@@ -170,6 +170,16 @@ CREATE TABLE attachments (
 	created_at TEXT NOT NULL
 );
 CREATE INDEX attachments_message ON attachments(message_id);
+`, `
+CREATE TABLE daemons (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	participant_id INTEGER NOT NULL UNIQUE REFERENCES participants(id) ON DELETE CASCADE,
+	name TEXT NOT NULL,
+	token_hash TEXT NOT NULL UNIQUE,
+	created_at TEXT NOT NULL
+);
+CREATE INDEX daemons_room ON daemons(room_id);
 `}
 
 // Open opens (and migrates) the database at path.

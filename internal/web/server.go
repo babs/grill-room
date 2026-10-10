@@ -57,11 +57,14 @@ type Server struct {
 	baseURL   string
 	log       *zap.Logger
 	streams   atomic.Int64
+	pairings  pairings
+	presence  presences
 }
 
 // New builds a server. adminHash is HashToken of the admin token; baseURL prefixes invite links.
 func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *Server {
-	return &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log}
+	return &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
+		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}}
 }
 
 // Streams returns the number of open event streams.
@@ -110,6 +113,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms/{room}/annotations/{ann}/messages", s.participant(s.postAnnotationMessage))
 	mux.Handle("PATCH /api/rooms/{room}/annotations/{ann}", s.participant(s.setAnnotationStatus))
 	mux.Handle("GET /api/rooms/{room}/attachments/{att}", s.participant(s.getAttachment))
+
+	mux.HandleFunc("POST /api/rooms/{room}/pairings", s.createPairing)
+	mux.HandleFunc("GET /api/pairings/{id}", s.pollPairing)
+	mux.Handle("GET /api/rooms/{room}/pairings/{id}", s.participant(s.getPairing))
+	mux.Handle("POST /api/rooms/{room}/pairings/{id}", s.participant(s.answerPairing))
+	mux.Handle("GET /api/rooms/{room}/daemon/events", s.daemonAuth(s.daemonEvents))
+	mux.Handle("POST /api/rooms/{room}/daemon/status", s.daemonAuth(s.daemonStatus))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -389,6 +399,8 @@ type roomResp struct {
 	Room         *store.Room         `json:"room"`
 	Me           *store.Participant  `json:"me"`
 	Participants []store.Participant `json:"participants"`
+	// Daemons are the connected ones, with whether each can host.
+	Daemons []presence `json:"daemons"`
 }
 
 func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
@@ -402,7 +414,7 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
 		s.serverError(w, "get_room_failed", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps})
+	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps, Daemons: s.connectedDaemons(room.ID)})
 }
 
 func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, sess session) {

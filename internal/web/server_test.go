@@ -131,9 +131,16 @@ type sseEvent struct{ id, event, data string }
 // openEvents opens a room's event stream; the channel closes when the server ends the stream.
 func (e *env) openEvents(t *testing.T, room, token, lastID string) <-chan sseEvent {
 	t.Helper()
+	ch, _ := e.openStream(t, "/api/rooms/"+room+"/events", token, lastID)
+	return ch
+}
+
+// openStream opens an SSE stream at path; cancel drops the connection.
+func (e *env) openStream(t *testing.T, path, token, lastID string) (<-chan sseEvent, context.CancelFunc) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
-	req, err := http.NewRequestWithContext(ctx, "GET", e.ts.URL+"/api/rooms/"+room+"/events", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", e.ts.URL+path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +179,7 @@ func (e *env) openEvents(t *testing.T, room, token, lastID string) <-chan sseEve
 			}
 		}
 	}()
-	return ch
+	return ch, cancel
 }
 
 func next(t *testing.T, ch <-chan sseEvent) sseEvent {

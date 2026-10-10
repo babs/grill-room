@@ -496,4 +496,41 @@ bodyInput.addEventListener('keydown', (e) => {
   }
 });
 
-loadRoom().then((ok) => { if (ok) connect(); }).catch(console.error);
+// Pairing: the daemon's local page opens this room with ?pair=<id>. Approving here, in the
+// participant's own session, hands the daemon its token; nobody sees or types it.
+async function showPairing(id) {
+  history.replaceState(null, '', location.pathname);
+  const url = api + '/pairings/' + encodeURIComponent(id);
+  const text = $('pairing-text');
+  $('pairing').hidden = false;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    text.textContent = data.error || 'This pairing request could not be loaded.';
+    $('pairing-actions').hidden = true;
+    return;
+  }
+  const p = await res.json();
+  text.textContent = 'The agent daemon on "' + p.name + '" asks to run the agent for you in this room, with your Claude subscription. ' +
+    'Approve only if your daemon page shows the code ' + p.code + '.';
+  const answer = async (approve) => {
+    $('pairing-actions').hidden = true;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approve }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) text.textContent = data.error || 'Pairing failed: HTTP ' + r.status;
+    else text.textContent = approve ? 'Daemon paired. Its page shows it connected within a few seconds.' : 'Pairing denied.';
+  };
+  $('pairing-approve').onclick = () => answer(true).catch(console.error);
+  $('pairing-deny').onclick = () => answer(false).catch(console.error);
+}
+
+loadRoom().then((ok) => {
+  if (!ok) return;
+  connect();
+  const pair = new URLSearchParams(location.search).get('pair');
+  if (pair) showPairing(pair).catch(console.error);
+}).catch(console.error);

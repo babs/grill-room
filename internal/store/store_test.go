@@ -23,7 +23,7 @@ func openTest(t *testing.T) *Store {
 }
 
 // seed creates a room with an invite, a participant, a text message, an upload, an agent
-// document with two revisions, and an annotation with a message carrying an image.
+// document with two revisions, an annotation with a message carrying an image, and a paired daemon.
 func seed(t *testing.T, s *Store, room string) *Participant {
 	t.Helper()
 	ctx := context.Background()
@@ -53,6 +53,9 @@ func seed(t *testing.T, s *Store, room string) *Participant {
 	}
 	msg := &NewMessage{ParticipantID: p.ID, Author: p.Name, Body: "see", Attachments: []Attachment{{ContentType: "image/png", Data: []byte("png")}}}
 	if _, err := s.CreateAnnotation(ctx, room, d.ID, 2, &anchor.Anchor{Kind: anchor.KindText, Exact: "v2"}, msg, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PairDaemon(ctx, room, p.ID, "laptop", "dmn-"+room); err != nil {
 		t.Fatal(err)
 	}
 	return p

@@ -62,6 +62,10 @@ header {
 header h1 { font-size: 1.1rem; flex: 1; }
 #me { color: var(--amber); }
 #banner { margin: 0; padding: 0.6rem 1rem; background: var(--amber); }
+#pairing { margin: 0; padding: 0.6rem 1rem; border-bottom: 1px solid var(--line); }
+#pairing h2 { margin: 0 0 0.3rem; font-size: 1rem; }
+#pairing p { margin: 0 0 0.5rem; }
+.pairing-actions { display: flex; gap: 0.4rem; }
 .layout { flex: 1; display: flex; min-height: 0; }
 aside { width: 14rem; padding: 1rem; border-right: 1px solid var(--line); overflow-y: auto; }
 aside h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
