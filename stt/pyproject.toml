@@ -9,6 +9,7 @@ dependencies = [
     "av>=16,<17",
     "livekit>=1.1",
     "livekit-api>=1.2",
+    "aiohttp>=3.14",
     "httpx>=0.28",
     "pydantic-settings>=2.14",
     "python-dotenv>=1.2",

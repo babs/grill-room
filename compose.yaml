@@ -46,5 +46,26 @@ services:
       - "${GRILL_ROOM_BIND:-127.0.0.1}:5349:5349/tcp"
     restart: unless-stopped
 
+  # Sized per spike S1-bis: 4 cores give about 2 s per utterance, 1.5 GiB holds the model.
+  stt:
+    build: ./stt
+    image: grill-stt:local
+    environment:
+      APP_ROOM_URL: http://grill-room:7680
+      APP_ROOM_TOKEN: ${STT_TOKEN}
+      APP_LIVEKIT_URL: ws://livekit:7880
+      APP_LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      APP_LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      APP_CPU_THREADS: "4"
+    ports:
+      - "127.0.0.1:${STT_METRICS_PORT:-7682}:9100"
+    cpus: 4
+    mem_limit: 1536m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/healthz')"]
+      interval: 5s
+      start_period: 60s
+    restart: unless-stopped
+
 volumes:
   grill-room-data:

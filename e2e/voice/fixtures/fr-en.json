@@ -5,31 +5,31 @@
  "utterances": [
   {
    "lang": "fr",
-   "text": "Il n'avait pas non plus le pouvoir de déroger aux lois fiscales ni à celles sur les droits de douane entre les États.",
+   "text": "L'eau se déverse sur la digue dans une section de 100 pieds de large.",
    "start": 4.0,
-   "end": 8.518,
-   "source": "google/fleurs fr_fr dev 10198958753510138668.wav"
+   "end": 7.487,
+   "source": "google/fleurs fr_fr dev 12551583146977488425.wav"
   },
   {
    "lang": "en",
    "text": "When you call someone who is thousands of miles away, you are using a satellite.",
-   "start": 10.518,
-   "end": 16.837,
+   "start": 9.488,
+   "end": 15.806,
    "source": "google/fleurs en_us dev 10010138729160973689.wav"
   },
   {
    "lang": "fr",
-   "text": "Noël est l'une des fêtes les plus importantes de la chrétienté, elle célèbre la naissance de Jésus.",
-   "start": 18.837,
-   "end": 24.92,
-   "source": "google/fleurs fr_fr dev 10333866429138543044.wav"
+   "text": "Les voies navigables intérieures peuvent être un excellent thème pour des vacances.",
+   "start": 17.806,
+   "end": 21.127,
+   "source": "google/fleurs fr_fr dev 12578790304113190442.wav"
   },
   {
    "lang": "en",
-   "text": "Then, Lakkha Singh took the lead in singing the bhajans.",
-   "start": 26.92,
-   "end": 30.654,
-   "source": "google/fleurs en_us dev 10098964113747380446.wav"
+   "text": "Some festivals have special camping areas for families with young children.",
+   "start": 23.127,
+   "end": 29.459,
+   "source": "google/fleurs en_us dev 10280794863324544626.wav"
   }
  ]
 }

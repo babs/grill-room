@@ -114,6 +114,32 @@ Media needs no published UDP port (spike S4): ICE runs over TCP 7881, or TURN ov
 
 The room page shows "Transcribing" while an STT worker is in its audio, and "Transcription unavailable" when no worker has sent a heartbeat for 15 s. Audio and text keep working meanwhile.
 
+### STT worker
+
+`stt/` is a Python service. It polls LiveKit for rooms with participants and joins each one as a hidden participant that cannot publish. Then it listens to every participant's audio track. Silero VAD cuts each track into utterances after 500 ms of silence, or at 15 s. faster-whisper `small` int8 then transcribes them, detecting the language per utterance, so French and English mix freely (spike S1-bis). Each line goes to `/voice/lines` under the speaker's participant id. The worker sends a heartbeat every 5 s, and at once when it joins or leaves a room.
+
+Audio stays in memory. Samples go from the LiveKit stream to the VAD, then to a bounded queue, then to the model, and are released once transcribed. Nothing is written to disk. When the queue is full, new utterances are dropped and counted. The worker logs the size and language of each line, never its words.
+
+The image bakes the model in at a pinned Hugging Face revision and runs with `HF_HUB_OFFLINE=1`, because a pod behind a default-deny egress policy could not fetch it at start. Compose gives it 4 CPUs and 1.5 GiB, the S1-bis starting point. On this host a line lands about 2 to 3 s after the speaker pauses.
+
+| Variable | Default | |
+|---|---|---|
+| `APP_ROOM_URL` | none | the room server's API |
+| `APP_ROOM_TOKEN` | none | the service token, `GRILL_ROOM_STT_TOKEN` on the server |
+| `APP_LIVEKIT_URL` | none | LiveKit signalling URL; the API is the same host over HTTP |
+| `APP_LIVEKIT_API_KEY`, `APP_LIVEKIT_API_SECRET` | none | LiveKit API key pair |
+| `APP_MODEL` | `small` (`/models/whisper` in the image) | model size or directory |
+| `APP_CPU_THREADS` | `4` | model threads |
+| `APP_QUEUE_SIZE` | `8` | utterances waiting for the model |
+| `APP_POLL_SECONDS`, `APP_HEARTBEAT_SECONDS` | `2`, `5` | room discovery and heartbeat periods |
+| `APP_PORT` | `9100` | `/healthz` (503 while the model loads) and `/metrics` |
+| `APP_WORKER_NAME` | hostname | name in heartbeats; LiveKit identity `stt-<name>` |
+| `APP_LOG_LEVEL` | `info` | |
+
+Metrics: `grill_stt_queue_depth`, `grill_stt_utterances_dropped_total`, `grill_stt_lines_total{result}`, `grill_stt_transcribe_seconds`, `grill_stt_line_latency_seconds`, `grill_stt_rooms`, `grill_stt_tracks`.
+
+The voice e2e tests play `e2e/voice/fixtures/fr-en.wav` as a fake microphone. It holds four read sentences from Google FLEURS (CC-BY-4.0), alternating French and English. `fr-en.json` gives their source files, text and timings. `uv run ./scripts/make_fixture.py ../e2e/voice/fixtures` (from `stt/`) rebuilds them.
+
 ## Host daemon
 
 `grill-room-daemon` runs on a participant's machine: Linux, macOS, or Windows inside WSL with the Linux build. It runs the agent with that participant's own Claude Code login, in a Docker sandbox.
@@ -156,4 +182,4 @@ make dev-down   # removes the rule, stops compose
 
 ## Make targets
 
-`build` (server and daemon), `build-daemons` (daemon for linux and darwin, amd64 and arm64), `run`, `test` (race detector), `test-docker` (sandbox against real Docker and a fake Anthropic upstream, no Claude request), `e2e` (Playwright with the installed Chrome, needs pnpm and pandoc), `e2e-voice` (Playwright against the compose stack, with fake microphones), `cover`, `lint` (golangci-lint), `docker-build` (also tests the office fixtures against the pandoc it ships), `sandbox-image`, `fixtures` (regenerates them), `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`.
+`build` (server and daemon), `build-daemons` (daemon for linux and darwin, amd64 and arm64), `run`, `test` (race detector), `test-docker` (sandbox against real Docker and a fake Anthropic upstream, no Claude request), `e2e` (Playwright with the installed Chrome, needs pnpm and pandoc), `e2e-voice` (Playwright against the compose stack, with fake microphones; it kills and restarts the `stt` container), `stt-test` (ruff, mypy and pytest for the worker), `stt-image`, `cover`, `lint` (golangci-lint), `docker-build` (also tests the office fixtures against the pandoc it ships), `sandbox-image`, `fixtures` (regenerates them), `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`.

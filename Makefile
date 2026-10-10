@@ -23,7 +23,7 @@ TRAEFIK_RULE      = $(TRAEFIK_RULES_DIR)/grill-room.yaml
 
 SANDBOX_IMAGE ?= grill-room-sandbox:local
 
-.PHONY: build build-daemons run test test-docker e2e e2e-voice cover lint docker-build sandbox-image fixtures dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: build build-daemons run test test-docker e2e e2e-voice stt-test stt-image cover lint docker-build sandbox-image fixtures dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -53,6 +53,19 @@ e2e: build
 # Voice tests against the compose stack behind the local traefik: run `make dev-up` first.
 e2e-voice:
 	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c voice/playwright.config.js
+
+# STT worker: lint, types and unit tests. The e2e-marked test runs too once the model is in the
+# Hugging Face cache, and skips otherwise.
+stt-test:
+	cd stt && uv run ruff check . && uv run ruff format --check . && uv run mypy grill_stt tests && uv run pytest
+
+stt-image:
+	docker build -t grill-stt:local \
+	  --build-arg VERSION=$(VERSION) \
+	  --build-arg COMMIT_HASH=$(COMMIT_HASH) \
+	  --build-arg BUILD_TIMESTAMP=$(BUILD_TS) \
+	  --build-arg PROJECT_URL=$(PROJECT_URL) \
+	  stt/
 
 cover:
 	go test -race -coverprofile=coverage.txt ./... && go tool cover -func=coverage.txt | tail -1
