@@ -467,10 +467,100 @@ function connect() {
   events.addEventListener('annotations', () => loadAnnotations().catch(console.error));
   events.addEventListener('revoked', () => end('Your access to this room has ended.'));
   events.addEventListener('stt', (e) => showSTT(JSON.parse(e.data)));
+  events.addEventListener('agent', (e) => {
+    agent = JSON.parse(e.data);
+    renderAgent();
+    renderParticipants();
+  });
   events.onerror = () => {
     // CLOSED means the browser gave up (a 401 on reconnect); otherwise it retries by itself.
     if (events.readyState === EventSource.CLOSED) loadRoom().catch(console.error);
   };
+}
+
+// Agent. The host's daemon runs it: the LED is green only while that daemon is connected and can
+// host (D8). The host, and the participants the host allows, can press the button (D18).
+let agent = { online: false, can_trigger: [], daemons: [], turn: null };
+
+const isHost = () => String(agent.host_participant_id || '') === myID;
+
+function renderAgent() {
+  const running = !!agent.turn && agent.turn.status === 'running';
+  const led = $('agent-led');
+  led.classList.toggle('on', agent.online && !running);
+  led.classList.toggle('busy', agent.online && running);
+  led.setAttribute('aria-label', !agent.online ? 'Agent offline' : running ? 'Agent working' : 'Agent ready');
+  $('agent-status').textContent = !agent.online ? (agent.reason || 'Agent offline') : running ? 'Agent working…' : '';
+  const allowed = isHost() || agent.can_trigger.includes(Number(myID));
+  const press = $('agent-press');
+  press.disabled = !agent.online || running || !allowed;
+  press.title = allowed ? '' : 'The host has not given you the agent button';
+  $('agent-fresh').hidden = !isHost();
+  $('agent-fresh').disabled = press.disabled;
+}
+
+async function pressAgent(fresh) {
+  $('agent-press').disabled = true;
+  $('agent-fresh').disabled = true;
+  try {
+    await sendJSON('POST', api + '/turns', { fresh });
+  } catch (err) {
+    renderAgent();
+    $('agent-status').textContent = err.message;
+  }
+}
+
+$('agent-press').addEventListener('click', () => pressAgent(false));
+$('agent-fresh').addEventListener('click', () => {
+  if (confirm('Start a new agent session? The agent forgets its earlier turns and rereads the room history.')) pressAgent(true);
+});
+
+// agentControls shows who hosts and, to the host, the button right and the hand-over per row.
+function agentControls(li, p) {
+  const id = p.id;
+  const host = agent.host_participant_id === id;
+  let badge = li.querySelector('.host-badge');
+  if (host && !badge) {
+    badge = document.createElement('span');
+    badge.className = 'host-badge';
+    badge.textContent = 'host';
+    li.querySelector('.name').after(badge);
+  } else if (!host && badge) {
+    badge.remove();
+  }
+  const manage = isHost() && !host;
+  let trigger = li.querySelector('label.trigger');
+  if (manage && !trigger) {
+    trigger = document.createElement('label');
+    trigger.className = 'trigger';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.setAttribute('aria-label', 'Let ' + p.name + ' press the agent button');
+    box.addEventListener('change', () => {
+      sendJSON('PATCH', api + '/participants/' + id, { can_trigger: box.checked })
+        .catch((err) => { box.checked = !box.checked; $('agent-status').textContent = err.message; });
+    });
+    trigger.append(box, 'can ask');
+    li.append(trigger);
+  } else if (!manage && trigger) {
+    trigger.remove();
+  }
+  if (trigger) trigger.querySelector('input').checked = agent.can_trigger.includes(id);
+  const daemon = agent.daemons.find((d) => d.participant_id === id && d.can_host);
+  let handOver = li.querySelector('button.make-host');
+  if (manage && daemon && !handOver) {
+    handOver = document.createElement('button');
+    handOver.type = 'button';
+    handOver.className = 'make-host';
+    handOver.textContent = 'Make host';
+    handOver.setAttribute('aria-label', 'Make ' + p.name + ' the agent host');
+    handOver.addEventListener('click', () => {
+      sendJSON('PUT', api + '/host', { participant_id: id }).catch((err) => { $('agent-status').textContent = err.message; });
+    });
+    li.append(handOver);
+  } else if (!(manage && daemon) && handOver) {
+    handOver.remove();
+  }
 }
 
 // Voice. One LiveKit room per grill room; a participant's LiveKit identity is its participant id,
@@ -526,6 +616,7 @@ function renderParticipants() {
     } else if (!vp && vol) {
       vol.remove();
     }
+    agentControls(li, p);
     return li;
   });
   if (rows.length !== list.children.length || rows.some((li, i) => list.children[i] !== li)) list.replaceChildren(...rows);

@@ -61,6 +61,14 @@ header {
 }
 header h1 { font-size: 1.1rem; flex: 1; }
 #me { color: var(--amber); }
+#agent { display: flex; align-items: center; gap: 0.5rem; }
+#agent-status { font-size: 0.85rem; color: #c9cbd6; }
+.led { width: 0.75rem; height: 0.75rem; border-radius: 50%; background: #d93025; box-shadow: 0 0 0 2px rgba(217, 48, 37, 0.3); }
+.led.on { background: #34c759; box-shadow: 0 0 0 2px rgba(52, 199, 89, 0.3); }
+.led.busy { background: var(--amber); box-shadow: 0 0 0 2px rgba(255, 194, 61, 0.35); }
+#participants .host-badge { font-size: 0.75rem; padding: 0 0.35rem; border-radius: 6px; background: var(--amber); color: var(--ink); }
+#participants label.trigger { font-size: 0.8rem; color: var(--muted); display: flex; align-items: center; gap: 0.2rem; }
+#participants button.make-host { padding: 0.15rem 0.5rem; font-size: 0.8rem; }
 #voice { display: flex; align-items: center; gap: 0.4rem; }
 #voice button { padding: 0.3rem 0.8rem; font-size: 0.9rem; }
 #voice-mute[aria-pressed="true"] { background: #b3261e; }
@@ -120,6 +128,7 @@ button.doc:hover { background: var(--line); }
 .msg .meta time { color: var(--muted); margin-left: 0.3rem; }
 .msg .body { white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg.system { color: var(--muted); font-size: 0.85rem; font-style: italic; }
+.msg.agent .meta strong { color: var(--teal); }
 .msg.voice .meta strong::after { content: " (voice)"; font-weight: normal; color: var(--muted); }
 #send { display: flex; gap: 0.5rem; padding: 0.75rem 1rem; border-top: 1px solid var(--line); }
 #send textarea { flex: 1; resize: vertical; }

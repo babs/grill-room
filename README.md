@@ -149,6 +149,12 @@ Metrics: `grill_stt_queue_depth`, `grill_stt_utterances_dropped_total`, `grill_s
 
 The voice e2e tests play `e2e/voice/fixtures/fr-en.wav` as a fake microphone. It holds four read sentences from Google FLEURS (CC-BY-4.0), alternating French and English. `fr-en.json` gives their source files, text and timings. `uv run ./scripts/make_fixture.py ../e2e/voice/fixtures` (from `stt/`) rebuilds them.
 
+## Agent
+
+The agent runs on a participant's machine, through their host daemon (below). The first participant whose daemon connects and can host becomes the host. When the host's daemon drops or can no longer host, the room moves the role to the daemon that connected earliest among those that can. The host can hand the role to anyone whose daemon is connected. The LED in the header is green while the host's daemon is connected, amber during a turn, and red with the reason when no host can run the agent. Transcripts keep recording either way.
+
+The host can press "Ask the agent" and can tick "can ask" next to other participants to let them press it too. One press runs one turn: the agent reads what was said and annotated since its last successful turn, edits or writes documents, answers threads, and posts a synthesis. A second press during a turn gets "turn in progress". "New session" (host only) starts the agent without its memory. It then rereads the room history from the transcript files. The room keeps the Claude session after every turn, so when another daemon takes over, the next turn resumes the same session. [docs/agent-workspace.md](docs/agent-workspace.md) has the details.
+
 ## Host daemon
 
 `grill-room-daemon` runs on a participant's machine: Linux, macOS, or Windows inside WSL with the Linux build. It runs the agent with that participant's own Claude Code login, in a Docker sandbox.
@@ -194,4 +200,4 @@ make dev-down   # removes the rule, stops compose
 
 ## Make targets
 
-`build` (server and daemon), `build-daemons` (daemon for linux and darwin, amd64 and arm64), `run`, `test` (race detector), `test-docker` (sandbox and agent turns against real Docker, a fake Anthropic upstream and a fake `claude`, no Claude request), `e2e` (Playwright with the installed Chrome, needs pnpm and pandoc), `e2e-voice` (Playwright against the compose stack, with fake microphones; it kills and restarts the `stt` container), `stt-test` (ruff, mypy and pytest for the worker), `stt-image`, `cover`, `lint` (golangci-lint), `docker-build` (also tests the office fixtures against the pandoc it ships), `sandbox-image`, `sandbox-fake-image` (the sandbox with `internal/sandbox/fakeclaude` as `claude`, for tests), `fixtures` (regenerates them), `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`.
+`build` (server and daemon), `build-daemons` (daemon for linux and darwin, amd64 and arm64), `run`, `test` (race detector), `test-docker` (sandbox and agent turns against real Docker, a fake Anthropic upstream and a fake `claude`, no Claude request), `e2e` (Playwright with the installed Chrome, needs pnpm, pandoc and Docker for the agent turns, which use the fake `claude`), `e2e-voice` (Playwright against the compose stack, with fake microphones; it kills and restarts the `stt` container), `stt-test` (ruff, mypy and pytest for the worker), `stt-image`, `cover`, `lint` (golangci-lint), `docker-build` (also tests the office fixtures against the pandoc it ships), `sandbox-image`, `sandbox-fake-image` (the sandbox with `internal/sandbox/fakeclaude` as `claude`, for tests), `fixtures` (regenerates them), `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`.

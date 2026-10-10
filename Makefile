@@ -50,8 +50,9 @@ test-docker: sandbox-image sandbox-fake-image
 	GRILL_ROOM_TEST_DOCKER=1 GRILL_ROOM_SANDBOX_IMAGE=$(SANDBOX_IMAGE) GRILL_ROOM_SANDBOX_FAKE_IMAGE=$(SANDBOX_FAKE_IMAGE) \
 	  go test -race -run 'Docker' ./internal/sandbox/ ./internal/daemon/
 
-# Browser tests against a fresh server, in the installed Chrome.
-e2e: build
+# Browser tests against a fresh server, in the installed Chrome; agent turns run in Docker with the
+# fake claude.
+e2e: build sandbox-fake-image
 	cd e2e && pnpm install --frozen-lockfile && pnpm test
 
 # Voice tests against the compose stack behind the local traefik: run `make dev-up` first.

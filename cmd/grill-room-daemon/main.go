@@ -198,6 +198,9 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 		}
 	}
 	err = daemon.Serve(ctx, srv, ln)
+	stop()
+	// The sandbox's containers go with the room loops: exiting first would leave them running.
+	d.Wait()
 	logger.Info("shutdown")
 	return err
 }

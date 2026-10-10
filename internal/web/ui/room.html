@@ -21,6 +21,12 @@
     <button type="button" id="voice-mute" aria-pressed="false" hidden>Mute</button>
     <button type="button" id="voice-leave" hidden>Leave audio</button>
   </div>
+  <div id="agent">
+    <span id="agent-led" class="led" role="img" aria-label="Agent offline"></span>
+    <span id="agent-status" role="status"></span>
+    <button type="button" id="agent-press" disabled>Ask the agent</button>
+    <button type="button" id="agent-fresh" hidden disabled>New session</button>
+  </div>
   <span id="me"></span>
 </header>
 <p id="voice-error" role="alert" hidden></p>

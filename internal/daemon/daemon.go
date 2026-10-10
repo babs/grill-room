@@ -81,6 +81,8 @@ type Daemon struct {
 	gen int
 	// changed wakes the heartbeat when readiness changes.
 	changed chan struct{}
+	// loops counts running room loops, which remove their sandbox as they end.
+	loops sync.WaitGroup
 }
 
 // New builds a daemon.
@@ -186,8 +188,11 @@ func (d *Daemon) SetRoom(ctx context.Context, room Room) {
 	r := &roomRun{d: d, room: room, update: d.roomUpdater(d.gen)}
 	d.st.Room, d.st.Pairing, d.st.Code, d.st.ApproveURL, d.st.Error, d.st.Connection = room.String(), "", "", "", "", "offline"
 	d.mu.Unlock()
-	go r.loop(ctx)
+	d.loops.Go(func() { r.loop(ctx) })
 }
+
+// Wait returns once every room loop has ended and removed its sandbox; cancel their context first.
+func (d *Daemon) Wait() { d.loops.Wait() }
 
 // roomRun is one SetRoom's pairing and connection.
 type roomRun struct {
