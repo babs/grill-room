@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, upload } from './helpers.js';
 
 const led = (page) => page.locator('#agent-led');
 const press = (page) => page.getByRole('button', { name: 'Ask the agent' });
@@ -50,6 +50,8 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
     await expect(led(alice)).toHaveAttribute('aria-label', 'Agent working');
     for (const p of [alice, bob]) {
       await expect(p.locator('#messages li.msg.agent').last()).toContainText('Wrote docs/notes.md, turn 1.', { timeout: 60_000 });
+      // The fake claude reports the model like claude -p: the one that wrote most, not its side model.
+      await expect(p.locator('#messages li.msg.agent').last().locator('.model')).toHaveText('claude-default-fake');
       await expect(p.locator('#documents')).toContainText('notes.md');
     }
     await expect(led(bob)).toHaveAttribute('aria-label', 'Agent ready');
@@ -86,5 +88,44 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
   } finally {
     daemonA.cleanup();
     daemonB.cleanup();
+  }
+});
+
+// 001-AC39: the agent opens its own anchored annotation on an upload, answers on it, closes it,
+// and a participant reply reopens it. Real daemon and Docker sandbox, fake claude.
+test('agent annotation loop', async ({ browser, request, baseURL }) => {
+  test.setTimeout(180_000);
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await upload(alice, 'plan.md', 'text/markdown', '# Rollout plan\n\nRollback first, then freeze.\n');
+  await expect(alice.frameLocator('#doc-frame iframe').locator('h1')).toHaveText('Rollout plan');
+  const daemon = startDaemon(`${baseURL}/r/${room.id}`);
+  const say = async (text) => {
+    await alice.locator('#body').fill(text);
+    await alice.locator('#body').press('Enter');
+    await expect(alice.locator('#messages')).toContainText(text);
+  };
+  try {
+    await pairDaemon(alice, daemon);
+    await expect(led(alice)).toHaveAttribute('aria-label', 'Agent ready');
+    await say('FAKE_ANNOTATE');
+    await press(alice).click();
+    const thread = alice.locator('#annot-list li.annot', { hasText: 'fake question' });
+    await expect(thread).toContainText('"Rollback"', { timeout: 60_000 });
+    await expect(thread).toContainText('Agent');
+    await expect(thread.locator('.annot-badge')).toHaveText('open');
+    await thread.getByLabel('Reply').fill('Ten minutes.');
+    await thread.getByRole('button', { name: 'Reply' }).click();
+    await expect(thread).toContainText('Ten minutes.');
+
+    await expect(led(alice)).toHaveAttribute('aria-label', 'Agent ready');
+    await say('FAKE_CLOSE');
+    await press(alice).click();
+    await expect(thread).toContainText('settled', { timeout: 60_000 });
+    await expect(thread.locator('.annot-badge')).toHaveText('done');
+    await thread.getByLabel('Reply').fill('Not settled yet.');
+    await thread.getByRole('button', { name: 'Reply' }).click();
+    await expect(thread.locator('.annot-badge')).toHaveText('reopened');
+  } finally {
+    daemon.cleanup();
   }
 });

@@ -205,6 +205,22 @@ type Result struct {
 	Result    string `json:"result"`
 	IsError   bool   `json:"is_error"`
 	Subtype   string `json:"subtype"`
+	// ModelUsage is keyed by model id; Claude Code may call a small model on the side.
+	ModelUsage map[string]struct {
+		OutputTokens int64 `json:"outputTokens"`
+	} `json:"modelUsage"`
+}
+
+// Model is the model that wrote most of the answer, or "" when claude reported none.
+func (r *Result) Model() string {
+	var best string
+	var most int64 = -1
+	for m, u := range r.ModelUsage {
+		if u.OutputTokens > most || (u.OutputTokens == most && m < best) {
+			best, most = m, u.OutputTokens
+		}
+	}
+	return best
 }
 
 // RunClaude runs one turn in the sandbox. ErrCredentialsExpired (with the host name) means the

@@ -60,11 +60,12 @@ func buildPrompt(room string, newSession bool, msgs []store.Message, anns []stor
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are the agent of the grill session %q. Participants talk in the room; their speech reaches you as transcript lines. Someone pressed the agent button: this is your turn.\n\n", room)
 	b.WriteString(`Your workspace is the current directory:
-- docs/: your documents, Markdown (.md) or HTML (.html). Edit them or add new ones; every change becomes a revision the room sees.
+- docs/: your documents, Markdown (.md) or HTML (.html). Edit them or add new ones; every change becomes a revision the room sees. Give a new document a name no upload has: your version of uploads/<id>-plan.md goes in docs/plan-revised.md, for example. A new document named like an upload is stored as <name>-agent.md.
 - uploads/: documents participants uploaded. They are read-only: never edit, move or delete them; write your own documents from them. Office files have a Markdown copy beside them, ending in .md.
 - transcript/: everything said in the room, one Markdown file per day.
 - annotations.md: every annotation thread on the documents, with its id. Images attached to threads are in attachments/.
-- To answer annotation threads, write replies.json: [{"annotation": <id>, "body": "<your reply>"}].
+- To answer annotation threads, write replies.json: [{"annotation": <id>, "body": "<your reply>"}]. Add "status": "done" to a reply that settles its thread; a participant who replies later reopens it.
+- To point the participants at a passage, any document included, uploads too, write annotations-new.json: [{"doc": "<its path here, like uploads/3-plan.md>", "exact": "<the passage, word for word as it reads, without Markdown marks>", "prefix": "<the few words before it>", "suffix": "<the few words after it>", "body": "<your question or remark>"}]. Use it for what needs an answer from someone, not to repeat your synthesis.
 
 `)
 	if newSession {

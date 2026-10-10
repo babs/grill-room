@@ -37,6 +37,15 @@ func TestFakeClaude(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(cwd, "transcript", "2026-10-10.md"), []byte("- FAKE_MARK"), 0o444)
 	_ = os.WriteFile(filepath.Join(cwd, "annotations.md"), []byte("### Annotation 7 on docs/x.md"), 0o444)
 
+	var buf bytes.Buffer
+	run([]string{"-p", "--model", "opus"}, strings.NewReader("hi"), &buf, cwd, home)
+	var usage struct {
+		ModelUsage map[string]struct{ OutputTokens int } `json:"modelUsage"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &usage); err != nil || usage.ModelUsage["claude-opus-fake"].OutputTokens == 0 {
+		t.Fatalf("model usage %s: %v", buf.String(), err)
+	}
+
 	o, code := call(t, cwd, home, "The code word is PAPRIKA-42.")
 	if code != 0 || o.SessionID == "" || o.Result != "Wrote docs/notes.md, turn 1." {
 		t.Fatalf("first turn %+v %d", o, code)
@@ -65,6 +74,19 @@ func TestFakeClaude(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(cwd, "replies.json")); string(b) != `[{"annotation": 7, "body": "fake reply"}]` {
 		t.Fatalf("replies %q", b)
+	}
+	if o, _ := call(t, cwd, home, "FAKE_CLOSE"); o.Result != "Closed." {
+		t.Fatalf("close %+v", o)
+	}
+	if b, _ := os.ReadFile(filepath.Join(cwd, "replies.json")); string(b) != `[{"annotation": 7, "body": "settled", "status": "done"}]` {
+		t.Fatalf("closing replies %q", b)
+	}
+	_ = os.WriteFile(filepath.Join(cwd, "uploads", "2-plan.md"), []byte("# Plan\n\nRollback first.\n"), 0o444)
+	if o, _ := call(t, cwd, home, "FAKE_ANNOTATE"); o.Result != "Annotated." {
+		t.Fatalf("annotate %+v", o)
+	}
+	if b, _ := os.ReadFile(filepath.Join(cwd, "annotations-new.json")); string(b) != `[{"body":"fake question","doc":"uploads/2-plan.md","exact":"Rollback"}]` {
+		t.Fatalf("new annotations %q", b)
 	}
 	if o, _ := call(t, cwd, home, "FAKE_LIST"); o.Result != "transcript: 2026-10-10.md; FAKE_MARK found: true" {
 		t.Fatalf("list %+v", o)

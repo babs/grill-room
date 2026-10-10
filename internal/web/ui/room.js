@@ -63,6 +63,13 @@ function addMessage(m) {
     time.dateTime = m.ts;
     time.textContent = new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     meta.append(sender, ' ', time);
+    if (m.model) {
+      const model = document.createElement('span');
+      model.className = 'model';
+      model.textContent = m.model;
+      model.title = 'Claude model of this turn';
+      meta.append(' ', model);
+    }
     const body = document.createElement('div');
     body.className = 'body';
     body.textContent = m.body;

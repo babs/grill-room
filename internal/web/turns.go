@@ -16,6 +16,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/babs/grill-room/internal/anchor"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/turn"
 )
@@ -276,7 +277,7 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 	}
 	o := turn.Classify(res.Changes)
 	out := &store.TurnOutcome{
-		Synthesis: sanitize(res.Synthesis, turn.MaxSynthesis), SessionID: res.SessionID,
+		Synthesis: sanitize(res.Synthesis, turn.MaxSynthesis), Model: sanitize(res.Model, turn.MaxModel), SessionID: res.SessionID,
 		SessionOffset: res.SessionOffset, Session: res.Session,
 		Report: store.TurnReport{Rejected: o.Rejected, Ignored: o.Ignored},
 	}
@@ -284,7 +285,29 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 		out.Documents = append(out.Documents, store.AgentWrite{Name: doc.Name, Format: doc.Format, Body: doc.Body})
 	}
 	for _, rp := range o.Replies {
-		out.Replies = append(out.Replies, store.AgentReply{AnnotationID: rp.Annotation, Body: rp.Body})
+		out.Replies = append(out.Replies, store.AgentReply{AnnotationID: rp.Annotation, Body: rp.Body, Done: rp.Status == store.StatusDone})
+	}
+	if len(o.Annotations) > 0 {
+		docs, err := s.bus.Store.Documents(r.Context(), d.RoomID)
+		if err != nil {
+			s.log.Error("complete_turn_failed", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.Error(err))
+			s.failTurn(r.Context(), d.RoomID, t.ID, "the room could not apply the result")
+			httpError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		ids := map[string]int64{}
+		for id, p := range docPaths(docs) {
+			ids[p] = id
+		}
+		for _, a := range o.Annotations {
+			// A docs/ path no document has yet may be one this turn writes: the store looks it up after.
+			agentDoc := ""
+			if name, ok := strings.CutPrefix(a.Doc, turn.DocsDir+"/"); ok {
+				agentDoc = name
+			}
+			out.Annotations = append(out.Annotations, store.AgentAnnotation{Path: a.Doc, DocID: ids[a.Doc], AgentDoc: agentDoc,
+				Anchor: anchor.Anchor{Exact: a.Exact, Prefix: a.Prefix, Suffix: a.Suffix}, Body: sanitize(a.Body, turn.MaxReplyLen)})
+		}
 	}
 	done, err := s.bus.Store.CompleteTurn(r.Context(), d.RoomID, t.ID, d.ID, out)
 	switch {
@@ -303,7 +326,8 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 	}
 	s.bus.Notify(d.RoomID)
 	s.log.Info("turn_done", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.Strings("revised", done.Report.Revised),
-		zap.Strings("created", done.Report.Created), zap.Strings("rejected", done.Report.Rejected), zap.Int("session_bytes", len(res.Session)))
+		zap.Strings("created", done.Report.Created), zap.Strings("rejected", done.Report.Rejected), zap.Int("annotated", done.Report.Annotated),
+		zap.Int("closed", done.Report.Closed), zap.String("model", done.Model), zap.Int("session_bytes", len(res.Session)))
 	writeJSON(w, http.StatusOK, done)
 }
 

@@ -61,6 +61,8 @@ type Message struct {
 	ParticipantID int64  `json:"participant_id,omitempty"`
 	Sender        string `json:"sender"`
 	Body          string `json:"body"`
+	// Model is the Claude model that wrote an agent synthesis, when its daemon reported one.
+	Model string `json:"model,omitempty"`
 }
 
 // Store wraps the SQLite handle.
@@ -215,6 +217,9 @@ CREATE TABLE agent_sessions (
 	updated_at TEXT NOT NULL,
 	PRIMARY KEY (room_id, session_id)
 );
+`, `
+ALTER TABLE turns ADD COLUMN model TEXT NOT NULL DEFAULT '';
+ALTER TABLE messages ADD COLUMN model TEXT NOT NULL DEFAULT '';
 `}
 
 // Open opens (and migrates) the database at path.
@@ -480,8 +485,8 @@ func insertMessage(ctx context.Context, db execer, m *Message) error {
 		pid = m.ParticipantID
 	}
 	res, err := db.ExecContext(ctx,
-		`INSERT INTO messages(room_id, ts, kind, participant_id, sender, body) VALUES(?,?,?,?,?,?)`,
-		m.RoomID, m.TS.Format(time.RFC3339Nano), m.Kind, pid, m.Sender, m.Body)
+		`INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, model) VALUES(?,?,?,?,?,?,?)`,
+		m.RoomID, m.TS.Format(time.RFC3339Nano), m.Kind, pid, m.Sender, m.Body, m.Model)
 	if err != nil {
 		return fmt.Errorf("insert message: %w", err)
 	}
@@ -494,7 +499,7 @@ func insertMessage(ctx context.Context, db execer, m *Message) error {
 // Messages returns up to limit messages of room with id > afterID, oldest first.
 func (s *Store) Messages(ctx context.Context, roomID string, afterID int64, limit int) ([]Message, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, ts, room_id, kind, COALESCE(participant_id, 0), sender, body FROM messages
+		SELECT id, ts, room_id, kind, COALESCE(participant_id, 0), sender, body, model FROM messages
 		WHERE room_id = ? AND id > ? ORDER BY id ASC LIMIT ?`, roomID, afterID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query messages: %w", err)
@@ -504,7 +509,7 @@ func (s *Store) Messages(ctx context.Context, roomID string, afterID int64, limi
 	for rows.Next() {
 		var m Message
 		var ts string
-		if err := rows.Scan(&m.ID, &ts, &m.RoomID, &m.Kind, &m.ParticipantID, &m.Sender, &m.Body); err != nil {
+		if err := rows.Scan(&m.ID, &ts, &m.RoomID, &m.Kind, &m.ParticipantID, &m.Sender, &m.Body, &m.Model); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
 		m.TS = parseTS(ts)

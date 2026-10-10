@@ -82,3 +82,53 @@ func TestNeedsContent(t *testing.T) {
 		}
 	}
 }
+
+// 001-AC39: replies may close their thread, and annotations-new.json opens the agent's own
+// annotations; malformed entries are reported, never fatal.
+func TestClassifyAgentAnnotations(t *testing.T) {
+	long := strings.Repeat("a", 70)
+	o := Classify([]Change{
+		{Path: RepliesFile, Content: []byte(`[{"annotation": 4, "body": "settled", "status": "done"}, {"annotation": 5, "body": "x", "status": "open"}]`)},
+		{Path: NewAnnotationsFile, Content: []byte(`[
+			{"doc": "uploads/3-plan.md", "exact": " the second\n  style sheet ", "prefix": "` + long + `b", "suffix": "c` + long + `", "body": " Who owns it? "},
+			{"doc": "./docs/plan-revised.md", "exact": "flag", "body": "On by default?"},
+			{"doc": "", "exact": "x", "body": "y"},
+			{"doc": "docs/a.md", "exact": "  ", "body": "y"},
+			{"doc": "docs/a.md", "exact": "x", "body": ""}
+		]`)},
+	})
+	if len(o.Replies) != 1 || o.Replies[0] != (Reply{Annotation: 4, Body: "settled", Status: "done"}) {
+		t.Fatalf("replies %+v", o.Replies)
+	}
+	want := []NewAnnotation{
+		{Doc: "uploads/3-plan.md", Exact: "the second style sheet", Prefix: long[7:] + "b", Suffix: "c" + long[:63], Body: "Who owns it?"},
+		{Doc: "docs/plan-revised.md", Exact: "flag", Body: "On by default?"},
+	}
+	if !slices.Equal(o.Annotations, want) {
+		t.Fatalf("annotations %+v,\nwant %+v", o.Annotations, want)
+	}
+	if len(o.Ignored) != 2 || !strings.Contains(o.Ignored[0], `status other than "done"`) || !strings.Contains(o.Ignored[1], "3 annotations without") {
+		t.Fatalf("ignored %q", o.Ignored)
+	}
+	if !NeedsContent(NewAnnotationsFile) {
+		t.Fatal("annotations-new.json needs its content")
+	}
+	for _, body := range []string{`{}`, `nope`} {
+		if o := Classify([]Change{{Path: NewAnnotationsFile, Content: []byte(body)}}); len(o.Annotations) != 0 || len(o.Ignored) != 1 {
+			t.Fatalf("%s: %+v", body, o)
+		}
+	}
+	var many strings.Builder
+	many.WriteString("[")
+	for i := range MaxNewAnnotations + 2 {
+		if i > 0 {
+			many.WriteString(",")
+		}
+		many.WriteString(`{"doc": "docs/a.md", "exact": "x", "body": "y"}`)
+	}
+	many.WriteString("]")
+	if o := Classify([]Change{{Path: NewAnnotationsFile, Content: []byte(many.String())}}); len(o.Annotations) != MaxNewAnnotations ||
+		len(o.Ignored) != 1 || !strings.Contains(o.Ignored[0], "2 annotations past") {
+		t.Fatalf("over the cap: %d annotations, %q", len(o.Annotations), o.Ignored)
+	}
+}

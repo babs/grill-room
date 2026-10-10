@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -394,5 +395,25 @@ func TestScanAndIsolated(t *testing.T) {
 	reachable = map[string]bool{}
 	if err := s.Isolated(context.Background()); err == nil || !strings.Contains(err.Error(), "proxy is unreachable") {
 		t.Fatalf("proxy down: %v", err)
+	}
+}
+
+// The model a turn ran on is the one that wrote most of the answer: Claude Code calls a small model
+// on the side, and reports none when the run failed early.
+func TestResultModel(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{`{}`, ""},
+		{`{"modelUsage": {}}`, ""},
+		{`{"modelUsage": {"claude-opus-5": {"outputTokens": 812}}}`, "claude-opus-5"},
+		{`{"modelUsage": {"claude-haiku-5-5": {"outputTokens": 40}, "claude-opus-5": {"outputTokens": 812}}}`, "claude-opus-5"},
+		{`{"modelUsage": {"b": {"outputTokens": 0}, "a": {"outputTokens": 0}}}`, "a"},
+	} {
+		var r Result
+		if err := json.Unmarshal([]byte(tc.in), &r); err != nil {
+			t.Fatal(err)
+		}
+		if got := r.Model(); got != tc.want {
+			t.Errorf("%s: Model() = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }

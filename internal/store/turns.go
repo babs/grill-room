@@ -6,8 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"time"
+
+	"github.com/babs/grill-room/internal/anchor"
+	"github.com/babs/grill-room/internal/render"
 )
 
 // Turn statuses.
@@ -44,6 +48,8 @@ type Turn struct {
 	Resume string `json:"-"`
 	// SessionID is the session the turn ran in, set when it is done.
 	SessionID string `json:"-"`
+	// Model is the Claude model the turn ran on, as its daemon reported it; empty when unknown.
+	Model string `json:"model,omitempty"`
 	// The cursors are the last message and annotation message ids the turn saw: the next turn
 	// reads what came after them.
 	MessageCursor    int64      `json:"-"`
@@ -60,10 +66,88 @@ type TurnReport struct {
 	Revised []string `json:"revised,omitempty"`
 	Created []string `json:"created,omitempty"`
 	Replies int      `json:"replies,omitempty"`
+	// Closed counts threads the agent marked done; Annotated, the annotations it opened.
+	Closed    int `json:"closed,omitempty"`
+	Annotated int `json:"annotated,omitempty"`
 	// Rejected lists workspace paths of uploads the agent changed: uploads are read-only (D30).
 	Rejected []string `json:"rejected,omitempty"`
 	// Ignored lists changes outside the contract, with why.
 	Ignored []string `json:"ignored,omitempty"`
+	// Renamed lists new agent documents stored under another name than the agent gave, as "a as b".
+	Renamed []string `json:"renamed,omitempty"`
+}
+
+// agentAnnotate opens the agent's annotation a on the latest revision of its document, anchored
+// where the quote reads now. It returns why not, for the turn report, when the quote cannot be
+// placed; an error only when the store fails.
+func agentAnnotate(ctx context.Context, tx *sql.Tx, roomID string, a AgentAnnotation) (string, error) {
+	a.Anchor.Kind = anchor.KindText
+	if err := a.Anchor.Validate(); err != nil {
+		return err.Error(), nil
+	}
+	var format, body string
+	var n int
+	err := tx.QueryRowContext(ctx, `
+		SELECT d.format, r.n, r.body FROM documents d JOIN revisions r ON r.document_id = d.id
+		WHERE d.id = ? AND d.room_id = ? ORDER BY r.n DESC LIMIT 1`, a.DocID, roomID).Scan(&format, &n, &body)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "the document has no text to quote", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("agent annotation: %w", err)
+	}
+	page := []byte(body)
+	if format == "md" {
+		if page, err = render.MdToHTML(page); err != nil {
+			return "", fmt.Errorf("agent annotation: %w", err)
+		}
+	}
+	doc, err := anchor.Parse(page)
+	if err != nil {
+		return "", fmt.Errorf("agent annotation: %w", err)
+	}
+	// The quote itself must be there: Reanchor's fallback between prefix and suffix is for text a
+	// participant anchored and a later revision reworded, not for placing a new one.
+	placed, ok := doc.Reanchor(a.Anchor)
+	if !ok || placed.Exact != a.Anchor.Exact {
+		return "quote not found", nil
+	}
+	js, err := json.Marshal(placed)
+	if err != nil {
+		return "", fmt.Errorf("agent annotation: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, `INSERT INTO annotations(room_id, document_id, revision, anchor, created_at) VALUES(?,?,?,?,?)`,
+		roomID, a.DocID, n, string(js), now())
+	if err != nil {
+		return "", fmt.Errorf("agent annotation: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return "", fmt.Errorf("agent annotation: %w", err)
+	}
+	if _, err := insertAnnotationMessage(ctx, tx, roomID, id, &NewMessage{Author: AgentName, Body: a.Body}, 0); err != nil {
+		return "", err
+	}
+	return "", nil
+}
+
+// agentDocName is the name an agent write lands under. An agent document never takes an upload's
+// name, or the room would list two documents as one (spike S5): a new one gets "-agent" before
+// its extension until no upload holds the name. An existing agent document keeps its name.
+func agentDocName(ctx context.Context, tx *sql.Tx, roomID, name string) (string, error) {
+	for {
+		var agent, upload int
+		err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FILTER (WHERE kind = 'agent'), COUNT(*) FILTER (WHERE kind = 'upload')
+			FROM documents WHERE room_id = ? AND name = ?`, roomID, name).Scan(&agent, &upload)
+		if err != nil {
+			return "", fmt.Errorf("agent document name: %w", err)
+		}
+		if agent > 0 || upload == 0 {
+			return name, nil
+		}
+		ext := path.Ext(name)
+		name = strings.TrimSuffix(name, ext) + "-agent" + ext
+	}
 }
 
 // AgentWrite is a document the agent wrote: a new revision of the agent document of that name, or
@@ -74,17 +158,31 @@ type AgentWrite struct {
 	Body   string
 }
 
-// AgentReply is the agent's message on an annotation thread.
+// AgentReply is the agent's message on an annotation thread; Done also closes the thread.
 type AgentReply struct {
 	AnnotationID int64
 	Body         string
+	Done         bool
+}
+
+// AgentAnnotation is an annotation the agent opens on a text quote. DocID names the document; 0
+// means the agent document named AgentDoc, which the same turn may have just written.
+type AgentAnnotation struct {
+	Path     string
+	DocID    int64
+	AgentDoc string
+	Anchor   anchor.Anchor
+	Body     string
 }
 
 // TurnOutcome is a finished turn's result, applied all at once or not at all.
 type TurnOutcome struct {
 	Synthesis string
+	Model     string
 	Documents []AgentWrite
 	Replies   []AgentReply
+	// Annotations are anchored after Documents are written, so they may quote this turn's text.
+	Annotations []AgentAnnotation
 	// Session holds the session jsonl bytes from SessionOffset on.
 	SessionID     string
 	SessionOffset int64
@@ -94,14 +192,14 @@ type TurnOutcome struct {
 }
 
 const turnCols = `SELECT id, room_id, COALESCE(participant_id, 0), COALESCE(daemon_id, 0), host, status, fresh, resume,
-	session_id, message_cursor, annotation_cursor, prompt, error, report, started_at, ended_at FROM turns`
+	session_id, model, message_cursor, annotation_cursor, prompt, error, report, started_at, ended_at FROM turns`
 
 func scanTurn(sc scanner) (*Turn, error) {
 	var t Turn
 	var report, started string
 	var ended sql.NullString
 	err := sc.Scan(&t.ID, &t.RoomID, &t.ParticipantID, &t.DaemonID, &t.Host, &t.Status, &t.Fresh, &t.Resume,
-		&t.SessionID, &t.MessageCursor, &t.AnnotationCursor, &t.Prompt, &t.Error, &report, &started, &ended)
+		&t.SessionID, &t.Model, &t.MessageCursor, &t.AnnotationCursor, &t.Prompt, &t.Error, &report, &started, &ended)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -291,10 +389,20 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 		return nil, err
 	}
 	report := out.Report
+	renamed := map[string]string{}
 	for _, w := range out.Documents {
+		name, err := agentDocName(ctx, tx, roomID, w.Name)
+		if err != nil {
+			return nil, err
+		}
+		renamed[w.Name] = name
+		if name != w.Name {
+			report.Renamed = append(report.Renamed, w.Name+" as "+name)
+			w.Name = name
+		}
 		var docID int64
 		var latest string
-		err := tx.QueryRowContext(ctx, `
+		err = tx.QueryRowContext(ctx, `
 			SELECT d.id, r.body FROM documents d JOIN revisions r ON r.document_id = d.id
 			WHERE d.room_id = ? AND d.kind = 'agent' AND d.name = ? ORDER BY r.n DESC LIMIT 1`, roomID, w.Name).Scan(&docID, &latest)
 		switch {
@@ -314,7 +422,20 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 		}
 	}
 	for _, r := range out.Replies {
-		res, err := tx.ExecContext(ctx, `UPDATE annotations SET version = version + 1 WHERE id = ? AND room_id = ?`, r.AnnotationID, roomID)
+		if r.Done {
+			// A participant who wrote after the turn read the thread has not been answered yet.
+			var unseen bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM annotation_messages
+				WHERE annotation_id = ? AND author_kind = 'participant' AND id > ?)`, r.AnnotationID, t.AnnotationCursor).Scan(&unseen); err != nil {
+				return nil, fmt.Errorf("complete turn: %w", err)
+			}
+			if unseen {
+				r.Done = false
+				report.Ignored = append(report.Ignored, fmt.Sprintf("closing annotation %d: a participant wrote in it during the turn", r.AnnotationID))
+			}
+		}
+		res, err := tx.ExecContext(ctx, `UPDATE annotations SET version = version + 1,
+			status = CASE WHEN ? THEN 'done' ELSE status END WHERE id = ? AND room_id = ?`, r.Done, r.AnnotationID, roomID)
 		if err != nil {
 			return nil, fmt.Errorf("complete turn: %w", err)
 		}
@@ -328,9 +449,37 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 			return nil, err
 		}
 		report.Replies++
+		if r.Done {
+			report.Closed++
+		}
+	}
+	for _, a := range out.Annotations {
+		if a.DocID == 0 {
+			name := a.AgentDoc
+			if n, ok := renamed[name]; ok {
+				name = n
+			}
+			err := tx.QueryRowContext(ctx, `SELECT id FROM documents WHERE room_id = ? AND kind = 'agent' AND name = ?`, roomID, name).Scan(&a.DocID)
+			if errors.Is(err, sql.ErrNoRows) {
+				report.Ignored = append(report.Ignored, fmt.Sprintf("annotation on %s: no such document", a.Path))
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("complete turn: %w", err)
+			}
+		}
+		why, err := agentAnnotate(ctx, tx, roomID, a)
+		if err != nil {
+			return nil, err
+		}
+		if why != "" {
+			report.Ignored = append(report.Ignored, fmt.Sprintf("annotation on %s: %s", a.Path, why))
+			continue
+		}
+		report.Annotated++
 	}
 	if strings.TrimSpace(out.Synthesis) != "" {
-		if err := insertMessage(ctx, tx, &Message{RoomID: roomID, Kind: KindAgent, Sender: AgentName, Body: out.Synthesis}); err != nil {
+		if err := insertMessage(ctx, tx, &Message{RoomID: roomID, Kind: KindAgent, Sender: AgentName, Body: out.Synthesis, Model: out.Model}); err != nil {
 			return nil, err
 		}
 	}
@@ -344,14 +493,14 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 		return nil, fmt.Errorf("complete turn: %w", err)
 	}
 	ended := time.Now().UTC()
-	if _, err := tx.ExecContext(ctx, `UPDATE turns SET status = 'done', session_id = ?, report = ?, ended_at = ? WHERE id = ?`,
-		out.SessionID, string(rep), ended.Format(time.RFC3339Nano), id); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE turns SET status = 'done', session_id = ?, model = ?, report = ?, ended_at = ? WHERE id = ?`,
+		out.SessionID, out.Model, string(rep), ended.Format(time.RFC3339Nano), id); err != nil {
 		return nil, fmt.Errorf("complete turn: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("complete turn: %w", err)
 	}
-	t.Status, t.SessionID, t.Report, t.EndedAt = TurnDone, out.SessionID, report, &ended
+	t.Status, t.SessionID, t.Model, t.Report, t.EndedAt = TurnDone, out.SessionID, out.Model, report, &ended
 	return t, nil
 }
 
@@ -385,6 +534,9 @@ func (r TurnReport) Note() string {
 	}
 	if len(r.Ignored) > 0 {
 		parts = append(parts, "ignored: "+strings.Join(r.Ignored, "; "))
+	}
+	if len(r.Renamed) > 0 {
+		parts = append(parts, "named like an upload, so stored "+strings.Join(r.Renamed, ", "))
 	}
 	if len(parts) == 0 {
 		return ""

@@ -19,6 +19,7 @@ import (
 
 	"github.com/babs/grill-room/internal/creds"
 	"github.com/babs/grill-room/internal/sandbox"
+	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/turn"
 	"github.com/babs/grill-room/internal/web"
 )
@@ -103,18 +104,24 @@ func (rs *roomServer) agent(t *testing.T, tok string) agentView {
 
 func (rs *roomServer) lastMessage(t *testing.T) string {
 	t.Helper()
+	return rs.last(t).Body
+}
+
+func (rs *roomServer) last(t *testing.T) store.Message {
+	t.Helper()
 	msgs, err := rs.st.Messages(t.Context(), rs.room, 0, 1000)
 	if err != nil || len(msgs) == 0 {
 		t.Fatalf("messages: %v", err)
 	}
-	return msgs[len(msgs)-1].Body
+	return msgs[len(msgs)-1]
 }
 
 const sid = "60dc4912-36ec-4225-a44a-6a6c1ed85b1b"
 
 // 001-AC32 001-AC33 001-AC34: a press runs the turn on the host daemon, whose result lands in the
 // room; when the host drops mid-turn the turn fails, the other daemon takes over, and its next
-// turn resumes the same session from the room's copy.
+// turn resumes the same session from the room's copy. Each synthesis names the model it ran on:
+// the one claude reported, else the daemon's setting.
 func TestDaemonTurnsAndTakeover(t *testing.T) {
 	rs := newRoomServer(t)
 	agA := &fakeAgent{}
@@ -141,8 +148,8 @@ func TestDaemonTurnsAndTakeover(t *testing.T) {
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/messages", alice, map[string]string{"body": "The code word is PAPRIKA."}, http.StatusCreated, nil)
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]bool{}, http.StatusCreated, nil)
 	waitFor(t, "turn 1 done", func() bool { v := rs.agent(t, alice); return v.Turn != nil && v.Turn.Status == "done" })
-	if m := rs.lastMessage(t); m != "Noted." {
-		t.Fatalf("synthesis %q", m)
+	if m := rs.last(t); m.Body != "Noted." || m.Model != "haiku" {
+		t.Fatalf("synthesis %+v", m)
 	}
 	if docs, _ := rs.st.Documents(t.Context(), rs.room); len(docs) != 1 || docs[0].Name != "plan.md" || docs[0].Author != "Agent" {
 		t.Fatalf("documents %+v", docs)
@@ -158,7 +165,11 @@ func TestDaemonTurnsAndTakeover(t *testing.T) {
 		if err != nil || string(data) != "line1\n" {
 			return nil, errors.New("session copy differs")
 		}
-		return &sandbox.TurnOutput{Result: &sandbox.Result{Result: "PAPRIKA", SessionID: sid}, SessionOffset: 6, Session: []byte("line2\n")}, nil
+		res := &sandbox.Result{Result: "PAPRIKA", SessionID: sid}
+		if err := json.Unmarshal([]byte(`{"modelUsage": {"claude-side-x": {"outputTokens": 9}, "claude-opus-x": {"outputTokens": 900}}}`), res); err != nil {
+			return nil, err
+		}
+		return &sandbox.TurnOutput{Result: res, SessionOffset: 6, Session: []byte("line2\n")}, nil
 	}
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]bool{}, http.StatusCreated, nil)
 	waitFor(t, "turn 2 running on alice", func() bool { agA.mu.Lock(); defer agA.mu.Unlock(); return len(agA.inputs) == 2 })
@@ -172,8 +183,11 @@ func TestDaemonTurnsAndTakeover(t *testing.T) {
 	waitFor(t, "alice's sandbox closed", func() bool { agA.mu.Lock(); defer agA.mu.Unlock(); return agA.closed })
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", bob, map[string]bool{}, http.StatusCreated, nil)
 	waitFor(t, "turn 3 done", func() bool { v := rs.agent(t, bob); return v.Turn.Status == "done" })
-	if m := rs.lastMessage(t); m != "PAPRIKA" {
-		t.Fatalf("synthesis %q", m)
+	if m := rs.last(t); m.Body != "PAPRIKA" || m.Model != "claude-opus-x" {
+		t.Fatalf("synthesis %+v", m)
+	}
+	if done, _ := rs.st.LastDoneTurn(t.Context(), rs.room); done.Model != "claude-opus-x" {
+		t.Fatalf("turn model %q", done.Model)
 	}
 	if data, _ := rs.st.AgentSession(t.Context(), rs.room, sid); string(data) != "line1\nline2\n" {
 		t.Fatalf("session %q", data)

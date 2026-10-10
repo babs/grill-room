@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/babs/grill-room/internal/anchor"
@@ -49,7 +51,12 @@ func newTurnRoom(t *testing.T, s *Store, room string) turnRoom {
 
 func (r turnRoom) start(t *testing.T, s *Store, room string) *Turn {
 	t.Helper()
-	tn := &Turn{RoomID: room, ParticipantID: r.p.ID, DaemonID: r.daemon, Host: "laptop", Prompt: "go"}
+	// The turn reads every annotation message so far, as the room's prepareTurn does.
+	_, cursor, err := s.AnnotationsSince(context.Background(), room, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tn := &Turn{RoomID: room, ParticipantID: r.p.ID, DaemonID: r.daemon, Host: "laptop", Prompt: "go", AnnotationCursor: cursor}
 	if err := s.StartTurn(context.Background(), tn); err != nil {
 		t.Fatal(err)
 	}
@@ -317,5 +324,133 @@ func TestHostAndCanTrigger(t *testing.T) {
 	}
 	if n, _ := s.MessageCursor(ctx, "c"); n != 0 {
 		t.Fatalf("cursor of an empty room: %d", n)
+	}
+}
+
+// 001-AC16: an agent document never shares its name with an upload (spike S5 listed two
+// "plan.md"). A new one is stored under a free "-agent" name, told in the room, and later writes
+// under the upload's name revise it; an agent document that had the name first keeps it.
+func TestCompleteTurnKeepsAgentNamesOffUploads(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	r := newTurnRoom(t, s, "a")
+	for _, name := range []string{"brief.md", "brief-agent.md", "plan.md"} {
+		u := &Upload{RoomID: "a", Author: "Alice", Filename: name, ContentType: "text/markdown", Format: "md", Data: []byte("x"), Text: "x"}
+		if _, err := s.AddUpload(ctx, u, 1<<20); err != nil {
+			t.Fatal(err)
+		}
+	}
+	complete := func(body string) *Turn {
+		t.Helper()
+		tn := r.start(t, s, "a")
+		done, err := s.CompleteTurn(ctx, "a", tn.ID, r.daemon, &TurnOutcome{SessionID: "s" + body,
+			Documents: []AgentWrite{{Name: "brief.md", Format: "md", Body: body}, {Name: "plan.md", Format: "md", Body: body}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return done
+	}
+	done := complete("v1")
+	if !slices.Equal(done.Report.Created, []string{"brief-agent-agent.md"}) || !slices.Equal(done.Report.Revised, []string{"plan.md"}) ||
+		!slices.Equal(done.Report.Renamed, []string{"brief.md as brief-agent-agent.md"}) {
+		t.Fatalf("report %+v", done.Report)
+	}
+	msgs, _ := s.Messages(ctx, "a", 0, 100)
+	if note := msgs[len(msgs)-1].Body; note != "Agent turn: named like an upload, so stored brief.md as brief-agent-agent.md." {
+		t.Fatalf("note %q", note)
+	}
+	done = complete("v2")
+	if len(done.Report.Created) != 0 || !slices.Equal(done.Report.Revised, []string{"brief-agent-agent.md", "plan.md"}) {
+		t.Fatalf("second turn report %+v", done.Report)
+	}
+	docs, _ := s.Documents(ctx, "a")
+	names := map[string]int{}
+	for _, d := range docs {
+		names[d.Name]++
+	}
+	for name, n := range names {
+		if n > 1 && name != "plan.md" {
+			t.Errorf("%d documents named %s", n, name)
+		}
+	}
+	if len(docs) != 5 {
+		t.Fatalf("documents %+v", docs)
+	}
+}
+
+// 001-AC39: the agent's own annotations land on the latest revision of any document with text,
+// one it wrote this turn included, authored by Agent; a reply with Done closes its thread. What
+// cannot be placed is reported and the rest of the turn still applies.
+func TestCompleteTurnAgentAnnotations(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	r := newTurnRoom(t, s, "a")
+	up, err := s.AddUpload(ctx, &Upload{RoomID: "a", Author: "Alice", Filename: "brief.md", ContentType: "text/markdown", Format: "md",
+		Data: []byte("x"), Text: "# Brief\n\nShip on *Friday* at noon.\n"}, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pdf, err := s.AddUpload(ctx, &Upload{RoomID: "a", Author: "Alice", Filename: "a.pdf", ContentType: "application/pdf", Format: "pdf", Data: []byte("%PDF")}, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tn := r.start(t, s, "a")
+	done, err := s.CompleteTurn(ctx, "a", tn.ID, r.daemon, &TurnOutcome{SessionID: "s1",
+		Documents: []AgentWrite{{Name: "risks.md", Format: "md", Body: "# Risks\n\nNo rollback.\n"}},
+		Replies:   []AgentReply{{AnnotationID: r.ann, Body: "the brown one", Done: true}},
+		Annotations: []AgentAnnotation{
+			{Path: "uploads/brief.md", DocID: up.ID, Anchor: anchor.Anchor{Exact: "Friday at noon"}, Body: "Which time zone?"},
+			{Path: "docs/risks.md", AgentDoc: "risks.md", Anchor: anchor.Anchor{Exact: "No rollback", Suffix: "."}, Body: "Who owns it?"},
+			{Path: "docs/plan.md", DocID: r.doc, Anchor: anchor.Anchor{Exact: "lazy dog"}, Body: "x"},
+			{Path: "uploads/a.pdf", DocID: pdf.ID, Anchor: anchor.Anchor{Exact: "PDF"}, Body: "x"},
+			{Path: "docs/none.md", AgentDoc: "none.md", Anchor: anchor.Anchor{Exact: "x"}, Body: "x"},
+			{Path: "docs/plan.md", DocID: r.doc, Anchor: anchor.Anchor{Exact: "brown", Prefix: string(make([]rune, 65))}, Body: "x"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done.Report.Annotated != 2 || done.Report.Closed != 1 || len(done.Report.Ignored) != 4 {
+		t.Fatalf("report %+v", done.Report)
+	}
+	for i, want := range []string{"docs/plan.md: quote not found", "uploads/a.pdf: the document has no text to quote", "docs/none.md: no such document", "docs/plan.md: prefix and suffix"} {
+		if done.Report.Ignored[i] != "annotation on "+want && !strings.HasPrefix(done.Report.Ignored[i], "annotation on "+want) {
+			t.Errorf("ignored[%d] = %q, want %q", i, done.Report.Ignored[i], want)
+		}
+	}
+	anns, _ := s.Annotations(ctx, "a", up.ID)
+	if len(anns) != 1 || anns[0].Anchor.Exact != "Friday at noon" || anns[0].Revision != 1 || anns[0].Status != StatusOpen ||
+		anns[0].Messages[0].By != ByAgent || anns[0].Messages[0].Body != "Which time zone?" {
+		t.Fatalf("annotation on the upload %+v", anns)
+	}
+	docs, _ := s.Documents(ctx, "a")
+	risks := docs[len(docs)-1]
+	if anns, _ := s.Annotations(ctx, "a", risks.ID); risks.Name != "risks.md" || len(anns) != 1 || anns[0].Anchor.Exact != "No rollback" {
+		t.Fatalf("annotation on this turn's document %+v %+v", risks, anns)
+	}
+	if anns, _ := s.Annotations(ctx, "a", r.doc); anns[0].Status != StatusDone {
+		t.Fatalf("closed thread %+v", anns[0])
+	}
+	// A participant reply reopens the thread the agent closed.
+	if _, err := s.AddAnnotationMessage(ctx, "a", r.ann, &NewMessage{ParticipantID: r.p.ID, Author: "Alice", Body: "not yet"}, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	if anns, _ := s.Annotations(ctx, "a", r.doc); anns[0].Status != StatusReopened {
+		t.Fatalf("after Alice's reply %+v", anns[0])
+	}
+
+	// Alice wrote again while the next turn ran: the agent's close leaves the thread open for her.
+	tn2 := r.start(t, s, "a")
+	if _, err := s.AddAnnotationMessage(ctx, "a", r.ann, &NewMessage{ParticipantID: r.p.ID, Author: "Alice", Body: "and the red one?"}, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	done, err = s.CompleteTurn(ctx, "a", tn2.ID, r.daemon, &TurnOutcome{SessionID: "s1", SessionOffset: 0,
+		Replies: []AgentReply{{AnnotationID: r.ann, Body: "settled", Done: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if anns, _ := s.Annotations(ctx, "a", r.doc); anns[0].Status != StatusReopened || done.Report.Closed != 0 || done.Report.Replies != 1 ||
+		!slices.Equal(done.Report.Ignored, []string{fmt.Sprintf("closing annotation %d: a participant wrote in it during the turn", r.ann)}) {
+		t.Fatalf("close during a participant reply: %+v, %+v", anns[0], done.Report)
 	}
 }

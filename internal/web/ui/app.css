@@ -136,6 +136,7 @@ button.doc:hover { background: var(--line); }
 .msg .body { white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg.system { color: var(--muted); font-size: 0.85rem; font-style: italic; }
 .msg.agent .meta strong { color: var(--teal); }
+.msg .meta .model { font-size: 0.75rem; color: var(--muted); }
 .msg.voice .meta strong::after { content: " (voice)"; font-weight: normal; color: var(--muted); }
 #send { display: flex; gap: 0.5rem; padding: 0.75rem 1rem; border-top: 1px solid var(--line); }
 #send textarea { flex: 1; resize: vertical; }

@@ -5,6 +5,7 @@ package turn
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -26,6 +27,8 @@ const (
 	AttachmentsDir = "attachments"
 	// RepliesFile is where the agent writes its annotation replies.
 	RepliesFile = "replies.json"
+	// NewAnnotationsFile is where the agent opens annotations of its own.
+	NewAnnotationsFile = "annotations-new.json"
 )
 
 // Limits on what a result may carry.
@@ -34,6 +37,11 @@ const (
 	MaxReplyLen  = 4000
 	MaxDocName   = 200
 	MaxSynthesis = 20000
+	MaxModel     = 100
+	// MaxNewAnnotations bounds the annotations one turn opens; the rest are ignored and reported.
+	MaxNewAnnotations = 50
+	// Anchor context, in runes, as the anchor package accepts it.
+	maxContext = 64
 )
 
 // Job is the turn the daemon runs, as the server hands it over.
@@ -61,6 +69,8 @@ type Change struct {
 type Result struct {
 	Error     string `json:"error,omitempty"`
 	Synthesis string `json:"synthesis,omitempty"`
+	// Model is the Claude model the turn ran on: the one claude reported, else the daemon's setting.
+	Model string `json:"model,omitempty"`
 	// Session carries the session jsonl bytes from SessionOffset on (D23).
 	SessionID     string   `json:"session_id,omitempty"`
 	SessionOffset int64    `json:"session_offset"`
@@ -71,7 +81,7 @@ type Result struct {
 // NeedsContent reports whether the server needs a changed file's bytes; for any other change the
 // path is enough, which keeps an edited 20 MB upload out of the result.
 func NeedsContent(p string) bool {
-	return p == RepliesFile || strings.HasPrefix(p, DocsDir+"/")
+	return p == RepliesFile || p == NewAnnotationsFile || strings.HasPrefix(p, DocsDir+"/")
 }
 
 // Doc is an agent document as a turn wrote it.
@@ -81,16 +91,28 @@ type Doc struct {
 	Body   string
 }
 
-// Reply is the agent's message on an annotation thread.
+// Reply is the agent's message on an annotation thread; Status "done" also closes the thread.
 type Reply struct {
 	Annotation int64  `json:"annotation"`
 	Body       string `json:"body"`
+	Status     string `json:"status,omitempty"`
+}
+
+// NewAnnotation is an annotation the agent opens: a text quote in the document at workspace path
+// Doc, uploads included (annotating is not editing, D30), with the first message of its thread.
+type NewAnnotation struct {
+	Doc    string `json:"doc"`
+	Exact  string `json:"exact"`
+	Prefix string `json:"prefix"`
+	Suffix string `json:"suffix"`
+	Body   string `json:"body"`
 }
 
 // Outcome is a result's changes, sorted out.
 type Outcome struct {
-	Docs    []Doc
-	Replies []Reply
+	Docs        []Doc
+	Replies     []Reply
+	Annotations []NewAnnotation
 	// Rejected lists changed upload paths; Ignored, changes outside the contract with why.
 	Rejected []string
 	Ignored  []string
@@ -111,6 +133,12 @@ func Classify(changes []Change) Outcome {
 				o.Ignored = append(o.Ignored, fmt.Sprintf("%s: %v", p, err))
 			}
 			o.Replies = append(o.Replies, replies...)
+		case p == NewAnnotationsFile && !c.Deleted:
+			anns, err := parseNewAnnotations(c.Content)
+			if err != nil {
+				o.Ignored = append(o.Ignored, fmt.Sprintf("%s: %v", p, err))
+			}
+			o.Annotations = append(o.Annotations, anns...)
 		case strings.HasPrefix(p, DocsDir+"/"):
 			d, err := doc(p, c)
 			if err != nil {
@@ -175,17 +203,61 @@ func parseReplies(b []byte) ([]Reply, error) {
 	var skipped int
 	for _, r := range in {
 		r.Body = strings.TrimSpace(r.Body)
-		if r.Annotation <= 0 || r.Body == "" {
+		if r.Annotation <= 0 || r.Body == "" || (r.Status != "" && r.Status != "done") {
 			skipped++
 			continue
 		}
-		if rs := []rune(r.Body); len(rs) > MaxReplyLen {
-			r.Body = string(rs[:MaxReplyLen])
-		}
+		r.Body = cut(r.Body, MaxReplyLen)
 		out = append(out, r)
 	}
 	if skipped > 0 {
-		return out, fmt.Errorf("%d replies without an annotation id or a body", skipped)
+		return out, fmt.Errorf(`%d replies without an annotation id or a body, or with a status other than "done"`, skipped)
+	}
+	return out, nil
+}
+
+func fold(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+func cut(s string, n int) string {
+	if rs := []rune(s); len(rs) > n {
+		return string(rs[:n])
+	}
+	return s
+}
+
+func parseNewAnnotations(b []byte) ([]NewAnnotation, error) {
+	var in []NewAnnotation
+	if err := json.Unmarshal(b, &in); err != nil {
+		return nil, fmt.Errorf(`want [{"doc": "<path>", "exact": "<quote>", "prefix": "...", "suffix": "...", "body": "<comment>"}]: %w`, err)
+	}
+	var out []NewAnnotation
+	var skipped int
+	for _, a := range in {
+		a.Doc, a.Body = path.Clean(strings.TrimSpace(a.Doc)), strings.TrimSpace(a.Body)
+		// Whitespace folded as the anchor text is: a quote copied across a line break still matches.
+		a.Exact, a.Prefix, a.Suffix = fold(a.Exact), fold(a.Prefix), fold(a.Suffix)
+		if a.Doc == "." || a.Exact == "" || a.Body == "" || !utf8.ValidString(a.Exact+a.Prefix+a.Suffix) {
+			skipped++
+			continue
+		}
+		// Context longer than an anchor holds is trimmed from its far end: the near words locate.
+		if rs := []rune(a.Prefix); len(rs) > maxContext {
+			a.Prefix = string(rs[len(rs)-maxContext:])
+		}
+		a.Suffix = cut(a.Suffix, maxContext)
+		a.Body = cut(a.Body, MaxReplyLen)
+		out = append(out, a)
+	}
+	var errs []string
+	if skipped > 0 {
+		errs = append(errs, fmt.Sprintf("%d annotations without a doc, a quote or a body", skipped))
+	}
+	if len(out) > MaxNewAnnotations {
+		errs = append(errs, fmt.Sprintf("%d annotations past the first %d", len(out)-MaxNewAnnotations, MaxNewAnnotations))
+		out = out[:MaxNewAnnotations]
+	}
+	if len(errs) > 0 {
+		return out, errors.New(strings.Join(errs, ", "))
 	}
 	return out, nil
 }

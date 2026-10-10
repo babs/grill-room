@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -633,5 +634,110 @@ func TestDescribeAnchorAndPaths(t *testing.T) {
 		if got := textPath(d); got != want {
 			t.Errorf("textPath(%s) = %q, want %q", d.Name, got, want)
 		}
+	}
+}
+
+const sid2 = "22222222-3333-4444-8555-666666666666"
+
+// 001-AC39: over several turns the agent answers participant replies on its threads, opens its
+// own anchored annotations on any document it sees (an upload's text, a document it wrote that
+// same turn), and closes a thread; a participant reply reopens it. Quotes it cannot place are
+// reported, never fatal. 001-AC16: an agent document named like an upload gets its own name.
+// The synthesis carries the model the daemon reported.
+func TestAgentAnnotationLoop(t *testing.T) {
+	e := newEnv(t)
+	r := newTurnRoom(t, e)
+	alice := r.alice
+	office := fmt.Sprintf("uploads/%d-plan.docx.md", r.office)
+	if _, err := e.st.AddUpload(t.Context(), &store.Upload{RoomID: r.room, Author: "Alice", Filename: "rollback.md",
+		ContentType: "text/markdown", Format: "md", Data: []byte("x"), Text: "x"}, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	tn := e.press(t, r, alice, alice.p.Token, false)
+	job := e.job(t, r, alice, tn.ID)
+	for _, want := range []string{`"status": "done"`, "annotations-new.json", "uploads too", "name no upload has"} {
+		if !strings.Contains(job.Prompt, want) {
+			t.Errorf("prompt lacks %q", want)
+		}
+	}
+	newAnns, _ := json.Marshal([]turn.NewAnnotation{
+		{Doc: office, Exact: "Converted\nplan", Body: "Who converted it?"},
+		{Doc: "docs/rollback.md", Exact: "No plan", Suffix: " yet", Body: "Who writes it?"},
+		{Doc: "docs/synthesis.md", Exact: "a purple fox", Body: "lost"},
+		{Doc: fmt.Sprintf("uploads/%d-brief.pdf", r.pdf), Exact: "PDF", Body: "no text"},
+		{Doc: "docs/nowhere.md", Exact: "x", Body: "no doc"},
+	})
+	code, b := e.result(t, r, alice, tn.ID, turn.Result{
+		Synthesis: "Opened two questions.", Model: "claude-opus-x\x07", SessionID: sid2, Session: []byte("one\n"),
+		Changes: []turn.Change{
+			{Path: "docs/rollback.md", Content: []byte("# Rollback\n\nNo plan yet.\n")},
+			{Path: turn.RepliesFile, Content: []byte(fmt.Sprintf(`[{"annotation": %d, "body": "the brown one"}]`, r.ann))},
+			{Path: turn.NewAnnotationsFile, Content: newAnns},
+		},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("result: %d %s", code, b)
+	}
+	done := decodeJSON[store.Turn](t, b)
+	if done.Model != "claude-opus-x" || done.Report.Annotated != 2 || done.Report.Replies != 1 ||
+		!slices.Equal(done.Report.Created, []string{"rollback-agent.md"}) || len(done.Report.Ignored) != 3 {
+		t.Fatalf("turn 1 %+v", done)
+	}
+	for i, want := range []string{"docs/synthesis.md: quote not found", "-brief.pdf: the document has no text to quote", "docs/nowhere.md: no such document"} {
+		if !strings.Contains(done.Report.Ignored[i], want) {
+			t.Errorf("ignored[%d] = %q, want %q", i, done.Report.Ignored[i], want)
+		}
+	}
+	msgs, _ := e.st.Messages(t.Context(), r.room, 0, 100)
+	if syn := msgs[len(msgs)-2]; syn.Kind != store.KindAgent || syn.Model != "claude-opus-x" {
+		t.Fatalf("synthesis %+v", syn)
+	}
+	agentAnn := func(doc int64) store.Annotation {
+		t.Helper()
+		anns, err := e.st.Annotations(t.Context(), r.room, doc)
+		if err != nil || len(anns) != 1 || anns[0].Messages[0].By != store.ByAgent || anns[0].Messages[0].Author != store.AgentName {
+			t.Fatalf("agent annotation on %d: %+v, %v", doc, anns, err)
+		}
+		return anns[0]
+	}
+	onUpload := agentAnn(r.office)
+	if a := onUpload.Anchor; a == nil || a.Exact != "Converted plan" || onUpload.Status != store.StatusOpen {
+		t.Fatalf("annotation on the upload %+v", onUpload)
+	}
+	docs, _ := e.st.Documents(t.Context(), r.room)
+	var rollback int64
+	for _, d := range docs {
+		if d.Name == "rollback-agent.md" {
+			rollback = d.ID
+		}
+	}
+	if a := agentAnn(rollback).Anchor; a == nil || a.Exact != "No plan" || !strings.HasPrefix(a.Suffix, " yet.") {
+		t.Fatalf("annotation on this turn's document %+v", a)
+	}
+
+	// Round 2: Alice answers the agent's question; the agent sees it as new, answers and closes it.
+	ap := "/api/rooms/" + r.room + "/annotations/" + strconv.FormatInt(onUpload.ID, 10) + "/messages"
+	if code, b := e.do(t, "POST", ap, alice.p.Token, map[string]string{"body": "Bob did, with pandoc."}); code != http.StatusCreated {
+		t.Fatalf("reply: %d %s", code, b)
+	}
+	tn2 := e.press(t, r, alice, alice.p.Token, false)
+	job = e.job(t, r, alice, tn2.ID)
+	if want := fmt.Sprintf("### Annotation %d on %s (open)", onUpload.ID, office); !strings.Contains(job.Prompt, want) ||
+		!strings.Contains(job.Prompt, "- **Agent**: Who converted it?\n- **Alice** (new): Bob did, with pandoc.") {
+		t.Fatalf("second prompt lacks the thread:\n%s", job.Prompt)
+	}
+	if code, b := e.result(t, r, alice, tn2.ID, turn.Result{SessionID: sid2, SessionOffset: 4, Session: []byte("two\n"),
+		Changes: []turn.Change{{Path: turn.RepliesFile, Content: []byte(fmt.Sprintf(`[{"annotation": %d, "body": "Thanks, settled.", "status": "done"}]`, onUpload.ID))}},
+	}); code != http.StatusOK || decodeJSON[store.Turn](t, b).Report.Closed != 1 {
+		t.Fatalf("turn 2: %d %s", code, b)
+	}
+	if a := agentAnn(r.office); a.Status != store.StatusDone || len(a.Messages) != 3 {
+		t.Fatalf("after closing %+v", a)
+	}
+	if code, b := e.do(t, "POST", ap, alice.p.Token, map[string]string{"body": "Not quite: the tables broke."}); code != http.StatusCreated {
+		t.Fatalf("reopening reply: %d %s", code, b)
+	}
+	if a := agentAnn(r.office); a.Status != store.StatusReopened {
+		t.Fatalf("after Alice's reply %+v", a)
 	}
 }

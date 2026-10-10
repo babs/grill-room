@@ -144,6 +144,10 @@ func (r *roomRun) execute(ctx context.Context, tok, ids string, job turn.Job) tu
 	if err != nil {
 		return turn.Result{Error: err.Error()}
 	}
-	return turn.Result{Synthesis: out.Result.Result, SessionID: out.Result.SessionID, SessionOffset: out.SessionOffset,
+	model := out.Result.Model()
+	if model == "" {
+		model = r.d.o.Model
+	}
+	return turn.Result{Synthesis: out.Result.Result, Model: model, SessionID: out.Result.SessionID, SessionOffset: out.SessionOffset,
 		Session: out.Session, Changes: out.Changes}
 }
