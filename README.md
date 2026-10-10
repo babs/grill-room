@@ -224,6 +224,43 @@ make dev-down   # removes the rule, stops compose
 
 `make dev-up` publishes the app port and LiveKit's 7880 and 5349 on the docker bridge gateway only, which is where traefik's `host.docker.internal` points, so the plain-HTTP ports stay off the LAN. The room is then at `https://grill-room.<dev-domain>/`, LiveKit signalling at `livekit.<dev-domain>` and TURN at `turn.<dev-domain>`. Compose needs the LiveKit key pair and the STT token in `.env`. With `GRILL_ROOM_ADMIN_TOKEN` set there, that is the admin token; otherwise read the generated one with `docker compose logs grill-room | grep admin_token_generated`.
 
+## Lab deployment on Kubernetes
+
+`deploy/k8s/` holds plain manifests for the room server, LiveKit and the STT worker, applied with kubectl. There is no GitOps and no Helm. The templates carry no domain, registry, digest or secret. `make k8s-render` fills them from `.env` into `deploy/k8s/out/`, which is untracked and readable by its owner only.
+
+The cluster needs:
+- traefik as the `traefik` IngressClass, with its CRDs (`IngressRouteTCP`) and a `websecure` entrypoint on 443;
+- a certificate for the three hostnames in traefik's default TLS store, since the routes name no secret;
+- a ReadWriteOnce StorageClass for the SQLite volume;
+- amd64 nodes for the room server and the worker, one of them with 2 free CPUs and 1.5 GiB for the worker;
+- a namespace you create beforehand, with pull access to your registry for its default service account.
+
+```sh
+make k8s-push VERSION=v0.8.0     # builds and pushes server and stt, prints GRILL_ROOM_IMAGE= and GRILL_STT_IMAGE= for .env
+export KUBECONFIG=<lab kubeconfig>
+make k8s-apply                   # renders, applies to K8S_NAMESPACE (default grill-room), waits for the rollouts
+make k8s-delete                  # removes everything k8s-apply created, the data volume included
+```
+
+The targets refuse to run without `KUBECONFIG` set, so the default kubeconfig is never used by accident. The namespace is left alone: delete it yourself.
+
+What gets deployed, with `<domain>` standing for `K8S_DOMAIN`:
+
+| Host | Route | Backend |
+|---|---|---|
+| `grill-room.<domain>` | Ingress, HTTPS | room server, port 7680 |
+| `grill-room-livekit.<domain>` | Ingress, HTTPS | LiveKit signalling, port 7880 |
+| `grill-room-turn.<domain>` | IngressRouteTCP, `HostSNI`, TLS terminated by traefik | LiveKit TURN, plain on 5349 (`turn.external_tls`) |
+
+- The room server runs one replica with a `Recreate` strategy. SQLite has one writer, on a 2 GiB volume. Probes hit `/healthz`, and `/metrics` is on 7681.
+- LiveKit exposes no UDP. Browsers relay through TURN/TLS on 443. `allow_restricted_peer_cidrs` lists only the pod's own IP, where the relay hands media to the SFU.
+- The STT worker requests 2 CPUs and may burst to 4, with 1.5 GiB.
+- Every pod runs as non-root with a read-only root filesystem, no service account token and no service links.
+- A default-deny NetworkPolicy blocks everything, then one policy per flow opens DNS, traefik to the room server and LiveKit, the worker to both, the room server to LiveKit's API, media between LiveKit and the worker, and the worker's traces to the cluster's OpenTelemetry collector (a Kyverno policy there injects `OTEL_EXPORTER_OTLP_ENDPOINT` into every pod).
+- The Secret `grill-room` comes from the same `.env` keys compose uses.
+
+`make e2e-lab` runs a whole session against the deployment through its public hostnames, with two participants, an upload, an annotation, audio and a voice line. Audio runs twice, once forced through TURN/TLS and once with default ICE. One agent turn runs with a real daemon on this machine and haiku, at most six Claude requests. [docs/lab-checklist.md](docs/lab-checklist.md) is the manual check with a participant outside the LAN.
+
 ## Make targets
 
-`build` (server and daemon), `release` (the daemon release into `DIST`, default `dist/`), `run`, `test` (race detector), `test-docker` (sandbox and agent turns against real Docker, a fake Anthropic upstream and a fake `claude`, no Claude request), `e2e` (Playwright with the installed Chrome, needs pnpm, pandoc and Docker for the agent turns, which use the fake `claude`), `e2e-voice` (Playwright against the compose stack, with fake microphones; it kills and restarts the `stt` container), `e2e-agent-live` (two real daemons against the compose stack with `claude --model haiku`: a turn, a daemon killed mid-turn, a takeover that recalls a code word through `--resume`; about six Claude requests), `e2e-install` (a clean Debian container runs the room's one-liner against the compose stack, pairs, takes a self-update and refuses a tampered release; it copies releases into the `grill-room` container and recreates it at the end; no Claude request), `stt-test` (ruff, mypy and pytest for the worker), `stt-image`, `cover`, `lint` (golangci-lint, shellcheck), `docker-build` (also tests the office fixtures against the pandoc it ships), `sandbox-image`, `sandbox-push` (pushes it to `REGISTRY` and prints its digest-pinned reference), `sandbox-fake-image` (the sandbox with `internal/sandbox/fakeclaude` as `claude`, for tests), `fixtures` (regenerates them), `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`.
+`build` (server and daemon), `release` (the daemon release into `DIST`, default `dist/`), `run`, `test` (race detector), `test-docker` (sandbox and agent turns against real Docker, a fake Anthropic upstream and a fake `claude`, no Claude request), `e2e` (Playwright with the installed Chrome, needs pnpm, pandoc and Docker for the agent turns, which use the fake `claude`), `e2e-voice` (Playwright against the compose stack, with fake microphones; it kills and restarts the `stt` container), `e2e-agent-live` (two real daemons against the compose stack with `claude --model haiku`: a turn, a daemon killed mid-turn, a takeover that recalls a code word through `--resume`; about six Claude requests), `e2e-install` (a clean Debian container runs the room's one-liner against the compose stack, pairs, takes a self-update and refuses a tampered release; it copies releases into the `grill-room` container and recreates it at the end; no Claude request), `stt-test` (ruff, mypy and pytest for the worker), `stt-image`, `cover`, `lint` (golangci-lint, shellcheck), `docker-build` (also tests the office fixtures against the pandoc it ships), `sandbox-image`, `sandbox-push` (pushes it to `REGISTRY` and prints its digest-pinned reference), `sandbox-fake-image` (the sandbox with `internal/sandbox/fakeclaude` as `claude`, for tests), `fixtures` (regenerates them), `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`, `k8s-push`, `k8s-render`, `k8s-check`, `k8s-apply`, `k8s-delete` (lab deployment, above), `e2e-lab` (a session against it; up to six Claude requests).

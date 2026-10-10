@@ -31,8 +31,11 @@ export async function invite(request, roomID) {
 }
 
 // join opens the invite in a fresh context of browser (its own cookie jar) and enters the room.
-export async function join(browser, inv, name) {
-  const page = await (await browser.newContext()).newPage();
+// init, if given, is a script the context runs in every page before the room's own.
+export async function join(browser, inv, name, init) {
+  const ctx = await browser.newContext();
+  if (init) await ctx.addInitScript(init);
+  const page = await ctx.newPage();
   const url = new URL(inv.url);
   await page.goto(url.pathname + url.hash);
   await page.getByLabel('Your name').fill(name);

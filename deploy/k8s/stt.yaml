@@ -1,0 +1,78 @@
+# STT worker, sized per spike S1-bis: 4 cores give about 2 s per utterance, 1.5 GiB holds the model.
+# One worker joins every active room. Rendered by `make k8s-render`.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stt
+  labels:
+    app.kubernetes.io/name: stt
+    app.kubernetes.io/part-of: grill-room
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: stt
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: stt
+        app.kubernetes.io/part-of: grill-room
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      securityContext:
+        runAsNonRoot: true
+        # The image's `app` user: numeric, so the kubelet can check runAsNonRoot.
+        runAsUser: 999
+        runAsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: stt
+          image: ${GRILL_STT_IMAGE}
+          env:
+            - name: APP_ROOM_URL
+              value: http://grill-room:7680
+            - name: APP_LIVEKIT_URL
+              value: ws://livekit:7880
+            - name: APP_CPU_THREADS
+              value: "4"
+            - name: APP_ROOM_TOKEN
+              valueFrom:
+                secretKeyRef: { name: grill-room, key: stt-token }
+            - name: APP_LIVEKIT_API_KEY
+              valueFrom:
+                secretKeyRef: { name: grill-room, key: livekit-api-key }
+            - name: APP_LIVEKIT_API_SECRET
+              valueFrom:
+                secretKeyRef: { name: grill-room, key: livekit-api-secret }
+          ports:
+            - { name: metrics, containerPort: 9100 }
+          # Loading the model takes a while on a cold node.
+          startupProbe:
+            httpGet: { path: /healthz, port: metrics }
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            periodSeconds: 20
+          # A 4-CPU worker node never has 4 CPUs free to request: ask for 2, burst to the S1-bis 4.
+          resources:
+            requests: { cpu: "2", memory: 1536Mi }
+            limits: { cpu: "4", memory: 1536Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

@@ -1,0 +1,139 @@
+# Default deny, then one allow per flow. Policies are additive: a pod gets the union of the rules
+# that select it. Replies to an allowed connection need no rule.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+---
+# Browsers and daemons reach the room through traefik; the STT worker posts voice lines.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: room
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grill-room
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik-system
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: stt
+      ports:
+        - { port: 7680, protocol: TCP }
+  # LiveKit's API: kick revoked participants, close deleted rooms.
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: livekit
+      ports:
+        - { port: 7880, protocol: TCP }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: livekit
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: livekit
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Signalling and TURN from browsers, through traefik.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik-system
+      ports:
+        - { port: 7880, protocol: TCP }
+        - { port: 5349, protocol: TCP }
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grill-room
+      ports:
+        - { port: 7880, protocol: TCP }
+    # The STT worker joins rooms as a participant: signalling, then media over ICE.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: stt
+      ports:
+        - { port: 7880, protocol: TCP }
+        - { port: 7881, protocol: TCP }
+        - { port: 7882, protocol: UDP }
+  # ICE checks from the SFU to the worker's candidates, on ports the worker picks.
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: stt
+      ports:
+        - { port: 1024, endPort: 65535, protocol: UDP }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: stt
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: stt
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: livekit
+      ports:
+        - { port: 1024, endPort: 65535, protocol: UDP }
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grill-room
+      ports:
+        - { port: 7680, protocol: TCP }
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: livekit
+      ports:
+        - { port: 7880, protocol: TCP }
+        - { port: 7881, protocol: TCP }
+        - { port: 7882, protocol: UDP }
+    # Traces: the cluster injects OTEL_EXPORTER_OTLP_ENDPOINT into every pod, and the worker's
+    # run.sh turns instrumentation on when it is set.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: opentelemetry-collector
+      ports:
+        - { port: 4317, protocol: TCP }
