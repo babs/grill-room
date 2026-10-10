@@ -27,6 +27,10 @@ On first start the server logs an `admin_token_generated` line holding the admin
 | `GRILL_ROOM_MAX_ATTACHMENT_MB` | `5` | largest image on an annotation message, in MiB (413 above) |
 | `GRILL_ROOM_PANDOC` | `pandoc` | pandoc binary for DOCX, ODT and PPTX (3.8+ for PPTX) |
 | `GRILL_ROOM_PANDOC_TIMEOUT` | `60s` | one conversion's time budget |
+| `GRILL_ROOM_LIVEKIT_URL` | none | LiveKit signalling URL for browsers (`wss://...`); unset turns voice off |
+| `GRILL_ROOM_LIVEKIT_API_URL` | `GRILL_ROOM_LIVEKIT_URL` as `https://` | LiveKit's HTTP API as the server reaches it |
+| `GRILL_ROOM_LIVEKIT_API_KEY`, `GRILL_ROOM_LIVEKIT_API_SECRET` | none | LiveKit API key pair; the secret needs 32+ characters |
+| `GRILL_ROOM_STT_TOKEN` | none | the STT worker's service token; unset refuses every worker |
 | `LOG_LEVEL` | `info` | |
 | `LOG_FORMAT` | `auto` | `console` on a TTY, `json` otherwise |
 
@@ -59,7 +63,8 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `POST /api/join` | invite token in the body | returns a participant token and sets a cookie |
 | `GET /api/rooms/{room}` | participant | room, me, participants |
 | `POST /api/rooms/{room}/messages` | participant | post a text message |
-| `GET /api/rooms/{room}/events` | participant | SSE: history then live messages; resumes from `Last-Event-ID`; a `documents` event when a document or revision is added, an `annotations` event when an annotation is added or changes |
+| `GET /api/rooms/{room}/events` | participant | SSE: history then live messages; resumes from `Last-Event-ID`; a `documents` event when a document or revision is added, an `annotations` event when an annotation is added or changes; with voice on, an `stt` event (`available`, `listening`) at open and on every change |
+| `GET /api/rooms/{room}/voice` | participant | LiveKit `url` and a 5 min `token` for this room's audio; 404 when voice is off |
 | `GET /api/rooms/{room}/documents` | participant | list |
 | `POST /api/rooms/{room}/documents` | participant | upload, multipart field `file` |
 | `GET /api/rooms/{room}/documents/{id}` | participant | document and its revisions |
@@ -76,6 +81,8 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `POST /api/rooms/{room}/pairings/{id}` | participant | `approve`: true pairs the daemon to this participant, false denies |
 | `GET /api/rooms/{room}/daemon/events` | daemon | SSE: `hello`, pings, `revoked` |
 | `POST /api/rooms/{room}/daemon/status` | daemon | heartbeat: `can_host`, `reason`, `version` |
+| `POST /api/stt/heartbeat` | STT token | `worker` name and the `rooms` whose audio it is in; a worker silent for 15 s counts as gone |
+| `POST /api/rooms/{room}/voice/lines` | STT token | one transcribed utterance: `participant_id`, `body`; stored as a `voice` message from that participant |
 
 Request bodies must be JSON with `Content-Type: application/json` (415 otherwise), uploads excepted. A body over its route's limit gets a 413. Participants authenticate with `Authorization: Bearer <token>` or the cookie set at join. The server stores tokens as SHA-256 hashes.
 

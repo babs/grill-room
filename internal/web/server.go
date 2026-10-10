@@ -17,6 +17,7 @@ import (
 	"io/fs"
 	"mime"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -59,12 +60,13 @@ type Server struct {
 	streams   atomic.Int64
 	pairings  pairings
 	presence  presences
+	stt       sttWorkers
 }
 
 // New builds a server. adminHash is HashToken of the admin token; baseURL prefixes invite links.
 func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *Server {
 	return &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
-		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}}
+		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, stt: sttWorkers{m: map[string]*sttWorker{}}}
 }
 
 // Streams returns the number of open event streams.
@@ -121,9 +123,18 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rooms/{room}/daemon/events", s.daemonAuth(s.daemonEvents))
 	mux.Handle("POST /api/rooms/{room}/daemon/status", s.daemonAuth(s.daemonStatus))
 
+	mux.Handle("GET /api/rooms/{room}/voice", s.participant(s.getVoice))
+	mux.Handle("POST /api/stt/heartbeat", s.sttAuth(s.sttHeartbeat))
+	mux.Handle("POST /api/rooms/{room}/voice/lines", s.sttAuth(s.postVoiceLine))
+
+	csp := "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+	if v := s.opts.Voice; v != nil {
+		// livekit-client signals over a WebSocket to LiveKit and probes its /rtc/validate over HTTPS.
+		csp += "; connect-src 'self' " + origin(v.URL, false) + " " + origin(v.URL, true)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+		h.Set("Content-Security-Policy", csp)
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		mux.ServeHTTP(w, r)
@@ -295,6 +306,7 @@ func (s *Server) deleteRoom(w http.ResponseWriter, r *http.Request) {
 	}
 	// Before the error check: a failed post-delete checkpoint still leaves the room gone.
 	s.bus.Notify(room)
+	s.closeVoice(room)
 	if err != nil {
 		s.serverError(w, "delete_room_failed", err)
 		return
@@ -344,6 +356,12 @@ func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	// Wakes the room's event streams, which re-check access and close.
 	s.bus.Notify(room)
+	// The revoke stands either way: a failed lookup only leaves the browser to leave audio itself.
+	if ids, err := s.bus.Store.InviteParticipantIDs(r.Context(), room, id); err != nil {
+		s.log.Error("voice_kick_lookup_failed", zap.String("room", room), zap.Error(err))
+	} else {
+		s.kickFromVoice(room, ids)
+	}
 	s.log.Info("invite_revoked", zap.String("room", room), zap.Int64("invite", id))
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -401,6 +419,8 @@ type roomResp struct {
 	Participants []store.Participant `json:"participants"`
 	// Daemons are the connected ones, with whether each can host.
 	Daemons []presence `json:"daemons"`
+	// Voice tells whether the server offers LiveKit audio.
+	Voice bool `json:"voice"`
 }
 
 func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
@@ -414,7 +434,7 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
 		s.serverError(w, "get_room_failed", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps, Daemons: s.connectedDaemons(room.ID)})
+	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps, Daemons: s.connectedDaemons(room.ID), Voice: s.opts.Voice != nil})
 }
 
 func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, sess session) {
@@ -439,8 +459,9 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, sess sessio
 
 // events streams the room's messages after ?since= or Last-Event-ID, then live ones, a
 // "documents" event when a document or revision is added, and an "annotations" event when an
-// annotation is added or changes. The stream ends with a "revoked" event
-// as soon as the participant's access is gone.
+// annotation is added or changes, and with voice on, an "stt" event at open and whenever
+// transcription comes or goes. The stream ends with a "revoked" event as soon as the participant's
+// access is gone.
 func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -532,12 +553,33 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	if !sync() {
 		return
 	}
+	// A worker's absence shows as a missing heartbeat, which no bus signal announces: poll for it.
+	var sttTick <-chan time.Time
+	var stt sttState
+	if s.opts.Voice != nil {
+		stt = s.stt.state(room, time.Now())
+		if _, err := io.WriteString(w, sttEvent(stt)); err != nil {
+			return
+		}
+		flusher.Flush()
+		t := time.NewTicker(sttPoll)
+		defer t.Stop()
+		sttTick = t.C
+	}
 	tick := time.NewTicker(heartbeat)
 	defer tick.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-sttTick:
+			if now := s.stt.state(room, time.Now()); now != stt {
+				stt = now
+				if _, err := io.WriteString(w, sttEvent(stt)); err != nil {
+					return
+				}
+				flusher.Flush()
+			}
 		case <-tick.C:
 			// The heartbeat doubles as a safety net for a signal lost to a full buffer.
 			if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
@@ -592,4 +634,16 @@ func Serve(ctx context.Context, srv *http.Server, log *zap.Logger) error {
 		return srv.Close()
 	}
 	return nil
+}
+
+// origin returns the scheme://host of a ws(s):// URL, as http(s):// when asHTTP is set.
+func origin(wsURL string, asHTTP bool) string {
+	u, err := url.Parse(wsURL)
+	if err != nil {
+		return ""
+	}
+	if asHTTP {
+		u.Scheme = strings.Replace(u.Scheme, "ws", "http", 1)
+	}
+	return u.Scheme + "://" + u.Host
 }

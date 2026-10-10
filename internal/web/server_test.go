@@ -33,6 +33,11 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
+	return newEnvOpts(t, testOptions)
+}
+
+func newEnvOpts(t *testing.T, opts Options) *env {
+	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +45,7 @@ func newEnv(t *testing.T) *env {
 	t.Cleanup(func() { _ = st.Close() })
 	admin := NewToken()
 	b := bus.New(st)
-	srv := New(b, HashToken(admin), baseURL+"/", testOptions, zap.NewNop())
+	srv := New(b, HashToken(admin), baseURL+"/", opts, zap.NewNop())
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return &env{ts: ts, st: st, bus: b, srv: srv, admin: admin}

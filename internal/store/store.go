@@ -13,7 +13,7 @@ import (
 	_ "modernc.org/sqlite" // pure-Go driver: keeps CGO_ENABLED=0 builds
 )
 
-// Message kinds. Only text and system are written in Phase 1; voice and agent are reserved.
+// Message kinds. The STT worker writes voice lines; agent is reserved for the agent turn.
 const (
 	KindVoice  = "voice"
 	KindText   = "text"
@@ -482,4 +482,40 @@ func now() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 func parseTS(s string) time.Time {
 	t, _ := time.Parse(time.RFC3339Nano, s)
 	return t
+}
+
+// RoomParticipant returns participant id of room, provided its invite is not revoked.
+func (s *Store) RoomParticipant(ctx context.Context, roomID string, id int64) (*Participant, error) {
+	var p Participant
+	var joined string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at FROM participants p
+		JOIN invites i ON i.id = p.invite_id
+		WHERE p.id = ? AND p.room_id = ? AND i.revoked_at IS NULL`, id, roomID).Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("room participant %d: %w", id, err)
+	}
+	p.JoinedAt = parseTS(joined)
+	return &p, nil
+}
+
+// InviteParticipantIDs lists the participants who joined room through invite, revoked or not.
+func (s *Store) InviteParticipantIDs(ctx context.Context, roomID string, inviteID int64) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM participants WHERE room_id = ? AND invite_id = ? ORDER BY id`, roomID, inviteID)
+	if err != nil {
+		return nil, fmt.Errorf("invite participants: %w", err)
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan invite participant: %w", err)
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }

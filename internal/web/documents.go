@@ -53,6 +53,8 @@ type Options struct {
 	MaxAttachmentBytes int64
 	// ToMarkdown converts an office file read as the pandoc format from.
 	ToMarkdown func(ctx context.Context, from string, data []byte) (string, error)
+	// Voice turns on LiveKit audio and transcription; nil leaves the room text only.
+	Voice *Voice
 }
 
 //go:embed templates

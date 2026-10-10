@@ -81,3 +81,40 @@ func TestAdminTokenHash(t *testing.T) {
 		t.Fatal("env token overwrote the stored hash")
 	}
 }
+
+func TestValidateVoice(t *testing.T) {
+	ok := Config{LiveKitURL: "wss://livekit.example", LiveKitAPIURL: "http://livekit:7880", LiveKitAPIKey: "k",
+		LiveKitAPISecret: "0123456789abcdef0123456789abcdef", STTToken: "s"}
+	if err := ok.validateVoice(); err != nil {
+		t.Fatalf("valid: %v", err)
+	}
+	if err := (Config{}).validateVoice(); err != nil {
+		t.Fatalf("voice off: %v", err)
+	}
+	cases := map[string]func(*Config){
+		"stt without livekit": func(c *Config) { *c = Config{STTToken: "s"} },
+		"http signalling":     func(c *Config) { c.LiveKitURL = "https://livekit.example" },
+		"no host":             func(c *Config) { c.LiveKitURL = "wss://" },
+		"ws api url":          func(c *Config) { c.LiveKitAPIURL = "ws://livekit:7880" },
+		"no key":              func(c *Config) { c.LiveKitAPIKey = "" },
+		"short secret":        func(c *Config) { c.LiveKitAPISecret = "short" },
+	}
+	for name, mutate := range cases {
+		c := ok
+		mutate(&c)
+		if err := c.validateVoice(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	v := ok.voice()
+	if v == nil || v.STTTokenHash != web.HashToken("s") || v.API.URL != "http://livekit:7880" {
+		t.Fatalf("voice %+v", v)
+	}
+	if (Config{}).voice() != nil {
+		t.Fatal("voice on without a URL")
+	}
+	t.Setenv("GRILL_ROOM_LIVEKIT_URL", "wss://livekit.example")
+	if c, _ := loadConfig(); c.LiveKitAPIURL != "https://livekit.example" {
+		t.Fatalf("default API URL %q", c.LiveKitAPIURL)
+	}
+}

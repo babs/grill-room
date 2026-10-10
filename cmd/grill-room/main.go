@@ -10,10 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,6 +29,7 @@ import (
 
 	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/convert"
+	"github.com/babs/grill-room/internal/livekit"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/web"
 )
@@ -66,6 +69,14 @@ type Config struct {
 	MaxAttachmentMB int64
 	Pandoc          string
 	PandocTimeout   time.Duration
+	// LiveKitURL is the signalling URL browsers use (wss://); empty turns voice off.
+	LiveKitURL string
+	// LiveKitAPIURL is LiveKit's HTTP API as this server reaches it; defaults from LiveKitURL.
+	LiveKitAPIURL    string
+	LiveKitAPIKey    string
+	LiveKitAPISecret string
+	// STTToken is the STT worker's service token; empty refuses every worker.
+	STTToken string
 }
 
 func loadConfig() (Config, error) {
@@ -85,8 +96,14 @@ func loadConfig() (Config, error) {
 		DB:              getEnv("GRILL_ROOM_DB", "grill-room.db"),
 		PublicURL:       getEnv("GRILL_ROOM_URL", "http://"+addr),
 		AdminToken:      os.Getenv("GRILL_ROOM_ADMIN_TOKEN"),
-		LogLevel:        getEnv("LOG_LEVEL", "info"),
-		LogFormat:       getEnv("LOG_FORMAT", "auto"),
+		LiveKitURL:      os.Getenv("GRILL_ROOM_LIVEKIT_URL"),
+		LiveKitAPIURL: getEnv("GRILL_ROOM_LIVEKIT_API_URL",
+			strings.Replace(os.Getenv("GRILL_ROOM_LIVEKIT_URL"), "ws", "http", 1)),
+		LiveKitAPIKey:    os.Getenv("GRILL_ROOM_LIVEKIT_API_KEY"),
+		LiveKitAPISecret: os.Getenv("GRILL_ROOM_LIVEKIT_API_SECRET"),
+		STTToken:         os.Getenv("GRILL_ROOM_STT_TOKEN"),
+		LogLevel:         getEnv("LOG_LEVEL", "info"),
+		LogFormat:        getEnv("LOG_FORMAT", "auto"),
 	}, errors.Join(err1, err2, err3, err4)
 }
 
@@ -107,6 +124,9 @@ func (c Config) Validate() error {
 	if c.PandocTimeout <= 0 {
 		return fmt.Errorf("GRILL_ROOM_PANDOC_TIMEOUT %s: want a positive duration", c.PandocTimeout)
 	}
+	if err := c.validateVoice(); err != nil {
+		return err
+	}
 	if _, err := zapcore.ParseLevel(c.LogLevel); err != nil {
 		return fmt.Errorf("LOG_LEVEL: %w", err)
 	}
@@ -114,6 +134,25 @@ func (c Config) Validate() error {
 	case "auto", "console", "json":
 	default:
 		return fmt.Errorf("LOG_FORMAT %q: want auto, console or json", c.LogFormat)
+	}
+	return nil
+}
+
+func (c Config) validateVoice() error {
+	if c.LiveKitURL == "" {
+		if c.STTToken != "" {
+			return errors.New("GRILL_ROOM_STT_TOKEN needs GRILL_ROOM_LIVEKIT_URL")
+		}
+		return nil
+	}
+	if u, err := url.Parse(c.LiveKitURL); err != nil || (u.Scheme != "wss" && u.Scheme != "ws") || u.Host == "" {
+		return fmt.Errorf("GRILL_ROOM_LIVEKIT_URL %q: want ws:// or wss://<host>", c.LiveKitURL)
+	}
+	if u, err := url.Parse(c.LiveKitAPIURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return fmt.Errorf("GRILL_ROOM_LIVEKIT_API_URL %q: want http:// or https://<host>", c.LiveKitAPIURL)
+	}
+	if c.LiveKitAPIKey == "" || len(c.LiveKitAPISecret) < livekit.MinSecretLen {
+		return fmt.Errorf("GRILL_ROOM_LIVEKIT_API_KEY must be set and GRILL_ROOM_LIVEKIT_API_SECRET hold %d+ characters", livekit.MinSecretLen)
 	}
 	return nil
 }
@@ -152,6 +191,21 @@ func adminTokenHash(ctx context.Context, st *store.Store, fromEnv string) (hash,
 		return "", "", err
 	}
 	return hash, generated, nil
+}
+
+// voice returns the LiveKit settings, nil when voice is off.
+func (c Config) voice() *web.Voice {
+	if c.LiveKitURL == "" {
+		return nil
+	}
+	v := &web.Voice{
+		URL: c.LiveKitURL, Key: c.LiveKitAPIKey, Secret: c.LiveKitAPISecret,
+		API: &livekit.Client{URL: c.LiveKitAPIURL, Key: c.LiveKitAPIKey, Secret: c.LiveKitAPISecret, HTTP: &http.Client{Timeout: 5 * time.Second}},
+	}
+	if c.STTToken != "" {
+		v.STTTokenHash = web.HashToken(c.STTToken)
+	}
+	return v
 }
 
 func main() {
@@ -210,7 +264,11 @@ func run() error {
 		MaxRoomBytes:       cfg.MaxRoomMB << 20,
 		MaxAttachmentBytes: cfg.MaxAttachmentMB << 20,
 		ToMarkdown:         convert.NewPandoc(cfg.Pandoc, cfg.PandocTimeout).ToMarkdown,
+		Voice:              cfg.voice(),
 	}, logger)
+	if cfg.LiveKitURL == "" {
+		logger.Info("voice_disabled", zap.String("hint", "set GRILL_ROOM_LIVEKIT_URL to enable audio"))
+	}
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
 		collectors.NewGoCollector(),
@@ -219,6 +277,8 @@ func run() error {
 			func() float64 { return float64(b.Dropped()) }),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_event_streams", Help: "Open SSE event streams."},
 			func() float64 { return float64(srv.Streams()) }),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_stt_workers", Help: "STT workers with a recent heartbeat."},
+			func() float64 { return float64(srv.STTWorkers()) }),
 	)
 
 	appSrv := &http.Server{
