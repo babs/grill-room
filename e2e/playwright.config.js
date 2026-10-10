@@ -7,8 +7,8 @@ export const adminToken = 'e2e-admin-token';
 
 export default defineConfig({
   testDir: '.',
-  // voice/ runs against the compose stack, with its own config.
-  testIgnore: 'voice/**',
+  // voice/ and agent-live/ run against the compose stack, with their own configs.
+  testIgnore: ['voice/**', 'agent-live/**'],
   timeout: 30_000,
   // The installed Chrome: no browser download.
   use: { baseURL, channel: 'chrome' },
