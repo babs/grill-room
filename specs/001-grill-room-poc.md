@@ -26,7 +26,7 @@ A self-hosted web room. People join with an invite link and a browser and talk t
 - Session continuity: resume the previous Claude session, or start fresh with transcripts provided as MD files.
 - Distribution: a download button in the room UI, a `curl | sh` one-liner carrying the room URL, and the standalone binary.
 - Dev and test environment: a local traefik serving a valid wildcard certificate for a dev domain that resolves to loopback (`*.<dev-domain>`), so it works on the dev machine only. LiveKit runs in the project's docker compose. Phases 1 to 7 are verified there, with no kube build loop.
-- Deployment: a lab k8s cluster via ArgoCD, with TLS ingress (traefik and cert-manager) and LiveKit reachable from the Internet (Phase 8).
+- Deployment: a lab k8s cluster with plain manifests (kubectl apply, Helm if needed), no GitOps for the PoC, with TLS ingress (traefik and cert-manager) and LiveKit reachable from the Internet (Phase 8).
 
 ## Out of scope
 
@@ -93,7 +93,7 @@ A self-hosted web room. People join with an invite link and a browser and talk t
 - [ ] **AC37** The daemon checks for a newer release at start, updates itself on approval in the local UI, and restarts.
 
 ### Deployment
-- [ ] **AC38** The room server, LiveKit and the STT worker deploy on the lab cluster from ArgoCD. The room is reachable over HTTPS with a valid certificate, and AC6 passes between a participant on the LAN and one outside it.
+- [ ] **AC38** The room server, LiveKit and the STT worker deploy on the lab cluster as plain manifests applied with kubectl (no GitOps for the PoC). The room is reachable over HTTPS with a valid certificate, and AC6 passes between a participant on the LAN and one outside it.
 
 ## Phases
 
@@ -116,7 +116,7 @@ A self-hosted web room. People join with an invite link and a browser and talk t
 - **DoD**: re-anchoring tests (reworded, removed, element re-render); a two-browser e2e (Playwright) shows a mark created in one appearing in the other.
 
 ### Phase 4 — Voice and STT
-- Work: LiveKit in the lab via ArgoCD, room token minting by the room server, and browser audio join. The STT worker subscribes to each track, cuts on VAD pauses, transcribes, and posts lines through the room API. The UI shows STT health.
+- Work: LiveKit in the dev compose, room token minting by the room server, and browser audio join. The STT worker subscribes to each track, cuts on VAD pauses, transcribes, and posts lines through the room API. The UI shows STT health.
 - **Covers**: AC6, AC7, AC8, AC9, AC10
 - **Data model impact**: `messages.kind` (`voice` | `text` | `agent` | `system`)
 - **DoD**: two browser profiles on `grill-room.<dev-domain>` exchange audio; a recorded FR+EN fixture played into a test participant yields lines in the right languages within 10 s; the STT pod has no audio files (`find / -name '*.wav' -o -name '*.opus'` empty); killing the STT pod shows the banner and recovers.
@@ -140,10 +140,10 @@ A self-hosted web room. People join with an invite link and a browser and talk t
 - **DoD**: on a clean VM per OS, the one-liner installs, starts and pairs; bumping the release triggers the update prompt and restart.
 
 ### Phase 8 — Lab deployment end to end
-- Work: ArgoCD apps (room server, LiveKit, STT), traefik ingress with cert-manager, LiveKit public reachability, and default-deny NetworkPolicies.
+- Work: plain manifests in `deploy/k8s/` (room server, LiveKit, STT) applied with kubectl, traefik ingress with cert-manager, LiveKit public reachability, and default-deny NetworkPolicies.
 - **Covers**: AC38
 - **Data model impact**: none
-- **DoD**: ArgoCD apps Healthy and Synced; HTTPS certificate valid; a full grill session (two humans, one inside and one outside the LAN, upload, annotate, agent turn) passes.
+- **DoD**: all workloads Ready; HTTPS certificate valid; a full grill session (two humans, one inside and one outside the LAN, upload, annotate, agent turn) passes.
 
 ## Data model impact (summary)
 
