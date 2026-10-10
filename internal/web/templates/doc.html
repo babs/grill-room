@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+<link rel="stylesheet" href="/static/doc/github-markdown-light.css" media="(prefers-color-scheme: light)">
+<link rel="stylesheet" href="/static/doc/github-markdown-dark.css" media="(prefers-color-scheme: dark)">
+<style media="(prefers-color-scheme: light)">{{.CodeLight}}</style>
+<style media="(prefers-color-scheme: dark)">{{.CodeDark}}</style>
+<link rel="stylesheet" href="/static/doc/github-clipboard.css">
+<link rel="stylesheet" href="/static/doc/github-diff.css">
+<script src="/static/doc/clipboard-copy.js"></script>
+{{- if .Math}}
+<link rel="stylesheet" href="/static/doc/mathjax.css">
+<script src="/static/doc/mathjax-options.js"></script>
+<script src="/static/doc/tex-mml-chtml.js"></script>
+{{- end}}
+{{- if .Mermaid}}
+<link rel="stylesheet" href="/static/doc/github-mermaid.css">
+<script src="/static/doc/mermaid.min.js"></script>
+<script src="/static/doc/mermaid-init.js"></script>
+{{- end}}
+</head>
+<body class="markdown-body">
+<div class="container"><div class="container-inner">
+{{.Content}}
+</div></div>
+</body>
+</html>

@@ -26,6 +26,8 @@ const baseURL = "https://rooms.example"
 type env struct {
 	ts    *httptest.Server
 	st    *store.Store
+	bus   *bus.Bus
+	srv   *Server
 	admin string
 }
 
@@ -37,9 +39,11 @@ func newEnv(t *testing.T) *env {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	admin := NewToken()
-	ts := httptest.NewServer(New(bus.New(st), HashToken(admin), baseURL+"/", zap.NewNop()).Handler())
+	b := bus.New(st)
+	srv := New(b, HashToken(admin), baseURL+"/", testOptions, zap.NewNop())
+	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	return &env{ts: ts, st: st, admin: admin}
+	return &env{ts: ts, st: st, bus: b, srv: srv, admin: admin}
 }
 
 // do sends a JSON request with an optional bearer token and returns the status and body.
@@ -286,6 +290,11 @@ func TestE2ERoomLifecycle(t *testing.T) {
 		{"GET", "/api/rooms/" + room.ID},
 		{"POST", "/api/rooms/" + room.ID + "/messages"},
 		{"GET", "/api/rooms/" + room.ID + "/events"},
+		{"GET", "/api/rooms/" + room.ID + "/documents"},
+		{"POST", "/api/rooms/" + room.ID + "/documents"},
+		{"GET", "/api/rooms/" + room.ID + "/documents/1"},
+		{"GET", "/api/rooms/" + room.ID + "/documents/1/view"},
+		{"GET", "/api/rooms/" + room.ID + "/documents/1/original"},
 	} {
 		if code, _ := e.do(t, r.method, r.path, alice.Token, map[string]string{"body": "x"}); code != http.StatusUnauthorized {
 			t.Errorf("%s %s after revoke: %d, want 401", r.method, r.path, code)
@@ -339,6 +348,11 @@ func TestRoomRoutesRequireValidRoomToken(t *testing.T) {
 		{"GET", "/api/rooms/" + room.ID},
 		{"POST", "/api/rooms/" + room.ID + "/messages"},
 		{"GET", "/api/rooms/" + room.ID + "/events"},
+		{"GET", "/api/rooms/" + room.ID + "/documents"},
+		{"POST", "/api/rooms/" + room.ID + "/documents"},
+		{"GET", "/api/rooms/" + room.ID + "/documents/1"},
+		{"GET", "/api/rooms/" + room.ID + "/documents/1/view"},
+		{"GET", "/api/rooms/" + room.ID + "/documents/1/original"},
 	}
 	creds := map[string]func(*http.Request){
 		"none":              func(*http.Request) {},

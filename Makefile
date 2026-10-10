@@ -21,7 +21,7 @@ export GRILL_ROOM_BIND
 TRAEFIK_TEMPLATE := deploy/local/traefik-grill-room.yaml
 TRAEFIK_RULE      = $(TRAEFIK_RULES_DIR)/grill-room.yaml
 
-.PHONY: build run test e2e cover lint docker-build dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: build run test e2e cover lint docker-build fixtures dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -49,6 +49,13 @@ docker-build:
 	  --build-arg BUILD_TIMESTAMP=$(BUILD_TS) \
 	  --build-arg PROJECT_URL=$(PROJECT_URL) \
 	  --build-arg PKG=$(PKG) .
+
+# Office fixtures for the pandoc tests, written by the pandoc release the image ships.
+FIXTURES := internal/convert/testdata
+fixtures:
+	for f in docx odt pptx; do \
+	  docker run --rm -u "$$(id -u):$$(id -g)" -v "$(CURDIR)/$(FIXTURES):/data" pandoc/minimal:3.11 fixture.md -o fixture.$$f || exit 1; \
+	done
 
 dev-up: traefik-install
 	docker compose up -d --build

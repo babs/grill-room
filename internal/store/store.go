@@ -103,6 +103,39 @@ CREATE TABLE messages (
 	body TEXT NOT NULL
 );
 CREATE INDEX messages_room_id ON messages(room_id, id);
+`, `
+CREATE TABLE uploads (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	participant_id INTEGER REFERENCES participants(id) ON DELETE CASCADE,
+	filename TEXT NOT NULL,
+	content_type TEXT NOT NULL,
+	size INTEGER NOT NULL,
+	data BLOB NOT NULL,
+	created_at TEXT NOT NULL
+);
+CREATE INDEX uploads_room ON uploads(room_id);
+CREATE TABLE documents (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	kind TEXT NOT NULL CHECK (kind IN ('upload', 'agent')),
+	name TEXT NOT NULL,
+	format TEXT NOT NULL CHECK (format IN ('md', 'html', 'pdf', 'image')),
+	upload_id INTEGER REFERENCES uploads(id) ON DELETE CASCADE,
+	author TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	CHECK ((kind = 'upload') = (upload_id IS NOT NULL))
+);
+CREATE INDEX documents_room ON documents(room_id, id);
+CREATE TABLE revisions (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+	n INTEGER NOT NULL,
+	body TEXT NOT NULL,
+	author TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	UNIQUE (document_id, n)
+);
 `}
 
 // Open opens (and migrates) the database at path.

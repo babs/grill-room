@@ -1,6 +1,6 @@
 # grill-room
 
-Self-hosted rooms for grill sessions. Guests join from an invite link with a display name, no account. The room shows who is in and a live message stream.
+Self-hosted rooms for grill sessions. Guests join from an invite link with a display name, no account. The room shows who is in, a live message stream and the room's documents.
 
 This is an early PoC. `INTENT.md` has the design and `specs/001-grill-room-poc.md` the plan.
 
@@ -22,6 +22,10 @@ On first start the server logs an `admin_token_generated` line holding the admin
 | `GRILL_ROOM_DB` | `grill-room.db` | SQLite file |
 | `GRILL_ROOM_URL` | `http://<GRILL_ROOM_ADDR>` | public base URL used in invite links |
 | `GRILL_ROOM_ADMIN_TOKEN` | generated | admin token |
+| `GRILL_ROOM_MAX_UPLOAD_MB` | `20` | largest upload, in MiB (413 above) |
+| `GRILL_ROOM_MAX_ROOM_MB` | `200` | all uploads of one room, in MiB (413 above) |
+| `GRILL_ROOM_PANDOC` | `pandoc` | pandoc binary for DOCX, ODT and PPTX (3.8+ for PPTX) |
+| `GRILL_ROOM_PANDOC_TIMEOUT` | `60s` | one conversion's time budget |
 | `LOG_LEVEL` | `info` | |
 | `LOG_FORMAT` | `auto` | `console` on a TTY, `json` otherwise |
 
@@ -54,9 +58,22 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `POST /api/join` | invite token in the body | returns a participant token and sets a cookie |
 | `GET /api/rooms/{room}` | participant | room, me, participants |
 | `POST /api/rooms/{room}/messages` | participant | post a text message |
-| `GET /api/rooms/{room}/events` | participant | SSE: history then live messages; resumes from `Last-Event-ID` |
+| `GET /api/rooms/{room}/events` | participant | SSE: history then live messages; resumes from `Last-Event-ID`; a `documents` event when a document or revision is added |
+| `GET /api/rooms/{room}/documents` | participant | list |
+| `POST /api/rooms/{room}/documents` | participant | upload, multipart field `file` |
+| `GET /api/rooms/{room}/documents/{id}` | participant | document and its revisions |
+| `GET /api/rooms/{room}/documents/{id}/view` | participant | rendered page; `?rev=N` picks a revision, `&from=M` shows the word diff from M |
+| `GET /api/rooms/{room}/documents/{id}/original` | participant | the uploaded bytes |
 
-Request bodies must be JSON with `Content-Type: application/json` (415 otherwise). Participants authenticate with `Authorization: Bearer <token>` or the cookie set at join. The server stores tokens as SHA-256 hashes.
+Request bodies must be JSON with `Content-Type: application/json` (415 otherwise), uploads excepted. Participants authenticate with `Authorization: Bearer <token>` or the cookie set at join. The server stores tokens as SHA-256 hashes.
+
+## Documents
+
+Any participant can upload Markdown, HTML, PDF, PNG, JPEG, GIF, WebP, SVG, DOCX, ODT or PPTX. The server reads the content to decide the type. The extension only picks between text formats, so a binary file named `.md` gets a 415. Uploads are read-only. The room keeps the original, and pandoc turns DOCX, ODT and PPTX into a Markdown copy that the room shows. Documents the agent writes take revisions instead.
+
+Markdown renders GitHub-style: tables, highlighted code, mermaid diagrams, math, alerts, footnotes. Every rendered document, uploaded HTML included, loads in an iframe sandboxed without `allow-same-origin`, and its response carries a `sandbox` CSP. A script in it runs in an opaque origin: it cannot read the room cookie, and the CSP blocks fetch, XHR and form posts.
+
+The Docker image ships pandoc's official static build. The image grew from 16 MB to 174 MB, 147 MB of it pandoc (7 MB to 49 MB gzipped). Math renders with fallback glyphs for now: MathJax fetches its fonts from a CDN, and the CSP blocks that.
 
 ## Local dev with docker compose and traefik
 
@@ -71,4 +88,4 @@ make dev-down   # removes the rule, stops compose
 
 ## Make targets
 
-`build`, `run`, `test` (race detector), `e2e` (Playwright with the installed Chrome, needs pnpm), `cover`, `lint` (golangci-lint), `docker-build`, `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`.
+`build`, `run`, `test` (race detector), `e2e` (Playwright with the installed Chrome, needs pnpm and pandoc), `cover`, `lint` (golangci-lint), `docker-build` (also tests the office fixtures against the pandoc it ships), `fixtures` (regenerates them), `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`.

@@ -20,3 +20,7 @@ linters:
     rules:
       - path: _test\.go
         linters: [errcheck, gosec]
+      # Goldmark extensions ported from grip-live-diff: kept as upstream wrote them, so they stay
+      # diffable against it. gosec still applies.
+      - path: internal/render/(alert|footnote|frontmatter|highlighting|mathjax|tasklist)/
+        linters: [revive, gocritic]

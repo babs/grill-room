@@ -19,7 +19,26 @@
   <aside>
     <h2>Participants</h2>
     <ul id="participants"></ul>
+    <h2>Documents</h2>
+    <ul id="documents"></ul>
+    <label class="upload">Upload a document
+      <input type="file" id="upload-input" accept=".md,.markdown,.html,.htm,.pdf,.png,.jpg,.jpeg,.gif,.webp,.svg,.docx,.odt,.pptx">
+    </label>
+    <p id="upload-status" role="status"></p>
   </aside>
+  <section id="viewer" hidden>
+    <div class="viewer-head">
+      <h2 id="doc-name"></h2>
+      <span id="doc-meta"></span>
+      <a id="doc-original" hidden>Download original</a>
+      <button type="button" id="doc-close" aria-label="Close document">Close</button>
+    </div>
+    <form id="revisions" hidden>
+      <label>Revision <select id="rev"></select></label>
+      <label>Compare with <select id="rev-from"></select></label>
+    </form>
+    <div id="doc-frame"></div>
+  </section>
   <section class="chat">
     <ol id="messages" aria-live="polite"></ol>
     <form id="send">

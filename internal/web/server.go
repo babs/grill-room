@@ -39,6 +39,8 @@ const (
 	maxNameLen   = 40
 	maxRoomName  = 100
 	maxBodyLen   = 4000
+	// maxConcurrentUploads bounds the memory uploads hold: about three copies of up to MaxUploadBytes each.
+	maxConcurrentUploads = 4
 	// replayBatch bounds one store read while an SSE stream catches up.
 	replayBatch = 500
 )
@@ -49,6 +51,8 @@ var heartbeat = 20 * time.Second
 // Server serves the room API and UI.
 type Server struct {
 	bus       *bus.Bus
+	opts      Options
+	uploads   chan struct{}
 	adminHash []byte
 	baseURL   string
 	log       *zap.Logger
@@ -56,8 +60,8 @@ type Server struct {
 }
 
 // New builds a server. adminHash is HashToken of the admin token; baseURL prefixes invite links.
-func New(b *bus.Bus, adminHash, baseURL string, log *zap.Logger) *Server {
-	return &Server{bus: b, adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log}
+func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *Server {
+	return &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log}
 }
 
 // Streams returns the number of open event streams.
@@ -96,6 +100,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rooms/{room}", s.participant(s.getRoom))
 	mux.Handle("POST /api/rooms/{room}/messages", s.participant(s.postMessage))
 	mux.Handle("GET /api/rooms/{room}/events", s.participant(s.events))
+	mux.Handle("GET /api/rooms/{room}/documents", s.participant(s.listDocuments))
+	mux.Handle("POST /api/rooms/{room}/documents", s.participant(s.uploadDocument))
+	mux.Handle("GET /api/rooms/{room}/documents/{doc}", s.participant(s.getDocument))
+	mux.Handle("GET /api/rooms/{room}/documents/{doc}/view", s.participant(s.viewDocument))
+	mux.Handle("GET /api/rooms/{room}/documents/{doc}/original", s.participant(s.originalDocument))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -154,6 +163,12 @@ func (s *Server) participant(next func(http.ResponseWriter, *http.Request, sessi
 		}
 		if tok == "" {
 			httpError(w, http.StatusUnauthorized, "missing token")
+			return
+		}
+		// A form posted by another site, or by a document in the sandboxed iframe (an opaque
+		// origin), needs no preflight: browsers label it, so refuse it whatever the cookie does.
+		if site := r.Header.Get("Sec-Fetch-Site"); r.Method != http.MethodGet && site != "" && site != "same-origin" {
+			httpError(w, http.StatusForbidden, "cross-site request refused")
 			return
 		}
 		sess := session{tokenHash: HashToken(tok)}
@@ -394,8 +409,9 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, sess sessio
 	writeJSON(w, http.StatusCreated, m)
 }
 
-// events streams the room's messages after ?since= or Last-Event-ID, then live ones. The stream
-// ends with a "revoked" event as soon as the participant's access is gone.
+// events streams the room's messages after ?since= or Last-Event-ID, then live ones, and a
+// "documents" event when a document or revision is added. The stream ends with a "revoked" event
+// as soon as the participant's access is gone.
 func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -409,6 +425,13 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 		last = id
 	}
 
+	// Read before the headers go out: a client lists the documents once the stream is open, and
+	// any change after this point reaches it as a "documents" event.
+	docsVersion, err := s.bus.Store.DocumentsVersion(r.Context(), room)
+	if err != nil {
+		s.serverError(w, "events_failed", err)
+		return
+	}
 	s.streams.Add(1)
 	defer s.streams.Add(-1)
 	// The live channel is only a wake-up signal: every send reads from the store after the last id,
@@ -447,9 +470,21 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 			}
 			flusher.Flush()
 			if len(msgs) < replayBatch {
-				return true
+				break
 			}
 		}
+		v, err := s.bus.Store.DocumentsVersion(r.Context(), room)
+		if err != nil {
+			return false
+		}
+		if v != docsVersion {
+			docsVersion = v
+			if _, err := io.WriteString(w, "event: documents\ndata: {}\n\n"); err != nil {
+				return false
+			}
+			flusher.Flush()
+		}
+		return true
 	}
 	if !sync() {
 		return

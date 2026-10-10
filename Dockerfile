@@ -1,9 +1,15 @@
+# pandoc's official static build: no libc or data files needed, so it runs on distroless static.
+FROM pandoc/minimal:3.11@sha256:fc17da3ba8f0a70b2ad5d7d4d61fed7d25da2e091cc3139f4d371f03b18641df AS pandoc
+
 FROM golang:1.26-bookworm AS builder
 WORKDIR /src
 # go.sum* — glob, not a typo: a stdlib-only module has no go.sum and the build would fail hard.
 COPY go.mod go.sum* ./
 RUN go mod download
 COPY . .
+# The office fixtures must convert with the exact pandoc the image ships (pptx needs 3.8+).
+COPY --from=pandoc /usr/local/bin/pandoc /usr/local/bin/pandoc
+RUN GRILL_ROOM_TEST_PANDOC_REQUIRED=1 go test -run 'TestPandoc' ./internal/convert/
 ARG VERSION="v0.0.0"
 ARG COMMIT_HASH="00000000-dirty"
 ARG BUILD_TIMESTAMP="1970-01-01T00:00:00+00:00"
@@ -40,9 +46,11 @@ ENV VERSION="${VERSION}" \
 
 ENV GRILL_ROOM_ADDR="0.0.0.0:7680" \
     GRILL_ROOM_METRICS_ADDR="0.0.0.0:7681" \
-    GRILL_ROOM_DB="/data/grill-room.db"
+    GRILL_ROOM_DB="/data/grill-room.db" \
+    GRILL_ROOM_PANDOC="/usr/local/bin/pandoc"
 
 COPY --from=builder --chown=65532:65532 /data /data
+COPY --from=pandoc /usr/local/bin/pandoc /usr/local/bin/pandoc
 COPY --from=builder /app /app
 VOLUME /data
 EXPOSE 7680 7681

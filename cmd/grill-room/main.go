@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/babs/grill-room/internal/bus"
+	"github.com/babs/grill-room/internal/convert"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/web"
 )
@@ -56,19 +59,31 @@ type Config struct {
 	AdminToken  string
 	LogLevel    string
 	LogFormat   string
+	// MaxUploadMB and MaxRoomMB bound one upload and all of a room's uploads (D31).
+	MaxUploadMB   int64
+	MaxRoomMB     int64
+	Pandoc        string
+	PandocTimeout time.Duration
 }
 
-func loadConfig() Config {
+func loadConfig() (Config, error) {
 	addr := getEnv("GRILL_ROOM_ADDR", "127.0.0.1:7680")
+	maxUpload, err1 := strconv.ParseInt(getEnv("GRILL_ROOM_MAX_UPLOAD_MB", "20"), 10, 64)
+	maxRoom, err2 := strconv.ParseInt(getEnv("GRILL_ROOM_MAX_ROOM_MB", "200"), 10, 64)
+	timeout, err3 := time.ParseDuration(getEnv("GRILL_ROOM_PANDOC_TIMEOUT", "60s"))
 	return Config{
-		Addr:        addr,
-		MetricsAddr: getEnv("GRILL_ROOM_METRICS_ADDR", "127.0.0.1:7681"),
-		DB:          getEnv("GRILL_ROOM_DB", "grill-room.db"),
-		PublicURL:   getEnv("GRILL_ROOM_URL", "http://"+addr),
-		AdminToken:  os.Getenv("GRILL_ROOM_ADMIN_TOKEN"),
-		LogLevel:    getEnv("LOG_LEVEL", "info"),
-		LogFormat:   getEnv("LOG_FORMAT", "auto"),
-	}
+		MaxUploadMB:   maxUpload,
+		MaxRoomMB:     maxRoom,
+		Pandoc:        getEnv("GRILL_ROOM_PANDOC", "pandoc"),
+		PandocTimeout: timeout,
+		Addr:          addr,
+		MetricsAddr:   getEnv("GRILL_ROOM_METRICS_ADDR", "127.0.0.1:7681"),
+		DB:            getEnv("GRILL_ROOM_DB", "grill-room.db"),
+		PublicURL:     getEnv("GRILL_ROOM_URL", "http://"+addr),
+		AdminToken:    os.Getenv("GRILL_ROOM_ADMIN_TOKEN"),
+		LogLevel:      getEnv("LOG_LEVEL", "info"),
+		LogFormat:     getEnv("LOG_FORMAT", "auto"),
+	}, errors.Join(err1, err2, err3)
 }
 
 // Validate rejects a configuration the server cannot run with.
@@ -78,6 +93,12 @@ func (c Config) Validate() error {
 	}
 	if c.DB == "" {
 		return errors.New("GRILL_ROOM_DB is empty")
+	}
+	if c.MaxUploadMB < 1 || c.MaxRoomMB < c.MaxUploadMB || c.MaxRoomMB > 1<<20 {
+		return fmt.Errorf("GRILL_ROOM_MAX_UPLOAD_MB %d, GRILL_ROOM_MAX_ROOM_MB %d: want 1 <= upload <= room <= %d", c.MaxUploadMB, c.MaxRoomMB, 1<<20)
+	}
+	if c.PandocTimeout <= 0 {
+		return fmt.Errorf("GRILL_ROOM_PANDOC_TIMEOUT %s: want a positive duration", c.PandocTimeout)
 	}
 	if _, err := zapcore.ParseLevel(c.LogLevel); err != nil {
 		return fmt.Errorf("LOG_LEVEL: %w", err)
@@ -134,8 +155,11 @@ func main() {
 }
 
 func run() error {
-	cfg := loadConfig()
-	if err := cfg.Validate(); err != nil {
+	cfg, err := loadConfig()
+	if err == nil {
+		err = cfg.Validate()
+	}
+	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	logger, err := newLogger(cfg)
@@ -168,8 +192,17 @@ func run() error {
 			zap.String("hint", "shown once; set GRILL_ROOM_ADMIN_TOKEN to pin one"))
 	}
 
+	if _, err := exec.LookPath(cfg.Pandoc); err != nil {
+		// Not fatal: only office uploads need it, and they answer 503 until it is installed.
+		logger.Warn("pandoc_missing", zap.String("pandoc", cfg.Pandoc), zap.Error(err))
+	}
+
 	b := bus.New(st)
-	srv := web.New(b, hash, cfg.PublicURL, logger)
+	srv := web.New(b, hash, cfg.PublicURL, web.Options{
+		MaxUploadBytes: cfg.MaxUploadMB << 20,
+		MaxRoomBytes:   cfg.MaxRoomMB << 20,
+		ToMarkdown:     convert.NewPandoc(cfg.Pandoc, cfg.PandocTimeout).ToMarkdown,
+	}, logger)
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
 		collectors.NewGoCollector(),

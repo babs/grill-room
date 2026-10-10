@@ -3,18 +3,24 @@ package main
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/web"
 )
 
 func TestConfigValidate(t *testing.T) {
-	ok := Config{Addr: "a:1", MetricsAddr: "a:2", DB: "x.db", LogLevel: "info", LogFormat: "auto"}
+	ok := Config{Addr: "a:1", MetricsAddr: "a:2", DB: "x.db", LogLevel: "info", LogFormat: "auto",
+		MaxUploadMB: 20, MaxRoomMB: 200, Pandoc: "pandoc", PandocTimeout: time.Minute}
 	cases := map[string]func(*Config){
-		"same addr":  func(c *Config) { c.MetricsAddr = c.Addr },
-		"empty db":   func(c *Config) { c.DB = "" },
-		"bad level":  func(c *Config) { c.LogLevel = "loud" },
-		"bad format": func(c *Config) { c.LogFormat = "xml" },
+		"zero upload limit":       func(c *Config) { c.MaxUploadMB = 0 },
+		"room below upload limit": func(c *Config) { c.MaxRoomMB = 10 },
+		"room limit overflows":    func(c *Config) { c.MaxRoomMB = 1 << 21 },
+		"zero pandoc timeout":     func(c *Config) { c.PandocTimeout = 0 },
+		"same addr":               func(c *Config) { c.MetricsAddr = c.Addr },
+		"empty db":                func(c *Config) { c.DB = "" },
+		"bad level":               func(c *Config) { c.LogLevel = "loud" },
+		"bad format":              func(c *Config) { c.LogFormat = "xml" },
 	}
 	if err := ok.Validate(); err != nil {
 		t.Fatalf("valid config: %v", err)
@@ -25,6 +31,21 @@ func TestConfigValidate(t *testing.T) {
 		if err := c.Validate(); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+func TestLoadConfigRejectsBadNumbers(t *testing.T) {
+	for key, val := range map[string]string{"GRILL_ROOM_MAX_UPLOAD_MB": "20MB", "GRILL_ROOM_MAX_ROOM_MB": "x", "GRILL_ROOM_PANDOC_TIMEOUT": "60"} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv(key, val)
+			if _, err := loadConfig(); err == nil {
+				t.Fatalf("%s=%s accepted", key, val)
+			}
+		})
+	}
+	c, err := loadConfig()
+	if err != nil || c.MaxUploadMB != 20 || c.MaxRoomMB != 200 || c.Validate() != nil {
+		t.Fatalf("defaults: %+v, %v", c, err)
 	}
 }
 

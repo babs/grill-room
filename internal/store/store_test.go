@@ -20,7 +20,8 @@ func openTest(t *testing.T) *Store {
 	return s
 }
 
-// seed creates a room with an invite, a participant and a text message.
+// seed creates a room with an invite, a participant, a text message, an upload and an agent
+// document with two revisions.
 func seed(t *testing.T, s *Store, room string) *Participant {
 	t.Helper()
 	ctx := context.Background()
@@ -35,6 +36,17 @@ func seed(t *testing.T, s *Store, room string) *Participant {
 		t.Fatal(err)
 	}
 	if err := s.InsertMessage(ctx, &Message{RoomID: room, Kind: KindText, ParticipantID: p.ID, Sender: p.Name, Body: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	up := &Upload{RoomID: room, ParticipantID: p.ID, Author: p.Name, Filename: "plan.md", ContentType: "text/markdown", Format: "md", Data: []byte("# Plan"), Text: "# Plan"}
+	if _, err := s.AddUpload(ctx, up, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.CreateAgentDocument(ctx, room, "synthesis.md", "md", "v1", "agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddRevision(ctx, room, d.ID, "v2", "agent"); err != nil {
 		t.Fatal(err)
 	}
 	return p
@@ -190,8 +202,20 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 	ctx := context.Background()
 	seed(t, s, "a")
 	seed(t, s, "b")
+	countRevisions := func() int {
+		var n int
+		if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM revisions`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	perRoom := countRevisions() / 2
 	if err := s.DeleteRoom(ctx, "a"); err != nil {
 		t.Fatal(err)
+	}
+	// revisions reach rooms through documents, so roomRows cannot see them.
+	if n := countRevisions(); n != perRoom {
+		t.Errorf("revisions: %d left, want the other room's %d", n, perRoom)
 	}
 	for table, n := range roomRows(t, s, "a") {
 		if n != 0 {
