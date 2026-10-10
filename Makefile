@@ -21,7 +21,9 @@ export GRILL_ROOM_BIND
 TRAEFIK_TEMPLATE := deploy/local/traefik-grill-room.yaml
 TRAEFIK_RULE      = $(TRAEFIK_RULES_DIR)/grill-room.yaml
 
-.PHONY: build run test e2e cover lint docker-build fixtures dev-up dev-down traefik-install traefik-uninstall clean
+SANDBOX_IMAGE ?= grill-room-sandbox:local
+
+.PHONY: build run test test-docker e2e cover lint docker-build sandbox-image fixtures dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -31,6 +33,10 @@ run: build
 
 test:
 	go test -race -cover ./...
+
+# Sandbox tests against real Docker and a fake Anthropic upstream: no subscription use.
+test-docker: sandbox-image
+	GRILL_ROOM_TEST_DOCKER=1 GRILL_ROOM_SANDBOX_IMAGE=$(SANDBOX_IMAGE) go test -race -run 'Docker' ./internal/sandbox/
 
 # Browser tests against a fresh server, in the installed Chrome.
 e2e: build
@@ -49,6 +55,14 @@ docker-build:
 	  --build-arg BUILD_TIMESTAMP=$(BUILD_TS) \
 	  --build-arg PROJECT_URL=$(PROJECT_URL) \
 	  --build-arg PKG=$(PKG) .
+
+sandbox-image:
+	docker build -t $(SANDBOX_IMAGE) \
+	  --build-arg VERSION=$(VERSION) \
+	  --build-arg COMMIT_HASH=$(COMMIT_HASH) \
+	  --build-arg BUILD_TIMESTAMP=$(BUILD_TS) \
+	  --build-arg PROJECT_URL=$(PROJECT_URL) \
+	  sandbox/
 
 # Office fixtures for the pandoc tests, written by the pandoc release the image ships.
 FIXTURES := internal/convert/testdata
