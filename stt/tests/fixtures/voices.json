@@ -1,0 +1,58 @@
+{
+ "about": "Piper 1.8 voices, 16 kHz mono. glitch-mls.wav is the 6 s the MLS voice produced for \"Ça demande du travail.\" in spike S5, cut out by the VAD; Whisper turns it into babble. mls-oui.wav is that voice failing a plain \"Oui.\".",
+ "voices": {
+  "fr_FR-siwis-medium": "CC-BY-4.0, SIWIS French Speech Synthesis Database",
+  "fr_FR-mls-medium": "CC-BY-4.0, Multilingual LibriSpeech (OpenSLR 94), speaker 84",
+  "en_US-joe-medium": "CC0, OHF-Voice voice-datasets",
+  "en_GB-cori-medium": "public domain, LibriVox"
+ },
+ "files": [
+  {
+   "file": "glitch-mls.wav",
+   "voice": "fr_FR-mls-medium",
+   "said": "Ça demande du travail.",
+   "post": false
+  },
+  {
+   "file": "mls-oui.wav",
+   "voice": "fr_FR-mls-medium",
+   "said": "Oui.",
+   "post": false
+  },
+  {
+   "file": "siwis-oui.wav",
+   "voice": "fr_FR-siwis-medium",
+   "said": "Oui.",
+   "post": true,
+   "heard": "oui"
+  },
+  {
+   "file": "siwis-daccord.wav",
+   "voice": "fr_FR-siwis-medium",
+   "said": "D'accord.",
+   "post": true,
+   "heard": "d'accord"
+  },
+  {
+   "file": "cori-yes.wav",
+   "voice": "en_GB-cori-medium",
+   "said": "Yes.",
+   "post": true,
+   "heard": "yes"
+  },
+  {
+   "file": "cori-okay.wav",
+   "voice": "en_GB-cori-medium",
+   "said": "Okay.",
+   "post": true,
+   "heard": "okay"
+  },
+  {
+   "file": "joe-ok.wav",
+   "voice": "en_US-joe-medium",
+   "said": "OK.",
+   "post": true,
+   "heard": "okay"
+  }
+ ]
+}

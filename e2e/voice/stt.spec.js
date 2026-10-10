@@ -96,6 +96,58 @@ test('speech becomes voice lines in the language spoken', async ({ request }) =>
   }
 });
 
+// sttTracks reads the worker's grill_stt_tracks gauge: the audio tracks it listens to, all rooms.
+const sttTracks = async () => {
+  const res = await fetch(`http://127.0.0.1:${process.env.STT_METRICS_PORT || 7682}/metrics`);
+  return Number((await res.text()).match(/^grill_stt_tracks (\S+)$/m)[1]);
+};
+
+// 001-AC7: LiveKit hands a left participant's freed transceiver to the next track it sends the
+// worker. A listener kept open on the old track then transcribes the newcomer under the old name.
+test('leaving and rejoining the audio keeps every line under its speaker', async ({ request }) => {
+  const quietBrowser = await launch();
+  const aliceBrowser = await launch(fixture.wav);
+  try {
+    const room = await createRoom(request, 'STT rejoin');
+    const bob = await listener(quietBrowser, request, room);
+    const carol = await join(quietBrowser, await invite(request, room.id), 'Carol');
+    await joinAudio(carol);
+    await expect.poll(sttTracks, { timeout: 15_000 }).toBe(2);
+    // Carol's track goes away and its transceiver is free for the next one.
+    await carol.getByRole('button', { name: 'Leave audio' }).click();
+    await expect.poll(sttTracks, { timeout: 15_000 }).toBe(1);
+
+    const alice = await join(aliceBrowser, await invite(request, room.id), 'Alice');
+    await joinAudio(alice);
+    await expect.poll(sttTracks, { timeout: 15_000 }).toBe(2);
+    const first = fixture.utterances[0];
+    await expect.poll(async () => (await voiceLines(bob)).some((l) => overlap(words(l.body), words(first.text)) > 2), {
+      timeout: (first.end + 15) * 1000,
+    }).toBe(true);
+
+    // Alice leaves and rejoins: her microphone restarts the fixture on a new track.
+    await alice.getByRole('button', { name: 'Leave audio' }).click();
+    await expect.poll(sttTracks, { timeout: 15_000 }).toBe(1);
+    await joinAudio(carol);
+    await joinAudio(alice);
+    await expect.poll(sttTracks, { timeout: 15_000 }).toBe(3);
+    await expect.poll(async () => (await voiceLines(bob)).filter((l) => overlap(words(l.body), words(first.text)) > 2).length, {
+      timeout: (first.end + 15) * 1000,
+    }).toBe(2);
+    // Let the second sentence through too, and any duplicate a stale listener would post.
+    await bob.waitForTimeout(12_000);
+    const lines = await voiceLines(bob);
+    console.log(JSON.stringify(lines, null, 1));
+    expect(lines.length).toBeGreaterThan(2);
+    for (const l of lines) expect(l.sender, `line "${l.body}"`).toBe('Alice');
+    await request.delete(`/api/rooms/${room.id}`, { headers: admin });
+    await expect.poll(sttTracks, { timeout: 15_000 }).toBe(0);
+  } finally {
+    await aliceBrowser.close();
+    await quietBrowser.close();
+  }
+});
+
 // 001-AC10: with the worker down the room shows it and keeps audio and text; lines resume after.
 test('transcription down shows a banner, and lines resume when it is back', async ({ request }) => {
   const bobBrowser = await launch();

@@ -1,4 +1,3 @@
-import os
 import re
 from typing import Any
 
@@ -10,18 +9,6 @@ from grill_stt.vad import SR, Audio, Segmenter, Silero
 
 def words(s: str) -> set[str]:
     return set(re.findall(r"[\w']+", s.lower().replace("’", "'")))
-
-
-@pytest.fixture(scope="module")
-def model() -> str:
-    from faster_whisper.utils import download_model
-
-    try:
-        return str(download_model(os.getenv("APP_MODEL", "small"), local_files_only=True))
-    except Exception as e:  # missing from the cache: huggingface_hub raises several types
-        if os.getenv("CI"):
-            pytest.fail(f"whisper model missing: {e}")
-        pytest.skip(f"whisper model not downloaded: {e}")
 
 
 @pytest.mark.e2e

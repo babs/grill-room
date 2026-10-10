@@ -1,4 +1,5 @@
-# STT worker, sized per spike S1-bis: 4 cores give about 2 s per utterance, 1.5 GiB holds the model.
+# STT worker. On the lab's 4-core nodes one utterance costs about 3.4 s of model time (spike S5),
+# 1.5 GiB holds the model.
 # One worker joins every active room. Rendered by `make k8s-render`.
 apiVersion: apps/v1
 kind: Deployment
@@ -37,8 +38,9 @@ spec:
               value: http://grill-room:7680
             - name: APP_LIVEKIT_URL
               value: ws://livekit:7880
+            # One CPU of the limit stays free for the event loop, the VAD and LiveKit's threads.
             - name: APP_CPU_THREADS
-              value: "4"
+              value: "3"
             - name: APP_ROOM_TOKEN
               valueFrom:
                 secretKeyRef: { name: grill-room, key: stt-token }

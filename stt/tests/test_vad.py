@@ -2,6 +2,7 @@ from typing import Any
 
 import numpy as np
 import numpy.typing as npt
+import pytest
 
 from grill_stt.vad import SR, Audio, Segmenter, Silero
 
@@ -30,7 +31,7 @@ def feed(seg: Segmenter, audio: Audio, frame: int = 160) -> list[Audio]:
 
 def test_cuts_on_a_pause() -> None:
     seg = Segmenter(loudness)
-    out = feed(seg, np.concatenate([silence(1), tone(2), silence(1), tone(1), silence(0.6)]))
+    out = feed(seg, np.concatenate([silence(1), tone(2), silence(1), tone(1), silence(0.9)]))
     assert len(out) == 2
     # Each utterance keeps pad_ms of lead-in and of trailing silence around its speech.
     assert abs(len(out[0]) / SR - 2.4) < 0.07
@@ -38,20 +39,23 @@ def test_cuts_on_a_pause() -> None:
 
 
 def test_frame_size_does_not_change_the_cuts() -> None:
-    audio = np.concatenate([silence(0.5), tone(1.3), silence(0.7), tone(0.9), silence(0.7)])
+    audio = np.concatenate([silence(0.5), tone(1.3), silence(0.9), tone(0.9), silence(0.9)])
     frames = (100, 160, 480, 512, 4000)
     shapes = {frame: [len(u) for u in feed(Segmenter(loudness), audio, frame)] for frame in frames}
     assert len(set(map(tuple, shapes.values()))) == 1, shapes
 
 
-def test_a_short_pause_does_not_cut() -> None:
-    out = feed(Segmenter(loudness), np.concatenate([tone(1), silence(0.3), tone(1), silence(0.6)]))
+@pytest.mark.parametrize("pause", [0.3, 0.6])
+def test_a_short_pause_does_not_cut(pause: float) -> None:
+    """001-AC7: a pause between two sentences of one turn keeps them in one utterance. At 500 ms
+    the S5 script's 18 lines became 32 utterances, each paying a full model pass."""
+    out = feed(Segmenter(loudness), np.concatenate([tone(1), silence(pause), tone(1), silence(0.9)]))
     assert len(out) == 1
 
 
 def test_between_thresholds_is_not_silence() -> None:
     # 0.4 is under threshold but over neg_threshold: a soft syllable must not end the utterance.
-    out = feed(Segmenter(loudness), np.concatenate([tone(1), tone(1, 0.1), tone(1), silence(0.6)]))
+    out = feed(Segmenter(loudness), np.concatenate([tone(1), tone(1, 0.1), tone(1), silence(0.9)]))
     assert len(out) == 1
     assert len(out[0]) / SR > 3
 
@@ -62,7 +66,7 @@ def test_drops_blips_shorter_than_min_speech() -> None:
 
 
 def test_cuts_long_speech_at_max() -> None:
-    out = feed(Segmenter(loudness, max_speech_s=2), np.concatenate([tone(5), silence(0.6)]))
+    out = feed(Segmenter(loudness, max_speech_s=2), np.concatenate([tone(5), silence(0.9)]))
     assert [round(len(u) / SR) for u in out] == [2, 2, 1]
 
 

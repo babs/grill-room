@@ -53,13 +53,15 @@ class Silero:
 class Segmenter:
     """Accumulates speech and emits it as one utterance once the speaker pauses.
 
-    Thresholds follow faster-whisper's VadOptions; min_silence_ms 500 is the S1-bis setting.
+    Thresholds follow faster-whisper's VadOptions. min_silence_ms was 500 (S1-bis) until spike S5:
+    that cut 18 script lines into 32 utterances, each paying a full encoder pass; 700 and up keep a
+    line whole there, and 800 leaves a margin for slower talkers.
     """
 
     probs: Probs
     threshold: float = 0.5
     neg_threshold: float = 0.35
-    min_silence_ms: int = 500
+    min_silence_ms: int = 800
     min_speech_ms: int = 400
     max_speech_s: float = 15.0
     pad_ms: int = 200

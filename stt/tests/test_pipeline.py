@@ -175,3 +175,23 @@ async def test_a_failing_utterance_does_not_stop_the_queue() -> None:
     task.cancel()
     assert stored == ["first", "third"]
     assert metric("grill_stt_lines_total", result="error") == errors + 1
+
+
+async def test_implausible_lines_are_counted_not_posted() -> None:
+    """001-AC8: babble the model made of a TTS glitch (spike S5) never reaches the room."""
+    stored: list[str] = []
+
+    def handle(r: httpx.Request) -> httpx.Response:
+        stored.append(json.loads(r.content)["body"])
+        return httpx.Response(201)
+
+    babble = Line("三二八四八四八四八二八四八三二八四八八", "zh", 0.3, -0.5, 0.2, 3.1)
+    texts = iter([babble, Line("Oui.", "en", 0.28, -0.43, 0.26, 0.33)])
+    dropped = metric("grill_stt_lines_total", result="implausible")
+    repeated = metric("grill_stt_lines_implausible_total", reason="repetition")
+    p = Pipeline(lambda _a: next(texts), api(httpx.MockTransport(handle)), size=4)
+    await p.process(utterance())
+    await p.process(utterance())
+    assert stored == ["Oui."]
+    assert metric("grill_stt_lines_total", result="implausible") == dropped + 1
+    assert metric("grill_stt_lines_implausible_total", reason="repetition") == repeated + 1

@@ -3,7 +3,9 @@
 import asyncio
 import contextlib
 import time
+from collections.abc import Coroutine
 from datetime import timedelta
+from typing import Any
 
 import numpy as np
 import structlog
@@ -35,8 +37,11 @@ class Worker:
         self._identity = f"stt-{s.worker_name}"
         self.rooms: dict[str, rtc.Room] = {}
         self._tracks: dict[str, set[asyncio.Task[None]]] = {}
+        # Open audio streams by track sid, with their participant's identity. LiveKit ends none of
+        # them when a track goes: the SFU hands the freed transceiver to the next track it sends,
+        # and a stream left open hears that newcomer under the old speaker's name (spike S5).
+        self._streams: dict[str, tuple[str, rtc.AudioStream]] = {}
         self._changed = asyncio.Event()
-        # The event loop keeps only weak references to tasks: hold the fire-and-forget ones.
         self._background: set[asyncio.Task[None]] = set()
         ROOMS.set_function(lambda: len(self.rooms))
 
@@ -74,8 +79,10 @@ class Worker:
         room = rtc.Room()
         self.rooms[name] = room
         self._tracks[name] = set()
-        room.on("track_subscribed", lambda track, _pub, p: self._on_track(name, track, p))
-        room.on("participant_disconnected", lambda _p: self._leave_if_alone(name))
+        room.on("track_subscribed", lambda track, pub, p: self._on_track(name, track, pub, p))
+        room.on("track_unsubscribed", lambda _track, pub, _p: self._close(pub.sid))
+        room.on("track_unpublished", lambda pub, _p: self._close(pub.sid))
+        room.on("participant_disconnected", lambda p: self._on_participant_left(name, p))
         room.on("disconnected", lambda reason: self._forget(name, room, reason))
         try:
             await room.connect(self._s.livekit_url, self._token(name), rtc.RoomOptions(auto_subscribe=True))
@@ -90,9 +97,7 @@ class Worker:
     def _leave_if_alone(self, name: str) -> None:
         room = self.rooms.get(name)
         if room is not None and not room.remote_participants:
-            task = asyncio.create_task(room.disconnect())  # "disconnected" cleans up
-            self._background.add(task)
-            task.add_done_callback(self._background.discard)
+            self._spawn(room.disconnect())  # "disconnected" cleans up
 
     def _forget(self, name: str, room: rtc.Room, reason: object) -> None:
         if self.rooms.get(name) is not room:
@@ -103,7 +108,27 @@ class Worker:
         self._changed.set()
         log.info("room_left", room=name, reason=str(reason))
 
-    def _on_track(self, room: str, track: rtc.Track, p: rtc.RemoteParticipant) -> None:
+    def _on_participant_left(self, room: str, p: rtc.RemoteParticipant) -> None:
+        # The Python SDK skips track_unsubscribed when the participant is already gone: close here too.
+        for sid in [sid for sid, (identity, _) in self._streams.items() if identity == p.identity]:
+            self._close(sid)
+        self._leave_if_alone(room)
+
+    def _close(self, sid: str) -> None:
+        """Ends the stream of a track that went away; its listener flushes the speech in progress."""
+        entry = self._streams.pop(sid, None)
+        if entry is not None:
+            self._spawn(entry[1].aclose())
+
+    def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
+        # The event loop keeps only weak references to tasks: hold the fire-and-forget ones.
+        task = asyncio.create_task(coro)
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
+    def _on_track(
+        self, room: str, track: rtc.Track, pub: rtc.RemoteTrackPublication, p: rtc.RemoteParticipant
+    ) -> None:
         if track.kind != rtc.TrackKind.KIND_AUDIO:
             return
         try:
@@ -111,19 +136,23 @@ class Worker:
         except ValueError:
             log.warning("track_ignored", room=room, identity=p.identity)
             return
-        task = asyncio.create_task(self._listen(room, participant_id, track))
+        self._close(pub.sid)  # a resubscription replaces the stream, never adds a second one
+        stream = rtc.AudioStream(track, sample_rate=SR, num_channels=1, capacity=FRAME_CAPACITY)
+        self._streams[pub.sid] = (p.identity, stream)
+        task = asyncio.create_task(self._listen(room, participant_id, pub.sid, stream))
         tasks = self._tracks.setdefault(room, set())
         tasks.add(task)
         task.add_done_callback(tasks.discard)
 
-    async def _listen(self, room: str, participant_id: int, track: rtc.Track) -> None:
+    async def _listen(self, room: str, participant_id: int, sid: str, stream: rtc.AudioStream) -> None:
         """VAD over one participant's track; every utterance it cuts goes to the queue, in memory."""
-        seg = Segmenter(Silero())
-        pause = seg.min_silence_ms / 1000
-        stream = rtc.AudioStream(track, sample_rate=SR, num_channels=1, capacity=FRAME_CAPACITY)
+        pause = self._s.vad_min_silence_ms / 1000
         TRACKS.inc()
-        log.info("track_listening", room=room, participant=participant_id)
+        log.info("track_listening", room=room, participant=participant_id, track=sid)
         try:
+            seg = Segmenter(
+                Silero(), min_silence_ms=self._s.vad_min_silence_ms, max_speech_s=self._s.vad_max_speech_s
+            )
             async for ev in stream:
                 samples = np.frombuffer(ev.frame.data, np.int16).astype(np.float32)
                 samples /= 32768
@@ -136,7 +165,10 @@ class Worker:
             log.exception("track_failed", room=room, participant=participant_id)
         finally:
             TRACKS.dec()
+            if self._streams.get(sid, (None, None))[1] is stream:
+                del self._streams[sid]
             await stream.aclose()
+            log.info("track_closed", room=room, participant=participant_id, track=sid)
 
     async def heartbeat(self) -> None:
         """Tells the room server the worker is up and which rooms it hears, at once on every change."""

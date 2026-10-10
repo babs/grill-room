@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -17,6 +18,11 @@ log = structlog.get_logger()
 QUEUE_DEPTH = Gauge("grill_stt_queue_depth", "Utterances waiting for the model.")
 DROPPED = Counter("grill_stt_utterances_dropped_total", "Utterances dropped because the queue was full.")
 LINES = Counter("grill_stt_lines_total", "Transcribed utterances by outcome.", ["result"])
+IMPLAUSIBLE = Counter(
+    "grill_stt_lines_implausible_total",
+    "Transcripts dropped as implausible, by first failed check.",
+    ["reason"],
+)
 TRANSCRIBE = Histogram(
     "grill_stt_transcribe_seconds", "Model time per utterance.", buckets=(0.5, 1, 2, 3, 5, 8, 13, 20)
 )
@@ -25,6 +31,98 @@ LATENCY = Histogram(
     "From the end of an utterance to its line stored in the room.",
     buckets=(1, 2, 3, 5, 7, 10, 15, 30),
 )
+
+
+# The script each language is written in, by the first word of its letters' Unicode names; any
+# language not listed is written in Latin letters.
+SCRIPTS = {
+    "zh": {"CJK"},
+    "yue": {"CJK"},
+    "ja": {"CJK", "HIRAGANA", "KATAKANA"},
+    "ko": {"HANGUL"},
+    "ru": {"CYRILLIC"},
+    "uk": {"CYRILLIC"},
+    "be": {"CYRILLIC"},
+    "bg": {"CYRILLIC"},
+    "mk": {"CYRILLIC"},
+    "sr": {"CYRILLIC", "LATIN"},
+    "kk": {"CYRILLIC"},
+    "mn": {"CYRILLIC"},
+    "tt": {"CYRILLIC"},
+    "ba": {"CYRILLIC"},
+    "tg": {"CYRILLIC"},
+    "el": {"GREEK"},
+    "he": {"HEBREW"},
+    "yi": {"HEBREW"},
+    "ar": {"ARABIC"},
+    "fa": {"ARABIC"},
+    "ur": {"ARABIC"},
+    "ps": {"ARABIC"},
+    "sd": {"ARABIC"},
+    "hi": {"DEVANAGARI"},
+    "mr": {"DEVANAGARI"},
+    "ne": {"DEVANAGARI"},
+    "sa": {"DEVANAGARI"},
+    "bn": {"BENGALI"},
+    "as": {"BENGALI"},
+    "pa": {"GURMUKHI"},
+    "gu": {"GUJARATI"},
+    "ta": {"TAMIL"},
+    "te": {"TELUGU"},
+    "kn": {"KANNADA"},
+    "ml": {"MALAYALAM"},
+    "si": {"SINHALA"},
+    "th": {"THAI"},
+    "lo": {"LAO"},
+    "my": {"MYANMAR"},
+    "km": {"KHMER"},
+    "bo": {"TIBETAN"},
+    "ka": {"GEORGIAN"},
+    "hy": {"ARMENIAN"},
+    "am": {"ETHIOPIC"},
+}
+
+
+@dataclass(frozen=True)
+class Plausibility:
+    """Thresholds past which a transcript is dropped rather than posted (spike S5, problem 6)."""
+
+    # Whisper's own failure thresholds: mean token log-probability, and gzip ratio (repetition).
+    min_avg_logprob: float = -1.0
+    max_compression_ratio: float = 2.4
+    # Whisper keeps a likely-silent segment it decoded confidently: only an unsure language too
+    # makes it noise.
+    max_no_speech_prob: float = 0.6
+    # An unsure language on a long utterance is babble: real speech that long is detected at 0.8 and
+    # up (S5). A short "oui" often comes out as English at 0.3, so short utterances are spared.
+    min_language_probability: float = 0.5
+    short_utterance_s: float = 2.0
+    # Share of a line's letters that must be in the detected language's script.
+    min_script_share: float = 0.9
+
+
+def script_share(text: str, language: str) -> float:
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return 1.0
+    want = SCRIPTS.get(language, {"LATIN"})
+    return sum(unicodedata.name(c, "?").split(" ")[0] in want for c in letters) / len(letters)
+
+
+def implausible(line: Line, seconds: float, p: Plausibility) -> str | None:
+    """The first check a transcript of seconds of audio fails, or None when it is fit to post."""
+    if line.avg_logprob < p.min_avg_logprob:
+        return "avg_logprob"
+    if line.compression_ratio > p.max_compression_ratio:
+        return "repetition"
+    unsure = line.language_probability < p.min_language_probability
+    if line.no_speech_prob > p.max_no_speech_prob and unsure:
+        return "no_speech"
+    if unsure and seconds >= p.short_utterance_s:
+        return "language_probability"
+    if script_share(line.text, line.language) < p.min_script_share:
+        return "script"
+    return None
 
 
 @dataclass
@@ -79,9 +177,12 @@ class RoomAPI:
 class Pipeline:
     """One consumer drains the queue: one utterance at a time gets every model thread."""
 
-    def __init__(self, transcribe: Callable[[Audio], Line], api: RoomAPI, size: int) -> None:
+    def __init__(
+        self, transcribe: Callable[[Audio], Line], api: RoomAPI, size: int, rules: Plausibility | None = None
+    ) -> None:
         self._transcribe = transcribe
         self._api = api
+        self._rules = rules or Plausibility()
         self._queue: asyncio.Queue[Utterance] = asyncio.Queue(size)
         QUEUE_DEPTH.set_function(self._queue.qsize)
 
@@ -118,6 +219,24 @@ class Pipeline:
         if not line.text:
             LINES.labels("empty").inc()
             log.info("utterance_empty", room=u.room, seconds=seconds, language=line.language)
+            return
+        reason = implausible(line, seconds, self._rules)
+        if reason:
+            LINES.labels("implausible").inc()
+            IMPLAUSIBLE.labels(reason).inc()
+            log.info(
+                "line_implausible",
+                room=u.room,
+                participant=u.participant_id,
+                reason=reason,
+                seconds=seconds,
+                language=line.language,
+                language_probability=round(line.language_probability, 2),
+                avg_logprob=round(line.avg_logprob, 2),
+                no_speech_prob=round(line.no_speech_prob, 2),
+                compression_ratio=round(line.compression_ratio, 2),
+                chars=len(line.text),
+            )
             return
         ok = await self._api.post_line(u.room, u.participant_id, line.text)
         LINES.labels("posted" if ok else "failed").inc()
