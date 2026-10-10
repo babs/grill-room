@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,9 +26,19 @@ func TestConfigValidate(t *testing.T) {
 		"empty db":                func(c *Config) { c.DB = "" },
 		"bad level":               func(c *Config) { c.LogLevel = "loud" },
 		"bad format":              func(c *Config) { c.LogFormat = "xml" },
+		"sandbox image by tag":    func(c *Config) { c.SandboxImage = "registry.example/grill-room/sandbox:v1" },
+		"sandbox image as a flag": func(c *Config) { c.SandboxImage = "--privileged@sha256:" + strings.Repeat("a", 64) },
+		"sandbox digest too short": func(c *Config) {
+			c.SandboxImage = "registry.example/grill-room/sandbox@sha256:" + strings.Repeat("a", 63)
+		},
 	}
 	if err := ok.Validate(); err != nil {
 		t.Fatalf("valid config: %v", err)
+	}
+	pinned := ok
+	pinned.SandboxImage = "registry.example:5000/grill-room/sandbox:v1@sha256:" + strings.Repeat("a", 64)
+	if err := pinned.Validate(); err != nil {
+		t.Fatalf("pinned sandbox image: %v", err)
 	}
 	for name, mutate := range cases {
 		c := ok

@@ -32,6 +32,8 @@ On first start the server logs an `admin_token_generated` line holding the admin
 | `GRILL_ROOM_LIVEKIT_API_KEY`, `GRILL_ROOM_LIVEKIT_API_SECRET` | none | LiveKit API key pair; the secret needs 32+ characters |
 | `GRILL_ROOM_STT_TOKEN` | none | the STT worker's service token; unset refuses every worker |
 | `GRILL_ROOM_TURN_TIMEOUT` | `15m` | one agent turn's time budget (1m to 24h) |
+| `GRILL_ROOM_DAEMON_DIR` | none (`/daemon` in the image) | daemon release written by `make release`; unset offers no download |
+| `GRILL_ROOM_SANDBOX_IMAGE` | none | sandbox image advertised to daemons, pinned by digest (`<repo>[:tag]@sha256:<hex>`); unset lets each daemon build it |
 | `LOG_LEVEL` | `info` | |
 | `LOG_FORMAT` | `auto` | `console` on a TTY, `json` otherwise |
 
@@ -187,6 +189,24 @@ When someone presses the agent button, the room hands the turn to the host's dae
 
 `docs/daemon-os-checklist.md` lists the manual checks on macOS and WSL.
 
+### Distribution
+
+The room server hands out the daemon itself. `make release` cross-compiles it for linux and darwin, amd64 and arm64 (static, `-trimpath`, version stamped), and writes a sha256 file per binary plus `VERSION`. The server image builds the same release into `/daemon`. These routes need no token:
+
+| Route | |
+|---|---|
+| `GET /install.sh` | the installer |
+| `GET /download/grill-room-daemon-<os>-<arch>[.sha256]` | a binary, or its `sha256sum` line |
+| `GET /api/daemon/version` | `{"version", "sha256": {"<os>-<arch>": "<hex>"}, "sandbox_image"}` |
+
+The room page has a "Host the agent" panel. It guesses the visitor's OS and CPU (Chromium reports the CPU, Safari and Firefox do not, so both stay editable), links the matching binary with its sha256, and shows the one-liner:
+
+```sh
+curl -fsSL https://<host>/install.sh | sh -s -- https://<host>/r/<room>
+```
+
+`install.sh` is POSIX sh. It picks the build from `uname` (WSL gets the Linux one, a Rosetta shell the arm64 one), downloads it from the host in the room URL, and checks it against the published sha256. Then it moves it into `~/.local/bin` and starts it with the room URL, which opens the pairing page. On a mismatch it installs nothing. It accepts plain `http` for `localhost` and `127.0.0.1` only.
+
 ## Local dev with docker compose and traefik
 
 The dev setup expects a traefik on the machine that serves `*.<dev-domain>` with a valid wildcard certificate and watches a file-provider rules directory. Copy `.env.example` to `.env` and fill in `DEV_DOMAIN` and `TRAEFIK_RULES_DIR`.
@@ -200,4 +220,4 @@ make dev-down   # removes the rule, stops compose
 
 ## Make targets
 
-`build` (server and daemon), `build-daemons` (daemon for linux and darwin, amd64 and arm64), `run`, `test` (race detector), `test-docker` (sandbox and agent turns against real Docker, a fake Anthropic upstream and a fake `claude`, no Claude request), `e2e` (Playwright with the installed Chrome, needs pnpm, pandoc and Docker for the agent turns, which use the fake `claude`), `e2e-voice` (Playwright against the compose stack, with fake microphones; it kills and restarts the `stt` container), `e2e-agent-live` (two real daemons against the compose stack with `claude --model haiku`: a turn, a daemon killed mid-turn, a takeover that recalls a code word through `--resume`; about six Claude requests), `stt-test` (ruff, mypy and pytest for the worker), `stt-image`, `cover`, `lint` (golangci-lint), `docker-build` (also tests the office fixtures against the pandoc it ships), `sandbox-image`, `sandbox-fake-image` (the sandbox with `internal/sandbox/fakeclaude` as `claude`, for tests), `fixtures` (regenerates them), `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`.
+`build` (server and daemon), `release` (the daemon release into `DIST`, default `dist/`), `run`, `test` (race detector), `test-docker` (sandbox and agent turns against real Docker, a fake Anthropic upstream and a fake `claude`, no Claude request), `e2e` (Playwright with the installed Chrome, needs pnpm, pandoc and Docker for the agent turns, which use the fake `claude`), `e2e-voice` (Playwright against the compose stack, with fake microphones; it kills and restarts the `stt` container), `e2e-agent-live` (two real daemons against the compose stack with `claude --model haiku`: a turn, a daemon killed mid-turn, a takeover that recalls a code word through `--resume`; about six Claude requests), `stt-test` (ruff, mypy and pytest for the worker), `stt-image`, `cover`, `lint` (golangci-lint, shellcheck), `docker-build` (also tests the office fixtures against the pandoc it ships), `sandbox-image`, `sandbox-push` (pushes it to `REGISTRY` and prints its digest-pinned reference), `sandbox-fake-image` (the sandbox with `internal/sandbox/fakeclaude` as `claude`, for tests), `fixtures` (regenerates them), `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`.

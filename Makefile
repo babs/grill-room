@@ -25,18 +25,27 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: build build-daemons run test test-docker e2e e2e-voice e2e-agent-live stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image fixtures dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: build release run test test-docker e2e e2e-voice e2e-agent-live stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push fixtures dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME)-daemon ./cmd/grill-room-daemon
 
-# The daemon for every supported target: Windows runs the linux build inside WSL.
+# The daemon release the room server hands out (D28): one static binary per target, its sha256 file
+# (sha256sum format, checked by install.sh) and VERSION. Windows runs the linux build inside WSL.
+DIST           ?= dist
 DAEMON_TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
-build-daemons:
+# The room server refuses to start on a VERSION that is not semver: fail the build instead.
+release:
+	@echo '$(VERSION)' | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$$' \
+	  || { echo "VERSION '$(VERSION)' is not a semver like v1.2.3" >&2; exit 1; }
+	rm -rf '$(DIST)' && mkdir -p '$(DIST)'
 	for t in $(DAEMON_TARGETS); do \
-	  CGO_ENABLED=0 GOOS=$${t%/*} GOARCH=$${t#*/} go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME)-daemon-$${t%/*}-$${t#*/} ./cmd/grill-room-daemon || exit 1; \
+	  f=$(APP_NAME)-daemon-$${t%/*}-$${t#*/}; \
+	  CGO_ENABLED=0 GOOS=$${t%/*} GOARCH=$${t#*/} go build -trimpath -ldflags="$(LDFLAGS)" -o '$(DIST)'/$$f ./cmd/grill-room-daemon || exit 1; \
+	  (cd '$(DIST)' && { sha256sum $$f 2>/dev/null || shasum -a 256 $$f; } > $$f.sha256) || exit 1; \
 	done
+	echo '$(VERSION)' > '$(DIST)/VERSION'
 
 run: build
 	./bin/$(APP_NAME)
@@ -53,6 +62,7 @@ test-docker: sandbox-image sandbox-fake-image
 # Browser tests against a fresh server, in the installed Chrome; agent turns run in Docker with the
 # fake claude.
 e2e: build sandbox-fake-image
+	$(MAKE) release DIST=bin/e2e-release VERSION=v0.0.1
 	cd e2e && pnpm install --frozen-lockfile && pnpm test
 
 # Voice tests against the compose stack behind the local traefik: run `make dev-up` first.
@@ -82,6 +92,7 @@ cover:
 
 lint:
 	golangci-lint run ./...
+	git ls-files -co --exclude-standard '*.sh' | xargs shellcheck
 
 docker-build:
 	docker build -t $(APP_NAME):local \
@@ -92,7 +103,7 @@ docker-build:
 	  --build-arg PKG=$(PKG) .
 
 sandbox-fake-image: sandbox-image
-	docker build -t $(SANDBOX_FAKE_IMAGE) -f sandbox/Dockerfile.fake \
+	docker build -t $(SANDBOX_FAKE_IMAGE) -f internal/sandbox/Dockerfile.fake \
 	  --build-arg BASE=$(SANDBOX_IMAGE) \
 	  --build-arg VERSION=$(VERSION) \
 	  --build-arg COMMIT_HASH=$(COMMIT_HASH) \
@@ -100,13 +111,23 @@ sandbox-fake-image: sandbox-image
 	  --build-arg PROJECT_URL=$(PROJECT_URL) \
 	  .
 
+# Built with no context, as the daemon builds its embedded copy when no registry image is advertised.
 sandbox-image:
 	docker build -t $(SANDBOX_IMAGE) \
 	  --build-arg VERSION=$(VERSION) \
 	  --build-arg COMMIT_HASH=$(COMMIT_HASH) \
 	  --build-arg BUILD_TIMESTAMP=$(BUILD_TS) \
 	  --build-arg PROJECT_URL=$(PROJECT_URL) \
-	  sandbox/
+	  - < internal/sandbox/Dockerfile
+
+# Pushes the sandbox image as $(REGISTRY)/grill-room/sandbox:$(VERSION) and prints the digest-pinned
+# reference for the room server's GRILL_ROOM_SANDBOX_IMAGE. REGISTRY comes from .env.
+sandbox-push: sandbox-image
+	@test -n "$(REGISTRY)" || { echo "REGISTRY is not set, see .env.example" >&2; exit 1; }
+	docker tag $(SANDBOX_IMAGE) $(REGISTRY)/grill-room/sandbox:$(VERSION)
+	docker push $(REGISTRY)/grill-room/sandbox:$(VERSION)
+	@docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' $(REGISTRY)/grill-room/sandbox:$(VERSION) \
+	  | grep '^$(REGISTRY)/grill-room/sandbox@' | sed 's/^/GRILL_ROOM_SANDBOX_IMAGE=/'
 
 # Office fixtures for the pandoc tests, written by the pandoc release the image ships.
 FIXTURES := internal/convert/testdata
@@ -133,4 +154,4 @@ traefik-uninstall:
 	rm -f '$(TRAEFIK_RULE)'
 
 clean:
-	rm -rf bin/ coverage.txt
+	rm -rf bin/ '$(DIST)' coverage.txt

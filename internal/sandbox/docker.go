@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -67,3 +68,10 @@ func Check(ctx context.Context, run Runner) Readiness {
 	}
 	return Readiness{OK: true, Version: version, Desktop: strings.Contains(osName, "Docker Desktop")}
 }
+
+// pinnedRe is a digest-pinned image reference. It starts with an alphanumeric, so it can never be
+// read as a docker CLI flag.
+var pinnedRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$`)
+
+// PinnedImage reports whether ref names an image by digest.
+func PinnedImage(ref string) bool { return pinnedRe.MatchString(ref) }

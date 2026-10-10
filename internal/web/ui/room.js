@@ -787,9 +787,55 @@ async function showPairing(id) {
   $('pairing-deny').onclick = () => answer(false).catch(console.error);
 }
 
+// Host the agent: the daemon download for the visitor's platform and the install one-liner (AC36).
+// Chromium tells the CPU through userAgentData; Safari and Firefox hide it, so the guess is editable.
+async function guessPlatform() {
+  const ua = navigator.userAgent;
+  let os = /Mac/.test(navigator.platform) || /Macintosh/.test(ua) ? 'darwin' : /Win/.test(navigator.platform) ? 'wsl' : 'linux';
+  // Every Mac sold since 2023 is Apple silicon.
+  let arch = os === 'darwin' || /aarch64|arm64/i.test(ua) ? 'arm64' : 'amd64';
+  const uad = navigator.userAgentData;
+  if (uad && uad.getHighEntropyValues) {
+    try {
+      const h = await uad.getHighEntropyValues(['architecture', 'platform']);
+      os = { macOS: 'darwin', Windows: 'wsl', Linux: 'linux', 'Chrome OS': 'linux' }[h.platform] || os;
+      arch = { arm: 'arm64', x86: 'amd64' }[h.architecture] || arch;
+    } catch { /* keep the user-agent guess */ }
+  }
+  return { os, arch };
+}
+
+async function showHostAgent() {
+  const res = await fetch('/api/daemon/version');
+  if (!res.ok) return;
+  const rel = await res.json();
+  if (!rel.version) return;
+  const { os, arch } = await guessPlatform();
+  $('host-os').value = os;
+  $('host-arch').value = arch;
+  const render = () => {
+    const target = ($('host-os').value === 'darwin' ? 'darwin' : 'linux') + '-' + $('host-arch').value;
+    const link = $('host-download');
+    link.href = '/download/grill-room-daemon-' + target;
+    link.textContent = 'Download grill-room-daemon ' + rel.version + ' (' + target + ')';
+    $('host-sha').textContent = 'sha256 ' + (rel.sha256[target] || '');
+    $('host-wsl').hidden = $('host-os').value !== 'wsl';
+  };
+  $('host-os').addEventListener('change', render);
+  $('host-arch').addEventListener('change', render);
+  render();
+  const oneLiner = 'curl -fsSL ' + location.origin + '/install.sh | sh -s -- ' + location.origin + location.pathname;
+  $('host-oneliner').textContent = oneLiner;
+  $('host-copy').addEventListener('click', () => {
+    navigator.clipboard.writeText(oneLiner).then(() => { $('host-copy').textContent = 'Copied'; }, console.error);
+  });
+  $('host-agent').hidden = false;
+}
+
 loadRoom().then((ok) => {
   if (!ok) return;
   connect();
+  showHostAgent().catch(console.error);
   const pair = new URLSearchParams(location.search).get('pair');
   if (pair) showPairing(pair).catch(console.error);
 }).catch(console.error);

@@ -22,6 +22,8 @@ export default defineConfig({
       GRILL_ROOM_DB: 'test-results/e2e.db',
       GRILL_ROOM_URL: baseURL,
       GRILL_ROOM_ADMIN_TOKEN: adminToken,
+      // `make e2e` writes a real release there first.
+      GRILL_ROOM_DAEMON_DIR: '../bin/e2e-release',
       LOG_FORMAT: 'json',
     },
   },

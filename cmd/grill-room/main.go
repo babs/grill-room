@@ -30,6 +30,7 @@ import (
 	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/convert"
 	"github.com/babs/grill-room/internal/livekit"
+	"github.com/babs/grill-room/internal/sandbox"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/web"
 )
@@ -79,6 +80,10 @@ type Config struct {
 	STTToken string
 	// TurnTimeout bounds one agent turn.
 	TurnTimeout time.Duration
+	// DaemonDir holds the daemon release `make release` writes; empty offers no download.
+	DaemonDir string
+	// SandboxImage is the digest-pinned sandbox image advertised to daemons; empty lets them build it.
+	SandboxImage string
 }
 
 func loadConfig() (Config, error) {
@@ -108,6 +113,8 @@ func loadConfig() (Config, error) {
 		STTToken:         os.Getenv("GRILL_ROOM_STT_TOKEN"),
 		LogLevel:         getEnv("LOG_LEVEL", "info"),
 		LogFormat:        getEnv("LOG_FORMAT", "auto"),
+		DaemonDir:        os.Getenv("GRILL_ROOM_DAEMON_DIR"),
+		SandboxImage:     os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
 	}, errors.Join(err1, err2, err3, err4, err5)
 }
 
@@ -133,6 +140,10 @@ func (c Config) Validate() error {
 	}
 	if err := c.validateVoice(); err != nil {
 		return err
+	}
+	// Security: a tag can be moved to another image after review; a digest cannot.
+	if c.SandboxImage != "" && !sandbox.PinnedImage(c.SandboxImage) {
+		return fmt.Errorf("GRILL_ROOM_SANDBOX_IMAGE %q: want a digest-pinned reference, <repository>[:tag]@sha256:<64 hex>", c.SandboxImage)
 	}
 	if _, err := zapcore.ParseLevel(c.LogLevel); err != nil {
 		return fmt.Errorf("LOG_LEVEL: %w", err)
@@ -272,6 +283,16 @@ func run() error {
 		logger.Warn("running_turns_failed", zap.Strings("rooms", rooms))
 	}
 
+	var release *web.Release
+	if cfg.DaemonDir != "" {
+		if release, err = web.LoadRelease(cfg.DaemonDir); err != nil {
+			return err
+		}
+		logger.Info("daemon_release", zap.String("version", release.Version))
+	} else {
+		logger.Info("daemon_release_disabled", zap.String("hint", "set GRILL_ROOM_DAEMON_DIR to offer the daemon download"))
+	}
+
 	b := bus.New(st)
 	srv := web.New(b, hash, cfg.PublicURL, web.Options{
 		TurnTimeout:        cfg.TurnTimeout,
@@ -280,6 +301,8 @@ func run() error {
 		MaxAttachmentBytes: cfg.MaxAttachmentMB << 20,
 		ToMarkdown:         convert.NewPandoc(cfg.Pandoc, cfg.PandocTimeout).ToMarkdown,
 		Voice:              cfg.voice(),
+		Release:            release,
+		SandboxImage:       cfg.SandboxImage,
 	}, logger)
 	if cfg.LiveKitURL == "" {
 		logger.Info("voice_disabled", zap.String("hint", "set GRILL_ROOM_LIVEKIT_URL to enable audio"))

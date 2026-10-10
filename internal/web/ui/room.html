@@ -50,6 +50,25 @@
       <input type="file" id="upload-input" accept=".md,.markdown,.html,.htm,.pdf,.png,.jpg,.jpeg,.gif,.webp,.svg,.docx,.odt,.pptx">
     </label>
     <p id="upload-status" role="status"></p>
+    <details id="host-agent" hidden>
+      <summary>Host the agent</summary>
+      <p>Runs the agent on your machine with your Claude subscription. Needs Docker.</p>
+      <label>System <select id="host-os">
+        <option value="linux">Linux</option>
+        <option value="darwin">macOS</option>
+        <option value="wsl">Windows (WSL)</option>
+      </select></label>
+      <label>Processor <select id="host-arch">
+        <option value="amd64">x86-64 (Intel, AMD)</option>
+        <option value="arm64">ARM64 (Apple silicon)</option>
+      </select></label>
+      <p id="host-wsl" hidden>Run it in a WSL terminal: the agent needs Linux and Docker there.</p>
+      <p><a id="host-download" download></a></p>
+      <p class="host-sha" id="host-sha"></p>
+      <p>Or install and start it from a terminal:</p>
+      <pre id="host-oneliner"></pre>
+      <button type="button" id="host-copy">Copy</button>
+    </details>
   </aside>
   <section id="viewer" hidden>
     <div class="viewer-head">

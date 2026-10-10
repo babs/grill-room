@@ -103,6 +103,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /r/{room}", page("room.html"))
 	static, _ := fs.Sub(ui, "ui") // cannot fail: "ui" is a valid embedded path
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
+	mux.HandleFunc("GET /install.sh", s.installScript)
+	mux.HandleFunc("GET /download/{file}", s.download)
+	mux.HandleFunc("GET /api/daemon/version", s.daemonVersion)
 
 	mux.Handle("GET /api/rooms", s.admin(s.listRooms))
 	mux.Handle("POST /api/rooms", s.admin(s.createRoom))

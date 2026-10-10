@@ -24,6 +24,8 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w \
     -X 'main.Builder=$(go version)' \
     -X 'main.ProjectURL=${PROJECT_URL}'" \
     -o /app "${PKG}"
+# The daemon release this server hands out (D28), every target cross-compiled here.
+RUN make release DIST=/daemon VERSION="${VERSION}" COMMIT_HASH="${COMMIT_HASH}" BUILD_TS="${BUILD_TIMESTAMP}" PROJECT_URL="${PROJECT_URL}"
 # distroless has no shell to create the data dir in the runtime stage.
 RUN mkdir /data
 
@@ -47,10 +49,12 @@ ENV VERSION="${VERSION}" \
 ENV GRILL_ROOM_ADDR="0.0.0.0:7680" \
     GRILL_ROOM_METRICS_ADDR="0.0.0.0:7681" \
     GRILL_ROOM_DB="/data/grill-room.db" \
-    GRILL_ROOM_PANDOC="/usr/local/bin/pandoc"
+    GRILL_ROOM_PANDOC="/usr/local/bin/pandoc" \
+    GRILL_ROOM_DAEMON_DIR="/daemon"
 
 COPY --from=builder --chown=65532:65532 /data /data
 COPY --from=pandoc /usr/local/bin/pandoc /usr/local/bin/pandoc
+COPY --from=builder /daemon /daemon
 COPY --from=builder /app /app
 VOLUME /data
 EXPOSE 7680 7681

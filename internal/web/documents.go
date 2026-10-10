@@ -59,6 +59,10 @@ type Options struct {
 	TurnTimeout time.Duration
 	// MaxResultBytes bounds a turn result a daemon posts; 0 means 32 MB.
 	MaxResultBytes int64
+	// Release is the daemon release handed out to hosts; nil offers no download.
+	Release *Release
+	// SandboxImage is the digest-pinned sandbox image daemons pull; empty lets them build their own.
+	SandboxImage string
 }
 
 //go:embed templates

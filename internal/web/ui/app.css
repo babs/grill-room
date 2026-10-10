@@ -110,6 +110,13 @@ button.doc:hover { background: var(--line); }
   text-align: center;
   cursor: pointer;
 }
+#host-agent { margin-top: 1rem; font-size: 0.85rem; }
+#host-agent summary { cursor: pointer; font-weight: 600; }
+#host-agent label { display: block; margin: 0.4rem 0; }
+#host-agent select { display: block; width: 100%; margin-top: 0.2rem; font: inherit; }
+#host-oneliner, .host-sha { font-family: ui-monospace, monospace; font-size: 0.75rem; word-break: break-all; white-space: pre-wrap; }
+#host-oneliner { padding: 0.4rem; background: #fff; border: 1px solid var(--line); border-radius: 6px; }
+.host-sha { color: var(--muted); }
 .upload input { display: block; width: 100%; margin-top: 0.4rem; font-size: 0.8rem; }
 #upload-status { font-size: 0.85rem; color: var(--muted); overflow-wrap: anywhere; }
 #viewer { flex: 2; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--line); }
