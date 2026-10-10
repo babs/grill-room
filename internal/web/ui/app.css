@@ -110,3 +110,37 @@ button.doc:hover { background: var(--line); }
   aside { display: none; }
   #viewer:not([hidden]) + .chat { display: none; }
 }
+
+/* Annotations */
+.viewer-body { flex: 1; display: flex; min-height: 0; }
+#annotations { width: 19rem; padding: 0.75rem; border-left: 1px solid var(--line); overflow-y: auto; font-size: 0.9rem; }
+.annot-tools { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.annot-tools button, .annot-actions button { padding: 0.3rem 0.7rem; font-size: 0.85rem; }
+#annot-pick[aria-pressed="true"] { background: var(--amber); color: var(--ink); }
+.annot-hint { color: var(--muted); font-size: 0.8rem; }
+#annot-new, .annot-reply { display: grid; gap: 0.4rem; margin: 0.6rem 0; }
+#annot-target { margin: 0; font-style: italic; overflow-wrap: anywhere; }
+.annot-file { font-size: 0.8rem; color: var(--muted); }
+.annot-file input { display: block; width: 100%; padding: 0.2rem; font-size: 0.8rem; }
+.annot-actions { display: flex; justify-content: flex-end; gap: 0.4rem; }
+#annot-status, .annot-error { color: #b3261e; font-size: 0.8rem; margin: 0; }
+#annot-list { list-style: none; margin: 0; padding: 0; }
+.annot { border: 1px solid var(--line); border-radius: 8px; padding: 0.5rem; margin-bottom: 0.6rem; background: #fff; }
+.annot.active { border-color: var(--amber); box-shadow: 0 0 0 1px var(--amber); }
+.annot.orphaned { border-style: dashed; }
+.annot-head { width: 100%; padding: 0; background: none; color: inherit; text-align: left; overflow-wrap: anywhere; }
+.annot-badge { display: inline-block; padding: 0 0.4rem; border-radius: 999px; font-size: 0.75rem; background: var(--amber); color: var(--ink); }
+.annot-badge.done { background: var(--teal); color: #fff; }
+.annot-badge.reopened { background: #e8743b; color: #fff; }
+.annot-note { margin: 0.3rem 0 0; color: #b3261e; font-size: 0.8rem; }
+.annot-thread { list-style: none; margin: 0.4rem 0 0; padding: 0; }
+.annot-msg { margin-bottom: 0.4rem; }
+.annot-msg .meta { font-size: 0.8rem; }
+.annot-msg .meta time { color: var(--muted); margin-left: 0.3rem; }
+.annot-msg.agent strong { color: var(--teal); }
+.annot-msg .body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.annot-msg img { display: block; max-width: 100%; max-height: 12rem; margin-top: 0.3rem; border-radius: 4px; }
+@media (max-width: 60rem) {
+  .viewer-body { flex-direction: column; }
+  #annotations { width: auto; max-height: 40%; border-left: 0; border-top: 1px solid var(--line); }
+}

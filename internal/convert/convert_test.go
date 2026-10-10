@@ -173,3 +173,28 @@ func TestPandocFailures(t *testing.T) {
 		}
 	})
 }
+
+// 001-AC20: attachments are raster images only; SVG can carry script.
+func TestImage(t *testing.T) {
+	cases := map[string]struct {
+		data []byte
+		want string
+		ok   bool
+	}{
+		"png":   {[]byte("\x89PNG\r\n\x1a\n...."), "image/png", true},
+		"jpeg":  {[]byte("\xff\xd8\xff\xe0...."), "image/jpeg", true},
+		"gif":   {[]byte("GIF89a...."), "image/gif", true},
+		"webp":  {[]byte("RIFF\x00\x00\x00\x00WEBPVP"), "image/webp", true},
+		"svg":   {[]byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`), "", false},
+		"pdf":   {[]byte("%PDF-1.7"), "", false},
+		"empty": {nil, "", false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			ct, ok := Image(tc.data)
+			if ok != tc.ok || (ok && ct != tc.want) {
+				t.Fatalf("Image() = %q, %v; want %q, %v", ct, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}

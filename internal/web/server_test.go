@@ -505,8 +505,8 @@ func TestJoinAndMessageValidation(t *testing.T) {
 			t.Errorf("body of %d bytes: %d, want %d", len(body), code, want)
 		}
 	}
-	if code, _ := e.do(t, "POST", "/api/rooms/"+room.ID+"/messages", p.Token, strings.Repeat("x", 70<<10)); code != http.StatusBadRequest {
-		t.Errorf("oversized request: %d, want 400", code)
+	if code, _ := e.do(t, "POST", "/api/rooms/"+room.ID+"/messages", p.Token, strings.Repeat("x", 70<<10)); code != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversized request: %d, want 413", code)
 	}
 }
 

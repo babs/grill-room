@@ -42,6 +42,13 @@ type Type struct {
 
 var images = map[string]bool{"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true}
 
+// Image returns the MIME type of a PNG, JPEG, GIF or WebP image, judged by content. SVG is left
+// out: it can carry script.
+func Image(data []byte) (string, bool) {
+	ct := http.DetectContentType(data)
+	return ct, images[ct]
+}
+
 // Detect identifies data by its content. The extension only tells apart text formats, which
 // content cannot (Markdown, HTML, SVG): a binary file named .md is still rejected.
 func Detect(name string, data []byte) (Type, error) {

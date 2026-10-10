@@ -105,6 +105,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rooms/{room}/documents/{doc}", s.participant(s.getDocument))
 	mux.Handle("GET /api/rooms/{room}/documents/{doc}/view", s.participant(s.viewDocument))
 	mux.Handle("GET /api/rooms/{room}/documents/{doc}/original", s.participant(s.originalDocument))
+	mux.Handle("GET /api/rooms/{room}/documents/{doc}/annotations", s.participant(s.listAnnotations))
+	mux.Handle("POST /api/rooms/{room}/documents/{doc}/annotations", s.participant(s.createAnnotation))
+	mux.Handle("POST /api/rooms/{room}/annotations/{ann}/messages", s.participant(s.postAnnotationMessage))
+	mux.Handle("PATCH /api/rooms/{room}/annotations/{ann}", s.participant(s.setAnnotationStatus))
+	mux.Handle("GET /api/rooms/{room}/attachments/{att}", s.participant(s.getAttachment))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -200,12 +205,23 @@ func (s *Server) authorize(ctx context.Context, tokenHash, room string) (*store.
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
+	return decodeLimit(w, r, v, 64<<10)
+}
+
+// decodeLimit reads a JSON body of at most limit bytes; past it the answer is a 413.
+func decodeLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
 	// A cross-site form can only send "simple" content types: requiring JSON blocks login CSRF.
 	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
 		httpError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
 		return false
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(v); err != nil {
+	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(v)
+	var mbe *http.MaxBytesError
+	switch {
+	case errors.As(err, &mbe):
+		httpError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("request body is over %d bytes", limit))
+		return false
+	case err != nil:
 		httpError(w, http.StatusBadRequest, "bad json: "+err.Error())
 		return false
 	}
@@ -409,8 +425,9 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, sess sessio
 	writeJSON(w, http.StatusCreated, m)
 }
 
-// events streams the room's messages after ?since= or Last-Event-ID, then live ones, and a
-// "documents" event when a document or revision is added. The stream ends with a "revoked" event
+// events streams the room's messages after ?since= or Last-Event-ID, then live ones, a
+// "documents" event when a document or revision is added, and an "annotations" event when an
+// annotation is added or changes. The stream ends with a "revoked" event
 // as soon as the participant's access is gone.
 func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	flusher, ok := w.(http.Flusher)
@@ -428,6 +445,11 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	// Read before the headers go out: a client lists the documents once the stream is open, and
 	// any change after this point reaches it as a "documents" event.
 	docsVersion, err := s.bus.Store.DocumentsVersion(r.Context(), room)
+	if err != nil {
+		s.serverError(w, "events_failed", err)
+		return
+	}
+	annVersion, err := s.bus.Store.AnnotationsVersion(r.Context(), room)
 	if err != nil {
 		s.serverError(w, "events_failed", err)
 		return
@@ -473,16 +495,25 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 				break
 			}
 		}
-		v, err := s.bus.Store.DocumentsVersion(r.Context(), room)
-		if err != nil {
-			return false
-		}
-		if v != docsVersion {
-			docsVersion = v
-			if _, err := io.WriteString(w, "event: documents\ndata: {}\n\n"); err != nil {
+		for _, c := range []struct {
+			event string
+			seen  *string
+			read  func(context.Context, string) (string, error)
+		}{
+			{"documents", &docsVersion, s.bus.Store.DocumentsVersion},
+			{"annotations", &annVersion, s.bus.Store.AnnotationsVersion},
+		} {
+			v, err := c.read(r.Context(), room)
+			if err != nil {
 				return false
 			}
-			flusher.Flush()
+			if v != *c.seen {
+				*c.seen = v
+				if _, err := io.WriteString(w, "event: "+c.event+"\ndata: {}\n\n"); err != nil {
+					return false
+				}
+				flusher.Flush()
+			}
 		}
 		return true
 	}

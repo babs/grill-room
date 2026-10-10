@@ -49,6 +49,8 @@ var uploadReadTimeout = 2 * time.Minute
 type Options struct {
 	MaxUploadBytes int64
 	MaxRoomBytes   int64
+	// MaxAttachmentBytes bounds one image on an annotation message.
+	MaxAttachmentBytes int64
 	// ToMarkdown converts an office file read as the pandoc format from.
 	ToMarkdown func(ctx context.Context, from string, data []byte) (string, error)
 }
@@ -285,7 +287,11 @@ func (s *Server) viewDocument(w http.ResponseWriter, r *http.Request, sess sessi
 	}
 	var page bytes.Buffer
 	if d.Format == convert.FormatHTML {
-		page.Write(withDiffStyle(body, from != 0))
+		tags := annotateScript
+		if from != 0 {
+			tags = append(append([]byte{}, diffStyle...), annotateScript...)
+		}
+		page.Write(inHead(body, tags))
 	} else {
 		err = docTmpl.Execute(&page, map[string]any{
 			"Title":     d.Name,
@@ -321,21 +327,24 @@ func (s *Server) revisionHTML(ctx context.Context, d *store.Document, n int) ([]
 
 var (
 	diffStyle = []byte(`<link rel="stylesheet" href="/static/doc/github-diff.css">`)
+	// annotateScript draws annotation marks inside the frame; the template carries it for Markdown.
+	annotateScript = []byte(`<link rel="stylesheet" href="/static/doc/annotate.css"><script src="/static/doc/annotate.js"></script>`)
 	// headTag is the <head> start tag, not <header>.
 	headTag = regexp.MustCompile(`(?i)<head(\s[^>]*)?>`)
+	// leadingDoctype is a doctype with only blanks and comments before it.
+	leadingDoctype = regexp.MustCompile(`(?is)^(?:\s|<!--.*?-->)*<!doctype[^>]*>`)
 )
 
-// withDiffStyle links the diff markers' stylesheet into an HTML document, inside its head when it
-// has one: before a doctype it would switch the page to quirks mode.
-func withDiffStyle(page []byte, diff bool) []byte {
-	if !diff {
-		return page
-	}
+// inHead inserts tags into an HTML document's head: after its <head> tag, else after its
+// doctype, else at the start. Before a doctype they would switch the page to quirks mode.
+func inHead(page, tags []byte) []byte {
 	at := 0
 	if m := headTag.FindIndex(page); m != nil {
 		at = m[1]
+	} else if m := leadingDoctype.FindIndex(page); m != nil {
+		at = m[1]
 	}
-	return append(append(append([]byte{}, page[:at]...), diffStyle...), page[at:]...)
+	return append(append(append([]byte{}, page[:at]...), tags...), page[at:]...)
 }
 
 // originalDocument serves an upload's original bytes: inline for PDF and images, as a download

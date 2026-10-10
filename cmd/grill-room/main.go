@@ -60,10 +60,12 @@ type Config struct {
 	LogLevel    string
 	LogFormat   string
 	// MaxUploadMB and MaxRoomMB bound one upload and all of a room's uploads (D31).
-	MaxUploadMB   int64
-	MaxRoomMB     int64
-	Pandoc        string
-	PandocTimeout time.Duration
+	MaxUploadMB int64
+	MaxRoomMB   int64
+	// MaxAttachmentMB bounds one image on an annotation message; attachments count in MaxRoomMB.
+	MaxAttachmentMB int64
+	Pandoc          string
+	PandocTimeout   time.Duration
 }
 
 func loadConfig() (Config, error) {
@@ -71,19 +73,21 @@ func loadConfig() (Config, error) {
 	maxUpload, err1 := strconv.ParseInt(getEnv("GRILL_ROOM_MAX_UPLOAD_MB", "20"), 10, 64)
 	maxRoom, err2 := strconv.ParseInt(getEnv("GRILL_ROOM_MAX_ROOM_MB", "200"), 10, 64)
 	timeout, err3 := time.ParseDuration(getEnv("GRILL_ROOM_PANDOC_TIMEOUT", "60s"))
+	maxAttachment, err4 := strconv.ParseInt(getEnv("GRILL_ROOM_MAX_ATTACHMENT_MB", "5"), 10, 64)
 	return Config{
-		MaxUploadMB:   maxUpload,
-		MaxRoomMB:     maxRoom,
-		Pandoc:        getEnv("GRILL_ROOM_PANDOC", "pandoc"),
-		PandocTimeout: timeout,
-		Addr:          addr,
-		MetricsAddr:   getEnv("GRILL_ROOM_METRICS_ADDR", "127.0.0.1:7681"),
-		DB:            getEnv("GRILL_ROOM_DB", "grill-room.db"),
-		PublicURL:     getEnv("GRILL_ROOM_URL", "http://"+addr),
-		AdminToken:    os.Getenv("GRILL_ROOM_ADMIN_TOKEN"),
-		LogLevel:      getEnv("LOG_LEVEL", "info"),
-		LogFormat:     getEnv("LOG_FORMAT", "auto"),
-	}, errors.Join(err1, err2, err3)
+		MaxUploadMB:     maxUpload,
+		MaxRoomMB:       maxRoom,
+		MaxAttachmentMB: maxAttachment,
+		Pandoc:          getEnv("GRILL_ROOM_PANDOC", "pandoc"),
+		PandocTimeout:   timeout,
+		Addr:            addr,
+		MetricsAddr:     getEnv("GRILL_ROOM_METRICS_ADDR", "127.0.0.1:7681"),
+		DB:              getEnv("GRILL_ROOM_DB", "grill-room.db"),
+		PublicURL:       getEnv("GRILL_ROOM_URL", "http://"+addr),
+		AdminToken:      os.Getenv("GRILL_ROOM_ADMIN_TOKEN"),
+		LogLevel:        getEnv("LOG_LEVEL", "info"),
+		LogFormat:       getEnv("LOG_FORMAT", "auto"),
+	}, errors.Join(err1, err2, err3, err4)
 }
 
 // Validate rejects a configuration the server cannot run with.
@@ -96,6 +100,9 @@ func (c Config) Validate() error {
 	}
 	if c.MaxUploadMB < 1 || c.MaxRoomMB < c.MaxUploadMB || c.MaxRoomMB > 1<<20 {
 		return fmt.Errorf("GRILL_ROOM_MAX_UPLOAD_MB %d, GRILL_ROOM_MAX_ROOM_MB %d: want 1 <= upload <= room <= %d", c.MaxUploadMB, c.MaxRoomMB, 1<<20)
+	}
+	if c.MaxAttachmentMB < 1 || c.MaxAttachmentMB > c.MaxRoomMB {
+		return fmt.Errorf("GRILL_ROOM_MAX_ATTACHMENT_MB %d: want 1 <= attachment <= room (%d)", c.MaxAttachmentMB, c.MaxRoomMB)
 	}
 	if c.PandocTimeout <= 0 {
 		return fmt.Errorf("GRILL_ROOM_PANDOC_TIMEOUT %s: want a positive duration", c.PandocTimeout)
@@ -199,9 +206,10 @@ func run() error {
 
 	b := bus.New(st)
 	srv := web.New(b, hash, cfg.PublicURL, web.Options{
-		MaxUploadBytes: cfg.MaxUploadMB << 20,
-		MaxRoomBytes:   cfg.MaxRoomMB << 20,
-		ToMarkdown:     convert.NewPandoc(cfg.Pandoc, cfg.PandocTimeout).ToMarkdown,
+		MaxUploadBytes:     cfg.MaxUploadMB << 20,
+		MaxRoomBytes:       cfg.MaxRoomMB << 20,
+		MaxAttachmentBytes: cfg.MaxAttachmentMB << 20,
+		ToMarkdown:         convert.NewPandoc(cfg.Pandoc, cfg.PandocTimeout).ToMarkdown,
 	}, logger)
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(

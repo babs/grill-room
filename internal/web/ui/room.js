@@ -16,6 +16,7 @@ function end(text) {
   $('banner').hidden = false;
   sendForm.hidden = true;
   document.querySelector('.upload').hidden = true;
+  $('annotations').hidden = true;
 }
 
 // loadRoom fetches the room header and participant list; false when access is gone.
@@ -141,11 +142,16 @@ async function showDocument(id, refresh) {
     $('rev-from').value = keepFrom;
   }
   if (!refresh || followLatest) renderDocument();
+  if (!refresh) closeNew();
+  await loadAnnotations();
 }
 
 function renderDocument() {
   const d = openDoc;
   let el;
+  frameReady = false;
+  setPick(false);
+  $('annot-pick').hidden = d.format !== 'html';
   if (d.format === 'image') {
     el = document.createElement('img');
     el.src = docURL(d.id, '/original');
@@ -175,7 +181,254 @@ $('doc-close').addEventListener('click', () => {
   openDoc = null;
   $('viewer').hidden = true;
   $('doc-frame').replaceChildren();
+  closeNew();
+  annotations = [];
+  renderAnnotations();
 });
+
+// Annotations. The document frame runs untrusted scripts, so it only ever proposes: an anchor to
+// annotate, a mark clicked. The thread UI and every API call live here, in the room page.
+let annotations = [];
+let frameReady = false;
+// newAnchor is the anchor of the annotation being written: undefined when none is, null for a
+// comment on the whole document.
+let newAnchor;
+
+const docFrame = () => $('doc-frame').querySelector('iframe[sandbox]');
+
+// canCreate: anchors are taken on the latest revision, shown without a diff.
+function canCreate() {
+  const d = openDoc;
+  if (!d || d.revisions === 0) return false;
+  return d.kind !== 'agent' || ($('rev').value === String(d.revisions) && !$('rev-from').value);
+}
+
+// The frame's origin is opaque, so it cannot be named: only anchors and statuses go there, never
+// thread text, names or credentials.
+function postToFrame(msg) {
+  const frame = docFrame();
+  if (frame && frameReady) frame.contentWindow.postMessage(msg, '*');
+}
+
+function sendAnnotations() {
+  postToFrame({
+    type: 'gr:annotations',
+    items: annotations.map((a) => ({ id: a.id, status: a.status, anchor: a.anchor })),
+    canCreate: canCreate(),
+  });
+}
+
+function rejectFrameMessage(why) {
+  console.warn('bridge: rejected frame message: ' + why);
+}
+
+window.addEventListener('message', (ev) => {
+  const frame = docFrame();
+  // Anything not from the document frame on show is none of this bridge's business.
+  if (!frame || ev.source !== frame.contentWindow) return;
+  if (ev.origin !== 'null') return rejectFrameMessage('origin ' + ev.origin);
+  const msg = GrillBridge.validate(ev.data);
+  if (!msg) return rejectFrameMessage('malformed or oversized');
+  switch (msg.type) {
+    case 'gr:ready':
+      frameReady = true;
+      sendAnnotations();
+      break;
+    case 'gr:anchor':
+      setPick(false);
+      // A frame script can post anchors at will: never replace what the participant is typing.
+      if (canCreate() && !(newAnchor !== undefined && $('annot-body').value.trim())) openNew(msg.anchor);
+      break;
+    case 'gr:open':
+      focusItem(msg.id, false);
+      break;
+    case 'gr:pick':
+      setPick(false);
+      break;
+  }
+});
+
+function setPick(on) {
+  $('annot-pick').setAttribute('aria-pressed', String(on));
+  postToFrame({ type: 'gr:pick', on });
+}
+
+$('annot-pick').addEventListener('click', () => setPick($('annot-pick').getAttribute('aria-pressed') !== 'true'));
+$('annot-doc').addEventListener('click', () => openNew(null));
+$('annot-cancel').addEventListener('click', closeNew);
+
+function clip(s, n) {
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
+
+function describeAnchor(a) {
+  if (!a) return 'Whole document';
+  if (a.kind === 'text') return '"' + clip(a.exact, 160) + '"';
+  return '<' + a.tag + '> element' + (a.fingerprint ? ': ' + clip(a.fingerprint, 80) : '');
+}
+
+function openNew(anchor) {
+  newAnchor = anchor;
+  $('annot-target').textContent = describeAnchor(anchor);
+  $('annot-new').hidden = false;
+  $('annot-status').textContent = '';
+  $('annot-body').focus();
+}
+
+function closeNew() {
+  newAnchor = undefined;
+  $('annot-new').hidden = true;
+  $('annot-body').value = '';
+  $('annot-files').value = '';
+}
+
+// readImages returns the chosen files as base64, the shape the API takes.
+function readImages(input) {
+  return Promise.all([...input.files].map((f) => new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve({ data: r.result.slice(r.result.indexOf(',') + 1) });
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(f);
+  })));
+}
+
+async function sendJSON(method, url, body) {
+  const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (res.status === 401) {
+    end('Your access to this room has ended.');
+    return null;
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
+  return data;
+}
+
+$('annot-new').addEventListener('submit', (e) => {
+  e.preventDefault();
+  (async () => {
+    const d = openDoc;
+    const attachments = await readImages($('annot-files'));
+    const body = $('annot-body').value;
+    const saved = await sendJSON('POST', docURL(d.id, '/annotations'), { revision: d.revisions, anchor: newAnchor, body, attachments });
+    if (!saved) return;
+    closeNew();
+    await loadAnnotations();
+    focusItem(saved.id, true);
+  })().catch((err) => { $('annot-status').textContent = 'Not saved: ' + err.message; });
+});
+
+async function loadAnnotations() {
+  const d = openDoc;
+  if (!d) return;
+  const res = await fetch(docURL(d.id, '/annotations'));
+  if (res.status === 401) return;
+  if (!res.ok) throw new Error('annotations: HTTP ' + res.status);
+  const list = await res.json();
+  // The viewer moved on while this was in flight.
+  if (!openDoc || openDoc.id !== d.id) return;
+  annotations = list;
+  renderAnnotations();
+  sendAnnotations();
+}
+
+// rank orders the panel: whole-document comments, then marks, then orphans.
+const rank = (a) => (a.anchor ? (a.orphaned ? 2 : 1) : 0);
+
+function renderAnnotations() {
+  const list = $('annot-list');
+  const kept = new Map([...list.children].map((li) => [li.dataset.id, li]));
+  const items = [...annotations].sort((x, y) => rank(x) - rank(y) || x.id - y.id)
+    .map((a) => fillItem(kept.get(String(a.id)) || newItem(a.id), a));
+  // Re-inserting blurs: only reorder when the order changed, and give focus back.
+  if (items.length !== list.children.length || items.some((li, i) => list.children[i] !== li)) {
+    const focused = document.activeElement;
+    list.replaceChildren(...items);
+    if (focused && list.contains(focused)) focused.focus();
+  }
+}
+
+function focusItem(id, quiet) {
+  const li = $('annot-list').querySelector(`li[data-id="${id}"]`);
+  if (!li) return;
+  $('annot-list').querySelectorAll('li.active').forEach((x) => x.classList.remove('active'));
+  li.classList.add('active');
+  li.scrollIntoView({ block: 'nearest' });
+  if (!quiet) li.querySelector('textarea').focus();
+  postToFrame({ type: 'gr:focus', id });
+}
+
+function newItem(id) {
+  const li = document.createElement('li');
+  li.className = 'annot';
+  li.dataset.id = id;
+  li.innerHTML = '<button type="button" class="annot-head"><span class="annot-badge"></span> <span class="annot-label"></span></button>'
+    + '<p class="annot-note"></p><ol class="annot-thread"></ol>'
+    + '<form class="annot-reply"><textarea rows="2" maxlength="4000" aria-label="Reply" placeholder="Reply"></textarea>'
+    + '<label class="annot-file">Images <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple></label>'
+    + '<div class="annot-actions"><button type="button" class="annot-state"></button><button type="submit">Reply</button></div>'
+    + '<p class="annot-error" role="status"></p></form>';
+  li.querySelector('.annot-head').addEventListener('click', () => focusItem(id, true));
+  const form = li.querySelector('form');
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    (async () => {
+      const attachments = await readImages(form.querySelector('input[type=file]'));
+      const body = form.querySelector('textarea').value;
+      if (!(await sendJSON('POST', api + '/annotations/' + id + '/messages', { body, attachments }))) return;
+      form.reset();
+      form.querySelector('.annot-error').textContent = '';
+      await loadAnnotations();
+    })().catch((err) => { form.querySelector('.annot-error').textContent = 'Not sent: ' + err.message; });
+  });
+  li.querySelector('.annot-state').addEventListener('click', () => {
+    const status = li.dataset.status === 'done' ? 'reopened' : 'done';
+    sendJSON('PATCH', api + '/annotations/' + id, { status })
+      .then(loadAnnotations)
+      .catch((err) => { form.querySelector('.annot-error').textContent = err.message; });
+  });
+  return li;
+}
+
+function fillItem(li, a) {
+  li.dataset.status = a.status;
+  li.classList.toggle('orphaned', a.orphaned);
+  const badge = li.querySelector('.annot-badge');
+  badge.className = 'annot-badge ' + a.status;
+  badge.textContent = a.status;
+  li.querySelector('.annot-label').textContent = describeAnchor(a.anchor);
+  const note = li.querySelector('.annot-note');
+  note.hidden = !a.orphaned;
+  note.textContent = a.orphaned ? 'Gone from the current revision, last seen in r' + a.revision + '.' : '';
+  li.querySelector('.annot-state').textContent = a.status === 'done' ? 'Reopen' : 'Mark done';
+  li.querySelector('.annot-thread').replaceChildren(...a.messages.map((m) => {
+    const item = document.createElement('li');
+    item.className = 'annot-msg ' + m.by;
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const who = document.createElement('strong');
+    who.textContent = m.author;
+    const time = document.createElement('time');
+    time.dateTime = m.created_at;
+    time.textContent = new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    meta.append(who, ' ', time);
+    item.append(meta);
+    if (m.body) {
+      const body = document.createElement('div');
+      body.className = 'body';
+      body.textContent = m.body;
+      item.append(body);
+    }
+    for (const at of m.attachments) {
+      const img = document.createElement('img');
+      img.src = api + '/attachments/' + encodeURIComponent(at.id);
+      img.alt = 'Image from ' + m.author;
+      img.loading = 'lazy';
+      item.append(img);
+    }
+    return item;
+  }));
+  return li;
+}
 
 async function upload(file) {
   const status = $('upload-status');
@@ -208,6 +461,7 @@ function connect() {
   // Listing on open, not before: the stream announces only changes made after it opened.
   events.onopen = () => loadDocuments().catch(console.error);
   events.addEventListener('documents', () => loadDocuments().catch(console.error));
+  events.addEventListener('annotations', () => loadAnnotations().catch(console.error));
   events.addEventListener('revoked', () => end('Your access to this room has ended.'));
   events.onerror = () => {
     // CLOSED means the browser gave up (a 401 on reconnect); otherwise it retries by itself.

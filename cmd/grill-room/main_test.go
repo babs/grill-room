@@ -11,11 +11,13 @@ import (
 
 func TestConfigValidate(t *testing.T) {
 	ok := Config{Addr: "a:1", MetricsAddr: "a:2", DB: "x.db", LogLevel: "info", LogFormat: "auto",
-		MaxUploadMB: 20, MaxRoomMB: 200, Pandoc: "pandoc", PandocTimeout: time.Minute}
+		MaxUploadMB: 20, MaxRoomMB: 200, MaxAttachmentMB: 5, Pandoc: "pandoc", PandocTimeout: time.Minute}
 	cases := map[string]func(*Config){
 		"zero upload limit":       func(c *Config) { c.MaxUploadMB = 0 },
 		"room below upload limit": func(c *Config) { c.MaxRoomMB = 10 },
 		"room limit overflows":    func(c *Config) { c.MaxRoomMB = 1 << 21 },
+		"zero attachment limit":   func(c *Config) { c.MaxAttachmentMB = 0 },
+		"attachment over room":    func(c *Config) { c.MaxAttachmentMB = 201 },
 		"zero pandoc timeout":     func(c *Config) { c.PandocTimeout = 0 },
 		"same addr":               func(c *Config) { c.MetricsAddr = c.Addr },
 		"empty db":                func(c *Config) { c.DB = "" },
@@ -35,7 +37,7 @@ func TestConfigValidate(t *testing.T) {
 }
 
 func TestLoadConfigRejectsBadNumbers(t *testing.T) {
-	for key, val := range map[string]string{"GRILL_ROOM_MAX_UPLOAD_MB": "20MB", "GRILL_ROOM_MAX_ROOM_MB": "x", "GRILL_ROOM_PANDOC_TIMEOUT": "60"} {
+	for key, val := range map[string]string{"GRILL_ROOM_MAX_UPLOAD_MB": "20MB", "GRILL_ROOM_MAX_ROOM_MB": "x", "GRILL_ROOM_PANDOC_TIMEOUT": "60", "GRILL_ROOM_MAX_ATTACHMENT_MB": "5MB"} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv(key, val)
 			if _, err := loadConfig(); err == nil {
@@ -44,7 +46,7 @@ func TestLoadConfigRejectsBadNumbers(t *testing.T) {
 		})
 	}
 	c, err := loadConfig()
-	if err != nil || c.MaxUploadMB != 20 || c.MaxRoomMB != 200 || c.Validate() != nil {
+	if err != nil || c.MaxUploadMB != 20 || c.MaxRoomMB != 200 || c.MaxAttachmentMB != 5 || c.Validate() != nil {
 		t.Fatalf("defaults: %+v, %v", c, err)
 	}
 }

@@ -6,6 +6,7 @@
 <title>grill-room</title>
 <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/app.css">
+<script src="/static/bridge.js" defer></script>
 <script src="/static/room.js" defer></script>
 </head>
 <body class="room">
@@ -37,7 +38,27 @@
       <label>Revision <select id="rev"></select></label>
       <label>Compare with <select id="rev-from"></select></label>
     </form>
-    <div id="doc-frame"></div>
+    <div class="viewer-body">
+      <div id="doc-frame"></div>
+      <aside id="annotations" aria-label="Annotations">
+        <div class="annot-tools">
+          <button type="button" id="annot-doc">Comment on the document</button>
+          <button type="button" id="annot-pick" aria-pressed="false" hidden>Annotate an element</button>
+        </div>
+        <p class="annot-hint">Select text in the document to annotate it.</p>
+        <form id="annot-new" hidden>
+          <p id="annot-target"></p>
+          <textarea id="annot-body" rows="3" maxlength="4000" aria-label="Annotation" placeholder="What should change here?"></textarea>
+          <label class="annot-file">Images <input type="file" id="annot-files" accept="image/png,image/jpeg,image/gif,image/webp" multiple></label>
+          <div class="annot-actions">
+            <button type="button" id="annot-cancel">Cancel</button>
+            <button type="submit">Save</button>
+          </div>
+        </form>
+        <p id="annot-status" role="status"></p>
+        <ol id="annot-list"></ol>
+      </aside>
+    </div>
   </section>
   <section class="chat">
     <ol id="messages" aria-live="polite"></ol>

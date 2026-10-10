@@ -22,8 +22,9 @@ import (
 
 // Small limits keep the 413 cases cheap; the defaults (20 MB, 200 MB) are config.
 var testOptions = Options{
-	MaxUploadBytes: 20000,
-	MaxRoomBytes:   50000,
+	MaxUploadBytes:     20000,
+	MaxRoomBytes:       50000,
+	MaxAttachmentBytes: 1000,
 	ToMarkdown: func(_ context.Context, from string, data []byte) (string, error) {
 		switch {
 		case bytes.Contains(data, []byte("pandoc-missing")):
@@ -325,10 +326,10 @@ func TestDocumentViews(t *testing.T) {
 			t.Error("MathJax loaded for a document without math")
 		}
 	})
-	t.Run("html is served as is, sandboxed", func(t *testing.T) {
+	t.Run("html is served as is, sandboxed, with the annotation script", func(t *testing.T) {
 		resp, body := e.get(t, docPath(room.ID, htmlDoc.ID, "/view"), alice.Token)
 		sandboxed(t, resp)
-		if string(body) != "<!doctype html><title>t</title><script>alert(1)</script>" {
+		if string(body) != "<!doctype html>"+string(annotateScript)+"<title>t</title><script>alert(1)</script>" {
 			t.Fatalf("body %q", body)
 		}
 	})
@@ -429,22 +430,24 @@ func TestAgentDocumentRevisionsAndDiff(t *testing.T) {
 	}
 }
 
-func TestHTMLDiffKeepsDoctypeFirst(t *testing.T) {
+// The frame's script and the diff style go into the head, never before the doctype.
+func TestInHeadKeepsDoctypeFirst(t *testing.T) {
+	const tag = `<script src="/x.js"></script>`
 	cases := map[string]struct{ in, want string }{
-		"header only": {"<header>x</header>", string(diffStyle) + "<header>x</header>"},
-		"head":        {"<!doctype html><html><HEAD lang=x><title>t</title>", `<!doctype html><html><HEAD lang=x>` + string(diffStyle) + `<title>t</title>`},
-		"no head":     {"<p>x</p>", string(diffStyle) + "<p>x</p>"},
-		"broken head": {"<p>x</p><head", string(diffStyle) + "<p>x</p><head"},
+		"header only":   {"<header>x</header>", tag + "<header>x</header>"},
+		"head":          {"<!doctype html><html><HEAD lang=x><title>t</title>", `<!doctype html><html><HEAD lang=x>` + tag + `<title>t</title>`},
+		"no head":       {"<p>x</p>", tag + "<p>x</p>"},
+		"broken head":   {"<p>x</p><head", tag + "<p>x</p><head"},
+		"doctype only":  {"<!DOCTYPE html>\n<p>x</p>", "<!DOCTYPE html>" + tag + "\n<p>x</p>"},
+		"comment first": {"<!-- c -->\n<!doctype html><body>", "<!-- c -->\n<!doctype html>" + tag + "<body>"},
+		"late doctype":  {"<p>x</p><!doctype html>", tag + "<p>x</p><!doctype html>"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := string(withDiffStyle([]byte(tc.in), true)); got != tc.want {
+			if got := string(inHead([]byte(tc.in), []byte(tag))); got != tc.want {
 				t.Fatalf("got %q", got)
 			}
 		})
-	}
-	if got := string(withDiffStyle([]byte("<p>x</p>"), false)); got != "<p>x</p>" {
-		t.Fatalf("no diff: %q", got)
 	}
 }
 
