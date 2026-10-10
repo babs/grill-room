@@ -14,6 +14,7 @@ flowchart LR
     Store[("SQLite<br/>rooms, messages, docs,<br/>revisions, annotations,<br/>turns, sessions")]
   end
 
+  AdminC["Room admin<br/>(curl today, admin UI in spec 003)"]
   LK["LiveKit<br/>(SFU + embedded TURN)"]
   STT["STT worker<br/>(Python, faster-whisper)"]
 
@@ -30,6 +31,7 @@ flowchart LR
   Creds[("Claude credentials<br/>file or Keychain, read-only")]
 
   UI <-->|"HTTPS: REST + SSE"| API
+  AdminC -->|"HTTPS REST: rooms, invites"| API
   UI <-->|"postMessage bridge"| Frame
   UI <-->|"WebRTC audio<br/>TURN/TLS 443 or ICE/TCP"| LK
   STT -->|"subscribes to audio tracks"| LK
@@ -48,6 +50,7 @@ flowchart LR
 
 | Component | Exposes | Talks to | Auth |
 |---|---|---|---|
+| Room admin | nothing | room server: `GET/POST /api/rooms`, `DELETE /api/rooms/{room}`, `POST/DELETE .../invites` | admin token (one per server) |
 | Room page | nothing | room server (REST + SSE), LiveKit (WebRTC), document iframe (postMessage, validated) | participant cookie |
 | Document iframe | anchors and selections via postMessage | room page only | none: opaque origin, CSP sandbox, no cookie |
 | Room server | `/api/*` REST, `/api/rooms/{room}/events` SSE, `/install.sh`, `/download/*`, `/healthz`; `/metrics` on its own port | SQLite, LiveKit server API | admin token, participant token or cookie, daemon token, STT token, pairing secret |
