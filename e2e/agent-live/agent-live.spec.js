@@ -1,63 +1,12 @@
 import { test, expect } from '@playwright/test';
-import { spawn, execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { mkdirSync, rmSync, openSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRoom, invite, join as joinRoom } from '../voice/helpers.js';
-import { pairDaemon } from '../helpers.js';
+import { pairDaemon, liveDaemon as liveDaemonIn, logLines, messagesRequests, removeSandbox, agentState, ask } from '../helpers.js';
 
 const out = join('test-results', 'agent-live');
-
-// liveDaemon runs the real daemon with this machine's Claude Code login (read only), the real
-// sandbox image and haiku. Its log goes to a file: the proxy logs one upstream_response per request.
-function liveDaemon(name, roomURL) {
-  const dir = join(out, name);
-  rmSync(dir, { recursive: true, force: true });
-  mkdirSync(dir, { recursive: true });
-  const stateDir = join(dir, 'state');
-  const log = join(dir, 'daemon.log');
-  const proc = spawn('../bin/grill-room-daemon', [roomURL], {
-    env: { ...process.env, GRILL_ROOM_DAEMON_STATE_DIR: stateDir, GRILL_ROOM_DAEMON_BROWSER: 'none', GRILL_ROOM_AGENT_MODEL: 'haiku', LOG_LEVEL: 'info' },
-    stdio: ['ignore', 'ignore', openSync(log, 'w')],
-  });
-  const exited = new Promise((resolve) => proc.on('exit', resolve));
-  const link = (async () => {
-    for (let i = 0; i < 100; i++) {
-      const m = readFileSync(log, 'utf8').match(/Admin page: (http:\/\/127\.0\.0\.1:\d+\/s\/\S+)/);
-      if (m) return m[1];
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    throw new Error('no admin link in ' + log);
-  })();
-  // Named as cmd/grill-room-daemon names it: a killed daemon leaves its sandbox behind.
-  const sandbox = createHash('sha256').update(stateDir + '\0' + roomURL).digest('hex').slice(0, 12);
-  return { proc, exited, link, log, sandbox };
-}
-
-const logLines = (d) => readFileSync(d.log, 'utf8').split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
-const messagesRequests = (d) => logLines(d).filter((l) => l.msg === 'upstream_response' && l.path.startsWith('/v1/messages')).length;
-
-function removeSandbox(name) {
-  const docker = (...args) => { try { return execFileSync('docker', args, { encoding: 'utf8' }); } catch { return ''; } };
-  const label = `label=grill-room-daemon=${name}`;
-  for (const id of docker('ps', '-aq', '--filter', label).split('\n').filter(Boolean)) docker('rm', '-f', '-v', id);
-  for (const id of docker('network', 'ls', '-q', '--filter', label).split('\n').filter(Boolean)) docker('network', 'rm', id);
-  for (const id of docker('volume', 'ls', '-q', '--filter', label).split('\n').filter(Boolean)) docker('volume', 'rm', '-f', id);
-}
-
-const agentState = (page, roomID) => page.evaluate((id) => fetch(`/api/rooms/${id}/agent`).then((r) => r.json()), roomID);
-
-async function ask(page, roomID, text) {
-  const before = await page.locator('#messages li.msg.agent').count();
-  await page.locator('#body').fill(text);
-  await page.locator('#body').press('Enter');
-  await expect(page.locator('#messages')).toContainText(text.slice(0, 40));
-  await page.getByRole('button', { name: 'Ask the agent' }).click();
-  await expect(page.locator('#messages li.msg.agent')).toHaveCount(before + 1, { timeout: 240_000 });
-  const st = await agentState(page, roomID);
-  expect(st.turn.status).toBe('done');
-  return page.locator('#messages li.msg.agent').last().locator('.body').textContent();
-}
+const liveDaemon = (name, roomURL) => liveDaemonIn(join(out, name), roomURL);
 
 // The session the room stores, read from a copy of the compose database: turn statuses, and the
 // tool results of the last turn that carry the code word, which would mean it read the word from a

@@ -1,42 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
-import { roomWith, upload, docFrame } from './helpers.js';
+import { roomWith, upload, docFrame, annotateSelection } from './helpers.js';
 
 // 1x1 transparent PNG.
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
 
 const plan = '# Rollout plan\n\nThe rollout needs a rollback step before the freeze.\n\nOwners sign off.\n';
 
-// select puts the page selection on the first occurrence of needle inside one text node.
-function select(frame, needle) {
-  return frame.evaluate((n) => {
-    const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    for (let node = w.nextNode(); node; node = w.nextNode()) {
-      const i = node.data.indexOf(n);
-      if (i < 0) continue;
-      const r = document.createRange();
-      r.setStart(node, i);
-      r.setEnd(node, i + n.length);
-      getSelection().removeAllRanges();
-      getSelection().addRange(r);
-      return;
-    }
-    throw new Error('not in the document: ' + n);
-  }, needle);
-}
-
 // marked lists the text under the frame's open annotation marks.
 const marked = (frame) => frame.evaluate(() => [...(CSS.highlights.get('gr-annot') || [])].map((r) => r.toString()));
-
-async function annotateSelection(page, needle, comment) {
-  const frame = await docFrame(page);
-  await select(frame, needle);
-  await page.frameLocator('#doc-frame iframe').locator('.gr-annot-bubble').click();
-  await expect(page.locator('#annot-target')).toHaveText(`"${needle}"`);
-  await page.getByRole('textbox', { name: 'Annotation', exact: true }).fill(comment);
-  await page.locator('#annot-new').getByRole('button', { name: 'Save' }).click();
-  await expect(page.locator('#annot-new')).toBeHidden();
-}
 
 // 001-AC18 001-AC13: a mark on selected text and its thread reach the other participant live, on
 // a Markdown upload and on the Markdown copy of a DOCX.
