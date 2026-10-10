@@ -3,7 +3,8 @@ body { margin: 0; color: #222; background: #fbf8f3; }
 header { display: flex; align-items: center; gap: 1rem; padding: 0.6rem 1rem; border-bottom: 1px solid var(--line); }
 header h1 { font-size: 1.1rem; margin: 0; }
 header button { margin-left: auto; }
-#banner { margin: 0; padding: 0.6rem 1rem; background: var(--amber); }
+#banner, #update { margin: 0; padding: 0.6rem 1rem; background: var(--amber); }
+#image { word-break: break-all; }
 main { padding: 0 1rem 1rem; max-width: 60rem; }
 h2 { font-size: 1rem; margin: 1.2rem 0 0.4rem; }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1rem; margin: 0 0 0.6rem; }

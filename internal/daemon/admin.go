@@ -78,6 +78,7 @@ func (a *Admin) Handler() http.Handler {
 	mux.Handle("POST /api/room", a.auth(a.setRoom))
 	mux.Handle("POST /api/recheck", a.auth(a.recheck))
 	mux.Handle("POST /api/stop", a.auth(a.stopDaemon))
+	mux.Handle("POST /api/update", a.auth(a.update))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
@@ -180,8 +181,26 @@ func (a *Admin) setRoom(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Admin) recheck(w http.ResponseWriter, r *http.Request) {
-	a.d.Refresh(r.Context())
+	a.d.Recheck(r.Context())
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// update applies the room server's newer daemon, then restarts into it. Nothing updates without
+// this approval (AC37).
+func (a *Admin) update(w http.ResponseWriter, _ *http.Request) {
+	// The daemon's context, not the request's: a closed tab must not leave a half-done download.
+	if err := a.d.Update(a.ctx); err != nil {
+		code := http.StatusBadGateway
+		if errors.Is(err, errNoUpdate) {
+			code = http.StatusConflict
+		}
+		writeJSON(w, code, map[string]string{"error": err.Error()})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+	if a.d.o.Restart != nil {
+		a.d.o.Restart()
+	}
 }
 
 func (a *Admin) stopDaemon(w http.ResponseWriter, _ *http.Request) {

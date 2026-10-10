@@ -26,13 +26,17 @@ type Agent interface {
 const maxSession = 256 << 20
 
 // agent returns the room run's sandbox, created on its first turn.
-func (r *roomRun) agent() Agent {
+func (r *roomRun) agent() (Agent, error) {
 	r.agentMu.Lock()
 	defer r.agentMu.Unlock()
 	if r.ag == nil {
-		r.ag = r.d.o.NewAgent(r.room)
+		img := r.d.Status().Image
+		if img.State != "ready" {
+			return nil, fmt.Errorf("the sandbox image is not ready on %s", r.d.o.Name)
+		}
+		r.ag = r.d.o.NewAgent(r.room, img.Ref)
 	}
-	return r.ag
+	return r.ag, nil
 }
 
 // closeAgent removes the sandbox when the room run ends.
@@ -121,7 +125,11 @@ func (r *roomRun) execute(ctx context.Context, tok, ids string, job turn.Job) tu
 		return turn.Result{Error: "could not fetch the workspace on " + r.d.o.Name + ": " + err.Error()}
 	}
 	defer ws.Body.Close()
-	out, err := r.agent().RunTurn(ctx, sandbox.TurnInput{
+	ag, err := r.agent()
+	if err != nil {
+		return turn.Result{Error: err.Error()}
+	}
+	out, err := ag.RunTurn(ctx, sandbox.TurnInput{
 		Workspace: ws.Body, Prompt: job.Prompt, Model: r.d.o.Model,
 		Resume: job.Resume, SessionSize: job.SessionSize, SessionSHA256: job.SessionSHA256,
 		FetchSession: func(ctx context.Context) ([]byte, error) {

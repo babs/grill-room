@@ -71,6 +71,24 @@ function render({ status: s, logs }) {
   if (!c.ok) mark($('creds'), false, c.error);
   else if (c.expired) mark($('creds'), false, 'expired: run Claude Code on this machine to refresh them');
   else mark($('creds'), true, 'found in ' + c.origin + (c.expires_at ? ', valid until ' + new Date(c.expires_at).toLocaleString() : ''));
+  const img = s.image;
+  const imageText = {
+    '': 'waiting for the room server',
+    pending: 'waiting for Docker',
+    checking: 'checking…',
+    pulling: 'pulling from the room server\'s registry: ' + (img.progress || ''),
+    building: 'building on this machine: ' + (img.progress || ''),
+    ready: 'ready (' + img.ref + ')',
+    failed: img.error,
+  }[img.state];
+  mark($('image'), img.state === 'ready', imageText || img.state);
+  const u = s.update;
+  $('update').hidden = !u.available;
+  if (u.available) {
+    $('update-version').textContent = u.available;
+    $('update-apply').disabled = u.running;
+    $('update-status').textContent = u.running ? 'Downloading…' : u.error || '';
+  }
   mark($('can-host'), s.can_host, s.can_host ? 'available' : 'unavailable: ' + s.reason);
   const logs$ = $('logs');
   const atBottom = logs$.scrollTop + logs$.clientHeight >= logs$.scrollHeight - 20;
@@ -97,6 +115,19 @@ $('room-form').addEventListener('submit', (e) => {
 });
 $('recheck').addEventListener('click', () => {
   api('POST', '/api/recheck').then(() => api('GET', '/api/status').then(render)).catch((err) => fail(err.message));
+});
+$('update-apply').addEventListener('click', () => {
+  $('update-apply').disabled = true;
+  $('update-status').textContent = 'Downloading…';
+  api('POST', '/api/update').then(() => {
+    stopped = true;
+    $('update').hidden = true;
+    $('main').hidden = true;
+    fail('Updated. The daemon restarts and opens a new page; you can close this one.');
+  }).catch((err) => {
+    $('update-apply').disabled = false;
+    $('update-status').textContent = err.message;
+  });
 });
 $('stop').addEventListener('click', () => {
   api('POST', '/api/stop').then(() => {

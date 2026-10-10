@@ -28,7 +28,7 @@ func sandboxHost(t *testing.T, rs *roomServer, name, image string) (string, cont
 	d.o.Log = zaptest.NewLogger(t, zaptest.Level(zap.WarnLevel))
 	label := fmt.Sprintf("test-%s-%d", strings.ToLower(name), time.Now().UnixNano())
 	up, _ := url.Parse("http://127.0.0.1:1")
-	d.o.NewAgent = func(Room) Agent {
+	d.o.NewAgent = func(Room, string) Agent {
 		return sandbox.New(sandbox.Config{Image: image, Name: label, Host: d.o.Name, Upstream: up}, sandbox.Docker, d.o.Creds, d.o.Log)
 	}
 	t.Cleanup(func() {

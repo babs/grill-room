@@ -43,7 +43,7 @@ func newTestDaemon(t *testing.T, run sandbox.Runner) *Daemon {
 	if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return New(Options{Name: "laptop", Version: "v-test", Tokens: NewTokens(filepath.Join(dir, "state")), Docker: run,
+	return New(Options{Name: "laptop", Version: "v-test", Image: "test-image", Tokens: NewTokens(filepath.Join(dir, "state")), Docker: run,
 		Creds: creds.NewSource(creds.Reader{ConfigDir: dir}), HTTP: &http.Client{}, Log: zap.NewNop(),
 		StatusEvery: 50 * time.Millisecond, PollEvery: 20 * time.Millisecond, MaxBackoff: 100 * time.Millisecond})
 }

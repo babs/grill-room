@@ -9,7 +9,7 @@ Every step spends nothing except step 3, which makes one `haiku` request.
 - Docker running: Docker Desktop on macOS; Docker Desktop with WSL integration, or Docker Engine inside the WSL distro.
 - Claude Code installed and logged in on that machine (in the WSL distro for WSL).
 - The daemon build for the machine: `make release` gives `dist/grill-room-daemon-darwin-arm64` (Apple silicon), `-darwin-amd64` (Intel) or `-linux-amd64` / `-linux-arm64` (WSL).
-- The sandbox image on that machine's Docker: `make sandbox-image`, or `docker save` it on the build host and `docker load` it there.
+- No sandbox image to prepare: the daemon pulls the room server's or builds the Dockerfile it embeds (a few minutes the first time).
 - A room on a reachable room server with you joined in a browser on that machine.
 
 ## Steps

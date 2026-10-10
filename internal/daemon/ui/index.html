@@ -14,6 +14,11 @@
   <button type="button" id="stop">Stop the daemon</button>
 </header>
 <p id="banner" role="alert" hidden></p>
+<p id="update" hidden>
+  Version <strong id="update-version"></strong> is available from the room server.
+  <button type="button" id="update-apply">Update and restart</button>
+  <span id="update-status" role="status"></span>
+</p>
 <main id="main" hidden>
   <section aria-labelledby="room-title">
     <h2 id="room-title">Room</h2>
@@ -34,6 +39,7 @@
     <dl>
       <dt>Docker</dt><dd id="docker"></dd>
       <dt>Claude credentials</dt><dd id="creds"></dd>
+      <dt>Sandbox image</dt><dd id="image"></dd>
       <dt>Hosting the agent</dt><dd id="can-host"></dd>
     </dl>
     <button type="button" id="recheck">Check again</button>

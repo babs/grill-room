@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -50,7 +51,8 @@ func getEnv(key, fallback string) string {
 type Config struct {
 	StateDir string
 	// Browser "none" prints the page link instead of opening it.
-	Browser  string
+	Browser string
+	// Image pins the sandbox image; empty takes the room server's, or builds the embedded one.
 	Image    string
 	LogLevel string
 	// Model is the claude --model for turns; empty keeps Claude Code's default.
@@ -69,7 +71,7 @@ func loadConfig() (Config, error) {
 	return Config{
 		StateDir: dir,
 		Browser:  getEnv("GRILL_ROOM_DAEMON_BROWSER", "auto"),
-		Image:    getEnv("GRILL_ROOM_SANDBOX_IMAGE", "grill-room-sandbox:local"),
+		Image:    os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
 		LogLevel: getEnv("LOG_LEVEL", "info"),
 		Model:    os.Getenv("GRILL_ROOM_AGENT_MODEL"),
 	}, nil
@@ -114,10 +116,24 @@ func sandboxName(stateDir string, r daemon.Room) string {
 	return hex.EncodeToString(sum[:6])
 }
 
+// restartError asks main to exec the updated binary in place of this process.
+type restartError struct {
+	exe  string
+	args []string
+}
+
+func (e restartError) Error() string { return "restart " + e.exe }
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	err := run(ctx, os.Args[1:], os.Stderr)
 	stop()
+	var re restartError
+	if errors.As(err, &re) {
+		fmt.Fprintf(os.Stderr, "grill-room-daemon: restarting %s\n", re.exe)
+		// Same pid, same terminal: the new version prints and opens a new admin page.
+		err = syscall.Exec(re.exe, append([]string{re.exe}, re.args...), os.Environ()) //nolint:gosec // our own binary, just verified
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "grill-room-daemon: %v\n", err)
 		os.Exit(1)
@@ -169,12 +185,19 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 		}
 		room = &r
 	}
+	exe, err := executable()
+	if err != nil {
+		logger.Warn("self_update_disabled", zap.Error(err))
+	}
+	var restart atomic.Bool
 	d := daemon.New(daemon.Options{
 		Name: host, Version: Version, Tokens: daemon.NewTokens(cfg.StateDir), Docker: sandbox.Docker, Creds: src,
 		// No client timeout: it would cut the long-lived room stream; each request has its own deadline.
 		HTTP: &http.Client{}, Log: logger, Model: cfg.Model,
-		NewAgent: func(r daemon.Room) daemon.Agent {
-			return sandbox.New(sandbox.Config{Image: cfg.Image, Name: sandboxName(cfg.StateDir, r), Host: host, Upstream: anthropic},
+		Image: cfg.Image, Stream: sandbox.DockerStream, Executable: exe,
+		Restart: func() { restart.Store(true); stop() },
+		NewAgent: func(r daemon.Room, image string) daemon.Agent {
+			return sandbox.New(sandbox.Config{Image: image, Name: sandboxName(cfg.StateDir, r), Host: host, Upstream: anthropic},
 				sandbox.Docker, src, logger.Named("sandbox"))
 		},
 	})
@@ -202,7 +225,28 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	// The sandbox's containers go with the room loops: exiting first would leave them running.
 	d.Wait()
 	logger.Info("shutdown")
+	if err == nil && restart.Load() {
+		// The room the page paired with may not be on the command line.
+		args := fs.Args()
+		if room := d.Status().Room; room != "" {
+			args = []string{room}
+		}
+		return restartError{exe: exe, args: args}
+	}
 	return err
+}
+
+// executable is this binary's real path, the file a self-update replaces.
+func executable() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("locate own binary: %w", err)
+	}
+	exe, err = filepath.EvalSymlinks(exe)
+	if err != nil {
+		return "", fmt.Errorf("locate own binary: %w", err)
+	}
+	return exe, nil
 }
 
 // check reports whether this machine can host, then runs one haiku turn in a throwaway sandbox,
@@ -218,7 +262,14 @@ func check(ctx context.Context, cfg Config, host string, src *creds.Source, log 
 		return fmt.Errorf("credentials: %w", err)
 	}
 	fmt.Printf("credentials: ok, from %s, expires %s\n", tok.Origin, tok.ExpiresAt.Local().Format(time.RFC3339))
-	sb := sandbox.New(sandbox.Config{Image: cfg.Image, Name: fmt.Sprintf("check-%d", time.Now().Unix()), Host: host, Upstream: anthropic},
+	image := cfg.Image
+	if image == "" {
+		if image, err = sandbox.EnsureImage(ctx, sandbox.Docker, sandbox.DockerStream, "", func(_, line string) { fmt.Println("  " + line) }); err != nil {
+			return fmt.Errorf("sandbox image: %w", err)
+		}
+	}
+	fmt.Printf("sandbox image: %s\n", image)
+	sb := sandbox.New(sandbox.Config{Image: image, Name: fmt.Sprintf("check-%d", time.Now().Unix()), Host: host, Upstream: anthropic},
 		sandbox.Docker, src, log)
 	defer sb.Close(ctx)
 	tctx, cancel := context.WithTimeout(ctx, 3*time.Minute)

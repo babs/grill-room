@@ -162,9 +162,11 @@ The host can press "Ask the agent" and can tick "can ask" next to other particip
 `grill-room-daemon` runs on a participant's machine: Linux, macOS, or Windows inside WSL with the Linux build. It runs the agent with that participant's own Claude Code login, in a Docker sandbox.
 
 ```sh
-make build sandbox-image
+make build
 ./bin/grill-room-daemon https://<host>/r/<room>
 ```
+
+Or install it from the room page (see Distribution below).
 
 It opens a page on `127.0.0.1` in the default browser. The page shows the pairing, Docker, the Claude credentials, whether this machine can host the agent, the logs, and a stop button. Without a room URL on the command line, paste the room link there. To pair, follow the page's link to the room, check that both pages show the same code, and press Approve: the room gives the daemon a token, which it keeps in `tokens.json` under its state dir. The daemon only opens outbound connections: an SSE stream from the room plus a status POST every 15 s, and it reconnects with backoff.
 
@@ -176,13 +178,17 @@ The sandbox holds no credential. It sits on an `--internal` Docker network whose
 
 When someone presses the agent button, the room hands the turn to the host's daemon. The daemon fetches the job and the workspace tar, clears the sandbox's `/workspace` and unpacks the tar there. If the room's copy of the session differs from the local one, it fetches the room's copy. Then it runs `claude -p` with the prompt on stdin and `--resume` when the room has a session, and posts back the changed files, the final answer and the session bytes added. [docs/agent-workspace.md](docs/agent-workspace.md) has the workspace layout and the prompt contract. A turn is cancelled after the room's turn timeout. Each daemon keeps one sandbox per room, named from its state dir and the room, so a restart replaces what a crash left.
 
-`grill-room-daemon check` checks Docker and the credentials, runs `claude -p --model haiku "say ok"` in a throwaway sandbox, checks that only the proxy is reachable, and counts the real token's occurrences in the container, its volumes and its inspect output. It spends one Claude request.
+The sandbox image comes from the room server. When the server advertises a digest-pinned image (`GRILL_ROOM_SANDBOX_IMAGE` on the server), the daemon pulls it by digest. When it advertises none, or the pull fails, for instance on a registry that wants a login, the daemon builds the Dockerfile embedded in its binary and tags the result `grill-room-sandbox:local-<hash of the Dockerfile>`, so it builds once per Dockerfile change. The page shows the pull or build progress. Until the image is ready, the daemon tells the room it cannot host.
+
+At start, and again each time it reconnects, the daemon asks the room server for its release (`/api/daemon/version`). When the server hands out a newer version built for this platform, the page offers "Update and restart". Nothing updates without that click. The daemon downloads the binary next to its own and checks it against the sha256 the server publishes. Only then does it rename it over the running binary, stop its sandboxes and exec the new version with the same room. On a mismatch it keeps the current binary and shows the error. The binary's directory must be writable by the user, as `~/.local/bin` is.
+
+`grill-room-daemon check` checks Docker and the credentials, builds the embedded sandbox image unless one is pinned, runs `claude -p --model haiku "say ok"` in a throwaway sandbox, checks that only the proxy is reachable, and counts the real token's occurrences in the container, its volumes and its inspect output. It spends one Claude request.
 
 | Variable | Default | |
 |---|---|---|
 | `GRILL_ROOM_DAEMON_STATE_DIR` | `<user config dir>/grill-room-daemon` | daemon tokens |
 | `GRILL_ROOM_DAEMON_BROWSER` | `auto` | `none` prints the page link instead of opening it |
-| `GRILL_ROOM_SANDBOX_IMAGE` | `grill-room-sandbox:local` | sandbox image, built by `make sandbox-image` |
+| `GRILL_ROOM_SANDBOX_IMAGE` | none | pins the sandbox image, e.g. `grill-room-sandbox:local` from `make sandbox-image`; skips the pull and the build |
 | `GRILL_ROOM_AGENT_MODEL` | Claude Code's default | `--model` for agent turns, e.g. `haiku` |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | where Claude Code keeps its credentials |
 | `LOG_LEVEL` | `info` | |

@@ -17,8 +17,9 @@ import (
 func TestConfig(t *testing.T) {
 	t.Setenv("GRILL_ROOM_DAEMON_STATE_DIR", "/state")
 	t.Setenv("GRILL_ROOM_DAEMON_BROWSER", "")
+	t.Setenv("GRILL_ROOM_SANDBOX_IMAGE", "")
 	cfg, err := loadConfig()
-	if err != nil || cfg.StateDir != "/state" || cfg.Browser != "auto" || cfg.Image != "grill-room-sandbox:local" {
+	if err != nil || cfg.StateDir != "/state" || cfg.Browser != "auto" || cfg.Image != "" {
 		t.Fatalf("cfg = %+v, %v", cfg, err)
 	}
 	for _, tc := range []struct {

@@ -33,10 +33,17 @@ type Options struct {
 	Creds   *creds.Source
 	HTTP    *http.Client
 	Log     *zap.Logger
-	// NewAgent builds the sandbox a room's turns run in, on the first turn.
-	NewAgent func(Room) Agent
+	// NewAgent builds the sandbox a room's turns run in, from image, on the first turn.
+	NewAgent func(r Room, image string) Agent
 	// Model is passed to claude --model; empty keeps Claude Code's default.
 	Model string
+	// Image pins the sandbox image; empty takes the room server's, or builds the embedded one.
+	Image  string
+	Stream sandbox.Streamer
+	// Executable is the binary a self-update replaces; empty disables updates.
+	Executable string
+	// Restart ends the daemon so that main starts the updated binary.
+	Restart func()
 
 	CheckEvery  time.Duration // readiness re-check
 	StatusEvery time.Duration // heartbeat to the room
@@ -67,8 +74,29 @@ type Status struct {
 	Error       string            `json:"error,omitempty"`
 	Docker      sandbox.Readiness `json:"docker"`
 	Credentials Credentials       `json:"credentials"`
+	Image       Image             `json:"image"`
+	Update      Update            `json:"update"`
 	CanHost     bool              `json:"can_host"`
 	Reason      string            `json:"reason,omitempty"`
+}
+
+// Image is the sandbox image turns run in.
+type Image struct {
+	// State is "" (no room server answer yet), "pending" (waiting for Docker), "checking",
+	// "pulling", "building", "ready" or "failed".
+	State string `json:"state"`
+	// Ref is the image in use once ready.
+	Ref      string `json:"ref,omitempty"`
+	Progress string `json:"progress,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// Update is the self-update the paired room server offers.
+type Update struct {
+	// Available is the newer version the room server hands out.
+	Available string `json:"available,omitempty"`
+	Running   bool   `json:"running"`
+	Error     string `json:"error,omitempty"`
 }
 
 // Daemon holds the pairing and connection state.
@@ -81,8 +109,12 @@ type Daemon struct {
 	gen int
 	// changed wakes the heartbeat when readiness changes.
 	changed chan struct{}
-	// loops counts running room loops, which remove their sandbox as they end.
+	// loops counts running room loops, which remove their sandbox as they end, and image jobs.
 	loops sync.WaitGroup
+	// img is the sandbox image job, guarded by mu.
+	img imageJob
+	// release is what the room server hands out, for the self-update; guarded by mu.
+	release release
 }
 
 // New builds a daemon.
@@ -96,7 +128,12 @@ func New(o Options) *Daemon {
 	def(&o.StatusEvery, 15*time.Second)
 	def(&o.PollEvery, 2*time.Second)
 	def(&o.MaxBackoff, 30*time.Second)
-	return &Daemon{o: o, st: Status{Host: o.Name, Version: o.Version, Connection: "offline"}, changed: make(chan struct{}, 1)}
+	d := &Daemon{o: o, st: Status{Host: o.Name, Version: o.Version, Connection: "offline"}, changed: make(chan struct{}, 1)}
+	if o.Image != "" {
+		d.img.known = true
+		d.st.Image = Image{State: "ready", Ref: o.Image}
+	}
+	return d
 }
 
 // Status returns a snapshot.
@@ -106,10 +143,20 @@ func (d *Daemon) Status() Status {
 	return d.st
 }
 
+// update applies f, then recomputes whether this machine can host under the same lock, so the
+// status never shows a readiness its parts contradict. A change wakes the heartbeat.
 func (d *Daemon) update(f func(*Status)) {
 	d.mu.Lock()
 	f(&d.st)
+	canHost, reason, changed := d.assessLocked()
 	d.mu.Unlock()
+	if changed {
+		d.o.Log.Info("readiness_changed", zap.Bool("can_host", canHost), zap.String("reason", reason))
+		select {
+		case d.changed <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // roomUpdater writes the status only while gen is the current room.
@@ -152,27 +199,29 @@ func (d *Daemon) Refresh(ctx context.Context) {
 		}
 		c.Expired = tok.Expired(time.Now())
 	}
-	canHost, reason := true, ""
+	d.update(func(s *Status) { s.Docker, s.Credentials = dk, c })
+	d.maybePrepare()
+}
+
+// assessLocked recomputes CanHost and Reason; the caller holds mu.
+func (d *Daemon) assessLocked() (canHost bool, reason string, changed bool) {
+	s := &d.st
+	canHost = true
 	switch {
-	case !dk.OK:
-		canHost, reason = false, dk.Reason
-	case !c.OK:
+	case !s.Docker.OK:
+		canHost, reason = false, s.Docker.Reason
+	case !s.Credentials.OK:
 		canHost, reason = false, "Claude credentials unreadable on "+d.o.Name
-	case c.Expired:
+	case s.Credentials.Expired:
 		canHost, reason = false, "Claude credentials expired on "+d.o.Name
+	case s.Image.State == "failed":
+		canHost, reason = false, "the sandbox image is unavailable on "+d.o.Name+": "+s.Image.Error
+	case s.Image.State != "ready":
+		canHost, reason = false, "the sandbox image is not ready yet on "+d.o.Name
 	}
-	var changed bool
-	d.update(func(s *Status) {
-		changed = s.CanHost != canHost || s.Reason != reason
-		s.Docker, s.Credentials, s.CanHost, s.Reason = dk, c, canHost, reason
-	})
-	if changed {
-		d.o.Log.Info("readiness_changed", zap.Bool("can_host", canHost), zap.String("reason", reason))
-		select {
-		case d.changed <- struct{}{}:
-		default:
-		}
-	}
+	changed = s.CanHost != canHost || s.Reason != reason
+	s.CanHost, s.Reason = canHost, reason
+	return canHost, reason, changed
 }
 
 // SetRoom pairs with room if no token is stored for it, then keeps connected to it. It replaces
@@ -185,7 +234,7 @@ func (d *Daemon) SetRoom(ctx context.Context, room Room) {
 	}
 	d.stop = cancel
 	d.gen++
-	r := &roomRun{d: d, room: room, update: d.roomUpdater(d.gen)}
+	r := &roomRun{d: d, room: room, update: d.roomUpdater(d.gen), ctx: ctx}
 	d.st.Room, d.st.Pairing, d.st.Code, d.st.ApproveURL, d.st.Error, d.st.Connection = room.String(), "", "", "", "", "offline"
 	d.mu.Unlock()
 	d.loops.Go(func() { r.loop(ctx) })
@@ -199,6 +248,8 @@ type roomRun struct {
 	d      *Daemon
 	room   Room
 	update func(func(*Status))
+	// ctx lasts as long as the room run.
+	ctx context.Context
 
 	agentMu sync.Mutex
 	ag      Agent
@@ -211,6 +262,7 @@ var errRevoked = errors.New("the room revoked this daemon's access: pair again")
 func (r *roomRun) loop(ctx context.Context) {
 	d, room := r.d, r.room
 	defer r.closeAgent(ctx)
+	r.checkServer(ctx)
 	fail := func(err error) {
 		d.o.Log.Warn("room_failed", zap.String("room", room.String()), zap.Error(err))
 		r.update(func(s *Status) { s.Error, s.Connection = err.Error(), "offline" })
@@ -440,6 +492,8 @@ func (r *roomRun) stream(ctx context.Context, tok string) error {
 			r.update(func(s *Status) { s.Connection, s.Error = "connected", "" })
 			d.o.Log.Info("room_connected", zap.String("room", room.String()))
 			wg.Go(func() { r.heartbeat(ctx, tok) })
+			// A reconnect often follows a room server upgrade: ask again what it hands out.
+			d.loops.Go(func() { r.checkServer(r.ctx) })
 		case strings.HasPrefix(line, "data: ") && event == "turn":
 			var t struct {
 				ID int64 `json:"id"`

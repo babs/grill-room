@@ -64,7 +64,7 @@ func pairedHost(t *testing.T, rs *roomServer, name string, ag *fakeAgent) (parti
 	d := newTestDaemon(t, dockerUp)
 	d.o.Name = name + "-box"
 	d.o.Model = "haiku"
-	d.o.NewAgent = func(Room) Agent { return ag }
+	d.o.NewAgent = func(Room, string) Agent { return ag }
 	d.Refresh(context.Background())
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -265,7 +265,7 @@ func TestRunTurnReportsFetchFailureAndDefaultsTimeout(t *testing.T) {
 	defer ts.Close()
 	d := newTestDaemon(t, dockerUp)
 	var deadline time.Duration
-	d.o.NewAgent = func(Room) Agent {
+	d.o.NewAgent = func(Room, string) Agent {
 		return &fakeAgent{run: func(ctx context.Context, _ sandbox.TurnInput, _ map[string]string) (*sandbox.TurnOutput, error) {
 			dl, _ := ctx.Deadline()
 			deadline = time.Until(dl)
@@ -308,7 +308,7 @@ func TestDaemonTurnCredentialsExpired(t *testing.T) {
 		t.Fatal(err)
 	}
 	expired := creds.NewSource(creds.Reader{ConfigDir: dir})
-	d.o.NewAgent = func(Room) Agent {
+	d.o.NewAgent = func(Room, string) Agent {
 		return sandbox.New(sandbox.Config{Name: "t", Host: d.o.Name, Upstream: &url.URL{}}, run, expired, d.o.Log)
 	}
 	d.Refresh(context.Background())
