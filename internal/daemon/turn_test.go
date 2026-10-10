@@ -5,14 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/babs/grill-room/internal/creds"
 	"github.com/babs/grill-room/internal/sandbox"
 	"github.com/babs/grill-room/internal/turn"
 	"github.com/babs/grill-room/internal/web"
@@ -278,5 +283,55 @@ func TestRunTurnReportsFetchFailureAndDefaultsTimeout(t *testing.T) {
 	}
 	if deadline < 14*time.Minute {
 		t.Fatalf("deadline %s", deadline)
+	}
+}
+
+// 001-AC29: credentials that expire after the daemon was elected fail the turn through the real
+// sandbox code with "Claude credentials expired on <host>" in the room, before Docker is touched.
+func TestDaemonTurnCredentialsExpired(t *testing.T) {
+	rs := newRoomServer(t)
+	participant, _ := rs.join(t, "Alice")
+	d := newTestDaemon(t, dockerUp)
+	d.o.Name = "Alice-box"
+	var dockerCalls []string
+	var mu sync.Mutex
+	run := func(_ context.Context, _ io.Reader, args ...string) ([]byte, error) {
+		mu.Lock()
+		dockerCalls = append(dockerCalls, strings.Join(args, " "))
+		mu.Unlock()
+		return nil, errors.New("docker must not run")
+	}
+	// The sandbox reads a token that has expired since the readiness check let the daemon host.
+	dir := t.TempDir()
+	body := fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"x","expiresAt":%d}}`, time.Now().Add(-time.Minute).UnixMilli())
+	if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	expired := creds.NewSource(creds.Reader{ConfigDir: dir})
+	d.o.NewAgent = func(Room) Agent {
+		return sandbox.New(sandbox.Config{Name: "t", Host: d.o.Name, Upstream: &url.URL{}}, run, expired, d.o.Log)
+	}
+	d.Refresh(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	room, _ := ParseRoomURL(rs.ts.URL + "/r/" + rs.room)
+	d.SetRoom(ctx, room)
+	waitFor(t, "pending", func() bool { return d.Status().Pairing == "pending" })
+	id := d.Status().ApproveURL[strings.Index(d.Status().ApproveURL, "=")+1:]
+	rs.call(t, "POST", "/api/rooms/"+rs.room+"/pairings/"+id, participant, map[string]bool{"approve": true}, http.StatusOK, nil)
+	waitFor(t, "online", func() bool { return rs.agent(t, participant).Online })
+	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", participant, map[string]bool{}, http.StatusCreated, nil)
+	start := time.Now()
+	waitFor(t, "turn failed", func() bool { v := rs.agent(t, participant); return v.Turn != nil && v.Turn.Status == "failed" })
+	if took := time.Since(start); took > 10*time.Second {
+		t.Fatalf("took %s", took)
+	}
+	if m := rs.lastMessage(t); m != "Agent turn failed: Claude credentials expired on Alice-box" {
+		t.Fatalf("message %q", m)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(dockerCalls) != 0 {
+		t.Fatalf("docker ran: %v", dockerCalls)
 	}
 }

@@ -33,8 +33,8 @@ func sandboxHost(t *testing.T, rs *roomServer, name, image string) (string, cont
 	}
 	t.Cleanup(func() {
 		// A dropped daemon closes its sandbox; this catches a test that failed before.
-		_ = exec.Command("docker", "rm", "-f", "-v", "grill-room-"+label, "grill-room-"+label+"-relay").Run() //nolint:gosec,noctx // fixed test names
-		_ = exec.Command("docker", "network", "rm", "grill-room-"+label).Run()                                //nolint:gosec,noctx // fixed test names
+		_ = exec.Command("docker", "rm", "-f", "-v", "grill-room-"+label, "grill-room-"+label+"-relay").Run()                 //nolint:gosec,noctx // fixed test names
+		_ = exec.Command("docker", "network", "rm", "grill-room-"+label).Run()                                                //nolint:gosec,noctx // fixed test names
 		_ = exec.Command("docker", "volume", "rm", "-f", "grill-room-"+label+"-home", "grill-room-"+label+"-workspace").Run() //nolint:gosec,noctx // fixed test names
 	})
 	d.Refresh(context.Background())
