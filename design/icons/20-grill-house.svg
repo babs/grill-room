@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <clipPath id="house"><path d="M128 36 L220 108 V204 A20 20 0 0 1 200 224 H56 A20 20 0 0 1 36 204 V108 Z"/></clipPath>
+  </defs>
+  <path d="M128 36 L220 108 V204 A20 20 0 0 1 200 224 H56 A20 20 0 0 1 36 204 V108 Z" fill="#F4512C" stroke="#F4512C" stroke-width="16" stroke-linejoin="round"/>
+  <g clip-path="url(#house)" stroke="#FFFFFF" stroke-width="18" stroke-linecap="round">
+    <path d="M70 188 L102 128"/>
+    <path d="M112 188 L144 128"/>
+    <path d="M154 188 L186 128"/>
+  </g>
+</svg>

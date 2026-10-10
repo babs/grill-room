@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>S1 - Chrome on-device STT</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 1rem; max-width: 1100px; }
+  fieldset { margin-bottom: .8rem; }
+  button { margin-right: .4rem; }
+  #features span { display: inline-block; margin-right: 1rem; padding: 0 .4rem; border-radius: 3px; }
+  .ok { background: #d4f7d4; } .ko { background: #f7d4d4; }
+  #results div { border-bottom: 1px solid #eee; padding: .2rem 0; }
+  .interim { color: #888; font-style: italic; }
+  .tag { font: 12px monospace; color: #555; }
+  #log { font: 12px monospace; background: #111; color: #ddd; padding: .5rem; height: 260px; overflow: auto; white-space: pre-wrap; }
+  .err { color: #ff8080; }
+</style>
+</head>
+<body>
+<h1>S1: Chrome on-device speech recognition</h1>
+<div id="features"></div>
+
+<fieldset>
+  <legend>Setup</legend>
+  <label>Language <select id="lang"><option>fr-FR</option><option>en-US</option></select></label>
+  <label><input type="checkbox" id="mixed"> Mixed mode (fr-FR and en-US recognizers in parallel)</label>
+  <p class="tag">Mixed sentence: "on doit merger la feature flag avant la release"</p>
+  <button id="check">Check availability</button>
+  <button id="install">Install language pack(s)</button>
+  <button id="start">Start</button>
+  <button id="stop" disabled>Stop</button>
+</fieldset>
+
+<h2>Results</h2>
+<div id="results"></div>
+<h2>Log</h2>
+<div id="log"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const now = () => performance.now();
+const ts = () => new Date().toISOString().slice(11, 23);
+
+function log(msg, isErr) {
+  const line = document.createElement('div');
+  line.textContent = `${ts()} ${msg}`;
+  if (isErr) line.className = 'err';
+  $('log').append(line);
+  $('log').scrollTop = $('log').scrollHeight;
+}
+
+const features = {
+  'SpeechRecognition': !!SR,
+  'unprefixed': !!window.SpeechRecognition,
+  'processLocally': !!SR && 'processLocally' in SR.prototype,
+  'available()': !!SR && typeof SR.available === 'function',
+  'install()': !!SR && typeof SR.install === 'function',
+  'secure context': window.isSecureContext,
+};
+for (const [k, v] of Object.entries(features)) {
+  const s = document.createElement('span');
+  s.className = v ? 'ok' : 'ko';
+  s.textContent = `${k}: ${v ? 'yes' : 'MISSING'}`;
+  $('features').append(s);
+}
+log(`UA: ${navigator.userAgent}`);
+log(`navigator.languages: ${JSON.stringify(navigator.languages)}`);
+log(`features: ${JSON.stringify(features)}`);
+
+const langs = () => $('mixed').checked ? ['fr-FR', 'en-US'] : [$('lang').value];
+
+$('check').onclick = async () => {
+  // Query each language alone and the set together: available() reports the worst status of the set.
+  const sets = langs().length > 1 ? [...langs().map((l) => [l]), langs()] : [langs()];
+  for (const set of sets) {
+    try {
+      const r = await SR.available({ langs: set, processLocally: true });
+      log(`available(${JSON.stringify(set)}, processLocally) -> ${r}`);
+    } catch (e) { log(`available(${JSON.stringify(set)}) threw ${e.name}: ${e.message}`, true); }
+  }
+};
+
+$('install').onclick = async () => {
+  // install() must run inside the click handler: Chrome requires transient user activation when status is "downloadable".
+  const set = langs();
+  const t0 = now();
+  log(`install(${JSON.stringify(set)}) started`);
+  try {
+    const ok = await SR.install({ langs: set, processLocally: true });
+    log(`install(${JSON.stringify(set)}) -> ${ok} after ${(now() - t0).toFixed(0)} ms`, !ok);
+  } catch (e) { log(`install threw ${e.name}: ${e.message}`, true); }
+};
+
+let recognizers = [];
+
+function makeRecognizer(lang) {
+  const r = new SR();
+  r.lang = lang;
+  r.processLocally = true;
+  r.continuous = true;
+  r.interimResults = true;
+  const lastInterimAt = {};
+  let speechEndAt = null;
+  const rows = {};
+
+  for (const ev of ['start', 'audiostart', 'soundstart', 'speechstart', 'soundend', 'audioend', 'nomatch'])
+    r.addEventListener(ev, () => log(`[${lang}] ${ev}`));
+  r.onspeechend = () => { speechEndAt = now(); log(`[${lang}] speechend`); };
+  r.onerror = (e) => log(`[${lang}] error: ${e.error}${e.message ? ' - ' + e.message : ''}`, true);
+  r.onend = () => {
+    log(`[${lang}] end`);
+    recognizers = recognizers.filter((x) => x !== r);
+    if (!recognizers.length) { $('start').disabled = false; $('stop').disabled = true; }
+  };
+  r.onresult = (e) => {
+    const t = now();
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const res = e.results[i];
+      const alt = res[0];
+      let row = rows[i];
+      if (!row) { row = rows[i] = document.createElement('div'); $('results').append(row); }
+      if (res.isFinal) {
+        // No per-utterance end-of-speech event in continuous mode: the last interim result is the closest proxy.
+        const fromInterim = lastInterimAt[i] ? `${(t - lastInterimAt[i]).toFixed(0)} ms after last interim` : 'no interim';
+        const fromEnd = speechEndAt ? `, ${(t - speechEndAt).toFixed(0)} ms after speechend` : '';
+        row.className = '';
+        row.innerHTML = `<span class="tag">${ts()} [${lang}] final conf=${alt.confidence.toFixed(2)} (${fromInterim}${fromEnd})</span> `;
+        row.append(alt.transcript);
+        log(`[${lang}] final #${i}: "${alt.transcript}" ${fromInterim}${fromEnd}`);
+      } else {
+        lastInterimAt[i] = t;
+        row.className = 'interim';
+        row.innerHTML = `<span class="tag">${ts()} [${lang}] interim</span> `;
+        row.append(alt.transcript);
+      }
+    }
+  };
+  return r;
+}
+
+$('start').onclick = () => {
+  if (!features.processLocally) { log('processLocally missing: refusing to start, audio would go to the cloud', true); return; }
+  recognizers = langs().map(makeRecognizer);
+  for (const r of recognizers) {
+    try { r.start(); log(`[${r.lang}] start() called, processLocally=${r.processLocally}`); }
+    catch (e) { log(`[${r.lang}] start threw ${e.name}: ${e.message}`, true); }
+  }
+  $('start').disabled = true; $('stop').disabled = false;
+};
+
+$('stop').onclick = () => recognizers.forEach((r) => r.stop());
+</script>
+</body>
+</html>

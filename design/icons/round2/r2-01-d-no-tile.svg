@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <mask id="marks">
+    <rect width="256" height="256" fill="#FFFFFF"/>
+    <g stroke="#000000" stroke-width="26" stroke-linecap="round">
+      <path d="M70 152 L100 72"/>
+      <path d="M118 152 L148 72"/>
+      <path d="M166 152 L196 72"/>
+    </g>
+  </mask>
+  <g fill="#F4512C" mask="url(#marks)">
+    <rect x="12" y="24" width="232" height="160" rx="62"/>
+    <path d="M56 170 C54 200 44 222 26 238 C72 232 110 210 134 182 Z"/>
+  </g>
+</svg>

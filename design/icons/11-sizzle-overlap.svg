@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <clipPath id="left"><circle cx="98" cy="116" r="62"/></clipPath>
+  </defs>
+  <circle cx="128" cy="128" r="128" fill="#1E2238"/>
+  <circle cx="98" cy="116" r="62" fill="#159F8C"/>
+  <path d="M60 160 L44 200 L92 172 Z" fill="#159F8C" stroke="#159F8C" stroke-width="6" stroke-linejoin="round"/>
+  <circle cx="158" cy="140" r="62" fill="#FFC23D"/>
+  <path d="M196 184 L212 220 L166 194 Z" fill="#FFC23D" stroke="#FFC23D" stroke-width="6" stroke-linejoin="round"/>
+  <circle cx="158" cy="140" r="62" fill="#F4512C" clip-path="url(#left)"/>
+</svg>

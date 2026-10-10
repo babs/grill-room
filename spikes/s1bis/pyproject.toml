@@ -1,0 +1,9 @@
+[project]
+name = "s1bis-whisper-cpu"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "faster-whisper>=1.2",
+    "av>=16,<17",  # av 19 rejects the metadata_errors kwarg faster-whisper 1.2.1 passes
+    "jiwer>=4.0",
+]

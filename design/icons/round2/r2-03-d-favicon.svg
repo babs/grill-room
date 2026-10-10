@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <clipPath id="bowl">
+    <circle cx="128" cy="128" r="58"/>
+  </clipPath>
+  <rect width="256" height="256" rx="56" fill="#159F8C"/>
+  <circle cx="128" cy="128" r="58" fill="#F4512C"/>
+  <g stroke="#1E2238" stroke-width="20" clip-path="url(#bowl)">
+    <path d="M60 110 H196"/>
+    <path d="M60 146 H196"/>
+  </g>
+  <g fill="#FFC23D">
+    <circle cx="58" cy="58" r="28"/>
+    <circle cx="198" cy="58" r="28"/>
+    <circle cx="58" cy="198" r="28"/>
+    <circle cx="198" cy="198" r="28"/>
+  </g>
+</svg>

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <mask id="bars">
+    <rect width="256" height="256" fill="#FFFFFF"/>
+    <g stroke="#000000" stroke-width="16" stroke-linecap="round">
+      <path d="M102 42 V128"/>
+      <path d="M128 36 V134"/>
+      <path d="M154 42 V128"/>
+    </g>
+  </mask>
+  <path d="M38 112 A90 90 0 0 0 218 112" fill="none" stroke="#159F8C" stroke-width="22" stroke-linecap="round"/>
+  <path d="M128 204 V230 M86 240 H170" stroke="#159F8C" stroke-width="22" stroke-linecap="round"/>
+  <rect x="70" y="6" width="116" height="160" rx="58" fill="#F4512C" mask="url(#bars)"/>
+</svg>
