@@ -1,6 +1,6 @@
 # S5: a simulated grill session on the lab
 
-**Verdict: the loop works end to end, but the lab STT is not fit for a real conversation yet.** Three synthetic voices held a 2.5 min FR/EN grill. A real daemon ran two Opus turns. The agent's syntheses, document and annotation reply track what was said closely, and the second turn resumed the session. STT has 7% WER, but it lags far behind speech on the lab node, and it posts lines under the wrong speaker after someone leaves and rejoins the audio. Both STT problems block a real session.
+**Verdict: the loop works end to end, but the lab STT is not fit for a real conversation yet.** Three synthetic voices held a 2.5 min FR/EN grill. A real daemon ran two Opus turns. The agent's syntheses, document and annotation reply track what was said closely, and the second turn resumed the session. STT has 7% WER, but it lags far behind speech on the lab node, and it posts lines under the wrong speaker after someone leaves and rejoins the audio. Both STT problems block a real session. The fix iteration solved both; the rerun at the end of this report holds AC7 on every line.
 
 ## Setup
 
@@ -48,3 +48,33 @@
 - 7 real Claude requests, all Opus (budget 8). The three voice-only runs used none.
 - The test room and both repro rooms are deleted, and the admin API lists 0 rooms. The daemon is stopped, there are no sandbox containers, networks or volumes, and the browsers are closed. The lab deployment is still running.
 - Left on disk: `.scratchpad/s5/` (venv, audio, run logs, daemon log).
+
+## Rerun after the fixes (v0.9.0)
+
+Same script, voices and lab node, audio fed at 16 kHz. Agent turns on Opus. The session now runs the AC39 loop: the agent answers Emma's thread, Emma replies, the agent answers again and opens its own annotations, a thread gets closed, and Emma's reply reopens it.
+
+| | S5 full run | rerun |
+|---|---|---|
+| WER all / fr / en | 0.07 / 0.07 / 0.07 | 0.08 / 0.07 / 0.11 |
+| WER Claire / Marc / Emma | 0.04 / 0.08 / 0.12 | 0.03 / 0.11 / 0.15 |
+| attribution | 30/32 | 18/18 |
+| voice lines per script line | 1.78 (32 for 18) | 1.00 (18 for 18) |
+| latency min / median / p95 / max | 7.7 / 33.9 / n/a / 52.3 s | 3.5 / 4.7 / 5.9 / 6.6 s |
+| lines over AC7's 10 s | 16 of 18 | 0 |
+| queue drops (full run, voice-only runs) | 0, 5, 10 | 0 |
+| garbage lines posted / dropped | 1 (Chinese) / 0 | 0 / 0 |
+| model time per utterance | about 6 s | 4.0 s mean (71.9 s for 18) |
+| `grill_stt_tracks` through leave and rejoin | 3 then 6 | 3 throughout |
+| turn 1 / turn 2, press to synthesis | 18.8 / 15.6 s | 21 / 26 s |
+| real Claude requests | 7 | 8 |
+| model shown on the syntheses | none | `claude-opus-5-5`, twice |
+
+- **Wrong speaker.** The worker now closes a track's stream when the track goes. The real mechanism was not a stale stream fed "the next track's audio" by chance. LiveKit's SFU adds a subscribed track with `AddTrack`, which reuses an inactive transceiver. The client's receiver track for that transceiver is the old object, so a stream left open on it plays the newcomer's audio. In the Python SDK a track stream only ends when its own handle or the track's handle is dropped, never on `track_unsubscribed`. A local voice e2e reproduced it before the fix: Alice's sentence came out under Carol, who had left.
+- **Capacity.** On the lab node, offline over the same audio: the old transcriber took 5.7 s per utterance. Sharing the encoder pass between language detection and decoding brought that to 3.9 s, and dropping the temperature fallback to 3.4 s. 3 threads cost 4% over 4. With 800 ms cuts and the old transcriber the median latency would still be 9.7 s, with 7 lines over 10 s. Live, beside LiveKit, a line costs 4.0 s. Batching and a smaller model were not needed.
+- **Over-splitting.** At 500 ms the 0.3 s pauses Piper leaves between sentences still cut lines. 600 ms gave 22 utterances, 700 and up gave 18. 800 ms keeps a margin.
+- **Garbage.** The MLS glitch on "Ça demande du travail." now lands inside the previous sentence's utterance, and Whisper drops it there. Cut on its own, as at 500 ms, it is dropped by the repetition and language checks (`stt/tests/fixtures/glitch-mls.wav`). Short answers ("Oui", "OK", "Yes", "D'accord") pass, even when Whisper detects "Oui" as English at 0.28.
+- **Names and model.** The agent named its document `plan-revised.md`, as the prompt now asks. The model shows on each synthesis.
+- **Annotation loop.** Turn 1 replied to Emma, closed her thread, and opened 2 annotations of its own on `plan-revised.md`. Emma's reply reopened her thread. Turn 2 answered her and left the thread open, since the colour mapping still has no owner. It closed its own rollout thread and opened one more. Emma's reply on that thread reopened it.
+- **Still rough.** "And I will" is "All" again, and "dark mode" became "ART mode", which the agent questioned in turn 2. Emma's WER is 0.15 on 68 words: two lines account for it, inside run-to-run noise. The lab node CPU is the limit: about 4 s per line leaves room for one talker at a time, with overlaps queued.
+
+Cleanup: the test room is deleted (the lab lists 0 rooms), the daemon is stopped, and no sandbox container, network or volume is left. The lab deployment runs v0.9.0.

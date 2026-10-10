@@ -101,13 +101,15 @@ def main() -> None:
         )
     delivered = sum(1 for r in refs if r["lines"])
     print(f"\nScript lines with a transcript: {delivered}/{len(refs)}. A missing line counts as WER 1.")
+    print(f"Voice lines per script line: {len(voice) / len(refs):.2f} ({len(voice)} for {len(refs)}).")
     print("\n| group | WER | words |\n|---|---|---|")
     for key, (e, n) in sorted(agg.items()):
         print(f"| {key} | {e / n:.2f} | {n} |")
-    print("\n| speaker | latency min / median / max s |\n|---|---|")
+    print("\n| speaker | latency min / median / p95 / max s |\n|---|---|")
     for key, v in lat.items():
         v = sorted(v)
-        print(f"| {key} | {v[0]:.1f} / {v[len(v) // 2]:.1f} / {v[-1]:.1f} |")
+        p95 = v[min(len(v) - 1, round(0.95 * (len(v) - 1)))]
+        print(f"| {key} | {v[0]:.1f} / {v[len(v) // 2]:.1f} / {p95:.1f} / {v[-1]:.1f} |")
 
     print("\n## Agent turns\n")
     for i, t in enumerate(res.get("turns", []), 1):
@@ -117,7 +119,15 @@ def main() -> None:
             f"resume {t['resume']}, report {json.dumps(turn['report'])}, requests so far {t['requestsSoFar']}"
         )
         print(f"> {t['synthesis'].strip()}\n")
-    print(f"Real Claude requests: {res.get('requests')} ({res.get('model')})\n")
+    models = [m.get("model") for m in res["messages"] if m.get("kind") == "agent"]
+    print(
+        f"Real Claude requests: {res.get('requests')} ({res.get('model')}); "
+        f"synthesis models shown: {models}\n"
+    )
+    print("## Threads after the agent turns\n")
+    for a in res.get("threadsAfterTurns", []):
+        print(f"- on {a['doc']}, opened by {a['opener']}, {a['status']}: {' > '.join(a['messages'])}")
+    print()
 
     print("## Documents\n")
     docs = res.get("documents", [])

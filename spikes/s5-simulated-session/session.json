@@ -52,7 +52,9 @@
  "annotation": {
   "by": "Emma",
   "quote": "Dark colours live in one extra style sheet loaded after the main one.",
-  "comment": "Should these be colour tokens shared by both themes instead of a second style sheet?"
+  "comment": "Should these be colour tokens shared by both themes instead of a second style sheet?",
+  "followup": "Agreed on tokens. Who maps the existing hard-coded colours to them, and by when?",
+  "reopen": "Reopening: we still need a date for the colour mapping."
  },
  "rounds": [
   {

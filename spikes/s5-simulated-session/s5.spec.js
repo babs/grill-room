@@ -19,8 +19,11 @@ const host = names[0];
 // S5_AGENT=0 plays both rounds without a daemon: no Claude request.
 const withAgent = process.env.S5_AGENT !== '0';
 const model = process.env.S5_MODEL || 'opus';
-const maxRequests = 8;
-const nudge = 'Agent : fais-le en un minimum d\'étapes, lis tout en parallèle puis écris le plan révisé et les réponses en une fois.';
+const maxRequests = 14;
+const nudges = [
+  'Agent : fais-le en un minimum d\'étapes, lis tout en parallèle puis écris le plan révisé et les réponses en une fois.',
+  'Agent : réponds à Emma sur son annotation et marque-la terminée si c\'est réglé, ouvre une annotation sur le plan pour ce qui reste à trancher. Un minimum d\'étapes, tout en une fois.',
+];
 
 // Each browser plays <name>.wav as its microphone; pointing the link at the next round's file and
 // reopening the microphone plays that round, since Chrome reads the file each time capture starts.
@@ -69,6 +72,7 @@ const messages = (page) => page.locator('#messages li.msg').evaluateAll((els) =>
   kind: [...li.classList].find((c) => c !== 'msg'),
   sender: li.querySelector('strong')?.textContent,
   body: li.querySelector('.body')?.textContent,
+  model: li.querySelector('.model')?.textContent,
   ts: Date.parse(li.querySelector('time')?.dateTime),
 })));
 
@@ -101,7 +105,7 @@ async function playRound(pages, n) {
   return { round: n, micAt, drainedAt: Date.now() };
 }
 
-async function agentTurn(page, roomID, daemon) {
+async function agentTurn(page, roomID, daemon, nudge) {
   await page.locator('#body').fill(nudge);
   await page.locator('#body').press('Enter');
   await expect(page.locator('#messages')).toContainText(nudge.slice(0, 40));
@@ -166,10 +170,34 @@ test('simulated grill session with synthetic voices', async ({ request, baseURL 
     await annotateSelection(pages[by], quote, comment);
     await expect(hostPage.locator('#annot-list')).toContainText(comment);
 
-    if (withAgent) result.turns.push(await agentTurn(hostPage, room.id, daemon));
+    // 001-AC39 loop: Emma's thread gets an agent reply, she answers it, the agent answers again,
+    // closes a thread and opens its own annotation; a participant reply then reopens the closed one.
+    const reply = async (page, text, body) => {
+      const thread = page.locator('#annot-list li.annot', { hasText: text });
+      await thread.getByLabel('Reply').fill(body);
+      await thread.getByRole('button', { name: 'Reply' }).click();
+      await expect(thread).toContainText(body);
+    };
+    if (withAgent) {
+      result.turns.push(await agentTurn(hostPage, room.id, daemon, nudges[0]));
+      await expect.soft(pages[by].locator('#annot-list li.annot', { hasText: comment })).toContainText('Agent');
+      await reply(pages[by], comment, session.annotation.followup);
+    }
     result.rounds.push(await playRound(pages, 2));
     // A turn spends 3 requests at least (read, write, answer): stay within the budget.
-    if (withAgent && result.turns[0].requestsSoFar <= maxRequests - 3) result.turns.push(await agentTurn(hostPage, room.id, daemon));
+    if (withAgent && result.turns[0].requestsSoFar <= maxRequests - 4) result.turns.push(await agentTurn(hostPage, room.id, daemon, nudges[1]));
+    if (withAgent) {
+      result.threadsAfterTurns = (await roomState(hostPage, room.id)).flatMap((d) => (d.annotations ?? []).map((a) => ({
+        doc: d.name, status: a.status, opener: a.messages[0].author, messages: a.messages.map((m) => m.author),
+      })));
+      const closed = result.threadsAfterTurns.find((a) => a.status === 'done');
+      if (closed) {
+        const opening = (await roomState(hostPage, room.id)).flatMap((d) => d.annotations ?? []).find((a) => a.status === 'done').messages[0].body;
+        await pages[by].locator('#documents').getByRole('button', { name: closed.doc }).first().click();
+        await reply(pages[by], opening.slice(0, 40), session.annotation.reopen);
+        await expect(pages[by].locator('#annot-list li.annot', { hasText: opening.slice(0, 40) }).locator('.annot-badge')).toHaveText('reopened');
+      }
+    }
 
     result.messages = await messages(hostPage);
     result.documents = await roomState(hostPage, room.id);
@@ -180,6 +208,9 @@ test('simulated grill session with synthetic voices', async ({ request, baseURL 
         expect(t.synthesis.trim(), `turn ${i + 1} synthesis`).not.toBe('');
       }
       expect(result.turns[1]?.resume, 'second turn resumes the session').toBe(true);
+      expect(result.messages.filter((m) => m.kind === 'agent').every((m) => m.model), 'every synthesis names its model').toBe(true);
+      expect(result.threadsAfterTurns.some((a) => a.opener === 'Agent'), 'the agent opened an annotation').toBe(true);
+      expect(result.threadsAfterTurns.some((a) => a.status === 'done'), 'the agent closed a thread').toBe(true);
       expect(result.documents.some((d) => d.texts.some((r) => r.author === 'Agent')), 'an agent document or revision').toBe(true);
       const thread = result.documents.find((d) => d.name === 'plan.md').annotations[0];
       expect(thread.messages.some((m) => m.author === 'Agent'), 'agent reply on the annotation').toBe(true);

@@ -50,7 +50,7 @@ A self-hosted web room. People join with an invite link and a browser and talk t
 
 ### Voice and transcripts
 - [x] **AC6** Given two participants in a room, when one speaks, then the other hears them.
-- [ ] **AC7** Given a participant speaking French, when they pause, then a transcript line with their display name appears for everyone within 10 s of the end of the utterance.
+- [x] **AC7** Given a participant speaking French, when they pause, then a transcript line with their display name appears for everyone within 10 s of the end of the utterance.
 - [x] **AC8** Given utterances alternating between French and English, each line is transcribed in the language spoken, not translated.
 - [x] **AC9** No audio file or audio blob exists on the server or in the store after a session. Verified by inspecting the STT pod filesystem and the SQLite tables.
 - [x] **AC10** When the STT worker is down, the room still works for audio and text. The UI shows "transcription unavailable", and lines resume when the worker returns.
@@ -87,7 +87,7 @@ A self-hosted web room. People join with an invite link and a browser and talk t
 - [x] **AC33** After each turn, the server holds the session jsonl up to the turn's end.
 - [x] **AC34** When the host's daemon disconnects mid-turn, the turn is marked failed and no partial revision is kept. When another daemon takes over, the next turn resumes the same Claude session (`--resume`) and the agent recalls a fact from before the switch.
 - [x] **AC35** Starting a fresh session in an existing room gives the agent the full room history as MD transcript files in its workspace.
-- [ ] **AC39** Over several turns, the agent answers new participant replies on its threads, can open its own anchored annotations on any visible document, and can mark a thread done; a participant reply reopens it.
+- [x] **AC39** Over several turns, the agent answers new participant replies on its threads, can open its own anchored annotations on any visible document, and can mark a thread done; a participant reply reopens it.
 
 ### Distribution
 - [x] **AC36** The room UI offers the daemon download for the visitor's OS and a `curl | sh` one-liner that installs the binary and starts it paired to that room.
@@ -176,7 +176,7 @@ No existing data to migrate.
 - The STT worker is a separate Python image (faster-whisper), talking to the room through its HTTP API like any client.
 - Frontend is vanilla JS with no build step, as in airc and gld.
 - LiveKit media needs no exposed UDP: embedded TURN with `turn.external_tls: true`, TLS terminated by traefik on 443 (TCP router on `HostSNI(turn.<domain>)`), plus ICE over TCP (7881). Spike S4: both paths carry audio with 0 loss; UDP stays an optional optimisation.
-- AC7 allows 10 s: S1-bis measured about 2 s on 4 P-cores, and this is a PoC. On the lab's 4-core i7-6700 nodes spike S5 measured about 6 s per utterance and a growing backlog. The fix iteration made language detection and decoding share one encoder pass (about 3.4 s), raised the VAD silence to 800 ms (one utterance per script line instead of 1.8), and gives the model 3 threads under a 4-CPU limit.
+- AC7 allows 10 s: S1-bis measured about 2 s on 4 P-cores, and this is a PoC. On the lab's 4-core i7-6700 nodes spike S5 measured about 6 s per utterance and a growing backlog. The fix iteration made language detection and decoding share one encoder pass, raised the VAD silence to 800 ms (one utterance per script line instead of 1.8), and gives the model 3 threads under a 4-CPU limit. The S5 rerun then held AC7 for every line: median 4.7 s, max 6.6 s, no queue drop.
 - Agent turns run on whatever model the host's daemon sets (`GRILL_ROOM_AGENT_MODEL`, empty for Claude Code's default). The room only shows the model each turn reported. Choosing a model or an effort belongs to spec 002.
 - A new agent document never takes an upload's name; a colliding one is stored as `<name>-agent.<ext>` and the room says so (docs/agent-workspace.md).
 - The agent writes annotations through `annotations-new.json` and closes threads with `"status": "done"` in `replies.json` (AC39): text-quote anchors only, uploads included, since annotating is not editing (D30).
