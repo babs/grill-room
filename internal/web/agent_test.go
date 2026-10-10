@@ -501,6 +501,18 @@ func TestTurnFailures(t *testing.T) {
 	if last, _ := e.st.LastTurn(t.Context(), r.room); last.Status != store.TurnFailed {
 		t.Fatalf("after bad session id %+v", last)
 	}
+	tn = e.press(t, r, bob, bob.p.Token, false)
+	req, _ := http.NewRequestWithContext(t.Context(), "POST", e.ts.URL+r.daemonPath("turns/"+strconv.FormatInt(tn.ID, 10)), strings.NewReader("{not json"))
+	req.Header.Set("Authorization", "Bearer "+bob.tok)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if last, _ := e.st.LastTurn(t.Context(), r.room); resp.StatusCode != http.StatusBadRequest || last.Status != store.TurnFailed || !strings.Contains(last.Error, "malformed") {
+		t.Fatalf("malformed result: %d %+v", resp.StatusCode, last)
+	}
 	// Re-pairing Bob's daemon mid-turn fails the turn the old daemon process holds.
 	e.press(t, r, bob, bob.p.Token, false)
 	p := e.requestPairing(t, r.room, "bob-new")
