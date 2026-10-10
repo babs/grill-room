@@ -65,6 +65,7 @@ Built for product people and PMs, not only engineers. Joining a room needs a bro
 | D31 | Uploads are blobs inside SQLite, 20 MB max per file, 200 MB max per room (defaults, configurable). |
 | D32 | Logo and favicon: `design/icons/round2/r2-03-b-three-quarter.svg` (people around a Weber, 3/4 view). One asset; modern browsers render favicons at 32px and up. |
 | D33 | The agent runtime is `claude -p` for now. Custom tools come as MCP via `--mcp-config` if files fall short; an own Agent SDK binary only for a concrete need the CLI cannot meet. |
+| D34 | LiveKit needs no exposed UDP: embedded TURN behind traefik TLS termination on 443 (`HostSNI`), plus ICE over TCP. Traefik HTTP/3 (QUIC) does not help WebRTC media (S4). |
 
 ## Spikes before any code
 
@@ -79,6 +80,7 @@ Built for product people and PMs, not only engineers. Joining a room needs a bro
 | S1-bis | done: `small` int8 only, ~2 s latency on 4 P-cores; medium/turbo too slow | `spikes/S1bis-whisper-cpu.md` |
 | S2 | done, pass | `spikes/S2-resume.md` |
 | S3 | done, pass with conditions D21-D22 | `spikes/S3-proxy-swap.md` |
+| S4 | done, pass: TURN/TLS 443 via traefik and ICE/TCP, 0 loss | `spikes/S4-livekit-sni.md` |
 
 ## Credentials
 

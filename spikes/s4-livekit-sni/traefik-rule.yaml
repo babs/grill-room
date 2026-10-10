@@ -1,0 +1,28 @@
+# Template for the local traefik file provider, rendered by run.sh (envsubst) and removed on exit.
+# TLS for both routers uses the default certificate (the dev-domain wildcard).
+http:
+  routers:
+    s4-livekit:
+      rule: "Host(`livekit.${DEV_DOMAIN}`)"
+      entryPoints: [websecure]
+      service: s4-livekit
+      tls: {}
+  services:
+    s4-livekit:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:7880/"
+
+tcp:
+  routers:
+    s4-turn:
+      rule: "HostSNI(`turn.${DEV_DOMAIN}`)"
+      entryPoints: [websecure]
+      service: s4-turn
+      # terminate TLS here; LiveKit runs turn.external_tls and reads plain TURN
+      tls: {}
+  services:
+    s4-turn:
+      loadBalancer:
+        servers:
+          - address: "host.docker.internal:5349"

@@ -165,7 +165,7 @@ No existing data to migrate.
 
 ## Open questions
 
-- [ ] 1. Blocks Phase 8 only. LiveKit reachability from outside the LAN: which public path does the lab offer for UDP (router port-forward to a LoadBalancer IP), or do we use TURN/TLS on 443 only?
+- [x] 1. Resolved by spike S4: LiveKit reachability with no UDP exposed. See Decisions.
 - [ ] 2. Personal data defaults above (invite-link access, no retention timer): approve or change.
 
 ## Decisions
@@ -174,6 +174,7 @@ No existing data to migrate.
 - The room server and the daemon live in one Go module, as two binaries (`cmd/grill-room`, `cmd/grill-room-daemon`), so they share types.
 - The STT worker is a separate Python image (faster-whisper), talking to the room through its HTTP API like any client.
 - Frontend is vanilla JS with no build step, as in airc and gld.
+- LiveKit media needs no exposed UDP: embedded TURN with `turn.external_tls: true`, TLS terminated by traefik on 443 (TCP router on `HostSNI(turn.<domain>)`), plus ICE over TCP (7881). Spike S4: both paths carry audio with 0 loss; UDP stays an optional optimisation.
 - AC7 allows 10 s: S1-bis measured about 2 s on 4 P-cores, and this is a PoC.
 - The traefik rule ships in the repo (`deploy/local/`). Enabling it means copying it into the local traefik's rules directory, and removing the file reverts it. The copy is proposed for your approval at Phase 1, never done silently.
 - Code copied from airc and gld keeps a header comment naming the upstream repo and commit.
