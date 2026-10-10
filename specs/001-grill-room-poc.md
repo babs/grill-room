@@ -16,7 +16,7 @@ A self-hosted web room. People join with an invite link and a browser and talk t
 ## Scope
 
 - Room server: a single static Go binary with SQLite storage (airc-derived). It handles rooms, invite links with tokens, participants, a live event stream and the web UI.
-- Voice: LiveKit (self-hosted) for audio between participants. A CPU STT worker per room (faster-whisper `small` int8, VAD-cut utterances, language detected per utterance) posts transcript lines. No audio is stored.
+- Voice: LiveKit (self-hosted) for audio between participants. A CPU STT worker (faster-whisper `small` int8, VAD-cut utterances, language detected per utterance) joins every active room and posts transcript lines. No audio is stored.
 - Documents: MD rendered GitHub-style and HTML in a sandboxed iframe (gld-derived), with revisions and word-level diffs between revisions.
 - Uploads by any participant: MD, HTML, PDF and images as-is. DOCX/ODT/PPTX are kept as originals plus a pandoc MD copy for annotation. Uploads are read-only sources.
 - Annotations on text ranges and HTML elements, with threads, status and image attachments (gld anchoring plus the lavish-style element anchors and attachments).
@@ -87,6 +87,7 @@ A self-hosted web room. People join with an invite link and a browser and talk t
 - [x] **AC33** After each turn, the server holds the session jsonl up to the turn's end.
 - [x] **AC34** When the host's daemon disconnects mid-turn, the turn is marked failed and no partial revision is kept. When another daemon takes over, the next turn resumes the same Claude session (`--resume`) and the agent recalls a fact from before the switch.
 - [x] **AC35** Starting a fresh session in an existing room gives the agent the full room history as MD transcript files in its workspace.
+- [ ] **AC39** Over several turns, the agent answers new participant replies on its threads, can open its own anchored annotations on any visible document, and can mark a thread done; a participant reply reopens it.
 
 ### Distribution
 - [x] **AC36** The room UI offers the daemon download for the visitor's OS and a `curl | sh` one-liner that installs the binary and starts it paired to that room.
@@ -128,9 +129,9 @@ A self-hosted web room. People join with an invite link and a browser and talk t
 - **DoD**: `claude -p --model haiku "say ok"` succeeds through the sandbox on Linux, macOS and WSL; a grep for the real token in `docker export` output and `docker inspect` env is empty; `curl api.anthropic.com` from the sandbox fails; host `~/.claude*` mtimes unchanged; locked Keychain test returns in under 5 s.
 
 ### Phase 6 — Agent turn, host election, continuity
-- Work: host election and handover, LED, button rights and delegation. The turn runs as snapshot, then `claude -p`, then a POST of changes, then revisions, synthesis and annotations, and is refused when one is in progress. Read-only enforcement on uploads. Jsonl upload by offset. Takeover with `--resume`. A fresh session gets the transcripts as MD.
-- **Covers**: AC16, AC30, AC31, AC32, AC33, AC34, AC35
-- **Data model impact**: `turns`, `agent_sessions` (session id, jsonl blob, uploaded offset), `rooms.host_participant_id`, `participants.can_trigger`
+- Work: host election and handover, LED, button rights and delegation. The turn runs as a workspace tar, then `claude -p`, then a POST of changes, then revisions, synthesis, thread replies and the agent's own annotations, and is refused when one is in progress. Read-only enforcement on uploads. Jsonl upload by offset. Takeover with `--resume`. A fresh session gets the transcripts as MD.
+- **Covers**: AC16, AC30, AC31, AC32, AC33, AC34, AC35, AC39
+- **Data model impact**: `turns` (with the reported `model`), `agent_sessions` (session id, jsonl blob, uploaded offset), `rooms.host_participant_id`, `participants.can_trigger`, `messages.model`
 - **DoD**: an e2e with two daemons: turn on A, kill A mid-turn (turn failed, no partial revision), take over on B, the agent recalls the code word; the fresh-session test finds the transcripts in the workspace; the agent's edit to an upload is rejected.
 
 ### Phase 7 — Distribution and self-update
@@ -148,10 +149,10 @@ A self-hosted web room. People join with an invite link and a browser and talk t
 ## Data model impact (summary)
 
 New SQLite database:
-- `rooms`, `participants`, `invites`, `messages` (`kind`)
+- `rooms`, `participants`, `invites`, `messages` (`kind`, `model` of an agent synthesis)
 - `documents`, `revisions`, `uploads` (blobs)
 - `annotations`, `annotation_messages`, `attachments`
-- `daemons`, `turns`, `agent_sessions`
+- `daemons`, `turns` (`model`), `agent_sessions`
 
 No existing data to migrate.
 
@@ -175,6 +176,13 @@ No existing data to migrate.
 - The STT worker is a separate Python image (faster-whisper), talking to the room through its HTTP API like any client.
 - Frontend is vanilla JS with no build step, as in airc and gld.
 - LiveKit media needs no exposed UDP: embedded TURN with `turn.external_tls: true`, TLS terminated by traefik on 443 (TCP router on `HostSNI(turn.<domain>)`), plus ICE over TCP (7881). Spike S4: both paths carry audio with 0 loss; UDP stays an optional optimisation.
-- AC7 allows 10 s: S1-bis measured about 2 s on 4 P-cores, and this is a PoC.
+- AC7 allows 10 s: S1-bis measured about 2 s on 4 P-cores, and this is a PoC. On the lab's 4-core i7-6700 nodes spike S5 measured about 6 s per utterance and a growing backlog. The fix iteration made language detection and decoding share one encoder pass (about 3.4 s), raised the VAD silence to 800 ms (one utterance per script line instead of 1.8), and gives the model 3 threads under a 4-CPU limit.
+- Agent turns run on whatever model the host's daemon sets (`GRILL_ROOM_AGENT_MODEL`, empty for Claude Code's default). The room only shows the model each turn reported. Choosing a model or an effort belongs to spec 002.
+- A new agent document never takes an upload's name; a colliding one is stored as `<name>-agent.<ext>` and the room says so (docs/agent-workspace.md).
+- The agent writes annotations through `annotations-new.json` and closes threads with `"status": "done"` in `replies.json` (AC39): text-quote anchors only, uploads included, since annotating is not editing (D30).
+- A failed turn keeps the cursors: its messages come back in the next turn's prompt.
+- The room shows the host daemon's machine name, in the participant list and in turn errors.
+- The room server image is 174 MB, most of it pandoc. Accepted.
+- Daemons pull the sandbox image the room server advertises. A public image (ghcr.io, anonymous pull) for hosts without a registry login is planned after the PoC; `GRILL_ROOM_SANDBOX_IMAGE` already takes any reference.
 - The traefik rule ships in the repo (`deploy/local/`). Enabling it means copying it into the local traefik's rules directory, and removing the file reverts it. The copy is proposed for your approval at Phase 1, never done silently.
 - Code copied from airc and gld keeps a header comment naming the upstream repo and commit.

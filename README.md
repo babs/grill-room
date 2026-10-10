@@ -127,11 +127,21 @@ The room page shows "Transcribing" while an STT worker is in its audio, and "Tra
 
 ### STT worker
 
-`stt/` is a Python service. It polls LiveKit for rooms with participants and joins each one as a hidden participant that cannot publish. Then it listens to every participant's audio track. Silero VAD cuts each track into utterances after 500 ms of silence, or at 15 s. faster-whisper `small` int8 then transcribes them, detecting the language per utterance, so French and English mix freely (spike S1-bis). Each line goes to `/voice/lines` under the speaker's participant id. The worker sends a heartbeat every 5 s, and at once when it joins or leaves a room.
+`stt/` is a Python service. It polls LiveKit for rooms with participants and joins each one as a hidden participant that cannot publish. Then it listens to every participant's audio track, and closes that listener when the track is unsubscribed or unpublished, when its participant leaves, or when the worker leaves the room. LiveKit reuses a freed transceiver for the next track it sends the worker, so a listener left open would hear the newcomer and post them under the old name (spike S5). Silero VAD cuts each track into utterances after 800 ms of silence, or at 15 s. faster-whisper `small` int8 then transcribes them, detecting the language per utterance, so French and English mix freely (spike S1-bis). Detection and decoding share one encoder pass: faster-whisper's own `transcribe(language=None)` runs two and throws the first away, which doubled the cost per line. Each line goes to `/voice/lines` under the speaker's participant id. The worker sends a heartbeat every 5 s, and at once when it joins or leaves a room.
+
+Before posting, the worker drops a transcript that fails one of these checks, and counts it in `grill_stt_lines_implausible_total{reason}`. Each threshold is a setting, in brackets.
+
+| Reason | Dropped when |
+|---|---|
+| `avg_logprob` | the lowest segment's mean token log-probability is under -1.0 (`APP_MIN_AVG_LOGPROB`), Whisper's own failure threshold |
+| `repetition` | a segment's gzip ratio is over 2.4 (`APP_MAX_COMPRESSION_RATIO`), Whisper's sign of a looping decoder |
+| `no_speech` | a segment's no-speech probability is over 0.6 (`APP_MAX_NO_SPEECH_PROB`) and the language is unsure. Whisper itself keeps a likely-silent segment it decoded confidently |
+| `language_probability` | the language is detected at under 0.5 (`APP_MIN_LANGUAGE_PROBABILITY`) on an utterance of 2 s or more (`APP_SHORT_UTTERANCE_S`). Shorter ones pass: Whisper often hears a French "oui" as English at 0.3 |
+| `script` | under 90% of the letters (`APP_MIN_SCRIPT_SHARE`) are in the script of the detected language, like Chinese characters for `fr` |
 
 Audio stays in memory. Samples go from the LiveKit stream to the VAD, then to a bounded queue, then to the model, and are released once transcribed. Nothing is written to disk. When the queue is full, new utterances are dropped and counted. The worker logs the size and language of each line, never its words.
 
-The image bakes the model in at a pinned Hugging Face revision and runs with `HF_HUB_OFFLINE=1`, because a pod behind a default-deny egress policy could not fetch it at start. Compose gives it 4 CPUs and 1.5 GiB, the S1-bis starting point. On this host a line lands about 2 to 3 s after the speaker pauses.
+The image bakes the model in at a pinned Hugging Face revision and runs with `HF_HUB_OFFLINE=1`, because a pod behind a default-deny egress policy could not fetch it at start. Compose gives it 4 CPUs and 1.5 GiB, the S1-bis starting point, and the model 3 threads: the fourth CPU is left to the event loop, the VAD and LiveKit's threads. On this host a line lands about 2 to 3 s after the speaker pauses.
 
 | Variable | Default | |
 |---|---|---|
@@ -140,14 +150,15 @@ The image bakes the model in at a pinned Hugging Face revision and runs with `HF
 | `APP_LIVEKIT_URL` | none | LiveKit signalling URL; the API is the same host over HTTP |
 | `APP_LIVEKIT_API_KEY`, `APP_LIVEKIT_API_SECRET` | none | LiveKit API key pair |
 | `APP_MODEL` | `small` (`/models/whisper` in the image) | model size or directory |
-| `APP_CPU_THREADS` | `4` | model threads |
+| `APP_CPU_THREADS` | `3` | model threads |
 | `APP_QUEUE_SIZE` | `8` | utterances waiting for the model |
+| `APP_VAD_MIN_SILENCE_MS`, `APP_VAD_MAX_SPEECH_S` | `800`, `15` | silence that ends an utterance, longest utterance before a cut |
 | `APP_POLL_SECONDS`, `APP_HEARTBEAT_SECONDS` | `2`, `5` | room discovery and heartbeat periods |
 | `APP_PORT` | `9100` | `/healthz` (503 while the model loads) and `/metrics` |
 | `APP_WORKER_NAME` | hostname | name in heartbeats; LiveKit identity `stt-<name>` |
 | `APP_LOG_LEVEL` | `info` | |
 
-Metrics: `grill_stt_queue_depth`, `grill_stt_utterances_dropped_total`, `grill_stt_lines_total{result}`, `grill_stt_transcribe_seconds`, `grill_stt_line_latency_seconds`, `grill_stt_rooms`, `grill_stt_tracks`.
+Metrics: `grill_stt_queue_depth`, `grill_stt_utterances_dropped_total`, `grill_stt_lines_total{result}` (`posted`, `failed`, `empty`, `implausible`, `error`), `grill_stt_lines_implausible_total{reason}`, `grill_stt_transcribe_seconds`, `grill_stt_line_latency_seconds`, `grill_stt_rooms`, `grill_stt_tracks`.
 
 The voice e2e tests play `e2e/voice/fixtures/fr-en.wav` as a fake microphone. It holds four read sentences from Google FLEURS (CC-BY-4.0), alternating French and English. `fr-en.json` gives their source files, text and timings. `uv run ./scripts/make_fixture.py ../e2e/voice/fixtures` (from `stt/`) rebuilds them.
 
@@ -155,7 +166,7 @@ The voice e2e tests play `e2e/voice/fixtures/fr-en.wav` as a fake microphone. It
 
 The agent runs on a participant's machine, through their host daemon (below). The first participant whose daemon connects and can host becomes the host. When the host's daemon drops or can no longer host, the room moves the role to the daemon that connected earliest among those that can. The host can hand the role to anyone whose daemon is connected. The LED in the header is green while the host's daemon is connected, amber during a turn, and red with the reason when no host can run the agent. Transcripts keep recording either way.
 
-The host can press "Ask the agent" and can tick "can ask" next to other participants to let them press it too. One press runs one turn: the agent reads what was said and annotated since its last successful turn, edits or writes documents, answers threads, and posts a synthesis. A second press during a turn gets "turn in progress". "New session" (host only) starts the agent without its memory. It then rereads the room history from the transcript files. The room keeps the Claude session after every turn, so when another daemon takes over, the next turn resumes the same session. [docs/agent-workspace.md](docs/agent-workspace.md) has the details.
+The host can press "Ask the agent" and can tick "can ask" next to other participants to let them press it too. One press runs one turn: the agent reads what was said and annotated since its last successful turn, edits or writes documents, answers threads and may close them, opens annotations of its own on any document, uploads included, and posts a synthesis. The synthesis shows the Claude model the turn ran on, as the daemon reported it. A new agent document never takes an upload's name. A second press during a turn gets "turn in progress". "New session" (host only) starts the agent without its memory. It then rereads the room history from the transcript files. The room keeps the Claude session after every turn, so when another daemon takes over, the next turn resumes the same session. [docs/agent-workspace.md](docs/agent-workspace.md) has the details.
 
 ## Host daemon
 
@@ -254,7 +265,7 @@ What gets deployed, with `<domain>` standing for `K8S_DOMAIN`:
 
 - The room server runs one replica with a `Recreate` strategy. SQLite has one writer, on a 2 GiB volume. Probes hit `/healthz`, and `/metrics` is on 7681.
 - LiveKit exposes no UDP. Browsers relay through TURN/TLS on 443. `allow_restricted_peer_cidrs` lists only the pod's own IP, where the relay hands media to the SFU.
-- The STT worker requests 2 CPUs and may burst to 4, with 1.5 GiB.
+- The STT worker requests 2 CPUs and may burst to 4, with 1.5 GiB. The model runs on 3 threads, leaving a CPU to the VAD and LiveKit.
 - Every pod runs as non-root with a read-only root filesystem, no service account token and no service links.
 - A default-deny NetworkPolicy blocks everything, then one policy per flow opens DNS, traefik to the room server and LiveKit, the worker to both, the room server to LiveKit's API, media between LiveKit and the worker, and the worker's traces to the cluster's OpenTelemetry collector (a Kyverno policy there injects `OTEL_EXPORTER_OTLP_ENDPOINT` into every pod).
 - The Secret `grill-room` comes from the same `.env` keys compose uses.
