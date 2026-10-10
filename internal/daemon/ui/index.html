@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>grill-room daemon</title>
+<link rel="stylesheet" href="/static/admin.css">
+<script src="/static/admin.js" defer></script>
+</head>
+<body>
+<header>
+  <h1>grill-room daemon</h1>
+  <span id="host"></span>
+  <button type="button" id="stop">Stop the daemon</button>
+</header>
+<p id="banner" role="alert" hidden></p>
+<main id="main" hidden>
+  <section aria-labelledby="room-title">
+    <h2 id="room-title">Room</h2>
+    <p id="room"></p>
+    <p id="pairing" role="status"></p>
+    <p id="approve" hidden>
+      Check that the room page shows the code <strong id="code"></strong>, then
+      <a id="approve-link" target="_blank" rel="noopener noreferrer">approve in the room</a>.
+    </p>
+    <form id="room-form">
+      <label>Room link <input id="room-url" type="url" required placeholder="https://.../r/..." size="50"></label>
+      <button type="submit">Pair with this room</button>
+    </form>
+    <p id="room-error" role="alert"></p>
+  </section>
+  <section aria-labelledby="host-title">
+    <h2 id="host-title">This machine</h2>
+    <dl>
+      <dt>Docker</dt><dd id="docker"></dd>
+      <dt>Claude credentials</dt><dd id="creds"></dd>
+      <dt>Hosting the agent</dt><dd id="can-host"></dd>
+    </dl>
+    <button type="button" id="recheck">Check again</button>
+  </section>
+  <section aria-labelledby="logs-title">
+    <h2 id="logs-title">Logs</h2>
+    <pre id="logs"></pre>
+  </section>
+</main>
+</body>
+</html>

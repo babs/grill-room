@@ -70,6 +70,12 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `POST /api/rooms/{room}/annotations/{id}/messages` | participant | reply: `body`, `attachments` |
 | `PATCH /api/rooms/{room}/annotations/{id}` | participant | `status`: `done` or `reopened` |
 | `GET /api/rooms/{room}/attachments/{id}` | participant | an annotation image |
+| `POST /api/rooms/{room}/pairings` | none | a daemon asks to pair: `name`; returns `id`, `secret`, `code`, `approve_url` |
+| `GET /api/pairings/{id}` | pairing secret | `pending`, `denied`, or `approved` with the daemon token, handed once |
+| `GET /api/rooms/{room}/pairings/{id}` | participant | the request's daemon name and code, for the approval page |
+| `POST /api/rooms/{room}/pairings/{id}` | participant | `approve`: true pairs the daemon to this participant, false denies |
+| `GET /api/rooms/{room}/daemon/events` | daemon | SSE: `hello`, pings, `revoked` |
+| `POST /api/rooms/{room}/daemon/status` | daemon | heartbeat: `can_host`, `reason`, `version` |
 
 Request bodies must be JSON with `Content-Type: application/json` (415 otherwise), uploads excepted. A body over its route's limit gets a 413. Participants authenticate with `Authorization: Bearer <token>` or the cookie set at join. The server stores tokens as SHA-256 hashes.
 
@@ -91,6 +97,35 @@ The document frame has no room credential, so it cannot call the API. It tells t
 
 `store.AnnotationsSince` is the read for the agent's turn: every thread with a message past a cursor, with its image bytes.
 
+## Host daemon
+
+`grill-room-daemon` runs on a participant's machine: Linux, macOS, or Windows inside WSL with the Linux build. It runs the agent with that participant's own Claude Code login, in a Docker sandbox.
+
+```sh
+make build sandbox-image
+./bin/grill-room-daemon https://<host>/r/<room>
+```
+
+It opens a page on `127.0.0.1` in the default browser. The page shows the pairing, Docker, the Claude credentials, whether this machine can host the agent, the logs, and a stop button. Without a room URL on the command line, paste the room link there. To pair, follow the page's link to the room, check that both pages show the same code, and press Approve: the room gives the daemon a token, which it keeps in `tokens.json` under its state dir. The daemon only opens outbound connections: an SSE stream from the room plus a status POST every 15 s, and it reconnects with backoff.
+
+The page link carries a one-time code. The page trades it for a session token kept in the tab's `sessionStorage`, and the daemon prints a fresh link in its terminal after each use. The page refuses requests whose `Host` is not `127.0.0.1:<port>` or, for writes, whose `Origin` is not the page's own.
+
+Credentials are read, never written: the macOS Keychain first (`security find-generic-password`, 3 s timeout, so a locked Keychain fails instead of hanging), then `<config dir>/.credentials.json`, where the config dir is `$CLAUDE_CONFIG_DIR` or `~/.claude`. The host's Claude Code keeps refreshing the token; the daemon re-reads it when the file changes, when it expires and after an upstream 401.
+
+The sandbox holds no credential. It sits on an `--internal` Docker network whose only other member is a socat relay to the daemon's bearer-swap proxy. The proxy replaces the sandbox's dummy bearer with the real token. It listens on the default bridge gateway, or on `127.0.0.1` under Docker Desktop. The daemon writes a dummy `.credentials.json` and an `oauthAccount` stub before every turn and sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `ENABLE_CLAUDEAI_MCP_SERVERS=false` (spike S3). Containers, network and volumes carry the `grill-room-daemon` label and are removed when the sandbox closes.
+
+`grill-room-daemon check` checks Docker and the credentials, runs `claude -p --model haiku "say ok"` in a throwaway sandbox, checks that only the proxy is reachable, and counts the real token's occurrences in the container, its volumes and its inspect output. It spends one Claude request.
+
+| Variable | Default | |
+|---|---|---|
+| `GRILL_ROOM_DAEMON_STATE_DIR` | `<user config dir>/grill-room-daemon` | daemon tokens |
+| `GRILL_ROOM_DAEMON_BROWSER` | `auto` | `none` prints the page link instead of opening it |
+| `GRILL_ROOM_SANDBOX_IMAGE` | `grill-room-sandbox:local` | sandbox image, built by `make sandbox-image` |
+| `CLAUDE_CONFIG_DIR` | `~/.claude` | where Claude Code keeps its credentials |
+| `LOG_LEVEL` | `info` | |
+
+`docs/daemon-os-checklist.md` lists the manual checks on macOS and WSL.
+
 ## Local dev with docker compose and traefik
 
 The dev setup expects a traefik on the machine that serves `*.<dev-domain>` with a valid wildcard certificate and watches a file-provider rules directory. Copy `.env.example` to `.env` and fill in `DEV_DOMAIN` and `TRAEFIK_RULES_DIR`.
@@ -104,4 +139,4 @@ make dev-down   # removes the rule, stops compose
 
 ## Make targets
 
-`build`, `run`, `test` (race detector), `e2e` (Playwright with the installed Chrome, needs pnpm and pandoc), `cover`, `lint` (golangci-lint), `docker-build` (also tests the office fixtures against the pandoc it ships), `fixtures` (regenerates them), `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`.
+`build` (server and daemon), `build-daemons` (daemon for linux and darwin, amd64 and arm64), `run`, `test` (race detector), `test-docker` (sandbox against real Docker and a fake Anthropic upstream, no Claude request), `e2e` (Playwright with the installed Chrome, needs pnpm and pandoc), `cover`, `lint` (golangci-lint), `docker-build` (also tests the office fixtures against the pandoc it ships), `sandbox-image`, `fixtures` (regenerates them), `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`.

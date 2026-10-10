@@ -23,10 +23,18 @@ TRAEFIK_RULE      = $(TRAEFIK_RULES_DIR)/grill-room.yaml
 
 SANDBOX_IMAGE ?= grill-room-sandbox:local
 
-.PHONY: build run test test-docker e2e cover lint docker-build sandbox-image fixtures dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: build build-daemons run test test-docker e2e cover lint docker-build sandbox-image fixtures dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
+	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME)-daemon ./cmd/grill-room-daemon
+
+# The daemon for every supported target: Windows runs the linux build inside WSL.
+DAEMON_TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
+build-daemons:
+	for t in $(DAEMON_TARGETS); do \
+	  CGO_ENABLED=0 GOOS=$${t%/*} GOARCH=$${t#*/} go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME)-daemon-$${t%/*}-$${t#*/} ./cmd/grill-room-daemon || exit 1; \
+	done
 
 run: build
 	./bin/$(APP_NAME)

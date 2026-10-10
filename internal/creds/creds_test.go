@@ -174,3 +174,21 @@ func TestSourceRereads(t *testing.T) {
 		t.Fatal("Get after removal succeeded")
 	}
 }
+
+// 001-AC23: the real constructor reads CLAUDE_CONFIG_DIR, both for the file and the Keychain item.
+func TestNewHonoursConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	t.Setenv("USER", "alice")
+	r := New()
+	if r.ConfigDir != dir || r.File() != filepath.Join(dir, ".credentials.json") || r.Service != KeychainService(dir) || r.Account != "alice" {
+		t.Fatalf("New() = %+v", r)
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	if r := New(); filepath.Base(r.ConfigDir) != ".claude" || r.Service != "Claude Code-credentials" {
+		t.Fatalf("New() without env = %+v", r)
+	}
+	if NewSource(r).Reader().ConfigDir != r.ConfigDir {
+		t.Fatal("Source.Reader lost the config dir")
+	}
+}

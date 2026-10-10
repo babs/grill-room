@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -17,6 +19,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/babs/grill-room/internal/creds"
+	"github.com/babs/grill-room/internal/proxy"
 )
 
 // fakeDocker records calls and answers from a table keyed by the first args.
@@ -242,5 +245,154 @@ func TestFailedStartCleansUpWithExpiredContext(t *testing.T) {
 	}
 	if cleanupCtxErr != nil {
 		t.Fatalf("cleanup ran with a dead context: %v", cleanupCtxErr)
+	}
+}
+
+// fakeSandbox answers info and the bridge inspect, and claude with reply.
+func fakeSandbox(t *testing.T, tok string, exp time.Time, claude func(ctx context.Context) ([]byte, error)) (*Sandbox, *fakeDocker) {
+	t.Helper()
+	f := &fakeDocker{}
+	f.reply = func(args []string) ([]byte, error) {
+		switch {
+		case args[0] == "info":
+			return []byte("29|Linux"), nil
+		case args[0] == "network" && args[1] == "inspect":
+			return []byte("127.0.0.1"), nil
+		}
+		return nil, nil
+	}
+	run := func(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
+		if args[0] == "exec" && slices.Contains(args, "claude") && claude != nil {
+			f.run(ctx, stdin, args...)
+			return claude(ctx)
+		}
+		return f.run(ctx, stdin, args...)
+	}
+	up, _ := url.Parse("https://x")
+	s := New(Config{Image: "img", Name: "t", Host: "laptop", Upstream: up}, run, testCreds(t, tok, exp), zap.NewNop())
+	t.Cleanup(func() { s.Close(context.Background()) })
+	return s, f
+}
+
+// 001-AC29: a turn that fails after the proxy saw an upstream 401 reports expired credentials;
+// other failures keep their own message.
+func TestRunClaudeFailures(t *testing.T) {
+	future := time.Now().Add(time.Hour)
+	for _, tc := range []struct {
+		name    string
+		out     string
+		err     error
+		saw401  bool
+		want    string
+		wantRes bool
+	}{
+		{"401 then exit 1", `{"is_error":true,"result":"OAuth token invalid"}`, errors.New("exit status 1"), true, "Claude credentials expired on laptop", false},
+		{"401 then is_error", `{"is_error":true,"subtype":"success","result":"API Error: 401"}`, nil, true, "Claude credentials expired on laptop", false},
+		{"exit without 401", `garbage`, errors.New("exit status 2"), false, "claude: exit status 2", false},
+		{"not json", `garbage`, nil, false, "claude output:", false},
+		{"is_error without 401", `{"is_error":true,"subtype":"error_max_turns","result":"stopped"}`, nil, false, "claude: error_max_turns: stopped", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := fakeSandbox(t, "real", future, func(context.Context) ([]byte, error) { return []byte(tc.out), tc.err })
+			// The turn's request goes through a real proxy to an upstream answering 401.
+			if tc.saw401 {
+				up401 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) }))
+				defer up401.Close()
+				upURL, _ := url.Parse(up401.URL)
+				s.proxy = proxy.New(upURL, s.src, s.dummy, zap.NewNop())
+				inner := s.run
+				s.run = func(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
+					if args[0] == "exec" && slices.Contains(args, "claude") {
+						req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/messages", http.NoBody)
+						req.Header.Set("Authorization", "Bearer "+s.dummy)
+						s.proxy.ServeHTTP(httptest.NewRecorder(), req)
+					}
+					return inner(ctx, stdin, args...)
+				}
+			}
+			res, err := s.RunClaude(context.Background(), Request{Prompt: "p"})
+			if err == nil || !strings.HasPrefix(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+			if (res != nil) != tc.wantRes {
+				t.Fatalf("res = %+v", res)
+			}
+		})
+	}
+}
+
+func TestRunClaudeCancelKillsClaude(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s, f := fakeSandbox(t, "real", time.Now().Add(time.Hour), func(context.Context) ([]byte, error) {
+		cancel()
+		return nil, context.Canceled
+	})
+	if _, err := s.RunClaude(ctx, Request{Prompt: "p"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
+	}
+	if f.find("exec", "grill-room-t", "pkill", "-x", "claude") == nil {
+		t.Fatalf("claude not killed: %v", f.calls)
+	}
+}
+
+func TestRunClaudeUnreadableCreds(t *testing.T) {
+	f := &fakeDocker{}
+	s := New(Config{Name: "t", Host: "laptop", Upstream: &url.URL{}}, f.run, creds.NewSource(creds.Reader{ConfigDir: t.TempDir()}), zap.NewNop())
+	_, err := s.RunClaude(context.Background(), Request{Prompt: "p"})
+	if err == nil || !strings.HasPrefix(err.Error(), "Claude credentials unavailable on laptop") || len(f.calls) != 0 {
+		t.Fatalf("err = %v, calls = %v", err, f.calls)
+	}
+}
+
+func TestScanAndIsolated(t *testing.T) {
+	secret := []byte("tok-123")
+	replies := map[string][]byte{"export": []byte("a tok-123 b tok-123"), "tar": []byte("x"), "inspect": []byte("tok-123")}
+	reachable := map[string]bool{"proxy/8787": true}
+	resolves := false
+	f := &fakeDocker{reply: func(args []string) ([]byte, error) {
+		switch {
+		case args[0] == "export":
+			return replies["export"], nil
+		case args[0] == "inspect":
+			return replies["inspect"], nil
+		case slices.Contains(args, "tar"):
+			return replies["tar"], nil
+		case slices.Contains(args, "getent"):
+			if resolves {
+				return []byte("1.2.3.4 api.anthropic.com"), nil
+			}
+			return nil, errors.New("exit status 2")
+		case slices.Contains(args, "bash"):
+			target := strings.TrimPrefix(args[len(args)-1], "exec 3<>/dev/tcp/")
+			if reachable[target] {
+				return nil, nil
+			}
+			return nil, errors.New("exit status 1")
+		}
+		return nil, nil
+	}}
+	s := New(Config{Name: "t", Upstream: &url.URL{}}, f.run, nil, zap.NewNop())
+	counts, err := s.Scan(context.Background(), secret)
+	if err != nil || counts["filesystem"] != 2 || counts["volumes"] != 0 || counts["inspect"] != 1 {
+		t.Fatalf("Scan = %v, %v", counts, err)
+	}
+	if _, err := s.Scan(context.Background(), nil); err == nil {
+		t.Fatal("empty secret accepted")
+	}
+	if err := s.Isolated(context.Background()); err != nil {
+		t.Fatalf("isolated sandbox: %v", err)
+	}
+	resolves = true
+	if err := s.Isolated(context.Background()); err == nil || !strings.Contains(err.Error(), "resolves") {
+		t.Fatalf("resolving: %v", err)
+	}
+	resolves = false
+	reachable["1.1.1.1/443"] = true
+	if err := s.Isolated(context.Background()); err == nil || !strings.Contains(err.Error(), "1.1.1.1") {
+		t.Fatalf("public IP reachable: %v", err)
+	}
+	reachable = map[string]bool{}
+	if err := s.Isolated(context.Background()); err == nil || !strings.Contains(err.Error(), "proxy is unreachable") {
+		t.Fatalf("proxy down: %v", err)
 	}
 }

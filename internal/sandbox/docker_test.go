@@ -147,20 +147,8 @@ func TestSandboxDocker(t *testing.T) {
 	}
 
 	t.Run("no route but the proxy", func(t *testing.T) {
-		probe := func(target string) error {
-			_, err := Docker(ctx, nil, "exec", s.container(), "bash", "-c", "timeout 5 bash -c 'exec 3<>/dev/tcp/"+target+"'")
-			return err
-		}
-		if _, err := Docker(ctx, nil, "exec", s.container(), "getent", "hosts", "api.anthropic.com"); err == nil {
-			t.Error("api.anthropic.com resolves inside the sandbox")
-		}
-		for _, target := range []string{"api.anthropic.com/443", "1.1.1.1/443", "platform.claude.com/443"} {
-			if probe(target) == nil {
-				t.Errorf("%s reachable from the sandbox", target)
-			}
-		}
-		if err := probe("proxy/8787"); err != nil {
-			t.Errorf("proxy unreachable: %v", err)
+		if err := s.Isolated(ctx); err != nil {
+			t.Error(err)
 		}
 		// The DoD's literal check, with curl from the server image's builder (the sandbox has none).
 		// Exit 6 = DNS failure, 7 = TCP connect failure, 28 = timeout.
@@ -198,6 +186,11 @@ func TestSandboxDocker(t *testing.T) {
 					t.Errorf("%s holds the host credential %d times", what, n)
 				}
 			}
+		}
+		// Scan, which `grill-room-daemon check` runs, must agree on what it sees.
+		counts, err := s.Scan(ctx, []byte(s.dummy))
+		if err != nil || counts["volumes"] == 0 || counts["filesystem"] != 0 || counts["inspect"] != 0 {
+			t.Fatalf("Scan(dummy) = %v, %v", counts, err)
 		}
 		if !strings.Contains(string(inspect), "ANTHROPIC_BASE_URL=http://proxy:8787") {
 			t.Error("inspect output lacks the sandbox env: the scan looked at the wrong thing")
@@ -280,21 +273,12 @@ func TestRealClaude(t *testing.T) {
 		t.Fatalf("turn: %v", err)
 	}
 	t.Logf("result=%q session=%s", res.Result, res.SessionID)
-	fsTar, err := exec.CommandContext(ctx, "docker", "export", s.container()).Output()
+	counts, err := s.Scan(ctx, []byte(tok.AccessToken))
 	if err != nil {
 		t.Fatal(err)
 	}
-	vols, err := Docker(ctx, nil, "exec", s.container(), "tar", "-c", "-C", "/", "home/agent", "workspace")
-	if err != nil {
-		t.Fatal(err)
-	}
-	env, err := Docker(ctx, nil, "inspect", "--format", "{{json .Config.Env}}", s.container(), s.relay())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for what, b := range map[string][]byte{"docker export": fsTar, "volumes": vols, "inspect env": env} {
-		n := bytes.Count(b, []byte(tok.AccessToken))
-		t.Logf("%s: %d bytes scanned, %d matches of the real token", what, len(b), n)
+	for what, n := range counts {
+		t.Logf("%s: %d matches of the real token", what, n)
 		if n != 0 {
 			t.Errorf("%s holds the real token", what)
 		}
