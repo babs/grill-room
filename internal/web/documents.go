@@ -55,6 +55,10 @@ type Options struct {
 	ToMarkdown func(ctx context.Context, from string, data []byte) (string, error)
 	// Voice turns on LiveKit audio and transcription; nil leaves the room text only.
 	Voice *Voice
+	// TurnTimeout bounds one agent turn; 0 means 15 minutes.
+	TurnTimeout time.Duration
+	// MaxResultBytes bounds a turn result a daemon posts; 0 means 32 MB.
+	MaxResultBytes int64
 }
 
 //go:embed templates

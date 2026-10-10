@@ -29,6 +29,8 @@ type Room struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`
+	// HostParticipantID is the participant whose daemon runs the agent; 0 before any daemon hosted.
+	HostParticipantID int64 `json:"host_participant_id,omitempty"`
 }
 
 // Invite is a link token granting access to one room. Only its hash is stored.
@@ -45,6 +47,8 @@ type Participant struct {
 	InviteID int64     `json:"-"`
 	Name     string    `json:"name"`
 	JoinedAt time.Time `json:"joined_at"`
+	// CanTrigger is the agent button right the host granted; the host holds it anyway.
+	CanTrigger bool `json:"can_trigger"`
 }
 
 // Message is one line in a room.
@@ -180,6 +184,37 @@ CREATE TABLE daemons (
 	created_at TEXT NOT NULL
 );
 CREATE INDEX daemons_room ON daemons(room_id);
+`, `
+ALTER TABLE rooms ADD COLUMN host_participant_id INTEGER REFERENCES participants(id) ON DELETE SET NULL;
+ALTER TABLE participants ADD COLUMN can_trigger INTEGER NOT NULL DEFAULT 0 CHECK (can_trigger IN (0, 1));
+CREATE UNIQUE INDEX documents_agent_name ON documents(room_id, name) WHERE kind = 'agent';
+CREATE TABLE turns (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	participant_id INTEGER REFERENCES participants(id) ON DELETE CASCADE,
+	daemon_id INTEGER REFERENCES daemons(id) ON DELETE SET NULL,
+	host TEXT NOT NULL,
+	status TEXT NOT NULL CHECK (status IN ('running', 'done', 'failed')),
+	fresh INTEGER NOT NULL CHECK (fresh IN (0, 1)),
+	resume TEXT NOT NULL,
+	session_id TEXT NOT NULL DEFAULT '',
+	message_cursor INTEGER NOT NULL,
+	annotation_cursor INTEGER NOT NULL,
+	prompt TEXT NOT NULL,
+	error TEXT NOT NULL DEFAULT '',
+	report TEXT NOT NULL DEFAULT '{}',
+	started_at TEXT NOT NULL,
+	ended_at TEXT
+);
+CREATE INDEX turns_room ON turns(room_id, id);
+CREATE UNIQUE INDEX turns_one_running ON turns(room_id) WHERE status = 'running';
+CREATE TABLE agent_sessions (
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	session_id TEXT NOT NULL,
+	data BLOB NOT NULL,
+	updated_at TEXT NOT NULL,
+	PRIMARY KEY (room_id, session_id)
+);
 `}
 
 // Open opens (and migrates) the database at path.
@@ -269,7 +304,8 @@ func (s *Store) CreateRoom(ctx context.Context, id, name string) (*Room, error) 
 func (s *Store) Room(ctx context.Context, id string) (*Room, error) {
 	var r Room
 	var created string
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at FROM rooms WHERE id = ?`, id).Scan(&r.ID, &r.Name, &created)
+	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at, COALESCE(host_participant_id, 0) FROM rooms WHERE id = ?`, id).
+		Scan(&r.ID, &r.Name, &created, &r.HostParticipantID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -392,9 +428,9 @@ func (s *Store) ParticipantByToken(ctx context.Context, tokenHash string) (*Part
 	var p Participant
 	var joined string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at FROM participants p
+		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger FROM participants p
 		JOIN invites i ON i.id = p.invite_id
-		WHERE p.token_hash = ? AND i.revoked_at IS NULL`, tokenHash).Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined)
+		WHERE p.token_hash = ? AND i.revoked_at IS NULL`, tokenHash).Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -408,7 +444,7 @@ func (s *Store) ParticipantByToken(ctx context.Context, tokenHash string) (*Part
 // Participants lists a room's participants whose invite is still valid, in join order.
 func (s *Store) Participants(ctx context.Context, roomID string) ([]Participant, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at FROM participants p
+		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger FROM participants p
 		JOIN invites i ON i.id = p.invite_id
 		WHERE p.room_id = ? AND i.revoked_at IS NULL ORDER BY p.id`, roomID)
 	if err != nil {
@@ -419,7 +455,7 @@ func (s *Store) Participants(ctx context.Context, roomID string) ([]Participant,
 	for rows.Next() {
 		var p Participant
 		var joined string
-		if err := rows.Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined); err != nil {
+		if err := rows.Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger); err != nil {
 			return nil, fmt.Errorf("scan participant: %w", err)
 		}
 		p.JoinedAt = parseTS(joined)
@@ -489,9 +525,9 @@ func (s *Store) RoomParticipant(ctx context.Context, roomID string, id int64) (*
 	var p Participant
 	var joined string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at FROM participants p
+		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger FROM participants p
 		JOIN invites i ON i.id = p.invite_id
-		WHERE p.id = ? AND p.room_id = ? AND i.revoked_at IS NULL`, id, roomID).Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined)
+		WHERE p.id = ? AND p.room_id = ? AND i.revoked_at IS NULL`, id, roomID).Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

@@ -63,6 +63,9 @@ type presence struct {
 	Version string `json:"version,omitempty"`
 	room    string
 	conns   int
+	id      int64
+	// since is when the current run of connections started: the earliest eligible one hosts.
+	since time.Time
 }
 
 type presences struct {
@@ -211,6 +214,8 @@ func (s *Server) answerPairing(w http.ResponseWriter, r *http.Request, sess sess
 		return
 	}
 	p.token = tok
+	// The replaced daemon can no longer post its result.
+	s.failDaemonTurn(r.Context(), d, "the host daemon was paired again")
 	// Re-pairing replaced the previous daemon's token: close its stream.
 	s.bus.Notify(p.room)
 	s.log.Info("daemon_paired", zap.String("room", p.room), zap.Int64("participant", sess.p.ID), zap.Int64("daemon", d.ID))
@@ -269,9 +274,13 @@ func (s *Server) daemonStatus(w http.ResponseWriter, r *http.Request, d *store.D
 		p = &presence{}
 		s.presence.m[d.ID] = p
 	}
-	p.room, p.ParticipantID, p.Name = d.RoomID, d.ParticipantID, d.Name
+	changed := p.CanHost != req.CanHost || p.Reason != reason
+	p.room, p.ParticipantID, p.Name, p.id = d.RoomID, d.ParticipantID, d.Name, d.ID
 	p.CanHost, p.Reason, p.Version = req.CanHost, reason, version
 	s.presence.mu.Unlock()
+	if changed {
+		s.agentChanged(r.Context(), d.RoomID)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -297,17 +306,28 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 		s.presence.m[d.ID] = p
 	}
 	// Re-pairing keeps the daemon id but may rename it.
-	p.room, p.ParticipantID, p.Name = d.RoomID, d.ParticipantID, d.Name
-	p.conns++
+	p.room, p.ParticipantID, p.Name, p.id = d.RoomID, d.ParticipantID, d.Name, d.ID
+	if p.conns++; p.conns == 1 {
+		p.since = time.Now()
+	}
 	s.presence.mu.Unlock()
 	s.log.Info("daemon_connected", zap.String("room", d.RoomID), zap.Int64("daemon", d.ID))
+	s.agentChanged(r.Context(), d.RoomID)
 	defer func() {
 		s.presence.mu.Lock()
+		gone := false
 		if p.conns--; p.conns == 0 {
 			delete(s.presence.m, d.ID)
+			gone = true
 		}
 		s.presence.mu.Unlock()
 		s.log.Info("daemon_disconnected", zap.String("room", d.RoomID), zap.Int64("daemon", d.ID))
+		if gone {
+			// The request context is done: the cleanup must still reach the store.
+			ctx := context.WithoutCancel(r.Context())
+			s.failDaemonTurn(ctx, d, "the host daemon on "+d.Name+" disconnected")
+			s.agentChanged(ctx, d.RoomID)
+		}
 	}()
 
 	live, cancel := s.bus.Subscribe(16)
@@ -322,6 +342,23 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 		return
 	}
 	flusher.Flush()
+	// sendTurn hands this daemon the room's running turn when it is this daemon's, once.
+	var sent int64
+	sendTurn := func() bool {
+		t, err := s.bus.Store.RunningTurn(r.Context(), d.RoomID)
+		if err != nil || t.DaemonID != d.ID || t.ID == sent {
+			return true
+		}
+		sent = t.ID
+		if _, err := fmt.Fprintf(w, "event: turn\ndata: {\"id\":%d}\n\n", t.ID); err != nil { //nolint:gosec // an integer id on an event stream, never HTML
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+	if !sendTurn() {
+		return
+	}
 	// alive re-checks the token: a revoked invite, a deleted room or a re-pairing ends the stream.
 	alive := func() bool {
 		if _, err := s.daemonFor(r.Context(), hash, d.RoomID); err != nil {
@@ -348,7 +385,7 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 			}
 			flusher.Flush()
 		case changed := <-live:
-			if changed == d.RoomID && !alive() {
+			if changed == d.RoomID && (!alive() || !sendTurn()) {
 				return
 			}
 		}

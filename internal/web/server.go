@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode"
@@ -61,10 +62,18 @@ type Server struct {
 	pairings  pairings
 	presence  presences
 	stt       sttWorkers
+	// electMu serialises host elections and hand-overs.
+	electMu sync.Mutex
 }
 
 // New builds a server. adminHash is HashToken of the admin token; baseURL prefixes invite links.
 func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *Server {
+	if opts.TurnTimeout <= 0 {
+		opts.TurnTimeout = defaultTurnTimeout
+	}
+	if opts.MaxResultBytes <= 0 {
+		opts.MaxResultBytes = defaultMaxResult
+	}
 	return &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
 		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, stt: sttWorkers{m: map[string]*sttWorker{}}}
 }
@@ -122,6 +131,15 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms/{room}/pairings/{id}", s.participant(s.answerPairing))
 	mux.Handle("GET /api/rooms/{room}/daemon/events", s.daemonAuth(s.daemonEvents))
 	mux.Handle("POST /api/rooms/{room}/daemon/status", s.daemonAuth(s.daemonStatus))
+
+	mux.Handle("GET /api/rooms/{room}/agent", s.participant(s.getAgent))
+	mux.Handle("POST /api/rooms/{room}/turns", s.participant(s.startTurn))
+	mux.Handle("PUT /api/rooms/{room}/host", s.participant(s.handOver))
+	mux.Handle("PATCH /api/rooms/{room}/participants/{participant}", s.participant(s.setCanTrigger))
+	mux.Handle("GET /api/rooms/{room}/daemon/turns/{turn}", s.daemonAuth(s.getJob))
+	mux.Handle("GET /api/rooms/{room}/daemon/turns/{turn}/workspace", s.daemonAuth(s.getWorkspace))
+	mux.Handle("POST /api/rooms/{room}/daemon/turns/{turn}", s.daemonAuth(s.postResult))
+	mux.Handle("GET /api/rooms/{room}/daemon/sessions/{session}", s.daemonAuth(s.getSession))
 
 	mux.Handle("GET /api/rooms/{room}/voice", s.participant(s.getVoice))
 	mux.Handle("POST /api/stt/heartbeat", s.sttAuth(s.sttHeartbeat))
@@ -458,8 +476,9 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, sess sessio
 }
 
 // events streams the room's messages after ?since= or Last-Event-ID, then live ones, a
-// "documents" event when a document or revision is added, and an "annotations" event when an
-// annotation is added or changes, and with voice on, an "stt" event at open and whenever
+// "documents" event when a document or revision is added, an "annotations" event when an
+// annotation is added or changes, an "agent" event carrying the agent state at open and whenever
+// it changes, and with voice on, an "stt" event at open and whenever
 // transcription comes or goes. The stream ends with a "revoked" event as soon as the participant's
 // access is gone.
 func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
@@ -499,6 +518,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 
+	var agentSent string
 	// sync re-checks access, then sends what the store holds past last. False ends the stream.
 	sync := func() bool {
 		if _, err := s.authorize(r.Context(), sess.tokenHash, room); err != nil {
@@ -527,6 +547,21 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 			if len(msgs) < replayBatch {
 				break
 			}
+		}
+		agent, err := s.agentState(r.Context(), room)
+		if err != nil {
+			return false
+		}
+		b, err := json.Marshal(agent)
+		if err != nil {
+			return false
+		}
+		if string(b) != agentSent {
+			agentSent = string(b)
+			if _, err := fmt.Fprintf(w, "event: agent\ndata: %s\n\n", b); err != nil {
+				return false
+			}
+			flusher.Flush()
 		}
 		for _, c := range []struct {
 			event string

@@ -141,23 +141,31 @@ func (s *Store) AddUpload(ctx context.Context, u *Upload, maxRoomBytes int64) (*
 
 // CreateAgentDocument creates an agent document with body as revision 1. format is md or html.
 func (s *Store) CreateAgentDocument(ctx context.Context, roomID, name, format, body, author string) (*Document, error) {
-	if format != "md" && format != "html" {
-		return nil, fmt.Errorf("create agent document: format %q is not md or html", format)
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create agent document: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	d, err := createAgentDocument(ctx, tx, roomID, name, format, body, author)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("create agent document: %w", err)
+	}
+	return d, nil
+}
+
+func createAgentDocument(ctx context.Context, tx *sql.Tx, roomID, name, format, body, author string) (*Document, error) {
+	if format != "md" && format != "html" {
+		return nil, fmt.Errorf("create agent document: format %q is not md or html", format)
+	}
 	d := &Document{RoomID: roomID, Kind: DocAgent, Name: name, Format: format, Author: author, Revisions: 1}
 	if err := insertDocument(ctx, tx, d, 0, now()); err != nil {
 		return nil, err
 	}
 	if _, err := insertRevision(ctx, tx, d.ID, 1, body, author); err != nil {
 		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("create agent document: %w", err)
 	}
 	return d, nil
 }
@@ -171,9 +179,20 @@ func (s *Store) AddRevision(ctx context.Context, roomID string, docID int64, bod
 		return nil, fmt.Errorf("add revision: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	r, err := addRevision(ctx, tx, roomID, docID, body, author)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("add revision: %w", err)
+	}
+	return r, nil
+}
+
+func addRevision(ctx context.Context, tx *sql.Tx, roomID string, docID int64, body, author string) (*Revision, error) {
 	var kind, format string
 	var last int
-	err = tx.QueryRowContext(ctx, `
+	err := tx.QueryRowContext(ctx, `
 		SELECT d.kind, d.format, COALESCE((SELECT MAX(n) FROM revisions WHERE document_id = d.id), 0)
 		FROM documents d WHERE d.id = ? AND d.room_id = ?`, docID, roomID).Scan(&kind, &format, &last)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -191,9 +210,6 @@ func (s *Store) AddRevision(ctx context.Context, roomID string, docID int64, bod
 	}
 	if err := reanchor(ctx, tx, docID, format, r.N, body); err != nil {
 		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("add revision: %w", err)
 	}
 	return r, nil
 }

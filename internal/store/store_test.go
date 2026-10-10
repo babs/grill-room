@@ -23,7 +23,8 @@ func openTest(t *testing.T) *Store {
 }
 
 // seed creates a room with an invite, a participant, a text message, an upload, an agent
-// document with two revisions, an annotation with a message carrying an image, and a paired daemon.
+// document with two revisions, an annotation with a message carrying an image, a paired daemon
+// hosting, and a done turn with its session.
 func seed(t *testing.T, s *Store, room string) *Participant {
 	t.Helper()
 	ctx := context.Background()
@@ -55,7 +56,18 @@ func seed(t *testing.T, s *Store, room string) *Participant {
 	if _, err := s.CreateAnnotation(ctx, room, d.ID, 2, &anchor.Anchor{Kind: anchor.KindText, Exact: "v2"}, msg, 1<<20); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.PairDaemon(ctx, room, p.ID, "laptop", "dmn-"+room); err != nil {
+	dm, err := s.PairDaemon(ctx, room, p.ID, "laptop", "dmn-"+room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetHost(ctx, room, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	turn := &Turn{RoomID: room, ParticipantID: p.ID, DaemonID: dm.ID, Host: "laptop", Prompt: "go"}
+	if err := s.StartTurn(ctx, turn); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CompleteTurn(ctx, room, turn.ID, dm.ID, &TurnOutcome{SessionID: "sid-" + room, Session: []byte("{}\n")}); err != nil {
 		t.Fatal(err)
 	}
 	return p

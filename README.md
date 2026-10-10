@@ -31,6 +31,7 @@ On first start the server logs an `admin_token_generated` line holding the admin
 | `GRILL_ROOM_LIVEKIT_API_URL` | `GRILL_ROOM_LIVEKIT_URL` as `https://` | LiveKit's HTTP API as the server reaches it |
 | `GRILL_ROOM_LIVEKIT_API_KEY`, `GRILL_ROOM_LIVEKIT_API_SECRET` | none | LiveKit API key pair; the secret needs 32+ characters |
 | `GRILL_ROOM_STT_TOKEN` | none | the STT worker's service token; unset refuses every worker |
+| `GRILL_ROOM_TURN_TIMEOUT` | `15m` | one agent turn's time budget (1m to 24h) |
 | `LOG_LEVEL` | `info` | |
 | `LOG_FORMAT` | `auto` | `console` on a TTY, `json` otherwise |
 
@@ -63,7 +64,11 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `POST /api/join` | invite token in the body | returns a participant token and sets a cookie |
 | `GET /api/rooms/{room}` | participant | room, me, participants |
 | `POST /api/rooms/{room}/messages` | participant | post a text message |
-| `GET /api/rooms/{room}/events` | participant | SSE: history then live messages; resumes from `Last-Event-ID`; a `documents` event when a document or revision is added, an `annotations` event when an annotation is added or changes; with voice on, an `stt` event (`available`, `listening`) at open and on every change |
+| `GET /api/rooms/{room}/events` | participant | SSE: history then live messages; resumes from `Last-Event-ID`; a `documents` event when a document or revision is added, an `annotations` event when an annotation is added or changes; an `agent` event with the agent state (`host_participant_id`, `online`, `reason`, last `turn`, `can_trigger`, connected `daemons`) at open and on every change; with voice on, an `stt` event (`available`, `listening`) at open and on every change |
+| `GET /api/rooms/{room}/agent` | participant | the agent state, as in the `agent` event |
+| `POST /api/rooms/{room}/turns` | host, or a participant the host allowed | the agent button: `fresh` (host only) starts a new session; 409 `turn in progress` while one runs, 409 when no host daemon is connected |
+| `PUT /api/rooms/{room}/host` | host | hand over: `participant_id` of a participant whose daemon is connected and can host |
+| `PATCH /api/rooms/{room}/participants/{id}` | host | `can_trigger`: grant or revoke the agent button |
 | `GET /api/rooms/{room}/voice` | participant | LiveKit `url` and a 5 min `token` for this room's audio; 404 when voice is off |
 | `GET /api/rooms/{room}/documents` | participant | list |
 | `POST /api/rooms/{room}/documents` | participant | upload, multipart field `file` |
@@ -79,7 +84,11 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `GET /api/pairings/{id}` | pairing secret | `pending`, `denied`, or `approved` with the daemon token, handed once |
 | `GET /api/rooms/{room}/pairings/{id}` | participant | the request's daemon name and code, for the approval page |
 | `POST /api/rooms/{room}/pairings/{id}` | participant | `approve`: true pairs the daemon to this participant, false denies |
-| `GET /api/rooms/{room}/daemon/events` | daemon | SSE: `hello`, pings, `revoked` |
+| `GET /api/rooms/{room}/daemon/events` | daemon | SSE: `hello`, pings, `turn` (`id`) when a turn starts on this daemon, `revoked` |
+| `GET /api/rooms/{room}/daemon/turns/{id}` | daemon running the turn | the job: `prompt`, `resume` session id, its `session_size` and `session_sha256`, `timeout_seconds` |
+| `GET /api/rooms/{room}/daemon/turns/{id}/workspace` | daemon running the turn | the workspace as a tar, see [docs/agent-workspace.md](docs/agent-workspace.md) |
+| `GET /api/rooms/{room}/daemon/sessions/{id}` | daemon running the turn | the stored session jsonl of the session the turn resumes |
+| `POST /api/rooms/{room}/daemon/turns/{id}` | daemon running the turn | the result: `error`, or `synthesis`, `changes`, and the session bytes from `session_offset`; applied all at once or not at all |
 | `POST /api/rooms/{room}/daemon/status` | daemon | heartbeat: `can_host`, `reason`, `version` |
 | `POST /api/stt/heartbeat` | STT token | `worker` name and the `rooms` whose audio it is in; a worker silent for 15 s counts as gone |
 | `POST /api/rooms/{room}/voice/lines` | STT token | one transcribed utterance: `participant_id`, `body`; stored as a `voice` message from that participant |

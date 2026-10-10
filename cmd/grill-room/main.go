@@ -77,6 +77,8 @@ type Config struct {
 	LiveKitAPISecret string
 	// STTToken is the STT worker's service token; empty refuses every worker.
 	STTToken string
+	// TurnTimeout bounds one agent turn.
+	TurnTimeout time.Duration
 }
 
 func loadConfig() (Config, error) {
@@ -85,7 +87,9 @@ func loadConfig() (Config, error) {
 	maxRoom, err2 := strconv.ParseInt(getEnv("GRILL_ROOM_MAX_ROOM_MB", "200"), 10, 64)
 	timeout, err3 := time.ParseDuration(getEnv("GRILL_ROOM_PANDOC_TIMEOUT", "60s"))
 	maxAttachment, err4 := strconv.ParseInt(getEnv("GRILL_ROOM_MAX_ATTACHMENT_MB", "5"), 10, 64)
+	turnTimeout, err5 := time.ParseDuration(getEnv("GRILL_ROOM_TURN_TIMEOUT", "15m"))
 	return Config{
+		TurnTimeout:     turnTimeout,
 		MaxUploadMB:     maxUpload,
 		MaxRoomMB:       maxRoom,
 		MaxAttachmentMB: maxAttachment,
@@ -104,7 +108,7 @@ func loadConfig() (Config, error) {
 		STTToken:         os.Getenv("GRILL_ROOM_STT_TOKEN"),
 		LogLevel:         getEnv("LOG_LEVEL", "info"),
 		LogFormat:        getEnv("LOG_FORMAT", "auto"),
-	}, errors.Join(err1, err2, err3, err4)
+	}, errors.Join(err1, err2, err3, err4, err5)
 }
 
 // Validate rejects a configuration the server cannot run with.
@@ -120,6 +124,9 @@ func (c Config) Validate() error {
 	}
 	if c.MaxAttachmentMB < 1 || c.MaxAttachmentMB > c.MaxRoomMB {
 		return fmt.Errorf("GRILL_ROOM_MAX_ATTACHMENT_MB %d: want 1 <= attachment <= room (%d)", c.MaxAttachmentMB, c.MaxRoomMB)
+	}
+	if c.TurnTimeout < time.Minute || c.TurnTimeout > 24*time.Hour {
+		return fmt.Errorf("GRILL_ROOM_TURN_TIMEOUT %s: want 1m to 24h", c.TurnTimeout)
 	}
 	if c.PandocTimeout <= 0 {
 		return fmt.Errorf("GRILL_ROOM_PANDOC_TIMEOUT %s: want a positive duration", c.PandocTimeout)
@@ -258,8 +265,16 @@ func run() error {
 		logger.Warn("pandoc_missing", zap.String("pandoc", cfg.Pandoc), zap.Error(err))
 	}
 
+	// No daemon is attached yet: a turn left running by the previous process can never finish.
+	if rooms, err := st.FailRunningTurns(ctx, "the room server restarted"); err != nil {
+		return fmt.Errorf("fail running turns: %w", err)
+	} else if len(rooms) > 0 {
+		logger.Warn("running_turns_failed", zap.Strings("rooms", rooms))
+	}
+
 	b := bus.New(st)
 	srv := web.New(b, hash, cfg.PublicURL, web.Options{
+		TurnTimeout:        cfg.TurnTimeout,
 		MaxUploadBytes:     cfg.MaxUploadMB << 20,
 		MaxRoomBytes:       cfg.MaxRoomMB << 20,
 		MaxAttachmentBytes: cfg.MaxAttachmentMB << 20,

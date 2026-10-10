@@ -11,7 +11,7 @@ import (
 
 func TestConfigValidate(t *testing.T) {
 	ok := Config{Addr: "a:1", MetricsAddr: "a:2", DB: "x.db", LogLevel: "info", LogFormat: "auto",
-		MaxUploadMB: 20, MaxRoomMB: 200, MaxAttachmentMB: 5, Pandoc: "pandoc", PandocTimeout: time.Minute}
+		MaxUploadMB: 20, MaxRoomMB: 200, MaxAttachmentMB: 5, Pandoc: "pandoc", PandocTimeout: time.Minute, TurnTimeout: 15 * time.Minute}
 	cases := map[string]func(*Config){
 		"zero upload limit":       func(c *Config) { c.MaxUploadMB = 0 },
 		"room below upload limit": func(c *Config) { c.MaxRoomMB = 10 },
@@ -19,6 +19,8 @@ func TestConfigValidate(t *testing.T) {
 		"zero attachment limit":   func(c *Config) { c.MaxAttachmentMB = 0 },
 		"attachment over room":    func(c *Config) { c.MaxAttachmentMB = 201 },
 		"zero pandoc timeout":     func(c *Config) { c.PandocTimeout = 0 },
+		"turn timeout too short":  func(c *Config) { c.TurnTimeout = time.Second },
+		"turn timeout too long":   func(c *Config) { c.TurnTimeout = 25 * time.Hour },
 		"same addr":               func(c *Config) { c.MetricsAddr = c.Addr },
 		"empty db":                func(c *Config) { c.DB = "" },
 		"bad level":               func(c *Config) { c.LogLevel = "loud" },
@@ -37,7 +39,7 @@ func TestConfigValidate(t *testing.T) {
 }
 
 func TestLoadConfigRejectsBadNumbers(t *testing.T) {
-	for key, val := range map[string]string{"GRILL_ROOM_MAX_UPLOAD_MB": "20MB", "GRILL_ROOM_MAX_ROOM_MB": "x", "GRILL_ROOM_PANDOC_TIMEOUT": "60", "GRILL_ROOM_MAX_ATTACHMENT_MB": "5MB"} {
+	for key, val := range map[string]string{"GRILL_ROOM_MAX_UPLOAD_MB": "20MB", "GRILL_ROOM_MAX_ROOM_MB": "x", "GRILL_ROOM_PANDOC_TIMEOUT": "60", "GRILL_ROOM_MAX_ATTACHMENT_MB": "5MB", "GRILL_ROOM_TURN_TIMEOUT": "15"} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv(key, val)
 			if _, err := loadConfig(); err == nil {
@@ -46,7 +48,7 @@ func TestLoadConfigRejectsBadNumbers(t *testing.T) {
 		})
 	}
 	c, err := loadConfig()
-	if err != nil || c.MaxUploadMB != 20 || c.MaxRoomMB != 200 || c.MaxAttachmentMB != 5 || c.Validate() != nil {
+	if err != nil || c.MaxUploadMB != 20 || c.MaxRoomMB != 200 || c.MaxAttachmentMB != 5 || c.TurnTimeout != 15*time.Minute || c.Validate() != nil {
 		t.Fatalf("defaults: %+v, %v", c, err)
 	}
 }
