@@ -182,11 +182,11 @@ func TestRunClaudeArgsAndStubs(t *testing.T) {
 	if err != nil || res.Result != "ok" || res.SessionID != "s1" {
 		t.Fatalf("res=%+v err=%v", res, err)
 	}
-	want := []string{"exec", "grill-room-t", "claude", "-p", "say ok", "--output-format", "json", "--model", "haiku", "--resume", "abc", "--allowedTools", "Read"}
-	if c := f.find("exec", "grill-room-t", "claude"); !slices.Equal(c, want) {
+	want := []string{"exec", "-i", "grill-room-t", "claude", "-p", "--output-format", "json", "--model", "haiku", "--resume", "abc", "--allowedTools", "Read"}
+	if c := f.find("exec", "-i", "grill-room-t", "claude"); !slices.Equal(c, want) {
 		t.Fatalf("claude args = %v", c)
 	}
-	if len(f.stdin) != 1 || !strings.Contains(f.stdin[0], "profileFetchedAt") || !strings.Contains(f.stdin[0], s.dummy) || strings.Contains(f.stdin[0], "real-secret") {
+	if len(f.stdin) != 2 || f.stdin[1] != "say ok" || !strings.Contains(f.stdin[0], "profileFetchedAt") || !strings.Contains(f.stdin[0], s.dummy) || strings.Contains(f.stdin[0], "real-secret") {
 		t.Fatalf("stubs tar wrong")
 	}
 }

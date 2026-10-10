@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/babs/grill-room/internal/daemon"
 )
 
 func TestConfig(t *testing.T) {
@@ -124,5 +126,20 @@ func TestRunServesAdminPage(t *testing.T) {
 	}
 	if strings.Contains(stderr.String(), `"token"`) {
 		t.Fatal("a token reached the logs")
+	}
+}
+
+// A restarted daemon must find its own sandbox again; two daemons must never share one.
+func TestSandboxName(t *testing.T) {
+	a := daemon.Room{Base: "https://rooms.example", ID: "abc"}
+	b := daemon.Room{Base: "https://rooms.example", ID: "abd"}
+	n := sandboxName("/state/one", a)
+	if len(n) != 12 || n != sandboxName("/state/one", a) {
+		t.Fatalf("name %q not stable", n)
+	}
+	for _, other := range []string{sandboxName("/state/two", a), sandboxName("/state/one", b)} {
+		if other == n {
+			t.Fatalf("names collide: %q", n)
+		}
 	}
 }

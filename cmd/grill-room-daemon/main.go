@@ -7,6 +7,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -51,6 +53,8 @@ type Config struct {
 	Browser  string
 	Image    string
 	LogLevel string
+	// Model is the claude --model for turns; empty keeps Claude Code's default.
+	Model string
 }
 
 func loadConfig() (Config, error) {
@@ -67,6 +71,7 @@ func loadConfig() (Config, error) {
 		Browser:  getEnv("GRILL_ROOM_DAEMON_BROWSER", "auto"),
 		Image:    getEnv("GRILL_ROOM_SANDBOX_IMAGE", "grill-room-sandbox:local"),
 		LogLevel: getEnv("LOG_LEVEL", "info"),
+		Model:    os.Getenv("GRILL_ROOM_AGENT_MODEL"),
 	}, nil
 }
 
@@ -98,6 +103,15 @@ func newLogger(level string, stderr io.Writer, ring *daemon.Ring) (*zap.Logger, 
 		zapcore.NewCore(zapcore.NewConsoleEncoder(enc), zapcore.AddSync(ring), lvl),
 	)
 	return zap.New(core), nil
+}
+
+var anthropic, _ = url.Parse("https://api.anthropic.com") // a constant, valid URL
+
+// sandboxName is stable per state dir and room: a restarted daemon finds and replaces the
+// containers a crash left, and two daemons on one machine never share one.
+func sandboxName(stateDir string, r daemon.Room) string {
+	sum := sha256.Sum256([]byte(stateDir + "\x00" + r.String()))
+	return hex.EncodeToString(sum[:6])
 }
 
 func main() {
@@ -158,7 +172,11 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	d := daemon.New(daemon.Options{
 		Name: host, Version: Version, Tokens: daemon.NewTokens(cfg.StateDir), Docker: sandbox.Docker, Creds: src,
 		// No client timeout: it would cut the long-lived room stream; each request has its own deadline.
-		HTTP: &http.Client{}, Log: logger,
+		HTTP: &http.Client{}, Log: logger, Model: cfg.Model,
+		NewAgent: func(r daemon.Room) daemon.Agent {
+			return sandbox.New(sandbox.Config{Image: cfg.Image, Name: sandboxName(cfg.StateDir, r), Host: host, Upstream: anthropic},
+				sandbox.Docker, src, logger.Named("sandbox"))
+		},
 	})
 	// Links are printed, never logged, so they stay on this terminal.
 	announce := func(link string) { _, _ = fmt.Fprintf(stderr, "\n  Admin page: %s\n\n", link) }
@@ -197,8 +215,7 @@ func check(ctx context.Context, cfg Config, host string, src *creds.Source, log 
 		return fmt.Errorf("credentials: %w", err)
 	}
 	fmt.Printf("credentials: ok, from %s, expires %s\n", tok.Origin, tok.ExpiresAt.Local().Format(time.RFC3339))
-	up, _ := url.Parse("https://api.anthropic.com") // a constant, valid URL
-	sb := sandbox.New(sandbox.Config{Image: cfg.Image, Name: fmt.Sprintf("check-%d", time.Now().Unix()), Host: host, Upstream: up},
+	sb := sandbox.New(sandbox.Config{Image: cfg.Image, Name: fmt.Sprintf("check-%d", time.Now().Unix()), Host: host, Upstream: anthropic},
 		sandbox.Docker, src, log)
 	defer sb.Close(ctx)
 	tctx, cancel := context.WithTimeout(ctx, 3*time.Minute)

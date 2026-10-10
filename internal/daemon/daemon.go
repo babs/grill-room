@@ -33,6 +33,10 @@ type Options struct {
 	Creds   *creds.Source
 	HTTP    *http.Client
 	Log     *zap.Logger
+	// NewAgent builds the sandbox a room's turns run in, on the first turn.
+	NewAgent func(Room) Agent
+	// Model is passed to claude --model; empty keeps Claude Code's default.
+	Model string
 
 	CheckEvery  time.Duration // readiness re-check
 	StatusEvery time.Duration // heartbeat to the room
@@ -190,12 +194,18 @@ type roomRun struct {
 	d      *Daemon
 	room   Room
 	update func(func(*Status))
+
+	agentMu sync.Mutex
+	ag      Agent
+	// lastTurn is the highest turn id taken: a stream reconnecting mid-turn announces it again.
+	lastTurn int64
 }
 
 var errRevoked = errors.New("the room revoked this daemon's access: pair again")
 
 func (r *roomRun) loop(ctx context.Context) {
 	d, room := r.d, r.room
+	defer r.closeAgent(ctx)
 	fail := func(err error) {
 		d.o.Log.Warn("room_failed", zap.String("room", room.String()), zap.Error(err))
 		r.update(func(s *Status) { s.Error, s.Connection = err.Error(), "offline" })
@@ -277,8 +287,8 @@ func (r *roomRun) pair(ctx context.Context) (string, error) {
 		return "", err
 	}
 	var p struct {
-		ID         string    `json:"id"`
-		Secret     string    `json:"secret"`
+		ID        string    `json:"id"`
+		Secret    string    `json:"secret"`
 		Code      string    `json:"code"`
 		ExpiresAt time.Time `json:"expires_at"`
 	}
@@ -369,7 +379,9 @@ func (r *roomRun) connect(ctx context.Context, tok string) error {
 		}
 		// Jitter: daemons cut by the same server restart must not reconnect in lockstep.
 		wait := backoff/2 + rand.N(backoff) //nolint:gosec // jitter needs no crypto randomness
-		r.update(func(s *Status) { s.Connection, s.Error = "offline", fmt.Sprintf("%v (retry in %s)", err, wait.Round(time.Second)) })
+		r.update(func(s *Status) {
+			s.Connection, s.Error = "offline", fmt.Sprintf("%v (retry in %s)", err, wait.Round(time.Second))
+		})
 		d.o.Log.Warn("room_disconnected", zap.Error(err), zap.Duration("retry_in", wait))
 		select {
 		case <-ctx.Done():
@@ -423,6 +435,13 @@ func (r *roomRun) stream(ctx context.Context, tok string) error {
 			r.update(func(s *Status) { s.Connection, s.Error = "connected", "" })
 			d.o.Log.Info("room_connected", zap.String("room", room.String()))
 			wg.Go(func() { r.heartbeat(ctx, tok) })
+		case strings.HasPrefix(line, "data: ") && event == "turn":
+			var t struct {
+				ID int64 `json:"id"`
+			}
+			if json.Unmarshal([]byte(line[len("data: "):]), &t) == nil && r.takeTurn(t.ID) {
+				wg.Go(func() { r.runTurn(ctx, tok, t.ID) })
+			}
 		case strings.HasPrefix(line, "data: ") && event == "revoked":
 			return errRevoked
 		case line == "":
@@ -462,4 +481,15 @@ func (r *roomRun) heartbeat(ctx context.Context, tok string) {
 		case <-d.changed:
 		}
 	}
+}
+
+// takeTurn reports whether turn id is new to this room run.
+func (r *roomRun) takeTurn(id int64) bool {
+	r.agentMu.Lock()
+	defer r.agentMu.Unlock()
+	if id <= r.lastTurn {
+		return false
+	}
+	r.lastTurn = id
+	return true
 }

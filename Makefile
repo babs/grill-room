@@ -22,8 +22,10 @@ TRAEFIK_TEMPLATE := deploy/local/traefik-grill-room.yaml
 TRAEFIK_RULE      = $(TRAEFIK_RULES_DIR)/grill-room.yaml
 
 SANDBOX_IMAGE ?= grill-room-sandbox:local
+# The sandbox with a fake claude: agent turns end to end with no subscription use.
+SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: build build-daemons run test test-docker e2e e2e-voice stt-test stt-image cover lint docker-build sandbox-image fixtures dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: build build-daemons run test test-docker e2e e2e-voice stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image fixtures dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -42,9 +44,11 @@ run: build
 test:
 	go test -race -cover ./...
 
-# Sandbox tests against real Docker and a fake Anthropic upstream: no subscription use.
-test-docker: sandbox-image
-	GRILL_ROOM_TEST_DOCKER=1 GRILL_ROOM_SANDBOX_IMAGE=$(SANDBOX_IMAGE) go test -race -run 'Docker' ./internal/sandbox/
+# Sandbox and agent turn tests against real Docker, a fake Anthropic upstream and a fake claude:
+# no subscription use.
+test-docker: sandbox-image sandbox-fake-image
+	GRILL_ROOM_TEST_DOCKER=1 GRILL_ROOM_SANDBOX_IMAGE=$(SANDBOX_IMAGE) GRILL_ROOM_SANDBOX_FAKE_IMAGE=$(SANDBOX_FAKE_IMAGE) \
+	  go test -race -run 'Docker' ./internal/sandbox/ ./internal/daemon/
 
 # Browser tests against a fresh server, in the installed Chrome.
 e2e: build
@@ -80,6 +84,15 @@ docker-build:
 	  --build-arg BUILD_TIMESTAMP=$(BUILD_TS) \
 	  --build-arg PROJECT_URL=$(PROJECT_URL) \
 	  --build-arg PKG=$(PKG) .
+
+sandbox-fake-image: sandbox-image
+	docker build -t $(SANDBOX_FAKE_IMAGE) -f sandbox/Dockerfile.fake \
+	  --build-arg BASE=$(SANDBOX_IMAGE) \
+	  --build-arg VERSION=$(VERSION) \
+	  --build-arg COMMIT_HASH=$(COMMIT_HASH) \
+	  --build-arg BUILD_TIMESTAMP=$(BUILD_TS) \
+	  --build-arg PROJECT_URL=$(PROJECT_URL) \
+	  .
 
 sandbox-image:
 	docker build -t $(SANDBOX_IMAGE) \

@@ -1,0 +1,30 @@
+# Test-only sandbox: the real image with claude swapped for a test double (internal/sandbox/fakeclaude),
+# so turns run end to end with no subscription use. Never shipped. Build from the repo root.
+ARG BASE="grill-room-sandbox:local"
+
+FROM golang:1.26-bookworm AS builder
+WORKDIR /src
+COPY go.mod go.sum* ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /claude ./internal/sandbox/fakeclaude
+
+FROM ${BASE}
+
+ARG BUILD_TIMESTAMP="1970-01-01T00:00:00+00:00"
+ARG COMMIT_HASH="00000000-dirty"
+ARG PROJECT_URL="grill-room/sandbox-fake"
+ARG VERSION="v0.0.0"
+
+LABEL org.opencontainers.image.source=${PROJECT_URL}
+LABEL org.opencontainers.image.created=${BUILD_TIMESTAMP}
+LABEL org.opencontainers.image.version=${VERSION}
+LABEL org.opencontainers.image.revision=${COMMIT_HASH}
+
+ENV VERSION="${VERSION}" \
+    COMMIT_HASH="${COMMIT_HASH}" \
+    BUILD_TIMESTAMP="${BUILD_TIMESTAMP}" \
+    PROJECT_URL="${PROJECT_URL}"
+
+# The base image runs as the non-root agent user already.
+COPY --from=builder /claude /usr/local/bin/claude

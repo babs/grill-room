@@ -166,6 +166,8 @@ Credentials are read, never written: the macOS Keychain first (`security find-ge
 
 The sandbox holds no credential. It sits on an `--internal` Docker network whose only other member is a socat relay to the daemon's bearer-swap proxy. The proxy replaces the sandbox's dummy bearer with the real token. It listens on the default bridge gateway, or on `127.0.0.1` under Docker Desktop. The daemon writes a dummy `.credentials.json` and an `oauthAccount` stub before every turn and sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `ENABLE_CLAUDEAI_MCP_SERVERS=false` (spike S3). Containers, network and volumes carry the `grill-room-daemon` label and are removed when the sandbox closes.
 
+When someone presses the agent button, the room hands the turn to the host's daemon. The daemon fetches the job and the workspace tar, clears the sandbox's `/workspace` and unpacks the tar there. If the room's copy of the session differs from the local one, it fetches the room's copy. Then it runs `claude -p` with the prompt on stdin and `--resume` when the room has a session, and posts back the changed files, the final answer and the session bytes added. [docs/agent-workspace.md](docs/agent-workspace.md) has the workspace layout and the prompt contract. A turn is cancelled after the room's turn timeout. Each daemon keeps one sandbox per room, named from its state dir and the room, so a restart replaces what a crash left.
+
 `grill-room-daemon check` checks Docker and the credentials, runs `claude -p --model haiku "say ok"` in a throwaway sandbox, checks that only the proxy is reachable, and counts the real token's occurrences in the container, its volumes and its inspect output. It spends one Claude request.
 
 | Variable | Default | |
@@ -173,6 +175,7 @@ The sandbox holds no credential. It sits on an `--internal` Docker network whose
 | `GRILL_ROOM_DAEMON_STATE_DIR` | `<user config dir>/grill-room-daemon` | daemon tokens |
 | `GRILL_ROOM_DAEMON_BROWSER` | `auto` | `none` prints the page link instead of opening it |
 | `GRILL_ROOM_SANDBOX_IMAGE` | `grill-room-sandbox:local` | sandbox image, built by `make sandbox-image` |
+| `GRILL_ROOM_AGENT_MODEL` | Claude Code's default | `--model` for agent turns, e.g. `haiku` |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | where Claude Code keeps its credentials |
 | `LOG_LEVEL` | `info` | |
 
@@ -191,4 +194,4 @@ make dev-down   # removes the rule, stops compose
 
 ## Make targets
 
-`build` (server and daemon), `build-daemons` (daemon for linux and darwin, amd64 and arm64), `run`, `test` (race detector), `test-docker` (sandbox against real Docker and a fake Anthropic upstream, no Claude request), `e2e` (Playwright with the installed Chrome, needs pnpm and pandoc), `e2e-voice` (Playwright against the compose stack, with fake microphones; it kills and restarts the `stt` container), `stt-test` (ruff, mypy and pytest for the worker), `stt-image`, `cover`, `lint` (golangci-lint), `docker-build` (also tests the office fixtures against the pandoc it ships), `sandbox-image`, `fixtures` (regenerates them), `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`.
+`build` (server and daemon), `build-daemons` (daemon for linux and darwin, amd64 and arm64), `run`, `test` (race detector), `test-docker` (sandbox and agent turns against real Docker, a fake Anthropic upstream and a fake `claude`, no Claude request), `e2e` (Playwright with the installed Chrome, needs pnpm and pandoc), `e2e-voice` (Playwright against the compose stack, with fake microphones; it kills and restarts the `stt` container), `stt-test` (ruff, mypy and pytest for the worker), `stt-image`, `cover`, `lint` (golangci-lint), `docker-build` (also tests the office fixtures against the pandoc it ships), `sandbox-image`, `sandbox-fake-image` (the sandbox with `internal/sandbox/fakeclaude` as `claude`, for tests), `fixtures` (regenerates them), `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`.

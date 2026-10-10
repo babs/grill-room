@@ -116,6 +116,11 @@ type roomServer struct {
 
 func newRoomServer(t *testing.T) *roomServer {
 	t.Helper()
+	return newRoomServerOpts(t, web.Options{MaxUploadBytes: 1 << 20, MaxRoomBytes: 1 << 20, MaxAttachmentBytes: 1 << 20})
+}
+
+func newRoomServerOpts(t *testing.T, opts web.Options) *roomServer {
+	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "room.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -124,7 +129,7 @@ func newRoomServer(t *testing.T) *roomServer {
 	admin := web.NewToken()
 	ts := httptest.NewUnstartedServer(nil)
 	ts.Start()
-	ts.Config.Handler = web.New(bus.New(st), web.HashToken(admin), ts.URL, web.Options{MaxUploadBytes: 1 << 20, MaxRoomBytes: 1 << 20, MaxAttachmentBytes: 1 << 20}, zap.NewNop()).Handler()
+	ts.Config.Handler = web.New(bus.New(st), web.HashToken(admin), ts.URL, opts, zap.NewNop()).Handler()
 	t.Cleanup(ts.Close)
 	rs := &roomServer{ts: ts, st: st, admin: admin}
 	var room store.Room

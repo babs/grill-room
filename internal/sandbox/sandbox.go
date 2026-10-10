@@ -191,12 +191,12 @@ func (s *Sandbox) remove(ctx context.Context) {
 
 // Request is one claude -p invocation.
 type Request struct {
+	// Prompt goes on stdin: argv caps one argument at 128 KiB, a turn's transcript can exceed it.
 	Prompt string
 	Model  string
 	// Resume is the session id to continue; empty starts a new session.
 	Resume string
-	// Args go after the prompt: --allowedTools is variadic and would swallow a prompt after it (S2).
-	Args []string
+	Args   []string
 }
 
 // Result is claude's --output-format json answer.
@@ -212,21 +212,32 @@ type Result struct {
 func (s *Sandbox) RunClaude(ctx context.Context, req Request) (*Result, error) {
 	s.turn.Lock()
 	defer s.turn.Unlock()
-	expired := fmt.Errorf("%w on %s", ErrCredentialsExpired, s.cfg.Host)
+	if err := s.prepare(ctx); err != nil {
+		return nil, err
+	}
+	return s.runClaude(ctx, req)
+}
+
+func (s *Sandbox) expired() error { return fmt.Errorf("%w on %s", ErrCredentialsExpired, s.cfg.Host) }
+
+// prepare checks the host's token, starts the sandbox and refreshes its stubs.
+func (s *Sandbox) prepare(ctx context.Context) error {
 	tok, err := s.src.Get(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("Claude credentials unavailable on %s: %w", s.cfg.Host, err) //nolint:staticcheck // shown to users as is
+		return fmt.Errorf("Claude credentials unavailable on %s: %w", s.cfg.Host, err) //nolint:staticcheck // shown to users as is
 	}
 	if tok.Expired(time.Now()) {
-		return nil, expired
+		return s.expired()
 	}
 	if err := s.Start(ctx); err != nil {
-		return nil, err
+		return err
 	}
-	if err := s.writeStubs(ctx); err != nil {
-		return nil, err
-	}
-	args := []string{"exec", s.container(), "claude", "-p", req.Prompt, "--output-format", "json"}
+	return s.writeStubs(ctx)
+}
+
+// runClaude runs claude -p in the started sandbox; the caller holds s.turn.
+func (s *Sandbox) runClaude(ctx context.Context, req Request) (*Result, error) {
+	args := []string{"exec", "-i", s.container(), "claude", "-p", "--output-format", "json"}
 	if req.Model != "" {
 		args = append(args, "--model", req.Model)
 	}
@@ -235,7 +246,7 @@ func (s *Sandbox) RunClaude(ctx context.Context, req Request) (*Result, error) {
 	}
 	args = append(args, req.Args...)
 	before := s.proxy.Unauthorized()
-	out, runErr := s.run(ctx, nil, args...)
+	out, runErr := s.run(ctx, strings.NewReader(req.Prompt), args...)
 	if ctx.Err() != nil {
 		// Killing the docker exec client leaves claude running in the container.
 		kctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -247,7 +258,7 @@ func (s *Sandbox) RunClaude(ctx context.Context, req Request) (*Result, error) {
 	jsonErr := json.Unmarshal(out, &res)
 	if runErr != nil || jsonErr != nil || res.IsError {
 		if s.proxy.Unauthorized() > before {
-			return nil, expired
+			return nil, s.expired()
 		}
 		if runErr != nil {
 			return nil, fmt.Errorf("claude: %w", runErr)
