@@ -63,25 +63,30 @@ type Upload struct {
 	Text string
 }
 
-// RoomUploadBytes returns the total size of a room's originals.
-func (s *Store) RoomUploadBytes(ctx context.Context, roomID string) (int64, error) {
-	return roomUploadBytes(ctx, s.db, roomID)
+// RoomBytes returns what a room's blobs weigh: upload originals plus annotation attachments.
+func (s *Store) RoomBytes(ctx context.Context, roomID string) (int64, error) {
+	return roomBytes(ctx, s.db, roomID)
 }
 
 type queryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-func roomUploadBytes(ctx context.Context, db queryer, roomID string) (int64, error) {
+func roomBytes(ctx context.Context, db queryer, roomID string) (int64, error) {
 	var used int64
-	if err := db.QueryRowContext(ctx, `SELECT COALESCE(SUM(size), 0) FROM uploads WHERE room_id = ?`, roomID).Scan(&used); err != nil {
-		return 0, fmt.Errorf("room upload bytes: %w", err)
+	err := db.QueryRowContext(ctx, `
+		SELECT (SELECT COALESCE(SUM(size), 0) FROM uploads WHERE room_id = ?)
+			+ (SELECT COALESCE(SUM(t.size), 0) FROM attachments t
+				JOIN annotation_messages m ON m.id = t.message_id
+				JOIN annotations a ON a.id = m.annotation_id WHERE a.room_id = ?)`, roomID, roomID).Scan(&used)
+	if err != nil {
+		return 0, fmt.Errorf("room bytes: %w", err)
 	}
 	return used, nil
 }
 
 // AddUpload stores the original and its document in one transaction. ErrRoomFull if the room's
-// originals would then exceed maxRoomBytes; ErrNotFound if the room is gone.
+// blobs would then exceed maxRoomBytes; ErrNotFound if the room is gone.
 func (s *Store) AddUpload(ctx context.Context, u *Upload, maxRoomBytes int64) (*Document, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -89,7 +94,7 @@ func (s *Store) AddUpload(ctx context.Context, u *Upload, maxRoomBytes int64) (*
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
 	// Checked inside the transaction: the single connection serialises it with concurrent uploads.
-	used, err := roomUploadBytes(ctx, tx, u.RoomID)
+	used, err := roomBytes(ctx, tx, u.RoomID)
 	if err != nil {
 		return nil, fmt.Errorf("add upload: %w", err)
 	}
@@ -157,19 +162,20 @@ func (s *Store) CreateAgentDocument(ctx context.Context, roomID, name, format, b
 	return d, nil
 }
 
-// AddRevision appends body as the next revision of an agent document of room. ErrReadOnly for an
-// upload, ErrNotFound if the document is not in room.
+// AddRevision appends body as the next revision of an agent document of room and re-anchors the
+// document's annotations on it. ErrReadOnly for an upload, ErrNotFound if the document is not in
+// room.
 func (s *Store) AddRevision(ctx context.Context, roomID string, docID int64, body, author string) (*Revision, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("add revision: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
-	var kind string
+	var kind, format string
 	var last int
 	err = tx.QueryRowContext(ctx, `
-		SELECT d.kind, COALESCE((SELECT MAX(n) FROM revisions WHERE document_id = d.id), 0)
-		FROM documents d WHERE d.id = ? AND d.room_id = ?`, docID, roomID).Scan(&kind, &last)
+		SELECT d.kind, d.format, COALESCE((SELECT MAX(n) FROM revisions WHERE document_id = d.id), 0)
+		FROM documents d WHERE d.id = ? AND d.room_id = ?`, docID, roomID).Scan(&kind, &format, &last)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -181,6 +187,9 @@ func (s *Store) AddRevision(ctx context.Context, roomID string, docID int64, bod
 	}
 	r, err := insertRevision(ctx, tx, docID, last+1, body, author)
 	if err != nil {
+		return nil, err
+	}
+	if err := reanchor(ctx, tx, docID, format, r.N, body); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

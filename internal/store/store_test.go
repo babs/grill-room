@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/babs/grill-room/internal/anchor"
 )
 
 func openTest(t *testing.T) *Store {
@@ -20,8 +22,8 @@ func openTest(t *testing.T) *Store {
 	return s
 }
 
-// seed creates a room with an invite, a participant, a text message, an upload and an agent
-// document with two revisions.
+// seed creates a room with an invite, a participant, a text message, an upload, an agent
+// document with two revisions, and an annotation with a message carrying an image.
 func seed(t *testing.T, s *Store, room string) *Participant {
 	t.Helper()
 	ctx := context.Background()
@@ -47,6 +49,10 @@ func seed(t *testing.T, s *Store, room string) *Participant {
 		t.Fatal(err)
 	}
 	if _, err := s.AddRevision(ctx, room, d.ID, "v2", "agent"); err != nil {
+		t.Fatal(err)
+	}
+	msg := &NewMessage{ParticipantID: p.ID, Author: p.Name, Body: "see", Attachments: []Attachment{{ContentType: "image/png", Data: []byte("png")}}}
+	if _, err := s.CreateAnnotation(ctx, room, d.ID, 2, &anchor.Anchor{Kind: anchor.KindText, Exact: "v2"}, msg, 1<<20); err != nil {
 		t.Fatal(err)
 	}
 	return p
@@ -202,20 +208,28 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 	ctx := context.Background()
 	seed(t, s, "a")
 	seed(t, s, "b")
-	countRevisions := func() int {
+	// These reach rooms through another table, so roomRows cannot see them.
+	indirect := []string{"revisions", "annotation_messages", "attachments"}
+	count := func(table string) int {
 		var n int
-		if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM revisions`).Scan(&n); err != nil {
+		if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM "`+table+`"`).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		return n
 	}
-	perRoom := countRevisions() / 2
+	perRoom := map[string]int{}
+	for _, tb := range indirect {
+		if perRoom[tb] = count(tb) / 2; perRoom[tb] == 0 {
+			t.Fatalf("seed wrote no %s", tb)
+		}
+	}
 	if err := s.DeleteRoom(ctx, "a"); err != nil {
 		t.Fatal(err)
 	}
-	// revisions reach rooms through documents, so roomRows cannot see them.
-	if n := countRevisions(); n != perRoom {
-		t.Errorf("revisions: %d left, want the other room's %d", n, perRoom)
+	for _, tb := range indirect {
+		if n := count(tb); n != perRoom[tb] {
+			t.Errorf("%s: %d left, want the other room's %d", tb, n, perRoom[tb])
+		}
 	}
 	for table, n := range roomRows(t, s, "a") {
 		if n != 0 {

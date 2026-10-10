@@ -191,7 +191,7 @@ func (s *Server) uploadDocument(w http.ResponseWriter, r *http.Request, sess ses
 		return
 	}
 	// Early answer for a full room, before pandoc spends its time; AddUpload re-checks atomically.
-	used, err := s.bus.Store.RoomUploadBytes(r.Context(), sess.p.RoomID)
+	used, err := s.bus.Store.RoomBytes(r.Context(), sess.p.RoomID)
 	if err != nil {
 		s.serverError(w, "upload_failed", err)
 		return

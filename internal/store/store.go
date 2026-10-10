@@ -136,6 +136,40 @@ CREATE TABLE revisions (
 	created_at TEXT NOT NULL,
 	UNIQUE (document_id, n)
 );
+`, `
+CREATE TABLE annotations (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+	revision INTEGER NOT NULL,
+	anchor TEXT,
+	orphaned INTEGER NOT NULL DEFAULT 0 CHECK (orphaned IN (0, 1)),
+	status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'done', 'reopened')),
+	version INTEGER NOT NULL DEFAULT 1,
+	created_at TEXT NOT NULL
+);
+CREATE INDEX annotations_document ON annotations(document_id);
+CREATE INDEX annotations_room ON annotations(room_id);
+CREATE TABLE annotation_messages (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	annotation_id INTEGER NOT NULL REFERENCES annotations(id) ON DELETE CASCADE,
+	author_kind TEXT NOT NULL CHECK (author_kind IN ('participant', 'agent')),
+	participant_id INTEGER REFERENCES participants(id) ON DELETE CASCADE,
+	author TEXT NOT NULL,
+	body TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	CHECK ((author_kind = 'participant') = (participant_id IS NOT NULL))
+);
+CREATE INDEX annotation_messages_annotation ON annotation_messages(annotation_id, id);
+CREATE TABLE attachments (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	message_id INTEGER NOT NULL REFERENCES annotation_messages(id) ON DELETE CASCADE,
+	content_type TEXT NOT NULL,
+	size INTEGER NOT NULL,
+	data BLOB NOT NULL,
+	created_at TEXT NOT NULL
+);
+CREATE INDEX attachments_message ON attachments(message_id);
 `}
 
 // Open opens (and migrates) the database at path.
