@@ -25,7 +25,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: build release run test test-docker e2e e2e-voice e2e-agent-live stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push fixtures dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: build release run test test-docker e2e e2e-voice e2e-agent-live e2e-install stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push fixtures dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -73,6 +73,12 @@ e2e-voice:
 # Spends about six real Claude requests (haiku) with this machine's Claude Code login.
 e2e-agent-live: build
 	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c agent-live/playwright.config.js
+
+# The one-liner on a clean Debian container, pairing, self-update and tampered releases against the
+# compose stack: run `make dev-up` first. Copies releases into the grill-room container and
+# recreates it at the end. No Claude request.
+e2e-install:
+	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c install/playwright.config.js
 
 # STT worker: lint, types and unit tests. The e2e-marked test runs too once the model is in the
 # Hugging Face cache, and skips otherwise.
