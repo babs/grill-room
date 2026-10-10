@@ -265,7 +265,7 @@ What gets deployed, with `<domain>` standing for `K8S_DOMAIN`:
 
 - The room server runs one replica with a `Recreate` strategy. SQLite has one writer, on a 2 GiB volume. Probes hit `/healthz`, and `/metrics` is on 7681.
 - LiveKit exposes no UDP. Browsers relay through TURN/TLS on 443. `allow_restricted_peer_cidrs` lists only the pod's own IP, where the relay hands media to the SFU.
-- The STT worker requests 2 CPUs and may burst to 4, with 1.5 GiB. The model runs on 3 threads, leaving a CPU to the VAD and LiveKit.
+- The STT worker requests 2 CPUs and may burst to 4, with 1.5 GiB. The model runs on 3 threads, leaving a CPU to the VAD and LiveKit. It updates with `Recreate`: no lab node has 2 CPUs free for a second worker beside the old one, so transcription stops for the minute a new pod takes to load the model.
 - Every pod runs as non-root with a read-only root filesystem, no service account token and no service links.
 - A default-deny NetworkPolicy blocks everything, then one policy per flow opens DNS, traefik to the room server and LiveKit, the worker to both, the room server to LiveKit's API, media between LiveKit and the worker, and the worker's traces to the cluster's OpenTelemetry collector (a Kyverno policy there injects `OTEL_EXPORTER_OTLP_ENDPOINT` into every pod).
 - The Secret `grill-room` comes from the same `.env` keys compose uses.

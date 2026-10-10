@@ -10,6 +10,9 @@ metadata:
     app.kubernetes.io/part-of: grill-room
 spec:
   replicas: 1
+  # A rolling update cannot schedule: no node has 2 CPUs free for a second worker beside the old one.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: stt
