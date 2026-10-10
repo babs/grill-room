@@ -4,7 +4,7 @@
 # Output: $OUT/<name>.out (claude stdout+stderr), $OUT/<name>.pcap.txt (non-proxy packets).
 set -euo pipefail
 name=$1 net=$2 vol=$3; shift 3
-G=/home/babs/devel/misc/grill-room
+G=$(cd "$(dirname "$0")/../.." && pwd)
 OUT=${OUT:-$G/.scratchpad/logs}
 HOME_DIR=${HOME_DIR:-/home/agent}
 WORKDIR=${WORKDIR:-/workspace}

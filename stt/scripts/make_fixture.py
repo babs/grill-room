@@ -61,7 +61,7 @@ def main() -> None:
     utts, t = [], LEAD_S
     for lang, (name, audio, text) in zip(["fr", "en", "fr", "en"], [fr[0], en[0], fr[1], en[1]], strict=True):
         # Some FLEURS takes peak at -40 dBFS; browsers apply AGC, so normalise like a live mic.
-        audio = audio * (PEAK / max(float(np.abs(audio).max()), 1e-6))
+        audio = (audio * (PEAK / max(float(np.abs(audio).max()), 1e-6))).astype(np.float32)
         # Trim the take's own edge silence: "end" must be the end of speech, which latency counts from.
         loud = np.flatnonzero(np.abs(audio) > PEAK * 0.05)
         audio = audio[loud[0] : loud[-1] + 1]

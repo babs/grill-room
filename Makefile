@@ -57,7 +57,7 @@ e2e-voice:
 # STT worker: lint, types and unit tests. The e2e-marked test runs too once the model is in the
 # Hugging Face cache, and skips otherwise.
 stt-test:
-	cd stt && uv run ruff check . && uv run ruff format --check . && uv run mypy grill_stt tests && uv run pytest
+	cd stt && uv run ruff check . && uv run ruff format --check . && uv run mypy grill_stt tests scripts && uv run pytest
 
 stt-image:
 	docker build -t grill-stt:local \
