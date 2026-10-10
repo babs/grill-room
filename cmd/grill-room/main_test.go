@@ -1,0 +1,60 @@
+package main
+
+import (
+	"path/filepath"
+	"testing"
+
+	"github.com/babs/grill-room/internal/store"
+	"github.com/babs/grill-room/internal/web"
+)
+
+func TestConfigValidate(t *testing.T) {
+	ok := Config{Addr: "a:1", MetricsAddr: "a:2", DB: "x.db", LogLevel: "info", LogFormat: "auto"}
+	cases := map[string]func(*Config){
+		"same addr":  func(c *Config) { c.MetricsAddr = c.Addr },
+		"empty db":   func(c *Config) { c.DB = "" },
+		"bad level":  func(c *Config) { c.LogLevel = "loud" },
+		"bad format": func(c *Config) { c.LogFormat = "xml" },
+	}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("valid config: %v", err)
+	}
+	for name, mutate := range cases {
+		c := ok
+		mutate(&c)
+		if err := c.Validate(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestAdminTokenHash(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := t.Context()
+
+	hash, generated, err := adminTokenHash(ctx, st, "")
+	if err != nil || generated == "" || hash != web.HashToken(generated) {
+		t.Fatalf("first start: %q %q %v", hash, generated, err)
+	}
+	stored, _ := st.Setting(ctx, adminTokenSetting)
+	if stored != hash {
+		t.Fatal("hash not persisted")
+	}
+	// Second start: same hash, nothing to show.
+	hash2, generated2, err := adminTokenHash(ctx, st, "")
+	if err != nil || hash2 != hash || generated2 != "" {
+		t.Fatalf("restart: %q %q %v", hash2, generated2, err)
+	}
+	// The environment wins and does not touch the stored hash.
+	hash3, generated3, err := adminTokenHash(ctx, st, "pinned")
+	if err != nil || hash3 != web.HashToken("pinned") || generated3 != "" {
+		t.Fatalf("env: %q %q %v", hash3, generated3, err)
+	}
+	if stored, _ := st.Setting(ctx, adminTokenSetting); stored != hash {
+		t.Fatal("env token overwrote the stored hash")
+	}
+}

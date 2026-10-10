@@ -1,0 +1,18 @@
+# Template for the local traefik file provider. `make traefik-install` renders ${DEV_DOMAIN} and
+# ${GRILL_ROOM_PORT} from .env into the rules directory; `make traefik-uninstall` removes it.
+# TLS uses the websecure entrypoint's default certificate (the dev-domain wildcard).
+# livekit.${DEV_DOMAIN} is reserved for the LiveKit route.
+http:
+  routers:
+    grill-room:
+      rule: "Host(`grill-room.${DEV_DOMAIN}`)"
+      entryPoints:
+        - websecure
+      service: grill-room
+      tls: {}
+
+  services:
+    grill-room:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:${GRILL_ROOM_PORT}/"

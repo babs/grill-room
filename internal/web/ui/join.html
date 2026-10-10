@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>grill-room</title>
+<link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/join.js" defer></script>
+</head>
+<body class="join">
+<main class="card">
+  <img src="/static/logo.svg" alt="" class="logo" width="96" height="96">
+  <h1>grill-room</h1>
+  <form id="join" hidden>
+    <label for="name">Your name, as the others will see it</label>
+    <input id="name" maxlength="40" autocomplete="name" required autofocus>
+    <button type="submit">Join the room</button>
+  </form>
+  <p id="status" role="status"></p>
+</main>
+</body>
+</html>

@@ -1,0 +1,17 @@
+# Local dev. The local traefik reaches the app through host.docker.internal, the docker bridge
+# gateway: `make dev-up` sets GRILL_ROOM_BIND to it. Plain `docker compose up` binds loopback only.
+services:
+  grill-room:
+    build: .
+    image: grill-room:local
+    environment:
+      GRILL_ROOM_URL: https://grill-room.${DEV_DOMAIN:?set DEV_DOMAIN in .env}
+    ports:
+      - "${GRILL_ROOM_BIND:-127.0.0.1}:${GRILL_ROOM_PORT:-7680}:7680"
+      - "127.0.0.1:${GRILL_ROOM_METRICS_PORT:-7681}:7681"
+    volumes:
+      - grill-room-data:/data
+    restart: unless-stopped
+
+volumes:
+  grill-room-data:

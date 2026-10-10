@@ -1,3 +1,11 @@
 .scratchpad/
 *.annotations.json5
 *.annotations.d/
+bin/
+coverage.txt
+.env
+*.db
+*.db-*
+e2e/node_modules/
+e2e/test-results/
+e2e/playwright-report/

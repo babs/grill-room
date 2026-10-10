@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>grill-room</title>
+<link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/room.js" defer></script>
+</head>
+<body class="room">
+<header>
+  <img src="/static/logo.svg" alt="" class="logo" width="32" height="32">
+  <h1 id="room-name">grill-room</h1>
+  <span id="me"></span>
+</header>
+<p id="banner" role="alert" hidden></p>
+<div class="layout">
+  <aside>
+    <h2>Participants</h2>
+    <ul id="participants"></ul>
+  </aside>
+  <section class="chat">
+    <ol id="messages" aria-live="polite"></ol>
+    <form id="send">
+      <textarea id="body" rows="2" maxlength="4000" placeholder="Write a message. Enter sends, Shift+Enter adds a line." aria-label="Message"></textarea>
+      <button type="submit">Send</button>
+    </form>
+  </section>
+</div>
+</body>
+</html>
