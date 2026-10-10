@@ -66,7 +66,7 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `POST /api/join` | invite token in the body | returns a participant token and sets a cookie |
 | `GET /api/rooms/{room}` | participant | room, me, participants |
 | `POST /api/rooms/{room}/messages` | participant | post a text message |
-| `GET /api/rooms/{room}/events` | participant | SSE: history then live messages; resumes from `Last-Event-ID`; a `documents` event when a document or revision is added, an `annotations` event when an annotation is added or changes; an `agent` event with the agent state (`host_participant_id`, `online`, `reason`, last `turn`, `can_trigger`, connected `daemons`) at open and on every change; with voice on, an `stt` event (`available`, `listening`) at open and on every change |
+| `GET /api/rooms/{room}/events` | participant | SSE: history then live messages; resumes after `?since=<id>` or `Last-Event-ID`; a `documents` event when a document or revision is added, an `annotations` event when an annotation is added or changes; an `agent` event with the agent state (`host_participant_id`, `online`, `reason`, last `turn`, `can_trigger`, connected `daemons`) at open and on every change; with voice on, an `stt` event (`available`, `listening`) at open and on every change |
 | `GET /api/rooms/{room}/agent` | participant | the agent state, as in the `agent` event |
 | `POST /api/rooms/{room}/turns` | host, or a participant the host allowed | the agent button: `fresh` (host only) starts a new session; 409 `turn in progress` while one runs, 409 when no host daemon is connected |
 | `PUT /api/rooms/{room}/host` | host | hand over: `participant_id` of a participant whose daemon is connected and can host |

@@ -7,13 +7,20 @@ const messages = $('messages');
 const sendForm = $('send');
 const bodyInput = $('body');
 let events;
+// lastID is the newest message shown: a reopened stream resumes after it.
+let lastID = 0;
+let retryTimer;
+let ended = false;
 let refreshTimer;
 let wasIn = false;
 let participants = [];
 let myID = '';
 
 function end(text) {
+  ended = true;
+  clearTimeout(retryTimer);
   if (events) events.close();
+  $('reconnecting').hidden = true;
   leaveVoice();
   $('voice').hidden = true;
   $('banner').textContent = text;
@@ -45,6 +52,17 @@ async function loadRoom() {
   return true;
 }
 
+// The list shrinks under a keyboard, a toolbar or a wrapping header: keep the newest message in
+// view when it was. Only a scroll up unpins, as scroll events land after the layout changed.
+let pinned = true;
+let lastTop = 0;
+messages.addEventListener('scroll', () => {
+  if (messages.scrollTop + messages.clientHeight >= messages.scrollHeight - 40) pinned = true;
+  else if (messages.scrollTop < lastTop) pinned = false;
+  lastTop = messages.scrollTop;
+});
+new ResizeObserver(() => { if (pinned) messages.scrollTop = messages.scrollHeight; }).observe(messages);
+
 function addMessage(m) {
   const li = document.createElement('li');
   li.className = 'msg ' + m.kind;
@@ -75,9 +93,8 @@ function addMessage(m) {
     body.textContent = m.body;
     li.append(meta, body);
   }
-  const atBottom = messages.scrollTop + messages.clientHeight >= messages.scrollHeight - 40;
   messages.append(li);
-  if (atBottom) messages.scrollTop = messages.scrollHeight;
+  if (pinned) messages.scrollTop = messages.scrollHeight;
 }
 
 // Documents. Text documents render in an iframe sandboxed without allow-same-origin: their
@@ -465,25 +482,60 @@ $('upload-input').addEventListener('change', (e) => {
   if (file) upload(file).catch((err) => { $('upload-status').textContent = 'Upload failed.'; console.error(err); });
 });
 
+// connect opens the event stream, replacing any previous one. A new EventSource cannot send
+// Last-Event-ID, so it resumes with ?since=.
 function connect() {
-  events = new EventSource(api + '/events');
-  events.onmessage = (e) => addMessage(JSON.parse(e.data));
+  clearTimeout(retryTimer);
+  if (events) events.close();
+  if (ended) return;
+  const es = new EventSource(api + '/events' + (lastID ? '?since=' + lastID : ''));
+  events = es;
+  es.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.id <= lastID) return;
+    lastID = m.id;
+    addMessage(m);
+  };
   // Listing on open, not before: the stream announces only changes made after it opened.
-  events.onopen = () => loadDocuments().catch(console.error);
-  events.addEventListener('documents', () => loadDocuments().catch(console.error));
-  events.addEventListener('annotations', () => loadAnnotations().catch(console.error));
-  events.addEventListener('revoked', () => end('Your access to this room has ended.'));
-  events.addEventListener('stt', (e) => showSTT(JSON.parse(e.data)));
-  events.addEventListener('agent', (e) => {
+  es.onopen = () => {
+    $('reconnecting').hidden = true;
+    loadDocuments().then(loadAnnotations).catch(console.error);
+  };
+  es.addEventListener('documents', () => loadDocuments().catch(console.error));
+  es.addEventListener('annotations', () => loadAnnotations().catch(console.error));
+  es.addEventListener('revoked', () => end('Your access to this room has ended.'));
+  es.addEventListener('stt', (e) => showSTT(JSON.parse(e.data)));
+  es.addEventListener('agent', (e) => {
     agent = JSON.parse(e.data);
     renderAgent();
     renderParticipants();
   });
-  events.onerror = () => {
-    // CLOSED means the browser gave up (a 401 on reconnect); otherwise it retries by itself.
-    if (events.readyState === EventSource.CLOSED) loadRoom().catch(console.error);
+  es.onerror = () => {
+    if (es !== events) return;
+    $('reconnecting').hidden = false;
+    // CLOSED: the browser gave up, on a 401 or on the proxy's error page during a redeploy. It
+    // retries by itself otherwise.
+    if (es.readyState === EventSource.CLOSED) retryTimer = setTimeout(resume, 3000);
   };
 }
+
+// resume reloads the room, then reopens the stream from the last message held. A failed load
+// (the server is still down) retries.
+function resume() {
+  clearTimeout(retryTimer);
+  if (ended) return;
+  loadRoom().then((ok) => { if (ok) connect(); }).catch((err) => {
+    console.error(err);
+    if (!ended) retryTimer = setTimeout(resume, 3000);
+  });
+}
+
+// A phone suspends a background page's stream, and the page may come back holding one that looks
+// open but delivers nothing: reopen it whenever the page returns.
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && events) resume(); });
+window.addEventListener('pageshow', (e) => { if (e.persisted && events) resume(); });
+window.addEventListener('online', () => { if (events) resume(); });
+window.addEventListener('focus', () => { if (events && events.readyState !== EventSource.OPEN) resume(); });
 
 // Agent. The host's daemon runs it: the LED is green only while that daemon is connected and can
 // host (D8). The host, and the participants the host allows, can press the button (D18).
@@ -837,6 +889,18 @@ async function showHostAgent() {
     navigator.clipboard.writeText(oneLiner).then(() => { $('host-copy').textContent = 'Copied'; }, console.error);
   });
   $('host-agent').hidden = false;
+}
+
+function fitViewport() {
+  // A pinch zoom also shrinks the visual viewport: only the keyboard and toolbars should resize.
+  if (Math.abs(visualViewport.scale - 1) > 0.01) return;
+  document.body.style.setProperty('--vv-height', visualViewport.height + 'px');
+  document.body.style.setProperty('--vv-top', visualViewport.offsetTop + 'px');
+}
+if (window.visualViewport) {
+  visualViewport.addEventListener('resize', fitViewport);
+  visualViewport.addEventListener('scroll', fitViewport);
+  fitViewport();
 }
 
 loadRoom().then((ok) => {

@@ -36,7 +36,7 @@ input, textarea {
 input:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
 
 /* Join page */
-body.join { min-height: 100vh; display: grid; place-items: center; padding: 1rem; }
+body.join { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 1rem; }
 .card {
   width: min(24rem, 100%);
   padding: 2rem;
@@ -50,7 +50,18 @@ body.join { min-height: 100vh; display: grid; place-items: center; padding: 1rem
 #status { color: var(--muted); min-height: 1.2em; }
 
 /* Room page */
-body.room { height: 100vh; display: flex; flex-direction: column; }
+/* --vv-* follow the visual viewport (room.js): iOS Safari lays the keyboard over the page without
+   resizing it, so only they keep the message box above the keyboard. */
+body.room {
+  position: fixed;
+  top: var(--vv-top, 0);
+  left: 0;
+  right: 0;
+  height: 100vh;
+  height: var(--vv-height, 100dvh);
+  display: flex;
+  flex-direction: column;
+}
 header {
   display: flex;
   align-items: center;
@@ -76,6 +87,7 @@ header h1 { font-size: 1.1rem; flex: 1; }
 #stt-status.down { padding: 0.15rem 0.5rem; border-radius: 6px; background: var(--amber); color: var(--ink); }
 #voice-error { margin: 0; padding: 0.4rem 1rem; background: #fbe4e2; color: #b3261e; }
 #banner { margin: 0; padding: 0.6rem 1rem; background: var(--amber); }
+#reconnecting { margin: 0; padding: 0.2rem 1rem; background: var(--amber); font-size: 0.85rem; }
 #pairing { margin: 0; padding: 0.6rem 1rem; border-bottom: 1px solid var(--line); }
 #pairing h2 { margin: 0 0 0.3rem; font-size: 1rem; }
 #pairing p { margin: 0 0 0.5rem; }

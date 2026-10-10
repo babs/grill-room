@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, devices } from '@playwright/test';
 import { join as joinPath } from 'node:path';
 import { createRoom, invite, join, joinAudio, inboundAudio, launch, admin, fixture } from '../voice/helpers.js';
 import { upload, annotateSelection, pairDaemon, liveDaemon, messagesRequests, removeSandbox, ask } from '../helpers.js';
@@ -116,5 +116,44 @@ test('audio on the lab with default ICE', async ({ request }) => {
     await request.delete(`/api/rooms/${room.id}`, { headers: admin });
     await aliceBrowser.close();
     await bobBrowser.close();
+  }
+});
+
+// Live delivery through the lab ingress (HTTP/2), on a page emulating a phone: a message typed by
+// one participant shows on the other's page without a reload, also after the page comes back from
+// the background. No daemon, no Claude request.
+test('messages reach a phone page live on the lab', async ({ request }) => {
+  const browser = await launch();
+  const room = await createRoom(request, 'Lab live');
+  try {
+    const alice = await join(browser, await invite(request, room.id), 'Alice');
+    const bob = await join(browser, await invite(request, room.id), 'Bob');
+    const { defaultBrowserType, ...pixel } = devices['Pixel 7'];
+    const phone = await browser.newContext(pixel);
+    const inv = new URL((await invite(request, room.id)).url);
+    const carol = await phone.newPage();
+    await carol.goto(inv.pathname + inv.hash);
+    await carol.getByLabel('Your name').fill('Carol');
+    await carol.getByRole('button', { name: 'Join the room' }).click();
+    await expect(carol.locator('#messages')).toContainText('Carol joined');
+
+    const say = async (page, text) => {
+      await page.getByLabel('Message').fill(text);
+      await page.getByLabel('Message').press('Enter');
+    };
+    await say(bob, 'live one');
+    await expect(carol.locator('#messages')).toContainText('live one', { timeout: 3000 });
+    await expect(alice.locator('#messages')).toContainText('live one', { timeout: 3000 });
+
+    await carol.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await say(alice, 'live two');
+    await expect(carol.locator('#messages')).toContainText('live two', { timeout: 3000 });
+    await expect(carol.locator('.msg', { hasText: 'live one' })).toHaveCount(1);
+  } finally {
+    await request.delete(`/api/rooms/${room.id}`, { headers: admin });
+    await browser.close();
   }
 });
