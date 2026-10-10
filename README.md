@@ -104,6 +104,16 @@ The document frame has no room credential, so it cannot call the API. It tells t
 
 `store.AnnotationsSince` is the read for the agent's turn: every thread with a message past a cursor, with its image bytes.
 
+## Voice
+
+With `GRILL_ROOM_LIVEKIT_URL` set, the room page shows a Join audio button. Each grill room maps to one LiveKit room named after the room id. A participant joins it under their participant id with their display name, and may publish their microphone only. The participant list shows who is in the audio, a dot that lights while LiveKit reports them speaking, red when muted, and a volume slider per remote participant.
+
+The server hands out LiveKit tokens valid for 5 minutes, and LiveKit refreshes them for connected clients. LiveKit has no way to revoke a token. So when an invite is revoked, the server also removes its participants from the LiveKit room, and deleting a room closes its LiveKit room. A revoked participant could still rejoin with a token minted before the revoke, until it expires.
+
+Media needs no published UDP port (spike S4): ICE runs over TCP 7881, or TURN over TLS on 443, where traefik terminates TLS and routes `turn.<dev-domain>` by SNI to LiveKit's plain TURN port.
+
+The room page shows "Transcribing" while an STT worker is in its audio, and "Transcription unavailable" when no worker has sent a heartbeat for 15 s. Audio and text keep working meanwhile.
+
 ## Host daemon
 
 `grill-room-daemon` runs on a participant's machine: Linux, macOS, or Windows inside WSL with the Linux build. It runs the agent with that participant's own Claude Code login, in a Docker sandbox.
@@ -142,8 +152,8 @@ make dev-up     # renders deploy/local/traefik-grill-room.yaml into the rules di
 make dev-down   # removes the rule, stops compose
 ```
 
-`make dev-up` publishes the app port on the docker bridge gateway only, which is where traefik's `host.docker.internal` points, so the plain-HTTP port stays off the LAN. The room is then at `https://grill-room.<dev-domain>/`. Read the admin token with `docker compose logs grill-room | grep admin_token_generated`.
+`make dev-up` publishes the app port and LiveKit's 7880 and 5349 on the docker bridge gateway only, which is where traefik's `host.docker.internal` points, so the plain-HTTP ports stay off the LAN. The room is then at `https://grill-room.<dev-domain>/`, LiveKit signalling at `livekit.<dev-domain>` and TURN at `turn.<dev-domain>`. Compose needs the LiveKit key pair and the STT token in `.env`. With `GRILL_ROOM_ADMIN_TOKEN` set there, that is the admin token; otherwise read the generated one with `docker compose logs grill-room | grep admin_token_generated`.
 
 ## Make targets
 
-`build` (server and daemon), `build-daemons` (daemon for linux and darwin, amd64 and arm64), `run`, `test` (race detector), `test-docker` (sandbox against real Docker and a fake Anthropic upstream, no Claude request), `e2e` (Playwright with the installed Chrome, needs pnpm and pandoc), `cover`, `lint` (golangci-lint), `docker-build` (also tests the office fixtures against the pandoc it ships), `sandbox-image`, `fixtures` (regenerates them), `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`.
+`build` (server and daemon), `build-daemons` (daemon for linux and darwin, amd64 and arm64), `run`, `test` (race detector), `test-docker` (sandbox against real Docker and a fake Anthropic upstream, no Claude request), `e2e` (Playwright with the installed Chrome, needs pnpm and pandoc), `e2e-voice` (Playwright against the compose stack, with fake microphones), `cover`, `lint` (golangci-lint), `docker-build` (also tests the office fixtures against the pandoc it ships), `sandbox-image`, `fixtures` (regenerates them), `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`.

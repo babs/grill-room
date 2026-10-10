@@ -1,16 +1,49 @@
-# Local dev. The local traefik reaches the app through host.docker.internal, the docker bridge
-# gateway: `make dev-up` sets GRILL_ROOM_BIND to it. Plain `docker compose up` binds loopback only.
+# Local dev. The local traefik reaches the app and LiveKit through host.docker.internal, the docker
+# bridge gateway: `make dev-up` sets GRILL_ROOM_BIND to it. Plain `docker compose up` binds loopback only.
+# Keys and tokens come from .env (see .env.example).
 services:
   grill-room:
     build: .
     image: grill-room:local
     environment:
       GRILL_ROOM_URL: https://grill-room.${DEV_DOMAIN:?set DEV_DOMAIN in .env}
+      GRILL_ROOM_ADMIN_TOKEN: ${GRILL_ROOM_ADMIN_TOKEN:-}
+      GRILL_ROOM_LIVEKIT_URL: wss://livekit.${DEV_DOMAIN}
+      GRILL_ROOM_LIVEKIT_API_URL: http://livekit:7880
+      GRILL_ROOM_LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?set LIVEKIT_API_KEY in .env}
+      GRILL_ROOM_LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET in .env}
+      GRILL_ROOM_STT_TOKEN: ${STT_TOKEN:?set STT_TOKEN in .env}
     ports:
       - "${GRILL_ROOM_BIND:-127.0.0.1}:${GRILL_ROOM_PORT:-7680}:7680"
       - "127.0.0.1:${GRILL_ROOM_METRICS_PORT:-7681}:7681"
     volumes:
       - grill-room-data:/data
+    restart: unless-stopped
+
+  # Media needs no published UDP (spike S4): browsers on this host reach the container's own IP,
+  # and remote ones would relay through TURN/TLS on traefik's 443.
+  livekit:
+    image: livekit/livekit-server:v1.13.9
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+      LIVEKIT_CONFIG: |
+        port: 7880
+        log_level: info
+        rtc:
+          tcp_port: 7881
+          udp_port: 7882
+          use_external_ip: false
+        turn:
+          enabled: true
+          domain: turn.${DEV_DOMAIN}
+          tls_port: 5349
+          # traefik terminates TLS: LiveKit reads plain TURN on tls_port and advertises turns:<domain>:443
+          external_tls: true
+          # the relay peer is the SFU's own container IP, which LiveKit denies by default
+          allow_restricted_peer_cidrs: ["172.16.0.0/12"]
+    ports:
+      - "${GRILL_ROOM_BIND:-127.0.0.1}:7880:7880/tcp"
+      - "${GRILL_ROOM_BIND:-127.0.0.1}:5349:5349/tcp"
     restart: unless-stopped
 
 volumes:

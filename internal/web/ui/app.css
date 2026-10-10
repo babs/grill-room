@@ -61,6 +61,12 @@ header {
 }
 header h1 { font-size: 1.1rem; flex: 1; }
 #me { color: var(--amber); }
+#voice { display: flex; align-items: center; gap: 0.4rem; }
+#voice button { padding: 0.3rem 0.8rem; font-size: 0.9rem; }
+#voice-mute[aria-pressed="true"] { background: #b3261e; }
+#stt-status { font-size: 0.85rem; color: #cfd2dc; }
+#stt-status.down { padding: 0.15rem 0.5rem; border-radius: 6px; background: var(--amber); color: var(--ink); }
+#voice-error { margin: 0; padding: 0.4rem 1rem; background: #fbe4e2; color: #b3261e; }
 #banner { margin: 0; padding: 0.6rem 1rem; background: var(--amber); }
 #pairing { margin: 0; padding: 0.6rem 1rem; border-bottom: 1px solid var(--line); }
 #pairing h2 { margin: 0 0 0.3rem; font-size: 1rem; }
@@ -70,7 +76,14 @@ header h1 { font-size: 1.1rem; flex: 1; }
 aside { width: 14rem; padding: 1rem; border-right: 1px solid var(--line); overflow-y: auto; }
 aside h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
 #participants, #documents { list-style: none; padding: 0; margin: 0.6rem 0 1.2rem; }
-#participants li { padding: 0.25rem 0; }
+#participants li { display: flex; align-items: center; gap: 0.4rem; padding: 0.25rem 0; }
+#participants .name { flex: 1; overflow-wrap: anywhere; }
+#participants input[type=range] { width: 4rem; }
+/* Speaking indicator: a dot that lights while LiveKit reports the participant as an active speaker. */
+.voice-dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--line); flex: none; }
+li.in-voice .voice-dot { background: var(--teal); opacity: 0.4; }
+li.in-voice.speaking .voice-dot { opacity: 1; box-shadow: 0 0 0 3px rgba(21, 159, 140, 0.35); }
+li.muted .voice-dot { background: #b3261e; opacity: 0.6; }
 button.doc {
   width: 100%;
   padding: 0.3rem 0.4rem;
@@ -107,6 +120,7 @@ button.doc:hover { background: var(--line); }
 .msg .meta time { color: var(--muted); margin-left: 0.3rem; }
 .msg .body { white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg.system { color: var(--muted); font-size: 0.85rem; font-style: italic; }
+.msg.voice .meta strong::after { content: " (voice)"; font-weight: normal; color: var(--muted); }
 #send { display: flex; gap: 0.5rem; padding: 0.75rem 1rem; border-top: 1px solid var(--line); }
 #send textarea { flex: 1; resize: vertical; }
 

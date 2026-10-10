@@ -23,7 +23,7 @@ TRAEFIK_RULE      = $(TRAEFIK_RULES_DIR)/grill-room.yaml
 
 SANDBOX_IMAGE ?= grill-room-sandbox:local
 
-.PHONY: build build-daemons run test test-docker e2e cover lint docker-build sandbox-image fixtures dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: build build-daemons run test test-docker e2e e2e-voice cover lint docker-build sandbox-image fixtures dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -49,6 +49,10 @@ test-docker: sandbox-image
 # Browser tests against a fresh server, in the installed Chrome.
 e2e: build
 	cd e2e && pnpm install --frozen-lockfile && pnpm test
+
+# Voice tests against the compose stack behind the local traefik: run `make dev-up` first.
+e2e-voice:
+	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c voice/playwright.config.js
 
 cover:
 	go test -race -coverprofile=coverage.txt ./... && go tool cover -func=coverage.txt | tail -1

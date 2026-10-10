@@ -9,9 +9,13 @@ const bodyInput = $('body');
 let events;
 let refreshTimer;
 let wasIn = false;
+let participants = [];
+let myID = '';
 
 function end(text) {
   if (events) events.close();
+  leaveVoice();
+  $('voice').hidden = true;
   $('banner').textContent = text;
   $('banner').hidden = false;
   sendForm.hidden = true;
@@ -34,11 +38,10 @@ async function loadRoom() {
   $('room-name').textContent = data.room.name;
   document.title = data.room.name + ' · grill-room';
   $('me').textContent = data.me.name;
-  $('participants').replaceChildren(...data.participants.map((p) => {
-    const li = document.createElement('li');
-    li.textContent = p.name;
-    return li;
-  }));
+  participants = data.participants;
+  myID = String(data.me.id);
+  $('voice').hidden = !data.voice;
+  renderParticipants();
   return true;
 }
 
@@ -463,11 +466,176 @@ function connect() {
   events.addEventListener('documents', () => loadDocuments().catch(console.error));
   events.addEventListener('annotations', () => loadAnnotations().catch(console.error));
   events.addEventListener('revoked', () => end('Your access to this room has ended.'));
+  events.addEventListener('stt', (e) => showSTT(JSON.parse(e.data)));
   events.onerror = () => {
     // CLOSED means the browser gave up (a 401 on reconnect); otherwise it retries by itself.
     if (events.readyState === EventSource.CLOSED) loadRoom().catch(console.error);
   };
 }
+
+// Voice. One LiveKit room per grill room; a participant's LiveKit identity is its participant id,
+// so each audio track, speaking flag and transcript line maps back to a name in the list.
+let voice = null;
+let speaking = new Set();
+const volumes = new Map();
+
+function voiceParticipant(id) {
+  if (!voice) return null;
+  return id === myID ? voice.localParticipant : voice.remoteParticipants.get(id);
+}
+
+// renderParticipants updates rows in place: speaker changes fire many times a second, and a
+// rebuilt row would drop a volume slider mid-drag.
+function renderParticipants() {
+  const list = $('participants');
+  const kept = new Map([...list.children].map((li) => [li.dataset.pid, li]));
+  const rows = participants.map((p) => {
+    const id = String(p.id);
+    let li = kept.get(id);
+    if (!li) {
+      li = document.createElement('li');
+      li.dataset.pid = id;
+      const dot = document.createElement('span');
+      dot.className = 'voice-dot';
+      const name = document.createElement('span');
+      name.className = 'name';
+      li.append(dot, name);
+    }
+    li.querySelector('.name').textContent = p.name;
+    const vp = voiceParticipant(id);
+    const mic = !!vp && vp.isMicrophoneEnabled;
+    li.classList.toggle('in-voice', !!vp);
+    li.classList.toggle('speaking', mic && speaking.has(id));
+    li.classList.toggle('muted', !!vp && !mic);
+    li.querySelector('.voice-dot').title = !vp ? '' : !mic ? 'Muted' : speaking.has(id) ? 'Speaking' : 'In the audio';
+    let vol = li.querySelector('input[type=range]');
+    if (vp && id !== myID && !vol) {
+      vol = document.createElement('input');
+      vol.type = 'range';
+      vol.min = '0';
+      vol.max = '1';
+      vol.step = '0.05';
+      vol.value = String(volumes.get(id) ?? 1);
+      vol.setAttribute('aria-label', 'Volume of ' + p.name);
+      vol.addEventListener('input', () => {
+        volumes.set(id, Number(vol.value));
+        const rp = voiceParticipant(id);
+        if (rp) rp.setVolume(Number(vol.value));
+      });
+      li.append(vol);
+    } else if (!vp && vol) {
+      vol.remove();
+    }
+    return li;
+  });
+  if (rows.length !== list.children.length || rows.some((li, i) => list.children[i] !== li)) list.replaceChildren(...rows);
+}
+
+function showSTT(st) {
+  const el = $('stt-status');
+  el.classList.toggle('down', !st.available);
+  el.textContent = !st.available ? 'Transcription unavailable' : st.listening ? 'Transcribing' : '';
+}
+
+function voiceError(text) {
+  $('voice-error').textContent = text;
+  $('voice-error').hidden = !text;
+}
+
+function voiceButtons() {
+  const on = !!voice;
+  $('voice-join').hidden = on;
+  $('voice-leave').hidden = !on;
+  $('voice-mute').hidden = !on;
+  const muted = on && !voice.localParticipant.isMicrophoneEnabled;
+  $('voice-mute').setAttribute('aria-pressed', String(muted));
+  $('voice-mute').textContent = muted ? 'Unmute' : 'Mute';
+  $('voice-unlock').hidden = !on || voice.canPlaybackAudio;
+}
+
+function voiceChanged() {
+  voiceButtons();
+  renderParticipants();
+}
+
+async function joinVoice() {
+  if (voice) return;
+  voiceError('');
+  $('voice-join').disabled = true;
+  let room;
+  try {
+    const res = await fetch(api + '/voice');
+    if (res.status === 401) return end('Your access to this room has ended.');
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'HTTP ' + res.status);
+    const { url, token } = await res.json();
+    const LK = LivekitClient;
+    room = new LK.Room({ audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    room.on(LK.RoomEvent.TrackSubscribed, (track, _pub, p) => {
+      if (track.kind !== 'audio') return;
+      const el = track.attach();
+      el.dataset.pid = p.identity;
+      $('voice-audio').append(el);
+      if (volumes.has(p.identity)) p.setVolume(volumes.get(p.identity));
+    });
+    room.on(LK.RoomEvent.TrackUnsubscribed, (track) => track.detach().forEach((el) => el.remove()));
+    room.on(LK.RoomEvent.ActiveSpeakersChanged, (list) => {
+      speaking = new Set(list.map((p) => p.identity));
+      renderParticipants();
+    });
+    for (const ev of ['ParticipantConnected', 'ParticipantDisconnected', 'TrackMuted', 'TrackUnmuted',
+      'LocalTrackPublished', 'LocalTrackUnpublished', 'AudioPlaybackStatusChanged']) {
+      room.on(LK.RoomEvent[ev], voiceChanged);
+    }
+    room.on(LK.RoomEvent.Disconnected, (reason) => {
+      if (voice !== room) return;
+      cleanupVoice();
+      // Leaving on purpose is CLIENT_INITIATED; anything else, a kick included, is worth saying.
+      if (reason !== LK.DisconnectReason.CLIENT_INITIATED) voiceError('You were disconnected from the audio.');
+    });
+    voice = room;
+    await room.connect(url, token);
+    if (voice !== room) return;
+    try {
+      await room.localParticipant.setMicrophoneEnabled(true);
+    } catch (err) {
+      // Without a microphone the participant still hears the others.
+      voiceError('Microphone unavailable: ' + err.message + '. You can still listen.');
+    }
+    voiceChanged();
+  } catch (err) {
+    // A Leave pressed while connecting rejects connect(): nothing to report then.
+    if (room && voice !== room) return;
+    leaveVoice();
+    voiceError('Could not join the audio: ' + err.message);
+  } finally {
+    $('voice-join').disabled = false;
+  }
+}
+
+function cleanupVoice() {
+  voice = null;
+  speaking = new Set();
+  $('voice-audio').replaceChildren();
+  voiceChanged();
+}
+
+function leaveVoice() {
+  const room = voice;
+  if (!room) return;
+  cleanupVoice();
+  room.disconnect().catch(console.error);
+}
+
+$('voice-join').addEventListener('click', () => joinVoice());
+$('voice-leave').addEventListener('click', leaveVoice);
+$('voice-mute').addEventListener('click', () => {
+  if (!voice) return;
+  voice.localParticipant.setMicrophoneEnabled(!voice.localParticipant.isMicrophoneEnabled)
+    .then(voiceChanged)
+    .catch((err) => voiceError('Microphone: ' + err.message));
+});
+// Browsers block playback without a gesture; LiveKit flags it and this button lifts it.
+$('voice-unlock').addEventListener('click', () => voice && voice.startAudio().then(voiceChanged).catch(console.error));
 
 async function send() {
   const body = bodyInput.value.trim();

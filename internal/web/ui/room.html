@@ -6,6 +6,7 @@
 <title>grill-room</title>
 <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/app.css">
+<script src="/static/vendor/livekit-client.umd.js" defer></script>
 <script src="/static/bridge.js" defer></script>
 <script src="/static/room.js" defer></script>
 </head>
@@ -13,8 +14,17 @@
 <header>
   <img src="/static/logo.svg" alt="" class="logo" width="32" height="32">
   <h1 id="room-name">grill-room</h1>
+  <div id="voice" hidden>
+    <span id="stt-status" role="status"></span>
+    <button type="button" id="voice-join">Join audio</button>
+    <button type="button" id="voice-unlock" hidden>Play audio</button>
+    <button type="button" id="voice-mute" aria-pressed="false" hidden>Mute</button>
+    <button type="button" id="voice-leave" hidden>Leave audio</button>
+  </div>
   <span id="me"></span>
 </header>
+<p id="voice-error" role="alert" hidden></p>
+<div id="voice-audio" hidden></div>
 <p id="banner" role="alert" hidden></p>
 <section id="pairing" aria-labelledby="pairing-title" hidden>
   <h2 id="pairing-title">Pair an agent daemon</h2>
