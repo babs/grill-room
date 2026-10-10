@@ -16,7 +16,7 @@ A self-hosted web room. People join with an invite link and a browser and talk t
 ## Scope
 
 - Room server: a single static Go binary with SQLite storage (airc-derived). It handles rooms, invite links with tokens, participants, a live event stream and the web UI.
-- Voice: LiveKit (self-hosted) for audio between participants. A CPU STT worker per room (faster-whisper `small` int8, VAD-cut utterances, language detected per utterance) posts transcript lines. No audio is stored.
+- Voice: LiveKit (self-hosted) for audio between participants. A CPU STT worker (faster-whisper `small` int8, VAD-cut utterances, language detected per utterance) joins every active room and posts transcript lines. No audio is stored.
 - Documents: MD rendered GitHub-style and HTML in a sandboxed iframe (gld-derived), with revisions and word-level diffs between revisions.
 - Uploads by any participant: MD, HTML, PDF and images as-is. DOCX/ODT/PPTX are kept as originals plus a pandoc MD copy for annotation. Uploads are read-only sources.
 - Annotations on text ranges and HTML elements, with threads, status and image attachments (gld anchoring plus the lavish-style element anchors and attachments).
@@ -26,7 +26,7 @@ A self-hosted web room. People join with an invite link and a browser and talk t
 - Session continuity: resume the previous Claude session, or start fresh with transcripts provided as MD files.
 - Distribution: a download button in the room UI, a `curl | sh` one-liner carrying the room URL, and the standalone binary.
 - Dev and test environment: a local traefik serving a valid wildcard certificate for a dev domain that resolves to loopback (`*.<dev-domain>`), so it works on the dev machine only. LiveKit runs in the project's docker compose. Phases 1 to 7 are verified there, with no kube build loop.
-- Deployment: a lab k8s cluster via ArgoCD, with TLS ingress (traefik and cert-manager) and LiveKit reachable from the Internet (Phase 8).
+- Deployment: a lab k8s cluster with plain manifests (kubectl apply, Helm if needed), no GitOps for the PoC, with TLS ingress (traefik and cert-manager) and LiveKit reachable from the Internet (Phase 8).
 
 ## Out of scope
 
@@ -42,58 +42,59 @@ A self-hosted web room. People join with an invite link and a browser and talk t
 ## Acceptance criteria
 
 ### Room, access, personal data
-- [ ] **AC1** Given a room, when its creator generates an invite link and a guest opens it in a browser, then the guest picks a display name and joins with no account and no install.
-- [ ] **AC2** A request without a valid room token gets a 401 on every room API route and on the event stream.
-- [ ] **AC3** A revoked invite token gets a 401 on its next request, and its open event stream is closed.
-- [ ] **AC4** Deleting a room removes its transcripts, documents, revisions, annotations, uploads and session data from the store. A query for that room id afterwards returns nothing.
-- [ ] **AC5** `GET /healthz` returns 200 when SQLite is writable and 503 otherwise. `/metrics` is served on a separate port.
+- [x] **AC1** Given a room, when its creator generates an invite link and a guest opens it in a browser, then the guest picks a display name and joins with no account and no install.
+- [x] **AC2** A request without a valid room token gets a 401 on every room API route and on the event stream.
+- [x] **AC3** A revoked invite token gets a 401 on its next request, and its open event stream is closed.
+- [x] **AC4** Deleting a room removes its transcripts, documents, revisions, annotations, uploads and session data from the store. A query for that room id afterwards returns nothing.
+- [x] **AC5** `GET /healthz` returns 200 when SQLite is writable and 503 otherwise. `/metrics` is served on a separate port.
 
 ### Voice and transcripts
-- [ ] **AC6** Given two participants in a room, when one speaks, then the other hears them.
-- [ ] **AC7** Given a participant speaking French, when they pause, then a transcript line with their display name appears for everyone within 10 s of the end of the utterance.
-- [ ] **AC8** Given utterances alternating between French and English, each line is transcribed in the language spoken, not translated.
-- [ ] **AC9** No audio file or audio blob exists on the server or in the store after a session. Verified by inspecting the STT pod filesystem and the SQLite tables.
-- [ ] **AC10** When the STT worker is down, the room still works for audio and text. The UI shows "transcription unavailable", and lines resume when the worker returns.
+- [x] **AC6** Given two participants in a room, when one speaks, then the other hears them.
+- [x] **AC7** Given a participant speaking French, when they pause, then a transcript line with their display name appears for everyone within 10 s of the end of the utterance.
+- [x] **AC8** Given utterances alternating between French and English, each line is transcribed in the language spoken, not translated.
+- [x] **AC9** No audio file or audio blob exists on the server or in the store after a session. Verified by inspecting the STT pod filesystem and the SQLite tables.
+- [x] **AC10** When the STT worker is down, the room still works for audio and text. The UI shows "transcription unavailable", and lines resume when the worker returns.
 
 ### Documents and uploads
-- [ ] **AC11** An uploaded MD renders like GitHub (headings, tables, code, mermaid as a diagram). An uploaded HTML renders in a sandboxed iframe with no access to the room's cookies or API.
-- [ ] **AC12** An uploaded PDF or image is viewable in the room and appears in the agent workspace as the original file.
-- [ ] **AC13** An uploaded DOCX, ODT or PPTX is kept as the original, and an MD copy produced by pandoc appears next to it and is annotatable.
-- [ ] **AC14** An upload over 20 MB gets a 413, and an upload that would take the room over 200 MB gets a 413 with a message naming the room limit.
-- [ ] **AC15** An upload with an unsupported type gets a 415 naming the accepted types.
-- [ ] **AC16** An uploaded document cannot be modified by the agent. An agent change to an upload is rejected and reported in the turn result.
-- [ ] **AC17** A document produced by the agent shows its revision list, and any two revisions can be compared with a word-level diff.
+- [x] **AC11** An uploaded MD renders like GitHub (headings, tables, code, mermaid as a diagram). An uploaded HTML renders in a sandboxed iframe with no access to the room's cookies or API.
+- [x] **AC12** An uploaded PDF or image is viewable in the room and appears in the agent workspace as the original file.
+- [x] **AC13** An uploaded DOCX, ODT or PPTX is kept as the original, and an MD copy produced by pandoc appears next to it and is annotatable.
+- [x] **AC14** An upload over 20 MB gets a 413, and an upload that would take the room over 200 MB gets a 413 with a message naming the room limit.
+- [x] **AC15** An upload with an unsupported type gets a 415 naming the accepted types.
+- [x] **AC16** An uploaded document cannot be modified by the agent. An agent change to an upload is rejected and reported in the turn result.
+- [x] **AC17** A document produced by the agent shows its revision list, and any two revisions can be compared with a word-level diff.
 
 ### Annotations
-- [ ] **AC18** A participant can annotate a selected text range in an MD document, and other participants see the mark and the thread live.
-- [ ] **AC19** A participant can annotate an element in an HTML document, and the mark follows the element after a re-render.
-- [ ] **AC20** A participant can attach an image to an annotation message, and the agent receives the image with the thread.
-- [ ] **AC21** When the annotated text is reworded in a new revision, the annotation re-anchors on its context. When the text is gone, it stays reachable and is flagged as orphaned.
+- [x] **AC18** A participant can annotate a selected text range in an MD document, and other participants see the mark and the thread live.
+- [x] **AC19** A participant can annotate an element in an HTML document, and the mark follows the element after a re-render.
+- [x] **AC20** A participant can attach an image to an annotation message, and the agent receives the image with the thread.
+- [x] **AC21** When the annotated text is reworded in a new revision, the annotation re-anchors on its context. When the text is gone, it stays reachable and is flagged as orphaned.
 
 ### Daemon, pairing, sandbox, credentials
-- [ ] **AC22** Running the daemon with a room URL opens a local admin UI on `127.0.0.1` in the default browser. Approving in the room browser session pairs it, with no token shown or typed.
+- [x] **AC22** Running the daemon with a room URL opens a local admin UI on `127.0.0.1` in the default browser. Approving in the room browser session pairs it, with no token shown or typed.
 - [ ] **AC23** The daemon runs on Linux, macOS and Windows/WSL. On macOS it reads credentials from the Keychain; elsewhere from `<config dir>/.credentials.json`, honouring `CLAUDE_CONFIG_DIR`.
-- [ ] **AC24** A locked macOS Keychain makes the credentials read fail within 5 s with a clear message in the local UI, not a hang.
-- [ ] **AC25** The sandbox container holds no real credential. A grep for the real access token over the container filesystem and environment finds nothing.
-- [ ] **AC26** From inside the sandbox, any host other than the proxy is unreachable (DNS and TCP to `api.anthropic.com` fail).
-- [ ] **AC27** The daemon never writes to the host's `~/.claude/`, `~/.claude.json` or Keychain entry. Their mtime is unchanged after a session.
-- [ ] **AC28** When Docker is missing or not running, the local UI says so and the daemon does not offer to host.
-- [ ] **AC29** When the host's access token is expired, the turn fails within 10 s with "Claude credentials expired on <host>" in the room, and the next turn works once the host's Claude Code has refreshed.
+- [x] **AC24** A locked macOS Keychain makes the credentials read fail within 5 s with a clear message in the local UI, not a hang.
+- [x] **AC25** The sandbox container holds no real credential. A grep for the real access token over the container filesystem and environment finds nothing.
+- [x] **AC26** From inside the sandbox, any host other than the proxy is unreachable (DNS and TCP to `api.anthropic.com` fail).
+- [x] **AC27** The daemon never writes to the host's `~/.claude/`, `~/.claude.json` or Keychain entry. Their mtime is unchanged after a session.
+- [x] **AC28** When Docker is missing or not running, the local UI says so and the daemon does not offer to host.
+- [x] **AC29** When the host's access token is expired, the turn fails within 10 s with "Claude credentials expired on <host>" in the room, and the next turn works once the host's Claude Code has refreshed.
 
 ### Host, turns, continuity
-- [ ] **AC30** The first participant whose daemon connects becomes host. With no daemon connected, the agent LED is red and the agent button is disabled, while transcripts keep recording.
-- [ ] **AC31** The host can hand the host role to another participant with a connected daemon, and can grant the agent button to other participants.
-- [ ] **AC32** Pressing the agent button runs one turn. The agent receives the transcript and annotations since its last turn and posts a synthesis message. Its document changes become new revisions attributed to the agent. A second press during a turn is refused with "turn in progress".
-- [ ] **AC33** After each turn, the server holds the session jsonl up to the turn's end.
-- [ ] **AC34** When the host's daemon disconnects mid-turn, the turn is marked failed and no partial revision is kept. When another daemon takes over, the next turn resumes the same Claude session (`--resume`) and the agent recalls a fact from before the switch.
-- [ ] **AC35** Starting a fresh session in an existing room gives the agent the full room history as MD transcript files in its workspace.
+- [x] **AC30** The first participant whose daemon connects becomes host. With no daemon connected, the agent LED is red and the agent button is disabled, while transcripts keep recording.
+- [x] **AC31** The host can hand the host role to another participant with a connected daemon, and can grant the agent button to other participants.
+- [x] **AC32** Pressing the agent button runs one turn. The agent receives the transcript and annotations since its last turn and posts a synthesis message. Its document changes become new revisions attributed to the agent. A second press during a turn is refused with "turn in progress".
+- [x] **AC33** After each turn, the server holds the session jsonl up to the turn's end.
+- [x] **AC34** When the host's daemon disconnects mid-turn, the turn is marked failed and no partial revision is kept. When another daemon takes over, the next turn resumes the same Claude session (`--resume`) and the agent recalls a fact from before the switch.
+- [x] **AC35** Starting a fresh session in an existing room gives the agent the full room history as MD transcript files in its workspace.
+- [x] **AC39** Over several turns, the agent answers new participant replies on its threads, can open its own anchored annotations on any visible document, and can mark a thread done; a participant reply reopens it.
 
 ### Distribution
-- [ ] **AC36** The room UI offers the daemon download for the visitor's OS and a `curl | sh` one-liner that installs the binary and starts it paired to that room.
-- [ ] **AC37** The daemon checks for a newer release at start, updates itself on approval in the local UI, and restarts.
+- [x] **AC36** The room UI offers the daemon download for the visitor's OS and a `curl | sh` one-liner that installs the binary and starts it paired to that room.
+- [x] **AC37** The daemon checks for a newer release at start, updates itself on approval in the local UI, and restarts.
 
 ### Deployment
-- [ ] **AC38** The room server, LiveKit and the STT worker deploy on the lab cluster from ArgoCD. The room is reachable over HTTPS with a valid certificate, and AC6 passes between a participant on the LAN and one outside it.
+- [ ] **AC38** The room server, LiveKit and the STT worker deploy on the lab cluster as plain manifests applied with kubectl (no GitOps for the PoC). The room is reachable over HTTPS with a valid certificate, and AC6 passes between a participant on the LAN and one outside it.
 
 ## Phases
 
@@ -116,7 +117,7 @@ A self-hosted web room. People join with an invite link and a browser and talk t
 - **DoD**: re-anchoring tests (reworded, removed, element re-render); a two-browser e2e (Playwright) shows a mark created in one appearing in the other.
 
 ### Phase 4 — Voice and STT
-- Work: LiveKit in the lab via ArgoCD, room token minting by the room server, and browser audio join. The STT worker subscribes to each track, cuts on VAD pauses, transcribes, and posts lines through the room API. The UI shows STT health.
+- Work: LiveKit in the dev compose, room token minting by the room server, and browser audio join. The STT worker subscribes to each track, cuts on VAD pauses, transcribes, and posts lines through the room API. The UI shows STT health.
 - **Covers**: AC6, AC7, AC8, AC9, AC10
 - **Data model impact**: `messages.kind` (`voice` | `text` | `agent` | `system`)
 - **DoD**: two browser profiles on `grill-room.<dev-domain>` exchange audio; a recorded FR+EN fixture played into a test participant yields lines in the right languages within 10 s; the STT pod has no audio files (`find / -name '*.wav' -o -name '*.opus'` empty); killing the STT pod shows the banner and recovers.
@@ -128,9 +129,9 @@ A self-hosted web room. People join with an invite link and a browser and talk t
 - **DoD**: `claude -p --model haiku "say ok"` succeeds through the sandbox on Linux, macOS and WSL; a grep for the real token in `docker export` output and `docker inspect` env is empty; `curl api.anthropic.com` from the sandbox fails; host `~/.claude*` mtimes unchanged; locked Keychain test returns in under 5 s.
 
 ### Phase 6 — Agent turn, host election, continuity
-- Work: host election and handover, LED, button rights and delegation. The turn runs as snapshot, then `claude -p`, then a POST of changes, then revisions, synthesis and annotations, and is refused when one is in progress. Read-only enforcement on uploads. Jsonl upload by offset. Takeover with `--resume`. A fresh session gets the transcripts as MD.
-- **Covers**: AC16, AC30, AC31, AC32, AC33, AC34, AC35
-- **Data model impact**: `turns`, `agent_sessions` (session id, jsonl blob, uploaded offset), `rooms.host_participant_id`, `participants.can_trigger`
+- Work: host election and handover, LED, button rights and delegation. The turn runs as a workspace tar, then `claude -p`, then a POST of changes, then revisions, synthesis, thread replies and the agent's own annotations, and is refused when one is in progress. Read-only enforcement on uploads. Jsonl upload by offset. Takeover with `--resume`. A fresh session gets the transcripts as MD.
+- **Covers**: AC16, AC30, AC31, AC32, AC33, AC34, AC35, AC39
+- **Data model impact**: `turns` (with the reported `model`), `agent_sessions` (session id, jsonl blob, uploaded offset), `rooms.host_participant_id`, `participants.can_trigger`, `messages.model`
 - **DoD**: an e2e with two daemons: turn on A, kill A mid-turn (turn failed, no partial revision), take over on B, the agent recalls the code word; the fresh-session test finds the transcripts in the workspace; the agent's edit to an upload is rejected.
 
 ### Phase 7 — Distribution and self-update
@@ -140,18 +141,18 @@ A self-hosted web room. People join with an invite link and a browser and talk t
 - **DoD**: on a clean VM per OS, the one-liner installs, starts and pairs; bumping the release triggers the update prompt and restart.
 
 ### Phase 8 — Lab deployment end to end
-- Work: ArgoCD apps (room server, LiveKit, STT), traefik ingress with cert-manager, LiveKit public reachability, and default-deny NetworkPolicies.
+- Work: plain manifests in `deploy/k8s/` (room server, LiveKit, STT) applied with kubectl, traefik ingress with cert-manager, LiveKit public reachability, and default-deny NetworkPolicies.
 - **Covers**: AC38
 - **Data model impact**: none
-- **DoD**: ArgoCD apps Healthy and Synced; HTTPS certificate valid; a full grill session (two humans, one inside and one outside the LAN, upload, annotate, agent turn) passes.
+- **DoD**: all workloads Ready; HTTPS certificate valid; a full grill session (two humans, one inside and one outside the LAN, upload, annotate, agent turn) passes.
 
 ## Data model impact (summary)
 
 New SQLite database:
-- `rooms`, `participants`, `invites`, `messages` (`kind`)
+- `rooms`, `participants`, `invites`, `messages` (`kind`, `model` of an agent synthesis)
 - `documents`, `revisions`, `uploads` (blobs)
 - `annotations`, `annotation_messages`, `attachments`
-- `daemons`, `turns`, `agent_sessions`
+- `daemons`, `turns` (`model`), `agent_sessions`
 
 No existing data to migrate.
 
@@ -165,8 +166,8 @@ No existing data to migrate.
 
 ## Open questions
 
-- [ ] 1. Blocks Phase 8 only. LiveKit reachability from outside the LAN: which public path does the lab offer for UDP (router port-forward to a LoadBalancer IP), or do we use TURN/TLS on 443 only?
-- [ ] 2. Personal data defaults above (invite-link access, no retention timer): approve or change.
+- [x] 1. Resolved by spike S4: LiveKit reachability with no UDP exposed. See Decisions.
+- [x] 2. Personal data defaults above (invite-link access, no retention timer): approve or change.
 
 ## Decisions
 
@@ -174,6 +175,14 @@ No existing data to migrate.
 - The room server and the daemon live in one Go module, as two binaries (`cmd/grill-room`, `cmd/grill-room-daemon`), so they share types.
 - The STT worker is a separate Python image (faster-whisper), talking to the room through its HTTP API like any client.
 - Frontend is vanilla JS with no build step, as in airc and gld.
-- AC7 allows 10 s: S1-bis measured about 2 s on 4 P-cores, and this is a PoC.
+- LiveKit media needs no exposed UDP: embedded TURN with `turn.external_tls: true`, TLS terminated by traefik on 443 (TCP router on `HostSNI(turn.<domain>)`), plus ICE over TCP (7881). Spike S4: both paths carry audio with 0 loss; UDP stays an optional optimisation.
+- AC7 allows 10 s: S1-bis measured about 2 s on 4 P-cores, and this is a PoC. On the lab's 4-core i7-6700 nodes spike S5 measured about 6 s per utterance and a growing backlog. The fix iteration made language detection and decoding share one encoder pass, raised the VAD silence to 800 ms (one utterance per script line instead of 1.8), and gives the model 3 threads under a 4-CPU limit. The S5 rerun then held AC7 for every line: median 4.7 s, max 6.6 s, no queue drop.
+- Agent turns run on whatever model the host's daemon sets (`GRILL_ROOM_AGENT_MODEL`, empty for Claude Code's default). The room only shows the model each turn reported. Choosing a model or an effort belongs to spec 002.
+- A new agent document never takes an upload's name; a colliding one is stored as `<name>-agent.<ext>` and the room says so (docs/agent-workspace.md).
+- The agent writes annotations through `annotations-new.json` and closes threads with `"status": "done"` in `replies.json` (AC39): text-quote anchors only, uploads included, since annotating is not editing (D30).
+- A failed turn keeps the cursors: its messages come back in the next turn's prompt.
+- The room shows the host daemon's machine name, in the participant list and in turn errors.
+- The room server image is 174 MB, most of it pandoc. Accepted.
+- Daemons pull the sandbox image the room server advertises. A public image (ghcr.io, anonymous pull) for hosts without a registry login is planned after the PoC; `GRILL_ROOM_SANDBOX_IMAGE` already takes any reference.
 - The traefik rule ships in the repo (`deploy/local/`). Enabling it means copying it into the local traefik's rules directory, and removing the file reverts it. The copy is proposed for your approval at Phase 1, never done silently.
 - Code copied from airc and gld keeps a header comment naming the upstream repo and commit.

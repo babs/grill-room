@@ -1,0 +1,16 @@
+[project]
+name = "s5-simulated-session"
+version = "0.1.0"
+description = "Spike S5: synthetic voices for a simulated grill session"
+requires-python = ">=3.14"
+dependencies = ["piper-tts>=1.8", "numpy>=2.3"]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 110
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP"]

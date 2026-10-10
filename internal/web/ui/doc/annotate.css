@@ -1,0 +1,20 @@
+::highlight(gr-annot) { background-color: rgba(255, 194, 61, 0.45); }
+::highlight(gr-annot-done) { background-color: rgba(21, 159, 140, 0.18); }
+::highlight(gr-annot-active) { background-color: rgba(255, 140, 0, 0.6); }
+[data-gr-annot] { outline: 2px solid rgba(255, 170, 0, 0.9); outline-offset: 2px; cursor: pointer; }
+[data-gr-annot][data-gr-done] { outline-color: rgba(21, 159, 140, 0.6); }
+[data-gr-annot][data-gr-active] { outline: 3px solid #ff8c00; }
+[data-gr-pick] { outline: 2px dashed #159f8c !important; outline-offset: 2px; }
+html[data-gr-picking], html[data-gr-picking] * { cursor: crosshair !important; }
+.gr-annot-bubble {
+  position: fixed;
+  z-index: 2147483647;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: #1e2238;
+  color: #fff;
+  font: 13px system-ui, sans-serif;
+  cursor: pointer;
+}
+.gr-annot-bubble[hidden] { display: none; }

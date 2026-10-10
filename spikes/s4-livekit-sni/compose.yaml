@@ -1,0 +1,46 @@
+# S4: LiveKit with no UDP reachable. Values come from ./.env (written by run.sh, untracked).
+# No UDP port is published, and udp-block drops non-loopback UDP in LiveKit's netns, both directions.
+services:
+  livekit:
+    image: livekit/livekit-server:v1.13.9
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:?}: ${LIVEKIT_API_SECRET:?}"
+      LIVEKIT_CONFIG: |
+        port: 7880
+        log_level: info
+        rtc:
+          tcp_port: 7881
+          udp_port: 7882
+          # candidates are the container IP: the browser on this host reaches it by TCP only
+          use_external_ip: false
+        turn:
+          enabled: true
+          domain: turn.${DEV_DOMAIN:?}
+          tls_port: 5349
+          # traefik terminates TLS: LiveKit reads plain TURN on tls_port, still advertises turns:<domain>:443
+          external_tls: true
+          # the relay peer is the SFU's own private IP, denied by default; spike only, scope to the pod IP in prod
+          allow_restricted_peer_cidrs: ["172.16.0.0/12"]
+    ports:
+      # signalling and TURN: reached by traefik via host.docker.internal (the bridge gateway), never the LAN
+      - "${LK_BIND:?}:7880:7880/tcp"
+      - "${LK_BIND:?}:5349:5349/tcp"
+
+  # On one host the browser and the SFU reach each other's private IPs over UDP; this stands in for a
+  # firewall dropping UDP. Loopback stays open: the TURN relay to SFU leg runs inside the container.
+  udp-block:
+    image: alpine:3.22
+    network_mode: service:livekit
+    cap_add: [NET_ADMIN]
+    command:
+      - sh
+      - -c
+      - >-
+        apk add --no-cache -q iptables &&
+        iptables -A OUTPUT -p udp ! -o lo -j DROP &&
+        iptables -A INPUT -p udp ! -i lo -j DROP &&
+        exec sleep infinity
+    healthcheck:
+      test: ["CMD", "iptables", "-C", "INPUT", "-p", "udp", "!", "-i", "lo", "-j", "DROP"]
+      interval: 1s
+      retries: 60

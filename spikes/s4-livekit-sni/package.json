@@ -1,0 +1,12 @@
+{
+  "name": "grill-room-s4-livekit-sni",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.0",
+    "livekit-client": "2.22.3"
+  }
+}

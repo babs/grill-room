@@ -1,0 +1,8 @@
+/* Derived from github.com/babs/grip-live-diff defaults/static/css/mathjax.css at commit 36209e6. */
+mjx-help {
+  display: none ! important;
+}
+
+.mjx-selected {
+  outline: none ! important;
+}

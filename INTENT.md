@@ -18,9 +18,9 @@ Built for product people and PMs, not only engineers. Joining a room needs a bro
 [Browsers] ──WebRTC──▶ LiveKit (kube)
      │                     └─▶ STT CPU worker (if Chrome on-device STT fails) ─┐
      └──HTTPS──▶ Room server (kube) ◀──────────────────────────────────────────┘
-                  transcripts · docs · annotations · one git repo per room
+                  transcripts · docs · annotations · revisions, in SQLite
                        ▲ outbound WS (no inbound port on user machines)
-[Host daemon, machine A] ── local claude -p ── clone of the room repo
+[Host daemon, machine A] ── local claude -p ── workspace built for each turn
 [Host daemon, machine B] ── takes over A's session when A drops
 ```
 
@@ -33,16 +33,16 @@ Built for product people and PMs, not only engineers. Joining a room needs a bro
 | # | Decision |
 |---|---|
 | D1 | Several remote humans per room. Fully self-hosted. |
-| D2 | Room server, LiveKit and STT run in kube, one STT instance per room. |
-| D3 | STT on CPU, server side: faster-whisper `small` int8, utterances cut on VAD pauses, language detected per utterance. Pod sized on simultaneous talkers, starting at 4 P-class cores and 1.5 GiB, with a queue; resize on the real kube node CPU (S1-bis). Chrome on-device STT is out (S1: no transcript in Chromium 153 or Chrome 155). |
+| D2 | Room server, LiveKit and STT run in kube. For the PoC one STT worker joins every active room; one per room is for later. |
+| D3 | STT on CPU, server side: faster-whisper `small` int8, utterances cut on VAD pauses, language detected per utterance. Pod sized on simultaneous talkers, starting at 4 P-class cores and 1.5 GiB, with a queue; resize on the real kube node CPU (S1-bis). On the lab's 4-core nodes (S5): one encoder pass per utterance, 800 ms VAD silence, 3 model threads under a 4-CPU limit. Chrome on-device STT is out (S1: no transcript in Chromium 153 or Chrome 155). |
 | D4 | The agent runs on a participant's machine via a local daemon driving their Claude Code. |
 | D5 | The daemon uploads the Claude session after every turn, not at disconnect, since a disconnect is often a crash. |
 | D6 | When the host drops, another connected participant's daemon resumes the session. |
 | D7 | The first participant with a connected daemon hosts. Anyone can switch the host to another connected participant. |
 | D8 | With no host connected, the room keeps recording transcripts. The UI shows the agent loop as off with a red LED. |
 | D9 | Lavish features are ported into gld (Go). One annotation model on the server, with text anchors and element anchors. |
-| D10 | SQLite (airc store) is the only store: docs, revisions, transcripts, annotations. Files are a view built for each agent turn: `GET /snapshot` before, `POST` changed files after. Git export later if needed. |
-| D11 | The daemon runs Claude in a Docker sandbox that mounts only the room clone. Nothing from the host's `~/.claude*` enters it: the daemon generates a minimal `.claude.json` and a `.credentials.json` holding a dummy token. The host's `~/.claude.json` carries `mcpServers` and 460 project entries, so it is never copied. |
+| D10 | SQLite (airc store) is the only store: docs, revisions, transcripts, annotations. Files are a view built for each agent turn: the daemon fetches a workspace tar before and posts the changed files after (docs/agent-workspace.md). Git export later if needed. |
+| D11 | The daemon runs Claude in a Docker sandbox that holds only the turn's workspace. Nothing from the host's `~/.claude*` enters it: the daemon generates a minimal `.claude.json` and a `.credentials.json` holding a dummy token. The host's `~/.claude.json` carries `mcpServers` and 460 project entries, so it is never copied. |
 | D12 | The agent acts only when a participant presses a button. One press runs one turn that reads the new transcript, posts a synthesis, annotates and edits the documents. |
 | D13 | The PoC is text only. The agent writes, it does not speak. |
 | D14 | Guests join with an invite link carrying a token. |
@@ -65,6 +65,7 @@ Built for product people and PMs, not only engineers. Joining a room needs a bro
 | D31 | Uploads are blobs inside SQLite, 20 MB max per file, 200 MB max per room (defaults, configurable). |
 | D32 | Logo and favicon: `design/icons/round2/r2-03-b-three-quarter.svg` (people around a Weber, 3/4 view). One asset; modern browsers render favicons at 32px and up. |
 | D33 | The agent runtime is `claude -p` for now. Custom tools come as MCP via `--mcp-config` if files fall short; an own Agent SDK binary only for a concrete need the CLI cannot meet. |
+| D34 | LiveKit needs no exposed UDP: embedded TURN behind traefik TLS termination on 443 (`HostSNI`), plus ICE over TCP. Traefik HTTP/3 (QUIC) does not help WebRTC media (S4). |
 
 ## Spikes before any code
 
@@ -79,6 +80,8 @@ Built for product people and PMs, not only engineers. Joining a room needs a bro
 | S1-bis | done: `small` int8 only, ~2 s latency on 4 P-cores; medium/turbo too slow | `spikes/S1bis-whisper-cpu.md` |
 | S2 | done, pass | `spikes/S2-resume.md` |
 | S3 | done, pass with conditions D21-D22 | `spikes/S3-proxy-swap.md` |
+| S4 | done, pass: TURN/TLS 443 via traefik and ICE/TCP, 0 loss | `spikes/S4-livekit-sni.md` |
+| S5 | done: the loop works end to end; STT lag, wrong speaker after a rejoin, over-splitting and garbage lines fixed after it | `spikes/S5-simulated-session.md` |
 
 ## Credentials
 
@@ -97,7 +100,7 @@ Chosen: B from day 1 (D17). Rationale: the client is still Claude Code, each hos
 ## Risks
 
 - **Remote code execution on the host's machine.** Other participants steer the host's Claude. D11 bounds it to the container.
-- **Uploaded sessions leak what Claude read.** The sandbox bounds this to the room clone.
+- **Uploaded sessions leak what Claude read.** The sandbox bounds this to the turn's workspace.
 - **Non-technical users.** No `!commands`, no CLI for participants. Hosting needs the daemon, but joining does not.
 
 ## Open questions

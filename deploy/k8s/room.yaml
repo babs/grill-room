@@ -1,0 +1,139 @@
+# Room server. One replica with Recreate: SQLite takes a single writer on a ReadWriteOnce volume.
+# Rendered by `make k8s-render`, which fills the placeholders from .env.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grill-room-data
+  labels:
+    app.kubernetes.io/name: grill-room
+    app.kubernetes.io/part-of: grill-room
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ${K8S_STORAGE_CLASS}
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grill-room
+  labels:
+    app.kubernetes.io/name: grill-room
+    app.kubernetes.io/part-of: grill-room
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grill-room
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grill-room
+        app.kubernetes.io/part-of: grill-room
+    spec:
+      automountServiceAccountToken: false
+      # Service links would inject GRILL_ROOM_* and LIVEKIT_* variables the binaries read as config.
+      enableServiceLinks: false
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: grill-room
+          image: ${GRILL_ROOM_IMAGE}
+          env:
+            - name: GRILL_ROOM_URL
+              value: https://${ROOM_HOST}
+            - name: GRILL_ROOM_LIVEKIT_URL
+              value: wss://${LIVEKIT_HOST}
+            - name: GRILL_ROOM_LIVEKIT_API_URL
+              value: http://livekit:7880
+            - name: GRILL_ROOM_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef: { name: grill-room, key: admin-token }
+            - name: GRILL_ROOM_LIVEKIT_API_KEY
+              valueFrom:
+                secretKeyRef: { name: grill-room, key: livekit-api-key }
+            - name: GRILL_ROOM_LIVEKIT_API_SECRET
+              valueFrom:
+                secretKeyRef: { name: grill-room, key: livekit-api-secret }
+            - name: GRILL_ROOM_STT_TOKEN
+              valueFrom:
+                secretKeyRef: { name: grill-room, key: stt-token }
+            - name: GRILL_ROOM_SANDBOX_IMAGE
+              value: "${GRILL_ROOM_SANDBOX_IMAGE}"
+          ports:
+            - { name: http, containerPort: 7680 }
+            - { name: metrics, containerPort: 7681 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          # Not /healthz: a full volume fails it, and a restart would not free the space.
+          livenessProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            # pandoc runs in this container: office conversions need the headroom.
+            limits: { cpu: "1", memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: grill-room-data
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grill-room
+  labels:
+    app.kubernetes.io/name: grill-room
+    app.kubernetes.io/part-of: grill-room
+spec:
+  selector:
+    app.kubernetes.io/name: grill-room
+  ports:
+    - { name: http, port: 7680, targetPort: http }
+    - { name: metrics, port: 7681, targetPort: metrics }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grill-room
+  labels:
+    app.kubernetes.io/name: grill-room
+    app.kubernetes.io/part-of: grill-room
+  annotations:
+    # No tls.secretName: traefik serves the wildcard certificate from its default TLS store.
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: ${ROOM_HOST}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: grill-room
+                port: { name: http }

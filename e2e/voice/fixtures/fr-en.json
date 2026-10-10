@@ -1,0 +1,35 @@
+{
+ "source": "Google FLEURS, https://huggingface.co/datasets/google/fleurs",
+ "license": "CC-BY-4.0, https://creativecommons.org/licenses/by/4.0/",
+ "changes": "sentences cut from the dev split, peak-normalised, joined with silence",
+ "utterances": [
+  {
+   "lang": "fr",
+   "text": "L'eau se déverse sur la digue dans une section de 100 pieds de large.",
+   "start": 4.0,
+   "end": 7.487,
+   "source": "google/fleurs fr_fr dev 12551583146977488425.wav"
+  },
+  {
+   "lang": "en",
+   "text": "When you call someone who is thousands of miles away, you are using a satellite.",
+   "start": 9.488,
+   "end": 15.806,
+   "source": "google/fleurs en_us dev 10010138729160973689.wav"
+  },
+  {
+   "lang": "fr",
+   "text": "Les voies navigables intérieures peuvent être un excellent thème pour des vacances.",
+   "start": 17.806,
+   "end": 21.127,
+   "source": "google/fleurs fr_fr dev 12578790304113190442.wav"
+  },
+  {
+   "lang": "en",
+   "text": "Some festivals have special camping areas for families with young children.",
+   "start": 23.127,
+   "end": 29.459,
+   "source": "google/fleurs en_us dev 10280794863324544626.wav"
+  }
+ ]
+}

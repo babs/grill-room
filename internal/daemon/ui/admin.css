@@ -1,0 +1,17 @@
+:root { --line: #d8d2c8; --amber: #f4b942; --bad: #b3261e; --good: #1e7b34; font-family: system-ui, sans-serif; }
+body { margin: 0; color: #222; background: #fbf8f3; }
+header { display: flex; align-items: center; gap: 1rem; padding: 0.6rem 1rem; border-bottom: 1px solid var(--line); }
+header h1 { font-size: 1.1rem; margin: 0; }
+header button { margin-left: auto; }
+#banner, #update { margin: 0; padding: 0.6rem 1rem; background: var(--amber); }
+#image { word-break: break-all; }
+main { padding: 0 1rem 1rem; max-width: 60rem; }
+h2 { font-size: 1rem; margin: 1.2rem 0 0.4rem; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1rem; margin: 0 0 0.6rem; }
+dt { font-weight: 600; }
+dd { margin: 0; }
+.ok { color: var(--good); }
+.bad { color: var(--bad); }
+#code { font-size: 1.2rem; letter-spacing: 0.1em; }
+#room-error { color: var(--bad); }
+pre { background: #fff; border: 1px solid var(--line); padding: 0.5rem; max-height: 20rem; overflow: auto; font-size: 0.8rem; white-space: pre-wrap; }

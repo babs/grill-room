@@ -1,0 +1,211 @@
+package web
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"sort"
+	"strconv"
+
+	"go.uber.org/zap"
+
+	"github.com/babs/grill-room/internal/store"
+)
+
+// agentState is what the room shows about the agent: who hosts it, whether its daemon is there
+// (the LED), the last turn, and who may press the button. Sent as the "agent" event.
+type agentState struct {
+	HostID int64 `json:"host_participant_id,omitempty"`
+	// Online is true when the host's daemon is connected and can host (D8).
+	Online bool `json:"online"`
+	// Reason says why the agent is offline.
+	Reason string      `json:"reason,omitempty"`
+	Turn   *store.Turn `json:"turn"`
+	// CanTrigger lists the participants the host granted the button to (D18).
+	CanTrigger []int64 `json:"can_trigger"`
+	// Daemons are the connected daemons: the host can hand over to one that can host.
+	Daemons []presence `json:"daemons"`
+}
+
+// hostDaemon returns the connected daemon of participant pid in room, nil if there is none.
+func (s *Server) hostDaemon(room string, pid int64) *presence {
+	s.presence.mu.Lock()
+	defer s.presence.mu.Unlock()
+	for _, p := range s.presence.m {
+		if p.room == room && p.conns > 0 && p.ParticipantID == pid {
+			c := *p
+			return &c
+		}
+	}
+	return nil
+}
+
+func (s *Server) agentState(ctx context.Context, room string) (*agentState, error) {
+	r, err := s.bus.Store.Room(ctx, room)
+	if err != nil {
+		return nil, err
+	}
+	ps, err := s.bus.Store.Participants(ctx, room)
+	if err != nil {
+		return nil, err
+	}
+	st := &agentState{HostID: r.HostParticipantID, CanTrigger: []int64{}, Daemons: s.connectedDaemons(room)}
+	for _, p := range ps {
+		if p.CanTrigger {
+			st.CanTrigger = append(st.CanTrigger, p.ID)
+		}
+	}
+	switch h := s.hostDaemon(room, r.HostParticipantID); {
+	case h == nil:
+		st.Reason = "No host daemon is connected."
+	case !h.CanHost:
+		st.Reason = h.Reason
+	default:
+		st.Online = true
+	}
+	if st.Turn, err = s.bus.Store.LastTurn(ctx, room); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+	return st, nil
+}
+
+// agentChanged re-runs the host election and wakes the room's streams. Called whenever a daemon
+// connects, drops or changes its readiness.
+func (s *Server) agentChanged(ctx context.Context, room string) {
+	if err := s.elect(ctx, room); err != nil && !errors.Is(err, store.ErrNotFound) {
+		s.log.Error("host_election_failed", zap.String("room", room), zap.Error(err))
+	}
+	s.bus.Notify(room)
+}
+
+// elect keeps the host while its daemon is connected and can host; otherwise the participant
+// whose eligible daemon connected first becomes host (D7). With none eligible the host stays, offline.
+func (s *Server) elect(ctx context.Context, room string) error {
+	s.electMu.Lock()
+	defer s.electMu.Unlock()
+	r, err := s.bus.Store.Room(ctx, room)
+	if err != nil {
+		return err
+	}
+	s.presence.mu.Lock()
+	var eligible []presence
+	for _, p := range s.presence.m {
+		if p.room == room && p.conns > 0 && p.CanHost {
+			eligible = append(eligible, *p)
+		}
+	}
+	s.presence.mu.Unlock()
+	sort.Slice(eligible, func(i, j int) bool { return eligible[i].since.Before(eligible[j].since) })
+	for _, p := range eligible {
+		if p.ParticipantID == r.HostParticipantID {
+			return nil
+		}
+	}
+	if len(eligible) == 0 {
+		return nil
+	}
+	return s.setHost(ctx, room, eligible[0])
+}
+
+// setHost records the new host and says so in the room.
+func (s *Server) setHost(ctx context.Context, room string, d presence) error {
+	p, err := s.bus.Store.RoomParticipant(ctx, room, d.ParticipantID)
+	if err != nil {
+		return err
+	}
+	if err := s.bus.Store.SetHost(ctx, room, p.ID); err != nil {
+		return err
+	}
+	s.log.Info("host_elected", zap.String("room", room), zap.Int64("participant", p.ID))
+	return s.bus.Post(ctx, &store.Message{RoomID: room, Kind: store.KindSystem, ParticipantID: p.ID, Sender: p.Name,
+		Body: fmt.Sprintf("%s hosts the agent, on %s.", p.Name, d.Name)})
+}
+
+func (s *Server) getAgent(w http.ResponseWriter, r *http.Request, sess session) {
+	st, err := s.agentState(r.Context(), sess.p.RoomID)
+	if err != nil {
+		s.serverError(w, "get_agent_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+// asHost loads the room and answers 403 unless the session's participant hosts it.
+func (s *Server) asHost(w http.ResponseWriter, r *http.Request, sess session) (*store.Room, bool) {
+	room, err := s.bus.Store.Room(r.Context(), sess.p.RoomID)
+	if err != nil {
+		s.serverError(w, "host_check_failed", err)
+		return nil, false
+	}
+	if room.HostParticipantID != sess.p.ID {
+		httpError(w, http.StatusForbidden, "only the agent host can do this")
+		return nil, false
+	}
+	return room, true
+}
+
+// handOver lets the host pass the role to a participant whose daemon is connected and can host.
+func (s *Server) handOver(w http.ResponseWriter, r *http.Request, sess session) {
+	var req struct {
+		ParticipantID int64 `json:"participant_id"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	room, ok := s.asHost(w, r, sess)
+	if !ok {
+		return
+	}
+	if req.ParticipantID == room.HostParticipantID {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	// Held across the check and the write: an election in between would undo the hand-over.
+	s.electMu.Lock()
+	defer s.electMu.Unlock()
+	d := s.hostDaemon(room.ID, req.ParticipantID)
+	if d == nil || !d.CanHost {
+		httpError(w, http.StatusConflict, "that participant has no connected daemon able to host")
+		return
+	}
+	if err := s.setHost(r.Context(), room.ID, *d); err != nil {
+		s.serverError(w, "hand_over_failed", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// setCanTrigger lets the host grant or revoke the agent button for a participant (D18).
+func (s *Server) setCanTrigger(w http.ResponseWriter, r *http.Request, sess session) {
+	var req struct {
+		CanTrigger *bool `json:"can_trigger"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.CanTrigger == nil {
+		httpError(w, http.StatusBadRequest, "can_trigger is required")
+		return
+	}
+	room, ok := s.asHost(w, r, sess)
+	if !ok {
+		return
+	}
+	pid, err := strconv.ParseInt(r.PathValue("participant"), 10, 64)
+	if err != nil {
+		httpError(w, http.StatusNotFound, "no such participant")
+		return
+	}
+	err = s.bus.Store.SetCanTrigger(r.Context(), room.ID, pid, *req.CanTrigger)
+	if errors.Is(err, store.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "no such participant")
+		return
+	}
+	if err != nil {
+		s.serverError(w, "set_can_trigger_failed", err)
+		return
+	}
+	s.bus.Notify(room.ID)
+	w.WriteHeader(http.StatusNoContent)
+}
