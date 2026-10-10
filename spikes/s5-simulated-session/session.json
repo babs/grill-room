@@ -1,0 +1,197 @@
+{
+ "about": "Spike S5 script: a grill session on plan.md. make_audio.py fills start and end (seconds from the round's audio start) from the generated audio.",
+ "voices": {
+  "fr_FR-siwis-medium": {
+   "license": "CC-BY-4.0",
+   "dataset": "SIWIS French Speech Synthesis Database"
+  },
+  "fr_FR-mls-medium": {
+   "license": "CC-BY-4.0",
+   "dataset": "Multilingual LibriSpeech (OpenSLR 94)"
+  },
+  "en_US-joe-medium": {
+   "license": "CC0",
+   "dataset": "OHF-Voice voice-datasets"
+  },
+  "en_GB-cori-medium": {
+   "license": "public domain",
+   "dataset": "LibriVox"
+  }
+ },
+ "speakers": {
+  "Claire": {
+   "role": "PM",
+   "voices": {
+    "fr": {
+     "model": "fr_FR-siwis-medium"
+    }
+   }
+  },
+  "Marc": {
+   "role": "dev",
+   "voices": {
+    "fr": {
+     "model": "fr_FR-mls-medium",
+     "speaker_id": 84
+    },
+    "en": {
+     "model": "en_US-joe-medium"
+    }
+   }
+  },
+  "Emma": {
+   "role": "designer",
+   "voices": {
+    "en": {
+     "model": "en_GB-cori-medium"
+    }
+   }
+  }
+ },
+ "gap_s": 1.2,
+ "annotation": {
+  "by": "Emma",
+  "quote": "Dark colours live in one extra style sheet loaded after the main one.",
+  "comment": "Should these be colour tokens shared by both themes instead of a second style sheet?"
+ },
+ "rounds": [
+  {
+   "lead_s": 10.0,
+   "lines": [
+    {
+     "speaker": "Claire",
+     "lang": "fr",
+     "text": "Bonjour à tous. Aujourd'hui, on passe en revue le plan pour ajouter un mode sombre à l'interface de la salle.",
+     "start": 10.0,
+     "end": 16.244
+    },
+    {
+     "speaker": "Claire",
+     "lang": "fr",
+     "text": "L'idée est simple. Le thème suit le réglage du système, et chacun peut le forcer avec un bouton dans l'en-tête.",
+     "start": 17.444,
+     "end": 24.373
+    },
+    {
+     "speaker": "Marc",
+     "lang": "fr",
+     "text": "D'accord, mais le plan ne dit rien sur les documents affichés dans le cadre. Ils ont leurs propres styles, donc ils resteront blancs.",
+     "start": 25.573,
+     "end": 35.614
+    },
+    {
+     "speaker": "Claire",
+     "lang": "fr",
+     "text": "Bonne remarque. On pourrait ajouter une feuille de style sombre dans le cadre au moment du rendu.",
+     "start": 36.814,
+     "end": 42.164
+    },
+    {
+     "speaker": "Marc",
+     "lang": "fr",
+     "text": "Le cadre est isolé, il faut donc passer le thème au serveur quand il rend le document. Ça demande du travail.",
+     "start": 43.364,
+     "end": 55.495
+    },
+    {
+     "speaker": "Emma",
+     "lang": "en",
+     "text": "From the design side, I would like us to define the colours as tokens first, so that both themes share the same names.",
+     "start": 56.695,
+     "end": 63.429
+    },
+    {
+     "speaker": "Marc",
+     "lang": "en",
+     "text": "Okay, let me switch to English. The tokens make sense, but we have hard coded colours in at least three style sheets today.",
+     "start": 64.629,
+     "end": 72.116
+    },
+    {
+     "speaker": "Emma",
+     "lang": "en",
+     "gap_s": -1.5,
+     "overlap": true,
+     "text": "Sorry, quick question, what about contrast?",
+     "start": 70.616,
+     "end": 74.343
+    },
+    {
+     "speaker": "Marc",
+     "lang": "en",
+     "text": "Right, contrast. The red agent light and the amber light are hard to read on a dark background.",
+     "start": 75.543,
+     "end": 81.125
+    },
+    {
+     "speaker": "Emma",
+     "lang": "en",
+     "text": "Exactly. Every colour pair has to pass the accessibility contrast check, in both themes.",
+     "start": 82.325,
+     "end": 88.755
+    },
+    {
+     "speaker": "Claire",
+     "lang": "fr",
+     "text": "Très bien. On ajoute donc trois points au plan : les jetons de couleur, le thème des documents, et le contraste.",
+     "start": 89.955,
+     "end": 96.559
+    },
+    {
+     "speaker": "Claire",
+     "lang": "fr",
+     "text": "Est-ce qu'on garde le choix de chaque personne dans le navigateur, ou sur le serveur ?",
+     "start": 97.759,
+     "end": 102.031
+    },
+    {
+     "speaker": "Marc",
+     "lang": "en",
+     "text": "In the browser. Local storage is enough, there are no accounts anyway.",
+     "start": 103.231,
+     "end": 107.571
+    },
+    {
+     "speaker": "Emma",
+     "lang": "en",
+     "text": "Agreed. And please, no flash of the light theme while the page is loading.",
+     "start": 108.771,
+     "end": 113.332
+    },
+    {
+     "speaker": "Claire",
+     "lang": "fr",
+     "text": "Parfait. On demande maintenant à l'agent de réviser le plan avec tous ces points.",
+     "start": 114.532,
+     "end": 118.803
+    }
+   ]
+  },
+  {
+   "lead_s": 4.0,
+   "lines": [
+    {
+     "speaker": "Marc",
+     "lang": "en",
+     "text": "One more decision. We ship dark mode behind a feature flag, and we turn it on for everyone after one week.",
+     "start": 4.0,
+     "end": 10.535
+    },
+    {
+     "speaker": "Emma",
+     "lang": "en",
+     "text": "And I will deliver the colour tokens before the developers start.",
+     "start": 11.735,
+     "end": 15.264
+    },
+    {
+     "speaker": "Claire",
+     "lang": "fr",
+     "text": "C'est noté. L'agent peut mettre à jour le plan avec le drapeau et ce calendrier.",
+     "start": 16.464,
+     "end": 21.443
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,7 @@
+# Links to e2e/node_modules (see README.md).
+node_modules
+*.wav
+*.onnx
+*.onnx.json
+.venv/
+__pycache__/

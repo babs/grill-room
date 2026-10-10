@@ -50,7 +50,7 @@ A self-hosted web room. People join with an invite link and a browser and talk t
 
 ### Voice and transcripts
 - [x] **AC6** Given two participants in a room, when one speaks, then the other hears them.
-- [x] **AC7** Given a participant speaking French, when they pause, then a transcript line with their display name appears for everyone within 10 s of the end of the utterance.
+- [ ] **AC7** Given a participant speaking French, when they pause, then a transcript line with their display name appears for everyone within 10 s of the end of the utterance.
 - [x] **AC8** Given utterances alternating between French and English, each line is transcribed in the language spoken, not translated.
 - [x] **AC9** No audio file or audio blob exists on the server or in the store after a session. Verified by inspecting the STT pod filesystem and the SQLite tables.
 - [x] **AC10** When the STT worker is down, the room still works for audio and text. The UI shows "transcription unavailable", and lines resume when the worker returns.
