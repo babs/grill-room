@@ -60,36 +60,36 @@ The sandbox gets Python, uv, Office libraries and common CLI tools. It reaches t
 - [x] **AC7** Any member can create an invite link. A member can revoke the invites they created, and the admin can revoke any.
 
 ### Chat
-- [ ] **AC8** A message renders Markdown (emphasis, lists, code, links, tables). Raw HTML and script content are not rendered, and links get `rel="noopener noreferrer"`.
-- [ ] **AC9** An author can edit their message. It shows "(edited)", and earlier versions stay readable.
-- [ ] **AC10** The speaker can correct their own voice line. Others cannot.
-- [ ] **AC11** An author can delete their message. It shows "message deleted", and the content stays in the store for the agent and for export.
-- [ ] **AC12** A message edited or deleted after an agent turn has seen it appears in that persona's next prompt as edited (before → after) or deleted.
+- [x] **AC8** A message renders Markdown (emphasis, lists, code, links, tables). Raw HTML and script content are not rendered, and links get `rel="noopener noreferrer"`.
+- [x] **AC9** An author can edit their message. It shows "(edited)", and earlier versions stay readable.
+- [x] **AC10** The speaker can correct their own voice line. Others cannot.
+- [x] **AC11** An author can delete their message. It shows "message deleted", and the content stays in the store for the agent and for export.
+- [x] **AC12** A message edited or deleted after an agent turn has seen it appears in that persona's next prompt as edited (before → after) or deleted.
 
 ### Personas
-- [ ] **AC13** The template library ships "Default" (grill) and "Secretary". A profile can publish a template, and each version is immutable with its author. The admin can remove a template.
-- [ ] **AC14** Any member can add a persona to a room from a template. The room copy keeps its own overrides, and a later template version does not change it. The room is offered the update instead.
-- [ ] **AC15** Any member can edit a room persona's text, model, effort, triggers, skills and self-call. A change made during a turn applies to the next turn, and every change is recorded in the chat.
-- [ ] **AC16** Each room persona has its own Claude session. Persona A's turn never resumes persona B's session, and a takeover by another host resumes each persona's own session.
-- [ ] **AC17** Only one turn runs at a time in a room. A press while a turn runs is queued and shown as queued.
-- [ ] **AC18** Every synthesis message shows the persona and the model and effort actually used.
-- [ ] **AC42** The default persona is always identified by its own name and badge ("Grill" unless renamed), never as an anonymous "Agent": synthesis messages, revisions, annotations and replies all carry it. Agent output from before 002 is attributed to the migrated Default persona.
+- [x] **AC13** The template library ships "Default" (grill) and "Secretary". A profile can publish a template, and each version is immutable with its author. The admin can remove a template.
+- [x] **AC14** Any member can add a persona to a room from a template. The room copy keeps its own overrides, and a later template version does not change it. The room is offered the update instead.
+- [x] **AC15** Any member can edit a room persona's text, model, effort, triggers, skills and self-call. A change made during a turn applies to the next turn, and every change is recorded in the chat.
+- [x] **AC16** Each room persona has its own Claude session. Persona A's turn never resumes persona B's session, and a takeover by another host resumes each persona's own session.
+- [x] **AC17** Only one turn runs at a time in a room. A press while a turn runs is queued and shown as queued.
+- [x] **AC18** Every synthesis message shows the persona and the model and effort actually used.
+- [x] **AC42** The default persona is always identified by its own name and badge ("Grill" unless renamed), never as an anonymous "Agent": synthesis messages, revisions, annotations and replies all carry it. Agent output from before 002 is attributed to the migrated Default persona.
 
 ### Host cap and approvals
-- [ ] **AC19** A persona asking for more than the host cap runs at the cap. Its synthesis shows "requested X → ran Y (host cap)", and the host sees an approval banner.
-- [ ] **AC20** When the host approves, that persona in that room runs as requested from the next turn, and the daemon's global cap is unchanged. When the host refuses, it keeps running at the cap.
-- [ ] **AC21** With "approve everything" on, a new persona and every persona change wait for the host's approval before taking effect.
+- [x] **AC19** A persona asking for more than the host cap runs at the cap. Its synthesis shows "requested X → ran Y (host cap)", and the host sees an approval banner.
+- [x] **AC20** When the host approves, that persona in that room runs as requested from the next turn, and the daemon's global cap is unchanged. When the host refuses, it keeps running at the cap.
+- [x] **AC21** With "approve everything" on, a new persona and every persona change wait for the host's approval before taking effect.
 
 ### Triggers and chains
-- [ ] **AC22** Each persona has its own button in the room. Pressing it runs that persona, and "every N rounds" makes it run after N completed agent turns of any persona.
-- [ ] **AC23** A human message mentioning `@persona` queues a turn for that persona.
-- [ ] **AC24** A persona's synthesis mentioning `@other` queues a turn for `other`. Mentioning itself does nothing unless that persona has self-call on.
-- [ ] **AC25** Agent-triggered turns (every N rounds and `@persona` from a persona) count as chain links. At the budget (default 25, configurable per room), the chain pauses with a banner offering "re-arm" and "suspend limit".
-- [ ] **AC26** A human pressing a persona button, the re-arm button, or a human message mentioning a persona resets the chain count. Voice lines and plain text do not.
-- [ ] **AC27** Suspending the limit shows a permanent warning while it is off, and the host cap still applies.
+- [x] **AC22** Each persona has its own button in the room. Pressing it runs that persona, and "every N rounds" makes it run after N completed agent turns of any persona.
+- [x] **AC23** A human message mentioning `@persona` queues a turn for that persona.
+- [x] **AC24** A persona's synthesis mentioning `@other` queues a turn for `other`. Mentioning itself does nothing unless that persona has self-call on.
+- [x] **AC25** Agent-triggered turns (every N rounds and `@persona` from a persona) count as chain links. At the budget (default 25, configurable per room), the chain pauses with a banner offering "re-arm" and "suspend limit".
+- [x] **AC26** A human pressing a persona button, the re-arm button, or a human message mentioning a persona resets the chain count. Voice lines and plain text do not.
+- [x] **AC27** Suspending the limit shows a permanent warning while it is off, and the host cap still applies.
 
 ### Presence
-- [ ] **AC28** Every prompt starts with a presence preamble from one template:
+- [x] **AC28** Every prompt starts with a presence preamble from one template:
   - the room name;
   - the persona's own name and model/effort;
   - each other persona with model/effort, state, turns, trigger and the first line of its last synthesis;
@@ -99,27 +99,27 @@ The sandbox gets Python, uv, Office libraries and common CLI tools. It reaches t
   Each line is capped at about 100 characters.
 
 ### Skills
-- [ ] **AC29** A skill is a Claude Code skill folder (`SKILL.md` with frontmatter, optional files). The shared library accepts a zip upload, keeps immutable versions with their author, and lets the admin remove one.
-- [ ] **AC30** A profile can upload personal skills. They are only offered in rooms that profile is in, and they never come from the host's disk.
-- [ ] **AC31** A persona's active skills reach `claude -p` through `--plugin-dir` as the version pinned in the room. A skill update is offered, not applied.
-- [ ] **AC32** The first time a profile activates a skill, a disclaimer warns about scripts and data exposure, including the egress allowlist. It is shown once per profile.
+- [x] **AC29** A skill is a Claude Code skill folder (`SKILL.md` with frontmatter, optional files). The shared library accepts a zip upload, keeps immutable versions with their author, and lets the admin remove one.
+- [x] **AC30** A profile can upload personal skills. They are only offered in rooms that profile is in, and they never come from the host's disk.
+- [x] **AC31** A persona's active skills reach `claude -p` through `--plugin-dir` as the version pinned in the room. A skill update is offered, not applied.
+- [x] **AC32** The first time a profile activates a skill, a disclaimer warns about scripts and data exposure, including the egress allowlist. It is shown once per profile.
 
 ### Sandbox and egress
-- [ ] **AC33** The sandbox image runs `python3`, `uv`, `node`, `jq`, `yq`, `rg`, `git`, `curl` and `pandoc`. A script reading and writing an `.xlsx` with openpyxl and a `.docx` with python-docx succeeds offline.
-- [ ] **AC34** From the sandbox, `uv pip install` of a PyPI package and a `git clone` from GitHub work through the egress proxy, and a request to a host outside the allowlist is denied.
-- [ ] **AC35** From the sandbox, any Anthropic host is denied by the egress proxy, and `claude -p` still works through the bearer-swap proxy.
-- [ ] **AC36** The host can edit the allowlist, the cap and the approval mode from the daemon page. Denied egress requests are listed there with host and time.
+- [x] **AC33** The sandbox image runs `python3`, `uv`, `node`, `jq`, `yq`, `rg`, `git`, `curl` and `pandoc`. A script reading and writing an `.xlsx` with openpyxl and a `.docx` with python-docx succeeds offline.
+- [x] **AC34** From the sandbox, `uv pip install` of a PyPI package and a `git clone` from GitHub work through the egress proxy, and a request to a host outside the allowlist is denied.
+- [x] **AC35** From the sandbox, any Anthropic host is denied by the egress proxy, and `claude -p` still works through the bearer-swap proxy.
+- [x] **AC36** The host can edit the allowlist, the cap and the approval mode from the daemon page. Denied egress requests are listed there with host and time.
 
 ### Workspace sync
-- [ ] **AC37** The daemon fetches a manifest of paths, sha256 and sizes, then a tar of only the paths missing from or changed in its per-room cache. A second turn with no room change transfers no upload bytes.
-- [ ] **AC38** A corrupt or missing cache falls back to the full workspace, and the turn still succeeds.
+- [x] **AC37** The daemon fetches a manifest of paths, sha256 and sizes, then a tar of only the paths missing from or changed in its per-room cache. A second turn with no room change transfers no upload bytes.
+- [x] **AC38** A corrupt or missing cache falls back to the full workspace, and the turn still succeeds.
 
 ### Mobile and live
-- [ ] **AC39** On a phone, the message input stays visible above the on-screen keyboard and the message list stays scrollable. Tested by `e2e/mobile.spec.js` and checked by hand on Android.
-- [ ] **AC40** A dropped live stream reconnects and resumes after the last message without duplicates. Returning to the page from the background reloads the room state. Tested by `e2e/mobile.spec.js`.
+- [x] **AC39** On a phone, the message input stays visible above the on-screen keyboard and the message list stays scrollable. Tested by `e2e/mobile.spec.js` and checked by hand on Android.
+- [x] **AC40** A dropped live stream reconnects and resumes after the last message without duplicates. Returning to the page from the background reloads the room state. Tested by `e2e/mobile.spec.js`.
 
 ### End to end
-- [ ] **AC41** On the lab, a simulated session with two personas (Grill on demand, Secretary every 2 rounds) runs: Grill calls `@secretary` once, the chain count is shown, and both syntheses name the model and effort. The presence preamble is captured and reviewed in the report.
+- [x] **AC41** On the lab, a simulated session with two personas (Grill on demand, Secretary every 2 rounds) runs: Grill calls `@secretary` once, the chain count is shown, and both syntheses name the model and effort. The presence preamble is captured and reviewed in the report.
 
 ## Phases
 
