@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -119,6 +120,9 @@ func TestLocalImageFollowsDockerfile(t *testing.T) {
 }
 
 func TestDockerStream(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake docker is a sh script")
+	}
 	dir := t.TempDir()
 	// A fake docker: prints its args and one line on stderr, fails when asked to.
 	script := "#!/bin/sh\necho \"args $*\"\necho 'to stderr' >&2\n[ \"$1\" = fail ] && { echo 'boom happened' >&2; exit 3; }\nexit 0\n"

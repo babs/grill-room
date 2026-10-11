@@ -56,7 +56,5 @@ func TestAdminSettings(t *testing.T) {
 	if _, err := LoadSettings(broken, env); err == nil || !strings.Contains(err.Error(), "parse") {
 		t.Fatalf("a corrupt file: %v", err)
 	}
-	if fi, err := os.Stat(d.o.SettingsPath); err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("settings file mode: %v %v", fi, err)
-	}
+	assertPerm(t, d.o.SettingsPath, 0o600)
 }

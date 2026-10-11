@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -201,6 +202,9 @@ func TestNoReleaseOffersNoDownload(t *testing.T) {
 // Ubuntu, bash elsewhere, busybox ash on Alpine.
 func installShells(t *testing.T) [][]string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("install.sh installs on Linux and macOS; it refuses MSYS and MinGW")
+	}
 	if _, err := exec.LookPath("curl"); err != nil {
 		t.Skip("curl not installed")
 	}

@@ -60,9 +60,7 @@ func TestAdminAllowlist(t *testing.T) {
 	if got, err := LoadAllowlist(d.o.AllowlistPath); err != nil || !slices.Equal(got, want) {
 		t.Fatalf("after a restart: %v %v", got, err)
 	}
-	if fi, err := os.Stat(d.o.AllowlistPath); err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("allowlist file mode: %v %v", fi, err)
-	}
+	assertPerm(t, d.o.AllowlistPath, 0o600)
 	// Removing every domain is a choice, kept as such.
 	if code, body := e.req(t, "POST", "/api/allowlist", tok, `{"allowlist":[]}`, nil); code != http.StatusNoContent {
 		t.Fatalf("empty allowlist: %d %s", code, body)

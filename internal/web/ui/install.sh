@@ -81,7 +81,9 @@ main() {
 	want=${want%% *}
 	got=$(sha256_of "$tmp")
 	got=${got%% *}
-	[ -n "$want" ] && [ "$got" = "$want" ] || die "sha256 mismatch for $file: the room server publishes $want, the download is $got. Nothing was installed."
+	if [ -z "$want" ] || [ "$got" != "$want" ]; then
+		die "sha256 mismatch for $file: the room server publishes $want, the download is $got. Nothing was installed."
+	fi
 
 	chmod 755 "$tmp"
 	mv -f "$tmp" "$dir/$bin_name"

@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -658,6 +659,10 @@ func TestUIIsServed(t *testing.T) {
 			t.Fatal(err)
 		}
 		_ = resp.Body.Close()
+		if runtime.GOOS == "windows" && strings.HasSuffix(path, ".js") {
+			// The registry maps .js to application/javascript; the server ships on Linux.
+			want = "application/javascript"
+		}
 		if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), want) {
 			t.Errorf("%s: %d %s, want %s", path, resp.StatusCode, resp.Header.Get("Content-Type"), want)
 		}

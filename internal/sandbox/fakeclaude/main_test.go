@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,9 @@ func call(t *testing.T, cwd, home, prompt string, args ...string) (out, int) {
 }
 
 func TestFakeClaude(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake claude runs in the Linux sandbox only; it names projects from POSIX paths")
+	}
 	cwd, home := t.TempDir(), t.TempDir()
 	for _, d := range []string{"docs", "uploads", "transcript"} {
 		if err := os.Mkdir(filepath.Join(cwd, d), 0o755); err != nil {

@@ -110,9 +110,7 @@ func TestUpdateReplacesBinaryAndRestarts(t *testing.T) {
 		t.Fatalf("update: %d %s", s, body)
 	}
 	assertOnlyBinary(t, exe, string(newBin))
-	if st, _ := os.Stat(exe); st.Mode().Perm() != 0o755 {
-		t.Fatalf("mode %v", st.Mode())
-	}
+	assertPerm(t, exe, 0o755)
 	if !restarted.Load() {
 		t.Fatal("no restart")
 	}
@@ -334,5 +332,17 @@ func TestReleaseFile(t *testing.T) {
 		if got := releaseFile(tt.goos, tt.goarch); got != tt.want {
 			t.Errorf("releaseFile(%s, %s) = %q, want %q", tt.goos, tt.goarch, got, tt.want)
 		}
+	}
+}
+
+// assertPerm checks path's Unix mode. Windows has no mode bits: Go reports 0666 or 0444 there.
+func assertPerm(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && fi.Mode().Perm() != want {
+		t.Fatalf("%s: mode %v, want %v", path, fi.Mode().Perm(), want)
 	}
 }

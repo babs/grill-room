@@ -31,7 +31,7 @@ proxy_pid=""
 credsdir=$(mktemp -d "$S8/creds.XXXXXX")
 # Cleanup runs after partial failures too: missing objects are expected.
 cleanup() {
-  [[ -n "$proxy_pid" ]] && kill "$proxy_pid" 2>/dev/null || true
+  if [[ -n "$proxy_pid" ]]; then kill "$proxy_pid" 2>/dev/null || true; fi
   docker rm -f "$NAME" "$NAME-relay" >/dev/null 2>&1 || true
   docker network rm "$NAME" >/dev/null 2>&1 || true
   rm -rf "$credsdir"

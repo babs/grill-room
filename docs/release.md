@@ -99,4 +99,16 @@ docker logout ghcr.io; docker pull "$(cat sandbox-image.txt)"
 
 ## Tests skipped on Windows
 
-TBD
+The `windows` job runs `go test ./...` without `-race`. These checks skip there:
+
+| Test | Why |
+|---|---|
+| `internal/web` `TestInstallScriptInstallsAndStarts`, `TestInstallScriptRefuses` | `install.sh` targets Linux and macOS and refuses MSYS and MinGW |
+| `internal/sandbox` `TestDockerStream` | its fake `docker` is a sh script |
+| `internal/sandbox/fakeclaude` `TestFakeClaude` | the fake claude runs only in the Linux sandbox and builds project names from POSIX paths |
+| `GRILL_ROOM_TEST_DOCKER` tests (`make test-docker`) | they need Docker; they already skip without that variable on every OS |
+
+Two assertions change on Windows:
+
+- the file-mode checks in `TestAdminAllowlist`, `TestAdminSettings` and `TestUpdateReplacesBinaryAndRestarts`. Windows has no mode bits, so the 0600 these files get on Unix protects nothing there. Phase 4 has to cover token files on Windows with ACLs or the Credential Manager.
+- `TestUIIsServed` expects `application/javascript` for `.js`, the type the Windows registry gives. The room server ships on Linux.
