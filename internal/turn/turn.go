@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path"
 	"strings"
 	"unicode"
@@ -108,6 +109,35 @@ type Result struct {
 	Session       []byte   `json:"session,omitempty"`
 	Changes       []Change `json:"changes,omitempty"`
 }
+
+// Manifest lists a turn's workspace (002-AC37): the daemon fetches only the files its cache lacks.
+// Files are sorted by path.
+type Manifest struct {
+	Dirs  []string `json:"dirs"`
+	Files []File   `json:"files"`
+}
+
+// File is one workspace file; SHA256 is the hex digest of its bytes.
+type File struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+	Mode   int64  `json:"mode"`
+}
+
+// PathsRequest asks for a tar of these workspace files only.
+type PathsRequest struct {
+	Paths []string `json:"paths"`
+}
+
+// FallbackReasons are why a daemon with a cache fetched the full workspace (002-AC38): it holds
+// no cache for the room, a cached file failed its hash, the partial tar did not match the
+// manifest, or the manifest was unavailable or invalid.
+var FallbackReasons = []string{"missing", "corrupt", "partial", "manifest"}
+
+// ValidPath accepts a relative, slash-separated workspace path with no "." or ".." element: it
+// cannot leave the workspace.
+func ValidPath(p string) bool { return p != "." && fs.ValidPath(p) }
 
 // NeedsContent reports whether the server needs a changed file's bytes; for any other change the
 // path is enough, which keeps an edited 20 MB upload out of the result.

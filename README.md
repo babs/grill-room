@@ -300,7 +300,8 @@ At start, and again each time it reconnects, the daemon asks the room server for
 
 | Variable | Default | |
 |---|---|---|
-| `GRILL_ROOM_DAEMON_STATE_DIR` | `<user config dir>/grill-room-daemon` | daemon tokens, and the page's settings in `settings.json` and `allowlist.json` |
+| `GRILL_ROOM_DAEMON_STATE_DIR` | `<user config dir>/grill-room-daemon` | daemon tokens, the page's settings in `settings.json` and `allowlist.json`, and the workspace cache in `workspace-cache/` |
+| `GRILL_ROOM_DAEMON_CACHE_MB` | `1024` | size cap of the workspace cache in `<state dir>/workspace-cache`, least recently used files dropped first; `0` fetches every workspace whole |
 | `GRILL_ROOM_DAEMON_BROWSER` | `auto` | `none` prints the page link instead of opening it |
 | `GRILL_ROOM_SANDBOX_IMAGE` | none | pins the sandbox image, e.g. `grill-room-sandbox:local` from `make sandbox-image`; skips the pull and the build |
 | `GRILL_ROOM_AGENT_MODEL` | Claude Code's default | `--model` for the turns of a persona that asks for none, e.g. `haiku` |

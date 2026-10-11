@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
+	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/mail"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/web"
@@ -140,5 +143,34 @@ func TestValidateVoice(t *testing.T) {
 	t.Setenv("GRILL_ROOM_LIVEKIT_URL", "wss://livekit.example")
 	if c, _ := loadConfig(); c.LiveKitAPIURL != "https://livekit.example" {
 		t.Fatalf("default API URL %q", c.LiveKitAPIURL)
+	}
+}
+
+// 002-AC38: workspace fallbacks are counted on /metrics, one series per reason.
+func TestRegistryCountsWorkspaceFallbacks(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "m.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	b := bus.New(st)
+	mfs, err := newRegistry(b, web.New(b, "", "http://x", web.Options{}, zap.NewNop())).Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reasons []string
+	for _, mf := range mfs {
+		if mf.GetName() != "grill_room_workspace_fallbacks_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			reasons = append(reasons, m.GetLabel()[0].GetValue())
+			if m.GetCounter().GetValue() != 0 {
+				t.Fatalf("%v", m)
+			}
+		}
+	}
+	if strings.Join(reasons, ",") != "corrupt,manifest,missing,partial" {
+		t.Fatalf("reasons %v", reasons)
 	}
 }

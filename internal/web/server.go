@@ -30,6 +30,7 @@ import (
 
 	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/store"
+	"github.com/babs/grill-room/internal/turn"
 )
 
 //go:embed ui
@@ -70,6 +71,8 @@ type Server struct {
 	// turnMu serialises turn starts and queue draining, so presses run in the order they came.
 	// ponytail: one lock for every room; per-room locks if many busy rooms ever contend.
 	turnMu sync.Mutex
+	// fallbacks counts full workspace fetches by daemons with a cache, by turn.FallbackReasons.
+	fallbacks map[string]*atomic.Int64
 }
 
 // New builds a server. adminHash is HashToken of the admin token; baseURL prefixes invite links.
@@ -85,8 +88,19 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	}
 	return &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
 		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, viewers: viewers{m: map[int64]int{}}, stt: sttWorkers{m: map[string]*sttWorker{}},
-		magicLimit: limiter{window: magicWindow}}
+		magicLimit: limiter{window: magicWindow}, fallbacks: fallbackCounters()}
 }
+
+func fallbackCounters() map[string]*atomic.Int64 {
+	m := make(map[string]*atomic.Int64, len(turn.FallbackReasons))
+	for _, r := range turn.FallbackReasons {
+		m[r] = new(atomic.Int64)
+	}
+	return m
+}
+
+// WorkspaceFallbacks returns how many full workspaces daemons fetched for reason (002-AC38).
+func (s *Server) WorkspaceFallbacks(reason string) int64 { return s.fallbacks[reason].Load() }
 
 // Streams returns the number of open event streams.
 func (s *Server) Streams() int64 { return s.streams.Load() }
@@ -186,6 +200,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/templates/{template}", s.admin(s.removeTemplate))
 	mux.Handle("GET /api/rooms/{room}/daemon/turns/{turn}", s.daemonAuth(s.getJob))
 	mux.Handle("GET /api/rooms/{room}/daemon/turns/{turn}/workspace", s.daemonAuth(s.getWorkspace))
+	mux.Handle("POST /api/rooms/{room}/daemon/turns/{turn}/workspace", s.daemonAuth(s.postWorkspace))
+	mux.Handle("GET /api/rooms/{room}/daemon/turns/{turn}/manifest", s.daemonAuth(s.getManifest))
 	mux.Handle("GET /api/rooms/{room}/daemon/turns/{turn}/skills", s.daemonAuth(s.getSkills))
 	mux.Handle("POST /api/rooms/{room}/daemon/turns/{turn}", s.daemonAuth(s.postResult))
 	mux.Handle("GET /api/rooms/{room}/daemon/sessions/{session}", s.daemonAuth(s.getSession))

@@ -407,15 +407,77 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request, d *store.Daemon,
 	writeJSON(w, http.StatusOK, job)
 }
 
-// getWorkspace streams the turn's workspace as a tar (D10, D20).
+// getWorkspace streams the turn's whole workspace as a tar (D10, D20). A daemon with a cache asks
+// for it only as a fallback, and says why (002-AC38).
 func (s *Server) getWorkspace(w http.ResponseWriter, r *http.Request, d *store.Daemon, _ string) {
 	t, ok := s.daemonTurn(w, r, d)
 	if !ok {
 		return
 	}
+	if reason := r.URL.Query().Get("fallback"); reason != "" {
+		if n := s.fallbacks[reason]; n != nil {
+			n.Add(1)
+		}
+		s.log.Warn("workspace_fallback", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.String("daemon", d.Name),
+			zap.String("reason", truncate(reason, 32)))
+	}
 	w.Header().Set("Content-Type", "application/x-tar")
-	if err := s.writeWorkspace(r.Context(), w, t); err != nil {
+	if err := s.writeWorkspace(r.Context(), w, t, nil); err != nil {
 		// Headers are gone: the daemon sees a truncated tar and fails the turn.
+		s.log.Error("workspace_failed", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.Error(err))
+	}
+}
+
+// getManifest lists the turn's workspace files with their sha256 and size (002-AC37).
+func (s *Server) getManifest(w http.ResponseWriter, r *http.Request, d *store.Daemon, _ string) {
+	t, ok := s.daemonTurn(w, r, d)
+	if !ok {
+		return
+	}
+	m, err := s.manifest(r.Context(), t)
+	if err != nil {
+		s.serverError(w, "workspace_manifest_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, m)
+}
+
+// maxPathsRequest bounds the list of paths a daemon asks for: thousands of workspace paths.
+const maxPathsRequest = 1 << 20
+
+// postWorkspace streams a tar of the workspace files the daemon lists, the ones its cache lacks
+// (002-AC37). Every path must be one of this turn's workspace.
+func (s *Server) postWorkspace(w http.ResponseWriter, r *http.Request, d *store.Daemon, _ string) {
+	t, ok := s.daemonTurn(w, r, d)
+	if !ok {
+		return
+	}
+	var req turn.PathsRequest
+	if !decodeLimit(w, r, &req, maxPathsRequest) {
+		return
+	}
+	only := make(map[string]bool, len(req.Paths))
+	for _, p := range req.Paths {
+		only[p] = true
+	}
+	// Listing the paths reads no blob; only the requested files are loaded below.
+	found := 0
+	err := s.walkWorkspace(r.Context(), t, func(name string, _ int64, _ func() ([]byte, error)) error {
+		if only[name] {
+			found++
+		}
+		return nil
+	})
+	if err != nil {
+		s.serverError(w, "workspace_failed", err)
+		return
+	}
+	if found != len(only) {
+		httpError(w, http.StatusBadRequest, "a path is not in this turn's workspace")
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-tar")
+	if err := s.writeWorkspace(r.Context(), w, t, only); err != nil {
 		s.log.Error("workspace_failed", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.Error(err))
 	}
 }

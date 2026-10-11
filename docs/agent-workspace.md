@@ -17,7 +17,7 @@ The Go side of this contract is `internal/turn`. Change both together.
 | `replies.json` | absent | the agent creates it to answer threads |
 | `annotations-new.json` | absent | the agent creates it to open annotations of its own |
 
-The id prefix on uploads keeps two uploads with the same name apart. The daemon wipes `/workspace` before unpacking, so nothing carries over from a previous turn. The read-only modes only stop honest edits; the server is what enforces D30.
+The id prefix on uploads keeps two uploads with the same name apart. The daemon wipes `/workspace` before unpacking, so nothing carries over from a previous turn, even when most files came from its cache (wire protocol, step 3). The read-only modes only stop honest edits; the server is what enforces D30.
 
 ## Personas
 
@@ -101,7 +101,15 @@ Anything else the agent writes, in `transcript/` or at the root, is scratch and 
 
 1. The server sends `event: turn` with `{"id": N}` on the daemon's stream.
 2. `GET .../daemon/turns/N` returns the job: `prompt`, `persona` (its name), `system` (its text), `model`, `effort`, `approved` (the `model` and `effort` the host approved above its cap for this persona, on this daemon; empty otherwise), `skills` (the persona's active skills at their pinned versions; absent for none), `resume` (the persona's session id or empty), `session_size`, `session_sha256`, `timeout_seconds`.
-3. `GET .../daemon/turns/N/workspace` returns the tar. When the job lists `skills` (`[{"name", "version"}]`), `GET .../daemon/turns/N/skills` returns the plugin directory as a tar.
+3. The workspace. A daemon with a cache asks for what changed:
+   - `GET .../daemon/turns/N/manifest` returns `{"dirs": [...], "files": [{"path", "sha256", "size", "mode"}]}`, every workspace file sorted by path.
+   - The daemon keeps one cache per room under its state dir (`workspace-cache/`), out of every sandbox, with files named by their sha256. It hashes each cached file the manifest names, then `POST .../daemon/turns/N/workspace` with `{"paths": [...]}` for the missing ones only, and gets a tar of those. A turn whose files are all cached sends no POST, and an unchanged upload is not sent again while it stays cached.
+   - It builds the tar it unpacks in `/workspace` from the cache. The cache has a size cap, `GRILL_ROOM_DAEMON_CACHE_MB` (1024 by default, 0 turns it off), and drops the least recently used files first, all rooms together. The daemon deletes a room's cache when the room revokes it or is deleted.
+   - It falls back to `GET .../daemon/turns/N/workspace?fallback=<reason>`, the full tar, which refills the cache: `missing` with no cache for the room, `corrupt` when a cached file fails its hash (the file is deleted), `partial` when the POST fails or its tar holds anything but the requested files with the manifest's hashes, `manifest` when the manifest is unavailable (an older room server) or invalid. The daemon logs `workspace_fallback`. The server logs it too and counts it in `grill_room_workspace_fallbacks_total{reason}`.
+   - The server answers a POST only for paths of this turn's workspace, or 400. Before writing anything, the daemon refuses a manifest path or a tar entry that is absolute or has a `.` or `..` element, a manifest path listed twice, and a tar entry that is not a regular file or a directory.
+   - A daemon without a cache, as before 002 or with the cap at 0, gets the full tar with a plain `GET .../daemon/turns/N/workspace`, which the server keeps for daemons not yet updated.
+
+   When the job lists `skills` (`[{"name", "version"}]`), `GET .../daemon/turns/N/skills` returns the plugin directory as a tar.
 4. If `resume` is set and the daemon's local `<id>.jsonl` does not match the size and hash, it fetches `GET .../daemon/sessions/<id>` and writes it into the sandbox home before running `claude -p --resume <id>` (D6). The cwd is always `/workspace`, so the session's project slug never changes (S2). Every persona's session lives in the same sandbox home under its own id; the room stores each under its persona, so a takeover resumes each persona's own session.
 5. The daemon hashes `/workspace` before and after the run and sends each changed path. It sends contents only for `docs/`, `replies.json` and `annotations-new.json`, so an edited 20 MB upload costs one path.
 6. `POST .../daemon/turns/N` with `{"synthesis", "model", "effort", "capped", "changes", "session_id", "session_offset", "session"}`, or `{"error"}`. `capped` is true when the host cap lowered what the persona asked for. `session` holds the jsonl bytes past `session_offset`: the server's size when resuming, 0 for a new session (D23). The server refuses a gap or an overlap.

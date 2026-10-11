@@ -33,6 +33,7 @@ import (
 	"github.com/babs/grill-room/internal/mail"
 	"github.com/babs/grill-room/internal/sandbox"
 	"github.com/babs/grill-room/internal/store"
+	"github.com/babs/grill-room/internal/turn"
 	"github.com/babs/grill-room/internal/web"
 )
 
@@ -343,17 +344,7 @@ func run() error {
 	if cfg.LiveKitURL == "" {
 		logger.Info("voice_disabled", zap.String("hint", "set GRILL_ROOM_LIVEKIT_URL to enable audio"))
 	}
-	reg := prometheus.NewRegistry()
-	reg.MustRegister(
-		collectors.NewGoCollector(),
-		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
-		prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_bus_dropped_total", Help: "Room change signals lost to full subscriber buffers."},
-			func() float64 { return float64(b.Dropped()) }),
-		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_event_streams", Help: "Open SSE event streams."},
-			func() float64 { return float64(srv.Streams()) }),
-		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_stt_workers", Help: "STT workers with a recent heartbeat."},
-			func() float64 { return float64(srv.STTWorkers()) }),
-	)
+	reg := newRegistry(b, srv)
 
 	appSrv := &http.Server{
 		Addr:    cfg.Addr,
@@ -379,4 +370,25 @@ func run() error {
 	err = g.Wait()
 	logger.Info("shutdown")
 	return err
+}
+
+// newRegistry holds the process metrics and the room server's own.
+func newRegistry(b *bus.Bus, srv *web.Server) *prometheus.Registry {
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+		prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_bus_dropped_total", Help: "Room change signals lost to full subscriber buffers."},
+			func() float64 { return float64(b.Dropped()) }),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_event_streams", Help: "Open SSE event streams."},
+			func() float64 { return float64(srv.Streams()) }),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_stt_workers", Help: "STT workers with a recent heartbeat."},
+			func() float64 { return float64(srv.STTWorkers()) }),
+	)
+	for _, reason := range turn.FallbackReasons {
+		reg.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_workspace_fallbacks_total",
+			Help: "Full workspace fetches by daemons that keep a workspace cache.", ConstLabels: prometheus.Labels{"reason": reason}},
+			func() float64 { return float64(srv.WorkspaceFallbacks(reason)) }))
+	}
+	return reg
 }

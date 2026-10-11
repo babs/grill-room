@@ -20,10 +20,22 @@ func TestConfig(t *testing.T) {
 	t.Setenv("GRILL_ROOM_DAEMON_BROWSER", "")
 	t.Setenv("GRILL_ROOM_SANDBOX_IMAGE", "")
 	cfg, err := loadConfig()
-	if err != nil || cfg.StateDir != "/state" || cfg.Browser != "auto" || cfg.Image != "" ||
+	if err != nil || cfg.StateDir != "/state" || cfg.Browser != "auto" || cfg.Image != "" || cfg.CacheMB != 1024 ||
 		cfg.Limits != (sandbox.Limits{CPUs: "2", Memory: "4g", EgressCPUs: "0.5", EgressMemory: "256m"}) {
 		t.Fatalf("cfg = %+v, %v", cfg, err)
 	}
+	// 002-AC37: the workspace cache cap is a size in MiB, 0 to disable it.
+	t.Setenv("GRILL_ROOM_DAEMON_CACHE_MB", "0")
+	if cfg, err := loadConfig(); err != nil || cfg.CacheMB != 0 {
+		t.Fatalf("cache disabled: %+v %v", cfg, err)
+	}
+	for _, bad := range []string{"-1", "1g", "lots"} {
+		t.Setenv("GRILL_ROOM_DAEMON_CACHE_MB", bad)
+		if _, err := loadConfig(); err == nil {
+			t.Fatalf("cache %q accepted", bad)
+		}
+	}
+	t.Setenv("GRILL_ROOM_DAEMON_CACHE_MB", "")
 	for _, tc := range []struct {
 		cfg Config
 		ok  bool

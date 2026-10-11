@@ -4,9 +4,12 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -220,56 +223,52 @@ func attachmentPath(at store.Attachment) string {
 	return fmt.Sprintf("%s/%d%s", turn.AttachmentsDir, at.ID, ext)
 }
 
-// writeWorkspace writes the turn's workspace as a tar: the documents, the uploads (read-only) with
+// workspaceDirs exist in every workspace, even empty.
+var workspaceDirs = []string{turn.DocsDir, turn.UploadsDir, turn.TranscriptDir, turn.AttachmentsDir}
+
+// wsFile receives one workspace file. data loads its bytes and is valid only during the call: a
+// walk that only lists paths reads no blob.
+type wsFile func(name string, mode int64, data func() ([]byte, error)) error
+
+func bytesOf(b []byte) func() ([]byte, error) { return func() ([]byte, error) { return b, nil } }
+
+// walkWorkspace visits the turn's workspace files: the documents, the uploads (read-only) with
 // their Markdown copies, the transcript up to the turn's cursor, and the annotation threads.
-func (s *Server) writeWorkspace(ctx context.Context, w io.Writer, t *store.Turn) error {
+func (s *Server) walkWorkspace(ctx context.Context, t *store.Turn, visit wsFile) error {
 	st := s.bus.Store
-	tw := tar.NewWriter(w)
-	mtime := time.Now()
-	dir := func(name string) error {
-		return tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: name + "/", Mode: 0o755, ModTime: mtime})
-	}
-	file := func(name string, mode int64, data []byte) error {
-		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: mode, Size: int64(len(data)), ModTime: mtime}); err != nil {
-			return err
+	file := func(name string, mode int64, data func() ([]byte, error)) error {
+		// Invariant: the daemon refuses a path that could leave /workspace.
+		if !turn.ValidPath(name) {
+			return fmt.Errorf("workspace path %q is not valid", name)
 		}
-		_, err := tw.Write(data)
-		return err
-	}
-	for _, d := range []string{turn.DocsDir, turn.UploadsDir, turn.TranscriptDir, turn.AttachmentsDir} {
-		if err := dir(d); err != nil {
-			return err
-		}
+		return visit(name, mode, data)
 	}
 	docs, err := st.Documents(ctx, t.RoomID)
 	if err != nil {
 		return err
 	}
 	for _, d := range docs {
-		if d.Kind == store.DocAgent {
-			rev, err := st.Revision(ctx, d.ID, d.Revisions)
-			if err != nil {
-				return err
+		revision := func(n int) func() ([]byte, error) {
+			return func() ([]byte, error) {
+				rev, err := st.Revision(ctx, d.ID, n)
+				if err != nil {
+					return nil, err
+				}
+				return []byte(rev.Body), nil
 			}
-			if err := file(agentPath(d), 0o644, []byte(rev.Body)); err != nil {
+		}
+		if d.Kind == store.DocAgent {
+			if err := file(agentPath(d), 0o644, revision(d.Revisions)); err != nil {
 				return err
 			}
 			continue
 		}
 		// Read-only modes keep honest edits away; the server refuses any upload change anyway.
-		data, err := st.Original(ctx, t.RoomID, d.ID)
-		if err != nil {
-			return err
-		}
-		if err := file(uploadPath(d), 0o444, data); err != nil {
+		if err := file(uploadPath(d), 0o444, func() ([]byte, error) { return st.Original(ctx, t.RoomID, d.ID) }); err != nil {
 			return err
 		}
 		if isOffice(d) {
-			rev, err := st.Revision(ctx, d.ID, 1)
-			if err != nil {
-				return err
-			}
-			if err := file(textPath(d), 0o444, []byte(rev.Body)); err != nil {
+			if err := file(textPath(d), 0o444, revision(1)); err != nil {
 				return err
 			}
 		}
@@ -291,20 +290,67 @@ func (s *Server) writeWorkspace(ctx context.Context, w io.Writer, t *store.Turn)
 		writeThread(&b, a, paths, 0, 0)
 		for _, m := range a.Messages {
 			for _, at := range m.Attachments {
-				if err := file(attachmentPath(at), 0o444, at.Data); err != nil {
+				if err := file(attachmentPath(at), 0o444, bytesOf(at.Data)); err != nil {
 					return err
 				}
 			}
 		}
 	}
-	if err := file(turn.AnnotationsFile, 0o444, []byte(b.String())); err != nil {
+	return file(turn.AnnotationsFile, 0o444, bytesOf([]byte(b.String())))
+}
+
+// writeWorkspace writes the turn's workspace as a tar, or only the files in only when it is not nil.
+func (s *Server) writeWorkspace(ctx context.Context, w io.Writer, t *store.Turn, only map[string]bool) error {
+	tw := tar.NewWriter(w)
+	mtime := time.Now()
+	if only == nil {
+		for _, d := range workspaceDirs {
+			if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: d + "/", Mode: 0o755, ModTime: mtime}); err != nil {
+				return err
+			}
+		}
+	}
+	err := s.walkWorkspace(ctx, t, func(name string, mode int64, data func() ([]byte, error)) error {
+		if only != nil && !only[name] {
+			return nil
+		}
+		b, err := data()
+		if err != nil {
+			return err
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: mode, Size: int64(len(b)), ModTime: mtime}); err != nil {
+			return err
+		}
+		_, err = tw.Write(b)
+		return err
+	})
+	if err != nil {
 		return err
 	}
 	return tw.Close()
 }
 
+// manifest lists the turn's workspace files with their sha256 and size, sorted by path (002-AC37).
+func (s *Server) manifest(ctx context.Context, t *store.Turn) (*turn.Manifest, error) {
+	m := &turn.Manifest{Dirs: workspaceDirs, Files: []turn.File{}}
+	err := s.walkWorkspace(ctx, t, func(name string, mode int64, data func() ([]byte, error)) error {
+		b, err := data()
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(b)
+		m.Files = append(m.Files, turn.File{Path: name, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(b)), Mode: mode})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(m.Files, func(a, b turn.File) int { return strings.Compare(a.Path, b.Path) })
+	return m, nil
+}
+
 // writeTranscript writes the room's messages up to the turn's cursor, one file per UTC day.
-func (s *Server) writeTranscript(ctx context.Context, t *store.Turn, file func(string, int64, []byte) error) error {
+func (s *Server) writeTranscript(ctx context.Context, t *store.Turn, file wsFile) error {
 	room, err := s.bus.Store.Room(ctx, t.RoomID)
 	if err != nil {
 		return err
@@ -315,7 +361,7 @@ func (s *Server) writeTranscript(ctx context.Context, t *store.Turn, file func(s
 		if day == "" {
 			return nil
 		}
-		return file(path.Join(turn.TranscriptDir, day+".md"), 0o444, buf.Bytes())
+		return file(path.Join(turn.TranscriptDir, day+".md"), 0o444, bytesOf(buf.Bytes()))
 	}
 	for after := int64(0); after < t.MessageCursor; {
 		batch, err := s.bus.Store.Messages(ctx, t.RoomID, after, replayBatch)

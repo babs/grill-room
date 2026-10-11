@@ -90,14 +90,17 @@ func pairedHost(t *testing.T, rs *roomServer, name string, ag *fakeAgent) (parti
 	return participant, cancel
 }
 
-// pairedDaemon is pairedHost, returning the daemon too.
-func pairedDaemon(t *testing.T, rs *roomServer, name string, ag *fakeAgent) (participant string, d *Daemon, cancel context.CancelFunc) {
+// pairedDaemon is pairedHost, returning the daemon too; set changes it before it starts.
+func pairedDaemon(t *testing.T, rs *roomServer, name string, ag *fakeAgent, set ...func(*Daemon)) (participant string, d *Daemon, cancel context.CancelFunc) {
 	t.Helper()
 	participant, _ = rs.join(t, name)
 	d = newTestDaemon(t, dockerUp)
 	d.o.Name = name + "-box"
 	d.o.Model = "haiku"
 	d.o.NewAgent = func(Room, string) Agent { return ag }
+	for _, f := range set {
+		f(d)
+	}
 	d.Refresh(context.Background())
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

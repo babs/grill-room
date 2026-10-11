@@ -63,6 +63,8 @@ type Config struct {
 	Settings daemon.Settings
 	// Limits cap the sandbox's and its egress proxy's CPUs and memory.
 	Limits sandbox.Limits
+	// CacheMB caps the workspace cache; 0 fetches every workspace whole.
+	CacheMB int64
 }
 
 func loadConfig() (Config, error) {
@@ -78,7 +80,12 @@ func loadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("GRILL_ROOM_APPROVE_ALL: %w", err)
 	}
+	cacheMB, err := strconv.ParseInt(getEnv("GRILL_ROOM_DAEMON_CACHE_MB", "1024"), 10, 64)
+	if err != nil || cacheMB < 0 {
+		return Config{}, fmt.Errorf("GRILL_ROOM_DAEMON_CACHE_MB: want a size in MiB, 0 to disable the cache")
+	}
 	return Config{
+		CacheMB:  cacheMB,
 		StateDir: dir,
 		Browser:  getEnv("GRILL_ROOM_DAEMON_BROWSER", "auto"),
 		Image:    os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
@@ -240,6 +247,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 		// No client timeout: it would cut the long-lived room stream; each request has its own deadline.
 		HTTP: &http.Client{}, Log: logger, Model: cfg.Model,
 		Image: cfg.Image, Stream: sandbox.DockerStream, Executable: exe,
+		CacheDir: filepath.Join(cfg.StateDir, "workspace-cache"), CacheMax: cfg.CacheMB << 20,
 		Restart: func() { restart.Store(true); stop() },
 		NewAgent: func(r daemon.Room, image string) daemon.Agent {
 			return sandbox.New(sandbox.Config{Image: image, Name: sandboxName(cfg.StateDir, r), Host: host, Upstream: anthropic, Limits: cfg.Limits},

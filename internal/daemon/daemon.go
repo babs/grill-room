@@ -49,6 +49,10 @@ type Options struct {
 	// Image pins the sandbox image; empty takes the room server's, or builds the embedded one.
 	Image  string
 	Stream sandbox.Streamer
+	// CacheDir holds the per-room workspace caches, CacheMax their total size in bytes; an empty
+	// dir or a cap of 0 fetches every workspace whole (002-AC37).
+	CacheDir string
+	CacheMax int64
 	// Executable is the binary a self-update replaces; empty disables updates.
 	Executable string
 	// Restart ends the daemon so that main starts the updated binary.
@@ -130,6 +134,8 @@ type Daemon struct {
 	settingsMu sync.Mutex
 	// cur is the current room run, guarded by mu; nil before the first SetRoom.
 	cur *roomRun
+	// cache is nil when disabled.
+	cache *wsCache
 }
 
 // New builds a daemon.
@@ -148,6 +154,9 @@ func New(o Options) *Daemon {
 	}
 	d := &Daemon{o: o, st: Status{Host: o.Name, Version: o.Version, Connection: "offline", Settings: o.Settings, Allowlist: o.Allowlist},
 		changed: make(chan struct{}, 1)}
+	if o.CacheDir != "" && o.CacheMax > 0 {
+		d.cache = &wsCache{dir: o.CacheDir, max: o.CacheMax}
+	}
 	if o.Image != "" {
 		d.img.known = true
 		d.st.Image = Image{State: "ready", Ref: o.Image}
@@ -309,6 +318,11 @@ func (r *roomRun) loop(ctx context.Context) {
 	if errors.Is(err, errRevoked) {
 		if serr := d.o.Tokens.Set(room, ""); serr != nil {
 			d.o.Log.Error("token_delete_failed", zap.Error(serr))
+		}
+		if d.cache != nil {
+			if serr := d.cache.forget(room); serr != nil {
+				d.o.Log.Error("workspace_cache_delete_failed", zap.Error(serr))
+			}
 		}
 		r.update(func(s *Status) { s.Pairing = "" })
 		fail(err)

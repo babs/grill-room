@@ -26,6 +26,11 @@ func sandboxHost(t *testing.T, rs *roomServer, name, image string) (string, cont
 	d := newTestDaemon(t, sandbox.Docker)
 	d.o.Name = name + "-box"
 	d.o.Log = zaptest.NewLogger(t, zaptest.Level(zap.WarnLevel))
+	// Alice keeps a workspace cache and Bob fetches whole workspaces: both unpack in a real
+	// sandbox (002-AC37).
+	if name == "Alice" {
+		d.cache = &wsCache{dir: t.TempDir(), max: 64 << 20}
+	}
 	label := fmt.Sprintf("test-%s-%d", strings.ToLower(name), time.Now().UnixNano())
 	up, _ := url.Parse("http://127.0.0.1:1")
 	d.o.NewAgent = func(Room, string) Agent {

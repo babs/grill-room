@@ -132,3 +132,16 @@ func TestClassifyAgentAnnotations(t *testing.T) {
 		t.Fatalf("over the cap: %d annotations, %q", len(o.Annotations), o.Ignored)
 	}
 }
+
+// 002-AC37: a workspace path stays inside the workspace.
+func TestValidPath(t *testing.T) {
+	for p, want := range map[string]bool{
+		"docs/plan.md": true, "uploads/3-a b.pdf": true, "annotations.md": true, `uploads/1-a\b`: true,
+		"": false, ".": false, "..": false, "../x": false, "docs/../../x": false, "/etc/passwd": false,
+		"docs/": false, "./docs/x": false, "docs//x": false, "docs/./x": false,
+	} {
+		if ValidPath(p) != want {
+			t.Errorf("ValidPath(%q) = %v", p, !want)
+		}
+	}
+}
