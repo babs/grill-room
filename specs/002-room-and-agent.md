@@ -1,6 +1,6 @@
 # 002 — Room and agent: personas, skills, profiles, richer chat
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-10-11
 **Context**: spec 001 (shipped as PoC), `INTENT.md`, `docs/architecture.md`, `docs/agent-workspace.md`, spike S5
