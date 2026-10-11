@@ -19,6 +19,12 @@
 <header>
   <img src="/static/logo.svg" alt="" class="logo" width="32" height="32">
   <h1 id="room-name">grill-room</h1>
+  <button type="button" id="rename-open" class="small">Rename</button>
+  <form id="rename" hidden>
+    <input id="rename-input" maxlength="100" aria-label="Room name" required>
+    <button type="submit">Save</button>
+    <button type="button" id="rename-cancel">Cancel</button>
+  </form>
   <div id="voice" hidden>
     <span id="stt-status" role="status"></span>
     <button type="button" id="voice-join">Join audio</button>
@@ -32,7 +38,7 @@
     <button type="button" id="agent-press" disabled>Ask the agent</button>
     <button type="button" id="agent-fresh" hidden disabled>New session</button>
   </div>
-  <span id="me"></span>
+  <a id="me" href="/profile" title="Your profile"></a>
 </header>
 <p id="voice-error" role="alert" hidden></p>
 <div id="voice-audio" hidden></div>
@@ -46,6 +52,15 @@
     <button type="button" id="pairing-approve">Approve</button>
   </div>
 </section>
+<section id="recovery" aria-labelledby="recovery-title" hidden>
+  <h2 id="recovery-title">Save your recovery link</h2>
+  <p>This browser now holds your profile, which follows you from room to room. Open this link on another device to use the same profile there. It is shown only once, and whoever holds it gets your profile.</p>
+  <input id="recovery-link" readonly aria-label="Recovery link">
+  <div class="pairing-actions">
+    <button type="button" id="recovery-copy">Copy link</button>
+    <button type="button" id="recovery-done">Done</button>
+  </div>
+</section>
 <div class="layout">
   <aside>
     <h2>Participants</h2>
@@ -56,6 +71,17 @@
       <input type="file" id="upload-input" accept=".md,.markdown,.html,.htm,.pdf,.png,.jpg,.jpeg,.gif,.webp,.svg,.docx,.odt,.pptx">
     </label>
     <p id="upload-status" role="status"></p>
+    <details id="invites">
+      <summary>Invite people</summary>
+      <p>Anyone holding an invite link can join and read the room.</p>
+      <button type="button" id="invite-create">Create an invite link</button>
+      <p id="invite-new" hidden>
+        <input id="invite-link" readonly aria-label="New invite link">
+        <button type="button" id="invite-copy">Copy invite</button>
+      </p>
+      <h3>Your invites</h3>
+      <ul id="invite-list"></ul>
+    </details>
     <details id="host-agent" hidden>
       <summary>Host the agent</summary>
       <p>Runs the agent on your machine with your Claude subscription. Needs Docker.</p>

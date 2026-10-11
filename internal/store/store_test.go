@@ -22,7 +22,7 @@ func openTest(t *testing.T) *Store {
 	return s
 }
 
-// seed creates a room with an invite, a participant, a text message, an upload, an agent
+// seed creates a room with an invite, a participant with its own profile, a text message, an upload, an agent
 // document with two revisions, an annotation with a message carrying an image, a paired daemon
 // hosting, and a done turn with its session.
 func seed(t *testing.T, s *Store, room string) *Participant {
@@ -31,10 +31,10 @@ func seed(t *testing.T, s *Store, room string) *Participant {
 	if _, err := s.CreateRoom(ctx, room, "Room "+room); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateInvite(ctx, room, "inv-"+room); err != nil {
+	if _, err := s.CreateInvite(ctx, room, "inv-"+room, 0); err != nil {
 		t.Fatal(err)
 	}
-	p, _, err := s.Join(ctx, "inv-"+room, "Alice", "tok-"+room)
+	p, _, err := s.Join(ctx, "inv-"+room, "Alice", "tok-"+room, JoinProfile{RecoveryHash: "rec-" + room, SessionHash: "sess-" + room})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,14 +91,14 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	}
 }
 
-// uncascadedTables returns the tables holding room data that a DELETE on rooms would not purge:
-// those without a chain of NOT NULL, ON DELETE CASCADE foreign keys leading to rooms.
+// uncascadedTables returns the tables that neither a DELETE on rooms nor one on profiles would
+// purge: those without a chain of NOT NULL, ON DELETE CASCADE foreign keys leading to an owner.
 func uncascadedTables(ctx context.Context, db *sql.DB) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT m.name, COALESCE(f."table", ''), COALESCE(f.on_delete, ''), COALESCE(c."notnull", 0)
 		FROM sqlite_master m LEFT JOIN pragma_foreign_key_list(m.name) f
 		LEFT JOIN pragma_table_info(m.name) c ON c.name = f."from"
-		WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.name NOT IN ('rooms', 'settings')`)
+		WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.name NOT IN ('rooms', 'profiles', 'settings')`)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +121,7 @@ func uncascadedTables(ctx context.Context, db *sql.DB) ([]string, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	purged := map[string]bool{"rooms": true}
+	purged := map[string]bool{"rooms": true, "profiles": true}
 	for changed := true; changed; {
 		changed = false
 		for table, parents := range cascadesTo {
@@ -140,15 +140,80 @@ func uncascadedTables(ctx context.Context, db *sql.DB) ([]string, error) {
 	return out, nil
 }
 
-// 001-AC4: later phases add tables; each must be purged by DeleteRoom.
-func TestEveryTableCascadesFromRooms(t *testing.T) {
+// 001-AC4: later phases add tables; each must be purged by DeleteRoom or DeleteProfile.
+func TestEveryTableCascadesFromAnOwner(t *testing.T) {
 	s := openTest(t)
 	bad, err := uncascadedTables(context.Background(), s.db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(bad) > 0 {
-		t.Fatalf("tables not purged by DeleteRoom (need an ON DELETE CASCADE chain to rooms): %v", bad)
+		t.Fatalf("tables purged by neither DeleteRoom nor DeleteProfile (need an ON DELETE CASCADE chain to rooms or profiles): %v", bad)
+	}
+}
+
+// profileRefViolations returns table.column for every foreign key to profiles that a profile
+// delete would neither purge (NOT NULL, CASCADE) nor detach (SET NULL).
+func profileRefViolations(ctx context.Context, db *sql.DB) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT m.name, f."from", f.on_delete, COALESCE(c."notnull", 0)
+		FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) f
+		LEFT JOIN pragma_table_info(m.name) c ON c.name = f."from"
+		WHERE m.type = 'table' AND f."table" = 'profiles'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var table, col, onDelete string
+		var notNull bool
+		if err := rows.Scan(&table, &col, &onDelete, &notNull); err != nil {
+			return nil, err
+		}
+		owned := notNull && strings.EqualFold(onDelete, "CASCADE")
+		detached := !notNull && strings.EqualFold(onDelete, "SET NULL")
+		if !owned && !detached {
+			out = append(out, table+"."+col)
+		}
+	}
+	slices.Sort(out)
+	return out, rows.Err()
+}
+
+// 002-AC1: a profile delete purges what the profile owns and only detaches the rest.
+func TestEveryProfileReferenceCascadesOrDetaches(t *testing.T) {
+	s := openTest(t)
+	bad, err := profileRefViolations(context.Background(), s.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bad) > 0 {
+		t.Fatalf("references to profiles that DeleteProfile would block or leave dangling: %v", bad)
+	}
+	for name, tc := range map[string]struct {
+		ddl  string
+		want []string
+	}{
+		"no action":         {`CREATE TABLE notes (id INTEGER PRIMARY KEY, profile_id INTEGER REFERENCES profiles(id))`, []string{"notes.profile_id"}},
+		"restrict":          {`CREATE TABLE notes (id INTEGER PRIMARY KEY, profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE RESTRICT)`, []string{"notes.profile_id"}},
+		"nullable cascade":  {`CREATE TABLE notes (id INTEGER PRIMARY KEY, profile_id INTEGER REFERENCES profiles(id) ON DELETE CASCADE)`, []string{"notes.profile_id"}},
+		"not null set null": {`CREATE TABLE notes (id INTEGER PRIMARY KEY, profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE SET NULL)`, []string{"notes.profile_id"}},
+		"owned ok":          {`CREATE TABLE notes (id INTEGER PRIMARY KEY, profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE)`, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := openTest(t)
+			if _, err := s.db.ExecContext(context.Background(), tc.ddl); err != nil {
+				t.Fatal(err)
+			}
+			got, err := profileRefViolations(context.Background(), s.db)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -164,6 +229,8 @@ func TestUncascadedTablesDetectsBadShapes(t *testing.T) {
 		"chain through orphan": {`CREATE TABLE docs (id INTEGER PRIMARY KEY); CREATE TABLE revs (id INTEGER PRIMARY KEY, doc_id INTEGER NOT NULL REFERENCES docs(id) ON DELETE CASCADE)`, []string{"docs", "revs"}},
 		"nullable cascade":     {`CREATE TABLE docs (id INTEGER PRIMARY KEY, room_id TEXT REFERENCES rooms(id) ON DELETE CASCADE)`, []string{"docs"}},
 		"cascade chain ok":     {`CREATE TABLE docs (id INTEGER PRIMARY KEY, room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE); CREATE TABLE revs (id INTEGER PRIMARY KEY, doc_id INTEGER NOT NULL REFERENCES docs(id) ON DELETE CASCADE)`, nil},
+		"profile owned ok":     {`CREATE TABLE keys (id INTEGER PRIMARY KEY, profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE)`, nil},
+		"profile set null":     {`CREATE TABLE keys (id INTEGER PRIMARY KEY, profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL)`, []string{"keys"}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -259,6 +326,10 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 	if err := s.DeleteRoom(ctx, "a"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("second delete: got %v, want ErrNotFound", err)
 	}
+	// A profile outlives its rooms: it only stops listing them.
+	if prof, err := s.ProfileBySession(ctx, "sess-a"); err != nil || len(prof.Rooms) != 0 {
+		t.Fatalf("profile after its room went: %+v %v", prof, err)
+	}
 }
 
 // 001-AC3
@@ -266,24 +337,24 @@ func TestRevokedInviteInvalidatesItsParticipants(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	p := seed(t, s, "a")
-	inv2, err := s.CreateInvite(ctx, "a", "inv2")
+	inv2, err := s.CreateInvite(ctx, "a", "inv2", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, _, err := s.Join(ctx, "inv2", "Bob", "tok-bob")
+	other, _, err := s.Join(ctx, "inv2", "Bob", "tok-bob", JoinProfile{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RevokeInvite(ctx, "a", p.InviteID); err != nil {
+	if _, err := s.RevokeInvite(ctx, "a", p.InviteID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RevokeInvite(ctx, "a", p.InviteID); err != nil {
+	if _, err := s.RevokeInvite(ctx, "a", p.InviteID); err != nil {
 		t.Fatalf("revoke is idempotent, got %v", err)
 	}
 	if _, err := s.ParticipantByToken(ctx, "tok-a"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("revoked participant: got %v, want ErrNotFound", err)
 	}
-	if _, _, err := s.Join(ctx, "inv-a", "Carol", "tok-carol"); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.Join(ctx, "inv-a", "Carol", "tok-carol", JoinProfile{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("join with revoked invite: got %v, want ErrNotFound", err)
 	}
 	if got, err := s.ParticipantByToken(ctx, "tok-bob"); err != nil || got.ID != other.ID {
@@ -293,21 +364,21 @@ func TestRevokedInviteInvalidatesItsParticipants(t *testing.T) {
 	if err != nil || len(ps) != 1 || ps[0].ID != other.ID {
 		t.Fatalf("participants after revoke: %v, %v", ps, err)
 	}
-	if err := s.RevokeInvite(ctx, "b", inv2.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := s.RevokeInvite(ctx, "b", inv2.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("revoke through the wrong room: got %v, want ErrNotFound", err)
 	}
 }
 
 func TestCreateInviteUnknownRoom(t *testing.T) {
 	s := openTest(t)
-	if _, err := s.CreateInvite(context.Background(), "nope", "h"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.CreateInvite(context.Background(), "nope", "h", 0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("got %v, want ErrNotFound", err)
 	}
 }
 
 func TestJoinUnknownInvite(t *testing.T) {
 	s := openTest(t)
-	if _, _, err := s.Join(context.Background(), "nope", "Alice", "t"); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.Join(context.Background(), "nope", "Alice", "t", JoinProfile{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("got %v, want ErrNotFound", err)
 	}
 }
@@ -386,7 +457,7 @@ func TestRoomParticipantAndInviteParticipants(t *testing.T) {
 	if _, err := s.RoomParticipant(ctx, "b", p.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("through another room: %v", err)
 	}
-	second, _, err := s.Join(ctx, "inv-a", "Bob", "tok-bob")
+	second, _, err := s.Join(ctx, "inv-a", "Bob", "tok-bob", JoinProfile{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +468,7 @@ func TestRoomParticipantAndInviteParticipants(t *testing.T) {
 	if ids, err := s.InviteParticipantIDs(ctx, "b", p.InviteID); err != nil || len(ids) != 0 {
 		t.Fatalf("through another room: %v %v", ids, err)
 	}
-	if err := s.RevokeInvite(ctx, "a", p.InviteID); err != nil {
+	if _, err := s.RevokeInvite(ctx, "a", p.InviteID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.RoomParticipant(ctx, "a", p.ID); !errors.Is(err, ErrNotFound) {

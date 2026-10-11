@@ -15,6 +15,9 @@ services:
       GRILL_ROOM_STT_TOKEN: ${STT_TOKEN:?set STT_TOKEN in .env}
       # Digest-pinned sandbox image advertised to daemons; empty lets each daemon build its own.
       GRILL_ROOM_SANDBOX_IMAGE: ${GRILL_ROOM_SANDBOX_IMAGE:-}
+      # Magic links land in mailpit, whose inbox is on loopback port MAILPIT_PORT.
+      GRILL_ROOM_SMTP_ADDR: mailpit:1025
+      GRILL_ROOM_SMTP_FROM: noreply@grill-room.invalid
     ports:
       - "${GRILL_ROOM_BIND:-127.0.0.1}:${GRILL_ROOM_PORT:-7680}:7680"
       - "127.0.0.1:${GRILL_ROOM_METRICS_PORT:-7681}:7681"
@@ -67,6 +70,13 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/healthz')"]
       interval: 5s
       start_period: 60s
+    restart: unless-stopped
+
+  # Catches every mail the room server sends; nothing leaves the host.
+  mailpit:
+    image: axllent/mailpit:v1.31.4
+    ports:
+      - "127.0.0.1:${MAILPIT_PORT:-8025}:8025"
     restart: unless-stopped
 
 volumes:

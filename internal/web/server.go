@@ -62,6 +62,8 @@ type Server struct {
 	pairings  pairings
 	presence  presences
 	stt       sttWorkers
+	// magicLimit rate-limits magic link requests per address and per client IP.
+	magicLimit limiter
 	// electMu serialises host elections and hand-overs.
 	electMu sync.Mutex
 }
@@ -74,8 +76,12 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	if opts.MaxResultBytes <= 0 {
 		opts.MaxResultBytes = defaultMaxResult
 	}
+	if opts.MagicLinkTTL <= 0 {
+		opts.MagicLinkTTL = DefaultMagicLinkTTL
+	}
 	return &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
-		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, stt: sttWorkers{m: map[string]*sttWorker{}}}
+		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, stt: sttWorkers{m: map[string]*sttWorker{}},
+		magicLimit: limiter{window: magicWindow}}
 }
 
 // Streams returns the number of open event streams.
@@ -102,6 +108,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /favicon.ico", asset(ui, "ui/favicon.ico", "image/x-icon"))
 	mux.HandleFunc("GET /site.webmanifest", asset(ui, "ui/site.webmanifest", "application/manifest+json"))
 	mux.HandleFunc("GET /r/{room}", page("room.html"))
+	mux.HandleFunc("GET /profile", page("profile.html"))
 	static, _ := fs.Sub(ui, "ui") // cannot fail: "ui" is a valid embedded path
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
 	mux.HandleFunc("GET /install.sh", s.installScript)
@@ -111,8 +118,18 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rooms", s.admin(s.listRooms))
 	mux.Handle("POST /api/rooms", s.admin(s.createRoom))
 	mux.Handle("DELETE /api/rooms/{room}", s.admin(s.deleteRoom))
-	mux.Handle("POST /api/rooms/{room}/invites", s.admin(s.createInvite))
-	mux.Handle("DELETE /api/rooms/{room}/invites/{invite}", s.admin(s.revokeInvite))
+	mux.Handle("PATCH /api/rooms/{room}", s.memberOrAdmin(s.renameRoom))
+	mux.Handle("GET /api/rooms/{room}/invites", s.memberOrAdmin(s.listInvites))
+	mux.Handle("POST /api/rooms/{room}/invites", s.memberOrAdmin(s.createInvite))
+	mux.Handle("DELETE /api/rooms/{room}/invites/{invite}", s.memberOrAdmin(s.revokeInvite))
+	mux.Handle("GET /api/profiles", s.admin(s.listProfiles))
+	mux.Handle("DELETE /api/profiles/{id}", s.admin(s.deleteProfile))
+
+	mux.HandleFunc("GET /api/profile", s.getProfile)
+	mux.HandleFunc("POST /api/profile/recover", s.recoverProfile)
+	mux.HandleFunc("POST /api/profile/email", s.bindEmail)
+	mux.HandleFunc("POST /api/profile/signin", s.emailSignIn)
+	mux.HandleFunc("POST /api/profile/magic", s.useMagicLink)
 
 	mux.HandleFunc("POST /api/join", s.join)
 	mux.Handle("GET /api/rooms/{room}", s.participant(s.getRoom))
@@ -191,10 +208,14 @@ func bearer(r *http.Request) string {
 	return strings.TrimSpace(tok)
 }
 
+func (s *Server) isAdmin(r *http.Request) bool {
+	tok := bearer(r)
+	return tok != "" && subtle.ConstantTimeCompare([]byte(HashToken(tok)), s.adminHash) == 1
+}
+
 func (s *Server) admin(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tok := bearer(r)
-		if tok == "" || subtle.ConstantTimeCompare([]byte(HashToken(tok)), s.adminHash) != 1 {
+		if !s.isAdmin(r) {
 			httpError(w, http.StatusUnauthorized, "admin token required")
 			return
 		}
@@ -202,35 +223,67 @@ func (s *Server) admin(next http.HandlerFunc) http.Handler {
 	})
 }
 
-// session is an authenticated participant and the hash of the token that proved it.
-type session struct {
-	p         *store.Participant
-	tokenHash string
+// memberOrAdmin runs next for the admin token with a nil session, else for a room participant.
+func (s *Server) memberOrAdmin(next func(http.ResponseWriter, *http.Request, *session)) http.Handler {
+	member := s.participant(func(w http.ResponseWriter, r *http.Request, sess session) { next(w, r, &sess) })
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.isAdmin(r) {
+			next(w, r, nil)
+			return
+		}
+		member.ServeHTTP(w, r)
+	})
 }
 
-// participant authenticates by bearer token (API clients) or cookie (browsers: EventSource cannot
-// set headers, and a cookie keeps the token out of URLs and access logs).
+// cred is the hash of a token a request offers: a participant token, or with viaProfile, a
+// profile session.
+type cred struct {
+	hash       string
+	viaProfile bool
+}
+
+// session is an authenticated participant and the credentials the request offered, which every
+// later re-check of its access tries again in the same order.
+type session struct {
+	p     *store.Participant
+	creds []cred
+}
+
+// crossSite reports a write another site or an opaque origin sent: a form, or a document in the
+// sandboxed iframe, needs no preflight, but browsers label it, so refuse it whatever cookies do.
+func crossSite(r *http.Request) bool {
+	site := r.Header.Get("Sec-Fetch-Site")
+	return r.Method != http.MethodGet && site != "" && site != "same-origin"
+}
+
+// participant authenticates by bearer token (API clients), the room's cookie (browsers:
+// EventSource cannot set headers, and a cookie keeps the token out of URLs and access logs), or
+// the profile cookie, which opens every room the profile is in, on any device it signed in on.
 func (s *Server) participant(next func(http.ResponseWriter, *http.Request, session)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tok := bearer(r)
-		if tok == "" {
-			if c, err := r.Cookie(cookieName); err == nil {
-				tok = c.Value
+		// A bearer token is all an API client offers. A browser may hold a room cookie its
+		// participant lost while its profile still has another participant in the room: try both.
+		var sess session
+		if tok := bearer(r); tok != "" {
+			sess.creds = append(sess.creds, cred{hash: HashToken(tok)})
+		} else {
+			if c, err := r.Cookie(cookieName); err == nil && c.Value != "" {
+				sess.creds = append(sess.creds, cred{hash: HashToken(c.Value)})
+			}
+			if c, err := r.Cookie(profileCookie); err == nil && c.Value != "" {
+				sess.creds = append(sess.creds, cred{hash: HashToken(c.Value), viaProfile: true})
 			}
 		}
-		if tok == "" {
+		if len(sess.creds) == 0 {
 			httpError(w, http.StatusUnauthorized, "missing token")
 			return
 		}
-		// A form posted by another site, or by a document in the sandboxed iframe (an opaque
-		// origin), needs no preflight: browsers label it, so refuse it whatever the cookie does.
-		if site := r.Header.Get("Sec-Fetch-Site"); r.Method != http.MethodGet && site != "" && site != "same-origin" {
+		if crossSite(r) {
 			httpError(w, http.StatusForbidden, "cross-site request refused")
 			return
 		}
-		sess := session{tokenHash: HashToken(tok)}
 		var err error
-		sess.p, err = s.authorize(r.Context(), sess.tokenHash, r.PathValue("room"))
+		sess.p, err = s.authorize(r.Context(), sess.creds, r.PathValue("room"))
 		if errors.Is(err, store.ErrNotFound) {
 			httpError(w, http.StatusUnauthorized, "invalid or revoked token")
 			return
@@ -244,16 +297,22 @@ func (s *Server) participant(next func(http.ResponseWriter, *http.Request, sessi
 	})
 }
 
-// authorize returns the participant for tokenHash if it is valid for room; ErrNotFound otherwise.
-func (s *Server) authorize(ctx context.Context, tokenHash, room string) (*store.Participant, error) {
-	p, err := s.bus.Store.ParticipantByToken(ctx, tokenHash)
-	if err != nil {
-		return nil, err
+// authorize returns the participant the first valid credential proves in room; ErrNotFound when
+// none does.
+func (s *Server) authorize(ctx context.Context, creds []cred, room string) (*store.Participant, error) {
+	for _, c := range creds {
+		var p *store.Participant
+		var err error
+		if c.viaProfile {
+			p, err = s.bus.Store.ProfileParticipant(ctx, c.hash, room)
+		} else if p, err = s.bus.Store.ParticipantByToken(ctx, c.hash); err == nil && p.RoomID != room {
+			err = store.ErrNotFound
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			return p, err
+		}
 	}
-	if p.RoomID != room {
-		return nil, store.ErrNotFound
-	}
-	return p, nil
+	return nil, store.ErrNotFound
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -352,10 +411,72 @@ type inviteResp struct {
 	URL   string `json:"url"`
 }
 
-func (s *Server) createInvite(w http.ResponseWriter, r *http.Request) {
+// renameRoom renames the room for any member or the admin, with a system line saying who did.
+func (s *Server) renameRoom(w http.ResponseWriter, r *http.Request, sess *session) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	name, ok := cleanText(req.Name, maxRoomName, false)
+	if !ok {
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("name must be 1 to %d characters", maxRoomName))
+		return
+	}
+	room := r.PathValue("room")
+	var by *store.Participant
+	if sess != nil {
+		by = sess.p
+	}
+	m, err := s.bus.Store.RenameRoom(r.Context(), room, name, by)
+	if errors.Is(err, store.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "no such room")
+		return
+	}
+	if err != nil {
+		s.serverError(w, "rename_room_failed", err)
+		return
+	}
+	if m != nil {
+		s.bus.Notify(room)
+		s.log.Info("room_renamed", zap.String("room", room))
+	}
+	got, err := s.bus.Store.Room(r.Context(), room)
+	if err != nil {
+		s.serverError(w, "rename_room_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, got)
+}
+
+// listInvites lists the room's invites: all of them for the admin, a member's own for a member.
+func (s *Server) listInvites(w http.ResponseWriter, r *http.Request, sess *session) {
+	var by int64
+	if sess != nil {
+		by = sess.p.ID
+	}
+	invs, err := s.bus.Store.Invites(r.Context(), r.PathValue("room"), by)
+	if err != nil {
+		s.serverError(w, "list_invites_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, invs)
+}
+
+func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, sess *session) {
 	room := r.PathValue("room")
 	tok := NewToken()
-	inv, err := s.bus.Store.CreateInvite(r.Context(), room, HashToken(tok))
+	var by int64
+	if sess != nil {
+		by = sess.p.ID
+	}
+	inv, err := s.bus.Store.CreateInvite(r.Context(), room, HashToken(tok), by)
+	if errors.Is(err, store.ErrNotFound) && sess != nil {
+		// Revoked between the auth check and the insert.
+		httpError(w, http.StatusUnauthorized, "invalid or revoked token")
+		return
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "no such room")
 		return
@@ -364,19 +485,35 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "create_invite_failed", err)
 		return
 	}
-	s.log.Info("invite_created", zap.String("room", room), zap.Int64("invite", inv.ID))
+	s.log.Info("invite_created", zap.String("room", room), zap.Int64("invite", inv.ID), zap.Int64("by", by))
 	// The token rides in the fragment, which browsers never send: it stays out of proxy logs.
 	writeJSON(w, http.StatusCreated, inviteResp{Invite: inv, Token: tok, URL: s.baseURL + "/join#" + tok})
 }
 
-func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request) {
+// revokeInvite revokes any invite for the admin, and only the ones they created for a member.
+func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request, sess *session) {
 	room := r.PathValue("room")
 	id, err := strconv.ParseInt(r.PathValue("invite"), 10, 64)
 	if err != nil {
 		httpError(w, http.StatusNotFound, "no such invite")
 		return
 	}
-	err = s.bus.Store.RevokeInvite(r.Context(), room, id)
+	if sess != nil {
+		inv, err := s.bus.Store.Invite(r.Context(), room, id)
+		if errors.Is(err, store.ErrNotFound) {
+			httpError(w, http.StatusNotFound, "no such invite")
+			return
+		}
+		if err != nil {
+			s.serverError(w, "revoke_invite_failed", err)
+			return
+		}
+		if inv.CreatedBy != sess.p.ID {
+			httpError(w, http.StatusForbidden, "you can revoke only the invites you created")
+			return
+		}
+	}
+	revoked, err := s.bus.Store.RevokeInvite(r.Context(), room, id)
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "no such invite")
 		return
@@ -388,12 +525,14 @@ func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request) {
 	// Wakes the room's event streams, which re-check access and close.
 	s.bus.Notify(room)
 	// The revoke stands either way: a failed lookup only leaves the browser to leave audio itself.
-	if ids, err := s.bus.Store.InviteParticipantIDs(r.Context(), room, id); err != nil {
-		s.log.Error("voice_kick_lookup_failed", zap.String("room", room), zap.Error(err))
-	} else {
-		s.kickFromVoice(room, ids)
+	for _, inv := range revoked {
+		if ids, err := s.bus.Store.InviteParticipantIDs(r.Context(), room, inv); err != nil {
+			s.log.Error("voice_kick_lookup_failed", zap.String("room", room), zap.Error(err))
+		} else {
+			s.kickFromVoice(room, ids)
+		}
 	}
-	s.log.Info("invite_revoked", zap.String("room", room), zap.Int64("invite", id))
+	s.log.Info("invite_revoked", zap.String("room", room), zap.Int64("invite", id), zap.Int64s("with", revoked))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -401,6 +540,9 @@ type joinResp struct {
 	Participant *store.Participant `json:"participant"`
 	// Token is for API clients; browsers use the cookie set alongside.
 	Token string `json:"token"`
+	// RecoveryURL signs another device into the profile this join created. Shown once: only its
+	// hash is kept.
+	RecoveryURL string `json:"recovery_url,omitempty"`
 }
 
 func (s *Server) join(w http.ResponseWriter, r *http.Request) {
@@ -420,8 +562,24 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, fmt.Sprintf("display name must be 1 to %d characters", maxNameLen))
 		return
 	}
+	var prof store.JoinProfile
+	if c, err := r.Cookie(profileCookie); err == nil && c.Value != "" {
+		got, err := s.bus.Store.ProfileBySession(r.Context(), HashToken(c.Value))
+		switch {
+		case err == nil:
+			prof.ID = got.ID
+		case !errors.Is(err, store.ErrNotFound):
+			s.serverError(w, "join_failed", err)
+			return
+		}
+	}
+	var recovery, profileTok string
+	if prof.ID == 0 {
+		recovery, profileTok = NewToken(), NewToken()
+		prof.RecoveryHash, prof.SessionHash = HashToken(recovery), HashToken(profileTok)
+	}
 	tok := NewToken()
-	p, m, err := s.bus.Store.Join(r.Context(), HashToken(req.Invite), name, HashToken(tok))
+	p, m, err := s.bus.Store.Join(r.Context(), HashToken(req.Invite), name, HashToken(tok), prof)
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusUnauthorized, "invalid or revoked invite")
 		return
@@ -438,10 +596,16 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 		Path:     "/api/rooms/" + p.RoomID,
 		MaxAge:   cookieMaxAge,
 		HttpOnly: true,
-		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+		Secure:   secure(r),
 		SameSite: http.SameSiteStrictMode,
 	})
-	writeJSON(w, http.StatusCreated, joinResp{Participant: p, Token: tok})
+	resp := joinResp{Participant: p, Token: tok}
+	if profileTok != "" {
+		setProfileCookie(w, r, profileTok)
+		// The token rides in the fragment, which browsers never send: it stays out of proxy logs.
+		resp.RecoveryURL = s.baseURL + "/profile#recover=" + recovery
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 type roomResp struct {
@@ -534,7 +698,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	var agentSent string
 	// sync re-checks access, then sends what the store holds past last. False ends the stream.
 	sync := func() bool {
-		if _, err := s.authorize(r.Context(), sess.tokenHash, room); err != nil {
+		if _, err := s.authorize(r.Context(), sess.creds, room); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				_, _ = io.WriteString(w, "event: revoked\ndata: {}\n\n")
 				flusher.Flush()

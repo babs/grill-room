@@ -34,7 +34,7 @@ func TestDaemons(t *testing.T) {
 	if got, err := s.DaemonByToken(ctx, "h2"); err != nil || got.Name != "desktop" {
 		t.Fatalf("new token = %+v, %v", got, err)
 	}
-	if err := s.RevokeInvite(ctx, "r1", p.InviteID); err != nil {
+	if _, err := s.RevokeInvite(ctx, "r1", p.InviteID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.DaemonByToken(ctx, "h2"); !errors.Is(err, ErrNotFound) {

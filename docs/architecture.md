@@ -11,10 +11,11 @@ flowchart LR
 
   subgraph Server["Room server (Go, SQLite)"]
     API["HTTP API + SSE"]
-    Store[("SQLite<br/>rooms, messages, docs,<br/>revisions, annotations,<br/>turns, sessions")]
+    Store[("SQLite<br/>rooms, messages, docs,<br/>revisions, annotations,<br/>turns, sessions, profiles")]
   end
 
   AdminC["Room admin<br/>(curl today, admin UI in spec 003)"]
+  SMTP["SMTP relay<br/>(optional: magic links)"]
   LK["LiveKit<br/>(SFU + embedded TURN)"]
   STT["STT worker<br/>(Python, faster-whisper)"]
 
@@ -31,7 +32,8 @@ flowchart LR
   Creds[("Claude credentials<br/>file or Keychain, read-only")]
 
   UI <-->|"HTTPS: REST + SSE"| API
-  AdminC -->|"HTTPS REST: rooms, invites"| API
+  AdminC -->|"HTTPS REST: rooms, invites, profiles"| API
+  API -->|"SMTP: magic links"| SMTP
   UI <-->|"postMessage bridge"| Frame
   UI <-->|"WebRTC audio<br/>TURN/TLS 443 or ICE/TCP"| LK
   STT -->|"subscribes to audio tracks"| LK
@@ -50,10 +52,11 @@ flowchart LR
 
 | Component | Exposes | Talks to | Auth |
 |---|---|---|---|
-| Room admin | nothing | room server: `GET/POST /api/rooms`, `DELETE /api/rooms/{room}`, `POST/DELETE .../invites` | admin token (one per server) |
-| Room page | nothing | room server (REST + SSE), LiveKit (WebRTC), document iframe (postMessage, validated) | participant cookie |
+| Room admin | nothing | room server: `GET/POST /api/rooms`, `PATCH/DELETE /api/rooms/{room}`, `GET/POST/DELETE .../invites`, `GET/DELETE /api/profiles` | admin token (one per server) |
+| Room page | nothing | room server (REST + SSE), LiveKit (WebRTC), document iframe (postMessage, validated) | room cookie, or the profile cookie |
+| Profile page | nothing | room server: `/api/profile/*` | profile cookie; recovery or emailed link token |
 | Document iframe | anchors and selections via postMessage | room page only | none: opaque origin, CSP sandbox, no cookie |
-| Room server | `/api/*` REST, `/api/rooms/{room}/events` SSE, `/install.sh`, `/download/*`, `/healthz`; `/metrics` on its own port | SQLite, LiveKit server API | admin token, participant token or cookie, daemon token, STT token, pairing secret |
+| Room server | `/api/*` REST, `/api/rooms/{room}/events` SSE, `/install.sh`, `/download/*`, `/healthz`; `/metrics` on its own port | SQLite, LiveKit server API, SMTP relay when configured | admin token, participant token or cookie, profile cookie, daemon token, STT token, pairing secret |
 | LiveKit | WebRTC signalling (WSS), TURN/TLS on 443, ICE/TCP | browsers, STT worker | 5 min JWT minted by the room server |
 | STT worker | `/metrics` | LiveKit (hidden participant), room server (`/api/stt/heartbeat`, `/voice/lines`) | STT token; LiveKit key pair |
 | Daemon | local admin page on 127.0.0.1 | room server (SSE `daemon/events`, turn job, workspace tar, session, result, status), Docker, `/api/daemon/version` for self-update | daemon token from pairing; admin page one-time link + Origin check |

@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go driver: keeps CGO_ENABLED=0 builds
@@ -38,6 +39,9 @@ type Invite struct {
 	ID        int64     `json:"id"`
 	RoomID    string    `json:"room_id"`
 	CreatedAt time.Time `json:"created_at"`
+	// CreatedBy is the participant who created it; 0 for the admin.
+	CreatedBy int64      `json:"created_by,omitempty"`
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
 }
 
 // Participant is a guest who joined a room through an invite.
@@ -49,6 +53,8 @@ type Participant struct {
 	JoinedAt time.Time `json:"joined_at"`
 	// CanTrigger is the agent button right the host granted; the host holds it anyway.
 	CanTrigger bool `json:"can_trigger"`
+	// ProfileID links the participant across rooms; never sent, as it would let others do the same.
+	ProfileID int64 `json:"-"`
 }
 
 // Message is one line in a room.
@@ -69,8 +75,9 @@ type Message struct {
 type Store struct{ db *sql.DB }
 
 // migrations run in order, each once, tracked by PRAGMA user_version. Append only.
-// Every table holding room data must reach rooms through NOT NULL, ON DELETE CASCADE foreign keys:
-// DeleteRoom is a single DELETE on rooms, and TestEveryTableCascadesFromRooms enforces it.
+// Every table must reach rooms or profiles through NOT NULL, ON DELETE CASCADE foreign keys, and
+// any other reference to profiles must be ON DELETE SET NULL: DeleteRoom and DeleteProfile are
+// single DELETEs, and TestEveryTableCascadesFromAnOwner enforces it.
 var migrations = []string{`
 CREATE TABLE settings (
 	key TEXT PRIMARY KEY,
@@ -220,6 +227,35 @@ CREATE TABLE agent_sessions (
 `, `
 ALTER TABLE turns ADD COLUMN model TEXT NOT NULL DEFAULT '';
 ALTER TABLE messages ADD COLUMN model TEXT NOT NULL DEFAULT '';
+`, `
+CREATE TABLE profiles (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	recovery_hash TEXT NOT NULL UNIQUE,
+	email TEXT UNIQUE,
+	created_at TEXT NOT NULL
+);
+CREATE TABLE profile_sessions (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+	token_hash TEXT NOT NULL UNIQUE,
+	created_at TEXT NOT NULL,
+	expires_at_s INTEGER NOT NULL
+);
+CREATE INDEX profile_sessions_profile ON profile_sessions(profile_id);
+CREATE TABLE magic_links (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+	email TEXT NOT NULL,
+	purpose TEXT NOT NULL CHECK (purpose IN ('bind', 'signin')),
+	token_hash TEXT NOT NULL UNIQUE,
+	created_at TEXT NOT NULL,
+	expires_at_ms INTEGER NOT NULL,
+	used_at TEXT
+);
+CREATE INDEX magic_links_profile ON magic_links(profile_id);
+ALTER TABLE participants ADD COLUMN profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL;
+CREATE INDEX participants_profile ON participants(profile_id);
+ALTER TABLE invites ADD COLUMN created_by INTEGER REFERENCES participants(id) ON DELETE SET NULL;
 `}
 
 // Open opens (and migrates) the database at path.
@@ -359,12 +395,53 @@ func (s *Store) DeleteRoom(ctx context.Context, id string) error {
 	return nil
 }
 
-// CreateInvite stores an invite for room; ErrNotFound if the room does not exist.
-func (s *Store) CreateInvite(ctx context.Context, roomID, tokenHash string) (*Invite, error) {
-	inv := &Invite{RoomID: roomID, CreatedAt: time.Now().UTC()}
-	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO invites(room_id, token_hash, created_at) SELECT id, ?, ? FROM rooms WHERE id = ?`,
-		tokenHash, inv.CreatedAt.Format(time.RFC3339Nano), roomID)
+// RenameRoom renames room and records who did it in a system message, in one transaction. by is
+// the participant renaming it, nil for the admin. Renaming to the current name changes nothing and
+// returns a nil message. ErrNotFound if the room does not exist. The caller broadcasts.
+func (s *Store) RenameRoom(ctx context.Context, roomID, name string, by *Participant) (*Message, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("rename room: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	var old string
+	err = tx.QueryRowContext(ctx, `SELECT name FROM rooms WHERE id = ?`, roomID).Scan(&old)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("rename room: %w", err)
+	}
+	if old == name {
+		return nil, nil
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE rooms SET name = ? WHERE id = ?`, name, roomID); err != nil {
+		return nil, fmt.Errorf("rename room: %w", err)
+	}
+	m := &Message{RoomID: roomID, Kind: KindSystem, Sender: "admin", Body: fmt.Sprintf("The admin renamed the room from %q to %q", old, name)}
+	if by != nil {
+		m.ParticipantID, m.Sender = by.ID, by.Name
+		m.Body = fmt.Sprintf("%s renamed the room from %q to %q", by.Name, old, name)
+	}
+	if err := insertMessage(ctx, tx, m); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("rename room: %w", err)
+	}
+	return m, nil
+}
+
+// CreateInvite stores an invite for room, created by participant createdBy or, when 0, by the
+// admin. ErrNotFound if the room does not exist, or createdBy is not in it with a valid invite: the
+// check and the insert are one statement, so a revoke cannot slip between them.
+func (s *Store) CreateInvite(ctx context.Context, roomID, tokenHash string, createdBy int64) (*Invite, error) {
+	inv := &Invite{RoomID: roomID, CreatedAt: time.Now().UTC(), CreatedBy: createdBy}
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO invites(room_id, token_hash, created_at, created_by) SELECT id, ?, ?, ? FROM rooms r WHERE r.id = ?
+		AND (? = 0 OR EXISTS (SELECT 1 FROM participants p JOIN invites i ON i.id = p.invite_id
+			WHERE p.id = ? AND p.room_id = r.id AND i.revoked_at IS NULL))`,
+		tokenHash, inv.CreatedAt.Format(time.RFC3339Nano), nullID(createdBy), roomID, createdBy, createdBy)
 	if err != nil {
 		return nil, fmt.Errorf("create invite: %w", err)
 	}
@@ -379,24 +456,95 @@ func (s *Store) CreateInvite(ctx context.Context, roomID, tokenHash string) (*In
 	return inv, nil
 }
 
-// RevokeInvite marks an invite revoked; idempotent. ErrNotFound if it is not in room.
-func (s *Store) RevokeInvite(ctx context.Context, roomID string, inviteID int64) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE invites SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ? AND room_id = ?`, now(), inviteID, roomID)
+// Invite returns invite id of room; ErrNotFound if room has none.
+func (s *Store) Invite(ctx context.Context, roomID string, id int64) (*Invite, error) {
+	invs, err := s.invites(ctx, roomID, id, 0)
 	if err != nil {
-		return fmt.Errorf("revoke invite %d: %w", inviteID, err)
+		return nil, err
 	}
-	if n, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("revoke invite %d: %w", inviteID, err)
-	} else if n == 0 {
-		return ErrNotFound
+	if len(invs) == 0 {
+		return nil, ErrNotFound
 	}
-	return nil
+	return &invs[0], nil
+}
+
+// Invites lists room's invites, revoked ones included, oldest first: those participant createdBy
+// created, or all of them when createdBy is 0.
+func (s *Store) Invites(ctx context.Context, roomID string, createdBy int64) ([]Invite, error) {
+	return s.invites(ctx, roomID, 0, createdBy)
+}
+
+// invites lists room's invites, narrowed to one id and to one creator when those are not 0.
+func (s *Store) invites(ctx context.Context, roomID string, id, createdBy int64) ([]Invite, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, room_id, created_at, COALESCE(created_by, 0), revoked_at FROM invites
+		WHERE room_id = ? AND (? = 0 OR id = ?) AND (? = 0 OR created_by = ?) ORDER BY id`, roomID, id, id, createdBy, createdBy)
+	if err != nil {
+		return nil, fmt.Errorf("query invites: %w", err)
+	}
+	defer rows.Close()
+	out := []Invite{}
+	for rows.Next() {
+		var inv Invite
+		var created string
+		var revoked sql.NullString
+		if err := rows.Scan(&inv.ID, &inv.RoomID, &created, &inv.CreatedBy, &revoked); err != nil {
+			return nil, fmt.Errorf("scan invite: %w", err)
+		}
+		inv.CreatedAt = parseTS(created)
+		if revoked.Valid {
+			t := parseTS(revoked.String)
+			inv.RevokedAt = &t
+		}
+		out = append(out, inv)
+	}
+	return out, rows.Err()
+}
+
+// RevokeInvite marks an invite revoked, with every invite created by someone who joined through a
+// revoked one: a member cut off must not walk back in through an invite they made. Idempotent.
+// Returns the ids of the invites it covers. ErrNotFound if inviteID is not in room.
+func (s *Store) RevokeInvite(ctx context.Context, roomID string, inviteID int64) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		WITH RECURSIVE gone(id) AS (
+			SELECT id FROM invites WHERE id = ? AND room_id = ?
+			UNION
+			SELECT i.id FROM invites i JOIN participants p ON p.id = i.created_by JOIN gone g ON g.id = p.invite_id
+		)
+		UPDATE invites SET revoked_at = COALESCE(revoked_at, ?) WHERE id IN gone RETURNING id`, inviteID, roomID, now())
+	if err != nil {
+		return nil, fmt.Errorf("revoke invite %d: %w", inviteID, err)
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("revoke invite %d: %w", inviteID, err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("revoke invite %d: %w", inviteID, err)
+	}
+	if len(ids) == 0 {
+		return nil, ErrNotFound
+	}
+	slices.Sort(ids)
+	return ids, nil
+}
+
+// JoinProfile says which profile a join attaches the participant to. ID names an existing one.
+// With ID 0, RecoveryHash and SessionHash create one; all empty joins without a profile.
+type JoinProfile struct {
+	ID                        int64
+	RecoveryHash, SessionHash string
 }
 
 // Join adds a participant through a valid invite and records a system message announcing them,
-// in one transaction. ErrNotFound if the invite is unknown or revoked. The caller broadcasts.
-func (s *Store) Join(ctx context.Context, inviteHash, name, tokenHash string) (*Participant, *Message, error) {
+// in one transaction, creating its profile when prof asks. ErrNotFound if the invite is unknown or
+// revoked. The caller broadcasts.
+func (s *Store) Join(ctx context.Context, inviteHash, name, tokenHash string, prof JoinProfile) (*Participant, *Message, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("join: %w", err)
@@ -410,8 +558,14 @@ func (s *Store) Join(ctx context.Context, inviteHash, name, tokenHash string) (*
 	if err != nil {
 		return nil, nil, fmt.Errorf("join: %w", err)
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO participants(room_id, invite_id, name, token_hash, joined_at) VALUES(?,?,?,?,?)`,
-		p.RoomID, p.InviteID, p.Name, tokenHash, p.JoinedAt.Format(time.RFC3339Nano))
+	p.ProfileID = prof.ID
+	if p.ProfileID == 0 && prof.RecoveryHash != "" {
+		if p.ProfileID, err = createProfile(ctx, tx, prof.RecoveryHash, prof.SessionHash); err != nil {
+			return nil, nil, fmt.Errorf("join: %w", err)
+		}
+	}
+	res, err := tx.ExecContext(ctx, `INSERT INTO participants(room_id, invite_id, name, token_hash, joined_at, profile_id) VALUES(?,?,?,?,?,?)`,
+		p.RoomID, p.InviteID, p.Name, tokenHash, p.JoinedAt.Format(time.RFC3339Nano), nullID(p.ProfileID))
 	if err != nil {
 		return nil, nil, fmt.Errorf("join: %w", err)
 	}
@@ -478,12 +632,17 @@ type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
+// nullID stores 0 as NULL, for optional foreign keys.
+func nullID(id int64) any {
+	if id == 0 {
+		return nil
+	}
+	return id
+}
+
 func insertMessage(ctx context.Context, db execer, m *Message) error {
 	m.TS = time.Now().UTC()
-	var pid any
-	if m.ParticipantID != 0 {
-		pid = m.ParticipantID
-	}
+	pid := nullID(m.ParticipantID)
 	res, err := db.ExecContext(ctx,
 		`INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, model) VALUES(?,?,?,?,?,?,?)`,
 		m.RoomID, m.TS.Format(time.RFC3339Nano), m.Kind, pid, m.Sender, m.Body, m.Model)

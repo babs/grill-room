@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your profile · grill-room</title>
+<link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+<link rel="icon" href="/static/icons/icon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<meta name="theme-color" content="#159F8C">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/profile.js" defer></script>
+</head>
+<body class="join">
+<main class="card">
+  <img src="/static/logo.svg" alt="" class="logo" width="96" height="96">
+  <h1>Your profile</h1>
+  <p id="status" role="status"></p>
+  <section id="confirm" hidden>
+    <p id="confirm-text"></p>
+    <div class="actions">
+      <button type="button" id="confirm-no">Cancel</button>
+      <button type="button" id="confirm-yes">Sign in to this profile</button>
+    </div>
+  </section>
+  <section id="signed-in" hidden>
+    <h2>Your rooms</h2>
+    <ul id="rooms" class="rooms"></ul>
+    <div id="email" hidden>
+      <h2>Email</h2>
+      <p id="email-state"></p>
+      <form id="bind">
+        <label for="bind-email">Bind an email to sign in from another device</label>
+        <input id="bind-email" type="email" maxlength="254" autocomplete="email" required>
+        <button type="submit">Send me a link</button>
+      </form>
+    </div>
+  </section>
+  <section id="signed-out" hidden>
+    <p>This browser holds no profile. Join a room from an invite link, or open your recovery link here.</p>
+    <form id="signin" hidden>
+      <label for="signin-email">Or sign in with the email bound to your profile</label>
+      <input id="signin-email" type="email" maxlength="254" autocomplete="email" required>
+      <button type="submit">Email me a sign-in link</button>
+    </form>
+  </section>
+</main>
+</body>
+</html>

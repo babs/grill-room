@@ -71,7 +71,6 @@ header {
   color: #fff;
 }
 header h1 { font-size: 1.1rem; flex: 1; }
-#me { color: var(--amber); }
 #agent { display: flex; align-items: center; gap: 0.5rem; }
 #agent-status { font-size: 0.85rem; color: #c9cbd6; }
 .led { width: 0.75rem; height: 0.75rem; border-radius: 50%; background: #d93025; box-shadow: 0 0 0 2px rgba(217, 48, 37, 0.3); }
@@ -92,6 +91,25 @@ header h1 { font-size: 1.1rem; flex: 1; }
 #pairing h2 { margin: 0 0 0.3rem; font-size: 1rem; }
 #pairing p { margin: 0 0 0.5rem; }
 .pairing-actions { display: flex; gap: 0.4rem; }
+/* Capped: on a phone with the keyboard up, the panel must leave room for the message box. */
+#recovery { flex: none; max-height: 30%; overflow-y: auto; margin: 0; padding: 0.6rem 1rem; border-bottom: 1px solid var(--line); }
+#recovery h2 { margin: 0 0 0.3rem; font-size: 1rem; }
+#recovery p { margin: 0 0 0.5rem; }
+#recovery-link, #invite-link { width: 100%; margin-bottom: 0.4rem; font-family: ui-monospace, monospace; font-size: 0.8rem; }
+#me { color: var(--amber); }
+#rename { display: flex; gap: 0.3rem; flex: 1; }
+#rename input { flex: 1; min-width: 6rem; }
+button.small, #rename button { padding: 0.2rem 0.6rem; font-size: 0.8rem; }
+#invites { margin-top: 1rem; font-size: 0.85rem; }
+#invites summary { cursor: pointer; font-weight: 600; }
+#invites h3 { margin: 0.8rem 0 0.3rem; font-size: 0.8rem; color: var(--muted); }
+#invite-list { list-style: none; padding: 0; margin: 0; }
+#invite-list li { display: flex; align-items: center; justify-content: space-between; gap: 0.3rem; padding: 0.15rem 0; }
+#invite-list button { padding: 0.1rem 0.5rem; font-size: 0.8rem; }
+body.join .rooms { list-style: none; padding: 0; text-align: left; }
+body.join .rooms li { padding: 0.25rem 0; overflow-wrap: anywhere; }
+body.join h2 { margin-top: 1.2rem; font-size: 1rem; text-align: left; }
+#confirm .actions { display: flex; justify-content: center; gap: 0.5rem; }
 .layout { flex: 1; display: flex; min-height: 0; }
 aside { width: 14rem; padding: 1rem; border-right: 1px solid var(--line); overflow-y: auto; }
 aside h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }

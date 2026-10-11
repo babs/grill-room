@@ -63,6 +63,10 @@ type Options struct {
 	Release *Release
 	// SandboxImage is the digest-pinned sandbox image daemons pull; empty lets them build their own.
 	SandboxImage string
+	// SendMail mails a plain-text message; nil turns email sign-in off.
+	SendMail func(ctx context.Context, to, subject, body string) error
+	// MagicLinkTTL is how long an emailed link works; 0 means 15 minutes.
+	MagicLinkTTL time.Duration
 }
 
 //go:embed templates

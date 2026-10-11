@@ -1,6 +1,6 @@
 # grill-room
 
-Self-hosted rooms for grill sessions. Guests join from an invite link with a display name, no account. The room shows who is in, a live message stream and the room's documents.
+Self-hosted rooms for grill sessions. Guests join from an invite link with a display name, no account. The first join gives the browser a lightweight profile that follows its person from room to room. The room shows who is in, a live message stream and the room's documents.
 
 This is an early PoC. `INTENT.md` has the design and `specs/001-grill-room-poc.md` the plan.
 
@@ -34,6 +34,10 @@ On first start the server logs an `admin_token_generated` line holding the admin
 | `GRILL_ROOM_TURN_TIMEOUT` | `15m` | one agent turn's time budget (1m to 24h) |
 | `GRILL_ROOM_DAEMON_DIR` | none (`/daemon` in the image) | daemon release written by `make release`; unset offers no download |
 | `GRILL_ROOM_SANDBOX_IMAGE` | none | sandbox image advertised to daemons, pinned by digest (`<repo>[:tag]@sha256:<hex>`); unset lets each daemon build it |
+| `GRILL_ROOM_SMTP_ADDR` | none | SMTP relay (`host:port`) for magic links; unset turns email sign-in off |
+| `GRILL_ROOM_SMTP_FROM` | none | sender address, needed with `GRILL_ROOM_SMTP_ADDR` |
+| `GRILL_ROOM_SMTP_USERNAME`, `GRILL_ROOM_SMTP_PASSWORD` | none | SMTP login, both or neither; sent only after STARTTLS, unless the relay is on localhost |
+| `GRILL_ROOM_MAGIC_LINK_TTL` | `15m` | how long an emailed link works (1s to 1h) |
 | `LOG_LEVEL` | `info` | |
 | `LOG_FORMAT` | `auto` | `console` on a TTY, `json` otherwise |
 
@@ -41,7 +45,7 @@ On first start the server logs an `admin_token_generated` line holding the admin
 
 ## Rooms and invites
 
-The admin token creates rooms and invites:
+The admin token creates rooms and the first invites:
 
 ```sh
 curl -H "Authorization: Bearer $ADMIN" --json '{"name":"Pricing review"}' localhost:7680/api/rooms
@@ -49,6 +53,8 @@ curl -H "Authorization: Bearer $ADMIN" -X POST localhost:7680/api/rooms/$ROOM/in
 ```
 
 The second call returns a `url` such as `https://<host>/join#<token>`. Whoever opens it picks a display name and lands in the room. One invite can be shared with several people.
+
+Once in, any member can create invites from the room page ("Invite people") and revoke the ones they created. The admin revokes any. Revoking an invite also revokes the invites created by those who joined through it, and so on down the chain, so a member cut off cannot come back through an invite they made. Any member can rename the room, and a system line in the chat says who renamed it, from what, to what.
 
 ```sh
 # Revoke an invite: everyone who joined through it gets a 401 and their live stream closes.
@@ -61,9 +67,18 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 |---|---|---|
 | `GET /api/rooms`, `POST /api/rooms` | admin | list, create |
 | `DELETE /api/rooms/{room}` | admin | delete with all its data |
-| `POST /api/rooms/{room}/invites` | admin | new invite link |
-| `DELETE /api/rooms/{room}/invites/{id}` | admin | revoke |
-| `POST /api/join` | invite token in the body | returns a participant token and sets a cookie |
+| `PATCH /api/rooms/{room}` | admin or participant | rename: `name` |
+| `GET /api/rooms/{room}/invites` | admin or participant | every invite for the admin, a participant's own for a participant; `created_by` is the participant who created it, absent for the admin |
+| `POST /api/rooms/{room}/invites` | admin or participant | new invite link |
+| `DELETE /api/rooms/{room}/invites/{id}` | admin, or the participant who created it | revoke, with the invites its joiners created; 403 for another participant's invite |
+| `GET /api/profiles` | admin | every profile with its email and rooms |
+| `DELETE /api/profiles/{id}` | admin | delete a profile, see Personal data |
+| `POST /api/join` | invite token in the body | returns a participant token and sets the room cookie; without a valid profile cookie, also creates a profile, sets its cookie and returns `recovery_url` once |
+| `GET /api/profile` | profile cookie, optional | `email_enabled`, and `profile` (`id`, own `email`, `rooms`) or null |
+| `POST /api/profile/recover` | recovery token in the body | signs this browser into the profile |
+| `POST /api/profile/email` | profile cookie | mails a link that binds `email` to the profile; 404 without SMTP |
+| `POST /api/profile/signin` | none | mails a sign-in link if a profile holds `email`; 202 either way; 404 without SMTP |
+| `POST /api/profile/magic` | link token in the body | spends an emailed link: a sign-in link signs this browser in, a bind link binds the address to the profile this browser holds (403 from any other browser); 401 when unknown, used or expired, 409 when another profile holds the address; 404 without SMTP |
 | `GET /api/rooms/{room}` | participant | room, me, participants |
 | `POST /api/rooms/{room}/messages` | participant | post a text message |
 | `GET /api/rooms/{room}/events` | participant | SSE: history then live messages; resumes after `?since=<id>` or `Last-Event-ID`; a `documents` event when a document or revision is added, an `annotations` event when an annotation is added or changes; an `agent` event with the agent state (`host_participant_id`, `online`, `reason`, last `turn`, `can_trigger`, connected `daemons`) at open and on every change; with voice on, an `stt` event (`available`, `listening`) at open and on every change |
@@ -95,7 +110,34 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `POST /api/stt/heartbeat` | STT token | `worker` name and the `rooms` whose audio it is in; a worker silent for 15 s counts as gone |
 | `POST /api/rooms/{room}/voice/lines` | STT token | one transcribed utterance: `participant_id`, `body`; stored as a `voice` message from that participant |
 
-Request bodies must be JSON with `Content-Type: application/json` (415 otherwise), uploads excepted. A body over its route's limit gets a 413. Participants authenticate with `Authorization: Bearer <token>` or the cookie set at join. The server stores tokens as SHA-256 hashes.
+Request bodies must be JSON with `Content-Type: application/json` (415 otherwise), uploads excepted. A body over its route's limit gets a 413. Participants authenticate with `Authorization: Bearer <token>`, the room cookie set at join, or the profile cookie. A browser's room cookie is tried first, then its profile cookie, which opens every room its profile has a participant in, as the newest of them. The server stores tokens as SHA-256 hashes.
+
+## Profiles
+
+The first join from a browser creates a profile and sets its cookie: HttpOnly, SameSite=Strict, valid for the whole site for 400 days. Every later join from that browser attaches the new participant to the same profile. `/profile` lists the profile's rooms, and the name in the room header links there.
+
+Right after that first join, the room page shows the profile's recovery link once, with a copy button. Opening it in another browser and confirming signs that browser into the profile, and from there into all its rooms. The page asks first, and warns when the browser already holds a profile: a link someone else sent would otherwise put the browser, and every room it joins next, in their profile. The link stays valid, so whoever holds it holds the profile. The server keeps only its hash.
+
+With SMTP configured, `/profile` offers to bind an email. The server mails a link that binds the address once opened in the same browser; anywhere else it is refused and signs nobody in. Later, "sign in with email" on `/profile` mails a sign-in link to a bound address, which signs a browser in after the same confirmation as a recovery link. Each link works once, for 15 minutes unless `GRILL_ROOM_MAGIC_LINK_TTL` says otherwise.
+
+Within 15 minutes, a client IP may ask for 10 links, and for 3 to the same address; an address gets at most 10 whoever asks. That cap stops mail floods, at a cost: someone asking from 4 IPs can block an address's email sign-in for 15 minutes. The recovery link still works meanwhile. The client IP is the peer address, or the last `X-Forwarded-For` hop when the peer is on a private or loopback address, as a proxy is. A sign-in request gets the same answer, as fast, whether or not a profile holds the address: the lookup and the mail come after it. Without SMTP, `/profile` shows no email option and the email routes answer 404.
+
+The server uses STARTTLS whenever the relay offers it. A relay that offers none gets the links in clear, so keep it on a trusted network, as an in-cluster relay is.
+
+## Personal data
+
+| Data | Who sees it | Removed by |
+|---|---|---|
+| display names, messages, voice transcripts, documents, annotations | the room's participants | deleting the room |
+| a profile's rooms | the profile's own browsers, the admin | deleting the room, or the profile (the link only) |
+| a profile's email | the profile's own browsers, the admin; never other participants | deleting the profile |
+
+- Access is by invite link. Anyone holding a valid one can read the room, and any member can make more.
+- No audio is stored. There is no retention timer: rooms and profiles live until deleted.
+- Deleting a room removes everything stored for it. A profile outlives its rooms and stops listing them.
+- Deleting a profile (`DELETE /api/profiles/{id}`) removes its sessions, its pending and used links, and its email. Its participants stay in their rooms under their display names, detached from it. Every browser signed into it is signed out.
+- Deletes overwrite the freed pages (`secure_delete`) and checkpoint the WAL, so the removed rows do not linger in the database files.
+- Logs carry profile ids, never emails.
 
 ## Documents
 
@@ -233,7 +275,7 @@ make dev-up     # renders deploy/local/traefik-grill-room.yaml into the rules di
 make dev-down   # removes the rule, stops compose
 ```
 
-`make dev-up` publishes the app port and LiveKit's 7880 and 5349 on the docker bridge gateway only, which is where traefik's `host.docker.internal` points, so the plain-HTTP ports stay off the LAN. The room is then at `https://grill-room.<dev-domain>/`, LiveKit signalling at `livekit.<dev-domain>` and TURN at `turn.<dev-domain>`. Compose needs the LiveKit key pair and the STT token in `.env`. With `GRILL_ROOM_ADMIN_TOKEN` set there, that is the admin token; otherwise read the generated one with `docker compose logs grill-room | grep admin_token_generated`.
+Compose also runs mailpit, which catches the magic link mails; its inbox is at `http://127.0.0.1:8025` (`MAILPIT_PORT`). `make dev-up` publishes the app port and LiveKit's 7880 and 5349 on the docker bridge gateway only, which is where traefik's `host.docker.internal` points, so the plain-HTTP ports stay off the LAN. The room is then at `https://grill-room.<dev-domain>/`, LiveKit signalling at `livekit.<dev-domain>` and TURN at `turn.<dev-domain>`. Compose needs the LiveKit key pair and the STT token in `.env`. With `GRILL_ROOM_ADMIN_TOKEN` set there, that is the admin token; otherwise read the generated one with `docker compose logs grill-room | grep admin_token_generated`.
 
 ## Lab deployment on Kubernetes
 
@@ -269,9 +311,10 @@ What gets deployed, with `<domain>` standing for `K8S_DOMAIN`:
 - Every pod runs as non-root with a read-only root filesystem, no service account token and no service links.
 - A default-deny NetworkPolicy blocks everything, then one policy per flow opens DNS, traefik to the room server and LiveKit, the worker to both, the room server to LiveKit's API, media between LiveKit and the worker, and the worker's traces to the cluster's OpenTelemetry collector (a Kyverno policy there injects `OTEL_EXPORTER_OTLP_ENDPOINT` into every pod).
 - The Secret `grill-room` comes from the same `.env` keys compose uses.
+- With `GRILL_ROOM_SMTP_ADDR` and `GRILL_ROOM_SMTP_FROM` in `.env`, the room server mails magic links; the `room-smtp` NetworkPolicy opens TCP `K8S_SMTP_PORT` (default 1025) to the namespace `K8S_SMTP_NAMESPACE` (default `mailpit`), where the relay runs.
 
 `make e2e-lab` runs a whole session against the deployment through its public hostnames, with two participants, an upload, an annotation, audio and a voice line. Audio runs twice, once forced through TURN/TLS and once with default ICE. One agent turn runs with a real daemon on this machine and haiku, at most six Claude requests. [docs/lab-checklist.md](docs/lab-checklist.md) is the manual check with a participant outside the LAN.
 
 ## Make targets
 
-`build` (server and daemon), `release` (the daemon release into `DIST`, default `dist/`), `run`, `test` (race detector), `test-docker` (sandbox and agent turns against real Docker, a fake Anthropic upstream and a fake `claude`, no Claude request), `e2e` (Playwright with the installed Chrome, needs pnpm, pandoc and Docker for the agent turns, which use the fake `claude`), `e2e-voice` (Playwright against the compose stack, with fake microphones; it kills and restarts the `stt` container), `e2e-agent-live` (two real daemons against the compose stack with `claude --model haiku`: a turn, a daemon killed mid-turn, a takeover that recalls a code word through `--resume`; about six Claude requests), `e2e-install` (a clean Debian container runs the room's one-liner against the compose stack, pairs, takes a self-update and refuses a tampered release; it copies releases into the `grill-room` container and recreates it at the end; no Claude request), `stt-test` (ruff, mypy and pytest for the worker), `stt-image`, `cover`, `lint` (golangci-lint, shellcheck), `docker-build` (also tests the office fixtures against the pandoc it ships), `sandbox-image`, `sandbox-push` (pushes it to `REGISTRY` and prints its digest-pinned reference), `sandbox-fake-image` (the sandbox with `internal/sandbox/fakeclaude` as `claude`, for tests), `fixtures` (regenerates them), `icons` (renders the favicon, PNG icons and apple-touch-icon from the logo with Inkscape and ImageMagick), `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`, `k8s-push`, `k8s-render`, `k8s-check`, `k8s-apply`, `k8s-delete` (lab deployment, above), `e2e-lab` (a session against it; up to six Claude requests).
+`build` (server and daemon), `release` (the daemon release into `DIST`, default `dist/`), `run`, `test` (race detector), `test-docker` (sandbox and agent turns against real Docker, a fake Anthropic upstream and a fake `claude`, no Claude request), `e2e` (Playwright with the installed Chrome, needs pnpm, pandoc and Docker for the agent turns, which use the fake `claude`; then the magic link tests against a second server and a throwaway mailpit container), `e2e-voice` (Playwright against the compose stack, with fake microphones; it kills and restarts the `stt` container), `e2e-agent-live` (two real daemons against the compose stack with `claude --model haiku`: a turn, a daemon killed mid-turn, a takeover that recalls a code word through `--resume`; about six Claude requests), `e2e-install` (a clean Debian container runs the room's one-liner against the compose stack, pairs, takes a self-update and refuses a tampered release; it copies releases into the `grill-room` container and recreates it at the end; no Claude request), `stt-test` (ruff, mypy and pytest for the worker), `stt-image`, `cover`, `lint` (golangci-lint, shellcheck), `docker-build` (also tests the office fixtures against the pandoc it ships), `sandbox-image`, `sandbox-push` (pushes it to `REGISTRY` and prints its digest-pinned reference), `sandbox-fake-image` (the sandbox with `internal/sandbox/fakeclaude` as `claude`, for tests), `fixtures` (regenerates them), `icons` (renders the favicon, PNG icons and apple-touch-icon from the logo with Inkscape and ImageMagick), `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`, `k8s-push`, `k8s-render`, `k8s-check`, `k8s-apply`, `k8s-delete` (lab deployment, above), `e2e-lab` (a session against it; up to six Claude requests), `e2e-lab-mail` (magic links against it, read through the lab mailpit at `K8S_MAILPIT_URL`; no Claude request).

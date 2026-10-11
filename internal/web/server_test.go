@@ -269,8 +269,12 @@ func TestE2ERoomLifecycle(t *testing.T) {
 		t.Fatalf("join: %d %+v", resp.StatusCode, alice)
 	}
 	c := resp.Cookies()
-	if len(c) != 1 || c[0].Path != "/api/rooms/"+room.ID || !c[0].HttpOnly || c[0].SameSite != http.SameSiteStrictMode {
+	if len(c) != 2 || c[0].Path != "/api/rooms/"+room.ID || !c[0].HttpOnly || c[0].SameSite != http.SameSiteStrictMode {
 		t.Fatalf("session cookie: %+v", c)
+	}
+	// 002-AC1: the profile cookie is site-wide and long-lived.
+	if c[1].Name != profileCookie || c[1].Path != "/" || !c[1].HttpOnly || c[1].SameSite != http.SameSiteStrictMode || c[1].MaxAge != 400*24*3600 {
+		t.Fatalf("profile cookie: %+v", c[1])
 	}
 	// The browser path: the cookie alone authenticates.
 	req, _ = http.NewRequestWithContext(t.Context(), "GET", e.ts.URL+"/api/rooms/"+room.ID, nil)
@@ -422,8 +426,8 @@ func TestAdminRoutesRequireAdminToken(t *testing.T) {
 		{"GET", "/api/rooms"},
 		{"POST", "/api/rooms"},
 		{"DELETE", "/api/rooms/" + room.ID},
-		{"POST", "/api/rooms/" + room.ID + "/invites"},
-		{"DELETE", "/api/rooms/" + room.ID + "/invites/" + strconv.FormatInt(inv.ID, 10)},
+		{"GET", "/api/profiles"},
+		{"DELETE", "/api/profiles/1"},
 	}
 	for _, rt := range routes {
 		for _, tok := range []string{"", "nope", member.Token, inv.Token} {
@@ -563,7 +567,7 @@ func TestHeartbeatRechecksAccess(t *testing.T) {
 	ev := e.openEvents(t, room.ID, p.Token, "")
 	nextMessage(t, ev)
 	// Straight to the store: no bus signal.
-	if err := e.st.RevokeInvite(t.Context(), room.ID, inv.ID); err != nil {
+	if _, err := e.st.RevokeInvite(t.Context(), room.ID, inv.ID); err != nil {
 		t.Fatal(err)
 	}
 	expectRevokedThenClosed(t, ev)
@@ -603,7 +607,7 @@ func get(t *testing.T, url string) (int, string, []byte) {
 // each manifest icon is served with the type its extension needs.
 func TestIconsAreLinkedAndServed(t *testing.T) {
 	e := newEnv(t)
-	for _, page := range []string{"/", "/r/abc"} {
+	for _, page := range []string{"/", "/r/abc", "/profile"} {
 		_, _, html := get(t, e.ts.URL+page)
 		links := iconLink.FindAllStringSubmatch(string(html), -1)
 		hrefs := map[string]bool{}
@@ -639,12 +643,14 @@ func TestIconsAreLinkedAndServed(t *testing.T) {
 func TestUIIsServed(t *testing.T) {
 	e := newEnv(t)
 	for path, want := range map[string]string{
-		"/":                "text/html",
-		"/join":            "text/html",
-		"/r/abc":           "text/html",
-		"/static/room.js":  "text/javascript",
-		"/static/app.css":  "text/css",
-		"/static/logo.svg": "image/svg+xml",
+		"/":                  "text/html",
+		"/join":              "text/html",
+		"/r/abc":             "text/html",
+		"/profile":           "text/html",
+		"/static/profile.js": "text/javascript",
+		"/static/room.js":    "text/javascript",
+		"/static/app.css":    "text/css",
+		"/static/logo.svg":   "image/svg+xml",
 	} {
 		req, _ := http.NewRequestWithContext(t.Context(), "GET", e.ts.URL+path, nil)
 		resp, err := http.DefaultClient.Do(req)

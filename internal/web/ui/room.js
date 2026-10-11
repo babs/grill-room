@@ -27,6 +27,9 @@ function end(text) {
   $('banner').hidden = false;
   sendForm.hidden = true;
   document.querySelector('.upload').hidden = true;
+  $('rename-open').hidden = true;
+  $('rename').hidden = true;
+  $('invites').hidden = true;
   $('annotations').hidden = true;
 }
 
@@ -96,6 +99,83 @@ function addMessage(m) {
   messages.append(li);
   if (pinned) messages.scrollTop = messages.scrollHeight;
 }
+
+// Rename: any member may; the system line it adds makes every page reload the room header.
+function closeRename() {
+  $('rename').hidden = true;
+  $('room-name').hidden = false;
+  $('rename-open').hidden = ended;
+}
+$('rename-open').addEventListener('click', () => {
+  $('rename-input').value = $('room-name').textContent;
+  $('room-name').hidden = true;
+  $('rename-open').hidden = true;
+  $('rename').hidden = false;
+  $('rename-input').focus();
+});
+$('rename-cancel').addEventListener('click', closeRename);
+$('rename').addEventListener('submit', (e) => {
+  e.preventDefault();
+  sendJSON('PATCH', api, { name: $('rename-input').value }).then((room) => {
+    if (!room) return;
+    $('room-name').textContent = room.name;
+    document.title = room.name + ' · grill-room';
+    closeRename();
+  }).catch((err) => { $('rename-input').setCustomValidity(err.message); $('rename-input').reportValidity(); });
+});
+$('rename-input').addEventListener('input', () => $('rename-input').setCustomValidity(''));
+
+// copyField copies a read-only field, and selects it for a manual copy when the clipboard refuses.
+function copyField(input, button) {
+  navigator.clipboard.writeText(input.value).then(() => { button.textContent = 'Copied'; }, () => input.select());
+}
+
+// The join page leaves the recovery link of a profile it just created: shown here once.
+function showRecovery() {
+  const link = sessionStorage.getItem('grill_room_recovery');
+  if (!link) return;
+  sessionStorage.removeItem('grill_room_recovery');
+  $('recovery-link').value = link;
+  $('recovery').hidden = false;
+}
+$('recovery-copy').addEventListener('click', () => copyField($('recovery-link'), $('recovery-copy')));
+$('recovery-done').addEventListener('click', () => {
+  $('recovery-link').value = '';
+  $('recovery').hidden = true;
+});
+
+// Invites: a member creates links and revokes the ones they created.
+async function loadInvites() {
+  const res = await fetch(api + '/invites');
+  if (!res.ok) return;
+  const invites = (await res.json()).filter((i) => !i.revoked_at);
+  $('invite-list').replaceChildren(...invites.map((inv) => {
+    const li = document.createElement('li');
+    const when = new Date(inv.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+    const label = document.createElement('span');
+    label.textContent = 'Created ' + when;
+    const revoke = document.createElement('button');
+    revoke.type = 'button';
+    revoke.textContent = 'Revoke';
+    revoke.setAttribute('aria-label', 'Revoke the invite created ' + when);
+    revoke.addEventListener('click', () => {
+      sendJSON('DELETE', api + '/invites/' + inv.id).then(loadInvites).catch(console.error);
+    });
+    li.append(label, revoke);
+    return li;
+  }));
+}
+$('invites').addEventListener('toggle', () => { if ($('invites').open) loadInvites().catch(console.error); });
+$('invite-create').addEventListener('click', () => {
+  sendJSON('POST', api + '/invites').then((inv) => {
+    if (!inv) return;
+    $('invite-link').value = inv.url;
+    $('invite-copy').textContent = 'Copy invite';
+    $('invite-new').hidden = false;
+    return loadInvites();
+  }).catch(console.error);
+});
+$('invite-copy').addEventListener('click', () => copyField($('invite-link'), $('invite-copy')));
 
 // Documents. Text documents render in an iframe sandboxed without allow-same-origin: their
 // scripts get an opaque origin, so no room cookie and no same-origin call to the API.
@@ -905,6 +985,7 @@ if (window.visualViewport) {
 
 loadRoom().then((ok) => {
   if (!ok) return;
+  showRecovery();
   connect();
   showHostAgent().catch(console.error);
   const pair = new URLSearchParams(location.search).get('pair');

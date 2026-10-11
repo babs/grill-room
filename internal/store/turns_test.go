@@ -26,10 +26,10 @@ func newTurnRoom(t *testing.T, s *Store, room string) turnRoom {
 	if _, err := s.CreateRoom(ctx, room, "R"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateInvite(ctx, room, "inv-"+room); err != nil {
+	if _, err := s.CreateInvite(ctx, room, "inv-"+room, 0); err != nil {
 		t.Fatal(err)
 	}
-	p, _, err := s.Join(ctx, "inv-"+room, "Alice", "tok-"+room)
+	p, _, err := s.Join(ctx, "inv-"+room, "Alice", "tok-"+room, JoinProfile{})
 	if err != nil {
 		t.Fatal(err)
 	}

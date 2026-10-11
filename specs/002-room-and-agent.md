@@ -49,15 +49,15 @@ The sandbox gets Python, uv, Office libraries and common CLI tools. It reaches t
 ## Acceptance criteria
 
 ### Profiles and identity
-- [ ] **AC1** A guest joining a room without a profile gets one: a long-lived HttpOnly cookie, and a recovery link shown once with a copy button.
-- [ ] **AC2** Joining another room with the same browser attaches the new participant to the same profile, and the profile lists both rooms.
-- [ ] **AC3** Opening the recovery link on another device signs that device into the profile.
-- [ ] **AC4** With SMTP configured, a profile can bind an email. A magic link is single use, expires after 15 minutes, and is rate-limited per address and per IP. Signing in with it from another device opens the profile. Without SMTP the option is hidden.
-- [ ] **AC5** Participants never see another profile's email. The admin can.
+- [x] **AC1** A guest joining a room without a profile gets one: a long-lived HttpOnly cookie, and a recovery link shown once with a copy button.
+- [x] **AC2** Joining another room with the same browser attaches the new participant to the same profile, and the profile lists both rooms.
+- [x] **AC3** Opening the recovery link on another device signs that device into the profile.
+- [x] **AC4** With SMTP configured, a profile can bind an email. A magic link is single use, expires after 15 minutes, and is rate-limited per address and per IP. Signing in with it from another device opens the profile. Without SMTP the option is hidden.
+- [x] **AC5** Participants never see another profile's email. The admin can.
 
 ### Rooms
-- [ ] **AC6** Any member can rename the room, and a system line in the chat records who renamed it from what to what.
-- [ ] **AC7** Any member can create an invite link. A member can revoke the invites they created, and the admin can revoke any.
+- [x] **AC6** Any member can rename the room, and a system line in the chat records who renamed it from what to what.
+- [x] **AC7** Any member can create an invite link. A member can revoke the invites they created, and the admin can revoke any.
 
 ### Chat
 - [ ] **AC8** A message renders Markdown (emphasis, lists, code, links, tables). Raw HTML and script content are not rendered, and links get `rel="noopener noreferrer"`.
@@ -204,7 +204,7 @@ Changed: `agent_sessions` is keyed by room persona. Existing rooms migrate to on
 
 ## Open questions
 
-- [ ] 1. SMTP relay for the lab magic links (user deploys a mailpit; local dev uses mailpit in compose). Blocks only the lab part of AC4.
+- [x] 1. SMTP relay for the lab magic links: a mailpit in the lab, reached through the `room-smtp` NetworkPolicy; local dev and `make e2e` use mailpit too.
 
 ## Decisions
 
