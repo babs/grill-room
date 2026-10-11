@@ -10,7 +10,7 @@ GitHub Actions builds and signs every release. Nobody holds a signing key: cosig
 - `windows`: `go test ./...` on `windows-latest`. See [Tests skipped on Windows](#tests-skipped-on-windows).
 - `stt`: `make stt-test`, with the whisper `small` model at the revision the STT image pins. CI sets `CI`, so the e2e test fails instead of skipping when the model is missing.
 
-`.github/workflows/release.yml` runs on a tag `vX.Y.Z`. Pre-release tags such as `v1.2.3-rc1` do not trigger it: the supervisor would refuse their signature anyway (see the identity below).
+`.github/workflows/release.yml` runs on a tag `vX.Y.Z`: its filter, `v[0-9]+.[0-9]+.[0-9]+`, leaves pre-release tags such as `v1.2.3-rc1` out. The supervisor would refuse their signature anyway (see the identity below).
 
 | Job | Permissions | Does |
 |---|---|---|
@@ -72,7 +72,7 @@ gh release download v0.0.1 -R babs/grill-room -D dist --clobber
 make docker-build VERSION=v0.0.1 DAEMON_DIST=dist
 ```
 
-The build fails when `dist/VERSION` differs from `VERSION`. Put `sandbox-image.txt`'s content in `GRILL_ROOM_SANDBOX_IMAGE` so daemons pull the signed image.
+The build fails when `dist/VERSION` differs from `VERSION`. Put `sandbox-image.txt`'s content in `GRILL_ROOM_SANDBOX_IMAGE` so daemons pull the released image by digest.
 
 ## Dev signing
 
@@ -89,13 +89,15 @@ make docker-build VERSION=v0.0.0-dev DAEMON_DIST=dist
 
 Keep the key outside the repository. `.env` is untracked, and `COSIGN_PASSWORD` can live there too. `make dev-release` uses cosign v3's `--use-signing-config=false --tlog-upload=false`; cosign prints a deprecation warning for the second flag (spike S7).
 
-## Making the image public
+## Image visibility
 
-ghcr.io creates a package private the first time a workflow pushes it, and the REST API cannot change a package's visibility. Once, after the first release: open the package (`https://github.com/users/babs/packages/container/grill-room%2Fsandbox/settings`), "Change visibility", "Public". Later releases keep it public. An anonymous pull confirms it:
+The package `ghcr.io/babs/grill-room/sandbox` is public. The first release, v0.0.1, created it that way with no manual step: an anonymous client gets a pull token and the manifest. After a release, this prints a token, where a private package answers 401:
 
 ```sh
-docker logout ghcr.io; docker pull "$(cat sandbox-image.txt)"
+curl -s "https://ghcr.io/token?scope=repository:babs/grill-room/sandbox:pull"
 ```
+
+If it ever turns private, the package's settings page has "Change visibility".
 
 ## Tests skipped on Windows
 
@@ -110,5 +112,5 @@ The `windows` job runs `go test ./...` without `-race`. These checks skip there:
 
 Two assertions change on Windows:
 
-- the file-mode checks in `TestAdminAllowlist`, `TestAdminSettings` and `TestUpdateReplacesBinaryAndRestarts`. Windows has no mode bits, so the 0600 these files get on Unix protects nothing there. Phase 4 has to cover token files on Windows with ACLs or the Credential Manager.
+- the file-mode checks in `TestAdminAllowlist`, `TestAdminSettings` and `TestUpdateReplacesBinaryAndRestarts` are skipped. Windows has no mode bits (Go reports 0666 or 0444), so the folder's ACL decides who reads these files. Phase 4 decides how token files are protected there.
 - `TestUIIsServed` expects `application/javascript` for `.js`, the type the Windows registry gives. The room server ships on Linux.
