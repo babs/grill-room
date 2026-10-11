@@ -31,47 +31,58 @@ async function joinRoom(browser, request, roomID, name) {
   return page;
 }
 
-// 002-AC4: bind an email, sign in from other devices with emailed links, each link once.
+// 002-AC4: bind an email, sign in from other devices with emailed links, each link once. The room
+// and the profile, which holds the email, are deleted at the end: on the lab they would pile up.
 test('magic links: bind, sign in elsewhere, single use', async ({ browser, request }) => {
   const email = `alice-${Date.now()}@example.com`;
   const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Mail room' } })).json();
-  const laptop = await joinRoom(browser, request, room.id, 'Alice');
+  let profile = 0;
+  try {
+    const laptop = await joinRoom(browser, request, room.id, 'Alice');
+    profile = (await (await laptop.request.get('/api/profile')).json()).profile.id;
 
-  await laptop.goto('/profile');
-  await expect(laptop.locator('#email-state')).toHaveText('No email bound.');
-  await laptop.getByLabel('Bind an email').fill(email);
-  await laptop.getByRole('button', { name: 'Send me a link' }).click();
-  await expect(laptop.locator('#status')).toContainText('Check your mailbox');
-  const bind = await nextMail(request, email, 1);
-  expect(bind.subject).toBe('Confirm your email for grill-room');
+    await laptop.goto('/profile');
+    await expect(laptop.locator('#email-state')).toHaveText('No email bound.');
+    await laptop.getByLabel('Bind an email').fill(email);
+    await laptop.getByRole('button', { name: 'Send me a link' }).click();
+    await expect(laptop.locator('#status')).toContainText('Check your mailbox');
+    const bind = await nextMail(request, email, 1);
+    expect(bind.subject).toBe('Confirm your email for grill-room');
 
-  // A bind link works only in the browser that asked for it, and signs nobody in.
-  const tablet = await (await browser.newContext()).newPage();
-  await tablet.goto(bind.link);
-  await expect(tablet.locator('#status')).toHaveText('open this link in the browser where you asked for it');
-  await expect(tablet.locator('#signed-out')).toBeVisible();
-  await laptop.goto(bind.link);
-  await expect(laptop.locator('#status')).toHaveText('Email bound.');
-  await expect(laptop.locator('#email-state')).toHaveText(`Bound to ${email}.`);
-  // The secret leaves the address bar once read.
-  expect(new URL(laptop.url()).hash).toBe('');
-  await laptop.goto(bind.link);
-  await expect(laptop.locator('#status')).toHaveText('this link is invalid, already used or expired');
+    // A bind link works only in the browser that asked for it, and signs nobody in.
+    const tablet = await (await browser.newContext()).newPage();
+    await tablet.goto(bind.link);
+    await expect(tablet.locator('#status')).toHaveText('open this link in the browser where you asked for it');
+    await expect(tablet.locator('#signed-out')).toBeVisible();
+    await laptop.goto(bind.link);
+    await expect(laptop.locator('#status')).toHaveText('Email bound.');
+    await expect(laptop.locator('#email-state')).toHaveText(`Bound to ${email}.`);
+    // The secret leaves the address bar once read.
+    expect(new URL(laptop.url()).hash).toBe('');
+    await laptop.goto(bind.link);
+    await expect(laptop.locator('#status')).toHaveText('this link is invalid, already used or expired');
 
-  // Sign in on a phone with the bound address.
-  const phone = await (await browser.newContext()).newPage();
-  await phone.goto('/profile');
-  await phone.getByLabel('Or sign in with the email').fill(email);
-  await phone.getByRole('button', { name: 'Email me a sign-in link' }).click();
-  await expect(phone.locator('#status')).toContainText('a sign-in link is on its way');
-  const signin = await nextMail(request, email, 2);
-  expect(signin.subject).toBe('Sign in to grill-room');
-  await phone.goto(signin.link);
-  await phone.getByRole('button', { name: 'Sign in to this profile' }).click();
-  await expect(phone.locator('#status')).toHaveText('Signed in on this device.');
-  await expect(phone.locator('#email-state')).toHaveText(`Bound to ${email}.`);
-  await phone.getByRole('link', { name: 'Mail room' }).click();
-  await expect(phone.locator('#me')).toHaveText('Alice');
+    // Sign in on a phone with the bound address.
+    const phone = await (await browser.newContext()).newPage();
+    await phone.goto('/profile');
+    await phone.getByLabel('Or sign in with the email').fill(email);
+    await phone.getByRole('button', { name: 'Email me a sign-in link' }).click();
+    await expect(phone.locator('#status')).toContainText('a sign-in link is on its way');
+    const signin = await nextMail(request, email, 2);
+    expect(signin.subject).toBe('Sign in to grill-room');
+    await phone.goto(signin.link);
+    await phone.getByRole('button', { name: 'Sign in to this profile' }).click();
+    await expect(phone.locator('#status')).toHaveText('Signed in on this device.');
+    await expect(phone.locator('#email-state')).toHaveText(`Bound to ${email}.`);
+    await phone.getByRole('link', { name: 'Mail room' }).click();
+    await expect(phone.locator('#me')).toHaveText('Alice');
+  } finally {
+    await request.delete(`/api/rooms/${room.id}`, { headers: admin });
+    if (profile) await request.delete(`/api/profiles/${profile}`, { headers: admin });
+  }
+  const ids = async (path) => (await (await request.get(path, { headers: admin })).json()).map((x) => x.id);
+  expect(await ids('/api/profiles'), 'the profile is gone').not.toContain(profile);
+  expect(await ids('/api/rooms'), 'the room is gone').not.toContain(room.id);
 });
 
 // 002-AC4: a link opened after its lifetime is refused and binds nothing.
