@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Scan counts occurrences of secret in the container filesystem (docker export), in its volumes,
@@ -32,8 +33,8 @@ func (s *Sandbox) Scan(ctx context.Context, secret []byte) (map[string]int, erro
 	}, nil
 }
 
-// Isolated returns nil when the sandbox reaches the proxy and nothing else: Anthropic's hosts do
-// not resolve and a public IP does not connect.
+// Isolated returns nil when the sandbox reaches the two proxies and nothing else: Anthropic's hosts
+// do not resolve, a public IP does not connect, and the egress proxy refuses Anthropic.
 func (s *Sandbox) Isolated(ctx context.Context) error {
 	dial := func(target string) error {
 		_, err := s.run(ctx, nil, "exec", s.container(), "timeout", "5", "bash", "-c", "exec 3<>/dev/tcp/"+target)
@@ -49,6 +50,11 @@ func (s *Sandbox) Isolated(ctx context.Context) error {
 	}
 	if err := dial("proxy/" + relayPort); err != nil {
 		return fmt.Errorf("the proxy is unreachable from the sandbox: %w", err)
+	}
+	// The sandbox's https_proxy sends curl through squid, which must answer the CONNECT with 403.
+	out, _ := s.run(ctx, nil, "exec", s.container(), "curl", "-s", "-o", "/dev/null", "-m", "10", "-w", "%{http_connect}", "https://api.anthropic.com")
+	if code := strings.TrimSpace(string(out)); code != "403" {
+		return fmt.Errorf("the egress proxy answered %q to api.anthropic.com, want 403", code)
 	}
 	return nil
 }

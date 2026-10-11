@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/babs/grill-room/internal/daemon"
+	"github.com/babs/grill-room/internal/sandbox"
 )
 
 func TestConfig(t *testing.T) {
@@ -19,7 +20,8 @@ func TestConfig(t *testing.T) {
 	t.Setenv("GRILL_ROOM_DAEMON_BROWSER", "")
 	t.Setenv("GRILL_ROOM_SANDBOX_IMAGE", "")
 	cfg, err := loadConfig()
-	if err != nil || cfg.StateDir != "/state" || cfg.Browser != "auto" || cfg.Image != "" {
+	if err != nil || cfg.StateDir != "/state" || cfg.Browser != "auto" || cfg.Image != "" ||
+		cfg.Limits != (sandbox.Limits{CPUs: "2", Memory: "4g", EgressCPUs: "0.5", EgressMemory: "256m"}) {
 		t.Fatalf("cfg = %+v, %v", cfg, err)
 	}
 	for _, tc := range []struct {
@@ -34,6 +36,12 @@ func TestConfig(t *testing.T) {
 		{Config{Browser: "auto", LogLevel: "info", Settings: daemon.Settings{MaxModel: "claude-sonnet-5-5", MaxEffort: "high"}}, true},
 		{Config{Browser: "auto", LogLevel: "info", Settings: daemon.Settings{MaxModel: "gpt-5"}}, false},
 		{Config{Browser: "auto", LogLevel: "info", Settings: daemon.Settings{MaxEffort: "turbo"}}, false},
+		// Sandbox and egress limits are docker --cpus and --memory values, 0 for none.
+		{Config{Browser: "auto", LogLevel: "info", Limits: sandbox.Limits{CPUs: "1.5", Memory: "4g", EgressCPUs: "0", EgressMemory: "512M"}}, true},
+		{Config{Browser: "auto", LogLevel: "info", Limits: sandbox.Limits{CPUs: "two"}}, false},
+		{Config{Browser: "auto", LogLevel: "info", Limits: sandbox.Limits{EgressCPUs: "-1"}}, false},
+		{Config{Browser: "auto", LogLevel: "info", Limits: sandbox.Limits{Memory: "4 GB"}}, false},
+		{Config{Browser: "auto", LogLevel: "info", Limits: sandbox.Limits{EgressMemory: "--privileged"}}, false},
 	} {
 		if err := tc.cfg.Validate(); (err == nil) != tc.ok {
 			t.Errorf("Validate(%+v) = %v", tc.cfg, err)

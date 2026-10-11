@@ -52,7 +52,7 @@ Built for product people and PMs, not only engineers. Joining a room needs a bro
 | D18 | The host may press the agent button. The host can grant the right to others or hand over the host role temporarily. |
 | D19 | A session produces any number of free-form documents (MD or HTML), as the session needs. No fixed template. |
 | D20 | Transcripts are exposed to the agent as Markdown files in its workspace, so a fresh session reads the room history with no extra API. |
-| D21 | The sandbox sits on an internal Docker network whose only route is the proxy. With egress, Claude Code calls `api.anthropic.com` directly with the dummy token, gets a 401, and wipes its own credentials file (S3). |
+| D21 | The sandbox sits on an internal Docker network whose only route is the proxy, plus, since spec 002, an egress allowlist proxy that denies Anthropic's hosts. With direct egress, Claude Code calls `api.anthropic.com` directly with the dummy token, gets a 401, and wipes its own credentials file (S3). |
 | D22 | Before each turn the daemon writes a fresh `oauthAccount` stub (`profileFetchedAt` = now) into the sandbox `.claude.json`, and sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `ENABLE_CLAUDEAI_MCP_SERVERS=false`. |
 | D23 | Session upload (D5) is the `<id>.jsonl` bytes past the last uploaded offset. The file is append-only, and the jsonl alone resumes in a fresh home with any HOME or cwd (S2). |
 | D24 | The daemon is one small portable static Go binary that participants run on their machine. It opens an outbound connection to the room, embeds the bearer-swap proxy (S3), and drives Claude Code in the Docker sandbox. |

@@ -33,6 +33,9 @@ type fakeAgent struct {
 	run    func(ctx context.Context, in sandbox.TurnInput, files map[string]string) (*sandbox.TurnOutput, error)
 	inputs []sandbox.TurnInput
 	closed bool
+	allow  []string
+	// allowErr and deniedErr fail SetAllowlist and Denied.
+	allowErr, deniedErr error
 }
 
 func (f *fakeAgent) RunTurn(ctx context.Context, in sandbox.TurnInput) (*sandbox.TurnOutput, error) {
@@ -53,6 +56,25 @@ func (f *fakeAgent) RunTurn(ctx context.Context, in sandbox.TurnInput) (*sandbox
 	f.inputs = append(f.inputs, in)
 	f.mu.Unlock()
 	return f.run(ctx, in, files)
+}
+
+func (f *fakeAgent) SetAllowlist(_ context.Context, list []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.allowErr != nil {
+		return f.allowErr
+	}
+	f.allow = list
+	return nil
+}
+
+func (f *fakeAgent) Denied(context.Context, int) ([]sandbox.Denied, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.deniedErr != nil {
+		return nil, f.deniedErr
+	}
+	return []sandbox.Denied{{Host: "example.com", Time: time.Unix(1791690692, 0).UTC()}}, nil
 }
 
 func (f *fakeAgent) Close(context.Context) {

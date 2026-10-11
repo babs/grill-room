@@ -59,7 +59,8 @@ test('skills: upload, disclaimer once, pinned through an update', async ({ brows
   await expect(disclaimer).toBeVisible();
   await expect(disclaimer).toContainText('scripts run in the host\'s sandbox');
   await expect(disclaimer).toContainText('ask the agent to print a skill\'s files');
-  await expect(disclaimer).toContainText('allowed domain that accepts writes');
+  await expect(disclaimer).toContainText('allowed domain that accepts uploads');
+  await expect(disclaimer).toContainText('only through the host\'s egress allowlist');
   await disclaimer.getByRole('button', { name: 'Cancel' }).click();
   await expect(disclaimer).toBeHidden();
   await expect(grill.locator('.persona-skills li')).toHaveText(['None on.']);

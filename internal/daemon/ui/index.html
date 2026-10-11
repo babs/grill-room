@@ -61,6 +61,23 @@
       <span id="settings-status" role="status"></span>
     </form>
   </section>
+  <section aria-labelledby="egress-title">
+    <h2 id="egress-title">Egress allowlist</h2>
+    <p class="hint">The sandbox reaches these domains, and nothing else, through its proxy and over HTTPS only. A leading dot, as in .example.com, also allows every subdomain. Anthropic's hosts stay blocked whatever the list says.</p>
+    <ul id="allowlist"></ul>
+    <form id="allowlist-form">
+      <label>Domain <input id="allowlist-add" required placeholder="example.com" size="30" autocomplete="off" spellcheck="false"></label>
+      <button type="submit">Allow</button>
+      <span id="allowlist-status" role="status"></span>
+    </form>
+    <h3 id="denied-title">Denied requests</h3>
+    <p class="hint">What the proxy refused in the current room's sandbox, newest first.</p>
+    <p id="denied-empty">None yet.</p>
+    <table id="denied" aria-labelledby="denied-title" hidden>
+      <thead><tr><th scope="col">Time</th><th scope="col">Host</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
   <section aria-labelledby="logs-title">
     <h2 id="logs-title">Logs</h2>
     <pre id="logs"></pre>

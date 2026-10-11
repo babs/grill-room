@@ -30,6 +30,7 @@ const (
 	Workspace = "/workspace"
 	home      = "/home/agent"
 	relayPort = "8787"
+	noProxy   = "proxy,localhost,127.0.0.1"
 	// Label marks every container, network and volume the daemon creates, for cleanup.
 	Label = "grill-room-daemon"
 )
@@ -45,6 +46,27 @@ type Config struct {
 	// Host names this machine in error messages shown in the room.
 	Host     string
 	Upstream *url.URL
+	// Limits caps the sandbox and its egress proxy; an empty value leaves Docker's default.
+	Limits Limits
+}
+
+// Limits are docker run --cpus and --memory values.
+type Limits struct {
+	CPUs, Memory             string
+	EgressCPUs, EgressMemory string
+}
+
+// limitFlags turns a cpus and memory pair into docker run flags.
+func limitFlags(cpus, memory string) []string {
+	var f []string
+	if cpus != "" {
+		f = append(f, "--cpus", cpus)
+	}
+	if memory != "" {
+		// Swap equal to memory: a sandbox past its limit is killed rather than paging the host.
+		f = append(f, "--memory", memory, "--memory-swap", memory)
+	}
+	return f
 }
 
 // Sandbox is one long-lived container plus its relay, network and proxy.
@@ -61,22 +83,26 @@ type Sandbox struct {
 	mu      sync.Mutex
 	srv     *http.Server
 	started bool
+	// allow is the egress allowlist the proxy runs with.
+	allow []string
 }
 
 // New prepares a sandbox; Start creates it.
 func New(cfg Config, run Runner, src *creds.Source, log *zap.Logger) *Sandbox {
 	dummy := "sk-ant-oat01-grill-room-dummy-" + rand.Text()
-	return &Sandbox{cfg: cfg, run: run, src: src, log: log, dummy: dummy,
+	return &Sandbox{cfg: cfg, run: run, src: src, log: log, dummy: dummy, allow: DefaultAllowlist,
 		proxy: proxy.New(cfg.Upstream, src, dummy, log.Named("proxy"))}
 }
 
 func (s *Sandbox) container() string { return "grill-room-" + s.cfg.Name }
 func (s *Sandbox) relay() string     { return s.container() + "-relay" }
 func (s *Sandbox) network() string   { return s.container() }
+func (s *Sandbox) egress() string    { return s.container() + "-egress" }
 func (s *Sandbox) homeVol() string   { return s.container() + "-home" }
 func (s *Sandbox) wsVol() string     { return s.container() + "-workspace" }
 
-// Start brings up the proxy, the internal network, the relay and the sandbox container.
+// Start brings up the proxy, the internal network, the relay, the egress proxy and the sandbox
+// container.
 func (s *Sandbox) Start(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -124,14 +150,29 @@ func (s *Sandbox) Start(ctx context.Context) error {
 		append(append([]string{"run", "-d", "--name", s.relay(), "--add-host", "host.docker.internal:" + gateway}, hardening...),
 			"--entrypoint", "socat", s.cfg.Image, "TCP-LISTEN:"+relayPort+",fork,reuseaddr", "TCP:host.docker.internal:"+port),
 		{"network", "connect", "--alias", "proxy", s.network(), s.relay()},
+		// The egress proxy sits on its own bridge to reach the allowlist, and on the internal
+		// network as "egress" (002-AC34).
+		{"network", "create", "--label", label, s.egress()},
+		// The local log driver is bounded and readable by docker logs, which the denied list reads.
+		append(append(append([]string{"run", "-d", "--name", s.egress(), "--network", s.egress(), "--log-driver", "local"}, hardening...),
+			limitFlags(s.cfg.Limits.EgressCPUs, s.cfg.Limits.EgressMemory)...),
+			"--tmpfs", "/tmp", "--pids-limit", "64", "-e", "GRILL_SQUID_CONF="+squidConf(s.allow),
+			"--entrypoint", "sh", s.cfg.Image, "-c", `printf '%s' "$GRILL_SQUID_CONF" > /tmp/squid.conf && exec squid -N -f /tmp/squid.conf`),
+		{"network", "connect", "--alias", "egress", s.network(), s.egress()},
 		{"volume", "create", "--label", label, s.homeVol()},
 		{"volume", "create", "--label", label, s.wsVol()},
-		append(append([]string{"run", "-d", "--init", "--name", s.container(), "--network", s.network()}, hardening...),
+		append(append(append([]string{"run", "-d", "--init", "--name", s.container(), "--network", s.network()}, hardening...),
+			limitFlags(s.cfg.Limits.CPUs, s.cfg.Limits.Memory)...),
 			"--tmpfs", "/tmp", "--pids-limit", "512",
 			"-v", s.homeVol()+":"+home, "-v", s.wsVol()+":"+Workspace, "-w", Workspace,
 			"-e", "ANTHROPIC_BASE_URL=http://proxy:"+relayPort,
 			"-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
 			"-e", "ENABLE_CLAUDEAI_MCP_SERVERS=false",
+			// Tools go out through the egress proxy; Claude Code's own traffic goes to the
+			// bearer-swap proxy, never through squid (002-AC35).
+			"-e", "HTTP_PROXY="+egressURL, "-e", "HTTPS_PROXY="+egressURL,
+			"-e", "http_proxy="+egressURL, "-e", "https_proxy="+egressURL,
+			"-e", "NO_PROXY="+noProxy, "-e", "no_proxy="+noProxy,
 			s.cfg.Image),
 	}
 	for _, args := range steps {
@@ -183,8 +224,8 @@ func (s *Sandbox) closeLocked(ctx context.Context) {
 // remove deletes the sandbox's objects; each may be missing, so errors are expected and ignored.
 func (s *Sandbox) remove(ctx context.Context) {
 	for _, args := range [][]string{
-		{"rm", "-f", "-v", s.container(), s.relay()},
-		{"network", "rm", s.network()},
+		{"rm", "-f", "-v", s.container(), s.relay(), s.egress()},
+		{"network", "rm", s.network(), s.egress()},
 		{"volume", "rm", "-f", s.homeVol(), s.wsVol()},
 	} {
 		_, _ = s.run(ctx, nil, args...)

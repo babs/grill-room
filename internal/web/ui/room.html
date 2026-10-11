@@ -79,7 +79,7 @@
   <ul>
     <li>A skill's scripts run in the host's sandbox, on the host's machine, with the room's documents and transcript in reach.</li>
     <li>Anyone in the room can ask the agent to print a skill's files. Put no secret in a skill.</li>
-    <li>An egress allowlist for the sandbox is coming. Once it is on, a script can send room data to any allowed domain that accepts writes.</li>
+    <li>The sandbox reaches the Internet only through the host's egress allowlist, with no inspection of what goes through. A script can send room data to any allowed domain that accepts uploads, GitHub included when the script carries a token.</li>
   </ul>
   <p class="hint">This shows once for your profile.</p>
   <form method="dialog" class="pairing-actions">

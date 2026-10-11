@@ -69,6 +69,64 @@ function renderSettings(set, models, efforts) {
   $('approve-all').checked = set.approve_all;
 }
 
+// renderAllowlist lists the domains, each with its remove button; unchanged lists keep their DOM.
+let shownAllowlist = '';
+function renderAllowlist(list) {
+  const key = JSON.stringify(list);
+  if (key === shownAllowlist) return;
+  shownAllowlist = key;
+  const ul = $('allowlist');
+  ul.replaceChildren();
+  if (!list.length) {
+    const li = document.createElement('li');
+    li.textContent = 'No domain: the sandbox reaches nothing.';
+    ul.append(li);
+  }
+  for (const domain of list) {
+    const li = document.createElement('li');
+    const name = document.createElement('code');
+    name.textContent = domain;
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.textContent = 'Remove';
+    rm.setAttribute('aria-label', 'Remove ' + domain);
+    rm.addEventListener('click', () => saveAllowlist(list.filter((d) => d !== domain)));
+    li.append(name, ' ', rm);
+    ul.append(li);
+  }
+}
+
+let currentAllowlist = [];
+function saveAllowlist(list) {
+  $('allowlist-status').textContent = '';
+  return api('POST', '/api/allowlist', { allowlist: list })
+    .then(() => api('GET', '/api/status').then(render))
+    .then(() => { $('allowlist-status').textContent = 'Saved.'; return true; })
+    .catch((err) => { $('allowlist-status').textContent = err.message; return false; });
+}
+
+function renderDenied(list) {
+  const body = $('denied').tBodies[0];
+  body.replaceChildren();
+  for (const d of list) {
+    const tr = body.insertRow();
+    tr.insertCell().textContent = new Date(d.time).toLocaleString();
+    tr.insertCell().textContent = d.host;
+  }
+  $('denied').hidden = !list.length;
+  $('denied-empty').hidden = !!list.length;
+}
+
+async function refreshDenied() {
+  try {
+    renderDenied((await api('GET', '/api/denied')).denied);
+  } catch (err) {
+    $('denied-empty').hidden = false;
+    $('denied-empty').textContent = err.message;
+  }
+  if (!stopped) setTimeout(refreshDenied, 5000);
+}
+
 function render({ status: s, logs, models, efforts }) {
   $('host').textContent = s.host + ' · ' + s.version;
   $('room').textContent = s.room || 'No room yet: paste the room link below.';
@@ -106,6 +164,8 @@ function render({ status: s, logs, models, efforts }) {
   }
   mark($('can-host'), s.can_host, s.can_host ? 'available' : 'unavailable: ' + s.reason);
   renderSettings(s.settings, models, efforts);
+  currentAllowlist = s.allowlist;
+  renderAllowlist(s.allowlist);
   const logs$ = $('logs');
   const atBottom = logs$.scrollTop + logs$.clientHeight >= logs$.scrollHeight - 20;
   logs$.textContent = logs.join('\n');
@@ -141,6 +201,11 @@ $('settings-form').addEventListener('submit', (e) => {
     })
     .catch((err) => { $('settings-status').textContent = err.message; });
 });
+$('allowlist-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const domain = $('allowlist-add').value.trim();
+  saveAllowlist([...currentAllowlist, domain]).then((ok) => { if (ok) $('allowlist-add').value = ''; });
+});
 $('recheck').addEventListener('click', () => {
   api('POST', '/api/recheck').then(() => api('GET', '/api/status').then(render)).catch((err) => fail(err.message));
 });
@@ -170,4 +235,5 @@ session().then((t) => {
   token = t;
   $('main').hidden = false;
   refresh();
+  refreshDenied();
 }).catch((err) => fail(err.message));

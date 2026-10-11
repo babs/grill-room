@@ -16,6 +16,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/babs/grill-room/internal/sandbox"
 	"github.com/babs/grill-room/internal/turn"
 )
 
@@ -84,6 +85,8 @@ func (a *Admin) Handler() http.Handler {
 	mux.Handle("POST /api/stop", a.auth(a.stopDaemon))
 	mux.Handle("POST /api/update", a.auth(a.update))
 	mux.Handle("POST /api/settings", a.auth(a.settings))
+	mux.Handle("POST /api/allowlist", a.auth(a.allowlist))
+	mux.Handle("GET /api/denied", a.auth(a.denied))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
@@ -135,7 +138,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 		writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"error": "Content-Type must be application/json"})
 		return false
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(v); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(v); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json"})
 		return false
 	}
@@ -205,6 +208,42 @@ func (a *Admin) settings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// allowlist saves the egress allowlist; the running sandbox takes it at once (002-AC36).
+func (a *Admin) allowlist(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Allowlist []string `json:"allowlist"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.Allowlist == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "allowlist missing"})
+		return
+	}
+	if _, err := sandbox.NormalizeAllowlist(req.Allowlist); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := a.d.SetAllowlist(r.Context(), req.Allowlist); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deniedShown is how many refused egress requests the page lists.
+const deniedShown = 50
+
+// denied lists the egress requests the proxy refused, newest first (002-AC36).
+func (a *Admin) denied(w http.ResponseWriter, r *http.Request) {
+	list, err := a.d.Denied(r.Context(), deniedShown)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"denied": list})
 }
 
 func (a *Admin) recheck(w http.ResponseWriter, r *http.Request) {

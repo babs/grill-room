@@ -13,6 +13,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,10 @@ type Options struct {
 	// them, "" to keep them in memory.
 	Settings     Settings
 	SettingsPath string
+	// Allowlist is the egress allowlist at start, nil for the default; AllowlistPath is where the
+	// page saves it, "" to keep it in memory.
+	Allowlist     []string
+	AllowlistPath string
 	// Image pins the sandbox image; empty takes the room server's, or builds the embedded one.
 	Image  string
 	Stream sandbox.Streamer
@@ -83,6 +88,8 @@ type Status struct {
 	CanHost     bool              `json:"can_host"`
 	Reason      string            `json:"reason,omitempty"`
 	Settings    Settings          `json:"settings"`
+	// Allowlist is the domains the sandbox may reach through its egress proxy.
+	Allowlist []string `json:"allowlist"`
 }
 
 // Image is the sandbox image turns run in.
@@ -121,6 +128,8 @@ type Daemon struct {
 	// release is what the room server hands out, for the self-update; guarded by mu.
 	release    release
 	settingsMu sync.Mutex
+	// cur is the current room run, guarded by mu; nil before the first SetRoom.
+	cur *roomRun
 }
 
 // New builds a daemon.
@@ -134,7 +143,11 @@ func New(o Options) *Daemon {
 	def(&o.StatusEvery, 15*time.Second)
 	def(&o.PollEvery, 2*time.Second)
 	def(&o.MaxBackoff, 30*time.Second)
-	d := &Daemon{o: o, st: Status{Host: o.Name, Version: o.Version, Connection: "offline", Settings: o.Settings}, changed: make(chan struct{}, 1)}
+	if o.Allowlist == nil {
+		o.Allowlist = slices.Clone(sandbox.DefaultAllowlist)
+	}
+	d := &Daemon{o: o, st: Status{Host: o.Name, Version: o.Version, Connection: "offline", Settings: o.Settings, Allowlist: o.Allowlist},
+		changed: make(chan struct{}, 1)}
 	if o.Image != "" {
 		d.img.known = true
 		d.st.Image = Image{State: "ready", Ref: o.Image}
@@ -241,6 +254,7 @@ func (d *Daemon) SetRoom(ctx context.Context, room Room) {
 	d.stop = cancel
 	d.gen++
 	r := &roomRun{d: d, room: room, update: d.roomUpdater(d.gen), ctx: ctx}
+	d.cur = r
 	d.st.Room, d.st.Pairing, d.st.Code, d.st.ApproveURL, d.st.Error, d.st.Connection = room.String(), "", "", "", "", "offline"
 	d.mu.Unlock()
 	d.loops.Go(func() { r.loop(ctx) })

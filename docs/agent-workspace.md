@@ -47,6 +47,7 @@ A persona's active skills reach `claude -p` as one plugin directory, passed with
 - The daemon fetches the plugin as a tar (wire protocol, step 3), deletes `/home/agent/.grill-room/plugin` in the sandbox home, unpacks the tar there and passes that path. A turn without skills deletes the directory and passes no flag, so no skill carries over from an earlier turn.
 - The tar holds `.claude-plugin/plugin.json` (`"name": "grill-room"`) and `skills/<name>/` for each skill: its `SKILL.md` and its other files, modes `0644` or `0755`. Claude Code 2.1.296 loads this layout: `claude plugin validate` passes on it and `claude --plugin-dir <dir> plugin details grill-room` lists each skill.
 - Scripts in a skill run in the sandbox as the agent user, with the workspace as their only room data. Anyone in the room can ask the agent to print a skill's files.
+- A script has Python with the Office libraries, uv, pip, node, pandoc, jq, yq, rg, git and curl, and reaches only the domains on the host's egress allowlist, through the `HTTPS_PROXY` the sandbox sets. The README's host daemon section lists both.
 
 ### Presence preamble
 

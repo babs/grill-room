@@ -20,6 +20,10 @@ import (
 // Agent runs turns in a sandbox; *sandbox.Sandbox is the real one.
 type Agent interface {
 	RunTurn(ctx context.Context, in sandbox.TurnInput) (*sandbox.TurnOutput, error)
+	// SetAllowlist sets the egress allowlist; a running sandbox takes it at once.
+	SetAllowlist(ctx context.Context, list []string) error
+	// Denied returns the last n refused egress requests, newest first.
+	Denied(ctx context.Context, n int) ([]sandbox.Denied, error)
 	Close(ctx context.Context)
 }
 
@@ -58,7 +62,12 @@ func (r *roomRun) agent() (Agent, error) {
 		if img.State != "ready" {
 			return nil, fmt.Errorf("the sandbox image is not ready on %s", r.d.o.Name)
 		}
-		r.ag = r.d.o.NewAgent(r.room, img.Ref)
+		ag := r.d.o.NewAgent(r.room, img.Ref)
+		// Under agentMu, read after any saved list: SetAllowlist hands later ones to r.ag.
+		if err := ag.SetAllowlist(r.ctx, r.d.Status().Allowlist); err != nil {
+			return nil, fmt.Errorf("egress allowlist: %w", err)
+		}
+		r.ag = ag
 	}
 	return r.ag, nil
 }
