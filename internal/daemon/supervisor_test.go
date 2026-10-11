@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -513,8 +514,11 @@ func TestLockAndHandoffFailures(t *testing.T) {
 	if _, err := LockSupervisor(filepath.Join(file, "state")); err == nil || errors.Is(err, ErrLocked) {
 		t.Fatalf("state dir under a file: %v", err)
 	}
-	if _, err := ListenHandoff(context.Background(), filepath.Join(file, "state")); err == nil {
-		t.Fatal("a socket under a file")
+	// Windows hands off through a named pipe, which never lives under the state dir.
+	if runtime.GOOS != "windows" {
+		if _, err := ListenHandoff(context.Background(), filepath.Join(file, "state")); err == nil {
+			t.Fatal("a socket under a file")
+		}
 	}
 	// A hello that cannot be sent fails the handshake.
 	r, w := io.Pipe()
