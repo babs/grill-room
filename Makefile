@@ -25,27 +25,38 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: build release run test test-docker e2e e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: build release dev-release run test test-docker e2e e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME)-daemon ./cmd/grill-room-daemon
 
 # The daemon release the room server hands out (D28): one static binary per target, its sha256 file
-# (sha256sum format, checked by install.sh) and VERSION. Windows runs the linux build inside WSL.
+# (sha256sum format, checked by install.sh) and VERSION.
 DIST           ?= dist
-DAEMON_TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
+DAEMON_TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 # The room server refuses to start on a VERSION that is not semver: fail the build instead.
 release:
 	@echo '$(VERSION)' | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$$' \
 	  || { echo "VERSION '$(VERSION)' is not a semver like v1.2.3" >&2; exit 1; }
 	rm -rf '$(DIST)' && mkdir -p '$(DIST)'
 	for t in $(DAEMON_TARGETS); do \
-	  f=$(APP_NAME)-daemon-$${t%/*}-$${t#*/}; \
+	  f=$(APP_NAME)-daemon-$${t%/*}-$${t#*/}; [ $${t%/*} = windows ] && f=$$f.exe; \
 	  CGO_ENABLED=0 GOOS=$${t%/*} GOARCH=$${t#*/} go build -trimpath -ldflags="$(LDFLAGS)" -o '$(DIST)'/$$f ./cmd/grill-room-daemon || exit 1; \
 	  (cd '$(DIST)' && { sha256sum $$f 2>/dev/null || shasum -a 256 $$f; } > $$f.sha256) || exit 1; \
 	done
 	echo '$(VERSION)' > '$(DIST)/VERSION'
+
+# `make release` signed with a local cosign key pair (docs/release.md): COSIGN_KEY from .env, its
+# password from COSIGN_PASSWORD. Offline: no transparency log entry, nothing leaves the machine.
+dev-release: export COSIGN_PASSWORD := $(COSIGN_PASSWORD)
+dev-release: release
+	@test -n "$(COSIGN_KEY)" || { echo "COSIGN_KEY is not set, see .env.example" >&2; exit 1; }
+	for f in '$(DIST)'/$(APP_NAME)-daemon-*; do \
+	  case $$f in *.sha256) continue ;; esac; \
+	  cosign sign-blob --yes --key '$(COSIGN_KEY)' --use-signing-config=false --tlog-upload=false \
+	    --bundle "$$f.sigstore.json" "$$f" >/dev/null || exit 1; \
+	done
 
 run: build
 	./bin/$(APP_NAME)
@@ -113,8 +124,10 @@ lint:
 	@out=$$(git ls-files -co --exclude-standard '*.go' | xargs gofmt -l); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 	git ls-files -co --exclude-standard '*.sh' | xargs shellcheck
 
+# DAEMON_DIST=<dir> ships that daemon release (a GitHub release or `make dev-release`, bundles
+# included) instead of building an unsigned one in the image.
 docker-build:
-	docker build -t $(APP_NAME):local \
+	docker build -t $(APP_NAME):local $(if $(DAEMON_DIST),--build-context daemon-dist='$(DAEMON_DIST)') \
 	  --build-arg VERSION=$(VERSION) \
 	  --build-arg COMMIT_HASH=$(COMMIT_HASH) \
 	  --build-arg BUILD_TIMESTAMP=$(BUILD_TS) \

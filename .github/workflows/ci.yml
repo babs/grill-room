@@ -1,0 +1,76 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [develop]
+  push:
+    # feat/**: a feature branch is green before its PR opens.
+    branches: [develop, "feat/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.11.4
+          install-only: true
+      - run: make lint
+      - run: make test
+      - run: make build
+      # The six daemon targets a release ships.
+      - run: make release VERSION=v0.0.0
+
+  # Unit tests only: Docker and the POSIX-shell tests skip themselves (docs/release.md lists them).
+  windows:
+    runs-on: windows-latest
+    steps:
+      # Golden files and embedded assets compare bytes: keep LF.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+
+  stt:
+    runs-on: ubuntu-latest
+    env:
+      # The e2e test fails, not skips, under CI without the model: give it the image's pinned one.
+      WHISPER_REVISION: 536b0662742c02347bc0e980a01041f333bce120
+      APP_MODEL: ${{ github.workspace }}/.whisper-small
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: stt/uv.lock
+      - id: model
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .whisper-small
+          key: whisper-small-${{ env.WHISPER_REVISION }}
+      - if: steps.model.outputs.cache-hit != 'true'
+        working-directory: stt
+        run: >-
+          uv run python -c "import os, sys; from faster_whisper import download_model;
+          download_model('small', output_dir=os.environ['APP_MODEL'], revision=sys.argv[1])"
+          "$WHISPER_REVISION"
+      - run: make stt-test

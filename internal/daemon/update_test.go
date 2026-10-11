@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -31,7 +32,7 @@ func fakeRoomRelease(t *testing.T, version, sum string, body []byte, image strin
 		switch r.URL.Path {
 		case "/api/daemon/version":
 			_ = json.NewEncoder(w).Encode(map[string]any{"version": version, "sha256": map[string]string{target: sum}, "sandbox_image": image})
-		case "/download/grill-room-daemon-" + target:
+		case "/download/" + releaseFile(runtime.GOOS, runtime.GOARCH):
 			_, _ = w.Write(body)
 		default:
 			http.NotFound(w, r)
@@ -320,5 +321,18 @@ func TestTurnWithoutImageFails(t *testing.T) {
 	r := &roomRun{d: d}
 	if _, err := r.agent(); err == nil || !strings.Contains(err.Error(), "not ready") {
 		t.Fatalf("agent() err = %v", err)
+	}
+}
+
+// The room server names the windows builds with .exe (internal/web.DaemonFile).
+func TestReleaseFile(t *testing.T) {
+	for _, tt := range []struct{ goos, goarch, want string }{
+		{"linux", "amd64", "grill-room-daemon-linux-amd64"},
+		{"darwin", "arm64", "grill-room-daemon-darwin-arm64"},
+		{"windows", "arm64", "grill-room-daemon-windows-arm64.exe"},
+	} {
+		if got := releaseFile(tt.goos, tt.goarch); got != tt.want {
+			t.Errorf("releaseFile(%s, %s) = %q, want %q", tt.goos, tt.goarch, got, tt.want)
+		}
 	}
 }

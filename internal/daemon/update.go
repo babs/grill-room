@@ -27,6 +27,14 @@ import (
 // target names this build in the room server's release, e.g. linux-amd64.
 const target = runtime.GOOS + "-" + runtime.GOARCH
 
+// releaseFile names the daemon for goos and goarch in the room server's release.
+func releaseFile(goos, goarch string) string {
+	if goos == "windows" {
+		return "grill-room-daemon-" + goos + "-" + goarch + ".exe"
+	}
+	return "grill-room-daemon-" + goos + "-" + goarch
+}
+
 // maxBinary bounds a downloaded daemon binary.
 const maxBinary = 200 << 20
 
@@ -191,7 +199,7 @@ func (d *Daemon) Update(ctx context.Context) error {
 	d.o.Log.Info("update_started", zap.String("version", rel.version))
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	err := d.replaceExecutable(ctx, rel.base+"/download/grill-room-daemon-"+target, rel.sha256)
+	err := d.replaceExecutable(ctx, rel.base+"/download/"+releaseFile(runtime.GOOS, runtime.GOARCH), rel.sha256)
 	d.mu.Lock()
 	d.st.Update.Running = false
 	if err != nil {

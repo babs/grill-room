@@ -32,7 +32,7 @@ On first start the server logs an `admin_token_generated` line holding the admin
 | `GRILL_ROOM_LIVEKIT_API_KEY`, `GRILL_ROOM_LIVEKIT_API_SECRET` | none | LiveKit API key pair; the secret needs 32+ characters |
 | `GRILL_ROOM_STT_TOKEN` | none | the STT worker's service token; unset refuses every worker |
 | `GRILL_ROOM_TURN_TIMEOUT` | `15m` | one agent turn's time budget (1m to 24h) |
-| `GRILL_ROOM_DAEMON_DIR` | none (`/daemon` in the image) | daemon release written by `make release`; unset offers no download |
+| `GRILL_ROOM_DAEMON_DIR` | none (`/daemon` in the image) | daemon release written by `make release` or `make dev-release`, or downloaded from a GitHub release; unset offers no download |
 | `GRILL_ROOM_SANDBOX_IMAGE` | none | sandbox image advertised to daemons, pinned by digest (`<repo>[:tag]@sha256:<hex>`); unset lets each daemon build it |
 | `GRILL_ROOM_SMTP_ADDR` | none | SMTP relay (`host:port`) for magic links; unset turns email sign-in off |
 | `GRILL_ROOM_SMTP_FROM` | none | sender address, needed with `GRILL_ROOM_SMTP_ADDR` |
@@ -317,13 +317,14 @@ At start, and again each time it reconnects, the daemon asks the room server for
 
 ### Distribution
 
-The room server hands out the daemon itself. `make release` cross-compiles it for linux and darwin, amd64 and arm64 (static, `-trimpath`, version stamped), and writes a sha256 file per binary plus `VERSION`. The server image builds the same release into `/daemon`. These routes need no token:
+The room server hands out the daemon itself. `make release` cross-compiles it for linux, darwin and windows, amd64 and arm64 (static, `-trimpath`, version stamped; the windows builds end in `.exe`), and writes a sha256 file per binary plus `VERSION`. The server image builds the same release into `/daemon`, unsigned, or ships a signed one with its bundles (`docs/release.md`). These routes need no token:
 
 | Route | |
 |---|---|
 | `GET /install.sh` | the installer |
-| `GET /download/grill-room-daemon-<os>-<arch>[.sha256]` | a binary, or its `sha256sum` line |
-| `GET /api/daemon/version` | `{"version", "sha256": {"<os>-<arch>": "<hex>"}, "sandbox_image"}` |
+| `GET /download/grill-room-daemon-<os>-<arch>[.exe][.sha256]` | a binary, or its `sha256sum` line |
+| `GET /download/grill-room-daemon-<os>-<arch>[.exe].sigstore.json` | the binary's cosign bundle, when the release is signed |
+| `GET /api/daemon/version` | `{"version", "sha256": {"<os>-<arch>": "<hex>"}, "bundles": {"<os>-<arch>": "/download/<binary>.sigstore.json"}, "sandbox_image"}`; `bundles` lists only signed targets |
 
 The room page has a "Host the agent" panel. It guesses the visitor's OS and CPU (Chromium reports the CPU, Safari and Firefox do not, so both stay editable), links the matching binary with its sha256, and shows the one-liner:
 

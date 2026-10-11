@@ -52,6 +52,13 @@ func TestLoadRelease(t *testing.T) {
 			return os.WriteFile(filepath.Join(d, DaemonFile("linux-amd64")+".sha256"), []byte(strings.Repeat("z", 64)+"  "+DaemonFile("linux-amd64")+"\n"), 0o644)
 		}, "not a sha256sum line"},
 		{"missing binary", func(d string) error { return os.Remove(filepath.Join(d, DaemonFile("linux-arm64"))) }, "linux-arm64"},
+		{"bundle not a file", func(d string) error {
+			if err := os.WriteFile(filepath.Join(d, DaemonFile("linux-amd64")+".sigstore.json"), []byte("{}"), 0o644); err != nil {
+				return err
+			}
+			return os.Mkdir(filepath.Join(d, DaemonFile("darwin-arm64")+".sigstore.json"), 0o755)
+		}, "darwin-arm64.sigstore.json is not a readable file"},
+		{"missing windows binary", func(d string) error { return os.Remove(filepath.Join(d, DaemonFile("windows-arm64"))) }, "windows-arm64.exe"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -62,7 +69,7 @@ func TestLoadRelease(t *testing.T) {
 			r, err := LoadRelease(dir)
 			if tt.want == "" {
 				sum := sha256.Sum256([]byte(fakeDaemon))
-				if err != nil || r.Version != "v1.2.3" || r.SHA256["darwin-amd64"] != hex.EncodeToString(sum[:]) || len(r.SHA256) != 4 {
+				if err != nil || r.Version != "v1.2.3" || r.SHA256["darwin-amd64"] != hex.EncodeToString(sum[:]) || len(r.SHA256) != 6 || len(r.Bundles) != 0 {
 					t.Fatalf("LoadRelease = %+v, %v", r, err)
 				}
 				return
@@ -87,9 +94,11 @@ func TestReleaseRoutes(t *testing.T) {
 	v := decodeJSON[struct {
 		Version      string            `json:"version"`
 		SHA256       map[string]string `json:"sha256"`
+		Bundles      map[string]string `json:"bundles"`
 		SandboxImage string            `json:"sandbox_image"`
 	}](t, body)
-	if code != http.StatusOK || v.Version != "v1.2.3" || v.SandboxImage != image || v.SHA256["linux-arm64"] != opts.Release.SHA256["linux-arm64"] || len(v.SHA256) != 4 {
+	if code != http.StatusOK || v.Version != "v1.2.3" || v.SandboxImage != image || v.SHA256["linux-arm64"] != opts.Release.SHA256["linux-arm64"] ||
+		len(v.SHA256) != 6 || v.Bundles == nil || len(v.Bundles) != 0 {
 		t.Fatalf("version: %d %s", code, body)
 	}
 	for _, tt := range []struct {
@@ -98,8 +107,13 @@ func TestReleaseRoutes(t *testing.T) {
 	}{
 		{"/download/grill-room-daemon-linux-amd64", fakeDaemon, http.StatusOK},
 		{"/download/grill-room-daemon-darwin-arm64.sha256", opts.Release.SHA256["darwin-arm64"] + "  grill-room-daemon-darwin-arm64\n", http.StatusOK},
+		{"/download/grill-room-daemon-windows-arm64.exe", fakeDaemon, http.StatusOK},
+		{"/download/grill-room-daemon-windows-amd64.exe.sha256", opts.Release.SHA256["windows-amd64"] + "  grill-room-daemon-windows-amd64.exe\n", http.StatusOK},
 		{"/download/VERSION", "", http.StatusNotFound},
 		{"/download/grill-room-daemon-windows-amd64", "", http.StatusNotFound},
+		{"/download/grill-room-daemon-freebsd-amd64", "", http.StatusNotFound},
+		// Unsigned: no bundle to serve.
+		{"/download/grill-room-daemon-linux-amd64.sigstore.json", "", http.StatusNotFound},
 		{"/download/..%2fVERSION", "", http.StatusNotFound},
 		{"/install.sh", "main \"$@\"\n", http.StatusOK},
 	} {
@@ -110,10 +124,70 @@ func TestReleaseRoutes(t *testing.T) {
 	}
 }
 
+// 003-AC1: a signed release serves each binary's sigstore bundle beside it and lists the bundle
+// URLs; a target released without a bundle lists none and serves none.
+func TestReleaseServesBundles(t *testing.T) {
+	dir := writeRelease(t, "v1.2.3", fakeDaemon)
+	const bundle = `{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json"}`
+	signed := map[string]bool{}
+	for _, target := range DaemonTargets {
+		if target == "darwin-amd64" {
+			continue
+		}
+		signed[target] = true
+		if err := os.WriteFile(filepath.Join(dir, DaemonFile(target)+".sigstore.json"), []byte(bundle), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Not a target of this release: never listed nor served.
+	if err := os.WriteFile(filepath.Join(dir, "grill-room-daemon-freebsd-amd64.sigstore.json"), []byte(bundle), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts := testOptions
+	var err error
+	if opts.Release, err = LoadRelease(dir); err != nil {
+		t.Fatal(err)
+	}
+	// Written after the release was loaded: not part of what this server hands out.
+	if err := os.WriteFile(filepath.Join(dir, DaemonFile("darwin-amd64")+".sigstore.json"), []byte(bundle), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e := newEnvOpts(t, opts)
+
+	code, body := e.do(t, http.MethodGet, "/api/daemon/version", "", nil)
+	v := decodeJSON[struct {
+		Bundles map[string]string `json:"bundles"`
+	}](t, body)
+	if code != http.StatusOK || len(v.Bundles) != len(signed) {
+		t.Fatalf("version: %d %s", code, body)
+	}
+	for _, target := range DaemonTargets {
+		url, listed := v.Bundles[target]
+		if listed != signed[target] {
+			t.Errorf("bundle of %s listed = %v, want %v", target, listed, signed[target])
+		}
+		path := "/download/" + DaemonFile(target) + ".sigstore.json"
+		if listed && url != path {
+			t.Errorf("bundle URL of %s = %q, want %q", target, url, path)
+		}
+		resp, got := e.get(t, path, "")
+		switch {
+		case signed[target] && (resp.StatusCode != http.StatusOK || string(got) != bundle || resp.Header.Get("Content-Type") != "application/json"):
+			t.Errorf("GET %s = %d %q %q, want the bundle as JSON", path, resp.StatusCode, got, resp.Header.Get("Content-Type"))
+		case !signed[target] && resp.StatusCode != http.StatusNotFound:
+			t.Errorf("GET %s = %d, want 404", path, resp.StatusCode)
+		}
+	}
+	if code, _ := e.do(t, http.MethodGet, "/download/grill-room-daemon-freebsd-amd64.sigstore.json", "", nil); code != http.StatusNotFound {
+		t.Errorf("foreign bundle served: %d", code)
+	}
+}
+
 func TestNoReleaseOffersNoDownload(t *testing.T) {
 	e := newEnv(t)
 	code, body := e.do(t, http.MethodGet, "/api/daemon/version", "", nil)
-	if code != http.StatusOK || !strings.Contains(string(body), `"version":""`) || !strings.Contains(string(body), `"sandbox_image":""`) {
+	if code != http.StatusOK || !strings.Contains(string(body), `"version":""`) || !strings.Contains(string(body), `"sandbox_image":""`) ||
+		!strings.Contains(string(body), `"bundles":{}`) {
 		t.Fatalf("version: %d %s", code, body)
 	}
 	for _, p := range []string{"/install.sh", "/download/grill-room-daemon-linux-amd64"} {
