@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -57,6 +58,8 @@ type Options struct {
 	Executable string
 	// Restart ends the daemon so that main starts the updated binary.
 	Restart func()
+	// OnTurn hears of every turn starting and ending; nil for none.
+	OnTurn func(TurnEvent)
 
 	CheckEvery  time.Duration // readiness re-check
 	StatusEvery time.Duration // heartbeat to the room
@@ -136,6 +139,8 @@ type Daemon struct {
 	cur *roomRun
 	// cache is nil when disabled.
 	cache *wsCache
+	// turns and failedTurns count the turns that ended, for the worker metrics.
+	turns, failedTurns atomic.Int64
 }
 
 // New builds a daemon.
@@ -162,6 +167,18 @@ func New(o Options) *Daemon {
 		d.st.Image = Image{State: "ready", Ref: o.Image}
 	}
 	return d
+}
+
+func (d *Daemon) turnEvent(e TurnEvent) {
+	if e.Phase == "end" {
+		d.turns.Add(1)
+		if e.Error != "" {
+			d.failedTurns.Add(1)
+		}
+	}
+	if d.o.OnTurn != nil {
+		d.o.OnTurn(e)
+	}
 }
 
 // Status returns a snapshot.
@@ -267,6 +284,13 @@ func (d *Daemon) SetRoom(ctx context.Context, room Room) {
 	d.st.Room, d.st.Pairing, d.st.Code, d.st.ApproveURL, d.st.Error, d.st.Connection = room.String(), "", "", "", "", "offline"
 	d.mu.Unlock()
 	d.loops.Go(func() { r.loop(ctx) })
+}
+
+// Restart ends the daemon so that main starts the updated binary.
+func (d *Daemon) Restart() {
+	if d.o.Restart != nil {
+		d.o.Restart()
+	}
 }
 
 // Wait returns once every room loop has ended and removed its sandbox; cancel their context first.

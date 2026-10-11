@@ -23,12 +23,31 @@ import (
 //go:embed ui
 var ui embed.FS
 
+// Backend is what the page drives: the supervisor, or a Daemon on its own.
+type Backend interface {
+	Status() Status
+	SetRoom(ctx context.Context, r Room)
+	SetSettings(s Settings) error
+	SetAllowlist(ctx context.Context, list []string) error
+	Denied(ctx context.Context, n int) ([]sandbox.Denied, error)
+	Recheck(ctx context.Context)
+	Update(ctx context.Context) error
+	Restart()
+}
+
+// hostBackend is a backend that runs instances and can start at login: the supervisor.
+type hostBackend interface {
+	Instances() ([]InstanceView, string)
+	Autostart() (bool, error)
+	SetAutostart(on bool) error
+}
+
 // Admin is the local admin page. Only someone holding a link this process printed or opened can
 // use it: the link's one-time code is traded for a session token the page keeps in sessionStorage
 // and sends as a bearer. No cookie, so no request from another site carries a credential.
 type Admin struct {
 	ctx  context.Context
-	d    *Daemon
+	d    Backend
 	logs *Ring
 	stop func()
 	log  *zap.Logger
@@ -43,7 +62,7 @@ type Admin struct {
 
 // NewAdmin serves d's page; stop ends the daemon. ctx bounds the room work the page starts.
 // announce receives a new link each time one is used, so a closed tab can be reopened.
-func NewAdmin(ctx context.Context, d *Daemon, logs *Ring, stop func(), announce func(string), log *zap.Logger) *Admin {
+func NewAdmin(ctx context.Context, d Backend, logs *Ring, stop func(), announce func(string), log *zap.Logger) *Admin {
 	return &Admin{ctx: ctx, d: d, logs: logs, stop: stop, announce: announce, log: log, codes: map[string]bool{}, sessions: map[string]bool{}}
 }
 
@@ -87,6 +106,7 @@ func (a *Admin) Handler() http.Handler {
 	mux.Handle("POST /api/settings", a.auth(a.settings))
 	mux.Handle("POST /api/allowlist", a.auth(a.allowlist))
 	mux.Handle("GET /api/denied", a.auth(a.denied))
+	mux.Handle("POST /api/autostart", a.auth(a.setAutostart))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
@@ -178,7 +198,34 @@ func (a *Admin) session(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Admin) status(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": a.d.Status(), "logs": a.logs.Lines(), "models": turn.Models, "efforts": turn.Efforts})
+	v := map[string]any{"status": a.d.Status(), "logs": a.logs.Lines(), "models": turn.Models, "efforts": turn.Efforts}
+	if h, ok := a.d.(hostBackend); ok {
+		v["instances"], v["instance"] = h.Instances()
+		if on, err := h.Autostart(); err == nil {
+			v["autostart"] = on
+		}
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+// setAutostart installs or removes the login item (003-AC11).
+func (a *Admin) setAutostart(w http.ResponseWriter, r *http.Request) {
+	h, ok := a.d.(hostBackend)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if err := h.SetAutostart(req.Enabled); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *Admin) setRoom(w http.ResponseWriter, r *http.Request) {
@@ -264,9 +311,7 @@ func (a *Admin) update(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-	if a.d.o.Restart != nil {
-		a.d.o.Restart()
-	}
+	a.d.Restart()
 }
 
 func (a *Admin) stopDaemon(w http.ResponseWriter, _ *http.Request) {

@@ -3,6 +3,7 @@ module github.com/babs/grill-room
 go 1.26.5
 
 require (
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/alecthomas/chroma/v2 v2.14.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/sergi/go-diff v1.4.0
@@ -14,6 +15,7 @@ require (
 	golang.org/x/mod v0.41.0
 	golang.org/x/net v0.61.0
 	golang.org/x/sync v0.24.0
+	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.60.1
@@ -35,7 +37,6 @@ require (
 	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	go.uber.org/multierr v1.10.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	modernc.org/libc v1.77.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

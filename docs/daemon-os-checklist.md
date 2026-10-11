@@ -1,4 +1,4 @@
-# Daemon checks on macOS and WSL
+# Daemon checks on macOS, Windows and WSL
 
 On Linux the daemon is tested for real. macOS and WSL get cross-compiled builds and unit tests with faked platform calls (Keychain runner, WSL detection, browser opener). Run these steps on a real machine of each kind before merging. Each one names the acceptance criterion it covers.
 
@@ -26,6 +26,16 @@ Every step spends nothing except step 3, which makes one `haiku` request.
 9. **One-liner (AC36).** Move any earlier `~/.local/bin/grill-room-daemon` aside, then paste the panel's one-liner into Terminal (macOS) or a WSL terminal. It must print `Installed <home>/.local/bin/grill-room-daemon` and open the daemon page, as in step 5. WSL must also print `WSL detected: installing the Linux build.` `file ~/.local/bin/grill-room-daemon` must name the machine's CPU. On Apple silicon, run it once more from a Rosetta shell (`arch -x86_64 /bin/zsh`): it must still install the arm64 build.
 10. **Sandbox image.** With `GRILL_ROOM_SANDBOX_IMAGE` unset on the machine, the page's "Sandbox image" line must go through pulling (the room server advertises an image and this Docker can pull it) or building (otherwise), then show `ready (...)`, and "Hosting the agent" must turn available. Note which of the two happened and how long it took.
 11. **Self-update (AC37).** Have the room server hand out a newer release (redeploy it with a higher `VERSION`). Within a minute the page must offer "Update and restart" with the new version. Press it: a new page must open showing the new version and "Paired. Connected.", and the checksum of `~/.local/bin/grill-room-daemon` must equal the room's `/download/grill-room-daemon-<os>-<arch>.sha256`.
+
+## Supervisor (spec 003)
+
+Run these on macOS, on native Windows (`grill-room-daemon-windows-<arch>.exe` from PowerShell, Docker Desktop running) and in WSL. No Claude request.
+
+12. **Paths (003-AC11).** Start the supervisor with a room link and pair. `tokens.json` must sit in `~/.local/state/grill-room/instances/<id>/` (WSL), `~/Library/Application Support/grill-room/instances/<id>/` (macOS) or `%LOCALAPPDATA%\grill-room\instances\<id>\` (Windows), and `instance.json` in `~/.config/grill-room/...`, the same Application Support dir, or `%APPDATA%\grill-room\...`.
+13. **Second launch (003-AC6).** With the supervisor running, run the command again with another room link in a second terminal. It must print `handed <room> to the running supervisor`, open the same admin page, and exit, and the page must show the new room. Run it once more with no argument: it must exit with `a supervisor already runs for <dir>`. On Windows, this goes through the named pipe.
+14. **Worker restart (003-AC8).** Kill the worker from the page's instance list (`kill <pid>`, or `taskkill /F /PID <pid>`). The page must show a restart and the room "Paired. Connected." again within a few seconds.
+15. **Autostart (003-AC11).** Tick "Start at login" on the page, log out and back in: the supervisor must be running (`systemctl --user status grill-room` on WSL with systemd, `launchctl list | grep grill-room` on macOS, `schtasks /Query /TN grill-room` on Windows). Untick it: the unit, `~/Library/LaunchAgents/io.github.babs.grill-room.plist` or the task must be gone, and the running supervisor must keep running. Note whether `schtasks /Create /SC ONLOGON` needed an elevated shell.
+16. **Migration (003-AC10).** On a machine with a paired single-room daemon (an earlier release), stop it and start the supervisor. The old dir must be in `legacy-backup-<date>` under the config root, and the room must reconnect without a new pairing.
 
 ## Known risks to watch
 

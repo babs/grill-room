@@ -1,14 +1,14 @@
 // Command grill-room-daemon hosts a grill-room agent on this machine: it pairs with a room, keeps
 // an outbound connection to it, and serves a local admin page on 127.0.0.1.
 //
-//	grill-room-daemon [room-url]   run, pairing with the room if needed
-//	grill-room-daemon check        check Docker, credentials and the sandbox (one haiku request)
+//	grill-room-daemon [room-url]              run the supervisor, or hand the room to the running one
+//	grill-room-daemon worker --instance <id>  serve one instance's rooms for the supervisor
+//	grill-room-daemon check                   check Docker, credentials and the sandbox (one haiku request)
 package main
 
 import (
+	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,10 +16,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -49,9 +52,12 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
-// Config is the daemon configuration, read from the environment.
+// Config is the supervisor configuration, read from the environment. Workers get theirs from the
+// supervisor.
 type Config struct {
-	StateDir string
+	Paths daemon.Paths
+	// Legacy is where a single-room daemon kept its state, migrated on start.
+	Legacy string
 	// Browser "none" prints the page link instead of opening it.
 	Browser string
 	// Image pins the sandbox image; empty takes the room server's, or builds the embedded one.
@@ -68,13 +74,10 @@ type Config struct {
 }
 
 func loadConfig() (Config, error) {
-	dir := os.Getenv("GRILL_ROOM_DAEMON_STATE_DIR")
-	if dir == "" {
-		base, err := os.UserConfigDir()
-		if err != nil {
-			return Config{}, fmt.Errorf("no state dir: set GRILL_ROOM_DAEMON_STATE_DIR: %w", err)
-		}
-		dir = filepath.Join(base, "grill-room-daemon")
+	home, _ := os.UserHomeDir() // ResolvePaths reports a missing home where it needs one
+	paths, legacy, err := daemon.ResolvePaths(runtime.GOOS, os.Getenv, home)
+	if err != nil {
+		return Config{}, err
 	}
 	approveAll, err := strconv.ParseBool(getEnv("GRILL_ROOM_APPROVE_ALL", "false"))
 	if err != nil {
@@ -86,7 +89,8 @@ func loadConfig() (Config, error) {
 	}
 	return Config{
 		CacheMB:  cacheMB,
-		StateDir: dir,
+		Paths:    paths,
+		Legacy:   legacy,
 		Browser:  getEnv("GRILL_ROOM_DAEMON_BROWSER", "auto"),
 		Image:    os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
 		LogLevel: getEnv("LOG_LEVEL", "info"),
@@ -150,13 +154,6 @@ func newLogger(level string, stderr io.Writer, ring *daemon.Ring) (*zap.Logger, 
 
 var anthropic, _ = url.Parse("https://api.anthropic.com") // a constant, valid URL
 
-// sandboxName is stable per state dir and room: a restarted daemon finds and replaces the
-// containers a crash left, and two daemons on one machine never share one.
-func sandboxName(stateDir string, r daemon.Room) string {
-	sum := sha256.Sum256([]byte(stateDir + "\x00" + r.String()))
-	return hex.EncodeToString(sum[:6])
-}
-
 // restartError asks main to exec the updated binary in place of this process.
 type restartError struct {
 	exe  string
@@ -191,6 +188,9 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if fs.Arg(0) == "worker" {
+		return runWorker(ctx, fs.Args()[1:], os.Stdin, os.Stdout, stderr)
+	}
 	cfg, err := loadConfig()
 	if err == nil {
 		err = cfg.Validate()
@@ -204,20 +204,13 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 		return fmt.Errorf("init logger: %w", err)
 	}
 	defer logger.Sync() //nolint:errcheck // stderr sync is best-effort
-	logger.Info("startup", zap.String("version", Version), zap.String("commit_hash", CommitHash),
-		zap.String("build_timestamp", BuildTimestamp), zap.String("builder", Builder), zap.String("project_url", ProjectURL))
-
-	ctx, stop := context.WithCancel(ctx)
-	defer stop()
 	host, err := os.Hostname()
 	if err != nil {
 		host = "unknown host"
 	}
-	src := creds.NewSource(creds.New())
 	if fs.Arg(0) == "check" {
-		return check(ctx, cfg, host, src, logger)
+		return check(ctx, cfg, host, creds.NewSource(creds.New()), logger)
 	}
-
 	var room *daemon.Room
 	if fs.NArg() > 0 {
 		r, err := daemon.ParseRoomURL(fs.Arg(0))
@@ -226,45 +219,72 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 		}
 		room = &r
 	}
+	release, err := daemon.LockSupervisor(cfg.Paths.State)
+	if errors.Is(err, daemon.ErrLocked) {
+		return handOver(ctx, cfg, room, stderr)
+	}
+	if err != nil {
+		return err
+	}
+	defer release()
+	logger.Info("startup", zap.String("version", Version), zap.String("commit_hash", CommitHash),
+		zap.String("build_timestamp", BuildTimestamp), zap.String("builder", Builder), zap.String("project_url", ProjectURL))
+	return supervise(ctx, cfg, host, room, stderr, ring, logger)
+}
+
+// supervise runs the supervisor (003-AC6, 003-AC8): it holds the state dir's lock, migrates a
+// single-room daemon's state, runs a worker per instance, and serves the admin page and the
+// handoff socket.
+func supervise(ctx context.Context, cfg Config, host string, room *daemon.Room, stderr io.Writer, ring *daemon.Ring, logger *zap.Logger) error {
+	if _, err := daemon.Migrate(cfg.Paths, cfg.Legacy, time.Now(), os.Getenv("CLAUDE_CONFIG_DIR"), logger); err != nil {
+		return fmt.Errorf("migrate the state in %s: %w", cfg.Legacy, err)
+	}
 	exe, err := executable()
 	if err != nil {
-		logger.Warn("self_update_disabled", zap.Error(err))
+		return err
 	}
-	settingsPath := filepath.Join(cfg.StateDir, "settings.json")
-	settings, err := daemon.LoadSettings(settingsPath, cfg.Settings)
-	if err != nil {
-		return fmt.Errorf("settings: %w", err)
-	}
-	allowlistPath := filepath.Join(cfg.StateDir, "allowlist.json")
-	allowlist, err := daemon.LoadAllowlist(allowlistPath)
-	if err != nil {
-		return fmt.Errorf("allowlist: %w", err)
-	}
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
 	var restart atomic.Bool
-	d := daemon.New(daemon.Options{
-		Settings: settings, SettingsPath: settingsPath, Allowlist: allowlist, AllowlistPath: allowlistPath,
-		Name: host, Version: Version, Tokens: daemon.NewTokens(cfg.StateDir), Docker: sandbox.Docker, Creds: src,
-		// No client timeout: it would cut the long-lived room stream; each request has its own deadline.
-		HTTP: &http.Client{}, Log: logger, Model: cfg.Model,
-		Image: cfg.Image, Stream: sandbox.DockerStream, Executable: exe,
-		CacheDir: filepath.Join(cfg.StateDir, "workspace-cache"), CacheMax: cfg.CacheMB << 20,
-		Restart: func() { restart.Store(true); stop() },
-		NewAgent: func(r daemon.Room, image string) daemon.Agent {
-			return sandbox.New(sandbox.Config{Image: image, Name: sandboxName(cfg.StateDir, r), Host: host, Upstream: anthropic, Limits: cfg.Limits},
-				sandbox.Docker, src, logger.Named("sandbox"))
-		},
+	sup := daemon.NewSupervisor(daemon.SupervisorOptions{
+		Paths: cfg.Paths, Version: Version,
+		Worker: daemon.WorkerConfig{Host: host, SandboxRoot: cfg.Paths.State, LogLevel: cfg.LogLevel, Model: cfg.Model, Image: cfg.Image,
+			Settings: cfg.Settings, Limits: cfg.Limits, CacheMB: cfg.CacheMB},
+		// ponytail: every instance runs the supervisor's own binary until phase 3 fetches theirs.
+		Binary: func(string) (string, error) { return exe, nil },
+		Env:    os.Environ(), Stderr: stderr, Ring: ring, Log: logger, Docker: sandbox.Docker,
+		Restart:   func() { restart.Store(true); stop() },
+		Autostart: autostart(exe),
 	})
 	// Links are printed, never logged, so they stay on this terminal.
 	announce := func(link string) { _, _ = fmt.Fprintf(stderr, "\n  Admin page: %s\n\n", link) }
-	admin := daemon.NewAdmin(ctx, d, ring, stop, announce, logger)
+	admin := daemon.NewAdmin(ctx, sup, ring, stop, announce, logger)
 	ln, err := admin.Listen(ctx)
 	if err != nil {
 		return fmt.Errorf("admin page: %w", err)
 	}
+	// Before the socket serves: a handed room starts a worker, which needs the running supervisor.
+	sup.Start(ctx)
+	hln, err := daemon.ListenHandoff(ctx, cfg.Paths.State)
+	if err != nil {
+		// A state dir too deep for a socket path: the page still works, a later launch says this
+		// supervisor does not answer.
+		logger.Warn("handoff_socket_failed", zap.Error(err))
+	} else {
+		go daemon.ServeHandoff(hln, func(u string) (string, error) {
+			if u != "" {
+				r, err := daemon.ParseRoomURL(u)
+				if err != nil {
+					return "", err
+				}
+				sup.SetRoom(ctx, r)
+			}
+			return admin.NewLink(), nil
+		}, logger)
+	}
 	srv := &http.Server{Handler: admin.Handler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
-	go d.Run(ctx)
 	if room != nil {
-		d.SetRoom(ctx, *room)
+		sup.SetRoom(ctx, *room)
 	}
 	link := admin.NewLink()
 	announce(link)
@@ -275,18 +295,70 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	}
 	err = daemon.Serve(ctx, srv, ln)
 	stop()
-	// The sandbox's containers go with the room loops: exiting first would leave them running.
-	d.Wait()
+	if hln != nil {
+		_ = hln.Close() // no handoff while the workers stop
+	}
+	// The workers remove their sandboxes as they stop: exiting first would leave them running.
+	sup.Wait()
 	logger.Info("shutdown")
 	if err == nil && restart.Load() {
-		// The room the page paired with may not be on the command line.
-		args := fs.Args()
-		if room := d.Status().Room; room != "" {
-			args = []string{room}
-		}
-		return restartError{exe: exe, args: args}
+		// The rooms are in the instances' state: the new binary reconnects to them on its own.
+		return restartError{exe: exe}
 	}
 	return err
+}
+
+// handOver gives room to the supervisor already running on this state dir and prints its admin
+// page link (003-AC6). With no room, this launch was a second supervisor: it is refused.
+func handOver(ctx context.Context, cfg Config, room *daemon.Room, stderr io.Writer) error {
+	u := ""
+	if room != nil {
+		u = room.String()
+	}
+	link, err := daemon.Handoff(ctx, cfg.Paths.State, u)
+	if err != nil {
+		return fmt.Errorf("a supervisor already runs for %s: %w", cfg.Paths.State, err)
+	}
+	_, _ = fmt.Fprintf(stderr, "\n  Admin page: %s\n\n", link)
+	if room == nil {
+		return fmt.Errorf("a supervisor already runs for %s: this one stops; its admin page is above, and `grill-room-daemon <room-url>` hands it a room", cfg.Paths.State)
+	}
+	_, _ = fmt.Fprintf(stderr, "grill-room-daemon: handed %s to the running supervisor\n", room)
+	if cfg.Browser == "auto" {
+		if err := daemon.Host().OpenURL(link); err != nil {
+			_, _ = fmt.Fprintf(stderr, "grill-room-daemon: open the admin page link printed above (%v)\n", err)
+		}
+	}
+	return nil
+}
+
+// autostart is the login item for exe. It carries the environment the supervisor needs to find
+// the same state, credentials and Docker, and opens no browser at login.
+func autostart(exe string) *daemon.Autostart {
+	home, _ := os.UserHomeDir()
+	configHome := os.Getenv("XDG_CONFIG_HOME")
+	if !filepath.IsAbs(configHome) {
+		configHome = filepath.Join(home, ".config")
+	}
+	env := []string{"GRILL_ROOM_DAEMON_BROWSER=none"}
+	for _, k := range []string{"PATH", "CLAUDE_CONFIG_DIR", "GRILL_ROOM_DAEMON_STATE_DIR"} {
+		v := os.Getenv(k)
+		if k == "GRILL_ROOM_DAEMON_STATE_DIR" && v != "" {
+			v, _ = filepath.Abs(v)
+		}
+		if v != "" {
+			env = append(env, k+"="+v)
+		}
+	}
+	return &daemon.Autostart{GOOS: runtime.GOOS, Home: home, ConfigHome: configHome, Exe: exe, Env: env, Run: runCommand}
+}
+
+func runCommand(name string, args ...string) error {
+	out, err := exec.Command(name, args...).CombinedOutput() //nolint:gosec,noctx // fixed service managers, short-lived
+	if err != nil {
+		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, bytes.TrimSpace(out))
+	}
+	return nil
 }
 
 // executable is this binary's real path, the file a self-update replaces.

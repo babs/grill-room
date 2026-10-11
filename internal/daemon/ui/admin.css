@@ -23,3 +23,6 @@ pre { background: #fff; border: 1px solid var(--line); padding: 0.5rem; max-heig
 h3 { font-size: 0.95rem; margin: 1rem 0 0.3rem; }
 #denied { border-collapse: collapse; font-size: 0.85rem; }
 #denied th, #denied td { text-align: left; padding: 0.2rem 1rem 0.2rem 0; border-bottom: 1px solid var(--line); }
+#instances { margin: 0 0 0.6rem; padding-left: 1.2rem; }
+#instances li.current > code { font-weight: 700; }
+#instances ul { margin: 0.2rem 0; padding-left: 1.2rem; font-size: 0.85rem; }

@@ -52,8 +52,10 @@ type Config struct {
 
 // Limits are docker run --cpus and --memory values.
 type Limits struct {
-	CPUs, Memory             string
-	EgressCPUs, EgressMemory string
+	CPUs         string `json:"cpus"`
+	Memory       string `json:"memory"`
+	EgressCPUs   string `json:"egress_cpus"`
+	EgressMemory string `json:"egress_memory"`
 }
 
 // limitFlags turns a cpus and memory pair into docker run flags.

@@ -105,6 +105,11 @@ func (r *roomRun) get(ctx context.Context, tok, path string) (*http.Response, er
 // only log: the room fails the turn when this daemon's stream drops or its timeout passes.
 func (r *roomRun) runTurn(ctx context.Context, tok string, id int64) {
 	log := r.d.o.Log.With(zap.Int64("turn", id))
+	start, ended := time.Now(), "the turn was abandoned"
+	r.d.turnEvent(TurnEvent{Room: r.room.String(), ID: id, Phase: "start"})
+	defer func() {
+		r.d.turnEvent(TurnEvent{Room: r.room.String(), ID: id, Phase: "end", Error: ended, DurationMS: time.Since(start).Milliseconds()})
+	}()
 	ids := strconv.FormatInt(id, 10)
 	jctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	resp, err := r.get(jctx, tok, "turns/"+ids)
@@ -148,8 +153,10 @@ func (r *roomRun) runTurn(ctx context.Context, tok string, id int64) {
 	}
 	if err != nil {
 		log.Warn("turn_result_refused", zap.Error(err))
+		ended = "the room refused the result: " + err.Error()
 		return
 	}
+	ended = res.Error
 	log.Info("turn_done", zap.String("error", res.Error), zap.Int("changes", len(res.Changes)), zap.Int("session_bytes", len(res.Session)))
 }
 

@@ -90,7 +90,7 @@ func (d *Daemon) SetSettings(s Settings) error {
 
 // writeFileAtomic writes b to path, owner-only, through a rename: a crash mid-write keeps the old file.
 func writeFileAtomic(path string, b []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil { //nolint:gosec // paths under the supervisor's own state dirs
 		return fmt.Errorf("create state dir: %w", err)
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
@@ -105,5 +105,5 @@ func writeFileAtomic(path string, b []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	return os.Rename(tmp.Name(), path) //nolint:gosec // paths under the supervisor's own state dirs
 }

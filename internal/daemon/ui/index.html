@@ -40,7 +40,14 @@
     </form>
     <p id="room-error" role="alert"></p>
   </section>
-  <section aria-labelledby="host-title">
+  <section aria-labelledby="instances-title" id="instances-section" hidden>
+    <h2 id="instances-title">Instances</h2>
+    <p class="hint">One worker per room server. The room above belongs to the last one you paired with.</p>
+    <ul id="instances"></ul>
+    <label><input id="autostart" type="checkbox"> Start at login</label>
+    <span id="autostart-status" role="status"></span>
+  </section>
+  <section aria-labelledby="host-title" class="per-instance">
     <h2 id="host-title">This machine</h2>
     <dl>
       <dt>Docker</dt><dd id="docker"></dd>
@@ -50,7 +57,7 @@
     </dl>
     <button type="button" id="recheck">Check again</button>
   </section>
-  <section aria-labelledby="cap-title">
+  <section aria-labelledby="cap-title" class="per-instance">
     <h2 id="cap-title">Host cap</h2>
     <p class="hint">A persona asking for more runs at this cap until you approve it in the room.</p>
     <form id="settings-form">
@@ -61,7 +68,7 @@
       <span id="settings-status" role="status"></span>
     </form>
   </section>
-  <section aria-labelledby="egress-title">
+  <section aria-labelledby="egress-title" class="per-instance">
     <h2 id="egress-title">Egress allowlist</h2>
     <p class="hint">The sandbox reaches these domains, and nothing else, through its proxy and over HTTPS only. A leading dot, as in .example.com, also allows every subdomain. Anthropic's hosts stay blocked whatever the list says.</p>
     <ul id="allowlist"></ul>

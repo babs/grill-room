@@ -1,0 +1,138 @@
+package daemon
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"io"
+	"sync"
+
+	"github.com/babs/grill-room/internal/sandbox"
+)
+
+// Proto is the supervisor-worker protocol version, docs/daemon-protocol.md. Peers up to ProtoSkew
+// apart talk at the lower of their two versions, so every change within that window must stay
+// additive: new fields and new message types only, and unknown ones are ignored.
+const (
+	Proto     = 1
+	ProtoSkew = 1
+)
+
+// Negotiate returns the version a peer at own talks with a peer at peer, or why they cannot.
+func Negotiate(own, peer int) (int, error) {
+	if peer < own-ProtoSkew || peer > own+ProtoSkew {
+		return 0, fmt.Errorf("protocol version %d is outside the supported range %d to %d: run a supervisor and a worker from releases closer in time",
+			peer, own-ProtoSkew, own+ProtoSkew)
+	}
+	return min(own, peer), nil
+}
+
+// Msg is one line of the protocol. Type says which other fields are set.
+type Msg struct {
+	Type string `json:"type"`
+	// ID numbers a supervisor request; the worker's reply carries it back.
+	ID int64 `json:"id,omitempty"`
+	// Proto is the sender's own version, in hello and config.
+	Proto    int    `json:"proto,omitempty"`
+	Version  string `json:"version,omitempty"`
+	Instance string `json:"instance,omitempty"`
+	Error    string `json:"error,omitempty"`
+
+	Config    *WorkerConfig    `json:"config,omitempty"`
+	Room      string           `json:"room,omitempty"`
+	Settings  *Settings        `json:"settings,omitempty"`
+	Allowlist []string         `json:"allowlist,omitempty"`
+	N         int              `json:"n,omitempty"`
+	Status    *Status          `json:"status,omitempty"`
+	Denied    []sandbox.Denied `json:"denied,omitempty"`
+	Metrics   *Metrics         `json:"metrics,omitempty"`
+	Turn      *TurnEvent       `json:"turn,omitempty"`
+	Log       json.RawMessage  `json:"log,omitempty"`
+}
+
+// WorkerConfig is everything a worker runs with; the supervisor sends it after the handshake.
+type WorkerConfig struct {
+	Instance string `json:"instance"`
+	// Host names this machine in the rooms.
+	Host string `json:"host"`
+	// ConfigDir, StateDir and CacheDir are the instance's own directories.
+	ConfigDir string `json:"config_dir"`
+	StateDir  string `json:"state_dir"`
+	CacheDir  string `json:"cache_dir"`
+	// SandboxRoot keys the sandbox names, so that two supervisors never share a sandbox.
+	SandboxRoot string `json:"sandbox_root"`
+	LogLevel    string `json:"log_level"`
+	Model       string `json:"model,omitempty"`
+	Image       string `json:"image,omitempty"`
+	// Settings apply until the page saves the instance's own.
+	Settings Settings       `json:"settings"`
+	Limits   sandbox.Limits `json:"limits"`
+	CacheMB  int64          `json:"cache_mb"`
+	// Rooms are the instance's rooms, oldest first. The worker reconnects to the newest one that
+	// holds a token, unless Pair names a room to pair with now.
+	Rooms []string `json:"rooms,omitempty"`
+	Pair  string   `json:"pair,omitempty"`
+}
+
+// Metrics is the worker process's health, sent every MetricsEvery.
+type Metrics struct {
+	UptimeSeconds int64  `json:"uptime_seconds"`
+	Turns         int64  `json:"turns"`
+	FailedTurns   int64  `json:"failed_turns"`
+	HeapBytes     uint64 `json:"heap_bytes"`
+	Goroutines    int    `json:"goroutines"`
+}
+
+// TurnEvent is a turn starting or ending in one of the worker's rooms.
+type TurnEvent struct {
+	Room string `json:"room"`
+	ID   int64  `json:"id"`
+	// Phase is "start" or "end".
+	Phase      string `json:"phase"`
+	Error      string `json:"error,omitempty"`
+	DurationMS int64  `json:"duration_ms,omitempty"`
+}
+
+// maxLine bounds one protocol line: a status with a long allowlist, or a full denied list.
+const maxLine = 4 << 20
+
+// Conn reads and writes protocol lines. Send is safe from several goroutines; Recv is not.
+type Conn struct {
+	sc  *bufio.Scanner
+	wmu sync.Mutex
+	w   io.Writer
+}
+
+// NewConn talks over r and w: a worker's stdin and stdout, or the supervisor's pipes to them.
+func NewConn(r io.Reader, w io.Writer) *Conn {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64<<10), maxLine)
+	return &Conn{sc: sc, w: w}
+}
+
+// Send writes m as one line.
+func (c *Conn) Send(m Msg) error {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return fmt.Errorf("encode %s: %w", m.Type, err)
+	}
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	_, err = c.w.Write(append(b, '\n'))
+	return err
+}
+
+// Recv reads the next message; io.EOF once the peer closed its end.
+func (c *Conn) Recv() (Msg, error) {
+	if !c.sc.Scan() {
+		if err := c.sc.Err(); err != nil {
+			return Msg{}, err
+		}
+		return Msg{}, io.EOF
+	}
+	var m Msg
+	if err := json.Unmarshal(c.sc.Bytes(), &m); err != nil {
+		return Msg{}, fmt.Errorf("bad protocol line: %w", err)
+	}
+	return m, nil
+}

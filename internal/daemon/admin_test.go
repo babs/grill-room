@@ -22,7 +22,7 @@ type adminEnv struct {
 	links   []string
 }
 
-func newAdminEnv(t *testing.T, d *Daemon) *adminEnv {
+func newAdminEnv(t *testing.T, d Backend) *adminEnv {
 	t.Helper()
 	e := &adminEnv{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -175,6 +175,13 @@ func TestAdminActions(t *testing.T) {
 	}
 	if s, _ := e.req(t, "POST", "/api/recheck", tok, "", nil); s != http.StatusNoContent {
 		t.Fatalf("recheck: %d", s)
+	}
+	// A daemon serving one room has no login item: only the supervisor offers one.
+	if s, _ := e.req(t, "POST", "/api/autostart", tok, `{"enabled":true}`, nil); s != http.StatusNotFound {
+		t.Fatalf("autostart: %d", s)
+	}
+	if _, body := e.req(t, "GET", "/api/status", tok, "", nil); strings.Contains(body, `"instances"`) || strings.Contains(body, `"autostart"`) {
+		t.Fatalf("status: %s", body)
 	}
 	if s, _ := e.req(t, "POST", "/api/stop", tok, "", nil); s != http.StatusNoContent || !e.stopped.Load() {
 		t.Fatalf("stop: %d", s)

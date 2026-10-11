@@ -69,7 +69,7 @@ test:
 # packages' sandboxes would otherwise compete for Docker and time out the turn waits.
 test-docker: sandbox-image sandbox-fake-image
 	GRILL_ROOM_TEST_DOCKER=1 GRILL_ROOM_SANDBOX_IMAGE=$(SANDBOX_IMAGE) GRILL_ROOM_SANDBOX_FAKE_IMAGE=$(SANDBOX_FAKE_IMAGE) \
-	  go test -race -p 1 -run 'Docker' ./internal/sandbox/ ./internal/daemon/
+	  go test -race -p 1 -run 'Docker' ./internal/sandbox/ ./internal/daemon/ ./cmd/grill-room-daemon/
 
 # Browser tests against a fresh server, in the installed Chrome; agent turns run in Docker with the
 # fake claude. Magic links run against a second server and a throwaway mailpit container.

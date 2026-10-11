@@ -127,7 +127,40 @@ async function refreshDenied() {
   if (!stopped) setTimeout(refreshDenied, 5000);
 }
 
-function render({ status: s, logs, models, efforts }) {
+// renderInstances lists the supervisor's instances; a daemon serving one room has none.
+function renderInstances(instances, current, autostart) {
+  $('instances-section').hidden = !instances;
+  if (!instances) return;
+  const ul = $('instances');
+  ul.replaceChildren();
+  for (const i of instances) {
+    const li = document.createElement('li');
+    const url = document.createElement('code');
+    url.textContent = i.url;
+    let text = ' · ' + i.state;
+    if (i.connection) text += ', ' + i.connection;
+    if (i.restarts) text += ', ' + i.restarts + ' restart' + (i.restarts > 1 ? 's' : '');
+    if (i.error) text += ': ' + i.error;
+    li.append(url, text);
+    const rooms = document.createElement('ul');
+    for (const r of i.rooms) {
+      const room = document.createElement('li');
+      room.textContent = r + (r === i.room ? ' (served)' : '');
+      rooms.append(room);
+    }
+    li.append(rooms);
+    if (i.id === current) li.className = 'current';
+    ul.append(li);
+  }
+  // Rooms set on the page go to an instance: these sections follow it.
+  for (const el of document.querySelectorAll('.per-instance')) el.hidden = !current;
+  const box = $('autostart');
+  box.parentElement.hidden = autostart === undefined;
+  if (autostart !== undefined && !box.dataset.busy) box.checked = autostart;
+}
+
+function render({ status: s, logs, models, efforts, instances, instance, autostart }) {
+  renderInstances(instances, instance, autostart);
   $('host').textContent = s.host + ' · ' + s.version;
   $('room').textContent = s.room || 'No room yet: paste the room link below.';
   let text = pairingText[s.pairing] || s.pairing;
@@ -205,6 +238,15 @@ $('allowlist-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const domain = $('allowlist-add').value.trim();
   saveAllowlist([...currentAllowlist, domain]).then((ok) => { if (ok) $('allowlist-add').value = ''; });
+});
+$('autostart').addEventListener('change', () => {
+  const box = $('autostart');
+  box.dataset.busy = '1';
+  $('autostart-status').textContent = '';
+  api('POST', '/api/autostart', { enabled: box.checked })
+    .then(() => { $('autostart-status').textContent = box.checked ? 'Starts at your next login.' : 'Removed.'; })
+    .catch((err) => { box.checked = !box.checked; $('autostart-status').textContent = err.message; })
+    .finally(() => { delete box.dataset.busy; });
 });
 $('recheck').addEventListener('click', () => {
   api('POST', '/api/recheck').then(() => api('GET', '/api/status').then(render)).catch((err) => fail(err.message));
