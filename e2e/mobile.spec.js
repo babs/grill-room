@@ -53,7 +53,7 @@ function flakyProxy(target) {
   }));
 }
 
-// EventSource gives up for good once a reconnect gets a non-200, which is what a redeploy hands
+// 002-AC40: EventSource gives up for good once a reconnect gets a non-200, which is what a redeploy hands
 // it: the page must retry by itself and catch up on what it missed.
 test('a stream cut by a redeploy comes back and catches up', async ({ browser, request, baseURL }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
@@ -83,7 +83,7 @@ test('a stream cut by a redeploy comes back and catches up', async ({ browser, r
   }
 });
 
-// A phone suspends a background tab's stream without the page noticing: on return the page must
+// 002-AC40: a phone suspends a background tab's stream without the page noticing: on return the page must
 // reopen it from the last message it holds and reload the room state.
 test('a page back from the background resumes the stream and reloads the room', async ({ browser, request }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
@@ -107,7 +107,7 @@ test('a page back from the background resumes the stream and reloads the room', 
   await expect(alice.locator('#messages')).toContainText('live after resume');
 });
 
-// The message box must stay above the on-screen keyboard: Android shrinks the viewport
+// 002-AC39: the message box must stay above the on-screen keyboard: Android shrinks the viewport
 // (interactive-widget=resizes-content), iOS Safari only shrinks the visual viewport.
 for (const name of ['iPhone 15', 'Pixel 7']) {
   test(`${name}: the message box stays above the keyboard`, async ({ browser, request }) => {

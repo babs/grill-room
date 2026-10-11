@@ -25,11 +25,14 @@ The server writes the prompt when the button is pressed and stores it on the tur
 
 1. The layout above, in plain words, the rule that uploads are read-only, the naming rule for new documents, and both annotation outputs.
 2. "This is a new session" when the turn does not resume: the first turn, a fresh session (D15), or a lost session copy. The agent is told to read `transcript/`.
-3. The messages since the last successful turn, with day and time, sender, and `(voice)` for speech. The agent's own syntheses are left out, since its session already holds them. Only the latest 100 KB are quoted; the prompt says how many earlier lines are in `transcript/`.
-4. The annotation threads with a participant message since the last successful turn, in full, with new messages flagged `(new)` and image paths listed.
-5. "Your final answer is posted in the room as your synthesis."
+3. "Changed since your last turn": lines the last successful turn saw that their author edited or deleted since, as `edited: <the text it saw> → <the text now>` or `deleted: <the text it saw>`. A line edited back to the text the agent saw is left out.
+4. The messages since the last successful turn, with day and time, sender, and `(voice)` for speech. The agent's own syntheses are left out, since its session already holds them. Only the latest 100 KB are quoted; the prompt says how many earlier lines are in `transcript/`.
+5. The annotation threads with a participant message since the last successful turn, in full, with new messages flagged `(new)` and image paths listed.
+6. "Your final answer is posted in the room as your synthesis."
 
-A failed turn does not move the cursors: the next turn quotes its messages again.
+A failed turn does not move the cursors: the next turn quotes its messages and changes again.
+
+Lines show their current text. An edited line is tagged `(edited)`, and a deleted one `(deleted)` with the text it had: a delete hides a line from participants, not from the agent. That holds in the prompt and in `transcript/`.
 
 ## What the agent produces
 

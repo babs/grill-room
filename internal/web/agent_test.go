@@ -575,11 +575,11 @@ func TestBuildPromptCapsTranscript(t *testing.T) {
 	for i := range 3000 {
 		msgs = append(msgs, store.Message{ID: int64(i + 1), Kind: store.KindVoice, Sender: "Bob", Body: strings.Repeat("blah ", 10) + strconv.Itoa(i)})
 	}
-	p := buildPrompt("R", false, msgs, nil, 0, nil)
+	p := buildPrompt("R", false, msgs, nil, nil, 0, nil)
 	if len(p) > maxPromptTranscript+5000 || !strings.Contains(p, "earlier lines are in transcript/") || !strings.Contains(p, "blah 2999") || strings.Contains(p, "blah 0\n") {
 		t.Fatalf("prompt of %d bytes", len(p))
 	}
-	if p := buildPrompt("R", false, nil, nil, 0, nil); !strings.Contains(p, "Nothing was said or annotated") {
+	if p := buildPrompt("R", false, nil, nil, nil, 0, nil); !strings.Contains(p, "Nothing was said or annotated") {
 		t.Fatalf("empty prompt:\n%s", p)
 	}
 }

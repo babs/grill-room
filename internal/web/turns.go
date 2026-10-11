@@ -113,9 +113,20 @@ func (s *Server) prepareTurn(ctx context.Context, room *store.Room, fresh bool) 
 			return nil, err
 		}
 	}
+	// Read before the messages: an edit landing in between is flagged again next turn, never lost.
+	if t.ChangeCursor, err = st.ChangeCursor(ctx, room.ID); err != nil {
+		return nil, err
+	}
 	if t.MessageCursor, err = st.MessageCursor(ctx, room.ID); err != nil {
 		return nil, err
 	}
+	// Keyed on the last done turn: per persona once turns carry one.
+	changes, err := st.MessageChanges(ctx, room.ID, prev.MessageCursor, prev.ChangeCursor, t.ChangeCursor)
+	if err != nil {
+		return nil, err
+	}
+	// An edit back to the text the agent saw changes nothing for it.
+	changes = slices.DeleteFunc(changes, func(c store.MessageChange) bool { return c.DeletedAt == nil && c.Before == c.Body })
 	var msgs []store.Message
 	for after := prev.MessageCursor; after < t.MessageCursor; {
 		batch, err := st.Messages(ctx, room.ID, after, replayBatch)
@@ -148,7 +159,7 @@ func (s *Server) prepareTurn(ctx context.Context, room *store.Room, fresh bool) 
 	if err != nil {
 		return nil, err
 	}
-	t.Prompt = buildPrompt(room.Name, t.Resume == "", msgs, anns, prev.AnnotationCursor, docPaths(docs))
+	t.Prompt = buildPrompt(room.Name, t.Resume == "", msgs, changes, anns, prev.AnnotationCursor, docPaths(docs))
 	return t, nil
 }
 

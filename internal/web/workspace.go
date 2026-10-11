@@ -55,8 +55,9 @@ func textPath(d store.Document) string {
 }
 
 // buildPrompt is the turn's prompt (docs/agent-workspace.md): the workspace contract, then what
-// was said and annotated since the last successful turn. Messages above annCursor are the new ones.
-func buildPrompt(room string, newSession bool, msgs []store.Message, anns []store.Annotation, annCursor int64, paths map[int64]string) string {
+// was said, changed and annotated since the last successful turn. Annotation messages above
+// annCursor are the new ones.
+func buildPrompt(room string, newSession bool, msgs []store.Message, changes []store.MessageChange, anns []store.Annotation, annCursor int64, paths map[int64]string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are the agent of the grill session %q. Participants talk in the room; their speech reaches you as transcript lines. Someone pressed the agent button: this is your turn.\n\n", room)
 	b.WriteString(`Your workspace is the current directory:
@@ -71,8 +72,15 @@ func buildPrompt(room string, newSession bool, msgs []store.Message, anns []stor
 	if newSession {
 		b.WriteString("This is a new session: you remember no earlier turn. Read transcript/ for the room's history.\n\n")
 	}
-	if len(msgs) == 0 && len(anns) == 0 {
+	if len(msgs) == 0 && len(changes) == 0 && len(anns) == 0 {
 		b.WriteString("Nothing was said or annotated since your last turn.\n\n")
+	}
+	if len(changes) > 0 {
+		b.WriteString("## Changed since your last turn\n\nLines you saw that their author edited or deleted since.\n\n")
+		for _, c := range changes {
+			b.WriteString(changeLine(c))
+		}
+		b.WriteString("\n")
 	}
 	if len(msgs) > 0 {
 		b.WriteString("## Said since your last turn\n\n")
@@ -111,14 +119,40 @@ func transcriptLine(m store.Message, dated bool) string {
 		layout = "2006-01-02 15:04:05"
 	}
 	ts := m.TS.UTC().Format(layout)
-	body := strings.ReplaceAll(strings.TrimSpace(m.Body), "\n", "\n  ")
-	switch m.Kind {
-	case store.KindSystem:
+	body := indent(m.Body)
+	if m.Kind == store.KindSystem {
 		return fmt.Sprintf("- %s _%s_\n", ts, body)
-	case store.KindVoice:
-		return fmt.Sprintf("- %s **%s** (voice): %s\n", ts, m.Sender, body)
 	}
-	return fmt.Sprintf("- %s **%s**: %s\n", ts, m.Sender, body)
+	var tags []string
+	if m.Kind == store.KindVoice {
+		tags = append(tags, "voice")
+	}
+	switch {
+	case m.DeletedAt != nil:
+		tags = append(tags, "deleted")
+	case m.EditedAt != nil:
+		tags = append(tags, "edited")
+	}
+	who := "**" + m.Sender + "**"
+	if len(tags) > 0 {
+		who += " (" + strings.Join(tags, ", ") + ")"
+	}
+	return fmt.Sprintf("- %s %s: %s\n", ts, who, body)
+}
+
+func indent(body string) string { return strings.ReplaceAll(strings.TrimSpace(body), "\n", "\n  ") }
+
+// changeLine tells the agent a line it saw changed: "edited: before → after", or "deleted".
+func changeLine(c store.MessageChange) string {
+	who := "**" + c.Sender + "**"
+	if c.Kind == store.KindVoice {
+		who += " (voice)"
+	}
+	ts := c.TS.UTC().Format("2006-01-02 15:04:05")
+	if c.DeletedAt != nil {
+		return fmt.Sprintf("- %s %s deleted: %s\n", ts, who, indent(c.Before))
+	}
+	return fmt.Sprintf("- %s %s edited: %s → %s\n", ts, who, indent(c.Before), indent(c.Body))
 }
 
 func describeAnchor(a *anchor.Anchor) string {

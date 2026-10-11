@@ -12,6 +12,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go driver: keeps CGO_ENABLED=0 builds
+
+	"github.com/babs/grill-room/internal/render"
 )
 
 // Message kinds. The STT worker writes voice lines; agent is reserved for the agent turn.
@@ -67,8 +69,15 @@ type Message struct {
 	ParticipantID int64  `json:"participant_id,omitempty"`
 	Sender        string `json:"sender"`
 	Body          string `json:"body"`
+	// HTML is Body rendered by render.MessageHTML when written; empty for system lines, and for
+	// lines written before rendering existed.
+	HTML string `json:"html,omitempty"`
 	// Model is the Claude model that wrote an agent synthesis, when its daemon reported one.
-	Model string `json:"model,omitempty"`
+	Model     string     `json:"model,omitempty"`
+	EditedAt  *time.Time `json:"edited_at,omitempty"`
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+	// ChangeSeq orders the room's edits and deletes: each one sets it past every other in the room.
+	ChangeSeq int64 `json:"change_seq,omitempty"`
 }
 
 // Store wraps the SQLite handle.
@@ -256,6 +265,21 @@ CREATE INDEX magic_links_profile ON magic_links(profile_id);
 ALTER TABLE participants ADD COLUMN profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL;
 CREATE INDEX participants_profile ON participants(profile_id);
 ALTER TABLE invites ADD COLUMN created_by INTEGER REFERENCES participants(id) ON DELETE SET NULL;
+`, `
+ALTER TABLE messages ADD COLUMN html TEXT;
+ALTER TABLE messages ADD COLUMN edited_at TEXT;
+ALTER TABLE messages ADD COLUMN deleted_at TEXT;
+ALTER TABLE messages ADD COLUMN change_seq INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX messages_change ON messages(room_id, change_seq);
+CREATE TABLE message_versions (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+	seq INTEGER NOT NULL,
+	body TEXT NOT NULL,
+	written_at TEXT NOT NULL
+);
+CREATE INDEX message_versions_message ON message_versions(message_id, seq);
+ALTER TABLE turns ADD COLUMN change_cursor INTEGER NOT NULL DEFAULT 0;
 `}
 
 // Open opens (and migrates) the database at path.
@@ -632,6 +656,14 @@ type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
+// nullStr stores "" as NULL.
+func nullStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 // nullID stores 0 as NULL, for optional foreign keys.
 func nullID(id int64) any {
 	if id == 0 {
@@ -643,9 +675,13 @@ func nullID(id int64) any {
 func insertMessage(ctx context.Context, db execer, m *Message) error {
 	m.TS = time.Now().UTC()
 	pid := nullID(m.ParticipantID)
+	// Rendered once here, not on every stream replay: a crafted 4000-character line takes ~10 ms.
+	if m.Kind != KindSystem {
+		m.HTML = render.MessageHTML(m.Body)
+	}
 	res, err := db.ExecContext(ctx,
-		`INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, model) VALUES(?,?,?,?,?,?,?)`,
-		m.RoomID, m.TS.Format(time.RFC3339Nano), m.Kind, pid, m.Sender, m.Body, m.Model)
+		`INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, html, model) VALUES(?,?,?,?,?,?,?,?)`,
+		m.RoomID, m.TS.Format(time.RFC3339Nano), m.Kind, pid, m.Sender, m.Body, nullStr(m.HTML), m.Model)
 	if err != nil {
 		return fmt.Errorf("insert message: %w", err)
 	}
@@ -657,24 +693,53 @@ func insertMessage(ctx context.Context, db execer, m *Message) error {
 
 // Messages returns up to limit messages of room with id > afterID, oldest first.
 func (s *Store) Messages(ctx context.Context, roomID string, afterID int64, limit int) ([]Message, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, ts, room_id, kind, COALESCE(participant_id, 0), sender, body, model FROM messages
-		WHERE room_id = ? AND id > ? ORDER BY id ASC LIMIT ?`, roomID, afterID, limit)
+	return s.queryMessages(ctx, `WHERE room_id = ? AND id > ? ORDER BY id ASC LIMIT ?`, roomID, afterID, limit)
+}
+
+const (
+	messageFields = `id, ts, room_id, kind, COALESCE(participant_id, 0), sender, body, COALESCE(html, ''), model, edited_at, deleted_at, change_seq`
+	messageCols   = `SELECT ` + messageFields + ` FROM messages `
+)
+
+func (s *Store) queryMessages(ctx context.Context, where string, args ...any) ([]Message, error) {
+	rows, err := s.db.QueryContext(ctx, messageCols+where, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query messages: %w", err)
 	}
 	defer rows.Close()
 	var out []Message
 	for rows.Next() {
-		var m Message
-		var ts string
-		if err := rows.Scan(&m.ID, &ts, &m.RoomID, &m.Kind, &m.ParticipantID, &m.Sender, &m.Body, &m.Model); err != nil {
-			return nil, fmt.Errorf("scan message: %w", err)
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, err
 		}
-		m.TS = parseTS(ts)
-		out = append(out, m)
+		out = append(out, *m)
 	}
 	return out, rows.Err()
+}
+
+func scanMessage(sc scanner, extra ...any) (*Message, error) {
+	var m Message
+	var ts string
+	var edited, deleted sql.NullString
+	err := sc.Scan(append([]any{&m.ID, &ts, &m.RoomID, &m.Kind, &m.ParticipantID, &m.Sender, &m.Body, &m.HTML, &m.Model, &edited, &deleted, &m.ChangeSeq}, extra...)...)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scan message: %w", err)
+	}
+	m.TS = parseTS(ts)
+	m.EditedAt, m.DeletedAt = parseNullTS(edited), parseNullTS(deleted)
+	return &m, nil
+}
+
+func parseNullTS(s sql.NullString) *time.Time {
+	if !s.Valid {
+		return nil
+	}
+	t := parseTS(s.String)
+	return &t
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339Nano) }

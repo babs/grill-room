@@ -7,8 +7,10 @@ const messages = $('messages');
 const sendForm = $('send');
 const bodyInput = $('body');
 let events;
-// lastID is the newest message shown: a reopened stream resumes after it.
+// lastID is the newest message shown: a reopened stream resumes after it. editSeq is the last
+// edit or delete applied: the stream replays the ones past it.
 let lastID = 0;
+let editSeq = 0;
 let retryTimer;
 let ended = false;
 let refreshTimer;
@@ -67,37 +69,138 @@ messages.addEventListener('scroll', () => {
 new ResizeObserver(() => { if (pinned) messages.scrollTop = messages.scrollHeight; }).observe(messages);
 
 function addMessage(m) {
-  const li = document.createElement('li');
-  li.className = 'msg ' + m.kind;
-  li.dataset.id = m.id;
   if (m.kind === 'system') {
-    li.textContent = m.body;
     // A join changes the participant list; history replay sends many, so refresh once.
     clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => loadRoom().catch(console.error), 200);
-  } else {
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    const sender = document.createElement('strong');
-    sender.textContent = m.sender;
-    const time = document.createElement('time');
-    time.dateTime = m.ts;
-    time.textContent = new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    meta.append(sender, ' ', time);
-    if (m.model) {
-      const model = document.createElement('span');
-      model.className = 'model';
-      model.textContent = m.model;
-      model.title = 'Claude model of this turn';
-      meta.append(' ', model);
-    }
-    const body = document.createElement('div');
-    body.className = 'body';
-    body.textContent = m.body;
-    li.append(meta, body);
   }
-  messages.append(li);
+  messages.append(renderMessage(m));
   if (pinned) messages.scrollTop = messages.scrollHeight;
+}
+
+// An edit or delete replaces the line in place; one not shown yet arrives later as it stands. A
+// replay of a change already shown leaves the line alone, with any edit box open on it.
+function replaceMessage(m) {
+  const li = messages.querySelector('li[data-id="' + m.id + '"]');
+  if (li && m.change_seq > Number(li.dataset.seq)) li.replaceWith(renderMessage(m));
+}
+
+function button(text, label, onClick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'link';
+  b.textContent = text;
+  if (label) b.setAttribute('aria-label', label);
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function renderMessage(m) {
+  const li = document.createElement('li');
+  li.className = 'msg ' + m.kind;
+  li.dataset.id = m.id;
+  li.dataset.seq = m.change_seq || 0;
+  if (m.kind === 'system') {
+    li.textContent = m.body;
+    return li;
+  }
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  const sender = document.createElement('strong');
+  sender.textContent = m.sender;
+  const time = document.createElement('time');
+  time.dateTime = m.ts;
+  time.textContent = new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  meta.append(sender, ' ', time);
+  if (m.model) {
+    const model = document.createElement('span');
+    model.className = 'model';
+    model.textContent = m.model;
+    model.title = 'Claude model of this turn';
+    meta.append(' ', model);
+  }
+  const body = document.createElement('div');
+  body.className = 'body';
+  if (m.deleted_at) {
+    li.classList.add('deleted');
+    body.textContent = 'message deleted';
+    li.append(meta, body);
+    return li;
+  }
+  // Rendered and sanitised by the server (render.MessageHTML).
+  body.innerHTML = m.html || '';
+  if (m.edited_at) {
+    meta.append(' ', button('(edited)', 'Show earlier versions', () => toggleVersions(li, m).catch(console.error)));
+  }
+  if (String(m.participant_id) === myID && (m.kind === 'text' || m.kind === 'voice')) {
+    meta.append(' ', button('Edit', '', () => editMessage(li, m)),
+      ' ', button('Delete', '', () => deleteMessage(m)));
+  }
+  li.append(meta, body);
+  return li;
+}
+
+async function toggleVersions(li, m) {
+  const shown = li.querySelector('.versions');
+  if (shown) {
+    shown.remove();
+    return;
+  }
+  const res = await fetch(api + '/messages/' + m.id + '/versions');
+  if (!res.ok) return;
+  const list = document.createElement('ol');
+  list.className = 'versions';
+  list.setAttribute('aria-label', 'Earlier versions');
+  list.append(...(await res.json()).map((v) => {
+    const item = document.createElement('li');
+    const when = document.createElement('time');
+    when.dateTime = v.written_at;
+    when.textContent = new Date(v.written_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+    const text = document.createElement('span');
+    text.textContent = v.body;
+    item.append(when, ' ', text);
+    return item;
+  }));
+  li.append(list);
+}
+
+function editMessage(li, m) {
+  const form = document.createElement('form');
+  form.className = 'edit';
+  const box = document.createElement('textarea');
+  box.value = m.body;
+  box.rows = 2;
+  box.maxLength = 4000;
+  // Not "message": the send box is labelled Message.
+  box.setAttribute('aria-label', 'New text');
+  const save = document.createElement('button');
+  save.textContent = 'Save';
+  const cancel = button('Cancel', '', () => li.replaceWith(renderMessage(m)));
+  form.append(box, save, ' ', cancel);
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    sendJSON('PATCH', api + '/messages/' + m.id, { body: box.value }).then((saved) => {
+      if (saved && form.isConnected) li.replaceWith(renderMessage(saved));
+    }).catch((err) => { box.setCustomValidity(err.message); box.reportValidity(); });
+  });
+  box.addEventListener('input', () => box.setCustomValidity(''));
+  box.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      form.requestSubmit();
+    } else if (e.key === 'Escape') {
+      cancel.click();
+    }
+  });
+  li.querySelector('.body').replaceWith(form);
+  box.focus();
+}
+
+function deleteMessage(m) {
+  if (!confirm('Delete this message? It shows as deleted for everyone.')) return;
+  fetch(api + '/messages/' + m.id, { method: 'DELETE' }).then((res) => {
+    if (res.status === 401) end('Your access to this room has ended.');
+  }).catch(console.error);
 }
 
 // Rename: any member may; the system line it adds makes every page reload the room header.
@@ -568,7 +671,7 @@ function connect() {
   clearTimeout(retryTimer);
   if (events) events.close();
   if (ended) return;
-  const es = new EventSource(api + '/events' + (lastID ? '?since=' + lastID : ''));
+  const es = new EventSource(api + '/events' + (lastID ? '?since=' + lastID + (editSeq ? '&edits=' + editSeq : '') : ''));
   events = es;
   es.onmessage = (e) => {
     const m = JSON.parse(e.data);
@@ -581,6 +684,11 @@ function connect() {
     $('reconnecting').hidden = true;
     loadDocuments().then(loadAnnotations).catch(console.error);
   };
+  es.addEventListener('message_edited', (e) => {
+    const m = JSON.parse(e.data);
+    if (m.change_seq > editSeq) editSeq = m.change_seq;
+    replaceMessage(m);
+  });
   es.addEventListener('documents', () => loadDocuments().catch(console.error));
   es.addEventListener('annotations', () => loadAnnotations().catch(console.error));
   es.addEventListener('revoked', () => end('Your access to this room has ended.'));

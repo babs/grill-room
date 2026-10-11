@@ -22,7 +22,7 @@ func openTest(t *testing.T) *Store {
 	return s
 }
 
-// seed creates a room with an invite, a participant with its own profile, a text message, an upload, an agent
+// seed creates a room with an invite, a participant with its own profile, an edited text message, an upload, an agent
 // document with two revisions, an annotation with a message carrying an image, a paired daemon
 // hosting, and a done turn with its session.
 func seed(t *testing.T, s *Store, room string) *Participant {
@@ -38,7 +38,11 @@ func seed(t *testing.T, s *Store, room string) *Participant {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.InsertMessage(ctx, &Message{RoomID: room, Kind: KindText, ParticipantID: p.ID, Sender: p.Name, Body: "hello"}); err != nil {
+	hello := &Message{RoomID: room, Kind: KindText, ParticipantID: p.ID, Sender: p.Name, Body: "hello"}
+	if err := s.InsertMessage(ctx, hello); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EditMessage(ctx, room, hello.ID, p.ID, "hello again"); err != nil {
 		t.Fatal(err)
 	}
 	up := &Upload{RoomID: room, ParticipantID: p.ID, Author: p.Name, Filename: "plan.md", ContentType: "text/markdown", Format: "md", Data: []byte("# Plan"), Text: "# Plan"}
@@ -284,14 +288,14 @@ func roomRows(t *testing.T, s *Store, room string) map[string]int {
 	return out
 }
 
-// 001-AC4
+// 001-AC4 002-AC9
 func TestDeleteRoomPurgesEverything(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	seed(t, s, "a")
 	seed(t, s, "b")
 	// These reach rooms through another table, so roomRows cannot see them.
-	indirect := []string{"revisions", "annotation_messages", "attachments"}
+	indirect := []string{"revisions", "annotation_messages", "attachments", "message_versions"}
 	count := func(table string) int {
 		var n int
 		if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM "`+table+`"`).Scan(&n); err != nil {

@@ -52,13 +52,16 @@ type Turn struct {
 	Model string `json:"model,omitempty"`
 	// The cursors are the last message and annotation message ids the turn saw: the next turn
 	// reads what came after them.
-	MessageCursor    int64      `json:"-"`
-	AnnotationCursor int64      `json:"-"`
-	Prompt           string     `json:"-"`
-	Error            string     `json:"error,omitempty"`
-	Report           TurnReport `json:"report"`
-	StartedAt        time.Time  `json:"started_at"`
-	EndedAt          *time.Time `json:"ended_at,omitempty"`
+	MessageCursor    int64 `json:"-"`
+	AnnotationCursor int64 `json:"-"`
+	// ChangeCursor is the room's last message change seq the turn saw: the next turn flags the
+	// messages up to MessageCursor changed after it.
+	ChangeCursor int64      `json:"-"`
+	Prompt       string     `json:"-"`
+	Error        string     `json:"error,omitempty"`
+	Report       TurnReport `json:"report"`
+	StartedAt    time.Time  `json:"started_at"`
+	EndedAt      *time.Time `json:"ended_at,omitempty"`
 }
 
 // TurnReport is what a turn changed, and what it tried to change and was refused.
@@ -192,14 +195,14 @@ type TurnOutcome struct {
 }
 
 const turnCols = `SELECT id, room_id, COALESCE(participant_id, 0), COALESCE(daemon_id, 0), host, status, fresh, resume,
-	session_id, model, message_cursor, annotation_cursor, prompt, error, report, started_at, ended_at FROM turns`
+	session_id, model, message_cursor, annotation_cursor, change_cursor, prompt, error, report, started_at, ended_at FROM turns`
 
 func scanTurn(sc scanner) (*Turn, error) {
 	var t Turn
 	var report, started string
 	var ended sql.NullString
 	err := sc.Scan(&t.ID, &t.RoomID, &t.ParticipantID, &t.DaemonID, &t.Host, &t.Status, &t.Fresh, &t.Resume,
-		&t.SessionID, &t.Model, &t.MessageCursor, &t.AnnotationCursor, &t.Prompt, &t.Error, &report, &started, &ended)
+		&t.SessionID, &t.Model, &t.MessageCursor, &t.AnnotationCursor, &t.ChangeCursor, &t.Prompt, &t.Error, &report, &started, &ended)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -240,9 +243,9 @@ func (s *Store) StartTurn(ctx context.Context, t *Turn) error {
 		did = t.DaemonID
 	}
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO turns(room_id, participant_id, daemon_id, host, status, fresh, resume, message_cursor, annotation_cursor, prompt, started_at)
-		SELECT id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM rooms WHERE id = ?`,
-		pid, did, t.Host, t.Status, t.Fresh, t.Resume, t.MessageCursor, t.AnnotationCursor, t.Prompt, t.StartedAt.Format(time.RFC3339Nano), t.RoomID)
+		INSERT INTO turns(room_id, participant_id, daemon_id, host, status, fresh, resume, message_cursor, annotation_cursor, change_cursor, prompt, started_at)
+		SELECT id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM rooms WHERE id = ?`,
+		pid, did, t.Host, t.Status, t.Fresh, t.Resume, t.MessageCursor, t.AnnotationCursor, t.ChangeCursor, t.Prompt, t.StartedAt.Format(time.RFC3339Nano), t.RoomID)
 	if err != nil {
 		return fmt.Errorf("start turn: %w", err)
 	}

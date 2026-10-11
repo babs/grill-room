@@ -80,8 +80,11 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `POST /api/profile/signin` | none | mails a sign-in link if a profile holds `email`; 202 either way; 404 without SMTP |
 | `POST /api/profile/magic` | link token in the body | spends an emailed link: a sign-in link signs this browser in, a bind link binds the address to the profile this browser holds (403 from any other browser); 401 when unknown, used or expired, 409 when another profile holds the address; 404 without SMTP |
 | `GET /api/rooms/{room}` | participant | room, me, participants |
-| `POST /api/rooms/{room}/messages` | participant | post a text message |
-| `GET /api/rooms/{room}/events` | participant | SSE: history then live messages; resumes after `?since=<id>` or `Last-Event-ID`; a `documents` event when a document or revision is added, an `annotations` event when an annotation is added or changes; an `agent` event with the agent state (`host_participant_id`, `online`, `reason`, last `turn`, `can_trigger`, connected `daemons`) at open and on every change; with voice on, an `stt` event (`available`, `listening`) at open and on every change |
+| `POST /api/rooms/{room}/messages` | participant | post a text message (Markdown); messages carry `body` (source) and `html` (sanitised render) |
+| `PATCH /api/rooms/{room}/messages/{id}` | author | edit your text or voice line: `body`; 403 for anyone else, 409 once deleted |
+| `DELETE /api/rooms/{room}/messages/{id}` | author | soft delete: participants see `deleted_at` and no body; the agent keeps the text |
+| `GET /api/rooms/{room}/messages/{id}/versions` | participant | earlier bodies of an edited message, oldest first |
+| `GET /api/rooms/{room}/events` | participant | SSE: history then live messages; resumes after `?since=<id>` or `Last-Event-ID`; a `message_edited` event with the message for each edit or delete past `?edits=<change_seq>` (all of them on a resume without it);  a `documents` event when a document or revision is added, an `annotations` event when an annotation is added or changes; an `agent` event with the agent state (`host_participant_id`, `online`, `reason`, last `turn`, `can_trigger`, connected `daemons`) at open and on every change; with voice on, an `stt` event (`available`, `listening`) at open and on every change |
 | `GET /api/rooms/{room}/agent` | participant | the agent state, as in the `agent` event |
 | `POST /api/rooms/{room}/turns` | host, or a participant the host allowed | the agent button: `fresh` (host only) starts a new session; 409 `turn in progress` while one runs, 409 when no host daemon is connected |
 | `PUT /api/rooms/{room}/host` | host | hand over: `participant_id` of a participant whose daemon is connected and can host |

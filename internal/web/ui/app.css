@@ -163,7 +163,18 @@ button.doc:hover { background: var(--line); }
 .msg { margin-bottom: 0.8rem; }
 .msg .meta { font-size: 0.85rem; }
 .msg .meta time { color: var(--muted); margin-left: 0.3rem; }
-.msg .body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg .body { overflow-wrap: anywhere; }
+.msg .body :is(p, ul, ol, pre, table, blockquote) { margin: 0.2rem 0; }
+.msg .body :is(ul, ol) { padding-left: 1.4rem; }
+.msg .body pre { overflow-x: auto; padding: 0.4rem; background: var(--line); border-radius: 4px; }
+.msg .body table { border-collapse: collapse; }
+.msg .body :is(th, td) { border: 1px solid var(--line); padding: 0.15rem 0.4rem; }
+.msg .body blockquote { border-left: 3px solid var(--line); padding-left: 0.6rem; color: var(--muted); }
+.msg.deleted .body { color: var(--muted); font-style: italic; }
+.msg .meta button.link { background: none; border: none; padding: 0; color: var(--muted); font-size: 0.75rem; cursor: pointer; text-decoration: underline; }
+.msg .versions { margin: 0.2rem 0; padding-left: 1.4rem; font-size: 0.85rem; color: var(--muted); white-space: pre-wrap; }
+.msg .versions time { margin-right: 0.3rem; }
+.msg form.edit textarea { width: 100%; }
 .msg.system { color: var(--muted); font-size: 0.85rem; font-style: italic; }
 .msg.agent .meta strong { color: var(--teal); }
 .msg .meta .model { font-size: 0.75rem; color: var(--muted); }

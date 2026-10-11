@@ -134,6 +134,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/join", s.join)
 	mux.Handle("GET /api/rooms/{room}", s.participant(s.getRoom))
 	mux.Handle("POST /api/rooms/{room}/messages", s.participant(s.postMessage))
+	mux.Handle("PATCH /api/rooms/{room}/messages/{msg}", s.participant(s.editMessage))
+	mux.Handle("DELETE /api/rooms/{room}/messages/{msg}", s.participant(s.deleteMessage))
+	mux.Handle("GET /api/rooms/{room}/messages/{msg}/versions", s.participant(s.messageVersions))
 	mux.Handle("GET /api/rooms/{room}/events", s.participant(s.events))
 	mux.Handle("GET /api/rooms/{room}/documents", s.participant(s.listDocuments))
 	mux.Handle("POST /api/rooms/{room}/documents", s.participant(s.uploadDocument))
@@ -649,10 +652,11 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, sess sessio
 		s.serverError(w, "post_message_failed", err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, m)
+	writeJSON(w, http.StatusCreated, viewMessage(*m))
 }
 
 // events streams the room's messages after ?since= or Last-Event-ID, then live ones, a
+// "message_edited" event carrying a message edited or deleted past change seq ?edits=, a
 // "documents" event when a document or revision is added, an "annotations" event when an
 // annotation is added or changes, an "agent" event carrying the agent state at open and whenever
 // it changes, and with voice on, an "stt" event at open and whenever
@@ -669,6 +673,15 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	// EventSource sends Last-Event-ID on reconnect, so a dropped connection resumes without a gap.
 	if id, err := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64); err == nil && id > last {
 		last = id
+	}
+	// Without ?edits=, a resumed stream replays every change, which a client applies idempotently;
+	// a fresh one gets every message as it stands now.
+	edits, err := strconv.ParseInt(r.URL.Query().Get("edits"), 10, 64)
+	if err != nil && last == 0 {
+		if edits, err = s.bus.Store.ChangeCursor(r.Context(), room); err != nil {
+			s.serverError(w, "events_failed", err)
+			return
+		}
 	}
 
 	// Read before the headers go out: a client lists the documents once the stream is open, and
@@ -711,7 +724,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 				return false
 			}
 			for i := range msgs {
-				b, err := json.Marshal(&msgs[i])
+				b, err := json.Marshal(viewMessage(msgs[i]))
 				if err != nil {
 					return false
 				}
@@ -719,6 +732,27 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 					return false
 				}
 				last = msgs[i].ID
+			}
+			flusher.Flush()
+			if len(msgs) < replayBatch {
+				break
+			}
+		}
+		// No id: line, so Last-Event-ID keeps naming the last message sent.
+		for {
+			msgs, err := s.bus.Store.ChangedMessages(r.Context(), room, edits, replayBatch)
+			if err != nil {
+				return false
+			}
+			for i := range msgs {
+				b, err := json.Marshal(viewMessage(msgs[i]))
+				if err != nil {
+					return false
+				}
+				if _, err := fmt.Fprintf(w, "event: message_edited\ndata: %s\n\n", b); err != nil {
+					return false
+				}
+				edits = msgs[i].ChangeSeq
 			}
 			flusher.Flush()
 			if len(msgs) < replayBatch {
