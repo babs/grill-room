@@ -118,6 +118,16 @@ func (rs *roomServer) last(t *testing.T) store.Message {
 
 const sid = "60dc4912-36ec-4225-a44a-6a6c1ed85b1b"
 
+// grill is the room's Default persona.
+func (rs *roomServer) grill(t *testing.T) store.RoomPersona {
+	t.Helper()
+	ps, err := rs.st.RoomPersonas(t.Context(), rs.room)
+	if err != nil || len(ps) == 0 {
+		t.Fatalf("personas: %+v %v", ps, err)
+	}
+	return ps[0]
+}
+
 // 001-AC32 001-AC33 001-AC34: a press runs the turn on the host daemon, whose result lands in the
 // room; when the host drops mid-turn the turn fails, the other daemon takes over, and its next
 // turn resumes the same session from the room's copy. Each synthesis names the model it ran on:
@@ -151,7 +161,7 @@ func TestDaemonTurnsAndTakeover(t *testing.T) {
 	if m := rs.last(t); m.Body != "Noted." || m.Model != "haiku" {
 		t.Fatalf("synthesis %+v", m)
 	}
-	if docs, _ := rs.st.Documents(t.Context(), rs.room); len(docs) != 1 || docs[0].Name != "plan.md" || docs[0].Author != "Agent" {
+	if docs, _ := rs.st.Documents(t.Context(), rs.room); len(docs) != 1 || docs[0].Name != "plan.md" || docs[0].Author != "Grill" {
 		t.Fatalf("documents %+v", docs)
 	}
 
@@ -186,14 +196,95 @@ func TestDaemonTurnsAndTakeover(t *testing.T) {
 	if m := rs.last(t); m.Body != "PAPRIKA" || m.Model != "claude-opus-x" {
 		t.Fatalf("synthesis %+v", m)
 	}
-	if done, _ := rs.st.LastDoneTurn(t.Context(), rs.room); done.Model != "claude-opus-x" {
+	if done, _ := rs.st.LastDoneTurn(t.Context(), rs.room, rs.grill(t).ID); done.Model != "claude-opus-x" {
 		t.Fatalf("turn model %q", done.Model)
 	}
-	if data, _ := rs.st.AgentSession(t.Context(), rs.room, sid); string(data) != "line1\nline2\n" {
+	if data, _ := rs.st.AgentSession(t.Context(), rs.room, rs.grill(t).ID, sid); string(data) != "line1\nline2\n" {
 		t.Fatalf("session %q", data)
 	}
 	if revs, _ := rs.st.Revisions(t.Context(), 1); len(revs) != 1 {
 		t.Fatalf("a revision from the failed turn was kept: %d", len(revs))
+	}
+}
+
+// 002-AC16 002-AC18: two personas in one room each keep their own session; after a takeover the
+// new host resumes each one's session, never the other's. Each turn gets its persona's text, the
+// model and effort it asks for (an empty model falls back to the daemon's), and its synthesis
+// carries them.
+func TestDaemonPersonasKeepTheirSessions(t *testing.T) {
+	rs := newRoomServer(t)
+	run := func(name string) func(ctx context.Context, in sandbox.TurnInput, _ map[string]string) (*sandbox.TurnOutput, error) {
+		return func(ctx context.Context, in sandbox.TurnInput, _ map[string]string) (*sandbox.TurnOutput, error) {
+			sess := "22222222-2222-4222-8222-222222222222"
+			if strings.HasPrefix(in.System, "You are Grill,") {
+				sess = "11111111-1111-4111-8111-111111111111"
+			}
+			if in.Resume == "" {
+				return &sandbox.TurnOutput{Result: &sandbox.Result{Result: name + " new " + in.Model + "/" + in.Effort, SessionID: sess}, Session: []byte(sess + "\n")}, nil
+			}
+			data, err := in.FetchSession(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return &sandbox.TurnOutput{Result: &sandbox.Result{Result: name + " resumed " + strings.TrimSpace(string(data)), SessionID: in.Resume},
+				SessionOffset: in.SessionSize, Session: []byte("more\n")}, nil
+		}
+	}
+	agA := &fakeAgent{}
+	agA.run = run("A")
+	alice, dropA := pairedHost(t, rs, "Alice", agA)
+	var templates []store.Template
+	rs.call(t, "GET", "/api/rooms/"+rs.room+"/templates", alice, nil, http.StatusOK, &templates)
+	var sec store.RoomPersona
+	rs.call(t, "POST", "/api/rooms/"+rs.room+"/personas", alice, map[string]int64{"template_id": templates[1].ID}, http.StatusCreated, &sec)
+	rs.call(t, "PATCH", "/api/rooms/"+rs.room+"/personas/"+fmt.Sprint(sec.ID), alice, map[string]string{"model": "sonnet", "effort": "low"}, http.StatusOK, nil)
+	grill := rs.grill(t)
+	press := func(tok string, persona int64) store.Message {
+		t.Helper()
+		var started store.Turn
+		rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", tok, map[string]int64{"persona_id": persona}, http.StatusCreated, &started)
+		waitFor(t, "turn done", func() bool { v := rs.agent(t, tok); return v.Turn.ID == started.ID && v.Turn.Status != "running" })
+		if v := rs.agent(t, tok); v.Turn.Status != "done" {
+			t.Fatalf("turn %+v, last message %q", v.Turn, rs.lastMessage(t))
+		}
+		return rs.last(t)
+	}
+	if m := press(alice, grill.ID); m.Body != "A new haiku/" || m.Sender != "Grill" || m.PersonaID != grill.ID || m.Model != "haiku" || m.Effort != "" {
+		t.Fatalf("grill on A: %+v", m)
+	}
+	if m := press(alice, sec.ID); m.Body != "A new sonnet/low" || m.Sender != "Secretary" || m.Model != "sonnet" || m.Effort != "low" || m.Badge != "📝" {
+		t.Fatalf("secretary on A: %+v", m)
+	}
+	if in := agA.inputs[1]; !strings.HasPrefix(in.System, "You are Secretary,") || in.Prompt == "" || !strings.Contains(in.Prompt, "You are Secretary, an agent") {
+		t.Fatalf("secretary's input: %+v", in)
+	}
+
+	agB := &fakeAgent{}
+	agB.run = run("B")
+	bob, _ := pairedHost(t, rs, "Bob", agB)
+	dropA()
+	waitFor(t, "bob is the host", func() bool {
+		var st struct {
+			Daemons []struct {
+				Name string `json:"name"`
+			} `json:"daemons"`
+		}
+		rs.call(t, "GET", "/api/rooms/"+rs.room+"/agent", bob, nil, http.StatusOK, &st)
+		return len(st.Daemons) == 1 && st.Daemons[0].Name == "Bob-box" && rs.agent(t, bob).Online
+	})
+	if m := press(bob, sec.ID); m.Body != "B resumed 22222222-2222-4222-8222-222222222222" {
+		t.Fatalf("secretary after takeover: %+v", m)
+	}
+	if m := press(bob, grill.ID); m.Body != "B resumed 11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("grill after takeover: %+v", m)
+	}
+	for _, p := range []struct {
+		id  int64
+		sid string
+	}{{grill.ID, "11111111-1111-4111-8111-111111111111"}, {sec.ID, "22222222-2222-4222-8222-222222222222"}} {
+		if data, err := rs.st.AgentSession(t.Context(), rs.room, p.id, p.sid); err != nil || string(data) != p.sid+"\nmore\n" {
+			t.Fatalf("persona %d session %q %v", p.id, data, err)
+		}
 	}
 }
 
@@ -206,7 +297,7 @@ func TestDaemonTurnError(t *testing.T) {
 	alice, _ := pairedHost(t, rs, "Alice", ag)
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]bool{}, http.StatusCreated, nil)
 	waitFor(t, "turn failed", func() bool { v := rs.agent(t, alice); return v.Turn != nil && v.Turn.Status == "failed" })
-	if m := rs.lastMessage(t); m != "Agent turn failed: Claude credentials expired on Alice-box" {
+	if m := rs.lastMessage(t); m != "Grill turn failed: Claude credentials expired on Alice-box" {
 		t.Fatalf("message %q", m)
 	}
 }
@@ -221,7 +312,7 @@ func TestDaemonTurnTimeout(t *testing.T) {
 	alice, _ := pairedHost(t, rs, "Alice", ag)
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]bool{}, http.StatusCreated, nil)
 	waitFor(t, "turn failed", func() bool { v := rs.agent(t, alice); return v.Turn != nil && v.Turn.Status == "failed" })
-	if m := rs.lastMessage(t); m != "Agent turn failed: the turn timed out after 1s on Alice-box" {
+	if m := rs.lastMessage(t); m != "Grill turn failed: the turn timed out after 1s on Alice-box" {
 		t.Fatalf("message %q", m)
 	}
 }
@@ -340,12 +431,29 @@ func TestDaemonTurnCredentialsExpired(t *testing.T) {
 	if took := time.Since(start); took > 10*time.Second {
 		t.Fatalf("took %s", took)
 	}
-	if m := rs.lastMessage(t); m != "Agent turn failed: Claude credentials expired on Alice-box" {
+	if m := rs.lastMessage(t); m != "Grill turn failed: Claude credentials expired on Alice-box" {
 		t.Fatalf("message %q", m)
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	if len(dockerCalls) != 0 {
 		t.Fatalf("docker ran: %v", dockerCalls)
+	}
+}
+
+// The model and effort a room asks for reach claude's argv only when claude knows them; anything
+// else falls back to the daemon's setting.
+func TestRunSettings(t *testing.T) {
+	d := &Daemon{o: Options{Model: "haiku"}}
+	for _, c := range []struct{ model, effort, wantModel, wantEffort string }{
+		{"", "", "haiku", ""},
+		{"sonnet", "max", "sonnet", "max"},
+		{"--dangerously-skip-permissions", "--verbose", "haiku", ""},
+		{"opus x", "high;", "haiku", ""},
+	} {
+		m, e := d.runSettings(turn.Job{Model: c.model, Effort: c.effort})
+		if m != c.wantModel || e != c.wantEffort {
+			t.Errorf("%q/%q: got %q/%q, want %q/%q", c.model, c.effort, m, e, c.wantModel, c.wantEffort)
+		}
 	}
 }

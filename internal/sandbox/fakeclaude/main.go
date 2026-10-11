@@ -8,7 +8,9 @@
 //	FAKE_CLOSE        answer the last annotation in annotations.md and mark it done
 //	FAKE_ANNOTATE     open an annotation on the first word after the first upload's heading
 //	FAKE_LIST         answer with the transcript files and whether they hold FAKE_MARK
-//	FAKE_RECALL       answer with the code word an earlier turn of the session was told
+//	FAKE_RECALL       answer with the latest code word an earlier turn of the session was told
+//	FAKE_WHOAMI       answer with the first line of --append-system-prompt-file, and --effort
+//	FAKE_SLOW         take a few seconds (a turn others queue behind)
 //	FAKE_SLEEP        hang until killed (a turn in progress)
 //
 // Any other prompt writes docs/notes.md. A prompt holding "code word is X" is remembered.
@@ -31,6 +33,9 @@ func main() {
 	cwd, _ := os.Getwd()
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, cwd, os.Getenv("HOME")))
 }
+
+// slow is how long FAKE_SLOW takes; a var for tests.
+var slow = 8 * time.Second
 
 var (
 	codeWord   = regexp.MustCompile(`code word is ([A-Z0-9-]+)`)
@@ -55,13 +60,20 @@ func uuid() string {
 }
 
 func run(args []string, stdin io.Reader, out io.Writer, cwd, home string) int {
-	resume, model := "", "default"
+	resume, model, system, effort := "", "default", "", "default"
 	for i, a := range args {
-		if a == "--resume" && i+1 < len(args) {
-			resume = args[i+1]
+		if i+1 == len(args) {
+			break
 		}
-		if a == "--model" && i+1 < len(args) {
+		switch a {
+		case "--resume":
+			resume = args[i+1]
+		case "--model":
 			model = args[i+1]
+		case "--append-system-prompt-file":
+			system = args[i+1]
+		case "--effort":
+			effort = args[i+1]
 		}
 	}
 	prompt, err := io.ReadAll(stdin)
@@ -81,7 +93,7 @@ func run(args []string, stdin io.Reader, out io.Writer, cwd, home string) int {
 	if err := os.MkdirAll(dir, 0o700); err != nil { //nolint:gosec // see above
 		return result(out, model, sid, err.Error(), true)
 	}
-	answer, err := act(string(prompt), string(history), cwd)
+	answer, err := act(string(prompt), string(history), cwd, system, effort)
 	if err != nil {
 		return result(out, model, sid, err.Error(), true)
 	}
@@ -98,7 +110,7 @@ func run(args []string, stdin io.Reader, out io.Writer, cwd, home string) int {
 	return result(out, model, sid, answer, false)
 }
 
-func act(prompt, history, cwd string) (string, error) {
+func act(prompt, history, cwd, system, effort string) (string, error) {
 	ws := func(p string) string { return filepath.Join(cwd, p) }
 	switch {
 	case strings.Contains(prompt, "FAKE_EDIT_UPLOAD"):
@@ -154,11 +166,17 @@ func act(prompt, history, cwd string) (string, error) {
 		sc.Buffer(make([]byte, 1<<20), 16<<20)
 		word := "nothing"
 		for sc.Scan() {
-			if m := codeWord.FindStringSubmatch(sc.Text()); m != nil {
-				word = m[1]
+			// The latest told wins: a persona's first prompt quotes the whole room.
+			if ms := codeWord.FindAllStringSubmatch(sc.Text(), -1); ms != nil {
+				word = ms[len(ms)-1][1]
 			}
 		}
 		return "The code word was " + word + ".", nil
+	case strings.Contains(prompt, "FAKE_WHOAMI"):
+		return whoami(system, effort)
+	case strings.Contains(prompt, "FAKE_SLOW"):
+		time.Sleep(slow)
+		return "Slow turn done.", nil
 	case strings.Contains(prompt, "FAKE_SLEEP"):
 		time.Sleep(time.Hour)
 		return "", nil
@@ -168,4 +186,13 @@ func act(prompt, history, cwd string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("Wrote docs/notes.md, turn %d.", turns), nil
+}
+
+func whoami(system, effort string) (string, error) {
+	b, err := os.ReadFile(system) //nolint:gosec // see above
+	if err != nil {
+		return "", fmt.Errorf("no system prompt file: %w", err)
+	}
+	first, _, _ := strings.Cut(string(b), "\n")
+	return fmt.Sprintf("%s (effort %s)", first, effort), nil
 }

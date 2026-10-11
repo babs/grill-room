@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/babs/grill-room/internal/store"
+	"github.com/babs/grill-room/internal/turn"
 )
 
 // agentState is what the room shows about the agent: who hosts it, whether its daemon is there
@@ -26,6 +27,12 @@ type agentState struct {
 	CanTrigger []int64 `json:"can_trigger"`
 	// Daemons are the connected daemons: the host can hand over to one that can host.
 	Daemons []presence `json:"daemons"`
+	// Personas are the room's agents, each with its button; Queue the presses waiting their turn.
+	Personas []store.RoomPersona `json:"personas"`
+	Queue    []store.QueuedTurn  `json:"queue"`
+	// Models and Efforts are what a persona may ask for, for the pickers.
+	Models  []string `json:"models"`
+	Efforts []string `json:"efforts"`
 }
 
 // hostDaemon returns the connected daemon of participant pid in room, nil if there is none.
@@ -50,7 +57,7 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 	if err != nil {
 		return nil, err
 	}
-	st := &agentState{HostID: r.HostParticipantID, CanTrigger: []int64{}, Daemons: s.connectedDaemons(room)}
+	st := &agentState{HostID: r.HostParticipantID, CanTrigger: []int64{}, Daemons: s.connectedDaemons(room), Models: turn.Models, Efforts: turn.Efforts}
 	for _, p := range ps {
 		if p.CanTrigger {
 			st.CanTrigger = append(st.CanTrigger, p.ID)
@@ -67,16 +74,23 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 	if st.Turn, err = s.bus.Store.LastTurn(ctx, room); err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, err
 	}
+	if st.Personas, err = s.bus.Store.RoomPersonas(ctx, room); err != nil {
+		return nil, err
+	}
+	if st.Queue, err = s.bus.Store.Queue(ctx, room); err != nil {
+		return nil, err
+	}
 	return st, nil
 }
 
-// agentChanged re-runs the host election and wakes the room's streams. Called whenever a daemon
-// connects, drops or changes its readiness.
+// agentChanged re-runs the host election, wakes the room's streams, and starts a queued turn the
+// new host can run. Called whenever a daemon connects, drops or changes its readiness.
 func (s *Server) agentChanged(ctx context.Context, room string) {
 	if err := s.elect(ctx, room); err != nil && !errors.Is(err, store.ErrNotFound) {
 		s.log.Error("host_election_failed", zap.String("room", room), zap.Error(err))
 	}
 	s.bus.Notify(room)
+	s.drain(ctx, room)
 }
 
 // elect keeps the host while its daemon is connected and can host; otherwise the participant

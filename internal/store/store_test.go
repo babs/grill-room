@@ -22,9 +22,10 @@ func openTest(t *testing.T) *Store {
 	return s
 }
 
-// seed creates a room with an invite, a participant with its own profile, an edited text message, an upload, an agent
-// document with two revisions, an annotation with a message carrying an image, a paired daemon
-// hosting, and a done turn with its session.
+// seed creates a room with its Grill persona, an invite, a participant with its own profile, an
+// edited text message, an upload, an agent document with two revisions, an annotation with a
+// message carrying an image, a paired daemon hosting, a queued turn, and a done turn with its
+// session.
 func seed(t *testing.T, s *Store, room string) *Participant {
 	t.Helper()
 	ctx := context.Background()
@@ -67,7 +68,14 @@ func seed(t *testing.T, s *Store, room string) *Participant {
 	if err := s.SetHost(ctx, room, p.ID); err != nil {
 		t.Fatal(err)
 	}
-	turn := &Turn{RoomID: room, ParticipantID: p.ID, DaemonID: dm.ID, Host: "laptop", Prompt: "go"}
+	ps, err := s.RoomPersonas(ctx, room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Enqueue(ctx, &QueuedTurn{RoomID: room, PersonaID: ps[0].ID, ParticipantID: p.ID}); err != nil {
+		t.Fatal(err)
+	}
+	turn := &Turn{RoomID: room, ParticipantID: p.ID, DaemonID: dm.ID, Host: "laptop", Prompt: "go", PersonaID: ps[0].ID, PersonaName: ps[0].Name}
 	if err := s.StartTurn(ctx, turn); err != nil {
 		t.Fatal(err)
 	}
@@ -95,14 +103,19 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	}
 }
 
+// serverWide are the tables the server itself owns: settings, and the persona template library,
+// whose presets belong to no profile while published templates cascade from theirs.
+var serverWide = []string{"settings", "persona_templates", "persona_template_versions"}
+
 // uncascadedTables returns the tables that neither a DELETE on rooms nor one on profiles would
 // purge: those without a chain of NOT NULL, ON DELETE CASCADE foreign keys leading to an owner.
+// serverWide tables are skipped.
 func uncascadedTables(ctx context.Context, db *sql.DB) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT m.name, COALESCE(f."table", ''), COALESCE(f.on_delete, ''), COALESCE(c."notnull", 0)
 		FROM sqlite_master m LEFT JOIN pragma_foreign_key_list(m.name) f
 		LEFT JOIN pragma_table_info(m.name) c ON c.name = f."from"
-		WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.name NOT IN ('rooms', 'profiles', 'settings')`)
+		WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.name NOT IN ('rooms', 'profiles')`)
 	if err != nil {
 		return nil, err
 	}
@@ -113,6 +126,9 @@ func uncascadedTables(ctx context.Context, db *sql.DB) ([]string, error) {
 		var notNull bool
 		if err := rows.Scan(&table, &parent, &onDelete, &notNull); err != nil {
 			return nil, err
+		}
+		if slices.Contains(serverWide, table) {
+			continue
 		}
 		if _, ok := cascadesTo[table]; !ok {
 			cascadesTo[table] = nil
@@ -175,7 +191,8 @@ func profileRefViolations(ctx context.Context, db *sql.DB) ([]string, error) {
 		if err := rows.Scan(&table, &col, &onDelete, &notNull); err != nil {
 			return nil, err
 		}
-		owned := notNull && strings.EqualFold(onDelete, "CASCADE")
+		// A server-wide table's NULL rows are the server's; the others go with their profile.
+		owned := (notNull || slices.Contains(serverWide, table)) && strings.EqualFold(onDelete, "CASCADE")
 		detached := !notNull && strings.EqualFold(onDelete, "SET NULL")
 		if !owned && !detached {
 			out = append(out, table+"."+col)

@@ -66,6 +66,9 @@ type Server struct {
 	magicLimit limiter
 	// electMu serialises host elections and hand-overs.
 	electMu sync.Mutex
+	// turnMu serialises turn starts and queue draining, so presses run in the order they came.
+	// ponytail: one lock for every room; per-room locks if many busy rooms ever contend.
+	turnMu sync.Mutex
 }
 
 // New builds a server. adminHash is HashToken of the admin token; baseURL prefixes invite links.
@@ -160,6 +163,15 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms/{room}/turns", s.participant(s.startTurn))
 	mux.Handle("PUT /api/rooms/{room}/host", s.participant(s.handOver))
 	mux.Handle("PATCH /api/rooms/{room}/participants/{participant}", s.participant(s.setCanTrigger))
+	mux.Handle("DELETE /api/rooms/{room}/queue/{queued}", s.participant(s.cancelQueued))
+	mux.Handle("GET /api/rooms/{room}/templates", s.participant(s.listTemplates))
+	mux.Handle("POST /api/rooms/{room}/templates", s.participant(s.publishTemplate))
+	mux.Handle("POST /api/rooms/{room}/personas", s.participant(s.addPersona))
+	mux.Handle("PATCH /api/rooms/{room}/personas/{persona}", s.participant(s.editPersona))
+	mux.Handle("POST /api/rooms/{room}/personas/{persona}/update", s.participant(s.updatePersona))
+	mux.Handle("DELETE /api/rooms/{room}/personas/{persona}", s.participant(s.removePersona))
+	mux.Handle("GET /api/templates", s.admin(s.adminTemplates))
+	mux.Handle("DELETE /api/templates/{template}", s.admin(s.removeTemplate))
 	mux.Handle("GET /api/rooms/{room}/daemon/turns/{turn}", s.daemonAuth(s.getJob))
 	mux.Handle("GET /api/rooms/{room}/daemon/turns/{turn}/workspace", s.daemonAuth(s.getWorkspace))
 	mux.Handle("POST /api/rooms/{room}/daemon/turns/{turn}", s.daemonAuth(s.postResult))

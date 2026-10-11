@@ -54,11 +54,14 @@ type AnnotationMessage struct {
 	AnnotationID int64  `json:"annotation_id"`
 	By           string `json:"by"`
 	// ParticipantID is 0 for the agent.
-	ParticipantID int64        `json:"participant_id,omitempty"`
-	Author        string       `json:"author"`
-	Body          string       `json:"body"`
-	CreatedAt     time.Time    `json:"created_at"`
-	Attachments   []Attachment `json:"attachments"`
+	ParticipantID int64 `json:"participant_id,omitempty"`
+	// PersonaID is the room persona that wrote an agent message; Badge is its current one.
+	PersonaID   int64        `json:"persona_id,omitempty"`
+	Badge       string       `json:"badge,omitempty"`
+	Author      string       `json:"author"`
+	Body        string       `json:"body"`
+	CreatedAt   time.Time    `json:"created_at"`
+	Attachments []Attachment `json:"attachments"`
 }
 
 // Attachment is an image on an annotation message.
@@ -70,9 +73,11 @@ type Attachment struct {
 	Data []byte `json:"-"`
 }
 
-// NewMessage is a message to add to a thread. ParticipantID 0 means the agent wrote it.
+// NewMessage is a message to add to a thread. ParticipantID 0 means the agent wrote it, as the
+// room persona PersonaID.
 type NewMessage struct {
 	ParticipantID int64
+	PersonaID     int64
 	Author        string
 	Body          string
 	// Attachments need ContentType and Data; the caller has checked both.
@@ -181,15 +186,15 @@ func insertAnnotationMessage(ctx context.Context, tx *sql.Tx, roomID string, ann
 			return nil, ErrRoomFull
 		}
 	}
-	m := &AnnotationMessage{AnnotationID: annID, By: ByAgent, ParticipantID: msg.ParticipantID, Author: msg.Author, Body: msg.Body,
+	m := &AnnotationMessage{AnnotationID: annID, By: ByAgent, ParticipantID: msg.ParticipantID, PersonaID: msg.PersonaID, Author: msg.Author, Body: msg.Body,
 		CreatedAt: time.Now().UTC(), Attachments: []Attachment{}}
 	var pid any
 	if msg.ParticipantID != 0 {
 		m.By, pid = ByParticipant, msg.ParticipantID
 	}
 	ts := m.CreatedAt.Format(time.RFC3339Nano)
-	res, err := tx.ExecContext(ctx, `INSERT INTO annotation_messages(annotation_id, author_kind, participant_id, author, body, created_at) VALUES(?,?,?,?,?,?)`,
-		annID, m.By, pid, m.Author, m.Body, ts)
+	res, err := tx.ExecContext(ctx, `INSERT INTO annotation_messages(annotation_id, author_kind, participant_id, persona_id, author, body, created_at) VALUES(?,?,?,?,?,?,?)`,
+		annID, m.By, pid, nullID(m.PersonaID), m.Author, m.Body, ts)
 	if err != nil {
 		return nil, fmt.Errorf("insert annotation message: %w", err)
 	}
@@ -328,7 +333,8 @@ func (s *Store) loadAnnotations(ctx context.Context, withData bool, cond string,
 	msgAt := map[int64]pos{}
 	//nolint:gosec // cond is a constant of this file, never user input
 	mrows, err := s.db.QueryContext(ctx, `
-		SELECT m.id, m.annotation_id, m.author_kind, COALESCE(m.participant_id, 0), m.author, m.body, m.created_at
+		SELECT m.id, m.annotation_id, m.author_kind, COALESCE(m.participant_id, 0), COALESCE(m.persona_id, 0),
+			COALESCE((SELECT badge FROM room_personas WHERE id = m.persona_id), ''), m.author, m.body, m.created_at
 		FROM annotation_messages m JOIN annotations a ON a.id = m.annotation_id WHERE `+cond+` ORDER BY m.id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query annotation messages: %w", err)
@@ -337,7 +343,7 @@ func (s *Store) loadAnnotations(ctx context.Context, withData bool, cond string,
 	for mrows.Next() {
 		var m AnnotationMessage
 		var created string
-		if err := mrows.Scan(&m.ID, &m.AnnotationID, &m.By, &m.ParticipantID, &m.Author, &m.Body, &created); err != nil {
+		if err := mrows.Scan(&m.ID, &m.AnnotationID, &m.By, &m.ParticipantID, &m.PersonaID, &m.Badge, &m.Author, &m.Body, &created); err != nil {
 			return nil, fmt.Errorf("scan annotation message: %w", err)
 		}
 		m.CreatedAt = parseTS(created)

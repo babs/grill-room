@@ -192,6 +192,36 @@ func TestRunClaudeArgsAndStubs(t *testing.T) {
 	}
 }
 
+// 002-AC18: a persona's turn passes its effort, and its text as an appended system prompt file
+// written in the sandbox home, with the snapshot off so a resumed session gets the current text.
+func TestRunClaudePersona(t *testing.T) {
+	f := &fakeDocker{reply: func(args []string) ([]byte, error) {
+		switch {
+		case args[0] == "info":
+			return []byte("29|Linux"), nil
+		case args[0] == "network" && args[1] == "inspect":
+			return []byte("127.0.0.1"), nil
+		case args[0] == "exec" && slices.Contains(args, "claude"):
+			return []byte(`{"type":"result","subtype":"success","is_error":false,"result":"ok","session_id":"s1"}`), nil
+		}
+		return nil, nil
+	}}
+	up, _ := url.Parse("https://x")
+	s := New(Config{Image: "img", Name: "t", Upstream: up}, f.run, testCreds(t, "real-secret", time.Now().Add(time.Hour)), zap.NewNop())
+	defer s.Close(context.Background())
+	if _, err := s.RunClaude(context.Background(), Request{Prompt: "go", System: "You are Secretary.", Model: "sonnet", Effort: "xhigh"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"exec", "-i", "grill-room-t", "claude", "-p", "--output-format", "json", "--model", "sonnet", "--effort", "xhigh",
+		"--append-system-prompt-file", "/home/agent/.grill-room/persona.md", "--system-prompt-snapshot", "off"}
+	if c := f.find("exec", "-i", "grill-room-t", "claude"); !slices.Equal(c, want) {
+		t.Fatalf("claude args = %v", c)
+	}
+	if len(f.stdin) != 3 || !strings.Contains(f.stdin[1], ".grill-room/persona.md") || !strings.Contains(f.stdin[1], "You are Secretary.") || f.stdin[2] != "go" {
+		t.Fatalf("persona file not written before the run: %q", f.stdin)
+	}
+}
+
 func TestReadSessionValidates(t *testing.T) {
 	f := &fakeDocker{}
 	s := New(Config{Name: "t", Upstream: &url.URL{}}, f.run, nil, zap.NewNop())

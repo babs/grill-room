@@ -101,7 +101,7 @@ func TestDockerTurnsAndTakeover(t *testing.T) {
 	}
 	docs, _ := rs.st.Documents(t.Context(), rs.room)
 	notes := docs[len(docs)-1]
-	if notes.Name != "notes.md" || notes.Author != store.AgentName {
+	if notes.Name != "notes.md" || notes.Author != "Grill" {
 		t.Fatalf("documents %+v", docs)
 	}
 
@@ -112,7 +112,7 @@ func TestDockerTurnsAndTakeover(t *testing.T) {
 	if orig, _ := rs.st.Original(t.Context(), rs.room, pdf.ID); string(orig) != "%PDF-1.4 brief" {
 		t.Fatalf("upload changed: %q", orig)
 	}
-	stored, _ := rs.st.LastDoneTurn(t.Context(), rs.room)
+	stored, _ := rs.st.LastDoneTurn(t.Context(), rs.room, rs.grill(t).ID)
 	sid := stored.SessionID
 
 	bob, _ := sandboxHost(t, rs, "Bob", image)
@@ -133,7 +133,7 @@ func TestDockerTurnsAndTakeover(t *testing.T) {
 	if v.Turn.Status != "done" || rs.lastMessage(t) != "The code word was PAPRIKA-42." {
 		t.Fatalf("takeover: %+v %q", v.Turn, rs.lastMessage(t))
 	}
-	if last, _ := rs.st.LastDoneTurn(t.Context(), rs.room); last.SessionID != sid {
+	if last, _ := rs.st.LastDoneTurn(t.Context(), rs.room, rs.grill(t).ID); last.SessionID != sid {
 		t.Fatalf("session %s after takeover, want %s", last.SessionID, sid)
 	}
 
@@ -142,7 +142,61 @@ func TestDockerTurnsAndTakeover(t *testing.T) {
 	if v.Turn.Status != "done" || rs.lastMessage(t) != "transcript: "+day+".md; FAKE_MARK found: true" {
 		t.Fatalf("fresh: %+v %q", v.Turn, rs.lastMessage(t))
 	}
-	if last, _ := rs.st.LastDoneTurn(t.Context(), rs.room); last.SessionID == sid || !last.Fresh {
+	if last, _ := rs.st.LastDoneTurn(t.Context(), rs.room, rs.grill(t).ID); last.SessionID == sid || !last.Fresh {
 		t.Fatalf("fresh turn kept session %s", last.SessionID)
+	}
+}
+
+// 002-AC16 002-AC18 in real Docker sandboxes with a fake claude: Grill and Secretary run in one
+// room, each in its own session; the Secretary gets its text and effort; after A drops, B resumes
+// each persona's own session, and each recalls its own code word.
+func TestDockerPersonasTakeover(t *testing.T) {
+	if os.Getenv("GRILL_ROOM_TEST_DOCKER") != "1" {
+		t.Skip("set GRILL_ROOM_TEST_DOCKER=1 to run the Docker sandbox tests")
+	}
+	image := os.Getenv("GRILL_ROOM_SANDBOX_FAKE_IMAGE")
+	if image == "" {
+		image = "grill-room-sandbox:fake"
+	}
+	rs := newRoomServer(t)
+	alice, dropA := sandboxHost(t, rs, "Alice", image)
+	var templates []store.Template
+	rs.call(t, "GET", "/api/rooms/"+rs.room+"/templates", alice, nil, http.StatusOK, &templates)
+	var sec store.RoomPersona
+	rs.call(t, "POST", "/api/rooms/"+rs.room+"/personas", alice, map[string]int64{"template_id": templates[1].ID}, http.StatusCreated, &sec)
+	rs.call(t, "PATCH", "/api/rooms/"+rs.room+"/personas/"+fmt.Sprint(sec.ID), alice, map[string]string{"effort": "low"}, http.StatusOK, nil)
+	grill := rs.grill(t)
+	say := func(tok, body string, persona int64) string {
+		t.Helper()
+		rs.call(t, "POST", "/api/rooms/"+rs.room+"/messages", tok, map[string]string{"body": body}, http.StatusCreated, nil)
+		var started store.Turn
+		rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", tok, map[string]int64{"persona_id": persona}, http.StatusCreated, &started)
+		waitFor(t, "turn ended", func() bool { v := rs.agent(t, tok); return v.Turn.ID == started.ID && v.Turn.Status != "running" })
+		if v := rs.agent(t, tok); v.Turn.Status != "done" {
+			t.Fatalf("turn %+v: %q", v.Turn, rs.lastMessage(t))
+		}
+		return rs.lastMessage(t)
+	}
+	say(alice, "The code word is GRILL-1.", grill.ID)
+	say(alice, "The code word is SECRETARY-2.", sec.ID)
+	if got := say(alice, "FAKE_WHOAMI", sec.ID); got != "You are Secretary, the note taker of this session. You record; you never challenge, judge or suggest. (effort low)" {
+		t.Fatalf("secretary's persona: %q", got)
+	}
+	bob, _ := sandboxHost(t, rs, "Bob", image)
+	dropA()
+	waitFor(t, "bob hosts", func() bool {
+		var st struct {
+			Daemons []struct {
+				Name string `json:"name"`
+			} `json:"daemons"`
+		}
+		rs.call(t, "GET", "/api/rooms/"+rs.room+"/agent", bob, nil, http.StatusOK, &st)
+		return len(st.Daemons) == 1 && st.Daemons[0].Name == "Bob-box" && rs.agent(t, bob).Online
+	})
+	if got := say(bob, "FAKE_RECALL", grill.ID); got != "The code word was GRILL-1." {
+		t.Fatalf("grill after takeover: %q", got)
+	}
+	if got := say(bob, "FAKE_RECALL", sec.ID); got != "The code word was SECRETARY-2." {
+		t.Fatalf("secretary after takeover: %q", got)
 	}
 }

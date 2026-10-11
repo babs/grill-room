@@ -33,10 +33,9 @@
     <button type="button" id="voice-leave" hidden>Leave audio</button>
   </div>
   <div id="agent">
-    <span id="agent-led" class="led" role="img" aria-label="Agent offline"></span>
+    <div id="persona-buttons" role="group" aria-label="Agents"></div>
+    <button type="button" id="personas-open" class="small">Personas</button>
     <span id="agent-status" role="status"></span>
-    <button type="button" id="agent-press" disabled>Ask the agent</button>
-    <button type="button" id="agent-fresh" hidden disabled>New session</button>
   </div>
   <a id="me" href="/profile" title="Your profile"></a>
 </header>
@@ -44,6 +43,23 @@
 <div id="voice-audio" hidden></div>
 <p id="banner" role="alert" hidden></p>
 <p id="reconnecting" role="status" hidden>Reconnecting…</p>
+<div id="queue" hidden>
+  <span>Queued:</span>
+  <ol id="queue-list" aria-label="Queued turns"></ol>
+</div>
+<dialog id="personas" aria-labelledby="personas-title">
+  <div class="dialog-head">
+    <h2 id="personas-title">Personas</h2>
+    <button type="button" id="personas-close" class="small">Close</button>
+  </div>
+  <p class="hint">Each persona is an agent with its own Claude session. Changes apply from its next turn.</p>
+  <p id="personas-status" role="status"></p>
+  <div id="persona-list"></div>
+  <form id="persona-add">
+    <label>Add from the library <select id="persona-template" required></select></label>
+    <button type="submit">Add</button>
+  </form>
+</dialog>
 <section id="pairing" aria-labelledby="pairing-title" hidden>
   <h2 id="pairing-title">Pair an agent daemon</h2>
   <p id="pairing-text"></p>

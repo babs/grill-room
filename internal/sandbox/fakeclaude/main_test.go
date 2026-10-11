@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type out struct {
@@ -90,6 +91,19 @@ func TestFakeClaude(t *testing.T) {
 	}
 	if o, _ := call(t, cwd, home, "FAKE_LIST"); o.Result != "transcript: 2026-10-10.md; FAKE_MARK found: true" {
 		t.Fatalf("list %+v", o)
+	}
+	// 002-AC18: the persona's text and effort, as the daemon passes them.
+	sys := filepath.Join(home, "persona.md")
+	_ = os.WriteFile(sys, []byte("You are Secretary, the note taker.\nMore.\n"), 0o600)
+	if o, _ := call(t, cwd, home, "FAKE_WHOAMI", "--append-system-prompt-file", sys, "--effort", "low"); o.Result != "You are Secretary, the note taker. (effort low)" {
+		t.Fatalf("whoami %+v", o)
+	}
+	if o, code := call(t, cwd, home, "FAKE_WHOAMI"); code != 1 || !o.IsError {
+		t.Fatalf("whoami without a system prompt %+v", o)
+	}
+	slow = time.Millisecond
+	if o, _ := call(t, cwd, home, "FAKE_SLOW"); o.Result != "Slow turn done." {
+		t.Fatalf("slow %+v", o)
 	}
 	b, _ := os.ReadFile(filepath.Join(home, ".claude", "projects", strings.ReplaceAll(cwd, "/", "-"), sid+".jsonl"))
 	if n := strings.Count(string(b), "\n"); n != 4 {

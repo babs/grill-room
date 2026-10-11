@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -24,6 +25,21 @@ type Agent interface {
 
 // maxSession bounds a session copy fetched from the room.
 const maxSession = 256 << 20
+
+// runSettings is the one place where the model and effort a persona asks for become the ones its
+// turn runs with: an empty model falls back to this daemon's. The host cap (spec 002 phase 4)
+// clamps here.
+func (d *Daemon) runSettings(job turn.Job) (model, effort string) {
+	// The values become claude arguments: only the known ones pass, whatever the room sent.
+	model, effort = d.o.Model, ""
+	if slices.Contains(turn.Models, job.Model) {
+		model = job.Model
+	}
+	if slices.Contains(turn.Efforts, job.Effort) {
+		effort = job.Effort
+	}
+	return model, effort
+}
 
 // agent returns the room run's sandbox, created on its first turn.
 func (r *roomRun) agent() (Agent, error) {
@@ -91,7 +107,7 @@ func (r *roomRun) runTurn(ctx context.Context, tok string, id int64) {
 		}
 		tctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		log.Info("turn_started", zap.Bool("resume", job.Resume != ""))
+		log.Info("turn_started", zap.Bool("resume", job.Resume != ""), zap.String("persona", job.Persona))
 		res = r.execute(tctx, tok, ids, job)
 		if res.Error != "" && errors.Is(tctx.Err(), context.DeadlineExceeded) {
 			res = turn.Result{Error: fmt.Sprintf("the turn timed out after %s on %s", timeout, r.d.o.Name)}
@@ -129,8 +145,9 @@ func (r *roomRun) execute(ctx context.Context, tok, ids string, job turn.Job) tu
 	if err != nil {
 		return turn.Result{Error: err.Error()}
 	}
+	model, effort := r.d.runSettings(job)
 	out, err := ag.RunTurn(ctx, sandbox.TurnInput{
-		Workspace: ws.Body, Prompt: job.Prompt, Model: r.d.o.Model,
+		Workspace: ws.Body, Prompt: job.Prompt, System: job.System, Model: model, Effort: effort,
 		Resume: job.Resume, SessionSize: job.SessionSize, SessionSHA256: job.SessionSHA256,
 		FetchSession: func(ctx context.Context) ([]byte, error) {
 			resp, err := r.get(ctx, tok, "sessions/"+job.Resume)
@@ -144,10 +161,10 @@ func (r *roomRun) execute(ctx context.Context, tok, ids string, job turn.Job) tu
 	if err != nil {
 		return turn.Result{Error: err.Error()}
 	}
-	model := out.Result.Model()
-	if model == "" {
-		model = r.d.o.Model
+	// The model claude reports is the one that answered; the one asked for is a fallback.
+	if m := out.Result.Model(); m != "" {
+		model = m
 	}
-	return turn.Result{Synthesis: out.Result.Result, Model: model, SessionID: out.Result.SessionID, SessionOffset: out.SessionOffset,
+	return turn.Result{Synthesis: out.Result.Result, Model: model, Effort: effort, SessionID: out.Result.SessionID, SessionOffset: out.SessionOffset,
 		Session: out.Session, Changes: out.Changes}
 }

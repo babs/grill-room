@@ -25,7 +25,10 @@ type TurnInput struct {
 	// Workspace is the tar the room built; it replaces /workspace whole.
 	Workspace io.Reader
 	Prompt    string
-	Model     string
+	// System is the persona's text, appended to Claude Code's system prompt.
+	System string
+	Model  string
+	Effort string
 	// Resume, SessionSize and SessionSHA256 name the session to continue and the room's copy of it.
 	Resume        string
 	SessionSize   int64
@@ -67,7 +70,7 @@ func (s *Sandbox) RunTurn(ctx context.Context, in TurnInput) (*TurnOutput, error
 			return nil, err
 		}
 	}
-	res, err := s.runClaude(ctx, Request{Prompt: in.Prompt, Model: in.Model, Resume: in.Resume})
+	res, err := s.runClaude(ctx, Request{Prompt: in.Prompt, System: in.System, Model: in.Model, Effort: in.Effort, Resume: in.Resume})
 	if err != nil {
 		return nil, err
 	}

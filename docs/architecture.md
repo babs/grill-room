@@ -52,7 +52,7 @@ flowchart LR
 
 | Component | Exposes | Talks to | Auth |
 |---|---|---|---|
-| Room admin | nothing | room server: `GET/POST /api/rooms`, `PATCH/DELETE /api/rooms/{room}`, `GET/POST/DELETE .../invites`, `GET/DELETE /api/profiles` | admin token (one per server) |
+| Room admin | nothing | room server: `GET/POST /api/rooms`, `PATCH/DELETE /api/rooms/{room}`, `GET/POST/DELETE .../invites`, `GET/DELETE /api/profiles`, `GET/DELETE /api/templates` | admin token (one per server) |
 | Room page | nothing | room server (REST + SSE), LiveKit (WebRTC), document iframe (postMessage, validated) | room cookie, or the profile cookie |
 | Profile page | nothing | room server: `/api/profile/*` | profile cookie; recovery or emailed link token |
 | Document iframe | anchors and selections via postMessage | room page only | none: opaque origin, CSP sandbox, no cookie |
@@ -65,8 +65,8 @@ flowchart LR
 
 ## A turn, end to end
 
-1. A participant presses the agent button: `POST /api/rooms/{room}/turns`.
-2. The server stores the turn and its prompt, then pushes `turn` on the host daemon's SSE.
+1. A participant presses a persona's button: `POST /api/rooms/{room}/turns`. While another turn runs, the press waits in the room's queue.
+2. The server stores the turn, its prompt and the persona's text, model and effort, then pushes `turn` on the host daemon's SSE.
 3. The daemon fetches the job, the workspace tar and, if needed, the session jsonl.
 4. It runs `claude -p` in the sandbox, which reaches Anthropic only through the proxy.
 5. It posts back the changed files, the synthesis and the session bytes added.

@@ -64,6 +64,7 @@ body.room {
 }
 header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.75rem;
   padding: 0.6rem 1rem;
@@ -71,7 +72,49 @@ header {
   color: #fff;
 }
 header h1 { font-size: 1.1rem; flex: 1; }
-#agent { display: flex; align-items: center; gap: 0.5rem; }
+#agent { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+#persona-buttons { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+/* --persona is the persona's colour, set per button and per form. */
+button.persona {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.7rem;
+  background: #fff;
+  color: var(--ink);
+  border-left: 0.35rem solid var(--persona, var(--teal));
+}
+button.persona .led { flex: none; }
+.led.queued { background: #8ab4f8; box-shadow: 0 0 0 2px rgba(138, 180, 248, 0.35); }
+#queue { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.3rem 1rem; background: #e8f0fe; font-size: 0.85rem; }
+#queue-list { display: flex; flex-wrap: wrap; gap: 0.2rem 1.4rem; margin: 0; padding-left: 1.2rem; }
+#queue-list button { padding: 0.05rem 0.5rem; font-size: 0.75rem; }
+dialog#personas {
+  width: min(44rem, calc(100vw - 1rem));
+  max-height: calc(100dvh - 1rem);
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--ink);
+}
+dialog#personas::backdrop { background: rgba(30, 34, 56, 0.45); }
+.dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.dialog-head h2 { font-size: 1.1rem; }
+dialog .hint { color: var(--muted); font-size: 0.85rem; margin: 0.3rem 0; }
+#personas-status { color: #b3261e; font-size: 0.85rem; min-height: 1em; margin: 0.3rem 0; }
+.persona-form { margin-bottom: 1rem; padding: 0.7rem; background: #fff; border: 1px solid var(--line); border-left: 0.35rem solid var(--persona, var(--teal)); border-radius: 8px; }
+.persona-form h3 { margin: 0; font-size: 1rem; }
+.persona-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: 0.4rem 0.6rem; margin: 0.4rem 0; }
+.persona-form label { display: grid; gap: 0.15rem; font-size: 0.8rem; color: var(--muted); }
+.persona-form :is(input, select, textarea) { width: 100%; font: inherit; color: var(--ink); }
+.persona-form input[type=color] { height: 2.4rem; padding: 0.2rem; }
+.persona-form textarea { resize: vertical; font-size: 0.85rem; }
+.persona-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.5rem; }
+.persona-actions button, #persona-add button { padding: 0.3rem 0.8rem; font-size: 0.85rem; }
+#persona-add { display: flex; flex-wrap: wrap; align-items: end; gap: 0.5rem; }
+#persona-add label { display: grid; gap: 0.15rem; font-size: 0.85rem; flex: 1; min-width: 12rem; }
+#persona-add select { font: inherit; padding: 0.4rem; }
 #agent-status { font-size: 0.85rem; color: #c9cbd6; }
 .led { width: 0.75rem; height: 0.75rem; border-radius: 50%; background: #d93025; box-shadow: 0 0 0 2px rgba(217, 48, 37, 0.3); }
 .led.on { background: #34c759; box-shadow: 0 0 0 2px rgba(52, 199, 89, 0.3); }
@@ -177,12 +220,16 @@ button.doc:hover { background: var(--line); }
 .msg form.edit textarea { width: 100%; }
 .msg.system { color: var(--muted); font-size: 0.85rem; font-style: italic; }
 .msg.agent .meta strong { color: var(--teal); }
-.msg .meta .model { font-size: 0.75rem; color: var(--muted); }
+.msg .meta :is(.model, .effort) { font-size: 0.75rem; color: var(--muted); }
 .msg.voice .meta strong::after { content: " (voice)"; font-weight: normal; color: var(--muted); }
 #send { display: flex; gap: 0.5rem; padding: 0.75rem 1rem; border-top: 1px solid var(--line); }
 #send textarea { flex: 1; resize: vertical; }
 
 @media (max-width: 40rem) {
+  /* Phones: the title row first, the agents on a row of their own below it. */
+  header { row-gap: 0.4rem; padding: 0.5rem 0.75rem; }
+  #agent { order: 1; flex-basis: 100%; }
+  #agent-status { font-size: 0.8rem; }
   aside { display: none; }
   #viewer:not([hidden]) + .chat { display: none; }
 }

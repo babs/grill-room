@@ -229,6 +229,8 @@ type turnRoom struct {
 	ann    int64
 	pdf    int64
 	office int64
+	// grill is the room's Default persona.
+	grill store.RoomPersona
 }
 
 func newTurnRoom(t *testing.T, e *env) *turnRoom {
@@ -258,6 +260,11 @@ func newTurnRoom(t *testing.T, e *env) *turnRoom {
 		t.Fatal(err)
 	}
 	r.doc, r.ann, r.pdf, r.office = doc.ID, ann.ID, pdf.ID, office.ID
+	ps, err := e.st.RoomPersonas(ctx, r.room)
+	if err != nil || len(ps) != 1 {
+		t.Fatalf("personas: %+v %v", ps, err)
+	}
+	r.grill = ps[0]
 	return r
 }
 
@@ -328,8 +335,13 @@ func TestTurnLifecycle(t *testing.T) {
 	r := newTurnRoom(t, e)
 	alice := r.alice
 	tn := e.press(t, r, alice, alice.p.Token, false)
-	if code, b := e.do(t, "POST", "/api/rooms/"+r.room+"/turns", alice.p.Token, map[string]bool{}); code != http.StatusConflict || !strings.Contains(string(b), "turn in progress") {
+	// 002-AC17: a press during a turn is queued; who queued it can take it back.
+	code, b := e.do(t, "POST", "/api/rooms/"+r.room+"/turns", alice.p.Token, map[string]bool{})
+	if code != http.StatusAccepted {
 		t.Fatalf("second press: %d %s", code, b)
+	}
+	if code, b := e.do(t, "DELETE", "/api/rooms/"+r.room+"/queue/"+strconv.FormatInt(decodeJSON[store.QueuedTurn](t, b).ID, 10), alice.p.Token, nil); code != http.StatusNoContent {
+		t.Fatalf("cancel: %d %s", code, b)
 	}
 	job := e.job(t, r, alice, tn.ID)
 	if job.Resume != "" || job.TimeoutSeconds != 900 {
@@ -371,7 +383,7 @@ func TestTurnLifecycle(t *testing.T) {
 		t.Errorf("attachment missing: %q", att)
 	}
 
-	code, b := e.result(t, r, alice, tn.ID, turn.Result{
+	code, b = e.result(t, r, alice, tn.ID, turn.Result{
 		Synthesis: "Friday is risky.\x07", SessionID: sid1, Session: []byte("one\n"),
 		Changes: []turn.Change{
 			{Path: "docs/synthesis.md", Content: []byte("# Synthesis\n\nThe slow brown fox.\n")},
@@ -388,7 +400,7 @@ func TestTurnLifecycle(t *testing.T) {
 		!slices.Equal(done.Report.Revised, []string{"synthesis.md"}) || !slices.Equal(done.Report.Created, []string{"rollback.md"}) {
 		t.Fatalf("done turn %+v", done)
 	}
-	if rev, err := e.st.Revision(t.Context(), r.doc, 2); err != nil || rev.Author != store.AgentName {
+	if rev, err := e.st.Revision(t.Context(), r.doc, 2); err != nil || rev.Author != "Grill" {
 		t.Fatalf("revision 2 %+v, %v", rev, err)
 	}
 	msgs, _ := e.st.Messages(t.Context(), r.room, 0, 100)
@@ -415,7 +427,7 @@ func TestTurnLifecycle(t *testing.T) {
 		t.Fatalf("second job %+v", job)
 	}
 	if !strings.Contains(job.Prompt, "What about Monday?") || strings.Contains(job.Prompt, "We ship on Friday") || strings.Contains(job.Prompt, "new session") ||
-		strings.Contains(job.Prompt, "Friday is risky") || !strings.Contains(job.Prompt, "- **Agent**: the brown one\n- **Alice** (new): and the red one?") {
+		strings.Contains(job.Prompt, "Friday is risky") || !strings.Contains(job.Prompt, "- **Grill**: the brown one\n- **Alice** (new): and the red one?") {
 		t.Fatalf("second prompt:\n%s", job.Prompt)
 	}
 	if code, b := e.do(t, "GET", r.daemonPath("sessions/"+sid1), alice.tok, nil); code != http.StatusOK || string(b) != "one\n" {
@@ -439,7 +451,7 @@ func TestTurnLifecycle(t *testing.T) {
 	if code, b := e.result(t, r, alice, tn3.ID, turn.Result{SessionID: sid1, SessionOffset: 4, Session: []byte("two\n")}); code != http.StatusOK {
 		t.Fatalf("continuing result: %d %s", code, b)
 	}
-	if data, _ := e.st.AgentSession(t.Context(), r.room, sid1); string(data) != "one\ntwo\n" {
+	if data, _ := e.st.AgentSession(t.Context(), r.room, r.grill.ID, sid1); string(data) != "one\ntwo\n" {
 		t.Fatalf("session %q", data)
 	}
 }
@@ -485,7 +497,7 @@ func TestTurnFailures(t *testing.T) {
 		t.Fatalf("error result: %d", code)
 	}
 	msgs, _ := e.st.Messages(t.Context(), r.room, 0, 100)
-	if last := msgs[len(msgs)-1]; last.Body != "Agent turn failed: Claude credentials expired on bob-box" {
+	if last := msgs[len(msgs)-1]; last.Body != "Grill turn failed: Claude credentials expired on bob-box" {
 		t.Fatalf("last message %q", last.Body)
 	}
 	tn = e.press(t, r, bob, bob.p.Token, false)
@@ -575,11 +587,11 @@ func TestBuildPromptCapsTranscript(t *testing.T) {
 	for i := range 3000 {
 		msgs = append(msgs, store.Message{ID: int64(i + 1), Kind: store.KindVoice, Sender: "Bob", Body: strings.Repeat("blah ", 10) + strconv.Itoa(i)})
 	}
-	p := buildPrompt("R", false, msgs, nil, nil, 0, nil)
+	p := buildPrompt(promptInput{Room: "R", Persona: "Grill", Msgs: msgs})
 	if len(p) > maxPromptTranscript+5000 || !strings.Contains(p, "earlier lines are in transcript/") || !strings.Contains(p, "blah 2999") || strings.Contains(p, "blah 0\n") {
 		t.Fatalf("prompt of %d bytes", len(p))
 	}
-	if p := buildPrompt("R", false, nil, nil, nil, 0, nil); !strings.Contains(p, "Nothing was said or annotated") {
+	if p := buildPrompt(promptInput{Room: "R", Persona: "Grill"}); !strings.Contains(p, "Nothing was said or annotated") {
 		t.Fatalf("empty prompt:\n%s", p)
 	}
 }
@@ -695,7 +707,7 @@ func TestAgentAnnotationLoop(t *testing.T) {
 	agentAnn := func(doc int64) store.Annotation {
 		t.Helper()
 		anns, err := e.st.Annotations(t.Context(), r.room, doc)
-		if err != nil || len(anns) != 1 || anns[0].Messages[0].By != store.ByAgent || anns[0].Messages[0].Author != store.AgentName {
+		if err != nil || len(anns) != 1 || anns[0].Messages[0].By != store.ByAgent || anns[0].Messages[0].Author != "Grill" {
 			t.Fatalf("agent annotation on %d: %+v, %v", doc, anns, err)
 		}
 		return anns[0]
@@ -723,7 +735,7 @@ func TestAgentAnnotationLoop(t *testing.T) {
 	tn2 := e.press(t, r, alice, alice.p.Token, false)
 	job = e.job(t, r, alice, tn2.ID)
 	if want := fmt.Sprintf("### Annotation %d on %s (open)", onUpload.ID, office); !strings.Contains(job.Prompt, want) ||
-		!strings.Contains(job.Prompt, "- **Agent**: Who converted it?\n- **Alice** (new): Bob did, with pandoc.") {
+		!strings.Contains(job.Prompt, "- **Grill**: Who converted it?\n- **Alice** (new): Bob did, with pandoc.") {
 		t.Fatalf("second prompt lacks the thread:\n%s", job.Prompt)
 	}
 	if code, b := e.result(t, r, alice, tn2.ID, turn.Result{SessionID: sid2, SessionOffset: 4, Session: []byte("two\n"),

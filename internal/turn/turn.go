@@ -44,10 +44,22 @@ const (
 	maxContext = 64
 )
 
+// Efforts are the values claude -p --effort accepts; empty leaves Claude Code's default.
+var Efforts = []string{"low", "medium", "high", "xhigh", "max"}
+
+// Models are the model aliases a persona may ask for; empty leaves the host's default.
+var Models = []string{"haiku", "sonnet", "opus", "fable"}
+
 // Job is the turn the daemon runs, as the server hands it over.
 type Job struct {
 	ID     int64  `json:"id"`
 	Prompt string `json:"prompt"`
+	// Persona names the room persona the turn runs; System is its text, which claude gets as an
+	// appended system prompt. Model and Effort are what it asks for, empty for the host's default.
+	Persona string `json:"persona,omitempty"`
+	System  string `json:"system,omitempty"`
+	Model   string `json:"model,omitempty"`
+	Effort  string `json:"effort,omitempty"`
 	// Resume is the session to continue; empty starts a new one.
 	Resume string `json:"resume,omitempty"`
 	// SessionSize and SessionSHA256 describe the server's copy of Resume: a daemon whose local copy
@@ -70,7 +82,9 @@ type Result struct {
 	Error     string `json:"error,omitempty"`
 	Synthesis string `json:"synthesis,omitempty"`
 	// Model is the Claude model the turn ran on: the one claude reported, else the daemon's setting.
-	Model string `json:"model,omitempty"`
+	// Effort is the effort it ran with.
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
 	// Session carries the session jsonl bytes from SessionOffset on (D23).
 	SessionID     string   `json:"session_id,omitempty"`
 	SessionOffset int64    `json:"session_offset"`

@@ -140,12 +140,13 @@ export function removeSandbox(name) {
 
 export const agentState = (page, roomID) => page.evaluate((id) => fetch(`/api/rooms/${id}/agent`).then((r) => r.json()), roomID);
 
-export async function ask(page, roomID, text) {
+// ask says text in the room, presses the persona's button and returns its synthesis.
+export async function ask(page, roomID, text, persona = 'Grill') {
   const before = await page.locator('#messages li.msg.agent').count();
   await page.locator('#body').fill(text);
   await page.locator('#body').press('Enter');
   await expect(page.locator('#messages')).toContainText(text.slice(0, 40));
-  await page.getByRole('button', { name: 'Ask the agent' }).click();
+  await page.getByRole('button', { name: 'Ask ' + persona }).click();
   await expect(page.locator('#messages li.msg.agent')).toHaveCount(before + 1, { timeout: 240_000 });
   const st = await agentState(page, roomID);
   expect(st.turn.status).toBe('done');

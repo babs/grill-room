@@ -33,11 +33,14 @@ var turnGrace = time.Minute
 
 var sessionIDRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
-// startTurn is the agent button (D12): the host, or a participant the host allowed, starts one
-// turn on the host's daemon. 409 "turn in progress" while one runs.
+// startTurn is a persona's button (D12): the host, or a participant the host allowed, runs one
+// turn of that persona on the host's daemon. While another turn runs, or others wait, the press
+// joins the room's queue and the answer is 202 (002-AC17).
 func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, sess session) {
 	var req struct {
 		Fresh bool `json:"fresh"`
+		// PersonaID 0 picks the room's first persona.
+		PersonaID int64 `json:"persona_id"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -61,17 +64,35 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, sess session)
 		httpError(w, http.StatusForbidden, "only the host can start a new session")
 		return
 	}
-	if _, err := s.bus.Store.RunningTurn(ctx, room.ID); err == nil {
-		httpError(w, http.StatusConflict, store.ErrTurnInProgress.Error())
+	persona, ok := s.pressedPersona(w, r, room.ID, req.PersonaID)
+	if !ok {
 		return
 	}
-	t, err := s.prepareTurn(ctx, room, req.Fresh)
+	s.turnMu.Lock()
+	defer s.turnMu.Unlock()
+	busy, err := s.roomBusy(ctx, room.ID)
 	if err != nil {
 		s.serverError(w, "start_turn_failed", err)
 		return
 	}
-	t.ParticipantID, t.DaemonID, t.Host = sess.p.ID, host.id, host.Name
-	err = s.bus.Store.StartTurn(ctx, t)
+	if busy {
+		q := &store.QueuedTurn{RoomID: room.ID, PersonaID: persona.ID, ParticipantID: sess.p.ID, Fresh: req.Fresh}
+		err := s.bus.Store.Enqueue(ctx, q)
+		switch {
+		case errors.Is(err, store.ErrAlreadyQueued):
+			httpError(w, http.StatusConflict, err.Error())
+		case errors.Is(err, store.ErrNotFound):
+			httpError(w, http.StatusNotFound, "no such persona")
+		case err != nil:
+			s.serverError(w, "queue_turn_failed", err)
+		default:
+			s.bus.Notify(room.ID)
+			s.log.Info("turn_queued", zap.String("room", room.ID), zap.Int64("persona", persona.ID), zap.Int64("participant", sess.p.ID))
+			writeJSON(w, http.StatusAccepted, q)
+		}
+		return
+	}
+	t, err := s.launch(ctx, room, persona, req.Fresh, sess.p.ID, host)
 	if errors.Is(err, store.ErrTurnInProgress) {
 		httpError(w, http.StatusConflict, err.Error())
 		return
@@ -80,26 +101,120 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, sess session)
 		s.serverError(w, "start_turn_failed", err)
 		return
 	}
+	writeJSON(w, http.StatusCreated, t)
+}
+
+// pressedPersona loads persona id of room, or the room's first one for 0; it answers the error itself.
+func (s *Server) pressedPersona(w http.ResponseWriter, r *http.Request, room string, id int64) (*store.RoomPersona, bool) {
+	if id != 0 {
+		p, err := s.bus.Store.RoomPersona(r.Context(), room, id)
+		if errors.Is(err, store.ErrNotFound) {
+			httpError(w, http.StatusNotFound, "no such persona")
+			return nil, false
+		}
+		if err != nil {
+			s.serverError(w, "start_turn_failed", err)
+			return nil, false
+		}
+		return p, true
+	}
+	ps, err := s.bus.Store.RoomPersonas(r.Context(), room)
+	if err != nil {
+		s.serverError(w, "start_turn_failed", err)
+		return nil, false
+	}
+	if len(ps) == 0 {
+		httpError(w, http.StatusConflict, "the room has no persona: add one first")
+		return nil, false
+	}
+	return &ps[0], true
+}
+
+// roomBusy reports a running turn or a waiting queue: a new press then waits its turn.
+func (s *Server) roomBusy(ctx context.Context, room string) (bool, error) {
+	if _, err := s.bus.Store.RunningTurn(ctx, room); err == nil {
+		return true, nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return false, err
+	}
+	q, err := s.bus.Store.Queue(ctx, room)
+	return len(q) > 0, err
+}
+
+// launch starts a turn of persona on host's daemon, pressed by participant pid. The caller holds
+// turnMu.
+func (s *Server) launch(ctx context.Context, room *store.Room, persona *store.RoomPersona, fresh bool, pid int64, host *presence) (*store.Turn, error) {
+	t, err := s.prepareTurn(ctx, room, persona, fresh)
+	if err != nil {
+		return nil, err
+	}
+	t.ParticipantID, t.DaemonID, t.Host = pid, host.id, host.Name
+	if err := s.bus.Store.StartTurn(ctx, t); err != nil {
+		return nil, err
+	}
 	// The daemon may have dropped after the presence check, its cleanup finding no turn to fail.
 	if h := s.hostDaemon(room.ID, room.HostParticipantID); h == nil || h.id != host.id {
-		s.failTurn(ctx, room.ID, t.ID, "the host daemon on "+host.Name+" disconnected")
+		s.endTurn(ctx, room.ID, t.ID, "the host daemon on "+host.Name+" disconnected")
 	}
 	// Backstop for a daemon that neither answers nor drops its stream.
 	time.AfterFunc(s.opts.TurnTimeout+turnGrace, func() {
 		s.failTurn(context.Background(), room.ID, t.ID, "timed out after "+s.opts.TurnTimeout.String())
 	})
 	s.bus.Notify(room.ID)
-	s.log.Info("turn_started", zap.String("room", room.ID), zap.Int64("turn", t.ID), zap.Int64("participant", sess.p.ID),
-		zap.Bool("fresh", req.Fresh), zap.Bool("resume", t.Resume != ""))
-	writeJSON(w, http.StatusCreated, t)
+	s.log.Info("turn_started", zap.String("room", room.ID), zap.Int64("turn", t.ID), zap.Int64("persona", persona.ID),
+		zap.Int64("participant", pid), zap.Bool("fresh", fresh), zap.Bool("resume", t.Resume != ""))
+	return t, nil
 }
 
-// prepareTurn reads what the turn needs: the session to resume, the cursors, and the prompt with
-// everything said and annotated since the last successful turn.
-func (s *Server) prepareTurn(ctx context.Context, room *store.Room, fresh bool) (*store.Turn, error) {
+// drain starts the room's next queued turn once no turn runs and the host's daemon is there; the
+// queue waits otherwise.
+func (s *Server) drain(ctx context.Context, roomID string) {
+	// A caller's request may end right after it: the queue must still move.
+	ctx = context.WithoutCancel(ctx)
+	s.turnMu.Lock()
+	defer s.turnMu.Unlock()
+	if _, err := s.bus.Store.RunningTurn(ctx, roomID); !errors.Is(err, store.ErrNotFound) {
+		return
+	}
+	room, err := s.bus.Store.Room(ctx, roomID)
+	if err != nil {
+		return
+	}
+	host := s.hostDaemon(room.ID, room.HostParticipantID)
+	if host == nil || !host.CanHost {
+		return
+	}
+	q, err := s.bus.Store.PopQueued(ctx, room.ID)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			s.log.Error("dequeue_failed", zap.String("room", room.ID), zap.Error(err))
+		}
+		return
+	}
+	persona, err := s.bus.Store.RoomPersona(ctx, room.ID, q.PersonaID)
+	if err == nil {
+		_, err = s.launch(ctx, room, persona, q.Fresh, q.ParticipantID, host)
+	}
+	if err != nil {
+		s.log.Error("queued_turn_failed", zap.String("room", room.ID), zap.Int64("persona", q.PersonaID), zap.Error(err))
+		m := &store.Message{RoomID: room.ID, Kind: store.KindSystem, Sender: "grill-room", Body: "A queued turn could not start."}
+		if persona != nil {
+			m.Sender, m.Body = persona.Name, "The queued turn of "+persona.Name+" could not start."
+		}
+		if err := s.bus.Post(ctx, m); err != nil {
+			s.log.Error("post_failed", zap.String("room", room.ID), zap.Error(err))
+		}
+	}
+}
+
+// prepareTurn reads what the turn of persona needs: the session to resume, the cursors, and the
+// prompt with everything said and annotated since that persona's last successful turn. The
+// persona's text, model and effort are copied onto the turn: a change during it waits for the next.
+func (s *Server) prepareTurn(ctx context.Context, room *store.Room, persona *store.RoomPersona, fresh bool) (*store.Turn, error) {
 	st := s.bus.Store
-	t := &store.Turn{RoomID: room.ID, Fresh: fresh}
-	prev, err := st.LastDoneTurn(ctx, room.ID)
+	t := &store.Turn{RoomID: room.ID, Fresh: fresh, PersonaID: persona.ID, PersonaName: persona.Name, PersonaText: persona.Text,
+		ReqModel: persona.Model, ReqEffort: persona.Effort}
+	prev, err := st.LastDoneTurn(ctx, room.ID, persona.ID)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		prev = &store.Turn{}
@@ -107,7 +222,7 @@ func (s *Server) prepareTurn(ctx context.Context, room *store.Room, fresh bool) 
 		return nil, err
 	}
 	if !fresh && prev.SessionID != "" {
-		if _, err := st.AgentSession(ctx, room.ID, prev.SessionID); err == nil {
+		if _, err := st.AgentSession(ctx, room.ID, persona.ID, prev.SessionID); err == nil {
 			t.Resume = prev.SessionID
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return nil, err
@@ -120,7 +235,6 @@ func (s *Server) prepareTurn(ctx context.Context, room *store.Room, fresh bool) 
 	if t.MessageCursor, err = st.MessageCursor(ctx, room.ID); err != nil {
 		return nil, err
 	}
-	// Keyed on the last done turn: per persona once turns carry one.
 	changes, err := st.MessageChanges(ctx, room.ID, prev.MessageCursor, prev.ChangeCursor, t.ChangeCursor)
 	if err != nil {
 		return nil, err
@@ -137,8 +251,8 @@ func (s *Server) prepareTurn(ctx context.Context, room *store.Room, fresh bool) 
 			break
 		}
 		for _, m := range batch {
-			// The agent's own synthesis is in its session already.
-			if m.ID <= t.MessageCursor && m.Kind != store.KindAgent {
+			// The persona's own synthesis is in its session already; the others' are news to it.
+			if m.ID <= t.MessageCursor && (m.Kind != store.KindAgent || m.PersonaID != persona.ID) {
 				msgs = append(msgs, m)
 			}
 		}
@@ -149,22 +263,24 @@ func (s *Server) prepareTurn(ctx context.Context, room *store.Room, fresh bool) 
 		return nil, err
 	}
 	t.AnnotationCursor = cursor
-	// Threads whose only new messages are the agent's own replies hold nothing new for it.
+	// Threads whose only new messages are the persona's own replies hold nothing new for it.
 	anns = slices.DeleteFunc(anns, func(a store.Annotation) bool {
 		return !slices.ContainsFunc(a.Messages, func(m store.AnnotationMessage) bool {
-			return m.ID > prev.AnnotationCursor && m.By != store.ByAgent
+			return m.ID > prev.AnnotationCursor && !ownMessage(m, persona.ID)
 		})
 	})
 	docs, err := st.Documents(ctx, room.ID)
 	if err != nil {
 		return nil, err
 	}
-	t.Prompt = buildPrompt(room.Name, t.Resume == "", msgs, changes, anns, prev.AnnotationCursor, docPaths(docs))
+	// The presence preamble of spec 002 phase 5 (002-AC28) goes in Preamble.
+	t.Prompt = buildPrompt(promptInput{Room: room.Name, Persona: persona.Name, Self: persona.ID, NewSession: t.Resume == "",
+		Msgs: msgs, Changes: changes, Anns: anns, AnnCursor: prev.AnnotationCursor, Paths: docPaths(docs)})
 	return t, nil
 }
 
-// failTurn fails a running turn and wakes the room; a turn already ended is left alone.
-func (s *Server) failTurn(ctx context.Context, room string, id int64, reason string) {
+// endTurn fails a running turn and wakes the room; a turn already ended is left alone.
+func (s *Server) endTurn(ctx context.Context, room string, id int64, reason string) {
 	m, err := s.bus.Store.FailTurn(ctx, room, id, reason)
 	if err != nil {
 		s.log.Error("fail_turn_failed", zap.String("room", room), zap.Int64("turn", id), zap.Error(err))
@@ -174,6 +290,12 @@ func (s *Server) failTurn(ctx context.Context, room string, id int64, reason str
 		s.log.Warn("turn_failed", zap.String("room", room), zap.Int64("turn", id), zap.String("reason", reason))
 		s.bus.Notify(room)
 	}
+}
+
+// failTurn fails a running turn, then starts the next queued one.
+func (s *Server) failTurn(ctx context.Context, room string, id int64, reason string) {
+	s.endTurn(ctx, room, id, reason)
+	s.drain(ctx, room)
 }
 
 // failDaemonTurn fails the room's running turn when d runs it (D6: a dropped host loses its turn).
@@ -187,6 +309,27 @@ func (s *Server) failDaemonTurn(ctx context.Context, d *store.Daemon, reason str
 	}
 	if t.DaemonID == d.ID {
 		s.failTurn(ctx, d.RoomID, t.ID, reason)
+	}
+}
+
+// cancelQueued drops a queued turn; only the participant who queued it may (002-AC17).
+func (s *Server) cancelQueued(w http.ResponseWriter, r *http.Request, sess session) {
+	id, err := strconv.ParseInt(r.PathValue("queued"), 10, 64)
+	if err != nil {
+		httpError(w, http.StatusNotFound, "no such queued turn")
+		return
+	}
+	err = s.bus.Store.CancelQueued(r.Context(), sess.p.RoomID, id, sess.p.ID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		httpError(w, http.StatusNotFound, "no such queued turn")
+	case errors.Is(err, store.ErrForbidden):
+		httpError(w, http.StatusForbidden, "only who queued a turn can cancel it")
+	case err != nil:
+		s.serverError(w, "cancel_queued_failed", err)
+	default:
+		s.bus.Notify(sess.p.RoomID)
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
@@ -219,9 +362,10 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request, d *store.Daemon,
 	if !ok {
 		return
 	}
-	job := turn.Job{ID: t.ID, Prompt: t.Prompt, Resume: t.Resume, TimeoutSeconds: int(s.opts.TurnTimeout / time.Second)}
+	job := turn.Job{ID: t.ID, Prompt: t.Prompt, Resume: t.Resume, TimeoutSeconds: int(s.opts.TurnTimeout / time.Second),
+		Persona: t.PersonaName, System: t.PersonaText, Model: t.ReqModel, Effort: t.ReqEffort}
 	if t.Resume != "" {
-		data, err := s.bus.Store.AgentSession(r.Context(), d.RoomID, t.Resume)
+		data, err := s.bus.Store.AgentSession(r.Context(), d.RoomID, t.PersonaID, t.Resume)
 		if err != nil {
 			s.serverError(w, "get_job_failed", err)
 			return
@@ -253,7 +397,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request, d *store.Dae
 		httpError(w, http.StatusNotFound, "no such session for this daemon's turn")
 		return
 	}
-	data, err := s.bus.Store.AgentSession(r.Context(), d.RoomID, sid)
+	data, err := s.bus.Store.AgentSession(r.Context(), d.RoomID, t.PersonaID, sid)
 	if err != nil {
 		s.serverError(w, "get_session_failed", err)
 		return
@@ -289,6 +433,8 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 	o := turn.Classify(res.Changes)
 	out := &store.TurnOutcome{
 		Synthesis: sanitize(res.Synthesis, turn.MaxSynthesis), Model: sanitize(res.Model, turn.MaxModel), SessionID: res.SessionID,
+		// An effort claude does not know is not shown as if it ran.
+		Effort:        knownOr(res.Effort, turn.Efforts),
 		SessionOffset: res.SessionOffset, Session: res.Session,
 		Report: store.TurnReport{Rejected: o.Rejected, Ignored: o.Ignored},
 	}
@@ -336,9 +482,10 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 		return
 	}
 	s.bus.Notify(d.RoomID)
+	s.drain(r.Context(), d.RoomID)
 	s.log.Info("turn_done", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.Strings("revised", done.Report.Revised),
 		zap.Strings("created", done.Report.Created), zap.Strings("rejected", done.Report.Rejected), zap.Int("annotated", done.Report.Annotated),
-		zap.Int("closed", done.Report.Closed), zap.String("model", done.Model), zap.Int("session_bytes", len(res.Session)))
+		zap.Int("closed", done.Report.Closed), zap.String("model", done.Model), zap.String("effort", done.Effort), zap.Int("session_bytes", len(res.Session)))
 	writeJSON(w, http.StatusOK, done)
 }
 
@@ -352,4 +499,12 @@ func sanitize(s string, n int) string {
 		return -1
 	}, strings.ToValidUTF8(s, "�"))
 	return truncate(strings.TrimSpace(s), n)
+}
+
+// knownOr returns v when it is one of known, else "".
+func knownOr(v string, known []string) string {
+	if slices.Contains(known, v) {
+		return v
+	}
+	return ""
 }

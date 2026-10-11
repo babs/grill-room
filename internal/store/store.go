@@ -72,8 +72,14 @@ type Message struct {
 	// HTML is Body rendered by render.MessageHTML when written; empty for system lines, and for
 	// lines written before rendering existed.
 	HTML string `json:"html,omitempty"`
-	// Model is the Claude model that wrote an agent synthesis, when its daemon reported one.
+	// PersonaID is the room persona that wrote an agent synthesis; Badge and Colour are its current
+	// ones, empty once it is removed.
+	PersonaID int64  `json:"persona_id,omitempty"`
+	Badge     string `json:"badge,omitempty"`
+	Colour    string `json:"colour,omitempty"`
+	// Model and Effort are what an agent synthesis ran with: the model as claude reported it.
 	Model     string     `json:"model,omitempty"`
+	Effort    string     `json:"effort,omitempty"`
 	EditedAt  *time.Time `json:"edited_at,omitempty"`
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 	// ChangeSeq orders the room's edits and deletes: each one sets it past every other in the room.
@@ -280,7 +286,80 @@ CREATE TABLE message_versions (
 );
 CREATE INDEX message_versions_message ON message_versions(message_id, seq);
 ALTER TABLE turns ADD COLUMN change_cursor INTEGER NOT NULL DEFAULT 0;
+`, `
+CREATE TABLE persona_templates (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	preset TEXT UNIQUE,
+	profile_id INTEGER REFERENCES profiles(id) ON DELETE CASCADE,
+	title TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	CHECK ((preset IS NULL) = (profile_id IS NOT NULL))
+);
+CREATE INDEX persona_templates_profile ON persona_templates(profile_id);
+CREATE TABLE persona_template_versions (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	template_id INTEGER NOT NULL REFERENCES persona_templates(id) ON DELETE CASCADE,
+	n INTEGER NOT NULL,
+	author TEXT NOT NULL,
+	name TEXT NOT NULL,
+	badge TEXT NOT NULL,
+	colour TEXT NOT NULL,
+	text TEXT NOT NULL,
+	model TEXT NOT NULL,
+	effort TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	UNIQUE (template_id, n)
+);
+CREATE TABLE room_personas (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	template_id INTEGER REFERENCES persona_templates(id) ON DELETE SET NULL,
+	template_version INTEGER NOT NULL,
+	name TEXT NOT NULL,
+	badge TEXT NOT NULL,
+	colour TEXT NOT NULL,
+	text TEXT NOT NULL,
+	model TEXT NOT NULL,
+	effort TEXT NOT NULL,
+	every_n INTEGER CHECK (every_n IS NULL OR every_n > 0),
+	self_call INTEGER NOT NULL DEFAULT 0 CHECK (self_call IN (0, 1)),
+	created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX room_personas_name ON room_personas(room_id, name COLLATE NOCASE);
+CREATE INDEX room_personas_template ON room_personas(template_id);
+CREATE TABLE turn_queue (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	persona_id INTEGER NOT NULL UNIQUE REFERENCES room_personas(id) ON DELETE CASCADE,
+	participant_id INTEGER NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+	fresh INTEGER NOT NULL CHECK (fresh IN (0, 1)),
+	created_at TEXT NOT NULL
+);
+CREATE INDEX turn_queue_room ON turn_queue(room_id, id);
+CREATE INDEX turn_queue_participant ON turn_queue(participant_id);
+ALTER TABLE turns ADD COLUMN persona_id INTEGER REFERENCES room_personas(id) ON DELETE SET NULL;
+ALTER TABLE turns ADD COLUMN persona_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE turns ADD COLUMN persona_text TEXT NOT NULL DEFAULT '';
+ALTER TABLE turns ADD COLUMN req_model TEXT NOT NULL DEFAULT '';
+ALTER TABLE turns ADD COLUMN req_effort TEXT NOT NULL DEFAULT '';
+ALTER TABLE turns ADD COLUMN effort TEXT NOT NULL DEFAULT '';
+CREATE INDEX turns_persona ON turns(persona_id, id);
+ALTER TABLE messages ADD COLUMN persona_id INTEGER REFERENCES room_personas(id) ON DELETE SET NULL;
+ALTER TABLE messages ADD COLUMN effort TEXT NOT NULL DEFAULT '';
+ALTER TABLE annotation_messages ADD COLUMN persona_id INTEGER REFERENCES room_personas(id) ON DELETE SET NULL;
+CREATE TABLE agent_sessions_by_persona (
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	persona_id INTEGER NOT NULL REFERENCES room_personas(id) ON DELETE CASCADE,
+	session_id TEXT NOT NULL,
+	data BLOB NOT NULL,
+	updated_at TEXT NOT NULL,
+	PRIMARY KEY (persona_id, session_id)
+);
+CREATE INDEX agent_sessions_room ON agent_sessions_by_persona(room_id);
 `}
+
+// migrationData runs Go code inside the transaction of the migration to version key, after its SQL.
+var migrationData = map[int]func(context.Context, *sql.Tx) error{9: migratePersonas}
 
 // Open opens (and migrates) the database at path.
 func Open(path string) (*Store, error) {
@@ -297,20 +376,31 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	// A preset whose shipped text changed gets a new version: rooms are offered it (002-AC14).
+	if err := ensurePresets(context.Background(), db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
 }
 
-func migrate(ctx context.Context, db *sql.DB) error {
+func migrate(ctx context.Context, db *sql.DB) error { return migrateTo(ctx, db, len(migrations)) }
+
+// migrateTo runs the migrations up to version target; tests build older schemas with it.
+func migrateTo(ctx context.Context, db *sql.DB, target int) error {
 	var version int
 	if err := db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("read schema version: %w", err)
 	}
-	for v := version; v < len(migrations); v++ {
+	for v := version; v < target; v++ {
 		tx, err := db.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("migrate to %d: %w", v+1, err)
 		}
 		_, err = tx.ExecContext(ctx, migrations[v])
+		if f := migrationData[v+1]; err == nil && f != nil {
+			err = f(ctx, tx)
+		}
 		if err == nil {
 			_, err = tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, v+1))
 		}
@@ -355,12 +445,22 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 	return nil
 }
 
-// CreateRoom inserts a room with the given id.
+// CreateRoom inserts a room with the given id, and the Default template's persona (002-AC42).
 func (s *Store) CreateRoom(ctx context.Context, id, name string) (*Room, error) {
 	r := &Room{ID: id, Name: name, CreatedAt: time.Now().UTC()}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO rooms(id, name, created_at) VALUES(?,?,?)`, r.ID, r.Name, r.CreatedAt.Format(time.RFC3339Nano))
+	err := s.withTx(ctx, "create room", func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO rooms(id, name, created_at) VALUES(?,?,?)`, r.ID, r.Name, r.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("create room: %w", err)
+		}
+		def, err := presetID(ctx, tx, PresetDefault)
+		if err != nil {
+			return err
+		}
+		_, _, err = addPersona(ctx, tx, r.ID, def)
+		return err
+	})
 	if err != nil {
-		return nil, fmt.Errorf("create room: %w", err)
+		return nil, err
 	}
 	return r, nil
 }
@@ -611,9 +711,9 @@ func (s *Store) ParticipantByToken(ctx context.Context, tokenHash string) (*Part
 	var p Participant
 	var joined string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger FROM participants p
+		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger, COALESCE(p.profile_id, 0) FROM participants p
 		JOIN invites i ON i.id = p.invite_id
-		WHERE p.token_hash = ? AND i.revoked_at IS NULL`, tokenHash).Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger)
+		WHERE p.token_hash = ? AND i.revoked_at IS NULL`, tokenHash).Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -680,8 +780,8 @@ func insertMessage(ctx context.Context, db execer, m *Message) error {
 		m.HTML = render.MessageHTML(m.Body)
 	}
 	res, err := db.ExecContext(ctx,
-		`INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, html, model) VALUES(?,?,?,?,?,?,?,?)`,
-		m.RoomID, m.TS.Format(time.RFC3339Nano), m.Kind, pid, m.Sender, m.Body, nullStr(m.HTML), m.Model)
+		`INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, html, model, effort, persona_id) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		m.RoomID, m.TS.Format(time.RFC3339Nano), m.Kind, pid, m.Sender, m.Body, nullStr(m.HTML), m.Model, m.Effort, nullID(m.PersonaID))
 	if err != nil {
 		return fmt.Errorf("insert message: %w", err)
 	}
@@ -697,8 +797,10 @@ func (s *Store) Messages(ctx context.Context, roomID string, afterID int64, limi
 }
 
 const (
-	messageFields = `id, ts, room_id, kind, COALESCE(participant_id, 0), sender, body, COALESCE(html, ''), model, edited_at, deleted_at, change_seq`
-	messageCols   = `SELECT ` + messageFields + ` FROM messages `
+	messageFields = `id, ts, room_id, kind, COALESCE(participant_id, 0), sender, body, COALESCE(html, ''), model, edited_at, deleted_at, change_seq,
+		COALESCE(persona_id, 0), effort, COALESCE((SELECT badge FROM room_personas WHERE id = messages.persona_id), ''),
+		COALESCE((SELECT colour FROM room_personas WHERE id = messages.persona_id), '')`
+	messageCols = `SELECT ` + messageFields + ` FROM messages `
 )
 
 func (s *Store) queryMessages(ctx context.Context, where string, args ...any) ([]Message, error) {
@@ -722,7 +824,8 @@ func scanMessage(sc scanner, extra ...any) (*Message, error) {
 	var m Message
 	var ts string
 	var edited, deleted sql.NullString
-	err := sc.Scan(append([]any{&m.ID, &ts, &m.RoomID, &m.Kind, &m.ParticipantID, &m.Sender, &m.Body, &m.HTML, &m.Model, &edited, &deleted, &m.ChangeSeq}, extra...)...)
+	err := sc.Scan(append([]any{&m.ID, &ts, &m.RoomID, &m.Kind, &m.ParticipantID, &m.Sender, &m.Body, &m.HTML, &m.Model, &edited, &deleted, &m.ChangeSeq,
+		&m.PersonaID, &m.Effort, &m.Badge, &m.Colour}, extra...)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

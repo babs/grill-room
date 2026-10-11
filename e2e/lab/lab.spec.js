@@ -84,7 +84,7 @@ test('grill session on the lab, audio over TURN/TLS', async ({ request, baseURL 
     console.log('voice line:', await line.locator('.body').textContent());
 
     await pairDaemon(alice, daemon);
-    await expect(alice.locator('#agent-led')).toHaveAttribute('aria-label', 'Agent ready', { timeout: 60_000 });
+    await expect(alice.locator('button.persona[data-name="Grill"] .led')).toHaveAttribute('aria-label', 'Grill ready', { timeout: 60_000 });
     const synthesis = await ask(alice, room.id, 'Without using any tool, reply in one short sentence: what is this room about?');
     console.log('synthesis:', synthesis);
     expect(synthesis.trim()).not.toBe('');

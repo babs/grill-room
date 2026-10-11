@@ -54,14 +54,37 @@ func textPath(d store.Document) string {
 	return uploadPath(d)
 }
 
+// promptInput is what a turn's prompt tells its persona.
+type promptInput struct {
+	// Preamble opens the prompt; empty until the presence preamble of spec 002 phase 5.
+	Preamble string
+	Room     string
+	// Persona and Self name the persona the turn runs: its own messages are not news to it.
+	Persona    string
+	Self       int64
+	NewSession bool
+	Msgs       []store.Message
+	Changes    []store.MessageChange
+	Anns       []store.Annotation
+	// AnnCursor is the last annotation message the persona's previous turn saw.
+	AnnCursor int64
+	Paths     map[int64]string
+}
+
+// ownMessage reports a thread message the persona self wrote.
+func ownMessage(m store.AnnotationMessage, self int64) bool {
+	return m.By == store.ByAgent && m.PersonaID == self
+}
+
 // buildPrompt is the turn's prompt (docs/agent-workspace.md): the workspace contract, then what
-// was said, changed and annotated since the last successful turn. Annotation messages above
-// annCursor are the new ones.
-func buildPrompt(room string, newSession bool, msgs []store.Message, changes []store.MessageChange, anns []store.Annotation, annCursor int64, paths map[int64]string) string {
+// was said, changed and annotated since the persona's last successful turn. The persona's role is
+// its system prompt, not part of this.
+func buildPrompt(in promptInput) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "You are the agent of the grill session %q. Participants talk in the room; their speech reaches you as transcript lines. Someone pressed the agent button: this is your turn.\n\n", room)
+	b.WriteString(in.Preamble)
+	fmt.Fprintf(&b, "You are %s, an agent of the grill session %q. Participants talk in the room; their speech reaches you as transcript lines. Other agents of the room may write there too, in lines tagged (agent). Someone asked for your turn.\n\n", in.Persona, in.Room)
 	b.WriteString(`Your workspace is the current directory:
-- docs/: your documents, Markdown (.md) or HTML (.html). Edit them or add new ones; every change becomes a revision the room sees. Give a new document a name no upload has: your version of uploads/<id>-plan.md goes in docs/plan-revised.md, for example. A new document named like an upload is stored as <name>-agent.md.
+- docs/: the documents the room's agents write, Markdown (.md) or HTML (.html). Edit them or add new ones; every change becomes a revision the room sees. Give a new document a name no upload has: your version of uploads/<id>-plan.md goes in docs/plan-revised.md, for example. A new document named like an upload is stored as <name>-agent.md.
 - uploads/: documents participants uploaded. They are read-only: never edit, move or delete them; write your own documents from them. Office files have a Markdown copy beside them, ending in .md.
 - transcript/: everything said in the room, one Markdown file per day.
 - annotations.md: every annotation thread on the documents, with its id. Images attached to threads are in attachments/.
@@ -69,9 +92,10 @@ func buildPrompt(room string, newSession bool, msgs []store.Message, changes []s
 - To point the participants at a passage, any document included, uploads too, write annotations-new.json: [{"doc": "<its path here, like uploads/3-plan.md>", "exact": "<the passage, word for word as it reads, without Markdown marks>", "prefix": "<the few words before it>", "suffix": "<the few words after it>", "body": "<your question or remark>"}]. Use it for what needs an answer from someone, not to repeat your synthesis.
 
 `)
-	if newSession {
+	if in.NewSession {
 		b.WriteString("This is a new session: you remember no earlier turn. Read transcript/ for the room's history.\n\n")
 	}
+	msgs, changes, anns := in.Msgs, in.Changes, in.Anns
 	if len(msgs) == 0 && len(changes) == 0 && len(anns) == 0 {
 		b.WriteString("Nothing was said or annotated since your last turn.\n\n")
 	}
@@ -105,7 +129,7 @@ func buildPrompt(room string, newSession bool, msgs []store.Message, changes []s
 	if len(anns) > 0 {
 		b.WriteString("## Annotation threads with new messages\n\n")
 		for _, a := range anns {
-			writeThread(&b, a, paths, annCursor)
+			writeThread(&b, a, in.Paths, in.AnnCursor, in.Self)
 		}
 	}
 	b.WriteString("Your final answer is posted in the room as your synthesis: say what you changed and what you need from the participants. Keep it short.\n")
@@ -124,8 +148,11 @@ func transcriptLine(m store.Message, dated bool) string {
 		return fmt.Sprintf("- %s _%s_\n", ts, body)
 	}
 	var tags []string
-	if m.Kind == store.KindVoice {
+	switch m.Kind {
+	case store.KindVoice:
 		tags = append(tags, "voice")
+	case store.KindAgent:
+		tags = append(tags, "agent")
 	}
 	switch {
 	case m.DeletedAt != nil:
@@ -167,9 +194,9 @@ func describeAnchor(a *anchor.Anchor) string {
 	return fmt.Sprintf("a <%s> element", a.Tag)
 }
 
-// writeThread renders an annotation thread; participants' messages above newAfter are flagged new
-// (0: none is).
-func writeThread(b *strings.Builder, a store.Annotation, paths map[int64]string, newAfter int64) {
+// writeThread renders an annotation thread; messages above newAfter that persona self did not
+// write are flagged new (0: none is).
+func writeThread(b *strings.Builder, a store.Annotation, paths map[int64]string, newAfter, self int64) {
 	fmt.Fprintf(b, "### Annotation %d on %s (%s)\n\nOn %s.", a.ID, paths[a.DocumentID], a.Status, describeAnchor(a.Anchor))
 	if a.Orphaned {
 		b.WriteString(" That text is gone from the latest revision.")
@@ -177,7 +204,7 @@ func writeThread(b *strings.Builder, a store.Annotation, paths map[int64]string,
 	b.WriteString("\n\n")
 	for _, m := range a.Messages {
 		flag := ""
-		if newAfter > 0 && m.ID > newAfter && m.By != store.ByAgent {
+		if newAfter > 0 && m.ID > newAfter && !ownMessage(m, self) {
 			flag = " (new)"
 		}
 		fmt.Fprintf(b, "- **%s**%s: %s\n", m.Author, flag, strings.ReplaceAll(strings.TrimSpace(m.Body), "\n", "\n  "))
@@ -261,7 +288,7 @@ func (s *Server) writeWorkspace(ctx context.Context, w io.Writer, t *store.Turn)
 	}
 	paths := docPaths(docs)
 	for _, a := range anns {
-		writeThread(&b, a, paths, 0)
+		writeThread(&b, a, paths, 0, 0)
 		for _, m := range a.Messages {
 			for _, at := range m.Attachments {
 				if err := file(attachmentPath(at), 0o444, at.Data); err != nil {

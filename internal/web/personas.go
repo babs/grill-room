@@ -1,0 +1,252 @@
+package web
+
+import (
+	"errors"
+	"fmt"
+	"net/http"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+
+	"go.uber.org/zap"
+
+	"github.com/babs/grill-room/internal/store"
+	"github.com/babs/grill-room/internal/turn"
+)
+
+const (
+	maxPersonaText  = 8000
+	maxBadge        = 8
+	maxTemplateName = 60
+	maxEveryN       = 100
+)
+
+var (
+	// A persona name is one word, so "@name" can call it (spec 002 phase 5).
+	personaNameRe = regexp.MustCompile(`^[\p{L}\p{N}_-]{1,30}$`)
+	colourRe      = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+)
+
+// personaReq is a persona's fields in a request; absent fields are nil.
+type personaReq struct {
+	Name     *string `json:"name"`
+	Badge    *string `json:"badge"`
+	Colour   *string `json:"colour"`
+	Text     *string `json:"text"`
+	Model    *string `json:"model"`
+	Effort   *string `json:"effort"`
+	EveryN   *int    `json:"every_n"`
+	SelfCall *bool   `json:"self_call"`
+}
+
+// check cleans the fields present and says what is wrong with the first bad one, "" when none is.
+func (q *personaReq) check() string {
+	if q.Name != nil && !personaNameRe.MatchString(*q.Name) {
+		return "name must be 1 to 30 letters, digits, - or _"
+	}
+	if q.Badge != nil {
+		b, ok := cleanText(*q.Badge, maxBadge, false)
+		if !ok {
+			return fmt.Sprintf("badge must be 1 to %d characters", maxBadge)
+		}
+		*q.Badge = b
+	}
+	if q.Colour != nil && !colourRe.MatchString(*q.Colour) {
+		return "colour must be like #1a2b3c"
+	}
+	if q.Text != nil {
+		t, ok := cleanText(strings.ReplaceAll(*q.Text, "\r\n", "\n"), maxPersonaText, true)
+		if !ok {
+			return fmt.Sprintf("text must be 1 to %d characters", maxPersonaText)
+		}
+		*q.Text = t
+	}
+	if q.Model != nil && *q.Model != "" && !slices.Contains(turn.Models, *q.Model) {
+		return fmt.Sprintf("model must be empty for the host's default, or one of %v", turn.Models)
+	}
+	if q.Effort != nil && *q.Effort != "" && !slices.Contains(turn.Efforts, *q.Effort) {
+		return fmt.Sprintf("effort must be empty for the default, or one of %v", turn.Efforts)
+	}
+	if q.EveryN != nil && (*q.EveryN < 0 || *q.EveryN > maxEveryN) {
+		return fmt.Sprintf("every_n must be 0 (off) to %d", maxEveryN)
+	}
+	return ""
+}
+
+// fields returns the persona the request describes in full; false when a field is missing.
+func (q *personaReq) fields() (store.PersonaFields, bool) {
+	if q.Name == nil || q.Badge == nil || q.Colour == nil || q.Text == nil {
+		return store.PersonaFields{}, false
+	}
+	f := store.PersonaFields{Name: *q.Name, Badge: *q.Badge, Colour: *q.Colour, Text: *q.Text}
+	if q.Model != nil {
+		f.Model = *q.Model
+	}
+	if q.Effort != nil {
+		f.Effort = *q.Effort
+	}
+	return f, true
+}
+
+// listTemplates shows the library to a room member, with the templates their profile published.
+func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request, sess session) {
+	ts, err := s.bus.Store.Templates(r.Context(), sess.p.ProfileID)
+	if err != nil {
+		s.serverError(w, "list_templates_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ts)
+}
+
+// adminTemplates lists the library for the admin, who removes templates by id.
+func (s *Server) adminTemplates(w http.ResponseWriter, r *http.Request) {
+	ts, err := s.bus.Store.Templates(r.Context(), 0)
+	if err != nil {
+		s.serverError(w, "list_templates_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ts)
+}
+
+// publishTemplate adds a template to the library under the member's profile, or with template_id
+// a new version of one that profile published (002-AC13). The member's name in the room signs it.
+func (s *Server) publishTemplate(w http.ResponseWriter, r *http.Request, sess session) {
+	var req struct {
+		personaReq
+		TemplateID int64  `json:"template_id"`
+		Title      string `json:"title"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if sess.p.ProfileID == 0 {
+		httpError(w, http.StatusForbidden, "publishing a template needs a profile")
+		return
+	}
+	if msg := req.check(); msg != "" {
+		httpError(w, http.StatusBadRequest, msg)
+		return
+	}
+	f, ok := req.fields()
+	if !ok {
+		httpError(w, http.StatusBadRequest, "name, badge, colour and text are required")
+		return
+	}
+	var t *store.Template
+	var err error
+	if req.TemplateID != 0 {
+		t, err = s.bus.Store.PublishVersion(r.Context(), sess.p.ProfileID, req.TemplateID, sess.p.Name, f)
+	} else {
+		title := f.Name
+		if req.Title != "" {
+			if title, ok = cleanText(req.Title, maxTemplateName, false); !ok {
+				httpError(w, http.StatusBadRequest, fmt.Sprintf("title must be 1 to %d characters", maxTemplateName))
+				return
+			}
+		}
+		t, err = s.bus.Store.PublishTemplate(r.Context(), sess.p.ProfileID, sess.p.Name, title, f)
+	}
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		httpError(w, http.StatusNotFound, "no such template")
+	case errors.Is(err, store.ErrForbidden):
+		httpError(w, http.StatusForbidden, "only the profile that published a template can add a version")
+	case errors.Is(err, store.ErrLimit):
+		httpError(w, http.StatusConflict, err.Error())
+	case err != nil:
+		s.serverError(w, "publish_template_failed", err)
+	default:
+		t.Mine = true
+		s.log.Info("template_published", zap.Int64("template", t.ID), zap.Int("version", t.Version), zap.Int64("profile", sess.p.ProfileID))
+		writeJSON(w, http.StatusCreated, t)
+	}
+}
+
+// removeTemplate is the admin's: rooms keep their copies, shipped templates stay.
+func (s *Server) removeTemplate(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("template"), 10, 64)
+	if err != nil {
+		httpError(w, http.StatusNotFound, "no such template")
+		return
+	}
+	err = s.bus.Store.RemoveTemplate(r.Context(), id)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		httpError(w, http.StatusNotFound, "no such template")
+	case errors.Is(err, store.ErrPreset):
+		httpError(w, http.StatusConflict, err.Error())
+	case err != nil:
+		s.serverError(w, "remove_template_failed", err)
+	default:
+		s.log.Info("template_removed", zap.Int64("template", id))
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// personaDone answers a persona change: the persona, or the store error as its status. A change
+// posted a line in the chat, which wakes every stream.
+func (s *Server) personaDone(w http.ResponseWriter, sess session, p *store.RoomPersona, m *store.Message, err error, status int) {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		httpError(w, http.StatusNotFound, "no such persona or template")
+	case errors.Is(err, store.ErrNameTaken), errors.Is(err, store.ErrPersonaBusy), errors.Is(err, store.ErrLimit):
+		httpError(w, http.StatusConflict, err.Error())
+	case err != nil:
+		s.serverError(w, "persona_change_failed", err)
+	default:
+		if m != nil {
+			s.bus.Notify(sess.p.RoomID)
+		}
+		if p == nil {
+			w.WriteHeader(status)
+			return
+		}
+		writeJSON(w, status, p)
+	}
+}
+
+func personaID(r *http.Request) int64 {
+	id, _ := strconv.ParseInt(r.PathValue("persona"), 10, 64)
+	return id
+}
+
+// addPersona copies a template into the room; any member may (002-AC14).
+func (s *Server) addPersona(w http.ResponseWriter, r *http.Request, sess session) {
+	var req struct {
+		TemplateID int64 `json:"template_id"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	p, m, err := s.bus.Store.AddPersona(r.Context(), sess.p.RoomID, req.TemplateID, sess.p)
+	s.personaDone(w, sess, p, m, err, http.StatusCreated)
+}
+
+// editPersona changes a room persona; any member may, and a running turn keeps the persona it
+// started with (002-AC15).
+func (s *Server) editPersona(w http.ResponseWriter, r *http.Request, sess session) {
+	var req personaReq
+	if !decode(w, r, &req) {
+		return
+	}
+	if msg := req.check(); msg != "" {
+		httpError(w, http.StatusBadRequest, msg)
+		return
+	}
+	patch := store.PersonaPatch{Name: req.Name, Badge: req.Badge, Colour: req.Colour, Text: req.Text, Model: req.Model, Effort: req.Effort,
+		EveryN: req.EveryN, SelfCall: req.SelfCall}
+	p, m, err := s.bus.Store.EditPersona(r.Context(), sess.p.RoomID, personaID(r), patch, sess.p)
+	s.personaDone(w, sess, p, m, err, http.StatusOK)
+}
+
+// updatePersona takes the template's newer version the room was offered (002-AC14).
+func (s *Server) updatePersona(w http.ResponseWriter, r *http.Request, sess session) {
+	p, m, err := s.bus.Store.UpdatePersona(r.Context(), sess.p.RoomID, personaID(r), sess.p)
+	s.personaDone(w, sess, p, m, err, http.StatusOK)
+}
+
+func (s *Server) removePersona(w http.ResponseWriter, r *http.Request, sess session) {
+	m, err := s.bus.Store.RemovePersona(r.Context(), sess.p.RoomID, personaID(r), sess.p)
+	s.personaDone(w, sess, nil, m, err, http.StatusNoContent)
+}

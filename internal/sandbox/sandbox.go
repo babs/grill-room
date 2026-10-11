@@ -11,7 +11,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -189,11 +191,18 @@ func (s *Sandbox) remove(ctx context.Context) {
 	}
 }
 
+// personaFile holds the persona's text in the sandbox home, out of the workspace the agent edits.
+const personaFile = ".grill-room/persona.md"
+
 // Request is one claude -p invocation.
 type Request struct {
 	// Prompt goes on stdin: argv caps one argument at 128 KiB, a turn's transcript can exceed it.
 	Prompt string
+	// System is appended to Claude Code's system prompt: the persona's text.
+	System string
 	Model  string
+	// Effort is passed to --effort; empty keeps Claude Code's default.
+	Effort string
 	// Resume is the session id to continue; empty starts a new session.
 	Resume string
 	Args   []string
@@ -257,6 +266,16 @@ func (s *Sandbox) runClaude(ctx context.Context, req Request) (*Result, error) {
 	if req.Model != "" {
 		args = append(args, "--model", req.Model)
 	}
+	if req.Effort != "" {
+		args = append(args, "--effort", req.Effort)
+	}
+	if req.System != "" {
+		if err := s.writeHome(ctx, map[string][]byte{personaFile: []byte(req.System)}); err != nil {
+			return nil, fmt.Errorf("write persona: %w", err)
+		}
+		// Snapshot off: a resumed session would otherwise keep the persona text of its first turn.
+		args = append(args, "--append-system-prompt-file", home+"/"+personaFile, "--system-prompt-snapshot", "off")
+	}
 	if req.Resume != "" {
 		args = append(args, "--resume", req.Resume)
 	}
@@ -291,17 +310,14 @@ func (s *Sandbox) runClaude(ctx context.Context, req Request) (*Result, error) {
 // refused refresh) and the oauthAccount stub, which skips the profile fetch only while under 24 h old.
 func (s *Sandbox) writeStubs(ctx context.Context) error {
 	nowMS := time.Now().UnixMilli()
-	files := []struct {
-		name string
-		v    any
-	}{
-		{".claude/.credentials.json", map[string]any{"claudeAiOauth": map[string]any{
+	files := map[string]any{
+		".claude/.credentials.json": map[string]any{"claudeAiOauth": map[string]any{
 			"accessToken": s.dummy, "refreshToken": "grill-room-dummy-refresh",
 			"expiresAt": time.Now().AddDate(10, 0, 0).UnixMilli(), "subscriptionType": "max",
 			"scopes": []string{"user:inference", "user:profile", "user:sessions:claude_code"},
-		}}},
+		}},
 		// Fake identity: keeps the host's account out of uploaded sessions (S2).
-		{".claude.json", map[string]any{"oauthAccount": map[string]any{
+		".claude.json": map[string]any{"oauthAccount": map[string]any{
 			"accountUuid":           "00000000-0000-4000-8000-000000000001",
 			"emailAddress":          "agent@grill-room.invalid",
 			"organizationUuid":      "00000000-0000-4000-8000-000000000002",
@@ -310,33 +326,53 @@ func (s *Sandbox) writeStubs(ctx context.Context) error {
 			"subscriptionCreatedAt": "2025-01-01T00:00:00Z",
 			"ccOnboardingFlags":     map[string]any{},
 			"profileFetchedAt":      nowMS,
-		}}},
+		}},
 	}
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: ".claude/", Mode: 0o700, ModTime: time.Now()}); err != nil {
-		return fmt.Errorf("stubs: %w", err)
-	}
-	for _, f := range files {
-		b, err := json.Marshal(f.v)
+	raw := map[string][]byte{}
+	for name, v := range files {
+		b, err := json.Marshal(v)
 		if err != nil {
 			return fmt.Errorf("stubs: %w", err)
 		}
-		if err := tw.WriteHeader(&tar.Header{Name: f.name, Mode: 0o600, Size: int64(len(b)), ModTime: time.Now()}); err != nil {
-			return fmt.Errorf("stubs: %w", err)
-		}
-		if _, err := tw.Write(b); err != nil {
-			return fmt.Errorf("stubs: %w", err)
-		}
+		raw[name] = b
 	}
-	if err := tw.Close(); err != nil {
-		return fmt.Errorf("stubs: %w", err)
-	}
-	// tar runs as the agent user, so the files end up owned by it.
-	if _, err := s.run(ctx, &buf, "exec", "-i", s.container(), "tar", "-x", "-C", home); err != nil {
+	if err := s.writeHome(ctx, raw); err != nil {
 		return fmt.Errorf("write stubs: %w", err)
 	}
 	return nil
+}
+
+// writeHome writes files, by path under the sandbox home, owner-only, creating their directories.
+func (s *Sandbox) writeHome(ctx context.Context, files map[string][]byte) error {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	now := time.Now()
+	dirs := map[string]bool{}
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if dir := path.Dir(name); dir != "." && !dirs[dir] {
+			dirs[dir] = true
+			if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: dir + "/", Mode: 0o700, ModTime: now}); err != nil {
+				return err
+			}
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: int64(len(files[name])), ModTime: now}); err != nil {
+			return err
+		}
+		if _, err := tw.Write(files[name]); err != nil {
+			return err
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	// tar runs as the agent user, so the files end up owned by it.
+	_, err := s.run(ctx, &buf, "exec", "-i", s.container(), "tar", "-x", "-C", home)
+	return err
 }
 
 var sessionIDRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
