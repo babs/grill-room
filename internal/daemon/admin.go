@@ -71,6 +71,8 @@ func (a *Admin) Handler() http.Handler {
 	index := func(w http.ResponseWriter, r *http.Request) { http.ServeFileFS(w, r, ui, "ui/index.html") }
 	mux.HandleFunc("GET /{$}", index)
 	mux.HandleFunc("GET /s/{code}", index)
+	mux.HandleFunc("GET /favicon.ico", asset("ui/favicon.ico", "image/x-icon"))
+	mux.HandleFunc("GET /site.webmanifest", asset("ui/site.webmanifest", "application/manifest+json"))
 	static, _ := fs.Sub(ui, "ui") // cannot fail: "ui" is a valid embedded path
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
 	mux.HandleFunc("POST /api/session", a.session)
@@ -100,6 +102,15 @@ func (a *Admin) Handler() http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// asset serves an embedded file with a fixed type: Go's MIME table lacks .ico and .webmanifest,
+// and the host's mime.types differs between machines.
+func asset(name, ctype string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", ctype)
+		http.ServeFileFS(w, r, ui, name)
+	}
 }
 
 func (a *Admin) auth(next http.HandlerFunc) http.Handler {

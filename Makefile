@@ -25,7 +25,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: build release run test test-docker e2e e2e-voice e2e-agent-live e2e-install e2e-lab stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: build release run test test-docker e2e e2e-voice e2e-agent-live e2e-install e2e-lab stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -189,6 +189,21 @@ k8s-delete: k8s-render k8s-check
 
 # Office fixtures for the pandoc tests, written by the pandoc release the image ships.
 FIXTURES := internal/convert/testdata
+# Favicons and app icons from the logo (D32), into both embedded UIs. Needs Inkscape and ImageMagick.
+# The apple-touch-icon is opaque: iOS paints transparent corners black and rounds them itself.
+LOGO      := design/icons/round2/r2-03-b-three-quarter.svg
+ICON_DIRS := internal/web/ui internal/daemon/ui
+icons:
+	tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
+	for n in 16 32 48 192 512; do inkscape '$(LOGO)' --export-type=png -w $$n -h $$n -o "$$tmp/$$n.png" || exit 1; done && \
+	inkscape '$(LOGO)' --export-type=png -w 180 -h 180 --export-background='#159F8C' --export-background-opacity=1 -o "$$tmp/180.png" && \
+	magick "$$tmp/16.png" "$$tmp/32.png" "$$tmp/48.png" "$$tmp/favicon.ico" && \
+	for d in $(ICON_DIRS); do \
+	  mkdir -p "$$d/icons" && cp '$(LOGO)' "$$d/logo.svg" && cp "$$tmp/favicon.ico" "$$d/favicon.ico" && \
+	  cp "$$tmp/32.png" "$$d/icons/icon-32.png" && cp "$$tmp/180.png" "$$d/icons/apple-touch-icon.png" && \
+	  cp "$$tmp/192.png" "$$d/icons/icon-192.png" && cp "$$tmp/512.png" "$$d/icons/icon-512.png" || exit 1; \
+	done
+
 fixtures:
 	for f in docx odt pptx; do \
 	  docker run --rm -u "$$(id -u):$$(id -g)" -v "$(CURDIR)/$(FIXTURES):/data" pandoc/minimal:3.11 fixture.md -o fixture.$$f || exit 1; \

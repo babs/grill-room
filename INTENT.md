@@ -63,7 +63,7 @@ Built for product people and PMs, not only engineers. Joining a room needs a bro
 | D29 | Any participant can upload documents into the room. Uploads land in the store (D10) and in the agent's workspace on the next turn. |
 | D30 | Uploads are read-only sources: annotatable, never revised by the agent, which writes its own documents from them. MD and HTML render in gld, PDF and images go to Claude as-is, DOCX/ODT/PPTX get a pandoc copy in MD for annotation next to the original. |
 | D31 | Uploads are blobs inside SQLite, 20 MB max per file, 200 MB max per room (defaults, configurable). |
-| D32 | Logo and favicon: `design/icons/round2/r2-03-b-three-quarter.svg` (people around a Weber, 3/4 view). One asset; modern browsers render favicons at 32px and up. |
+| D32 | Logo and favicon: `design/icons/round2/r2-03-b-three-quarter.svg` (people around a Weber, 3/4 view). One source asset. `make icons` renders PNGs, an opaque apple-touch-icon and a 16/32/48 `favicon.ico` from it, because Safari, iOS and some Android surfaces ignore SVG favicons. |
 | D33 | The agent runtime is `claude -p` for now. Custom tools come as MCP via `--mcp-config` if files fall short; an own Agent SDK binary only for a concrete need the CLI cannot meet. |
 | D34 | LiveKit needs no exposed UDP: embedded TURN behind traefik TLS termination on 443 (`HostSNI`), plus ICE over TCP. Traefik HTTP/3 (QUIC) does not help WebRTC media (S4). |
 
