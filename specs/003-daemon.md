@@ -112,6 +112,7 @@ Releases are built and signed keyless by GitHub Actions, and the sandbox image i
 
 ### Turn contract
 - [ ] **AC22** Every prompt's preamble has a "Why you are running" line naming the cause: pressed by a person, an @mention with its start, a call from a persona, every N rounds, or a re-run after a conflict on a document.
+- [ ] **AC32** The presence preamble shows a short profile uuid next to each human name ("Alice ·a1b2"), so two people with the same display name stay distinct.
 - [ ] **AC23** Transcripts are split into chunks `transcript/<day>/<NNN>.md` of about 200 lines, and a full chunk never changes. On a turn after new messages, only the last chunk, plus any chunk with an edited message, is transferred.
 - [ ] **AC24** Each persona has an `autocompact` setting (auto, or a token count) passed to `claude -p`. The persona panel and the monitoring show each session's context use as a percentage of the window.
 - [ ] **AC25** "New session with handoff" (host) runs a last turn that writes `docs/_handoff-<persona>.md`, then starts a new session that reads it plus the transcripts. Above 80% context use, a banner offers it.
@@ -182,12 +183,12 @@ Releases are built and signed keyless by GitHub Actions, and the sandbox image i
 
 ### Phase 6 — Turn contract
 - Work: the "why" line, transcript chunks, autocompact and context measurement, handoff session and banner.
-- **Covers**: AC22, AC23, AC24, AC25
+- **Covers**: AC22, AC23, AC24, AC25, AC32
 - **Data model impact**: `room_personas.autocompact`; `turns.cause`; `agent_sessions.context_tokens`
 - **DoD**: preamble golden updated; bytes test on chunks; handoff e2e with the fake claude; a live haiku turn shows context %.
 
 ### Phase 7 — Admin page and monitoring
-- Work: the single page (instances, rooms, accounts, settings, monitoring), `monitor.db`, views, CSV, retention and alerts.
+- Work: the single page (instances, rooms, accounts, settings, monitoring), `monitor.db`, views, CSV, retention and alerts. The page is written in Preact + htm + @preact/signals, vendored as ESM with no build step, and typed through JSDoc checked by `tsc --checkJs` in CI.
 - **Covers**: AC26, AC27, AC28, AC29
 - **Data model impact**: local `monitor.db` only
 - **DoD**: Playwright on the page, mobile width included; retention and alert tests.
@@ -231,4 +232,5 @@ Daemon (local):
 - Default global cap is 2, to be tuned after the first sessions using the queue-wait metrics (grill Q5).
 - The prompt stays built at turn start, so messages between a call-out and the start are included (grill Q6 check).
 - The install script downloads from the instance and checks the signature when cosign or minisign is present. After that, the GitHub channel brings project-signed updates (grill Q9).
-- Signing is cosign keyless, pending spike S7; minisign is the fallback (grill Q10).
+- Signing is cosign keyless: spike S7 found it works offline and adds about 12 MB per binary (grill Q10).
+- New UIs use Preact + htm + signals, vendored with no build step; `room.js` migrates panel by panel when touched. A build step stays possible later through a multi-stage build that runs before `go build` (grill 004).
