@@ -4,7 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <title>grill-room</title>
+<link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
 <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+<link rel="icon" href="/static/icons/icon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<meta name="theme-color" content="#159F8C">
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/vendor/livekit-client.umd.js" defer></script>
 <script src="/static/bridge.js" defer></script>
@@ -14,6 +19,12 @@
 <header>
   <img src="/static/logo.svg" alt="" class="logo" width="32" height="32">
   <h1 id="room-name">grill-room</h1>
+  <button type="button" id="rename-open" class="small">Rename</button>
+  <form id="rename" hidden>
+    <input id="rename-input" maxlength="100" aria-label="Room name" required>
+    <button type="submit">Save</button>
+    <button type="button" id="rename-cancel">Cancel</button>
+  </form>
   <div id="voice" hidden>
     <span id="stt-status" role="status"></span>
     <button type="button" id="voice-join">Join audio</button>
@@ -22,23 +33,75 @@
     <button type="button" id="voice-leave" hidden>Leave audio</button>
   </div>
   <div id="agent">
-    <span id="agent-led" class="led" role="img" aria-label="Agent offline"></span>
+    <div id="persona-buttons" role="group" aria-label="Agents"></div>
+    <button type="button" id="personas-open" class="small">Personas</button>
+    <span id="chain-count" title="Agent-triggered turns since a human last took the lead"></span>
     <span id="agent-status" role="status"></span>
-    <button type="button" id="agent-press" disabled>Ask the agent</button>
-    <button type="button" id="agent-fresh" hidden disabled>New session</button>
   </div>
-  <span id="me"></span>
+  <a id="me" href="/profile" title="Your profile"></a>
 </header>
 <p id="voice-error" role="alert" hidden></p>
 <div id="voice-audio" hidden></div>
 <p id="banner" role="alert" hidden></p>
 <p id="reconnecting" role="status" hidden>Reconnecting…</p>
+<div id="queue" hidden>
+  <span>Queued:</span>
+  <ol id="queue-list" aria-label="Queued turns"></ol>
+</div>
+<p id="chain-unlimited" role="alert" hidden>Chain limit suspended: agents may call each other without end. The host cap still applies.
+  <button type="button" id="chain-restore" class="small">Restore the limit</button></p>
+<p id="chain-paused" role="alert" hidden><span id="chain-paused-text"></span>
+  <button type="button" id="chain-rearm" class="small">Re-arm</button>
+  <button type="button" id="chain-suspend" class="small">Suspend limit</button></p>
+<section id="approvals" aria-label="Waiting for the host" hidden>
+  <ul id="approval-list"></ul>
+</section>
+<dialog id="personas" aria-labelledby="personas-title">
+  <div class="dialog-head">
+    <h2 id="personas-title">Personas</h2>
+    <button type="button" id="personas-close" class="small">Close</button>
+  </div>
+  <p class="hint">Each persona is an agent with its own Claude session. Changes apply from its next turn.</p>
+  <p id="personas-status" role="status"></p>
+  <div id="persona-list"></div>
+  <form id="chain-form">
+    <label>Chain budget <input id="chain-budget" type="number" min="1" max="1000" required></label>
+    <button type="submit">Set</button>
+  </form>
+  <p class="hint">Turns agents start one after another (every N rounds, @name in a synthesis) before the chain pauses. A press or an @name from a person starts it over.</p>
+  <form id="persona-add">
+    <label>Add from the library <select id="persona-template" required></select></label>
+    <button type="submit">Add</button>
+  </form>
+</dialog>
+<dialog id="skills-disclaimer" aria-labelledby="skills-disclaimer-title">
+  <h2 id="skills-disclaimer-title">Before you turn on a skill</h2>
+  <ul>
+    <li>A skill's scripts run in the host's sandbox, on the host's machine, with the room's documents and transcript in reach.</li>
+    <li>Anyone in the room can ask the agent to print a skill's files. Put no secret in a skill.</li>
+    <li>The sandbox reaches the Internet only through the host's egress allowlist, with no inspection of what goes through. A script can send room data to any allowed domain that accepts uploads, GitHub included when the script carries a token.</li>
+  </ul>
+  <p class="hint">This shows once for your profile.</p>
+  <form method="dialog" class="pairing-actions">
+    <button type="submit" value="cancel">Cancel</button>
+    <button type="submit" value="accept" id="skills-accept">I understand, turn it on</button>
+  </form>
+</dialog>
 <section id="pairing" aria-labelledby="pairing-title" hidden>
   <h2 id="pairing-title">Pair an agent daemon</h2>
   <p id="pairing-text"></p>
   <div class="pairing-actions" id="pairing-actions">
     <button type="button" id="pairing-deny">Deny</button>
     <button type="button" id="pairing-approve">Approve</button>
+  </div>
+</section>
+<section id="recovery" aria-labelledby="recovery-title" hidden>
+  <h2 id="recovery-title">Save your recovery link</h2>
+  <p>This browser now holds your profile, which follows you from room to room. Open this link on another device to use the same profile there. It is shown only once, and whoever holds it gets your profile.</p>
+  <input id="recovery-link" readonly aria-label="Recovery link">
+  <div class="pairing-actions">
+    <button type="button" id="recovery-copy">Copy link</button>
+    <button type="button" id="recovery-done">Done</button>
   </div>
 </section>
 <div class="layout">
@@ -51,6 +114,17 @@
       <input type="file" id="upload-input" accept=".md,.markdown,.html,.htm,.pdf,.png,.jpg,.jpeg,.gif,.webp,.svg,.docx,.odt,.pptx">
     </label>
     <p id="upload-status" role="status"></p>
+    <details id="invites">
+      <summary>Invite people</summary>
+      <p>Anyone holding an invite link can join and read the room.</p>
+      <button type="button" id="invite-create">Create an invite link</button>
+      <p id="invite-new" hidden>
+        <input id="invite-link" readonly aria-label="New invite link">
+        <button type="button" id="invite-copy">Copy invite</button>
+      </p>
+      <h3>Your invites</h3>
+      <ul id="invite-list"></ul>
+    </details>
     <details id="host-agent" hidden>
       <summary>Host the agent</summary>
       <p>Runs the agent on your machine with your Claude subscription. Needs Docker.</p>

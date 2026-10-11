@@ -70,6 +70,11 @@ spec:
                 secretKeyRef: { name: grill-room, key: stt-token }
             - name: GRILL_ROOM_SANDBOX_IMAGE
               value: "${GRILL_ROOM_SANDBOX_IMAGE}"
+            # Empty turns email sign-in off.
+            - name: GRILL_ROOM_SMTP_ADDR
+              value: "${GRILL_ROOM_SMTP_ADDR}"
+            - name: GRILL_ROOM_SMTP_FROM
+              value: "${GRILL_ROOM_SMTP_FROM}"
           ports:
             - { name: http, containerPort: 7680 }
             - { name: metrics, containerPort: 7681 }

@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>grill-room daemon</title>
+<link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+<link rel="icon" href="/static/icons/icon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<meta name="theme-color" content="#159F8C">
 <link rel="stylesheet" href="/static/admin.css">
 <script src="/static/admin.js" defer></script>
 </head>
@@ -43,6 +49,34 @@
       <dt>Hosting the agent</dt><dd id="can-host"></dd>
     </dl>
     <button type="button" id="recheck">Check again</button>
+  </section>
+  <section aria-labelledby="cap-title">
+    <h2 id="cap-title">Host cap</h2>
+    <p class="hint">A persona asking for more runs at this cap until you approve it in the room.</p>
+    <form id="settings-form">
+      <label>Max model <select id="max-model"><option value="">no cap</option></select></label>
+      <label>Max effort <select id="max-effort"><option value="">no cap</option></select></label>
+      <label><input id="approve-all" type="checkbox"> Approve every new persona and persona change</label>
+      <button type="submit">Save</button>
+      <span id="settings-status" role="status"></span>
+    </form>
+  </section>
+  <section aria-labelledby="egress-title">
+    <h2 id="egress-title">Egress allowlist</h2>
+    <p class="hint">The sandbox reaches these domains, and nothing else, through its proxy and over HTTPS only. A leading dot, as in .example.com, also allows every subdomain. Anthropic's hosts stay blocked whatever the list says.</p>
+    <ul id="allowlist"></ul>
+    <form id="allowlist-form">
+      <label>Domain <input id="allowlist-add" required placeholder="example.com" size="30" autocomplete="off" spellcheck="false"></label>
+      <button type="submit">Allow</button>
+      <span id="allowlist-status" role="status"></span>
+    </form>
+    <h3 id="denied-title">Denied requests</h3>
+    <p class="hint">What the proxy refused in the current room's sandbox, newest first.</p>
+    <p id="denied-empty">None yet.</p>
+    <table id="denied" aria-labelledby="denied-title" hidden>
+      <thead><tr><th scope="col">Time</th><th scope="col">Host</th></tr></thead>
+      <tbody></tbody>
+    </table>
   </section>
   <section aria-labelledby="logs-title">
     <h2 id="logs-title">Logs</h2>

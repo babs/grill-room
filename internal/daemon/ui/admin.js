@@ -54,7 +54,80 @@ const pairingText = {
   paired: 'Paired.',
 };
 
-function render({ status: s, logs }) {
+// renderSettings fills the cap form, unless the user is changing it.
+function renderSettings(set, models, efforts) {
+  const form = $('settings-form');
+  if (form.dataset.dirty) return;
+  for (const [id, values] of [['max-model', models], ['max-effort', efforts]]) {
+    const sel = $(id);
+    if (sel.options.length === 1) {
+      for (const v of values) sel.add(new Option(v, v));
+    }
+  }
+  $('max-model').value = set.max_model;
+  $('max-effort').value = set.max_effort;
+  $('approve-all').checked = set.approve_all;
+}
+
+// renderAllowlist lists the domains, each with its remove button; unchanged lists keep their DOM.
+let shownAllowlist = '';
+function renderAllowlist(list) {
+  const key = JSON.stringify(list);
+  if (key === shownAllowlist) return;
+  shownAllowlist = key;
+  const ul = $('allowlist');
+  ul.replaceChildren();
+  if (!list.length) {
+    const li = document.createElement('li');
+    li.textContent = 'No domain: the sandbox reaches nothing.';
+    ul.append(li);
+  }
+  for (const domain of list) {
+    const li = document.createElement('li');
+    const name = document.createElement('code');
+    name.textContent = domain;
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.textContent = 'Remove';
+    rm.setAttribute('aria-label', 'Remove ' + domain);
+    rm.addEventListener('click', () => saveAllowlist(list.filter((d) => d !== domain)));
+    li.append(name, ' ', rm);
+    ul.append(li);
+  }
+}
+
+let currentAllowlist = [];
+function saveAllowlist(list) {
+  $('allowlist-status').textContent = '';
+  return api('POST', '/api/allowlist', { allowlist: list })
+    .then(() => api('GET', '/api/status').then(render))
+    .then(() => { $('allowlist-status').textContent = 'Saved.'; return true; })
+    .catch((err) => { $('allowlist-status').textContent = err.message; return false; });
+}
+
+function renderDenied(list) {
+  const body = $('denied').tBodies[0];
+  body.replaceChildren();
+  for (const d of list) {
+    const tr = body.insertRow();
+    tr.insertCell().textContent = new Date(d.time).toLocaleString();
+    tr.insertCell().textContent = d.host;
+  }
+  $('denied').hidden = !list.length;
+  $('denied-empty').hidden = !!list.length;
+}
+
+async function refreshDenied() {
+  try {
+    renderDenied((await api('GET', '/api/denied')).denied);
+  } catch (err) {
+    $('denied-empty').hidden = false;
+    $('denied-empty').textContent = err.message;
+  }
+  if (!stopped) setTimeout(refreshDenied, 5000);
+}
+
+function render({ status: s, logs, models, efforts }) {
   $('host').textContent = s.host + ' · ' + s.version;
   $('room').textContent = s.room || 'No room yet: paste the room link below.';
   let text = pairingText[s.pairing] || s.pairing;
@@ -90,6 +163,9 @@ function render({ status: s, logs }) {
     $('update-status').textContent = u.running ? 'Downloading…' : u.error || '';
   }
   mark($('can-host'), s.can_host, s.can_host ? 'available' : 'unavailable: ' + s.reason);
+  renderSettings(s.settings, models, efforts);
+  currentAllowlist = s.allowlist;
+  renderAllowlist(s.allowlist);
   const logs$ = $('logs');
   const atBottom = logs$.scrollTop + logs$.clientHeight >= logs$.scrollHeight - 20;
   logs$.textContent = logs.join('\n');
@@ -112,6 +188,23 @@ $('room-form').addEventListener('submit', (e) => {
   api('POST', '/api/room', { url: $('room-url').value })
     .then(() => api('GET', '/api/status').then(render))
     .catch((err) => { $('room-error').textContent = err.message; });
+});
+$('settings-form').addEventListener('input', () => { $('settings-form').dataset.dirty = '1'; });
+$('settings-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  $('settings-status').textContent = '';
+  api('POST', '/api/settings', { max_model: $('max-model').value, max_effort: $('max-effort').value, approve_all: $('approve-all').checked })
+    .then(() => {
+      delete $('settings-form').dataset.dirty;
+      $('settings-status').textContent = 'Saved.';
+      return api('GET', '/api/status').then(render);
+    })
+    .catch((err) => { $('settings-status').textContent = err.message; });
+});
+$('allowlist-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const domain = $('allowlist-add').value.trim();
+  saveAllowlist([...currentAllowlist, domain]).then((ok) => { if (ok) $('allowlist-add').value = ''; });
 });
 $('recheck').addEventListener('click', () => {
   api('POST', '/api/recheck').then(() => api('GET', '/api/status').then(render)).catch((err) => fail(err.message));
@@ -142,4 +235,5 @@ session().then((t) => {
   token = t;
   $('main').hidden = false;
   refresh();
+  refreshDenied();
 }).catch((err) => fail(err.message));

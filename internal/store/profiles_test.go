@@ -1,0 +1,486 @@
+package store
+
+import (
+	"bytes"
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"testing"
+	"time"
+)
+
+// joinWithProfile adds a room with an invite and joins it as name under prof.
+func joinWithProfile(t *testing.T, s *Store, room, name string, prof JoinProfile) *Participant {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := s.CreateRoom(ctx, room, "Room "+room); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateInvite(ctx, room, "inv-"+room, 0); err != nil {
+		t.Fatal(err)
+	}
+	p, _, err := s.Join(ctx, "inv-"+room, name, "tok-"+room, prof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// 002-AC1 002-AC2: the first join creates the profile, a later one attaches to it, and the profile
+// lists the rooms it still has access to.
+func TestJoinCreatesThenAttachesProfile(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
+	if a.ProfileID == 0 {
+		t.Fatal("first join created no profile")
+	}
+	b := joinWithProfile(t, s, "b", "Ali", JoinProfile{ID: a.ProfileID})
+	if b.ProfileID != a.ProfileID {
+		t.Fatalf("second join: profile %d, want %d", b.ProfileID, a.ProfileID)
+	}
+	joinWithProfile(t, s, "c", "Stranger", JoinProfile{})
+	prof, err := s.ProfileBySession(ctx, "sess")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prof.Rooms) != 2 || prof.Rooms[0].RoomID != "b" || prof.Rooms[0].Name != "Ali" || prof.Rooms[1].RoomID != "a" {
+		t.Fatalf("rooms: %+v", prof.Rooms)
+	}
+	if _, err := s.RevokeInvite(ctx, "b", b.InviteID); err != nil {
+		t.Fatal(err)
+	}
+	if prof, _ = s.ProfileBySession(ctx, "sess"); len(prof.Rooms) != 1 || prof.Rooms[0].RoomID != "a" {
+		t.Fatalf("rooms after a revoke: %+v", prof.Rooms)
+	}
+	if _, err := s.ProfileBySession(ctx, "nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown session: %v", err)
+	}
+	// A failed join creates no profile.
+	if _, _, err := s.Join(ctx, "nope", "X", "t", JoinProfile{RecoveryHash: "rec2", SessionHash: "sess2"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("bad invite: %v", err)
+	}
+	if _, err := s.ProfileBySession(ctx, "sess2"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("profile left by a failed join: %v", err)
+	}
+}
+
+// 002-AC3
+func TestSignInByRecovery(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
+	prof, err := s.SignInByRecovery(ctx, "rec", "other-device")
+	if err != nil || prof.ID != a.ProfileID || len(prof.Rooms) != 1 {
+		t.Fatalf("recover: %+v %v", prof, err)
+	}
+	if p, err := s.ProfileParticipant(ctx, "other-device", "a"); err != nil || p.ID != a.ID {
+		t.Fatalf("participant through the new session: %+v %v", p, err)
+	}
+	if _, err := s.SignInByRecovery(ctx, "sess", "x"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a session hash is no recovery: %v", err)
+	}
+}
+
+func TestProfileParticipant(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
+	joinWithProfile(t, s, "b", "Bob", JoinProfile{RecoveryHash: "rec-b", SessionHash: "sess-b"})
+	if _, err := s.ProfileParticipant(ctx, "sess", "b"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another profile's room: %v", err)
+	}
+	// Joining the same room again: the newest participant wins.
+	again, _, err := s.Join(ctx, "inv-a", "Alice 2", "tok-a2", JoinProfile{ID: a.ProfileID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.ProfileParticipant(ctx, "sess", "a"); err != nil || p.ID != again.ID || p.ProfileID != a.ProfileID {
+		t.Fatalf("newest: %+v %v", p, err)
+	}
+	if _, err := s.RevokeInvite(ctx, "a", a.InviteID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ProfileParticipant(ctx, "sess", "a"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("revoked: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE profile_sessions SET expires_at_s = ?`, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ProfileBySession(ctx, "sess-b"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expired session: %v", err)
+	}
+}
+
+func link(s *Store, t *testing.T, profileID int64, email, purpose, token string, ttl time.Duration) {
+	t.Helper()
+	if err := s.CreateMagicLink(context.Background(), MagicLink{ProfileID: profileID, Email: email, Purpose: purpose, TokenHash: token, ExpiresAt: time.Now().Add(ttl)}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 002-AC4: single use, expiry, bind then sign in, and links gone stale or opened elsewhere.
+func TestMagicLinks(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec-a", SessionHash: "sess-a"})
+	b := joinWithProfile(t, s, "b", "Bob", JoinProfile{RecoveryHash: "rec-b", SessionHash: "sess-b"})
+
+	link(s, t, a.ProfileID, "alice@example.com", MagicBind, "bind-a", time.Minute)
+	// A bind link opened outside Alice's profile, or with none, binds nothing and stays usable.
+	for _, current := range []int64{0, b.ProfileID} {
+		if _, err := s.UseMagicLink(ctx, "bind-a", MagicBind, "dev2", current); !errors.Is(err, ErrWrongProfile) {
+			t.Fatalf("bind from profile %d: %v", current, err)
+		}
+	}
+	// Offered as the other kind, a link is unknown and stays unused.
+	if _, err := s.UseMagicLink(ctx, "bind-a", MagicSignIn, "dev2", a.ProfileID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("bind link as a sign-in: %v", err)
+	}
+	prof, err := s.UseMagicLink(ctx, "bind-a", MagicBind, "dev2", a.ProfileID)
+	if err != nil || prof.Email != "alice@example.com" || prof.ID != a.ProfileID {
+		t.Fatalf("bind: %+v %v", prof, err)
+	}
+	if _, err := s.ProfileBySession(ctx, "dev2"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a bind link opened a session: %v", err)
+	}
+	if _, err := s.UseMagicLink(ctx, "bind-a", MagicBind, "dev3", a.ProfileID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second use: %v", err)
+	}
+	if id, err := s.ProfileIDByEmail(ctx, "alice@example.com"); err != nil || id != a.ProfileID {
+		t.Fatalf("by email: %d %v", id, err)
+	}
+	if _, err := s.ProfileIDByEmail(ctx, "nobody@example.com"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown email: %v", err)
+	}
+
+	link(s, t, a.ProfileID, "alice@example.com", MagicSignIn, "expired", -time.Second)
+	if _, err := s.UseMagicLink(ctx, "expired", MagicSignIn, "x", 0); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expired: %v", err)
+	}
+	link(s, t, a.ProfileID, "alice@example.com", MagicSignIn, "signin", time.Minute)
+	if _, err := s.UseMagicLink(ctx, "signin", MagicBind, "dev4", a.ProfileID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("sign-in link as a bind: %v", err)
+	}
+	if prof, err := s.UseMagicLink(ctx, "signin", MagicSignIn, "dev4", b.ProfileID); err != nil || prof.ID != a.ProfileID {
+		t.Fatalf("sign in: %+v %v", prof, err)
+	}
+	if got, err := s.ProfileBySession(ctx, "dev4"); err != nil || got.ID != a.ProfileID {
+		t.Fatalf("sign-in session: %+v %v", got, err)
+	}
+
+	// Bob asks to bind Alice's address: the link stays unused, and the address stays hers.
+	link(s, t, b.ProfileID, "alice@example.com", MagicBind, "bind-b", time.Minute)
+	if _, err := s.UseMagicLink(ctx, "bind-b", MagicBind, "x", b.ProfileID); !errors.Is(err, ErrEmailTaken) {
+		t.Fatalf("taken: %v", err)
+	}
+	var used sql.NullString
+	if err := s.db.QueryRowContext(ctx, `SELECT used_at FROM magic_links WHERE token_hash = 'bind-b'`).Scan(&used); err != nil || used.Valid {
+		t.Fatalf("refused bind spent the link: %v %v", used, err)
+	}
+
+	// Alice moves to another address: a sign-in link for the old one is stale.
+	link(s, t, a.ProfileID, "old@example.com", MagicSignIn, "stale", time.Minute)
+	if _, err := s.UseMagicLink(ctx, "stale", MagicSignIn, "x", 0); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stale: %v", err)
+	}
+
+	// Creating a link sweeps the used and expired ones.
+	link(s, t, a.ProfileID, "alice@example.com", MagicSignIn, "fresh", time.Minute)
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM magic_links WHERE token_hash IN ('bind-a', 'expired', 'signin')`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("swept: %d left, %v", n, err)
+	}
+}
+
+func count(t *testing.T, s *Store, query string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRowContext(context.Background(), query, args...).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// 002-AC5: the purge invariant for profiles. Deleting one removes its sessions, links and email,
+// down to the bytes on disk, and detaches its participants, which keep their name and access.
+func TestDeleteProfilePurges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	ctx := context.Background()
+	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec-a", SessionHash: "sess-a"})
+	joinWithProfile(t, s, "b", "Alice B", JoinProfile{ID: a.ProfileID})
+	other := joinWithProfile(t, s, "c", "Carol", JoinProfile{RecoveryHash: "rec-c", SessionHash: "sess-c"})
+	const email = "secret-address@example.com"
+	link(s, t, a.ProfileID, email, MagicBind, "bind", time.Minute)
+	if _, err := s.UseMagicLink(ctx, "bind", MagicBind, "", a.ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	link(s, t, a.ProfileID, email, MagicSignIn, "pending", time.Minute)
+	link(s, t, other.ProfileID, "carol@example.com", MagicBind, "carol", time.Minute)
+
+	if err := s.DeleteProfile(ctx, a.ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	for table, want := range map[string]int{"profiles": 0, "profile_sessions": 0, "magic_links": 0} {
+		if n := count(t, s, `SELECT count(*) FROM "`+table+`" WHERE `+map[bool]string{true: "id", false: "profile_id"}[table == "profiles"]+` = ?`, a.ProfileID); n != want {
+			t.Errorf("%s: %d rows of the deleted profile left", table, n)
+		}
+	}
+	if n := count(t, s, `SELECT count(*) FROM participants WHERE name IN ('Alice', 'Alice B') AND profile_id IS NULL`); n != 2 {
+		t.Errorf("detached participants: %d, want 2", n)
+	}
+	if p, err := s.ParticipantByToken(ctx, "tok-a"); err != nil || p.Name != "Alice" || p.ProfileID != 0 {
+		t.Errorf("detached participant keeps its access and name: %+v %v", p, err)
+	}
+	if _, err := s.ProfileParticipant(ctx, "sess-a", "a"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("deleted profile's session still opens the room: %v", err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM magic_links WHERE profile_id = ?`, other.ProfileID); n != 1 {
+		t.Errorf("other profile's link: %d, want 1", n)
+	}
+	if prof, err := s.ProfileBySession(ctx, "sess-c"); err != nil || len(prof.Rooms) != 1 {
+		t.Errorf("other profile: %+v %v", prof, err)
+	}
+	for _, f := range []string{path, path + "-wal"} {
+		b, err := os.ReadFile(f)
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if bytes.Contains(b, []byte(email)) {
+			t.Errorf("%s still holds the deleted email", filepath.Base(f))
+		}
+	}
+	if err := s.DeleteProfile(ctx, a.ProfileID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second delete: %v", err)
+	}
+}
+
+func TestProfilesForAdmin(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec-a", SessionHash: "sess-a"})
+	joinWithProfile(t, s, "b", "Bob", JoinProfile{RecoveryHash: "rec-b", SessionHash: "sess-b"})
+	link(s, t, a.ProfileID, "alice@example.com", MagicBind, "bind", time.Minute)
+	if _, err := s.UseMagicLink(ctx, "bind", MagicBind, "", a.ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	ps, err := s.Profiles(ctx)
+	if err != nil || len(ps) != 2 || ps[0].Email != "alice@example.com" || ps[0].Rooms[0].RoomID != "a" || ps[1].Email != "" {
+		t.Fatalf("profiles: %+v %v", ps, err)
+	}
+}
+
+// Databases from before 002 keep working: their participants have no profile, their invites no
+// creator.
+func TestMigrationKeepsProfilelessParticipants(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	const before = 6 // the schema spec 001 shipped
+	for _, m := range migrations[:before] {
+		if _, err := db.ExecContext(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		fmt.Sprintf(`PRAGMA user_version = %d`, before),
+		`INSERT INTO rooms(id, name, created_at) VALUES('r', 'Old', '2026-01-01T00:00:00Z')`,
+		`INSERT INTO invites(room_id, token_hash, created_at) VALUES('r', 'inv', '2026-01-01T00:00:00Z')`,
+		`INSERT INTO participants(room_id, invite_id, name, token_hash, joined_at) VALUES('r', 1, 'Old Alice', 'tok', '2026-01-01T00:00:00Z')`,
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	p, err := s.ParticipantByToken(ctx, "tok")
+	if err != nil || p.Name != "Old Alice" || p.ProfileID != 0 {
+		t.Fatalf("old participant: %+v %v", p, err)
+	}
+	invs, err := s.Invites(ctx, "r", 0)
+	if err != nil || len(invs) != 1 || invs[0].CreatedBy != 0 || invs[0].RevokedAt != nil {
+		t.Fatalf("old invite: %+v %v", invs, err)
+	}
+	if m, err := s.RenameRoom(ctx, "r", "New", p); err != nil || m == nil {
+		t.Fatalf("rename by an old participant: %v", err)
+	}
+}
+
+// 002-AC6
+func TestRenameRoom(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	p := seed(t, s, "a")
+	m, err := s.RenameRoom(ctx, "a", `New "plan"`, p)
+	if err != nil || m.Kind != KindSystem || m.ParticipantID != p.ID || m.Body != `Alice renamed the room from "Room a" to "New \"plan\""` {
+		t.Fatalf("rename: %+v %v", m, err)
+	}
+	if r, _ := s.Room(ctx, "a"); r.Name != `New "plan"` {
+		t.Fatalf("name = %q", r.Name)
+	}
+	if m, err := s.RenameRoom(ctx, "a", `New "plan"`, p); err != nil || m != nil {
+		t.Fatalf("same name: %+v %v", m, err)
+	}
+	m, err = s.RenameRoom(ctx, "a", "Final", nil)
+	if err != nil || m.ParticipantID != 0 || m.Body != `The admin renamed the room from "New \"plan\"" to "Final"` {
+		t.Fatalf("admin rename: %+v %v", m, err)
+	}
+	if _, err := s.RenameRoom(ctx, "zz", "x", nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown room: %v", err)
+	}
+}
+
+// 002-AC7
+func TestInvitesRecordTheirCreator(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	p := seed(t, s, "a")
+	bob, _, err := s.Join(ctx, "inv-a", "Bob", "tok-bob", JoinProfile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mine, err := s.CreateInvite(ctx, "a", "mine", p.ID)
+	if err != nil || mine.CreatedBy != p.ID {
+		t.Fatalf("create: %+v %v", mine, err)
+	}
+	if _, err := s.CreateInvite(ctx, "a", "bobs", bob.ID); err != nil {
+		t.Fatal(err)
+	}
+	if invs, err := s.Invites(ctx, "a", p.ID); err != nil || len(invs) != 1 || invs[0].ID != mine.ID {
+		t.Fatalf("mine: %+v %v", invs, err)
+	}
+	if invs, err := s.Invites(ctx, "a", 0); err != nil || len(invs) != 3 {
+		t.Fatalf("all: %+v %v", invs, err)
+	}
+	if _, err := s.RevokeInvite(ctx, "a", mine.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Invite(ctx, "a", mine.ID)
+	if err != nil || got.CreatedBy != p.ID || got.RevokedAt == nil {
+		t.Fatalf("revoked invite: %+v %v", got, err)
+	}
+	if _, err := s.Invite(ctx, "b", mine.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("through another room: %v", err)
+	}
+	// A participant joining through a member's invite: the chain invites -> participants -> invites
+	// still purges with the room.
+	if _, _, err := s.Join(ctx, "bobs", "Carol", "tok-carol", JoinProfile{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteRoom(ctx, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM invites`); n != 0 {
+		t.Fatalf("invites left: %d", n)
+	}
+}
+
+// Storage failures surface as errors, never as a missing profile or link a caller would treat as
+// "not signed in" or "invalid link".
+func TestProfileCallsFailOnAClosedStore(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	p := seed(t, s, "a")
+	_ = s.Close()
+	calls := map[string]func() error{
+		"ProfileBySession":   func() error { _, err := s.ProfileBySession(ctx, "sess-a"); return err },
+		"SignInByRecovery":   func() error { _, err := s.SignInByRecovery(ctx, "rec-a", "x"); return err },
+		"ProfileIDByEmail":   func() error { _, err := s.ProfileIDByEmail(ctx, "a@example.com"); return err },
+		"ProfileParticipant": func() error { _, err := s.ProfileParticipant(ctx, "sess-a", "a"); return err },
+		"Profiles":           func() error { _, err := s.Profiles(ctx); return err },
+		"DeleteProfile":      func() error { return s.DeleteProfile(ctx, p.ProfileID) },
+		"CreateMagicLink": func() error {
+			return s.CreateMagicLink(ctx, MagicLink{ProfileID: 1, Email: "a@example.com", Purpose: MagicBind, TokenHash: "t", ExpiresAt: time.Now().Add(time.Minute)})
+		},
+		"UseMagicLink": func() error { _, err := s.UseMagicLink(ctx, "t", MagicSignIn, "x", 0); return err },
+		"RenameRoom":   func() error { _, err := s.RenameRoom(ctx, "a", "x", p); return err },
+		"CreateInvite": func() error { _, err := s.CreateInvite(ctx, "a", "h", p.ID); return err },
+		"Invite":       func() error { _, err := s.Invite(ctx, "a", 1); return err },
+		"Invites":      func() error { _, err := s.Invites(ctx, "a", 0); return err },
+		"Join": func() error {
+			_, _, err := s.Join(ctx, "inv-a", "B", "t", JoinProfile{RecoveryHash: "r", SessionHash: "s"})
+			return err
+		},
+	}
+	for name, call := range calls {
+		if err := call(); err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrEmailTaken) {
+			t.Errorf("%s: %v, want a storage error", name, err)
+		}
+	}
+}
+
+// 002-AC7: revoking an invite also revokes the invites its joiners created, down the chain, so a
+// member cut off cannot walk back in through an invite they made. Other branches stay.
+func TestRevokeInviteCascadesToInvitesItsJoinersMade(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	alice := seed(t, s, "a") // joined through inv-a, the admin's
+	chain := []int64{alice.InviteID}
+	by := alice
+	for i, name := range []string{"Carol", "Dave"} {
+		inv, err := s.CreateInvite(ctx, "a", fmt.Sprintf("chain-%d", i), by.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		chain = append(chain, inv.ID)
+		if by, _, err = s.Join(ctx, fmt.Sprintf("chain-%d", i), name, "tok-"+name, JoinProfile{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other, err := s.CreateInvite(ctx, "a", "other", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, _, err := s.Join(ctx, "other", "Bob", "tok-bob", JoinProfile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bobs, err := s.CreateInvite(ctx, "a", "bobs", bob.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 { // idempotent
+		got, err := s.RevokeInvite(ctx, "a", alice.InviteID)
+		if err != nil || !slices.Equal(got, chain) {
+			t.Fatalf("revoked %v %v, want %v", got, err, chain)
+		}
+	}
+	for _, tok := range []string{"tok-a", "tok-Carol", "tok-Dave"} {
+		if _, err := s.ParticipantByToken(ctx, tok); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s kept access: %v", tok, err)
+		}
+	}
+	if _, _, err := s.Join(ctx, "chain-0", "Alice again", "t2", JoinProfile{}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("rejoin through her own invite: %v", err)
+	}
+	// Nor can a revoked member mint a new one, whatever the HTTP layer checked before.
+	if _, err := s.CreateInvite(ctx, "a", "late", alice.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("invite by a revoked member: %v", err)
+	}
+	if _, err := s.CreateInvite(ctx, "b", "elsewhere", bob.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("invite into a room the member is not in: %v", err)
+	}
+	if _, err := s.ParticipantByToken(ctx, "tok-bob"); err != nil {
+		t.Errorf("another branch lost access: %v", err)
+	}
+	if inv, err := s.Invite(ctx, "a", bobs.ID); err != nil || inv.RevokedAt != nil || other.ID == 0 {
+		t.Errorf("another branch's invite: %+v %v", inv, err)
+	}
+}

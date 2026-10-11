@@ -8,7 +8,13 @@
 //	FAKE_CLOSE        answer the last annotation in annotations.md and mark it done
 //	FAKE_ANNOTATE     open an annotation on the first word after the first upload's heading
 //	FAKE_LIST         answer with the transcript files and whether they hold FAKE_MARK
-//	FAKE_RECALL       answer with the code word an earlier turn of the session was told
+//	FAKE_RECALL       answer with the latest code word an earlier turn of the session was told
+//	FAKE_WHOAMI       answer with the first line of --append-system-prompt-file, and --effort
+//	FAKE_SKILLS       run every scripts/*.sh of each skill in --plugin-dir and write what they
+//	                  print to docs/skills.md, as an agent using its skills would
+//	FAKE_PINGPONG A B as persona A call @B, as any other call @A, and repeat the marker so the
+//	                  called persona's prompt holds it too (an agent chain)
+//	FAKE_SLOW         take a few seconds (a turn others queue behind)
 //	FAKE_SLEEP        hang until killed (a turn in progress)
 //
 // Any other prompt writes docs/notes.md. A prompt holding "code word is X" is remembered.
@@ -21,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -32,8 +39,13 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, cwd, os.Getenv("HOME")))
 }
 
+// slow is how long FAKE_SLOW takes; a var for tests.
+var slow = 8 * time.Second
+
 var (
 	codeWord   = regexp.MustCompile(`code word is ([A-Z0-9-]+)`)
+	pingPong   = regexp.MustCompile(`FAKE_PINGPONG ([\p{L}\p{N}_-]+) ([\p{L}\p{N}_-]+)`)
+	persona    = regexp.MustCompile(`(?m)^You are (\S+), an agent`)
 	annotation = regexp.MustCompile(`### Annotation (\d+)`)
 )
 
@@ -55,13 +67,22 @@ func uuid() string {
 }
 
 func run(args []string, stdin io.Reader, out io.Writer, cwd, home string) int {
-	resume, model := "", "default"
+	resume, model, system, effort, plugin := "", "default", "", "default", ""
 	for i, a := range args {
-		if a == "--resume" && i+1 < len(args) {
-			resume = args[i+1]
+		if i+1 == len(args) {
+			break
 		}
-		if a == "--model" && i+1 < len(args) {
+		switch a {
+		case "--resume":
+			resume = args[i+1]
+		case "--model":
 			model = args[i+1]
+		case "--append-system-prompt-file":
+			system = args[i+1]
+		case "--effort":
+			effort = args[i+1]
+		case "--plugin-dir":
+			plugin = args[i+1]
 		}
 	}
 	prompt, err := io.ReadAll(stdin)
@@ -81,7 +102,12 @@ func run(args []string, stdin io.Reader, out io.Writer, cwd, home string) int {
 	if err := os.MkdirAll(dir, 0o700); err != nil { //nolint:gosec // see above
 		return result(out, model, sid, err.Error(), true)
 	}
-	answer, err := act(string(prompt), string(history), cwd)
+	var answer string
+	if strings.Contains(string(prompt), "FAKE_SKILLS") {
+		answer, err = useSkills(plugin, cwd)
+	} else {
+		answer, err = act(string(prompt), string(history), cwd, system, effort)
+	}
 	if err != nil {
 		return result(out, model, sid, err.Error(), true)
 	}
@@ -98,7 +124,7 @@ func run(args []string, stdin io.Reader, out io.Writer, cwd, home string) int {
 	return result(out, model, sid, answer, false)
 }
 
-func act(prompt, history, cwd string) (string, error) {
+func act(prompt, history, cwd, system, effort string) (string, error) {
 	ws := func(p string) string { return filepath.Join(cwd, p) }
 	switch {
 	case strings.Contains(prompt, "FAKE_EDIT_UPLOAD"):
@@ -154,11 +180,19 @@ func act(prompt, history, cwd string) (string, error) {
 		sc.Buffer(make([]byte, 1<<20), 16<<20)
 		word := "nothing"
 		for sc.Scan() {
-			if m := codeWord.FindStringSubmatch(sc.Text()); m != nil {
-				word = m[1]
+			// The latest told wins: a persona's first prompt quotes the whole room.
+			if ms := codeWord.FindAllStringSubmatch(sc.Text(), -1); ms != nil {
+				word = ms[len(ms)-1][1]
 			}
 		}
 		return "The code word was " + word + ".", nil
+	case strings.Contains(prompt, "FAKE_PINGPONG"):
+		return pingPongCall(prompt)
+	case strings.Contains(prompt, "FAKE_WHOAMI"):
+		return whoami(system, effort)
+	case strings.Contains(prompt, "FAKE_SLOW"):
+		time.Sleep(slow)
+		return "Slow turn done.", nil
 	case strings.Contains(prompt, "FAKE_SLEEP"):
 		time.Sleep(time.Hour)
 		return "", nil
@@ -168,4 +202,54 @@ func act(prompt, history, cwd string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("Wrote docs/notes.md, turn %d.", turns), nil
+}
+
+func whoami(system, effort string) (string, error) {
+	b, err := os.ReadFile(system) //nolint:gosec // see above
+	if err != nil {
+		return "", fmt.Errorf("no system prompt file: %w", err)
+	}
+	first, _, _ := strings.Cut(string(b), "\n")
+	return fmt.Sprintf("%s (effort %s)", first, effort), nil
+}
+
+func pingPongCall(prompt string) (string, error) {
+	m, self := pingPong.FindStringSubmatch(prompt), persona.FindStringSubmatch(prompt)
+	if m == nil || self == nil {
+		return "", fmt.Errorf("FAKE_PINGPONG wants two persona names and a prompt naming its persona")
+	}
+	other := m[1]
+	if strings.EqualFold(self[1], m[1]) {
+		other = m[2]
+	}
+	return fmt.Sprintf("FAKE_PINGPONG %s %s: over to @%s.", m[1], m[2], other), nil
+}
+
+// useSkills runs each skill's scripts the way the agent would, from the skill's folder.
+func useSkills(plugin, cwd string) (string, error) {
+	if plugin == "" {
+		return "No skills.", nil
+	}
+	mds, _ := filepath.Glob(filepath.Join(plugin, "skills", "*", "SKILL.md"))
+	var lines []string
+	for _, md := range mds {
+		dir := filepath.Dir(md)
+		scripts, _ := filepath.Glob(filepath.Join(dir, "scripts", "*.sh"))
+		var outs []string
+		for _, sc := range scripts {
+			cmd := exec.Command("sh", sc) //nolint:gosec,noctx // a test double running the skill it was handed
+			cmd.Dir = dir
+			b, err := cmd.Output()
+			if err != nil {
+				return "", fmt.Errorf("%s: %w", sc, err)
+			}
+			outs = append(outs, strings.TrimSpace(string(b)))
+		}
+		lines = append(lines, filepath.Base(dir)+": "+strings.Join(outs, " "))
+	}
+	body := "# Skills\n\n- " + strings.Join(lines, "\n- ") + "\n"
+	if err := os.WriteFile(filepath.Join(cwd, "docs", "skills.md"), []byte(body), 0o600); err != nil { //nolint:gosec // see above
+		return "", err
+	}
+	return "Skills used: " + strings.Join(lines, "; ") + ".", nil
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/babs/grill-room/internal/daemon"
+	"github.com/babs/grill-room/internal/sandbox"
 )
 
 func TestConfig(t *testing.T) {
@@ -19,9 +20,22 @@ func TestConfig(t *testing.T) {
 	t.Setenv("GRILL_ROOM_DAEMON_BROWSER", "")
 	t.Setenv("GRILL_ROOM_SANDBOX_IMAGE", "")
 	cfg, err := loadConfig()
-	if err != nil || cfg.StateDir != "/state" || cfg.Browser != "auto" || cfg.Image != "" {
+	if err != nil || cfg.StateDir != "/state" || cfg.Browser != "auto" || cfg.Image != "" || cfg.CacheMB != 1024 ||
+		cfg.Limits != (sandbox.Limits{CPUs: "2", Memory: "4g", EgressCPUs: "0.5", EgressMemory: "256m"}) {
 		t.Fatalf("cfg = %+v, %v", cfg, err)
 	}
+	// 002-AC37: the workspace cache cap is a size in MiB, 0 to disable it.
+	t.Setenv("GRILL_ROOM_DAEMON_CACHE_MB", "0")
+	if cfg, err := loadConfig(); err != nil || cfg.CacheMB != 0 {
+		t.Fatalf("cache disabled: %+v %v", cfg, err)
+	}
+	for _, bad := range []string{"-1", "1g", "lots"} {
+		t.Setenv("GRILL_ROOM_DAEMON_CACHE_MB", bad)
+		if _, err := loadConfig(); err == nil {
+			t.Fatalf("cache %q accepted", bad)
+		}
+	}
+	t.Setenv("GRILL_ROOM_DAEMON_CACHE_MB", "")
 	for _, tc := range []struct {
 		cfg Config
 		ok  bool
@@ -30,10 +44,30 @@ func TestConfig(t *testing.T) {
 		{Config{Browser: "none", LogLevel: "debug"}, true},
 		{Config{Browser: "firefox", LogLevel: "info"}, false},
 		{Config{Browser: "auto", LogLevel: "loud"}, false},
+		// 002-AC19: a cap names a known model family and effort.
+		{Config{Browser: "auto", LogLevel: "info", Settings: daemon.Settings{MaxModel: "claude-sonnet-5-5", MaxEffort: "high"}}, true},
+		{Config{Browser: "auto", LogLevel: "info", Settings: daemon.Settings{MaxModel: "gpt-5"}}, false},
+		{Config{Browser: "auto", LogLevel: "info", Settings: daemon.Settings{MaxEffort: "turbo"}}, false},
+		// Sandbox and egress limits are docker --cpus and --memory values, 0 for none.
+		{Config{Browser: "auto", LogLevel: "info", Limits: sandbox.Limits{CPUs: "1.5", Memory: "4g", EgressCPUs: "0", EgressMemory: "512M"}}, true},
+		{Config{Browser: "auto", LogLevel: "info", Limits: sandbox.Limits{CPUs: "two"}}, false},
+		{Config{Browser: "auto", LogLevel: "info", Limits: sandbox.Limits{EgressCPUs: "-1"}}, false},
+		{Config{Browser: "auto", LogLevel: "info", Limits: sandbox.Limits{Memory: "4 GB"}}, false},
+		{Config{Browser: "auto", LogLevel: "info", Limits: sandbox.Limits{EgressMemory: "--privileged"}}, false},
 	} {
 		if err := tc.cfg.Validate(); (err == nil) != tc.ok {
 			t.Errorf("Validate(%+v) = %v", tc.cfg, err)
 		}
+	}
+	t.Setenv("GRILL_ROOM_MAX_MODEL", "opus")
+	t.Setenv("GRILL_ROOM_MAX_EFFORT", "xhigh")
+	t.Setenv("GRILL_ROOM_APPROVE_ALL", "true")
+	if cfg, err := loadConfig(); err != nil || cfg.Settings != (daemon.Settings{MaxModel: "opus", MaxEffort: "xhigh", ApproveAll: true}) {
+		t.Fatalf("settings from the environment: %+v %v", cfg.Settings, err)
+	}
+	t.Setenv("GRILL_ROOM_APPROVE_ALL", "sometimes")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("a bad GRILL_ROOM_APPROVE_ALL loaded")
 	}
 }
 

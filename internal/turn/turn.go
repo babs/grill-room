@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path"
 	"strings"
 	"unicode"
@@ -29,6 +30,9 @@ const (
 	RepliesFile = "replies.json"
 	// NewAnnotationsFile is where the agent opens annotations of its own.
 	NewAnnotationsFile = "annotations-new.json"
+	// PluginName names the plugin that carries a persona's active skills: claude -p shows them as
+	// "grill-room:<skill>".
+	PluginName = "grill-room"
 )
 
 // Limits on what a result may carry.
@@ -44,10 +48,25 @@ const (
 	maxContext = 64
 )
 
+// Efforts are the values claude -p --effort accepts; empty leaves Claude Code's default.
+var Efforts = []string{"low", "medium", "high", "xhigh", "max"}
+
+// Models are the model aliases a persona may ask for; empty leaves the host's default.
+var Models = []string{"haiku", "sonnet", "opus", "fable"}
+
 // Job is the turn the daemon runs, as the server hands it over.
 type Job struct {
 	ID     int64  `json:"id"`
 	Prompt string `json:"prompt"`
+	// Persona names the room persona the turn runs; System is its text, which claude gets as an
+	// appended system prompt. Model and Effort are what it asks for, empty for the host's default.
+	Persona string `json:"persona,omitempty"`
+	System  string `json:"system,omitempty"`
+	Model   string `json:"model,omitempty"`
+	Effort  string `json:"effort,omitempty"`
+	// Approved is what the host approved for this persona above its cap, on this daemon only: the
+	// daemon clamps to the higher of its cap and Approved (002-AC20).
+	Approved Level `json:"approved"`
 	// Resume is the session to continue; empty starts a new one.
 	Resume string `json:"resume,omitempty"`
 	// SessionSize and SessionSHA256 describe the server's copy of Resume: a daemon whose local copy
@@ -55,6 +74,15 @@ type Job struct {
 	SessionSize    int64  `json:"session_size"`
 	SessionSHA256  string `json:"session_sha256,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds"`
+	// Skills are the persona's active skills at the versions the room pinned (002-AC31). When set,
+	// the daemon fetches them as a plugin directory and runs claude with --plugin-dir.
+	Skills []Skill `json:"skills,omitempty"`
+}
+
+// Skill names a skill a turn loads, at its pinned version.
+type Skill struct {
+	Name    string `json:"name"`
+	Version int    `json:"version"`
 }
 
 // Change is one workspace file the turn created, modified or deleted. Content is sent only for the
@@ -70,13 +98,46 @@ type Result struct {
 	Error     string `json:"error,omitempty"`
 	Synthesis string `json:"synthesis,omitempty"`
 	// Model is the Claude model the turn ran on: the one claude reported, else the daemon's setting.
-	Model string `json:"model,omitempty"`
+	// Effort is the effort it ran with.
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
+	// Capped reports that the host cap lowered the model or effort the persona asked for (002-AC19).
+	Capped bool `json:"capped,omitempty"`
 	// Session carries the session jsonl bytes from SessionOffset on (D23).
 	SessionID     string   `json:"session_id,omitempty"`
 	SessionOffset int64    `json:"session_offset"`
 	Session       []byte   `json:"session,omitempty"`
 	Changes       []Change `json:"changes,omitempty"`
 }
+
+// Manifest lists a turn's workspace (002-AC37): the daemon fetches only the files its cache lacks.
+// Files are sorted by path.
+type Manifest struct {
+	Dirs  []string `json:"dirs"`
+	Files []File   `json:"files"`
+}
+
+// File is one workspace file; SHA256 is the hex digest of its bytes.
+type File struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+	Mode   int64  `json:"mode"`
+}
+
+// PathsRequest asks for a tar of these workspace files only.
+type PathsRequest struct {
+	Paths []string `json:"paths"`
+}
+
+// FallbackReasons are why a daemon with a cache fetched the full workspace (002-AC38): it holds
+// no cache for the room, a cached file failed its hash, the partial tar did not match the
+// manifest, or the manifest was unavailable or invalid.
+var FallbackReasons = []string{"missing", "corrupt", "partial", "manifest"}
+
+// ValidPath accepts a relative, slash-separated workspace path with no "." or ".." element: it
+// cannot leave the workspace.
+func ValidPath(p string) bool { return p != "." && fs.ValidPath(p) }
 
 // NeedsContent reports whether the server needs a changed file's bytes; for any other change the
 // path is enough, which keeps an edited 20 MB upload out of the result.

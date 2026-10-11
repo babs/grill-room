@@ -60,3 +60,17 @@ export const inboundAudio = (page) => page.evaluate(async () => {
   }
   return bytes;
 });
+
+// dropProfiles deletes the profiles of pages, which joining gave one each: deleting a room keeps
+// its participants' profiles, so a run against a long-lived deployment would leave them behind.
+export async function dropProfiles(request, pages) {
+  const ids = [];
+  for (const page of pages) {
+    const me = await page.request.get('/api/profile').then((r) => r.json()).catch(() => null);
+    if (me?.profile?.id) ids.push(me.profile.id);
+  }
+  expect(ids.length, 'a profile per page').toBe(pages.length);
+  for (const id of ids) await request.delete(`/api/profiles/${id}`, { headers: admin });
+  const left = (await (await request.get('/api/profiles', { headers: admin })).json()).filter((p) => ids.includes(p.id));
+  expect(left, 'profiles left behind').toEqual([]);
+}

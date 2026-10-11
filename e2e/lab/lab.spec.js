@@ -1,6 +1,6 @@
 import { test, expect, devices } from '@playwright/test';
 import { join as joinPath } from 'node:path';
-import { createRoom, invite, join, joinAudio, inboundAudio, launch, admin, fixture } from '../voice/helpers.js';
+import { createRoom, invite, join, joinAudio, inboundAudio, launch, admin, fixture, dropProfiles } from '../voice/helpers.js';
 import { upload, annotateSelection, pairDaemon, liveDaemon, messagesRequests, removeSandbox, ask } from '../helpers.js';
 
 const plan = '# Rollout plan\n\nThe rollout needs a rollback step before the freeze.\n';
@@ -63,9 +63,11 @@ test('grill session on the lab, audio over TURN/TLS', async ({ request, baseURL 
   const bobBrowser = await launch();
   const room = await createRoom(request, 'Lab session');
   const daemon = liveDaemon(joinPath('test-results', 'lab', 'daemon'), `${baseURL}/r/${room.id}`);
+  const joined = [];
   try {
     const alice = await join(aliceBrowser, await invite(request, room.id), 'Alice', forceRelay);
     const bob = await join(bobBrowser, await invite(request, room.id), 'Bob', forceRelay);
+    joined.push(alice, bob);
 
     await upload(alice, 'plan.md', 'text/markdown', plan);
     await expect(alice.frameLocator('#doc-frame iframe').locator('h1')).toHaveText('Rollout plan');
@@ -84,7 +86,7 @@ test('grill session on the lab, audio over TURN/TLS', async ({ request, baseURL 
     console.log('voice line:', await line.locator('.body').textContent());
 
     await pairDaemon(alice, daemon);
-    await expect(alice.locator('#agent-led')).toHaveAttribute('aria-label', 'Agent ready', { timeout: 60_000 });
+    await expect(alice.locator('button.persona[data-name="Grill"] .led')).toHaveAttribute('aria-label', 'Grill ready', { timeout: 60_000 });
     const synthesis = await ask(alice, room.id, 'Without using any tool, reply in one short sentence: what is this room about?');
     console.log('synthesis:', synthesis);
     expect(synthesis.trim()).not.toBe('');
@@ -96,6 +98,7 @@ test('grill session on the lab, audio over TURN/TLS', async ({ request, baseURL 
     await daemon.exited;
     removeSandbox(daemon.sandbox);
     await request.delete(`/api/rooms/${room.id}`, { headers: admin });
+    await dropProfiles(request, joined);
     await aliceBrowser.close();
     await bobBrowser.close();
   }
@@ -106,14 +109,17 @@ test('audio on the lab with default ICE', async ({ request }) => {
   const aliceBrowser = await launch(fixture.wav);
   const bobBrowser = await launch();
   const room = await createRoom(request, 'Lab audio');
+  const joined = [];
   try {
     const alice = await join(aliceBrowser, await invite(request, room.id), 'Alice');
     const bob = await join(bobBrowser, await invite(request, room.id), 'Bob');
+    joined.push(alice, bob);
     await joinAudio(bob);
     await joinAudio(alice);
     await assertAudio({ alice, bob }, false);
   } finally {
     await request.delete(`/api/rooms/${room.id}`, { headers: admin });
+    await dropProfiles(request, joined);
     await aliceBrowser.close();
     await bobBrowser.close();
   }
@@ -125,9 +131,11 @@ test('audio on the lab with default ICE', async ({ request }) => {
 test('messages reach a phone page live on the lab', async ({ request }) => {
   const browser = await launch();
   const room = await createRoom(request, 'Lab live');
+  const joined = [];
   try {
     const alice = await join(browser, await invite(request, room.id), 'Alice');
     const bob = await join(browser, await invite(request, room.id), 'Bob');
+    joined.push(alice, bob);
     const { defaultBrowserType, ...pixel } = devices['Pixel 7'];
     const phone = await browser.newContext(pixel);
     const inv = new URL((await invite(request, room.id)).url);
@@ -135,6 +143,7 @@ test('messages reach a phone page live on the lab', async ({ request }) => {
     await carol.goto(inv.pathname + inv.hash);
     await carol.getByLabel('Your name').fill('Carol');
     await carol.getByRole('button', { name: 'Join the room' }).click();
+    joined.push(carol);
     await expect(carol.locator('#messages')).toContainText('Carol joined');
 
     const say = async (page, text) => {
@@ -154,6 +163,7 @@ test('messages reach a phone page live on the lab', async ({ request }) => {
     await expect(carol.locator('.msg', { hasText: 'live one' })).toHaveCount(1);
   } finally {
     await request.delete(`/api/rooms/${room.id}`, { headers: admin });
+    await dropProfiles(request, joined);
     await browser.close();
   }
 });

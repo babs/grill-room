@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/babs/grill-room/internal/store"
+	"github.com/babs/grill-room/internal/turn"
 )
 
 // agentState is what the room shows about the agent: who hosts it, whether its daemon is there
@@ -26,6 +27,51 @@ type agentState struct {
 	CanTrigger []int64 `json:"can_trigger"`
 	// Daemons are the connected daemons: the host can hand over to one that can host.
 	Daemons []presence `json:"daemons"`
+	// Personas are the room's agents, each with its button; Queue the presses waiting their turn.
+	Personas []store.RoomPersona `json:"personas"`
+	Queue    []store.QueuedTurn  `json:"queue"`
+	// Models and Efforts are what a persona may ask for, for the pickers.
+	Models  []string `json:"models"`
+	Efforts []string `json:"efforts"`
+	// Cap is the host daemon's cap and approval mode, nil while the host has no daemon.
+	Cap *store.DaemonSettings `json:"cap"`
+	// CapRequests are the personas asking above the host's cap that the host has not answered
+	// (002-AC19); Changes, the persona changes waiting for the host's approval (002-AC21).
+	CapRequests []capRequest          `json:"cap_requests"`
+	Changes     []store.PersonaChange `json:"changes"`
+	// Chain is the count of agent-triggered turns against the room's budget (002-AC25).
+	Chain store.Chain `json:"chain"`
+}
+
+// capRequest is a persona asking for more than the host cap: it runs at Runs until the host
+// approves Asks.
+type capRequest struct {
+	PersonaID int64      `json:"persona_id"`
+	Asks      turn.Level `json:"asks"`
+	Runs      turn.Level `json:"runs"`
+}
+
+// capped returns what persona p runs at on host daemon d, and whether that is below what it asks.
+func capped(d *store.Daemon, p *store.RoomPersona) (turn.Level, bool) {
+	return turn.Clamp(p.Asks(), turn.Level{Model: d.Settings.MaxModel, Effort: d.Settings.MaxEffort}, p.Cap.Approved(d.ID))
+}
+
+// capRequests lists the personas the host d still has to answer on. The answers are kept per host
+// daemon: after a hand-over the new host's cap and answers apply.
+func capRequests(d *store.Daemon, ps []store.RoomPersona) []capRequest {
+	out := []capRequest{}
+	if d == nil {
+		return out
+	}
+	for _, p := range ps {
+		if p.Pending {
+			continue
+		}
+		if runs, low := capped(d, &p); low && !p.Cap.Settles(d.ID, p.Asks()) {
+			out = append(out, capRequest{PersonaID: p.ID, Asks: p.Asks(), Runs: runs})
+		}
+	}
+	return out
 }
 
 // hostDaemon returns the connected daemon of participant pid in room, nil if there is none.
@@ -50,7 +96,8 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 	if err != nil {
 		return nil, err
 	}
-	st := &agentState{HostID: r.HostParticipantID, CanTrigger: []int64{}, Daemons: s.connectedDaemons(room)}
+	st := &agentState{HostID: r.HostParticipantID, CanTrigger: []int64{}, Daemons: s.connectedDaemons(room), Models: turn.Models, Efforts: turn.Efforts,
+		Chain: r.Chain}
 	for _, p := range ps {
 		if p.CanTrigger {
 			st.CanTrigger = append(st.CanTrigger, p.ID)
@@ -67,16 +114,36 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 	if st.Turn, err = s.bus.Store.LastTurn(ctx, room); err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, err
 	}
+	if st.Personas, err = s.bus.Store.RoomPersonas(ctx, room); err != nil {
+		return nil, err
+	}
+	if st.Queue, err = s.bus.Store.Queue(ctx, room); err != nil {
+		return nil, err
+	}
+	host, err := s.bus.Store.HostDaemon(ctx, room)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		host = nil
+	case err != nil:
+		return nil, err
+	default:
+		st.Cap = &host.Settings
+	}
+	st.CapRequests = capRequests(host, st.Personas)
+	if st.Changes, err = s.bus.Store.PersonaChanges(ctx, room); err != nil {
+		return nil, err
+	}
 	return st, nil
 }
 
-// agentChanged re-runs the host election and wakes the room's streams. Called whenever a daemon
-// connects, drops or changes its readiness.
+// agentChanged re-runs the host election, wakes the room's streams, and starts a queued turn the
+// new host can run. Called whenever a daemon connects, drops or changes its readiness.
 func (s *Server) agentChanged(ctx context.Context, room string) {
 	if err := s.elect(ctx, room); err != nil && !errors.Is(err, store.ErrNotFound) {
 		s.log.Error("host_election_failed", zap.String("room", room), zap.Error(err))
 	}
 	s.bus.Notify(room)
+	s.drain(ctx, room)
 }
 
 // elect keeps the host while its daemon is connected and can host; otherwise the participant

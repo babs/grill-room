@@ -13,6 +13,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -35,11 +36,23 @@ type Options struct {
 	Log     *zap.Logger
 	// NewAgent builds the sandbox a room's turns run in, from image, on the first turn.
 	NewAgent func(r Room, image string) Agent
-	// Model is passed to claude --model; empty keeps Claude Code's default.
+	// Model is passed to claude --model when a persona asks for none; empty keeps Claude Code's default.
 	Model string
+	// Settings are the host cap and approval mode at start; SettingsPath is where the page saves
+	// them, "" to keep them in memory.
+	Settings     Settings
+	SettingsPath string
+	// Allowlist is the egress allowlist at start, nil for the default; AllowlistPath is where the
+	// page saves it, "" to keep it in memory.
+	Allowlist     []string
+	AllowlistPath string
 	// Image pins the sandbox image; empty takes the room server's, or builds the embedded one.
 	Image  string
 	Stream sandbox.Streamer
+	// CacheDir holds the per-room workspace caches, CacheMax their total size in bytes; an empty
+	// dir or a cap of 0 fetches every workspace whole (002-AC37).
+	CacheDir string
+	CacheMax int64
 	// Executable is the binary a self-update replaces; empty disables updates.
 	Executable string
 	// Restart ends the daemon so that main starts the updated binary.
@@ -78,6 +91,9 @@ type Status struct {
 	Update      Update            `json:"update"`
 	CanHost     bool              `json:"can_host"`
 	Reason      string            `json:"reason,omitempty"`
+	Settings    Settings          `json:"settings"`
+	// Allowlist is the domains the sandbox may reach through its egress proxy.
+	Allowlist []string `json:"allowlist"`
 }
 
 // Image is the sandbox image turns run in.
@@ -114,7 +130,12 @@ type Daemon struct {
 	// img is the sandbox image job, guarded by mu.
 	img imageJob
 	// release is what the room server hands out, for the self-update; guarded by mu.
-	release release
+	release    release
+	settingsMu sync.Mutex
+	// cur is the current room run, guarded by mu; nil before the first SetRoom.
+	cur *roomRun
+	// cache is nil when disabled.
+	cache *wsCache
 }
 
 // New builds a daemon.
@@ -128,7 +149,14 @@ func New(o Options) *Daemon {
 	def(&o.StatusEvery, 15*time.Second)
 	def(&o.PollEvery, 2*time.Second)
 	def(&o.MaxBackoff, 30*time.Second)
-	d := &Daemon{o: o, st: Status{Host: o.Name, Version: o.Version, Connection: "offline"}, changed: make(chan struct{}, 1)}
+	if o.Allowlist == nil {
+		o.Allowlist = slices.Clone(sandbox.DefaultAllowlist)
+	}
+	d := &Daemon{o: o, st: Status{Host: o.Name, Version: o.Version, Connection: "offline", Settings: o.Settings, Allowlist: o.Allowlist},
+		changed: make(chan struct{}, 1)}
+	if o.CacheDir != "" && o.CacheMax > 0 {
+		d.cache = &wsCache{dir: o.CacheDir, max: o.CacheMax}
+	}
 	if o.Image != "" {
 		d.img.known = true
 		d.st.Image = Image{State: "ready", Ref: o.Image}
@@ -235,6 +263,7 @@ func (d *Daemon) SetRoom(ctx context.Context, room Room) {
 	d.stop = cancel
 	d.gen++
 	r := &roomRun{d: d, room: room, update: d.roomUpdater(d.gen), ctx: ctx}
+	d.cur = r
 	d.st.Room, d.st.Pairing, d.st.Code, d.st.ApproveURL, d.st.Error, d.st.Connection = room.String(), "", "", "", "", "offline"
 	d.mu.Unlock()
 	d.loops.Go(func() { r.loop(ctx) })
@@ -289,6 +318,11 @@ func (r *roomRun) loop(ctx context.Context) {
 	if errors.Is(err, errRevoked) {
 		if serr := d.o.Tokens.Set(room, ""); serr != nil {
 			d.o.Log.Error("token_delete_failed", zap.Error(serr))
+		}
+		if d.cache != nil {
+			if serr := d.cache.forget(room); serr != nil {
+				d.o.Log.Error("workspace_cache_delete_failed", zap.Error(serr))
+			}
 		}
 		r.update(func(s *Status) { s.Pairing = "" })
 		fail(err)
@@ -522,7 +556,8 @@ func (r *roomRun) heartbeat(ctx context.Context, tok string) {
 		st := d.Status()
 		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		resp, err := d.roomRequest(rctx, http.MethodPost, room.Base+"/api/rooms/"+room.ID+"/daemon/status", tok,
-			map[string]any{"can_host": st.CanHost, "reason": st.Reason, "version": d.o.Version})
+			map[string]any{"can_host": st.CanHost, "reason": st.Reason, "version": d.o.Version,
+				"max_model": st.Settings.MaxModel, "max_effort": st.Settings.MaxEffort, "approve_all": st.Settings.ApproveAll})
 		if err == nil {
 			if resp.StatusCode != http.StatusNoContent {
 				err = apiError(resp)

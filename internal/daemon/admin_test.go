@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"path"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -129,6 +131,39 @@ func TestAdminAccess(t *testing.T) {
 	}
 	if s, _ := e.req(t, "POST", "/api/stop", r.Token, "", map[string]string{"Origin": "null"}); s != http.StatusForbidden || e.stopped.Load() {
 		t.Fatalf("stop from an opaque origin: %d", s)
+	}
+}
+
+var iconLink = regexp.MustCompile(`<link rel="(icon|apple-touch-icon|manifest)" href="([^"]+)"`)
+
+// The page links the same icons as the room pages, and each one is served with its type.
+func TestAdminIcons(t *testing.T) {
+	e := newAdminEnv(t, newTestDaemon(t, nil))
+	types := map[string]string{".ico": "image/x-icon", ".svg": "image/svg+xml", ".png": "image/png", ".webmanifest": "application/manifest+json"}
+	_, html := e.req(t, "GET", "/", "", "", nil)
+	hrefs := map[string]bool{}
+	for _, l := range iconLink.FindAllStringSubmatch(html, -1) {
+		hrefs[l[2]] = true
+	}
+	for _, want := range []string{"/favicon.ico", "/static/logo.svg", "/static/icons/icon-32.png", "/static/icons/apple-touch-icon.png", "/site.webmanifest"} {
+		if !hrefs[want] {
+			t.Errorf("page does not link %s", want)
+		}
+	}
+	srcs := []string{"/static/icons/icon-192.png", "/static/icons/icon-512.png"}
+	for href := range hrefs {
+		srcs = append(srcs, href)
+	}
+	for _, src := range srcs {
+		req, _ := http.NewRequestWithContext(t.Context(), "GET", e.base+src, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if want := types[path.Ext(src)]; resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != want {
+			t.Errorf("%s: %d %q, want %q", src, resp.StatusCode, resp.Header.Get("Content-Type"), want)
+		}
 	}
 }
 

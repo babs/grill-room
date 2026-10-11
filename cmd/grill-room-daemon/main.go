@@ -18,6 +18,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -55,8 +57,14 @@ type Config struct {
 	// Image pins the sandbox image; empty takes the room server's, or builds the embedded one.
 	Image    string
 	LogLevel string
-	// Model is the claude --model for turns; empty keeps Claude Code's default.
+	// Model is the claude --model for a persona asking for none; empty keeps Claude Code's default.
 	Model string
+	// Settings are the host cap and approval mode until the admin page saves its own.
+	Settings daemon.Settings
+	// Limits cap the sandbox's and its egress proxy's CPUs and memory.
+	Limits sandbox.Limits
+	// CacheMB caps the workspace cache; 0 fetches every workspace whole.
+	CacheMB int64
 }
 
 func loadConfig() (Config, error) {
@@ -68,12 +76,26 @@ func loadConfig() (Config, error) {
 		}
 		dir = filepath.Join(base, "grill-room-daemon")
 	}
+	approveAll, err := strconv.ParseBool(getEnv("GRILL_ROOM_APPROVE_ALL", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("GRILL_ROOM_APPROVE_ALL: %w", err)
+	}
+	cacheMB, err := strconv.ParseInt(getEnv("GRILL_ROOM_DAEMON_CACHE_MB", "1024"), 10, 64)
+	if err != nil || cacheMB < 0 {
+		return Config{}, fmt.Errorf("GRILL_ROOM_DAEMON_CACHE_MB: want a size in MiB, 0 to disable the cache")
+	}
 	return Config{
+		CacheMB:  cacheMB,
 		StateDir: dir,
 		Browser:  getEnv("GRILL_ROOM_DAEMON_BROWSER", "auto"),
 		Image:    os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
 		LogLevel: getEnv("LOG_LEVEL", "info"),
 		Model:    os.Getenv("GRILL_ROOM_AGENT_MODEL"),
+		Settings: daemon.Settings{MaxModel: os.Getenv("GRILL_ROOM_MAX_MODEL"), MaxEffort: os.Getenv("GRILL_ROOM_MAX_EFFORT"), ApproveAll: approveAll},
+		Limits: sandbox.Limits{
+			CPUs: getEnv("GRILL_ROOM_SANDBOX_CPUS", "2"), Memory: getEnv("GRILL_ROOM_SANDBOX_MEMORY", "4g"),
+			EgressCPUs: getEnv("GRILL_ROOM_EGRESS_CPUS", "0.5"), EgressMemory: getEnv("GRILL_ROOM_EGRESS_MEMORY", "256m"),
+		},
 	}, nil
 }
 
@@ -85,8 +107,27 @@ func (c Config) Validate() error {
 	if _, err := zapcore.ParseLevel(c.LogLevel); err != nil {
 		return fmt.Errorf("LOG_LEVEL: %w", err)
 	}
+	if _, err := c.Settings.Normalize(); err != nil {
+		return fmt.Errorf("GRILL_ROOM_MAX_MODEL or GRILL_ROOM_MAX_EFFORT: %w", err)
+	}
+	for name, v := range map[string]string{"GRILL_ROOM_SANDBOX_CPUS": c.Limits.CPUs, "GRILL_ROOM_EGRESS_CPUS": c.Limits.EgressCPUs} {
+		if v != "" && !cpusRe.MatchString(v) {
+			return fmt.Errorf("%s %q: want a number of CPUs like 2 or 0.5, 0 for no limit", name, v)
+		}
+	}
+	for name, v := range map[string]string{"GRILL_ROOM_SANDBOX_MEMORY": c.Limits.Memory, "GRILL_ROOM_EGRESS_MEMORY": c.Limits.EgressMemory} {
+		if v != "" && !memoryRe.MatchString(v) {
+			return fmt.Errorf("%s %q: want a size like 4g or 256m, 0 for no limit", name, v)
+		}
+	}
 	return nil
 }
+
+// Docker's --cpus and --memory syntax; the values become docker arguments.
+var (
+	cpusRe   = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
+	memoryRe = regexp.MustCompile(`^[0-9]+[bkmgBKMG]?$`)
+)
 
 // newLogger writes to stderr and to ring, which the local page shows.
 func newLogger(level string, stderr io.Writer, ring *daemon.Ring) (*zap.Logger, error) {
@@ -189,15 +230,27 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	if err != nil {
 		logger.Warn("self_update_disabled", zap.Error(err))
 	}
+	settingsPath := filepath.Join(cfg.StateDir, "settings.json")
+	settings, err := daemon.LoadSettings(settingsPath, cfg.Settings)
+	if err != nil {
+		return fmt.Errorf("settings: %w", err)
+	}
+	allowlistPath := filepath.Join(cfg.StateDir, "allowlist.json")
+	allowlist, err := daemon.LoadAllowlist(allowlistPath)
+	if err != nil {
+		return fmt.Errorf("allowlist: %w", err)
+	}
 	var restart atomic.Bool
 	d := daemon.New(daemon.Options{
+		Settings: settings, SettingsPath: settingsPath, Allowlist: allowlist, AllowlistPath: allowlistPath,
 		Name: host, Version: Version, Tokens: daemon.NewTokens(cfg.StateDir), Docker: sandbox.Docker, Creds: src,
 		// No client timeout: it would cut the long-lived room stream; each request has its own deadline.
 		HTTP: &http.Client{}, Log: logger, Model: cfg.Model,
 		Image: cfg.Image, Stream: sandbox.DockerStream, Executable: exe,
+		CacheDir: filepath.Join(cfg.StateDir, "workspace-cache"), CacheMax: cfg.CacheMB << 20,
 		Restart: func() { restart.Store(true); stop() },
 		NewAgent: func(r daemon.Room, image string) daemon.Agent {
-			return sandbox.New(sandbox.Config{Image: image, Name: sandboxName(cfg.StateDir, r), Host: host, Upstream: anthropic},
+			return sandbox.New(sandbox.Config{Image: image, Name: sandboxName(cfg.StateDir, r), Host: host, Upstream: anthropic, Limits: cfg.Limits},
 				sandbox.Docker, src, logger.Named("sandbox"))
 		},
 	})
@@ -269,7 +322,7 @@ func check(ctx context.Context, cfg Config, host string, src *creds.Source, log 
 		}
 	}
 	fmt.Printf("sandbox image: %s\n", image)
-	sb := sandbox.New(sandbox.Config{Image: image, Name: fmt.Sprintf("check-%d", time.Now().Unix()), Host: host, Upstream: anthropic},
+	sb := sandbox.New(sandbox.Config{Image: image, Name: fmt.Sprintf("check-%d", time.Now().Unix()), Host: host, Upstream: anthropic, Limits: cfg.Limits},
 		sandbox.Docker, src, log)
 	defer sb.Close(ctx)
 	tctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
@@ -282,7 +335,7 @@ func check(ctx context.Context, cfg Config, host string, src *creds.Source, log 
 	if err := sb.Isolated(ctx); err != nil {
 		return fmt.Errorf("isolation: %w", err)
 	}
-	fmt.Println("isolation: ok, only the proxy is reachable")
+	fmt.Println("isolation: ok, only the proxies are reachable and the egress proxy refuses Anthropic")
 	counts, err := sb.Scan(ctx, []byte(tok.AccessToken))
 	if err != nil {
 		return fmt.Errorf("scan: %w", err)

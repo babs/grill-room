@@ -11,7 +11,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +30,7 @@ const (
 	Workspace = "/workspace"
 	home      = "/home/agent"
 	relayPort = "8787"
+	noProxy   = "proxy,localhost,127.0.0.1"
 	// Label marks every container, network and volume the daemon creates, for cleanup.
 	Label = "grill-room-daemon"
 )
@@ -43,6 +46,27 @@ type Config struct {
 	// Host names this machine in error messages shown in the room.
 	Host     string
 	Upstream *url.URL
+	// Limits caps the sandbox and its egress proxy; an empty value leaves Docker's default.
+	Limits Limits
+}
+
+// Limits are docker run --cpus and --memory values.
+type Limits struct {
+	CPUs, Memory             string
+	EgressCPUs, EgressMemory string
+}
+
+// limitFlags turns a cpus and memory pair into docker run flags.
+func limitFlags(cpus, memory string) []string {
+	var f []string
+	if cpus != "" {
+		f = append(f, "--cpus", cpus)
+	}
+	if memory != "" {
+		// Swap equal to memory: a sandbox past its limit is killed rather than paging the host.
+		f = append(f, "--memory", memory, "--memory-swap", memory)
+	}
+	return f
 }
 
 // Sandbox is one long-lived container plus its relay, network and proxy.
@@ -59,22 +83,26 @@ type Sandbox struct {
 	mu      sync.Mutex
 	srv     *http.Server
 	started bool
+	// allow is the egress allowlist the proxy runs with.
+	allow []string
 }
 
 // New prepares a sandbox; Start creates it.
 func New(cfg Config, run Runner, src *creds.Source, log *zap.Logger) *Sandbox {
 	dummy := "sk-ant-oat01-grill-room-dummy-" + rand.Text()
-	return &Sandbox{cfg: cfg, run: run, src: src, log: log, dummy: dummy,
+	return &Sandbox{cfg: cfg, run: run, src: src, log: log, dummy: dummy, allow: DefaultAllowlist,
 		proxy: proxy.New(cfg.Upstream, src, dummy, log.Named("proxy"))}
 }
 
 func (s *Sandbox) container() string { return "grill-room-" + s.cfg.Name }
 func (s *Sandbox) relay() string     { return s.container() + "-relay" }
 func (s *Sandbox) network() string   { return s.container() }
+func (s *Sandbox) egress() string    { return s.container() + "-egress" }
 func (s *Sandbox) homeVol() string   { return s.container() + "-home" }
 func (s *Sandbox) wsVol() string     { return s.container() + "-workspace" }
 
-// Start brings up the proxy, the internal network, the relay and the sandbox container.
+// Start brings up the proxy, the internal network, the relay, the egress proxy and the sandbox
+// container.
 func (s *Sandbox) Start(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -122,14 +150,29 @@ func (s *Sandbox) Start(ctx context.Context) error {
 		append(append([]string{"run", "-d", "--name", s.relay(), "--add-host", "host.docker.internal:" + gateway}, hardening...),
 			"--entrypoint", "socat", s.cfg.Image, "TCP-LISTEN:"+relayPort+",fork,reuseaddr", "TCP:host.docker.internal:"+port),
 		{"network", "connect", "--alias", "proxy", s.network(), s.relay()},
+		// The egress proxy sits on its own bridge to reach the allowlist, and on the internal
+		// network as "egress" (002-AC34).
+		{"network", "create", "--label", label, s.egress()},
+		// The local log driver is bounded and readable by docker logs, which the denied list reads.
+		append(append(append([]string{"run", "-d", "--name", s.egress(), "--network", s.egress(), "--log-driver", "local"}, hardening...),
+			limitFlags(s.cfg.Limits.EgressCPUs, s.cfg.Limits.EgressMemory)...),
+			"--tmpfs", "/tmp", "--pids-limit", "64", "-e", "GRILL_SQUID_CONF="+squidConf(s.allow),
+			"--entrypoint", "sh", s.cfg.Image, "-c", `printf '%s' "$GRILL_SQUID_CONF" > /tmp/squid.conf && exec squid -N -f /tmp/squid.conf`),
+		{"network", "connect", "--alias", "egress", s.network(), s.egress()},
 		{"volume", "create", "--label", label, s.homeVol()},
 		{"volume", "create", "--label", label, s.wsVol()},
-		append(append([]string{"run", "-d", "--init", "--name", s.container(), "--network", s.network()}, hardening...),
+		append(append(append([]string{"run", "-d", "--init", "--name", s.container(), "--network", s.network()}, hardening...),
+			limitFlags(s.cfg.Limits.CPUs, s.cfg.Limits.Memory)...),
 			"--tmpfs", "/tmp", "--pids-limit", "512",
 			"-v", s.homeVol()+":"+home, "-v", s.wsVol()+":"+Workspace, "-w", Workspace,
 			"-e", "ANTHROPIC_BASE_URL=http://proxy:"+relayPort,
 			"-e", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
 			"-e", "ENABLE_CLAUDEAI_MCP_SERVERS=false",
+			// Tools go out through the egress proxy; Claude Code's own traffic goes to the
+			// bearer-swap proxy, never through squid (002-AC35).
+			"-e", "HTTP_PROXY="+egressURL, "-e", "HTTPS_PROXY="+egressURL,
+			"-e", "http_proxy="+egressURL, "-e", "https_proxy="+egressURL,
+			"-e", "NO_PROXY="+noProxy, "-e", "no_proxy="+noProxy,
 			s.cfg.Image),
 	}
 	for _, args := range steps {
@@ -181,22 +224,31 @@ func (s *Sandbox) closeLocked(ctx context.Context) {
 // remove deletes the sandbox's objects; each may be missing, so errors are expected and ignored.
 func (s *Sandbox) remove(ctx context.Context) {
 	for _, args := range [][]string{
-		{"rm", "-f", "-v", s.container(), s.relay()},
-		{"network", "rm", s.network()},
+		{"rm", "-f", "-v", s.container(), s.relay(), s.egress()},
+		{"network", "rm", s.network(), s.egress()},
 		{"volume", "rm", "-f", s.homeVol(), s.wsVol()},
 	} {
 		_, _ = s.run(ctx, nil, args...)
 	}
 }
 
+// personaFile holds the persona's text in the sandbox home, out of the workspace the agent edits.
+const personaFile = ".grill-room/persona.md"
+
 // Request is one claude -p invocation.
 type Request struct {
 	// Prompt goes on stdin: argv caps one argument at 128 KiB, a turn's transcript can exceed it.
 	Prompt string
+	// System is appended to Claude Code's system prompt: the persona's text.
+	System string
 	Model  string
+	// Effort is passed to --effort; empty keeps Claude Code's default.
+	Effort string
 	// Resume is the session id to continue; empty starts a new session.
 	Resume string
-	Args   []string
+	// PluginDir is a plugin directory to load, the persona's skills; empty for none.
+	PluginDir string
+	Args      []string
 }
 
 // Result is claude's --output-format json answer.
@@ -257,8 +309,21 @@ func (s *Sandbox) runClaude(ctx context.Context, req Request) (*Result, error) {
 	if req.Model != "" {
 		args = append(args, "--model", req.Model)
 	}
+	if req.Effort != "" {
+		args = append(args, "--effort", req.Effort)
+	}
+	if req.System != "" {
+		if err := s.writeHome(ctx, map[string][]byte{personaFile: []byte(req.System)}); err != nil {
+			return nil, fmt.Errorf("write persona: %w", err)
+		}
+		// Snapshot off: a resumed session would otherwise keep the persona text of its first turn.
+		args = append(args, "--append-system-prompt-file", home+"/"+personaFile, "--system-prompt-snapshot", "off")
+	}
 	if req.Resume != "" {
 		args = append(args, "--resume", req.Resume)
+	}
+	if req.PluginDir != "" {
+		args = append(args, "--plugin-dir", req.PluginDir)
 	}
 	args = append(args, req.Args...)
 	before := s.proxy.Unauthorized()
@@ -291,17 +356,14 @@ func (s *Sandbox) runClaude(ctx context.Context, req Request) (*Result, error) {
 // refused refresh) and the oauthAccount stub, which skips the profile fetch only while under 24 h old.
 func (s *Sandbox) writeStubs(ctx context.Context) error {
 	nowMS := time.Now().UnixMilli()
-	files := []struct {
-		name string
-		v    any
-	}{
-		{".claude/.credentials.json", map[string]any{"claudeAiOauth": map[string]any{
+	files := map[string]any{
+		".claude/.credentials.json": map[string]any{"claudeAiOauth": map[string]any{
 			"accessToken": s.dummy, "refreshToken": "grill-room-dummy-refresh",
 			"expiresAt": time.Now().AddDate(10, 0, 0).UnixMilli(), "subscriptionType": "max",
 			"scopes": []string{"user:inference", "user:profile", "user:sessions:claude_code"},
-		}}},
+		}},
 		// Fake identity: keeps the host's account out of uploaded sessions (S2).
-		{".claude.json", map[string]any{"oauthAccount": map[string]any{
+		".claude.json": map[string]any{"oauthAccount": map[string]any{
 			"accountUuid":           "00000000-0000-4000-8000-000000000001",
 			"emailAddress":          "agent@grill-room.invalid",
 			"organizationUuid":      "00000000-0000-4000-8000-000000000002",
@@ -310,33 +372,53 @@ func (s *Sandbox) writeStubs(ctx context.Context) error {
 			"subscriptionCreatedAt": "2025-01-01T00:00:00Z",
 			"ccOnboardingFlags":     map[string]any{},
 			"profileFetchedAt":      nowMS,
-		}}},
+		}},
 	}
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: ".claude/", Mode: 0o700, ModTime: time.Now()}); err != nil {
-		return fmt.Errorf("stubs: %w", err)
-	}
-	for _, f := range files {
-		b, err := json.Marshal(f.v)
+	raw := map[string][]byte{}
+	for name, v := range files {
+		b, err := json.Marshal(v)
 		if err != nil {
 			return fmt.Errorf("stubs: %w", err)
 		}
-		if err := tw.WriteHeader(&tar.Header{Name: f.name, Mode: 0o600, Size: int64(len(b)), ModTime: time.Now()}); err != nil {
-			return fmt.Errorf("stubs: %w", err)
-		}
-		if _, err := tw.Write(b); err != nil {
-			return fmt.Errorf("stubs: %w", err)
-		}
+		raw[name] = b
 	}
-	if err := tw.Close(); err != nil {
-		return fmt.Errorf("stubs: %w", err)
-	}
-	// tar runs as the agent user, so the files end up owned by it.
-	if _, err := s.run(ctx, &buf, "exec", "-i", s.container(), "tar", "-x", "-C", home); err != nil {
+	if err := s.writeHome(ctx, raw); err != nil {
 		return fmt.Errorf("write stubs: %w", err)
 	}
 	return nil
+}
+
+// writeHome writes files, by path under the sandbox home, owner-only, creating their directories.
+func (s *Sandbox) writeHome(ctx context.Context, files map[string][]byte) error {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	now := time.Now()
+	dirs := map[string]bool{}
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if dir := path.Dir(name); dir != "." && !dirs[dir] {
+			dirs[dir] = true
+			if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: dir + "/", Mode: 0o700, ModTime: now}); err != nil {
+				return err
+			}
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: int64(len(files[name])), ModTime: now}); err != nil {
+			return err
+		}
+		if _, err := tw.Write(files[name]); err != nil {
+			return err
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	// tar runs as the agent user, so the files end up owned by it.
+	_, err := s.run(ctx, &buf, "exec", "-i", s.container(), "tar", "-x", "-C", home)
+	return err
 }
 
 var sessionIDRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)

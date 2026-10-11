@@ -223,7 +223,10 @@ func TestSandboxImageFromRoomServer(t *testing.T) {
 	}
 	srv := fakeRoomRelease(t, "v1.0.0", "", nil, pinnedImage)
 	(&roomRun{d: d, room: Room{Base: srv.URL, ID: "abc"}}).checkServer(context.Background())
-	waitFor(t, "pull progress", func() bool { s := d.Status().Image; return s.State == "pulling" && s.Progress == "layer 1: downloading" })
+	waitFor(t, "pull progress", func() bool {
+		s := d.Status().Image
+		return s.State == "pulling" && s.Progress == "layer 1: downloading"
+	})
 	if s := d.Status(); s.CanHost || !strings.Contains(s.Reason, "not ready") {
 		t.Fatalf("while pulling: %+v", s)
 	}

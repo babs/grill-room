@@ -7,8 +7,10 @@ const messages = $('messages');
 const sendForm = $('send');
 const bodyInput = $('body');
 let events;
-// lastID is the newest message shown: a reopened stream resumes after it.
+// lastID is the newest message shown: a reopened stream resumes after it. editSeq is the last
+// edit or delete applied: the stream replays the ones past it.
 let lastID = 0;
+let editSeq = 0;
 let retryTimer;
 let ended = false;
 let refreshTimer;
@@ -27,6 +29,11 @@ function end(text) {
   $('banner').hidden = false;
   sendForm.hidden = true;
   document.querySelector('.upload').hidden = true;
+  $('rename-open').hidden = true;
+  $('rename').hidden = true;
+  $('invites').hidden = true;
+  $('agent').hidden = true;
+  if ($('personas').open) $('personas').close();
   $('annotations').hidden = true;
 }
 
@@ -64,38 +71,234 @@ messages.addEventListener('scroll', () => {
 new ResizeObserver(() => { if (pinned) messages.scrollTop = messages.scrollHeight; }).observe(messages);
 
 function addMessage(m) {
-  const li = document.createElement('li');
-  li.className = 'msg ' + m.kind;
-  li.dataset.id = m.id;
   if (m.kind === 'system') {
-    li.textContent = m.body;
     // A join changes the participant list; history replay sends many, so refresh once.
     clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => loadRoom().catch(console.error), 200);
-  } else {
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    const sender = document.createElement('strong');
-    sender.textContent = m.sender;
-    const time = document.createElement('time');
-    time.dateTime = m.ts;
-    time.textContent = new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    meta.append(sender, ' ', time);
-    if (m.model) {
-      const model = document.createElement('span');
-      model.className = 'model';
-      model.textContent = m.model;
-      model.title = 'Claude model of this turn';
-      meta.append(' ', model);
-    }
-    const body = document.createElement('div');
-    body.className = 'body';
-    body.textContent = m.body;
-    li.append(meta, body);
   }
-  messages.append(li);
+  messages.append(renderMessage(m));
   if (pinned) messages.scrollTop = messages.scrollHeight;
 }
+
+// An edit or delete replaces the line in place; one not shown yet arrives later as it stands. A
+// replay of a change already shown leaves the line alone, with any edit box open on it.
+function replaceMessage(m) {
+  const li = messages.querySelector('li[data-id="' + m.id + '"]');
+  if (li && m.change_seq > Number(li.dataset.seq)) li.replaceWith(renderMessage(m));
+}
+
+function button(text, label, onClick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'link';
+  b.textContent = text;
+  if (label) b.setAttribute('aria-label', label);
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function renderMessage(m) {
+  const li = document.createElement('li');
+  li.className = 'msg ' + m.kind;
+  li.dataset.id = m.id;
+  li.dataset.seq = m.change_seq || 0;
+  if (m.kind === 'system') {
+    li.textContent = m.body;
+    return li;
+  }
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  const sender = document.createElement('strong');
+  // An agent shows its persona's badge and colour (002-AC42).
+  sender.textContent = m.badge ? m.badge + ' ' + m.sender : m.sender;
+  if (m.colour) sender.style.color = m.colour;
+  const time = document.createElement('time');
+  time.dateTime = m.ts;
+  time.textContent = new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  meta.append(sender, ' ', time);
+  if (m.kind === 'agent') {
+    // The model and effort the turn ran with (002-AC18).
+    const model = document.createElement('span');
+    model.className = 'model';
+    model.textContent = m.model || 'model unknown';
+    model.title = 'Claude model of this turn';
+    const effort = document.createElement('span');
+    effort.className = 'effort';
+    effort.textContent = 'effort ' + (m.effort || 'default');
+    effort.title = 'Effort of this turn';
+    // The host cap lowered what the persona asked for (002-AC19).
+    if (m.requested_model || m.requested_effort) {
+      const asked = document.createElement('span');
+      asked.className = 'capped';
+      asked.textContent = 'requested ' + level({ model: m.requested_model, effort: m.requested_effort }) + ' → ran';
+      const why = document.createElement('span');
+      why.className = 'capped';
+      why.textContent = '(host cap)';
+      meta.append(' ', asked, ' ', model, ' · ', effort, ' ', why);
+    } else {
+      meta.append(' ', model, ' · ', effort);
+    }
+  }
+  const body = document.createElement('div');
+  body.className = 'body';
+  if (m.deleted_at) {
+    li.classList.add('deleted');
+    body.textContent = 'message deleted';
+    li.append(meta, body);
+    return li;
+  }
+  // Rendered and sanitised by the server (render.MessageHTML).
+  body.innerHTML = m.html || '';
+  if (m.edited_at) {
+    meta.append(' ', button('(edited)', 'Show earlier versions', () => toggleVersions(li, m).catch(console.error)));
+  }
+  if (String(m.participant_id) === myID && (m.kind === 'text' || m.kind === 'voice')) {
+    meta.append(' ', button('Edit', '', () => editMessage(li, m)),
+      ' ', button('Delete', '', () => deleteMessage(m)));
+  }
+  li.append(meta, body);
+  return li;
+}
+
+async function toggleVersions(li, m) {
+  const shown = li.querySelector('.versions');
+  if (shown) {
+    shown.remove();
+    return;
+  }
+  const res = await fetch(api + '/messages/' + m.id + '/versions');
+  if (!res.ok) return;
+  const list = document.createElement('ol');
+  list.className = 'versions';
+  list.setAttribute('aria-label', 'Earlier versions');
+  list.append(...(await res.json()).map((v) => {
+    const item = document.createElement('li');
+    const when = document.createElement('time');
+    when.dateTime = v.written_at;
+    when.textContent = new Date(v.written_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+    const text = document.createElement('span');
+    text.textContent = v.body;
+    item.append(when, ' ', text);
+    return item;
+  }));
+  li.append(list);
+}
+
+function editMessage(li, m) {
+  const form = document.createElement('form');
+  form.className = 'edit';
+  const box = document.createElement('textarea');
+  box.value = m.body;
+  box.rows = 2;
+  box.maxLength = 4000;
+  // Not "message": the send box is labelled Message.
+  box.setAttribute('aria-label', 'New text');
+  const save = document.createElement('button');
+  save.textContent = 'Save';
+  const cancel = button('Cancel', '', () => li.replaceWith(renderMessage(m)));
+  form.append(box, save, ' ', cancel);
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    sendJSON('PATCH', api + '/messages/' + m.id, { body: box.value }).then((saved) => {
+      if (saved && form.isConnected) li.replaceWith(renderMessage(saved));
+    }).catch((err) => { box.setCustomValidity(err.message); box.reportValidity(); });
+  });
+  box.addEventListener('input', () => box.setCustomValidity(''));
+  box.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      form.requestSubmit();
+    } else if (e.key === 'Escape') {
+      cancel.click();
+    }
+  });
+  li.querySelector('.body').replaceWith(form);
+  box.focus();
+}
+
+function deleteMessage(m) {
+  if (!confirm('Delete this message? It shows as deleted for everyone.')) return;
+  fetch(api + '/messages/' + m.id, { method: 'DELETE' }).then((res) => {
+    if (res.status === 401) end('Your access to this room has ended.');
+  }).catch(console.error);
+}
+
+// Rename: any member may; the system line it adds makes every page reload the room header.
+function closeRename() {
+  $('rename').hidden = true;
+  $('room-name').hidden = false;
+  $('rename-open').hidden = ended;
+}
+$('rename-open').addEventListener('click', () => {
+  $('rename-input').value = $('room-name').textContent;
+  $('room-name').hidden = true;
+  $('rename-open').hidden = true;
+  $('rename').hidden = false;
+  $('rename-input').focus();
+});
+$('rename-cancel').addEventListener('click', closeRename);
+$('rename').addEventListener('submit', (e) => {
+  e.preventDefault();
+  sendJSON('PATCH', api, { name: $('rename-input').value }).then((room) => {
+    if (!room) return;
+    $('room-name').textContent = room.name;
+    document.title = room.name + ' · grill-room';
+    closeRename();
+  }).catch((err) => { $('rename-input').setCustomValidity(err.message); $('rename-input').reportValidity(); });
+});
+$('rename-input').addEventListener('input', () => $('rename-input').setCustomValidity(''));
+
+// copyField copies a read-only field, and selects it for a manual copy when the clipboard refuses.
+function copyField(input, button) {
+  navigator.clipboard.writeText(input.value).then(() => { button.textContent = 'Copied'; }, () => input.select());
+}
+
+// The join page leaves the recovery link of a profile it just created: shown here once.
+function showRecovery() {
+  const link = sessionStorage.getItem('grill_room_recovery');
+  if (!link) return;
+  sessionStorage.removeItem('grill_room_recovery');
+  $('recovery-link').value = link;
+  $('recovery').hidden = false;
+}
+$('recovery-copy').addEventListener('click', () => copyField($('recovery-link'), $('recovery-copy')));
+$('recovery-done').addEventListener('click', () => {
+  $('recovery-link').value = '';
+  $('recovery').hidden = true;
+});
+
+// Invites: a member creates links and revokes the ones they created.
+async function loadInvites() {
+  const res = await fetch(api + '/invites');
+  if (!res.ok) return;
+  const invites = (await res.json()).filter((i) => !i.revoked_at);
+  $('invite-list').replaceChildren(...invites.map((inv) => {
+    const li = document.createElement('li');
+    const when = new Date(inv.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+    const label = document.createElement('span');
+    label.textContent = 'Created ' + when;
+    const revoke = document.createElement('button');
+    revoke.type = 'button';
+    revoke.textContent = 'Revoke';
+    revoke.setAttribute('aria-label', 'Revoke the invite created ' + when);
+    revoke.addEventListener('click', () => {
+      sendJSON('DELETE', api + '/invites/' + inv.id).then(loadInvites).catch(console.error);
+    });
+    li.append(label, revoke);
+    return li;
+  }));
+}
+$('invites').addEventListener('toggle', () => { if ($('invites').open) loadInvites().catch(console.error); });
+$('invite-create').addEventListener('click', () => {
+  sendJSON('POST', api + '/invites').then((inv) => {
+    if (!inv) return;
+    $('invite-link').value = inv.url;
+    $('invite-copy').textContent = 'Copy invite';
+    $('invite-new').hidden = false;
+    return loadInvites();
+  }).catch(console.error);
+});
+$('invite-copy').addEventListener('click', () => copyField($('invite-link'), $('invite-copy')));
 
 // Documents. Text documents render in an iframe sandboxed without allow-same-origin: their
 // scripts get an opaque origin, so no room cookie and no same-origin call to the API.
@@ -106,7 +309,7 @@ function docURL(id, suffix) {
 }
 
 function describe(d) {
-  if (d.kind === 'agent') return 'agent document, ' + d.revisions + (d.revisions === 1 ? ' revision' : ' revisions');
+  if (d.kind === 'agent') return 'agent document by ' + personaLabel(d.author) + ', ' + d.revisions + (d.revisions === 1 ? ' revision' : ' revisions');
   return 'uploaded by ' + d.author;
 }
 
@@ -163,7 +366,7 @@ async function showDocument(id, refresh) {
   $('revisions').hidden = !agent;
   if (agent) {
     const prev = $('rev').value;
-    $('rev').replaceChildren(...revisions.map((r) => option(r.n, 'r' + r.n + ' · ' + new Date(r.created_at).toLocaleString())));
+    $('rev').replaceChildren(...revisions.map((r) => option(r.n, 'r' + r.n + ' · ' + personaLabel(r.author) + ' · ' + new Date(r.created_at).toLocaleString())));
     $('rev-from').replaceChildren(option('', 'nothing'), ...revisions.map((r) => option(r.n, 'r' + r.n)));
     $('rev').value = followLatest ? String(d.revisions) : prev;
     $('rev-from').value = keepFrom;
@@ -433,7 +636,7 @@ function fillItem(li, a) {
     const meta = document.createElement('div');
     meta.className = 'meta';
     const who = document.createElement('strong');
-    who.textContent = m.author;
+    who.textContent = m.badge ? m.badge + ' ' + m.author : m.author;
     const time = document.createElement('time');
     time.dateTime = m.created_at;
     time.textContent = new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -488,7 +691,7 @@ function connect() {
   clearTimeout(retryTimer);
   if (events) events.close();
   if (ended) return;
-  const es = new EventSource(api + '/events' + (lastID ? '?since=' + lastID : ''));
+  const es = new EventSource(api + '/events' + (lastID ? '?since=' + lastID + (editSeq ? '&edits=' + editSeq : '') : ''));
   events = es;
   es.onmessage = (e) => {
     const m = JSON.parse(e.data);
@@ -501,6 +704,11 @@ function connect() {
     $('reconnecting').hidden = true;
     loadDocuments().then(loadAnnotations).catch(console.error);
   };
+  es.addEventListener('message_edited', (e) => {
+    const m = JSON.parse(e.data);
+    if (m.change_seq > editSeq) editSeq = m.change_seq;
+    replaceMessage(m);
+  });
   es.addEventListener('documents', () => loadDocuments().catch(console.error));
   es.addEventListener('annotations', () => loadAnnotations().catch(console.error));
   es.addEventListener('revoked', () => end('Your access to this room has ended.'));
@@ -537,41 +745,441 @@ window.addEventListener('pageshow', (e) => { if (e.persisted && events) resume()
 window.addEventListener('online', () => { if (events) resume(); });
 window.addEventListener('focus', () => { if (events && events.readyState !== EventSource.OPEN) resume(); });
 
-// Agent. The host's daemon runs it: the LED is green only while that daemon is connected and can
-// host (D8). The host, and the participants the host allows, can press the button (D18).
-let agent = { online: false, can_trigger: [], daemons: [], turn: null };
+// Agents. The host's daemon runs every persona of the room: a persona's LED is green only while
+// that daemon is connected and can host (D8). The host, and the participants the host allows,
+// press a persona's button (D18); a press during a turn waits in the room's queue (002-AC17).
+let agent = { online: false, can_trigger: [], daemons: [], turn: null, personas: [], queue: [], models: [], efforts: [], cap_requests: [], changes: [],
+  chain: { budget: 25, count: 0, suspended: false } };
+
+// level shows a model and effort as the room says them, "opus · effort max".
+const level = (l) => (l.model || 'default') + ' · effort ' + (l.effort || 'default');
 
 const isHost = () => String(agent.host_participant_id || '') === myID;
-
-function renderAgent() {
-  const running = !!agent.turn && agent.turn.status === 'running';
-  const led = $('agent-led');
-  led.classList.toggle('on', agent.online && !running);
-  led.classList.toggle('busy', agent.online && running);
-  led.setAttribute('aria-label', !agent.online ? 'Agent offline' : running ? 'Agent working' : 'Agent ready');
-  $('agent-status').textContent = !agent.online ? (agent.reason || 'Agent offline') : running ? 'Agent working…' : '';
-  const allowed = isHost() || agent.can_trigger.includes(Number(myID));
-  const press = $('agent-press');
-  press.disabled = !agent.online || running || !allowed;
-  press.title = allowed ? '' : 'The host has not given you the agent button';
-  $('agent-fresh').hidden = !isHost();
-  $('agent-fresh').disabled = press.disabled;
+const canPress = () => isHost() || agent.can_trigger.includes(Number(myID));
+const personaByID = (id) => agent.personas.find((p) => p.id === id);
+// A persona signs documents and revisions by name: show its badge while one holds that name.
+function personaLabel(name) {
+  const p = agent.personas.find((x) => x.name === name);
+  return p ? p.badge + ' ' + name : name;
 }
 
-async function pressAgent(fresh) {
-  $('agent-press').disabled = true;
-  $('agent-fresh').disabled = true;
+function personaState(p) {
+  const running = !!agent.turn && agent.turn.status === 'running' && agent.turn.persona_id === p.id;
+  const pos = agent.queue.findIndex((q) => q.persona_id === p.id);
+  if (p.pending) return { cls: 'pending', label: p.name + ' waits for the host\'s approval' };
+  if (!agent.online) return { cls: '', label: p.name + ' offline' };
+  if (running) return { cls: 'busy', label: p.name + ' working' };
+  if (pos >= 0) return { cls: 'queued', label: p.name + ' queued, position ' + (pos + 1) };
+  return { cls: 'on', label: p.name + ' ready' };
+}
+
+function renderAgent() {
+  const bar = $('persona-buttons');
+  const kept = new Map([...bar.children].map((b) => [b.dataset.id, b]));
+  const buttons = agent.personas.map((p) => {
+    let b = kept.get(String(p.id));
+    if (!b) {
+      b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'persona';
+      b.dataset.id = p.id;
+      const led = document.createElement('span');
+      led.className = 'led';
+      led.setAttribute('role', 'img');
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      const name = document.createElement('span');
+      name.className = 'pname';
+      b.append(led, badge, name);
+      b.addEventListener('click', () => pressPersona(Number(b.dataset.id), false));
+    }
+    const st = personaState(p);
+    b.style.setProperty('--persona', p.colour);
+    b.setAttribute('aria-label', 'Ask ' + p.name);
+    b.dataset.name = p.name;
+    b.querySelector('.badge').textContent = p.badge;
+    b.querySelector('.pname').textContent = p.name;
+    const led = b.querySelector('.led');
+    led.className = 'led ' + st.cls;
+    led.setAttribute('aria-label', st.label);
+    b.disabled = !agent.online || !canPress() || st.cls === 'queued' || st.cls === 'pending';
+    b.title = !canPress() ? 'The host has not given you the agent button' : st.label;
+    return b;
+  });
+  if (buttons.length !== bar.children.length || buttons.some((b, i) => bar.children[i] !== b)) bar.replaceChildren(...buttons);
+  const running = agent.turn && agent.turn.status === 'running' ? personaByID(agent.turn.persona_id) : null;
+  $('agent-status').textContent = !agent.online ? (agent.reason || 'Agent offline')
+    : running ? running.name + ' working…' : agent.personas.length === 0 ? 'No persona: add one.' : '';
+  renderQueue();
+  renderApprovals();
+  renderChain();
+  renderPersonas();
+}
+
+// renderChain shows the agent chain: its count, a banner once it reached its budget (re-arm or
+// suspend the limit), and a permanent warning while the limit is suspended (002-AC25, 002-AC27).
+function renderChain() {
+  const c = agent.chain;
+  const paused = !c.suspended && c.count >= c.budget;
+  $('chain-count').textContent = c.suspended ? 'Chain ' + c.count + ', no limit' : 'Chain ' + c.count + '/' + c.budget;
+  $('chain-unlimited').hidden = !c.suspended;
+  $('chain-paused').hidden = !paused;
+  $('chain-paused-text').textContent = 'The agent chain reached its budget of ' + c.budget + ' turns: agents cannot call each other until it is re-armed.'
+    + (canPress() ? '' : ' The host, or someone they allow to press, can re-arm it.');
+  for (const id of ['chain-rearm', 'chain-suspend', 'chain-restore']) $(id).hidden = !canPress();
+  if (document.activeElement !== $('chain-budget')) $('chain-budget').value = c.budget;
+  $('chain-budget').disabled = !canPress();
+}
+
+function steerChain(body) {
+  return sendJSON('PATCH', api + '/chain', body).catch((err) => { $('agent-status').textContent = err.message; });
+}
+$('chain-rearm').addEventListener('click', () => steerChain({ rearm: true }));
+$('chain-suspend').addEventListener('click', () => {
+  if (confirm('Suspend the chain limit? Agents may then call each other without end, on the host\'s subscription.')) steerChain({ suspended: true });
+});
+$('chain-restore').addEventListener('click', () => steerChain({ suspended: false }));
+$('chain-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  sendJSON('PATCH', api + '/chain', { budget: Number($('chain-budget').value) })
+    .then((c) => { if (c) personasStatus('Chain budget set to ' + c.budget + '.'); })
+    .catch((err) => personasStatus(err.message));
+});
+
+// renderApprovals is the banner of what waits for the host: personas asking above the host cap
+// (002-AC19) and persona changes held while the host approves everything (002-AC21). Everyone sees
+// it; only the host answers.
+function renderApprovals() {
+  const items = [];
+  const decide = (li, what, path, body) => {
+    if (!isHost()) {
+      li.append(' The host decides.');
+      return;
+    }
+    for (const approve of [true, false]) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'small';
+      b.textContent = approve ? 'Approve' : 'Refuse';
+      b.setAttribute('aria-label', (approve ? 'Approve ' : 'Refuse ') + what);
+      b.addEventListener('click', () => {
+        sendJSON('POST', api + path, { ...body, approve }).catch((err) => { $('agent-status').textContent = err.message; });
+      });
+      li.append(' ', b);
+    }
+  };
+  for (const r of agent.cap_requests || []) {
+    const p = personaByID(r.persona_id);
+    if (!p) continue;
+    const li = document.createElement('li');
+    li.textContent = p.badge + ' ' + p.name + ' asks for ' + level(r.asks) + ', above the host cap: it runs at ' + level(r.runs) + '.';
+    decide(li, level(r.asks) + ' for ' + p.name, '/personas/' + p.id + '/cap', { model: r.asks.model || '', effort: r.asks.effort || '' });
+    items.push(li);
+  }
+  for (const c of agent.changes || []) {
+    const p = personaByID(c.persona_id);
+    if (!p) continue;
+    const li = document.createElement('li');
+    li.textContent = c.kind === 'add'
+      ? p.badge + ' ' + p.name + ', added by ' + c.requested_by + ': ' + c.summary + '.'
+      : c.requested_by + ' asks to change ' + p.badge + ' ' + p.name + ': ' + c.summary + '.';
+    decide(li, (c.kind === 'add' ? 'the persona ' : 'the change to ') + p.name, '/changes/' + c.id, {});
+    items.push(li);
+  }
+  $('approvals').hidden = items.length === 0;
+  $('approval-list').replaceChildren(...items);
+}
+
+function renderQueue() {
+  $('queue').hidden = agent.queue.length === 0;
+  $('queue-list').replaceChildren(...agent.queue.map((q) => {
+    const li = document.createElement('li');
+    const p = personaByID(q.persona_id);
+    const who = participants.find((x) => x.id === q.participant_id);
+    const by = { mention: ', mentioned by ', call: ', called by an agent', every_n: ', every ' + (p ? p.every_n : 'N') + ' rounds' }[q.source];
+    const label = (p ? p.badge + ' ' + p.name : 'a persona') + (by === undefined ? ', asked by ' : by)
+      + (q.participant_id ? (who ? who.name : 'someone') : '');
+    li.append(label);
+    if (String(q.participant_id) === myID || (!q.participant_id && canPress())) {
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'small';
+      cancel.textContent = 'Cancel';
+      cancel.setAttribute('aria-label', 'Cancel the queued turn of ' + (p ? p.name : 'this persona'));
+      cancel.addEventListener('click', () => {
+        fetch(api + '/queue/' + q.id, { method: 'DELETE' }).catch(console.error);
+      });
+      li.append(' ', cancel);
+    }
+    return li;
+  }));
+}
+
+async function pressPersona(id, fresh) {
   try {
-    await sendJSON('POST', api + '/turns', { fresh });
+    await sendJSON('POST', api + '/turns', { persona_id: id, fresh });
   } catch (err) {
     renderAgent();
     $('agent-status').textContent = err.message;
   }
 }
 
-$('agent-press').addEventListener('click', () => pressAgent(false));
-$('agent-fresh').addEventListener('click', () => {
-  if (confirm('Start a new agent session? The agent forgets its earlier turns and rereads the room history.')) pressAgent(true);
+// Personas panel: any member adds, edits, updates and removes the room's personas; a change
+// applies from that persona's next turn and shows in the chat (002-AC14, 002-AC15).
+let templates = [];
+
+function personasStatus(text) {
+  $('personas-status').textContent = text;
+}
+
+function picker(name, values, value, defaultLabel) {
+  const s = document.createElement('select');
+  s.name = name;
+  s.append(option('', defaultLabel), ...values.map((v) => option(v, v)));
+  s.value = value || '';
+  return s;
+}
+
+function field(labelText, input) {
+  const l = document.createElement('label');
+  l.append(labelText, input);
+  return l;
+}
+
+function personaForm(p) {
+  const form = document.createElement('form');
+  form.className = 'persona-form';
+  form.dataset.id = p.id;
+  form.dataset.seen = seenKey(p);
+  form.style.setProperty('--persona', p.colour);
+  const head = document.createElement('h3');
+  head.textContent = p.badge + ' ' + p.name;
+  const tpl = templates.find((t) => t.id === p.template_id);
+  const from = document.createElement('p');
+  from.className = 'hint';
+  from.textContent = (tpl ? 'From "' + tpl.title + '" v' + p.template_version : 'Its template was removed from the library.')
+    + (p.pending ? ' Waits for the host\'s approval.' : '');
+  const input = (name, value, attrs) => {
+    const i = document.createElement('input');
+    i.name = name;
+    i.value = value;
+    Object.assign(i, attrs || {});
+    return i;
+  };
+  const text = document.createElement('textarea');
+  text.name = 'text';
+  text.rows = 6;
+  text.maxLength = 8000;
+  text.value = p.text;
+  const grid = document.createElement('div');
+  grid.className = 'persona-fields';
+  grid.append(
+    field('Name', input('name', p.name, { maxLength: 30, required: true })),
+    field('Badge', input('badge', p.badge, { maxLength: 8, required: true })),
+    field('Colour', input('colour', p.colour, { type: 'color' })),
+    field('Model', picker('model', agent.models, p.model, 'host default')),
+    field('Effort', picker('effort', agent.efforts, p.effort, 'default')),
+    field('Every N rounds', input('every_n', p.every_n || 0, { type: 'number', min: 0, max: 100, title: '0 runs it on demand only' })),
+  );
+  const self = input('self_call', '', { type: 'checkbox', checked: p.self_call });
+  const selfCall = field('', self);
+  selfCall.className = 'check';
+  selfCall.append('Self-call: its own @' + p.name + ' gives it another turn');
+  const actions = document.createElement('div');
+  actions.className = 'persona-actions';
+  const save = document.createElement('button');
+  save.type = 'submit';
+  save.textContent = 'Save';
+  actions.append(save);
+  const act = (label, aria, fn) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.setAttribute('aria-label', aria);
+    b.addEventListener('click', () => fn().catch((err) => personasStatus(err.message)));
+    actions.append(b);
+    return b;
+  };
+  if (p.update_version) {
+    act('Update to v' + p.update_version, 'Update ' + p.name + ' to template version ' + p.update_version, async () => {
+      const done = await sendJSON('POST', api + '/personas/' + p.id + '/update');
+      if (done) personasStatus(done.held ? p.name + ': the update waits for the host\'s approval.' : p.name + ' updated.');
+    });
+  }
+  const mine = tpl && tpl.mine;
+  act(mine ? 'Publish as v' + (tpl.version + 1) : 'Publish as a template', 'Publish ' + p.name + ' to the library', async () => {
+    const body = formFields(form);
+    if (mine) body.template_id = tpl.id;
+    const t = await sendJSON('POST', api + '/templates', body);
+    if (t) personasStatus('Published "' + t.title + '" v' + t.version + ' to the library.');
+    await loadTemplates();
+  });
+  if (isHost()) {
+    act('New session', 'Start a new session for ' + p.name, async () => {
+      if (confirm('Start a new session for ' + p.name + '? It forgets its earlier turns and rereads the room history.')) await pressPersona(p.id, true);
+    });
+  }
+  act('Remove', 'Remove ' + p.name, async () => {
+    if (!confirm('Remove ' + p.name + ' from the room? Its session goes; what it wrote stays.')) return;
+    const res = await fetch(api + '/personas/' + p.id, { method: 'DELETE' });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'HTTP ' + res.status);
+  });
+  form.append(head, from, grid, selfCall, skillsBlock(p), field('Persona text', text), actions);
+  form.addEventListener('input', () => { form.dataset.dirty = '1'; });
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    sendJSON('PATCH', api + '/personas/' + p.id, formFields(form)).then((saved) => {
+      if (!saved) return;
+      delete form.dataset.dirty;
+      personasStatus(saved.held ? saved.name + ': the change waits for the host\'s approval.' : saved.name + ' saved. It applies from its next turn.');
+    }).catch((err) => personasStatus(err.message));
+  });
+  return form;
+}
+
+// Skills: a member turns a skill of the library or one of their own on for a persona, pinned at
+// its latest version; a newer upload is offered, never applied by itself (002-AC31). The first
+// activation of a profile shows the disclaimer (002-AC32).
+let skillLib = { skills: [], disclaimer: false, no_profile: false };
+
+function skillsBlock(p) {
+  const box = document.createElement('fieldset');
+  box.className = 'persona-skills';
+  const legend = document.createElement('legend');
+  legend.textContent = 'Skills';
+  const list = document.createElement('ul');
+  const button = (label, aria, fn) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.setAttribute('aria-label', aria);
+    b.addEventListener('click', () => fn().catch((err) => personasStatus(err.message)));
+    return b;
+  };
+  for (const k of p.skills || []) {
+    const li = document.createElement('li');
+    li.dataset.skill = k.name;
+    li.append(k.name + ' v' + k.version + (k.shared ? '' : ' (personal)'));
+    // A personal skill's update is its owner's to take: only they see it in their library.
+    if (k.update_version && skillLib.skills.some((x) => x.id === k.skill_id)) {
+      li.append(button('Update to v' + k.update_version, 'Update skill ' + k.name + ' of ' + p.name + ' to version ' + k.update_version,
+        () => turnSkillOn(p, k.skill_id)));
+    }
+    li.append(button('Turn off', 'Turn off skill ' + k.name + ' for ' + p.name, async () => {
+      const done = await sendJSON('DELETE', api + '/personas/' + p.id + '/skills/' + k.skill_id);
+      if (done) personasStatus(done.held ? p.name + ': the change waits for the host\'s approval.' : k.name + ' is off for ' + p.name + '.');
+    }));
+    list.append(li);
+  }
+  if (!list.children.length) list.append(Object.assign(document.createElement('li'), { textContent: 'None on.' }));
+  box.append(legend, list);
+  if (skillLib.no_profile) {
+    box.append(Object.assign(document.createElement('p'), { className: 'hint', textContent: 'Turning skills on needs a profile.' }));
+    return box;
+  }
+  const offered = skillLib.skills.filter((x) => !(p.skills || []).some((k) => k.skill_id === x.id));
+  if (!offered.length) {
+    box.append(Object.assign(document.createElement('p'), { className: 'hint', textContent: 'Upload skills from your profile page.' }));
+    return box;
+  }
+  const add = document.createElement('div');
+  add.className = 'skill-add';
+  const sel = document.createElement('select');
+  sel.setAttribute('aria-label', 'Skill to turn on for ' + p.name);
+  sel.append(...offered.map((x) => option(x.id, x.name + ' v' + x.version + (x.shared ? '' : ' (personal)'))));
+  // Picking a skill is not an edit of the persona's fields: the form keeps refreshing.
+  sel.addEventListener('input', (e) => e.stopPropagation());
+  add.append(sel, button('Turn on', 'Turn on the chosen skill for ' + p.name, () => turnSkillOn(p, Number(sel.value))));
+  box.append(add);
+  return box;
+}
+
+// skillsDisclaimer resolves true once the person accepts the disclaimer.
+function skillsDisclaimer() {
+  const d = $('skills-disclaimer');
+  d.returnValue = '';
+  d.showModal();
+  return new Promise((resolve) => d.addEventListener('close', () => resolve(d.returnValue === 'accept'), { once: true }));
+}
+
+async function turnSkillOn(p, id) {
+  const accept = skillLib.disclaimer && await skillsDisclaimer();
+  if (skillLib.disclaimer && !accept) return;
+  try {
+    const done = await sendJSON('PUT', api + '/personas/' + p.id + '/skills/' + id, { accept_disclaimer: accept });
+    if (done) {
+      const k = (done.skills || []).find((x) => x.skill_id === id);
+      personasStatus(done.held ? p.name + ': the change waits for the host\'s approval.' : (k ? k.name + ' v' + k.version + ' is on for ' + p.name + '.' : ''));
+    }
+  } finally {
+    // A refusal may mean the library or the disclaimer state moved on: read them again.
+    await loadSkills();
+  }
+}
+
+async function loadSkills() {
+  const [lib, st] = await Promise.all([fetch(api + '/skills'), fetch(api + '/agent')]);
+  if (!lib.ok) return;
+  skillLib = await lib.json();
+  [...$('persona-list').children].forEach((f) => { if (!f.dataset.dirty) delete f.dataset.seen; });
+  // An upload to the library does not wake the room: read the update offers afresh.
+  if (st.ok) {
+    agent = await st.json();
+    renderAgent();
+  } else {
+    renderPersonas();
+  }
+}
+
+// formFields reads the inputs' own values: FormData would turn the text's line breaks into CRLF.
+function formFields(form) {
+  const v = (name) => form.elements.namedItem(name).value;
+  return { name: v('name'), badge: v('badge'), colour: v('colour'), model: v('model'), effort: v('effort'), text: v('text'),
+    every_n: Number(v('every_n')), self_call: form.elements.namedItem('self_call').checked };
+}
+
+// seenKey is what a form shows: the persona, and whether the viewer hosts (New session).
+const seenKey = (p) => JSON.stringify([p, isHost()]);
+
+// renderPersonas refreshes the open panel; a form being edited keeps what its user typed.
+function renderPersonas() {
+  if (!$('personas').open) return;
+  const list = $('persona-list');
+  const kept = new Map([...list.children].map((f) => [f.dataset.id, f]));
+  list.replaceChildren(...agent.personas.map((p) => {
+    const f = kept.get(String(p.id));
+    if (f && (f.dataset.dirty || f.dataset.seen === seenKey(p))) return f;
+    return personaForm(p);
+  }));
+}
+
+async function loadTemplates() {
+  const res = await fetch(api + '/templates');
+  if (!res.ok) return;
+  templates = await res.json();
+  // A choice made while the library loaded survives it.
+  const chosen = $('persona-template').value;
+  $('persona-template').replaceChildren(...templates.map((t) =>
+    option(t.id, t.badge + ' ' + t.title + ' v' + t.version + (t.preset ? '' : ', by ' + t.author))));
+  if (templates.some((t) => String(t.id) === chosen)) $('persona-template').value = chosen;
+  [...$('persona-list').children].forEach((f) => { if (!f.dataset.dirty) delete f.dataset.seen; });
+  renderPersonas();
+}
+
+$('personas-open').addEventListener('click', () => {
+  personasStatus('');
+  $('persona-list').replaceChildren();
+  $('personas').showModal();
+  renderPersonas();
+  loadTemplates().catch(console.error);
+  loadSkills().catch(console.error);
+});
+$('personas-close').addEventListener('click', () => $('personas').close());
+$('persona-add').addEventListener('submit', (e) => {
+  e.preventDefault();
+  sendJSON('POST', api + '/personas', { template_id: Number($('persona-template').value) })
+    .then((p) => { if (p) personasStatus(p.name + (p.pending ? ' added. It waits for the host\'s approval.' : ' added.')); })
+    .catch((err) => personasStatus(err.message));
 });
 
 // agentControls shows who hosts and, to the host, the button right and the hand-over per row.
@@ -905,6 +1513,7 @@ if (window.visualViewport) {
 
 loadRoom().then((ok) => {
   if (!ok) return;
+  showRecovery();
   connect();
   showHostAgent().catch(console.error);
   const pair = new URLSearchParams(location.search).get('pair');

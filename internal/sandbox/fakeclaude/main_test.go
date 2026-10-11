@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type out struct {
@@ -90,6 +91,45 @@ func TestFakeClaude(t *testing.T) {
 	}
 	if o, _ := call(t, cwd, home, "FAKE_LIST"); o.Result != "transcript: 2026-10-10.md; FAKE_MARK found: true" {
 		t.Fatalf("list %+v", o)
+	}
+	// 002-AC18: the persona's text and effort, as the daemon passes them.
+	sys := filepath.Join(home, "persona.md")
+	_ = os.WriteFile(sys, []byte("You are Secretary, the note taker.\nMore.\n"), 0o600)
+	if o, _ := call(t, cwd, home, "FAKE_WHOAMI", "--append-system-prompt-file", sys, "--effort", "low"); o.Result != "You are Secretary, the note taker. (effort low)" {
+		t.Fatalf("whoami %+v", o)
+	}
+	if o, code := call(t, cwd, home, "FAKE_WHOAMI"); code != 1 || !o.IsError {
+		t.Fatalf("whoami without a system prompt %+v", o)
+	}
+	// 002-AC31: the skills of --plugin-dir run from their own folder; without it, none.
+	plugin := filepath.Join(home, "plugin")
+	_ = os.MkdirAll(filepath.Join(plugin, "skills", "stamp", "scripts"), 0o755)
+	_ = os.WriteFile(filepath.Join(plugin, "skills", "stamp", "SKILL.md"), []byte("---\nname: stamp\n---\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(plugin, "skills", "stamp", "scripts", "stamp.sh"), []byte("cat SKILL.md >/dev/null && echo STAMP-v1\n"), 0o600)
+	if o, _ := call(t, cwd, home, "FAKE_SKILLS", "--plugin-dir", plugin); o.Result != "Skills used: stamp: STAMP-v1." {
+		t.Fatalf("skills %+v", o)
+	}
+	if b, _ := os.ReadFile(filepath.Join(cwd, "docs", "skills.md")); string(b) != "# Skills\n\n- stamp: STAMP-v1\n" {
+		t.Fatalf("skills.md %q", b)
+	}
+	if o, _ := call(t, cwd, home, "FAKE_SKILLS"); o.Result != "No skills." {
+		t.Fatalf("no skills %+v", o)
+	}
+	// 002-AC24: the ping-pong of an agent chain, each persona calling the other.
+	for prompt, want := range map[string]string{
+		"## Who is here\nYou: @Grill\n\nYou are Grill, an agent.\n- FAKE_PINGPONG grill Secretary": "FAKE_PINGPONG grill Secretary: over to @Secretary.",
+		"You are Secretary, an agent.\n- FAKE_PINGPONG grill Secretary: over to @Secretary.":       "FAKE_PINGPONG grill Secretary: over to @grill.",
+	} {
+		if o, _ := call(t, cwd, home, prompt); o.Result != want {
+			t.Fatalf("ping-pong %q: %+v", prompt, o)
+		}
+	}
+	if o, code := call(t, cwd, home, "FAKE_PINGPONG alone"); code != 1 || !o.IsError {
+		t.Fatalf("ping-pong without names %+v", o)
+	}
+	slow = time.Millisecond
+	if o, _ := call(t, cwd, home, "FAKE_SLOW"); o.Result != "Slow turn done." {
+		t.Fatalf("slow %+v", o)
 	}
 	b, _ := os.ReadFile(filepath.Join(home, ".claude", "projects", strings.ReplaceAll(cwd, "/", "-"), sid+".jsonl"))
 	if n := strings.Count(string(b), "\n"); n != 4 {

@@ -6,13 +6,17 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
+	"github.com/babs/grill-room/internal/bus"
+	"github.com/babs/grill-room/internal/mail"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/web"
 )
 
 func TestConfigValidate(t *testing.T) {
 	ok := Config{Addr: "a:1", MetricsAddr: "a:2", DB: "x.db", LogLevel: "info", LogFormat: "auto",
-		MaxUploadMB: 20, MaxRoomMB: 200, MaxAttachmentMB: 5, Pandoc: "pandoc", PandocTimeout: time.Minute, TurnTimeout: 15 * time.Minute}
+		MaxUploadMB: 20, MaxRoomMB: 200, MaxAttachmentMB: 5, Pandoc: "pandoc", PandocTimeout: time.Minute, TurnTimeout: 15 * time.Minute, MagicLinkTTL: 15 * time.Minute}
 	cases := map[string]func(*Config){
 		"zero upload limit":       func(c *Config) { c.MaxUploadMB = 0 },
 		"room below upload limit": func(c *Config) { c.MaxRoomMB = 10 },
@@ -28,6 +32,11 @@ func TestConfigValidate(t *testing.T) {
 		"bad format":              func(c *Config) { c.LogFormat = "xml" },
 		"sandbox image by tag":    func(c *Config) { c.SandboxImage = "registry.example/grill-room/sandbox:v1" },
 		"sandbox image as a flag": func(c *Config) { c.SandboxImage = "--privileged@sha256:" + strings.Repeat("a", 64) },
+		"smtp without from":       func(c *Config) { c.SMTP.Addr = "mail.example:25" },
+		"smtp from without addr":  func(c *Config) { c.SMTP.From = "noreply@example.com" },
+		"smtp user, no password":  func(c *Config) { c.SMTP = mail.SMTP{Addr: "mail.example:25", From: "a@example.com", Username: "u"} },
+		"magic link ttl too long": func(c *Config) { c.MagicLinkTTL = 2 * time.Hour },
+		"magic link ttl zero":     func(c *Config) { c.MagicLinkTTL = 0 },
 		"sandbox digest too short": func(c *Config) {
 			c.SandboxImage = "registry.example/grill-room/sandbox@sha256:" + strings.Repeat("a", 63)
 		},
@@ -40,6 +49,11 @@ func TestConfigValidate(t *testing.T) {
 	if err := pinned.Validate(); err != nil {
 		t.Fatalf("pinned sandbox image: %v", err)
 	}
+	withMail := ok
+	withMail.SMTP = mail.SMTP{Addr: "mail.example:587", From: "grill-room <noreply@example.com>", Username: "u", Password: "p"}
+	if err := withMail.Validate(); err != nil || withMail.sendMail() == nil || ok.sendMail() != nil {
+		t.Fatalf("smtp config: %v", err)
+	}
 	for name, mutate := range cases {
 		c := ok
 		mutate(&c)
@@ -50,7 +64,7 @@ func TestConfigValidate(t *testing.T) {
 }
 
 func TestLoadConfigRejectsBadNumbers(t *testing.T) {
-	for key, val := range map[string]string{"GRILL_ROOM_MAX_UPLOAD_MB": "20MB", "GRILL_ROOM_MAX_ROOM_MB": "x", "GRILL_ROOM_PANDOC_TIMEOUT": "60", "GRILL_ROOM_MAX_ATTACHMENT_MB": "5MB", "GRILL_ROOM_TURN_TIMEOUT": "15"} {
+	for key, val := range map[string]string{"GRILL_ROOM_MAX_UPLOAD_MB": "20MB", "GRILL_ROOM_MAX_ROOM_MB": "x", "GRILL_ROOM_PANDOC_TIMEOUT": "60", "GRILL_ROOM_MAX_ATTACHMENT_MB": "5MB", "GRILL_ROOM_TURN_TIMEOUT": "15", "GRILL_ROOM_MAGIC_LINK_TTL": "15"} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv(key, val)
 			if _, err := loadConfig(); err == nil {
@@ -59,7 +73,7 @@ func TestLoadConfigRejectsBadNumbers(t *testing.T) {
 		})
 	}
 	c, err := loadConfig()
-	if err != nil || c.MaxUploadMB != 20 || c.MaxRoomMB != 200 || c.MaxAttachmentMB != 5 || c.TurnTimeout != 15*time.Minute || c.Validate() != nil {
+	if err != nil || c.MaxUploadMB != 20 || c.MaxRoomMB != 200 || c.MaxAttachmentMB != 5 || c.TurnTimeout != 15*time.Minute || c.MagicLinkTTL != 15*time.Minute || c.Validate() != nil {
 		t.Fatalf("defaults: %+v, %v", c, err)
 	}
 }
@@ -129,5 +143,34 @@ func TestValidateVoice(t *testing.T) {
 	t.Setenv("GRILL_ROOM_LIVEKIT_URL", "wss://livekit.example")
 	if c, _ := loadConfig(); c.LiveKitAPIURL != "https://livekit.example" {
 		t.Fatalf("default API URL %q", c.LiveKitAPIURL)
+	}
+}
+
+// 002-AC38: workspace fallbacks are counted on /metrics, one series per reason.
+func TestRegistryCountsWorkspaceFallbacks(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "m.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	b := bus.New(st)
+	mfs, err := newRegistry(b, web.New(b, "", "http://x", web.Options{}, zap.NewNop())).Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reasons []string
+	for _, mf := range mfs {
+		if mf.GetName() != "grill_room_workspace_fallbacks_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			reasons = append(reasons, m.GetLabel()[0].GetValue())
+			if m.GetCounter().GetValue() != 0 {
+				t.Fatalf("%v", m)
+			}
+		}
+	}
+	if strings.Join(reasons, ",") != "corrupt,manifest,missing,partial" {
+		t.Fatalf("reasons %v", reasons)
 	}
 }

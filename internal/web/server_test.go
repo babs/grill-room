@@ -9,7 +9,10 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -266,8 +269,12 @@ func TestE2ERoomLifecycle(t *testing.T) {
 		t.Fatalf("join: %d %+v", resp.StatusCode, alice)
 	}
 	c := resp.Cookies()
-	if len(c) != 1 || c[0].Path != "/api/rooms/"+room.ID || !c[0].HttpOnly || c[0].SameSite != http.SameSiteStrictMode {
+	if len(c) != 2 || c[0].Path != "/api/rooms/"+room.ID || !c[0].HttpOnly || c[0].SameSite != http.SameSiteStrictMode {
 		t.Fatalf("session cookie: %+v", c)
+	}
+	// 002-AC1: the profile cookie is site-wide and long-lived.
+	if c[1].Name != profileCookie || c[1].Path != "/" || !c[1].HttpOnly || c[1].SameSite != http.SameSiteStrictMode || c[1].MaxAge != 400*24*3600 {
+		t.Fatalf("profile cookie: %+v", c[1])
 	}
 	// The browser path: the cookie alone authenticates.
 	req, _ = http.NewRequestWithContext(t.Context(), "GET", e.ts.URL+"/api/rooms/"+room.ID, nil)
@@ -419,8 +426,8 @@ func TestAdminRoutesRequireAdminToken(t *testing.T) {
 		{"GET", "/api/rooms"},
 		{"POST", "/api/rooms"},
 		{"DELETE", "/api/rooms/" + room.ID},
-		{"POST", "/api/rooms/" + room.ID + "/invites"},
-		{"DELETE", "/api/rooms/" + room.ID + "/invites/" + strconv.FormatInt(inv.ID, 10)},
+		{"GET", "/api/profiles"},
+		{"DELETE", "/api/profiles/1"},
 	}
 	for _, rt := range routes {
 		for _, tok := range []string{"", "nope", member.Token, inv.Token} {
@@ -560,7 +567,7 @@ func TestHeartbeatRechecksAccess(t *testing.T) {
 	ev := e.openEvents(t, room.ID, p.Token, "")
 	nextMessage(t, ev)
 	// Straight to the store: no bus signal.
-	if err := e.st.RevokeInvite(t.Context(), room.ID, inv.ID); err != nil {
+	if _, err := e.st.RevokeInvite(t.Context(), room.ID, inv.ID); err != nil {
 		t.Fatal(err)
 	}
 	expectRevokedThenClosed(t, ev)
@@ -578,16 +585,72 @@ func TestHealthz(t *testing.T) {
 	}
 }
 
+var iconLink = regexp.MustCompile(`<link rel="(icon|apple-touch-icon|manifest)" href="([^"]+)"`)
+
+// iconTypes maps an icon file extension to the Content-Type browsers need to use it.
+var iconTypes = map[string]string{".ico": "image/x-icon", ".svg": "image/svg+xml", ".png": "image/png", ".webmanifest": "application/manifest+json"}
+
+// get fetches path and returns its status, Content-Type and body.
+func get(t *testing.T, url string) (int, string, []byte) {
+	t.Helper()
+	req, _ := http.NewRequestWithContext(t.Context(), "GET", url, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, resp.Header.Get("Content-Type"), b
+}
+
+// Every page links the favicon, a PNG icon, the apple-touch-icon and the manifest; each link and
+// each manifest icon is served with the type its extension needs.
+func TestIconsAreLinkedAndServed(t *testing.T) {
+	e := newEnv(t)
+	for _, page := range []string{"/", "/r/abc", "/profile"} {
+		_, _, html := get(t, e.ts.URL+page)
+		links := iconLink.FindAllStringSubmatch(string(html), -1)
+		hrefs := map[string]bool{}
+		for _, l := range links {
+			hrefs[l[2]] = true
+		}
+		for _, want := range []string{"/favicon.ico", "/static/icons/icon-32.png", "/static/icons/apple-touch-icon.png", "/site.webmanifest"} {
+			if !hrefs[want] {
+				t.Errorf("%s does not link %s", page, want)
+			}
+		}
+		for href := range hrefs {
+			code, ctype, body := get(t, e.ts.URL+href)
+			if code != http.StatusOK || ctype != iconTypes[path.Ext(href)] {
+				t.Errorf("%s: %d %q, want 200 %q", href, code, ctype, iconTypes[path.Ext(href)])
+			}
+			if href != "/site.webmanifest" {
+				continue
+			}
+			var m struct{ Icons []struct{ Src, Type string } }
+			if err := json.Unmarshal(body, &m); err != nil || len(m.Icons) < 2 {
+				t.Fatalf("manifest: %v %s", err, body)
+			}
+			for _, ic := range m.Icons {
+				if code, ctype, _ := get(t, e.ts.URL+ic.Src); code != http.StatusOK || ctype != ic.Type {
+					t.Errorf("manifest icon %s: %d %q, want %q", ic.Src, code, ctype, ic.Type)
+				}
+			}
+		}
+	}
+}
+
 func TestUIIsServed(t *testing.T) {
 	e := newEnv(t)
 	for path, want := range map[string]string{
-		"/":                "text/html",
-		"/join":            "text/html",
-		"/r/abc":           "text/html",
-		"/static/room.js":  "text/javascript",
-		"/static/app.css":  "text/css",
-		"/static/logo.svg": "image/svg+xml",
-		"/favicon.ico":     "image/svg+xml",
+		"/":                  "text/html",
+		"/join":              "text/html",
+		"/r/abc":             "text/html",
+		"/profile":           "text/html",
+		"/static/profile.js": "text/javascript",
+		"/static/room.js":    "text/javascript",
+		"/static/app.css":    "text/css",
+		"/static/logo.svg":   "image/svg+xml",
 	} {
 		req, _ := http.NewRequestWithContext(t.Context(), "GET", e.ts.URL+path, nil)
 		resp, err := http.DefaultClient.Do(req)
@@ -600,6 +663,27 @@ func TestUIIsServed(t *testing.T) {
 		}
 		if !strings.Contains(resp.Header.Get("Content-Security-Policy"), "default-src 'self'") {
 			t.Errorf("%s: no CSP", path)
+		}
+	}
+}
+
+// make icons writes one asset set into both embedded UIs: a copy edited or regenerated alone drifts.
+func TestIconCopiesMatch(t *testing.T) {
+	pairs := [][2]string{{"ui/logo.svg", "../../design/icons/round2/r2-03-b-three-quarter.svg"}}
+	for _, f := range []string{"logo.svg", "favicon.ico", "icons/icon-32.png", "icons/apple-touch-icon.png", "icons/icon-192.png", "icons/icon-512.png"} {
+		pairs = append(pairs, [2]string{"ui/" + f, "../daemon/ui/" + f})
+	}
+	for _, p := range pairs {
+		a, err := ui.ReadFile(p[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(p[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(a, b) {
+			t.Errorf("%s differs from %s: run make icons", p[0], p[1])
 		}
 	}
 }

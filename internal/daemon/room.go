@@ -106,23 +106,7 @@ func (t *Tokens) Set(r Room, tok string) error {
 	if err != nil {
 		return fmt.Errorf("encode tokens: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(t.path), 0o700); err != nil {
-		return fmt.Errorf("create state dir: %w", err)
-	}
-	// Write then rename: a crash mid-write must not lose every room's token.
-	tmp, err := os.CreateTemp(filepath.Dir(t.path), ".tokens-*")
-	if err != nil {
-		return fmt.Errorf("write tokens: %w", err)
-	}
-	defer os.Remove(tmp.Name()) //nolint:errcheck // gone after the rename
-	if _, err := tmp.Write(b); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write tokens: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("write tokens: %w", err)
-	}
-	if err := os.Rename(tmp.Name(), t.path); err != nil {
+	if err := writeFileAtomic(t.path, b); err != nil {
 		return fmt.Errorf("write tokens: %w", err)
 	}
 	return nil

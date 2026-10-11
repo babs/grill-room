@@ -1,6 +1,6 @@
 # grill-room
 
-Self-hosted rooms for grill sessions. Guests join from an invite link with a display name, no account. The room shows who is in, a live message stream and the room's documents.
+Self-hosted rooms for grill sessions. Guests join from an invite link with a display name, no account. The first join gives the browser a lightweight profile that follows its person from room to room. The room shows who is in, a live message stream and the room's documents.
 
 This is an early PoC. `INTENT.md` has the design and `specs/001-grill-room-poc.md` the plan.
 
@@ -34,6 +34,10 @@ On first start the server logs an `admin_token_generated` line holding the admin
 | `GRILL_ROOM_TURN_TIMEOUT` | `15m` | one agent turn's time budget (1m to 24h) |
 | `GRILL_ROOM_DAEMON_DIR` | none (`/daemon` in the image) | daemon release written by `make release`; unset offers no download |
 | `GRILL_ROOM_SANDBOX_IMAGE` | none | sandbox image advertised to daemons, pinned by digest (`<repo>[:tag]@sha256:<hex>`); unset lets each daemon build it |
+| `GRILL_ROOM_SMTP_ADDR` | none | SMTP relay (`host:port`) for magic links; unset turns email sign-in off |
+| `GRILL_ROOM_SMTP_FROM` | none | sender address, needed with `GRILL_ROOM_SMTP_ADDR` |
+| `GRILL_ROOM_SMTP_USERNAME`, `GRILL_ROOM_SMTP_PASSWORD` | none | SMTP login, both or neither; sent only after STARTTLS, unless the relay is on localhost |
+| `GRILL_ROOM_MAGIC_LINK_TTL` | `15m` | how long an emailed link works (1s to 1h) |
 | `LOG_LEVEL` | `info` | |
 | `LOG_FORMAT` | `auto` | `console` on a TTY, `json` otherwise |
 
@@ -41,7 +45,7 @@ On first start the server logs an `admin_token_generated` line holding the admin
 
 ## Rooms and invites
 
-The admin token creates rooms and invites:
+The admin token creates rooms and the first invites:
 
 ```sh
 curl -H "Authorization: Bearer $ADMIN" --json '{"name":"Pricing review"}' localhost:7680/api/rooms
@@ -49,6 +53,8 @@ curl -H "Authorization: Bearer $ADMIN" -X POST localhost:7680/api/rooms/$ROOM/in
 ```
 
 The second call returns a `url` such as `https://<host>/join#<token>`. Whoever opens it picks a display name and lands in the room. One invite can be shared with several people.
+
+Once in, any member can create invites from the room page ("Invite people") and revoke the ones they created. The admin revokes any. Revoking an invite also revokes the invites created by those who joined through it, and so on down the chain, so a member cut off cannot come back through an invite they made. Any member can rename the room, and a system line in the chat says who renamed it, from what, to what.
 
 ```sh
 # Revoke an invite: everyone who joined through it gets a 401 and their live stream closes.
@@ -61,14 +67,43 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 |---|---|---|
 | `GET /api/rooms`, `POST /api/rooms` | admin | list, create |
 | `DELETE /api/rooms/{room}` | admin | delete with all its data |
-| `POST /api/rooms/{room}/invites` | admin | new invite link |
-| `DELETE /api/rooms/{room}/invites/{id}` | admin | revoke |
-| `POST /api/join` | invite token in the body | returns a participant token and sets a cookie |
+| `PATCH /api/rooms/{room}` | admin or participant | rename: `name` |
+| `GET /api/rooms/{room}/invites` | admin or participant | every invite for the admin, a participant's own for a participant; `created_by` is the participant who created it, absent for the admin |
+| `POST /api/rooms/{room}/invites` | admin or participant | new invite link |
+| `DELETE /api/rooms/{room}/invites/{id}` | admin, or the participant who created it | revoke, with the invites its joiners created; 403 for another participant's invite |
+| `GET /api/profiles` | admin | every profile with its email and rooms |
+| `DELETE /api/profiles/{id}` | admin | delete a profile, see Personal data |
+| `POST /api/join` | invite token in the body | returns a participant token and sets the room cookie; without a valid profile cookie, also creates a profile, sets its cookie and returns `recovery_url` once |
+| `GET /api/profile` | profile cookie, optional | `email_enabled`, and `profile` (`id`, own `email`, `rooms`) or null |
+| `POST /api/profile/recover` | recovery token in the body | signs this browser into the profile |
+| `POST /api/profile/email` | profile cookie | mails a link that binds `email` to the profile; 404 without SMTP |
+| `POST /api/profile/signin` | none | mails a sign-in link if a profile holds `email`; 202 either way; 404 without SMTP |
+| `GET /api/profile/skills` | profile cookie | the profile's personal skills and the shared ones it published, each at its latest version |
+| `POST /api/profile/skills` | profile cookie | upload a skill folder as an `application/zip` body, personal, or shared with `?scope=shared`; a name the profile already uploaded in that scope becomes its next version; 400 with the reason for an invalid zip, 409 for the same files as the latest version, a shared name another profile published, or past 20 skills per profile or 20 versions per skill |
+| `DELETE /api/profile/skills/{id}` | profile cookie | remove one of the profile's personal skills; 404 for a shared one |
+| `GET /api/skills`, `DELETE /api/skills/{id}` | admin | every skill; remove one with its versions, and from every persona that had it |
+| `POST /api/profile/magic` | link token in the body | spends an emailed link: a sign-in link signs this browser in, a bind link binds the address to the profile this browser holds (403 from any other browser); 401 when unknown, used or expired, 409 when another profile holds the address; 404 without SMTP |
 | `GET /api/rooms/{room}` | participant | room, me, participants |
-| `POST /api/rooms/{room}/messages` | participant | post a text message |
-| `GET /api/rooms/{room}/events` | participant | SSE: history then live messages; resumes after `?since=<id>` or `Last-Event-ID`; a `documents` event when a document or revision is added, an `annotations` event when an annotation is added or changes; an `agent` event with the agent state (`host_participant_id`, `online`, `reason`, last `turn`, `can_trigger`, connected `daemons`) at open and on every change; with voice on, an `stt` event (`available`, `listening`) at open and on every change |
+| `POST /api/rooms/{room}/messages` | participant | post a text message (Markdown); messages carry `body` (source) and `html` (sanitised render) |
+| `PATCH /api/rooms/{room}/messages/{id}` | author | edit your text or voice line: `body`; 403 for anyone else, 409 once deleted |
+| `DELETE /api/rooms/{room}/messages/{id}` | author | soft delete: participants see `deleted_at` and no body; the agent keeps the text |
+| `GET /api/rooms/{room}/messages/{id}/versions` | participant | earlier bodies of an edited message, oldest first |
+| `GET /api/rooms/{room}/events` | participant | SSE: history then live messages; resumes after `?since=<id>` or `Last-Event-ID`; a `message_edited` event with the message for each edit or delete past `?edits=<change_seq>` (all of them on a resume without it);  a `documents` event when a document or revision is added, an `annotations` event when an annotation is added or changes; an `agent` event with the agent state (`host_participant_id`, `online`, `reason`, last `turn`, `can_trigger`, connected `daemons`, the room's `personas`, the `queue`, the `models` and `efforts` a persona may ask for, the host daemon's `cap`, the `cap_requests` of personas asking above it, and the persona `changes` waiting for the host) at open and on every change; with voice on, an `stt` event (`available`, `listening`) at open and on every change |
 | `GET /api/rooms/{room}/agent` | participant | the agent state, as in the `agent` event |
-| `POST /api/rooms/{room}/turns` | host, or a participant the host allowed | the agent button: `fresh` (host only) starts a new session; 409 `turn in progress` while one runs, 409 when no host daemon is connected |
+| `POST /api/rooms/{room}/turns` | host, or a participant the host allowed | a persona's button: `persona_id` (the room's first persona when absent), `fresh` (host only) starts a new session for it; 201 with the turn, or 202 with the queued press while another turn runs or others wait; 409 when that persona is queued already, waits for the host's approval, or no host daemon is connected |
+| `DELETE /api/rooms/{room}/queue/{id}` | who queued it | cancel a queued press |
+| `GET /api/rooms/{room}/templates` | participant | the persona template library at each template's latest version; `mine` marks the ones this participant's profile published |
+| `POST /api/rooms/{room}/templates` | participant with a profile | publish `name`, `badge`, `colour`, `text`, `model`, `effort` as a new template (`title` optional), or with `template_id` as the next version of one this profile published (403 otherwise); signed with the participant's name; 409 past 50 templates per profile or 100 versions per template |
+| `GET /api/templates`, `DELETE /api/templates/{id}` | admin | the library; remove a published template (409 for a shipped one); rooms keep their copies |
+| `POST /api/rooms/{room}/personas` | participant | add a copy of `template_id`'s latest version; a name the room uses gets a number; `pending` while the host approves everything; 409 past 12 personas |
+| `PATCH /api/rooms/{room}/personas/{id}` | participant | change `name` (one word), `badge`, `colour` (`#rrggbb`), `text`, `model` (empty, `haiku`, `sonnet`, `opus`, `fable`), `effort` (empty, `low`, `medium`, `high`, `xhigh`, `max`), `every_n`, `self_call`; applies from the persona's next turn; 202 with `held` when it waits for the host's approval; 409 for a name taken |
+| `POST /api/rooms/{room}/personas/{id}/update` | participant | take the text, model and effort of the template's newer version, keeping the room's name, badge and colour; 202 with `held` as for a change |
+| `POST /api/rooms/{room}/personas/{id}/cap` | host | answer a persona asking above the host cap: `approve`, and the `model` and `effort` the banner showed (409 when the persona asks for something else by now, or runs as it asks already) |
+| `POST /api/rooms/{room}/changes/{id}` | host | `approve` or refuse a held persona change or new persona |
+| `GET /api/rooms/{room}/skills` | participant | the skills this participant can turn on: the shared library and their profile's personal skills; `disclaimer` is true until their profile accepts the skills disclaimer, `no_profile` when they have none |
+| `PUT /api/rooms/{room}/personas/{id}/skills/{skill}` | participant with a profile | turn a skill on at its latest version, or move it there from an older pin; `accept_disclaimer` the first time (428 without it); a persona change, 202 with `held` as for one; 404 for a skill not offered to this participant, 409 for a second skill of the same name or past 10 per persona |
+| `DELETE /api/rooms/{room}/personas/{id}/skills/{skill}` | participant | turn a skill off |
+| `DELETE /api/rooms/{room}/personas/{id}` | participant | remove a persona with its session and queued press; 409 during its turn |
 | `PUT /api/rooms/{room}/host` | host | hand over: `participant_id` of a participant whose daemon is connected and can host |
 | `PATCH /api/rooms/{room}/participants/{id}` | host | `can_trigger`: grant or revoke the agent button |
 | `GET /api/rooms/{room}/voice` | participant | LiveKit `url` and a 5 min `token` for this room's audio; 404 when voice is off |
@@ -95,7 +130,37 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `POST /api/stt/heartbeat` | STT token | `worker` name and the `rooms` whose audio it is in; a worker silent for 15 s counts as gone |
 | `POST /api/rooms/{room}/voice/lines` | STT token | one transcribed utterance: `participant_id`, `body`; stored as a `voice` message from that participant |
 
-Request bodies must be JSON with `Content-Type: application/json` (415 otherwise), uploads excepted. A body over its route's limit gets a 413. Participants authenticate with `Authorization: Bearer <token>` or the cookie set at join. The server stores tokens as SHA-256 hashes.
+Request bodies must be JSON with `Content-Type: application/json` (415 otherwise), uploads excepted. A body over its route's limit gets a 413. Participants authenticate with `Authorization: Bearer <token>`, the room cookie set at join, or the profile cookie. A browser's room cookie is tried first, then its profile cookie, which opens every room its profile has a participant in, as the newest of them. The server stores tokens as SHA-256 hashes.
+
+## Profiles
+
+The first join from a browser creates a profile and sets its cookie: HttpOnly, SameSite=Strict, valid for the whole site for 400 days. Every later join from that browser attaches the new participant to the same profile. `/profile` lists the profile's rooms, and the name in the room header links there.
+
+Right after that first join, the room page shows the profile's recovery link once, with a copy button. Opening it in another browser and confirming signs that browser into the profile, and from there into all its rooms. The page asks first, and warns when the browser already holds a profile: a link someone else sent would otherwise put the browser, and every room it joins next, in their profile. The link stays valid, so whoever holds it holds the profile. The server keeps only its hash.
+
+With SMTP configured, `/profile` offers to bind an email. The server mails a link that binds the address once opened in the same browser; anywhere else it is refused and signs nobody in. Later, "sign in with email" on `/profile` mails a sign-in link to a bound address, which signs a browser in after the same confirmation as a recovery link. Each link works once, for 15 minutes unless `GRILL_ROOM_MAGIC_LINK_TTL` says otherwise.
+
+Within 15 minutes, a client IP may ask for 10 links, and for 3 to the same address; an address gets at most 10 whoever asks. That cap stops mail floods, at a cost: someone asking from 4 IPs can block an address's email sign-in for 15 minutes. The recovery link still works meanwhile. The client IP is the peer address, or the last `X-Forwarded-For` hop when the peer is on a private or loopback address, as a proxy is. A sign-in request gets the same answer, as fast, whether or not a profile holds the address: the lookup and the mail come after it. Without SMTP, `/profile` shows no email option and the email routes answer 404.
+
+The server uses STARTTLS whenever the relay offers it. A relay that offers none gets the links in clear, so keep it on a trusted network, as an in-cluster relay is.
+
+## Personal data
+
+| Data | Who sees it | Removed by |
+|---|---|---|
+| display names, messages, voice transcripts, documents, annotations | the room's participants | deleting the room |
+| a profile's rooms | the profile's own browsers, the admin | deleting the room, or the profile (the link only) |
+| a profile's email | the profile's own browsers, the admin; never other participants | deleting the profile |
+| persona templates a profile published, signed with a display name | every participant of every room | the admin removing the template, or deleting the profile; room copies stay |
+| personal skills, signed with a display name | the profile's own browsers; the agent and anyone in a room where a persona has one on | the profile removing it, the admin, or deleting the profile |
+| shared skills, signed with a display name | every participant of every room | the admin removing it; deleting the profile only detaches it |
+
+- Access is by invite link. Anyone holding a valid one can read the room, and any member can make more.
+- No audio is stored. There is no retention timer: rooms and profiles live until deleted.
+- Deleting a room removes everything stored for it. A profile outlives its rooms and stops listing them.
+- Deleting a profile (`DELETE /api/profiles/{id}`) removes its sessions, its pending and used links, its email, the persona templates it published and its personal skills. Shared skills it published stay in the library under the display name that signed them. Its participants stay in their rooms under their display names, detached from it. Every browser signed into it is signed out.
+- Deletes overwrite the freed pages (`secure_delete`) and checkpoint the WAL, so the removed rows do not linger in the database files.
+- Logs carry profile ids, never emails.
 
 ## Documents
 
@@ -164,9 +229,39 @@ The voice e2e tests play `e2e/voice/fixtures/fr-en.wav` as a fake microphone. It
 
 ## Agent
 
-The agent runs on a participant's machine, through their host daemon (below). The first participant whose daemon connects and can host becomes the host. When the host's daemon drops or can no longer host, the room moves the role to the daemon that connected earliest among those that can. The host can hand the role to anyone whose daemon is connected. The LED in the header is green while the host's daemon is connected, amber during a turn, and red with the reason when no host can run the agent. Transcripts keep recording either way.
+The agent runs on a participant's machine, through their host daemon (below). The first participant whose daemon connects and can host becomes the host. When the host's daemon drops or can no longer host, the room moves the role to the daemon that connected earliest among those that can. The host can hand the role to anyone whose daemon is connected. Each persona's LED in the header is green while the host's daemon is connected, amber during its turn, blue while it waits in the queue, and red with the reason when no host can run the agents. Transcripts keep recording either way.
 
-The host can press "Ask the agent" and can tick "can ask" next to other participants to let them press it too. One press runs one turn: the agent reads what was said and annotated since its last successful turn, edits or writes documents, answers threads and may close them, opens annotations of its own on any document, uploads included, and posts a synthesis. The synthesis shows the Claude model the turn ran on, as the daemon reported it. A new agent document never takes an upload's name. A second press during a turn gets "turn in progress". "New session" (host only) starts the agent without its memory. It then rereads the room history from the transcript files. The room keeps the Claude session after every turn, so when another daemon takes over, the next turn resumes the same session. [docs/agent-workspace.md](docs/agent-workspace.md) has the details.
+A room holds personas: agents with a name, a badge, a colour, a text that sets their role, and the model and effort they ask for. Every room starts with Grill, from the Default template, which challenges the plan. The Secretary template takes notes. In the Personas panel any member adds a persona from the template library, edits it, or removes it; each change is a line in the chat and applies from that persona's next turn. A template's newer version is offered to the room, never applied by itself. A profile can publish a persona as a template, and new versions of its own templates.
+
+Each persona has its own button. The host can press them and can tick "can ask" next to other participants to let them press too. One press runs one turn of that persona: it reads what was said and annotated since its own last successful turn, other personas' syntheses included, edits or writes documents, answers threads and may close them, opens annotations of its own on any document, uploads included, and posts a synthesis. The synthesis shows the persona's badge and name and the model and effort the turn ran with. A new agent document never takes an upload's name. One turn runs at a time in a room: a press during a turn waits in a queue shown under the header, which the person who pressed can cancel. "New session" (host only, in the panel) starts a persona without its memory. It then rereads the room history from the transcript files. The room keeps each persona's Claude session after every turn, so when another daemon takes over, each persona's next turn resumes its own session. [docs/agent-workspace.md](docs/agent-workspace.md) has the details.
+
+### Skills
+
+A skill is a Claude Code skill folder: a `SKILL.md` whose YAML frontmatter has a `name` (lowercase letters, digits and hyphens) and a `description`, plus any files it needs, scripts included. The profile page uploads one as a zip, with `SKILL.md` at the root of the zip or of its single folder. The upload is personal, kept in the profile and offered only in rooms that profile is in, or shared, in the library every room sees. Uploading a name again publishes its next version; versions never change. The server refuses a zip with symlinks, absolute or `..` paths, more than 200 files, or more than 8 MB packed or unpacked, and says why. The admin can remove any skill. Skills never come from the host's disk.
+
+In the Personas panel any member with a profile turns a skill on for a persona, from the shared library or their own personal skills, and anyone turns one off. Each change is a persona change: a line in the chat, held while the host approves everything. The persona keeps the version it was turned on at. A newer upload shows as "Update to vN", applied only when someone takes it. The first time a profile turns any skill on, the panel shows a disclaimer once:
+
+- a skill's scripts run in the host's sandbox, on the host's machine;
+- anyone in the room can ask the agent to print a skill's content, so a skill must hold no secret;
+- the sandbox reaches the Internet only through the host's egress allowlist, which does not inspect traffic, so a script can send room data to any allowed domain that accepts uploads, GitHub included when the script carries a token.
+
+The turn hands the skills to `claude -p` as a plugin directory with `--plugin-dir`. [docs/agent-workspace.md](docs/agent-workspace.md) has the layout.
+
+### Triggers and chains
+
+A persona runs on three triggers. Its button is the first. With "Every N rounds" set in the panel, it also runs after N completed turns of any persona since its own last turn; a failed turn of its own counts as that last turn, so a persona that keeps failing waits N rounds before it tries again. The third is `@name`: a text message naming a persona, in any case and outside code, queues its turn as a press by the author, so only the host and the people they allow can call one that way, and only while the agent is online. A synthesis naming another persona queues that persona too. A persona naming itself runs again only with "Self-call" ticked. Each persona is queued once however many times it is named, and queued turns run in order like presses.
+
+Turns that agents start, every N rounds or `@name` in a synthesis, are links of a chain. The header shows the count against the room's budget, 25 by default, which the host and the people they allow set in the panel. At the budget the next link is dropped, not queued: a line in the chat names who did not run, and a banner offers "Re-arm" and "Suspend limit". Dropping keeps a paused room from replaying a backlog of calls nobody saw once someone re-arms it. A press, "Re-arm" or a text message that calls a persona starts the count over. Voice lines and other text do not. "Suspend limit" lets agents call each other without end, behind a red warning until someone restores the limit; the host cap still applies.
+
+### Host cap and approvals
+
+The host pays for every turn, so the host's daemon caps the model and effort personas run with. The cap comes from `GRILL_ROOM_MAX_MODEL` and `GRILL_ROOM_MAX_EFFORT`, or from the "Host cap" form on the daemon page, which saves it in the state dir and wins over the environment from then on. Delete `settings.json` to go back to the environment's.
+
+- Models rank `haiku` < `sonnet` < `opus` < `fable`. A full model id ranks with the family it names, so `claude-sonnet-5-5` is `sonnet` and a Mythos model is `fable`. An id naming no family ranks above all of them, so any cap lowers it. Efforts rank in `--effort` order: `low` < `medium` < `high` < `xhigh` < `max`.
+- Model and effort clamp separately. A persona asking for `opus` and `max` under a `sonnet`, `high` cap runs at `sonnet`, `high`, and its synthesis says "requested opus · effort max → ran … (host cap)". A persona that leaves the model or effort empty gets the host's own default, which the cap does not touch.
+- A banner under the header lists every persona asking above the cap, with what it runs at. Everyone sees it; only the host answers. Approving lets that persona run as asked from its next turn, on the host's daemon only: the daemon's cap does not change. Refusing keeps it at the cap. Either answer is a line in the chat. An answer covers the exact model and effort it was given for: a persona asking for anything else above the cap shows in the banner again, and until then an approval still raises its cap up to what was approved.
+- Answers belong to the daemon that hosted when they were given. After a hand-over, the new host's cap applies, the banner asks the new host again, and the old answers apply again if the old host takes the role back.
+- With "Approve every new persona and persona change" ticked on the daemon page, or `GRILL_ROOM_APPROVE_ALL=true`, a member's new persona waits, greyed and unable to run, and any change of theirs to a persona waits too, in the same banner. Later changes to the same persona join its waiting request. The host's own changes apply at once, and removing a persona is never held, since it runs nothing. The mode follows the host's daemon even while it is offline. Waiting requests survive a hand-over and the new host decides them, whatever its own mode.
 
 ## Host daemon
 
@@ -179,28 +274,42 @@ make build
 
 Or install it from the room page (see Distribution below).
 
-It opens a page on `127.0.0.1` in the default browser. The page shows the pairing, Docker, the Claude credentials, whether this machine can host the agent, the logs, and a stop button. Without a room URL on the command line, paste the room link there. To pair, follow the page's link to the room, check that both pages show the same code, and press Approve: the room gives the daemon a token, which it keeps in `tokens.json` under its state dir. The daemon only opens outbound connections: an SSE stream from the room plus a status POST every 15 s, and it reconnects with backoff.
+It opens a page on `127.0.0.1` in the default browser. The page shows the pairing, Docker, the Claude credentials, whether this machine can host the agent, the host cap, the egress allowlist with the requests it refused, the logs, and a stop button. Without a room URL on the command line, paste the room link there. To pair, follow the page's link to the room, check that both pages show the same code, and press Approve: the room gives the daemon a token, which it keeps in `tokens.json` under its state dir. The daemon only opens outbound connections: an SSE stream from the room plus a status POST every 15 s, and it reconnects with backoff.
 
 The page link carries a one-time code. The page trades it for a session token kept in the tab's `sessionStorage`, and the daemon prints a fresh link in its terminal after each use. The page refuses requests whose `Host` is not `127.0.0.1:<port>` or, for writes, whose `Origin` is not the page's own.
 
 Credentials are read, never written: the macOS Keychain first (`security find-generic-password`, 3 s timeout, so a locked Keychain fails instead of hanging), then `<config dir>/.credentials.json`, where the config dir is `$CLAUDE_CONFIG_DIR` or `~/.claude`. The host's Claude Code keeps refreshing the token; the daemon re-reads it when the file changes, when it expires and after an upstream 401.
 
-The sandbox holds no credential. It sits on an `--internal` Docker network whose only other member is a socat relay to the daemon's bearer-swap proxy. The proxy replaces the sandbox's dummy bearer with the real token. It listens on the default bridge gateway, or on `127.0.0.1` under Docker Desktop. The daemon writes a dummy `.credentials.json` and an `oauthAccount` stub before every turn and sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `ENABLE_CLAUDEAI_MCP_SERVERS=false` (spike S3). Containers, network and volumes carry the `grill-room-daemon` label and are removed when the sandbox closes.
+The sandbox holds no credential. It sits on an `--internal` Docker network whose only other members are a socat relay to the daemon's bearer-swap proxy and the egress proxy, below. The proxy replaces the sandbox's dummy bearer with the real token. It listens on the default bridge gateway, or on `127.0.0.1` under Docker Desktop. The daemon writes a dummy `.credentials.json` and an `oauthAccount` stub before every turn and sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `ENABLE_CLAUDEAI_MCP_SERVERS=false` (spike S3). Containers, networks and volumes carry the `grill-room-daemon` label and are removed when the sandbox closes.
 
-When someone presses the agent button, the room hands the turn to the host's daemon. The daemon fetches the job and the workspace tar, clears the sandbox's `/workspace` and unpacks the tar there. If the room's copy of the session differs from the local one, it fetches the room's copy. Then it runs `claude -p` with the prompt on stdin and `--resume` when the room has a session, and posts back the changed files, the final answer and the session bytes added. [docs/agent-workspace.md](docs/agent-workspace.md) has the workspace layout and the prompt contract. A turn is cancelled after the room's turn timeout. Each daemon keeps one sandbox per room, named from its state dir and the room, so a restart replaces what a crash left.
+The image has `python3` with a venv on `PATH` (`/home/agent/.venv`, layered on Debian's openpyxl, pandas, python-docx, pypdf and matplotlib, plus python-pptx from PyPI), `uv`, `pip`, `node` 24 with `npm`, `pandoc`, `jq`, `yq`, `rg`, `git` and `curl`. No LibreOffice. The base, pandoc and uv images are pinned by digest; Node, yq and python-pptx are checked against sha256 sums the Dockerfile pins; the Claude Code installer checks its download against its release manifest. It runs as the non-root `agent` user on a read-only root filesystem; the home and `/workspace` are volumes, so `uv pip install`, `pip install` and `npm install` work there. It weighs 1.26 GB, up from 455 MB before the tools: Claude Code 257 MB, the Python stack about 300 MB, pandoc 147 MB, Node 138 MB.
+
+Tools reach the Internet through an egress proxy, a squid container per sandbox started from the same image. Squid sits on the sandbox's internal network as `egress` and on a bridge of its own that routes out. The sandbox gets `HTTP_PROXY` and `HTTPS_PROXY` (and lowercase) pointing at it, which uv, pip, npm, git and curl follow, and `NO_PROXY=proxy,localhost,127.0.0.1`, so Claude Code's own traffic still goes to the bearer-swap proxy and never through squid. Squid denies `.anthropic.com`, `.claude.ai` and `platform.claude.com` first, then anything but `CONNECT` to port 443, then any host off the allowlist. It does not intercept TLS, so an allowed host gets the whole tunnel. The default allowlist is `pypi.org`, `files.pythonhosted.org`, `github.com`, `codeload.github.com`, `raw.githubusercontent.com`, `objects.githubusercontent.com` and `registry.npmjs.org`.
+
+The host edits the list on the daemon page: one domain per entry, or a leading dot (`.example.com`) for a domain and its subdomains. The page refuses wildcards, IP addresses, ports, URLs and Anthropic hosts, and drops an entry a leading-dot entry already covers, which squid would refuse. The list is saved in `allowlist.json` in the state dir and the running squid reloads it at once. Below it the page lists the last 50 requests squid refused in the current room's sandbox, with host and time, read from squid's access log; the list empties when the sandbox goes.
+
+The sandbox gets 2 CPUs and 4 GiB and squid 0.5 CPU and 256 MiB by default, swap included, so a runaway script is killed instead of paging the host. The four `GRILL_ROOM_*_CPUS` and `*_MEMORY` variables below change that; `0` lifts a limit.
+
+When someone presses a persona's button, the room hands the turn to the host's daemon. The daemon fetches the job and the workspace tar, clears the sandbox's `/workspace` and unpacks the tar there. If the room's copy of the session differs from the local one, it fetches the room's copy. Then it runs `claude -p` with the prompt on stdin, the persona's text as an appended system prompt file, its `--model` and `--effort`, and `--resume` when the room has a session for that persona, and posts back the changed files, the final answer and the session bytes added. [docs/agent-workspace.md](docs/agent-workspace.md) has the workspace layout and the prompt contract. A turn is cancelled after the room's turn timeout. Each daemon keeps one sandbox per room, named from its state dir and the room, so a restart replaces what a crash left.
 
 The sandbox image comes from the room server. When the server advertises a digest-pinned image (`GRILL_ROOM_SANDBOX_IMAGE` on the server), the daemon pulls it by digest. When it advertises none, or the pull fails, for instance on a registry that wants a login, the daemon builds the Dockerfile embedded in its binary and tags the result `grill-room-sandbox:local-<hash of the Dockerfile>`, so it builds once per Dockerfile change. The page shows the pull or build progress. Until the image is ready, the daemon tells the room it cannot host.
 
 At start, and again each time it reconnects, the daemon asks the room server for its release (`/api/daemon/version`). When the server hands out a newer version built for this platform, the page offers "Update and restart". Nothing updates without that click. The daemon downloads the binary next to its own and checks it against the sha256 the server publishes. Only then does it rename it over the running binary, stop its sandboxes and exec the new version with the same room. On a mismatch it keeps the current binary and shows the error. The binary's directory must be writable by the user, as `~/.local/bin` is.
 
-`grill-room-daemon check` checks Docker and the credentials, builds the embedded sandbox image unless one is pinned, runs `claude -p --model haiku "say ok"` in a throwaway sandbox, checks that only the proxy is reachable, and counts the real token's occurrences in the container, its volumes and its inspect output. It spends one Claude request.
+`grill-room-daemon check` checks Docker and the credentials, builds the embedded sandbox image unless one is pinned, runs `claude -p --model haiku "say ok"` in a throwaway sandbox, checks that only the two proxies are reachable and that the egress proxy refuses `api.anthropic.com`, and counts the real token's occurrences in the container, its volumes and its inspect output. It spends one Claude request.
 
 | Variable | Default | |
 |---|---|---|
-| `GRILL_ROOM_DAEMON_STATE_DIR` | `<user config dir>/grill-room-daemon` | daemon tokens |
+| `GRILL_ROOM_DAEMON_STATE_DIR` | `<user config dir>/grill-room-daemon` | daemon tokens, the page's settings in `settings.json` and `allowlist.json`, and the workspace cache in `workspace-cache/` |
+| `GRILL_ROOM_DAEMON_CACHE_MB` | `1024` | size cap of the workspace cache in `<state dir>/workspace-cache`, least recently used files dropped first; `0` fetches every workspace whole |
 | `GRILL_ROOM_DAEMON_BROWSER` | `auto` | `none` prints the page link instead of opening it |
 | `GRILL_ROOM_SANDBOX_IMAGE` | none | pins the sandbox image, e.g. `grill-room-sandbox:local` from `make sandbox-image`; skips the pull and the build |
-| `GRILL_ROOM_AGENT_MODEL` | Claude Code's default | `--model` for agent turns, e.g. `haiku` |
+| `GRILL_ROOM_AGENT_MODEL` | Claude Code's default | `--model` for the turns of a persona that asks for none, e.g. `haiku` |
+| `GRILL_ROOM_MAX_MODEL` | no cap | host cap on the model: `haiku`, `sonnet`, `opus`, `fable`, or a model id naming one |
+| `GRILL_ROOM_MAX_EFFORT` | no cap | host cap on the effort: `low`, `medium`, `high`, `xhigh`, `max` |
+| `GRILL_ROOM_APPROVE_ALL` | `false` | hold every new persona and persona change until the host approves it |
+| `GRILL_ROOM_SANDBOX_CPUS`, `GRILL_ROOM_SANDBOX_MEMORY` | `2`, `4g` | the sandbox's `docker run --cpus` and `--memory` (swap included); `0` for no limit |
+| `GRILL_ROOM_EGRESS_CPUS`, `GRILL_ROOM_EGRESS_MEMORY` | `0.5`, `256m` | the same for its squid egress proxy |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | where Claude Code keeps its credentials |
 | `LOG_LEVEL` | `info` | |
 
@@ -233,7 +342,7 @@ make dev-up     # renders deploy/local/traefik-grill-room.yaml into the rules di
 make dev-down   # removes the rule, stops compose
 ```
 
-`make dev-up` publishes the app port and LiveKit's 7880 and 5349 on the docker bridge gateway only, which is where traefik's `host.docker.internal` points, so the plain-HTTP ports stay off the LAN. The room is then at `https://grill-room.<dev-domain>/`, LiveKit signalling at `livekit.<dev-domain>` and TURN at `turn.<dev-domain>`. Compose needs the LiveKit key pair and the STT token in `.env`. With `GRILL_ROOM_ADMIN_TOKEN` set there, that is the admin token; otherwise read the generated one with `docker compose logs grill-room | grep admin_token_generated`.
+Compose also runs mailpit, which catches the magic link mails; its inbox is at `http://127.0.0.1:8025` (`MAILPIT_PORT`). `make dev-up` publishes the app port and LiveKit's 7880 and 5349 on the docker bridge gateway only, which is where traefik's `host.docker.internal` points, so the plain-HTTP ports stay off the LAN. The room is then at `https://grill-room.<dev-domain>/`, LiveKit signalling at `livekit.<dev-domain>` and TURN at `turn.<dev-domain>`. Compose needs the LiveKit key pair and the STT token in `.env`. With `GRILL_ROOM_ADMIN_TOKEN` set there, that is the admin token; otherwise read the generated one with `docker compose logs grill-room | grep admin_token_generated`.
 
 ## Lab deployment on Kubernetes
 
@@ -269,9 +378,10 @@ What gets deployed, with `<domain>` standing for `K8S_DOMAIN`:
 - Every pod runs as non-root with a read-only root filesystem, no service account token and no service links.
 - A default-deny NetworkPolicy blocks everything, then one policy per flow opens DNS, traefik to the room server and LiveKit, the worker to both, the room server to LiveKit's API, media between LiveKit and the worker, and the worker's traces to the cluster's OpenTelemetry collector (a Kyverno policy there injects `OTEL_EXPORTER_OTLP_ENDPOINT` into every pod).
 - The Secret `grill-room` comes from the same `.env` keys compose uses.
+- With `GRILL_ROOM_SMTP_ADDR` and `GRILL_ROOM_SMTP_FROM` in `.env`, the room server mails magic links; the `room-smtp` NetworkPolicy opens TCP `K8S_SMTP_PORT` (default 1025) to the namespace `K8S_SMTP_NAMESPACE` (default `mailpit`), where the relay runs.
 
 `make e2e-lab` runs a whole session against the deployment through its public hostnames, with two participants, an upload, an annotation, audio and a voice line. Audio runs twice, once forced through TURN/TLS and once with default ICE. One agent turn runs with a real daemon on this machine and haiku, at most six Claude requests. [docs/lab-checklist.md](docs/lab-checklist.md) is the manual check with a participant outside the LAN.
 
 ## Make targets
 
-`build` (server and daemon), `release` (the daemon release into `DIST`, default `dist/`), `run`, `test` (race detector), `test-docker` (sandbox and agent turns against real Docker, a fake Anthropic upstream and a fake `claude`, no Claude request), `e2e` (Playwright with the installed Chrome, needs pnpm, pandoc and Docker for the agent turns, which use the fake `claude`), `e2e-voice` (Playwright against the compose stack, with fake microphones; it kills and restarts the `stt` container), `e2e-agent-live` (two real daemons against the compose stack with `claude --model haiku`: a turn, a daemon killed mid-turn, a takeover that recalls a code word through `--resume`; about six Claude requests), `e2e-install` (a clean Debian container runs the room's one-liner against the compose stack, pairs, takes a self-update and refuses a tampered release; it copies releases into the `grill-room` container and recreates it at the end; no Claude request), `stt-test` (ruff, mypy and pytest for the worker), `stt-image`, `cover`, `lint` (golangci-lint, shellcheck), `docker-build` (also tests the office fixtures against the pandoc it ships), `sandbox-image`, `sandbox-push` (pushes it to `REGISTRY` and prints its digest-pinned reference), `sandbox-fake-image` (the sandbox with `internal/sandbox/fakeclaude` as `claude`, for tests), `fixtures` (regenerates them), `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`, `k8s-push`, `k8s-render`, `k8s-check`, `k8s-apply`, `k8s-delete` (lab deployment, above), `e2e-lab` (a session against it; up to six Claude requests).
+`build` (server and daemon), `release` (the daemon release into `DIST`, default `dist/`), `run`, `test` (race detector), `test-docker` (sandbox and agent turns against real Docker, a fake Anthropic upstream and a fake `claude`, no Claude request; the egress test needs Internet access to PyPI, npm and GitHub), `e2e` (Playwright with the installed Chrome, needs pnpm, pandoc and Docker for the agent turns, which use the fake `claude`; then the magic link tests against a second server and a throwaway mailpit container), `e2e-voice` (Playwright against the compose stack, with fake microphones; it kills and restarts the `stt` container), `e2e-agent-live` (two real daemons against the compose stack with `claude --model haiku`: a turn, a daemon killed mid-turn, a takeover that recalls a code word through `--resume`; about six Claude requests), `e2e-install` (a clean Debian container runs the room's one-liner against the compose stack, pairs, takes a self-update and refuses a tampered release; it copies releases into the `grill-room` container and recreates it at the end; no Claude request), `stt-test` (ruff, mypy and pytest for the worker), `stt-image`, `cover`, `lint` (golangci-lint, shellcheck), `docker-build` (also tests the office fixtures against the pandoc it ships), `sandbox-image`, `sandbox-push` (pushes it to `REGISTRY` and prints its digest-pinned reference), `sandbox-fake-image` (the sandbox with `internal/sandbox/fakeclaude` as `claude`, for tests), `fixtures` (regenerates them), `icons` (renders the favicon, PNG icons and apple-touch-icon from the logo with Inkscape and ImageMagick), `dev-up`, `dev-down`, `traefik-install`, `traefik-uninstall`, `k8s-push`, `k8s-render`, `k8s-check`, `k8s-apply`, `k8s-delete` (lab deployment, above), `e2e-lab` (a session against it; up to six Claude requests), `e2e-lab-mail` (magic links against it, read through the lab mailpit at `K8S_MAILPIT_URL`; no Claude request).

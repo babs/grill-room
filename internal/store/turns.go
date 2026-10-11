@@ -21,7 +21,7 @@ const (
 	TurnFailed  = "failed"
 )
 
-// AgentName signs what the agent writes: messages, revisions, annotation replies.
+// AgentName signs what a turn whose persona is gone writes. A turn normally signs with its persona's name.
 const AgentName = "Agent"
 
 var (
@@ -43,22 +43,34 @@ type Turn struct {
 	// Host names the daemon's machine, for error messages.
 	Host   string `json:"host"`
 	Status string `json:"status"`
+	// PersonaID is the room persona the turn runs. PersonaName, PersonaText, ReqModel and ReqEffort
+	// are that persona as the turn started: a change during the turn applies to the next (002-AC15).
+	PersonaID   int64  `json:"persona_id,omitempty"`
+	PersonaName string `json:"persona_name,omitempty"`
+	PersonaText string `json:"-"`
+	ReqModel    string `json:"-"`
+	ReqEffort   string `json:"-"`
 	// Fresh starts a new Claude session instead of resuming Resume.
 	Fresh  bool   `json:"fresh"`
 	Resume string `json:"-"`
 	// SessionID is the session the turn ran in, set when it is done.
 	SessionID string `json:"-"`
 	// Model is the Claude model the turn ran on, as its daemon reported it; empty when unknown.
-	Model string `json:"model,omitempty"`
+	// Effort is the effort it ran with; empty for Claude Code's default.
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
 	// The cursors are the last message and annotation message ids the turn saw: the next turn
 	// reads what came after them.
-	MessageCursor    int64      `json:"-"`
-	AnnotationCursor int64      `json:"-"`
-	Prompt           string     `json:"-"`
-	Error            string     `json:"error,omitempty"`
-	Report           TurnReport `json:"report"`
-	StartedAt        time.Time  `json:"started_at"`
-	EndedAt          *time.Time `json:"ended_at,omitempty"`
+	MessageCursor    int64 `json:"-"`
+	AnnotationCursor int64 `json:"-"`
+	// ChangeCursor is the room's last message change seq the turn saw: the next turn flags the
+	// messages up to MessageCursor changed after it.
+	ChangeCursor int64      `json:"-"`
+	Prompt       string     `json:"-"`
+	Error        string     `json:"error,omitempty"`
+	Report       TurnReport `json:"report"`
+	StartedAt    time.Time  `json:"started_at"`
+	EndedAt      *time.Time `json:"ended_at,omitempty"`
 }
 
 // TurnReport is what a turn changed, and what it tried to change and was refused.
@@ -125,7 +137,7 @@ func agentAnnotate(ctx context.Context, tx *sql.Tx, roomID string, a AgentAnnota
 	if err != nil {
 		return "", fmt.Errorf("agent annotation: %w", err)
 	}
-	if _, err := insertAnnotationMessage(ctx, tx, roomID, id, &NewMessage{Author: AgentName, Body: a.Body}, 0); err != nil {
+	if _, err := insertAnnotationMessage(ctx, tx, roomID, id, &NewMessage{Author: a.author, PersonaID: a.persona, Body: a.Body}, 0); err != nil {
 		return "", err
 	}
 	return "", nil
@@ -173,12 +185,18 @@ type AgentAnnotation struct {
 	AgentDoc string
 	Anchor   anchor.Anchor
 	Body     string
+	// author and persona sign it, from the turn.
+	author  string
+	persona int64
 }
 
 // TurnOutcome is a finished turn's result, applied all at once or not at all.
 type TurnOutcome struct {
 	Synthesis string
 	Model     string
+	Effort    string
+	// Capped tells that the host cap lowered what the persona asked for: the synthesis says so.
+	Capped    bool
 	Documents []AgentWrite
 	Replies   []AgentReply
 	// Annotations are anchored after Documents are written, so they may quote this turn's text.
@@ -192,14 +210,16 @@ type TurnOutcome struct {
 }
 
 const turnCols = `SELECT id, room_id, COALESCE(participant_id, 0), COALESCE(daemon_id, 0), host, status, fresh, resume,
-	session_id, model, message_cursor, annotation_cursor, prompt, error, report, started_at, ended_at FROM turns`
+	session_id, model, message_cursor, annotation_cursor, change_cursor, prompt, error, report, started_at, ended_at,
+	COALESCE(persona_id, 0), persona_name, persona_text, req_model, req_effort, effort FROM turns`
 
 func scanTurn(sc scanner) (*Turn, error) {
 	var t Turn
 	var report, started string
 	var ended sql.NullString
 	err := sc.Scan(&t.ID, &t.RoomID, &t.ParticipantID, &t.DaemonID, &t.Host, &t.Status, &t.Fresh, &t.Resume,
-		&t.SessionID, &t.Model, &t.MessageCursor, &t.AnnotationCursor, &t.Prompt, &t.Error, &report, &started, &ended)
+		&t.SessionID, &t.Model, &t.MessageCursor, &t.AnnotationCursor, &t.ChangeCursor, &t.Prompt, &t.Error, &report, &started, &ended,
+		&t.PersonaID, &t.PersonaName, &t.PersonaText, &t.ReqModel, &t.ReqEffort, &t.Effort)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -217,7 +237,8 @@ func scanTurn(sc scanner) (*Turn, error) {
 	return &t, nil
 }
 
-// StartTurn records t as the room's running turn. ErrTurnInProgress if one is running already.
+// StartTurn records t as the room's running turn, for its persona. ErrTurnInProgress if one is
+// running already, ErrNotFound when the persona is not in the room or waits for the host's approval.
 func (s *Store) StartTurn(ctx context.Context, t *Turn) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -240,9 +261,11 @@ func (s *Store) StartTurn(ctx context.Context, t *Turn) error {
 		did = t.DaemonID
 	}
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO turns(room_id, participant_id, daemon_id, host, status, fresh, resume, message_cursor, annotation_cursor, prompt, started_at)
-		SELECT id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM rooms WHERE id = ?`,
-		pid, did, t.Host, t.Status, t.Fresh, t.Resume, t.MessageCursor, t.AnnotationCursor, t.Prompt, t.StartedAt.Format(time.RFC3339Nano), t.RoomID)
+		INSERT INTO turns(room_id, participant_id, daemon_id, host, status, fresh, resume, message_cursor, annotation_cursor, change_cursor, prompt, started_at,
+			persona_id, persona_name, persona_text, req_model, req_effort)
+		SELECT room_id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, id, ?, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? AND pending = 0`,
+		pid, did, t.Host, t.Status, t.Fresh, t.Resume, t.MessageCursor, t.AnnotationCursor, t.ChangeCursor, t.Prompt, t.StartedAt.Format(time.RFC3339Nano),
+		t.PersonaName, t.PersonaText, t.ReqModel, t.ReqEffort, t.PersonaID, t.RoomID)
 	if err != nil {
 		return fmt.Errorf("start turn: %w", err)
 	}
@@ -253,6 +276,9 @@ func (s *Store) StartTurn(ctx context.Context, t *Turn) error {
 	}
 	if t.ID, err = res.LastInsertId(); err != nil {
 		return fmt.Errorf("start turn id: %w", err)
+	}
+	if err := pinTurnSkills(ctx, tx, t.RoomID, t.ID, t.PersonaID); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("start turn: %w", err)
@@ -275,9 +301,10 @@ func (s *Store) LastTurn(ctx context.Context, roomID string) (*Turn, error) {
 	return scanTurn(s.db.QueryRowContext(ctx, turnCols+` WHERE room_id = ? ORDER BY id DESC LIMIT 1`, roomID))
 }
 
-// LastDoneTurn returns the room's latest successful turn; ErrNotFound if none succeeded.
-func (s *Store) LastDoneTurn(ctx context.Context, roomID string) (*Turn, error) {
-	return scanTurn(s.db.QueryRowContext(ctx, turnCols+` WHERE room_id = ? AND status = 'done' ORDER BY id DESC LIMIT 1`, roomID))
+// LastDoneTurn returns the latest successful turn of persona personaID in room; ErrNotFound if
+// none succeeded. Each persona reads the room from its own last turn on (002-AC16).
+func (s *Store) LastDoneTurn(ctx context.Context, roomID string, personaID int64) (*Turn, error) {
+	return scanTurn(s.db.QueryRowContext(ctx, turnCols+` WHERE room_id = ? AND persona_id = ? AND status = 'done' ORDER BY id DESC LIMIT 1`, roomID, personaID))
 }
 
 // FailTurn marks turn id failed with reason and posts it in the room, in one transaction. It
@@ -288,17 +315,17 @@ func (s *Store) FailTurn(ctx context.Context, roomID string, id int64, reason st
 		return nil, fmt.Errorf("fail turn: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
-	res, err := tx.ExecContext(ctx, `UPDATE turns SET status = 'failed', error = ?, ended_at = ? WHERE id = ? AND room_id = ? AND status = 'running'`,
-		reason, now(), id, roomID)
+	var name string
+	err = tx.QueryRowContext(ctx, `UPDATE turns SET status = 'failed', error = ?, ended_at = ? WHERE id = ? AND room_id = ? AND status = 'running'
+		RETURNING persona_name`, reason, now(), id, roomID).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("fail turn: %w", err)
 	}
-	if n, err := res.RowsAffected(); err != nil {
-		return nil, fmt.Errorf("fail turn: %w", err)
-	} else if n == 0 {
-		return nil, nil
-	}
-	m := &Message{RoomID: roomID, Kind: KindSystem, Sender: AgentName, Body: "Agent turn failed: " + reason}
+	name = signer(name)
+	m := &Message{RoomID: roomID, Kind: KindSystem, Sender: name, Body: name + " turn failed: " + reason}
 	if err := insertMessage(ctx, tx, m); err != nil {
 		return nil, err
 	}
@@ -351,10 +378,20 @@ func (s *Store) MessageCursor(ctx context.Context, roomID string) (int64, error)
 	return id, nil
 }
 
-// AgentSession returns the stored jsonl of session sid of room; ErrNotFound if there is none.
-func (s *Store) AgentSession(ctx context.Context, roomID, sid string) ([]byte, error) {
+// signer is the name a turn signs with: its persona's, or AgentName for a turn from before personas.
+func signer(personaName string) string {
+	if personaName == "" {
+		return AgentName
+	}
+	return personaName
+}
+
+// AgentSession returns the stored jsonl of session sid of persona personaID in room; ErrNotFound
+// if there is none. Sessions belong to one persona: another never resumes it (002-AC16).
+func (s *Store) AgentSession(ctx context.Context, roomID string, personaID int64, sid string) ([]byte, error) {
 	var data []byte
-	err := s.db.QueryRowContext(ctx, `SELECT data FROM agent_sessions WHERE room_id = ? AND session_id = ?`, roomID, sid).Scan(&data)
+	err := s.db.QueryRowContext(ctx, `SELECT data FROM agent_sessions WHERE room_id = ? AND persona_id = ? AND session_id = ?`,
+		roomID, personaID, sid).Scan(&data)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -385,10 +422,11 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 	if t.Status != TurnRunning || t.DaemonID != daemonID {
 		return nil, ErrTurnNotRunning
 	}
-	if err := appendSession(ctx, tx, roomID, out); err != nil {
+	if err := appendSession(ctx, tx, roomID, t.PersonaID, out); err != nil {
 		return nil, err
 	}
 	report := out.Report
+	author := signer(t.PersonaName)
 	renamed := map[string]string{}
 	for _, w := range out.Documents {
 		name, err := agentDocName(ctx, tx, roomID, w.Name)
@@ -407,7 +445,7 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 			WHERE d.room_id = ? AND d.kind = 'agent' AND d.name = ? ORDER BY r.n DESC LIMIT 1`, roomID, w.Name).Scan(&docID, &latest)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
-			if _, err := createAgentDocument(ctx, tx, roomID, w.Name, w.Format, w.Body, AgentName); err != nil {
+			if _, err := createAgentDocument(ctx, tx, roomID, w.Name, w.Format, w.Body, author); err != nil {
 				return nil, err
 			}
 			report.Created = append(report.Created, w.Name)
@@ -415,7 +453,7 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 			return nil, fmt.Errorf("complete turn: %w", err)
 		case latest == w.Body:
 		default:
-			if _, err := addRevision(ctx, tx, roomID, docID, w.Body, AgentName); err != nil {
+			if _, err := addRevision(ctx, tx, roomID, docID, w.Body, author); err != nil {
 				return nil, err
 			}
 			report.Revised = append(report.Revised, w.Name)
@@ -445,7 +483,7 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 			report.Ignored = append(report.Ignored, fmt.Sprintf("reply to annotation %d: no such annotation", r.AnnotationID))
 			continue
 		}
-		if _, err := insertAnnotationMessage(ctx, tx, roomID, r.AnnotationID, &NewMessage{Author: AgentName, Body: r.Body}, 0); err != nil {
+		if _, err := insertAnnotationMessage(ctx, tx, roomID, r.AnnotationID, &NewMessage{Author: author, PersonaID: t.PersonaID, Body: r.Body}, 0); err != nil {
 			return nil, err
 		}
 		report.Replies++
@@ -468,6 +506,7 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 				return nil, fmt.Errorf("complete turn: %w", err)
 			}
 		}
+		a.author, a.persona = author, t.PersonaID
 		why, err := agentAnnotate(ctx, tx, roomID, a)
 		if err != nil {
 			return nil, err
@@ -479,12 +518,16 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 		report.Annotated++
 	}
 	if strings.TrimSpace(out.Synthesis) != "" {
-		if err := insertMessage(ctx, tx, &Message{RoomID: roomID, Kind: KindAgent, Sender: AgentName, Body: out.Synthesis, Model: out.Model}); err != nil {
+		m := &Message{RoomID: roomID, Kind: KindAgent, Sender: author, PersonaID: t.PersonaID, Body: out.Synthesis, Model: out.Model, Effort: out.Effort}
+		if out.Capped {
+			m.ReqModel, m.ReqEffort = t.ReqModel, t.ReqEffort
+		}
+		if err := insertMessage(ctx, tx, m); err != nil {
 			return nil, err
 		}
 	}
-	if note := report.Note(); note != "" {
-		if err := insertMessage(ctx, tx, &Message{RoomID: roomID, Kind: KindSystem, Sender: AgentName, Body: note}); err != nil {
+	if note := report.Note(author); note != "" {
+		if err := insertMessage(ctx, tx, &Message{RoomID: roomID, Kind: KindSystem, Sender: author, Body: note}); err != nil {
 			return nil, err
 		}
 	}
@@ -493,21 +536,21 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 		return nil, fmt.Errorf("complete turn: %w", err)
 	}
 	ended := time.Now().UTC()
-	if _, err := tx.ExecContext(ctx, `UPDATE turns SET status = 'done', session_id = ?, model = ?, report = ?, ended_at = ? WHERE id = ?`,
-		out.SessionID, out.Model, string(rep), ended.Format(time.RFC3339Nano), id); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE turns SET status = 'done', session_id = ?, model = ?, effort = ?, report = ?, ended_at = ? WHERE id = ?`,
+		out.SessionID, out.Model, out.Effort, string(rep), ended.Format(time.RFC3339Nano), id); err != nil {
 		return nil, fmt.Errorf("complete turn: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("complete turn: %w", err)
 	}
-	t.Status, t.SessionID, t.Model, t.Report, t.EndedAt = TurnDone, out.SessionID, out.Model, report, &ended
+	t.Status, t.SessionID, t.Model, t.Effort, t.Report, t.EndedAt = TurnDone, out.SessionID, out.Model, out.Effort, report, &ended
 	return t, nil
 }
 
-// appendSession adds out's session bytes to the stored copy, provided they start where it ends.
-func appendSession(ctx context.Context, tx *sql.Tx, roomID string, out *TurnOutcome) error {
+// appendSession adds out's session bytes to persona's stored copy, provided they start where it ends.
+func appendSession(ctx context.Context, tx *sql.Tx, roomID string, persona int64, out *TurnOutcome) error {
 	var stored []byte
-	err := tx.QueryRowContext(ctx, `SELECT data FROM agent_sessions WHERE room_id = ? AND session_id = ?`, roomID, out.SessionID).Scan(&stored)
+	err := tx.QueryRowContext(ctx, `SELECT data FROM agent_sessions WHERE persona_id = ? AND session_id = ?`, persona, out.SessionID).Scan(&stored)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("append session: %w", err)
 	}
@@ -517,17 +560,18 @@ func appendSession(ctx context.Context, tx *sql.Tx, roomID string, out *TurnOutc
 	// Appended in Go: SQLite's || would turn the blob into text. Never nil: the column is NOT NULL.
 	data := append(append(make([]byte, 0, len(stored)+len(out.Session)), stored...), out.Session...)
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO agent_sessions(room_id, session_id, data, updated_at) VALUES(?,?,?,?)
-		ON CONFLICT(room_id, session_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
-		roomID, out.SessionID, data, now())
+		INSERT INTO agent_sessions(room_id, persona_id, session_id, data, updated_at) VALUES(?,?,?,?,?)
+		ON CONFLICT(persona_id, session_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
+		roomID, persona, out.SessionID, data, now())
 	if err != nil {
 		return fmt.Errorf("append session: %w", err)
 	}
 	return nil
 }
 
-// Note is the room message telling what the turn refused or ignored; empty when nothing was.
-func (r TurnReport) Note() string {
+// Note is the room message telling what the turn of persona name refused or ignored; empty when
+// nothing was.
+func (r TurnReport) Note(name string) string {
 	var parts []string
 	if len(r.Rejected) > 0 {
 		parts = append(parts, "uploads are read-only, changes refused: "+strings.Join(r.Rejected, ", "))
@@ -541,7 +585,7 @@ func (r TurnReport) Note() string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return "Agent turn: " + strings.Join(parts, ". ") + "."
+	return name + " turn: " + strings.Join(parts, ". ") + "."
 }
 
 // SetHost makes participant pid of room the agent host. ErrNotFound if pid is not in room.

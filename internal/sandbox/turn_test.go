@@ -87,11 +87,27 @@ func (e *emulator) run(_ context.Context, stdin io.Reader, args ...string) ([]by
 		}
 		return fmt.Appendf(nil, "%d\n%s  -\n", len(d), sum(d)), nil
 	case cmd[0] == "tar" && cmd[1] == "-x":
-		into := e.home
 		if cmd[3] == Workspace {
-			into = e.ws
+			return nil, untar(stdin, e.ws)
 		}
-		return nil, untar(stdin, into)
+		// A directory under the home keeps its path, as the plugin directory does.
+		sub := map[string][]byte{}
+		err := untar(stdin, sub)
+		prefix := strings.TrimPrefix(strings.TrimPrefix(cmd[3], home), "/")
+		for p, d := range sub {
+			if prefix != "" {
+				p = prefix + "/" + p
+			}
+			e.home[p] = d
+		}
+		return nil, err
+	case cmd[0] == "rm" && cmd[1] == "-rf":
+		prefix := strings.TrimPrefix(cmd[2], home+"/") + "/"
+		for p := range e.home {
+			if strings.HasPrefix(p, prefix) {
+				delete(e.home, p)
+			}
+		}
 	case cmd[0] == "tar" && cmd[1] == "-c":
 		list, _ := io.ReadAll(stdin)
 		var buf bytes.Buffer
@@ -188,6 +204,34 @@ func TestRunTurn(t *testing.T) {
 		if c.Path != want[i].Path || c.Deleted != want[i].Deleted || !bytes.Equal(c.Content, want[i].Content) {
 			t.Fatalf("change %d = %+v, want %+v", i, c, want[i])
 		}
+	}
+}
+
+// 002-AC31: a turn's skills land in the home's plugin directory and reach claude through
+// --plugin-dir; the next turn starts from none.
+func TestRunTurnLoadsSkills(t *testing.T) {
+	e := newEmulator()
+	var seen []string
+	e.claude = func(e *emulator, _ string, args []string) (string, error) {
+		i := slices.Index(args, "--plugin-dir")
+		got := "none"
+		if i >= 0 {
+			got = args[i+1] + " " + string(e.home[".grill-room/plugin/skills/stamp/SKILL.md"])
+		} else if len(e.home[".grill-room/plugin/skills/stamp/SKILL.md"]) > 0 {
+			got = "stale plugin"
+		}
+		seen = append(seen, got)
+		e.home[".claude/projects/-workspace/"+sid+".jsonl"] = []byte("l\n")
+		return `{"result":"done","session_id":"` + sid + `"}`, nil
+	}
+	s := newTurnSandbox(t, e)
+	for _, plugin := range []io.Reader{workspaceTar(t, map[string]string{"skills/stamp/SKILL.md": "stamp v1"}), nil} {
+		if _, err := s.RunTurn(context.Background(), TurnInput{Workspace: workspaceTar(t, nil), Prompt: "p", Plugin: plugin}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !slices.Equal(seen, []string{pluginDir + " stamp v1", "none"}) {
+		t.Fatalf("claude saw %q", seen)
 	}
 }
 

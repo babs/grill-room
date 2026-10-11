@@ -30,8 +30,10 @@ import (
 	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/convert"
 	"github.com/babs/grill-room/internal/livekit"
+	"github.com/babs/grill-room/internal/mail"
 	"github.com/babs/grill-room/internal/sandbox"
 	"github.com/babs/grill-room/internal/store"
+	"github.com/babs/grill-room/internal/turn"
 	"github.com/babs/grill-room/internal/web"
 )
 
@@ -84,6 +86,10 @@ type Config struct {
 	DaemonDir string
 	// SandboxImage is the digest-pinned sandbox image advertised to daemons; empty lets them build it.
 	SandboxImage string
+	// SMTP sends magic links; an empty Addr turns email sign-in off.
+	SMTP mail.SMTP
+	// MagicLinkTTL is how long an emailed sign-in link works.
+	MagicLinkTTL time.Duration
 }
 
 func loadConfig() (Config, error) {
@@ -93,7 +99,15 @@ func loadConfig() (Config, error) {
 	timeout, err3 := time.ParseDuration(getEnv("GRILL_ROOM_PANDOC_TIMEOUT", "60s"))
 	maxAttachment, err4 := strconv.ParseInt(getEnv("GRILL_ROOM_MAX_ATTACHMENT_MB", "5"), 10, 64)
 	turnTimeout, err5 := time.ParseDuration(getEnv("GRILL_ROOM_TURN_TIMEOUT", "15m"))
+	magicTTL, err6 := time.ParseDuration(getEnv("GRILL_ROOM_MAGIC_LINK_TTL", web.DefaultMagicLinkTTL.String()))
 	return Config{
+		SMTP: mail.SMTP{
+			Addr:     os.Getenv("GRILL_ROOM_SMTP_ADDR"),
+			From:     os.Getenv("GRILL_ROOM_SMTP_FROM"),
+			Username: os.Getenv("GRILL_ROOM_SMTP_USERNAME"),
+			Password: os.Getenv("GRILL_ROOM_SMTP_PASSWORD"),
+		},
+		MagicLinkTTL:    magicTTL,
 		TurnTimeout:     turnTimeout,
 		MaxUploadMB:     maxUpload,
 		MaxRoomMB:       maxRoom,
@@ -115,7 +129,7 @@ func loadConfig() (Config, error) {
 		LogFormat:        getEnv("LOG_FORMAT", "auto"),
 		DaemonDir:        os.Getenv("GRILL_ROOM_DAEMON_DIR"),
 		SandboxImage:     os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
-	}, errors.Join(err1, err2, err3, err4, err5)
+	}, errors.Join(err1, err2, err3, err4, err5, err6)
 }
 
 // Validate rejects a configuration the server cannot run with.
@@ -140,6 +154,16 @@ func (c Config) Validate() error {
 	}
 	if err := c.validateVoice(); err != nil {
 		return err
+	}
+	if c.SMTP.Addr != "" {
+		if err := c.SMTP.Validate(); err != nil {
+			return fmt.Errorf("GRILL_ROOM_SMTP_*: %w", err)
+		}
+	} else if c.SMTP != (mail.SMTP{}) {
+		return errors.New("GRILL_ROOM_SMTP_FROM, _USERNAME and _PASSWORD need GRILL_ROOM_SMTP_ADDR")
+	}
+	if c.MagicLinkTTL < time.Second || c.MagicLinkTTL > time.Hour {
+		return fmt.Errorf("GRILL_ROOM_MAGIC_LINK_TTL %s: want 1s to 1h", c.MagicLinkTTL)
 	}
 	// Security: a tag can be moved to another image after review; a digest cannot.
 	if c.SandboxImage != "" && !sandbox.PinnedImage(c.SandboxImage) {
@@ -209,6 +233,14 @@ func adminTokenHash(ctx context.Context, st *store.Store, fromEnv string) (hash,
 		return "", "", err
 	}
 	return hash, generated, nil
+}
+
+// sendMail returns the magic link sender, nil when email sign-in is off.
+func (c Config) sendMail() func(ctx context.Context, to, subject, body string) error {
+	if c.SMTP.Addr == "" {
+		return nil
+	}
+	return c.SMTP.Send
 }
 
 // voice returns the LiveKit settings, nil when voice is off.
@@ -303,21 +335,16 @@ func run() error {
 		Voice:              cfg.voice(),
 		Release:            release,
 		SandboxImage:       cfg.SandboxImage,
+		SendMail:           cfg.sendMail(),
+		MagicLinkTTL:       cfg.MagicLinkTTL,
 	}, logger)
+	if cfg.SMTP.Addr == "" {
+		logger.Info("email_signin_disabled", zap.String("hint", "set GRILL_ROOM_SMTP_ADDR and GRILL_ROOM_SMTP_FROM to send magic links"))
+	}
 	if cfg.LiveKitURL == "" {
 		logger.Info("voice_disabled", zap.String("hint", "set GRILL_ROOM_LIVEKIT_URL to enable audio"))
 	}
-	reg := prometheus.NewRegistry()
-	reg.MustRegister(
-		collectors.NewGoCollector(),
-		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
-		prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_bus_dropped_total", Help: "Room change signals lost to full subscriber buffers."},
-			func() float64 { return float64(b.Dropped()) }),
-		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_event_streams", Help: "Open SSE event streams."},
-			func() float64 { return float64(srv.Streams()) }),
-		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_stt_workers", Help: "STT workers with a recent heartbeat."},
-			func() float64 { return float64(srv.STTWorkers()) }),
-	)
+	reg := newRegistry(b, srv)
 
 	appSrv := &http.Server{
 		Addr:    cfg.Addr,
@@ -343,4 +370,25 @@ func run() error {
 	err = g.Wait()
 	logger.Info("shutdown")
 	return err
+}
+
+// newRegistry holds the process metrics and the room server's own.
+func newRegistry(b *bus.Bus, srv *web.Server) *prometheus.Registry {
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+		prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_bus_dropped_total", Help: "Room change signals lost to full subscriber buffers."},
+			func() float64 { return float64(b.Dropped()) }),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_event_streams", Help: "Open SSE event streams."},
+			func() float64 { return float64(srv.Streams()) }),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_stt_workers", Help: "STT workers with a recent heartbeat."},
+			func() float64 { return float64(srv.STTWorkers()) }),
+	)
+	for _, reason := range turn.FallbackReasons {
+		reg.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_workspace_fallbacks_total",
+			Help: "Full workspace fetches by daemons that keep a workspace cache.", ConstLabels: prometheus.Labels{"reason": reason}},
+			func() float64 { return float64(srv.WorkspaceFallbacks(reason)) }))
+	}
+	return reg
 }

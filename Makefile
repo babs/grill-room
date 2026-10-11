@@ -25,7 +25,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: build release run test test-docker e2e e2e-voice e2e-agent-live e2e-install e2e-lab stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: build release run test test-docker e2e e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -54,23 +54,25 @@ test:
 	go test -race -cover ./...
 
 # Sandbox and agent turn tests against real Docker, a fake Anthropic upstream and a fake claude:
-# no subscription use.
+# no subscription use. The egress test needs Internet access to PyPI, npm and GitHub. -p 1: the
+# packages' sandboxes would otherwise compete for Docker and time out the turn waits.
 test-docker: sandbox-image sandbox-fake-image
 	GRILL_ROOM_TEST_DOCKER=1 GRILL_ROOM_SANDBOX_IMAGE=$(SANDBOX_IMAGE) GRILL_ROOM_SANDBOX_FAKE_IMAGE=$(SANDBOX_FAKE_IMAGE) \
-	  go test -race -run 'Docker' ./internal/sandbox/ ./internal/daemon/
+	  go test -race -p 1 -run 'Docker' ./internal/sandbox/ ./internal/daemon/
 
 # Browser tests against a fresh server, in the installed Chrome; agent turns run in Docker with the
-# fake claude.
+# fake claude. Magic links run against a second server and a throwaway mailpit container.
 e2e: build sandbox-fake-image
 	$(MAKE) release DIST=bin/e2e-release VERSION=v0.0.1
-	cd e2e && pnpm install --frozen-lockfile && pnpm test
+	cd e2e && pnpm install --frozen-lockfile && pnpm test && pnpm exec playwright test -c mail/playwright.config.js
 
 # Voice tests against the compose stack behind the local traefik: run `make dev-up` first.
 e2e-voice:
 	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c voice/playwright.config.js
 
-# Agent turns with two real daemons against the compose stack: run `make dev-up sandbox-image` first.
-# Spends about six real Claude requests (haiku) with this machine's Claude Code login.
+# Agent turns with real daemons against the compose stack: run `make dev-up sandbox-image` first.
+# Spends four to eight real Claude requests (haiku) with this machine's Claude Code login, plus at
+# most four for the skill turn (skills-live.spec.js, three when last run).
 e2e-agent-live: build
 	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c agent-live/playwright.config.js
 
@@ -85,6 +87,10 @@ e2e-install:
 # Claude requests, and the sandbox image the room server advertises.
 e2e-lab: build
 	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c lab/playwright.config.js
+
+# Magic links against the lab deployment and its mailpit (K8S_MAILPIT_URL in .env); no Claude request.
+e2e-lab-mail:
+	cd e2e && pnpm install --frozen-lockfile && GRILL_ROOM_E2E_LAB=1 pnpm exec playwright test -c mail/playwright.config.js
 
 # STT worker: lint, types and unit tests. The e2e-marked test runs too once the model is in the
 # Hugging Face cache, and skips otherwise.
@@ -104,6 +110,7 @@ cover:
 
 lint:
 	golangci-lint run ./...
+	@out=$$(git ls-files -co --exclude-standard '*.go' | xargs gofmt -l); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 	git ls-files -co --exclude-standard '*.sh' | xargs shellcheck
 
 docker-build:
@@ -152,8 +159,13 @@ K8S_NAMESPACE ?= grill-room
 K8S_OUT       := deploy/k8s/out
 K8S_VARS      := K8S_DOMAIN K8S_STORAGE_CLASS GRILL_ROOM_IMAGE GRILL_STT_IMAGE GRILL_ROOM_ADMIN_TOKEN STT_TOKEN LIVEKIT_API_KEY LIVEKIT_API_SECRET
 KUBECTL        = kubectl -n '$(K8S_NAMESPACE)'
+# Optional: an empty GRILL_ROOM_SMTP_ADDR turns email sign-in off. The NetworkPolicy opens
+# K8S_SMTP_PORT to the namespace K8S_SMTP_NAMESPACE, where the relay runs.
+K8S_SMTP_NAMESPACE ?= mailpit
+K8S_SMTP_PORT      ?= 1025
+K8S_OPTIONAL  := GRILL_ROOM_SANDBOX_IMAGE GRILL_ROOM_SMTP_ADDR GRILL_ROOM_SMTP_FROM K8S_SMTP_NAMESPACE K8S_SMTP_PORT
 # Exported to the render recipe only: no other recipe sees the secrets in its environment.
-$(foreach v,$(K8S_VARS) GRILL_ROOM_SANDBOX_IMAGE,$(eval k8s-render: export $(v) := $$($(v))))
+$(foreach v,$(K8S_VARS) $(K8S_OPTIONAL),$(eval k8s-render: export $(v) := $$($(v))))
 
 # The room server and STT images, pushed for the lab; prints the .env lines to paste.
 k8s-push: docker-build stt-image
@@ -167,10 +179,12 @@ k8s-render:
 	  || { echo "$$v must be pinned by digest: run make k8s-push" >&2; exit 1; }; done
 	@for v in GRILL_ROOM_ADMIN_TOKEN STT_TOKEN LIVEKIT_API_KEY LIVEKIT_API_SECRET; do printenv "$$v" | grep -Eq '^[A-Za-z0-9._~+/=-]+$$' \
 	  || { echo "$$v holds characters the Secret template cannot quote: use [A-Za-z0-9._~+/=-]" >&2; exit 1; }; done
+	@printenv K8S_SMTP_PORT | grep -Eq '^[0-9]+$$' || { echo "K8S_SMTP_PORT must be a port number" >&2; exit 1; }
+	@printenv GRILL_ROOM_SMTP_FROM | grep -q '"' && { echo "GRILL_ROOM_SMTP_FROM must not hold a double quote" >&2; exit 1; } || true
 	rm -rf '$(K8S_OUT)' && (umask 077 && mkdir -p '$(K8S_OUT)')
 	@for f in deploy/k8s/*.yaml; do \
 	  (umask 077 && ROOM_HOST=grill-room.$$K8S_DOMAIN LIVEKIT_HOST=grill-room-livekit.$$K8S_DOMAIN TURN_HOST=grill-room-turn.$$K8S_DOMAIN \
-	    envsubst '$${K8S_STORAGE_CLASS} $${GRILL_ROOM_IMAGE} $${GRILL_STT_IMAGE} $${GRILL_ROOM_SANDBOX_IMAGE} $${ROOM_HOST} $${LIVEKIT_HOST} $${TURN_HOST} $${GRILL_ROOM_ADMIN_TOKEN} $${STT_TOKEN} $${LIVEKIT_API_KEY} $${LIVEKIT_API_SECRET}' \
+	    envsubst '$${K8S_STORAGE_CLASS} $${GRILL_ROOM_IMAGE} $${GRILL_STT_IMAGE} $${GRILL_ROOM_SANDBOX_IMAGE} $${GRILL_ROOM_SMTP_ADDR} $${GRILL_ROOM_SMTP_FROM} $${K8S_SMTP_NAMESPACE} $${K8S_SMTP_PORT} $${ROOM_HOST} $${LIVEKIT_HOST} $${TURN_HOST} $${GRILL_ROOM_ADMIN_TOKEN} $${STT_TOKEN} $${LIVEKIT_API_KEY} $${LIVEKIT_API_SECRET}' \
 	    < $$f > '$(K8S_OUT)'/$${f##*/}) || exit 1; \
 	done
 	@echo "rendered $(K8S_OUT): https://grill-room.$$K8S_DOMAIN/"
@@ -189,6 +203,21 @@ k8s-delete: k8s-render k8s-check
 
 # Office fixtures for the pandoc tests, written by the pandoc release the image ships.
 FIXTURES := internal/convert/testdata
+# Favicons and app icons from the logo (D32), into both embedded UIs. Needs Inkscape and ImageMagick.
+# The apple-touch-icon is opaque: iOS paints transparent corners black and rounds them itself.
+LOGO      := design/icons/round2/r2-03-b-three-quarter.svg
+ICON_DIRS := internal/web/ui internal/daemon/ui
+icons:
+	tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
+	for n in 16 32 48 192 512; do inkscape '$(LOGO)' --export-type=png -w $$n -h $$n -o "$$tmp/$$n.png" || exit 1; done && \
+	inkscape '$(LOGO)' --export-type=png -w 180 -h 180 --export-background='#159F8C' --export-background-opacity=1 -o "$$tmp/180.png" && \
+	magick "$$tmp/16.png" "$$tmp/32.png" "$$tmp/48.png" "$$tmp/favicon.ico" && \
+	for d in $(ICON_DIRS); do \
+	  mkdir -p "$$d/icons" && cp '$(LOGO)' "$$d/logo.svg" && cp "$$tmp/favicon.ico" "$$d/favicon.ico" && \
+	  cp "$$tmp/32.png" "$$d/icons/icon-32.png" && cp "$$tmp/180.png" "$$d/icons/apple-touch-icon.png" && \
+	  cp "$$tmp/192.png" "$$d/icons/icon-192.png" && cp "$$tmp/512.png" "$$d/icons/icon-512.png" || exit 1; \
+	done
+
 fixtures:
 	for f in docx odt pptx; do \
 	  docker run --rm -u "$$(id -u):$$(id -g)" -v "$(CURDIR)/$(FIXTURES):/data" pandoc/minimal:3.11 fixture.md -o fixture.$$f || exit 1; \

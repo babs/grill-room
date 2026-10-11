@@ -36,15 +36,16 @@ export async function docFrame(page) {
 
 // startDaemon runs the real daemon binary against this room, with a fake credentials file and a
 // throwaway state dir, and resolves with the admin page link it prints. Its sandbox uses the fake
-// claude image: no Claude request.
-export function startDaemon(roomURL) {
+// claude image: no Claude request. env adds to the daemon's environment.
+export function startDaemon(roomURL, env = {}) {
   const dir = mkdtempSync(join('test-results', 'daemon-'));
+  const stateDir = join(dir, 'state');
   writeFileSync(join(dir, '.credentials.json'),
     JSON.stringify({ claudeAiOauth: { accessToken: 'e2e-fake', expiresAt: Date.now() + 3600e3 } }), { mode: 0o600 });
   const proc = spawn('../bin/grill-room-daemon', [roomURL], {
     env: {
-      ...process.env, CLAUDE_CONFIG_DIR: dir, GRILL_ROOM_DAEMON_STATE_DIR: join(dir, 'state'), GRILL_ROOM_DAEMON_BROWSER: 'none',
-      GRILL_ROOM_SANDBOX_IMAGE: process.env.GRILL_ROOM_SANDBOX_FAKE_IMAGE || 'grill-room-sandbox:fake', LOG_LEVEL: 'info',
+      ...process.env, CLAUDE_CONFIG_DIR: dir, GRILL_ROOM_DAEMON_STATE_DIR: stateDir, GRILL_ROOM_DAEMON_BROWSER: 'none',
+      GRILL_ROOM_SANDBOX_IMAGE: process.env.GRILL_ROOM_SANDBOX_FAKE_IMAGE || 'grill-room-sandbox:fake', LOG_LEVEL: 'info', ...env,
     },
     stdio: ['ignore', 'ignore', 'pipe'],
   });
@@ -58,7 +59,7 @@ export function startDaemon(roomURL) {
     });
     proc.on('exit', (code) => reject(new Error('daemon exited ' + code + ': ' + out)));
   });
-  return { proc, link, exited, cleanup: () => { proc.kill(); rmSync(dir, { recursive: true, force: true }); } };
+  return { proc, link, exited, sandbox: sandboxName(stateDir, roomURL), cleanup: () => { proc.kill(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
 // pairDaemon approves the daemon's pairing from the participant's room page, as a person would.
@@ -122,10 +123,12 @@ export function liveDaemon(dir, roomURL) {
     }
     throw new Error('no admin link in ' + log);
   })();
-  // Named as cmd/grill-room-daemon names it: a killed daemon leaves its sandbox behind.
-  const sandbox = createHash('sha256').update(stateDir + '\0' + roomURL).digest('hex').slice(0, 12);
-  return { proc, exited, link, log, sandbox };
+  return { proc, exited, link, log, sandbox: sandboxName(stateDir, roomURL) };
 }
+
+// sandboxName names a daemon's sandbox as cmd/grill-room-daemon does: a killed daemon leaves its
+// sandbox behind, and a test may reach into it.
+const sandboxName = (stateDir, roomURL) => createHash('sha256').update(stateDir + '\0' + roomURL).digest('hex').slice(0, 12);
 
 export const logLines = (d) => readFileSync(d.log, 'utf8').split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
 export const messagesRequests = (d) => logLines(d).filter((l) => l.msg === 'upstream_response' && l.path.startsWith('/v1/messages')).length;
@@ -140,12 +143,13 @@ export function removeSandbox(name) {
 
 export const agentState = (page, roomID) => page.evaluate((id) => fetch(`/api/rooms/${id}/agent`).then((r) => r.json()), roomID);
 
-export async function ask(page, roomID, text) {
+// ask says text in the room, presses the persona's button and returns its synthesis.
+export async function ask(page, roomID, text, persona = 'Grill') {
   const before = await page.locator('#messages li.msg.agent').count();
   await page.locator('#body').fill(text);
   await page.locator('#body').press('Enter');
   await expect(page.locator('#messages')).toContainText(text.slice(0, 40));
-  await page.getByRole('button', { name: 'Ask the agent' }).click();
+  await page.getByRole('button', { name: 'Ask ' + persona }).click();
   await expect(page.locator('#messages li.msg.agent')).toHaveCount(before + 1, { timeout: 240_000 });
   const st = await agentState(page, roomID);
   expect(st.turn.status).toBe('done');

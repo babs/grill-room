@@ -106,7 +106,8 @@ func TestStartArgs(t *testing.T) {
 				return nil, nil
 			}}
 			up, _ := url.Parse("https://api.anthropic.com")
-			s := New(Config{Image: "img", Name: "t1", Host: "h", Upstream: up}, f.run, testCreds(t, "real-secret", time.Now().Add(time.Hour)), zap.NewNop())
+			s := New(Config{Image: "img", Name: "t1", Host: "h", Upstream: up, Limits: Limits{CPUs: "2", Memory: "4g", EgressCPUs: "0.5", EgressMemory: "256m"}},
+				f.run, testCreds(t, "real-secret", time.Now().Add(time.Hour)), zap.NewNop())
 			if err := s.Start(context.Background()); err != nil {
 				t.Fatal(err)
 			}
@@ -130,6 +131,26 @@ func TestStartArgs(t *testing.T) {
 			}
 			if !slices.Contains(relay, wantGW) {
 				t.Errorf("relay = %v, want %s", relay, wantGW)
+			}
+			// 002-AC34 002-AC35: tools reach squid as "egress", which alone has a route out; Claude
+			// Code's base URL host stays off the proxy. Both containers are capped.
+			if c := f.find("network", "create", "--label", Label+"=t1", "grill-room-t1-egress"); c == nil {
+				t.Errorf("no egress network: %v", f.calls)
+			}
+			if c := f.find("network", "connect", "--alias", "egress", "grill-room-t1", "grill-room-t1-egress"); c == nil {
+				t.Error("squid is not on the sandbox network as egress")
+			}
+			egress := f.find("run", "-d", "--name", "grill-room-t1-egress")
+			for _, want := range []string{"--network", "grill-room-t1-egress", "--read-only", "--cpus", "0.5", "--memory", "256m", "local"} {
+				if !slices.Contains(egress, want) {
+					t.Errorf("egress run lacks %q: %v", want, egress)
+				}
+			}
+			for _, want := range []string{"HTTPS_PROXY=http://egress:3128", "https_proxy=http://egress:3128", "HTTP_PROXY=http://egress:3128",
+				"http_proxy=http://egress:3128", "NO_PROXY=proxy,localhost,127.0.0.1", "no_proxy=proxy,localhost,127.0.0.1", "4g", "--memory-swap"} {
+				if !slices.Contains(run, want) {
+					t.Errorf("sandbox run lacks %q: %v", want, run)
+				}
 			}
 			// 001-AC25: no argument of any docker call carries the real token.
 			for _, c := range f.calls {
@@ -189,6 +210,36 @@ func TestRunClaudeArgsAndStubs(t *testing.T) {
 	}
 	if len(f.stdin) != 2 || f.stdin[1] != "say ok" || !strings.Contains(f.stdin[0], "profileFetchedAt") || !strings.Contains(f.stdin[0], s.dummy) || strings.Contains(f.stdin[0], "real-secret") {
 		t.Fatalf("stubs tar wrong")
+	}
+}
+
+// 002-AC18: a persona's turn passes its effort, and its text as an appended system prompt file
+// written in the sandbox home, with the snapshot off so a resumed session gets the current text.
+func TestRunClaudePersona(t *testing.T) {
+	f := &fakeDocker{reply: func(args []string) ([]byte, error) {
+		switch {
+		case args[0] == "info":
+			return []byte("29|Linux"), nil
+		case args[0] == "network" && args[1] == "inspect":
+			return []byte("127.0.0.1"), nil
+		case args[0] == "exec" && slices.Contains(args, "claude"):
+			return []byte(`{"type":"result","subtype":"success","is_error":false,"result":"ok","session_id":"s1"}`), nil
+		}
+		return nil, nil
+	}}
+	up, _ := url.Parse("https://x")
+	s := New(Config{Image: "img", Name: "t", Upstream: up}, f.run, testCreds(t, "real-secret", time.Now().Add(time.Hour)), zap.NewNop())
+	defer s.Close(context.Background())
+	if _, err := s.RunClaude(context.Background(), Request{Prompt: "go", System: "You are Secretary.", Model: "sonnet", Effort: "xhigh"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"exec", "-i", "grill-room-t", "claude", "-p", "--output-format", "json", "--model", "sonnet", "--effort", "xhigh",
+		"--append-system-prompt-file", "/home/agent/.grill-room/persona.md", "--system-prompt-snapshot", "off"}
+	if c := f.find("exec", "-i", "grill-room-t", "claude"); !slices.Equal(c, want) {
+		t.Fatalf("claude args = %v", c)
+	}
+	if len(f.stdin) != 3 || !strings.Contains(f.stdin[1], ".grill-room/persona.md") || !strings.Contains(f.stdin[1], "You are Secretary.") || f.stdin[2] != "go" {
+		t.Fatalf("persona file not written before the run: %q", f.stdin)
 	}
 }
 
@@ -350,8 +401,15 @@ func TestScanAndIsolated(t *testing.T) {
 	replies := map[string][]byte{"export": []byte("a tok-123 b tok-123"), "tar": []byte("x"), "inspect": []byte("tok-123")}
 	reachable := map[string]bool{"proxy/8787": true}
 	resolves := false
+	// egressCode is what squid answers a CONNECT to api.anthropic.com; "000" is no answer.
+	egressCode := "403"
 	f := &fakeDocker{reply: func(args []string) ([]byte, error) {
 		switch {
+		case slices.Contains(args, "curl"):
+			if egressCode != "403" {
+				return []byte(egressCode), errors.New("exit status 7")
+			}
+			return []byte(egressCode), errors.New("exit status 56")
 		case args[0] == "export":
 			return replies["export"], nil
 		case args[0] == "inspect":
@@ -391,6 +449,14 @@ func TestScanAndIsolated(t *testing.T) {
 	reachable["1.1.1.1/443"] = true
 	if err := s.Isolated(context.Background()); err == nil || !strings.Contains(err.Error(), "1.1.1.1") {
 		t.Fatalf("public IP reachable: %v", err)
+	}
+	// 002-AC35: squid down, or letting Anthropic through, fails the check.
+	delete(reachable, "1.1.1.1/443")
+	for _, code := range []string{"000", "200", ""} {
+		egressCode = code
+		if err := s.Isolated(context.Background()); err == nil || !strings.Contains(err.Error(), "egress proxy answered") {
+			t.Fatalf("egress answered %q: %v", code, err)
+		}
 	}
 	reachable = map[string]bool{}
 	if err := s.Isolated(context.Background()); err == nil || !strings.Contains(err.Error(), "proxy is unreachable") {

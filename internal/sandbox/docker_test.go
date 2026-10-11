@@ -147,6 +147,11 @@ func TestSandboxDocker(t *testing.T) {
 	}
 
 	t.Run("no route but the proxy", func(t *testing.T) {
+		// 002-AC35: the real claude binary ran its turn with HTTPS_PROXY set and sent nothing to
+		// squid, before Isolated's own probe goes through it.
+		if log, err := Docker(ctx, nil, "logs", s.egress()); err != nil || len(log) != 0 {
+			t.Errorf("egress log after a claude turn: %q %v", log, err)
+		}
 		if err := s.Isolated(ctx); err != nil {
 			t.Error(err)
 		}
@@ -243,8 +248,9 @@ func listTar(t *testing.T, b []byte) {
 }
 
 // TestRealClaude spends one real haiku request: GRILL_ROOM_TEST_REAL_CLAUDE=1 runs `claude -p
-// --model haiku "say ok"` through the sandbox with this host's credentials (read-only), then scans
-// the container, its volumes and its inspect output for the real token. Only counts are printed.
+// --model haiku "say ok"` through the sandbox with this host's credentials (read-only), checks that
+// nothing went through the egress proxy, then scans the container, its volumes and its inspect
+// output for the real token. Only counts are printed.
 func TestRealClaude(t *testing.T) {
 	img := dockerTest(t)
 	if os.Getenv("GRILL_ROOM_TEST_REAL_CLAUDE") != "1" {
@@ -273,6 +279,16 @@ func TestRealClaude(t *testing.T) {
 		t.Fatalf("turn: %v", err)
 	}
 	t.Logf("result=%q session=%s", res.Result, res.SessionID)
+	// 002-AC35: the turn ran with the egress proxy in its environment, yet Claude Code sent nothing
+	// through it: its base URL host is in NO_PROXY, and squid let no Anthropic host through.
+	egressLog, err := Docker(ctx, nil, "logs", s.egress())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("egress log, %d bytes: %q", len(egressLog), egressLog)
+	if n := anthropicTunnels(egressLog); n != 0 || bytes.Contains(egressLog, []byte(logTag)) {
+		t.Errorf("Claude Code went through the egress proxy (%d Anthropic tunnels):\n%s", n, egressLog)
+	}
 	counts, err := s.Scan(ctx, []byte(tok.AccessToken))
 	if err != nil {
 		t.Fatal(err)

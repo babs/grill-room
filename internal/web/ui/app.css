@@ -64,6 +64,7 @@ body.room {
 }
 header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.75rem;
   padding: 0.6rem 1rem;
@@ -71,8 +72,84 @@ header {
   color: #fff;
 }
 header h1 { font-size: 1.1rem; flex: 1; }
-#me { color: var(--amber); }
-#agent { display: flex; align-items: center; gap: 0.5rem; }
+#agent { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+#persona-buttons { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+/* --persona is the persona's colour, set per button and per form. */
+button.persona {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.7rem;
+  background: #fff;
+  color: var(--ink);
+  border-left: 0.35rem solid var(--persona, var(--teal));
+}
+button.persona .led { flex: none; }
+.led.queued { background: #8ab4f8; box-shadow: 0 0 0 2px rgba(138, 180, 248, 0.35); }
+#queue { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.3rem 1rem; background: #e8f0fe; font-size: 0.85rem; }
+#queue-list { display: flex; flex-wrap: wrap; gap: 0.2rem 1.4rem; margin: 0; padding-left: 1.2rem; }
+#queue-list button { padding: 0.05rem 0.5rem; font-size: 0.75rem; }
+#approvals { padding: 0.3rem 1rem; background: #fff4e5; font-size: 0.85rem; }
+#chain-count { font-size: 0.85rem; color: #c9cbd6; }
+#chain-paused { margin: 0; padding: 0.4rem 1rem; background: var(--amber); font-size: 0.9rem; }
+#chain-unlimited { margin: 0; padding: 0.4rem 1rem; background: #b3261e; color: #fff; font-size: 0.9rem; font-weight: 600; }
+:is(#chain-paused, #chain-unlimited) button { padding: 0.1rem 0.6rem; font-size: 0.8rem; margin-left: 0.3rem; }
+#chain-unlimited button { background: #fff; color: #b3261e; }
+#chain-form { display: flex; flex-wrap: wrap; align-items: end; gap: 0.5rem; margin-top: 0.5rem; }
+#chain-form label { display: grid; gap: 0.15rem; font-size: 0.85rem; }
+#chain-form input { width: 7rem; }
+#chain-form button { padding: 0.3rem 0.8rem; font-size: 0.85rem; }
+.persona-form label.check { display: flex; align-items: center; gap: 0.3rem; }
+.persona-form label.check input { width: auto; }
+#approval-list { margin: 0; padding-left: 1.2rem; }
+#approval-list li { margin: 0.15rem 0; }
+#approval-list button { padding: 0.05rem 0.6rem; font-size: 0.75rem; margin-left: 0.3rem; }
+.led.pending { background: #c4c7d0; box-shadow: 0 0 0 2px rgba(196, 199, 208, 0.4); }
+.meta .capped { color: #b06000; }
+dialog#personas {
+  width: min(44rem, calc(100vw - 1rem));
+  max-height: calc(100dvh - 1rem);
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--ink);
+}
+dialog#skills-disclaimer {
+  width: min(32rem, calc(100vw - 1rem));
+  max-height: calc(100dvh - 1rem);
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--ink);
+}
+dialog#skills-disclaimer h2 { font-size: 1.05rem; margin: 0 0 0.5rem; }
+dialog#skills-disclaimer ul { padding-left: 1.2rem; font-size: 0.9rem; }
+:is(dialog#personas, dialog#skills-disclaimer)::backdrop { background: rgba(30, 34, 56, 0.45); }
+.persona-skills { margin: 0.4rem 0; padding: 0.4rem 0.6rem; border: 1px solid var(--line); border-radius: 6px; font-size: 0.85rem; }
+.persona-skills legend { font-size: 0.8rem; color: var(--muted); }
+.persona-skills ul { list-style: none; margin: 0 0 0.4rem; padding: 0; }
+.persona-skills li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.5rem; padding: 0.15rem 0; overflow-wrap: anywhere; }
+.persona-skills button { padding: 0.15rem 0.6rem; font-size: 0.8rem; }
+.persona-skills .skill-add { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.persona-skills .skill-add select { flex: 1; min-width: 10rem; width: auto; }
+.dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.dialog-head h2 { font-size: 1.1rem; }
+dialog .hint { color: var(--muted); font-size: 0.85rem; margin: 0.3rem 0; }
+#personas-status { color: #b3261e; font-size: 0.85rem; min-height: 1em; margin: 0.3rem 0; }
+.persona-form { margin-bottom: 1rem; padding: 0.7rem; background: #fff; border: 1px solid var(--line); border-left: 0.35rem solid var(--persona, var(--teal)); border-radius: 8px; }
+.persona-form h3 { margin: 0; font-size: 1rem; }
+.persona-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: 0.4rem 0.6rem; margin: 0.4rem 0; }
+.persona-form label { display: grid; gap: 0.15rem; font-size: 0.8rem; color: var(--muted); }
+.persona-form :is(input, select, textarea) { width: 100%; font: inherit; color: var(--ink); }
+.persona-form input[type=color] { height: 2.4rem; padding: 0.2rem; }
+.persona-form textarea { resize: vertical; font-size: 0.85rem; }
+.persona-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.5rem; }
+.persona-actions button, #persona-add button { padding: 0.3rem 0.8rem; font-size: 0.85rem; }
+#persona-add { display: flex; flex-wrap: wrap; align-items: end; gap: 0.5rem; }
+#persona-add label { display: grid; gap: 0.15rem; font-size: 0.85rem; flex: 1; min-width: 12rem; }
+#persona-add select { font: inherit; padding: 0.4rem; }
 #agent-status { font-size: 0.85rem; color: #c9cbd6; }
 .led { width: 0.75rem; height: 0.75rem; border-radius: 50%; background: #d93025; box-shadow: 0 0 0 2px rgba(217, 48, 37, 0.3); }
 .led.on { background: #34c759; box-shadow: 0 0 0 2px rgba(52, 199, 89, 0.3); }
@@ -92,6 +169,28 @@ header h1 { font-size: 1.1rem; flex: 1; }
 #pairing h2 { margin: 0 0 0.3rem; font-size: 1rem; }
 #pairing p { margin: 0 0 0.5rem; }
 .pairing-actions { display: flex; gap: 0.4rem; }
+/* Capped: on a phone with the keyboard up, the panel must leave room for the message box. */
+#recovery { flex: none; max-height: 30%; overflow-y: auto; margin: 0; padding: 0.6rem 1rem; border-bottom: 1px solid var(--line); }
+#recovery h2 { margin: 0 0 0.3rem; font-size: 1rem; }
+#recovery p { margin: 0 0 0.5rem; }
+#recovery-link, #invite-link { width: 100%; margin-bottom: 0.4rem; font-family: ui-monospace, monospace; font-size: 0.8rem; }
+#me { color: var(--amber); }
+#rename { display: flex; gap: 0.3rem; flex: 1; }
+#rename input { flex: 1; min-width: 6rem; }
+button.small, #rename button { padding: 0.2rem 0.6rem; font-size: 0.8rem; }
+#invites { margin-top: 1rem; font-size: 0.85rem; }
+#invites summary { cursor: pointer; font-weight: 600; }
+#invites h3 { margin: 0.8rem 0 0.3rem; font-size: 0.8rem; color: var(--muted); }
+#invite-list { list-style: none; padding: 0; margin: 0; }
+#invite-list li { display: flex; align-items: center; justify-content: space-between; gap: 0.3rem; padding: 0.15rem 0; }
+#invite-list button { padding: 0.1rem 0.5rem; font-size: 0.8rem; }
+body.join .rooms { list-style: none; padding: 0; text-align: left; }
+body.join .rooms li { padding: 0.25rem 0; overflow-wrap: anywhere; }
+body.join h2 { margin-top: 1.2rem; font-size: 1rem; text-align: left; }
+body.join .hint { color: var(--muted); font-size: 0.85rem; text-align: left; }
+#skill-upload :is(input, select) { width: 100%; min-width: 0; }
+#skill-status { min-height: 1em; font-size: 0.85rem; text-align: left; overflow-wrap: anywhere; }
+#confirm .actions { display: flex; justify-content: center; gap: 0.5rem; }
 .layout { flex: 1; display: flex; min-height: 0; }
 aside { width: 14rem; padding: 1rem; border-right: 1px solid var(--line); overflow-y: auto; }
 aside h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
@@ -145,15 +244,30 @@ button.doc:hover { background: var(--line); }
 .msg { margin-bottom: 0.8rem; }
 .msg .meta { font-size: 0.85rem; }
 .msg .meta time { color: var(--muted); margin-left: 0.3rem; }
-.msg .body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg .body { overflow-wrap: anywhere; }
+.msg .body :is(p, ul, ol, pre, table, blockquote) { margin: 0.2rem 0; }
+.msg .body :is(ul, ol) { padding-left: 1.4rem; }
+.msg .body pre { overflow-x: auto; padding: 0.4rem; background: var(--line); border-radius: 4px; }
+.msg .body table { border-collapse: collapse; }
+.msg .body :is(th, td) { border: 1px solid var(--line); padding: 0.15rem 0.4rem; }
+.msg .body blockquote { border-left: 3px solid var(--line); padding-left: 0.6rem; color: var(--muted); }
+.msg.deleted .body { color: var(--muted); font-style: italic; }
+.msg .meta button.link { background: none; border: none; padding: 0; color: var(--muted); font-size: 0.75rem; cursor: pointer; text-decoration: underline; }
+.msg .versions { margin: 0.2rem 0; padding-left: 1.4rem; font-size: 0.85rem; color: var(--muted); white-space: pre-wrap; }
+.msg .versions time { margin-right: 0.3rem; }
+.msg form.edit textarea { width: 100%; }
 .msg.system { color: var(--muted); font-size: 0.85rem; font-style: italic; }
 .msg.agent .meta strong { color: var(--teal); }
-.msg .meta .model { font-size: 0.75rem; color: var(--muted); }
+.msg .meta :is(.model, .effort) { font-size: 0.75rem; color: var(--muted); }
 .msg.voice .meta strong::after { content: " (voice)"; font-weight: normal; color: var(--muted); }
 #send { display: flex; gap: 0.5rem; padding: 0.75rem 1rem; border-top: 1px solid var(--line); }
 #send textarea { flex: 1; resize: vertical; }
 
 @media (max-width: 40rem) {
+  /* Phones: the title row first, the agents on a row of their own below it. */
+  header { row-gap: 0.4rem; padding: 0.5rem 0.75rem; }
+  #agent { order: 1; flex-basis: 100%; }
+  #agent-status { font-size: 0.8rem; }
   aside { display: none; }
   #viewer:not([hidden]) + .chat { display: none; }
 }

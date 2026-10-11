@@ -28,6 +28,8 @@ form.addEventListener('submit', async (e) => {
       button.disabled = false;
       return;
     }
+    // Shown once by the room page, which removes it on read.
+    if (data.recovery_url) sessionStorage.setItem('grill_room_recovery', data.recovery_url);
     location.assign('/r/' + encodeURIComponent(data.participant.room_id));
   } catch {
     statusLine.textContent = 'Network error, try again.';

@@ -53,7 +53,7 @@ function flakyProxy(target) {
   }));
 }
 
-// EventSource gives up for good once a reconnect gets a non-200, which is what a redeploy hands
+// 002-AC40: EventSource gives up for good once a reconnect gets a non-200, which is what a redeploy hands
 // it: the page must retry by itself and catch up on what it missed.
 test('a stream cut by a redeploy comes back and catches up', async ({ browser, request, baseURL }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
@@ -83,7 +83,7 @@ test('a stream cut by a redeploy comes back and catches up', async ({ browser, r
   }
 });
 
-// A phone suspends a background tab's stream without the page noticing: on return the page must
+// 002-AC40: a phone suspends a background tab's stream without the page noticing: on return the page must
 // reopen it from the last message it holds and reload the room state.
 test('a page back from the background resumes the stream and reloads the room', async ({ browser, request }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
@@ -107,7 +107,7 @@ test('a page back from the background resumes the stream and reloads the room', 
   await expect(alice.locator('#messages')).toContainText('live after resume');
 });
 
-// The message box must stay above the on-screen keyboard: Android shrinks the viewport
+// 002-AC39: the message box must stay above the on-screen keyboard: Android shrinks the viewport
 // (interactive-widget=resizes-content), iOS Safari only shrinks the visual viewport.
 for (const name of ['iPhone 15', 'Pixel 7']) {
   test(`${name}: the message box stays above the keyboard`, async ({ browser, request }) => {
@@ -146,5 +146,46 @@ for (const name of ['iPhone 15', 'Pixel 7']) {
     // Android: the keyboard resizes the viewport itself.
     await page.setViewportSize({ width, height: height - keyboard });
     await fits(height - keyboard);
+  });
+}
+
+// 002-AC15 on a phone: the persona buttons and the personas panel fit the screen, the panel scrolls
+// to every persona, and an edit made there is saved.
+for (const name of ['iPhone 15', 'Pixel 7']) {
+  test(`${name}: the personas panel fits the screen`, async ({ browser, request }) => {
+    const { defaultBrowserType, ...device } = devices[name];
+    const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Phone personas' } })).json();
+    const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
+    const page = await (await browser.newContext(device)).newPage();
+    await page.goto(new URL(inv.url).pathname + new URL(inv.url).hash);
+    await page.getByLabel('Your name').fill('Alice');
+    await page.getByRole('button', { name: 'Join the room' }).click();
+    await expect(page.locator('#messages')).toContainText('Alice joined');
+    const { width, height } = page.viewportSize();
+    const inside = async (loc) => {
+      const b = await loc.boundingBox();
+      expect(b.x).toBeGreaterThanOrEqual(0);
+      expect(b.x + b.width).toBeLessThanOrEqual(width + 1);
+    };
+
+    await page.getByRole('button', { name: 'Personas' }).click();
+    const panel = page.locator('#personas');
+    await panel.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
+    await panel.getByRole('button', { name: 'Add', exact: true }).click();
+    await expect(panel.locator('.persona-form')).toHaveCount(2);
+    await inside(panel);
+    expect((await panel.boundingBox()).height).toBeLessThanOrEqual(height + 1);
+    // The second persona's controls are reachable by scrolling the panel.
+    const sec = panel.locator('.persona-form', { hasText: 'Secretary' });
+    await sec.getByLabel('Model').selectOption('haiku');
+    const save = sec.getByRole('button', { name: 'Save' });
+    await save.scrollIntoViewIfNeeded();
+    await inside(save);
+    await save.click();
+    await expect(panel.locator('#personas-status')).toHaveText('Secretary saved. It applies from its next turn.');
+    await panel.getByRole('button', { name: 'Close' }).click();
+    await expect(page.locator('#messages')).toContainText('Alice changed 📝 Secretary: model default → haiku.');
+    for (const b of await page.locator('button.persona').all()) await inside(b);
+    await inside(page.locator('#body'));
   });
 }

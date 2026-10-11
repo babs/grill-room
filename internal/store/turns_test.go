@@ -18,6 +18,8 @@ type turnRoom struct {
 	daemon int64
 	doc    int64
 	ann    int64
+	// grill is the room's Default persona.
+	grill RoomPersona
 }
 
 func newTurnRoom(t *testing.T, s *Store, room string) turnRoom {
@@ -26,10 +28,10 @@ func newTurnRoom(t *testing.T, s *Store, room string) turnRoom {
 	if _, err := s.CreateRoom(ctx, room, "R"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateInvite(ctx, room, "inv-"+room); err != nil {
+	if _, err := s.CreateInvite(ctx, room, "inv-"+room, 0); err != nil {
 		t.Fatal(err)
 	}
-	p, _, err := s.Join(ctx, "inv-"+room, "Alice", "tok-"+room)
+	p, _, err := s.Join(ctx, "inv-"+room, "Alice", "tok-"+room, JoinProfile{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +48,11 @@ func newTurnRoom(t *testing.T, s *Store, room string) turnRoom {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return turnRoom{p: p, daemon: d.ID, doc: doc.ID, ann: a.ID}
+	ps, err := s.RoomPersonas(ctx, room)
+	if err != nil || len(ps) != 1 {
+		t.Fatalf("personas: %+v, %v", ps, err)
+	}
+	return turnRoom{p: p, daemon: d.ID, doc: doc.ID, ann: a.ID, grill: ps[0]}
 }
 
 func (r turnRoom) start(t *testing.T, s *Store, room string) *Turn {
@@ -56,7 +62,8 @@ func (r turnRoom) start(t *testing.T, s *Store, room string) *Turn {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tn := &Turn{RoomID: room, ParticipantID: r.p.ID, DaemonID: r.daemon, Host: "laptop", Prompt: "go", AnnotationCursor: cursor}
+	tn := &Turn{RoomID: room, ParticipantID: r.p.ID, DaemonID: r.daemon, Host: "laptop", Prompt: "go", AnnotationCursor: cursor,
+		PersonaID: r.grill.ID, PersonaName: r.grill.Name}
 	if err := s.StartTurn(context.Background(), tn); err != nil {
 		t.Fatal(err)
 	}
@@ -69,26 +76,29 @@ func TestStartTurnOnePerRoom(t *testing.T) {
 	ctx := context.Background()
 	r := newTurnRoom(t, s, "a")
 	first := r.start(t, s, "a")
-	if err := s.StartTurn(ctx, &Turn{RoomID: "a", Host: "x"}); !errors.Is(err, ErrTurnInProgress) {
+	if err := s.StartTurn(ctx, &Turn{RoomID: "a", Host: "x", PersonaID: r.grill.ID}); !errors.Is(err, ErrTurnInProgress) {
 		t.Fatalf("second turn: %v, want ErrTurnInProgress", err)
 	}
 	// Another room is independent.
-	newTurnRoom(t, s, "b")
-	if err := s.StartTurn(ctx, &Turn{RoomID: "b", Host: "x"}); err != nil {
+	rb := newTurnRoom(t, s, "b")
+	if err := s.StartTurn(ctx, &Turn{RoomID: "b", Host: "x", PersonaID: rb.grill.ID}); err != nil {
 		t.Fatalf("other room: %v", err)
 	}
 	m, err := s.FailTurn(ctx, "a", first.ID, "boom")
-	if err != nil || m == nil || m.Body != "Agent turn failed: boom" || m.Kind != KindSystem {
+	if err != nil || m == nil || m.Body != "Grill turn failed: boom" || m.Sender != "Grill" || m.Kind != KindSystem {
 		t.Fatalf("fail: %+v, %v", m, err)
 	}
 	if m, err := s.FailTurn(ctx, "a", first.ID, "again"); err != nil || m != nil {
 		t.Fatalf("failing a failed turn: %+v, %v", m, err)
 	}
-	if err := s.StartTurn(ctx, &Turn{RoomID: "a", Host: "x"}); err != nil {
-		t.Fatalf("turn after failure: %v", err)
+	// 002-AC16: a turn runs a persona of its own room.
+	for _, tn := range []*Turn{{RoomID: "a", Host: "x"}, {RoomID: "a", Host: "x", PersonaID: rb.grill.ID}, {RoomID: "gone", Host: "x", PersonaID: r.grill.ID}} {
+		if err := s.StartTurn(ctx, tn); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("turn %+v: %v, want ErrNotFound", tn, err)
+		}
 	}
-	if err := s.StartTurn(ctx, &Turn{RoomID: "gone", Host: "x"}); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("unknown room: %v", err)
+	if err := s.StartTurn(ctx, &Turn{RoomID: "a", Host: "x", PersonaID: r.grill.ID}); err != nil {
+		t.Fatalf("turn after failure: %v", err)
 	}
 }
 
@@ -127,14 +137,14 @@ func TestCompleteTurnApplies(t *testing.T) {
 		t.Fatalf("stored turn: %+v, %v", stored, err)
 	}
 	rev, err := s.Revision(ctx, r.doc, 2)
-	if err != nil || rev.Author != AgentName || rev.Body != "# Plan\n\nThe slow brown fox.\n" {
+	if err != nil || rev.Author != "Grill" || rev.Body != "# Plan\n\nThe slow brown fox.\n" {
 		t.Fatalf("revision 2: %+v, %v", rev, err)
 	}
 	anns, err := s.Annotations(ctx, "a", r.doc)
 	if err != nil || len(anns) != 1 || anns[0].Revision != 2 || anns[0].Orphaned {
 		t.Fatalf("annotation not re-anchored on r2: %+v, %v", anns, err)
 	}
-	if msgs := anns[0].Messages; len(msgs) != 2 || msgs[1].By != ByAgent || msgs[1].Author != AgentName || msgs[1].Body != "the brown one" {
+	if msgs := anns[0].Messages; len(msgs) != 2 || msgs[1].By != ByAgent || msgs[1].Author != "Grill" || msgs[1].PersonaID != r.grill.ID || msgs[1].Badge != r.grill.Badge || msgs[1].Body != "the brown one" {
 		t.Fatalf("thread: %+v", msgs)
 	}
 	docs, _ := s.Documents(ctx, "a")
@@ -143,11 +153,12 @@ func TestCompleteTurnApplies(t *testing.T) {
 	}
 	msgs, _ := s.Messages(ctx, "a", 0, 100)
 	last := msgs[len(msgs)-2:]
-	if last[0].Kind != KindAgent || last[0].Body != "Here is where we are." || last[1].Kind != KindSystem ||
-		last[1].Body != "Agent turn: uploads are read-only, changes refused: uploads/1-brief.pdf. ignored: reply to annotation 999: no such annotation." {
+	if last[0].Kind != KindAgent || last[0].Body != "Here is where we are." || last[0].Sender != "Grill" || last[0].PersonaID != r.grill.ID ||
+		last[0].Badge != "🔥" || last[0].Colour != r.grill.Colour || last[1].Kind != KindSystem ||
+		last[1].Body != "Grill turn: uploads are read-only, changes refused: uploads/1-brief.pdf. ignored: reply to annotation 999: no such annotation." {
 		t.Fatalf("messages: %+v", last)
 	}
-	if data, err := s.AgentSession(ctx, "a", "s1"); err != nil || string(data) != "line1\n" {
+	if data, err := s.AgentSession(ctx, "a", r.grill.ID, "s1"); err != nil || string(data) != "line1\n" {
 		t.Fatalf("session: %q, %v", data, err)
 	}
 	// A result for a done turn is refused.
@@ -191,7 +202,7 @@ func TestCompleteTurnSessionContinuity(t *testing.T) {
 		if err := complete(c.sid, c.off, c.data); !errors.Is(err, c.err) {
 			t.Fatalf("case %d: %v, want %v", i, err, c.err)
 		}
-		got, err := s.AgentSession(ctx, "a", c.sid)
+		got, err := s.AgentSession(ctx, "a", r.grill.ID, c.sid)
 		if c.want == "" {
 			if !errors.Is(err, ErrNotFound) {
 				t.Fatalf("case %d: session %q, %v", i, got, err)
@@ -233,7 +244,7 @@ func TestCompleteTurnAtomic(t *testing.T) {
 	if after, _ := s.Messages(ctx, "a", 0, 100); len(after) != len(before) {
 		t.Fatal("partial message kept")
 	}
-	if _, err := s.AgentSession(ctx, "a", "s1"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.AgentSession(ctx, "a", r.grill.ID, "s1"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("partial session kept: %v", err)
 	}
 	if got, _ := s.RunningTurn(ctx, "a"); got == nil || got.ID != tn.ID {
@@ -283,11 +294,11 @@ func TestFailRunningTurnsAndLookups(t *testing.T) {
 	if err != nil || last.ID != ta2.ID || last.Status != TurnFailed || last.Error != "server restarted" {
 		t.Fatalf("last turn: %+v, %v", last, err)
 	}
-	done, err := s.LastDoneTurn(ctx, "a")
+	done, err := s.LastDoneTurn(ctx, "a", ra.grill.ID)
 	if err != nil || done.ID != ta.ID || done.SessionID != "s" {
 		t.Fatalf("last done turn: %+v, %v", done, err)
 	}
-	if _, err := s.LastDoneTurn(ctx, "b"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.LastDoneTurn(ctx, "b", rb.grill.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("no done turn in b: %v", err)
 	}
 }
@@ -356,7 +367,7 @@ func TestCompleteTurnKeepsAgentNamesOffUploads(t *testing.T) {
 		t.Fatalf("report %+v", done.Report)
 	}
 	msgs, _ := s.Messages(ctx, "a", 0, 100)
-	if note := msgs[len(msgs)-1].Body; note != "Agent turn: named like an upload, so stored brief.md as brief-agent-agent.md." {
+	if note := msgs[len(msgs)-1].Body; note != "Grill turn: named like an upload, so stored brief.md as brief-agent-agent.md." {
 		t.Fatalf("note %q", note)
 	}
 	done = complete("v2")
