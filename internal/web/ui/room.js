@@ -748,7 +748,8 @@ window.addEventListener('focus', () => { if (events && events.readyState !== Eve
 // Agents. The host's daemon runs every persona of the room: a persona's LED is green only while
 // that daemon is connected and can host (D8). The host, and the participants the host allows,
 // press a persona's button (D18); a press during a turn waits in the room's queue (002-AC17).
-let agent = { online: false, can_trigger: [], daemons: [], turn: null, personas: [], queue: [], models: [], efforts: [], cap_requests: [], changes: [] };
+let agent = { online: false, can_trigger: [], daemons: [], turn: null, personas: [], queue: [], models: [], efforts: [], cap_requests: [], changes: [],
+  chain: { budget: 25, count: 0, suspended: false } };
 
 // level shows a model and effort as the room says them, "opus · effort max".
 const level = (l) => (l.model || 'default') + ' · effort ' + (l.effort || 'default');
@@ -811,8 +812,39 @@ function renderAgent() {
     : running ? running.name + ' working…' : agent.personas.length === 0 ? 'No persona: add one.' : '';
   renderQueue();
   renderApprovals();
+  renderChain();
   renderPersonas();
 }
+
+// renderChain shows the agent chain: its count, a banner once it reached its budget (re-arm or
+// suspend the limit), and a permanent warning while the limit is suspended (002-AC25, 002-AC27).
+function renderChain() {
+  const c = agent.chain;
+  const paused = !c.suspended && c.count >= c.budget;
+  $('chain-count').textContent = c.suspended ? 'Chain ' + c.count + ', no limit' : 'Chain ' + c.count + '/' + c.budget;
+  $('chain-unlimited').hidden = !c.suspended;
+  $('chain-paused').hidden = !paused;
+  $('chain-paused-text').textContent = 'The agent chain reached its budget of ' + c.budget + ' turns: agents cannot call each other until it is re-armed.'
+    + (canPress() ? '' : ' The host, or someone they allow to press, can re-arm it.');
+  for (const id of ['chain-rearm', 'chain-suspend', 'chain-restore']) $(id).hidden = !canPress();
+  if (document.activeElement !== $('chain-budget')) $('chain-budget').value = c.budget;
+  $('chain-budget').disabled = !canPress();
+}
+
+function steerChain(body) {
+  return sendJSON('PATCH', api + '/chain', body).catch((err) => { $('agent-status').textContent = err.message; });
+}
+$('chain-rearm').addEventListener('click', () => steerChain({ rearm: true }));
+$('chain-suspend').addEventListener('click', () => {
+  if (confirm('Suspend the chain limit? Agents may then call each other without end, on the host\'s subscription.')) steerChain({ suspended: true });
+});
+$('chain-restore').addEventListener('click', () => steerChain({ suspended: false }));
+$('chain-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  sendJSON('PATCH', api + '/chain', { budget: Number($('chain-budget').value) })
+    .then((c) => { if (c) personasStatus('Chain budget set to ' + c.budget + '.'); })
+    .catch((err) => personasStatus(err.message));
+});
 
 // renderApprovals is the banner of what waits for the host: personas asking above the host cap
 // (002-AC19) and persona changes held while the host approves everything (002-AC21). Everyone sees
@@ -864,9 +896,11 @@ function renderQueue() {
     const li = document.createElement('li');
     const p = personaByID(q.persona_id);
     const who = participants.find((x) => x.id === q.participant_id);
-    const label = (p ? p.badge + ' ' + p.name : 'a persona') + ', asked by ' + (who ? who.name : 'someone');
+    const by = { mention: ', mentioned by ', call: ', called by an agent', every_n: ', every ' + (p ? p.every_n : 'N') + ' rounds' }[q.source];
+    const label = (p ? p.badge + ' ' + p.name : 'a persona') + (by === undefined ? ', asked by ' : by)
+      + (q.participant_id ? (who ? who.name : 'someone') : '');
     li.append(label);
-    if (String(q.participant_id) === myID) {
+    if (String(q.participant_id) === myID || (!q.participant_id && canPress())) {
       const cancel = document.createElement('button');
       cancel.type = 'button';
       cancel.className = 'small';
@@ -945,7 +979,12 @@ function personaForm(p) {
     field('Colour', input('colour', p.colour, { type: 'color' })),
     field('Model', picker('model', agent.models, p.model, 'host default')),
     field('Effort', picker('effort', agent.efforts, p.effort, 'default')),
+    field('Every N rounds', input('every_n', p.every_n || 0, { type: 'number', min: 0, max: 100, title: '0 runs it on demand only' })),
   );
+  const self = input('self_call', '', { type: 'checkbox', checked: p.self_call });
+  const selfCall = field('', self);
+  selfCall.className = 'check';
+  selfCall.append('Self-call: its own @' + p.name + ' gives it another turn');
   const actions = document.createElement('div');
   actions.className = 'persona-actions';
   const save = document.createElement('button');
@@ -985,7 +1024,7 @@ function personaForm(p) {
     const res = await fetch(api + '/personas/' + p.id, { method: 'DELETE' });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'HTTP ' + res.status);
   });
-  form.append(head, from, grid, field('Persona text', text), actions);
+  form.append(head, from, grid, selfCall, field('Persona text', text), actions);
   form.addEventListener('input', () => { form.dataset.dirty = '1'; });
   form.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -1001,7 +1040,8 @@ function personaForm(p) {
 // formFields reads the inputs' own values: FormData would turn the text's line breaks into CRLF.
 function formFields(form) {
   const v = (name) => form.elements.namedItem(name).value;
-  return { name: v('name'), badge: v('badge'), colour: v('colour'), model: v('model'), effort: v('effort'), text: v('text') };
+  return { name: v('name'), badge: v('badge'), colour: v('colour'), model: v('model'), effort: v('effort'), text: v('text'),
+    every_n: Number(v('every_n')), self_call: form.elements.namedItem('self_call').checked };
 }
 
 // seenKey is what a form shows: the persona, and whether the viewer hosts (New session).

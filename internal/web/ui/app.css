@@ -90,6 +90,17 @@ button.persona .led { flex: none; }
 #queue-list { display: flex; flex-wrap: wrap; gap: 0.2rem 1.4rem; margin: 0; padding-left: 1.2rem; }
 #queue-list button { padding: 0.05rem 0.5rem; font-size: 0.75rem; }
 #approvals { padding: 0.3rem 1rem; background: #fff4e5; font-size: 0.85rem; }
+#chain-count { font-size: 0.85rem; color: #c9cbd6; }
+#chain-paused { margin: 0; padding: 0.4rem 1rem; background: var(--amber); font-size: 0.9rem; }
+#chain-unlimited { margin: 0; padding: 0.4rem 1rem; background: #b3261e; color: #fff; font-size: 0.9rem; font-weight: 600; }
+:is(#chain-paused, #chain-unlimited) button { padding: 0.1rem 0.6rem; font-size: 0.8rem; margin-left: 0.3rem; }
+#chain-unlimited button { background: #fff; color: #b3261e; }
+#chain-form { display: flex; flex-wrap: wrap; align-items: end; gap: 0.5rem; margin-top: 0.5rem; }
+#chain-form label { display: grid; gap: 0.15rem; font-size: 0.85rem; }
+#chain-form input { width: 7rem; }
+#chain-form button { padding: 0.3rem 0.8rem; font-size: 0.85rem; }
+.persona-form label.check { display: flex; align-items: center; gap: 0.3rem; }
+.persona-form label.check input { width: auto; }
 #approval-list { margin: 0; padding-left: 1.2rem; }
 #approval-list li { margin: 0.15rem 0; }
 #approval-list button { padding: 0.05rem 0.6rem; font-size: 0.75rem; margin-left: 0.3rem; }

@@ -350,20 +350,20 @@ func TestQueue(t *testing.T) {
 		t.Fatalf("persona of another room: %v", err)
 	}
 	q, err := s.Queue(ctx, "a")
-	if err != nil || len(q) != 2 || q[0].ID != first.ID || q[1].ID != second.ID || !q[1].Fresh {
+	if err != nil || len(q) != 2 || q[0].ID != first.ID || q[1].ID != second.ID || !q[1].Fresh || q[0].Source != SourceButton {
 		t.Fatalf("queue: %+v %v", q, err)
 	}
-	if err := s.CancelQueued(ctx, "a", first.ID, alice.ID); !errors.Is(err, ErrForbidden) {
+	if err := s.CancelQueued(ctx, "a", first.ID, alice.ID, true); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("cancel someone else's: %v", err)
 	}
-	if err := s.CancelQueued(ctx, "b", first.ID, bob.ID); !errors.Is(err, ErrNotFound) {
+	if err := s.CancelQueued(ctx, "b", first.ID, bob.ID, false); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cancel through another room: %v", err)
 	}
 	head, err := s.PopQueued(ctx, "a")
 	if err != nil || head.ID != first.ID || head.PersonaID != sec.ID {
 		t.Fatalf("pop: %+v %v", head, err)
 	}
-	if err := s.CancelQueued(ctx, "a", second.ID, alice.ID); err != nil {
+	if err := s.CancelQueued(ctx, "a", second.ID, alice.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	if q, _ := s.Queue(ctx, "a"); len(q) != 0 {

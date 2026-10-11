@@ -68,6 +68,11 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, sess session)
 	if !ok {
 		return
 	}
+	// A human took the lead: the agent chain starts over (002-AC26).
+	if err := s.bus.Store.ResetChain(ctx, room.ID, store.ResetButton); err != nil {
+		s.serverError(w, "start_turn_failed", err)
+		return
+	}
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
 	busy, err := s.roomBusy(ctx, room.ID)
@@ -280,8 +285,11 @@ func (s *Server) prepareTurn(ctx context.Context, room *store.Room, persona *sto
 	if err != nil {
 		return nil, err
 	}
-	// The presence preamble of spec 002 phase 5 (002-AC28) goes in Preamble.
-	t.Prompt = buildPrompt(promptInput{Room: room.Name, Persona: persona.Name, Self: persona.ID, NewSession: t.Resume == "",
+	preamble, err := s.presencePreamble(ctx, room, persona)
+	if err != nil {
+		return nil, err
+	}
+	t.Prompt = buildPrompt(promptInput{Preamble: preamble, Room: room.Name, Persona: persona.Name, Self: persona.ID, NewSession: t.Resume == "",
 		Msgs: msgs, Changes: changes, Anns: anns, AnnCursor: prev.AnnotationCursor, Paths: docPaths(docs)})
 	return t, nil
 }
@@ -319,19 +327,20 @@ func (s *Server) failDaemonTurn(ctx context.Context, d *store.Daemon, reason str
 	}
 }
 
-// cancelQueued drops a queued turn; only the participant who queued it may (002-AC17).
+// cancelQueued drops a queued turn: the participant who queued it may, and for a turn an agent
+// queued, anyone allowed to press (002-AC17, 002-AC24).
 func (s *Server) cancelQueued(w http.ResponseWriter, r *http.Request, sess session) {
 	id, err := strconv.ParseInt(r.PathValue("queued"), 10, 64)
 	if err != nil {
 		httpError(w, http.StatusNotFound, "no such queued turn")
 		return
 	}
-	err = s.bus.Store.CancelQueued(r.Context(), sess.p.RoomID, id, sess.p.ID)
+	err = s.bus.Store.CancelQueued(r.Context(), sess.p.RoomID, id, sess.p.ID, s.canPress(r.Context(), sess.p))
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		httpError(w, http.StatusNotFound, "no such queued turn")
 	case errors.Is(err, store.ErrForbidden):
-		httpError(w, http.StatusForbidden, "only who queued a turn can cancel it")
+		httpError(w, http.StatusForbidden, "only who queued a turn, or for an agent's, who may press, can cancel it")
 	case err != nil:
 		s.serverError(w, "cancel_queued_failed", err)
 	default:
@@ -496,6 +505,7 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 		httpError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	s.chainLinks(r.Context(), done, out.Synthesis)
 	s.bus.Notify(d.RoomID)
 	s.drain(r.Context(), d.RoomID)
 	s.log.Info("turn_done", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.Strings("revised", done.Report.Revised),

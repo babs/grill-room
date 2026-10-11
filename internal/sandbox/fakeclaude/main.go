@@ -10,6 +10,8 @@
 //	FAKE_LIST         answer with the transcript files and whether they hold FAKE_MARK
 //	FAKE_RECALL       answer with the latest code word an earlier turn of the session was told
 //	FAKE_WHOAMI       answer with the first line of --append-system-prompt-file, and --effort
+//	FAKE_PINGPONG A B as persona A call @B, as any other call @A, and repeat the marker so the
+//	                  called persona's prompt holds it too (an agent chain)
 //	FAKE_SLOW         take a few seconds (a turn others queue behind)
 //	FAKE_SLEEP        hang until killed (a turn in progress)
 //
@@ -39,6 +41,8 @@ var slow = 8 * time.Second
 
 var (
 	codeWord   = regexp.MustCompile(`code word is ([A-Z0-9-]+)`)
+	pingPong   = regexp.MustCompile(`FAKE_PINGPONG ([\p{L}\p{N}_-]+) ([\p{L}\p{N}_-]+)`)
+	persona    = regexp.MustCompile(`(?m)^You are (\S+), an agent`)
 	annotation = regexp.MustCompile(`### Annotation (\d+)`)
 )
 
@@ -172,6 +176,8 @@ func act(prompt, history, cwd, system, effort string) (string, error) {
 			}
 		}
 		return "The code word was " + word + ".", nil
+	case strings.Contains(prompt, "FAKE_PINGPONG"):
+		return pingPongCall(prompt)
 	case strings.Contains(prompt, "FAKE_WHOAMI"):
 		return whoami(system, effort)
 	case strings.Contains(prompt, "FAKE_SLOW"):
@@ -195,4 +201,16 @@ func whoami(system, effort string) (string, error) {
 	}
 	first, _, _ := strings.Cut(string(b), "\n")
 	return fmt.Sprintf("%s (effort %s)", first, effort), nil
+}
+
+func pingPongCall(prompt string) (string, error) {
+	m, self := pingPong.FindStringSubmatch(prompt), persona.FindStringSubmatch(prompt)
+	if m == nil || self == nil {
+		return "", fmt.Errorf("FAKE_PINGPONG wants two persona names and a prompt naming its persona")
+	}
+	other := m[1]
+	if strings.EqualFold(self[1], m[1]) {
+		other = m[2]
+	}
+	return fmt.Sprintf("FAKE_PINGPONG %s %s: over to @%s.", m[1], m[2], other), nil
 }

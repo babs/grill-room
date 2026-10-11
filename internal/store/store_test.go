@@ -328,13 +328,21 @@ func roomRows(t *testing.T, s *Store, room string) map[string]int {
 	return out
 }
 
-// 001-AC4 002-AC9
+// 001-AC4 002-AC9 002-AC24
 func TestDeleteRoomPurgesEverything(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	for _, room := range []string{"a", "b"} {
-		seed(t, s, room)
+		p := seed(t, s, room)
 		seedHeld(t, s, room)
+		// A turn an agent queued: no participant holds it, only the room (002-AC24).
+		sec, _, err := s.AddPersona(ctx, room, templateByPreset(t, s, "secretary").ID, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.EnqueueLink(ctx, &QueuedTurn{RoomID: room, PersonaID: sec.ID}, LinkCall); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// These reach rooms through another table, so roomRows cannot see them.
 	indirect := []string{"revisions", "annotation_messages", "attachments", "message_versions"}
@@ -474,7 +482,7 @@ func TestRoomsAndSettings(t *testing.T) {
 	ctx := context.Background()
 	seed(t, s, "a")
 	rooms, err := s.Rooms(ctx)
-	if err != nil || len(rooms) != 1 || rooms[0].ID != "a" {
+	if err != nil || len(rooms) != 1 || rooms[0].ID != "a" || rooms[0].Chain.Budget != DefaultChainBudget {
 		t.Fatalf("rooms: %v, %v", rooms, err)
 	}
 	if _, err := s.Room(ctx, "zz"); !errors.Is(err, ErrNotFound) {

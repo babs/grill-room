@@ -39,6 +39,8 @@ type agentState struct {
 	// (002-AC19); Changes, the persona changes waiting for the host's approval (002-AC21).
 	CapRequests []capRequest          `json:"cap_requests"`
 	Changes     []store.PersonaChange `json:"changes"`
+	// Chain is the count of agent-triggered turns against the room's budget (002-AC25).
+	Chain store.Chain `json:"chain"`
 }
 
 // capRequest is a persona asking for more than the host cap: it runs at Runs until the host
@@ -94,7 +96,8 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 	if err != nil {
 		return nil, err
 	}
-	st := &agentState{HostID: r.HostParticipantID, CanTrigger: []int64{}, Daemons: s.connectedDaemons(room), Models: turn.Models, Efforts: turn.Efforts}
+	st := &agentState{HostID: r.HostParticipantID, CanTrigger: []int64{}, Daemons: s.connectedDaemons(room), Models: turn.Models, Efforts: turn.Efforts,
+		Chain: r.Chain}
 	for _, p := range ps {
 		if p.CanTrigger {
 			st.CanTrigger = append(st.CanTrigger, p.ID)

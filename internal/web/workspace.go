@@ -56,7 +56,7 @@ func textPath(d store.Document) string {
 
 // promptInput is what a turn's prompt tells its persona.
 type promptInput struct {
-	// Preamble opens the prompt; empty until the presence preamble of spec 002 phase 5.
+	// Preamble opens the prompt: the presence preamble (002-AC28).
 	Preamble string
 	Room     string
 	// Persona and Self name the persona the turn runs: its own messages are not news to it.

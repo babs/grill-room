@@ -275,6 +275,12 @@ func TestPromptFlagsChangedMessages(t *testing.T) {
 
 	tn = e.press(t, r, alice, alice.p.Token, false)
 	got := promptTS.ReplaceAllString(e.job(t, r, alice, tn.ID).Prompt, "<ts>")
+	// The preamble names who speaks now, from the clock: TestPresencePreamble holds its own golden.
+	if i := strings.Index(got, "\nYou are Grill"); i < 0 || !strings.HasPrefix(got, "## Who is here\n") {
+		t.Fatalf("no presence preamble before the prompt:\n%s", got)
+	} else {
+		got = got[i+1:]
+	}
 	golden(t, "testdata/prompt-changes.golden", got)
 
 	day := time.Now().UTC().Format(time.DateOnly)

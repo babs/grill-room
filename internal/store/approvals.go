@@ -92,7 +92,7 @@ func (s *Store) DecideCap(ctx context.Context, roomID string, id int64, d *Daemo
 			status, d.ID, asked.Model, asked.Effort, id); err != nil {
 			return fmt.Errorf("decide cap: %w", err)
 		}
-		m, err = personaLine(ctx, tx, roomID, by, body)
+		m, err = memberLine(ctx, tx, roomID, by, body)
 		return err
 	})
 	return m, err
@@ -294,7 +294,7 @@ func (s *Store) DecideChange(ctx context.Context, roomID string, id int64, appro
 		if _, err := tx.ExecContext(ctx, `DELETE FROM persona_change_requests WHERE id = ?`, c.ID); err != nil {
 			return fmt.Errorf("decide change: %w", err)
 		}
-		m, err = personaLine(ctx, tx, roomID, by, body)
+		m, err = memberLine(ctx, tx, roomID, by, body)
 		return err
 	})
 	return m, err

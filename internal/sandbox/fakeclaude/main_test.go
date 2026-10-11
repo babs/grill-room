@@ -101,6 +101,18 @@ func TestFakeClaude(t *testing.T) {
 	if o, code := call(t, cwd, home, "FAKE_WHOAMI"); code != 1 || !o.IsError {
 		t.Fatalf("whoami without a system prompt %+v", o)
 	}
+	// 002-AC24: the ping-pong of an agent chain, each persona calling the other.
+	for prompt, want := range map[string]string{
+		"## Who is here\nYou: @Grill\n\nYou are Grill, an agent.\n- FAKE_PINGPONG grill Secretary": "FAKE_PINGPONG grill Secretary: over to @Secretary.",
+		"You are Secretary, an agent.\n- FAKE_PINGPONG grill Secretary: over to @Secretary.":       "FAKE_PINGPONG grill Secretary: over to @grill.",
+	} {
+		if o, _ := call(t, cwd, home, prompt); o.Result != want {
+			t.Fatalf("ping-pong %q: %+v", prompt, o)
+		}
+	}
+	if o, code := call(t, cwd, home, "FAKE_PINGPONG alone"); code != 1 || !o.IsError {
+		t.Fatalf("ping-pong without names %+v", o)
+	}
 	slow = time.Millisecond
 	if o, _ := call(t, cwd, home, "FAKE_SLOW"); o.Result != "Slow turn done." {
 		t.Fatalf("slow %+v", o)

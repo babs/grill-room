@@ -29,7 +29,7 @@ The persona's text is its role. It does not go in the prompt: the daemon writes 
 
 The server writes the prompt when the turn starts and stores it on the turn. The daemon passes it to `claude -p` on stdin. It holds:
 
-1. A preamble, empty until the presence preamble of spec 002 phase 5 fills it.
+1. The presence preamble, below.
 2. The persona's name and the room's, and that other agents' lines are tagged `(agent)`.
 3. The layout above, in plain words, the rule that uploads are read-only, the naming rule for new documents, and both annotation outputs.
 4. "This is a new session" when the turn does not resume: the persona's first turn, a fresh session (D15), or a lost session copy. The agent is told to read `transcript/`.
@@ -37,6 +37,19 @@ The server writes the prompt when the turn starts and stores it on the turn. The
 6. The messages since the persona's last successful turn, with day and time, sender, `(voice)` for speech and `(agent)` for another persona's synthesis. The persona's own syntheses are left out, since its session already holds them. Only the latest 100 KB are quoted; the prompt says how many earlier lines are in `transcript/`.
 7. The annotation threads with a message by anyone but this persona since its last successful turn, in full, with those messages flagged `(new)` and image paths listed.
 8. "Your final answer is posted in the room as your synthesis."
+
+### Presence preamble
+
+The prompt opens with who is in the room, from one template, `internal/web/presence.tmpl`, embedded in the server. Edit that file to change what agents are told. It holds:
+
+- the room name;
+- the persona itself: its name, the model and effort it runs at on the host's daemon after the cap, and its triggers;
+- each other persona: model and effort after the cap, state (`idle`, `running`, `queued`, or waiting for the host's approval), completed turns, triggers, and the first line of its latest synthesis on a line of its own;
+- the humans present (those with the room page open), the host, and who speaks now (the author of a voice line from the last 10 seconds);
+- the chain budget left, or "unlimited" while the limit is suspended;
+- how to call another persona with `@name`, and whether the persona's own `@name` gives it another turn.
+
+The server cuts each rendered line at 100 characters. The preamble is fixed when the turn starts, like the rest of the prompt.
 
 A failed turn does not move the cursors: the next turn of that persona quotes its messages and changes again. A persona added to a room has no turn yet, so its first prompt quotes the room from the start.
 
@@ -51,6 +64,7 @@ Lines show their current text. An edited line is tagged `(edited)`, and a delete
 | new documents | a new file in `docs/` | a new agent document by the persona |
 | thread replies | `replies.json`: `[{"annotation": <id>, "body": "...", "status": "done"}]`, `status` optional | an annotation message by the persona; `"done"` also closes the thread |
 | new annotations | `annotations-new.json`: `[{"doc": "<path>", "exact": "...", "prefix": "...", "suffix": "...", "body": "..."}]` | an annotation by the persona on that quote, with `body` as its first message |
+| calls | `@name` in the synthesis, outside code | a queued turn of that persona, one chain link each; its own name only with self-call on |
 | model and effort | `modelUsage` in `claude -p`'s JSON; the effort the daemon passed | shown on the synthesis, stored on the turn |
 
 Documents are the room's, not a persona's: any persona may revise any agent document.

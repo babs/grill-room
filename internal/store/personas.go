@@ -278,7 +278,8 @@ type RoomPersona struct {
 	// never applied by itself (002-AC14).
 	UpdateVersion int `json:"update_version,omitempty"`
 	PersonaFields
-	// EveryN and SelfCall are kept for the triggers of spec 002 phase 5; nothing acts on them yet.
+	// EveryN runs the persona after that many completed turns of any persona since its own last
+	// one, 0 for off (002-AC22). SelfCall lets its synthesis queue itself with @name (002-AC24).
 	EveryN   int  `json:"every_n,omitempty"`
 	SelfCall bool `json:"self_call"`
 	// Pending is a persona added while the host approves everything: it cannot run until the host
@@ -390,8 +391,8 @@ func presetID(ctx context.Context, tx *sql.Tx, key string) (int64, error) {
 	return id, nil
 }
 
-// personaLine records a persona change in the room, signed by the participant who made it.
-func personaLine(ctx context.Context, tx *sql.Tx, roomID string, by *Participant, body string) (*Message, error) {
+// memberLine records a member's change (a persona, the chain) in the room, signed by them.
+func memberLine(ctx context.Context, tx *sql.Tx, roomID string, by *Participant, body string) (*Message, error) {
 	m := &Message{RoomID: roomID, Kind: KindSystem, ParticipantID: by.ID, Sender: by.Name, Body: by.Name + " " + body}
 	return m, insertMessage(ctx, tx, m)
 }
@@ -443,7 +444,7 @@ func (s *Store) AddPersona(ctx context.Context, roomID string, templateID int64,
 			}
 			p.Pending, body = true, body+waitsNote
 		}
-		m, err = personaLine(ctx, tx, roomID, by, body)
+		m, err = memberLine(ctx, tx, roomID, by, body)
 		return err
 	})
 	return p, m, err
@@ -582,7 +583,7 @@ func changePersona(ctx context.Context, tx *sql.Tx, p *RoomPersona, c PersonaPat
 		}
 		body = applied(before, changes)
 	}
-	m, err := personaLine(ctx, tx, p.RoomID, by, body)
+	m, err := memberLine(ctx, tx, p.RoomID, by, body)
 	return p, m, held, err
 }
 
@@ -633,28 +634,37 @@ func (s *Store) RemovePersona(ctx context.Context, roomID string, id int64, by *
 		if _, err := tx.ExecContext(ctx, `DELETE FROM room_personas WHERE id = ?`, id); err != nil {
 			return fmt.Errorf("remove persona: %w", err)
 		}
-		m, err = personaLine(ctx, tx, roomID, by, "removed the persona "+p.label()+".")
+		m, err = memberLine(ctx, tx, roomID, by, "removed the persona "+p.label()+".")
 		return err
 	})
 	return m, err
 }
 
-// QueuedTurn is a persona's button pressed while another turn ran: it starts when the room is free.
+// Queue sources: who put a turn in the queue.
+const (
+	SourceButton  = "button"
+	SourceMention = "mention"
+)
+
+// QueuedTurn is a turn waiting for the room to be free: a persona's button pressed while another
+// turn ran, a human's @mention, or an agent-triggered link of the chain (Source every_n or call).
 type QueuedTurn struct {
-	ID            int64     `json:"id"`
-	RoomID        string    `json:"-"`
-	PersonaID     int64     `json:"persona_id"`
-	ParticipantID int64     `json:"participant_id"`
+	ID        int64  `json:"id"`
+	RoomID    string `json:"-"`
+	PersonaID int64  `json:"persona_id"`
+	// ParticipantID is who pressed or mentioned; 0 for a turn an agent triggered.
+	ParticipantID int64     `json:"participant_id,omitempty"`
+	Source        string    `json:"source"`
 	Fresh         bool      `json:"fresh"`
 	CreatedAt     time.Time `json:"created_at"`
 }
 
-const queueCols = `SELECT id, room_id, persona_id, participant_id, fresh, created_at FROM turn_queue `
+const queueCols = `SELECT id, room_id, persona_id, COALESCE(participant_id, 0), source, fresh, created_at FROM turn_queue `
 
 func scanQueued(sc scanner) (*QueuedTurn, error) {
 	var q QueuedTurn
 	var created string
-	err := sc.Scan(&q.ID, &q.RoomID, &q.PersonaID, &q.ParticipantID, &q.Fresh, &created)
+	err := sc.Scan(&q.ID, &q.RoomID, &q.PersonaID, &q.ParticipantID, &q.Source, &q.Fresh, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -665,13 +675,25 @@ func scanQueued(sc scanner) (*QueuedTurn, error) {
 	return &q, nil
 }
 
-// Enqueue puts q at the end of its room's queue. ErrAlreadyQueued when its persona waits already,
-// ErrNotFound when the persona is not in the room or waits for the host's approval.
+// Enqueue puts q at the end of its room's queue, as a press when q.Source is empty. ErrAlreadyQueued
+// when its persona waits already, ErrNotFound when the persona is not in the room or waits for the
+// host's approval.
 func (s *Store) Enqueue(ctx context.Context, q *QueuedTurn) error {
+	if q.Source == "" {
+		q.Source = SourceButton
+	}
+	return enqueue(ctx, s.db, q)
+}
+
+func enqueue(ctx context.Context, db querier, q *QueuedTurn) error {
 	q.CreatedAt = time.Now().UTC()
-	err := s.db.QueryRowContext(ctx, `INSERT INTO turn_queue(room_id, persona_id, participant_id, fresh, created_at)
-		SELECT room_id, id, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? AND pending = 0 RETURNING id`,
-		q.ParticipantID, q.Fresh, q.CreatedAt.Format(time.RFC3339Nano), q.PersonaID, q.RoomID).Scan(&q.ID)
+	var pid any
+	if q.ParticipantID != 0 {
+		pid = q.ParticipantID
+	}
+	err := db.QueryRowContext(ctx, `INSERT INTO turn_queue(room_id, persona_id, participant_id, source, fresh, created_at)
+		SELECT room_id, id, ?, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? AND pending = 0 RETURNING id`,
+		pid, q.Source, q.Fresh, q.CreatedAt.Format(time.RFC3339Nano), q.PersonaID, q.RoomID).Scan(&q.ID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return ErrNotFound
@@ -701,14 +723,14 @@ func (s *Store) Queue(ctx context.Context, roomID string) ([]QueuedTurn, error) 
 	return out, rows.Err()
 }
 
-// CancelQueued drops queued turn id of room, which only participant by, who queued it, may do.
-// ErrForbidden, ErrNotFound.
-func (s *Store) CancelQueued(ctx context.Context, roomID string, id, by int64) error {
+// CancelQueued drops queued turn id of room. Participant by may drop what they queued, and with
+// canPress, the turns agents queued. ErrForbidden, ErrNotFound.
+func (s *Store) CancelQueued(ctx context.Context, roomID string, id, by int64, canPress bool) error {
 	q, err := scanQueued(s.db.QueryRowContext(ctx, queueCols+`WHERE id = ? AND room_id = ?`, id, roomID))
 	if err != nil {
 		return err
 	}
-	if q.ParticipantID != by {
+	if q.ParticipantID != by && (q.ParticipantID != 0 || !canPress) {
 		return ErrForbidden
 	}
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM turn_queue WHERE id = ?`, id); err != nil {
@@ -720,7 +742,59 @@ func (s *Store) CancelQueued(ctx context.Context, roomID string, id, by int64) e
 // PopQueued removes and returns the head of the room's queue. ErrNotFound when it is empty.
 func (s *Store) PopQueued(ctx context.Context, roomID string) (*QueuedTurn, error) {
 	return scanQueued(s.db.QueryRowContext(ctx, `DELETE FROM turn_queue WHERE id = (SELECT id FROM turn_queue WHERE room_id = ? ORDER BY id LIMIT 1)
-		RETURNING id, room_id, persona_id, participant_id, fresh, created_at`, roomID))
+		RETURNING id, room_id, persona_id, COALESCE(participant_id, 0), source, fresh, created_at`, roomID))
+}
+
+// DuePersonas lists the room's personas whose "every N rounds" is due: at least N turns of any
+// persona completed since that persona's own last turn, whatever its outcome (002-AC22). A failed
+// turn counts as the persona's last, so a persona that keeps failing does not retry every round.
+func (s *Store) DuePersonas(ctx context.Context, roomID string) ([]RoomPersona, error) {
+	rows, err := s.db.QueryContext(ctx, personaCols+`WHERE p.room_id = ? AND p.every_n IS NOT NULL AND p.pending = 0
+		AND (SELECT COUNT(*) FROM turns t WHERE t.room_id = p.room_id AND t.status = 'done'
+			AND t.id > COALESCE((SELECT MAX(id) FROM turns WHERE persona_id = p.id), 0)) >= p.every_n
+		ORDER BY p.id`, roomID)
+	if err != nil {
+		return nil, fmt.Errorf("due personas: %w", err)
+	}
+	defer rows.Close()
+	var out []RoomPersona
+	for rows.Next() {
+		p, err := scanPersona(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *p)
+	}
+	return out, rows.Err()
+}
+
+// PersonaStat is what the presence preamble says about a persona's past: its completed turns and
+// its latest synthesis.
+type PersonaStat struct {
+	Turns int
+	Last  string
+}
+
+// PersonaStats returns the stat of each persona of the room, by persona id.
+func (s *Store) PersonaStats(ctx context.Context, roomID string) (map[int64]PersonaStat, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT p.id,
+		(SELECT COUNT(*) FROM turns t WHERE t.persona_id = p.id AND t.status = 'done'),
+		COALESCE((SELECT body FROM messages m WHERE m.persona_id = p.id AND m.kind = 'agent' AND m.deleted_at IS NULL ORDER BY m.id DESC LIMIT 1), '')
+		FROM room_personas p WHERE p.room_id = ?`, roomID)
+	if err != nil {
+		return nil, fmt.Errorf("persona stats: %w", err)
+	}
+	defer rows.Close()
+	out := map[int64]PersonaStat{}
+	for rows.Next() {
+		var id int64
+		var st PersonaStat
+		if err := rows.Scan(&id, &st.Turns, &st.Last); err != nil {
+			return nil, fmt.Errorf("persona stats: %w", err)
+		}
+		out[id] = st
+	}
+	return out, rows.Err()
 }
 
 // migratePersonas moves a pre-002 database to personas (002-AC42): every room gets the Default

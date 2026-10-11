@@ -1,0 +1,13 @@
+## Who is here
+
+Room: Grill
+You: @Secretary, model sonnet, effort high, on demand and every 2 rounds
+Agent @Grill: model default, effort default, idle, turns done: 1, on demand
+  last said: "Over to @critic, and a very long first line that goes on and on until the preamble ha…
+Agent @Critic: model haiku, effort default, queued, turns done: 0, on demand
+Humans present: Alice
+Host: Alice
+Speaking now: Bob
+Chain budget: 9 of 10 agent turns left
+Write @name in your synthesis to give another agent a turn; it counts against the chain budget.
+Writing @Secretary gives you another turn.

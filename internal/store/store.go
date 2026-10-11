@@ -34,6 +34,7 @@ type Room struct {
 	CreatedAt time.Time `json:"created_at"`
 	// HostParticipantID is the participant whose daemon runs the agent; 0 before any daemon hosted.
 	HostParticipantID int64 `json:"host_participant_id,omitempty"`
+	Chain             Chain `json:"chain"`
 }
 
 // Invite is a link token granting access to one room. Only its hash is stored.
@@ -381,6 +382,26 @@ CREATE TABLE persona_change_requests (
 	created_at TEXT NOT NULL
 );
 CREATE INDEX persona_change_requests_room ON persona_change_requests(room_id);
+`, `
+ALTER TABLE rooms ADD COLUMN chain_budget INTEGER NOT NULL DEFAULT 25 CHECK (chain_budget > 0);
+ALTER TABLE rooms ADD COLUMN chain_count INTEGER NOT NULL DEFAULT 0 CHECK (chain_count >= 0);
+ALTER TABLE rooms ADD COLUMN chain_suspended INTEGER NOT NULL DEFAULT 0 CHECK (chain_suspended IN (0, 1));
+CREATE TABLE turn_queue_v2 (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	persona_id INTEGER NOT NULL UNIQUE REFERENCES room_personas(id) ON DELETE CASCADE,
+	participant_id INTEGER REFERENCES participants(id) ON DELETE CASCADE,
+	source TEXT NOT NULL CHECK (source IN ('button', 'mention', 'every_n', 'call')),
+	fresh INTEGER NOT NULL CHECK (fresh IN (0, 1)),
+	created_at TEXT NOT NULL,
+	CHECK ((participant_id IS NULL) = (source IN ('every_n', 'call')))
+);
+INSERT INTO turn_queue_v2(id, room_id, persona_id, participant_id, source, fresh, created_at)
+	SELECT id, room_id, persona_id, participant_id, 'button', fresh, created_at FROM turn_queue;
+DROP TABLE turn_queue;
+ALTER TABLE turn_queue_v2 RENAME TO turn_queue;
+CREATE INDEX turn_queue_room ON turn_queue(room_id, id);
+CREATE INDEX turn_queue_participant ON turn_queue(participant_id);
 `}
 
 // migrationData runs Go code inside the transaction of the migration to version key, after its SQL.
@@ -472,7 +493,7 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 
 // CreateRoom inserts a room with the given id, and the Default template's persona (002-AC42).
 func (s *Store) CreateRoom(ctx context.Context, id, name string) (*Room, error) {
-	r := &Room{ID: id, Name: name, CreatedAt: time.Now().UTC()}
+	r := &Room{ID: id, Name: name, CreatedAt: time.Now().UTC(), Chain: Chain{Budget: DefaultChainBudget}}
 	err := s.withTx(ctx, "create room", func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO rooms(id, name, created_at) VALUES(?,?,?)`, r.ID, r.Name, r.CreatedAt.Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("create room: %w", err)
@@ -494,8 +515,8 @@ func (s *Store) CreateRoom(ctx context.Context, id, name string) (*Room, error) 
 func (s *Store) Room(ctx context.Context, id string) (*Room, error) {
 	var r Room
 	var created string
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at, COALESCE(host_participant_id, 0) FROM rooms WHERE id = ?`, id).
-		Scan(&r.ID, &r.Name, &created, &r.HostParticipantID)
+	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at, COALESCE(host_participant_id, 0), chain_budget, chain_count, chain_suspended
+		FROM rooms WHERE id = ?`, id).Scan(&r.ID, &r.Name, &created, &r.HostParticipantID, &r.Chain.Budget, &r.Chain.Count, &r.Chain.Suspended)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -508,7 +529,7 @@ func (s *Store) Room(ctx context.Context, id string) (*Room, error) {
 
 // Rooms lists every room, newest first.
 func (s *Store) Rooms(ctx context.Context) ([]Room, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, created_at FROM rooms ORDER BY rowid DESC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, created_at, chain_budget, chain_count, chain_suspended FROM rooms ORDER BY rowid DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("query rooms: %w", err)
 	}
@@ -517,7 +538,7 @@ func (s *Store) Rooms(ctx context.Context) ([]Room, error) {
 	for rows.Next() {
 		var r Room
 		var created string
-		if err := rows.Scan(&r.ID, &r.Name, &created); err != nil {
+		if err := rows.Scan(&r.ID, &r.Name, &created, &r.Chain.Budget, &r.Chain.Count, &r.Chain.Suspended); err != nil {
 			return nil, fmt.Errorf("scan room: %w", err)
 		}
 		r.CreatedAt = parseTS(created)
@@ -819,6 +840,11 @@ func insertMessage(ctx context.Context, db execer, m *Message) error {
 // Messages returns up to limit messages of room with id > afterID, oldest first.
 func (s *Store) Messages(ctx context.Context, roomID string, afterID int64, limit int) ([]Message, error) {
 	return s.queryMessages(ctx, `WHERE room_id = ? AND id > ? ORDER BY id ASC LIMIT ?`, roomID, afterID, limit)
+}
+
+// LastVoice returns the room's latest voice line still shown; ErrNotFound if there is none.
+func (s *Store) LastVoice(ctx context.Context, roomID string) (*Message, error) {
+	return scanMessage(s.db.QueryRowContext(ctx, messageCols+`WHERE room_id = ? AND kind = 'voice' AND deleted_at IS NULL ORDER BY id DESC LIMIT 1`, roomID))
 }
 
 const (

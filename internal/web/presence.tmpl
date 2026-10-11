@@ -1,0 +1,21 @@
+{{/* The presence preamble opens every prompt (002-AC28, docs/agent-workspace.md). Each line is
+cut at about 100 characters after rendering, so keep what matters at the start of a line. */ -}}
+## Who is here
+
+Room: {{.Room}}
+You: @{{.Self.Name}}, {{.Self.Level}}, {{.Self.Trigger}}
+{{- range .Others}}
+Agent @{{.Name}}: {{.Level}}, {{.State}}, turns done: {{.Turns}}, {{.Trigger}}
+{{- if .Last}}
+  last said: "{{.Last}}"
+{{- end}}
+{{- else}}
+No other agent is in the room.
+{{- end}}
+Humans present: {{if .Humans}}{{join .Humans}}{{else}}none{{end}}
+Host: {{or .Host "none"}}
+Speaking now: {{or .Speaker "nobody"}}
+Chain budget: {{.Chain}}
+Write @name in your synthesis to give another agent a turn; it counts against the chain budget.
+Writing @{{.Self.Name}} {{if .SelfCall}}gives you another turn{{else}}does nothing: self-call is off{{end}}.
+

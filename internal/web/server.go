@@ -61,6 +61,7 @@ type Server struct {
 	streams   atomic.Int64
 	pairings  pairings
 	presence  presences
+	viewers   viewers
 	stt       sttWorkers
 	// magicLimit rate-limits magic link requests per address and per client IP.
 	magicLimit limiter
@@ -83,7 +84,7 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 		opts.MagicLinkTTL = DefaultMagicLinkTTL
 	}
 	return &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
-		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, stt: sttWorkers{m: map[string]*sttWorker{}},
+		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, viewers: viewers{m: map[int64]int{}}, stt: sttWorkers{m: map[string]*sttWorker{}},
 		magicLimit: limiter{window: magicWindow}}
 }
 
@@ -164,6 +165,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/rooms/{room}/host", s.participant(s.handOver))
 	mux.Handle("PATCH /api/rooms/{room}/participants/{participant}", s.participant(s.setCanTrigger))
 	mux.Handle("DELETE /api/rooms/{room}/queue/{queued}", s.participant(s.cancelQueued))
+	mux.Handle("PATCH /api/rooms/{room}/chain", s.participant(s.controlChain))
 	mux.Handle("GET /api/rooms/{room}/templates", s.participant(s.listTemplates))
 	mux.Handle("POST /api/rooms/{room}/templates", s.participant(s.publishTemplate))
 	mux.Handle("POST /api/rooms/{room}/personas", s.participant(s.addPersona))
@@ -666,6 +668,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, sess sessio
 		s.serverError(w, "post_message_failed", err)
 		return
 	}
+	s.mentionTurns(r.Context(), sess.p, body)
 	writeJSON(w, http.StatusCreated, viewMessage(*m))
 }
 
@@ -712,6 +715,8 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	}
 	s.streams.Add(1)
 	defer s.streams.Add(-1)
+	s.viewers.add(sess.p.ID, 1)
+	defer s.viewers.add(sess.p.ID, -1)
 	// The live channel is only a wake-up signal: every send reads from the store after the last id,
 	// so a dropped or out-of-order signal can never leave a gap in the stream.
 	live, cancel := s.bus.Subscribe(64)

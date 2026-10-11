@@ -168,7 +168,7 @@ func TestPersonaEditDuringTurn(t *testing.T) {
 		t.Fatalf("remove while running: %d", code)
 	}
 	job := e.job(t, r, alice, tn.ID)
-	if job.Persona != "Grill" || job.System != r.grill.Text || job.Model != "" || job.Effort != "" || !strings.HasPrefix(job.Prompt, "You are Grill, an agent") {
+	if job.Persona != "Grill" || job.System != r.grill.Text || job.Model != "" || job.Effort != "" || !strings.Contains(job.Prompt, "\nYou are Grill, an agent") {
 		t.Fatalf("job of the running turn: %+v", job)
 	}
 	if code, b := e.result(t, r, alice, tn.ID, turn.Result{Synthesis: "One.", Model: "claude-haiku-x", Effort: "turbo", SessionID: sid1, Session: []byte("a\n")}); code != http.StatusOK {

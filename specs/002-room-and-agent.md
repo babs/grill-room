@@ -150,7 +150,7 @@ The sandbox gets Python, uv, Office libraries and common CLI tools. It reaches t
 ### Phase 5 — Triggers, chains, presence
 - Work: per-persona buttons, every N rounds, `@persona` from humans and personas, self-call option, chain budget, re-arm/suspend/unlimited, presence preamble template.
 - **Covers**: AC22, AC23, AC24, AC25, AC26, AC27, AC28
-- **Data model impact**: `rooms.chain_budget`, `rooms.chain_count`, `rooms.chain_suspended`; `room_personas.every_n`, `room_personas.self_call`
+- **Data model impact**: `rooms.chain_budget`, `rooms.chain_count`, `rooms.chain_suspended`; `room_personas.every_n`, `room_personas.self_call`; `turn_queue.source`, and `turn_queue.participant_id` nullable for turns an agent queued
 - **DoD**: unit tests for the chain counter state machine (every reset and link source); a golden test of the preamble; e2e chain pause → re-arm.
 
 ### Phase 6 — Skills
@@ -190,9 +190,10 @@ New columns:
 - `messages.edited_at`, `messages.deleted_at`
 - `turns.persona_id`, `turns.effort`
 - `rooms.chain_budget`, `rooms.chain_count`, `rooms.chain_suspended`
+- `turn_queue.source`
 - `profiles.skills_disclaimer_at`
 
-Changed: `agent_sessions` is keyed by room persona. Existing rooms migrate to one "Default" persona that keeps their current session. Every new room-owned table cascades from `rooms`; profile-owned tables cascade from `profiles`.
+Changed: `agent_sessions` is keyed by room persona, and `turn_queue.participant_id` is empty for a turn an agent queued. Existing rooms migrate to one "Default" persona that keeps their current session. Every new room-owned table cascades from `rooms`; profile-owned tables cascade from `profiles`.
 
 ## Personal data
 

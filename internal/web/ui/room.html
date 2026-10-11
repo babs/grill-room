@@ -35,6 +35,7 @@
   <div id="agent">
     <div id="persona-buttons" role="group" aria-label="Agents"></div>
     <button type="button" id="personas-open" class="small">Personas</button>
+    <span id="chain-count" title="Agent-triggered turns since a human last took the lead"></span>
     <span id="agent-status" role="status"></span>
   </div>
   <a id="me" href="/profile" title="Your profile"></a>
@@ -47,6 +48,11 @@
   <span>Queued:</span>
   <ol id="queue-list" aria-label="Queued turns"></ol>
 </div>
+<p id="chain-unlimited" role="alert" hidden>Chain limit suspended: agents may call each other without end. The host cap still applies.
+  <button type="button" id="chain-restore" class="small">Restore the limit</button></p>
+<p id="chain-paused" role="alert" hidden><span id="chain-paused-text"></span>
+  <button type="button" id="chain-rearm" class="small">Re-arm</button>
+  <button type="button" id="chain-suspend" class="small">Suspend limit</button></p>
 <section id="approvals" aria-label="Waiting for the host" hidden>
   <ul id="approval-list"></ul>
 </section>
@@ -58,6 +64,11 @@
   <p class="hint">Each persona is an agent with its own Claude session. Changes apply from its next turn.</p>
   <p id="personas-status" role="status"></p>
   <div id="persona-list"></div>
+  <form id="chain-form">
+    <label>Chain budget <input id="chain-budget" type="number" min="1" max="1000" required></label>
+    <button type="submit">Set</button>
+  </form>
+  <p class="hint">Turns agents start one after another (every N rounds, @name in a synthesis) before the chain pauses. A press or an @name from a person starts it over.</p>
   <form id="persona-add">
     <label>Add from the library <select id="persona-template" required></select></label>
     <button type="submit">Add</button>
