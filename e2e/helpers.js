@@ -36,15 +36,15 @@ export async function docFrame(page) {
 
 // startDaemon runs the real daemon binary against this room, with a fake credentials file and a
 // throwaway state dir, and resolves with the admin page link it prints. Its sandbox uses the fake
-// claude image: no Claude request.
-export function startDaemon(roomURL) {
+// claude image: no Claude request. env adds to the daemon's environment.
+export function startDaemon(roomURL, env = {}) {
   const dir = mkdtempSync(join('test-results', 'daemon-'));
   writeFileSync(join(dir, '.credentials.json'),
     JSON.stringify({ claudeAiOauth: { accessToken: 'e2e-fake', expiresAt: Date.now() + 3600e3 } }), { mode: 0o600 });
   const proc = spawn('../bin/grill-room-daemon', [roomURL], {
     env: {
       ...process.env, CLAUDE_CONFIG_DIR: dir, GRILL_ROOM_DAEMON_STATE_DIR: join(dir, 'state'), GRILL_ROOM_DAEMON_BROWSER: 'none',
-      GRILL_ROOM_SANDBOX_IMAGE: process.env.GRILL_ROOM_SANDBOX_FAKE_IMAGE || 'grill-room-sandbox:fake', LOG_LEVEL: 'info',
+      GRILL_ROOM_SANDBOX_IMAGE: process.env.GRILL_ROOM_SANDBOX_FAKE_IMAGE || 'grill-room-sandbox:fake', LOG_LEVEL: 'info', ...env,
     },
     stdio: ['ignore', 'ignore', 'pipe'],
   });

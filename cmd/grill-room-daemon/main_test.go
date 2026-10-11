@@ -30,10 +30,24 @@ func TestConfig(t *testing.T) {
 		{Config{Browser: "none", LogLevel: "debug"}, true},
 		{Config{Browser: "firefox", LogLevel: "info"}, false},
 		{Config{Browser: "auto", LogLevel: "loud"}, false},
+		// 002-AC19: a cap names a known model family and effort.
+		{Config{Browser: "auto", LogLevel: "info", Settings: daemon.Settings{MaxModel: "claude-sonnet-5-5", MaxEffort: "high"}}, true},
+		{Config{Browser: "auto", LogLevel: "info", Settings: daemon.Settings{MaxModel: "gpt-5"}}, false},
+		{Config{Browser: "auto", LogLevel: "info", Settings: daemon.Settings{MaxEffort: "turbo"}}, false},
 	} {
 		if err := tc.cfg.Validate(); (err == nil) != tc.ok {
 			t.Errorf("Validate(%+v) = %v", tc.cfg, err)
 		}
+	}
+	t.Setenv("GRILL_ROOM_MAX_MODEL", "opus")
+	t.Setenv("GRILL_ROOM_MAX_EFFORT", "xhigh")
+	t.Setenv("GRILL_ROOM_APPROVE_ALL", "true")
+	if cfg, err := loadConfig(); err != nil || cfg.Settings != (daemon.Settings{MaxModel: "opus", MaxEffort: "xhigh", ApproveAll: true}) {
+		t.Fatalf("settings from the environment: %+v %v", cfg.Settings, err)
+	}
+	t.Setenv("GRILL_ROOM_APPROVE_ALL", "sometimes")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("a bad GRILL_ROOM_APPROVE_ALL loaded")
 	}
 }
 

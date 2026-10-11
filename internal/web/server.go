@@ -170,6 +170,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PATCH /api/rooms/{room}/personas/{persona}", s.participant(s.editPersona))
 	mux.Handle("POST /api/rooms/{room}/personas/{persona}/update", s.participant(s.updatePersona))
 	mux.Handle("DELETE /api/rooms/{room}/personas/{persona}", s.participant(s.removePersona))
+	mux.Handle("POST /api/rooms/{room}/personas/{persona}/cap", s.participant(s.decideCap))
+	mux.Handle("POST /api/rooms/{room}/changes/{change}", s.participant(s.decideChange))
 	mux.Handle("GET /api/templates", s.admin(s.adminTemplates))
 	mux.Handle("DELETE /api/templates/{template}", s.admin(s.removeTemplate))
 	mux.Handle("GET /api/rooms/{room}/daemon/turns/{turn}", s.daemonAuth(s.getJob))

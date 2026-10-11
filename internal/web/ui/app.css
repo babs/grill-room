@@ -89,6 +89,12 @@ button.persona .led { flex: none; }
 #queue { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.3rem 1rem; background: #e8f0fe; font-size: 0.85rem; }
 #queue-list { display: flex; flex-wrap: wrap; gap: 0.2rem 1.4rem; margin: 0; padding-left: 1.2rem; }
 #queue-list button { padding: 0.05rem 0.5rem; font-size: 0.75rem; }
+#approvals { padding: 0.3rem 1rem; background: #fff4e5; font-size: 0.85rem; }
+#approval-list { margin: 0; padding-left: 1.2rem; }
+#approval-list li { margin: 0.15rem 0; }
+#approval-list button { padding: 0.05rem 0.6rem; font-size: 0.75rem; margin-left: 0.3rem; }
+.led.pending { background: #c4c7d0; box-shadow: 0 0 0 2px rgba(196, 199, 208, 0.4); }
+.meta .capped { color: #b06000; }
 dialog#personas {
   width: min(44rem, calc(100vw - 1rem));
   max-height: calc(100dvh - 1rem);

@@ -50,6 +50,17 @@
     </dl>
     <button type="button" id="recheck">Check again</button>
   </section>
+  <section aria-labelledby="cap-title">
+    <h2 id="cap-title">Host cap</h2>
+    <p class="hint">A persona asking for more runs at this cap until you approve it in the room.</p>
+    <form id="settings-form">
+      <label>Max model <select id="max-model"><option value="">no cap</option></select></label>
+      <label>Max effort <select id="max-effort"><option value="">no cap</option></select></label>
+      <label><input id="approve-all" type="checkbox"> Approve every new persona and persona change</label>
+      <button type="submit">Save</button>
+      <span id="settings-status" role="status"></span>
+    </form>
+  </section>
   <section aria-labelledby="logs-title">
     <h2 id="logs-title">Logs</h2>
     <pre id="logs"></pre>

@@ -59,7 +59,7 @@ flowchart LR
 | Room server | `/api/*` REST, `/api/rooms/{room}/events` SSE, `/install.sh`, `/download/*`, `/healthz`; `/metrics` on its own port | SQLite, LiveKit server API, SMTP relay when configured | admin token, participant token or cookie, profile cookie, daemon token, STT token, pairing secret |
 | LiveKit | WebRTC signalling (WSS), TURN/TLS on 443, ICE/TCP | browsers, STT worker | 5 min JWT minted by the room server |
 | STT worker | `/metrics` | LiveKit (hidden participant), room server (`/api/stt/heartbeat`, `/voice/lines`) | STT token; LiveKit key pair |
-| Daemon | local admin page on 127.0.0.1 | room server (SSE `daemon/events`, turn job, workspace tar, session, result, status), Docker, `/api/daemon/version` for self-update | daemon token from pairing; admin page one-time link + Origin check |
+| Daemon | local admin page on 127.0.0.1 | room server (SSE `daemon/events`, turn job, workspace tar, session, result, status with the host cap and approval mode), Docker, `/api/daemon/version` for self-update | daemon token from pairing; admin page one-time link + Origin check |
 | Bearer-swap proxy | HTTP on the Docker bridge, sandbox network only | Anthropic API | swaps the sandbox's dummy bearer for the host's real token |
 | Sandbox | nothing | the proxy, nothing else | dummy credentials only |
 

@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/babs/grill-room/internal/turn"
 )
 
 //go:embed ui
@@ -81,6 +83,7 @@ func (a *Admin) Handler() http.Handler {
 	mux.Handle("POST /api/recheck", a.auth(a.recheck))
 	mux.Handle("POST /api/stop", a.auth(a.stopDaemon))
 	mux.Handle("POST /api/update", a.auth(a.update))
+	mux.Handle("POST /api/settings", a.auth(a.settings))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
@@ -172,7 +175,7 @@ func (a *Admin) session(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Admin) status(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": a.d.Status(), "logs": a.logs.Lines()})
+	writeJSON(w, http.StatusOK, map[string]any{"status": a.d.Status(), "logs": a.logs.Lines(), "models": turn.Models, "efforts": turn.Efforts})
 }
 
 func (a *Admin) setRoom(w http.ResponseWriter, r *http.Request) {
@@ -188,6 +191,19 @@ func (a *Admin) setRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.d.SetRoom(a.ctx, room)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// settings saves the host cap and approval mode; the room hears of them at once (002-AC36).
+func (a *Admin) settings(w http.ResponseWriter, r *http.Request) {
+	var req Settings
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if err := a.d.SetSettings(req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

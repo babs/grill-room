@@ -195,6 +195,8 @@ type TurnOutcome struct {
 	Synthesis string
 	Model     string
 	Effort    string
+	// Capped tells that the host cap lowered what the persona asked for: the synthesis says so.
+	Capped    bool
 	Documents []AgentWrite
 	Replies   []AgentReply
 	// Annotations are anchored after Documents are written, so they may quote this turn's text.
@@ -236,7 +238,7 @@ func scanTurn(sc scanner) (*Turn, error) {
 }
 
 // StartTurn records t as the room's running turn, for its persona. ErrTurnInProgress if one is
-// running already, ErrNotFound when the persona is not in the room.
+// running already, ErrNotFound when the persona is not in the room or waits for the host's approval.
 func (s *Store) StartTurn(ctx context.Context, t *Turn) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -261,7 +263,7 @@ func (s *Store) StartTurn(ctx context.Context, t *Turn) error {
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO turns(room_id, participant_id, daemon_id, host, status, fresh, resume, message_cursor, annotation_cursor, change_cursor, prompt, started_at,
 			persona_id, persona_name, persona_text, req_model, req_effort)
-		SELECT room_id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, id, ?, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ?`,
+		SELECT room_id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, id, ?, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? AND pending = 0`,
 		pid, did, t.Host, t.Status, t.Fresh, t.Resume, t.MessageCursor, t.AnnotationCursor, t.ChangeCursor, t.Prompt, t.StartedAt.Format(time.RFC3339Nano),
 		t.PersonaName, t.PersonaText, t.ReqModel, t.ReqEffort, t.PersonaID, t.RoomID)
 	if err != nil {
@@ -513,8 +515,11 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 		report.Annotated++
 	}
 	if strings.TrimSpace(out.Synthesis) != "" {
-		if err := insertMessage(ctx, tx, &Message{RoomID: roomID, Kind: KindAgent, Sender: author, PersonaID: t.PersonaID, Body: out.Synthesis,
-			Model: out.Model, Effort: out.Effort}); err != nil {
+		m := &Message{RoomID: roomID, Kind: KindAgent, Sender: author, PersonaID: t.PersonaID, Body: out.Synthesis, Model: out.Model, Effort: out.Effort}
+		if out.Capped {
+			m.ReqModel, m.ReqEffort = t.ReqModel, t.ReqEffort
+		}
+		if err := insertMessage(ctx, tx, m); err != nil {
 			return nil, err
 		}
 	}

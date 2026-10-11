@@ -26,19 +26,27 @@ type Agent interface {
 // maxSession bounds a session copy fetched from the room.
 const maxSession = 256 << 20
 
+// known keeps l's fields only when claude knows them: the values become claude arguments, whatever
+// the room sent.
+func known(l turn.Level) turn.Level {
+	if !slices.Contains(turn.Models, l.Model) {
+		l.Model = ""
+	}
+	if !slices.Contains(turn.Efforts, l.Effort) {
+		l.Effort = ""
+	}
+	return l
+}
+
 // runSettings is the one place where the model and effort a persona asks for become the ones its
-// turn runs with: an empty model falls back to this daemon's. The host cap (spec 002 phase 4)
-// clamps here.
-func (d *Daemon) runSettings(job turn.Job) (model, effort string) {
-	// The values become claude arguments: only the known ones pass, whatever the room sent.
-	model, effort = d.o.Model, ""
-	if slices.Contains(turn.Models, job.Model) {
-		model = job.Model
+// turn runs with. The host cap, raised by what the host approved for the persona, clamps them
+// (002-AC19, 002-AC20); an empty model then falls back to this daemon's.
+func (d *Daemon) runSettings(job turn.Job) (run turn.Level, capped bool) {
+	run, capped = turn.Clamp(known(turn.Level{Model: job.Model, Effort: job.Effort}), d.Status().Settings.Limit(), known(job.Approved))
+	if run.Model == "" {
+		run.Model = d.o.Model
 	}
-	if slices.Contains(turn.Efforts, job.Effort) {
-		effort = job.Effort
-	}
-	return model, effort
+	return run, capped
 }
 
 // agent returns the room run's sandbox, created on its first turn.
@@ -145,9 +153,14 @@ func (r *roomRun) execute(ctx context.Context, tok, ids string, job turn.Job) tu
 	if err != nil {
 		return turn.Result{Error: err.Error()}
 	}
-	model, effort := r.d.runSettings(job)
+	run, capped := r.d.runSettings(job)
+	if capped {
+		r.d.o.Log.Info("turn_capped", zap.String("persona", job.Persona), zap.String("asked", turn.Level{Model: job.Model, Effort: job.Effort}.String()),
+			zap.String("runs", run.String()))
+	}
+	model := run.Model
 	out, err := ag.RunTurn(ctx, sandbox.TurnInput{
-		Workspace: ws.Body, Prompt: job.Prompt, System: job.System, Model: model, Effort: effort,
+		Workspace: ws.Body, Prompt: job.Prompt, System: job.System, Model: model, Effort: run.Effort,
 		Resume: job.Resume, SessionSize: job.SessionSize, SessionSHA256: job.SessionSHA256,
 		FetchSession: func(ctx context.Context) ([]byte, error) {
 			resp, err := r.get(ctx, tok, "sessions/"+job.Resume)
@@ -165,6 +178,6 @@ func (r *roomRun) execute(ctx context.Context, tok, ids string, job turn.Job) tu
 	if m := out.Result.Model(); m != "" {
 		model = m
 	}
-	return turn.Result{Synthesis: out.Result.Result, Model: model, Effort: effort, SessionID: out.Result.SessionID, SessionOffset: out.SessionOffset,
+	return turn.Result{Synthesis: out.Result.Result, Model: model, Effort: run.Effort, Capped: capped, SessionID: out.Result.SessionID, SessionOffset: out.SessionOffset,
 		Session: out.Session, Changes: out.Changes}
 }

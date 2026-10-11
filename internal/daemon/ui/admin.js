@@ -54,7 +54,22 @@ const pairingText = {
   paired: 'Paired.',
 };
 
-function render({ status: s, logs }) {
+// renderSettings fills the cap form, unless the user is changing it.
+function renderSettings(set, models, efforts) {
+  const form = $('settings-form');
+  if (form.dataset.dirty) return;
+  for (const [id, values] of [['max-model', models], ['max-effort', efforts]]) {
+    const sel = $(id);
+    if (sel.options.length === 1) {
+      for (const v of values) sel.add(new Option(v, v));
+    }
+  }
+  $('max-model').value = set.max_model;
+  $('max-effort').value = set.max_effort;
+  $('approve-all').checked = set.approve_all;
+}
+
+function render({ status: s, logs, models, efforts }) {
   $('host').textContent = s.host + ' · ' + s.version;
   $('room').textContent = s.room || 'No room yet: paste the room link below.';
   let text = pairingText[s.pairing] || s.pairing;
@@ -90,6 +105,7 @@ function render({ status: s, logs }) {
     $('update-status').textContent = u.running ? 'Downloading…' : u.error || '';
   }
   mark($('can-host'), s.can_host, s.can_host ? 'available' : 'unavailable: ' + s.reason);
+  renderSettings(s.settings, models, efforts);
   const logs$ = $('logs');
   const atBottom = logs$.scrollTop + logs$.clientHeight >= logs$.scrollHeight - 20;
   logs$.textContent = logs.join('\n');
@@ -112,6 +128,18 @@ $('room-form').addEventListener('submit', (e) => {
   api('POST', '/api/room', { url: $('room-url').value })
     .then(() => api('GET', '/api/status').then(render))
     .catch((err) => { $('room-error').textContent = err.message; });
+});
+$('settings-form').addEventListener('input', () => { $('settings-form').dataset.dirty = '1'; });
+$('settings-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  $('settings-status').textContent = '';
+  api('POST', '/api/settings', { max_model: $('max-model').value, max_effort: $('max-effort').value, approve_all: $('approve-all').checked })
+    .then(() => {
+      delete $('settings-form').dataset.dirty;
+      $('settings-status').textContent = 'Saved.';
+      return api('GET', '/api/status').then(render);
+    })
+    .catch((err) => { $('settings-status').textContent = err.message; });
 });
 $('recheck').addEventListener('click', () => {
   api('POST', '/api/recheck').then(() => api('GET', '/api/status').then(render)).catch((err) => fail(err.message));

@@ -84,16 +84,18 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `PATCH /api/rooms/{room}/messages/{id}` | author | edit your text or voice line: `body`; 403 for anyone else, 409 once deleted |
 | `DELETE /api/rooms/{room}/messages/{id}` | author | soft delete: participants see `deleted_at` and no body; the agent keeps the text |
 | `GET /api/rooms/{room}/messages/{id}/versions` | participant | earlier bodies of an edited message, oldest first |
-| `GET /api/rooms/{room}/events` | participant | SSE: history then live messages; resumes after `?since=<id>` or `Last-Event-ID`; a `message_edited` event with the message for each edit or delete past `?edits=<change_seq>` (all of them on a resume without it);  a `documents` event when a document or revision is added, an `annotations` event when an annotation is added or changes; an `agent` event with the agent state (`host_participant_id`, `online`, `reason`, last `turn`, `can_trigger`, connected `daemons`, the room's `personas`, the `queue`, and the `models` and `efforts` a persona may ask for) at open and on every change; with voice on, an `stt` event (`available`, `listening`) at open and on every change |
+| `GET /api/rooms/{room}/events` | participant | SSE: history then live messages; resumes after `?since=<id>` or `Last-Event-ID`; a `message_edited` event with the message for each edit or delete past `?edits=<change_seq>` (all of them on a resume without it);  a `documents` event when a document or revision is added, an `annotations` event when an annotation is added or changes; an `agent` event with the agent state (`host_participant_id`, `online`, `reason`, last `turn`, `can_trigger`, connected `daemons`, the room's `personas`, the `queue`, the `models` and `efforts` a persona may ask for, the host daemon's `cap`, the `cap_requests` of personas asking above it, and the persona `changes` waiting for the host) at open and on every change; with voice on, an `stt` event (`available`, `listening`) at open and on every change |
 | `GET /api/rooms/{room}/agent` | participant | the agent state, as in the `agent` event |
-| `POST /api/rooms/{room}/turns` | host, or a participant the host allowed | a persona's button: `persona_id` (the room's first persona when absent), `fresh` (host only) starts a new session for it; 201 with the turn, or 202 with the queued press while another turn runs or others wait; 409 when that persona is queued already or no host daemon is connected |
+| `POST /api/rooms/{room}/turns` | host, or a participant the host allowed | a persona's button: `persona_id` (the room's first persona when absent), `fresh` (host only) starts a new session for it; 201 with the turn, or 202 with the queued press while another turn runs or others wait; 409 when that persona is queued already, waits for the host's approval, or no host daemon is connected |
 | `DELETE /api/rooms/{room}/queue/{id}` | who queued it | cancel a queued press |
 | `GET /api/rooms/{room}/templates` | participant | the persona template library at each template's latest version; `mine` marks the ones this participant's profile published |
 | `POST /api/rooms/{room}/templates` | participant with a profile | publish `name`, `badge`, `colour`, `text`, `model`, `effort` as a new template (`title` optional), or with `template_id` as the next version of one this profile published (403 otherwise); signed with the participant's name; 409 past 50 templates per profile or 100 versions per template |
 | `GET /api/templates`, `DELETE /api/templates/{id}` | admin | the library; remove a published template (409 for a shipped one); rooms keep their copies |
-| `POST /api/rooms/{room}/personas` | participant | add a copy of `template_id`'s latest version; a name the room uses gets a number; 409 past 12 personas |
-| `PATCH /api/rooms/{room}/personas/{id}` | participant | change `name` (one word), `badge`, `colour` (`#rrggbb`), `text`, `model` (empty, `haiku`, `sonnet`, `opus`, `fable`), `effort` (empty, `low`, `medium`, `high`, `xhigh`, `max`), `every_n`, `self_call`; applies from the persona's next turn; 409 for a name taken |
-| `POST /api/rooms/{room}/personas/{id}/update` | participant | take the text, model and effort of the template's newer version, keeping the room's name, badge and colour |
+| `POST /api/rooms/{room}/personas` | participant | add a copy of `template_id`'s latest version; a name the room uses gets a number; `pending` while the host approves everything; 409 past 12 personas |
+| `PATCH /api/rooms/{room}/personas/{id}` | participant | change `name` (one word), `badge`, `colour` (`#rrggbb`), `text`, `model` (empty, `haiku`, `sonnet`, `opus`, `fable`), `effort` (empty, `low`, `medium`, `high`, `xhigh`, `max`), `every_n`, `self_call`; applies from the persona's next turn; 202 with `held` when it waits for the host's approval; 409 for a name taken |
+| `POST /api/rooms/{room}/personas/{id}/update` | participant | take the text, model and effort of the template's newer version, keeping the room's name, badge and colour; 202 with `held` as for a change |
+| `POST /api/rooms/{room}/personas/{id}/cap` | host | answer a persona asking above the host cap: `approve`, and the `model` and `effort` the banner showed (409 when the persona asks for something else by now, or runs as it asks already) |
+| `POST /api/rooms/{room}/changes/{id}` | host | `approve` or refuse a held persona change or new persona |
 | `DELETE /api/rooms/{room}/personas/{id}` | participant | remove a persona with its session and queued press; 409 during its turn |
 | `PUT /api/rooms/{room}/host` | host | hand over: `participant_id` of a participant whose daemon is connected and can host |
 | `PATCH /api/rooms/{room}/participants/{id}` | host | `can_trigger`: grant or revoke the agent button |
@@ -224,6 +226,16 @@ A room holds personas: agents with a name, a badge, a colour, a text that sets t
 
 Each persona has its own button. The host can press them and can tick "can ask" next to other participants to let them press too. One press runs one turn of that persona: it reads what was said and annotated since its own last successful turn, other personas' syntheses included, edits or writes documents, answers threads and may close them, opens annotations of its own on any document, uploads included, and posts a synthesis. The synthesis shows the persona's badge and name and the model and effort the turn ran with. A new agent document never takes an upload's name. One turn runs at a time in a room: a press during a turn waits in a queue shown under the header, which the person who pressed can cancel. "New session" (host only, in the panel) starts a persona without its memory. It then rereads the room history from the transcript files. The room keeps each persona's Claude session after every turn, so when another daemon takes over, each persona's next turn resumes its own session. [docs/agent-workspace.md](docs/agent-workspace.md) has the details.
 
+### Host cap and approvals
+
+The host pays for every turn, so the host's daemon caps the model and effort personas run with. The cap comes from `GRILL_ROOM_MAX_MODEL` and `GRILL_ROOM_MAX_EFFORT`, or from the "Host cap" form on the daemon page, which saves it in the state dir and wins over the environment from then on. Delete `settings.json` to go back to the environment's.
+
+- Models rank `haiku` < `sonnet` < `opus` < `fable`. A full model id ranks with the family it names, so `claude-sonnet-5-5` is `sonnet` and a Mythos model is `fable`. An id naming no family ranks above all of them, so any cap lowers it. Efforts rank in `--effort` order: `low` < `medium` < `high` < `xhigh` < `max`.
+- Model and effort clamp separately. A persona asking for `opus` and `max` under a `sonnet`, `high` cap runs at `sonnet`, `high`, and its synthesis says "requested opus · effort max → ran … (host cap)". A persona that leaves the model or effort empty gets the host's own default, which the cap does not touch.
+- A banner under the header lists every persona asking above the cap, with what it runs at. Everyone sees it; only the host answers. Approving lets that persona run as asked from its next turn, on the host's daemon only: the daemon's cap does not change. Refusing keeps it at the cap. Either answer is a line in the chat. An answer covers the exact model and effort it was given for: a persona asking for anything else above the cap shows in the banner again, and until then an approval still raises its cap up to what was approved.
+- Answers belong to the daemon that hosted when they were given. After a hand-over, the new host's cap applies, the banner asks the new host again, and the old answers apply again if the old host takes the role back.
+- With "Approve every new persona and persona change" ticked on the daemon page, or `GRILL_ROOM_APPROVE_ALL=true`, a member's new persona waits, greyed and unable to run, and any change of theirs to a persona waits too, in the same banner. Later changes to the same persona join its waiting request. The host's own changes apply at once, and removing a persona is never held, since it runs nothing. The mode follows the host's daemon even while it is offline. Waiting requests survive a hand-over and the new host decides them, whatever its own mode.
+
 ## Host daemon
 
 `grill-room-daemon` runs on a participant's machine: Linux, macOS, or Windows inside WSL with the Linux build. It runs the agent with that participant's own Claude Code login, in a Docker sandbox.
@@ -235,7 +247,7 @@ make build
 
 Or install it from the room page (see Distribution below).
 
-It opens a page on `127.0.0.1` in the default browser. The page shows the pairing, Docker, the Claude credentials, whether this machine can host the agent, the logs, and a stop button. Without a room URL on the command line, paste the room link there. To pair, follow the page's link to the room, check that both pages show the same code, and press Approve: the room gives the daemon a token, which it keeps in `tokens.json` under its state dir. The daemon only opens outbound connections: an SSE stream from the room plus a status POST every 15 s, and it reconnects with backoff.
+It opens a page on `127.0.0.1` in the default browser. The page shows the pairing, Docker, the Claude credentials, whether this machine can host the agent, the host cap, the logs, and a stop button. Without a room URL on the command line, paste the room link there. To pair, follow the page's link to the room, check that both pages show the same code, and press Approve: the room gives the daemon a token, which it keeps in `tokens.json` under its state dir. The daemon only opens outbound connections: an SSE stream from the room plus a status POST every 15 s, and it reconnects with backoff.
 
 The page link carries a one-time code. The page trades it for a session token kept in the tab's `sessionStorage`, and the daemon prints a fresh link in its terminal after each use. The page refuses requests whose `Host` is not `127.0.0.1:<port>` or, for writes, whose `Origin` is not the page's own.
 
@@ -253,10 +265,13 @@ At start, and again each time it reconnects, the daemon asks the room server for
 
 | Variable | Default | |
 |---|---|---|
-| `GRILL_ROOM_DAEMON_STATE_DIR` | `<user config dir>/grill-room-daemon` | daemon tokens |
+| `GRILL_ROOM_DAEMON_STATE_DIR` | `<user config dir>/grill-room-daemon` | daemon tokens, and the page's settings in `settings.json` |
 | `GRILL_ROOM_DAEMON_BROWSER` | `auto` | `none` prints the page link instead of opening it |
 | `GRILL_ROOM_SANDBOX_IMAGE` | none | pins the sandbox image, e.g. `grill-room-sandbox:local` from `make sandbox-image`; skips the pull and the build |
 | `GRILL_ROOM_AGENT_MODEL` | Claude Code's default | `--model` for the turns of a persona that asks for none, e.g. `haiku` |
+| `GRILL_ROOM_MAX_MODEL` | no cap | host cap on the model: `haiku`, `sonnet`, `opus`, `fable`, or a model id naming one |
+| `GRILL_ROOM_MAX_EFFORT` | no cap | host cap on the effort: `low`, `medium`, `high`, `xhigh`, `max` |
+| `GRILL_ROOM_APPROVE_ALL` | `false` | hold every new persona and persona change until the host approves it |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | where Claude Code keeps its credentials |
 | `LOG_LEVEL` | `info` | |
 

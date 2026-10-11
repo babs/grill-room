@@ -60,6 +60,9 @@ type Job struct {
 	System  string `json:"system,omitempty"`
 	Model   string `json:"model,omitempty"`
 	Effort  string `json:"effort,omitempty"`
+	// Approved is what the host approved for this persona above its cap, on this daemon only: the
+	// daemon clamps to the higher of its cap and Approved (002-AC20).
+	Approved Level `json:"approved"`
 	// Resume is the session to continue; empty starts a new one.
 	Resume string `json:"resume,omitempty"`
 	// SessionSize and SessionSHA256 describe the server's copy of Resume: a daemon whose local copy
@@ -85,6 +88,8 @@ type Result struct {
 	// Effort is the effort it ran with.
 	Model  string `json:"model,omitempty"`
 	Effort string `json:"effort,omitempty"`
+	// Capped reports that the host cap lowered the model or effort the persona asked for (002-AC19).
+	Capped bool `json:"capped,omitempty"`
 	// Session carries the session jsonl bytes from SessionOffset on (D23).
 	SessionID     string   `json:"session_id,omitempty"`
 	SessionOffset int64    `json:"session_offset"`

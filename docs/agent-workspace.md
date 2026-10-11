@@ -61,7 +61,7 @@ An agent document never takes an upload's name, or the room would list two docum
 
 A participant reply on a thread the agent closed reopens it, as for any thread. A close is not applied when a participant wrote in the thread after the turn read it: the agent's reply lands, the thread stays open, and the report says why. The next prompt quotes that thread, with the reply flagged `(new)`. A thread holding only the agent's own messages is not quoted back to it.
 
-The daemon reports the model that wrote most of the answer: `claude -p` lists every model it called in `modelUsage`, a small one on the side included. With no `modelUsage`, it reports the model it asked for. A persona asks for a model (`haiku`, `sonnet`, `opus`, `fable`) and an effort (`low`, `medium`, `high`, `xhigh`, `max`), or leaves either empty. The daemon turns the request into what runs in one place: an empty model becomes its `GRILL_ROOM_AGENT_MODEL`, an empty effort is left to Claude Code, and a value outside those lists is treated as empty, since it becomes a `claude` argument. The host cap of spec 002 phase 4 clamps there. The server shows an effort only when it is one `--effort` accepts.
+The daemon reports the model that wrote most of the answer: `claude -p` lists every model it called in `modelUsage`, a small one on the side included. With no `modelUsage`, it reports the model it asked for. A persona asks for a model (`haiku`, `sonnet`, `opus`, `fable`) and an effort (`low`, `medium`, `high`, `xhigh`, `max`), or leaves either empty. The daemon turns the request into what runs in one place: a value outside those lists is treated as empty, since it becomes a `claude` argument, then the host cap clamps model and effort apart, each to the higher of the cap and what the host approved for this persona on this daemon. An empty model then becomes its `GRILL_ROOM_AGENT_MODEL`, and an empty effort is left to Claude Code; neither is capped. The README's "Host cap and approvals" has the ranking rules. The server shows an effort only when it is one `--effort` accepts.
 
 Refused or ignored, and listed in a system message after the synthesis:
 
@@ -75,11 +75,11 @@ Anything else the agent writes, in `transcript/` or at the root, is scratch and 
 ## Wire protocol
 
 1. The server sends `event: turn` with `{"id": N}` on the daemon's stream.
-2. `GET .../daemon/turns/N` returns the job: `prompt`, `persona` (its name), `system` (its text), `model`, `effort`, `resume` (the persona's session id or empty), `session_size`, `session_sha256`, `timeout_seconds`.
+2. `GET .../daemon/turns/N` returns the job: `prompt`, `persona` (its name), `system` (its text), `model`, `effort`, `approved` (the `model` and `effort` the host approved above its cap for this persona, on this daemon; empty otherwise), `resume` (the persona's session id or empty), `session_size`, `session_sha256`, `timeout_seconds`.
 3. `GET .../daemon/turns/N/workspace` returns the tar.
 4. If `resume` is set and the daemon's local `<id>.jsonl` does not match the size and hash, it fetches `GET .../daemon/sessions/<id>` and writes it into the sandbox home before running `claude -p --resume <id>` (D6). The cwd is always `/workspace`, so the session's project slug never changes (S2). Every persona's session lives in the same sandbox home under its own id; the room stores each under its persona, so a takeover resumes each persona's own session.
 5. The daemon hashes `/workspace` before and after the run and sends each changed path. It sends contents only for `docs/`, `replies.json` and `annotations-new.json`, so an edited 20 MB upload costs one path.
-6. `POST .../daemon/turns/N` with `{"synthesis", "model", "effort", "changes", "session_id", "session_offset", "session"}`, or `{"error"}`. `session` holds the jsonl bytes past `session_offset`: the server's size when resuming, 0 for a new session (D23). The server refuses a gap or an overlap.
+6. `POST .../daemon/turns/N` with `{"synthesis", "model", "effort", "capped", "changes", "session_id", "session_offset", "session"}`, or `{"error"}`. `capped` is true when the host cap lowered what the persona asked for. `session` holds the jsonl bytes past `session_offset`: the server's size when resuming, 0 for a new session (D23). The server refuses a gap or an overlap.
 
 ## Failure rules
 

@@ -78,8 +78,12 @@ type Message struct {
 	Badge     string `json:"badge,omitempty"`
 	Colour    string `json:"colour,omitempty"`
 	// Model and Effort are what an agent synthesis ran with: the model as claude reported it.
-	Model     string     `json:"model,omitempty"`
-	Effort    string     `json:"effort,omitempty"`
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
+	// ReqModel and ReqEffort are what the persona asked for, set only when the host cap lowered
+	// them (002-AC19).
+	ReqModel  string     `json:"requested_model,omitempty"`
+	ReqEffort string     `json:"requested_effort,omitempty"`
 	EditedAt  *time.Time `json:"edited_at,omitempty"`
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 	// ChangeSeq orders the room's edits and deletes: each one sets it past every other in the room.
@@ -356,6 +360,27 @@ CREATE TABLE agent_sessions_by_persona (
 	PRIMARY KEY (persona_id, session_id)
 );
 CREATE INDEX agent_sessions_room ON agent_sessions_by_persona(room_id);
+`, `
+ALTER TABLE daemons ADD COLUMN max_model TEXT NOT NULL DEFAULT '';
+ALTER TABLE daemons ADD COLUMN max_effort TEXT NOT NULL DEFAULT '';
+ALTER TABLE daemons ADD COLUMN approve_all INTEGER NOT NULL DEFAULT 0 CHECK (approve_all IN (0, 1));
+ALTER TABLE room_personas ADD COLUMN pending INTEGER NOT NULL DEFAULT 0 CHECK (pending IN (0, 1));
+ALTER TABLE room_personas ADD COLUMN cap_decision TEXT NOT NULL DEFAULT '' CHECK (cap_decision IN ('', 'approved', 'refused'));
+ALTER TABLE room_personas ADD COLUMN cap_daemon_id INTEGER REFERENCES daemons(id) ON DELETE SET NULL;
+ALTER TABLE room_personas ADD COLUMN cap_model TEXT NOT NULL DEFAULT '';
+ALTER TABLE room_personas ADD COLUMN cap_effort TEXT NOT NULL DEFAULT '';
+ALTER TABLE messages ADD COLUMN req_model TEXT NOT NULL DEFAULT '';
+ALTER TABLE messages ADD COLUMN req_effort TEXT NOT NULL DEFAULT '';
+CREATE TABLE persona_change_requests (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	persona_id INTEGER NOT NULL UNIQUE REFERENCES room_personas(id) ON DELETE CASCADE,
+	kind TEXT NOT NULL CHECK (kind IN ('add', 'change')),
+	patch TEXT NOT NULL,
+	requested_by TEXT NOT NULL,
+	created_at TEXT NOT NULL
+);
+CREATE INDEX persona_change_requests_room ON persona_change_requests(room_id);
 `}
 
 // migrationData runs Go code inside the transaction of the migration to version key, after its SQL.
@@ -780,8 +805,8 @@ func insertMessage(ctx context.Context, db execer, m *Message) error {
 		m.HTML = render.MessageHTML(m.Body)
 	}
 	res, err := db.ExecContext(ctx,
-		`INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, html, model, effort, persona_id) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-		m.RoomID, m.TS.Format(time.RFC3339Nano), m.Kind, pid, m.Sender, m.Body, nullStr(m.HTML), m.Model, m.Effort, nullID(m.PersonaID))
+		`INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, html, model, effort, persona_id, req_model, req_effort) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		m.RoomID, m.TS.Format(time.RFC3339Nano), m.Kind, pid, m.Sender, m.Body, nullStr(m.HTML), m.Model, m.Effort, nullID(m.PersonaID), m.ReqModel, m.ReqEffort)
 	if err != nil {
 		return fmt.Errorf("insert message: %w", err)
 	}
@@ -799,7 +824,7 @@ func (s *Store) Messages(ctx context.Context, roomID string, afterID int64, limi
 const (
 	messageFields = `id, ts, room_id, kind, COALESCE(participant_id, 0), sender, body, COALESCE(html, ''), model, edited_at, deleted_at, change_seq,
 		COALESCE(persona_id, 0), effort, COALESCE((SELECT badge FROM room_personas WHERE id = messages.persona_id), ''),
-		COALESCE((SELECT colour FROM room_personas WHERE id = messages.persona_id), '')`
+		COALESCE((SELECT colour FROM room_personas WHERE id = messages.persona_id), ''), req_model, req_effort`
 	messageCols = `SELECT ` + messageFields + ` FROM messages `
 )
 
@@ -825,7 +850,7 @@ func scanMessage(sc scanner, extra ...any) (*Message, error) {
 	var ts string
 	var edited, deleted sql.NullString
 	err := sc.Scan(append([]any{&m.ID, &ts, &m.RoomID, &m.Kind, &m.ParticipantID, &m.Sender, &m.Body, &m.HTML, &m.Model, &edited, &deleted, &m.ChangeSeq,
-		&m.PersonaID, &m.Effort, &m.Badge, &m.Colour}, extra...)...)
+		&m.PersonaID, &m.Effort, &m.Badge, &m.Colour, &m.ReqModel, &m.ReqEffort}, extra...)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

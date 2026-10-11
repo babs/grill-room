@@ -61,8 +61,15 @@ func (f *fakeAgent) Close(context.Context) {
 // pairedHost pairs a daemon for a new participant and waits until the room sees it able to host.
 func pairedHost(t *testing.T, rs *roomServer, name string, ag *fakeAgent) (participant string, cancel context.CancelFunc) {
 	t.Helper()
+	participant, _, cancel = pairedDaemon(t, rs, name, ag)
+	return participant, cancel
+}
+
+// pairedDaemon is pairedHost, returning the daemon too.
+func pairedDaemon(t *testing.T, rs *roomServer, name string, ag *fakeAgent) (participant string, d *Daemon, cancel context.CancelFunc) {
+	t.Helper()
 	participant, _ = rs.join(t, name)
-	d := newTestDaemon(t, dockerUp)
+	d = newTestDaemon(t, dockerUp)
 	d.o.Name = name + "-box"
 	d.o.Model = "haiku"
 	d.o.NewAgent = func(Room, string) Agent { return ag }
@@ -82,7 +89,9 @@ func pairedHost(t *testing.T, rs *roomServer, name string, ag *fakeAgent) (parti
 		}
 		return false
 	})
-	return participant, cancel
+	// The room elects its host just after it lists the daemon as able to host.
+	waitFor(t, "a host online", func() bool { return rs.agent(t, participant).Online })
+	return participant, d, cancel
 }
 
 type agentView struct {
@@ -442,18 +451,79 @@ func TestDaemonTurnCredentialsExpired(t *testing.T) {
 }
 
 // The model and effort a room asks for reach claude's argv only when claude knows them; anything
-// else falls back to the daemon's setting.
+// else falls back to the daemon's setting. 002-AC19 002-AC20: the cap clamps them, raised to what
+// the host approved, and an approval the room sent is sanitised like a request.
 func TestRunSettings(t *testing.T) {
-	d := &Daemon{o: Options{Model: "haiku"}}
-	for _, c := range []struct{ model, effort, wantModel, wantEffort string }{
-		{"", "", "haiku", ""},
-		{"sonnet", "max", "sonnet", "max"},
-		{"--dangerously-skip-permissions", "--verbose", "haiku", ""},
-		{"opus x", "high;", "haiku", ""},
+	d := &Daemon{o: Options{Model: "haiku"}, st: Status{Settings: Settings{MaxModel: "sonnet", MaxEffort: "high"}}}
+	for _, c := range []struct {
+		model, effort      string
+		approved           turn.Level
+		wantModel, wantEff string
+		capped             bool
+	}{
+		{"", "", turn.Level{}, "haiku", "", false},
+		{"sonnet", "medium", turn.Level{}, "sonnet", "medium", false},
+		{"opus", "max", turn.Level{}, "sonnet", "high", true},
+		{"opus", "max", turn.Level{Model: "opus", Effort: "max"}, "opus", "max", false},
+		{"fable", "max", turn.Level{Model: "opus", Effort: "xhigh"}, "opus", "xhigh", true},
+		{"opus", "max", turn.Level{Model: "--verbose", Effort: "max;"}, "sonnet", "high", true},
+		{"--dangerously-skip-permissions", "--verbose", turn.Level{}, "haiku", "", false},
+		{"opus x", "high;", turn.Level{}, "haiku", "", false},
 	} {
-		m, e := d.runSettings(turn.Job{Model: c.model, Effort: c.effort})
-		if m != c.wantModel || e != c.wantEffort {
-			t.Errorf("%q/%q: got %q/%q, want %q/%q", c.model, c.effort, m, e, c.wantModel, c.wantEffort)
+		run, capped := d.runSettings(turn.Job{Model: c.model, Effort: c.effort, Approved: c.approved})
+		if run.Model != c.wantModel || run.Effort != c.wantEff || capped != c.capped {
+			t.Errorf("%q/%q approved %v: got %v %v, want %q/%q %v", c.model, c.effort, c.approved, run, capped, c.wantModel, c.wantEff, c.capped)
 		}
+	}
+}
+
+// 002-AC19 002-AC20 002-AC36: the cap set on the daemon page reaches the room through the
+// heartbeat; a persona asking above it runs clamped and its synthesis says so; once the host
+// approves in the room, the next turn runs as asked, and the daemon's cap is unchanged.
+func TestDaemonHostCap(t *testing.T) {
+	rs := newRoomServer(t)
+	ag := &fakeAgent{}
+	ag.run = func(_ context.Context, in sandbox.TurnInput, _ map[string]string) (*sandbox.TurnOutput, error) {
+		sess := "33333333-3333-4333-8333-333333333333"
+		return &sandbox.TurnOutput{Result: &sandbox.Result{Result: in.Model + "/" + in.Effort, SessionID: sess}, Session: []byte("x\n"),
+			SessionOffset: in.SessionSize}, nil
+	}
+	alice, d, _ := pairedDaemon(t, rs, "Alice", ag)
+	if err := d.SetSettings(Settings{MaxModel: "sonnet", MaxEffort: "high"}); err != nil {
+		t.Fatal(err)
+	}
+	type capView struct {
+		Cap *struct {
+			MaxModel string `json:"max_model"`
+		} `json:"cap"`
+		CapRequests []json.RawMessage `json:"cap_requests"`
+	}
+	var v capView
+	waitFor(t, "the room has the cap", func() bool {
+		rs.call(t, "GET", "/api/rooms/"+rs.room+"/agent", alice, nil, http.StatusOK, &v)
+		return v.Cap != nil && v.Cap.MaxModel == "sonnet"
+	})
+	grill := rs.grill(t)
+	rs.call(t, "PATCH", "/api/rooms/"+rs.room+"/personas/"+fmt.Sprint(grill.ID), alice, map[string]string{"model": "opus", "effort": "max"}, http.StatusOK, nil)
+	press := func() store.Message {
+		t.Helper()
+		var started store.Turn
+		rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]int64{"persona_id": grill.ID}, http.StatusCreated, &started)
+		waitFor(t, "turn done", func() bool { v := rs.agent(t, alice); return v.Turn.ID == started.ID && v.Turn.Status != "running" })
+		return rs.last(t)
+	}
+	if m := press(); m.Body != "sonnet/high" || m.ReqModel != "opus" || m.ReqEffort != "max" || m.Model != "sonnet" || m.Effort != "high" {
+		t.Fatalf("capped turn: %+v", m)
+	}
+	rs.call(t, "GET", "/api/rooms/"+rs.room+"/agent", alice, nil, http.StatusOK, &v)
+	if len(v.CapRequests) != 1 {
+		t.Fatalf("banner: %+v", v)
+	}
+	rs.call(t, "POST", "/api/rooms/"+rs.room+"/personas/"+fmt.Sprint(grill.ID)+"/cap", alice, map[string]any{"approve": true, "model": "opus", "effort": "max"}, http.StatusOK, nil)
+	if m := press(); m.Body != "opus/max" || m.ReqModel != "" {
+		t.Fatalf("approved turn: %+v", m)
+	}
+	if s := d.Status().Settings; s.MaxModel != "sonnet" || s.MaxEffort != "high" {
+		t.Fatalf("the approval changed the daemon's cap: %+v", s)
 	}
 }

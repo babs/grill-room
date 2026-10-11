@@ -279,20 +279,27 @@ type RoomPersona struct {
 	UpdateVersion int `json:"update_version,omitempty"`
 	PersonaFields
 	// EveryN and SelfCall are kept for the triggers of spec 002 phase 5; nothing acts on them yet.
-	EveryN    int       `json:"every_n,omitempty"`
-	SelfCall  bool      `json:"self_call"`
-	CreatedAt time.Time `json:"created_at"`
+	EveryN   int  `json:"every_n,omitempty"`
+	SelfCall bool `json:"self_call"`
+	// Pending is a persona added while the host approves everything: it cannot run until the host
+	// approves it (002-AC21).
+	Pending bool `json:"pending,omitempty"`
+	// Cap is the host's last decision on this persona asking above the cap (002-AC20).
+	Cap       CapDecision `json:"-"`
+	CreatedAt time.Time   `json:"created_at"`
 }
 
 const personaCols = `SELECT p.id, p.room_id, COALESCE(p.template_id, 0), p.template_version,
 	COALESCE((SELECT MAX(n) FROM persona_template_versions WHERE template_id = p.template_id), 0),
-	p.name, p.badge, p.colour, p.text, p.model, p.effort, COALESCE(p.every_n, 0), p.self_call, p.created_at FROM room_personas p `
+	p.name, p.badge, p.colour, p.text, p.model, p.effort, COALESCE(p.every_n, 0), p.self_call, p.created_at,
+	p.pending, p.cap_decision, COALESCE(p.cap_daemon_id, 0), p.cap_model, p.cap_effort FROM room_personas p `
 
 func scanPersona(sc scanner) (*RoomPersona, error) {
 	var p RoomPersona
 	var created string
 	err := sc.Scan(&p.ID, &p.RoomID, &p.TemplateID, &p.TemplateVersion, &p.UpdateVersion,
-		&p.Name, &p.Badge, &p.Colour, &p.Text, &p.Model, &p.Effort, &p.EveryN, &p.SelfCall, &created)
+		&p.Name, &p.Badge, &p.Colour, &p.Text, &p.Model, &p.Effort, &p.EveryN, &p.SelfCall, &created,
+		&p.Pending, &p.Cap.Status, &p.Cap.DaemonID, &p.Cap.Level.Model, &p.Cap.Level.Effort)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -408,7 +415,8 @@ func (s *Store) withTx(ctx context.Context, what string, fn func(tx *sql.Tx) err
 }
 
 // AddPersona adds a copy of template templateID's latest version to room, recorded in the chat.
-// A name the room uses already gets a number. ErrNotFound for an unknown room or template.
+// A name the room uses already gets a number. While the host approves everything, the persona waits
+// for the host, Pending (002-AC21). ErrNotFound for an unknown room or template.
 func (s *Store) AddPersona(ctx context.Context, roomID string, templateID int64, by *Participant) (*RoomPersona, *Message, error) {
 	var p *RoomPersona
 	var m *Message
@@ -421,7 +429,21 @@ func (s *Store) AddPersona(ctx context.Context, roomID string, templateID int64,
 		if p, title, err = addPersona(ctx, tx, roomID, templateID); err != nil {
 			return err
 		}
-		m, err = personaLine(ctx, tx, roomID, by, fmt.Sprintf("added the persona %s, from the template %q v%d.", p.label(), title, p.TemplateVersion))
+		body := fmt.Sprintf("added the persona %s, from the template %q v%d.", p.label(), title, p.TemplateVersion)
+		held, err := heldBy(ctx, tx, roomID, by)
+		if err != nil {
+			return err
+		}
+		if held {
+			if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET pending = 1 WHERE id = ?`, p.ID); err != nil {
+				return fmt.Errorf("add persona: %w", err)
+			}
+			if err := holdChange(ctx, tx, roomID, p, ChangeAdd, PersonaPatch{}, by); err != nil {
+				return err
+			}
+			p.Pending, body = true, body+waitsNote
+		}
+		m, err = personaLine(ctx, tx, roomID, by, body)
 		return err
 	})
 	return p, m, err
@@ -433,6 +455,8 @@ type PersonaPatch struct {
 	// EveryN 0 turns the trigger off.
 	EveryN   *int
 	SelfCall *bool
+	// TemplateVersion is set by a held template update.
+	TemplateVersion *int
 }
 
 func orDefault(s string) string {
@@ -470,6 +494,10 @@ func (c PersonaPatch) apply(p *RoomPersona) []string {
 		out = append(out, fmt.Sprintf("self-call %s → %s", onOff(p.SelfCall), onOff(*c.SelfCall)))
 		p.SelfCall = *c.SelfCall
 	}
+	if c.TemplateVersion != nil && *c.TemplateVersion != p.TemplateVersion {
+		out = append(out, fmt.Sprintf("template v%d → v%d", p.TemplateVersion, *c.TemplateVersion))
+		p.TemplateVersion = *c.TemplateVersion
+	}
 	return out
 }
 
@@ -496,7 +524,7 @@ func nullInt(n int) any {
 
 func updatePersona(ctx context.Context, tx *sql.Tx, p *RoomPersona) error {
 	_, err := tx.ExecContext(ctx, `UPDATE room_personas SET template_version = ?, name = ?, badge = ?, colour = ?, text = ?, model = ?, effort = ?,
-		every_n = ?, self_call = ? WHERE id = ?`, append(append([]any{p.TemplateVersion}, p.args()...), nullInt(p.EveryN), p.SelfCall, p.ID)...)
+		every_n = ?, self_call = ?, pending = ? WHERE id = ?`, append(append([]any{p.TemplateVersion}, p.args()...), nullInt(p.EveryN), p.SelfCall, p.Pending, p.ID)...)
 	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
 		return ErrNameTaken
 	}
@@ -507,37 +535,62 @@ func updatePersona(ctx context.Context, tx *sql.Tx, p *RoomPersona) error {
 }
 
 // EditPersona applies c to persona id of room and records what changed in the chat. A running turn
-// keeps the persona it started with: the change applies from the next turn (002-AC15). A patch
-// changing nothing returns a nil message. ErrNameTaken, ErrNotFound.
-func (s *Store) EditPersona(ctx context.Context, roomID string, id int64, c PersonaPatch, by *Participant) (*RoomPersona, *Message, error) {
-	var p *RoomPersona
-	var m *Message
-	err := s.withTx(ctx, "edit persona", func(tx *sql.Tx) error {
+// keeps the persona it started with: the change applies from the next turn (002-AC15). While the
+// host approves everything, the change waits for the host instead, and held is true (002-AC21). A
+// patch changing nothing returns a nil message. ErrNameTaken, ErrNotFound.
+func (s *Store) EditPersona(ctx context.Context, roomID string, id int64, c PersonaPatch, by *Participant) (p *RoomPersona, m *Message, held bool, err error) {
+	err = s.withTx(ctx, "edit persona", func(tx *sql.Tx) error {
 		var err error
 		if p, err = roomPersona(ctx, tx, roomID, id); err != nil {
 			return err
 		}
-		before := p.label()
-		changes := c.apply(p)
-		if len(changes) == 0 {
-			return nil
-		}
-		if err := updatePersona(ctx, tx, p); err != nil {
-			return err
-		}
-		m, err = personaLine(ctx, tx, roomID, by, fmt.Sprintf("changed %s: %s.", before, strings.Join(changes, ", ")))
+		p, m, held, err = changePersona(ctx, tx, p, c, by, func(before string, changes []string) string {
+			return fmt.Sprintf("changed %s: %s.", before, strings.Join(changes, ", "))
+		})
 		return err
 	})
-	return p, m, err
+	return p, m, held, err
+}
+
+// changePersona applies c to p, or holds it for the host, and says so in the chat: applied words
+// the line of an applied change from p's label before it and the changes. p is returned as the room
+// now has it.
+func changePersona(ctx context.Context, tx *sql.Tx, p *RoomPersona, c PersonaPatch, by *Participant, applied func(before string, changes []string) string) (*RoomPersona, *Message, bool, error) {
+	before := p.label()
+	held, err := heldBy(ctx, tx, p.RoomID, by)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	target := p
+	if held {
+		cp := *p
+		target = &cp
+	}
+	changes := c.apply(target)
+	if len(changes) == 0 {
+		return p, nil, false, nil
+	}
+	var body string
+	if held {
+		if err := holdChange(ctx, tx, p.RoomID, p, ChangeEdit, c, by); err != nil {
+			return nil, nil, false, err
+		}
+		body = fmt.Sprintf("asked to change %s: %s.%s", before, strings.Join(changes, ", "), waitsNote)
+	} else {
+		if err := updatePersona(ctx, tx, p); err != nil {
+			return nil, nil, false, err
+		}
+		body = applied(before, changes)
+	}
+	m, err := personaLine(ctx, tx, p.RoomID, by, body)
+	return p, m, held, err
 }
 
 // UpdatePersona takes the text, model and effort of the template's latest version into persona id
-// of room; its name, badge and colour stay the room's. A persona already up to date returns a nil
-// message. ErrNotFound.
-func (s *Store) UpdatePersona(ctx context.Context, roomID string, id int64, by *Participant) (*RoomPersona, *Message, error) {
-	var p *RoomPersona
-	var m *Message
-	err := s.withTx(ctx, "update persona", func(tx *sql.Tx) error {
+// of room; its name, badge and colour stay the room's. It is a persona change, held like an edit
+// while the host approves everything. A persona already up to date returns a nil message. ErrNotFound.
+func (s *Store) UpdatePersona(ctx context.Context, roomID string, id int64, by *Participant) (p *RoomPersona, m *Message, held bool, err error) {
+	err = s.withTx(ctx, "update persona", func(tx *sql.Tx) error {
 		var err error
 		if p, err = roomPersona(ctx, tx, roomID, id); err != nil {
 			return err
@@ -549,14 +602,16 @@ func (s *Store) UpdatePersona(ctx context.Context, roomID string, id int64, by *
 		if err != nil {
 			return err
 		}
-		p.Text, p.Model, p.Effort, p.TemplateVersion, p.UpdateVersion = t.Text, t.Model, t.Effort, t.Version, 0
-		if err := updatePersona(ctx, tx, p); err != nil {
-			return err
+		c := PersonaPatch{Text: &t.Text, Model: &t.Model, Effort: &t.Effort, TemplateVersion: &t.Version}
+		p, m, held, err = changePersona(ctx, tx, p, c, by, func(before string, _ []string) string {
+			return fmt.Sprintf("updated %s to version %d of the template %q.", before, t.Version, t.Title)
+		})
+		if err == nil && !held {
+			p.UpdateVersion = 0
 		}
-		m, err = personaLine(ctx, tx, roomID, by, fmt.Sprintf("updated %s to version %d of the template %q.", p.label(), t.Version, t.Title))
 		return err
 	})
-	return p, m, err
+	return p, m, held, err
 }
 
 // RemovePersona deletes persona id of room with its sessions and queued turns; what it wrote stays.
@@ -611,11 +666,11 @@ func scanQueued(sc scanner) (*QueuedTurn, error) {
 }
 
 // Enqueue puts q at the end of its room's queue. ErrAlreadyQueued when its persona waits already,
-// ErrNotFound when the persona is not in the room.
+// ErrNotFound when the persona is not in the room or waits for the host's approval.
 func (s *Store) Enqueue(ctx context.Context, q *QueuedTurn) error {
 	q.CreatedAt = time.Now().UTC()
 	err := s.db.QueryRowContext(ctx, `INSERT INTO turn_queue(room_id, persona_id, participant_id, fresh, created_at)
-		SELECT room_id, id, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? RETURNING id`,
+		SELECT room_id, id, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? AND pending = 0 RETURNING id`,
 		q.ParticipantID, q.Fresh, q.CreatedAt.Format(time.RFC3339Nano), q.PersonaID, q.RoomID).Scan(&q.ID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):

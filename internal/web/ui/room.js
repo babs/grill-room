@@ -126,7 +126,18 @@ function renderMessage(m) {
     effort.className = 'effort';
     effort.textContent = 'effort ' + (m.effort || 'default');
     effort.title = 'Effort of this turn';
-    meta.append(' ', model, ' · ', effort);
+    // The host cap lowered what the persona asked for (002-AC19).
+    if (m.requested_model || m.requested_effort) {
+      const asked = document.createElement('span');
+      asked.className = 'capped';
+      asked.textContent = 'requested ' + level({ model: m.requested_model, effort: m.requested_effort }) + ' → ran';
+      const why = document.createElement('span');
+      why.className = 'capped';
+      why.textContent = '(host cap)';
+      meta.append(' ', asked, ' ', model, ' · ', effort, ' ', why);
+    } else {
+      meta.append(' ', model, ' · ', effort);
+    }
   }
   const body = document.createElement('div');
   body.className = 'body';
@@ -737,7 +748,10 @@ window.addEventListener('focus', () => { if (events && events.readyState !== Eve
 // Agents. The host's daemon runs every persona of the room: a persona's LED is green only while
 // that daemon is connected and can host (D8). The host, and the participants the host allows,
 // press a persona's button (D18); a press during a turn waits in the room's queue (002-AC17).
-let agent = { online: false, can_trigger: [], daemons: [], turn: null, personas: [], queue: [], models: [], efforts: [] };
+let agent = { online: false, can_trigger: [], daemons: [], turn: null, personas: [], queue: [], models: [], efforts: [], cap_requests: [], changes: [] };
+
+// level shows a model and effort as the room says them, "opus · effort max".
+const level = (l) => (l.model || 'default') + ' · effort ' + (l.effort || 'default');
 
 const isHost = () => String(agent.host_participant_id || '') === myID;
 const canPress = () => isHost() || agent.can_trigger.includes(Number(myID));
@@ -751,6 +765,7 @@ function personaLabel(name) {
 function personaState(p) {
   const running = !!agent.turn && agent.turn.status === 'running' && agent.turn.persona_id === p.id;
   const pos = agent.queue.findIndex((q) => q.persona_id === p.id);
+  if (p.pending) return { cls: 'pending', label: p.name + ' waits for the host\'s approval' };
   if (!agent.online) return { cls: '', label: p.name + ' offline' };
   if (running) return { cls: 'busy', label: p.name + ' working' };
   if (pos >= 0) return { cls: 'queued', label: p.name + ' queued, position ' + (pos + 1) };
@@ -786,7 +801,7 @@ function renderAgent() {
     const led = b.querySelector('.led');
     led.className = 'led ' + st.cls;
     led.setAttribute('aria-label', st.label);
-    b.disabled = !agent.online || !canPress() || st.cls === 'queued';
+    b.disabled = !agent.online || !canPress() || st.cls === 'queued' || st.cls === 'pending';
     b.title = !canPress() ? 'The host has not given you the agent button' : st.label;
     return b;
   });
@@ -795,7 +810,52 @@ function renderAgent() {
   $('agent-status').textContent = !agent.online ? (agent.reason || 'Agent offline')
     : running ? running.name + ' working…' : agent.personas.length === 0 ? 'No persona: add one.' : '';
   renderQueue();
+  renderApprovals();
   renderPersonas();
+}
+
+// renderApprovals is the banner of what waits for the host: personas asking above the host cap
+// (002-AC19) and persona changes held while the host approves everything (002-AC21). Everyone sees
+// it; only the host answers.
+function renderApprovals() {
+  const items = [];
+  const decide = (li, what, path, body) => {
+    if (!isHost()) {
+      li.append(' The host decides.');
+      return;
+    }
+    for (const approve of [true, false]) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'small';
+      b.textContent = approve ? 'Approve' : 'Refuse';
+      b.setAttribute('aria-label', (approve ? 'Approve ' : 'Refuse ') + what);
+      b.addEventListener('click', () => {
+        sendJSON('POST', api + path, { ...body, approve }).catch((err) => { $('agent-status').textContent = err.message; });
+      });
+      li.append(' ', b);
+    }
+  };
+  for (const r of agent.cap_requests || []) {
+    const p = personaByID(r.persona_id);
+    if (!p) continue;
+    const li = document.createElement('li');
+    li.textContent = p.badge + ' ' + p.name + ' asks for ' + level(r.asks) + ', above the host cap: it runs at ' + level(r.runs) + '.';
+    decide(li, level(r.asks) + ' for ' + p.name, '/personas/' + p.id + '/cap', { model: r.asks.model || '', effort: r.asks.effort || '' });
+    items.push(li);
+  }
+  for (const c of agent.changes || []) {
+    const p = personaByID(c.persona_id);
+    if (!p) continue;
+    const li = document.createElement('li');
+    li.textContent = c.kind === 'add'
+      ? p.badge + ' ' + p.name + ', added by ' + c.requested_by + ': ' + c.summary + '.'
+      : c.requested_by + ' asks to change ' + p.badge + ' ' + p.name + ': ' + c.summary + '.';
+    decide(li, (c.kind === 'add' ? 'the persona ' : 'the change to ') + p.name, '/changes/' + c.id, {});
+    items.push(li);
+  }
+  $('approvals').hidden = items.length === 0;
+  $('approval-list').replaceChildren(...items);
 }
 
 function renderQueue() {
@@ -863,7 +923,8 @@ function personaForm(p) {
   const tpl = templates.find((t) => t.id === p.template_id);
   const from = document.createElement('p');
   from.className = 'hint';
-  from.textContent = tpl ? 'From "' + tpl.title + '" v' + p.template_version : 'Its template was removed from the library.';
+  from.textContent = (tpl ? 'From "' + tpl.title + '" v' + p.template_version : 'Its template was removed from the library.')
+    + (p.pending ? ' Waits for the host\'s approval.' : '');
   const input = (name, value, attrs) => {
     const i = document.createElement('input');
     i.name = name;
@@ -902,7 +963,8 @@ function personaForm(p) {
   };
   if (p.update_version) {
     act('Update to v' + p.update_version, 'Update ' + p.name + ' to template version ' + p.update_version, async () => {
-      if (await sendJSON('POST', api + '/personas/' + p.id + '/update')) personasStatus(p.name + ' updated.');
+      const done = await sendJSON('POST', api + '/personas/' + p.id + '/update');
+      if (done) personasStatus(done.held ? p.name + ': the update waits for the host\'s approval.' : p.name + ' updated.');
     });
   }
   const mine = tpl && tpl.mine;
@@ -930,7 +992,7 @@ function personaForm(p) {
     sendJSON('PATCH', api + '/personas/' + p.id, formFields(form)).then((saved) => {
       if (!saved) return;
       delete form.dataset.dirty;
-      personasStatus(saved.name + ' saved. It applies from its next turn.');
+      personasStatus(saved.held ? saved.name + ': the change waits for the host\'s approval.' : saved.name + ' saved. It applies from its next turn.');
     }).catch((err) => personasStatus(err.message));
   });
   return form;
@@ -961,8 +1023,11 @@ async function loadTemplates() {
   const res = await fetch(api + '/templates');
   if (!res.ok) return;
   templates = await res.json();
+  // A choice made while the library loaded survives it.
+  const chosen = $('persona-template').value;
   $('persona-template').replaceChildren(...templates.map((t) =>
     option(t.id, t.badge + ' ' + t.title + ' v' + t.version + (t.preset ? '' : ', by ' + t.author))));
+  if (templates.some((t) => String(t.id) === chosen)) $('persona-template').value = chosen;
   [...$('persona-list').children].forEach((f) => { if (!f.dataset.dirty) delete f.dataset.seen; });
   renderPersonas();
 }
@@ -978,7 +1043,7 @@ $('personas-close').addEventListener('click', () => $('personas').close());
 $('persona-add').addEventListener('submit', (e) => {
   e.preventDefault();
   sendJSON('POST', api + '/personas', { template_id: Number($('persona-template').value) })
-    .then((p) => { if (p) personasStatus(p.name + ' added.'); })
+    .then((p) => { if (p) personasStatus(p.name + (p.pending ? ' added. It waits for the host\'s approval.' : ' added.')); })
     .catch((err) => personasStatus(err.message));
 });
 

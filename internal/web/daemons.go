@@ -17,6 +17,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/babs/grill-room/internal/store"
+	"github.com/babs/grill-room/internal/turn"
 )
 
 const (
@@ -262,8 +263,16 @@ func (s *Server) daemonStatus(w http.ResponseWriter, r *http.Request, d *store.D
 		CanHost bool   `json:"can_host"`
 		Reason  string `json:"reason"`
 		Version string `json:"version"`
+		store.DaemonSettings
 	}
 	if !decode(w, r, &req) {
+		return
+	}
+	// A daemon from before the host cap sends none: no cap, nothing held.
+	set := store.DaemonSettings{MaxModel: turn.ModelFamily(req.MaxModel), MaxEffort: knownOr(req.MaxEffort, turn.Efforts), ApproveAll: req.ApproveAll}
+	settingsChanged, err := s.bus.Store.SetDaemonSettings(r.Context(), d.ID, set)
+	if err != nil {
+		s.serverError(w, "daemon_status_failed", err)
 		return
 	}
 	reason, _ := cleanText(truncate(req.Reason, maxReason), maxReason, false)
@@ -278,8 +287,11 @@ func (s *Server) daemonStatus(w http.ResponseWriter, r *http.Request, d *store.D
 	p.room, p.ParticipantID, p.Name, p.id = d.RoomID, d.ParticipantID, d.Name, d.ID
 	p.CanHost, p.Reason, p.Version = req.CanHost, reason, version
 	s.presence.mu.Unlock()
-	if changed {
+	switch {
+	case changed:
 		s.agentChanged(r.Context(), d.RoomID)
+	case settingsChanged:
+		s.bus.Notify(d.RoomID)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

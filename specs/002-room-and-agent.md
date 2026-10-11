@@ -144,7 +144,7 @@ The sandbox gets Python, uv, Office libraries and common CLI tools. It reaches t
 ### Phase 4 — Host cap and approvals
 - Work: cap and approval mode in the daemon config and on its page, clamping, approval banner, per-persona exceptions.
 - **Covers**: AC19, AC20, AC21
-- **Data model impact**: `room_personas.approved_model`, `room_personas.approved_effort`, `persona_change_requests`
+- **Data model impact**: `room_personas.cap_decision`, `cap_daemon_id`, `cap_model`, `cap_effort` (the host's last answer, approved or refused, per host daemon), `room_personas.pending`, `persona_change_requests`; `daemons.max_model`, `max_effort`, `approve_all`; `messages.req_model`, `req_effort`
 - **DoD**: e2e covering above-cap clamp → banner → approve → next turn as requested; "approve everything" holds a new persona.
 
 ### Phase 5 — Triggers, chains, presence
@@ -216,3 +216,6 @@ Changed: `agent_sessions` is keyed by room persona. Existing rooms migrate to on
 - Personal skills come only from the profile, never from the host's disk, to avoid accidental leaks (grill Q7).
 - Squid allows CONNECT on 443 without TLS interception; the residual risk of writable allowed domains is stated in the disclaimer.
 - The sandbox stays a single image without LibreOffice.
+- Models rank haiku < sonnet < opus < fable; a full id ranks with the family it names, Mythos with fable, and an unknown id above all. An empty model or effort is the host's default and is never capped.
+- A cap answer is per persona and host daemon, for the exact level asked: after a hand-over the new host's cap applies and the new host is asked again. A refusal is kept so the banner does not ask again for that same level.
+- "Approve everything" holds a member's new persona and changes, not the host's own and not removals. Held requests survive a hand-over; the host at decision time decides.

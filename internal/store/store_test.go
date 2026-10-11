@@ -85,6 +85,29 @@ func seed(t *testing.T, s *Store, room string) *Participant {
 	return p
 }
 
+// seedHeld has the seeded room's host approve everything, and a second member add a persona that
+// waits for the host, with a held change request (002-AC21).
+func seedHeld(t *testing.T, s *Store, room string) *Participant {
+	t.Helper()
+	ctx := context.Background()
+	host, err := s.HostDaemon(ctx, room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetDaemonSettings(ctx, host.ID, DaemonSettings{ApproveAll: true}); err != nil {
+		t.Fatal(err)
+	}
+	bob, _, err := s.Join(ctx, "inv-"+room, "Bob", "tok-bob-"+room, JoinProfile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _, err := s.AddPersona(ctx, room, templateByPreset(t, s, "secretary").ID, bob)
+	if err != nil || !p.Pending {
+		t.Fatalf("held persona: %+v %v", p, err)
+	}
+	return bob
+}
+
 func TestMigrateIsIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.db")
 	for range 2 {
@@ -309,8 +332,10 @@ func roomRows(t *testing.T, s *Store, room string) map[string]int {
 func TestDeleteRoomPurgesEverything(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
-	seed(t, s, "a")
-	seed(t, s, "b")
+	for _, room := range []string{"a", "b"} {
+		seed(t, s, room)
+		seedHeld(t, s, room)
+	}
 	// These reach rooms through another table, so roomRows cannot see them.
 	indirect := []string{"revisions", "annotation_messages", "attachments", "message_versions"}
 	count := func(table string) int {

@@ -202,8 +202,24 @@ func (s *Server) personaDone(w http.ResponseWriter, sess session, p *store.RoomP
 			w.WriteHeader(status)
 			return
 		}
+		if status == http.StatusAccepted {
+			writeJSON(w, status, struct {
+				*store.RoomPersona
+				Held bool `json:"held"`
+			}{p, true})
+			return
+		}
 		writeJSON(w, status, p)
 	}
+}
+
+// heldStatus answers a change the host must approve first with 202 and the persona as it still is
+// (002-AC21).
+func heldStatus(held bool) int {
+	if held {
+		return http.StatusAccepted
+	}
+	return http.StatusOK
 }
 
 func personaID(r *http.Request) int64 {
@@ -236,14 +252,14 @@ func (s *Server) editPersona(w http.ResponseWriter, r *http.Request, sess sessio
 	}
 	patch := store.PersonaPatch{Name: req.Name, Badge: req.Badge, Colour: req.Colour, Text: req.Text, Model: req.Model, Effort: req.Effort,
 		EveryN: req.EveryN, SelfCall: req.SelfCall}
-	p, m, err := s.bus.Store.EditPersona(r.Context(), sess.p.RoomID, personaID(r), patch, sess.p)
-	s.personaDone(w, sess, p, m, err, http.StatusOK)
+	p, m, held, err := s.bus.Store.EditPersona(r.Context(), sess.p.RoomID, personaID(r), patch, sess.p)
+	s.personaDone(w, sess, p, m, err, heldStatus(held))
 }
 
 // updatePersona takes the template's newer version the room was offered (002-AC14).
 func (s *Server) updatePersona(w http.ResponseWriter, r *http.Request, sess session) {
-	p, m, err := s.bus.Store.UpdatePersona(r.Context(), sess.p.RoomID, personaID(r), sess.p)
-	s.personaDone(w, sess, p, m, err, http.StatusOK)
+	p, m, held, err := s.bus.Store.UpdatePersona(r.Context(), sess.p.RoomID, personaID(r), sess.p)
+	s.personaDone(w, sess, p, m, err, heldStatus(held))
 }
 
 func (s *Server) removePersona(w http.ResponseWriter, r *http.Request, sess session) {

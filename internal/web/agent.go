@@ -33,6 +33,43 @@ type agentState struct {
 	// Models and Efforts are what a persona may ask for, for the pickers.
 	Models  []string `json:"models"`
 	Efforts []string `json:"efforts"`
+	// Cap is the host daemon's cap and approval mode, nil while the host has no daemon.
+	Cap *store.DaemonSettings `json:"cap"`
+	// CapRequests are the personas asking above the host's cap that the host has not answered
+	// (002-AC19); Changes, the persona changes waiting for the host's approval (002-AC21).
+	CapRequests []capRequest          `json:"cap_requests"`
+	Changes     []store.PersonaChange `json:"changes"`
+}
+
+// capRequest is a persona asking for more than the host cap: it runs at Runs until the host
+// approves Asks.
+type capRequest struct {
+	PersonaID int64      `json:"persona_id"`
+	Asks      turn.Level `json:"asks"`
+	Runs      turn.Level `json:"runs"`
+}
+
+// capped returns what persona p runs at on host daemon d, and whether that is below what it asks.
+func capped(d *store.Daemon, p *store.RoomPersona) (turn.Level, bool) {
+	return turn.Clamp(p.Asks(), turn.Level{Model: d.Settings.MaxModel, Effort: d.Settings.MaxEffort}, p.Cap.Approved(d.ID))
+}
+
+// capRequests lists the personas the host d still has to answer on. The answers are kept per host
+// daemon: after a hand-over the new host's cap and answers apply.
+func capRequests(d *store.Daemon, ps []store.RoomPersona) []capRequest {
+	out := []capRequest{}
+	if d == nil {
+		return out
+	}
+	for _, p := range ps {
+		if p.Pending {
+			continue
+		}
+		if runs, low := capped(d, &p); low && !p.Cap.Settles(d.ID, p.Asks()) {
+			out = append(out, capRequest{PersonaID: p.ID, Asks: p.Asks(), Runs: runs})
+		}
+	}
+	return out
 }
 
 // hostDaemon returns the connected daemon of participant pid in room, nil if there is none.
@@ -78,6 +115,19 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 		return nil, err
 	}
 	if st.Queue, err = s.bus.Store.Queue(ctx, room); err != nil {
+		return nil, err
+	}
+	host, err := s.bus.Store.HostDaemon(ctx, room)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		host = nil
+	case err != nil:
+		return nil, err
+	default:
+		st.Cap = &host.Settings
+	}
+	st.CapRequests = capRequests(host, st.Personas)
+	if st.Changes, err = s.bus.Store.PersonaChanges(ctx, room); err != nil {
 		return nil, err
 	}
 	return st, nil

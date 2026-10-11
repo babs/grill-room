@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -55,8 +56,10 @@ type Config struct {
 	// Image pins the sandbox image; empty takes the room server's, or builds the embedded one.
 	Image    string
 	LogLevel string
-	// Model is the claude --model for turns; empty keeps Claude Code's default.
+	// Model is the claude --model for a persona asking for none; empty keeps Claude Code's default.
 	Model string
+	// Settings are the host cap and approval mode until the admin page saves its own.
+	Settings daemon.Settings
 }
 
 func loadConfig() (Config, error) {
@@ -68,12 +71,17 @@ func loadConfig() (Config, error) {
 		}
 		dir = filepath.Join(base, "grill-room-daemon")
 	}
+	approveAll, err := strconv.ParseBool(getEnv("GRILL_ROOM_APPROVE_ALL", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("GRILL_ROOM_APPROVE_ALL: %w", err)
+	}
 	return Config{
 		StateDir: dir,
 		Browser:  getEnv("GRILL_ROOM_DAEMON_BROWSER", "auto"),
 		Image:    os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
 		LogLevel: getEnv("LOG_LEVEL", "info"),
 		Model:    os.Getenv("GRILL_ROOM_AGENT_MODEL"),
+		Settings: daemon.Settings{MaxModel: os.Getenv("GRILL_ROOM_MAX_MODEL"), MaxEffort: os.Getenv("GRILL_ROOM_MAX_EFFORT"), ApproveAll: approveAll},
 	}, nil
 }
 
@@ -84,6 +92,9 @@ func (c Config) Validate() error {
 	}
 	if _, err := zapcore.ParseLevel(c.LogLevel); err != nil {
 		return fmt.Errorf("LOG_LEVEL: %w", err)
+	}
+	if _, err := c.Settings.Normalize(); err != nil {
+		return fmt.Errorf("GRILL_ROOM_MAX_MODEL or GRILL_ROOM_MAX_EFFORT: %w", err)
 	}
 	return nil
 }
@@ -189,8 +200,14 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	if err != nil {
 		logger.Warn("self_update_disabled", zap.Error(err))
 	}
+	settingsPath := filepath.Join(cfg.StateDir, "settings.json")
+	settings, err := daemon.LoadSettings(settingsPath, cfg.Settings)
+	if err != nil {
+		return fmt.Errorf("settings: %w", err)
+	}
 	var restart atomic.Bool
 	d := daemon.New(daemon.Options{
+		Settings: settings, SettingsPath: settingsPath,
 		Name: host, Version: Version, Tokens: daemon.NewTokens(cfg.StateDir), Docker: sandbox.Docker, Creds: src,
 		// No client timeout: it would cut the long-lived room stream; each request has its own deadline.
 		HTTP: &http.Client{}, Log: logger, Model: cfg.Model,

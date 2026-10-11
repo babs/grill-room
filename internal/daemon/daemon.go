@@ -35,8 +35,12 @@ type Options struct {
 	Log     *zap.Logger
 	// NewAgent builds the sandbox a room's turns run in, from image, on the first turn.
 	NewAgent func(r Room, image string) Agent
-	// Model is passed to claude --model; empty keeps Claude Code's default.
+	// Model is passed to claude --model when a persona asks for none; empty keeps Claude Code's default.
 	Model string
+	// Settings are the host cap and approval mode at start; SettingsPath is where the page saves
+	// them, "" to keep them in memory.
+	Settings     Settings
+	SettingsPath string
 	// Image pins the sandbox image; empty takes the room server's, or builds the embedded one.
 	Image  string
 	Stream sandbox.Streamer
@@ -78,6 +82,7 @@ type Status struct {
 	Update      Update            `json:"update"`
 	CanHost     bool              `json:"can_host"`
 	Reason      string            `json:"reason,omitempty"`
+	Settings    Settings          `json:"settings"`
 }
 
 // Image is the sandbox image turns run in.
@@ -115,6 +120,7 @@ type Daemon struct {
 	img imageJob
 	// release is what the room server hands out, for the self-update; guarded by mu.
 	release release
+	settingsMu sync.Mutex
 }
 
 // New builds a daemon.
@@ -128,7 +134,7 @@ func New(o Options) *Daemon {
 	def(&o.StatusEvery, 15*time.Second)
 	def(&o.PollEvery, 2*time.Second)
 	def(&o.MaxBackoff, 30*time.Second)
-	d := &Daemon{o: o, st: Status{Host: o.Name, Version: o.Version, Connection: "offline"}, changed: make(chan struct{}, 1)}
+	d := &Daemon{o: o, st: Status{Host: o.Name, Version: o.Version, Connection: "offline", Settings: o.Settings}, changed: make(chan struct{}, 1)}
 	if o.Image != "" {
 		d.img.known = true
 		d.st.Image = Image{State: "ready", Ref: o.Image}
@@ -522,7 +528,8 @@ func (r *roomRun) heartbeat(ctx context.Context, tok string) {
 		st := d.Status()
 		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		resp, err := d.roomRequest(rctx, http.MethodPost, room.Base+"/api/rooms/"+room.ID+"/daemon/status", tok,
-			map[string]any{"can_host": st.CanHost, "reason": st.Reason, "version": d.o.Version})
+			map[string]any{"can_host": st.CanHost, "reason": st.Reason, "version": d.o.Version,
+				"max_model": st.Settings.MaxModel, "max_effort": st.Settings.MaxEffort, "approve_all": st.Settings.ApproveAll})
 		if err == nil {
 			if resp.StatusCode != http.StatusNoContent {
 				err = apiError(resp)

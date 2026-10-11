@@ -220,27 +220,27 @@ func TestRoomPersonaOverridesAndUpdate(t *testing.T) {
 		t.Fatalf("unknown room: %v", err)
 	}
 	model, effort, text, name, colour := "haiku", "low", "Only decisions.", "Scribe", "#000000"
-	p, m, err = s.EditPersona(ctx, "a", p.ID, PersonaPatch{Model: &model, Effort: &effort, Text: &text, Name: &name, Colour: &colour}, alice)
+	p, m, _, err = s.EditPersona(ctx, "a", p.ID, PersonaPatch{Model: &model, Effort: &effort, Text: &text, Name: &name, Colour: &colour}, alice)
 	if err != nil || p.Name != "Scribe" || p.Model != "haiku" || p.Effort != "low" || p.Text != text || p.Badge != "📝" ||
 		m.Body != "Alice changed 📝 Secretary: name Secretary → Scribe, colour #1971c2 → #000000, model default → haiku, effort default → low, persona text." {
 		t.Fatalf("edit: %+v %+v %v", p, m, err)
 	}
-	if _, m, err := s.EditPersona(ctx, "a", p.ID, PersonaPatch{Model: &model}, alice); err != nil || m != nil {
+	if _, m, _, err := s.EditPersona(ctx, "a", p.ID, PersonaPatch{Model: &model}, alice); err != nil || m != nil {
 		t.Fatalf("no-op edit: %+v %v", m, err)
 	}
 	n, on := 3, true
-	if _, m, err := s.EditPersona(ctx, "a", p.ID, PersonaPatch{EveryN: &n, SelfCall: &on}, alice); err != nil ||
+	if _, m, _, err := s.EditPersona(ctx, "a", p.ID, PersonaPatch{EveryN: &n, SelfCall: &on}, alice); err != nil ||
 		m.Body != "Alice changed 📝 Scribe: every N rounds off → 3, self-call off → on." {
 		t.Fatalf("trigger fields: %+v %v", m, err)
 	}
 	upper := "GRILL"
-	if _, _, err := s.EditPersona(ctx, "a", p.ID, PersonaPatch{Name: &upper}, alice); !errors.Is(err, ErrNameTaken) {
+	if _, _, _, err := s.EditPersona(ctx, "a", p.ID, PersonaPatch{Name: &upper}, alice); !errors.Is(err, ErrNameTaken) {
 		t.Fatalf("name taken whatever its case: %v", err)
 	}
-	if _, _, err := s.EditPersona(ctx, "a", 999, PersonaPatch{Name: &upper}, alice); !errors.Is(err, ErrNotFound) {
+	if _, _, _, err := s.EditPersona(ctx, "a", 999, PersonaPatch{Name: &upper}, alice); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown persona: %v", err)
 	}
-	if _, _, err := s.EditPersona(ctx, "b", grill.ID, PersonaPatch{Name: &upper}, alice); !errors.Is(err, ErrNotFound) {
+	if _, _, _, err := s.EditPersona(ctx, "b", grill.ID, PersonaPatch{Name: &upper}, alice); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("persona of another room: %v", err)
 	}
 	// A second Grill gets a number.
@@ -259,10 +259,10 @@ func TestRoomPersonaOverridesAndUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	badge := "🔎"
-	if _, _, err := s.EditPersona(ctx, "a", c.ID, PersonaPatch{Badge: &badge}, alice); err != nil {
+	if _, _, _, err := s.EditPersona(ctx, "a", c.ID, PersonaPatch{Badge: &badge}, alice); err != nil {
 		t.Fatal(err)
 	}
-	if _, m, err := s.UpdatePersona(ctx, "a", c.ID, alice); err != nil || m != nil {
+	if _, m, _, err := s.UpdatePersona(ctx, "a", c.ID, alice); err != nil || m != nil {
 		t.Fatalf("update with none offered: %+v %v", m, err)
 	}
 	if _, err := s.PublishVersion(ctx, alice.ProfileID, tp.ID, "Alice", PersonaFields{Name: "Critic", Badge: "🧐", Colour: "#112233", Text: "v2", Model: "sonnet", Effort: "high"}); err != nil {
@@ -272,7 +272,7 @@ func TestRoomPersonaOverridesAndUpdate(t *testing.T) {
 	if err != nil || c.Text != "v1" || c.TemplateVersion != 1 || c.UpdateVersion != 2 {
 		t.Fatalf("offered: %+v %v", c, err)
 	}
-	c, m, err = s.UpdatePersona(ctx, "a", c.ID, bob)
+	c, m, _, err = s.UpdatePersona(ctx, "a", c.ID, bob)
 	if err != nil || c.Text != "v2" || c.Model != "sonnet" || c.Effort != "high" || c.Badge != "🔎" || c.TemplateVersion != 2 || c.UpdateVersion != 0 ||
 		m.Body != `Bob updated 🔎 Critic to version 2 of the template "Critic".` {
 		t.Fatalf("update: %+v %+v %v", c, m, err)

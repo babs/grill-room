@@ -104,7 +104,8 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, sess session)
 	writeJSON(w, http.StatusCreated, t)
 }
 
-// pressedPersona loads persona id of room, or the room's first one for 0; it answers the error itself.
+// pressedPersona loads persona id of room, or the room's first one for 0; a persona waiting for the
+// host's approval cannot run (002-AC21). It answers the error itself.
 func (s *Server) pressedPersona(w http.ResponseWriter, r *http.Request, room string, id int64) (*store.RoomPersona, bool) {
 	if id != 0 {
 		p, err := s.bus.Store.RoomPersona(r.Context(), room, id)
@@ -116,6 +117,10 @@ func (s *Server) pressedPersona(w http.ResponseWriter, r *http.Request, room str
 			s.serverError(w, "start_turn_failed", err)
 			return nil, false
 		}
+		if p.Pending {
+			httpError(w, http.StatusConflict, p.Name+" waits for the host's approval")
+			return nil, false
+		}
 		return p, true
 	}
 	ps, err := s.bus.Store.RoomPersonas(r.Context(), room)
@@ -123,11 +128,13 @@ func (s *Server) pressedPersona(w http.ResponseWriter, r *http.Request, room str
 		s.serverError(w, "start_turn_failed", err)
 		return nil, false
 	}
-	if len(ps) == 0 {
-		httpError(w, http.StatusConflict, "the room has no persona: add one first")
-		return nil, false
+	for _, p := range ps {
+		if !p.Pending {
+			return &p, true
+		}
 	}
-	return &ps[0], true
+	httpError(w, http.StatusConflict, "the room has no persona: add one first")
+	return nil, false
 }
 
 // roomBusy reports a running turn or a waiting queue: a new press then waits its turn.
@@ -364,6 +371,13 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request, d *store.Daemon,
 	}
 	job := turn.Job{ID: t.ID, Prompt: t.Prompt, Resume: t.Resume, TimeoutSeconds: int(s.opts.TurnTimeout / time.Second),
 		Persona: t.PersonaName, System: t.PersonaText, Model: t.ReqModel, Effort: t.ReqEffort}
+	// The host's approval holds for this persona on the daemon it was given for only (002-AC20).
+	if p, err := s.bus.Store.RoomPersona(r.Context(), d.RoomID, t.PersonaID); err == nil {
+		job.Approved = p.Cap.Approved(d.ID)
+	} else if !errors.Is(err, store.ErrNotFound) {
+		s.serverError(w, "get_job_failed", err)
+		return
+	}
 	if t.Resume != "" {
 		data, err := s.bus.Store.AgentSession(r.Context(), d.RoomID, t.PersonaID, t.Resume)
 		if err != nil {
@@ -435,6 +449,7 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 		Synthesis: sanitize(res.Synthesis, turn.MaxSynthesis), Model: sanitize(res.Model, turn.MaxModel), SessionID: res.SessionID,
 		// An effort claude does not know is not shown as if it ran.
 		Effort:        knownOr(res.Effort, turn.Efforts),
+		Capped:        res.Capped,
 		SessionOffset: res.SessionOffset, Session: res.Session,
 		Report: store.TurnReport{Rejected: o.Rejected, Ignored: o.Ignored},
 	}
