@@ -108,6 +108,7 @@ cover:
 
 lint:
 	golangci-lint run ./...
+	@out=$$(git ls-files -co --exclude-standard '*.go' | xargs gofmt -l); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 	git ls-files -co --exclude-standard '*.sh' | xargs shellcheck
 
 docker-build:

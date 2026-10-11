@@ -273,7 +273,9 @@ func TestQueueWaitsForHost(t *testing.T) {
 		t.Fatalf("queue: %d %s", code, b)
 	}
 	alice.drop()
-	e.waitAgent(t, r.room, alice.p.Token, func(st agentState) bool { return !st.Online && st.Turn.ID == first.ID && st.Turn.Status == store.TurnFailed })
+	e.waitAgent(t, r.room, alice.p.Token, func(st agentState) bool {
+		return !st.Online && st.Turn.ID == first.ID && st.Turn.Status == store.TurnFailed
+	})
 	if st := e.agent(t, r.room, alice.p.Token); len(st.Queue) != 1 {
 		t.Fatalf("queue after the drop: %+v", st.Queue)
 	}

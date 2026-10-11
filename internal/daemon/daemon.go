@@ -119,7 +119,7 @@ type Daemon struct {
 	// img is the sandbox image job, guarded by mu.
 	img imageJob
 	// release is what the room server hands out, for the self-update; guarded by mu.
-	release release
+	release    release
 	settingsMu sync.Mutex
 }
 
