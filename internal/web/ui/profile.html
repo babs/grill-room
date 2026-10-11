@@ -28,6 +28,22 @@
   <section id="signed-in" hidden>
     <h2>Your rooms</h2>
     <ul id="rooms" class="rooms"></ul>
+    <div id="skills">
+      <h2>Your skills</h2>
+      <p class="hint">A skill is a Claude Code skill folder: a SKILL.md with a name and a description, and its files. Upload it again to publish its next version; rooms keep the version they turned on until they take the new one.</p>
+      <ul id="skill-list" class="rooms"></ul>
+      <form id="skill-upload">
+        <label for="skill-file">Upload a skill folder as a zip</label>
+        <input id="skill-file" type="file" accept=".zip,application/zip" required>
+        <label for="skill-scope">Offer it</label>
+        <select id="skill-scope">
+          <option value="personal">Only in my rooms (personal)</option>
+          <option value="shared">In every room (shared library)</option>
+        </select>
+        <button type="submit">Upload</button>
+      </form>
+      <p id="skill-status" role="status"></p>
+    </div>
     <div id="email" hidden>
       <h2>Email</h2>
       <p id="email-state"></p>

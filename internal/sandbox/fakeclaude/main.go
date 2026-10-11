@@ -10,6 +10,8 @@
 //	FAKE_LIST         answer with the transcript files and whether they hold FAKE_MARK
 //	FAKE_RECALL       answer with the latest code word an earlier turn of the session was told
 //	FAKE_WHOAMI       answer with the first line of --append-system-prompt-file, and --effort
+//	FAKE_SKILLS       run every scripts/*.sh of each skill in --plugin-dir and write what they
+//	                  print to docs/skills.md, as an agent using its skills would
 //	FAKE_PINGPONG A B as persona A call @B, as any other call @A, and repeat the marker so the
 //	                  called persona's prompt holds it too (an agent chain)
 //	FAKE_SLOW         take a few seconds (a turn others queue behind)
@@ -25,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -64,7 +67,7 @@ func uuid() string {
 }
 
 func run(args []string, stdin io.Reader, out io.Writer, cwd, home string) int {
-	resume, model, system, effort := "", "default", "", "default"
+	resume, model, system, effort, plugin := "", "default", "", "default", ""
 	for i, a := range args {
 		if i+1 == len(args) {
 			break
@@ -78,6 +81,8 @@ func run(args []string, stdin io.Reader, out io.Writer, cwd, home string) int {
 			system = args[i+1]
 		case "--effort":
 			effort = args[i+1]
+		case "--plugin-dir":
+			plugin = args[i+1]
 		}
 	}
 	prompt, err := io.ReadAll(stdin)
@@ -97,7 +102,12 @@ func run(args []string, stdin io.Reader, out io.Writer, cwd, home string) int {
 	if err := os.MkdirAll(dir, 0o700); err != nil { //nolint:gosec // see above
 		return result(out, model, sid, err.Error(), true)
 	}
-	answer, err := act(string(prompt), string(history), cwd, system, effort)
+	var answer string
+	if strings.Contains(string(prompt), "FAKE_SKILLS") {
+		answer, err = useSkills(plugin, cwd)
+	} else {
+		answer, err = act(string(prompt), string(history), cwd, system, effort)
+	}
 	if err != nil {
 		return result(out, model, sid, err.Error(), true)
 	}
@@ -213,4 +223,33 @@ func pingPongCall(prompt string) (string, error) {
 		other = m[2]
 	}
 	return fmt.Sprintf("FAKE_PINGPONG %s %s: over to @%s.", m[1], m[2], other), nil
+}
+
+// useSkills runs each skill's scripts the way the agent would, from the skill's folder.
+func useSkills(plugin, cwd string) (string, error) {
+	if plugin == "" {
+		return "No skills.", nil
+	}
+	mds, _ := filepath.Glob(filepath.Join(plugin, "skills", "*", "SKILL.md"))
+	var lines []string
+	for _, md := range mds {
+		dir := filepath.Dir(md)
+		scripts, _ := filepath.Glob(filepath.Join(dir, "scripts", "*.sh"))
+		var outs []string
+		for _, sc := range scripts {
+			cmd := exec.Command("sh", sc) //nolint:gosec,noctx // a test double running the skill it was handed
+			cmd.Dir = dir
+			b, err := cmd.Output()
+			if err != nil {
+				return "", fmt.Errorf("%s: %w", sc, err)
+			}
+			outs = append(outs, strings.TrimSpace(string(b)))
+		}
+		lines = append(lines, filepath.Base(dir)+": "+strings.Join(outs, " "))
+	}
+	body := "# Skills\n\n- " + strings.Join(lines, "\n- ") + "\n"
+	if err := os.WriteFile(filepath.Join(cwd, "docs", "skills.md"), []byte(body), 0o600); err != nil { //nolint:gosec // see above
+		return "", err
+	}
+	return "Skills used: " + strings.Join(lines, "; ") + ".", nil
 }

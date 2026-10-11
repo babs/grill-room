@@ -1,6 +1,6 @@
 # Agent workspace and prompt contract
 
-TL;DR: each turn runs one persona of the room. The room server builds a workspace tar, a prompt, and hands over the persona's text, model and effort. The host daemon unpacks the tar into the sandbox's `/workspace`, runs `claude -p` there, and posts back the files that changed, the final answer and the new session bytes. The server applies all of it in one transaction or none of it. Files are the only channel (D20, D33): no MCP, no custom tool.
+TL;DR: each turn runs one persona of the room. The room server builds a workspace tar, a prompt, and hands over the persona's text, model, effort and skills. The host daemon unpacks the tar into the sandbox's `/workspace`, runs `claude -p` there, and posts back the files that changed, the final answer and the new session bytes. The server applies all of it in one transaction or none of it. Files are the only channel (D20, D33): no MCP, no custom tool.
 
 The Go side of this contract is `internal/turn`. Change both together.
 
@@ -37,6 +37,16 @@ The server writes the prompt when the turn starts and stores it on the turn. The
 6. The messages since the persona's last successful turn, with day and time, sender, `(voice)` for speech and `(agent)` for another persona's synthesis. The persona's own syntheses are left out, since its session already holds them. Only the latest 100 KB are quoted; the prompt says how many earlier lines are in `transcript/`.
 7. The annotation threads with a message by anyone but this persona since its last successful turn, in full, with those messages flagged `(new)` and image paths listed.
 8. "Your final answer is posted in the room as your synthesis."
+
+### Skills
+
+A persona's active skills reach `claude -p` as one plugin directory, passed with `--plugin-dir`, never through the workspace or the prompt. Claude Code lists them as `grill-room:<name>`; the agent invokes one like any skill and is told its folder.
+
+- The room pins each skill at a version when a member turns it on. The versions pinned when the turn starts are copied onto the turn, so a change during the turn applies to the next one, like the persona's text. A newer upload of the skill is offered in the room, never applied by itself.
+- A personal skill rides only while its owner is a member of the room. Skills never come from the host's disk: the server sends them.
+- The daemon fetches the plugin as a tar (wire protocol, step 3), deletes `/home/agent/.grill-room/plugin` in the sandbox home, unpacks the tar there and passes that path. A turn without skills deletes the directory and passes no flag, so no skill carries over from an earlier turn.
+- The tar holds `.claude-plugin/plugin.json` (`"name": "grill-room"`) and `skills/<name>/` for each skill: its `SKILL.md` and its other files, modes `0644` or `0755`. Claude Code 2.1.296 loads this layout: `claude plugin validate` passes on it and `claude --plugin-dir <dir> plugin details grill-room` lists each skill.
+- Scripts in a skill run in the sandbox as the agent user, with the workspace as their only room data. Anyone in the room can ask the agent to print a skill's files.
 
 ### Presence preamble
 
@@ -89,8 +99,8 @@ Anything else the agent writes, in `transcript/` or at the root, is scratch and 
 ## Wire protocol
 
 1. The server sends `event: turn` with `{"id": N}` on the daemon's stream.
-2. `GET .../daemon/turns/N` returns the job: `prompt`, `persona` (its name), `system` (its text), `model`, `effort`, `approved` (the `model` and `effort` the host approved above its cap for this persona, on this daemon; empty otherwise), `resume` (the persona's session id or empty), `session_size`, `session_sha256`, `timeout_seconds`.
-3. `GET .../daemon/turns/N/workspace` returns the tar.
+2. `GET .../daemon/turns/N` returns the job: `prompt`, `persona` (its name), `system` (its text), `model`, `effort`, `approved` (the `model` and `effort` the host approved above its cap for this persona, on this daemon; empty otherwise), `skills` (the persona's active skills at their pinned versions; absent for none), `resume` (the persona's session id or empty), `session_size`, `session_sha256`, `timeout_seconds`.
+3. `GET .../daemon/turns/N/workspace` returns the tar. When the job lists `skills` (`[{"name", "version"}]`), `GET .../daemon/turns/N/skills` returns the plugin directory as a tar.
 4. If `resume` is set and the daemon's local `<id>.jsonl` does not match the size and hash, it fetches `GET .../daemon/sessions/<id>` and writes it into the sandbox home before running `claude -p --resume <id>` (D6). The cwd is always `/workspace`, so the session's project slug never changes (S2). Every persona's session lives in the same sandbox home under its own id; the room stores each under its persona, so a takeover resumes each persona's own session.
 5. The daemon hashes `/workspace` before and after the run and sends each changed path. It sends contents only for `docs/`, `replies.json` and `annotations-new.json`, so an edited 20 MB upload costs one path.
 6. `POST .../daemon/turns/N` with `{"synthesis", "model", "effort", "capped", "changes", "session_id", "session_offset", "session"}`, or `{"error"}`. `capped` is true when the host cap lowered what the persona asked for. `session` holds the jsonl bytes past `session_offset`: the server's size when resuming, 0 for a new session (D23). The server refuses a gap or an overlap.

@@ -35,6 +35,9 @@ type TurnInput struct {
 	SessionSHA256 string
 	// FetchSession returns the room's copy of Resume; called only when the local copy differs.
 	FetchSession func(ctx context.Context) ([]byte, error)
+	// Plugin is the tar of the plugin directory holding the persona's active skills, nil for none
+	// (002-AC31).
+	Plugin io.Reader
 }
 
 // TurnOutput is what a turn produced for the room.
@@ -70,7 +73,11 @@ func (s *Sandbox) RunTurn(ctx context.Context, in TurnInput) (*TurnOutput, error
 			return nil, err
 		}
 	}
-	res, err := s.runClaude(ctx, Request{Prompt: in.Prompt, System: in.System, Model: in.Model, Effort: in.Effort, Resume: in.Resume})
+	req := Request{Prompt: in.Prompt, System: in.System, Model: in.Model, Effort: in.Effort, Resume: in.Resume}
+	if req.PluginDir, err = s.loadPlugin(ctx, in.Plugin); err != nil {
+		return nil, err
+	}
+	res, err := s.runClaude(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +96,27 @@ func (s *Sandbox) RunTurn(ctx context.Context, in TurnInput) (*TurnOutput, error
 		return nil, err
 	}
 	return out, nil
+}
+
+// pluginDir holds the turn's skills in the sandbox home, out of the workspace the agent edits.
+const pluginDir = home + "/.grill-room/plugin"
+
+// loadPlugin replaces the plugin directory with the turn's, and returns it for --plugin-dir; ""
+// when the turn has no skill. The previous turn's skills never carry over.
+func (s *Sandbox) loadPlugin(ctx context.Context, plugin io.Reader) (string, error) {
+	if _, err := s.run(ctx, nil, "exec", s.container(), "rm", "-rf", pluginDir); err != nil {
+		return "", fmt.Errorf("clear skills: %w", err)
+	}
+	if plugin == nil {
+		return "", nil
+	}
+	if _, err := s.run(ctx, nil, "exec", s.container(), "mkdir", "-p", pluginDir); err != nil {
+		return "", fmt.Errorf("load skills: %w", err)
+	}
+	if _, err := s.run(ctx, plugin, "exec", "-i", s.container(), "tar", "-x", "-C", pluginDir); err != nil {
+		return "", fmt.Errorf("load skills: %w", err)
+	}
+	return pluginDir, nil
 }
 
 func sessionPath(id string) string {

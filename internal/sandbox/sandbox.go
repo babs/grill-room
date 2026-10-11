@@ -205,7 +205,9 @@ type Request struct {
 	Effort string
 	// Resume is the session id to continue; empty starts a new session.
 	Resume string
-	Args   []string
+	// PluginDir is a plugin directory to load, the persona's skills; empty for none.
+	PluginDir string
+	Args      []string
 }
 
 // Result is claude's --output-format json answer.
@@ -278,6 +280,9 @@ func (s *Sandbox) runClaude(ctx context.Context, req Request) (*Result, error) {
 	}
 	if req.Resume != "" {
 		args = append(args, "--resume", req.Resume)
+	}
+	if req.PluginDir != "" {
+		args = append(args, "--plugin-dir", req.PluginDir)
 	}
 	args = append(args, req.Args...)
 	before := s.proxy.Unauthorized()

@@ -115,7 +115,25 @@ dialog#personas {
   background: var(--paper);
   color: var(--ink);
 }
-dialog#personas::backdrop { background: rgba(30, 34, 56, 0.45); }
+dialog#skills-disclaimer {
+  width: min(32rem, calc(100vw - 1rem));
+  max-height: calc(100dvh - 1rem);
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--ink);
+}
+dialog#skills-disclaimer h2 { font-size: 1.05rem; margin: 0 0 0.5rem; }
+dialog#skills-disclaimer ul { padding-left: 1.2rem; font-size: 0.9rem; }
+:is(dialog#personas, dialog#skills-disclaimer)::backdrop { background: rgba(30, 34, 56, 0.45); }
+.persona-skills { margin: 0.4rem 0; padding: 0.4rem 0.6rem; border: 1px solid var(--line); border-radius: 6px; font-size: 0.85rem; }
+.persona-skills legend { font-size: 0.8rem; color: var(--muted); }
+.persona-skills ul { list-style: none; margin: 0 0 0.4rem; padding: 0; }
+.persona-skills li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.5rem; padding: 0.15rem 0; overflow-wrap: anywhere; }
+.persona-skills button { padding: 0.15rem 0.6rem; font-size: 0.8rem; }
+.persona-skills .skill-add { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.persona-skills .skill-add select { flex: 1; min-width: 10rem; width: auto; }
 .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
 .dialog-head h2 { font-size: 1.1rem; }
 dialog .hint { color: var(--muted); font-size: 0.85rem; margin: 0.3rem 0; }
@@ -169,6 +187,9 @@ button.small, #rename button { padding: 0.2rem 0.6rem; font-size: 0.8rem; }
 body.join .rooms { list-style: none; padding: 0; text-align: left; }
 body.join .rooms li { padding: 0.25rem 0; overflow-wrap: anywhere; }
 body.join h2 { margin-top: 1.2rem; font-size: 1rem; text-align: left; }
+body.join .hint { color: var(--muted); font-size: 0.85rem; text-align: left; }
+#skill-upload :is(input, select) { width: 100%; min-width: 0; }
+#skill-status { min-height: 1em; font-size: 0.85rem; text-align: left; overflow-wrap: anywhere; }
 #confirm .actions { display: flex; justify-content: center; gap: 0.5rem; }
 .layout { flex: 1; display: flex; min-height: 0; }
 aside { width: 14rem; padding: 1rem; border-right: 1px solid var(--line); overflow-y: auto; }

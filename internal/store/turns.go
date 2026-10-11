@@ -277,6 +277,9 @@ func (s *Store) StartTurn(ctx context.Context, t *Turn) error {
 	if t.ID, err = res.LastInsertId(); err != nil {
 		return fmt.Errorf("start turn id: %w", err)
 	}
+	if err := pinTurnSkills(ctx, tx, t.RoomID, t.ID, t.PersonaID); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("start turn: %w", err)
 	}

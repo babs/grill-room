@@ -200,3 +200,46 @@ func TestDockerPersonasTakeover(t *testing.T) {
 		t.Fatalf("secretary after takeover: %q", got)
 	}
 }
+
+// 002-AC31 in a real Docker sandbox with a fake claude: the persona's skill reaches claude through
+// --plugin-dir, its script runs in the sandbox and its output lands in a document; the pin holds
+// across a library update until the room takes it; a skill turned off is gone from the next turn.
+func TestDockerSkills(t *testing.T) {
+	if os.Getenv("GRILL_ROOM_TEST_DOCKER") != "1" {
+		t.Skip("set GRILL_ROOM_TEST_DOCKER=1 to run the Docker sandbox tests")
+	}
+	image := os.Getenv("GRILL_ROOM_SANDBOX_FAKE_IMAGE")
+	if image == "" {
+		image = "grill-room-sandbox:fake"
+	}
+	rs := newRoomServer(t)
+	alice, _ := sandboxHost(t, rs, "Alice", image)
+	k := rs.publishSkill(t, alice, "stamp", "STAMP-v1", true)
+	doc := func() string {
+		t.Helper()
+		docs, _ := rs.st.Documents(t.Context(), rs.room)
+		for _, d := range docs {
+			if d.Name == "skills.md" {
+				rev, _ := rs.st.Revision(t.Context(), d.ID, d.Revisions)
+				return rev.Body
+			}
+		}
+		return ""
+	}
+	for i, want := range []string{"STAMP-v1", "STAMP-v1", "STAMP-v2"} {
+		switch i {
+		case 1:
+			rs.publishSkill(t, alice, "stamp", "STAMP-v2", false)
+		case 2:
+			rs.call(t, "PUT", fmt.Sprintf("/api/rooms/%s/personas/%d/skills/%d", rs.room, rs.grill(t).ID, k.ID), alice, map[string]bool{}, http.StatusOK, nil)
+		}
+		v := rs.turn(t, alice, fmt.Sprintf("FAKE_SKILLS %d", i), false)
+		if v.Turn.Status != "done" || rs.lastMessage(t) != "Skills used: stamp: "+want+"." || doc() != "# Skills\n\n- stamp: "+want+"\n" {
+			t.Fatalf("turn %d: %+v %q %q", i, v.Turn, rs.lastMessage(t), doc())
+		}
+	}
+	rs.call(t, "DELETE", fmt.Sprintf("/api/rooms/%s/personas/%d/skills/%d", rs.room, rs.grill(t).ID, k.ID), alice, nil, http.StatusOK, nil)
+	if v := rs.turn(t, alice, "FAKE_SKILLS off", false); v.Turn.Status != "done" || rs.lastMessage(t) != "No skills." {
+		t.Fatalf("off: %+v %q", v.Turn, rs.lastMessage(t))
+	}
+}

@@ -74,6 +74,19 @@
     <button type="submit">Add</button>
   </form>
 </dialog>
+<dialog id="skills-disclaimer" aria-labelledby="skills-disclaimer-title">
+  <h2 id="skills-disclaimer-title">Before you turn on a skill</h2>
+  <ul>
+    <li>A skill's scripts run in the host's sandbox, on the host's machine, with the room's documents and transcript in reach.</li>
+    <li>Anyone in the room can ask the agent to print a skill's files. Put no secret in a skill.</li>
+    <li>An egress allowlist for the sandbox is coming. Once it is on, a script can send room data to any allowed domain that accepts writes.</li>
+  </ul>
+  <p class="hint">This shows once for your profile.</p>
+  <form method="dialog" class="pairing-actions">
+    <button type="submit" value="cancel">Cancel</button>
+    <button type="submit" value="accept" id="skills-accept">I understand, turn it on</button>
+  </form>
+</dialog>
 <section id="pairing" aria-labelledby="pairing-title" hidden>
   <h2 id="pairing-title">Pair an agent daemon</h2>
   <p id="pairing-text"></p>

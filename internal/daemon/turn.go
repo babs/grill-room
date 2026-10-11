@@ -158,8 +158,19 @@ func (r *roomRun) execute(ctx context.Context, tok, ids string, job turn.Job) tu
 		r.d.o.Log.Info("turn_capped", zap.String("persona", job.Persona), zap.String("asked", turn.Level{Model: job.Model, Effort: job.Effort}.String()),
 			zap.String("runs", run.String()))
 	}
+	var plugin io.Reader
+	if len(job.Skills) > 0 {
+		resp, err := r.get(ctx, tok, "turns/"+ids+"/skills")
+		if err != nil {
+			return turn.Result{Error: "could not fetch the persona's skills on " + r.d.o.Name + ": " + err.Error()}
+		}
+		defer resp.Body.Close()
+		plugin = resp.Body
+		r.d.o.Log.Info("turn_skills", zap.String("persona", job.Persona), zap.Any("skills", job.Skills))
+	}
 	model := run.Model
 	out, err := ag.RunTurn(ctx, sandbox.TurnInput{
+		Plugin:    plugin,
 		Workspace: ws.Body, Prompt: job.Prompt, System: job.System, Model: model, Effort: run.Effort,
 		Resume: job.Resume, SessionSize: job.SessionSize, SessionSHA256: job.SessionSHA256,
 		FetchSession: func(ctx context.Context) ([]byte, error) {

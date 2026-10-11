@@ -78,6 +78,10 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `POST /api/profile/recover` | recovery token in the body | signs this browser into the profile |
 | `POST /api/profile/email` | profile cookie | mails a link that binds `email` to the profile; 404 without SMTP |
 | `POST /api/profile/signin` | none | mails a sign-in link if a profile holds `email`; 202 either way; 404 without SMTP |
+| `GET /api/profile/skills` | profile cookie | the profile's personal skills and the shared ones it published, each at its latest version |
+| `POST /api/profile/skills` | profile cookie | upload a skill folder as an `application/zip` body, personal, or shared with `?scope=shared`; a name the profile already uploaded in that scope becomes its next version; 400 with the reason for an invalid zip, 409 for the same files as the latest version, a shared name another profile published, or past 20 skills per profile or 20 versions per skill |
+| `DELETE /api/profile/skills/{id}` | profile cookie | remove one of the profile's personal skills; 404 for a shared one |
+| `GET /api/skills`, `DELETE /api/skills/{id}` | admin | every skill; remove one with its versions, and from every persona that had it |
 | `POST /api/profile/magic` | link token in the body | spends an emailed link: a sign-in link signs this browser in, a bind link binds the address to the profile this browser holds (403 from any other browser); 401 when unknown, used or expired, 409 when another profile holds the address; 404 without SMTP |
 | `GET /api/rooms/{room}` | participant | room, me, participants |
 | `POST /api/rooms/{room}/messages` | participant | post a text message (Markdown); messages carry `body` (source) and `html` (sanitised render) |
@@ -96,6 +100,9 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `POST /api/rooms/{room}/personas/{id}/update` | participant | take the text, model and effort of the template's newer version, keeping the room's name, badge and colour; 202 with `held` as for a change |
 | `POST /api/rooms/{room}/personas/{id}/cap` | host | answer a persona asking above the host cap: `approve`, and the `model` and `effort` the banner showed (409 when the persona asks for something else by now, or runs as it asks already) |
 | `POST /api/rooms/{room}/changes/{id}` | host | `approve` or refuse a held persona change or new persona |
+| `GET /api/rooms/{room}/skills` | participant | the skills this participant can turn on: the shared library and their profile's personal skills; `disclaimer` is true until their profile accepts the skills disclaimer, `no_profile` when they have none |
+| `PUT /api/rooms/{room}/personas/{id}/skills/{skill}` | participant with a profile | turn a skill on at its latest version, or move it there from an older pin; `accept_disclaimer` the first time (428 without it); a persona change, 202 with `held` as for one; 404 for a skill not offered to this participant, 409 for a second skill of the same name or past 10 per persona |
+| `DELETE /api/rooms/{room}/personas/{id}/skills/{skill}` | participant | turn a skill off |
 | `DELETE /api/rooms/{room}/personas/{id}` | participant | remove a persona with its session and queued press; 409 during its turn |
 | `PUT /api/rooms/{room}/host` | host | hand over: `participant_id` of a participant whose daemon is connected and can host |
 | `PATCH /api/rooms/{room}/participants/{id}` | host | `can_trigger`: grant or revoke the agent button |
@@ -145,11 +152,13 @@ The server uses STARTTLS whenever the relay offers it. A relay that offers none 
 | a profile's rooms | the profile's own browsers, the admin | deleting the room, or the profile (the link only) |
 | a profile's email | the profile's own browsers, the admin; never other participants | deleting the profile |
 | persona templates a profile published, signed with a display name | every participant of every room | the admin removing the template, or deleting the profile; room copies stay |
+| personal skills, signed with a display name | the profile's own browsers; the agent and anyone in a room where a persona has one on | the profile removing it, the admin, or deleting the profile |
+| shared skills, signed with a display name | every participant of every room | the admin removing it; deleting the profile only detaches it |
 
 - Access is by invite link. Anyone holding a valid one can read the room, and any member can make more.
 - No audio is stored. There is no retention timer: rooms and profiles live until deleted.
 - Deleting a room removes everything stored for it. A profile outlives its rooms and stops listing them.
-- Deleting a profile (`DELETE /api/profiles/{id}`) removes its sessions, its pending and used links, its email and the persona templates it published. Its participants stay in their rooms under their display names, detached from it. Every browser signed into it is signed out.
+- Deleting a profile (`DELETE /api/profiles/{id}`) removes its sessions, its pending and used links, its email, the persona templates it published and its personal skills. Shared skills it published stay in the library under the display name that signed them. Its participants stay in their rooms under their display names, detached from it. Every browser signed into it is signed out.
 - Deletes overwrite the freed pages (`secure_delete`) and checkpoint the WAL, so the removed rows do not linger in the database files.
 - Logs carry profile ids, never emails.
 
@@ -225,6 +234,18 @@ The agent runs on a participant's machine, through their host daemon (below). Th
 A room holds personas: agents with a name, a badge, a colour, a text that sets their role, and the model and effort they ask for. Every room starts with Grill, from the Default template, which challenges the plan. The Secretary template takes notes. In the Personas panel any member adds a persona from the template library, edits it, or removes it; each change is a line in the chat and applies from that persona's next turn. A template's newer version is offered to the room, never applied by itself. A profile can publish a persona as a template, and new versions of its own templates.
 
 Each persona has its own button. The host can press them and can tick "can ask" next to other participants to let them press too. One press runs one turn of that persona: it reads what was said and annotated since its own last successful turn, other personas' syntheses included, edits or writes documents, answers threads and may close them, opens annotations of its own on any document, uploads included, and posts a synthesis. The synthesis shows the persona's badge and name and the model and effort the turn ran with. A new agent document never takes an upload's name. One turn runs at a time in a room: a press during a turn waits in a queue shown under the header, which the person who pressed can cancel. "New session" (host only, in the panel) starts a persona without its memory. It then rereads the room history from the transcript files. The room keeps each persona's Claude session after every turn, so when another daemon takes over, each persona's next turn resumes its own session. [docs/agent-workspace.md](docs/agent-workspace.md) has the details.
+
+### Skills
+
+A skill is a Claude Code skill folder: a `SKILL.md` whose YAML frontmatter has a `name` (lowercase letters, digits and hyphens) and a `description`, plus any files it needs, scripts included. The profile page uploads one as a zip, with `SKILL.md` at the root of the zip or of its single folder. The upload is personal, kept in the profile and offered only in rooms that profile is in, or shared, in the library every room sees. Uploading a name again publishes its next version; versions never change. The server refuses a zip with symlinks, absolute or `..` paths, more than 200 files, or more than 8 MB packed or unpacked, and says why. The admin can remove any skill. Skills never come from the host's disk.
+
+In the Personas panel any member with a profile turns a skill on for a persona, from the shared library or their own personal skills, and anyone turns one off. Each change is a persona change: a line in the chat, held while the host approves everything. The persona keeps the version it was turned on at. A newer upload shows as "Update to vN", applied only when someone takes it. The first time a profile turns any skill on, the panel shows a disclaimer once:
+
+- a skill's scripts run in the host's sandbox, on the host's machine;
+- anyone in the room can ask the agent to print a skill's content, so a skill must hold no secret;
+- once the sandbox gets an egress allowlist, a script can send room data to any allowed domain that accepts writes.
+
+The turn hands the skills to `claude -p` as a plugin directory with `--plugin-dir`. [docs/agent-workspace.md](docs/agent-workspace.md) has the layout.
 
 ### Triggers and chains
 

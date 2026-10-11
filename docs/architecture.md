@@ -52,7 +52,7 @@ flowchart LR
 
 | Component | Exposes | Talks to | Auth |
 |---|---|---|---|
-| Room admin | nothing | room server: `GET/POST /api/rooms`, `PATCH/DELETE /api/rooms/{room}`, `GET/POST/DELETE .../invites`, `GET/DELETE /api/profiles`, `GET/DELETE /api/templates` | admin token (one per server) |
+| Room admin | nothing | room server: `GET/POST /api/rooms`, `PATCH/DELETE /api/rooms/{room}`, `GET/POST/DELETE .../invites`, `GET/DELETE /api/profiles`, `GET/DELETE /api/templates`, `GET/DELETE /api/skills` | admin token (one per server) |
 | Room page | nothing | room server (REST + SSE), LiveKit (WebRTC), document iframe (postMessage, validated) | room cookie, or the profile cookie |
 | Profile page | nothing | room server: `/api/profile/*` | profile cookie; recovery or emailed link token |
 | Document iframe | anchors and selections via postMessage | room page only | none: opaque origin, CSP sandbox, no cookie |

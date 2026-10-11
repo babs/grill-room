@@ -1024,7 +1024,7 @@ function personaForm(p) {
     const res = await fetch(api + '/personas/' + p.id, { method: 'DELETE' });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'HTTP ' + res.status);
   });
-  form.append(head, from, grid, selfCall, field('Persona text', text), actions);
+  form.append(head, from, grid, selfCall, skillsBlock(p), field('Persona text', text), actions);
   form.addEventListener('input', () => { form.dataset.dirty = '1'; });
   form.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -1035,6 +1035,100 @@ function personaForm(p) {
     }).catch((err) => personasStatus(err.message));
   });
   return form;
+}
+
+// Skills: a member turns a skill of the library or one of their own on for a persona, pinned at
+// its latest version; a newer upload is offered, never applied by itself (002-AC31). The first
+// activation of a profile shows the disclaimer (002-AC32).
+let skillLib = { skills: [], disclaimer: false, no_profile: false };
+
+function skillsBlock(p) {
+  const box = document.createElement('fieldset');
+  box.className = 'persona-skills';
+  const legend = document.createElement('legend');
+  legend.textContent = 'Skills';
+  const list = document.createElement('ul');
+  const button = (label, aria, fn) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.setAttribute('aria-label', aria);
+    b.addEventListener('click', () => fn().catch((err) => personasStatus(err.message)));
+    return b;
+  };
+  for (const k of p.skills || []) {
+    const li = document.createElement('li');
+    li.dataset.skill = k.name;
+    li.append(k.name + ' v' + k.version + (k.shared ? '' : ' (personal)'));
+    // A personal skill's update is its owner's to take: only they see it in their library.
+    if (k.update_version && skillLib.skills.some((x) => x.id === k.skill_id)) {
+      li.append(button('Update to v' + k.update_version, 'Update skill ' + k.name + ' of ' + p.name + ' to version ' + k.update_version,
+        () => turnSkillOn(p, k.skill_id)));
+    }
+    li.append(button('Turn off', 'Turn off skill ' + k.name + ' for ' + p.name, async () => {
+      const done = await sendJSON('DELETE', api + '/personas/' + p.id + '/skills/' + k.skill_id);
+      if (done) personasStatus(done.held ? p.name + ': the change waits for the host\'s approval.' : k.name + ' is off for ' + p.name + '.');
+    }));
+    list.append(li);
+  }
+  if (!list.children.length) list.append(Object.assign(document.createElement('li'), { textContent: 'None on.' }));
+  box.append(legend, list);
+  if (skillLib.no_profile) {
+    box.append(Object.assign(document.createElement('p'), { className: 'hint', textContent: 'Turning skills on needs a profile.' }));
+    return box;
+  }
+  const offered = skillLib.skills.filter((x) => !(p.skills || []).some((k) => k.skill_id === x.id));
+  if (!offered.length) {
+    box.append(Object.assign(document.createElement('p'), { className: 'hint', textContent: 'Upload skills from your profile page.' }));
+    return box;
+  }
+  const add = document.createElement('div');
+  add.className = 'skill-add';
+  const sel = document.createElement('select');
+  sel.setAttribute('aria-label', 'Skill to turn on for ' + p.name);
+  sel.append(...offered.map((x) => option(x.id, x.name + ' v' + x.version + (x.shared ? '' : ' (personal)'))));
+  // Picking a skill is not an edit of the persona's fields: the form keeps refreshing.
+  sel.addEventListener('input', (e) => e.stopPropagation());
+  add.append(sel, button('Turn on', 'Turn on the chosen skill for ' + p.name, () => turnSkillOn(p, Number(sel.value))));
+  box.append(add);
+  return box;
+}
+
+// skillsDisclaimer resolves true once the person accepts the disclaimer.
+function skillsDisclaimer() {
+  const d = $('skills-disclaimer');
+  d.returnValue = '';
+  d.showModal();
+  return new Promise((resolve) => d.addEventListener('close', () => resolve(d.returnValue === 'accept'), { once: true }));
+}
+
+async function turnSkillOn(p, id) {
+  const accept = skillLib.disclaimer && await skillsDisclaimer();
+  if (skillLib.disclaimer && !accept) return;
+  try {
+    const done = await sendJSON('PUT', api + '/personas/' + p.id + '/skills/' + id, { accept_disclaimer: accept });
+    if (done) {
+      const k = (done.skills || []).find((x) => x.skill_id === id);
+      personasStatus(done.held ? p.name + ': the change waits for the host\'s approval.' : (k ? k.name + ' v' + k.version + ' is on for ' + p.name + '.' : ''));
+    }
+  } finally {
+    // A refusal may mean the library or the disclaimer state moved on: read them again.
+    await loadSkills();
+  }
+}
+
+async function loadSkills() {
+  const [lib, st] = await Promise.all([fetch(api + '/skills'), fetch(api + '/agent')]);
+  if (!lib.ok) return;
+  skillLib = await lib.json();
+  [...$('persona-list').children].forEach((f) => { if (!f.dataset.dirty) delete f.dataset.seen; });
+  // An upload to the library does not wake the room: read the update offers afresh.
+  if (st.ok) {
+    agent = await st.json();
+    renderAgent();
+  } else {
+    renderPersonas();
+  }
 }
 
 // formFields reads the inputs' own values: FormData would turn the text's line breaks into CRLF.
@@ -1078,6 +1172,7 @@ $('personas-open').addEventListener('click', () => {
   $('personas').showModal();
   renderPersonas();
   loadTemplates().catch(console.error);
+  loadSkills().catch(console.error);
 });
 $('personas-close').addEventListener('click', () => $('personas').close());
 $('persona-add').addEventListener('submit', (e) => {

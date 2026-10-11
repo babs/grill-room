@@ -286,8 +286,10 @@ type RoomPersona struct {
 	// approves it (002-AC21).
 	Pending bool `json:"pending,omitempty"`
 	// Cap is the host's last decision on this persona asking above the cap (002-AC20).
-	Cap       CapDecision `json:"-"`
-	CreatedAt time.Time   `json:"created_at"`
+	Cap CapDecision `json:"-"`
+	// Skills are its active skills, by name, each pinned at a version (002-AC31).
+	Skills    []PersonaSkill `json:"skills"`
+	CreatedAt time.Time      `json:"created_at"`
 }
 
 const personaCols = `SELECT p.id, p.room_id, COALESCE(p.template_id, 0), p.template_version,
@@ -329,16 +331,33 @@ func (s *Store) RoomPersonas(ctx context.Context, roomID string) ([]RoomPersona,
 		}
 		out = append(out, *p)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("room personas: %w", err)
+	}
+	_ = rows.Close()
+	return out, loadSkills(ctx, s.db, roomID, out)
 }
 
 // RoomPersona returns persona id of room.
 func (s *Store) RoomPersona(ctx context.Context, roomID string, id int64) (*RoomPersona, error) {
-	return scanPersona(s.db.QueryRowContext(ctx, personaCols+`WHERE p.id = ? AND p.room_id = ?`, id, roomID))
+	return withSkills(ctx, s.db, s.db.QueryRowContext(ctx, personaCols+`WHERE p.id = ? AND p.room_id = ?`, id, roomID), roomID)
 }
 
 func roomPersona(ctx context.Context, tx *sql.Tx, roomID string, id int64) (*RoomPersona, error) {
-	return scanPersona(tx.QueryRowContext(ctx, personaCols+`WHERE p.id = ? AND p.room_id = ?`, id, roomID))
+	return withSkills(ctx, tx, tx.QueryRowContext(ctx, personaCols+`WHERE p.id = ? AND p.room_id = ?`, id, roomID), roomID)
+}
+
+// withSkills scans one persona with its active skills.
+func withSkills(ctx context.Context, db rowsQuerier, row *sql.Row, roomID string) (*RoomPersona, error) {
+	p, err := scanPersona(row)
+	if err != nil {
+		return nil, err
+	}
+	ps := []RoomPersona{*p}
+	if err := loadSkills(ctx, db, roomID, ps); err != nil {
+		return nil, err
+	}
+	return &ps[0], nil
 }
 
 // freeName is name, or name-2, name-3… when the room already uses it.
@@ -458,6 +477,8 @@ type PersonaPatch struct {
 	SelfCall *bool
 	// TemplateVersion is set by a held template update.
 	TemplateVersion *int
+	// Skills turns skills on at a version, or off, by skill id.
+	Skills map[int64]SkillPin `json:",omitempty"`
 }
 
 func orDefault(s string) string {
@@ -499,7 +520,7 @@ func (c PersonaPatch) apply(p *RoomPersona) []string {
 		out = append(out, fmt.Sprintf("template v%d → v%d", p.TemplateVersion, *c.TemplateVersion))
 		p.TemplateVersion = *c.TemplateVersion
 	}
-	return out
+	return append(out, applySkills(p, c.Skills)...)
 }
 
 func everyN(n int) string {
@@ -532,7 +553,7 @@ func updatePersona(ctx context.Context, tx *sql.Tx, p *RoomPersona) error {
 	if err != nil {
 		return fmt.Errorf("update persona %d: %w", p.ID, err)
 	}
-	return nil
+	return saveSkills(ctx, tx, p)
 }
 
 // EditPersona applies c to persona id of room and records what changed in the chat. A running turn

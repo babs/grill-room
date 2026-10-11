@@ -29,6 +29,9 @@ const (
 	RepliesFile = "replies.json"
 	// NewAnnotationsFile is where the agent opens annotations of its own.
 	NewAnnotationsFile = "annotations-new.json"
+	// PluginName names the plugin that carries a persona's active skills: claude -p shows them as
+	// "grill-room:<skill>".
+	PluginName = "grill-room"
 )
 
 // Limits on what a result may carry.
@@ -70,6 +73,15 @@ type Job struct {
 	SessionSize    int64  `json:"session_size"`
 	SessionSHA256  string `json:"session_sha256,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds"`
+	// Skills are the persona's active skills at the versions the room pinned (002-AC31). When set,
+	// the daemon fetches them as a plugin directory and runs claude with --plugin-dir.
+	Skills []Skill `json:"skills,omitempty"`
+}
+
+// Skill names a skill a turn loads, at its pinned version.
+type Skill struct {
+	Name    string `json:"name"`
+	Version int    `json:"version"`
 }
 
 // Change is one workspace file the turn created, modified or deleted. Content is sent only for the

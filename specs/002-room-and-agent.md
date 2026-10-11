@@ -156,7 +156,7 @@ The sandbox gets Python, uv, Office libraries and common CLI tools. It reaches t
 ### Phase 6 — Skills
 - Work: shared library (zip upload, versions, removal), personal skills in profiles, per-persona activation, pinning, plugin dir injection, disclaimer.
 - **Covers**: AC29, AC30, AC31, AC32
-- **Data model impact**: `skills`, `skill_versions` (blobs), `room_persona_skills`, `profiles.skills_disclaimer_at`
+- **Data model impact**: `skills`, `skill_versions` (blobs), `room_persona_skills`, `profiles.skills_disclaimer_at`; `turns.skills` (the versions a turn loads, pinned when it starts)
 - **DoD**: a skill with a script runs in the sandbox during a live haiku turn and its output lands in a doc; pinning holds across a library update.
 
 ### Phase 7 — Sandbox image and egress
@@ -191,7 +191,7 @@ New columns:
 - `turns.persona_id`, `turns.effort`
 - `rooms.chain_budget`, `rooms.chain_count`, `rooms.chain_suspended`
 - `turn_queue.source`
-- `profiles.skills_disclaimer_at`
+- `profiles.skills_disclaimer_at`, `turns.skills`
 
 Changed: `agent_sessions` is keyed by room persona, and `turn_queue.participant_id` is empty for a turn an agent queued. Existing rooms migrate to one "Default" persona that keeps their current session. Every new room-owned table cascades from `rooms`; profile-owned tables cascade from `profiles`.
 

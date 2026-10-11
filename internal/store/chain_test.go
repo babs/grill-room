@@ -215,7 +215,8 @@ func TestMigrationToChains(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if err := migrateTo(ctx, db, len(migrations)-1); err != nil {
+	// Version 10 is the schema right before the chain migration.
+	if err := migrateTo(ctx, db, 10); err != nil {
 		t.Fatal(err)
 	}
 	alice, grill := personaRoomOld(t, db)

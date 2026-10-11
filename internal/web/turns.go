@@ -387,6 +387,14 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request, d *store.Daemon,
 		s.serverError(w, "get_job_failed", err)
 		return
 	}
+	ks, err := s.bus.Store.TurnSkills(r.Context(), d.RoomID, t.ID, false)
+	if err != nil {
+		s.serverError(w, "get_job_failed", err)
+		return
+	}
+	for _, k := range ks {
+		job.Skills = append(job.Skills, turn.Skill{Name: k.Name, Version: k.Version})
+	}
 	if t.Resume != "" {
 		data, err := s.bus.Store.AgentSession(r.Context(), d.RoomID, t.PersonaID, t.Resume)
 		if err != nil {

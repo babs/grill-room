@@ -1,0 +1,126 @@
+import { test, expect } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { join } from 'node:path';
+import { roomWith, startDaemon, pairDaemon, ask } from './helpers.js';
+import { adminToken } from './playwright.config.js';
+
+const admin = { Authorization: `Bearer ${adminToken}` };
+
+// skillZip writes a zip of a skill folder whose script prints out; without frontmatter it is one
+// the room must refuse.
+function skillZip(name, out, frontmatter = true) {
+  const zip = join(mkdtempSync(join('test-results', 'skill-')), name + '.zip');
+  const md = frontmatter ? `---\nname: ${name}\ndescription: Prints ${out}.\n---\nRun scripts/stamp.sh.\n` : '# No frontmatter\n';
+  execFileSync('python3', ['-I', '-c', `import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    z.writestr(sys.argv[2] + "/SKILL.md", sys.argv[3])
+    z.writestr(sys.argv[2] + "/scripts/stamp.sh", "echo " + sys.argv[4] + "\\n")`, zip, name, md, out]);
+  return zip;
+}
+
+async function uploadSkill(page, zip, scope, status) {
+  await page.locator('#skill-file').setInputFiles(zip);
+  await page.locator('#skill-scope').selectOption(scope);
+  await page.getByRole('button', { name: 'Upload', exact: true }).click();
+  await expect(page.locator('#skill-status')).toHaveText(status);
+}
+
+async function openPanel(page) {
+  await page.getByRole('button', { name: 'Personas' }).click();
+  return page.locator('#personas .persona-form', { hasText: 'Grill' }).first();
+}
+
+// 002-AC29 002-AC30 002-AC31 002-AC32: Alice uploads a personal skill from her profile page (a
+// zip without frontmatter is refused, and says why) and Bob shares one; in the personas panel
+// Alice sees the shared skill and her own, not Bob's personal one. Her first activation shows the
+// disclaimer, her next ones do not, in this room or another. A turn (real daemon and sandbox,
+// fake claude) runs both skills' scripts; a newer upload is offered, the next turn still runs the
+// pinned version, and the update applies once taken. The panel and the profile page fit a phone.
+test('skills: upload, disclaimer once, pinned through an update', async ({ browser, request, baseURL }) => {
+  test.setTimeout(180_000);
+  const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  const aliceProfile = await alice.context().newPage();
+  await aliceProfile.goto('/profile');
+  await uploadSkill(aliceProfile, skillZip('broken', 'X', false), 'personal', /SKILL.md must start with a --- frontmatter block/);
+  await uploadSkill(aliceProfile, skillZip('stamp', 'STAMP-v1'), 'personal', 'Uploaded stamp v1.');
+  await expect(aliceProfile.locator('#skill-list li')).toHaveText(['stamp v1 · personal · Prints STAMP-v1. Remove']);
+  const bobProfile = await bob.context().newPage();
+  await bobProfile.goto('/profile');
+  await uploadSkill(bobProfile, skillZip('pdf', 'PDF-v1'), 'shared', 'Uploaded pdf v1.');
+  await uploadSkill(bobProfile, skillZip('bobs', 'BOB'), 'personal', 'Uploaded bobs v1.');
+
+  const grill = await openPanel(alice);
+  const pick = grill.getByLabel('Skill to turn on for Grill');
+  await expect(pick.locator('option')).toHaveText(['pdf v1', 'stamp v1 (personal)']);
+  await pick.selectOption({ label: 'stamp v1 (personal)' });
+  await grill.getByRole('button', { name: 'Turn on the chosen skill for Grill' }).click();
+  const disclaimer = alice.locator('#skills-disclaimer');
+  await expect(disclaimer).toBeVisible();
+  await expect(disclaimer).toContainText('scripts run in the host\'s sandbox');
+  await expect(disclaimer).toContainText('ask the agent to print a skill\'s files');
+  await expect(disclaimer).toContainText('allowed domain that accepts writes');
+  await disclaimer.getByRole('button', { name: 'Cancel' }).click();
+  await expect(disclaimer).toBeHidden();
+  await expect(grill.locator('.persona-skills li')).toHaveText(['None on.']);
+  await grill.getByRole('button', { name: 'Turn on the chosen skill for Grill' }).click();
+  await disclaimer.getByRole('button', { name: 'I understand, turn it on' }).click();
+  await expect(alice.locator('#personas-status')).toHaveText('stamp v1 is on for Grill.');
+  await expect(bob.locator('#messages')).toContainText('Alice changed 🔥 Grill: skill stamp v1 on.');
+  // Once per profile: the next activation goes straight through.
+  await grill.getByRole('button', { name: 'Turn on the chosen skill for Grill' }).click();
+  await expect(alice.locator('#personas-status')).toHaveText('pdf v1 is on for Grill.');
+  await expect(disclaimer).toBeHidden();
+  await expect(grill.locator('.persona-skills li[data-skill]')).toHaveText([/^pdf v1/, /^stamp v1 \(personal\)/]);
+
+  // Phone width: the panel's skill controls stay on screen and the dialog scrolls.
+  await alice.setViewportSize({ width: 390, height: 844 });
+  const off = grill.getByRole('button', { name: 'Turn off skill pdf for Grill' });
+  await off.scrollIntoViewIfNeeded();
+  await expect(off).toBeInViewport();
+  expect(await alice.locator('#personas').evaluate((d) => d.scrollWidth <= d.clientWidth)).toBe(true);
+  await alice.setViewportSize({ width: 1280, height: 720 });
+  await alice.getByRole('button', { name: 'Close' }).click();
+
+  const daemon = startDaemon(`${baseURL}/r/${room.id}`);
+  try {
+    await pairDaemon(alice, daemon);
+    expect((await ask(alice, room.id, 'FAKE_SKILLS first')).trim()).toBe('Skills used: pdf: PDF-v1; stamp: STAMP-v1.');
+    await uploadSkill(aliceProfile, skillZip('stamp', 'STAMP-v2'), 'personal', 'Uploaded stamp v2.');
+    const panel = await openPanel(alice);
+    const update = panel.getByRole('button', { name: 'Update skill stamp of Grill to version 2' });
+    await expect(update).toBeVisible();
+    await alice.getByRole('button', { name: 'Close' }).click();
+    // Bob sees the offer of Alice's personal skill nowhere: it is hers to take.
+    const bobPanel = await openPanel(bob);
+    await expect(bobPanel.locator('.persona-skills li[data-skill="stamp"]')).toHaveText(/^stamp v1 \(personal\)Turn off$/);
+    await bob.getByRole('button', { name: 'Close' }).click();
+    expect((await ask(alice, room.id, 'FAKE_SKILLS pinned')).trim()).toBe('Skills used: pdf: PDF-v1; stamp: STAMP-v1.');
+    await openPanel(alice);
+    await update.click();
+    await expect(alice.locator('#personas-status')).toHaveText('stamp v2 is on for Grill.');
+    await alice.getByRole('button', { name: 'Close' }).click();
+    expect((await ask(alice, room.id, 'FAKE_SKILLS updated')).trim()).toBe('Skills used: pdf: PDF-v1; stamp: STAMP-v2.');
+  } finally {
+    daemon.cleanup();
+  }
+
+  // Another room, same profile: no disclaimer again.
+  const other = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Second room' } })).json();
+  const inv = await (await request.post(`/api/rooms/${other.id}/invites`, { headers: admin })).json();
+  await alice.goto(new URL(inv.url).pathname + new URL(inv.url).hash);
+  await alice.getByLabel('Your name').fill('Alice');
+  await alice.getByRole('button', { name: 'Join the room' }).click();
+  const second = await openPanel(alice);
+  await second.getByLabel('Skill to turn on for Grill').selectOption({ label: 'pdf v1' });
+  await second.getByRole('button', { name: 'Turn on the chosen skill for Grill' }).click();
+  await expect(alice.locator('#personas-status')).toHaveText('pdf v1 is on for Grill.');
+  await expect(disclaimer).toBeHidden();
+
+  // The profile page fits a phone too.
+  await aliceProfile.setViewportSize({ width: 390, height: 844 });
+  await aliceProfile.reload();
+  await expect(aliceProfile.locator('#skill-list li')).toHaveText([/^stamp v2 · personal/]);
+  await expect(aliceProfile.getByRole('button', { name: 'Upload', exact: true })).toBeVisible();
+  expect(await aliceProfile.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});

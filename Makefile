@@ -69,8 +69,9 @@ e2e: build sandbox-fake-image
 e2e-voice:
 	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c voice/playwright.config.js
 
-# Agent turns with two real daemons against the compose stack: run `make dev-up sandbox-image` first.
-# Spends four to eight real Claude requests (haiku) with this machine's Claude Code login.
+# Agent turns with real daemons against the compose stack: run `make dev-up sandbox-image` first.
+# Spends four to eight real Claude requests (haiku) with this machine's Claude Code login, plus at
+# most four for the skill turn (skills-live.spec.js, three when last run).
 e2e-agent-live: build
 	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c agent-live/playwright.config.js
 

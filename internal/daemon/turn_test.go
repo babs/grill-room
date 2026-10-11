@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"archive/tar"
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/babs/grill-room/internal/creds"
 	"github.com/babs/grill-room/internal/sandbox"
+	"github.com/babs/grill-room/internal/skill"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/turn"
 	"github.com/babs/grill-room/internal/web"
@@ -525,5 +528,69 @@ func TestDaemonHostCap(t *testing.T) {
 	}
 	if s := d.Status().Settings; s.MaxModel != "sonnet" || s.MaxEffort != "high" {
 		t.Fatalf("the approval changed the daemon's cap: %+v", s)
+	}
+}
+
+// publishSkill stores, as the profile of participant tok, a skill whose script prints out, and
+// turns it on for the room's Grill: the disclaimer accepted, its latest version pinned.
+func (rs *roomServer) publishSkill(t *testing.T, tok, name, out string, activate bool) *store.Skill {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for path, body := range map[string]string{
+		"SKILL.md":         "---\nname: " + name + "\ndescription: Prints a stamp.\n---\nRun `sh scripts/stamp.sh` from this folder.\n",
+		"scripts/stamp.sh": "echo " + out + "\n",
+	} {
+		w, _ := zw.Create(path)
+		_, _ = io.WriteString(w, body)
+	}
+	_ = zw.Close()
+	sk, err := skill.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := rs.st.ParticipantByToken(t.Context(), web.HashToken(tok))
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := rs.st.PublishSkill(t.Context(), p.ProfileID, false, sk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if activate {
+		rs.call(t, "PUT", fmt.Sprintf("/api/rooms/%s/personas/%d/skills/%d", rs.room, rs.grill(t).ID, k.ID), tok,
+			map[string]bool{"accept_disclaimer": true}, http.StatusOK, nil)
+	}
+	return k
+}
+
+// 002-AC31: the daemon hands the sandbox the persona's skills as the plugin directory the room
+// built for the turn, and nothing for a persona without skills.
+func TestDaemonLoadsPersonaSkills(t *testing.T) {
+	rs := newRoomServer(t)
+	ag := &fakeAgent{}
+	ag.run = func(_ context.Context, in sandbox.TurnInput, _ map[string]string) (*sandbox.TurnOutput, error) {
+		names := "none"
+		if in.Plugin != nil {
+			var got []string
+			tr := tar.NewReader(in.Plugin)
+			for h, err := tr.Next(); err == nil; h, err = tr.Next() {
+				if h.Typeflag == tar.TypeReg {
+					b, _ := io.ReadAll(tr)
+					got = append(got, h.Name+"="+strings.TrimSpace(string(b)))
+				}
+			}
+			names = strings.Join(got[1:], ",")
+		}
+		return &sandbox.TurnOutput{Result: &sandbox.Result{Result: names, SessionID: sid}, SessionOffset: in.SessionSize, Session: []byte("{}\n")}, nil
+	}
+	alice, _ := pairedHost(t, rs, "Alice", ag)
+	if v := rs.turn(t, alice, "go", false); v.Turn.Status != "done" || rs.lastMessage(t) != "none" {
+		t.Fatalf("no skill: %+v %q", v.Turn, rs.lastMessage(t))
+	}
+	rs.publishSkill(t, alice, "stamp", "STAMP-v1", true)
+	if v := rs.turn(t, alice, "go", false); v.Turn.Status != "done" ||
+		rs.lastMessage(t) != "skills/stamp/SKILL.md=---\nname: stamp\ndescription: Prints a stamp.\n---\nRun `sh scripts/stamp.sh` from this folder.,skills/stamp/scripts/stamp.sh=echo STAMP-v1" {
+		t.Fatalf("with a skill: %+v %q", v.Turn, rs.lastMessage(t))
 	}
 }

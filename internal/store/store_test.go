@@ -126,9 +126,10 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	}
 }
 
-// serverWide are the tables the server itself owns: settings, and the persona template library,
-// whose presets belong to no profile while published templates cascade from theirs.
-var serverWide = []string{"settings", "persona_templates", "persona_template_versions"}
+// serverWide are the tables the server itself owns: settings, the persona template library, whose
+// presets belong to no profile while published templates cascade from theirs, and the skill
+// library, whose shared skills outlive their publisher while personal ones cascade from theirs.
+var serverWide = []string{"settings", "persona_templates", "persona_template_versions", "skills", "skill_versions"}
 
 // uncascadedTables returns the tables that neither a DELETE on rooms nor one on profiles would
 // purge: those without a chain of NOT NULL, ON DELETE CASCADE foreign keys leading to an owner.
@@ -343,9 +344,14 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 		if _, err := s.EnqueueLink(ctx, &QueuedTurn{RoomID: room, PersonaID: sec.ID}, LinkCall); err != nil {
 			t.Fatal(err)
 		}
+		// 002-AC31: a persona's active skills go with the room; the skills stay in the library.
+		k := publish(t, s, p.ProfileID, true, "shared-"+room, "v1")
+		if _, _, _, err := s.SetPersonaSkill(ctx, room, sec.ID, k.ID, true, true, p); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// These reach rooms through another table, so roomRows cannot see them.
-	indirect := []string{"revisions", "annotation_messages", "attachments", "message_versions"}
+	indirect := []string{"revisions", "annotation_messages", "attachments", "message_versions", "room_persona_skills"}
 	count := func(table string) int {
 		var n int
 		if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM "`+table+`"`).Scan(&n); err != nil {

@@ -30,8 +30,59 @@ function render({ email_enabled: emailEnabled, profile }) {
 async function load() {
   const res = await fetch('/api/profile');
   if (!res.ok) throw new Error('profile: HTTP ' + res.status);
-  render(await res.json());
+  const data = await res.json();
+  render(data);
+  if (data.profile) await loadSkills();
 }
+
+// Skills: the profile's personal skills and the shared ones it published (002-AC29, 002-AC30).
+async function loadSkills() {
+  const res = await fetch('/api/profile/skills');
+  if (!res.ok) return;
+  const skills = await res.json();
+  $('skill-list').replaceChildren(...skills.map((k) => {
+    const li = document.createElement('li');
+    li.dataset.skill = k.name;
+    const name = document.createElement('strong');
+    name.textContent = k.name;
+    li.append(name, ' v' + k.version + ' · ' + (k.shared ? 'shared' : 'personal') + ' · ' + k.description);
+    if (!k.shared) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'small';
+      b.textContent = 'Remove';
+      b.setAttribute('aria-label', 'Remove skill ' + k.name);
+      b.addEventListener('click', async () => {
+        if (!window.confirm('Remove ' + k.name + '? Personas that have it on lose it.')) return;
+        const r = await fetch('/api/profile/skills/' + k.id, { method: 'DELETE' });
+        $('skill-status').textContent = r.ok ? k.name + ' removed.' : ((await r.json().catch(() => ({}))).error || 'HTTP ' + r.status);
+        await loadSkills();
+      });
+      li.append(' ', b);
+    }
+    return li;
+  }));
+  if (!skills.length) $('skill-list').textContent = 'None yet.';
+}
+
+$('skill-upload').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const file = $('skill-file').files[0];
+  if (!file) return;
+  const button = $('skill-upload').querySelector('button');
+  button.disabled = true;
+  try {
+    const res = await fetch('/api/profile/skills?scope=' + $('skill-scope').value,
+      { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: file });
+    const data = await res.json().catch(() => ({}));
+    $('skill-status').textContent = res.ok ? 'Uploaded ' + data.name + ' v' + data.version + '.' : data.error || 'HTTP ' + res.status;
+    if (res.ok) $('skill-upload').reset();
+    await loadSkills();
+  } catch {
+    $('skill-status').textContent = 'Network error, try again.';
+  }
+  button.disabled = false;
+});
 
 // confirm resolves true once the person agrees to sign this browser in with a link: a link sent by
 // someone else would otherwise silently put this browser, and every room it joins next, in their

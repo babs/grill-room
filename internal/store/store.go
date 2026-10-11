@@ -402,6 +402,42 @@ DROP TABLE turn_queue;
 ALTER TABLE turn_queue_v2 RENAME TO turn_queue;
 CREATE INDEX turn_queue_room ON turn_queue(room_id, id);
 CREATE INDEX turn_queue_participant ON turn_queue(participant_id);
+`, `
+CREATE TABLE skills (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	name TEXT NOT NULL,
+	profile_id INTEGER REFERENCES profiles(id) ON DELETE CASCADE,
+	publisher_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL,
+	created_at TEXT NOT NULL,
+	CHECK (profile_id IS NULL OR publisher_id IS NULL)
+);
+CREATE UNIQUE INDEX skills_shared_name ON skills(name) WHERE profile_id IS NULL;
+CREATE UNIQUE INDEX skills_personal_name ON skills(profile_id, name) WHERE profile_id IS NOT NULL;
+CREATE INDEX skills_publisher ON skills(publisher_id);
+CREATE TABLE skill_versions (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	skill_id INTEGER NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+	n INTEGER NOT NULL,
+	author TEXT NOT NULL,
+	author_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL,
+	description TEXT NOT NULL,
+	files INTEGER NOT NULL,
+	size INTEGER NOT NULL,
+	sha256 TEXT NOT NULL,
+	data BLOB NOT NULL,
+	created_at TEXT NOT NULL,
+	UNIQUE (skill_id, n)
+);
+CREATE INDEX skill_versions_author ON skill_versions(author_id);
+CREATE TABLE room_persona_skills (
+	persona_id INTEGER NOT NULL REFERENCES room_personas(id) ON DELETE CASCADE,
+	skill_id INTEGER NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+	version INTEGER NOT NULL CHECK (version > 0),
+	PRIMARY KEY (persona_id, skill_id)
+);
+CREATE INDEX room_persona_skills_skill ON room_persona_skills(skill_id);
+ALTER TABLE profiles ADD COLUMN skills_disclaimer_at TEXT;
+ALTER TABLE turns ADD COLUMN skills TEXT NOT NULL DEFAULT '[]';
 `}
 
 // migrationData runs Go code inside the transaction of the migration to version key, after its SQL.

@@ -101,6 +101,20 @@ func TestFakeClaude(t *testing.T) {
 	if o, code := call(t, cwd, home, "FAKE_WHOAMI"); code != 1 || !o.IsError {
 		t.Fatalf("whoami without a system prompt %+v", o)
 	}
+	// 002-AC31: the skills of --plugin-dir run from their own folder; without it, none.
+	plugin := filepath.Join(home, "plugin")
+	_ = os.MkdirAll(filepath.Join(plugin, "skills", "stamp", "scripts"), 0o755)
+	_ = os.WriteFile(filepath.Join(plugin, "skills", "stamp", "SKILL.md"), []byte("---\nname: stamp\n---\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(plugin, "skills", "stamp", "scripts", "stamp.sh"), []byte("cat SKILL.md >/dev/null && echo STAMP-v1\n"), 0o600)
+	if o, _ := call(t, cwd, home, "FAKE_SKILLS", "--plugin-dir", plugin); o.Result != "Skills used: stamp: STAMP-v1." {
+		t.Fatalf("skills %+v", o)
+	}
+	if b, _ := os.ReadFile(filepath.Join(cwd, "docs", "skills.md")); string(b) != "# Skills\n\n- stamp: STAMP-v1\n" {
+		t.Fatalf("skills.md %q", b)
+	}
+	if o, _ := call(t, cwd, home, "FAKE_SKILLS"); o.Result != "No skills." {
+		t.Fatalf("no skills %+v", o)
+	}
 	// 002-AC24: the ping-pong of an agent chain, each persona calling the other.
 	for prompt, want := range map[string]string{
 		"## Who is here\nYou: @Grill\n\nYou are Grill, an agent.\n- FAKE_PINGPONG grill Secretary": "FAKE_PINGPONG grill Secretary: over to @Secretary.",
