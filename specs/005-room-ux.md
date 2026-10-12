@@ -48,10 +48,10 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 - [ ] **AC1** A participant can change their own display name from the room page, with the same validation as at join. A system line says "<old> is now <new>". Past messages show the new name with the old one on hover. An option also applies it to their profile. The presence preamble keeps the same short uuid across the rename.
 
 ### Mentions and turns
-- [ ] **AC2** Typing `@` in the message box suggests the room's personas first, then participants, filtered as you type. It works with keyboard and touch.
+- [x] **AC2** Typing `@` in the message box suggests the room's personas first, then participants, filtered as you type. It works with keyboard and touch.
 - [ ] **AC3** A message mentioning a persona that cannot run gets a notice visible only to its author, with the reason: no right to trigger agents, no host online, chain paused, or unknown persona.
-- [ ] **AC4** A message whose mention queued a turn shows "→ @Persona" with that turn's live state (queued, running, done, failed, stopped), linked to the synthesis.
-- [ ] **AC5** Whoever started a turn, the host or a room admin can stop it while it runs. The daemon kills `claude` in the sandbox. The turn ends as "stopped" with nothing applied: no revision, no synthesis, no replies. The persona's next turn resumes from the server's session copy, and a stopped turn is not a chain link.
+- [x] **AC4** A message whose mention queued a turn shows "→ @Persona" with that turn's live state (queued, running, done, failed, stopped), linked to the synthesis.
+- [x] **AC5** Whoever started a turn, the host or a room admin can stop it while it runs. The daemon kills `claude` in the sandbox. The turn ends as "stopped" with nothing applied: no revision, no synthesis, no replies. The persona's next turn resumes from the server's session copy, and a stopped turn is not a chain link.
 
 ### Presence and audio
 - [x] **AC6** The server keeps each participant's presence from their open streams and a heartbeat, with a grace period of about 20 s, so reloads, background tabs and several tabs do not flap. It sends `presence` events (here, gone, audio on or off, mic on or off) and replays the full state when a stream opens. Tests cover a flapping connection, a backgrounded phone, and two tabs with one closed.
