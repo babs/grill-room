@@ -268,7 +268,7 @@ k8s-render:
 	rm -rf '$(K8S_OUT)' && (umask 077 && mkdir -p '$(K8S_OUT)')
 	@for f in deploy/k8s/*.yaml; do \
 	  (umask 077 && ROOM_HOST=grill-room.$$K8S_DOMAIN LIVEKIT_HOST=grill-room-livekit.$$K8S_DOMAIN TURN_HOST=grill-room-turn.$$K8S_DOMAIN \
-	    envsubst '$${K8S_STORAGE_CLASS} $${GRILL_ROOM_IMAGE} $${GRILL_STT_IMAGE} $${GRILL_ROOM_SANDBOX_IMAGE} $${GRILL_ROOM_SMTP_ADDR} $${GRILL_ROOM_SMTP_FROM} $${K8S_SMTP_NAMESPACE} $${K8S_SMTP_PORT} $${ROOM_HOST} $${LIVEKIT_HOST} $${TURN_HOST} $${GRILL_ROOM_ADMIN_TOKEN} $${STT_TOKEN} $${LIVEKIT_API_KEY} $${LIVEKIT_API_SECRET}' \
+	    envsubst '$${K8S_STORAGE_CLASS} $${GRILL_ROOM_IMAGE} $${GRILL_STT_IMAGE} $${GRILL_ROOM_SANDBOX_IMAGE} $${GRILL_ROOM_TRUSTED_PROXIES} $${GRILL_ROOM_SMTP_ADDR} $${GRILL_ROOM_SMTP_FROM} $${K8S_SMTP_NAMESPACE} $${K8S_SMTP_PORT} $${ROOM_HOST} $${LIVEKIT_HOST} $${TURN_HOST} $${GRILL_ROOM_ADMIN_TOKEN} $${STT_TOKEN} $${LIVEKIT_API_KEY} $${LIVEKIT_API_SECRET}' \
 	    < $$f > '$(K8S_OUT)'/$${f##*/}) || exit 1; \
 	done
 	@echo "rendered $(K8S_OUT): https://grill-room.$$K8S_DOMAIN/"
