@@ -240,3 +240,18 @@ test('notification controls, desktop and iPhone', async ({ browser, request }) =
   await expect(phone.locator('#push-hint')).toHaveText(/add.*home screen|Add to Home Screen/i);
   expect(await noOverflow(phone)).toEqual([]);
 });
+
+// 005-AC24: a notification's link, /r/<room>#m<id>, opens the chat scrolled to that line.
+test('a deep link to a line scrolls the chat there', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
+  const bob = await (await request.post('/api/join', { data: { invite: inv.token, name: 'Bob' } })).json();
+  const post = async (body) => (await (await request.post(`/api/rooms/${room.id}/messages`, { headers: { Authorization: 'Bearer ' + bob.token }, data: { body } })).json()).id;
+  const target = await post('the line to find');
+  for (let i = 0; i < 60; i++) await post('filler ' + i);
+  const page = await alice.context().newPage();
+  await page.goto(`/r/${room.id}#m${target}`);
+  await expect(page.locator('#messages li', { hasText: 'filler 59' })).toHaveCount(1);
+  await expect(page.locator(`#messages li[data-id="${target}"]`)).toBeInViewport();
+  await expect(page.locator('#messages li', { hasText: 'filler 59' })).not.toBeInViewport();
+});

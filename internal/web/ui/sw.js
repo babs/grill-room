@@ -17,11 +17,16 @@ self.addEventListener('push', (e) => {
   }));
 });
 
+// A click opens the chat at the line that triggered the push: a tab of the room already open
+// scrolls there, otherwise a new one opens on the deep link.
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const url = new URL((e.notification.data && e.notification.data.url) || '/', self.location.origin).href;
+  const url = new URL((e.notification.data && e.notification.data.url) || '/', self.location.origin);
+  const jump = (url.hash.match(/^#m(\d+)$/) || [])[1];
   e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((tabs) => {
-    const open = tabs.find((t) => t.url === url);
-    return open ? open.focus() : self.clients.openWindow(url);
+    const open = tabs.find((t) => new URL(t.url).pathname === url.pathname);
+    if (!open) return self.clients.openWindow(url.href);
+    if (jump) open.postMessage({ jump });
+    return open.focus();
   }));
 });

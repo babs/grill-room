@@ -120,6 +120,28 @@ window.addEventListener('focus', () => {
 $('count-voice').checked = localStorage.getItem(voiceKey) === '1';
 $('count-voice').addEventListener('change', () => localStorage.setItem(voiceKey, $('count-voice').checked ? '1' : '0'));
 
+// jumpTo is the line a deep link names, /r/<room>#m<id>, as a notification opens it (005-AC24):
+// the chat scrolls there once the stream has delivered it.
+let jumpTo = Number((location.hash.match(/^#m(\d+)$/) || [])[1] || 0);
+
+function jump(id) {
+  const li = messages.querySelector('li[data-id="' + id + '"]');
+  if (!li) {
+    jumpTo = id;
+    return;
+  }
+  jumpTo = 0;
+  pinned = false;
+  li.scrollIntoView({ block: 'center' });
+  li.classList.add('flash');
+  setTimeout(() => li.classList.remove('flash'), 1500);
+}
+
+// A notification clicked while the room is open: its service worker names the line.
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (e) => { if (e.data && e.data.jump) jump(Number(e.data.jump)); });
+}
+
 function addMessage(m) {
   countUnread(m);
   if (m.kind === 'system') {
@@ -129,6 +151,7 @@ function addMessage(m) {
   }
   messages.append(renderMessage(m));
   if (pinned) messages.scrollTop = messages.scrollHeight;
+  if (m.id === jumpTo) jump(m.id);
 }
 
 // An edit or delete replaces the line in place; one not shown yet arrives later as it stands. A

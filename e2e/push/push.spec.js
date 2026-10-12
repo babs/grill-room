@@ -41,7 +41,7 @@ test('a mention arrives as a real push notification', async ({ request, baseURL 
       }
       return [];
     });
-    expect(shown).toEqual([{ title: 'Push check', body: 'You were mentioned', data: { url: `/r/${room.id}`, count: 1 } }]);
+    expect(shown).toEqual([{ title: 'Push check', body: 'You were mentioned', data: { url: `/r/${room.id}#m${(await said.json()).id}`, count: 1 } }]);
   } finally {
     await ctx.close();
     await request.delete(`/api/rooms/${room.id}`, { headers: admin });

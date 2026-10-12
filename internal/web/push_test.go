@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -203,8 +204,9 @@ func TestPushDispatch(t *testing.T) {
 	say(bob.Token, "@Ana_María the secret plan")
 	say(bob.Token, "@ana_maría again")
 	got := waitPushes(t, b, 1)
-	want := pushPayload{Room: "Pricing", Kind: pushMention, Count: 2, URL: "/r/" + room.ID}
-	if got[0] != want || !strings.HasPrefix(b.auths[0], "vapid t=") {
+	last := e.lastLine(t, room.ID)
+	want := pushPayload{Room: "Pricing", Kind: pushMention, Count: 2, URL: fmt.Sprintf("/r/%s#m%d", room.ID, last.ID)}
+	if last.Body != "@ana_maría again" || got[0] != want || !strings.HasPrefix(b.auths[0], "vapid t=") {
 		t.Fatalf("push %+v %q, want %+v", got[0], b.auths[0], want)
 	}
 

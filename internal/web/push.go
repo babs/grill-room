@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -141,10 +142,12 @@ type pushBatch struct {
 	kind  string
 	count int
 	first time.Time
+	// message is the latest line of the batch's kind: the notification opens the chat there.
+	message int64
 }
 
 // pushPayload is all a notification says: it passes through the browser vendor's push service, so
-// no line's text, no name but the room's.
+// no line's text, no name but the room's. URL opens the chat at the line that triggered it.
 type pushPayload struct {
 	Room  string `json:"room"`
 	Kind  string `json:"kind"`
@@ -248,8 +251,8 @@ func (s *Server) pushEvents(ctx context.Context, room string, after int64, pendi
 				pending[sub.ID] = b
 			}
 			b.count++
-			if b.kind == "" || pushRank[kind] > pushRank[b.kind] {
-				b.kind = kind
+			if b.kind == "" || pushRank[kind] >= pushRank[b.kind] {
+				b.kind, b.message = kind, m.ID
 			}
 		}
 	}
@@ -305,7 +308,8 @@ func (s *Server) sendPush(ctx context.Context, b *pushBatch) {
 	if err != nil {
 		return
 	}
-	payload, err := json.Marshal(pushPayload{Room: r.Name, Kind: b.kind, Count: b.count, URL: "/r/" + url.PathEscape(b.room)})
+	link := "/r/" + url.PathEscape(b.room) + "#m" + strconv.FormatInt(b.message, 10)
+	payload, err := json.Marshal(pushPayload{Room: r.Name, Kind: b.kind, Count: b.count, URL: link})
 	if err != nil {
 		return
 	}
