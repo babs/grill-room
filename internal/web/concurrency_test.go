@@ -47,10 +47,11 @@ func TestHostQueuedTurn(t *testing.T) {
 	if got, _ := e.st.Turn(t.Context(), r.room, tn.ID); got.Status != store.TurnRunning || !got.HostQueued {
 		t.Fatalf("the backstop failed a queued turn: %+v", got)
 	}
+	asked := time.Now()
 	if code := e.turnState(t, r, r.alice, tn.ID, false); code != http.StatusNoContent {
 		t.Fatalf("running: %d", code)
 	}
-	if got, _ := e.st.Turn(t.Context(), r.room, tn.ID); got.HostQueued || time.Since(got.StartedAt) > 100*time.Millisecond {
+	if got, _ := e.st.Turn(t.Context(), r.room, tn.ID); got.HostQueued || got.StartedAt.Before(asked) {
 		t.Fatalf("left the queue: %+v", got)
 	}
 	st = e.waitAgent(t, r.room, tok, func(st agentState) bool { return st.Turn.Status == store.TurnFailed })
