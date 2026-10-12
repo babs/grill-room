@@ -35,6 +35,7 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 - Unread count in the tab title, and Web Push notifications when no tab is focused.
 - A per-room STT glossary.
 - Modal dismissal.
+- Renaming documents, and soft-deleting them for room admins.
 
 ## Out of scope
 
@@ -49,8 +50,8 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 
 ### Mentions and turns
 - [x] **AC2** Typing `@` in the message box suggests the room's personas first, then participants, filtered as you type. It works with keyboard and touch.
-- [ ] **AC3** A message mentioning a persona that cannot run gets a notice visible only to its author, with the reason: no right to trigger agents, no host online, chain paused, or unknown persona.
-- [x] **AC4** A message whose mention queued a turn shows "→ @Persona" with that turn's live state (queued, running, done, failed, stopped), linked to the synthesis.
+- [ ] **AC3** A message mentioning a persona that cannot run gets a notice visible only to its author, with the reason: no right to trigger agents, no host online, or unknown persona. A human mention resets the chain (002-AC26), so it never meets a paused chain.
+- [ ] **AC4** A message whose mention queued a turn shows "→ @Persona" with that turn's live state (queued, running, done, failed, stopped), linked to the synthesis. The link between the message and its turn is stored, so every message keeps its chip after a reload, however old, and an export carries it (the export format moves to 2; format 1 still imports).
 - [x] **AC5** Whoever started a turn, the host or a room admin can stop it while it runs. The daemon kills `claude` in the sandbox. The turn ends as "stopped" with nothing applied: no revision, no synthesis, no replies. The persona's next turn resumes from the server's session copy, and a stopped turn is not a chain link.
 
 ### Presence and audio
@@ -79,10 +80,12 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
   - a persona synthesis;
   - a turn they started that ends.
 
-  Other messages are opt-in. The payload carries only the room name, the kind of event and a link, never message text, because it passes through the browser vendor's push service. Repeated events are grouped into one notification per room. Expired subscriptions (410) are dropped, and subscriptions are purged with the participant or the room. On iOS, this works only once the room is added to the home screen; the UI says so.
-- [x] **AC15** Room management (the "Manage" panel) opens as a wide sheet with tabs: General (name, volume), Invites, Admins, Personas, Skills, Export. It is full screen on a phone. Each tab has a deep link (`#manage/invites`, …), and the tabs are keyboard reachable.
+  Other messages are opt-in. The payload carries only the room name, the kind of event and a link, never message text, because it passes through the browser vendor's push service. Repeated events are grouped into one notification per room. Clicking a notification opens the room's chat scrolled to the message that triggered it: the link is a deep link to that message. Expired subscriptions (410) are dropped, and subscriptions are purged with the participant or the room. On iOS, this works only once the room is added to the home screen; the UI says so.
+- [x] **AC15** Room management (the "Manage" panel) opens as a wide sheet with tabs: General (name, volume), Invites, Admins, Personas, Skills, Export. It is full screen on a phone. Every member opens Manage and sees only its Glossary tab (AC23); the other tabs are for room admins. Each tab has a deep link (`#manage/invites`, …), and the tabs are keyboard reachable.
 - [x] **AC16** `/admin` uses the full page width with a tab bar: Rooms, Profiles, Libraries, Instance, Sessions, Audit. A room opens its own detail view with tabs (General, Invites, Admins, Export), following the AC15 layout. Every tab and room has a deep link, and phone width stays usable.
 - [x] **AC17** The daemon's local admin page uses the full width with a tab bar that stays pinned at the top while scrolling: Instances, Rooms, Accounts, Settings, Monitoring, Update. Alerts show as a badge on their tab. Each tab has a deep link (`#accounts`, …).
+- [ ] **AC25** Any member can rename a document from the document manager. The document keeps its id, so its revisions, annotations and deep links survive. Its workspace path changes; the daemon's cache is keyed by sha256, so nothing is transferred again. The new name passes the same validation as an upload, keeps the extension, and no other document of the room may hold it, so paths stay unique. A timestamped chat line says "X renamed `a.md` → `b.md`". The personas' next turn tells them the old and new paths, so a resumed session does not keep the old one. An agent document is not renamed while a turn runs, as its result would recreate the old name.
+- [ ] **AC26** A room admin can delete a document, softly. It leaves the list, the workspace and the agents' view, and a chat line records it. Its data (revisions, annotations, original) stays and counts in the room's volume. A room admin restores it from Manage, unless another document took its name meanwhile. Only deleting the room purges it. An export carries deleted documents, flagged. As for a rename, an agent document is not deleted while a turn runs.
 - [x] **AC13** Every modal (persona panel, the "Manage" room-admin panel, and the others) closes on a click outside it and on Escape, and keeps focus correctly for keyboard users.
 
 ## Phases
@@ -106,20 +109,21 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 - **DoD**: e2e for each mention outcome; a stop test with the fake claude (nothing applied, next turn resumes); one live haiku turn stopped mid-run.
 
 ### Phase 4 — Self-rename, docs window, unread, modals
-- Work: self-rename, the document manager in its own window, the unread title count, modal dismissal.
-- **Covers**: AC1, AC11, AC12, AC13, AC15, AC16, AC17, AC21, AC24
-- **Data model impact**: the name history needed for "old name on hover" (`participant_names` or message author snapshot); `push_subscriptions`; VAPID keys in instance settings
+- Work: self-rename, the document manager in its own window, the unread title count, modal dismissal, document rename and soft delete, the stored mention chips.
+- **Covers**: AC1, AC3 (text), AC4 (stored link), AC11, AC12, AC13, AC15, AC16, AC17, AC21, AC24, AC25, AC26
+- **Data model impact**: the message author snapshot gives the name history; `profiles.name`; `push_subscriptions`; VAPID keys in instance settings; `documents.deleted_at` and a change counter; `document_renames`; `message_turns` keeps the final state of an imported mention; export format 2
 - **DoD**: e2e for each, at phone and desktop width; push encryption (RFC 8291) and VAPID JWT tested against a local test push endpoint; a real notification received on an Android phone from the lab.
 
 ## Data model impact (summary)
 
 - `room_personas` and template model and effort become explicit and NOT NULL.
 - `participants.last_seen_at`.
-- A mention to turn link.
+- A mention to turn link, stored (`message_turns`), with the final state of an imported mention; export format 2.
 - Turn status `stopped`.
-- A name history for renames.
+- A name history for renames: the author snapshot each line keeps; `profiles.name`.
 - `rooms.stt_glossary`.
 - `push_subscriptions` and the VAPID keys.
+- `documents.deleted_at` and a change counter; `document_renames`.
 
 ## Open questions
 
@@ -131,5 +135,9 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 - SSE stays; presence uses SSE plus a heartbeat POST (user agreed after the SSE vs WebSocket comparison).
 - Migrated personas get sonnet / medium.
 - STT stays on faster-whisper `small`; the glossary is passed as `initial_prompt` only (spike S10, user, 2026-10-12).
-- Web Push with VAPID for background notifications (user, 2026-10-12).
+- Web Push with VAPID for background notifications (user, 2026-10-12); a notification opens the chat at the message that triggered it (user, 2026-10-13).
+- Manage opens for every member, who sees only the Glossary tab; the admin tabs stay admin-only (user, 2026-10-13).
+- AC3 drops "chain paused": a human mention resets the chain, so it never meets a paused one (user, 2026-10-13).
+- The mention to turn link is stored, not kept as the latest 200 in memory, and travels in exports (user, 2026-10-13).
+- Documents: any member renames, room admins soft-delete and restore; only the room's deletion purges (user, 2026-10-13).
 - Test campaigns run throttled on the workstation (`nice`, `ionice`, CPU cap, no stress); repetition goes to CI.
