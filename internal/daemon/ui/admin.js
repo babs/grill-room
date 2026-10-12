@@ -608,6 +608,8 @@ function Settings() {
   const id = instances.some((i) => i.id === picked.value) ? picked.value : d.instance || '';
   const inst = instances.find((i) => i.id === id);
   const st = inst?.status;
+  // LimitsForm stays out of the worker's settings: applying limits restarts the worker, and the
+  // form's status line must outlive the restart.
   return html`<${Section} id="settings" title="Settings">
     ${d.concurrency && html`<h3>This supervisor</h3>
       <${NumberForm} id="max-turns" label="Turns at once, across every instance and room" value=${d.concurrency.max_turns}
@@ -625,8 +627,8 @@ function Settings() {
         <${Machine} i=${inst} st=${st} />
         <${Cap} i=${inst} st=${st} />
         <${Egress} i=${inst} st=${st} />
-        <${LimitsForm} i=${inst} />
       </div>` : html`<p class="hint">The worker for ${inst.url} is ${inst.state}${inst.error ? ': ' + inst.error : ''}. Its settings show once it runs.</p>`}
+    ${inst && html`<${LimitsForm} key=${id} i=${inst} />`}
   <//>`;
 }
 
