@@ -121,6 +121,10 @@ type AdminProfile struct {
 	// Skills counts the personal skills it owns and the shared ones it published.
 	Skills       int       `json:"skills"`
 	LastActivity time.Time `json:"last_activity"`
+	// MaxRooms is its own limit on the rooms it creates: nil follows the instance's, UnlimitedRooms
+	// lifts it (004-AC7). RoomsCreated counts those it has.
+	MaxRooms     *int `json:"max_rooms"`
+	RoomsCreated int  `json:"rooms_created"`
 }
 
 // Profiles lists every profile with its email, rooms, skill count and last activity: its last
@@ -129,7 +133,8 @@ func (s *Store) Profiles(ctx context.Context) ([]AdminProfile, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.email, p.created_at, COALESCE(p.uuid, ''),
 		COALESCE((SELECT name FROM participants WHERE profile_id = p.id ORDER BY id DESC LIMIT 1), ''),
 		COALESCE((SELECT joined_at FROM participants WHERE profile_id = p.id ORDER BY id DESC LIMIT 1), ''),
-		(SELECT COUNT(*) FROM skills WHERE profile_id = p.id OR publisher_id = p.id),
+		(SELECT COUNT(*) FROM skills WHERE profile_id = p.id OR publisher_id = p.id), p.max_rooms,
+		(SELECT COUNT(*) FROM rooms WHERE creator_profile_id = p.id),
 		COALESCE((SELECT m.ts FROM messages m WHERE m.id = (SELECT MAX(m2.id) FROM participants pa
 			JOIN messages m2 ON m2.participant_id = pa.id WHERE pa.profile_id = p.id)), '')
 		FROM profiles p ORDER BY p.id`)
@@ -141,11 +146,16 @@ func (s *Store) Profiles(ctx context.Context) ([]AdminProfile, error) {
 		var p AdminProfile
 		var email sql.NullString
 		var created, joined, line string
-		if err := rows.Scan(&p.ID, &email, &created, &p.UUID, &p.Name, &joined, &p.Skills, &line); err != nil {
+		var maxRooms sql.NullInt64
+		if err := rows.Scan(&p.ID, &email, &created, &p.UUID, &p.Name, &joined, &p.Skills, &maxRooms, &p.RoomsCreated, &line); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("scan profile: %w", err)
 		}
 		p.Email, p.CreatedAt, p.LastActivity = email.String, parseTS(created), parseTS(created)
+		if maxRooms.Valid {
+			n := int(maxRooms.Int64)
+			p.MaxRooms = &n
+		}
 		for _, ts := range []string{joined, line} {
 			if t := parseTS(ts); t.After(p.LastActivity) {
 				p.LastActivity = t

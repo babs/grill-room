@@ -44,7 +44,7 @@ async function openManage(page) {
 
 // 004-AC7 004-AC19: a profile creates rooms from its profile page, at phone width, and becomes their
 // room admin; the 11th is refused with its reason, and so is any once the instance admin switches
-// creation to themselves in /admin.
+// creation to themselves in /admin. A profile the instance admin allows 12 creates its 11th.
 test('room creation from the profile page, within the limits', async ({ browser, request }) => {
   const lobby = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Lobby' } })).json();
   const page = await join(browser, request, lobby.id, 'Pia', phone);
@@ -84,6 +84,28 @@ test('room creation from the profile page, within the limits', async ({ browser,
   await expect(page.locator('#room-name')).toHaveText('Pia room 11');
   const log = await (await request.get('/api/admin/audit?action=instance.settings', { headers: admin })).json();
   expect(log.entries[1].details.room_creation).toBe('super-admin');
+
+  // Quinn gets a limit of 12 from the profiles view: his 11th room goes through, where Pia's was
+  // refused at the instance's 10.
+  const quinn = await join(browser, request, lobby.id, 'Quinn', phone);
+  for (let i = 1; i <= 10; i++) {
+    expect((await quinn.request.post('/api/profile/rooms', { data: { name: `Quinn room ${i}`, display_name: 'Quinn' } })).status()).toBe(201);
+  }
+  await adminPage.goto('/admin#profiles');
+  const row = adminPage.locator('#profiles tbody tr', { hasText: 'Quinn' });
+  await expect(row).toContainText("10 created, limit instance's (10)");
+  await row.getByLabel('Rooms Quinn may create').fill('12');
+  await row.getByRole('button', { name: 'Set' }).click();
+  await expect(row).toContainText('10 created, limit 12');
+  await fits(adminPage);
+  await newRoom(quinn, 'Quinn room 11');
+  await page.goto('/profile');
+  await page.getByRole('button', { name: 'New room' }).click();
+  await page.getByLabel('Room name').fill('Pia room 12');
+  await page.getByRole('button', { name: 'Create the room' }).click();
+  await expect(page.locator('#room-create-status')).toHaveText('room creation refused: you have created 10 rooms, the most this instance allows per profile');
+  const set = await (await request.get('/api/admin/audit?action=profile.max_rooms', { headers: admin })).json();
+  expect(set.entries[0]).toMatchObject({ target_kind: 'profile', target_name: 'Quinn', details: { max_rooms: 12, via: 'session' } });
 });
 
 for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', ...phone }]) {

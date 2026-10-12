@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -22,6 +23,7 @@ const (
 	ActionRoomAdminRemove = "room_admin.remove"
 	ActionRoomSkillRemove = "room_skill.remove"
 	ActionSettings        = "instance.settings"
+	ActionProfileMaxRooms = "profile.max_rooms"
 )
 
 // maxStorageQuota bounds the instance storage quota: 1 PiB.
@@ -165,6 +167,38 @@ func (s *Server) createProfileRoom(w http.ResponseWriter, r *http.Request) {
 		s.log.Info("room_created", zap.String("room", room.ID), zap.Int64("profile", p.ID))
 		writeJSON(w, http.StatusCreated, room)
 	}
+}
+
+// setProfileMaxRooms sets a profile's own limit on the rooms it creates: `max_rooms` 1 to 1000,
+// -1 for unlimited, or null for the instance's (004-AC7).
+func (s *Server) setProfileMaxRooms(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		MaxRooms json.RawMessage `json:"max_rooms"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	var n *int
+	if len(req.MaxRooms) == 0 || (string(req.MaxRooms) != "null" && (json.Unmarshal(req.MaxRooms, &n) != nil || n == nil ||
+		(*n != store.UnlimitedRooms && (*n < 1 || *n > 1000)))) {
+		httpError(w, http.StatusBadRequest, "max_rooms must be 1 to 1000, -1 for unlimited, or null for the instance's limit")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err == nil {
+		err = s.bus.Store.SetProfileMaxRooms(s.auditing(r, ActionProfileMaxRooms, store.TargetProfile, strconv.FormatInt(id, 10), "",
+			map[string]any{"max_rooms": n}), id, n)
+	}
+	if errors.Is(err, store.ErrNotFound) || errors.Is(err, strconv.ErrSyntax) || errors.Is(err, strconv.ErrRange) {
+		httpError(w, http.StatusNotFound, "no such profile")
+		return
+	}
+	if err != nil {
+		s.serverError(w, "set_profile_max_rooms_failed", err)
+		return
+	}
+	s.log.Info("profile_max_rooms_set", zap.Int64("profile", id), zap.Any("max_rooms", n))
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) instanceSettings(w http.ResponseWriter, r *http.Request) {

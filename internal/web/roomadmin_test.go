@@ -2,6 +2,7 @@ package web
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -371,5 +372,62 @@ func TestAuditedActionsFailWithTheAuditLog(t *testing.T) {
 		if code, _ := e.do(t, "GET", p, e.admin, nil); code != http.StatusInternalServerError {
 			t.Errorf("%s with no store: %d", p, code)
 		}
+	}
+}
+
+// 004-AC7: the super-admin sets one profile's rooms limit, unlimited, or back to the instance's;
+// each change is audited, and the profiles view shows it.
+func TestProfileMaxRoomsAPI(t *testing.T) {
+	e := newEnv(t)
+	alice := e.device(t)
+	alice.createRoom(t, "One", "Alice")
+	id := strconv.FormatInt(alice.profile(t).Profile.ID, 10)
+	path := "/api/admin/profiles/" + id + "/max_rooms"
+	for _, bad := range []string{`{}`, `{"max_rooms": 0}`, `{"max_rooms": -2}`, `{"max_rooms": 1001}`, `{"max_rooms": "unlimited"}`, `{"max_rooms": 1.5}`} {
+		var body map[string]any
+		_ = json.Unmarshal([]byte(bad), &body)
+		if code, _ := e.do(t, "PUT", path, e.admin, body); code != http.StatusBadRequest {
+			t.Errorf("%s: %d", bad, code)
+		}
+	}
+	if code, _ := alice.do(t, "PUT", path, map[string]any{"max_rooms": 50}); code != http.StatusUnauthorized {
+		t.Fatalf("a profile sets its own limit: %d", code)
+	}
+	if code, _ := e.do(t, "PUT", "/api/admin/profiles/999/max_rooms", e.admin, map[string]any{"max_rooms": 2}); code != http.StatusNotFound {
+		t.Fatalf("unknown profile: %d", code)
+	}
+	limit := func() *int {
+		t.Helper()
+		_, b := e.do(t, "GET", "/api/admin/profiles", e.admin, nil)
+		for _, p := range decodeJSON[[]store.AdminProfile](t, b) {
+			if strconv.FormatInt(p.ID, 10) == id {
+				if p.RoomsCreated != 1 {
+					t.Fatalf("rooms created: %d", p.RoomsCreated)
+				}
+				return p.MaxRooms
+			}
+		}
+		t.Fatal("profile not listed")
+		return nil
+	}
+	for _, c := range []struct {
+		body any
+		want string
+	}{{12, "12"}, {-1, "-1"}, {nil, "<nil>"}} {
+		if code, b := e.do(t, "PUT", "/api/profiles/"+id+"/max_rooms", e.admin, map[string]any{"max_rooms": c.body}); code != http.StatusNoContent {
+			t.Fatalf("%v: %d %s", c.body, code, b)
+		}
+		got := "<nil>"
+		if n := limit(); n != nil {
+			got = strconv.Itoa(*n)
+		}
+		if got != c.want {
+			t.Fatalf("after %v: %s", c.body, got)
+		}
+	}
+	log := e.auditLog(t, "?action="+ActionProfileMaxRooms).Entries
+	if len(log) != 3 || log[0].TargetID != id || log[0].TargetName != "Alice" || !strings.Contains(string(log[2].Details), `"max_rooms":12`) ||
+		!strings.Contains(string(log[0].Details), `"max_rooms":null`) {
+		t.Fatalf("audit: %+v", log)
 	}
 }

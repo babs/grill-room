@@ -72,7 +72,7 @@ An instance gets an admin UI at `/admin`. One login with the admin token opens a
 - [ ] **AC6** Every admin action, super-admin and room-admin alike, is written to an audit log: who, what, when, and which room or profile. The UI shows it read-only. Entries older than 1 year are purged.
 
 ### Room admins and creation
-- [ ] **AC7** Any profile can create a room from its profile page and becomes its room admin, unless the instance is set to "super-admin only". It is refused beyond the rooms-per-profile limit (default 10) or the instance storage quota.
+- [ ] **AC7** Any profile can create a room from its profile page and becomes its room admin, unless the instance is set to "super-admin only". It is refused beyond the rooms-per-profile limit (default 10) or the instance storage quota. The super-admin can override the limit for one profile (a number, unlimited, or back to the instance default).
 - [ ] **AC8** A room admin can, from the room page:
   - rename the room;
   - manage every invite;

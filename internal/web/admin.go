@@ -51,7 +51,7 @@ const (
 
 // AuditActions lists every action, for the audit view's filter.
 var AuditActions = []string{ActionRoomCreate, ActionRoomRename, ActionRoomDelete, ActionRoomQuota, ActionInviteCreate, ActionInviteRevoke,
-	ActionRoomAdminAdd, ActionRoomAdminRemove, ActionRoomSkillRemove, ActionProfileDelete, ActionTemplateRemove, ActionSkillRemove, ActionSettings,
+	ActionRoomAdminAdd, ActionRoomAdminRemove, ActionRoomSkillRemove, ActionProfileDelete, ActionProfileMaxRooms, ActionTemplateRemove, ActionSkillRemove, ActionSettings,
 	ActionAdminLogin, ActionAdminLogout, ActionSessionRevoke}
 
 // adminCSP admits the /admin page's import map by its hash.

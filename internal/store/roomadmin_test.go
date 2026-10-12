@@ -235,3 +235,59 @@ func TestRoomAdminCallsFailWithTheStore(t *testing.T) {
 		}
 	}
 }
+
+// 004-AC7: the super-admin's limit for one profile wins over the instance's, in both directions;
+// unlimited lifts it; nil returns the profile to the instance's limit.
+func TestProfileMaxRooms(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	alice := joinWithProfile(t, s, "lobby", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
+	if err := s.SetInstanceSettings(ctx, InstanceSettings{RoomsPerProfile: 2, RoomCreation: CreationAnyone}); err != nil {
+		t.Fatal(err)
+	}
+	set := func(n *int) {
+		t.Helper()
+		if err := s.SetProfileMaxRooms(ctx, alice.ProfileID, n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	create := func(id string) error { _, err := createFor(t, s, id, alice, "Alice"); return err }
+	three, one, unlimited := 3, 1, UnlimitedRooms
+	set(&three)
+	for _, id := range []string{"r1", "r2", "r3"} {
+		if err := create(id); err != nil {
+			t.Fatalf("%s within its own limit of 3: %v", id, err)
+		}
+	}
+	if err := create("r4"); !errors.Is(err, ErrCreationRefused) || !strings.Contains(err.Error(), "you have created 3 rooms, the most the instance admin allows your profile") {
+		t.Fatalf("past its own limit: %v", err)
+	}
+	set(&one)
+	if err := create("r4"); !errors.Is(err, ErrCreationRefused) {
+		t.Fatalf("below the instance's: %v", err)
+	}
+	set(&unlimited)
+	if err := create("r4"); err != nil {
+		t.Fatalf("unlimited: %v", err)
+	}
+	set(nil)
+	if err := create("r5"); !errors.Is(err, ErrCreationRefused) || !strings.Contains(err.Error(), "the most this instance allows per profile") {
+		t.Fatalf("back on the instance's limit: %v", err)
+	}
+	ps, err := s.Profiles(ctx)
+	if err != nil || ps[0].MaxRooms != nil || ps[0].RoomsCreated != 4 {
+		t.Fatalf("profiles view: %+v %v", ps, err)
+	}
+	set(&three)
+	if ps, _ := s.Profiles(ctx); ps[0].MaxRooms == nil || *ps[0].MaxRooms != 3 {
+		t.Fatalf("profiles view after set: %+v", ps[0])
+	}
+	if err := s.SetProfileMaxRooms(ctx, 999, &three); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown profile: %v", err)
+	}
+	for _, bad := range []int{0, -2} {
+		if err := s.SetProfileMaxRooms(ctx, alice.ProfileID, &bad); err == nil {
+			t.Errorf("max_rooms %d accepted", bad)
+		}
+	}
+}

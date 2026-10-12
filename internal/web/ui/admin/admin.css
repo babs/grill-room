@@ -38,3 +38,6 @@ dd { margin: 0; }
 .link { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.85rem; margin-bottom: 0.6rem; }
 .link input { width: 100%; box-sizing: border-box; }
 button.danger:enabled { background: var(--bad); color: #fff; border: 1px solid var(--bad); }
+form.limit { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; min-width: 16rem; }
+form.limit .hint { margin: 0; width: 100%; }
+form.limit input { width: 5rem; }

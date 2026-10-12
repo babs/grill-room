@@ -17,7 +17,7 @@ import { RoomPanel, fetchJSON, size, when, onInput, formAction } from './room-pa
  * @typedef {{rooms: Room[], default_quota: number}} RoomsPage
  * @typedef {{room_id: string, room_name: string}} ProfileRoom
  * @typedef {{id: number, uuid: string, name: string, email?: string, created_at: string, last_activity: string,
- *   skills: number, rooms: ProfileRoom[]}} Profile
+ *   skills: number, rooms: ProfileRoom[], max_rooms: number | null, rooms_created: number}} Profile
  * @typedef {{id: number, preset?: string, title: string, version: number, author: string, created_at: string}} Template
  * @typedef {{id: number, name: string, shared: boolean, version: number, author: string, size: number,
  *   updated_at: string}} Skill
@@ -222,8 +222,12 @@ function Rooms() {
 
 function Profiles() {
   const [list, setList] = useState(/** @type {Profile[] | null} */ (null));
+  const [perProfile, setPerProfile] = useState(0);
   const load = () => api('GET', '/api/admin/profiles').then(setList).catch(show);
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    api('GET', '/api/admin/settings').then((/** @type {Settings} */ v) => setPerProfile(v.rooms_per_profile)).catch(show);
+  }, []);
   /** @param {Profile} p */
   const remove = (p) => {
     if (!window.confirm(`Delete the profile of ${p.name || p.uuid}? Its participants stay in their rooms, detached.`)) return;
@@ -233,13 +237,33 @@ function Profiles() {
     <h2>Profiles</h2>
     <p class="hint">Emails show here and nowhere else. A profile's name is the one it last joined a room with.</p>
     ${list && (list.length ? html`<div class="scroll"><table id="profiles">
-      <thead><tr><th>Name</th><th>Email</th><th>Rooms</th><th>Skills</th><th>Last activity</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Email</th><th>Rooms</th><th>Skills</th><th>Last activity</th><th>Rooms it may create</th><th></th></tr></thead>
       <tbody>${list.map((p) => html`<tr id=${'profile-' + p.id}>
         <td>${p.name || '—'} <code title=${p.uuid}>${p.uuid.slice(0, 8)}</code></td><td>${p.email || '—'}</td>
         <td class="wrap">${p.rooms.map((r) => r.room_name).join(', ') || '—'}</td><td>${p.skills}</td><td>${when(p.last_activity)}</td>
+        <td><${RoomLimit} key=${p.id} p=${p} perProfile=${perProfile} reload=${load}/></td>
         <td><button type="button" onClick=${() => remove(p)}>Delete</button></td>
       </tr>`)}</tbody>
     </table></div>` : html`<p>No profile yet.</p>`)}`;
+}
+
+/**
+ * RoomLimit sets a profile's own limit on the rooms it creates: a number, unlimited, or the
+ * instance's (004-AC7).
+ * @param {{p: Profile, perProfile: number, reload: () => void}} props
+ */
+function RoomLimit({ p, perProfile, reload }) {
+  const [n, setN] = useState(p.max_rooms && p.max_rooms > 0 ? String(p.max_rooms) : '');
+  /** @param {number | null} v */
+  const set = (v) => api('PUT', `/api/admin/profiles/${p.id}/max_rooms`, { max_rooms: v }).then(reload).catch(show);
+  const now = p.max_rooms === null ? `instance's (${perProfile})` : p.max_rooms === -1 ? 'unlimited' : String(p.max_rooms);
+  return html`<form class="limit" onSubmit=${formAction(() => set(Number(n)))}>
+    <span class="hint">${p.rooms_created} created, limit ${now}</span>
+    <input type="number" min="1" max="1000" step="1" required value=${n} onInput=${onInput(setN)} aria-label=${'Rooms ' + (p.name || p.uuid) + ' may create'}/>
+    <button type="submit">Set</button>
+    <button type="button" onClick=${() => set(-1)} disabled=${p.max_rooms === -1}>Unlimited</button>
+    <button type="button" onClick=${() => set(null)} disabled=${p.max_rooms === null}>Instance's</button>
+  </form>`;
 }
 
 function Libraries() {

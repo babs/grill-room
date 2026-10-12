@@ -17,6 +17,9 @@ const (
 // DefaultRoomsPerProfile is how many rooms a profile may have created at once (004-AC7).
 const DefaultRoomsPerProfile = 10
 
+// UnlimitedRooms is the profile limit that lets a profile create rooms without a count (004-AC7).
+const UnlimitedRooms = -1
+
 var (
 	// ErrCreationRefused is returned when a profile may not create a room; the error says why.
 	ErrCreationRefused = errors.New("room creation refused")
@@ -115,11 +118,16 @@ func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileI
 			return fmt.Errorf("%w: only the super-admin creates rooms on this instance", ErrCreationRefused)
 		}
 		var n int
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM rooms WHERE creator_profile_id = ?`, profileID).Scan(&n); err != nil {
+		var own sql.NullInt64
+		if err := tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM rooms WHERE creator_profile_id = p.id), max_rooms FROM profiles p WHERE id = ?`,
+			profileID).Scan(&n, &own); err != nil {
 			return fmt.Errorf("create room: %w", err)
 		}
-		if n >= v.RoomsPerProfile {
+		switch {
+		case !own.Valid && n >= v.RoomsPerProfile:
 			return fmt.Errorf("%w: you have created %d rooms, the most this instance allows per profile", ErrCreationRefused, n)
+		case own.Valid && own.Int64 != UnlimitedRooms && int64(n) >= own.Int64:
+			return fmt.Errorf("%w: you have created %d rooms, the most the instance admin allows your profile", ErrCreationRefused, n)
 		}
 		if v.StorageQuota > 0 {
 			used, err := usedBytes(ctx, tx)
@@ -154,6 +162,21 @@ func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileI
 		return nil, err
 	}
 	return r, nil
+}
+
+// SetProfileMaxRooms sets profile id's own rooms limit: n rooms, UnlimitedRooms, or with nil the
+// instance's (004-AC7). The caller validated n. ErrNotFound.
+func (s *Store) SetProfileMaxRooms(ctx context.Context, id int64, n *int) error {
+	return s.withTx(ctx, "set profile max rooms", func(tx *sql.Tx) error {
+		var v any
+		if n != nil {
+			v = *n
+		}
+		if err := execOne(ctx, tx, `UPDATE profiles SET max_rooms = ? WHERE id = ?`, v, id); err != nil {
+			return err
+		}
+		return auditTx(ctx, tx, "", nil)
+	})
 }
 
 // RoomAdmin returns the uuid of profile profileID when it is an admin of room; ErrForbidden when

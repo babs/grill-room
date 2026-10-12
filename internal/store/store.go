@@ -532,6 +532,10 @@ ALTER TABLE skills ADD COLUMN scope TEXT GENERATED ALWAYS AS
 DROP INDEX skills_shared_name;
 CREATE UNIQUE INDEX skills_shared_name ON skills(name) WHERE profile_id IS NULL AND room_id IS NULL;
 CREATE UNIQUE INDEX skills_room_name ON skills(room_id, name) WHERE room_id IS NOT NULL;
+`, `
+-- 004-AC7: a profile's own rooms limit, set by the super-admin: NULL follows the instance's, -1 is
+-- unlimited.
+ALTER TABLE profiles ADD COLUMN max_rooms INTEGER CHECK (max_rooms IS NULL OR max_rooms = -1 OR max_rooms > 0);
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
