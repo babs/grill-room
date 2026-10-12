@@ -22,7 +22,8 @@ import { RoomPanel, fetchJSON, size, when, onInput, formAction } from './room-pa
  * @typedef {{id: number, name: string, shared: boolean, version: number, author: string, size: number,
  *   updated_at: string}} Skill
  * @typedef {{rooms_per_profile: number, storage_quota_bytes: number, room_creation: string}} Settings
- * @typedef {{id: number, name: string, admin: boolean, has_profile: boolean}} Participant
+ * @typedef {{join_ip: string, join_ua: string, last_ip: string, last_ua: string, last_seen_at: string | null}} Client
+ * @typedef {{id: number, name: string, admin: boolean, has_profile: boolean, client?: Client}} Participant
  * @typedef {{name: string, counts: Record<string, number>, bytes: Record<string, number>, warnings: string[], format: number,
  *   instance_version: string, same_instance: boolean, exported_at: string, archive_bytes: number,
  *   room?: {id: string, name: string}}} ImportReport
@@ -244,7 +245,19 @@ function RoomAdmins({ base }) {
       ${!p.has_profile ? html`<span class="hint">no profile</span>`
         : p.admin ? html`<button type="button" class="small" onClick=${() => set(p, false)} aria-label=${'Remove ' + p.name + ' from the room admins'}>Remove admin</button>`
         : html`<button type="button" class="small" onClick=${() => set(p, true)} aria-label=${'Make ' + p.name + ' a room admin'}>Make admin</button>`}
+      ${p.client && html`<${ClientLine} c=${p.client}/>`}
     </li>`)}</ul>` : html`<p class="hint">No participant yet.</p>`)}`;
+}
+
+/**
+ * ClientLine shows where a participant connected from, at join and at last activity (005-AC20).
+ * The purge leaves the fields empty past their retention.
+ * @param {{c: Client}} props
+ */
+function ClientLine({ c }) {
+  const at = (/** @type {string} */ ip, /** @type {string} */ ua) => ip ? `${ip} · ${ua || 'no user agent'}` : 'purged';
+  return html`<div class="hint client">Joined from ${at(c.join_ip, c.join_ua)}; last active${c.last_seen_at
+    ? ' ' + new Date(c.last_seen_at).toLocaleString() : ''} from ${at(c.last_ip, c.last_ua)}</div>`;
 }
 
 /** @type {[string, string][]} */

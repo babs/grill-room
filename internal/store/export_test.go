@@ -600,7 +600,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 	// Each table's columns: those the export carries, or why the table is left out.
 	tables := map[string]string{
 		"rooms":                     "id name created_at chain_budget chain_count chain_suspended parallel_turns | host_participant_id quota_bytes creator_profile_id",
-		"participants":              "id name joined_at can_trigger profile_id profile_uuid_hint room_id invite_id | token_hash",
+		"participants":              "id name joined_at can_trigger profile_id profile_uuid_hint room_id invite_id | token_hash last_seen_at join_ip join_ua last_ip last_ua",
 		"invites":                   "| id room_id token_hash created_at revoked_at created_by",
 		"messages":                  "id room_id ts kind participant_id sender body model edited_at deleted_at change_seq persona_id effort req_model req_effort model_note model_mismatch | html",
 		"message_versions":          "id message_id seq body written_at |",

@@ -12,6 +12,7 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/netip"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -70,6 +71,11 @@ type Options struct {
 	MagicLinkTTL time.Duration
 	// AuditRetention is how long the audit log keeps an entry; 0 means DefaultAuditRetention.
 	AuditRetention time.Duration
+	// ClientRetention is how long a participant's IP and user agent are kept; 0 means
+	// DefaultClientRetention (005-AC20).
+	ClientRetention time.Duration
+	// TrustedProxies are the peers whose X-Forwarded-For names the client (005-AC20).
+	TrustedProxies []netip.Prefix
 	// MaxImportBytes bounds an imported archive, compressed and once uncompressed; 0 means
 	// DefaultMaxImportBytes.
 	MaxImportBytes int64

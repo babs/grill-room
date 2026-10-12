@@ -66,6 +66,7 @@ type Server struct {
 	presence  presences
 	viewers   viewers
 	stt       sttWorkers
+	clients   clients
 	// magicLimit rate-limits magic link requests per address and per client IP.
 	magicLimit limiter
 	// loginLimit rate-limits /admin logins per client IP.
@@ -97,12 +98,15 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	if opts.AuditRetention <= 0 {
 		opts.AuditRetention = DefaultAuditRetention
 	}
+	if opts.ClientRetention <= 0 {
+		opts.ClientRetention = DefaultClientRetention
+	}
 	if opts.MaxImportBytes <= 0 {
 		opts.MaxImportBytes = DefaultMaxImportBytes
 	}
 	s := &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), archives: make(chan struct{}, maxConcurrentArchives),
 		adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
-		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, viewers: viewers{m: map[int64]int{}}, stt: sttWorkers{m: map[string]*sttWorker{}},
+		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, viewers: viewers{m: map[int64]int{}}, stt: sttWorkers{m: map[string]*sttWorker{}}, clients: clients{m: map[int64]clientSeen{}},
 		magicLimit: limiter{window: magicWindow}, loginLimit: limiter{window: loginWindow}, now: time.Now, fallbacks: fallbackCounters(),
 		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}}
 	s.cleanStaging()
@@ -399,6 +403,7 @@ func (s *Server) participant(next func(http.ResponseWriter, *http.Request, sessi
 			httpError(w, http.StatusInternalServerError, "auth failed")
 			return
 		}
+		s.seen(r.Context(), sess.p.ID, r)
 		next(w, r, sess)
 	})
 }
@@ -715,6 +720,9 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.serverError(w, "join_failed", err)
 		return
+	}
+	if err := s.bus.Store.ParticipantJoined(r.Context(), p.ID, s.clientIP(r), userAgent(r), s.now()); err != nil {
+		s.log.Warn("participant_joined_client_failed", zap.Int64("participant", p.ID), zap.Error(err))
 	}
 	s.bus.Notify(m.RoomID)
 	s.log.Info("participant_joined", zap.String("room", p.RoomID), zap.Int64("participant", p.ID), zap.Int64("invite", p.InviteID))

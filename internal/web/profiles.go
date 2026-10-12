@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/mail"
 	"strconv"
@@ -141,7 +140,7 @@ func (s *Server) emailRequest(w http.ResponseWriter, r *http.Request) (string, b
 		httpError(w, http.StatusBadRequest, "not an email address")
 		return "", false
 	}
-	now, ip := time.Now(), clientIP(r)
+	now, ip := time.Now(), s.clientIP(r)
 	if !s.magicLimit.allow("ip:"+ip, magicPerIP, now) || !s.magicLimit.allow("to:"+email+" ip:"+ip, magicPerAddressIP, now) ||
 		!s.magicLimit.allow("to:"+email, magicPerAddress, now) {
 		httpError(w, http.StatusTooManyRequests, "too many links asked for, retry in 15 minutes")
@@ -315,27 +314,6 @@ func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Info("profile_deleted", zap.Int64("profile", id))
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// clientIP is the address rate limits count against. Behind a proxy on a private or loopback
-// address it is the last X-Forwarded-For hop, the one that proxy appended; a direct client cannot
-// set it.
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	// ponytail: any private peer is trusted as a proxy; a trusted-proxy list if clients ever share
-	// the server's private network.
-	if ip := net.ParseIP(host); ip != nil && (ip.IsPrivate() || ip.IsLoopback()) {
-		if xff := r.Header.Values("X-Forwarded-For"); len(xff) > 0 {
-			hops := strings.Split(xff[len(xff)-1], ",")
-			if last := strings.TrimSpace(hops[len(hops)-1]); net.ParseIP(last) != nil {
-				return last
-			}
-		}
-	}
-	return host
 }
 
 // limiter counts events per key in a sliding window. In memory: the room server runs one replica.

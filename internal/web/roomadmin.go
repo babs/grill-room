@@ -125,6 +125,8 @@ type adminParticipant struct {
 	Name       string `json:"name"`
 	Admin      bool   `json:"admin"`
 	HasProfile bool   `json:"has_profile"`
+	// Client is where the participant connected from (005-AC20): the super-admin's view only.
+	Client *store.Client `json:"client,omitempty"`
 }
 
 // roomParticipants lists a room's participants for the super-admin, who appoints room admins among
@@ -140,9 +142,17 @@ func (s *Server) roomParticipants(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "room_participants_failed", err)
 		return
 	}
+	cs, err := s.bus.Store.RoomClients(r.Context(), room)
+	if err != nil {
+		s.serverError(w, "room_participants_failed", err)
+		return
+	}
 	out := make([]adminParticipant, len(ps))
 	for i, p := range ps {
 		out[i] = adminParticipant{ID: p.ID, Name: p.Name, Admin: p.Admin, HasProfile: p.ProfileID != 0}
+		if c, ok := cs[p.ID]; ok {
+			out[i].Client = &c
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }

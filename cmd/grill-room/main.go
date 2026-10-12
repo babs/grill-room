@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -94,6 +95,10 @@ type Config struct {
 	MagicLinkTTL time.Duration
 	// AuditRetention is how long the audit log keeps an entry.
 	AuditRetention time.Duration
+	// ClientRetention is how long a participant's IP and user agent are kept.
+	ClientRetention time.Duration
+	// TrustedProxies are the reverse proxies whose X-Forwarded-For names the client.
+	TrustedProxies []netip.Prefix
 }
 
 func loadConfig() (Config, error) {
@@ -105,6 +110,11 @@ func loadConfig() (Config, error) {
 	turnTimeout, err5 := time.ParseDuration(getEnv("GRILL_ROOM_TURN_TIMEOUT", "15m"))
 	magicTTL, err6 := time.ParseDuration(getEnv("GRILL_ROOM_MAGIC_LINK_TTL", web.DefaultMagicLinkTTL.String()))
 	auditRetention, err7 := time.ParseDuration(getEnv("GRILL_ROOM_AUDIT_RETENTION", web.DefaultAuditRetention.String()))
+	clientRetention, err9 := time.ParseDuration(getEnv("GRILL_ROOM_CLIENT_RETENTION", web.DefaultClientRetention.String()))
+	proxies, err10 := web.ParseTrustedProxies(os.Getenv("GRILL_ROOM_TRUSTED_PROXIES"))
+	if err10 != nil {
+		err10 = fmt.Errorf("GRILL_ROOM_TRUSTED_PROXIES: %w", err10)
+	}
 	maxImport, err8 := strconv.ParseInt(getEnv("GRILL_ROOM_MAX_IMPORT_MB", strconv.Itoa(web.DefaultMaxImportBytes>>20)), 10, 64)
 	return Config{
 		SMTP: mail.SMTP{
@@ -115,6 +125,8 @@ func loadConfig() (Config, error) {
 		},
 		MagicLinkTTL:    magicTTL,
 		AuditRetention:  auditRetention,
+		ClientRetention: clientRetention,
+		TrustedProxies:  proxies,
 		TurnTimeout:     turnTimeout,
 		MaxUploadMB:     maxUpload,
 		MaxRoomMB:       maxRoom,
@@ -137,7 +149,7 @@ func loadConfig() (Config, error) {
 		LogFormat:        getEnv("LOG_FORMAT", "auto"),
 		DaemonDir:        os.Getenv("GRILL_ROOM_DAEMON_DIR"),
 		SandboxImage:     os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
-	}, errors.Join(err1, err2, err3, err4, err5, err6, err7, err8)
+	}, errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9, err10)
 }
 
 // Validate rejects a configuration the server cannot run with.
@@ -178,6 +190,9 @@ func (c Config) Validate() error {
 	}
 	if c.AuditRetention < 24*time.Hour {
 		return fmt.Errorf("GRILL_ROOM_AUDIT_RETENTION %s: want 24h or more", c.AuditRetention)
+	}
+	if c.ClientRetention < 24*time.Hour {
+		return fmt.Errorf("GRILL_ROOM_CLIENT_RETENTION %s: want 24h or more", c.ClientRetention)
 	}
 	// Security: a tag can be moved to another image after review; a digest cannot.
 	if c.SandboxImage != "" && !sandbox.PinnedImage(c.SandboxImage) {
@@ -353,6 +368,8 @@ func run() error {
 		SendMail:           cfg.sendMail(),
 		MagicLinkTTL:       cfg.MagicLinkTTL,
 		AuditRetention:     cfg.AuditRetention,
+		ClientRetention:    cfg.ClientRetention,
+		TrustedProxies:     cfg.TrustedProxies,
 		Version:            Version,
 		DBPath:             cfg.DB,
 	}, logger)

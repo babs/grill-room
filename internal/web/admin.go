@@ -186,7 +186,7 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	now, ip := s.now(), clientIP(r)
+	now, ip := s.now(), s.clientIP(r)
 	key := "ip:" + ip
 	// Counted before the check, in one step: concurrent guesses cannot slip past the limit.
 	if !s.loginLimit.allow(key, loginAttempts, now) {
@@ -307,7 +307,8 @@ func (s *Server) auditLog(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// PurgeAudit deletes the audit entries past the retention and the expired admin sessions now, then
+// PurgeAudit deletes the audit entries past the retention, the participants' client fields past theirs
+// (005-AC20) and the expired admin sessions now, then
 // every auditPurgeEvery, until ctx ends (004-AC6).
 func (s *Server) PurgeAudit(ctx context.Context) {
 	for {
@@ -318,6 +319,11 @@ func (s *Server) PurgeAudit(ctx context.Context) {
 			s.log.Error("audit_purge_failed", zap.Error(err))
 		case n > 0:
 			s.log.Info("audit_purged", zap.Int64("entries", n))
+		}
+		if n, err := s.bus.Store.PurgeClients(ctx, now.Add(-s.opts.ClientRetention)); err != nil && ctx.Err() == nil {
+			s.log.Error("client_purge_failed", zap.Error(err))
+		} else if n > 0 {
+			s.log.Info("clients_purged", zap.Int64("participants", n))
 		}
 		if _, err := s.bus.Store.PurgeAdminSessions(ctx, now); err != nil && ctx.Err() == nil {
 			s.log.Error("admin_session_purge_failed", zap.Error(err))

@@ -448,7 +448,8 @@ func TestSuperAdminAppointsRoomAdmins(t *testing.T) {
 		t.Fatalf("a member lists the participants: %d", code)
 	}
 	code, b := e.do(t, "GET", adminPath+"/participants", e.admin, nil)
-	if ps := decodeJSON[[]adminParticipant](t, b); code != http.StatusOK || len(ps) != 1 || ps[0] != (adminParticipant{ID: ap.ID, Name: "Alice", HasProfile: true}) {
+	if ps := decodeJSON[[]adminParticipant](t, b); code != http.StatusOK || len(ps) != 1 || ps[0].Client == nil ||
+		ps[0].ID != ap.ID || ps[0].Name != "Alice" || !ps[0].HasProfile || ps[0].Admin {
 		t.Fatalf("participants: %d %s", code, b)
 	}
 	if code, b := e.do(t, "PUT", fmt.Sprintf("%s/admins/%d", adminPath, ap.ID), e.admin, nil); code != http.StatusNoContent {

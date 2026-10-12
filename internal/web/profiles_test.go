@@ -428,25 +428,6 @@ func TestLimiterWindow(t *testing.T) {
 	}
 }
 
-func TestClientIP(t *testing.T) {
-	for _, tc := range []struct{ remote, xff, want string }{
-		{"203.0.113.1:5000", "", "203.0.113.1"},
-		{"203.0.113.1:5000", "198.51.100.9", "203.0.113.1"}, // a public peer is the client: its header is not trusted
-		{"10.0.0.5:5000", "198.51.100.9", "198.51.100.9"},
-		{"10.0.0.5:5000", "1.1.1.1, 198.51.100.9", "198.51.100.9"}, // the hop the proxy appended, not one the client wrote
-		{"127.0.0.1:5000", "garbage", "127.0.0.1"},
-		{"[::1]:5000", "2001:db8::1", "2001:db8::1"},
-	} {
-		r := &http.Request{RemoteAddr: tc.remote, Header: http.Header{}}
-		if tc.xff != "" {
-			r.Header.Set("X-Forwarded-For", tc.xff)
-		}
-		if got := clientIP(r); got != tc.want {
-			t.Errorf("%s %q: %s, want %s", tc.remote, tc.xff, got, tc.want)
-		}
-	}
-}
-
 // 002-AC5 004-AC3: a bound email reaches its owner and the admin's profiles view, never another
 // participant, nor any other admin view, even once its owner posted, published and was audited.
 func TestEmailStaysPrivate(t *testing.T) {

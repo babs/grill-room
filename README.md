@@ -40,6 +40,8 @@ On first start the server logs an `admin_token_generated` line holding the admin
 | `GRILL_ROOM_SMTP_USERNAME`, `GRILL_ROOM_SMTP_PASSWORD` | none | SMTP login, both or neither; sent only after STARTTLS, unless the relay is on localhost |
 | `GRILL_ROOM_MAGIC_LINK_TTL` | `15m` | how long an emailed link works (1s to 1h) |
 | `GRILL_ROOM_AUDIT_RETENTION` | `8760h` | how long the audit log keeps an entry (24h or more) |
+| `GRILL_ROOM_CLIENT_RETENTION` | `720h` | how long a participant's IP and user agent are kept (24h or more) |
+| `GRILL_ROOM_TRUSTED_PROXIES` | none | comma-separated CIDRs or addresses of the reverse proxies whose `X-Forwarded-For` names the client; unset uses the peer address |
 | `LOG_LEVEL` | `info` | |
 | `LOG_FORMAT` | `auto` | `console` on a TTY, `json` otherwise |
 
@@ -183,7 +185,7 @@ Right after that first join, the room page shows the profile's recovery link onc
 
 With SMTP configured, `/profile` offers to bind an email. The server mails a link that binds the address once opened in the same browser; anywhere else it is refused and signs nobody in. Later, "sign in with email" on `/profile` mails a sign-in link to a bound address, which signs a browser in after the same confirmation as a recovery link. Each link works once, for 15 minutes unless `GRILL_ROOM_MAGIC_LINK_TTL` says otherwise.
 
-Within 15 minutes, a client IP may ask for 10 links, and for 3 to the same address; an address gets at most 10 whoever asks. That cap stops mail floods, at a cost: someone asking from 4 IPs can block an address's email sign-in for 15 minutes. The recovery link still works meanwhile. The client IP is the peer address, or the last `X-Forwarded-For` hop when the peer is on a private or loopback address, as a proxy is. A sign-in request gets the same answer, as fast, whether or not a profile holds the address: the lookup and the mail come after it. Without SMTP, `/profile` shows no email option and the email routes answer 404.
+Within 15 minutes, a client IP may ask for 10 links, and for 3 to the same address; an address gets at most 10 whoever asks. That cap stops mail floods, at a cost: someone asking from 4 IPs can block an address's email sign-in for 15 minutes. The recovery link still works meanwhile. The client IP is the peer address. When the peer is in `GRILL_ROOM_TRUSTED_PROXIES`, it is the right-most `X-Forwarded-For` hop not in that list; a header from any other peer is ignored, so a client cannot spoof it. The admin login limit counts the same IP. A sign-in request gets the same answer, as fast, whether or not a profile holds the address: the lookup and the mail come after it. Without SMTP, `/profile` shows no email option and the email routes answer 404.
 
 The server uses STARTTLS whenever the relay offers it. A relay that offers none gets the links in clear, so keep it on a trusted network, as an in-cluster relay is.
 
@@ -200,6 +202,7 @@ The server uses STARTTLS whenever the relay offers it. A relay that offers none 
 | room skills, copies of a personal skill signed with its author's display name | the room's participants and its agent | a room admin or the admin removing it, or deleting the room; not leaving the room or deleting the profile |
 | room admins: which profiles administer a room | the room's participants | removing them, deleting the room, or deleting the profile |
 | audit log entries: the name of a room or profile an admin action targeted, the admin's IP at login, a room admin's profile uuid and display name | the admin | the purge after `GRILL_ROOM_AUDIT_RETENTION` (1 year), not deleting the room or profile |
+| participants' client IP and user agent, at join and at last activity | the admin, in a room's view | the purge after `GRILL_ROOM_CLIENT_RETENTION` (30 days), or deleting the room |
 | admin sessions: IP and browser user agent | the admin | revoking or signing out, or the daily purge once expired (12 h) |
 | room exports: everything the room holds, agent sessions included, and its participants' display names and profile uuids | whoever holds the file | nothing on the server: the file leaves it |
 | an imported participant's profile uuid that matches no profile here (`profile_uuid_hint`) | nobody but the next export | deleting the room |

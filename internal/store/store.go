@@ -66,6 +66,8 @@ type Participant struct {
 	ProfileUUID string `json:"-"`
 	// Admin tells that its profile administers the room (004-AC8). Set by Participants only.
 	Admin bool `json:"admin"`
+	// LastSeen is when the participant was last active (005-AC7). Set by Participants only.
+	LastSeen *time.Time `json:"last_seen_at,omitempty"`
 }
 
 // Message is one line in a room.
@@ -561,6 +563,14 @@ CREATE TRIGGER persona_template_versions_level BEFORE INSERT ON persona_template
 -- 005-AC10: the other models claude reported for a synthesis, or a mismatch with the one asked for.
 ALTER TABLE messages ADD COLUMN model_note TEXT NOT NULL DEFAULT '';
 ALTER TABLE messages ADD COLUMN model_mismatch INTEGER NOT NULL DEFAULT 0 CHECK (model_mismatch IN (0, 1));
+`, `
+-- 005-AC6, 005-AC20: when a participant was last active, and the client IP and user agent at join
+-- and at last activity, for the super-admin only. The retention purge clears the client fields.
+ALTER TABLE participants ADD COLUMN last_seen_at TEXT;
+ALTER TABLE participants ADD COLUMN join_ip TEXT;
+ALTER TABLE participants ADD COLUMN join_ua TEXT;
+ALTER TABLE participants ADD COLUMN last_ip TEXT;
+ALTER TABLE participants ADD COLUMN last_ua TEXT;
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -973,7 +983,7 @@ func (s *Store) ParticipantByToken(ctx context.Context, tokenHash string) (*Part
 func (s *Store) Participants(ctx context.Context, roomID string) ([]Participant, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger, COALESCE(p.profile_id, 0), COALESCE(f.uuid, ''),
-			EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = p.room_id AND a.profile_id = p.profile_id) FROM participants p
+			EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = p.room_id AND a.profile_id = p.profile_id), p.last_seen_at FROM participants p
 		JOIN invites i ON i.id = p.invite_id LEFT JOIN profiles f ON f.id = p.profile_id
 		WHERE p.room_id = ? AND i.revoked_at IS NULL ORDER BY p.id`, roomID)
 	if err != nil {
@@ -984,10 +994,15 @@ func (s *Store) Participants(ctx context.Context, roomID string) ([]Participant,
 	for rows.Next() {
 		var p Participant
 		var joined string
-		if err := rows.Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID, &p.ProfileUUID, &p.Admin); err != nil {
+		var seen sql.NullString
+		if err := rows.Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID, &p.ProfileUUID, &p.Admin, &seen); err != nil {
 			return nil, fmt.Errorf("scan participant: %w", err)
 		}
 		p.JoinedAt = parseTS(joined)
+		if seen.Valid {
+			t := parseTS(seen.String)
+			p.LastSeen = &t
+		}
 		out = append(out, p)
 	}
 	return out, rows.Err()

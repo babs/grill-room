@@ -247,7 +247,7 @@ KUBECTL        = kubectl -n '$(K8S_NAMESPACE)'
 # K8S_SMTP_PORT to the namespace K8S_SMTP_NAMESPACE, where the relay runs.
 K8S_SMTP_NAMESPACE ?= mailpit
 K8S_SMTP_PORT      ?= 1025
-K8S_OPTIONAL  := GRILL_ROOM_SANDBOX_IMAGE GRILL_ROOM_SMTP_ADDR GRILL_ROOM_SMTP_FROM K8S_SMTP_NAMESPACE K8S_SMTP_PORT
+K8S_OPTIONAL  := GRILL_ROOM_SANDBOX_IMAGE GRILL_ROOM_TRUSTED_PROXIES GRILL_ROOM_SMTP_ADDR GRILL_ROOM_SMTP_FROM K8S_SMTP_NAMESPACE K8S_SMTP_PORT
 # Exported to the render recipe only: no other recipe sees the secrets in its environment.
 $(foreach v,$(K8S_VARS) $(K8S_OPTIONAL),$(eval k8s-render: export $(v) := $$($(v))))
 
