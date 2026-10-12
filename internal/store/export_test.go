@@ -315,6 +315,10 @@ func TestExportImportRoundTrip(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	alice, persona := richRoom(t, s, "orig")
+	// 005-AC23: the STT glossary is room content.
+	if _, err := s.SetSTTGlossary(ctx, "orig", "Kubernetes\nHelm", alice); err != nil {
+		t.Fatal(err)
+	}
 	a := export(t, s, "orig")
 	for _, name := range []string{fileRoom, fileTranscript, "uploads", "attachments", "documents", "skills", "sessions"} {
 		if _, err := os.Stat(filepath.Join(a, name)); err != nil {
@@ -344,6 +348,9 @@ func TestExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("report %+v, want counts %v", rep, want)
 	}
 	diffCanon(t, canon(t, a), canon(t, export(t, s, "copy")))
+	if g, err := s.STTGlossary(ctx, "copy"); err != nil || g != "Kubernetes\nHelm" {
+		t.Fatalf("glossary in the copy: %q %v", g, err)
+	}
 
 	// Alice reaches the copy through her profile; nobody's old token or invite does.
 	if p, err := s.ProfileParticipant(ctx, "sess-orig", "copy"); err != nil || p.Name != "Alice" {
@@ -599,7 +606,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 	const server = "server-wide, not room content"
 	// Each table's columns: those the export carries, or why the table is left out.
 	tables := map[string]string{
-		"rooms":                     "id name created_at chain_budget chain_count chain_suspended parallel_turns | host_participant_id quota_bytes creator_profile_id",
+		"rooms":                     "id name created_at chain_budget chain_count chain_suspended parallel_turns stt_glossary | host_participant_id quota_bytes creator_profile_id",
 		"participants":              "id name joined_at can_trigger profile_id profile_uuid_hint room_id invite_id | token_hash last_seen_at join_ip join_ua last_ip last_ua",
 		"invites":                   "| id room_id token_hash created_at revoked_at created_by",
 		"messages":                  "id room_id ts kind participant_id sender body model edited_at deleted_at change_seq persona_id effort req_model req_effort model_note model_mismatch | html",

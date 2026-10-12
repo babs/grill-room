@@ -571,6 +571,9 @@ ALTER TABLE participants ADD COLUMN join_ip TEXT;
 ALTER TABLE participants ADD COLUMN join_ua TEXT;
 ALTER TABLE participants ADD COLUMN last_ip TEXT;
 ALTER TABLE participants ADD COLUMN last_ua TEXT;
+`, `
+-- 005-AC23: the terms the STT worker is told to expect in the room.
+ALTER TABLE rooms ADD COLUMN stt_glossary TEXT NOT NULL DEFAULT '';
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.

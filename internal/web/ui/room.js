@@ -61,8 +61,8 @@ async function loadRoom() {
   participants = data.participants;
   myID = String(data.me.id);
   $('voice').hidden = !data.voice;
-  $('manage-open').hidden = !data.me.admin;
-  if (!data.me.admin && $('manage').open) $('manage').close();
+  // Every member edits the transcription glossary there (005-AC23); the rest is for room admins.
+  $('manage-open').hidden = false;
   renderParticipants();
   // The room admin panel (admin/room-admin.js) renders from the same answer.
   window.grillRoom = data;

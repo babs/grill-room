@@ -121,8 +121,11 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     const carol = await join(browser, request, id, 'Carol', vp);
     const api = `/api/rooms/${id}`;
 
-    // Plain members: no panel, and the API says no.
-    await expect(bob.getByRole('button', { name: 'Manage' })).toBeHidden();
+    // Plain members: only the transcription glossary in Manage (005-AC23), and the API says no.
+    await bob.getByRole('button', { name: 'Manage' }).click();
+    await expect(bob.locator('#manage #stt-glossary')).toBeVisible();
+    await expect(bob.locator('#manage #room-panel')).toHaveCount(0);
+    await bob.locator('#manage-close').click();
     for (const [method, path] of [['patch', api], ['delete', api], ['get', api + '/overview'], ['put', `${api}/admins/1`]]) {
       expect((await carol.request[method](path, { data: { name: 'x' } })).status(), `${method} ${path}`).toBe(403);
     }
@@ -150,8 +153,7 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     await expect(bob.getByRole('button', { name: 'Manage' })).toBeVisible();
     const bobPanel = await openManage(bob);
     await bobPanel.locator('#room-admins li', { hasText: 'Alice' }).getByRole('button', { name: 'Remove admin' }).click();
-    await expect(alice.getByRole('button', { name: 'Manage' })).toBeHidden();
-    await expect(alice.locator('#manage')).not.toHaveAttribute('open');
+    await expect(alice.locator('#manage #room-panel')).toHaveCount(0);
     await bobPanel.locator('#room-admins li', { hasText: 'Bob' }).getByRole('button', { name: 'Step down' }).click();
     await expect(bob.locator('#manage [role="alert"]')).toHaveText("you are the room's last admin: appoint another one first");
 

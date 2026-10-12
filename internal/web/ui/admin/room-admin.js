@@ -12,6 +12,7 @@ import { RoomPanel, fetchJSON } from './room-panel.js';
  * @typedef {{room: {id: string, name: string}, me: Participant, participants: Participant[]}} RoomData
  * @typedef {{id: number, name: string, version: number, author: string, pending?: boolean}} RoomSkill
  * @typedef {{room_skills?: RoomSkill[]}} AgentState
+ * @typedef {{glossary: string, prompt: string, used: number, total: number, capacity: number}} Glossary
  */
 
 const w = /** @type {Window & {grillRoom?: RoomData, grillAgent?: AgentState}} */ (window);
@@ -44,6 +45,7 @@ function Manage({ data }) {
   };
   const skills = agentState.value?.room_skills || [];
   return html`
+    <p class="hint">You are a room admin. Every action here is recorded in the instance's audit log.</p>
     <p class="said" role="alert">${said}</p>
     ${room && html`<${RoomPanel} key=${room.id} room=${room} base=${base} api=${fetchJSON} show=${show} reload=${load} byName=${byName}
       close=${() => location.assign('/profile')}>
@@ -62,9 +64,44 @@ function Manage({ data }) {
     <//>`}`;
 }
 
+/**
+ * STTGlossary edits the terms the transcription expects, for every member (005-AC23). The worker
+ * reads them before each utterance, with the room's names and document titles, while they fit.
+ * @param {{data: RoomData}} props
+ */
+function STTGlossary({ data }) {
+  const base = '/api/rooms/' + encodeURIComponent(data.room.id) + '/glossary';
+  const [g, setG] = useState(/** @type {Glossary | null} */ (null));
+  const [text, setText] = useState('');
+  const [said, setSaid] = useState('');
+  /** @param {Glossary} v */
+  const got = (v) => { setG(v); setText(v.glossary); setSaid(''); };
+  /** @param {unknown} err */
+  const show = (err) => setSaid(/** @type {Error} */ (err).message);
+  useEffect(() => { fetchJSON('GET', base).then(got).catch(show); }, [base]);
+  /** @param {Event} e */
+  const save = (e) => {
+    e.preventDefault();
+    fetchJSON('PUT', base, { glossary: text }).then((v) => { got(v); setSaid('Saved: it applies from the next utterance.'); }).catch(show);
+  };
+  return html`
+    <h3>Transcription glossary</h3>
+    <p class="hint">Terms people will say: product names, jargon, acronyms. One per line or comma-separated.
+      The transcription also expects the participants' and personas' names, then the documents' titles, while they fit.</p>
+    <form id="stt-glossary" onSubmit=${save}>
+      <textarea rows="5" aria-label="Transcription glossary" value=${text} onInput=${(/** @type {Event} */ e) => setText(/** @type {HTMLTextAreaElement} */ (e.target).value)}></textarea>
+      <div class="glossary-actions">
+        <span id="glossary-used" title=${g ? g.prompt : ''}>${g ? `${g.used} / ~${g.capacity} terms used` : ''}</span>
+        <button type="submit" class="small">Save glossary</button>
+      </div>
+    </form>
+    <p class="said" role="status">${said}</p>`;
+}
+
 function App() {
   const data = roomData.value;
-  return open.value && data?.me.admin ? html`<${Manage} data=${data}/>` : null;
+  if (!open.value || !data) return null;
+  return html`<${STTGlossary} data=${data}/>${data.me.admin && html`<${Manage} data=${data}/>`}`;
 }
 
 render(html`<${App}/>`, /** @type {HTMLElement} */ (document.getElementById('room-admin')));

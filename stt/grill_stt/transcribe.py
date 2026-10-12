@@ -1,6 +1,6 @@
 """faster-whisper on CPU: small int8, language detected per utterance (spike S1-bis)."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 from faster_whisper import WhisperModel
@@ -39,8 +39,10 @@ class Transcriber:
         )
         self._options = info.transcription_options
 
-    def __call__(self, audio: Audio) -> Line:
+    def __call__(self, audio: Audio, prompt: str = "") -> Line:
+        # The room's glossary goes in initial_prompt, never hotwords: they did worse in spike S10.
         m = self._model
+        options = replace(self._options, initial_prompt=prompt or None)
         features = m.feature_extractor(audio)
         # One encoder pass serves language detection and decoding. transcribe(language=None) runs a
         # second one and drops the first (faster-whisper 1.2.1, spike S1-bis): half the CPU per line.
@@ -53,7 +55,7 @@ class Transcriber:
             (token, probability), *_ = m.model.detect_language(encoded)[0]
             language = token[2:-2]
         tokenizer = Tokenizer(m.hf_tokenizer, m.model.is_multilingual, task="transcribe", language=language)
-        segments = list(m.generate_segments(features, tokenizer, self._options, False, encoded))
+        segments = list(m.generate_segments(features, tokenizer, options, False, encoded))
         # Whisper's own silence rule: a segment that is likely no speech and decoded with low
         # confidence is a hallucination ("merci d'avoir regardé cette vidéo").
         kept = [s for s in segments if not (s.no_speech_prob > 0.6 and s.avg_logprob < -1.0)]

@@ -199,11 +199,14 @@ func (im *importer) run() error {
 	if err := textIs("room name", maxImportRoomName, false, false, x.Name); err != nil {
 		return err
 	}
+	if err := textIs("STT glossary", MaxSTTGlossary, true, true, x.STTGlossary); err != nil {
+		return err
+	}
 	if x.Chain.Budget < 1 || x.Chain.Count < 0 || len(x.Personas) > MaxRoomPersonas {
 		return refuseImport("%s: bad chain, or more than %d personas", fileRoom, MaxRoomPersonas)
 	}
-	_, err = im.tx.ExecContext(im.ctx, `INSERT INTO rooms(id, name, created_at, creator_profile_id, chain_budget, chain_count, chain_suspended, parallel_turns)
-		VALUES(?,?,?,?,?,?,?,?)`, im.room, x.Name, now(), nullID(im.o.Importer), x.Chain.Budget, x.Chain.Count, x.Chain.Suspended, x.ParallelTurns)
+	_, err = im.tx.ExecContext(im.ctx, `INSERT INTO rooms(id, name, created_at, creator_profile_id, chain_budget, chain_count, chain_suspended, parallel_turns, stt_glossary)
+		VALUES(?,?,?,?,?,?,?,?,?)`, im.room, x.Name, now(), nullID(im.o.Importer), x.Chain.Budget, x.Chain.Count, x.Chain.Suspended, x.ParallelTurns, x.STTGlossary)
 	if err != nil {
 		return fmt.Errorf("import room: %w", err)
 	}

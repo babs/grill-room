@@ -285,6 +285,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rooms/{room}/voice", s.participant(s.getVoice))
 	mux.Handle("POST /api/stt/heartbeat", s.sttAuth(s.sttHeartbeat))
 	mux.Handle("POST /api/rooms/{room}/voice/lines", s.sttAuth(s.postVoiceLine))
+	mux.Handle("GET /api/stt/rooms/{room}/prompt", s.sttAuth(s.sttPromptFor))
+	mux.Handle("GET /api/rooms/{room}/glossary", s.participant(s.getGlossary))
+	mux.Handle("PUT /api/rooms/{room}/glossary", s.participant(s.putGlossary))
 
 	csp := "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" + s.connectSrc()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

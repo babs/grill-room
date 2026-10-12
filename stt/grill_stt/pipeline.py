@@ -162,6 +162,19 @@ class RoomAPI:
             return False
         return False
 
+    async def prompt(self, room: str) -> str | None:
+        """The room's Whisper prompt (005-AC23); None when it could not be read."""
+        try:
+            r = await self._client.get(f"/api/stt/rooms/{room}/prompt")
+            if r.status_code == 200:
+                prompt = r.json()["prompt"]
+                if isinstance(prompt, str):
+                    return prompt
+            log.warning("prompt_refused", room=room, status=r.status_code)
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
+            log.warning("prompt_failed", room=room, error=str(e))
+        return None
+
     async def heartbeat(self, worker: str, rooms: list[str], voices: dict[str, list[int]]) -> bool:
         try:
             body = {"worker": worker, "rooms": rooms, "voices": voices}
@@ -179,10 +192,16 @@ class Pipeline:
     """One consumer drains the queue: one utterance at a time gets every model thread."""
 
     def __init__(
-        self, transcribe: Callable[[Audio], Line], api: RoomAPI, size: int, rules: Plausibility | None = None
+        self,
+        transcribe: Callable[[Audio, str], Line],
+        api: RoomAPI,
+        size: int,
+        rules: Plausibility | None = None,
     ) -> None:
         self._transcribe = transcribe
         self._api = api
+        # The last prompt read for each room: a room server that does not answer keeps it in use.
+        self._prompts: dict[str, str] = {}
         self._rules = rules or Plausibility()
         self._queue: asyncio.Queue[Utterance] = asyncio.Queue(size)
         QUEUE_DEPTH.set_function(self._queue.qsize)
@@ -212,8 +231,14 @@ class Pipeline:
                 self._queue.task_done()
 
     async def process(self, u: Utterance) -> None:
+        # Read before each utterance, so a glossary change applies from the next one (005-AC23).
+        prompt = await self._api.prompt(u.room)
+        if prompt is None:
+            prompt = self._prompts.get(u.room, "")
+        else:
+            self._prompts[u.room] = prompt
         t0 = time.monotonic()
-        line = await asyncio.to_thread(self._transcribe, u.audio)
+        line = await asyncio.to_thread(self._transcribe, u.audio, prompt)
         TRANSCRIBE.observe(time.monotonic() - t0)
         seconds = round(len(u.audio) / SR, 2)
         u.audio = u.audio[:0]  # the samples are no longer needed: drop them now, not at the next utterance

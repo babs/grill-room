@@ -341,3 +341,8 @@ button.doc:hover { background: var(--line); }
   .viewer-body { flex-direction: column; }
   #annotations { width: auto; max-height: 40%; border-left: 0; border-top: 1px solid var(--line); }
 }
+
+/* Transcription glossary (005-AC23) */
+#stt-glossary textarea { width: 100%; font: inherit; padding: 0.4rem; }
+.glossary-actions { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; margin-top: 0.3rem; }
+#glossary-used { font-size: 0.85rem; color: var(--muted); }

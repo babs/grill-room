@@ -39,6 +39,7 @@ type xRoom struct {
 	CreatedAt     string     `json:"created_at"`
 	Chain         Chain      `json:"chain"`
 	ParallelTurns bool       `json:"parallel_turns"`
+	STTGlossary   string     `json:"stt_glossary,omitempty"`
 	Personas      []xPersona `json:"personas"`
 }
 
@@ -339,8 +340,8 @@ func (s *Store) ExportRoom(ctx context.Context, roomID, dir string) (*Room, erro
 func exportRoom(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) (*Room, error) {
 	room := &Room{ID: roomID}
 	x := xRoom{Personas: []xPersona{}}
-	err := tx.QueryRowContext(ctx, `SELECT name, created_at, chain_budget, chain_count, chain_suspended, parallel_turns FROM rooms WHERE id = ?`, roomID).
-		Scan(&x.Name, &x.CreatedAt, &x.Chain.Budget, &x.Chain.Count, &x.Chain.Suspended, &x.ParallelTurns)
+	err := tx.QueryRowContext(ctx, `SELECT name, created_at, chain_budget, chain_count, chain_suspended, parallel_turns, stt_glossary FROM rooms WHERE id = ?`, roomID).
+		Scan(&x.Name, &x.CreatedAt, &x.Chain.Budget, &x.Chain.Count, &x.Chain.Suspended, &x.ParallelTurns, &x.STTGlossary)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
