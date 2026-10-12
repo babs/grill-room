@@ -61,6 +61,9 @@ type Participant struct {
 	CanTrigger bool `json:"can_trigger"`
 	// ProfileID links the participant across rooms; never sent, as it would let others do the same.
 	ProfileID int64 `json:"-"`
+	// ProfileUUID is the profile's uuid, empty without one: the presence preamble shows its start
+	// (003-AC32). Never sent, like ProfileID.
+	ProfileUUID string `json:"-"`
 }
 
 // Message is one line in a room.
@@ -462,7 +465,25 @@ CREATE UNIQUE INDEX turns_one_running ON turns(persona_id) WHERE status = 'runni
 ALTER TABLE turn_queue ADD COLUMN rerun_of INTEGER REFERENCES turns(id) ON DELETE CASCADE;
 ALTER TABLE turn_queue ADD COLUMN cause TEXT NOT NULL DEFAULT '';
 CREATE INDEX turn_queue_rerun_of ON turn_queue(rerun_of);
+`, `
+-- 003-AC22 to 003-AC25, 003-AC32: the turn contract. A profile's uuid tells two people of the same
+-- name apart in the presence preamble; context_* is the session's context use after its last turn;
+-- handoff marks the turn that writes a handoff note ('write') and the new session reading it ('read').
+ALTER TABLE profiles ADD COLUMN uuid TEXT;
+UPDATE profiles SET uuid = ` + uuidSQL + `;
+CREATE UNIQUE INDEX profiles_uuid ON profiles(uuid);
+ALTER TABLE room_personas ADD COLUMN autocompact INTEGER NOT NULL DEFAULT 0
+	CHECK (autocompact = 0 OR autocompact BETWEEN 100000 AND 1000000);
+ALTER TABLE agent_sessions ADD COLUMN context_tokens INTEGER;
+ALTER TABLE agent_sessions ADD COLUMN context_window INTEGER;
+ALTER TABLE agent_sessions ADD COLUMN context_updated_at TEXT;
+ALTER TABLE turns ADD COLUMN handoff TEXT NOT NULL DEFAULT '' CHECK (handoff IN ('', 'write', 'read'));
+ALTER TABLE turn_queue ADD COLUMN handoff TEXT NOT NULL DEFAULT '' CHECK (handoff IN ('', 'write', 'read'));
 `}
+
+// uuidSQL is a random version 4 UUID; SQLite has no function for it.
+const uuidSQL = `lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)), 2) || '-' ||
+	substr('89ab', 1 + abs(random() % 4), 1) || substr(hex(randomblob(2)), 2) || '-' || hex(randomblob(6)))`
 
 // migrationData runs Go code inside the transaction of the migration to version key, after its SQL.
 var migrationData = map[int]func(context.Context, *sql.Tx) error{9: migratePersonas}
@@ -833,8 +854,8 @@ func (s *Store) ParticipantByToken(ctx context.Context, tokenHash string) (*Part
 // Participants lists a room's participants whose invite is still valid, in join order.
 func (s *Store) Participants(ctx context.Context, roomID string) ([]Participant, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger FROM participants p
-		JOIN invites i ON i.id = p.invite_id
+		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger, COALESCE(p.profile_id, 0), COALESCE(f.uuid, '') FROM participants p
+		JOIN invites i ON i.id = p.invite_id LEFT JOIN profiles f ON f.id = p.profile_id
 		WHERE p.room_id = ? AND i.revoked_at IS NULL ORDER BY p.id`, roomID)
 	if err != nil {
 		return nil, fmt.Errorf("query participants: %w", err)
@@ -844,7 +865,7 @@ func (s *Store) Participants(ctx context.Context, roomID string) ([]Participant,
 	for rows.Next() {
 		var p Participant
 		var joined string
-		if err := rows.Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger); err != nil {
+		if err := rows.Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID, &p.ProfileUUID); err != nil {
 			return nil, fmt.Errorf("scan participant: %w", err)
 		}
 		p.JoinedAt = parseTS(joined)
@@ -870,7 +891,7 @@ func nullStr(s string) any {
 	return s
 }
 
-// nullID stores 0 as NULL, for optional foreign keys.
+// nullID stores 0 as NULL: an optional foreign key, or a count not known.
 func nullID(id int64) any {
 	if id == 0 {
 		return nil

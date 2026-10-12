@@ -371,7 +371,7 @@ func TestTurnLifecycle(t *testing.T) {
 		}
 	}
 	day := time.Now().UTC().Format(time.DateOnly)
-	if tr := ws["transcript/"+day+".md"].data; !strings.HasPrefix(tr, "# Grill, "+day+" (UTC)\n\n") || !strings.Contains(tr, "_Alice joined_") || !strings.Contains(tr, "**Alice**: We ship on Friday.") {
+	if tr := ws["transcript/"+day+"/001.md"].data; !strings.HasPrefix(tr, "# "+day+" (UTC), part 1\n\n") || !strings.Contains(tr, "_Alice joined_") || !strings.Contains(tr, "**Alice**: We ship on Friday.") {
 		t.Errorf("transcript:\n%s", tr)
 	}
 	if a := ws["annotations.md"].data; !strings.Contains(a, fmt.Sprintf("### Annotation %d on docs/synthesis.md", r.ann)) || strings.Contains(a, "(new)") {
@@ -570,7 +570,7 @@ func TestFreshSession(t *testing.T) {
 		t.Fatalf("fresh job %+v", job)
 	}
 	ws := e.workspace(t, r, alice, tn.ID)
-	tr := ws["transcript/"+time.Now().UTC().Format(time.DateOnly)+".md"].data
+	tr := ws["transcript/"+time.Now().UTC().Format(time.DateOnly)+"/001.md"].data
 	for _, want := range []string{"We ship on Friday.", "Start over."} {
 		if !strings.Contains(tr, want) {
 			t.Fatalf("transcript lacks %q:\n%s", want, tr)

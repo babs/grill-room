@@ -46,6 +46,15 @@ func known(l turn.Level) turn.Level {
 	return l
 }
 
+// knownAutocompact keeps n only within the range claude accepts, as it becomes a claude argument
+// whatever the room sent; 0 leaves Claude Code on auto (003-AC24).
+func knownAutocompact(n int) int {
+	if n < turn.MinAutocompact || n > turn.MaxAutocompact {
+		return 0
+	}
+	return n
+}
+
 // runSettings is the one place where the model and effort a persona asks for become the ones its
 // turn runs with. The host cap, raised by what the host approved for the persona, clamps them
 // (002-AC19, 002-AC20); an empty model then falls back to this daemon's.
@@ -130,20 +139,20 @@ func (r *roomRun) runTurn(ctx context.Context, tok string, id int64) {
 	start, ended := time.Now(), "the turn was abandoned"
 	var queued time.Duration
 	r.d.turnEvent(TurnEvent{Room: r.room.String(), ID: id, Phase: "start"})
+	var job turn.Job
+	var res turn.Result
 	defer func() {
 		r.d.turnEvent(TurnEvent{Room: r.room.String(), ID: id, Phase: "end", Error: ended, DurationMS: time.Since(start).Milliseconds(),
-			QueueMS: queued.Milliseconds()})
+			QueueMS: queued.Milliseconds(), Persona: job.Persona, ContextTokens: res.ContextTokens, ContextWindow: res.ContextWindow})
 	}()
 	ids := strconv.FormatInt(id, 10)
 	jctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	resp, err := r.get(jctx, tok, "turns/"+ids)
-	var job turn.Job
 	if err == nil {
 		err = json.NewDecoder(resp.Body).Decode(&job)
 		_ = resp.Body.Close()
 	}
 	cancel()
-	var res turn.Result
 	if err != nil {
 		log.Warn("turn_job_failed", zap.Error(err))
 		// Told now, the room frees the button instead of waiting for its timeout.
@@ -292,7 +301,7 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 	}
 	model := run.Model
 	out, err := ag.RunTurn(ctx, sandbox.TurnInput{
-		Plugin: plugin, Bearer: px.Bearer,
+		Plugin: plugin, Bearer: px.Bearer, Autocompact: knownAutocompact(job.Autocompact),
 		Workspace: ws, Prompt: job.Prompt, System: job.System, Model: model, Effort: run.Effort,
 		Resume: job.Resume, SessionSize: job.SessionSize, SessionSHA256: job.SessionSHA256,
 		FetchSession: func(ctx context.Context) ([]byte, error) {
@@ -311,8 +320,9 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 	if m := out.Result.Model(); m != "" {
 		model = m
 	}
+	tokens, window := out.Result.Context()
 	return turn.Result{Synthesis: out.Result.Result, Model: model, Effort: run.Effort, Capped: capped, SessionID: out.Result.SessionID, SessionOffset: out.SessionOffset,
-		Session: out.Session, Changes: out.Changes}
+		Session: out.Session, Changes: out.Changes, ContextTokens: tokens, ContextWindow: window}
 }
 
 // maxManifest bounds the manifest a room sends: tens of thousands of files.

@@ -55,6 +55,10 @@ func (s *Server) controlChain(w http.ResponseWriter, r *http.Request, sess sessi
 	writeJSON(w, http.StatusOK, c)
 }
 
+// mentionQuote is how much of a mentioning message the called persona's preamble quotes, short
+// enough for the line to fit presenceLineMax with a short name (003-AC22).
+const mentionQuote = 50
+
 // mentionTurns queues a turn of each persona a human's text message names with @name, as that
 // human's press: only for someone allowed to press, while the host's daemon can run it. It resets
 // the chain, since a human took the lead (002-AC23, 002-AC26).
@@ -87,9 +91,14 @@ func (s *Server) mentionTurns(ctx context.Context, p *store.Participant, body st
 		s.log.Error("mention_failed", zap.String("room", room.ID), zap.Error(err))
 		return
 	}
+	quote := oneLine(body)
+	if r := []rune(quote); len(r) > mentionQuote {
+		quote = string(r[:mentionQuote]) + "…"
+	}
+	cause := fmt.Sprintf("@mention by %s: %q", oneLine(p.Name), quote)
 	s.turnMu.Lock()
 	for _, persona := range called {
-		q := &store.QueuedTurn{RoomID: room.ID, PersonaID: persona.ID, ParticipantID: p.ID, Source: store.SourceMention}
+		q := &store.QueuedTurn{RoomID: room.ID, PersonaID: persona.ID, ParticipantID: p.ID, Source: store.SourceMention, Cause: cause}
 		// A persona waiting already, or for the host's approval, is not queued again.
 		if err := s.bus.Store.Enqueue(ctx, q); err != nil && !errors.Is(err, store.ErrAlreadyQueued) && !errors.Is(err, store.ErrNotFound) {
 			s.log.Error("queue_turn_failed", zap.String("room", room.ID), zap.Int64("persona", persona.ID), zap.Error(err))
@@ -114,13 +123,14 @@ func (s *Server) chainLinks(ctx context.Context, done *store.Turn, synthesis str
 		return
 	}
 	type link struct {
-		p store.RoomPersona
-		e store.ChainEvent
+		p     store.RoomPersona
+		e     store.ChainEvent
+		cause string
 	}
 	var links []link
 	for _, p := range mentioned(synthesis, personas) {
 		if p.ID != done.PersonaID || p.SelfCall {
-			links = append(links, link{p, store.LinkCall})
+			links = append(links, link{p, store.LinkCall, "called by @" + done.PersonaName})
 		}
 	}
 	due, err := s.bus.Store.DuePersonas(ctx, room)
@@ -128,14 +138,14 @@ func (s *Server) chainLinks(ctx context.Context, done *store.Turn, synthesis str
 		s.log.Error("chain_failed", zap.String("room", room), zap.Error(err))
 	}
 	for _, p := range due {
-		links = append(links, link{p, store.LinkEveryN})
+		links = append(links, link{p, store.LinkEveryN, fmt.Sprintf("every %d rounds", p.EveryN)})
 	}
 	var dropped []string
 	var c store.Chain
 	s.turnMu.Lock()
 	for _, l := range links {
 		var err error
-		c, err = s.bus.Store.EnqueueLink(ctx, &store.QueuedTurn{RoomID: room, PersonaID: l.p.ID}, l.e)
+		c, err = s.bus.Store.EnqueueLink(ctx, &store.QueuedTurn{RoomID: room, PersonaID: l.p.ID, Cause: l.cause}, l.e)
 		switch {
 		case errors.Is(err, store.ErrChainPaused):
 			if !slices.Contains(dropped, l.p.Name) {

@@ -136,7 +136,7 @@ func TestDockerTurnsAndTakeover(t *testing.T) {
 
 	v = rs.turn(t, bob, "FAKE_LIST", true)
 	day := time.Now().UTC().Format(time.DateOnly)
-	if v.Turn.Status != "done" || rs.lastMessage(t) != "transcript: "+day+".md; FAKE_MARK found: true" {
+	if v.Turn.Status != "done" || rs.lastMessage(t) != "transcript: "+day+"/001.md; FAKE_MARK found: true" {
 		t.Fatalf("fresh: %+v %q", v.Turn, rs.lastMessage(t))
 	}
 	if last, _ := rs.st.LastDoneTurn(t.Context(), rs.room, rs.grill(t).ID); last.SessionID == sid || !last.Fresh {

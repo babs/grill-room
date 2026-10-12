@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/babs/grill-room/internal/anchor"
 	"github.com/babs/grill-room/internal/render"
+	"github.com/babs/grill-room/internal/turn"
 )
 
 // Turn statuses.
@@ -84,6 +86,9 @@ type Turn struct {
 	// why the turn runs (003-AC21).
 	RerunOf int64  `json:"rerun_of,omitempty"`
 	Cause   string `json:"cause,omitempty"`
+	// Handoff is HandoffWrite for a last turn writing a handoff note before a new session, and
+	// HandoffRead for that new session's first turn (003-AC25).
+	Handoff string `json:"handoff,omitempty"`
 	// BaseRevisions are the revisions of the agent documents in the turn's workspace, by document
 	// id, pinned when the daemon first fetches it; nil before.
 	BaseRevisions map[int64]int `json:"-"`
@@ -221,6 +226,10 @@ type TurnOutcome struct {
 	SessionID     string
 	SessionOffset int64
 	Session       []byte
+	// ContextTokens and ContextWindow are the session's context use after the turn, 0 when unknown
+	// (003-AC24).
+	ContextTokens int64
+	ContextWindow int64
 	// Report carries the refusals found before the store; CompleteTurn adds what it applied.
 	Report TurnReport
 }
@@ -228,7 +237,7 @@ type TurnOutcome struct {
 const turnCols = `SELECT id, room_id, COALESCE(participant_id, 0), COALESCE(daemon_id, 0), status, fresh, resume,
 	session_id, model, message_cursor, annotation_cursor, change_cursor, prompt, error, report, started_at, ended_at,
 	COALESCE(persona_id, 0), persona_name, persona_text, req_model, req_effort, effort,
-	host_queued_at IS NOT NULL, COALESCE(rerun_of, 0), cause, base_revisions FROM turns`
+	host_queued_at IS NOT NULL, COALESCE(rerun_of, 0), cause, base_revisions, handoff FROM turns`
 
 func scanTurn(sc scanner) (*Turn, error) {
 	var t Turn
@@ -237,7 +246,7 @@ func scanTurn(sc scanner) (*Turn, error) {
 	err := sc.Scan(&t.ID, &t.RoomID, &t.ParticipantID, &t.DaemonID, &t.Status, &t.Fresh, &t.Resume,
 		&t.SessionID, &t.Model, &t.MessageCursor, &t.AnnotationCursor, &t.ChangeCursor, &t.Prompt, &t.Error, &report, &started, &ended,
 		&t.PersonaID, &t.PersonaName, &t.PersonaText, &t.ReqModel, &t.ReqEffort, &t.Effort,
-		&t.HostQueued, &t.RerunOf, &t.Cause, &base)
+		&t.HostQueued, &t.RerunOf, &t.Cause, &base, &t.Handoff)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -290,10 +299,10 @@ func (s *Store) StartTurn(ctx context.Context, t *Turn, parallel bool) error {
 	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO turns(room_id, participant_id, daemon_id, host, status, fresh, resume, message_cursor, annotation_cursor, change_cursor, prompt, started_at,
-			persona_id, persona_name, persona_text, req_model, req_effort, rerun_of, cause)
-		SELECT room_id, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, id, ?, ?, ?, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? AND pending = 0`,
+			persona_id, persona_name, persona_text, req_model, req_effort, rerun_of, cause, handoff)
+		SELECT room_id, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, id, ?, ?, ?, ?, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? AND pending = 0`,
 		pid, did, t.Status, t.Fresh, t.Resume, t.MessageCursor, t.AnnotationCursor, t.ChangeCursor, t.Prompt, t.StartedAt.Format(time.RFC3339Nano),
-		t.PersonaName, t.PersonaText, t.ReqModel, t.ReqEffort, rerun, t.Cause, t.PersonaID, t.RoomID)
+		t.PersonaName, t.PersonaText, t.ReqModel, t.ReqEffort, rerun, t.Cause, t.Handoff, t.PersonaID, t.RoomID)
 	if err != nil {
 		return fmt.Errorf("start turn: %w", err)
 	}
@@ -428,9 +437,9 @@ func (s *Store) FailTurn(ctx context.Context, roomID string, id int64, reason st
 		return nil, fmt.Errorf("fail turn: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
-	var name string
+	var name, handoff string
 	err = tx.QueryRowContext(ctx, `UPDATE turns SET status = 'failed', error = ?, ended_at = ? WHERE id = ? AND room_id = ? AND status = 'running'
-		RETURNING persona_name`, reason, now(), id, roomID).Scan(&name)
+		RETURNING persona_name, handoff`, reason, now(), id, roomID).Scan(&name, &handoff)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -438,7 +447,11 @@ func (s *Store) FailTurn(ctx context.Context, roomID string, id int64, reason st
 		return nil, fmt.Errorf("fail turn: %w", err)
 	}
 	name = signer(name)
-	m := &Message{RoomID: roomID, Kind: KindSystem, Sender: name, Body: name + " turn failed: " + reason}
+	body := name + " turn failed: " + reason
+	if note := handoffFailed(name, handoff); note != "" {
+		body = strings.TrimSuffix(body, ".") + "." + note
+	}
+	m := &Message{RoomID: roomID, Kind: KindSystem, Sender: name, Body: body}
 	if err := insertMessage(ctx, tx, m); err != nil {
 		return nil, err
 	}
@@ -469,7 +482,7 @@ func (s *Store) RejectTurn(ctx context.Context, roomID string, id, daemonID int6
 			return fmt.Errorf("reject turn: %w", err)
 		}
 		name := signer(t.PersonaName)
-		m = &Message{RoomID: roomID, Kind: KindSystem, Sender: name, Body: name + " turn failed: " + reason + "."}
+		m = &Message{RoomID: roomID, Kind: KindSystem, Sender: name, Body: name + " turn failed: " + reason + "." + handoffFailed(name, t.Handoff)}
 		if rerun = t.RerunOf == 0 && t.PersonaID != 0; rerun {
 			m.Body = name + " turn: " + doc + " changed while it ran, so its result is set aside and it runs again on the new version."
 			if err := queueRerun(ctx, tx, t, doc); err != nil {
@@ -479,6 +492,40 @@ func (s *Store) RejectTurn(ctx context.Context, roomID string, id, daemonID int6
 		return insertMessage(ctx, tx, m)
 	})
 	return m, rerun, err
+}
+
+// Handoff kinds of a turn (003-AC25).
+const (
+	HandoffWrite = "write"
+	HandoffRead  = "read"
+)
+
+// HandoffCause is why a new session after a handoff runs, as its preamble says.
+const HandoffCause = "handoff from your previous session"
+
+// handoffFailed is the sentence a failed handoff turn adds to its failure line: no new session
+// starts; "" for any other turn.
+func handoffFailed(name, handoff string) string {
+	if handoff != HandoffWrite {
+		return ""
+	}
+	return " No handoff: " + name + " stays on its current session."
+}
+
+// handoffNext follows handoff turn t, done with report, in its transaction: a turn that wrote the
+// note queues the persona's new session in place of its queued turn, which the new session answers
+// anyway; one that did not says that the persona stays on its session (003-AC25).
+func handoffNext(ctx context.Context, tx *sql.Tx, t *Turn, report TurnReport) error {
+	doc := turn.HandoffDoc(t.PersonaName)
+	if !slices.Contains(report.Created, doc) && !slices.Contains(report.Revised, doc) {
+		return insertMessage(ctx, tx, &Message{RoomID: t.RoomID, Kind: KindSystem, Sender: signer(t.PersonaName),
+			Body: "No handoff: " + t.PersonaName + " did not write docs/" + doc + ", so it stays on its current session."})
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM turn_queue WHERE persona_id = ?`, t.PersonaID); err != nil {
+		return fmt.Errorf("queue handoff: %w", err)
+	}
+	return enqueue(ctx, tx, &QueuedTurn{RoomID: t.RoomID, PersonaID: t.PersonaID, ParticipantID: t.ParticipantID, Source: SourceButton,
+		Fresh: true, Cause: HandoffCause, Handoff: HandoffRead})
 }
 
 // queueRerun puts the re-run of turn t at the head of its room's queue, in place of its persona's
@@ -499,8 +546,8 @@ func queueRerun(ctx context.Context, tx *sql.Tx, t *Turn, doc string) error {
 	if t.ParticipantID != 0 {
 		pid, source = t.ParticipantID, SourceButton
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO turn_queue(room_id, persona_id, participant_id, source, fresh, created_at, rerun_of, cause)
-		VALUES(?,?,?,?,?,?,?,?)`, t.RoomID, t.PersonaID, pid, source, fresh, now(), t.ID, "re-run after a conflict on "+doc)
+	_, err = tx.ExecContext(ctx, `INSERT INTO turn_queue(room_id, persona_id, participant_id, source, fresh, created_at, rerun_of, cause, handoff)
+		VALUES(?,?,?,?,?,?,?,?,?)`, t.RoomID, t.PersonaID, pid, source, fresh, now(), t.ID, "re-run after a conflict on "+doc, t.Handoff)
 	if err != nil {
 		return fmt.Errorf("queue re-run: %w", err)
 	}
@@ -709,6 +756,11 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 			return nil, err
 		}
 	}
+	if t.Handoff == HandoffWrite {
+		if err := handoffNext(ctx, tx, t, report); err != nil {
+			return nil, err
+		}
+	}
 	rep, err := json.Marshal(report)
 	if err != nil {
 		return nil, fmt.Errorf("complete turn: %w", err)
@@ -737,10 +789,13 @@ func appendSession(ctx context.Context, tx *sql.Tx, roomID string, persona int64
 	}
 	// Appended in Go: SQLite's || would turn the blob into text. Never nil: the column is NOT NULL.
 	data := append(append(make([]byte, 0, len(stored)+len(out.Session)), stored...), out.Session...)
+	ts := now()
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO agent_sessions(room_id, persona_id, session_id, data, updated_at) VALUES(?,?,?,?,?)
-		ON CONFLICT(persona_id, session_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
-		roomID, persona, out.SessionID, data, now())
+		INSERT INTO agent_sessions(room_id, persona_id, session_id, data, updated_at, context_tokens, context_window, context_updated_at)
+		VALUES(?,?,?,?,?,?,?,?)
+		ON CONFLICT(persona_id, session_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at,
+			context_tokens = excluded.context_tokens, context_window = excluded.context_window, context_updated_at = excluded.context_updated_at`,
+		roomID, persona, out.SessionID, data, ts, nullID(out.ContextTokens), nullID(out.ContextWindow), ts)
 	if err != nil {
 		return fmt.Errorf("append session: %w", err)
 	}

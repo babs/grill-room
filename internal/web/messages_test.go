@@ -284,7 +284,7 @@ func TestPromptFlagsChangedMessages(t *testing.T) {
 	golden(t, "testdata/prompt-changes.golden", got)
 
 	day := time.Now().UTC().Format(time.DateOnly)
-	tr := e.workspace(t, r, alice, tn.ID)["transcript/"+day+".md"].data
+	tr := e.workspace(t, r, alice, tn.ID)["transcript/"+day+"/001.md"].data
 	for _, want := range []string{"**Alice** (edited): We ship on Tuesday.\n  With a rollback plan.\n", "**Alice** (deleted): Budget is 10k.\n",
 		"**Alice** (voice, edited): we need a rollback\n", "**Alice** (edited): Final.\n"} {
 		if !strings.Contains(tr, want) {

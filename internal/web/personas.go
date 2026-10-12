@@ -38,6 +38,8 @@ type personaReq struct {
 	Effort   *string `json:"effort"`
 	EveryN   *int    `json:"every_n"`
 	SelfCall *bool   `json:"self_call"`
+	// Autocompact 0 is auto: Claude Code picks when to compact.
+	Autocompact *int `json:"autocompact"`
 }
 
 // check cleans the fields present and says what is wrong with the first bad one, "" when none is.
@@ -70,6 +72,9 @@ func (q *personaReq) check() string {
 	}
 	if q.EveryN != nil && (*q.EveryN < 0 || *q.EveryN > maxEveryN) {
 		return fmt.Sprintf("every_n must be 0 (off) to %d", maxEveryN)
+	}
+	if a := q.Autocompact; a != nil && *a != 0 && (*a < turn.MinAutocompact || *a > turn.MaxAutocompact) {
+		return fmt.Sprintf("autocompact must be 0 (auto) or %d to %d tokens", turn.MinAutocompact, turn.MaxAutocompact)
 	}
 	return ""
 }
@@ -251,7 +256,7 @@ func (s *Server) editPersona(w http.ResponseWriter, r *http.Request, sess sessio
 		return
 	}
 	patch := store.PersonaPatch{Name: req.Name, Badge: req.Badge, Colour: req.Colour, Text: req.Text, Model: req.Model, Effort: req.Effort,
-		EveryN: req.EveryN, SelfCall: req.SelfCall}
+		EveryN: req.EveryN, SelfCall: req.SelfCall, Autocompact: req.Autocompact}
 	p, m, held, err := s.bus.Store.EditPersona(r.Context(), sess.p.RoomID, personaID(r), patch, sess.p)
 	s.personaDone(w, sess, p, m, err, heldStatus(held))
 }

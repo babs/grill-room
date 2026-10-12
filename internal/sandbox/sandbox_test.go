@@ -233,6 +233,61 @@ func TestRunClaudePersona(t *testing.T) {
 	}
 }
 
+// 003-AC24: a persona's autocompact reaches claude -p as --autocompact; 0 passes none, leaving
+// Claude Code on auto.
+func TestRunClaudeAutocompact(t *testing.T) {
+	for _, tc := range []struct {
+		n    int
+		want []string
+	}{{0, nil}, {200_000, []string{"--autocompact", "200000"}}} {
+		f := &fakeDocker{reply: func(args []string) ([]byte, error) {
+			switch {
+			case args[0] == "info":
+				return []byte("29|Linux"), nil
+			case args[0] == "network" && args[1] == "inspect":
+				return []byte("127.0.0.1"), nil
+			case args[0] == "exec" && slices.Contains(args, "claude"):
+				return []byte(`{"type":"result","subtype":"success","is_error":false,"result":"ok","session_id":"s1"}`), nil
+			}
+			return nil, nil
+		}}
+		s := New(Config{Image: "img", Name: "t", Proxy: testProxy}, f.run, zap.NewNop())
+		if _, err := s.RunClaude(context.Background(), Request{Prompt: "go", Autocompact: tc.n, Bearer: testBearer}); err != nil {
+			t.Fatal(err)
+		}
+		s.Close(context.Background())
+		c := f.find("exec", "-i", "grill-room-t", "claude")
+		i := slices.Index(c, "--autocompact")
+		if (tc.want == nil) != (i < 0) || (i >= 0 && !slices.Equal(c[i:i+2], tc.want)) {
+			t.Fatalf("autocompact %d: claude args = %v", tc.n, c)
+		}
+	}
+}
+
+// 003-AC24: the context a session holds is its last request's input, cache read and cache creation
+// tokens, against the window claude reports for the model that answered; unknown without them.
+func TestResultContext(t *testing.T) {
+	for _, tc := range []struct {
+		in             string
+		tokens, window int64
+	}{
+		{`{}`, 0, 0},
+		{`{"usage": {"input_tokens": 2, "cache_read_input_tokens": 24948, "cache_creation_input_tokens": 50, "output_tokens": 11},
+			"modelUsage": {"claude-haiku-5-5": {"outputTokens": 16, "contextWindow": 1000000, "cacheReadInputTokens": 46239}}}`, 25000, 1000000},
+		{`{"usage": {"input_tokens": 10}, "modelUsage": {"claude-side": {"outputTokens": 3, "contextWindow": 200000},
+			"claude-opus-5": {"outputTokens": 900, "contextWindow": 1000000}}}`, 10, 1000000},
+		{`{"usage": {"input_tokens": 10}, "modelUsage": {"claude-opus-5": {"outputTokens": 900}}}`, 10, 0},
+	} {
+		var r Result
+		if err := json.Unmarshal([]byte(tc.in), &r); err != nil {
+			t.Fatal(err)
+		}
+		if tokens, window := r.Context(); tokens != tc.tokens || window != tc.window {
+			t.Errorf("%s: Context() = %d, %d, want %d, %d", tc.in, tokens, window, tc.tokens, tc.window)
+		}
+	}
+}
+
 func TestReadSessionValidates(t *testing.T) {
 	f := &fakeDocker{}
 	s := New(Config{Name: "t", Proxy: testProxy}, f.run, zap.NewNop())

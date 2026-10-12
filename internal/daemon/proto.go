@@ -125,6 +125,11 @@ type TurnEvent struct {
 	DurationMS int64  `json:"duration_ms,omitempty"`
 	// QueueMS is how long the turn waited for a slot under the host's global cap (003-AC18).
 	QueueMS int64 `json:"queue_ms,omitempty"`
+	// Persona, ContextTokens and ContextWindow come with a turn's end: the session's context use,
+	// 0 when unknown (003-AC24).
+	Persona       string `json:"persona,omitempty"`
+	ContextTokens int64  `json:"context_tokens,omitempty"`
+	ContextWindow int64  `json:"context_window,omitempty"`
 }
 
 // maxLine bounds one protocol line: a status with a long allowlist, or a full denied list.

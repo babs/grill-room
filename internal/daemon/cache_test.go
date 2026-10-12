@@ -239,7 +239,7 @@ func fullFetch(calls []wsCall) string {
 // sandbox still gets the whole workspace.
 func TestWorkspaceSyncTransfersOnlyChanges(t *testing.T) {
 	sr := newSyncRoom(t, 64<<20)
-	day := "transcript/" + time.Now().UTC().Format(time.DateOnly) + ".md"
+	day := "transcript/" + time.Now().UTC().Format(time.DateOnly) + "/001.md"
 
 	first := sr.turn(t)
 	if fullFetch(first) != "full?fallback=missing" || total(first) < len(sr.data) || !slices.Contains(fetched(first), sr.upload) {
@@ -261,6 +261,54 @@ func TestWorkspaceSyncTransfersOnlyChanges(t *testing.T) {
 	if n := sr.rs.srv.WorkspaceFallbacks("missing"); n != 1 {
 		t.Fatalf("missing fallbacks %d", n)
 	}
+}
+
+// 003-AC23: with the transcript in chunks, a turn after new messages fetches only the day's last
+// chunk, plus the chunk holding a message edited since: full chunks stay in the cache. The bytes
+// are measured as for 002-AC37.
+func TestTranscriptChunksTransferOnlyChanges(t *testing.T) {
+	sr := newSyncRoom(t, 64<<20)
+	ctx := t.Context()
+	ps, err := sr.rs.st.Participants(ctx, sr.rs.room)
+	if err != nil || len(ps) == 0 {
+		t.Fatalf("participants %+v %v", ps, err)
+	}
+	var first int64
+	for i := range 3 * turn.TranscriptChunk {
+		m := &store.Message{RoomID: sr.rs.room, Kind: store.KindText, ParticipantID: ps[0].ID, Sender: ps[0].Name,
+			Body: fmt.Sprintf("line %d, long enough to weigh a little in the transcript", i)}
+		if err := sr.rs.st.InsertMessage(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			first = m.ID
+		}
+	}
+	day := "transcript/" + time.Now().UTC().Format(time.DateOnly) + "/"
+	whole := sr.turn(t)
+	if !slices.Contains(fetched(whole), day+"001.md") || !slices.Contains(fetched(whole), day+"004.md") {
+		t.Fatalf("turn 1: %v", fetched(whole))
+	}
+	// Only the first turn's synthesis is new: it lands in the last chunk.
+	appended := sr.turn(t)
+	if got := fetched(appended); !slices.Equal(got, []string{day + "004.md"}) {
+		t.Fatalf("turn 2 fetched %v", got)
+	}
+	if _, err := sr.rs.st.EditMessage(ctx, sr.rs.room, first, ps[0].ID, "line 0, edited"); err != nil {
+		t.Fatal(err)
+	}
+	edited := sr.turn(t)
+	if got := fetched(edited); !slices.Equal(got, []string{day + "001.md", day + "004.md"}) {
+		t.Fatalf("turn 3 fetched %v", got)
+	}
+	chunk := len(sr.workdir[2][day+"002.md"])
+	if total(appended) > chunk || total(edited) > 3*chunk {
+		t.Fatalf("bytes: turn 2 %d, turn 3 %d, a full chunk %d", total(appended), total(edited), chunk)
+	}
+	if !strings.Contains(sr.workdir[2][day+"001.md"], "(edited): line 0, edited\n") {
+		t.Fatalf("turn 3's 001.md:\n%.300s", sr.workdir[2][day+"001.md"])
+	}
+	t.Logf("workspace bytes: turn 1 %d, turn 2 %d, turn 3 %d (a full chunk %d)", total(whole), total(appended), total(edited), chunk)
 }
 
 // cached returns the path of the cached copy of data.
@@ -308,7 +356,7 @@ func TestWorkspaceSyncFallsBack(t *testing.T) {
 func TestWorkspaceSyncRefusesHostileRoom(t *testing.T) {
 	sr := newSyncRoom(t, 64<<20)
 	sr.turn(t)
-	day := "transcript/" + time.Now().UTC().Format(time.DateOnly) + ".md"
+	day := "transcript/" + time.Now().UTC().Format(time.DateOnly) + "/001.md"
 	for _, tc := range []struct {
 		name, reason string
 		hook         func(w http.ResponseWriter, r *http.Request) bool

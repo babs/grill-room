@@ -40,6 +40,8 @@ type TurnInput struct {
 	Plugin io.Reader
 	// Bearer is the dummy token for the account's proxy (Request.Bearer).
 	Bearer string
+	// Autocompact is Request.Autocompact.
+	Autocompact int
 }
 
 // TurnOutput is what a turn produced for the room.
@@ -75,7 +77,7 @@ func (s *Sandbox) RunTurn(ctx context.Context, in TurnInput) (*TurnOutput, error
 			return nil, err
 		}
 	}
-	req := Request{Prompt: in.Prompt, System: in.System, Model: in.Model, Effort: in.Effort, Resume: in.Resume}
+	req := Request{Prompt: in.Prompt, System: in.System, Model: in.Model, Effort: in.Effort, Resume: in.Resume, Autocompact: in.Autocompact}
 	if req.PluginDir, err = s.loadPlugin(ctx, in.Plugin); err != nil {
 		return nil, err
 	}

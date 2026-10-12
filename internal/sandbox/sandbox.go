@@ -257,7 +257,9 @@ type Request struct {
 	Resume string
 	// PluginDir is a plugin directory to load, the persona's skills; empty for none.
 	PluginDir string
-	Args      []string
+	// Autocompact is passed to --autocompact, in tokens; 0 keeps Claude Code's auto.
+	Autocompact int
+	Args        []string
 	// Bearer is the dummy token the sandbox sends to its proxy, written before each turn.
 	Bearer string
 }
@@ -270,8 +272,23 @@ type Result struct {
 	Subtype   string `json:"subtype"`
 	// ModelUsage is keyed by model id; Claude Code may call a small model on the side.
 	ModelUsage map[string]struct {
-		OutputTokens int64 `json:"outputTokens"`
+		OutputTokens  int64 `json:"outputTokens"`
+		ContextWindow int64 `json:"contextWindow"`
 	} `json:"modelUsage"`
+	// Usage is the session's last request: claude 2.1.296 reports it there, while ModelUsage sums
+	// every request of the turn.
+	Usage struct {
+		InputTokens              int64 `json:"input_tokens"`
+		CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+		CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+	} `json:"usage"`
+}
+
+// Context returns what the session's last request sent to the model and the model's window, as
+// claude reported them: the context the next turn starts from (003-AC24). 0 is unknown.
+func (r *Result) Context() (tokens, window int64) {
+	tokens = r.Usage.InputTokens + r.Usage.CacheReadInputTokens + r.Usage.CacheCreationInputTokens
+	return tokens, r.ModelUsage[r.Model()].ContextWindow
 }
 
 // Model is the model that wrote most of the answer, or "" when claude reported none.
@@ -328,6 +345,9 @@ func (s *Sandbox) runClaude(ctx context.Context, req Request) (*Result, error) {
 	}
 	if req.PluginDir != "" {
 		args = append(args, "--plugin-dir", req.PluginDir)
+	}
+	if req.Autocompact != 0 {
+		args = append(args, "--autocompact", strconv.Itoa(req.Autocompact))
 	}
 	args = append(args, req.Args...)
 	out, runErr := s.run(ctx, strings.NewReader(req.Prompt), args...)

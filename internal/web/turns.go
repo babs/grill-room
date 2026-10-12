@@ -38,6 +38,8 @@ var sessionIDRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, sess session) {
 	var req struct {
 		Fresh bool `json:"fresh"`
+		// Handoff runs a last turn that writes a handoff note, then a new session reading it (003-AC25).
+		Handoff bool `json:"handoff"`
 		// PersonaID 0 picks the room's first persona.
 		PersonaID int64 `json:"persona_id"`
 	}
@@ -59,13 +61,33 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, sess session)
 	case !isHost && !sess.p.CanTrigger:
 		httpError(w, http.StatusForbidden, "only the host and the participants they allow can press the agent button")
 		return
-	case req.Fresh && !isHost:
+	case (req.Fresh || req.Handoff) && !isHost:
 		httpError(w, http.StatusForbidden, "only the host can start a new session")
+		return
+	case req.Fresh && req.Handoff:
+		httpError(w, http.StatusBadRequest, "a handoff resumes the current session: fresh and handoff do not go together")
 		return
 	}
 	persona, ok := s.pressedPersona(w, r, room.ID, req.PersonaID)
 	if !ok {
 		return
+	}
+	press := &store.QueuedTurn{RoomID: room.ID, PersonaID: persona.ID, ParticipantID: sess.p.ID, Source: store.SourceButton, Fresh: req.Fresh,
+		Cause: "pressed by " + oneLine(sess.p.Name)}
+	if req.Handoff {
+		// A handoff writes its note from the session it replaces: with none, New session is the way.
+		prev, err := s.bus.Store.LastDoneTurn(ctx, room.ID, persona.ID)
+		if err == nil {
+			_, err = s.bus.Store.AgentSession(ctx, room.ID, persona.ID, prev.SessionID)
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			httpError(w, http.StatusConflict, persona.Name+" has no session to hand over: start a new session instead")
+			return
+		} else if err != nil {
+			s.serverError(w, "start_turn_failed", err)
+			return
+		}
+		press.Handoff, press.Cause = store.HandoffWrite, "the host "+oneLine(sess.p.Name)+" asked for a handoff note before a new session"
 	}
 	// A human took the lead: the agent chain starts over (002-AC26).
 	if err := s.bus.Store.ResetChain(ctx, room.ID, store.ResetButton); err != nil {
@@ -80,7 +102,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, sess session)
 		return
 	}
 	if busy {
-		q := &store.QueuedTurn{RoomID: room.ID, PersonaID: persona.ID, ParticipantID: sess.p.ID, Fresh: req.Fresh}
+		q := press
 		err := s.bus.Store.Enqueue(ctx, q)
 		switch {
 		case errors.Is(err, store.ErrAlreadyQueued):
@@ -96,7 +118,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, sess session)
 		}
 		return
 	}
-	t, err := s.launch(ctx, room, persona, &store.QueuedTurn{PersonaID: persona.ID, ParticipantID: sess.p.ID, Fresh: req.Fresh}, host)
+	t, err := s.launch(ctx, room, persona, press, host)
 	if errors.Is(err, store.ErrTurnInProgress) {
 		httpError(w, http.StatusConflict, err.Error())
 		return
@@ -160,13 +182,13 @@ func (s *Server) roomBusy(ctx context.Context, room *store.Room, persona int64) 
 }
 
 // launch starts a turn of persona on host's daemon, as q asks: pressed by its participant, fresh,
-// or the re-run of a rejected turn. The caller holds turnMu.
+// the re-run of a rejected turn, or a step of a handoff. The caller holds turnMu.
 func (s *Server) launch(ctx context.Context, room *store.Room, persona *store.RoomPersona, q *store.QueuedTurn, host *presence) (*store.Turn, error) {
-	t, err := s.prepareTurn(ctx, room, persona, q.Fresh)
+	t, err := s.prepareTurn(ctx, room, persona, q)
 	if err != nil {
 		return nil, err
 	}
-	t.ParticipantID, t.DaemonID, t.RerunOf, t.Cause = q.ParticipantID, host.id, q.RerunOf, q.Cause
+	t.ParticipantID, t.DaemonID, t.RerunOf = q.ParticipantID, host.id, q.RerunOf
 	if err := s.bus.Store.StartTurn(ctx, t, room.ParallelTurns); err != nil {
 		return nil, err
 	}
@@ -177,7 +199,8 @@ func (s *Server) launch(ctx context.Context, room *store.Room, persona *store.Ro
 	s.backstop(room.ID, t.ID, s.opts.TurnTimeout+turnGrace)
 	s.bus.Notify(room.ID)
 	s.log.Info("turn_started", zap.String("room", room.ID), zap.Int64("turn", t.ID), zap.Int64("persona", persona.ID),
-		zap.Int64("participant", q.ParticipantID), zap.Bool("fresh", q.Fresh), zap.Bool("resume", t.Resume != ""), zap.Int64("rerun_of", t.RerunOf))
+		zap.Int64("participant", q.ParticipantID), zap.Bool("fresh", q.Fresh), zap.Bool("resume", t.Resume != ""), zap.Int64("rerun_of", t.RerunOf),
+		zap.String("source", q.Source), zap.String("handoff", t.Handoff))
 	return t, nil
 }
 
@@ -243,13 +266,15 @@ func (s *Server) drain(ctx context.Context, roomID string) {
 	}
 }
 
-// prepareTurn reads what the turn of persona needs: the session to resume, the cursors, and the
-// prompt with everything said and annotated since that persona's last successful turn. The
-// persona's text, model and effort are copied onto the turn: a change during it waits for the next.
-func (s *Server) prepareTurn(ctx context.Context, room *store.Room, persona *store.RoomPersona, fresh bool) (*store.Turn, error) {
+// prepareTurn reads what the turn of persona that q asks for needs: the session to resume, the
+// cursors, and the prompt with why it runs and everything said and annotated since that persona's
+// last successful turn. The persona's text, model and effort are copied onto the turn: a change
+// during it waits for the next.
+func (s *Server) prepareTurn(ctx context.Context, room *store.Room, persona *store.RoomPersona, q *store.QueuedTurn) (*store.Turn, error) {
 	st := s.bus.Store
+	fresh := q.Fresh
 	t := &store.Turn{RoomID: room.ID, Fresh: fresh, PersonaID: persona.ID, PersonaName: persona.Name, PersonaText: persona.Text,
-		ReqModel: persona.Model, ReqEffort: persona.Effort}
+		ReqModel: persona.Model, ReqEffort: persona.Effort, Cause: q.Cause, Handoff: q.Handoff}
 	prev, err := st.LastDoneTurn(ctx, room.ID, persona.ID)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -309,12 +334,12 @@ func (s *Server) prepareTurn(ctx context.Context, room *store.Room, persona *sto
 	if err != nil {
 		return nil, err
 	}
-	preamble, err := s.presencePreamble(ctx, room, persona)
+	preamble, err := s.presencePreamble(ctx, room, persona, t.Cause)
 	if err != nil {
 		return nil, err
 	}
 	t.Prompt = buildPrompt(promptInput{Preamble: preamble, Room: room.Name, Persona: persona.Name, Self: persona.ID, NewSession: t.Resume == "",
-		Msgs: msgs, Changes: changes, Anns: anns, AnnCursor: prev.AnnotationCursor, Paths: docPaths(docs)})
+		Handoff: t.Handoff, Msgs: msgs, Changes: changes, Anns: anns, AnnCursor: prev.AnnotationCursor, Paths: docPaths(docs)})
 	return t, nil
 }
 
@@ -483,7 +508,7 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request, d *store.Daemon,
 		Persona: t.PersonaName, System: t.PersonaText, Model: t.ReqModel, Effort: t.ReqEffort}
 	// The host's approval holds for this persona on the daemon it was given for only (002-AC20).
 	if p, err := s.bus.Store.RoomPersona(r.Context(), d.RoomID, t.PersonaID); err == nil {
-		job.Approved = p.Cap.Approved(d.ID)
+		job.Approved, job.Autocompact = p.Cap.Approved(d.ID), p.Autocompact
 	} else if !errors.Is(err, store.ErrNotFound) {
 		s.serverError(w, "get_job_failed", err)
 		return
@@ -638,6 +663,12 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 		Capped:        res.Capped,
 		SessionOffset: res.SessionOffset, Session: res.Session,
 		Report: store.TurnReport{Rejected: o.Rejected, Ignored: o.Ignored},
+	}
+	// A window under the tokens it holds is a daemon's mistake: the room shows no percentage then.
+	if res.ContextTokens > 0 && res.ContextWindow >= res.ContextTokens {
+		out.ContextTokens, out.ContextWindow = res.ContextTokens, res.ContextWindow
+	} else if res.ContextTokens > 0 && res.ContextWindow == 0 {
+		out.ContextTokens = res.ContextTokens
 	}
 	for _, doc := range o.Docs {
 		out.Documents = append(out.Documents, store.AgentWrite{Name: doc.Name, Format: doc.Format, Body: doc.Body})

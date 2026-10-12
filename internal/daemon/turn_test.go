@@ -178,7 +178,7 @@ func TestDaemonTurnsAndTakeover(t *testing.T) {
 		if in.Model != "haiku" || in.Resume != "" || !strings.Contains(in.Prompt, "The code word is PAPRIKA") {
 			return nil, errors.New("unexpected input")
 		}
-		if _, ok := files["transcript/"+time.Now().UTC().Format(time.DateOnly)+".md"]; !ok {
+		if _, ok := files["transcript/"+time.Now().UTC().Format(time.DateOnly)+"/001.md"]; !ok {
 			return nil, errors.New("no transcript in the workspace")
 		}
 		return &sandbox.TurnOutput{Result: &sandbox.Result{Result: "Noted.", SessionID: sid}, Session: []byte("line1\n"),
@@ -315,6 +315,49 @@ func TestDaemonPersonasKeepTheirSessions(t *testing.T) {
 }
 
 // 001-AC29: an agent error, such as a refused login, reaches the room as the turn's failure.
+// 003-AC24: the persona's autocompact reaches the sandbox, a value claude would refuse never does,
+// and the context use claude reports reaches the room and the supervisor's turn event.
+func TestDaemonAutocompactAndContext(t *testing.T) {
+	for n, want := range map[int]int{0: 0, 99_999: 0, 100_000: 100_000, 1_000_000: 1_000_000, 1_000_001: 0, -5: 0} {
+		if got := knownAutocompact(n); got != want {
+			t.Errorf("knownAutocompact(%d) = %d, want %d", n, got, want)
+		}
+	}
+	rs := newRoomServer(t)
+	ag := &fakeAgent{run: func(_ context.Context, in sandbox.TurnInput, _ map[string]string) (*sandbox.TurnOutput, error) {
+		if in.Autocompact != 300_000 {
+			return nil, fmt.Errorf("autocompact %d", in.Autocompact)
+		}
+		res := &sandbox.Result{Result: "Done.", SessionID: sid}
+		if err := json.Unmarshal([]byte(`{"usage": {"input_tokens": 5, "cache_read_input_tokens": 150000, "cache_creation_input_tokens": 15000},
+			"modelUsage": {"claude-haiku-x": {"outputTokens": 9, "contextWindow": 200000}}}`), res); err != nil {
+			return nil, err
+		}
+		return &sandbox.TurnOutput{Result: res, Session: []byte("x\n")}, nil
+	}}
+	events := make(chan TurnEvent, 4)
+	alice, _, _ := pairedDaemon(t, rs, "Alice", ag, func(d *Daemon) { d.o.OnTurn = func(e TurnEvent) { events <- e } })
+	g := rs.grill(t)
+	rs.call(t, "PATCH", fmt.Sprintf("/api/rooms/%s/personas/%d", rs.room, g.ID), alice, map[string]int{"autocompact": 300_000}, http.StatusOK, nil)
+	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]bool{}, http.StatusCreated, nil)
+	waitFor(t, "turn done", func() bool { v := rs.agent(t, alice); return v.Turn != nil && v.Turn.Status != "running" })
+	if v := rs.agent(t, alice); v.Turn.Status != "done" {
+		t.Fatalf("turn %+v", v.Turn)
+	}
+	if g := rs.grill(t); g.ContextTokens != 165_005 || g.ContextWindow != 200_000 {
+		t.Fatalf("persona context %d / %d", g.ContextTokens, g.ContextWindow)
+	}
+	for e := range events {
+		if e.Phase != "end" {
+			continue
+		}
+		if e.Persona != "Grill" || e.ContextTokens != 165_005 || e.ContextWindow != 200_000 {
+			t.Fatalf("end event %+v", e)
+		}
+		break
+	}
+}
+
 func TestDaemonTurnError(t *testing.T) {
 	rs := newRoomServer(t)
 	ag := &fakeAgent{run: func(context.Context, sandbox.TurnInput, map[string]string) (*sandbox.TurnOutput, error) {

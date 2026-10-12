@@ -64,7 +64,7 @@ A closed stdin means the same as `stop`, so a worker whose supervisor died stops
 |---|---|---|
 | `status` | `status`, the page's view of the worker; `update.served` is the version its room server hands out; `rooms` lists each room's pairing, connection, and turns `running` and `queued` | whenever it changes, checked every 250 ms |
 | `metrics` | `metrics`: `uptime_seconds`, `turns`, `failed_turns`, `heap_bytes`, `goroutines` | at start, then every 30 s |
-| `turn` | `turn`: `room`, `id`, `phase` (`start` or `end`), `error`, `duration_ms`, and at the end `queue_ms`, the wait for a slot | as a turn starts and ends |
+| `turn` | `turn`: `room`, `id`, `phase` (`start` or `end`), `error`, `duration_ms`, and at the end `queue_ms`, the wait for a slot, `persona`, and the session's `context_tokens` and `context_window` (absent when unknown) | as a turn starts and ends |
 | `acquire` | `slot`, a number the worker picks; `turn`: `room`, `id` | before each turn, version 3: the supervisor answers `grant`, or `wait` then `grant` |
 | `release` | `slot` | once the turn ran, or when it gives up waiting |
 | `log` | `log`, one zap JSON entry | for every log line. The supervisor re-encodes it before writing it to its stderr and to the page's log: it sets `instance` itself, and escapes control characters, C1 codes and Unicode format characters (bidi overrides, zero-width), so a worker binary cannot drive the terminal or fake a line. Entries over 16 KiB are dropped. The worker's stderr gets the same treatment, one entry per line with `"stream":"stderr"` |
