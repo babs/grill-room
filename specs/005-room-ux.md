@@ -45,7 +45,7 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 ## Acceptance criteria
 
 ### Identity
-- [ ] **AC1** A participant can change their own display name from the room page, with the same validation as at join. A system line says "<old> is now <new>". Past messages show the new name with the old one on hover. An option also applies it to their profile. The presence preamble keeps the same short uuid across the rename.
+- [x] **AC1** A participant can change their own display name from the room page, with the same validation as at join. A system line says "<old> is now <new>". Past messages show the new name with the old one on hover. An option also applies it to their profile. The presence preamble keeps the same short uuid across the rename.
 
 ### Mentions and turns
 - [x] **AC2** Typing `@` in the message box suggests the room's personas first, then participants, filtered as you type. It works with keyboard and touch.
@@ -62,7 +62,7 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 - [x] **AC20** `/admin` shows, for each participant, the client IP and user agent at join and at last activity. Only the super-admin sees them; they are kept 30 days by default (configurable) and purged with the room.
 
   The client IP comes from `X-Forwarded-For` ONLY when the direct peer is in a configured trusted-proxy list (`GRILL_ROOM_TRUSTED_PROXIES`, CIDRs). The address taken is the right-most one not in that list. With no list configured, the peer address is used. A header sent by an untrusted peer is ignored, so it cannot spoof the IP. The same rule replaces 004's "any private peer is trusted" for the admin login rate limit.
-- [ ] **AC21** A room admin (in the room's Manage panel) and the super-admin (in `/admin`) can rename any participant. A system line says who renamed whom, the audit log records it, and the renamed person sees a notice.
+- [x] **AC21** A room admin (in the room's Manage panel) and the super-admin (in `/admin`) can rename any participant. A system line says who renamed whom, the audit log records it, and the renamed person sees a notice.
 - [x] **AC22** Each participant can turn on "deafen", which stops receiving the other participants' audio. As in Discord, deafen also mutes their mic by default. An option "keep my mic on while deafened" (useful when people share a physical room) keeps the voice published, and so transcribed. Undeafening restores the mic state from before. The list shows a deafened icon, and the state survives a reconnect within the session.
 - [x] **AC23** Each room has an STT glossary, edited by any member in Manage, with a line in the journal. Every change applies from the next utterance. The worker passes it to faster-whisper as a natural sentence in `initial_prompt`, never as `hotwords` (spike S10). The prompt stays within Whisper's ~224-token limit. When the terms do not all fit, they are taken in this order: the edited glossary, then participant and persona names, then document titles. Manage shows "N / ~70 terms used". A Piper scenario with technical terms checks term accuracy against `small` without a glossary.
 - [x] **AC8** The room no longer shows "Transcribing" as if it applied to the viewer. It shows how many voices are transcribed ("2 voices transcribed"). A viewer whose voice is captured sees "your voice is being transcribed", and one who is not sees nothing implying capture.
@@ -72,18 +72,18 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 - [x] **AC10** The synthesis header names the model the turn ran on: the requested one, checked against `claude -p`'s `modelUsage`. Any other model in `modelUsage` shows as secondary with its cost share, for example on a resumed session started with another model.
 
 ### Documents and tabs
-- [ ] **AC11** "Open in a new window" opens the whole document manager at `/r/<room>/docs`: list, upload, viewer, annotations, revisions and diff, all live. Deep links `/r/<room>/docs/<doc>` open one document. The room page and the docs window stay in sync.
-- [ ] **AC12** When the room tab is not focused, its title reads "(N) <room name>", where N counts new text messages from others and persona syntheses. Voice lines are counted only if the user opts in. The count resets when the tab regains focus.
+- [x] **AC11** "Open in a new window" opens the whole document manager at `/r/<room>/docs`: list, upload, viewer, annotations, revisions and diff, all live. Deep links `/r/<room>/docs/<doc>` open one document. The room page and the docs window stay in sync.
+- [x] **AC12** When the room tab is not focused, its title reads "(N) <room name>", where N counts new text messages from others and persona syntheses. Voice lines are counted only if the user opts in. The count resets when the tab regains focus.
 - [ ] **AC24** A participant can turn on browser notifications for a room. They arrive through Web Push (VAPID; keys generated once and kept in the instance data), so they work in a background tab and with the tab closed. They are sent only when none of that participant's tabs is focused: presence (AC6) tells the server. The default triggers are:
   - a mention of the participant;
   - a persona synthesis;
   - a turn they started that ends.
 
   Other messages are opt-in. The payload carries only the room name, the kind of event and a link, never message text, because it passes through the browser vendor's push service. Repeated events are grouped into one notification per room. Expired subscriptions (410) are dropped, and subscriptions are purged with the participant or the room. On iOS, this works only once the room is added to the home screen; the UI says so.
-- [ ] **AC15** Room management (the "Manage" panel) opens as a wide sheet with tabs: General (name, volume), Invites, Admins, Personas, Skills, Export. It is full screen on a phone. Each tab has a deep link (`#manage/invites`, …), and the tabs are keyboard reachable.
-- [ ] **AC16** `/admin` uses the full page width with a tab bar: Rooms, Profiles, Libraries, Instance, Sessions, Audit. A room opens its own detail view with tabs (General, Invites, Admins, Export), following the AC15 layout. Every tab and room has a deep link, and phone width stays usable.
-- [ ] **AC17** The daemon's local admin page uses the full width with a tab bar that stays pinned at the top while scrolling: Instances, Rooms, Accounts, Settings, Monitoring, Update. Alerts show as a badge on their tab. Each tab has a deep link (`#accounts`, …).
-- [ ] **AC13** Every modal (persona panel, the "Manage" room-admin panel, and the others) closes on a click outside it and on Escape, and keeps focus correctly for keyboard users.
+- [x] **AC15** Room management (the "Manage" panel) opens as a wide sheet with tabs: General (name, volume), Invites, Admins, Personas, Skills, Export. It is full screen on a phone. Each tab has a deep link (`#manage/invites`, …), and the tabs are keyboard reachable.
+- [x] **AC16** `/admin` uses the full page width with a tab bar: Rooms, Profiles, Libraries, Instance, Sessions, Audit. A room opens its own detail view with tabs (General, Invites, Admins, Export), following the AC15 layout. Every tab and room has a deep link, and phone width stays usable.
+- [x] **AC17** The daemon's local admin page uses the full width with a tab bar that stays pinned at the top while scrolling: Instances, Rooms, Accounts, Settings, Monitoring, Update. Alerts show as a badge on their tab. Each tab has a deep link (`#accounts`, …).
+- [x] **AC13** Every modal (persona panel, the "Manage" room-admin panel, and the others) closes on a click outside it and on Escape, and keeps focus correctly for keyboard users.
 
 ## Phases
 
