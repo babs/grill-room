@@ -3,7 +3,7 @@
 import asyncio
 import contextlib
 import time
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Sequence
 from datetime import timedelta
 from typing import Any
 
@@ -36,6 +36,8 @@ class Worker:
         self._lk = lk
         self._identity = f"stt-{s.worker_name}"
         self.rooms: dict[str, rtc.Room] = {}
+        # The LiveKit room sid each room was listed with when joined.
+        self._sids: dict[str, str] = {}
         self._tracks: dict[str, set[asyncio.Task[None]]] = {}
         # Open audio streams by track sid, with their participant's identity and room. LiveKit ends
         # none of them when a track goes: the SFU hands the freed transceiver to the next track it
@@ -68,16 +70,40 @@ class Worker:
         while True:
             try:
                 resp = await self._lk.room.list_rooms(api.ListRoomsRequest())
-                for r in resp.rooms:
-                    if r.name not in self.rooms and r.num_participants > 0:
-                        await self._join(r.name)
+                await self.reconcile(resp.rooms)
             except Exception as e:  # LiveKit down: keep polling, it comes back
                 log.warning("discover_failed", error=str(e))
             await asyncio.sleep(self._s.poll_seconds)
 
-    async def _join(self, name: str) -> None:
+    async def reconcile(self, listed: Sequence[Any]) -> None:
+        """Drops the rooms LiveKit closed, then joins the ones with someone in them (005-AC18).
+
+        LiveKit can close an empty room without the SDK telling the worker, and a later join opens a
+        new room under the same name: a room gone from the list, under another sid, or no longer
+        connected is stale.
+        """
+        by_name = {r.name: r for r in listed}
+        for name, room in list(self.rooms.items()):
+            r = by_name.get(name)
+            sid = self._sids.get(name)
+            if r is None:
+                reason = "closed"
+            elif sid and r.sid != sid:
+                reason = "replaced"
+            elif not room.isconnected():
+                reason = "connection_lost"
+            else:
+                continue
+            self._forget(name, room, reason)
+            self._spawn(room.disconnect())
+        for r in listed:
+            if r.name not in self.rooms and r.num_participants > 0:
+                await self._join(r.name, r.sid)
+
+    async def _join(self, name: str, sid: str = "") -> None:
         room = rtc.Room()
         self.rooms[name] = room
+        self._sids[name] = sid
         self._tracks[name] = set()
         room.on("track_subscribed", lambda track, pub, p: self._on_track(name, track, pub, p))
         room.on("track_unsubscribed", lambda _track, pub, _p: self._close(pub.sid))
@@ -103,6 +129,7 @@ class Worker:
         if self.rooms.get(name) is not room:
             return
         del self.rooms[name]
+        self._sids.pop(name, None)
         for task in self._tracks.pop(name, set()):
             task.cancel()
         self._changed.set()
