@@ -330,7 +330,11 @@ func TestRoomsServedSideBySide(t *testing.T) {
 	d := newTestDaemon(t, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	a, b := Room{Base: "http://127.0.0.1:1", ID: "a"}, Room{Base: "http://127.0.0.1:1", ID: "b"}
+	// Pairing waits on this server, so both runs stay alive: an unreachable one would end at once
+	// and be restarted by right.
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	defer srv.Close()
+	a, b := Room{Base: srv.URL, ID: "a"}, Room{Base: srv.URL, ID: "b"}
 	d.SetRoom(ctx, a)
 	d.mu.Lock()
 	first := d.rooms[a.String()]
