@@ -38,10 +38,19 @@ On first start the server logs an `admin_token_generated` line holding the admin
 | `GRILL_ROOM_SMTP_FROM` | none | sender address, needed with `GRILL_ROOM_SMTP_ADDR` |
 | `GRILL_ROOM_SMTP_USERNAME`, `GRILL_ROOM_SMTP_PASSWORD` | none | SMTP login, both or neither; sent only after STARTTLS, unless the relay is on localhost |
 | `GRILL_ROOM_MAGIC_LINK_TTL` | `15m` | how long an emailed link works (1s to 1h) |
+| `GRILL_ROOM_AUDIT_RETENTION` | `8760h` | how long the audit log keeps an entry (24h or more) |
 | `LOG_LEVEL` | `info` | |
 | `LOG_FORMAT` | `auto` | `console` on a TTY, `json` otherwise |
 
 `/healthz` returns 200 when SQLite accepts a write and 503 otherwise.
+
+## Admin page
+
+`/admin` asks for the admin token once and then works on a session cookie: HttpOnly, SameSite=Strict, Secure over https, sent only to `/api/admin/`, valid 12 hours. The database keeps only the session token's hash. The page lists the open sessions with their IP and browser, and revokes any of them; a revoked browser gets a 401 on its next request and lands back on the login form. A client IP gets 10 login attempts per 15 minutes, and a success resets its count. The bearer token keeps working for `curl` and scripts, on every admin route.
+
+The audit log records every admin action: room create, rename and delete, invite create and revoke, profile delete, template and skill removal, and admin logins, logouts and session revocations. Each entry holds who (`super-admin`), the action, the target's kind, id and name at the time, details as JSON (4 KiB at most) and the time. Deleting a room or a profile keeps the entries about it, with the old name. The server purges entries older than `GRILL_ROOM_AUDIT_RETENTION`, and expired sessions, at start and then daily. `/admin` shows the log read-only, newest first, filtered by action and by target id or name.
+
+The page is Preact, htm and @preact/signals, served from `internal/uivendor/esm/` like the daemon's page. `make ui-check` runs `tsc --checkJs` on it.
 
 ## Rooms and invites
 
@@ -73,6 +82,10 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `DELETE /api/rooms/{room}/invites/{id}` | admin, or the participant who created it | revoke, with the invites its joiners created; 403 for another participant's invite |
 | `GET /api/profiles` | admin | every profile with its email and rooms |
 | `DELETE /api/profiles/{id}` | admin | delete a profile, see Personal data |
+| `POST /api/admin/login` | admin token in the body (`token`) | opens a 12 h session and sets its cookie; 401 for a wrong token, 429 past 10 attempts per client IP in 15 minutes |
+| `POST /api/admin/logout` | admin | ends the caller's session and clears its cookie |
+| `GET /api/admin/sessions`, `DELETE /api/admin/sessions/{id}` | admin | the open sessions (`current` marks the caller's); revoke one |
+| `GET /api/admin/audit` | admin | the audit log, newest first: `entries`, `next` (the `before` of the next page, 0 on the last), `actions`; filters `action`, `target` (an id, or part of a name), `before`, `limit` (1 to 200, default 50) |
 | `POST /api/join` | invite token in the body | returns a participant token and sets the room cookie; without a valid profile cookie, also creates a profile, sets its cookie and returns `recovery_url` once |
 | `GET /api/profile` | profile cookie, optional | `email_enabled`, and `profile` (`id`, own `email`, `rooms`) or null |
 | `POST /api/profile/recover` | recovery token in the body | signs this browser into the profile |
@@ -156,6 +169,8 @@ The server uses STARTTLS whenever the relay offers it. A relay that offers none 
 | persona templates a profile published, signed with a display name | every participant of every room | the admin removing the template, or deleting the profile; room copies stay |
 | personal skills, signed with a display name | the profile's own browsers; the agent and anyone in a room where a persona has one on | the profile removing it, the admin, or deleting the profile |
 | shared skills, signed with a display name | every participant of every room | the admin removing it; deleting the profile only detaches it |
+| audit log entries: the name of a room or profile an admin action targeted, the admin's IP at login | the admin | the purge after `GRILL_ROOM_AUDIT_RETENTION` (1 year), not deleting the room or profile |
+| admin sessions: IP and browser user agent | the admin | revoking or signing out, or the daily purge once expired (12 h) |
 
 - Access is by invite link. Anyone holding a valid one can read the room, and any member can make more.
 - No audio is stored. There is no retention timer: rooms and profiles live until deleted.

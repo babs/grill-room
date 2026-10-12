@@ -302,7 +302,9 @@ func (s *Server) listProfiles(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	var name string
 	if err == nil {
+		name = s.targetName(r, store.TargetProfile, strconv.FormatInt(id, 10))
 		err = s.bus.Store.DeleteProfile(r.Context(), id)
 	}
 	if errors.Is(err, store.ErrNotFound) || errors.Is(err, strconv.ErrSyntax) || errors.Is(err, strconv.ErrRange) {
@@ -313,6 +315,7 @@ func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "delete_profile_failed", err)
 		return
 	}
+	s.audit(r, ActionProfileDelete, store.TargetProfile, strconv.FormatInt(id, 10), name, nil)
 	s.log.Info("profile_deleted", zap.Int64("profile", id))
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -372,4 +375,11 @@ func (l *limiter) allow(key string, maxHits int, now time.Time) bool {
 	}
 	l.hits[key] = append(ts, now)
 	return true
+}
+
+// reset forgets key's events.
+func (l *limiter) reset(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.hits, key)
 }

@@ -1,0 +1,27 @@
+:root { --teal: #159f8c; --amber: #ffc23d; --ink: #1e2238; --paper: #f7f6f2; --line: #dedbd2; --muted: #6b6f80; --bad: #b3261e; font-family: system-ui, sans-serif; }
+body { margin: 0; color: var(--ink); background: var(--paper); overflow-wrap: anywhere; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1rem; padding: 0.6rem 1rem; background: var(--teal); color: #fff; }
+header h1 { font-size: 1.1rem; margin: 0; }
+header nav { display: flex; flex-wrap: wrap; gap: 0.2rem 0.8rem; }
+header nav a { color: #fff; }
+header nav a[aria-current="page"] { font-weight: 700; }
+header button { margin-left: auto; }
+main { padding: 0 1rem 1rem; max-width: 72rem; }
+h2 { font-size: 1.05rem; margin: 1.2rem 0 0.4rem; }
+.login { max-width: 24rem; margin: 3rem auto; padding: 1rem; }
+.login label { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.6rem; }
+.said { min-height: 1.2em; font-size: 0.9rem; }
+.bad { color: var(--bad); }
+.hint { color: var(--muted); font-size: 0.85rem; margin: 0 0 0.6rem; }
+.row { display: flex; flex-wrap: wrap; align-items: end; gap: 0.4rem 1rem; margin: 0.3rem 0 0.6rem; }
+.row label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.85rem; }
+.scroll { overflow-x: auto; max-width: 100%; }
+table { border-collapse: collapse; font-size: 0.85rem; }
+th, td { text-align: left; padding: 0.3rem 0.8rem 0.3rem 0; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: top; }
+td.wrap { white-space: normal; min-width: 10rem; max-width: 24rem; overflow-wrap: anywhere; }
+code { font-size: 0.8rem; }
+input, select, button { font: inherit; max-width: 100%; }
+@media (max-width: 40rem) {
+  main { padding: 0 0.6rem 1rem; }
+  header button { margin-left: 0; }
+}

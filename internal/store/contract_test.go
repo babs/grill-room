@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -19,7 +21,9 @@ func TestProfileUUIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if err := migrateTo(ctx, db, len(migrations)-1); err != nil {
+	// The schema just before profiles got their uuid.
+	before := slices.IndexFunc(migrations, func(m string) bool { return strings.Contains(m, "ALTER TABLE profiles ADD COLUMN uuid") })
+	if err := migrateTo(ctx, db, before); err != nil {
 		t.Fatal(err)
 	}
 	for _, h := range []string{"r1", "r2"} {

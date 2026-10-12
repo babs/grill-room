@@ -67,6 +67,8 @@ type Options struct {
 	SendMail func(ctx context.Context, to, subject, body string) error
 	// MagicLinkTTL is how long an emailed link works; 0 means 15 minutes.
 	MagicLinkTTL time.Duration
+	// AuditRetention is how long the audit log keeps an entry; 0 means DefaultAuditRetention.
+	AuditRetention time.Duration
 }
 
 //go:embed templates

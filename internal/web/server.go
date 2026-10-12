@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -31,6 +30,7 @@ import (
 	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/turn"
+	"github.com/babs/grill-room/internal/uivendor"
 )
 
 //go:embed ui
@@ -66,6 +66,10 @@ type Server struct {
 	stt       sttWorkers
 	// magicLimit rate-limits magic link requests per address and per client IP.
 	magicLimit limiter
+	// loginLimit rate-limits /admin logins per client IP.
+	loginLimit limiter
+	// now is the clock admin sessions and the audit log read; tests set it.
+	now func() time.Time
 	// electMu serialises host elections and hand-overs.
 	electMu sync.Mutex
 	// turnMu serialises turn starts and queue draining, so presses run in the order they came.
@@ -88,9 +92,12 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	if opts.MagicLinkTTL <= 0 {
 		opts.MagicLinkTTL = DefaultMagicLinkTTL
 	}
+	if opts.AuditRetention <= 0 {
+		opts.AuditRetention = DefaultAuditRetention
+	}
 	return &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
 		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, viewers: viewers{m: map[int64]int{}}, stt: sttWorkers{m: map[string]*sttWorker{}},
-		magicLimit: limiter{window: magicWindow}, fallbacks: fallbackCounters(),
+		magicLimit: limiter{window: magicWindow}, loginLimit: limiter{window: loginWindow}, now: time.Now, fallbacks: fallbackCounters(),
 		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}}
 }
 
@@ -136,8 +143,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /site.webmanifest", asset(ui, "ui/site.webmanifest", "application/manifest+json"))
 	mux.HandleFunc("GET /r/{room}", page("room.html"))
 	mux.HandleFunc("GET /profile", page("profile.html"))
+	mux.HandleFunc("GET /admin", s.adminPage)
 	static, _ := fs.Sub(ui, "ui") // cannot fail: "ui" is a valid embedded path
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
+	mux.Handle("GET "+uivendor.Prefix, uivendor.Handler())
 	mux.HandleFunc("GET /install.sh", s.installScript)
 	mux.HandleFunc("GET /download/{file}", s.download)
 	mux.HandleFunc("GET /api/daemon/version", s.daemonVersion)
@@ -151,6 +160,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/rooms/{room}/invites/{invite}", s.memberOrAdmin(s.revokeInvite))
 	mux.Handle("GET /api/profiles", s.admin(s.listProfiles))
 	mux.Handle("DELETE /api/profiles/{id}", s.admin(s.deleteProfile))
+	mux.HandleFunc("POST /api/admin/login", s.adminLogin)
+	mux.Handle("POST /api/admin/logout", s.admin(s.adminLogout))
+	mux.Handle("GET /api/admin/sessions", s.admin(s.adminSessions))
+	mux.Handle("DELETE /api/admin/sessions/{id}", s.admin(s.revokeAdminSession))
+	mux.Handle("GET /api/admin/audit", s.admin(s.auditLog))
 
 	mux.HandleFunc("GET /api/profile", s.getProfile)
 	mux.HandleFunc("POST /api/profile/recover", s.recoverProfile)
@@ -261,33 +275,6 @@ func bearer(r *http.Request) string {
 		return ""
 	}
 	return strings.TrimSpace(tok)
-}
-
-func (s *Server) isAdmin(r *http.Request) bool {
-	tok := bearer(r)
-	return tok != "" && subtle.ConstantTimeCompare([]byte(HashToken(tok)), s.adminHash) == 1
-}
-
-func (s *Server) admin(next http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.isAdmin(r) {
-			httpError(w, http.StatusUnauthorized, "admin token required")
-			return
-		}
-		next(w, r)
-	})
-}
-
-// memberOrAdmin runs next for the admin token with a nil session, else for a room participant.
-func (s *Server) memberOrAdmin(next func(http.ResponseWriter, *http.Request, *session)) http.Handler {
-	member := s.participant(func(w http.ResponseWriter, r *http.Request, sess session) { next(w, r, &sess) })
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.isAdmin(r) {
-			next(w, r, nil)
-			return
-		}
-		member.ServeHTTP(w, r)
-	})
 }
 
 // cred is the hash of a token a request offers: a participant token, or with viaProfile, a
@@ -438,12 +425,14 @@ func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "create_room_failed", err)
 		return
 	}
+	s.audit(r, ActionRoomCreate, store.TargetRoom, room.ID, room.Name, nil)
 	s.log.Info("room_created", zap.String("room", room.ID))
 	writeJSON(w, http.StatusCreated, room)
 }
 
 func (s *Server) deleteRoom(w http.ResponseWriter, r *http.Request) {
 	room := r.PathValue("room")
+	name := s.targetName(r, store.TargetRoom, room)
 	err := s.bus.Store.DeleteRoom(r.Context(), room)
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "no such room")
@@ -456,6 +445,7 @@ func (s *Server) deleteRoom(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "delete_room_failed", err)
 		return
 	}
+	s.audit(r, ActionRoomDelete, store.TargetRoom, room, name, nil)
 	s.log.Info("room_deleted", zap.String("room", room))
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -481,8 +471,11 @@ func (s *Server) renameRoom(w http.ResponseWriter, r *http.Request, sess *sessio
 	}
 	room := r.PathValue("room")
 	var by *store.Participant
+	var old string
 	if sess != nil {
 		by = sess.p
+	} else {
+		old = s.targetName(r, store.TargetRoom, room)
 	}
 	m, err := s.bus.Store.RenameRoom(r.Context(), room, name, by)
 	if errors.Is(err, store.ErrNotFound) {
@@ -495,6 +488,9 @@ func (s *Server) renameRoom(w http.ResponseWriter, r *http.Request, sess *sessio
 	}
 	if m != nil {
 		s.bus.Notify(room)
+		if sess == nil {
+			s.audit(r, ActionRoomRename, store.TargetRoom, room, name, map[string]any{"from": old})
+		}
 		s.log.Info("room_renamed", zap.String("room", room))
 	}
 	got, err := s.bus.Store.Room(r.Context(), room)
@@ -539,6 +535,9 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, sess *sess
 	if err != nil {
 		s.serverError(w, "create_invite_failed", err)
 		return
+	}
+	if sess == nil {
+		s.audit(r, ActionInviteCreate, store.TargetRoom, room, s.targetName(r, store.TargetRoom, room), map[string]any{"invite": inv.ID})
 	}
 	s.log.Info("invite_created", zap.String("room", room), zap.Int64("invite", inv.ID), zap.Int64("by", by))
 	// The token rides in the fragment, which browsers never send: it stays out of proxy logs.
@@ -586,6 +585,9 @@ func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request, sess *sess
 		} else {
 			s.kickFromVoice(room, ids)
 		}
+	}
+	if sess == nil {
+		s.audit(r, ActionInviteRevoke, store.TargetRoom, room, s.targetName(r, store.TargetRoom, room), map[string]any{"invite": id, "revoked": revoked})
 	}
 	s.log.Info("invite_revoked", zap.String("room", room), zap.Int64("invite", id), zap.Int64s("with", revoked))
 	w.WriteHeader(http.StatusNoContent)

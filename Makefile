@@ -158,9 +158,10 @@ test-offline:
 	docker run --rm --network none -e GRILL_ROOM_TEST_OFFLINE=1 -v '$(CURDIR)/internal/trust:/src:ro' \
 	  -v '$(CURDIR)/bin/trust.test:/trust.test:ro' -w /src debian:stable-slim /trust.test -test.v -test.run 'Offline|Release|DevKey'
 
-# The admin page's libraries, pinned in tools/ui/package.json and copied unmodified with their
-# licenses: no CDN, no build step. index.html maps the bare imports to them.
-UI_VENDOR := internal/daemon/ui/vendor
+# The admin pages' libraries, pinned in tools/ui/package.json and copied unmodified with their
+# licenses: no CDN, no build step. One copy serves the daemon's page and the server's /admin, whose
+# import maps point the bare imports to it.
+UI_VENDOR := internal/uivendor/esm
 UI_MODULES := preact/dist/preact.mjs:preact.js preact/hooks/dist/hooks.mjs:preact-hooks.js \
   @preact/signals-core/dist/signals-core.mjs:signals-core.js @preact/signals/dist/signals.mjs:signals.js \
   htm/dist/htm.mjs:htm.js htm/preact/index.mjs:htm-preact.js
@@ -175,7 +176,7 @@ ui-vendor: ui-tools
 	  echo "$$p $$(node -p "require('./tools/ui/node_modules/$$p/package.json').version")"; \
 	done > '$(UI_VENDOR)/VERSIONS'
 
-# The page's JSDoc types, checked by tsc (003 Phase 7).
+# The admin pages' JSDoc types, checked by tsc (003 Phase 7, 004-AC19).
 ui-check: ui-tools
 	cd tools/ui && pnpm exec tsc -p tsconfig.json
 

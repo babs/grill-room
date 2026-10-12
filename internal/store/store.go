@@ -103,7 +103,8 @@ type Store struct{ db *sql.DB }
 // migrations run in order, each once, tracked by PRAGMA user_version. Append only.
 // Every table must reach rooms or profiles through NOT NULL, ON DELETE CASCADE foreign keys, and
 // any other reference to profiles must be ON DELETE SET NULL: DeleteRoom and DeleteProfile are
-// single DELETEs, and TestEveryTableCascadesFromAnOwner enforces it.
+// single DELETEs, and TestEveryTableCascadesFromAnOwner enforces it. Server-wide tables, listed in
+// that test, are the exceptions.
 var migrations = []string{`
 CREATE TABLE settings (
 	key TEXT PRIMARY KEY,
@@ -479,6 +480,30 @@ ALTER TABLE agent_sessions ADD COLUMN context_window INTEGER;
 ALTER TABLE agent_sessions ADD COLUMN context_updated_at TEXT;
 ALTER TABLE turns ADD COLUMN handoff TEXT NOT NULL DEFAULT '' CHECK (handoff IN ('', 'write', 'read'));
 ALTER TABLE turn_queue ADD COLUMN handoff TEXT NOT NULL DEFAULT '' CHECK (handoff IN ('', 'write', 'read'));
+`, `
+-- 004-AC1, 004-AC6: server-wide tables. The audit log has no foreign key on purpose: an entry about
+-- a room or profile outlives it, with the name it had, until the retention purge.
+CREATE TABLE admin_sessions (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	token_hash TEXT NOT NULL UNIQUE,
+	created_at TEXT NOT NULL,
+	last_used_at TEXT NOT NULL,
+	expires_at_s INTEGER NOT NULL,
+	user_agent TEXT NOT NULL,
+	ip TEXT NOT NULL
+);
+CREATE TABLE audit_log (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	at_ms INTEGER NOT NULL,
+	actor TEXT NOT NULL,
+	action TEXT NOT NULL,
+	target_kind TEXT NOT NULL,
+	target_id TEXT NOT NULL,
+	target_name TEXT NOT NULL,
+	details TEXT NOT NULL
+);
+CREATE INDEX audit_log_at ON audit_log(at_ms);
+CREATE INDEX audit_log_action ON audit_log(action, id);
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.

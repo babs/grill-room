@@ -131,6 +131,10 @@ func (s *Server) adminRemoveSkill(w http.ResponseWriter, r *http.Request) { s.re
 
 func (s *Server) removeSkill(w http.ResponseWriter, r *http.Request, profileID int64) {
 	id := skillID(r)
+	var name string
+	if profileID == 0 {
+		name = s.targetName(r, store.TargetSkill, strconv.FormatInt(id, 10))
+	}
 	err := s.bus.Store.RemoveSkill(r.Context(), id, profileID)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -138,6 +142,9 @@ func (s *Server) removeSkill(w http.ResponseWriter, r *http.Request, profileID i
 	case err != nil:
 		s.serverError(w, "remove_skill_failed", err)
 	default:
+		if profileID == 0 {
+			s.audit(r, ActionSkillRemove, store.TargetSkill, strconv.FormatInt(id, 10), name, nil)
+		}
 		s.log.Info("skill_removed", zap.Int64("skill", id), zap.Int64("profile", profileID))
 		w.WriteHeader(http.StatusNoContent)
 	}
