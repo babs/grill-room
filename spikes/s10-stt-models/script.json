@@ -1,0 +1,60 @@
+{
+  "voices": {
+    "fr1": {"model": "fr_FR-siwis-medium"},
+    "fr2": {"model": "fr_FR-mls-medium", "speaker_id": 84},
+    "en1": {"model": "en_US-joe-medium"},
+    "en2": {"model": "en_GB-cori-medium"}
+  },
+  "terms": [
+    "Kubernetes", "ArgoCD", "rollout", "feature flag", "sidecar", "LiveKit", "egress", "rate limit",
+    "merge request", "staging", "Helm chart", "observability", "p95", "pod", "pods", "namespace", "nodes",
+    "cluster", "readiness probe", "endpoint", "healthcheck", "canary", "rollback", "webhook", "GitHub",
+    "pipeline", "CI", "push", "dashboard", "Grafana", "ingress", "Prometheus", "scrape", "timeout",
+    "load balancer", "retry", "backoff", "token", "OAuth", "backup", "cache", "Redis", "Postgres",
+    "Terraform", "bucket", "autoscaling", "queue", "on-call", "postmortem", "SLO", "hotfix", "release",
+    "backlog", "sprint", "deployment", "WebRTC", "logs", "API", "benchmark", "proxy"
+  ],
+  "distractors": [
+    "Kafka", "Istio", "Vault", "OpenTelemetry", "Kyverno", "Loki", "gRPC", "runbook"
+  ],
+  "lines": [
+    {"id": "f01", "lang": "fr", "voice": "fr1", "text": "On fait le rollout sur le staging avant de toucher à la production."},
+    {"id": "f02", "lang": "fr", "voice": "fr2", "text": "Le pod du sidecar redémarre en boucle depuis ce matin."},
+    {"id": "f03", "lang": "fr", "voice": "fr1", "text": "Il faut ajouter un feature flag pour couper la nouvelle page."},
+    {"id": "f04", "lang": "fr", "voice": "fr2", "text": "ArgoCD n'a pas synchronisé le namespace après la merge request."},
+    {"id": "f05", "lang": "fr", "voice": "fr1", "text": "Le Helm chart expose déjà les limites de mémoire du worker."},
+    {"id": "f06", "lang": "fr", "voice": "fr2", "text": "LiveKit perd la connexion quand l'egress passe par le proxy."},
+    {"id": "f07", "lang": "fr", "voice": "fr1", "text": "On a atteint le rate limit de l'API pendant le benchmark."},
+    {"id": "f08", "lang": "fr", "voice": "fr2", "text": "La latence p95 a doublé depuis la dernière mise en production."},
+    {"id": "f09", "lang": "fr", "voice": "fr1", "text": "Sans observability correcte, on ne verra jamais le problème."},
+    {"id": "f10", "lang": "fr", "voice": "fr2", "text": "Je relis ta merge request cet après-midi et je valide."},
+    {"id": "f11", "lang": "fr", "voice": "fr1", "text": "Le cluster Kubernetes manque de nodes pendant le pic de charge."},
+    {"id": "f12", "lang": "fr", "voice": "fr2", "text": "Mets le readiness probe sur le endpoint de healthcheck."},
+    {"id": "f13", "lang": "fr", "voice": "fr1", "text": "On peut lancer un canary sur une partie du trafic, puis un rollback si besoin."},
+    {"id": "f14", "lang": "fr", "voice": "fr2", "text": "Le webhook GitHub déclenche la pipeline de CI à chaque push."},
+    {"id": "f15", "lang": "fr", "voice": "fr1", "text": "Le dashboard Grafana montre un pic d'erreurs sur l'ingress."},
+    {"id": "f16", "lang": "fr", "voice": "fr2", "text": "Prometheus ne vient plus scrape les métriques du sidecar."},
+    {"id": "f17", "lang": "fr", "voice": "fr1", "text": "Le timeout du load balancer coupe les requêtes longues."},
+    {"id": "f18", "lang": "fr", "voice": "fr2", "text": "Ajoute un retry avec un backoff exponentiel sur le client."},
+    {"id": "f19", "lang": "fr", "voice": "fr1", "text": "Le token OAuth expire avant la fin du backup."},
+    {"id": "f20", "lang": "fr", "voice": "fr2", "text": "Le cache Redis sature et Postgres prend toute la charge."},
+    {"id": "f21", "lang": "fr", "voice": "fr1", "text": "Terraform veut recréer le bucket, il ne faut surtout pas appliquer."},
+    {"id": "f22", "lang": "fr", "voice": "fr2", "text": "L'autoscaling ajoute des pods mais la queue continue de grossir."},
+    {"id": "f23", "lang": "fr", "voice": "fr1", "text": "Qui fait le on-call ce week-end, toi ou moi ?"},
+    {"id": "f24", "lang": "fr", "voice": "fr2", "text": "On écrit le postmortem demain et on revoit le SLO."},
+    {"id": "f25", "lang": "fr", "voice": "fr1", "text": "Le hotfix part en release ce soir, après la revue."},
+    {"id": "f26", "lang": "fr", "voice": "fr2", "text": "Le backlog du sprint est trop chargé pour la démo."},
+    {"id": "f27", "lang": "fr", "voice": "fr1", "text": "Le deployment reste bloqué tant que le secret n'existe pas."},
+    {"id": "f28", "lang": "fr", "voice": "fr2", "text": "Je baisse le rate limit sur l'egress pour protéger le service."},
+    {"id": "f29", "lang": "fr", "voice": "fr1", "text": "Les logs du sidecar LiveKit montrent des erreurs WebRTC."},
+    {"id": "f30", "lang": "fr", "voice": "fr2", "text": "On garde ArgoCD pour le staging et un Helm chart par service."},
+    {"id": "f31", "lang": "fr", "voice": "fr1", "text": "Le feature flag reste désactivé jusqu'au rollout complet."},
+    {"id": "f32", "lang": "fr", "voice": "fr2", "text": "Il faut une alerte sur la p95 avant de passer en production."},
+    {"id": "e01", "lang": "en", "voice": "en1", "text": "The rollout is paused until the canary error rate drops."},
+    {"id": "e02", "lang": "en", "voice": "en2", "text": "Can you check the egress rate limit on the LiveKit server?"},
+    {"id": "e03", "lang": "en", "voice": "en1", "text": "Let's merge the Helm chart change after the staging tests pass."},
+    {"id": "e04", "lang": "en", "voice": "en2", "text": "The p95 latency is fine, but the readiness probe keeps failing."},
+    {"id": "e05", "lang": "en", "voice": "en1", "text": "I'll open a merge request to add the feature flag."},
+    {"id": "e06", "lang": "en", "voice": "en2", "text": "We need better observability before we scale this cluster."}
+  ]
+}
