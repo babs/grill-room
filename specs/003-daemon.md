@@ -1,6 +1,6 @@
 # 003 — Daemon: one supervisor, many instances, rooms and agents
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-10-11
 **Context**: specs 001 and 002 (shipped), `docs/architecture.md`, `docs/agent-workspace.md`, grill notes
