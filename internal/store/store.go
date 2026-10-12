@@ -103,6 +103,8 @@ type Message struct {
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 	// ChangeSeq orders the room's edits and deletes: each one sets it past every other in the room.
 	ChangeSeq int64 `json:"change_seq,omitempty"`
+	// TurnID is the turn whose synthesis, failure or stop the message tells (005-AC4).
+	TurnID int64 `json:"-"`
 }
 
 // Store wraps the SQLite handle.
@@ -574,6 +576,28 @@ ALTER TABLE participants ADD COLUMN last_ua TEXT;
 `, `
 -- 005-AC23: the terms the STT worker is told to expect in the room.
 ALTER TABLE rooms ADD COLUMN stt_glossary TEXT NOT NULL DEFAULT '';
+`, `
+-- 005-AC5: a turn someone stopped. ALTER TABLE cannot change a CHECK, but loosening one in the
+-- stored schema is safe: no row on disk changes (sqlite.org/lang_altertable.html#otheralter).
+PRAGMA writable_schema = ON;
+UPDATE sqlite_schema SET sql = replace(sql, 'CHECK (status IN (''running'', ''done'', ''failed''))',
+	'CHECK (status IN (''running'', ''done'', ''failed'', ''stopped''))') WHERE type = 'table' AND name = 'turns';
+PRAGMA writable_schema = OFF;
+`, `
+-- 005-AC4: the turn a message's @mention queued: its queue entry, then the turn it became. Queue
+-- ids are never reused, and the entry is deleted as its turn starts, so queue_id has no key.
+CREATE TABLE message_turns (
+	message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+	persona_id INTEGER NOT NULL REFERENCES room_personas(id) ON DELETE CASCADE,
+	queue_id INTEGER,
+	turn_id INTEGER REFERENCES turns(id) ON DELETE SET NULL,
+	PRIMARY KEY (message_id, persona_id)
+);
+CREATE INDEX message_turns_queue ON message_turns(queue_id);
+CREATE INDEX message_turns_turn ON message_turns(turn_id);
+-- The turn whose synthesis, failure or stop a message tells.
+ALTER TABLE messages ADD COLUMN turn_id INTEGER REFERENCES turns(id) ON DELETE SET NULL;
+CREATE INDEX messages_turn ON messages(turn_id) WHERE turn_id IS NOT NULL;
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -581,7 +605,7 @@ const uuidSQL = `lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' |
 	substr('89ab', 1 + abs(random() % 4), 1) || substr(hex(randomblob(2)), 2) || '-' || hex(randomblob(6)))`
 
 // migrationData runs Go code inside the transaction of the migration to version key, after its SQL.
-var migrationData = map[int]func(context.Context, *sql.Tx) error{9: migratePersonas}
+var migrationData = map[int]func(context.Context, *sql.Tx) error{9: migratePersonas, 24: migrateStopped}
 
 // Open opens (and migrates) the database at path.
 func Open(path string) (*Store, error) {
@@ -1044,10 +1068,10 @@ func insertMessage(ctx context.Context, db execer, m *Message) error {
 		m.HTML = render.MessageHTML(m.Body)
 	}
 	res, err := db.ExecContext(ctx,
-		`INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, html, model, effort, persona_id, req_model, req_effort, model_note, model_mismatch)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, html, model, effort, persona_id, req_model, req_effort, model_note, model_mismatch, turn_id)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		m.RoomID, m.TS.Format(time.RFC3339Nano), m.Kind, pid, m.Sender, m.Body, nullStr(m.HTML), m.Model, m.Effort, nullID(m.PersonaID), m.ReqModel, m.ReqEffort,
-		m.ModelNote, m.ModelMismatch)
+		m.ModelNote, m.ModelMismatch, nullID(m.TurnID))
 	if err != nil {
 		return fmt.Errorf("insert message: %w", err)
 	}

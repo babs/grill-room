@@ -188,7 +188,7 @@ func (s *Server) launch(ctx context.Context, room *store.Room, persona *store.Ro
 	if err != nil {
 		return nil, err
 	}
-	t.ParticipantID, t.DaemonID, t.RerunOf = q.ParticipantID, host.id, q.RerunOf
+	t.ParticipantID, t.DaemonID, t.RerunOf, t.QueueID = q.ParticipantID, host.id, q.RerunOf, q.ID
 	if err := s.bus.Store.StartTurn(ctx, t, room.ParallelTurns); err != nil {
 		return nil, err
 	}
@@ -473,6 +473,69 @@ func (s *Server) cancelQueued(w http.ResponseWriter, r *http.Request, sess sessi
 		s.bus.Notify(sess.p.RoomID)
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// stopTurn stops a running {turn}: whoever started it, the host or a room admin may. The turn ends
+// at once, its result is refused when it comes, and the host's daemon is told to kill claude
+// (005-AC5).
+func (s *Server) stopTurn(w http.ResponseWriter, r *http.Request, sess session) {
+	// The JSON body, empty, is what a cross-site form cannot send.
+	if !decode(w, r, &struct{}{}) {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("turn"), 10, 64)
+	if err != nil {
+		httpError(w, http.StatusNotFound, "no such turn")
+		return
+	}
+	ctx, room := r.Context(), sess.p.RoomID
+	t, err := s.bus.Store.Turn(ctx, room, id)
+	if errors.Is(err, store.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "no such turn")
+		return
+	}
+	if err != nil {
+		s.serverError(w, "stop_turn_failed", err)
+		return
+	}
+	if t.Status != store.TurnRunning {
+		httpError(w, http.StatusConflict, store.ErrTurnNotRunning.Error())
+		return
+	}
+	if allowed, err := s.mayStop(ctx, &sess, t); err != nil {
+		s.serverError(w, "stop_turn_failed", err)
+		return
+	} else if !allowed {
+		httpError(w, http.StatusForbidden, "only who started the turn, the host or a room admin can stop it")
+		return
+	}
+	switch _, err := s.bus.Store.StopTurn(ctx, room, id, oneLine(sess.p.Name)); {
+	case errors.Is(err, store.ErrTurnNotRunning):
+		httpError(w, http.StatusConflict, err.Error())
+		return
+	case err != nil:
+		s.serverError(w, "stop_turn_failed", err)
+		return
+	}
+	s.log.Info("turn_stopped", zap.String("room", room), zap.Int64("turn", id), zap.Int64("participant", sess.p.ID))
+	s.bus.Notify(room)
+	s.drain(ctx, room)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// mayStop reports whether the member may stop turn t: who started it, the host, or a room admin.
+func (s *Server) mayStop(ctx context.Context, sess *session, t *store.Turn) (bool, error) {
+	if t.ParticipantID == sess.p.ID {
+		return true, nil
+	}
+	room, err := s.bus.Store.Room(ctx, sess.p.RoomID)
+	if err != nil {
+		return false, err
+	}
+	if room.HostParticipantID == sess.p.ID {
+		return true, nil
+	}
+	return s.roomAdmin(ctx, sess)
 }
 
 // daemonTurn loads the {turn} of the daemon's room, provided it is running on this daemon.

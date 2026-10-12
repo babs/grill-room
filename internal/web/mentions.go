@@ -64,3 +64,12 @@ func mentioned(body string, personas []store.RoomPersona) []store.RoomPersona {
 	}
 	return out
 }
+
+// notToken is what a participant's name holds besides the characters an @name takes.
+var notToken = regexp.MustCompile(`[^\p{L}\p{N}_-]+`)
+
+// mentionToken is how "@" spells a participant's name: "Ana María" is @Ana_María. The room page's
+// autocompletion writes it the same way (005-AC2).
+func mentionToken(name string) string {
+	return strings.Trim(notToken.ReplaceAllString(name, "_"), "_")
+}

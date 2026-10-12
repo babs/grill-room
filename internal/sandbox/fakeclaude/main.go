@@ -17,7 +17,8 @@
 //	FAKE_PINGPONG A B as persona A call @B, as any other call @A, and repeat the marker so the
 //	                  called persona's prompt holds it too (an agent chain)
 //	FAKE_SLOW         take a few seconds (a turn others queue behind)
-//	FAKE_SLEEP        hang until killed (a turn in progress)
+//	FAKE_SLEEP        write docs/notes.md and the prompt to the session, as a turn under way
+//	                  does, then hang until killed
 //
 // Before them, the room's own handoff instructions: a prompt asking to write docs/_handoff-<name>.md
 // writes it with the latest code word, and a new session told to read it answers with what it says.
@@ -131,7 +132,7 @@ func run(args []string, stdin io.Reader, out io.Writer, cwd, home string) int {
 	if strings.Contains(string(prompt), "FAKE_SKILLS") {
 		answer, err = useSkills(plugin, cwd)
 	} else {
-		answer, err = act(string(prompt), string(history), cwd, system, effort, autocompact)
+		answer, err = act(string(prompt), string(history), cwd, system, effort, autocompact, path)
 	}
 	if err != nil {
 		return result(out, model, sid, err.Error(), true, 0)
@@ -153,7 +154,7 @@ func run(args []string, stdin io.Reader, out io.Writer, cwd, home string) int {
 	return result(out, model, sid, answer, false, used)
 }
 
-func act(prompt, history, cwd, system, effort, autocompact string) (string, error) {
+func act(prompt, history, cwd, system, effort, autocompact, session string) (string, error) {
 	ws := func(p string) string { return filepath.Join(cwd, p) }
 	if m := writeNote.FindStringSubmatch(prompt); m != nil {
 		word := "nothing"
@@ -240,6 +241,12 @@ func act(prompt, history, cwd, system, effort, autocompact string) (string, erro
 		time.Sleep(slow)
 		return "Slow turn done.", nil
 	case strings.Contains(prompt, "FAKE_SLEEP"):
+		// What a killed turn leaves behind must never reach the room.
+		_ = os.WriteFile(ws("docs/notes.md"), []byte("# Notes\n\nWritten by a turn that never ended.\n"), 0o600) //nolint:gosec // see above
+		if f, err := os.OpenFile(session, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {              //nolint:gosec // see above
+			_ = json.NewEncoder(f).Encode(map[string]string{"type": "user", "prompt": prompt})
+			_ = f.Close()
+		}
 		time.Sleep(time.Hour)
 		return "", nil
 	}

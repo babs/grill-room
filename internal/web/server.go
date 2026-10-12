@@ -253,6 +253,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rooms/{room}/agent", s.participant(s.getAgent))
 	mux.Handle("PATCH /api/rooms/{room}/agent", s.participant(s.setAgentMode))
 	mux.Handle("POST /api/rooms/{room}/turns", s.participant(s.startTurn))
+	mux.Handle("POST /api/rooms/{room}/turns/{turn}/stop", s.participant(s.stopTurn))
 	mux.Handle("PUT /api/rooms/{room}/host", s.participant(s.handOver))
 	mux.Handle("PATCH /api/rooms/{room}/participants/{participant}", s.participant(s.setCanTrigger))
 	mux.Handle("DELETE /api/rooms/{room}/queue/{queued}", s.participant(s.cancelQueued))
@@ -796,8 +797,12 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, sess sessio
 		s.serverError(w, "post_message_failed", err)
 		return
 	}
-	s.mentionTurns(r.Context(), sess.p, body)
-	writeJSON(w, http.StatusCreated, viewMessage(*m))
+	notices := s.mentionTurns(r.Context(), sess.p, m)
+	writeJSON(w, http.StatusCreated, struct {
+		store.Message
+		// Notices go to the author alone: nobody else is told (005-AC3).
+		Notices []mentionNotice `json:"mention_notices,omitempty"`
+	}{viewMessage(*m), notices})
 }
 
 // events streams the room's messages after ?since= or Last-Event-ID, then live ones, a

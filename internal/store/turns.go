@@ -21,6 +21,8 @@ const (
 	TurnRunning = "running"
 	TurnDone    = "done"
 	TurnFailed  = "failed"
+	// TurnStopped is a turn someone stopped while it ran: nothing of it applies (005-AC5).
+	TurnStopped = "stopped"
 )
 
 // AgentName signs what a turn whose persona is gone writes. A turn normally signs with its persona's name.
@@ -92,6 +94,9 @@ type Turn struct {
 	// BaseRevisions are the revisions of the agent documents in the turn's workspace, by document
 	// id, pinned when the daemon first fetches it; nil before.
 	BaseRevisions map[int64]int `json:"-"`
+	// QueueID is the queue entry the turn comes from, 0 for a press that did not wait: the
+	// mentions waiting on it follow the turn (005-AC4). Set by the caller of StartTurn only.
+	QueueID int64 `json:"-"`
 }
 
 // TurnReport is what a turn changed, and what it tried to change and was refused.
@@ -320,6 +325,11 @@ func (s *Store) StartTurn(ctx context.Context, t *Turn, parallel bool) error {
 	if err := pinTurnSkills(ctx, tx, t.RoomID, t.ID, t.PersonaID); err != nil {
 		return err
 	}
+	if t.QueueID != 0 {
+		if _, err := tx.ExecContext(ctx, `UPDATE message_turns SET turn_id = ? WHERE queue_id = ?`, t.ID, t.QueueID); err != nil {
+			return fmt.Errorf("start turn: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("start turn: %w", err)
 	}
@@ -454,7 +464,7 @@ func (s *Store) FailTurn(ctx context.Context, roomID string, id int64, reason st
 	if note := handoffFailed(name, handoff); note != "" {
 		body = strings.TrimSuffix(body, ".") + "." + note
 	}
-	m := &Message{RoomID: roomID, Kind: KindSystem, Sender: name, Body: body}
+	m := &Message{RoomID: roomID, Kind: KindSystem, Sender: name, Body: body, TurnID: id}
 	if err := insertMessage(ctx, tx, m); err != nil {
 		return nil, err
 	}
@@ -462,6 +472,49 @@ func (s *Store) FailTurn(ctx context.Context, roomID string, id int64, reason st
 		return nil, fmt.Errorf("fail turn: %w", err)
 	}
 	return m, nil
+}
+
+// StopTurn ends running turn id as stopped by name and says so in the room, in one transaction
+// (005-AC5). Its result, if one comes, is refused: nothing of it applies. ErrTurnNotRunning when
+// the turn ended already.
+func (s *Store) StopTurn(ctx context.Context, roomID string, id int64, name string) (*Message, error) {
+	var m *Message
+	err := s.withTx(ctx, "stop turn", func(tx *sql.Tx) error {
+		var persona string
+		err := tx.QueryRowContext(ctx, `UPDATE turns SET status = 'stopped', error = ?, ended_at = ? WHERE id = ? AND room_id = ? AND status = 'running'
+			RETURNING persona_name`, "stopped by "+name, now(), id, roomID).Scan(&persona)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrTurnNotRunning
+		}
+		if err != nil {
+			return fmt.Errorf("stop turn: %w", err)
+		}
+		persona = signer(persona)
+		m = &Message{RoomID: roomID, Kind: KindSystem, Sender: persona, Body: persona + " turn stopped by " + name + ".", TurnID: id}
+		return insertMessage(ctx, tx, m)
+	})
+	return m, err
+}
+
+// migrateStopped checks that the migration to 'stopped' loosened the CHECK, since a schema text
+// other than expected would leave the old one, then bumps schema_version as SQLite's procedure
+// for a schema edit asks, so that no connection keeps the old schema cached.
+func migrateStopped(ctx context.Context, tx *sql.Tx) error {
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'turns' AND sql LIKE '%''stopped''%'`).Scan(&n); err != nil {
+		return fmt.Errorf("check turns schema: %w", err)
+	}
+	if n != 1 {
+		return errors.New("the turns table's status CHECK is not the expected one: 'stopped' was not added")
+	}
+	var v int
+	if err := tx.QueryRowContext(ctx, `PRAGMA schema_version`).Scan(&v); err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA schema_version = %d`, v+1)); err != nil {
+		return fmt.Errorf("bump schema version: %w", err)
+	}
+	return nil
 }
 
 // RejectTurn ends running turn id of daemonID, whose result conflicts on doc (003-AC21). A first
@@ -485,7 +538,7 @@ func (s *Store) RejectTurn(ctx context.Context, roomID string, id, daemonID int6
 			return fmt.Errorf("reject turn: %w", err)
 		}
 		name := signer(t.PersonaName)
-		m = &Message{RoomID: roomID, Kind: KindSystem, Sender: name, Body: name + " turn failed: " + reason + "." + handoffFailed(name, t.Handoff)}
+		m = &Message{RoomID: roomID, Kind: KindSystem, Sender: name, Body: name + " turn failed: " + reason + "." + handoffFailed(name, t.Handoff), TurnID: id}
 		if rerun = t.RerunOf == 0 && t.PersonaID != 0; rerun {
 			m.Body = name + " turn: " + doc + " changed while it ran, so its result is set aside and it runs again on the new version."
 			if err := queueRerun(ctx, tx, t, doc); err != nil {
@@ -524,11 +577,17 @@ func handoffNext(ctx context.Context, tx *sql.Tx, t *Turn, report TurnReport) er
 		return insertMessage(ctx, tx, &Message{RoomID: t.RoomID, Kind: KindSystem, Sender: signer(t.PersonaName),
 			Body: "No handoff: " + t.PersonaName + " did not write docs/" + doc + ", so it stays on its current session."})
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM turn_queue WHERE persona_id = ?`, t.PersonaID); err != nil {
+	var old int64
+	err := tx.QueryRowContext(ctx, `DELETE FROM turn_queue WHERE persona_id = ? RETURNING id`, t.PersonaID).Scan(&old)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("queue handoff: %w", err)
 	}
-	return enqueue(ctx, tx, &QueuedTurn{RoomID: t.RoomID, PersonaID: t.PersonaID, ParticipantID: t.ParticipantID, Source: SourceButton,
-		Fresh: true, Cause: HandoffCause, Handoff: HandoffRead})
+	q := &QueuedTurn{RoomID: t.RoomID, PersonaID: t.PersonaID, ParticipantID: t.ParticipantID, Source: SourceButton,
+		Fresh: true, Cause: HandoffCause, Handoff: HandoffRead}
+	if err := enqueue(ctx, tx, q); err != nil {
+		return err
+	}
+	return requeueMentions(ctx, tx, q.ID, 0, old)
 }
 
 // queueRerun puts the re-run of turn t at the head of its room's queue, in place of its persona's
@@ -536,7 +595,8 @@ func handoffNext(ctx context.Context, tx *sql.Tx, t *Turn, report TurnReport) er
 func queueRerun(ctx context.Context, tx *sql.Tx, t *Turn, doc string) error {
 	fresh := t.Fresh
 	var queued bool
-	err := tx.QueryRowContext(ctx, `DELETE FROM turn_queue WHERE persona_id = ? RETURNING fresh`, t.PersonaID).Scan(&queued)
+	var old int64
+	err := tx.QueryRowContext(ctx, `DELETE FROM turn_queue WHERE persona_id = ? RETURNING fresh, id`, t.PersonaID).Scan(&queued, &old)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
@@ -549,12 +609,14 @@ func queueRerun(ctx context.Context, tx *sql.Tx, t *Turn, doc string) error {
 	if t.ParticipantID != 0 {
 		pid, source = t.ParticipantID, SourceButton
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO turn_queue(room_id, persona_id, participant_id, source, fresh, created_at, rerun_of, cause, handoff)
-		VALUES(?,?,?,?,?,?,?,?,?)`, t.RoomID, t.PersonaID, pid, source, fresh, now(), t.ID, "re-run after a conflict on "+doc, t.Handoff)
+	var id int64
+	err = tx.QueryRowContext(ctx, `INSERT INTO turn_queue(room_id, persona_id, participant_id, source, fresh, created_at, rerun_of, cause, handoff)
+		VALUES(?,?,?,?,?,?,?,?,?) RETURNING id`, t.RoomID, t.PersonaID, pid, source, fresh, now(), t.ID, "re-run after a conflict on "+doc, t.Handoff).Scan(&id)
 	if err != nil {
 		return fmt.Errorf("queue re-run: %w", err)
 	}
-	return nil
+	// The re-run answers the mentions of the rejected turn and of the entry it replaces.
+	return requeueMentions(ctx, tx, id, t.ID, old)
 }
 
 // FailRunningTurns fails every running turn, in every room, and returns the rooms touched. At
@@ -747,7 +809,7 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 	}
 	if strings.TrimSpace(out.Synthesis) != "" {
 		m := &Message{RoomID: roomID, Kind: KindAgent, Sender: author, PersonaID: t.PersonaID, Body: out.Synthesis, Model: out.Model, Effort: out.Effort,
-			ModelNote: out.ModelNote, ModelMismatch: out.ModelMismatch}
+			ModelNote: out.ModelNote, ModelMismatch: out.ModelMismatch, TurnID: id}
 		if out.Capped {
 			m.ReqModel, m.ReqEffort = t.ReqModel, t.ReqEffort
 		}

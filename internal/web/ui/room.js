@@ -189,7 +189,62 @@ function renderMessage(m) {
       ' ', button('Delete', '', () => deleteMessage(m)));
   }
   li.append(meta, body);
+  if (m.kind === 'text') fillMentions(li);
   return li;
+}
+
+// Mentions. A message whose @mention queued a turn shows that turn's state, linked to how it
+// ended (005-AC4); one that cannot run tells its author why, and nobody else (005-AC3).
+const notices = new Map();
+
+// mentionToken spells a person's name as the server's mentionToken does: "Ana María" is @Ana_María.
+const mentionToken = (name) => name.replace(/[^\p{L}\p{N}_-]+/gu, '_').replace(/^_+|_+$/g, '');
+
+function fillMentions(li) {
+  const id = Number(li.dataset.id);
+  const states = (agent.mentions || []).filter((s) => s.message_id === id);
+  const said = notices.get(id) || [];
+  // A mention past the agent state's window keeps the state it last showed.
+  if (!states.length && !said.length) return;
+  let box = li.querySelector(':scope > .mentions');
+  if (!box) {
+    box = document.createElement('div');
+    box.className = 'mentions';
+    li.append(box);
+  }
+  box.replaceChildren(...states.map(mentionChip), ...said.map((n) => {
+    const el = document.createElement('span');
+    el.className = 'notice';
+    el.textContent = '@' + n.name + ': ' + n.reason + '. Only you see this.';
+    return el;
+  }));
+}
+
+function mentionChip(s) {
+  const p = personaByID(s.persona_id);
+  const el = document.createElement(s.line_id ? 'a' : 'span');
+  el.className = 'mention-turn ' + s.status;
+  el.textContent = '→ @' + (p ? p.name : 'persona') + ' · ' + s.status;
+  if (s.line_id) {
+    el.href = '#';
+    el.title = s.status === 'done' ? 'Show the synthesis' : 'Show how the turn ended';
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      const line = messages.querySelector('li[data-id="' + s.line_id + '"]');
+      if (!line) return;
+      line.scrollIntoView({ block: 'center' });
+      line.classList.add('flash');
+      setTimeout(() => line.classList.remove('flash'), 1500);
+    });
+  }
+  return el;
+}
+
+function renderMentions() {
+  for (const id of new Set((agent.mentions || []).map((s) => s.message_id))) {
+    const li = messages.querySelector('li[data-id="' + id + '"]');
+    if (li) fillMentions(li);
+  }
 }
 
 async function toggleVersions(li, m) {
@@ -733,6 +788,7 @@ function connect() {
   es.addEventListener('agent', (e) => {
     agent = JSON.parse(e.data);
     renderAgent();
+    renderMentions();
     renderParticipants();
     window.grillAgent = agent;
     window.dispatchEvent(new CustomEvent('grill:agent', { detail: agent }));
@@ -846,6 +902,7 @@ function renderAgent() {
   const running = (agent.running || []).map((t) => [personaByID(t.persona_id), t]).filter(([p]) => p);
   $('agent-status').textContent = !agent.online ? (agent.reason || 'Agent offline')
     : running.length ? running.map(([p, t]) => turnText(p, t)).join(', ') + '…' : agent.personas.length === 0 ? 'No persona: add one.' : '';
+  renderRunning();
   renderQueue();
   renderApprovals();
   renderChain();
@@ -963,6 +1020,38 @@ function renderApprovals() {
   }
   $('approvals').hidden = items.length === 0;
   $('approval-list').replaceChildren(...items);
+}
+
+// Whoever started a turn, the host or a room admin stops it while it runs (005-AC5).
+function mayStop(t) {
+  const me = participants.find((x) => String(x.id) === myID);
+  return String(t.participant_id) === myID || isHost() || !!(me && me.admin);
+}
+
+function renderRunning() {
+  const running = agent.running || [];
+  $('running').hidden = running.length === 0;
+  $('running-list').replaceChildren(...running.map((t) => {
+    const li = document.createElement('li');
+    const p = personaByID(t.persona_id) || { name: t.persona_name, badge: '' };
+    li.append((p.badge ? p.badge + ' ' : '') + turnText(p, t) + (t.cause ? ', ' + t.cause : ''));
+    if (mayStop(t)) {
+      const stop = document.createElement('button');
+      stop.type = 'button';
+      stop.className = 'small';
+      stop.textContent = 'Stop';
+      stop.setAttribute('aria-label', 'Stop the turn of ' + p.name);
+      stop.addEventListener('click', () => {
+        stop.disabled = true;
+        sendJSON('POST', api + '/turns/' + t.id + '/stop', {}).catch((err) => {
+          stop.disabled = false;
+          $('agent-status').textContent = err.message;
+        });
+      });
+      li.append(' ', stop);
+    }
+    return li;
+  }));
 }
 
 function renderQueue() {
@@ -1661,13 +1750,111 @@ async function send() {
   }
   if (!res.ok) throw new Error('send: HTTP ' + res.status);
   bodyInput.value = '';
+  const m = await res.json();
+  if (m.mention_notices) {
+    notices.set(m.id, m.mention_notices);
+    const li = messages.querySelector('li[data-id="' + m.id + '"]');
+    if (li) fillMentions(li);
+  }
 }
+
+// @ autocompletion (005-AC2): the room's personas first, then the people, filtered as you type;
+// arrows, Enter or Tab, and a tap pick one.
+const mentionList = $('mention-list');
+let mentionHits = [];
+let mentionAt = -1;
+let mentionPick = 0;
+
+function suggest() {
+  const before = bodyInput.value.slice(0, bodyInput.selectionStart);
+  const found = bodyInput.selectionStart === bodyInput.selectionEnd && before.match(/(?:^|[^\p{L}\p{N}_@])@([\p{L}\p{N}_-]*)$/u);
+  mentionHits = [];
+  if (found) {
+    const q = found[1].toLowerCase();
+    mentionAt = before.length - found[1].length - 1;
+    const all = [...agent.personas.map((p) => ({ token: p.name, label: p.badge + ' ' + p.name, kind: 'agent' })),
+      ...participants.filter((p) => String(p.id) !== myID).map((p) => ({ token: mentionToken(p.name), label: p.name, kind: 'person' }))];
+    const seen = new Set();
+    for (const h of all) {
+      const key = h.token.toLowerCase();
+      if (h.token && key.startsWith(q) && !seen.has(key)) {
+        seen.add(key);
+        mentionHits.push(h);
+      }
+    }
+    mentionHits = mentionHits.slice(0, 8);
+  }
+  mentionPick = 0;
+  renderSuggestions();
+}
+
+function renderSuggestions() {
+  const open = mentionHits.length > 0;
+  mentionList.hidden = !open;
+  bodyInput.setAttribute('aria-expanded', String(open));
+  mentionList.replaceChildren(...mentionHits.map((h, i) => {
+    const li = document.createElement('li');
+    li.id = 'mention-' + i;
+    li.setAttribute('role', 'option');
+    li.setAttribute('aria-selected', String(i === mentionPick));
+    const kind = document.createElement('span');
+    kind.className = 'kind';
+    kind.textContent = h.kind;
+    li.append(h.label, kind);
+    // On pointerdown, before the textarea loses focus to the tap.
+    li.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      pickMention(i);
+    });
+    return li;
+  }));
+  if (open) bodyInput.setAttribute('aria-activedescendant', 'mention-' + mentionPick);
+  else bodyInput.removeAttribute('aria-activedescendant');
+}
+
+function pickMention(i) {
+  const text = '@' + mentionHits[i].token + ' ';
+  const v = bodyInput.value;
+  bodyInput.value = v.slice(0, mentionAt) + text + v.slice(bodyInput.selectionStart);
+  bodyInput.setSelectionRange(mentionAt + text.length, mentionAt + text.length);
+  bodyInput.focus();
+  mentionHits = [];
+  renderSuggestions();
+}
+
+bodyInput.addEventListener('input', suggest);
+bodyInput.addEventListener('click', suggest);
+bodyInput.addEventListener('blur', () => {
+  mentionHits = [];
+  renderSuggestions();
+});
 
 sendForm.addEventListener('submit', (e) => {
   e.preventDefault();
   send().catch(console.error);
 });
 bodyInput.addEventListener('keydown', (e) => {
+  if (mentionHits.length && !e.isComposing) {
+    const move = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+    if (move) {
+      e.preventDefault();
+      mentionPick = (mentionPick + move + mentionHits.length) % mentionHits.length;
+      renderSuggestions();
+      return;
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      pickMention(mentionPick);
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      mentionHits = [];
+      renderSuggestions();
+      return;
+    }
+  }
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
     send().catch(console.error);

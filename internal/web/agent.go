@@ -47,7 +47,13 @@ type agentState struct {
 	RoomSkills []store.Skill `json:"room_skills"`
 	// Chain is the count of agent-triggered turns against the room's budget (002-AC25).
 	Chain store.Chain `json:"chain"`
+	// Mentions are where the turns of the room's latest mentions stand, newest first (005-AC4).
+	Mentions []store.MentionState `json:"mentions"`
 }
+
+// mentionStates bounds the mentions the agent state carries.
+// ponytail: older mentions lose their turn state on the page; page them in if rooms outgrow it.
+const mentionStates = 200
 
 // capRequest is a persona asking for more than the host cap: it runs at Runs until the host
 // approves Asks.
@@ -143,6 +149,9 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 		return nil, err
 	}
 	if st.RoomSkills, err = s.bus.Store.RoomSkills(ctx, room); err != nil {
+		return nil, err
+	}
+	if st.Mentions, err = s.bus.Store.MentionStates(ctx, room, mentionStates); err != nil {
 		return nil, err
 	}
 	return st, nil

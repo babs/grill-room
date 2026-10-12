@@ -89,6 +89,9 @@ button.persona .led { flex: none; }
 #queue { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.3rem 1rem; background: #e8f0fe; font-size: 0.85rem; }
 #queue-list { display: flex; flex-wrap: wrap; gap: 0.2rem 1.4rem; margin: 0; padding-left: 1.2rem; }
 #queue-list button { padding: 0.05rem 0.5rem; font-size: 0.75rem; }
+#running { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.3rem 1rem; background: #fff4d6; font-size: 0.85rem; }
+#running-list { display: flex; flex-wrap: wrap; gap: 0.2rem 1.4rem; margin: 0; padding-left: 1.2rem; }
+#running-list button { padding: 0.05rem 0.5rem; font-size: 0.75rem; background: #b3261e; }
 #approvals { padding: 0.3rem 1rem; background: #fff4e5; font-size: 0.85rem; }
 #chain-count { font-size: 0.85rem; color: #c9cbd6; }
 #chain-paused { margin: 0; padding: 0.4rem 1rem; background: var(--amber); font-size: 0.9rem; }
@@ -292,7 +295,16 @@ button.doc:hover { background: var(--line); }
 .msg .meta :is(.model, .effort, .model-note) { font-size: 0.75rem; color: var(--muted); }
 .msg .meta .model-note.mismatch { color: #b06000; font-weight: 600; }
 .msg.voice .meta strong::after { content: " (voice)"; font-weight: normal; color: var(--muted); }
-#send { display: flex; gap: 0.5rem; padding: 0.75rem 1rem; border-top: 1px solid var(--line); }
+#send { position: relative; display: flex; gap: 0.5rem; padding: 0.75rem 1rem; border-top: 1px solid var(--line); }
+#mention-list { position: absolute; bottom: 100%; left: 1rem; z-index: 5; max-height: 14rem; min-width: 12rem; overflow-y: auto; margin: 0; padding: 0.2rem 0;
+  list-style: none; background: #fff; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 2px 8px rgb(0 0 0 / 15%); }
+#mention-list li { padding: 0.45rem 0.8rem; cursor: pointer; }
+#mention-list li[aria-selected="true"] { background: #e8f0fe; }
+#mention-list .kind { margin-left: 0.5rem; font-size: 0.75rem; color: var(--muted); }
+.msg .mentions { display: flex; flex-wrap: wrap; gap: 0.2rem 0.8rem; font-size: 0.8rem; color: var(--muted); }
+.msg .mention-turn.failed, .msg .mention-turn.stopped { color: #b3261e; }
+.msg .notice { font-size: 0.8rem; color: #8a5a00; }
+.msg.flash { background: #fff4d6; transition: background 1s; }
 #send textarea { flex: 1; resize: vertical; }
 
 @media (max-width: 40rem) {

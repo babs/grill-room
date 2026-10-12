@@ -59,55 +59,111 @@ func (s *Server) controlChain(w http.ResponseWriter, r *http.Request, sess sessi
 // enough for the line to fit presenceLineMax with a short name (003-AC22).
 const mentionQuote = 50
 
-// mentionTurns queues a turn of each persona a human's text message names with @name, as that
-// human's press: only for someone allowed to press, while the host's daemon can run it. It resets
-// the chain, since a human took the lead (002-AC23, 002-AC26).
-func (s *Server) mentionTurns(ctx context.Context, p *store.Participant, body string) {
-	if !strings.Contains(body, "@") {
-		return
+// mentionNotice tells only the author of a message why a persona it names will not run (005-AC3).
+type mentionNotice struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
+}
+
+// Why a mention runs nothing, as its author reads it (005-AC3).
+const (
+	whyNoRight   = "you may not trigger agents in this room: the host can allow you"
+	whyOffline   = "no host is online to run it"
+	whyPending   = "it waits for the host's approval"
+	whyUnknown   = "no persona or participant has that name"
+	maxNoticeLen = 64
+)
+
+// mentionTurns queues a turn of each persona a human's text message m names with @name, as that
+// human's press, and links m to it: only for someone allowed to press, while the host's daemon can
+// run it. It resets the chain, since a human took the lead (002-AC23, 002-AC26, 005-AC4). It
+// returns, for m's author only, why each named persona will not run and which names match nobody
+// (005-AC3).
+func (s *Server) mentionTurns(ctx context.Context, p *store.Participant, m *store.Message) []mentionNotice {
+	if !strings.Contains(m.Body, "@") {
+		return nil
 	}
 	ctx = context.WithoutCancel(ctx)
 	personas, err := s.bus.Store.RoomPersonas(ctx, p.RoomID)
 	if err != nil {
 		s.log.Error("mention_failed", zap.String("room", p.RoomID), zap.Error(err))
-		return
+		return nil
 	}
-	called := mentioned(body, personas)
+	notices := s.unknownMentions(ctx, p.RoomID, m.Body, personas)
+	called := mentioned(m.Body, personas)
 	if len(called) == 0 {
-		return
+		return notices
 	}
 	room, err := s.bus.Store.Room(ctx, p.RoomID)
 	if err != nil {
 		s.log.Error("mention_failed", zap.String("room", p.RoomID), zap.Error(err))
-		return
+		return notices
 	}
-	if room.HostParticipantID != p.ID && !p.CanTrigger {
-		return
+	var why string
+	switch h := s.hostDaemon(room.ID, room.HostParticipantID); {
+	case room.HostParticipantID != p.ID && !p.CanTrigger:
+		why = whyNoRight
+	case h == nil || !h.CanHost:
+		why = whyOffline
 	}
-	if h := s.hostDaemon(room.ID, room.HostParticipantID); h == nil || !h.CanHost {
-		return
+	var runnable []store.RoomPersona
+	for _, persona := range called {
+		switch {
+		case why != "":
+			notices = append(notices, mentionNotice{persona.Name, why})
+		case persona.Pending:
+			notices = append(notices, mentionNotice{persona.Name, whyPending})
+		default:
+			runnable = append(runnable, persona)
+		}
+	}
+	if len(runnable) == 0 {
+		return notices
 	}
 	if err := s.bus.Store.ResetChain(ctx, room.ID, store.ResetMention); err != nil {
 		s.log.Error("mention_failed", zap.String("room", room.ID), zap.Error(err))
-		return
+		return notices
 	}
-	quote := oneLine(body)
+	quote := oneLine(m.Body)
 	if r := []rune(quote); len(r) > mentionQuote {
 		quote = string(r[:mentionQuote]) + "…"
 	}
 	cause := fmt.Sprintf("@mention by %s: %q", oneLine(p.Name), quote)
 	s.turnMu.Lock()
-	for _, persona := range called {
-		q := &store.QueuedTurn{RoomID: room.ID, PersonaID: persona.ID, ParticipantID: p.ID, Source: store.SourceMention, Cause: cause}
-		// A persona waiting already, or for the host's approval, is not queued again.
-		if err := s.bus.Store.Enqueue(ctx, q); err != nil && !errors.Is(err, store.ErrAlreadyQueued) && !errors.Is(err, store.ErrNotFound) {
+	for _, persona := range runnable {
+		q := &store.QueuedTurn{RoomID: room.ID, PersonaID: persona.ID, ParticipantID: p.ID, Cause: cause}
+		err := s.bus.Store.EnqueueMention(ctx, m.ID, q)
+		// ErrNotFound: removed since the list was read, so no longer a name to explain.
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			s.log.Error("queue_turn_failed", zap.String("room", room.ID), zap.Int64("persona", persona.ID), zap.Error(err))
 		}
 	}
 	s.turnMu.Unlock()
-	s.log.Info("mention_queued", zap.String("room", room.ID), zap.Int64("participant", p.ID), zap.Int("personas", len(called)))
+	s.log.Info("mention_queued", zap.String("room", room.ID), zap.Int64("participant", p.ID), zap.Int("personas", len(runnable)))
 	s.bus.Notify(room.ID)
 	s.drain(ctx, room.ID)
+	return notices
+}
+
+// unknownMentions returns a notice for each distinct @name of body that names no persona of the
+// room and no participant, as mentionToken spells them.
+func (s *Server) unknownMentions(ctx context.Context, room, body string, personas []store.RoomPersona) []mentionNotice {
+	ps, err := s.bus.Store.Participants(ctx, room)
+	if err != nil {
+		s.log.Error("mention_failed", zap.String("room", room), zap.Error(err))
+		return nil
+	}
+	var out []mentionNotice
+	for _, m := range mentionRe.FindAllStringSubmatch(proseText(body), -1) {
+		name := m[1]
+		known := slices.ContainsFunc(personas, func(p store.RoomPersona) bool { return strings.EqualFold(p.Name, name) }) ||
+			slices.ContainsFunc(ps, func(p store.Participant) bool { return strings.EqualFold(mentionToken(p.Name), name) }) ||
+			slices.ContainsFunc(out, func(n mentionNotice) bool { return strings.EqualFold(n.Name, truncate(name, maxNoticeLen)) })
+		if !known {
+			out = append(out, mentionNotice{truncate(name, maxNoticeLen), whyUnknown})
+		}
+	}
+	return out
 }
 
 // chainLinks queues what the finished turn done triggers, each as a link of the room's chain: the

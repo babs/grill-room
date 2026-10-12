@@ -51,6 +51,10 @@
 <div id="voice-audio" hidden></div>
 <p id="banner" role="alert" hidden></p>
 <p id="reconnecting" role="status" hidden>Reconnecting…</p>
+<div id="running" hidden>
+  <span>Running:</span>
+  <ol id="running-list" aria-label="Running turns"></ol>
+</div>
 <div id="queue" hidden>
   <span>Queued:</span>
   <ol id="queue-list" aria-label="Queued turns"></ol>
@@ -208,7 +212,9 @@
   <section class="chat">
     <ol id="messages" aria-live="polite"></ol>
     <form id="send">
-      <textarea id="body" rows="2" maxlength="4000" placeholder="Write a message. Enter sends, Shift+Enter adds a line." aria-label="Message"></textarea>
+      <ul id="mention-list" role="listbox" aria-label="Mention" hidden></ul>
+      <textarea id="body" rows="2" maxlength="4000" placeholder="Write a message. Enter sends, Shift+Enter adds a line. @ names a persona or a person." aria-label="Message"
+        aria-autocomplete="list" aria-controls="mention-list" aria-expanded="false"></textarea>
       <button type="submit">Send</button>
     </form>
   </section>

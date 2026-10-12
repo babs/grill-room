@@ -25,6 +25,7 @@ const (
 	StatusConflict = "conflict"
 	StatusExpired  = "expired"
 	StatusCutOff   = "cut off"
+	StatusStopped  = "stopped"
 )
 
 // Turn is one recorded turn. Day is At's date in At's location: the supervisor's local day.

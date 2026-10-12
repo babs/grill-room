@@ -75,7 +75,7 @@ The supervisor lets at most `max_turns` turns run at once, 2 by default, across 
 
 ## Monitoring
 
-The supervisor records every `turn` end in `monitor.db`, a SQLite file in its state directory, owner-only (003-AC27). A row holds the instance, room, persona and the account the room used at that moment, the event's fields, and a status sorted from the error: `ok`, `cut off`, `conflict` (the room refused the result for a document conflict), `expired` (the turn ran out of time, or the Claude login expired) or `failed`. The page lists the latest 500 turns a filter matches, sums them per account and day, and exports every match as CSV. Text cells starting with `=`, `+`, `-`, `@`, a tab or a carriage return get a leading `'` so that a spreadsheet does not run them.
+The supervisor records every `turn` end in `monitor.db`, a SQLite file in its state directory, owner-only (003-AC27). A row holds the instance, room, persona and the account the room used at that moment, the event's fields, and a status sorted from the error: `ok`, `cut off`, `stopped` (stopped from the room), `conflict` (the room refused the result for a document conflict), `expired` (the turn ran out of time, or the Claude login expired) or `failed`. The page lists the latest 500 turns a filter matches, sums them per account and day, and exports every match as CSV. Text cells starting with `=`, `+`, `-`, `@`, a tab or a carriage return get a leading `'` so that a spreadsheet does not run them.
 
 Rows older than the retention, 30 days unless the page sets 1 to 3650 in `supervisor.json`, are deleted at start, daily, and when the page shortens it (003-AC28).
 

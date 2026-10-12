@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/babs/grill-room/internal/monitor"
 	"github.com/babs/grill-room/internal/sandbox"
 	"github.com/babs/grill-room/internal/skill"
 	"github.com/babs/grill-room/internal/store"
@@ -497,6 +498,47 @@ func TestDaemonCutOff(t *testing.T) {
 	waitFor(t, "the room sees the host offline", func() bool { return !rs.agent(t, alice).Online })
 	grant(d, room)
 	waitFor(t, "online again", func() bool { return rs.agent(t, alice).Online })
+	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]bool{}, http.StatusCreated, nil)
+	waitFor(t, "turn done", func() bool { v := rs.agent(t, alice); return v.Turn != nil && v.Turn.Status == "done" })
+}
+
+// 005-AC5: a turn stopped in the room cancels the agent's run with errStopped, posts no result,
+// and reports its end as stopped; the next turn runs.
+func TestDaemonStop(t *testing.T) {
+	rs := newRoomServer(t)
+	ag := &fakeAgent{}
+	started := make(chan struct{}, 1)
+	cause := make(chan error, 1)
+	ag.run = func(ctx context.Context, _ sandbox.TurnInput, _ map[string]string) (*sandbox.TurnOutput, error) {
+		if len(ag.inputs) == 1 {
+			started <- struct{}{}
+			<-ctx.Done()
+			cause <- context.Cause(ctx)
+			return nil, ctx.Err()
+		}
+		return &sandbox.TurnOutput{Result: &sandbox.Result{Result: "back", SessionID: sid}}, nil
+	}
+	ends := make(chan TurnEvent, 4)
+	alice, _, _ := pairedDaemon(t, rs, "Alice", ag, func(d *Daemon) {
+		d.o.OnTurn = func(e TurnEvent) {
+			if e.Phase == "end" {
+				ends <- e
+			}
+		}
+	})
+	var tn store.Turn
+	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]bool{}, http.StatusCreated, &tn)
+	<-started
+	rs.call(t, "POST", fmt.Sprintf("/api/rooms/%s/turns/%d/stop", rs.room, tn.ID), alice, struct{}{}, http.StatusNoContent, nil)
+	if err := <-cause; !errors.Is(err, errStopped) {
+		t.Fatalf("cause %v", err)
+	}
+	if e := <-ends; e.Error != errStopped.Error() || turnStatus(e.Error) != monitor.StatusStopped {
+		t.Fatalf("end %+v", e)
+	}
+	if m := rs.lastMessage(t); m != "Grill turn stopped by Alice." {
+		t.Fatalf("message %q", m)
+	}
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]bool{}, http.StatusCreated, nil)
 	waitFor(t, "turn done", func() bool { v := rs.agent(t, alice); return v.Turn != nil && v.Turn.Status == "done" })
 }

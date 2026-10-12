@@ -346,19 +346,40 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 	}
 	flusher.Flush()
 	// sendTurn hands this daemon each running turn of the room that is its own, once. Ids grow, so
-	// the last one sent tells which are new; with parallel on there may be several (003-AC20).
+	// the last one sent tells which are new; with parallel on there may be several (003-AC20). A
+	// turn handed over that ended here without its result, stopped or failed, gets a "stop": the
+	// daemon kills its claude (005-AC5). Daemons from before ignore the event; the room refuses their result.
 	var sent int64
+	held := map[int64]bool{}
 	sendTurn := func() bool {
 		ts, err := s.bus.Store.RunningTurns(r.Context(), d.RoomID)
 		if err != nil {
 			return true
 		}
+		running := map[int64]bool{}
 		for _, t := range ts {
-			if t.DaemonID != d.ID || t.ID <= sent {
+			if t.DaemonID != d.ID {
 				continue
 			}
-			sent = t.ID
+			running[t.ID] = true
+			if t.ID <= sent {
+				continue
+			}
+			sent, held[t.ID] = t.ID, true
 			if _, err := fmt.Fprintf(w, "event: turn\ndata: {\"id\":%d}\n\n", t.ID); err != nil { //nolint:gosec // an integer id on an event stream, never HTML
+				return false
+			}
+		}
+		for id := range held {
+			if running[id] {
+				continue
+			}
+			delete(held, id)
+			// A done turn's daemon posted its result: it has nothing left to kill.
+			if t, err := s.bus.Store.Turn(r.Context(), d.RoomID, id); err == nil && t.Status == store.TurnDone {
+				continue
+			}
+			if _, err := fmt.Fprintf(w, "event: stop\ndata: {\"id\":%d}\n\n", id); err != nil { //nolint:gosec // an integer id on an event stream, never HTML
 				return false
 			}
 		}

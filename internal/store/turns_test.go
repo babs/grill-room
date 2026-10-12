@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -629,5 +631,90 @@ func TestSetParallelTurns(t *testing.T) {
 		if err != nil || room.ParallelTurns != step.on || (m == nil) != (step.says == "") || (m != nil && m.Body != step.says) {
 			t.Fatalf("on %v: %+v, room %+v, %v", step.on, m, room, err)
 		}
+	}
+}
+
+// 005-AC5: a stopped turn ends as "stopped" with a line in the room; its result is refused with
+// nothing applied, a second stop finds it ended, and the persona's last done turn stays the one
+// before, whose session the next turn resumes.
+func TestStopTurn(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	r := newTurnRoom(t, s, "a")
+	first := r.start(t, s, "a")
+	if _, err := s.CompleteTurn(ctx, "a", first.ID, r.daemon, &TurnOutcome{SessionID: "s1", Session: []byte("one\n")}); err != nil {
+		t.Fatal(err)
+	}
+	tn := r.start(t, s, "a")
+	m, err := s.StopTurn(ctx, "a", tn.ID, "Bob")
+	if err != nil || m.Body != "Grill turn stopped by Bob." || m.Kind != KindSystem || m.Sender != "Grill" {
+		t.Fatalf("stop: %+v, %v", m, err)
+	}
+	if _, err := s.StopTurn(ctx, "a", tn.ID, "Bob"); !errors.Is(err, ErrTurnNotRunning) {
+		t.Fatalf("second stop: %v", err)
+	}
+	if _, err := s.StopTurn(ctx, "b", tn.ID, "Bob"); !errors.Is(err, ErrTurnNotRunning) {
+		t.Fatalf("stop from another room: %v", err)
+	}
+	stored, err := s.Turn(ctx, "a", tn.ID)
+	if err != nil || stored.Status != TurnStopped || stored.Error != "stopped by Bob" || stored.EndedAt == nil {
+		t.Fatalf("stored: %+v, %v", stored, err)
+	}
+	out := &TurnOutcome{Synthesis: "late", SessionID: "s1", SessionOffset: 4, Session: []byte("two\n"),
+		Documents: []AgentWrite{{Name: "plan.md", Format: "md", Body: "# Plan\n\nchanged\n"}}}
+	if _, err := s.CompleteTurn(ctx, "a", tn.ID, r.daemon, out); !errors.Is(err, ErrTurnNotRunning) {
+		t.Fatalf("result after stop: %v", err)
+	}
+	if _, err := s.Revision(ctx, r.doc, 2); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a revision was applied: %v", err)
+	}
+	if data, err := s.AgentSession(ctx, "a", r.grill.ID, "s1"); err != nil || string(data) != "one\n" {
+		t.Fatalf("session: %q, %v", data, err)
+	}
+	last, err := s.LastDoneTurn(ctx, "a", r.grill.ID)
+	if err != nil || last.ID != first.ID {
+		t.Fatalf("last done: %+v, %v", last, err)
+	}
+	// The room runs again: the stopped turn holds no slot.
+	r.start(t, s, "a")
+}
+
+// 005-AC5: the migration adding "stopped" keeps the turns of an older database and lets the
+// connection store the new status at once.
+func TestMigrationToStopped(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "old.db")+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	before := slices.IndexFunc(migrations, func(m string) bool { return strings.Contains(m, "''stopped''") })
+	if err := migrateTo(ctx, db, before); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{`INSERT INTO rooms(id, name, created_at) VALUES('a', 'A', '2026-01-01T00:00:00Z')`,
+		`INSERT INTO turns(room_id, host, status, fresh, resume, message_cursor, annotation_cursor, prompt, started_at)
+			VALUES('a', '', 'running', 0, '', 0, 0, '', '2026-01-01T00:00:00Z')`} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stop := `UPDATE turns SET status = 'stopped'`
+	if _, err := db.ExecContext(ctx, stop); err == nil {
+		t.Fatal("the old schema took a stopped turn")
+	}
+	if err := migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, stop); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE turns SET status = 'bogus'`); err == nil {
+		t.Fatal("the CHECK is gone")
+	}
+	var ok string
+	if err := db.QueryRowContext(ctx, `PRAGMA integrity_check`).Scan(&ok); err != nil || ok != "ok" {
+		t.Fatalf("integrity: %q, %v", ok, err)
 	}
 }

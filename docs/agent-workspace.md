@@ -157,6 +157,8 @@ Anything else the agent writes, in `transcript/` or at the root, is scratch and 
 5. The daemon hashes `/workspace` before and after the run and sends each changed path. It sends contents only for `docs/`, `replies.json` and `annotations-new.json`, so an edited 20 MB upload costs one path.
 6. `POST .../daemon/turns/N` with `{"synthesis", "model", "model_note", "model_mismatch", "effort", "capped", "changes", "session_id", "session_offset", "session", "context_tokens", "context_window"}`, or `{"error"}`. The context fields are absent when unknown. `capped` is true when the host cap lowered what the persona asked for. `session` holds the jsonl bytes past `session_offset`: the server's size when resuming, 0 for a new session (D23). The server refuses a gap or an overlap. A document edit whose document is past its pinned revision, or was created after the pin, is a conflict: the server answers 409 `conflict on <name>` and keeps nothing of the result.
 
+7. When a turn handed to the daemon ends on the server without its result, stopped from the room or failed there, the server sends `event: stop` with `{"id": N}`. The daemon kills `claude` in the sandbox, or ends the turn while it waits for a slot, and posts no result. A daemon from before ignores the event: its result then gets a 409. The supervisor's monitor records the turn as `stopped`.
+
 ## Failure rules
 
 | Event | Outcome |
@@ -166,6 +168,7 @@ Anything else the agent writes, in `transcript/` or at the root, is scratch and 
 | press of a persona already queued | 409 |
 | persona removed during its turn | refused, 409 |
 | host daemon drops mid-turn | turn failed, nothing kept; a late result gets a 409 |
+| stopped from the room by who started it, the host or a room admin | turn `stopped` at once, the line "<persona> turn stopped by <name>." in the room, nothing kept; the daemon gets `event: stop`, and a late result gets a 409. The persona's next turn resumes its last done turn's session; a stopped turn triggers no chain link and does not count for "every N rounds" |
 | daemon reports an error (credentials expired, Claude failed) | turn failed, the error in the room |
 | result over 32 MB or malformed | 413 or 400, turn failed |
 | session bytes do not continue the stored copy | 409, turn failed |

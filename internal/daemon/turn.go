@@ -148,7 +148,19 @@ func (r *roomRun) runTurn(ctx context.Context, tok string, id int64) {
 		r.d.turnEvent(ev)
 	}()
 	ids := strconv.FormatInt(id, 10)
-	jctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Cancellable from the start: a cut-off ends a turn still waiting for a slot, and a stop may
+	// come while the job is fetched.
+	cctx, cut := context.WithCancelCause(ctx)
+	defer cut(nil)
+	r.d.mu.Lock()
+	r.d.running[id] = cut
+	r.d.mu.Unlock()
+	defer func() {
+		r.d.mu.Lock()
+		delete(r.d.running, id)
+		r.d.mu.Unlock()
+	}()
+	jctx, cancel := context.WithTimeout(cctx, 30*time.Second)
 	resp, err := r.get(jctx, tok, "turns/"+ids)
 	if err == nil {
 		err = json.NewDecoder(resp.Body).Decode(&job)
@@ -159,22 +171,14 @@ func (r *roomRun) runTurn(ctx context.Context, tok string, id int64) {
 		log.Warn("turn_job_failed", zap.Error(err))
 		// Told now, the room frees the button instead of waiting for its timeout.
 		res.Error = "could not fetch the turn: " + err.Error()
+		if errors.Is(context.Cause(cctx), errCutOff) {
+			res.Error = errCutOff.Error()
+		}
 	} else {
 		timeout := time.Duration(job.TimeoutSeconds) * time.Second
 		if timeout <= 0 {
 			timeout = 15 * time.Minute
 		}
-		// Cancellable before the slot: a cut-off ends a turn still waiting for one.
-		cctx, cut := context.WithCancelCause(ctx)
-		defer cut(nil)
-		r.d.mu.Lock()
-		r.d.running[id] = cut
-		r.d.mu.Unlock()
-		defer func() {
-			r.d.mu.Lock()
-			delete(r.d.running, id)
-			r.d.mu.Unlock()
-		}()
 		release, waited, err := r.slot(cctx, tok, id)
 		queued = waited
 		switch {
@@ -202,6 +206,12 @@ func (r *roomRun) runTurn(ctx context.Context, tok string, id int64) {
 	if ctx.Err() != nil {
 		// The stream dropped: the room has failed the turn already.
 		log.Warn("turn_abandoned", zap.Error(ctx.Err()))
+		return
+	}
+	if errors.Is(context.Cause(cctx), errStopped) {
+		// The room ended the turn already and would refuse its result (005-AC5).
+		ended = errStopped.Error()
+		log.Info("turn_stopped")
 		return
 	}
 	pctx, cancel := context.WithTimeout(ctx, 2*time.Minute)

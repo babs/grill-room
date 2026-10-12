@@ -290,6 +290,20 @@ func (d *Daemon) Refresh(ctx context.Context) {
 // errCutOff ends the turns of a worker the host cut off (003-AC15). Its text reaches the room.
 var errCutOff = errors.New("the host cut this agent off from Claude for now")
 
+// errStopped ends a turn someone stopped in the room (005-AC5).
+var errStopped = errors.New("stopped in the room")
+
+// stopTurn kills turn id's claude, or ends it while it waits, when the room stopped it; a turn this
+// daemon no longer runs is left alone.
+func (d *Daemon) stopTurn(id int64) {
+	d.mu.Lock()
+	cut := d.running[id]
+	d.mu.Unlock()
+	if cut != nil {
+		cut(errStopped)
+	}
+}
+
 // SetAccess takes the rooms' proxies the supervisor hands out. Cutting off ends the running turns.
 func (d *Daemon) SetAccess(a Access) {
 	d.mu.Lock()
@@ -679,6 +693,13 @@ func (r *roomRun) stream(ctx context.Context, tok string) error {
 			}
 			if json.Unmarshal([]byte(line[len("data: "):]), &t) == nil && r.takeTurn(t.ID) {
 				wg.Go(func() { r.runTurn(ctx, tok, t.ID) })
+			}
+		case strings.HasPrefix(line, "data: ") && event == "stop":
+			var t struct {
+				ID int64 `json:"id"`
+			}
+			if json.Unmarshal([]byte(line[len("data: "):]), &t) == nil {
+				d.stopTurn(t.ID)
 			}
 		case strings.HasPrefix(line, "data: ") && event == "room":
 			var info struct {

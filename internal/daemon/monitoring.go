@@ -28,7 +28,7 @@ const (
 	queueAlertAfter = 10 * time.Minute
 )
 
-// turnStatus sorts a turn's end by its error: ok, cut off, a document conflict, out of time or
+// turnStatus sorts a turn's end by its error: ok, cut off, stopped in the room, a document conflict, out of time or
 // out of login, or any other failure. Workers of other versions word errors alike.
 func turnStatus(err string) string {
 	switch {
@@ -36,6 +36,8 @@ func turnStatus(err string) string {
 		return monitor.StatusOK
 	case err == errCutOff.Error():
 		return monitor.StatusCutOff
+	case err == errStopped.Error():
+		return monitor.StatusStopped
 	case strings.Contains(err, "conflict on "):
 		return monitor.StatusConflict
 	case strings.HasPrefix(err, "the turn timed out"), strings.Contains(err, "login has expired"):
