@@ -26,6 +26,8 @@ export default defineConfig({
       GRILL_ROOM_ADMIN_TOKEN: adminToken,
       // `make e2e` writes a real release there first.
       GRILL_ROOM_DAEMON_DIR: '../bin/e2e-release',
+      // Specs send X-Forwarded-For as clients behind a proxy on loopback (005-AC20).
+      GRILL_ROOM_TRUSTED_PROXIES: '127.0.0.1',
       LOG_FORMAT: 'json',
     },
   },
