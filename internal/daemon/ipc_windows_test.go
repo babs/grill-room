@@ -49,7 +49,7 @@ func TestPipeServerOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = c.Close() }()
-	if err := checkPipeServer(c, system); !errors.Is(err, errForeignPipe) || !strings.Contains(err.Error(), "S-1-5-18") {
+	if err := checkPipeServer(c, system); !errors.Is(err, errForeignPipe) || !strings.Contains(err.Error(), user.User.Sid.String()) {
 		t.Fatalf("pipe of another user accepted: %v", err)
 	}
 	// A process of another user: System (pid 4) cannot be opened, or runs as SYSTEM.
