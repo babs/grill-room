@@ -32,12 +32,13 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 - Room transcription label.
 - Explicit model and effort on personas, plus the correct model label.
 - Document manager in its own window.
-- Unread count in the tab title.
+- Unread count in the tab title, and Web Push notifications when no tab is focused.
+- A per-room STT glossary.
 - Modal dismissal.
 
 ## Out of scope
 
-- Renaming or removing another participant (moderation).
+- Removing (kicking) a single participant.
 - WebSockets: SSE stays.
 - Typing indicators.
 
@@ -55,6 +56,15 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 ### Presence and audio
 - [ ] **AC6** The server keeps each participant's presence from their open streams and a heartbeat, with a grace period of about 20 s, so reloads, background tabs and several tabs do not flap. It sends `presence` events (here, gone, audio on or off, mic on or off) and replays the full state when a stream opens. Tests cover a flapping connection, a backgrounded phone, and two tabs with one closed.
 - [ ] **AC7** The participant list shows "In the room", then "Not here" collapsed, with "seen <time> ago". Each person shows their audio state: mic live, muted, listening only, not in audio. It also shows the speaking pulse, and a "transcribed" badge when the STT worker is subscribed to that person's track.
+- [ ] **AC14** The participant list marks roles with a badge, and each badge has a tooltip: room admin, host (holds the agents), and "you".
+- [ ] **AC18** When LiveKit closes an empty room while the STT worker is in it, the worker drops that room and joins again when people come back to the audio, including when the new LiveKit room has the same name. Lines resume without restarting the worker.
+- [ ] **AC19** Every event line in the chat shows its time, as messages already do: joins, leaves, renames, persona changes, and turns started, stopped, done or failed.
+- [ ] **AC20** `/admin` shows, for each participant, the client IP and user agent at join and at last activity. Only the super-admin sees them; they are kept 30 days by default (configurable) and purged with the room.
+
+  The client IP comes from `X-Forwarded-For` ONLY when the direct peer is in a configured trusted-proxy list (`GRILL_ROOM_TRUSTED_PROXIES`, CIDRs). The address taken is the right-most one not in that list. With no list configured, the peer address is used. A header sent by an untrusted peer is ignored, so it cannot spoof the IP. The same rule replaces 004's "any private peer is trusted" for the admin login rate limit.
+- [ ] **AC21** A room admin (in the room's Manage panel) and the super-admin (in `/admin`) can rename any participant. A system line says who renamed whom, the audit log records it, and the renamed person sees a notice.
+- [ ] **AC22** Each participant can turn on "deafen", which stops receiving the other participants' audio. As in Discord, deafen also mutes their mic by default. An option "keep my mic on while deafened" (useful when people share a physical room) keeps the voice published, and so transcribed. Undeafening restores the mic state from before. The list shows a deafened icon, and the state survives a reconnect within the session.
+- [ ] **AC23** Each room has an STT glossary, edited by any member in Manage, with a line in the journal. Every change applies from the next utterance. The worker passes it to faster-whisper as a natural sentence in `initial_prompt`, never as `hotwords` (spike S10). The prompt stays within Whisper's ~224-token limit. When the terms do not all fit, they are taken in this order: the edited glossary, then participant and persona names, then document titles. Manage shows "N / ~70 terms used". A Piper scenario with technical terms checks term accuracy against `small` without a glossary.
 - [ ] **AC8** The room no longer shows "Transcribing" as if it applied to the viewer. It shows how many voices are transcribed ("2 voices transcribed"). A viewer whose voice is captured sees "your voice is being transcribed", and one who is not sees nothing implying capture.
 
 ### Models
@@ -64,7 +74,16 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 ### Documents and tabs
 - [ ] **AC11** "Open in a new window" opens the whole document manager at `/r/<room>/docs`: list, upload, viewer, annotations, revisions and diff, all live. Deep links `/r/<room>/docs/<doc>` open one document. The room page and the docs window stay in sync.
 - [ ] **AC12** When the room tab is not focused, its title reads "(N) <room name>", where N counts new text messages from others and persona syntheses. Voice lines are counted only if the user opts in. The count resets when the tab regains focus.
-- [ ] **AC13** Every modal (persona panel and the others) closes on a click outside it and on Escape, and keeps focus correctly for keyboard users.
+- [ ] **AC24** A participant can turn on browser notifications for a room. They arrive through Web Push (VAPID; keys generated once and kept in the instance data), so they work in a background tab and with the tab closed. They are sent only when none of that participant's tabs is focused: presence (AC6) tells the server. The default triggers are:
+  - a mention of the participant;
+  - a persona synthesis;
+  - a turn they started that ends.
+
+  Other messages are opt-in. The payload carries only the room name, the kind of event and a link, never message text, because it passes through the browser vendor's push service. Repeated events are grouped into one notification per room. Expired subscriptions (410) are dropped, and subscriptions are purged with the participant or the room. On iOS, this works only once the room is added to the home screen; the UI says so.
+- [ ] **AC15** Room management (the "Manage" panel) opens as a wide sheet with tabs: General (name, volume), Invites, Admins, Personas, Skills, Export. It is full screen on a phone. Each tab has a deep link (`#manage/invites`, …), and the tabs are keyboard reachable.
+- [ ] **AC16** `/admin` uses the full page width with a tab bar: Rooms, Profiles, Libraries, Instance, Sessions, Audit. A room opens its own detail view with tabs (General, Invites, Admins, Export), following the AC15 layout. Every tab and room has a deep link, and phone width stays usable.
+- [ ] **AC17** The daemon's local admin page uses the full width with a tab bar that stays pinned at the top while scrolling: Instances, Rooms, Accounts, Settings, Monitoring, Update. Alerts show as a badge on their tab. Each tab has a deep link (`#accounts`, …).
+- [ ] **AC13** Every modal (persona panel, the "Manage" room-admin panel, and the others) closes on a click outside it and on Escape, and keeps focus correctly for keyboard users.
 
 ## Phases
 
@@ -76,9 +95,9 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 
 ### Phase 2 — Presence and audio indicators
 - Work: server presence state and events, heartbeat, participant list sections, audio and capture states (from LiveKit and the STT worker's subscriptions).
-- **Covers**: AC6, AC7
-- **Data model impact**: `participants.last_seen_at` (if not present)
-- **DoD**: presence tests (flap, background, multi-tab); e2e for the list at phone width.
+- **Covers**: AC6, AC7, AC14, AC18, AC19, AC20, AC22, AC23
+- **Data model impact**: `participants.last_seen_at` (if not present); `rooms.stt_glossary`
+- **DoD**: presence tests (flap, background, multi-tab); e2e for the list at phone width; the glossary prompt builder unit-tested (order, token cap); a lab scenario run with the glossary shows better term accuracy than without.
 
 ### Phase 3 — Mentions, autocomplete, stop
 - Work: `@` autocompletion, mention feedback, trigger state on messages, stopping a running turn end to end (server, protocol, daemon, sandbox).
@@ -88,9 +107,9 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 
 ### Phase 4 — Self-rename, docs window, unread, modals
 - Work: self-rename, the document manager in its own window, the unread title count, modal dismissal.
-- **Covers**: AC1, AC11, AC12, AC13
-- **Data model impact**: none beyond the name history needed for "old name on hover" (`participant_names` or message author snapshot)
-- **DoD**: e2e for each, at phone and desktop width.
+- **Covers**: AC1, AC11, AC12, AC13, AC15, AC16, AC17, AC21, AC24
+- **Data model impact**: the name history needed for "old name on hover" (`participant_names` or message author snapshot); `push_subscriptions`; VAPID keys in instance settings
+- **DoD**: e2e for each, at phone and desktop width; push encryption (RFC 8291) and VAPID JWT tested against a local test push endpoint; a real notification received on an Android phone from the lab.
 
 ## Data model impact (summary)
 
@@ -99,6 +118,8 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 - A mention to turn link.
 - Turn status `stopped`.
 - A name history for renames.
+- `rooms.stt_glossary`.
+- `push_subscriptions` and the VAPID keys.
 
 ## Open questions
 
@@ -106,7 +127,9 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 
 ## Decisions
 
-- Moderation by others is out; only self-rename (user, 2026-10-12).
+- Moderation: self-rename plus admin rename; no kick (user, 2026-10-12).
 - SSE stays; presence uses SSE plus a heartbeat POST (user agreed after the SSE vs WebSocket comparison).
 - Migrated personas get sonnet / medium.
+- STT stays on faster-whisper `small`; the glossary is passed as `initial_prompt` only (spike S10, user, 2026-10-12).
+- Web Push with VAPID for background notifications (user, 2026-10-12).
 - Test campaigns run throttled on the workstation (`nice`, `ionice`, CPU cap, no stress); repetition goes to CI.
