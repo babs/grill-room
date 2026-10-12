@@ -1,6 +1,6 @@
 # 004 — Instance ops: admin UI, room admins, export/import, scenarios
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-10-11
 **Context**: specs 001-003, grill notes (004)
