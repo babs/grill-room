@@ -45,11 +45,13 @@
     <span id="chain-count" title="Agent-triggered turns since a human last took the lead"></span>
     <span id="agent-status" role="status"></span>
   </div>
-  <a id="me" href="/profile" title="Your profile"></a>
+  <span class="me"><a id="me" href="/profile" title="Your profile"></a>
+    <button type="button" id="rename-open" class="small" aria-label="Change your name" title="Change your name">✎</button></span>
 </header>
 <p id="voice-error" role="alert" hidden></p>
 <div id="voice-audio" hidden></div>
 <p id="banner" role="alert" hidden></p>
+<p id="notice" role="status" hidden><span id="notice-text"></span> <button type="button" id="notice-close" class="small">OK</button></p>
 <p id="reconnecting" role="status" hidden>Reconnecting…</p>
 <div id="running" hidden>
   <span>Running:</span>
@@ -103,6 +105,18 @@
   </div>
   <div id="room-admin"></div>
 </dialog>
+<dialog id="rename" aria-labelledby="rename-title">
+  <form id="rename-form">
+    <h2 id="rename-title">Your name in this room</h2>
+    <label>Display name <input id="rename-name" maxlength="40" required autocomplete="nickname"></label>
+    <label id="rename-profile-label"><input type="checkbox" id="rename-profile"> Also use it for my profile</label>
+    <p id="rename-status" role="status"></p>
+    <div class="pairing-actions">
+      <button type="button" id="rename-cancel">Cancel</button>
+      <button type="submit">Rename</button>
+    </div>
+  </form>
+</dialog>
 <dialog id="skills-disclaimer" aria-labelledby="skills-disclaimer-title">
   <h2 id="skills-disclaimer-title">Before you turn on a skill</h2>
   <ul>
@@ -155,6 +169,10 @@
       </p>
       <h3>Your invites</h3>
       <ul id="invite-list"></ul>
+    </details>
+    <details id="notify">
+      <summary>Notifications</summary>
+      <label><input type="checkbox" id="count-voice"> Count voice lines in the tab title</label>
     </details>
     <details id="host-agent" hidden>
       <summary>Host the agent</summary>

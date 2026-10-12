@@ -17,6 +17,9 @@ let refreshTimer;
 let wasIn = false;
 let participants = [];
 let myID = '';
+let myName = '';
+let hasProfile = false;
+let roomName = '';
 // tab names this page to the server's presence: its stream and heartbeats (005-AC6).
 const tab = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)).replaceAll('-', '');
 // presence holds the server's "presence" event by participant id; transcribed, the participants
@@ -56,10 +59,16 @@ async function loadRoom() {
   wasIn = true;
   const data = await res.json();
   $('room-name').textContent = data.room.name;
-  document.title = data.room.name + ' · grill-room';
+  roomName = data.room.name;
+  showTitle();
+  // Someone else renamed this participant (005-AC21): a rename of their own sets myName first.
+  if (myName && data.me.name !== myName) showNotice('Your name in this room is now ' + data.me.name + '.');
+  myName = data.me.name;
   $('me').textContent = data.me.name;
   participants = data.participants;
   myID = String(data.me.id);
+  hasProfile = !!data.profile;
+  renameSenders();
   $('voice').hidden = !data.voice;
   // Every member edits the transcription glossary there (005-AC23); the rest is for room admins.
   $('manage-open').hidden = false;
@@ -81,7 +90,33 @@ messages.addEventListener('scroll', () => {
 });
 new ResizeObserver(() => { if (pinned) messages.scrollTop = messages.scrollHeight; }).observe(messages);
 
+// Unread count (005-AC12): lines from others and syntheses that arrive while the tab is not
+// focused show as "(N) " in its title; voice lines only when opted in. The stream replays history
+// on load, so only lines written since the page loaded count.
+const loadedAt = Date.now();
+const voiceKey = 'grill-room-count-voice';
+let unread = 0;
+
+function showTitle() {
+  document.title = (unread ? '(' + unread + ') ' : '') + roomName + ' · grill-room';
+}
+
+function countUnread(m) {
+  if (document.hasFocus() || new Date(m.ts).getTime() < loadedAt || String(m.participant_id) === myID) return;
+  if (m.kind === 'text' || m.kind === 'agent' || (m.kind === 'voice' && localStorage.getItem(voiceKey) === '1')) {
+    unread++;
+    showTitle();
+  }
+}
+window.addEventListener('focus', () => {
+  unread = 0;
+  showTitle();
+});
+$('count-voice').checked = localStorage.getItem(voiceKey) === '1';
+$('count-voice').addEventListener('change', () => localStorage.setItem(voiceKey, $('count-voice').checked ? '1' : '0'));
+
 function addMessage(m) {
+  countUnread(m);
   if (m.kind === 'system') {
     // A join changes the participant list; history replay sends many, so refresh once.
     clearTimeout(refreshTimer);
@@ -132,9 +167,15 @@ function renderMessage(m) {
   const meta = document.createElement('div');
   meta.className = 'meta';
   const sender = document.createElement('strong');
+  sender.className = 'sender';
   // An agent shows its persona's badge and colour (002-AC42).
   sender.textContent = m.badge ? m.badge + ' ' + m.sender : m.sender;
   if (m.colour) sender.style.color = m.colour;
+  if (m.participant_id) {
+    li.dataset.pid = m.participant_id;
+    li.dataset.sender = m.sender;
+    nameSender(li, sender);
+  }
   meta.append(sender, ' ', timeOf(m.ts));
   if (m.kind === 'agent') {
     // The model and effort the turn ran with (002-AC18), the model checked against what claude
@@ -192,6 +233,50 @@ function renderMessage(m) {
   if (m.kind === 'text') fillMentions(li);
   return li;
 }
+
+// nameSender shows a person's line under their current name, and the name it was written under on
+// hover once they renamed (005-AC1).
+function nameSender(li, el) {
+  const p = participants.find((x) => String(x.id) === li.dataset.pid);
+  const was = li.dataset.sender;
+  el.textContent = p ? p.name : was;
+  el.title = p && p.name !== was ? 'Written as ' + was : '';
+}
+
+function renameSenders() {
+  for (const li of messages.querySelectorAll('li[data-pid]')) {
+    const el = li.querySelector(':scope > .meta > .sender');
+    if (el) nameSender(li, el);
+  }
+}
+
+function showNotice(text) {
+  $('notice-text').textContent = text;
+  $('notice').hidden = false;
+}
+$('notice-close').addEventListener('click', () => { $('notice').hidden = true; });
+
+// Self-rename (005-AC1), with the validation of a join; the option also names their profile.
+$('rename-open').addEventListener('click', () => {
+  $('rename-name').value = myName;
+  $('rename-profile').checked = false;
+  $('rename-profile-label').hidden = !hasProfile;
+  $('rename-status').textContent = '';
+  $('rename').showModal();
+  $('rename-name').select();
+});
+$('rename-cancel').addEventListener('click', () => $('rename').close());
+$('rename-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const name = $('rename-name').value.trim();
+  sendJSON('PUT', api + '/participants/' + myID + '/name', { name, profile: $('rename-profile').checked }).then((done) => {
+    if (!done) return;
+    // Not an outside rename: no notice when loadRoom reads the new name.
+    myName = '';
+    $('rename').close();
+    return loadRoom();
+  }).catch((err) => { $('rename-status').textContent = err.message; });
+});
 
 // Mentions. A message whose @mention queued a turn shows that turn's state, linked to how it
 // ended (005-AC4); one that cannot run tells its author why, and nobody else (005-AC3).
@@ -310,9 +395,32 @@ function deleteMessage(m) {
   }).catch(console.error);
 }
 
-// Manage: a room admin's panel, rendered by admin/room-admin.js (004-AC8).
-$('manage-open').addEventListener('click', () => $('manage').showModal());
-$('manage-close').addEventListener('click', () => $('manage').close());
+// Modals (005-AC13): Escape closes a modal dialog natively; a click outside one closes it too,
+// and focus goes back to where it was. A press that starts inside, say a text selection dragged
+// out, is not a click outside.
+let pressedOutside = null;
+const outside = (d, e) => {
+  const r = d.getBoundingClientRect();
+  return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+};
+document.addEventListener('pointerdown', (e) => {
+  pressedOutside = e.target instanceof HTMLDialogElement && e.target.open && outside(e.target, e) ? e.target : null;
+});
+document.addEventListener('click', (e) => {
+  const d = e.target;
+  if (d instanceof HTMLDialogElement && d === pressedOutside && d.open && outside(d, e)) d.close();
+  pressedOutside = null;
+});
+let focusBefore = null;
+document.addEventListener('focusin', (e) => {
+  if (!e.target.closest('dialog[open]')) focusBefore = e.target;
+});
+// close does not bubble: listen in the capture phase.
+document.addEventListener('close', (e) => {
+  if (e.target instanceof HTMLDialogElement && focusBefore && focusBefore.isConnected && !document.querySelector('dialog[open]')) focusBefore.focus();
+}, true);
+
+// Manage, its tabs and its deep links are admin/room-admin.js's (004-AC8, 005-AC15).
 
 // copyField copies a read-only field, and selects it for a manual copy when the clipboard refuses.
 function copyField(input, button) {

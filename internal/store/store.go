@@ -598,6 +598,9 @@ CREATE INDEX message_turns_turn ON message_turns(turn_id);
 -- The turn whose synthesis, failure or stop a message tells.
 ALTER TABLE messages ADD COLUMN turn_id INTEGER REFERENCES turns(id) ON DELETE SET NULL;
 CREATE INDEX messages_turn ON messages(turn_id) WHERE turn_id IS NOT NULL;
+`, `
+-- 005-AC1: the name a profile chose for itself; NULL keeps the one it last joined a room with.
+ALTER TABLE profiles ADD COLUMN name TEXT;
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.

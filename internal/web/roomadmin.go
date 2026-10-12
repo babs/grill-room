@@ -24,6 +24,7 @@ const (
 	ActionRoomSkillRemove = "room_skill.remove"
 	ActionSettings        = "instance.settings"
 	ActionProfileMaxRooms = "profile.max_rooms"
+	ActionRename          = "participant.rename"
 )
 
 // maxStorageQuota bounds the instance storage quota: 1 PiB.
@@ -277,4 +278,50 @@ func (s *Server) setInstanceSettings(w http.ResponseWriter, r *http.Request) {
 	s.log.Info("instance_settings_set", zap.Int("rooms_per_profile", v.RoomsPerProfile), zap.Int64("storage_quota_bytes", v.StorageQuota),
 		zap.String("room_creation", v.RoomCreation))
 	writeJSON(w, http.StatusOK, v)
+}
+
+// renameParticipant sets a participant's display name, with the validation of a join: their own
+// (005-AC1), or anyone's by a room admin or the super-admin (005-AC21), who are audited.
+func (s *Server) renameParticipant(w http.ResponseWriter, r *http.Request, sess *session) {
+	var req struct {
+		Name string `json:"name"`
+		// Profile also makes it the name of the renamer's own profile.
+		Profile bool `json:"profile"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	name, ok := cleanText(req.Name, maxNameLen, false)
+	if !ok {
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("display name must be 1 to %d characters", maxNameLen))
+		return
+	}
+	target, _ := strconv.ParseInt(r.PathValue("participant"), 10, 64)
+	room := r.PathValue("room")
+	ctx := r.Context()
+	var by *store.Participant
+	if sess != nil {
+		by = sess.p
+	}
+	if by == nil || by.ID != target {
+		if !s.asRoomAdmin(w, r, sess) {
+			return
+		}
+		ctx = s.roomAuditing(r, sess, ActionRename, room, nil)
+	}
+	m, err := s.bus.Store.RenameParticipant(ctx, room, target, name, by, req.Profile)
+	switch {
+	case errors.Is(err, store.ErrForbidden):
+		httpError(w, http.StatusForbidden, "only a room admin can do this")
+	case errors.Is(err, store.ErrNotFound):
+		httpError(w, http.StatusNotFound, "no such participant in this room")
+	case err != nil:
+		s.serverError(w, "rename_participant_failed", err)
+	default:
+		if m != nil {
+			s.bus.Notify(room)
+			s.log.Info("participant_renamed", zap.String("room", room), zap.Int64("participant", target), zap.Bool("self", by != nil && by.ID == target))
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
 }

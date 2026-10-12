@@ -23,7 +23,8 @@ function render({ email_enabled: emailEnabled, profile }) {
     return li;
   }));
   if (!profile.rooms.length) $('rooms').textContent = 'None yet.';
-  if (!$('room-create-as').value && profile.rooms.length) $('room-create-as').value = profile.rooms[0].name;
+  // The name the profile chose in a room (005-AC1), else the one it last joined with.
+  if (!$('room-create-as').value) $('room-create-as').value = profile.name || (profile.rooms[0] || {}).name || '';
   $('email').hidden = !emailEnabled;
   $('email-state').textContent = profile.email ? 'Bound to ' + profile.email + '.' : 'No email bound.';
 }

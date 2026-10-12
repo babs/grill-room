@@ -128,8 +128,9 @@ func (s *Store) Skills(ctx context.Context, profileID int64, roomID, which strin
 
 // PublishSkill stores an upload of profileID: a new version of the skill of that name it owns
 // (personal) or published (shared), or a new skill. Versions never change once stored (002-AC29).
-// The latest name the profile joined a room with signs the version. ErrForbidden when another
-// profile published the shared skill of that name or profileID is 0, ErrSameVersion, ErrLimit.
+// The profile's name (005-AC1), else the latest it joined a room with, signs the version.
+// ErrForbidden when another profile published the shared skill of that name or profileID is 0,
+// ErrSameVersion, ErrLimit.
 func (s *Store) PublishSkill(ctx context.Context, profileID int64, shared bool, up *skill.Skill) (*Skill, error) {
 	if profileID == 0 {
 		return nil, ErrForbidden
@@ -175,8 +176,8 @@ func (s *Store) PublishSkill(ctx context.Context, profileID int64, shared bool, 
 			n++
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO skill_versions(skill_id, n, author, author_id, description, files, size, sha256, data, created_at)
-			VALUES(?, ?, COALESCE((SELECT name FROM participants WHERE profile_id = ? ORDER BY id DESC LIMIT 1), 'someone'), ?, ?, ?, ?, ?, ?, ?)`,
-			id, n, profileID, profileID, up.Description, up.Files, up.Size, up.SHA256, up.Tar, now())
+			VALUES(?, ?, COALESCE((SELECT name FROM profiles WHERE id = ?), (SELECT name FROM participants WHERE profile_id = ? ORDER BY id DESC LIMIT 1), 'someone'), ?, ?, ?, ?, ?, ?, ?)`,
+			id, n, profileID, profileID, profileID, up.Description, up.Files, up.Size, up.SHA256, up.Tar, now())
 		if err != nil {
 			return fmt.Errorf("publish skill: %w", err)
 		}

@@ -194,6 +194,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/admin/rooms/import", s.admin(s.importRoom))
 	mux.Handle("PUT /api/admin/rooms/{room}/admins/{participant}", adminOnly(s.setRoomAdmin))
 	mux.Handle("DELETE /api/admin/rooms/{room}/admins/{participant}", adminOnly(s.setRoomAdmin))
+	mux.Handle("PUT /api/admin/rooms/{room}/participants/{participant}/name", adminOnly(s.renameParticipant))
 	mux.Handle("PUT /api/rooms/{room}/quota", s.memberOrAdmin(s.setQuota))
 	mux.Handle("GET /api/admin/rooms/{room}/invites", adminOnly(s.listInvites))
 	mux.Handle("POST /api/admin/rooms/{room}/invites", adminOnly(s.createInvite))
@@ -256,6 +257,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms/{room}/turns/{turn}/stop", s.participant(s.stopTurn))
 	mux.Handle("PUT /api/rooms/{room}/host", s.participant(s.handOver))
 	mux.Handle("PATCH /api/rooms/{room}/participants/{participant}", s.participant(s.setCanTrigger))
+	mux.Handle("PUT /api/rooms/{room}/participants/{participant}/name", s.memberOrAdmin(s.renameParticipant))
 	mux.Handle("DELETE /api/rooms/{room}/queue/{queued}", s.participant(s.cancelQueued))
 	mux.Handle("PATCH /api/rooms/{room}/chain", s.participant(s.controlChain))
 	mux.Handle("GET /api/rooms/{room}/templates", s.participant(s.listTemplates))
@@ -759,6 +761,8 @@ type roomResp struct {
 	Daemons []presence `json:"daemons"`
 	// Voice tells whether the server offers LiveKit audio.
 	Voice bool `json:"voice"`
+	// Profile tells whether the viewer has a profile, to which a rename may apply (005-AC1).
+	Profile bool `json:"profile"`
 }
 
 func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
@@ -777,7 +781,8 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
 			sess.p.Admin = p.Admin
 		}
 	}
-	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps, Daemons: s.connectedDaemons(room.ID), Voice: s.opts.Voice != nil})
+	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps, Daemons: s.connectedDaemons(room.ID), Voice: s.opts.Voice != nil,
+		Profile: sess.p.ProfileID != 0})
 }
 
 func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, sess session) {

@@ -5,7 +5,7 @@ import { render } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { html } from 'htm/preact';
-import { RoomPanel, fetchJSON, size, when, onInput, formAction } from './room-panel.js';
+import { RoomPanel, Rename, TabBar, fetchJSON, roomTabs, size, when, onInput, formAction } from './room-panel.js';
 
 /**
  * @typedef {{id: number, created_at: string, last_used_at: string, expires_at: string, user_agent: string, ip: string,
@@ -36,11 +36,18 @@ import { RoomPanel, fetchJSON, size, when, onInput, formAction } from './room-pa
 const signedIn = signal(null);
 const notice = signal('');
 const views = [['rooms', 'Rooms'], ['profiles', 'Profiles'], ['libraries', 'Libraries'], ['instance', 'Instance'],
-  ['sessions', 'Sessions'], ['audit', 'Audit log']];
-/** @param {string} hash */
-const viewOf = (hash) => views.find(([id]) => '#' + id === hash)?.[0] || 'rooms';
-const view = signal(viewOf(location.hash));
-addEventListener('hashchange', () => { view.value = viewOf(location.hash); });
+  ['sessions', 'Sessions'], ['audit', 'Audit']];
+/**
+ * routeOf reads a deep link (005-AC16): #<view>, or #rooms/<room>/<tab> for one room's tab.
+ * @param {string} hash
+ */
+const routeOf = (hash) => {
+  const [v, room = '', tab = ''] = hash.slice(1).split('/').map(decodeURIComponent);
+  return { view: views.some(([id]) => id === v) ? v : 'rooms', room: v === 'rooms' ? room : '', tab };
+};
+const route = signal(routeOf(location.hash));
+addEventListener('hashchange', () => { route.value = routeOf(location.hash); });
+const roomTabList = Object.entries(roomTabs);
 
 /**
  * api is fetchJSON for this page. A 401 outside the login form means the session is gone: the
@@ -196,10 +203,21 @@ const roomCols = [
 function Rooms() {
   const [page, setPage] = useState(/** @type {RoomsPage | null} */ (null));
   const [sort, setSort] = useState({ col: 'activity', desc: true });
-  const [open, setOpen] = useState('');
   const load = () => api('GET', '/api/admin/rooms').then(setPage).catch(show);
   useEffect(() => { load(); }, []);
   if (!page) return html`<h2>Rooms</h2>`;
+  const { room: open, tab } = route.value;
+  if (open) {
+    const room = page.rooms.find((r) => r.id === open);
+    const base = '/api/admin/rooms/' + encodeURIComponent(open);
+    const t = roomTabList.some(([id]) => id === tab) ? tab : 'general';
+    return html`
+      <p><a href="#rooms" id="back-to-rooms">← All rooms</a></p>
+      ${room ? html`<${RoomPanel} key=${room.id} room=${room} base=${base} api=${api} show=${show} setQuota=${true} reload=${load}
+        tab=${t} tabs=${roomTabList} href=${(/** @type {string} */ id) => `#rooms/${encodeURIComponent(room.id)}/${id}`}
+        close=${() => { location.hash = '#rooms'; load(); }}>${t === 'admins' && html`<${RoomAdmins} base=${base}/>`}<//>`
+        : html`<p>No such room.</p>`}`;
+  }
   const key = (roomCols.find(([id]) => id === sort.col) || roomCols[0])[2];
   const rooms = [...page.rooms].sort((a, b) => {
     const x = key(a), y = key(b);
@@ -207,7 +225,6 @@ function Rooms() {
   });
   /** @param {string} col */
   const by = (col) => setSort({ col, desc: sort.col === col ? !sort.desc : col !== 'name' });
-  const room = page.rooms.find((r) => r.id === open);
   return html`
     <h2>Rooms</h2>
     <p class="hint">${page.rooms.length} rooms. A room's quota counts its uploads and attachments; the default is ${size(page.default_quota)}.</p>
@@ -219,11 +236,9 @@ function Rooms() {
         <td class="wrap">${r.name}</td><td>${when(r.created_at)}</td><td>${when(r.last_activity)}</td>
         <td>${r.participants}</td><td>${r.personas}</td><td>${!r.host_participant_id ? 'none' : r.host_online ? 'online' : 'offline'}</td><td>${size(r.volume.total)}</td>
         <td><meter min="0" max=${r.quota} value=${r.used} title=${size(r.used) + ' of ' + size(r.quota)}></meter> ${size(r.used)} / ${size(r.quota)}</td>
-        <td><button type="button" onClick=${() => setOpen(open === r.id ? '' : r.id)}>${open === r.id ? 'Close' : 'Manage'}</button></td>
+        <td><a class="button" href=${'#rooms/' + encodeURIComponent(r.id)} aria-label=${'Manage ' + r.name}>Manage</a></td>
       </tr>`)}</tbody>
-    </table></div>` : html`<p>No room yet.</p>`}
-    ${room && html`<${RoomPanel} key=${room.id} room=${room} base=${'/api/admin/rooms/' + room.id} api=${api} show=${show} setQuota=${true}
-      reload=${load} close=${() => { setOpen(''); load(); }}><${RoomAdmins} base=${'/api/admin/rooms/' + room.id}/><//>`}`;
+    </table></div>` : html`<p>No room yet.</p>`}`;
 }
 
 /**
@@ -238,13 +253,13 @@ function RoomAdmins({ base }) {
   /** @param {Participant} p @param {boolean} on */
   const set = (p, on) => api(on ? 'PUT' : 'DELETE', `${base}/admins/${p.id}`).then(load).catch(show);
   return html`
-    <h3>Room admins</h3>
-    <p class="hint">Room admins rename the room, manage its invites, appoint other admins, export and delete it. Only participants with a profile can be appointed.</p>
+    <p class="hint">Room admins rename the room and its participants, manage its invites, appoint other admins, export and delete it. Only participants with a profile can be appointed.</p>
     ${list && (list.length ? html`<ul id="room-admins">${list.map((p) => html`<li key=${p.id}>
       ${p.name}${p.admin && html` <strong>admin</strong>`}${' '}
       ${!p.has_profile ? html`<span class="hint">no profile</span>`
         : p.admin ? html`<button type="button" class="small" onClick=${() => set(p, false)} aria-label=${'Remove ' + p.name + ' from the room admins'}>Remove admin</button>`
         : html`<button type="button" class="small" onClick=${() => set(p, true)} aria-label=${'Make ' + p.name + ' a room admin'}>Make admin</button>`}
+      ${' '}<${Rename} key=${p.name} name=${p.name} path=${`${base}/participants/${p.id}/name`} api=${api} show=${show} done=${load}/>
       ${p.client && html`<${ClientLine} c=${p.client}/>`}
     </li>`)}</ul>` : html`<p class="hint">No participant yet.</p>`)}`;
 }
@@ -347,7 +362,7 @@ function Profiles() {
   };
   return html`
     <h2>Profiles</h2>
-    <p class="hint">Emails show here and nowhere else. A profile's name is the one it last joined a room with.</p>
+    <p class="hint">Emails show here and nowhere else. A profile's name is the one it chose in a room, else the one it last joined a room with.</p>
     ${list && (list.length ? html`<div class="scroll"><table id="profiles">
       <thead><tr><th>Name</th><th>Email</th><th>Rooms</th><th>Skills</th><th>Last activity</th><th>Rooms it may create</th><th></th></tr></thead>
       <tbody>${list.map((p) => html`<tr id=${'profile-' + p.id}>
@@ -464,18 +479,17 @@ function RoomCreation() {
 
 function Shell() {
   const logout = () => api('POST', '/api/admin/logout').then(() => { signedIn.value = false; }).catch(show);
-  /** @param {string} id @param {string} name */
-  const link = (id, name) => html`<a href=${'#' + id} aria-current=${view.value === id ? 'page' : undefined}>${name}</a>`;
+  const view = route.value.view;
   return html`
     <header>
       <h1>grill-room admin</h1>
-      <nav aria-label="Views">${views.map(([id, name]) => link(id, name))}</nav>
       <button type="button" id="logout" onClick=${logout}>Sign out</button>
     </header>
+    <${TabBar} tabs=${views} active=${view} href=${(/** @type {string} */ id) => '#' + id} label="Views" cls="views"/>
     <main>
       ${notice.value && html`<p class="said bad" role="alert">${notice.value}</p>`}
       ${{ rooms: html`<${Rooms}/>`, profiles: html`<${Profiles}/>`, libraries: html`<${Libraries}/>`, instance: html`<${InstanceView}/>`,
-        sessions: html`<${Sessions}/>`, audit: html`<${Audit}/>` }[view.value]}
+        sessions: html`<${Sessions}/>`, audit: html`<${Audit}/>` }[view]}
     </main>`;
 }
 

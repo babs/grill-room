@@ -33,6 +33,8 @@ type Profile struct {
 	Rooms     []ProfileRoom `json:"rooms"`
 	// UUID names the profile in the audit log of its room admin actions; never sent.
 	UUID string `json:"-"`
+	// Name is the one the profile chose from a room (005-AC1); empty until it does.
+	Name string `json:"name,omitempty"`
 }
 
 // ProfileRoom is a room a profile is in, under the name it joined with.
@@ -123,7 +125,8 @@ func (s *Store) profile(ctx context.Context, where string, args ...any) (*Profil
 	var p Profile
 	var email sql.NullString
 	var created string
-	err := s.db.QueryRowContext(ctx, `SELECT id, email, created_at, COALESCE(uuid, '') FROM profiles WHERE `+where, args...).Scan(&p.ID, &email, &created, &p.UUID)
+	err := s.db.QueryRowContext(ctx, `SELECT id, email, created_at, COALESCE(uuid, ''), COALESCE(name, '') FROM profiles WHERE `+where, args...).
+		Scan(&p.ID, &email, &created, &p.UUID, &p.Name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

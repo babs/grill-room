@@ -229,6 +229,7 @@ func TestRoomAdminCallsFailWithTheStore(t *testing.T) {
 		"create":       func() error { _, err := createFor(t, s, "x", p, "A"); return err },
 		"room admin":   func() error { _, err := s.RoomAdmin(ctx, "x", 1); return err },
 		"set admin":    func() error { _, err := s.SetRoomAdmin(ctx, "x", 1, true, p); return err },
+		"rename":       func() error { _, err := s.RenameParticipant(ctx, "x", 1, "B", p, true); return err },
 	} {
 		if err := call(); err == nil || errors.Is(err, ErrForbidden) || errors.Is(err, ErrNotFound) {
 			t.Errorf("%s: %v", name, err)
@@ -320,5 +321,61 @@ func TestSuperAdminSetsRoomAdmin(t *testing.T) {
 	}
 	if _, err := s.RoomAdmin(ctx, "r", alice.ProfileID); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("alice still a room admin: %v", err)
+	}
+}
+
+// 005-AC1 005-AC21: a participant renames themselves, and may name their profile with it; a room
+// admin or the super-admin renames others, a plain member nobody else. Each rename is one system
+// line, and the profile's name wins over the name it last joined with.
+func TestRenameParticipant(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	alice := joinWithProfile(t, s, "lobby", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
+	if _, err := createFor(t, s, "r", alice, "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	ps, _ := s.Participants(ctx, "r")
+	al := &ps[0]
+	if _, err := s.CreateInvite(ctx, "r", "inv-bob", 0); err != nil {
+		t.Fatal(err)
+	}
+	bob, _, err := s.Join(ctx, "inv-bob", "Bob", "tok-bob", JoinProfile{RecoveryHash: "rec-bob", SessionHash: "sess-bob"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		by      *Participant
+		target  int64
+		name    string
+		profile bool
+		line    string
+		err     error
+	}{
+		{bob, al.ID, "X", false, "", ErrForbidden},
+		{al, 999, "X", false, "", ErrNotFound},
+		{bob, bob.ID, "Bob", true, "", nil},
+		{bob, bob.ID, "Rob", true, "Bob is now Rob", nil},
+		{al, bob.ID, "Robert", true, "Alice renamed Rob to Robert", nil},
+		{nil, bob.ID, "Bobby", false, "The admin renamed Robert to Bobby", nil},
+	} {
+		before, _ := s.Messages(ctx, "r", 0, 100)
+		m, err := s.RenameParticipant(ctx, "r", c.target, c.name, c.by, c.profile)
+		if !errors.Is(err, c.err) || (c.line == "") != (m == nil) || (m != nil && m.Body != c.line) {
+			t.Fatalf("%+v: %+v %v", c, m, err)
+		}
+		if after, _ := s.Messages(ctx, "r", 0, 100); len(after)-len(before) != map[bool]int{true: 1, false: 0}[m != nil] {
+			t.Fatalf("%+v: %d lines written", c, len(after)-len(before))
+		}
+	}
+	// Bob's own renames named his profile, the no-op one included; Alice's did not.
+	p, err := s.ProfileBySession(ctx, "sess-bob")
+	if err != nil || p.Name != "Rob" {
+		t.Fatalf("bob's profile %+v %v", p, err)
+	}
+	ap, _ := s.Profiles(ctx)
+	for _, x := range ap {
+		if x.ID == bob.ProfileID && x.Name != "Rob" {
+			t.Fatalf("admin profiles name %+v", x)
+		}
 	}
 }

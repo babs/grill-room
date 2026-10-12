@@ -2,11 +2,9 @@
 body { margin: 0; color: var(--ink); background: var(--paper); overflow-wrap: anywhere; }
 header { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1rem; padding: 0.6rem 1rem; background: var(--teal); color: #fff; }
 header h1 { font-size: 1.1rem; margin: 0; }
-header nav { display: flex; flex-wrap: wrap; gap: 0.2rem 0.8rem; }
-header nav a { color: #fff; }
-header nav a[aria-current="page"] { font-weight: 700; }
+
 header button { margin-left: auto; }
-main { padding: 0 1rem 1rem; max-width: 72rem; }
+main { padding: 0 1rem 1rem; }
 h2 { font-size: 1.05rem; margin: 1.2rem 0 0.4rem; }
 .login { max-width: 24rem; margin: 3rem auto; padding: 1rem; }
 .login label { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.6rem; }
@@ -43,3 +41,10 @@ form.limit .hint { margin: 0; width: 100%; }
 form.limit input { width: 5rem; }
 .warn { background: #fff4d6; border-left: 3px solid var(--amber); padding: 0.4rem 0.6rem; font-size: 0.85rem; margin: 0 0 0.6rem; }
 a.button { display: inline-block; padding: 0.2rem 0.7rem; border: 1px solid var(--muted); border-radius: 3px; background: #efefef; color: inherit; text-decoration: none; }
+.tabs { display: flex; flex-wrap: wrap; gap: 0.2rem; margin: 0.6rem 0; border-bottom: 1px solid var(--line); }
+.tabs a { flex: none; padding: 0.45rem 0.8rem; color: inherit; text-decoration: none; border-bottom: 3px solid transparent; }
+.tabs a[aria-current="page"] { border-bottom-color: var(--teal); font-weight: 600; }
+.tabs a:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+nav.tabs.views { position: sticky; top: 0; z-index: 1; margin: 0; padding: 0 1rem; background: #fff; }
+form.rename { display: inline-flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+form.rename input { width: 12rem; }

@@ -29,7 +29,7 @@ for (const vp of widths) {
     await expect(alice.locator('#messages')).toContainText('Ship on Friday.');
     const page = await (await browser.newContext({ viewport: vp })).newPage();
     expect(await signIn(page, adminToken, 'rooms')).toBe(201);
-    await page.locator('#room-' + room.id).getByRole('button', { name: 'Manage' }).click();
+    await page.goto(`/admin#rooms/${room.id}/export`);
     const panel = page.locator('#room-panel');
     await expect(panel.locator('#export-warning')).toContainText('everything Claude read');
     const [dl] = await Promise.all([page.waitForEvent('download'), panel.locator('#export').click()]);
@@ -38,6 +38,7 @@ for (const vp of widths) {
     const log = await (await request.get(`/api/admin/audit?action=room.export&target=${room.id}`, { headers: admin })).json();
     expect(log.entries[0].details.via).toBe('session');
 
+    await page.getByRole('link', { name: '← All rooms' }).click();
     await page.locator('#import-file').setInputFiles(file);
     await page.getByRole('button', { name: 'Preview' }).click();
     const pv = page.locator('#import-preview');
@@ -78,6 +79,7 @@ test('the room page offers its admins the export', async ({ browser, request }) 
   await alice.reload();
   await alice.getByRole('button', { name: 'Manage', exact: true }).click();
   const dialog = alice.locator('#manage');
+  await dialog.getByRole('link', { name: 'Export', exact: true }).click();
   await expect(dialog.locator('#export-warning')).toContainText('everything Claude read');
   const [dl] = await Promise.all([alice.waitForEvent('download'), dialog.locator('#export').click()]);
   expect(dl.suggestedFilename()).toMatch(/\.tar\.gz$/);

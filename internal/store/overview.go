@@ -116,7 +116,7 @@ func (s *Store) SetRoomQuota(ctx context.Context, roomID string, quota int64) er
 type AdminProfile struct {
 	Profile
 	UUID string `json:"uuid"`
-	// Name is the name the profile last joined a room with; profiles have none of their own.
+	// Name is the one the profile chose (005-AC1), else the name it last joined a room with.
 	Name string `json:"name"`
 	// Skills counts the personal skills it owns and the shared ones it published.
 	Skills       int       `json:"skills"`
@@ -131,7 +131,7 @@ type AdminProfile struct {
 // line, join or creation, whichever is latest.
 func (s *Store) Profiles(ctx context.Context) ([]AdminProfile, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.email, p.created_at, COALESCE(p.uuid, ''),
-		COALESCE((SELECT name FROM participants WHERE profile_id = p.id ORDER BY id DESC LIMIT 1), ''),
+		COALESCE(p.name, (SELECT name FROM participants WHERE profile_id = p.id ORDER BY id DESC LIMIT 1), ''),
 		COALESCE((SELECT joined_at FROM participants WHERE profile_id = p.id ORDER BY id DESC LIMIT 1), ''),
 		(SELECT COUNT(*) FROM skills WHERE profile_id = p.id OR publisher_id = p.id), p.max_rooms,
 		(SELECT COUNT(*) FROM rooms WHERE creator_profile_id = p.id),

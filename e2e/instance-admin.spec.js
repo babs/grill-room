@@ -37,7 +37,7 @@ test('admin sessions list and revoke', async ({ browser }) => {
   await expect(row).toHaveCount(0);
 
   expect((await bCtx.request.get('/api/admin/sessions')).status()).toBe(401);
-  await b.getByRole('link', { name: 'Audit log' }).click();
+  await b.getByRole('link', { name: 'Audit', exact: true }).click();
   await expect(b.getByLabel('Admin token')).toBeVisible();
   await expect(b.getByRole('alert')).toHaveText('Your session ended: sign in again.');
 
@@ -58,7 +58,7 @@ test('audit view shows real admin actions, filters, and fits a phone', async ({ 
 
   const page = await (await browser.newContext()).newPage();
   expect(await signIn(page)).toBe(201);
-  await page.getByRole('link', { name: 'Audit log' }).click();
+  await page.getByRole('link', { name: 'Audit', exact: true }).click();
   await page.locator('#audit-target').fill(room.id);
   await page.locator('#audit-target').press('Enter');
   const rows = page.locator('#audit tbody tr');

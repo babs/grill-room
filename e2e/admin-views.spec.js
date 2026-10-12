@@ -57,19 +57,26 @@ for (const vp of widths) {
     await expect(page.locator('#rooms th[aria-sort="descending"]')).toHaveText('Name');
     expect(await names()).toEqual(sorted(await names(), true));
 
-    await row.getByRole('button', { name: 'Manage' }).click();
+    // 005-AC16: a room opens its own view, with tabs, each a deep link.
+    await row.getByRole('link', { name: 'Manage ' + name }).click();
+    await expect(page).toHaveURL(new RegExp(`#rooms/${room.id}$`));
     const panel = page.locator('#room-panel');
+    const tab = async (label) => {
+      await panel.getByRole('link', { name: label, exact: true }).click();
+      await expect(page).toHaveURL(new RegExp(`#rooms/${room.id}/${label.toLowerCase()}$`));
+    };
     await expect(panel.locator('#volume')).toContainText(`Uploads${Buffer.byteLength(plan)} B`);
     await expect(panel.locator('#volume')).toContainText('Room skills0 B');
     await expect(panel).toContainText('of 200 MB used, the instance default.');
+    await tab('Export');
     await expect(panel.locator('#export')).toHaveAttribute('href', `/api/admin/rooms/${room.id}/export`);
     await fits(page, vp.width);
+    await tab('General');
 
     // Quota: 1 MB, then an upload past it is refused; back to the default.
     await panel.locator('#quota').fill('1');
     await panel.getByRole('button', { name: 'Set quota' }).click();
     await expect(panel).toContainText('of 1.0 MB used.');
-    await expect(row).toContainText('/ 1.0 MB');
     await audited(request, 'room.quota', room.id);
     const big = await alice.ctx.post(`/api/rooms/${room.id}/documents`, { multipart: { file: { name: 'big.md', mimeType: 'text/markdown', buffer: Buffer.alloc(1 << 20, 'a') } } });
     expect(big.status()).toBe(413);
@@ -80,10 +87,15 @@ for (const vp of widths) {
     // Rename.
     await panel.locator('#room-name-input').fill(name + ' renamed');
     await panel.getByRole('button', { name: 'Rename' }).click();
-    await expect(row.locator('td').first()).toHaveText(name + ' renamed');
+    await expect(panel.locator('h2')).toContainText(name + ' renamed');
     await audited(request, 'room.rename', room.id);
+    await page.getByRole('link', { name: '← All rooms' }).click();
+    await expect(row.locator('td').first()).toHaveText(name + ' renamed');
+    await expect(row).toContainText('/ 200 MB');
 
-    // Invites: a new link shown once, then revoked.
+    // Invites, from a deep link: a new link shown once, then revoked.
+    await page.goto(`/admin#rooms/${room.id}/invites`);
+    await expect(panel.getByRole('link', { name: 'Invites', exact: true })).toHaveAttribute('aria-current', 'page');
     const invites = panel.locator('#invites-all tbody tr');
     await expect(invites).toHaveCount(1);
     await panel.getByRole('button', { name: 'New invite link' }).click();
@@ -96,14 +108,16 @@ for (const vp of widths) {
     await fits(page, vp.width);
 
     // Delete asks for the name typed.
+    await tab('General');
     const del = panel.getByRole('button', { name: 'Delete the room' });
     await expect(del).toBeDisabled();
     await panel.locator('#delete-confirm').fill(name);
     await expect(del).toBeDisabled();
     await panel.locator('#delete-confirm').fill(name + ' renamed');
     await del.click();
-    await expect(row).toHaveCount(0);
+    await expect(page).toHaveURL(/#rooms$/);
     await expect(panel).toHaveCount(0);
+    await expect(row).toHaveCount(0);
     await audited(request, 'room.delete', room.id);
     expect((await alice.ctx.get(`/api/rooms/${room.id}`)).status()).toBe(401);
     await alice.ctx.dispose();
@@ -118,7 +132,8 @@ for (const vp of widths) {
     expect((await alice.ctx.patch(`/api/rooms/${room.id}`, { data: { name: 'by Alice' } })).status()).toBe(403);
     const page = await (await browser.newContext({ viewport: vp })).newPage();
     expect(await signIn(page, adminToken, 'rooms')).toBe(201);
-    await page.locator('#room-' + room.id).getByRole('button', { name: 'Manage' }).click();
+    await page.locator('#room-' + room.id).getByRole('link', { name: 'Manage ' + name }).click();
+    await page.locator('#room-panel').getByRole('link', { name: 'Admins', exact: true }).click();
     const admins = page.locator('#room-panel #room-admins');
     await expect(admins.locator('li')).toHaveCount(1);
     await admins.getByRole('button', { name: 'Make Alice a room admin' }).click();

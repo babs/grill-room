@@ -35,11 +35,19 @@ async function newRoom(page, name) {
   return decodeURIComponent(new URL(page.url()).pathname.split('/')[2]);
 }
 
+// openManage opens the Manage sheet on its General tab (005-AC15).
 async function openManage(page) {
   await page.getByRole('button', { name: 'Manage' }).click();
   const panel = page.locator('#manage #room-panel');
   await expect(panel).toBeVisible();
+  await expect(panel.locator('#panel-general')).toBeVisible();
   return panel;
+}
+
+// tab opens a tab of the Manage sheet.
+async function tab(panel, name) {
+  await panel.getByRole('link', { name, exact: true }).click();
+  await expect(panel.getByRole('link', { name, exact: true })).toHaveAttribute('aria-current', 'page');
 }
 
 // 004-AC7 004-AC19: a profile creates rooms from its profile page, at phone width, and becomes their
@@ -140,11 +148,15 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     await expect(panel.locator('#volume')).toContainText('Transcripts');
     await expect(panel).toContainText('Only the instance admin changes it.');
     await expect(panel.locator('#quota')).toHaveCount(0);
+    await tab(panel, 'Export');
+    await expect(alice).toHaveURL(/#manage\/export$/);
     await expect(panel.locator('#export')).toHaveAttribute('href', `/api/rooms/${id}/export`);
     await expect(panel.locator('#export-warning')).toContainText('everything Claude read');
+    await tab(panel, 'Invites');
     await expect(panel.locator('#invites-all tbody tr')).toHaveCount(3);
     await expect(panel.locator('#invites-all tbody tr').first()).toContainText('Alice');
     await fits(alice);
+    await tab(panel, 'Admins');
     await panel.getByRole('button', { name: 'Make Bob a room admin' }).click();
     await expect(panel.locator('#room-admins li', { hasText: 'Bob' }).locator('strong')).toHaveText('admin');
     await expect(carol.locator('#messages')).toContainText('Alice made Bob a room admin.');
@@ -152,10 +164,12 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     // Bob, now an admin, removes Alice; she loses her panel.
     await expect(bob.getByRole('button', { name: 'Manage' })).toBeVisible();
     const bobPanel = await openManage(bob);
+    await tab(bobPanel, 'Admins');
     await bobPanel.locator('#room-admins li', { hasText: 'Alice' }).getByRole('button', { name: 'Remove admin' }).click();
     await expect(alice.locator('#manage #room-panel')).toHaveCount(0);
     await bobPanel.locator('#room-admins li', { hasText: 'Bob' }).getByRole('button', { name: 'Step down' }).click();
     await expect(bob.locator('#manage [role="alert"]')).toHaveText("you are the room's last admin: appoint another one first");
+    await tab(bobPanel, 'General');
 
     await bobPanel.locator('#room-name-input').fill(`Delegated ${vp.name}`);
     await bobPanel.getByRole('button', { name: 'Rename' }).click();
