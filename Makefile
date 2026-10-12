@@ -28,7 +28,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: ui-tools ui-vendor ui-check build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: ui-tools ui-vendor ui-check build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail e2e-supervisor stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -103,6 +103,18 @@ e2e-install:
 # Claude requests, and the sandbox image the room server advertises.
 e2e-lab: build
 	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c lab/playwright.config.js
+
+# 003-AC31: one supervisor serves a room on the compose stack and one on the lab deployment at once,
+# on two accounts: this machine's Claude Code login and the setup token in SETUP_TOKEN_FILE. The
+# compose stack must serve a release signed with the dev key DEV_KEY_PUB (docs/release.md, Dev
+# signing). SUPERVISOR_BIN picks the supervisor binary, default bin/grill-room-daemon. Two haiku
+# turns run at once: at most six real Claude requests.
+SUPERVISOR_BIN ?= bin/grill-room-daemon
+e2e-supervisor: build
+	@test -n "$(SETUP_TOKEN_FILE)" && test -n "$(DEV_KEY_PUB)" || { echo "set SETUP_TOKEN_FILE and DEV_KEY_PUB" >&2; exit 2; }
+	cd e2e && pnpm install --frozen-lockfile && GRILL_ROOM_E2E_SETUP_TOKEN_FILE='$(abspath $(SETUP_TOKEN_FILE))' \
+	  GRILL_ROOM_E2E_DEV_KEY='$(abspath $(DEV_KEY_PUB))' GRILL_ROOM_E2E_SUPERVISOR='$(abspath $(SUPERVISOR_BIN))' \
+	  pnpm exec playwright test -c supervisor/playwright.config.js
 
 # Magic links against the lab deployment and its mailpit (K8S_MAILPIT_URL in .env); no Claude request.
 e2e-lab-mail:
