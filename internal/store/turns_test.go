@@ -35,7 +35,7 @@ func newTurnRoom(t *testing.T, s *Store, room string) turnRoom {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := s.PairDaemon(ctx, room, p.ID, "laptop", "dmn-"+room)
+	d, err := s.PairDaemon(ctx, room, p.ID, "dmn-"+room)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func (r turnRoom) start(t *testing.T, s *Store, room string) *Turn {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tn := &Turn{RoomID: room, ParticipantID: r.p.ID, DaemonID: r.daemon, Host: "laptop", Prompt: "go", AnnotationCursor: cursor,
+	tn := &Turn{RoomID: room, ParticipantID: r.p.ID, DaemonID: r.daemon, Prompt: "go", AnnotationCursor: cursor,
 		PersonaID: r.grill.ID, PersonaName: r.grill.Name}
 	if err := s.StartTurn(context.Background(), tn); err != nil {
 		t.Fatal(err)
@@ -76,12 +76,12 @@ func TestStartTurnOnePerRoom(t *testing.T) {
 	ctx := context.Background()
 	r := newTurnRoom(t, s, "a")
 	first := r.start(t, s, "a")
-	if err := s.StartTurn(ctx, &Turn{RoomID: "a", Host: "x", PersonaID: r.grill.ID}); !errors.Is(err, ErrTurnInProgress) {
+	if err := s.StartTurn(ctx, &Turn{RoomID: "a", PersonaID: r.grill.ID}); !errors.Is(err, ErrTurnInProgress) {
 		t.Fatalf("second turn: %v, want ErrTurnInProgress", err)
 	}
 	// Another room is independent.
 	rb := newTurnRoom(t, s, "b")
-	if err := s.StartTurn(ctx, &Turn{RoomID: "b", Host: "x", PersonaID: rb.grill.ID}); err != nil {
+	if err := s.StartTurn(ctx, &Turn{RoomID: "b", PersonaID: rb.grill.ID}); err != nil {
 		t.Fatalf("other room: %v", err)
 	}
 	m, err := s.FailTurn(ctx, "a", first.ID, "boom")
@@ -92,12 +92,12 @@ func TestStartTurnOnePerRoom(t *testing.T) {
 		t.Fatalf("failing a failed turn: %+v, %v", m, err)
 	}
 	// 002-AC16: a turn runs a persona of its own room.
-	for _, tn := range []*Turn{{RoomID: "a", Host: "x"}, {RoomID: "a", Host: "x", PersonaID: rb.grill.ID}, {RoomID: "gone", Host: "x", PersonaID: r.grill.ID}} {
+	for _, tn := range []*Turn{{RoomID: "a"}, {RoomID: "a", PersonaID: rb.grill.ID}, {RoomID: "gone", PersonaID: r.grill.ID}} {
 		if err := s.StartTurn(ctx, tn); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("turn %+v: %v, want ErrNotFound", tn, err)
 		}
 	}
-	if err := s.StartTurn(ctx, &Turn{RoomID: "a", Host: "x", PersonaID: r.grill.ID}); err != nil {
+	if err := s.StartTurn(ctx, &Turn{RoomID: "a", PersonaID: r.grill.ID}); err != nil {
 		t.Fatalf("turn after failure: %v", err)
 	}
 }

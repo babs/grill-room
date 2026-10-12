@@ -175,18 +175,17 @@ func TestSourceRereads(t *testing.T) {
 	}
 }
 
-// 001-AC23: the real constructor reads CLAUDE_CONFIG_DIR, both for the file and the Keychain item.
-func TestNewHonoursConfigDir(t *testing.T) {
+// 001-AC23, 003-AC12: a config dir account reads that dir's file and the Keychain item Claude Code
+// started with CLAUDE_CONFIG_DIR=dir uses; "" is Claude Code's default.
+func TestForConfigDir(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("CLAUDE_CONFIG_DIR", dir)
 	t.Setenv("USER", "alice")
-	r := New()
+	r := ForConfigDir(dir)
 	if r.ConfigDir != dir || r.File() != filepath.Join(dir, ".credentials.json") || r.Service != KeychainService(dir) || r.Account != "alice" {
-		t.Fatalf("New() = %+v", r)
+		t.Fatalf("ForConfigDir(dir) = %+v", r)
 	}
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	if r := New(); filepath.Base(r.ConfigDir) != ".claude" || r.Service != "Claude Code-credentials" {
-		t.Fatalf("New() without env = %+v", r)
+	if r := ForConfigDir(""); filepath.Base(r.ConfigDir) != ".claude" || r.Service != "Claude Code-credentials" {
+		t.Fatalf("ForConfigDir(\"\") = %+v", r)
 	}
 	if NewSource(r).Reader().ConfigDir != r.ConfigDir {
 		t.Fatal("Source.Reader lost the config dir")

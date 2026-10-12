@@ -25,8 +25,9 @@ import (
 	"github.com/babs/grill-room/internal/trust"
 )
 
-// minWorkerVersion is the first release that runs as a worker: an older one cannot say hello.
-const minWorkerVersion = "v0.0.2"
+// minWorkerVersion is the first release a supervisor runs as a worker: v0.0.1 cannot say hello,
+// and v0.0.2 reads the Claude credentials itself instead of using the supervisor's proxies (003-AC14).
+const minWorkerVersion = "v0.0.3"
 
 // maxBundle bounds a downloaded sigstore bundle.
 const maxBundle = 1 << 20
@@ -136,7 +137,7 @@ func (b *Binaries) Resolve(ctx context.Context, in Instance) (Resolved, error) {
 	if err != nil {
 		// Offline: the copy verified last time still runs, re-verified from disk.
 		b.Log.Warn("instance_version_unknown", zap.String("instance", in.ID), zap.Error(err))
-		if in.Version != "" && in.Version != b.Version {
+		if in.Version != "" && in.Version != b.Version && semver.Compare(in.Version, minWorkerVersion) >= 0 {
 			if r, err := b.stored(in, in.Version, ""); err == nil {
 				return r, nil
 			}
@@ -151,7 +152,7 @@ func (b *Binaries) Resolve(ctx context.Context, in Instance) (Resolved, error) {
 		return Resolved{}, errRefused{fmt.Sprintf("the instance serves version %q, which is not a semver", v)}
 	}
 	if semver.Compare(v, minWorkerVersion) < 0 {
-		return Resolved{}, errRefused{fmt.Sprintf("the instance serves %s, older than %s, the first version that runs as a worker", v, minWorkerVersion)}
+		return Resolved{}, errRefused{fmt.Sprintf("the instance serves %s, older than %s, the first version that runs as a worker without Claude credentials", v, minWorkerVersion)}
 	}
 	sum := info.SHA256[target]
 	if sum == "" {

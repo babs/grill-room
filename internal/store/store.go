@@ -438,6 +438,12 @@ CREATE TABLE room_persona_skills (
 CREATE INDEX room_persona_skills_skill ON room_persona_skills(skill_id);
 ALTER TABLE profiles ADD COLUMN skills_disclaimer_at TEXT;
 ALTER TABLE turns ADD COLUMN skills TEXT NOT NULL DEFAULT '[]';
+`, `
+-- 003-AC17: the room shows who holds the agent, never their machine's name.
+UPDATE messages SET body = substr(body, 1, instr(body, ' hosts the agent, on ') - 1) || ' holds the agent(s).'
+	WHERE kind = 'system' AND instr(body, ' hosts the agent, on ') > 0;
+UPDATE daemons SET name = '';
+UPDATE turns SET host = '';
 `}
 
 // migrationData runs Go code inside the transaction of the migration to version key, after its SQL.

@@ -12,7 +12,6 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/babs/grill-room/internal/creds"
 	"github.com/babs/grill-room/internal/daemon"
 	"github.com/babs/grill-room/internal/sandbox"
 )
@@ -53,18 +52,22 @@ func runWorker(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	if err != nil {
 		return fmt.Errorf("allowlist: %w", err)
 	}
-	src := creds.NewSource(creds.New())
+	var access daemon.Access
+	if cfg.Access != nil {
+		access = *cfg.Access
+	}
+	// No Claude credentials here: the supervisor's proxies hold them (003-AC14).
 	d := daemon.New(daemon.Options{
 		Settings: settings, SettingsPath: settingsPath, Allowlist: allowlist, AllowlistPath: allowlistPath,
-		Name: cfg.Host, Version: Version, Tokens: daemon.NewTokens(cfg.StateDir), Docker: sandbox.Docker, Creds: src,
+		Version: Version, Tokens: daemon.NewTokens(cfg.StateDir), Docker: sandbox.Docker, Access: access,
 		// No client timeout: it would cut the long-lived room stream; each request has its own deadline.
 		HTTP: &http.Client{}, Log: logger, Model: cfg.Model,
 		Image: cfg.Image, Stream: sandbox.DockerStream,
 		CacheDir: filepath.Join(cfg.CacheDir, "workspace-cache"), CacheMax: cfg.CacheMB << 20,
 		OnTurn: func(e daemon.TurnEvent) { _ = conn.Send(daemon.Msg{Type: "turn", Turn: &e}) },
-		NewAgent: func(r daemon.Room, image string) daemon.Agent {
-			return sandbox.New(sandbox.Config{Image: image, Name: daemon.SandboxName(cfg.SandboxRoot, r), Host: cfg.Host, Upstream: anthropic, Limits: cfg.Limits},
-				sandbox.Docker, src, logger.Named("sandbox"))
+		NewAgent: func(r daemon.Room, image, proxy string) daemon.Agent {
+			return sandbox.New(sandbox.Config{Image: image, Name: daemon.SandboxName(cfg.SandboxRoot, r), Proxy: proxy, Limits: cfg.Limits},
+				sandbox.Docker, logger.Named("sandbox"))
 		},
 	})
 	logger.Info("worker_startup", zap.String("version", Version), zap.String("commit_hash", CommitHash))

@@ -172,7 +172,7 @@ func TestServeWorkerStopsOnEOF(t *testing.T) {
 	f, conn := newFakeSupervisor(t)
 	done := make(chan error, 1)
 	go func() { done <- ServeWorker(context.Background(), conn, d, WorkerConfig{}) }()
-	waitFor(t, "a first status", func() bool { return f.lastStatus().Host == "laptop" })
+	waitFor(t, "a first status", func() bool { return f.lastStatus().Version == "v-test" })
 	_ = f.w.Close()
 	select {
 	case <-done:
@@ -245,7 +245,7 @@ func TestServeWorkerStopsOnGarbage(t *testing.T) {
 	f, conn := newFakeSupervisor(t)
 	done := make(chan error, 1)
 	go func() { done <- ServeWorker(context.Background(), conn, d, WorkerConfig{}) }()
-	waitFor(t, "a first status", func() bool { return f.lastStatus().Host == "laptop" })
+	waitFor(t, "a first status", func() bool { return f.lastStatus().Version == "v-test" })
 	if _, err := f.w.(io.Writer).Write([]byte("{not json\n")); err != nil {
 		t.Fatal(err)
 	}

@@ -134,7 +134,11 @@ func TestHostElection(t *testing.T) {
 	msgs, _ := e.st.Messages(t.Context(), room, 0, 100)
 	var hosts []string
 	for _, m := range msgs {
-		if strings.Contains(m.Body, "hosts the agent") {
+		// 003-AC17: who holds the agent, never on which machine.
+		if strings.Contains(m.Body, "laptop") {
+			t.Errorf("a machine name in the room: %q", m.Body)
+		}
+		if m.Body == m.Sender+" holds the agent(s)." {
 			hosts = append(hosts, m.Sender)
 		}
 	}
@@ -481,7 +485,7 @@ func TestTurnFailures(t *testing.T) {
 	alice.drop()
 	e.waitAgent(t, r.room, bob.p.Token, func(st agentState) bool { return st.Turn != nil && st.Turn.Status == store.TurnFailed })
 	st := e.waitAgent(t, r.room, bob.p.Token, hostIs(bob.p.Participant.ID, true))
-	if st.Turn.Error != "the host daemon on Alice-laptop disconnected" {
+	if st.Turn.Error != "the host's daemon disconnected" {
 		t.Fatalf("turn error %q", st.Turn.Error)
 	}
 	if code, _ := e.result(t, r, alice, tn.ID, turn.Result{SessionID: sid1, Changes: []turn.Change{{Path: "docs/x.md", Content: []byte("late")}}}); code != http.StatusConflict {

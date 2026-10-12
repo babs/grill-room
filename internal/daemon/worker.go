@@ -156,6 +156,12 @@ func (d *Daemon) handle(ctx context.Context, m Msg) Msg {
 		out.Denied, err = d.Denied(ctx, m.N)
 	case "recheck":
 		d.Recheck(ctx)
+	case "access":
+		if m.Access == nil {
+			err = errors.New("access missing")
+		} else {
+			d.SetAccess(*m.Access)
+		}
 	case "update":
 		// A worker runs a copy the supervisor verified: only the supervisor updates (003-AC5).
 		err = errors.New("updates go through the supervisor")
@@ -246,5 +252,5 @@ func sandboxNames(root string, rooms []string) []string {
 
 // removeSandbox removes every Docker object of sandbox name, as its worker would have on a clean stop.
 func removeSandbox(ctx context.Context, run sandbox.Runner, name string, log *zap.Logger) {
-	sandbox.New(sandbox.Config{Name: name}, run, nil, log).Close(ctx)
+	sandbox.New(sandbox.Config{Name: name}, run, log).Close(ctx)
 }

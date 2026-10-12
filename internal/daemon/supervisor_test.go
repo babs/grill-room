@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -65,11 +66,19 @@ func fakeWorker(mode string) int {
 	_ = conn.Send(Msg{Type: "status", Status: &Status{Host: "fake-worker", Room: m.Config.Pair, Pairing: "paired", Connection: "connected",
 		Update: Update{Available: "v9.9.9", Served: served}}})
 	_ = conn.Send(Msg{Type: "log", Log: []byte(`{"msg":"fake_worker_ready"}`)})
+	logAccess := func(a *Access) {
+		if a != nil {
+			b, _ := json.Marshal(map[string]any{"msg": "fake_access", "access": a})
+			_ = conn.Send(Msg{Type: "log", Log: b})
+		}
+	}
+	logAccess(m.Config.Access)
 	for {
 		r, err := conn.Recv()
 		if err != nil || r.Type == "stop" {
 			return 0
 		}
+		logAccess(r.Access)
 		if mode != "mute" {
 			_ = conn.Send(Msg{Type: "reply", ID: r.ID})
 		}
@@ -84,7 +93,7 @@ func testSupervisor(t *testing.T, mode string, a *Autostart, set ...func(*Superv
 	t.Helper()
 	dir := t.TempDir()
 	o := SupervisorOptions{
-		Paths: Paths{Config: dir, State: dir, Cache: dir}, Version: "v-test", Worker: WorkerConfig{Host: "laptop", SandboxRoot: dir},
+		Paths: Paths{Config: dir, State: dir, Cache: dir}, Version: "v-test", Host: "laptop", Worker: WorkerConfig{SandboxRoot: dir},
 		Binary: ownBinary, Env: append(os.Environ(), "GRILL_ROOM_TEST_WORKER="+mode),
 		Stderr: io.Discard, Log: zap.NewNop(), MaxBackoff: 100 * time.Millisecond, StopTimeout: 5 * time.Second, Autostart: a,
 	}
@@ -120,7 +129,7 @@ func TestProtocolSkew(t *testing.T) {
 			s := testSupervisor(t, strconv.Itoa(tc.proto), nil)
 			s.SetRoom(context.Background(), room)
 			if tc.ok {
-				waitFor(t, "the worker running", func() bool { return s.Status().Host == "fake-worker" })
+				waitFor(t, "the worker running", func() bool { return s.Status().Connection == "connected" })
 				if in := instance(t, s); in.State != "running" || in.Proto != min(Proto, tc.proto) || in.Restarts != 0 {
 					t.Fatalf("instance %+v", in)
 				}
@@ -132,7 +141,7 @@ func TestProtocolSkew(t *testing.T) {
 			waitFor(t, "the worker refused", func() bool { return instance(t, s).State == "refused" })
 			time.Sleep(300 * time.Millisecond) // three backoffs: a restart would show
 			in := instance(t, s)
-			want := "worker fake-" + strconv.Itoa(tc.proto) + " refused: protocol version " + strconv.Itoa(tc.proto) + " is outside the supported range 0 to 2"
+			want := "worker fake-" + strconv.Itoa(tc.proto) + " refused: protocol version " + strconv.Itoa(tc.proto) + " is outside the supported range " + strconv.Itoa(Proto-ProtoSkew) + " to " + strconv.Itoa(Proto+ProtoSkew)
 			if in.Restarts != 0 || !strings.HasPrefix(in.Error, want) {
 				t.Fatalf("instance %+v, want error %q", in, want)
 			}
@@ -196,7 +205,7 @@ func TestWorkerRefusesSupervisor(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "refuses the supervisor v-other: protocol version "+strconv.Itoa(tc.proto)+" is outside") {
 			t.Fatalf("proto %d: %v", tc.proto, err)
 		}
-		if m := <-got; m.Type != "refused" || !strings.Contains(m.Error, "outside the supported range 0 to 2") {
+		if m := <-got; m.Type != "refused" || !strings.Contains(m.Error, "outside the supported range "+strconv.Itoa(Proto-ProtoSkew)+" to "+strconv.Itoa(Proto+ProtoSkew)) {
 			t.Fatalf("refusal %+v", m)
 		}
 	}
@@ -254,7 +263,7 @@ func TestSupervisorPage(t *testing.T) {
 	if code, _ := e.req(t, "POST", "/api/room", tok, `{"url":"https://rooms.example/r/abc"}`, nil); code != http.StatusNoContent {
 		t.Fatalf("room: %d", code)
 	}
-	waitFor(t, "the worker running", func() bool { return s.Status().Host == "fake-worker" })
+	waitFor(t, "the worker running", func() bool { return s.Status().Connection == "connected" })
 	id, _ := InstanceID("https://rooms.example")
 	if v := status(); v["instance"] != id {
 		t.Fatalf("current instance: %v", v)
@@ -476,7 +485,7 @@ func TestLockAndHandoff(t *testing.T) {
 func TestSupervisorRequestTimeout(t *testing.T) {
 	s := testSupervisor(t, "mute", nil, func(o *SupervisorOptions) { o.RequestTimeout = 200 * time.Millisecond })
 	s.SetRoom(context.Background(), Room{Base: "https://rooms.example", ID: "abc"})
-	waitFor(t, "the worker running", func() bool { return s.Status().Host == "fake-worker" })
+	waitFor(t, "the worker running", func() bool { return s.Status().Connection == "connected" })
 	start := time.Now()
 	err := s.SetSettings(Settings{})
 	if err == nil || !strings.Contains(err.Error(), "did not answer: context deadline exceeded") || time.Since(start) > 5*time.Second {
@@ -495,7 +504,7 @@ func TestSupervisorRequestTimeout(t *testing.T) {
 func TestSupervisorWorkerDiesMidRequest(t *testing.T) {
 	s := testSupervisor(t, "mute", nil, func(o *SupervisorOptions) { o.MaxBackoff = 2 * time.Second })
 	s.SetRoom(context.Background(), Room{Base: "https://rooms.example", ID: "abc"})
-	waitFor(t, "the worker running", func() bool { return s.Status().Host == "fake-worker" })
+	waitFor(t, "the worker running", func() bool { return s.Status().Connection == "connected" })
 	errc := make(chan error, 1)
 	go func() { errc <- s.SetSettings(Settings{}) }()
 	w := s.currentWorker()
@@ -516,7 +525,7 @@ func TestSupervisorWorkerDiesMidRequest(t *testing.T) {
 	waitFor(t, "restarting", func() bool { return strings.Contains(s.Status().Error, "restarting in") })
 	other := Room{Base: "https://rooms.example", ID: "def"}
 	s.SetRoom(context.Background(), other)
-	waitFor(t, "the next worker pairing the new room", func() bool { st := s.Status(); return st.Host == "fake-worker" && st.Room == other.String() })
+	waitFor(t, "the next worker pairing the new room", func() bool { st := s.Status(); return st.Connection == "connected" && st.Room == other.String() })
 }
 
 func TestLockAndHandoffFailures(t *testing.T) {
@@ -557,7 +566,7 @@ func TestSupervisorSetRoomFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.SetRoom(context.Background(), Room{Base: "https://rooms.example", ID: "abc"})
-	waitFor(t, "the worker running", func() bool { return s.Status().Host == "fake-worker" })
+	waitFor(t, "the worker running", func() bool { return s.Status().Connection == "connected" })
 }
 
 // A worker that never says hello is killed and restarted; one that talks before hello is cut off.
@@ -568,5 +577,150 @@ func TestSupervisorHandshakeFailures(t *testing.T) {
 			s.SetRoom(context.Background(), Room{Base: "https://rooms.example", ID: "abc"})
 			waitFor(t, "a restart", func() bool { in := instance(t, s); return in.Restarts >= 1 && strings.Contains(in.Error, want) })
 		})
+	}
+}
+
+// lastAccess is the last access the fake worker logged it was given.
+func lastAccess(s *Supervisor) *Access {
+	lines := s.o.Ring.Lines()
+	for i := len(lines) - 1; i >= 0; i-- {
+		if j := strings.Index(lines[i], `{"access":`); j >= 0 && strings.Contains(lines[i], "fake_access") {
+			var v struct{ Access *Access }
+			if json.Unmarshal([]byte(lines[i][j:]), &v) == nil {
+				return v.Access
+			}
+		}
+	}
+	return nil
+}
+
+// 003-AC13 003-AC14 003-AC15: the worker gets its rooms' proxies in its config and again whenever
+// the mapping changes; a cut-off reaches it and is kept; accounts in use cannot be removed.
+func TestSupervisorAccounts(t *testing.T) {
+	claude := t.TempDir()
+	writeClaudeCreds(t, claude, "cfg-secret", time.Now().Add(time.Hour))
+	var accounts *Accounts
+	s := testSupervisor(t, strconv.Itoa(Proto), nil, func(o *SupervisorOptions) {
+		up, _ := url.Parse("http://127.0.0.1:1")
+		var err error
+		accounts, err = LoadAccounts(AccountsOptions{Paths: o.Paths, ClaudeConfigDir: claude, Upstream: up, Docker: desktopDocker,
+			Keyring: &memKeyring{m: map[string]string{}}, Log: zap.NewNop()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.Accounts = accounts
+	})
+	room := Room{Base: "https://rooms.example", ID: "abc"}
+	s.SetRoom(context.Background(), room)
+	waitFor(t, "the room's proxy in the config", func() bool {
+		a := lastAccess(s)
+		return a != nil && strings.HasPrefix(a.Proxies[room.String()].Addr, "host-gateway:") && a.Proxies[room.String()].Bearer != ""
+	})
+	id := instance(t, s).ID
+	if in := instance(t, s); in.Account != "default" || in.CutOff {
+		t.Fatalf("instance %+v", in)
+	}
+	if err := s.AddAccount(context.Background(), Account{Name: "work", Kind: KindSetupToken}, setupToken); err != nil {
+		t.Fatal(err)
+	}
+	first := lastAccess(s).Proxies[room.String()]
+	if err := s.SetAccount(id, room.String(), "work"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the room moved to the work account's proxy", func() bool {
+		a := lastAccess(s)
+		return a != nil && a.Proxies[room.String()].Addr != "" && a.Proxies[room.String()].Addr != first.Addr
+	})
+	if in := instance(t, s); in.RoomAccounts[room.String()] != "work" || in.Account != "default" {
+		t.Fatalf("instance %+v", in)
+	}
+	for _, tc := range []struct {
+		room, account, want string
+	}{
+		{"", "nobody", "no such account"},
+		{"https://rooms.example/r/other", "work", "no such room"},
+	} {
+		if err := s.SetAccount(id, tc.room, tc.account); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("SetAccount(%q, %q) = %v", tc.room, tc.account, err)
+		}
+	}
+	for _, name := range []string{"work", "default"} {
+		if err := s.RemoveAccount(name); err == nil || !strings.Contains(err.Error(), "uses this account") {
+			t.Errorf("removed %s while in use: %v", name, err)
+		}
+	}
+	if err := s.SetCutOff(id, true); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the cut-off", func() bool { a := lastAccess(s); return a != nil && a.CutOff && len(a.Proxies) == 0 })
+	if in := instance(t, s); !in.CutOff {
+		t.Fatalf("instance %+v", in)
+	}
+	saved, err := loadInstance(s.o.Paths.InstanceConfig(id))
+	if err != nil || !saved.CutOff || saved.RoomAccounts[room.String()] != "work" {
+		t.Fatalf("saved %+v %v", saved, err)
+	}
+	if err := s.SetCutOff(id, false); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "let back", func() bool { a := lastAccess(s); return a != nil && !a.CutOff && a.Proxies[room.String()].Bearer != "" })
+	if err := s.SetAccount(id, room.String(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveAccount("work"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 003-AC12 003-AC13 003-AC15: the page adds and removes accounts, maps a room, and cuts a worker
+// off. A setup token entered once never comes back from the page, nor reaches its logs.
+func TestSupervisorPageAccounts(t *testing.T) {
+	claude := t.TempDir()
+	writeClaudeCreds(t, claude, "cfg-secret", time.Now().Add(time.Hour))
+	s := testSupervisor(t, strconv.Itoa(Proto), nil, func(o *SupervisorOptions) {
+		up, _ := url.Parse("http://127.0.0.1:1")
+		a, err := LoadAccounts(AccountsOptions{Paths: o.Paths, ClaudeConfigDir: claude, Upstream: up, Docker: desktopDocker,
+			Keyring: &memKeyring{m: map[string]string{}}, Log: zap.NewNop()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.Accounts = a
+	})
+	e := newAdminEnv(t, s)
+	tok := e.login(t)
+	post := func(path, body string, want int) {
+		t.Helper()
+		if code, b := e.req(t, "POST", path, tok, body, nil); code != want {
+			t.Fatalf("%s %s: %d %s", path, body, code, b)
+		}
+	}
+	post("/api/accounts", `{"name":"work","kind":"setup_token","token":"`+setupToken+`"}`, http.StatusNoContent)
+	post("/api/accounts", `{"name":"half","kind":"setup_token","token":"`+setupToken[:60]+`"}`, http.StatusBadRequest)
+	post("/api/accounts", `{"name":"other","kind":"config_dir","config_dir":"`+filepath.ToSlash(claude)+`"}`, http.StatusNoContent)
+	post("/api/accounts/probe", `{"name":"default"}`, http.StatusBadRequest)
+	post("/api/room", `{"url":"https://rooms.example/r/abc"}`, http.StatusNoContent)
+	waitFor(t, "the worker running", func() bool { return s.Status().Connection == "connected" })
+	id, _ := InstanceID("https://rooms.example")
+	post("/api/instance-account", `{"instance":"`+id+`","room":"https://rooms.example/r/abc","account":"work"}`, http.StatusNoContent)
+	post("/api/instance-account", `{"instance":"`+id+`","account":"other"}`, http.StatusNoContent)
+	post("/api/cut-off", `{"instance":"`+id+`","cut_off":true}`, http.StatusNoContent)
+	_, body := e.req(t, "GET", "/api/status", tok, "", nil)
+	var v struct {
+		Accounts  []AccountView  `json:"accounts"`
+		Instances []InstanceView `json:"instances"`
+	}
+	if err := json.Unmarshal([]byte(body), &v); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Accounts) != 3 || len(v.Instances) != 1 || v.Instances[0].Account != "other" || !v.Instances[0].CutOff ||
+		v.Instances[0].RoomAccounts["https://rooms.example/r/abc"] != "work" {
+		t.Fatalf("status %s", body)
+	}
+	post("/api/accounts/remove", `{"name":"work"}`, http.StatusBadRequest)
+	post("/api/instance-account", `{"instance":"`+id+`","room":"https://rooms.example/r/abc","account":""}`, http.StatusNoContent)
+	post("/api/accounts/remove", `{"name":"work"}`, http.StatusNoContent)
+	_, body = e.req(t, "GET", "/api/status", tok, "", nil)
+	if strings.Contains(body, setupToken) || strings.Contains(body, "cfg-secret") || strings.Contains(strings.Join(s.o.Ring.Lines(), "\n"), setupToken) {
+		t.Fatal("a token reached the page")
 	}
 }

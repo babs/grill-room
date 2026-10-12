@@ -9,8 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/http"
-	"net/url"
 	"path"
 	"regexp"
 	"sort"
@@ -20,9 +18,6 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-
-	"github.com/babs/grill-room/internal/creds"
-	"github.com/babs/grill-room/internal/proxy"
 )
 
 const (
@@ -35,17 +30,14 @@ const (
 	Label = "grill-room-daemon"
 )
 
-// ErrCredentialsExpired means upstream refused the host's token: the host's Claude Code must refresh it.
-var ErrCredentialsExpired = errors.New("Claude credentials expired") //nolint:revive,staticcheck // shown to users as is
-
 // Config names the sandbox and where it sends model traffic.
 type Config struct {
 	Image string
 	// Name is unique per daemon instance; every Docker object is named after it.
 	Name string
-	// Host names this machine in error messages shown in the room.
-	Host     string
-	Upstream *url.URL
+	// Proxy is the address the relay dials for the account's bearer-swap proxy, "<gateway>:<port>"
+	// as HostAddr gives the gateway. The proxy runs in the supervisor, outside this process (003-AC14).
+	Proxy string
 	// Limits caps the sandbox and its egress proxy; an empty value leaves Docker's default.
 	Limits Limits
 }
@@ -71,30 +63,27 @@ func limitFlags(cpus, memory string) []string {
 	return f
 }
 
-// Sandbox is one long-lived container plus its relay, network and proxy.
+// Sandbox is one long-lived container plus its relay, network and egress proxy.
 type Sandbox struct {
-	cfg   Config
-	run   Runner
-	src   *creds.Source
-	log   *zap.Logger
-	dummy string
-	proxy *proxy.Proxy
+	cfg Config
+	run Runner
+	log *zap.Logger
 
 	// turn serialises turns: one claude process per sandbox.
 	turn    sync.Mutex
 	mu      sync.Mutex
-	srv     *http.Server
 	started bool
 	// allow is the egress allowlist the proxy runs with.
 	allow []string
 }
 
 // New prepares a sandbox; Start creates it.
-func New(cfg Config, run Runner, src *creds.Source, log *zap.Logger) *Sandbox {
-	dummy := "sk-ant-oat01-grill-room-dummy-" + rand.Text()
-	return &Sandbox{cfg: cfg, run: run, src: src, log: log, dummy: dummy, allow: DefaultAllowlist,
-		proxy: proxy.New(cfg.Upstream, src, dummy, log.Named("proxy"))}
+func New(cfg Config, run Runner, log *zap.Logger) *Sandbox {
+	return &Sandbox{cfg: cfg, run: run, log: log, allow: DefaultAllowlist}
 }
+
+// NewBearer returns a dummy bearer for a sandbox: the bearer-swap proxy knows it, upstream never sees it.
+func NewBearer() string { return "sk-ant-oat01-grill-room-dummy-" + rand.Text() }
 
 func (s *Sandbox) container() string { return "grill-room-" + s.cfg.Name }
 func (s *Sandbox) relay() string     { return s.container() + "-relay" }
@@ -103,8 +92,8 @@ func (s *Sandbox) egress() string    { return s.container() + "-egress" }
 func (s *Sandbox) homeVol() string   { return s.container() + "-home" }
 func (s *Sandbox) wsVol() string     { return s.container() + "-workspace" }
 
-// Start brings up the proxy, the internal network, the relay, the egress proxy and the sandbox
-// container.
+// Start brings up the internal network, the relay to the account's proxy, the egress proxy and
+// the sandbox container.
 func (s *Sandbox) Start(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -115,33 +104,13 @@ func (s *Sandbox) Start(ctx context.Context) error {
 	if !ready.OK {
 		return errors.New(ready.Reason)
 	}
+	gateway, port, err := net.SplitHostPort(s.cfg.Proxy)
+	if err != nil {
+		return fmt.Errorf("no Claude account proxy for this sandbox (%q): %w", s.cfg.Proxy, err)
+	}
 	// A crashed previous run with the same name left objects behind.
 	s.remove(ctx)
-
-	bindIP, gateway, err := s.proxyAddr(ctx, ready.Desktop)
-	if err != nil {
-		return err
-	}
-	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", net.JoinHostPort(bindIP, "0"))
-	if err != nil {
-		return fmt.Errorf("proxy listen on %s: %w", bindIP, err)
-	}
-	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
-	srv := &http.Server{
-		Handler:           s.proxy,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       5 * time.Minute,
-		WriteTimeout:      30 * time.Minute, // long streamed turns
-		IdleTimeout:       2 * time.Minute,
-	}
-	s.srv = srv
-	go func() {
-		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			s.log.Error("proxy_serve_failed", zap.Error(err))
-		}
-	}()
 	s.started = true
-	s.log.Info("proxy_started", zap.String("listen", ln.Addr().String()))
 
 	label := Label + "=" + s.cfg.Name
 	hardening := []string{"--label", label, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only"}
@@ -187,13 +156,17 @@ func (s *Sandbox) Start(ctx context.Context) error {
 	return nil
 }
 
-// proxyAddr picks where the proxy listens and the address the relay dials for it. Docker Desktop
-// forwards host-gateway to the host's loopback; a native engine reaches the host on its bridge.
-func (s *Sandbox) proxyAddr(ctx context.Context, desktop bool) (bindIP, gateway string, err error) {
-	if desktop {
+// HostAddr picks where a bearer-swap proxy listens and the gateway a relay dials for it. Docker
+// Desktop forwards host-gateway to the host's loopback; a native engine reaches the host on its bridge.
+func HostAddr(ctx context.Context, run Runner) (bindIP, gateway string, err error) {
+	ready := Check(ctx, run)
+	if !ready.OK {
+		return "", "", errors.New(ready.Reason)
+	}
+	if ready.Desktop {
 		return "127.0.0.1", "host-gateway", nil
 	}
-	out, err := s.run(ctx, nil, "network", "inspect", "bridge", "--format", "{{(index .IPAM.Config 0).Gateway}}")
+	out, err := run(ctx, nil, "network", "inspect", "bridge", "--format", "{{(index .IPAM.Config 0).Gateway}}")
 	if err != nil {
 		return "", "", fmt.Errorf("find the docker bridge gateway: %w", err)
 	}
@@ -204,7 +177,7 @@ func (s *Sandbox) proxyAddr(ctx context.Context, desktop bool) (bindIP, gateway 
 	return ip, ip, nil
 }
 
-// Close removes every Docker object of the sandbox, volumes included, and stops the proxy.
+// Close removes every Docker object of the sandbox, volumes included.
 func (s *Sandbox) Close(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -216,10 +189,6 @@ func (s *Sandbox) closeLocked(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	s.remove(ctx)
-	if s.srv != nil {
-		_ = s.srv.Close()
-		s.srv = nil
-	}
 	s.started = false
 }
 
@@ -251,6 +220,8 @@ type Request struct {
 	// PluginDir is a plugin directory to load, the persona's skills; empty for none.
 	PluginDir string
 	Args      []string
+	// Bearer is the dummy token the sandbox sends to its proxy, written before each turn.
+	Bearer string
 }
 
 // Result is claude's --output-format json answer.
@@ -277,32 +248,25 @@ func (r *Result) Model() string {
 	return best
 }
 
-// RunClaude runs one turn in the sandbox. ErrCredentialsExpired (with the host name) means the
-// host's token is expired or refused; the next turn works once the host's Claude Code refreshed it.
+// RunClaude runs one turn in the sandbox.
 func (s *Sandbox) RunClaude(ctx context.Context, req Request) (*Result, error) {
 	s.turn.Lock()
 	defer s.turn.Unlock()
-	if err := s.prepare(ctx); err != nil {
+	if err := s.prepare(ctx, req.Bearer); err != nil {
 		return nil, err
 	}
 	return s.runClaude(ctx, req)
 }
 
-func (s *Sandbox) expired() error { return fmt.Errorf("%w on %s", ErrCredentialsExpired, s.cfg.Host) }
-
-// prepare checks the host's token, starts the sandbox and refreshes its stubs.
-func (s *Sandbox) prepare(ctx context.Context) error {
-	tok, err := s.src.Get(ctx)
-	if err != nil {
-		return fmt.Errorf("Claude credentials unavailable on %s: %w", s.cfg.Host, err) //nolint:staticcheck // shown to users as is
-	}
-	if tok.Expired(time.Now()) {
-		return s.expired()
+// prepare starts the sandbox and refreshes its stubs with bearer.
+func (s *Sandbox) prepare(ctx context.Context, bearer string) error {
+	if bearer == "" {
+		return errors.New("no Claude account proxy for this sandbox")
 	}
 	if err := s.Start(ctx); err != nil {
 		return err
 	}
-	return s.writeStubs(ctx)
+	return s.writeStubs(ctx, bearer)
 }
 
 // runClaude runs claude -p in the started sandbox; the caller holds s.turn.
@@ -328,7 +292,6 @@ func (s *Sandbox) runClaude(ctx context.Context, req Request) (*Result, error) {
 		args = append(args, "--plugin-dir", req.PluginDir)
 	}
 	args = append(args, req.Args...)
-	before := s.proxy.Unauthorized()
 	out, runErr := s.run(ctx, strings.NewReader(req.Prompt), args...)
 	if ctx.Err() != nil {
 		// Killing the docker exec client leaves claude running in the container.
@@ -340,9 +303,6 @@ func (s *Sandbox) runClaude(ctx context.Context, req Request) (*Result, error) {
 	var res Result
 	jsonErr := json.Unmarshal(out, &res)
 	if runErr != nil || jsonErr != nil || res.IsError {
-		if s.proxy.Unauthorized() > before {
-			return nil, s.expired()
-		}
 		if runErr != nil {
 			return nil, fmt.Errorf("claude: %w", runErr)
 		}
@@ -355,12 +315,13 @@ func (s *Sandbox) runClaude(ctx context.Context, req Request) (*Result, error) {
 }
 
 // writeStubs regenerates, before every turn, the dummy credentials (Claude Code wipes them after a
-// refused refresh) and the oauthAccount stub, which skips the profile fetch only while under 24 h old.
-func (s *Sandbox) writeStubs(ctx context.Context) error {
+// refused refresh, and the supervisor may have rotated the bearer) and the oauthAccount stub, which
+// skips the profile fetch only while under 24 h old.
+func (s *Sandbox) writeStubs(ctx context.Context, bearer string) error {
 	nowMS := time.Now().UnixMilli()
 	files := map[string]any{
 		".claude/.credentials.json": map[string]any{"claudeAiOauth": map[string]any{
-			"accessToken": s.dummy, "refreshToken": "grill-room-dummy-refresh",
+			"accessToken": bearer, "refreshToken": "grill-room-dummy-refresh",
 			"expiresAt": time.Now().AddDate(10, 0, 0).UnixMilli(), "subscriptionType": "max",
 			"scopes": []string{"user:inference", "user:profile", "user:sessions:claude_code"},
 		}},

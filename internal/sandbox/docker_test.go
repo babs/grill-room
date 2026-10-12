@@ -8,12 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -23,6 +25,7 @@ import (
 	"go.uber.org/zap/zaptest"
 
 	"github.com/babs/grill-room/internal/creds"
+	"github.com/babs/grill-room/internal/proxy"
 )
 
 // dockerTest skips unless GRILL_ROOM_TEST_DOCKER=1: these tests need Docker and the sandbox image
@@ -94,10 +97,31 @@ func writeHostCreds(t *testing.T, dir, tok string, exp time.Time) {
 	}
 }
 
-// 001-AC25 001-AC26 001-AC27 001-AC29 against a fake upstream: a turn succeeds through the proxy,
-// an expired or refused token fails the turn within 10 s and the next turn works after a
-// refresh, the sandbox cannot resolve or reach Anthropic, no trace of the host token is left in
-// the container, its volumes or its environment, and the host credentials file is never written.
+// accountProxy runs a bearer-swap proxy for src where a sandbox relay reaches it, as the
+// supervisor does for an account, and returns the address the relay dials and the bearer it allows.
+func accountProxy(t *testing.T, upstream *url.URL, src proxy.TokenSource) (addr, bearer string) {
+	t.Helper()
+	bindIP, gw, err := HostAddr(t.Context(), Docker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", net.JoinHostPort(bindIP, "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := proxy.New(upstream, src, zaptest.NewLogger(t, zaptest.Level(zap.WarnLevel)))
+	bearer = NewBearer()
+	p.Allow("test", bearer)
+	srv := &http.Server{Handler: p, ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return net.JoinHostPort(gw, strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)), bearer
+}
+
+// 001-AC25 001-AC26 001-AC27 003-AC14 against a fake upstream: a turn succeeds through an account
+// proxy outside the sandbox, the sandbox cannot resolve or reach Anthropic, no trace of the host
+// token is left in the container, its volumes or its environment, and the host credentials file
+// is never written.
 func TestSandboxDocker(t *testing.T) {
 	img := dockerTest(t)
 	ctx := context.Background()
@@ -116,15 +140,15 @@ func TestSandboxDocker(t *testing.T) {
 	before, _ := os.Stat(credsFile)
 
 	name := fmt.Sprintf("test-%d", time.Now().UnixNano())
-	s := New(Config{Image: img, Name: name, Host: "testhost", Upstream: upURL}, Docker,
-		creds.NewSource(creds.Reader{ConfigDir: cfgDir}), zaptest.NewLogger(t, zaptest.Level(zap.WarnLevel)))
+	addr, bearer := accountProxy(t, upURL, creds.NewSource(creds.Reader{ConfigDir: cfgDir}))
+	s := New(Config{Image: img, Name: name, Proxy: addr}, Docker, zaptest.NewLogger(t, zaptest.Level(zap.WarnLevel)))
 	t.Cleanup(func() { s.Close(context.Background()) })
 
 	turn := func() (*Result, time.Duration, error) {
 		tctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
 		start := time.Now()
-		res, err := s.RunClaude(tctx, Request{Prompt: "say ok", Model: "haiku"})
+		res, err := s.RunClaude(tctx, Request{Prompt: "say ok", Model: "haiku", Bearer: bearer})
 		return res, time.Since(start), err
 	}
 	res, _, err := turn()
@@ -178,7 +202,7 @@ func TestSandboxDocker(t *testing.T) {
 			t.Fatal(err)
 		}
 		// The volumes do hold the session: the scan must see its content to be meaningful.
-		if !bytes.Contains(vols, []byte(res.SessionID)) || !bytes.Contains(vols, []byte(s.dummy)) {
+		if !bytes.Contains(vols, []byte(res.SessionID)) || !bytes.Contains(vols, []byte(bearer)) {
 			t.Fatal("volume archive misses the session or the stubs")
 		}
 		inspect, err := Docker(ctx, nil, "inspect", s.container(), s.relay())
@@ -193,7 +217,7 @@ func TestSandboxDocker(t *testing.T) {
 			}
 		}
 		// Scan, which `grill-room-daemon check` runs, must agree on what it sees.
-		counts, err := s.Scan(ctx, []byte(s.dummy))
+		counts, err := s.Scan(ctx, []byte(bearer))
 		if err != nil || counts["volumes"] == 0 || counts["filesystem"] != 0 || counts["inspect"] != 0 {
 			t.Fatalf("Scan(dummy) = %v, %v", counts, err)
 		}
@@ -201,28 +225,6 @@ func TestSandboxDocker(t *testing.T) {
 			t.Error("inspect output lacks the sandbox env: the scan looked at the wrong thing")
 		}
 		listTar(t, vols)
-	})
-
-	t.Run("expired token fails fast, refreshed works", func(t *testing.T) {
-		writeCreds := func(tok string, exp time.Time) {
-			_ = os.Chmod(credsFile, 0o600)
-			writeHostCreds(t, cfgDir, tok, exp)
-		}
-		writeCreds(hostTok, time.Now().Add(-time.Minute))
-		_, took, err := turn()
-		if !errors.Is(err, ErrCredentialsExpired) || err.Error() != "Claude credentials expired on testhost" || took > 10*time.Second {
-			t.Fatalf("expired file: err=%v took=%s", err, took)
-		}
-		// expiresAt says valid, upstream refuses: the 401 path through the sandbox.
-		writeCreds("sk-ant-oat01-revoked", time.Now().Add(time.Hour))
-		_, took, err = turn()
-		if !errors.Is(err, ErrCredentialsExpired) || took > 10*time.Second {
-			t.Fatalf("refused token: err=%v took=%s", err, took)
-		}
-		writeCreds(hostTok, time.Now().Add(time.Hour))
-		if res, _, err := turn(); err != nil || res.Result != "ok" {
-			t.Fatalf("after refresh: %+v %v", res, err)
-		}
 	})
 
 }
@@ -257,7 +259,7 @@ func TestRealClaude(t *testing.T) {
 		t.Skip("set GRILL_ROOM_TEST_REAL_CLAUDE=1 to spend one haiku request")
 	}
 	ctx := context.Background()
-	r := creds.New()
+	r := creds.ForConfigDir(os.Getenv("CLAUDE_CONFIG_DIR"))
 	tok, err := r.Read(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -269,12 +271,12 @@ func TestRealClaude(t *testing.T) {
 		}
 	}
 	upURL, _ := url.Parse("https://api.anthropic.com")
-	s := New(Config{Image: img, Name: fmt.Sprintf("real-%d", time.Now().UnixNano()), Host: "testhost", Upstream: upURL},
-		Docker, creds.NewSource(r), zaptest.NewLogger(t, zaptest.Level(zap.WarnLevel)))
+	addr, bearer := accountProxy(t, upURL, creds.NewSource(r))
+	s := New(Config{Image: img, Name: fmt.Sprintf("real-%d", time.Now().UnixNano()), Proxy: addr}, Docker, zaptest.NewLogger(t, zaptest.Level(zap.WarnLevel)))
 	t.Cleanup(func() { s.Close(context.Background()) })
 	tctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	res, err := s.RunClaude(tctx, Request{Prompt: "say ok", Model: "haiku"})
+	res, err := s.RunClaude(tctx, Request{Prompt: "say ok", Model: "haiku", Bearer: bearer})
 	if err != nil {
 		t.Fatalf("turn: %v", err)
 	}

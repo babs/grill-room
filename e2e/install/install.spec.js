@@ -9,8 +9,8 @@ import { pairDaemon } from '../helpers.js';
 const repo = resolve('..');
 const out = resolve('test-results', 'install');
 const box = 'grill-room-install-e2e';
-// Above v0.0.2, the first release that runs as a worker.
-const versions = ['v0.0.3-e2e.1', 'v0.0.3-e2e.2', 'v0.0.3-e2e.3'];
+// Above v0.0.3, the first release that runs as a worker without Claude credentials.
+const versions = ['v0.0.4-e2e.1', 'v0.0.4-e2e.2', 'v0.0.4-e2e.3'];
 const bin = 'grill-room-daemon-linux-amd64';
 
 const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { encoding: 'utf8', ...opts });

@@ -36,6 +36,7 @@ func TestMain(m *testing.M) {
 
 type roomServer struct {
 	ts    *httptest.Server
+	st    *store.Store
 	room  string
 	admin string
 }
@@ -47,7 +48,7 @@ func newRoomServer(t *testing.T) *roomServer {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	rs := &roomServer{admin: web.NewToken()}
+	rs := &roomServer{admin: web.NewToken(), st: st}
 	rs.ts = httptest.NewUnstartedServer(nil)
 	rs.ts.Start()
 	t.Cleanup(rs.ts.Close)

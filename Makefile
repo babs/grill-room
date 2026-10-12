@@ -28,7 +28,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: build release dev-release run test test-docker test-offline test-release e2e e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -130,6 +130,14 @@ RELEASES ?= v0.0.1 v0.0.2
 test-release:
 	for v in $(RELEASES); do gh release download "$$v" -R babs/grill-room -D bin/releases/$$v --clobber || exit 1; done
 	GRILL_ROOM_TEST_RELEASES='$(foreach v,$(RELEASES),$(CURDIR)/bin/releases/$(v))' go test -race -count=1 -run TestReleases -v ./cmd/grill-room-daemon/
+
+# Two real haiku turns, one on this machine's Claude Code login, one on the setup token in
+# SETUP_TOKEN_FILE, then the token scan of workers and sandboxes and the privacy grep of the rooms
+# (003-AC14, 003-AC17). TMPDIR must be short: the supervisor's socket lives under it.
+test-live-accounts: sandbox-image
+	@test -n "$(SETUP_TOKEN_FILE)" || { echo "set SETUP_TOKEN_FILE to a file holding a claude setup-token token"; exit 2; }
+	GRILL_ROOM_TEST_SETUP_TOKEN_FILE='$(abspath $(SETUP_TOKEN_FILE))' GRILL_ROOM_TEST_SANDBOX_IMAGE=$(SANDBOX_IMAGE) \
+	  go test -count=1 -run TestLiveAccounts -v ./cmd/grill-room-daemon/
 
 # The trust tests in a container with no network (003-AC3): the embedded trusted root verifies the
 # v0.0.1 release bundle, and TUF is unreachable.

@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -186,7 +185,7 @@ func (s *Server) setHost(ctx context.Context, room string, d presence) error {
 	}
 	s.log.Info("host_elected", zap.String("room", room), zap.Int64("participant", p.ID))
 	return s.bus.Post(ctx, &store.Message{RoomID: room, Kind: store.KindSystem, ParticipantID: p.ID, Sender: p.Name,
-		Body: fmt.Sprintf("%s hosts the agent, on %s.", p.Name, d.Name)})
+		Body: p.Name + " holds the agent(s)."})
 }
 
 func (s *Server) getAgent(w http.ResponseWriter, r *http.Request, sess session) {

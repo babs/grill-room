@@ -13,8 +13,10 @@ import (
 // Proto is the supervisor-worker protocol version, docs/daemon-protocol.md. Peers up to ProtoSkew
 // apart talk at the lower of their two versions, so every change within that window must stay
 // additive: new fields and new message types only, and unknown ones are ignored.
+//
+// Version 2 added the config's access and the access request: the accounts' proxies (003-AC14).
 const (
-	Proto     = 1
+	Proto     = 2
 	ProtoSkew = 1
 )
 
@@ -48,13 +50,32 @@ type Msg struct {
 	Metrics   *Metrics         `json:"metrics,omitempty"`
 	Turn      *TurnEvent       `json:"turn,omitempty"`
 	Log       json.RawMessage  `json:"log,omitempty"`
+	Access    *Access          `json:"access,omitempty"`
+}
+
+// Access is how a worker's rooms reach Claude: the bearer-swap proxy of each room's account, which
+// runs in the supervisor. A worker never sees a Claude token (003-AC14).
+type Access struct {
+	// Proxies are keyed by room link.
+	Proxies map[string]Proxy `json:"proxies,omitempty"`
+	// CutOff is set while the host has cut this worker off: its turns end and no new one starts (003-AC15).
+	CutOff bool `json:"cut_off,omitempty"`
+}
+
+// Proxy is one room's way to its account's proxy.
+type Proxy struct {
+	// Addr is what the sandbox relay dials, "<gateway>:<port>".
+	Addr string `json:"addr,omitempty"`
+	// Bearer is the dummy token the proxy knows this worker by.
+	Bearer string `json:"bearer,omitempty"`
+	// Error says, in words fit for the room, why the room cannot reach Claude now. It never names
+	// the account (003-AC17).
+	Error string `json:"error,omitempty"`
 }
 
 // WorkerConfig is everything a worker runs with; the supervisor sends it after the handshake.
 type WorkerConfig struct {
 	Instance string `json:"instance"`
-	// Host names this machine in the rooms.
-	Host string `json:"host"`
 	// ConfigDir, StateDir and CacheDir are the instance's own directories.
 	ConfigDir string `json:"config_dir"`
 	StateDir  string `json:"state_dir"`
@@ -72,6 +93,8 @@ type WorkerConfig struct {
 	// holds a token, unless Pair names a room to pair with now.
 	Rooms []string `json:"rooms,omitempty"`
 	Pair  string   `json:"pair,omitempty"`
+	// Access is the rooms' proxies at start; the access request replaces it.
+	Access *Access `json:"access,omitempty"`
 }
 
 // Metrics is the worker process's health, sent every MetricsEvery.

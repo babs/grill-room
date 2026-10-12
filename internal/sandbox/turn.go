@@ -38,6 +38,8 @@ type TurnInput struct {
 	// Plugin is the tar of the plugin directory holding the persona's active skills, nil for none
 	// (002-AC31).
 	Plugin io.Reader
+	// Bearer is the dummy token for the account's proxy (Request.Bearer).
+	Bearer string
 }
 
 // TurnOutput is what a turn produced for the room.
@@ -54,7 +56,7 @@ type TurnOutput struct {
 func (s *Sandbox) RunTurn(ctx context.Context, in TurnInput) (*TurnOutput, error) {
 	s.turn.Lock()
 	defer s.turn.Unlock()
-	if err := s.prepare(ctx); err != nil {
+	if err := s.prepare(ctx, in.Bearer); err != nil {
 		return nil, err
 	}
 	// The agent owns every file, but may have taken its own write bit away.

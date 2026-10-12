@@ -55,21 +55,26 @@ func (d *Daemon) runSettings(job turn.Job) (run turn.Level, capped bool) {
 	return run, capped
 }
 
-// agent returns the room run's sandbox, created on its first turn.
-func (r *roomRun) agent() (Agent, error) {
+// agent returns the room run's sandbox, created on its first turn and again when the room moves
+// to another account's proxy.
+func (r *roomRun) agent(proxy string) (Agent, error) {
 	r.agentMu.Lock()
 	defer r.agentMu.Unlock()
+	if r.ag != nil && r.agProxy != proxy {
+		r.ag.Close(r.ctx)
+		r.ag = nil
+	}
 	if r.ag == nil {
 		img := r.d.Status().Image
 		if img.State != "ready" {
-			return nil, fmt.Errorf("the sandbox image is not ready on %s", r.d.o.Name)
+			return nil, errors.New("the sandbox image is not ready on the host's machine")
 		}
-		ag := r.d.o.NewAgent(r.room, img.Ref)
+		ag := r.d.o.NewAgent(r.room, img.Ref, proxy)
 		// Under agentMu, read after any saved list: SetAllowlist hands later ones to r.ag.
 		if err := ag.SetAllowlist(r.ctx, r.d.Status().Allowlist); err != nil {
 			return nil, fmt.Errorf("egress allowlist: %w", err)
 		}
-		r.ag = ag
+		r.ag, r.agProxy = ag, proxy
 	}
 	return r.ag, nil
 }
@@ -123,7 +128,7 @@ func (r *roomRun) runTurn(ctx context.Context, tok string, id int64) {
 	if err != nil {
 		log.Warn("turn_job_failed", zap.Error(err))
 		// Told now, the room frees the button instead of waiting for its timeout.
-		res.Error = "could not fetch the turn on " + r.d.o.Name + ": " + err.Error()
+		res.Error = "could not fetch the turn: " + err.Error()
 	} else {
 		timeout := time.Duration(job.TimeoutSeconds) * time.Second
 		if timeout <= 0 {
@@ -131,10 +136,24 @@ func (r *roomRun) runTurn(ctx context.Context, tok string, id int64) {
 		}
 		tctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
+		tctx, cut := context.WithCancelCause(tctx)
+		defer cut(nil)
+		r.d.mu.Lock()
+		r.d.running[id] = cut
+		r.d.mu.Unlock()
+		defer func() {
+			r.d.mu.Lock()
+			delete(r.d.running, id)
+			r.d.mu.Unlock()
+		}()
 		log.Info("turn_started", zap.Bool("resume", job.Resume != ""), zap.String("persona", job.Persona))
 		res = r.execute(tctx, tok, id, job)
-		if res.Error != "" && errors.Is(tctx.Err(), context.DeadlineExceeded) {
-			res = turn.Result{Error: fmt.Sprintf("the turn timed out after %s on %s", timeout, r.d.o.Name)}
+		switch {
+		case res.Error == "":
+		case errors.Is(context.Cause(tctx), errCutOff):
+			res = turn.Result{Error: errCutOff.Error()}
+		case errors.Is(tctx.Err(), context.DeadlineExceeded):
+			res = turn.Result{Error: fmt.Sprintf("the turn timed out after %s", timeout)}
 		}
 	}
 	if ctx.Err() != nil {
@@ -163,12 +182,16 @@ func (r *roomRun) runTurn(ctx context.Context, tok string, id int64) {
 // execute fetches the workspace, runs the turn in the sandbox and shapes the result.
 func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Job) turn.Result {
 	ids := strconv.FormatInt(id, 10)
+	px, err := r.d.proxyFor(r.room.String())
+	if err != nil {
+		return turn.Result{Error: err.Error()}
+	}
 	ws, err := r.workspace(ctx, tok, id)
 	if err != nil {
-		return turn.Result{Error: "could not fetch the workspace on " + r.d.o.Name + ": " + err.Error()}
+		return turn.Result{Error: "could not fetch the workspace: " + err.Error()}
 	}
 	defer ws.Close()
-	ag, err := r.agent()
+	ag, err := r.agent(px.Addr)
 	if err != nil {
 		return turn.Result{Error: err.Error()}
 	}
@@ -181,7 +204,7 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 	if len(job.Skills) > 0 {
 		resp, err := r.get(ctx, tok, "turns/"+ids+"/skills")
 		if err != nil {
-			return turn.Result{Error: "could not fetch the persona's skills on " + r.d.o.Name + ": " + err.Error()}
+			return turn.Result{Error: "could not fetch the persona's skills: " + err.Error()}
 		}
 		defer resp.Body.Close()
 		plugin = resp.Body
@@ -189,7 +212,7 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 	}
 	model := run.Model
 	out, err := ag.RunTurn(ctx, sandbox.TurnInput{
-		Plugin:    plugin,
+		Plugin: plugin, Bearer: px.Bearer,
 		Workspace: ws, Prompt: job.Prompt, System: job.System, Model: model, Effort: run.Effort,
 		Resume: job.Resume, SessionSize: job.SessionSize, SessionSHA256: job.SessionSHA256,
 		FetchSession: func(ctx context.Context) ([]byte, error) {

@@ -2,7 +2,6 @@ package sandbox
 
 import (
 	"context"
-	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -145,8 +144,7 @@ func TestSetAllowlist(t *testing.T) {
 		}
 		return nil, nil
 	}}
-	up, _ := url.Parse("https://x")
-	s := New(Config{Image: "img", Name: "t", Upstream: up}, f.run, testCreds(t, "x", time.Now().Add(time.Hour)), zap.NewNop())
+	s := New(Config{Image: "img", Name: "t", Proxy: testProxy}, f.run, zap.NewNop())
 	ctx := context.Background()
 	if d, err := s.Denied(ctx, 5); err != nil || len(d) != 0 {
 		t.Fatalf("denied before start = %v, %v", d, err)

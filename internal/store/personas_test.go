@@ -382,7 +382,7 @@ func TestSessionsPerPersona(t *testing.T) {
 	}
 	run := func(p RoomPersona, sid string, off int64, data string) *Turn {
 		t.Helper()
-		tn := &Turn{RoomID: "a", ParticipantID: r.p.ID, DaemonID: r.daemon, Host: "laptop", Prompt: "go", PersonaID: p.ID, PersonaName: p.Name}
+		tn := &Turn{RoomID: "a", ParticipantID: r.p.ID, DaemonID: r.daemon, Prompt: "go", PersonaID: p.ID, PersonaName: p.Name}
 		if err := s.StartTurn(ctx, tn); err != nil {
 			t.Fatal(err)
 		}

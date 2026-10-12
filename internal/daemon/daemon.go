@@ -21,22 +21,22 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/babs/grill-room/internal/creds"
 	"github.com/babs/grill-room/internal/sandbox"
 )
 
-// Options wires a Daemon. Zero durations take the defaults.
+// Options wires a Daemon. Zero durations take the defaults. Nothing here names the machine, its
+// user or its Claude account: what the daemon tells a room is free of them (003-AC17).
 type Options struct {
-	// Name identifies this machine in the room and in error messages.
-	Name    string
 	Version string
 	Tokens  *Tokens
 	Docker  sandbox.Runner
-	Creds   *creds.Source
 	HTTP    *http.Client
 	Log     *zap.Logger
-	// NewAgent builds the sandbox a room's turns run in, from image, on the first turn.
-	NewAgent func(r Room, image string) Agent
+	// Access is the rooms' proxies at start (Daemon.SetAccess).
+	Access Access
+	// NewAgent builds the sandbox a room's turns run in, from image, on its first turn; proxy is
+	// the address of the room's account proxy.
+	NewAgent func(r Room, image, proxy string) Agent
 	// Model is passed to claude --model when a persona asks for none; empty keeps Claude Code's default.
 	Model string
 	// Settings are the host cap and approval mode at start; SettingsPath is where the page saves
@@ -63,17 +63,9 @@ type Options struct {
 	MaxBackoff  time.Duration
 }
 
-// Credentials is the credentials readiness, never the token itself.
-type Credentials struct {
-	OK        bool       `json:"ok"`
-	Origin    string     `json:"origin,omitempty"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	Expired   bool       `json:"expired"`
-	Error     string     `json:"error,omitempty"`
-}
-
 // Status is what the local page shows.
 type Status struct {
+	// Host is this machine's name, set by the supervisor for its page only.
 	Host    string `json:"host"`
 	Version string `json:"version"`
 	Room    string `json:"room,omitempty"`
@@ -82,15 +74,14 @@ type Status struct {
 	Code       string `json:"code,omitempty"`
 	ApproveURL string `json:"approve_url,omitempty"`
 	// Connection is "offline", "connecting" or "connected".
-	Connection  string            `json:"connection"`
-	Error       string            `json:"error,omitempty"`
-	Docker      sandbox.Readiness `json:"docker"`
-	Credentials Credentials       `json:"credentials"`
-	Image       Image             `json:"image"`
-	Update      Update            `json:"update"`
-	CanHost     bool              `json:"can_host"`
-	Reason      string            `json:"reason,omitempty"`
-	Settings    Settings          `json:"settings"`
+	Connection string            `json:"connection"`
+	Error      string            `json:"error,omitempty"`
+	Docker     sandbox.Readiness `json:"docker"`
+	Image      Image             `json:"image"`
+	Update     Update            `json:"update"`
+	CanHost    bool              `json:"can_host"`
+	Reason     string            `json:"reason,omitempty"`
+	Settings   Settings          `json:"settings"`
 	// Allowlist is the domains the sandbox may reach through its egress proxy.
 	Allowlist []string `json:"allowlist"`
 }
@@ -140,6 +131,10 @@ type Daemon struct {
 	cache *wsCache
 	// turns and failedTurns count the turns that ended, for the worker metrics.
 	turns, failedTurns atomic.Int64
+	// access is the rooms' proxies and the cut-off, guarded by mu.
+	access Access
+	// running cancels the running turns by id, guarded by mu.
+	running map[int64]context.CancelCauseFunc
 }
 
 // New builds a daemon.
@@ -156,8 +151,8 @@ func New(o Options) *Daemon {
 	if o.Allowlist == nil {
 		o.Allowlist = slices.Clone(sandbox.DefaultAllowlist)
 	}
-	d := &Daemon{o: o, st: Status{Host: o.Name, Version: o.Version, Connection: "offline", Settings: o.Settings, Allowlist: o.Allowlist},
-		changed: make(chan struct{}, 1)}
+	d := &Daemon{o: o, st: Status{Version: o.Version, Connection: "offline", Settings: o.Settings, Allowlist: o.Allowlist},
+		changed: make(chan struct{}, 1), access: o.Access, running: map[int64]context.CancelCauseFunc{}}
 	if o.CacheDir != "" && o.CacheMax > 0 {
 		d.cache = &wsCache{dir: o.CacheDir, max: o.CacheMax}
 	}
@@ -228,40 +223,72 @@ func (d *Daemon) Run(ctx context.Context) {
 	}
 }
 
-// Refresh re-checks Docker and the credentials now.
+// Refresh re-checks Docker now.
 func (d *Daemon) Refresh(ctx context.Context) {
 	dk := sandbox.Check(ctx, d.o.Docker)
-	var c Credentials
-	tok, err := d.o.Creds.Get(ctx)
-	if err != nil {
-		c.Error = err.Error()
-	} else {
-		c.OK, c.Origin = true, tok.Origin
-		if !tok.ExpiresAt.IsZero() {
-			exp := tok.ExpiresAt
-			c.ExpiresAt = &exp
-		}
-		c.Expired = tok.Expired(time.Now())
-	}
-	d.update(func(s *Status) { s.Docker, s.Credentials = dk, c })
+	d.update(func(s *Status) { s.Docker = dk })
 	d.maybePrepare()
+}
+
+// errCutOff ends the turns of a worker the host cut off (003-AC15). Its text reaches the room.
+var errCutOff = errors.New("the host cut this agent off from Claude for now")
+
+// SetAccess takes the rooms' proxies the supervisor hands out. Cutting off ends the running turns.
+func (d *Daemon) SetAccess(a Access) {
+	d.mu.Lock()
+	cut := a.CutOff && !d.access.CutOff
+	d.access = a
+	var cancels []context.CancelCauseFunc
+	if cut {
+		for _, c := range d.running {
+			cancels = append(cancels, c)
+		}
+	}
+	d.mu.Unlock()
+	for _, c := range cancels {
+		c(errCutOff)
+	}
+	if cut {
+		d.o.Log.Warn("cut_off", zap.Int("turns_ended", len(cancels)))
+	}
+	d.update(func(*Status) {})
+}
+
+// proxyFor is room's account proxy, or why the room cannot reach Claude.
+func (d *Daemon) proxyFor(room string) (Proxy, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.proxyLocked(room)
+}
+
+func (d *Daemon) proxyLocked(room string) (Proxy, error) {
+	if d.access.CutOff {
+		return Proxy{}, errCutOff
+	}
+	p, ok := d.access.Proxies[room]
+	switch {
+	case !ok:
+		return Proxy{}, errors.New("the host has no Claude account ready for this room yet")
+	case p.Error != "":
+		return Proxy{}, errors.New(p.Error)
+	}
+	return p, nil
 }
 
 // assessLocked recomputes CanHost and Reason; the caller holds mu.
 func (d *Daemon) assessLocked() (canHost bool, reason string, changed bool) {
 	s := &d.st
 	canHost = true
+	_, accessErr := d.proxyLocked(s.Room)
 	switch {
 	case !s.Docker.OK:
 		canHost, reason = false, s.Docker.Reason
-	case !s.Credentials.OK:
-		canHost, reason = false, "Claude credentials unreadable on "+d.o.Name
-	case s.Credentials.Expired:
-		canHost, reason = false, "Claude credentials expired on "+d.o.Name
+	case accessErr != nil:
+		canHost, reason = false, accessErr.Error()
 	case s.Image.State == "failed":
-		canHost, reason = false, "the sandbox image is unavailable on "+d.o.Name+": "+s.Image.Error
+		canHost, reason = false, "the sandbox image is unavailable on the host's machine: "+s.Image.Error
 	case s.Image.State != "ready":
-		canHost, reason = false, "the sandbox image is not ready yet on "+d.o.Name
+		canHost, reason = false, "the sandbox image is not ready yet on the host's machine"
 	}
 	changed = s.CanHost != canHost || s.Reason != reason
 	s.CanHost, s.Reason = canHost, reason
@@ -282,6 +309,8 @@ func (d *Daemon) SetRoom(ctx context.Context, room Room) {
 	d.cur = r
 	d.st.Room, d.st.Pairing, d.st.Code, d.st.ApproveURL, d.st.Error, d.st.Connection = room.String(), "", "", "", "", "offline"
 	d.mu.Unlock()
+	// Readiness depends on the room's account.
+	d.update(func(*Status) {})
 	d.loops.Go(func() { r.loop(ctx) })
 }
 
@@ -298,6 +327,8 @@ type roomRun struct {
 
 	agentMu sync.Mutex
 	ag      Agent
+	// agProxy is the proxy address ag was built with.
+	agProxy string
 	// lastTurn is the highest turn id taken: a stream reconnecting mid-turn announces it again.
 	lastTurn int64
 }
@@ -388,7 +419,8 @@ func (r *roomRun) pair(ctx context.Context) (string, error) {
 	d, room := r.d, r.room
 	r.update(func(s *Status) { s.Pairing = "requesting" })
 	rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	resp, err := d.roomRequest(rctx, http.MethodPost, room.Base+"/api/rooms/"+room.ID+"/pairings", "", map[string]string{"name": d.o.Name})
+	// A fixed name, not this machine's: room servers before spec 003 require one (003-AC17).
+	resp, err := d.roomRequest(rctx, http.MethodPost, room.Base+"/api/rooms/"+room.ID+"/pairings", "", map[string]string{"name": "grill-room daemon"})
 	if err != nil {
 		cancel()
 		return "", err

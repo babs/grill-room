@@ -6,14 +6,14 @@ The instance id is the first 12 hex digits of the sha256 of the server's scheme,
 
 ## Versions
 
-Both sides carry a protocol version, `Proto` in `internal/daemon/proto.go`, currently 1. Peers at most one version apart (`ProtoSkew`) talk at the lower of the two. Further apart, the side that notices sends `refused` and the worker exits. The supervisor marks the instance `refused` with the reason and does not restart it.
+Both sides carry a protocol version, `Proto` in `internal/daemon/proto.go`, currently 2. Version 2 added `access`. Peers at most one version apart (`ProtoSkew`) talk at the lower of the two. Further apart, the side that notices sends `refused` and the worker exits. The supervisor marks the instance `refused` with the reason and does not restart it.
 
 A version bump must stay additive within that window: new fields and new message types only. Both sides ignore unknown fields and unknown message types. A supervisor must not send a request type its worker's agreed version lacks.
 
 ## Handshake
 
-1. The worker sends `{"type":"hello","proto":1,"version":"v0.0.2","instance":"<id>"}`.
-2. The supervisor answers either `{"type":"refused","proto":1,"error":"..."}`, or `{"type":"config","proto":1,"version":"v0.0.2","config":{...}}`.
+1. The worker sends `{"type":"hello","proto":2,"version":"v0.0.3","instance":"<id>"}`.
+2. The supervisor answers either `{"type":"refused","proto":2,"error":"..."}`, or `{"type":"config","proto":2,"version":"v0.0.3","config":{...}}`.
 3. The worker checks the supervisor's `proto` in turn, and may answer `refused` before it exits.
 
 A worker that says nothing within 10 s is killed and restarted.
@@ -23,7 +23,6 @@ The `config` object:
 | Field | |
 |---|---|
 | `instance` | the instance id; a worker refuses another instance's config |
-| `host` | this machine's name, shown in the rooms |
 | `config_dir`, `state_dir`, `cache_dir` | the instance's directories: `settings.json` and `allowlist.json`, `tokens.json`, `workspace-cache/` |
 | `sandbox_root` | keys the sandbox names, so that two supervisors never share a sandbox |
 | `log_level`, `model`, `image`, `cache_mb` | as the supervisor's environment sets them |
@@ -31,6 +30,14 @@ The `config` object:
 | `limits` | `cpus`, `memory`, `egress_cpus`, `egress_memory` for the sandbox and its egress proxy |
 | `rooms` | the instance's room links, oldest first |
 | `pair` | a room to pair with now; without it the worker reconnects to the newest room in `rooms` that holds a token |
+| `access` | how the rooms reach Claude, below; sent to workers at version 2 or later |
+
+The `access` object never holds a Claude token, an account name or a config dir (003-AC14, 003-AC17):
+
+| Field | |
+|---|---|
+| `proxies` | by room link: `addr`, the `<gateway>:<port>` the sandbox relay dials for the room's account proxy (`host-gateway` under Docker Desktop), and `bearer`, the dummy token that proxy knows this worker by; or `error`, why the room cannot reach Claude now, in words the room may show |
+| `cut_off` | the host cut this worker off: it ends its running turns with an error and starts none |
 
 ## Supervisor to worker
 
@@ -42,7 +49,8 @@ Requests carry an `id`; the worker answers each one with `{"type":"reply","id":N
 | `settings` | `settings` | saves the host cap and approval mode, and tells the room |
 | `allowlist` | `allowlist` (absent for an empty list) | saves the egress allowlist; the running sandbox takes it at once |
 | `denied` | `n` | the reply's `denied` lists the last `n` refused egress requests |
-| `recheck` | | re-runs the Docker and credentials checks, and retries a failed sandbox image |
+| `recheck` | | re-runs the Docker check, and retries a failed sandbox image |
+| `access` | `access` | replaces the access: a room whose proxy moved gets a new sandbox at its next turn, and a new `cut_off` ends the running turns. Sent whenever it changes: an account added, mapped or expired, a cut-off, Docker coming up |
 | `update` | | refused with an error: only the supervisor updates, and it updates itself (003-AC5). Phase 2 workers replaced their binary here |
 | `stop` | | no reply: the worker ends its rooms, removes their sandboxes and exits 0 |
 
@@ -56,6 +64,10 @@ A closed stdin means the same as `stop`, so a worker whose supervisor died stops
 | `metrics` | `metrics`: `uptime_seconds`, `turns`, `failed_turns`, `heap_bytes`, `goroutines` | at start, then every 30 s |
 | `turn` | `turn`: `room`, `id`, `phase` (`start` or `end`), `error`, `duration_ms` | as a turn starts and ends |
 | `log` | `log`, one zap JSON entry | for every log line. The supervisor re-encodes it before writing it to its stderr and to the page's log: it sets `instance` itself, and escapes control characters, C1 codes and Unicode format characters (bidi overrides, zero-width), so a worker binary cannot drive the terminal or fake a line. Entries over 16 KiB are dropped. The worker's stderr gets the same treatment, one entry per line with `"stream":"stderr"` |
+
+## Claude accounts
+
+Only the supervisor reads Claude tokens. It runs one bearer-swap proxy per account and gives each worker its own dummy bearer for each proxy, so the proxy counts the worker's requests and a cut-off revokes them alone. Workers start with every `CLAUDE_*` and `ANTHROPIC_*` variable removed from their environment. A worker binary older than v0.0.3 is refused: it read the credentials itself.
 
 ## Supervision
 

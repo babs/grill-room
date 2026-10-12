@@ -86,7 +86,8 @@ func TestPairingFlow(t *testing.T) {
 		t.Fatalf("answer through another room: %d", code)
 	}
 	code, b := e.do(t, "GET", path, alice.Token, nil)
-	if code != http.StatusOK || !strings.Contains(string(b), `"name":"alice-laptop"`) || !strings.Contains(string(b), p.Code) {
+	// 003-AC17: the machine name a daemon sends never reaches the room.
+	if code != http.StatusOK || strings.Contains(string(b), "alice-laptop") || !strings.Contains(string(b), p.Code) {
 		t.Fatalf("view: %d %s", code, b)
 	}
 	// The approval page's POST is CSRF-guarded like every participant write.
@@ -107,7 +108,7 @@ func TestPairingFlow(t *testing.T) {
 		t.Fatalf("token handed twice: %d", code)
 	}
 	d, err := e.st.DaemonByToken(t.Context(), HashToken(r.Token))
-	if err != nil || d.ParticipantID != alice.Participant.ID || d.Name != "alice-laptop" {
+	if err != nil || d.ParticipantID != alice.Participant.ID {
 		t.Fatalf("daemon = %+v, %v", d, err)
 	}
 }
@@ -141,8 +142,7 @@ func TestPairingDenyExpiryAndLimits(t *testing.T) {
 		want             int
 	}{
 		{"unknown room", "nope", `{"name":"x"}`, http.StatusNotFound},
-		{"empty name", room.ID, `{"name":""}`, http.StatusBadRequest},
-		{"long name", room.ID, `{"name":"` + strings.Repeat("a", maxDaemonName+1) + `"}`, http.StatusBadRequest},
+		{"bad json", room.ID, `{"name":`, http.StatusBadRequest},
 	} {
 		if code, _ := e.raw(t, "POST", "/api/rooms/"+tc.room+"/pairings", "", "application/json", nil, tc.body); code != tc.want {
 			t.Errorf("%s: %d, want %d", tc.name, code, tc.want)
@@ -182,7 +182,7 @@ func TestDaemonConnection(t *testing.T) {
 	}
 
 	ch, drop := e.openStream(t, events, tok, "")
-	if ev := next(t, ch); ev.event != "hello" || !strings.Contains(ev.data, `"name":"Alice-laptop"`) {
+	if ev := next(t, ch); ev.event != "hello" || !strings.Contains(ev.data, `"heartbeat_seconds"`) || strings.Contains(ev.data, "Alice-laptop") {
 		t.Fatalf("hello = %+v", ev)
 	}
 	if code, b := e.do(t, "POST", status, tok, map[string]any{"can_host": false, "reason": "Docker is not running", "version": "v1"}); code != http.StatusNoContent {
@@ -216,7 +216,7 @@ func TestDaemonConnection(t *testing.T) {
 	// Revoking the participant's invite ends the new one too.
 	ch, _ = e.openStream(t, events, r.Token, "")
 	next(t, ch)
-	if ds := roomDaemons(); len(ds) != 1 || ds[0].Name != "new" {
+	if ds := roomDaemons(); len(ds) != 1 {
 		t.Fatalf("after re-pairing, daemons = %+v", ds)
 	}
 	ap, err := e.st.ParticipantByToken(t.Context(), HashToken(alice.Token))

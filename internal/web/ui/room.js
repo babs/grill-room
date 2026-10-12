@@ -1437,7 +1437,7 @@ async function showPairing(id) {
     return;
   }
   const p = await res.json();
-  text.textContent = 'The agent daemon on "' + p.name + '" asks to run the agent for you in this room, with your Claude subscription. ' +
+  text.textContent = 'An agent daemon asks to run the agent for you in this room, with your Claude subscription. ' +
     'Approve only if your daemon page shows the code ' + p.code + '.';
   const answer = async (approve) => {
     $('pairing-actions').hidden = true;

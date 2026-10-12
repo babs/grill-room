@@ -14,9 +14,9 @@ Every step spends nothing except step 3, which makes one `haiku` request.
 
 ## Steps
 
-1. **Credentials source (AC23).** Run `grill-room-daemon check` with Docker running. The `credentials:` line must say `from Keychain` on macOS and `from <home>/.claude/.credentials.json` on WSL.
+1. **Credentials source (AC23).** Run `grill-room-daemon check` with Docker running. The `account default:` line must say `from Keychain` on macOS and `from <home>/.claude/.credentials.json` on WSL.
    - With `CLAUDE_CONFIG_DIR` set to another logged-in config dir, the line must name that dir on WSL. On macOS, Claude Code stores that config dir's token in a Keychain item named `Claude Code-credentials-<8 hex>`; the line must still say `from Keychain`.
-2. **Locked Keychain, macOS only (AC24).** Lock the login keychain (`security lock-keychain ~/Library/Keychains/login.keychain-db`), move any `~/.claude/.credentials.json` aside, and start the daemon. Within 5 s the page's "Claude credentials" line must read `macOS Keychain: no answer within 3s, the Keychain may be locked...` and "Hosting the agent" must say unavailable. Unlock, press "Check again": both turn green. Put the file back.
+2. **Locked Keychain, macOS only (AC24).** Lock the login keychain (`security lock-keychain ~/Library/Keychains/login.keychain-db`), move any `~/.claude/.credentials.json` aside, and start the daemon. Within 5 s the page's account `default` must show "unreadable" with `macOS Keychain: no answer within 3s, the Keychain may be locked...`, a warning at the top, and "Hosting the agent" unavailable. Unlock, press "Check again": both turn green. Put the file back.
 3. **Sandbox turn, isolation, no token (AC25, AC26, DoD).** `grill-room-daemon check` must print `sandbox turn: "ok"`, `isolation: ok` and `real token matches: filesystem 0, volumes 0, inspect 0`, and exit 0.
 4. **Host files untouched (AC27).** Before step 3, note `stat` of `~/.claude/.credentials.json` (if present) and, on macOS, `security find-generic-password -s "Claude Code-credentials" | grep mdat`. Both must be unchanged after step 3. Do not compare `~/.claude.json`: a running Claude Code session rewrites it on its own.
 5. **Browser and pairing (AC22).** Run `grill-room-daemon https://<host>/r/<room>`. The page must open in the default browser (on WSL, the Windows browser, through `wslview` or `explorer.exe`). Follow "approve in the room", check the code matches, press Approve. The page must reach "Paired. Connected." with no token shown anywhere.
@@ -38,7 +38,13 @@ Run these on macOS, on native Windows (`grill-room-daemon-windows-<arch>.exe` fr
 16. **Migration (003-AC10).** On a machine with a paired single-room daemon (an earlier release), stop it and start the supervisor. The old dir must be in `legacy-backup-<date>` under the config root, and the room must reconnect without a new pairing.
 17. **Worker binary (003-AC2, 003-AC7).** Pair with a room on an instance serving another signed release than the supervisor's. The instance list must show that version and "signed by the project", and the binary must sit in `bin/<version>/` under the state root (`%LOCALAPPDATA%\grill-room\bin\` on Windows). Redeploy that instance with the supervisor's version: once its worker reconnects, `bin/<version>/` must be gone (on Windows, at the next start if the old worker still held the file).
 
+18. **Setup token storage (003-AC12).** Add an account of kind "a setup token" on the page, with a token from `claude setup-token`. It must show "valid" and "in the OS keyring". The item must exist, named `grill-room-<8 hex>` for the account name: Keychain Access on macOS, `cmdkey /list` on Windows (target `grill-room-<8 hex>:<name>`), `secret-tool search service grill-room-<8 hex>` on Linux with a Secret Service. No file under the state root may hold the token. Remove the account: the item must be gone.
+19. **Owner-only files on Windows (003-AC12).** `icacls %LOCALAPPDATA%\grill-room\instances\<id>\tokens.json` must list one entry, the current user with `(F)`, and no inherited entry. The CI runs the same check (`TestOwnerOnlyDACL`), and the Credential Manager round trip (`TestCredentialManager`).
+20. **Accounts and cut-off (003-AC13, 003-AC15).** Pick the setup token account for a room on the page and press a persona: the account's request count must grow. Press "Cut it off from Claude" during a turn: the room must show "the host cut this agent off from Claude for now" and the agent offline, until "Let it use Claude again". One haiku request.
+
 ## Known risks to watch
+
+- A locked Secret Service (Linux) or Keychain (macOS) may show an unlock prompt. After 5 s the supervisor gives up and keeps a new setup token in its owner-only file instead; the page says where the token is.
 
 - WSL with Docker Desktop: the proxy listens on `127.0.0.1` inside the distro and the relay reaches it through `host-gateway`. If step 3 fails with a connection error from the relay, note which Docker setup the machine runs.
 - A host firewall that blocks containers from reaching the host's bridge address breaks the relay on native engines. Step 3 shows it as a failed turn.

@@ -1,16 +1,20 @@
-// Package proxy is the bearer-swap reverse proxy: it replaces the sandbox's dummy bearer with the
-// host's real Claude Code OAuth access token, so the sandbox never holds a usable credential.
+// Package proxy is the bearer-swap reverse proxy: it replaces a sandbox's dummy bearer with an
+// account's real Claude token, so no sandbox or worker ever holds a usable credential. One proxy
+// serves one account; each client (a worker) has its own dummy bearer, so the proxy counts its
+// requests and can cut it off alone (003-AC14, 003-AC15).
 //
 // Derived from the grill-room S3 spike (spikes/s3/proxy/main.go) at commit 3ae0776.
 package proxy
 
 import (
-	"crypto/subtle"
+	"context"
+	"crypto/sha256"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -22,18 +26,45 @@ import (
 // Header values safe to log: feature flags and client identity, never credentials.
 var loggedValues = []string{"anthropic-beta", "anthropic-version", "user-agent", "x-app"}
 
-// Proxy forwards authorised sandbox requests upstream with the real token.
+// TokenSource hands out the account's real token. Invalidate asks for a fresh read after upstream
+// refused the token.
+type TokenSource interface {
+	Get(ctx context.Context) (creds.Token, error)
+	Invalidate()
+}
+
+// Stats is what the proxy forwarded.
+type Stats struct {
+	// Requests counts the forwarded requests per client.
+	Requests map[string]int64
+	// LastUse is when the last request was forwarded, zero before any.
+	LastUse time.Time
+	// Unauthorized counts upstream 401s: the account's token was refused.
+	Unauthorized int64
+}
+
+// Proxy forwards the requests of its allowed clients upstream with the account's token.
 type Proxy struct {
-	rp   *httputil.ReverseProxy
-	want []byte
-	log  *zap.Logger
-	// unauthorized counts upstream 401s: the caller tells an expired host token from other failures.
+	rp  *httputil.ReverseProxy
+	log *zap.Logger
+
+	mu sync.Mutex
+	// Bearers are kept as their SHA-256: the lookup's timing then says nothing about a bearer.
+	clients  map[[32]byte]string
+	byClient map[string][32]byte
+	// live ends a client's requests in flight when it is revoked.
+	live     map[string]context.Context
+	stop     map[string]context.CancelFunc
+	requests map[string]int64
+	lastUse  time.Time
+
 	unauthorized atomic.Int64
 }
 
-// New builds a proxy to upstream. dummy is the bearer the sandbox holds; any other is refused.
-func New(upstream *url.URL, src *creds.Source, dummy string, log *zap.Logger) *Proxy {
-	p := &Proxy{want: []byte("Bearer " + dummy), log: log}
+// New builds a proxy to upstream that swaps in src's token. It allows no client until Allow.
+func New(upstream *url.URL, src TokenSource, log *zap.Logger) *Proxy {
+	p := &Proxy{log: log, clients: map[[32]byte]string{}, byClient: map[string][32]byte{}, requests: map[string]int64{},
+		live: map[string]context.Context{}, stop: map[string]context.CancelFunc{}}
 	p.rp = &httputil.ReverseProxy{
 		FlushInterval: -1, // SSE streaming
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -47,7 +78,7 @@ func New(upstream *url.URL, src *creds.Source, dummy string, log *zap.Logger) *P
 				return
 			}
 			if tok.Expired(time.Now()) {
-				// ponytail: forwards anyway and lets upstream answer 401; the host's Claude Code owns refresh.
+				// ponytail: forwards anyway and lets upstream answer 401; Claude Code owns the refresh.
 				log.Warn("token_expired", zap.Time("expires_at", tok.ExpiresAt))
 			}
 			pr.Out.Header.Set("Authorization", "Bearer "+tok.AccessToken)
@@ -72,19 +103,73 @@ func New(upstream *url.URL, src *creds.Source, dummy string, log *zap.Logger) *P
 	return p
 }
 
-// Unauthorized returns how many upstream 401s the proxy has seen.
-func (p *Proxy) Unauthorized() int64 { return p.unauthorized.Load() }
+func hashBearer(b string) [32]byte { return sha256.Sum256([]byte("Bearer " + b)) }
+
+// Allow lets client in with bearer, replacing the client's previous bearer.
+func (p *Proxy) Allow(client, bearer string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if old, ok := p.byClient[client]; ok {
+		delete(p.clients, old)
+	}
+	h := hashBearer(bearer)
+	p.clients[h], p.byClient[client] = client, h
+	if p.live[client] == nil {
+		p.live[client], p.stop[client] = context.WithCancel(context.Background()) //nolint:gosec // Revoke calls it
+	}
+}
+
+// Revoke shuts client out: its next request is refused.
+func (p *Proxy) Revoke(client string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if h, ok := p.byClient[client]; ok {
+		delete(p.clients, h)
+		delete(p.byClient, client)
+	}
+	if stop := p.stop[client]; stop != nil {
+		stop()
+		delete(p.stop, client)
+		delete(p.live, client)
+	}
+}
+
+// Stats returns a snapshot of the counters.
+func (p *Proxy) Stats() Stats {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	req := make(map[string]int64, len(p.requests))
+	for k, v := range p.requests {
+		req[k] = v
+	}
+	return Stats{Requests: req, LastUse: p.lastUse, Unauthorized: p.unauthorized.Load()}
+}
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Security: only the sandbox holding the dummy bearer may spend the host's token.
-	if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), p.want) != 1 {
+	h := sha256.Sum256([]byte(r.Header.Get("Authorization")))
+	p.mu.Lock()
+	client, ok := p.clients[h]
+	var live context.Context
+	if ok {
+		p.requests[client]++
+		p.lastUse = time.Now()
+		live = p.live[client]
+	}
+	p.mu.Unlock()
+	// Security: only an allowed client's sandbox may spend the account's token.
+	if !ok {
 		p.log.Warn("bearer_rejected", append([]zap.Field{
 			zap.String("method", r.Method), zap.String("path", r.URL.Path),
 		}, headerSummary(r.Header)...)...)
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	p.rp.ServeHTTP(w, r)
+	// A revoked client's streams end now, not when the model stops talking (003-AC15).
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	unhook := context.AfterFunc(live, cancel)
+	defer unhook()
+	p.rp.ServeHTTP(w, r.WithContext(ctx))
 }
 
 func headerSummary(h http.Header) []zap.Field {

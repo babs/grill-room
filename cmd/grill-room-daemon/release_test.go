@@ -103,7 +103,7 @@ func devBuild(t *testing.T, version string, key *trusttest.Key) string {
 
 // 003-AC2, 003-AC7, 003-AC4: one supervisor, one instance per real GitHub release in
 // GRILL_ROOM_TEST_RELEASES (space-separated directories, as `make test-release` downloads them)
-// plus one serving a dev-signed local build. Each release from v0.0.2 runs as its own worker,
+// plus one serving a dev-signed local build. Each release from v0.0.3 runs as its own worker,
 // verified keyless as a project release; an older one is refused as too old; the dev build runs
 // with its key trusted. Each worker runs from bin/<version>/, and when an instance moves to the
 // supervisor's own version, its stored copy goes.
@@ -149,7 +149,7 @@ func TestReleases(t *testing.T) {
 		return m
 	}
 	settled := func(in daemon.InstanceView, v string) bool {
-		if semver.Compare(v, "v0.0.2") < 0 && !strings.HasSuffix(v, "-dev") {
+		if semver.Compare(v, "v0.0.3") < 0 && !strings.HasSuffix(v, "-dev") {
 			return in.State == "refused"
 		}
 		return in.State == "running" && in.Version == v
@@ -169,7 +169,7 @@ func TestReleases(t *testing.T) {
 		t.Logf("%s: %s %s, trust %q, error %q", v, in.State, in.Version, in.Trust, in.Error)
 		switch {
 		case in.State == "refused":
-			if !strings.Contains(in.Error, v+", older than v0.0.2") {
+			if !strings.Contains(in.Error, v+", older than v0.0.3") {
 				t.Errorf("%s refused with %q", v, in.Error)
 			}
 			continue

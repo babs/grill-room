@@ -21,6 +21,7 @@
   <button type="button" id="stop">Stop the daemon</button>
 </header>
 <p id="banner" role="alert" hidden></p>
+<ul id="account-warnings" role="alert" hidden></ul>
 <p id="relax-banner" class="danger" role="alert" hidden>
   Unsigned worker binaries are accepted for: <span id="relax-list"></span>. Switch it off below once you are done testing.
 </p>
@@ -50,6 +51,25 @@
     <ul id="instances"></ul>
     <label><input id="autostart" type="checkbox"> Start at login</label>
     <span id="autostart-status" role="status"></span>
+  </section>
+  <section aria-labelledby="accounts-title" id="accounts-section" hidden>
+    <h2 id="accounts-title">Claude accounts</h2>
+    <p class="hint">Each account has its own proxy in this supervisor: the workers and their sandboxes get its address, never a token. Rooms see none of this page.</p>
+    <ul id="accounts"></ul>
+    <form id="account-form">
+      <label>Name <input id="account-name" required size="16" autocomplete="off" spellcheck="false" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,63}"></label>
+      <label>Kind
+        <select id="account-kind">
+          <option value="config_dir">a Claude Code config dir</option>
+          <option value="setup_token">a setup token</option>
+        </select>
+      </label>
+      <label id="account-dir-label">Config dir <input id="account-dir" size="30" autocomplete="off" spellcheck="false" placeholder="empty for ~/.claude"></label>
+      <label id="account-token-label" hidden>Token <input id="account-token" type="password" size="30" autocomplete="off" spellcheck="false" placeholder="from claude setup-token"></label>
+      <button type="submit">Add the account</button>
+      <span id="account-status" role="status"></span>
+    </form>
+    <p class="hint">A config dir is read only: Claude Code, run by you, refreshes its login. A setup token goes to the OS keyring, or to a file only you can read; it is not shown again.</p>
   </section>
   <section aria-labelledby="trust-title" id="trust-section" hidden>
     <h2 id="trust-title">Signatures and updates</h2>
@@ -91,7 +111,6 @@
     <h2 id="host-title">This machine</h2>
     <dl>
       <dt>Docker</dt><dd id="docker"></dd>
-      <dt>Claude credentials</dt><dd id="creds"></dd>
       <dt>Sandbox image</dt><dd id="image"></dd>
       <dt>Hosting the agent</dt><dd id="can-host"></dd>
     </dl>

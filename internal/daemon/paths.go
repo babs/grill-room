@@ -116,12 +116,27 @@ type Instance struct {
 	URL string `json:"url"`
 	// Rooms are its room links, oldest first.
 	Rooms []string `json:"rooms"`
-	// Account names the Claude account its turns use (spec 003 phase 4).
+	// Account names the Claude account its rooms use; empty is "default" (003-AC13).
 	Account string `json:"account,omitempty"`
+	// RoomAccounts overrides Account for some rooms, by room link (003-AC13).
+	RoomAccounts map[string]string `json:"room_accounts,omitempty"`
+	// CutOff shuts the instance's worker out of every account's proxy until the host lets it back (003-AC15).
+	CutOff bool `json:"cut_off,omitempty"`
 	// Version is the binary its worker ran last, kept by the binary store's collection (003-AC7).
 	Version string `json:"version,omitempty"`
 	// Relax runs its binaries even unsigned: off by default, switched on by typing its host (003-AC4).
 	Relax bool `json:"accept_unsigned,omitempty"`
+}
+
+// accountFor names the account room's turns use (003-AC13).
+func (i *Instance) accountFor(room string) string {
+	if a := i.RoomAccounts[room]; a != "" {
+		return a
+	}
+	if i.Account != "" {
+		return i.Account
+	}
+	return "default"
 }
 
 // addRoom puts room last, as the newest.

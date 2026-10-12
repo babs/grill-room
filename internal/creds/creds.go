@@ -49,10 +49,11 @@ type Reader struct {
 	Service, Account string
 }
 
-// New returns the Reader for this OS and environment.
-func New() Reader {
-	return Reader{ConfigDir: ConfigDir(os.Getenv, home()), Keychain: platformKeychain, KeychainTimeout: KeychainTimeout,
-		Service: KeychainService(os.Getenv("CLAUDE_CONFIG_DIR")), Account: keychainAccount(os.Getenv("USER"), currentUser())}
+// ForConfigDir returns the Reader of a Claude Code config dir, as Claude Code started with
+// CLAUDE_CONFIG_DIR=dir finds it; "" is Claude Code's default, ~/.claude.
+func ForConfigDir(dir string) Reader {
+	return Reader{ConfigDir: ConfigDir(func(string) string { return dir }, home()), Keychain: platformKeychain, KeychainTimeout: KeychainTimeout,
+		Service: KeychainService(dir), Account: keychainAccount(os.Getenv("USER"), currentUser())}
 }
 
 func home() string {

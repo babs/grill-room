@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon } from './helpers.js';
+import { hostname } from 'node:os';
+import { roomWith, startDaemon, pairDaemon } from './helpers.js';
 
 // 001-AC22: run the daemon with the room URL, open its local page, approve in the room session
 // with one click: the daemon is paired and connected, and no token was shown or typed.
@@ -20,7 +21,10 @@ test('daemon pairs through the room approval', async ({ browser, request, baseUR
     await expect(approval.locator('#pairing-text')).toContainText('Daemon paired');
 
     await expect(admin.locator('#pairing')).toHaveText('Paired. Connected.');
-    await expect(admin.locator('#creds')).toContainText('found in');
+    // 003-AC12: the Claude account is the supervisor's CLAUDE_CONFIG_DIR, read only, with its status.
+    await expect(admin.locator('#accounts li').first()).toContainText('default');
+    await expect(admin.locator('#accounts li').first()).toContainText('valid');
+    await expect(admin.locator('#account-warnings')).toBeHidden();
     await expect(admin.locator('#can-host')).toBeVisible();
     // The page reloads into the same session; the one-time link is spent.
     await admin.reload();
@@ -33,6 +37,28 @@ test('daemon pairs through the room approval', async ({ browser, request, baseUR
     await admin.getByRole('button', { name: 'Stop the daemon' }).click();
     await expect(admin.locator('#banner')).toHaveText('The daemon stopped. You can close this tab.');
     expect(await daemon.exited).toBe(0);
+  } finally {
+    daemon.cleanup();
+  }
+});
+
+// 003-AC15, 003-AC17: the room says who holds the agent, never the machine. From the page the host
+// cuts the worker off: the room sees the agent offline until the host lets it back.
+test('daemon page cuts a worker off from Claude and lets it back', async ({ browser, request, baseURL }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const daemon = startDaemon(`${baseURL}/r/${room.id}`, { GRILL_ROOM_GITHUB_URL: 'http://127.0.0.1:9' });
+  try {
+    const admin = await pairDaemon(alice, daemon);
+    const led = alice.locator('button.persona[data-name="Grill"] .led');
+    await expect(led).toHaveAttribute('aria-label', 'Grill ready', { timeout: 30_000 });
+    await expect(alice.locator('#messages')).toContainText('Alice holds the agent(s).');
+    await expect(admin.getByLabel('Claude account of ' + baseURL, { exact: true })).toHaveValue('default');
+    await admin.getByRole('button', { name: 'Cut it off from Claude' }).click();
+    await expect(admin.locator('#instances')).toContainText('cut off: its turns end and none starts');
+    await expect(led).toHaveAttribute('aria-label', 'Grill offline');
+    await admin.getByRole('button', { name: 'Let it use Claude again' }).click();
+    await expect(led).toHaveAttribute('aria-label', 'Grill ready');
+    await expect(alice.locator('body')).not.toContainText(hostname());
   } finally {
     daemon.cleanup();
   }

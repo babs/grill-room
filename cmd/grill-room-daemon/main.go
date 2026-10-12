@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -31,7 +32,6 @@ import (
 	"go.uber.org/zap/zapcore"
 	"golang.org/x/term"
 
-	"github.com/babs/grill-room/internal/creds"
 	"github.com/babs/grill-room/internal/daemon"
 	"github.com/babs/grill-room/internal/sandbox"
 	"github.com/babs/grill-room/internal/trust"
@@ -216,7 +216,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 		host = "unknown host"
 	}
 	if fs.Arg(0) == "check" {
-		return check(ctx, cfg, host, creds.NewSource(creds.New()), logger)
+		return check(ctx, cfg, logger)
 	}
 	var room *daemon.Room
 	if fs.NArg() > 0 {
@@ -246,6 +246,10 @@ func supervise(ctx context.Context, cfg Config, host string, room *daemon.Room, 
 	if _, err := daemon.Migrate(cfg.Paths, cfg.Legacy, time.Now(), os.Getenv("CLAUDE_CONFIG_DIR"), logger); err != nil {
 		return fmt.Errorf("migrate the state in %s: %w", cfg.Legacy, err)
 	}
+	accounts, err := loadAccounts(cfg, logger)
+	if err != nil {
+		return err
+	}
 	exe, err := executable()
 	if err != nil {
 		return err
@@ -263,11 +267,11 @@ func supervise(ctx context.Context, cfg Config, host string, room *daemon.Room, 
 	bins.Init(insts)
 	var restart atomic.Bool
 	sup := daemon.NewSupervisor(daemon.SupervisorOptions{
-		Paths: cfg.Paths, Version: Version,
-		Worker: daemon.WorkerConfig{Host: host, SandboxRoot: cfg.Paths.State, LogLevel: cfg.LogLevel, Model: cfg.Model, Image: cfg.Image,
+		Paths: cfg.Paths, Version: Version, Host: host, Accounts: accounts,
+		Worker: daemon.WorkerConfig{SandboxRoot: cfg.Paths.State, LogLevel: cfg.LogLevel, Model: cfg.Model, Image: cfg.Image,
 			Settings: cfg.Settings, Limits: cfg.Limits, CacheMB: cfg.CacheMB},
 		Binary: bins.Resolve, Bins: bins, Executable: exe, GitHub: cfg.GitHub,
-		Env: os.Environ(), Stderr: stderr, Ring: ring, Log: logger, Docker: sandbox.Docker,
+		Env: workerEnv(os.Environ()), Stderr: stderr, Ring: ring, Log: logger, Docker: sandbox.Docker,
 		Restart:   func() { restart.Store(true); stop() },
 		Autostart: autostart(exe),
 	})
@@ -321,6 +325,23 @@ func supervise(ctx context.Context, cfg Config, host string, room *daemon.Room, 
 		return restartError{exe: exe}
 	}
 	return err
+}
+
+func loadAccounts(cfg Config, log *zap.Logger) (*daemon.Accounts, error) {
+	a, err := daemon.LoadAccounts(daemon.AccountsOptions{Paths: cfg.Paths, ClaudeConfigDir: os.Getenv("CLAUDE_CONFIG_DIR"),
+		Upstream: anthropic, Docker: sandbox.Docker, Log: log})
+	if err != nil {
+		return nil, fmt.Errorf("accounts: %w", err)
+	}
+	return a, nil
+}
+
+// workerEnv is the supervisor's environment minus what may carry a Claude token or name an
+// account: workers never see one (003-AC14).
+func workerEnv(env []string) []string {
+	return slices.DeleteFunc(slices.Clone(env), func(kv string) bool {
+		return strings.HasPrefix(kv, "CLAUDE_") || strings.HasPrefix(kv, "ANTHROPIC_")
+	})
 }
 
 // handOver gives room to the supervisor already running on this state dir and prints its admin
@@ -389,19 +410,29 @@ func executable() (string, error) {
 	return exe, nil
 }
 
-// check reports whether this machine can host, then runs one haiku turn in a throwaway sandbox,
-// checks its isolation and scans it for the real token.
-func check(ctx context.Context, cfg Config, host string, src *creds.Source, log *zap.Logger) error {
+// check reports whether this machine can host, then runs one haiku turn in a throwaway sandbox
+// through the "default" account's proxy, checks its isolation and scans it for the real token.
+func check(ctx context.Context, cfg Config, log *zap.Logger) error {
 	ready := sandbox.Check(ctx, sandbox.Docker)
 	if !ready.OK {
 		return errors.New(ready.Reason)
 	}
 	fmt.Printf("docker: ok, %s (desktop: %v)\n", ready.Version, ready.Desktop)
-	tok, err := src.Get(ctx)
+	accounts, err := loadAccounts(cfg, log)
 	if err != nil {
-		return fmt.Errorf("credentials: %w", err)
+		return err
 	}
-	fmt.Printf("credentials: ok, from %s, expires %s\n", tok.Origin, tok.ExpiresAt.Local().Format(time.RFC3339))
+	defer accounts.Close()
+	tok, err := accounts.Token(ctx, "default")
+	if err != nil {
+		return fmt.Errorf("account default: %w", err)
+	}
+	fmt.Printf("account default: ok, from %s\n", tok.Origin)
+	const room = "check"
+	px := accounts.Access(ctx, room, map[string]string{room: "default"}, false).Proxies[room]
+	if px.Error != "" {
+		return fmt.Errorf("account default: %s", px.Error)
+	}
 	image := cfg.Image
 	if image == "" {
 		if image, err = sandbox.EnsureImage(ctx, sandbox.Docker, sandbox.DockerStream, "", func(_, line string) { fmt.Println("  " + line) }); err != nil {
@@ -409,12 +440,12 @@ func check(ctx context.Context, cfg Config, host string, src *creds.Source, log 
 		}
 	}
 	fmt.Printf("sandbox image: %s\n", image)
-	sb := sandbox.New(sandbox.Config{Image: image, Name: fmt.Sprintf("check-%d", time.Now().Unix()), Host: host, Upstream: anthropic, Limits: cfg.Limits},
-		sandbox.Docker, src, log)
+	sb := sandbox.New(sandbox.Config{Image: image, Name: fmt.Sprintf("check-%d", time.Now().Unix()), Proxy: px.Addr, Limits: cfg.Limits},
+		sandbox.Docker, log)
 	defer sb.Close(ctx)
 	tctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	res, err := sb.RunClaude(tctx, sandbox.Request{Prompt: "say ok", Model: "haiku"})
+	res, err := sb.RunClaude(tctx, sandbox.Request{Prompt: "say ok", Model: "haiku", Bearer: px.Bearer})
 	if err != nil {
 		return fmt.Errorf("sandbox turn: %w", err)
 	}

@@ -46,6 +46,12 @@ type hostBackend interface {
 	SetUpdateChannel(channel, instance string) error
 	Update(ctx context.Context) error
 	Restart()
+	AccountViews(ctx context.Context) []AccountView
+	AddAccount(ctx context.Context, acc Account, token string) error
+	RemoveAccount(name string) error
+	ProbeAccount(ctx context.Context, name string) error
+	SetAccount(instance, room, account string) error
+	SetCutOff(instance string, on bool) error
 }
 
 // Admin is the local admin page. Only someone holding a link this process printed or opened can
@@ -117,6 +123,11 @@ func (a *Admin) Handler() http.Handler {
 	mux.Handle("POST /api/dev-keys/remove", a.auth(a.host(a.removeDevKey)))
 	mux.Handle("POST /api/relax", a.auth(a.host(a.relax)))
 	mux.Handle("POST /api/update-channel", a.auth(a.host(a.updateChannel)))
+	mux.Handle("POST /api/accounts", a.auth(a.host(a.addAccount)))
+	mux.Handle("POST /api/accounts/remove", a.auth(a.host(a.removeAccount)))
+	mux.Handle("POST /api/accounts/probe", a.auth(a.host(a.probeAccount)))
+	mux.Handle("POST /api/instance-account", a.auth(a.host(a.instanceAccount)))
+	mux.Handle("POST /api/cut-off", a.auth(a.host(a.cutOff)))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
@@ -207,7 +218,7 @@ func (a *Admin) session(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 }
 
-func (a *Admin) status(w http.ResponseWriter, _ *http.Request) {
+func (a *Admin) status(w http.ResponseWriter, r *http.Request) {
 	v := map[string]any{"status": a.d.Status(), "logs": a.logs.Lines(), "models": turn.Models, "efforts": turn.Efforts}
 	if h, ok := a.d.(hostBackend); ok {
 		v["instances"], v["instance"] = h.Instances()
@@ -215,6 +226,7 @@ func (a *Admin) status(w http.ResponseWriter, _ *http.Request) {
 			v["autostart"] = on
 		}
 		v["trust"] = h.Trust()
+		v["accounts"] = h.AccountViews(r.Context())
 	}
 	writeJSON(w, http.StatusOK, v)
 }
@@ -393,6 +405,61 @@ func (a *Admin) updateChannel(w http.ResponseWriter, r *http.Request, h hostBack
 	}
 	if decodeJSON(w, r, &req) {
 		reply(w, h.SetUpdateChannel(req.Channel, req.Instance))
+	}
+}
+
+// addAccount adds a Claude account. The token is never logged or sent back (003-AC12).
+func (a *Admin) addAccount(w http.ResponseWriter, r *http.Request, h hostBackend) {
+	var req struct {
+		Name      string `json:"name"`
+		Kind      string `json:"kind"`
+		ConfigDir string `json:"config_dir"`
+		Token     string `json:"token"`
+	}
+	if decodeJSON(w, r, &req) {
+		reply(w, h.AddAccount(a.ctx, Account{Name: req.Name, Kind: req.Kind, ConfigDir: req.ConfigDir}, req.Token))
+	}
+}
+
+func (a *Admin) removeAccount(w http.ResponseWriter, r *http.Request, h hostBackend) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if decodeJSON(w, r, &req) {
+		reply(w, h.RemoveAccount(req.Name))
+	}
+}
+
+// probeAccount checks a setup token now, on demand (003-AC12).
+func (a *Admin) probeAccount(w http.ResponseWriter, r *http.Request, h hostBackend) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if decodeJSON(w, r, &req) {
+		reply(w, h.ProbeAccount(r.Context(), req.Name))
+	}
+}
+
+// instanceAccount maps an instance, or one of its rooms, to an account (003-AC13).
+func (a *Admin) instanceAccount(w http.ResponseWriter, r *http.Request, h hostBackend) {
+	var req struct {
+		Instance string `json:"instance"`
+		Room     string `json:"room"`
+		Account  string `json:"account"`
+	}
+	if decodeJSON(w, r, &req) {
+		reply(w, h.SetAccount(req.Instance, req.Room, req.Account))
+	}
+}
+
+// cutOff cuts a worker off from Claude, or lets it back (003-AC15).
+func (a *Admin) cutOff(w http.ResponseWriter, r *http.Request, h hostBackend) {
+	var req struct {
+		Instance string `json:"instance"`
+		CutOff   bool   `json:"cut_off"`
+	}
+	if decodeJSON(w, r, &req) {
+		reply(w, h.SetCutOff(req.Instance, req.CutOff))
 	}
 }
 

@@ -18,15 +18,6 @@ import (
 // legacyEntries are what a single-room daemon kept in its state dir.
 var legacyEntries = []string{"tokens.json", "settings.json", "allowlist.json", "workspace-cache"}
 
-// Account is a Claude account the supervisor knows, kept in accounts.json (spec 003 phase 4).
-type Account struct {
-	Name string `json:"name"`
-	// Kind is "config_dir": a Claude Code config dir, read only.
-	Kind string `json:"kind"`
-	// ConfigDir is the dir's path; empty is Claude Code's default location.
-	ConfigDir string `json:"config_dir"`
-}
-
 // Migrate moves a single-room daemon's state from legacy into p's instance layout (003-AC10).
 // Each paired room goes to the instance of its room server, with its token, a copy of the
 // settings and allowlist, and its workspace cache; claudeConfigDir becomes account "default". The
@@ -160,14 +151,15 @@ func writeAccounts(p Paths, configDir string) error {
 		return nil
 	}
 	// A relative dir means nothing to a supervisor started from elsewhere, by autostart say.
-	if configDir != "" {
+	// An absolute dir stays as written: Claude Code names its Keychain item after the raw value.
+	if configDir != "" && !filepath.IsAbs(configDir) {
 		abs, err := filepath.Abs(configDir)
 		if err != nil {
 			return fmt.Errorf("account default: %w", err)
 		}
 		configDir = abs
 	}
-	b, err := json.MarshalIndent(map[string][]Account{"accounts": {{Name: "default", Kind: "config_dir", ConfigDir: configDir}}}, "", "  ")
+	b, err := json.MarshalIndent(map[string][]Account{"accounts": {{Name: "default", Kind: KindConfigDir, ConfigDir: configDir}}}, "", "  ")
 	if err != nil {
 		return err
 	}

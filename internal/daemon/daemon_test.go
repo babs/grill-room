@@ -5,11 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -19,7 +18,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/babs/grill-room/internal/bus"
-	"github.com/babs/grill-room/internal/creds"
 	"github.com/babs/grill-room/internal/sandbox"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/web"
@@ -39,13 +37,26 @@ func newTestDaemon(t *testing.T, run sandbox.Runner) *Daemon {
 		run = dockerDown
 	}
 	dir := t.TempDir()
-	body := fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"host-secret","expiresAt":%d}}`, time.Now().Add(time.Hour).UnixMilli())
-	if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return New(Options{Name: "laptop", Version: "v-test", Image: "test-image", Tokens: NewTokens(filepath.Join(dir, "state")), Docker: run,
-		Creds: creds.NewSource(creds.Reader{ConfigDir: dir}), HTTP: &http.Client{}, Log: zap.NewNop(),
+	d := New(Options{Version: "v-test", Image: "test-image", Tokens: NewTokens(filepath.Join(dir, "state")), Docker: run,
+		HTTP: &http.Client{}, Log: zap.NewNop(),
 		StatusEvery: 50 * time.Millisecond, PollEvery: 20 * time.Millisecond, MaxBackoff: 100 * time.Millisecond})
+	grant(d, "")
+	return d
+}
+
+// testBearer stands for the dummy bearer the supervisor hands a worker for an account's proxy.
+const testBearer = "sk-ant-oat01-grill-room-dummy-test"
+
+// grant gives room an account proxy, as the supervisor's access message would.
+func grant(d *Daemon, room string) {
+	d.mu.Lock()
+	a := Access{Proxies: maps.Clone(d.access.Proxies)}
+	d.mu.Unlock()
+	if a.Proxies == nil {
+		a.Proxies = map[string]Proxy{}
+	}
+	a.Proxies[room] = Proxy{Addr: "127.0.0.1:1", Bearer: testBearer}
+	d.SetAccess(a)
 }
 
 func waitFor(t *testing.T, what string, cond func() bool) {
@@ -59,31 +70,13 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// 001-AC24: a Keychain that never answers shows a clear message in the local page within 5 s.
-func TestLockedKeychainInStatus(t *testing.T) {
-	block := make(chan struct{})
-	defer close(block)
-	d := newTestDaemon(t, dockerUp)
-	d.o.Creds = creds.NewSource(creds.Reader{ConfigDir: t.TempDir(), KeychainTimeout: creds.KeychainTimeout,
-		Keychain: func(context.Context, string, string) ([]byte, error) { <-block; return nil, nil }})
-	start := time.Now()
-	d.Refresh(context.Background())
-	if took := time.Since(start); took >= 5*time.Second {
-		t.Fatalf("refresh took %s", took)
-	}
-	s := d.Status()
-	if s.Credentials.OK || !strings.Contains(s.Credentials.Error, "Keychain may be locked") || s.CanHost || !strings.Contains(s.Reason, "credentials unreadable") {
-		t.Fatalf("status = %+v", s)
-	}
-}
-
-// 001-AC28 001-AC29: hosting is offered only with Docker running and fresh credentials, and the
-// status never carries the token.
+// 001-AC28 003-AC14: hosting is offered only with Docker running and an account proxy for the
+// room; the reasons the room sees name neither the machine nor the account (003-AC17).
 func TestReadiness(t *testing.T) {
 	d := newTestDaemon(t, nil)
 	d.Refresh(context.Background())
 	s := d.Status()
-	if s.CanHost || s.Reason != "Docker is not running: Cannot connect to the Docker daemon" || !s.Credentials.OK {
+	if s.CanHost || s.Reason != "Docker is not running: Cannot connect to the Docker daemon" {
 		t.Fatalf("docker down: %+v", s)
 	}
 	d.o.Docker = dockerUp
@@ -92,18 +85,22 @@ func TestReadiness(t *testing.T) {
 		t.Fatalf("ready: %+v", s)
 	}
 	b, _ := json.Marshal(d.Status())
-	if bytes.Contains(b, []byte("host-secret")) {
-		t.Fatal("status holds the token")
+	if bytes.Contains(b, []byte(testBearer)) {
+		t.Fatal("status holds the bearer")
 	}
-	dir := t.TempDir()
-	body := fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"x","expiresAt":%d}}`, time.Now().Add(-time.Minute).UnixMilli())
-	if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	d.o.Creds = creds.NewSource(creds.Reader{ConfigDir: dir})
-	d.Refresh(context.Background())
-	if s := d.Status(); s.CanHost || s.Reason != "Claude credentials expired on laptop" || !s.Credentials.Expired {
-		t.Fatalf("expired: %+v", s)
+	for _, tc := range []struct {
+		access Access
+		reason string
+	}{
+		{Access{}, "the host has no Claude account ready for this room yet"},
+		{Access{Proxies: map[string]Proxy{"": {Error: "the host's Claude login has expired"}}}, "the host's Claude login has expired"},
+		{Access{Proxies: map[string]Proxy{"": {Addr: "127.0.0.1:1", Bearer: testBearer}}, CutOff: true}, errCutOff.Error()},
+		{Access{Proxies: map[string]Proxy{"": {Addr: "127.0.0.1:1", Bearer: testBearer}}}, ""},
+	} {
+		d.SetAccess(tc.access)
+		if s := d.Status(); s.CanHost != (tc.reason == "") || s.Reason != tc.reason {
+			t.Errorf("access %+v: status %+v", tc.access, s)
+		}
 	}
 }
 
@@ -193,9 +190,25 @@ func (rs *roomServer) join(t *testing.T, name string) (string, int64) {
 }
 
 type roomDaemon struct {
-	Name    string `json:"name"`
-	CanHost bool   `json:"can_host"`
-	Reason  string `json:"reason"`
+	ParticipantID int64  `json:"participant_id"`
+	CanHost       bool   `json:"can_host"`
+	Reason        string `json:"reason"`
+}
+
+// hostsFor reports whether participant's own daemon is connected and can host.
+func (rs *roomServer) hostsFor(t *testing.T, participant string) bool {
+	t.Helper()
+	var r struct {
+		Me      struct{ ID int64 } `json:"me"`
+		Daemons []roomDaemon       `json:"daemons"`
+	}
+	rs.call(t, "GET", "/api/rooms/"+rs.room, participant, nil, http.StatusOK, &r)
+	for _, rd := range r.Daemons {
+		if rd.ParticipantID == r.Me.ID && rd.CanHost {
+			return true
+		}
+	}
+	return false
 }
 
 func (rs *roomServer) daemons(t *testing.T, participant string) []roomDaemon {
@@ -221,6 +234,7 @@ func TestPairAndConnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	grant(d, room.String())
 	d.SetRoom(ctx, room)
 
 	waitFor(t, "pending pairing", func() bool { return d.Status().Pairing == "pending" })
@@ -248,7 +262,7 @@ func TestPairAndConnect(t *testing.T) {
 	}
 	waitFor(t, "room sees the daemon", func() bool {
 		ds := rs.daemons(t, alice)
-		return len(ds) == 1 && ds[0].Name == "laptop" && !ds[0].CanHost && strings.HasPrefix(ds[0].Reason, "Docker is not running")
+		return len(ds) == 1 && !ds[0].CanHost && strings.HasPrefix(ds[0].Reason, "Docker is not running")
 	})
 	// Docker comes up: the heartbeat tells the room right away.
 	d.o.Docker = dockerUp
@@ -297,7 +311,6 @@ func TestRunRefreshesUntilCancelled(t *testing.T) {
 	done := make(chan struct{})
 	go func() { d.Run(ctx); close(done) }()
 	waitFor(t, "first refresh", func() bool { return d.Status().CanHost })
-	d.o.Creds.Invalidate()
 	cancel()
 	select {
 	case <-done:

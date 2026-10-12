@@ -38,11 +38,9 @@ type Turn struct {
 	ID     int64  `json:"id"`
 	RoomID string `json:"room_id"`
 	// ParticipantID pressed the button.
-	ParticipantID int64 `json:"participant_id"`
-	DaemonID      int64 `json:"-"`
-	// Host names the daemon's machine, for error messages.
-	Host   string `json:"host"`
-	Status string `json:"status"`
+	ParticipantID int64  `json:"participant_id"`
+	DaemonID      int64  `json:"-"`
+	Status        string `json:"status"`
 	// PersonaID is the room persona the turn runs. PersonaName, PersonaText, ReqModel and ReqEffort
 	// are that persona as the turn started: a change during the turn applies to the next (002-AC15).
 	PersonaID   int64  `json:"persona_id,omitempty"`
@@ -209,7 +207,7 @@ type TurnOutcome struct {
 	Report TurnReport
 }
 
-const turnCols = `SELECT id, room_id, COALESCE(participant_id, 0), COALESCE(daemon_id, 0), host, status, fresh, resume,
+const turnCols = `SELECT id, room_id, COALESCE(participant_id, 0), COALESCE(daemon_id, 0), status, fresh, resume,
 	session_id, model, message_cursor, annotation_cursor, change_cursor, prompt, error, report, started_at, ended_at,
 	COALESCE(persona_id, 0), persona_name, persona_text, req_model, req_effort, effort FROM turns`
 
@@ -217,7 +215,7 @@ func scanTurn(sc scanner) (*Turn, error) {
 	var t Turn
 	var report, started string
 	var ended sql.NullString
-	err := sc.Scan(&t.ID, &t.RoomID, &t.ParticipantID, &t.DaemonID, &t.Host, &t.Status, &t.Fresh, &t.Resume,
+	err := sc.Scan(&t.ID, &t.RoomID, &t.ParticipantID, &t.DaemonID, &t.Status, &t.Fresh, &t.Resume,
 		&t.SessionID, &t.Model, &t.MessageCursor, &t.AnnotationCursor, &t.ChangeCursor, &t.Prompt, &t.Error, &report, &started, &ended,
 		&t.PersonaID, &t.PersonaName, &t.PersonaText, &t.ReqModel, &t.ReqEffort, &t.Effort)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -263,8 +261,8 @@ func (s *Store) StartTurn(ctx context.Context, t *Turn) error {
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO turns(room_id, participant_id, daemon_id, host, status, fresh, resume, message_cursor, annotation_cursor, change_cursor, prompt, started_at,
 			persona_id, persona_name, persona_text, req_model, req_effort)
-		SELECT room_id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, id, ?, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? AND pending = 0`,
-		pid, did, t.Host, t.Status, t.Fresh, t.Resume, t.MessageCursor, t.AnnotationCursor, t.ChangeCursor, t.Prompt, t.StartedAt.Format(time.RFC3339Nano),
+		SELECT room_id, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, id, ?, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? AND pending = 0`,
+		pid, did, t.Status, t.Fresh, t.Resume, t.MessageCursor, t.AnnotationCursor, t.ChangeCursor, t.Prompt, t.StartedAt.Format(time.RFC3339Nano),
 		t.PersonaName, t.PersonaText, t.ReqModel, t.ReqEffort, t.PersonaID, t.RoomID)
 	if err != nil {
 		return fmt.Errorf("start turn: %w", err)

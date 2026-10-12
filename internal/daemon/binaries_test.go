@@ -154,7 +154,9 @@ func TestResolveRefuses(t *testing.T) {
 		{"wrong arch, relaxed", release{version: "v1.2.3", bin: wrongArch}, true, "refused: "},
 		{"not a binary at all, relaxed", release{version: "v1.2.3", bin: []byte("#!/bin/sh\necho hi\n")}, true, "executable"},
 		{"download differs from the published digest", release{version: "v1.2.3", bin: exe, sum: strings.Repeat("0", 64), bundle: trusted.Sign(t, exe)}, false, "does not match the sha256"},
-		{"older than worker mode", release{version: "v0.0.1", bin: exe, bundle: trusted.Sign(t, exe)}, false, "older than v0.0.2"},
+		{"older than worker mode", release{version: "v0.0.1", bin: exe, bundle: trusted.Sign(t, exe)}, false, "older than v0.0.3"},
+		// 003-AC14: v0.0.2 workers read the Claude credentials themselves.
+		{"reads credentials itself", release{version: "v0.0.2", bin: exe, bundle: trusted.Sign(t, exe)}, false, "v0.0.2, older than v0.0.3"},
 		{"not a semver", release{version: "latest", bin: exe}, false, "not a semver"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

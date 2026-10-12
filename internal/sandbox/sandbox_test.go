@@ -6,21 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"net/http/httptest"
-	"net/url"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"go.uber.org/zap"
-
-	"github.com/babs/grill-room/internal/creds"
-	"github.com/babs/grill-room/internal/proxy"
 )
 
 // fakeDocker records calls and answers from a table keyed by the first args.
@@ -81,15 +72,11 @@ func TestCheck(t *testing.T) {
 	}
 }
 
-func testCreds(t *testing.T, tok string, exp time.Time) *creds.Source {
-	t.Helper()
-	dir := t.TempDir()
-	body := fmt.Sprintf(`{"claudeAiOauth":{"accessToken":%q,"expiresAt":%d}}`, tok, exp.UnixMilli())
-	if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return creds.NewSource(creds.Reader{ConfigDir: dir})
-}
+// testProxy and testBearer stand for the supervisor's account proxy (003-AC14).
+const (
+	testProxy  = "172.17.0.1:4321"
+	testBearer = "sk-ant-oat01-grill-room-dummy-test"
+)
 
 func TestStartArgs(t *testing.T) {
 	for _, desktop := range []bool{false, true} {
@@ -105,9 +92,8 @@ func TestStartArgs(t *testing.T) {
 				}
 				return nil, nil
 			}}
-			up, _ := url.Parse("https://api.anthropic.com")
-			s := New(Config{Image: "img", Name: "t1", Host: "h", Upstream: up, Limits: Limits{CPUs: "2", Memory: "4g", EgressCPUs: "0.5", EgressMemory: "256m"}},
-				f.run, testCreds(t, "real-secret", time.Now().Add(time.Hour)), zap.NewNop())
+			s := New(Config{Image: "img", Name: "t1", Proxy: testProxy, Limits: Limits{CPUs: "2", Memory: "4g", EgressCPUs: "0.5", EgressMemory: "256m"}},
+				f.run, zap.NewNop())
 			if err := s.Start(context.Background()); err != nil {
 				t.Fatal(err)
 			}
@@ -124,13 +110,10 @@ func TestStartArgs(t *testing.T) {
 					t.Errorf("sandbox run lacks %q: %v", want, run)
 				}
 			}
+			// 003-AC14: the relay dials the supervisor's account proxy it was given.
 			relay := f.find("run", "-d", "--name", "grill-room-t1-relay")
-			wantGW := "host.docker.internal:127.0.0.1"
-			if desktop {
-				wantGW = "host.docker.internal:host-gateway"
-			}
-			if !slices.Contains(relay, wantGW) {
-				t.Errorf("relay = %v, want %s", relay, wantGW)
+			if !slices.Contains(relay, "host.docker.internal:172.17.0.1") || !slices.Contains(relay, "TCP:host.docker.internal:4321") {
+				t.Errorf("relay = %v", relay)
 			}
 			// 002-AC34 002-AC35: tools reach squid as "egress", which alone has a route out; Claude
 			// Code's base URL host stays off the proxy. Both containers are capped.
@@ -152,10 +135,10 @@ func TestStartArgs(t *testing.T) {
 					t.Errorf("sandbox run lacks %q: %v", want, run)
 				}
 			}
-			// 001-AC25: no argument of any docker call carries the real token.
+			// 001-AC25: no argument of any docker call carries a bearer, dummy or not.
 			for _, c := range f.calls {
-				if strings.Contains(strings.Join(c, " "), "real-secret") {
-					t.Fatalf("token in docker args: %v", c)
+				if strings.Contains(strings.Join(c, " "), "sk-ant") {
+					t.Fatalf("bearer in docker args: %v", c)
 				}
 			}
 		})
@@ -164,24 +147,33 @@ func TestStartArgs(t *testing.T) {
 
 func TestStartFailsWithoutDocker(t *testing.T) {
 	f := &fakeDocker{reply: func([]string) ([]byte, error) { return nil, ErrNoDocker }}
-	up, _ := url.Parse("https://x")
-	s := New(Config{Image: "img", Name: "t", Upstream: up}, f.run, testCreds(t, "x", time.Now().Add(time.Hour)), zap.NewNop())
+	s := New(Config{Image: "img", Name: "t", Proxy: testProxy}, f.run, zap.NewNop())
 	if err := s.Start(context.Background()); err == nil || err.Error() != "Docker is not installed" {
 		t.Fatalf("err = %v", err)
 	}
 }
 
-// 001-AC29: an expired host token fails the turn at once, before any container work.
-func TestRunClaudeExpiredToken(t *testing.T) {
-	f := &fakeDocker{}
-	up, _ := url.Parse("https://x")
-	s := New(Config{Image: "img", Name: "t", Host: "laptop", Upstream: up}, f.run, testCreds(t, "x", time.Now().Add(-time.Minute)), zap.NewNop())
-	_, err := s.RunClaude(context.Background(), Request{Prompt: "say ok"})
-	if !errors.Is(err, ErrCredentialsExpired) || err.Error() != "Claude credentials expired on laptop" {
-		t.Fatalf("err = %v", err)
-	}
-	if len(f.calls) != 0 {
-		t.Fatalf("docker called: %v", f.calls)
+// 003-AC14: a sandbox with no proxy or no bearer runs nothing: the worker had no account access.
+func TestRunClaudeWithoutAccess(t *testing.T) {
+	for _, tc := range []struct {
+		name, proxy, bearer, want string
+	}{
+		{"no bearer", testProxy, "", "no Claude account proxy for this sandbox"},
+		{"no proxy", "", testBearer, "no Claude account proxy for this sandbox"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeDocker{reply: func(args []string) ([]byte, error) {
+				if args[0] == "info" {
+					return []byte("29|Linux"), nil
+				}
+				return nil, nil
+			}}
+			s := New(Config{Image: "img", Name: "t", Proxy: tc.proxy}, f.run, zap.NewNop())
+			_, err := s.RunClaude(context.Background(), Request{Prompt: "say ok", Bearer: tc.bearer})
+			if err == nil || !strings.HasPrefix(err.Error(), tc.want) || f.find("run") != nil {
+				t.Fatalf("err = %v, calls = %v", err, f.calls)
+			}
+		})
 	}
 }
 
@@ -197,10 +189,9 @@ func TestRunClaudeArgsAndStubs(t *testing.T) {
 		}
 		return nil, nil
 	}}
-	up, _ := url.Parse("https://x")
-	s := New(Config{Image: "img", Name: "t", Upstream: up}, f.run, testCreds(t, "real-secret", time.Now().Add(time.Hour)), zap.NewNop())
+	s := New(Config{Image: "img", Name: "t", Proxy: testProxy}, f.run, zap.NewNop())
 	defer s.Close(context.Background())
-	res, err := s.RunClaude(context.Background(), Request{Prompt: "say ok", Model: "haiku", Resume: "abc", Args: []string{"--allowedTools", "Read"}})
+	res, err := s.RunClaude(context.Background(), Request{Prompt: "say ok", Model: "haiku", Resume: "abc", Args: []string{"--allowedTools", "Read"}, Bearer: testBearer})
 	if err != nil || res.Result != "ok" || res.SessionID != "s1" {
 		t.Fatalf("res=%+v err=%v", res, err)
 	}
@@ -208,7 +199,7 @@ func TestRunClaudeArgsAndStubs(t *testing.T) {
 	if c := f.find("exec", "-i", "grill-room-t", "claude"); !slices.Equal(c, want) {
 		t.Fatalf("claude args = %v", c)
 	}
-	if len(f.stdin) != 2 || f.stdin[1] != "say ok" || !strings.Contains(f.stdin[0], "profileFetchedAt") || !strings.Contains(f.stdin[0], s.dummy) || strings.Contains(f.stdin[0], "real-secret") {
+	if len(f.stdin) != 2 || f.stdin[1] != "say ok" || !strings.Contains(f.stdin[0], "profileFetchedAt") || !strings.Contains(f.stdin[0], testBearer) {
 		t.Fatalf("stubs tar wrong")
 	}
 }
@@ -227,10 +218,9 @@ func TestRunClaudePersona(t *testing.T) {
 		}
 		return nil, nil
 	}}
-	up, _ := url.Parse("https://x")
-	s := New(Config{Image: "img", Name: "t", Upstream: up}, f.run, testCreds(t, "real-secret", time.Now().Add(time.Hour)), zap.NewNop())
+	s := New(Config{Image: "img", Name: "t", Proxy: testProxy}, f.run, zap.NewNop())
 	defer s.Close(context.Background())
-	if _, err := s.RunClaude(context.Background(), Request{Prompt: "go", System: "You are Secretary.", Model: "sonnet", Effort: "xhigh"}); err != nil {
+	if _, err := s.RunClaude(context.Background(), Request{Prompt: "go", System: "You are Secretary.", Model: "sonnet", Effort: "xhigh", Bearer: testBearer}); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"exec", "-i", "grill-room-t", "claude", "-p", "--output-format", "json", "--model", "sonnet", "--effort", "xhigh",
@@ -245,7 +235,7 @@ func TestRunClaudePersona(t *testing.T) {
 
 func TestReadSessionValidates(t *testing.T) {
 	f := &fakeDocker{}
-	s := New(Config{Name: "t", Upstream: &url.URL{}}, f.run, nil, zap.NewNop())
+	s := New(Config{Name: "t", Proxy: testProxy}, f.run, zap.NewNop())
 	for _, id := range []string{"", "../../etc/passwd", "60DC4912-36EC-4225-A44A-6A6C1ED85B1B"} {
 		if _, err := s.ReadSession(context.Background(), id, 0); err == nil {
 			t.Errorf("id %q accepted", id)
@@ -281,8 +271,7 @@ func TestFailedStartCleansUpWithExpiredContext(t *testing.T) {
 		}
 		return f.run(ctx, stdin, args...)
 	}
-	up, _ := url.Parse("https://x")
-	s := New(Config{Image: "img", Name: "t", Upstream: up}, run, testCreds(t, "x", time.Now().Add(time.Hour)), zap.NewNop())
+	s := New(Config{Image: "img", Name: "t", Proxy: testProxy}, run, zap.NewNop())
 	ctx, cancel := context.WithCancel(context.Background())
 	f.reply = func(next func([]string) ([]byte, error)) func([]string) ([]byte, error) {
 		return func(args []string) ([]byte, error) {
@@ -301,7 +290,7 @@ func TestFailedStartCleansUpWithExpiredContext(t *testing.T) {
 }
 
 // fakeSandbox answers info and the bridge inspect, and claude with reply.
-func fakeSandbox(t *testing.T, tok string, exp time.Time, claude func(ctx context.Context) ([]byte, error)) (*Sandbox, *fakeDocker) {
+func fakeSandbox(t *testing.T, claude func(ctx context.Context) ([]byte, error)) (*Sandbox, *fakeDocker) {
 	t.Helper()
 	f := &fakeDocker{}
 	f.reply = func(args []string) ([]byte, error) {
@@ -320,49 +309,27 @@ func fakeSandbox(t *testing.T, tok string, exp time.Time, claude func(ctx contex
 		}
 		return f.run(ctx, stdin, args...)
 	}
-	up, _ := url.Parse("https://x")
-	s := New(Config{Image: "img", Name: "t", Host: "laptop", Upstream: up}, run, testCreds(t, tok, exp), zap.NewNop())
+	s := New(Config{Image: "img", Name: "t", Proxy: testProxy}, run, zap.NewNop())
 	t.Cleanup(func() { s.Close(context.Background()) })
 	return s, f
 }
 
-// 001-AC29: a turn that fails after the proxy saw an upstream 401 reports expired credentials;
-// other failures keep their own message.
+// A failed claude run keeps its own message.
 func TestRunClaudeFailures(t *testing.T) {
-	future := time.Now().Add(time.Hour)
 	for _, tc := range []struct {
 		name    string
 		out     string
 		err     error
-		saw401  bool
 		want    string
 		wantRes bool
 	}{
-		{"401 then exit 1", `{"is_error":true,"result":"OAuth token invalid"}`, errors.New("exit status 1"), true, "Claude credentials expired on laptop", false},
-		{"401 then is_error", `{"is_error":true,"subtype":"success","result":"API Error: 401"}`, nil, true, "Claude credentials expired on laptop", false},
-		{"exit without 401", `garbage`, errors.New("exit status 2"), false, "claude: exit status 2", false},
-		{"not json", `garbage`, nil, false, "claude output:", false},
-		{"is_error without 401", `{"is_error":true,"subtype":"error_max_turns","result":"stopped"}`, nil, false, "claude: error_max_turns: stopped", true},
+		{"exit", `garbage`, errors.New("exit status 2"), "claude: exit status 2", false},
+		{"not json", `garbage`, nil, "claude output:", false},
+		{"is_error", `{"is_error":true,"subtype":"error_max_turns","result":"stopped"}`, nil, "claude: error_max_turns: stopped", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, _ := fakeSandbox(t, "real", future, func(context.Context) ([]byte, error) { return []byte(tc.out), tc.err })
-			// The turn's request goes through a real proxy to an upstream answering 401.
-			if tc.saw401 {
-				up401 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) }))
-				defer up401.Close()
-				upURL, _ := url.Parse(up401.URL)
-				s.proxy = proxy.New(upURL, s.src, s.dummy, zap.NewNop())
-				inner := s.run
-				s.run = func(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
-					if args[0] == "exec" && slices.Contains(args, "claude") {
-						req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/messages", http.NoBody)
-						req.Header.Set("Authorization", "Bearer "+s.dummy)
-						s.proxy.ServeHTTP(httptest.NewRecorder(), req)
-					}
-					return inner(ctx, stdin, args...)
-				}
-			}
-			res, err := s.RunClaude(context.Background(), Request{Prompt: "p"})
+			s, _ := fakeSandbox(t, func(context.Context) ([]byte, error) { return []byte(tc.out), tc.err })
+			res, err := s.RunClaude(context.Background(), Request{Prompt: "p", Bearer: testBearer})
 			if err == nil || !strings.HasPrefix(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
 			}
@@ -375,24 +342,15 @@ func TestRunClaudeFailures(t *testing.T) {
 
 func TestRunClaudeCancelKillsClaude(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s, f := fakeSandbox(t, "real", time.Now().Add(time.Hour), func(context.Context) ([]byte, error) {
+	s, f := fakeSandbox(t, func(context.Context) ([]byte, error) {
 		cancel()
 		return nil, context.Canceled
 	})
-	if _, err := s.RunClaude(ctx, Request{Prompt: "p"}); !errors.Is(err, context.Canceled) {
+	if _, err := s.RunClaude(ctx, Request{Prompt: "p", Bearer: testBearer}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v", err)
 	}
 	if f.find("exec", "grill-room-t", "pkill", "-x", "claude") == nil {
 		t.Fatalf("claude not killed: %v", f.calls)
-	}
-}
-
-func TestRunClaudeUnreadableCreds(t *testing.T) {
-	f := &fakeDocker{}
-	s := New(Config{Name: "t", Host: "laptop", Upstream: &url.URL{}}, f.run, creds.NewSource(creds.Reader{ConfigDir: t.TempDir()}), zap.NewNop())
-	_, err := s.RunClaude(context.Background(), Request{Prompt: "p"})
-	if err == nil || !strings.HasPrefix(err.Error(), "Claude credentials unavailable on laptop") || len(f.calls) != 0 {
-		t.Fatalf("err = %v, calls = %v", err, f.calls)
 	}
 }
 
@@ -430,7 +388,7 @@ func TestScanAndIsolated(t *testing.T) {
 		}
 		return nil, nil
 	}}
-	s := New(Config{Name: "t", Upstream: &url.URL{}}, f.run, nil, zap.NewNop())
+	s := New(Config{Name: "t", Proxy: testProxy}, f.run, zap.NewNop())
 	counts, err := s.Scan(context.Background(), secret)
 	if err != nil || counts["filesystem"] != 2 || counts["volumes"] != 0 || counts["inspect"] != 1 {
 		t.Fatalf("Scan = %v, %v", counts, err)
@@ -481,5 +439,33 @@ func TestResultModel(t *testing.T) {
 		if got := r.Model(); got != tc.want {
 			t.Errorf("%s: Model() = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// 003-AC14: an account proxy listens where the relays reach it: the host's loopback behind Docker
+// Desktop's host-gateway, the bridge gateway on a native engine; nowhere without Docker.
+func TestHostAddr(t *testing.T) {
+	for _, tc := range []struct {
+		name, info, bridge     string
+		err                    error
+		bind, gateway, wantErr string
+	}{
+		{"desktop", "28|Docker Desktop", "", nil, "127.0.0.1", "host-gateway", ""},
+		{"native", "29|Linux", "172.17.0.1\n", nil, "172.17.0.1", "172.17.0.1", ""},
+		{"bad bridge", "29|Linux", "nope", nil, "", "", "is not an IP"},
+		{"no docker", "", "", ErrNoDocker, "", "", "Docker is not installed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeDocker{reply: func(args []string) ([]byte, error) {
+				if args[0] == "info" {
+					return []byte(tc.info), tc.err
+				}
+				return []byte(tc.bridge), nil
+			}}
+			bind, gw, err := HostAddr(context.Background(), f.run)
+			if bind != tc.bind || gw != tc.gateway || (err == nil) != (tc.wantErr == "") || (err != nil && !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("HostAddr = %q %q %v", bind, gw, err)
+			}
+		})
 	}
 }

@@ -198,3 +198,13 @@ func TestRunWithoutHandoffSocket(t *testing.T) {
 		t.Fatalf("run: %v\n%s", err, stderr.String())
 	}
 }
+
+// 003-AC14: workers get the supervisor's environment minus anything that may carry a Claude token
+// or name an account.
+func TestWorkerEnv(t *testing.T) {
+	got := workerEnv([]string{"PATH=/bin", "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-x", "ANTHROPIC_API_KEY=k", "ANTHROPIC_AUTH_TOKEN=t",
+		"CLAUDE_CONFIG_DIR=/home/a/.claude-work", "GRILL_ROOM_DAEMON_STATE_DIR=/s", "HOME=/home/a"})
+	if strings.Join(got, " ") != "PATH=/bin GRILL_ROOM_DAEMON_STATE_DIR=/s HOME=/home/a" {
+		t.Fatalf("worker env %v", got)
+	}
+}

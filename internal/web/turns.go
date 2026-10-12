@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"net/http"
 	"regexp"
 	"slices"
@@ -160,13 +159,13 @@ func (s *Server) launch(ctx context.Context, room *store.Room, persona *store.Ro
 	if err != nil {
 		return nil, err
 	}
-	t.ParticipantID, t.DaemonID, t.Host = pid, host.id, host.Name
+	t.ParticipantID, t.DaemonID = pid, host.id
 	if err := s.bus.Store.StartTurn(ctx, t); err != nil {
 		return nil, err
 	}
 	// The daemon may have dropped after the presence check, its cleanup finding no turn to fail.
 	if h := s.hostDaemon(room.ID, room.HostParticipantID); h == nil || h.id != host.id {
-		s.endTurn(ctx, room.ID, t.ID, "the host daemon on "+host.Name+" disconnected")
+		s.endTurn(ctx, room.ID, t.ID, "the host's daemon disconnected")
 	}
 	// Backstop for a daemon that neither answers nor drops its stream.
 	time.AfterFunc(s.opts.TurnTimeout+turnGrace, func() {
@@ -418,7 +417,7 @@ func (s *Server) getWorkspace(w http.ResponseWriter, r *http.Request, d *store.D
 		if n := s.fallbacks[reason]; n != nil {
 			n.Add(1)
 		}
-		s.log.Warn("workspace_fallback", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.String("daemon", d.Name),
+		s.log.Warn("workspace_fallback", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.Int64("daemon", d.ID),
 			zap.String("reason", truncate(reason, 32)))
 	}
 	w.Header().Set("Content-Type", "application/x-tar")
@@ -510,7 +509,7 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 	var res turn.Result
 	if !decodeLimit(w, r, &res, s.opts.MaxResultBytes) {
 		// Answered already (413 or 400): the turn cannot finish with what the daemon sent.
-		s.failTurn(r.Context(), d.RoomID, t.ID, fmt.Sprintf("the result from %s was refused: too large or malformed", d.Name))
+		s.failTurn(r.Context(), d.RoomID, t.ID, "the result from the host's daemon was refused: too large or malformed")
 		return
 	}
 	if res.Error != "" {

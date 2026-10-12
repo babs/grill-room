@@ -36,3 +36,8 @@ h3 { font-size: 0.95rem; margin: 1rem 0 0.3rem; }
 #channel-form, #key-form, #relax-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem 1rem; }
 #key-form label { display: flex; flex-direction: column; gap: 0.2rem; }
 #dev-keys { margin: 0 0 0.6rem; padding-left: 1.2rem; }
+#accounts { margin: 0 0 0.6rem; padding-left: 1.2rem; }
+#accounts li { margin: 0.3rem 0; }
+#account-form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; }
+#account-warnings { margin: 0; padding: 0.6rem 1rem 0.6rem 2.2rem; background: var(--amber); }
+.account-map { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin: 0.2rem 0; font-size: 0.85rem; }

@@ -61,7 +61,7 @@ func seed(t *testing.T, s *Store, room string) *Participant {
 	if _, err := s.CreateAnnotation(ctx, room, d.ID, 2, &anchor.Anchor{Kind: anchor.KindText, Exact: "v2"}, msg, 1<<20); err != nil {
 		t.Fatal(err)
 	}
-	dm, err := s.PairDaemon(ctx, room, p.ID, "laptop", "dmn-"+room)
+	dm, err := s.PairDaemon(ctx, room, p.ID, "dmn-"+room)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func seed(t *testing.T, s *Store, room string) *Participant {
 	if err := s.Enqueue(ctx, &QueuedTurn{RoomID: room, PersonaID: ps[0].ID, ParticipantID: p.ID}); err != nil {
 		t.Fatal(err)
 	}
-	turn := &Turn{RoomID: room, ParticipantID: p.ID, DaemonID: dm.ID, Host: "laptop", Prompt: "go", PersonaID: ps[0].ID, PersonaName: ps[0].Name}
+	turn := &Turn{RoomID: room, ParticipantID: p.ID, DaemonID: dm.ID, Prompt: "go", PersonaID: ps[0].ID, PersonaName: ps[0].Name}
 	if err := s.StartTurn(ctx, turn); err != nil {
 		t.Fatal(err)
 	}

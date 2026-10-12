@@ -3,9 +3,11 @@ package daemon
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"slices"
@@ -20,6 +22,10 @@ import (
 // SupervisorOptions wires a Supervisor. Zero durations take the defaults.
 type SupervisorOptions struct {
 	Paths Paths
+	// Host is this machine's name, shown on the admin page only.
+	Host string
+	// Accounts are the Claude accounts and their proxies; nil runs workers with no Claude access.
+	Accounts *Accounts
 	// Worker is the configuration every worker starts from; the supervisor fills in its instance.
 	Worker  WorkerConfig
 	Version string
@@ -96,6 +102,9 @@ type worker struct {
 	version, trust, devKey, served string
 	// reload restarts the worker at once, for a new binary or a new trust policy.
 	reload bool
+	// sentAccess is the last access the worker took, as JSON; accessMu orders the pushes.
+	sentAccess []byte
+	accessMu   sync.Mutex
 }
 
 // InstanceView is an instance as the admin page lists it.
@@ -111,11 +120,17 @@ type InstanceView struct {
 	Version  string   `json:"version,omitempty"`
 	Trust    string   `json:"trust,omitempty"`
 	// AcceptUnsigned is the relax toggle: the instance's binaries run even unsigned (003-AC4).
-	AcceptUnsigned bool       `json:"accept_unsigned"`
-	Room           string     `json:"room,omitempty"`
-	Connection     string     `json:"connection,omitempty"`
-	Metrics        *Metrics   `json:"metrics,omitempty"`
-	LastTurn       *TurnEvent `json:"last_turn,omitempty"`
+	AcceptUnsigned bool `json:"accept_unsigned"`
+	// Account is the instance's default account; RoomAccounts the rooms that use another (003-AC13).
+	Account      string            `json:"account"`
+	RoomAccounts map[string]string `json:"room_accounts,omitempty"`
+	// Requests counts what the worker sent through the accounts' proxies; CutOff shuts it out (003-AC15).
+	Requests   int64      `json:"requests"`
+	CutOff     bool       `json:"cut_off,omitempty"`
+	Room       string     `json:"room,omitempty"`
+	Connection string     `json:"connection,omitempty"`
+	Metrics    *Metrics   `json:"metrics,omitempty"`
+	LastTurn   *TurnEvent `json:"last_turn,omitempty"`
 }
 
 // errRefused is a worker the handshake turned down; restarting it would not help.
@@ -174,6 +189,9 @@ func (s *Supervisor) Start(ctx context.Context) {
 	}
 	if s.o.Bins != nil {
 		s.wg.Go(func() { s.updateLoop(ctx) })
+	}
+	if s.o.Accounts != nil {
+		s.wg.Go(func() { s.accountsLoop(ctx) })
 	}
 }
 
@@ -345,13 +363,29 @@ func (w *worker) serve(conn *Conn, cmd *exec.Cmd, log *zap.Logger) error {
 		_ = conn.Send(Msg{Type: "refused", Proto: Proto, Error: reason})
 		return errRefused{reason}
 	}
+	// Before the worker shows as running: a request sent ahead of the config would kill it, and
+	// finding where the proxies listen can take a Docker call. A room added meanwhile gets its
+	// proxy with the next access push.
+	var access *Access
+	if agreed >= 2 && s.o.Accounts != nil {
+		s.mu.Lock()
+		in := w.inst
+		in.Rooms, in.RoomAccounts = slices.Clone(in.Rooms), maps.Clone(in.RoomAccounts)
+		s.mu.Unlock()
+		a := s.access(in)
+		access = &a
+	}
 	s.mu.Lock()
 	cfg := s.o.Worker
 	cfg.Instance = w.inst.ID
 	cfg.ConfigDir, cfg.StateDir, cfg.CacheDir = s.o.Paths.InstanceConfig(w.inst.ID), s.o.Paths.InstanceState(w.inst.ID), s.o.Paths.InstanceCache(w.inst.ID)
-	cfg.Rooms, cfg.Pair = slices.Clone(w.inst.Rooms), w.pair
+	cfg.Rooms, cfg.Pair, cfg.Access = slices.Clone(w.inst.Rooms), w.pair, access
 	w.pair = ""
 	w.state, w.err, w.pid, w.proto, w.conn, w.pending = "running", "", cmd.Process.Pid, agreed, conn, map[int64]chan Msg{}
+	w.sentAccess = nil
+	if access != nil {
+		w.sentAccess, _ = json.Marshal(access)
+	}
 	s.mu.Unlock()
 	log.Info("worker_ready", zap.String("version", hello.Version), zap.Int("proto", agreed))
 	if err := conn.Send(Msg{Type: "config", Proto: Proto, Version: s.o.Version, Config: &cfg}); err != nil {
@@ -371,6 +405,8 @@ func (w *worker) serve(conn *Conn, cmd *exec.Cmd, log *zap.Logger) error {
 		}
 		switch m.Type {
 		case "status":
+			// Docker may have come up, or the room changed: the proxies follow.
+			go s.pushAccess(w)
 			w.set(func() {
 				w.status = m.Status
 				// The instance moved to another version: run it (003-AC7).
@@ -469,6 +505,12 @@ func (w *worker) request(ctx context.Context, m Msg) (Msg, error) {
 	}
 }
 
+func (w *worker) isStarting() bool {
+	w.s.mu.Lock()
+	defer w.s.mu.Unlock()
+	return w.state == "starting"
+}
+
 // describe says why the worker is not running; the caller holds mu.
 func (w *worker) describe() string {
 	if w.err != "" {
@@ -538,9 +580,9 @@ func (s *Supervisor) SetRoom(ctx context.Context, room Room) {
 func (s *Supervisor) Status() (st Status) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st = Status{Host: s.o.Worker.Host, Version: s.o.Version, Connection: "offline", Allowlist: []string{}}
+	st = Status{Host: s.o.Host, Version: s.o.Version, Connection: "offline", Allowlist: []string{}}
 	// The update on offer is the supervisor's own, from its channel (003-AC5).
-	defer func() { st.Update = s.upd.view() }()
+	defer func() { st.Update, st.Host = s.upd.view(), s.o.Host }()
 	w := s.workers[s.current]
 	if w == nil {
 		return st
@@ -568,7 +610,10 @@ func (s *Supervisor) Instances() ([]InstanceView, string) {
 	for _, w := range s.workers {
 		v := InstanceView{ID: w.inst.ID, URL: w.inst.URL, Rooms: slices.Clone(w.inst.Rooms), State: w.state, Error: w.err, PID: w.pid,
 			Proto: w.proto, Restarts: w.restarts, Metrics: w.metrics, LastTurn: w.lastTurn, Version: w.version, Trust: w.trust,
-			AcceptUnsigned: w.inst.Relax}
+			AcceptUnsigned: w.inst.Relax, Account: w.inst.accountFor(""), RoomAccounts: maps.Clone(w.inst.RoomAccounts), CutOff: w.inst.CutOff}
+		if s.o.Accounts != nil {
+			v.Requests = s.o.Accounts.Requests(w.inst.ID)
+		}
 		if w.status != nil {
 			v.Room, v.Connection = w.status.Room, w.status.Connection
 		}
@@ -596,7 +641,8 @@ func (s *Supervisor) SetAllowlist(ctx context.Context, list []string) error {
 
 // Denied lists the egress requests the current room's sandbox was refused.
 func (s *Supervisor) Denied(ctx context.Context, n int) ([]sandbox.Denied, error) {
-	if s.currentWorker() == nil {
+	// No worker, or one still starting, has refused nothing yet.
+	if w := s.currentWorker(); w == nil || w.isStarting() {
 		return []sandbox.Denied{}, nil
 	}
 	r, err := s.requestCurrent(ctx, Msg{Type: "denied", N: n})
