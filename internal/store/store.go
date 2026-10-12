@@ -105,6 +105,9 @@ type Message struct {
 	ChangeSeq int64 `json:"change_seq,omitempty"`
 	// TurnID is the turn whose synthesis, failure or stop the message tells (005-AC4).
 	TurnID int64 `json:"-"`
+	// Named are the personas and members the line names with @name, as the server's rule reads it:
+	// the page draws them as chips (005-AC27).
+	Named []Named `json:"named,omitempty"`
 	// Mentions are where the turns this line's @mentions queued stand, as the event stream's
 	// replay sends them: the chips stay with a line however old (005-AC4).
 	Mentions []MentionState `json:"mentions,omitempty"`

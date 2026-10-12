@@ -52,6 +52,7 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 - [x] **AC2** Typing `@` in the message box suggests the room's personas first, then participants, filtered as you type. It works with keyboard and touch.
 - [ ] **AC3** A message mentioning a persona that cannot run gets a notice visible only to its author, with the reason: no right to trigger agents, no host online, or unknown persona. A human mention resets the chain (002-AC26), so it never meets a paused chain.
 - [ ] **AC4** A message whose mention queued a turn shows "→ @Persona" with that turn's live state (queued, running, done, failed, stopped), linked to the synthesis. The link between the message and its turn is stored, so every message keeps its chip after a reload, however old, and an export carries it (the export format moves to 2; format 1 still imports).
+- [ ] **AC27** In the chat, `@Persona` shows as a chip with the persona's badge and colour, and `@Person` as a chip with that person's name. Only a persona or member of the room makes a chip; any other `@name` stays plain text. The match is case-insensitive and is the server's (`mentionRe`): the server names the mentions of each line, and the page only draws them. A line mentioning the viewer gets a highlighted background and an accent bar, and counts as a mention for the unread title (AC12) and for push (AC24). Chips are reachable by keyboard and read by screen readers, and the text still copies as `@Name`. Chips are DOM nodes; the line's text stays escaped.
 - [x] **AC5** Whoever started a turn, the host or a room admin can stop it while it runs. The daemon kills `claude` in the sandbox. The turn ends as "stopped" with nothing applied: no revision, no synthesis, no replies. The persona's next turn resumes from the server's session copy, and a stopped turn is not a chain link.
 
 ### Presence and audio
@@ -110,7 +111,7 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 
 ### Phase 4 — Self-rename, docs window, unread, modals
 - Work: self-rename, the document manager in its own window, the unread title count, modal dismissal, document rename and soft delete, the stored mention chips.
-- **Covers**: AC1, AC3 (text), AC4 (stored link), AC11, AC12, AC13, AC15, AC16, AC17, AC21, AC24, AC25, AC26
+- **Covers**: AC1, AC3 (text), AC4 (stored link), AC11, AC12, AC13, AC15, AC16, AC17, AC21, AC24, AC25, AC26, AC27
 - **Data model impact**: the message author snapshot gives the name history; `profiles.name`; `push_subscriptions`; VAPID keys in instance settings; `documents.deleted_at` and a change counter; `document_renames`; `message_turns` keeps the final state of an imported mention; export format 2
 - **DoD**: e2e for each, at phone and desktop width; push encryption (RFC 8291) and VAPID JWT tested against a local test push endpoint; a real notification received on an Android phone from the lab.
 
@@ -139,5 +140,6 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 - Manage opens for every member, who sees only the Glossary tab; the admin tabs stay admin-only (user, 2026-10-13).
 - AC3 drops "chain paused": a human mention resets the chain, so it never meets a paused one (user, 2026-10-13).
 - The mention to turn link is stored, not kept as the latest 200 in memory, and travels in exports (user, 2026-10-13).
+- Mentions show as chips, resolved by the server's rule only, and a line mentioning the viewer is highlighted (user, 2026-10-13).
 - Documents: any member renames, room admins soft-delete and restore; only the room's deletion purges (user, 2026-10-13).
 - Test campaigns run throttled on the workstation (`nice`, `ionice`, CPU cap, no stress); repetition goes to CI.

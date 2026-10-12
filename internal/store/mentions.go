@@ -20,6 +20,14 @@ type MentionState struct {
 	LineID int64 `json:"line_id,omitempty"`
 }
 
+// Named is one @name of a line that names a persona or a member of its room (005-AC27): At is the
+// text as written, "@grill", and one of PersonaID and ParticipantID is set.
+type Named struct {
+	At            string `json:"at"`
+	PersonaID     int64  `json:"persona_id,omitempty"`
+	ParticipantID int64  `json:"participant_id,omitempty"`
+}
+
 // MentionCancelled is the status of a mention whose queued turn was dropped before it ran.
 const MentionCancelled = "cancelled"
 

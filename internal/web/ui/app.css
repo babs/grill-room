@@ -397,3 +397,12 @@ body.docs-window:has(#viewer[hidden]) .layout > aside { flex: 1; width: auto; bo
 #doc-rename-form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; padding: 0.4rem 1rem; border-bottom: 1px solid var(--line); font-size: 0.9rem; }
 #doc-rename-form input { min-width: 12rem; padding: 0.3rem 0.5rem; }
 #doc-rename-status { color: #b3261e; font-size: 0.85rem; }
+
+/* Mention chips and the lines that mention you (005-AC27). The badge is drawn, not text: a copy
+   of the line reads "@Grill". */
+mark.mention-chip { padding: 0 0.3em; border-radius: 0.6em; background: #e3f4f1; color: var(--teal); font-weight: 600; }
+mark.mention-chip.persona { background: color-mix(in srgb, var(--persona, var(--teal)) 15%, white); color: var(--persona, var(--teal)); }
+mark.mention-chip.persona[data-badge]::before { content: attr(data-badge) " "; }
+mark.mention-chip.me { background: var(--amber); color: var(--ink); }
+mark.mention-chip:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.msg.mentions-me { background: #fff8e1; box-shadow: inset 3px 0 0 var(--amber); }

@@ -77,7 +77,12 @@ func (s *Server) editMessage(w http.ResponseWriter, r *http.Request, sess sessio
 	}
 	s.bus.Notify(sess.p.RoomID)
 	s.log.Info("message_edited", zap.String("room", sess.p.RoomID), zap.Int64("message", id), zap.Int64("participant", sess.p.ID))
-	writeJSON(w, http.StatusOK, viewMessage(*m))
+	// The page redraws the line from this answer: with its chips (005-AC27).
+	edited := []store.Message{*m}
+	if err := s.nameMentions(r.Context(), sess.p.RoomID, edited); err != nil {
+		s.log.Warn("name_mentions_failed", zap.String("room", sess.p.RoomID), zap.Error(err))
+	}
+	writeJSON(w, http.StatusOK, viewMessage(edited[0]))
 }
 
 // deleteMessage soft-deletes an author's text or voice line.

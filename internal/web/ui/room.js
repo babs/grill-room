@@ -103,20 +103,24 @@ new ResizeObserver(() => { if (pinned) messages.scrollTop = messages.scrollHeigh
 const loadedAt = Date.now();
 const voiceKey = 'grill-room-count-voice';
 let unread = 0;
+// unreadMe: one of the unread lines mentions the viewer (005-AC27).
+let unreadMe = false;
 
 function showTitle() {
-  document.title = (unread ? '(' + unread + ') ' : '') + (docsMode ? 'Documents · ' : '') + roomName + ' · grill-room';
+  document.title = (unread ? '(' + unread + (unreadMe ? ' @' : '') + ') ' : '') + (docsMode ? 'Documents · ' : '') + roomName + ' · grill-room';
 }
 
 function countUnread(m) {
   if (docsMode || document.hasFocus() || new Date(m.ts).getTime() < loadedAt || String(m.participant_id) === myID) return;
-  if (m.kind === 'text' || m.kind === 'agent' || (m.kind === 'voice' && localStorage.getItem(voiceKey) === '1')) {
+  if (m.kind === 'text' || m.kind === 'agent' || (m.kind === 'voice' && localStorage.getItem(voiceKey) === '1') || namesMe(m)) {
     unread++;
+    unreadMe = unreadMe || namesMe(m);
     showTitle();
   }
 }
 window.addEventListener('focus', () => {
   unread = 0;
+  unreadMe = false;
   showTitle();
 });
 $('count-voice').checked = localStorage.getItem(voiceKey) === '1';
@@ -252,6 +256,8 @@ function renderMessage(m) {
   }
   // Rendered and sanitised by the server (render.MessageHTML).
   body.innerHTML = m.html || '';
+  drawMentions(body, m.named || []);
+  if (namesMe(m)) li.classList.add('mentions-me');
   if (m.edited_at) {
     meta.append(' ', button('(edited)', 'Show earlier versions', () => toggleVersions(li, m).catch(console.error)));
   }
@@ -308,6 +314,63 @@ $('rename-form').addEventListener('submit', (e) => {
     return loadRoom();
   }).catch((err) => { $('rename-status').textContent = err.message; });
 });
+
+// Mention chips (005-AC27). The server names the line's @mentions by its one rule (mentionRe in
+// mentions.go); the page only finds those words in the rendered text. A word boundary is what
+// mentionRe takes: before, none of [\p{L}\p{N}_@]; after, none of [\p{L}\p{N}_-]
+// (TestChipsFollowMentionRe checks these classes match the server's).
+const notBefore = /[\p{L}\p{N}_@]/u;
+const notAfter = /[\p{L}\p{N}_-]/u;
+const namesMe = (m) => (m.named || []).some((n) => String(n.participant_id) === myID);
+
+function chip(n) {
+  const el = document.createElement('mark');
+  el.className = 'mention-chip';
+  el.tabIndex = 0;
+  el.textContent = n.at;
+  const p = n.persona_id ? null : participants.find((x) => x.id === n.participant_id);
+  if (n.persona_id) {
+    el.classList.add('persona');
+    el.dataset.persona = n.persona_id;
+    paintChip(el);
+  } else {
+    el.classList.add(String(n.participant_id) === myID ? 'me' : 'person');
+    el.title = (p ? p.name : n.at.slice(1)) + (String(n.participant_id) === myID ? ', you' : '');
+  }
+  return el;
+}
+
+// paintChip gives a persona chip its persona's badge and colour, once the agent state names them.
+function paintChip(el) {
+  const p = personaByID(Number(el.dataset.persona));
+  el.title = (p ? p.name : el.textContent.slice(1)) + ', persona';
+  if (!p) return;
+  el.dataset.badge = p.badge;
+  el.style.setProperty('--persona', p.colour);
+}
+
+// drawMentions turns each named @word of body's text into a chip, outside code and links.
+function drawMentions(body, named) {
+  if (!named.length) return;
+  const walk = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
+    acceptNode: (t) => (t.parentElement.closest('code, pre, a, mark') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+  });
+  const texts = [];
+  for (let t = walk.nextNode(); t; t = walk.nextNode()) texts.push(t);
+  for (const t of texts) {
+    const s = t.data;
+    const parts = [];
+    let from = 0;
+    for (let i = s.indexOf('@'); i >= 0; i = s.indexOf('@', i + 1)) {
+      const n = named.find((x) => s.startsWith(x.at, i) && !notAfter.test(s.charAt(i + x.at.length)) && !(i > 0 && notBefore.test(s.charAt(i - 1))));
+      if (!n) continue;
+      parts.push(s.slice(from, i), chip(n));
+      from = i + n.at.length;
+      i = from - 1;
+    }
+    if (parts.length) t.replaceWith(...parts, s.slice(from));
+  }
+}
 
 // Mentions. A message whose @mention queued a turn shows that turn's state, linked to how it
 // ended (005-AC4); one that cannot run tells its author why, and nobody else (005-AC3).
@@ -971,6 +1034,7 @@ function connect() {
     agent = JSON.parse(e.data);
     renderAgent();
     renderMentions();
+    messages.querySelectorAll('mark.mention-chip.persona').forEach(paintChip);
     renderParticipants();
     window.grillAgent = agent;
     window.dispatchEvent(new CustomEvent('grill:agent', { detail: agent }));

@@ -933,6 +933,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 				for i := range msgs {
 					msgs[i].Mentions = mentions[msgs[i].ID]
 				}
+				if s.nameMentions(r.Context(), room, msgs) != nil {
+					return false
+				}
 			}
 			for i := range msgs {
 				b, err := json.Marshal(viewMessage(msgs[i]))
@@ -952,7 +955,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 		// No id: line, so Last-Event-ID keeps naming the last message sent.
 		for {
 			msgs, err := s.bus.Store.ChangedMessages(r.Context(), room, edits, replayBatch)
-			if err != nil {
+			if err != nil || s.nameMentions(r.Context(), room, msgs) != nil {
 				return false
 			}
 			for i := range msgs {

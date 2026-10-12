@@ -178,6 +178,10 @@ test('unread count in the title', async ({ browser, request }) => {
   await alice.getByLabel('Count voice lines in the tab title').check();
   await voice();
   await expect(alice).toHaveTitle('(3) Docs room · grill-room');
+  // 005-AC27: a line naming her marks the count.
+  await bob.locator('#body').fill('@Alice look');
+  await bob.locator('#body').press('Enter');
+  await expect(alice).toHaveTitle('(4 @) Docs room · grill-room');
   await alice.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(alice).toHaveTitle('Docs room · grill-room');
 });
@@ -292,5 +296,35 @@ for (const vp of widths) {
     await sheet.getByRole('button', { name: 'Restore roadmap.md' }).click();
     await expect(sheet.locator('#deleted-documents')).toHaveCount(0);
     await expect(bob.locator('#documents')).toHaveText('roadmap.md');
+  });
+}
+
+for (const vp of widths) {
+  // 005-AC27: @Grill draws a persona chip with its badge and colour, @Ana_María a person chip,
+  // @nobody stays text, and code stays code. Bob's line names Ana: her page highlights it, and its
+  // text still reads "@Ana_María". Chips take the keyboard focus.
+  test(`mention chips and the self-mention highlight, ${vp.name}`, async ({ browser, request }) => {
+    const { pages: [ana, bob] } = await roomWith(browser, request, ['Ana María', 'Bob']);
+    await ana.setViewportSize(vp);
+    await bob.locator('#body').fill('@grill ask @Ana_María, not @nobody or `@Grill` <img src=x onerror=alert(1)>');
+    await bob.locator('#body').press('Enter');
+    const line = ana.locator('#messages li.msg.text', { hasText: 'ask' });
+    const chips = line.locator('mark.mention-chip');
+    await expect(chips).toHaveText(['@grill', '@Ana_María']);
+    await expect(chips.first()).toHaveClass(/persona/);
+    await expect(chips.first()).toHaveAttribute('data-badge', '🔥');
+    await expect(chips.first()).toHaveAttribute('title', 'Grill, persona');
+    await expect(chips.nth(1)).toHaveClass(/\bme\b/);
+    await expect(line).toHaveClass(/mentions-me/);
+    await expect(line.locator('code')).toHaveText('@Grill');
+    await expect(line.locator('.body')).toContainText('@grill ask @Ana_María, not @nobody or @Grill');
+    await expect(line.locator('img')).toHaveCount(0);
+    await chips.first().focus();
+    await expect(chips.first()).toBeFocused();
+    // Bob is not named: no highlight on his page, Ana's chip is a person's.
+    const his = bob.locator('#messages li.msg.text', { hasText: 'ask' });
+    await expect(his).not.toHaveClass(/mentions-me/);
+    await expect(his.locator('mark.mention-chip').nth(1)).toHaveClass(/person/);
+    expect(await noOverflow(ana)).toEqual([]);
   });
 }

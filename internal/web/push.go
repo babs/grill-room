@@ -231,6 +231,10 @@ func (s *Server) pushEvents(ctx context.Context, room string, after int64, pendi
 	if err != nil {
 		return after, err
 	}
+	personas, err := st.RoomPersonas(ctx, room)
+	if err != nil {
+		return after, err
+	}
 	now := s.now()
 	for _, m := range msgs {
 		starter := int64(0)
@@ -239,9 +243,9 @@ func (s *Server) pushEvents(ctx context.Context, room string, after int64, pendi
 				starter = t.ParticipantID
 			}
 		}
-		named := mentionedPeople(m, ps)
+		mentioned := mentionedPeople(m, personas, ps)
 		for _, sub := range subs {
-			kind := pushKind(m, sub, starter, named[sub.ParticipantID])
+			kind := pushKind(m, sub, starter, mentioned[sub.ParticipantID])
 			if kind == "" || s.people.focused(room, sub.ParticipantID, now) {
 				continue
 			}
@@ -281,17 +285,16 @@ func pushKind(m store.Message, sub store.PushSubscription, starter int64, mentio
 	return ""
 }
 
-// mentionedPeople returns the participants a text line names with their @token (005-AC2).
-func mentionedPeople(m store.Message, ps []store.Participant) map[int64]bool {
+// mentionedPeople returns the participants a text line names with their @token, by the rule the
+// chips follow (005-AC27): a persona of the same name takes the mention.
+func mentionedPeople(m store.Message, personas []store.RoomPersona, ps []store.Participant) map[int64]bool {
 	out := map[int64]bool{}
-	if m.Kind != store.KindText || !strings.Contains(m.Body, "@") {
+	if m.Kind != store.KindText {
 		return out
 	}
-	for _, hit := range mentionRe.FindAllStringSubmatch(proseText(m.Body), -1) {
-		for _, p := range ps {
-			if strings.EqualFold(hit[1], mentionToken(p.Name)) {
-				out[p.ID] = true
-			}
+	for _, n := range named(m.Body, personas, ps) {
+		if n.ParticipantID != 0 {
+			out[n.ParticipantID] = true
 		}
 	}
 	return out
