@@ -19,6 +19,9 @@ import (
 // ErrLocked means another supervisor holds the lock on this state dir.
 var ErrLocked = errors.New("locked")
 
+// errForeignPipe means another user serves the supervisor's pipe (Windows): never retried.
+var errForeignPipe = errors.New("served by another user")
+
 // LockSupervisor makes this process the state dir's only supervisor (003-AC6): it fails with
 // ErrLocked while another one runs.
 func LockSupervisor(stateDir string) (release func(), err error) {
@@ -79,6 +82,9 @@ func Handoff(ctx context.Context, stateDir, room string) (string, error) {
 	for {
 		if c, err = dialLocal(ctx, stateDir); err == nil {
 			break
+		}
+		if errors.Is(err, errForeignPipe) {
+			return "", fmt.Errorf("refusing to hand over: %w", err)
 		}
 		select {
 		case <-ctx.Done():
