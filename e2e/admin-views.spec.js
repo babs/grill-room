@@ -109,6 +109,30 @@ for (const vp of widths) {
     await alice.ctx.dispose();
   });
 
+  // 004-AC8 004-AC6: a room the super-admin created has no room admin; the super-admin appoints a
+  // participant with a profile, who may then rename it, and removes them again. Both are audited.
+  test(`room admins appointed from /admin, ${vp.name}`, async ({ browser, request, baseURL }) => {
+    const name = `Admins ${vp.name} ${Date.now()}`;
+    const room = await (await request.post('/api/rooms', { headers: admin, data: { name } })).json();
+    const alice = await member(baseURL, request, room, 'Alice');
+    expect((await alice.ctx.patch(`/api/rooms/${room.id}`, { data: { name: 'by Alice' } })).status()).toBe(403);
+    const page = await (await browser.newContext({ viewport: vp })).newPage();
+    expect(await signIn(page, adminToken, 'rooms')).toBe(201);
+    await page.locator('#room-' + room.id).getByRole('button', { name: 'Manage' }).click();
+    const admins = page.locator('#room-panel #room-admins');
+    await expect(admins.locator('li')).toHaveCount(1);
+    await admins.getByRole('button', { name: 'Make Alice a room admin' }).click();
+    await expect(admins.locator('li')).toContainText('Alice admin');
+    await audited(request, 'room_admin.add', room.id);
+    await fits(page, vp.width);
+    expect((await alice.ctx.patch(`/api/rooms/${room.id}`, { data: { name: name + ' by Alice' } })).status()).toBe(200);
+    await admins.getByRole('button', { name: 'Remove Alice from the room admins' }).click();
+    await expect(admins.getByRole('button', { name: 'Make Alice a room admin' })).toBeVisible();
+    await audited(request, 'room_admin.remove', room.id);
+    expect((await alice.ctx.patch(`/api/rooms/${room.id}`, { data: { name: 'by Alice' } })).status()).toBe(403);
+    await alice.ctx.dispose();
+  });
+
   // 004-AC3: the profiles view lists name, email, rooms, skill count and last activity, and deletes
   // a profile: its participant stays in the room, detached.
   test(`profiles view and delete, ${vp.name}`, async ({ browser, request, baseURL }) => {

@@ -431,3 +431,53 @@ func TestProfileMaxRoomsAPI(t *testing.T) {
 		t.Fatalf("audit: %+v", log)
 	}
 }
+
+// 004-AC8 004-AC6: a room the super-admin created has no room admin; the super-admin lists its
+// participants and appoints, then removes, one with a profile from /admin, each audited.
+func TestSuperAdminAppointsRoomAdmins(t *testing.T) {
+	e := newEnv(t)
+	room := e.createRoom(t, "Phone test")
+	path := "/api/rooms/" + room.ID
+	alice := e.device(t)
+	ap := alice.join(t, room.ID, "Alice").Participant
+	if code, _ := alice.do(t, "PATCH", path, map[string]string{"name": "x"}); code != http.StatusForbidden {
+		t.Fatalf("alice renames before being appointed: %d", code)
+	}
+	adminPath := "/api/admin/rooms/" + room.ID
+	if code, _ := alice.do(t, "GET", adminPath+"/participants", nil); code != http.StatusUnauthorized {
+		t.Fatalf("a member lists the participants: %d", code)
+	}
+	code, b := e.do(t, "GET", adminPath+"/participants", e.admin, nil)
+	if ps := decodeJSON[[]adminParticipant](t, b); code != http.StatusOK || len(ps) != 1 || ps[0] != (adminParticipant{ID: ap.ID, Name: "Alice", HasProfile: true}) {
+		t.Fatalf("participants: %d %s", code, b)
+	}
+	if code, b := e.do(t, "PUT", fmt.Sprintf("%s/admins/%d", adminPath, ap.ID), e.admin, nil); code != http.StatusNoContent {
+		t.Fatalf("appoint alice: %d %s", code, b)
+	}
+	_, b = e.do(t, "GET", adminPath+"/participants", e.admin, nil)
+	if ps := decodeJSON[[]adminParticipant](t, b); !ps[0].Admin {
+		t.Fatalf("alice not listed as admin: %s", b)
+	}
+	if code, b := alice.do(t, "PATCH", path, map[string]string{"name": "Renamed by Alice"}); code != http.StatusOK {
+		t.Fatalf("alice renames as a room admin: %d %s", code, b)
+	}
+	// The bearer token reaches the same action on the room's own path.
+	if code, b := e.do(t, "DELETE", fmt.Sprintf("%s/admins/%d", path, ap.ID), e.admin, nil); code != http.StatusNoContent {
+		t.Fatalf("remove alice: %d %s", code, b)
+	}
+	if code, _ := e.do(t, "GET", "/api/admin/rooms/nope/participants", e.admin, nil); code != http.StatusNotFound {
+		t.Fatalf("unknown room: %d", code)
+	}
+	if code, _ := e.do(t, "PUT", adminPath+"/admins/999", e.admin, nil); code != http.StatusNotFound {
+		t.Fatalf("unknown participant: %d", code)
+	}
+	var got []string
+	for _, en := range e.auditLog(t, "?target="+room.ID).Entries {
+		if en.Actor == store.ActorSuperAdmin && strings.HasPrefix(en.Action, "room_admin.") {
+			got = append(got, en.Action)
+		}
+	}
+	if want := []string{ActionRoomAdminRemove, ActionRoomAdminAdd}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("audit %v, want %v", got, want)
+	}
+}

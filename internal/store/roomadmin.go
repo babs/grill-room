@@ -199,14 +199,17 @@ func roomAdmin(ctx context.Context, db rowQuerier, roomID string, profileID int6
 }
 
 // SetRoomAdmin appoints, or with on false removes, the profile of participant target of room as a
-// room admin, and says so in the chat. by must be a room admin, checked in the same transaction;
-// the last admin cannot step down. A change of nothing returns a nil message (004-AC8).
-// ErrForbidden, ErrNotFound for a target not in the room, ErrNoProfile, ErrLastAdmin.
+// room admin, and says so in the chat. by must be a room admin, checked in the same transaction,
+// or nil for the super-admin, who appoints in rooms that have none; the last admin cannot step
+// down. A change of nothing returns a nil message (004-AC8). ErrForbidden, ErrNotFound for a
+// target not in the room, ErrNoProfile, ErrLastAdmin.
 func (s *Store) SetRoomAdmin(ctx context.Context, roomID string, target int64, on bool, by *Participant) (*Message, error) {
 	var m *Message
 	err := s.withTx(ctx, "set room admin", func(tx *sql.Tx) error {
-		if _, err := roomAdmin(ctx, tx, roomID, by.ProfileID); err != nil {
-			return err
+		if by != nil {
+			if _, err := roomAdmin(ctx, tx, roomID, by.ProfileID); err != nil {
+				return err
+			}
 		}
 		var name string
 		var profile sql.NullInt64
@@ -230,11 +233,12 @@ func (s *Store) SetRoomAdmin(ctx context.Context, roomID string, target int64, o
 			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM room_admins WHERE room_id = ?`, roomID).Scan(&n); err != nil {
 				return fmt.Errorf("set room admin: %w", err)
 			}
-			if n == 1 && profile.Int64 == by.ProfileID {
+			self := by != nil && profile.Int64 == by.ProfileID
+			if n == 1 && self {
 				return ErrLastAdmin
 			}
 			body = fmt.Sprintf("removed %s from the room admins.", name)
-			if profile.Int64 == by.ProfileID {
+			if self {
 				body = "stepped down as a room admin."
 			}
 			res, err = tx.ExecContext(ctx, `DELETE FROM room_admins WHERE room_id = ? AND profile_id = ?`, roomID, profile.Int64)
@@ -245,7 +249,13 @@ func (s *Store) SetRoomAdmin(ctx context.Context, roomID string, target int64, o
 		if n, err := res.RowsAffected(); err != nil || n == 0 {
 			return err
 		}
-		if m, err = memberLine(ctx, tx, roomID, by, body); err != nil {
+		if by == nil {
+			m = &Message{RoomID: roomID, Kind: KindSystem, Sender: "admin", Body: "The admin " + body}
+			err = insertMessage(ctx, tx, m)
+		} else {
+			m, err = memberLine(ctx, tx, roomID, by, body)
+		}
+		if err != nil {
 			return err
 		}
 		return auditTx(ctx, tx, "", map[string]any{"participant": target, "name": name})

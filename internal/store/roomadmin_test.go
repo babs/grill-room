@@ -291,3 +291,34 @@ func TestProfileMaxRooms(t *testing.T) {
 		}
 	}
 }
+
+// 004-AC8: the super-admin appoints a room admin in a room it created, which has none, and may
+// remove the last one: it can always appoint another.
+func TestSuperAdminSetsRoomAdmin(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	alice := joinWithProfile(t, s, "r", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
+	if _, err := s.CreateInvite(ctx, "r", "inv-guest", 0); err != nil {
+		t.Fatal(err)
+	}
+	guest, _, err := s.Join(ctx, "inv-guest", "Guest", "tok-guest", JoinProfile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetRoomAdmin(ctx, "r", guest.ID, true, nil); !errors.Is(err, ErrNoProfile) {
+		t.Fatalf("guest without a profile: %v", err)
+	}
+	m, err := s.SetRoomAdmin(ctx, "r", alice.ID, true, nil)
+	if err != nil || m == nil || m.Sender != "admin" || m.ParticipantID != 0 || m.Body != "The admin made Alice a room admin." {
+		t.Fatalf("appoint: %+v %v", m, err)
+	}
+	if _, err := s.RoomAdmin(ctx, "r", alice.ProfileID); err != nil {
+		t.Fatalf("alice is no room admin: %v", err)
+	}
+	if m, err := s.SetRoomAdmin(ctx, "r", alice.ID, false, nil); err != nil || m.Body != "The admin removed Alice from the room admins." {
+		t.Fatalf("remove the last admin: %+v %v", m, err)
+	}
+	if _, err := s.RoomAdmin(ctx, "r", alice.ProfileID); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("alice still a room admin: %v", err)
+	}
+}

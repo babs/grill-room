@@ -84,9 +84,9 @@ func (s *Server) roomAuditing(r *http.Request, sess *session, action, room strin
 }
 
 // setRoomAdmin appoints (PUT) or removes (DELETE) the profile of a participant as a room admin.
-// Only a room admin may; the last one cannot step down (004-AC8).
-func (s *Server) setRoomAdmin(w http.ResponseWriter, r *http.Request, sess session) {
-	if !s.asRoomAdmin(w, r, &sess) {
+// Only a room admin or the super-admin may; the last one cannot step down (004-AC8).
+func (s *Server) setRoomAdmin(w http.ResponseWriter, r *http.Request, sess *session) {
+	if !s.asRoomAdmin(w, r, sess) {
 		return
 	}
 	on := r.Method == http.MethodPut
@@ -95,8 +95,12 @@ func (s *Server) setRoomAdmin(w http.ResponseWriter, r *http.Request, sess sessi
 	if on {
 		action = ActionRoomAdminAdd
 	}
-	room := sess.p.RoomID
-	m, err := s.bus.Store.SetRoomAdmin(s.roomAuditing(r, &sess, action, room, nil), room, target, on, sess.p)
+	room := r.PathValue("room")
+	var by *store.Participant
+	if sess != nil {
+		by = sess.p
+	}
+	m, err := s.bus.Store.SetRoomAdmin(s.roomAuditing(r, sess, action, room, nil), room, target, on, by)
 	switch {
 	case errors.Is(err, store.ErrForbidden):
 		httpError(w, http.StatusForbidden, "only a room admin can do this")
@@ -109,10 +113,38 @@ func (s *Server) setRoomAdmin(w http.ResponseWriter, r *http.Request, sess sessi
 	default:
 		if m != nil {
 			s.bus.Notify(room)
-			s.log.Info("room_admin_set", zap.String("room", room), zap.Int64("participant", target), zap.Bool("admin", on), zap.Int64("by", sess.p.ID))
+			s.log.Info("room_admin_set", zap.String("room", room), zap.Int64("participant", target), zap.Bool("admin", on), zap.Bool("super_admin", by == nil))
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// adminParticipant is a participant as the super-admin appoints room admins among them.
+type adminParticipant struct {
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	Admin      bool   `json:"admin"`
+	HasProfile bool   `json:"has_profile"`
+}
+
+// roomParticipants lists a room's participants for the super-admin, who appoints room admins among
+// those with a profile (004-AC8).
+func (s *Server) roomParticipants(w http.ResponseWriter, r *http.Request) {
+	room := r.PathValue("room")
+	if _, err := s.bus.Store.Room(r.Context(), room); errors.Is(err, store.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "no such room")
+		return
+	}
+	ps, err := s.bus.Store.Participants(r.Context(), room)
+	if err != nil {
+		s.serverError(w, "room_participants_failed", err)
+		return
+	}
+	out := make([]adminParticipant, len(ps))
+	for i, p := range ps {
+		out[i] = adminParticipant{ID: p.ID, Name: p.Name, Admin: p.Admin, HasProfile: p.ProfileID != 0}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // roomOverview is the room's volume and quota, for its admins and the super-admin (004-AC8).

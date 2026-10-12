@@ -22,6 +22,7 @@ import { RoomPanel, fetchJSON, size, when, onInput, formAction } from './room-pa
  * @typedef {{id: number, name: string, shared: boolean, version: number, author: string, size: number,
  *   updated_at: string}} Skill
  * @typedef {{rooms_per_profile: number, storage_quota_bytes: number, room_creation: string}} Settings
+ * @typedef {{id: number, name: string, admin: boolean, has_profile: boolean}} Participant
  * @typedef {{version: string, db_bytes: number, disk_free: number, disk_total: number,
  *   stt: {voice: boolean, configured: boolean, workers: number},
  *   daemons: {connected: number, versions: Record<string, number>}, smtp: boolean}} Instance
@@ -217,7 +218,29 @@ function Rooms() {
       </tr>`)}</tbody>
     </table></div>` : html`<p>No room yet.</p>`}
     ${room && html`<${RoomPanel} key=${room.id} room=${room} base=${'/api/admin/rooms/' + room.id} api=${api} show=${show} setQuota=${true}
-      reload=${load} close=${() => { setOpen(''); load(); }}/>`}`;
+      reload=${load} close=${() => { setOpen(''); load(); }}><${RoomAdmins} base=${'/api/admin/rooms/' + room.id}/><//>`}`;
+}
+
+/**
+ * RoomAdmins appoints and removes room admins among the room's participants with a profile: a room
+ * the super-admin created starts with none (004-AC8).
+ * @param {{base: string}} props
+ */
+function RoomAdmins({ base }) {
+  const [list, setList] = useState(/** @type {Participant[] | null} */ (null));
+  const load = () => api('GET', base + '/participants').then(setList).catch(show);
+  useEffect(() => { load(); }, [base]);
+  /** @param {Participant} p @param {boolean} on */
+  const set = (p, on) => api(on ? 'PUT' : 'DELETE', `${base}/admins/${p.id}`).then(load).catch(show);
+  return html`
+    <h3>Room admins</h3>
+    <p class="hint">Room admins rename the room, manage its invites, appoint other admins, export and delete it. Only participants with a profile can be appointed.</p>
+    ${list && (list.length ? html`<ul id="room-admins">${list.map((p) => html`<li key=${p.id}>
+      ${p.name}${p.admin && html` <strong>admin</strong>`}${' '}
+      ${!p.has_profile ? html`<span class="hint">no profile</span>`
+        : p.admin ? html`<button type="button" class="small" onClick=${() => set(p, false)} aria-label=${'Remove ' + p.name + ' from the room admins'}>Remove admin</button>`
+        : html`<button type="button" class="small" onClick=${() => set(p, true)} aria-label=${'Make ' + p.name + ' a room admin'}>Make admin</button>`}
+    </li>`)}</ul>` : html`<p class="hint">No participant yet.</p>`)}`;
 }
 
 function Profiles() {
