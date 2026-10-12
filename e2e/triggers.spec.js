@@ -127,6 +127,8 @@ test('triggers: human @mention', async ({ browser, request, baseURL }) => {
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {
     await pairDaemon(alice, daemon);
+    // A mention calls no one until the room hears the host can run it.
+    await expect(alice.locator('button.persona[data-name="Secretary"] .led')).toHaveAttribute('aria-label', 'Secretary ready', { timeout: 30_000 });
     await say(alice, 'In code, `@secretary` calls no one.');
     await say(alice, '@SECRETARY FAKE_WHOAMI please');
     const sec = agentLines(alice).filter({ hasText: 'You are Secretary' });
