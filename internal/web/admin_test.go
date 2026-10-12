@@ -331,11 +331,11 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 	if len(got) != len(want) {
 		t.Fatalf("entries: %+v", got)
 	}
-	// Every mutation action is exercised here; the admin.* ones, the room admins' and the settings'
-	// have their own tests (TestAuditLogViewAPI, TestRoomAdmins, TestRoomSkillsAPI, TestProfileCreatesRooms,
-	// TestProfileMaxRoomsAPI).
+	// Every mutation action is exercised here; the admin.* ones, the room admins', the settings' and
+	// the archives' have their own tests (TestAuditLogViewAPI, TestRoomAdmins, TestRoomSkillsAPI,
+	// TestProfileCreatesRooms, TestProfileMaxRoomsAPI, TestExportImportAPI).
 	covered := map[string]bool{ActionRoomAdminAdd: true, ActionRoomAdminRemove: true, ActionRoomSkillRemove: true, ActionSettings: true,
-		ActionProfileMaxRooms: true}
+		ActionProfileMaxRooms: true, ActionRoomExport: true, ActionRoomImport: true}
 	for _, w := range want {
 		covered[w.action] = true
 	}

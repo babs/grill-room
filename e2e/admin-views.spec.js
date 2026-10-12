@@ -62,7 +62,7 @@ for (const vp of widths) {
     await expect(panel.locator('#volume')).toContainText(`Uploads${Buffer.byteLength(plan)} B`);
     await expect(panel.locator('#volume')).toContainText('Room skills0 B');
     await expect(panel).toContainText('of 200 MB used, the instance default.');
-    await expect(panel.locator('#export')).toBeDisabled();
+    await expect(panel.locator('#export')).toHaveAttribute('href', `/api/admin/rooms/${room.id}/export`);
     await fits(page, vp.width);
 
     // Quota: 1 MB, then an upload past it is refused; back to the default.

@@ -22,8 +22,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"go.uber.org/zap"
 
@@ -44,6 +42,8 @@ const (
 	maxBodyLen   = 4000
 	// maxConcurrentUploads bounds the memory uploads hold: about three copies of up to MaxUploadBytes each.
 	maxConcurrentUploads = 4
+	// maxConcurrentArchives bounds the rooms staged on disk at once by exports and imports.
+	maxConcurrentArchives = 2
 	// replayBatch bounds one store read while an SSE stream catches up.
 	replayBatch = 500
 )
@@ -53,9 +53,11 @@ var heartbeat = 20 * time.Second
 
 // Server serves the room API and UI.
 type Server struct {
-	bus       *bus.Bus
-	opts      Options
-	uploads   chan struct{}
+	bus     *bus.Bus
+	opts    Options
+	uploads chan struct{}
+	// archives bounds the exports and imports running at once.
+	archives  chan struct{}
 	adminHash []byte
 	baseURL   string
 	log       *zap.Logger
@@ -95,10 +97,16 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	if opts.AuditRetention <= 0 {
 		opts.AuditRetention = DefaultAuditRetention
 	}
-	return &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
+	if opts.MaxImportBytes <= 0 {
+		opts.MaxImportBytes = DefaultMaxImportBytes
+	}
+	s := &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), archives: make(chan struct{}, maxConcurrentArchives),
+		adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
 		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, viewers: viewers{m: map[int64]int{}}, stt: sttWorkers{m: map[string]*sttWorker{}},
 		magicLimit: limiter{window: magicWindow}, loginLimit: limiter{window: loginWindow}, now: time.Now, fallbacks: fallbackCounters(),
 		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}}
+	s.cleanStaging()
+	return s
 }
 
 func fallbackCounters() map[string]*atomic.Int64 {
@@ -154,6 +162,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rooms", s.admin(s.listRooms))
 	mux.Handle("POST /api/rooms", s.admin(s.createRoom))
 	mux.Handle("DELETE /api/rooms/{room}", s.memberOrAdmin(s.deleteRoom))
+	mux.HandleFunc("POST /api/rooms/import", s.importRoom)
+	mux.Handle("GET /api/rooms/{room}/export", s.memberOrAdmin(s.exportRoom))
 	mux.Handle("PATCH /api/rooms/{room}", s.memberOrAdmin(s.renameRoom))
 	mux.Handle("GET /api/rooms/{room}/invites", s.memberOrAdmin(s.listInvites))
 	mux.Handle("POST /api/rooms/{room}/invites", s.memberOrAdmin(s.createInvite))
@@ -175,6 +185,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/admin/rooms/{room}", adminOnly(s.deleteRoom))
 	mux.Handle("PUT /api/admin/rooms/{room}/quota", adminOnly(s.setQuota))
 	mux.Handle("GET /api/admin/rooms/{room}/participants", s.admin(s.roomParticipants))
+	mux.Handle("GET /api/admin/rooms/{room}/export", adminOnly(s.exportRoom))
+	mux.Handle("POST /api/admin/rooms/import", s.admin(s.importRoom))
 	mux.Handle("PUT /api/admin/rooms/{room}/admins/{participant}", adminOnly(s.setRoomAdmin))
 	mux.Handle("DELETE /api/admin/rooms/{room}/admins/{participant}", adminOnly(s.setRoomAdmin))
 	mux.Handle("PUT /api/rooms/{room}/quota", s.memberOrAdmin(s.setQuota))
@@ -437,16 +449,8 @@ func decodeLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) boo
 // text may hold newlines and tabs, single-line text no bidi controls (they spoof names).
 func cleanText(s string, maxLen int, multiline bool) (string, bool) {
 	s = strings.TrimSpace(s)
-	if s == "" || !utf8.ValidString(s) || utf8.RuneCountInString(s) > maxLen {
+	if s == "" || !store.ValidText(s, maxLen, multiline) {
 		return "", false
-	}
-	for _, c := range s {
-		if multiline && (c == '\n' || c == '\t') {
-			continue
-		}
-		if unicode.IsControl(c) || (!multiline && unicode.Is(unicode.Bidi_Control, c)) {
-			return "", false
-		}
 	}
 	return s, true
 }

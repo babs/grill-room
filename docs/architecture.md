@@ -33,7 +33,7 @@ flowchart LR
   Creds[("Claude accounts<br/>config dir, read-only, or setup token in the OS keyring")]
 
   UI <-->|"HTTPS: REST + SSE"| API
-  AdminC -->|"HTTPS REST: rooms, invites, profiles"| API
+  AdminC -->|"HTTPS REST: rooms, invites, profiles, room exports and imports"| API
   API -->|"SMTP: magic links"| SMTP
   UI <-->|"postMessage bridge"| Frame
   UI <-->|"WebRTC audio<br/>TURN/TLS 443 or ICE/TCP"| LK

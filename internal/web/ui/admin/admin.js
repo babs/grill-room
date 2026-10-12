@@ -23,6 +23,9 @@ import { RoomPanel, fetchJSON, size, when, onInput, formAction } from './room-pa
  *   updated_at: string}} Skill
  * @typedef {{rooms_per_profile: number, storage_quota_bytes: number, room_creation: string}} Settings
  * @typedef {{id: number, name: string, admin: boolean, has_profile: boolean}} Participant
+ * @typedef {{name: string, counts: Record<string, number>, bytes: Record<string, number>, warnings: string[], format: number,
+ *   instance_version: string, same_instance: boolean, exported_at: string, archive_bytes: number,
+ *   room?: {id: string, name: string}}} ImportReport
  * @typedef {{version: string, db_bytes: number, disk_free: number, disk_total: number,
  *   stt: {voice: boolean, configured: boolean, workers: number},
  *   daemons: {connected: number, versions: Record<string, number>}, smtp: boolean}} Instance
@@ -207,6 +210,7 @@ function Rooms() {
   return html`
     <h2>Rooms</h2>
     <p class="hint">${page.rooms.length} rooms. A room's quota counts its uploads and attachments; the default is ${size(page.default_quota)}.</p>
+    <${ImportRoom} reload=${load}/>
     ${page.rooms.length ? html`<div class="scroll"><table id="rooms">
       <thead><tr>${roomCols.map(([id, label]) => html`<th aria-sort=${sort.col === id ? (sort.desc ? 'descending' : 'ascending') : undefined}>
         <button type="button" class="sort" onClick=${() => by(id)}>${label}</button></th>`)}<th></th></tr></thead>
@@ -241,6 +245,78 @@ function RoomAdmins({ base }) {
         : p.admin ? html`<button type="button" class="small" onClick=${() => set(p, false)} aria-label=${'Remove ' + p.name + ' from the room admins'}>Remove admin</button>`
         : html`<button type="button" class="small" onClick=${() => set(p, true)} aria-label=${'Make ' + p.name + ' a room admin'}>Make admin</button>`}
     </li>`)}</ul>` : html`<p class="hint">No participant yet.</p>`)}`;
+}
+
+/** @type {[string, string][]} */
+const importKinds = [['participants', 'Participants'], ['messages', 'Lines'], ['message_versions', 'Earlier versions'],
+  ['documents', 'Documents'], ['revisions', 'Revisions'], ['uploads', 'Uploads'], ['annotations', 'Annotations'],
+  ['annotation_messages', 'Thread messages'], ['attachments', 'Attachments'], ['personas', 'Personas'], ['skills', 'Skills'],
+  ['sessions', 'Agent sessions']];
+
+/**
+ * ImportRoom uploads an export for a preview of what it holds, which creates nothing, then imports
+ * it as a new room (004-AC12, 004-AC15). The file is sent twice: the server keeps nothing between.
+ * @param {{reload: () => void}} props
+ */
+function ImportRoom({ reload }) {
+  const [file, setFile] = useState(/** @type {File | null} */ (null));
+  const [preview, setPreview] = useState(/** @type {ImportReport | null} */ (null));
+  const [said, setSaid] = useState('');
+  const [busy, setBusy] = useState(false);
+  /** @param {boolean} dry */
+  const send = async (dry) => {
+    if (!file) return;
+    setBusy(true);
+    setSaid('');
+    try {
+      const res = await fetch('/api/admin/rooms/import' + (dry ? '?preview=1' : ''), { method: 'POST', headers: { 'Content-Type': 'application/gzip' }, body: file });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) signedIn.value = false;
+      if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
+      if (dry) {
+        setPreview(data);
+      } else {
+        setPreview(null);
+        setSaid(`Imported as ${data.room.name} (${data.room.id}).`);
+        reload();
+      }
+    } catch (err) {
+      if (dry) setPreview(null);
+      setSaid(/** @type {Error} */ (err).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  /** @param {Event} e */
+  const pick = (e) => {
+    const f = /** @type {HTMLInputElement} */ (e.currentTarget).files?.[0] || null;
+    setFile(f);
+    setPreview(null);
+    setSaid('');
+  };
+  const p = preview;
+  return html`
+    <h3>Import a room</h3>
+    <p class="hint">An export from this instance or another one becomes a new room. Nothing is created until you confirm the preview.</p>
+    <form class="row" id="import-form" onSubmit=${formAction(() => send(true))}>
+      <label>Archive (.tar.gz)<input id="import-file" type="file" accept=".gz,.tgz,application/gzip" required onChange=${pick}/></label>
+      <button type="submit" disabled=${!file || busy}>Preview</button>
+    </form>
+    <p id="import-status" class="said" role="status">${said}</p>
+    ${p && html`<section id="import-preview" aria-label="Import preview">
+      <dl>
+        <div><dt>Room</dt><dd id="import-name">${p.name}</dd></div>
+        <div><dt>Format</dt><dd>${p.format}</dd></div>
+        <div><dt>Exported by</dt><dd id="import-version">${p.instance_version || 'unknown'}${p.same_instance ? ', this instance' : ', another instance'}</dd></div>
+        <div><dt>Exported</dt><dd>${when(p.exported_at)}</dd></div>
+        <div><dt>Archive</dt><dd>${size(p.archive_bytes)}</dd></div>
+        <div><dt>Uploads and attachments</dt><dd>${size((p.bytes.uploads || 0) + (p.bytes.attachments || 0))}</dd></div>
+        <div><dt>Agent sessions</dt><dd>${size(p.bytes.sessions || 0)}</dd></div>
+      </dl>
+      <dl id="import-counts">${importKinds.map(([k, label]) => html`<div><dt>${label}</dt><dd>${p.counts[k] || 0}</dd></div>`)}</dl>
+      ${p.warnings.length > 0 && html`<ul id="import-warnings" class="warn">${p.warnings.map((w) => html`<li>${w}</li>`)}</ul>`}
+      <div class="row"><button type="button" id="import-confirm" disabled=${busy} onClick=${() => send(false)}>Import as a new room</button></div>
+    </section>`}`;
 }
 
 function Profiles() {

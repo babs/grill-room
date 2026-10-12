@@ -70,7 +70,11 @@ type Options struct {
 	MagicLinkTTL time.Duration
 	// AuditRetention is how long the audit log keeps an entry; 0 means DefaultAuditRetention.
 	AuditRetention time.Duration
-	// Version is the server's own, and DBPath its database file: the instance view shows both.
+	// MaxImportBytes bounds an imported archive, compressed and once uncompressed; 0 means
+	// DefaultMaxImportBytes.
+	MaxImportBytes int64
+	// Version is the server's own, and DBPath its database file: the instance view shows both, and
+	// exports and imports stage beside the database.
 	Version string
 	DBPath  string
 }

@@ -28,7 +28,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: ui-tools ui-vendor ui-check build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail e2e-supervisor stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: ui-tools ui-vendor ui-check build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail e2e-supervisor e2e-crossinstance stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -115,6 +115,12 @@ e2e-supervisor: build
 	cd e2e && pnpm install --frozen-lockfile && GRILL_ROOM_E2E_SETUP_TOKEN_FILE='$(abspath $(SETUP_TOKEN_FILE))' \
 	  GRILL_ROOM_E2E_DEV_KEY='$(abspath $(DEV_KEY_PUB))' GRILL_ROOM_E2E_SUPERVISOR='$(abspath $(SUPERVISOR_BIN))' \
 	  pnpm exec playwright test -c supervisor/playwright.config.js
+
+# 004-AC13: a room exported from the compose stack is imported on the lab deployment, where a haiku
+# turn resumes its session, then moves back: two real turns, at most two Claude requests. Both
+# instances must run this build (`make dev-up`, `make k8s-apply`).
+e2e-crossinstance: build
+	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c crossinstance/playwright.config.js
 
 # Magic links against the lab deployment and its mailpit (K8S_MAILPIT_URL in .env); no Claude request.
 e2e-lab-mail:

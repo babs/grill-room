@@ -50,7 +50,7 @@ const (
 )
 
 // AuditActions lists every action, for the audit view's filter.
-var AuditActions = []string{ActionRoomCreate, ActionRoomRename, ActionRoomDelete, ActionRoomQuota, ActionInviteCreate, ActionInviteRevoke,
+var AuditActions = []string{ActionRoomCreate, ActionRoomRename, ActionRoomDelete, ActionRoomQuota, ActionRoomExport, ActionRoomImport, ActionInviteCreate, ActionInviteRevoke,
 	ActionRoomAdminAdd, ActionRoomAdminRemove, ActionRoomSkillRemove, ActionProfileDelete, ActionProfileMaxRooms, ActionTemplateRemove, ActionSkillRemove, ActionSettings,
 	ActionAdminLogin, ActionAdminLogout, ActionSessionRevoke}
 

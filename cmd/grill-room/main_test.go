@@ -16,7 +16,7 @@ import (
 
 func TestConfigValidate(t *testing.T) {
 	ok := Config{Addr: "a:1", MetricsAddr: "a:2", DB: "x.db", LogLevel: "info", LogFormat: "auto",
-		MaxUploadMB: 20, MaxRoomMB: 200, MaxAttachmentMB: 5, Pandoc: "pandoc", PandocTimeout: time.Minute, TurnTimeout: 15 * time.Minute, MagicLinkTTL: 15 * time.Minute,
+		MaxUploadMB: 20, MaxRoomMB: 200, MaxAttachmentMB: 5, MaxImportMB: 1024, Pandoc: "pandoc", PandocTimeout: time.Minute, TurnTimeout: 15 * time.Minute, MagicLinkTTL: 15 * time.Minute,
 		AuditRetention: 365 * 24 * time.Hour}
 	cases := map[string]func(*Config){
 		"zero upload limit":       func(c *Config) { c.MaxUploadMB = 0 },
@@ -24,6 +24,8 @@ func TestConfigValidate(t *testing.T) {
 		"room limit overflows":    func(c *Config) { c.MaxRoomMB = 1 << 21 },
 		"zero attachment limit":   func(c *Config) { c.MaxAttachmentMB = 0 },
 		"attachment over room":    func(c *Config) { c.MaxAttachmentMB = 201 },
+		"import below room":       func(c *Config) { c.MaxImportMB = 199 },
+		"import overflows":        func(c *Config) { c.MaxImportMB = 1<<20 + 1 },
 		"zero pandoc timeout":     func(c *Config) { c.PandocTimeout = 0 },
 		"turn timeout too short":  func(c *Config) { c.TurnTimeout = time.Second },
 		"turn timeout too long":   func(c *Config) { c.TurnTimeout = 25 * time.Hour },

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -87,6 +88,14 @@ func (s *Store) SetInstanceSettings(ctx context.Context, v InstanceSettings) err
 	})
 }
 
+// InstanceID returns this instance's id, drawn once: an import tells its own exports by it.
+func (s *Store) InstanceID(ctx context.Context) (string, error) {
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO settings(key, value) VALUES('instance_id', ?) ON CONFLICT DO NOTHING`, rand.Text()); err != nil {
+		return "", fmt.Errorf("instance id: %w", err)
+	}
+	return s.Setting(ctx, "instance_id")
+}
+
 // UsedBytes is what the database holds: its pages in use, free pages left by deletes aside.
 func (s *Store) UsedBytes(ctx context.Context) (int64, error) { return usedBytes(ctx, s.db) }
 
@@ -114,20 +123,8 @@ func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileI
 		if err != nil {
 			return err
 		}
-		if v.RoomCreation == CreationSuperAdmin {
-			return fmt.Errorf("%w: only the super-admin creates rooms on this instance", ErrCreationRefused)
-		}
-		var n int
-		var own sql.NullInt64
-		if err := tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM rooms WHERE creator_profile_id = p.id), max_rooms FROM profiles p WHERE id = ?`,
-			profileID).Scan(&n, &own); err != nil {
-			return fmt.Errorf("create room: %w", err)
-		}
-		switch {
-		case !own.Valid && n >= v.RoomsPerProfile:
-			return fmt.Errorf("%w: you have created %d rooms, the most this instance allows per profile", ErrCreationRefused, n)
-		case own.Valid && own.Int64 != UnlimitedRooms && int64(n) >= own.Int64:
-			return fmt.Errorf("%w: you have created %d rooms, the most the instance admin allows your profile", ErrCreationRefused, n)
+		if err := creationAllowed(ctx, tx, v, profileID); err != nil {
+			return err
 		}
 		if v.StorageQuota > 0 {
 			used, err := usedBytes(ctx, tx)
@@ -162,6 +159,27 @@ func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileI
 		return nil, err
 	}
 	return r, nil
+}
+
+// creationAllowed returns ErrCreationRefused, with why, unless profile profileID may create one more
+// room under settings v: the creation mode and its rooms limit, its own or the instance's.
+func creationAllowed(ctx context.Context, tx *sql.Tx, v InstanceSettings, profileID int64) error {
+	if v.RoomCreation == CreationSuperAdmin {
+		return fmt.Errorf("%w: only the super-admin creates rooms on this instance", ErrCreationRefused)
+	}
+	var n int
+	var own sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM rooms WHERE creator_profile_id = p.id), max_rooms FROM profiles p WHERE id = ?`,
+		profileID).Scan(&n, &own); err != nil {
+		return fmt.Errorf("create room: %w", err)
+	}
+	switch {
+	case !own.Valid && n >= v.RoomsPerProfile:
+		return fmt.Errorf("%w: you have created %d rooms, the most this instance allows per profile", ErrCreationRefused, n)
+	case own.Valid && own.Int64 != UnlimitedRooms && int64(n) >= own.Int64:
+		return fmt.Errorf("%w: you have created %d rooms, the most the instance admin allows your profile", ErrCreationRefused, n)
+	}
+	return nil
 }
 
 // SetProfileMaxRooms sets profile id's own rooms limit: n rooms, UnlimitedRooms, or with nil the

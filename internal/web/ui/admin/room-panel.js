@@ -53,7 +53,8 @@ export const formAction = (work) => (/** @type {Event} */ e) => { e.preventDefau
 
 /**
  * RoomPanel shows the room's volume against its quota, renames it, lists and revokes its invites,
- * offers the export and deletes it once its name is typed. Only the super-admin sets the quota.
+ * exports it, with a warning on what the archive holds (004-AC11), and deletes it once its name is
+ * typed. Only the super-admin sets the quota.
  * byName names an invite's creator; children add sections before the export.
  * @param {{room: Room, base: string, api: Api, show: (err: unknown) => void, reload: () => void, close: () => void,
  *   setQuota?: boolean, byName?: (id: number) => string, children?: import('preact').ComponentChildren}} props
@@ -107,7 +108,8 @@ export function RoomPanel({ room, base, api, show, reload, close, setQuota, byNa
       </table></div>`}
       ${children}
       <h3>Export</h3>
-      <div class="row"><button type="button" id="export" disabled>Export</button><span class="hint">Export is not available yet.</span></div>
+      <p class="warn" id="export-warning">The archive holds the room's agent sessions: everything Claude read in this room, documents and transcripts included. Whoever holds the file can read it all.</p>
+      <div class="row"><a id="export" class="button" href=${base + '/export'} download>Export the room</a></div>
       <h3>Delete</h3>
       <form class="row" onSubmit=${formAction(() => api('DELETE', base).then(close).catch(show))}>
         <label>Type the room name to delete it, with everything it holds

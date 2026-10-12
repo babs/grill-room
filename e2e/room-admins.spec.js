@@ -137,7 +137,8 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     await expect(panel.locator('#volume')).toContainText('Transcripts');
     await expect(panel).toContainText('Only the instance admin changes it.');
     await expect(panel.locator('#quota')).toHaveCount(0);
-    await expect(panel.locator('#export')).toBeDisabled();
+    await expect(panel.locator('#export')).toHaveAttribute('href', `/api/rooms/${id}/export`);
+    await expect(panel.locator('#export-warning')).toContainText('everything Claude read');
     await expect(panel.locator('#invites-all tbody tr')).toHaveCount(3);
     await expect(panel.locator('#invites-all tbody tr').first()).toContainText('Alice');
     await fits(alice);
