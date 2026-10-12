@@ -220,8 +220,28 @@ func installShells(t *testing.T) [][]string {
 	return shells
 }
 
-// runInstall pipes the served install.sh into shell, as the one-liner does.
-func runInstall(t *testing.T, e *env, shell []string, home string, args ...string) (string, error) {
+// toolPath returns a PATH holding only the commands install.sh may call, so the host's own cosign
+// never takes part. A non-empty cosign is written there as a fake cosign script.
+func toolPath(t *testing.T, cosign string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, tool := range []string{"curl", "mktemp", "mkdir", "chmod", "mv", "rm", "uname", "grep", "sha256sum", "shasum", "sysctl"} {
+		if p, err := exec.LookPath(tool); err == nil {
+			if err := os.Symlink(p, filepath.Join(dir, tool)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if cosign != "" {
+		if err := os.WriteFile(filepath.Join(dir, "cosign"), []byte(cosign), 0o755); err != nil { //nolint:gosec // an executable test script
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// runInstall pipes the served install.sh into shell, as the one-liner does, with path as PATH.
+func runInstall(t *testing.T, e *env, shell []string, path, home string, args ...string) (string, error) {
 	t.Helper()
 	code, script := e.do(t, http.MethodGet, "/install.sh", "", nil)
 	if code != http.StatusOK {
@@ -229,7 +249,7 @@ func runInstall(t *testing.T, e *env, shell []string, home string, args ...strin
 	}
 	cmd := exec.Command(shell[0], append(append(shell[1:], "-s", "--"), args...)...) //nolint:gosec,noctx // test shells
 	cmd.Stdin = bytes.NewReader(script)
-	cmd.Env = []string{"HOME=" + home, "PATH=" + os.Getenv("PATH")}
+	cmd.Env = []string{"HOME=" + home, "PATH=" + path}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -244,8 +264,8 @@ func TestInstallScriptInstallsAndStarts(t *testing.T) {
 	for _, sh := range installShells(t) {
 		t.Run(sh[0], func(t *testing.T) {
 			home := t.TempDir()
-			out, err := runInstall(t, e, sh, home, room)
-			if err != nil || !strings.Contains(out, "daemon started for "+room) {
+			out, err := runInstall(t, e, sh, toolPath(t, ""), home, room)
+			if err != nil || !strings.Contains(out, "daemon started for "+room) || !strings.Contains(out, "Signature not checked: cosign is not installed.") {
 				t.Fatalf("install: %v\n%s", err, out)
 			}
 			bin := filepath.Join(home, ".local", "bin", "grill-room-daemon")
@@ -288,13 +308,103 @@ func TestInstallScriptRefuses(t *testing.T) {
 		} {
 			t.Run(fmt.Sprintf("%s/%s", sh[0], tt.name), func(t *testing.T) {
 				home := t.TempDir()
-				out, err := runInstall(t, e, sh, home, tt.args...)
+				out, err := runInstall(t, e, sh, toolPath(t, ""), home, tt.args...)
 				ee, ok := err.(*exec.ExitError)
 				if !ok || ee.ExitCode() != tt.exit || !strings.Contains(out, tt.want) || strings.Contains(out, "daemon started") {
 					t.Fatalf("exit %v, want %d with %q:\n%s", err, tt.exit, tt.want, out)
 				}
 				if entries, _ := os.ReadDir(filepath.Join(home, ".local", "bin")); len(entries) != 0 {
 					t.Fatalf("installed anyway: %v", entries)
+				}
+			})
+		}
+	}
+}
+
+// fakeCosign answers `cosign version` with version, logs its verify-blob arguments to
+// $HOME/cosign.args and exits with code.
+func fakeCosign(version string, code int) string {
+	return fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = version ]; then echo 'GitVersion:    %s'; exit 0; fi\n"+
+		"printf '%%s\\n' \"$@\" > \"$HOME/cosign.args\"\necho 'Error: none of the expected identities matched' >&2\nexit %d\n", version, code)
+}
+
+// Grill Q9: with cosign installed, install.sh checks the downloaded build's sigstore bundle
+// against the release workflow identity and refuses on failure or when the server serves no
+// bundle; without cosign it says the signature was not checked.
+func TestInstallScriptChecksSignature(t *testing.T) {
+	signed := writeRelease(t, "v1.2.3", fakeDaemon)
+	for _, target := range DaemonTargets {
+		if err := os.WriteFile(filepath.Join(signed, DaemonFile(target)+".sigstore.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	serve := func(dir string) *env {
+		opts := testOptions
+		var err error
+		if opts.Release, err = LoadRelease(dir); err != nil {
+			t.Fatal(err)
+		}
+		return newEnvOpts(t, opts)
+	}
+	signedEnv, unsignedEnv := serve(signed), serve(writeRelease(t, "v1.2.3", fakeDaemon))
+	for _, sh := range installShells(t) {
+		for _, tt := range []struct {
+			name   string
+			e      *env
+			cosign string
+			ok     bool
+			want   []string
+		}{
+			{"cosign 3 accepts", signedEnv, fakeCosign("v3.0.6", 0), true, []string{"Signature checked"}},
+			{"cosign 2 accepts", signedEnv, fakeCosign("v2.4.1", 0), true, []string{"Signature checked"}},
+			{"cosign refuses", signedEnv, fakeCosign("v3.0.6", 1), false, []string{"signature check failed", "none of the expected identities matched"}},
+			{"no bundle served", unsignedEnv, fakeCosign("v3.0.6", 0), false, []string{"serves no signature"}},
+			{"no cosign, no bundle", unsignedEnv, "", true, []string{"Signature not checked"}},
+		} {
+			t.Run(sh[0]+"/"+tt.name, func(t *testing.T) {
+				home := t.TempDir()
+				room := tt.e.ts.URL + "/r/abc123"
+				out, err := runInstall(t, tt.e, sh, toolPath(t, tt.cosign), home, room)
+				for _, w := range tt.want {
+					if !strings.Contains(out, w) {
+						t.Fatalf("output lacks %q:\n%s", w, out)
+					}
+				}
+				bin := filepath.Join(home, ".local", "bin")
+				if left, _ := filepath.Glob(filepath.Join(bin, ".grill-room-daemon.*")); len(left) != 0 {
+					t.Fatalf("temp files left: %v", left)
+				}
+				if !tt.ok {
+					if ee, isExit := err.(*exec.ExitError); !isExit || ee.ExitCode() != 1 || strings.Contains(out, "daemon started") {
+						t.Fatalf("exit %v, want 1:\n%s", err, out)
+					}
+					if _, err := os.Stat(filepath.Join(bin, "grill-room-daemon")); err == nil {
+						t.Fatal("installed anyway")
+					}
+					return
+				}
+				if err != nil || !strings.Contains(out, "daemon started for "+room) {
+					t.Fatalf("install: %v\n%s", err, out)
+				}
+				if tt.cosign == "" {
+					return
+				}
+				args, err := os.ReadFile(filepath.Join(home, "cosign.args"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				got := string(args)
+				for _, w := range []string{
+					"verify-blob\n", "--bundle\n" + bin + "/.grill-room-daemon.",
+					"--certificate-identity-regexp\n^https://github\\.com/babs/grill-room/\\.github/workflows/release\\.yml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$\n",
+					"--certificate-oidc-issuer\nhttps://token.actions.githubusercontent.com\n",
+				} {
+					if !strings.Contains(got, w) {
+						t.Errorf("cosign args lack %q:\n%s", w, got)
+					}
+				}
+				if v2 := strings.Contains(tt.cosign, "v2."); v2 != strings.Contains(got, "--new-bundle-format\n") {
+					t.Errorf("cosign %s: --new-bundle-format passed = %v", tt.name, !v2)
 				}
 			})
 		}

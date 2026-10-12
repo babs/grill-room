@@ -105,7 +105,7 @@ The `windows` job runs `go test ./...` without `-race`. These checks skip there:
 
 | Test | Why |
 |---|---|
-| `internal/web` `TestInstallScriptInstallsAndStarts`, `TestInstallScriptRefuses` | `install.sh` targets Linux and macOS and refuses MSYS and MinGW |
+| `internal/web` `TestInstallScriptInstallsAndStarts`, `TestInstallScriptRefuses`, `TestInstallScriptChecksSignature` | `install.sh` targets Linux and macOS and refuses MSYS and MinGW |
 | `internal/sandbox` `TestDockerStream` | its fake `docker` is a sh script |
 | `internal/sandbox/fakeclaude` `TestFakeClaude` | the fake claude runs only in the Linux sandbox and builds project names from POSIX paths |
 | `internal/daemon` `TestMigrateCutShort` | it makes a directory read-only, which Windows does not enforce |
