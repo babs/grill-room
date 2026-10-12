@@ -345,16 +345,22 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 		return
 	}
 	flusher.Flush()
-	// sendTurn hands this daemon the room's running turn when it is this daemon's, once.
+	// sendTurn hands this daemon each running turn of the room that is its own, once. Ids grow, so
+	// the last one sent tells which are new; with parallel on there may be several (003-AC20).
 	var sent int64
 	sendTurn := func() bool {
-		t, err := s.bus.Store.RunningTurn(r.Context(), d.RoomID)
-		if err != nil || t.DaemonID != d.ID || t.ID == sent {
+		ts, err := s.bus.Store.RunningTurns(r.Context(), d.RoomID)
+		if err != nil {
 			return true
 		}
-		sent = t.ID
-		if _, err := fmt.Fprintf(w, "event: turn\ndata: {\"id\":%d}\n\n", t.ID); err != nil { //nolint:gosec // an integer id on an event stream, never HTML
-			return false
+		for _, t := range ts {
+			if t.DaemonID != d.ID || t.ID <= sent {
+				continue
+			}
+			sent = t.ID
+			if _, err := fmt.Fprintf(w, "event: turn\ndata: {\"id\":%d}\n\n", t.ID); err != nil { //nolint:gosec // an integer id on an event stream, never HTML
+				return false
+			}
 		}
 		flusher.Flush()
 		return true

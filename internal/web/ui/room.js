@@ -748,8 +748,8 @@ window.addEventListener('focus', () => { if (events && events.readyState !== Eve
 // Agents. The host's daemon runs every persona of the room: a persona's LED is green only while
 // that daemon is connected and can host (D8). The host, and the participants the host allows,
 // press a persona's button (D18); a press during a turn waits in the room's queue (002-AC17).
-let agent = { online: false, can_trigger: [], daemons: [], turn: null, personas: [], queue: [], models: [], efforts: [], cap_requests: [], changes: [],
-  chain: { budget: 25, count: 0, suspended: false } };
+let agent = { online: false, can_trigger: [], daemons: [], turn: null, running: [], personas: [], queue: [], models: [], efforts: [], cap_requests: [],
+  changes: [], chain: { budget: 25, count: 0, suspended: false }, parallel_turns: false };
 
 // level shows a model and effort as the room says them, "opus · effort max".
 const level = (l) => (l.model || 'default') + ' · effort ' + (l.effort || 'default');
@@ -763,12 +763,17 @@ function personaLabel(name) {
   return p ? p.badge + ' ' + name : name;
 }
 
+// A turn the host's machine holds in its own queue, behind turns of other rooms, is "queued (host
+// busy)" (003-AC18).
+const runningTurn = (p) => (agent.running || []).find((t) => t.persona_id === p.id);
+const turnText = (p, t) => p.name + (t.host_queued ? ' queued (host busy)' : ' working');
+
 function personaState(p) {
-  const running = !!agent.turn && agent.turn.status === 'running' && agent.turn.persona_id === p.id;
+  const running = runningTurn(p);
   const pos = agent.queue.findIndex((q) => q.persona_id === p.id);
   if (p.pending) return { cls: 'pending', label: p.name + ' waits for the host\'s approval' };
   if (!agent.online) return { cls: '', label: p.name + ' offline' };
-  if (running) return { cls: 'busy', label: p.name + ' working' };
+  if (running) return { cls: running.host_queued ? 'queued' : 'busy', label: turnText(p, running) };
   if (pos >= 0) return { cls: 'queued', label: p.name + ' queued, position ' + (pos + 1) };
   return { cls: 'on', label: p.name + ' ready' };
 }
@@ -807,14 +812,29 @@ function renderAgent() {
     return b;
   });
   if (buttons.length !== bar.children.length || buttons.some((b, i) => bar.children[i] !== b)) bar.replaceChildren(...buttons);
-  const running = agent.turn && agent.turn.status === 'running' ? personaByID(agent.turn.persona_id) : null;
+  const running = (agent.running || []).map((t) => [personaByID(t.persona_id), t]).filter(([p]) => p);
   $('agent-status').textContent = !agent.online ? (agent.reason || 'Agent offline')
-    : running ? running.name + ' working…' : agent.personas.length === 0 ? 'No persona: add one.' : '';
+    : running.length ? running.map(([p, t]) => turnText(p, t)).join(', ') + '…' : agent.personas.length === 0 ? 'No persona: add one.' : '';
   renderQueue();
   renderApprovals();
   renderChain();
+  renderParallel();
   renderPersonas();
 }
+
+// renderParallel shows the room's parallel mode; only the host switches it (003-AC20).
+function renderParallel() {
+  const box = $('parallel-turns');
+  if (!box.dataset.busy) box.checked = !!agent.parallel_turns;
+  box.disabled = !isHost();
+}
+$('parallel-turns').addEventListener('change', () => {
+  const box = $('parallel-turns');
+  box.dataset.busy = '1';
+  sendJSON('PATCH', api + '/agent', { parallel_turns: box.checked })
+    .catch((err) => { box.checked = !box.checked; personasStatus(err.message); })
+    .finally(() => { delete box.dataset.busy; });
+});
 
 // renderChain shows the agent chain: its count, a banner once it reached its budget (re-arm or
 // suspend the limit), and a permanent warning while the limit is suspended (002-AC25, 002-AC27).
@@ -897,8 +917,8 @@ function renderQueue() {
     const p = personaByID(q.persona_id);
     const who = participants.find((x) => x.id === q.participant_id);
     const by = { mention: ', mentioned by ', call: ', called by an agent', every_n: ', every ' + (p ? p.every_n : 'N') + ' rounds' }[q.source];
-    const label = (p ? p.badge + ' ' + p.name : 'a persona') + (by === undefined ? ', asked by ' : by)
-      + (q.participant_id ? (who ? who.name : 'someone') : '');
+    const label = (p ? p.badge + ' ' + p.name : 'a persona') + (q.cause ? ', ' + q.cause
+      : (by === undefined ? ', asked by ' : by) + (q.participant_id ? (who ? who.name : 'someone') : ''));
     li.append(label);
     if (String(q.participant_id) === myID || (!q.participant_id && canPress())) {
       const cancel = document.createElement('button');

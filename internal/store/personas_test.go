@@ -333,7 +333,7 @@ func TestQueue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.PopQueued(ctx, "a"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.PopQueued(ctx, "a", false); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("pop empty: %v", err)
 	}
 	first := &QueuedTurn{RoomID: "a", PersonaID: sec.ID, ParticipantID: bob.ID}
@@ -359,7 +359,7 @@ func TestQueue(t *testing.T) {
 	if err := s.CancelQueued(ctx, "b", first.ID, bob.ID, false); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("cancel through another room: %v", err)
 	}
-	head, err := s.PopQueued(ctx, "a")
+	head, err := s.PopQueued(ctx, "a", false)
 	if err != nil || head.ID != first.ID || head.PersonaID != sec.ID {
 		t.Fatalf("pop: %+v %v", head, err)
 	}
@@ -383,7 +383,7 @@ func TestSessionsPerPersona(t *testing.T) {
 	run := func(p RoomPersona, sid string, off int64, data string) *Turn {
 		t.Helper()
 		tn := &Turn{RoomID: "a", ParticipantID: r.p.ID, DaemonID: r.daemon, Prompt: "go", PersonaID: p.ID, PersonaName: p.Name}
-		if err := s.StartTurn(ctx, tn); err != nil {
+		if err := s.StartTurn(ctx, tn, false); err != nil {
 			t.Fatal(err)
 		}
 		done, err := s.CompleteTurn(ctx, "a", tn.ID, r.daemon, &TurnOutcome{Synthesis: "by " + p.Name, Model: "m", Effort: "low", SessionID: sid, SessionOffset: off, Session: []byte(data)})

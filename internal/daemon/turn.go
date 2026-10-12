@@ -21,6 +21,8 @@ import (
 
 // Agent runs turns in a sandbox; *sandbox.Sandbox is the real one.
 type Agent interface {
+	// Start brings the sandbox up; RunTurn starts it too when it is down.
+	Start(ctx context.Context) error
 	RunTurn(ctx context.Context, in sandbox.TurnInput) (*sandbox.TurnOutput, error)
 	// SetAllowlist sets the egress allowlist; a running sandbox takes it at once.
 	SetAllowlist(ctx context.Context, list []string) error
@@ -55,38 +57,53 @@ func (d *Daemon) runSettings(job turn.Job) (run turn.Level, capped bool) {
 	return run, capped
 }
 
-// agent returns the room run's sandbox, created on its first turn and again when the room moves
-// to another account's proxy.
-func (r *roomRun) agent(proxy string) (Agent, error) {
+// agent takes a free sandbox of the room for one turn, and returns it with the function that frees
+// it again. The room's first sandbox serves its turns one after the other; a parallel turn finds
+// it busy and gets one of its own (003-AC20). A free sandbox built for another account's proxy is
+// rebuilt.
+func (r *roomRun) agent(proxy string) (Agent, func(), error) {
 	r.agentMu.Lock()
 	defer r.agentMu.Unlock()
-	if r.ag != nil && r.agProxy != proxy {
-		r.ag.Close(r.ctx)
-		r.ag = nil
+	i := slices.IndexFunc(r.sandboxes, func(sl *sandboxSlot) bool { return !sl.busy })
+	if i < 0 {
+		r.sandboxes = append(r.sandboxes, &sandboxSlot{})
+		i = len(r.sandboxes) - 1
 	}
-	if r.ag == nil {
+	sl := r.sandboxes[i]
+	if sl.ag != nil && sl.proxy != proxy {
+		sl.ag.Close(r.ctx)
+		sl.ag = nil
+	}
+	if sl.ag == nil {
 		img := r.d.Status().Image
 		if img.State != "ready" {
-			return nil, errors.New("the sandbox image is not ready on the host's machine")
+			return nil, nil, errors.New("the sandbox image is not ready on the host's machine")
 		}
-		ag := r.d.o.NewAgent(r.room, img.Ref, proxy)
-		// Under agentMu, read after any saved list: SetAllowlist hands later ones to r.ag.
+		ag := r.d.o.NewAgent(r.room, i, img.Ref, proxy)
+		// Under agentMu, read after any saved list: SetAllowlist hands later ones to every sandbox.
 		if err := ag.SetAllowlist(r.ctx, r.d.Status().Allowlist); err != nil {
-			return nil, fmt.Errorf("egress allowlist: %w", err)
+			return nil, nil, fmt.Errorf("egress allowlist: %w", err)
 		}
-		r.ag, r.agProxy = ag, proxy
+		sl.ag, sl.proxy = ag, proxy
 	}
-	return r.ag, nil
+	sl.busy = true
+	return sl.ag, func() {
+		r.agentMu.Lock()
+		sl.busy = false
+		r.agentMu.Unlock()
+	}, nil
 }
 
-// closeAgent removes the sandbox when the room run ends.
+// closeAgent removes the room's sandboxes when the room run ends.
 func (r *roomRun) closeAgent(ctx context.Context) {
 	r.agentMu.Lock()
 	defer r.agentMu.Unlock()
-	if r.ag != nil {
-		r.ag.Close(ctx)
-		r.ag = nil
+	for _, sl := range r.sandboxes {
+		if sl.ag != nil {
+			sl.ag.Close(ctx)
+		}
 	}
+	r.sandboxes = nil
 }
 
 func (r *roomRun) daemonURL(path string) string {
@@ -109,11 +126,13 @@ func (r *roomRun) get(ctx context.Context, tok, path string) (*http.Response, er
 // runTurn runs turn id the room handed this daemon and posts its result. Errors before the run
 // only log: the room fails the turn when this daemon's stream drops or its timeout passes.
 func (r *roomRun) runTurn(ctx context.Context, tok string, id int64) {
-	log := r.d.o.Log.With(zap.Int64("turn", id))
+	log := r.d.o.Log.With(zap.String("room", r.room.String()), zap.Int64("turn", id))
 	start, ended := time.Now(), "the turn was abandoned"
+	var queued time.Duration
 	r.d.turnEvent(TurnEvent{Room: r.room.String(), ID: id, Phase: "start"})
 	defer func() {
-		r.d.turnEvent(TurnEvent{Room: r.room.String(), ID: id, Phase: "end", Error: ended, DurationMS: time.Since(start).Milliseconds()})
+		r.d.turnEvent(TurnEvent{Room: r.room.String(), ID: id, Phase: "end", Error: ended, DurationMS: time.Since(start).Milliseconds(),
+			QueueMS: queued.Milliseconds()})
 	}()
 	ids := strconv.FormatInt(id, 10)
 	jctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -134,9 +153,8 @@ func (r *roomRun) runTurn(ctx context.Context, tok string, id int64) {
 		if timeout <= 0 {
 			timeout = 15 * time.Minute
 		}
-		tctx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-		tctx, cut := context.WithCancelCause(tctx)
+		// Cancellable before the slot: a cut-off ends a turn still waiting for one.
+		cctx, cut := context.WithCancelCause(ctx)
 		defer cut(nil)
 		r.d.mu.Lock()
 		r.d.running[id] = cut
@@ -146,14 +164,28 @@ func (r *roomRun) runTurn(ctx context.Context, tok string, id int64) {
 			delete(r.d.running, id)
 			r.d.mu.Unlock()
 		}()
-		log.Info("turn_started", zap.Bool("resume", job.Resume != ""), zap.String("persona", job.Persona))
-		res = r.execute(tctx, tok, id, job)
+		release, waited, err := r.slot(cctx, tok, id)
+		queued = waited
 		switch {
-		case res.Error == "":
-		case errors.Is(context.Cause(tctx), errCutOff):
-			res = turn.Result{Error: errCutOff.Error()}
-		case errors.Is(tctx.Err(), context.DeadlineExceeded):
-			res = turn.Result{Error: fmt.Sprintf("the turn timed out after %s", timeout)}
+		case errors.Is(context.Cause(cctx), errCutOff):
+			res.Error = errCutOff.Error()
+		case err != nil:
+			res.Error = "could not get a slot on the host's machine: " + err.Error()
+		default:
+			tctx, cancel := context.WithTimeout(cctx, timeout)
+			log.Info("turn_started", zap.Bool("resume", job.Resume != ""), zap.String("persona", job.Persona), zap.Duration("queued", waited))
+			r.count(1)
+			res = r.execute(tctx, tok, id, job)
+			r.count(-1)
+			release()
+			switch {
+			case res.Error == "":
+			case errors.Is(context.Cause(tctx), errCutOff):
+				res = turn.Result{Error: errCutOff.Error()}
+			case errors.Is(tctx.Err(), context.DeadlineExceeded):
+				res = turn.Result{Error: fmt.Sprintf("the turn timed out after %s", timeout)}
+			}
+			cancel()
 		}
 	}
 	if ctx.Err() != nil {
@@ -179,11 +211,63 @@ func (r *roomRun) runTurn(ctx context.Context, tok string, id int64) {
 	log.Info("turn_done", zap.String("error", res.Error), zap.Int("changes", len(res.Changes)), zap.Int("session_bytes", len(res.Session)))
 }
 
-// execute fetches the workspace, runs the turn in the sandbox and shapes the result.
+// slot waits for a slot under the host's global cap, and returns the function that frees it and
+// how long the turn waited. While it waits, the room shows the turn "queued (host busy)" (003-AC18).
+func (r *roomRun) slot(ctx context.Context, tok string, id int64) (func(), time.Duration, error) {
+	if r.d.acquire == nil {
+		return func() {}, 0, nil
+	}
+	start := time.Now()
+	queued := false
+	release, err := r.d.acquire(ctx, r.room.String(), id, func() {
+		queued = true
+		r.update(func(s *RoomStatus) { s.Queued++ })
+		r.postState(ctx, tok, id, true)
+	})
+	if queued {
+		r.update(func(s *RoomStatus) { s.Queued-- })
+		if err == nil {
+			r.postState(ctx, tok, id, false)
+		}
+	}
+	return release, time.Since(start), err
+}
+
+// postState tells the room that the turn waits in this machine's queue, or runs now. A room server
+// from before spec 003 phase 5 knows no such state: it shows the turn running throughout.
+func (r *roomRun) postState(ctx context.Context, tok string, id int64, queued bool) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	resp, err := r.d.roomRequest(ctx, http.MethodPost, r.daemonURL("turns/"+strconv.FormatInt(id, 10)+"/state"), tok, map[string]bool{"host_queued": queued})
+	if err == nil {
+		if resp.StatusCode/100 != 2 {
+			err = apiError(resp)
+		}
+		_ = resp.Body.Close()
+	}
+	if err != nil {
+		r.d.o.Log.Debug("turn_state_failed", zap.Int64("turn", id), zap.Bool("queued", queued), zap.Error(err))
+	}
+}
+
+// count moves the room's count of running turns.
+func (r *roomRun) count(n int) { r.update(func(s *RoomStatus) { s.Running += n }) }
+
+// execute fetches the workspace, runs the turn in a free sandbox and shapes the result.
 func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Job) turn.Result {
 	ids := strconv.FormatInt(id, 10)
 	px, err := r.d.proxyFor(r.room.String())
 	if err != nil {
+		return turn.Result{Error: err.Error()}
+	}
+	ag, free, err := r.agent(px.Addr)
+	if err != nil {
+		return turn.Result{Error: err.Error()}
+	}
+	defer free()
+	// Before the workspace: its tar holds the worker's cache lock until read, and a sandbox
+	// start takes seconds that the other rooms' turns would wait.
+	if err := ag.Start(ctx); err != nil {
 		return turn.Result{Error: err.Error()}
 	}
 	ws, err := r.workspace(ctx, tok, id)
@@ -191,10 +275,6 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 		return turn.Result{Error: "could not fetch the workspace: " + err.Error()}
 	}
 	defer ws.Close()
-	ag, err := r.agent(px.Addr)
-	if err != nil {
-		return turn.Result{Error: err.Error()}
-	}
 	run, capped := r.d.runSettings(job)
 	if capped {
 		r.d.o.Log.Info("turn_capped", zap.String("persona", job.Persona), zap.String("asked", turn.Level{Model: job.Model, Effort: job.Effort}.String()),

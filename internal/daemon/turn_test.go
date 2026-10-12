@@ -30,8 +30,8 @@ type fakeAgent struct {
 	inputs []sandbox.TurnInput
 	closed bool
 	allow  []string
-	// allowErr and deniedErr fail SetAllowlist and Denied.
-	allowErr, deniedErr error
+	// allowErr, deniedErr and startErr fail SetAllowlist, Denied and Start.
+	allowErr, deniedErr, startErr error
 }
 
 func (f *fakeAgent) RunTurn(ctx context.Context, in sandbox.TurnInput) (*sandbox.TurnOutput, error) {
@@ -52,6 +52,12 @@ func (f *fakeAgent) RunTurn(ctx context.Context, in sandbox.TurnInput) (*sandbox
 	f.inputs = append(f.inputs, in)
 	f.mu.Unlock()
 	return f.run(ctx, in, files)
+}
+
+func (f *fakeAgent) Start(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.startErr
 }
 
 func (f *fakeAgent) SetAllowlist(_ context.Context, list []string) error {
@@ -92,7 +98,7 @@ func pairedDaemon(t *testing.T, rs *roomServer, name string, ag *fakeAgent, set 
 	participant, _ = rs.join(t, name)
 	d = newTestDaemon(t, dockerUp)
 	d.o.Model = "haiku"
-	d.o.NewAgent = func(Room, string, string) Agent { return ag }
+	d.o.NewAgent = func(Room, int, string, string) Agent { return ag }
 	for _, f := range set {
 		f(d)
 	}
@@ -390,7 +396,7 @@ func TestRunTurnReportsFetchFailureAndDefaultsTimeout(t *testing.T) {
 	defer ts.Close()
 	d := newTestDaemon(t, dockerUp)
 	var deadline time.Duration
-	d.o.NewAgent = func(Room, string, string) Agent {
+	d.o.NewAgent = func(Room, int, string, string) Agent {
 		return &fakeAgent{run: func(ctx context.Context, _ sandbox.TurnInput, _ map[string]string) (*sandbox.TurnOutput, error) {
 			dl, _ := ctx.Deadline()
 			deadline = time.Until(dl)

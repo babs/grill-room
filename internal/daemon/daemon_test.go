@@ -319,16 +319,28 @@ func TestRunRefreshesUntilCancelled(t *testing.T) {
 	}
 }
 
-// A replaced room's loop may still be unwinding: its last writes must not reach the status.
-func TestReplacedRoomCannotWriteStatus(t *testing.T) {
+// A second room joins the first instead of replacing it: the worker serves both. The page's room
+// fields follow the room handed over last, and handing over a room served already keeps its run.
+func TestRoomsServedSideBySide(t *testing.T) {
 	d := newTestDaemon(t, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	d.SetRoom(ctx, Room{Base: "http://127.0.0.1:1", ID: "old"})
-	old := d.roomUpdater(d.gen)
-	d.SetRoom(ctx, Room{Base: "http://127.0.0.1:1", ID: "new"})
-	old(func(s *Status) { s.Connection, s.Error = "connected", "stale" })
-	if s := d.Status(); s.Connection == "connected" || s.Error == "stale" || s.Room != "http://127.0.0.1:1/r/new" {
+	a, b := Room{Base: "http://127.0.0.1:1", ID: "a"}, Room{Base: "http://127.0.0.1:1", ID: "b"}
+	d.SetRoom(ctx, a)
+	d.mu.Lock()
+	first := d.rooms[a.String()]
+	d.mu.Unlock()
+	d.SetRoom(ctx, b)
+	if s := d.Status(); len(s.Rooms) != 2 || s.Room != b.String() {
 		t.Fatalf("status = %+v", s)
 	}
+	d.SetRoom(ctx, a)
+	d.mu.Lock()
+	same := d.rooms[a.String()] == first
+	d.mu.Unlock()
+	if s := d.Status(); !same || s.Room != a.String() || len(s.Rooms) != 2 {
+		t.Fatalf("handing a served room over again restarted it: %v, status %+v", same, s)
+	}
+	cancel()
+	d.Wait()
 }

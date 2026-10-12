@@ -166,7 +166,8 @@ function renderInstances(instances, current, autostart, accounts) {
   if (!instances) return;
   // Counters and metrics change during turns: they must not rebuild an open account picker.
   const key = JSON.stringify([instances.map((i) => [i.id, i.url, i.rooms, i.room, i.state, i.error, i.version, i.trust, i.restarts,
-    i.connection, i.accept_unsigned, i.account, i.room_accounts, i.cut_off, Math.floor(i.requests / 10)]), current, (accounts || []).map((a) => a.name)]);
+    i.connection, i.accept_unsigned, i.account, i.room_accounts, i.cut_off, Math.floor(i.requests / 10), i.room_states]), current,
+  (accounts || []).map((a) => a.name)]);
   const box = $('autostart');
   box.parentElement.hidden = autostart === undefined;
   if (autostart !== undefined && !box.dataset.busy) box.checked = autostart;
@@ -216,7 +217,7 @@ function renderInstances(instances, current, autostart, accounts) {
     const rooms = document.createElement('ul');
     for (const r of i.rooms) {
       const room = document.createElement('li');
-      room.append(r + (r === i.room ? ' (served)' : ''));
+      room.append(r + roomState((i.room_states || []).find((x) => x.room === r)));
       if (accounts) {
         const own = (i.room_accounts || {})[r] || '';
         room.append(' · ', accountSelect('Claude account of ' + r, accounts, own, i.account, (a) => setAccount(i.id, r, a)));
@@ -227,6 +228,28 @@ function renderInstances(instances, current, autostart, accounts) {
     if (i.id === current) li.className = 'current';
     ul.append(li);
   }
+}
+
+// roomState says how a worker serves a room: its connection, and its turns running or waiting for
+// a slot under the global cap (003-AC18).
+function roomState(st) {
+  if (!st) return '';
+  const parts = [st.pairing === 'pending' ? 'waiting for your approval in the room' : st.connection];
+  if (st.running) parts.push(st.running + ' running');
+  if (st.queued) parts.push(st.queued + ' waiting for a slot');
+  return ' (' + parts.join(', ') + ')';
+}
+
+// renderConcurrency shows the global cap and the queue waits, to tune it (003-AC18).
+function renderConcurrency(c) {
+  $('max-turns-form').hidden = !c;
+  $('concurrency').hidden = !c;
+  if (!c) return;
+  if (document.activeElement !== $('max-turns')) $('max-turns').value = c.max_turns;
+  const secs = (ms) => (ms / 1000).toFixed(1) + ' s';
+  let text = 'Now ' + c.running.length + ' running, ' + c.queued.length + ' waiting. Since start: ' + c.granted + ' turn' + (c.granted === 1 ? '' : 's');
+  if (c.waited) text += ', ' + c.waited + ' waited for a slot, ' + secs(c.wait_total_ms / c.waited) + ' on average, ' + secs(c.wait_max_ms) + ' at worst';
+  $('concurrency').textContent = text + '.';
 }
 
 const stateText = { valid: ['valid', 'ok'], expired: ['expired', 'bad'], refused: ['refused', 'bad'], unknown: ['not checked yet', ''], error: ['unreadable', 'bad'] };
@@ -372,9 +395,10 @@ function renderTrust(t, instances) {
   }
 }
 
-function render({ status: s, logs, models, efforts, instances, instance, autostart, trust, accounts }) {
+function render({ status: s, logs, models, efforts, instances, instance, autostart, trust, accounts, concurrency }) {
   renderAccounts(accounts);
   renderInstances(instances, instance, autostart, accounts);
+  renderConcurrency(concurrency);
   renderTrust(trust, instances);
   $('host').textContent = s.host + ' · ' + s.version;
   $('room').textContent = s.room || 'No room yet: paste the room link below.';
@@ -508,6 +532,13 @@ $('account-form').addEventListener('submit', (e) => {
       return api('GET', '/api/status').then(render);
     })
     .catch((err) => { $('account-status').textContent = err.message; });
+});
+$('max-turns-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  $('max-turns-status').textContent = '';
+  api('POST', '/api/max-turns', { max_turns: Number($('max-turns').value) })
+    .then(() => { $('max-turns-status').textContent = 'Saved.'; })
+    .catch((err) => { $('max-turns-status').textContent = err.message; });
 });
 $('autostart').addEventListener('change', () => {
   const box = $('autostart');

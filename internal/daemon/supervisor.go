@@ -72,8 +72,10 @@ type Supervisor struct {
 	current   string
 	autostart bool
 	set       SupervisorSettings
-	upd       selfUpdate
-	self      SelfSignature
+	// gate holds the global cap on concurrent turns (003-AC18).
+	gate *gate
+	upd  selfUpdate
+	self SelfSignature
 	// checkNow asks the update loop for a check.
 	checkNow chan struct{}
 }
@@ -124,6 +126,8 @@ type InstanceView struct {
 	// Account is the instance's default account; RoomAccounts the rooms that use another (003-AC13).
 	Account      string            `json:"account"`
 	RoomAccounts map[string]string `json:"room_accounts,omitempty"`
+	// RoomStates are the rooms the worker serves, with their connection and turns.
+	RoomStates []RoomStatus `json:"room_states,omitempty"`
 	// Requests counts what the worker sent through the accounts' proxies; CutOff shuts it out (003-AC15).
 	Requests   int64      `json:"requests"`
 	CutOff     bool       `json:"cut_off,omitempty"`
@@ -162,6 +166,7 @@ func NewSupervisor(o SupervisorOptions) *Supervisor {
 		o.Log.Warn("supervisor_settings_unreadable", zap.Error(err))
 	}
 	s.set = set
+	s.gate = newGate(set.maxTurns())
 	if o.Autostart != nil {
 		on, err := o.Autostart.Enabled()
 		if err != nil {
@@ -173,13 +178,14 @@ func NewSupervisor(o SupervisorOptions) *Supervisor {
 }
 
 // Start runs a worker for every known instance until ctx ends. The newest instance is the one
-// the page shows first.
+// the page shows first. Sandboxes a killed supervisor left are removed first.
 func (s *Supervisor) Start(ctx context.Context) {
 	s.ctx = ctx
 	insts, errs := LoadInstances(s.o.Paths)
 	for _, err := range errs {
 		s.o.Log.Error("instance_unreadable", zap.Error(err))
 	}
+	s.removeOrphans(ctx, insts)
 	var newest time.Time
 	for _, in := range insts {
 		if fi, err := os.Stat(s.o.Paths.InstanceConfig(in.ID)); err == nil && !fi.ModTime().Before(newest) {
@@ -330,11 +336,10 @@ func (w *worker) once(log *zap.Logger) error {
 	if werr != nil && s.o.Docker != nil {
 		// A clean exit removed its sandboxes; a crash or a kill left them.
 		w.s.mu.Lock()
-		names := sandboxNames(s.o.Worker.SandboxRoot, w.inst.Rooms)
+		in := w.inst
+		in.Rooms = slices.Clone(in.Rooms)
 		w.s.mu.Unlock()
-		for _, n := range names {
-			removeSandbox(context.WithoutCancel(s.ctx), s.o.Docker, n, log)
-		}
+		s.removeSandboxes(context.WithoutCancel(s.ctx), log, []Instance{in}, InstanceLabel(in.ID))
 	}
 	if err == nil {
 		err = werr
@@ -425,6 +430,14 @@ func (w *worker) serve(conn *Conn, cmd *exec.Cmd, log *zap.Logger) error {
 					}
 				}
 			})
+		case "acquire":
+			room, turn := "", int64(0)
+			if m.Turn != nil {
+				room, turn = m.Turn.Room, m.Turn.ID
+			}
+			s.gate.acquire(slotKey{w.inst.ID, m.Slot}, room, turn, conn.Send)
+		case "release":
+			s.gate.release(slotKey{w.inst.ID, m.Slot})
 		case "metrics":
 			w.set(func() { w.metrics = m.Metrics })
 		case "turn":
@@ -444,8 +457,41 @@ func (w *worker) serve(conn *Conn, cmd *exec.Cmd, log *zap.Logger) error {
 	}
 }
 
-// detach fails the requests still waiting on a worker that is gone.
+// removeOrphans removes the sandboxes, egress proxies and networks a killed supervisor left: every
+// Docker object carrying this state root's label, and the first sandbox of each known room, as
+// workers before the labels named it. Another state root's, or another project's, carry neither.
+func (s *Supervisor) removeOrphans(ctx context.Context, insts []Instance) {
+	if s.o.Docker == nil {
+		return
+	}
+	if ready := sandbox.Check(ctx, s.o.Docker); !ready.OK {
+		return
+	}
+	s.removeSandboxes(ctx, s.o.Log, insts)
+}
+
+// removeSandboxes removes the Docker objects labelled with this state root and labels, and the
+// first sandbox of each room of insts.
+func (s *Supervisor) removeSandboxes(ctx context.Context, log *zap.Logger, insts []Instance, labels ...string) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	n, err := sandbox.RemoveLabelled(ctx, s.o.Docker, append([]string{RootLabel(s.o.Worker.SandboxRoot)}, labels...)...)
+	if err != nil {
+		log.Warn("sandbox_cleanup_failed", zap.Error(err))
+	}
+	if n > 0 {
+		log.Info("sandboxes_removed", zap.Int("objects", n))
+	}
+	for _, in := range insts {
+		for _, name := range sandboxNames(s.o.Worker.SandboxRoot, in.Rooms) {
+			removeSandbox(ctx, s.o.Docker, name, log)
+		}
+	}
+}
+
+// detach fails the requests still waiting on a worker that is gone, and frees its slots.
 func (w *worker) detach() {
+	w.s.gate.drop(w.inst.ID)
 	w.set(func() {
 		for id, ch := range w.pending {
 			ch <- Msg{ID: id, Error: "the worker stopped"}
@@ -615,7 +661,7 @@ func (s *Supervisor) Instances() ([]InstanceView, string) {
 			v.Requests = s.o.Accounts.Requests(w.inst.ID)
 		}
 		if w.status != nil {
-			v.Room, v.Connection = w.status.Room, w.status.Connection
+			v.Room, v.Connection, v.RoomStates = w.status.Room, w.status.Connection, w.status.Rooms
 		}
 		out = append(out, v)
 	}

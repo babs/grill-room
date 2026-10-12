@@ -11,6 +11,7 @@ import (
 	"net"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,6 +41,8 @@ type Config struct {
 	Proxy string
 	// Limits caps the sandbox and its egress proxy; an empty value leaves Docker's default.
 	Limits Limits
+	// Labels, "key=value", mark every Docker object besides Label, for RemoveLabelled.
+	Labels []string
 }
 
 // Limits are docker run --cpus and --memory values.
@@ -112,10 +115,13 @@ func (s *Sandbox) Start(ctx context.Context) error {
 	s.remove(ctx)
 	s.started = true
 
-	label := Label + "=" + s.cfg.Name
-	hardening := []string{"--label", label, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only"}
+	labels := []string{"--label", Label + "=" + s.cfg.Name}
+	for _, l := range s.cfg.Labels {
+		labels = append(labels, "--label", l)
+	}
+	hardening := append(slices.Clone(labels), "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only")
 	steps := [][]string{
-		{"network", "create", "--internal", "--label", label, s.network()},
+		append(append([]string{"network", "create", "--internal"}, labels...), s.network()),
 		// The relay sits on the default bridge to reach the host, and on the internal network as
 		// "proxy". It forwards to one fixed address, so the sandbox gains no other route.
 		append(append([]string{"run", "-d", "--name", s.relay(), "--add-host", "host.docker.internal:" + gateway}, hardening...),
@@ -123,15 +129,15 @@ func (s *Sandbox) Start(ctx context.Context) error {
 		{"network", "connect", "--alias", "proxy", s.network(), s.relay()},
 		// The egress proxy sits on its own bridge to reach the allowlist, and on the internal
 		// network as "egress" (002-AC34).
-		{"network", "create", "--label", label, s.egress()},
+		append(append([]string{"network", "create"}, labels...), s.egress()),
 		// The local log driver is bounded and readable by docker logs, which the denied list reads.
 		append(append(append([]string{"run", "-d", "--name", s.egress(), "--network", s.egress(), "--log-driver", "local"}, hardening...),
 			limitFlags(s.cfg.Limits.EgressCPUs, s.cfg.Limits.EgressMemory)...),
 			"--tmpfs", "/tmp", "--pids-limit", "64", "-e", "GRILL_SQUID_CONF="+squidConf(s.allow),
 			"--entrypoint", "sh", s.cfg.Image, "-c", `printf '%s' "$GRILL_SQUID_CONF" > /tmp/squid.conf && exec squid -N -f /tmp/squid.conf`),
 		{"network", "connect", "--alias", "egress", s.network(), s.egress()},
-		{"volume", "create", "--label", label, s.homeVol()},
-		{"volume", "create", "--label", label, s.wsVol()},
+		append(append([]string{"volume", "create"}, labels...), s.homeVol()),
+		append(append([]string{"volume", "create"}, labels...), s.wsVol()),
 		append(append(append([]string{"run", "-d", "--init", "--name", s.container(), "--network", s.network()}, hardening...),
 			limitFlags(s.cfg.Limits.CPUs, s.cfg.Limits.Memory)...),
 			"--tmpfs", "/tmp", "--pids-limit", "512",
@@ -201,6 +207,38 @@ func (s *Sandbox) remove(ctx context.Context) {
 	} {
 		_, _ = s.run(ctx, nil, args...)
 	}
+}
+
+// RemoveLabelled removes every container, network and volume carrying all of labels, "key=value",
+// and returns how many it removed. Containers go first: a network or a volume in use stays.
+func RemoveLabelled(ctx context.Context, run Runner, labels ...string) (int, error) {
+	if len(labels) == 0 {
+		return 0, errors.New("remove labelled: no label, which would match every object")
+	}
+	var filters []string
+	for _, l := range labels {
+		filters = append(filters, "--filter", "label="+l)
+	}
+	n := 0
+	var errs []error
+	for _, kind := range [][]string{{"container", "ls", "-aq"}, {"network", "ls", "-q"}, {"volume", "ls", "-q"}} {
+		out, err := run(ctx, nil, append(slices.Clone(kind), filters...)...)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		ids := strings.Fields(string(out))
+		if len(ids) == 0 {
+			continue
+		}
+		rm := map[string][]string{"container": {"container", "rm", "-f", "-v"}, "network": {"network", "rm"}, "volume": {"volume", "rm", "-f"}}[kind[0]]
+		if _, err := run(ctx, nil, append(rm, ids...)...); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		n += len(ids)
+	}
+	return n, errors.Join(errs...)
 }
 
 // personaFile holds the persona's text in the sandbox home, out of the workspace the agent edits.

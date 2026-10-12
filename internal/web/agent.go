@@ -20,8 +20,13 @@ type agentState struct {
 	// Online is true when the host's daemon is connected and can host (D8).
 	Online bool `json:"online"`
 	// Reason says why the agent is offline.
-	Reason string      `json:"reason,omitempty"`
-	Turn   *store.Turn `json:"turn"`
+	Reason string `json:"reason,omitempty"`
+	// Turn is the room's latest turn; Running, the turns running now, those the host's daemon
+	// queued under its cap included (003-AC18).
+	Turn    *store.Turn  `json:"turn"`
+	Running []store.Turn `json:"running"`
+	// ParallelTurns lets personas run side by side (003-AC20).
+	ParallelTurns bool `json:"parallel_turns"`
 	// CanTrigger lists the participants the host granted the button to (D18).
 	CanTrigger []int64 `json:"can_trigger"`
 	// Daemons are the connected daemons: the host can hand over to one that can host.
@@ -96,7 +101,7 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 		return nil, err
 	}
 	st := &agentState{HostID: r.HostParticipantID, CanTrigger: []int64{}, Daemons: s.connectedDaemons(room), Models: turn.Models, Efforts: turn.Efforts,
-		Chain: r.Chain}
+		Chain: r.Chain, ParallelTurns: r.ParallelTurns}
 	for _, p := range ps {
 		if p.CanTrigger {
 			st.CanTrigger = append(st.CanTrigger, p.ID)
@@ -111,6 +116,9 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 		st.Online = true
 	}
 	if st.Turn, err = s.bus.Store.LastTurn(ctx, room); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+	if st.Running, err = s.bus.Store.RunningTurns(ctx, room); err != nil {
 		return nil, err
 	}
 	if st.Personas, err = s.bus.Store.RoomPersonas(ctx, room); err != nil {
@@ -195,6 +203,36 @@ func (s *Server) getAgent(w http.ResponseWriter, r *http.Request, sess session) 
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
+}
+
+// setAgentMode is the host switching the room's parallel mode (003-AC20). Turning it on starts the
+// queued turns of personas that do not run.
+func (s *Server) setAgentMode(w http.ResponseWriter, r *http.Request, sess session) {
+	var req struct {
+		ParallelTurns *bool `json:"parallel_turns"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.ParallelTurns == nil {
+		httpError(w, http.StatusBadRequest, "parallel_turns is required")
+		return
+	}
+	room, ok := s.asHost(w, r, sess)
+	if !ok {
+		return
+	}
+	m, err := s.bus.Store.SetParallelTurns(r.Context(), room.ID, *req.ParallelTurns, sess.p)
+	if err != nil {
+		s.serverError(w, "set_agent_mode_failed", err)
+		return
+	}
+	if m != nil {
+		s.log.Info("parallel_turns_changed", zap.String("room", room.ID), zap.Bool("on", *req.ParallelTurns))
+		s.bus.Notify(room.ID)
+		s.drain(r.Context(), room.ID)
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // asHost loads the room and answers 403 unless the session's participant hosts it.

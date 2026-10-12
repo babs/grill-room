@@ -258,7 +258,15 @@ func (s *Server) walkWorkspace(ctx context.Context, t *store.Turn, visit wsFile)
 			}
 		}
 		if d.Kind == store.DocAgent {
-			if err := file(agentPath(d), 0o644, revision(d.Revisions)); err != nil {
+			n := d.Revisions
+			if t.BaseRevisions != nil {
+				var ok bool
+				// A document another turn wrote after this workspace was pinned stays out of it.
+				if n, ok = t.BaseRevisions[d.ID]; !ok {
+					continue
+				}
+			}
+			if err := file(agentPath(d), 0o644, revision(n)); err != nil {
 				return err
 			}
 			continue

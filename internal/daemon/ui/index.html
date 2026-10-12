@@ -49,6 +49,12 @@
     <h2 id="instances-title">Instances</h2>
     <p class="hint">One worker per room server. The room above belongs to the last one you paired with.</p>
     <ul id="instances"></ul>
+    <form id="max-turns-form">
+      <label>Turns at once, across every instance and room <input id="max-turns" type="number" min="1" max="16" required></label>
+      <button type="submit">Set</button>
+      <span id="max-turns-status" role="status"></span>
+    </form>
+    <p class="hint" id="concurrency"></p>
     <label><input id="autostart" type="checkbox"> Start at login</label>
     <span id="autostart-status" role="status"></span>
   </section>

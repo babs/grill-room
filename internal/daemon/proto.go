@@ -15,10 +15,14 @@ import (
 // additive: new fields and new message types only, and unknown ones are ignored.
 //
 // Version 2 added the config's access and the access request: the accounts' proxies (003-AC14).
+// Version 3 added the slots under the host's global cap: acquire, wait, grant, release (003-AC18).
 const (
-	Proto     = 2
+	Proto     = 3
 	ProtoSkew = 1
 )
+
+// protoSlots is the first version whose workers ask for a slot before each turn.
+const protoSlots = 3
 
 // Negotiate returns the version a peer at own talks with a peer at peer, or why they cannot.
 func Negotiate(own, peer int) (int, error) {
@@ -34,6 +38,9 @@ type Msg struct {
 	Type string `json:"type"`
 	// ID numbers a supervisor request; the worker's reply carries it back.
 	ID int64 `json:"id,omitempty"`
+	// Slot numbers a worker's acquire; the supervisor's wait and grant, and the worker's
+	// release, carry it back.
+	Slot int64 `json:"slot,omitempty"`
 	// Proto is the sender's own version, in hello and config.
 	Proto    int    `json:"proto,omitempty"`
 	Version  string `json:"version,omitempty"`
@@ -95,6 +102,8 @@ type WorkerConfig struct {
 	Pair  string   `json:"pair,omitempty"`
 	// Access is the rooms' proxies at start; the access request replaces it.
 	Access *Access `json:"access,omitempty"`
+	// agreed is the protocol version the handshake settled on.
+	agreed int
 }
 
 // Metrics is the worker process's health, sent every MetricsEvery.
@@ -114,6 +123,8 @@ type TurnEvent struct {
 	Phase      string `json:"phase"`
 	Error      string `json:"error,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
+	// QueueMS is how long the turn waited for a slot under the host's global cap (003-AC18).
+	QueueMS int64 `json:"queue_ms,omitempty"`
 }
 
 // maxLine bounds one protocol line: a status with a long allowlist, or a full denied list.

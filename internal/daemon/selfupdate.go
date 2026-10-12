@@ -32,6 +32,16 @@ type SupervisorSettings struct {
 	UpdateChannel string `json:"update_channel"`
 	// UpdateInstance is the instance the "instance" channel follows.
 	UpdateInstance string `json:"update_instance,omitempty"`
+	// MaxTurns is the global cap on concurrent turns, DefaultMaxTurns when 0 (003-AC18).
+	MaxTurns int `json:"max_turns,omitempty"`
+}
+
+// maxTurns is the cap in force.
+func (s SupervisorSettings) maxTurns() int {
+	if s.MaxTurns == 0 {
+		return DefaultMaxTurns
+	}
+	return s.MaxTurns
 }
 
 func loadSupervisorSettings(path string) (SupervisorSettings, error) {
@@ -43,7 +53,7 @@ func loadSupervisorSettings(path string) (SupervisorSettings, error) {
 	if err == nil {
 		err = json.Unmarshal(b, &set)
 	}
-	if err != nil || (set.UpdateChannel != "github" && set.UpdateChannel != "instance") {
+	if err != nil || (set.UpdateChannel != "github" && set.UpdateChannel != "instance") || set.MaxTurns < 0 || set.MaxTurns > MaxTurnsLimit {
 		return SupervisorSettings{UpdateChannel: "github"}, fmt.Errorf("%s: %w", path, errors.Join(err, errors.New("falling back to the GitHub channel")))
 	}
 	return set, nil
@@ -283,7 +293,8 @@ func (s *Supervisor) SetUpdateChannel(channel, instance string) error {
 	if s.upd.running {
 		return errors.New("an update is running: change the channel once it is done")
 	}
-	set := SupervisorSettings{UpdateChannel: channel}
+	set := s.set
+	set.UpdateChannel, set.UpdateInstance = channel, ""
 	switch channel {
 	case "github":
 	case "instance":
@@ -297,11 +308,9 @@ func (s *Supervisor) SetUpdateChannel(channel, instance string) error {
 	default:
 		return fmt.Errorf("unknown update channel %q: want github or instance", channel)
 	}
-	b, _ := json.MarshalIndent(set, "", "  ") // plain strings
-	if err := writeFileAtomic(s.o.Paths.supervisorSettings(), append(b, '\n')); err != nil {
+	if err := s.saveSettingsLocked(set); err != nil {
 		return err
 	}
-	s.set = set
 	s.upd = selfUpdate{}
 	s.o.Log.Info("update_channel_changed", zap.String("channel", channel), zap.String("instance", instance))
 	select {
@@ -310,6 +319,37 @@ func (s *Supervisor) SetUpdateChannel(channel, instance string) error {
 	}
 	return nil
 }
+
+// saveSettingsLocked writes set to supervisor.json and applies it; the caller holds mu.
+func (s *Supervisor) saveSettingsLocked(set SupervisorSettings) error {
+	b, _ := json.MarshalIndent(set, "", "  ") // plain strings and a number
+	if err := writeFileAtomic(s.o.Paths.supervisorSettings(), append(b, '\n')); err != nil {
+		return err
+	}
+	s.set = set
+	return nil
+}
+
+// SetMaxTurns sets the global cap on concurrent turns across every instance and room (003-AC18).
+func (s *Supervisor) SetMaxTurns(n int) error {
+	if n < 1 || n > MaxTurnsLimit {
+		return fmt.Errorf("the cap on concurrent turns must be 1 to %d", MaxTurnsLimit)
+	}
+	s.mu.Lock()
+	set := s.set
+	set.MaxTurns = n
+	err := s.saveSettingsLocked(set)
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	s.gate.setMax(n)
+	s.o.Log.Info("max_turns_changed", zap.Int("max_turns", n))
+	return nil
+}
+
+// Concurrency is the global cap, the turns holding or waiting for a slot, and the queue waits.
+func (s *Supervisor) Concurrency() ConcurrencyView { return s.gate.view() }
 
 // SetRelax switches an instance's "accept unsigned" toggle (003-AC4). Switching it on needs the
 // instance's host typed exactly. The worker restarts under the new rule.

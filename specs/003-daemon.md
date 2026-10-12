@@ -178,7 +178,7 @@ Releases are built and signed keyless by GitHub Actions, and the sandbox image i
 ### Phase 5 — Concurrency
 - Work: global cap and local FIFO, server state "queued (host busy)", parallel turns across rooms, per-room parallel mode, a sandbox per parallel turn, conflict detection on base revisions with one re-run, queue-wait and conflict metrics.
 - **Covers**: AC18, AC19, AC20, AC21
-- **Data model impact**: `rooms.parallel_turns`; `turns.base_revisions` (or a per-document base table); `turns.rerun_of`
+- **Data model impact**: `rooms.parallel_turns`; `turns.base_revisions` (JSON, pinned at the first workspace fetch); `turns.rerun_of`; `turns.host_queued_at` (an accepted turn waiting for a slot on the host's machine); `turns.cause` (set for re-runs here, by Phase 6 for the rest); `turn_queue.rerun_of` and `turn_queue.cause`; one running turn per persona instead of per room
 - **DoD**: tests with the fake claude covering the cap, the FIFO, two rooms in parallel, and an in-room parallel conflict re-run then failure.
 
 ### Phase 6 — Turn contract
@@ -203,7 +203,7 @@ Releases are built and signed keyless by GitHub Actions, and the sandbox image i
 
 Server:
 - `rooms.parallel_turns`
-- `turns.base_revisions` (or a per-document base table), `turns.rerun_of`, `turns.cause`
+- `turns.base_revisions`, `turns.rerun_of`, `turns.host_queued_at`, `turns.cause`; `turn_queue.rerun_of`, `turn_queue.cause`
 - `room_personas.autocompact`
 - `agent_sessions.context_tokens`
 - the hostname is removed from room-visible state

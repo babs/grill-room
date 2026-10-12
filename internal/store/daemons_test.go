@@ -54,6 +54,8 @@ func TestDaemons(t *testing.T) {
 // "<name> holds the agent(s).", and the daemons' and turns' host columns are blank. A participant's
 // text that happens to hold the phrase stays as written.
 func TestMigrationDropsHostnames(t *testing.T) {
+	// The schema version the hostname migration brings.
+	const dropHostnames = 13
 	s := openTest(t)
 	ctx := context.Background()
 	seed(t, s, "r1")
@@ -62,13 +64,13 @@ func TestMigrationDropsHostnames(t *testing.T) {
 		`UPDATE turns SET host = 'laptop-of-alice'`,
 		`INSERT INTO messages(room_id, kind, sender, body, ts) VALUES ('r1', 'system', 'Alice', 'Alice hosts the agent, on laptop-of-alice.', '2026-01-01T00:00:00Z')`,
 		`INSERT INTO messages(room_id, kind, sender, body, ts) VALUES ('r1', 'text', 'Bob', 'Bob hosts the agent, on laptop-of-alice.', '2026-01-01T00:00:00Z')`,
-		fmt.Sprintf(`PRAGMA user_version = %d`, len(migrations)-1),
+		fmt.Sprintf(`PRAGMA user_version = %d`, dropHostnames-1),
 	} {
 		if _, err := s.db.ExecContext(ctx, q); err != nil {
 			t.Fatalf("%s: %v", q, err)
 		}
 	}
-	if err := migrateTo(ctx, s.db, len(migrations)); err != nil {
+	if err := migrateTo(ctx, s.db, dropHostnames); err != nil {
 		t.Fatal(err)
 	}
 	var system, text string

@@ -52,6 +52,8 @@ type hostBackend interface {
 	ProbeAccount(ctx context.Context, name string) error
 	SetAccount(instance, room, account string) error
 	SetCutOff(instance string, on bool) error
+	Concurrency() ConcurrencyView
+	SetMaxTurns(n int) error
 }
 
 // Admin is the local admin page. Only someone holding a link this process printed or opened can
@@ -128,6 +130,7 @@ func (a *Admin) Handler() http.Handler {
 	mux.Handle("POST /api/accounts/probe", a.auth(a.host(a.probeAccount)))
 	mux.Handle("POST /api/instance-account", a.auth(a.host(a.instanceAccount)))
 	mux.Handle("POST /api/cut-off", a.auth(a.host(a.cutOff)))
+	mux.Handle("POST /api/max-turns", a.auth(a.host(a.maxTurns)))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
@@ -227,6 +230,7 @@ func (a *Admin) status(w http.ResponseWriter, r *http.Request) {
 		}
 		v["trust"] = h.Trust()
 		v["accounts"] = h.AccountViews(r.Context())
+		v["concurrency"] = h.Concurrency()
 	}
 	writeJSON(w, http.StatusOK, v)
 }
@@ -460,6 +464,16 @@ func (a *Admin) cutOff(w http.ResponseWriter, r *http.Request, h hostBackend) {
 	}
 	if decodeJSON(w, r, &req) {
 		reply(w, h.SetCutOff(req.Instance, req.CutOff))
+	}
+}
+
+// maxTurns sets the global cap on concurrent turns (003-AC18).
+func (a *Admin) maxTurns(w http.ResponseWriter, r *http.Request, h hostBackend) {
+	var req struct {
+		MaxTurns int `json:"max_turns"`
+	}
+	if decodeJSON(w, r, &req) {
+		reply(w, h.SetMaxTurns(req.MaxTurns))
 	}
 }
 

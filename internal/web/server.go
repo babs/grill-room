@@ -73,6 +73,8 @@ type Server struct {
 	turnMu sync.Mutex
 	// fallbacks counts full workspace fetches by daemons with a cache, by turn.FallbackReasons.
 	fallbacks map[string]*atomic.Int64
+	// conflicts counts results rejected on a document conflict, by ConflictOutcomes (003-AC21).
+	conflicts map[string]*atomic.Int64
 }
 
 // New builds a server. adminHash is HashToken of the admin token; baseURL prefixes invite links.
@@ -88,7 +90,8 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	}
 	return &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
 		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, viewers: viewers{m: map[int64]int{}}, stt: sttWorkers{m: map[string]*sttWorker{}},
-		magicLimit: limiter{window: magicWindow}, fallbacks: fallbackCounters()}
+		magicLimit: limiter{window: magicWindow}, fallbacks: fallbackCounters(),
+		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}}
 }
 
 func fallbackCounters() map[string]*atomic.Int64 {
@@ -101,6 +104,12 @@ func fallbackCounters() map[string]*atomic.Int64 {
 
 // WorkspaceFallbacks returns how many full workspaces daemons fetched for reason (002-AC38).
 func (s *Server) WorkspaceFallbacks(reason string) int64 { return s.fallbacks[reason].Load() }
+
+// ConflictOutcomes are what a document conflict does to a turn: it runs again, or fails.
+var ConflictOutcomes = []string{"rerun", "failed"}
+
+// TurnConflicts counts the turn results rejected on a document conflict with outcome.
+func (s *Server) TurnConflicts(outcome string) int64 { return s.conflicts[outcome].Load() }
 
 // Streams returns the number of open event streams.
 func (s *Server) Streams() int64 { return s.streams.Load() }
@@ -180,6 +189,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms/{room}/daemon/status", s.daemonAuth(s.daemonStatus))
 
 	mux.Handle("GET /api/rooms/{room}/agent", s.participant(s.getAgent))
+	mux.Handle("PATCH /api/rooms/{room}/agent", s.participant(s.setAgentMode))
 	mux.Handle("POST /api/rooms/{room}/turns", s.participant(s.startTurn))
 	mux.Handle("PUT /api/rooms/{room}/host", s.participant(s.handOver))
 	mux.Handle("PATCH /api/rooms/{room}/participants/{participant}", s.participant(s.setCanTrigger))
@@ -204,6 +214,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rooms/{room}/daemon/turns/{turn}/manifest", s.daemonAuth(s.getManifest))
 	mux.Handle("GET /api/rooms/{room}/daemon/turns/{turn}/skills", s.daemonAuth(s.getSkills))
 	mux.Handle("POST /api/rooms/{room}/daemon/turns/{turn}", s.daemonAuth(s.postResult))
+	mux.Handle("POST /api/rooms/{room}/daemon/turns/{turn}/state", s.daemonAuth(s.postTurnState))
 	mux.Handle("GET /api/rooms/{room}/daemon/sessions/{session}", s.daemonAuth(s.getSession))
 
 	mux.Handle("GET /api/rooms/{room}/voice", s.participant(s.getVoice))

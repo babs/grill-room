@@ -35,6 +35,9 @@ type Room struct {
 	// HostParticipantID is the participant whose daemon runs the agent; 0 before any daemon hosted.
 	HostParticipantID int64 `json:"host_participant_id,omitempty"`
 	Chain             Chain `json:"chain"`
+	// ParallelTurns lets two personas of the room run at once, each in its own sandbox; the host
+	// switches it (003-AC20).
+	ParallelTurns bool `json:"parallel_turns"`
 }
 
 // Invite is a link token granting access to one room. Only its hash is stored.
@@ -444,6 +447,21 @@ UPDATE messages SET body = substr(body, 1, instr(body, ' hosts the agent, on ') 
 	WHERE kind = 'system' AND instr(body, ' hosts the agent, on ') > 0;
 UPDATE daemons SET name = '';
 UPDATE turns SET host = '';
+`, `
+-- 003-AC18 to 003-AC21: concurrent turns. host_queued_at is set while the host's daemon holds an
+-- accepted turn in its local queue; base_revisions pins the agent documents a turn's workspace holds.
+ALTER TABLE rooms ADD COLUMN parallel_turns INTEGER NOT NULL DEFAULT 0 CHECK (parallel_turns IN (0, 1));
+ALTER TABLE turns ADD COLUMN host_queued_at TEXT;
+ALTER TABLE turns ADD COLUMN base_revisions TEXT;
+ALTER TABLE turns ADD COLUMN rerun_of INTEGER REFERENCES turns(id) ON DELETE SET NULL;
+ALTER TABLE turns ADD COLUMN cause TEXT NOT NULL DEFAULT '';
+CREATE INDEX turns_rerun_of ON turns(rerun_of);
+-- One running turn per persona; StartTurn keeps one per room unless the room runs in parallel.
+DROP INDEX turns_one_running;
+CREATE UNIQUE INDEX turns_one_running ON turns(persona_id) WHERE status = 'running';
+ALTER TABLE turn_queue ADD COLUMN rerun_of INTEGER REFERENCES turns(id) ON DELETE CASCADE;
+ALTER TABLE turn_queue ADD COLUMN cause TEXT NOT NULL DEFAULT '';
+CREATE INDEX turn_queue_rerun_of ON turn_queue(rerun_of);
 `}
 
 // migrationData runs Go code inside the transaction of the migration to version key, after its SQL.
@@ -557,8 +575,8 @@ func (s *Store) CreateRoom(ctx context.Context, id, name string) (*Room, error) 
 func (s *Store) Room(ctx context.Context, id string) (*Room, error) {
 	var r Room
 	var created string
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at, COALESCE(host_participant_id, 0), chain_budget, chain_count, chain_suspended
-		FROM rooms WHERE id = ?`, id).Scan(&r.ID, &r.Name, &created, &r.HostParticipantID, &r.Chain.Budget, &r.Chain.Count, &r.Chain.Suspended)
+	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at, COALESCE(host_participant_id, 0), chain_budget, chain_count, chain_suspended, parallel_turns
+		FROM rooms WHERE id = ?`, id).Scan(&r.ID, &r.Name, &created, &r.HostParticipantID, &r.Chain.Budget, &r.Chain.Count, &r.Chain.Suspended, &r.ParallelTurns)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

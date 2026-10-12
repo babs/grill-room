@@ -39,14 +39,17 @@ func WorkerHandshake(conn *Conn, instance, version string) (WorkerConfig, error)
 	case m.Type != "config" || m.Config == nil:
 		return WorkerConfig{}, fmt.Errorf("the supervisor sent %q instead of a config", m.Type)
 	}
-	if _, err := Negotiate(Proto, m.Proto); err != nil {
+	agreed, err := Negotiate(Proto, m.Proto)
+	if err != nil {
 		_ = conn.Send(Msg{Type: "refused", Proto: Proto, Error: fmt.Sprintf("worker %s: supervisor %v", version, err)})
 		return WorkerConfig{}, fmt.Errorf("this worker refuses the supervisor %s: %w", m.Version, err)
 	}
 	if m.Config.Instance != instance {
 		return WorkerConfig{}, fmt.Errorf("the supervisor sent the config of instance %s to the worker of %s", m.Config.Instance, instance)
 	}
-	return *m.Config, nil
+	cfg := *m.Config
+	cfg.agreed = agreed
+	return cfg, nil
 }
 
 // ServeWorker is the worker side of docs/daemon-protocol.md once the handshake is done: it runs d
@@ -56,9 +59,15 @@ func ServeWorker(ctx context.Context, conn *Conn, d *Daemon, cfg WorkerConfig) e
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	started := time.Now()
+	var sl *slots
+	// A supervisor before version 3 knows no slots: the turns then run outside the host's cap.
+	if cfg.agreed >= protoSlots {
+		sl = &slots{conn: conn, waiting: map[int64]chan bool{}}
+		d.acquire = sl.acquire
+	}
 	var wg sync.WaitGroup
 	wg.Go(func() { d.Run(ctx) })
-	if room, ok := d.startRoom(cfg); ok {
+	for _, room := range d.startRooms(cfg) {
 		d.SetRoom(ctx, room)
 	}
 	wg.Go(func() { pushStatus(ctx, conn, d) })
@@ -92,6 +101,10 @@ loop:
 			if !ok || m.Type == "stop" {
 				break loop
 			}
+			if (m.Type == "wait" || m.Type == "grant") && sl != nil {
+				sl.answer(m)
+				continue
+			}
 			wg.Go(func() {
 				if err := conn.Send(d.handle(ctx, m)); err != nil {
 					d.o.Log.Warn("reply_failed", zap.String("request", m.Type), zap.Error(err))
@@ -106,27 +119,92 @@ loop:
 	return nil
 }
 
-// startRoom is the room to serve at start: the one to pair, else the newest one holding a token.
-// ponytail: one room per worker until workers serve several rooms (spec 003 phase 5).
-func (d *Daemon) startRoom(cfg WorkerConfig) (Room, bool) {
+// startRooms are the rooms to serve at start: every one holding a token, oldest first, then the
+// one to pair, which the page shows.
+func (d *Daemon) startRooms(cfg WorkerConfig) []Room {
+	var out []Room
+	for _, u := range cfg.Rooms {
+		r, err := ParseRoomURL(u)
+		if err != nil || u == cfg.Pair {
+			continue
+		}
+		if tok, err := d.o.Tokens.Get(r); err == nil && tok != "" {
+			out = append(out, r)
+		}
+	}
 	if cfg.Pair != "" {
 		r, err := ParseRoomURL(cfg.Pair)
 		if err != nil {
 			d.o.Log.Warn("pair_refused", zap.Error(err))
-			return Room{}, false
+			return out
 		}
-		return r, true
+		out = append(out, r)
 	}
-	for i := len(cfg.Rooms) - 1; i >= 0; i-- {
-		r, err := ParseRoomURL(cfg.Rooms[i])
-		if err != nil {
-			continue
-		}
-		if tok, err := d.o.Tokens.Get(r); err == nil && tok != "" {
-			return r, true
+	return out
+}
+
+// slots is the worker's side of the host's global cap (003-AC18): before each turn it asks the
+// supervisor for a slot, and waits in the supervisor's queue until one is granted.
+type slots struct {
+	conn *Conn
+	mu   sync.Mutex
+	next int64
+	// waiting hears false for "wait" and true for "grant", by slot.
+	waiting map[int64]chan bool
+}
+
+// acquire waits for a slot for turn of room; onWait runs once the supervisor queues it. The
+// returned function frees the slot, or leaves the queue.
+func (s *slots) acquire(ctx context.Context, room string, turn int64, onWait func()) (func(), error) {
+	s.mu.Lock()
+	s.next++
+	id := s.next
+	ch := make(chan bool, 2)
+	s.waiting[id] = ch
+	s.mu.Unlock()
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			s.mu.Lock()
+			delete(s.waiting, id)
+			s.mu.Unlock()
+			_ = s.conn.Send(Msg{Type: "release", Slot: id})
+		})
+	}
+	if err := s.conn.Send(Msg{Type: "acquire", Slot: id, Turn: &TurnEvent{Room: room, ID: turn}}); err != nil {
+		release()
+		return nil, err
+	}
+	waited := false
+	for {
+		select {
+		case granted := <-ch:
+			if granted {
+				return release, nil
+			}
+			if !waited {
+				waited = true
+				onWait()
+			}
+		case <-ctx.Done():
+			release()
+			return nil, context.Cause(ctx)
 		}
 	}
-	return Room{}, false
+}
+
+// answer hands the supervisor's wait or grant to the turn asking.
+func (s *slots) answer(m Msg) {
+	s.mu.Lock()
+	ch := s.waiting[m.Slot]
+	s.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- m.Type == "grant":
+	default:
+	}
 }
 
 // handle answers one supervisor request.
@@ -239,7 +317,27 @@ func SandboxName(root string, r Room) string {
 	return hex.EncodeToString(sum[:6])
 }
 
-// sandboxNames lists the sandboxes the rooms may have, for the cleanup after a worker crash.
+// SlotSandboxName names sandbox slot of a room: the room's first keeps SandboxName, the ones its
+// parallel turns add get a suffix (003-AC20).
+func SlotSandboxName(root string, r Room, slot int) string {
+	if slot == 0 {
+		return SandboxName(root, r)
+	}
+	return fmt.Sprintf("%s-%d", SandboxName(root, r), slot)
+}
+
+// RootLabel marks every Docker object of the sandboxes under one state root, so that a
+// supervisor finds the ones a crash left, and never another's (003-AC8).
+func RootLabel(root string) string {
+	sum := sha256.Sum256([]byte(root))
+	return "grill-room-root=" + hex.EncodeToString(sum[:6])
+}
+
+// InstanceLabel marks the Docker objects of one instance's sandboxes.
+func InstanceLabel(instance string) string { return "grill-room-instance=" + instance }
+
+// sandboxNames lists the first sandbox of each room, for the cleanup of workers that predate the
+// labels.
 func sandboxNames(root string, rooms []string) []string {
 	var names []string
 	for _, u := range rooms {

@@ -132,10 +132,8 @@ func (s *Server) presencePreamble(ctx context.Context, room *store.Room, self *s
 	if err != nil {
 		return "", err
 	}
-	running, err := st.RunningTurn(ctx, room.ID)
-	if errors.Is(err, store.ErrNotFound) {
-		running = &store.Turn{}
-	} else if err != nil {
+	running, err := st.RunningTurns(ctx, room.ID)
+	if err != nil {
 		return "", err
 	}
 	host, err := st.HostDaemon(ctx, room.ID)
@@ -162,8 +160,10 @@ func (s *Server) presencePreamble(ctx context.Context, room *store.Room, self *s
 		switch {
 		case p.Pending:
 			state = "waiting for the host's approval"
-		case running.PersonaID == p.ID:
+		case slices.ContainsFunc(running, func(t store.Turn) bool { return t.PersonaID == p.ID && !t.HostQueued }):
 			state = "running"
+		case slices.ContainsFunc(running, func(t store.Turn) bool { return t.PersonaID == p.ID }):
+			state = "queued"
 		case slices.ContainsFunc(queue, func(q store.QueuedTurn) bool { return q.PersonaID == p.ID }):
 			state = "queued"
 		}

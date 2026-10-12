@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -215,26 +216,33 @@ func TestConnAndLogWriter(t *testing.T) {
 	}
 }
 
-// A worker pairs with the room it is handed; with none, it serves the newest room holding a token.
-func TestStartRoom(t *testing.T) {
+// A worker serves every room holding a token, oldest first, then pairs with the room it is
+// handed, which the page shows.
+func TestStartRooms(t *testing.T) {
 	d := newTestDaemon(t, nil)
-	a, b := Room{Base: "https://rooms.example", ID: "aaa"}, Room{Base: "https://rooms.example", ID: "bbb"}
-	if err := d.o.Tokens.Set(a, "tok"); err != nil {
-		t.Fatal(err)
+	a, b, c := Room{Base: "https://rooms.example", ID: "aaa"}, Room{Base: "https://rooms.example", ID: "bbb"}, Room{Base: "https://rooms.example", ID: "ccc"}
+	for _, r := range []Room{a, c} {
+		if err := d.o.Tokens.Set(r, "tok"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, tc := range []struct {
 		cfg  WorkerConfig
-		want string
+		want []string
 	}{
-		{WorkerConfig{Pair: b.String(), Rooms: []string{a.String()}}, b.String()},
-		{WorkerConfig{Pair: "http://rooms.example/r/x", Rooms: []string{a.String()}}, ""},
-		{WorkerConfig{Rooms: []string{a.String(), b.String()}}, a.String()},
-		{WorkerConfig{Rooms: []string{b.String()}}, ""},
-		{WorkerConfig{}, ""},
+		{WorkerConfig{Pair: b.String(), Rooms: []string{a.String(), b.String()}}, []string{a.String(), b.String()}},
+		{WorkerConfig{Pair: a.String(), Rooms: []string{a.String(), c.String()}}, []string{c.String(), a.String()}},
+		{WorkerConfig{Pair: "http://rooms.example/r/x", Rooms: []string{a.String()}}, []string{a.String()}},
+		{WorkerConfig{Rooms: []string{c.String(), b.String(), a.String()}}, []string{c.String(), a.String()}},
+		{WorkerConfig{Rooms: []string{b.String()}}, nil},
+		{WorkerConfig{}, nil},
 	} {
-		r, ok := d.startRoom(tc.cfg)
-		if got := map[bool]string{true: r.String(), false: ""}[ok]; got != tc.want {
-			t.Errorf("startRoom(%+v) = %q, want %q", tc.cfg, got, tc.want)
+		var got []string
+		for _, r := range d.startRooms(tc.cfg) {
+			got = append(got, r.String())
+		}
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("startRooms(%+v) = %q, want %q", tc.cfg, got, tc.want)
 		}
 	}
 }
@@ -253,5 +261,36 @@ func TestServeWorkerStopsOnGarbage(t *testing.T) {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatal("the worker did not stop on garbage")
+	}
+}
+
+// 003-AC18: a worker asks its supervisor for a slot only when both speak version 3: the grant and
+// wait it hears are no requests, so it answers none; with an older supervisor, turns run at once.
+func TestServeWorkerSlots(t *testing.T) {
+	for _, agreed := range []int{protoSlots - 1, protoSlots} {
+		d := newTestDaemon(t, nil)
+		f, conn := newFakeSupervisor(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- ServeWorker(ctx, conn, d, WorkerConfig{agreed: agreed}) }()
+		waitFor(t, "a first status", func() bool { return f.lastStatus().Version == "v-test" })
+		if (d.acquire != nil) != (agreed >= protoSlots) {
+			t.Fatalf("version %d: slots %v", agreed, d.acquire != nil)
+		}
+		if agreed >= protoSlots {
+			if err := f.conn.Send(Msg{Type: "grant", Slot: 7}); err != nil {
+				t.Fatal(err)
+			}
+			// A request after it is still answered, and the grant got no reply of its own.
+			f.request(t, Msg{Type: "recheck"})
+			f.mu.Lock()
+			n := len(f.replies)
+			f.mu.Unlock()
+			if n != 1 {
+				t.Fatalf("%d replies, want the recheck's only", n)
+			}
+		}
+		cancel()
+		<-done
 	}
 }

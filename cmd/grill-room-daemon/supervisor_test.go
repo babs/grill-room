@@ -340,9 +340,15 @@ func sandboxObjects(t *testing.T, name string) int {
 	return n
 }
 
-// turn posts a message, presses the agent button and waits for the turn to end.
+// turn posts a message, presses the agent button and waits for the turn to end. The room may not
+// have heard the host's readiness yet when its page shows it connected: it waits for that first.
 func (rs *roomServer) turn(t *testing.T, tok string) {
 	t.Helper()
+	waitFor(t, "the room sees its host online", func() bool {
+		var v struct{ Online bool }
+		rs.call(t, "GET", "/api/rooms/"+rs.room+"/agent", tok, nil, http.StatusOK, &v)
+		return v.Online
+	})
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/messages", tok, map[string]string{"body": "hello FAKE_MARK"}, http.StatusCreated, nil)
 	var started struct{ ID int64 }
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", tok, map[string]bool{}, http.StatusCreated, &started)

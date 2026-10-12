@@ -76,7 +76,7 @@ func seed(t *testing.T, s *Store, room string) *Participant {
 		t.Fatal(err)
 	}
 	turn := &Turn{RoomID: room, ParticipantID: p.ID, DaemonID: dm.ID, Prompt: "go", PersonaID: ps[0].ID, PersonaName: ps[0].Name}
-	if err := s.StartTurn(ctx, turn); err != nil {
+	if err := s.StartTurn(ctx, turn, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.CompleteTurn(ctx, room, turn.ID, dm.ID, &TurnOutcome{SessionID: "sid-" + room, Session: []byte("{}\n")}); err != nil {
@@ -343,6 +343,25 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 		}
 		if _, err := s.EnqueueLink(ctx, &QueuedTurn{RoomID: room, PersonaID: sec.ID}, LinkCall); err != nil {
 			t.Fatal(err)
+		}
+		// 003-AC21: a turn pinned to its base revisions, whose result conflicted, waits to run again.
+		dm, err := s.HostDaemon(ctx, room)
+		if err != nil {
+			t.Fatal(err)
+		}
+		grill, err := s.RoomPersonas(ctx, room)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rejected := &Turn{RoomID: room, ParticipantID: p.ID, DaemonID: dm.ID, Prompt: "go", PersonaID: grill[0].ID, PersonaName: grill[0].Name}
+		if err := s.StartTurn(ctx, rejected, false); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.PinBaseRevisions(ctx, room, rejected.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, rerun, err := s.RejectTurn(ctx, room, rejected.ID, dm.ID, "synthesis.md"); err != nil || !rerun {
+			t.Fatalf("reject: %v %v", rerun, err)
 		}
 		// 002-AC31: a persona's active skills go with the room; the skills stay in the library.
 		k := publish(t, s, p.ProfileID, true, "shared-"+room, "v1")

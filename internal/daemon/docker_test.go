@@ -31,7 +31,7 @@ func sandboxHost(t *testing.T, rs *roomServer, name, image string) (string, cont
 	}
 	label := fmt.Sprintf("test-%s-%d", strings.ToLower(name), time.Now().UnixNano())
 	// The fake claude sends nothing upstream: the relay only needs an address.
-	d.o.NewAgent = func(_ Room, _, proxy string) Agent {
+	d.o.NewAgent = func(_ Room, _ int, _, proxy string) Agent {
 		return sandbox.New(sandbox.Config{Image: image, Name: label, Proxy: proxy}, sandbox.Docker, d.o.Log)
 	}
 	t.Cleanup(func() {

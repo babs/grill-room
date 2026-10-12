@@ -6,14 +6,14 @@ The instance id is the first 12 hex digits of the sha256 of the server's scheme,
 
 ## Versions
 
-Both sides carry a protocol version, `Proto` in `internal/daemon/proto.go`, currently 2. Version 2 added `access`. Peers at most one version apart (`ProtoSkew`) talk at the lower of the two. Further apart, the side that notices sends `refused` and the worker exits. The supervisor marks the instance `refused` with the reason and does not restart it.
+Both sides carry a protocol version, `Proto` in `internal/daemon/proto.go`, currently 3. Version 2 added `access`, version 3 the slots under the global cap. A worker that settles on version 2 asks for no slot: its turns run outside the cap. Peers at most one version apart (`ProtoSkew`) talk at the lower of the two. Further apart, the side that notices sends `refused` and the worker exits. The supervisor marks the instance `refused` with the reason and does not restart it.
 
 A version bump must stay additive within that window: new fields and new message types only. Both sides ignore unknown fields and unknown message types. A supervisor must not send a request type its worker's agreed version lacks.
 
 ## Handshake
 
-1. The worker sends `{"type":"hello","proto":2,"version":"v0.0.3","instance":"<id>"}`.
-2. The supervisor answers either `{"type":"refused","proto":2,"error":"..."}`, or `{"type":"config","proto":2,"version":"v0.0.3","config":{...}}`.
+1. The worker sends `{"type":"hello","proto":3,"version":"v0.0.3","instance":"<id>"}`.
+2. The supervisor answers either `{"type":"refused","proto":3,"error":"..."}`, or `{"type":"config","proto":3,"version":"v0.0.3","config":{...}}`.
 3. The worker checks the supervisor's `proto` in turn, and may answer `refused` before it exits.
 
 A worker that says nothing within 10 s is killed and restarted.
@@ -24,12 +24,12 @@ The `config` object:
 |---|---|
 | `instance` | the instance id; a worker refuses another instance's config |
 | `config_dir`, `state_dir`, `cache_dir` | the instance's directories: `settings.json` and `allowlist.json`, `tokens.json`, `workspace-cache/` |
-| `sandbox_root` | keys the sandbox names, so that two supervisors never share a sandbox |
+| `sandbox_root` | keys the sandbox names and the `grill-room-root` label, so that two supervisors never share a sandbox |
 | `log_level`, `model`, `image`, `cache_mb` | as the supervisor's environment sets them |
 | `settings` | the host cap and approval mode until the page saves the instance's own |
 | `limits` | `cpus`, `memory`, `egress_cpus`, `egress_memory` for the sandbox and its egress proxy |
-| `rooms` | the instance's room links, oldest first |
-| `pair` | a room to pair with now; without it the worker reconnects to the newest room in `rooms` that holds a token |
+| `rooms` | the instance's room links, oldest first; the worker serves every one that holds a token |
+| `pair` | a room to pair with now, beside the others |
 | `access` | how the rooms reach Claude, below; sent to workers at version 2 or later |
 
 The `access` object never holds a Claude token, an account name or a config dir (003-AC14, 003-AC17):
@@ -45,13 +45,15 @@ Requests carry an `id`; the worker answers each one with `{"type":"reply","id":N
 
 | Type | Fields | Does |
 |---|---|---|
-| `pair` | `room` | serves that room, pairing first if no token is stored for it |
+| `pair` | `room` | serves that room beside the others, pairing first if no token is stored for it |
 | `settings` | `settings` | saves the host cap and approval mode, and tells the room |
 | `allowlist` | `allowlist` (absent for an empty list) | saves the egress allowlist; the running sandbox takes it at once |
 | `denied` | `n` | the reply's `denied` lists the last `n` refused egress requests |
 | `recheck` | | re-runs the Docker check, and retries a failed sandbox image |
 | `access` | `access` | replaces the access: a room whose proxy moved gets a new sandbox at its next turn, and a new `cut_off` ends the running turns. Sent whenever it changes: an account added, mapped or expired, a cut-off, Docker coming up |
 | `update` | | refused with an error: only the supervisor updates, and it updates itself (003-AC5). Phase 2 workers replaced their binary here |
+| `wait` | `slot` | no reply: the worker's turn waits in the supervisor's queue (version 3) |
+| `grant` | `slot` | no reply: the turn may run (version 3) |
 | `stop` | | no reply: the worker ends its rooms, removes their sandboxes and exits 0 |
 
 A closed stdin means the same as `stop`, so a worker whose supervisor died stops on its own.
@@ -60,10 +62,16 @@ A closed stdin means the same as `stop`, so a worker whose supervisor died stops
 
 | Type | Fields | When |
 |---|---|---|
-| `status` | `status`, the page's view of the worker; `update.served` is the version its room server hands out | whenever it changes, checked every 250 ms |
+| `status` | `status`, the page's view of the worker; `update.served` is the version its room server hands out; `rooms` lists each room's pairing, connection, and turns `running` and `queued` | whenever it changes, checked every 250 ms |
 | `metrics` | `metrics`: `uptime_seconds`, `turns`, `failed_turns`, `heap_bytes`, `goroutines` | at start, then every 30 s |
-| `turn` | `turn`: `room`, `id`, `phase` (`start` or `end`), `error`, `duration_ms` | as a turn starts and ends |
+| `turn` | `turn`: `room`, `id`, `phase` (`start` or `end`), `error`, `duration_ms`, and at the end `queue_ms`, the wait for a slot | as a turn starts and ends |
+| `acquire` | `slot`, a number the worker picks; `turn`: `room`, `id` | before each turn, version 3: the supervisor answers `grant`, or `wait` then `grant` |
+| `release` | `slot` | once the turn ran, or when it gives up waiting |
 | `log` | `log`, one zap JSON entry | for every log line. The supervisor re-encodes it before writing it to its stderr and to the page's log: it sets `instance` itself, and escapes control characters, C1 codes and Unicode format characters (bidi overrides, zero-width), so a worker binary cannot drive the terminal or fake a line. Entries over 16 KiB are dropped. The worker's stderr gets the same treatment, one entry per line with `"stream":"stderr"` |
+
+## Global cap
+
+The supervisor lets at most `max_turns` turns run at once, 2 by default, across every worker (003-AC18). A turn past it waits in one queue, first in first out, whatever its instance and room. A release, a worker's exit, or a higher cap grants the next ones. The page sets the cap, saved in `supervisor.json`, and shows the turns holding and waiting for a slot, with the slots granted since start, how many waited, and the average and longest wait.
 
 ## Claude accounts
 
@@ -71,7 +79,7 @@ Only the supervisor reads Claude tokens. It runs one bearer-swap proxy per accou
 
 ## Supervision
 
-A worker that exits without being told to is restarted after 1 s, then 2 s, 4 s and so on up to 30 s. A worker that ran for over a minute starts again from 1 s. Before the restart, the supervisor removes the sandboxes of the instance's rooms, which a crash leaves behind. A refused worker, by the handshake or by the binary checks, is not restarted until something changes: a dev key added or removed, or the instance's "accept unsigned" toggle. When a worker's status reports that its instance serves another version than the one it runs, the supervisor restarts it at once on that version.
+A worker that exits without being told to is restarted after 1 s, then 2 s, 4 s and so on up to 30 s. A worker that ran for over a minute starts again from 1 s. Before the restart, the supervisor frees the worker's slots and removes the sandboxes a crash leaves behind: every Docker object labelled with its state root and the instance, and the first sandbox of each room by name, for workers that predate the labels. At start, before any worker, it removes every object labelled with its state root: a supervisor killed with its workers left them. A refused worker, by the handshake or by the binary checks, is not restarted until something changes: a dev key added or removed, or the instance's "accept unsigned" toggle. When a worker's status reports that its instance serves another version than the one it runs, the supervisor restarts it at once on that version.
 
 When the supervisor stops, it sends `stop` to every worker, waits up to 45 s for each to exit, then kills it and removes its sandboxes.
 

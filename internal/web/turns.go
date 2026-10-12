@@ -74,7 +74,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, sess session)
 	}
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
-	busy, err := s.roomBusy(ctx, room.ID)
+	busy, err := s.roomBusy(ctx, room, persona.ID)
 	if err != nil {
 		s.serverError(w, "start_turn_failed", err)
 		return
@@ -96,7 +96,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, sess session)
 		}
 		return
 	}
-	t, err := s.launch(ctx, room, persona, req.Fresh, sess.p.ID, host)
+	t, err := s.launch(ctx, room, persona, &store.QueuedTurn{PersonaID: persona.ID, ParticipantID: sess.p.ID, Fresh: req.Fresh}, host)
 	if errors.Is(err, store.ErrTurnInProgress) {
 		httpError(w, http.StatusConflict, err.Error())
 		return
@@ -141,52 +141,71 @@ func (s *Server) pressedPersona(w http.ResponseWriter, r *http.Request, room str
 	return nil, false
 }
 
-// roomBusy reports a running turn or a waiting queue: a new press then waits its turn.
-func (s *Server) roomBusy(ctx context.Context, room string) (bool, error) {
-	if _, err := s.bus.Store.RunningTurn(ctx, room); err == nil {
-		return true, nil
-	} else if !errors.Is(err, store.ErrNotFound) {
+// roomBusy reports whether a press of persona must wait: while a turn runs or others wait. With
+// parallel on, only the persona's own running or waiting turn holds it back (003-AC20).
+func (s *Server) roomBusy(ctx context.Context, room *store.Room, persona int64) (bool, error) {
+	running, err := s.bus.Store.RunningTurns(ctx, room.ID)
+	if err != nil {
 		return false, err
 	}
-	q, err := s.bus.Store.Queue(ctx, room)
-	return len(q) > 0, err
+	q, err := s.bus.Store.Queue(ctx, room.ID)
+	if err != nil {
+		return false, err
+	}
+	if !room.ParallelTurns {
+		return len(running) > 0 || len(q) > 0, nil
+	}
+	return slices.ContainsFunc(running, func(t store.Turn) bool { return t.PersonaID == persona }) ||
+		slices.ContainsFunc(q, func(t store.QueuedTurn) bool { return t.PersonaID == persona }), nil
 }
 
-// launch starts a turn of persona on host's daemon, pressed by participant pid. The caller holds
-// turnMu.
-func (s *Server) launch(ctx context.Context, room *store.Room, persona *store.RoomPersona, fresh bool, pid int64, host *presence) (*store.Turn, error) {
-	t, err := s.prepareTurn(ctx, room, persona, fresh)
+// launch starts a turn of persona on host's daemon, as q asks: pressed by its participant, fresh,
+// or the re-run of a rejected turn. The caller holds turnMu.
+func (s *Server) launch(ctx context.Context, room *store.Room, persona *store.RoomPersona, q *store.QueuedTurn, host *presence) (*store.Turn, error) {
+	t, err := s.prepareTurn(ctx, room, persona, q.Fresh)
 	if err != nil {
 		return nil, err
 	}
-	t.ParticipantID, t.DaemonID = pid, host.id
-	if err := s.bus.Store.StartTurn(ctx, t); err != nil {
+	t.ParticipantID, t.DaemonID, t.RerunOf, t.Cause = q.ParticipantID, host.id, q.RerunOf, q.Cause
+	if err := s.bus.Store.StartTurn(ctx, t, room.ParallelTurns); err != nil {
 		return nil, err
 	}
 	// The daemon may have dropped after the presence check, its cleanup finding no turn to fail.
 	if h := s.hostDaemon(room.ID, room.HostParticipantID); h == nil || h.id != host.id {
 		s.endTurn(ctx, room.ID, t.ID, "the host's daemon disconnected")
 	}
-	// Backstop for a daemon that neither answers nor drops its stream.
-	time.AfterFunc(s.opts.TurnTimeout+turnGrace, func() {
-		s.failTurn(context.Background(), room.ID, t.ID, "timed out after "+s.opts.TurnTimeout.String())
-	})
+	s.backstop(room.ID, t.ID, s.opts.TurnTimeout+turnGrace)
 	s.bus.Notify(room.ID)
 	s.log.Info("turn_started", zap.String("room", room.ID), zap.Int64("turn", t.ID), zap.Int64("persona", persona.ID),
-		zap.Int64("participant", pid), zap.Bool("fresh", fresh), zap.Bool("resume", t.Resume != ""))
+		zap.Int64("participant", q.ParticipantID), zap.Bool("fresh", q.Fresh), zap.Bool("resume", t.Resume != ""), zap.Int64("rerun_of", t.RerunOf))
 	return t, nil
 }
 
-// drain starts the room's next queued turn once no turn runs and the host's daemon is there; the
-// queue waits otherwise.
+// backstop fails turn id once it has run for the turn timeout plus the grace, for a daemon that
+// neither answers nor drops its stream. A turn its host's daemon queued is not running yet: its
+// clock starts when it leaves that queue, which arms a new backstop (003-AC18).
+func (s *Server) backstop(room string, id int64, after time.Duration) {
+	time.AfterFunc(after, func() {
+		ctx := context.Background()
+		t, err := s.bus.Store.Turn(ctx, room, id)
+		if err != nil || t.Status != store.TurnRunning || t.HostQueued {
+			return
+		}
+		if left := time.Until(t.StartedAt.Add(s.opts.TurnTimeout + turnGrace)); left > 0 {
+			s.backstop(room, id, left)
+			return
+		}
+		s.failTurn(ctx, room, id, "timed out after "+s.opts.TurnTimeout.String())
+	})
+}
+
+// drain starts the room's queued turns while the host's daemon is there: the next one once no
+// turn runs, or with parallel on, every one whose persona is not running (003-AC20).
 func (s *Server) drain(ctx context.Context, roomID string) {
 	// A caller's request may end right after it: the queue must still move.
 	ctx = context.WithoutCancel(ctx)
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
-	if _, err := s.bus.Store.RunningTurn(ctx, roomID); !errors.Is(err, store.ErrNotFound) {
-		return
-	}
 	room, err := s.bus.Store.Room(ctx, roomID)
 	if err != nil {
 		return
@@ -195,25 +214,31 @@ func (s *Server) drain(ctx context.Context, roomID string) {
 	if host == nil || !host.CanHost {
 		return
 	}
-	q, err := s.bus.Store.PopQueued(ctx, room.ID)
-	if err != nil {
-		if !errors.Is(err, store.ErrNotFound) {
-			s.log.Error("dequeue_failed", zap.String("room", room.ID), zap.Error(err))
+	for {
+		running, err := s.bus.Store.RunningTurns(ctx, room.ID)
+		if err != nil || (!room.ParallelTurns && len(running) > 0) {
+			return
 		}
-		return
-	}
-	persona, err := s.bus.Store.RoomPersona(ctx, room.ID, q.PersonaID)
-	if err == nil {
-		_, err = s.launch(ctx, room, persona, q.Fresh, q.ParticipantID, host)
-	}
-	if err != nil {
-		s.log.Error("queued_turn_failed", zap.String("room", room.ID), zap.Int64("persona", q.PersonaID), zap.Error(err))
-		m := &store.Message{RoomID: room.ID, Kind: store.KindSystem, Sender: "grill-room", Body: "A queued turn could not start."}
-		if persona != nil {
-			m.Sender, m.Body = persona.Name, "The queued turn of "+persona.Name+" could not start."
+		q, err := s.bus.Store.PopQueued(ctx, room.ID, room.ParallelTurns)
+		if err != nil {
+			if !errors.Is(err, store.ErrNotFound) {
+				s.log.Error("dequeue_failed", zap.String("room", room.ID), zap.Error(err))
+			}
+			return
 		}
-		if err := s.bus.Post(ctx, m); err != nil {
-			s.log.Error("post_failed", zap.String("room", room.ID), zap.Error(err))
+		persona, err := s.bus.Store.RoomPersona(ctx, room.ID, q.PersonaID)
+		if err == nil {
+			_, err = s.launch(ctx, room, persona, q, host)
+		}
+		if err != nil {
+			s.log.Error("queued_turn_failed", zap.String("room", room.ID), zap.Int64("persona", q.PersonaID), zap.Error(err))
+			m := &store.Message{RoomID: room.ID, Kind: store.KindSystem, Sender: "grill-room", Body: "A queued turn could not start."}
+			if persona != nil {
+				m.Sender, m.Body = persona.Name, "The queued turn of "+persona.Name+" could not start."
+			}
+			if err := s.bus.Post(ctx, m); err != nil {
+				s.log.Error("post_failed", zap.String("room", room.ID), zap.Error(err))
+			}
 		}
 	}
 }
@@ -312,17 +337,94 @@ func (s *Server) failTurn(ctx context.Context, room string, id int64, reason str
 	s.drain(ctx, room)
 }
 
-// failDaemonTurn fails the room's running turn when d runs it (D6: a dropped host loses its turn).
+// failDaemonTurn fails the room's running turns that d runs (D6: a dropped host loses its turns).
 func (s *Server) failDaemonTurn(ctx context.Context, d *store.Daemon, reason string) {
-	t, err := s.bus.Store.RunningTurn(ctx, d.RoomID)
+	ts, err := s.bus.Store.RunningTurns(ctx, d.RoomID)
 	if err != nil {
-		if !errors.Is(err, store.ErrNotFound) {
-			s.log.Error("running_turn_lookup_failed", zap.String("room", d.RoomID), zap.Error(err))
+		s.log.Error("running_turn_lookup_failed", zap.String("room", d.RoomID), zap.Error(err))
+		return
+	}
+	for _, t := range ts {
+		if t.DaemonID == d.ID {
+			s.endTurn(ctx, d.RoomID, t.ID, reason)
+		}
+	}
+	s.drain(ctx, d.RoomID)
+}
+
+// rejectTurn sets aside the result of turn id, which conflicts on doc, and queues its re-run or
+// fails it (003-AC21).
+func (s *Server) rejectTurn(ctx context.Context, room string, id, daemon int64, doc string) {
+	_, rerun, err := s.bus.Store.RejectTurn(ctx, room, id, daemon, doc)
+	if err != nil {
+		if !errors.Is(err, store.ErrTurnNotRunning) {
+			s.log.Error("reject_turn_failed", zap.String("room", room), zap.Int64("turn", id), zap.Error(err))
 		}
 		return
 	}
-	if t.DaemonID == d.ID {
-		s.failTurn(ctx, d.RoomID, t.ID, reason)
+	outcome := "failed"
+	if rerun {
+		outcome = "rerun"
+	}
+	s.conflicts[outcome].Add(1)
+	s.log.Warn("turn_conflict", zap.String("room", room), zap.Int64("turn", id), zap.String("doc", doc), zap.String("outcome", outcome))
+	s.bus.Notify(room)
+	s.drain(ctx, room)
+}
+
+// pinBase pins the base revisions of the turn's workspace on t, answering the error itself: every
+// fetch of one turn's workspace holds the same documents (003-AC21). A daemon fetches the
+// workspace once its turn runs: a turn still shown queued on its host lost that state change.
+func (s *Server) pinBase(w http.ResponseWriter, r *http.Request, t *store.Turn) bool {
+	base, err := s.bus.Store.PinBaseRevisions(r.Context(), t.RoomID, t.ID)
+	if err != nil {
+		s.serverError(w, "workspace_failed", err)
+		return false
+	}
+	t.BaseRevisions = base
+	if t.HostQueued {
+		if err := s.hostQueued(r.Context(), t.RoomID, t.ID, t.DaemonID, false); err != nil {
+			s.log.Warn("turn_state_failed", zap.String("room", t.RoomID), zap.Int64("turn", t.ID), zap.Error(err))
+		}
+	}
+	return true
+}
+
+// hostQueued records that the turn waits in its host's queue, or runs: the room is told, and a
+// running turn's backstop starts (003-AC18).
+func (s *Server) hostQueued(ctx context.Context, room string, id, daemon int64, queued bool) error {
+	changed, err := s.bus.Store.SetHostQueued(ctx, room, id, daemon, queued)
+	if err != nil || !changed {
+		return err
+	}
+	if !queued {
+		s.backstop(room, id, s.opts.TurnTimeout+turnGrace)
+	}
+	s.bus.Notify(room)
+	s.log.Info("turn_host_queued", zap.String("room", room), zap.Int64("turn", id), zap.Bool("queued", queued))
+	return nil
+}
+
+// postTurnState is the daemon saying that it holds the turn in its local queue under the host's
+// cap, or that the turn left it and runs now (003-AC18).
+func (s *Server) postTurnState(w http.ResponseWriter, r *http.Request, d *store.Daemon, _ string) {
+	t, ok := s.daemonTurn(w, r, d)
+	if !ok {
+		return
+	}
+	var req struct {
+		HostQueued bool `json:"host_queued"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	switch err := s.hostQueued(r.Context(), d.RoomID, t.ID, d.ID, req.HostQueued); {
+	case errors.Is(err, store.ErrTurnNotRunning):
+		httpError(w, http.StatusConflict, err.Error())
+	case err != nil:
+		s.serverError(w, "turn_state_failed", err)
+	default:
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
@@ -410,7 +512,7 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request, d *store.Daemon,
 // for it only as a fallback, and says why (002-AC38).
 func (s *Server) getWorkspace(w http.ResponseWriter, r *http.Request, d *store.Daemon, _ string) {
 	t, ok := s.daemonTurn(w, r, d)
-	if !ok {
+	if !ok || !s.pinBase(w, r, t) {
 		return
 	}
 	if reason := r.URL.Query().Get("fallback"); reason != "" {
@@ -430,7 +532,7 @@ func (s *Server) getWorkspace(w http.ResponseWriter, r *http.Request, d *store.D
 // getManifest lists the turn's workspace files with their sha256 and size (002-AC37).
 func (s *Server) getManifest(w http.ResponseWriter, r *http.Request, d *store.Daemon, _ string) {
 	t, ok := s.daemonTurn(w, r, d)
-	if !ok {
+	if !ok || !s.pinBase(w, r, t) {
 		return
 	}
 	m, err := s.manifest(r.Context(), t)
@@ -448,7 +550,7 @@ const maxPathsRequest = 1 << 20
 // (002-AC37). Every path must be one of this turn's workspace.
 func (s *Server) postWorkspace(w http.ResponseWriter, r *http.Request, d *store.Daemon, _ string) {
 	t, ok := s.daemonTurn(w, r, d)
-	if !ok {
+	if !ok || !s.pinBase(w, r, t) {
 		return
 	}
 	var req turn.PathsRequest
@@ -484,11 +586,17 @@ func (s *Server) postWorkspace(w http.ResponseWriter, r *http.Request, d *store.
 // getSession serves the stored jsonl of the session the daemon's running turn resumes (D6, D23).
 func (s *Server) getSession(w http.ResponseWriter, r *http.Request, d *store.Daemon, _ string) {
 	sid := r.PathValue("session")
-	t, err := s.bus.Store.RunningTurn(r.Context(), d.RoomID)
-	if err != nil || t.DaemonID != d.ID || t.Resume != sid {
+	running, err := s.bus.Store.RunningTurns(r.Context(), d.RoomID)
+	if err != nil {
+		s.serverError(w, "get_session_failed", err)
+		return
+	}
+	i := slices.IndexFunc(running, func(t store.Turn) bool { return t.DaemonID == d.ID && t.Resume == sid })
+	if i < 0 {
 		httpError(w, http.StatusNotFound, "no such session for this daemon's turn")
 		return
 	}
+	t := &running[i]
 	data, err := s.bus.Store.AgentSession(r.Context(), d.RoomID, t.PersonaID, sid)
 	if err != nil {
 		s.serverError(w, "get_session_failed", err)
@@ -560,7 +668,12 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 		}
 	}
 	done, err := s.bus.Store.CompleteTurn(r.Context(), d.RoomID, t.ID, d.ID, out)
+	var conflict *store.ConflictError
 	switch {
+	case errors.As(err, &conflict):
+		s.rejectTurn(r.Context(), d.RoomID, t.ID, d.ID, conflict.Doc)
+		httpError(w, http.StatusConflict, err.Error())
+		return
 	case errors.Is(err, store.ErrTurnNotRunning):
 		httpError(w, http.StatusConflict, err.Error())
 		return

@@ -59,7 +59,7 @@ func TestHeldChanges(t *testing.T) {
 	if err := s.Enqueue(ctx, &QueuedTurn{RoomID: "a", PersonaID: sec.ID, ParticipantID: bob.ID}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("queued a pending persona: %v", err)
 	}
-	if err := s.StartTurn(ctx, &Turn{RoomID: "a", PersonaID: sec.ID, Prompt: "x"}); !errors.Is(err, ErrNotFound) {
+	if err := s.StartTurn(ctx, &Turn{RoomID: "a", PersonaID: sec.ID, Prompt: "x"}, false); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("started a pending persona: %v", err)
 	}
 	if _, m, held, err := s.EditPersona(ctx, "a", sec.ID, PersonaPatch{Name: str("Scribe")}, bob); err != nil || !held ||

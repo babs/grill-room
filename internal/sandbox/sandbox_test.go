@@ -469,3 +469,59 @@ func TestHostAddr(t *testing.T) {
 		})
 	}
 }
+
+// 003-AC8: RemoveLabelled removes the containers, then the networks and volumes, carrying every
+// label given, goes on past a failing kind, and refuses to run with no label at all.
+func TestRemoveLabelled(t *testing.T) {
+	f := &fakeDocker{reply: func(args []string) ([]byte, error) {
+		switch strings.Join(args[:2], " ") {
+		case "container ls":
+			return []byte("c1\nc2\n"), nil
+		case "network ls":
+			return nil, errors.New("daemon busy")
+		case "volume ls":
+			return []byte("v1\n"), nil
+		}
+		return nil, nil
+	}}
+	n, err := RemoveLabelled(context.Background(), f.run, "a=1", "b=2")
+	if n != 3 || err == nil || !strings.Contains(err.Error(), "daemon busy") {
+		t.Fatalf("removed %d, %v", n, err)
+	}
+	if got := f.find("container", "ls"); !slices.Equal(got, []string{"container", "ls", "-aq", "--filter", "label=a=1", "--filter", "label=b=2"}) {
+		t.Fatalf("container list %q", got)
+	}
+	if f.find("container", "rm", "-f", "-v", "c1", "c2") == nil || f.find("volume", "rm", "-f", "v1") == nil || f.find("network", "rm") != nil {
+		t.Fatalf("calls %q", f.calls)
+	}
+	if _, err := RemoveLabelled(context.Background(), f.run); err == nil {
+		t.Fatal("no label would match every object")
+	}
+}
+
+// Config.Labels mark every object a sandbox creates.
+func TestSandboxLabels(t *testing.T) {
+	f := &fakeDocker{reply: func(args []string) ([]byte, error) {
+		if args[0] == "info" {
+			return []byte("29.7.2|Ubuntu\n"), nil
+		}
+		return nil, nil
+	}}
+	s := New(Config{Image: "img", Name: "n", Proxy: "172.17.0.1:9", Labels: []string{"grill-room-root=r", "grill-room-instance=i"}}, f.run, zap.NewNop())
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	created := 0
+	for _, c := range f.calls {
+		if c[0] == "run" || slices.Equal(c[:2], []string{"network", "create"}) || slices.Equal(c[:2], []string{"volume", "create"}) {
+			created++
+			j := strings.Join(c, " ")
+			if !strings.Contains(j, "--label "+Label+"=n") || !strings.Contains(j, "--label grill-room-root=r") || !strings.Contains(j, "--label grill-room-instance=i") {
+				t.Fatalf("unlabelled: %q", c)
+			}
+		}
+	}
+	if created != 7 {
+		t.Fatalf("%d objects created", created)
+	}
+}

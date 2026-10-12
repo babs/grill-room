@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,7 +35,7 @@ func TestMain(m *testing.M) {
 // fakeWorker is a worker from another release: it only says hello at its version, reports a
 // status, answers requests and stops when told. "crash" exits right after its config, "mute"
 // never answers, "silent" never says hello, "early" talks before it, "served" reports that its
-// instance serves v9.9.9.
+// instance serves v9.9.9, "slots" asks for two slots and frees the first once granted.
 func fakeWorker(mode string) int {
 	proto, err := strconv.Atoi(mode)
 	if err != nil {
@@ -73,10 +76,22 @@ func fakeWorker(mode string) int {
 		}
 	}
 	logAccess(m.Config.Access)
+	if mode == "slots" {
+		for i := range int64(2) {
+			_ = conn.Send(Msg{Type: "acquire", Slot: i + 1, Turn: &TurnEvent{Room: m.Config.Pair, ID: 10 + i}})
+		}
+	}
 	for {
 		r, err := conn.Recv()
 		if err != nil || r.Type == "stop" {
 			return 0
+		}
+		if r.Type == "grant" || r.Type == "wait" {
+			_ = conn.Send(Msg{Type: "log", Log: []byte(fmt.Sprintf(`{"msg":"fake_slot %s %d"}`, r.Type, r.Slot))})
+			if r.Type == "grant" && r.Slot == 1 {
+				_ = conn.Send(Msg{Type: "release", Slot: 1})
+			}
+			continue
 		}
 		logAccess(r.Access)
 		if mode != "mute" {
@@ -397,17 +412,29 @@ func TestSupervisorCleansUpAfterCrash(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		calls = append(calls, strings.Join(args, " "))
+		if args[0] == "container" && args[1] == "ls" {
+			return []byte("c1\n"), nil
+		}
 		return nil, nil
 	}
 	s := testSupervisor(t, "crash", nil, func(o *SupervisorOptions) { o.Docker = docker })
 	room := Room{Base: "https://rooms.example", ID: "abc"}
 	s.SetRoom(context.Background(), room)
 	waitFor(t, "two restarts", func() bool { return instance(t, s).Restarts >= 2 })
+	id, _ := InstanceID(room.Base)
+	filter := " --filter label=" + RootLabel(s.o.Worker.SandboxRoot) + " --filter label=" + InstanceLabel(id)
 	name := "grill-room-" + SandboxName(s.o.Worker.SandboxRoot, room)
+	want := []string{
+		// Every object of the instance's sandboxes, its parallel ones included, by label.
+		"container ls -aq" + filter, "container rm -f -v c1", "network ls -q" + filter, "volume ls -q" + filter,
+		// The room's first sandbox by name, as workers before the labels left it.
+		"rm -f -v " + name + " " + name + "-relay " + name + "-egress", "network rm " + name + " " + name + "-egress",
+		"volume rm -f " + name + "-home " + name + "-workspace",
+	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(calls) < 3 || calls[0] != "rm -f -v "+name+" "+name+"-relay "+name+"-egress" || calls[1] != "network rm "+name+" "+name+"-egress" ||
-		calls[2] != "volume rm -f "+name+"-home "+name+"-workspace" {
+	// The first call is the start's Docker check, which finds no Docker here.
+	if len(calls) < 1+len(want) || !slices.Equal(calls[1:1+len(want)], want) {
 		t.Fatalf("docker calls %q", calls)
 	}
 	if _, err := s.requestCurrent(context.Background(), Msg{Type: "recheck"}); err == nil {
@@ -722,5 +749,48 @@ func TestSupervisorPageAccounts(t *testing.T) {
 	_, body = e.req(t, "GET", "/api/status", tok, "", nil)
 	if strings.Contains(body, setupToken) || strings.Contains(body, "cfg-secret") || strings.Contains(strings.Join(s.o.Ring.Lines(), "\n"), setupToken) {
 		t.Fatal("a token reached the page")
+	}
+}
+
+// 003-AC18: the supervisor grants a worker's slots under the global cap the page saved, queues
+// the one past it, and grants it once the first is released. The cap survives a restart, within
+// its bounds.
+func TestSupervisorSlots(t *testing.T) {
+	s := testSupervisor(t, "slots", nil)
+	for _, bad := range []int{0, MaxTurnsLimit + 1} {
+		if err := s.SetMaxTurns(bad); err == nil {
+			t.Fatalf("cap %d accepted", bad)
+		}
+	}
+	if err := s.SetMaxTurns(1); err != nil {
+		t.Fatal(err)
+	}
+	s.SetRoom(context.Background(), Room{Base: "https://rooms.example", ID: "abc"})
+	waitFor(t, "the second slot granted", func() bool { v := s.Concurrency(); return v.Granted == 2 && v.Waited == 1 })
+	v := s.Concurrency()
+	if v.MaxTurns != 1 || len(v.Running) != 1 || v.Running[0].Turn != 11 || v.Running[0].Room != "https://rooms.example/r/abc" || len(v.Queued) != 0 {
+		t.Fatalf("concurrency %+v", v)
+	}
+	var lines []string
+	for _, l := range s.o.Ring.Lines() {
+		lines = append(lines, regexp.MustCompile(`fake_slot \w+ \d`).FindAllString(l, -1)...)
+	}
+	if !slices.Equal(lines, []string{"fake_slot grant 1", "fake_slot wait 2", "fake_slot grant 2"}) {
+		t.Fatalf("the worker heard %q", lines)
+	}
+	if set, err := loadSupervisorSettings(s.o.Paths.supervisorSettings()); err != nil || set.maxTurns() != 1 || set.UpdateChannel != "github" {
+		t.Fatalf("saved %+v %v", set, err)
+	}
+	if err := s.SetUpdateChannel("github", ""); err != nil {
+		t.Fatal(err)
+	}
+	if set, _ := loadSupervisorSettings(s.o.Paths.supervisorSettings()); set.MaxTurns != 1 {
+		t.Fatalf("the update channel dropped the cap: %+v", set)
+	}
+	if err := os.WriteFile(s.o.Paths.supervisorSettings(), []byte(`{"update_channel":"github","max_turns":99}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if set, err := loadSupervisorSettings(s.o.Paths.supervisorSettings()); err == nil || set.maxTurns() != DefaultMaxTurns {
+		t.Fatalf("a cap out of bounds loaded: %+v %v", set, err)
 	}
 }

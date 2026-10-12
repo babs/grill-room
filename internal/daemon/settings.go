@@ -81,10 +81,7 @@ func (d *Daemon) SetSettings(s Settings) error {
 	d.st.Settings = s
 	d.mu.Unlock()
 	d.o.Log.Info("settings_changed", zap.String("max_model", s.MaxModel), zap.String("max_effort", s.MaxEffort), zap.Bool("approve_all", s.ApproveAll))
-	select {
-	case d.changed <- struct{}{}:
-	default:
-	}
+	d.wake()
 	return nil
 }
 

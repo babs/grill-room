@@ -678,14 +678,21 @@ type QueuedTurn struct {
 	Source        string    `json:"source"`
 	Fresh         bool      `json:"fresh"`
 	CreatedAt     time.Time `json:"created_at"`
+	// RerunOf is the turn a conflict rejected, which this entry runs again ahead of the others;
+	// Cause says why (003-AC21).
+	RerunOf int64  `json:"rerun_of,omitempty"`
+	Cause   string `json:"cause,omitempty"`
 }
 
-const queueCols = `SELECT id, room_id, persona_id, COALESCE(participant_id, 0), source, fresh, created_at FROM turn_queue `
+// queueOrder runs re-runs first, then in the order turns were queued.
+const queueOrder = ` ORDER BY rerun_of IS NULL, id`
+
+const queueCols = `SELECT id, room_id, persona_id, COALESCE(participant_id, 0), source, fresh, created_at, COALESCE(rerun_of, 0), cause FROM turn_queue `
 
 func scanQueued(sc scanner) (*QueuedTurn, error) {
 	var q QueuedTurn
 	var created string
-	err := sc.Scan(&q.ID, &q.RoomID, &q.PersonaID, &q.ParticipantID, &q.Source, &q.Fresh, &created)
+	err := sc.Scan(&q.ID, &q.RoomID, &q.PersonaID, &q.ParticipantID, &q.Source, &q.Fresh, &created, &q.RerunOf, &q.Cause)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -728,7 +735,7 @@ func enqueue(ctx context.Context, db querier, q *QueuedTurn) error {
 
 // Queue lists the room's queued turns, first to run first.
 func (s *Store) Queue(ctx context.Context, roomID string) ([]QueuedTurn, error) {
-	rows, err := s.db.QueryContext(ctx, queueCols+`WHERE room_id = ? ORDER BY id`, roomID)
+	rows, err := s.db.QueryContext(ctx, queueCols+`WHERE room_id = ?`+queueOrder, roomID)
 	if err != nil {
 		return nil, fmt.Errorf("queue: %w", err)
 	}
@@ -760,10 +767,12 @@ func (s *Store) CancelQueued(ctx context.Context, roomID string, id, by int64, c
 	return nil
 }
 
-// PopQueued removes and returns the head of the room's queue. ErrNotFound when it is empty.
-func (s *Store) PopQueued(ctx context.Context, roomID string) (*QueuedTurn, error) {
-	return scanQueued(s.db.QueryRowContext(ctx, `DELETE FROM turn_queue WHERE id = (SELECT id FROM turn_queue WHERE room_id = ? ORDER BY id LIMIT 1)
-		RETURNING id, room_id, persona_id, COALESCE(participant_id, 0), source, fresh, created_at`, roomID))
+// PopQueued removes and returns the head of the room's queue; with parallel on, the first entry
+// whose persona runs no turn (003-AC20). ErrNotFound when there is none.
+func (s *Store) PopQueued(ctx context.Context, roomID string, parallel bool) (*QueuedTurn, error) {
+	return scanQueued(s.db.QueryRowContext(ctx, `DELETE FROM turn_queue WHERE id = (SELECT id FROM turn_queue q WHERE room_id = ?
+			AND (? = 0 OR NOT EXISTS (SELECT 1 FROM turns t WHERE t.persona_id = q.persona_id AND t.status = 'running'))`+queueOrder+` LIMIT 1)
+		RETURNING id, room_id, persona_id, COALESCE(participant_id, 0), source, fresh, created_at, COALESCE(rerun_of, 0), cause`, roomID, parallel))
 }
 
 // DuePersonas lists the room's personas whose "every N rounds" is due: at least N turns of any

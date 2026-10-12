@@ -165,7 +165,7 @@ func TestDuePersonas(t *testing.T) {
 	run := func(persona RoomPersona, fail bool) {
 		t.Helper()
 		tn := &Turn{RoomID: "a", DaemonID: r.daemon, Prompt: "go", PersonaID: persona.ID, PersonaName: persona.Name}
-		if err := s.StartTurn(ctx, tn); err != nil {
+		if err := s.StartTurn(ctx, tn, false); err != nil {
 			t.Fatal(err)
 		}
 		if fail {
