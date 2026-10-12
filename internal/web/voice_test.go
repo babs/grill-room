@@ -228,9 +228,9 @@ func sttOf(t *testing.T, ev sseEvent) sttState {
 // 001-AC10: the room learns when transcription goes away and when it comes back. 005-AC8: and whose
 // voices the workers transcribe, counted once over the workers, from those that say so.
 func TestSTTHeartbeatState(t *testing.T) {
-	oldTimeout, oldPoll := sttTimeout, sttPoll
-	sttTimeout, sttPoll = 300*time.Millisecond, 20*time.Millisecond
-	t.Cleanup(func() { sttTimeout, sttPoll = oldTimeout, oldPoll })
+	oldTimeout, oldPoll := sttTimeout, pollEvery
+	sttTimeout, pollEvery = 300*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { sttTimeout, pollEvery = oldTimeout, oldPoll })
 	e, _ := newVoiceEnv(t)
 	room := e.createRoom(t, "R")
 	p := e.join(t, e.createInvite(t, room.ID).Token, "A")

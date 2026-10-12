@@ -175,7 +175,18 @@ dialog .hint { color: var(--muted); font-size: 0.85rem; margin: 0.3rem 0; }
 .led { width: 0.75rem; height: 0.75rem; border-radius: 50%; background: #d93025; box-shadow: 0 0 0 2px rgba(217, 48, 37, 0.3); }
 .led.on { background: #34c759; box-shadow: 0 0 0 2px rgba(52, 199, 89, 0.3); }
 .led.busy { background: var(--amber); box-shadow: 0 0 0 2px rgba(255, 194, 61, 0.35); }
-#participants .host-badge { font-size: 0.75rem; padding: 0 0.35rem; border-radius: 6px; background: var(--amber); color: var(--ink); }
+#participants .badges { display: contents; }
+.badge { font-size: 0.75rem; padding: 0 0.35rem; border-radius: 6px; background: var(--line); color: var(--ink); cursor: help; }
+.badge.role-host { background: var(--amber); }
+.badge.role-you { background: var(--teal); color: #fff; }
+.badge.transcribed { background: none; border: 1px solid var(--teal); color: var(--teal); }
+#participants .audio:not(:empty) { cursor: help; }
+#participants-away .seen { font-size: 0.75rem; color: var(--muted); }
+aside h3.people { font-size: 0.75rem; color: var(--muted); font-weight: normal; margin: 0.5rem 0 0; }
+#away summary { font-size: 0.75rem; color: var(--muted); cursor: pointer; }
+#participants-away { list-style: none; padding: 0; margin: 0.3rem 0 1.2rem; opacity: 0.75; }
+#participants-away li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; padding: 0.2rem 0; }
+#people-open { display: none; }
 #participants label.trigger { font-size: 0.8rem; color: var(--muted); display: flex; align-items: center; gap: 0.2rem; }
 #participants button.make-host { padding: 0.15rem 0.5rem; font-size: 0.8rem; }
 #voice { display: flex; align-items: center; gap: 0.4rem; }
@@ -214,7 +225,7 @@ body.join .hint { color: var(--muted); font-size: 0.85rem; text-align: left; }
 aside { width: 14rem; padding: 1rem; border-right: 1px solid var(--line); overflow-y: auto; }
 aside h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
 #participants, #documents { list-style: none; padding: 0; margin: 0.6rem 0 1.2rem; }
-#participants li { display: flex; align-items: center; gap: 0.4rem; padding: 0.25rem 0; }
+#participants li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; padding: 0.25rem 0; }
 #participants .name { flex: 1; overflow-wrap: anywhere; }
 #participants input[type=range] { width: 4rem; }
 /* Speaking indicator: a dot that lights while LiveKit reports the participant as an active speaker. */
@@ -222,6 +233,7 @@ aside h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em;
 li.in-voice .voice-dot { background: var(--teal); opacity: 0.4; }
 li.in-voice.speaking .voice-dot { opacity: 1; box-shadow: 0 0 0 3px rgba(21, 159, 140, 0.35); }
 li.muted .voice-dot { background: #b3261e; opacity: 0.6; }
+li.deaf .name { text-decoration: underline dotted; }
 button.doc {
   width: 100%;
   padding: 0.3rem 0.4rem;
@@ -289,6 +301,10 @@ button.doc:hover { background: var(--line); }
   #agent { order: 1; flex-basis: 100%; }
   #agent-status { font-size: 0.8rem; }
   aside { display: none; }
+  /* The participant list opens over the chat (005-AC7). */
+  #people-open { display: inline-block; padding: 0.3rem 0.7rem; font-size: 0.85rem; }
+  body.people-open .layout > aside { display: block; position: fixed; inset: 0; top: auto; height: 75dvh; width: auto; z-index: 5;
+    background: var(--paper); border-top: 1px solid var(--line); box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.15); }
   #viewer:not([hidden]) + .chat { display: none; }
 }
 

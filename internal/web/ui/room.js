@@ -17,6 +17,12 @@ let refreshTimer;
 let wasIn = false;
 let participants = [];
 let myID = '';
+// tab names this page to the server's presence: its stream and heartbeats (005-AC6).
+const tab = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)).replaceAll('-', '');
+// presence holds the server's "presence" event by participant id; transcribed, the participants
+// the STT worker hears.
+let presence = new Map();
+let transcribed = new Set();
 
 function end(text) {
   ended = true;
@@ -102,13 +108,25 @@ function button(text, label, onClick) {
   return b;
 }
 
+function timeOf(ts) {
+  const time = document.createElement('time');
+  time.dateTime = ts;
+  time.textContent = new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  time.title = new Date(ts).toLocaleString();
+  return time;
+}
+
 function renderMessage(m) {
   const li = document.createElement('li');
   li.className = 'msg ' + m.kind;
   li.dataset.id = m.id;
   li.dataset.seq = m.change_seq || 0;
   if (m.kind === 'system') {
-    li.textContent = m.body;
+    // Event lines show their time as messages do (005-AC19).
+    const body = document.createElement('span');
+    body.className = 'body';
+    body.textContent = m.body;
+    li.append(timeOf(m.ts), ' ', body);
     return li;
   }
   const meta = document.createElement('div');
@@ -117,10 +135,7 @@ function renderMessage(m) {
   // An agent shows its persona's badge and colour (002-AC42).
   sender.textContent = m.badge ? m.badge + ' ' + m.sender : m.sender;
   if (m.colour) sender.style.color = m.colour;
-  const time = document.createElement('time');
-  time.dateTime = m.ts;
-  time.textContent = new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  meta.append(sender, ' ', time);
+  meta.append(sender, ' ', timeOf(m.ts));
   if (m.kind === 'agent') {
     // The model and effort the turn ran with (002-AC18), the model checked against what claude
     // reported (005-AC10). Lines from before 005-AC9 may carry no effort.
@@ -688,7 +703,7 @@ function connect() {
   clearTimeout(retryTimer);
   if (events) events.close();
   if (ended) return;
-  const es = new EventSource(api + '/events' + (lastID ? '?since=' + lastID + (editSeq ? '&edits=' + editSeq : '') : ''));
+  const es = new EventSource(api + '/events?' + (lastID ? 'since=' + lastID + (editSeq ? '&edits=' + editSeq : '') + '&' : '') + 'tab=' + tab);
   events = es;
   es.onmessage = (e) => {
     const m = JSON.parse(e.data);
@@ -699,6 +714,7 @@ function connect() {
   // Listing on open, not before: the stream announces only changes made after it opened.
   es.onopen = () => {
     $('reconnecting').hidden = true;
+    beat();
     loadDocuments().then(loadAnnotations).catch(console.error);
   };
   es.addEventListener('message_edited', (e) => {
@@ -710,6 +726,10 @@ function connect() {
   es.addEventListener('annotations', () => loadAnnotations().catch(console.error));
   es.addEventListener('revoked', () => end('Your access to this room has ended.'));
   es.addEventListener('stt', (e) => showSTT(JSON.parse(e.data)));
+  es.addEventListener('presence', (e) => {
+    presence = new Map(JSON.parse(e.data).people.map((p) => [String(p.id), p]));
+    renderParticipants();
+  });
   es.addEventListener('agent', (e) => {
     agent = JSON.parse(e.data);
     renderAgent();
@@ -1278,15 +1298,6 @@ $('persona-add').addEventListener('submit', (e) => {
 function agentControls(li, p) {
   const id = p.id;
   const host = agent.host_participant_id === id;
-  let badge = li.querySelector('.host-badge');
-  if (host && !badge) {
-    badge = document.createElement('span');
-    badge.className = 'host-badge';
-    badge.textContent = 'host';
-    li.querySelector('.name').after(badge);
-  } else if (!host && badge) {
-    badge.remove();
-  }
   const manage = isHost() && !host;
   let trigger = li.querySelector('label.trigger');
   if (manage && !trigger) {
@@ -1333,30 +1344,86 @@ function voiceParticipant(id) {
   return id === myID ? voice.localParticipant : voice.remoteParticipants.get(id);
 }
 
-// renderParticipants updates rows in place: speaker changes fire many times a second, and a
-// rebuilt row would drop a volume slider mid-drag.
+// Each role badge and its tooltip (005-AC14).
+const roles = [
+  ['you', 'This is you', (p) => String(p.id) === myID],
+  ['host', 'Host: holds the agents, which run on their machine', (p) => agent.host_participant_id === p.id],
+  ['admin', 'Room admin: manages the room, its invites and its admins', (p) => p.admin],
+];
+
+// audioState is how a participant is in the audio: from the server's presence, which every
+// viewer gets whether or not they joined the audio, with the LiveKit state for those they hear.
+function audioState(id) {
+  const pr = presence.get(id);
+  const vp = voiceParticipant(id);
+  const audio = !!(pr && pr.audio) || !!vp;
+  if (!audio) return { key: 'none', icon: '', text: 'Not in the audio' };
+  const mic = vp ? vp.isMicrophoneEnabled : !!(pr && pr.mic);
+  const muted = !mic && (vp ? !!vp.getTrackPublication(LivekitClient.Track.Source.Microphone) : !!(pr && pr.muted));
+  if (mic) return { key: 'live', icon: '🎙', text: 'Mic live' };
+  if (muted) return { key: 'muted', icon: '🔇', text: 'Muted' };
+  return { key: 'listening', icon: '🎧', text: 'Listening only' };
+}
+
+// ago says how long ago a time was, coarsely: the list refreshes every 30 seconds.
+function ago(ts) {
+  const s = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + ' min ago';
+  if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+  return Math.floor(s / 86400) + ' d ago';
+}
+
+function span(cls, text, title) {
+  const el = document.createElement('span');
+  el.className = cls;
+  el.textContent = text;
+  if (title) el.title = title;
+  return el;
+}
+
+// renderParticipants splits the list into those in the room and those not here (005-AC7). Rows
+// update in place: speaker changes fire many times a second, and a rebuilt row would drop a
+// volume slider mid-drag.
 function renderParticipants() {
-  const list = $('participants');
-  const kept = new Map([...list.children].map((li) => [li.dataset.pid, li]));
-  const rows = participants.map((p) => {
+  const here = $('participants');
+  const away = $('participants-away');
+  const kept = new Map([...here.children, ...away.children].map((li) => [li.dataset.pid, li]));
+  const rows = { here: [], away: [] };
+  for (const p of participants) {
     const id = String(p.id);
     let li = kept.get(id);
     if (!li) {
       li = document.createElement('li');
       li.dataset.pid = id;
-      const dot = document.createElement('span');
-      dot.className = 'voice-dot';
-      const name = document.createElement('span');
-      name.className = 'name';
-      li.append(dot, name);
+      li.append(span('voice-dot', ''), span('name', ''), span('badges', ''), span('audio', ''), span('seen', ''));
     }
+    const pr = presence.get(id);
+    const isHere = id === myID || !!(pr && pr.here);
     li.querySelector('.name').textContent = p.name;
+    li.querySelector('.badges').replaceChildren(...roles.filter(([, , on]) => on(p))
+      .map(([name, title]) => span('badge role-' + name + (name === 'host' ? ' host-badge' : ''), name, title)));
     const vp = voiceParticipant(id);
-    const mic = !!vp && vp.isMicrophoneEnabled;
-    li.classList.toggle('in-voice', !!vp);
-    li.classList.toggle('speaking', mic && speaking.has(id));
-    li.classList.toggle('muted', !!vp && !mic);
-    li.querySelector('.voice-dot').title = !vp ? '' : !mic ? 'Muted' : speaking.has(id) ? 'Speaking' : 'In the audio';
+    const st = isHere ? audioState(id) : { key: 'none', icon: '', text: 'Not in the audio' };
+    const deaf = isHere && !!(pr && pr.deaf);
+    const audio = li.querySelector('.audio');
+    audio.dataset.state = st.key;
+    audio.textContent = st.icon + (deaf ? ' 🔕' : '');
+    audio.title = st.text + (deaf ? ', deafened: hears nobody' : '');
+    audio.setAttribute('aria-label', audio.title);
+    let tr = li.querySelector('.transcribed');
+    if (transcribed.has(id) && !tr) {
+      tr = span('badge transcribed', 'transcribed', 'The transcription hears this voice');
+      audio.after(tr);
+    } else if (!transcribed.has(id) && tr) {
+      tr.remove();
+    }
+    li.querySelector('.seen').textContent = isHere ? '' : 'seen ' + ago((pr && pr.seen_at) || p.last_seen_at || p.joined_at);
+    li.classList.toggle('in-voice', st.key !== 'none');
+    li.classList.toggle('speaking', st.key === 'live' && speaking.has(id));
+    li.classList.toggle('muted', st.key === 'muted');
+    li.classList.toggle('deaf', deaf);
+    li.querySelector('.voice-dot').title = st.key === 'none' ? '' : st.key === 'live' && speaking.has(id) ? 'Speaking' : st.text;
     let vol = li.querySelector('input[type=range]');
     if (vp && id !== myID && !vol) {
       vol = document.createElement('input');
@@ -1376,16 +1443,32 @@ function renderParticipants() {
       vol.remove();
     }
     agentControls(li, p);
-    return li;
-  });
-  if (rows.length !== list.children.length || rows.some((li, i) => list.children[i] !== li)) list.replaceChildren(...rows);
+    rows[isHere ? 'here' : 'away'].push(li);
+  }
+  for (const [list, want] of [[here, rows.here], [away, rows.away]]) {
+    if (want.length !== list.children.length || want.some((li, i) => list.children[i] !== li)) list.replaceChildren(...want);
+  }
+  $('away').hidden = !rows.away.length;
+  $('away-count').textContent = String(rows.away.length);
+  $('people-open').textContent = 'People (' + rows.here.length + ')';
 }
+setInterval(() => { if (participants.length) renderParticipants(); }, 30_000);
+
+// On a phone the list opens over the chat; Escape or the button closes it.
+function showPeople(on) {
+  document.body.classList.toggle('people-open', on);
+  $('people-open').setAttribute('aria-expanded', String(on));
+}
+$('people-open').addEventListener('click', () => showPeople(!document.body.classList.contains('people-open')));
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') showPeople(false); });
 
 // showSTT counts the voices the STT worker transcribes, and tells viewers only whether their own
 // is one of them (005-AC8).
 function showSTT(st) {
   const el = $('stt-status');
   const voices = st.transcribed || [];
+  transcribed = new Set(voices.map(String));
+  renderParticipants();
   const mine = voices.some((id) => String(id) === myID);
   el.classList.toggle('down', !st.available);
   el.textContent = !st.available ? 'Transcription unavailable'
@@ -1403,6 +1486,10 @@ function voiceButtons() {
   $('voice-join').hidden = on;
   $('voice-leave').hidden = !on;
   $('voice-mute').hidden = !on;
+  $('voice-deaf').hidden = !on;
+  $('voice-keepmic').hidden = !on;
+  $('voice-deaf').setAttribute('aria-pressed', String(on && deaf));
+  $('voice-deaf').textContent = on && deaf ? 'Undeafen' : 'Deafen';
   const muted = on && !voice.localParticipant.isMicrophoneEnabled;
   $('voice-mute').setAttribute('aria-pressed', String(muted));
   $('voice-mute').textContent = muted ? 'Unmute' : 'Mute';
@@ -1412,6 +1499,63 @@ function voiceButtons() {
 function voiceChanged() {
   voiceButtons();
   renderParticipants();
+  clearTimeout(beatTimer);
+  beatTimer = setTimeout(beat, 300);
+}
+
+// Presence heartbeat (005-AC6): it keeps this tab counted while its stream is down, and reports
+// its audio state. A closing page says so, so its audio state goes at once.
+let beatTimer;
+function beat(gone) {
+  if (ended || !myID) return;
+  const lp = voice && voice.localParticipant;
+  const mic = !!lp && lp.isMicrophoneEnabled;
+  const body = JSON.stringify({
+    tab, audio: !!lp, mic, muted: !!lp && !mic && !!lp.getTrackPublication(LivekitClient.Track.Source.Microphone),
+    deaf: !!lp && deaf, gone: !!gone,
+  });
+  // keepalive lets the request outlive a closing page.
+  fetch(api + '/presence', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: !!gone })
+    .catch(() => {});
+}
+setInterval(() => { if (events) beat(); }, 10_000);
+window.addEventListener('pagehide', () => { if (events) beat(true); });
+
+// Deafen stops hearing the others and, unless the participant keeps it on, mutes their mic;
+// undeafen restores the mic as it was (005-AC22). The state outlives a reconnect in this session.
+const deafKey = 'grill-room-deaf:' + roomID;
+let deaf = false;
+let micBefore = true;
+$('voice-keepmic').querySelector('input').checked = !!JSON.parse(sessionStorage.getItem(deafKey) || '{}').keepMic;
+
+function saveDeaf() {
+  sessionStorage.setItem(deafKey, JSON.stringify({ deaf, micBefore, keepMic: $('voice-keepmic').querySelector('input').checked }));
+}
+
+function hearOthers(on) {
+  for (const rp of voice.remoteParticipants.values()) {
+    for (const pub of rp.audioTrackPublications.values()) pub.setSubscribed(on);
+  }
+}
+
+async function setDeaf(on, before) {
+  const room = voice;
+  if (!room || on === deaf) return;
+  const lp = room.localParticipant;
+  deaf = on;
+  hearOthers(!on);
+  try {
+    if (on) {
+      micBefore = before ?? lp.isMicrophoneEnabled;
+      if (!$('voice-keepmic').querySelector('input').checked) await lp.setMicrophoneEnabled(false);
+    } else if (lp.isMicrophoneEnabled !== micBefore) {
+      await lp.setMicrophoneEnabled(micBefore);
+    }
+  } catch (err) {
+    voiceError('Microphone: ' + err.message);
+  }
+  saveDeaf();
+  voiceChanged();
 }
 
 async function joinVoice() {
@@ -1426,8 +1570,9 @@ async function joinVoice() {
     const { url, token } = await res.json();
     const LK = LivekitClient;
     room = new LK.Room({ audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-    room.on(LK.RoomEvent.TrackSubscribed, (track, _pub, p) => {
+    room.on(LK.RoomEvent.TrackSubscribed, (track, pub, p) => {
       if (track.kind !== 'audio') return;
+      if (deaf) return pub.setSubscribed(false);
       const el = track.attach();
       el.dataset.pid = p.identity;
       $('voice-audio').append(el);
@@ -1457,6 +1602,13 @@ async function joinVoice() {
       // Without a microphone the participant still hears the others.
       voiceError('Microphone unavailable: ' + err.message + '. You can still listen.');
     }
+    // A reconnect in the same session comes back deafened, with the mic it had before.
+    const saved = JSON.parse(sessionStorage.getItem(deafKey) || '{}');
+    if (saved.deaf) {
+      const before = saved.micBefore;
+      deaf = false;
+      await setDeaf(true, before);
+    }
     voiceChanged();
   } catch (err) {
     // A Leave pressed while connecting rejects connect(): nothing to report then.
@@ -1484,6 +1636,8 @@ function leaveVoice() {
 
 $('voice-join').addEventListener('click', () => joinVoice());
 $('voice-leave').addEventListener('click', leaveVoice);
+$('voice-deaf').addEventListener('click', () => setDeaf(!deaf));
+$('voice-keepmic').querySelector('input').addEventListener('change', saveDeaf);
 $('voice-mute').addEventListener('click', () => {
   if (!voice) return;
   voice.localParticipant.setMicrophoneEnabled(!voice.localParticipant.isMicrophoneEnabled)

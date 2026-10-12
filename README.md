@@ -252,7 +252,11 @@ The document frame has no room credential, so it cannot call the API. It tells t
 
 ## Voice
 
-With `GRILL_ROOM_LIVEKIT_URL` set, the room page shows a Join audio button. Each grill room maps to one LiveKit room named after the room id. A participant joins it under their participant id with their display name, and may publish their microphone only. The participant list shows who is in the audio, a dot that lights while LiveKit reports them speaking, red when muted, and a volume slider per remote participant.
+With `GRILL_ROOM_LIVEKIT_URL` set, the room page shows a Join audio button. Each grill room maps to one LiveKit room named after the room id. A participant joins it under their participant id with their display name, and may publish their microphone only. Deafen stops hearing the others and mutes the mic, unless "Keep my mic on while deafened" is checked, for people who share a physical room; undeafen restores the mic as it was. The state outlives a reconnect within the browser session.
+
+## Presence
+
+The participant list shows "In the room", then "Not here", collapsed, with when each was last seen. On a phone the People button opens it over the chat. The server keeps presence from each page's event stream and a heartbeat every 10 seconds: a participant stays here while one of their pages holds its stream open, and for 20 seconds after their last sign of life, so a reload, a background tab or a phone switching apps does not flap. A closing page says so, and the audio state it held goes at once. Each page reports its audio state, and every participant sees it, in the audio or not: mic live, muted, listening only, or not in the audio, with an icon when deafened. Badges with a tooltip mark you, the host (who holds the agents) and room admins. A "transcribed" badge marks each voice the STT worker hears. Those in the audio also see the speaking dot, and a volume slider per remote participant.
 
 The server hands out LiveKit tokens valid for 5 minutes, and LiveKit refreshes them for connected clients. LiveKit has no way to revoke a token. So when an invite is revoked, the server also removes its participants from the LiveKit room, and deleting a room closes its LiveKit room. A revoked participant could still rejoin with a token minted before the revoke, until it expires.
 

@@ -140,8 +140,8 @@ func (e *env) join(t *testing.T, inviteToken, name string) joined {
 
 type sseEvent struct{ id, event, data string }
 
-// openEvents opens a room's event stream without its "agent" events, which tests of the agent read
-// with openAgentEvents; the channel closes when the server ends the stream.
+// openEvents opens a room's event stream without its "agent" and "presence" events, which their own
+// tests read; the channel closes when the server ends the stream.
 func (e *env) openEvents(t *testing.T, room, token, lastID string) <-chan sseEvent {
 	t.Helper()
 	ch, _ := e.openStream(t, "/api/rooms/"+room+"/events", token, lastID)
@@ -149,7 +149,7 @@ func (e *env) openEvents(t *testing.T, room, token, lastID string) <-chan sseEve
 	go func() {
 		defer close(out)
 		for ev := range ch {
-			if ev.event != "agent" {
+			if ev.event != "agent" && ev.event != "presence" {
 				out <- ev
 			}
 		}

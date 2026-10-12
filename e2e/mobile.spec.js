@@ -97,11 +97,11 @@ test('a page back from the background resumes the stream and reloads the room', 
   await alice.waitForTimeout(500);
   await expect(alice.locator('#messages')).not.toContainText('sent while away');
 
-  const resumed = alice.waitForRequest((r) => /\/events\?since=\d+$/.test(r.url()));
+  const resumed = alice.waitForRequest((r) => /\/events\?since=\d+&tab=\w+$/.test(r.url()));
   await setVisibility(alice, 'visible');
   await resumed;
   await expect(alice.locator('#messages')).toContainText('sent while away');
-  await expect(alice.locator('#participants li')).toHaveText(['Alice', 'Bob']);
+  await expect(alice.locator('#participants li .name, #participants-away li .name')).toHaveText(['Alice', 'Bob']);
   await expect(alice.locator('.msg', { hasText: 'Alice joined' })).toHaveCount(1);
   await post(request, room.id, bob, 'live after resume');
   await expect(alice.locator('#messages')).toContainText('live after resume');

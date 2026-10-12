@@ -431,7 +431,21 @@ func TestPresencePreamble(t *testing.T) {
 // waitPresent waits until participant pid has a room stream open.
 func (e *env) waitPresent(t *testing.T, pid int64) {
 	t.Helper()
-	for i := 0; !e.srv.viewers.present(pid); i++ {
+	streaming := func() bool {
+		e.srv.people.mu.Lock()
+		defer e.srv.people.mu.Unlock()
+		for _, r := range e.srv.people.m {
+			if p := r[pid]; p != nil {
+				for _, tb := range p.tabs {
+					if tb.streams > 0 {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+	for i := 0; !streaming(); i++ {
 		if i > 500 {
 			t.Fatal("never present")
 		}

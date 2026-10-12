@@ -71,7 +71,7 @@ The prompt opens with who is in the room, from one template, `internal/web/prese
   | the new session after it | `handoff from your previous session` |
 
 - each other persona: model and effort after the cap, state (`idle`, `running`, `queued`, or waiting for the host's approval), completed turns, triggers, and the first line of its latest synthesis on a line of its own;
-- the humans present (those with the room page open), the host, and who speaks now (the author of a voice line from the last 10 seconds). Each name carries a short id, `Alice ·a1b2`, so two people with the same name stay apart (003-AC32):
+- the humans present (those with the room page open, or who had it open in the last 20 seconds), the host, and who speaks now (the author of a voice line from the last 10 seconds). Each name carries a short id, `Alice ·a1b2`, so two people with the same name stay apart (003-AC32):
   - with a profile: the first 4 hex digits of the profile's uuid (`profiles.uuid`, random v4). When two profiles among the room's participants share those 4 digits, every profile id in that preamble shows 6, or 8 if 6 still clash;
   - without a profile: `#` and the participant's id in the server, `Bob ·#12`. A profile id never starts with `#`;
   - one person who joined twice under the same profile shows the same id twice.

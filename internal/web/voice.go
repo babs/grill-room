@@ -30,11 +30,11 @@ const (
 	livekitCallTimeout = 5 * time.Second
 )
 
-// sttTimeout is how long a worker counts as up after its last heartbeat; sttPoll is how often an
-// event stream checks for a change. Vars for tests.
+// sttTimeout is how long a worker counts as up after its last heartbeat; pollEvery is how often an
+// event stream checks presence and transcription for a change. Vars for tests.
 var (
 	sttTimeout = 15 * time.Second
-	sttPoll    = time.Second
+	pollEvery  = time.Second
 )
 
 // Voice configures LiveKit audio. A nil Voice in Options turns voice off.

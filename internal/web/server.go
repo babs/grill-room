@@ -17,6 +17,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -64,7 +65,7 @@ type Server struct {
 	streams   atomic.Int64
 	pairings  pairings
 	presence  presences
-	viewers   viewers
+	people    people
 	stt       sttWorkers
 	clients   clients
 	// magicLimit rate-limits magic link requests per address and per client IP.
@@ -106,7 +107,7 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	}
 	s := &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), archives: make(chan struct{}, maxConcurrentArchives),
 		adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
-		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, viewers: viewers{m: map[int64]int{}}, stt: sttWorkers{m: map[string]*sttWorker{}}, clients: clients{m: map[int64]clientSeen{}},
+		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, people: people{m: map[string]map[int64]*person{}}, stt: sttWorkers{m: map[string]*sttWorker{}}, clients: clients{m: map[int64]clientSeen{}},
 		magicLimit: limiter{window: magicWindow}, loginLimit: limiter{window: loginWindow}, now: time.Now, fallbacks: fallbackCounters(),
 		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}}
 	s.cleanStaging()
@@ -230,6 +231,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/rooms/{room}/messages/{msg}", s.participant(s.deleteMessage))
 	mux.Handle("GET /api/rooms/{room}/messages/{msg}/versions", s.participant(s.messageVersions))
 	mux.Handle("GET /api/rooms/{room}/events", s.participant(s.events))
+	mux.Handle("POST /api/rooms/{room}/presence", s.participant(s.postPresence))
 	mux.Handle("GET /api/rooms/{room}/documents", s.participant(s.listDocuments))
 	mux.Handle("POST /api/rooms/{room}/documents", s.participant(s.uploadDocument))
 	mux.Handle("GET /api/rooms/{room}/documents/{doc}", s.participant(s.getDocument))
@@ -505,6 +507,7 @@ func (s *Server) deleteRoom(w http.ResponseWriter, r *http.Request, sess *sessio
 	// Before the error check: a failed post-delete checkpoint still leaves the room gone.
 	s.bus.Notify(room)
 	s.closeVoice(room)
+	s.people.forget(room)
 	if err != nil {
 		s.serverError(w, "delete_room_failed", err)
 		return
@@ -798,8 +801,9 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, sess sessio
 // "message_edited" event carrying a message edited or deleted past change seq ?edits=, a
 // "documents" event when a document or revision is added, an "annotations" event when an
 // annotation is added or changes, an "agent" event carrying the agent state at open and whenever
-// it changes, and with voice on, an "stt" event at open and whenever
-// transcription comes or goes. The stream ends with a "revoked" event as soon as the participant's
+// it changes, a "presence" event carrying who is here and their audio state at open and whenever it
+// changes (005-AC6), and with voice on, an "stt" event at open and whenever transcription comes or
+// goes. ?tab= names the page the stream belongs to, as its presence heartbeats do. The stream ends with a "revoked" event as soon as the participant's
 // access is gone.
 func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	flusher, ok := w.(http.Flusher)
@@ -837,8 +841,8 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	}
 	s.streams.Add(1)
 	defer s.streams.Add(-1)
-	s.viewers.add(sess.p.ID, 1)
-	defer s.viewers.add(sess.p.ID, -1)
+	release := s.people.open(room, sess.p.ID, r.URL.Query().Get("tab"), s.now())
+	defer func() { release(s.now()) }()
 	// The live channel is only a wake-up signal: every send reads from the store after the last id,
 	// so a dropped or out-of-order signal can never leave a gap in the stream.
 	live, cancel := s.bus.Subscribe(64)
@@ -940,26 +944,39 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	if !sync() {
 		return
 	}
-	// A worker's absence shows as a missing heartbeat, which no bus signal announces: poll for it.
-	var sttTick <-chan time.Time
+	// A worker's absence and a participant's grace running out show as nothing happening, which
+	// no bus signal announces: poll for them.
+	ps := s.people.snapshot(room, s.now())
+	if _, err := io.WriteString(w, presenceEvent(ps)); err != nil {
+		return
+	}
 	var stt sttState
 	if s.opts.Voice != nil {
 		stt = s.stt.state(room, time.Now())
 		if _, err := io.WriteString(w, sttEvent(stt)); err != nil {
 			return
 		}
-		flusher.Flush()
-		t := time.NewTicker(sttPoll)
-		defer t.Stop()
-		sttTick = t.C
 	}
+	flusher.Flush()
+	poll := time.NewTicker(pollEvery)
+	defer poll.Stop()
 	tick := time.NewTicker(heartbeat)
 	defer tick.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-sttTick:
+		case <-poll.C:
+			if now := s.people.snapshot(room, s.now()); !slices.EqualFunc(now, ps, samePresence) {
+				ps = now
+				if _, err := io.WriteString(w, presenceEvent(ps)); err != nil {
+					return
+				}
+				flusher.Flush()
+			}
+			if s.opts.Voice == nil {
+				continue
+			}
 			if now := s.stt.state(room, time.Now()); !now.equal(stt) {
 				stt = now
 				if _, err := io.WriteString(w, sttEvent(stt)); err != nil {
