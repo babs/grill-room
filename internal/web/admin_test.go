@@ -279,7 +279,7 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 	if code, _ := e.do(t, "POST", "/api/rooms/"+room.ID+"/invites", tok, nil); code != http.StatusCreated {
 		t.Fatalf("member invite: %d", code)
 	}
-	tpl := map[string]any{"name": "Critic", "badge": "🧐", "colour": "#112233", "text": "Criticise."}
+	tpl := map[string]any{"name": "Critic", "badge": "🧐", "colour": "#112233", "text": "Criticise.", "model": "sonnet", "effort": "medium"}
 	code, b := e.do(t, "POST", "/api/rooms/"+room.ID+"/templates", tok, tpl)
 	if code != http.StatusCreated {
 		t.Fatalf("publish: %d %s", code, b)

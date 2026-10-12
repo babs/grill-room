@@ -952,7 +952,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 		case <-r.Context().Done():
 			return
 		case <-sttTick:
-			if now := s.stt.state(room, time.Now()); now != stt {
+			if now := s.stt.state(room, time.Now()); !now.equal(stt) {
 				stt = now
 				if _, err := io.WriteString(w, sttEvent(stt)); err != nil {
 					return

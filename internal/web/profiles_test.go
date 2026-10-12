@@ -467,7 +467,7 @@ func TestEmailStaysPrivate(t *testing.T) {
 	if code, _ := alice.do(t, "POST", "/api/rooms/"+room.ID+"/messages", map[string]string{"body": "ping"}); code != http.StatusCreated {
 		t.Fatal("post")
 	}
-	critic := map[string]any{"name": "Critic", "badge": "🧐", "colour": "#112233", "text": "Find the flaw.", "title": "Critic"}
+	critic := map[string]any{"name": "Critic", "badge": "🧐", "colour": "#112233", "text": "Find the flaw.", "model": "sonnet", "effort": "medium", "title": "Critic"}
 	if code, b := alice.do(t, "POST", "/api/rooms/"+room.ID+"/templates", critic); code != http.StatusCreated {
 		t.Fatalf("publish: %d %s", code, b)
 	}

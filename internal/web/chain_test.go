@@ -17,8 +17,8 @@ import (
 // 002-AC23 002-AC24: @name at a word start, any case, each persona once in order of first mention;
 // never in code spans, code blocks, raw HTML or an email address.
 func TestMentioned(t *testing.T) {
-	ps := []store.RoomPersona{{ID: 1, PersonaFields: store.PersonaFields{Name: "Grill"}}, {ID: 2, PersonaFields: store.PersonaFields{Name: "Secretary"}},
-		{ID: 3, PersonaFields: store.PersonaFields{Name: "Grill-2"}}}
+	ps := []store.RoomPersona{{ID: 1, PersonaFields: store.PersonaFields{Name: "Grill", Model: "sonnet", Effort: "medium"}}, {ID: 2, PersonaFields: store.PersonaFields{Name: "Secretary", Model: "sonnet", Effort: "medium"}},
+		{ID: 3, PersonaFields: store.PersonaFields{Name: "Grill-2", Model: "sonnet", Effort: "medium"}}}
 	for _, c := range []struct {
 		body string
 		want []int64
@@ -100,7 +100,7 @@ func TestPresenceParts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"You: @Grill, model opus, effort default, on demand and every 3 rounds\n", "No other agent is in the room.\n", "Host: none\n"} {
+	for _, want := range []string{"You: @Grill, model opus, effort medium, on demand and every 3 rounds\n", "No other agent is in the room.\n", "Host: none\n"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("lacks %q:\n%s", want, got)
 		}

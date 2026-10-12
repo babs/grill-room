@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
@@ -64,6 +65,7 @@ func TestPersonaAPI(t *testing.T) {
 	for _, bad := range []map[string]any{
 		{"name": "two words"}, {"name": ""}, {"name": strings.Repeat("n", 31)}, {"badge": ""}, {"badge": "123456789"},
 		{"colour": "red"}, {"colour": "#12345"}, {"model": "gpt-5"}, {"effort": "turbo"}, {"text": " "},
+		{"model": ""}, {"effort": ""}, {"model": "default"}, {"effort": "default"}, {"model": "claude-sonnet-5-5"},
 		{"text": strings.Repeat("x", maxPersonaText+1)}, {"every_n": -1}, {"every_n": maxEveryN + 1},
 	} {
 		if code, b := e.do(t, "PATCH", r.path(fmt.Sprintf("/personas/%d", sec.ID)), bob, bad); code != http.StatusBadRequest {
@@ -74,7 +76,7 @@ func TestPersonaAPI(t *testing.T) {
 	if p := decodeJSON[store.RoomPersona](t, b); code != http.StatusOK || p.Effort != "xhigh" || p.Model != "opus" || p.Badge != "🗒" {
 		t.Fatalf("edit: %d %s", code, b)
 	}
-	if m := e.lastLine(t, r.room); m.Body != "Bob changed 📝 Secretary: badge 📝 → 🗒, model default → opus, effort default → xhigh." {
+	if m := e.lastLine(t, r.room); m.Body != "Bob changed 📝 Secretary: badge 📝 → 🗒, model sonnet → opus, effort medium → xhigh." {
 		t.Fatalf("edit line: %+v", m)
 	}
 	if code, _ := e.do(t, "PATCH", r.path(fmt.Sprintf("/personas/%d", sec.ID)), bob, map[string]string{"name": "grill"}); code != http.StatusConflict {
@@ -85,7 +87,7 @@ func TestPersonaAPI(t *testing.T) {
 	}
 
 	// Publishing: a template of Alice's own, then a version only she may add.
-	critic := map[string]any{"name": "Critic", "badge": "🧐", "colour": "#112233", "text": "Find the flaw.", "effort": "low", "title": "Critic"}
+	critic := map[string]any{"name": "Critic", "badge": "🧐", "colour": "#112233", "text": "Find the flaw.", "model": "haiku", "effort": "low", "title": "Critic"}
 	code, b = e.do(t, "POST", r.path("/templates"), alice, critic)
 	tp := decodeJSON[store.Template](t, b)
 	if code != http.StatusCreated || tp.Version != 1 || tp.Author != "Alice" || !tp.Mine || tp.Effort != "low" {
@@ -94,14 +96,21 @@ func TestPersonaAPI(t *testing.T) {
 	if code, _ := e.do(t, "POST", r.path("/templates"), alice, map[string]any{"name": "Critic"}); code != http.StatusBadRequest {
 		t.Fatalf("publish without text: %d", code)
 	}
-	if code, _ := e.do(t, "POST", r.path("/templates"), alice, map[string]any{"name": "Critic", "badge": "🧐", "colour": "#112233", "text": "x", "effort": "turbo"}); code != http.StatusBadRequest {
-		t.Fatalf("publish with a bad effort: %d", code)
+	// 005-AC9: a template names its model and effort, never a default.
+	for _, bad := range []map[string]any{
+		{"effort": "turbo", "model": "haiku"}, {"model": "haiku"}, {"effort": "low"}, {"model": "", "effort": "low"}, {"model": "haiku", "effort": ""},
+	} {
+		body := map[string]any{"name": "Critic", "badge": "🧐", "colour": "#112233", "text": "x"}
+		maps.Copy(body, bad)
+		if code, b := e.do(t, "POST", r.path("/templates"), alice, body); code != http.StatusBadRequest {
+			t.Errorf("publish with %v: %d %s", bad, code, b)
+		}
 	}
 	critic["template_id"], critic["text"] = tp.ID, "Find the flaw, then the fix."
 	if code, _ := e.do(t, "POST", r.path("/templates"), bob, critic); code != http.StatusForbidden {
 		t.Fatalf("Bob versions Alice's template: %d", code)
 	}
-	if code, _ := e.do(t, "POST", r.path("/templates"), bob, map[string]any{"template_id": ts[0].ID, "name": "Grill", "badge": "🔥", "colour": "#112233", "text": "x"}); code != http.StatusForbidden {
+	if code, _ := e.do(t, "POST", r.path("/templates"), bob, map[string]any{"template_id": ts[0].ID, "name": "Grill", "badge": "🔥", "colour": "#112233", "text": "x", "model": "haiku", "effort": "low"}); code != http.StatusForbidden {
 		t.Fatalf("Bob versions a preset: %d", code)
 	}
 	cp := e.addPersona(t, r, bob, tp.ID)
@@ -168,7 +177,7 @@ func TestPersonaEditDuringTurn(t *testing.T) {
 		t.Fatalf("remove while running: %d", code)
 	}
 	job := e.job(t, r, alice, tn.ID)
-	if job.Persona != "Grill" || job.System != r.grill.Text || job.Model != "" || job.Effort != "" || !strings.Contains(job.Prompt, "\nYou are Grill, an agent") {
+	if job.Persona != "Grill" || job.System != r.grill.Text || job.Model != "sonnet" || job.Effort != "medium" || !strings.Contains(job.Prompt, "\nYou are Grill, an agent") {
 		t.Fatalf("job of the running turn: %+v", job)
 	}
 	if code, b := e.result(t, r, alice, tn.ID, turn.Result{Synthesis: "One.", Model: "claude-haiku-x", Effort: "turbo", SessionID: sid1, Session: []byte("a\n")}); code != http.StatusOK {
@@ -182,10 +191,13 @@ func TestPersonaEditDuringTurn(t *testing.T) {
 	if job.System != "Be kind." || job.Model != "sonnet" || job.Effort != "high" || job.Resume != sid1 {
 		t.Fatalf("job of the next turn: %+v", job)
 	}
-	if code, b := e.result(t, r, alice, tn2.ID, turn.Result{Synthesis: "Two.", Model: "claude-sonnet-x", Effort: "high", SessionID: sid1, SessionOffset: 2, Session: []byte("b\n")}); code != http.StatusOK {
+	// 005-AC10: the model note and a mismatch reach the synthesis, the note cleaned like the model.
+	if code, b := e.result(t, r, alice, tn2.ID, turn.Result{Synthesis: "Two.", Model: "sonnet", ModelNote: "opus 97%,\x00 haiku 3% " + strings.Repeat("x", 300),
+		ModelMismatch: true, Effort: "high", SessionID: sid1, SessionOffset: 2, Session: []byte("b\n")}); code != http.StatusOK {
 		t.Fatalf("result: %d %s", code, b)
 	}
-	if m := e.lastLine(t, r.room); m.Model != "claude-sonnet-x" || m.Effort != "high" {
+	if m := e.lastLine(t, r.room); m.Model != "sonnet" || m.Effort != "high" || !m.ModelMismatch || !strings.HasPrefix(m.ModelNote, "opus 97%, haiku 3% x") ||
+		len([]rune(m.ModelNote)) > turn.MaxModelNote {
 		t.Fatalf("synthesis: %+v", m)
 	}
 	if last, _ := e.st.LastTurn(t.Context(), r.room); last.Effort != "high" || last.PersonaID != r.grill.ID {

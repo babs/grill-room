@@ -65,7 +65,7 @@ async def test_heartbeat_goes_out_at_once_when_the_rooms_change() -> None:
             break
         await asyncio.sleep(0.01)
     # heartbeat_seconds is 30: the second beat came from the change, not the timer.
-    assert beats == [b'{"worker":"w1","rooms":[]}', b'{"worker":"w1","rooms":["r1"]}']
+    assert beats == [b'{"worker":"w1","rooms":[],"voices":{}}', b'{"worker":"w1","rooms":["r1"],"voices":{}}']
     task.cancel()
 
 
@@ -240,3 +240,23 @@ async def test_a_listener_that_fails_to_start_still_closes_its_stream(
     subscribe(w, "TR_a", "7")
     await settle(lambda: streams[0].closed)
     assert not w._streams and tracks() == base
+
+
+async def test_voices_follow_the_subscribed_tracks(
+    listening: tuple[Worker, list[FakeStream], list[tuple[int, int]]],
+) -> None:
+    """005-AC8: the heartbeat's voices are the participants whose track a stream is open on, per room."""
+    w, streams, _ = listening
+    w._changed.clear()
+    subscribe(w, "TR_a", "7")
+    subscribe(w, "TR_b", "8")
+    subscribe(w, "TR_c", "8")
+    assert w._changed.is_set()
+    assert w.voices() == {"r1": [7, 8]}
+    w._changed.clear()
+    w._close("TR_a")
+    assert w._changed.is_set() and w.voices() == {"r1": [8]}
+    w._on_participant_left("r1", SimpleNamespace(identity="8"))  # type: ignore[arg-type]
+    assert w.voices() == {}
+    for s in streams:
+        await s.aclose()

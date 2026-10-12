@@ -46,6 +46,13 @@ func overLimit(ctx context.Context, tx *sql.Tx, limit int, what, query string, a
 // PresetDefault is the shipped template every room starts with.
 const PresetDefault = "default"
 
+// DefaultModel and DefaultEffort are what the shipped templates ask for, and what a persona from
+// before 005-AC9, which left them to the host, asks for once migrated or imported.
+const (
+	DefaultModel  = "sonnet"
+	DefaultEffort = "medium"
+)
+
 // presetAuthor signs the shipped template versions.
 const presetAuthor = "grill-room"
 
@@ -57,7 +64,7 @@ type PersonaFields struct {
 	Colour string `json:"colour"`
 	// Text is the persona's system prompt.
 	Text string `json:"text"`
-	// Model and Effort are what the persona asks for; empty leaves the choice to the host.
+	// Model and Effort are what the persona asks for, never empty (005-AC9).
 	Model  string `json:"model"`
 	Effort string `json:"effort"`
 }
@@ -91,8 +98,8 @@ var presets = []struct {
 	key, title string
 	f          PersonaFields
 }{
-	{PresetDefault, "Default", PersonaFields{Name: "Grill", Badge: "🔥", Colour: "#d9480f", Text: grillText}},
-	{"secretary", "Secretary", PersonaFields{Name: "Secretary", Badge: "📝", Colour: "#1971c2", Text: secretaryText}},
+	{PresetDefault, "Default", PersonaFields{Name: "Grill", Badge: "🔥", Colour: "#d9480f", Text: grillText, Model: DefaultModel, Effort: DefaultEffort}},
+	{"secretary", "Secretary", PersonaFields{Name: "Secretary", Badge: "📝", Colour: "#1971c2", Text: secretaryText, Model: DefaultModel, Effort: DefaultEffort}},
 }
 
 // ensurePresets creates the shipped templates and adds a version to any whose shipped fields

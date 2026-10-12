@@ -39,8 +39,6 @@ type Options struct {
 	// room's first, the others serve its parallel turns (003-AC20). proxy is the address of the
 	// room's account proxy.
 	NewAgent func(r Room, slot int, image, proxy string) Agent
-	// Model is passed to claude --model when a persona asks for none; empty keeps Claude Code's default.
-	Model string
 	// Settings are the host cap and approval mode at start; SettingsPath is where the page saves
 	// them, "" to keep them in memory.
 	Settings     Settings

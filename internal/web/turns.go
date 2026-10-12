@@ -658,6 +658,7 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 	o := turn.Classify(res.Changes)
 	out := &store.TurnOutcome{
 		Synthesis: sanitize(res.Synthesis, turn.MaxSynthesis), Model: sanitize(res.Model, turn.MaxModel), SessionID: res.SessionID,
+		ModelNote: sanitize(res.ModelNote, turn.MaxModelNote), ModelMismatch: res.ModelMismatch,
 		// An effort claude does not know is not shown as if it ran.
 		Effort:        knownOr(res.Effort, turn.Efforts),
 		Capped:        res.Capped,
@@ -717,6 +718,9 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 		s.failTurn(r.Context(), d.RoomID, t.ID, "the room could not apply the result")
 		httpError(w, http.StatusInternalServerError, "internal error")
 		return
+	}
+	if out.ModelMismatch {
+		s.log.Warn("turn_model_mismatch", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.String("asked", out.Model), zap.String("reported", out.ModelNote))
 	}
 	s.chainLinks(r.Context(), done, out.Synthesis)
 	s.bus.Notify(d.RoomID)

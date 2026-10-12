@@ -116,7 +116,7 @@ export function liveDaemon(dir, roomURL, env = {}) {
   const stateDir = join(dir, 'state');
   const log = join(dir, 'daemon.log');
   const proc = spawn('../bin/grill-room-daemon', [roomURL], {
-    env: { ...process.env, GRILL_ROOM_DAEMON_STATE_DIR: stateDir, GRILL_ROOM_DAEMON_BROWSER: 'none', GRILL_ROOM_AGENT_MODEL: 'haiku', LOG_LEVEL: 'info', ...env },
+    env: { ...process.env, GRILL_ROOM_DAEMON_STATE_DIR: stateDir, GRILL_ROOM_DAEMON_BROWSER: 'none', GRILL_ROOM_MAX_MODEL: 'haiku', LOG_LEVEL: 'info', ...env },
     stdio: ['ignore', 'ignore', openSync(log, 'w')],
   });
   const exited = new Promise((resolve) => proc.on('exit', resolve));

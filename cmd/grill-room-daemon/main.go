@@ -64,8 +64,6 @@ type Config struct {
 	// Image pins the sandbox image; empty takes the room server's, or builds the embedded one.
 	Image    string
 	LogLevel string
-	// Model is the claude --model for a persona asking for none; empty keeps Claude Code's default.
-	Model string
 	// Settings are the host cap and approval mode until the admin page saves its own.
 	Settings daemon.Settings
 	// Limits cap the sandbox's and its egress proxy's CPUs and memory.
@@ -98,7 +96,6 @@ func loadConfig() (Config, error) {
 		Browser:  getEnv("GRILL_ROOM_DAEMON_BROWSER", "auto"),
 		Image:    os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
 		LogLevel: getEnv("LOG_LEVEL", "info"),
-		Model:    os.Getenv("GRILL_ROOM_AGENT_MODEL"),
 		Settings: daemon.Settings{MaxModel: os.Getenv("GRILL_ROOM_MAX_MODEL"), MaxEffort: os.Getenv("GRILL_ROOM_MAX_EFFORT"), ApproveAll: approveAll},
 		Limits: sandbox.Limits{
 			CPUs: getEnv("GRILL_ROOM_SANDBOX_CPUS", "2"), Memory: getEnv("GRILL_ROOM_SANDBOX_MEMORY", "4g"),
@@ -269,7 +266,7 @@ func supervise(ctx context.Context, cfg Config, host string, room *daemon.Room, 
 	var restart atomic.Bool
 	sup := daemon.NewSupervisor(daemon.SupervisorOptions{
 		Paths: cfg.Paths, Version: Version, Host: host, Accounts: accounts,
-		Worker: daemon.WorkerConfig{SandboxRoot: cfg.Paths.State, LogLevel: cfg.LogLevel, Model: cfg.Model, Image: cfg.Image,
+		Worker: daemon.WorkerConfig{SandboxRoot: cfg.Paths.State, LogLevel: cfg.LogLevel, Image: cfg.Image,
 			Settings: cfg.Settings, Limits: cfg.Limits, CacheMB: cfg.CacheMB},
 		Binary: bins.Resolve, Bins: bins, Executable: exe, GitHub: cfg.GitHub,
 		Env: workerEnv(os.Environ()), Stderr: stderr, Ring: ring, Log: logger, Docker: sandbox.Docker, Monitor: mon,

@@ -90,7 +90,6 @@ type WorkerConfig struct {
 	// SandboxRoot keys the sandbox names, so that two supervisors never share a sandbox.
 	SandboxRoot string `json:"sandbox_root"`
 	LogLevel    string `json:"log_level"`
-	Model       string `json:"model,omitempty"`
 	Image       string `json:"image,omitempty"`
 	// Settings apply until the page saves the instance's own.
 	Settings Settings       `json:"settings"`
@@ -133,10 +132,13 @@ type TurnEvent struct {
 	// Also at the end, for the supervisor's monitoring (003-AC27): why the turn ran, the model and
 	// effort the persona asked for and those it ran with, its tokens summed over every model
 	// claude called, claude's cost estimate (nil when unknown) and the workspace tar's size.
+	// ModelNote and ModelMismatch qualify Model as turn.Result does (005-AC10).
 	Cause            string   `json:"cause,omitempty"`
 	AskedModel       string   `json:"asked_model,omitempty"`
 	AskedEffort      string   `json:"asked_effort,omitempty"`
 	Model            string   `json:"model,omitempty"`
+	ModelNote        string   `json:"model_note,omitempty"`
+	ModelMismatch    bool     `json:"model_mismatch,omitempty"`
 	Effort           string   `json:"effort,omitempty"`
 	TokensIn         int64    `json:"tokens_in,omitempty"`
 	TokensOut        int64    `json:"tokens_out,omitempty"`

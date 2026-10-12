@@ -3,7 +3,8 @@ package turn
 import "strings"
 
 // Level is a model and an effort as a persona asks for them or a host caps them. An empty field
-// is the host's default for a request, and no cap for a limit.
+// is no cap for a limit; in a request it comes only from a room server older than 005-AC9, and
+// leaves the choice to Claude Code.
 type Level struct {
 	Model  string `json:"model,omitempty"`
 	Effort string `json:"effort,omitempty"`
@@ -69,7 +70,7 @@ func clampOne(req, limit, approved string, rk func(string) int) (string, bool) {
 
 // Clamp returns the level req runs at under the host cap limit, raised by the host's approval for
 // this persona (002-AC19, 002-AC20). Model and effort clamp apart, each to the higher of the cap
-// and the approval. An empty request is the host's own default and is never clamped. capped
+// and the approval. An empty request leaves the choice to Claude Code and is never clamped. capped
 // reports that the cap lowered either.
 func Clamp(req, limit, approved Level) (run Level, capped bool) {
 	var cm, ce bool

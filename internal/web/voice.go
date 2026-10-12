@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ const (
 	voiceTokenTTL = 5 * time.Minute
 	maxSTTWorkers = 100
 	maxSTTRooms   = 1000
+	maxSTTVoices  = 10000
 	maxWorkerName = 64
 	// livekitCallTimeout bounds a kick on revoke or delete, so a LiveKit outage cannot hang the admin.
 	livekitCallTimeout = 5 * time.Second
@@ -46,10 +48,12 @@ type Voice struct {
 	STTTokenHash string
 }
 
-// sttWorker is the last heartbeat of one STT worker.
+// sttWorker is the last heartbeat of one STT worker: the rooms whose audio it is in, and in each the
+// participants whose track it is subscribed to.
 type sttWorker struct {
-	at    time.Time
-	rooms map[string]bool
+	at     time.Time
+	rooms  map[string]bool
+	voices map[string][]int64
 }
 
 type sttWorkers struct {
@@ -63,12 +67,19 @@ type sttState struct {
 	Available bool `json:"available"`
 	// Listening is true while a worker is in the room's audio.
 	Listening bool `json:"listening"`
+	// Transcribed lists the participants whose track a worker is subscribed to, sorted: the voices
+	// it transcribes (005-AC8).
+	Transcribed []int64 `json:"transcribed"`
+}
+
+func (a sttState) equal(b sttState) bool {
+	return a.Available == b.Available && a.Listening == b.Listening && slices.Equal(a.Transcribed, b.Transcribed)
 }
 
 func (w *sttWorkers) state(room string, now time.Time) sttState {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	var st sttState
+	st := sttState{Transcribed: []int64{}}
 	for id, wk := range w.m {
 		if now.Sub(wk.at) > sttTimeout {
 			delete(w.m, id)
@@ -76,7 +87,10 @@ func (w *sttWorkers) state(room string, now time.Time) sttState {
 		}
 		st.Available = true
 		st.Listening = st.Listening || wk.rooms[room]
+		st.Transcribed = append(st.Transcribed, wk.voices[room]...)
 	}
+	slices.Sort(st.Transcribed)
+	st.Transcribed = slices.Compact(st.Transcribed)
 	return st
 }
 
@@ -122,18 +136,25 @@ func (s *Server) sttAuth(next http.HandlerFunc) http.Handler {
 	})
 }
 
-// sttHeartbeat records that a worker is up and which rooms' audio it is in.
+// sttHeartbeat records that a worker is up, which rooms' audio it is in, and whose tracks it is
+// subscribed to there. A worker from before 005-AC8 sends no voices.
 func (s *Server) sttHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Worker string   `json:"worker"`
-		Rooms  []string `json:"rooms"`
+		Worker string             `json:"worker"`
+		Rooms  []string           `json:"rooms"`
+		Voices map[string][]int64 `json:"voices"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
 	name, ok := cleanText(req.Worker, maxWorkerName, false)
-	if !ok || len(req.Rooms) > maxSTTRooms {
-		httpError(w, http.StatusBadRequest, fmt.Sprintf("worker must be 1 to %d characters, rooms at most %d", maxWorkerName, maxSTTRooms))
+	n := 0
+	for _, ids := range req.Voices {
+		n += len(ids)
+	}
+	if !ok || len(req.Rooms) > maxSTTRooms || len(req.Voices) > maxSTTRooms || n > maxSTTVoices {
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("worker must be 1 to %d characters, rooms at most %d, voices at most %d",
+			maxWorkerName, maxSTTRooms, maxSTTVoices))
 		return
 	}
 	rooms := make(map[string]bool, len(req.Rooms))
@@ -148,7 +169,7 @@ func (s *Server) sttHeartbeat(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusTooManyRequests, "too many STT workers")
 		return
 	}
-	s.stt.m[name] = &sttWorker{at: now, rooms: rooms}
+	s.stt.m[name] = &sttWorker{at: now, rooms: rooms, voices: req.Voices}
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -31,7 +31,8 @@
  *   alerts?: Alert[]}} StatusReply
  * @typedef {{host: string, time: string}} Denied
  * @typedef {{id: number, at: string, day: string, instance: string, room: string, turn_id: number, persona: string,
- *   account: string, asked_model: string, asked_effort: string, model: string, effort: string, cause: string,
+ *   account: string, asked_model: string, asked_effort: string, model: string, model_note?: string,
+ *   model_mismatch?: boolean, effort: string, cause: string,
  *   duration_ms: number, queue_ms: number, status: string, error?: string, tokens_in: number, tokens_out: number,
  *   tokens_cache_read: number, tokens_cache_write: number, cost_usd: number | null, context_tokens: number,
  *   context_window: number, workspace_bytes: number}} Turn

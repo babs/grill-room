@@ -35,7 +35,7 @@ class Persona(Strict):
     # already has, like Grill.
     template: str = ""
     model: Literal["haiku", "sonnet", "opus", "fable"]
-    effort: Literal["", "low", "medium", "high", "xhigh", "max"] = ""
+    effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
     every_n: int = Field(0, ge=0, le=100)
     text: str = ""
     # What one turn costs in Claude requests: 1 with no tool, one more per round of tool calls.

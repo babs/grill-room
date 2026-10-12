@@ -184,7 +184,7 @@ for (const name of ['iPhone 15', 'Pixel 7']) {
     await save.click();
     await expect(panel.locator('#personas-status')).toHaveText('Secretary saved. It applies from its next turn.');
     await panel.getByRole('button', { name: 'Close' }).click();
-    await expect(page.locator('#messages')).toContainText('Alice changed 📝 Secretary: model default → haiku.');
+    await expect(page.locator('#messages')).toContainText('Alice changed 📝 Secretary: model sonnet → haiku.');
     for (const b of await page.locator('button.persona').all()) await inside(b);
     await inside(page.locator('#body'));
   });

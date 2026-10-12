@@ -60,11 +60,16 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
     await expect(led(alice)).toHaveAttribute('aria-label', 'Grill working');
     for (const p of [alice, bob]) {
       await expect(p.locator('#messages li.msg.agent').last()).toContainText('Wrote docs/notes.md, turn 1.', { timeout: 60_000 });
-      // The fake claude reports the model like claude -p: the one that wrote most, not its side model.
-      await expect(p.locator('#messages li.msg.agent').last().locator('.model')).toHaveText('claude-default-fake');
+      // 005-AC10: the model asked for, found in what the fake claude reports, its side model second
+      // with its cost share.
+      const meta = p.locator('#messages li.msg.agent').last().locator('.meta');
+      await expect(meta.locator('.model')).toHaveText('sonnet');
+      await expect(meta.locator('.model-note')).toHaveText(/^\+claude-side-fake (<1|\d+)%$/);
+      await expect(meta.locator('.model-note')).not.toHaveClass(/mismatch/);
+      await expect(meta).toContainText(/sonnet · effort medium · \+claude-side-fake/);
       // 002-AC18 002-AC42: the synthesis names its persona and the effort it ran with.
-      await expect(p.locator('#messages li.msg.agent').last().locator('.meta strong')).toHaveText('🔥 Grill');
-      await expect(p.locator('#messages li.msg.agent').last().locator('.effort')).toHaveText('effort default');
+      await expect(meta.locator('strong')).toHaveText('🔥 Grill');
+      await expect(meta.locator('.effort')).toHaveText('effort medium');
       await expect(p.locator('#documents')).toContainText('notes.md');
     }
     await expect(led(bob)).toHaveAttribute('aria-label', 'Grill ready');

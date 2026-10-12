@@ -85,21 +85,21 @@ func TestHeldChanges(t *testing.T) {
 		t.Fatalf("host edit: %+v %v %v", p, held, err)
 	}
 	p, m, held, err := s.EditPersona(ctx, "a", grill.ID, PersonaPatch{Model: str("opus")}, bob)
-	if err != nil || !held || p.Model != "" || m.Body != "Bob asked to change 🌶 Grill: model default → opus. It waits for the host's approval." {
+	if err != nil || !held || p.Model != "sonnet" || m.Body != "Bob asked to change 🌶 Grill: model sonnet → opus. It waits for the host's approval." {
 		t.Fatalf("held edit: %+v %+v %v %v", p, m, held, err)
 	}
 	if _, _, _, err := s.EditPersona(ctx, "a", grill.ID, PersonaPatch{Effort: str("max")}, bob); err != nil {
 		t.Fatal(err)
 	}
 	c := s.onlyChange(t, "a")
-	if c.Kind != ChangeEdit || c.Summary != "model default → opus, effort default → max" {
+	if c.Kind != ChangeEdit || c.Summary != "model sonnet → opus, effort medium → max" {
 		t.Fatalf("merged change: %+v", c)
 	}
-	if got, _ := s.RoomPersona(ctx, "a", grill.ID); got.Model != "" || got.Effort != "" {
+	if got, _ := s.RoomPersona(ctx, "a", grill.ID); got.Model != "sonnet" || got.Effort != "medium" {
 		t.Fatalf("a held change applied: %+v", got)
 	}
 	m, err = s.DecideChange(ctx, "a", c.ID, true, alice)
-	if err != nil || m.Body != "Alice approved Bob's change to 🌶 Grill: model default → opus, effort default → max." {
+	if err != nil || m.Body != "Alice approved Bob's change to 🌶 Grill: model sonnet → opus, effort medium → max." {
 		t.Fatalf("approve: %+v %v", m, err)
 	}
 	if got, _ := s.RoomPersona(ctx, "a", grill.ID); got.Model != "opus" || got.Effort != "max" {
@@ -149,7 +149,7 @@ func TestHeldChanges(t *testing.T) {
 	}
 
 	// A template update is a change too.
-	tpl, err := s.PublishTemplate(ctx, bob.ProfileID, "Bob", "Critic", PersonaFields{Name: "Critic", Badge: "🧐", Colour: "#112233", Text: "v1"})
+	tpl, err := s.PublishTemplate(ctx, bob.ProfileID, "Bob", "Critic", PersonaFields{Name: "Critic", Badge: "🧐", Colour: "#112233", Text: "v1", Model: "sonnet", Effort: "medium"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,12 +160,12 @@ func TestHeldChanges(t *testing.T) {
 	if err != nil || crit.Pending {
 		t.Fatalf("host's add: %+v %v", crit, err)
 	}
-	if _, err := s.PublishVersion(ctx, bob.ProfileID, tpl.ID, "Bob", PersonaFields{Name: "Critic", Badge: "🧐", Colour: "#112233", Text: "v2", Model: "opus"}); err != nil {
+	if _, err := s.PublishVersion(ctx, bob.ProfileID, tpl.ID, "Bob", PersonaFields{Name: "Critic", Badge: "🧐", Colour: "#112233", Text: "v2", Model: "opus", Effort: "medium"}); err != nil {
 		t.Fatal(err)
 	}
 	p, m, held, err = s.UpdatePersona(ctx, "a", crit.ID, bob)
 	if err != nil || !held || p.Text != "v1" || p.UpdateVersion != 2 ||
-		m.Body != "Bob asked to change 🧐 Critic: model default → opus, persona text, template v1 → v2. It waits for the host's approval." {
+		m.Body != "Bob asked to change 🧐 Critic: model sonnet → opus, persona text, template v1 → v2. It waits for the host's approval." {
 		t.Fatalf("held update: %+v %+v %v %v", p, m, held, err)
 	}
 	if _, err := s.DecideChange(ctx, "a", s.onlyChange(t, "a").ID, true, alice); err != nil {

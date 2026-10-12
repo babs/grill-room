@@ -602,7 +602,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"rooms":                     "id name created_at chain_budget chain_count chain_suspended parallel_turns | host_participant_id quota_bytes creator_profile_id",
 		"participants":              "id name joined_at can_trigger profile_id profile_uuid_hint room_id invite_id | token_hash",
 		"invites":                   "| id room_id token_hash created_at revoked_at created_by",
-		"messages":                  "id room_id ts kind participant_id sender body model edited_at deleted_at change_seq persona_id effort req_model req_effort | html",
+		"messages":                  "id room_id ts kind participant_id sender body model edited_at deleted_at change_seq persona_id effort req_model req_effort model_note model_mismatch | html",
 		"message_versions":          "id message_id seq body written_at |",
 		"uploads":                   "id room_id participant_id filename content_type size data created_at |",
 		"documents":                 "id room_id kind name format upload_id author created_at |",
@@ -867,6 +867,41 @@ func personaJSON(t *testing.T, dir string) string {
 	return string(out)
 }
 
+// 005-AC9: a persona from an archive made before explicit levels asks for sonnet / medium here,
+// as a migrated one does, and the room API's check sees those.
+func TestImportFillsMissingLevels(t *testing.T) {
+	s := openTest(t)
+	richRoom(t, s, "orig")
+	dir := export(t, s, "orig")
+	p := filepath.Join(dir, fileRoom)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := bytes.ReplaceAll(bytes.ReplaceAll(b, []byte(`"model": "sonnet"`), []byte(`"model": ""`)), []byte(`"effort": "medium"`), []byte(`"effort": ""`))
+	if bytes.Equal(old, b) {
+		t.Fatal("no persona level to blank")
+	}
+	if err := os.WriteFile(p, old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o := importOpts("copy")
+	var checked []PersonaFields
+	o.CheckPersona = func(f PersonaFields, _, _ int) error { checked = append(checked, f); return nil }
+	if _, err := s.ImportRoom(t.Context(), dir, o); err != nil {
+		t.Fatal(err)
+	}
+	ps, err := s.RoomPersonas(t.Context(), "copy")
+	if err != nil || len(ps) == 0 {
+		t.Fatalf("personas %v %v", ps, err)
+	}
+	for i, p := range ps {
+		if p.Model != DefaultModel || p.Effort != DefaultEffort || checked[i].Model != DefaultModel || checked[i].Effort != DefaultEffort {
+			t.Errorf("persona %s: %s / %s, checked %+v", p.Name, p.Model, p.Effort, checked[i])
+		}
+	}
+}
+
 // 004-AC12 004-AC13: an imported persona keeps its library template on the instance that exported
 // it, takes the shipped template of the same key anywhere, and has none for a template the other
 // instance does not have.
@@ -874,7 +909,7 @@ func TestImportPersonaTemplates(t *testing.T) {
 	src, dst := openTest(t), openTest(t)
 	ctx := t.Context()
 	alice, _ := richRoom(t, src, "orig")
-	tpl, err := src.PublishTemplate(ctx, alice.ProfileID, "Alice", "Critic", PersonaFields{Name: "Critic", Badge: "🧐", Colour: "#112233", Text: "Criticise."})
+	tpl, err := src.PublishTemplate(ctx, alice.ProfileID, "Alice", "Critic", PersonaFields{Name: "Critic", Badge: "🧐", Colour: "#112233", Text: "Criticise.", Model: "sonnet", Effort: "medium"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -215,7 +215,10 @@ type AgentAnnotation struct {
 type TurnOutcome struct {
 	Synthesis string
 	Model     string
-	Effort    string
+	// ModelNote and ModelMismatch qualify Model as turn.Result does (005-AC10).
+	ModelNote     string
+	ModelMismatch bool
+	Effort        string
 	// Capped tells that the host cap lowered what the persona asked for: the synthesis says so.
 	Capped    bool
 	Documents []AgentWrite
@@ -743,7 +746,8 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 		report.Annotated++
 	}
 	if strings.TrimSpace(out.Synthesis) != "" {
-		m := &Message{RoomID: roomID, Kind: KindAgent, Sender: author, PersonaID: t.PersonaID, Body: out.Synthesis, Model: out.Model, Effort: out.Effort}
+		m := &Message{RoomID: roomID, Kind: KindAgent, Sender: author, PersonaID: t.PersonaID, Body: out.Synthesis, Model: out.Model, Effort: out.Effort,
+			ModelNote: out.ModelNote, ModelMismatch: out.ModelMismatch}
 		if out.Capped {
 			m.ReqModel, m.ReqEffort = t.ReqModel, t.ReqEffort
 		}

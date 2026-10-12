@@ -22,6 +22,7 @@ import (
 	"github.com/babs/grill-room/internal/convert"
 	"github.com/babs/grill-room/internal/render"
 	"github.com/babs/grill-room/internal/skill"
+	"github.com/babs/grill-room/internal/turn"
 )
 
 // ErrImportRefused wraps every reason an import is refused; the message says which. Nothing is
@@ -258,6 +259,7 @@ const (
 	maxImportRoomName = 100
 	maxImportName     = 100
 	maxImportName40   = 40
+	maxImportNote     = turn.MaxModelNote
 	maxImportLineBody = 4000
 	maxImportAgent    = 20000
 	maxImportDocName  = 200
@@ -360,6 +362,13 @@ func ref(m map[int64]int64, what string, r int64, optional bool) (any, error) {
 
 func (im *importer) personasStep(ps []xPersona) error {
 	for _, p := range ps {
+		// An archive from before 005-AC9 may leave either to the host, as a migrated room did.
+		if p.Model == "" {
+			p.Model = DefaultModel
+		}
+		if p.Effort == "" {
+			p.Effort = DefaultEffort
+		}
 		if err := im.o.CheckPersona(p.PersonaFields, p.EveryN, p.Autocompact); err != nil {
 			return refuseImport("persona %s: %v", p.Name, err)
 		}
@@ -533,7 +542,10 @@ func checkMessage(m *xMessage) error {
 	if err := textIs(what, maxImportName, false, false, m.Sender); err != nil {
 		return err
 	}
-	return textIs(what, maxImportName, false, true, m.Model, m.Effort, m.ReqModel, m.ReqEffort)
+	if err := textIs(what, maxImportName, false, true, m.Model, m.Effort, m.ReqModel, m.ReqEffort); err != nil {
+		return err
+	}
+	return textIs(what, maxImportNote, false, true, m.ModelNote)
 }
 
 // renderAhead checks every line and writes its HTML to fileRendered, one JSON value per line in
@@ -590,8 +602,9 @@ func (im *importer) messagesStep() error {
 		}
 		var id int64
 		err = im.tx.QueryRowContext(im.ctx, `INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, html, model, effort, persona_id,
-			req_model, req_effort, edited_at, deleted_at, change_seq) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
-			im.room, m.TS, m.Kind, pid, m.Sender, m.Body, html, m.Model, m.Effort, persona, m.ReqModel, m.ReqEffort, m.EditedAt, m.DeletedAt, m.ChangeSeq).Scan(&id)
+			req_model, req_effort, model_note, model_mismatch, edited_at, deleted_at, change_seq) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
+			im.room, m.TS, m.Kind, pid, m.Sender, m.Body, html, m.Model, m.Effort, persona, m.ReqModel, m.ReqEffort, m.ModelNote, m.Mismatch,
+			m.EditedAt, m.DeletedAt, m.ChangeSeq).Scan(&id)
 		if err != nil {
 			return refuseImport("message %d: %v", m.Ref, err)
 		}

@@ -289,7 +289,7 @@ func TestArchiveStagingAndSlots(t *testing.T) {
 
 // 004-AC14: an imported persona passes the checks of the room API.
 func TestCheckPersona(t *testing.T) {
-	good := store.PersonaFields{Name: "Grill", Badge: "🔥", Colour: "#d9480f", Text: "Grill them."}
+	good := store.PersonaFields{Name: "Grill", Badge: "🔥", Colour: "#d9480f", Text: "Grill them.", Model: "sonnet", Effort: "medium"}
 	if err := checkPersona(good, 0, 0); err != nil {
 		t.Fatal(err)
 	}

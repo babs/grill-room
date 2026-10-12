@@ -56,7 +56,8 @@ func (s *Supervisor) record(w *worker, e *TurnEvent) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(s.ctx), 5*time.Second)
 	defer cancel()
 	err := s.o.Monitor.Record(ctx, monitor.Turn{Instance: id, Room: e.Room, TurnID: e.ID, Persona: e.Persona, Account: account,
-		AskedModel: e.AskedModel, AskedEffort: e.AskedEffort, Model: e.Model, Effort: e.Effort, Cause: e.Cause,
+		AskedModel: e.AskedModel, AskedEffort: e.AskedEffort, Model: e.Model, ModelNote: e.ModelNote, ModelMismatch: e.ModelMismatch,
+		Effort: e.Effort, Cause: e.Cause,
 		DurationMS: e.DurationMS, QueueMS: e.QueueMS, Status: turnStatus(e.Error), Error: e.Error,
 		TokensIn: e.TokensIn, TokensOut: e.TokensOut, CacheRead: e.TokensCacheRead, CacheWrite: e.TokensCacheWrite, CostUSD: e.CostUSD,
 		ContextTokens: e.ContextTokens, ContextWindow: e.ContextWindow, WorkspaceBytes: e.WorkspaceBytes})

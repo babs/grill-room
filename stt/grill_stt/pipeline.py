@@ -162,9 +162,10 @@ class RoomAPI:
             return False
         return False
 
-    async def heartbeat(self, worker: str, rooms: list[str]) -> bool:
+    async def heartbeat(self, worker: str, rooms: list[str], voices: dict[str, list[int]]) -> bool:
         try:
-            r = await self._client.post("/api/stt/heartbeat", json={"worker": worker, "rooms": rooms})
+            body = {"worker": worker, "rooms": rooms, "voices": voices}
+            r = await self._client.post("/api/stt/heartbeat", json=body)
         except httpx.HTTPError as e:
             log.warning("heartbeat_failed", error=str(e))
             return False

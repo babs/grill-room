@@ -77,7 +77,7 @@ test('grill session on the lab, audio over TURN/TLS', async ({ request, baseURL 
 
     // Bob listens first, so the worker is in the room when Alice's recorded speech starts.
     await joinAudio(bob);
-    await expect(bob.locator('#stt-status')).toHaveText('Transcribing', { timeout: 30_000 });
+    await expect(bob.locator('#stt-status')).toHaveText(/^\d+ voices? transcribed/, { timeout: 30_000 });
     await joinAudio(alice);
     await assertAudio({ alice, bob }, true);
     const first = fixture.utterances[0];

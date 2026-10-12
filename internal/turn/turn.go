@@ -43,6 +43,7 @@ const (
 	MaxDocName   = 200
 	MaxSynthesis = 20000
 	MaxModel     = 100
+	MaxModelNote = 200
 	// MaxNewAnnotations bounds the annotations one turn opens; the rest are ignored and reported.
 	MaxNewAnnotations = 50
 	// Anchor context, in runes, as the anchor package accepts it.
@@ -59,10 +60,10 @@ const (
 // in docs/ (003-AC25).
 func HandoffDoc(persona string) string { return "_handoff-" + persona + ".md" }
 
-// Efforts are the values claude -p --effort accepts; empty leaves Claude Code's default.
+// Efforts are the values claude -p --effort accepts; a persona always names one (005-AC9).
 var Efforts = []string{"low", "medium", "high", "xhigh", "max"}
 
-// Models are the model aliases a persona may ask for; empty leaves the host's default.
+// Models are the model aliases a persona may ask for; a persona always names one (005-AC9).
 var Models = []string{"haiku", "sonnet", "opus", "fable"}
 
 // Job is the turn the daemon runs, as the server hands it over.
@@ -70,7 +71,8 @@ type Job struct {
 	ID     int64  `json:"id"`
 	Prompt string `json:"prompt"`
 	// Persona names the room persona the turn runs; System is its text, which claude gets as an
-	// appended system prompt. Model and Effort are what it asks for, empty for the host's default.
+	// appended system prompt. Model and Effort are what it asks for; empty only from a room server
+	// older than 005-AC9, which leaves them to Claude Code.
 	Persona string `json:"persona,omitempty"`
 	System  string `json:"system,omitempty"`
 	Model   string `json:"model,omitempty"`
@@ -112,10 +114,14 @@ type Change struct {
 type Result struct {
 	Error     string `json:"error,omitempty"`
 	Synthesis string `json:"synthesis,omitempty"`
-	// Model is the Claude model the turn ran on: the one claude reported, else the daemon's setting.
+	// Model is the model the turn asked for after the host cap, checked against what claude reported
+	// (005-AC10). ModelNote names the other models claude reported with their cost share, "+opus 3%";
+	// with ModelMismatch, claude did not report Model at all and the note lists what it did report.
 	// Effort is the effort it ran with.
-	Model  string `json:"model,omitempty"`
-	Effort string `json:"effort,omitempty"`
+	Model         string `json:"model,omitempty"`
+	ModelNote     string `json:"model_note,omitempty"`
+	ModelMismatch bool   `json:"model_mismatch,omitempty"`
+	Effort        string `json:"effort,omitempty"`
 	// Capped reports that the host cap lowered the model or effort the persona asked for (002-AC19).
 	Capped bool `json:"capped,omitempty"`
 	// Session carries the session jsonl bytes from SessionOffset on (D23).

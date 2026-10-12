@@ -25,7 +25,7 @@ The `config` object:
 | `instance` | the instance id; a worker refuses another instance's config |
 | `config_dir`, `state_dir`, `cache_dir` | the instance's directories: `settings.json` and `allowlist.json`, `tokens.json`, `workspace-cache/` |
 | `sandbox_root` | keys the sandbox names and the `grill-room-root` label, so that two supervisors never share a sandbox |
-| `log_level`, `model`, `image`, `cache_mb` | as the supervisor's environment sets them |
+| `log_level`, `image`, `cache_mb` | as the supervisor's environment sets them |
 | `settings` | the host cap and approval mode until the page saves the instance's own |
 | `limits` | `cpus`, `memory`, `egress_cpus`, `egress_memory` for the sandbox and its egress proxy |
 | `rooms` | the instance's room links, oldest first; the worker serves every one that holds a token |
@@ -64,7 +64,7 @@ A closed stdin means the same as `stop`, so a worker whose supervisor died stops
 |---|---|---|
 | `status` | `status`, the page's view of the worker; `update.served` is the version its room server hands out; `rooms` lists each room's pairing, connection, and turns `running` and `queued` | whenever it changes, checked every 250 ms |
 | `metrics` | `metrics`: `uptime_seconds`, `turns`, `failed_turns`, `heap_bytes`, `goroutines` | at start, then every 30 s |
-| `turn` | `turn`: `room`, `id`, `phase` (`start` or `end`), `error`, `duration_ms`, and at the end `queue_ms`, the wait for a slot, `persona`, the session's `context_tokens` and `context_window`, `cause`, `asked_model` and `asked_effort`, `model` and `effort` as run, `tokens_in`, `tokens_out`, `tokens_cache_read` and `tokens_cache_write` summed over every model claude called, `cost_usd` from claude's `total_cost_usd`, and `workspace_bytes`, the workspace tar's size. Absent fields are unknown | as a turn starts and ends |
+| `turn` | `turn`: `room`, `id`, `phase` (`start` or `end`), `error`, `duration_ms`, and at the end `queue_ms`, the wait for a slot, `persona`, the session's `context_tokens` and `context_window`, `cause`, `asked_model` and `asked_effort`, `model` and `effort` as run, `model_note` and `model_mismatch` as in the turn result, `tokens_in`, `tokens_out`, `tokens_cache_read` and `tokens_cache_write` summed over every model claude called, `cost_usd` from claude's `total_cost_usd`, and `workspace_bytes`, the workspace tar's size. Absent fields are unknown | as a turn starts and ends |
 | `acquire` | `slot`, a number the worker picks; `turn`: `room`, `id` | before each turn, version 3: the supervisor answers `grant`, or `wait` then `grant` |
 | `release` | `slot` | once the turn ran, or when it gives up waiting |
 | `log` | `log`, one zap JSON entry | for every log line. The supervisor re-encodes it before writing it to its stderr and to the page's log: it sets `instance` itself, and escapes control characters, C1 codes and Unicode format characters (bidi overrides, zero-width), so a worker binary cannot drive the terminal or fake a line. Entries over 16 KiB are dropped. The worker's stderr gets the same treatment, one entry per line with `"stream":"stderr"` |

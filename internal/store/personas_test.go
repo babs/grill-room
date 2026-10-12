@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -222,7 +223,7 @@ func TestRoomPersonaOverridesAndUpdate(t *testing.T) {
 	model, effort, text, name, colour := "haiku", "low", "Only decisions.", "Scribe", "#000000"
 	p, m, _, err = s.EditPersona(ctx, "a", p.ID, PersonaPatch{Model: &model, Effort: &effort, Text: &text, Name: &name, Colour: &colour}, alice)
 	if err != nil || p.Name != "Scribe" || p.Model != "haiku" || p.Effort != "low" || p.Text != text || p.Badge != "📝" ||
-		m.Body != "Alice changed 📝 Secretary: name Secretary → Scribe, colour #1971c2 → #000000, model default → haiku, effort default → low, persona text." {
+		m.Body != "Alice changed 📝 Secretary: name Secretary → Scribe, colour #1971c2 → #000000, model sonnet → haiku, effort medium → low, persona text." {
 		t.Fatalf("edit: %+v %+v %v", p, m, err)
 	}
 	if _, m, _, err := s.EditPersona(ctx, "a", p.ID, PersonaPatch{Model: &model}, alice); err != nil || m != nil {
@@ -250,7 +251,7 @@ func TestRoomPersonaOverridesAndUpdate(t *testing.T) {
 	}
 
 	// A new version is offered, not applied.
-	tp, err := s.PublishTemplate(ctx, alice.ProfileID, "Alice", "Critic", PersonaFields{Name: "Critic", Badge: "🧐", Colour: "#112233", Text: "v1"})
+	tp, err := s.PublishTemplate(ctx, alice.ProfileID, "Alice", "Critic", PersonaFields{Name: "Critic", Badge: "🧐", Colour: "#112233", Text: "v1", Model: "sonnet", Effort: "medium"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,6 +447,91 @@ func legacyRoom(t *testing.T, db *sql.DB) {
 	}
 }
 
+// 005-AC9: personas, template versions and held changes that left the model or effort to the host
+// ask for sonnet / medium once migrated; explicit ones stay. The shipped templates get no new
+// version for it, and the schema refuses an empty model or effort from then on.
+func TestMigrationToExplicitLevels(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	before := slices.IndexFunc(migrations, func(m string) bool { return strings.Contains(m, "005-AC9") })
+	if err := migrateTo(ctx, db, before); err != nil {
+		t.Fatal(err)
+	}
+	ts := "2026-01-01T00:00:00Z"
+	for _, q := range []string{
+		// The shipped templates as the code before 005-AC9 published them.
+		`UPDATE persona_template_versions SET model = '', effort = ''`,
+		`INSERT INTO rooms(id, name, created_at) VALUES('r', 'R', '` + ts + `')`,
+		`INSERT INTO room_personas(room_id, template_id, template_version, name, badge, colour, text, model, effort, created_at) VALUES
+			('r', 1, 1, 'Grill', 'x', '#000000', 't', '', '', '` + ts + `'),
+			('r', NULL, 1, 'Deep', 'x', '#000000', 't', 'opus', 'high', '` + ts + `'),
+			('r', NULL, 1, 'Half', 'x', '#000000', 't', '', 'low', '` + ts + `')`,
+		`INSERT INTO persona_change_requests(room_id, persona_id, kind, patch, requested_by, created_at) VALUES
+			('r', 2, 'change', '{"Name":null,"Model":"","Effort":"","Text":null}', 'Bob', '` + ts + `'),
+			('r', 3, 'change', '{"Name":"Halved","Model":null,"Effort":"max"}', 'Bob', '` + ts + `')`,
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	_ = db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	ps, err := s.RoomPersonas(ctx, "r")
+	if err != nil || len(ps) != 3 {
+		t.Fatalf("personas %+v %v", ps, err)
+	}
+	for i, want := range [][2]string{{"sonnet", "medium"}, {"opus", "high"}, {"sonnet", "low"}} {
+		if ps[i].Model != want[0] || ps[i].Effort != want[1] {
+			t.Errorf("persona %s: %s / %s, want %v", ps[i].Name, ps[i].Model, ps[i].Effort, want)
+		}
+	}
+	for _, key := range []string{PresetDefault, "secretary"} {
+		if tpl := templateByPreset(t, s, key); tpl.Version != 1 || tpl.Model != DefaultModel || tpl.Effort != DefaultEffort {
+			t.Errorf("preset %s: %+v", key, tpl)
+		}
+	}
+	var patches []string
+	rows, err := s.db.QueryContext(ctx, `SELECT patch FROM persona_change_requests ORDER BY persona_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			t.Fatal(err)
+		}
+		patches = append(patches, p)
+	}
+	_ = rows.Close()
+	if !slices.Equal(patches, []string{`{"Name":null,"Model":"sonnet","Effort":"medium","Text":null}`, `{"Name":"Halved","Model":null,"Effort":"max"}`}) {
+		t.Fatalf("held patches %q", patches)
+	}
+
+	for _, q := range []string{
+		`INSERT INTO room_personas(room_id, template_version, name, badge, colour, text, model, effort, created_at) VALUES('r', 1, 'E', 'x', '#000000', 't', '', 'low', '` + ts + `')`,
+		`INSERT INTO room_personas(room_id, template_version, name, badge, colour, text, model, effort, created_at) VALUES('r', 1, 'E', 'x', '#000000', 't', 'haiku', '', '` + ts + `')`,
+		`UPDATE room_personas SET effort = '' WHERE name = 'Deep'`,
+		`UPDATE room_personas SET model = '' WHERE name = 'Deep'`,
+		`INSERT INTO persona_template_versions(template_id, n, author, name, badge, colour, text, model, effort, created_at) VALUES(1, 9, 'a', 'n', 'b', 'c', 't', '', 'low', '` + ts + `')`,
+	} {
+		if _, err := s.db.ExecContext(ctx, q); err == nil || !strings.Contains(err.Error(), "a persona needs a model and an effort") {
+			t.Errorf("%s: %v", q, err)
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE room_personas SET name = 'Deeper' WHERE name = 'Deep'`); err != nil {
+		t.Fatalf("an update leaving the level alone: %v", err)
+	}
+}
+
 // 002-AC42: a pre-002 room gets the Default template's Grill persona, which takes over the room's
 // turns, session and everything the agent signed; a participant who happens to be named Agent
 // keeps their lines.
@@ -597,7 +683,7 @@ func TestPersonaLimits(t *testing.T) {
 	if _, _, err := s.AddPersona(ctx, "a", sec.ID, alice); !errors.Is(err, ErrLimit) || !strings.Contains(err.Error(), "12 personas per room") {
 		t.Fatalf("persona past the limit: %v", err)
 	}
-	f := PersonaFields{Name: "T", Badge: "x", Colour: "#000000", Text: "t"}
+	f := PersonaFields{Name: "T", Badge: "x", Colour: "#000000", Text: "t", Model: "sonnet", Effort: "medium"}
 	var last *Template
 	for i := 0; i < MaxProfileTemplates; i++ {
 		var err error

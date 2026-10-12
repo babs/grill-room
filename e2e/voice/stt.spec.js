@@ -22,7 +22,7 @@ const voiceLines = (page) => page.locator('.msg.voice').evaluateAll((els) => els
 async function listener(browser, request, room) {
   const page = await join(browser, await invite(request, room.id), 'Bob');
   await joinAudio(page);
-  await expect(page.locator('#stt-status')).toHaveText('Transcribing', { timeout: 30_000 });
+  await expect(page.locator('#stt-status')).toHaveText(/^\d+ voices? transcribed/, { timeout: 30_000 });
   return page;
 }
 
@@ -168,7 +168,7 @@ test('transcription down shows a banner, and lines resume when it is back', asyn
     await expect(bob.locator('.msg.text').last()).toContainText('still here');
 
     compose('start', 'stt');
-    await expect(bob.locator('#stt-status')).toHaveText('Transcribing', { timeout: 120_000 });
+    await expect(bob.locator('#stt-status')).toHaveText(/^\d+ voices? transcribed/, { timeout: 120_000 });
     aliceBrowser = await launch(fixture.wav);
     const alice = await join(aliceBrowser, await invite(request, room.id), 'Alice');
     await joinAudio(alice);

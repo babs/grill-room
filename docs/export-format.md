@@ -29,7 +29,7 @@ Every row carries `ref`, its id on the exporting instance. Other rows point to i
 |---|---|
 | `room.json` | `name`, `created_at`, `chain` (`budget`, `count`, `suspended`), `parallel_turns`, and `personas` |
 | `participants.jsonl` | `ref`, `name`, `joined_at`, `can_trigger`, `active` (false once their invite was revoked), `profile_uuid` (or the hint an earlier import kept), `admin` |
-| `messages.jsonl` | `ref`, `ts`, `kind` (`voice`, `text`, `agent`, `system`), `participant`, `persona`, `sender`, `body`, `model`, `effort`, `requested_model`, `requested_effort`, `edited_at`, `deleted_at`, `change_seq` |
+| `messages.jsonl` | `ref`, `ts`, `kind` (`voice`, `text`, `agent`, `system`), `participant`, `persona`, `sender`, `body`, `model`, `model_note`, `model_mismatch`, `effort`, `requested_model`, `requested_effort`, `edited_at`, `deleted_at`, `change_seq` |
 | `message_versions.jsonl` | earlier bodies of edited lines: `message`, `seq`, `body`, `written_at` |
 | `transcript.md` | the lines as Markdown, each followed by its earlier versions; deletions marked. For people: the import never reads it |
 | `uploads.jsonl` and `uploads/<ref>` | `ref`, `participant`, `filename`, `content_type`, `size`, `created_at`, `file`; the file is the original |
@@ -42,7 +42,7 @@ Every row carries `ref`, its id on the exporting instance. Other rows point to i
 | `skill_versions.jsonl` and `skills/<skill>/<n>.tar` | `skill`, `n`, `author`, `description`, `files`, `size`, `sha256`, `created_at`, `file`; the file is the skill's normalised tar |
 | `sessions.jsonl` and `sessions/<persona>/<i>.jsonl` | `persona`, `session_id`, `updated_at`, `context_tokens`, `context_window`, `context_updated_at`, `size`, `file`; the file is the Claude Code session jsonl |
 
-A persona in `room.json` has `ref`, `name`, `badge`, `colour`, `text`, `model`, `effort`, `template` (its library template's ref) and `template_preset` (the key of a shipped template), `template_version`, `every_n`, `self_call`, `autocompact`, `created_at`, `skills` (`skill` and `version` of each skill it has on), and `resume`. `resume` is where its next turn picks up: the `session_id` of its last successful turn, the `message_cursor` and `annotation_cursor` refs that turn had read up to, `change_cursor`, `model`, `effort` and `ended_at`.
+A persona in `room.json` has `ref`, `name`, `badge`, `colour`, `text`, `model`, `effort`, `template` (its library template's ref) and `template_preset` (the key of a shipped template), `template_version`, `every_n`, `self_call`, `autocompact`, `created_at`, `skills` (`skill` and `version` of each skill it has on), and `resume`. An archive from before explicit models may leave `model` or `effort` empty: the import reads them as `sonnet` and `medium`. `resume` is where its next turn picks up: the `session_id` of its last successful turn, the `message_cursor` and `annotation_cursor` refs that turn had read up to, `change_cursor`, `model`, `effort` and `ended_at`.
 
 Skills: the room's own skills come with every version. A shared or personal skill a persona has on comes with the pinned versions only.
 

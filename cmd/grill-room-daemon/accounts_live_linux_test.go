@@ -176,7 +176,7 @@ func TestLiveAccounts(t *testing.T) {
 	rs1, rs2 := newRoomServer(t), newRoomServer(t)
 	alice, bob := rs1.join(t, "Alice"), rs2.join(t, "Bob")
 	state := filepath.Join(t.TempDir(), "state")
-	env := []string{"GRILL_ROOM_DAEMON_STATE_DIR=" + state, "GRILL_ROOM_SANDBOX_IMAGE=" + image, "GRILL_ROOM_AGENT_MODEL=haiku",
+	env := []string{"GRILL_ROOM_DAEMON_STATE_DIR=" + state, "GRILL_ROOM_SANDBOX_IMAGE=" + image, "GRILL_ROOM_MAX_MODEL=haiku",
 		// No keyring: the setup token lands in the supervisor's owner-only file, which this test can see.
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent",
 		// A token in the supervisor's environment must not reach its workers.

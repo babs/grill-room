@@ -206,7 +206,6 @@ func slotsThrough(t *testing.T, g *gate, instance string) *slots {
 func cappedHost(t *testing.T, desk *turnDesk, g *gate, instance string) (*Daemon, context.Context) {
 	t.Helper()
 	d := newTestDaemon(t, dockerUp)
-	d.o.Model = "haiku"
 	d.o.NewAgent = desk.newAgent
 	d.acquire = slotsThrough(t, g, instance).acquire
 	d.Refresh(context.Background())

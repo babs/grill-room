@@ -87,12 +87,12 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
     ({ status } = await edit(bob, 'Secretary', { Model: 'opus' }));
     await expect(status).toHaveText('Secretary saved. It applies from its next turn.');
     await close(bob);
-    await alice.getByRole('button', { name: 'Refuse opus · effort default for Secretary' }).click();
+    await alice.getByRole('button', { name: 'Refuse opus · effort medium for Secretary' }).click();
     await expect(bob.locator('#messages')).toContainText(
-      'Alice refused opus · effort default for 📝 Secretary: it keeps running at the host cap, sonnet · effort default.');
+      'Alice refused opus · effort medium for 📝 Secretary: it keeps running at the host cap, sonnet · effort medium.');
     await expect(bob.locator('#approvals')).toBeHidden();
     await ask(alice, 'Secretary', 3);
-    await expect(lastAgent(bob).locator('.meta')).toContainText('requested opus · effort default → ran claude-sonnet-fake · effort default (host cap)');
+    await expect(lastAgent(bob).locator('.meta')).toContainText(/requested opus · effort medium → ran sonnet · effort medium · \+claude-side-fake \S+ \(host cap\)/);
 
     // Approve everything: Bob's new persona and his change wait for Alice.
     await admin.getByLabel('Approve every new persona and persona change').check();
@@ -112,7 +112,7 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
     }
     await expect(bob.locator('#approval-list li')).toHaveText([
       '🔥 Grill-2, added by Bob: new persona. The host decides.',
-      'Bob asks to change 📝 Secretary: effort default → low. The host decides.',
+      'Bob asks to change 📝 Secretary: effort medium → low. The host decides.',
     ]);
     await alice.getByRole('button', { name: 'Approve the persona Grill-2' }).click();
     await alice.getByRole('button', { name: 'Approve the change to Secretary' }).click();
@@ -121,7 +121,7 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
       '📝 Secretary asks for opus · effort low, above the host cap: it runs at sonnet · effort low. The host decides.',
     ]);
     await expect(led(bob, 'Grill-2')).toHaveAttribute('aria-label', 'Grill-2 ready');
-    await expect(bob.locator('#messages')).toContainText('Alice approved Bob\'s change to 📝 Secretary: effort default → low.');
+    await expect(bob.locator('#messages')).toContainText('Alice approved Bob\'s change to 📝 Secretary: effort medium → low.');
     await ask(alice, 'Secretary', 4);
     await expect(lastAgent(bob).locator('.effort')).toHaveText('effort low');
   } finally {

@@ -195,7 +195,7 @@ test(plan.name, async ({ request }) => {
           }
           const micAt = {};
           for (const name of plan.speakers) micAt[name] = await pages[name].evaluate(() => window.scMicAt);
-          await expect(first.locator('#stt-status')).toHaveText('Transcribing', { timeout: 30_000 });
+          await expect(first.locator('#stt-status')).toHaveText(/^\d+ voices? transcribed/, { timeout: 30_000 });
           const lastEnd = Math.max(...rnd.lines.map((l) => l.end));
           await first.waitForTimeout(Math.max(0, Math.max(...Object.values(micAt)) + lastEnd * 1000 - Date.now()));
           // The worker lags behind speech: wait until no line has landed for 15 s, 2 minutes at most.

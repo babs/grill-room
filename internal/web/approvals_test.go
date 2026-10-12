@@ -178,11 +178,11 @@ func TestApproveEverything(t *testing.T) {
 		t.Fatalf("a pending persona ran: %d %s", code, b)
 	}
 	code, b := e.do(t, "PATCH", r.path(fmt.Sprintf("/personas/%d", r.grill.ID)), bob, map[string]string{"model": "haiku"})
-	if p := decodeJSON[store.RoomPersona](t, b); code != http.StatusAccepted || p.Model != "" {
+	if p := decodeJSON[store.RoomPersona](t, b); code != http.StatusAccepted || p.Model != "sonnet" {
 		t.Fatalf("held edit: %d %s", code, b)
 	}
 	st := e.agent(t, r.room, bob)
-	if len(st.Changes) != 2 || st.Changes[0].Kind != store.ChangeAdd || st.Changes[1].Summary != "model default → haiku" || !st.Cap.ApproveAll {
+	if len(st.Changes) != 2 || st.Changes[0].Kind != store.ChangeAdd || st.Changes[1].Summary != "model sonnet → haiku" || !st.Cap.ApproveAll {
 		t.Fatalf("held: %+v", st.Changes)
 	}
 	path := func(id int64) string { return r.path(fmt.Sprintf("/changes/%d", id)) }

@@ -30,7 +30,7 @@ test('personas: add, edit, queue', async ({ browser, request, baseURL }) => {
   await sec.getByLabel('Persona text').fill('You are Scribe, who writes it all down.\nNothing else.');
   await sec.getByRole('button', { name: 'Save' }).click();
   await expect(panel.locator('#personas-status')).toHaveText('Secretary saved. It applies from its next turn.');
-  await expect(bob.locator('#messages')).toContainText('Alice changed 📝 Secretary: effort default → low, persona text.');
+  await expect(bob.locator('#messages')).toContainText('Alice changed 📝 Secretary: effort medium → low, persona text.');
   // A bad name is refused by the room, and says why.
   await sec.getByLabel('Name').fill('two words');
   await sec.getByRole('button', { name: 'Save' }).click();
@@ -64,7 +64,7 @@ test('personas: add, edit, queue', async ({ browser, request, baseURL }) => {
     const scribe = alice.locator('#messages li.msg.agent', { hasText: 'You are Scribe' });
     await expect(scribe.locator('.body')).toHaveText('You are Scribe, who writes it all down. (effort low)', { timeout: 60_000 });
     await expect(scribe.locator('.meta strong')).toHaveText('📝 Secretary');
-    await expect(scribe.locator('.model')).toHaveText('claude-default-fake');
+    await expect(scribe.locator('.model')).toHaveText('sonnet');
     await expect(scribe.locator('.effort')).toHaveText('effort low');
     await expect(alice.locator('#queue')).toBeHidden();
     await expect(led(alice, 'Secretary')).toHaveAttribute('aria-label', 'Secretary ready');

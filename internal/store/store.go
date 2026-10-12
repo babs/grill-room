@@ -86,9 +86,13 @@ type Message struct {
 	PersonaID int64  `json:"persona_id,omitempty"`
 	Badge     string `json:"badge,omitempty"`
 	Colour    string `json:"colour,omitempty"`
-	// Model and Effort are what an agent synthesis ran with: the model as claude reported it.
-	Model  string `json:"model,omitempty"`
-	Effort string `json:"effort,omitempty"`
+	// Model and Effort are what an agent synthesis ran with. Since 005-AC10 the model is the one
+	// asked for, checked against claude's report, ModelNote and ModelMismatch as in turn.Result;
+	// before, the one claude reported.
+	Model         string `json:"model,omitempty"`
+	ModelNote     string `json:"model_note,omitempty"`
+	ModelMismatch bool   `json:"model_mismatch,omitempty"`
+	Effort        string `json:"effort,omitempty"`
 	// ReqModel and ReqEffort are what the persona asked for, set only when the host cap lowered
 	// them (002-AC19).
 	ReqModel  string     `json:"requested_model,omitempty"`
@@ -539,6 +543,24 @@ ALTER TABLE profiles ADD COLUMN max_rooms INTEGER CHECK (max_rooms IS NULL OR ma
 `, `
 -- 004-AC13: an imported participant whose profile uuid matches no profile here keeps it, unlinked.
 ALTER TABLE participants ADD COLUMN profile_uuid_hint TEXT;
+`, `
+-- 005-AC9: a persona always names its model and effort. Those left to the host run on sonnet,
+-- medium, held changes included; the triggers stand for a CHECK, which ALTER TABLE cannot add.
+UPDATE room_personas SET model = 'sonnet' WHERE model = '';
+UPDATE room_personas SET effort = 'medium' WHERE effort = '';
+UPDATE persona_template_versions SET model = 'sonnet' WHERE model = '';
+UPDATE persona_template_versions SET effort = 'medium' WHERE effort = '';
+UPDATE persona_change_requests SET patch = json_set(patch, '$.Model', 'sonnet') WHERE json_extract(patch, '$.Model') = '';
+UPDATE persona_change_requests SET patch = json_set(patch, '$.Effort', 'medium') WHERE json_extract(patch, '$.Effort') = '';
+CREATE TRIGGER room_personas_level_insert BEFORE INSERT ON room_personas WHEN NEW.model = '' OR NEW.effort = ''
+	BEGIN SELECT RAISE(ABORT, 'a persona needs a model and an effort'); END;
+CREATE TRIGGER room_personas_level_update BEFORE UPDATE OF model, effort ON room_personas WHEN NEW.model = '' OR NEW.effort = ''
+	BEGIN SELECT RAISE(ABORT, 'a persona needs a model and an effort'); END;
+CREATE TRIGGER persona_template_versions_level BEFORE INSERT ON persona_template_versions WHEN NEW.model = '' OR NEW.effort = ''
+	BEGIN SELECT RAISE(ABORT, 'a persona needs a model and an effort'); END;
+-- 005-AC10: the other models claude reported for a synthesis, or a mismatch with the one asked for.
+ALTER TABLE messages ADD COLUMN model_note TEXT NOT NULL DEFAULT '';
+ALTER TABLE messages ADD COLUMN model_mismatch INTEGER NOT NULL DEFAULT 0 CHECK (model_mismatch IN (0, 1));
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -1004,8 +1026,10 @@ func insertMessage(ctx context.Context, db execer, m *Message) error {
 		m.HTML = render.MessageHTML(m.Body)
 	}
 	res, err := db.ExecContext(ctx,
-		`INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, html, model, effort, persona_id, req_model, req_effort) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-		m.RoomID, m.TS.Format(time.RFC3339Nano), m.Kind, pid, m.Sender, m.Body, nullStr(m.HTML), m.Model, m.Effort, nullID(m.PersonaID), m.ReqModel, m.ReqEffort)
+		`INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, html, model, effort, persona_id, req_model, req_effort, model_note, model_mismatch)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		m.RoomID, m.TS.Format(time.RFC3339Nano), m.Kind, pid, m.Sender, m.Body, nullStr(m.HTML), m.Model, m.Effort, nullID(m.PersonaID), m.ReqModel, m.ReqEffort,
+		m.ModelNote, m.ModelMismatch)
 	if err != nil {
 		return fmt.Errorf("insert message: %w", err)
 	}
@@ -1028,7 +1052,7 @@ func (s *Store) LastVoice(ctx context.Context, roomID string) (*Message, error) 
 const (
 	messageFields = `id, ts, room_id, kind, COALESCE(participant_id, 0), sender, body, COALESCE(html, ''), model, edited_at, deleted_at, change_seq,
 		COALESCE(persona_id, 0), effort, COALESCE((SELECT badge FROM room_personas WHERE id = messages.persona_id), ''),
-		COALESCE((SELECT colour FROM room_personas WHERE id = messages.persona_id), ''), req_model, req_effort`
+		COALESCE((SELECT colour FROM room_personas WHERE id = messages.persona_id), ''), req_model, req_effort, model_note, model_mismatch`
 	messageCols = `SELECT ` + messageFields + ` FROM messages `
 )
 
@@ -1054,7 +1078,7 @@ func scanMessage(sc scanner, extra ...any) (*Message, error) {
 	var ts string
 	var edited, deleted sql.NullString
 	err := sc.Scan(append([]any{&m.ID, &ts, &m.RoomID, &m.Kind, &m.ParticipantID, &m.Sender, &m.Body, &m.HTML, &m.Model, &edited, &deleted, &m.ChangeSeq,
-		&m.PersonaID, &m.Effort, &m.Badge, &m.Colour, &m.ReqModel, &m.ReqEffort}, extra...)...)
+		&m.PersonaID, &m.Effort, &m.Badge, &m.Colour, &m.ReqModel, &m.ReqEffort, &m.ModelNote, &m.ModelMismatch}, extra...)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

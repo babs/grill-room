@@ -122,15 +122,27 @@ function renderMessage(m) {
   time.textContent = new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   meta.append(sender, ' ', time);
   if (m.kind === 'agent') {
-    // The model and effort the turn ran with (002-AC18).
+    // The model and effort the turn ran with (002-AC18), the model checked against what claude
+    // reported (005-AC10). Lines from before 005-AC9 may carry no effort.
     const model = document.createElement('span');
     model.className = 'model';
     model.textContent = m.model || 'model unknown';
     model.title = 'Claude model of this turn';
-    const effort = document.createElement('span');
-    effort.className = 'effort';
-    effort.textContent = 'effort ' + (m.effort || 'default');
-    effort.title = 'Effort of this turn';
+    const ran = [model];
+    if (m.effort) {
+      const effort = document.createElement('span');
+      effort.className = 'effort';
+      effort.textContent = 'effort ' + m.effort;
+      effort.title = 'Effort of this turn';
+      ran.push(' · ', effort);
+    }
+    if (m.model_note || m.model_mismatch) {
+      const note = document.createElement('span');
+      note.className = 'model-note' + (m.model_mismatch ? ' mismatch' : '');
+      note.textContent = m.model_mismatch ? '⚠ claude reported ' + (m.model_note || 'no model') : m.model_note;
+      note.title = m.model_mismatch ? 'Claude did not report the model this turn asked for' : 'Other models of this turn, with their share of its cost';
+      ran.push(' · ', note);
+    }
     // The host cap lowered what the persona asked for (002-AC19).
     if (m.requested_model || m.requested_effort) {
       const asked = document.createElement('span');
@@ -139,9 +151,9 @@ function renderMessage(m) {
       const why = document.createElement('span');
       why.className = 'capped';
       why.textContent = '(host cap)';
-      meta.append(' ', asked, ' ', model, ' · ', effort, ' ', why);
+      meta.append(' ', asked, ' ', ...ran, ' ', why);
     } else {
-      meta.append(' ', model, ' · ', effort);
+      meta.append(' ', ...ran);
     }
   }
   const body = document.createElement('div');
@@ -738,8 +750,9 @@ window.addEventListener('focus', () => { if (events && events.readyState !== Eve
 let agent = { online: false, can_trigger: [], daemons: [], turn: null, running: [], personas: [], queue: [], models: [], efforts: [], cap_requests: [],
   changes: [], room_skills: [], chain: { budget: 25, count: 0, suspended: false }, parallel_turns: false };
 
-// level shows a model and effort as the room says them, "opus · effort max".
-const level = (l) => (l.model || 'default') + ' · effort ' + (l.effort || 'default');
+// level shows a model and effort as the room says them, "opus · effort max". Both are always set
+// since 005-AC9; "unset" only shows a line written before.
+const level = (l) => (l.model || 'unset') + ' · effort ' + (l.effort || 'unset');
 
 const isHost = () => String(agent.host_participant_id || '') === myID;
 const canPress = () => isHost() || agent.can_trigger.includes(Number(myID));
@@ -974,11 +987,13 @@ function personasStatus(text) {
   $('personas-status').textContent = text;
 }
 
-function picker(name, values, value, defaultLabel) {
+// picker offers values only: a persona always names its model and effort (005-AC9).
+function picker(name, values, value) {
   const s = document.createElement('select');
   s.name = name;
-  s.append(option('', defaultLabel), ...values.map((v) => option(v, v)));
-  s.value = value || '';
+  s.required = true;
+  s.append(...values.map((v) => option(v, v)));
+  s.value = value;
   return s;
 }
 
@@ -1000,7 +1015,8 @@ function personaForm(p) {
   const from = document.createElement('p');
   from.className = 'hint';
   const use = contextUse(p);
-  from.textContent = (tpl ? 'From "' + tpl.title + '" v' + p.template_version : 'Its template was removed from the library.')
+  from.textContent = 'Runs on ' + level(p) + '. '
+    + (tpl ? 'From "' + tpl.title + '" v' + p.template_version : 'Its template was removed from the library.')
     + (p.pending ? ' Waits for the host\'s approval.' : '')
     + (use === null ? '' : ' Its session holds ' + use + '% of its context window.');
   const input = (name, value, attrs) => {
@@ -1021,8 +1037,8 @@ function personaForm(p) {
     field('Name', input('name', p.name, { maxLength: 30, required: true })),
     field('Badge', input('badge', p.badge, { maxLength: 8, required: true })),
     field('Colour', input('colour', p.colour, { type: 'color' })),
-    field('Model', picker('model', agent.models, p.model, 'host default')),
-    field('Effort', picker('effort', agent.efforts, p.effort, 'default')),
+    field('Model', picker('model', agent.models, p.model)),
+    field('Effort', picker('effort', agent.efforts, p.effort)),
     field('Every N rounds', input('every_n', p.every_n || 0, { type: 'number', min: 0, max: 100, title: '0 runs it on demand only' })),
     field('Autocompact (k tokens)', input('autocompact', p.autocompact ? p.autocompact / 1000 : '', { type: 'number', min: 100, max: 1000,
       placeholder: 'auto', title: 'Context size at which Claude Code compacts the session; empty for auto' })),
@@ -1365,10 +1381,16 @@ function renderParticipants() {
   if (rows.length !== list.children.length || rows.some((li, i) => list.children[i] !== li)) list.replaceChildren(...rows);
 }
 
+// showSTT counts the voices the STT worker transcribes, and tells viewers only whether their own
+// is one of them (005-AC8).
 function showSTT(st) {
   const el = $('stt-status');
+  const voices = st.transcribed || [];
+  const mine = voices.some((id) => String(id) === myID);
   el.classList.toggle('down', !st.available);
-  el.textContent = !st.available ? 'Transcription unavailable' : st.listening ? 'Transcribing' : '';
+  el.textContent = !st.available ? 'Transcription unavailable'
+    : !st.listening || !voices.length ? ''
+    : (voices.length === 1 ? '1 voice' : voices.length + ' voices') + ' transcribed' + (mine ? ' · your voice is being transcribed' : '');
 }
 
 function voiceError(text) {
