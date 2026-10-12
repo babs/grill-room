@@ -70,6 +70,7 @@ test('one supervisor, two instances, two accounts, two turns at once', async ({ 
   const rooms = [];
   let proc;
   let exited;
+  let api;
   try {
     rooms.push(await joinRoom(browser, request, local, 'Alice', 'AC31 local'));
     rooms.push(await joinRoom(browser, request, lab, 'Alice', 'AC31 lab'));
@@ -80,7 +81,7 @@ test('one supervisor, two instances, two accounts, two turns at once', async ({ 
     });
     // A binary that cannot start emits error, not exit.
     exited = new Promise((resolve) => { proc.on('exit', resolve); proc.on('error', resolve); });
-    const api = await adminAPI(request, log);
+    api = await adminAPI(request, log);
     // The compose instance serves a dev build: its worker runs once the dev key is trusted.
     await api.post('/api/dev-keys', { name: 'e2e', pem: readFileSync(process.env.GRILL_ROOM_E2E_DEV_KEY, 'utf8') });
     await api.post('/api/accounts', { name: 'token', kind: 'setup_token', token: readFileSync(process.env.GRILL_ROOM_E2E_SETUP_TOKEN_FILE, 'utf8').trim() });
@@ -130,6 +131,8 @@ test('one supervisor, two instances, two accounts, two turns at once', async ({ 
     expect(requests).toBeLessThanOrEqual(6);
     expect(logLines({ log }).filter((l) => l.msg === 'upstream_response').map((l) => l.account).sort()).toEqual(expect.arrayContaining(['default', 'token']));
   } finally {
+    // The token account's secret sits in the OS keyring, outside the state dir.
+    if (api) await api.post('/api/accounts/remove', { name: 'token' }).catch((e) => console.log('account removal:', e.message));
     if (proc) {
       proc.kill('SIGTERM');
       await exited;
