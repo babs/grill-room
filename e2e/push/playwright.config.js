@@ -13,7 +13,7 @@ if (!base || !process.env.PUSH_ADMIN_TOKEN) throw new Error('set PUSH_BASE and P
 
 export default defineConfig({
   testDir: '.',
-  timeout: 120_000,
+  timeout: 180_000,
   workers: 1,
   retries: 0,
   use: { baseURL: base, channel: 'chrome', headless: false },

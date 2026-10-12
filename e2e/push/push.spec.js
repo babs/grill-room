@@ -25,7 +25,8 @@ test('a mention arrives as a real push notification', async ({ request, baseURL 
 
     await alice.locator('#notify summary').click();
     await alice.getByRole('button', { name: 'Turn on notifications' }).click();
-    await expect(alice.locator('#push-status')).toHaveText('Notifications on for this room.', { timeout: 30_000 });
+    // A fresh profile registers with the push service first: over 30 s at times.
+    await expect(alice.locator('#push-status')).toHaveText('Notifications on for this room.', { timeout: 90_000 });
     // The tab loses the focus, as when another window comes in front, and its beat says so.
     await alice.evaluate(() => { document.hasFocus = () => false; window.dispatchEvent(new Event('blur')); });
     await alice.waitForTimeout(1000);
