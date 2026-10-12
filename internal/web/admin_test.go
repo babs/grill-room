@@ -463,8 +463,8 @@ func TestAuditPurgeLoop(t *testing.T) {
 // the vendored modules are served.
 func TestAdminPage(t *testing.T) {
 	e := newEnv(t)
-	// The room page's admin panel is Preact too (004-AC19).
-	for _, path := range []string{"/admin", "/r/some-room"} {
+	// The room page's admin panel is Preact too (004-AC19); its docs window is the same page (005-AC11).
+	for _, path := range []string{"/admin", "/r/some-room", "/r/some-room/docs", "/r/some-room/docs/some-doc"} {
 		resp, err := http.Get(e.ts.URL + path) //nolint:noctx // test
 		if err != nil {
 			t.Fatal(err)

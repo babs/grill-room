@@ -3,6 +3,11 @@
 const $ = (id) => document.getElementById(id);
 const roomID = decodeURIComponent(location.pathname.split('/')[2] || '');
 const api = '/api/rooms/' + encodeURIComponent(roomID);
+// /r/<room>/docs[/<doc>] is the document manager in a window of its own (005-AC11): this page,
+// without the chat, the audio and the agents. Its stream keeps it live like the room page.
+const roomPath = '/r/' + encodeURIComponent(roomID);
+const docsMode = location.pathname.split('/')[3] === 'docs';
+if (docsMode) document.body.classList.add('docs-window');
 const messages = $('messages');
 const sendForm = $('send');
 const bodyInput = $('body');
@@ -98,11 +103,11 @@ const voiceKey = 'grill-room-count-voice';
 let unread = 0;
 
 function showTitle() {
-  document.title = (unread ? '(' + unread + ') ' : '') + roomName + ' · grill-room';
+  document.title = (unread ? '(' + unread + ') ' : '') + (docsMode ? 'Documents · ' : '') + roomName + ' · grill-room';
 }
 
 function countUnread(m) {
-  if (document.hasFocus() || new Date(m.ts).getTime() < loadedAt || String(m.participant_id) === myID) return;
+  if (docsMode || document.hasFocus() || new Date(m.ts).getTime() < loadedAt || String(m.participant_id) === myID) return;
   if (m.kind === 'text' || m.kind === 'agent' || (m.kind === 'voice' && localStorage.getItem(voiceKey) === '1')) {
     unread++;
     showTitle();
@@ -483,6 +488,12 @@ function docURL(id, suffix) {
   return api + '/documents/' + encodeURIComponent(id) + suffix;
 }
 
+// The docs window is one per room: a second "Open in a new window" reuses it.
+const docsTarget = 'grill-docs-' + roomID;
+$('docs-window').href = roomPath + '/docs';
+$('docs-window').target = docsTarget;
+$('doc-window').target = docsTarget;
+
 function describe(d) {
   if (d.kind === 'agent') return 'agent document by ' + personaLabel(d.author) + ', ' + d.revisions + (d.revisions === 1 ? ' revision' : ' revisions');
   return 'uploaded by ' + d.author;
@@ -528,6 +539,9 @@ async function showDocument(id, refresh) {
   const keepFrom = refresh ? $('rev-from').value : '';
   openDoc = d;
   $('viewer').hidden = false;
+  $('doc-window').href = roomPath + '/docs/' + encodeURIComponent(d.id);
+  // The docs window's address follows the document shown: a deep link to reload or share.
+  if (docsMode) history.replaceState(null, '', $('doc-window').href);
   $('doc-name').textContent = d.name;
   $('doc-meta').textContent = d.kind === 'upload' && d.format === 'md' && !/\.(md|markdown)$/i.test(d.name)
     ? describe(d) + ', shown as its Markdown copy'
@@ -583,6 +597,7 @@ function renderDocument() {
 $('rev').addEventListener('change', renderDocument);
 $('rev-from').addEventListener('change', renderDocument);
 $('doc-close').addEventListener('click', () => {
+  if (docsMode) history.replaceState(null, '', roomPath + '/docs');
   openDoc = null;
   $('viewer').hidden = true;
   $('doc-frame').replaceChildren();
@@ -2060,8 +2075,13 @@ if (window.visualViewport) {
 
 loadRoom().then((ok) => {
   if (!ok) return;
-  showRecovery();
   connect();
+  if (docsMode) {
+    const doc = decodeURIComponent(location.pathname.split('/')[4] || '');
+    if (doc) showDocument(doc).catch(() => history.replaceState(null, '', roomPath + '/docs'));
+    return;
+  }
+  showRecovery();
   showHostAgent().catch(console.error);
   const pair = new URLSearchParams(location.search).get('pair');
   if (pair) showPairing(pair).catch(console.error);

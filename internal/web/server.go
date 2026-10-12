@@ -155,6 +155,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /favicon.ico", asset(ui, "ui/favicon.ico", "image/x-icon"))
 	mux.HandleFunc("GET /site.webmanifest", asset(ui, "ui/site.webmanifest", "application/manifest+json"))
 	mux.HandleFunc("GET /r/{room}", s.roomPage)
+	// The document manager in a window of its own (005-AC11): the room page in its docs mode.
+	mux.HandleFunc("GET /r/{room}/docs", s.roomPage)
+	mux.HandleFunc("GET /r/{room}/docs/{doc}", s.roomPage)
 	mux.HandleFunc("GET /profile", page("profile.html"))
 	mux.HandleFunc("GET /admin", s.adminPage)
 	static, _ := fs.Sub(ui, "ui") // cannot fail: "ui" is a valid embedded path

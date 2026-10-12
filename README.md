@@ -245,6 +245,8 @@ Any participant can upload Markdown, HTML, PDF, PNG, JPEG, GIF, WebP, SVG, DOCX,
 
 Markdown renders GitHub-style: tables, highlighted code, mermaid diagrams, math, alerts, footnotes. Every rendered document, uploaded HTML included, loads in an iframe sandboxed without `allow-same-origin`, and its response carries a `sandbox` CSP. A script in it runs in an opaque origin: it cannot read the room cookie, and the CSP blocks fetch, XHR and form posts.
 
+"Open in a new window" puts the document manager in a window of its own, `/r/<room>/docs`: the list, uploads, the viewer, annotations, revisions and diffs, kept live by the room's event stream like the room page. Its address follows the document shown, so `/r/<room>/docs/<doc>` opens that document. A second click reuses the same window.
+
 The Docker image ships pandoc's official static build. The image grew from 16 MB to 174 MB, 147 MB of it pandoc (7 MB to 49 MB gzipped). Math renders with fallback glyphs for now: MathJax fetches its fonts from a CDN, and the CSP blocks that.
 
 ## Annotations
@@ -264,6 +266,10 @@ With `GRILL_ROOM_LIVEKIT_URL` set, the room page shows a Join audio button. Each
 ## Presence
 
 The participant list shows "In the room", then "Not here", collapsed, with when each was last seen. On a phone the People button opens it over the chat. The server keeps presence from each page's event stream and a heartbeat every 10 seconds: a participant stays here while one of their pages holds its stream open, and for 20 seconds after their last sign of life, so a reload, a background tab or a phone switching apps does not flap. A closing page says so, and the audio state it held goes at once. Each page reports its audio state, and every participant sees it, in the audio or not: mic live, muted, listening only, or not in the audio, with an icon when deafened. Badges with a tooltip mark you, the host (who holds the agents) and room admins. A "transcribed" badge marks each voice the STT worker hears. Those in the audio also see the speaking dot, and a volume slider per remote participant.
+
+A participant changes their own name from the pencil next to it in the header, with the same rules as at join, and may make it their profile's name too. A room admin, from Manage, or the admin, from `/admin`, renames anyone, and the renamed person sees a notice. The chat says who renamed whom. Earlier lines show the new name, with the one they were written under on hover. The agents' presence preamble keeps the same short id after the name, as it comes from the profile.
+
+While the room's tab is not focused, its title counts new lines from others and syntheses, "(3) Pricing review · grill-room", and resets once the tab is focused again. Voice lines count only when "Count voice lines in the tab title" is ticked, under Notifications.
 
 The server hands out LiveKit tokens valid for 5 minutes, and LiveKit refreshes them for connected clients. LiveKit has no way to revoke a token. So when an invite is revoked, the server also removes its participants from the LiveKit room, and deleting a room closes its LiveKit room. A revoked participant could still rejoin with a token minted before the revoke, until it expires.
 

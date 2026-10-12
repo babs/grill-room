@@ -153,12 +153,15 @@
     <h3 class="people">In the room</h3>
     <ul id="participants"></ul>
     <details id="away" hidden><summary>Not here (<span id="away-count">0</span>)</summary><ul id="participants-away"></ul></details>
-    <h2>Documents</h2>
-    <ul id="documents"></ul>
-    <label class="upload">Upload a document
-      <input type="file" id="upload-input" accept=".md,.markdown,.html,.htm,.pdf,.png,.jpg,.jpeg,.gif,.webp,.svg,.docx,.odt,.pptx">
-    </label>
-    <p id="upload-status" role="status"></p>
+    <section id="docs-pane" aria-labelledby="docs-title">
+      <h2 id="docs-title">Documents</h2>
+      <a id="docs-window" class="docs-window-link" target="_blank">Open in a new window</a>
+      <ul id="documents"></ul>
+      <label class="upload">Upload a document
+        <input type="file" id="upload-input" accept=".md,.markdown,.html,.htm,.pdf,.png,.jpg,.jpeg,.gif,.webp,.svg,.docx,.odt,.pptx">
+      </label>
+      <p id="upload-status" role="status"></p>
+    </section>
     <details id="invites">
       <summary>Invite people</summary>
       <p>Anyone holding an invite link can join and read the room.</p>
@@ -199,6 +202,7 @@
       <h2 id="doc-name"></h2>
       <span id="doc-meta"></span>
       <a id="doc-original" hidden>Download original</a>
+      <a id="doc-window" class="docs-window-link" target="_blank">Open in a new window</a>
       <button type="button" id="doc-close" aria-label="Close document">Close</button>
     </div>
     <form id="revisions" hidden>

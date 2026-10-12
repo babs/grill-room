@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, noOverflow } from './helpers.js';
+import { roomWith, signIn, noOverflow, upload, annotateSelection } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
@@ -161,6 +161,8 @@ test('unread count in the title', async ({ browser, request }) => {
   for (const text of ['one', 'two']) {
     await bob.locator('#body').fill(text);
     await bob.locator('#body').press('Enter');
+    // The box clears once the line is sent: typing the next one before would lose it.
+    await expect(bob.locator('#body')).toHaveValue('');
     await expect(alice.locator('#messages')).toContainText(text);
   }
   await expect(alice).toHaveTitle('(2) Docs room · grill-room');
@@ -178,4 +180,43 @@ test('unread count in the title', async ({ browser, request }) => {
   await expect(alice).toHaveTitle('(3) Docs room · grill-room');
   await alice.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(alice).toHaveTitle('Docs room · grill-room');
+});
+
+// 005-AC11: "Open in a new window" opens the whole document manager at /r/<room>/docs, live: a doc
+// uploaded in the room shows there, an annotation made there shows in the room. Its address
+// follows the document shown, and /r/<room>/docs/<doc> opens one document, at desktop and phone
+// width.
+test('document manager in its own window', async ({ browser, request }) => {
+  const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  await upload(alice, 'plan.md', 'text/markdown', '# Rollout plan\n\nThe rollback step comes first.\n');
+  await expect(alice.frameLocator('#doc-frame iframe').locator('h1')).toHaveText('Rollout plan');
+  const [docs] = await Promise.all([alice.context().waitForEvent('page'), alice.locator('#docs-pane').getByRole('link', { name: 'Open in a new window' }).click()]);
+  await expect(docs).toHaveURL(new RegExp(`/r/${room.id}/docs$`));
+  await expect(docs).toHaveTitle('Documents · Docs room · grill-room');
+  await expect(docs.locator('#messages')).toBeHidden();
+  await expect(docs.locator('#voice')).toBeHidden();
+  await docs.locator('#documents').getByRole('button', { name: 'plan.md' }).click();
+  await expect(docs.frameLocator('#doc-frame iframe').locator('h1')).toHaveText('Rollout plan');
+  const id = new URL(docs.url()).pathname.split('/')[4];
+  expect(docs.url()).toMatch(new RegExp(`/r/${room.id}/docs/${id}$`));
+
+  await annotateSelection(docs, 'rollback step', 'Who runs it?');
+  await bob.locator('#documents').getByRole('button', { name: 'plan.md' }).click();
+  await expect(bob.locator('#annot-list')).toContainText('Who runs it?');
+  await upload(bob, 'notes.md', 'text/markdown', '# Notes\n');
+  await expect(docs.locator('#documents')).toContainText('notes.md');
+  // The viewer's own link opens the document shown.
+  await expect(bob.locator('#doc-window')).toHaveAttribute('href', new RegExp(`/r/${room.id}/docs/[^/]+$`));
+
+  // A deep link on a phone: the document first, the list once it is closed.
+  const phone = await bob.context().newPage();
+  await phone.setViewportSize({ width: 390, height: 844 });
+  await phone.goto(`/r/${room.id}/docs/${id}`);
+  await expect(phone.frameLocator('#doc-frame iframe').locator('h1')).toHaveText('Rollout plan');
+  await expect(phone.locator('#annot-list')).toContainText('Who runs it?');
+  expect(await noOverflow(phone)).toEqual([]);
+  await phone.getByRole('button', { name: 'Close document' }).click();
+  await expect(phone).toHaveURL(new RegExp(`/r/${room.id}/docs$`));
+  await expect(phone.locator('#documents')).toBeVisible();
+  expect(await noOverflow(phone)).toEqual([]);
 });
