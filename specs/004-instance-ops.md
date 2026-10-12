@@ -59,21 +59,21 @@ An instance gets an admin UI at `/admin`. One login with the admin token opens a
 ## Acceptance criteria
 
 ### Super-admin
-- [ ] **AC1** `/admin` asks for the admin token once, then works on a session cookie (HttpOnly, SameSite=Strict, 12 h). The page lists the open admin sessions and revokes any of them; a revoked session gets a 401 on its next request.
-- [ ] **AC2** The rooms view lists every room with:
+- [x] **AC1** `/admin` asks for the admin token once, then works on a session cookie (HttpOnly, SameSite=Strict, 12 h). The page lists the open admin sessions and revokes any of them; a revoked session gets a 401 on its next request.
+- [x] **AC2** The rooms view lists every room with:
   - name, creation date, last activity, participants and personas;
   - whether the host is online;
   - its volume broken down into uploads, revisions, attachments, agent sessions, transcripts and room skills, against its quota.
 
   The super-admin can rename, manage invites, change the quota, export and delete. Delete asks for the room name to be typed.
-- [ ] **AC3** The profiles view lists display name, email, rooms, skill count and last activity. Deleting a profile detaches its participants. Emails appear nowhere else.
-- [ ] **AC4** The libraries view lists persona templates and shared skills with their author and versions, and removes an entry.
-- [ ] **AC5** The instance view shows version, disk used and free, STT status, connected daemons and SMTP status.
-- [ ] **AC6** Every admin action, super-admin and room-admin alike, is written to an audit log: who, what, when, and which room or profile. The UI shows it read-only. Entries older than 1 year are purged.
+- [x] **AC3** The profiles view lists display name, email, rooms, skill count and last activity. Deleting a profile detaches its participants. Emails appear nowhere else.
+- [x] **AC4** The libraries view lists persona templates and shared skills with their author and versions, and removes an entry.
+- [x] **AC5** The instance view shows version, disk used and free, STT status, connected daemons and SMTP status.
+- [x] **AC6** Every admin action, super-admin and room-admin alike, is written to an audit log: who, what, when, and which room or profile. The UI shows it read-only. Entries older than 1 year are purged.
 
 ### Room admins and creation
-- [ ] **AC7** Any profile can create a room from its profile page and becomes its room admin, unless the instance is set to "super-admin only". It is refused beyond the rooms-per-profile limit (default 10) or the instance storage quota. The super-admin can override the limit for one profile (a number, unlimited, or back to the instance default).
-- [ ] **AC8** A room admin can, from the room page:
+- [x] **AC7** Any profile can create a room from its profile page and becomes its room admin, unless the instance is set to "super-admin only". It is refused beyond the rooms-per-profile limit (default 10) or the instance storage quota. The super-admin can override the limit for one profile (a number, unlimited, or back to the instance default).
+- [x] **AC8** A room admin can, from the room page:
   - rename the room;
   - manage every invite;
   - appoint and remove room admins;
@@ -82,14 +82,14 @@ An instance gets an admin UI at `/admin`. One login with the admin token opens a
   - see its volume.
 
   A plain member can do none of these, apart from the invite rights spec 002 already gives members.
-- [ ] **AC9** The room quota can only be changed by the super-admin.
+- [x] **AC9** The room quota can only be changed by the super-admin.
 
 ### Room skills
-- [ ] **AC10** A room has its own skills: owned by the room, visible to its members, and deleted with it. A member can copy one of their personal skills into the room. The copy shows as a chat line, and waits for the host under "approve everything". The copy keeps working after its author leaves the room.
+- [x] **AC10** A room has its own skills: owned by the room, visible to its members, and deleted with it. A member can copy one of their personal skills into the room. The copy shows as a chat line, and waits for the host under "approve everything". The copy keeps working after its author leaves the room.
 
 ### Export and import
-- [ ] **AC11** An export contains everything listed in Scope, with a manifest of sha256 per file plus the format version and instance version. Participants carry their display name and profile uuid, never an email or token. The export UI warns that agent sessions hold everything Claude read.
-- [ ] **AC12** Importing an export on the same instance gives a new room with new ids whose content matches the original:
+- [x] **AC11** An export contains everything listed in Scope, with a manifest of sha256 per file plus the format version and instance version. Participants carry their display name and profile uuid, never an email or token. The export UI warns that agent sessions hold everything Claude read.
+- [x] **AC12** Importing an export on the same instance gives a new room with new ids whose content matches the original:
   - messages with versions and deletions;
   - documents and revisions;
   - annotations anchored as before;
@@ -98,22 +98,22 @@ An instance gets an admin UI at `/admin`. One login with the admin token opens a
   - the agent session resumable by the next turn.
 
   Its participants are relinked to their existing profiles, and no old invite works.
-- [ ] **AC13** Importing on another instance (the lab from the local compose stack, or the reverse) gives the same content. Embedded skills land as room skills, and participants have no profile link but keep their uuid as metadata.
-- [ ] **AC14** An import with a sha256 mismatch, a format newer than the instance supports, or a size above the target quota is refused with a reason, and nothing is created.
-- [ ] **AC15** The import UI previews an archive (room name, counts, size, format and instance versions) before creating anything.
+- [x] **AC13** Importing on another instance (the lab from the local compose stack, or the reverse) gives the same content. Embedded skills land as room skills, and participants have no profile link but keep their uuid as metadata.
+- [x] **AC14** An import with a sha256 mismatch, a format newer than the instance supports, or a size above the target quota is refused with a reason, and nothing is created.
+- [x] **AC15** The import UI previews an archive (room name, counts, size, format and instance versions) before creating anything.
 
 ### Scenarios
-- [ ] **AC16** `scenarios/` runs a YAML scenario against a room URL. It generates per-speaker Piper audio, plays it through Playwright fake microphones, performs the scripted actions, and asserts:
+- [x] **AC16** `scenarios/` runs a YAML scenario against a room URL. It generates per-speaker Piper audio, plays it through Playwright fake microphones, performs the scripted actions, and asserts:
   - voice lines and their speakers;
   - syntheses and the chain count;
   - latency bounds.
 
   The output is a report.
-- [ ] **AC17** The repo ships four scenarios: the dark-mode grill, a two-persona chain, a long session (context and transcript chunks) and a host hand-over. Each runs green against the lab, and prints its Claude request budget before starting.
-- [ ] **AC18** Every Piper voice used is listed with its license, and only CC0, CC-BY or public-domain voices are allowed.
+- [x] **AC17** The repo ships four scenarios: the dark-mode grill, a two-persona chain, a long session (context and transcript chunks) and a host hand-over. Each runs green against the lab, and prints its Claude request budget before starting.
+- [x] **AC18** Every Piper voice used is listed with its license, and only CC0, CC-BY or public-domain voices are allowed.
 
 ### UI stack
-- [ ] **AC19** `/admin` and the room-admin panels are written in Preact + htm + @preact/signals, vendored as ESM with no build step, and CI runs `tsc --checkJs` on them. They stay usable at phone width.
+- [x] **AC19** `/admin` and the room-admin panels are written in Preact + htm + @preact/signals, vendored as ESM with no build step, and CI runs `tsc --checkJs` on them. They stay usable at phone width.
 
 ## Phases
 

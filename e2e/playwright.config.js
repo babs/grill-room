@@ -9,8 +9,8 @@ export default defineConfig({
   testDir: '.',
   // voice/, agent-live/ and install/ run against the compose stack, lab/ against the lab
   // deployment, supervisor/ and crossinstance/ against both, mail/ against its own server and
-  // mailpit, each with its own config.
-  testIgnore: ['voice/**', 'agent-live/**', 'install/**', 'lab/**', 'mail/**', 'supervisor/**', 'crossinstance/**'],
+  // mailpit, scenario/ wherever grill-scenario points it, each with its own config.
+  testIgnore: ['voice/**', 'agent-live/**', 'install/**', 'lab/**', 'mail/**', 'supervisor/**', 'crossinstance/**', 'scenario/**'],
   timeout: 30_000,
   // The installed Chrome: no browser download.
   use: { baseURL, channel: 'chrome' },

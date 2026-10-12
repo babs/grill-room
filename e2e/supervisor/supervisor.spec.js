@@ -3,37 +3,12 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, openSync, readFileSync, rmSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import { ask, logLines, messagesRequests } from '../helpers.js';
+import { adminAPI, ask, latestLink, logLines, messagesRequests } from '../helpers.js';
 
 const local = `https://grill-room.${process.env.DEV_DOMAIN}`;
 const lab = `https://grill-room.${process.env.K8S_DOMAIN}`;
 const admin = { Authorization: `Bearer ${process.env.GRILL_ROOM_ADMIN_TOKEN}` };
 const question = 'Without using any tool, reply in one short sentence: what is this room about?';
-
-// latestLink is the newest admin page link the supervisor printed: each one opens one session.
-const latestLink = async (log) => {
-  for (let i = 0; i < 100; i++) {
-    const all = [...readFileSync(log, 'utf8').matchAll(/Admin page: (http:\/\/127\.0\.0\.1:\d+\/s\/\S+)/g)];
-    if (all.length) return all.at(-1)[1];
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error('no admin link in ' + log);
-};
-
-// adminAPI opens a session on the supervisor's page API, as the page does with its link.
-async function adminAPI(request, log) {
-  const link = await latestLink(log);
-  const origin = new URL(link).origin;
-  const res = await request.post(`${origin}/api/session`, { headers: { Origin: origin }, data: { code: link.split('/s/')[1] } });
-  expect(res.status()).toBe(200);
-  const headers = { Origin: origin, Authorization: `Bearer ${(await res.json()).token}` };
-  const call = async (method, path, data) => {
-    const r = await request.fetch(origin + path, { method, headers, data });
-    expect(r.ok(), `${method} ${path}: ${await r.text()}`).toBeTruthy();
-    return r.status() === 204 ? null : r.json();
-  };
-  return { get: (p) => call('GET', p), post: (p, d) => call('POST', p, d) };
-}
 
 // joinRoom creates a room on base and enters it as name in a fresh context of browser.
 async function joinRoom(browser, request, base, name, roomName) {

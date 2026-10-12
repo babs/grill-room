@@ -1,0 +1,44 @@
+# A long session in minutes: a short spoken round, then 450 chat lines posted through the API, so
+# the transcript spans three chunks of 200 messages. Grill finds a word said near the start, then
+# after 30 more lines answers from its resumed session, fetching only the chunk that grew.
+name: Long session
+about: Transcript chunks and context use over a day's worth of lines, driven fast.
+budget: {max_requests: 6}
+participants:
+  - name: Claire
+    voices:
+      fr: {model: fr_FR-siwis-medium}
+  - name: Marc
+    voices:
+      en: {model: en_US-joe-medium}
+personas:
+  - {name: Grill, model: haiku, requests_per_turn: 2}
+steps:
+  - daemon: {by: Claire}
+  - voice:
+      lead: 10.0
+      lines:
+        - {by: Claire, lang: fr, text: "On commence la revue de la version suivante."}
+        - {by: Marc, lang: en, text: "For the record, we call this release Heron."}
+  - say: {by: Marc, text: "Written down too: the release codename is HERON."}
+  - flood: {by: [Claire, Marc], messages: 450}
+  - say:
+      by: Claire
+      text: "Grill: run one command, ls transcript/*/, and one grep for codename in transcript/. Then reply in two sentences: the file names you saw, and the release codename."
+  - press: {by: Claire, persona: Grill}
+  - wait: {turns: 1, timeout: 600}
+  - flood: {by: [Claire, Marc], messages: 30}
+  - say: {by: Claire, text: "Grill: use no tool. In one sentence, what is the release codename?"}
+  - press: {by: Claire, persona: Grill}
+  - wait: {turns: 2, timeout: 600}
+assertions:
+  turns: {Grill: 2}
+  voice: {max_wer: 0.25, min_attribution: 1.0, min_delivered: 1.0, max_latency_s: 10}
+  syntheses:
+    # 450 lines plus the rest make three chunks: 001.md to 003.md.
+    - {persona: Grill, nth: 1, contains: [heron, "003\\.md"]}
+    - {persona: Grill, nth: 2, contains: [heron], resumed: true}
+  min_context_pct: 1
+  # Only the last chunk grew between the turns: the full ones stay in the daemon's cache.
+  max_fetched_files_after_first: 2
+  max_turn_s: 180

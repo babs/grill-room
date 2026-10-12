@@ -1,0 +1,43 @@
+[project]
+name = "grill-scenarios"
+version = "0.1.0"
+description = "Replays scripted grill-room sessions with synthetic voices against an instance"
+requires-python = ">=3.14"
+dependencies = [
+    "piper-tts>=1.8",
+    "numpy>=2.3",
+    "pydantic>=2.13",
+    "pyyaml>=6.0",
+    "structlog>=26.1",
+]
+
+[project.scripts]
+grill-scenario = "grill_scenarios.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=9", "pytest-cov>=7", "mypy>=2", "ruff>=0.16", "types-pyyaml>=6.0"]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 110
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP"]
+
+[tool.mypy]
+strict = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+strict_optional = true
+warn_return_any = true
+
+[[tool.mypy.overrides]]
+module = ["piper.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+addopts = "-v --tb=short --strict-markers"

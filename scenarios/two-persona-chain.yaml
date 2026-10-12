@@ -1,0 +1,51 @@
+# Spike S6's chain, short: Grill calls the Secretary by writing @Secretary, and the Secretary runs
+# again on its every-round trigger after Grill's next turn. Run once on opus with --model opus.
+name: Two-persona chain
+about: Grill on demand, Secretary every round; a call, then an every-N link.
+budget: {max_requests: 7}
+participants:
+  - name: Claire
+    voices:
+      fr: {model: fr_FR-siwis-medium}
+  - name: Marc
+    voices:
+      en: {model: en_US-joe-medium}
+  - name: Emma
+    voices:
+      en: {model: en_GB-cori-medium}
+personas:
+  - {name: Grill, model: haiku, requests_per_turn: 1}
+  - {name: Secretary, template: secretary, model: haiku, every_n: 1, requests_per_turn: 2}
+steps:
+  - daemon: {by: Claire}
+  - voice:
+      lead: 10.0
+      lines:
+        - {by: Claire, lang: fr, text: "On décide aujourd'hui du calendrier du mode sombre."}
+        - {by: Marc, lang: en, text: "We ship it behind a feature flag, and we turn it on for everyone after one week."}
+        - {by: Emma, lang: en, text: "I will deliver the colour tokens before the developers start."}
+        - {by: Claire, lang: fr, text: "Très bien. Marc s'occupe du drapeau, Emma des jetons."}
+  # Chat lines name no persona with an at sign: a human @mention would queue a turn by itself.
+  - say:
+      by: Claire
+      text: "Secretary: no file this time, give the minutes as three short lines in your reply. Grill: use no tool."
+  - say:
+      by: Claire
+      text: "Grill: in two sentences, what is the main risk of this plan? End your reply with the at sign followed by Secretary, as plain text, so the Secretary takes the minutes."
+  - press: {by: Claire, persona: Grill}
+  - wait: {turns: 2, timeout: 600}
+  - say:
+      by: Claire
+      text: "Grill: use no tool and name no other agent. In one sentence, is the rollout date clear?"
+  - press: {by: Claire, persona: Grill}
+  - wait: {turns: 4, timeout: 600}
+assertions:
+  turns: {Grill: 2, Secretary: 2}
+  voice: {max_wer: 0.25, min_attribution: 1.0, min_delivered: 1.0, max_latency_s: 10}
+  syntheses:
+    - {persona: Grill, nth: 1, contains: ["@secretary\\b"]}
+    - {persona: Secretary, nth: 1, cause: called by @Grill}
+    - {persona: Grill, nth: 2, not_contains: ["@secretary\\b"]}
+    - {persona: Secretary, nth: 2, cause: every round}
+  chain: {min: 1, max: 1}
+  max_turn_s: 180

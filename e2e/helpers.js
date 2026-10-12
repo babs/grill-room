@@ -108,14 +108,15 @@ export async function annotateSelection(page, needle, comment) {
 }
 
 // liveDaemon runs the real daemon with this machine's Claude Code login (read only), the real
-// sandbox image and haiku. Its log goes to a file: the proxy logs one upstream_response per request.
-export function liveDaemon(dir, roomURL) {
+// sandbox image and haiku, env added. Its log goes to a file: the proxy logs one upstream_response
+// per request.
+export function liveDaemon(dir, roomURL, env = {}) {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   const stateDir = join(dir, 'state');
   const log = join(dir, 'daemon.log');
   const proc = spawn('../bin/grill-room-daemon', [roomURL], {
-    env: { ...process.env, GRILL_ROOM_DAEMON_STATE_DIR: stateDir, GRILL_ROOM_DAEMON_BROWSER: 'none', GRILL_ROOM_AGENT_MODEL: 'haiku', LOG_LEVEL: 'info' },
+    env: { ...process.env, GRILL_ROOM_DAEMON_STATE_DIR: stateDir, GRILL_ROOM_DAEMON_BROWSER: 'none', GRILL_ROOM_AGENT_MODEL: 'haiku', LOG_LEVEL: 'info', ...env },
     stdio: ['ignore', 'ignore', openSync(log, 'w')],
   });
   const exited = new Promise((resolve) => proc.on('exit', resolve));
@@ -128,6 +129,31 @@ export function liveDaemon(dir, roomURL) {
     throw new Error('no admin link in ' + log);
   })();
   return { proc, exited, link, log, sandbox: sandboxName(stateDir, roomURL) };
+}
+
+// latestLink is the newest admin page link a supervisor printed to log: each one opens one session.
+export const latestLink = async (log) => {
+  for (let i = 0; i < 100; i++) {
+    const all = [...readFileSync(log, 'utf8').matchAll(/Admin page: (http:\/\/127\.0\.0\.1:\d+\/s\/\S+)/g)];
+    if (all.length) return all.at(-1)[1];
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error('no admin link in ' + log);
+};
+
+// adminAPI opens a session on a supervisor's page API, as the page does with its link.
+export async function adminAPI(request, log) {
+  const link = await latestLink(log);
+  const origin = new URL(link).origin;
+  const res = await request.post(`${origin}/api/session`, { headers: { Origin: origin }, data: { code: link.split('/s/')[1] } });
+  expect(res.status()).toBe(200);
+  const headers = { Origin: origin, Authorization: `Bearer ${(await res.json()).token}` };
+  const call = async (method, path, data) => {
+    const r = await request.fetch(origin + path, { method, headers, data });
+    expect(r.ok(), `${method} ${path}: ${await r.text()}`).toBeTruthy();
+    return r.status() === 204 ? null : r.json();
+  };
+  return { get: (p) => call('GET', p), post: (p, d) => call('POST', p, d) };
 }
 
 // sandboxName names a daemon's sandbox as cmd/grill-room-daemon does: a killed daemon leaves its

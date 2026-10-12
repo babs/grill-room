@@ -1,0 +1,5 @@
+# Voice models, synthesised clips and run outputs: generated, large, never committed.
+.cache/
+out/
+.venv/
+__pycache__/

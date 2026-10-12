@@ -1,0 +1,66 @@
+# Spike S5's session: three people grill a dark-mode plan in French and English, Marc switches
+# language mid-session and Emma talks over him once. Grill revises the plan once, after both rounds.
+name: Dark mode grill
+about: The S5 script, its voices and plan.md, with one Grill turn on haiku.
+budget: {max_requests: 5}
+participants:
+  - name: Claire
+    voices:
+      fr: {model: fr_FR-siwis-medium}
+  - name: Marc
+    voices:
+      fr: {model: fr_FR-mls-medium, speaker: 84}
+      en: {model: en_US-joe-medium}
+  - name: Emma
+    voices:
+      en: {model: en_GB-cori-medium}
+personas:
+  - {name: Grill, model: haiku, requests_per_turn: 4}
+steps:
+  - daemon: {by: Claire}
+  - upload: {by: Claire, file: plan.md}
+  # Round 1
+  - voice:
+      lead: 10.0
+      lines:
+        - {by: Claire, lang: fr, text: "Bonjour à tous. Aujourd'hui, on passe en revue le plan pour ajouter un mode sombre à l'interface de la salle."}
+        - {by: Claire, lang: fr, text: "L'idée est simple. Le thème suit le réglage du système, et chacun peut le forcer avec un bouton dans l'en-tête."}
+        - {by: Marc, lang: fr, text: "D'accord, mais le plan ne dit rien sur les documents affichés dans le cadre. Ils ont leurs propres styles, donc ils resteront blancs."}
+        - {by: Claire, lang: fr, text: "Bonne remarque. On pourrait ajouter une feuille de style sombre dans le cadre au moment du rendu."}
+        - {by: Marc, lang: fr, text: "Le cadre est isolé, il faut donc passer le thème au serveur quand il rend le document. Ça demande du travail."}
+        - {by: Emma, lang: en, text: "From the design side, I would like us to define the colours as tokens first, so that both themes share the same names."}
+        - {by: Marc, lang: en, text: "Okay, let me switch to English. The tokens make sense, but we have hard coded colours in at least three style sheets today."}
+        - {by: Emma, lang: en, gap: -1.5, text: "Sorry, quick question, what about contrast?"}
+        - {by: Marc, lang: en, text: "Right, contrast. The red agent light and the amber light are hard to read on a dark background."}
+        - {by: Emma, lang: en, text: "Exactly. Every colour pair has to pass the accessibility contrast check, in both themes."}
+        - {by: Claire, lang: fr, text: "Très bien. On ajoute donc trois points au plan : les jetons de couleur, le thème des documents, et le contraste."}
+        - {by: Claire, lang: fr, text: "Est-ce qu'on garde le choix de chaque personne dans le navigateur, ou sur le serveur ?"}
+        - {by: Marc, lang: en, text: "In the browser. Local storage is enough, there are no accounts anyway."}
+        - {by: Emma, lang: en, text: "Agreed. And please, no flash of the light theme while the page is loading."}
+        - {by: Claire, lang: fr, text: "Parfait. On demande maintenant à l'agent de réviser le plan avec tous ces points."}
+  - annotate:
+      by: Emma
+      doc: plan.md
+      quote: Dark colours live in one extra style sheet loaded after the main one.
+      comment: Should these be colour tokens shared by both themes instead of a second style sheet?
+  # Round 2
+  - voice:
+      lead: 4.0
+      lines:
+        - {by: Marc, lang: en, text: "One more decision. We ship dark mode behind a feature flag, and we turn it on for everyone after one week."}
+        - {by: Emma, lang: en, text: "And I will deliver the colour tokens before the developers start."}
+        - {by: Claire, lang: fr, text: "C'est noté. L'agent peut mettre à jour le plan avec le drapeau et ce calendrier."}
+  - say:
+      by: Claire
+      text: "Grill : en un minimum d'étapes, lis tout en parallèle, puis écris le plan révisé et réponds à l'annotation d'Emma en une seule fois."
+  - press: {by: Claire, persona: Grill}
+  - wait: {turns: 1, timeout: 900}
+assertions:
+  turns: {Grill: 1}
+  voice: {max_wer: 0.2, min_attribution: 1.0, min_delivered: 1.0, max_latency_s: 10}
+  syntheses:
+    - persona: Grill
+      contains: [contrast, "token|jeton"]
+      # Whisper once posted a line of Chinese for a TTS glitch (S5): the synthesis must not echo it.
+      not_contains: ["[一-鿿]"]
+  max_turn_s: 300
