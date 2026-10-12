@@ -794,3 +794,28 @@ func TestSupervisorSlots(t *testing.T) {
 		t.Fatalf("a cap out of bounds loaded: %+v %v", set, err)
 	}
 }
+
+// A slow Docker never holds up the supervisor's start, and so its page: the orphan cleanup runs
+// beside it, and the workers start once it is done.
+func TestSupervisorStartsBeforeCleanup(t *testing.T) {
+	release := make(chan struct{})
+	docker := func(ctx context.Context, _ io.Reader, args ...string) ([]byte, error) {
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil, errors.New("no docker here")
+	}
+	started := time.Now()
+	s := testSupervisor(t, "ok", nil, func(o *SupervisorOptions) { o.Docker = docker })
+	if time.Since(started) > time.Second {
+		t.Fatalf("Start took %s", time.Since(started))
+	}
+	s.SetRoom(context.Background(), Room{Base: "https://rooms.example", ID: "abc"})
+	time.Sleep(200 * time.Millisecond)
+	if st := instance(t, s).State; st != "starting" {
+		t.Fatalf("a worker ran before the cleanup: %s", st)
+	}
+	close(release)
+	waitFor(t, "the worker running", func() bool { return instance(t, s).State == "running" })
+}

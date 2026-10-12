@@ -78,6 +78,8 @@ type Supervisor struct {
 	self SelfSignature
 	// checkNow asks the update loop for a check.
 	checkNow chan struct{}
+	// cleaned closes once the orphans of a killed supervisor are gone: workers wait for it.
+	cleaned chan struct{}
 }
 
 // worker is one instance's worker process, restarted with backoff while the supervisor runs. Its
@@ -160,7 +162,7 @@ func NewSupervisor(o SupervisorOptions) *Supervisor {
 	if o.Ring == nil {
 		o.Ring = NewRing(200)
 	}
-	s := &Supervisor{o: o, workers: map[string]*worker{}, checkNow: make(chan struct{}, 1), self: SelfSignature{State: "unknown", Detail: "not checked yet"}}
+	s := &Supervisor{o: o, workers: map[string]*worker{}, checkNow: make(chan struct{}, 1), cleaned: make(chan struct{}), self: SelfSignature{State: "unknown", Detail: "not checked yet"}}
 	set, err := loadSupervisorSettings(o.Paths.supervisorSettings())
 	if err != nil {
 		o.Log.Warn("supervisor_settings_unreadable", zap.Error(err))
@@ -178,14 +180,18 @@ func NewSupervisor(o SupervisorOptions) *Supervisor {
 }
 
 // Start runs a worker for every known instance until ctx ends. The newest instance is the one
-// the page shows first. Sandboxes a killed supervisor left are removed first.
+// the page shows first. The workers start once the sandboxes a killed supervisor left are
+// removed; the page does not wait for those Docker calls.
 func (s *Supervisor) Start(ctx context.Context) {
 	s.ctx = ctx
 	insts, errs := LoadInstances(s.o.Paths)
 	for _, err := range errs {
 		s.o.Log.Error("instance_unreadable", zap.Error(err))
 	}
-	s.removeOrphans(ctx, insts)
+	s.wg.Go(func() {
+		defer close(s.cleaned)
+		s.removeOrphans(ctx, insts)
+	})
 	var newest time.Time
 	for _, in := range insts {
 		if fi, err := os.Stat(s.o.Paths.InstanceConfig(in.ID)); err == nil && !fi.ModTime().Before(newest) {
@@ -216,6 +222,12 @@ func (s *Supervisor) Wait() { s.wg.Wait() }
 
 func (w *worker) run() {
 	s := w.s
+	select {
+	case <-s.cleaned:
+	case <-s.ctx.Done():
+		w.set(func() { w.state = "stopped" })
+		return
+	}
 	log := s.o.Log.With(zap.String("instance", w.inst.ID))
 	backoff := time.Second
 	for {
