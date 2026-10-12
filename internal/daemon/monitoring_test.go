@@ -166,7 +166,11 @@ func TestSupervisorSetLimits(t *testing.T) {
 		o.Worker.Limits = sandbox.Limits{CPUs: "2", Memory: "4g"}
 	})
 	s.SetRoom(context.Background(), Room{Base: "https://rooms.example", ID: "abc"})
-	waitFor(t, "the worker running", func() bool { return instance(t, s).State == "running" })
+	// The worker's first status report lands after it shows as running.
+	waitFor(t, "the worker running and reporting", func() bool {
+		in := instance(t, s)
+		return in.State == "running" && in.Status != nil
+	})
 	in := instance(t, s)
 	if in.Limits.CPUs != "2" || in.Status == nil || in.Status.Room != "https://rooms.example/r/abc" {
 		t.Fatalf("instance %+v", in)
