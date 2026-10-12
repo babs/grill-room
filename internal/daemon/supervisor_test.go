@@ -30,7 +30,8 @@ func TestMain(m *testing.M) {
 
 // fakeWorker is a worker from another release: it only says hello at its version, reports a
 // status, answers requests and stops when told. "crash" exits right after its config, "mute"
-// never answers, "silent" never says hello, "early" talks before it.
+// never answers, "silent" never says hello, "early" talks before it, "served" reports that its
+// instance serves v9.9.9.
 func fakeWorker(mode string) int {
 	proto, err := strconv.Atoi(mode)
 	if err != nil {
@@ -57,8 +58,12 @@ func fakeWorker(mode string) int {
 	if mode == "crash" {
 		return 1
 	}
+	served := ""
+	if mode == "served" {
+		served = "v9.9.9"
+	}
 	_ = conn.Send(Msg{Type: "status", Status: &Status{Host: "fake-worker", Room: m.Config.Pair, Pairing: "paired", Connection: "connected",
-		Update: Update{Available: "v9.9.9"}}})
+		Update: Update{Available: "v9.9.9", Served: served}}})
 	_ = conn.Send(Msg{Type: "log", Log: []byte(`{"msg":"fake_worker_ready"}`)})
 	for {
 		r, err := conn.Recv()
@@ -71,12 +76,16 @@ func fakeWorker(mode string) int {
 	}
 }
 
+func ownBinary(context.Context, Instance) (Resolved, error) {
+	return Resolved{Path: os.Args[0], Version: "v-test", Trust: "the supervisor's own binary"}, nil
+}
+
 func testSupervisor(t *testing.T, mode string, a *Autostart, set ...func(*SupervisorOptions)) *Supervisor {
 	t.Helper()
 	dir := t.TempDir()
 	o := SupervisorOptions{
 		Paths: Paths{Config: dir, State: dir, Cache: dir}, Version: "v-test", Worker: WorkerConfig{Host: "laptop", SandboxRoot: dir},
-		Binary: func(string) (string, error) { return os.Args[0], nil }, Env: append(os.Environ(), "GRILL_ROOM_TEST_WORKER="+mode),
+		Binary: ownBinary, Env: append(os.Environ(), "GRILL_ROOM_TEST_WORKER="+mode),
 		Stderr: io.Discard, Log: zap.NewNop(), MaxBackoff: 100 * time.Millisecond, StopTimeout: 5 * time.Second, Autostart: a,
 	}
 	for _, f := range set {
@@ -261,11 +270,16 @@ func TestSupervisorPage(t *testing.T) {
 	if code, body := e.req(t, "GET", "/api/denied", tok, "", nil); code != http.StatusOK || !strings.Contains(body, `"denied":[]`) {
 		t.Fatalf("denied: %d %s", code, body)
 	}
-	if code, _ := e.req(t, "POST", "/api/update", tok, "", nil); code != http.StatusNoContent || !restarted.Load() {
+	// The worker's update offer is not the supervisor's: with no binary store, there is none
+	// (selfupdate_test.go covers the supervisor's own update).
+	if code, _ := e.req(t, "POST", "/api/update", tok, "", nil); code != http.StatusBadGateway || restarted.Load() {
 		t.Fatalf("update: %d, restarted %v", code, restarted.Load())
 	}
+	if st := s.Status(); st.Update.Available != "" || st.Version != "v-test" {
+		t.Fatalf("status shows the worker's update or version: %+v", st)
+	}
 	waitFor(t, "the worker's log line", func() bool {
-		return strings.Contains(stderr.String(), `{"msg":"fake_worker_ready"}`) && strings.Contains(strings.Join(s.o.Ring.Lines(), "\n"), "fake_worker_ready")
+		return strings.Contains(stderr.String(), `{"instance":"`+id+`","msg":"fake_worker_ready"}`) && strings.Contains(strings.Join(s.o.Ring.Lines(), "\n"), "fake_worker_ready")
 	})
 	if code, _ := e.req(t, "POST", "/api/autostart", tok, `{"enabled":true}`, nil); code != http.StatusNoContent || status()["autostart"] != true {
 		t.Fatalf("autostart on: %d", code)
@@ -313,7 +327,7 @@ func TestSupervisorRestoresInstances(t *testing.T) {
 	if _, errs := LoadInstances(p); len(errs) != 2 {
 		t.Fatalf("errors %v", errs)
 	}
-	s := NewSupervisor(SupervisorOptions{Paths: p, Version: "v-test", Binary: func(string) (string, error) { return os.Args[0], nil },
+	s := NewSupervisor(SupervisorOptions{Paths: p, Version: "v-test", Binary: ownBinary,
 		Env: append(os.Environ(), "GRILL_ROOM_TEST_WORKER="+strconv.Itoa(Proto)), Stderr: io.Discard, Log: zap.NewNop()})
 	ctx, cancel := context.WithCancel(context.Background())
 	s.Start(ctx)
@@ -331,12 +345,12 @@ func TestSupervisorWorkerStartFails(t *testing.T) {
 	calls := 0
 	s := NewSupervisor(SupervisorOptions{Paths: Paths{Config: dir, State: dir, Cache: dir}, Version: "v-test", Stderr: io.Discard, Log: zap.NewNop(),
 		MaxBackoff: 50 * time.Millisecond,
-		Binary: func(string) (string, error) {
+		Binary: func(context.Context, Instance) (Resolved, error) {
 			calls++
 			if calls == 1 {
-				return "", errors.New("no release for this version")
+				return Resolved{}, errors.New("no release for this version")
 			}
-			return dir + "/missing-binary", nil
+			return Resolved{Path: dir + "/missing-binary"}, nil
 		}})
 	ctx, cancel := context.WithCancel(context.Background())
 	s.Start(ctx)

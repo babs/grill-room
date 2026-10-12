@@ -56,7 +56,14 @@ func TestConfig(t *testing.T) {
 		{Config{Browser: "auto", LogLevel: "info", Limits: sandbox.Limits{EgressCPUs: "-1"}}, false},
 		{Config{Browser: "auto", LogLevel: "info", Limits: sandbox.Limits{Memory: "4 GB"}}, false},
 		{Config{Browser: "auto", LogLevel: "info", Limits: sandbox.Limits{EgressMemory: "--privileged"}}, false},
+		// 003-AC5: the GitHub update channel needs a repository URL.
+		{Config{Browser: "auto", LogLevel: "info", GitHub: "http://127.0.0.1:8080/repo"}, true},
+		{Config{Browser: "auto", LogLevel: "info", GitHub: "ftp://github.com/babs/grill-room"}, false},
+		{Config{Browser: "auto", LogLevel: "info", GitHub: "github.com/babs/grill-room"}, false},
 	} {
+		if tc.cfg.GitHub == "" {
+			tc.cfg.GitHub = "https://github.com/babs/grill-room"
+		}
 		if err := tc.cfg.Validate(); (err == nil) != tc.ok {
 			t.Errorf("Validate(%+v) = %v", tc.cfg, err)
 		}

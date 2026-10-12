@@ -127,6 +127,13 @@ async function refreshDenied() {
   if (!stopped) setTimeout(refreshDenied, 5000);
 }
 
+function badge(text, cls) {
+  const b = document.createElement('span');
+  b.className = 'badge ' + cls;
+  b.textContent = text;
+  return b;
+}
+
 // renderInstances lists the supervisor's instances; a daemon serving one room has none.
 function renderInstances(instances, current, autostart) {
   $('instances-section').hidden = !instances;
@@ -138,10 +145,27 @@ function renderInstances(instances, current, autostart) {
     const url = document.createElement('code');
     url.textContent = i.url;
     let text = ' · ' + i.state;
+    if (i.version) text += ', ' + i.version;
     if (i.connection) text += ', ' + i.connection;
     if (i.restarts) text += ', ' + i.restarts + ' restart' + (i.restarts > 1 ? 's' : '');
     if (i.error) text += ': ' + i.error;
     li.append(url, text);
+    if (i.trust) {
+      const trust = document.createElement('div');
+      trust.className = 'hint';
+      trust.textContent = 'Worker binary: ' + i.trust;
+      li.append(trust);
+    }
+    if (i.accept_unsigned) {
+      const row = document.createElement('div');
+      row.className = 'relax';
+      const off = document.createElement('button');
+      off.type = 'button';
+      off.textContent = 'Stop accepting unsigned binaries';
+      off.addEventListener('click', () => setRelax(i.id, false, ''));
+      row.append(badge('accepts unsigned binaries', 'danger'), off);
+      li.append(row);
+    }
     const rooms = document.createElement('ul');
     for (const r of i.rooms) {
       const room = document.createElement('li');
@@ -159,8 +183,92 @@ function renderInstances(instances, current, autostart) {
   if (autostart !== undefined && !box.dataset.busy) box.checked = autostart;
 }
 
-function render({ status: s, logs, models, efforts, instances, instance, autostart }) {
+const selfText = {
+  project: ['project-signed', 'ok'],
+  'dev-key': ['signed with a dev key', 'ok'],
+  'dev build': ['dev build', ''],
+  unsigned: ['NOT project-signed', 'bad'],
+  unknown: ['signature not checked', ''],
+};
+
+function setRelax(instance, enabled, host) {
+  $('relax-status').textContent = '';
+  return api('POST', '/api/relax', { instance, enabled, host })
+    .then(() => api('GET', '/api/status').then(render))
+    .then(() => { $('relax-status').textContent = enabled ? 'Unsigned binaries accepted.' : ''; return true; })
+    .catch((err) => { $('relax-status').textContent = err.message; return false; });
+}
+
+// fillSelect replaces a select's options when the instances change, keeping the selection.
+function fillSelect(sel, instances) {
+  const key = instances.map((i) => i.id).join();
+  if (sel.dataset.key === key) return;
+  sel.dataset.key = key;
+  const was = sel.value;
+  sel.replaceChildren(...instances.map((i) => new Option(i.url, i.id)));
+  if (was) sel.value = was;
+}
+
+// renderTrust shows the supervisor's signature, its trust settings and the relax toggles
+// (003-AC4, 003-AC5).
+let shownKeys = '';
+function renderTrust(t, instances) {
+  $('trust-section').hidden = !t;
+  $('self-sig').hidden = !t;
+  if (!t) return;
+  const [text, cls] = selfText[t.self.state] || [t.self.state, ''];
+  const sig = $('self-sig');
+  sig.textContent = text;
+  sig.className = 'badge ' + cls;
+  mark($('self-detail'), t.self.state !== 'unsigned', text + (t.self.detail ? ': ' + t.self.detail : ''));
+  const r = t.root;
+  let root = { tuf: 'refreshed through TUF', disk: 'last good copy on disk', embedded: 'embedded in this binary' }[r.source] || 'not loaded yet';
+  if (r.source && r.at && !r.at.startsWith('0001')) root += ', ' + new Date(r.at).toLocaleString();
+  if (r.error) root += ' (TUF unreachable: ' + r.error + ')';
+  $('root').textContent = root;
+  $('checked').textContent = (t.checked && !t.checked.startsWith('0001') ? new Date(t.checked).toLocaleString() : 'not yet') + (t.check_error ? ': ' + t.check_error : '');
+  const list = instances || [];
+  fillSelect($('channel-instance'), list);
+  fillSelect($('relax-instance'), list.filter((i) => !i.accept_unsigned));
+  $('relax-form').hidden = !$('relax-instance').options.length;
+  const form = $('channel-form');
+  if (!form.dataset.dirty) {
+    $('channel').value = t.channel;
+    if (t.follow) $('channel-instance').value = t.follow;
+  }
+  $('channel-instance').hidden = $('channel').value !== 'instance';
+  const relaxed = list.filter((i) => i.accept_unsigned);
+  $('relax-banner').hidden = !relaxed.length;
+  $('relax-list').textContent = relaxed.map((i) => i.url).join(', ');
+  const key = JSON.stringify(t.dev_keys);
+  if (key === shownKeys) return;
+  shownKeys = key;
+  const ul = $('dev-keys');
+  ul.replaceChildren();
+  if (!t.dev_keys.length) {
+    const li = document.createElement('li');
+    li.textContent = 'None.';
+    ul.append(li);
+  }
+  for (const k of t.dev_keys) {
+    const li = document.createElement('li');
+    const name = document.createElement('code');
+    name.textContent = k.name;
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.textContent = 'Remove';
+    rm.setAttribute('aria-label', 'Remove ' + k.name);
+    rm.addEventListener('click', () => api('POST', '/api/dev-keys/remove', { name: k.name })
+      .then(() => api('GET', '/api/status').then(render))
+      .catch((err) => { $('key-status').textContent = err.message; }));
+    li.append(name, ' · ' + k.fingerprint + ' ', rm);
+    ul.append(li);
+  }
+}
+
+function render({ status: s, logs, models, efforts, instances, instance, autostart, trust }) {
   renderInstances(instances, instance, autostart);
+  renderTrust(trust, instances);
   $('host').textContent = s.host + ' · ' + s.version;
   $('room').textContent = s.room || 'No room yet: paste the room link below.';
   let text = pairingText[s.pairing] || s.pairing;
@@ -192,6 +300,7 @@ function render({ status: s, logs, models, efforts, instances, instance, autosta
   $('update').hidden = !u.available;
   if (u.available) {
     $('update-version').textContent = u.available;
+    $('update-from').textContent = u.from || 'the room server';
     $('update-apply').disabled = u.running;
     $('update-status').textContent = u.running ? 'Downloading…' : u.error || '';
   }
@@ -238,6 +347,39 @@ $('allowlist-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const domain = $('allowlist-add').value.trim();
   saveAllowlist([...currentAllowlist, domain]).then((ok) => { if (ok) $('allowlist-add').value = ''; });
+});
+$('channel').addEventListener('change', () => {
+  $('channel-form').dataset.dirty = '1';
+  $('channel-instance').hidden = $('channel').value !== 'instance';
+});
+$('channel-instance').addEventListener('change', () => { $('channel-form').dataset.dirty = '1'; });
+$('channel-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  $('channel-status').textContent = '';
+  const channel = $('channel').value;
+  api('POST', '/api/update-channel', { channel, instance: channel === 'instance' ? $('channel-instance').value : '' })
+    .then(() => {
+      delete $('channel-form').dataset.dirty;
+      $('channel-status').textContent = 'Saved. Checking for an update…';
+      return api('GET', '/api/status').then(render);
+    })
+    .catch((err) => { $('channel-status').textContent = err.message; });
+});
+$('relax-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  setRelax($('relax-instance').value, true, $('relax-host').value).then((ok) => { if (ok) $('relax-host').value = ''; });
+});
+$('key-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  $('key-status').textContent = '';
+  api('POST', '/api/dev-keys', { name: $('key-name').value.trim(), pem: $('key-pem').value })
+    .then(() => {
+      $('key-name').value = '';
+      $('key-pem').value = '';
+      $('key-status').textContent = 'Trusted.';
+      return api('GET', '/api/status').then(render);
+    })
+    .catch((err) => { $('key-status').textContent = err.message; });
 });
 $('autostart').addEventListener('change', () => {
   const box = $('autostart');

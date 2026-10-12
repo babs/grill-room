@@ -54,10 +54,6 @@ type Options struct {
 	// dir or a cap of 0 fetches every workspace whole (002-AC37).
 	CacheDir string
 	CacheMax int64
-	// Executable is the binary a self-update replaces; empty disables updates.
-	Executable string
-	// Restart ends the daemon so that main starts the updated binary.
-	Restart func()
 	// OnTurn hears of every turn starting and ending; nil for none.
 	OnTurn func(TurnEvent)
 
@@ -112,10 +108,15 @@ type Image struct {
 
 // Update is the self-update the paired room server offers.
 type Update struct {
-	// Available is the newer version the room server hands out.
+	// Available is the newer version on offer.
 	Available string `json:"available,omitempty"`
-	Running   bool   `json:"running"`
-	Error     string `json:"error,omitempty"`
+	// Served is the version the worker's room server hands out; the supervisor restarts a worker
+	// whose instance changed version, so that it runs the new one (003-AC7).
+	Served string `json:"served,omitempty"`
+	// From names where Available comes from: GitHub or an instance's URL.
+	From    string `json:"from,omitempty"`
+	Running bool   `json:"running"`
+	Error   string `json:"error,omitempty"`
 }
 
 // Daemon holds the pairing and connection state.
@@ -131,9 +132,7 @@ type Daemon struct {
 	// loops counts running room loops, which remove their sandbox as they end, and image jobs.
 	loops sync.WaitGroup
 	// img is the sandbox image job, guarded by mu.
-	img imageJob
-	// release is what the room server hands out, for the self-update; guarded by mu.
-	release    release
+	img        imageJob
 	settingsMu sync.Mutex
 	// cur is the current room run, guarded by mu; nil before the first SetRoom.
 	cur *roomRun
@@ -284,13 +283,6 @@ func (d *Daemon) SetRoom(ctx context.Context, room Room) {
 	d.st.Room, d.st.Pairing, d.st.Code, d.st.ApproveURL, d.st.Error, d.st.Connection = room.String(), "", "", "", "", "offline"
 	d.mu.Unlock()
 	d.loops.Go(func() { r.loop(ctx) })
-}
-
-// Restart ends the daemon so that main starts the updated binary.
-func (d *Daemon) Restart() {
-	if d.o.Restart != nil {
-		d.o.Restart()
-	}
 }
 
 // Wait returns once every room loop has ended and removed its sandbox; cancel their context first.

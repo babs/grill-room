@@ -37,3 +37,38 @@ test('daemon pairs through the room approval', async ({ browser, request, baseUR
     daemon.cleanup();
   }
 });
+
+// 003-AC4, 003-AC5: the page says the supervisor is a dev build. Accepting unsigned binaries from
+// an instance needs its host typed exactly; while on, a red banner and a badge show.
+test('daemon page shows its signature and guards the unsigned toggle', async ({ browser, request, baseURL }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  // An unreachable GitHub: no update check leaves this machine.
+  const daemon = startDaemon(`${baseURL}/r/${room.id}`, { GRILL_ROOM_GITHUB_URL: 'http://127.0.0.1:9' });
+  try {
+    const admin = await alice.context().newPage();
+    await admin.goto(await daemon.link);
+    await expect(admin.locator('#self-sig')).toHaveText('dev build');
+    await expect(admin.locator('#instances')).toContainText("Worker binary: the supervisor's own binary");
+    await expect(admin.locator('#relax-banner')).toBeHidden();
+    await expect(admin.locator('#checked')).toContainText('127.0.0.1:9');
+
+    const accept = admin.getByRole('button', { name: 'Accept unsigned binaries' });
+    await admin.locator('#relax-host').fill('127.0.0.1');
+    await accept.click();
+    await expect(admin.locator('#relax-status')).toContainText("type the instance's host exactly");
+    await expect(admin.locator('#relax-banner')).toBeHidden();
+    await admin.locator('#relax-host').fill(new URL(baseURL).host);
+    await accept.click();
+    await expect(admin.locator('#relax-banner')).toBeVisible();
+    await expect(admin.locator('#relax-banner')).toContainText(baseURL);
+    await expect(admin.locator('#instances .badge.danger')).toHaveText('accepts unsigned binaries');
+    await admin.getByRole('button', { name: 'Stop accepting unsigned binaries' }).click();
+    await expect(admin.locator('#relax-banner')).toBeHidden();
+    await expect(admin.locator('#instances .badge.danger')).toHaveCount(0);
+
+    await admin.getByRole('button', { name: 'Stop the daemon' }).click();
+    expect(await daemon.exited).toBe(0);
+  } finally {
+    daemon.cleanup();
+  }
+});

@@ -76,6 +76,18 @@ func (p Paths) instance(root, id string) string { return filepath.Join(root, "in
 // InstanceConfig holds instance.json, settings.json and allowlist.json.
 func (p Paths) InstanceConfig(id string) string { return p.instance(p.Config, id) }
 
+// supervisorSettings is the supervisor's own settings file.
+func (p Paths) supervisorSettings() string { return filepath.Join(p.Config, "supervisor.json") }
+
+// Bin holds the instances' worker binaries, one directory per version.
+func (p Paths) Bin() string { return filepath.Join(p.State, "bin") }
+
+// Trust holds the TUF cache and the last good trusted root.
+func (p Paths) Trust() string { return filepath.Join(p.State, "trust") }
+
+// DevKeys holds the trusted dev public keys, one <name>.pub file each.
+func (p Paths) DevKeys() string { return filepath.Join(p.Config, "dev-keys") }
+
 // InstanceState holds tokens.json.
 func (p Paths) InstanceState(id string) string { return p.instance(p.State, id) }
 
@@ -106,6 +118,10 @@ type Instance struct {
 	Rooms []string `json:"rooms"`
 	// Account names the Claude account its turns use (spec 003 phase 4).
 	Account string `json:"account,omitempty"`
+	// Version is the binary its worker ran last, kept by the binary store's collection (003-AC7).
+	Version string `json:"version,omitempty"`
+	// Relax runs its binaries even unsigned: off by default, switched on by typing its host (003-AC4).
+	Relax bool `json:"accept_unsigned,omitempty"`
 }
 
 // addRoom puts room last, as the newest.

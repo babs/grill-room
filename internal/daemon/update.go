@@ -1,20 +1,11 @@
 package daemon
 
-// The self-update is ported from github.com/babs/claude-quota selfupdate.go and restart_unix.go at
-// commit 45b0113, with the paired room server as the source instead of GitHub releases, a sha256
-// check against the server's published digest, and an approval in the local page.
-
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"runtime"
 	"time"
 
@@ -42,12 +33,8 @@ const maxBinary = 200 << 20
 type serverInfo struct {
 	Version      string            `json:"version"`
 	SHA256       map[string]string `json:"sha256"`
+	Bundles      map[string]string `json:"bundles"`
 	SandboxImage string            `json:"sandbox_image"`
-}
-
-// release is the room server's daemon build for this platform.
-type release struct {
-	base, version, sha256 string
 }
 
 // imageJob tracks the sandbox image the room server asked for.
@@ -94,9 +81,8 @@ func (d *Daemon) useServer(ctx context.Context, base string, info serverInfo) {
 	}
 	var announce bool
 	d.update(func(s *Status) {
-		d.release = release{base: base, version: info.Version, sha256: sum}
 		announce = avail != "" && avail != s.Update.Available
-		s.Update.Available = avail
+		s.Update.Available, s.Update.Served = avail, info.Version
 		if d.o.Image == "" {
 			d.img.ctx = ctx
 			if !d.img.known || d.img.want != info.SandboxImage {
@@ -179,80 +165,3 @@ func (d *Daemon) Recheck(ctx context.Context) {
 }
 
 var errNoUpdate = errors.New("no update available")
-
-// Update replaces this daemon's binary with the room server's newer one, after checking its
-// sha256 against the digest the server publishes. The caller restarts the daemon on success.
-func (d *Daemon) Update(ctx context.Context) error {
-	d.mu.Lock()
-	rel, u := d.release, d.st.Update
-	if u.Available == "" || u.Available != rel.version {
-		d.mu.Unlock()
-		return errNoUpdate
-	}
-	if u.Running {
-		d.mu.Unlock()
-		return errors.New("an update is already running")
-	}
-	d.st.Update.Running, d.st.Update.Error = true, ""
-	d.mu.Unlock()
-
-	d.o.Log.Info("update_started", zap.String("version", rel.version))
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-	defer cancel()
-	err := d.replaceExecutable(ctx, rel.base+"/download/"+releaseFile(runtime.GOOS, runtime.GOARCH), rel.sha256)
-	d.mu.Lock()
-	d.st.Update.Running = false
-	if err != nil {
-		d.st.Update.Error = err.Error()
-	}
-	d.mu.Unlock()
-	if err != nil {
-		d.o.Log.Warn("update_failed", zap.Error(err))
-		return err
-	}
-	d.o.Log.Info("update_applied", zap.String("version", rel.version))
-	return nil
-}
-
-// replaceExecutable downloads url beside the executable, checks its sha256 and renames it over
-// the executable. A failure at any step leaves the current binary in place.
-func (d *Daemon) replaceExecutable(ctx context.Context, url, wantSHA string) error {
-	exe := d.o.Executable
-	if exe == "" {
-		return errors.New("this daemon cannot locate its own binary")
-	}
-	// Same directory, so the final rename is atomic.
-	tmp, err := os.CreateTemp(filepath.Dir(exe), "."+filepath.Base(exe)+".update-*")
-	if err != nil {
-		return fmt.Errorf("cannot write next to %s (download the new version from %s): %w", exe, url, err)
-	}
-	defer os.Remove(tmp.Name()) //nolint:errcheck // gone after the rename
-	resp, err := d.roomRequest(ctx, http.MethodGet, url, "", nil)
-	if err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("download: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		_ = tmp.Close()
-		return fmt.Errorf("download %s: %s", url, resp.Status)
-	}
-	h := sha256.New()
-	_, err = io.Copy(io.MultiWriter(tmp, h), io.LimitReader(resp.Body, maxBinary))
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return fmt.Errorf("download: %w", err)
-	}
-	if got := hex.EncodeToString(h.Sum(nil)); got != wantSHA {
-		return fmt.Errorf("sha256 mismatch: the room server publishes %s, the download is %s; the current binary is kept", wantSHA, got)
-	}
-	if err := os.Chmod(tmp.Name(), 0o755); err != nil { //nolint:gosec // an executable must be executable
-		return fmt.Errorf("chmod: %w", err)
-	}
-	if err := os.Rename(tmp.Name(), exe); err != nil {
-		return fmt.Errorf("replace %s: %w", exe, err)
-	}
-	return nil
-}

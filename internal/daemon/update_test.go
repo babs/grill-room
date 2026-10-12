@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -61,129 +60,11 @@ func TestUseServerOffersNewerVersionOnly(t *testing.T) {
 			d := newTestDaemon(t, dockerUp)
 			d.o.Version = "v1.0.0"
 			d.useServer(context.Background(), "https://rooms.example", serverInfo{Version: tt.version, SHA256: tt.sums})
-			if got := d.Status().Update.Available; got != tt.want {
-				t.Fatalf("available = %q, want %q", got, tt.want)
+			if got := d.Status().Update; got.Available != tt.want || got.Served != tt.version {
+				t.Fatalf("update = %+v, want available %q, served %q", got, tt.want, tt.version)
 			}
 		})
 	}
-}
-
-// updateDaemon is a test daemon whose "binary" is a temp file, paired with srv's release.
-func updateDaemon(t *testing.T, srv *httptest.Server) (*Daemon, string) {
-	t.Helper()
-	d := newTestDaemon(t, dockerUp)
-	d.o.Version = "v1.0.0"
-	exe := filepath.Join(t.TempDir(), "grill-room-daemon")
-	if err := os.WriteFile(exe, []byte("old binary"), 0o755); err != nil { //nolint:gosec // an executable fake
-		t.Fatal(err)
-	}
-	d.o.Executable = exe
-	(&roomRun{d: d, room: Room{Base: srv.URL, ID: "abc"}}).checkServer(context.Background())
-	if d.Status().Update.Available != "v1.1.0" {
-		t.Fatalf("no update offered: %+v", d.Status().Update)
-	}
-	return d, exe
-}
-
-func assertOnlyBinary(t *testing.T, exe string, want string) {
-	t.Helper()
-	b, err := os.ReadFile(exe) //nolint:gosec // test temp file
-	if err != nil || string(b) != want {
-		t.Fatalf("binary = %q, %v; want %q", b, err, want)
-	}
-	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(exe), ".*")); len(left) != 0 {
-		t.Fatalf("temp files left: %v", left)
-	}
-}
-
-// 001-AC37: approving in the local page replaces the binary with the room server's, checked
-// against its published sha256, and restarts the daemon.
-func TestUpdateReplacesBinaryAndRestarts(t *testing.T) {
-	newBin := []byte("new binary v1.1.0")
-	srv := fakeRoomRelease(t, "v1.1.0", hexSHA(newBin), newBin, "")
-	d, exe := updateDaemon(t, srv)
-	var restarted atomic.Bool
-	d.o.Restart = func() { restarted.Store(true) }
-	e := newAdminEnv(t, d)
-	tok := e.login(t)
-	if s, body := e.req(t, "POST", "/api/update", tok, "", nil); s != http.StatusNoContent {
-		t.Fatalf("update: %d %s", s, body)
-	}
-	assertOnlyBinary(t, exe, string(newBin))
-	assertPerm(t, exe, 0o755)
-	if !restarted.Load() {
-		t.Fatal("no restart")
-	}
-}
-
-// 001-AC37: a download whose sha256 differs from the published one is refused, the current
-// binary stays, and nothing restarts.
-func TestUpdateRefusesTamperedBinary(t *testing.T) {
-	newBin := []byte("new binary v1.1.0")
-	for _, tt := range []struct {
-		name string
-		srv  *httptest.Server
-		want string
-	}{
-		{"tampered", fakeRoomRelease(t, "v1.1.0", hexSHA(newBin), []byte("evil binary"), ""), "sha256 mismatch"},
-		{"truncated", fakeRoomRelease(t, "v1.1.0", hexSHA(newBin), newBin[:5], ""), "sha256 mismatch"},
-		{"published digest wrong", fakeRoomRelease(t, "v1.1.0", strings.Repeat("0", 64), newBin, ""), "sha256 mismatch"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			d, exe := updateDaemon(t, tt.srv)
-			var restarted atomic.Bool
-			d.o.Restart = func() { restarted.Store(true) }
-			e := newAdminEnv(t, d)
-			s, body := e.req(t, "POST", "/api/update", e.login(t), "", nil)
-			if s != http.StatusBadGateway || !strings.Contains(body, tt.want) {
-				t.Fatalf("update: %d %s", s, body)
-			}
-			assertOnlyBinary(t, exe, "old binary")
-			if restarted.Load() || !strings.Contains(d.Status().Update.Error, tt.want) || d.Status().Update.Running {
-				t.Fatalf("restarted %v, status %+v", restarted.Load(), d.Status().Update)
-			}
-		})
-	}
-}
-
-func TestUpdateFailures(t *testing.T) {
-	newBin := []byte("new binary")
-	t.Run("nothing to update", func(t *testing.T) {
-		d := newTestDaemon(t, dockerUp)
-		e := newAdminEnv(t, d)
-		if s, _ := e.req(t, "POST", "/api/update", e.login(t), "", nil); s != http.StatusConflict {
-			t.Fatalf("update: %d", s)
-		}
-	})
-	t.Run("download missing", func(t *testing.T) {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/api/daemon/version" {
-				_ = json.NewEncoder(w).Encode(map[string]any{"version": "v1.1.0", "sha256": map[string]string{target: hexSHA(newBin)}})
-				return
-			}
-			http.NotFound(w, r)
-		}))
-		t.Cleanup(srv.Close)
-		d, exe := updateDaemon(t, srv)
-		if err := d.Update(context.Background()); err == nil || !strings.Contains(err.Error(), "404") {
-			t.Fatalf("err = %v", err)
-		}
-		assertOnlyBinary(t, exe, "old binary")
-	})
-	t.Run("binary dir not writable", func(t *testing.T) {
-		d, _ := updateDaemon(t, fakeRoomRelease(t, "v1.1.0", hexSHA(newBin), newBin, ""))
-		d.o.Executable = filepath.Join(t.TempDir(), "missing-dir", "grill-room-daemon")
-		if err := d.Update(context.Background()); err == nil || !strings.Contains(err.Error(), "cannot write next to") {
-			t.Fatalf("err = %v", err)
-		}
-	})
-	t.Run("own binary unknown", func(t *testing.T) {
-		d, _ := updateDaemon(t, fakeRoomRelease(t, "v1.1.0", hexSHA(newBin), newBin, ""))
-		d.o.Executable = ""
-		if err := d.Update(context.Background()); err == nil || !strings.Contains(err.Error(), "cannot locate") {
-			t.Fatalf("err = %v", err)
-		}
-	})
 }
 
 // imageDaemon has no pinned image: it takes the room server's, through a fake docker.

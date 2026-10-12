@@ -157,7 +157,8 @@ func (d *Daemon) handle(ctx context.Context, m Msg) Msg {
 	case "recheck":
 		d.Recheck(ctx)
 	case "update":
-		err = d.Update(ctx)
+		// A worker runs a copy the supervisor verified: only the supervisor updates (003-AC5).
+		err = errors.New("updates go through the supervisor")
 	default:
 		err = fmt.Errorf("unknown request %q", m.Type)
 	}

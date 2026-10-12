@@ -26,3 +26,13 @@ h3 { font-size: 0.95rem; margin: 1rem 0 0.3rem; }
 #instances { margin: 0 0 0.6rem; padding-left: 1.2rem; }
 #instances li.current > code { font-weight: 700; }
 #instances ul { margin: 0.2rem 0; padding-left: 1.2rem; font-size: 0.85rem; }
+#relax-banner, .danger { background: var(--bad); color: #fff; }
+#relax-banner { margin: 0; padding: 0.6rem 1rem; font-weight: 600; }
+.badge { padding: 0.1rem 0.5rem; border-radius: 0.8rem; font-size: 0.8rem; border: 1px solid var(--line); }
+.badge.ok { border-color: var(--good); }
+.badge.bad, .badge.danger { border-color: var(--bad); }
+.badge.danger { font-weight: 600; }
+.relax { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin: 0.2rem 0; font-size: 0.85rem; }
+#channel-form, #key-form, #relax-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem 1rem; }
+#key-form label { display: flex; flex-direction: column; gap: 0.2rem; }
+#dev-keys { margin: 0 0 0.6rem; padding-left: 1.2rem; }

@@ -1,3 +1,6 @@
+# A dependency needing a newer Go must fail the build, not fetch a toolchain (spike S7).
+export GOTOOLCHAIN := local
+
 APP_NAME    := grill-room
 PKG         := ./cmd/grill-room
 VERSION     ?= v0.0.0
@@ -25,7 +28,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: build release dev-release run test test-docker e2e e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: build release dev-release run test test-docker test-offline test-release e2e e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -72,9 +75,11 @@ test-docker: sandbox-image sandbox-fake-image
 	  go test -race -p 1 -run 'Docker' ./internal/sandbox/ ./internal/daemon/ ./cmd/grill-room-daemon/
 
 # Browser tests against a fresh server, in the installed Chrome; agent turns run in Docker with the
-# fake claude. Magic links run against a second server and a throwaway mailpit container.
+# fake claude. Magic links run against a second server and a throwaway mailpit container. The
+# server hands out the daemon's own version, so its workers run the daemon's binary: an unsigned
+# release at another version would be refused (003-AC2).
 e2e: build sandbox-fake-image
-	$(MAKE) release DIST=bin/e2e-release VERSION=v0.0.1
+	$(MAKE) release DIST=bin/e2e-release VERSION=$(VERSION)
 	cd e2e && pnpm install --frozen-lockfile && pnpm test && pnpm exec playwright test -c mail/playwright.config.js
 
 # Voice tests against the compose stack behind the local traefik: run `make dev-up` first.
@@ -118,6 +123,20 @@ stt-image:
 
 cover:
 	go test -race -coverprofile=coverage.txt ./... && go tool cover -func=coverage.txt | tail -1
+
+# The supervisor against real GitHub releases (003-AC2, 003-AC7): one instance per release in
+# RELEASES, and one serving a dev-signed local build. Needs gh and the network.
+RELEASES ?= v0.0.1 v0.0.2
+test-release:
+	for v in $(RELEASES); do gh release download "$$v" -R babs/grill-room -D bin/releases/$$v --clobber || exit 1; done
+	GRILL_ROOM_TEST_RELEASES='$(foreach v,$(RELEASES),$(CURDIR)/bin/releases/$(v))' go test -race -count=1 -run TestReleases -v ./cmd/grill-room-daemon/
+
+# The trust tests in a container with no network (003-AC3): the embedded trusted root verifies the
+# v0.0.1 release bundle, and TUF is unreachable.
+test-offline:
+	CGO_ENABLED=0 go test -c -o bin/trust.test ./internal/trust/
+	docker run --rm --network none -e GRILL_ROOM_TEST_OFFLINE=1 -v '$(CURDIR)/internal/trust:/src:ro' \
+	  -v '$(CURDIR)/bin/trust.test:/trust.test:ro' -w /src debian:stable-slim /trust.test -test.v -test.run 'Offline|Release|DevKey'
 
 lint:
 	golangci-lint run ./...

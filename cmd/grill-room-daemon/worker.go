@@ -53,17 +53,13 @@ func runWorker(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	if err != nil {
 		return fmt.Errorf("allowlist: %w", err)
 	}
-	exe, err := executable()
-	if err != nil {
-		logger.Warn("self_update_disabled", zap.Error(err))
-	}
 	src := creds.NewSource(creds.New())
 	d := daemon.New(daemon.Options{
 		Settings: settings, SettingsPath: settingsPath, Allowlist: allowlist, AllowlistPath: allowlistPath,
 		Name: cfg.Host, Version: Version, Tokens: daemon.NewTokens(cfg.StateDir), Docker: sandbox.Docker, Creds: src,
 		// No client timeout: it would cut the long-lived room stream; each request has its own deadline.
 		HTTP: &http.Client{}, Log: logger, Model: cfg.Model,
-		Image: cfg.Image, Stream: sandbox.DockerStream, Executable: exe,
+		Image: cfg.Image, Stream: sandbox.DockerStream,
 		CacheDir: filepath.Join(cfg.CacheDir, "workspace-cache"), CacheMax: cfg.CacheMB << 20,
 		OnTurn: func(e daemon.TurnEvent) { _ = conn.Send(daemon.Msg{Type: "turn", Turn: &e}) },
 		NewAgent: func(r daemon.Room, image string) daemon.Agent {

@@ -23,9 +23,18 @@ type SupervisorOptions struct {
 	// Worker is the configuration every worker starts from; the supervisor fills in its instance.
 	Worker  WorkerConfig
 	Version string
-	// Binary returns the worker binary for an instance: the supervisor's own until instances
-	// serve their own releases (spec 003 phase 3).
-	Binary func(instance string) (string, error)
+	// Binary returns the checked worker binary for an instance (003-AC2, 003-AC7). An errRefused
+	// stops the worker until something changes; any other error is retried with backoff.
+	Binary func(ctx context.Context, in Instance) (Resolved, error)
+	// Bins holds the trust material: the trusted root, the dev keys and the downloads. Nil turns
+	// off the self-update, the dev keys and the signature indicator.
+	Bins *Binaries
+	// Executable is the supervisor's own binary, which a self-update replaces.
+	Executable string
+	// GitHub is the project's repository URL, the default update channel.
+	GitHub string
+	// UpdateEvery is how often the update channel is checked.
+	UpdateEvery time.Duration
 	// Env is the workers' environment.
 	Env []string
 	// Stderr receives the workers' stderr and their log lines, which Ring keeps too.
@@ -41,11 +50,8 @@ type SupervisorOptions struct {
 	MaxBackoff     time.Duration // between restarts of a crashing worker
 	HelloTimeout   time.Duration // for a started worker to say hello
 	StopTimeout    time.Duration // for a worker to stop before it is killed
-	RequestTimeout time.Duration // for a worker's reply; an update gets updateTimeout
+	RequestTimeout time.Duration // for a worker's reply
 }
-
-// updateTimeout outlasts the worker's own 10-minute bound on a download.
-const updateTimeout = 11 * time.Minute
 
 // Supervisor runs one worker per instance and serves the admin page for all of them.
 type Supervisor struct {
@@ -59,6 +65,11 @@ type Supervisor struct {
 	workers   map[string]*worker
 	current   string
 	autostart bool
+	set       SupervisorSettings
+	upd       selfUpdate
+	self      SelfSignature
+	// checkNow asks the update loop for a check.
+	checkNow chan struct{}
 }
 
 // worker is one instance's worker process, restarted with backoff while the supervisor runs. Its
@@ -80,22 +91,31 @@ type worker struct {
 	nextID   int64
 	// pair is a room to pair with once the worker runs.
 	pair string
+	// version and trust describe the binary the worker runs; served is the version its instance
+	// hands out, as last seen.
+	version, trust, devKey, served string
+	// reload restarts the worker at once, for a new binary or a new trust policy.
+	reload bool
 }
 
 // InstanceView is an instance as the admin page lists it.
 type InstanceView struct {
-	ID         string     `json:"id"`
-	URL        string     `json:"url"`
-	Rooms      []string   `json:"rooms"`
-	State      string     `json:"state"`
-	Error      string     `json:"error,omitempty"`
-	PID        int        `json:"pid,omitempty"`
-	Proto      int        `json:"proto,omitempty"`
-	Restarts   int        `json:"restarts"`
-	Room       string     `json:"room,omitempty"`
-	Connection string     `json:"connection,omitempty"`
-	Metrics    *Metrics   `json:"metrics,omitempty"`
-	LastTurn   *TurnEvent `json:"last_turn,omitempty"`
+	ID       string   `json:"id"`
+	URL      string   `json:"url"`
+	Rooms    []string `json:"rooms"`
+	State    string   `json:"state"`
+	Error    string   `json:"error,omitempty"`
+	PID      int      `json:"pid,omitempty"`
+	Proto    int      `json:"proto,omitempty"`
+	Restarts int      `json:"restarts"`
+	Version  string   `json:"version,omitempty"`
+	Trust    string   `json:"trust,omitempty"`
+	// AcceptUnsigned is the relax toggle: the instance's binaries run even unsigned (003-AC4).
+	AcceptUnsigned bool       `json:"accept_unsigned"`
+	Room           string     `json:"room,omitempty"`
+	Connection     string     `json:"connection,omitempty"`
+	Metrics        *Metrics   `json:"metrics,omitempty"`
+	LastTurn       *TurnEvent `json:"last_turn,omitempty"`
 }
 
 // errRefused is a worker the handshake turned down; restarting it would not help.
@@ -114,10 +134,19 @@ func NewSupervisor(o SupervisorOptions) *Supervisor {
 	def(&o.HelloTimeout, 10*time.Second)
 	def(&o.StopTimeout, 45*time.Second)
 	def(&o.RequestTimeout, 30*time.Second)
+	def(&o.UpdateEvery, 6*time.Hour)
+	if o.GitHub == "" {
+		o.GitHub = "https://github.com/babs/grill-room"
+	}
 	if o.Ring == nil {
 		o.Ring = NewRing(200)
 	}
-	s := &Supervisor{o: o, workers: map[string]*worker{}}
+	s := &Supervisor{o: o, workers: map[string]*worker{}, checkNow: make(chan struct{}, 1), self: SelfSignature{State: "unknown", Detail: "not checked yet"}}
+	set, err := loadSupervisorSettings(o.Paths.supervisorSettings())
+	if err != nil {
+		o.Log.Warn("supervisor_settings_unreadable", zap.Error(err))
+	}
+	s.set = set
 	if o.Autostart != nil {
 		on, err := o.Autostart.Enabled()
 		if err != nil {
@@ -142,6 +171,9 @@ func (s *Supervisor) Start(ctx context.Context) {
 			newest, s.current = fi.ModTime(), in.ID
 		}
 		s.start(in, "")
+	}
+	if s.o.Bins != nil {
+		s.wg.Go(func() { s.updateLoop(ctx) })
 	}
 }
 
@@ -170,9 +202,22 @@ func (w *worker) run() {
 			return
 		}
 		var refused errRefused
+		s.mu.Lock()
+		// One critical section with reload: a reload is either seen here or starts a new run.
+		reload := w.reload
+		w.reload = false
+		if !reload && errors.As(err, &refused) {
+			w.state, w.err = "refused", err.Error()
+			w.version, w.trust, w.devKey = "", "", ""
+		}
+		s.mu.Unlock()
+		if reload {
+			log.Info("worker_reloading", zap.NamedError("exit", err))
+			backoff = time.Second
+			continue
+		}
 		if errors.As(err, &refused) {
 			log.Error("worker_refused", zap.Error(err))
-			w.set(func() { w.state, w.err = "refused", err.Error() })
 			return
 		}
 		if time.Since(started) > time.Minute {
@@ -202,14 +247,30 @@ func (w *worker) set(f func()) {
 // once runs the worker process until it exits.
 func (w *worker) once(log *zap.Logger) error {
 	s := w.s
-	w.set(func() { w.state = "starting" })
-	bin, err := s.o.Binary(w.inst.ID)
+	var in Instance
+	w.set(func() { w.state, in = "starting", w.inst })
+	res, err := s.o.Binary(s.ctx, in)
 	if err != nil {
 		return fmt.Errorf("worker binary: %w", err)
 	}
+	s.mu.Lock()
+	w.version, w.trust, w.devKey = res.Version, res.Trust, res.DevKey
+	// Unknown when the instance did not answer: the version its worker reports stays the last seen.
+	if res.Served != "" {
+		w.served = res.Served
+	}
+	if res.Version != w.inst.Version {
+		w.inst.Version = res.Version
+		s.save(w)
+	}
+	s.mu.Unlock()
+	if in.Relax {
+		log.Warn("worker_accepts_unsigned", zap.String("version", res.Version), zap.String("trust", res.Trust))
+	}
 	// Not CommandContext: a stop message lets the worker remove its sandboxes first.
-	cmd := exec.Command(bin, "worker", "--instance", w.inst.ID) //nolint:gosec,noctx // the binary Binary picked, our own until phase 3
-	cmd.Env, cmd.Stderr = s.o.Env, s.o.Stderr
+	cmd := exec.Command(res.Path, "worker", "--instance", w.inst.ID) //nolint:gosec,noctx // a binary Binary checked
+	// The worker may run an instance's binary: its stderr is escaped like its log lines.
+	cmd.Env, cmd.Stderr = s.o.Env, &lineWriter{emit: func(b []byte) { s.logLine(in.ID, map[string]any{"stream": "stderr", "msg": string(b)}) }}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -221,7 +282,7 @@ func (w *worker) once(log *zap.Logger) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start worker: %w", err)
 	}
-	log.Info("worker_started", zap.Int("pid", cmd.Process.Pid), zap.String("binary", bin))
+	log.Info("worker_started", zap.Int("pid", cmd.Process.Pid), zap.String("binary", res.Path), zap.String("version", res.Version))
 	conn := NewConn(stdout, stdin)
 	exited := make(chan struct{})
 	go func() {
@@ -310,13 +371,30 @@ func (w *worker) serve(conn *Conn, cmd *exec.Cmd, log *zap.Logger) error {
 		}
 		switch m.Type {
 		case "status":
-			w.set(func() { w.status = m.Status })
+			w.set(func() {
+				w.status = m.Status
+				// The instance moved to another version: run it (003-AC7).
+				if sv := m.Status.Update.Served; sv != "" && sv != w.served {
+					w.served = sv
+					if s.set.UpdateChannel == "instance" && s.set.UpdateInstance == w.inst.ID {
+						// The supervisor follows this instance: its new version is on offer now.
+						select {
+						case s.checkNow <- struct{}{}:
+						default:
+						}
+					}
+					if sv != w.version {
+						log.Info("instance_version_changed", zap.String("served", sv), zap.String("running", w.version))
+						s.reload(w)
+					}
+				}
+			})
 		case "metrics":
 			w.set(func() { w.metrics = m.Metrics })
 		case "turn":
 			w.set(func() { w.lastTurn = m.Turn })
 		case "log":
-			w.s.logLine(m.Log)
+			w.s.logLine(w.inst.ID, m.Log)
 		case "reply":
 			w.set(func() {
 				if ch := w.pending[m.ID]; ch != nil {
@@ -340,25 +418,21 @@ func (w *worker) detach() {
 	})
 }
 
-func (s *Supervisor) logLine(line []byte) {
-	if len(line) == 0 {
-		return
-	}
+// logLine writes a worker's log entry, re-encoded by safeLogLine: a worker may run a binary its
+// instance served, and the terminal must not run what it prints.
+func (s *Supervisor) logLine(instance string, entry any) {
+	line := safeLogLine(instance, entry)
 	_, _ = s.o.Ring.Write(line)
 	s.logMu.Lock()
 	defer s.logMu.Unlock()
-	_, _ = s.o.Stderr.Write(append(slices.Clone(line), '\n'))
+	_, _ = s.o.Stderr.Write(append(line, '\n'))
 }
 
 // request sends m to the worker and waits for its reply, for a bounded time: a hung worker must
 // not hang the page.
 func (w *worker) request(ctx context.Context, m Msg) (Msg, error) {
 	s := w.s
-	timeout := s.o.RequestTimeout
-	if m.Type == "update" {
-		timeout = updateTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, s.o.RequestTimeout)
 	defer cancel()
 	s.mu.Lock()
 	if w.state != "running" || w.conn == nil {
@@ -442,10 +516,12 @@ func (s *Supervisor) SetRoom(ctx context.Context, room Room) {
 	if !fresh && !running {
 		w.pair = room.String()
 	}
-	s.mu.Unlock()
-	if err := saveInstance(s.o.Paths, in); err != nil {
-		s.o.Log.Error("instance_save_failed", zap.String("instance", id), zap.Error(err))
+	if fresh {
+		s.saveInstance(in)
+	} else {
+		s.save(w)
 	}
+	s.mu.Unlock()
 	s.o.Log.Info("room_handed", zap.String("instance", id), zap.String("room", room.String()))
 	if fresh {
 		s.start(in, room.String())
@@ -459,16 +535,21 @@ func (s *Supervisor) SetRoom(ctx context.Context, room Room) {
 }
 
 // Status is the current instance's worker status, or what the page shows before any room.
-func (s *Supervisor) Status() Status {
+func (s *Supervisor) Status() (st Status) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st := Status{Host: s.o.Worker.Host, Version: s.o.Version, Connection: "offline", Allowlist: []string{}}
+	st = Status{Host: s.o.Worker.Host, Version: s.o.Version, Connection: "offline", Allowlist: []string{}}
+	// The update on offer is the supervisor's own, from its channel (003-AC5).
+	defer func() { st.Update = s.upd.view() }()
 	w := s.workers[s.current]
 	if w == nil {
 		return st
 	}
 	if w.status != nil && w.state == "running" {
-		return *w.status
+		st = *w.status
+		// The page names the supervisor's version; the worker's is listed with its instance.
+		st.Version = s.o.Version
+		return st
 	}
 	if n := len(w.inst.Rooms); n > 0 {
 		st.Room = w.inst.Rooms[n-1]
@@ -486,7 +567,8 @@ func (s *Supervisor) Instances() ([]InstanceView, string) {
 	out := make([]InstanceView, 0, len(s.workers))
 	for _, w := range s.workers {
 		v := InstanceView{ID: w.inst.ID, URL: w.inst.URL, Rooms: slices.Clone(w.inst.Rooms), State: w.state, Error: w.err, PID: w.pid,
-			Proto: w.proto, Restarts: w.restarts, Metrics: w.metrics, LastTurn: w.lastTurn}
+			Proto: w.proto, Restarts: w.restarts, Metrics: w.metrics, LastTurn: w.lastTurn, Version: w.version, Trust: w.trust,
+			AcceptUnsigned: w.inst.Relax}
 		if w.status != nil {
 			v.Room, v.Connection = w.status.Room, w.status.Connection
 		}
@@ -529,16 +611,6 @@ func (s *Supervisor) Recheck(ctx context.Context) {
 	if _, err := s.requestCurrent(ctx, Msg{Type: "recheck"}); err != nil {
 		s.o.Log.Warn("recheck_failed", zap.Error(err))
 	}
-}
-
-// Update has the current worker replace the binary with its room server's newer one; the
-// supervisor and every worker run it after Restart.
-func (s *Supervisor) Update(ctx context.Context) error {
-	if s.Status().Update.Available == "" {
-		return errNoUpdate
-	}
-	_, err := s.requestCurrent(ctx, Msg{Type: "update"})
-	return err
 }
 
 // Restart ends the supervisor so that main starts the updated binary.

@@ -34,7 +34,7 @@ The `config` object:
 
 ## Supervisor to worker
 
-Requests carry an `id`; the worker answers each one with `{"type":"reply","id":N}`, plus `"error"` when it failed. The supervisor gives up on a reply after 30 s, or 11 minutes for `update`.
+Requests carry an `id`; the worker answers each one with `{"type":"reply","id":N}`, plus `"error"` when it failed. The supervisor gives up on a reply after 30 s.
 
 | Type | Fields | Does |
 |---|---|---|
@@ -43,7 +43,7 @@ Requests carry an `id`; the worker answers each one with `{"type":"reply","id":N
 | `allowlist` | `allowlist` (absent for an empty list) | saves the egress allowlist; the running sandbox takes it at once |
 | `denied` | `n` | the reply's `denied` lists the last `n` refused egress requests |
 | `recheck` | | re-runs the Docker and credentials checks, and retries a failed sandbox image |
-| `update` | | replaces the binary with the room server's newer one; the supervisor then restarts |
+| `update` | | refused with an error: only the supervisor updates, and it updates itself (003-AC5). Phase 2 workers replaced their binary here |
 | `stop` | | no reply: the worker ends its rooms, removes their sandboxes and exits 0 |
 
 A closed stdin means the same as `stop`, so a worker whose supervisor died stops on its own.
@@ -52,14 +52,14 @@ A closed stdin means the same as `stop`, so a worker whose supervisor died stops
 
 | Type | Fields | When |
 |---|---|---|
-| `status` | `status`, the page's view of the worker | whenever it changes, checked every 250 ms |
+| `status` | `status`, the page's view of the worker; `update.served` is the version its room server hands out | whenever it changes, checked every 250 ms |
 | `metrics` | `metrics`: `uptime_seconds`, `turns`, `failed_turns`, `heap_bytes`, `goroutines` | at start, then every 30 s |
 | `turn` | `turn`: `room`, `id`, `phase` (`start` or `end`), `error`, `duration_ms` | as a turn starts and ends |
-| `log` | `log`, one zap JSON entry | for every log line; the supervisor writes it to its stderr and to the page's log |
+| `log` | `log`, one zap JSON entry | for every log line. The supervisor re-encodes it before writing it to its stderr and to the page's log: it sets `instance` itself, and escapes control characters, C1 codes and Unicode format characters (bidi overrides, zero-width), so a worker binary cannot drive the terminal or fake a line. Entries over 16 KiB are dropped. The worker's stderr gets the same treatment, one entry per line with `"stream":"stderr"` |
 
 ## Supervision
 
-A worker that exits without being told to is restarted after 1 s, then 2 s, 4 s and so on up to 30 s. A worker that ran for over a minute starts again from 1 s. Before the restart, the supervisor removes the sandboxes of the instance's rooms, which a crash leaves behind. A refused worker is not restarted.
+A worker that exits without being told to is restarted after 1 s, then 2 s, 4 s and so on up to 30 s. A worker that ran for over a minute starts again from 1 s. Before the restart, the supervisor removes the sandboxes of the instance's rooms, which a crash leaves behind. A refused worker, by the handshake or by the binary checks, is not restarted until something changes: a dev key added or removed, or the instance's "accept unsigned" toggle. When a worker's status reports that its instance serves another version than the one it runs, the supervisor restarts it at once on that version.
 
 When the supervisor stops, it sends `stop` to every worker, waits up to 45 s for each to exit, then kills it and removes its sandboxes.
 

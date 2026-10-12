@@ -180,7 +180,14 @@ func TestAdminActions(t *testing.T) {
 	if s, _ := e.req(t, "POST", "/api/autostart", tok, `{"enabled":true}`, nil); s != http.StatusNotFound {
 		t.Fatalf("autostart: %d", s)
 	}
-	if _, body := e.req(t, "GET", "/api/status", tok, "", nil); strings.Contains(body, `"instances"`) || strings.Contains(body, `"autostart"`) {
+	// Nor does it check binaries or update itself.
+	for path, body := range map[string]string{"/api/update": "", "/api/relax": `{"instance":"x"}`, "/api/dev-keys": `{"name":"x"}`,
+		"/api/dev-keys/remove": `{"name":"x"}`, "/api/update-channel": `{"channel":"github"}`} {
+		if s, _ := e.req(t, "POST", path, tok, body, nil); s != http.StatusNotFound {
+			t.Fatalf("%s: %d", path, s)
+		}
+	}
+	if _, body := e.req(t, "GET", "/api/status", tok, "", nil); strings.Contains(body, `"instances"`) || strings.Contains(body, `"autostart"`) || strings.Contains(body, `"trust"`) {
 		t.Fatalf("status: %s", body)
 	}
 	if s, _ := e.req(t, "POST", "/api/stop", tok, "", nil); s != http.StatusNoContent || !e.stopped.Load() {

@@ -34,6 +34,7 @@ import (
 	"github.com/babs/grill-room/internal/creds"
 	"github.com/babs/grill-room/internal/daemon"
 	"github.com/babs/grill-room/internal/sandbox"
+	"github.com/babs/grill-room/internal/trust"
 )
 
 // Build metadata, injected with -ldflags -X.
@@ -71,6 +72,8 @@ type Config struct {
 	Limits sandbox.Limits
 	// CacheMB caps the workspace cache; 0 fetches every workspace whole.
 	CacheMB int64
+	// GitHub is the repository the default update channel follows.
+	GitHub string
 }
 
 func loadConfig() (Config, error) {
@@ -89,6 +92,7 @@ func loadConfig() (Config, error) {
 	}
 	return Config{
 		CacheMB:  cacheMB,
+		GitHub:   strings.TrimRight(getEnv("GRILL_ROOM_GITHUB_URL", "https://github.com/babs/grill-room"), "/"),
 		Paths:    paths,
 		Legacy:   legacy,
 		Browser:  getEnv("GRILL_ROOM_DAEMON_BROWSER", "auto"),
@@ -107,6 +111,9 @@ func loadConfig() (Config, error) {
 func (c Config) Validate() error {
 	if c.Browser != "auto" && c.Browser != "none" {
 		return fmt.Errorf("GRILL_ROOM_DAEMON_BROWSER %q: want auto or none", c.Browser)
+	}
+	if u, err := url.Parse(c.GitHub); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return fmt.Errorf("GRILL_ROOM_GITHUB_URL %q: want a repository URL like https://github.com/babs/grill-room", c.GitHub)
 	}
 	if _, err := zapcore.ParseLevel(c.LogLevel); err != nil {
 		return fmt.Errorf("LOG_LEVEL: %w", err)
@@ -245,14 +252,22 @@ func supervise(ctx context.Context, cfg Config, host string, room *daemon.Room, 
 	}
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
+	insts, _ := daemon.LoadInstances(cfg.Paths) // the supervisor reports the unreadable ones
+	bins := &daemon.Binaries{
+		Dir: cfg.Paths.Bin(), Self: exe, Version: Version, Log: logger,
+		// No client timeout: a download is bounded by its own context.
+		HTTP:  &http.Client{},
+		Roots: &trust.Roots{Dir: cfg.Paths.Trust(), Log: logger},
+		Keys:  &daemon.DevKeys{Dir: cfg.Paths.DevKeys(), Log: logger},
+	}
+	bins.Init(insts)
 	var restart atomic.Bool
 	sup := daemon.NewSupervisor(daemon.SupervisorOptions{
 		Paths: cfg.Paths, Version: Version,
 		Worker: daemon.WorkerConfig{Host: host, SandboxRoot: cfg.Paths.State, LogLevel: cfg.LogLevel, Model: cfg.Model, Image: cfg.Image,
 			Settings: cfg.Settings, Limits: cfg.Limits, CacheMB: cfg.CacheMB},
-		// ponytail: every instance runs the supervisor's own binary until phase 3 fetches theirs.
-		Binary: func(string) (string, error) { return exe, nil },
-		Env:    os.Environ(), Stderr: stderr, Ring: ring, Log: logger, Docker: sandbox.Docker,
+		Binary: bins.Resolve, Bins: bins, Executable: exe, GitHub: cfg.GitHub,
+		Env: os.Environ(), Stderr: stderr, Ring: ring, Log: logger, Docker: sandbox.Docker,
 		Restart:   func() { restart.Store(true); stop() },
 		Autostart: autostart(exe),
 	})

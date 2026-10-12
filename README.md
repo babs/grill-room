@@ -280,7 +280,7 @@ The supervisor opens a page on `127.0.0.1` in the default browser. The page list
 
 State lives in one directory per instance, `instances/<id>/`, under three roots:
 
-| | Config (`instance.json`, `settings.json`, `allowlist.json`) | State (`tokens.json`, lock, socket) | Cache (`workspace-cache/`) |
+| | Config (`instance.json`, `settings.json`, `allowlist.json`; `supervisor.json` and `dev-keys/` at the root) | State (`tokens.json`, lock, socket; `bin/` and `trust/` at the root) | Cache (`workspace-cache/`) |
 |---|---|---|---|
 | Linux, WSL | `$XDG_CONFIG_HOME/grill-room` (`~/.config`) | `$XDG_STATE_HOME/grill-room` (`~/.local/state`) | `$XDG_CACHE_HOME/grill-room` (`~/.cache`) |
 | macOS | `~/Library/Application Support/grill-room` | same | `~/Library/Caches/grill-room` |
@@ -306,7 +306,30 @@ When someone presses a persona's button, the room hands the turn to the host's d
 
 The sandbox image comes from the room server. When the server advertises a digest-pinned image (`GRILL_ROOM_SANDBOX_IMAGE` on the server), the daemon pulls it by digest. When it advertises none, or the pull fails, for instance on a registry that wants a login, the daemon builds the Dockerfile embedded in its binary and tags the result `grill-room-sandbox:local-<hash of the Dockerfile>`, so it builds once per Dockerfile change. The page shows the pull or build progress. Until the image is ready, the daemon tells the room it cannot host.
 
-At start, and again each time it reconnects, the daemon asks the room server for its release (`/api/daemon/version`). When the server hands out a newer version built for this platform, the page offers "Update and restart". Nothing updates without that click. The daemon downloads the binary next to its own and checks it against the sha256 the server publishes. Only then does it rename it over the running binary. The supervisor then stops its workers, which remove their sandboxes, and execs the new version, which reconnects to the same rooms. On a mismatch it keeps the current binary and shows the error. The binary's directory must be writable by the user, as `~/.local/bin` is.
+#### Worker binaries and signatures
+
+Each instance's worker runs the daemon version its room server hands out. When that is the supervisor's own version, or the server hands out none, the worker runs the supervisor's binary. Otherwise the supervisor reads `/api/daemon/version`, downloads the binary for its OS and architecture and its sigstore bundle, and runs it only if all of these hold:
+
+- the download matches the sha256 the server publishes;
+- sigstore-go verifies the bundle: a certificate for this repository's `release.yml` on a semver tag, issued by GitHub Actions, logged in Rekor ([docs/release.md](docs/release.md#signing-identity)), whose tag is the version served; or a signature by one of the trusted dev keys;
+- the file is an executable for this OS and architecture;
+- the version is v0.0.2 or later, the first release that runs as a worker.
+
+Otherwise the worker stays stopped and the instance list shows why, as does the log. The binary and its bundle are kept in `bin/<version>/` under the state root, one copy per version, and verified again before every start, offline included. A version no instance runs any more is deleted at start and whenever an instance changes version. When a worker reports that its room server now hands out another version, the supervisor restarts it on that version.
+
+Verification works offline with the sigstore trusted root embedded in the binary. Online, the supervisor refreshes it through TUF when it verifies a binary, at most once a day (cache in `trust/tuf` under the state root) and keeps the last good copy in `trust/trusted_root.json`. When TUF is unreachable it uses that copy, else the embedded one, and tries TUF again an hour later. The page says which root is in use.
+
+Dev builds signed by `make dev-release` run once their cosign public key is trusted: paste it under "Trusted dev keys" on the page, or drop it in `dev-keys/<name>.pub` under the config root. Adding a key restarts the refused workers; removing one restarts the workers running a binary it signed.
+
+Each instance also has an "accept unsigned binaries" toggle, off by default, for testing builds nobody signed. Switching it on takes the instance's host typed exactly as in its URL. While it is on, a red banner and a badge stay on the page and every worker start logs `worker_accepts_unsigned`. The binary must still match the published sha256 and this platform.
+
+Worker log lines and stderr reach the supervisor's terminal re-encoded: the supervisor sets their `instance` field and escapes control and Unicode format characters, so a worker binary cannot drive the terminal.
+
+#### Supervisor updates
+
+The supervisor updates itself from GitHub releases by default: it reads `releases/latest/download/VERSION` at start and every 6 hours, and the page offers "Update and restart" for a newer version. The other channel, "the version an instance serves", follows one instance and offers whatever version it hands out, older ones included, under that instance's rules (dev keys, accept unsigned). It checks again as soon as that instance moves to another version. Nothing updates without that click. The supervisor downloads the binary next to its own and checks it like a worker binary. Only then does it rename it over the running binary and keep the bundle beside it as `<binary>.sigstore.json`. It then stops its workers, which remove their sandboxes, and execs the new version, which reconnects to the same rooms. On a failed check it keeps the current binary and shows the reason. The binary's directory must be writable by the user, as `~/.local/bin` is.
+
+Next to its version, the page says whether the running supervisor is project-signed. It checks its own binary against `<binary>.sigstore.json`, or against the release's bundle on GitHub. A version that is not a release, or that GitHub does not have, shows "dev build"; a binary its bundle does not match shows "NOT project-signed".
 
 `grill-room-daemon check` checks Docker and the credentials, builds the embedded sandbox image unless one is pinned, runs `claude -p --model haiku "say ok"` in a throwaway sandbox, checks that only the two proxies are reachable and that the egress proxy refuses `api.anthropic.com`, and counts the real token's occurrences in the container, its volumes and its inspect output. It spends one Claude request.
 
@@ -315,6 +338,7 @@ At start, and again each time it reconnects, the daemon asks the room server for
 | `GRILL_ROOM_DAEMON_STATE_DIR` | the platform's directories, above | one directory for the config, state and cache roots |
 | `GRILL_ROOM_DAEMON_CACHE_MB` | `1024` | size cap of each instance's workspace cache, least recently used files dropped first; `0` fetches every workspace whole |
 | `GRILL_ROOM_DAEMON_BROWSER` | `auto` | `none` prints the page link instead of opening it |
+| `GRILL_ROOM_GITHUB_URL` | `https://github.com/babs/grill-room` | the repository the GitHub update channel reads releases from |
 | `GRILL_ROOM_SANDBOX_IMAGE` | none | pins the sandbox image, e.g. `grill-room-sandbox:local` from `make sandbox-image`; skips the pull and the build |
 | `GRILL_ROOM_AGENT_MODEL` | Claude Code's default | `--model` for the turns of a persona that asks for none, e.g. `haiku` |
 | `GRILL_ROOM_MAX_MODEL` | no cap | host cap on the model: `haiku`, `sonnet`, `opus`, `fable`, or a model id naming one |

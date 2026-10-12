@@ -31,15 +31,21 @@ type Backend interface {
 	SetAllowlist(ctx context.Context, list []string) error
 	Denied(ctx context.Context, n int) ([]sandbox.Denied, error)
 	Recheck(ctx context.Context)
-	Update(ctx context.Context) error
-	Restart()
 }
 
-// hostBackend is a backend that runs instances and can start at login: the supervisor.
+// hostBackend is a backend that runs instances, checks and updates binaries, and can start at
+// login: the supervisor.
 type hostBackend interface {
 	Instances() ([]InstanceView, string)
 	Autostart() (bool, error)
 	SetAutostart(on bool) error
+	Trust() TrustView
+	AddDevKey(ctx context.Context, name string, pem []byte) error
+	RemoveDevKey(ctx context.Context, name string) error
+	SetRelax(id string, on bool, host string) error
+	SetUpdateChannel(channel, instance string) error
+	Update(ctx context.Context) error
+	Restart()
 }
 
 // Admin is the local admin page. Only someone holding a link this process printed or opened can
@@ -107,6 +113,10 @@ func (a *Admin) Handler() http.Handler {
 	mux.Handle("POST /api/allowlist", a.auth(a.allowlist))
 	mux.Handle("GET /api/denied", a.auth(a.denied))
 	mux.Handle("POST /api/autostart", a.auth(a.setAutostart))
+	mux.Handle("POST /api/dev-keys", a.auth(a.host(a.addDevKey)))
+	mux.Handle("POST /api/dev-keys/remove", a.auth(a.host(a.removeDevKey)))
+	mux.Handle("POST /api/relax", a.auth(a.host(a.relax)))
+	mux.Handle("POST /api/update-channel", a.auth(a.host(a.updateChannel)))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
@@ -204,6 +214,7 @@ func (a *Admin) status(w http.ResponseWriter, _ *http.Request) {
 		if on, err := h.Autostart(); err == nil {
 			v["autostart"] = on
 		}
+		v["trust"] = h.Trust()
 	}
 	writeJSON(w, http.StatusOK, v)
 }
@@ -298,11 +309,16 @@ func (a *Admin) recheck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// update applies the room server's newer daemon, then restarts into it. Nothing updates without
-// this approval (AC37).
-func (a *Admin) update(w http.ResponseWriter, _ *http.Request) {
+// update applies the supervisor's update, then restarts into it. Nothing updates without this
+// approval (001-AC37, 003-AC5).
+func (a *Admin) update(w http.ResponseWriter, r *http.Request) {
+	h, ok := a.d.(hostBackend)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
 	// The daemon's context, not the request's: a closed tab must not leave a half-done download.
-	if err := a.d.Update(a.ctx); err != nil {
+	if err := h.Update(a.ctx); err != nil {
 		code := http.StatusBadGateway
 		if errors.Is(err, errNoUpdate) {
 			code = http.StatusConflict
@@ -311,7 +327,73 @@ func (a *Admin) update(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-	a.d.Restart()
+	h.Restart()
+}
+
+// hostHandler is a handler for the supervisor's own settings.
+type hostHandler func(w http.ResponseWriter, r *http.Request, h hostBackend)
+
+// host serves next with the supervisor, or 404 for a backend that is not one.
+func (a *Admin) host(next hostHandler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		h, ok := a.d.(hostBackend)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		next(w, r, h)
+	}
+}
+
+func reply(w http.ResponseWriter, err error) {
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// addDevKey trusts a cosign public key for dev builds (003-AC4).
+func (a *Admin) addDevKey(w http.ResponseWriter, r *http.Request, h hostBackend) {
+	var req struct {
+		Name string `json:"name"`
+		PEM  string `json:"pem"`
+	}
+	if decodeJSON(w, r, &req) {
+		reply(w, h.AddDevKey(a.ctx, req.Name, []byte(req.PEM)))
+	}
+}
+
+func (a *Admin) removeDevKey(w http.ResponseWriter, r *http.Request, h hostBackend) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if decodeJSON(w, r, &req) {
+		reply(w, h.RemoveDevKey(a.ctx, req.Name))
+	}
+}
+
+// relax switches an instance's "accept unsigned" toggle; on needs its host typed (003-AC4).
+func (a *Admin) relax(w http.ResponseWriter, r *http.Request, h hostBackend) {
+	var req struct {
+		Instance string `json:"instance"`
+		Enabled  bool   `json:"enabled"`
+		Host     string `json:"host"`
+	}
+	if decodeJSON(w, r, &req) {
+		reply(w, h.SetRelax(req.Instance, req.Enabled, req.Host))
+	}
+}
+
+// updateChannel picks GitHub or an instance as the supervisor's update source (003-AC5).
+func (a *Admin) updateChannel(w http.ResponseWriter, r *http.Request, h hostBackend) {
+	var req struct {
+		Channel  string `json:"channel"`
+		Instance string `json:"instance"`
+	}
+	if decodeJSON(w, r, &req) {
+		reply(w, h.SetUpdateChannel(req.Channel, req.Instance))
+	}
 }
 
 func (a *Admin) stopDaemon(w http.ResponseWriter, _ *http.Request) {

@@ -17,11 +17,15 @@
 <header>
   <h1>grill-room daemon</h1>
   <span id="host"></span>
+  <span id="self-sig" class="badge" hidden></span>
   <button type="button" id="stop">Stop the daemon</button>
 </header>
 <p id="banner" role="alert" hidden></p>
+<p id="relax-banner" class="danger" role="alert" hidden>
+  Unsigned worker binaries are accepted for: <span id="relax-list"></span>. Switch it off below once you are done testing.
+</p>
 <p id="update" hidden>
-  Version <strong id="update-version"></strong> is available from the room server.
+  Version <strong id="update-version"></strong> of the supervisor is available from <span id="update-from"></span>.
   <button type="button" id="update-apply">Update and restart</button>
   <span id="update-status" role="status"></span>
 </p>
@@ -46,6 +50,42 @@
     <ul id="instances"></ul>
     <label><input id="autostart" type="checkbox"> Start at login</label>
     <span id="autostart-status" role="status"></span>
+  </section>
+  <section aria-labelledby="trust-title" id="trust-section" hidden>
+    <h2 id="trust-title">Signatures and updates</h2>
+    <dl>
+      <dt>This supervisor</dt><dd id="self-detail"></dd>
+      <dt>Trusted root</dt><dd id="root"></dd>
+      <dt>Last update check</dt><dd id="checked"></dd>
+    </dl>
+    <form id="channel-form">
+      <label>Update from
+        <select id="channel">
+          <option value="github">GitHub releases (default)</option>
+          <option value="instance">the version an instance serves</option>
+        </select>
+      </label>
+      <select id="channel-instance" aria-label="Instance to follow" hidden></select>
+      <button type="submit">Use this channel</button>
+      <span id="channel-status" role="status"></span>
+    </form>
+    <h3 id="relax-title">Unsigned binaries</h3>
+    <p class="hint">Off by default. While on, the instance's worker runs whatever binary it serves, signed or not: for testing local builds only. To switch it on, type the instance's host exactly as in its URL.</p>
+    <form id="relax-form">
+      <select id="relax-instance" aria-label="Instance"></select>
+      <label>Host <input id="relax-host" required size="30" autocomplete="off" spellcheck="false"></label>
+      <button type="submit">Accept unsigned binaries</button>
+      <span id="relax-status" role="status"></span>
+    </form>
+    <h3 id="keys-title">Trusted dev keys</h3>
+    <p class="hint">Worker binaries signed with one of these cosign public keys run like project releases. Keys also load from the dev-keys folder of the supervisor's config.</p>
+    <ul id="dev-keys"></ul>
+    <form id="key-form">
+      <label>Name <input id="key-name" required size="16" autocomplete="off" spellcheck="false" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,63}"></label>
+      <label>Public key <textarea id="key-pem" required rows="4" cols="50" spellcheck="false" placeholder="-----BEGIN PUBLIC KEY-----"></textarea></label>
+      <button type="submit">Trust this key</button>
+      <span id="key-status" role="status"></span>
+    </form>
   </section>
   <section aria-labelledby="host-title" class="per-instance">
     <h2 id="host-title">This machine</h2>

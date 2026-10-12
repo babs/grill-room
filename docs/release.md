@@ -76,7 +76,7 @@ The build fails when `dist/VERSION` differs from `VERSION`. Put `sandbox-image.t
 
 ## Dev signing
 
-Local builds can be signed with a cosign key pair, for a supervisor told to trust that key (003-AC4). Signing stays offline: no certificate, no Rekor entry.
+Local builds can be signed with a cosign key pair, for a supervisor told to trust that key (003-AC4): on its page under "Trusted dev keys", or as `dev-keys/<name>.pub` in its config root. Signing stays offline: no certificate, no Rekor entry.
 
 ```sh
 cosign generate-key-pair --output-key-prefix /path/to/dev-cosign   # asks for a password
