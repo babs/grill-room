@@ -20,6 +20,7 @@ test('a turn waiting for the host shows queued (host busy)', async ({ browser, r
     await approval.getByRole('button', { name: 'Approve' }).click();
     await expect(admin.locator('#pairing')).toHaveText('Paired. Connected.');
     await approval.close();
+    await admin.locator('#tab-settings').click();
     await admin.getByLabel('Turns at once, across every instance and room').fill('1');
     await admin.getByRole('button', { name: 'Set', exact: true }).click();
     await expect(admin.locator('#max-turns-status')).toHaveText('Saved.');

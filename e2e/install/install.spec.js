@@ -105,6 +105,7 @@ test('one-liner install, pairing, dev key, self-update, tampered release refused
     await expect(admin.locator('#instances')).toContainText('refused: signature refused', { timeout: 120_000 });
     expect(stored()).toBe('');
     // Trusted on the page, the key lets it run from bin/<version>/.
+    await admin.locator('#tab-update').click();
     await admin.locator('#key-name').fill('e2e');
     await admin.locator('#key-pem').fill(readFileSync(`${out}/e2e-cosign.pub`, 'utf8'));
     await admin.getByRole('button', { name: 'Trust this key' }).click();
@@ -136,6 +137,7 @@ test('one-liner install, pairing, dev key, self-update, tampered release refused
     await serve(request, `${out}/${versions[2]}`);
     await expect(next.locator('#instances')).toContainText('does not match the sha256', { timeout: 120_000 });
     await expect(next.locator('#update-version')).toHaveText(versions[2], { timeout: 60_000 });
+    await next.locator('#tab-update').click();
     await next.getByRole('button', { name: 'Update and restart' }).click();
     await expect(next.locator('#update-status')).toContainText('does not match the sha256');
     expect(installed()).toBe(sha256(readFileSync(`${out}/${versions[1]}/${bin}`)));

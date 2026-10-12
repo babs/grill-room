@@ -43,6 +43,7 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {
     const admin = await pairDaemon(alice, daemon);
+    await admin.locator('#tab-settings').click();
     await admin.getByLabel('Max model').selectOption('sonnet');
     await admin.getByLabel('Max effort').selectOption('high');
     await admin.getByRole('button', { name: 'Save' }).click();
@@ -96,6 +97,7 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
     await expect(lastAgent(bob).locator('.meta')).toContainText(/requested opus · effort medium → ran sonnet · effort medium · \+claude-side-fake \S+ \(host cap\)/);
 
     // Approve everything: Bob's new persona and his change wait for Alice.
+    await admin.locator('#tab-settings').click();
     await admin.getByLabel('Approve every new persona and persona change').check();
     await admin.getByRole('button', { name: 'Save' }).click();
     await expect(admin.locator('#settings-status')).toHaveText('Saved.');

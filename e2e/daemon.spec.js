@@ -24,7 +24,8 @@ test('daemon pairs through the room approval', async ({ browser, request, baseUR
     // 003-AC12: the Claude account is the supervisor's CLAUDE_CONFIG_DIR, read only, with its status.
     await expect(admin.locator('#accounts li').first()).toContainText('default');
     await expect(admin.locator('#accounts li').first()).toContainText('valid');
-    await expect(admin.locator('#alerts')).toBeHidden();
+    await expect(admin.locator('.alerts')).toHaveCount(0);
+    await admin.locator('#tab-settings').click();
     await expect(admin.locator('#can-host')).toBeVisible();
     // The page reloads into the same session; the one-time link is spent.
     await admin.reload();
@@ -53,6 +54,7 @@ test('daemon page cuts a worker off from Claude and lets it back', async ({ brow
     await expect(led).toHaveAttribute('aria-label', 'Grill ready', { timeout: 30_000 });
     await expect(alice.locator('#messages')).toContainText('Alice holds the agent(s).');
     await expect(admin.getByLabel('Claude account of ' + baseURL, { exact: true })).toHaveValue('default');
+    await admin.locator('#tab-instances').click();
     await admin.getByRole('button', { name: 'Cut it off from Claude' }).click();
     await expect(admin.locator('#instances')).toContainText('cut off: its turns end and none starts');
     await expect(led).toHaveAttribute('aria-label', 'Grill offline');
@@ -78,6 +80,7 @@ test('daemon page shows its signature and guards the unsigned toggle', async ({ 
     await expect(admin.locator('#relax-banner')).toBeHidden();
     await expect(admin.locator('#checked')).toContainText('127.0.0.1:9');
 
+    await admin.locator('#tab-instances').click();
     const card = admin.locator('#instances li.instance', { hasText: baseURL });
     const accept = card.getByRole('button', { name: 'Accept unsigned binaries' });
     const host = card.getByLabel('To accept its unsigned binaries, type its host');

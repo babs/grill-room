@@ -2,14 +2,21 @@
 body { margin: 0; color: #222; background: #fbf8f3; overflow-wrap: anywhere; }
 header { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1rem; padding: 0.6rem 1rem; border-bottom: 1px solid var(--line); }
 header h1 { font-size: 1.1rem; margin: 0; }
-header nav { display: flex; flex-wrap: wrap; gap: 0.2rem 0.8rem; font-size: 0.9rem; }
 header button { margin-left: auto; }
-#banner, #update, #alerts { margin: 0; padding: 0.6rem 1rem; background: var(--amber); }
-#alerts { padding-left: 2.2rem; }
-#alerts .alert-unsigned { font-weight: 600; }
+#banner, #update, .alerts { margin: 0; padding: 0.6rem 1rem; background: var(--amber); }
+#update { margin-top: 0.6rem; }
+.alerts { margin: 0.6rem 0 0; padding-left: 2.2rem; }
+.alerts .alert-unsigned { font-weight: 600; }
+/* The tab bar stays pinned while the page scrolls (005-AC17). */
+#tabs { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; gap: 0.2rem; padding: 0 1rem; background: #fbf8f3; border-bottom: 1px solid var(--line); }
+#tabs a { padding: 0.45rem 0.8rem; color: inherit; text-decoration: none; border-bottom: 3px solid transparent; }
+#tabs a[aria-current="page"] { border-bottom-color: #159f8c; font-weight: 600; }
+#tabs a:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.tab-badge { display: inline-block; min-width: 1.2em; padding: 0 0.3em; border-radius: 0.8em; background: var(--bad); color: #fff; font-size: 0.75rem; text-align: center; }
+.panel > section:first-of-type > h2, .panel > .alerts + section > h2 { border-top: 0; }
 #relax-banner, .danger { background: var(--bad); color: #fff; }
 #relax-banner { margin: 0; padding: 0.6rem 1rem; font-weight: 600; }
-main { padding: 0 1rem 1rem; max-width: 72rem; }
+main { padding: 0 1rem 1rem; }
 h2 { font-size: 1.05rem; margin: 1.4rem 0 0.4rem; padding-top: 0.4rem; border-top: 1px solid var(--line); }
 h3 { font-size: 0.95rem; margin: 1rem 0 0.3rem; }
 h4 { font-size: 0.9rem; margin: 0.8rem 0 0.3rem; }

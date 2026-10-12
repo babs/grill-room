@@ -103,6 +103,7 @@ test('mentions: turn states, stop, pending and offline', async ({ browser, reque
     await expect(alice.locator('#messages li.msg.system.flash')).toContainText('Grill turn failed: claude');
 
     // With "approve everything", Bob's new persona waits for the host.
+    await admin.locator('#tab-settings').click();
     await admin.getByLabel('Approve every new persona and persona change').check();
     await admin.getByRole('button', { name: 'Save' }).click();
     await expect(admin.locator('#settings-status')).toHaveText('Saved.');

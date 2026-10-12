@@ -93,21 +93,43 @@ function Header() {
       <h1>grill-room daemon</h1>
       <span id="host">${d ? d.status.host + ' · ' + d.status.version : ''}</span>
       ${t && html`<span id="self-sig" class=${'badge ' + cls}>${sig}</span>`}
-      <nav aria-label="Sections">
-        ${[['room', 'Room'], ['instances', 'Instances'], ['rooms', 'Rooms'], ['accounts', 'Accounts'], ['settings', 'Settings'],
-          ['monitoring', 'Monitoring'], ['logs', 'Logs']].map(([id, name]) => html`<a href=${'#' + id + '-section'}>${name}</a>`)}
-      </nav>
       <button type="button" id="stop" onClick=${stop} disabled=${stopped.value}>Stop the daemon</button>
     </header>`;
 }
 
-// Alerts are the page's warnings: logins near expiry, unsigned workers, full contexts and stuck
-// queues (003-AC29).
-function Alerts() {
-  const list = data.value?.alerts || [];
-  if (!list.length) return null;
-  return html`<ul id="alerts" role="alert">${list.map((a) => html`<li class=${'alert-' + a.kind}>${a.text}</li>`)}</ul>`;
+// The page's tabs (005-AC17), each a deep link (#accounts). Rooms comes first to the eye of whoever
+// pairs: the daemon opens its page there.
+const tabs = [['instances', 'Instances'], ['rooms', 'Rooms'], ['accounts', 'Accounts'], ['settings', 'Settings'],
+  ['monitoring', 'Monitoring'], ['update', 'Update']];
+/** @param {string} hash */
+const tabOf = (hash) => tabs.find(([id]) => '#' + id === hash)?.[0] || 'rooms';
+const tab = signal(tabOf(location.hash));
+addEventListener('hashchange', () => { tab.value = tabOf(location.hash); });
+
+// Each alert kind belongs to the tab that resolves it: logins near expiry, unsigned workers, full
+// contexts and stuck queues (003-AC29).
+const alertTab = /** @type {Record<string, string>} */ ({ account: 'accounts', unsigned: 'instances', context: 'rooms', queue: 'settings' });
+/** @param {string} id */
+const alertsOf = (id) => (data.value?.alerts || []).filter((a) => (alertTab[a.kind] || 'monitoring') === id);
+
+// TabBar stays pinned at the top; a tab with alerts, or an update waiting, shows their count.
+function TabBar() {
+  return html`<nav id="tabs" aria-label="Sections">${tabs.map(([id, name]) => {
+    const n = alertsOf(id).length + (id === 'update' && data.value?.status.update?.available ? 1 : 0);
+    return html`<a key=${id} id=${'tab-' + id} href=${'#' + id} aria-current=${tab.value === id ? 'page' : undefined}>${name}${n
+      ? html` <span class="tab-badge" title=${n + (n === 1 ? ' alert' : ' alerts')}>${n}</span>` : ''}</a>`;
+  })}</nav>`;
 }
+
+/** @param {{id: string}} p */
+function Alerts({ id }) {
+  const list = alertsOf(id);
+  if (!list.length) return null;
+  return html`<ul id=${'alerts-' + id} class="alerts" role="alert">${list.map((a) => html`<li class=${'alert-' + a.kind}>${a.text}</li>`)}</ul>`;
+}
+
+/** @param {{id: string, children?: any}} p */
+const Panel = ({ id, children }) => html`<div id=${'panel-' + id} class="panel" hidden=${tab.value !== id}><${Alerts} id=${id} />${children}</div>`;
 
 function RelaxBanner() {
   const relaxed = (data.value?.instances || []).filter((i) => i.accept_unsigned);
@@ -122,7 +144,7 @@ function UpdateOffer() {
   const u = data.value?.status.update;
   const [busy, setBusy] = useState(false);
   const [text, setText] = useState('');
-  if (!u?.available) return null;
+  if (!u?.available) return html`<p class="hint">${u?.running ? 'Downloading…' : 'No update waiting.'}</p>`;
   const apply = () => {
     setBusy(true);
     setText('Downloading…');
@@ -252,7 +274,7 @@ function Instances() {
   const d = /** @type {StatusReply} */ (data.value);
   if (!d.instances) return null;
   return html`<${Section} id="instances" title="Instances">
-    <p class="hint">One worker per room server, running the version that server hands out. The Room section above shows the last one you paired with.</p>
+    <p class="hint">One worker per room server, running the version that server hands out. The Rooms tab shows the last one you paired with.</p>
     <ul id="instances">${d.instances.map((i) => html`<${InstanceCard} key=${i.id} i=${i} current=${i.id === d.instance} />`)}</ul>
   <//>`;
 }
@@ -617,7 +639,6 @@ function Settings() {
       <${NumberForm} id="retention" label="Days the turn history keeps" value=${d.retention_days || 30} min=${1} max=${3650}
         button="Keep" path="/api/retention" field="days" />
       <${Autostart} />`}
-    <${Trust} />
     ${inst && html`<h3 id="instance-settings-title">Instance</h3>
       <p class="row"><label>Instance <select id="settings-instance" value=${id} onChange=${(/** @type {any} */ e) => { picked.value = e.currentTarget.value; }}>
         ${instances.map((i) => html`<option value=${i.id}>${i.url}</option>`)}
@@ -649,12 +670,16 @@ function App() {
   const live = d && !stopped.value;
   return html`
     <${Header} />
+    ${live && html`<${TabBar} />`}
     ${banner.value && html`<p id="banner" role="alert">${banner.value}</p>`}
-    ${live && html`<${Alerts} /><${RelaxBanner} /><${UpdateOffer} />`}
+    ${live && html`<${RelaxBanner} />`}
     ${live && html`<main id="main">
-      <${Room} /><${Instances} /><${Rooms} /><${Accounts} /><${Settings} />
-      ${d.instances && html`<${Monitoring} instances=${d.instances} />`}
-      <${Logs} />
+      <${Panel} id="instances"><${Instances} /><//>
+      <${Panel} id="rooms"><${Room} /><${Rooms} /><//>
+      <${Panel} id="accounts"><${Accounts} /><//>
+      <${Panel} id="settings"><${Settings} /><//>
+      <${Panel} id="monitoring">${d.instances && html`<${Monitoring} instances=${d.instances} />`}<${Logs} /><//>
+      <${Panel} id="update"><${Section} id="update" title="Update"><${UpdateOffer} /><${Trust} /><//><//>
     </main>`}`;
 }
 
