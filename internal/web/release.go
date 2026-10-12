@@ -2,7 +2,9 @@ package web
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"strings"
@@ -11,19 +13,30 @@ import (
 	"golang.org/x/mod/semver"
 )
 
-// DaemonTargets are the platforms a release ships a daemon for; Windows runs the linux build in WSL.
-var DaemonTargets = []string{"linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"}
+// DaemonTargets are the platforms a release ships a daemon for.
+var DaemonTargets = []string{"linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64", "windows-amd64", "windows-arm64"}
 
 // DaemonFile is the release file name of the daemon for target.
-func DaemonFile(target string) string { return "grill-room-daemon-" + target }
+func DaemonFile(target string) string {
+	if strings.HasPrefix(target, "windows-") {
+		// Windows runs a program only by its extension.
+		return "grill-room-daemon-" + target + ".exe"
+	}
+	return "grill-room-daemon-" + target
+}
+
+// bundleExt names a binary's sigstore bundle: <binary>.sigstore.json.
+const bundleExt = ".sigstore.json"
 
 // Release is the daemon release this server hands out (D28), as `make release` writes it: one
-// binary per target, its <binary>.sha256 file, and VERSION.
+// binary per target, its <binary>.sha256 file, VERSION, and, when signed, <binary>.sigstore.json.
 type Release struct {
 	Dir     string
 	Version string
 	// SHA256 maps a target to its binary's hex digest, as published in its .sha256 file.
 	SHA256 map[string]string
+	// Bundles maps a signed target to its bundle's download path; an unsigned build has none.
+	Bundles map[string]string
 }
 
 // LoadRelease reads the release in dir. Every target must be there: install.sh and the room page
@@ -38,7 +51,7 @@ func LoadRelease(dir string) (*Release, error) {
 	if err != nil {
 		return nil, fmt.Errorf("daemon release: %w", err)
 	}
-	r := &Release{Dir: dir, Version: strings.TrimSpace(string(b)), SHA256: map[string]string{}}
+	r := &Release{Dir: dir, Version: strings.TrimSpace(string(b)), SHA256: map[string]string{}, Bundles: map[string]string{}}
 	if !semver.IsValid(r.Version) {
 		return nil, fmt.Errorf("daemon release: VERSION %q is not a semver like v1.2.3", r.Version)
 	}
@@ -57,6 +70,20 @@ func LoadRelease(dir string) (*Release, error) {
 			return nil, fmt.Errorf("daemon release: %w", err)
 		}
 		r.SHA256[t] = sum
+		// Opened, not stat'ed: an unreadable bundle (cosign writes them 0600) must fail here, not 404.
+		bf, err := root.Open(f + bundleExt)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("daemon release: %w", err)
+		}
+		st, err := bf.Stat()
+		_ = bf.Close()
+		if err != nil || !st.Mode().IsRegular() {
+			return nil, fmt.Errorf("daemon release: %s%s is not a readable file", f, bundleExt)
+		}
+		r.Bundles[t] = "/download/" + f + bundleExt
 	}
 	return r, nil
 }
@@ -64,14 +91,14 @@ func LoadRelease(dir string) (*Release, error) {
 // daemonVersion tells daemons and the room page what this server hands out. Public: install.sh
 // and a daemon that is not paired yet have no token.
 func (s *Server) daemonVersion(w http.ResponseWriter, _ *http.Request) {
-	v := map[string]any{"version": "", "sha256": map[string]string{}, "sandbox_image": s.opts.SandboxImage}
+	v := map[string]any{"version": "", "sha256": map[string]string{}, "bundles": map[string]string{}, "sandbox_image": s.opts.SandboxImage}
 	if r := s.opts.Release; r != nil {
-		v["version"], v["sha256"] = r.Version, r.SHA256
+		v["version"], v["sha256"], v["bundles"] = r.Version, r.SHA256, r.Bundles
 	}
 	writeJSON(w, http.StatusOK, v)
 }
 
-// download serves a release binary or its .sha256 file, by exact name only.
+// download serves a release binary, its .sha256 file or its sigstore bundle, by exact name only.
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	rel := s.opts.Release
 	if rel == nil {
@@ -81,7 +108,8 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("file")
 	known := false
 	for _, t := range DaemonTargets {
-		known = known || name == DaemonFile(t) || name == DaemonFile(t)+".sha256"
+		f := DaemonFile(t)
+		known = known || name == f || name == f+".sha256" || (name == f+bundleExt && rel.Bundles[t] != "")
 	}
 	if !known {
 		httpError(w, http.StatusNotFound, "no such file")
@@ -100,8 +128,11 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
-	if strings.HasSuffix(name, ".sha256") {
+	switch {
+	case strings.HasSuffix(name, ".sha256"):
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	case strings.HasSuffix(name, bundleExt):
+		w.Header().Set("Content-Type", "application/json")
 	}
 	// The names stay the same from one release to the next.
 	w.Header().Set("Cache-Control", "no-cache")

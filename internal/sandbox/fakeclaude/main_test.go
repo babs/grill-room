@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,9 @@ func call(t *testing.T, cwd, home, prompt string, args ...string) (out, int) {
 }
 
 func TestFakeClaude(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake claude runs in the Linux sandbox only; it names projects from POSIX paths")
+	}
 	cwd, home := t.TempDir(), t.TempDir()
 	for _, d := range []string{"docs", "uploads", "transcript"} {
 		if err := os.Mkdir(filepath.Join(cwd, d), 0o755); err != nil {
@@ -35,7 +39,8 @@ func TestFakeClaude(t *testing.T) {
 		}
 	}
 	_ = os.WriteFile(filepath.Join(cwd, "uploads", "1-a.pdf"), []byte("%PDF"), 0o444)
-	_ = os.WriteFile(filepath.Join(cwd, "transcript", "2026-10-10.md"), []byte("- FAKE_MARK"), 0o444)
+	_ = os.Mkdir(filepath.Join(cwd, "transcript", "2026-10-10"), 0o755)
+	_ = os.WriteFile(filepath.Join(cwd, "transcript", "2026-10-10", "001.md"), []byte("- FAKE_MARK"), 0o444)
 	_ = os.WriteFile(filepath.Join(cwd, "annotations.md"), []byte("### Annotation 7 on docs/x.md"), 0o444)
 
 	var buf bytes.Buffer
@@ -89,7 +94,7 @@ func TestFakeClaude(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(cwd, "annotations-new.json")); string(b) != `[{"body":"fake question","doc":"uploads/2-plan.md","exact":"Rollback"}]` {
 		t.Fatalf("new annotations %q", b)
 	}
-	if o, _ := call(t, cwd, home, "FAKE_LIST"); o.Result != "transcript: 2026-10-10.md; FAKE_MARK found: true" {
+	if o, _ := call(t, cwd, home, "FAKE_LIST"); o.Result != "transcript: 2026-10-10/001.md; FAKE_MARK found: true" {
 		t.Fatalf("list %+v", o)
 	}
 	// 002-AC18: the persona's text and effort, as the daemon passes them.
@@ -100,6 +105,48 @@ func TestFakeClaude(t *testing.T) {
 	}
 	if o, code := call(t, cwd, home, "FAKE_WHOAMI"); code != 1 || !o.IsError {
 		t.Fatalf("whoami without a system prompt %+v", o)
+	}
+	// 003-AC24: --autocompact as passed, and a context use that grows with the session.
+	if o, _ := call(t, cwd, home, "FAKE_AUTOCOMPACT", "--autocompact", "200000"); o.Result != "autocompact 200000" {
+		t.Fatalf("autocompact %+v", o)
+	}
+	if o, _ := call(t, cwd, home, "FAKE_AUTOCOMPACT"); o.Result != "autocompact auto" {
+		t.Fatalf("no autocompact %+v", o)
+	}
+	contextOf := func(prompt string, args ...string) (tokens, window int64) {
+		var buf bytes.Buffer
+		run(append([]string{"-p"}, args...), strings.NewReader(prompt), &buf, cwd, home)
+		var r struct {
+			Usage      map[string]int64 `json:"usage"`
+			ModelUsage map[string]struct {
+				ContextWindow int64 `json:"contextWindow"`
+			} `json:"modelUsage"`
+		}
+		if err := json.Unmarshal(buf.Bytes(), &r); err != nil {
+			t.Fatal(err)
+		}
+		return r.Usage["input_tokens"] + r.Usage["cache_read_input_tokens"] + r.Usage["cache_creation_input_tokens"], r.ModelUsage["claude-default-fake"].ContextWindow
+	}
+	small, w := contextOf("hi", "--resume", sid)
+	if larger, _ := contextOf(strings.Repeat("x", 4000), "--resume", sid); w != window || larger <= small {
+		t.Fatalf("context %d then %d, window %d", small, larger, w)
+	}
+	if full, _ := contextOf("FAKE_CONTEXT_FULL"); full != window*85/100 {
+		t.Fatalf("full context %d", full)
+	}
+	// 003-AC25: the room's handoff instructions: the last turn writes the note with the latest code
+	// word, the new session reads it back.
+	if o, _ := call(t, cwd, home, "## Handoff\n\nWrite docs/_handoff-Grill.md for it: the decisions.", "--resume", sid); o.Result != "Handoff note written." {
+		t.Fatalf("handoff write %+v", o)
+	}
+	if b, _ := os.ReadFile(filepath.Join(cwd, "docs", "_handoff-Grill.md")); string(b) != "# Handoff\n\nThe code word was PAPRIKA-42.\n" {
+		t.Fatalf("note %q", b)
+	}
+	if o, _ := call(t, cwd, home, "Your previous session wrote docs/_handoff-Grill.md for you: read it first"); o.Result != "Read docs/_handoff-Grill.md: The code word was PAPRIKA-42." {
+		t.Fatalf("handoff read %+v", o)
+	}
+	if o, code := call(t, cwd, home, "Your previous session wrote docs/_handoff-Nobody.md for you"); code != 1 || !o.IsError {
+		t.Fatalf("missing note %+v", o)
 	}
 	// 002-AC31: the skills of --plugin-dir run from their own folder; without it, none.
 	plugin := filepath.Join(home, "plugin")
@@ -132,7 +179,8 @@ func TestFakeClaude(t *testing.T) {
 		t.Fatalf("slow %+v", o)
 	}
 	b, _ := os.ReadFile(filepath.Join(home, ".claude", "projects", strings.ReplaceAll(cwd, "/", "-"), sid+".jsonl"))
-	if n := strings.Count(string(b), "\n"); n != 4 {
+	// Two lines per turn of the session: the first prompt, the recall, two context reads, the note.
+	if n := strings.Count(string(b), "\n"); n != 10 {
 		t.Fatalf("session holds %d lines", n)
 	}
 }

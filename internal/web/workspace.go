@@ -66,9 +66,12 @@ type promptInput struct {
 	Persona    string
 	Self       int64
 	NewSession bool
-	Msgs       []store.Message
-	Changes    []store.MessageChange
-	Anns       []store.Annotation
+	// Handoff is store.HandoffWrite for the last turn of a session, which writes the handoff note,
+	// and store.HandoffRead for the new session that reads it (003-AC25).
+	Handoff string
+	Msgs    []store.Message
+	Changes []store.MessageChange
+	Anns    []store.Annotation
 	// AnnCursor is the last annotation message the persona's previous turn saw.
 	AnnCursor int64
 	Paths     map[int64]string
@@ -89,14 +92,18 @@ func buildPrompt(in promptInput) string {
 	b.WriteString(`Your workspace is the current directory:
 - docs/: the documents the room's agents write, Markdown (.md) or HTML (.html). Edit them or add new ones; every change becomes a revision the room sees. Give a new document a name no upload has: your version of uploads/<id>-plan.md goes in docs/plan-revised.md, for example. A new document named like an upload is stored as <name>-agent.md.
 - uploads/: documents participants uploaded. They are read-only: never edit, move or delete them; write your own documents from them. Office files have a Markdown copy beside them, ending in .md.
-- transcript/: everything said in the room, one Markdown file per day.
+- transcript/: everything said in the room, a folder per UTC day (transcript/<YYYY-MM-DD>/) of Markdown files of 200 messages each, 001.md first. Only the last file of a day grows; an earlier one changes only when one of its lines was edited or deleted. Earlier turns may name transcript/<YYYY-MM-DD>.md: that layout is gone.
 - annotations.md: every annotation thread on the documents, with its id. Images attached to threads are in attachments/.
 - To answer annotation threads, write replies.json: [{"annotation": <id>, "body": "<your reply>"}]. Add "status": "done" to a reply that settles its thread; a participant who replies later reopens it.
 - To point the participants at a passage, any document included, uploads too, write annotations-new.json: [{"doc": "<its path here, like uploads/3-plan.md>", "exact": "<the passage, word for word as it reads, without Markdown marks>", "prefix": "<the few words before it>", "suffix": "<the few words after it>", "body": "<your question or remark>"}]. Use it for what needs an answer from someone, not to repeat your synthesis.
 
 `)
-	if in.NewSession {
-		b.WriteString("This is a new session: you remember no earlier turn. Read transcript/ for the room's history.\n\n")
+	doc := turn.DocsDir + "/" + turn.HandoffDoc(in.Persona)
+	switch {
+	case in.NewSession && in.Handoff == store.HandoffRead:
+		fmt.Fprintf(&b, "This is a new session: you remember no earlier turn. Your previous session wrote %s for you: read it first, then transcript/ for the room's history, oldest first.\n\n", doc)
+	case in.NewSession:
+		b.WriteString("This is a new session: you remember no earlier turn. Read transcript/ for the room's history, oldest first.\n\n")
 	}
 	msgs, changes, anns := in.Msgs, in.Changes, in.Anns
 	if len(msgs) == 0 && len(changes) == 0 && len(anns) == 0 {
@@ -134,6 +141,9 @@ func buildPrompt(in promptInput) string {
 		for _, a := range anns {
 			writeThread(&b, a, in.Paths, in.AnnCursor, in.Self)
 		}
+	}
+	if in.Handoff == store.HandoffWrite {
+		fmt.Fprintf(&b, "## Handoff\n\nThis is the last turn of your session: the host starts a new session for you after it, which remembers nothing of this one. Write %s for it: the decisions made, the current state, the open questions, and what to do next. The new session reads it, then transcript/.\n\n", doc)
 	}
 	b.WriteString("Your final answer is posted in the room as your synthesis: say what you changed and what you need from the participants. Keep it short.\n")
 	return b.String()
@@ -258,7 +268,15 @@ func (s *Server) walkWorkspace(ctx context.Context, t *store.Turn, visit wsFile)
 			}
 		}
 		if d.Kind == store.DocAgent {
-			if err := file(agentPath(d), 0o644, revision(d.Revisions)); err != nil {
+			n := d.Revisions
+			if t.BaseRevisions != nil {
+				var ok bool
+				// A document another turn wrote after this workspace was pinned stays out of it.
+				if n, ok = t.BaseRevisions[d.ID]; !ok {
+					continue
+				}
+			}
+			if err := file(agentPath(d), 0o644, revision(n)); err != nil {
 				return err
 			}
 			continue
@@ -349,19 +367,22 @@ func (s *Server) manifest(ctx context.Context, t *store.Turn) (*turn.Manifest, e
 	return m, nil
 }
 
-// writeTranscript writes the room's messages up to the turn's cursor, one file per UTC day.
+// writeTranscript writes the room's messages up to the turn's cursor: a folder per UTC day, of
+// chunks of turn.TranscriptChunk messages (003-AC23). Messages only ever append, so a full chunk
+// changes only when one of its messages is edited or deleted, and a daemon's cache keeps the rest.
+// The header names no room: a rename would rewrite every chunk.
 func (s *Server) writeTranscript(ctx context.Context, t *store.Turn, file wsFile) error {
-	room, err := s.bus.Store.Room(ctx, t.RoomID)
-	if err != nil {
-		return err
-	}
 	var day string
+	var n int // messages of the day so far
 	var buf bytes.Buffer
 	flush := func() error {
-		if day == "" {
+		if buf.Len() == 0 {
 			return nil
 		}
-		return file(path.Join(turn.TranscriptDir, day+".md"), 0o444, bytesOf(buf.Bytes()))
+		chunk := fmt.Sprintf("%03d.md", (n-1)/turn.TranscriptChunk+1)
+		err := file(path.Join(turn.TranscriptDir, day, chunk), 0o444, bytesOf(buf.Bytes()))
+		buf.Reset()
+		return err
 	}
 	for after := int64(0); after < t.MessageCursor; {
 		batch, err := s.bus.Store.Messages(ctx, t.RoomID, after, replayBatch)
@@ -375,14 +396,16 @@ func (s *Server) writeTranscript(ctx context.Context, t *store.Turn, file wsFile
 			if m.ID > t.MessageCursor {
 				break
 			}
-			if d := m.TS.UTC().Format(time.DateOnly); d != day {
+			if d := m.TS.UTC().Format(time.DateOnly); d != day || n%turn.TranscriptChunk == 0 {
 				if err := flush(); err != nil {
 					return err
 				}
-				day = d
-				buf.Reset()
-				fmt.Fprintf(&buf, "# %s, %s (UTC)\n\n", room.Name, day)
+				if d != day {
+					day, n = d, 0
+				}
+				fmt.Fprintf(&buf, "# %s (UTC), part %d\n\n", day, n/turn.TranscriptChunk+1)
 			}
+			n++
 			buf.WriteString(transcriptLine(m, false))
 		}
 		after = batch[len(batch)-1].ID

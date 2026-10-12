@@ -58,7 +58,7 @@ type querier interface {
 
 func createProfile(ctx context.Context, db querier, recoveryHash, sessionHash string) (int64, error) {
 	var id int64
-	err := db.QueryRowContext(ctx, `INSERT INTO profiles(recovery_hash, created_at) VALUES(?,?) RETURNING id`, recoveryHash, now()).Scan(&id)
+	err := db.QueryRowContext(ctx, `INSERT INTO profiles(recovery_hash, created_at, uuid) VALUES(?,?,`+uuidSQL+`) RETURNING id`, recoveryHash, now()).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("create profile: %w", err)
 	}

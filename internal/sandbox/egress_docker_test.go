@@ -41,11 +41,10 @@ pandoc t.docx -t markdown`
 func TestEgressDocker(t *testing.T) {
 	img := dockerTest(t)
 	ctx := context.Background()
-	up, _ := url.Parse("http://127.0.0.1:1")
 	name := fmt.Sprintf("egress-%d", time.Now().UnixNano())
-	s := New(Config{Image: img, Name: name, Host: "testhost", Upstream: up,
+	s := New(Config{Image: img, Name: name, Proxy: "host-gateway:1",
 		Limits: Limits{CPUs: "1.5", Memory: "3g", EgressCPUs: "0.5", EgressMemory: "256m"}},
-		Docker, testCreds(t, "x", time.Now().Add(time.Hour)), zaptest.NewLogger(t, zaptest.Level(zap.WarnLevel)))
+		Docker, zaptest.NewLogger(t, zaptest.Level(zap.WarnLevel)))
 	t.Cleanup(func() { s.Close(context.Background()) })
 	if err := s.Start(ctx); err != nil {
 		t.Fatal(err)

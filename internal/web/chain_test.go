@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -95,7 +96,7 @@ func TestPresenceParts(t *testing.T) {
 		t.Fatal(err)
 	}
 	ps[0].Model, ps[0].EveryN = "opus", 3
-	got, err := e.srv.presencePreamble(t.Context(), r, &ps[0])
+	got, err := e.srv.presencePreamble(t.Context(), r, &ps[0], "pressed by Alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,7 +424,8 @@ func TestPresencePreamble(t *testing.T) {
 	if !ok {
 		t.Fatalf("prompt:\n%s", prompt)
 	}
-	golden(t, "testdata/presence.golden", preamble)
+	// Profile uuids are random: TestHumanTags pins their rendering.
+	golden(t, "testdata/presence.golden", regexp.MustCompile(`·[0-9a-f]{4}\b`).ReplaceAllString(preamble, "·<uuid>"))
 }
 
 // waitPresent waits until participant pid has a room stream open.

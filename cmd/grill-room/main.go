@@ -390,5 +390,10 @@ func newRegistry(b *bus.Bus, srv *web.Server) *prometheus.Registry {
 			Help: "Full workspace fetches by daemons that keep a workspace cache.", ConstLabels: prometheus.Labels{"reason": reason}},
 			func() float64 { return float64(srv.WorkspaceFallbacks(reason)) }))
 	}
+	for _, outcome := range web.ConflictOutcomes {
+		reg.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_turn_conflicts_total",
+			Help: "Turn results rejected because a document they edit changed during the turn.", ConstLabels: prometheus.Labels{"outcome": outcome}},
+			func() float64 { return float64(srv.TurnConflicts(outcome)) }))
+	}
 	return reg
 }

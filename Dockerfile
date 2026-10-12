@@ -1,6 +1,9 @@
 # pandoc's official static build: no libc or data files needed, so it runs on distroless static.
 FROM pandoc/minimal:3.11@sha256:fc17da3ba8f0a70b2ad5d7d4d61fed7d25da2e091cc3139f4d371f03b18641df AS pandoc
 
+# Empty unless `--build-context daemon-dist=<dir>` ships a prebuilt, signed daemon release.
+FROM scratch AS daemon-dist
+
 FROM golang:1.26-bookworm AS builder
 WORKDIR /src
 # go.sum* — glob, not a typo: a stdlib-only module has no go.sum and the build would fail hard.
@@ -24,8 +27,16 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w \
     -X 'main.Builder=$(go version)' \
     -X 'main.ProjectURL=${PROJECT_URL}'" \
     -o /app "${PKG}"
-# The daemon release this server hands out (D28), every target cross-compiled here.
-RUN make release DIST=/daemon VERSION="${VERSION}" COMMIT_HASH="${COMMIT_HASH}" BUILD_TS="${BUILD_TIMESTAMP}" PROJECT_URL="${PROJECT_URL}"
+# The daemon release this server hands out (D28): the prebuilt one with its bundles when given, of
+# this image's version only, else every target cross-compiled here, unsigned.
+RUN --mount=type=bind,from=daemon-dist,target=/daemon-dist \
+    if [ -f /daemon-dist/VERSION ]; then \
+      [ "$(cat /daemon-dist/VERSION)" = "${VERSION}" ] \
+        || { echo "daemon-dist holds $(cat /daemon-dist/VERSION), the image is ${VERSION}" >&2; exit 1; }; \
+      mkdir /daemon && cp /daemon-dist/VERSION /daemon-dist/grill-room-daemon-* /daemon/ && chmod -R a+rX /daemon; \
+    else \
+      make release DIST=/daemon VERSION="${VERSION}" COMMIT_HASH="${COMMIT_HASH}" BUILD_TS="${BUILD_TIMESTAMP}" PROJECT_URL="${PROJECT_URL}"; \
+    fi
 # distroless has no shell to create the data dir in the runtime stage.
 RUN mkdir /data
 

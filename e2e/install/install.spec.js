@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createRoom, invite, join } from '../voice/helpers.js';
 import { pairDaemon } from '../helpers.js';
@@ -9,7 +9,8 @@ import { pairDaemon } from '../helpers.js';
 const repo = resolve('..');
 const out = resolve('test-results', 'install');
 const box = 'grill-room-install-e2e';
-const versions = ['v0.0.1-e2e.1', 'v0.0.1-e2e.2', 'v0.0.1-e2e.3'];
+// Above v0.0.3, the first release that runs as a worker without Claude credentials.
+const versions = ['v0.0.4-e2e.1', 'v0.0.4-e2e.2', 'v0.0.4-e2e.3'];
 const bin = 'grill-room-daemon-linux-amd64';
 
 const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { encoding: 'utf8', ...opts });
@@ -38,10 +39,20 @@ async function adminLink(after = '') {
 }
 
 const installed = () => inBox('sha256sum /root/.local/bin/grill-room-daemon').split(' ')[0];
+const stored = () => inBox('ls -A /root/.local/state/grill-room/bin 2>/dev/null || true').trim();
 
 test.beforeAll(() => {
   mkdirSync(out, { recursive: true });
-  for (const v of versions) run('make', ['-C', repo, 'release', `DIST=${out}/${v}`, `VERSION=${v}`], { stdio: 'ignore' });
+  // A throwaway dev key with an empty password signs the releases, as `make dev-release` does.
+  rmSync(`${out}/e2e-cosign.key`, { force: true });
+  rmSync(`${out}/e2e-cosign.pub`, { force: true });
+  const cosign = { env: { ...process.env, COSIGN_PASSWORD: '' }, stdio: 'ignore' };
+  run('cosign', ['generate-key-pair', '--output-key-prefix', `${out}/e2e-cosign`], cosign);
+  for (const v of versions) {
+    run('make', ['-C', repo, 'dev-release', `DIST=${out}/${v}`, `VERSION=${v}`, `COSIGN_KEY=${out}/e2e-cosign.key`], cosign);
+    // cosign writes bundles 0600: the room server, another user in its container, must read them.
+    run('sh', ['-c', `chmod a+r "${out}/${v}"/*.sigstore.json`]);
+  }
   // The third release is tampered after publication: its binary no longer matches its .sha256.
   const f = `${out}/${versions[2]}/${bin}`;
   writeFileSync(f, Buffer.concat([readFileSync(f), Buffer.from('tampered')]));
@@ -60,11 +71,13 @@ test.afterAll(() => {
   run('docker', ['compose', '-f', `${repo}/compose.yaml`, 'up', '-d', '--force-recreate', 'grill-room'], { env: { ...process.env, GRILL_ROOM_BIND: bind }, stdio: 'ignore' });
 });
 
-// 001-AC36 001-AC37: the room's one-liner installs and starts the daemon on a clean Debian, the
-// daemon pairs through its local page, a newer release on the room server is offered there and
-// applied on approval (binary replaced, sha256 checked, restarted), and a tampered release is
-// refused by the daemon and by install.sh.
-test('one-liner install, pairing, self-update, tampered release refused', async ({ browser, request, baseURL }) => {
+// 001-AC36 001-AC37 003-AC2 003-AC4 003-AC5 003-AC7: the room's one-liner installs and starts the
+// daemon on a clean Debian, and it pairs through its local page. A newer dev-signed release on
+// the room server is refused for the worker until its key is trusted on the page, then runs from
+// bin/<version>/. Following the instance, the supervisor offers it, applies it on approval and
+// drops the copy it no longer needs. A tampered release is refused by the worker, by the update
+// and by install.sh.
+test('one-liner install, pairing, dev key, self-update, tampered release refused', async ({ browser, request, baseURL }) => {
   await serve(request, `${out}/${versions[0]}`);
   const room = await createRoom(request, 'Install e2e');
   const alice = await join(browser, await invite(request, room.id), 'Alice');
@@ -83,25 +96,48 @@ test('one-liner install, pairing, self-update, tampered release refused', async 
     expect(installed()).toBe(sha256(readFileSync(`${out}/${versions[0]}/${bin}`)));
     await expect(admin.locator('#host')).toContainText(versions[0]);
     await expect(admin.locator('#docker')).toHaveText('Docker is not installed');
+    await expect(admin.locator('#self-sig')).toHaveText('dev build');
+    await expect(admin.locator('#instances')).toContainText("Worker binary: the supervisor's own binary");
     await expect(admin.locator('#update')).toBeHidden();
 
-    // A newer release on the room server: offered after the daemon reconnects, applied on approval.
+    // A newer release on the room server: its worker restarts on it, and refuses an unknown key.
     await serve(request, `${out}/${versions[1]}`);
-    await expect(admin.locator('#update-version')).toHaveText(versions[1], { timeout: 120_000 });
+    await expect(admin.locator('#instances')).toContainText('refused: signature refused', { timeout: 120_000 });
+    expect(stored()).toBe('');
+    // Trusted on the page, the key lets it run from bin/<version>/.
+    await admin.locator('#key-name').fill('e2e');
+    await admin.locator('#key-pem').fill(readFileSync(`${out}/e2e-cosign.pub`, 'utf8'));
+    await admin.getByRole('button', { name: 'Trust this key' }).click();
+    await expect(admin.locator('#instances')).toContainText(`running, ${versions[1]}`, { timeout: 60_000 });
+    await expect(admin.locator('#instances')).toContainText('Worker binary: signed with the dev key e2e');
+    await expect(admin.locator('#pairing')).toHaveText('Paired. Connected.', { timeout: 30_000 });
+    expect(stored()).toBe(versions[1]);
+    expect(inBox(`sha256sum /root/.local/state/grill-room/bin/${versions[1]}/${bin}`).split(' ')[0]).toBe(sha256(readFileSync(`${out}/${versions[1]}/${bin}`)));
+
+    // The supervisor follows the instance: the release is offered, applied on approval.
+    await admin.locator('#channel').selectOption('instance');
+    await admin.getByRole('button', { name: 'Use this channel' }).click();
+    await expect(admin.locator('#update-version')).toHaveText(versions[1], { timeout: 60_000 });
+    await expect(admin.locator('#update-from')).toHaveText(baseURL);
     await admin.getByRole('button', { name: 'Update and restart' }).click();
     await expect(admin.locator('#banner')).toContainText('Updated.');
     const next = await alice.context().newPage();
     await next.goto(await adminLink('grill-room-daemon: restarting'));
     await expect(next.locator('#host')).toContainText(versions[1]);
+    await expect(next.locator('#self-sig')).toHaveText('signed with a dev key');
     await expect(next.locator('#pairing')).toHaveText('Paired. Connected.', { timeout: 30_000 });
     await expect(next.locator('#update')).toBeHidden();
     expect(installed()).toBe(sha256(readFileSync(`${out}/${versions[1]}/${bin}`)));
+    // The worker now runs the supervisor's own binary: the stored copy is gone.
+    await expect(next.locator('#instances')).toContainText("Worker binary: the supervisor's own binary");
+    expect(stored()).toBe('');
 
-    // A tampered release: the daemon refuses it and keeps running the current binary.
+    // A tampered release: the worker and the update refuse it; the current binary stays.
     await serve(request, `${out}/${versions[2]}`);
-    await expect(next.locator('#update-version')).toHaveText(versions[2], { timeout: 120_000 });
+    await expect(next.locator('#instances')).toContainText('does not match the sha256', { timeout: 120_000 });
+    await expect(next.locator('#update-version')).toHaveText(versions[2], { timeout: 60_000 });
     await next.getByRole('button', { name: 'Update and restart' }).click();
-    await expect(next.locator('#update-status')).toContainText('sha256 mismatch');
+    await expect(next.locator('#update-status')).toContainText('does not match the sha256');
     expect(installed()).toBe(sha256(readFileSync(`${out}/${versions[1]}/${bin}`)));
     await expect(next.locator('#host')).toContainText(versions[1]);
 

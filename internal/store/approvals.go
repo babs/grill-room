@@ -86,7 +86,7 @@ func (s *Store) DecideCap(ctx context.Context, roomID string, id int64, d *Daemo
 		}
 		status, body := CapRefused, fmt.Sprintf("refused %s for %s: it keeps running at the host cap, %s.", asked, p.label(), runs)
 		if approve {
-			status, body = CapApproved, fmt.Sprintf("approved %s for %s on %s: it runs as asked from its next turn.", asked, p.label(), d.Name)
+			status, body = CapApproved, fmt.Sprintf("approved %s for %s: it runs as asked from its next turn.", asked, p.label())
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET cap_decision = ?, cap_daemon_id = ?, cap_model = ?, cap_effort = ? WHERE id = ?`,
 			status, d.ID, asked.Model, asked.Effort, id); err != nil {

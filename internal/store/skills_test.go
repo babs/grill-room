@@ -229,8 +229,8 @@ func TestSkillPinning(t *testing.T) {
 	}
 	turnSkills := func() []TurnSkill {
 		t.Helper()
-		tn := &Turn{RoomID: "a", ParticipantID: r.alice.ID, Host: "h", Prompt: "go", PersonaID: r.grill.ID, PersonaName: "Grill"}
-		if err := r.s.StartTurn(ctx, tn); err != nil {
+		tn := &Turn{RoomID: "a", ParticipantID: r.alice.ID, Prompt: "go", PersonaID: r.grill.ID, PersonaName: "Grill"}
+		if err := r.s.StartTurn(ctx, tn, false); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := r.s.FailTurn(ctx, "a", tn.ID, "test"); err != nil {

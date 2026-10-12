@@ -1,3 +1,6 @@
+# A dependency needing a newer Go must fail the build, not fetch a toolchain (spike S7).
+export GOTOOLCHAIN := local
+
 APP_NAME    := grill-room
 PKG         := ./cmd/grill-room
 VERSION     ?= v0.0.0
@@ -25,27 +28,38 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: build release run test test-docker e2e e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: ui-tools ui-vendor ui-check build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail e2e-supervisor stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME)-daemon ./cmd/grill-room-daemon
 
 # The daemon release the room server hands out (D28): one static binary per target, its sha256 file
-# (sha256sum format, checked by install.sh) and VERSION. Windows runs the linux build inside WSL.
+# (sha256sum format, checked by install.sh) and VERSION.
 DIST           ?= dist
-DAEMON_TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
+DAEMON_TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 # The room server refuses to start on a VERSION that is not semver: fail the build instead.
 release:
 	@echo '$(VERSION)' | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$$' \
 	  || { echo "VERSION '$(VERSION)' is not a semver like v1.2.3" >&2; exit 1; }
 	rm -rf '$(DIST)' && mkdir -p '$(DIST)'
 	for t in $(DAEMON_TARGETS); do \
-	  f=$(APP_NAME)-daemon-$${t%/*}-$${t#*/}; \
+	  f=$(APP_NAME)-daemon-$${t%/*}-$${t#*/}; [ $${t%/*} = windows ] && f=$$f.exe; \
 	  CGO_ENABLED=0 GOOS=$${t%/*} GOARCH=$${t#*/} go build -trimpath -ldflags="$(LDFLAGS)" -o '$(DIST)'/$$f ./cmd/grill-room-daemon || exit 1; \
 	  (cd '$(DIST)' && { sha256sum $$f 2>/dev/null || shasum -a 256 $$f; } > $$f.sha256) || exit 1; \
 	done
 	echo '$(VERSION)' > '$(DIST)/VERSION'
+
+# `make release` signed with a local cosign key pair (docs/release.md): COSIGN_KEY from .env, its
+# password from COSIGN_PASSWORD. Offline: no transparency log entry, nothing leaves the machine.
+dev-release: export COSIGN_PASSWORD := $(COSIGN_PASSWORD)
+dev-release: release
+	@test -n "$(COSIGN_KEY)" || { echo "COSIGN_KEY is not set, see .env.example" >&2; exit 1; }
+	for f in '$(DIST)'/$(APP_NAME)-daemon-*; do \
+	  case $$f in *.sha256) continue ;; esac; \
+	  cosign sign-blob --yes --key '$(COSIGN_KEY)' --use-signing-config=false --tlog-upload=false \
+	    --bundle "$$f.sigstore.json" "$$f" >/dev/null || exit 1; \
+	done
 
 run: build
 	./bin/$(APP_NAME)
@@ -58,12 +72,14 @@ test:
 # packages' sandboxes would otherwise compete for Docker and time out the turn waits.
 test-docker: sandbox-image sandbox-fake-image
 	GRILL_ROOM_TEST_DOCKER=1 GRILL_ROOM_SANDBOX_IMAGE=$(SANDBOX_IMAGE) GRILL_ROOM_SANDBOX_FAKE_IMAGE=$(SANDBOX_FAKE_IMAGE) \
-	  go test -race -p 1 -run 'Docker' ./internal/sandbox/ ./internal/daemon/
+	  go test -race -p 1 -run 'Docker' ./internal/sandbox/ ./internal/daemon/ ./cmd/grill-room-daemon/
 
 # Browser tests against a fresh server, in the installed Chrome; agent turns run in Docker with the
-# fake claude. Magic links run against a second server and a throwaway mailpit container.
+# fake claude. Magic links run against a second server and a throwaway mailpit container. The
+# server hands out the daemon's own version, so its workers run the daemon's binary: an unsigned
+# release at another version would be refused (003-AC2).
 e2e: build sandbox-fake-image
-	$(MAKE) release DIST=bin/e2e-release VERSION=v0.0.1
+	$(MAKE) release DIST=bin/e2e-release VERSION=$(VERSION)
 	cd e2e && pnpm install --frozen-lockfile && pnpm test && pnpm exec playwright test -c mail/playwright.config.js
 
 # Voice tests against the compose stack behind the local traefik: run `make dev-up` first.
@@ -88,6 +104,18 @@ e2e-install:
 e2e-lab: build
 	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c lab/playwright.config.js
 
+# 003-AC31: one supervisor serves a room on the compose stack and one on the lab deployment at once,
+# on two accounts: this machine's Claude Code login and the setup token in SETUP_TOKEN_FILE. The
+# compose stack must serve a release signed with the dev key DEV_KEY_PUB (docs/release.md, Dev
+# signing). SUPERVISOR_BIN picks the supervisor binary, default bin/grill-room-daemon. Two haiku
+# turns run at once: at most six real Claude requests.
+SUPERVISOR_BIN ?= bin/grill-room-daemon
+e2e-supervisor: build
+	@test -n "$(SETUP_TOKEN_FILE)" && test -n "$(DEV_KEY_PUB)" || { echo "set SETUP_TOKEN_FILE and DEV_KEY_PUB" >&2; exit 2; }
+	cd e2e && pnpm install --frozen-lockfile && GRILL_ROOM_E2E_SETUP_TOKEN_FILE='$(abspath $(SETUP_TOKEN_FILE))' \
+	  GRILL_ROOM_E2E_DEV_KEY='$(abspath $(DEV_KEY_PUB))' GRILL_ROOM_E2E_SUPERVISOR='$(abspath $(SUPERVISOR_BIN))' \
+	  pnpm exec playwright test -c supervisor/playwright.config.js
+
 # Magic links against the lab deployment and its mailpit (K8S_MAILPIT_URL in .env); no Claude request.
 e2e-lab-mail:
 	cd e2e && pnpm install --frozen-lockfile && GRILL_ROOM_E2E_LAB=1 pnpm exec playwright test -c mail/playwright.config.js
@@ -108,13 +136,58 @@ stt-image:
 cover:
 	go test -race -coverprofile=coverage.txt ./... && go tool cover -func=coverage.txt | tail -1
 
-lint:
+# The supervisor against real GitHub releases (003-AC2, 003-AC7): one instance per release in
+# RELEASES, and one serving a dev-signed local build. Needs gh and the network.
+RELEASES ?= v0.0.1 v0.0.2
+test-release:
+	for v in $(RELEASES); do gh release download "$$v" -R babs/grill-room -D bin/releases/$$v --clobber || exit 1; done
+	GRILL_ROOM_TEST_RELEASES='$(foreach v,$(RELEASES),$(CURDIR)/bin/releases/$(v))' go test -race -count=1 -run TestReleases -v ./cmd/grill-room-daemon/
+
+# Two real haiku turns, one on this machine's Claude Code login, one on the setup token in
+# SETUP_TOKEN_FILE, then the token scan of workers and sandboxes and the privacy grep of the rooms
+# (003-AC14, 003-AC17). TMPDIR must be short: the supervisor's socket lives under it.
+test-live-accounts: sandbox-image
+	@test -n "$(SETUP_TOKEN_FILE)" || { echo "set SETUP_TOKEN_FILE to a file holding a claude setup-token token"; exit 2; }
+	GRILL_ROOM_TEST_SETUP_TOKEN_FILE='$(abspath $(SETUP_TOKEN_FILE))' GRILL_ROOM_TEST_SANDBOX_IMAGE=$(SANDBOX_IMAGE) \
+	  go test -count=1 -run TestLiveAccounts -v ./cmd/grill-room-daemon/
+
+# The trust tests in a container with no network (003-AC3): the embedded trusted root verifies the
+# v0.0.1 release bundle, and TUF is unreachable.
+test-offline:
+	CGO_ENABLED=0 go test -c -o bin/trust.test ./internal/trust/
+	docker run --rm --network none -e GRILL_ROOM_TEST_OFFLINE=1 -v '$(CURDIR)/internal/trust:/src:ro' \
+	  -v '$(CURDIR)/bin/trust.test:/trust.test:ro' -w /src debian:stable-slim /trust.test -test.v -test.run 'Offline|Release|DevKey'
+
+# The admin page's libraries, pinned in tools/ui/package.json and copied unmodified with their
+# licenses: no CDN, no build step. index.html maps the bare imports to them.
+UI_VENDOR := internal/daemon/ui/vendor
+UI_MODULES := preact/dist/preact.mjs:preact.js preact/hooks/dist/hooks.mjs:preact-hooks.js \
+  @preact/signals-core/dist/signals-core.mjs:signals-core.js @preact/signals/dist/signals.mjs:signals.js \
+  htm/dist/htm.mjs:htm.js htm/preact/index.mjs:htm-preact.js
+ui-tools:
+	cd tools/ui && pnpm install --frozen-lockfile
+
+ui-vendor: ui-tools
+	rm -rf '$(UI_VENDOR)' && mkdir -p '$(UI_VENDOR)'
+	for m in $(UI_MODULES); do cp "tools/ui/node_modules/$${m%%:*}" '$(UI_VENDOR)'/"$${m#*:}" || exit 1; done
+	for p in preact htm @preact/signals @preact/signals-core; do \
+	  cp "tools/ui/node_modules/$$p/LICENSE" '$(UI_VENDOR)'/LICENSE-"$$(echo $$p | tr -d @ | tr / -)" || exit 1; \
+	  echo "$$p $$(node -p "require('./tools/ui/node_modules/$$p/package.json').version")"; \
+	done > '$(UI_VENDOR)/VERSIONS'
+
+# The page's JSDoc types, checked by tsc (003 Phase 7).
+ui-check: ui-tools
+	cd tools/ui && pnpm exec tsc -p tsconfig.json
+
+lint: ui-check
 	golangci-lint run ./...
 	@out=$$(git ls-files -co --exclude-standard '*.go' | xargs gofmt -l); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 	git ls-files -co --exclude-standard '*.sh' | xargs shellcheck
 
+# DAEMON_DIST=<dir> ships that daemon release (a GitHub release or `make dev-release`, bundles
+# included) instead of building an unsigned one in the image.
 docker-build:
-	docker build -t $(APP_NAME):local \
+	docker build -t $(APP_NAME):local $(if $(DAEMON_DIST),--build-context daemon-dist='$(DAEMON_DIST)') \
 	  --build-arg VERSION=$(VERSION) \
 	  --build-arg COMMIT_HASH=$(COMMIT_HASH) \
 	  --build-arg BUILD_TIMESTAMP=$(BUILD_TS) \

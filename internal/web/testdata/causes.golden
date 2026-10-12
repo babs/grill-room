@@ -1,0 +1,7 @@
+button: Why you are running: pressed by Alice
+call: Why you are running: called by @Grill
+mention: Why you are running: @mention by Alice: "@Grill is the rollback ready for Friday, and who s…"
+every_n: Why you are running: every round
+rerun: Why you are running: re-run after a conflict on synthesis.md
+handoff write: Why you are running: the host Alice asked for a handoff note before a new session
+handoff read: Why you are running: handoff from your previous session

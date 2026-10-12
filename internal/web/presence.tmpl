@@ -4,6 +4,7 @@ cut at about 100 characters after rendering, so keep what matters at the start o
 
 Room: {{.Room}}
 You: @{{.Self.Name}}, {{.Self.Level}}, {{.Self.Trigger}}
+Why you are running: {{or .Why "asked for a turn"}}
 {{- range .Others}}
 Agent @{{.Name}}: {{.Level}}, {{.State}}, turns done: {{.Turns}}, {{.Trigger}}
 {{- if .Last}}

@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -20,7 +22,7 @@ func TestConfig(t *testing.T) {
 	t.Setenv("GRILL_ROOM_DAEMON_BROWSER", "")
 	t.Setenv("GRILL_ROOM_SANDBOX_IMAGE", "")
 	cfg, err := loadConfig()
-	if err != nil || cfg.StateDir != "/state" || cfg.Browser != "auto" || cfg.Image != "" || cfg.CacheMB != 1024 ||
+	if err != nil || cfg.Paths != (daemon.Paths{Config: "/state", State: "/state", Cache: "/state"}) || cfg.Legacy != "/state" || cfg.Browser != "auto" || cfg.Image != "" || cfg.CacheMB != 1024 ||
 		cfg.Limits != (sandbox.Limits{CPUs: "2", Memory: "4g", EgressCPUs: "0.5", EgressMemory: "256m"}) {
 		t.Fatalf("cfg = %+v, %v", cfg, err)
 	}
@@ -54,7 +56,14 @@ func TestConfig(t *testing.T) {
 		{Config{Browser: "auto", LogLevel: "info", Limits: sandbox.Limits{EgressCPUs: "-1"}}, false},
 		{Config{Browser: "auto", LogLevel: "info", Limits: sandbox.Limits{Memory: "4 GB"}}, false},
 		{Config{Browser: "auto", LogLevel: "info", Limits: sandbox.Limits{EgressMemory: "--privileged"}}, false},
+		// 003-AC5: the GitHub update channel needs a repository URL.
+		{Config{Browser: "auto", LogLevel: "info", GitHub: "http://127.0.0.1:8080/repo"}, true},
+		{Config{Browser: "auto", LogLevel: "info", GitHub: "ftp://github.com/babs/grill-room"}, false},
+		{Config{Browser: "auto", LogLevel: "info", GitHub: "github.com/babs/grill-room"}, false},
 	} {
+		if tc.cfg.GitHub == "" {
+			tc.cfg.GitHub = "https://github.com/babs/grill-room"
+		}
 		if err := tc.cfg.Validate(); (err == nil) != tc.ok {
 			t.Errorf("Validate(%+v) = %v", tc.cfg, err)
 		}
@@ -164,17 +173,38 @@ func TestRunServesAdminPage(t *testing.T) {
 	}
 }
 
-// A restarted daemon must find its own sandbox again; two daemons must never share one.
-func TestSandboxName(t *testing.T) {
-	a := daemon.Room{Base: "https://rooms.example", ID: "abc"}
-	b := daemon.Room{Base: "https://rooms.example", ID: "abd"}
-	n := sandboxName("/state/one", a)
-	if len(n) != 12 || n != sandboxName("/state/one", a) {
-		t.Fatalf("name %q not stable", n)
+// A state dir too deep for a Unix socket path keeps the supervisor and its page up, without the
+// handoff socket.
+func TestRunWithoutHandoffSocket(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("named pipes have no path limit")
 	}
-	for _, other := range []string{sandboxName("/state/two", a), sandboxName("/state/one", b)} {
-		if other == n {
-			t.Fatalf("names collide: %q", n)
+	t.Setenv("GRILL_ROOM_DAEMON_STATE_DIR", filepath.Join(t.TempDir(), strings.Repeat("x", 120)))
+	t.Setenv("GRILL_ROOM_DAEMON_BROWSER", "none")
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	stderr := &syncBuf{}
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, nil, stderr) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(stderr.String(), "Admin page:") {
+		if time.Now().After(deadline) {
+			t.Fatalf("no admin link in: %s", stderr.String())
 		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil || !strings.Contains(stderr.String(), "handoff_socket_failed") {
+		t.Fatalf("run: %v\n%s", err, stderr.String())
+	}
+}
+
+// 003-AC14: workers get the supervisor's environment minus anything that may carry a Claude token
+// or name an account.
+func TestWorkerEnv(t *testing.T) {
+	got := workerEnv([]string{"PATH=/bin", "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-x", "ANTHROPIC_API_KEY=k", "ANTHROPIC_AUTH_TOKEN=t",
+		"CLAUDE_CONFIG_DIR=/home/a/.claude-work", "GRILL_ROOM_DAEMON_STATE_DIR=/s", "HOME=/home/a"})
+	if strings.Join(got, " ") != "PATH=/bin GRILL_ROOM_DAEMON_STATE_DIR=/s HOME=/home/a" {
+		t.Fatalf("worker env %v", got)
 	}
 }

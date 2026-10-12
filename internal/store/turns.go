@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/babs/grill-room/internal/anchor"
 	"github.com/babs/grill-room/internal/render"
+	"github.com/babs/grill-room/internal/turn"
 )
 
 // Turn statuses.
@@ -33,16 +35,20 @@ var (
 	ErrSessionGap = errors.New("session upload does not continue the stored session")
 )
 
+// ConflictError rejects a turn's result: it edits Doc, which another turn revised since this turn's
+// workspace was built (003-AC21).
+type ConflictError struct{ Doc string }
+
+func (e *ConflictError) Error() string { return "conflict on " + e.Doc }
+
 // Turn is one press of the agent button and its run on the host's daemon.
 type Turn struct {
 	ID     int64  `json:"id"`
 	RoomID string `json:"room_id"`
 	// ParticipantID pressed the button.
-	ParticipantID int64 `json:"participant_id"`
-	DaemonID      int64 `json:"-"`
-	// Host names the daemon's machine, for error messages.
-	Host   string `json:"host"`
-	Status string `json:"status"`
+	ParticipantID int64  `json:"participant_id"`
+	DaemonID      int64  `json:"-"`
+	Status        string `json:"status"`
 	// PersonaID is the room persona the turn runs. PersonaName, PersonaText, ReqModel and ReqEffort
 	// are that persona as the turn started: a change during the turn applies to the next (002-AC15).
 	PersonaID   int64  `json:"persona_id,omitempty"`
@@ -69,8 +75,23 @@ type Turn struct {
 	Prompt       string     `json:"-"`
 	Error        string     `json:"error,omitempty"`
 	Report       TurnReport `json:"report"`
-	StartedAt    time.Time  `json:"started_at"`
-	EndedAt      *time.Time `json:"ended_at,omitempty"`
+	// StartedAt is when the turn started running: a turn the host's daemon queued starts when it
+	// leaves that queue.
+	StartedAt time.Time  `json:"started_at"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	// HostQueued is set while the host's daemon holds the turn in its local queue, waiting under
+	// the host's cap: the room shows "queued (host busy)" (003-AC18).
+	HostQueued bool `json:"host_queued,omitempty"`
+	// RerunOf is the turn whose result a conflict rejected, which this one runs again; Cause says
+	// why the turn runs (003-AC21).
+	RerunOf int64  `json:"rerun_of,omitempty"`
+	Cause   string `json:"cause,omitempty"`
+	// Handoff is HandoffWrite for a last turn writing a handoff note before a new session, and
+	// HandoffRead for that new session's first turn (003-AC25).
+	Handoff string `json:"handoff,omitempty"`
+	// BaseRevisions are the revisions of the agent documents in the turn's workspace, by document
+	// id, pinned when the daemon first fetches it; nil before.
+	BaseRevisions map[int64]int `json:"-"`
 }
 
 // TurnReport is what a turn changed, and what it tried to change and was refused.
@@ -205,21 +226,27 @@ type TurnOutcome struct {
 	SessionID     string
 	SessionOffset int64
 	Session       []byte
+	// ContextTokens and ContextWindow are the session's context use after the turn, 0 when unknown
+	// (003-AC24).
+	ContextTokens int64
+	ContextWindow int64
 	// Report carries the refusals found before the store; CompleteTurn adds what it applied.
 	Report TurnReport
 }
 
-const turnCols = `SELECT id, room_id, COALESCE(participant_id, 0), COALESCE(daemon_id, 0), host, status, fresh, resume,
+const turnCols = `SELECT id, room_id, COALESCE(participant_id, 0), COALESCE(daemon_id, 0), status, fresh, resume,
 	session_id, model, message_cursor, annotation_cursor, change_cursor, prompt, error, report, started_at, ended_at,
-	COALESCE(persona_id, 0), persona_name, persona_text, req_model, req_effort, effort FROM turns`
+	COALESCE(persona_id, 0), persona_name, persona_text, req_model, req_effort, effort,
+	host_queued_at IS NOT NULL, COALESCE(rerun_of, 0), cause, base_revisions, handoff FROM turns`
 
 func scanTurn(sc scanner) (*Turn, error) {
 	var t Turn
 	var report, started string
-	var ended sql.NullString
-	err := sc.Scan(&t.ID, &t.RoomID, &t.ParticipantID, &t.DaemonID, &t.Host, &t.Status, &t.Fresh, &t.Resume,
+	var ended, base sql.NullString
+	err := sc.Scan(&t.ID, &t.RoomID, &t.ParticipantID, &t.DaemonID, &t.Status, &t.Fresh, &t.Resume,
 		&t.SessionID, &t.Model, &t.MessageCursor, &t.AnnotationCursor, &t.ChangeCursor, &t.Prompt, &t.Error, &report, &started, &ended,
-		&t.PersonaID, &t.PersonaName, &t.PersonaText, &t.ReqModel, &t.ReqEffort, &t.Effort)
+		&t.PersonaID, &t.PersonaName, &t.PersonaText, &t.ReqModel, &t.ReqEffort, &t.Effort,
+		&t.HostQueued, &t.RerunOf, &t.Cause, &base, &t.Handoff)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -229,6 +256,11 @@ func scanTurn(sc scanner) (*Turn, error) {
 	if err := json.Unmarshal([]byte(report), &t.Report); err != nil {
 		return nil, fmt.Errorf("turn %d report: %w", t.ID, err)
 	}
+	if base.Valid {
+		if err := json.Unmarshal([]byte(base.String), &t.BaseRevisions); err != nil {
+			return nil, fmt.Errorf("turn %d base revisions: %w", t.ID, err)
+		}
+	}
 	t.StartedAt = parseTS(started)
 	if ended.Valid {
 		e := parseTS(ended.String)
@@ -237,35 +269,40 @@ func scanTurn(sc scanner) (*Turn, error) {
 	return &t, nil
 }
 
-// StartTurn records t as the room's running turn, for its persona. ErrTurnInProgress if one is
-// running already, ErrNotFound when the persona is not in the room or waits for the host's approval.
-func (s *Store) StartTurn(ctx context.Context, t *Turn) error {
+// StartTurn records t as a running turn of the room, for its persona. ErrTurnInProgress if one
+// runs already: any turn of the room, or with parallel on, one of the same persona (003-AC20).
+// ErrNotFound when the persona is not in the room or waits for the host's approval.
+func (s *Store) StartTurn(ctx context.Context, t *Turn, parallel bool) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("start turn: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
 	var running int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM turns WHERE room_id = ? AND status = 'running'`, t.RoomID).Scan(&running); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM turns WHERE room_id = ? AND status = 'running' AND (? = 0 OR persona_id = ?)`,
+		t.RoomID, parallel, t.PersonaID).Scan(&running); err != nil {
 		return fmt.Errorf("start turn: %w", err)
 	}
 	if running > 0 {
 		return ErrTurnInProgress
 	}
 	t.Status, t.StartedAt = TurnRunning, time.Now().UTC()
-	var pid, did any
+	var pid, did, rerun any
 	if t.ParticipantID != 0 {
 		pid = t.ParticipantID
 	}
 	if t.DaemonID != 0 {
 		did = t.DaemonID
 	}
+	if t.RerunOf != 0 {
+		rerun = t.RerunOf
+	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO turns(room_id, participant_id, daemon_id, host, status, fresh, resume, message_cursor, annotation_cursor, change_cursor, prompt, started_at,
-			persona_id, persona_name, persona_text, req_model, req_effort)
-		SELECT room_id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, id, ?, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? AND pending = 0`,
-		pid, did, t.Host, t.Status, t.Fresh, t.Resume, t.MessageCursor, t.AnnotationCursor, t.ChangeCursor, t.Prompt, t.StartedAt.Format(time.RFC3339Nano),
-		t.PersonaName, t.PersonaText, t.ReqModel, t.ReqEffort, t.PersonaID, t.RoomID)
+			persona_id, persona_name, persona_text, req_model, req_effort, rerun_of, cause, handoff)
+		SELECT room_id, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, id, ?, ?, ?, ?, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? AND pending = 0`,
+		pid, did, t.Status, t.Fresh, t.Resume, t.MessageCursor, t.AnnotationCursor, t.ChangeCursor, t.Prompt, t.StartedAt.Format(time.RFC3339Nano),
+		t.PersonaName, t.PersonaText, t.ReqModel, t.ReqEffort, rerun, t.Cause, t.Handoff, t.PersonaID, t.RoomID)
 	if err != nil {
 		return fmt.Errorf("start turn: %w", err)
 	}
@@ -291,9 +328,94 @@ func (s *Store) Turn(ctx context.Context, roomID string, id int64) (*Turn, error
 	return scanTurn(s.db.QueryRowContext(ctx, turnCols+` WHERE id = ? AND room_id = ?`, id, roomID))
 }
 
-// RunningTurn returns the room's running turn; ErrNotFound if none is.
-func (s *Store) RunningTurn(ctx context.Context, roomID string) (*Turn, error) {
-	return scanTurn(s.db.QueryRowContext(ctx, turnCols+` WHERE room_id = ? AND status = 'running'`, roomID))
+// RunningTurns lists the room's running turns, the ones its host's daemon queued included, oldest
+// first. Only a room in parallel mode runs more than one (003-AC20).
+func (s *Store) RunningTurns(ctx context.Context, roomID string) ([]Turn, error) {
+	rows, err := s.db.QueryContext(ctx, turnCols+` WHERE room_id = ? AND status = 'running' ORDER BY id`, roomID)
+	if err != nil {
+		return nil, fmt.Errorf("running turns: %w", err)
+	}
+	defer rows.Close()
+	out := []Turn{}
+	for rows.Next() {
+		t, err := scanTurn(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *t)
+	}
+	return out, rows.Err()
+}
+
+// SetHostQueued records that daemonID holds running turn id in its local queue, or that the turn
+// left it and starts running now (003-AC18). It reports whether that changed anything;
+// ErrTurnNotRunning when the turn ended or is another daemon's.
+func (s *Store) SetHostQueued(ctx context.Context, roomID string, id, daemonID int64, queued bool) (bool, error) {
+	q := `UPDATE turns SET host_queued_at = ? WHERE id = ? AND room_id = ? AND daemon_id = ? AND status = 'running' AND host_queued_at IS NULL`
+	if !queued {
+		q = `UPDATE turns SET host_queued_at = NULL, started_at = ? WHERE id = ? AND room_id = ? AND daemon_id = ? AND status = 'running' AND host_queued_at IS NOT NULL`
+	}
+	res, err := s.db.ExecContext(ctx, q, now(), id, roomID, daemonID)
+	if err != nil {
+		return false, fmt.Errorf("set host queued: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return false, fmt.Errorf("set host queued: %w", err)
+	} else if n > 0 {
+		return true, nil
+	}
+	t, err := s.Turn(ctx, roomID, id)
+	if err != nil {
+		return false, err
+	}
+	if t.Status != TurnRunning || t.DaemonID != daemonID {
+		return false, ErrTurnNotRunning
+	}
+	return false, nil
+}
+
+// PinBaseRevisions returns the revision of each agent document the turn's workspace holds, by
+// document id. The first call pins them to the latest ones: every later fetch of the workspace,
+// and the conflict check of its result, use the same (003-AC21).
+func (s *Store) PinBaseRevisions(ctx context.Context, roomID string, id int64) (map[int64]int, error) {
+	base := map[int64]int{}
+	err := s.withTx(ctx, "pin base revisions", func(tx *sql.Tx) error {
+		var pinned sql.NullString
+		if err := tx.QueryRowContext(ctx, `SELECT base_revisions FROM turns WHERE id = ? AND room_id = ?`, id, roomID).Scan(&pinned); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("pin base revisions: %w", err)
+		}
+		if pinned.Valid {
+			return json.Unmarshal([]byte(pinned.String), &base)
+		}
+		rows, err := tx.QueryContext(ctx, `SELECT d.id, MAX(r.n) FROM documents d JOIN revisions r ON r.document_id = d.id
+			WHERE d.room_id = ? AND d.kind = 'agent' GROUP BY d.id`, roomID)
+		if err != nil {
+			return fmt.Errorf("pin base revisions: %w", err)
+		}
+		for rows.Next() {
+			var doc int64
+			var n int
+			if err := rows.Scan(&doc, &n); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("pin base revisions: %w", err)
+			}
+			base[doc] = n
+		}
+		_ = rows.Close()
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("pin base revisions: %w", err)
+		}
+		b, err := json.Marshal(base)
+		if err != nil {
+			return fmt.Errorf("pin base revisions: %w", err)
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE turns SET base_revisions = ? WHERE id = ?`, string(b), id)
+		return err
+	})
+	return base, err
 }
 
 // LastTurn returns the room's latest turn, whatever its status; ErrNotFound if none ran.
@@ -315,9 +437,9 @@ func (s *Store) FailTurn(ctx context.Context, roomID string, id int64, reason st
 		return nil, fmt.Errorf("fail turn: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
-	var name string
+	var name, handoff string
 	err = tx.QueryRowContext(ctx, `UPDATE turns SET status = 'failed', error = ?, ended_at = ? WHERE id = ? AND room_id = ? AND status = 'running'
-		RETURNING persona_name`, reason, now(), id, roomID).Scan(&name)
+		RETURNING persona_name, handoff`, reason, now(), id, roomID).Scan(&name, &handoff)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -325,7 +447,11 @@ func (s *Store) FailTurn(ctx context.Context, roomID string, id int64, reason st
 		return nil, fmt.Errorf("fail turn: %w", err)
 	}
 	name = signer(name)
-	m := &Message{RoomID: roomID, Kind: KindSystem, Sender: name, Body: name + " turn failed: " + reason}
+	body := name + " turn failed: " + reason
+	if note := handoffFailed(name, handoff); note != "" {
+		body = strings.TrimSuffix(body, ".") + "." + note
+	}
+	m := &Message{RoomID: roomID, Kind: KindSystem, Sender: name, Body: body}
 	if err := insertMessage(ctx, tx, m); err != nil {
 		return nil, err
 	}
@@ -333,6 +459,99 @@ func (s *Store) FailTurn(ctx context.Context, roomID string, id int64, reason st
 		return nil, fmt.Errorf("fail turn: %w", err)
 	}
 	return m, nil
+}
+
+// RejectTurn ends running turn id of daemonID, whose result conflicts on doc (003-AC21). A first
+// conflict queues the turn again at the head of the room's queue, to run on the new version: the
+// persona's queued turn, if any, becomes that re-run. A re-run's conflict fails it. Both say so in
+// the room. It returns the message posted and whether the turn runs again; ErrTurnNotRunning when
+// the turn ended or is another daemon's.
+func (s *Store) RejectTurn(ctx context.Context, roomID string, id, daemonID int64, doc string) (*Message, bool, error) {
+	var m *Message
+	var rerun bool
+	err := s.withTx(ctx, "reject turn", func(tx *sql.Tx) error {
+		t, err := scanTurn(tx.QueryRowContext(ctx, turnCols+` WHERE id = ? AND room_id = ?`, id, roomID))
+		if err != nil {
+			return err
+		}
+		if t.Status != TurnRunning || t.DaemonID != daemonID {
+			return ErrTurnNotRunning
+		}
+		reason := (&ConflictError{Doc: doc}).Error()
+		if _, err := tx.ExecContext(ctx, `UPDATE turns SET status = 'failed', error = ?, ended_at = ? WHERE id = ?`, reason, now(), id); err != nil {
+			return fmt.Errorf("reject turn: %w", err)
+		}
+		name := signer(t.PersonaName)
+		m = &Message{RoomID: roomID, Kind: KindSystem, Sender: name, Body: name + " turn failed: " + reason + "." + handoffFailed(name, t.Handoff)}
+		if rerun = t.RerunOf == 0 && t.PersonaID != 0; rerun {
+			m.Body = name + " turn: " + doc + " changed while it ran, so its result is set aside and it runs again on the new version."
+			if err := queueRerun(ctx, tx, t, doc); err != nil {
+				return err
+			}
+		}
+		return insertMessage(ctx, tx, m)
+	})
+	return m, rerun, err
+}
+
+// Handoff kinds of a turn (003-AC25).
+const (
+	HandoffWrite = "write"
+	HandoffRead  = "read"
+)
+
+// HandoffCause is why a new session after a handoff runs, as its preamble says.
+const HandoffCause = "handoff from your previous session"
+
+// handoffFailed is the sentence a failed handoff turn adds to its failure line: no new session
+// starts; "" for any other turn.
+func handoffFailed(name, handoff string) string {
+	if handoff != HandoffWrite {
+		return ""
+	}
+	return " No handoff: " + name + " stays on its current session."
+}
+
+// handoffNext follows handoff turn t, done with report, in its transaction: a turn that wrote the
+// note queues the persona's new session in place of its queued turn, which the new session answers
+// anyway; one that did not says that the persona stays on its session (003-AC25).
+func handoffNext(ctx context.Context, tx *sql.Tx, t *Turn, report TurnReport) error {
+	doc := turn.HandoffDoc(t.PersonaName)
+	if !slices.Contains(report.Created, doc) && !slices.Contains(report.Revised, doc) {
+		return insertMessage(ctx, tx, &Message{RoomID: t.RoomID, Kind: KindSystem, Sender: signer(t.PersonaName),
+			Body: "No handoff: " + t.PersonaName + " did not write docs/" + doc + ", so it stays on its current session."})
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM turn_queue WHERE persona_id = ?`, t.PersonaID); err != nil {
+		return fmt.Errorf("queue handoff: %w", err)
+	}
+	return enqueue(ctx, tx, &QueuedTurn{RoomID: t.RoomID, PersonaID: t.PersonaID, ParticipantID: t.ParticipantID, Source: SourceButton,
+		Fresh: true, Cause: HandoffCause, Handoff: HandoffRead})
+}
+
+// queueRerun puts the re-run of turn t at the head of its room's queue, in place of its persona's
+// queued turn: the re-run reads everything since the persona's last turn, so it answers that one too.
+func queueRerun(ctx context.Context, tx *sql.Tx, t *Turn, doc string) error {
+	fresh := t.Fresh
+	var queued bool
+	err := tx.QueryRowContext(ctx, `DELETE FROM turn_queue WHERE persona_id = ? RETURNING fresh`, t.PersonaID).Scan(&queued)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return fmt.Errorf("queue re-run: %w", err)
+	default:
+		fresh = fresh || queued
+	}
+	var pid any
+	source := string(LinkCall)
+	if t.ParticipantID != 0 {
+		pid, source = t.ParticipantID, SourceButton
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO turn_queue(room_id, persona_id, participant_id, source, fresh, created_at, rerun_of, cause, handoff)
+		VALUES(?,?,?,?,?,?,?,?,?)`, t.RoomID, t.PersonaID, pid, source, fresh, now(), t.ID, "re-run after a conflict on "+doc, t.Handoff)
+	if err != nil {
+		return fmt.Errorf("queue re-run: %w", err)
+	}
+	return nil
 }
 
 // FailRunningTurns fails every running turn, in every room, and returns the rooms touched. At
@@ -439,10 +658,11 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 			w.Name = name
 		}
 		var docID int64
+		var n int
 		var latest string
 		err = tx.QueryRowContext(ctx, `
-			SELECT d.id, r.body FROM documents d JOIN revisions r ON r.document_id = d.id
-			WHERE d.room_id = ? AND d.kind = 'agent' AND d.name = ? ORDER BY r.n DESC LIMIT 1`, roomID, w.Name).Scan(&docID, &latest)
+			SELECT d.id, r.n, r.body FROM documents d JOIN revisions r ON r.document_id = d.id
+			WHERE d.room_id = ? AND d.kind = 'agent' AND d.name = ? ORDER BY r.n DESC LIMIT 1`, roomID, w.Name).Scan(&docID, &n, &latest)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			if _, err := createAgentDocument(ctx, tx, roomID, w.Name, w.Format, w.Body, author); err != nil {
@@ -453,6 +673,11 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 			return nil, fmt.Errorf("complete turn: %w", err)
 		case latest == w.Body:
 		default:
+			// Another turn revised the document, or created it, since this turn's workspace was
+			// built: this edit would overwrite it unseen (003-AC21).
+			if base, ok := t.BaseRevisions[docID]; t.BaseRevisions != nil && (!ok || base != n) {
+				return nil, &ConflictError{Doc: w.Name}
+			}
 			if _, err := addRevision(ctx, tx, roomID, docID, w.Body, author); err != nil {
 				return nil, err
 			}
@@ -531,6 +756,11 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 			return nil, err
 		}
 	}
+	if t.Handoff == HandoffWrite {
+		if err := handoffNext(ctx, tx, t, report); err != nil {
+			return nil, err
+		}
+	}
 	rep, err := json.Marshal(report)
 	if err != nil {
 		return nil, fmt.Errorf("complete turn: %w", err)
@@ -559,10 +789,13 @@ func appendSession(ctx context.Context, tx *sql.Tx, roomID string, persona int64
 	}
 	// Appended in Go: SQLite's || would turn the blob into text. Never nil: the column is NOT NULL.
 	data := append(append(make([]byte, 0, len(stored)+len(out.Session)), stored...), out.Session...)
+	ts := now()
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO agent_sessions(room_id, persona_id, session_id, data, updated_at) VALUES(?,?,?,?,?)
-		ON CONFLICT(persona_id, session_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
-		roomID, persona, out.SessionID, data, now())
+		INSERT INTO agent_sessions(room_id, persona_id, session_id, data, updated_at, context_tokens, context_window, context_updated_at)
+		VALUES(?,?,?,?,?,?,?,?)
+		ON CONFLICT(persona_id, session_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at,
+			context_tokens = excluded.context_tokens, context_window = excluded.context_window, context_updated_at = excluded.context_updated_at`,
+		roomID, persona, out.SessionID, data, ts, nullID(out.ContextTokens), nullID(out.ContextWindow), ts)
 	if err != nil {
 		return fmt.Errorf("append session: %w", err)
 	}
@@ -616,4 +849,26 @@ func (s *Store) SetCanTrigger(ctx context.Context, roomID string, pid int64, can
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SetParallelTurns switches the room's parallel mode and says so in the room, signed by. It
+// returns nil when nothing changed (003-AC20).
+func (s *Store) SetParallelTurns(ctx context.Context, roomID string, on bool, by *Participant) (*Message, error) {
+	var m *Message
+	err := s.withTx(ctx, "set parallel turns", func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `UPDATE rooms SET parallel_turns = ? WHERE id = ? AND parallel_turns != ?`, on, roomID, on)
+		if err != nil {
+			return fmt.Errorf("set parallel turns: %w", err)
+		}
+		if n, err := res.RowsAffected(); err != nil || n == 0 {
+			return err
+		}
+		body := "let the personas run one at a time again."
+		if on {
+			body = "let the personas run at the same time, each in its own sandbox."
+		}
+		m, err = memberLine(ctx, tx, roomID, by, body)
+		return err
+	})
+	return m, err
 }

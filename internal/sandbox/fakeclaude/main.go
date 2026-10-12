@@ -10,6 +10,8 @@
 //	FAKE_LIST         answer with the transcript files and whether they hold FAKE_MARK
 //	FAKE_RECALL       answer with the latest code word an earlier turn of the session was told
 //	FAKE_WHOAMI       answer with the first line of --append-system-prompt-file, and --effort
+//	FAKE_AUTOCOMPACT  answer with --autocompact, "auto" without it
+//	FAKE_CONTEXT_FULL report a session context at 85% of the window
 //	FAKE_SKILLS       run every scripts/*.sh of each skill in --plugin-dir and write what they
 //	                  print to docs/skills.md, as an agent using its skills would
 //	FAKE_PINGPONG A B as persona A call @B, as any other call @A, and repeat the marker so the
@@ -17,7 +19,12 @@
 //	FAKE_SLOW         take a few seconds (a turn others queue behind)
 //	FAKE_SLEEP        hang until killed (a turn in progress)
 //
+// Before them, the room's own handoff instructions: a prompt asking to write docs/_handoff-<name>.md
+// writes it with the latest code word, and a new session told to read it answers with what it says.
 // Any other prompt writes docs/notes.md. A prompt holding "code word is X" is remembered.
+//
+// The result reports a context use that grows with the session: the prompt and history sizes over
+// four, in a 200k window, and a fixed cost.
 package main
 
 import (
@@ -47,12 +54,28 @@ var (
 	pingPong   = regexp.MustCompile(`FAKE_PINGPONG ([\p{L}\p{N}_-]+) ([\p{L}\p{N}_-]+)`)
 	persona    = regexp.MustCompile(`(?m)^You are (\S+), an agent`)
 	annotation = regexp.MustCompile(`### Annotation (\d+)`)
+	writeNote  = regexp.MustCompile(`Write (docs/_handoff-[\p{L}\p{N}_-]+\.md) for it`)
+	readNote   = regexp.MustCompile(`Your previous session wrote (docs/_handoff-[\p{L}\p{N}_-]+\.md) for you`)
 )
 
-// result reports model, what --model asked for, beside a small side model, as claude does.
-func result(out io.Writer, model, sid, text string, isErr bool) int {
-	usage := map[string]any{"claude-" + model + "-fake": map[string]int{"outputTokens": 120}, "claude-side-fake": map[string]int{"outputTokens": 3}}
-	_ = json.NewEncoder(out).Encode(map[string]any{"type": "result", "subtype": "success", "is_error": isErr, "result": text, "session_id": sid, "modelUsage": usage})
+// window is the context window the fake reports.
+const window = 200_000
+
+// cost is the total_cost_usd the fake reports for every turn.
+const cost = 0.0125
+
+// result reports model, what --model asked for, beside a small side model, as claude does, and
+// used as the last request's context: input, cache read and cache creation tokens. The turn's
+// tokens are that request's plus the side model's, at a fixed cost.
+func result(out io.Writer, model, sid, text string, isErr bool, used int64) int {
+	read, create := used/2, max(used-used/2-3, 0)
+	usage := map[string]any{
+		"claude-" + model + "-fake": map[string]int64{"inputTokens": 3, "outputTokens": 120, "cacheReadInputTokens": read,
+			"cacheCreationInputTokens": create, "contextWindow": window},
+		"claude-side-fake": map[string]int64{"inputTokens": 50, "outputTokens": 3, "contextWindow": window}}
+	last := map[string]int64{"input_tokens": 3, "cache_read_input_tokens": read, "cache_creation_input_tokens": create}
+	_ = json.NewEncoder(out).Encode(map[string]any{"type": "result", "subtype": "success", "is_error": isErr, "result": text, "session_id": sid,
+		"modelUsage": usage, "usage": last, "total_cost_usd": cost})
 	if isErr {
 		return 1
 	}
@@ -67,7 +90,7 @@ func uuid() string {
 }
 
 func run(args []string, stdin io.Reader, out io.Writer, cwd, home string) int {
-	resume, model, system, effort, plugin := "", "default", "", "default", ""
+	resume, model, system, effort, plugin, autocompact := "", "default", "", "default", "", "auto"
 	for i, a := range args {
 		if i+1 == len(args) {
 			break
@@ -83,11 +106,13 @@ func run(args []string, stdin io.Reader, out io.Writer, cwd, home string) int {
 			effort = args[i+1]
 		case "--plugin-dir":
 			plugin = args[i+1]
+		case "--autocompact":
+			autocompact = args[i+1]
 		}
 	}
 	prompt, err := io.ReadAll(stdin)
 	if err != nil {
-		return result(out, model, "", err.Error(), true)
+		return result(out, model, "", err.Error(), true, 0)
 	}
 	dir := filepath.Join(home, ".claude", "projects", strings.ReplaceAll(cwd, "/", "-"))
 	sid := resume
@@ -97,36 +122,57 @@ func run(args []string, stdin io.Reader, out io.Writer, cwd, home string) int {
 	path := filepath.Join(dir, sid+".jsonl")
 	history, err := os.ReadFile(path) //nolint:gosec // a test double reading its own session file
 	if resume != "" && err != nil {
-		return result(out, model, "", "No conversation found with session ID: "+resume, true)
+		return result(out, model, "", "No conversation found with session ID: "+resume, true, 0)
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil { //nolint:gosec // see above
-		return result(out, model, sid, err.Error(), true)
+		return result(out, model, sid, err.Error(), true, 0)
 	}
 	var answer string
 	if strings.Contains(string(prompt), "FAKE_SKILLS") {
 		answer, err = useSkills(plugin, cwd)
 	} else {
-		answer, err = act(string(prompt), string(history), cwd, system, effort)
+		answer, err = act(string(prompt), string(history), cwd, system, effort, autocompact)
 	}
 	if err != nil {
-		return result(out, model, sid, err.Error(), true)
+		return result(out, model, sid, err.Error(), true, 0)
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // see above
 	if err != nil {
-		return result(out, model, sid, err.Error(), true)
+		return result(out, model, sid, err.Error(), true, 0)
 	}
 	enc := json.NewEncoder(f)
 	_ = enc.Encode(map[string]string{"type": "user", "prompt": string(prompt)})
 	_ = enc.Encode(map[string]string{"type": "assistant", "text": answer})
 	if err := f.Close(); err != nil {
-		return result(out, model, sid, err.Error(), true)
+		return result(out, model, sid, err.Error(), true, 0)
 	}
-	return result(out, model, sid, answer, false)
+	used := max(int64(len(prompt)+len(history))/4, 10)
+	if strings.Contains(string(prompt), "FAKE_CONTEXT_FULL") {
+		used = window * 85 / 100
+	}
+	return result(out, model, sid, answer, false, used)
 }
 
-func act(prompt, history, cwd, system, effort string) (string, error) {
+func act(prompt, history, cwd, system, effort, autocompact string) (string, error) {
 	ws := func(p string) string { return filepath.Join(cwd, p) }
+	if m := writeNote.FindStringSubmatch(prompt); m != nil {
+		word := "nothing"
+		if ms := codeWord.FindAllStringSubmatch(history+prompt, -1); ms != nil {
+			word = ms[len(ms)-1][1]
+		}
+		return "Handoff note written.", os.WriteFile(ws(m[1]), []byte("# Handoff\n\nThe code word was "+word+".\n"), 0o600) //nolint:gosec // see above
+	}
+	if m := readNote.FindStringSubmatch(prompt); m != nil {
+		b, err := os.ReadFile(ws(m[1])) //nolint:gosec // see above
+		if err != nil {
+			return "", fmt.Errorf("no handoff note: %w", err)
+		}
+		_, note, _ := strings.Cut(string(b), "\n\n")
+		return "Read " + m[1] + ": " + strings.TrimSpace(note), nil
+	}
 	switch {
+	case strings.Contains(prompt, "FAKE_AUTOCOMPACT"):
+		return "autocompact " + autocompact, nil
 	case strings.Contains(prompt, "FAKE_EDIT_UPLOAD"):
 		ups, _ := filepath.Glob(ws("uploads/*"))
 		if len(ups) == 0 {
@@ -166,11 +212,11 @@ func act(prompt, history, cwd, system, effort string) (string, error) {
 		anns, _ := json.Marshal([]map[string]string{{"doc": "uploads/" + filepath.Base(ups[0]), "exact": word, "body": "fake question"}})
 		return "Annotated.", os.WriteFile(ws("annotations-new.json"), anns, 0o600) //nolint:gosec // see above
 	case strings.Contains(prompt, "FAKE_LIST"):
-		files, _ := filepath.Glob(ws("transcript/*.md"))
+		files, _ := filepath.Glob(ws("transcript/*/*.md"))
 		marked := false
 		var names []string
 		for _, f := range files {
-			names = append(names, filepath.Base(f))
+			names = append(names, filepath.Base(filepath.Dir(f))+"/"+filepath.Base(f))
 			b, _ := os.ReadFile(f) //nolint:gosec // see above
 			marked = marked || strings.Contains(string(b), "FAKE_MARK")
 		}

@@ -9,12 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -154,8 +152,7 @@ const sid = "60dc4912-36ec-4225-a44a-6a6c1ed85b1b"
 
 func newTurnSandbox(t *testing.T, e *emulator) *Sandbox {
 	t.Helper()
-	up, _ := url.Parse("https://x")
-	s := New(Config{Image: "img", Name: "t", Host: "laptop", Upstream: up}, e.run, testCreds(t, "real", time.Now().Add(time.Hour)), zap.NewNop())
+	s := New(Config{Image: "img", Name: "t", Proxy: testProxy}, e.run, zap.NewNop())
 	t.Cleanup(func() { s.Close(context.Background()) })
 	return s
 }
@@ -179,7 +176,7 @@ func TestRunTurn(t *testing.T) {
 		return `{"result":"done","session_id":"` + sid + `"}`, nil
 	}
 	s := newTurnSandbox(t, e)
-	out, err := s.RunTurn(context.Background(), TurnInput{
+	out, err := s.RunTurn(context.Background(), TurnInput{Bearer: testBearer,
 		Workspace: workspaceTar(t, map[string]string{"docs/plan.md": "# Plan", "uploads/1-brief.pdf": "%PDF", "uploads/2-a.png": "PNG", "transcript/d.md": "t"}),
 		Prompt:    "the prompt", Model: "haiku",
 	})
@@ -226,7 +223,7 @@ func TestRunTurnLoadsSkills(t *testing.T) {
 	}
 	s := newTurnSandbox(t, e)
 	for _, plugin := range []io.Reader{workspaceTar(t, map[string]string{"skills/stamp/SKILL.md": "stamp v1"}), nil} {
-		if _, err := s.RunTurn(context.Background(), TurnInput{Workspace: workspaceTar(t, nil), Prompt: "p", Plugin: plugin}); err != nil {
+		if _, err := s.RunTurn(context.Background(), TurnInput{Workspace: workspaceTar(t, nil), Prompt: "p", Plugin: plugin, Bearer: testBearer}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -264,7 +261,7 @@ func TestRunTurnSyncsSession(t *testing.T) {
 			}
 			fetched := false
 			s := newTurnSandbox(t, e)
-			out, err := s.RunTurn(context.Background(), TurnInput{
+			out, err := s.RunTurn(context.Background(), TurnInput{Bearer: testBearer,
 				Workspace: workspaceTar(t, nil), Prompt: "p", Resume: sid, SessionSize: int64(len(room)), SessionSHA256: sum(room),
 				FetchSession: func(context.Context) ([]byte, error) { fetched = true; return room, nil },
 			})
@@ -302,17 +299,17 @@ func TestRunTurnFailures(t *testing.T) {
 			e := newEmulator()
 			e.claude = tc.claude
 			tc.in.Workspace = workspaceTar(t, nil)
+			tc.in.Bearer = testBearer
 			_, err := newTurnSandbox(t, e).RunTurn(context.Background(), tc.in)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err %v, want %q", err, tc.want)
 			}
 		})
 	}
-	// Expired credentials stop the turn before anything runs in the sandbox.
+	// 003-AC14: with no bearer for the account proxy, nothing runs in the sandbox.
 	e := newEmulator()
-	up, _ := url.Parse("https://x")
-	s := New(Config{Name: "t", Host: "laptop", Upstream: up}, e.run, testCreds(t, "x", time.Now().Add(-time.Minute)), zap.NewNop())
-	if _, err := s.RunTurn(context.Background(), TurnInput{}); !errors.Is(err, ErrCredentialsExpired) || len(e.calls) != 0 {
+	s := New(Config{Name: "t", Proxy: testProxy}, e.run, zap.NewNop())
+	if _, err := s.RunTurn(context.Background(), TurnInput{}); err == nil || len(e.calls) != 0 {
 		t.Fatalf("err %v, calls %v", err, e.calls)
 	}
 }

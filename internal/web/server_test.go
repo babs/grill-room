@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -226,7 +227,12 @@ func nextMessage(t *testing.T, ch <-chan sseEvent) store.Message {
 // expectRevokedThenClosed asserts the stream sends "revoked" and ends.
 func expectRevokedThenClosed(t *testing.T, ch <-chan sseEvent) {
 	t.Helper()
-	if ev := next(t, ch); ev.event != "revoked" {
+	// The stream says who hosts first (003-AC26); those events may come before.
+	ev := next(t, ch)
+	for ev.event == "room" {
+		ev = next(t, ch)
+	}
+	if ev.event != "revoked" {
 		t.Fatalf("got %+v, want revoked event", ev)
 	}
 	select {
@@ -658,6 +664,10 @@ func TestUIIsServed(t *testing.T) {
 			t.Fatal(err)
 		}
 		_ = resp.Body.Close()
+		if runtime.GOOS == "windows" && strings.HasSuffix(path, ".js") {
+			// The registry maps .js to application/javascript; the server ships on Linux.
+			want = "application/javascript"
+		}
 		if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), want) {
 			t.Errorf("%s: %d %s, want %s", path, resp.StatusCode, resp.Header.Get("Content-Type"), want)
 		}

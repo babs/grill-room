@@ -68,7 +68,7 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
     await alice.getByRole('button', { name: 'Approve opus · effort max for Grill' }).click();
     for (const p of [alice, bob]) {
       await expect(p.locator('#approvals')).toBeHidden();
-      await expect(p.locator('#messages')).toContainText(/Alice approved opus · effort max for 🔥 Grill on .+: it runs as asked from its next turn\./);
+      await expect(p.locator('#messages')).toContainText(/Alice approved opus · effort max for 🔥 Grill: it runs as asked from its next turn\./);
     }
     await ask(alice, 'Grill', 2);
     await expect(lastAgent(bob).locator('.model')).toHaveText('claude-opus-fake');

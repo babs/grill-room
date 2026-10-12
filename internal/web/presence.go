@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"text/template"
@@ -59,8 +60,10 @@ type presencePersona struct {
 
 // presenceView is what presence.tmpl renders.
 type presenceView struct {
-	Room     string
-	Self     presencePersona
+	Room string
+	Self presencePersona
+	// Why is the turn's cause (003-AC22).
+	Why      string
 	SelfCall bool
 	Others   []presencePersona
 	Humans   []string
@@ -101,9 +104,17 @@ func orDefault(s string) string {
 	return s
 }
 
+// everyRounds is a persona's "every N rounds" trigger in words.
+func everyRounds(n int) string {
+	if n == 1 {
+		return "every round"
+	}
+	return fmt.Sprintf("every %d rounds", n)
+}
+
 func triggerText(p *store.RoomPersona) string {
 	if p.EveryN > 0 {
-		return fmt.Sprintf("on demand and every %d rounds", p.EveryN)
+		return "on demand and " + everyRounds(p.EveryN)
 	}
 	return "on demand"
 }
@@ -115,10 +126,52 @@ func chainText(c store.Chain) string {
 	return fmt.Sprintf("%d of %d agent turns left", max(c.Budget-c.Count, 0), c.Budget)
 }
 
-// presencePreamble describes the room to persona self as its turn starts: the other personas and
-// what they did, the humans present, the host and who speaks, and the chain budget (002-AC28).
-// Models and efforts are what each persona runs at on the host daemon, after its cap.
-func (s *Server) presencePreamble(ctx context.Context, room *store.Room, self *store.RoomPersona) (string, error) {
+// humanTags returns, by participant id, the short id the preamble shows after each human's name,
+// so two people with the same name stay apart (003-AC32): the first 4 hex digits of their
+// profile's uuid, or 6 or 8 for the whole room once 4 would show two profiles alike. A participant
+// with no profile gets "#" and their participant id, which no profile tag can look like.
+func humanTags(ps []store.Participant) map[int64]string {
+	hex := func(p store.Participant) string { return strings.ReplaceAll(p.ProfileUUID, "-", "") }
+	n := 4
+	for ; n < 8; n += 2 {
+		seen := map[string]string{}
+		clash := false
+		for _, p := range ps {
+			if h := hex(p); len(h) >= 8 {
+				if other, ok := seen[h[:n]]; ok && other != h {
+					clash = true
+				}
+				seen[h[:n]] = h
+			}
+		}
+		if !clash {
+			break
+		}
+	}
+	tags := make(map[int64]string, len(ps))
+	for _, p := range ps {
+		if h := hex(p); len(h) >= 8 {
+			tags[p.ID] = h[:n]
+		} else {
+			tags[p.ID] = "#" + strconv.FormatInt(p.ID, 10)
+		}
+	}
+	return tags
+}
+
+// tagged is a human's name with its short id, "Alice ·a1b2"; a name with no id stays bare.
+func tagged(name, tag string) string {
+	if tag == "" {
+		return oneLine(name)
+	}
+	return oneLine(name) + " ·" + tag
+}
+
+// presencePreamble describes the room to persona self as its turn starts: why it runs, the other
+// personas and what they did, the humans present, the host and who speaks, and the chain budget
+// (002-AC28, 003-AC22). Models and efforts are what each persona runs at on the host daemon, after
+// its cap.
+func (s *Server) presencePreamble(ctx context.Context, room *store.Room, self *store.RoomPersona, cause string) (string, error) {
 	st := s.bus.Store
 	personas, err := st.RoomPersonas(ctx, room.ID)
 	if err != nil {
@@ -132,10 +185,8 @@ func (s *Server) presencePreamble(ctx context.Context, room *store.Room, self *s
 	if err != nil {
 		return "", err
 	}
-	running, err := st.RunningTurn(ctx, room.ID)
-	if errors.Is(err, store.ErrNotFound) {
-		running = &store.Turn{}
-	} else if err != nil {
+	running, err := st.RunningTurns(ctx, room.ID)
+	if err != nil {
 		return "", err
 	}
 	host, err := st.HostDaemon(ctx, room.ID)
@@ -151,7 +202,7 @@ func (s *Server) presencePreamble(ctx context.Context, room *store.Room, self *s
 		runs, _ := capped(host, p)
 		return levelText(runs)
 	}
-	v := presenceView{Room: oneLine(room.Name), SelfCall: self.SelfCall, Chain: chainText(room.Chain),
+	v := presenceView{Room: oneLine(room.Name), SelfCall: self.SelfCall, Chain: chainText(room.Chain), Why: oneLine(cause),
 		Self: presencePersona{Name: self.Name, Level: level(self), Trigger: triggerText(self)}}
 	for i := range personas {
 		p := &personas[i]
@@ -162,8 +213,10 @@ func (s *Server) presencePreamble(ctx context.Context, room *store.Room, self *s
 		switch {
 		case p.Pending:
 			state = "waiting for the host's approval"
-		case running.PersonaID == p.ID:
+		case slices.ContainsFunc(running, func(t store.Turn) bool { return t.PersonaID == p.ID && !t.HostQueued }):
 			state = "running"
+		case slices.ContainsFunc(running, func(t store.Turn) bool { return t.PersonaID == p.ID }):
+			state = "queued"
 		case slices.ContainsFunc(queue, func(q store.QueuedTurn) bool { return q.PersonaID == p.ID }):
 			state = "queued"
 		}
@@ -175,16 +228,18 @@ func (s *Server) presencePreamble(ctx context.Context, room *store.Room, self *s
 	if err != nil {
 		return "", err
 	}
+	tags := humanTags(humans)
+	named := func(id int64, name string) string { return tagged(name, tags[id]) }
 	for _, h := range humans {
 		if h.ID == room.HostParticipantID {
-			v.Host = oneLine(h.Name)
+			v.Host = named(h.ID, h.Name)
 		}
 		if s.viewers.present(h.ID) {
-			v.Humans = append(v.Humans, oneLine(h.Name))
+			v.Humans = append(v.Humans, named(h.ID, h.Name))
 		}
 	}
 	if m, err := st.LastVoice(ctx, room.ID); err == nil && speakingAt(m, time.Now()) {
-		v.Speaker = oneLine(m.Sender)
+		v.Speaker = named(m.ParticipantID, m.Sender)
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return "", err
 	}

@@ -282,6 +282,13 @@ type RoomPersona struct {
 	// one, 0 for off (002-AC22). SelfCall lets its synthesis queue itself with @name (002-AC24).
 	EveryN   int  `json:"every_n,omitempty"`
 	SelfCall bool `json:"self_call"`
+	// Autocompact is the context size, in tokens, at which Claude Code compacts the persona's
+	// session; 0 leaves it to Claude Code (auto). Passed to claude -p --autocompact (003-AC24).
+	Autocompact int `json:"autocompact"`
+	// ContextTokens is what its current session's last request sent, against the model's
+	// ContextWindow; 0 when unknown (003-AC24).
+	ContextTokens int64 `json:"context_tokens,omitempty"`
+	ContextWindow int64 `json:"context_window,omitempty"`
 	// Pending is a persona added while the host approves everything: it cannot run until the host
 	// approves it (002-AC21).
 	Pending bool `json:"pending,omitempty"`
@@ -295,14 +302,18 @@ type RoomPersona struct {
 const personaCols = `SELECT p.id, p.room_id, COALESCE(p.template_id, 0), p.template_version,
 	COALESCE((SELECT MAX(n) FROM persona_template_versions WHERE template_id = p.template_id), 0),
 	p.name, p.badge, p.colour, p.text, p.model, p.effort, COALESCE(p.every_n, 0), p.self_call, p.created_at,
-	p.pending, p.cap_decision, COALESCE(p.cap_daemon_id, 0), p.cap_model, p.cap_effort FROM room_personas p `
+	p.pending, p.cap_decision, COALESCE(p.cap_daemon_id, 0), p.cap_model, p.cap_effort, p.autocompact,
+	COALESCE(s.context_tokens, 0), COALESCE(s.context_window, 0) FROM room_personas p
+	LEFT JOIN agent_sessions s ON s.persona_id = p.id
+		AND s.session_id = (SELECT session_id FROM turns WHERE persona_id = p.id AND status = 'done' ORDER BY id DESC LIMIT 1) `
 
 func scanPersona(sc scanner) (*RoomPersona, error) {
 	var p RoomPersona
 	var created string
 	err := sc.Scan(&p.ID, &p.RoomID, &p.TemplateID, &p.TemplateVersion, &p.UpdateVersion,
 		&p.Name, &p.Badge, &p.Colour, &p.Text, &p.Model, &p.Effort, &p.EveryN, &p.SelfCall, &created,
-		&p.Pending, &p.Cap.Status, &p.Cap.DaemonID, &p.Cap.Level.Model, &p.Cap.Level.Effort)
+		&p.Pending, &p.Cap.Status, &p.Cap.DaemonID, &p.Cap.Level.Model, &p.Cap.Level.Effort, &p.Autocompact,
+		&p.ContextTokens, &p.ContextWindow)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -475,6 +486,8 @@ type PersonaPatch struct {
 	// EveryN 0 turns the trigger off.
 	EveryN   *int
 	SelfCall *bool
+	// Autocompact 0 leaves compaction to Claude Code.
+	Autocompact *int `json:",omitempty"`
 	// TemplateVersion is set by a held template update.
 	TemplateVersion *int
 	// Skills turns skills on at a version, or off, by skill id.
@@ -516,11 +529,22 @@ func (c PersonaPatch) apply(p *RoomPersona) []string {
 		out = append(out, fmt.Sprintf("self-call %s → %s", onOff(p.SelfCall), onOff(*c.SelfCall)))
 		p.SelfCall = *c.SelfCall
 	}
+	if c.Autocompact != nil && *c.Autocompact != p.Autocompact {
+		out = append(out, fmt.Sprintf("autocompact %s → %s", autocompact(p.Autocompact), autocompact(*c.Autocompact)))
+		p.Autocompact = *c.Autocompact
+	}
 	if c.TemplateVersion != nil && *c.TemplateVersion != p.TemplateVersion {
 		out = append(out, fmt.Sprintf("template v%d → v%d", p.TemplateVersion, *c.TemplateVersion))
 		p.TemplateVersion = *c.TemplateVersion
 	}
 	return append(out, applySkills(p, c.Skills)...)
+}
+
+func autocompact(n int) string {
+	if n == 0 {
+		return "auto"
+	}
+	return strconv.Itoa(n/1000) + "k"
 }
 
 func everyN(n int) string {
@@ -546,7 +570,8 @@ func nullInt(n int) any {
 
 func updatePersona(ctx context.Context, tx *sql.Tx, p *RoomPersona) error {
 	_, err := tx.ExecContext(ctx, `UPDATE room_personas SET template_version = ?, name = ?, badge = ?, colour = ?, text = ?, model = ?, effort = ?,
-		every_n = ?, self_call = ?, pending = ? WHERE id = ?`, append(append([]any{p.TemplateVersion}, p.args()...), nullInt(p.EveryN), p.SelfCall, p.Pending, p.ID)...)
+		every_n = ?, self_call = ?, pending = ?, autocompact = ? WHERE id = ?`,
+		append(append([]any{p.TemplateVersion}, p.args()...), nullInt(p.EveryN), p.SelfCall, p.Pending, p.Autocompact, p.ID)...)
 	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
 		return ErrNameTaken
 	}
@@ -678,14 +703,26 @@ type QueuedTurn struct {
 	Source        string    `json:"source"`
 	Fresh         bool      `json:"fresh"`
 	CreatedAt     time.Time `json:"created_at"`
+	// RerunOf is the turn a conflict rejected, which this entry runs again ahead of the others;
+	// Cause says why (003-AC21).
+	RerunOf int64  `json:"rerun_of,omitempty"`
+	Cause   string `json:"cause,omitempty"`
+	// Handoff is HandoffWrite for the turn writing a handoff note, HandoffRead for the new session
+	// reading it (003-AC25).
+	Handoff string `json:"handoff,omitempty"`
 }
 
-const queueCols = `SELECT id, room_id, persona_id, COALESCE(participant_id, 0), source, fresh, created_at FROM turn_queue `
+// queueOrder runs re-runs first, then in the order turns were queued.
+const queueOrder = ` ORDER BY rerun_of IS NULL, id`
+
+const queueFields = `id, room_id, persona_id, COALESCE(participant_id, 0), source, fresh, created_at, COALESCE(rerun_of, 0), cause, handoff`
+
+const queueCols = `SELECT ` + queueFields + ` FROM turn_queue `
 
 func scanQueued(sc scanner) (*QueuedTurn, error) {
 	var q QueuedTurn
 	var created string
-	err := sc.Scan(&q.ID, &q.RoomID, &q.PersonaID, &q.ParticipantID, &q.Source, &q.Fresh, &created)
+	err := sc.Scan(&q.ID, &q.RoomID, &q.PersonaID, &q.ParticipantID, &q.Source, &q.Fresh, &created, &q.RerunOf, &q.Cause, &q.Handoff)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -712,9 +749,9 @@ func enqueue(ctx context.Context, db querier, q *QueuedTurn) error {
 	if q.ParticipantID != 0 {
 		pid = q.ParticipantID
 	}
-	err := db.QueryRowContext(ctx, `INSERT INTO turn_queue(room_id, persona_id, participant_id, source, fresh, created_at)
-		SELECT room_id, id, ?, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? AND pending = 0 RETURNING id`,
-		pid, q.Source, q.Fresh, q.CreatedAt.Format(time.RFC3339Nano), q.PersonaID, q.RoomID).Scan(&q.ID)
+	err := db.QueryRowContext(ctx, `INSERT INTO turn_queue(room_id, persona_id, participant_id, source, fresh, created_at, cause, handoff)
+		SELECT room_id, id, ?, ?, ?, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? AND pending = 0 RETURNING id`,
+		pid, q.Source, q.Fresh, q.CreatedAt.Format(time.RFC3339Nano), q.Cause, q.Handoff, q.PersonaID, q.RoomID).Scan(&q.ID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return ErrNotFound
@@ -728,7 +765,7 @@ func enqueue(ctx context.Context, db querier, q *QueuedTurn) error {
 
 // Queue lists the room's queued turns, first to run first.
 func (s *Store) Queue(ctx context.Context, roomID string) ([]QueuedTurn, error) {
-	rows, err := s.db.QueryContext(ctx, queueCols+`WHERE room_id = ? ORDER BY id`, roomID)
+	rows, err := s.db.QueryContext(ctx, queueCols+`WHERE room_id = ?`+queueOrder, roomID)
 	if err != nil {
 		return nil, fmt.Errorf("queue: %w", err)
 	}
@@ -760,10 +797,12 @@ func (s *Store) CancelQueued(ctx context.Context, roomID string, id, by int64, c
 	return nil
 }
 
-// PopQueued removes and returns the head of the room's queue. ErrNotFound when it is empty.
-func (s *Store) PopQueued(ctx context.Context, roomID string) (*QueuedTurn, error) {
-	return scanQueued(s.db.QueryRowContext(ctx, `DELETE FROM turn_queue WHERE id = (SELECT id FROM turn_queue WHERE room_id = ? ORDER BY id LIMIT 1)
-		RETURNING id, room_id, persona_id, COALESCE(participant_id, 0), source, fresh, created_at`, roomID))
+// PopQueued removes and returns the head of the room's queue; with parallel on, the first entry
+// whose persona runs no turn (003-AC20). ErrNotFound when there is none.
+func (s *Store) PopQueued(ctx context.Context, roomID string, parallel bool) (*QueuedTurn, error) {
+	return scanQueued(s.db.QueryRowContext(ctx, `DELETE FROM turn_queue WHERE id = (SELECT id FROM turn_queue q WHERE room_id = ?
+			AND (? = 0 OR NOT EXISTS (SELECT 1 FROM turns t WHERE t.persona_id = q.persona_id AND t.status = 'running'))`+queueOrder+` LIMIT 1)
+		RETURNING `+queueFields, roomID, parallel))
 }
 
 // DuePersonas lists the room's personas whose "every N rounds" is due: at least N turns of any

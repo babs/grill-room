@@ -10,32 +10,35 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
 
-	"github.com/babs/grill-room/internal/creds"
 	"github.com/babs/grill-room/internal/sandbox"
 )
 
-// Options wires a Daemon. Zero durations take the defaults.
+// Options wires a Daemon. Zero durations take the defaults. Nothing here names the machine, its
+// user or its Claude account: what the daemon tells a room is free of them (003-AC17).
 type Options struct {
-	// Name identifies this machine in the room and in error messages.
-	Name    string
 	Version string
 	Tokens  *Tokens
 	Docker  sandbox.Runner
-	Creds   *creds.Source
 	HTTP    *http.Client
 	Log     *zap.Logger
-	// NewAgent builds the sandbox a room's turns run in, from image, on the first turn.
-	NewAgent func(r Room, image string) Agent
+	// Access is the rooms' proxies at start (Daemon.SetAccess).
+	Access Access
+	// NewAgent builds a sandbox of room r, from image, when a turn finds none free: slot 0 is the
+	// room's first, the others serve its parallel turns (003-AC20). proxy is the address of the
+	// room's account proxy.
+	NewAgent func(r Room, slot int, image, proxy string) Agent
 	// Model is passed to claude --model when a persona asks for none; empty keeps Claude Code's default.
 	Model string
 	// Settings are the host cap and approval mode at start; SettingsPath is where the page saves
@@ -53,10 +56,8 @@ type Options struct {
 	// dir or a cap of 0 fetches every workspace whole (002-AC37).
 	CacheDir string
 	CacheMax int64
-	// Executable is the binary a self-update replaces; empty disables updates.
-	Executable string
-	// Restart ends the daemon so that main starts the updated binary.
-	Restart func()
+	// OnTurn hears of every turn starting and ending; nil for none.
+	OnTurn func(TurnEvent)
 
 	CheckEvery  time.Duration // readiness re-check
 	StatusEvery time.Duration // heartbeat to the room
@@ -64,17 +65,9 @@ type Options struct {
 	MaxBackoff  time.Duration
 }
 
-// Credentials is the credentials readiness, never the token itself.
-type Credentials struct {
-	OK        bool       `json:"ok"`
-	Origin    string     `json:"origin,omitempty"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	Expired   bool       `json:"expired"`
-	Error     string     `json:"error,omitempty"`
-}
-
-// Status is what the local page shows.
+// Status is what the local page shows. The room fields are those of the room handed over last.
 type Status struct {
+	// Host is this machine's name, set by the supervisor for its page only.
 	Host    string `json:"host"`
 	Version string `json:"version"`
 	Room    string `json:"room,omitempty"`
@@ -83,17 +76,38 @@ type Status struct {
 	Code       string `json:"code,omitempty"`
 	ApproveURL string `json:"approve_url,omitempty"`
 	// Connection is "offline", "connecting" or "connected".
-	Connection  string            `json:"connection"`
-	Error       string            `json:"error,omitempty"`
-	Docker      sandbox.Readiness `json:"docker"`
-	Credentials Credentials       `json:"credentials"`
-	Image       Image             `json:"image"`
-	Update      Update            `json:"update"`
-	CanHost     bool              `json:"can_host"`
-	Reason      string            `json:"reason,omitempty"`
-	Settings    Settings          `json:"settings"`
+	Connection string            `json:"connection"`
+	Error      string            `json:"error,omitempty"`
+	Docker     sandbox.Readiness `json:"docker"`
+	Image      Image             `json:"image"`
+	Update     Update            `json:"update"`
+	CanHost    bool              `json:"can_host"`
+	Reason     string            `json:"reason,omitempty"`
+	Settings   Settings          `json:"settings"`
 	// Allowlist is the domains the sandbox may reach through its egress proxy.
 	Allowlist []string `json:"allowlist"`
+	// Rooms are every room the daemon serves, by link.
+	Rooms []RoomStatus `json:"rooms,omitempty"`
+}
+
+// RoomStatus is one served room's pairing, connection and turns.
+type RoomStatus struct {
+	Room       string `json:"room"`
+	Pairing    string `json:"pairing"`
+	Code       string `json:"code,omitempty"`
+	ApproveURL string `json:"approve_url,omitempty"`
+	Connection string `json:"connection"`
+	Error      string `json:"error,omitempty"`
+	CanHost    bool   `json:"can_host"`
+	Reason     string `json:"reason,omitempty"`
+	// Running counts the room's turns running now; Queued, those waiting for a slot under the
+	// host's global cap (003-AC18).
+	Running int `json:"running,omitempty"`
+	Queued  int `json:"queued,omitempty"`
+	// Host says whether this daemon hosts the room's agent, nil until the room says (a room server
+	// from before spec 003 phase 7 never does); ParallelTurns is the room's parallel mode (003-AC26).
+	Host          *bool `json:"host,omitempty"`
+	ParallelTurns bool  `json:"parallel_turns,omitempty"`
 }
 
 // Image is the sandbox image turns run in.
@@ -109,33 +123,47 @@ type Image struct {
 
 // Update is the self-update the paired room server offers.
 type Update struct {
-	// Available is the newer version the room server hands out.
+	// Available is the newer version on offer.
 	Available string `json:"available,omitempty"`
-	Running   bool   `json:"running"`
-	Error     string `json:"error,omitempty"`
+	// Served is the version the worker's room server hands out; the supervisor restarts a worker
+	// whose instance changed version, so that it runs the new one (003-AC7).
+	Served string `json:"served,omitempty"`
+	// From names where Available comes from: GitHub or an instance's URL.
+	From    string `json:"from,omitempty"`
+	Running bool   `json:"running"`
+	Error   string `json:"error,omitempty"`
 }
 
-// Daemon holds the pairing and connection state.
+// Daemon holds the pairing and connection state of every room it serves.
 type Daemon struct {
-	o    Options
-	mu   sync.Mutex
-	st   Status
-	stop context.CancelFunc // ends the current room's pairing and connection
-	// gen numbers SetRoom calls: a replaced room's loop must not write the status any more.
-	gen int
-	// changed wakes the heartbeat when readiness changes.
+	o  Options
+	mu sync.Mutex
+	// st holds what the rooms share; the room fields come from cur.
+	st Status
+	// rooms are the room runs by room link, and cur the one handed over last, guarded by mu.
+	rooms map[string]*roomRun
+	cur   *roomRun
+	// ready is each room's readiness as last told, "" when it can host, guarded by mu.
+	ready map[string]string
+	// changed is closed, and replaced, whenever the settings or a room's readiness change: it
+	// wakes every heartbeat. Guarded by mu.
 	changed chan struct{}
 	// loops counts running room loops, which remove their sandbox as they end, and image jobs.
 	loops sync.WaitGroup
 	// img is the sandbox image job, guarded by mu.
-	img imageJob
-	// release is what the room server hands out, for the self-update; guarded by mu.
-	release    release
+	img        imageJob
 	settingsMu sync.Mutex
-	// cur is the current room run, guarded by mu; nil before the first SetRoom.
-	cur *roomRun
+	// acquire waits for a slot under the host's global cap, set by ServeWorker before any room
+	// starts; nil runs turns at once.
+	acquire func(ctx context.Context, room string, turn int64, onWait func()) (release func(), err error)
 	// cache is nil when disabled.
 	cache *wsCache
+	// turns and failedTurns count the turns that ended, for the worker metrics.
+	turns, failedTurns atomic.Int64
+	// access is the rooms' proxies and the cut-off, guarded by mu.
+	access Access
+	// running cancels the running turns by id, guarded by mu.
+	running map[int64]context.CancelCauseFunc
 }
 
 // New builds a daemon.
@@ -152,8 +180,9 @@ func New(o Options) *Daemon {
 	if o.Allowlist == nil {
 		o.Allowlist = slices.Clone(sandbox.DefaultAllowlist)
 	}
-	d := &Daemon{o: o, st: Status{Host: o.Name, Version: o.Version, Connection: "offline", Settings: o.Settings, Allowlist: o.Allowlist},
-		changed: make(chan struct{}, 1)}
+	d := &Daemon{o: o, st: Status{Version: o.Version, Connection: "offline", Settings: o.Settings, Allowlist: o.Allowlist},
+		rooms: map[string]*roomRun{}, ready: map[string]string{}, changed: make(chan struct{}), access: o.Access,
+		running: map[int64]context.CancelCauseFunc{}}
 	if o.CacheDir != "" && o.CacheMax > 0 {
 		d.cache = &wsCache{dir: o.CacheDir, max: o.CacheMax}
 	}
@@ -164,38 +193,79 @@ func New(o Options) *Daemon {
 	return d
 }
 
-// Status returns a snapshot.
+func (d *Daemon) turnEvent(e TurnEvent) {
+	if e.Phase == "end" {
+		d.turns.Add(1)
+		if e.Error != "" {
+			d.failedTurns.Add(1)
+		}
+	}
+	if d.o.OnTurn != nil {
+		d.o.OnTurn(e)
+	}
+}
+
+// Status returns a snapshot: what the rooms share, every room, and the current room's fields.
 func (d *Daemon) Status() Status {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.st
+	st := d.st
+	st.Rooms = make([]RoomStatus, 0, len(d.rooms))
+	for _, r := range d.rooms {
+		rs := r.st
+		rs.CanHost, rs.Reason = d.readinessLocked(rs.Room)
+		st.Rooms = append(st.Rooms, rs)
+	}
+	slices.SortFunc(st.Rooms, func(a, b RoomStatus) int { return strings.Compare(a.Room, b.Room) })
+	if c := d.cur; c != nil {
+		st.Room, st.Pairing, st.Code, st.ApproveURL, st.Connection, st.Error = c.st.Room, c.st.Pairing, c.st.Code, c.st.ApproveURL, c.st.Connection, c.st.Error
+	}
+	st.CanHost, st.Reason = d.readinessLocked(st.Room)
+	return st
 }
 
-// update applies f, then recomputes whether this machine can host under the same lock, so the
-// status never shows a readiness its parts contradict. A change wakes the heartbeat.
+// update applies f, then recomputes each room's readiness under the same lock, so the status
+// never shows a readiness its parts contradict. A change wakes the heartbeats.
 func (d *Daemon) update(f func(*Status)) {
 	d.mu.Lock()
 	f(&d.st)
-	canHost, reason, changed := d.assessLocked()
-	d.mu.Unlock()
-	if changed {
-		d.o.Log.Info("readiness_changed", zap.Bool("can_host", canHost), zap.String("reason", reason))
-		select {
-		case d.changed <- struct{}{}:
-		default:
+	changed := map[string]string{}
+	for room := range d.rooms {
+		_, reason := d.readinessLocked(room)
+		if old, ok := d.ready[room]; !ok || old != reason {
+			changed[room] = reason
 		}
+		d.ready[room] = reason
+	}
+	d.mu.Unlock()
+	for room, reason := range changed {
+		d.o.Log.Info("readiness_changed", zap.String("room", room), zap.Bool("can_host", reason == ""), zap.String("reason", reason))
+	}
+	if len(changed) > 0 {
+		d.wake()
 	}
 }
 
-// roomUpdater writes the status only while gen is the current room.
-func (d *Daemon) roomUpdater(gen int) func(func(*Status)) {
-	return func(f func(*Status)) {
-		d.mu.Lock()
-		if d.gen == gen {
-			f(&d.st)
-		}
-		d.mu.Unlock()
-	}
+// wake tells every heartbeat that something it posts changed.
+func (d *Daemon) wake() {
+	d.mu.Lock()
+	close(d.changed)
+	d.changed = make(chan struct{})
+	d.mu.Unlock()
+}
+
+// changes is closed at the next wake.
+func (d *Daemon) changes() <-chan struct{} {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.changed
+}
+
+// readiness is whether this machine can host room now, and why not.
+func (d *Daemon) readiness(room string) (bool, string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.readinessLocked(room)
 }
 
 // Run re-checks readiness until ctx ends.
@@ -212,78 +282,154 @@ func (d *Daemon) Run(ctx context.Context) {
 	}
 }
 
-// Refresh re-checks Docker and the credentials now.
+// Refresh re-checks Docker now.
 func (d *Daemon) Refresh(ctx context.Context) {
 	dk := sandbox.Check(ctx, d.o.Docker)
-	var c Credentials
-	tok, err := d.o.Creds.Get(ctx)
-	if err != nil {
-		c.Error = err.Error()
-	} else {
-		c.OK, c.Origin = true, tok.Origin
-		if !tok.ExpiresAt.IsZero() {
-			exp := tok.ExpiresAt
-			c.ExpiresAt = &exp
-		}
-		c.Expired = tok.Expired(time.Now())
-	}
-	d.update(func(s *Status) { s.Docker, s.Credentials = dk, c })
+	d.update(func(s *Status) { s.Docker = dk })
 	d.maybePrepare()
 }
 
-// assessLocked recomputes CanHost and Reason; the caller holds mu.
-func (d *Daemon) assessLocked() (canHost bool, reason string, changed bool) {
+// errCutOff ends the turns of a worker the host cut off (003-AC15). Its text reaches the room.
+var errCutOff = errors.New("the host cut this agent off from Claude for now")
+
+// SetAccess takes the rooms' proxies the supervisor hands out. Cutting off ends the running turns.
+func (d *Daemon) SetAccess(a Access) {
+	d.mu.Lock()
+	cut := a.CutOff && !d.access.CutOff
+	d.access = a
+	var cancels []context.CancelCauseFunc
+	if cut {
+		for _, c := range d.running {
+			cancels = append(cancels, c)
+		}
+	}
+	d.mu.Unlock()
+	for _, c := range cancels {
+		c(errCutOff)
+	}
+	if cut {
+		d.o.Log.Warn("cut_off", zap.Int("turns_ended", len(cancels)))
+	}
+	d.update(func(*Status) {})
+}
+
+// proxyFor is room's account proxy, or why the room cannot reach Claude.
+func (d *Daemon) proxyFor(room string) (Proxy, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.proxyLocked(room)
+}
+
+func (d *Daemon) proxyLocked(room string) (Proxy, error) {
+	if d.access.CutOff {
+		return Proxy{}, errCutOff
+	}
+	p, ok := d.access.Proxies[room]
+	switch {
+	case !ok:
+		return Proxy{}, errors.New("the host has no Claude account ready for this room yet")
+	case p.Error != "":
+		return Proxy{}, errors.New(p.Error)
+	}
+	return p, nil
+}
+
+// readinessLocked is whether this machine can host room, and why not; the caller holds mu.
+func (d *Daemon) readinessLocked(room string) (bool, string) {
 	s := &d.st
-	canHost = true
+	_, accessErr := d.proxyLocked(room)
 	switch {
 	case !s.Docker.OK:
-		canHost, reason = false, s.Docker.Reason
-	case !s.Credentials.OK:
-		canHost, reason = false, "Claude credentials unreadable on "+d.o.Name
-	case s.Credentials.Expired:
-		canHost, reason = false, "Claude credentials expired on "+d.o.Name
+		return false, s.Docker.Reason
+	case accessErr != nil:
+		return false, accessErr.Error()
 	case s.Image.State == "failed":
-		canHost, reason = false, "the sandbox image is unavailable on "+d.o.Name+": "+s.Image.Error
+		return false, "the sandbox image is unavailable on the host's machine: " + s.Image.Error
 	case s.Image.State != "ready":
-		canHost, reason = false, "the sandbox image is not ready yet on "+d.o.Name
+		return false, "the sandbox image is not ready yet on the host's machine"
 	}
-	changed = s.CanHost != canHost || s.Reason != reason
-	s.CanHost, s.Reason = canHost, reason
-	return canHost, reason, changed
+	return true, ""
 }
 
-// SetRoom pairs with room if no token is stored for it, then keeps connected to it. It replaces
-// any previous room.
+// SetRoom serves room beside the others, pairing first if no token is stored for it, and makes it
+// the one the page shows. A room served already keeps its connection; one whose run ended, revoked
+// or failed, starts again.
 func (d *Daemon) SetRoom(ctx context.Context, room Room) {
-	ctx, cancel := context.WithCancel(ctx)
+	key := room.String()
 	d.mu.Lock()
-	if d.stop != nil {
-		d.stop()
+	old := d.rooms[key]
+	if old != nil && !old.ended() {
+		d.cur = old
+		d.mu.Unlock()
+		return
 	}
-	d.stop = cancel
-	d.gen++
-	r := &roomRun{d: d, room: room, update: d.roomUpdater(d.gen), ctx: ctx}
-	d.cur = r
-	d.st.Room, d.st.Pairing, d.st.Code, d.st.ApproveURL, d.st.Error, d.st.Connection = room.String(), "", "", "", "", "offline"
+	if old != nil {
+		old.cancel()
+	}
+	ctx, cancel := context.WithCancel(ctx) //nolint:gosec // kept in the run: cancelled when it is replaced, or with ctx
+	r := &roomRun{d: d, room: room, ctx: ctx, cancel: cancel, done: make(chan struct{}), st: RoomStatus{Room: key, Connection: "offline"}}
+	d.rooms[key], d.cur = r, r
 	d.mu.Unlock()
-	d.loops.Go(func() { r.loop(ctx) })
+	// Readiness depends on the room's account.
+	d.update(func(*Status) {})
+	d.loops.Go(func() {
+		defer close(r.done)
+		r.loop(ctx)
+	})
 }
 
-// Wait returns once every room loop has ended and removed its sandbox; cancel their context first.
+// Wait returns once every room loop has ended and removed its sandboxes; cancel their context first.
 func (d *Daemon) Wait() { d.loops.Wait() }
 
-// roomRun is one SetRoom's pairing and connection.
+// runs lists the room runs.
+func (d *Daemon) runs() []*roomRun {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Collect(maps.Values(d.rooms))
+}
+
+// roomRun is one room's pairing, connection and sandboxes.
 type roomRun struct {
-	d      *Daemon
-	room   Room
-	update func(func(*Status))
-	// ctx lasts as long as the room run.
-	ctx context.Context
+	d    *Daemon
+	room Room
+	// ctx lasts until the run is replaced, as the image job it started may serve the other rooms;
+	// cancel ends it. done closes once its loop returned.
+	ctx    context.Context
+	cancel context.CancelFunc
+	done   chan struct{}
+	// st is the room's status, guarded by d.mu.
+	st RoomStatus
 
 	agentMu sync.Mutex
-	ag      Agent
+	// sandboxes are the room's, one per turn running at once (003-AC20).
+	sandboxes []*sandboxSlot
 	// lastTurn is the highest turn id taken: a stream reconnecting mid-turn announces it again.
 	lastTurn int64
+}
+
+// sandboxSlot is one of a room's sandboxes; busy while a turn runs in it.
+type sandboxSlot struct {
+	ag Agent
+	// proxy is the proxy address ag was built with.
+	proxy string
+	busy  bool
+}
+
+// update changes the room's status.
+func (r *roomRun) update(f func(*RoomStatus)) {
+	r.d.mu.Lock()
+	defer r.d.mu.Unlock()
+	f(&r.st)
+}
+
+// ended reports a run whose loop returned.
+func (r *roomRun) ended() bool {
+	select {
+	case <-r.done:
+		return true
+	default:
+		return false
+	}
 }
 
 var errRevoked = errors.New("the room revoked this daemon's access: pair again")
@@ -294,7 +440,7 @@ func (r *roomRun) loop(ctx context.Context) {
 	r.checkServer(ctx)
 	fail := func(err error) {
 		d.o.Log.Warn("room_failed", zap.String("room", room.String()), zap.Error(err))
-		r.update(func(s *Status) { s.Error, s.Connection = err.Error(), "offline" })
+		r.update(func(s *RoomStatus) { s.Error, s.Connection = err.Error(), "offline" })
 	}
 	tok, err := d.o.Tokens.Get(room)
 	if err != nil {
@@ -313,7 +459,7 @@ func (r *roomRun) loop(ctx context.Context) {
 			return
 		}
 	}
-	r.update(func(s *Status) { s.Pairing, s.Code, s.ApproveURL = "paired", "", "" })
+	r.update(func(s *RoomStatus) { s.Pairing, s.Code, s.ApproveURL = "paired", "", "" })
 	err = r.connect(ctx, tok)
 	if errors.Is(err, errRevoked) {
 		if serr := d.o.Tokens.Set(room, ""); serr != nil {
@@ -324,7 +470,7 @@ func (r *roomRun) loop(ctx context.Context) {
 				d.o.Log.Error("workspace_cache_delete_failed", zap.Error(serr))
 			}
 		}
-		r.update(func(s *Status) { s.Pairing = "" })
+		r.update(func(s *RoomStatus) { s.Pairing = "" })
 		fail(err)
 	}
 }
@@ -370,9 +516,10 @@ func apiError(resp *http.Response) error {
 // pair asks the room for a pairing and waits for a participant's answer.
 func (r *roomRun) pair(ctx context.Context) (string, error) {
 	d, room := r.d, r.room
-	r.update(func(s *Status) { s.Pairing = "requesting" })
+	r.update(func(s *RoomStatus) { s.Pairing = "requesting" })
 	rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	resp, err := d.roomRequest(rctx, http.MethodPost, room.Base+"/api/rooms/"+room.ID+"/pairings", "", map[string]string{"name": d.o.Name})
+	// A fixed name, not this machine's: room servers before spec 003 require one (003-AC17).
+	resp, err := d.roomRequest(rctx, http.MethodPost, room.Base+"/api/rooms/"+room.ID+"/pairings", "", map[string]string{"name": "grill-room daemon"})
 	if err != nil {
 		cancel()
 		return "", err
@@ -395,7 +542,7 @@ func (r *roomRun) pair(ctx context.Context) (string, error) {
 	}
 	// Built here, not taken from the reply: the page links to it, so it must be the room's own page.
 	approve := room.String() + "?pair=" + url.QueryEscape(p.ID)
-	r.update(func(s *Status) { s.Pairing, s.Code, s.ApproveURL = "pending", p.Code, approve })
+	r.update(func(s *RoomStatus) { s.Pairing, s.Code, s.ApproveURL = "pending", p.Code, approve })
 	d.o.Log.Info("pairing_pending", zap.String("room", room.String()), zap.String("code", p.Code))
 
 	tick := time.NewTicker(d.o.PollEvery)
@@ -455,11 +602,11 @@ func (r *roomRun) connect(ctx context.Context, tok string) error {
 	d := r.d
 	backoff := time.Second
 	for {
-		r.update(func(s *Status) { s.Connection = "connecting" })
+		r.update(func(s *RoomStatus) { s.Connection = "connecting" })
 		start := time.Now()
 		err := r.stream(ctx, tok)
 		if ctx.Err() != nil {
-			r.update(func(s *Status) { s.Connection = "offline" })
+			r.update(func(s *RoomStatus) { s.Connection = "offline" })
 			return ctx.Err()
 		}
 		if errors.Is(err, errRevoked) {
@@ -470,7 +617,7 @@ func (r *roomRun) connect(ctx context.Context, tok string) error {
 		}
 		// Jitter: daemons cut by the same server restart must not reconnect in lockstep.
 		wait := backoff/2 + rand.N(backoff) //nolint:gosec // jitter needs no crypto randomness
-		r.update(func(s *Status) {
+		r.update(func(s *RoomStatus) {
 			s.Connection, s.Error = "offline", fmt.Sprintf("%v (retry in %s)", err, wait.Round(time.Second))
 		})
 		d.o.Log.Warn("room_disconnected", zap.Error(err), zap.Duration("retry_in", wait))
@@ -523,7 +670,7 @@ func (r *roomRun) stream(ctx context.Context, tok string) error {
 				silence = 3 * time.Duration(h.Heartbeat) * time.Second
 				watchdog.Reset(silence)
 			}
-			r.update(func(s *Status) { s.Connection, s.Error = "connected", "" })
+			r.update(func(s *RoomStatus) { s.Connection, s.Error = "connected", "" })
 			d.o.Log.Info("room_connected", zap.String("room", room.String()))
 			wg.Go(func() { r.heartbeat(ctx, tok) })
 			// A reconnect often follows a room server upgrade: ask again what it hands out.
@@ -534,6 +681,14 @@ func (r *roomRun) stream(ctx context.Context, tok string) error {
 			}
 			if json.Unmarshal([]byte(line[len("data: "):]), &t) == nil && r.takeTurn(t.ID) {
 				wg.Go(func() { r.runTurn(ctx, tok, t.ID) })
+			}
+		case strings.HasPrefix(line, "data: ") && event == "room":
+			var info struct {
+				Host     bool `json:"host"`
+				Parallel bool `json:"parallel_turns"`
+			}
+			if json.Unmarshal([]byte(line[len("data: "):]), &info) == nil {
+				r.update(func(s *RoomStatus) { s.Host, s.ParallelTurns = &info.Host, info.Parallel })
 			}
 		case strings.HasPrefix(line, "data: ") && event == "revoked":
 			return errRevoked
@@ -553,10 +708,12 @@ func (r *roomRun) heartbeat(ctx context.Context, tok string) {
 	tick := time.NewTicker(d.o.StatusEvery)
 	defer tick.Stop()
 	for {
+		changed := d.changes()
 		st := d.Status()
+		canHost, reason := d.readiness(room.String())
 		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		resp, err := d.roomRequest(rctx, http.MethodPost, room.Base+"/api/rooms/"+room.ID+"/daemon/status", tok,
-			map[string]any{"can_host": st.CanHost, "reason": st.Reason, "version": d.o.Version,
+			map[string]any{"can_host": canHost, "reason": reason, "version": d.o.Version,
 				"max_model": st.Settings.MaxModel, "max_effort": st.Settings.MaxEffort, "approve_all": st.Settings.ApproveAll})
 		if err == nil {
 			if resp.StatusCode != http.StatusNoContent {
@@ -572,7 +729,7 @@ func (r *roomRun) heartbeat(ctx context.Context, tok string) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-		case <-d.changed:
+		case <-changed:
 		}
 	}
 }

@@ -35,7 +35,7 @@ func newTurnRoom(t *testing.T, s *Store, room string) turnRoom {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := s.PairDaemon(ctx, room, p.ID, "laptop", "dmn-"+room)
+	d, err := s.PairDaemon(ctx, room, p.ID, "dmn-"+room)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,9 +62,9 @@ func (r turnRoom) start(t *testing.T, s *Store, room string) *Turn {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tn := &Turn{RoomID: room, ParticipantID: r.p.ID, DaemonID: r.daemon, Host: "laptop", Prompt: "go", AnnotationCursor: cursor,
+	tn := &Turn{RoomID: room, ParticipantID: r.p.ID, DaemonID: r.daemon, Prompt: "go", AnnotationCursor: cursor,
 		PersonaID: r.grill.ID, PersonaName: r.grill.Name}
-	if err := s.StartTurn(context.Background(), tn); err != nil {
+	if err := s.StartTurn(context.Background(), tn, false); err != nil {
 		t.Fatal(err)
 	}
 	return tn
@@ -76,12 +76,12 @@ func TestStartTurnOnePerRoom(t *testing.T) {
 	ctx := context.Background()
 	r := newTurnRoom(t, s, "a")
 	first := r.start(t, s, "a")
-	if err := s.StartTurn(ctx, &Turn{RoomID: "a", Host: "x", PersonaID: r.grill.ID}); !errors.Is(err, ErrTurnInProgress) {
+	if err := s.StartTurn(ctx, &Turn{RoomID: "a", PersonaID: r.grill.ID}, false); !errors.Is(err, ErrTurnInProgress) {
 		t.Fatalf("second turn: %v, want ErrTurnInProgress", err)
 	}
 	// Another room is independent.
 	rb := newTurnRoom(t, s, "b")
-	if err := s.StartTurn(ctx, &Turn{RoomID: "b", Host: "x", PersonaID: rb.grill.ID}); err != nil {
+	if err := s.StartTurn(ctx, &Turn{RoomID: "b", PersonaID: rb.grill.ID}, false); err != nil {
 		t.Fatalf("other room: %v", err)
 	}
 	m, err := s.FailTurn(ctx, "a", first.ID, "boom")
@@ -92,12 +92,12 @@ func TestStartTurnOnePerRoom(t *testing.T) {
 		t.Fatalf("failing a failed turn: %+v, %v", m, err)
 	}
 	// 002-AC16: a turn runs a persona of its own room.
-	for _, tn := range []*Turn{{RoomID: "a", Host: "x"}, {RoomID: "a", Host: "x", PersonaID: rb.grill.ID}, {RoomID: "gone", Host: "x", PersonaID: r.grill.ID}} {
-		if err := s.StartTurn(ctx, tn); !errors.Is(err, ErrNotFound) {
+	for _, tn := range []*Turn{{RoomID: "a"}, {RoomID: "a", PersonaID: rb.grill.ID}, {RoomID: "gone", PersonaID: r.grill.ID}} {
+		if err := s.StartTurn(ctx, tn, false); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("turn %+v: %v, want ErrNotFound", tn, err)
 		}
 	}
-	if err := s.StartTurn(ctx, &Turn{RoomID: "a", Host: "x", PersonaID: r.grill.ID}); err != nil {
+	if err := s.StartTurn(ctx, &Turn{RoomID: "a", PersonaID: r.grill.ID}, false); err != nil {
 		t.Fatalf("turn after failure: %v", err)
 	}
 }
@@ -247,7 +247,7 @@ func TestCompleteTurnAtomic(t *testing.T) {
 	if _, err := s.AgentSession(ctx, "a", r.grill.ID, "s1"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("partial session kept: %v", err)
 	}
-	if got, _ := s.RunningTurn(ctx, "a"); got == nil || got.ID != tn.ID {
+	if got, _ := s.RunningTurns(ctx, "a"); len(got) != 1 || got[0].ID != tn.ID {
 		t.Fatal("turn no longer running")
 	}
 	// Another daemon cannot complete it, and a failed turn cannot complete either.
@@ -287,8 +287,8 @@ func TestFailRunningTurnsAndLookups(t *testing.T) {
 	if err != nil || !slices.Equal(rooms, []string{"a", "b"}) {
 		t.Fatalf("rooms %v, %v", rooms, err)
 	}
-	if _, err := s.RunningTurn(ctx, "a"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("still running: %v", err)
+	if got, err := s.RunningTurns(ctx, "a"); err != nil || len(got) != 0 {
+		t.Fatalf("still running: %v %v", got, err)
 	}
 	last, err := s.LastTurn(ctx, "a")
 	if err != nil || last.ID != ta2.ID || last.Status != TurnFailed || last.Error != "server restarted" {
@@ -463,5 +463,171 @@ func TestCompleteTurnAgentAnnotations(t *testing.T) {
 	if anns, _ := s.Annotations(ctx, "a", r.doc); anns[0].Status != StatusReopened || done.Report.Closed != 0 || done.Report.Replies != 1 ||
 		!slices.Equal(done.Report.Ignored, []string{fmt.Sprintf("closing annotation %d: a participant wrote in it during the turn", r.ann)}) {
 		t.Fatalf("close during a participant reply: %+v, %+v", anns[0], done.Report)
+	}
+}
+
+// 003-AC21: the workspace's base revisions are pinned at the first fetch. An edit of a document
+// revised since conflicts, unless it writes what the document holds now; a new document never
+// does.
+func TestConflictOnBaseRevision(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	r := newTurnRoom(t, s, "a")
+	tn := r.start(t, s, "a")
+	base, err := s.PinBaseRevisions(ctx, "a", tn.ID)
+	if err != nil || len(base) != 1 || base[r.doc] != 1 {
+		t.Fatalf("base %v %v", base, err)
+	}
+	if _, err := s.AddRevision(ctx, "a", r.doc, "# Plan\n\nA lazy dog.\n", "Secretary"); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := s.PinBaseRevisions(ctx, "a", tn.ID); again[r.doc] != 1 {
+		t.Fatalf("the pin moved: %v", again)
+	}
+	edit := func(body string) error {
+		_, err := s.CompleteTurn(ctx, "a", tn.ID, r.daemon, &TurnOutcome{SessionID: "s1",
+			Documents: []AgentWrite{{Name: "new.md", Format: "md", Body: "# New"}, {Name: "plan.md", Format: "md", Body: body}}})
+		return err
+	}
+	var conflict *ConflictError
+	if err := edit("# Plan\n\nThe quick red fox.\n"); !errors.As(err, &conflict) || conflict.Doc != "plan.md" || err.Error() != "conflict on plan.md" {
+		t.Fatalf("edit of a revised document: %v", err)
+	}
+	if docs, _ := s.Documents(ctx, "a"); len(docs) != 1 {
+		t.Fatalf("a conflicting result kept a document: %+v", docs)
+	}
+	if err := edit("# Plan\n\nA lazy dog.\n"); err != nil {
+		t.Fatalf("an edit matching the new version: %v", err)
+	}
+}
+
+// 003-AC21: a first conflict queues the turn again ahead of the room's queue, taking the place of
+// its persona's queued turn; the re-run's conflict fails it for good. Only the turn's daemon can.
+func TestRejectTurnRunsAgainFirst(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	r := newTurnRoom(t, s, "a")
+	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, r.p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tn := r.start(t, s, "a")
+	for _, q := range []*QueuedTurn{{RoomID: "a", PersonaID: sec.ID, ParticipantID: r.p.ID}, {RoomID: "a", PersonaID: r.grill.ID, ParticipantID: r.p.ID, Fresh: true}} {
+		if err := s.Enqueue(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := s.RejectTurn(ctx, "a", tn.ID, r.daemon+1, "plan.md"); !errors.Is(err, ErrTurnNotRunning) {
+		t.Fatalf("another daemon: %v", err)
+	}
+	m, rerun, err := s.RejectTurn(ctx, "a", tn.ID, r.daemon, "plan.md")
+	if err != nil || !rerun || !strings.Contains(m.Body, "plan.md changed while it ran") {
+		t.Fatalf("first conflict: %+v %v %v", m, rerun, err)
+	}
+	q, _ := s.Queue(ctx, "a")
+	if len(q) != 2 || q[0].PersonaID != r.grill.ID || q[0].RerunOf != tn.ID || !q[0].Fresh || q[0].Cause != "re-run after a conflict on plan.md" || q[1].PersonaID != sec.ID {
+		t.Fatalf("queue %+v", q)
+	}
+	if c, _ := roomChain(ctx, s.db, "a"); c.Count != 0 {
+		t.Fatalf("the re-run counted as a chain link: %+v", c)
+	}
+	head, err := s.PopQueued(ctx, "a", false)
+	if err != nil || head.RerunOf != tn.ID {
+		t.Fatalf("head %+v %v", head, err)
+	}
+	again := &Turn{RoomID: "a", ParticipantID: r.p.ID, DaemonID: r.daemon, Prompt: "go", PersonaID: r.grill.ID, PersonaName: r.grill.Name,
+		RerunOf: head.RerunOf, Cause: head.Cause}
+	if err := s.StartTurn(ctx, again, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Turn(ctx, "a", again.ID); got.RerunOf != tn.ID || got.Cause != head.Cause {
+		t.Fatalf("re-run %+v", got)
+	}
+	m, rerun, err = s.RejectTurn(ctx, "a", again.ID, r.daemon, "plan.md")
+	if err != nil || rerun || m.Body != "Grill turn failed: conflict on plan.md." {
+		t.Fatalf("second conflict: %+v %v %v", m, rerun, err)
+	}
+	if q, _ := s.Queue(ctx, "a"); len(q) != 1 || q[0].PersonaID != sec.ID {
+		t.Fatalf("queue after the second conflict %+v", q)
+	}
+	if _, _, err := s.RejectTurn(ctx, "a", again.ID, r.daemon, "plan.md"); !errors.Is(err, ErrTurnNotRunning) {
+		t.Fatalf("an ended turn: %v", err)
+	}
+}
+
+// 003-AC20: with parallel on, two personas run at once, never one twice; the queue hands out the
+// first entry whose persona does not run.
+func TestParallelStartAndPop(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	r := newTurnRoom(t, s, "a")
+	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, r.p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.start(t, s, "a")
+	if err := s.StartTurn(ctx, &Turn{RoomID: "a", PersonaID: sec.ID}, false); !errors.Is(err, ErrTurnInProgress) {
+		t.Fatalf("parallel off: %v", err)
+	}
+	if err := s.StartTurn(ctx, &Turn{RoomID: "a", PersonaID: r.grill.ID}, true); !errors.Is(err, ErrTurnInProgress) {
+		t.Fatalf("the same persona twice: %v", err)
+	}
+	for _, id := range []int64{r.grill.ID, sec.ID} {
+		if err := s.Enqueue(ctx, &QueuedTurn{RoomID: "a", PersonaID: id, ParticipantID: r.p.ID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if q, err := s.PopQueued(ctx, "a", true); err != nil || q.PersonaID != sec.ID {
+		t.Fatalf("pop %+v %v", q, err)
+	}
+	if q, err := s.PopQueued(ctx, "a", true); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the running persona's entry was popped: %+v %v", q, err)
+	}
+	if err := s.StartTurn(ctx, &Turn{RoomID: "a", PersonaID: sec.ID}, true); err != nil {
+		t.Fatal(err)
+	}
+	if ts, _ := s.RunningTurns(ctx, "a"); len(ts) != 2 {
+		t.Fatalf("running %+v", ts)
+	}
+}
+
+// 003-AC18: the host's daemon queues a running turn and lets it go; nothing changes twice, and
+// only that daemon can say so.
+func TestSetHostQueued(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	r := newTurnRoom(t, s, "a")
+	tn := r.start(t, s, "a")
+	for _, step := range []struct {
+		queued, changed bool
+	}{{true, true}, {true, false}, {false, true}, {false, false}} {
+		changed, err := s.SetHostQueued(ctx, "a", tn.ID, r.daemon, step.queued)
+		got, _ := s.Turn(ctx, "a", tn.ID)
+		if err != nil || changed != step.changed || got.HostQueued != step.queued {
+			t.Fatalf("queued %v: changed %v, turn %+v, %v", step.queued, changed, got, err)
+		}
+	}
+	if _, err := s.SetHostQueued(ctx, "a", tn.ID, r.daemon+1, true); !errors.Is(err, ErrTurnNotRunning) {
+		t.Fatalf("another daemon: %v", err)
+	}
+	if _, err := s.SetHostQueued(ctx, "a", tn.ID+9, r.daemon, true); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("no such turn: %v", err)
+	}
+}
+
+// 003-AC20: switching parallel mode says so once in the room; switching to the same says nothing.
+func TestSetParallelTurns(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	r := newTurnRoom(t, s, "a")
+	for _, step := range []struct {
+		on   bool
+		says string
+	}{{true, "Alice let the personas run at the same time, each in its own sandbox."}, {true, ""}, {false, "Alice let the personas run one at a time again."}} {
+		m, err := s.SetParallelTurns(ctx, "a", step.on, r.p)
+		room, _ := s.Room(ctx, "a")
+		if err != nil || room.ParallelTurns != step.on || (m == nil) != (step.says == "") || (m != nil && m.Body != step.says) {
+			t.Fatalf("on %v: %+v, room %+v, %v", step.on, m, room, err)
+		}
 	}
 }

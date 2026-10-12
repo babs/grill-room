@@ -69,6 +69,8 @@
     <button type="submit">Set</button>
   </form>
   <p class="hint">Turns agents start one after another (every N rounds, @name in a synthesis) before the chain pauses. A press or an @name from a person starts it over.</p>
+  <label><input id="parallel-turns" type="checkbox"> Personas run at the same time</label>
+  <p class="hint" id="parallel-hint">Each one in its own sandbox on the host's machine. When two edit the same document, the second runs again on the new version. Only the host switches it.</p>
   <form id="persona-add">
     <label>Add from the library <select id="persona-template" required></select></label>
     <button type="submit">Add</button>

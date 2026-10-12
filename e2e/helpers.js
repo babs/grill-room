@@ -36,18 +36,22 @@ export async function docFrame(page) {
 
 // startDaemon runs the real daemon binary against this room, with a fake credentials file and a
 // throwaway state dir, and resolves with the admin page link it prints. Its sandbox uses the fake
-// claude image: no Claude request. env adds to the daemon's environment.
-export function startDaemon(roomURL, env = {}) {
+// claude image: no Claude request. env adds to the daemon's environment; expiresIn is the fake
+// login's lifetime in milliseconds.
+export function startDaemon(roomURL, env = {}, { expiresIn = 3600e3 } = {}) {
   const dir = mkdtempSync(join('test-results', 'daemon-'));
   const stateDir = join(dir, 'state');
   writeFileSync(join(dir, '.credentials.json'),
-    JSON.stringify({ claudeAiOauth: { accessToken: 'e2e-fake', expiresAt: Date.now() + 3600e3 } }), { mode: 0o600 });
-  const proc = spawn('../bin/grill-room-daemon', [roomURL], {
-    env: {
-      ...process.env, CLAUDE_CONFIG_DIR: dir, GRILL_ROOM_DAEMON_STATE_DIR: stateDir, GRILL_ROOM_DAEMON_BROWSER: 'none',
-      GRILL_ROOM_SANDBOX_IMAGE: process.env.GRILL_ROOM_SANDBOX_FAKE_IMAGE || 'grill-room-sandbox:fake', LOG_LEVEL: 'info', ...env,
-    },
-    stdio: ['ignore', 'ignore', 'pipe'],
+    JSON.stringify({ claudeAiOauth: { accessToken: 'e2e-fake', expiresAt: Date.now() + expiresIn } }), { mode: 0o600 });
+  const daemonEnv = {
+    ...process.env, CLAUDE_CONFIG_DIR: dir, GRILL_ROOM_DAEMON_STATE_DIR: stateDir, GRILL_ROOM_DAEMON_BROWSER: 'none',
+    GRILL_ROOM_SANDBOX_IMAGE: process.env.GRILL_ROOM_SANDBOX_FAKE_IMAGE || 'grill-room-sandbox:fake', LOG_LEVEL: 'info', ...env,
+  };
+  const proc = spawn('../bin/grill-room-daemon', [roomURL], { env: daemonEnv, stdio: ['ignore', 'ignore', 'pipe'] });
+  // handOver launches the daemon again with another room: it hands the room to the running
+  // supervisor and exits 0 (003-AC6).
+  const handOver = (url) => new Promise((resolve) => {
+    spawn('../bin/grill-room-daemon', [url], { env: daemonEnv, stdio: 'ignore' }).on('exit', resolve);
   });
   const exited = new Promise((resolve) => proc.on('exit', resolve));
   const link = new Promise((resolve, reject) => {
@@ -59,7 +63,7 @@ export function startDaemon(roomURL, env = {}) {
     });
     proc.on('exit', (code) => reject(new Error('daemon exited ' + code + ': ' + out)));
   });
-  return { proc, link, exited, sandbox: sandboxName(stateDir, roomURL), cleanup: () => { proc.kill(); rmSync(dir, { recursive: true, force: true }); } };
+  return { proc, link, exited, handOver, sandbox: sandboxName(stateDir, roomURL), cleanup: () => { proc.kill(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
 // pairDaemon approves the daemon's pairing from the participant's room page, as a person would.

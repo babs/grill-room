@@ -11,15 +11,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/babs/grill-room/internal/creds"
 	"github.com/babs/grill-room/internal/sandbox"
 	"github.com/babs/grill-room/internal/skill"
 	"github.com/babs/grill-room/internal/store"
@@ -34,8 +30,8 @@ type fakeAgent struct {
 	inputs []sandbox.TurnInput
 	closed bool
 	allow  []string
-	// allowErr and deniedErr fail SetAllowlist and Denied.
-	allowErr, deniedErr error
+	// allowErr, deniedErr and startErr fail SetAllowlist, Denied and Start.
+	allowErr, deniedErr, startErr error
 }
 
 func (f *fakeAgent) RunTurn(ctx context.Context, in sandbox.TurnInput) (*sandbox.TurnOutput, error) {
@@ -56,6 +52,12 @@ func (f *fakeAgent) RunTurn(ctx context.Context, in sandbox.TurnInput) (*sandbox
 	f.inputs = append(f.inputs, in)
 	f.mu.Unlock()
 	return f.run(ctx, in, files)
+}
+
+func (f *fakeAgent) Start(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.startErr
 }
 
 func (f *fakeAgent) SetAllowlist(_ context.Context, list []string) error {
@@ -95,9 +97,8 @@ func pairedDaemon(t *testing.T, rs *roomServer, name string, ag *fakeAgent, set 
 	t.Helper()
 	participant, _ = rs.join(t, name)
 	d = newTestDaemon(t, dockerUp)
-	d.o.Name = name + "-box"
 	d.o.Model = "haiku"
-	d.o.NewAgent = func(Room, string) Agent { return ag }
+	d.o.NewAgent = func(Room, int, string, string) Agent { return ag }
 	for _, f := range set {
 		f(d)
 	}
@@ -105,18 +106,12 @@ func pairedDaemon(t *testing.T, rs *roomServer, name string, ag *fakeAgent, set 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	room, _ := ParseRoomURL(rs.ts.URL + "/r/" + rs.room)
+	grant(d, room.String())
 	d.SetRoom(ctx, room)
 	waitFor(t, "pending", func() bool { return d.Status().Pairing == "pending" })
 	id := d.Status().ApproveURL[strings.Index(d.Status().ApproveURL, "=")+1:]
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/pairings/"+id, participant, map[string]bool{"approve": true}, http.StatusOK, nil)
-	waitFor(t, "can host", func() bool {
-		for _, rd := range rs.daemons(t, participant) {
-			if rd.Name == d.o.Name && rd.CanHost {
-				return true
-			}
-		}
-		return false
-	})
+	waitFor(t, "can host", func() bool { return rs.hostsFor(t, participant) })
 	// The room elects its host just after it lists the daemon as able to host.
 	waitFor(t, "a host online", func() bool { return rs.agent(t, participant).Online })
 	return participant, d, cancel
@@ -183,7 +178,7 @@ func TestDaemonTurnsAndTakeover(t *testing.T) {
 		if in.Model != "haiku" || in.Resume != "" || !strings.Contains(in.Prompt, "The code word is PAPRIKA") {
 			return nil, errors.New("unexpected input")
 		}
-		if _, ok := files["transcript/"+time.Now().UTC().Format(time.DateOnly)+".md"]; !ok {
+		if _, ok := files["transcript/"+time.Now().UTC().Format(time.DateOnly)+"/001.md"]; !ok {
 			return nil, errors.New("no transcript in the workspace")
 		}
 		return &sandbox.TurnOutput{Result: &sandbox.Result{Result: "Noted.", SessionID: sid}, Session: []byte("line1\n"),
@@ -224,7 +219,7 @@ func TestDaemonTurnsAndTakeover(t *testing.T) {
 	<-block
 	// The room fails the turn, then elects: wait for both.
 	waitFor(t, "turn 2 failed and bob hosting", func() bool { v := rs.agent(t, bob); return v.Turn.Status == "failed" && v.Online })
-	if v := rs.agent(t, bob); !strings.Contains(v.Turn.Error, "Alice-box disconnected") {
+	if v := rs.agent(t, bob); !strings.Contains(v.Turn.Error, "the host's daemon disconnected") {
 		t.Fatalf("after alice dropped: %+v", v.Turn)
 	}
 	waitFor(t, "alice's sandbox closed", func() bool { agA.mu.Lock(); defer agA.mu.Unlock(); return agA.closed })
@@ -301,13 +296,7 @@ func TestDaemonPersonasKeepTheirSessions(t *testing.T) {
 	bob, _ := pairedHost(t, rs, "Bob", agB)
 	dropA()
 	waitFor(t, "bob is the host", func() bool {
-		var st struct {
-			Daemons []struct {
-				Name string `json:"name"`
-			} `json:"daemons"`
-		}
-		rs.call(t, "GET", "/api/rooms/"+rs.room+"/agent", bob, nil, http.StatusOK, &st)
-		return len(st.Daemons) == 1 && st.Daemons[0].Name == "Bob-box" && rs.agent(t, bob).Online
+		return rs.hostsFor(t, bob) && len(rs.daemons(t, bob)) == 1 && rs.agent(t, bob).Online
 	})
 	if m := press(bob, sec.ID); m.Body != "B resumed 22222222-2222-4222-8222-222222222222" {
 		t.Fatalf("secretary after takeover: %+v", m)
@@ -325,16 +314,66 @@ func TestDaemonPersonasKeepTheirSessions(t *testing.T) {
 	}
 }
 
-// 001-AC29: an agent error, such as expired credentials, reaches the room as the turn's failure.
+// 001-AC29: an agent error, such as a refused login, reaches the room as the turn's failure.
+// 003-AC24: the persona's autocompact reaches the sandbox, a value claude would refuse never does,
+// and the context use claude reports reaches the room and the supervisor's turn event.
+func TestDaemonAutocompactAndContext(t *testing.T) {
+	for n, want := range map[int]int{0: 0, 99_999: 0, 100_000: 100_000, 1_000_000: 1_000_000, 1_000_001: 0, -5: 0} {
+		if got := knownAutocompact(n); got != want {
+			t.Errorf("knownAutocompact(%d) = %d, want %d", n, got, want)
+		}
+	}
+	rs := newRoomServer(t)
+	ag := &fakeAgent{run: func(_ context.Context, in sandbox.TurnInput, _ map[string]string) (*sandbox.TurnOutput, error) {
+		if in.Autocompact != 300_000 {
+			return nil, fmt.Errorf("autocompact %d", in.Autocompact)
+		}
+		if _, err := io.Copy(io.Discard, in.Workspace); err != nil {
+			return nil, err
+		}
+		res := &sandbox.Result{Result: "Done.", SessionID: sid}
+		if err := json.Unmarshal([]byte(`{"usage": {"input_tokens": 5, "cache_read_input_tokens": 150000, "cache_creation_input_tokens": 15000},
+			"modelUsage": {"claude-haiku-x": {"inputTokens": 7, "outputTokens": 9, "cacheReadInputTokens": 300000, "cacheCreationInputTokens": 15000,
+			"contextWindow": 200000}}, "total_cost_usd": 0.042}`), res); err != nil {
+			return nil, err
+		}
+		return &sandbox.TurnOutput{Result: res, Session: []byte("x\n")}, nil
+	}}
+	events := make(chan TurnEvent, 4)
+	alice, _, _ := pairedDaemon(t, rs, "Alice", ag, func(d *Daemon) { d.o.OnTurn = func(e TurnEvent) { events <- e } })
+	g := rs.grill(t)
+	rs.call(t, "PATCH", fmt.Sprintf("/api/rooms/%s/personas/%d", rs.room, g.ID), alice, map[string]int{"autocompact": 300_000}, http.StatusOK, nil)
+	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]bool{}, http.StatusCreated, nil)
+	waitFor(t, "turn done", func() bool { v := rs.agent(t, alice); return v.Turn != nil && v.Turn.Status != "running" })
+	if v := rs.agent(t, alice); v.Turn.Status != "done" {
+		t.Fatalf("turn %+v", v.Turn)
+	}
+	if g := rs.grill(t); g.ContextTokens != 165_005 || g.ContextWindow != 200_000 {
+		t.Fatalf("persona context %d / %d", g.ContextTokens, g.ContextWindow)
+	}
+	for e := range events {
+		if e.Phase != "end" {
+			continue
+		}
+		// 003-AC27: and what the supervisor's monitoring records.
+		if e.Persona != "Grill" || e.ContextTokens != 165_005 || e.ContextWindow != 200_000 || e.Cause != "pressed by Alice" ||
+			e.Model != "claude-haiku-x" || e.TokensIn != 7 || e.TokensOut != 9 || e.TokensCacheRead != 300_000 || e.TokensCacheWrite != 15_000 ||
+			e.CostUSD == nil || *e.CostUSD != 0.042 || e.WorkspaceBytes < 512 || e.Error != "" {
+			t.Fatalf("end event %+v", e)
+		}
+		break
+	}
+}
+
 func TestDaemonTurnError(t *testing.T) {
 	rs := newRoomServer(t)
 	ag := &fakeAgent{run: func(context.Context, sandbox.TurnInput, map[string]string) (*sandbox.TurnOutput, error) {
-		return nil, errors.New("Claude credentials expired on Alice-box")
+		return nil, errors.New("Anthropic refused the host's Claude login")
 	}}
 	alice, _ := pairedHost(t, rs, "Alice", ag)
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]bool{}, http.StatusCreated, nil)
 	waitFor(t, "turn failed", func() bool { v := rs.agent(t, alice); return v.Turn != nil && v.Turn.Status == "failed" })
-	if m := rs.lastMessage(t); m != "Grill turn failed: Claude credentials expired on Alice-box" {
+	if m := rs.lastMessage(t); m != "Grill turn failed: Anthropic refused the host's Claude login" {
 		t.Fatalf("message %q", m)
 	}
 }
@@ -349,7 +388,7 @@ func TestDaemonTurnTimeout(t *testing.T) {
 	alice, _ := pairedHost(t, rs, "Alice", ag)
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]bool{}, http.StatusCreated, nil)
 	waitFor(t, "turn failed", func() bool { v := rs.agent(t, alice); return v.Turn != nil && v.Turn.Status == "failed" })
-	if m := rs.lastMessage(t); m != "Grill turn failed: the turn timed out after 1s on Alice-box" {
+	if m := rs.lastMessage(t); m != "Grill turn failed: the turn timed out after 1s" {
 		t.Fatalf("message %q", m)
 	}
 }
@@ -407,7 +446,7 @@ func TestRunTurnReportsFetchFailureAndDefaultsTimeout(t *testing.T) {
 	defer ts.Close()
 	d := newTestDaemon(t, dockerUp)
 	var deadline time.Duration
-	d.o.NewAgent = func(Room, string) Agent {
+	d.o.NewAgent = func(Room, int, string, string) Agent {
 		return &fakeAgent{run: func(ctx context.Context, _ sandbox.TurnInput, _ map[string]string) (*sandbox.TurnOutput, error) {
 			dl, _ := ctx.Deadline()
 			deadline = time.Until(dl)
@@ -415,12 +454,13 @@ func TestRunTurnReportsFetchFailureAndDefaultsTimeout(t *testing.T) {
 		}}
 	}
 	r := &roomRun{d: d, room: Room{Base: ts.URL, ID: "r"}}
+	grant(d, r.room.String())
 	r.runTurn(context.Background(), "tok", 1)
 	jobCode = http.StatusOK
 	r.runTurn(context.Background(), "tok", 1)
 	mu.Lock()
 	defer mu.Unlock()
-	if len(posted) != 2 || posted[0].Error != "could not fetch the turn on laptop: room server: boom" || posted[1].Error != "" {
+	if len(posted) != 2 || posted[0].Error != "could not fetch the turn: room server: boom" || posted[1].Error != "" {
 		t.Fatalf("posted %+v", posted)
 	}
 	if deadline < 14*time.Minute {
@@ -428,54 +468,38 @@ func TestRunTurnReportsFetchFailureAndDefaultsTimeout(t *testing.T) {
 	}
 }
 
-// 001-AC29: credentials that expire after the daemon was elected fail the turn through the real
-// sandbox code with "Claude credentials expired on <host>" in the room, before Docker is touched.
-func TestDaemonTurnCredentialsExpired(t *testing.T) {
+// 003-AC15: cutting the worker off ends its running turn with a clear error in the room, and the
+// room sees it unable to host until the host lets it back; then a turn runs again. The turn got
+// the room's bearer, never a token (003-AC14).
+func TestDaemonCutOff(t *testing.T) {
 	rs := newRoomServer(t)
-	participant, _ := rs.join(t, "Alice")
-	d := newTestDaemon(t, dockerUp)
-	d.o.Name = "Alice-box"
-	var dockerCalls []string
-	var mu sync.Mutex
-	run := func(_ context.Context, _ io.Reader, args ...string) ([]byte, error) {
-		mu.Lock()
-		dockerCalls = append(dockerCalls, strings.Join(args, " "))
-		mu.Unlock()
-		return nil, errors.New("docker must not run")
+	ag := &fakeAgent{}
+	started := make(chan struct{}, 1)
+	ag.run = func(ctx context.Context, in sandbox.TurnInput, _ map[string]string) (*sandbox.TurnOutput, error) {
+		if in.Bearer != testBearer {
+			return nil, errors.New("no bearer")
+		}
+		if len(ag.inputs) == 1 {
+			started <- struct{}{}
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return &sandbox.TurnOutput{Result: &sandbox.Result{Result: "back", SessionID: sid}}, nil
 	}
-	// The sandbox reads a token that has expired since the readiness check let the daemon host.
-	dir := t.TempDir()
-	body := fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"x","expiresAt":%d}}`, time.Now().Add(-time.Minute).UnixMilli())
-	if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	expired := creds.NewSource(creds.Reader{ConfigDir: dir})
-	d.o.NewAgent = func(Room, string) Agent {
-		return sandbox.New(sandbox.Config{Name: "t", Host: d.o.Name, Upstream: &url.URL{}}, run, expired, d.o.Log)
-	}
-	d.Refresh(context.Background())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	room, _ := ParseRoomURL(rs.ts.URL + "/r/" + rs.room)
-	d.SetRoom(ctx, room)
-	waitFor(t, "pending", func() bool { return d.Status().Pairing == "pending" })
-	id := d.Status().ApproveURL[strings.Index(d.Status().ApproveURL, "=")+1:]
-	rs.call(t, "POST", "/api/rooms/"+rs.room+"/pairings/"+id, participant, map[string]bool{"approve": true}, http.StatusOK, nil)
-	waitFor(t, "online", func() bool { return rs.agent(t, participant).Online })
-	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", participant, map[string]bool{}, http.StatusCreated, nil)
-	start := time.Now()
-	waitFor(t, "turn failed", func() bool { v := rs.agent(t, participant); return v.Turn != nil && v.Turn.Status == "failed" })
-	if took := time.Since(start); took > 10*time.Second {
-		t.Fatalf("took %s", took)
-	}
-	if m := rs.lastMessage(t); m != "Grill turn failed: Claude credentials expired on Alice-box" {
+	alice, d, _ := pairedDaemon(t, rs, "Alice", ag)
+	room := rs.ts.URL + "/r/" + rs.room
+	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]bool{}, http.StatusCreated, nil)
+	<-started
+	d.SetAccess(Access{Proxies: map[string]Proxy{room: {Addr: "127.0.0.1:1", Bearer: testBearer}}, CutOff: true})
+	waitFor(t, "turn failed", func() bool { v := rs.agent(t, alice); return v.Turn != nil && v.Turn.Status == "failed" })
+	if m := rs.lastMessage(t); m != "Grill turn failed: "+errCutOff.Error() {
 		t.Fatalf("message %q", m)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(dockerCalls) != 0 {
-		t.Fatalf("docker ran: %v", dockerCalls)
-	}
+	waitFor(t, "the room sees the host offline", func() bool { return !rs.agent(t, alice).Online })
+	grant(d, room)
+	waitFor(t, "online again", func() bool { return rs.agent(t, alice).Online })
+	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]bool{}, http.StatusCreated, nil)
+	waitFor(t, "turn done", func() bool { v := rs.agent(t, alice); return v.Turn != nil && v.Turn.Status == "done" })
 }
 
 // The model and effort a room asks for reach claude's argv only when claude knows them; anything

@@ -748,8 +748,8 @@ window.addEventListener('focus', () => { if (events && events.readyState !== Eve
 // Agents. The host's daemon runs every persona of the room: a persona's LED is green only while
 // that daemon is connected and can host (D8). The host, and the participants the host allows,
 // press a persona's button (D18); a press during a turn waits in the room's queue (002-AC17).
-let agent = { online: false, can_trigger: [], daemons: [], turn: null, personas: [], queue: [], models: [], efforts: [], cap_requests: [], changes: [],
-  chain: { budget: 25, count: 0, suspended: false } };
+let agent = { online: false, can_trigger: [], daemons: [], turn: null, running: [], personas: [], queue: [], models: [], efforts: [], cap_requests: [],
+  changes: [], chain: { budget: 25, count: 0, suspended: false }, parallel_turns: false };
 
 // level shows a model and effort as the room says them, "opus · effort max".
 const level = (l) => (l.model || 'default') + ' · effort ' + (l.effort || 'default');
@@ -757,18 +757,34 @@ const level = (l) => (l.model || 'default') + ' · effort ' + (l.effort || 'defa
 const isHost = () => String(agent.host_participant_id || '') === myID;
 const canPress = () => isHost() || agent.can_trigger.includes(Number(myID));
 const personaByID = (id) => agent.personas.find((p) => p.id === id);
+// contextUse is the share of its model's window that a persona's session holds, in percent; null
+// while unknown (003-AC24).
+const contextUse = (p) => (p.context_window ? Math.round((100 * (p.context_tokens || 0)) / p.context_window) : null);
+// Above this use the room offers the host a new session with a handoff note (003-AC25).
+const contextFull = 80;
+
+function handOff(p) {
+  if (!confirm('New session for ' + p.name + ' with a handoff? Its last turn on this session writes docs/_handoff-' + p.name
+    + '.md, then a new session starts from that note and the transcripts.')) return Promise.resolve();
+  return sendJSON('POST', api + '/turns', { persona_id: p.id, handoff: true });
+}
 // A persona signs documents and revisions by name: show its badge while one holds that name.
 function personaLabel(name) {
   const p = agent.personas.find((x) => x.name === name);
   return p ? p.badge + ' ' + name : name;
 }
 
+// A turn the host's machine holds in its own queue, behind turns of other rooms, is "queued (host
+// busy)" (003-AC18).
+const runningTurn = (p) => (agent.running || []).find((t) => t.persona_id === p.id);
+const turnText = (p, t) => p.name + (t.host_queued ? ' queued (host busy)' : ' working');
+
 function personaState(p) {
-  const running = !!agent.turn && agent.turn.status === 'running' && agent.turn.persona_id === p.id;
+  const running = runningTurn(p);
   const pos = agent.queue.findIndex((q) => q.persona_id === p.id);
   if (p.pending) return { cls: 'pending', label: p.name + ' waits for the host\'s approval' };
   if (!agent.online) return { cls: '', label: p.name + ' offline' };
-  if (running) return { cls: 'busy', label: p.name + ' working' };
+  if (running) return { cls: running.host_queued ? 'queued' : 'busy', label: turnText(p, running) };
   if (pos >= 0) return { cls: 'queued', label: p.name + ' queued, position ' + (pos + 1) };
   return { cls: 'on', label: p.name + ' ready' };
 }
@@ -807,14 +823,29 @@ function renderAgent() {
     return b;
   });
   if (buttons.length !== bar.children.length || buttons.some((b, i) => bar.children[i] !== b)) bar.replaceChildren(...buttons);
-  const running = agent.turn && agent.turn.status === 'running' ? personaByID(agent.turn.persona_id) : null;
+  const running = (agent.running || []).map((t) => [personaByID(t.persona_id), t]).filter(([p]) => p);
   $('agent-status').textContent = !agent.online ? (agent.reason || 'Agent offline')
-    : running ? running.name + ' working…' : agent.personas.length === 0 ? 'No persona: add one.' : '';
+    : running.length ? running.map(([p, t]) => turnText(p, t)).join(', ') + '…' : agent.personas.length === 0 ? 'No persona: add one.' : '';
   renderQueue();
   renderApprovals();
   renderChain();
+  renderParallel();
   renderPersonas();
 }
+
+// renderParallel shows the room's parallel mode; only the host switches it (003-AC20).
+function renderParallel() {
+  const box = $('parallel-turns');
+  if (!box.dataset.busy) box.checked = !!agent.parallel_turns;
+  box.disabled = !isHost();
+}
+$('parallel-turns').addEventListener('change', () => {
+  const box = $('parallel-turns');
+  box.dataset.busy = '1';
+  sendJSON('PATCH', api + '/agent', { parallel_turns: box.checked })
+    .catch((err) => { box.checked = !box.checked; personasStatus(err.message); })
+    .finally(() => { delete box.dataset.busy; });
+});
 
 // renderChain shows the agent chain: its count, a banner once it reached its budget (re-arm or
 // suspend the limit), and a permanent warning while the limit is suspended (002-AC25, 002-AC27).
@@ -876,6 +907,24 @@ function renderApprovals() {
     decide(li, level(r.asks) + ' for ' + p.name, '/personas/' + p.id + '/cap', { model: r.asks.model || '', effort: r.asks.effort || '' });
     items.push(li);
   }
+  for (const p of agent.personas) {
+    const use = contextUse(p);
+    if (use === null || use < contextFull) continue;
+    const li = document.createElement('li');
+    li.textContent = p.badge + ' ' + p.name + '\'s session holds ' + use + '% of its context window.';
+    if (isHost()) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'small';
+      b.textContent = 'New session with handoff';
+      b.setAttribute('aria-label', 'New session with handoff for ' + p.name);
+      b.addEventListener('click', () => handOff(p).catch((err) => { $('agent-status').textContent = err.message; }));
+      li.append(' ', b);
+    } else {
+      li.append(' The host can start a new session with a handoff.');
+    }
+    items.push(li);
+  }
   for (const c of agent.changes || []) {
     const p = personaByID(c.persona_id);
     if (!p) continue;
@@ -897,8 +946,8 @@ function renderQueue() {
     const p = personaByID(q.persona_id);
     const who = participants.find((x) => x.id === q.participant_id);
     const by = { mention: ', mentioned by ', call: ', called by an agent', every_n: ', every ' + (p ? p.every_n : 'N') + ' rounds' }[q.source];
-    const label = (p ? p.badge + ' ' + p.name : 'a persona') + (by === undefined ? ', asked by ' : by)
-      + (q.participant_id ? (who ? who.name : 'someone') : '');
+    const label = (p ? p.badge + ' ' + p.name : 'a persona') + (q.cause ? ', ' + q.cause
+      : (by === undefined ? ', asked by ' : by) + (q.participant_id ? (who ? who.name : 'someone') : ''));
     li.append(label);
     if (String(q.participant_id) === myID || (!q.participant_id && canPress())) {
       const cancel = document.createElement('button');
@@ -957,8 +1006,10 @@ function personaForm(p) {
   const tpl = templates.find((t) => t.id === p.template_id);
   const from = document.createElement('p');
   from.className = 'hint';
+  const use = contextUse(p);
   from.textContent = (tpl ? 'From "' + tpl.title + '" v' + p.template_version : 'Its template was removed from the library.')
-    + (p.pending ? ' Waits for the host\'s approval.' : '');
+    + (p.pending ? ' Waits for the host\'s approval.' : '')
+    + (use === null ? '' : ' Its session holds ' + use + '% of its context window.');
   const input = (name, value, attrs) => {
     const i = document.createElement('input');
     i.name = name;
@@ -980,6 +1031,8 @@ function personaForm(p) {
     field('Model', picker('model', agent.models, p.model, 'host default')),
     field('Effort', picker('effort', agent.efforts, p.effort, 'default')),
     field('Every N rounds', input('every_n', p.every_n || 0, { type: 'number', min: 0, max: 100, title: '0 runs it on demand only' })),
+    field('Autocompact (k tokens)', input('autocompact', p.autocompact ? p.autocompact / 1000 : '', { type: 'number', min: 100, max: 1000,
+      placeholder: 'auto', title: 'Context size at which Claude Code compacts the session; empty for auto' })),
   );
   const self = input('self_call', '', { type: 'checkbox', checked: p.self_call });
   const selfCall = field('', self);
@@ -1018,6 +1071,7 @@ function personaForm(p) {
     act('New session', 'Start a new session for ' + p.name, async () => {
       if (confirm('Start a new session for ' + p.name + '? It forgets its earlier turns and rereads the room history.')) await pressPersona(p.id, true);
     });
+    act('New session with handoff', 'New session with handoff for ' + p.name, () => handOff(p));
   }
   act('Remove', 'Remove ' + p.name, async () => {
     if (!confirm('Remove ' + p.name + ' from the room? Its session goes; what it wrote stays.')) return;
@@ -1135,7 +1189,8 @@ async function loadSkills() {
 function formFields(form) {
   const v = (name) => form.elements.namedItem(name).value;
   return { name: v('name'), badge: v('badge'), colour: v('colour'), model: v('model'), effort: v('effort'), text: v('text'),
-    every_n: Number(v('every_n')), self_call: form.elements.namedItem('self_call').checked };
+    every_n: Number(v('every_n')), self_call: form.elements.namedItem('self_call').checked,
+    autocompact: v('autocompact') ? Math.round(Number(v('autocompact')) * 1000) : 0 };
 }
 
 // seenKey is what a form shows: the persona, and whether the viewer hosts (New session).
@@ -1437,7 +1492,7 @@ async function showPairing(id) {
     return;
   }
   const p = await res.json();
-  text.textContent = 'The agent daemon on "' + p.name + '" asks to run the agent for you in this room, with your Claude subscription. ' +
+  text.textContent = 'An agent daemon asks to run the agent for you in this room, with your Claude subscription. ' +
     'Approve only if your daemon page shows the code ' + p.code + '.';
   const answer = async (approve) => {
     $('pairing-actions').hidden = true;

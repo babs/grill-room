@@ -1,0 +1,2 @@
+# Makes tools/ui/ its own pnpm workspace root: without it pnpm walks up to any parent workspace.
+packages: []

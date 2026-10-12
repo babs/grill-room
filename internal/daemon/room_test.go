@@ -85,3 +85,18 @@ func TestRing(t *testing.T) {
 		t.Fatalf("lines = %q", got)
 	}
 }
+
+// A restarted worker must find its own sandbox again; two supervisors must never share one.
+func TestSandboxName(t *testing.T) {
+	a := Room{Base: "https://rooms.example", ID: "abc"}
+	b := Room{Base: "https://rooms.example", ID: "abd"}
+	n := SandboxName("/state/one", a)
+	if len(n) != 12 || n != SandboxName("/state/one", a) {
+		t.Fatalf("name %q not stable", n)
+	}
+	for _, other := range []string{SandboxName("/state/two", a), SandboxName("/state/one", b)} {
+		if other == n {
+			t.Fatalf("names collide: %q", n)
+		}
+	}
+}

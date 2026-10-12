@@ -20,7 +20,8 @@ const (
 	DocsDir = "docs"
 	// UploadsDir holds participants' uploads, read-only (D30), plus the Markdown copy of office files.
 	UploadsDir = "uploads"
-	// TranscriptDir holds the room's messages as Markdown, one file per UTC day (D20).
+	// TranscriptDir holds the room's messages as Markdown: a folder per UTC day, of chunks of
+	// TranscriptChunk messages each (D20, 003-AC23).
 	TranscriptDir = "transcript"
 	// AnnotationsFile lists every annotation thread with its id.
 	AnnotationsFile = "annotations.md"
@@ -46,7 +47,17 @@ const (
 	MaxNewAnnotations = 50
 	// Anchor context, in runes, as the anchor package accepts it.
 	maxContext = 64
+	// TranscriptChunk is how many messages a transcript chunk holds. Counted in messages, not
+	// lines: an edit that adds lines to a message must not move the later ones to another chunk.
+	TranscriptChunk = 200
+	// MinAutocompact and MaxAutocompact bound the token count claude -p --autocompact accepts.
+	MinAutocompact = 100_000
+	MaxAutocompact = 1_000_000
 )
+
+// HandoffDoc is the document a persona's last turn before a handoff writes for its new session,
+// in docs/ (003-AC25).
+func HandoffDoc(persona string) string { return "_handoff-" + persona + ".md" }
 
 // Efforts are the values claude -p --effort accepts; empty leaves Claude Code's default.
 var Efforts = []string{"low", "medium", "high", "xhigh", "max"}
@@ -77,6 +88,10 @@ type Job struct {
 	// Skills are the persona's active skills at the versions the room pinned (002-AC31). When set,
 	// the daemon fetches them as a plugin directory and runs claude with --plugin-dir.
 	Skills []Skill `json:"skills,omitempty"`
+	// Autocompact is the persona's context size for claude -p --autocompact; 0 for auto (003-AC24).
+	Autocompact int `json:"autocompact,omitempty"`
+	// Cause is why the turn runs, as its preamble says; the daemon's monitoring records it (003-AC27).
+	Cause string `json:"cause,omitempty"`
 }
 
 // Skill names a skill a turn loads, at its pinned version.
@@ -108,6 +123,11 @@ type Result struct {
 	SessionOffset int64    `json:"session_offset"`
 	Session       []byte   `json:"session,omitempty"`
 	Changes       []Change `json:"changes,omitempty"`
+	// ContextTokens is what the session's last request sent to the model: its input, cache read
+	// and cache creation tokens. ContextWindow is the model's window as claude reported it. 0 is
+	// unknown (003-AC24).
+	ContextTokens int64 `json:"context_tokens,omitempty"`
+	ContextWindow int64 `json:"context_window,omitempty"`
 }
 
 // Manifest lists a turn's workspace (002-AC37): the daemon fetches only the files its cache lacks.

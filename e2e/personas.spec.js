@@ -48,7 +48,7 @@ test('personas: add, edit, queue', async ({ browser, request, baseURL }) => {
     await alice.getByRole('button', { name: 'Ask Secretary' }).click();
     for (const p of [alice, bob]) {
       await expect(led(p, 'Secretary')).toHaveAttribute('aria-label', 'Secretary queued, position 1');
-      await expect(p.locator('#queue-list li')).toHaveText([/^📝 Secretary, asked by Alice/]);
+      await expect(p.locator('#queue-list li')).toHaveText([/^📝 Secretary, pressed by Alice/]);
     }
     await expect(bob.getByRole('button', { name: 'Cancel the queued turn of Secretary' })).toHaveCount(0);
     await alice.getByRole('button', { name: 'Cancel the queued turn of Secretary' }).click();

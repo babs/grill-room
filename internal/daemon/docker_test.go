@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -24,7 +23,6 @@ func sandboxHost(t *testing.T, rs *roomServer, name, image string) (string, cont
 	t.Helper()
 	participant, _ := rs.join(t, name)
 	d := newTestDaemon(t, sandbox.Docker)
-	d.o.Name = name + "-box"
 	d.o.Log = zaptest.NewLogger(t, zaptest.Level(zap.WarnLevel))
 	// Alice keeps a workspace cache and Bob fetches whole workspaces: both unpack in a real
 	// sandbox (002-AC37).
@@ -32,9 +30,9 @@ func sandboxHost(t *testing.T, rs *roomServer, name, image string) (string, cont
 		d.cache = &wsCache{dir: t.TempDir(), max: 64 << 20}
 	}
 	label := fmt.Sprintf("test-%s-%d", strings.ToLower(name), time.Now().UnixNano())
-	up, _ := url.Parse("http://127.0.0.1:1")
-	d.o.NewAgent = func(Room, string) Agent {
-		return sandbox.New(sandbox.Config{Image: image, Name: label, Host: d.o.Name, Upstream: up}, sandbox.Docker, d.o.Creds, d.o.Log)
+	// The fake claude sends nothing upstream: the relay only needs an address.
+	d.o.NewAgent = func(_ Room, _ int, _, proxy string) Agent {
+		return sandbox.New(sandbox.Config{Image: image, Name: label, Proxy: proxy}, sandbox.Docker, d.o.Log)
 	}
 	t.Cleanup(func() {
 		// A dropped daemon closes its sandbox; this catches a test that failed before.
@@ -46,18 +44,12 @@ func sandboxHost(t *testing.T, rs *roomServer, name, image string) (string, cont
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	room, _ := ParseRoomURL(rs.ts.URL + "/r/" + rs.room)
+	grant(d, room.String())
 	d.SetRoom(ctx, room)
 	waitFor(t, "pending", func() bool { return d.Status().Pairing == "pending" })
 	id := d.Status().ApproveURL[strings.Index(d.Status().ApproveURL, "=")+1:]
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/pairings/"+id, participant, map[string]bool{"approve": true}, http.StatusOK, nil)
-	waitFor(t, "can host", func() bool {
-		for _, rd := range rs.daemons(t, participant) {
-			if rd.Name == d.o.Name && rd.CanHost {
-				return true
-			}
-		}
-		return false
-	})
+	waitFor(t, "can host", func() bool { return rs.hostsFor(t, participant) })
 	return participant, cancel
 }
 
@@ -128,7 +120,7 @@ func TestDockerTurnsAndTakeover(t *testing.T) {
 	dropA()
 	waitFor(t, "bob hosts after the failed turn", func() bool {
 		v := rs.agent(t, bob)
-		return v.Turn.Status == "failed" && v.Online && strings.Contains(v.Turn.Error, "Alice-box disconnected")
+		return v.Turn.Status == "failed" && v.Online && strings.Contains(v.Turn.Error, "the host's daemon disconnected")
 	})
 	if revs, _ := rs.st.Revisions(t.Context(), notes.ID); len(revs) != 1 {
 		t.Fatalf("partial revision kept: %d revisions", len(revs))
@@ -144,7 +136,7 @@ func TestDockerTurnsAndTakeover(t *testing.T) {
 
 	v = rs.turn(t, bob, "FAKE_LIST", true)
 	day := time.Now().UTC().Format(time.DateOnly)
-	if v.Turn.Status != "done" || rs.lastMessage(t) != "transcript: "+day+".md; FAKE_MARK found: true" {
+	if v.Turn.Status != "done" || rs.lastMessage(t) != "transcript: "+day+"/001.md; FAKE_MARK found: true" {
 		t.Fatalf("fresh: %+v %q", v.Turn, rs.lastMessage(t))
 	}
 	if last, _ := rs.st.LastDoneTurn(t.Context(), rs.room, rs.grill(t).ID); last.SessionID == sid || !last.Fresh {
@@ -190,13 +182,7 @@ func TestDockerPersonasTakeover(t *testing.T) {
 	bob, _ := sandboxHost(t, rs, "Bob", image)
 	dropA()
 	waitFor(t, "bob hosts", func() bool {
-		var st struct {
-			Daemons []struct {
-				Name string `json:"name"`
-			} `json:"daemons"`
-		}
-		rs.call(t, "GET", "/api/rooms/"+rs.room+"/agent", bob, nil, http.StatusOK, &st)
-		return len(st.Daemons) == 1 && st.Daemons[0].Name == "Bob-box" && rs.agent(t, bob).Online
+		return rs.hostsFor(t, bob) && len(rs.daemons(t, bob)) == 1 && rs.agent(t, bob).Online
 	})
 	if got := say(bob, "FAKE_RECALL", grill.ID); got != "The code word was GRILL-1." {
 		t.Fatalf("grill after takeover: %q", got)

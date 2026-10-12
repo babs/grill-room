@@ -25,16 +25,15 @@ const (
 	// Pairing requests need no token, so their count is bounded per room and overall.
 	maxPairingsPerRoom = 10
 	maxPairings        = 1000
-	maxDaemonName      = 64
 	maxReason          = 200
 )
 
 // pairing is a daemon's request to pair, waiting for a participant's answer. Kept in memory: a
 // restart only makes the daemon ask again.
 type pairing struct {
-	id, room, name, code string
-	secretHash           string
-	expires              time.Time
+	id, room, code string
+	secretHash     string
+	expires        time.Time
 	// token is set on approval and handed to the daemon once.
 	token  string
 	denied bool
@@ -56,9 +55,8 @@ func (ps *pairings) sweepLocked(now time.Time) {
 
 // presence is a connected daemon as the room sees it.
 type presence struct {
-	ParticipantID int64  `json:"participant_id"`
-	Name          string `json:"name"`
-	CanHost       bool   `json:"can_host"`
+	ParticipantID int64 `json:"participant_id"`
+	CanHost       bool  `json:"can_host"`
 	// Reason says why the daemon cannot host (Docker missing, credentials unreadable).
 	Reason  string `json:"reason,omitempty"`
 	Version string `json:"version,omitempty"`
@@ -96,18 +94,12 @@ func pairCode() string {
 	return s[:3] + "-" + s[3:]
 }
 
-// createPairing is called by a daemon that has no token yet.
+// createPairing is called by a daemon that has no token yet. A name it sends, the machine's
+// name for daemons before spec 003, is dropped unread (003-AC17).
 func (s *Server) createPairing(w http.ResponseWriter, r *http.Request) {
 	room := r.PathValue("room")
-	var req struct {
-		Name string `json:"name"`
-	}
+	var req struct{}
 	if !decode(w, r, &req) {
-		return
-	}
-	name, ok := cleanText(req.Name, maxDaemonName, false)
-	if !ok {
-		httpError(w, http.StatusBadRequest, fmt.Sprintf("name must be 1 to %d characters", maxDaemonName))
 		return
 	}
 	if _, err := s.bus.Store.Room(r.Context(), room); err != nil {
@@ -119,7 +111,7 @@ func (s *Server) createPairing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secret := NewToken()
-	p := &pairing{id: NewToken(), room: room, name: name, code: pairCode(), secretHash: HashToken(secret), expires: time.Now().Add(pairingTTL)}
+	p := &pairing{id: NewToken(), room: room, code: pairCode(), secretHash: HashToken(secret), expires: time.Now().Add(pairingTTL)}
 	s.pairings.mu.Lock()
 	s.pairings.sweepLocked(time.Now())
 	inRoom := 0
@@ -135,7 +127,7 @@ func (s *Server) createPairing(w http.ResponseWriter, r *http.Request) {
 	}
 	s.pairings.m[p.id] = p
 	s.pairings.mu.Unlock()
-	s.log.Info("pairing_requested", zap.String("room", room), zap.String("name", name))
+	s.log.Info("pairing_requested", zap.String("room", room))
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": p.id, "secret": secret, "code": p.code, "expires_at": p.expires.UTC(),
 		"approve_url": s.baseURL + "/r/" + room + "?pair=" + p.id,
@@ -184,7 +176,7 @@ func (s *Server) getPairing(w http.ResponseWriter, r *http.Request, sess session
 		httpError(w, http.StatusNotFound, "this pairing request expired or was already answered")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": p.id, "name": p.name, "code": p.code, "expires_at": p.expires.UTC()})
+	writeJSON(w, http.StatusOK, map[string]any{"id": p.id, "code": p.code, "expires_at": p.expires.UTC()})
 }
 
 // answerPairing pairs the daemon to the participant answering, or denies it.
@@ -209,7 +201,7 @@ func (s *Server) answerPairing(w http.ResponseWriter, r *http.Request, sess sess
 		return
 	}
 	tok := NewToken()
-	d, err := s.bus.Store.PairDaemon(r.Context(), sess.p.RoomID, sess.p.ID, p.name, HashToken(tok))
+	d, err := s.bus.Store.PairDaemon(r.Context(), sess.p.RoomID, sess.p.ID, HashToken(tok))
 	if err != nil {
 		s.serverError(w, "pair_daemon_failed", err)
 		return
@@ -284,7 +276,7 @@ func (s *Server) daemonStatus(w http.ResponseWriter, r *http.Request, d *store.D
 		s.presence.m[d.ID] = p
 	}
 	changed := p.CanHost != req.CanHost || p.Reason != reason
-	p.room, p.ParticipantID, p.Name, p.id = d.RoomID, d.ParticipantID, d.Name, d.ID
+	p.room, p.ParticipantID, p.id = d.RoomID, d.ParticipantID, d.ID
 	p.CanHost, p.Reason, p.Version = req.CanHost, reason, version
 	s.presence.mu.Unlock()
 	switch {
@@ -317,8 +309,7 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 		p = &presence{}
 		s.presence.m[d.ID] = p
 	}
-	// Re-pairing keeps the daemon id but may rename it.
-	p.room, p.ParticipantID, p.Name, p.id = d.RoomID, d.ParticipantID, d.Name, d.ID
+	p.room, p.ParticipantID, p.id = d.RoomID, d.ParticipantID, d.ID
 	if p.conns++; p.conns == 1 {
 		p.since = time.Now()
 	}
@@ -337,7 +328,7 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 		if gone {
 			// The request context is done: the cleanup must still reach the store.
 			ctx := context.WithoutCancel(r.Context())
-			s.failDaemonTurn(ctx, d, "the host daemon on "+d.Name+" disconnected")
+			s.failDaemonTurn(ctx, d, "the host's daemon disconnected")
 			s.agentChanged(ctx, d.RoomID)
 		}
 	}()
@@ -354,21 +345,50 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 		return
 	}
 	flusher.Flush()
-	// sendTurn hands this daemon the room's running turn when it is this daemon's, once.
+	// sendTurn hands this daemon each running turn of the room that is its own, once. Ids grow, so
+	// the last one sent tells which are new; with parallel on there may be several (003-AC20).
 	var sent int64
 	sendTurn := func() bool {
-		t, err := s.bus.Store.RunningTurn(r.Context(), d.RoomID)
-		if err != nil || t.DaemonID != d.ID || t.ID == sent {
+		ts, err := s.bus.Store.RunningTurns(r.Context(), d.RoomID)
+		if err != nil {
 			return true
 		}
-		sent = t.ID
-		if _, err := fmt.Fprintf(w, "event: turn\ndata: {\"id\":%d}\n\n", t.ID); err != nil { //nolint:gosec // an integer id on an event stream, never HTML
+		for _, t := range ts {
+			if t.DaemonID != d.ID || t.ID <= sent {
+				continue
+			}
+			sent = t.ID
+			if _, err := fmt.Fprintf(w, "event: turn\ndata: {\"id\":%d}\n\n", t.ID); err != nil { //nolint:gosec // an integer id on an event stream, never HTML
+				return false
+			}
+		}
+		flusher.Flush()
+		return true
+	}
+	// sendRoom tells this daemon whether it hosts the room's agent and whether the room runs
+	// personas in parallel, when that changed; its admin page shows both (003-AC26).
+	var sentRoom string
+	sendRoom := func() bool {
+		room, err := s.bus.Store.Room(r.Context(), d.RoomID)
+		if err != nil {
+			return true
+		}
+		host, err := s.bus.Store.HostDaemon(r.Context(), d.RoomID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return true
+		}
+		b, _ := json.Marshal(map[string]bool{"host": host != nil && host.ID == d.ID, "parallel_turns": room.ParallelTurns})
+		if string(b) == sentRoom {
+			return true
+		}
+		sentRoom = string(b)
+		if _, err := fmt.Fprintf(w, "event: room\ndata: %s\n\n", b); err != nil {
 			return false
 		}
 		flusher.Flush()
 		return true
 	}
-	if !sendTurn() {
+	if !sendTurn() || !sendRoom() {
 		return
 	}
 	// alive re-checks the token: a revoked invite, a deleted room or a re-pairing ends the stream.
@@ -397,7 +417,7 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 			}
 			flusher.Flush()
 		case changed := <-live:
-			if changed == d.RoomID && (!alive() || !sendTurn()) {
+			if changed == d.RoomID && (!alive() || !sendTurn() || !sendRoom()) {
 				return
 			}
 		}

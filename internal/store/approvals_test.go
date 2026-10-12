@@ -14,7 +14,7 @@ func approvingRoom(t *testing.T, s *Store, room string) (alice, bob *Participant
 	t.Helper()
 	ctx := context.Background()
 	alice, bob, grill = personaRoom(t, s, room)
-	d, err := s.PairDaemon(ctx, room, alice.ID, "laptop", "dmn-"+room)
+	d, err := s.PairDaemon(ctx, room, alice.ID, "dmn-"+room)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestHeldChanges(t *testing.T) {
 	if err := s.Enqueue(ctx, &QueuedTurn{RoomID: "a", PersonaID: sec.ID, ParticipantID: bob.ID}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("queued a pending persona: %v", err)
 	}
-	if err := s.StartTurn(ctx, &Turn{RoomID: "a", PersonaID: sec.ID, Prompt: "x"}); !errors.Is(err, ErrNotFound) {
+	if err := s.StartTurn(ctx, &Turn{RoomID: "a", PersonaID: sec.ID, Prompt: "x"}, false); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("started a pending persona: %v", err)
 	}
 	if _, m, held, err := s.EditPersona(ctx, "a", sec.ID, PersonaPatch{Name: str("Scribe")}, bob); err != nil || !held ||
@@ -190,7 +190,7 @@ func TestHeldChangesSurviveAHandOver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.PairDaemon(ctx, "a", carol.ID, "desk", "dmn-carol"); err != nil {
+	if _, err := s.PairDaemon(ctx, "a", carol.ID, "dmn-carol"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetHost(ctx, "a", carol.ID); err != nil {
@@ -237,7 +237,7 @@ func TestDecideCap(t *testing.T) {
 		t.Fatalf("refusal: %+v", p.Cap)
 	}
 	m, err = s.DecideCap(ctx, "a", grill.ID, d, opusMax, turn.Level{}, true, alice)
-	if err != nil || m.Body != "Alice approved opus · effort max for 🔥 Grill on laptop: it runs as asked from its next turn." {
+	if err != nil || m.Body != "Alice approved opus · effort max for 🔥 Grill: it runs as asked from its next turn." {
 		t.Fatalf("approve: %+v %v", m, err)
 	}
 	p, _ = s.RoomPersona(ctx, "a", grill.ID)

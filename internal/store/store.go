@@ -35,6 +35,9 @@ type Room struct {
 	// HostParticipantID is the participant whose daemon runs the agent; 0 before any daemon hosted.
 	HostParticipantID int64 `json:"host_participant_id,omitempty"`
 	Chain             Chain `json:"chain"`
+	// ParallelTurns lets two personas of the room run at once, each in its own sandbox; the host
+	// switches it (003-AC20).
+	ParallelTurns bool `json:"parallel_turns"`
 }
 
 // Invite is a link token granting access to one room. Only its hash is stored.
@@ -58,6 +61,9 @@ type Participant struct {
 	CanTrigger bool `json:"can_trigger"`
 	// ProfileID links the participant across rooms; never sent, as it would let others do the same.
 	ProfileID int64 `json:"-"`
+	// ProfileUUID is the profile's uuid, empty without one: the presence preamble shows its start
+	// (003-AC32). Never sent, like ProfileID.
+	ProfileUUID string `json:"-"`
 }
 
 // Message is one line in a room.
@@ -438,7 +444,46 @@ CREATE TABLE room_persona_skills (
 CREATE INDEX room_persona_skills_skill ON room_persona_skills(skill_id);
 ALTER TABLE profiles ADD COLUMN skills_disclaimer_at TEXT;
 ALTER TABLE turns ADD COLUMN skills TEXT NOT NULL DEFAULT '[]';
+`, `
+-- 003-AC17: the room shows who holds the agent, never their machine's name.
+UPDATE messages SET body = substr(body, 1, instr(body, ' hosts the agent, on ') - 1) || ' holds the agent(s).'
+	WHERE kind = 'system' AND instr(body, ' hosts the agent, on ') > 0;
+UPDATE daemons SET name = '';
+UPDATE turns SET host = '';
+`, `
+-- 003-AC18 to 003-AC21: concurrent turns. host_queued_at is set while the host's daemon holds an
+-- accepted turn in its local queue; base_revisions pins the agent documents a turn's workspace holds.
+ALTER TABLE rooms ADD COLUMN parallel_turns INTEGER NOT NULL DEFAULT 0 CHECK (parallel_turns IN (0, 1));
+ALTER TABLE turns ADD COLUMN host_queued_at TEXT;
+ALTER TABLE turns ADD COLUMN base_revisions TEXT;
+ALTER TABLE turns ADD COLUMN rerun_of INTEGER REFERENCES turns(id) ON DELETE SET NULL;
+ALTER TABLE turns ADD COLUMN cause TEXT NOT NULL DEFAULT '';
+CREATE INDEX turns_rerun_of ON turns(rerun_of);
+-- One running turn per persona; StartTurn keeps one per room unless the room runs in parallel.
+DROP INDEX turns_one_running;
+CREATE UNIQUE INDEX turns_one_running ON turns(persona_id) WHERE status = 'running';
+ALTER TABLE turn_queue ADD COLUMN rerun_of INTEGER REFERENCES turns(id) ON DELETE CASCADE;
+ALTER TABLE turn_queue ADD COLUMN cause TEXT NOT NULL DEFAULT '';
+CREATE INDEX turn_queue_rerun_of ON turn_queue(rerun_of);
+`, `
+-- 003-AC22 to 003-AC25, 003-AC32: the turn contract. A profile's uuid tells two people of the same
+-- name apart in the presence preamble; context_* is the session's context use after its last turn;
+-- handoff marks the turn that writes a handoff note ('write') and the new session reading it ('read').
+ALTER TABLE profiles ADD COLUMN uuid TEXT;
+UPDATE profiles SET uuid = ` + uuidSQL + `;
+CREATE UNIQUE INDEX profiles_uuid ON profiles(uuid);
+ALTER TABLE room_personas ADD COLUMN autocompact INTEGER NOT NULL DEFAULT 0
+	CHECK (autocompact = 0 OR autocompact BETWEEN 100000 AND 1000000);
+ALTER TABLE agent_sessions ADD COLUMN context_tokens INTEGER;
+ALTER TABLE agent_sessions ADD COLUMN context_window INTEGER;
+ALTER TABLE agent_sessions ADD COLUMN context_updated_at TEXT;
+ALTER TABLE turns ADD COLUMN handoff TEXT NOT NULL DEFAULT '' CHECK (handoff IN ('', 'write', 'read'));
+ALTER TABLE turn_queue ADD COLUMN handoff TEXT NOT NULL DEFAULT '' CHECK (handoff IN ('', 'write', 'read'));
 `}
+
+// uuidSQL is a random version 4 UUID; SQLite has no function for it.
+const uuidSQL = `lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)), 2) || '-' ||
+	substr('89ab', 1 + abs(random() % 4), 1) || substr(hex(randomblob(2)), 2) || '-' || hex(randomblob(6)))`
 
 // migrationData runs Go code inside the transaction of the migration to version key, after its SQL.
 var migrationData = map[int]func(context.Context, *sql.Tx) error{9: migratePersonas}
@@ -551,8 +596,8 @@ func (s *Store) CreateRoom(ctx context.Context, id, name string) (*Room, error) 
 func (s *Store) Room(ctx context.Context, id string) (*Room, error) {
 	var r Room
 	var created string
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at, COALESCE(host_participant_id, 0), chain_budget, chain_count, chain_suspended
-		FROM rooms WHERE id = ?`, id).Scan(&r.ID, &r.Name, &created, &r.HostParticipantID, &r.Chain.Budget, &r.Chain.Count, &r.Chain.Suspended)
+	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at, COALESCE(host_participant_id, 0), chain_budget, chain_count, chain_suspended, parallel_turns
+		FROM rooms WHERE id = ?`, id).Scan(&r.ID, &r.Name, &created, &r.HostParticipantID, &r.Chain.Budget, &r.Chain.Count, &r.Chain.Suspended, &r.ParallelTurns)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -809,8 +854,8 @@ func (s *Store) ParticipantByToken(ctx context.Context, tokenHash string) (*Part
 // Participants lists a room's participants whose invite is still valid, in join order.
 func (s *Store) Participants(ctx context.Context, roomID string) ([]Participant, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger FROM participants p
-		JOIN invites i ON i.id = p.invite_id
+		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger, COALESCE(p.profile_id, 0), COALESCE(f.uuid, '') FROM participants p
+		JOIN invites i ON i.id = p.invite_id LEFT JOIN profiles f ON f.id = p.profile_id
 		WHERE p.room_id = ? AND i.revoked_at IS NULL ORDER BY p.id`, roomID)
 	if err != nil {
 		return nil, fmt.Errorf("query participants: %w", err)
@@ -820,7 +865,7 @@ func (s *Store) Participants(ctx context.Context, roomID string) ([]Participant,
 	for rows.Next() {
 		var p Participant
 		var joined string
-		if err := rows.Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger); err != nil {
+		if err := rows.Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID, &p.ProfileUUID); err != nil {
 			return nil, fmt.Errorf("scan participant: %w", err)
 		}
 		p.JoinedAt = parseTS(joined)
@@ -846,7 +891,7 @@ func nullStr(s string) any {
 	return s
 }
 
-// nullID stores 0 as NULL, for optional foreign keys.
+// nullID stores 0 as NULL: an optional foreign key, or a count not known.
 func nullID(id int64) any {
 	if id == 0 {
 		return nil

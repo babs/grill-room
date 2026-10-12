@@ -13,7 +13,6 @@ type Daemon struct {
 	ID            int64     `json:"id"`
 	RoomID        string    `json:"room_id"`
 	ParticipantID int64     `json:"participant_id"`
-	Name          string    `json:"name"`
 	CreatedAt     time.Time `json:"created_at"`
 	// Settings are the cap and approval mode the daemon last reported; the room applies the
 	// current host's, even while its daemon is offline.
@@ -27,12 +26,12 @@ type DaemonSettings struct {
 	ApproveAll bool   `json:"approve_all"`
 }
 
-const daemonCols = `SELECT d.id, d.room_id, d.participant_id, d.name, d.created_at, d.max_model, d.max_effort, d.approve_all FROM daemons d `
+const daemonCols = `SELECT d.id, d.room_id, d.participant_id, d.created_at, d.max_model, d.max_effort, d.approve_all FROM daemons d `
 
 func scanDaemon(sc scanner) (*Daemon, error) {
 	var d Daemon
 	var created string
-	err := sc.Scan(&d.ID, &d.RoomID, &d.ParticipantID, &d.Name, &created, &d.Settings.MaxModel, &d.Settings.MaxEffort, &d.Settings.ApproveAll)
+	err := sc.Scan(&d.ID, &d.RoomID, &d.ParticipantID, &created, &d.Settings.MaxModel, &d.Settings.MaxEffort, &d.Settings.ApproveAll)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -45,13 +44,14 @@ func scanDaemon(sc scanner) (*Daemon, error) {
 
 // PairDaemon records participant's daemon with tokenHash. A participant has one daemon: pairing
 // again replaces the previous one and its token. ErrNotFound if the participant is not in room.
-func (s *Store) PairDaemon(ctx context.Context, roomID string, participantID int64, name, tokenHash string) (*Daemon, error) {
-	d := &Daemon{RoomID: roomID, ParticipantID: participantID, Name: name, CreatedAt: time.Now().UTC()}
+// The daemon's machine name is not kept: the room never shows it (003-AC17).
+func (s *Store) PairDaemon(ctx context.Context, roomID string, participantID int64, tokenHash string) (*Daemon, error) {
+	d := &Daemon{RoomID: roomID, ParticipantID: participantID, CreatedAt: time.Now().UTC()}
 	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO daemons(room_id, participant_id, name, token_hash, created_at)
-		SELECT room_id, id, ?, ?, ? FROM participants WHERE id = ? AND room_id = ?
-		ON CONFLICT(participant_id) DO UPDATE SET name = excluded.name, token_hash = excluded.token_hash, created_at = excluded.created_at
-		RETURNING id`, name, tokenHash, d.CreatedAt.Format(time.RFC3339Nano), participantID, roomID).Scan(&d.ID)
+		SELECT room_id, id, '', ?, ? FROM participants WHERE id = ? AND room_id = ?
+		ON CONFLICT(participant_id) DO UPDATE SET token_hash = excluded.token_hash, created_at = excluded.created_at
+		RETURNING id`, tokenHash, d.CreatedAt.Format(time.RFC3339Nano), participantID, roomID).Scan(&d.ID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

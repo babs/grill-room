@@ -8,6 +8,9 @@
 set -eu
 
 readonly bin_name=grill-room-daemon
+# The signer the supervisor accepts (003-AC2): this repository's release workflow on a vX.Y.Z tag.
+readonly signer='^https://github\.com/babs/grill-room/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$'
+readonly issuer=https://token.actions.githubusercontent.com
 
 die() {
 	printf 'grill-room install: %s\n' "$1" >&2
@@ -48,6 +51,28 @@ sha256_of() {
 	fi
 }
 
+# verify_signature checks the project's keyless signature on the download in $tmp when cosign is
+# installed; there are no minisign signatures to check.
+verify_signature() {
+	if ! command -v cosign >/dev/null 2>&1; then
+		printf 'Signature not checked: cosign is not installed.\n'
+		return
+	fi
+	bundle=$(mktemp "$dir/.$bin_name.XXXXXX")
+	curl -fsSL -o "$bundle" "$base/download/$file.sigstore.json" \
+		|| die "the room server serves no signature for $file and cosign is installed: refusing an unsigned build. Nothing was installed."
+	# cosign 2.4 reads cosign 3's bundle format only with this flag; 2.5 and 3 detect it.
+	format=
+	case $(cosign version 2>&1) in *GitVersion:*v2.*) format=--new-bundle-format ;; esac
+	# $format is empty or one flag: unquoted on purpose.
+	# shellcheck disable=SC2086
+	if ! out=$(cosign verify-blob $format --bundle "$bundle" --certificate-identity-regexp "$signer" \
+		--certificate-oidc-issuer "$issuer" "$tmp" 2>&1); then
+		die "signature check failed for $file: $out. Nothing was installed."
+	fi
+	printf 'Signature checked: built by the grill-room release workflow.\n'
+}
+
 main() {
 	[ "$#" -eq 1 ] || usage
 	room_url=$1
@@ -72,8 +97,9 @@ main() {
 	mkdir -p "$dir"
 
 	# Downloaded next to its final place, so the move into place is an atomic rename.
+	bundle=
 	tmp=$(mktemp "$dir/.$bin_name.XXXXXX")
-	trap 'rm -f "$tmp"' EXIT
+	trap 'rm -f "$tmp" ${bundle:+"$bundle"}' EXIT
 	trap 'exit 1' HUP INT TERM
 	printf 'Downloading %s from %s\n' "$file" "$base"
 	curl -fsSL -o "$tmp" "$base/download/$file" || die "download of $base/download/$file failed"
@@ -81,10 +107,14 @@ main() {
 	want=${want%% *}
 	got=$(sha256_of "$tmp")
 	got=${got%% *}
-	[ -n "$want" ] && [ "$got" = "$want" ] || die "sha256 mismatch for $file: the room server publishes $want, the download is $got. Nothing was installed."
+	if [ -z "$want" ] || [ "$got" != "$want" ]; then
+		die "sha256 mismatch for $file: the room server publishes $want, the download is $got. Nothing was installed."
+	fi
+	verify_signature
 
 	chmod 755 "$tmp"
 	mv -f "$tmp" "$dir/$bin_name"
+	[ -z "$bundle" ] || rm -f "$bundle"
 	trap - EXIT HUP INT TERM
 	printf 'Installed %s\n' "$dir/$bin_name"
 	case ":${PATH:-}:" in
