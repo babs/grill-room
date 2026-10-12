@@ -91,7 +91,7 @@ func (s *Server) newMessage(w http.ResponseWriter, req *messageReq, sess session
 }
 
 // annotationError answers the store errors creating or extending an annotation can return.
-func (s *Server) annotationError(w http.ResponseWriter, event string, err error) {
+func (s *Server) annotationError(w http.ResponseWriter, r *http.Request, room, event string, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		httpError(w, http.StatusNotFound, "no such annotation or document")
@@ -100,7 +100,7 @@ func (s *Server) annotationError(w http.ResponseWriter, event string, err error)
 	case errors.Is(err, store.ErrNotAnchorable):
 		httpError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, store.ErrRoomFull):
-		s.roomFull(w)
+		s.roomFull(w, r, room)
 	default:
 		s.serverError(w, event, err)
 	}
@@ -142,7 +142,7 @@ func (s *Server) createAnnotation(w http.ResponseWriter, r *http.Request, sess s
 	}
 	a, err := s.bus.Store.CreateAnnotation(r.Context(), d.RoomID, d.ID, req.Revision, req.Anchor, msg, s.opts.MaxRoomBytes)
 	if err != nil {
-		s.annotationError(w, "create_annotation_failed", err)
+		s.annotationError(w, r, sess.p.RoomID, "create_annotation_failed", err)
 		return
 	}
 	s.bus.Notify(d.RoomID)
@@ -176,7 +176,7 @@ func (s *Server) postAnnotationMessage(w http.ResponseWriter, r *http.Request, s
 	}
 	m, err := s.bus.Store.AddAnnotationMessage(r.Context(), sess.p.RoomID, id, msg, s.opts.MaxRoomBytes)
 	if err != nil {
-		s.annotationError(w, "annotation_message_failed", err)
+		s.annotationError(w, r, sess.p.RoomID, "annotation_message_failed", err)
 		return
 	}
 	s.bus.Notify(sess.p.RoomID)
@@ -201,7 +201,7 @@ func (s *Server) setAnnotationStatus(w http.ResponseWriter, r *http.Request, ses
 	}
 	err := s.bus.Store.SetAnnotationStatus(r.Context(), sess.p.RoomID, id, req.Status)
 	if err != nil {
-		s.annotationError(w, "annotation_status_failed", err)
+		s.annotationError(w, r, sess.p.RoomID, "annotation_status_failed", err)
 		return
 	}
 	s.bus.Notify(sess.p.RoomID)

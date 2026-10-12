@@ -63,42 +63,44 @@ type Upload struct {
 	Text string
 }
 
-// RoomBytes returns what a room's blobs weigh: upload originals plus annotation attachments.
-func (s *Store) RoomBytes(ctx context.Context, roomID string) (int64, error) {
-	return roomBytes(ctx, s.db, roomID)
+// RoomUsage returns what a room's blobs weigh, upload originals plus annotation attachments, and
+// the quota they count against: the room's own, else defaultQuota (004-AC9).
+func (s *Store) RoomUsage(ctx context.Context, roomID string, defaultQuota int64) (used, quota int64, err error) {
+	return roomUsage(ctx, s.db, roomID, defaultQuota)
 }
 
 type queryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-func roomBytes(ctx context.Context, db queryer, roomID string) (int64, error) {
-	var used int64
-	err := db.QueryRowContext(ctx, `
-		SELECT (SELECT COALESCE(SUM(size), 0) FROM uploads WHERE room_id = ?)
+func roomUsage(ctx context.Context, db queryer, roomID string, defaultQuota int64) (used, quota int64, err error) {
+	err = db.QueryRowContext(ctx, `
+		SELECT COALESCE((SELECT quota_bytes FROM rooms WHERE id = ?), ?),
+			(SELECT COALESCE(SUM(size), 0) FROM uploads WHERE room_id = ?)
 			+ (SELECT COALESCE(SUM(t.size), 0) FROM attachments t
 				JOIN annotation_messages m ON m.id = t.message_id
-				JOIN annotations a ON a.id = m.annotation_id WHERE a.room_id = ?)`, roomID, roomID).Scan(&used)
+				JOIN annotations a ON a.id = m.annotation_id WHERE a.room_id = ?)`, roomID, defaultQuota, roomID, roomID).Scan(&quota, &used)
 	if err != nil {
-		return 0, fmt.Errorf("room bytes: %w", err)
+		return 0, 0, fmt.Errorf("room usage: %w", err)
 	}
-	return used, nil
+	return used, quota, nil
 }
 
 // AddUpload stores the original and its document in one transaction. ErrRoomFull if the room's
-// blobs would then exceed maxRoomBytes; ErrNotFound if the room is gone.
-func (s *Store) AddUpload(ctx context.Context, u *Upload, maxRoomBytes int64) (*Document, error) {
+// blobs would then exceed its quota, defaultQuota when it has none of its own; ErrNotFound if the
+// room is gone.
+func (s *Store) AddUpload(ctx context.Context, u *Upload, defaultQuota int64) (*Document, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("add upload: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
 	// Checked inside the transaction: the single connection serialises it with concurrent uploads.
-	used, err := roomBytes(ctx, tx, u.RoomID)
+	used, quota, err := roomUsage(ctx, tx, u.RoomID, defaultQuota)
 	if err != nil {
 		return nil, fmt.Errorf("add upload: %w", err)
 	}
-	if used+int64(len(u.Data)) > maxRoomBytes {
+	if used+int64(len(u.Data)) > quota {
 		return nil, ErrRoomFull
 	}
 	ts := now()

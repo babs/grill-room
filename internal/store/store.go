@@ -504,6 +504,11 @@ CREATE TABLE audit_log (
 );
 CREATE INDEX audit_log_at ON audit_log(at_ms);
 CREATE INDEX audit_log_action ON audit_log(action, id);
+`, `
+-- 004-AC2, 004-AC3, 004-AC9: a room's own quota, NULL for the instance default; the profiles view
+-- finds a profile's last line through its participants.
+ALTER TABLE rooms ADD COLUMN quota_bytes INTEGER CHECK (quota_bytes IS NULL OR quota_bytes > 0);
+CREATE INDEX messages_participant ON messages(participant_id, id);
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.

@@ -447,7 +447,8 @@ func TestClientIP(t *testing.T) {
 	}
 }
 
-// 002-AC5: a bound email reaches its owner and the admin, never another participant.
+// 002-AC5 004-AC3: a bound email reaches its owner and the admin's profiles view, never another
+// participant, nor any other admin view, even once its owner posted, published and was audited.
 func TestEmailStaysPrivate(t *testing.T) {
 	e, box := newMailEnv(t, time.Minute)
 	room := e.createRoom(t, "A")
@@ -463,20 +464,51 @@ func TestEmailStaysPrivate(t *testing.T) {
 	if alice.profile(t).Profile.Email != email {
 		t.Fatal("owner does not see their email")
 	}
+	if code, _ := alice.do(t, "POST", "/api/rooms/"+room.ID+"/messages", map[string]string{"body": "ping"}); code != http.StatusCreated {
+		t.Fatal("post")
+	}
+	critic := map[string]any{"name": "Critic", "badge": "🧐", "colour": "#112233", "text": "Find the flaw.", "title": "Critic"}
+	if code, b := alice.do(t, "POST", "/api/rooms/"+room.ID+"/templates", critic); code != http.StatusCreated {
+		t.Fatalf("publish: %d %s", code, b)
+	}
+	other := e.createRoom(t, "B")
+	carol := e.device(t)
+	carol.join(t, other.ID, "Carol")
+	carolID := strconv.FormatInt(carol.profile(t).Profile.ID, 10)
+	if code, _ := e.do(t, "DELETE", "/api/profiles/"+carolID, e.admin, nil); code != http.StatusNoContent {
+		t.Fatal("delete profile")
+	}
 	var seen []byte
-	for _, path := range []string{"/api/rooms/" + room.ID, "/api/profile", "/api/rooms/" + room.ID + "/agent", "/api/rooms/" + room.ID + "/invites"} {
+	for _, path := range []string{"/api/rooms/" + room.ID, "/api/profile", "/api/rooms/" + room.ID + "/agent", "/api/rooms/" + room.ID + "/invites",
+		"/api/rooms/" + room.ID + "/templates", "/api/rooms/" + room.ID + "/skills", "/api/rooms/" + room.ID + "/documents"} {
 		_, b := bob.do(t, "GET", path, nil)
 		seen = append(seen, b...)
 	}
 	for _, ev := range collect(e.openEvents(t, room.ID, bobJoin.Token, ""), 200*time.Millisecond) {
 		seen = append(seen, ev.data...)
 	}
+	if !bytes.Contains(seen, []byte("ping")) || !bytes.Contains(seen, []byte("Critic")) {
+		t.Fatalf("the participant views miss what Alice did: %s", seen)
+	}
 	if bytes.Contains(seen, []byte("alice.private")) {
 		t.Fatalf("a participant sees another profile's email: %s", seen)
 	}
-	_, b := e.do(t, "GET", "/api/profiles", e.admin, nil)
-	if !bytes.Contains(b, []byte(email)) {
-		t.Fatalf("admin does not see it: %s", b)
+	seen = nil
+	for _, path := range []string{"/api/rooms", "/api/templates", "/api/skills", "/api/admin/rooms", "/api/admin/templates", "/api/admin/skills",
+		"/api/admin/instance", "/api/admin/audit", "/api/admin/sessions", "/api/admin/rooms/" + room.ID + "/invites"} {
+		code, b := e.do(t, "GET", path, e.admin, nil)
+		if code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", path, code, b)
+		}
+		seen = append(seen, b...)
+	}
+	if !bytes.Contains(seen, []byte("profile.delete")) || bytes.Contains(seen, []byte("alice.private")) {
+		t.Fatalf("an admin view other than profiles shows the email: %s", seen)
+	}
+	for _, path := range []string{"/api/profiles", "/api/admin/profiles"} {
+		if _, b := e.do(t, "GET", path, e.admin, nil); !bytes.Contains(b, []byte(email)) {
+			t.Fatalf("the profiles view %s lacks it: %s", path, b)
+		}
 	}
 }
 

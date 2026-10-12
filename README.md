@@ -23,7 +23,7 @@ On first start the server logs an `admin_token_generated` line holding the admin
 | `GRILL_ROOM_URL` | `http://<GRILL_ROOM_ADDR>` | public base URL used in invite links |
 | `GRILL_ROOM_ADMIN_TOKEN` | generated | admin token |
 | `GRILL_ROOM_MAX_UPLOAD_MB` | `20` | largest upload, in MiB (413 above) |
-| `GRILL_ROOM_MAX_ROOM_MB` | `200` | all uploads and annotation images of one room, in MiB (413 above) |
+| `GRILL_ROOM_MAX_ROOM_MB` | `200` | default room quota: all uploads and annotation images of one room, in MiB (413 above); the admin sets other quotas room by room |
 | `GRILL_ROOM_MAX_ATTACHMENT_MB` | `5` | largest image on an annotation message, in MiB (413 above) |
 | `GRILL_ROOM_PANDOC` | `pandoc` | pandoc binary for DOCX, ODT and PPTX (3.8+ for PPTX) |
 | `GRILL_ROOM_PANDOC_TIMEOUT` | `60s` | one conversion's time budget |
@@ -48,7 +48,17 @@ On first start the server logs an `admin_token_generated` line holding the admin
 
 `/admin` asks for the admin token once and then works on a session cookie: HttpOnly, SameSite=Strict, Secure over https, sent only to `/api/admin/`, valid 12 hours. The database keeps only the session token's hash. The page lists the open sessions with their IP and browser, and revokes any of them; a revoked browser gets a 401 on its next request and lands back on the login form. A client IP gets 10 login attempts per 15 minutes, and a success resets its count. The bearer token keeps working for `curl` and scripts, on every admin route.
 
-The audit log records every admin action: room create, rename and delete, invite create and revoke, profile delete, template and skill removal, and admin logins, logouts and session revocations. Each entry holds who (`super-admin`), the action, the target's kind, id and name at the time, details as JSON (4 KiB at most) and the time. Deleting a room or a profile keeps the entries about it, with the old name. The server purges entries older than `GRILL_ROOM_AUDIT_RETENTION`, and expired sessions, at start and then daily. `/admin` shows the log read-only, newest first, filtered by action and by target id or name.
+The page has six views:
+
+- Rooms: name, creation, last line, participants, personas and whether the host's daemon is online, sortable by any column. Each room shows its volume by kind (uploads, revisions, attachments, agent sessions, transcripts, room skills) and its quota. From there the admin renames it, sets its quota or returns it to the default, creates and revokes invites, and deletes it after typing its name. Export is greyed out until it exists.
+- Profiles: the name a profile last joined with, its email, rooms, skill count (personal ones plus the shared ones it published) and last activity. Deleting a profile leaves its participants in their rooms, detached. This is the only place an email shows, besides its owner's profile page.
+- Libraries: persona templates and shared skills, with author and latest version. The admin removes any but the shipped templates.
+- Instance: server version, database size (with its write-ahead log), free and total space on its disk, speech to text, connected daemons by version, and whether SMTP is set.
+- Sessions and the audit log, below.
+
+A room's quota counts its uploads and annotation images, the blobs people add. Revisions, transcripts and agent sessions show in its volume but do not count. Only the admin changes a quota; a participant asking through the room's API gets a 403. The volume comes from SQL sums over lengths, so the view reads no blob.
+
+The audit log records every admin action: room create, rename, quota change and delete, invite create and revoke, profile delete, template and skill removal, and admin logins, logouts and session revocations. Each entry holds who (`super-admin`), the action, the target's kind, id and name at the time, details as JSON (4 KiB at most) and the time. Deleting a room or a profile keeps the entries about it, with the old name. The server purges entries older than `GRILL_ROOM_AUDIT_RETENTION`, and expired sessions, at start and then daily. `/admin` shows the log read-only, newest first, filtered by action and by target id or name.
 
 The page is Preact, htm and @preact/signals, served from `internal/uivendor/esm/` like the daemon's page. `make ui-check` runs `tsc --checkJs` on it.
 
@@ -80,11 +90,15 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `GET /api/rooms/{room}/invites` | admin or participant | every invite for the admin, a participant's own for a participant; `created_by` is the participant who created it, absent for the admin |
 | `POST /api/rooms/{room}/invites` | admin or participant | new invite link |
 | `DELETE /api/rooms/{room}/invites/{id}` | admin, or the participant who created it | revoke, with the invites its joiners created; 403 for another participant's invite |
-| `GET /api/profiles` | admin | every profile with its email and rooms |
+| `GET /api/profiles` | admin | every profile with its `email`, `rooms`, `uuid`, `name` (the one it last joined with), `skills` and `last_activity` |
 | `DELETE /api/profiles/{id}` | admin | delete a profile, see Personal data |
 | `POST /api/admin/login` | admin token in the body (`token`) | opens a 12 h session and sets its cookie; 401 for a wrong token, 429 past 10 attempts per client IP in 15 minutes |
 | `POST /api/admin/logout` | admin | ends the caller's session and clears its cookie |
 | `GET /api/admin/sessions`, `DELETE /api/admin/sessions/{id}` | admin | the open sessions (`current` marks the caller's); revoke one |
+| `GET /api/admin/rooms` | admin | every room with `participants`, `personas`, `last_activity`, `host_online`, `volume` by kind in bytes, `quota` and `used` (what counts against it), and `quota_bytes` (0 on the default); plus `default_quota` |
+| `PUT /api/rooms/{room}/quota`, `PUT /api/admin/rooms/{room}/quota` | admin; a participant gets 403 on the first, 401 on the second | `quota_bytes`: 1 byte to 1 TiB, or 0 for the default |
+| `GET /api/admin/instance` | admin | `version`, `db_bytes`, `disk_free` and `disk_total` (-1 when unknown), `stt` (`voice`, `configured`, `workers`), `daemons` (`connected`, `versions`), `smtp` |
+| `/api/admin/rooms/{room}`, `.../invites`, `/api/admin/profiles`, `/api/admin/templates`, `/api/admin/skills` | admin | the same routes as without `/admin`, where the page's cookie reaches them |
 | `GET /api/admin/audit` | admin | the audit log, newest first: `entries`, `next` (the `before` of the next page, 0 on the last), `actions`; filters `action`, `target` (an id, or part of a name), `before`, `limit` (1 to 200, default 50) |
 | `POST /api/join` | invite token in the body | returns a participant token and sets the room cookie; without a valid profile cookie, also creates a profile, sets its cookie and returns `recovery_url` once |
 | `GET /api/profile` | profile cookie, optional | `email_enabled`, and `profile` (`id`, own `email`, `rooms`) or null |
@@ -165,7 +179,7 @@ The server uses STARTTLS whenever the relay offers it. A relay that offers none 
 |---|---|---|
 | display names, messages, voice transcripts, documents, annotations | the room's participants | deleting the room |
 | a profile's rooms | the profile's own browsers, the admin | deleting the room, or the profile (the link only) |
-| a profile's email | the profile's own browsers, the admin; never other participants | deleting the profile |
+| a profile's email | the profile's own browsers, the admin's profiles view; never other participants nor other admin views | deleting the profile |
 | persona templates a profile published, signed with a display name | every participant of every room | the admin removing the template, or deleting the profile; room copies stay |
 | personal skills, signed with a display name | the profile's own browsers; the agent and anyone in a room where a persona has one on | the profile removing it, the admin, or deleting the profile |
 | shared skills, signed with a display name | every participant of every room | the admin removing it; deleting the profile only detaches it |

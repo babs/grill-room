@@ -345,6 +345,8 @@ func run() error {
 		SendMail:           cfg.sendMail(),
 		MagicLinkTTL:       cfg.MagicLinkTTL,
 		AuditRetention:     cfg.AuditRetention,
+		Version:            Version,
+		DBPath:             cfg.DB,
 	}, logger)
 	if cfg.SMTP.Addr == "" {
 		logger.Info("email_signin_disabled", zap.String("hint", "set GRILL_ROOM_SMTP_ADDR and GRILL_ROOM_SMTP_FROM to send magic links"))

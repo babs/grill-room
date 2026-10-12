@@ -159,3 +159,31 @@ export async function ask(page, roomID, text, persona = 'Grill') {
   expect(st.turn.status).toBe('done');
   return page.locator('#messages li.msg.agent').last().locator('.body').textContent();
 }
+
+// skillZip writes a zip of a skill folder whose script prints out; without frontmatter it is one
+// the room must refuse.
+export function skillZip(name, out, frontmatter = true) {
+  const zip = join(mkdtempSync(join('test-results', 'skill-')), name + '.zip');
+  const md = frontmatter ? `---\nname: ${name}\ndescription: Prints ${out}.\n---\nRun scripts/stamp.sh.\n` : '# No frontmatter\n';
+  execFileSync('python3', ['-I', '-c', `import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    z.writestr(sys.argv[2] + "/SKILL.md", sys.argv[3])
+    z.writestr(sys.argv[2] + "/scripts/stamp.sh", "echo " + sys.argv[4] + "\\n")`, zip, name, md, out]);
+  return zip;
+}
+
+// signIn signs page in to /admin at view, and returns the login's status.
+export async function signIn(page, token = adminToken, view = 'sessions') {
+  await page.goto('/admin#' + view);
+  await page.getByLabel('Admin token').fill(token);
+  const [res] = await Promise.all([
+    page.waitForResponse((r) => r.url().endsWith('/api/admin/login')),
+    page.getByRole('button', { name: 'Sign in' }).click(),
+  ]);
+  return res.status();
+}
+
+// noOverflow lists what sticks out past the viewport, tables scrolling in their own box aside.
+export const noOverflow = (page) => page.evaluate(() => [...document.querySelectorAll('body *')]
+  .filter((e) => !e.parentElement?.closest('.scroll') && e.getBoundingClientRect().right > innerWidth + 1)
+  .map((e) => `${e.tagName.toLowerCase()}#${e.id}.${e.className}`));

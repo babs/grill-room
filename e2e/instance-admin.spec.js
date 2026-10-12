@@ -1,22 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { adminToken } from './playwright.config.js';
+import { signIn, noOverflow } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
-
-async function signIn(page, token = adminToken) {
-  await page.goto('/admin');
-  await page.getByLabel('Admin token').fill(token);
-  const [res] = await Promise.all([
-    page.waitForResponse((r) => r.url().endsWith('/api/admin/login')),
-    page.getByRole('button', { name: 'Sign in' }).click(),
-  ]);
-  return res.status();
-}
-
-// noOverflow lists what sticks out past the viewport, tables scrolling in their own box aside.
-const noOverflow = (page) => page.evaluate(() => [...document.querySelectorAll('body *')]
-  .filter((e) => !e.parentElement?.closest('.scroll') && e.getBoundingClientRect().right > innerWidth + 1)
-  .map((e) => `${e.tagName.toLowerCase()}#${e.id}.${e.className}`));
 
 // 004-AC1: a wrong token is refused, and past 10 tries from one IP even the right one is, for 15
 // minutes. The browser gets an IP of its own: every other test signs in from 127.0.0.1.

@@ -187,40 +187,6 @@ func (s *Store) ProfileParticipant(ctx context.Context, sessionHash, roomID stri
 	return &p, nil
 }
 
-// Profiles lists every profile with its email and rooms, for the admin.
-func (s *Store) Profiles(ctx context.Context) ([]Profile, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM profiles ORDER BY id`)
-	if err != nil {
-		return nil, fmt.Errorf("query profiles: %w", err)
-	}
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return nil, fmt.Errorf("scan profile: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	_ = rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("query profiles: %w", err)
-	}
-	// ponytail: one query per profile; a single join if the admin list grows past a few thousand.
-	out := make([]Profile, 0, len(ids))
-	for _, id := range ids {
-		p, err := s.profile(ctx, `id = ?`, id)
-		if errors.Is(err, ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *p)
-	}
-	return out, nil
-}
-
 // DeleteProfile removes a profile with its sessions, magic links and email, and detaches its
 // participants, which keep their name and their room access.
 func (s *Store) DeleteProfile(ctx context.Context, id int64) error {

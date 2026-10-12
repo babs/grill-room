@@ -301,6 +301,12 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 	if code, _ := e.do(t, "DELETE", "/api/profiles/00"+profID, e.admin, nil); code != http.StatusNoContent {
 		t.Fatalf("delete profile: %d", code)
 	}
+	if code, _ := e.do(t, "PUT", "/api/rooms/"+room.ID+"/quota", tok, map[string]any{"quota_bytes": 1 << 20}); code != http.StatusForbidden {
+		t.Fatalf("member quota: %d", code)
+	}
+	if code, _ := e.do(t, "PUT", "/api/rooms/"+room.ID+"/quota", e.admin, map[string]any{"quota_bytes": 1 << 20}); code != http.StatusNoContent {
+		t.Fatalf("quota: %d", code)
+	}
 	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID, e.admin, nil); code != http.StatusNoContent {
 		t.Fatalf("delete room: %d", code)
 	}
@@ -313,6 +319,7 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 	type row struct{ action, kind, id, name string }
 	want := []row{
 		{ActionRoomDelete, store.TargetRoom, room.ID, "By Alice"},
+		{ActionRoomQuota, store.TargetRoom, room.ID, "By Alice"},
 		{ActionProfileDelete, store.TargetProfile, profID, "Alice"},
 		{ActionSkillRemove, store.TargetSkill, skID, "stamp"},
 		{ActionTemplateRemove, store.TargetTemplate, tplID, "Critic"},
@@ -325,14 +332,25 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 	if len(got) != len(want) {
 		t.Fatalf("entries: %+v", got)
 	}
+	// Every mutation action is exercised here; the admin.* ones have their own test.
+	covered := map[string]bool{}
+	for _, w := range want {
+		covered[w.action] = true
+	}
+	for _, a := range AuditActions {
+		if !covered[a] && !strings.HasPrefix(a, "admin.") {
+			t.Errorf("action %s not exercised", a)
+		}
+	}
 	for i, w := range want {
 		g := got[i]
 		if (row{g.Action, g.TargetKind, g.TargetID, g.TargetName}) != w || g.Actor != store.ActorSuperAdmin || !strings.Contains(string(g.Details), `"via":"token"`) {
 			t.Errorf("entry %d: %+v %s, want %+v", i, g, g.Details, w)
 		}
 	}
-	if !strings.Contains(string(got[7].Details), `"from":"Pricing"`) || !strings.Contains(string(got[6].Details), fmt.Sprintf(`"invite":%d`, inv.ID)) {
-		t.Errorf("details: %s %s", got[7].Details, got[6].Details)
+	if !strings.Contains(string(got[8].Details), `"from":"Pricing"`) || !strings.Contains(string(got[7].Details), fmt.Sprintf(`"invite":%d`, inv.ID)) ||
+		!strings.Contains(string(got[1].Details), `"quota_bytes":1048576`) {
+		t.Errorf("details: %s %s %s", got[8].Details, got[7].Details, got[1].Details)
 	}
 }
 

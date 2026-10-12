@@ -165,6 +165,25 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/admin/sessions", s.admin(s.adminSessions))
 	mux.Handle("DELETE /api/admin/sessions/{id}", s.admin(s.revokeAdminSession))
 	mux.Handle("GET /api/admin/audit", s.admin(s.auditLog))
+	// The /admin page's views: its session cookie only reaches /api/admin (004-AC2 to 004-AC5).
+	adminOnly := func(h func(http.ResponseWriter, *http.Request, *session)) http.Handler {
+		return s.admin(func(w http.ResponseWriter, r *http.Request) { h(w, r, nil) })
+	}
+	mux.Handle("GET /api/admin/rooms", s.admin(s.adminRooms))
+	mux.Handle("PATCH /api/admin/rooms/{room}", adminOnly(s.renameRoom))
+	mux.Handle("DELETE /api/admin/rooms/{room}", s.admin(s.deleteRoom))
+	mux.Handle("PUT /api/admin/rooms/{room}/quota", adminOnly(s.setQuota))
+	mux.Handle("PUT /api/rooms/{room}/quota", s.memberOrAdmin(s.setQuota))
+	mux.Handle("GET /api/admin/rooms/{room}/invites", adminOnly(s.listInvites))
+	mux.Handle("POST /api/admin/rooms/{room}/invites", adminOnly(s.createInvite))
+	mux.Handle("DELETE /api/admin/rooms/{room}/invites/{invite}", adminOnly(s.revokeInvite))
+	mux.Handle("GET /api/admin/profiles", s.admin(s.listProfiles))
+	mux.Handle("DELETE /api/admin/profiles/{id}", s.admin(s.deleteProfile))
+	mux.Handle("GET /api/admin/templates", s.admin(s.adminTemplates))
+	mux.Handle("DELETE /api/admin/templates/{template}", s.admin(s.removeTemplate))
+	mux.Handle("GET /api/admin/skills", s.admin(s.adminSkills))
+	mux.Handle("DELETE /api/admin/skills/{skill}", s.admin(s.adminRemoveSkill))
+	mux.Handle("GET /api/admin/instance", s.admin(s.adminInstance))
 
 	mux.HandleFunc("GET /api/profile", s.getProfile)
 	mux.HandleFunc("POST /api/profile/recover", s.recoverProfile)

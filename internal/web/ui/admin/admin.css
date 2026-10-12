@@ -25,3 +25,16 @@ input, select, button { font: inherit; max-width: 100%; }
   main { padding: 0 0.6rem 1rem; }
   header button { margin-left: 0; }
 }
+h3 { font-size: 0.95rem; margin: 1rem 0 0.3rem; }
+th button.sort { font: inherit; font-weight: 700; border: 0; background: none; padding: 0; cursor: pointer; color: inherit; }
+th[aria-sort="ascending"] button.sort::after { content: " ▲" / ""; }
+th[aria-sort="descending"] button.sort::after { content: " ▼" / ""; }
+meter { width: 4rem; vertical-align: middle; }
+dl { display: flex; flex-wrap: wrap; gap: 0.4rem 1.6rem; margin: 0.3rem 0 0.6rem; }
+dl div { min-width: 8rem; }
+dt { color: var(--muted); font-size: 0.8rem; }
+dd { margin: 0; }
+#room-panel { margin-top: 1rem; padding: 0.2rem 1rem 0.8rem; border: 1px solid var(--line); background: #fff; }
+.link { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.85rem; margin-bottom: 0.6rem; }
+.link input { width: 100%; box-sizing: border-box; }
+button.danger:enabled { background: var(--bad); color: #fff; border: 1px solid var(--bad); }
