@@ -41,10 +41,11 @@ jobs:
       - run: make lint
       - run: make test
       - run: make build
-      # The six daemon targets a release ships.
+      # 003-AC30: cross-compiles the six daemon targets a release ships.
       - run: make release VERSION=v0.0.0
 
-  # Unit tests only: Docker and the POSIX-shell tests skip themselves (docs/release.md lists them).
+  # 003-AC30: unit tests on Windows. Docker and the POSIX-shell tests skip themselves (docs/release.md
+  # lists them).
   windows:
     runs-on: windows-latest
     steps:

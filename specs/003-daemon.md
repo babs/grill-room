@@ -75,19 +75,19 @@ Releases are built and signed keyless by GitHub Actions, and the sandbox image i
 ## Acceptance criteria
 
 ### Release and trust
-- [ ] **AC1** A PR runs tests, lint and builds on GitHub Actions. A semver tag publishes a GitHub release with six binaries (linux, darwin, windows × amd64, arm64), their sha256 and cosign keyless bundles, plus a public sandbox image on ghcr.io whose digest is recorded in the release.
-- [ ] **AC2** The supervisor runs a worker binary only after sigstore-go verifies its bundle against the expected identity: this repository's release workflow on a semver tag. A tampered binary, a wrong identity or a missing bundle is refused, with the reason shown on the admin page.
-- [ ] **AC3** Bundle verification works offline with the embedded trusted root. When online, the supervisor refreshes the trusted root through TUF.
-- [ ] **AC4** A trusted dev key added on the admin page lets binaries signed with it run. The per-instance "accept unsigned" toggle is off by default, needs the instance host typed to switch on, and shows a red badge on the page and in the logs while on.
-- [ ] **AC5** The admin page shows whether the supervisor binary itself is project-signed. The supervisor updates from GitHub by default, or from its instance when the channel is set to "follow instance", always after approval on the page.
+- [x] **AC1** A PR runs tests, lint and builds on GitHub Actions. A semver tag publishes a GitHub release with six binaries (linux, darwin, windows × amd64, arm64), their sha256 and cosign keyless bundles, plus a public sandbox image on ghcr.io whose digest is recorded in the release.
+- [x] **AC2** The supervisor runs a worker binary only after sigstore-go verifies its bundle against the expected identity: this repository's release workflow on a semver tag. A tampered binary, a wrong identity or a missing bundle is refused, with the reason shown on the admin page.
+- [x] **AC3** Bundle verification works offline with the embedded trusted root. When online, the supervisor refreshes the trusted root through TUF.
+- [x] **AC4** A trusted dev key added on the admin page lets binaries signed with it run. The per-instance "accept unsigned" toggle is off by default, needs the instance host typed to switch on, and shows a red badge on the page and in the logs while on.
+- [x] **AC5** The admin page shows whether the supervisor binary itself is project-signed. The supervisor updates from GitHub by default, or from its instance when the channel is set to "follow instance", always after approval on the page.
 
 ### Supervisor and workers
-- [ ] **AC6** A second launch while a supervisor runs starts no second process. It hands its room URL to the running supervisor over the local socket and opens the existing admin page. A second supervisor started directly exits with a clear message.
-- [ ] **AC7** Rooms from two instances are served by two workers, each running the binary version its own instance serves. When both instances serve the same version as the supervisor, no extra binary is stored. A version no instance uses any more is removed.
-- [ ] **AC8** A worker that crashes is restarted with backoff, and its rooms reconnect. Stopping the supervisor stops every worker and removes its sandboxes.
-- [ ] **AC9** The supervisor and a worker one protocol version apart still work together. Beyond the supported range, the worker is refused with a clear message.
-- [ ] **AC10** On first start, an existing single-room daemon state is migrated: tokens, settings, allowlist and cache move into `instances/<id>/`, the old directory is kept as `legacy-backup-<date>`, and its `CLAUDE_CONFIG_DIR` becomes account "default". An already paired room keeps working without re-pairing.
-- [ ] **AC11** Paths follow the platform:
+- [x] **AC6** A second launch while a supervisor runs starts no second process. It hands its room URL to the running supervisor over the local socket and opens the existing admin page. A second supervisor started directly exits with a clear message.
+- [x] **AC7** Rooms from two instances are served by two workers, each running the binary version its own instance serves. When both instances serve the same version as the supervisor, no extra binary is stored. A version no instance uses any more is removed.
+- [x] **AC8** A worker that crashes is restarted with backoff, and its rooms reconnect. Stopping the supervisor stops every worker and removes its sandboxes.
+- [x] **AC9** The supervisor and a worker one protocol version apart still work together. Beyond the supported range, the worker is refused with a clear message.
+- [x] **AC10** On first start, an existing single-room daemon state is migrated: tokens, settings, allowlist and cache move into `instances/<id>/`, the old directory is kept as `legacy-backup-<date>`, and its `CLAUDE_CONFIG_DIR` becomes account "default". An already paired room keeps working without re-pairing.
+- [x] **AC11** Paths follow the platform:
   - XDG on Linux and WSL;
   - `~/Library/Application Support` and `~/Library/Caches` on macOS;
   - `%APPDATA%\grill-room` and `%LOCALAPPDATA%\grill-room` on Windows.
@@ -97,29 +97,29 @@ Releases are built and signed keyless by GitHub Actions, and the sandbox image i
   Autostart is opt-in from the page: a systemd user unit, a LaunchAgent, or a Windows scheduled task.
 
 ### Accounts and credentials
-- [ ] **AC12** The host can add accounts of two kinds: a config dir, read-only and refreshed by Claude Code, or a long-lived setup token stored in the OS keyring (Keychain, Secret Service, Windows Credential Manager) or a 0600 file. Each account shows its status, expiry and last use.
-- [ ] **AC13** Each instance has a default account, and a room can override it. A turn uses the room's account, through that account's proxy in the supervisor.
-- [ ] **AC14** No worker process, environment, file or sandbox ever holds a real token. A scan of worker memory maps, environments, state dirs and sandbox exports finds none.
-- [ ] **AC15** The supervisor counts requests per worker and per account. The host can cut a worker off, which ends its turns with a clear error in the room.
-- [ ] **AC16** The page warns about 30 minutes before an access token expires, and two weeks before a setup token expires.
-- [ ] **AC17** The account name, the config dir, the hostname and the cap never appear in the room UI, in prompts or in the presence preamble. The room shows "<name> holds the agent(s)".
+- [x] **AC12** The host can add accounts of two kinds: a config dir, read-only and refreshed by Claude Code, or a long-lived setup token stored in the OS keyring (Keychain, Secret Service, Windows Credential Manager) or a 0600 file. Each account shows its status, expiry and last use.
+- [x] **AC13** Each instance has a default account, and a room can override it. A turn uses the room's account, through that account's proxy in the supervisor.
+- [x] **AC14** No worker process, environment, file or sandbox ever holds a real token. A scan of worker memory maps, environments, state dirs and sandbox exports finds none.
+- [x] **AC15** The supervisor counts requests per worker and per account. The host can cut a worker off, which ends its turns with a clear error in the room.
+- [x] **AC16** The page warns about 30 minutes before an access token expires, and two weeks before a setup token expires.
+- [x] **AC17** The account name, the config dir, the hostname and the cap never appear in the room UI, in prompts or in the presence preamble. The room shows "<name> holds the agent(s)".
 
 ### Concurrency
-- [ ] **AC18** With a global cap of N (default 2), at most N turns run at once across all instances and rooms. Further turns wait in a local FIFO, and the room shows "queued (host busy)".
-- [ ] **AC19** Turns of two rooms on the same machine run in parallel when the cap allows.
-- [ ] **AC20** With a room's parallel mode on (host only, off by default), two personas of that room run at once in separate sandboxes.
-- [ ] **AC21** When a parallel turn edits a document that changed since its turn started, its result is rejected and the turn re-runs once, at the head of the queue, on the new version. A second conflict fails the turn with "conflict on <doc>". Thread replies, new annotations and syntheses never conflict, and the re-run does not count as a chain link.
+- [x] **AC18** With a global cap of N (default 2), at most N turns run at once across all instances and rooms. Further turns wait in a local FIFO, and the room shows "queued (host busy)".
+- [x] **AC19** Turns of two rooms on the same machine run in parallel when the cap allows.
+- [x] **AC20** With a room's parallel mode on (host only, off by default), two personas of that room run at once in separate sandboxes.
+- [x] **AC21** When a parallel turn edits a document that changed since its turn started, its result is rejected and the turn re-runs once, at the head of the queue, on the new version. A second conflict fails the turn with "conflict on <doc>". Thread replies, new annotations and syntheses never conflict, and the re-run does not count as a chain link.
 
 ### Turn contract
-- [ ] **AC22** Every prompt's preamble has a "Why you are running" line naming the cause: pressed by a person, an @mention with its start, a call from a persona, every N rounds, or a re-run after a conflict on a document.
-- [ ] **AC32** The presence preamble shows a short profile uuid next to each human name ("Alice ·a1b2"), so two people with the same display name stay distinct.
-- [ ] **AC23** Transcripts are split into chunks `transcript/<day>/<NNN>.md` of about 200 lines, and a full chunk never changes. On a turn after new messages, only the last chunk, plus any chunk with an edited message, is transferred.
-- [ ] **AC24** Each persona has an `autocompact` setting (auto, or a token count) passed to `claude -p`. The persona panel and the monitoring show each session's context use as a percentage of the window.
-- [ ] **AC25** "New session with handoff" (host) runs a last turn that writes `docs/_handoff-<persona>.md`, then starts a new session that reads it plus the transcripts. Above 80% context use, a banner offers it.
+- [x] **AC22** Every prompt's preamble has a "Why you are running" line naming the cause: pressed by a person, an @mention with its start, a call from a persona, every N rounds, or a re-run after a conflict on a document.
+- [x] **AC32** The presence preamble shows a short profile uuid next to each human name ("Alice ·a1b2"), so two people with the same display name stay distinct.
+- [x] **AC23** Transcripts are split into chunks `transcript/<day>/<NNN>.md` of about 200 lines, and a full chunk never changes. On a turn after new messages, only the last chunk, plus any chunk with an edited message, is transferred.
+- [x] **AC24** Each persona has an `autocompact` setting (auto, or a token count) passed to `claude -p`. The persona panel and the monitoring show each session's context use as a percentage of the window.
+- [x] **AC25** "New session with handoff" (host) runs a last turn that writes `docs/_handoff-<persona>.md`, then starts a new session that reads it plus the transcripts. Above 80% context use, a banner offers it.
 
 ### Admin page and monitoring
-- [ ] **AC26** The page lists instances with their version and signature state, their rooms with status (connected, host or not, running or queued turns), and the accounts. It edits global and per-instance settings: global cap, per-instance model and effort cap, approval mode, allowlist and resource limits.
-- [ ] **AC27** Every turn is recorded in local `monitor.db` with:
+- [x] **AC26** The page lists instances with their version and signature state, their rooms with status (connected, host or not, running or queued turns), and the accounts. It edits global and per-instance settings: global cap, per-instance model and effort cap, approval mode, allowlist and resource limits.
+- [x] **AC27** Every turn is recorded in local `monitor.db` with:
   - instance, room, persona and account;
   - model and effort requested and effective;
   - why the turn ran;
@@ -127,15 +127,17 @@ Releases are built and signed keyless by GitHub Actions, and the sandbox image i
   - tokens and estimated cost, context %, and workspace bytes.
 
   The page filters turns by instance, room, persona and account, shows daily per-account totals, and exports CSV.
-- [ ] **AC28** History older than the retention (default 30 days) is purged at start and daily.
-- [ ] **AC29** Alerts on the page: a token near expiry, an unsigned worker, context above 80%, and a queue stuck for more than 10 minutes.
+- [x] **AC28** History older than the retention (default 30 days) is purged at start and daily.
+- [x] **AC29** Alerts on the page: a token near expiry, an unsigned worker, context above 80%, and a queue stuck for more than 10 minutes.
 
 ### Platforms and end to end
-- [ ] **AC30** CI cross-compiles linux, darwin and windows, amd64 and arm64, and runs the unit tests on a `windows-latest` runner. `docs/daemon-os-checklist.md` covers:
+- [x] **AC30** CI cross-compiles linux, darwin and windows, amd64 and arm64, and runs the unit tests on a `windows-latest` runner. `docs/daemon-os-checklist.md` covers:
   - macOS: Keychain account, Docker Desktop, LaunchAgent;
   - native Windows: Claude Code credentials location, Credential Manager, Docker Desktop, scheduled task, local socket;
   - WSL as Linux.
-- [ ] **AC31** End to end, on this machine:
+
+  Ticked for the CI part only (`.github/workflows/ci.yml`, jobs `go` and `windows`). The real-OS checks are steps 21 to 29 of the checklist, for the host to run on macOS, native Windows and WSL.
+- [x] **AC31** End to end, on this machine:
   - one supervisor serves a room on the local compose instance and a room on the lab instance at the same time, each with its own account;
   - two turns run in parallel across the two rooms;
   - the monitoring shows both turns with their accounts;
@@ -221,7 +223,7 @@ Daemon (local):
 
 ## Open questions
 
-- [ ] 1. Native Windows: where does Claude Code keep its credentials (expected `%USERPROFILE%\.claude\.credentials.json`), and is a non-default config dir honoured the same way? This needs checking on a real machine; it only changes the account picker and docs.
+- [ ] 1. Native Windows: where does Claude Code keep its credentials (expected `%USERPROFILE%\.claude\.credentials.json`), and is a non-default config dir honoured the same way? This needs checking on a real machine; it only changes the account picker and docs. The check is written: `docs/daemon-os-checklist.md` step 25.
 
 ## Decisions
 
