@@ -334,12 +334,19 @@ func (s *Server) prepareTurn(ctx context.Context, room *store.Room, persona *sto
 	if err != nil {
 		return nil, err
 	}
+	var renamed []string
+	// A resumed session remembers the old paths (005-AC25); a new one reads the workspace afresh.
+	if t.Resume != "" {
+		if renamed, err = s.renamedPaths(ctx, room.ID, prev.MessageCursor, t.MessageCursor, docs); err != nil {
+			return nil, err
+		}
+	}
 	preamble, err := s.presencePreamble(ctx, room, persona, t.Cause)
 	if err != nil {
 		return nil, err
 	}
 	t.Prompt = buildPrompt(promptInput{Preamble: preamble, Room: room.Name, Persona: persona.Name, Self: persona.ID, NewSession: t.Resume == "",
-		Handoff: t.Handoff, Msgs: msgs, Changes: changes, Anns: anns, AnnCursor: prev.AnnotationCursor, Paths: docPaths(docs)})
+		Handoff: t.Handoff, Msgs: msgs, Changes: changes, Anns: anns, AnnCursor: prev.AnnotationCursor, Paths: docPaths(docs), Renamed: renamed})
 	return t, nil
 }
 

@@ -32,6 +32,7 @@ const (
 	fileSkills             = "skills.jsonl"
 	fileSkillVersions      = "skill_versions.jsonl"
 	fileSessions           = "sessions.jsonl"
+	fileMentions           = "mentions.jsonl"
 )
 
 type xRoom struct {
@@ -131,6 +132,16 @@ type xDocument struct {
 	Upload    int64  `json:"upload,omitempty"`
 	Author    string `json:"author"`
 	CreatedAt string `json:"created_at"`
+	// DeletedAt flags a document a room admin deleted (005-AC26).
+	DeletedAt string `json:"deleted_at,omitempty"`
+}
+
+// xMention is how a line's @mention of a persona ended (005-AC4).
+type xMention struct {
+	Message int64  `json:"message"`
+	Persona int64  `json:"persona"`
+	Status  string `json:"status"`
+	Line    int64  `json:"line,omitempty"`
 }
 
 type xRevision struct {
@@ -360,13 +371,32 @@ func exportRoom(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) (*
 		return nil, err
 	}
 	for _, step := range []func(context.Context, *sql.Tx, string, *exportDir) error{
-		exportParticipants, exportMessages, exportDocuments, exportAnnotations, exportSkills, exportSessions,
+		exportParticipants, exportMessages, exportMentions, exportDocuments, exportAnnotations, exportSkills, exportSessions,
 	} {
 		if err := step(ctx, tx, roomID, d); err != nil {
 			return nil, err
 		}
 	}
 	return room, nil
+}
+
+// exportMentions writes how each line's @mentions ended, for the personas the export carries.
+func exportMentions(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) error {
+	ms, err := queryMentions(ctx, tx, mentionCols+` JOIN room_personas p ON p.id = mt.persona_id
+		WHERE m.room_id = ? AND p.pending = 0 ORDER BY mt.message_id, mt.persona_id`, roomID)
+	if err != nil {
+		return err
+	}
+	l, err := d.lines(fileMentions)
+	if err != nil {
+		return err
+	}
+	for _, m := range ms {
+		if err := l.add(xMention{Message: m.MessageID, Persona: m.PersonaID, Status: m.Status, Line: m.LineID}); err != nil {
+			return err
+		}
+	}
+	return l.flush()
 }
 
 // exportPersonas lists the room's personas with their pins and resume points. A persona still
@@ -547,10 +577,11 @@ func exportDocuments(ctx context.Context, tx *sql.Tx, roomID string, d *exportDi
 		err = dump(ctx, tx, d, fileDocuments, func(rows *sql.Rows) (any, error) {
 			var x xDocument
 			var up sql.NullInt64
-			err := rows.Scan(&x.Ref, &x.Kind, &x.Name, &x.Format, &up, &x.Author, &x.CreatedAt)
-			x.Upload = up.Int64
+			var deleted sql.NullString
+			err := rows.Scan(&x.Ref, &x.Kind, &x.Name, &x.Format, &up, &x.Author, &x.CreatedAt, &deleted)
+			x.Upload, x.DeletedAt = up.Int64, deleted.String
 			return x, err
-		}, `SELECT id, kind, name, format, upload_id, author, created_at FROM documents WHERE room_id = ? ORDER BY id`, roomID)
+		}, `SELECT id, kind, name, format, upload_id, author, created_at, deleted_at FROM documents WHERE room_id = ? ORDER BY id`, roomID)
 	}
 	if err == nil {
 		err = dump(ctx, tx, d, fileRevisions, func(rows *sql.Rows) (any, error) {

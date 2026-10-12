@@ -278,7 +278,7 @@ function ClientLine({ c }) {
 /** @type {[string, string][]} */
 const importKinds = [['participants', 'Participants'], ['messages', 'Lines'], ['message_versions', 'Earlier versions'],
   ['documents', 'Documents'], ['revisions', 'Revisions'], ['uploads', 'Uploads'], ['annotations', 'Annotations'],
-  ['annotation_messages', 'Thread messages'], ['attachments', 'Attachments'], ['personas', 'Personas'], ['skills', 'Skills'],
+  ['annotation_messages', 'Thread messages'], ['attachments', 'Attachments'], ['mentions', 'Mentions'], ['personas', 'Personas'], ['skills', 'Skills'],
   ['sessions', 'Agent sessions']];
 
 /**

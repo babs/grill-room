@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -44,6 +45,8 @@ const (
 type ImportOptions struct {
 	// RoomID is the new room's id.
 	RoomID string
+	// Format is the archive's format: 1 holds no mentions.jsonl.
+	Format int
 	// Importer is the importing profile, 0 for the super-admin. A profile imports within the
 	// room creation guardrails and becomes the room's admin, seated as DisplayName unless one of
 	// the relinked participants is already its own.
@@ -212,7 +215,7 @@ func (im *importer) run() error {
 	}
 	for _, step := range []func() error{
 		func() error { return im.personasStep(x.Personas) },
-		im.participantsStep, im.messagesStep, im.documentsStep, im.annotationsStep, im.skillsStep,
+		im.participantsStep, im.messagesStep, im.mentionsStep, im.documentsStep, im.annotationsStep, im.skillsStep,
 		func() error { return im.pinsAndResume(x.Personas) },
 		im.sessionsStep, im.seatStep,
 	} {
@@ -636,6 +639,39 @@ func (im *importer) messagesStep() error {
 
 // blob reads the blob file named by a row, refused past limit; what names the row for errors. The
 // export directory is an os.Root: a name cannot leave it.
+// mentionsStep links the imported lines to how their mentions' turns ended (005-AC4). The turn
+// history stays behind, so a turn still queued or running at export never ends here: cancelled.
+func (im *importer) mentionsStep() error {
+	if im.o.Format < 2 {
+		return nil
+	}
+	final := map[string]string{"done": "done", "failed": "failed", "stopped": "stopped", "cancelled": MentionCancelled,
+		"queued": MentionCancelled, "running": MentionCancelled}
+	return eachLine(im, fileMentions, func(x *xMention) error {
+		msg, ok := im.messages.get(x.Message)
+		status, known := final[x.Status]
+		persona, isPersona := im.personas[x.Persona]
+		if !ok || !known || !isPersona {
+			return refuseImport("mention of message %d: unknown message, persona or status %q", x.Message, x.Status)
+		}
+		var line any
+		if x.Line != 0 {
+			id, ok := im.messages.get(x.Line)
+			if !ok {
+				return refuseImport("mention of message %d: unknown line %d", x.Message, x.Line)
+			}
+			line = id
+		}
+		_, err := im.tx.ExecContext(im.ctx, `INSERT INTO message_turns(message_id, persona_id, final_status, final_line_id) VALUES(?,?,?,?)`,
+			msg, persona, status, line)
+		if err != nil {
+			return refuseImport("mention of message %d: %v", x.Message, err)
+		}
+		im.rep.Counts["mentions"]++
+		return nil
+	})
+}
+
 func (im *importer) blob(name, what string, limit int64) ([]byte, error) {
 	if name == "" {
 		return nil, refuseImport("%s names no file", what)
@@ -689,9 +725,16 @@ func (im *importer) documentsStep() error {
 		if d.Upload != 0 && im.uploadFormat[d.Upload] != d.Format {
 			return refuseImport("document %s: format %s, but its upload reads as %s", d.Name, d.Format, im.uploadFormat[d.Upload])
 		}
+		var deleted *string
+		if d.DeletedAt != "" {
+			if _, err := time.Parse(time.RFC3339Nano, d.DeletedAt); err != nil {
+				return refuseImport("document %d: deleted_at %q is not a time", d.Ref, d.DeletedAt)
+			}
+			deleted = &d.DeletedAt
+		}
 		var id int64
-		err = im.tx.QueryRowContext(im.ctx, `INSERT INTO documents(room_id, kind, name, format, upload_id, author, created_at) VALUES(?,?,?,?,?,?,?) RETURNING id`,
-			im.room, d.Kind, d.Name, d.Format, up, d.Author, d.CreatedAt).Scan(&id)
+		err = im.tx.QueryRowContext(im.ctx, `INSERT INTO documents(room_id, kind, name, format, upload_id, author, created_at, deleted_at)
+			VALUES(?,?,?,?,?,?,?,?) RETURNING id`, im.room, d.Kind, d.Name, d.Format, up, d.Author, d.CreatedAt, deleted).Scan(&id)
 		if err != nil {
 			return refuseImport("document %d: %v", d.Ref, err)
 		}

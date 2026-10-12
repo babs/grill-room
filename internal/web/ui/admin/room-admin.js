@@ -22,8 +22,8 @@ const agentState = signal(w.grillAgent);
 addEventListener('grill:room', (e) => { roomData.value = /** @type {CustomEvent<RoomData>} */ (e).detail; });
 addEventListener('grill:agent', (e) => { agentState.value = /** @type {CustomEvent<AgentState>} */ (e).detail; });
 
-const allTabs = [...Object.entries(roomTabs).slice(0, 3), ['personas', 'Personas'], ['skills', 'Skills'], ['export', roomTabs.export],
-  ['glossary', 'Glossary']];
+const allTabs = [...Object.entries(roomTabs).slice(0, 3), ['personas', 'Personas'], ['skills', 'Skills'], ['documents', 'Documents'],
+  ['export', roomTabs.export], ['glossary', 'Glossary']];
 // The tabs a plain member gets; a room admin gets them all. Pending the user's word (Phase 2 kept
 // members to the glossary): add an id here to open a tab to every member.
 const memberTabs = ['glossary'];
@@ -93,8 +93,26 @@ function Manage({ data, tab }) {
       ${tab === 'skills' && (skills.length ? html`<ul id="room-admin-skills">${skills.map((k) => html`<li key=${k.id}>${k.name} v${k.version}, copied by ${k.author}
           ${' '}<button type="button" class="small" onClick=${() => removeSkill(k)} aria-label=${'Remove the room skill ' + k.name}>Remove</button></li>`)}</ul>`
         : html`<p class="hint">None yet. Members copy their personal skills in from the Personas panel.</p>`)}
+      ${tab === 'documents' && html`<${DeletedDocuments} base=${base} show=${show}/>`}
       ${tab === 'glossary' && html`<${STTGlossary} data=${data}/>`}
     <//>`}`;
+}
+
+/**
+ * DeletedDocuments lists the room's deleted documents for a room admin to restore (005-AC26).
+ * @param {{base: string, show: (err: unknown) => void}} props
+ */
+function DeletedDocuments({ base, show }) {
+  const [list, setList] = useState(/** @type {{id: number, name: string, author: string}[] | null} */ (null));
+  const load = () => fetchJSON('GET', base + '/documents/deleted').then(setList).catch(show);
+  useEffect(() => { load(); }, [base]);
+  /** @param {number} id */
+  const restore = (id) => fetchJSON('POST', `${base}/documents/${id}/restore`).then(load).catch(show);
+  return html`
+    <p class="hint">Documents a room admin deleted. They left the room and the agents' workspace; their data stays until the room is deleted.</p>
+    ${list && (list.length ? html`<ul id="deleted-documents">${list.map((d) => html`<li key=${d.id}>${d.name}, by ${d.author}
+      ${' '}<button type="button" class="small" onClick=${() => restore(d.id)} aria-label=${'Restore ' + d.name}>Restore</button></li>`)}</ul>`
+      : html`<p class="hint">No deleted document.</p>`)}`;
 }
 
 /**

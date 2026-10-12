@@ -105,6 +105,9 @@ type Message struct {
 	ChangeSeq int64 `json:"change_seq,omitempty"`
 	// TurnID is the turn whose synthesis, failure or stop the message tells (005-AC4).
 	TurnID int64 `json:"-"`
+	// Mentions are where the turns this line's @mentions queued stand, as the event stream's
+	// replay sends them: the chips stay with a line however old (005-AC4).
+	Mentions []MentionState `json:"mentions,omitempty"`
 }
 
 // Store wraps the SQLite handle.
@@ -614,6 +617,26 @@ CREATE TABLE push_subscriptions (
 	created_at TEXT NOT NULL,
 	UNIQUE (participant_id, endpoint)
 );
+`, `
+-- 005-AC25, 005-AC26: a document renamed or deleted, softly; change_seq moves the room's
+-- documents version on either. The renames tell the personas' next turns the old paths.
+ALTER TABLE documents ADD COLUMN deleted_at TEXT;
+ALTER TABLE documents ADD COLUMN change_seq INTEGER NOT NULL DEFAULT 0;
+-- A deleted agent document leaves its name to a new one; restoring it checks the name is free.
+DROP INDEX documents_agent_name;
+CREATE UNIQUE INDEX documents_agent_name ON documents(room_id, name) WHERE kind = 'agent' AND deleted_at IS NULL;
+CREATE TABLE document_renames (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+	message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+	from_name TEXT NOT NULL,
+	to_name TEXT NOT NULL,
+	created_at TEXT NOT NULL
+);
+CREATE INDEX document_renames_message ON document_renames(message_id);
+-- 005-AC4: an imported mention keeps how its turn ended, as the turn history stays behind.
+ALTER TABLE message_turns ADD COLUMN final_status TEXT CHECK (final_status IN ('done', 'failed', 'stopped', 'cancelled'));
+ALTER TABLE message_turns ADD COLUMN final_line_id INTEGER REFERENCES messages(id) ON DELETE SET NULL;
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.

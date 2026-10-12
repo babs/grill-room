@@ -108,7 +108,7 @@ func (s *Store) CreateAnnotation(ctx context.Context, roomID string, docID int64
 	var last int
 	err = tx.QueryRowContext(ctx, `
 		SELECT COALESCE((SELECT MAX(n) FROM revisions WHERE document_id = d.id), 0)
-		FROM documents d WHERE d.id = ? AND d.room_id = ?`, docID, roomID).Scan(&last)
+		FROM documents d WHERE d.id = ? AND d.room_id = ? AND d.deleted_at IS NULL`, docID, roomID).Scan(&last)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -249,8 +249,10 @@ func (s *Store) AnnotationsSince(ctx context.Context, roomID string, cursor int6
 		return nil, 0, fmt.Errorf("annotations since: %w", err)
 	}
 	// Read with the same cut: a message landing between the two queries waits for the next turn.
+	// A deleted document's threads leave the agents' view with it (005-AC26).
 	out, err := s.loadAnnotations(ctx, true, `a.room_id = ? AND a.id IN (
-		SELECT annotation_id FROM annotation_messages WHERE id > ? AND id <= ?)`, roomID, cursor, next)
+		SELECT annotation_id FROM annotation_messages WHERE id > ? AND id <= ?)
+		AND a.document_id IN (SELECT id FROM documents WHERE deleted_at IS NULL)`, roomID, cursor, next)
 	if err != nil {
 		return nil, 0, err
 	}

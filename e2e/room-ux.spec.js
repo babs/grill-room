@@ -80,7 +80,7 @@ for (const vp of widths) {
     const sheet = alice.locator('#manage');
     await expect(sheet).toBeVisible();
     await expect(sheet.getByRole('link', { name: 'Admins', exact: true })).toHaveAttribute('aria-current', 'page');
-    await expect(sheet.locator('#tab-general, #tab-invites, #tab-admins, #tab-personas, #tab-skills, #tab-export, #tab-glossary')).toHaveCount(7);
+    await expect(sheet.locator('#tab-general, #tab-invites, #tab-admins, #tab-personas, #tab-skills, #tab-documents, #tab-export, #tab-glossary')).toHaveCount(8);
     const box = await sheet.boundingBox();
     if (vp.width < 400) expect(box.width).toBe(vp.width);
     else expect(box.width).toBeGreaterThan(900);
@@ -255,3 +255,42 @@ test('a deep link to a line scrolls the chat there', async ({ browser, request }
   await expect(page.locator(`#messages li[data-id="${target}"]`)).toBeInViewport();
   await expect(page.locator('#messages li', { hasText: 'filler 59' })).not.toBeInViewport();
 });
+
+for (const vp of widths) {
+  // 005-AC25 005-AC26: Bob renames a document from the viewer and everyone sees the new name and
+  // the chat line; Alice, room admin, deletes it, and Bob's viewer closes; Bob has no Delete. Alice
+  // restores it from Manage, Documents.
+  test(`document rename, delete and restore, ${vp.name}`, async ({ browser, request }) => {
+    const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
+    await makeAdmin(request, alice, room);
+    await alice.reload();
+    await bob.setViewportSize(vp);
+    await upload(bob, 'plan.md', 'text/markdown', '# Plan\n');
+    await expect(bob.locator('#doc-name')).toHaveText('plan.md');
+    await expect(bob.locator('#doc-delete')).toBeHidden();
+    await bob.getByRole('button', { name: 'Rename', exact: true }).click();
+    await bob.getByLabel('New name').fill('roadmap.txt');
+    await bob.locator('#doc-rename-form').getByRole('button', { name: 'Save' }).click();
+    await expect(bob.locator('#doc-rename-status')).toHaveText('the name must keep the extension .md');
+    await bob.getByLabel('New name').fill('roadmap.md');
+    await bob.locator('#doc-rename-form').getByRole('button', { name: 'Save' }).click();
+    await expect(bob.locator('#doc-name')).toHaveText('roadmap.md');
+    expect(await noOverflow(bob)).toEqual([]);
+    await expect(alice.locator('#documents')).toHaveText('roadmap.md');
+    await expect(alice.locator('.msg.system').last()).toContainText('Bob renamed `plan.md` → `roadmap.md`');
+
+    await alice.locator('#documents').getByRole('button', { name: 'roadmap.md' }).click();
+    alice.once('dialog', (d) => d.accept());
+    await alice.locator('#doc-delete').click();
+    await expect(alice.locator('#viewer')).toBeHidden();
+    await expect(bob.locator('#viewer')).toBeHidden();
+    await expect(bob.locator('#documents li')).toHaveCount(0);
+    await expect(bob.locator('.msg.system').last()).toContainText('Alice deleted the document `roadmap.md`');
+
+    await alice.goto(`/r/${room.id}#manage/documents`);
+    const sheet = alice.locator('#manage');
+    await sheet.getByRole('button', { name: 'Restore roadmap.md' }).click();
+    await expect(sheet.locator('#deleted-documents')).toHaveCount(0);
+    await expect(bob.locator('#documents')).toHaveText('roadmap.md');
+  });
+}

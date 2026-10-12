@@ -101,6 +101,13 @@ test('mentions: turn states, stop, pending and offline', async ({ browser, reque
     await expect(failed).toHaveText('→ @Grill · failed', { timeout: 60_000 });
     await failed.click();
     await expect(alice.locator('#messages li.msg.system.flash')).toContainText('Grill turn failed: claude');
+    // 005-AC4: the chips are stored with their lines: a reload shows them all again.
+    const again = await bob.context().newPage();
+    await again.goto(bob.url());
+    for (const [text, state] of [['code word is ALPHA', 'done'], ['FAKE_RECALL', 'done'], ['FAKE_EDIT_UPLOAD', 'failed']]) {
+      await expect(line(again, text).locator('.mention-turn')).toHaveText('→ @Grill · ' + state);
+    }
+    await again.close();
 
     // With "approve everything", Bob's new persona waits for the host.
     await admin.locator('#tab-settings').click();

@@ -127,7 +127,7 @@ func agentAnnotate(ctx context.Context, tx *sql.Tx, roomID string, a AgentAnnota
 	var n int
 	err := tx.QueryRowContext(ctx, `
 		SELECT d.format, r.n, r.body FROM documents d JOIN revisions r ON r.document_id = d.id
-		WHERE d.id = ? AND d.room_id = ? ORDER BY r.n DESC LIMIT 1`, a.DocID, roomID).Scan(&format, &n, &body)
+		WHERE d.id = ? AND d.room_id = ? AND d.deleted_at IS NULL ORDER BY r.n DESC LIMIT 1`, a.DocID, roomID).Scan(&format, &n, &body)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "the document has no text to quote", nil
 	}
@@ -176,7 +176,7 @@ func agentDocName(ctx context.Context, tx *sql.Tx, roomID, name string) (string,
 	for {
 		var agent, upload int
 		err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FILTER (WHERE kind = 'agent'), COUNT(*) FILTER (WHERE kind = 'upload')
-			FROM documents WHERE room_id = ? AND name = ?`, roomID, name).Scan(&agent, &upload)
+			FROM documents WHERE room_id = ? AND name = ? AND deleted_at IS NULL`, roomID, name).Scan(&agent, &upload)
 		if err != nil {
 			return "", fmt.Errorf("agent document name: %w", err)
 		}
@@ -404,7 +404,7 @@ func (s *Store) PinBaseRevisions(ctx context.Context, roomID string, id int64) (
 			return json.Unmarshal([]byte(pinned.String), &base)
 		}
 		rows, err := tx.QueryContext(ctx, `SELECT d.id, MAX(r.n) FROM documents d JOIN revisions r ON r.document_id = d.id
-			WHERE d.room_id = ? AND d.kind = 'agent' GROUP BY d.id`, roomID)
+			WHERE d.room_id = ? AND d.kind = 'agent' AND d.deleted_at IS NULL GROUP BY d.id`, roomID)
 		if err != nil {
 			return fmt.Errorf("pin base revisions: %w", err)
 		}
@@ -727,7 +727,7 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 		var latest string
 		err = tx.QueryRowContext(ctx, `
 			SELECT d.id, r.n, r.body FROM documents d JOIN revisions r ON r.document_id = d.id
-			WHERE d.room_id = ? AND d.kind = 'agent' AND d.name = ? ORDER BY r.n DESC LIMIT 1`, roomID, w.Name).Scan(&docID, &n, &latest)
+			WHERE d.room_id = ? AND d.kind = 'agent' AND d.name = ? AND d.deleted_at IS NULL ORDER BY r.n DESC LIMIT 1`, roomID, w.Name).Scan(&docID, &n, &latest)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			if _, err := createAgentDocument(ctx, tx, roomID, w.Name, w.Format, w.Body, author); err != nil {
@@ -787,7 +787,7 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 			if n, ok := renamed[name]; ok {
 				name = n
 			}
-			err := tx.QueryRowContext(ctx, `SELECT id FROM documents WHERE room_id = ? AND kind = 'agent' AND name = ?`, roomID, name).Scan(&a.DocID)
+			err := tx.QueryRowContext(ctx, `SELECT id FROM documents WHERE room_id = ? AND kind = 'agent' AND name = ? AND deleted_at IS NULL`, roomID, name).Scan(&a.DocID)
 			if errors.Is(err, sql.ErrNoRows) {
 				report.Ignored = append(report.Ignored, fmt.Sprintf("annotation on %s: no such document", a.Path))
 				continue

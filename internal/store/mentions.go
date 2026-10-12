@@ -53,17 +53,41 @@ func requeueMentions(ctx context.Context, tx *sql.Tx, to, turn, from int64) erro
 	return nil
 }
 
-// MentionStates returns where the turns of the room's latest limit mentions stand, newest first.
-func (s *Store) MentionStates(ctx context.Context, roomID string, limit int) ([]MentionState, error) {
-	rows, err := s.db.QueryContext(ctx, `
+// mentionCols reads where a mention's turn stands: from the turn, from the queue while it waits,
+// or as an import kept it.
+const mentionCols = `
 		SELECT mt.message_id, mt.persona_id, COALESCE(t.id, 0),
 			CASE WHEN t.id IS NULL THEN
-				CASE WHEN EXISTS (SELECT 1 FROM turn_queue q WHERE q.id = mt.queue_id) THEN 'queued' ELSE 'cancelled' END
+				CASE WHEN mt.final_status IS NOT NULL THEN mt.final_status
+				WHEN EXISTS (SELECT 1 FROM turn_queue q WHERE q.id = mt.queue_id) THEN 'queued' ELSE 'cancelled' END
 			WHEN t.status = 'running' AND t.host_queued_at IS NOT NULL THEN 'queued'
 			ELSE t.status END,
-			COALESCE((SELECT l.id FROM messages l WHERE l.turn_id = t.id AND t.status != 'running' ORDER BY l.kind != 'agent', l.id LIMIT 1), 0)
-		FROM message_turns mt JOIN messages m ON m.id = mt.message_id LEFT JOIN turns t ON t.id = mt.turn_id
-		WHERE m.room_id = ? ORDER BY mt.message_id DESC, mt.persona_id LIMIT ?`, roomID, limit)
+			COALESCE((SELECT l.id FROM messages l WHERE l.turn_id = t.id AND t.status != 'running' ORDER BY l.kind != 'agent', l.id LIMIT 1),
+				mt.final_line_id, 0)
+		FROM message_turns mt JOIN messages m ON m.id = mt.message_id LEFT JOIN turns t ON t.id = mt.turn_id`
+
+// MentionStates returns where the turns of the room's latest limit mentions stand, newest first.
+func (s *Store) MentionStates(ctx context.Context, roomID string, limit int) ([]MentionState, error) {
+	return queryMentions(ctx, s.db, mentionCols+` WHERE m.room_id = ? ORDER BY mt.message_id DESC, mt.persona_id LIMIT ?`, roomID, limit)
+}
+
+// MessageMentions returns where the mentions of room's lines after..upTo stand, by line: the chips
+// every line keeps however old (005-AC4).
+func (s *Store) MessageMentions(ctx context.Context, roomID string, after, upTo int64) (map[int64][]MentionState, error) {
+	list, err := queryMentions(ctx, s.db, mentionCols+` WHERE m.room_id = ? AND mt.message_id > ? AND mt.message_id <= ?
+		ORDER BY mt.message_id, mt.persona_id`, roomID, after, upTo)
+	if err != nil {
+		return nil, err
+	}
+	out := map[int64][]MentionState{}
+	for _, m := range list {
+		out[m.MessageID] = append(out[m.MessageID], m)
+	}
+	return out, nil
+}
+
+func queryMentions(ctx context.Context, db rowsQuerier, query string, args ...any) ([]MentionState, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("mention states: %w", err)
 	}

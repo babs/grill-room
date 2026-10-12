@@ -150,7 +150,7 @@ func TestUnpackRefusals(t *testing.T) {
 		want    string
 	}{
 		"tampered file":   {tampered, limits, "sha256 mismatch on uploads/1"},
-		"newer format":    {craft(t, good, func(m *Manifest) { m.Format = Format + 1 }), limits, "format 2 is newer than this instance reads (1)"},
+		"newer format":    {craft(t, good, func(m *Manifest) { m.Format = Format + 1 }), limits, fmt.Sprintf("format %d is newer than this instance reads (%d)", Format+1, Format)},
 		"no format":       {craft(t, good, func(m *Manifest) { m.Format = 0 }), limits, "format 0 is not a format"},
 		"traversal":       {craft(t, []entry{{tar.Header{Name: "../evil", Mode: 0o644}, "x"}}, nil), limits, `unsafe path "../evil"`},
 		"inner traversal": {craft(t, []entry{{tar.Header{Name: "uploads/../../evil", Mode: 0o644}, "x"}}, nil), limits, "unsafe path"},

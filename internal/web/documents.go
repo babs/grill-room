@@ -14,8 +14,10 @@ import (
 	"net/http"
 	"net/netip"
 	"os/exec"
+	"path"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -23,6 +25,7 @@ import (
 	"github.com/babs/grill-room/internal/convert"
 	"github.com/babs/grill-room/internal/render"
 	"github.com/babs/grill-room/internal/store"
+	"github.com/babs/grill-room/internal/turn"
 )
 
 const (
@@ -417,4 +420,99 @@ func (s *Server) originalDocument(w http.ResponseWriter, r *http.Request, sess s
 	h.Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": d.Name}))
 	h.Set("Content-Length", strconv.Itoa(len(data)))
 	_, _ = w.Write(data)
+}
+
+// renameDocument renames a document for any member (005-AC25): the name passes the checks an
+// upload's does, an agent document's those of its workspace path too, and keeps its extension.
+func (s *Server) renameDocument(w http.ResponseWriter, r *http.Request, sess session) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	d, ok := s.document(w, r, sess)
+	if !ok {
+		return
+	}
+	name, ok := cleanText(req.Name, maxFileName, false)
+	switch {
+	case !ok || strings.ContainsAny(name, `/\`):
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("file name must be 1 to %d characters, without / or \\", maxFileName))
+		return
+	case !strings.EqualFold(path.Ext(name), path.Ext(d.Name)):
+		httpError(w, http.StatusBadRequest, "the name must keep the extension "+path.Ext(d.Name))
+		return
+	case d.Kind == store.DocAgent && !turn.ValidDocName(name):
+		httpError(w, http.StatusBadRequest, "not a name an agent document can take")
+		return
+	}
+	c, err := s.bus.Store.RenameDocument(r.Context(), sess.p.RoomID, d.ID, name, sess.p)
+	if s.docChangeFailed(w, err, "rename_document_failed") {
+		return
+	}
+	if c != nil {
+		s.bus.Notify(sess.p.RoomID)
+		s.log.Info("document_renamed", zap.String("room", sess.p.RoomID), zap.Int64("document", d.ID), zap.Int64("participant", sess.p.ID))
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// docChangeFailed answers a refused document change and reports whether it did.
+func (s *Server) docChangeFailed(w http.ResponseWriter, err error, event string) bool {
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, store.ErrNotFound):
+		httpError(w, http.StatusNotFound, "no such document")
+	case errors.Is(err, store.ErrForbidden):
+		httpError(w, http.StatusForbidden, "only a room admin can do this")
+	case errors.Is(err, store.ErrDocNameTaken), errors.Is(err, store.ErrTurnRunning):
+		httpError(w, http.StatusConflict, err.Error())
+	default:
+		s.serverError(w, event, err)
+	}
+	return true
+}
+
+// setDocumentDeleted deletes a document softly (DELETE), or restores it (POST .../restore), for a
+// room admin or the super-admin (005-AC26), audited.
+func (s *Server) setDocumentDeleted(w http.ResponseWriter, r *http.Request, sess *session) {
+	if !s.asRoomAdmin(w, r, sess) {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("doc"), 10, 64)
+	if err != nil {
+		httpError(w, http.StatusNotFound, "no such document")
+		return
+	}
+	deleted, action := r.Method == http.MethodDelete, ActionDocumentDelete
+	if !deleted {
+		action = ActionDocumentRestore
+	}
+	room := r.PathValue("room")
+	var by *store.Participant
+	if sess != nil {
+		by = sess.p
+	}
+	c, err := s.bus.Store.SetDocumentDeleted(s.roomAuditing(r, sess, action, room, nil), room, id, deleted, by)
+	if s.docChangeFailed(w, err, "delete_document_failed") {
+		return
+	}
+	s.bus.Notify(room)
+	s.log.Info("document_deleted", zap.String("room", room), zap.Int64("document", c.Document.ID), zap.Bool("deleted", deleted))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deletedDocuments lists the room's deleted documents for its admins to restore (005-AC26).
+func (s *Server) deletedDocuments(w http.ResponseWriter, r *http.Request, sess *session) {
+	if !s.asRoomAdmin(w, r, sess) {
+		return
+	}
+	docs, err := s.bus.Store.DeletedDocuments(r.Context(), r.PathValue("room"))
+	if err != nil {
+		s.serverError(w, "deleted_documents_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, docs)
 }

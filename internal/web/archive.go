@@ -200,7 +200,7 @@ func (s *Server) importRoom(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "import_failed", err)
 		return
 	}
-	o := store.ImportOptions{RoomID: strings.ToLower(NewToken()), DisplayName: display, SameInstance: m.InstanceID == inst, SourceRoom: m.Room.ID, ArchiveBytes: m.Bytes(),
+	o := store.ImportOptions{RoomID: strings.ToLower(NewToken()), Format: m.Format, DisplayName: display, SameInstance: m.InstanceID == inst, SourceRoom: m.Room.ID, ArchiveBytes: m.Bytes(),
 		DefaultQuota: s.opts.MaxRoomBytes, MaxUpload: s.opts.MaxUploadBytes, MaxAttachment: s.opts.MaxAttachmentBytes, CheckPersona: checkPersona, DryRun: preview}
 	details := map[string]any{"from": m.Room.ID, "from_instance_version": m.InstanceVersion, "same_instance": o.SameInstance}
 	var ctx context.Context

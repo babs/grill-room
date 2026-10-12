@@ -255,6 +255,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rooms/{room}/documents", s.participant(s.listDocuments))
 	mux.Handle("POST /api/rooms/{room}/documents", s.participant(s.uploadDocument))
 	mux.Handle("GET /api/rooms/{room}/documents/{doc}", s.participant(s.getDocument))
+	mux.Handle("PATCH /api/rooms/{room}/documents/{doc}", s.participant(s.renameDocument))
+	mux.Handle("DELETE /api/rooms/{room}/documents/{doc}", s.memberOrAdmin(s.setDocumentDeleted))
+	mux.Handle("POST /api/rooms/{room}/documents/{doc}/restore", s.memberOrAdmin(s.setDocumentDeleted))
+	mux.Handle("GET /api/rooms/{room}/documents/deleted", s.memberOrAdmin(s.deletedDocuments))
 	mux.Handle("GET /api/rooms/{room}/documents/{doc}/view", s.participant(s.viewDocument))
 	mux.Handle("GET /api/rooms/{room}/documents/{doc}/original", s.participant(s.originalDocument))
 	mux.Handle("GET /api/rooms/{room}/documents/{doc}/annotations", s.participant(s.listAnnotations))
@@ -899,6 +903,15 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 			msgs, err := s.bus.Store.Messages(r.Context(), room, last, replayBatch)
 			if err != nil {
 				return false
+			}
+			if len(msgs) > 0 {
+				mentions, err := s.bus.Store.MessageMentions(r.Context(), room, last, msgs[len(msgs)-1].ID)
+				if err != nil {
+					return false
+				}
+				for i := range msgs {
+					msgs[i].Mentions = mentions[msgs[i].ID]
+				}
 			}
 			for i := range msgs {
 				b, err := json.Marshal(viewMessage(msgs[i]))

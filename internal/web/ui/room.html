@@ -208,8 +208,16 @@
       <span id="doc-meta"></span>
       <a id="doc-original" hidden>Download original</a>
       <a id="doc-window" class="docs-window-link" target="_blank">Open in a new window</a>
+      <button type="button" id="doc-rename" class="small">Rename</button>
+      <button type="button" id="doc-delete" class="small" hidden>Delete</button>
       <button type="button" id="doc-close" aria-label="Close document">Close</button>
     </div>
+    <form id="doc-rename-form" hidden>
+      <label>New name <input id="doc-rename-name" required maxlength="200"></label>
+      <button type="submit" class="small">Save</button>
+      <button type="button" id="doc-rename-cancel" class="small">Cancel</button>
+      <span id="doc-rename-status" role="status"></span>
+    </form>
     <form id="revisions" hidden>
       <label>Revision <select id="rev"></select></label>
       <label>Compare with <select id="rev-from"></select></label>

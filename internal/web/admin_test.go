@@ -334,9 +334,10 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 	// Every mutation action is exercised here; the admin.* ones, the room admins', the settings' and
 	// the archives' and the renames' have their own tests (TestAuditLogViewAPI, TestRoomAdmins,
 	// TestRoomSkillsAPI, TestProfileCreatesRooms, TestProfileMaxRoomsAPI, TestExportImportAPI,
-	// TestRenameParticipant).
+	// TestRenameParticipant, TestDeleteDocument).
 	covered := map[string]bool{ActionRoomAdminAdd: true, ActionRoomAdminRemove: true, ActionRoomSkillRemove: true, ActionSettings: true,
-		ActionProfileMaxRooms: true, ActionRoomExport: true, ActionRoomImport: true, ActionRename: true}
+		ActionProfileMaxRooms: true, ActionRoomExport: true, ActionRoomImport: true, ActionRename: true, ActionDocumentDelete: true,
+		ActionDocumentRestore: true}
 	for _, w := range want {
 		covered[w.action] = true
 	}

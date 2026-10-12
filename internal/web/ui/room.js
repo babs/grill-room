@@ -73,6 +73,8 @@ async function loadRoom() {
   participants = data.participants;
   myID = String(data.me.id);
   hasProfile = !!data.profile;
+  meAdmin = !!data.me.admin;
+  $('doc-delete').hidden = !meAdmin;
   renameSenders();
   $('voice').hidden = !data.voice;
   // Every member edits the transcription glossary there (005-AC23); the rest is for room admins.
@@ -258,6 +260,7 @@ function renderMessage(m) {
       ' ', button('Delete', '', () => deleteMessage(m)));
   }
   li.append(meta, body);
+  if (m.mentions) stored.set(m.id, m.mentions);
   if (m.kind === 'text') fillMentions(li);
   return li;
 }
@@ -313,9 +316,14 @@ const notices = new Map();
 // mentionToken spells a person's name as the server's mentionToken does: "Ana María" is @Ana_María.
 const mentionToken = (name) => name.replace(/[^\p{L}\p{N}_-]+/gu, '_').replace(/^_+|_+$/g, '');
 
+// stored holds the chips each line came with from the stream: the agent state carries only the
+// latest mentions, and an older line keeps its chips from there.
+const stored = new Map();
+
 function fillMentions(li) {
   const id = Number(li.dataset.id);
-  const states = (agent.mentions || []).filter((s) => s.message_id === id);
+  const live = (agent.mentions || []).filter((s) => s.message_id === id);
+  const states = live.length ? live : stored.get(id) || [];
   const said = notices.get(id) || [];
   // A mention past the agent state's window keeps the state it last showed.
   if (!states.length && !said.length) return;
@@ -540,7 +548,9 @@ async function loadDocuments() {
   }));
   if (openDoc) {
     const fresh = docs.find((d) => d.id === openDoc.id);
-    if (fresh && fresh.revisions !== openDoc.revisions) await showDocument(fresh.id, true);
+    // A room admin deleted it meanwhile: the viewer closes; renamed, it shows its new name.
+    if (!fresh) $('doc-close').click();
+    else if (fresh.revisions !== openDoc.revisions || fresh.name !== openDoc.name) await showDocument(fresh.id, true);
   }
 }
 
@@ -566,6 +576,7 @@ async function showDocument(id, refresh) {
   // The docs window's address follows the document shown: a deep link to reload or share.
   if (docsMode) history.replaceState(null, '', $('doc-window').href);
   $('doc-name').textContent = d.name;
+  $('doc-delete').hidden = !meAdmin;
   $('doc-meta').textContent = d.kind === 'upload' && d.format === 'md' && !/\.(md|markdown)$/i.test(d.name)
     ? describe(d) + ', shown as its Markdown copy'
     : describe(d);
@@ -616,6 +627,31 @@ function renderDocument() {
   }
   $('doc-frame').replaceChildren(el);
 }
+
+// Any member renames a document; a room admin deletes it, softly (005-AC25, 005-AC26).
+let meAdmin = false;
+$('doc-rename').addEventListener('click', () => {
+  $('doc-rename-name').value = openDoc.name;
+  $('doc-rename-status').textContent = '';
+  $('doc-rename-form').hidden = false;
+  $('doc-rename-name').focus();
+});
+$('doc-rename-cancel').addEventListener('click', () => { $('doc-rename-form').hidden = true; });
+$('doc-rename-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const d = openDoc;
+  sendJSON('PATCH', docURL(d.id, ''), { name: $('doc-rename-name').value.trim() }).then((done) => {
+    if (!done) return;
+    $('doc-rename-form').hidden = true;
+    return Promise.all([loadDocuments(), showDocument(d.id, true)]);
+  }).catch((err) => { $('doc-rename-status').textContent = err.message; });
+});
+$('doc-delete').addEventListener('click', () => {
+  const d = openDoc;
+  if (!confirm('Delete ' + d.name + '? It leaves the room and the agents\' workspace; a room admin can restore it from Manage.')) return;
+  sendJSON('DELETE', docURL(d.id, '')).then((done) => { if (done) $('doc-close').click(); })
+    .catch((err) => { $('doc-rename-status').textContent = err.message; $('doc-rename-form').hidden = false; });
+});
 
 $('rev').addEventListener('change', renderDocument);
 $('rev-from').addEventListener('change', renderDocument);

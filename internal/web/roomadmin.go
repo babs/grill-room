@@ -25,6 +25,8 @@ const (
 	ActionSettings        = "instance.settings"
 	ActionProfileMaxRooms = "profile.max_rooms"
 	ActionRename          = "participant.rename"
+	ActionDocumentDelete  = "document.delete"
+	ActionDocumentRestore = "document.restore"
 )
 
 // maxStorageQuota bounds the instance storage quota: 1 PiB.
