@@ -3,16 +3,13 @@ package daemon
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"embed"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"mime"
 	"net"
 	"net/http"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +19,7 @@ import (
 	"github.com/babs/grill-room/internal/monitor"
 	"github.com/babs/grill-room/internal/sandbox"
 	"github.com/babs/grill-room/internal/turn"
+	"github.com/babs/grill-room/internal/uivendor"
 )
 
 //go:embed ui
@@ -30,13 +28,7 @@ var ui embed.FS
 // csp lets the page run its own scripts and its import map, inline in index.html, by hash.
 var csp = func() string {
 	page, _ := ui.ReadFile("ui/index.html") // embedded above
-	m := regexp.MustCompile(`(?s)<script type="importmap">(.*?)</script>`).FindSubmatch(page)
-	if m == nil {
-		panic("ui/index.html has no import map")
-	}
-	sum := sha256.Sum256(m[1])
-	return "default-src 'self'; script-src 'self' 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) +
-		"'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+	return uivendor.CSP(page, "'none'")
 }()
 
 // Backend is what the page drives: the supervisor, or a Daemon on its own. Its instanceOps act
@@ -131,6 +123,7 @@ func (a *Admin) Handler() http.Handler {
 	mux.HandleFunc("GET /site.webmanifest", asset("ui/site.webmanifest", "application/manifest+json"))
 	static, _ := fs.Sub(ui, "ui") // cannot fail: "ui" is a valid embedded path
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
+	mux.Handle("GET "+uivendor.Prefix, uivendor.Handler())
 	mux.HandleFunc("POST /api/session", a.session)
 	mux.Handle("GET /api/status", a.auth(a.status))
 	mux.Handle("POST /api/room", a.auth(a.setRoom))

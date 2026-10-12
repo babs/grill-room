@@ -83,7 +83,7 @@ The page shows four alerts (003-AC29): a Claude account's expiry warning, a runn
 
 ## Admin page
 
-The page is written with Preact, htm and @preact/signals, served from `internal/daemon/ui/vendor/` as unmodified ESM files with their licenses, and mapped by an import map that the CSP admits by its hash. No CDN, no build step. `tools/ui/package.json` pins the versions; `make ui-vendor` copies them again, and `make ui-check` (part of `make lint`) runs `tsc --checkJs` on the page's JSDoc types.
+The page is written with Preact, htm and @preact/signals, served from `internal/uivendor/esm/`, shared with the room server's `/admin`, as unmodified ESM files with their licenses, and mapped by an import map that the CSP admits by its hash. No CDN, no build step. `tools/ui/package.json` pins the versions; `make ui-vendor` copies them again, and `make ui-check` (part of `make lint`) runs `tsc --checkJs` on the page's JSDoc types.
 
 The room's stream tells each daemon whether it hosts the room's agent and whether the room runs personas in parallel: a `room` event, `{"host":true,"parallel_turns":false}`, sent after `hello` and whenever either changes. Daemons from before ignore it.
 

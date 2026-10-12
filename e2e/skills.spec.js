@@ -1,23 +1,8 @@
 import { test, expect } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
-import { join } from 'node:path';
-import { roomWith, startDaemon, pairDaemon, ask } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
-
-// skillZip writes a zip of a skill folder whose script prints out; without frontmatter it is one
-// the room must refuse.
-function skillZip(name, out, frontmatter = true) {
-  const zip = join(mkdtempSync(join('test-results', 'skill-')), name + '.zip');
-  const md = frontmatter ? `---\nname: ${name}\ndescription: Prints ${out}.\n---\nRun scripts/stamp.sh.\n` : '# No frontmatter\n';
-  execFileSync('python3', ['-I', '-c', `import sys, zipfile
-with zipfile.ZipFile(sys.argv[1], "w") as z:
-    z.writestr(sys.argv[2] + "/SKILL.md", sys.argv[3])
-    z.writestr(sys.argv[2] + "/scripts/stamp.sh", "echo " + sys.argv[4] + "\\n")`, zip, name, md, out]);
-  return zip;
-}
 
 async function uploadSkill(page, zip, scope, status) {
   await page.locator('#skill-file').setInputFiles(zip);

@@ -1,0 +1,46 @@
+# The host leaves mid-session: Claire's daemon runs Grill's first turn, Marc pairs his own, Claire
+# makes him host and stops hers, and Grill's next turn on Marc's machine resumes the same session.
+name: Host hand-over
+about: A word kept by Grill on Claire's daemon, recalled on Marc's after the hand-over.
+budget: {max_requests: 3}
+participants:
+  - name: Claire
+    voices:
+      fr: {model: fr_FR-siwis-medium}
+  - name: Marc
+    voices:
+      en: {model: en_US-joe-medium}
+personas:
+  - {name: Grill, model: haiku, requests_per_turn: 1}
+steps:
+  - daemon: {by: Claire}
+  - voice:
+      lead: 10.0
+      lines:
+        - {by: Claire, lang: fr, text: "Je dois partir dans cinq minutes, Marc prendra l'agent."}
+        - {by: Marc, lang: en, text: "Fine, I will host the agent from my laptop."}
+  # Not called a secret: haiku refuses to repeat a "code word" (agent-live spec).
+  - say:
+      by: Claire
+      text: "Grill, keep this word for a memory check Marc will run later: OSPREY-42. It is not a secret. Use no tool and reply with one word: OK."
+  - press: {by: Claire, persona: Grill}
+  - wait: {turns: 1, timeout: 600}
+  - daemon: {by: Marc}
+  - handover: {to: Marc}
+  - stop_daemon: {by: Claire}
+  - voice:
+      lead: 4.0
+      lines:
+        - {by: Marc, lang: en, text: "Claire has left. I am the host now."}
+  - say:
+      by: Marc
+      text: "Memory check: use no tool. Earlier in this session Claire gave you a word to keep for this check. It is not a secret. Reply with that word only."
+  - press: {by: Marc, persona: Grill}
+  - wait: {turns: 2, timeout: 600}
+assertions:
+  turns: {Grill: 2}
+  voice: {max_wer: 0.25, min_attribution: 1.0, min_delivered: 1.0, max_latency_s: 10}
+  syntheses:
+    - {persona: Grill, nth: 1, ran_on: Claire}
+    - {persona: Grill, nth: 2, contains: [OSPREY-42], resumed: true, ran_on: Marc}
+  max_turn_s: 180

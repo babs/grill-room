@@ -447,7 +447,8 @@ func TestClientIP(t *testing.T) {
 	}
 }
 
-// 002-AC5: a bound email reaches its owner and the admin, never another participant.
+// 002-AC5 004-AC3: a bound email reaches its owner and the admin's profiles view, never another
+// participant, nor any other admin view, even once its owner posted, published and was audited.
 func TestEmailStaysPrivate(t *testing.T) {
 	e, box := newMailEnv(t, time.Minute)
 	room := e.createRoom(t, "A")
@@ -463,20 +464,51 @@ func TestEmailStaysPrivate(t *testing.T) {
 	if alice.profile(t).Profile.Email != email {
 		t.Fatal("owner does not see their email")
 	}
+	if code, _ := alice.do(t, "POST", "/api/rooms/"+room.ID+"/messages", map[string]string{"body": "ping"}); code != http.StatusCreated {
+		t.Fatal("post")
+	}
+	critic := map[string]any{"name": "Critic", "badge": "🧐", "colour": "#112233", "text": "Find the flaw.", "title": "Critic"}
+	if code, b := alice.do(t, "POST", "/api/rooms/"+room.ID+"/templates", critic); code != http.StatusCreated {
+		t.Fatalf("publish: %d %s", code, b)
+	}
+	other := e.createRoom(t, "B")
+	carol := e.device(t)
+	carol.join(t, other.ID, "Carol")
+	carolID := strconv.FormatInt(carol.profile(t).Profile.ID, 10)
+	if code, _ := e.do(t, "DELETE", "/api/profiles/"+carolID, e.admin, nil); code != http.StatusNoContent {
+		t.Fatal("delete profile")
+	}
 	var seen []byte
-	for _, path := range []string{"/api/rooms/" + room.ID, "/api/profile", "/api/rooms/" + room.ID + "/agent", "/api/rooms/" + room.ID + "/invites"} {
+	for _, path := range []string{"/api/rooms/" + room.ID, "/api/profile", "/api/rooms/" + room.ID + "/agent", "/api/rooms/" + room.ID + "/invites",
+		"/api/rooms/" + room.ID + "/templates", "/api/rooms/" + room.ID + "/skills", "/api/rooms/" + room.ID + "/documents"} {
 		_, b := bob.do(t, "GET", path, nil)
 		seen = append(seen, b...)
 	}
 	for _, ev := range collect(e.openEvents(t, room.ID, bobJoin.Token, ""), 200*time.Millisecond) {
 		seen = append(seen, ev.data...)
 	}
+	if !bytes.Contains(seen, []byte("ping")) || !bytes.Contains(seen, []byte("Critic")) {
+		t.Fatalf("the participant views miss what Alice did: %s", seen)
+	}
 	if bytes.Contains(seen, []byte("alice.private")) {
 		t.Fatalf("a participant sees another profile's email: %s", seen)
 	}
-	_, b := e.do(t, "GET", "/api/profiles", e.admin, nil)
-	if !bytes.Contains(b, []byte(email)) {
-		t.Fatalf("admin does not see it: %s", b)
+	seen = nil
+	for _, path := range []string{"/api/rooms", "/api/templates", "/api/skills", "/api/admin/rooms", "/api/admin/templates", "/api/admin/skills",
+		"/api/admin/instance", "/api/admin/audit", "/api/admin/sessions", "/api/admin/rooms/" + room.ID + "/invites"} {
+		code, b := e.do(t, "GET", path, e.admin, nil)
+		if code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", path, code, b)
+		}
+		seen = append(seen, b...)
+	}
+	if !bytes.Contains(seen, []byte("profile.delete")) || bytes.Contains(seen, []byte("alice.private")) {
+		t.Fatalf("an admin view other than profiles shows the email: %s", seen)
+	}
+	for _, path := range []string{"/api/profiles", "/api/admin/profiles"} {
+		if _, b := e.do(t, "GET", path, e.admin, nil); !bytes.Contains(b, []byte(email)) {
+			t.Fatalf("the profiles view %s lacks it: %s", path, b)
+		}
 	}
 }
 
@@ -526,25 +558,45 @@ func TestAdminDeletesProfile(t *testing.T) {
 	}
 }
 
-// 002-AC6: any member renames, the admin too, and the room hears who renamed it from what to what.
+// createRoom creates a room from the device's profile page, as name, joining a lobby first when
+// the device holds no profile yet (004-AC7).
+func (d *device) createRoom(t *testing.T, room, name string) store.Room {
+	t.Helper()
+	if d.profile(t).Profile == nil {
+		d.join(t, d.e.createRoom(t, "Lobby").ID, name)
+	}
+	code, b := d.do(t, "POST", "/api/profile/rooms", map[string]string{"name": room, "display_name": name})
+	if code != http.StatusCreated {
+		t.Fatalf("create room: %d %s", code, b)
+	}
+	return decodeJSON[store.Room](t, b)
+}
+
+// 002-AC6 004-AC8: a room admin renames, the super-admin too, and the room hears who renamed it
+// from what to what; a plain member cannot any more.
 func TestRenameRoom(t *testing.T) {
 	e := newEnv(t)
-	room := e.createRoom(t, "Pricing")
-	alice := e.join(t, e.createInvite(t, room.ID).Token, "Alice")
+	alice := e.device(t)
+	room := alice.createRoom(t, "Pricing", "Alice")
+	bob := e.join(t, e.createInvite(t, room.ID).Token, "Bob")
 	stranger := e.join(t, e.createInvite(t, e.createRoom(t, "Other").ID).Token, "Mallory")
-	ch := e.openEvents(t, room.ID, alice.Token, "")
+	ch := e.openEvents(t, room.ID, bob.Token, "")
 	nextMessage(t, ch) // Alice joined
+	nextMessage(t, ch) // Bob joined
 	path := "/api/rooms/" + room.ID
 	for _, bad := range []string{"", "  ", strings.Repeat("x", maxRoomName+1), "a\u202eb", "a\nb"} {
-		if code, _ := e.do(t, "PATCH", path, alice.Token, map[string]string{"name": bad}); code != http.StatusBadRequest {
+		if code, _ := alice.do(t, "PATCH", path, map[string]string{"name": bad}); code != http.StatusBadRequest {
 			t.Errorf("rename to %q: %d, want 400", bad, code)
 		}
 	}
 	if code, _ := e.do(t, "PATCH", path, stranger.Token, map[string]string{"name": "x"}); code != http.StatusUnauthorized {
 		t.Fatalf("another room's member: %d", code)
 	}
+	if code, _ := e.do(t, "PATCH", path, bob.Token, map[string]string{"name": "x"}); code != http.StatusForbidden {
+		t.Fatalf("plain member: %d", code)
+	}
 	const xss = `<img src=x onerror=alert(1)>`
-	code, b := e.do(t, "PATCH", path, alice.Token, map[string]string{"name": xss})
+	code, b := alice.do(t, "PATCH", path, map[string]string{"name": xss})
 	if code != http.StatusOK || decodeJSON[store.Room](t, b).Name != xss {
 		t.Fatalf("rename: %d %s", code, b)
 	}

@@ -64,6 +64,8 @@ type Participant struct {
 	// ProfileUUID is the profile's uuid, empty without one: the presence preamble shows its start
 	// (003-AC32). Never sent, like ProfileID.
 	ProfileUUID string `json:"-"`
+	// Admin tells that its profile administers the room (004-AC8). Set by Participants only.
+	Admin bool `json:"admin"`
 }
 
 // Message is one line in a room.
@@ -103,7 +105,8 @@ type Store struct{ db *sql.DB }
 // migrations run in order, each once, tracked by PRAGMA user_version. Append only.
 // Every table must reach rooms or profiles through NOT NULL, ON DELETE CASCADE foreign keys, and
 // any other reference to profiles must be ON DELETE SET NULL: DeleteRoom and DeleteProfile are
-// single DELETEs, and TestEveryTableCascadesFromAnOwner enforces it.
+// single DELETEs, and TestEveryTableCascadesFromAnOwner enforces it. Server-wide tables, listed in
+// that test, are the exceptions.
 var migrations = []string{`
 CREATE TABLE settings (
 	key TEXT PRIMARY KEY,
@@ -479,6 +482,63 @@ ALTER TABLE agent_sessions ADD COLUMN context_window INTEGER;
 ALTER TABLE agent_sessions ADD COLUMN context_updated_at TEXT;
 ALTER TABLE turns ADD COLUMN handoff TEXT NOT NULL DEFAULT '' CHECK (handoff IN ('', 'write', 'read'));
 ALTER TABLE turn_queue ADD COLUMN handoff TEXT NOT NULL DEFAULT '' CHECK (handoff IN ('', 'write', 'read'));
+`, `
+-- 004-AC1, 004-AC6: server-wide tables. The audit log has no foreign key on purpose: an entry about
+-- a room or profile outlives it, with the name it had, until the retention purge.
+CREATE TABLE admin_sessions (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	token_hash TEXT NOT NULL UNIQUE,
+	created_at TEXT NOT NULL,
+	last_used_at TEXT NOT NULL,
+	expires_at_s INTEGER NOT NULL,
+	user_agent TEXT NOT NULL,
+	ip TEXT NOT NULL
+);
+CREATE TABLE audit_log (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	at_ms INTEGER NOT NULL,
+	actor TEXT NOT NULL,
+	action TEXT NOT NULL,
+	target_kind TEXT NOT NULL,
+	target_id TEXT NOT NULL,
+	target_name TEXT NOT NULL,
+	details TEXT NOT NULL
+);
+CREATE INDEX audit_log_at ON audit_log(at_ms);
+CREATE INDEX audit_log_action ON audit_log(action, id);
+`, `
+-- 004-AC2, 004-AC3, 004-AC9: a room's own quota, NULL for the instance default; the profiles view
+-- finds a profile's last line through its participants.
+ALTER TABLE rooms ADD COLUMN quota_bytes INTEGER CHECK (quota_bytes IS NULL OR quota_bytes > 0);
+CREATE INDEX messages_participant ON messages(participant_id, id);
+`, `
+-- 004-AC7, 004-AC8: the rooms a profile created count against its limit; room admins are profiles.
+ALTER TABLE rooms ADD COLUMN creator_profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL;
+CREATE INDEX rooms_creator ON rooms(creator_profile_id);
+CREATE TABLE room_admins (
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+	created_at TEXT NOT NULL,
+	PRIMARY KEY (room_id, profile_id)
+);
+CREATE INDEX room_admins_profile ON room_admins(profile_id);
+-- 004-AC10: a room's own skills belong to no profile and go with the room; one a member copies in
+-- while the host approves everything waits as pending. scope names what profile_id and room_id say.
+ALTER TABLE skills ADD COLUMN room_id TEXT REFERENCES rooms(id) ON DELETE CASCADE
+	CHECK (room_id IS NULL OR (profile_id IS NULL AND publisher_id IS NULL));
+ALTER TABLE skills ADD COLUMN pending INTEGER NOT NULL DEFAULT 0 CHECK (pending = 0 OR (pending = 1 AND room_id IS NOT NULL));
+ALTER TABLE skills ADD COLUMN scope TEXT GENERATED ALWAYS AS
+	(CASE WHEN room_id IS NOT NULL THEN 'room' WHEN profile_id IS NULL THEN 'shared' ELSE 'personal' END) VIRTUAL;
+DROP INDEX skills_shared_name;
+CREATE UNIQUE INDEX skills_shared_name ON skills(name) WHERE profile_id IS NULL AND room_id IS NULL;
+CREATE UNIQUE INDEX skills_room_name ON skills(room_id, name) WHERE room_id IS NOT NULL;
+`, `
+-- 004-AC7: a profile's own rooms limit, set by the super-admin: NULL follows the instance's, -1 is
+-- unlimited.
+ALTER TABLE profiles ADD COLUMN max_rooms INTEGER CHECK (max_rooms IS NULL OR max_rooms = -1 OR max_rooms > 0);
+`, `
+-- 004-AC13: an imported participant whose profile uuid matches no profile here keeps it, unlinked.
+ALTER TABLE participants ADD COLUMN profile_uuid_hint TEXT;
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -574,19 +634,33 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 
 // CreateRoom inserts a room with the given id, and the Default template's persona (002-AC42).
 func (s *Store) CreateRoom(ctx context.Context, id, name string) (*Room, error) {
-	r := &Room{ID: id, Name: name, CreatedAt: time.Now().UTC(), Chain: Chain{Budget: DefaultChainBudget}}
+	var r *Room
 	err := s.withTx(ctx, "create room", func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO rooms(id, name, created_at) VALUES(?,?,?)`, r.ID, r.Name, r.CreatedAt.Format(time.RFC3339Nano)); err != nil {
-			return fmt.Errorf("create room: %w", err)
-		}
-		def, err := presetID(ctx, tx, PresetDefault)
-		if err != nil {
+		var err error
+		if r, err = insertRoom(ctx, tx, id, name, 0); err != nil {
 			return err
 		}
-		_, _, err = addPersona(ctx, tx, r.ID, def)
-		return err
+		return auditTx(ctx, tx, "", nil)
 	})
 	if err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+// insertRoom inserts a room created by profile creator (0 for the super-admin) with the Default
+// template's persona.
+func insertRoom(ctx context.Context, tx *sql.Tx, id, name string, creator int64) (*Room, error) {
+	r := &Room{ID: id, Name: name, CreatedAt: time.Now().UTC(), Chain: Chain{Budget: DefaultChainBudget}}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO rooms(id, name, created_at, creator_profile_id) VALUES(?,?,?,?)`,
+		r.ID, r.Name, r.CreatedAt.Format(time.RFC3339Nano), nullID(creator)); err != nil {
+		return nil, fmt.Errorf("create room: %w", err)
+	}
+	def, err := presetID(ctx, tx, PresetDefault)
+	if err != nil {
+		return nil, err
+	}
+	if _, _, err = addPersona(ctx, tx, r.ID, def); err != nil {
 		return nil, err
 	}
 	return r, nil
@@ -630,14 +704,14 @@ func (s *Store) Rooms(ctx context.Context) ([]Room, error) {
 
 // DeleteRoom purges a room and, through ON DELETE CASCADE, every row that belongs to it.
 func (s *Store) DeleteRoom(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM rooms WHERE id = ?`, id)
+	err := s.withTx(ctx, "delete room", func(tx *sql.Tx) error {
+		if err := auditTx(ctx, tx, "", nil); err != nil {
+			return err
+		}
+		return execOne(ctx, tx, `DELETE FROM rooms WHERE id = ?`, id)
+	})
 	if err != nil {
-		return fmt.Errorf("delete room %s: %w", id, err)
-	}
-	if n, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("delete room %s: %w", id, err)
-	} else if n == 0 {
-		return ErrNotFound
+		return err
 	}
 	// The WAL still holds the deleted rows' old pages until a checkpoint rewrites the main file.
 	if _, err := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
@@ -677,6 +751,9 @@ func (s *Store) RenameRoom(ctx context.Context, roomID, name string, by *Partici
 	if err := insertMessage(ctx, tx, m); err != nil {
 		return nil, err
 	}
+	if err := auditTx(ctx, tx, "", map[string]any{"from": old}); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("rename room: %w", err)
 	}
@@ -688,21 +765,22 @@ func (s *Store) RenameRoom(ctx context.Context, roomID, name string, by *Partici
 // check and the insert are one statement, so a revoke cannot slip between them.
 func (s *Store) CreateInvite(ctx context.Context, roomID, tokenHash string, createdBy int64) (*Invite, error) {
 	inv := &Invite{RoomID: roomID, CreatedAt: time.Now().UTC(), CreatedBy: createdBy}
-	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO invites(room_id, token_hash, created_at, created_by) SELECT id, ?, ?, ? FROM rooms r WHERE r.id = ?
-		AND (? = 0 OR EXISTS (SELECT 1 FROM participants p JOIN invites i ON i.id = p.invite_id
-			WHERE p.id = ? AND p.room_id = r.id AND i.revoked_at IS NULL))`,
-		tokenHash, inv.CreatedAt.Format(time.RFC3339Nano), nullID(createdBy), roomID, createdBy, createdBy)
+	err := s.withTx(ctx, "create invite", func(tx *sql.Tx) error {
+		err := tx.QueryRowContext(ctx, `
+			INSERT INTO invites(room_id, token_hash, created_at, created_by) SELECT id, ?, ?, ? FROM rooms r WHERE r.id = ?
+			AND (? = 0 OR EXISTS (SELECT 1 FROM participants p JOIN invites i ON i.id = p.invite_id
+				WHERE p.id = ? AND p.room_id = r.id AND i.revoked_at IS NULL)) RETURNING id`,
+			tokenHash, inv.CreatedAt.Format(time.RFC3339Nano), nullID(createdBy), roomID, createdBy, createdBy).Scan(&inv.ID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("create invite: %w", err)
+		}
+		return auditTx(ctx, tx, "", map[string]any{"invite": inv.ID})
+	})
 	if err != nil {
-		return nil, fmt.Errorf("create invite: %w", err)
-	}
-	if n, err := res.RowsAffected(); err != nil {
-		return nil, fmt.Errorf("create invite: %w", err)
-	} else if n == 0 {
-		return nil, ErrNotFound
-	}
-	if inv.ID, err = res.LastInsertId(); err != nil {
-		return nil, fmt.Errorf("create invite id: %w", err)
+		return nil, err
 	}
 	return inv, nil
 }
@@ -756,7 +834,19 @@ func (s *Store) invites(ctx context.Context, roomID string, id, createdBy int64)
 // revoked one: a member cut off must not walk back in through an invite they made. Idempotent.
 // Returns the ids of the invites it covers. ErrNotFound if inviteID is not in room.
 func (s *Store) RevokeInvite(ctx context.Context, roomID string, inviteID int64) ([]int64, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	var ids []int64
+	err := s.withTx(ctx, "revoke invite", func(tx *sql.Tx) error {
+		var err error
+		if ids, err = revokeInvite(ctx, tx, roomID, inviteID); err != nil {
+			return err
+		}
+		return auditTx(ctx, tx, "", map[string]any{"invite": inviteID, "revoked": ids})
+	})
+	return ids, err
+}
+
+func revokeInvite(ctx context.Context, tx *sql.Tx, roomID string, inviteID int64) ([]int64, error) {
+	rows, err := tx.QueryContext(ctx, `
 		WITH RECURSIVE gone(id) AS (
 			SELECT id FROM invites WHERE id = ? AND room_id = ?
 			UNION
@@ -796,13 +886,22 @@ type JoinProfile struct {
 // in one transaction, creating its profile when prof asks. ErrNotFound if the invite is unknown or
 // revoked. The caller broadcasts.
 func (s *Store) Join(ctx context.Context, inviteHash, name, tokenHash string, prof JoinProfile) (*Participant, *Message, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	var p *Participant
+	var m *Message
+	err := s.withTx(ctx, "join", func(tx *sql.Tx) error {
+		var err error
+		p, m, err = join(ctx, tx, inviteHash, name, tokenHash, prof)
+		return err
+	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("join: %w", err)
+		return nil, nil, err
 	}
-	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	return p, m, nil
+}
+
+func join(ctx context.Context, tx *sql.Tx, inviteHash, name, tokenHash string, prof JoinProfile) (*Participant, *Message, error) {
 	p := &Participant{Name: name, JoinedAt: time.Now().UTC()}
-	err = tx.QueryRowContext(ctx, `SELECT id, room_id FROM invites WHERE token_hash = ? AND revoked_at IS NULL`, inviteHash).Scan(&p.InviteID, &p.RoomID)
+	err := tx.QueryRowContext(ctx, `SELECT id, room_id FROM invites WHERE token_hash = ? AND revoked_at IS NULL`, inviteHash).Scan(&p.InviteID, &p.RoomID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, ErrNotFound
 	}
@@ -826,9 +925,6 @@ func (s *Store) Join(ctx context.Context, inviteHash, name, tokenHash string, pr
 	m := &Message{RoomID: p.RoomID, Kind: KindSystem, ParticipantID: p.ID, Sender: name, Body: name + " joined"}
 	if err := insertMessage(ctx, tx, m); err != nil {
 		return nil, nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, nil, fmt.Errorf("join: %w", err)
 	}
 	return p, m, nil
 }
@@ -854,7 +950,8 @@ func (s *Store) ParticipantByToken(ctx context.Context, tokenHash string) (*Part
 // Participants lists a room's participants whose invite is still valid, in join order.
 func (s *Store) Participants(ctx context.Context, roomID string) ([]Participant, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger, COALESCE(p.profile_id, 0), COALESCE(f.uuid, '') FROM participants p
+		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger, COALESCE(p.profile_id, 0), COALESCE(f.uuid, ''),
+			EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = p.room_id AND a.profile_id = p.profile_id) FROM participants p
 		JOIN invites i ON i.id = p.invite_id LEFT JOIN profiles f ON f.id = p.profile_id
 		WHERE p.room_id = ? AND i.revoked_at IS NULL ORDER BY p.id`, roomID)
 	if err != nil {
@@ -865,7 +962,7 @@ func (s *Store) Participants(ctx context.Context, roomID string) ([]Participant,
 	for rows.Next() {
 		var p Participant
 		var joined string
-		if err := rows.Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID, &p.ProfileUUID); err != nil {
+		if err := rows.Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID, &p.ProfileUUID, &p.Admin); err != nil {
 			return nil, fmt.Errorf("scan participant: %w", err)
 		}
 		p.JoinedAt = parseTS(joined)

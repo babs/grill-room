@@ -65,22 +65,22 @@ func TestPublishSkill(t *testing.T) {
 		t.Fatalf("version 1 changed: %q %v", v1, err)
 	}
 
-	lib, err := s.Skills(ctx, alice.ProfileID, SkillsLibrary)
+	lib, err := s.Skills(ctx, alice.ProfileID, "", SkillsLibrary)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := names(lib); !slices.Equal(got, []string{"pdf", "stamp"}) || lib[1].ProfileID != alice.ProfileID || lib[0].Mine || !lib[1].Mine {
 		t.Fatalf("Alice's library: %+v", lib)
 	}
-	mine, err := s.Skills(ctx, bob.ProfileID, SkillsMine)
+	mine, err := s.Skills(ctx, bob.ProfileID, "", SkillsMine)
 	if err != nil || !slices.Equal(names(mine), []string{"pdf", "stamp"}) || mine[1].ProfileID != bob.ProfileID {
 		t.Fatalf("Bob's skills: %+v %v", mine, err)
 	}
-	all, err := s.Skills(ctx, 0, SkillsAll)
+	all, err := s.Skills(ctx, 0, "", SkillsAll)
 	if err != nil || len(all) != 3 || slices.ContainsFunc(all, func(k Skill) bool { return k.Mine }) {
 		t.Fatalf("admin list: %+v %v", all, err)
 	}
-	if _, err := s.Skills(ctx, 0, "everything"); err == nil {
+	if _, err := s.Skills(ctx, 0, "", "everything"); err == nil {
 		t.Fatal("unknown listing accepted")
 	}
 }
@@ -158,7 +158,7 @@ func TestSetPersonaSkill(t *testing.T) {
 	if err != nil || held || m == nil || m.Body != "Alice changed 🔥 Grill: skill stamp v1 on." {
 		t.Fatalf("activate: %+v %+v %v %v", p, m, held, err)
 	}
-	if len(p.Skills) != 1 || p.Skills[0] != (PersonaSkill{SkillID: r.stamp.ID, Name: "stamp", Version: 1}) {
+	if len(p.Skills) != 1 || p.Skills[0] != (PersonaSkill{SkillID: r.stamp.ID, Name: "stamp", Scope: ScopePersonal, Version: 1}) {
 		t.Fatalf("skills: %+v", p.Skills)
 	}
 	if ok, err := r.s.SkillsDisclaimerAccepted(ctx, r.alice.ProfileID); err != nil || !ok {
@@ -224,7 +224,7 @@ func TestSkillPinning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Skills[1] != (PersonaSkill{SkillID: r.stamp.ID, Name: "stamp", Version: 1, UpdateVersion: 2}) {
+	if p.Skills[1] != (PersonaSkill{SkillID: r.stamp.ID, Name: "stamp", Scope: ScopePersonal, Version: 1, UpdateVersion: 2}) {
 		t.Fatalf("after the library update: %+v", p.Skills)
 	}
 	turnSkills := func() []TurnSkill {
@@ -383,5 +383,184 @@ func TestDeleteProfileSkills(t *testing.T) {
 	p, err := r.s.RoomPersona(ctx, "a", r.grill.ID)
 	if err != nil || len(p.Skills) != 1 || p.Skills[0].Name != "pdf" {
 		t.Fatalf("persona skills: %+v %v", p, err)
+	}
+}
+
+// 004-AC10: a member copies a personal skill into the room, frozen at its latest version; every
+// member may turn the copy on; it keeps reaching the sandbox after its author leaves, unlike the
+// personal skill it came from; a room admin removes it.
+func TestRoomSkill(t *testing.T) {
+	r := newSkillRoom(t)
+	ctx := context.Background()
+	publish(t, r.s, r.bob.ProfileID, false, "bobs", "bobs v2")
+	k, m, err := r.s.CopySkillToRoom(ctx, "a", r.bobOwn.ID, r.bob)
+	if err != nil || k.Scope != ScopeRoom || k.Shared || k.Pending || k.Version != 2 || k.Author != "Bob" || k.Mine {
+		t.Fatalf("copy: %+v %v", k, err)
+	}
+	if m.Body != "Bob copied the skill bobs v2 into the room." || m.Kind != KindSystem {
+		t.Fatalf("chat line: %+v", m)
+	}
+	for name, c := range map[string]struct {
+		skill int64
+		by    *Participant
+		want  error
+	}{
+		"the same name again":         {r.bobOwn.ID, r.bob, ErrRoomSkillName},
+		"someone else's personal one": {r.stamp.ID, r.bob, ErrNotFound},
+		"a shared one":                {r.pdf.ID, r.bob, ErrNotFound},
+		"the room skill itself":       {k.ID, r.bob, ErrNotFound},
+		"without a profile":           {r.stamp.ID, r.carol, ErrForbidden},
+	} {
+		if _, _, err := r.s.CopySkillToRoom(ctx, "a", c.skill, c.by); !errors.Is(err, c.want) {
+			t.Errorf("%s: %v, want %v", name, err, c.want)
+		}
+	}
+	// Alice sees it in the room's library, not in another room's, nor among her own skills.
+	lib, err := r.s.Skills(ctx, r.alice.ProfileID, "a", SkillsLibrary)
+	if err != nil || !slices.Equal(names(lib), []string{"bobs", "pdf", "stamp"}) {
+		t.Fatalf("library in a: %+v %v", lib, err)
+	}
+	if lib, _ := r.s.Skills(ctx, r.alice.ProfileID, "elsewhere", SkillsLibrary); slices.Contains(names(lib), "bobs") {
+		t.Fatal("a room skill offered in another room")
+	}
+	if mine, _ := r.s.Skills(ctx, r.bob.ProfileID, "", SkillsMine); len(mine) != 2 {
+		t.Fatalf("a room skill listed among its author's: %+v", mine)
+	}
+	p, _, _, err := r.set(k.ID, true, true, r.alice)
+	if err != nil || len(p.Skills) != 1 || p.Skills[0] != (PersonaSkill{SkillID: k.ID, Name: "bobs", Scope: ScopeRoom, Version: 2}) {
+		t.Fatalf("Alice turns it on: %+v %v", p, err)
+	}
+	if _, _, _, err := r.set(r.bobOwn.ID, true, true, r.bob); !errors.Is(err, ErrSkillName) {
+		t.Fatalf("the personal source beside its copy: %v", err)
+	}
+	if _, _, _, err := r.s.SetPersonaSkill(ctx, "elsewhere", r.grill.ID, k.ID, true, true, r.alice); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another room's persona: %v", err)
+	}
+	if v, err := r.s.RoomOverview(ctx, "a", 1<<20); err != nil || v.Volume.RoomSkills != int64(len("bobs v2")) {
+		t.Fatalf("volume: %+v %v", v, err)
+	}
+
+	turnSkills := func() []string {
+		t.Helper()
+		tn := &Turn{RoomID: "a", ParticipantID: r.alice.ID, Prompt: "go", PersonaID: r.grill.ID, PersonaName: "Grill"}
+		if err := r.s.StartTurn(ctx, tn, false); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.s.FailTurn(ctx, "a", tn.ID, "test"); err != nil {
+			t.Fatal(err)
+		}
+		ks, err := r.s.TurnSkills(ctx, "a", tn.ID, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, k := range ks {
+			out = append(out, k.Name+"="+string(k.Data))
+		}
+		return out
+	}
+	if got := turnSkills(); !slices.Equal(got, []string{"bobs=bobs v2"}) {
+		t.Fatalf("turn loads: %v", got)
+	}
+	// Bob leaves and removes his personal skill: the room's copy still rides.
+	if _, err := r.s.RevokeInvite(ctx, "a", r.bob.InviteID); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.s.RemoveSkill(ctx, r.bobOwn.ID, r.bob.ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.s.CreateInvite(ctx, "a", "inv-2", 0); err != nil {
+		t.Fatal(err)
+	}
+	if r.alice, _, err = r.s.Join(ctx, "inv-2", "Alice", "tok-alice-2", JoinProfile{ID: r.alice.ProfileID}); err != nil {
+		t.Fatal(err)
+	}
+	if got := turnSkills(); !slices.Equal(got, []string{"bobs=bobs v2"}) {
+		t.Fatalf("after its author left: %v", got)
+	}
+
+	if _, err := r.s.RemoveRoomSkill(ctx, "elsewhere", k.ID, r.alice); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("remove from another room: %v", err)
+	}
+	m, err = r.s.RemoveRoomSkill(ctx, "a", k.ID, r.alice)
+	if err != nil || m.Body != "Alice removed the room skill bobs." {
+		t.Fatalf("remove: %+v %v", m, err)
+	}
+	if p, _ := r.s.RoomPersona(ctx, "a", r.grill.ID); len(p.Skills) != 0 {
+		t.Fatalf("persona kept a removed room skill: %+v", p.Skills)
+	}
+	if got := turnSkills(); len(got) != 0 {
+		t.Fatalf("turn after the removal: %v", got)
+	}
+}
+
+// 004-AC10: while the host approves everything, a member's copy waits for the host and cannot be
+// turned on; the host approves or refuses it, and the chat says so. The host's own copy goes
+// through.
+func TestRoomSkillHeld(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	host := seed(t, s, "a")
+	seedHeld(t, s, "a")
+	bob, _, err := s.Join(ctx, "inv-a", "Bob", "tok-dan", JoinProfile{RecoveryHash: "rec-dan", SessionHash: "sess-dan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k1 := publish(t, s, bob.ProfileID, false, "one", "v1")
+	k2 := publish(t, s, bob.ProfileID, false, "two", "v1")
+	held, m, err := s.CopySkillToRoom(ctx, "a", k1.ID, bob)
+	if err != nil || !held.Pending || m.Body != "Bob copied the skill one v1 into the room."+waitsNote {
+		t.Fatalf("held copy: %+v %+v %v", held, m, err)
+	}
+	refused, _, err := s.CopySkillToRoom(ctx, "a", k2.ID, bob)
+	if err != nil || !refused.Pending {
+		t.Fatalf("second copy: %+v %v", refused, err)
+	}
+	if lib, _ := s.Skills(ctx, bob.ProfileID, "a", SkillsLibrary); slices.Contains(names(lib), "one") && slices.ContainsFunc(lib, func(k Skill) bool { return k.Scope == ScopeRoom }) {
+		t.Fatalf("a pending copy offered: %+v", lib)
+	}
+	ps, _ := s.RoomPersonas(ctx, "a")
+	if _, _, _, err := s.SetPersonaSkill(ctx, "a", ps[0].ID, held.ID, true, true, host); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("turning on a pending copy: %v", err)
+	}
+	if _, err := s.DecideRoomSkill(ctx, "a", held.ID, true, bob); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("decided by a member: %v", err)
+	}
+	if m, err := s.DecideRoomSkill(ctx, "a", held.ID, true, host); err != nil || m.Body != "Alice approved Bob's copy of the skill one v1." {
+		t.Fatalf("approve: %+v %v", m, err)
+	}
+	if _, err := s.DecideRoomSkill(ctx, "a", held.ID, true, host); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("decided twice: %v", err)
+	}
+	if m, err := s.DecideRoomSkill(ctx, "a", refused.ID, false, host); err != nil || m.Body != "Alice refused Bob's copy of the skill two v1: it is removed." {
+		t.Fatalf("refuse: %+v %v", m, err)
+	}
+	ks, err := s.RoomSkills(ctx, "a")
+	if err != nil || len(ks) != 1 || ks[0].Name != "one" || ks[0].Pending {
+		t.Fatalf("room skills: %+v %v", ks, err)
+	}
+	if _, _, _, err := s.SetPersonaSkill(ctx, "a", ps[0].ID, held.ID, true, true, host); err != nil {
+		t.Fatalf("turning on the approved copy: %v", err)
+	}
+	mine := publish(t, s, host.ProfileID, false, "hosts", "v1")
+	if k, _, err := s.CopySkillToRoom(ctx, "a", mine.ID, host); err != nil || k.Pending {
+		t.Fatalf("the host's own copy: %+v %v", k, err)
+	}
+}
+
+func TestRoomSkillLimit(t *testing.T) {
+	r := newSkillRoom(t)
+	ctx := context.Background()
+	for i := range MaxRoomSkills {
+		k := publish(t, r.s, r.alice.ProfileID, false, "s"+strings.Repeat("x", i), "v")
+		if _, _, err := r.s.CopySkillToRoom(ctx, "a", k.ID, r.alice); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.s.RemoveSkill(ctx, k.ID, r.alice.ProfileID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := r.s.CopySkillToRoom(ctx, "a", r.stamp.ID, r.alice); !errors.Is(err, ErrLimit) {
+		t.Fatalf("past the room's limit: %v", err)
 	}
 }

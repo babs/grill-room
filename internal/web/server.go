@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -23,14 +22,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"go.uber.org/zap"
 
 	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/turn"
+	"github.com/babs/grill-room/internal/uivendor"
 )
 
 //go:embed ui
@@ -44,6 +42,8 @@ const (
 	maxBodyLen   = 4000
 	// maxConcurrentUploads bounds the memory uploads hold: about three copies of up to MaxUploadBytes each.
 	maxConcurrentUploads = 4
+	// maxConcurrentArchives bounds the rooms staged on disk at once by exports and imports.
+	maxConcurrentArchives = 2
 	// replayBatch bounds one store read while an SSE stream catches up.
 	replayBatch = 500
 )
@@ -53,9 +53,11 @@ var heartbeat = 20 * time.Second
 
 // Server serves the room API and UI.
 type Server struct {
-	bus       *bus.Bus
-	opts      Options
-	uploads   chan struct{}
+	bus     *bus.Bus
+	opts    Options
+	uploads chan struct{}
+	// archives bounds the exports and imports running at once.
+	archives  chan struct{}
 	adminHash []byte
 	baseURL   string
 	log       *zap.Logger
@@ -66,6 +68,10 @@ type Server struct {
 	stt       sttWorkers
 	// magicLimit rate-limits magic link requests per address and per client IP.
 	magicLimit limiter
+	// loginLimit rate-limits /admin logins per client IP.
+	loginLimit limiter
+	// now is the clock admin sessions and the audit log read; tests set it.
+	now func() time.Time
 	// electMu serialises host elections and hand-overs.
 	electMu sync.Mutex
 	// turnMu serialises turn starts and queue draining, so presses run in the order they came.
@@ -88,10 +94,19 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	if opts.MagicLinkTTL <= 0 {
 		opts.MagicLinkTTL = DefaultMagicLinkTTL
 	}
-	return &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
+	if opts.AuditRetention <= 0 {
+		opts.AuditRetention = DefaultAuditRetention
+	}
+	if opts.MaxImportBytes <= 0 {
+		opts.MaxImportBytes = DefaultMaxImportBytes
+	}
+	s := &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), archives: make(chan struct{}, maxConcurrentArchives),
+		adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
 		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, viewers: viewers{m: map[int64]int{}}, stt: sttWorkers{m: map[string]*sttWorker{}},
-		magicLimit: limiter{window: magicWindow}, fallbacks: fallbackCounters(),
+		magicLimit: limiter{window: magicWindow}, loginLimit: limiter{window: loginWindow}, now: time.Now, fallbacks: fallbackCounters(),
 		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}}
+	s.cleanStaging()
+	return s
 }
 
 func fallbackCounters() map[string]*atomic.Int64 {
@@ -134,23 +149,60 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /join", page("join.html"))
 	mux.HandleFunc("GET /favicon.ico", asset(ui, "ui/favicon.ico", "image/x-icon"))
 	mux.HandleFunc("GET /site.webmanifest", asset(ui, "ui/site.webmanifest", "application/manifest+json"))
-	mux.HandleFunc("GET /r/{room}", page("room.html"))
+	mux.HandleFunc("GET /r/{room}", s.roomPage)
 	mux.HandleFunc("GET /profile", page("profile.html"))
+	mux.HandleFunc("GET /admin", s.adminPage)
 	static, _ := fs.Sub(ui, "ui") // cannot fail: "ui" is a valid embedded path
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
+	mux.Handle("GET "+uivendor.Prefix, uivendor.Handler())
 	mux.HandleFunc("GET /install.sh", s.installScript)
 	mux.HandleFunc("GET /download/{file}", s.download)
 	mux.HandleFunc("GET /api/daemon/version", s.daemonVersion)
 
 	mux.Handle("GET /api/rooms", s.admin(s.listRooms))
 	mux.Handle("POST /api/rooms", s.admin(s.createRoom))
-	mux.Handle("DELETE /api/rooms/{room}", s.admin(s.deleteRoom))
+	mux.Handle("DELETE /api/rooms/{room}", s.memberOrAdmin(s.deleteRoom))
+	mux.HandleFunc("POST /api/rooms/import", s.importRoom)
+	mux.Handle("GET /api/rooms/{room}/export", s.memberOrAdmin(s.exportRoom))
 	mux.Handle("PATCH /api/rooms/{room}", s.memberOrAdmin(s.renameRoom))
 	mux.Handle("GET /api/rooms/{room}/invites", s.memberOrAdmin(s.listInvites))
 	mux.Handle("POST /api/rooms/{room}/invites", s.memberOrAdmin(s.createInvite))
 	mux.Handle("DELETE /api/rooms/{room}/invites/{invite}", s.memberOrAdmin(s.revokeInvite))
 	mux.Handle("GET /api/profiles", s.admin(s.listProfiles))
 	mux.Handle("DELETE /api/profiles/{id}", s.admin(s.deleteProfile))
+	mux.Handle("PUT /api/profiles/{id}/max_rooms", s.admin(s.setProfileMaxRooms))
+	mux.HandleFunc("POST /api/admin/login", s.adminLogin)
+	mux.Handle("POST /api/admin/logout", s.admin(s.adminLogout))
+	mux.Handle("GET /api/admin/sessions", s.admin(s.adminSessions))
+	mux.Handle("DELETE /api/admin/sessions/{id}", s.admin(s.revokeAdminSession))
+	mux.Handle("GET /api/admin/audit", s.admin(s.auditLog))
+	// The /admin page's views: its session cookie only reaches /api/admin (004-AC2 to 004-AC5).
+	adminOnly := func(h func(http.ResponseWriter, *http.Request, *session)) http.Handler {
+		return s.admin(func(w http.ResponseWriter, r *http.Request) { h(w, r, nil) })
+	}
+	mux.Handle("GET /api/admin/rooms", s.admin(s.adminRooms))
+	mux.Handle("PATCH /api/admin/rooms/{room}", adminOnly(s.renameRoom))
+	mux.Handle("DELETE /api/admin/rooms/{room}", adminOnly(s.deleteRoom))
+	mux.Handle("PUT /api/admin/rooms/{room}/quota", adminOnly(s.setQuota))
+	mux.Handle("GET /api/admin/rooms/{room}/participants", s.admin(s.roomParticipants))
+	mux.Handle("GET /api/admin/rooms/{room}/export", adminOnly(s.exportRoom))
+	mux.Handle("POST /api/admin/rooms/import", s.admin(s.importRoom))
+	mux.Handle("PUT /api/admin/rooms/{room}/admins/{participant}", adminOnly(s.setRoomAdmin))
+	mux.Handle("DELETE /api/admin/rooms/{room}/admins/{participant}", adminOnly(s.setRoomAdmin))
+	mux.Handle("PUT /api/rooms/{room}/quota", s.memberOrAdmin(s.setQuota))
+	mux.Handle("GET /api/admin/rooms/{room}/invites", adminOnly(s.listInvites))
+	mux.Handle("POST /api/admin/rooms/{room}/invites", adminOnly(s.createInvite))
+	mux.Handle("DELETE /api/admin/rooms/{room}/invites/{invite}", adminOnly(s.revokeInvite))
+	mux.Handle("GET /api/admin/profiles", s.admin(s.listProfiles))
+	mux.Handle("DELETE /api/admin/profiles/{id}", s.admin(s.deleteProfile))
+	mux.Handle("PUT /api/admin/profiles/{id}/max_rooms", s.admin(s.setProfileMaxRooms))
+	mux.Handle("GET /api/admin/templates", s.admin(s.adminTemplates))
+	mux.Handle("DELETE /api/admin/templates/{template}", s.admin(s.removeTemplate))
+	mux.Handle("GET /api/admin/skills", s.admin(s.adminSkills))
+	mux.Handle("DELETE /api/admin/skills/{skill}", s.admin(s.adminRemoveSkill))
+	mux.Handle("GET /api/admin/instance", s.admin(s.adminInstance))
+	mux.Handle("GET /api/admin/settings", s.admin(s.instanceSettings))
+	mux.Handle("PUT /api/admin/settings", s.admin(s.setInstanceSettings))
 
 	mux.HandleFunc("GET /api/profile", s.getProfile)
 	mux.HandleFunc("POST /api/profile/recover", s.recoverProfile)
@@ -160,11 +212,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/profile/skills", s.mySkills)
 	mux.HandleFunc("POST /api/profile/skills", s.uploadSkill)
 	mux.HandleFunc("DELETE /api/profile/skills/{skill}", s.removeMySkill)
+	mux.HandleFunc("POST /api/profile/rooms", s.createProfileRoom)
 	mux.Handle("GET /api/skills", s.admin(s.adminSkills))
 	mux.Handle("DELETE /api/skills/{skill}", s.admin(s.adminRemoveSkill))
 
 	mux.HandleFunc("POST /api/join", s.join)
 	mux.Handle("GET /api/rooms/{room}", s.participant(s.getRoom))
+	mux.Handle("GET /api/rooms/{room}/overview", s.participant(s.roomOverview))
+	mux.Handle("PUT /api/rooms/{room}/admins/{participant}", s.memberOrAdmin(s.setRoomAdmin))
+	mux.Handle("DELETE /api/rooms/{room}/admins/{participant}", s.memberOrAdmin(s.setRoomAdmin))
 	mux.Handle("POST /api/rooms/{room}/messages", s.participant(s.postMessage))
 	mux.Handle("PATCH /api/rooms/{room}/messages/{msg}", s.participant(s.editMessage))
 	mux.Handle("DELETE /api/rooms/{room}/messages/{msg}", s.participant(s.deleteMessage))
@@ -202,6 +258,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms/{room}/personas/{persona}/update", s.participant(s.updatePersona))
 	mux.Handle("DELETE /api/rooms/{room}/personas/{persona}", s.participant(s.removePersona))
 	mux.Handle("GET /api/rooms/{room}/skills", s.participant(s.roomSkills))
+	mux.Handle("POST /api/rooms/{room}/skills", s.participant(s.copySkill))
+	mux.Handle("POST /api/rooms/{room}/skills/{skill}/decision", s.participant(s.decideRoomSkill))
+	mux.Handle("DELETE /api/rooms/{room}/skills/{skill}", s.participant(s.removeRoomSkill))
 	mux.Handle("PUT /api/rooms/{room}/personas/{persona}/skills/{skill}", s.participant(s.setPersonaSkill))
 	mux.Handle("DELETE /api/rooms/{room}/personas/{persona}/skills/{skill}", s.participant(s.setPersonaSkill))
 	mux.Handle("POST /api/rooms/{room}/personas/{persona}/cap", s.participant(s.decideCap))
@@ -221,11 +280,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/stt/heartbeat", s.sttAuth(s.sttHeartbeat))
 	mux.Handle("POST /api/rooms/{room}/voice/lines", s.sttAuth(s.postVoiceLine))
 
-	csp := "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
-	if v := s.opts.Voice; v != nil {
-		// livekit-client signals over a WebSocket to LiveKit and probes its /rtc/validate over HTTPS.
-		csp += "; connect-src 'self' " + origin(v.URL, false) + " " + origin(v.URL, true)
-	}
+	csp := "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" + s.connectSrc()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", csp)
@@ -233,6 +288,27 @@ func (s *Server) Handler() http.Handler {
 		h.Set("Referrer-Policy", "no-referrer")
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// connectSrc is the CSP directive letting livekit-client signal over a WebSocket to LiveKit and
+// probe its /rtc/validate over HTTPS; empty without voice.
+func (s *Server) connectSrc() string {
+	v := s.opts.Voice
+	if v == nil {
+		return ""
+	}
+	return "; connect-src 'self' " + origin(v.URL, false) + " " + origin(v.URL, true)
+}
+
+// roomCSP admits the room page's import map by its hash: its room admin panel is Preact (004-AC19).
+var roomCSP = func() string {
+	page, _ := ui.ReadFile("ui/room.html") // embedded
+	return uivendor.CSP(page, "'self'")
+}()
+
+func (s *Server) roomPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Security-Policy", roomCSP+s.connectSrc())
+	http.ServeFileFS(w, r, ui, "ui/room.html")
 }
 
 // asset serves an embedded file with a fixed type: Go's MIME table lacks .ico and .webmanifest,
@@ -263,33 +339,6 @@ func bearer(r *http.Request) string {
 	return strings.TrimSpace(tok)
 }
 
-func (s *Server) isAdmin(r *http.Request) bool {
-	tok := bearer(r)
-	return tok != "" && subtle.ConstantTimeCompare([]byte(HashToken(tok)), s.adminHash) == 1
-}
-
-func (s *Server) admin(next http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.isAdmin(r) {
-			httpError(w, http.StatusUnauthorized, "admin token required")
-			return
-		}
-		next(w, r)
-	})
-}
-
-// memberOrAdmin runs next for the admin token with a nil session, else for a room participant.
-func (s *Server) memberOrAdmin(next func(http.ResponseWriter, *http.Request, *session)) http.Handler {
-	member := s.participant(func(w http.ResponseWriter, r *http.Request, sess session) { next(w, r, &sess) })
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.isAdmin(r) {
-			next(w, r, nil)
-			return
-		}
-		member.ServeHTTP(w, r)
-	})
-}
-
 // cred is the hash of a token a request offers: a participant token, or with viaProfile, a
 // profile session.
 type cred struct {
@@ -302,6 +351,8 @@ type cred struct {
 type session struct {
 	p     *store.Participant
 	creds []cred
+	// adminUUID is the profile uuid of a member checked as a room admin, empty otherwise.
+	adminUUID string
 }
 
 // crossSite reports a write another site or an opaque origin sent: a form, or a document in the
@@ -398,16 +449,8 @@ func decodeLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) boo
 // text may hold newlines and tabs, single-line text no bidi controls (they spoof names).
 func cleanText(s string, maxLen int, multiline bool) (string, bool) {
 	s = strings.TrimSpace(s)
-	if s == "" || !utf8.ValidString(s) || utf8.RuneCountInString(s) > maxLen {
+	if s == "" || !store.ValidText(s, maxLen, multiline) {
 		return "", false
-	}
-	for _, c := range s {
-		if multiline && (c == '\n' || c == '\t') {
-			continue
-		}
-		if unicode.IsControl(c) || (!multiline && unicode.Is(unicode.Bidi_Control, c)) {
-			return "", false
-		}
 	}
 	return s, true
 }
@@ -433,7 +476,8 @@ func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, fmt.Sprintf("name must be 1 to %d characters", maxRoomName))
 		return
 	}
-	room, err := s.bus.Store.CreateRoom(r.Context(), strings.ToLower(NewToken()), name)
+	id := strings.ToLower(NewToken())
+	room, err := s.bus.Store.CreateRoom(s.auditing(r, ActionRoomCreate, store.TargetRoom, id, name, nil), id, name)
 	if err != nil {
 		s.serverError(w, "create_room_failed", err)
 		return
@@ -442,9 +486,13 @@ func (s *Server) createRoom(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, room)
 }
 
-func (s *Server) deleteRoom(w http.ResponseWriter, r *http.Request) {
+// deleteRoom deletes the room with everything it holds: the super-admin's or a room admin's to do.
+func (s *Server) deleteRoom(w http.ResponseWriter, r *http.Request, sess *session) {
+	if !s.asRoomAdmin(w, r, sess) {
+		return
+	}
 	room := r.PathValue("room")
-	err := s.bus.Store.DeleteRoom(r.Context(), room)
+	err := s.bus.Store.DeleteRoom(s.roomAuditing(r, sess, ActionRoomDelete, room, nil), room)
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "no such room")
 		return
@@ -456,7 +504,7 @@ func (s *Server) deleteRoom(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "delete_room_failed", err)
 		return
 	}
-	s.log.Info("room_deleted", zap.String("room", room))
+	s.log.Info("room_deleted", zap.String("room", room), zap.Bool("by_room_admin", sess != nil))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -466,8 +514,12 @@ type inviteResp struct {
 	URL   string `json:"url"`
 }
 
-// renameRoom renames the room for any member or the admin, with a system line saying who did.
+// renameRoom renames the room for a room admin or the super-admin, with a system line saying who
+// did (004-AC8).
 func (s *Server) renameRoom(w http.ResponseWriter, r *http.Request, sess *session) {
+	if !s.asRoomAdmin(w, r, sess) {
+		return
+	}
 	var req struct {
 		Name string `json:"name"`
 	}
@@ -484,7 +536,7 @@ func (s *Server) renameRoom(w http.ResponseWriter, r *http.Request, sess *sessio
 	if sess != nil {
 		by = sess.p
 	}
-	m, err := s.bus.Store.RenameRoom(r.Context(), room, name, by)
+	m, err := s.bus.Store.RenameRoom(s.roomAuditing(r, sess, ActionRoomRename, room, nil), room, name, by)
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "no such room")
 		return
@@ -505,11 +557,19 @@ func (s *Server) renameRoom(w http.ResponseWriter, r *http.Request, sess *sessio
 	writeJSON(w, http.StatusOK, got)
 }
 
-// listInvites lists the room's invites: all of them for the admin, a member's own for a member.
+// listInvites lists the room's invites: all of them for the super-admin and room admins, a
+// member's own for a plain member.
 func (s *Server) listInvites(w http.ResponseWriter, r *http.Request, sess *session) {
 	var by int64
 	if sess != nil {
-		by = sess.p.ID
+		admin, err := s.roomAdmin(r.Context(), sess)
+		if err != nil {
+			s.serverError(w, "list_invites_failed", err)
+			return
+		}
+		if !admin {
+			by = sess.p.ID
+		}
 	}
 	invs, err := s.bus.Store.Invites(r.Context(), r.PathValue("room"), by)
 	if err != nil {
@@ -525,8 +585,13 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, sess *sess
 	var by int64
 	if sess != nil {
 		by = sess.p.ID
+		// A room admin's invites are audited; a plain member's are not admin actions.
+		if _, err := s.roomAdmin(r.Context(), sess); err != nil {
+			s.serverError(w, "create_invite_failed", err)
+			return
+		}
 	}
-	inv, err := s.bus.Store.CreateInvite(r.Context(), room, HashToken(tok), by)
+	inv, err := s.bus.Store.CreateInvite(s.roomAuditing(r, sess, ActionInviteCreate, room, nil), room, HashToken(tok), by)
 	if errors.Is(err, store.ErrNotFound) && sess != nil {
 		// Revoked between the auth check and the insert.
 		httpError(w, http.StatusUnauthorized, "invalid or revoked token")
@@ -545,7 +610,8 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, sess *sess
 	writeJSON(w, http.StatusCreated, inviteResp{Invite: inv, Token: tok, URL: s.baseURL + "/join#" + tok})
 }
 
-// revokeInvite revokes any invite for the admin, and only the ones they created for a member.
+// revokeInvite revokes any invite for the super-admin and room admins, and only the ones they
+// created for a plain member.
 func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request, sess *session) {
 	room := r.PathValue("room")
 	id, err := strconv.ParseInt(r.PathValue("invite"), 10, 64)
@@ -553,7 +619,14 @@ func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request, sess *sess
 		httpError(w, http.StatusNotFound, "no such invite")
 		return
 	}
-	if sess != nil {
+	admin := sess == nil
+	if !admin {
+		if admin, err = s.roomAdmin(r.Context(), sess); err != nil {
+			s.serverError(w, "revoke_invite_failed", err)
+			return
+		}
+	}
+	if !admin {
 		inv, err := s.bus.Store.Invite(r.Context(), room, id)
 		if errors.Is(err, store.ErrNotFound) {
 			httpError(w, http.StatusNotFound, "no such invite")
@@ -568,7 +641,7 @@ func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request, sess *sess
 			return
 		}
 	}
-	revoked, err := s.bus.Store.RevokeInvite(r.Context(), room, id)
+	revoked, err := s.bus.Store.RevokeInvite(s.roomAuditing(r, sess, ActionInviteRevoke, room, nil), room, id)
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "no such invite")
 		return
@@ -683,6 +756,11 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
 	if err != nil {
 		s.serverError(w, "get_room_failed", err)
 		return
+	}
+	for _, p := range ps {
+		if p.ID == sess.p.ID {
+			sess.p.Admin = p.Admin
+		}
 	}
 	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps, Daemons: s.connectedDaemons(room.ID), Voice: s.opts.Voice != nil})
 }

@@ -86,8 +86,9 @@ type NewMessage struct {
 
 // CreateAnnotation opens a thread on docID of room with msg as its first message. A non-nil a
 // must be valid and taken on revision, the document's latest (ErrStaleRevision otherwise).
-// ErrNotFound if the document is not in room, ErrRoomFull if the attachments do not fit.
-func (s *Store) CreateAnnotation(ctx context.Context, roomID string, docID int64, revision int, a *anchor.Anchor, msg *NewMessage, maxRoomBytes int64) (*Annotation, error) {
+// ErrNotFound if the document is not in room, ErrRoomFull if the attachments do not fit in the
+// room's quota, defaultQuota when it has none of its own.
+func (s *Store) CreateAnnotation(ctx context.Context, roomID string, docID int64, revision int, a *anchor.Anchor, msg *NewMessage, defaultQuota int64) (*Annotation, error) {
 	var anchorJSON any
 	if a != nil {
 		if err := a.Validate(); err != nil {
@@ -129,7 +130,7 @@ func (s *Store) CreateAnnotation(ctx context.Context, roomID string, docID int64
 	if ann.ID, err = res.LastInsertId(); err != nil {
 		return nil, fmt.Errorf("create annotation id: %w", err)
 	}
-	m, err := insertAnnotationMessage(ctx, tx, roomID, ann.ID, msg, maxRoomBytes)
+	m, err := insertAnnotationMessage(ctx, tx, roomID, ann.ID, msg, defaultQuota)
 	if err != nil {
 		return nil, err
 	}
@@ -142,8 +143,8 @@ func (s *Store) CreateAnnotation(ctx context.Context, roomID string, docID int64
 
 // AddAnnotationMessage appends msg to annotation annID of room. A participant message reopens a
 // done annotation. ErrNotFound if the annotation is not in room, ErrRoomFull if the attachments
-// do not fit.
-func (s *Store) AddAnnotationMessage(ctx context.Context, roomID string, annID int64, msg *NewMessage, maxRoomBytes int64) (*AnnotationMessage, error) {
+// do not fit in the room's quota, defaultQuota when it has none of its own.
+func (s *Store) AddAnnotationMessage(ctx context.Context, roomID string, annID int64, msg *NewMessage, defaultQuota int64) (*AnnotationMessage, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("add annotation message: %w", err)
@@ -162,7 +163,7 @@ func (s *Store) AddAnnotationMessage(ctx context.Context, roomID string, annID i
 	} else if n == 0 {
 		return nil, ErrNotFound
 	}
-	m, err := insertAnnotationMessage(ctx, tx, roomID, annID, msg, maxRoomBytes)
+	m, err := insertAnnotationMessage(ctx, tx, roomID, annID, msg, defaultQuota)
 	if err != nil {
 		return nil, err
 	}
@@ -172,17 +173,17 @@ func (s *Store) AddAnnotationMessage(ctx context.Context, roomID string, annID i
 	return m, nil
 }
 
-func insertAnnotationMessage(ctx context.Context, tx *sql.Tx, roomID string, annID int64, msg *NewMessage, maxRoomBytes int64) (*AnnotationMessage, error) {
+func insertAnnotationMessage(ctx context.Context, tx *sql.Tx, roomID string, annID int64, msg *NewMessage, defaultQuota int64) (*AnnotationMessage, error) {
 	if len(msg.Attachments) > 0 {
 		// Checked inside the transaction: the single connection serialises it with uploads.
-		used, err := roomBytes(ctx, tx, roomID)
+		used, quota, err := roomUsage(ctx, tx, roomID, defaultQuota)
 		if err != nil {
 			return nil, fmt.Errorf("add annotation message: %w", err)
 		}
 		for _, at := range msg.Attachments {
 			used += int64(len(at.Data))
 		}
-		if used > maxRoomBytes {
+		if used > quota {
 			return nil, ErrRoomFull
 		}
 	}

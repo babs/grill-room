@@ -44,7 +44,7 @@ func (s *Server) mySkills(w http.ResponseWriter, r *http.Request) {
 	if p == nil {
 		return
 	}
-	ks, err := s.bus.Store.Skills(r.Context(), p.ID, store.SkillsMine)
+	ks, err := s.bus.Store.Skills(r.Context(), p.ID, "", store.SkillsMine)
 	if err != nil {
 		s.serverError(w, "list_skills_failed", err)
 		return
@@ -118,7 +118,7 @@ func (s *Server) removeMySkill(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminSkills(w http.ResponseWriter, r *http.Request) {
-	ks, err := s.bus.Store.Skills(r.Context(), 0, store.SkillsAll)
+	ks, err := s.bus.Store.Skills(r.Context(), 0, "", store.SkillsAll)
 	if err != nil {
 		s.serverError(w, "list_skills_failed", err)
 		return
@@ -131,7 +131,11 @@ func (s *Server) adminRemoveSkill(w http.ResponseWriter, r *http.Request) { s.re
 
 func (s *Server) removeSkill(w http.ResponseWriter, r *http.Request, profileID int64) {
 	id := skillID(r)
-	err := s.bus.Store.RemoveSkill(r.Context(), id, profileID)
+	ctx := r.Context()
+	if profileID == 0 {
+		ctx = s.auditing(r, ActionSkillRemove, store.TargetSkill, strconv.FormatInt(id, 10), "", nil)
+	}
+	err := s.bus.Store.RemoveSkill(ctx, id, profileID)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		httpError(w, http.StatusNotFound, "no such skill of yours")
@@ -153,7 +157,7 @@ func (s *Server) roomSkills(w http.ResponseWriter, r *http.Request, sess session
 		NoProfile  bool `json:"no_profile,omitempty"`
 	}{NoProfile: sess.p.ProfileID == 0}
 	var err error
-	if resp.Skills, err = s.bus.Store.Skills(r.Context(), sess.p.ProfileID, store.SkillsLibrary); err != nil {
+	if resp.Skills, err = s.bus.Store.Skills(r.Context(), sess.p.ProfileID, sess.p.RoomID, store.SkillsLibrary); err != nil {
 		s.serverError(w, "list_skills_failed", err)
 		return
 	}
@@ -213,5 +217,71 @@ func (s *Server) getSkills(w http.ResponseWriter, r *http.Request, d *store.Daem
 	if err := skill.WritePlugin(w, packed); err != nil {
 		// Headers are gone: the daemon sees a truncated tar and fails the turn.
 		s.log.Error("turn_skills_failed", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.Error(err))
+	}
+}
+
+// copySkill copies one of the member's personal skills into the room, frozen at its latest
+// version: the room's from then on, whoever leaves. Held for the host like a persona change
+// (004-AC10).
+func (s *Server) copySkill(w http.ResponseWriter, r *http.Request, sess session) {
+	var req struct {
+		SkillID int64 `json:"skill_id"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	k, m, err := s.bus.Store.CopySkillToRoom(r.Context(), sess.p.RoomID, req.SkillID, sess.p)
+	switch {
+	case errors.Is(err, store.ErrForbidden):
+		httpError(w, http.StatusForbidden, "copying a skill needs a profile")
+	case errors.Is(err, store.ErrNotFound):
+		httpError(w, http.StatusNotFound, "no such personal skill of yours")
+	case errors.Is(err, store.ErrRoomSkillName), errors.Is(err, store.ErrLimit):
+		httpError(w, http.StatusConflict, err.Error())
+	case err != nil:
+		s.serverError(w, "copy_skill_failed", err)
+	default:
+		s.bus.Notify(m.RoomID)
+		s.log.Info("skill_copied_to_room", zap.String("room", sess.p.RoomID), zap.Int64("skill", k.ID), zap.Int64("from", req.SkillID), zap.Bool("pending", k.Pending))
+		status := http.StatusCreated
+		if k.Pending {
+			status = http.StatusAccepted
+		}
+		writeJSON(w, status, k)
+	}
+}
+
+// decideRoomSkill is the host's answer to a room skill copied in while they approve everything.
+func (s *Server) decideRoomSkill(w http.ResponseWriter, r *http.Request, sess session) {
+	var req struct {
+		Approve bool `json:"approve"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	room, ok := s.asHost(w, r, sess)
+	if !ok {
+		return
+	}
+	m, err := s.bus.Store.DecideRoomSkill(r.Context(), room.ID, skillID(r), req.Approve, sess.p)
+	s.decided(w, sess, m, err)
+}
+
+// removeRoomSkill removes one of the room's own skills: a room admin's to do (004-AC8, 004-AC10).
+func (s *Server) removeRoomSkill(w http.ResponseWriter, r *http.Request, sess session) {
+	if !s.asRoomAdmin(w, r, &sess) {
+		return
+	}
+	id := skillID(r)
+	m, err := s.bus.Store.RemoveRoomSkill(s.roomAuditing(r, &sess, ActionRoomSkillRemove, sess.p.RoomID, nil), sess.p.RoomID, id, sess.p)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		httpError(w, http.StatusNotFound, "no such room skill")
+	case err != nil:
+		s.serverError(w, "remove_room_skill_failed", err)
+	default:
+		s.bus.Notify(m.RoomID)
+		s.log.Info("room_skill_removed", zap.String("room", sess.p.RoomID), zap.Int64("skill", id))
+		w.WriteHeader(http.StatusNoContent)
 	}
 }

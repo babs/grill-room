@@ -264,21 +264,6 @@ func TestDeleteProfilePurges(t *testing.T) {
 	}
 }
 
-func TestProfilesForAdmin(t *testing.T) {
-	s := openTest(t)
-	ctx := context.Background()
-	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec-a", SessionHash: "sess-a"})
-	joinWithProfile(t, s, "b", "Bob", JoinProfile{RecoveryHash: "rec-b", SessionHash: "sess-b"})
-	link(s, t, a.ProfileID, "alice@example.com", MagicBind, "bind", time.Minute)
-	if _, err := s.UseMagicLink(ctx, "bind", MagicBind, "", a.ProfileID); err != nil {
-		t.Fatal(err)
-	}
-	ps, err := s.Profiles(ctx)
-	if err != nil || len(ps) != 2 || ps[0].Email != "alice@example.com" || ps[0].Rooms[0].RoomID != "a" || ps[1].Email != "" {
-		t.Fatalf("profiles: %+v %v", ps, err)
-	}
-}
-
 // Databases from before 002 keep working: their participants have no profile, their invites no
 // creator.
 func TestMigrationKeepsProfilelessParticipants(t *testing.T) {

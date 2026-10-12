@@ -175,7 +175,7 @@ func (s *Server) removeTemplate(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusNotFound, "no such template")
 		return
 	}
-	err = s.bus.Store.RemoveTemplate(r.Context(), id)
+	err = s.bus.Store.RemoveTemplate(s.auditing(r, ActionTemplateRemove, store.TargetTemplate, strconv.FormatInt(id, 10), "", nil), id)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		httpError(w, http.StatusNotFound, "no such template")

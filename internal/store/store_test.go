@@ -127,9 +127,10 @@ func TestMigrateIsIdempotent(t *testing.T) {
 }
 
 // serverWide are the tables the server itself owns: settings, the persona template library, whose
-// presets belong to no profile while published templates cascade from theirs, and the skill
-// library, whose shared skills outlive their publisher while personal ones cascade from theirs.
-var serverWide = []string{"settings", "persona_templates", "persona_template_versions", "skills", "skill_versions"}
+// presets belong to no profile while published templates cascade from theirs, the skill library,
+// whose shared skills outlive their publisher while personal ones cascade from theirs, the admin
+// sessions, and the audit log, whose entries outlive the rooms and profiles they name (004-AC6).
+var serverWide = []string{"settings", "persona_templates", "persona_template_versions", "skills", "skill_versions", "admin_sessions", "audit_log"}
 
 // uncascadedTables returns the tables that neither a DELETE on rooms nor one on profiles would
 // purge: those without a chain of NOT NULL, ON DELETE CASCADE foreign keys leading to an owner.
@@ -333,6 +334,7 @@ func roomRows(t *testing.T, s *Store, room string) map[string]int {
 func TestDeleteRoomPurgesEverything(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
+	roomSkill := map[string]int64{}
 	for _, room := range []string{"a", "b"} {
 		p := seed(t, s, room)
 		seedHeld(t, s, room)
@@ -368,6 +370,19 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 		if _, _, _, err := s.SetPersonaSkill(ctx, room, sec.ID, k.ID, true, true, p); err != nil {
 			t.Fatal(err)
 		}
+		// 004-AC8 004-AC10: room admins and the room's own skills, versions and pins go with it.
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO room_admins(room_id, profile_id, created_at) VALUES(?,?,?)`, room, p.ProfileID, now()); err != nil {
+			t.Fatal(err)
+		}
+		own := publish(t, s, p.ProfileID, false, "own-"+room, "v1")
+		rk, _, err := s.CopySkillToRoom(ctx, room, own.ID, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, _, err := s.SetPersonaSkill(ctx, room, sec.ID, rk.ID, true, true, p); err != nil {
+			t.Fatal(err)
+		}
+		roomSkill[room] = rk.ID
 	}
 	// These reach rooms through another table, so roomRows cannot see them.
 	indirect := []string{"revisions", "annotation_messages", "attachments", "message_versions", "room_persona_skills"}
@@ -404,6 +419,17 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 	}
 	if err := s.DeleteRoom(ctx, "a"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("second delete: got %v, want ErrNotFound", err)
+	}
+	for room, want := range map[string]int{"a": 0, "b": 1} {
+		var n int
+		if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM skill_versions WHERE skill_id = ?`, roomSkill[room]).Scan(&n); err != nil || n != want {
+			t.Errorf("room %s skill versions: %d, want %d", room, n, want)
+		}
+	}
+	// The personal skills copied from stay with their profile.
+	var own int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM skills WHERE name = 'own-a' AND scope = 'personal'`).Scan(&own); err != nil || own != 1 {
+		t.Errorf("the personal source of a room skill went with the room")
 	}
 	// A profile outlives its rooms: it only stops listing them.
 	if prof, err := s.ProfileBySession(ctx, "sess-a"); err != nil || len(prof.Rooms) != 0 {
@@ -556,5 +582,48 @@ func TestRoomParticipantAndInviteParticipants(t *testing.T) {
 	// Revoked participants are still listed: they are who must leave the audio.
 	if ids, err := s.InviteParticipantIDs(ctx, "a", p.InviteID); err != nil || len(ids) != 2 {
 		t.Fatalf("after revoke: %v %v", ids, err)
+	}
+}
+
+// serverWideRoomRefs returns table.column for every reference from a server-wide table to rooms
+// that a room delete would not cascade.
+func serverWideRoomRefs(ctx context.Context, db *sql.DB, tables []string) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `SELECT m.name, f."from", f.on_delete FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) f
+		WHERE m.type = 'table' AND f."table" = 'rooms'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var table, col, onDelete string
+		if err := rows.Scan(&table, &col, &onDelete); err != nil {
+			return nil, err
+		}
+		if slices.Contains(tables, table) && !strings.EqualFold(onDelete, "CASCADE") {
+			out = append(out, table+"."+col)
+		}
+	}
+	return out, rows.Err()
+}
+
+// 004-AC10: a server-wide table holding rows of a room, like the room skills, cascades them with it.
+func TestServerWideRoomReferencesCascade(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	if bad, err := serverWideRoomRefs(ctx, s.db, serverWide); err != nil || len(bad) > 0 {
+		t.Fatalf("server-wide references a room delete leaves behind: %v %v", bad, err)
+	}
+	for _, ddl := range []string{
+		`CREATE TABLE notes (id INTEGER PRIMARY KEY, room_id TEXT REFERENCES rooms(id))`,
+		`CREATE TABLE notes (id INTEGER PRIMARY KEY, room_id TEXT REFERENCES rooms(id) ON DELETE SET NULL)`,
+	} {
+		s := openTest(t)
+		if _, err := s.db.ExecContext(ctx, ddl); err != nil {
+			t.Fatal(err)
+		}
+		if bad, _ := serverWideRoomRefs(ctx, s.db, append(slices.Clone(serverWide), "notes")); !slices.Equal(bad, []string{"notes.room_id"}) {
+			t.Errorf("%s: %v", ddl, bad)
+		}
 	}
 }

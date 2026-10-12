@@ -33,6 +33,8 @@ type env struct {
 	bus   *bus.Bus
 	srv   *Server
 	admin string
+	// dbPath is the store's file.
+	dbPath string
 }
 
 func newEnv(t *testing.T) *env {
@@ -42,7 +44,8 @@ func newEnv(t *testing.T) *env {
 
 func newEnvOpts(t *testing.T, opts Options) *env {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	dbPath := filepath.Join(t.TempDir(), "t.db")
+	st, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +55,7 @@ func newEnvOpts(t *testing.T, opts Options) *env {
 	srv := New(b, HashToken(admin), baseURL+"/", opts, zap.NewNop())
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	return &env{ts: ts, st: st, bus: b, srv: srv, admin: admin}
+	return &env{ts: ts, st: st, bus: b, srv: srv, admin: admin, dbPath: dbPath}
 }
 
 // do sends a JSON request with an optional bearer token and returns the status and body.
@@ -431,7 +434,6 @@ func TestAdminRoutesRequireAdminToken(t *testing.T) {
 	routes := []struct{ method, path string }{
 		{"GET", "/api/rooms"},
 		{"POST", "/api/rooms"},
-		{"DELETE", "/api/rooms/" + room.ID},
 		{"GET", "/api/profiles"},
 		{"DELETE", "/api/profiles/1"},
 	}

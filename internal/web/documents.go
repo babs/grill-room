@@ -48,7 +48,8 @@ var uploadReadTimeout = 2 * time.Minute
 // Options configures documents and uploads.
 type Options struct {
 	MaxUploadBytes int64
-	MaxRoomBytes   int64
+	// MaxRoomBytes is the default room quota; the super-admin sets others room by room (004-AC9).
+	MaxRoomBytes int64
 	// MaxAttachmentBytes bounds one image on an annotation message.
 	MaxAttachmentBytes int64
 	// ToMarkdown converts an office file read as the pandoc format from.
@@ -67,6 +68,15 @@ type Options struct {
 	SendMail func(ctx context.Context, to, subject, body string) error
 	// MagicLinkTTL is how long an emailed link works; 0 means 15 minutes.
 	MagicLinkTTL time.Duration
+	// AuditRetention is how long the audit log keeps an entry; 0 means DefaultAuditRetention.
+	AuditRetention time.Duration
+	// MaxImportBytes bounds an imported archive, compressed and once uncompressed; 0 means
+	// DefaultMaxImportBytes.
+	MaxImportBytes int64
+	// Version is the server's own, and DBPath its database file: the instance view shows both, and
+	// exports and imports stage beside the database.
+	Version string
+	DBPath  string
 }
 
 //go:embed templates
@@ -180,8 +190,14 @@ func (s *Server) readUpload(w http.ResponseWriter, r *http.Request) (string, []b
 	}
 }
 
-func (s *Server) roomFull(w http.ResponseWriter) {
-	httpError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("this upload would take the room over its %s limit", sizeText(s.opts.MaxRoomBytes)))
+// roomFull answers an upload or attachment refused by the room's quota (004-AC9).
+func (s *Server) roomFull(w http.ResponseWriter, r *http.Request, room string) {
+	_, quota, err := s.bus.Store.RoomUsage(r.Context(), room, s.opts.MaxRoomBytes)
+	if err != nil {
+		s.serverError(w, "room_usage_failed", err)
+		return
+	}
+	httpError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("this upload would take the room over its %s limit", sizeText(quota)))
 }
 
 func (s *Server) uploadDocument(w http.ResponseWriter, r *http.Request, sess session) {
@@ -207,13 +223,13 @@ func (s *Server) uploadDocument(w http.ResponseWriter, r *http.Request, sess ses
 		return
 	}
 	// Early answer for a full room, before pandoc spends its time; AddUpload re-checks atomically.
-	used, err := s.bus.Store.RoomBytes(r.Context(), sess.p.RoomID)
+	used, quota, err := s.bus.Store.RoomUsage(r.Context(), sess.p.RoomID, s.opts.MaxRoomBytes)
 	if err != nil {
 		s.serverError(w, "upload_failed", err)
 		return
 	}
-	if used+int64(len(data)) > s.opts.MaxRoomBytes {
-		s.roomFull(w)
+	if used+int64(len(data)) > quota {
+		s.roomFull(w, r, sess.p.RoomID)
 		return
 	}
 	text := ""
@@ -238,7 +254,7 @@ func (s *Server) uploadDocument(w http.ResponseWriter, r *http.Request, sess ses
 		ContentType: typ.ContentType, Format: typ.Format, Data: data, Text: text,
 	}, s.opts.MaxRoomBytes)
 	if errors.Is(err, store.ErrRoomFull) {
-		s.roomFull(w)
+		s.roomFull(w, r, sess.p.RoomID)
 		return
 	}
 	if err != nil {

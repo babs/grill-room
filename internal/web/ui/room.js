@@ -29,8 +29,8 @@ function end(text) {
   $('banner').hidden = false;
   sendForm.hidden = true;
   document.querySelector('.upload').hidden = true;
-  $('rename-open').hidden = true;
-  $('rename').hidden = true;
+  $('manage-open').hidden = true;
+  if ($('manage').open) $('manage').close();
   $('invites').hidden = true;
   $('agent').hidden = true;
   if ($('personas').open) $('personas').close();
@@ -55,7 +55,12 @@ async function loadRoom() {
   participants = data.participants;
   myID = String(data.me.id);
   $('voice').hidden = !data.voice;
+  $('manage-open').hidden = !data.me.admin;
+  if (!data.me.admin && $('manage').open) $('manage').close();
   renderParticipants();
+  // The room admin panel (admin/room-admin.js) renders from the same answer.
+  window.grillRoom = data;
+  window.dispatchEvent(new CustomEvent('grill:room', { detail: data }));
   return true;
 }
 
@@ -223,30 +228,9 @@ function deleteMessage(m) {
   }).catch(console.error);
 }
 
-// Rename: any member may; the system line it adds makes every page reload the room header.
-function closeRename() {
-  $('rename').hidden = true;
-  $('room-name').hidden = false;
-  $('rename-open').hidden = ended;
-}
-$('rename-open').addEventListener('click', () => {
-  $('rename-input').value = $('room-name').textContent;
-  $('room-name').hidden = true;
-  $('rename-open').hidden = true;
-  $('rename').hidden = false;
-  $('rename-input').focus();
-});
-$('rename-cancel').addEventListener('click', closeRename);
-$('rename').addEventListener('submit', (e) => {
-  e.preventDefault();
-  sendJSON('PATCH', api, { name: $('rename-input').value }).then((room) => {
-    if (!room) return;
-    $('room-name').textContent = room.name;
-    document.title = room.name + ' · grill-room';
-    closeRename();
-  }).catch((err) => { $('rename-input').setCustomValidity(err.message); $('rename-input').reportValidity(); });
-});
-$('rename-input').addEventListener('input', () => $('rename-input').setCustomValidity(''));
+// Manage: a room admin's panel, rendered by admin/room-admin.js (004-AC8).
+$('manage-open').addEventListener('click', () => $('manage').showModal());
+$('manage-close').addEventListener('click', () => $('manage').close());
 
 // copyField copies a read-only field, and selects it for a manual copy when the clipboard refuses.
 function copyField(input, button) {
@@ -267,11 +251,12 @@ $('recovery-done').addEventListener('click', () => {
   $('recovery').hidden = true;
 });
 
-// Invites: a member creates links and revokes the ones they created.
+// Invites: a member creates links and revokes the ones they created; a room admin, who gets every
+// invite, manages the others from Manage.
 async function loadInvites() {
   const res = await fetch(api + '/invites');
   if (!res.ok) return;
-  const invites = (await res.json()).filter((i) => !i.revoked_at);
+  const invites = (await res.json()).filter((i) => !i.revoked_at && String(i.created_by) === myID);
   $('invite-list').replaceChildren(...invites.map((inv) => {
     const li = document.createElement('li');
     const when = new Date(inv.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
@@ -717,6 +702,8 @@ function connect() {
     agent = JSON.parse(e.data);
     renderAgent();
     renderParticipants();
+    window.grillAgent = agent;
+    window.dispatchEvent(new CustomEvent('grill:agent', { detail: agent }));
   });
   es.onerror = () => {
     if (es !== events) return;
@@ -749,7 +736,7 @@ window.addEventListener('focus', () => { if (events && events.readyState !== Eve
 // that daemon is connected and can host (D8). The host, and the participants the host allows,
 // press a persona's button (D18); a press during a turn waits in the room's queue (002-AC17).
 let agent = { online: false, can_trigger: [], daemons: [], turn: null, running: [], personas: [], queue: [], models: [], efforts: [], cap_requests: [],
-  changes: [], chain: { budget: 25, count: 0, suspended: false }, parallel_turns: false };
+  changes: [], room_skills: [], chain: { budget: 25, count: 0, suspended: false }, parallel_turns: false };
 
 // level shows a model and effort as the room says them, "opus · effort max".
 const level = (l) => (l.model || 'default') + ' · effort ' + (l.effort || 'default');
@@ -935,6 +922,12 @@ function renderApprovals() {
     decide(li, (c.kind === 'add' ? 'the persona ' : 'the change to ') + p.name, '/changes/' + c.id, {});
     items.push(li);
   }
+  for (const k of (agent.room_skills || []).filter((x) => x.pending)) {
+    const li = document.createElement('li');
+    li.textContent = k.author + ' copied the skill ' + k.name + ' v' + k.version + ' into the room.';
+    decide(li, 'the room skill ' + k.name, '/skills/' + k.id + '/decision', {});
+    items.push(li);
+  }
   $('approvals').hidden = items.length === 0;
   $('approval-list').replaceChildren(...items);
 }
@@ -1096,6 +1089,33 @@ function personaForm(p) {
 // activation of a profile shows the disclaimer (002-AC32).
 let skillLib = { skills: [], disclaimer: false, no_profile: false };
 
+// scopeNote tells a personal or room skill from a shared one.
+const scopeNote = (k) => ({ personal: ' (personal)', room: ' (room)' }[k.scope] || '');
+
+// renderRoomSkills lists the room's own skills, and offers the member's personal skills to copy in
+// (004-AC10).
+function renderRoomSkills() {
+  const own = agent.room_skills || [];
+  $('room-skill-list').replaceChildren(...own.map((k) => {
+    const li = document.createElement('li');
+    li.dataset.skill = k.name;
+    li.textContent = k.name + ' v' + k.version + ', copied by ' + k.author + (k.pending ? ': waits for the host\'s approval' : '');
+    return li;
+  }));
+  if (!own.length) $('room-skill-list').append(Object.assign(document.createElement('li'), { textContent: 'None yet.' }));
+  const mine = skillLib.skills.filter((x) => x.scope === 'personal' && !own.some((k) => k.name === x.name));
+  $('room-skill-copy').hidden = !mine.length;
+  const chosen = $('room-skill-source').value;
+  $('room-skill-source').replaceChildren(...mine.map((x) => option(x.id, x.name + ' v' + x.version)));
+  if (mine.some((x) => String(x.id) === chosen)) $('room-skill-source').value = chosen;
+}
+$('room-skill-copy').addEventListener('submit', (e) => {
+  e.preventDefault();
+  sendJSON('POST', api + '/skills', { skill_id: Number($('room-skill-source').value) }).then((k) => {
+    if (k) personasStatus(k.name + ' v' + k.version + (k.pending ? ' copied. It waits for the host\'s approval.' : ' copied into the room.'));
+  }).catch((err) => personasStatus(err.message)).finally(() => loadSkills().catch(console.error));
+});
+
 function skillsBlock(p) {
   const box = document.createElement('fieldset');
   box.className = 'persona-skills';
@@ -1113,7 +1133,7 @@ function skillsBlock(p) {
   for (const k of p.skills || []) {
     const li = document.createElement('li');
     li.dataset.skill = k.name;
-    li.append(k.name + ' v' + k.version + (k.shared ? '' : ' (personal)'));
+    li.append(k.name + ' v' + k.version + scopeNote(k));
     // A personal skill's update is its owner's to take: only they see it in their library.
     if (k.update_version && skillLib.skills.some((x) => x.id === k.skill_id)) {
       li.append(button('Update to v' + k.update_version, 'Update skill ' + k.name + ' of ' + p.name + ' to version ' + k.update_version,
@@ -1140,7 +1160,7 @@ function skillsBlock(p) {
   add.className = 'skill-add';
   const sel = document.createElement('select');
   sel.setAttribute('aria-label', 'Skill to turn on for ' + p.name);
-  sel.append(...offered.map((x) => option(x.id, x.name + ' v' + x.version + (x.shared ? '' : ' (personal)'))));
+  sel.append(...offered.map((x) => option(x.id, x.name + ' v' + x.version + scopeNote(x))));
   // Picking a skill is not an edit of the persona's fields: the form keeps refreshing.
   sel.addEventListener('input', (e) => e.stopPropagation());
   add.append(sel, button('Turn on', 'Turn on the chosen skill for ' + p.name, () => turnSkillOn(p, Number(sel.value))));
@@ -1199,6 +1219,7 @@ const seenKey = (p) => JSON.stringify([p, isHost()]);
 // renderPersonas refreshes the open panel; a form being edited keeps what its user typed.
 function renderPersonas() {
   if (!$('personas').open) return;
+  renderRoomSkills();
   const list = $('persona-list');
   const kept = new Map([...list.children].map((f) => [f.dataset.id, f]));
   list.replaceChildren(...agent.personas.map((p) => {

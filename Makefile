@@ -28,7 +28,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: ui-tools ui-vendor ui-check build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail e2e-supervisor stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: ui-tools ui-vendor ui-check build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -116,6 +116,12 @@ e2e-supervisor: build
 	  GRILL_ROOM_E2E_DEV_KEY='$(abspath $(DEV_KEY_PUB))' GRILL_ROOM_E2E_SUPERVISOR='$(abspath $(SUPERVISOR_BIN))' \
 	  pnpm exec playwright test -c supervisor/playwright.config.js
 
+# 004-AC13: a room exported from the compose stack is imported on the lab deployment, where a haiku
+# turn resumes its session, then moves back: two real turns, at most two Claude requests. Both
+# instances must run this build (`make dev-up`, `make k8s-apply`).
+e2e-crossinstance: build
+	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c crossinstance/playwright.config.js
+
 # Magic links against the lab deployment and its mailpit (K8S_MAILPIT_URL in .env); no Claude request.
 e2e-lab-mail:
 	cd e2e && pnpm install --frozen-lockfile && GRILL_ROOM_E2E_LAB=1 pnpm exec playwright test -c mail/playwright.config.js
@@ -124,6 +130,10 @@ e2e-lab-mail:
 # Hugging Face cache, and skips otherwise.
 stt-test:
 	cd stt && uv run ruff check . && uv run ruff format --check . && uv run mypy grill_stt tests scripts && uv run pytest
+
+# The scenario tool (scenarios/, 004-AC16): lint, types and unit tests. No audio, no Claude request.
+scenarios-test:
+	cd scenarios && uv run ruff check . && uv run ruff format --check . && uv run mypy grill_scenarios tests && uv run pytest
 
 stt-image:
 	docker build -t grill-stt:local \
@@ -158,9 +168,10 @@ test-offline:
 	docker run --rm --network none -e GRILL_ROOM_TEST_OFFLINE=1 -v '$(CURDIR)/internal/trust:/src:ro' \
 	  -v '$(CURDIR)/bin/trust.test:/trust.test:ro' -w /src debian:stable-slim /trust.test -test.v -test.run 'Offline|Release|DevKey'
 
-# The admin page's libraries, pinned in tools/ui/package.json and copied unmodified with their
-# licenses: no CDN, no build step. index.html maps the bare imports to them.
-UI_VENDOR := internal/daemon/ui/vendor
+# The admin pages' libraries, pinned in tools/ui/package.json and copied unmodified with their
+# licenses: no CDN, no build step. One copy serves the daemon's page and the server's /admin, whose
+# import maps point the bare imports to it.
+UI_VENDOR := internal/uivendor/esm
 UI_MODULES := preact/dist/preact.mjs:preact.js preact/hooks/dist/hooks.mjs:preact-hooks.js \
   @preact/signals-core/dist/signals-core.mjs:signals-core.js @preact/signals/dist/signals.mjs:signals.js \
   htm/dist/htm.mjs:htm.js htm/preact/index.mjs:htm-preact.js
@@ -175,7 +186,7 @@ ui-vendor: ui-tools
 	  echo "$$p $$(node -p "require('./tools/ui/node_modules/$$p/package.json').version")"; \
 	done > '$(UI_VENDOR)/VERSIONS'
 
-# The page's JSDoc types, checked by tsc (003 Phase 7).
+# The admin pages' JSDoc types, checked by tsc (003 Phase 7, 004-AC19).
 ui-check: ui-tools
 	cd tools/ui && pnpm exec tsc -p tsconfig.json
 

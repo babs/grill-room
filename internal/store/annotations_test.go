@@ -157,9 +157,9 @@ func TestAttachmentsCountAgainstTheRoom(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	p, doc := annotated(t, s, "x")
-	used, err := s.RoomBytes(ctx, "a")
-	if err != nil {
-		t.Fatal(err)
+	used, quota, err := s.RoomUsage(ctx, "a", 1<<20)
+	if err != nil || quota != 1<<20 {
+		t.Fatal(quota, err)
 	}
 	limit := used + 10
 	a, err := s.CreateAnnotation(ctx, "a", doc, 0, nil, say(p, "pic", "123456"), limit)
@@ -172,7 +172,7 @@ func TestAttachmentsCountAgainstTheRoom(t *testing.T) {
 	if _, err := s.AddAnnotationMessage(ctx, "a", a.ID, say(p, "fits", "1234"), limit); err != nil {
 		t.Fatalf("exactly at the limit: %v", err)
 	}
-	if got, _ := s.RoomBytes(ctx, "a"); got != limit {
+	if got, _, _ := s.RoomUsage(ctx, "a", limit); got != limit {
 		t.Fatalf("room bytes %d, want %d", got, limit)
 	}
 	if _, err := s.AddUpload(ctx, &Upload{RoomID: "a", Author: "x", Filename: "f.md", ContentType: "text/markdown", Format: "md", Data: []byte("y"), Text: "y"}, limit); !errors.Is(err, ErrRoomFull) {

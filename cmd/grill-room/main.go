@@ -70,8 +70,10 @@ type Config struct {
 	MaxRoomMB   int64
 	// MaxAttachmentMB bounds one image on an annotation message; attachments count in MaxRoomMB.
 	MaxAttachmentMB int64
-	Pandoc          string
-	PandocTimeout   time.Duration
+	// MaxImportMB bounds an imported room archive once uncompressed (004-AC14).
+	MaxImportMB   int64
+	Pandoc        string
+	PandocTimeout time.Duration
 	// LiveKitURL is the signalling URL browsers use (wss://); empty turns voice off.
 	LiveKitURL string
 	// LiveKitAPIURL is LiveKit's HTTP API as this server reaches it; defaults from LiveKitURL.
@@ -90,6 +92,8 @@ type Config struct {
 	SMTP mail.SMTP
 	// MagicLinkTTL is how long an emailed sign-in link works.
 	MagicLinkTTL time.Duration
+	// AuditRetention is how long the audit log keeps an entry.
+	AuditRetention time.Duration
 }
 
 func loadConfig() (Config, error) {
@@ -100,6 +104,8 @@ func loadConfig() (Config, error) {
 	maxAttachment, err4 := strconv.ParseInt(getEnv("GRILL_ROOM_MAX_ATTACHMENT_MB", "5"), 10, 64)
 	turnTimeout, err5 := time.ParseDuration(getEnv("GRILL_ROOM_TURN_TIMEOUT", "15m"))
 	magicTTL, err6 := time.ParseDuration(getEnv("GRILL_ROOM_MAGIC_LINK_TTL", web.DefaultMagicLinkTTL.String()))
+	auditRetention, err7 := time.ParseDuration(getEnv("GRILL_ROOM_AUDIT_RETENTION", web.DefaultAuditRetention.String()))
+	maxImport, err8 := strconv.ParseInt(getEnv("GRILL_ROOM_MAX_IMPORT_MB", strconv.Itoa(web.DefaultMaxImportBytes>>20)), 10, 64)
 	return Config{
 		SMTP: mail.SMTP{
 			Addr:     os.Getenv("GRILL_ROOM_SMTP_ADDR"),
@@ -108,10 +114,12 @@ func loadConfig() (Config, error) {
 			Password: os.Getenv("GRILL_ROOM_SMTP_PASSWORD"),
 		},
 		MagicLinkTTL:    magicTTL,
+		AuditRetention:  auditRetention,
 		TurnTimeout:     turnTimeout,
 		MaxUploadMB:     maxUpload,
 		MaxRoomMB:       maxRoom,
 		MaxAttachmentMB: maxAttachment,
+		MaxImportMB:     maxImport,
 		Pandoc:          getEnv("GRILL_ROOM_PANDOC", "pandoc"),
 		PandocTimeout:   timeout,
 		Addr:            addr,
@@ -129,7 +137,7 @@ func loadConfig() (Config, error) {
 		LogFormat:        getEnv("LOG_FORMAT", "auto"),
 		DaemonDir:        os.Getenv("GRILL_ROOM_DAEMON_DIR"),
 		SandboxImage:     os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
-	}, errors.Join(err1, err2, err3, err4, err5, err6)
+	}, errors.Join(err1, err2, err3, err4, err5, err6, err7, err8)
 }
 
 // Validate rejects a configuration the server cannot run with.
@@ -142,6 +150,9 @@ func (c Config) Validate() error {
 	}
 	if c.MaxUploadMB < 1 || c.MaxRoomMB < c.MaxUploadMB || c.MaxRoomMB > 1<<20 {
 		return fmt.Errorf("GRILL_ROOM_MAX_UPLOAD_MB %d, GRILL_ROOM_MAX_ROOM_MB %d: want 1 <= upload <= room <= %d", c.MaxUploadMB, c.MaxRoomMB, 1<<20)
+	}
+	if c.MaxImportMB < c.MaxRoomMB || c.MaxImportMB > 1<<20 {
+		return fmt.Errorf("GRILL_ROOM_MAX_IMPORT_MB %d: want room (%d) <= import <= %d", c.MaxImportMB, c.MaxRoomMB, 1<<20)
 	}
 	if c.MaxAttachmentMB < 1 || c.MaxAttachmentMB > c.MaxRoomMB {
 		return fmt.Errorf("GRILL_ROOM_MAX_ATTACHMENT_MB %d: want 1 <= attachment <= room (%d)", c.MaxAttachmentMB, c.MaxRoomMB)
@@ -164,6 +175,9 @@ func (c Config) Validate() error {
 	}
 	if c.MagicLinkTTL < time.Second || c.MagicLinkTTL > time.Hour {
 		return fmt.Errorf("GRILL_ROOM_MAGIC_LINK_TTL %s: want 1s to 1h", c.MagicLinkTTL)
+	}
+	if c.AuditRetention < 24*time.Hour {
+		return fmt.Errorf("GRILL_ROOM_AUDIT_RETENTION %s: want 24h or more", c.AuditRetention)
 	}
 	// Security: a tag can be moved to another image after review; a digest cannot.
 	if c.SandboxImage != "" && !sandbox.PinnedImage(c.SandboxImage) {
@@ -331,12 +345,16 @@ func run() error {
 		MaxUploadBytes:     cfg.MaxUploadMB << 20,
 		MaxRoomBytes:       cfg.MaxRoomMB << 20,
 		MaxAttachmentBytes: cfg.MaxAttachmentMB << 20,
+		MaxImportBytes:     cfg.MaxImportMB << 20,
 		ToMarkdown:         convert.NewPandoc(cfg.Pandoc, cfg.PandocTimeout).ToMarkdown,
 		Voice:              cfg.voice(),
 		Release:            release,
 		SandboxImage:       cfg.SandboxImage,
 		SendMail:           cfg.sendMail(),
 		MagicLinkTTL:       cfg.MagicLinkTTL,
+		AuditRetention:     cfg.AuditRetention,
+		Version:            Version,
+		DBPath:             cfg.DB,
 	}, logger)
 	if cfg.SMTP.Addr == "" {
 		logger.Info("email_signin_disabled", zap.String("hint", "set GRILL_ROOM_SMTP_ADDR and GRILL_ROOM_SMTP_FROM to send magic links"))
@@ -366,6 +384,7 @@ func run() error {
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return web.Serve(gctx, appSrv, logger) })
 	g.Go(func() error { return web.Serve(gctx, metricsSrv, logger) })
+	g.Go(func() error { srv.PurgeAudit(gctx); return nil })
 	logger.Info("ready", zap.String("url", cfg.PublicURL))
 	err = g.Wait()
 	logger.Info("shutdown")

@@ -77,10 +77,29 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
     await admin.locator('#alerts').scrollIntoViewIfNeeded();
     await expect(admin.locator('#alerts')).toBeInViewport();
 
-    // Limits apply by restarting the worker, which comes back.
+    // Limits apply by restarting the worker, which comes back. The page's next status is held until
+    // one shows the worker down, as a loaded machine delivers it: the status line must survive. A
+    // restart too quick to catch in 3 s lets the status through.
+    let applied = false;
+    await admin.route('**/api/limits', (route) => { applied = true; return route.continue(); });
+    await admin.route('**/api/status', async (route) => {
+      for (let i = 0; applied && i < 300; i++) {
+        // Node reuses a kept-alive socket the supervisor may have closed: try again.
+        const res = await route.fetch().catch(() => null);
+        const json = await res?.json();
+        if (json && !json.instances?.every((x) => x.status)) {
+          applied = false;
+          test.info().annotations.push({ type: 'held', description: 'the reloaded status shows the worker down' });
+          return route.fulfill({ response: res, json });
+        }
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      applied = false;
+      return route.continue();
+    });
     await admin.getByLabel('Sandbox memory').fill('2g');
     await admin.getByRole('button', { name: 'Apply the limits' }).click();
-    await expect(admin.locator('#limits-status')).toHaveText('Applied: the worker restarts.');
+    await expect(admin.locator('#limits-status')).toHaveText('Applied: the worker restarts.', { timeout: 10_000 });
     await expect(card).toContainText(`${baseURL} · running`, { timeout: 30_000 });
     await expect(admin.getByLabel('Sandbox memory')).toHaveValue('2g');
   } finally {

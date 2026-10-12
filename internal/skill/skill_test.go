@@ -226,3 +226,45 @@ func TestWritePlugin(t *testing.T) {
 		t.Fatal("a bad name reached the plugin")
 	}
 }
+
+// tarOf writes headers with bodies as a tar, as a hand-made archive would carry a skill.
+func tarOf(t *testing.T, files map[*tar.Header]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for h, body := range files {
+		h.Size = int64(len(body))
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.WriteString(tw, body)
+	}
+	_ = tw.Close()
+	return buf.Bytes()
+}
+
+// 004-AC14: an imported skill version passes the upload rules again, and must be the normalised
+// tar the store keeps, unchanged.
+func TestParseTar(t *testing.T) {
+	sk, err := Parse(mkzip(t, entry{name: "SKILL.md", body: good}, entry{name: "scripts/stamp.sh", body: "echo ok\n", mode: 0o755}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ParseTar(sk.Tar)
+	if err != nil || got.SHA256 != sk.SHA256 || got.Name != "hello-stamp" || got.Files != 2 {
+		t.Fatalf("round trip: %+v %v", got, err)
+	}
+	for name, data := range map[string][]byte{
+		"not normalised": tarOf(t, map[*tar.Header]string{{Name: "SKILL.md", Mode: 0o600}: good}),
+		"trailing bytes": append(append([]byte{}, sk.Tar...), 0),
+		"symlink":        tarOf(t, map[*tar.Header]string{{Name: "SKILL.md", Mode: 0o644}: good, {Name: "x", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd"}: ""}),
+		"traversal":      tarOf(t, map[*tar.Header]string{{Name: "SKILL.md", Mode: 0o644}: good, {Name: "../x", Mode: 0o644}: "x"}),
+		"no SKILL.md":    tarOf(t, map[*tar.Header]string{{Name: "README.md", Mode: 0o644}: "x"}),
+		"not a tar":      []byte("plain text, long enough to be read as a broken tar header block by the reader"),
+		"too large":      make([]byte, MaxZipBytes+1),
+	} {
+		if _, err := ParseTar(data); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}

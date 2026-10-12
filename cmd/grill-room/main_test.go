@@ -16,13 +16,16 @@ import (
 
 func TestConfigValidate(t *testing.T) {
 	ok := Config{Addr: "a:1", MetricsAddr: "a:2", DB: "x.db", LogLevel: "info", LogFormat: "auto",
-		MaxUploadMB: 20, MaxRoomMB: 200, MaxAttachmentMB: 5, Pandoc: "pandoc", PandocTimeout: time.Minute, TurnTimeout: 15 * time.Minute, MagicLinkTTL: 15 * time.Minute}
+		MaxUploadMB: 20, MaxRoomMB: 200, MaxAttachmentMB: 5, MaxImportMB: 1024, Pandoc: "pandoc", PandocTimeout: time.Minute, TurnTimeout: 15 * time.Minute, MagicLinkTTL: 15 * time.Minute,
+		AuditRetention: 365 * 24 * time.Hour}
 	cases := map[string]func(*Config){
 		"zero upload limit":       func(c *Config) { c.MaxUploadMB = 0 },
 		"room below upload limit": func(c *Config) { c.MaxRoomMB = 10 },
 		"room limit overflows":    func(c *Config) { c.MaxRoomMB = 1 << 21 },
 		"zero attachment limit":   func(c *Config) { c.MaxAttachmentMB = 0 },
 		"attachment over room":    func(c *Config) { c.MaxAttachmentMB = 201 },
+		"import below room":       func(c *Config) { c.MaxImportMB = 199 },
+		"import overflows":        func(c *Config) { c.MaxImportMB = 1<<20 + 1 },
 		"zero pandoc timeout":     func(c *Config) { c.PandocTimeout = 0 },
 		"turn timeout too short":  func(c *Config) { c.TurnTimeout = time.Second },
 		"turn timeout too long":   func(c *Config) { c.TurnTimeout = 25 * time.Hour },
@@ -37,6 +40,7 @@ func TestConfigValidate(t *testing.T) {
 		"smtp user, no password":  func(c *Config) { c.SMTP = mail.SMTP{Addr: "mail.example:25", From: "a@example.com", Username: "u"} },
 		"magic link ttl too long": func(c *Config) { c.MagicLinkTTL = 2 * time.Hour },
 		"magic link ttl zero":     func(c *Config) { c.MagicLinkTTL = 0 },
+		"audit retention short":   func(c *Config) { c.AuditRetention = 23 * time.Hour },
 		"sandbox digest too short": func(c *Config) {
 			c.SandboxImage = "registry.example/grill-room/sandbox@sha256:" + strings.Repeat("a", 63)
 		},
@@ -64,7 +68,7 @@ func TestConfigValidate(t *testing.T) {
 }
 
 func TestLoadConfigRejectsBadNumbers(t *testing.T) {
-	for key, val := range map[string]string{"GRILL_ROOM_MAX_UPLOAD_MB": "20MB", "GRILL_ROOM_MAX_ROOM_MB": "x", "GRILL_ROOM_PANDOC_TIMEOUT": "60", "GRILL_ROOM_MAX_ATTACHMENT_MB": "5MB", "GRILL_ROOM_TURN_TIMEOUT": "15", "GRILL_ROOM_MAGIC_LINK_TTL": "15"} {
+	for key, val := range map[string]string{"GRILL_ROOM_MAX_UPLOAD_MB": "20MB", "GRILL_ROOM_MAX_ROOM_MB": "x", "GRILL_ROOM_PANDOC_TIMEOUT": "60", "GRILL_ROOM_MAX_ATTACHMENT_MB": "5MB", "GRILL_ROOM_TURN_TIMEOUT": "15", "GRILL_ROOM_MAGIC_LINK_TTL": "15", "GRILL_ROOM_AUDIT_RETENTION": "365"} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv(key, val)
 			if _, err := loadConfig(); err == nil {
@@ -73,7 +77,7 @@ func TestLoadConfigRejectsBadNumbers(t *testing.T) {
 		})
 	}
 	c, err := loadConfig()
-	if err != nil || c.MaxUploadMB != 20 || c.MaxRoomMB != 200 || c.MaxAttachmentMB != 5 || c.TurnTimeout != 15*time.Minute || c.MagicLinkTTL != 15*time.Minute || c.Validate() != nil {
+	if err != nil || c.MaxUploadMB != 20 || c.MaxRoomMB != 200 || c.MaxAttachmentMB != 5 || c.TurnTimeout != 15*time.Minute || c.MagicLinkTTL != 15*time.Minute || c.AuditRetention != 8760*time.Hour || c.Validate() != nil {
 		t.Fatalf("defaults: %+v, %v", c, err)
 	}
 }

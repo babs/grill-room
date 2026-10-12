@@ -31,6 +31,8 @@ type Profile struct {
 	Email     string        `json:"email,omitempty"`
 	CreatedAt time.Time     `json:"created_at"`
 	Rooms     []ProfileRoom `json:"rooms"`
+	// UUID names the profile in the audit log of its room admin actions; never sent.
+	UUID string `json:"-"`
 }
 
 // ProfileRoom is a room a profile is in, under the name it joined with.
@@ -121,7 +123,7 @@ func (s *Store) profile(ctx context.Context, where string, args ...any) (*Profil
 	var p Profile
 	var email sql.NullString
 	var created string
-	err := s.db.QueryRowContext(ctx, `SELECT id, email, created_at FROM profiles WHERE `+where, args...).Scan(&p.ID, &email, &created)
+	err := s.db.QueryRowContext(ctx, `SELECT id, email, created_at, COALESCE(uuid, '') FROM profiles WHERE `+where, args...).Scan(&p.ID, &email, &created, &p.UUID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -187,51 +189,17 @@ func (s *Store) ProfileParticipant(ctx context.Context, sessionHash, roomID stri
 	return &p, nil
 }
 
-// Profiles lists every profile with its email and rooms, for the admin.
-func (s *Store) Profiles(ctx context.Context) ([]Profile, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM profiles ORDER BY id`)
-	if err != nil {
-		return nil, fmt.Errorf("query profiles: %w", err)
-	}
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return nil, fmt.Errorf("scan profile: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	_ = rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("query profiles: %w", err)
-	}
-	// ponytail: one query per profile; a single join if the admin list grows past a few thousand.
-	out := make([]Profile, 0, len(ids))
-	for _, id := range ids {
-		p, err := s.profile(ctx, `id = ?`, id)
-		if errors.Is(err, ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *p)
-	}
-	return out, nil
-}
-
 // DeleteProfile removes a profile with its sessions, magic links and email, and detaches its
 // participants, which keep their name and their room access.
 func (s *Store) DeleteProfile(ctx context.Context, id int64) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM profiles WHERE id = ?`, id)
+	err := s.withTx(ctx, "delete profile", func(tx *sql.Tx) error {
+		if err := auditTx(ctx, tx, "", nil); err != nil {
+			return err
+		}
+		return execOne(ctx, tx, `DELETE FROM profiles WHERE id = ?`, id)
+	})
 	if err != nil {
-		return fmt.Errorf("delete profile %d: %w", id, err)
-	}
-	if n, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("delete profile %d: %w", id, err)
-	} else if n == 0 {
-		return ErrNotFound
+		return err
 	}
 	// The WAL still holds the deleted email's old pages until a checkpoint rewrites the main file.
 	if _, err := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {

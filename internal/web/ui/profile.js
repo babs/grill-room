@@ -23,6 +23,7 @@ function render({ email_enabled: emailEnabled, profile }) {
     return li;
   }));
   if (!profile.rooms.length) $('rooms').textContent = 'None yet.';
+  if (!$('room-create-as').value && profile.rooms.length) $('room-create-as').value = profile.rooms[0].name;
   $('email').hidden = !emailEnabled;
   $('email-state').textContent = profile.email ? 'Bound to ' + profile.email + '.' : 'No email bound.';
 }
@@ -80,6 +81,29 @@ $('skill-upload').addEventListener('submit', async (e) => {
     await loadSkills();
   } catch {
     $('skill-status').textContent = 'Network error, try again.';
+  }
+  button.disabled = false;
+});
+
+// New room: the profile creates a room and becomes its admin, within the instance's limits (004-AC7).
+$('room-new').addEventListener('click', () => {
+  $('room-new').hidden = true;
+  $('room-create').hidden = false;
+  $('room-create-name').focus();
+});
+$('room-create').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const button = $('room-create').querySelector('button');
+  button.disabled = true;
+  try {
+    const { res, data } = await post('/api/profile/rooms', { name: $('room-create-name').value, display_name: $('room-create-as').value });
+    if (res.ok) {
+      location.assign('/r/' + encodeURIComponent(data.id));
+      return;
+    }
+    $('room-create-status').textContent = data.error || 'HTTP ' + res.status;
+  } catch {
+    $('room-create-status').textContent = 'Network error, try again.';
   }
   button.disabled = false;
 });

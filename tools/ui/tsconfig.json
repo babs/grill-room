@@ -11,5 +11,5 @@
     "types": [],
     "paths": { "*": ["./node_modules/*"] }
   },
-  "include": ["../../internal/daemon/ui/*.js"]
+  "include": ["../../internal/daemon/ui/*.js", "../../internal/web/ui/admin/*.js"]
 }

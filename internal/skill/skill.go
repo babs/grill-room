@@ -46,6 +46,9 @@ var ErrInvalid = errors.New("invalid skill")
 // nameRe is Claude Code's rule for a skill name: lowercase letters, digits and single hyphens.
 var nameRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
+// ValidName reports whether name is a skill name Claude Code takes, as the frontmatter must hold.
+func ValidName(name string) bool { return len(name) <= 64 && nameRe.MatchString(name) }
+
 // Skill is a validated upload: its frontmatter, and its files as a normalised tar (sorted paths,
 // fixed times, modes 0644 or 0755) whose hash tells two identical uploads apart.
 type Skill struct {
@@ -232,7 +235,7 @@ func frontmatter(md []byte) (name, description string, err error) {
 	}
 	fm.Description = strings.TrimSpace(fm.Description)
 	switch {
-	case len(fm.Name) > 64 || !nameRe.MatchString(fm.Name):
+	case !ValidName(fm.Name):
 		return "", "", invalid("frontmatter name must be 1 to 64 lowercase letters, digits and hyphens")
 	case fm.Description == "" || utf8.RuneCountInString(fm.Description) > MaxDescription:
 		return "", "", invalid("frontmatter description must be 1 to %d characters", MaxDescription)
@@ -348,4 +351,45 @@ func copySkill(tw *tar.Writer, sk Packed, dir func(string) error) error {
 			return fmt.Errorf("plugin: %w", err)
 		}
 	}
+}
+
+// ParseTar validates a skill's normalised tar, as the store keeps it and an import carries it,
+// with the rules of Parse, and requires it normalised: the store's copy hashes to its sha256, and
+// the plugin is built from it as is.
+func ParseTar(data []byte) (*Skill, error) {
+	if len(data) > MaxZipBytes {
+		return nil, invalid("the skill is over %d MB", MaxZipBytes>>20)
+	}
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	tr := tar.NewReader(bytes.NewReader(data))
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, invalid("not a tar: %v", err)
+		}
+		zh := &zip.FileHeader{Name: h.Name, Method: zip.Store}
+		zh.SetMode(h.FileInfo().Mode())
+		w, err := zw.CreateHeader(zh)
+		if err != nil {
+			return nil, invalid("%q: %v", h.Name, err)
+		}
+		if _, err := io.Copy(w, tr); err != nil { //nolint:gosec // bounded by the tar's own size, checked above
+			return nil, invalid("%q: %v", h.Name, err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		return nil, invalid("repack: %v", err)
+	}
+	sk, err := Parse(buf.Bytes())
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(sk.Tar, data) {
+		return nil, invalid("the skill's tar is not in normalised form")
+	}
+	return sk, nil
 }

@@ -108,14 +108,15 @@ export async function annotateSelection(page, needle, comment) {
 }
 
 // liveDaemon runs the real daemon with this machine's Claude Code login (read only), the real
-// sandbox image and haiku. Its log goes to a file: the proxy logs one upstream_response per request.
-export function liveDaemon(dir, roomURL) {
+// sandbox image and haiku, env added. Its log goes to a file: the proxy logs one upstream_response
+// per request.
+export function liveDaemon(dir, roomURL, env = {}) {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   const stateDir = join(dir, 'state');
   const log = join(dir, 'daemon.log');
   const proc = spawn('../bin/grill-room-daemon', [roomURL], {
-    env: { ...process.env, GRILL_ROOM_DAEMON_STATE_DIR: stateDir, GRILL_ROOM_DAEMON_BROWSER: 'none', GRILL_ROOM_AGENT_MODEL: 'haiku', LOG_LEVEL: 'info' },
+    env: { ...process.env, GRILL_ROOM_DAEMON_STATE_DIR: stateDir, GRILL_ROOM_DAEMON_BROWSER: 'none', GRILL_ROOM_AGENT_MODEL: 'haiku', LOG_LEVEL: 'info', ...env },
     stdio: ['ignore', 'ignore', openSync(log, 'w')],
   });
   const exited = new Promise((resolve) => proc.on('exit', resolve));
@@ -128,6 +129,31 @@ export function liveDaemon(dir, roomURL) {
     throw new Error('no admin link in ' + log);
   })();
   return { proc, exited, link, log, sandbox: sandboxName(stateDir, roomURL) };
+}
+
+// latestLink is the newest admin page link a supervisor printed to log: each one opens one session.
+export const latestLink = async (log) => {
+  for (let i = 0; i < 100; i++) {
+    const all = [...readFileSync(log, 'utf8').matchAll(/Admin page: (http:\/\/127\.0\.0\.1:\d+\/s\/\S+)/g)];
+    if (all.length) return all.at(-1)[1];
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error('no admin link in ' + log);
+};
+
+// adminAPI opens a session on a supervisor's page API, as the page does with its link.
+export async function adminAPI(request, log) {
+  const link = await latestLink(log);
+  const origin = new URL(link).origin;
+  const res = await request.post(`${origin}/api/session`, { headers: { Origin: origin }, data: { code: link.split('/s/')[1] } });
+  expect(res.status()).toBe(200);
+  const headers = { Origin: origin, Authorization: `Bearer ${(await res.json()).token}` };
+  const call = async (method, path, data) => {
+    const r = await request.fetch(origin + path, { method, headers, data });
+    expect(r.ok(), `${method} ${path}: ${await r.text()}`).toBeTruthy();
+    return r.status() === 204 ? null : r.json();
+  };
+  return { get: (p) => call('GET', p), post: (p, d) => call('POST', p, d) };
 }
 
 // sandboxName names a daemon's sandbox as cmd/grill-room-daemon does: a killed daemon leaves its
@@ -159,3 +185,31 @@ export async function ask(page, roomID, text, persona = 'Grill') {
   expect(st.turn.status).toBe('done');
   return page.locator('#messages li.msg.agent').last().locator('.body').textContent();
 }
+
+// skillZip writes a zip of a skill folder whose script prints out; without frontmatter it is one
+// the room must refuse.
+export function skillZip(name, out, frontmatter = true) {
+  const zip = join(mkdtempSync(join('test-results', 'skill-')), name + '.zip');
+  const md = frontmatter ? `---\nname: ${name}\ndescription: Prints ${out}.\n---\nRun scripts/stamp.sh.\n` : '# No frontmatter\n';
+  execFileSync('python3', ['-I', '-c', `import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    z.writestr(sys.argv[2] + "/SKILL.md", sys.argv[3])
+    z.writestr(sys.argv[2] + "/scripts/stamp.sh", "echo " + sys.argv[4] + "\\n")`, zip, name, md, out]);
+  return zip;
+}
+
+// signIn signs page in to /admin at view, and returns the login's status.
+export async function signIn(page, token = adminToken, view = 'sessions') {
+  await page.goto('/admin#' + view);
+  await page.getByLabel('Admin token').fill(token);
+  const [res] = await Promise.all([
+    page.waitForResponse((r) => r.url().endsWith('/api/admin/login')),
+    page.getByRole('button', { name: 'Sign in' }).click(),
+  ]);
+  return res.status();
+}
+
+// noOverflow lists what sticks out past the viewport, tables scrolling in their own box aside.
+export const noOverflow = (page) => page.evaluate(() => [...document.querySelectorAll('body *')]
+  .filter((e) => !e.parentElement?.closest('.scroll') && e.getBoundingClientRect().right > innerWidth + 1)
+  .map((e) => `${e.tagName.toLowerCase()}#${e.id}.${e.className}`));

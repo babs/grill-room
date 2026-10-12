@@ -41,12 +41,24 @@ const (
 	SkillsAll = "all"
 )
 
+// Skill scopes: who owns a skill.
+const (
+	ScopeShared   = "shared"
+	ScopePersonal = "personal"
+	ScopeRoom     = "room"
+)
+
 // Skill is a skill of the library at its latest version. A shared skill belongs to the server and
-// outlives its publisher; a personal one belongs to its profile.
+// outlives its publisher; a personal one belongs to its profile; a room skill belongs to its room
+// and goes with it (004-AC10).
 type Skill struct {
 	ID     int64  `json:"id"`
 	Name   string `json:"name"`
 	Shared bool   `json:"shared"`
+	Scope  string `json:"scope"`
+	// Pending marks a room skill copied in while the host approves everything: it waits for the
+	// host, and no persona can turn it on yet.
+	Pending bool `json:"pending,omitempty"`
 	// Mine tells the asking profile that it owns the skill (personal) or published it (shared):
 	// it may upload versions.
 	Mine        bool      `json:"mine"`
@@ -61,21 +73,21 @@ type Skill struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-const skillCols = `SELECT s.id, s.name, s.profile_id IS NULL, COALESCE(s.profile_id, 0), COALESCE(s.publisher_id, 0),
+const skillCols = `SELECT s.id, s.name, s.scope, s.pending, COALESCE(s.profile_id, 0), COALESCE(s.publisher_id, 0),
 	v.n, v.author, v.description, v.files, v.size, v.sha256, v.created_at
 	FROM skills s JOIN skill_versions v ON v.skill_id = s.id AND v.n = (SELECT MAX(n) FROM skill_versions WHERE skill_id = s.id) `
 
 func scanSkill(sc scanner) (*Skill, error) {
 	var k Skill
 	var updated string
-	err := sc.Scan(&k.ID, &k.Name, &k.Shared, &k.ProfileID, &k.PublisherID, &k.Version, &k.Author, &k.Description, &k.Files, &k.Size, &k.SHA256, &updated)
+	err := sc.Scan(&k.ID, &k.Name, &k.Scope, &k.Pending, &k.ProfileID, &k.PublisherID, &k.Version, &k.Author, &k.Description, &k.Files, &k.Size, &k.SHA256, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("scan skill: %w", err)
 	}
-	k.UpdatedAt = parseTS(updated)
+	k.Shared, k.UpdatedAt = k.Scope == ScopeShared, parseTS(updated)
 	return &k, nil
 }
 
@@ -83,13 +95,14 @@ func (k *Skill) mineFor(profileID int64) {
 	k.Mine = profileID != 0 && (k.ProfileID == profileID || k.PublisherID == profileID)
 }
 
-// Skills lists, by name, the skills listing which shows to profileID.
-func (s *Store) Skills(ctx context.Context, profileID int64, which string) ([]Skill, error) {
+// Skills lists, by name, the skills listing which shows to profileID. The library a member may
+// activate in room roomID holds the room's own skills too, but for those waiting for the host.
+func (s *Store) Skills(ctx context.Context, profileID int64, roomID, which string) ([]Skill, error) {
 	var where string
 	var args []any
 	switch which {
 	case SkillsLibrary:
-		where, args = `WHERE s.profile_id IS NULL OR s.profile_id = ?`, []any{profileID}
+		where, args = `WHERE s.scope = 'shared' OR s.profile_id = ? OR (s.room_id = ? AND NOT s.pending)`, []any{profileID, roomID}
 	case SkillsMine:
 		where, args = `WHERE s.profile_id = ? OR s.publisher_id = ?`, []any{profileID, profileID}
 	case SkillsAll:
@@ -126,7 +139,7 @@ func (s *Store) PublishSkill(ctx context.Context, profileID int64, shared bool, 
 		var publisher int64
 		q, args := `SELECT id, 0 FROM skills WHERE profile_id = ? AND name = ?`, []any{profileID, up.Name}
 		if shared {
-			q, args = `SELECT id, COALESCE(publisher_id, 0) FROM skills WHERE profile_id IS NULL AND name = ?`, []any{up.Name}
+			q, args = `SELECT id, COALESCE(publisher_id, 0) FROM skills WHERE scope = 'shared' AND name = ?`, []any{up.Name}
 		}
 		err := tx.QueryRowContext(ctx, q, args...).Scan(&id, &publisher)
 		n := 1
@@ -183,16 +196,12 @@ func (s *Store) PublishSkill(ctx context.Context, profileID int64, shared bool, 
 // RemoveSkill deletes skill id with its versions; the personas that had it active lose it. The
 // admin (profileID 0) removes any skill (002-AC29); a profile only its personal ones. ErrNotFound.
 func (s *Store) RemoveSkill(ctx context.Context, id, profileID int64) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM skills WHERE id = ? AND (? = 0 OR profile_id = ?)`, id, profileID, profileID)
-	if err != nil {
-		return fmt.Errorf("remove skill %d: %w", id, err)
-	}
-	if n, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("remove skill %d: %w", id, err)
-	} else if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.withTx(ctx, "remove skill", func(tx *sql.Tx) error {
+		if err := auditTx(ctx, tx, "", nil); err != nil {
+			return err
+		}
+		return execOne(ctx, tx, `DELETE FROM skills WHERE id = ? AND (? = 0 OR profile_id = ?)`, id, profileID, profileID)
+	})
 }
 
 // SkillsDisclaimerAccepted reports whether profile id accepted the skills disclaimer (002-AC32).
@@ -213,6 +222,7 @@ type PersonaSkill struct {
 	SkillID int64  `json:"skill_id"`
 	Name    string `json:"name"`
 	Shared  bool   `json:"shared"`
+	Scope   string `json:"scope"`
 	Version int    `json:"version"`
 	// UpdateVersion is the skill's latest version when newer than the pin: offered to the room,
 	// never applied by itself.
@@ -223,6 +233,7 @@ type PersonaSkill struct {
 type SkillPin struct {
 	Name    string
 	Shared  bool
+	Scope   string `json:",omitempty"`
 	Version int
 }
 
@@ -235,7 +246,7 @@ func loadSkills(ctx context.Context, db rowsQuerier, roomID string, ps []RoomPer
 	if len(ps) == 0 {
 		return nil
 	}
-	rows, err := db.QueryContext(ctx, `SELECT k.persona_id, s.id, s.name, s.profile_id IS NULL, k.version,
+	rows, err := db.QueryContext(ctx, `SELECT k.persona_id, s.id, s.name, s.scope, k.version,
 		(SELECT MAX(n) FROM skill_versions WHERE skill_id = s.id)
 		FROM room_persona_skills k JOIN room_personas p ON p.id = k.persona_id JOIN skills s ON s.id = k.skill_id
 		WHERE p.room_id = ? ORDER BY s.name, s.id`, roomID)
@@ -247,9 +258,10 @@ func loadSkills(ctx context.Context, db rowsQuerier, roomID string, ps []RoomPer
 	for rows.Next() {
 		var pid int64
 		var k PersonaSkill
-		if err := rows.Scan(&pid, &k.SkillID, &k.Name, &k.Shared, &k.Version, &k.UpdateVersion); err != nil {
+		if err := rows.Scan(&pid, &k.SkillID, &k.Name, &k.Scope, &k.Version, &k.UpdateVersion); err != nil {
 			return fmt.Errorf("persona skills: %w", err)
 		}
+		k.Shared = k.Scope == ScopeShared
 		if k.UpdateVersion <= k.Version {
 			k.UpdateVersion = 0
 		}
@@ -291,7 +303,7 @@ func applySkills(p *RoomPersona, pins map[int64]SkillPin) []string {
 			p.Skills = slices.Delete(p.Skills, i, i+1)
 		case pin.Version > 0 && i < 0:
 			out = append(out, fmt.Sprintf("skill %s v%d on", pin.Name, pin.Version))
-			p.Skills = append(p.Skills, PersonaSkill{SkillID: id, Name: pin.Name, Shared: pin.Shared, Version: pin.Version})
+			p.Skills = append(p.Skills, PersonaSkill{SkillID: id, Name: pin.Name, Shared: pin.Shared, Scope: pin.Scope, Version: pin.Version})
 		case pin.Version > 0 && p.Skills[i].Version != pin.Version:
 			out = append(out, fmt.Sprintf("skill %s v%d → v%d", pin.Name, p.Skills[i].Version, pin.Version))
 			p.Skills[i].Version = pin.Version
@@ -372,9 +384,14 @@ func pinLatest(ctx context.Context, tx *sql.Tx, p *RoomPersona, i int, skillID i
 	}
 	var pin SkillPin
 	var owner int64
-	err := tx.QueryRowContext(ctx, `SELECT name, profile_id IS NULL, COALESCE(profile_id, 0), (SELECT MAX(n) FROM skill_versions WHERE skill_id = s.id)
-		FROM skills s WHERE id = ?`, skillID).Scan(&pin.Name, &pin.Shared, &owner, &pin.Version)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && !pin.Shared && owner != by.ProfileID) {
+	var room string
+	var pending bool
+	err := tx.QueryRowContext(ctx, `SELECT name, scope, COALESCE(profile_id, 0), COALESCE(room_id, ''), pending, (SELECT MAX(n) FROM skill_versions WHERE skill_id = s.id)
+		FROM skills s WHERE id = ?`, skillID).Scan(&pin.Name, &pin.Scope, &owner, &room, &pending, &pin.Version)
+	pin.Shared = pin.Scope == ScopeShared
+	// The library offered in the room: shared skills, by's personal ones, the room's own approved.
+	offered := pin.Shared || (pin.Scope == ScopePersonal && owner == by.ProfileID) || (pin.Scope == ScopeRoom && room == p.RoomID && !pending)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !offered) {
 		return SkillPin{}, ErrNotFound
 	}
 	if err != nil {
@@ -410,15 +427,16 @@ type TurnSkill struct {
 
 // pinTurnSkills copies the persona's pinned skills onto turn id as it starts: a change during the
 // turn applies to the next (002-AC15). A personal skill rides only while its owner is in the room
-// (002-AC30).
+// (002-AC30); a room skill rides whoever copied it in (004-AC10).
 func pinTurnSkills(ctx context.Context, tx *sql.Tx, roomID string, id, personaID int64) error {
 	_, err := tx.ExecContext(ctx, `UPDATE turns SET skills = (SELECT json_group_array(vid) FROM (
 			SELECT v.id AS vid FROM room_persona_skills k JOIN skills s ON s.id = k.skill_id
 			JOIN skill_versions v ON v.skill_id = k.skill_id AND v.n = k.version
-			WHERE k.persona_id = ? AND (s.profile_id IS NULL OR EXISTS (SELECT 1 FROM participants p JOIN invites i ON i.id = p.invite_id
+			WHERE k.persona_id = ? AND (s.scope = 'shared' OR (s.scope = 'room' AND s.room_id = ?)
+				OR EXISTS (SELECT 1 FROM participants p JOIN invites i ON i.id = p.invite_id
 				WHERE p.room_id = ? AND p.profile_id = s.profile_id AND i.revoked_at IS NULL))
 			ORDER BY s.name))
-		WHERE id = ?`, personaID, roomID, id)
+		WHERE id = ?`, personaID, roomID, roomID, id)
 	if err != nil {
 		return fmt.Errorf("pin turn skills: %w", err)
 	}
@@ -444,4 +462,132 @@ func (s *Store) TurnSkills(ctx context.Context, roomID string, id int64, withDat
 		out = append(out, k)
 	}
 	return out, rows.Err()
+}
+
+// MaxRoomSkills bounds a room's own skills.
+const MaxRoomSkills = 20
+
+// ErrRoomSkillName is returned when copying a skill into a room that has one of that name.
+var ErrRoomSkillName = errors.New("the room has a skill with that name already")
+
+// RoomSkills lists the room's own skills by name, pending ones included.
+func (s *Store) RoomSkills(ctx context.Context, roomID string) ([]Skill, error) {
+	rows, err := s.db.QueryContext(ctx, skillCols+`WHERE s.room_id = ? ORDER BY s.name`, roomID)
+	if err != nil {
+		return nil, fmt.Errorf("room skills: %w", err)
+	}
+	defer rows.Close()
+	out := []Skill{}
+	for rows.Next() {
+		k, err := scanSkill(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *k)
+	}
+	return out, rows.Err()
+}
+
+// CopySkillToRoom copies the latest version of skill skillID, one of by's personal skills, into
+// room as a room skill frozen at that version, and says so in the chat. The copy stays the room's
+// whoever leaves. While the host approves everything, it waits for the host as pending
+// (004-AC10). ErrForbidden without a profile, ErrNotFound for a skill that is not by's personal
+// one, ErrRoomSkillName, ErrLimit.
+func (s *Store) CopySkillToRoom(ctx context.Context, roomID string, skillID int64, by *Participant) (*Skill, *Message, error) {
+	if by.ProfileID == 0 {
+		return nil, nil, ErrForbidden
+	}
+	var id int64
+	var m *Message
+	err := s.withTx(ctx, "copy skill to room", func(tx *sql.Tx) error {
+		var name string
+		var n int
+		err := tx.QueryRowContext(ctx, `SELECT name, (SELECT MAX(n) FROM skill_versions WHERE skill_id = s.id) FROM skills s
+			WHERE id = ? AND scope = 'personal' AND profile_id = ?`, skillID, by.ProfileID).Scan(&name, &n)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("copy skill to room: %w", err)
+		}
+		if err := overLimit(ctx, tx, MaxRoomSkills, "skills per room", `SELECT count(*) FROM skills WHERE room_id = ?`, roomID); err != nil {
+			return err
+		}
+		held, err := heldBy(ctx, tx, roomID, by)
+		if err != nil {
+			return err
+		}
+		err = tx.QueryRowContext(ctx, `INSERT INTO skills(name, created_at, room_id, pending) VALUES(?,?,?,?) RETURNING id`, name, now(), roomID, held).Scan(&id)
+		if err != nil && strings.Contains(err.Error(), "UNIQUE") {
+			return ErrRoomSkillName
+		}
+		if err != nil {
+			return fmt.Errorf("copy skill to room: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO skill_versions(skill_id, n, author, author_id, description, files, size, sha256, data, created_at)
+			SELECT ?, n, author, author_id, description, files, size, sha256, data, ? FROM skill_versions WHERE skill_id = ? AND n = ?`,
+			id, now(), skillID, n); err != nil {
+			return fmt.Errorf("copy skill to room: %w", err)
+		}
+		body := fmt.Sprintf("copied the skill %s v%d into the room.", name, n)
+		if held {
+			body += waitsNote
+		}
+		m, err = memberLine(ctx, tx, roomID, by, body)
+		return err
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	k, err := scanSkill(s.db.QueryRowContext(ctx, skillCols+`WHERE s.id = ?`, id))
+	return k, m, err
+}
+
+// DecideRoomSkill is the host's answer to a room skill copied in while they approve everything:
+// approved, personas may turn it on; refused, it is removed. Either way the chat says so
+// (004-AC10). ErrForbidden unless by hosts the room, ErrNotFound unless the skill waits in it.
+func (s *Store) DecideRoomSkill(ctx context.Context, roomID string, id int64, approve bool, by *Participant) (*Message, error) {
+	var m *Message
+	err := s.withTx(ctx, "decide room skill", func(tx *sql.Tx) error {
+		if err := asHost(ctx, tx, roomID, by); err != nil {
+			return err
+		}
+		k, err := scanSkill(tx.QueryRowContext(ctx, skillCols+`WHERE s.id = ? AND s.room_id = ? AND s.pending`, id, roomID))
+		if err != nil {
+			return err
+		}
+		body := fmt.Sprintf("approved %s's copy of the skill %s v%d.", k.Author, k.Name, k.Version)
+		q := `UPDATE skills SET pending = 0 WHERE id = ?`
+		if !approve {
+			body = fmt.Sprintf("refused %s's copy of the skill %s v%d: it is removed.", k.Author, k.Name, k.Version)
+			q = `DELETE FROM skills WHERE id = ?`
+		}
+		if _, err := tx.ExecContext(ctx, q, id); err != nil {
+			return fmt.Errorf("decide room skill: %w", err)
+		}
+		m, err = memberLine(ctx, tx, roomID, by, body)
+		return err
+	})
+	return m, err
+}
+
+// RemoveRoomSkill deletes room skill id of room with its versions, for a room admin by; the
+// personas that had it on lose it, and the chat says so. ErrNotFound.
+func (s *Store) RemoveRoomSkill(ctx context.Context, roomID string, id int64, by *Participant) (*Message, error) {
+	var m *Message
+	err := s.withTx(ctx, "remove room skill", func(tx *sql.Tx) error {
+		var name string
+		err := tx.QueryRowContext(ctx, `DELETE FROM skills WHERE id = ? AND room_id = ? RETURNING name`, id, roomID).Scan(&name)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("remove room skill: %w", err)
+		}
+		if m, err = memberLine(ctx, tx, roomID, by, "removed the room skill "+name+"."); err != nil {
+			return err
+		}
+		return auditTx(ctx, tx, "", map[string]any{"skill": id, "name": name})
+	})
+	return m, err
 }

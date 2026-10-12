@@ -14,7 +14,7 @@ flowchart LR
     Store[("SQLite<br/>rooms, messages, docs,<br/>revisions, annotations,<br/>turns, sessions, profiles")]
   end
 
-  AdminC["Room admin<br/>(curl today, admin UI in spec 003)"]
+  AdminC["Instance admin<br/>(/admin, or curl)"]
   SMTP["SMTP relay<br/>(optional: magic links)"]
   LK["LiveKit<br/>(SFU + embedded TURN)"]
   STT["STT worker<br/>(Python, faster-whisper)"]
@@ -33,7 +33,7 @@ flowchart LR
   Creds[("Claude accounts<br/>config dir, read-only, or setup token in the OS keyring")]
 
   UI <-->|"HTTPS: REST + SSE"| API
-  AdminC -->|"HTTPS REST: rooms, invites, profiles"| API
+  AdminC -->|"HTTPS REST: rooms, invites, profiles, room exports and imports"| API
   API -->|"SMTP: magic links"| SMTP
   UI <-->|"postMessage bridge"| Frame
   UI <-->|"WebRTC audio<br/>TURN/TLS 443 or ICE/TCP"| LK
@@ -55,7 +55,8 @@ flowchart LR
 
 | Component | Exposes | Talks to | Auth |
 |---|---|---|---|
-| Room admin | nothing | room server: `GET/POST /api/rooms`, `PATCH/DELETE /api/rooms/{room}`, `GET/POST/DELETE .../invites`, `GET/DELETE /api/profiles`, `GET/DELETE /api/templates`, `GET/DELETE /api/skills` | admin token (one per server) |
+| Instance admin | nothing | room server: `GET/POST /api/rooms`, `PATCH/DELETE /api/rooms/{room}`, `GET/POST/DELETE .../invites`, `GET/DELETE /api/profiles`, `GET/DELETE /api/templates`, `GET/DELETE /api/skills`, and `/admin` with its `/api/admin/*` routes | admin token (one per server), or an `/admin` session |
+| Room admin | nothing | room server: rename, invites, room admins, overview and delete of their room, from the room page | profile cookie of a profile in `room_admins` |
 | Room page | nothing | room server (REST + SSE), LiveKit (WebRTC), document iframe (postMessage, validated) | room cookie, or the profile cookie |
 | Profile page | nothing | room server: `/api/profile/*` | profile cookie; recovery or emailed link token |
 | Document iframe | anchors and selections via postMessage | room page only | none: opaque origin, CSP sandbox, no cookie |

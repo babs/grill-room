@@ -250,21 +250,23 @@ func (s *Store) PublishVersion(ctx context.Context, profileID, id int64, author 
 // RemoveTemplate deletes template id with its versions. Room personas made from it keep their
 // copy. ErrPreset for a shipped template.
 func (s *Store) RemoveTemplate(ctx context.Context, id int64) error {
-	var preset sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT preset FROM persona_templates WHERE id = ?`, id).Scan(&preset)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrNotFound
-	}
-	if err != nil {
-		return fmt.Errorf("remove template %d: %w", id, err)
-	}
-	if preset.Valid {
-		return ErrPreset
-	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM persona_templates WHERE id = ?`, id); err != nil {
-		return fmt.Errorf("remove template %d: %w", id, err)
-	}
-	return nil
+	return s.withTx(ctx, "remove template", func(tx *sql.Tx) error {
+		var preset sql.NullString
+		err := tx.QueryRowContext(ctx, `SELECT preset FROM persona_templates WHERE id = ?`, id).Scan(&preset)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("remove template %d: %w", id, err)
+		}
+		if preset.Valid {
+			return ErrPreset
+		}
+		if err := auditTx(ctx, tx, "", nil); err != nil {
+			return err
+		}
+		return execOne(ctx, tx, `DELETE FROM persona_templates WHERE id = ?`, id)
+	})
 }
 
 // RoomPersona is a room's copy of a template, with the room's own changes.
