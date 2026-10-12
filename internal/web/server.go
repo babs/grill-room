@@ -53,6 +53,10 @@ const (
 // heartbeat keeps proxies from timing out an idle stream and re-checks access. A var for tests.
 var heartbeat = 20 * time.Second
 
+// afterAccessCheck runs between a stream's access check and its reads; tests delete the room
+// there, as a concurrent DELETE may.
+var afterAccessCheck atomic.Pointer[func(room string)]
+
 // Server serves the room API and UI.
 type Server struct {
 	bus     *bus.Bus
@@ -890,14 +894,31 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	w.WriteHeader(http.StatusOK)
 
 	var agentSent string
-	// sync re-checks access, then sends what the store holds past last. False ends the stream.
+	// gone sends "revoked" once the participant's access is gone, as a room deleted or an invite
+	// revoked mid-read fails the read that follows the access check.
+	revoked := false
+	gone := func() {
+		if _, err := s.authorize(r.Context(), sess.creds, room); errors.Is(err, store.ErrNotFound) && !revoked {
+			revoked = true
+			_, _ = io.WriteString(w, "event: revoked\ndata: {}\n\n")
+			flusher.Flush()
+		}
+	}
+	// send re-checks access, then sends what the store holds past last. False ends the stream.
+	var send func() bool
 	sync := func() bool {
+		ok := send()
+		if !ok {
+			gone()
+		}
+		return ok
+	}
+	send = func() bool {
 		if _, err := s.authorize(r.Context(), sess.creds, room); err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				_, _ = io.WriteString(w, "event: revoked\ndata: {}\n\n")
-				flusher.Flush()
-			}
 			return false
+		}
+		if f := afterAccessCheck.Load(); f != nil {
+			(*f)(room)
 		}
 		for {
 			msgs, err := s.bus.Store.Messages(r.Context(), room, last, replayBatch)
