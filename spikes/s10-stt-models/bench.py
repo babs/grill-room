@@ -9,8 +9,9 @@
 
 backend: whisper (faster-whisper int8), onnx (onnx-asr int8: Parakeet, Canary), kyutai and granite
 (transformers on torch CPU).
-glossary: none | hot | prompt | both. Whisper: hotwords, initial_prompt, or both. Granite: prompt adds
-its "Keywords:" list. Other backends ignore it.
+glossary: none | hot | prompt | both | sentence. Whisper: hotwords, initial_prompt, or both; sentence
+passes prompt.txt, the room server's own prompt for these terms (005-AC23), as initial_prompt.
+Granite: prompt adds its "Keywords:" list. Other backends ignore it.
 `audio` and `run` need the lab Job's venvs (job.sh); `report` needs only the standard library.
 """
 
@@ -103,6 +104,8 @@ class Whisper:
         self.m = WhisperModel(model, device="cpu", compute_type="int8", cpu_threads=threads)
         words = ", ".join(terms)
         prompt = f"Glossaire : {words}." if glossary in ("prompt", "both") else None
+        if glossary == "sentence":
+            prompt = SCRIPT.with_name("prompt.txt").read_text(encoding="utf-8").strip()
         hot = words if glossary in ("hot", "both") else None
         _, info = self.m.transcribe(
             np.zeros(16000, np.float32),
@@ -391,7 +394,7 @@ def main() -> None:
     r.add_argument("dir")
     r.add_argument("backend", choices=BACKENDS)
     r.add_argument("model")
-    r.add_argument("glossary", choices=["none", "hot", "prompt", "both"])
+    r.add_argument("glossary", choices=["none", "hot", "prompt", "both", "sentence"])
     r.add_argument("--threads", type=int, default=4)
     r.add_argument("--every", type=int, default=1)
     rep = sub.add_parser("report")

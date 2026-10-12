@@ -20,7 +20,7 @@ if [[ ! "$cpu" =~ ^[0-9]+$ || ! "$every" =~ ^[0-9]+$ ]]; then
     exit 2
 fi
 for spec in "$@"; do
-    if [[ ! "$spec" =~ ^[A-Za-z0-9._/-]+:[A-Za-z0-9._/-]+:(none|hot|prompt|both)$ ]]; then
+    if [[ ! "$spec" =~ ^[A-Za-z0-9._/-]+:[A-Za-z0-9._/-]+:(none|hot|prompt|both|sentence)$ ]]; then
         echo "bad spec: $spec" >&2
         exit 2
     fi
@@ -28,7 +28,7 @@ done
 runs="$(printf '"%s", ' "$@")"
 
 kubectl -n "$NS" create configmap s10-bench --from-file="$HERE/bench.py" --from-file="$HERE/script.json" \
-    --from-file="$HERE/job.sh" --dry-run=client -o yaml | kubectl -n "$NS" apply -f -
+    --from-file="$HERE/job.sh" --from-file="$HERE/prompt.txt" --dry-run=client -o yaml | kubectl -n "$NS" apply -f -
 kubectl -n "$NS" delete job "$name" --ignore-not-found
 sed -e "s/__NAME__/$name/; s/__CPU__/$cpu/; s/__MEM__/$mem/g; s/__THREADS__/$cpu/; s/__EVERY__/$every/" \
     -e "s|__RUNS__|${runs%, }|; s|__STORAGE_CLASS__|$STORAGE_CLASS|" "$HERE/job.yaml" | kubectl -n "$NS" apply -f -

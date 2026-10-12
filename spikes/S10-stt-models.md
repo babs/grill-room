@@ -41,6 +41,17 @@ Slow models ran on a subset, so compare them with `small` on the same lines:
 
 `small` gains only 0.2-0.3 s from 2 to 4 CPUs on these shared nodes.
 
+## 005-AC23: the room server's sentence prompt
+The shipped prompt is one French sentence built by the room server, glossary last: `prompt.txt` is what it served for these 68 terms in a room with Alice and its Grill persona (206 tokens). Same Job, 4-CPU limit, 38 lines:
+
+| Glossary | WER all / fr / en | Terms all / fr / en | Infer p50 / p95 s | Dropped |
+|---|---|---|---|---|
+| none | 0.32 / 0.37 / 0.05 | 0.33 / 0.24 / 0.85 | 3.53 / 4.03 | 0 |
+| prompt (comma list) | 0.23 / 0.27 / 0.02 | 0.55 / 0.47 / 1.00 | 3.91 / 4.67 | 1 |
+| sentence (shipped) | **0.19** / 0.22 / 0.02 | **0.65** / 0.58 / 1.00 | 3.88 / 4.79 | 0 |
+
+The sentence beats the comma list on every column and turns no line into a list. `./run.sh glossary-4 4 3Gi 1 whisper:small:none whisper:small:prompt whisper:small:sentence`.
+
 ## Biases
 - Piper speaks English terms with French phonetics. 23 of 72 French term occurrences were missed by every model in every configuration: "rollout" came out as "relou" from all of them, "l'ingress" as "Aline KS". So French term accuracy tops out near 0.68 here. A real speaker who says the terms the English way should score higher; no recording exists in the repo to check.
 - The MLS voice (speaker 84) doubles French WER against SIWIS in every model. Some of its lines are garbled at the source.
