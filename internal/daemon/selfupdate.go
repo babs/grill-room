@@ -34,6 +34,16 @@ type SupervisorSettings struct {
 	UpdateInstance string `json:"update_instance,omitempty"`
 	// MaxTurns is the global cap on concurrent turns, DefaultMaxTurns when 0 (003-AC18).
 	MaxTurns int `json:"max_turns,omitempty"`
+	// RetentionDays is how long monitor.db keeps a turn, DefaultRetentionDays when 0 (003-AC28).
+	RetentionDays int `json:"retention_days,omitempty"`
+}
+
+// retentionDays is the retention in force.
+func (s SupervisorSettings) retentionDays() int {
+	if s.RetentionDays == 0 {
+		return DefaultRetentionDays
+	}
+	return s.RetentionDays
 }
 
 // maxTurns is the cap in force.
@@ -53,7 +63,8 @@ func loadSupervisorSettings(path string) (SupervisorSettings, error) {
 	if err == nil {
 		err = json.Unmarshal(b, &set)
 	}
-	if err != nil || (set.UpdateChannel != "github" && set.UpdateChannel != "instance") || set.MaxTurns < 0 || set.MaxTurns > MaxTurnsLimit {
+	if err != nil || (set.UpdateChannel != "github" && set.UpdateChannel != "instance") || set.MaxTurns < 0 || set.MaxTurns > MaxTurnsLimit ||
+		set.RetentionDays < 0 || set.RetentionDays > MaxRetentionDays {
 		return SupervisorSettings{UpdateChannel: "github"}, fmt.Errorf("%s: %w", path, errors.Join(err, errors.New("falling back to the GitHub channel")))
 	}
 	return set, nil

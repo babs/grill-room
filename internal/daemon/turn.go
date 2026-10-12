@@ -11,6 +11,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -141,9 +142,13 @@ func (r *roomRun) runTurn(ctx context.Context, tok string, id int64) {
 	r.d.turnEvent(TurnEvent{Room: r.room.String(), ID: id, Phase: "start"})
 	var job turn.Job
 	var res turn.Result
+	// ev gathers what execute learns of the run; the rest is set here at the end.
+	var ev TurnEvent
 	defer func() {
-		r.d.turnEvent(TurnEvent{Room: r.room.String(), ID: id, Phase: "end", Error: ended, DurationMS: time.Since(start).Milliseconds(),
-			QueueMS: queued.Milliseconds(), Persona: job.Persona, ContextTokens: res.ContextTokens, ContextWindow: res.ContextWindow})
+		ev.Room, ev.ID, ev.Phase, ev.Error, ev.DurationMS, ev.QueueMS = r.room.String(), id, "end", ended, time.Since(start).Milliseconds(), queued.Milliseconds()
+		ev.Persona, ev.ContextTokens, ev.ContextWindow = job.Persona, res.ContextTokens, res.ContextWindow
+		ev.Cause, ev.AskedModel, ev.AskedEffort = job.Cause, job.Model, job.Effort
+		r.d.turnEvent(ev)
 	}()
 	ids := strconv.FormatInt(id, 10)
 	jctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -184,7 +189,7 @@ func (r *roomRun) runTurn(ctx context.Context, tok string, id int64) {
 			tctx, cancel := context.WithTimeout(cctx, timeout)
 			log.Info("turn_started", zap.Bool("resume", job.Resume != ""), zap.String("persona", job.Persona), zap.Duration("queued", waited))
 			r.count(1)
-			res = r.execute(tctx, tok, id, job)
+			res = r.execute(tctx, tok, id, job, &ev)
 			r.count(-1)
 			release()
 			switch {
@@ -262,8 +267,9 @@ func (r *roomRun) postState(ctx context.Context, tok string, id int64, queued bo
 // count moves the room's count of running turns.
 func (r *roomRun) count(n int) { r.update(func(s *RoomStatus) { s.Running += n }) }
 
-// execute fetches the workspace, runs the turn in a free sandbox and shapes the result.
-func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Job) turn.Result {
+// execute fetches the workspace, runs the turn in a free sandbox and shapes the result. It notes
+// in ev the model and effort the turn ran with, its tokens, cost and workspace size.
+func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Job, ev *TurnEvent) turn.Result {
 	ids := strconv.FormatInt(id, 10)
 	px, err := r.d.proxyFor(r.room.String())
 	if err != nil {
@@ -285,6 +291,7 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 	}
 	defer ws.Close()
 	run, capped := r.d.runSettings(job)
+	ev.Model, ev.Effort = run.Model, run.Effort
 	if capped {
 		r.d.o.Log.Info("turn_capped", zap.String("persona", job.Persona), zap.String("asked", turn.Level{Model: job.Model, Effort: job.Effort}.String()),
 			zap.String("runs", run.String()))
@@ -300,9 +307,10 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 		r.d.o.Log.Info("turn_skills", zap.String("persona", job.Persona), zap.Any("skills", job.Skills))
 	}
 	model := run.Model
+	wsr := &countingReader{r: ws}
 	out, err := ag.RunTurn(ctx, sandbox.TurnInput{
 		Plugin: plugin, Bearer: px.Bearer, Autocompact: knownAutocompact(job.Autocompact),
-		Workspace: ws, Prompt: job.Prompt, System: job.System, Model: model, Effort: run.Effort,
+		Workspace: wsr, Prompt: job.Prompt, System: job.System, Model: model, Effort: run.Effort,
 		Resume: job.Resume, SessionSize: job.SessionSize, SessionSHA256: job.SessionSHA256,
 		FetchSession: func(ctx context.Context) ([]byte, error) {
 			resp, err := r.get(ctx, tok, "sessions/"+job.Resume)
@@ -313,6 +321,7 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 			return io.ReadAll(io.LimitReader(resp.Body, maxSession))
 		},
 	})
+	ev.WorkspaceBytes = wsr.n.Load()
 	if err != nil {
 		return turn.Result{Error: err.Error()}
 	}
@@ -320,6 +329,8 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 	if m := out.Result.Model(); m != "" {
 		model = m
 	}
+	ev.Model, ev.CostUSD = model, out.Result.TotalCostUSD
+	ev.TokensIn, ev.TokensOut, ev.TokensCacheRead, ev.TokensCacheWrite = out.Result.Tokens()
 	tokens, window := out.Result.Context()
 	return turn.Result{Synthesis: out.Result.Result, Model: model, Effort: run.Effort, Capped: capped, SessionID: out.Result.SessionID, SessionOffset: out.SessionOffset,
 		Session: out.Session, Changes: out.Changes, ContextTokens: tokens, ContextWindow: window}
@@ -427,4 +438,17 @@ func (r *roomRun) fetchFiles(ctx context.Context, tok, ids, dir string, files []
 	}
 	_, _, err = ingest(dir, resp.Body, want)
 	return err
+}
+
+// countingReader counts the bytes read through it; atomic, as the sandbox may read from another
+// goroutine.
+type countingReader struct {
+	r io.Reader
+	n atomic.Int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n.Add(int64(n))
+	return n, err
 }

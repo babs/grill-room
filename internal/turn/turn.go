@@ -90,6 +90,8 @@ type Job struct {
 	Skills []Skill `json:"skills,omitempty"`
 	// Autocompact is the persona's context size for claude -p --autocompact; 0 for auto (003-AC24).
 	Autocompact int `json:"autocompact,omitempty"`
+	// Cause is why the turn runs, as its preamble says; the daemon's monitoring records it (003-AC27).
+	Cause string `json:"cause,omitempty"`
 }
 
 // Skill names a skill a turn loads, at its pinned version.

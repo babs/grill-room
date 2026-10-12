@@ -174,3 +174,46 @@ func TestWorkspaceFetchEndsHostQueue(t *testing.T) {
 		t.Fatalf("still queued after its workspace fetch: %+v", got)
 	}
 }
+
+// 003-AC26: each daemon's stream says whether it hosts the room's agent and, when that changes,
+// the room's parallel mode; the job names why the turn runs, for the host's monitoring (003-AC27).
+func TestDaemonRoomEvent(t *testing.T) {
+	e := newEnv(t)
+	r := newTurnRoom(t, e)
+	bob := e.daemonFor(t, r.room, "Bob")
+	e.connect(t, r.room, bob, true)
+	want := func(d *testDaemon, data string) {
+		t.Helper()
+		for {
+			if ev := nextEvent(t, d.events, "room"); ev.data == data {
+				return
+			}
+		}
+	}
+	want(r.alice, `{"host":true,"parallel_turns":false}`)
+	want(bob, `{"host":false,"parallel_turns":false}`)
+	if code, b := e.do(t, "PATCH", "/api/rooms/"+r.room+"/agent", r.alice.p.Token, map[string]bool{"parallel_turns": true}); code != http.StatusNoContent {
+		t.Fatalf("parallel: %d %s", code, b)
+	}
+	want(r.alice, `{"host":true,"parallel_turns":true}`)
+	want(bob, `{"host":false,"parallel_turns":true}`)
+	tn := e.press(t, r, r.alice, r.alice.p.Token, false)
+	if job := e.job(t, r, r.alice, tn.ID); job.Cause != "pressed by Alice" {
+		t.Fatalf("job cause %q", job.Cause)
+	}
+}
+
+// 003-AC22: a persona's trigger reads "every round" for one round, "every N rounds" otherwise.
+func TestEveryRounds(t *testing.T) {
+	for n, want := range map[int]string{1: "every round", 2: "every 2 rounds", 10: "every 10 rounds"} {
+		if got := everyRounds(n); got != want {
+			t.Errorf("everyRounds(%d) = %q", n, got)
+		}
+		if got := triggerText(&store.RoomPersona{EveryN: n}); got != "on demand and "+want {
+			t.Errorf("triggerText(%d) = %q", n, got)
+		}
+	}
+	if got := triggerText(&store.RoomPersona{}); got != "on demand" {
+		t.Errorf("triggerText(0) = %q", got)
+	}
+}

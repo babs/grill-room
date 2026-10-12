@@ -138,7 +138,7 @@ func (s *Server) chainLinks(ctx context.Context, done *store.Turn, synthesis str
 		s.log.Error("chain_failed", zap.String("room", room), zap.Error(err))
 	}
 	for _, p := range due {
-		links = append(links, link{p, store.LinkEveryN, fmt.Sprintf("every %d rounds", p.EveryN)})
+		links = append(links, link{p, store.LinkEveryN, everyRounds(p.EveryN)})
 	}
 	var dropped []string
 	var c store.Chain

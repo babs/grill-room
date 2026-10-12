@@ -11,149 +11,17 @@
 <link rel="manifest" href="/site.webmanifest">
 <meta name="theme-color" content="#159F8C">
 <link rel="stylesheet" href="/static/admin.css">
-<script src="/static/admin.js" defer></script>
+<script type="importmap">{"imports": {
+  "preact": "/static/vendor/preact.js",
+  "preact/hooks": "/static/vendor/preact-hooks.js",
+  "@preact/signals-core": "/static/vendor/signals-core.js",
+  "@preact/signals": "/static/vendor/signals.js",
+  "htm": "/static/vendor/htm.js",
+  "htm/preact": "/static/vendor/htm-preact.js"
+}}</script>
+<script type="module" src="/static/admin.js"></script>
 </head>
 <body>
-<header>
-  <h1>grill-room daemon</h1>
-  <span id="host"></span>
-  <span id="self-sig" class="badge" hidden></span>
-  <button type="button" id="stop">Stop the daemon</button>
-</header>
-<p id="banner" role="alert" hidden></p>
-<ul id="account-warnings" role="alert" hidden></ul>
-<p id="relax-banner" class="danger" role="alert" hidden>
-  Unsigned worker binaries are accepted for: <span id="relax-list"></span>. Switch it off below once you are done testing.
-</p>
-<p id="update" hidden>
-  Version <strong id="update-version"></strong> of the supervisor is available from <span id="update-from"></span>.
-  <button type="button" id="update-apply">Update and restart</button>
-  <span id="update-status" role="status"></span>
-</p>
-<main id="main" hidden>
-  <section aria-labelledby="room-title">
-    <h2 id="room-title">Room</h2>
-    <p id="room"></p>
-    <p id="pairing" role="status"></p>
-    <p id="approve" hidden>
-      Check that the room page shows the code <strong id="code"></strong>, then
-      <a id="approve-link" target="_blank" rel="noopener noreferrer">approve in the room</a>.
-    </p>
-    <form id="room-form">
-      <label>Room link <input id="room-url" type="url" required placeholder="https://.../r/..." size="50"></label>
-      <button type="submit">Pair with this room</button>
-    </form>
-    <p id="room-error" role="alert"></p>
-  </section>
-  <section aria-labelledby="instances-title" id="instances-section" hidden>
-    <h2 id="instances-title">Instances</h2>
-    <p class="hint">One worker per room server. The room above belongs to the last one you paired with.</p>
-    <ul id="instances"></ul>
-    <form id="max-turns-form">
-      <label>Turns at once, across every instance and room <input id="max-turns" type="number" min="1" max="16" required></label>
-      <button type="submit">Set</button>
-      <span id="max-turns-status" role="status"></span>
-    </form>
-    <p class="hint" id="concurrency"></p>
-    <label><input id="autostart" type="checkbox"> Start at login</label>
-    <span id="autostart-status" role="status"></span>
-  </section>
-  <section aria-labelledby="accounts-title" id="accounts-section" hidden>
-    <h2 id="accounts-title">Claude accounts</h2>
-    <p class="hint">Each account has its own proxy in this supervisor: the workers and their sandboxes get its address, never a token. Rooms see none of this page.</p>
-    <ul id="accounts"></ul>
-    <form id="account-form">
-      <label>Name <input id="account-name" required size="16" autocomplete="off" spellcheck="false" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,63}"></label>
-      <label>Kind
-        <select id="account-kind">
-          <option value="config_dir">a Claude Code config dir</option>
-          <option value="setup_token">a setup token</option>
-        </select>
-      </label>
-      <label id="account-dir-label">Config dir <input id="account-dir" size="30" autocomplete="off" spellcheck="false" placeholder="empty for ~/.claude"></label>
-      <label id="account-token-label" hidden>Token <input id="account-token" type="password" size="30" autocomplete="off" spellcheck="false" placeholder="from claude setup-token"></label>
-      <button type="submit">Add the account</button>
-      <span id="account-status" role="status"></span>
-    </form>
-    <p class="hint">A config dir is read only: Claude Code, run by you, refreshes its login. A setup token goes to the OS keyring, or to a file only you can read; it is not shown again.</p>
-  </section>
-  <section aria-labelledby="trust-title" id="trust-section" hidden>
-    <h2 id="trust-title">Signatures and updates</h2>
-    <dl>
-      <dt>This supervisor</dt><dd id="self-detail"></dd>
-      <dt>Trusted root</dt><dd id="root"></dd>
-      <dt>Last update check</dt><dd id="checked"></dd>
-    </dl>
-    <form id="channel-form">
-      <label>Update from
-        <select id="channel">
-          <option value="github">GitHub releases (default)</option>
-          <option value="instance">the version an instance serves</option>
-        </select>
-      </label>
-      <select id="channel-instance" aria-label="Instance to follow" hidden></select>
-      <button type="submit">Use this channel</button>
-      <span id="channel-status" role="status"></span>
-    </form>
-    <h3 id="relax-title">Unsigned binaries</h3>
-    <p class="hint">Off by default. While on, the instance's worker runs whatever binary it serves, signed or not: for testing local builds only. To switch it on, type the instance's host exactly as in its URL.</p>
-    <form id="relax-form">
-      <select id="relax-instance" aria-label="Instance"></select>
-      <label>Host <input id="relax-host" required size="30" autocomplete="off" spellcheck="false"></label>
-      <button type="submit">Accept unsigned binaries</button>
-      <span id="relax-status" role="status"></span>
-    </form>
-    <h3 id="keys-title">Trusted dev keys</h3>
-    <p class="hint">Worker binaries signed with one of these cosign public keys run like project releases. Keys also load from the dev-keys folder of the supervisor's config.</p>
-    <ul id="dev-keys"></ul>
-    <form id="key-form">
-      <label>Name <input id="key-name" required size="16" autocomplete="off" spellcheck="false" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,63}"></label>
-      <label>Public key <textarea id="key-pem" required rows="4" cols="50" spellcheck="false" placeholder="-----BEGIN PUBLIC KEY-----"></textarea></label>
-      <button type="submit">Trust this key</button>
-      <span id="key-status" role="status"></span>
-    </form>
-  </section>
-  <section aria-labelledby="host-title" class="per-instance">
-    <h2 id="host-title">This machine</h2>
-    <dl>
-      <dt>Docker</dt><dd id="docker"></dd>
-      <dt>Sandbox image</dt><dd id="image"></dd>
-      <dt>Hosting the agent</dt><dd id="can-host"></dd>
-    </dl>
-    <button type="button" id="recheck">Check again</button>
-  </section>
-  <section aria-labelledby="cap-title" class="per-instance">
-    <h2 id="cap-title">Host cap</h2>
-    <p class="hint">A persona asking for more runs at this cap until you approve it in the room.</p>
-    <form id="settings-form">
-      <label>Max model <select id="max-model"><option value="">no cap</option></select></label>
-      <label>Max effort <select id="max-effort"><option value="">no cap</option></select></label>
-      <label><input id="approve-all" type="checkbox"> Approve every new persona and persona change</label>
-      <button type="submit">Save</button>
-      <span id="settings-status" role="status"></span>
-    </form>
-  </section>
-  <section aria-labelledby="egress-title" class="per-instance">
-    <h2 id="egress-title">Egress allowlist</h2>
-    <p class="hint">The sandbox reaches these domains, and nothing else, through its proxy and over HTTPS only. A leading dot, as in .example.com, also allows every subdomain. Anthropic's hosts stay blocked whatever the list says.</p>
-    <ul id="allowlist"></ul>
-    <form id="allowlist-form">
-      <label>Domain <input id="allowlist-add" required placeholder="example.com" size="30" autocomplete="off" spellcheck="false"></label>
-      <button type="submit">Allow</button>
-      <span id="allowlist-status" role="status"></span>
-    </form>
-    <h3 id="denied-title">Denied requests</h3>
-    <p class="hint">What the proxy refused in the current room's sandbox, newest first.</p>
-    <p id="denied-empty">None yet.</p>
-    <table id="denied" aria-labelledby="denied-title" hidden>
-      <thead><tr><th scope="col">Time</th><th scope="col">Host</th></tr></thead>
-      <tbody></tbody>
-    </table>
-  </section>
-  <section aria-labelledby="logs-title">
-    <h2 id="logs-title">Logs</h2>
-    <pre id="logs"></pre>
-  </section>
-</main>
+<div id="app"></div>
 </body>
 </html>

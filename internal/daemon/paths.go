@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/babs/grill-room/internal/sandbox"
 )
 
 // Paths are the supervisor's roots; each instance has its own instances/<id>/ under every root.
@@ -126,6 +128,8 @@ type Instance struct {
 	Version string `json:"version,omitempty"`
 	// Relax runs its binaries even unsigned: off by default, switched on by typing its host (003-AC4).
 	Relax bool `json:"accept_unsigned,omitempty"`
+	// Limits replace the supervisor's sandbox limits for this instance, set on the page (003-AC26).
+	Limits *sandbox.Limits `json:"limits,omitempty"`
 }
 
 // accountFor names the account room's turns use (003-AC13).

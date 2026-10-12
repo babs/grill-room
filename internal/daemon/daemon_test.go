@@ -268,6 +268,11 @@ func TestPairAndConnect(t *testing.T) {
 	d.o.Docker = dockerUp
 	d.Refresh(context.Background())
 	waitFor(t, "room sees can_host", func() bool { ds := rs.daemons(t, alice); return len(ds) == 1 && ds[0].CanHost })
+	// 003-AC26: elected, the daemon hears it hosts the room's agent, parallel mode off.
+	waitFor(t, "told it hosts", func() bool {
+		rs := d.Status().Rooms
+		return len(rs) == 1 && rs[0].Host != nil && *rs[0].Host && !rs[0].ParallelTurns
+	})
 
 	// A dropped connection is retried with backoff.
 	rs.ts.CloseClientConnections()

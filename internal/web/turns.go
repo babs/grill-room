@@ -505,7 +505,7 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request, d *store.Daemon,
 		return
 	}
 	job := turn.Job{ID: t.ID, Prompt: t.Prompt, Resume: t.Resume, TimeoutSeconds: int(s.opts.TurnTimeout / time.Second),
-		Persona: t.PersonaName, System: t.PersonaText, Model: t.ReqModel, Effort: t.ReqEffort}
+		Persona: t.PersonaName, System: t.PersonaText, Model: t.ReqModel, Effort: t.ReqEffort, Cause: t.Cause}
 	// The host's approval holds for this persona on the daemon it was given for only (002-AC20).
 	if p, err := s.bus.Store.RoomPersona(r.Context(), d.RoomID, t.PersonaID); err == nil {
 		job.Approved, job.Autocompact = p.Cap.Approved(d.ID), p.Autocompact

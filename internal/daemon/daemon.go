@@ -104,6 +104,10 @@ type RoomStatus struct {
 	// host's global cap (003-AC18).
 	Running int `json:"running,omitempty"`
 	Queued  int `json:"queued,omitempty"`
+	// Host says whether this daemon hosts the room's agent, nil until the room says (a room server
+	// from before spec 003 phase 7 never does); ParallelTurns is the room's parallel mode (003-AC26).
+	Host          *bool `json:"host,omitempty"`
+	ParallelTurns bool  `json:"parallel_turns,omitempty"`
 }
 
 // Image is the sandbox image turns run in.
@@ -677,6 +681,14 @@ func (r *roomRun) stream(ctx context.Context, tok string) error {
 			}
 			if json.Unmarshal([]byte(line[len("data: "):]), &t) == nil && r.takeTurn(t.ID) {
 				wg.Go(func() { r.runTurn(ctx, tok, t.ID) })
+			}
+		case strings.HasPrefix(line, "data: ") && event == "room":
+			var info struct {
+				Host     bool `json:"host"`
+				Parallel bool `json:"parallel_turns"`
+			}
+			if json.Unmarshal([]byte(line[len("data: "):]), &info) == nil {
+				r.update(func(s *RoomStatus) { s.Host, s.ParallelTurns = &info.Host, info.Parallel })
 			}
 		case strings.HasPrefix(line, "data: ") && event == "revoked":
 			return errRevoked

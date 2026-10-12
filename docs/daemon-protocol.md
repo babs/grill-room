@@ -64,7 +64,7 @@ A closed stdin means the same as `stop`, so a worker whose supervisor died stops
 |---|---|---|
 | `status` | `status`, the page's view of the worker; `update.served` is the version its room server hands out; `rooms` lists each room's pairing, connection, and turns `running` and `queued` | whenever it changes, checked every 250 ms |
 | `metrics` | `metrics`: `uptime_seconds`, `turns`, `failed_turns`, `heap_bytes`, `goroutines` | at start, then every 30 s |
-| `turn` | `turn`: `room`, `id`, `phase` (`start` or `end`), `error`, `duration_ms`, and at the end `queue_ms`, the wait for a slot, `persona`, and the session's `context_tokens` and `context_window` (absent when unknown) | as a turn starts and ends |
+| `turn` | `turn`: `room`, `id`, `phase` (`start` or `end`), `error`, `duration_ms`, and at the end `queue_ms`, the wait for a slot, `persona`, the session's `context_tokens` and `context_window`, `cause`, `asked_model` and `asked_effort`, `model` and `effort` as run, `tokens_in`, `tokens_out`, `tokens_cache_read` and `tokens_cache_write` summed over every model claude called, `cost_usd` from claude's `total_cost_usd`, and `workspace_bytes`, the workspace tar's size. Absent fields are unknown | as a turn starts and ends |
 | `acquire` | `slot`, a number the worker picks; `turn`: `room`, `id` | before each turn, version 3: the supervisor answers `grant`, or `wait` then `grant` |
 | `release` | `slot` | once the turn ran, or when it gives up waiting |
 | `log` | `log`, one zap JSON entry | for every log line. The supervisor re-encodes it before writing it to its stderr and to the page's log: it sets `instance` itself, and escapes control characters, C1 codes and Unicode format characters (bidi overrides, zero-width), so a worker binary cannot drive the terminal or fake a line. Entries over 16 KiB are dropped. The worker's stderr gets the same treatment, one entry per line with `"stream":"stderr"` |
@@ -72,6 +72,20 @@ A closed stdin means the same as `stop`, so a worker whose supervisor died stops
 ## Global cap
 
 The supervisor lets at most `max_turns` turns run at once, 2 by default, across every worker (003-AC18). A turn past it waits in one queue, first in first out, whatever its instance and room. A release, a worker's exit, or a higher cap grants the next ones. The page sets the cap, saved in `supervisor.json`, and shows the turns holding and waiting for a slot, with the slots granted since start, how many waited, and the average and longest wait.
+
+## Monitoring
+
+The supervisor records every `turn` end in `monitor.db`, a SQLite file in its state directory, owner-only (003-AC27). A row holds the instance, room, persona and the account the room used at that moment, the event's fields, and a status sorted from the error: `ok`, `cut off`, `conflict` (the room refused the result for a document conflict), `expired` (the turn ran out of time, or the Claude login expired) or `failed`. The page lists the latest 500 turns a filter matches, sums them per account and day, and exports every match as CSV. Text cells starting with `=`, `+`, `-`, `@`, a tab or a carriage return get a leading `'` so that a spreadsheet does not run them.
+
+Rows older than the retention, 30 days unless the page sets 1 to 3650 in `supervisor.json`, are deleted at start, daily, and when the page shortens it (003-AC28).
+
+The page shows four alerts (003-AC29): a Claude account's expiry warning, a running worker whose binary nobody signed, a persona whose latest recorded context is above 80% of its window in a room still served, and a turn waiting more than 10 minutes for a slot.
+
+## Admin page
+
+The page is written with Preact, htm and @preact/signals, served from `internal/daemon/ui/vendor/` as unmodified ESM files with their licenses, and mapped by an import map that the CSP admits by its hash. No CDN, no build step. `tools/ui/package.json` pins the versions; `make ui-vendor` copies them again, and `make ui-check` (part of `make lint`) runs `tsc --checkJs` on the page's JSDoc types.
+
+The room's stream tells each daemon whether it hosts the room's agent and whether the room runs personas in parallel: a `room` event, `{"host":true,"parallel_turns":false}`, sent after `hello` and whenever either changes. Daemons from before ignore it.
 
 ## Claude accounts
 

@@ -16,6 +16,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/babs/grill-room/internal/monitor"
 	"github.com/babs/grill-room/internal/sandbox"
 )
 
@@ -47,6 +48,8 @@ type SupervisorOptions struct {
 	Stderr io.Writer
 	Ring   *Ring
 	Log    *zap.Logger
+	// Monitor records every turn the workers end (003-AC27); nil records none.
+	Monitor *monitor.DB
 	// Docker removes a crashed worker's sandboxes; nil leaves them for the next run of that room.
 	Docker sandbox.Runner
 	// Restart ends the supervisor so that main starts the updated binary.
@@ -104,6 +107,8 @@ type worker struct {
 	// version and trust describe the binary the worker runs; served is the version its instance
 	// hands out, as last seen.
 	version, trust, devKey, served string
+	// unsigned is a binary nobody signed, run under the relax toggle.
+	unsigned bool
 	// reload restarts the worker at once, for a new binary or a new trust policy.
 	reload bool
 	// sentAccess is the last access the worker took, as JSON; accessMu orders the pushes.
@@ -137,6 +142,12 @@ type InstanceView struct {
 	Connection string     `json:"connection,omitempty"`
 	Metrics    *Metrics   `json:"metrics,omitempty"`
 	LastTurn   *TurnEvent `json:"last_turn,omitempty"`
+	// Unsigned is a running worker whose binary nobody signed (003-AC29).
+	Unsigned bool `json:"unsigned,omitempty"`
+	// Limits are its sandboxes' CPUs and memory (003-AC26).
+	Limits sandbox.Limits `json:"limits"`
+	// Status is the running worker's own view: readiness, host cap, allowlist (003-AC26).
+	Status *Status `json:"status,omitempty"`
 }
 
 // errRefused is a worker the handshake turned down; restarting it would not help.
@@ -205,6 +216,9 @@ func (s *Supervisor) Start(ctx context.Context) {
 	if s.o.Accounts != nil {
 		s.wg.Go(func() { s.accountsLoop(ctx) })
 	}
+	if s.o.Monitor != nil {
+		s.wg.Go(func() { s.purgeLoop(ctx) })
+	}
 }
 
 // start runs a worker for in, which has none yet.
@@ -244,7 +258,7 @@ func (w *worker) run() {
 		w.reload = false
 		if !reload && errors.As(err, &refused) {
 			w.state, w.err = "refused", err.Error()
-			w.version, w.trust, w.devKey = "", "", ""
+			w.version, w.trust, w.devKey, w.unsigned = "", "", "", false
 		}
 		s.mu.Unlock()
 		if reload {
@@ -290,7 +304,7 @@ func (w *worker) once(log *zap.Logger) error {
 		return fmt.Errorf("worker binary: %w", err)
 	}
 	s.mu.Lock()
-	w.version, w.trust, w.devKey = res.Version, res.Trust, res.DevKey
+	w.version, w.trust, w.devKey, w.unsigned = res.Version, res.Trust, res.DevKey, res.Relaxed
 	// Unknown when the instance did not answer: the version its worker reports stays the last seen.
 	if res.Served != "" {
 		w.served = res.Served
@@ -397,6 +411,9 @@ func (w *worker) serve(conn *Conn, cmd *exec.Cmd, log *zap.Logger) error {
 	cfg.Instance = w.inst.ID
 	cfg.ConfigDir, cfg.StateDir, cfg.CacheDir = s.o.Paths.InstanceConfig(w.inst.ID), s.o.Paths.InstanceState(w.inst.ID), s.o.Paths.InstanceCache(w.inst.ID)
 	cfg.Rooms, cfg.Pair, cfg.Access = slices.Clone(w.inst.Rooms), w.pair, access
+	if w.inst.Limits != nil {
+		cfg.Limits = *w.inst.Limits
+	}
 	w.pair = ""
 	w.state, w.err, w.pid, w.proto, w.conn, w.pending = "running", "", cmd.Process.Pid, agreed, conn, map[int64]chan Msg{}
 	w.sentAccess = nil
@@ -454,6 +471,7 @@ func (w *worker) serve(conn *Conn, cmd *exec.Cmd, log *zap.Logger) error {
 			w.set(func() { w.metrics = m.Metrics })
 		case "turn":
 			w.set(func() { w.lastTurn = m.Turn })
+			s.record(w, m.Turn)
 		case "log":
 			w.s.logLine(w.inst.ID, m.Log)
 		case "reply":
@@ -584,12 +602,82 @@ func (s *Supervisor) currentWorker() *worker {
 	return s.workers[s.current]
 }
 
-func (s *Supervisor) requestCurrent(ctx context.Context, m Msg) (Msg, error) {
-	w := s.currentWorker()
+// instanceOps is what the page changes on one instance: its host cap, its egress allowlist, its
+// denied list and its readiness checks (003-AC26).
+type instanceOps interface {
+	SetSettings(s Settings) error
+	SetAllowlist(ctx context.Context, list []string) error
+	Denied(ctx context.Context, n int) ([]sandbox.Denied, error)
+	Recheck(ctx context.Context)
+}
+
+// workerOps drives one instance's worker; an empty id is the instance the page shows.
+type workerOps struct {
+	s  *Supervisor
+	id string
+}
+
+// InstanceOps is the page's handle on instance id.
+func (s *Supervisor) InstanceOps(id string) (instanceOps, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.workers[id] == nil {
+		return nil, errors.New("no such instance")
+	}
+	return workerOps{s, id}, nil
+}
+
+func (o workerOps) worker() *worker {
+	o.s.mu.Lock()
+	defer o.s.mu.Unlock()
+	if o.id == "" {
+		return o.s.workers[o.s.current]
+	}
+	return o.s.workers[o.id]
+}
+
+func (o workerOps) request(ctx context.Context, m Msg) (Msg, error) {
+	w := o.worker()
 	if w == nil {
 		return Msg{}, errors.New("no room yet: pair with a room first")
 	}
 	return w.request(ctx, m)
+}
+
+// SetSettings saves the instance's host cap and approval mode.
+func (o workerOps) SetSettings(set Settings) error {
+	set, err := set.Normalize()
+	if err != nil {
+		return err
+	}
+	_, err = o.request(o.s.ctx, Msg{Type: "settings", Settings: &set})
+	return err
+}
+
+// SetAllowlist saves the instance's egress allowlist.
+func (o workerOps) SetAllowlist(ctx context.Context, list []string) error {
+	_, err := o.request(ctx, Msg{Type: "allowlist", Allowlist: list})
+	return err
+}
+
+// Denied lists the egress requests the instance's sandboxes were refused.
+func (o workerOps) Denied(ctx context.Context, n int) ([]sandbox.Denied, error) {
+	// No worker, or one still starting, has refused nothing yet.
+	if w := o.worker(); w == nil || w.isStarting() {
+		return []sandbox.Denied{}, nil
+	}
+	r, err := o.request(ctx, Msg{Type: "denied", N: n})
+	if r.Denied == nil {
+		r.Denied = []sandbox.Denied{}
+	}
+	return r.Denied, err
+}
+
+// Recheck re-runs the worker's readiness checks.
+func (o workerOps) Recheck(ctx context.Context) {
+	if _, err := o.request(ctx, Msg{Type: "recheck"}); err != nil {
+		o.s.o.Log.Warn("recheck_failed", zap.Error(err))
+	}
 }
 
 // SetRoom hands room to its instance's worker, starting the worker if the instance is new.
@@ -668,12 +756,18 @@ func (s *Supervisor) Instances() ([]InstanceView, string) {
 	for _, w := range s.workers {
 		v := InstanceView{ID: w.inst.ID, URL: w.inst.URL, Rooms: slices.Clone(w.inst.Rooms), State: w.state, Error: w.err, PID: w.pid,
 			Proto: w.proto, Restarts: w.restarts, Metrics: w.metrics, LastTurn: w.lastTurn, Version: w.version, Trust: w.trust,
-			AcceptUnsigned: w.inst.Relax, Account: w.inst.accountFor(""), RoomAccounts: maps.Clone(w.inst.RoomAccounts), CutOff: w.inst.CutOff}
+			AcceptUnsigned: w.inst.Relax, Account: w.inst.accountFor(""), RoomAccounts: maps.Clone(w.inst.RoomAccounts), CutOff: w.inst.CutOff,
+			Unsigned: w.unsigned && w.state == "running", Limits: s.o.Worker.Limits}
+		if w.inst.Limits != nil {
+			v.Limits = *w.inst.Limits
+		}
 		if s.o.Accounts != nil {
 			v.Requests = s.o.Accounts.Requests(w.inst.ID)
 		}
 		if w.status != nil {
 			v.Room, v.Connection, v.RoomStates = w.status.Room, w.status.Connection, w.status.Rooms
+			st := *w.status
+			v.Status = &st
 		}
 		out = append(out, v)
 	}
@@ -682,40 +776,20 @@ func (s *Supervisor) Instances() ([]InstanceView, string) {
 }
 
 // SetSettings saves the current instance's host cap and approval mode.
-func (s *Supervisor) SetSettings(set Settings) error {
-	set, err := set.Normalize()
-	if err != nil {
-		return err
-	}
-	_, err = s.requestCurrent(s.ctx, Msg{Type: "settings", Settings: &set})
-	return err
-}
+func (s *Supervisor) SetSettings(set Settings) error { return workerOps{s: s}.SetSettings(set) }
 
 // SetAllowlist saves the current instance's egress allowlist.
 func (s *Supervisor) SetAllowlist(ctx context.Context, list []string) error {
-	_, err := s.requestCurrent(ctx, Msg{Type: "allowlist", Allowlist: list})
-	return err
+	return workerOps{s: s}.SetAllowlist(ctx, list)
 }
 
 // Denied lists the egress requests the current room's sandbox was refused.
 func (s *Supervisor) Denied(ctx context.Context, n int) ([]sandbox.Denied, error) {
-	// No worker, or one still starting, has refused nothing yet.
-	if w := s.currentWorker(); w == nil || w.isStarting() {
-		return []sandbox.Denied{}, nil
-	}
-	r, err := s.requestCurrent(ctx, Msg{Type: "denied", N: n})
-	if r.Denied == nil {
-		r.Denied = []sandbox.Denied{}
-	}
-	return r.Denied, err
+	return workerOps{s: s}.Denied(ctx, n)
 }
 
 // Recheck re-runs the current worker's readiness checks.
-func (s *Supervisor) Recheck(ctx context.Context) {
-	if _, err := s.requestCurrent(ctx, Msg{Type: "recheck"}); err != nil {
-		s.o.Log.Warn("recheck_failed", zap.Error(err))
-	}
-}
+func (s *Supervisor) Recheck(ctx context.Context) { workerOps{s: s}.Recheck(ctx) }
 
 // Restart ends the supervisor so that main starts the updated binary.
 func (s *Supervisor) Restart() {

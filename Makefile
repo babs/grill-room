@@ -28,7 +28,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: ui-tools ui-vendor ui-check build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -146,7 +146,28 @@ test-offline:
 	docker run --rm --network none -e GRILL_ROOM_TEST_OFFLINE=1 -v '$(CURDIR)/internal/trust:/src:ro' \
 	  -v '$(CURDIR)/bin/trust.test:/trust.test:ro' -w /src debian:stable-slim /trust.test -test.v -test.run 'Offline|Release|DevKey'
 
-lint:
+# The admin page's libraries, pinned in tools/ui/package.json and copied unmodified with their
+# licenses: no CDN, no build step. index.html maps the bare imports to them.
+UI_VENDOR := internal/daemon/ui/vendor
+UI_MODULES := preact/dist/preact.mjs:preact.js preact/hooks/dist/hooks.mjs:preact-hooks.js \
+  @preact/signals-core/dist/signals-core.mjs:signals-core.js @preact/signals/dist/signals.mjs:signals.js \
+  htm/dist/htm.mjs:htm.js htm/preact/index.mjs:htm-preact.js
+ui-tools:
+	cd tools/ui && pnpm install --frozen-lockfile
+
+ui-vendor: ui-tools
+	rm -rf '$(UI_VENDOR)' && mkdir -p '$(UI_VENDOR)'
+	for m in $(UI_MODULES); do cp "tools/ui/node_modules/$${m%%:*}" '$(UI_VENDOR)'/"$${m#*:}" || exit 1; done
+	for p in preact htm @preact/signals @preact/signals-core; do \
+	  cp "tools/ui/node_modules/$$p/LICENSE" '$(UI_VENDOR)'/LICENSE-"$$(echo $$p | tr -d @ | tr / -)" || exit 1; \
+	  echo "$$p $$(node -p "require('./tools/ui/node_modules/$$p/package.json').version")"; \
+	done > '$(UI_VENDOR)/VERSIONS'
+
+# The page's JSDoc types, checked by tsc (003 Phase 7).
+ui-check: ui-tools
+	cd tools/ui && pnpm exec tsc -p tsconfig.json
+
+lint: ui-check
 	golangci-lint run ./...
 	@out=$$(git ls-files -co --exclude-standard '*.go' | xargs gofmt -l); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 	git ls-files -co --exclude-standard '*.sh' | xargs shellcheck

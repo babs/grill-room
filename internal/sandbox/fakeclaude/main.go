@@ -24,7 +24,7 @@
 // Any other prompt writes docs/notes.md. A prompt holding "code word is X" is remembered.
 //
 // The result reports a context use that grows with the session: the prompt and history sizes over
-// four, in a 200k window.
+// four, in a 200k window, and a fixed cost.
 package main
 
 import (
@@ -61,14 +61,21 @@ var (
 // window is the context window the fake reports.
 const window = 200_000
 
+// cost is the total_cost_usd the fake reports for every turn.
+const cost = 0.0125
+
 // result reports model, what --model asked for, beside a small side model, as claude does, and
-// used as the last request's context: input, cache read and cache creation tokens.
+// used as the last request's context: input, cache read and cache creation tokens. The turn's
+// tokens are that request's plus the side model's, at a fixed cost.
 func result(out io.Writer, model, sid, text string, isErr bool, used int64) int {
-	usage := map[string]any{"claude-" + model + "-fake": map[string]int64{"outputTokens": 120, "contextWindow": window},
-		"claude-side-fake": map[string]int64{"outputTokens": 3, "contextWindow": window}}
-	last := map[string]int64{"input_tokens": 3, "cache_read_input_tokens": used / 2, "cache_creation_input_tokens": used - used/2 - 3}
+	read, create := used/2, max(used-used/2-3, 0)
+	usage := map[string]any{
+		"claude-" + model + "-fake": map[string]int64{"inputTokens": 3, "outputTokens": 120, "cacheReadInputTokens": read,
+			"cacheCreationInputTokens": create, "contextWindow": window},
+		"claude-side-fake": map[string]int64{"inputTokens": 50, "outputTokens": 3, "contextWindow": window}}
+	last := map[string]int64{"input_tokens": 3, "cache_read_input_tokens": read, "cache_creation_input_tokens": create}
 	_ = json.NewEncoder(out).Encode(map[string]any{"type": "result", "subtype": "success", "is_error": isErr, "result": text, "session_id": sid,
-		"modelUsage": usage, "usage": last})
+		"modelUsage": usage, "usage": last, "total_cost_usd": cost})
 	if isErr {
 		return 1
 	}

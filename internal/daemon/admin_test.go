@@ -2,11 +2,15 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -192,5 +196,45 @@ func TestAdminActions(t *testing.T) {
 	}
 	if s, _ := e.req(t, "POST", "/api/stop", tok, "", nil); s != http.StatusNoContent || !e.stopped.Load() {
 		t.Fatalf("stop: %d", s)
+	}
+}
+
+// The page's import map runs under the CSP by its hash, and nothing else inline does; every
+// module it maps is served as JavaScript.
+func TestAdminImportMap(t *testing.T) {
+	e := newAdminEnv(t, newTestDaemon(t, nil))
+	req, _ := http.NewRequestWithContext(t.Context(), "GET", e.base+"/", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	m := regexp.MustCompile(`(?s)<script type="importmap">(.*?)</script>`).FindSubmatch(page)
+	if m == nil {
+		t.Fatal("no import map")
+	}
+	sum := sha256.Sum256(m[1])
+	want := "script-src 'self' 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "';"
+	if c := resp.Header.Get("Content-Security-Policy"); !strings.Contains(c, want) || strings.Contains(c, "unsafe") {
+		t.Fatalf("CSP %q, want %q", c, want)
+	}
+	if n := strings.Count(string(page), "<script"); n != 2 {
+		t.Fatalf("%d scripts in the page", n)
+	}
+	var im struct{ Imports map[string]string }
+	if err := json.Unmarshal(m[1], &im); err != nil || len(im.Imports) != 6 {
+		t.Fatalf("import map %s: %v", m[1], err)
+	}
+	for _, p := range append(slices.Collect(maps.Values(im.Imports)), "/static/admin.js", "/static/api.js", "/static/monitor.js") {
+		req, _ := http.NewRequestWithContext(t.Context(), "GET", e.base+p, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || !strings.Contains(resp.Header.Get("Content-Type"), "javascript") {
+			t.Fatalf("%s: %d %s", p, resp.StatusCode, resp.Header.Get("Content-Type"))
+		}
 	}
 }

@@ -1,0 +1,12 @@
+{
+  "name": "grill-room-ui-tools",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@preact/signals": "2.11.3",
+    "@preact/signals-core": "1.14.4",
+    "htm": "3.1.1",
+    "preact": "10.29.8",
+    "typescript": "6.0.3"
+  }
+}

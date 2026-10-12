@@ -35,7 +35,8 @@ func TestMain(m *testing.M) {
 // fakeWorker is a worker from another release: it only says hello at its version, reports a
 // status, answers requests and stops when told. "crash" exits right after its config, "mute"
 // never answers, "silent" never says hello, "early" talks before it, "served" reports that its
-// instance serves v9.9.9, "slots" asks for two slots and frees the first once granted.
+// instance serves v9.9.9, "slots" asks for two slots and frees the first once granted, "turns"
+// reports two ended turns.
 func fakeWorker(mode string) int {
 	proto, err := strconv.Atoi(mode)
 	if err != nil {
@@ -76,6 +77,19 @@ func fakeWorker(mode string) int {
 		}
 	}
 	logAccess(m.Config.Access)
+	b, _ := json.Marshal(map[string]any{"msg": "fake_limits", "limits": m.Config.Limits})
+	_ = conn.Send(Msg{Type: "log", Log: b})
+	if mode == "turns" {
+		for _, e := range []TurnEvent{
+			{Room: m.Config.Pair, ID: 1, Phase: "start"},
+			{Room: m.Config.Pair, ID: 1, Phase: "end", Persona: "Grill", Cause: "pressed by Alice", AskedModel: "opus", Model: "claude-sonnet-fake",
+				Effort: "high", DurationMS: 1500, QueueMS: 200, TokensIn: 5, TokensOut: 6, TokensCacheRead: 7, TokensCacheWrite: 8,
+				CostUSD: new(0.25), ContextTokens: 90, ContextWindow: 100, WorkspaceBytes: 4096},
+			{Room: m.Config.Pair, ID: 2, Phase: "end", Persona: "Scribe", Error: errCutOff.Error()},
+		} {
+			_ = conn.Send(Msg{Type: "turn", Turn: &e})
+		}
+	}
 	if mode == "slots" {
 		for i := range int64(2) {
 			_ = conn.Send(Msg{Type: "acquire", Slot: i + 1, Turn: &TurnEvent{Room: m.Config.Pair, ID: 10 + i}})
@@ -437,7 +451,7 @@ func TestSupervisorCleansUpAfterCrash(t *testing.T) {
 	if len(calls) < 1+len(want) || !slices.Equal(calls[1:1+len(want)], want) {
 		t.Fatalf("docker calls %q", calls)
 	}
-	if _, err := s.requestCurrent(context.Background(), Msg{Type: "recheck"}); err == nil {
+	if _, err := (workerOps{s: s}).request(context.Background(), Msg{Type: "recheck"}); err == nil {
 		t.Fatal("a request reached a crashed worker")
 	}
 }

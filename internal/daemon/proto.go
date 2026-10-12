@@ -130,6 +130,20 @@ type TurnEvent struct {
 	Persona       string `json:"persona,omitempty"`
 	ContextTokens int64  `json:"context_tokens,omitempty"`
 	ContextWindow int64  `json:"context_window,omitempty"`
+	// Also at the end, for the supervisor's monitoring (003-AC27): why the turn ran, the model and
+	// effort the persona asked for and those it ran with, its tokens summed over every model
+	// claude called, claude's cost estimate (nil when unknown) and the workspace tar's size.
+	Cause            string   `json:"cause,omitempty"`
+	AskedModel       string   `json:"asked_model,omitempty"`
+	AskedEffort      string   `json:"asked_effort,omitempty"`
+	Model            string   `json:"model,omitempty"`
+	Effort           string   `json:"effort,omitempty"`
+	TokensIn         int64    `json:"tokens_in,omitempty"`
+	TokensOut        int64    `json:"tokens_out,omitempty"`
+	TokensCacheRead  int64    `json:"tokens_cache_read,omitempty"`
+	TokensCacheWrite int64    `json:"tokens_cache_write,omitempty"`
+	CostUSD          *float64 `json:"cost_usd,omitempty"`
+	WorkspaceBytes   int64    `json:"workspace_bytes,omitempty"`
 }
 
 // maxLine bounds one protocol line: a status with a long allowlist, or a full denied list.

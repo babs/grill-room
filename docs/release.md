@@ -110,6 +110,7 @@ The `windows` job runs `go test ./...` without `-race`. These checks skip there:
 | `internal/sandbox/fakeclaude` `TestFakeClaude` | the fake claude runs only in the Linux sandbox and builds project names from POSIX paths |
 | `internal/daemon` `TestMigrateCutShort` | it makes a directory read-only, which Windows does not enforce |
 | `cmd/grill-room-daemon` `TestRunWithoutHandoffSocket` | it overflows the Unix socket path limit; Windows uses a named pipe |
+| `internal/monitor` `TestOpenOwnerOnly` | it checks mode bits; `monitor.db` sits in `%LOCALAPPDATA%`, which only the user reads |
 | `GRILL_ROOM_TEST_DOCKER` tests (`make test-docker`) | they need Docker; they already skip without that variable on every OS |
 
 Two assertions change on Windows:

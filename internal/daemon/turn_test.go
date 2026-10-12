@@ -328,9 +328,13 @@ func TestDaemonAutocompactAndContext(t *testing.T) {
 		if in.Autocompact != 300_000 {
 			return nil, fmt.Errorf("autocompact %d", in.Autocompact)
 		}
+		if _, err := io.Copy(io.Discard, in.Workspace); err != nil {
+			return nil, err
+		}
 		res := &sandbox.Result{Result: "Done.", SessionID: sid}
 		if err := json.Unmarshal([]byte(`{"usage": {"input_tokens": 5, "cache_read_input_tokens": 150000, "cache_creation_input_tokens": 15000},
-			"modelUsage": {"claude-haiku-x": {"outputTokens": 9, "contextWindow": 200000}}}`), res); err != nil {
+			"modelUsage": {"claude-haiku-x": {"inputTokens": 7, "outputTokens": 9, "cacheReadInputTokens": 300000, "cacheCreationInputTokens": 15000,
+			"contextWindow": 200000}}, "total_cost_usd": 0.042}`), res); err != nil {
 			return nil, err
 		}
 		return &sandbox.TurnOutput{Result: res, Session: []byte("x\n")}, nil
@@ -351,7 +355,10 @@ func TestDaemonAutocompactAndContext(t *testing.T) {
 		if e.Phase != "end" {
 			continue
 		}
-		if e.Persona != "Grill" || e.ContextTokens != 165_005 || e.ContextWindow != 200_000 {
+		// 003-AC27: and what the supervisor's monitoring records.
+		if e.Persona != "Grill" || e.ContextTokens != 165_005 || e.ContextWindow != 200_000 || e.Cause != "pressed by Alice" ||
+			e.Model != "claude-haiku-x" || e.TokensIn != 7 || e.TokensOut != 9 || e.TokensCacheRead != 300_000 || e.TokensCacheWrite != 15_000 ||
+			e.CostUSD == nil || *e.CostUSD != 0.042 || e.WorkspaceBytes < 512 || e.Error != "" {
 			t.Fatalf("end event %+v", e)
 		}
 		break

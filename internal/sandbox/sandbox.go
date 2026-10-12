@@ -53,6 +53,33 @@ type Limits struct {
 	EgressMemory string `json:"egress_memory"`
 }
 
+// Docker's --cpus and --memory syntax; the values become docker arguments.
+var (
+	cpusRe   = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
+	memoryRe = regexp.MustCompile(`^[0-9]+[bkmgBKMG]?$`)
+)
+
+// ValidCPUs reports a --cpus value: a number like 2 or 0.5, 0 for no limit.
+func ValidCPUs(v string) bool { return cpusRe.MatchString(v) }
+
+// ValidMemory reports a --memory value: a size like 4g or 256m, 0 for no limit.
+func ValidMemory(v string) bool { return memoryRe.MatchString(v) }
+
+// Validate rejects a value docker would not take; empty values leave Docker's default.
+func (l Limits) Validate() error {
+	for name, v := range map[string]string{"sandbox CPUs": l.CPUs, "egress proxy CPUs": l.EgressCPUs} {
+		if v != "" && !ValidCPUs(v) {
+			return fmt.Errorf("%s %q: want a number of CPUs like 2 or 0.5, 0 for no limit", name, v)
+		}
+	}
+	for name, v := range map[string]string{"sandbox memory": l.Memory, "egress proxy memory": l.EgressMemory} {
+		if v != "" && !ValidMemory(v) {
+			return fmt.Errorf("%s %q: want a size like 4g or 256m, 0 for no limit", name, v)
+		}
+	}
+	return nil
+}
+
 // limitFlags turns a cpus and memory pair into docker run flags.
 func limitFlags(cpus, memory string) []string {
 	var f []string
@@ -272,9 +299,14 @@ type Result struct {
 	Subtype   string `json:"subtype"`
 	// ModelUsage is keyed by model id; Claude Code may call a small model on the side.
 	ModelUsage map[string]struct {
-		OutputTokens  int64 `json:"outputTokens"`
-		ContextWindow int64 `json:"contextWindow"`
+		InputTokens              int64 `json:"inputTokens"`
+		OutputTokens             int64 `json:"outputTokens"`
+		CacheReadInputTokens     int64 `json:"cacheReadInputTokens"`
+		CacheCreationInputTokens int64 `json:"cacheCreationInputTokens"`
+		ContextWindow            int64 `json:"contextWindow"`
 	} `json:"modelUsage"`
+	// TotalCostUSD is claude's estimate of the turn's cost, nil when it reports none.
+	TotalCostUSD *float64 `json:"total_cost_usd"`
 	// Usage is the session's last request: claude 2.1.296 reports it there, while ModelUsage sums
 	// every request of the turn.
 	Usage struct {
@@ -289,6 +321,15 @@ type Result struct {
 func (r *Result) Context() (tokens, window int64) {
 	tokens = r.Usage.InputTokens + r.Usage.CacheReadInputTokens + r.Usage.CacheCreationInputTokens
 	return tokens, r.ModelUsage[r.Model()].ContextWindow
+}
+
+// Tokens sums the turn's tokens over every model claude called: input, output, cache read and
+// cache creation (003-AC27).
+func (r *Result) Tokens() (in, out, cacheRead, cacheWrite int64) {
+	for _, u := range r.ModelUsage {
+		in, out, cacheRead, cacheWrite = in+u.InputTokens, out+u.OutputTokens, cacheRead+u.CacheReadInputTokens, cacheWrite+u.CacheCreationInputTokens
+	}
+	return in, out, cacheRead, cacheWrite
 }
 
 // Model is the model that wrote most of the answer, or "" when claude reported none.

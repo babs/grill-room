@@ -19,7 +19,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -33,6 +32,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/babs/grill-room/internal/daemon"
+	"github.com/babs/grill-room/internal/monitor"
 	"github.com/babs/grill-room/internal/sandbox"
 	"github.com/babs/grill-room/internal/trust"
 )
@@ -122,23 +122,17 @@ func (c Config) Validate() error {
 		return fmt.Errorf("GRILL_ROOM_MAX_MODEL or GRILL_ROOM_MAX_EFFORT: %w", err)
 	}
 	for name, v := range map[string]string{"GRILL_ROOM_SANDBOX_CPUS": c.Limits.CPUs, "GRILL_ROOM_EGRESS_CPUS": c.Limits.EgressCPUs} {
-		if v != "" && !cpusRe.MatchString(v) {
+		if v != "" && !sandbox.ValidCPUs(v) {
 			return fmt.Errorf("%s %q: want a number of CPUs like 2 or 0.5, 0 for no limit", name, v)
 		}
 	}
 	for name, v := range map[string]string{"GRILL_ROOM_SANDBOX_MEMORY": c.Limits.Memory, "GRILL_ROOM_EGRESS_MEMORY": c.Limits.EgressMemory} {
-		if v != "" && !memoryRe.MatchString(v) {
+		if v != "" && !sandbox.ValidMemory(v) {
 			return fmt.Errorf("%s %q: want a size like 4g or 256m, 0 for no limit", name, v)
 		}
 	}
 	return nil
 }
-
-// Docker's --cpus and --memory syntax; the values become docker arguments.
-var (
-	cpusRe   = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
-	memoryRe = regexp.MustCompile(`^[0-9]+[bkmgBKMG]?$`)
-)
 
 // newLogger writes to stderr and to ring, which the local page shows.
 func newLogger(level string, stderr io.Writer, ring *daemon.Ring) (*zap.Logger, error) {
@@ -265,13 +259,20 @@ func supervise(ctx context.Context, cfg Config, host string, room *daemon.Room, 
 		Keys:  &daemon.DevKeys{Dir: cfg.Paths.DevKeys(), Log: logger},
 	}
 	bins.Init(insts)
+	mon, err := openMonitor(cfg.Paths.State)
+	if err != nil {
+		// The page still runs, without a history.
+		logger.Error("monitor_unavailable", zap.Error(err))
+	} else {
+		defer mon.Close() //nolint:errcheck // closed as the supervisor exits
+	}
 	var restart atomic.Bool
 	sup := daemon.NewSupervisor(daemon.SupervisorOptions{
 		Paths: cfg.Paths, Version: Version, Host: host, Accounts: accounts,
 		Worker: daemon.WorkerConfig{SandboxRoot: cfg.Paths.State, LogLevel: cfg.LogLevel, Model: cfg.Model, Image: cfg.Image,
 			Settings: cfg.Settings, Limits: cfg.Limits, CacheMB: cfg.CacheMB},
 		Binary: bins.Resolve, Bins: bins, Executable: exe, GitHub: cfg.GitHub,
-		Env: workerEnv(os.Environ()), Stderr: stderr, Ring: ring, Log: logger, Docker: sandbox.Docker,
+		Env: workerEnv(os.Environ()), Stderr: stderr, Ring: ring, Log: logger, Docker: sandbox.Docker, Monitor: mon,
 		Restart:   func() { restart.Store(true); stop() },
 		Autostart: autostart(exe),
 	})
@@ -463,4 +464,12 @@ func check(ctx context.Context, cfg Config, log *zap.Logger) error {
 		return errors.New("the sandbox holds the real token")
 	}
 	return nil
+}
+
+// openMonitor opens the turn history in the supervisor's state dir (003-AC27).
+func openMonitor(state string) (*monitor.DB, error) {
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		return nil, fmt.Errorf("create state dir: %w", err)
+	}
+	return monitor.Open(filepath.Join(state, "monitor.db"), nil)
 }

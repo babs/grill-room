@@ -104,9 +104,17 @@ func orDefault(s string) string {
 	return s
 }
 
+// everyRounds is a persona's "every N rounds" trigger in words.
+func everyRounds(n int) string {
+	if n == 1 {
+		return "every round"
+	}
+	return fmt.Sprintf("every %d rounds", n)
+}
+
 func triggerText(p *store.RoomPersona) string {
 	if p.EveryN > 0 {
-		return fmt.Sprintf("on demand and every %d rounds", p.EveryN)
+		return "on demand and " + everyRounds(p.EveryN)
 	}
 	return "on demand"
 }

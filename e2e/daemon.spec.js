@@ -24,7 +24,7 @@ test('daemon pairs through the room approval', async ({ browser, request, baseUR
     // 003-AC12: the Claude account is the supervisor's CLAUDE_CONFIG_DIR, read only, with its status.
     await expect(admin.locator('#accounts li').first()).toContainText('default');
     await expect(admin.locator('#accounts li').first()).toContainText('valid');
-    await expect(admin.locator('#account-warnings')).toBeHidden();
+    await expect(admin.locator('#alerts')).toBeHidden();
     await expect(admin.locator('#can-host')).toBeVisible();
     // The page reloads into the same session; the one-time link is spent.
     await admin.reload();
@@ -78,12 +78,14 @@ test('daemon page shows its signature and guards the unsigned toggle', async ({ 
     await expect(admin.locator('#relax-banner')).toBeHidden();
     await expect(admin.locator('#checked')).toContainText('127.0.0.1:9');
 
-    const accept = admin.getByRole('button', { name: 'Accept unsigned binaries' });
-    await admin.locator('#relax-host').fill('127.0.0.1');
+    const card = admin.locator('#instances li.instance', { hasText: baseURL });
+    const accept = card.getByRole('button', { name: 'Accept unsigned binaries' });
+    const host = card.getByLabel('To accept its unsigned binaries, type its host');
+    await host.fill('127.0.0.1');
     await accept.click();
-    await expect(admin.locator('#relax-status')).toContainText("type the instance's host exactly");
+    await expect(card.getByRole('status')).toContainText("type the instance's host exactly");
     await expect(admin.locator('#relax-banner')).toBeHidden();
-    await admin.locator('#relax-host').fill(new URL(baseURL).host);
+    await host.fill(new URL(baseURL).host);
     await accept.click();
     await expect(admin.locator('#relax-banner')).toBeVisible();
     await expect(admin.locator('#relax-banner')).toContainText(baseURL);

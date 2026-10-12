@@ -365,7 +365,30 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 		flusher.Flush()
 		return true
 	}
-	if !sendTurn() {
+	// sendRoom tells this daemon whether it hosts the room's agent and whether the room runs
+	// personas in parallel, when that changed; its admin page shows both (003-AC26).
+	var sentRoom string
+	sendRoom := func() bool {
+		room, err := s.bus.Store.Room(r.Context(), d.RoomID)
+		if err != nil {
+			return true
+		}
+		host, err := s.bus.Store.HostDaemon(r.Context(), d.RoomID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return true
+		}
+		b, _ := json.Marshal(map[string]bool{"host": host != nil && host.ID == d.ID, "parallel_turns": room.ParallelTurns})
+		if string(b) == sentRoom {
+			return true
+		}
+		sentRoom = string(b)
+		if _, err := fmt.Fprintf(w, "event: room\ndata: %s\n\n", b); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+	if !sendTurn() || !sendRoom() {
 		return
 	}
 	// alive re-checks the token: a revoked invite, a deleted room or a re-pairing ends the stream.
@@ -394,7 +417,7 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 			}
 			flusher.Flush()
 		case changed := <-live:
-			if changed == d.RoomID && (!alive() || !sendTurn()) {
+			if changed == d.RoomID && (!alive() || !sendTurn() || !sendRoom()) {
 				return
 			}
 		}

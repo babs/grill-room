@@ -227,7 +227,12 @@ func nextMessage(t *testing.T, ch <-chan sseEvent) store.Message {
 // expectRevokedThenClosed asserts the stream sends "revoked" and ends.
 func expectRevokedThenClosed(t *testing.T, ch <-chan sseEvent) {
 	t.Helper()
-	if ev := next(t, ch); ev.event != "revoked" {
+	// The stream says who hosts first (003-AC26); those events may come before.
+	ev := next(t, ch)
+	for ev.event == "room" {
+		ev = next(t, ch)
+	}
+	if ev.event != "revoked" {
 		t.Fatalf("got %+v, want revoked event", ev)
 	}
 	select {

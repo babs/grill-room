@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -578,5 +579,49 @@ func TestSandboxLabels(t *testing.T) {
 	}
 	if created != 7 {
 		t.Fatalf("%d objects created", created)
+	}
+}
+
+// 003-AC27: a turn's tokens sum every model claude called, and its cost is claude's
+// total_cost_usd, unknown when claude reports none (a zero cost stays known).
+func TestResultTokensAndCost(t *testing.T) {
+	for _, tc := range []struct {
+		in                    string
+		tin, tout, read, writ int64
+		cost                  string
+	}{
+		{`{}`, 0, 0, 0, 0, "unknown"},
+		{`{"total_cost_usd": 0.00093391, "modelUsage": {"claude-haiku-5-5": {"inputTokens": 2, "outputTokens": 4,
+			"cacheReadInputTokens": 21291, "cacheCreationInputTokens": 3594, "costUSD": 0.00093391}}}`, 2, 4, 21291, 3594, "0.00093391"},
+		{`{"total_cost_usd": 0, "modelUsage": {"a": {"inputTokens": 1, "outputTokens": 2, "cacheReadInputTokens": 3, "cacheCreationInputTokens": 4},
+			"b": {"inputTokens": 10, "outputTokens": 20, "cacheReadInputTokens": 30, "cacheCreationInputTokens": 40}}}`, 11, 22, 33, 44, "0"},
+	} {
+		var r Result
+		if err := json.Unmarshal([]byte(tc.in), &r); err != nil {
+			t.Fatal(err)
+		}
+		in, out, read, write := r.Tokens()
+		cost := "unknown"
+		if r.TotalCostUSD != nil {
+			cost = strconv.FormatFloat(*r.TotalCostUSD, 'f', -1, 64)
+		}
+		if in != tc.tin || out != tc.tout || read != tc.read || write != tc.writ || cost != tc.cost {
+			t.Errorf("%s: Tokens() = %d %d %d %d, cost %s", tc.in, in, out, read, write, cost)
+		}
+	}
+}
+
+// 003-AC26: limits the page sends become docker arguments: only docker's own syntax passes.
+func TestLimitsValidate(t *testing.T) {
+	for _, l := range []Limits{{}, {CPUs: "2", Memory: "4g", EgressCPUs: "0.5", EgressMemory: "256m"}, {CPUs: "0", Memory: "0"}, {Memory: "512M"}} {
+		if err := l.Validate(); err != nil {
+			t.Errorf("%+v: %v", l, err)
+		}
+	}
+	for _, l := range []Limits{{CPUs: "two"}, {CPUs: "-1"}, {CPUs: "1.5.2"}, {Memory: "4 GB"}, {Memory: "4t"}, {EgressCPUs: "--privileged"},
+		{EgressMemory: "1g --network host"}} {
+		if err := l.Validate(); err == nil {
+			t.Errorf("%+v accepted", l)
+		}
 	}
 }
