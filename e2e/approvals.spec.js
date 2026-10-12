@@ -61,7 +61,7 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
 
     await ask(alice, 'Grill', 1);
     for (const p of [alice, bob]) {
-      await expect(lastAgent(p).locator('.meta')).toContainText('requested opus · effort max → ran claude-sonnet-fake · effort high (host cap)');
+      await expect(lastAgent(p).locator('.meta')).toContainText(/requested opus · effort max → ran sonnet · effort high · \+claude-side-fake \S+ \(host cap\)/);
       await expect(lastAgent(p).locator('.body')).toContainText('(effort high)');
     }
 
@@ -71,7 +71,8 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
       await expect(p.locator('#messages')).toContainText(/Alice approved opus · effort max for 🔥 Grill: it runs as asked from its next turn\./);
     }
     await ask(alice, 'Grill', 2);
-    await expect(lastAgent(bob).locator('.model')).toHaveText('claude-opus-fake');
+    await expect(lastAgent(bob).locator('.model')).toHaveText('opus');
+    await expect(lastAgent(bob).locator('.model-note')).not.toHaveClass(/mismatch/);
     await expect(lastAgent(bob).locator('.effort')).toHaveText('effort max');
     await expect(lastAgent(bob).locator('.capped')).toHaveCount(0);
     // The approval is an exception: the daemon's cap stays.

@@ -11,7 +11,7 @@ test('persona panel: no default model or effort', async ({ browser, request }) =
   await expect(grill.getByLabel('Effort').locator('option')).toHaveText(['low', 'medium', 'high', 'xhigh', 'max']);
   await expect(grill.getByLabel('Model')).toHaveValue('sonnet');
   await expect(grill.getByLabel('Effort')).toHaveValue('medium');
-  await expect(grill.locator('.hint')).toContainText('Runs on sonnet · effort medium.');
+  await expect(grill.locator('.hint', { hasText: 'Runs on' })).toContainText('Runs on sonnet · effort medium.');
   await expect(alice.locator('#personas')).not.toContainText('default');
 });
 

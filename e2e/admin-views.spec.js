@@ -164,7 +164,7 @@ for (const vp of widths) {
     const stamp = `${vp.name}${Date.now()}`;
     const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Library ' + stamp } })).json();
     const lib = await member(baseURL, request, room, 'Lib');
-    const tpl = { name: 'Critic', badge: '🧐', colour: '#112233', text: 'Find the flaw.', title: 'Critic ' + stamp };
+    const tpl = { name: 'Critic', badge: '🧐', colour: '#112233', text: 'Find the flaw.', model: 'sonnet', effort: 'medium', title: 'Critic ' + stamp };
     expect((await lib.ctx.post(`/api/rooms/${room.id}/templates`, { data: tpl })).status()).toBe(201);
     const skill = 'shared' + stamp;
     expect((await lib.ctx.post('/api/profile/skills?scope=shared', { headers: { 'Content-Type': 'application/zip' }, data: readFileSync(skillZip(skill, 'X')) })).status()).toBe(201);
