@@ -53,14 +53,14 @@ The page has six views:
 - Rooms: name, creation, last line, participants, personas and whether the host's daemon is online, sortable by any column. Each room shows its volume by kind (uploads, revisions, attachments, agent sessions, transcripts, room skills) and its quota. From there the admin renames it, sets its quota or returns it to the default, creates and revokes invites, and deletes it after typing its name. Export is greyed out until it exists.
 - Profiles: the name a profile last joined with, its email, rooms, skill count (personal ones plus the shared ones it published) and last activity. Deleting a profile leaves its participants in their rooms, detached. This is the only place an email shows, besides its owner's profile page.
 - Libraries: persona templates and shared skills, with author and latest version. The admin removes any but the shipped templates.
-- Instance: server version, database size (with its write-ahead log), free and total space on its disk, speech to text, connected daemons by version, and whether SMTP is set.
+- Instance: server version, database size (with its write-ahead log), free and total space on its disk, speech to text, connected daemons by version, and whether SMTP is set. Below, the room creation limits: who creates rooms (anyone with a profile, or the admin only), how many rooms a profile may have created (10 by default), and an optional storage quota. Past that quota, which counts the database pages in use, profiles create no room.
 - Sessions and the audit log, below.
 
 A room's quota counts its uploads and annotation images, the blobs people add. Revisions, transcripts and agent sessions show in its volume but do not count. Only the admin changes a quota; a participant asking through the room's API gets a 403. The volume comes from SQL sums over lengths, so the view reads no blob.
 
-The audit log records every admin action: room create, rename, quota change and delete, invite create and revoke, profile delete, template and skill removal, and admin logins, logouts and session revocations. Each entry holds who (`super-admin`), the action, the target's kind, id and name at the time, details as JSON (4 KiB at most) and the time. Deleting a room or a profile keeps the entries about it, with the old name. The server purges entries older than `GRILL_ROOM_AUDIT_RETENTION`, and expired sessions, at start and then daily. `/admin` shows the log read-only, newest first, filtered by action and by target id or name.
+The audit log records every admin action: room create, rename, quota change and delete, invite create and revoke, room admin appointment and removal, room skill removal, profile delete, template and skill removal, room creation limits, and admin logins, logouts and session revocations. Each entry holds who (`super-admin`, or `profile:<uuid>` for a room admin, with the name they acted as), the action, the target's kind, id and name at the time, details as JSON (4 KiB at most) and the time. An entry is written in the same transaction as its change: if the entry cannot be written, the change is rolled back and the request gets a 500. Deleting a room or a profile keeps the entries about it, with the old name. The server purges entries older than `GRILL_ROOM_AUDIT_RETENTION`, and expired sessions, at start and then daily. `/admin` shows the log read-only, newest first, filtered by action and by target id or name.
 
-The page is Preact, htm and @preact/signals, served from `internal/uivendor/esm/` like the daemon's page. `make ui-check` runs `tsc --checkJs` on it.
+The page is Preact, htm and @preact/signals, served from `internal/uivendor/esm/` like the daemon's page, and so is the room page's Manage panel. `make ui-check` runs `tsc --checkJs` on both.
 
 ## Rooms and invites
 
@@ -73,7 +73,9 @@ curl -H "Authorization: Bearer $ADMIN" -X POST localhost:7680/api/rooms/$ROOM/in
 
 The second call returns a `url` such as `https://<host>/join#<token>`. Whoever opens it picks a display name and lands in the room. One invite can be shared with several people.
 
-Once in, any member can create invites from the room page ("Invite people") and revoke the ones they created. The admin revokes any. Revoking an invite also revokes the invites created by those who joined through it, and so on down the chain, so a member cut off cannot come back through an invite they made. Any member can rename the room, and a system line in the chat says who renamed it, from what, to what.
+Once in, any member can create invites from the room page ("Invite people") and revoke the ones they created. The admin revokes any. Revoking an invite also revokes the invites created by those who joined through it, and so on down the chain, so a member cut off cannot come back through an invite they made.
+
+A profile can also create a room from `/profile` ("New room"), within the limits set in `/admin`. It joins the room under the name it picks, through an invite of its own, and becomes the room's first room admin. A room admin opens "Manage" on the room page to rename the room, list and revoke every invite, appoint other members as room admins or remove them, see the room's volume, and delete the room after typing its name. The room keeps at least one room admin: the last one cannot step down. Room admin rights belong to profiles, so a member without one cannot be appointed. Each of these actions is a line in the chat and an audit log entry. The quota stays the admin's. A room the admin created has no room admin, and only the admin renames it.
 
 ```sh
 # Revoke an invite: everyone who joined through it gets a 401 and their live stream closes.
@@ -85,11 +87,15 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | Route | Auth | |
 |---|---|---|
 | `GET /api/rooms`, `POST /api/rooms` | admin | list, create |
-| `DELETE /api/rooms/{room}` | admin | delete with all its data |
-| `PATCH /api/rooms/{room}` | admin or participant | rename: `name` |
-| `GET /api/rooms/{room}/invites` | admin or participant | every invite for the admin, a participant's own for a participant; `created_by` is the participant who created it, absent for the admin |
+| `DELETE /api/rooms/{room}` | admin or room admin | delete with all its data; 403 for another participant |
+| `PATCH /api/rooms/{room}` | admin or room admin | rename: `name`; 403 for another participant |
+| `GET /api/rooms/{room}/invites` | admin or participant | every invite for the admin and room admins, a participant's own for anyone else; `created_by` is the participant who created it, absent for the admin |
 | `POST /api/rooms/{room}/invites` | admin or participant | new invite link |
-| `DELETE /api/rooms/{room}/invites/{id}` | admin, or the participant who created it | revoke, with the invites its joiners created; 403 for another participant's invite |
+| `DELETE /api/rooms/{room}/invites/{id}` | admin, room admin, or the participant who created it | revoke, with the invites its joiners created; 403 for another participant's invite |
+| `GET /api/rooms/{room}/overview` | room admin | the room as `GET /api/admin/rooms` shows it: volume by kind, `quota`, `used` |
+| `PUT /api/rooms/{room}/admins/{participant}`, `DELETE` | room admin | appoint the participant's profile as a room admin, or remove it; 404 for someone not in the room, 409 for a participant without a profile or for the last room admin stepping down |
+| `POST /api/profile/rooms` | profile cookie | create a room: `name`, and `display_name` to join it as; the profile becomes its room admin; 403 with the reason when creation is the admin's only, the profile has created as many rooms as allowed, or the instance is at its storage quota |
+| `GET /api/admin/settings`, `PUT /api/admin/settings` | admin | room creation limits: `rooms_per_profile` (1 to 1000), `storage_quota_bytes` (0 for none), `room_creation` (`anyone` or `super-admin`) |
 | `GET /api/profiles` | admin | every profile with its `email`, `rooms`, `uuid`, `name` (the one it last joined with), `skills` and `last_activity` |
 | `DELETE /api/profiles/{id}` | admin | delete a profile, see Personal data |
 | `POST /api/admin/login` | admin token in the body (`token`) | opens a 12 h session and sets its cookie; 401 for a wrong token, 429 past 10 attempts per client IP in 15 minutes |
@@ -110,12 +116,12 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `DELETE /api/profile/skills/{id}` | profile cookie | remove one of the profile's personal skills; 404 for a shared one |
 | `GET /api/skills`, `DELETE /api/skills/{id}` | admin | every skill; remove one with its versions, and from every persona that had it |
 | `POST /api/profile/magic` | link token in the body | spends an emailed link: a sign-in link signs this browser in, a bind link binds the address to the profile this browser holds (403 from any other browser); 401 when unknown, used or expired, 409 when another profile holds the address; 404 without SMTP |
-| `GET /api/rooms/{room}` | participant | room, me, participants |
+| `GET /api/rooms/{room}` | participant | room, me, participants; `admin` marks the room admins |
 | `POST /api/rooms/{room}/messages` | participant | post a text message (Markdown); messages carry `body` (source) and `html` (sanitised render) |
 | `PATCH /api/rooms/{room}/messages/{id}` | author | edit your text or voice line: `body`; 403 for anyone else, 409 once deleted |
 | `DELETE /api/rooms/{room}/messages/{id}` | author | soft delete: participants see `deleted_at` and no body; the agent keeps the text |
 | `GET /api/rooms/{room}/messages/{id}/versions` | participant | earlier bodies of an edited message, oldest first |
-| `GET /api/rooms/{room}/events` | participant | SSE: history then live messages; resumes after `?since=<id>` or `Last-Event-ID`; a `message_edited` event with the message for each edit or delete past `?edits=<change_seq>` (all of them on a resume without it);  a `documents` event when a document or revision is added, an `annotations` event when an annotation is added or changes; an `agent` event with the agent state (`host_participant_id`, `online`, `reason`, last `turn`, the `running` turns (each with `host_queued`, `rerun_of` and `cause`), `parallel_turns`, `can_trigger`, connected `daemons`, the room's `personas`, the `queue`, the `models` and `efforts` a persona may ask for, the host daemon's `cap`, the `cap_requests` of personas asking above it, and the persona `changes` waiting for the host) at open and on every change; with voice on, an `stt` event (`available`, `listening`) at open and on every change |
+| `GET /api/rooms/{room}/events` | participant | SSE: history then live messages; resumes after `?since=<id>` or `Last-Event-ID`; a `message_edited` event with the message for each edit or delete past `?edits=<change_seq>` (all of them on a resume without it);  a `documents` event when a document or revision is added, an `annotations` event when an annotation is added or changes; an `agent` event with the agent state (`host_participant_id`, `online`, `reason`, last `turn`, the `running` turns (each with `host_queued`, `rerun_of` and `cause`), `parallel_turns`, `can_trigger`, connected `daemons`, the room's `personas`, the `queue`, the `models` and `efforts` a persona may ask for, the host daemon's `cap`, the `cap_requests` of personas asking above it, the persona `changes` waiting for the host, and the `room_skills`, those waiting for the host included) at open and on every change; with voice on, an `stt` event (`available`, `listening`) at open and on every change |
 | `GET /api/rooms/{room}/agent` | participant | the agent state, as in the `agent` event |
 | `PATCH /api/rooms/{room}/agent` | host | `parallel_turns`: personas run at the same time, or one at a time |
 | `POST /api/rooms/{room}/turns` | host, or a participant the host allowed | a persona's button: `persona_id` (the room's first persona when absent), `fresh` (host only) starts a new session for it; 201 with the turn, or 202 with the queued press while another turn runs or others wait (in parallel mode, while this persona runs or waits); 409 when that persona is queued already, waits for the host's approval, or no host daemon is connected |
@@ -128,7 +134,10 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `POST /api/rooms/{room}/personas/{id}/update` | participant | take the text, model and effort of the template's newer version, keeping the room's name, badge and colour; 202 with `held` as for a change |
 | `POST /api/rooms/{room}/personas/{id}/cap` | host | answer a persona asking above the host cap: `approve`, and the `model` and `effort` the banner showed (409 when the persona asks for something else by now, or runs as it asks already) |
 | `POST /api/rooms/{room}/changes/{id}` | host | `approve` or refuse a held persona change or new persona |
-| `GET /api/rooms/{room}/skills` | participant | the skills this participant can turn on: the shared library and their profile's personal skills; `disclaimer` is true until their profile accepts the skills disclaimer, `no_profile` when they have none |
+| `GET /api/rooms/{room}/skills` | participant | the skills this participant can turn on: the shared library, their profile's personal skills and the room's own skills the host approved; each has a `scope` (`shared`, `personal`, `room`); `disclaimer` is true until their profile accepts the skills disclaimer, `no_profile` when they have none |
+| `POST /api/rooms/{room}/skills` | participant with a profile | copy `skill_id`, one of their personal skills, into the room at its latest version: 201, or 202 with `pending` while the host approves everything; 404 for a skill that is not their personal one, 409 for a name the room has or past 20 room skills |
+| `POST /api/rooms/{room}/skills/{id}/decision` | host | `approve` or refuse a pending room skill; refused, it is removed |
+| `DELETE /api/rooms/{room}/skills/{id}` | room admin | remove a room skill, and from every persona that had it |
 | `PUT /api/rooms/{room}/personas/{id}/skills/{skill}` | participant with a profile | turn a skill on at its latest version, or move it there from an older pin; `accept_disclaimer` the first time (428 without it); a persona change, 202 with `held` as for one; 404 for a skill not offered to this participant, 409 for a second skill of the same name or past 10 per persona |
 | `DELETE /api/rooms/{room}/personas/{id}/skills/{skill}` | participant | turn a skill off |
 | `DELETE /api/rooms/{room}/personas/{id}` | participant | remove a persona with its session and queued press; 409 during its turn |
@@ -183,7 +192,9 @@ The server uses STARTTLS whenever the relay offers it. A relay that offers none 
 | persona templates a profile published, signed with a display name | every participant of every room | the admin removing the template, or deleting the profile; room copies stay |
 | personal skills, signed with a display name | the profile's own browsers; the agent and anyone in a room where a persona has one on | the profile removing it, the admin, or deleting the profile |
 | shared skills, signed with a display name | every participant of every room | the admin removing it; deleting the profile only detaches it |
-| audit log entries: the name of a room or profile an admin action targeted, the admin's IP at login | the admin | the purge after `GRILL_ROOM_AUDIT_RETENTION` (1 year), not deleting the room or profile |
+| room skills, copies of a personal skill signed with its author's display name | the room's participants and its agent | a room admin or the admin removing it, or deleting the room; not leaving the room or deleting the profile |
+| room admins: which profiles administer a room | the room's participants | removing them, deleting the room, or deleting the profile |
+| audit log entries: the name of a room or profile an admin action targeted, the admin's IP at login, a room admin's profile uuid and display name | the admin | the purge after `GRILL_ROOM_AUDIT_RETENTION` (1 year), not deleting the room or profile |
 | admin sessions: IP and browser user agent | the admin | revoking or signing out, or the daily purge once expired (12 h) |
 
 - Access is by invite link. Anyone holding a valid one can read the room, and any member can make more.
@@ -272,7 +283,9 @@ The host can tick "Personas run at the same time" in the Personas panel. Two per
 
 A skill is a Claude Code skill folder: a `SKILL.md` whose YAML frontmatter has a `name` (lowercase letters, digits and hyphens) and a `description`, plus any files it needs, scripts included. The profile page uploads one as a zip, with `SKILL.md` at the root of the zip or of its single folder. The upload is personal, kept in the profile and offered only in rooms that profile is in, or shared, in the library every room sees. Uploading a name again publishes its next version; versions never change. The server refuses a zip with symlinks, absolute or `..` paths, more than 200 files, or more than 8 MB packed or unpacked, and says why. The admin can remove any skill. Skills never come from the host's disk.
 
-In the Personas panel any member with a profile turns a skill on for a persona, from the shared library or their own personal skills, and anyone turns one off. Each change is a persona change: a line in the chat, held while the host approves everything. The persona keeps the version it was turned on at. A newer upload shows as "Update to vN", applied only when someone takes it. The first time a profile turns any skill on, the panel shows a disclaimer once:
+A member can also copy one of their personal skills into the room from the Personas panel. The copy is the room's: frozen at the version copied, offered to every member, and kept when its author leaves the room or deletes the original, unlike a personal skill, which rides only while its owner is a member. The copy is a line in the chat. While the host approves everything, it waits for the host before any persona can use it. A room admin removes room skills from "Manage"; deleting the room deletes them.
+
+In the Personas panel any member with a profile turns a skill on for a persona, from the shared library, their own personal skills or the room's skills, and anyone turns one off. Each change is a persona change: a line in the chat, held while the host approves everything. The persona keeps the version it was turned on at. A newer upload shows as "Update to vN", applied only when someone takes it. The first time a profile turns any skill on, the panel shows a disclaimer once:
 
 - a skill's scripts run in the host's sandbox, on the host's machine;
 - anyone in the room can ask the agent to print a skill's content, so a skill must hold no secret;

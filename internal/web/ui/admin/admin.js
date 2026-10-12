@@ -2,9 +2,10 @@
 // vendored, no build step. The session cookie is HttpOnly: the page never sees a token after the
 // login form.
 import { render } from 'preact';
-import { useState, useEffect, useRef } from 'preact/hooks';
+import { useState, useEffect } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { html } from 'htm/preact';
+import { RoomPanel, fetchJSON, size, when, onInput, formAction } from './room-panel.js';
 
 /**
  * @typedef {{id: number, created_at: string, last_used_at: string, expires_at: string, user_agent: string, ip: string,
@@ -12,18 +13,15 @@ import { html } from 'htm/preact';
  * @typedef {{id: number, at: string, actor: string, action: string, target_kind: string, target_id: string,
  *   target_name: string, details: Record<string, unknown>}} Entry
  * @typedef {{entries: Entry[], next: number, actions: string[]}} AuditPage
- * @typedef {{uploads: number, revisions: number, attachments: number, agent_sessions: number, transcripts: number,
- *   room_skills: number, total: number}} Volume
- * @typedef {{id: string, name: string, created_at: string, last_activity: string, participants: number, personas: number,
- *   host_participant_id?: number, quota_bytes: number, quota: number, used: number, host_online: boolean, volume: Volume}} Room
+ * @typedef {import('./room-panel.js').Room} Room
  * @typedef {{rooms: Room[], default_quota: number}} RoomsPage
- * @typedef {{id: number, created_at: string, created_by?: number, revoked_at?: string}} Invite
  * @typedef {{room_id: string, room_name: string}} ProfileRoom
  * @typedef {{id: number, uuid: string, name: string, email?: string, created_at: string, last_activity: string,
  *   skills: number, rooms: ProfileRoom[]}} Profile
  * @typedef {{id: number, preset?: string, title: string, version: number, author: string, created_at: string}} Template
  * @typedef {{id: number, name: string, shared: boolean, version: number, author: string, size: number,
  *   updated_at: string}} Skill
+ * @typedef {{rooms_per_profile: number, storage_quota_bytes: number, room_creation: string}} Settings
  * @typedef {{version: string, db_bytes: number, disk_free: number, disk_total: number,
  *   stt: {voice: boolean, configured: boolean, workers: number},
  *   daemons: {connected: number, versions: Record<string, number>}, smtp: boolean}} Instance
@@ -40,49 +38,24 @@ const view = signal(viewOf(location.hash));
 addEventListener('hashchange', () => { view.value = viewOf(location.hash); });
 
 /**
- * api sends a request with the session cookie and returns its JSON answer, {} for none. A 401
- * outside the login form means the session is gone: the page shows the form again.
- * @param {string} method
- * @param {string} path
- * @param {unknown} [body]
- * @returns {Promise<any>}
+ * api is fetchJSON for this page. A 401 outside the login form means the session is gone: the
+ * page shows the form again.
+ * @type {import('./room-panel.js').Api}
  */
 async function api(method, path, body) {
-  /** @type {RequestInit & {headers: Record<string, string>}} */
-  const opts = { method, headers: {} };
-  if (body !== undefined) {
-    opts.headers['Content-Type'] = 'application/json';
-    opts.body = JSON.stringify(body);
+  try {
+    return await fetchJSON(method, path, body);
+  } catch (err) {
+    if (/** @type {{status?: number}} */ (err).status === 401 && path !== '/api/admin/login') {
+      if (signedIn.value) notice.value = 'Your session ended: sign in again.';
+      signedIn.value = false;
+    }
+    throw err;
   }
-  const res = await fetch(path, opts);
-  const data = res.status === 204 ? {} : await res.json().catch(() => ({}));
-  if (res.status === 401 && path !== '/api/admin/login') {
-    if (signedIn.value) notice.value = 'Your session ended: sign in again.';
-    signedIn.value = false;
-  }
-  if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
-  return data;
 }
 
 /** @param {unknown} err */
 const show = (err) => { if (signedIn.value) notice.value = /** @type {Error} */ (err).message; };
-/** @param {string} t */
-const when = (t) => new Date(t).toLocaleString();
-/** @param {number} n bytes */
-function size(n) {
-  if (n < 1024) return n + ' B';
-  const units = ['KB', 'MB', 'GB', 'TB'];
-  let i = -1;
-  do { n /= 1024; i++; } while (n >= 1024 && i < units.length - 1);
-  return (n < 10 ? n.toFixed(1) : Math.round(n)) + ' ' + units[i];
-}
-/** @param {(v: string) => void} set */
-const onInput = (set) => (/** @type {Event} */ e) => set(/** @type {HTMLInputElement} */ (e.currentTarget).value);
-/**
- * formAction runs work on a form's submit, without a page load.
- * @param {() => unknown} work
- */
-const formAction = (work) => (/** @type {Event} */ e) => { e.preventDefault(); work(); };
 
 function Login() {
   const [token, setToken] = useState('');
@@ -137,6 +110,12 @@ function Sessions() {
     </table></div>`}`;
 }
 
+/**
+ * actor names who acted: the super-admin, or a room admin's profile by the name it acted as.
+ * @param {Entry} e
+ */
+const actor = (e) => (e.actor.startsWith('profile:') ? `${e.details.as || 'profile'} (profile ${e.actor.slice(8, 16)})` : e.actor);
+
 function Audit() {
   const [action, setAction] = useState('');
   const [target, setTarget] = useState('');
@@ -186,7 +165,7 @@ function Audit() {
     ${page && (page.entries.length ? html`<div class="scroll"><table id="audit">
       <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Details</th></tr></thead>
       <tbody>${page.entries.map((e) => html`<tr id=${'audit-' + e.id}>
-        <td>${when(e.at)}</td><td>${e.actor}</td><td>${e.action}</td>
+        <td>${when(e.at)}</td><td>${actor(e)}</td><td>${e.action}</td>
         <td class="wrap">${e.target_kind} ${e.target_name && html`<strong>${e.target_name}</strong>`} <code>${e.target_id}</code></td>
         <td class="wrap"><code>${JSON.stringify(e.details)}</code></td>
       </tr>`)}</tbody>
@@ -237,65 +216,8 @@ function Rooms() {
         <td><button type="button" onClick=${() => setOpen(open === r.id ? '' : r.id)}>${open === r.id ? 'Close' : 'Manage'}</button></td>
       </tr>`)}</tbody>
     </table></div>` : html`<p>No room yet.</p>`}
-    ${room && html`<${RoomPanel} key=${room.id} room=${room} reload=${load} close=${() => { setOpen(''); load(); }}/>`}`;
-}
-
-/** @param {{room: Room, reload: () => void, close: () => void}} props */
-function RoomPanel({ room, reload, close }) {
-  const base = '/api/admin/rooms/' + room.id;
-  const [name, setName] = useState(room.name);
-  const [quota, setQuota] = useState(String(Math.round(room.quota / 1048576)));
-  const [confirm, setConfirm] = useState('');
-  const [invites, setInvites] = useState(/** @type {Invite[] | null} */ (null));
-  const [link, setLink] = useState('');
-  const loadInvites = () => api('GET', base + '/invites').then(setInvites).catch(show);
-  // The panel opens under the list: a long list would leave it off screen.
-  const panel = useRef(/** @type {HTMLElement | null} */ (null));
-  useEffect(() => { loadInvites(); panel.current?.scrollIntoView({ block: 'nearest' }); }, []);
-  const v = room.volume;
-  const kinds = [['Uploads', v.uploads], ['Revisions', v.revisions], ['Attachments', v.attachments],
-    ['Agent sessions', v.agent_sessions], ['Transcripts', v.transcripts], ['Room skills', v.room_skills]];
-  /** @param {number} bytes */
-  const setQuotaTo = (bytes) => api('PUT', base + '/quota', { quota_bytes: bytes }).then(reload).catch(show);
-  const invite = () => api('POST', base + '/invites').then((/** @type {{url: string}} */ i) => { setLink(i.url); loadInvites(); }).catch(show);
-  /** @param {Invite} i */
-  const revoke = (i) => api('DELETE', `${base}/invites/${i.id}`).then(loadInvites).catch(show);
-  return html`
-    <section id="room-panel" ref=${panel} aria-label=${'Manage ' + room.name}>
-      <h2>${room.name} <code>${room.id}</code></h2>
-      <h3>Volume</h3>
-      <dl id="volume">${kinds.map(([k, n]) => html`<div><dt>${k}</dt><dd>${size(/** @type {number} */ (n))}</dd></div>`)}
-        <div><dt>Total</dt><dd>${size(v.total)}</dd></div></dl>
-      <h3>Quota</h3>
-      <p class="hint">${size(room.used)} of ${size(room.quota)} used${room.quota_bytes ? '' : ', the instance default'}.</p>
-      <form class="row" onSubmit=${formAction(() => setQuotaTo(Math.round(Number(quota) * 1048576)))}>
-        <label>Quota (MB)<input id="quota" type="number" min="1" step="1" required value=${quota} onInput=${onInput(setQuota)}/></label>
-        <button type="submit">Set quota</button>
-        <button type="button" disabled=${!room.quota_bytes} onClick=${() => setQuotaTo(0)}>Use the default</button>
-      </form>
-      <h3>Name</h3>
-      <form class="row" onSubmit=${formAction(() => api('PATCH', base, { name }).then(reload).catch(show))}>
-        <label>Room name<input id="room-name" required maxlength="100" value=${name} onInput=${onInput(setName)}/></label>
-        <button type="submit" disabled=${name.trim() === room.name}>Rename</button>
-      </form>
-      <h3>Invites</h3>
-      <div class="row"><button type="button" onClick=${invite}>New invite link</button></div>
-      ${link && html`<label class="link">Invite link, shown once<input id="invite-link" readonly value=${link}/></label>`}
-      ${invites && html`<div class="scroll"><table id="invites">
-        <thead><tr><th>Invite</th><th>Created</th><th>By</th><th>State</th><th></th></tr></thead>
-        <tbody>${invites.map((i) => html`<tr id=${'invite-' + i.id}><td>#${i.id}</td><td>${when(i.created_at)}</td>
-          <td>${i.created_by ? 'participant #' + i.created_by : 'admin'}</td><td>${i.revoked_at ? 'revoked' : 'valid'}</td>
-          <td>${!i.revoked_at && html`<button type="button" onClick=${() => revoke(i)}>Revoke</button>`}</td></tr>`)}</tbody>
-      </table></div>`}
-      <h3>Export</h3>
-      <div class="row"><button type="button" id="export" disabled>Export</button><span class="hint">Export is not available yet.</span></div>
-      <h3>Delete</h3>
-      <form class="row" onSubmit=${formAction(() => api('DELETE', base).then(close).catch(show))}>
-        <label>Type the room name to delete it, with everything it holds
-          <input id="delete-confirm" autocomplete="off" value=${confirm} onInput=${onInput(setConfirm)}/></label>
-        <button type="submit" class="danger" disabled=${confirm !== room.name}>Delete the room</button>
-      </form>
-    </section>`;
+    ${room && html`<${RoomPanel} key=${room.id} room=${room} base=${'/api/admin/rooms/' + room.id} api=${api} show=${show} setQuota=${true}
+      reload=${load} close=${() => { setOpen(''); load(); }}/>`}`;
 }
 
 function Profiles() {
@@ -368,7 +290,40 @@ function InstanceView() {
   ];
   return html`
     <h2>Instance</h2>
-    <dl id="instance">${rows.map(([k, v]) => html`<div><dt>${k}</dt><dd>${v}</dd></div>`)}</dl>`;
+    <dl id="instance">${rows.map(([k, v]) => html`<div><dt>${k}</dt><dd>${v}</dd></div>`)}</dl>
+    <${RoomCreation}/>`;
+}
+
+// RoomCreation sets the guardrails on rooms profiles create from their profile page (004-AC7).
+function RoomCreation() {
+  const [per, setPer] = useState('');
+  const [quota, setQuota] = useState('');
+  const [mode, setMode] = useState('anyone');
+  const [said, setSaid] = useState('');
+  /** @param {Settings} v */
+  const fill = (v) => {
+    setPer(String(v.rooms_per_profile));
+    setQuota(v.storage_quota_bytes ? String(Math.round(v.storage_quota_bytes / 1048576)) : '');
+    setMode(v.room_creation);
+  };
+  useEffect(() => { api('GET', '/api/admin/settings').then(fill).catch(show); }, []);
+  const save = () => api('PUT', '/api/admin/settings', {
+    rooms_per_profile: Number(per), storage_quota_bytes: Math.round(Number(quota || 0) * 1048576), room_creation: mode,
+  }).then((/** @type {Settings} */ v) => { fill(v); setSaid('Saved.'); }).catch(show);
+  return html`
+    <h2>Room creation</h2>
+    <p class="hint">Profiles create rooms from their profile page and administer them. These limits apply to them, not to you.</p>
+    <form class="row" id="room-creation" onSubmit=${formAction(save)}>
+      <label>Who creates rooms
+        <select id="room-creation-mode" value=${mode} onChange=${onInput(setMode)}>
+          <option value="anyone">Anyone with a profile</option>
+          <option value="super-admin">The instance admin only</option>
+        </select></label>
+      <label>Rooms per profile<input id="rooms-per-profile" type="number" min="1" max="1000" step="1" required value=${per} onInput=${onInput(setPer)}/></label>
+      <label>Storage quota (MB, empty for none)<input id="storage-quota" type="number" min="1" step="1" value=${quota} onInput=${onInput(setQuota)}/></label>
+      <button type="submit">Save</button>
+      <span class="said" role="status">${said}</span>
+    </form>`;
 }
 
 function Shell() {

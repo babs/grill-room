@@ -302,10 +302,8 @@ func (s *Server) listProfiles(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	var name string
 	if err == nil {
-		name = s.targetName(r, store.TargetProfile, strconv.FormatInt(id, 10))
-		err = s.bus.Store.DeleteProfile(r.Context(), id)
+		err = s.bus.Store.DeleteProfile(s.auditing(r, ActionProfileDelete, store.TargetProfile, strconv.FormatInt(id, 10), "", nil), id)
 	}
 	if errors.Is(err, store.ErrNotFound) || errors.Is(err, strconv.ErrSyntax) || errors.Is(err, strconv.ErrRange) {
 		httpError(w, http.StatusNotFound, "no such profile")
@@ -315,7 +313,6 @@ func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "delete_profile_failed", err)
 		return
 	}
-	s.audit(r, ActionProfileDelete, store.TargetProfile, strconv.FormatInt(id, 10), name, nil)
 	s.log.Info("profile_deleted", zap.Int64("profile", id))
 	w.WriteHeader(http.StatusNoContent)
 }

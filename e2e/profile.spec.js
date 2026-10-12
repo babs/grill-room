@@ -73,29 +73,7 @@ test('profile across rooms and devices', async ({ browser, request }) => {
   await expect(stranger.locator('#signin')).toBeHidden();
 });
 
-// 002-AC6: a member renames the room; every page shows the new name as text and the system line.
-test('rename a room, with a name that is markup', async ({ browser, request }) => {
-  const room = await newRoom(request, 'Plain name');
-  const alice = await (await browser.newContext()).newPage();
-  const bob = await (await browser.newContext()).newPage();
-  await join(alice, await invitePath(request, room.id), 'Alice');
-  await join(bob, await invitePath(request, room.id), 'Bob');
-  const evil = '<img src=x onerror="window.__xss=1"><script>window.__xss=2</script>';
-  await alice.getByRole('button', { name: 'Rename' }).click();
-  await alice.getByLabel('Room name').fill(evil);
-  await alice.getByRole('button', { name: 'Save' }).click();
-  for (const page of [alice, bob]) {
-    await expect(page.locator('#room-name')).toHaveText(evil);
-    await expect(page.locator('#messages')).toContainText(`Alice renamed the room from "Plain name" to "${evil.replaceAll('"', '\\"')}"`);
-    await expect(page.locator('#room-name img, #room-name script, #messages img, #messages script')).toHaveCount(0);
-    await expect(page).toHaveTitle(evil + ' · grill-room');
-    expect(await page.evaluate(() => window.__xss)).toBeUndefined();
-  }
-  await bob.locator('#me').click();
-  await expect(bob.locator('#rooms li')).toHaveText([`${evil} as Bob`]);
-  await expect(bob.locator('#rooms img, #rooms script')).toHaveCount(0);
-  expect(await bob.evaluate(() => window.__xss)).toBeUndefined();
-});
+// 002-AC6 moved to room-admins.spec.js: renaming is a room admin's since 004-AC8.
 
 // 002-AC7: a member creates an invite, a guest joins through it, the member revokes it.
 test('member invites and revokes', async ({ browser, request }) => {

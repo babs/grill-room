@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -273,8 +272,8 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 	alice := e.device(t)
 	joined := alice.join(t, room.ID, "Alice")
 	tok := joined.Token
-	// Member actions: not audited.
-	if code, _ := e.do(t, "PATCH", "/api/rooms/"+room.ID, tok, map[string]string{"name": "By Alice"}); code != http.StatusOK {
+	// A plain member's actions: refused or not audited.
+	if code, _ := e.do(t, "PATCH", "/api/rooms/"+room.ID, tok, map[string]string{"name": "By Alice"}); code != http.StatusForbidden {
 		t.Fatalf("member rename: %d", code)
 	}
 	if code, _ := e.do(t, "POST", "/api/rooms/"+room.ID+"/invites", tok, nil); code != http.StatusCreated {
@@ -318,8 +317,8 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 	got := e.auditLog(t, "").Entries
 	type row struct{ action, kind, id, name string }
 	want := []row{
-		{ActionRoomDelete, store.TargetRoom, room.ID, "By Alice"},
-		{ActionRoomQuota, store.TargetRoom, room.ID, "By Alice"},
+		{ActionRoomDelete, store.TargetRoom, room.ID, "Pricing v2"},
+		{ActionRoomQuota, store.TargetRoom, room.ID, "Pricing v2"},
 		{ActionProfileDelete, store.TargetProfile, profID, "Alice"},
 		{ActionSkillRemove, store.TargetSkill, skID, "stamp"},
 		{ActionTemplateRemove, store.TargetTemplate, tplID, "Critic"},
@@ -332,8 +331,9 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 	if len(got) != len(want) {
 		t.Fatalf("entries: %+v", got)
 	}
-	// Every mutation action is exercised here; the admin.* ones have their own test.
-	covered := map[string]bool{}
+	// Every mutation action is exercised here; the admin.* ones, the room admins' and the settings'
+	// have their own tests (TestAuditLogViewAPI, TestRoomAdmins, TestRoomSkillsAPI, TestProfileCreatesRooms).
+	covered := map[string]bool{ActionRoomAdminAdd: true, ActionRoomAdminRemove: true, ActionRoomSkillRemove: true, ActionSettings: true}
 	for _, w := range want {
 		covered[w.action] = true
 	}
@@ -460,27 +460,31 @@ func TestAuditPurgeLoop(t *testing.T) {
 // the vendored modules are served.
 func TestAdminPage(t *testing.T) {
 	e := newEnv(t)
-	resp, err := http.Get(e.ts.URL + "/admin") //nolint:noctx // test
-	if err != nil {
-		t.Fatal(err)
+	// The room page's admin panel is Preact too (004-AC19).
+	for _, path := range []string{"/admin", "/r/some-room"} {
+		resp, err := http.Get(e.ts.URL + path) //nolint:noctx // test
+		if err != nil {
+			t.Fatal(err)
+		}
+		page, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		m := regexp.MustCompile(`(?s)<script type="importmap">(.*?)</script>`).FindSubmatch(page)
+		if resp.StatusCode != http.StatusOK || m == nil {
+			t.Fatalf("%s: %d", path, resp.StatusCode)
+		}
+		sum := sha256.Sum256(m[1])
+		if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'self' 'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'") {
+			t.Fatalf("%s csp: %s", path, csp)
+		}
 	}
-	page, _ := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	m := regexp.MustCompile(`(?s)<script type="importmap">(.*?)</script>`).FindSubmatch(page)
-	if resp.StatusCode != http.StatusOK || m == nil {
-		t.Fatalf("page: %d", resp.StatusCode)
-	}
-	sum := sha256.Sum256(m[1])
-	if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'self' 'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'") {
-		t.Fatalf("csp: %s", csp)
-	}
-	for _, p := range []string{"/static/esm/preact.js", "/static/esm/signals.js", "/static/esm/htm-preact.js", "/static/admin/admin.js"} {
+	for _, p := range []string{"/static/esm/preact.js", "/static/esm/signals.js", "/static/esm/htm-preact.js", "/static/admin/admin.js",
+		"/static/admin/room-admin.js", "/static/admin/room-panel.js"} {
 		if code, _ := e.do(t, "GET", p, "", nil); code != http.StatusOK {
 			t.Errorf("%s: %d", p, code)
 		}
 	}
-	// The room pages keep their own policy, with no inline script.
-	resp, err = http.Get(e.ts.URL + "/join") //nolint:noctx // test
+	// The join page keeps the default policy, with no inline script.
+	resp, err := http.Get(e.ts.URL + "/join") //nolint:noctx // test
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -520,18 +524,15 @@ func TestAdminRoutesFailWithTheStore(t *testing.T) {
 			t.Errorf("%s %s: %d", c.method, c.path, code)
 		}
 	}
-	// The action fails too; its name lookup and audit write are logged, not fatal.
 	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID, e.admin, nil); code != http.StatusInternalServerError {
 		t.Errorf("delete room: %d", code)
 	}
-	r := httptest.NewRequestWithContext(t.Context(), "POST", "/", nil)
-	e.srv.audit(r, ActionRoomCreate, store.TargetRoom, "x", "", nil)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer func(d time.Duration) { auditPurgeEvery = d }(auditPurgeEvery)
 	auditPurgeEvery = time.Millisecond
 	time.AfterFunc(20*time.Millisecond, cancel)
 	e.srv.PurgeAudit(ctx)
-	for _, ev := range []string{"admin_session_lookup_failed", "audit_target_name_failed", "audit_write_failed", "audit_purge_failed", "admin_session_purge_failed"} {
+	for _, ev := range []string{"admin_session_lookup_failed", "delete_room_failed", "audit_purge_failed", "admin_session_purge_failed"} {
 		if logs.FilterMessage(ev).Len() == 0 {
 			t.Errorf("no %s logged", ev)
 		}

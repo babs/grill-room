@@ -14,17 +14,21 @@
 <script src="/static/vendor/livekit-client.umd.js" defer></script>
 <script src="/static/bridge.js" defer></script>
 <script src="/static/room.js" defer></script>
+<script type="importmap">{"imports": {
+  "preact": "/static/esm/preact.js",
+  "preact/hooks": "/static/esm/preact-hooks.js",
+  "@preact/signals-core": "/static/esm/signals-core.js",
+  "@preact/signals": "/static/esm/signals.js",
+  "htm": "/static/esm/htm.js",
+  "htm/preact": "/static/esm/htm-preact.js"
+}}</script>
+<script type="module" src="/static/admin/room-admin.js"></script>
 </head>
 <body class="room">
 <header>
   <img src="/static/logo.svg" alt="" class="logo" width="32" height="32">
   <h1 id="room-name">grill-room</h1>
-  <button type="button" id="rename-open" class="small">Rename</button>
-  <form id="rename" hidden>
-    <input id="rename-input" maxlength="100" aria-label="Room name" required>
-    <button type="submit">Save</button>
-    <button type="button" id="rename-cancel">Cancel</button>
-  </form>
+  <button type="button" id="manage-open" class="small" hidden>Manage</button>
   <div id="voice" hidden>
     <span id="stt-status" role="status"></span>
     <button type="button" id="voice-join">Join audio</button>
@@ -75,6 +79,23 @@
     <label>Add from the library <select id="persona-template" required></select></label>
     <button type="submit">Add</button>
   </form>
+  <section id="room-skills" aria-labelledby="room-skills-title">
+    <h3 id="room-skills-title">Room skills</h3>
+    <p class="hint">The room's own copies of skills, at the version copied. They stay when whoever copied them leaves, and any persona can turn them on.</p>
+    <ul id="room-skill-list"></ul>
+    <form id="room-skill-copy" hidden>
+      <label>Copy one of your personal skills into the room <select id="room-skill-source" required></select></label>
+      <button type="submit">Copy</button>
+    </form>
+  </section>
+</dialog>
+<dialog id="manage" aria-labelledby="manage-title">
+  <div class="dialog-head">
+    <h2 id="manage-title">Manage the room</h2>
+    <button type="button" id="manage-close" class="small">Close</button>
+  </div>
+  <p class="hint">You are a room admin. Every action here is recorded in the instance's audit log.</p>
+  <div id="room-admin"></div>
 </dialog>
 <dialog id="skills-disclaimer" aria-labelledby="skills-disclaimer-title">
   <h2 id="skills-disclaimer-title">Before you turn on a skill</h2>

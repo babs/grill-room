@@ -78,7 +78,7 @@ func (s *Server) setQuota(w http.ResponseWriter, r *http.Request, sess *session)
 		return
 	}
 	room := r.PathValue("room")
-	err := s.bus.Store.SetRoomQuota(r.Context(), room, *req.QuotaBytes)
+	err := s.bus.Store.SetRoomQuota(s.auditing(r, ActionRoomQuota, store.TargetRoom, room, "", map[string]any{"quota_bytes": *req.QuotaBytes}), room, *req.QuotaBytes)
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "no such room")
 		return
@@ -87,7 +87,6 @@ func (s *Server) setQuota(w http.ResponseWriter, r *http.Request, sess *session)
 		s.serverError(w, "set_quota_failed", err)
 		return
 	}
-	s.audit(r, ActionRoomQuota, store.TargetRoom, room, s.targetName(r, store.TargetRoom, room), map[string]any{"quota_bytes": *req.QuotaBytes})
 	s.log.Info("room_quota_set", zap.String("room", room), zap.Int64("quota_bytes", *req.QuotaBytes))
 	w.WriteHeader(http.StatusNoContent)
 }

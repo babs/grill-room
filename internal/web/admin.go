@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"crypto/subtle"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -52,7 +51,8 @@ const (
 
 // AuditActions lists every action, for the audit view's filter.
 var AuditActions = []string{ActionRoomCreate, ActionRoomRename, ActionRoomDelete, ActionRoomQuota, ActionInviteCreate, ActionInviteRevoke,
-	ActionProfileDelete, ActionTemplateRemove, ActionSkillRemove, ActionAdminLogin, ActionAdminLogout, ActionSessionRevoke}
+	ActionRoomAdminAdd, ActionRoomAdminRemove, ActionRoomSkillRemove, ActionProfileDelete, ActionTemplateRemove, ActionSkillRemove, ActionSettings,
+	ActionAdminLogin, ActionAdminLogout, ActionSessionRevoke}
 
 // adminCSP admits the /admin page's import map by its hash.
 var adminCSP = func() string {
@@ -128,9 +128,10 @@ func (s *Server) memberOrAdmin(next func(http.ResponseWriter, *http.Request, *se
 	})
 }
 
-// audit records an admin action that took place, under the request's admin caller. The write
-// outlives a client gone meanwhile; a failed one is logged with the entry.
-func (s *Server) audit(r *http.Request, action, kind, id, name string, details map[string]any) {
+// auditing returns r's context carrying the entry of an admin action by the request's admin
+// caller. The store writes it in the transaction of the change itself, so a failed write fails the
+// change (004-AC6). The store also reads the target's name there when name is empty.
+func (s *Server) auditing(r *http.Request, action, kind, id, name string, details map[string]any) context.Context {
 	if details == nil {
 		details = map[string]any{}
 	}
@@ -140,22 +141,7 @@ func (s *Server) audit(r *http.Request, action, kind, id, name string, details m
 		details["via"] = "token"
 	}
 	e := store.AuditEntry{At: s.now(), Actor: store.ActorSuperAdmin, Action: action, TargetKind: kind, TargetID: id, TargetName: name}
-	var err error
-	if e.Details, err = json.Marshal(details); err == nil {
-		err = s.bus.Store.Audit(context.WithoutCancel(r.Context()), e)
-	}
-	if err != nil {
-		s.log.Error("audit_write_failed", zap.String("action", action), zap.String("target_kind", kind), zap.String("target_id", id), zap.Error(err))
-	}
-}
-
-// targetName is the name an audit entry keeps for a target about to change or go.
-func (s *Server) targetName(r *http.Request, kind, id string) string {
-	name, err := s.bus.Store.AuditTargetName(r.Context(), kind, id)
-	if err != nil {
-		s.log.Error("audit_target_name_failed", zap.String("target_kind", kind), zap.String("target_id", id), zap.Error(err))
-	}
-	return name
+	return store.WithAudit(r.Context(), e, details)
 }
 
 func (s *Server) adminPage(w http.ResponseWriter, r *http.Request) {
@@ -214,14 +200,15 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.loginLimit.reset(key)
 	tok := NewToken()
-	sess, err := s.bus.Store.CreateAdminSession(r.Context(), HashToken(tok), clip(r.UserAgent(), maxUserAgent), ip, now)
+	// The session's own id is the target, and its caller: the store fills both once it exists.
+	ctx := store.WithAudit(r.Context(), store.AuditEntry{At: now, Actor: store.ActorSuperAdmin, Action: ActionAdminLogin, TargetKind: store.TargetAdminSession},
+		map[string]any{"ip": ip, "via": "session"})
+	sess, err := s.bus.Store.CreateAdminSession(ctx, HashToken(tok), clip(r.UserAgent(), maxUserAgent), ip, now)
 	if err != nil {
 		s.serverError(w, "admin_login_failed", err)
 		return
 	}
 	setAdminCookie(w, r, tok, int(store.AdminSessionTTL/time.Second))
-	ar := r.WithContext(context.WithValue(r.Context(), adminKey{}, adminCaller{Session: sess.ID}))
-	s.audit(ar, ActionAdminLogin, store.TargetAdminSession, strconv.FormatInt(sess.ID, 10), "", map[string]any{"ip": ip})
 	s.log.Info("admin_signed_in", zap.Int64("session", sess.ID))
 	writeJSON(w, http.StatusCreated, sess)
 }
@@ -229,11 +216,11 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 // adminLogout ends the caller's own session and clears its cookie.
 func (s *Server) adminLogout(w http.ResponseWriter, r *http.Request) {
 	if id := callerOf(r).Session; id != 0 {
-		if err := s.bus.Store.RevokeAdminSession(r.Context(), id); err != nil && !errors.Is(err, store.ErrNotFound) {
+		ctx := s.auditing(r, ActionAdminLogout, store.TargetAdminSession, strconv.FormatInt(id, 10), "", nil)
+		if err := s.bus.Store.RevokeAdminSession(ctx, id); err != nil && !errors.Is(err, store.ErrNotFound) {
 			s.serverError(w, "admin_logout_failed", err)
 			return
 		}
-		s.audit(r, ActionAdminLogout, store.TargetAdminSession, strconv.FormatInt(id, 10), "", nil)
 	}
 	setAdminCookie(w, r, "", -1)
 	w.WriteHeader(http.StatusNoContent)
@@ -263,7 +250,7 @@ func (s *Server) adminSessions(w http.ResponseWriter, r *http.Request) {
 func (s *Server) revokeAdminSession(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err == nil {
-		err = s.bus.Store.RevokeAdminSession(r.Context(), id)
+		err = s.bus.Store.RevokeAdminSession(s.auditing(r, ActionSessionRevoke, store.TargetAdminSession, strconv.FormatInt(id, 10), "", nil), id)
 	}
 	if errors.Is(err, store.ErrNotFound) || errors.Is(err, strconv.ErrSyntax) || errors.Is(err, strconv.ErrRange) {
 		httpError(w, http.StatusNotFound, "no such session")
@@ -273,7 +260,6 @@ func (s *Server) revokeAdminSession(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "revoke_admin_session_failed", err)
 		return
 	}
-	s.audit(r, ActionSessionRevoke, store.TargetAdminSession, strconv.FormatInt(id, 10), "", nil)
 	if id == callerOf(r).Session {
 		setAdminCookie(w, r, "", -1)
 	}

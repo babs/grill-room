@@ -1,6 +1,8 @@
 package store
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -71,40 +73,34 @@ func TestAuditOutlivesTargetsUntilPurged(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	p := seed(t, s, "a")
-	name, err := s.AuditTargetName(ctx, TargetRoom, "a")
-	if err != nil || name != "Room a" {
-		t.Fatalf("room name: %q %v", name, err)
-	}
 	pid := strconv.FormatInt(p.ProfileID, 10)
-	if name, err := s.AuditTargetName(ctx, TargetProfile, pid); err != nil || name != "Alice" {
-		t.Fatalf("profile name: %q %v", name, err)
-	}
 	audit(t, s, t0.Add(-400*24*time.Hour), "room.create", TargetRoom, "a", "Room a")
-	audit(t, s, t0, "room.delete", TargetRoom, "a", "Room a")
-	audit(t, s, t0, "profile.delete", TargetProfile, pid, "Alice")
-	if err := s.DeleteRoom(ctx, "a"); err != nil {
+	// The entries read the names the targets have in the delete's own transaction.
+	entry := func(action, kind, id string) context.Context {
+		return WithAudit(ctx, AuditEntry{At: t0, Actor: ActorSuperAdmin, Action: action, TargetKind: kind, TargetID: id}, nil)
+	}
+	if err := s.DeleteProfile(entry("profile.delete", TargetProfile, pid), p.ProfileID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteProfile(ctx, p.ProfileID); err != nil {
+	if err := s.DeleteRoom(entry("room.delete", TargetRoom, "a"), "a"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.AuditLog(ctx, AuditQuery{Limit: 10})
-	if err != nil || len(got) != 3 || got[2].TargetName != "Room a" || got[0].TargetName != "Alice" || string(got[0].Details) != "{}" {
+	if err != nil || len(got) != 3 || got[0].TargetName != "Room a" || got[1].TargetName != "Alice" || string(got[0].Details) != "{}" {
 		t.Fatalf("after deletes: %+v %v", got, err)
 	}
-	for kind, id := range map[string]string{TargetRoom: "a", TargetProfile: pid, TargetSkill: "1", TargetTemplate: "999"} {
-		if name, err := s.AuditTargetName(ctx, kind, id); err != nil || name != "" {
-			t.Errorf("gone %s: %q %v", kind, name, err)
-		}
+	// A target gone already: the delete fails, and no entry is written.
+	if err := s.DeleteRoom(entry("room.delete", TargetRoom, "a"), "a"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second delete: %v", err)
 	}
-	if _, err := s.AuditTargetName(ctx, "planet", "x"); err == nil {
-		t.Error("unknown kind accepted")
+	if again, _ := s.AuditLog(ctx, AuditQuery{Limit: 10}); len(again) != 3 {
+		t.Fatalf("a failed delete wrote an entry: %+v", again)
 	}
 	n, err := s.PurgeAudit(ctx, t0.Add(-365*24*time.Hour))
 	if err != nil || n != 1 {
 		t.Fatalf("purge: %d %v", n, err)
 	}
-	if got, _ := s.AuditLog(ctx, AuditQuery{Limit: 10}); len(got) != 2 || got[1].Action != "room.delete" {
+	if got, _ := s.AuditLog(ctx, AuditQuery{Limit: 10}); len(got) != 2 || got[0].Action != "room.delete" {
 		t.Fatalf("after purge: %+v", got)
 	}
 }
@@ -160,11 +156,78 @@ func TestAdminCallsFailWithTheStore(t *testing.T) {
 		"audit":       func() error { return s.Audit(ctx, AuditEntry{At: t0, Action: "x"}) },
 		"log":         func() error { _, err := s.AuditLog(ctx, AuditQuery{Limit: 1}); return err },
 		"purge audit": func() error { _, err := s.PurgeAudit(ctx, t0); return err },
-		"target name": func() error { _, err := s.AuditTargetName(ctx, TargetRoom, "a"); return err },
 	}
 	for name, call := range calls {
 		if err := call(); err == nil || errors.Is(err, ErrNotFound) {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+// 004-AC6: an audited change and its entry share one transaction. The entry goes first to fail:
+// a failed audit write rolls the change back (the reverse, a failed change, writes no entry, as
+// TestAuditOutlivesTargetsUntilPurged shows).
+func TestAuditWriteFailureRollsBackTheChange(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	p := seed(t, s, "a")
+	tpl, err := s.PublishTemplate(ctx, p.ProfileID, "Alice", "Critic", PersonaFields{Name: "Critic", Badge: "🧐", Colour: "#112233", Text: "v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := publish(t, s, p.ProfileID, true, "stamp", "v1")
+	sess, err := s.CreateAdminSession(ctx, "h1", "ua", "ip", t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invs, err := s.Invites(ctx, "a", 0)
+	if err != nil || len(invs) != 1 {
+		t.Fatalf("invites %+v %v", invs, err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE TRIGGER audit_down BEFORE INSERT ON audit_log BEGIN SELECT RAISE(ABORT, 'audit down'); END`); err != nil {
+		t.Fatal(err)
+	}
+	audited := func(kind, id string) context.Context {
+		return WithAudit(ctx, AuditEntry{At: t0, Actor: ActorSuperAdmin, Action: "x", TargetKind: kind, TargetID: id}, nil)
+	}
+	one := func(q string, args ...any) string {
+		var v sql.NullString
+		if err := s.db.QueryRowContext(ctx, q, args...).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v.String
+	}
+	for _, c := range []struct {
+		name   string
+		change func() error
+		state  string
+		args   []any
+		want   string
+	}{
+		{"create room", func() error { _, err := s.CreateRoom(audited(TargetRoom, "n"), "n", "N"); return err }, `SELECT count(*) FROM rooms WHERE id = 'n'`, nil, "0"},
+		{"delete room", func() error { return s.DeleteRoom(audited(TargetRoom, "a"), "a") }, `SELECT count(*) FROM rooms WHERE id = 'a'`, nil, "1"},
+		{"rename room", func() error { _, err := s.RenameRoom(audited(TargetRoom, "a"), "a", "Z", nil); return err }, `SELECT name FROM rooms WHERE id = 'a'`, nil, "Room a"},
+		{"room quota", func() error { return s.SetRoomQuota(audited(TargetRoom, "a"), "a", 5) }, `SELECT quota_bytes FROM rooms WHERE id = 'a'`, nil, ""},
+		{"create invite", func() error { _, err := s.CreateInvite(audited(TargetRoom, "a"), "a", "ix", 0); return err }, `SELECT count(*) FROM invites WHERE token_hash = 'ix'`, nil, "0"},
+		{"revoke invite", func() error { _, err := s.RevokeInvite(audited(TargetRoom, "a"), "a", invs[0].ID); return err }, `SELECT revoked_at FROM invites WHERE id = ?`, []any{invs[0].ID}, ""},
+		{"delete profile", func() error { return s.DeleteProfile(audited(TargetProfile, "p"), p.ProfileID) }, `SELECT count(*) FROM profiles WHERE id = ?`, []any{p.ProfileID}, "1"},
+		{"remove template", func() error { return s.RemoveTemplate(audited(TargetTemplate, "t"), tpl.ID) }, `SELECT count(*) FROM persona_templates WHERE id = ?`, []any{tpl.ID}, "1"},
+		{"remove skill", func() error { return s.RemoveSkill(audited(TargetSkill, "k"), k.ID, 0) }, `SELECT count(*) FROM skills WHERE id = ?`, []any{k.ID}, "1"},
+		{"admin login", func() error {
+			_, err := s.CreateAdminSession(audited(TargetAdminSession, ""), "h2", "ua", "ip", t0)
+			return err
+		}, `SELECT count(*) FROM admin_sessions`, nil, "1"},
+		{"admin revoke", func() error { return s.RevokeAdminSession(audited(TargetAdminSession, "s"), sess.ID) }, `SELECT count(*) FROM admin_sessions`, nil, "1"},
+	} {
+		if err := c.change(); err == nil || !strings.Contains(err.Error(), "audit down") {
+			t.Errorf("%s: %v, want the audit failure", c.name, err)
+		}
+		if got := one(c.state, c.args...); got != c.want {
+			t.Errorf("%s: state %q, want %q: the change outlived its failed audit", c.name, got, c.want)
+		}
+	}
+	// The same changes without an entry to write go through.
+	if err := s.SetRoomQuota(ctx, "a", 5); err != nil {
+		t.Fatal(err)
 	}
 }

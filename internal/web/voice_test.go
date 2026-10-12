@@ -126,6 +126,16 @@ func TestVoiceCSPAllowsLiveKit(t *testing.T) {
 	if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "connect-src 'self' wss://livekit.example https://livekit.example") {
 		t.Fatalf("csp %q", csp)
 	}
+	// The room page, which sets its own policy for its import map, keeps LiveKit in reach.
+	resp, err = http.Get(e.ts.URL + "/r/x") //nolint:noctx // test
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "connect-src 'self' wss://livekit.example https://livekit.example") ||
+		!strings.Contains(csp, "script-src 'self' 'sha256-") {
+		t.Fatalf("room page csp %q", csp)
+	}
 	resp, err = http.Get(newEnv(t).ts.URL + "/healthz") //nolint:noctx // test
 	if err != nil {
 		t.Fatal(err)

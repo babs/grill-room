@@ -28,6 +28,16 @@
   <section id="signed-in" hidden>
     <h2>Your rooms</h2>
     <ul id="rooms" class="rooms"></ul>
+    <button type="button" id="room-new">New room</button>
+    <form id="room-create" hidden>
+      <label for="room-create-name">Room name</label>
+      <input id="room-create-name" maxlength="100" required>
+      <label for="room-create-as">Your name in the room</label>
+      <input id="room-create-as" maxlength="40" autocomplete="nickname" required>
+      <p class="hint">You become the room's admin: you rename it, manage its invites and admins, and delete it.</p>
+      <button type="submit">Create the room</button>
+    </form>
+    <p id="room-create-status" role="status"></p>
     <div id="skills">
       <h2>Your skills</h2>
       <p class="hint">A skill is a Claude Code skill folder: a SKILL.md with a name and a description, and its files. Upload it again to publish its next version; rooms keep the version they turned on until they take the new one.</p>

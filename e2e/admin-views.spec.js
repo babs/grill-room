@@ -78,16 +78,16 @@ for (const vp of widths) {
     await expect(panel).toContainText('of 200 MB used, the instance default.');
 
     // Rename.
-    await panel.locator('#room-name').fill(name + ' renamed');
+    await panel.locator('#room-name-input').fill(name + ' renamed');
     await panel.getByRole('button', { name: 'Rename' }).click();
     await expect(row.locator('td').first()).toHaveText(name + ' renamed');
     await audited(request, 'room.rename', room.id);
 
     // Invites: a new link shown once, then revoked.
-    const invites = panel.locator('#invites tbody tr');
+    const invites = panel.locator('#invites-all tbody tr');
     await expect(invites).toHaveCount(1);
     await panel.getByRole('button', { name: 'New invite link' }).click();
-    await expect(panel.locator('#invite-link')).toHaveValue(/\/join#\S+$/);
+    await expect(panel.locator('#invite-link-new')).toHaveValue(/\/join#\S+$/);
     await expect(invites).toHaveCount(2);
     await invites.nth(1).getByRole('button', { name: 'Revoke' }).click();
     await expect(invites.nth(1)).toContainText('revoked');

@@ -43,6 +43,8 @@ type agentState struct {
 	// (002-AC19); Changes, the persona changes waiting for the host's approval (002-AC21).
 	CapRequests []capRequest          `json:"cap_requests"`
 	Changes     []store.PersonaChange `json:"changes"`
+	// RoomSkills are the room's own skills, those waiting for the host included (004-AC10).
+	RoomSkills []store.Skill `json:"room_skills"`
 	// Chain is the count of agent-triggered turns against the room's budget (002-AC25).
 	Chain store.Chain `json:"chain"`
 }
@@ -138,6 +140,9 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 	}
 	st.CapRequests = capRequests(host, st.Personas)
 	if st.Changes, err = s.bus.Store.PersonaChanges(ctx, room); err != nil {
+		return nil, err
+	}
+	if st.RoomSkills, err = s.bus.Store.RoomSkills(ctx, room); err != nil {
 		return nil, err
 	}
 	return st, nil

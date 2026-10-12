@@ -434,7 +434,6 @@ func TestAdminRoutesRequireAdminToken(t *testing.T) {
 	routes := []struct{ method, path string }{
 		{"GET", "/api/rooms"},
 		{"POST", "/api/rooms"},
-		{"DELETE", "/api/rooms/" + room.ID},
 		{"GET", "/api/profiles"},
 		{"DELETE", "/api/profiles/1"},
 	}

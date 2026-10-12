@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -29,10 +31,17 @@ func (s *Store) CreateAdminSession(ctx context.Context, tokenHash, userAgent, ip
 		return nil, err
 	}
 	a := &AdminSession{CreatedAt: now.UTC(), LastUsedAt: now.UTC(), ExpiresAt: time.Unix(now.Add(AdminSessionTTL).Unix(), 0).UTC(), UserAgent: userAgent, IP: ip}
-	err := s.db.QueryRowContext(ctx, `INSERT INTO admin_sessions(token_hash, created_at, last_used_at, expires_at_s, user_agent, ip) VALUES(?,?,?,?,?,?) RETURNING id`,
-		tokenHash, a.CreatedAt.Format(time.RFC3339Nano), a.LastUsedAt.Format(time.RFC3339Nano), a.ExpiresAt.Unix(), userAgent, ip).Scan(&a.ID)
+	err := s.withTx(ctx, "create admin session", func(tx *sql.Tx) error {
+		err := tx.QueryRowContext(ctx, `INSERT INTO admin_sessions(token_hash, created_at, last_used_at, expires_at_s, user_agent, ip) VALUES(?,?,?,?,?,?) RETURNING id`,
+			tokenHash, a.CreatedAt.Format(time.RFC3339Nano), a.LastUsedAt.Format(time.RFC3339Nano), a.ExpiresAt.Unix(), userAgent, ip).Scan(&a.ID)
+		if err != nil {
+			return fmt.Errorf("create admin session: %w", err)
+		}
+		// A login is audited under the session it opens.
+		return auditTx(ctx, tx, strconv.FormatInt(a.ID, 10), map[string]any{"session": a.ID})
+	})
 	if err != nil {
-		return nil, fmt.Errorf("create admin session: %w", err)
+		return nil, err
 	}
 	return a, nil
 }
@@ -89,12 +98,22 @@ func (s *Store) PurgeAdminSessions(ctx context.Context, now time.Time) (int64, e
 
 // RevokeAdminSession ends session id. ErrNotFound if there is none.
 func (s *Store) RevokeAdminSession(ctx context.Context, id int64) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM admin_sessions WHERE id = ?`, id)
+	return s.withTx(ctx, "revoke admin session", func(tx *sql.Tx) error {
+		if err := execOne(ctx, tx, `DELETE FROM admin_sessions WHERE id = ?`, id); err != nil {
+			return err
+		}
+		return auditTx(ctx, tx, "", nil)
+	})
+}
+
+// deleteOne runs a DELETE that must remove a row: ErrNotFound when it removed none.
+func execOne(ctx context.Context, tx *sql.Tx, query string, args ...any) error {
+	res, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
-		return fmt.Errorf("revoke admin session %d: %w", id, err)
+		return fmt.Errorf("exec: %w", err)
 	}
 	if n, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("revoke admin session %d: %w", id, err)
+		return fmt.Errorf("exec: %w", err)
 	} else if n == 0 {
 		return ErrNotFound
 	}
@@ -111,6 +130,7 @@ const (
 	TargetSkill        = "skill"
 	TargetTemplate     = "template"
 	TargetAdminSession = "admin_session"
+	TargetInstance     = "instance"
 )
 
 // MaxAuditDetails caps an entry's details; larger ones are stored as {"truncated":true}.
@@ -130,7 +150,9 @@ type AuditEntry struct {
 }
 
 // Audit stores e. Empty details are stored as {}.
-func (s *Store) Audit(ctx context.Context, e AuditEntry) error {
+func (s *Store) Audit(ctx context.Context, e AuditEntry) error { return insertAudit(ctx, s.db, e) }
+
+func insertAudit(ctx context.Context, db execer, e AuditEntry) error {
 	switch {
 	case len(e.Details) == 0:
 		e.Details = json.RawMessage(`{}`)
@@ -139,12 +161,55 @@ func (s *Store) Audit(ctx context.Context, e AuditEntry) error {
 	case len(e.Details) > MaxAuditDetails:
 		e.Details = json.RawMessage(`{"truncated":true}`)
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO audit_log(at_ms, actor, action, target_kind, target_id, target_name, details) VALUES(?,?,?,?,?,?,?)`,
+	_, err := db.ExecContext(ctx, `INSERT INTO audit_log(at_ms, actor, action, target_kind, target_id, target_name, details) VALUES(?,?,?,?,?,?,?)`,
 		e.At.UnixMilli(), e.Actor, e.Action, e.TargetKind, e.TargetID, e.TargetName, string(e.Details))
 	if err != nil {
 		return fmt.Errorf("audit %s: %w", e.Action, err)
 	}
 	return nil
+}
+
+type auditKey struct{}
+
+type pendingAudit struct {
+	e       AuditEntry
+	details map[string]any
+}
+
+// WithAudit returns ctx carrying e and its details: the audited mutation run with it writes e in
+// its own transaction, so the change and its entry commit together or not at all, and a failed
+// audit write fails the change (004-AC6).
+func WithAudit(ctx context.Context, e AuditEntry, details map[string]any) context.Context {
+	return context.WithValue(ctx, auditKey{}, &pendingAudit{e: e, details: details})
+}
+
+// auditTx writes the entry ctx carries, if any, in tx. id, when set, is the target's id, for a
+// target the mutation creates; extra adds details. An entry without a target name gets the one the
+// target has in tx: run it before a delete, after a rename.
+func auditTx(ctx context.Context, tx *sql.Tx, id string, extra map[string]any) error {
+	p, _ := ctx.Value(auditKey{}).(*pendingAudit)
+	if p == nil {
+		return nil
+	}
+	e := p.e
+	if id != "" {
+		e.TargetID = id
+	}
+	if q, ok := targetNames[e.TargetKind]; ok && e.TargetName == "" {
+		if err := tx.QueryRowContext(ctx, q, e.TargetID).Scan(&e.TargetName); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("audit %s: target name: %w", e.Action, err)
+		}
+	}
+	details := maps.Clone(p.details)
+	if details == nil {
+		details = map[string]any{}
+	}
+	maps.Copy(details, extra)
+	var err error
+	if e.Details, err = json.Marshal(details); err != nil {
+		return fmt.Errorf("audit %s: %w", e.Action, err)
+	}
+	return insertAudit(ctx, tx, e)
 }
 
 // AuditQuery selects audit entries: those before entry Before when not 0, of Action when set,
@@ -199,21 +264,4 @@ var targetNames = map[string]string{
 	TargetProfile:  `SELECT COALESCE((SELECT name FROM participants WHERE profile_id = p.id ORDER BY id DESC LIMIT 1), p.uuid, '') FROM profiles p WHERE p.id = ?`,
 	TargetSkill:    `SELECT name FROM skills WHERE id = ?`,
 	TargetTemplate: `SELECT title FROM persona_templates WHERE id = ?`,
-}
-
-// AuditTargetName returns the current name of target id of kind, "" when it does not exist.
-func (s *Store) AuditTargetName(ctx context.Context, kind, id string) (string, error) {
-	q, ok := targetNames[kind]
-	if !ok {
-		return "", fmt.Errorf("audit target name: unknown kind %q", kind)
-	}
-	var name string
-	err := s.db.QueryRowContext(ctx, q, id).Scan(&name)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("audit target name %s %s: %w", kind, id, err)
-	}
-	return name, nil
 }

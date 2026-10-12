@@ -558,25 +558,45 @@ func TestAdminDeletesProfile(t *testing.T) {
 	}
 }
 
-// 002-AC6: any member renames, the admin too, and the room hears who renamed it from what to what.
+// createRoom creates a room from the device's profile page, as name, joining a lobby first when
+// the device holds no profile yet (004-AC7).
+func (d *device) createRoom(t *testing.T, room, name string) store.Room {
+	t.Helper()
+	if d.profile(t).Profile == nil {
+		d.join(t, d.e.createRoom(t, "Lobby").ID, name)
+	}
+	code, b := d.do(t, "POST", "/api/profile/rooms", map[string]string{"name": room, "display_name": name})
+	if code != http.StatusCreated {
+		t.Fatalf("create room: %d %s", code, b)
+	}
+	return decodeJSON[store.Room](t, b)
+}
+
+// 002-AC6 004-AC8: a room admin renames, the super-admin too, and the room hears who renamed it
+// from what to what; a plain member cannot any more.
 func TestRenameRoom(t *testing.T) {
 	e := newEnv(t)
-	room := e.createRoom(t, "Pricing")
-	alice := e.join(t, e.createInvite(t, room.ID).Token, "Alice")
+	alice := e.device(t)
+	room := alice.createRoom(t, "Pricing", "Alice")
+	bob := e.join(t, e.createInvite(t, room.ID).Token, "Bob")
 	stranger := e.join(t, e.createInvite(t, e.createRoom(t, "Other").ID).Token, "Mallory")
-	ch := e.openEvents(t, room.ID, alice.Token, "")
+	ch := e.openEvents(t, room.ID, bob.Token, "")
 	nextMessage(t, ch) // Alice joined
+	nextMessage(t, ch) // Bob joined
 	path := "/api/rooms/" + room.ID
 	for _, bad := range []string{"", "  ", strings.Repeat("x", maxRoomName+1), "a\u202eb", "a\nb"} {
-		if code, _ := e.do(t, "PATCH", path, alice.Token, map[string]string{"name": bad}); code != http.StatusBadRequest {
+		if code, _ := alice.do(t, "PATCH", path, map[string]string{"name": bad}); code != http.StatusBadRequest {
 			t.Errorf("rename to %q: %d, want 400", bad, code)
 		}
 	}
 	if code, _ := e.do(t, "PATCH", path, stranger.Token, map[string]string{"name": "x"}); code != http.StatusUnauthorized {
 		t.Fatalf("another room's member: %d", code)
 	}
+	if code, _ := e.do(t, "PATCH", path, bob.Token, map[string]string{"name": "x"}); code != http.StatusForbidden {
+		t.Fatalf("plain member: %d", code)
+	}
 	const xss = `<img src=x onerror=alert(1)>`
-	code, b := e.do(t, "PATCH", path, alice.Token, map[string]string{"name": xss})
+	code, b := alice.do(t, "PATCH", path, map[string]string{"name": xss})
 	if code != http.StatusOK || decodeJSON[store.Room](t, b).Name != xss {
 		t.Fatalf("rename: %d %s", code, b)
 	}
