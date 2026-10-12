@@ -176,6 +176,11 @@
     <details id="notify">
       <summary>Notifications</summary>
       <label><input type="checkbox" id="count-voice"> Count voice lines in the tab title</label>
+      <p class="hint">Browser notifications reach you while no tab of this room is focused, the browser closed too: when someone mentions you, when a persona answers, and when a turn you started ends.</p>
+      <p id="push-hint" class="hint" hidden></p>
+      <button type="button" id="push-toggle" class="small" hidden>Turn on notifications</button>
+      <label id="push-all-label" hidden><input type="checkbox" id="push-all"> Also every other line</label>
+      <p id="push-status" role="status"></p>
     </details>
     <details id="host-agent" hidden>
       <summary>Host the agent</summary>

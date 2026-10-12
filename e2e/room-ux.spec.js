@@ -220,3 +220,23 @@ test('document manager in its own window', async ({ browser, request }) => {
   await expect(phone.locator('#documents')).toBeVisible();
   expect(await noOverflow(phone)).toEqual([]);
 });
+
+// 005-AC24: the Notifications section offers browser notifications, and on an iPhone outside the
+// home screen says they need the room added there. A real push runs in push/ (make e2e-push):
+// Chrome has no Push API in Playwright's contexts.
+test('notification controls, desktop and iPhone', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.locator('#notify summary').click();
+  await expect(alice.getByRole('button', { name: 'Turn on notifications' })).toBeVisible();
+  await expect(alice.locator('#push-hint')).toBeHidden();
+  const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
+  const ua = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+  const phone = await (await browser.newContext({ userAgent: ua, viewport: { width: 390, height: 844 } })).newPage();
+  await phone.goto(new URL(inv.url).pathname + new URL(inv.url).hash);
+  await phone.getByLabel('Your name').fill('Ian');
+  await phone.getByRole('button', { name: 'Join the room' }).click();
+  await phone.getByRole('button', { name: /People/ }).click();
+  await phone.locator('#notify summary').click();
+  await expect(phone.locator('#push-hint')).toHaveText(/add.*home screen|Add to Home Screen/i);
+  expect(await noOverflow(phone)).toEqual([]);
+});

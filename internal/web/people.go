@@ -32,6 +32,8 @@ type tab struct {
 	streams                 int
 	beat                    time.Time
 	audio, mic, muted, deaf bool
+	// focused is the page in the foreground with the focus: no push for this room then (005-AC24).
+	focused bool
 }
 
 // person is a participant's presence in their room: their tabs and their last sign of life.
@@ -99,7 +101,7 @@ func (pp *people) beat(room string, pid int64, id string, st tab, gone bool, now
 		if t != nil && t.streams == 0 {
 			delete(p.tabs, id)
 		} else if t != nil {
-			t.audio, t.mic, t.muted, t.deaf = false, false, false, false
+			t.audio, t.mic, t.muted, t.deaf, t.focused = false, false, false, false, false
 		}
 		return true
 	}
@@ -110,8 +112,24 @@ func (pp *people) beat(room string, pid int64, id string, st tab, gone bool, now
 		t = &tab{}
 		p.tabs[id] = t
 	}
-	t.beat, t.audio, t.mic, t.muted, t.deaf = now, st.audio, st.mic, st.muted, st.deaf
+	t.beat, t.audio, t.mic, t.muted, t.deaf, t.focused = now, st.audio, st.mic, st.muted, st.deaf, st.focused
 	return true
+}
+
+// focused reports whether one of participant pid's live tabs in room has the focus.
+func (pp *people) focused(room string, pid int64, now time.Time) bool {
+	pp.mu.Lock()
+	defer pp.mu.Unlock()
+	p := pp.m[room][pid]
+	if p == nil {
+		return false
+	}
+	for _, t := range p.tabs {
+		if t.focused && t.alive(now) {
+			return true
+		}
+	}
+	return false
 }
 
 // here reports participant pid of room present at now.
@@ -214,6 +232,8 @@ func (s *Server) postPresence(w http.ResponseWriter, r *http.Request, sess sessi
 		Muted bool   `json:"muted"`
 		Deaf  bool   `json:"deaf"`
 		Gone  bool   `json:"gone"`
+		// Focused: the page is visible and has the focus (005-AC24).
+		Focused bool `json:"focused"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -222,7 +242,7 @@ func (s *Server) postPresence(w http.ResponseWriter, r *http.Request, sess sessi
 		httpError(w, http.StatusBadRequest, "tab must be 1 to 64 letters, digits, - or _")
 		return
 	}
-	st := tab{audio: req.Audio, mic: req.Audio && req.Mic, muted: req.Audio && req.Muted && !req.Mic, deaf: req.Audio && req.Deaf}
+	st := tab{audio: req.Audio, mic: req.Audio && req.Mic, muted: req.Audio && req.Muted && !req.Mic, deaf: req.Audio && req.Deaf, focused: req.Focused}
 	if !s.people.beat(sess.p.RoomID, sess.p.ID, req.Tab, st, req.Gone, s.now()) {
 		httpError(w, http.StatusTooManyRequests, fmt.Sprintf("at most %d open tabs", maxTabs))
 		return

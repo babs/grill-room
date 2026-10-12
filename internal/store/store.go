@@ -601,6 +601,19 @@ CREATE INDEX messages_turn ON messages(turn_id) WHERE turn_id IS NOT NULL;
 `, `
 -- 005-AC1: the name a profile chose for itself; NULL keeps the one it last joined a room with.
 ALTER TABLE profiles ADD COLUMN name TEXT;
+`, `
+-- 005-AC24: a participant's Web Push subscriptions, one per browser; they go with the participant
+-- and so with the room. all_messages opts in to every line, not only the default triggers.
+CREATE TABLE push_subscriptions (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	participant_id INTEGER NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+	endpoint TEXT NOT NULL,
+	p256dh TEXT NOT NULL,
+	auth TEXT NOT NULL,
+	all_messages INTEGER NOT NULL DEFAULT 0 CHECK (all_messages IN (0, 1)),
+	created_at TEXT NOT NULL,
+	UNIQUE (participant_id, endpoint)
+);
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -692,6 +705,24 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 		return fmt.Errorf("set setting %s: %w", key, err)
 	}
 	return nil
+}
+
+// LastMessageID is the newest line's id across rooms, 0 with none.
+func (s *Store) LastMessageID(ctx context.Context) (int64, error) {
+	var id int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM messages`).Scan(&id); err != nil {
+		return 0, fmt.Errorf("last message id: %w", err)
+	}
+	return id, nil
+}
+
+// SettingOrInit reads key, writing init first when it is absent: a key generated once, as the
+// VAPID key (005-AC24), keeps the first value written.
+func (s *Store) SettingOrInit(ctx context.Context, key, init string) (string, error) {
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO settings(key, value) VALUES(?,?) ON CONFLICT(key) DO NOTHING`, key, init); err != nil {
+		return "", fmt.Errorf("init setting %s: %w", key, err)
+	}
+	return s.Setting(ctx, key)
 }
 
 // CreateRoom inserts a room with the given id, and the Default template's persona (002-AC42).
@@ -1097,7 +1128,7 @@ func (s *Store) LastVoice(ctx context.Context, roomID string) (*Message, error) 
 const (
 	messageFields = `id, ts, room_id, kind, COALESCE(participant_id, 0), sender, body, COALESCE(html, ''), model, edited_at, deleted_at, change_seq,
 		COALESCE(persona_id, 0), effort, COALESCE((SELECT badge FROM room_personas WHERE id = messages.persona_id), ''),
-		COALESCE((SELECT colour FROM room_personas WHERE id = messages.persona_id), ''), req_model, req_effort, model_note, model_mismatch`
+		COALESCE((SELECT colour FROM room_personas WHERE id = messages.persona_id), ''), req_model, req_effort, model_note, model_mismatch, COALESCE(turn_id, 0)`
 	messageCols = `SELECT ` + messageFields + ` FROM messages `
 )
 
@@ -1123,7 +1154,7 @@ func scanMessage(sc scanner, extra ...any) (*Message, error) {
 	var ts string
 	var edited, deleted sql.NullString
 	err := sc.Scan(append([]any{&m.ID, &ts, &m.RoomID, &m.Kind, &m.ParticipantID, &m.Sender, &m.Body, &m.HTML, &m.Model, &edited, &deleted, &m.ChangeSeq,
-		&m.PersonaID, &m.Effort, &m.Badge, &m.Colour, &m.ReqModel, &m.ReqEffort, &m.ModelNote, &m.ModelMismatch}, extra...)...)
+		&m.PersonaID, &m.Effort, &m.Badge, &m.Colour, &m.ReqModel, &m.ReqEffort, &m.ModelNote, &m.ModelMismatch, &m.TurnID}, extra...)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

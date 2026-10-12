@@ -8,5 +8,5 @@
   ],
   "theme_color": "#159F8C",
   "background_color": "#159F8C",
-  "display": "browser"
+  "display": "standalone"
 }

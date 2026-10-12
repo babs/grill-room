@@ -99,6 +99,8 @@ type Config struct {
 	ClientRetention time.Duration
 	// TrustedProxies are the reverse proxies whose X-Forwarded-For names the client.
 	TrustedProxies []netip.Prefix
+	// PushHosts replaces the push services Web Push subscriptions may name; nil keeps the default.
+	PushHosts []string
 }
 
 func loadConfig() (Config, error) {
@@ -127,6 +129,7 @@ func loadConfig() (Config, error) {
 		AuditRetention:  auditRetention,
 		ClientRetention: clientRetention,
 		TrustedProxies:  proxies,
+		PushHosts:       pushHosts(os.Getenv("GRILL_ROOM_PUSH_HOSTS")),
 		TurnTimeout:     turnTimeout,
 		MaxUploadMB:     maxUpload,
 		MaxRoomMB:       maxRoom,
@@ -370,6 +373,7 @@ func run() error {
 		AuditRetention:     cfg.AuditRetention,
 		ClientRetention:    cfg.ClientRetention,
 		TrustedProxies:     cfg.TrustedProxies,
+		PushHosts:          cfg.PushHosts,
 		Version:            Version,
 		DBPath:             cfg.DB,
 	}, logger)
@@ -402,10 +406,22 @@ func run() error {
 	g.Go(func() error { return web.Serve(gctx, appSrv, logger) })
 	g.Go(func() error { return web.Serve(gctx, metricsSrv, logger) })
 	g.Go(func() error { srv.PurgeAudit(gctx); return nil })
+	g.Go(func() error { srv.PushLoop(gctx); return nil })
 	logger.Info("ready", zap.String("url", cfg.PublicURL))
 	err = g.Wait()
 	logger.Info("shutdown")
 	return err
+}
+
+// pushHosts splits a comma-separated list of host suffixes; nil when there is none.
+func pushHosts(v string) []string {
+	var out []string
+	for _, h := range strings.Split(v, ",") {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // newRegistry holds the process metrics and the room server's own.

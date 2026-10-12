@@ -628,6 +628,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"turn_queue":                "| id room_id persona_id participant_id source fresh created_at rerun_of cause handoff",
 		"message_turns":             "| message_id persona_id queue_id turn_id",
 		"persona_change_requests":   "| id room_id persona_id kind patch requested_by created_at",
+		"push_subscriptions":        "| id participant_id endpoint p256dh auth all_messages created_at", // a device's keys: a copy gets none
 		"persona_templates":         server,
 		"persona_template_versions": server,
 		"profiles":                  server,

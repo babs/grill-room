@@ -30,6 +30,7 @@ import (
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/turn"
 	"github.com/babs/grill-room/internal/uivendor"
+	"github.com/babs/grill-room/internal/webpush"
 )
 
 //go:embed ui
@@ -83,6 +84,10 @@ type Server struct {
 	fallbacks map[string]*atomic.Int64
 	// conflicts counts results rejected on a document conflict, by ConflictOutcomes (003-AC21).
 	conflicts map[string]*atomic.Int64
+	// vapid is the instance's Web Push identity, loaded or generated on first use (005-AC24).
+	vapid      *webpush.VAPID
+	vapidMu    sync.Mutex
+	pushClient *http.Client
 }
 
 // New builds a server. adminHash is HashToken of the admin token; baseURL prefixes invite links.
@@ -105,11 +110,17 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	if opts.MaxImportBytes <= 0 {
 		opts.MaxImportBytes = DefaultMaxImportBytes
 	}
+	if opts.PushHosts == nil {
+		opts.PushHosts = DefaultPushHosts
+	}
+	if opts.PushClient == nil {
+		opts.PushClient = newPushClient()
+	}
 	s := &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), archives: make(chan struct{}, maxConcurrentArchives),
 		adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
 		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, people: people{m: map[string]map[int64]*person{}}, stt: sttWorkers{m: map[string]*sttWorker{}}, clients: clients{m: map[int64]clientSeen{}},
 		magicLimit: limiter{window: magicWindow}, loginLimit: limiter{window: loginWindow}, now: time.Now, fallbacks: fallbackCounters(),
-		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}}
+		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}, pushClient: opts.PushClient}
 	s.cleanStaging()
 	return s
 }
@@ -154,6 +165,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /join", page("join.html"))
 	mux.HandleFunc("GET /favicon.ico", asset(ui, "ui/favicon.ico", "image/x-icon"))
 	mux.HandleFunc("GET /site.webmanifest", asset(ui, "ui/site.webmanifest", "application/manifest+json"))
+	// The Web Push service worker: served from the root, its scope covers every room (005-AC24).
+	mux.HandleFunc("GET /sw.js", asset(ui, "ui/sw.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("GET /r/{room}", s.roomPage)
 	// The document manager in a window of its own (005-AC11): the room page in its docs mode.
 	mux.HandleFunc("GET /r/{room}/docs", s.roomPage)
@@ -236,6 +249,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rooms/{room}/messages/{msg}/versions", s.participant(s.messageVersions))
 	mux.Handle("GET /api/rooms/{room}/events", s.participant(s.events))
 	mux.Handle("POST /api/rooms/{room}/presence", s.participant(s.postPresence))
+	mux.Handle("GET /api/rooms/{room}/push", s.participant(s.getPush))
+	mux.Handle("PUT /api/rooms/{room}/push", s.participant(s.putPush))
+	mux.Handle("DELETE /api/rooms/{room}/push", s.participant(s.putPush))
 	mux.Handle("GET /api/rooms/{room}/documents", s.participant(s.listDocuments))
 	mux.Handle("POST /api/rooms/{room}/documents", s.participant(s.uploadDocument))
 	mux.Handle("GET /api/rooms/{room}/documents/{doc}", s.participant(s.getDocument))

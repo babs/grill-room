@@ -76,6 +76,11 @@ type Options struct {
 	ClientRetention time.Duration
 	// TrustedProxies are the peers whose X-Forwarded-For names the client (005-AC20).
 	TrustedProxies []netip.Prefix
+	// PushHosts are the push services a Web Push subscription may name, by host suffix; nil means
+	// DefaultPushHosts (005-AC24). PushClient posts to them; nil means one with a timeout and no
+	// redirect.
+	PushHosts  []string
+	PushClient *http.Client
 	// MaxImportBytes bounds an imported archive, compressed and once uncompressed; 0 means
 	// DefaultMaxImportBytes.
 	MaxImportBytes int64

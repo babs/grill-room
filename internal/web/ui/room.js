@@ -1725,6 +1725,8 @@ function beat(gone) {
   const body = JSON.stringify({
     tab, audio: !!lp, mic, muted: !!lp && !mic && !!lp.getTrackPublication(LivekitClient.Track.Source.Microphone),
     deaf: !!lp && deaf, gone: !!gone,
+    // A focused tab holds the room's Web Push notifications back (005-AC24).
+    focused: !gone && document.visibilityState === 'visible' && document.hasFocus(),
   });
   // keepalive lets the request outlive a closing page.
   fetch(api + '/presence', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: !!gone })
@@ -1732,6 +1734,74 @@ function beat(gone) {
 }
 setInterval(() => { if (events) beat(); }, 10_000);
 window.addEventListener('pagehide', () => { if (events) beat(true); });
+for (const ev of ['focus', 'blur']) window.addEventListener(ev, () => { if (events) beat(); });
+document.addEventListener('visibilitychange', () => { if (events) beat(); });
+
+// Web Push (005-AC24): one browser subscription, registered for each room where the participant
+// turns notifications on. Turning them off here leaves the other rooms' alone.
+const pushKey = 'grill-room-push:' + roomID;
+const pushable = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const homeScreen = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+
+function pushStatus(text) {
+  $('push-status').textContent = text;
+}
+
+function renderPush() {
+  const on = localStorage.getItem(pushKey) === '1';
+  $('push-hint').hidden = !(ios && !homeScreen) && pushable;
+  $('push-hint').textContent = ios && !homeScreen
+    ? 'On iPhone and iPad, notifications work once the room is on the home screen: Share, Add to Home Screen, then open it from there.'
+    : 'This browser does not support notifications.';
+  $('push-toggle').hidden = !pushable;
+  $('push-toggle').textContent = on ? 'Turn off notifications' : 'Turn on notifications';
+  $('push-all-label').hidden = !pushable || !on;
+  $('push-all').checked = localStorage.getItem(pushKey + ':all') === '1';
+}
+
+async function pushSubscription(create) {
+  const reg = await navigator.serviceWorker.register('/sw.js');
+  await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+  if (sub || !create) return sub;
+  const res = await fetch(api + '/push');
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const key = Uint8Array.from(atob((await res.json()).key.replaceAll('-', '+').replaceAll('_', '/')), (c) => c.charCodeAt(0));
+  return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+}
+
+async function savePush() {
+  const sub = await pushSubscription(true);
+  const done = await sendJSON('PUT', api + '/push', { subscription: sub.toJSON(), all_messages: $('push-all').checked });
+  if (done) localStorage.setItem(pushKey, '1');
+}
+
+$('push-toggle').addEventListener('click', () => (async () => {
+  pushStatus('');
+  if (localStorage.getItem(pushKey) === '1') {
+    const sub = await pushSubscription(false);
+    if (sub) await sendJSON('DELETE', api + '/push', { subscription: { endpoint: sub.endpoint } });
+    localStorage.removeItem(pushKey);
+    pushStatus('Notifications off for this room.');
+  } else {
+    if (await Notification.requestPermission() !== 'granted') {
+      pushStatus('The browser did not allow notifications: allow them in its site settings, then try again.');
+      return;
+    }
+    await savePush();
+    pushStatus('Notifications on for this room.');
+  }
+})().catch((err) => pushStatus('Notifications: ' + err.message)).finally(renderPush));
+$('push-all').addEventListener('change', () => {
+  localStorage.setItem(pushKey + ':all', $('push-all').checked ? '1' : '0');
+  savePush().catch((err) => pushStatus('Notifications: ' + err.message));
+});
+renderPush();
+// The browser may have renewed its subscription since: hand the server the current one.
+if (pushable && localStorage.getItem(pushKey) === '1' && Notification.permission === 'granted' && !docsMode) {
+  savePush().catch((err) => pushStatus('Notifications: ' + err.message));
+}
 
 // Deafen stops hearing the others and, unless the participant keeps it on, mutes their mic;
 // undeafen restores the mic as it was (005-AC22). The state outlives a reconnect in this session.

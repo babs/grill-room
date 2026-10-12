@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -148,6 +149,19 @@ func TestValidateVoice(t *testing.T) {
 	t.Setenv("GRILL_ROOM_LIVEKIT_URL", "wss://livekit.example")
 	if c, _ := loadConfig(); c.LiveKitAPIURL != "https://livekit.example" {
 		t.Fatalf("default API URL %q", c.LiveKitAPIURL)
+	}
+}
+
+// 005-AC24: GRILL_ROOM_PUSH_HOSTS replaces the push services subscriptions may name; unset keeps
+// the default.
+func TestPushHosts(t *testing.T) {
+	t.Setenv("GRILL_ROOM_PUSH_HOSTS", " Push.Example.org, ,127.0.0.1 ")
+	if c, err := loadConfig(); err != nil || !slices.Equal(c.PushHosts, []string{"push.example.org", "127.0.0.1"}) {
+		t.Fatalf("hosts %q %v", c.PushHosts, err)
+	}
+	t.Setenv("GRILL_ROOM_PUSH_HOSTS", "")
+	if c, _ := loadConfig(); c.PushHosts != nil {
+		t.Fatalf("unset: %q", c.PushHosts)
 	}
 }
 
