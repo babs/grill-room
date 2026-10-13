@@ -285,7 +285,13 @@ for (const vp of widths) {
     await expect(alice.locator('.msg.system').last()).toContainText('Bob renamed `plan.md` → `roadmap.md`');
 
     await alice.locator('#documents').getByRole('button', { name: 'roadmap.md' }).click();
-    alice.once('dialog', (d) => d.accept());
+    // 005-AC39: no native dialog, an Undo toast instead; Undo restores, a second delete stays.
+    await alice.locator('#doc-delete').click();
+    await expect(alice.locator('#viewer')).toBeHidden();
+    await expect(bob.locator('#documents li')).toHaveCount(0);
+    await alice.locator('#toasts').getByRole('button', { name: 'Undo' }).click();
+    await expect(bob.locator('#documents')).toHaveText('roadmap.md');
+    await alice.locator('#documents').getByRole('button', { name: 'roadmap.md' }).click();
     await alice.locator('#doc-delete').click();
     await expect(alice.locator('#viewer')).toBeHidden();
     await expect(bob.locator('#viewer')).toBeHidden();

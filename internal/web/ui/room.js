@@ -545,12 +545,52 @@ $('msg-edit').addEventListener('click', () => {
 });
 $('msg-delete').addEventListener('click', () => { if (menuFor) deleteMessage(menuFor.m); });
 
-function deleteMessage(m) {
-  if (!confirm('Delete this message? It shows as deleted for everyone.')) return;
-  fetch(api + '/messages/' + m.id, { method: 'DELETE' }).then((res) => {
-    if (res.status === 401) end('Your access to this room has ended.');
-  }).catch(console.error);
+// toast says what an action did, with at most one action of its own (005-AC39); onEnd runs when it
+// goes, undone or not.
+function toast(text, action, onEnd) {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.append(span('text', text));
+  let timer;
+  const close = (undone) => {
+    clearTimeout(timer);
+    el.remove();
+    if (onEnd) onEnd(undone);
+  };
+  if (action) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn-ghost';
+    b.textContent = action;
+    b.addEventListener('click', () => close(true));
+    el.append(b);
+  }
+  $('toasts').append(el);
+  timer = setTimeout(() => close(false), 5000);
+  return () => close(false);
 }
+
+// A delete waits out its toast: Undo keeps the line, and nothing reaches the server. A closing page
+// sends the deletes it holds at once.
+const pendingDeletes = new Map();
+function deleteMessage(m) {
+  const li = messages.querySelector('li[data-id="' + m.id + '"]');
+  if (li) li.classList.add('deleting');
+  const send = () => {
+    pendingDeletes.delete(m.id);
+    fetch(api + '/messages/' + m.id, { method: 'DELETE', keepalive: true }).then((res) => {
+      if (res.status === 401) end('Your access to this room has ended.');
+    }).catch(console.error);
+  };
+  pendingDeletes.set(m.id, send);
+  toast('Message deleted', 'Undo', (undone) => {
+    if (!pendingDeletes.has(m.id)) return;
+    if (!undone) return send();
+    pendingDeletes.delete(m.id);
+    messages.querySelector('li[data-id="' + m.id + '"]')?.classList.remove('deleting');
+  });
+}
+window.addEventListener('pagehide', () => { for (const send of [...pendingDeletes.values()]) send(); });
 
 // Modals (005-AC13): Escape closes a modal dialog natively; a click outside one closes it too,
 // and focus goes back to where it was. A press that starts inside, say a text selection dragged
@@ -826,11 +866,16 @@ $('doc-rename-form').addEventListener('submit', (e) => {
     return Promise.all([loadDocuments(), showDocument(d.id, true)]);
   }).catch((err) => { $('doc-rename-status').textContent = err.message; });
 });
+// A soft delete acts at once; Undo restores it (005-AC39).
 $('doc-delete').addEventListener('click', () => {
   const d = openDoc;
-  if (!confirm('Delete ' + d.name + '? It leaves the room and the agents\' workspace; a room admin can restore it from Manage.')) return;
-  sendJSON('DELETE', docURL(d.id, '')).then((done) => { if (done) $('doc-close').click(); })
-    .catch((err) => { $('doc-rename-status').textContent = err.message; $('doc-rename-form').hidden = false; });
+  sendJSON('DELETE', docURL(d.id, '')).then((done) => {
+    if (!done) return;
+    $('doc-close').click();
+    toast(d.name + ' deleted', 'Undo', (undone) => {
+      if (undone) sendJSON('POST', docURL(d.id, '/restore')).catch((err) => showNotice(err.message));
+    });
+  }).catch((err) => { $('doc-rename-status').textContent = err.message; $('doc-rename-form').hidden = false; });
 });
 
 $('rev').addEventListener('change', renderDocument);
@@ -2302,7 +2347,8 @@ $('voice-mute').addEventListener('click', () => {
 $('voice-unlock').addEventListener('click', () => voice && voice.startAudio().then(voiceChanged).catch(console.error));
 
 async function send() {
-  const body = bodyInput.value.trim();
+  const typed = bodyInput.value;
+  const body = typed.trim();
   if (!body) return;
   const res = await fetch(api + '/messages', {
     method: 'POST',
@@ -2314,7 +2360,8 @@ async function send() {
     return;
   }
   if (!res.ok) throw new Error('send: HTTP ' + res.status);
-  bodyInput.value = '';
+  // Only the line sent leaves the box: the next one may already be typed in it.
+  if (bodyInput.value === typed) bodyInput.value = '';
   nudgeRecovery();
   const m = await res.json();
   if (m.mention_notices) {
