@@ -340,23 +340,29 @@ function showNotice(text) {
 }
 $('notice-close').addEventListener('click', () => { $('notice').hidden = true; });
 
-// Self-rename (005-AC1), with the validation of a join; the option also names their profile.
-$('rename-open').addEventListener('click', () => {
-  $('rename-name').value = myName;
+// Self-rename (005-AC1), with the validation of a join; the option also names their profile. A
+// room admin renames someone else from their ⋯ (008-AC13): renameTarget is that participant.
+let renameTarget = null;
+function openRename(p) {
+  renameTarget = p;
+  $('rename-title').textContent = p ? 'Rename ' + p.name : 'Your name in this room';
+  $('rename-name').value = p ? p.name : myName;
   $('rename-profile').checked = false;
-  $('rename-profile-label').hidden = !hasProfile;
+  $('rename-profile-label').hidden = !!p || !hasProfile;
   $('rename-status').textContent = '';
   $('rename').showModal();
   $('rename-name').select();
-});
+}
+$('rename-open').addEventListener('click', () => openRename(null));
 $('rename-cancel').addEventListener('click', () => $('rename').close());
 $('rename-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const name = $('rename-name').value.trim();
-  sendJSON('PUT', api + '/participants/' + myID + '/name', { name, profile: $('rename-profile').checked }).then((done) => {
+  const other = renameTarget;
+  sendJSON('PUT', api + '/participants/' + (other ? other.id : myID) + '/name', other ? { name } : { name, profile: $('rename-profile').checked }).then((done) => {
     if (!done) return;
     // Not an outside rename: no notice when loadRoom reads the new name.
-    myName = '';
+    if (!other) myName = '';
     $('rename').close();
     toast('Renamed');
     return loadRoom();
@@ -674,7 +680,7 @@ $('strip-more').addEventListener('click', () => {
 // Menus are popovers (005-AC32): the browser closes them on a click outside and on Escape; picking
 // an item closes them too.
 // The document's menu has its own (008-AC8).
-for (const menu of document.querySelectorAll('.menu:not(#doc-menu)')) {
+for (const menu of document.querySelectorAll('.menu:not(#doc-menu, #person-menu)')) {
   menu.addEventListener('click', (e) => { if (e.target.closest('button, a')) menu.hidePopover(); });
 }
 for (const b of document.querySelectorAll('dialog .close')) b.addEventListener('click', () => b.closest('dialog').close());
@@ -807,7 +813,8 @@ async function loadDocuments() {
     b.type = 'button';
     b.className = 'doc';
     b.textContent = d.name;
-    b.title = describe(d);
+    // One line with an ellipsis: the full name in the tooltip (008-AC14).
+    b.title = d.name + '\n' + describe(d);
     b.addEventListener('click', () => {
       showDocument(d.id).catch(console.error);
     });
@@ -1244,21 +1251,20 @@ for (const p of Object.values(panes)) {
     setWidth(p, Number(p.handle.getAttribute('aria-valuenow')) + sign * step, true);
   });
 }
-const drawers = [
-  { name: 'people', button: $('people-fold'), icon: '👥', label: 'people' },
-  { name: 'docs', button: $('docs-fold'), icon: '📄', label: 'documents' },
-];
+// A drawer's disclosure triangle names the drawer and says its state in aria-expanded; the whole
+// header toggles it, its own actions aside (008-AC5).
+const drawers = [{ name: 'people', button: $('people-fold') }, { name: 'docs', button: $('docs-fold') }];
 function foldDrawer(d, on, store) {
   document.body.classList.toggle('fold-' + d.name, on);
-  d.button.textContent = on ? d.icon : '«';
   d.button.setAttribute('aria-expanded', String(!on));
-  d.button.setAttribute('aria-label', (on ? 'Show ' : 'Hide ') + d.label);
-  d.button.title = (on ? 'Show ' : 'Hide ') + d.label;
   if (store) localStorage.setItem('grill-room-fold-' + d.name, on ? '1' : '0');
 }
 for (const d of drawers) {
   foldDrawer(d, localStorage.getItem('grill-room-fold-' + d.name) === '1', false);
   d.button.addEventListener('click', () => foldDrawer(d, !document.body.classList.contains('fold-' + d.name), true));
+  d.button.closest('.pane-head').addEventListener('click', (e) => {
+    if (!phone() && !e.target.closest('a, button, input')) d.button.click();
+  });
 }
 
 // Markdown reads at one of three widths, as in gld (008-AC7).
@@ -1279,23 +1285,28 @@ $('doc-width').addEventListener('click', () => {
   postToFrame({ type: 'gr:width', width: mdWidth });
 });
 
+// arrowKeys moves the focus through a menu's shown items with ↑ and ↓ (008-AC8, 008-AC13).
+const menuItems = (menu) => [...menu.querySelectorAll(':scope > :is(a, button), :scope > label > input')].filter((e) => !e.hidden && e.offsetParent !== null);
+function arrowKeys(menu) {
+  menu.addEventListener('keydown', (e) => {
+    const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const items = menuItems(menu);
+    items[(items.indexOf(document.activeElement) + step + items.length) % items.length]?.focus();
+  });
+}
+
 // The document's actions menu (008-AC8): under its button, the first item focused, arrows move.
 const docMenu = $('doc-menu');
-const menuItems = () => [...docMenu.querySelectorAll(':scope > :is(a, button)')].filter((e) => !e.hidden && e.offsetParent !== null);
 docMenu.addEventListener('beforetoggle', (e) => {
   if (e.newState !== 'open') return;
   const r = $('doc-more').getBoundingClientRect();
   docMenu.style.top = (r.bottom + 4) + 'px';
   docMenu.style.right = Math.max(8, innerWidth - r.right) + 'px';
 });
-docMenu.addEventListener('toggle', (e) => { if (e.newState === 'open') menuItems()[0]?.focus(); });
-docMenu.addEventListener('keydown', (e) => {
-  const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
-  if (!step) return;
-  e.preventDefault();
-  const items = menuItems();
-  items[(items.indexOf(document.activeElement) + step + items.length) % items.length]?.focus();
-});
+docMenu.addEventListener('toggle', (e) => { if (e.newState === 'open') menuItems(docMenu)[0]?.focus(); });
+arrowKeys(docMenu);
 // Capture: the menu closes, its focus back on ⋯, before the item's own action moves the focus.
 docMenu.addEventListener('click', (e) => { if (e.target.closest('a, button')) docMenu.hidePopover(); }, true);
 
@@ -1635,6 +1646,7 @@ function whyNot(p, st) {
 }
 
 function renderAgent() {
+  hidePairingOnceConnected();
   const bar = $('persona-buttons');
   const kept = new Map([...bar.children].map((b) => [b.dataset.id, b]));
   const buttons = agent.personas.map((p) => {
@@ -2204,45 +2216,6 @@ $('persona-add').addEventListener('submit', (e) => {
     .catch((err) => personasStatus(err.message));
 });
 
-// agentControls shows who hosts and, to the host, the button right and the hand-over per row.
-function agentControls(li, p) {
-  const id = p.id;
-  const host = agent.host_participant_id === id;
-  const manage = isHost() && !host;
-  let trigger = li.querySelector('label.trigger');
-  if (manage && !trigger) {
-    trigger = document.createElement('label');
-    trigger.className = 'trigger';
-    const box = document.createElement('input');
-    box.type = 'checkbox';
-    box.setAttribute('aria-label', 'Let ' + p.name + ' ask the AI');
-    box.addEventListener('change', () => {
-      sendJSON('PATCH', api + '/participants/' + id, { can_trigger: box.checked })
-        .catch((err) => { box.checked = !box.checked; agentError(err.message); });
-    });
-    trigger.append(box, 'Can ask the AI');
-    li.append(trigger);
-  } else if (!manage && trigger) {
-    trigger.remove();
-  }
-  if (trigger) trigger.querySelector('input').checked = agent.can_trigger.includes(id);
-  const daemon = agent.daemons.find((d) => d.participant_id === id && d.can_host);
-  let handOver = li.querySelector('button.make-host');
-  if (manage && daemon && !handOver) {
-    handOver = document.createElement('button');
-    handOver.type = 'button';
-    handOver.className = 'make-host';
-    handOver.textContent = 'Make AI host';
-    handOver.setAttribute('aria-label', 'Make ' + p.name + ' the AI host');
-    handOver.addEventListener('click', () => {
-      sendJSON('PUT', api + '/host', { participant_id: id }).catch((err) => { agentError(err.message); });
-    });
-    li.append(handOver);
-  } else if (!(manage && daemon) && handOver) {
-    handOver.remove();
-  }
-}
-
 // Voice. One LiveKit room per grill room; a participant's LiveKit identity is its participant id,
 // so each audio track, speaking flag and transcript line maps back to a name in the list.
 let voice = null;
@@ -2287,9 +2260,101 @@ function span(cls, text, title) {
   return el;
 }
 
+// tagColumns are the badges a person row may carry, in their fixed order (008-AC13): a column shows
+// in every row of a list once any row has it, so a badge sits at the same place on every row.
+const tagColumns = ['you', 'host', 'admin', 'ask', 'transcribed', 'audio'];
+
+// personTags are a participant's badges by column: [icon, accessible name, tooltip].
+function personTags(p, id, isHere) {
+  const t = {};
+  for (const [name, title, on, icon] of roles) if (on(p)) t[name] = [icon, name, title];
+  if (agent.can_trigger.includes(p.id) && agent.host_participant_id !== p.id) t.ask = ['✦', 'Can ask the AI', 'Can ask the AI'];
+  if (transcribed.has(id)) t.transcribed = ['✍', 'The transcription hears this voice', 'The transcription hears this voice'];
+  const st = isHere ? audioState(id) : { key: 'none', icon: '', text: 'Not in the audio' };
+  const deaf = isHere && !!presence.get(id)?.deaf;
+  // One glyph per square: deafened shows 🔕 alone, its audio state in the tooltip.
+  t.audio = [deaf ? '🔕' : st.icon, '', st.text + (deaf ? ', deafened: hears nobody' : ''), st.key, deaf];
+  return t;
+}
+
+// personActions are what the viewer may do about p, for its ⋯ menu (008-AC13): none, no menu.
+function personActions(p, id) {
+  const acts = [];
+  const other = id !== myID;
+  if (other && meAdmin) acts.push({ label: 'Rename', run: () => openRename(p) });
+  const host = agent.host_participant_id === p.id;
+  if (other && isHost() && !host) {
+    acts.push({ label: 'Can ask the AI', checked: agent.can_trigger.includes(p.id),
+      run: () => sendJSON('PATCH', api + '/participants/' + id, { can_trigger: !agent.can_trigger.includes(p.id) }).catch((err) => agentError(err.message)) });
+  }
+  if (other && meAdmin) {
+    acts.push({ label: p.admin ? 'Remove room admin' : 'Make room admin', run: () => {
+      // The list as it is now: another room admin may have changed it since the menu opened.
+      const now = participants.find((x) => String(x.id) === id) || p;
+      sendJSON(now.admin ? 'DELETE' : 'PUT', api + '/admins/' + id).then(() => loadRoom()).catch((err) => toast(err.message));
+    } });
+  }
+  if (other && isHost() && !host && agent.daemons.some((d) => d.participant_id === p.id && d.can_host)) {
+    acts.push({ label: 'Make AI host', run: () => sendJSON('PUT', api + '/host', { participant_id: p.id }).catch((err) => agentError(err.message)) });
+  }
+  if (other && voiceParticipant(id)) acts.push({ volume: true });
+  return acts;
+}
+
+// The person menu, built for the row it opens from; arrows move through it like the document's.
+let personFor = null;
+// openFor is the ⋯ whose menu was open when the press began: a light dismiss closes it before the
+// click, which must then not open it again.
+let openFor = null;
+function openPersonMenu(b, p, id, fromPointer) {
+  const menu = $('person-menu');
+  const was = openFor;
+  openFor = null;
+  if (menu.matches(':popover-open')) menu.hidePopover();
+  if (personFor) personFor.b.setAttribute('aria-expanded', 'false');
+  if (fromPointer && was === b) return;
+  personFor = { b, id };
+  const items = personActions(p, id).map((a) => {
+    if (a.volume) {
+      const label = document.createElement('label');
+      const vol = document.createElement('input');
+      vol.type = 'range';
+      vol.min = '0';
+      vol.max = '1';
+      vol.step = '0.05';
+      vol.value = String(volumes.get(id) ?? 1);
+      vol.addEventListener('input', () => {
+        volumes.set(id, Number(vol.value));
+        voiceParticipant(id)?.setVolume(Number(vol.value));
+      });
+      label.append('Volume ', vol);
+      return label;
+    }
+    const it = document.createElement('button');
+    it.type = 'button';
+    it.textContent = a.label;
+    if ('checked' in a) it.setAttribute('aria-pressed', String(a.checked));
+    it.addEventListener('click', () => { menu.hidePopover(); a.run(); });
+    return it;
+  });
+  const head = span('menu-head', p.name);
+  menu.replaceChildren(head, ...items);
+  const r = b.getBoundingClientRect();
+  menu.style.top = Math.min(r.bottom + 4, innerHeight - 200) + 'px';
+  menu.style.right = Math.max(8, innerWidth - r.right) + 'px';
+  menu.showPopover();
+  menu.style.top = Math.max(8, Math.min(r.bottom + 4, innerHeight - menu.offsetHeight - 8)) + 'px';
+  b.setAttribute('aria-expanded', 'true');
+  menu.querySelector('button, input')?.focus();
+}
+$('person-menu').addEventListener('toggle', (e) => {
+  if (e.newState === 'closed' && personFor) personFor.b.setAttribute('aria-expanded', 'false');
+});
+arrowKeys($('person-menu'));
+
 // renderParticipants splits the list into those in the room and those not here (005-AC7). Rows
-// update in place: speaker changes fire many times a second, and a rebuilt row would drop a
-// volume slider mid-drag.
+// update in place: speaker changes fire many times a second, and a rebuilt row would close a
+// menu or drop a focus.
 function renderParticipants() {
   const here = $('participants');
   const away = $('participants-away');
@@ -2301,65 +2366,66 @@ function renderParticipants() {
     if (!li) {
       li = document.createElement('li');
       li.dataset.pid = id;
-      li.append(span('voice-dot', ''), span('name', ''), span('badges', ''), span('audio', ''), span('seen', ''));
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'person-more';
+      more.textContent = '⋯';
+      more.setAttribute('aria-expanded', 'false');
+      li.append(span('voice-dot', ''), span('name', ''), span('tags', ''), more);
     }
-    const pr = presence.get(id);
-    const isHere = id === myID || !!(pr && pr.here);
+    const isHere = id === myID || !!presence.get(id)?.here;
     li.querySelector('.name').textContent = p.name;
-    const mine = roles.filter(([, , on]) => on(p));
-    li.querySelector('.badges').replaceChildren(...mine.map(([name, title, , icon]) => {
-      const b = span('badge role-' + name + (name === 'host' ? ' host-badge' : '') + (mine.length > 2 ? ' icon' : ''), mine.length > 2 ? icon : name, title);
-      if (mine.length > 2) b.setAttribute('aria-label', name);
-      return b;
-    }));
-    const vp = voiceParticipant(id);
-    const st = isHere ? audioState(id) : { key: 'none', icon: '', text: 'Not in the audio' };
-    const deaf = isHere && !!(pr && pr.deaf);
-    const audio = li.querySelector('.audio');
-    audio.dataset.state = st.key;
-    audio.textContent = st.icon + (deaf ? ' 🔕' : '');
-    audio.title = st.text + (deaf ? ', deafened: hears nobody' : '');
-    audio.setAttribute('aria-label', audio.title);
-    let tr = li.querySelector('.transcribed');
-    if (transcribed.has(id) && !tr) {
-      tr = span('badge transcribed', 'transcribed', 'The transcription hears this voice');
-      audio.after(tr);
-    } else if (!transcribed.has(id) && tr) {
-      tr.remove();
-    }
-    li.querySelector('.seen').textContent = isHere ? '' : 'seen ' + ago((pr && pr.seen_at) || p.last_seen_at || p.joined_at);
-    li.classList.toggle('in-voice', st.key !== 'none');
-    li.classList.toggle('speaking', st.key === 'live' && speaking.has(id));
-    li.classList.toggle('muted', st.key === 'muted');
+    const tags = personTags(p, id, isHere);
+    const [, , , key, deaf] = tags.audio;
+    li.classList.toggle('in-voice', key !== 'none');
+    li.classList.toggle('speaking', key === 'live' && speaking.has(id));
+    li.classList.toggle('muted', key === 'muted');
     li.classList.toggle('deaf', deaf);
-    li.querySelector('.voice-dot').title = st.key === 'none' ? '' : st.key === 'live' && speaking.has(id) ? 'Speaking' : st.text;
-    let vol = li.querySelector('input[type=range]');
-    if (vp && id !== myID && !vol) {
-      vol = document.createElement('input');
-      vol.type = 'range';
-      vol.min = '0';
-      vol.max = '1';
-      vol.step = '0.05';
-      vol.value = String(volumes.get(id) ?? 1);
-      vol.setAttribute('aria-label', 'Volume of ' + p.name);
-      vol.addEventListener('input', () => {
-        volumes.set(id, Number(vol.value));
-        const rp = voiceParticipant(id);
-        if (rp) rp.setVolume(Number(vol.value));
-      });
-      li.append(vol);
-    } else if (!vp && vol) {
-      vol.remove();
-    }
-    agentControls(li, p);
-    rows[isHere ? 'here' : 'away'].push(li);
+    li.querySelector('.voice-dot').title = key === 'none' ? '' : key === 'live' && speaking.has(id) ? 'Speaking' : tags.audio[2];
+    const more = li.querySelector('.person-more');
+    more.setAttribute('aria-label', 'Actions for ' + p.name);
+    more.onpointerdown = () => { openFor = $('person-menu').matches(':popover-open') ? personFor?.b : null; };
+    more.onclick = (e) => openPersonMenu(more, p, id, e.detail > 0);
+    const pr = presence.get(id);
+    rows[isHere ? 'here' : 'away'].push({ li, tags, menu: personActions(p, id).length > 0,
+      seen: isHere ? '' : 'seen ' + ago((pr && pr.seen_at) || p.last_seen_at || p.joined_at) });
   }
   for (const [list, want] of [[here, rows.here], [away, rows.away]]) {
-    if (want.length !== list.children.length || want.some((li, i) => list.children[i] !== li)) list.replaceChildren(...want);
+    const cols = tagColumns.filter((c) => c === 'audio' || want.some((r) => r.tags[c] && r.tags[c][0]));
+    const anyMenu = want.some((r) => r.menu);
+    for (const { li, tags, menu, seen } of want) {
+      li.querySelector('.tags').replaceChildren(...cols.map((c) => tagSpan(c, tags[c])), ...(seen ? [span('seen', seen)] : []));
+      const more = li.querySelector('.person-more');
+      more.hidden = !anyMenu;
+      more.classList.toggle('blank', !menu);
+      more.disabled = !menu;
+    }
+    const lis = want.map((r) => r.li);
+    if (lis.length !== list.children.length || lis.some((li, i) => list.children[i] !== li)) list.replaceChildren(...lis);
   }
   $('away').hidden = !rows.away.length;
   $('away-count').textContent = String(rows.away.length);
   $('tab-people-count').textContent = String(rows.here.length);
+}
+
+// tagSpan is one badge square, or an empty one keeping its column. The audio one is always there
+// with its state, for the people that are not in the audio too.
+function tagSpan(col, t) {
+  // The classes that name a state go on a filled square only.
+  const on = !!(t && t[0]);
+  const role = on && ['you', 'host', 'admin'].includes(col);
+  const el = span('tag tag-' + col + (role ? ' role-' + col : '') + (on && col === 'host' ? ' host-badge' : '') + (on && col === 'transcribed' ? ' transcribed' : '') + (col === 'audio' ? ' audio' : ''), t ? t[0] : '');
+  if (col === 'audio') {
+    el.dataset.state = t[3];
+    el.title = t[2];
+    el.setAttribute('aria-label', t[2]);
+  } else if (t) {
+    el.title = t[2];
+    el.setAttribute('aria-label', t[1]);
+  }
+  if (!on) el.classList.add('blank');
+  el.setAttribute('role', 'img');
+  return el;
 }
 setInterval(() => { if (participants.length) renderParticipants(); }, 30_000);
 
@@ -2832,6 +2898,17 @@ bodyInput.addEventListener('keydown', (e) => {
 
 // Pairing: the daemon's local page opens this room with ?pair=<id>. Approving here, in the
 // participant's own session, hands the daemon its token; nobody sees or types it.
+// The pairing notice goes once the approved app is connected to the room (its daemon is listed),
+// and ✕ dismisses it any time (008-AC17).
+let pairingApproved = false;
+let myDaemonsAtApproval = 0;
+const myDaemons = () => agent.daemons.filter((d) => String(d.participant_id) === myID).length;
+// Another of this participant's apps may already be connected: only one more counts.
+function hidePairingOnceConnected() {
+  if (pairingApproved && myDaemons() > myDaemonsAtApproval) $('pairing').hidden = true;
+}
+$('pairing-close').addEventListener('click', () => { $('pairing').hidden = true; });
+
 async function showPairing(id) {
   history.replaceState(null, '', location.pathname);
   const url = api + '/pairings/' + encodeURIComponent(id);
@@ -2851,6 +2928,8 @@ async function showPairing(id) {
     'Approve only if your daemon page shows the code ' + p.code + '.';
   const answer = async (approve) => {
     $('pairing-actions').hidden = true;
+    // Before the request: the approved app may announce itself before the answer is read.
+    myDaemonsAtApproval = myDaemons();
     const r = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2859,6 +2938,8 @@ async function showPairing(id) {
     const data = await r.json().catch(() => ({}));
     if (!r.ok) text.textContent = data.error || 'Pairing failed: HTTP ' + r.status;
     else text.textContent = approve ? 'Daemon paired. Its page shows it connected within a few seconds.' : 'Pairing denied.';
+    pairingApproved = approve && r.ok;
+    hidePairingOnceConnected();
   };
   $('pairing-approve').onclick = () => answer(true).catch(console.error);
   $('pairing-deny').onclick = () => answer(false).catch(console.error);
@@ -2907,8 +2988,14 @@ async function showHostAgent() {
   $('host-copy').addEventListener('click', () => {
     navigator.clipboard.writeText(oneLiner).then(() => toast('Copied'), console.error);
   });
-  $('host-open').hidden = false;
+  $('host-install').hidden = false;
 }
+
+// Both ways to run the AI for this room (008-AC16): the app already running takes the room's link
+// on its page; the install part shows when the server hands out a release.
+$('host-room-link').value = location.origin + roomPath;
+$('host-room-copy').addEventListener('click', () => copyField($('host-room-link'), $('host-room-copy')));
+$('host-open').hidden = docsMode;
 
 function fitViewport() {
   // A pinch zoom also shrinks the visual viewport: only the keyboard and toolbars should resize.

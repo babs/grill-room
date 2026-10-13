@@ -154,31 +154,51 @@ test('drawers fold, one by one, and stay folded', async ({ browser, request }) =
   await docs.locator('#documents').getByRole('button', { name: 'plan.md' }).click();
   await expect(docs.frameLocator('#doc-frame iframe').locator('h1')).toHaveText('Plan');
   await expect(docs.locator('#people-fold')).toBeHidden();
+  // The triangle names its drawer and points down while open, right once folded.
+  const fold = docs.getByRole('button', { name: 'Documents', exact: true });
+  await expect(fold).toHaveAttribute('aria-expanded', 'true');
+  const turn = () => docs.locator('#docs-fold').evaluate((e) => getComputedStyle(e, '::before').transform);
+  expect(await turn()).toBe('none');
+  // 008-AC14: the triangle, the external-link action and + share one size, with 44 px to hit.
+  await alice.setViewportSize(desktop);
+  const sizes = await alice.locator('#docs-pane .pane-head :is(.fold, .head-action)').evaluateAll((els) => els.map((e) => {
+    const r = e.getBoundingClientRect();
+    const hit = getComputedStyle(e, '::after');
+    return [Math.round(r.width), Math.round(r.height), Math.round(r.width - 2 * parseFloat(hit.left)), Math.round(r.height - 2 * parseFloat(hit.top))];
+  }));
+  expect(sizes).toEqual([[24, 24, 44, 44], [24, 24, 44, 44], [24, 24, 44, 44]]);
   const before = await width(docs, '#doc-frame');
-  await docs.getByRole('button', { name: 'Hide documents' }).click();
+  // A click anywhere on the header folds it, its actions aside.
+  await docs.locator('#docs-title').click();
+  await expect(fold).toHaveAttribute('aria-expanded', 'false');
+  expect(await turn()).not.toBe('none');
   expect(await width(docs, '#side')).toBeCloseTo(56, 0);
+  await expect(docs.locator('#docs-pane .sec-icon')).toBeVisible();
   expect(await width(docs, '#doc-frame')).toBeCloseTo(before + 256 - 56, 0);
   await expect(docs.locator('#documents')).toBeHidden();
   await expect(docs.locator('#side-handle')).toBeHidden();
   await docs.reload();
-  await expect(docs.getByRole('button', { name: 'Show documents' })).toBeVisible();
+  await expect(docs.locator('#docs-fold')).toHaveAttribute('aria-expanded', 'false');
   expect(await width(docs, '#side')).toBeCloseTo(56, 0);
-  await docs.getByRole('button', { name: 'Show documents' }).click();
+  await docs.locator('#docs-fold').click();
   expect(await width(docs, '#side')).toBeCloseTo(256, 0);
   await expect(docs.locator('#documents')).toBeVisible();
 
   await alice.setViewportSize(desktop);
-  await alice.getByRole('button', { name: 'Hide people' }).click();
+  await alice.locator('#people-fold').click();
   await expect(alice.locator('#participants')).toBeHidden();
   await expect(alice.locator('#documents')).toBeVisible();
+  // The header's own actions do not fold it.
+  await alice.locator('#upload-open').click();
+  await expect(alice.locator('#docs-fold')).toHaveAttribute('aria-expanded', 'true');
   expect(await width(alice, '#side')).toBeCloseTo(256, 0);
-  await alice.getByRole('button', { name: 'Hide documents' }).click();
+  await alice.locator('#docs-fold').click();
   expect(await width(alice, '#side')).toBeCloseTo(56, 0);
   await alice.reload();
-  await expect(alice.getByRole('button', { name: 'Show people' })).toBeVisible();
-  await expect(alice.getByRole('button', { name: 'Show documents' })).toBeVisible();
+  await expect(alice.locator('#people-fold')).toHaveAttribute('aria-expanded', 'false');
+  await expect(alice.locator('#docs-fold')).toHaveAttribute('aria-expanded', 'false');
   expect(await width(alice, '#side')).toBeCloseTo(56, 0);
-  await alice.getByRole('button', { name: 'Show people' }).click();
+  await alice.locator('#people-fold').click();
   expect(await width(alice, '#side')).toBeCloseTo(256, 0);
   await expect(alice.locator('#participants')).toBeVisible();
   await expect(alice.locator('#documents')).toBeHidden();
@@ -219,9 +239,9 @@ test('markdown width toggle', async ({ browser, request }) => {
   await expect(alice.locator('#documents li')).toHaveCount(2);
   await alice.evaluate(() => { localStorage.setItem('grill-room-annotations', '0'); localStorage.setItem('grill-room-fold-docs', '1'); });
   const docs = await docsWindow(alice, room, wide);
-  await docs.getByRole('button', { name: 'Show documents' }).click();
+  await docs.locator('#docs-fold').click();
   await docs.locator('#documents').getByRole('button', { name: 'plan.md' }).click();
-  await docs.getByRole('button', { name: 'Hide documents' }).click();
+  await docs.locator('#docs-fold').click();
   await expect(docs.locator('#annotations')).toBeHidden();
   const frame = docs.frameLocator('#doc-frame iframe');
   await expect(frame.locator('h1')).toHaveText('Plan');
@@ -249,7 +269,7 @@ test('markdown width toggle', async ({ browser, request }) => {
   expect((await measure()).marker).toBe('kept');
 
   await docs.reload();
-  await docs.getByRole('button', { name: 'Show documents' }).click();
+  await docs.locator('#docs-fold').click();
   await docs.locator('#documents').getByRole('button', { name: 'plan.md' }).click();
   await expect(button).toHaveAccessibleName('Text width: Full');
   await expect(frame.locator('h1')).toHaveText('Plan');

@@ -470,7 +470,7 @@ test('participant names never break mid-word, roles stay two badges', async ({ b
   expect((await request.put(`/api/rooms/${room.id}/admins/${me.me.id}`, { headers: admin })).status()).toBe(204);
   await alice.reload();
   const row = alice.locator('#participants li').first();
-  await expect(row.locator('.badge')).toHaveCount(2);
+  await expect(row.locator('.tag:not(.blank):is(.role-you, .role-admin)')).toHaveCount(2);
   const name = row.locator('.name');
   const [lines, clipped] = await name.evaluate((e) => [Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight)), e.scrollWidth > e.clientWidth]);
   expect(lines).toBe(1);
@@ -487,17 +487,21 @@ test('docs panes follow the design rules', async ({ browser, request }) => {
   await alice.setViewportSize(desktop);
   await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
   await expect(alice.locator('#viewer')).toBeVisible();
-  const heights = await alice.locator('.viewer-head button:visible, .pane-head button:visible').evaluateAll((els) => els.map((e) => [e.id, Math.round(e.getBoundingClientRect().height)]));
-  expect(heights.map(([id]) => id)).toEqual(expect.arrayContaining(['doc-more', 'doc-width', 'people-fold', 'docs-fold']));
+  const heights = await alice.locator('.viewer-head button:visible').evaluateAll((els) => els.map((e) => [e.id, Math.round(e.getBoundingClientRect().height)]));
+  expect(heights.map(([id]) => id)).toEqual(expect.arrayContaining(['doc-more', 'doc-width']));
   expect(new Set(heights.map(([, h]) => h)), JSON.stringify(heights)).toEqual(new Set([36]));
+  // The drawer headers' small actions: one 24 px size (008-AC14).
+  const heads = await alice.locator('.pane-head :is(button, a):visible').evaluateAll((els) => els.map((e) => [e.id, Math.round(e.getBoundingClientRect().height)]));
+  expect(heads.map(([id]) => id)).toEqual(['people-fold', 'docs-fold', 'docs-window', 'upload-open']);
+  expect(new Set(heads.map(([, h]) => h)), JSON.stringify(heads)).toEqual(new Set([24]));
   await alice.emulateMedia({ reducedMotion: 'reduce' });
   for (const id of ['side-handle', 'notes-handle']) {
     await alice.locator('#' + id).focus();
     const s = await alice.locator('#' + id).evaluate((e) => { const c = getComputedStyle(e); return [c.outlineStyle, c.outlineWidth, c.transitionDuration]; });
     expect(s, id).toEqual(['solid', '2px', '0s']);
   }
-  await alice.getByRole('button', { name: 'Hide people' }).click();
-  await alice.getByRole('button', { name: 'Hide documents' }).click();
+  await alice.locator('#people-fold').click();
+  await alice.locator('#docs-fold').click();
   expect(await alice.locator('#side').evaluate((e) => getComputedStyle(e).transitionDuration)).toBe('0s');
   await shot(alice, 'after-desktop-rail');
   await menuItem(alice, 'Notifications', 'me');

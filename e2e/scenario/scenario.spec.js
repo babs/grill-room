@@ -303,7 +303,7 @@ test(plan.name, async ({ request }) => {
             }
           }
           expect(clicked, `a host page offers "${label}"`).toBe(true);
-          await expect(first.locator('#participants li', { hasText: step.to }).locator('.host-badge')).toHaveText('host');
+          await expect(first.locator('#participants li', { hasText: step.to }).locator('.host-badge')).toHaveAttribute('aria-label', 'host');
           break;
         }
         default:
