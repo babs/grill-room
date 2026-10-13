@@ -112,12 +112,23 @@ function showMe() {
 const initials = (name) => name.trim().split(/\s+/).slice(0, 2).map((w) => [...w][0] || '').join('').toUpperCase();
 
 // The list shrinks under a keyboard, a toolbar or a wrapping header: keep the newest message in
-// view when it was. Only a scroll up unpins, as scroll events land after the layout changed.
+// view when it was. A scroll up unpins, as scroll events land after the layout changed, except
+// right after a viewport resize: a list that grew clamps its scroll down, and when it shrinks back
+// within the frame no resize of the list is observed to pin it again.
 let pinned = true;
 let lastTop = 0;
+let resizedAt = -Infinity;
+// A pinch zoom is no layout change, and a reader's own wheel, touch or key ends the window.
+for (const target of [window, window.visualViewport]) {
+  target?.addEventListener('resize', () => { if (!window.visualViewport || Math.abs(visualViewport.scale - 1) <= 0.01) resizedAt = performance.now(); });
+}
+for (const ev of ['wheel', 'touchstart', 'keydown']) messages.addEventListener(ev, () => { resizedAt = -Infinity; }, { passive: true });
 messages.addEventListener('scroll', () => {
   if (messages.scrollTop + messages.clientHeight >= messages.scrollHeight - 40) pinned = true;
-  else if (messages.scrollTop < lastTop) pinned = false;
+  else if (messages.scrollTop < lastTop) {
+    if (pinned && performance.now() - resizedAt < 1000) messages.scrollTop = messages.scrollHeight;
+    else pinned = false;
+  }
   lastTop = messages.scrollTop;
 });
 new ResizeObserver(() => { if (pinned) messages.scrollTop = messages.scrollHeight; }).observe(messages);

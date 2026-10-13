@@ -291,7 +291,12 @@ test('phone tab bar', async ({ browser, request }) => {
   expect(Math.round(box.y + box.height)).toBe(phone.height);
   await expect(alice.locator('.chat')).toBeVisible();
   await expect(alice.locator('#side')).toBeHidden();
-  await alice.locator('#messages').evaluate((m) => { m.scrollTop = 200; });
+  // A scroll right after the viewport resize above counts as the layout's: repeat it until it unpins.
+  await expect.poll(() => alice.evaluate(async () => {
+    messages.scrollTop = 200;
+    await new Promise((r) => requestAnimationFrame(() => setTimeout(r)));
+    return pinned;
+  })).toBe(false);
   await bar.getByRole('button', { name: /Docs/ }).click();
   await expect(alice.locator('#docs-pane')).toBeVisible();
   await expect(alice.locator('#people-pane')).toBeHidden();
