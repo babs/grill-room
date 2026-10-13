@@ -89,3 +89,19 @@ def test_silero_cuts_the_fixture_after_each_sentence(speech: tuple[Audio, list[d
     for cut, u in zip(cuts, utts, strict=True):
         # Cut within min_silence_ms of the end of speech, plus slack for a soft last syllable.
         assert u["end"] - 1.0 < cut < u["end"] + 0.9, (cut, u["end"])
+
+
+def test_each_cut_says_how_long_ago_its_speech_ended() -> None:
+    """A pause cut waited min_silence_ms after the speech; a forced cut at max_speech_s waited none,
+    and a flush says how long the track was silent: the line's latency counts from there."""
+    seg = Segmenter(loudness)
+    cuts: list[tuple[Audio, float]] = []
+    audio = np.concatenate([tone(1), silence(0.9), tone(16)])
+    for i in range(0, len(audio), 160):
+        cuts += seg.feed_timed(audio[i : i + 160])
+    cuts += seg.flush_timed()
+    assert [round(s, 2) for _, s in cuts] == [0.8, 0.0, 0.0]
+    seg = Segmenter(loudness)
+    seg.feed_timed(np.concatenate([tone(1), silence(0.3)]))
+    ((_, tail),) = seg.flush_timed()
+    assert abs(tail - 0.3) < 0.07  # two 32 ms windows

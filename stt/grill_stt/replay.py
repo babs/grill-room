@@ -80,7 +80,6 @@ def read(path: Path) -> np.ndarray:
 async def play(p: ReplayPipeline, track: dict[str, Any], audio: np.ndarray, pid: int, s: Settings) -> None:
     """One speaker live: 10 ms frames on the wall clock, cut by the worker's Segmenter."""
     seg = Segmenter(Silero(), min_silence_ms=s.vad_min_silence_ms, max_speech_s=s.vad_max_speech_s)
-    pause = s.vad_min_silence_ms / 1000
     loop = asyncio.get_running_loop()
     start = loop.time()
 
@@ -95,14 +94,14 @@ async def play(p: ReplayPipeline, track: dict[str, Any], audio: np.ndarray, pid:
             p.meta.pop(id(utt))
 
     for i in range(0, len(audio), FRAME):
-        for u in seg.feed(audio[i : i + FRAME]):
-            submit(u, (i + FRAME) / SR, time.monotonic() - pause)
+        for u, silent_s in seg.feed_timed(audio[i : i + FRAME]):
+            submit(u, (i + FRAME) / SR, time.monotonic() - silent_s)
         # Absolute schedule: a late frame does not push the rest of the track back.
         delay = start + (i + FRAME) / SR - loop.time()
         if delay > 0:
             await asyncio.sleep(delay)
-    for u in seg.flush():
-        submit(u, len(audio) / SR, time.monotonic())
+    for u, silent_s in seg.flush_timed():
+        submit(u, len(audio) / SR, time.monotonic() - silent_s)
 
 
 def working_set() -> int | None:

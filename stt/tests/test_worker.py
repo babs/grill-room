@@ -236,6 +236,30 @@ async def test_a_track_that_goes_ends_its_stream_and_flushes_its_speech(
     assert streams[1].closed and not w._streams
 
 
+async def test_an_utterance_ends_when_its_speech_does(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Line latency counts from the end of speech: 800 ms before a pause cut, at a forced 15 s cut,
+    where the speaker never paused (spike S007-ab: dating it 800 ms early overstated the p95)."""
+    streams: list[FakeStream] = []
+
+    def stream(track: object, **kw: object) -> FakeStream:
+        streams.append(FakeStream(track, **kw))
+        return streams[-1]
+
+    monkeypatch.setattr(rtc, "AudioStream", stream)
+    monkeypatch.setattr(worker_mod, "Silero", lambda: loud)
+    w = worker(httpx.MockTransport(lambda _r: httpx.Response(204)))
+    w._clock = lambda: 1000.0
+    ended: list[float] = []
+    monkeypatch.setattr(w._pipeline, "submit", lambda u: ended.append(u.ended))
+    subscribe(w, "TR_a", "7")
+    await settle(lambda: streams)
+    streams[0].frames.put_nowait(speech(1) + bytes(int(0.9 * 16000) * 2))
+    streams[0].frames.put_nowait(speech(16))
+    await settle(lambda: len(ended) == 2)
+    assert [round(1000 - e, 2) for e in ended] == [0.8, 0.0]
+    await streams[0].aclose()
+
+
 async def test_a_participant_who_leaves_closes_every_stream_of_theirs(
     listening: tuple[Worker, list[FakeStream], list[tuple[int, int]]],
 ) -> None:
