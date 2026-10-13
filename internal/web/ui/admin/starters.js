@@ -166,6 +166,9 @@ export function Picker({ api, pick, close }) {
   const [q, setQ] = useState('');
   const [chosen, setChosen] = useState(/** @type {StarterView | null} */ (null));
   const [blankText, setBlankText] = useState('');
+  // A pick whose preview has not come back yet: "Use this starter" waits for it, so it never opens
+  // the editor on the previous one.
+  const [loading, setLoading] = useState(true);
   const [said, setSaid] = useState('');
   /** @param {unknown} err */
   const show = (err) => setSaid(/** @type {Error} */ (err).message);
@@ -175,10 +178,11 @@ export function Picker({ api, pick, close }) {
   /** @param {number} id */
   const preview = (id) => {
     const n = ++asked.current;
+    setLoading(true);
     return api('GET', '/api/profile/starters/' + id).then((/** @type {StarterView} */ v) => {
       if (!id) setBlankText(v.description);
-      if (n === asked.current) setChosen(v);
-    }).catch((err) => { if (n === asked.current) show(err); });
+      if (n === asked.current) { setChosen(v); setLoading(false); }
+    }).catch((err) => { if (n === asked.current) { show(err); setLoading(false); } });
   };
   useEffect(() => { preview(0); }, []);
   const needle = q.trim().toLowerCase();
@@ -200,7 +204,7 @@ export function Picker({ api, pick, close }) {
     <p class="said error" role="status">${said}</p>
     <div class="actions">
       <button type="button" class="btn-secondary" onClick=${close}>Cancel</button>
-      <button type="button" class="btn-primary" id="starter-use" disabled=${!chosen} onClick=${() => chosen && pick(chosen)}>Use this starter</button>
+      <button type="button" class="btn-primary" id="starter-use" disabled=${!chosen || loading} onClick=${() => chosen && !loading && pick(chosen)}>Use this starter</button>
     </div>
   </div>`;
 }
