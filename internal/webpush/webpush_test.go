@@ -96,8 +96,8 @@ func TestEncryptRoundTrip(t *testing.T) {
 	if got := decrypt(t, uaPriv, must(t, rfcAuth), a); string(got) != "hello" {
 		t.Fatalf("decrypted %q", got)
 	}
-	if _, err := Encrypt(rfcSub(), make([]byte, MaxPayload)); err != nil {
-		t.Fatalf("a full record: %v", err)
+	if full, err := Encrypt(rfcSub(), make([]byte, MaxPayload)); err != nil || len(full) != 4096 || MaxPayload != 3993 {
+		t.Fatalf("a full body: %d octets, %v", len(full), err)
 	}
 	if _, err := Encrypt(rfcSub(), make([]byte, MaxPayload+1)); err == nil {
 		t.Fatal("a payload past one record went through")

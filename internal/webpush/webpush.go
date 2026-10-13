@@ -43,9 +43,10 @@ var keyMismatch = regexp.MustCompile(`(?i)vapid public key mismatch|"errno":\s*1
 // payload, so it only needs to exceed it: 4096 is what push services accept (RFC 8291 section 4).
 const recordSize = 4096
 
-// MaxPayload is the largest plaintext one record holds: the record size less the padding
-// delimiter and the 16-octet GCM tag.
-const MaxPayload = recordSize - 1 - 16
+// MaxPayload is the largest plaintext that keeps the body within the 4096 octets push services
+// must accept (RFC 8291 section 4): less the 86-octet header (salt, record size, key id length and
+// a 65-octet key id), the 16-octet GCM tag and the padding delimiter.
+const MaxPayload = 4096 - 86 - 16 - 1
 
 var b64 = base64.RawURLEncoding
 
