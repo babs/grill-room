@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +27,7 @@ const (
 	maxSTTRooms   = 1000
 	maxSTTVoices  = 10000
 	maxWorkerName = 64
+	maxEngineName = 32
 	// livekitCallTimeout bounds a kick on revoke or delete, so a LiveKit outage cannot hang the admin.
 	livekitCallTimeout = 5 * time.Second
 )
@@ -48,12 +50,14 @@ type Voice struct {
 	STTTokenHash string
 }
 
-// sttWorker is the last heartbeat of one STT worker: the rooms whose audio it is in, and in each the
-// participants whose track it is subscribed to.
+// sttWorker is the last heartbeat of one STT worker: the rooms whose audio it is in, in each the
+// participants whose track it is subscribed to, its engine and whether it reads room glossaries.
 type sttWorker struct {
-	at     time.Time
-	rooms  map[string]bool
-	voices map[string][]int64
+	at       time.Time
+	rooms    map[string]bool
+	voices   map[string][]int64
+	engine   string
+	glossary bool
 }
 
 type sttWorkers struct {
@@ -70,16 +74,22 @@ type sttState struct {
 	// Transcribed lists the participants whose track a worker is subscribed to, sorted: the voices
 	// it transcribes (005-AC8).
 	Transcribed []int64 `json:"transcribed"`
+	// Engines lists the live workers' engines, sorted: the audio menu credits the model (007-AC13).
+	Engines []string `json:"engines"`
+	// Glossary is true while a live worker reads room glossaries: Room settings shows the tab only
+	// then (007-AC14).
+	Glossary bool `json:"glossary"`
 }
 
 func (a sttState) equal(b sttState) bool {
-	return a.Available == b.Available && a.Listening == b.Listening && slices.Equal(a.Transcribed, b.Transcribed)
+	return a.Available == b.Available && a.Listening == b.Listening && a.Glossary == b.Glossary &&
+		slices.Equal(a.Transcribed, b.Transcribed) && slices.Equal(a.Engines, b.Engines)
 }
 
 func (w *sttWorkers) state(room string, now time.Time) sttState {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	st := sttState{Transcribed: []int64{}}
+	st := sttState{Transcribed: []int64{}, Engines: []string{}}
 	for id, wk := range w.m {
 		if now.Sub(wk.at) > sttTimeout {
 			delete(w.m, id)
@@ -88,9 +98,15 @@ func (w *sttWorkers) state(room string, now time.Time) sttState {
 		st.Available = true
 		st.Listening = st.Listening || wk.rooms[room]
 		st.Transcribed = append(st.Transcribed, wk.voices[room]...)
+		st.Glossary = st.Glossary || wk.glossary
+		if wk.engine != "" {
+			st.Engines = append(st.Engines, wk.engine)
+		}
 	}
 	slices.Sort(st.Transcribed)
 	st.Transcribed = slices.Compact(st.Transcribed)
+	slices.Sort(st.Engines)
+	st.Engines = slices.Compact(st.Engines)
 	return st
 }
 
@@ -137,24 +153,29 @@ func (s *Server) sttAuth(next http.HandlerFunc) http.Handler {
 }
 
 // sttHeartbeat records that a worker is up, which rooms' audio it is in, and whose tracks it is
-// subscribed to there. A worker from before 005-AC8 sends no voices.
+// subscribed to there. A worker from before 005-AC8 sends no voices, one from before 007 no engine:
+// it counts as not reading glossaries.
 func (s *Server) sttHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Worker string             `json:"worker"`
-		Rooms  []string           `json:"rooms"`
-		Voices map[string][]int64 `json:"voices"`
+		Worker   string             `json:"worker"`
+		Rooms    []string           `json:"rooms"`
+		Voices   map[string][]int64 `json:"voices"`
+		Engine   string             `json:"engine"`
+		Glossary bool               `json:"glossary"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
+	engine := strings.TrimSpace(req.Engine)
+	engineOK := engine == "" || store.ValidText(engine, maxEngineName, false)
 	name, ok := cleanText(req.Worker, maxWorkerName, false)
 	n := 0
 	for _, ids := range req.Voices {
 		n += len(ids)
 	}
-	if !ok || len(req.Rooms) > maxSTTRooms || len(req.Voices) > maxSTTRooms || n > maxSTTVoices {
-		httpError(w, http.StatusBadRequest, fmt.Sprintf("worker must be 1 to %d characters, rooms at most %d, voices at most %d",
-			maxWorkerName, maxSTTRooms, maxSTTVoices))
+	if !ok || !engineOK || len(req.Rooms) > maxSTTRooms || len(req.Voices) > maxSTTRooms || n > maxSTTVoices {
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("worker must be 1 to %d characters, engine at most %d, rooms at most %d, voices at most %d",
+			maxWorkerName, maxEngineName, maxSTTRooms, maxSTTVoices))
 		return
 	}
 	rooms := make(map[string]bool, len(req.Rooms))
@@ -169,7 +190,7 @@ func (s *Server) sttHeartbeat(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusTooManyRequests, "too many STT workers")
 		return
 	}
-	s.stt.m[name] = &sttWorker{at: now, rooms: rooms, voices: req.Voices}
+	s.stt.m[name] = &sttWorker{at: now, rooms: rooms, voices: req.Voices, engine: engine, glossary: req.Glossary}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -187,14 +208,8 @@ func (s *Server) postVoiceLine(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, fmt.Sprintf("body must be 1 to %d characters", maxBodyLen))
 		return
 	}
-	p, err := s.bus.Store.RoomParticipant(r.Context(), r.PathValue("room"), req.ParticipantID)
-	if errors.Is(err, store.ErrNotFound) {
-		// A participant revoked while speaking: the line is dropped with their access.
-		httpError(w, http.StatusNotFound, "no such participant in this room")
-		return
-	}
-	if err != nil {
-		s.serverError(w, "voice_line_failed", err)
+	p, ok := s.voiceSpeaker(w, r, req.ParticipantID)
+	if !ok {
 		return
 	}
 	m := &store.Message{RoomID: p.RoomID, Kind: store.KindVoice, ParticipantID: p.ID, Sender: p.Name, Body: body}
@@ -203,6 +218,43 @@ func (s *Server) postVoiceLine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.voiceTriggers(r.Context(), p.RoomID)
+	writeJSON(w, http.StatusCreated, m)
+}
+
+// voiceSpeaker is the room's participant a worker names; false once it answered the error.
+func (s *Server) voiceSpeaker(w http.ResponseWriter, r *http.Request, id int64) (*store.Participant, bool) {
+	p, err := s.bus.Store.RoomParticipant(r.Context(), r.PathValue("room"), id)
+	if errors.Is(err, store.ErrNotFound) {
+		// A participant revoked while speaking: the line is dropped with their access.
+		httpError(w, http.StatusNotFound, "no such participant in this room")
+		return nil, false
+	}
+	if err != nil {
+		s.serverError(w, "voice_speaker_failed", err)
+		return nil, false
+	}
+	return p, true
+}
+
+// postVoiceDropped says in the room that the STT worker's full queue lost a line of a speaker
+// (007-AC8): a drop is never silent. The worker spaces them out per speaker.
+func (s *Server) postVoiceDropped(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ParticipantID int64 `json:"participant_id"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	p, ok := s.voiceSpeaker(w, r, req.ParticipantID)
+	if !ok {
+		return
+	}
+	m := &store.Message{RoomID: p.RoomID, Kind: store.KindSystem, Sender: "Transcription",
+		Body: "Transcription overloaded: one line lost for " + p.Name + "."}
+	if err := s.bus.Post(r.Context(), m); err != nil {
+		s.serverError(w, "voice_dropped_failed", err)
+		return
+	}
 	writeJSON(w, http.StatusCreated, m)
 }
 

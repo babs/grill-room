@@ -334,6 +334,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rooms/{room}/voice", s.participant(s.getVoice))
 	mux.Handle("POST /api/stt/heartbeat", s.sttAuth(s.sttHeartbeat))
 	mux.Handle("POST /api/rooms/{room}/voice/lines", s.sttAuth(s.postVoiceLine))
+	mux.Handle("POST /api/rooms/{room}/voice/dropped", s.sttAuth(s.postVoiceDropped))
 	mux.Handle("GET /api/stt/rooms/{room}/prompt", s.sttAuth(s.sttPromptFor))
 	mux.Handle("GET /api/rooms/{room}/glossary", s.participant(s.getGlossary))
 	mux.Handle("PUT /api/rooms/{room}/glossary", s.participant(s.putGlossary))

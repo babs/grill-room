@@ -25,6 +25,39 @@ export async function roomWith(browser, request, names) {
   return { room, pages };
 }
 
+// playSTT replaces the page's event stream with one "stt" event, as the server sends it from the
+// workers' heartbeats, and reloads. The e2e server has no voice: by default no worker reads the
+// glossary and Room settings has no glossary tab (007-AC14).
+export async function playSTT(page, roomID, st) {
+  const body = { available: true, listening: false, transcribed: [], engines: [], glossary: false, ...st };
+  await page.route(`**/api/rooms/${roomID}/events*`, (r) => r.fulfill({
+    status: 200, headers: { 'Content-Type': 'text/event-stream' }, body: `event: stt\ndata: ${JSON.stringify(body)}\n\n`,
+  }));
+  await settled(page, () => page.reload());
+}
+
+// settled loads the page again while a load lost a request to ERR_NETWORK_CHANGED: Chrome aborts
+// in-flight requests whenever a parallel spec's Docker network comes or goes, and a lost module
+// leaves the page without its Room settings.
+async function settled(page, load) {
+  for (let i = 0; i < 3; i++) {
+    const lost = [];
+    const watch = (r) => { if (r.failure()?.errorText.includes('ERR_NETWORK_CHANGED')) lost.push(r.url()); };
+    page.on('requestfailed', watch);
+    await load();
+    page.off('requestfailed', watch);
+    if (!lost.length) return;
+  }
+  throw new Error('three loads in a row lost requests to network changes');
+}
+
+// stopSTT gives the page its real event stream back, on the room without a sheet open.
+export async function stopSTT(page) {
+  await page.unrouteAll();
+  const url = page.url().split('#')[0];
+  await settled(page, () => page.goto(url));
+}
+
 export function upload(page, name, mimeType, content) {
   return page.locator('#upload-input').setInputFiles({ name, mimeType, buffer: Buffer.from(content) });
 }

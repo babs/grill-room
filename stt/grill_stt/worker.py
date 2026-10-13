@@ -45,6 +45,8 @@ class Worker:
         self._streams: dict[str, tuple[str, rtc.AudioStream, str]] = {}
         self._changed = asyncio.Event()
         self._background: set[asyncio.Task[None]] = set()
+        # The pipeline's clock: an utterance's end and its line's latency are read on it.
+        self._clock = time.monotonic
         ROOMS.set_function(lambda: len(self.rooms))
 
     def _token(self, room: str) -> str:
@@ -175,7 +177,6 @@ class Worker:
 
     async def _listen(self, room: str, participant_id: int, sid: str, stream: rtc.AudioStream) -> None:
         """VAD over one participant's track; every utterance it cuts goes to the queue, in memory."""
-        pause = self._s.vad_min_silence_ms / 1000
         TRACKS.inc()
         log.info("track_listening", room=room, participant=participant_id, track=sid)
         try:
@@ -185,10 +186,11 @@ class Worker:
             async for ev in stream:
                 samples = np.frombuffer(ev.frame.data, np.int16).astype(np.float32)
                 samples /= 32768
-                for audio in seg.feed(samples):
-                    self._pipeline.submit(Utterance(room, participant_id, audio, time.monotonic() - pause))
-            for audio in seg.flush():
-                self._pipeline.submit(Utterance(room, participant_id, audio, time.monotonic()))
+                # The speech ended the silence the cut waited for ago; a forced cut waited none.
+                for audio, silent_s in seg.feed_timed(samples):
+                    self._pipeline.submit(Utterance(room, participant_id, audio, self._clock() - silent_s))
+            for audio, silent_s in seg.flush_timed():
+                self._pipeline.submit(Utterance(room, participant_id, audio, self._clock() - silent_s))
         except Exception:
             # One broken track must not go unnoticed, nor take the room down with it.
             log.exception("track_failed", room=room, participant=participant_id)
@@ -212,7 +214,9 @@ class Worker:
         """Tells the room server the worker is up, which rooms and voices it hears, at once on a change."""
         while True:
             self._changed.clear()
-            await self._api.heartbeat(self._s.worker_name, sorted(self.rooms), self.voices())
+            await self._api.heartbeat(
+                self._s.worker_name, sorted(self.rooms), self.voices(), self._s.engine, self._s.uses_glossary
+            )
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._changed.wait(), self._s.heartbeat_seconds)
 

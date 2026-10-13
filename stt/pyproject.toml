@@ -5,6 +5,8 @@ description = "Transcribes grill-room LiveKit audio into room messages"
 requires-python = ">=3.14"
 dependencies = [
     "faster-whisper>=1.2,<1.3",
+    # ctypes binding only: the image builds libtranscribe itself, pinned and AVX2 (spec 007, AC11).
+    "transcribe-cpp==0.4.0",
     # av 19 rejects the metadata_errors kwarg faster-whisper 1.2.1 passes (spike S1-bis).
     "av>=16,<17",
     "livekit>=1.1",
@@ -27,6 +29,11 @@ dev = [
     "pytest>=9", "pytest-asyncio>=1.4", "pytest-cov>=7",
     "mypy>=2", "ruff>=0.16",
 ]
+
+[tool.uv]
+# The prebuilt provider wheel is tuned for no CPU in particular and ships Vulkan: the image loads its
+# own build through TRANSCRIBE_LIBRARY instead. A false marker drops the dependency.
+override-dependencies = ["transcribe-cpp-native; python_version < '0'"]
 
 [tool.ruff]
 line-length = 110
