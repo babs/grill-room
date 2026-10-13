@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, confirmSheet, smallTargets, noOverflow } from './helpers.js';
+import { roomWith, signIn, confirmSheet, smallTargets, noOverflow, menuItem } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -126,7 +126,8 @@ for (const vp of widths) {
       await page.locator('#invites').getByRole('button', { name: 'Close' }).click();
       await expect(page.locator('button.persona')).toHaveText(b.personas.map((n) => new RegExp(n)));
       if (vp.width > 400) await expect(page.locator('#documents li').first()).toContainText('agenda.md');
-      await page.goto(page.url().split('?')[0] + '#manage');
+      await expect(page.locator('#invites')).toBeHidden();
+      await menuItem(page, 'Room settings');
       await expect(page.locator('#created-from')).toHaveText(`Created from the starter ${b.title} v1.`);
     }
     // Blank: Grill alone, no agenda, no starter named.
@@ -138,7 +139,8 @@ for (const vp of widths) {
     await expect(page.locator('#room-name')).toHaveText('Plain ' + vp.name);
     await page.locator('#invites').getByRole('button', { name: 'Close' }).click();
     await expect(page.locator('button.persona')).toHaveText([/Grill/]);
-    await page.goto(page.url().split('?')[0] + '#manage');
+    await expect(page.locator('#invites')).toBeHidden();
+    await menuItem(page, 'Room settings');
     await expect(page.locator('#room-panel')).toBeVisible();
     await expect(page.locator('#created-from')).toHaveCount(0);
   });
@@ -163,7 +165,7 @@ test('save a room as a starter, share it, create a room from it', async ({ brows
   await page.locator('#invites').getByRole('button', { name: 'Close' }).click();
   await page.locator('#upload-input').setInputFiles({ name: 'plan.md', mimeType: 'text/markdown', buffer: Buffer.from('# Plan\n') });
   await expect(page.locator('#documents li', { hasText: 'plan.md' })).toHaveCount(1);
-  await page.goto(page.url().split('?')[0].split('#')[0] + '#manage');
+  await menuItem(page, 'Room settings');
   await page.getByRole('button', { name: 'Save as starter' }).click();
   const sheet = page.locator('#starter-save-sheet');
   await expect(sheet.getByLabel('Title')).toHaveValue('Grill: Search');
