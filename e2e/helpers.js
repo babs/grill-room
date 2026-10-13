@@ -128,7 +128,7 @@ export function liveDaemon(dir, roomURL, env = {}) {
     for (let i = 0; i < 100; i++) {
       const m = readFileSync(log, 'utf8').match(/Admin page: (http:\/\/127\.0\.0\.1:\d+\/s\/\S+)/);
       if (m) return m[1];
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100)); // polls the log file, bounded by 100 rounds
     }
     throw new Error('no admin link in ' + log);
   })();
@@ -140,7 +140,7 @@ export const latestLink = async (log) => {
   for (let i = 0; i < 100; i++) {
     const all = [...readFileSync(log, 'utf8').matchAll(/Admin page: (http:\/\/127\.0\.0\.1:\d+\/s\/\S+)/g)];
     if (all.length) return all.at(-1)[1];
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 100)); // polls the log file, bounded by 100 rounds
   }
   throw new Error('no admin link in ' + log);
 };

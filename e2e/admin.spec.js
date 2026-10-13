@@ -123,7 +123,7 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
           test.info().annotations.push({ type: 'held', description: 'the reloaded status shows the worker down' });
           return route.fulfill({ response: res, json });
         }
-        await new Promise((r) => setTimeout(r, 10));
+        await new Promise((r) => setTimeout(r, 10)); // polls the worker's restart, bounded by 300 rounds
       }
       applied = false;
       return route.continue();

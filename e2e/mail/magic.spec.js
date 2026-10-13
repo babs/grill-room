@@ -16,7 +16,7 @@ async function nextMail(request, to, n) {
       expect(link, msg.Text).not.toBeNull();
       return { subject: msg.Subject, link: link[0] };
     }
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 200)); // polls mailpit, bounded by 50 rounds
   }
   throw new Error(`no mail ${n} to ${to}`);
 }

@@ -86,7 +86,7 @@ test('one supervisor, two instances, two accounts, two turns at once', async ({ 
     const watch = (async () => {
       while (!both && !done) {
         both = (await api.get('/api/status')).concurrency.running.length === 2;
-        await new Promise((r) => setTimeout(r, 200));
+        await new Promise((r) => setTimeout(r, 200)); // samples the slots until both turns end
       }
     })();
     const answers = await Promise.all(rooms.map((r) => ask(r.page, r.room.id, question))).finally(() => { done = true; });

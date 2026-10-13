@@ -40,7 +40,7 @@ test('a mention arrives as a real push notification', async ({ request, baseURL 
       for (let i = 0; i < 60; i++) {
         const n = await reg.getNotifications();
         if (n.length) return n.map((x) => ({ title: x.title, body: x.body, data: x.data }));
-        await new Promise((r) => setTimeout(r, 1000));
+        await new Promise((r) => setTimeout(r, 1000)); // polls the push service's delivery, bounded by 60 rounds
       }
       return [];
     });

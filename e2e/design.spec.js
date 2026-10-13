@@ -294,7 +294,7 @@ test('phone tab bar', async ({ browser, request }) => {
   // A scroll right after the viewport resize above counts as the layout's: repeat it until it unpins.
   await expect.poll(() => alice.evaluate(async () => {
     messages.scrollTop = 200;
-    await new Promise((r) => requestAnimationFrame(() => setTimeout(r)));
+    await new Promise((r) => requestAnimationFrame(() => setTimeout(r))); // one frame, then the scroll event's task
     return pinned;
   })).toBe(false);
   await bar.getByRole('button', { name: /Docs/ }).click();
