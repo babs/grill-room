@@ -29,6 +29,34 @@ type pushBrowser struct {
 	mu     sync.Mutex
 	got    []pushPayload
 	auths  []string
+	// clock is the server's time; read, the last line its push loop read; lastLine, the newest.
+	clock    time.Time
+	read     int64
+	lastLine func() int64
+}
+
+func (b *pushBrowser) now() time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.clock
+}
+
+func (b *pushBrowser) advance(d time.Duration) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.clock = b.clock.Add(d)
+}
+
+func (b *pushBrowser) noteRead(last int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.read = max(b.read, last)
+}
+
+func (b *pushBrowser) readUpTo() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.read
 }
 
 func newPushBrowser(t *testing.T) *pushBrowser {
@@ -82,6 +110,18 @@ func pushEnv(t *testing.T, b *pushBrowser) *env {
 	e := newEnvOpts(t, opts)
 	oldWindow, oldTick := pushWindow, pushTick
 	pushWindow, pushTick = 150*time.Millisecond, 20*time.Millisecond
+	// The batches run on a clock the test moves: what is said before a move is one batch, however
+	// slow the machine (a 150 ms window once split two mentions on a Windows runner).
+	b.clock = time.Now()
+	e.srv.now = b.now
+	e.srv.pushRead = b.noteRead
+	b.lastLine = func() int64 {
+		id, err := e.st.LastMessageID(context.Background())
+		if err != nil {
+			t.Error(err)
+		}
+		return id
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { e.srv.PushLoop(ctx); close(done) }()
@@ -96,11 +136,17 @@ func pushEnv(t *testing.T, b *pushBrowser) *env {
 // waitPushes waits until b got n pushes, then a little longer to see no more come.
 func waitPushes(t *testing.T, b *pushBrowser, n int) []pushPayload {
 	t.Helper()
+	// Every line said so far is read, then the batches are due: the clock moves past the window.
 	deadline := time.Now().Add(5 * time.Second)
-	for len(b.pushes()) < n && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
+	for b.readUpTo() < b.lastLine() && time.Now().Before(deadline) {
+		time.Sleep(pushTick)
 	}
-	time.Sleep(3 * pushWindow)
+	b.advance(pushWindow)
+	for len(b.pushes()) < n && time.Now().Before(deadline) {
+		time.Sleep(pushTick)
+	}
+	// A few more ticks: a push due now and not counted yet would show.
+	time.Sleep(5 * pushTick)
 	got := b.pushes()
 	if len(got) != n {
 		t.Fatalf("%d pushes, want %d: %+v", len(got), n, got)

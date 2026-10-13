@@ -188,7 +188,12 @@ func (s *Server) PushLoop(ctx context.Context) {
 				continue
 			}
 			cursors[room] = last
-		case now := <-tick.C:
+			if s.pushRead != nil {
+				s.pushRead(last)
+			}
+		case <-tick.C:
+			// The server's clock, as each batch's first event used: the tick only polls.
+			now := s.now()
 			for id, b := range pending {
 				if now.Sub(b.first) < pushWindow {
 					continue

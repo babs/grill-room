@@ -80,6 +80,8 @@ type Server struct {
 	loginLimit limiter
 	// now is the clock admin sessions and the audit log read; tests set it.
 	now func() time.Time
+	// pushRead, set by tests, learns the last line PushLoop has read for a room.
+	pushRead func(last int64)
 	// electMu serialises host elections and hand-overs.
 	electMu sync.Mutex
 	// turnMu serialises turn starts and queue draining, so presses run in the order they came.
