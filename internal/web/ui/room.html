@@ -69,6 +69,12 @@
   <a id="docs-window-menu">Open documents in a new window</a>
   <button type="button" id="host-open" hidden>Run the AI on my computer</button>
 </div>
+<div id="doc-menu" class="menu" popover>
+  <a id="doc-original" hidden>Download</a>
+  <a id="doc-window">Open in a new window</a>
+  <button type="button" id="doc-rename">Rename</button>
+  <button type="button" id="doc-delete" class="danger" hidden>Delete</button>
+</div>
 <div id="msg-menu" class="menu msg-menu" popover>
   <button type="button" id="msg-edit">Edit</button>
   <button type="button" id="msg-delete">Delete</button>
@@ -241,6 +247,7 @@
     <section id="people-pane" aria-labelledby="people-title">
       <div class="pane-head">
         <h2 id="people-title">People</h2>
+        <button type="button" id="people-fold" class="fold btn-icon btn-ghost" aria-controls="people-pane" aria-expanded="true"></button>
       </div>
       <h3 class="people">In the room</h3>
       <ul id="participants"></ul>
@@ -251,6 +258,7 @@
         <h2 id="docs-title">Documents</h2>
         <a id="docs-window" class="btn btn-icon btn-ghost" aria-label="Open documents in a new window" title="Open documents in a new window">⧉</a>
         <button type="button" id="upload-open" class="btn-icon" aria-label="Add documents" title="Add documents">+</button>
+        <button type="button" id="docs-fold" class="fold btn-icon btn-ghost" aria-controls="docs-pane" aria-expanded="true"></button>
       </div>
       <input type="file" id="upload-input" multiple hidden accept=".md,.markdown,.html,.htm,.pdf,.png,.jpg,.jpeg,.gif,.webp,.svg,.docx,.odt,.pptx">
       <ul id="documents"></ul>
@@ -259,17 +267,17 @@
       <div class="drop-overlay" aria-hidden="true">Drop to add to the room</div>
     </section>
   </aside>
+  <!-- Resize handles (008-AC2, 008-AC3): room.js drags them and stores the width. -->
+  <div id="side-handle" class="pane-handle" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="side" aria-label="Resize the side panel"></div>
   <section id="viewer" hidden>
     <div class="viewer-head">
       <button type="button" id="doc-close" class="btn-icon btn-ghost" aria-label="Close document" title="Close">✕</button>
       <div class="doc-title"><h2 id="doc-name"></h2><span id="doc-meta"></span></div>
       <div class="doc-tools">
-        <a id="doc-original" class="btn btn-icon btn-ghost" aria-label="Download" title="Download" hidden>⤓</a>
-        <a id="doc-window" class="btn btn-icon btn-ghost" aria-label="Open in a new window" title="Open in a new window">⧉</a>
-        <button type="button" id="doc-rename" class="btn-icon btn-ghost" aria-label="Rename" title="Rename">✎</button>
-        <button type="button" id="doc-delete" class="btn-icon btn-ghost danger" aria-label="Delete" title="Delete" hidden>🗑</button>
         <button type="button" id="annot-toggle" class="btn-ghost" aria-pressed="false" aria-controls="annotations" title="Show or hide the annotations">💬 Notes <span id="annot-count"></span></button>
+        <button type="button" id="doc-width" class="btn-icon btn-ghost" hidden>↔</button>
         <button type="button" id="chat-fold" class="btn-icon btn-ghost" aria-pressed="false" title="Fold the chat away to read the document">⇥</button>
+        <button type="button" id="doc-more" class="btn-icon btn-ghost" popovertarget="doc-menu" aria-label="Document actions" title="Document actions">⋯</button>
       </div>
     </div>
     <form id="doc-rename-form" class="row" hidden>
@@ -284,7 +292,9 @@
     </form>
     <div class="viewer-body">
       <div id="doc-frame"></div>
+      <div id="notes-handle" class="pane-handle" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="annotations" aria-label="Resize the notes"></div>
       <aside id="annotations" aria-label="Annotations">
+        <button type="button" id="notes-back" class="btn-secondary">← Back to the document</button>
         <div class="annot-tools">
           <button type="button" id="annot-doc">Comment on the document</button>
           <button type="button" id="annot-pick" aria-pressed="false" hidden>Annotate an element</button>
@@ -304,6 +314,7 @@
       </aside>
     </div>
   </section>
+  <div id="viewer-empty"><p class="empty">Pick a document to read it here.</p></div>
   <section class="chat">
     <button type="button" id="chat-unfold" class="btn-icon btn-ghost" aria-label="Show the chat" title="Show the chat">💬</button>
     <ol id="messages" aria-live="polite"></ol>

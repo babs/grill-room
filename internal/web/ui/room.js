@@ -8,6 +8,7 @@ const api = '/api/rooms/' + encodeURIComponent(roomID);
 const roomPath = '/r/' + encodeURIComponent(roomID);
 const docsMode = location.pathname.split('/')[3] === 'docs';
 if (docsMode) document.body.classList.add('docs-window');
+const phone = () => matchMedia('(max-width: 40rem)').matches;
 const messages = $('messages');
 const sendForm = $('send');
 const bodyInput = $('body');
@@ -64,7 +65,16 @@ async function loadRoom() {
   if (!res.ok) throw new Error('room: HTTP ' + res.status);
   wasIn = true;
   const data = await res.json();
-  $('room-name').textContent = data.room.name;
+  // The docs window's room name leads back to the room (008-AC6).
+  if (docsMode) {
+    const a = document.createElement('a');
+    a.href = roomPath;
+    a.title = 'Back to the room';
+    a.textContent = data.room.name;
+    $('room-name').replaceChildren(a);
+  } else {
+    $('room-name').textContent = data.room.name;
+  }
   roomName = data.room.name;
   showTitle();
   // Someone else renamed this participant (005-AC21): a rename of their own sets myName first.
@@ -651,7 +661,8 @@ $('strip-more').addEventListener('click', () => {
 
 // Menus are popovers (005-AC32): the browser closes them on a click outside and on Escape; picking
 // an item closes them too.
-for (const menu of document.querySelectorAll('.menu')) {
+// The document's menu has its own (008-AC8).
+for (const menu of document.querySelectorAll('.menu:not(#doc-menu)')) {
   menu.addEventListener('click', (e) => { if (e.target.closest('button, a')) menu.hidePopover(); });
 }
 for (const b of document.querySelectorAll('dialog .close')) b.addEventListener('click', () => b.closest('dialog').close());
@@ -809,7 +820,8 @@ function option(value, text) {
 }
 
 // showDocument opens a document; refresh keeps the revisions picked unless the latest was shown.
-async function showDocument(id, refresh) {
+// A deep link pushes no history entry: Chrome lets Back skip an entry pushed before any tap.
+async function showDocument(id, refresh, deepLink) {
   const res = await fetch(docURL(id, ''));
   if (!res.ok) throw new Error('document: HTTP ' + res.status);
   const { document: d, revisions } = await res.json();
@@ -817,14 +829,22 @@ async function showDocument(id, refresh) {
   if (refresh && (!openDoc || openDoc.id !== id)) return;
   const followLatest = !refresh || $('rev').value === String(openDoc.revisions);
   const keepFrom = refresh ? $('rev-from').value : '';
+  const opening = !refresh && !openDoc;
   openDoc = d;
   $('viewer').hidden = false;
   // A document opened from the chat (a single upload, a link) shows in the phone's Docs tab.
-  if (!refresh && !docsMode && matchMedia('(max-width: 40rem)').matches) showTab('docs');
+  if (!refresh && !docsMode && phone()) showTab('docs');
   $('doc-window').href = roomPath + '/docs/' + encodeURIComponent(d.id);
-  // The docs window's address follows the document shown: a deep link to reload or share.
-  if (docsMode) history.replaceState(null, '', $('doc-window').href);
+  // The docs window's address follows the document shown: a deep link to reload or share. On a
+  // phone the document is a step Back undoes (008-AC9).
+  const url = docsMode ? $('doc-window').href : location.href;
+  if (opening && phone() && !deepLink) {
+    history.pushState({ pane: 'doc' }, '', url);
+    docPushed = true;
+  } else if (docsMode) history.replaceState(history.state, '', url);
+  $('doc-width').hidden = d.format !== 'md';
   $('doc-name').textContent = d.name;
+  $('doc-name').title = d.name;
   $('doc-delete').hidden = !meAdmin;
   $('doc-meta').textContent = d.kind === 'upload' && d.format === 'md' && !/\.(md|markdown)$/i.test(d.name)
     ? describe(d) + ', shown as its Markdown copy'
@@ -867,6 +887,8 @@ function renderDocument() {
     } else {
       el.setAttribute('sandbox', 'allow-scripts');
       const q = new URLSearchParams();
+      // The first paint at the chosen width; later changes go to the frame as a message (008-AC7).
+      if (d.format === 'md' && mdWidth !== 'narrow') q.set('width', mdWidth);
       if (d.kind === 'agent') {
         q.set('rev', $('rev').value);
         if ($('rev-from').value) q.set('from', $('rev-from').value);
@@ -910,14 +932,48 @@ $('doc-delete').addEventListener('click', () => {
 
 $('rev').addEventListener('change', renderDocument);
 $('rev-from').addEventListener('change', renderDocument);
+// On a phone the document and Notes are history entries: closing one goes Back, so Back and ✕
+// stay in step (008-AC9).
+// The pane closes at once and the flags clear before going Back: a second tap meanwhile finds
+// nothing to step back from.
 $('doc-close').addEventListener('click', () => {
+  const steps = (docPushed ? 1 : 0) + (notesPushed ? 1 : 0);
+  docPushed = false;
+  notesPushed = false;
+  closeDocument();
+  if (steps) history.go(-steps);
+});
+function closeDocument() {
   if (docsMode) history.replaceState(null, '', roomPath + '/docs');
+  notesPane(false);
   openDoc = null;
   $('viewer').hidden = true;
   $('doc-frame').replaceChildren();
   closeNew();
   annotations = [];
   renderAnnotations();
+}
+window.addEventListener('popstate', (e) => {
+  const pane = e.state?.pane;
+  let closed = false;
+  if (notesPushed && pane !== 'notes') {
+    notesPushed = false;
+    notesPane(false);
+    closed = true;
+  }
+  if (docPushed && !pane) {
+    docPushed = false;
+    closeDocument();
+    closed = true;
+  } else if (pane === 'notes' && docPushed && openDoc) {
+    notesPushed = true;
+    notesPane(true);
+  } else if (pane && !(pane === 'doc' ? docPushed : notesPushed)) {
+    // Forward onto the step of a pane since closed, or one from before a reload: stay put.
+    history.replaceState(null, '', docsMode && !openDoc ? roomPath + '/docs' : location.href);
+  }
+  // Back from the phone's Chat or People tab steps past the hidden panes: it leaves the room.
+  if (closed && !docsMode && roomTab !== 'docs') history.back();
 });
 
 // Annotations. The document frame runs untrusted scripts, so it only ever proposes: an anchor to
@@ -966,6 +1022,7 @@ window.addEventListener('message', (ev) => {
   switch (msg.type) {
     case 'gr:ready':
       frameReady = true;
+      if (openDoc?.format === 'md') postToFrame({ type: 'gr:width', width: mdWidth });
       sendAnnotations();
       break;
     case 'gr:anchor':
@@ -974,7 +1031,7 @@ window.addEventListener('message', (ev) => {
       if (canCreate() && !(newAnchor !== undefined && $('annot-body').value.trim())) openNew(msg.anchor);
       break;
     case 'gr:open':
-      showAnnotations(true);
+      openNotes();
       focusItem(msg.id, false);
       break;
     case 'gr:pick':
@@ -1004,7 +1061,7 @@ function describeAnchor(a) {
 
 function openNew(anchor) {
   // An annotation started from the document needs its form in sight.
-  showAnnotations(true);
+  openNotes();
   newAnchor = anchor;
   $('annot-target').textContent = describeAnchor(anchor);
   $('annot-new').hidden = false;
@@ -1079,7 +1136,13 @@ function showAnnotations(on) {
   $('annot-toggle').setAttribute('aria-pressed', String(on));
 }
 showAnnotations(localStorage.getItem(annotKey) ? localStorage.getItem(annotKey) === '1' : matchMedia('(min-width: 100rem)').matches);
+if (phone()) notesPane(false);
 $('annot-toggle').addEventListener('click', () => {
+  if (phone()) {
+    if (!document.body.classList.contains('notes-pane')) openNotes();
+    else $('notes-back').click();
+    return;
+  }
   const on = document.body.classList.contains('annot-closed');
   localStorage.setItem(annotKey, on ? '1' : '0');
   showAnnotations(on);
@@ -1094,6 +1157,135 @@ function foldChat(on) {
 foldChat(localStorage.getItem(chatKey) === '1');
 $('chat-fold').addEventListener('click', () => foldChat(!document.body.classList.contains('chat-folded')));
 $('chat-unfold').addEventListener('click', () => foldChat(false));
+
+// A phone shows one pane at a time: the list, the document, then Notes (008-AC9). docPushed and
+// notesPushed say which of them this page pushed a history entry for; a reload keeps the browser's
+// entries but not these, so the current one starts plain.
+let docPushed = false;
+let notesPushed = false;
+if (history.state?.pane) history.replaceState(null, '', location.href);
+function notesPane(on) {
+  document.body.classList.toggle('notes-pane', on);
+  if (phone()) $('annot-toggle').setAttribute('aria-pressed', String(on));
+}
+// openNotes brings Notes in sight: a pane of its own on a phone, the side panel elsewhere.
+function openNotes() {
+  if (!phone()) {
+    showAnnotations(true);
+    return;
+  }
+  if (document.body.classList.contains('notes-pane')) return;
+  history.pushState({ pane: 'notes' }, '', location.href);
+  notesPushed = true;
+  notesPane(true);
+}
+$('notes-back').addEventListener('click', () => {
+  const pushed = notesPushed;
+  notesPushed = false;
+  notesPane(false);
+  if (pushed) history.back();
+});
+// The Notes button says what the layout shows: the Notes pane on a phone, the side panel wider.
+matchMedia('(max-width: 40rem)').addEventListener('change', () => {
+  const on = phone() ? document.body.classList.contains('notes-pane') : !document.body.classList.contains('annot-closed');
+  $('annot-toggle').setAttribute('aria-pressed', String(on));
+});
+
+// Pane widths and folds, per browser and shared by every room and both pages (008-AC2 to AC5).
+const panes = {
+  side: { key: 'grill-room-list-w', prop: '--list-w', min: 192, max: 480, def: 256, pane: $('side'), handle: $('side-handle'), edge: 'right' },
+  notes: { key: 'grill-room-notes-w', prop: '--notes-w', min: 256, max: 640, def: 320, pane: $('annotations'), handle: $('notes-handle'), edge: 'left' },
+};
+const clampWidth = (p, w) => Math.round(Math.min(p.max, Math.max(p.min, w)));
+function setWidth(p, w, store) {
+  w = clampWidth(p, w);
+  document.documentElement.style.setProperty(p.prop, w + 'px');
+  p.handle.setAttribute('aria-valuenow', String(w));
+  if (store) localStorage.setItem(p.key, String(w));
+}
+for (const p of Object.values(panes)) {
+  p.handle.setAttribute('aria-valuemin', String(p.min));
+  p.handle.setAttribute('aria-valuemax', String(p.max));
+  setWidth(p, Number(localStorage.getItem(p.key)) || p.def, false);
+  // Dragging the right edge of the side panel widens it; the left edge of Notes, the other way.
+  const sign = p.edge === 'right' ? 1 : -1;
+  p.handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    p.handle.setPointerCapture(e.pointerId);
+    p.handle.classList.add('dragging');
+    const r = p.pane.getBoundingClientRect();
+    const origin = p.edge === 'right' ? r.left : r.right;
+    const move = (ev) => setWidth(p, sign * (ev.clientX - origin), false);
+    const done = () => {
+      p.handle.classList.remove('dragging');
+      p.handle.removeEventListener('pointermove', move);
+      localStorage.setItem(p.key, p.handle.getAttribute('aria-valuenow'));
+    };
+    p.handle.addEventListener('pointermove', move);
+    p.handle.addEventListener('lostpointercapture', done, { once: true });
+  });
+  p.handle.addEventListener('keydown', (e) => {
+    const step = { ArrowRight: 16, ArrowLeft: -16 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    setWidth(p, Number(p.handle.getAttribute('aria-valuenow')) + sign * step, true);
+  });
+}
+const drawers = [
+  { name: 'people', button: $('people-fold'), icon: '👥', label: 'people' },
+  { name: 'docs', button: $('docs-fold'), icon: '📄', label: 'documents' },
+];
+function foldDrawer(d, on, store) {
+  document.body.classList.toggle('fold-' + d.name, on);
+  d.button.textContent = on ? d.icon : '«';
+  d.button.setAttribute('aria-expanded', String(!on));
+  d.button.setAttribute('aria-label', (on ? 'Show ' : 'Hide ') + d.label);
+  d.button.title = (on ? 'Show ' : 'Hide ') + d.label;
+  if (store) localStorage.setItem('grill-room-fold-' + d.name, on ? '1' : '0');
+}
+for (const d of drawers) {
+  foldDrawer(d, localStorage.getItem('grill-room-fold-' + d.name) === '1', false);
+  d.button.addEventListener('click', () => foldDrawer(d, !document.body.classList.contains('fold-' + d.name), true));
+}
+
+// Markdown reads at one of three widths, as in gld (008-AC7).
+const mdWidths = { narrow: 'Narrow', large: 'Large', full: 'Full' };
+const mdWidthKey = 'grill-room-md-width';
+let mdWidth = mdWidths[localStorage.getItem(mdWidthKey)] ? localStorage.getItem(mdWidthKey) : 'narrow';
+const widthNames = Object.keys(mdWidths);
+const nextWidth = () => widthNames[(widthNames.indexOf(mdWidth) + 1) % widthNames.length];
+function showWidth() {
+  $('doc-width').setAttribute('aria-label', 'Text width: ' + mdWidths[mdWidth]);
+  $('doc-width').title = 'Text width: ' + mdWidths[mdWidth] + '. Press for ' + mdWidths[nextWidth()] + '.';
+}
+showWidth();
+$('doc-width').addEventListener('click', () => {
+  mdWidth = nextWidth();
+  localStorage.setItem(mdWidthKey, mdWidth);
+  showWidth();
+  postToFrame({ type: 'gr:width', width: mdWidth });
+});
+
+// The document's actions menu (008-AC8): under its button, the first item focused, arrows move.
+const docMenu = $('doc-menu');
+const menuItems = () => [...docMenu.querySelectorAll(':scope > :is(a, button)')].filter((e) => !e.hidden && e.offsetParent !== null);
+docMenu.addEventListener('beforetoggle', (e) => {
+  if (e.newState !== 'open') return;
+  const r = $('doc-more').getBoundingClientRect();
+  docMenu.style.top = (r.bottom + 4) + 'px';
+  docMenu.style.right = Math.max(8, innerWidth - r.right) + 'px';
+});
+docMenu.addEventListener('toggle', (e) => { if (e.newState === 'open') menuItems()[0]?.focus(); });
+docMenu.addEventListener('keydown', (e) => {
+  const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+  if (!step) return;
+  e.preventDefault();
+  const items = menuItems();
+  items[(items.indexOf(document.activeElement) + step + items.length) % items.length]?.focus();
+});
+// Capture: the menu closes, its focus back on ⋯, before the item's own action moves the focus.
+docMenu.addEventListener('click', (e) => { if (e.target.closest('a, button')) docMenu.hidePopover(); }, true);
 
 function renderAnnotations() {
   $('annot-count').textContent = annotations.length ? '(' + annotations.length + ')' : '';
@@ -2670,7 +2862,7 @@ loadRoom().then((ok) => {
   connect();
   if (docsMode) {
     const doc = decodeURIComponent(location.pathname.split('/')[4] || '');
-    if (doc) showDocument(doc).catch(() => history.replaceState(null, '', roomPath + '/docs'));
+    if (doc) showDocument(doc, false, true).catch(() => history.replaceState(null, '', roomPath + '/docs'));
     return;
   }
   // A room just created from the profile opens on its invite card (005-AC34).

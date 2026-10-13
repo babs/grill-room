@@ -68,6 +68,13 @@ test('touch targets at phone width', async ({ browser, request, baseURL }) => {
   await expect(alice.locator('#viewer')).toBeVisible();
   expect(await smallTargets(alice), 'document open').toEqual([]);
   await shot(alice, 'after-phone-doc');
+  // 008-AC12: the document's ⋯ menu and its Notes pane.
+  await alice.locator('#doc-more').click();
+  expect(await smallTargets(alice), 'document menu').toEqual([]);
+  await alice.keyboard.press('Escape');
+  await alice.getByRole('button', { name: /Notes/ }).click();
+  expect(await smallTargets(alice), 'notes pane').toEqual([]);
+  await alice.getByRole('button', { name: '← Back to the document' }).click();
   await alice.locator('#doc-close').click();
 
   // Room settings, as a room admin.
@@ -459,4 +466,26 @@ test('participant names never break mid-word, roles stay two badges', async ({ b
   await expect(name).toHaveCSS('text-overflow', 'ellipsis');
   await menuItem(alice, 'Personas');
   await expect(alice.locator('#personas')).toBeVisible();
+});
+
+// 008-AC12: the new controls at 1440 px share the one control height, the handles show the focus
+// ring, and nothing new moves under reduced motion.
+test('docs panes follow the design rules', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.setViewportSize(desktop);
+  await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
+  await expect(alice.locator('#viewer')).toBeVisible();
+  const heights = await alice.locator('.viewer-head button:visible, .pane-head button:visible').evaluateAll((els) => els.map((e) => [e.id, Math.round(e.getBoundingClientRect().height)]));
+  expect(heights.map(([id]) => id)).toEqual(expect.arrayContaining(['doc-more', 'doc-width', 'people-fold', 'docs-fold']));
+  expect(new Set(heights.map(([, h]) => h)), JSON.stringify(heights)).toEqual(new Set([36]));
+  await alice.emulateMedia({ reducedMotion: 'reduce' });
+  for (const id of ['side-handle', 'notes-handle']) {
+    await alice.locator('#' + id).focus();
+    const s = await alice.locator('#' + id).evaluate((e) => { const c = getComputedStyle(e); return [c.outlineStyle, c.outlineWidth, c.transitionDuration]; });
+    expect(s, id).toEqual(['solid', '2px', '0s']);
+  }
+  await alice.getByRole('button', { name: 'Hide people' }).click();
+  await alice.getByRole('button', { name: 'Hide documents' }).click();
+  expect(await alice.locator('#side').evaluate((e) => getComputedStyle(e).transitionDuration)).toBe('0s');
+  await shot(alice, 'after-desktop-rail');
 });

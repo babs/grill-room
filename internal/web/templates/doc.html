@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en"{{with .Width}} data-width="{{.}}"{{end}}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="/static/doc/github-clipboard.css">
 <link rel="stylesheet" href="/static/doc/github-diff.css">
 <script src="/static/doc/clipboard-copy.js"></script>
+<style>:root[data-width=large] .container { max-width: 1400px; } :root[data-width=full] .container { max-width: none; }</style>
 <link rel="stylesheet" href="/static/doc/annotate.css">
 <script src="/static/doc/annotate.js"></script>
 {{- if .Math}}

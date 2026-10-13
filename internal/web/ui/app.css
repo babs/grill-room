@@ -178,11 +178,12 @@ button.doc:hover { background: var(--border); }
 /* Document viewer */
 #viewer { flex: 2; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--border); }
 .viewer-head { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); }
-.doc-title { flex: 1; min-width: 0; }
-.doc-title h2 { font-size: var(--fs-md); overflow-wrap: anywhere; }
-#doc-meta { color: var(--text-muted); font-size: var(--fs-sm); }
-.doc-tools { display: flex; gap: var(--sp-1); }
-.btn-ghost.danger { color: var(--danger); }
+.doc-title { flex: 1; min-width: 0; contain: inline-size; }
+.doc-title h2, #doc-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-title h2 { font-size: var(--fs-md); }
+#doc-meta { display: block; color: var(--text-muted); font-size: var(--fs-sm); }
+.doc-tools { display: flex; flex: none; gap: var(--sp-1); }
+.btn-ghost.danger, .menu > .danger { color: var(--danger); }
 #doc-rename-form, #revisions { margin: 0; padding: var(--sp-2) var(--sp-4); border-bottom: 1px solid var(--border); }
 #doc-rename-form input { min-width: 12rem; }
 #doc-frame { flex: 1; display: flex; min-height: 0; background: var(--surface); }
@@ -310,7 +311,6 @@ mark.mention-chip.me { background: var(--accent); color: var(--on-accent); }
   body[data-tab=people] #viewer { display: none; }
   body:not([data-tab=chat]) .chat { display: none; }
   #viewer { border-right: 0; }
-  .doc-tools { flex-wrap: wrap; justify-content: flex-end; }
   .msg { padding-right: calc(var(--control-h) + var(--sp-1)); }
   .toasts { inset: auto var(--sp-2) calc(64px + env(safe-area-inset-bottom)) var(--sp-2); }
 }
@@ -324,5 +324,38 @@ body.docs-window #viewer { flex: 1; border-right: 0; }
   body.docs-window #side { width: 100%; border-right: 0; }
   body.docs-window:has(#viewer:not([hidden])) #side { display: none; }
 }
-body.docs-window:has(#viewer[hidden]) #side { flex: 1; width: auto; border-right: 0; }
 input[aria-invalid=true] { border-color: var(--danger); }
+
+/* Panes (008): the side panel and Notes keep the width the reader drags, from 64rem up; the
+   document keeps 24rem, Notes gives way first, then the side panel. */
+:root { --list-w: 256px; --notes-w: 320px; }
+.pane-handle, .fold, #notes-back, #viewer-empty { display: none; }
+@media (min-width: 64rem) {
+  #side { flex: 0 1 var(--list-w); width: auto; min-width: 12rem; }
+  /* With the chat beside it, the room page keeps the chat's share instead. */
+  body:is(.docs-window, .chat-folded) #viewer { min-width: auto; }
+  body:is(.docs-window, .chat-folded) #doc-frame { min-width: 24rem; }
+  #annotations { flex: 0 1 var(--notes-w); width: auto; min-width: 16rem; }
+  /* 12 px to grab, none of it taken from the panes. */
+  .pane-handle { display: block; position: relative; z-index: 1; flex: none; width: 12px; margin: 0 -6px; cursor: col-resize; touch-action: none; }
+  .pane-handle:is(:hover, :focus-visible, .dragging) { background: linear-gradient(var(--brand), var(--brand)) center / 2px 100% no-repeat; }
+  body.annot-closed #notes-handle { display: none; }
+}
+/* Each drawer of the side panel folds on its own; with every drawer shown folded, the panel is a
+   rail (008-AC5). The docs window shows the documents only. */
+@media (width > 40rem) {
+  .fold { display: inline-flex; }
+  body.fold-people #people-pane > :not(.pane-head), body.fold-docs #docs-pane > :not(.pane-head) { display: none; }
+  body.fold-docs:is(.docs-window, .fold-people) #side { flex: 0 0 56px; width: 56px; min-width: 0; padding: var(--sp-2) 0; }
+  body.fold-docs:is(.docs-window, .fold-people) #side .pane-head { justify-content: center; }
+  body.fold-docs:is(.docs-window, .fold-people) #side .pane-head > :not(.fold), body.fold-docs:is(.docs-window, .fold-people) #side-handle { display: none; }
+  body.docs-window #viewer[hidden] + #viewer-empty { display: flex; flex: 1; align-items: flex-start; padding: var(--sp-6); }
+}
+/* A phone shows one pane at a time: the list, the document, then Notes (008-AC9). */
+@media (max-width: 40rem) {
+  #annotations, body.annot-closed #annotations { display: none; }
+  body.notes-pane #annotations { display: block; flex: 1; max-height: none; border-top: 0; }
+  body.notes-pane #doc-frame { display: none; }
+  body.notes-pane #notes-back { display: inline-flex; margin-bottom: var(--sp-3); }
+}
+#room-name a { display: inline-flex; align-items: center; min-height: 44px; color: inherit; }

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, noOverflow, upload, annotateSelection, menuItem } from './helpers.js';
+import { roomWith, signIn, noOverflow, upload, annotateSelection, menuItem, docAction } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
@@ -272,8 +272,11 @@ for (const vp of widths) {
     await bob.setViewportSize(vp);
     await upload(bob, 'plan.md', 'text/markdown', '# Plan\n');
     await expect(bob.locator('#doc-name')).toHaveText('plan.md');
+    await bob.locator('#doc-more').click();
+    await expect(bob.locator('#doc-menu').getByRole('button', { name: 'Rename' })).toBeVisible();
     await expect(bob.locator('#doc-delete')).toBeHidden();
-    await bob.getByRole('button', { name: 'Rename', exact: true }).click();
+    await bob.keyboard.press('Escape');
+    await docAction(bob, 'Rename');
     await bob.getByLabel('New name').fill('roadmap.txt');
     await bob.locator('#doc-rename-form').getByRole('button', { name: 'Save', exact: true }).click();
     await expect(bob.locator('#doc-rename-status')).toHaveText('the name must keep the extension .md');
@@ -286,13 +289,13 @@ for (const vp of widths) {
 
     await alice.locator('#documents').getByRole('button', { name: 'roadmap.md' }).click();
     // 005-AC39: no native dialog, an Undo toast instead; Undo restores, a second delete stays.
-    await alice.locator('#doc-delete').click();
+    await docAction(alice, 'Delete');
     await expect(alice.locator('#viewer')).toBeHidden();
     await expect(bob.locator('#documents li')).toHaveCount(0);
     await alice.locator('#toasts').getByRole('button', { name: 'Undo' }).click();
     await expect(bob.locator('#documents')).toHaveText('roadmap.md');
     await alice.locator('#documents').getByRole('button', { name: 'roadmap.md' }).click();
-    await alice.locator('#doc-delete').click();
+    await docAction(alice, 'Delete');
     await expect(alice.locator('#viewer')).toBeHidden();
     await expect(bob.locator('#viewer')).toBeHidden();
     await expect(bob.locator('#documents li')).toHaveCount(0);

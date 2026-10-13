@@ -12,6 +12,7 @@
   // source), scripts, buttons, hidden parts, diff deletions, this script's own UI.
   var SKIP = 'script, style, noscript, template, button, mjx-container, del.gg-del, [hidden], .mermaid, .math, .gr-annot-ui';
   var STEP = /([a-zA-Z][a-zA-Z0-9-]*):nth-of-type\((\d+)\)/g;
+  var WIDTHS = /^(narrow|large|full)$/;
   // The room page is served by the same server as this document.
   var room = new URL(location.href).origin;
   var supported = 'highlights' in CSS && typeof Highlight === 'function';
@@ -355,6 +356,9 @@
       focus(msg.id);
     } else if (msg.type === 'gr:pick') {
       setPicking(msg.on === true && canCreate);
+    } else if (msg.type === 'gr:width' && WIDTHS.test(msg.width)) {
+      // The Markdown text width (008-AC7): doc.html sizes .container by it, no reload.
+      document.documentElement.setAttribute('data-width', msg.width);
     }
   }
 
@@ -404,6 +408,17 @@
         setPicking(false);
         send({ type: 'gr:pick', on: false });
       }
+    });
+    // A link within the page scrolls without a history entry: the room page's Back and ✕ step
+    // through its own panes (008-AC9), and a frame entry would sit between them.
+    document.addEventListener('click', function (ev) {
+      var a = ev.target instanceof Element && ev.target.closest('a[href^="#"]');
+      if (!a || ev.defaultPrevented) return;
+      var id = decodeURIComponent(a.getAttribute('href').slice(1));
+      var target = id ? document.getElementById(id) || document.getElementsByName(id)[0] : document.body;
+      if (!target) return;
+      ev.preventDefault();
+      target.scrollIntoView();
     });
     window.addEventListener('message', receive);
     new MutationObserver(schedule).observe(article, { childList: true, subtree: true, characterData: true });

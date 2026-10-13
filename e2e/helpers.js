@@ -279,3 +279,9 @@ export function sandboxHas(daemon, file, text) {
     return false;
   }
 }
+
+// docAction runs an item of the document's ⋯ menu (008-AC8).
+export async function docAction(page, name) {
+  await page.locator('#doc-more').click();
+  await page.locator('#doc-menu').getByRole(name === 'Download' || name === 'Open in a new window' ? 'link' : 'button', { name, exact: true }).click();
+}
