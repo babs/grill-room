@@ -99,14 +99,26 @@ async def test_heartbeat_names_the_worker_and_its_rooms() -> None:
         bodies.append(json.loads(r.content))
         return httpx.Response(204 if r.url.path == "/api/stt/heartbeat" else 404)
 
-    assert await api(httpx.MockTransport(handle)).heartbeat("w1", ["a", "b"], {"a": [7, 8]})
-    assert bodies == [{"worker": "w1", "rooms": ["a", "b"], "voices": {"a": [7, 8]}}]
+    assert await api(httpx.MockTransport(handle)).heartbeat(
+        "w1", ["a", "b"], {"a": [7, 8]}, "parakeet", False
+    )
+    assert bodies == [
+        {
+            "worker": "w1",
+            "rooms": ["a", "b"],
+            "voices": {"a": [7, 8]},
+            "engine": "parakeet",
+            "glossary": False,
+        }
+    ]
 
     def down(r: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("down", request=r)
 
-    assert not await api(httpx.MockTransport(down)).heartbeat("w1", [], {})
-    assert not await api(httpx.MockTransport(lambda _r: httpx.Response(401))).heartbeat("w1", [], {})
+    assert not await api(httpx.MockTransport(down)).heartbeat("w1", [], {}, "whisper", True)
+    assert not await api(httpx.MockTransport(lambda _r: httpx.Response(401))).heartbeat(
+        "w1", [], {}, "whisper", True
+    )
 
 
 async def test_queue_is_bounded_and_its_depth_exported() -> None:

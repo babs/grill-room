@@ -1,6 +1,7 @@
 """The bounded queue between the audio tracks and the model, and the room API it posts lines to."""
 
 import asyncio
+import re
 import time
 import unicodedata
 from collections.abc import Callable
@@ -25,6 +26,11 @@ IMPLAUSIBLE = Counter(
 )
 TRANSCRIBE = Histogram(
     "grill_stt_transcribe_seconds", "Model time per utterance.", buckets=(0.5, 1, 2, 3, 5, 8, 13, 20)
+)
+LANGUAGE = Counter(
+    "grill_stt_lines_language_total",
+    "Lines stored in the room, by guessed language: English lines in a French room show an English leak.",
+    ["engine", "guess"],
 )
 LATENCY = Histogram(
     "grill_stt_line_latency_seconds",
@@ -125,6 +131,39 @@ def implausible(line: Line, seconds: float, p: Plausibility) -> str | None:
     return None
 
 
+def implausible_parakeet(line: Line, _seconds: float, p: Plausibility) -> str | None:
+    """As implausible, without the checks on Whisper's confidence and language (spec 007, AC3)."""
+    if line.compression_ratio > p.max_compression_ratio:
+        return "repetition"
+    # French and English both use Latin letters: anything else means the engine went astray.
+    if script_share(line.text, "") < p.min_script_share:
+        return "script"
+    return None
+
+
+# Words frequent in one language and absent from the other's: "a", "on", "en" or "pour" would not do.
+FRENCH = frozenset(
+    "le la les un une des du et est sont que qui pas ne je tu il elle nous vous ils elles ce cette ces dans "
+    "avec sur au aux mais ou donc oui non très aussi bien fait faire être avoir mon ma mes ton ta son sa "
+    "leur notre votre quoi comme alors parce puis voilà accord".split()
+)
+ENGLISH = frozenset(
+    "the and is are was were of to that it this for with not you we they be have has do does but or so "
+    "yes no very what which there their our your my his her will would can could should just about "
+    "because then okay".split()
+)
+
+
+def guess_language(text: str) -> str:
+    """fr, en or unknown, by function words; it feeds metrics and logs only (spec 007, AC4)."""
+    words = re.findall(r"[^\W\d_]+", text.lower())
+    fr = sum(w in FRENCH for w in words)
+    en = sum(w in ENGLISH for w in words)
+    if fr == en:
+        return "unknown"
+    return "fr" if fr > en else "en"
+
+
 @dataclass
 class Utterance:
     room: str
@@ -175,9 +214,18 @@ class RoomAPI:
             log.warning("prompt_failed", room=room, error=str(e))
         return None
 
-    async def heartbeat(self, worker: str, rooms: list[str], voices: dict[str, list[int]]) -> bool:
+    async def heartbeat(
+        self, worker: str, rooms: list[str], voices: dict[str, list[int]], engine: str, glossary: bool
+    ) -> bool:
         try:
-            body = {"worker": worker, "rooms": rooms, "voices": voices}
+            # engine and glossary drive the audio menu's credit and the glossary tab (spec 007, AC13-14).
+            body = {
+                "worker": worker,
+                "rooms": rooms,
+                "voices": voices,
+                "engine": engine,
+                "glossary": glossary,
+            }
             r = await self._client.post("/api/stt/heartbeat", json=body)
         except httpx.HTTPError as e:
             log.warning("heartbeat_failed", error=str(e))
@@ -198,8 +246,11 @@ class Pipeline:
         size: int,
         rules: Plausibility | None = None,
         use_prompt: bool = False,
+        engine: str = "whisper",
     ) -> None:
         self._transcribe = transcribe
+        self._engine = engine
+        self._judge = implausible_parakeet if engine == "parakeet" else implausible
         self._api = api
         self._use_prompt = use_prompt
         # The last prompt read for each room: a room server that does not answer keeps it in use.
@@ -245,11 +296,11 @@ class Pipeline:
         TRANSCRIBE.observe(time.monotonic() - t0)
         seconds = round(len(u.audio) / SR, 2)
         u.audio = u.audio[:0]  # the samples are no longer needed: drop them now, not at the next utterance
-        if not line.text:
+        if not line.text.strip():
             LINES.labels("empty").inc()
-            log.info("utterance_empty", room=u.room, seconds=seconds, language=line.language)
+            log.info("utterance_empty", room=u.room, seconds=seconds, detected=line.language)
             return
-        reason = implausible(line, seconds, self._rules)
+        reason = self._judge(line, seconds, self._rules)
         if reason:
             LINES.labels("implausible").inc()
             IMPLAUSIBLE.labels(reason).inc()
@@ -259,7 +310,7 @@ class Pipeline:
                 participant=u.participant_id,
                 reason=reason,
                 seconds=seconds,
-                language=line.language,
+                detected=line.language,
                 language_probability=round(line.language_probability, 2),
                 avg_logprob=round(line.avg_logprob, 2),
                 no_speech_prob=round(line.no_speech_prob, 2),
@@ -269,6 +320,9 @@ class Pipeline:
             return
         ok = await self._api.post_line(u.room, u.participant_id, line.text)
         LINES.labels("posted" if ok else "failed").inc()
+        language = guess_language(line.text)
+        if ok:
+            LANGUAGE.labels(self._engine, language).inc()
         if ok:
             LATENCY.observe(time.monotonic() - u.ended)
         # The text is personal data: logs carry its size and language, never the words.
@@ -278,7 +332,9 @@ class Pipeline:
             participant=u.participant_id,
             posted=ok,
             seconds=seconds,
-            language=line.language,
+            language=language,
+            # Whisper's own label; parakeet gives none.
+            detected=line.language,
             chars=len(line.text),
             latency_s=round(time.monotonic() - u.ended, 2),
         )

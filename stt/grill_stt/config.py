@@ -1,5 +1,6 @@
 import socket
 from dataclasses import fields
+from typing import Literal
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -18,8 +19,15 @@ class Settings(BaseSettings):
     livekit_url: str
     livekit_api_key: str
     livekit_api_secret: SecretStr
+    # parakeet: parakeet-ultra through transcribe.cpp (spec 007). whisper: faster-whisper, the
+    # fallback for one release.
+    engine: Literal["parakeet", "whisper"] = "parakeet"
+    # The parakeet GGUF file, and the revision it was fetched at (the image sets both).
+    parakeet_model: str = "/models/parakeet/parakeet-ultra-Q8_0.gguf"
+    parakeet_revision: str = "unknown"
     # A model size faster-whisper downloads, or the directory of a downloaded one.
     model: str = "small"
+    whisper_revision: str = "unknown"
     # One CPU of a 4-CPU limit stays free for the event loop, the VAD and LiveKit's threads.
     cpu_threads: int = 3
     # Utterances waiting for the model; past it new ones are dropped and counted.
@@ -42,6 +50,11 @@ class Settings(BaseSettings):
     port: int = 9100
     log_level: str = "info"
     worker_name: str = socket.gethostname()
+
+    @property
+    def uses_glossary(self) -> bool:
+        """Whether the room prompt reaches the engine: Parakeet has no input for it (spec 007, AC14)."""
+        return self.engine == "whisper" and self.glossary_prompt
 
     def plausibility(self) -> Plausibility:
         return Plausibility(**{f.name: getattr(self, f.name) for f in fields(Plausibility)})

@@ -1,10 +1,11 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, menuItem } from './helpers.js';
+import { roomWith, menuItem, playSTT } from './helpers.js';
 
 // 005-AC23: any member edits the transcription glossary in Manage, sees how many terms the prompt
-// holds, and the room says who changed it.
+// holds, and the room says who changed it. 007-AC14: while a worker reads it.
 test('a member edits the transcription glossary', async ({ browser, request }) => {
-  const { pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  await playSTT(bob, room.id, { engines: ['whisper'], glossary: true });
   await menuItem(bob, 'Room settings');
   const form = bob.locator('#stt-glossary');
   // Alice, Bob and the room's Grill persona.

@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -28,10 +29,10 @@ def settings(**kw: Any) -> Settings:
     return Settings(**(base | kw))
 
 
-def worker(handler: httpx.MockTransport) -> Worker:
+def worker(handler: httpx.MockTransport, **kw: Any) -> Worker:
     room_api = RoomAPI(httpx.AsyncClient(base_url="http://room", transport=handler))
     pipeline = Pipeline(lambda _a, _p: Line("", "en"), room_api, size=1)
-    return Worker(settings(), pipeline, room_api, lk=None)  # type: ignore[arg-type] # unused here
+    return Worker(settings(**kw), pipeline, room_api, lk=None)  # type: ignore[arg-type] # unused here
 
 
 def test_plausibility_thresholds_come_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -65,8 +66,39 @@ async def test_heartbeat_goes_out_at_once_when_the_rooms_change() -> None:
             break
         await asyncio.sleep(0.01)
     # heartbeat_seconds is 30: the second beat came from the change, not the timer.
-    assert beats == [b'{"worker":"w1","rooms":[],"voices":{}}', b'{"worker":"w1","rooms":["r1"],"voices":{}}']
+    tail = b',"engine":"parakeet","glossary":false}'
+    assert beats == [
+        b'{"worker":"w1","rooms":[],"voices":{}' + tail,
+        b'{"worker":"w1","rooms":["r1"],"voices":{}' + tail,
+    ]
     task.cancel()
+
+
+@pytest.mark.parametrize(
+    ("kw", "engine", "glossary"),
+    [
+        ({}, "parakeet", False),
+        # 007-AC14: parakeet never uses the glossary, even with the prompt setting on.
+        ({"engine": "parakeet", "glossary_prompt": True}, "parakeet", False),
+        ({"engine": "whisper"}, "whisper", False),
+        ({"engine": "whisper", "glossary_prompt": True}, "whisper", True),
+    ],
+)
+async def test_heartbeat_says_the_engine_and_whether_it_reads_the_glossary(
+    kw: dict[str, Any], engine: str, glossary: bool
+) -> None:
+    """007-AC14: the room hides the glossary tab while no worker reads the glossary."""
+    beats: list[dict[str, Any]] = []
+
+    def handle(r: httpx.Request) -> httpx.Response:
+        beats.append(json.loads(r.content))
+        return httpx.Response(204)
+
+    task = asyncio.create_task(worker(httpx.MockTransport(handle), **kw).heartbeat())
+    while not beats:
+        await asyncio.sleep(0.01)
+    task.cancel()
+    assert (beats[0]["engine"], beats[0]["glossary"]) == (engine, glossary)
 
 
 async def test_forget_drops_the_room_and_its_tracks_once() -> None:

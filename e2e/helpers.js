@@ -25,6 +25,23 @@ export async function roomWith(browser, request, names) {
   return { room, pages };
 }
 
+// playSTT replaces the page's event stream with one "stt" event, as the server sends it from the
+// workers' heartbeats, and reloads. The e2e server has no voice: by default no worker reads the
+// glossary and Room settings has no glossary tab (007-AC14).
+export async function playSTT(page, roomID, st) {
+  const body = { available: true, listening: false, transcribed: [], engines: [], glossary: false, ...st };
+  await page.route(`**/api/rooms/${roomID}/events*`, (r) => r.fulfill({
+    status: 200, headers: { 'Content-Type': 'text/event-stream' }, body: `event: stt\ndata: ${JSON.stringify(body)}\n\n`,
+  }));
+  await page.reload();
+}
+
+// stopSTT gives the page its real event stream back, on the room without a sheet open.
+export async function stopSTT(page) {
+  await page.unrouteAll();
+  await page.goto(page.url().split('#')[0]);
+}
+
 export function upload(page, name, mimeType, content) {
   return page.locator('#upload-input').setInputFiles({ name, mimeType, buffer: Buffer.from(content) });
 }

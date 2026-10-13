@@ -17,7 +17,7 @@ flowchart LR
   AdminC["Instance admin<br/>(/admin, or curl)"]
   SMTP["SMTP relay<br/>(optional: magic links)"]
   LK["LiveKit<br/>(SFU + embedded TURN)"]
-  STT["STT worker<br/>(Python, faster-whisper)"]
+  STT["STT worker<br/>(Python, parakeet-ultra via transcribe.cpp)"]
 
   subgraph Host["Host machine"]
     Daemon["grill-room-daemon<br/>(Go)"]

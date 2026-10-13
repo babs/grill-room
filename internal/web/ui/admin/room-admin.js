@@ -1,6 +1,7 @@
 // The room's Manage sheet (004-AC8, 004-AC19, 005-AC15): Preact, htm and signals, like /admin.
-// room.js, vanilla, hands over the room and the agent state it loads as window.grillRoom and
-// window.grillAgent, each followed by an event. Each tab is a deep link, #manage/<tab>.
+// room.js, vanilla, hands over the room, the agent state and the transcription state it loads as
+// window.grillRoom, window.grillAgent and window.grillSTT, each followed by an event. Each tab is a
+// deep link, #manage/<tab>.
 import { render } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
 import { signal } from '@preact/signals';
@@ -14,13 +15,17 @@ import { RoomPanel, Rename, TabBar, fetchJSON, roomTabs } from './room-panel.js'
  * @typedef {{id: number, name: string, badge: string, model: string, effort: string, pending?: boolean}} Persona
  * @typedef {{room_skills?: RoomSkill[], personas?: Persona[]}} AgentState
  * @typedef {{glossary: string, prompt: string, used: number, total: number, capacity: number}} Glossary
+ * @typedef {{glossary: boolean}} STTState
  */
 
-const w = /** @type {Window & {grillRoom?: RoomData, grillAgent?: AgentState}} */ (window);
+const w = /** @type {Window & {grillRoom?: RoomData, grillAgent?: AgentState, grillSTT?: STTState}} */ (window);
 const roomData = signal(w.grillRoom);
 const agentState = signal(w.grillAgent);
+// The glossary tab shows only while a transcription worker reads it (007-AC14); its data stays.
+const sttGlossary = signal(!!w.grillSTT?.glossary);
 addEventListener('grill:room', (e) => { roomData.value = /** @type {CustomEvent<RoomData>} */ (e).detail; });
 addEventListener('grill:agent', (e) => { agentState.value = /** @type {CustomEvent<AgentState>} */ (e).detail; });
+addEventListener('grill:stt', (e) => { sttGlossary.value = /** @type {CustomEvent<STTState>} */ (e).detail.glossary; });
 
 const allTabs = [...Object.entries(roomTabs).slice(0, 3), ['personas', 'Personas'], ['skills', 'Skills'], ['documents', 'Documents'],
   ['export', roomTabs.export], ['glossary', 'Words to recognise']];
@@ -48,8 +53,8 @@ dialog.addEventListener('close', () => {
   tab.value = '';
 });
 
-/** @param {{data: RoomData, tab: string}} props */
-function Manage({ data, tab }) {
+/** @param {{data: RoomData, tab: string, tabs: string[][]}} props */
+function Manage({ data, tab, tabs }) {
   const base = '/api/rooms/' + encodeURIComponent(data.room.id);
   const [room, setRoom] = useState(/** @type {import('./room-panel.js').Room | null} */ (null));
   const [said, setSaid] = useState('');
@@ -77,7 +82,7 @@ function Manage({ data, tab }) {
     <p class="hint">You are a room admin. The instance's audit log records every action here.</p>
     <p class="said" role="alert">${said}</p>
     ${room && html`<${RoomPanel} key=${room.id} room=${room} base=${base} api=${fetchJSON} show=${show} reload=${load} byName=${byName}
-      tab=${tab} tabs=${allTabs} href=${(/** @type {string} */ id) => '#manage/' + id} close=${() => location.assign('/profile')} label="Room settings">
+      tab=${tab} tabs=${tabs} href=${(/** @type {string} */ id) => '#manage/' + id} close=${() => location.assign('/profile')} label="Room settings">
       ${tab === 'admins' && html`
         <p class="hint">Room admins rename the room and its participants, manage every invite, appoint other admins and delete the room. The room keeps at least one.</p>
         <ul id="room-admins">${data.participants.map((p) => html`<li key=${p.id}>
@@ -153,9 +158,12 @@ function STTGlossary({ data }) {
 function App() {
   const data = roomData.value;
   if (!tab.value || !data) return null;
-  if (data.me.admin) return html`<${Manage} data=${data} tab=${allTabs.some(([id]) => id === tab.value) ? tab.value : 'general'}/>`;
-  const mine = allTabs.filter(([id]) => memberTabs.includes(id));
-  const t = memberTabs.includes(tab.value) ? tab.value : memberTabs[0];
+  const tabs = sttGlossary.value ? allTabs : allTabs.filter(([id]) => id !== 'glossary');
+  if (data.me.admin) return html`<${Manage} data=${data} tabs=${tabs} tab=${tabs.some(([id]) => id === tab.value) ? tab.value : 'general'}/>`;
+  const mine = tabs.filter(([id]) => memberTabs.includes(id));
+  // A stale #manage/glossary link while no engine reads the glossary.
+  if (!mine.length) return html`<p class="hint" id="manage-none">Room settings are for room admins.</p>`;
+  const t = mine.some(([id]) => id === tab.value) ? tab.value : mine[0][0];
   return html`<${TabBar} tabs=${mine} active=${t} href=${(/** @type {string} */ id) => '#manage/' + id} label="Room settings"/>
     <div class="tab-panel" id=${'panel-' + t}>${t === 'glossary' && html`<${STTGlossary} data=${data}/>`}</div>`;
 }

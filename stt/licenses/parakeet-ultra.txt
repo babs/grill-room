@@ -1,0 +1,13 @@
+parakeet-ultra-Q8_0.gguf
+
+Model: parakeet-ultra by Moondream, a post-trained version of NVIDIA's parakeet-tdt-0.6b-v3.
+  https://huggingface.co/moondream/parakeet-ultra
+  https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
+Conversion: Q8_0 GGUF by the transcribe.cpp authors (handy-computer).
+  https://huggingface.co/handy-computer/parakeet-ultra-gguf
+  revision 39eeb55181f0d354fd934f06e92fd8d5037fed8e
+  sha256 007a59761e9258779f189df396b50d12b83bb5b79e66df4b955c230d2f2a0a59
+
+License: Creative Commons Attribution 4.0 International (CC-BY-4.0).
+  https://creativecommons.org/licenses/by/4.0/
+grill-room uses the file unmodified.

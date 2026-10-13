@@ -78,8 +78,7 @@ async function loadRoom() {
   $('doc-delete').hidden = !meAdmin;
   renameSenders();
   $('voice').hidden = !data.voice;
-  // Every member edits the transcription glossary there (005-AC23); the rest is for room admins.
-  $('manage-open').hidden = false;
+  showManage();
   renderParticipants();
   // The room admin panel (admin/room-admin.js) renders from the same answer.
   window.grillRoom = data;
@@ -2192,8 +2191,25 @@ function showSTT(st) {
   $('voice-mute').classList.toggle('captured', mine);
   $('voice-mute').title = mine ? 'Your voice is being written down' : '';
   $('voice-more').classList.toggle('down', sttDown);
+  // The model's license asks for credit wherever it runs (007-AC13).
+  $('stt-credit').hidden = !(st.engines || []).includes('parakeet');
+  if (sttGlossary !== !!st.glossary) {
+    sttGlossary = !!st.glossary;
+    showManage();
+    // The Room settings sheet (admin/room-admin.js) shows its glossary tab from the same state.
+    window.grillSTT = { glossary: sttGlossary };
+    window.dispatchEvent(new CustomEvent('grill:stt', { detail: window.grillSTT }));
+  }
 }
 let sttDown = false;
+// sttGlossary is true while a transcription worker reads room glossaries (007-AC14).
+let sttGlossary = false;
+
+// showManage offers Room settings to room admins, and to every member while the glossary, their
+// only tab (005-AC23), is in use.
+function showManage() {
+  $('manage-open').hidden = !meAdmin && !sttGlossary;
+}
 
 function voiceError(text) {
   $('voice-error').textContent = text;

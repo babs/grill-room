@@ -212,7 +212,9 @@ class Worker:
         """Tells the room server the worker is up, which rooms and voices it hears, at once on a change."""
         while True:
             self._changed.clear()
-            await self._api.heartbeat(self._s.worker_name, sorted(self.rooms), self.voices())
+            await self._api.heartbeat(
+                self._s.worker_name, sorted(self.rooms), self.voices(), self._s.engine, self._s.uses_glossary
+            )
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._changed.wait(), self._s.heartbeat_seconds)
 

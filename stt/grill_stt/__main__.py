@@ -6,19 +6,47 @@ import logging
 import os
 import signal
 import sys
+from collections.abc import Callable
+from pathlib import Path
 
 import httpx
 import structlog
 from aiohttp import web
 from livekit import api
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, Gauge, generate_latest
+from pydantic import ValidationError
 
 from .config import Settings
+from .parakeet import ParakeetTranscriber
 from .pipeline import Pipeline, RoomAPI
-from .transcribe import Transcriber
+from .transcribe import Line, Transcriber
+from .vad import Audio
 from .worker import Worker, http_url
 
 log = structlog.get_logger()
+
+ENGINE = Gauge(
+    "grill_stt_engine_info", "The running engine, its model and revision.", ["engine", "model", "revision"]
+)
+
+
+def engine(s: Settings) -> tuple[str, str]:
+    """The model path and revision of the configured engine."""
+    if s.engine == "parakeet":
+        return s.parakeet_model, s.parakeet_revision
+    return s.model, s.whisper_revision
+
+
+def engine_info(s: Settings) -> None:
+    model, revision = engine(s)
+    ENGINE.labels(s.engine, Path(model).name, revision).set(1)
+
+
+def load(s: Settings) -> Callable[[Audio, str], Line]:
+    model, _ = engine(s)
+    if s.engine == "parakeet":
+        return ParakeetTranscriber(model, s.cpu_threads)
+    return Transcriber(model, s.cpu_threads)
 
 
 def setup_logging(level: str) -> None:
@@ -59,10 +87,12 @@ async def serve_http(port: int, ready: asyncio.Event) -> web.AppRunner:
 async def run(s: Settings) -> None:
     ready = asyncio.Event()
     runner = await serve_http(s.port, ready)
-    log.info("model_loading", model=s.model, cpu_threads=s.cpu_threads)
-    transcribe = await asyncio.to_thread(Transcriber, s.model, s.cpu_threads)
+    model, revision = engine(s)
+    log.info("model_loading", engine=s.engine, model=model, revision=revision, cpu_threads=s.cpu_threads)
+    transcribe = await asyncio.to_thread(load, s)
+    engine_info(s)
     ready.set()
-    log.info("model_ready")
+    log.info("model_ready", engine=s.engine)
     client = httpx.AsyncClient(
         base_url=s.room_url,
         timeout=httpx.Timeout(10.0, connect=5.0),
@@ -70,7 +100,9 @@ async def run(s: Settings) -> None:
     )
     lk = api.LiveKitAPI(http_url(s.livekit_url), s.livekit_api_key, s.livekit_api_secret.get_secret_value())
     room_api = RoomAPI(client)
-    pipeline = Pipeline(transcribe, room_api, s.queue_size, s.plausibility(), use_prompt=s.glossary_prompt)
+    pipeline = Pipeline(
+        transcribe, room_api, s.queue_size, s.plausibility(), use_prompt=s.uses_glossary, engine=s.engine
+    )
     worker = Worker(s, pipeline, room_api, lk)
     try:
         async with asyncio.TaskGroup() as tg:
@@ -85,7 +117,16 @@ async def run(s: Settings) -> None:
 
 
 def main() -> None:
-    s = Settings()  # type: ignore[call-arg] # pydantic-settings reads the required fields from the env
+    try:
+        s = Settings()  # type: ignore[call-arg] # pydantic-settings reads the required fields from the env
+    except ValidationError as e:
+        # One JSON line naming each bad setting and what it accepts, e.g. APP_ENGINE's two values.
+        setup_logging("info")
+        log.error(
+            "config_invalid",
+            errors=[f"APP_{'_'.join(map(str, x['loc'])).upper()}: {x['msg']}" for x in e.errors()],
+        )
+        sys.exit(2)
     setup_logging(s.log_level)
     log.info(
         "startup",
@@ -94,6 +135,7 @@ def main() -> None:
         build_timestamp=os.getenv("BUILD_TIMESTAMP", "1970-01-01T00:00:00"),
         project_url=os.getenv("PROJECT_URL", "https://github.com/babs/grill-room"),
         worker=s.worker_name,
+        engine=s.engine,
     )
 
     async def guarded() -> None:

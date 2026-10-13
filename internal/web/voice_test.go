@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -215,6 +216,52 @@ func TestVoiceLines(t *testing.T) {
 	}
 }
 
+// 007-AC13, 007-AC14: the room learns each live worker's engine, and whether one reads the glossary.
+func TestSTTHeartbeatEngine(t *testing.T) {
+	oldPoll := pollEvery
+	pollEvery = 20 * time.Millisecond
+	t.Cleanup(func() { pollEvery = oldPoll })
+	e, _ := newVoiceEnv(t)
+	room := e.createRoom(t, "R")
+	p := e.join(t, e.createInvite(t, room.ID).Token, "A")
+	ev := e.openEvents(t, room.ID, p.Token, "")
+	nextMessage(t, ev)
+	sttOf(t, next(t, ev))
+	beat := func(body map[string]any) {
+		t.Helper()
+		if code, b := e.do(t, "POST", "/api/stt/heartbeat", sttToken, body); code != http.StatusNoContent {
+			t.Fatalf("heartbeat %v: %d %s", body, code, b)
+		}
+	}
+	expect := func(what string, engines []string, glossary bool) {
+		t.Helper()
+		st := sttOf(t, next(t, ev))
+		if !slices.Equal(st.Engines, engines) || st.Glossary != glossary || st.Engines == nil {
+			t.Fatalf("%s: %+v, want engines %v glossary %v", what, st, engines, glossary)
+		}
+	}
+	// A worker from before 007 names no engine: it reads no glossary.
+	beat(map[string]any{"worker": "old"})
+	expect("pre-007 worker", []string{}, false)
+	beat(map[string]any{"worker": "w1", "engine": " parakeet ", "glossary": false})
+	expect("parakeet", []string{"parakeet"}, false)
+	beat(map[string]any{"worker": "w2", "engine": "whisper", "glossary": true})
+	expect("whisper with the prompt on", []string{"parakeet", "whisper"}, true)
+	beat(map[string]any{"worker": "w2", "engine": "whisper", "glossary": false})
+	expect("whisper with the prompt off", []string{"parakeet", "whisper"}, false)
+
+	for name, body := range map[string]any{
+		"bidi engine":     map[string]any{"worker": "w", "engine": "a\u202eb"},
+		"long engine":     map[string]any{"worker": "w", "engine": strings.Repeat("e", maxEngineName+1)},
+		"multiline":       map[string]any{"worker": "w", "engine": "a\nb"},
+		"engine not text": map[string]any{"worker": "w", "engine": 3},
+	} {
+		if code, _ := e.do(t, "POST", "/api/stt/heartbeat", sttToken, body); code != http.StatusBadRequest {
+			t.Errorf("%s: %d", name, code)
+		}
+	}
+}
+
 func itoa(n int64) string { b, _ := json.Marshal(n); return string(b) }
 
 func sttOf(t *testing.T, ev sseEvent) sttState {
@@ -240,6 +287,9 @@ func TestSTTHeartbeatState(t *testing.T) {
 		t.Helper()
 		if want.Transcribed == nil {
 			want.Transcribed = []int64{}
+		}
+		if want.Engines == nil {
+			want.Engines = []string{}
 		}
 		if st := sttOf(t, next(t, ev)); !st.equal(want) || st.Transcribed == nil {
 			t.Fatalf("%s: %+v, want %+v", what, st, want)
