@@ -21,13 +21,23 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"time"
 )
 
-// ErrGone is returned when the push service says the subscription no longer exists (404, 410):
-// the caller drops it.
+// ErrGone is returned when the push service says the subscription no longer exists (404, 410)
+// or refuses it for good (403, or a 401 saying it was made with another VAPID key): the caller
+// drops it.
 var ErrGone = errors.New("push subscription gone")
+
+// ErrUnauthorized is any other 401: the push service refused this server's VAPID JWT, a fault of
+// the server's own setup, so the subscription stays.
+var ErrUnauthorized = errors.New("push service refused the VAPID authorization")
+
+// keyMismatch is how Mozilla (errno 109) and FCM word a 401 for a subscription made with another
+// VAPID key: it never recovers, as the browser holds the old key.
+var keyMismatch = regexp.MustCompile(`(?i)vapid public key mismatch|"errno":\s*109\b|do not correspond to the credentials`)
 
 // recordSize is the aes128gcm record size the header announces. One record holds the whole
 // payload, so it only needs to exceed it: 4096 is what push services accept (RFC 8291 section 4).
@@ -258,7 +268,8 @@ type Message struct {
 }
 
 // Send encrypts m for sub and posts it to the push service. ErrGone when the subscription no
-// longer exists; any other refusal is an error with the status.
+// longer exists or is refused for good, ErrUnauthorized for another 401; any other refusal is an
+// error with the status.
 func (v *VAPID) Send(ctx context.Context, c *http.Client, sub *Subscription, m Message, now time.Time) error {
 	body, err := Encrypt(sub, m.Payload)
 	if err != nil {
@@ -289,8 +300,11 @@ func (v *VAPID) Send(ctx context.Context, c *http.Client, sub *Subscription, m M
 	defer resp.Body.Close()
 	reason, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 	switch {
-	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone:
+	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone || resp.StatusCode == http.StatusForbidden,
+		resp.StatusCode == http.StatusUnauthorized && keyMismatch.Match(reason):
 		return ErrGone
+	case resp.StatusCode == http.StatusUnauthorized:
+		return fmt.Errorf("%w: %s", ErrUnauthorized, bytes.TrimSpace(reason))
 	case resp.StatusCode/100 != 2:
 		return fmt.Errorf("push: %s: %s", resp.Status, bytes.TrimSpace(reason))
 	}

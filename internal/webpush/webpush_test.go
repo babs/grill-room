@@ -177,18 +177,20 @@ func TestVAPIDAuthorization(t *testing.T) {
 }
 
 // 005-AC24: Send posts the encrypted body with its headers to a test push endpoint, which the user
-// agent's key decrypts; 404 and 410 are ErrGone, any other refusal an error.
+// agent's key decrypts; 404, 410, 403 and a 401 for another VAPID key are ErrGone, any other 401
+// ErrUnauthorized, any other refusal an error.
 func TestSend(t *testing.T) {
 	uaPriv, _ := ecdh.P256().NewPrivateKey(must(t, rfcUAPrivate))
 	raw, _ := NewVAPIDKey()
 	v, _ := ParseVAPID(raw, "mailto:ops@example.org")
-	status := http.StatusCreated
+	status, reply := http.StatusCreated, ""
 	var got *http.Request
 	var body []byte
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r
 		body, _ = io.ReadAll(r.Body)
 		w.WriteHeader(status)
+		_, _ = io.WriteString(w, reply)
 	}))
 	defer srv.Close()
 	sub := rfcSub()
@@ -208,13 +210,29 @@ func TestSend(t *testing.T) {
 	if p := decrypt(t, uaPriv, must(t, rfcAuth), body); string(p) != `{"room":"Pricing"}` {
 		t.Fatalf("payload %q", p)
 	}
-	for code, want := range map[int]error{http.StatusGone: ErrGone, http.StatusNotFound: ErrGone} {
-		status = code
-		if err := v.Send(t.Context(), srv.Client(), sub, m, time.Now()); !errors.Is(err, want) {
-			t.Errorf("%d: %v", code, err)
+	for _, c := range []struct {
+		code int
+		body string
+		want error
+	}{
+		{http.StatusGone, "", ErrGone},
+		{http.StatusNotFound, "", ErrGone},
+		{http.StatusForbidden, "", ErrGone},
+		{http.StatusUnauthorized, `{"code": 401, "errno": 109, "error": "Unauthorized", "message": "VAPID public key mismatch"}`, ErrGone},
+		{http.StatusUnauthorized, `{"errno":109}`, ErrGone},
+		{http.StatusUnauthorized, "vapid public KEY mismatch", ErrGone},
+		{http.StatusUnauthorized, "the VAPID credentials in the authorization header do not correspond to the credentials used to create the subscriptions.", ErrGone},
+		{http.StatusUnauthorized, `{"errno": 1090}`, ErrUnauthorized},
+		{http.StatusUnauthorized, `{"errno": 108, "message": "Invalid JWT"}`, ErrUnauthorized},
+		{http.StatusUnauthorized, "", ErrUnauthorized},
+	} {
+		status, reply = c.code, c.body
+		err := v.Send(t.Context(), srv.Client(), sub, m, time.Now())
+		if !errors.Is(err, c.want) || errors.Is(err, ErrGone) && c.want != ErrGone {
+			t.Errorf("%d %s: %v, want %v", c.code, c.body, err, c.want)
 		}
 	}
-	status = http.StatusTooManyRequests
+	status, reply = http.StatusTooManyRequests, ""
 	if err := v.Send(t.Context(), srv.Client(), sub, m, time.Now()); err == nil || errors.Is(err, ErrGone) || !strings.Contains(err.Error(), "429") {
 		t.Errorf("429: %v", err)
 	}

@@ -310,7 +310,8 @@ func mentionedPeople(m store.Message, personas []store.RoomPersona, ps []store.P
 	return out
 }
 
-// sendPush delivers one batch, and drops a subscription the push service says is gone.
+// sendPush delivers one batch, and drops a subscription the push service says is gone or refuses
+// for good.
 func (s *Server) sendPush(ctx context.Context, b *pushBatch) {
 	v, err := s.vapidKey(ctx)
 	if err != nil {
@@ -342,6 +343,9 @@ func (s *Server) sendPush(ctx context.Context, b *pushBatch) {
 			s.log.Warn("push_drop_failed", zap.Int64("subscription", b.sub.ID), zap.Error(err))
 		}
 		s.log.Info("push_subscription_gone", zap.String("room", b.room), zap.Int64("participant", b.sub.ParticipantID))
+	case errors.Is(err, webpush.ErrUnauthorized):
+		// Our VAPID key or JWT, not the subscription: every push fails until the setup is fixed.
+		s.log.Error("push_unauthorized", zap.String("room", b.room), zap.Int64("participant", b.sub.ParticipantID), zap.Error(err))
 	case err != nil:
 		s.log.Warn("push_failed", zap.String("room", b.room), zap.Int64("participant", b.sub.ParticipantID), zap.Error(err))
 	default:
