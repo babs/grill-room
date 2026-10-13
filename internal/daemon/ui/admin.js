@@ -654,7 +654,14 @@ function LimitsForm({ i }) {
   /** @param {Event} e */
   const save = (e) => {
     e.preventDefault();
-    const apply = () => run(api('POST', '/api/limits', { instance: i.id, ...l }), 'Applied: the worker restarts.').then((ok) => { if (ok) setL(null); });
+    // Chrome fails a request in flight when Docker adds or removes the sandboxes' networks, as the
+    // restart does (ERR_NETWORK_CHANGED): the limits may have landed all the same.
+    const post = () => api('POST', '/api/limits', { instance: i.id, ...l }).catch(async (err) => {
+      if (!(err instanceof TypeError)) throw err;
+      const now = (await api('GET', '/api/status')).instances?.find((/** @type {Instance} */ x) => x.id === i.id)?.limits;
+      if (!now || Object.entries(l).some(([k, v]) => now[k] !== v)) throw err;
+    });
+    const apply = () => run(post(), 'Applied: the worker restarts.').then((ok) => { if (ok) setL(null); });
     if (!busy) return apply();
     window.grillConfirm('Apply the limits now?', 'An answer is running on this server: restarting its worker fails it.', 'Apply now')
       .then((yes) => { if (yes) apply(); });

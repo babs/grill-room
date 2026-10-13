@@ -105,8 +105,14 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
     // Limits apply by restarting the worker, which comes back. The page's next status is held until
     // one shows the worker down, as a loaded machine delivers it: the status line must survive. A
     // restart too quick to catch in 3 s lets the status through.
+    // The limits reach the daemon but the browser sees the request fail, as Chrome does when the
+    // restart's Docker networks come and go (ERR_NETWORK_CHANGED): the page checks they landed.
     let applied = false;
-    await admin.route('**/api/limits', (route) => { applied = true; return route.continue(); });
+    await admin.route('**/api/limits', async (route) => {
+      applied = true;
+      await route.fetch();
+      return route.abort('failed');
+    });
     await admin.route('**/api/status', async (route) => {
       for (let i = 0; applied && i < 300; i++) {
         // Node reuses a kept-alive socket the supervisor may have closed: try again.
