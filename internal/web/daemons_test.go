@@ -182,7 +182,9 @@ func TestDaemonConnection(t *testing.T) {
 	}
 
 	ch, drop := e.openStream(t, events, tok, "")
-	if ev := next(t, ch); ev.event != "hello" || !strings.Contains(ev.data, `"heartbeat_seconds"`) || strings.Contains(ev.data, "Alice-laptop") {
+	// 005-AC42: the hello names the room, for the daemon's page.
+	if ev := next(t, ch); ev.event != "hello" || !strings.Contains(ev.data, `"heartbeat_seconds"`) || !strings.Contains(ev.data, `"room_name":"R"`) ||
+		strings.Contains(ev.data, "Alice-laptop") {
 		t.Fatalf("hello = %+v", ev)
 	}
 	if code, b := e.do(t, "POST", status, tok, map[string]any{"can_host": false, "reason": "Docker is not running", "version": "v1"}); code != http.StatusNoContent {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -206,5 +207,38 @@ func TestWorkerEnv(t *testing.T) {
 		"CLAUDE_CONFIG_DIR=/home/a/.claude-work", "GRILL_ROOM_DAEMON_STATE_DIR=/s", "HOME=/home/a"})
 	if strings.Join(got, " ") != "PATH=/bin GRILL_ROOM_DAEMON_STATE_DIR=/s HOME=/home/a" {
 		t.Fatalf("worker env %v", got)
+	}
+}
+
+// 005-AC45: the page's address and sessions a self-update hands over go through an owner-only file
+// that the new binary reads once; a stale or future-dated one is ignored, and nothing goes through
+// the environment.
+func TestHandedPage(t *testing.T) {
+	state := t.TempDir()
+	now := time.Now()
+	if err := handPage(state, handedPage{Addr: "127.0.0.1:4242", Sessions: []string{"AAA", "BBB"}, At: now}); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(handedPagePath(state))
+	if err != nil || (runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600) {
+		t.Fatalf("handover file: %v %v", fi, err)
+	}
+	h := takeHandedPage(state, now.Add(time.Second))
+	if h.Addr != "127.0.0.1:4242" || len(h.Sessions) != 2 || h.Sessions[1] != "BBB" {
+		t.Fatalf("handed %+v", h)
+	}
+	if _, err := os.Stat(handedPagePath(state)); !os.IsNotExist(err) {
+		t.Fatalf("handover still there: %v", err)
+	}
+	if h := takeHandedPage(state, now); h.Addr != "" {
+		t.Fatalf("second read %+v", h)
+	}
+	for _, at := range []time.Time{now.Add(-3 * time.Minute), now.Add(time.Hour)} {
+		if err := handPage(state, handedPage{Addr: "127.0.0.1:4242", Sessions: []string{"AAA"}, At: at}); err != nil {
+			t.Fatal(err)
+		}
+		if h := takeHandedPage(state, now); h.Addr != "" || h.Sessions != nil {
+			t.Fatalf("handover at %v taken: %+v", at, h)
+		}
 	}
 }

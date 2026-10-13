@@ -219,14 +219,15 @@ func TestAdminImportMap(t *testing.T) {
 	if c := resp.Header.Get("Content-Security-Policy"); !strings.Contains(c, want) || strings.Contains(c, "unsafe") {
 		t.Fatalf("CSP %q, want %q", c, want)
 	}
-	if n := strings.Count(string(page), "<script"); n != 2 {
-		t.Fatalf("%d scripts in the page", n)
+	// The import map is the only inline script; the module and the shared kit come from the server.
+	if n, src := strings.Count(string(page), "<script"), strings.Count(string(page), "<script src="); n != 3 || src != 1 {
+		t.Fatalf("%d scripts in the page, %d with a src", n, src)
 	}
 	var im struct{ Imports map[string]string }
 	if err := json.Unmarshal(m[1], &im); err != nil || len(im.Imports) != 6 {
 		t.Fatalf("import map %s: %v", m[1], err)
 	}
-	for _, p := range append(slices.Collect(maps.Values(im.Imports)), "/static/admin.js", "/static/api.js", "/static/monitor.js") {
+	for _, p := range append(slices.Collect(maps.Values(im.Imports)), "/static/admin.js", "/static/api.js", "/static/monitor.js", "/static/kit/ui.js") {
 		req, _ := http.NewRequestWithContext(t.Context(), "GET", e.base+p, nil)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -237,4 +238,63 @@ func TestAdminImportMap(t *testing.T) {
 			t.Fatalf("%s: %d %s", p, resp.StatusCode, resp.Header.Get("Content-Type"))
 		}
 	}
+}
+
+// 005-AC45: after a self-update, the new binary binds the page's old port and admits its sessions:
+// the open tab's next request works without a new link. A port taken meanwhile falls back to a
+// random one, and an address off 127.0.0.1 is never bound.
+func TestAdminPageSurvivesRestart(t *testing.T) {
+	d := newTestDaemon(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	old := NewAdmin(ctx, d, NewRing(10), func() {}, func(string) {}, zap.NewNop())
+	ln, err := old.Listen(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: old.Handler(), ReadHeaderTimeout: time.Second}
+	served := make(chan struct{})
+	go func() { _ = Serve(ctx, srv, ln); close(served) }()
+	e := &adminEnv{a: old, base: "http://" + ln.Addr().String()}
+	tok := e.login(t)
+	addr, sessions := ln.Addr().String(), old.Sessions()
+	cancel()
+	<-served
+
+	e2 := &adminEnv{}
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	t.Cleanup(cancel2)
+	e2.a = NewAdmin(ctx2, d, NewRing(10), func() {}, func(string) {}, zap.NewNop())
+	ln2, reused, err := e2.a.ListenAt(ctx2, addr)
+	if err != nil || !reused || ln2.Addr().String() != addr {
+		t.Fatalf("listen %v, reused %v, err %v", ln2, reused, err)
+	}
+	e2.a.Restore(sessions)
+	go func() { _ = Serve(ctx2, &http.Server{Handler: e2.a.Handler(), ReadHeaderTimeout: time.Second}, ln2) }()
+	e2.base = "http://" + addr
+	if code, body := e2.req(t, "GET", "/api/status", tok, "", nil); code != http.StatusOK {
+		t.Fatalf("old tab after restart: %d %s", code, body)
+	}
+	if code, _ := e2.req(t, "GET", "/api/status", "not-a-session", "", nil); code != http.StatusUnauthorized {
+		t.Fatalf("unknown token: %d", code)
+	}
+	// A handover only admits tokens shaped as the page hands them out.
+	e2.a.Restore([]string{"x", "short"})
+	for _, tok := range []string{"x", "short"} {
+		if code, _ := e2.req(t, "GET", "/api/status", tok, "", nil); code != http.StatusUnauthorized {
+			t.Fatalf("restored %q: %d", tok, code)
+		}
+	}
+
+	// The port is taken now: a third binary gets another one.
+	third := NewAdmin(ctx2, d, NewRing(10), func() {}, func(string) {}, zap.NewNop())
+	ln3, reused, err := third.ListenAt(ctx2, addr)
+	if err != nil || reused || ln3.Addr().String() == addr {
+		t.Fatalf("taken port: %v, reused %v, err %v", ln3, reused, err)
+	}
+	_ = ln3.Close()
+	ln4, reused, err := third.ListenAt(ctx2, "0.0.0.0:0")
+	if err != nil || reused || !strings.HasPrefix(ln4.Addr().String(), "127.0.0.1:") {
+		t.Fatalf("off-loopback address: %v, reused %v, err %v", ln4, reused, err)
+	}
+	_ = ln4.Close()
 }

@@ -85,6 +85,8 @@ The page shows four alerts (003-AC29): a Claude account's expiry warning, a runn
 
 The page is written with Preact, htm and @preact/signals, served from `internal/uivendor/esm/`, shared with the room server's `/admin`, as unmodified ESM files with their licenses, and mapped by an import map that the CSP admits by its hash. No CDN, no build step. `tools/ui/package.json` pins the versions; `make ui-vendor` copies them again, and `make ui-check` (part of `make lint`) runs `tsc --checkJs` on the page's JSDoc types.
 
+The stream opens with `hello`: `{"daemon":…, "heartbeat_seconds":20, "room_name":"…"}`. The daemon's page shows the room by that name; a room server from before 005-AC42 sends none, and the page shows the link. A rename reaches the page at the next connection.
+
 The room's stream tells each daemon whether it hosts the room's agent and whether the room runs personas in parallel: a `room` event, `{"host":true,"parallel_turns":false}`, sent after `hello` and whenever either changes. Daemons from before ignore it.
 
 ## Claude accounts
@@ -101,4 +103,6 @@ When the supervisor stops, it sends `stop` to every worker, waits up to 45 s for
 
 The supervisor holds an exclusive lock on `supervisor.lock` in its state directory: `flock` on Unix, `LockFileEx` on Windows. The kernel drops it when the process dies.
 
-A later launch that finds the lock taken connects to the local socket: `run/supervisor.sock` in the state directory, owner-only, or on Windows the named pipe `\\.\pipe\grill-room-<12 hex digits of the state dir's sha256>`, whose DACL admits only the current user. It sends one line, `{"room":"<room link>"}` or `{}`, and reads `{"link":"<admin page link>"}` or `{"error":"..."}`. With a room, the launch prints the link, opens it, and exits 0. Without one, it prints the link and exits 1: a second supervisor is refused. A launch opens a link only if it starts with `http://127.0.0.1:`.
+A later launch that finds the lock taken connects to the local socket: `run/supervisor.sock` in the state directory, owner-only, or on Windows the named pipe `\\.\pipe\grill-room-<12 hex digits of the state dir's sha256>`, whose DACL admits only the current user. It sends one line, `{"room":"<room link>"}` or `{}`, and reads `{"link":"<admin page link>"}` or `{"error":"..."}`. With a room, the launch prints the link, opens it, and exits 0. Without one, and for `grill-room-daemon admin`, it says the supervisor already runs, prints the link, opens it and exits 0: a second supervisor never starts. `grill-room-daemon admin` with no supervisor running says how to start one and exits 1.
+
+Before a self-update execs the new binary, the supervisor writes `run/admin-page.json` in the state directory, owner-only: the page's `127.0.0.1` address, its session tokens and the time. The new binary reads and deletes it at start, ignores one older than 2 minutes, binds that address again and, only if it got it, admits those sessions, so the open tab reconnects. Nothing goes through the environment, which other processes of the user can read. A launch opens a link only if it starts with `http://127.0.0.1:`.

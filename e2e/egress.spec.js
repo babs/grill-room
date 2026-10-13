@@ -29,7 +29,7 @@ test('egress allowlist and denied requests on the daemon page', async ({ browser
 
     const add = async (domain) => {
       await admin.getByLabel('Domain').fill(domain);
-      await admin.getByRole('button', { name: 'Allow' }).click();
+      await admin.locator('#allowlist-form').getByRole('button', { name: 'Add' }).click();
     };
     for (const [bad, why] of [['*.example.com', 'no wildcards'], ['api.anthropic.com', 'Anthropic host'], ['https://example.com/x', 'not a domain name']]) {
       await add(bad);

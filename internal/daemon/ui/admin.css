@@ -45,3 +45,11 @@ select { text-overflow: ellipsis; }
   main { padding: 0 var(--sp-2) var(--sp-4); }
   .app-header button { margin-left: 0; }
 }
+/* Settings: one card per topic, one Save each (005-AC42). */
+.card { margin: var(--sp-3) 0; }
+.card h3 { margin-top: 0; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr)); gap: var(--sp-3); }
+.cards .card { margin: 0; }
+.room-card { list-style: none; }
+.room-card .row { margin-top: var(--sp-1); }
+ul.rooms { padding-left: 0; }

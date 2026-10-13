@@ -64,7 +64,8 @@ function Manage({ data, tab }) {
   const setAdmin = (p, on) => fetchJSON(on ? 'PUT' : 'DELETE', `${base}/admins/${p.id}`).then(() => setSaid('')).catch(show);
   /** @param {RoomSkill} k */
   const removeSkill = (k) => {
-    if (window.confirm(`Remove the room skill ${k.name}? Personas that have it on lose it.`)) fetchJSON('DELETE', `${base}/skills/${k.id}`).catch(show);
+    window.grillConfirm(`Remove the room skill ${k.name}?`, 'Personas that have it on lose it.', 'Remove')
+      .then((yes) => { if (yes) fetchJSON('DELETE', `${base}/skills/${k.id}`).catch(show); });
   };
   const skills = agentState.value?.room_skills || [];
   const personas = agentState.value?.personas || [];

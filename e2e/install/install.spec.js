@@ -108,7 +108,7 @@ test('one-liner install, pairing, dev key, self-update, tampered release refused
     await admin.locator('#tab-update').click();
     await admin.locator('#key-name').fill('e2e');
     await admin.locator('#key-pem').fill(readFileSync(`${out}/e2e-cosign.pub`, 'utf8'));
-    await admin.getByRole('button', { name: 'Trust this key' }).click();
+    await admin.getByRole('button', { name: 'Add the key' }).click();
     await expect(admin.locator('#instances')).toContainText(`running, ${versions[1]}`, { timeout: 60_000 });
     await expect(admin.locator('#instances')).toContainText('Worker binary: signed with the dev key e2e');
     await expect(admin.locator('#pairing')).toHaveText('Paired. Connected.', { timeout: 30_000 });
@@ -117,13 +117,14 @@ test('one-liner install, pairing, dev key, self-update, tampered release refused
 
     // The supervisor follows the instance: the release is offered, applied on approval.
     await admin.locator('#channel').selectOption('instance');
-    await admin.getByRole('button', { name: 'Use this channel' }).click();
+    await admin.locator('#channel-form').getByRole('button', { name: 'Save' }).click();
     await expect(admin.locator('#update-version')).toHaveText(versions[1], { timeout: 60_000 });
     await expect(admin.locator('#update-from')).toHaveText(baseURL);
     await admin.getByRole('button', { name: 'Update and restart' }).click();
-    await expect(admin.locator('#banner')).toContainText('Updated.');
-    const next = await alice.context().newPage();
-    await next.goto(await adminLink('grill-room-daemon: restarting'));
+    // 005-AC45: the same tab waits for the new version on its address and reconnects.
+    await expect(admin.locator('#banner')).toContainText('Updating');
+    await expect(admin.locator('#banner')).toHaveText(`Updated to ${versions[1]}.`, { timeout: 120_000 });
+    const next = admin;
     await expect(next.locator('#host')).toContainText(versions[1]);
     await expect(next.locator('#self-sig')).toHaveText('signed with a dev key');
     await expect(next.locator('#pairing')).toHaveText('Paired. Connected.', { timeout: 30_000 });

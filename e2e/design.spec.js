@@ -59,10 +59,10 @@ test('touch targets at phone width', async ({ browser, request, baseURL }) => {
   await shot(alice, 'after-phone-more-menu');
   await alice.keyboard.press('Escape');
 
-  await alice.locator('#people-open').click();
-  expect(await smallTargets(alice), 'people sheet').toEqual([]);
+  await alice.locator('#tabbar').getByRole('button', { name: /People/ }).click();
+  expect(await smallTargets(alice), 'people tab').toEqual([]);
   await shot(alice, 'after-phone-people');
-  await alice.keyboard.press('Escape');
+  await alice.locator('#tabbar').getByRole('button', { name: /Chat/ }).click();
 
   await upload(alice, 'plan.md', 'text/markdown', '# Plan\n\nShip it.\n');
   await expect(alice.locator('#viewer')).toBeVisible();
@@ -242,7 +242,7 @@ test('header menus, wording and empty states', async ({ browser, request }) => {
 });
 
 // 005-AC35: a pill that cannot ask says why; the phone's People sheet; the viewer's one toolbar.
-test('locked pill, people sheet and viewer toolbar', async ({ browser, request }) => {
+test('locked pill and viewer toolbar', async ({ browser, request }) => {
   const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
   await alice.setViewportSize(phone);
   const pill = alice.locator('button.persona').first();
@@ -253,28 +253,194 @@ test('locked pill, people sheet and viewer toolbar', async ({ browser, request }
   await shot(alice, 'after-phone-why');
   await alice.locator('#why').getByRole('button', { name: 'OK' }).click();
 
-  await alice.locator('#people-open').click();
-  await expect(alice.locator('#side')).toBeVisible();
-  await alice.keyboard.press('Escape');
-  await expect(alice.locator('#side')).toBeHidden();
-  await alice.locator('#people-open').click();
-  await alice.locator('#sheet-backdrop').click({ position: { x: 10, y: 10 } });
-  await expect(alice.locator('#side')).toBeHidden();
-  await alice.locator('#people-open').click();
-  await alice.getByRole('button', { name: 'Close the list' }).click();
-  await expect(alice.locator('#side')).toBeHidden();
-
   await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
-  await alice.locator('#doc-close').click();
-  await alice.locator('#people-open').click();
-  await alice.locator('#documents').getByRole('button', { name: 'plan.md' }).click();
-  await expect(alice.locator('#side')).toBeHidden();
-  await expect(alice.locator('#viewer')).toBeVisible();
-
   await alice.setViewportSize(desktop);
+  await expect(alice.locator('#viewer')).toBeVisible();
   const tools = await alice.locator('.viewer-head :is(button, a):visible').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)));
   expect(new Set(tools)).toEqual(new Set([36]));
   await expect(alice.locator('.viewer-head > :first-child')).toHaveId('doc-close');
+});
+
+// 005-AC36: a phone shows one tab at a time under a bar; each keeps its scroll position, and a
+// document picked opens in the Docs tab.
+test('phone tab bar', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.setViewportSize(phone);
+  await alice.evaluate(async (id) => {
+    for (let i = 0; i < 40; i++) await fetch(`/api/rooms/${id}/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body: 'line ' + i }) });
+  }, room.id);
+  await expect(alice.locator('.msg.text')).toHaveCount(40);
+  const bar = alice.locator('#tabbar');
+  await expect(bar).toBeVisible();
+  const box = await bar.boundingBox();
+  expect(Math.round(box.height)).toBe(56);
+  expect(Math.round(box.y + box.height)).toBe(phone.height);
+  await expect(alice.locator('.chat')).toBeVisible();
+  await expect(alice.locator('#side')).toBeHidden();
+  await alice.locator('#messages').evaluate((m) => { m.scrollTop = 200; });
+  await bar.getByRole('button', { name: /Docs/ }).click();
+  await expect(alice.locator('#docs-pane')).toBeVisible();
+  await expect(alice.locator('#people-pane')).toBeHidden();
+  await expect(alice.locator('.chat')).toBeHidden();
+  await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
+  await expect(alice.locator('#viewer')).toBeVisible();
+  await expect(bar.getByRole('button', { name: /Docs/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(alice.locator('#tab-docs-count')).toHaveText('1');
+  await shot(alice, 'after-phone-docs-tab');
+  await bar.getByRole('button', { name: /People/ }).click();
+  await expect(alice.locator('#people-pane')).toBeVisible();
+  await expect(alice.locator('#viewer')).toBeHidden();
+  await bar.getByRole('button', { name: /Chat/ }).click();
+  await expect(alice.locator('.chat')).toBeVisible();
+  expect(await alice.locator('#messages').evaluate((m) => m.scrollTop)).toBe(200);
+  await expect(alice.locator('#people-open')).toHaveCount(0);
+});
+
+// 005-AC37: annotations toggle from the viewer, closed by default below 100rem and remembered; the
+// chat folds into a 56 px rail.
+test('annotations panel and chat rail', async ({ browser, request }) => {
+  const { room } = await roomWith(browser, request, ['Bob']);
+  // A context of its own: roomWith's pages start with the panel open.
+  const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
+  const alice = await (await browser.newContext({ viewport: desktop })).newPage();
+  await alice.goto(new URL(inv.url).pathname + new URL(inv.url).hash);
+  await alice.getByLabel('Your name').fill('Alice');
+  await alice.getByRole('button', { name: 'Join the room' }).click();
+  await expect(alice.locator('#me')).toHaveText('Alice');
+  await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
+  await expect(alice.locator('#annotations')).toBeHidden();
+  await alice.getByRole('button', { name: /Notes/ }).click();
+  await expect(alice.locator('#annotations')).toBeVisible();
+  await alice.reload();
+  await alice.locator('#documents').getByRole('button', { name: 'plan.md' }).click();
+  await expect(alice.locator('#annotations')).toBeVisible();
+  await alice.setViewportSize({ width: 1700, height: 900 });
+  await alice.getByRole('button', { name: 'Fold the chat away' }).click();
+  const rail = await alice.locator('.chat').boundingBox();
+  expect(Math.round(rail.width)).toBe(56);
+  await expect(alice.locator('#body')).toBeHidden();
+  await shot(alice, 'after-desktop-chat-rail');
+  await alice.getByRole('button', { name: 'Show the chat' }).first().click();
+  await expect(alice.locator('#body')).toBeVisible();
+});
+
+// 005-AC38: one strip shows the most urgent state and "+N more"; feedback goes to toasts.
+test('status strip and toasts', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.setViewportSize(desktop);
+  await alice.evaluate(() => {
+    showNotice('A notice.');
+    document.getElementById('reconnecting').hidden = false;
+  });
+  await expect(alice.locator('#reconnecting')).toBeVisible();
+  await expect(alice.locator('#notice')).toBeHidden();
+  await expect(alice.locator('#strip-more')).toHaveText('+1 more');
+  await alice.locator('#strip-more').click();
+  await expect(alice.locator('#notice')).toBeVisible();
+  await expect(alice.locator('#strip-more')).toHaveText('Show less');
+  await alice.evaluate(() => { document.getElementById('reconnecting').hidden = true; });
+  await expect(alice.locator('#strip-more')).toBeHidden();
+  await expect(alice.locator('#notice')).toBeVisible();
+
+  await alice.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await menuItem(alice, 'Invite people');
+  await alice.getByRole('button', { name: 'Create an invite link' }).click();
+  await alice.getByRole('button', { name: 'Copy invite' }).click();
+  await expect(alice.locator('#toasts .toast')).toHaveText('Copied');
+  await expect(alice.locator('#toast-live')).toHaveText('Copied');
+  await expect(alice.locator('#toast-live')).toHaveAttribute('role', 'status');
+  await expect(alice.locator('#toasts .toast')).toHaveCount(0, { timeout: 8000 });
+});
+
+// 005-AC39, 005-AC40: the Personas sheet: one primary Save, Remove a danger outline, the rest folded;
+// a right-click on a pill opens it; a removal asks in the shared confirm sheet.
+test('personas sheet and confirm sheet', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.setViewportSize(desktop);
+  await alice.locator('button.persona').first().click({ button: 'right', force: true });
+  const form = alice.locator('#personas .persona-form').first();
+  await expect(form).toBeVisible();
+  await expect(form.locator('button.btn-primary, button[type=submit]')).toHaveText(['Save']);
+  await expect(form.getByRole('button', { name: /^Remove/ })).toHaveClass('btn-danger-outline');
+  await expect(form.getByLabel('Speaks up every N answers')).toBeHidden();
+  await form.locator('details.advanced summary').click();
+  await expect(form.getByLabel('Speaks up every N answers')).toBeVisible();
+  await expect(form.getByRole('button', { name: /library/ })).toBeHidden();
+  await form.locator('details.more summary').click();
+  await expect(form.getByRole('button', { name: /library/ })).toBeVisible();
+  await shot(alice, 'after-desktop-personas');
+  await form.getByRole('button', { name: /^Remove/ }).click();
+  const sheet = alice.locator('dialog.confirm');
+  await expect(sheet.locator('h2')).toHaveText('Remove Grill?');
+  await sheet.getByRole('button', { name: 'Cancel' }).click();
+  await expect(sheet).toHaveCount(0);
+  await expect(alice.locator('button.persona')).toHaveCount(1);
+  await form.getByRole('button', { name: /^Remove/ }).click();
+  await alice.locator('dialog.confirm').getByRole('button', { name: 'Remove' }).click();
+  await expect(alice.locator('button.persona')).toHaveCount(0);
+});
+
+// 005-AC41: the profile is a home page: room cards with people, activity and the admin badge; New
+// room in a sheet.
+test('profile home page', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.setViewportSize(desktop);
+  await alice.goto('/profile');
+  const card = alice.locator('#rooms li.card').first();
+  await expect(card.locator('.room-line')).toHaveText('Docs room as Alice');
+  await expect(card).toContainText('1 person · active');
+  await expect(card.locator('time')).toHaveAttribute('title', /\d/);
+  await expect(alice.locator('#profile-name')).toHaveText('Alice');
+  await expect(alice.locator('#skills')).not.toHaveAttribute('open', '');
+  await alice.getByRole('button', { name: 'New room' }).click();
+  await expect(alice.locator('#room-create-sheet')).toBeVisible();
+  await expect(alice.getByLabel('Your name in the room')).toHaveValue('Alice');
+  await shot(alice, 'after-desktop-profile-new');
+  await alice.getByLabel('Room name').fill('Launch plan');
+  await alice.getByRole('button', { name: 'Create the room' }).click();
+  await expect(alice.locator('#invites')).toBeVisible();
+  await alice.goto('/profile');
+  await expect(alice.locator('#rooms li.card', { hasText: 'Launch plan' }).locator('.badge')).toHaveText('admin');
+  await shot(alice, 'after-desktop-profile');
+  await alice.setViewportSize(phone);
+  expect(await smallTargets(alice), 'profile').toEqual([]);
+});
+
+// 005-AC43: /admin's rooms: a search box, relative dates, the import in a sheet, cards on a phone.
+test('admin rooms list', async ({ browser, request }) => {
+  const { room } = await roomWith(browser, request, ['Alice']);
+  const adm = await (await browser.newContext({ viewport: desktop })).newPage();
+  expect(await signIn(adm, adminToken, 'rooms')).toBe(201);
+  const row = adm.locator(`#room-${room.id}`);
+  await expect(row.locator('time').first()).toHaveAttribute('title', /\d/);
+  await expect(row.locator('time').first()).toHaveText(/ago|just now/);
+  await adm.getByLabel('Search rooms').fill('no such room');
+  await expect(row).toHaveCount(0);
+  await adm.getByLabel('Search rooms').fill('docs');
+  await expect(row).toBeVisible();
+  await adm.getByRole('button', { name: 'Import a room' }).click();
+  await expect(adm.locator('#import-sheet')).toBeVisible();
+  await shot(adm, 'after-desktop-admin-import');
+  await adm.keyboard.press('Escape');
+  await adm.setViewportSize(phone);
+  await expect(row.locator('td').first()).toHaveCSS('display', 'block');
+  expect(await smallTargets(adm), 'admin rooms').toEqual([]);
+});
+
+// 005-AC44: the join page names its action and shows a missing name under the field.
+test('join page', async ({ browser, request }) => {
+  const r = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Join room' } })).json();
+  const inv = await (await request.post(`/api/rooms/${r.id}/invites`, { headers: admin })).json();
+  const page = await (await browser.newContext({ viewport: phone })).newPage();
+  await page.goto(new URL(inv.url).pathname + new URL(inv.url).hash);
+  await expect(page).toHaveTitle('Join the room · grill-room');
+  await expect(page.locator('main h1')).toHaveText('Join the room');
+  await page.getByRole('button', { name: 'Join the room' }).click();
+  await expect(page.locator('#name-error')).toHaveText('Type the name the others will see, up to 40 characters.');
+  await expect(page.getByLabel(/Your name/)).toHaveAttribute('aria-invalid', 'true');
+  await shot(page, 'after-phone-join-error');
+  await page.getByLabel(/Your name/).fill('Zoe');
+  await expect(page.locator('#name-error')).toBeEmpty();
 });
 
 // 005-AC35: a long name ends with an ellipsis instead of breaking.

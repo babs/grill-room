@@ -39,6 +39,7 @@ for (const vp of widths) {
     expect(log.entries[0].details.via).toBe('session');
 
     await page.getByRole('link', { name: '← All rooms' }).click();
+    await page.getByRole('button', { name: 'Import a room' }).click();
     await page.locator('#import-file').setInputFiles(file);
     await page.getByRole('button', { name: 'Preview' }).click();
     const pv = page.locator('#import-preview');

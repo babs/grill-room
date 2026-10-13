@@ -90,7 +90,9 @@ type Status struct {
 
 // RoomStatus is one served room's pairing, connection and turns.
 type RoomStatus struct {
-	Room       string `json:"room"`
+	Room string `json:"room"`
+	// Name is the room's name from the stream's hello, empty from a room server before 005-AC42.
+	Name       string `json:"name,omitempty"`
 	Pairing    string `json:"pairing"`
 	Code       string `json:"code,omitempty"`
 	ApproveURL string `json:"approve_url,omitempty"`
@@ -676,13 +678,14 @@ func (r *roomRun) stream(ctx context.Context, tok string) error {
 			event = line[len("event: "):]
 		case strings.HasPrefix(line, "data: ") && event == "hello":
 			var h struct {
-				Heartbeat int `json:"heartbeat_seconds"`
+				Heartbeat int    `json:"heartbeat_seconds"`
+				RoomName  string `json:"room_name"`
 			}
 			if json.Unmarshal([]byte(line[len("data: "):]), &h) == nil && h.Heartbeat > 0 {
 				silence = 3 * time.Duration(h.Heartbeat) * time.Second
 				watchdog.Reset(silence)
 			}
-			r.update(func(s *RoomStatus) { s.Connection, s.Error = "connected", "" })
+			r.update(func(s *RoomStatus) { s.Connection, s.Error, s.Name = "connected", "", h.RoomName })
 			d.o.Log.Info("room_connected", zap.String("room", room.String()))
 			wg.Go(func() { r.heartbeat(ctx, tok) })
 			// A reconnect often follows a room server upgrade: ask again what it hands out.

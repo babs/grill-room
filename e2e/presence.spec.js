@@ -27,11 +27,12 @@ test('participant list on a phone follows the server presence', async ({ browser
   const carolID = await carol.evaluate(() => myID);
   expect((await request.put(`/api/rooms/${room.id}/admins/${carolID}`, { headers: admin })).status()).toBe(204);
 
+  // 005-AC36: the phone's People tab.
   await expect(carol.locator('.layout > aside')).toBeHidden();
-  await carol.getByRole('button', { name: /^People/ }).click();
+  await carol.locator('#tabbar').getByRole('button', { name: /People/ }).click();
   await expect(carol.locator('.layout > aside')).toBeVisible();
   await expect(carol.locator('#participants li .name')).toHaveText(['Alice', 'Bob', 'Carol']);
-  await expect(carol.getByRole('button', { name: /^People/ })).toHaveAttribute('aria-label', 'People (3)');
+  await expect(carol.locator('#tab-people-count')).toHaveText('3');
   const me = row(carol, 'Carol');
   await expect(me.locator('.badge')).toHaveText(['you', 'admin']);
   await expect(me.locator('.badge.role-admin')).toHaveAttribute('title', /Room admin/);
@@ -59,7 +60,7 @@ test('participant list on a phone follows the server presence', async ({ browser
   await carol.locator('#away summary').click();
   await expect(row(carol, 'Bob').locator('.seen')).toHaveText('seen just now');
 
-  await carol.keyboard.press('Escape');
+  await carol.locator('#tabbar').getByRole('button', { name: /Chat/ }).click();
   await expect(carol.locator('.layout > aside')).toBeHidden();
 });
 

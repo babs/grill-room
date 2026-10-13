@@ -336,6 +336,7 @@ $('rename-form').addEventListener('submit', (e) => {
     // Not an outside rename: no notice when loadRoom reads the new name.
     myName = '';
     $('rename').close();
+    toast('Renamed');
     return loadRoom();
   }).catch((err) => { $('rename-status').textContent = err.message; });
 });
@@ -555,6 +556,7 @@ function toast(text, action, onEnd) {
   const close = (undone) => {
     clearTimeout(timer);
     el.remove();
+    if (!$('toasts').children.length && $('toasts').matches(':popover-open')) $('toasts').hidePopover();
     if (onEnd) onEnd(undone);
   };
   if (action) {
@@ -565,8 +567,12 @@ function toast(text, action, onEnd) {
     b.addEventListener('click', () => close(true));
     el.append(b);
   }
+  // The region is a popover: in the top layer, a toast shows over an open sheet too.
   $('toasts').append(el);
-  timer = setTimeout(() => close(false), 5000);
+  if (!$('toasts').matches(':popover-open')) $('toasts').showPopover();
+  // A region that only just appeared is often skipped by screen readers: this one always is there.
+  $('toast-live').textContent = text;
+  timer = setTimeout(() => close(false), action ? 5000 : 4000);
   return () => close(false);
 }
 
@@ -620,6 +626,27 @@ document.addEventListener('close', (e) => {
   if (e.target instanceof HTMLDialogElement && focusBefore && focusBefore.isConnected && !document.querySelector('dialog[open]')) focusBefore.focus();
 }, true);
 
+// The status strip shows its most urgent item, the first of its children shown; "+N more" opens the
+// rest (005-AC38). Each item keeps its own hidden flag: the strip only folds the extra ones.
+let stripOpen = false;
+// The docs window hides the agent's items by its stylesheet: they never count there.
+const docsHides = new Set(['running', 'queue', 'chain-unlimited', 'chain-paused', 'approvals']);
+function updateStrip() {
+  const items = [...$('strip').children].filter((el) => el.id !== 'strip-more' && !el.hidden && !(docsMode && docsHides.has(el.id)));
+  items.forEach((el, i) => el.classList.toggle('extra', i > 0 && !stripOpen));
+  const more = $('strip-more');
+  // The observer watches hidden flags: writing an unchanged one would wake it again, forever.
+  if (more.hidden !== items.length < 2) more.hidden = items.length < 2;
+  more.textContent = stripOpen ? 'Show less' : '+' + (items.length - 1) + ' more';
+  more.setAttribute('aria-expanded', String(stripOpen));
+  if (items.length < 2) stripOpen = false;
+}
+new MutationObserver(updateStrip).observe($('strip'), { subtree: true, attributes: true, attributeFilter: ['hidden'] });
+$('strip-more').addEventListener('click', () => {
+  stripOpen = !stripOpen;
+  updateStrip();
+});
+
 // Manage, its tabs and its deep links are admin/room-admin.js's (004-AC8, 005-AC15).
 
 // Menus are popovers (005-AC32): the browser closes them on a click outside and on Escape; picking
@@ -640,8 +667,8 @@ $('docs-window-menu').addEventListener('click', (e) => {
 });
 
 // copyField copies a read-only field, and selects it for a manual copy when the clipboard refuses.
-function copyField(input, button) {
-  navigator.clipboard.writeText(input.value).then(() => { button.textContent = 'Copied'; }, () => input.select());
+function copyField(input) {
+  navigator.clipboard.writeText(input.value).then(() => toast('Copied'), () => input.select());
 }
 
 // The join page leaves the recovery link of a profile it just created. This tab keeps it for the
@@ -759,13 +786,13 @@ async function loadDocuments() {
     b.textContent = d.name;
     b.title = describe(d);
     b.addEventListener('click', () => {
-      showPeople(false);
       showDocument(d.id).catch(console.error);
     });
     li.append(b);
     return li;
   }));
   $('docs-empty').hidden = docs.length > 0;
+  $('tab-docs-count').textContent = docs.length ? String(docs.length) : '';
   if (openDoc) {
     const fresh = docs.find((d) => d.id === openDoc.id);
     // A room admin deleted it meanwhile: the viewer closes; renamed, it shows its new name.
@@ -792,6 +819,8 @@ async function showDocument(id, refresh) {
   const keepFrom = refresh ? $('rev-from').value : '';
   openDoc = d;
   $('viewer').hidden = false;
+  // A document opened from the chat (a single upload, a link) shows in the phone's Docs tab.
+  if (!refresh && !docsMode && matchMedia('(max-width: 40rem)').matches) showTab('docs');
   $('doc-window').href = roomPath + '/docs/' + encodeURIComponent(d.id);
   // The docs window's address follows the document shown: a deep link to reload or share.
   if (docsMode) history.replaceState(null, '', $('doc-window').href);
@@ -863,6 +892,7 @@ $('doc-rename-form').addEventListener('submit', (e) => {
   sendJSON('PATCH', docURL(d.id, ''), { name: $('doc-rename-name').value.trim() }).then((done) => {
     if (!done) return;
     $('doc-rename-form').hidden = true;
+    toast('Renamed');
     return Promise.all([loadDocuments(), showDocument(d.id, true)]);
   }).catch((err) => { $('doc-rename-status').textContent = err.message; });
 });
@@ -944,6 +974,7 @@ window.addEventListener('message', (ev) => {
       if (canCreate() && !(newAnchor !== undefined && $('annot-body').value.trim())) openNew(msg.anchor);
       break;
     case 'gr:open':
+      showAnnotations(true);
       focusItem(msg.id, false);
       break;
     case 'gr:pick':
@@ -972,6 +1003,8 @@ function describeAnchor(a) {
 }
 
 function openNew(anchor) {
+  // An annotation started from the document needs its form in sight.
+  showAnnotations(true);
   newAnchor = anchor;
   $('annot-target').textContent = describeAnchor(anchor);
   $('annot-new').hidden = false;
@@ -1038,7 +1071,32 @@ async function loadAnnotations() {
 // rank orders the panel: whole-document comments, then marks, then orphans.
 const rank = (a) => (a.anchor ? (a.orphaned ? 2 : 1) : 0);
 
+// Annotations are a panel the viewer toggles, closed by default below 100rem, and the chat folds
+// into a rail (005-AC37). Both remember their last state.
+const annotKey = 'grill-room-annotations';
+function showAnnotations(on) {
+  document.body.classList.toggle('annot-closed', !on);
+  $('annot-toggle').setAttribute('aria-pressed', String(on));
+}
+showAnnotations(localStorage.getItem(annotKey) ? localStorage.getItem(annotKey) === '1' : matchMedia('(min-width: 100rem)').matches);
+$('annot-toggle').addEventListener('click', () => {
+  const on = document.body.classList.contains('annot-closed');
+  localStorage.setItem(annotKey, on ? '1' : '0');
+  showAnnotations(on);
+});
+const chatKey = 'grill-room-chat-folded';
+function foldChat(on) {
+  document.body.classList.toggle('chat-folded', on);
+  $('chat-fold').setAttribute('aria-pressed', String(on));
+  $('chat-fold').setAttribute('aria-label', on ? 'Show the chat' : 'Fold the chat away');
+  localStorage.setItem(chatKey, on ? '1' : '0');
+}
+foldChat(localStorage.getItem(chatKey) === '1');
+$('chat-fold').addEventListener('click', () => foldChat(!document.body.classList.contains('chat-folded')));
+$('chat-unfold').addEventListener('click', () => foldChat(false));
+
 function renderAnnotations() {
+  $('annot-count').textContent = annotations.length ? '(' + annotations.length + ')' : '';
   const list = $('annot-list');
   const kept = new Map([...list.children].map((li) => [li.dataset.id, li]));
   const items = [...annotations].sort((x, y) => rank(x) - rank(y) || x.id - y.id)
@@ -1332,11 +1390,13 @@ const contextUse = (p) => (p.context_window ? Math.round((100 * (p.context_token
 // Above this use the room offers the host a new session with a handoff note (003-AC25).
 const contextFull = 80;
 
-function handOff(p) {
-  if (!confirm('New session for ' + p.name + ' with a handoff? Its last turn on this session writes docs/_handoff-' + p.name
-    + '.md, then a new session starts from that note and the transcripts.')) return Promise.resolve();
+async function handOff(p) {
+  if (!(await grillConfirm('Start ' + p.name + ' fresh, keeping a summary?', 'Its last answer on this session writes docs/_handoff-' + p.name
+    + '.md, then a new session starts from that note and the transcripts.', 'Start fresh'))) return null;
   return sendJSON('POST', api + '/turns', { persona_id: p.id, handoff: true });
 }
+// unfolded holds the persona sheet's opened Advanced and More sections, by persona.
+const unfolded = new Set();
 // A persona signs documents and revisions by name: show its badge while one holds that name.
 function personaLabel(name) {
   const p = agent.personas.find((x) => x.name === name);
@@ -1390,7 +1450,29 @@ function renderAgent() {
       const word = document.createElement('span');
       word.className = 'pstate';
       b.append(led, badge, name, word);
-      b.addEventListener('click', () => {
+      // A right-click, or a long press on a touch screen, opens that persona's settings. iOS fires
+      // no contextmenu: a press held 500 ms does it there, and the click that follows is dropped.
+      let held = 0;
+      let longPressed = false;
+      b.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        openPersonas(Number(b.dataset.id));
+      });
+      b.addEventListener('pointerdown', (e) => {
+        if (e.pointerType !== 'touch') return;
+        longPressed = false;
+        held = setTimeout(() => {
+          longPressed = true;
+          openPersonas(Number(b.dataset.id));
+        }, 500);
+      });
+      for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) b.addEventListener(ev, () => clearTimeout(held));
+      b.addEventListener('click', (e) => {
+        if (longPressed) {
+          longPressed = false;
+          e.preventDefault();
+          return;
+        }
         const p = personaByID(Number(b.dataset.id));
         const why = p && whyNot(p, personaState(p));
         if (why) return explain(p.badge + ' ' + p.name, why);
@@ -1462,7 +1544,8 @@ function steerChain(body) {
 }
 $('chain-rearm').addEventListener('click', () => steerChain({ rearm: true }));
 $('chain-suspend').addEventListener('click', () => {
-  if (confirm('Remove the limit on auto turns? The personas may then call each other without end, on the AI host\'s subscription.')) steerChain({ suspended: true });
+  grillConfirm('Remove the limit on auto turns?', 'The personas may then call each other without end, on the AI host\'s subscription.', 'Remove the limit')
+    .then((yes) => { if (yes) steerChain({ suspended: true }); });
 });
 $('chain-restore').addEventListener('click', () => steerChain({ suspended: false }));
 $('chain-form').addEventListener('submit', (e) => {
@@ -1662,27 +1745,43 @@ function personaForm(p) {
     field('Colour', input('colour', p.colour, { type: 'color' })),
     field('Model', picker('model', agent.models, p.model)),
     field('Effort', picker('effort', agent.efforts, p.effort)),
-    field('Speaks up every N answers', input('every_n', p.every_n || 0, { type: 'number', min: 0, max: 100, title: '0: it speaks only when asked' })),
-    field('Memory size (k tokens)', input('autocompact', p.autocompact ? p.autocompact / 1000 : '', { type: 'number', min: 100, max: 1000,
-      placeholder: 'auto', title: 'How much it remembers before it summarizes its session; empty for automatic' })),
   );
   const self = input('self_call', '', { type: 'checkbox', checked: p.self_call });
   const selfCall = field('', self);
   selfCall.className = 'check';
   selfCall.append('Can follow up on its own: its own @' + p.name + ' gives it another answer');
+  // The rarely touched settings and actions fold away (005-AC40); a refresh keeps them as opened.
+  const fold = (label, cls, ...children) => {
+    const d = document.createElement('details');
+    d.className = cls;
+    const key = cls + ':' + p.id;
+    d.open = unfolded.has(key);
+    d.addEventListener('toggle', () => { if (d.open) unfolded.add(key); else unfolded.delete(key); });
+    const sum = document.createElement('summary');
+    sum.textContent = label;
+    d.append(sum, ...children);
+    return d;
+  };
+  const advanced = fold('Advanced', 'advanced',
+    field('Speaks up every N answers', input('every_n', p.every_n || 0, { type: 'number', min: 0, max: 100, title: '0: it speaks only when asked' })),
+    field('Memory size (k tokens)', input('autocompact', p.autocompact ? p.autocompact / 1000 : '', { type: 'number', min: 100, max: 1000,
+      placeholder: 'auto', title: 'How much it remembers before it summarizes its session; empty for automatic' })),
+    selfCall);
   const actions = document.createElement('div');
   actions.className = 'persona-actions';
   const save = document.createElement('button');
   save.type = 'submit';
   save.textContent = 'Save';
-  actions.append(save);
-  const act = (label, aria, fn) => {
+  const moreBox = document.createElement('div');
+  moreBox.className = 'persona-actions';
+  const act = (label, aria, fn, into = moreBox, cls = 'btn-secondary') => {
     const b = document.createElement('button');
     b.type = 'button';
+    b.className = cls;
     b.textContent = label;
     b.setAttribute('aria-label', aria);
     b.addEventListener('click', () => fn().catch((err) => personasStatus(err.message)));
-    actions.append(b);
+    into.append(b);
     return b;
   };
   if (p.update_version) {
@@ -1701,16 +1800,17 @@ function personaForm(p) {
   });
   if (isHost()) {
     act('Start fresh', 'Start fresh for ' + p.name, async () => {
-      if (confirm('Start a new session for ' + p.name + '? It forgets its earlier turns and rereads the room history.')) await pressPersona(p.id, true);
+      if (await grillConfirm('Start ' + p.name + ' fresh?', 'It forgets its earlier answers and rereads the room history.', 'Start fresh')) await pressPersona(p.id, true);
     });
     act('Start fresh, keep a summary', 'Start fresh with a summary for ' + p.name, () => handOff(p));
   }
+  actions.append(save);
   act('Remove', 'Remove ' + p.name, async () => {
-    if (!confirm('Remove ' + p.name + ' from the room? Its session goes; what it wrote stays.')) return;
+    if (!(await grillConfirm('Remove ' + p.name + '?', 'Its session goes; what it wrote stays.', 'Remove'))) return;
     const res = await fetch(api + '/personas/' + p.id, { method: 'DELETE' });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'HTTP ' + res.status);
-  });
-  form.append(head, from, grid, selfCall, skillsBlock(p), field('Persona text', text), actions);
+  }, actions, 'btn-danger-outline');
+  form.append(head, from, grid, field('Persona text', text), skillsBlock(p), advanced, actions, fold('More', 'more', moreBox));
   form.addEventListener('input', () => { form.dataset.dirty = '1'; });
   form.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -1881,14 +1981,17 @@ async function loadTemplates() {
   renderPersonas();
 }
 
-$('personas-open').addEventListener('click', () => {
+// openPersonas opens the Personas sheet, scrolled to persona id when given (005-AC40).
+function openPersonas(id) {
   personasStatus('');
   $('persona-list').replaceChildren();
-  $('personas').showModal();
+  if (!$('personas').open) $('personas').showModal();
   renderPersonas();
+  if (id) $('persona-list').querySelector('form[data-id="' + id + '"]')?.scrollIntoView({ block: 'start' });
   loadTemplates().catch(console.error);
   loadSkills().catch(console.error);
-});
+}
+$('personas-open').addEventListener('click', () => openPersonas());
 $('personas-close').addEventListener('click', () => $('personas').close());
 $('persona-add').addEventListener('submit', (e) => {
   e.preventDefault();
@@ -1969,14 +2072,8 @@ function audioState(id) {
   return { key: 'listening', icon: '🎧', text: 'Listening only' };
 }
 
-// ago says how long ago a time was, coarsely: the list refreshes every 30 seconds.
-function ago(ts) {
-  const s = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
-  if (s < 60) return 'just now';
-  if (s < 3600) return Math.floor(s / 60) + ' min ago';
-  if (s < 86400) return Math.floor(s / 3600) + ' h ago';
-  return Math.floor(s / 86400) + ' d ago';
-}
+// ago says how long ago a time was, coarsely (kit/ui.js): the list refreshes every 30 seconds.
+const ago = (ts) => grillAgo(ts);
 
 function span(cls, text, title) {
   const el = document.createElement('span');
@@ -2058,30 +2155,25 @@ function renderParticipants() {
   }
   $('away').hidden = !rows.away.length;
   $('away-count').textContent = String(rows.away.length);
-  $('people-open').textContent = '👥 ' + rows.here.length;
-  $('people-open').setAttribute('aria-label', 'People (' + rows.here.length + ')');
+  $('tab-people-count').textContent = String(rows.here.length);
 }
 setInterval(() => { if (participants.length) renderParticipants(); }, 30_000);
 
-// On a phone the list opens as a sheet over the chat (005-AC35): its ✕, a tap on the backdrop,
-// Escape and picking a document close it.
-function showPeople(on) {
-  if (!on && !document.body.classList.contains('people-open')) return;
-  document.body.classList.toggle('people-open', on);
-  $('sheet-backdrop').hidden = !on;
-  // A sheet: the page behind it is out of reach until it closes.
-  for (const el of [document.querySelector('header'), $('viewer'), document.querySelector('.chat')]) el.inert = on;
-  if (on) $('side').setAttribute('role', 'dialog');
-  else $('side').removeAttribute('role');
-  $('side').setAttribute('aria-modal', String(on));
-  $('people-open').setAttribute('aria-expanded', String(on));
-  if (on) $('people-close').focus();
-  else if (document.activeElement && $('side').contains(document.activeElement)) $('people-open').focus();
+// On a phone the room is three tabs under one bar (005-AC36): the chat, the documents (list and
+// viewer) and the people. Each keeps its scroll position across a switch.
+let roomTab = 'chat';
+const tabScroll = new Map();
+const tabScroller = (t) => (t === 'chat' ? messages : $('side'));
+function showTab(t) {
+  if (t === roomTab) return;
+  tabScroll.set(roomTab, tabScroller(roomTab).scrollTop);
+  roomTab = t;
+  document.body.dataset.tab = t;
+  for (const b of $('tabbar').querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.tab === t));
+  tabScroller(t).scrollTop = tabScroll.get(t) ?? (t === 'chat' ? messages.scrollHeight : 0);
 }
-$('people-open').addEventListener('click', () => showPeople(!document.body.classList.contains('people-open')));
-$('people-close').addEventListener('click', () => showPeople(false));
-$('sheet-backdrop').addEventListener('click', () => showPeople(false));
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') showPeople(false); });
+if (!docsMode) document.body.dataset.tab = roomTab;
+for (const b of $('tabbar').querySelectorAll('button')) b.addEventListener('click', () => showTab(b.dataset.tab));
 
 // showSTT counts the voices the STT worker transcribes, and tells viewers only whether their own
 // is one of them (005-AC8).
@@ -2553,7 +2645,7 @@ async function showHostAgent() {
   const oneLiner = 'curl -fsSL ' + location.origin + '/install.sh | sh -s -- ' + location.origin + location.pathname;
   $('host-oneliner').textContent = oneLiner;
   $('host-copy').addEventListener('click', () => {
-    navigator.clipboard.writeText(oneLiner).then(() => { $('host-copy').textContent = 'Copied'; }, console.error);
+    navigator.clipboard.writeText(oneLiner).then(() => toast('Copied'), console.error);
   });
   $('host-open').hidden = false;
 }

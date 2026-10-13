@@ -46,7 +46,7 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
     await admin.locator('#tab-settings').click();
     await admin.getByLabel('Max model').selectOption('sonnet');
     await admin.getByLabel('Max effort').selectOption('high');
-    await admin.getByRole('button', { name: 'Save', exact: true }).click();
+    await admin.locator('#settings-form').getByRole('button', { name: 'Save' }).click();
     await expect(admin.locator('#settings-status')).toHaveText('Saved.');
     await admin.reload();
     await expect(admin.getByLabel('Max model')).toHaveValue('sonnet');
@@ -99,7 +99,7 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
     // Approve everything: Bob's new persona and his change wait for Alice.
     await admin.locator('#tab-settings').click();
     await admin.getByLabel('Approve every new persona and persona change').check();
-    await admin.getByRole('button', { name: 'Save', exact: true }).click();
+    await admin.locator('#settings-form').getByRole('button', { name: 'Save' }).click();
     await expect(admin.locator('#settings-status')).toHaveText('Saved.');
     await openPanel(bob);
     await bob.locator('#persona-template').selectOption({ label: '🔥 Default v1' });

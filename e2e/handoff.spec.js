@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon, ask, menuItem } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, menuItem, confirmSheet, unfold } from './helpers.js';
 
 // 003-AC24 003-AC25: Alice sets Grill's autocompact, which reaches claude -p. A session past 80% of
 // its context window shows the share in the personas panel and a banner offering the host a new
@@ -17,6 +17,7 @@ test('handoff: autocompact, context banner, new session from the note', async ({
     const panel = alice.locator('#personas');
     await menuItem(alice, 'Personas');
     const grill = panel.locator('.persona-form', { hasText: 'Grill' });
+    await unfold(grill, 'advanced');
     await grill.getByLabel('Memory size (k tokens)').fill('300');
     await grill.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(bob.locator('#messages')).toContainText('Alice changed 🔥 Grill: autocompact auto → 300k.');
@@ -32,8 +33,8 @@ test('handoff: autocompact, context banner, new session from the note', async ({
     await expect(grill.locator('.hint').first()).toContainText('Its session holds 85% of its context window.');
     await panel.getByRole('button', { name: 'Close' }).click();
 
-    alice.once('dialog', (d) => d.accept());
     await banner.getByRole('button', { name: 'Start fresh with a summary for Grill' }).click();
+    await confirmSheet(alice, 'Start fresh');
     const read = alice.locator('#messages li.msg.agent', { hasText: 'Read docs/_handoff-Grill.md' });
     await expect(read.locator('.body')).toHaveText('Read docs/_handoff-Grill.md: The code word was OSPREY.', { timeout: 120_000 });
     await expect(alice.locator('#messages li.msg.agent', { hasText: 'Handoff note written.' })).toHaveCount(1);

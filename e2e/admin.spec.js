@@ -3,8 +3,8 @@ import { readFileSync } from 'node:fs';
 import { roomWith, startDaemon, pairDaemon, removeSandbox } from './helpers.js';
 
 // Each tab of the page and the sections it holds (005-AC17).
-const tabs = { instances: ['Instances'], rooms: ['Room', 'Rooms'], accounts: ['Claude accounts'], settings: ['Settings'],
-  monitoring: ['Monitoring', 'Logs'], update: ['Update'] };
+const tabs = { instances: ['Servers'], rooms: ['Room', 'Rooms'], accounts: ['Claude accounts'], settings: ['Settings'],
+  monitoring: ['Activity', 'Logs'], update: ['Update'] };
 
 // 003-AC26 003-AC27 003-AC28 003-AC29 005-AC17: the supervisor's page shows every section in its
 // tab, each tab a deep link, the tab bar pinned while scrolling; a turn shows up in the history
@@ -33,14 +33,18 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
     await expect(card).toContainText(`${baseURL} · running, v`);
     await expect(card.locator('.badge')).toHaveText("the supervisor's binary");
     await expect(card).toContainText(/Worker pid \d+, protocol 3/);
-    await expect(admin.locator('#rooms-section')).toContainText(`${roomURL} connected, hosts the agent, parallel turns off`);
+    // 005-AC42: the room by its name, its link below.
+    const roomCard = admin.locator('#rooms-section li.room-card');
+    await expect(roomCard.locator('.room-name')).toHaveText(room.name);
+    await expect(roomCard.locator('.room-state')).toHaveText('connected, runs the AI, parallel answers off');
+    await expect(roomCard.locator('.room-link')).toHaveText(roomURL);
     await expect(admin.locator('#accounts li').first()).toContainText('default');
     await expect(admin.locator('#alerts-accounts')).toContainText('Claude account default: the access token expires in');
     await expect(admin.locator('#tab-accounts .tab-badge')).toHaveText('1');
 
     await admin.locator('#tab-settings').click();
     await admin.getByLabel('Days the turn history keeps').fill('7');
-    await admin.getByRole('button', { name: 'Keep', exact: true }).click();
+    await admin.locator('#retention-form').getByRole('button', { name: 'Save' }).click();
     await expect(admin.locator('#retention-status')).toHaveText('Saved.');
     await expect(admin.locator('#settings-instance')).toHaveValue(/^[0-9a-f]{12}$/);
     await expect(admin.getByLabel('Sandbox CPUs')).toHaveValue('2');
@@ -119,7 +123,7 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
       return route.continue();
     });
     await admin.getByLabel('Sandbox memory').fill('2g');
-    await admin.getByRole('button', { name: 'Apply the limits' }).click();
+    await admin.getByRole('button', { name: 'Save and restart' }).click();
     await expect(admin.locator('#limits-status')).toHaveText('Applied: the worker restarts.', { timeout: 10_000 });
     await expect(card).toContainText(`${baseURL} · running`, { timeout: 30_000 });
     await expect(admin.getByLabel('Sandbox memory')).toHaveValue('2g');

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { adminToken } from './playwright.config.js';
-import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const phone = { width: 390, height: 844 };
@@ -212,7 +212,7 @@ test('rename a room, with a name that is markup', async ({ browser, request }) =
     expect(await page.evaluate(() => window.__xss)).toBeUndefined();
   }
   await menuItem(bob, 'My rooms and profile', 'me');
-  await expect(bob.locator('#rooms li', { hasText: 'as Bob' })).toHaveText(`${evil} as Bob`);
+  await expect(bob.locator('#rooms li .room-line', { hasText: 'as Bob' })).toHaveText(`${evil} as Bob`);
   await expect(bob.locator('#rooms img, #rooms script')).toHaveCount(0);
   expect(await bob.evaluate(() => window.__xss)).toBeUndefined();
 });
@@ -227,6 +227,7 @@ test('a room skill survives its author leaving', async ({ browser, request, base
   const bobProfile = await bob.context().newPage();
   await bobProfile.goto('/profile');
   await bobProfile.locator('#skill-file').setInputFiles(skillZip('bobs', 'BOB-v1'));
+  await bobProfile.locator('#skills summary').click();
   await bobProfile.getByRole('button', { name: 'Upload', exact: true }).click();
   await expect(bobProfile.locator('#skill-status')).toHaveText('Uploaded bobs v1.');
 
@@ -262,8 +263,9 @@ test('a room skill survives its author leaving', async ({ browser, request, base
     expect((await request.delete(`/api/rooms/${room.id}/invites/${invites[1].id}`, { headers: admin })).status()).toBe(204);
     await expect(bob.locator('#banner')).toHaveText('Your access to this room has ended.');
     await bobProfile.reload();
-    bobProfile.once('dialog', (d) => d.accept());
+    await bobProfile.locator('#skills summary').click();
     await bobProfile.getByRole('button', { name: 'Remove skill bobs' }).click();
+    await confirmSheet(bobProfile, 'Remove');
     await expect(bobProfile.locator('#skill-status')).toHaveText('bobs removed.');
     expect((await ask(alice, room.id, 'FAKE_SKILLS without Bob')).trim()).toBe('Skills used: bobs: BOB-v1.');
   } finally {

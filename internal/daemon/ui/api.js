@@ -7,7 +7,7 @@
  * @typedef {{max_model: string, max_effort: string, approve_all: boolean}} Settings
  * @typedef {{cpus: string, memory: string, egress_cpus: string, egress_memory: string}} Limits
  * @typedef {{room: string, pairing: string, code?: string, approve_url?: string, connection: string, error?: string,
- *   can_host: boolean, reason?: string, running?: number, queued?: number, host?: boolean, parallel_turns?: boolean}} RoomStatus
+ *   can_host: boolean, reason?: string, running?: number, queued?: number, host?: boolean, parallel_turns?: boolean, name?: string}} RoomStatus
  * @typedef {{host: string, version: string, room?: string, pairing: string, code?: string, approve_url?: string,
  *   connection: string, error?: string, docker: Readiness, image: Image, update: Update, can_host: boolean, reason?: string,
  *   settings: Settings, allowlist: string[], rooms?: RoomStatus[]}} Status
@@ -16,7 +16,7 @@
  *   restarts: number, version?: string, trust?: string, accept_unsigned: boolean, account: string,
  *   room_accounts?: Record<string, string>, room_states?: RoomStatus[], requests: number, cut_off?: boolean,
  *   room?: string, connection?: string, metrics?: Metrics, unsigned?: boolean, limits: Limits, status?: Status}} Instance
- * @typedef {{name: string, kind: string, config_dir?: string, storage?: string, state: string, detail?: string,
+ * @typedef {{name: string, kind: string, config_dir?: string, display_dir?: string, storage?: string, state: string, detail?: string,
  *   expires_at?: string, expiry_estimated?: boolean, checked_at?: string, last_use?: string,
  *   requests: Record<string, number>, warning?: string}} Account
  * @typedef {{instance: string, room: string, turn: number, since_ms: number}} Slot

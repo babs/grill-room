@@ -78,6 +78,42 @@ type AccountView struct {
 	// Requests are the proxied requests per instance (worker).
 	Requests map[string]int64 `json:"requests"`
 	Warning  string           `json:"warning,omitempty"`
+	// DisplayDir is ConfigDir as the page shows it: ~/… under the home dir (005-AC47).
+	DisplayDir string `json:"display_dir,omitempty"`
+}
+
+// expandHome turns a config dir as typed into the absolute path stored: ~ and ~/x are the
+// daemon user's home. Another user's ~name and any other relative path are refused (005-AC47).
+func expandHome(dir string) (string, error) {
+	switch {
+	case dir == "" || filepath.IsAbs(dir):
+		return dir, nil
+	case dir == "~" || strings.HasPrefix(dir, "~/") || strings.HasPrefix(dir, `~`+string(filepath.Separator)):
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("~ needs a home dir: %w", err)
+		}
+		return filepath.Join(home, dir[1:]), nil
+	case strings.HasPrefix(dir, "~"):
+		return "", errors.New("another user's ~name is not supported: give the config dir as ~/… or as an absolute path")
+	default:
+		return "", fmt.Errorf("%q is relative: give the config dir as ~/… or as an absolute path, or leave it empty for Claude Code's default", dir)
+	}
+}
+
+// homeShort shows a path under the home dir as ~/…, any other path as it is.
+func homeShort(dir string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" || dir == "" {
+		return dir
+	}
+	if dir == home {
+		return "~"
+	}
+	if rel, err := filepath.Rel(home, dir); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
+		return "~" + string(filepath.Separator) + rel
+	}
+	return dir
 }
 
 // Keyring stores secrets in the OS keyring: Keychain, Secret Service or Windows Credential Manager.
@@ -343,10 +379,12 @@ func (a *Accounts) Add(ctx context.Context, acc Account, token string) error {
 	}
 	switch acc.Kind {
 	case KindConfigDir:
+		dir, err := expandHome(strings.TrimSpace(acc.ConfigDir))
+		if err != nil {
+			return err
+		}
+		acc.ConfigDir = dir
 		if acc.ConfigDir != "" {
-			if !filepath.IsAbs(acc.ConfigDir) {
-				return errors.New("give the config dir as an absolute path, or leave it empty for Claude Code's default")
-			}
 			if fi, err := os.Stat(acc.ConfigDir); err != nil || !fi.IsDir() {
 				return fmt.Errorf("%s is not a directory", acc.ConfigDir)
 			}
@@ -554,7 +592,7 @@ func (a *Accounts) Views(ctx context.Context) []AccountView {
 func (a *Accounts) view(ctx context.Context, ap *accountProxy) AccountView {
 	now := a.o.Now()
 	st := ap.p.Stats()
-	v := AccountView{Account: ap.acc, Requests: st.Requests}
+	v := AccountView{Account: ap.acc, Requests: st.Requests, DisplayDir: homeShort(ap.acc.ConfigDir)}
 	if !st.LastUse.IsZero() {
 		v.LastUse = &st.LastUse
 	}
@@ -566,7 +604,7 @@ func (a *Accounts) view(ctx context.Context, ap *accountProxy) AccountView {
 			v.Warning = "the Claude login cannot be read: log in with Claude Code on this machine"
 			break
 		}
-		v.Detail = "read from " + tok.Origin
+		v.Detail = "read from " + homeShort(tok.Origin)
 		v.State = "valid"
 		if tok.ExpiresAt.IsZero() {
 			break

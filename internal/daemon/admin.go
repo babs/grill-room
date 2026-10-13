@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -95,14 +96,55 @@ func NewAdmin(ctx context.Context, d Backend, logs *Ring, stop func(), announce 
 
 // Listen binds a random port on 127.0.0.1.
 func (a *Admin) Listen(ctx context.Context) (net.Listener, error) {
-	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, err
+	ln, _, err := a.ListenAt(ctx, "")
+	return ln, err
+}
+
+// ListenAt binds addr, the port the page had before a self-update restarted the supervisor, so
+// that its open tab reconnects (005-AC45). With addr taken or empty it binds a random port on
+// 127.0.0.1; reused says whether addr was kept.
+func (a *Admin) ListenAt(ctx context.Context, addr string) (ln net.Listener, reused bool, err error) {
+	if host, _, e := net.SplitHostPort(addr); e == nil && host == "127.0.0.1" {
+		if ln, err = (&net.ListenConfig{}).Listen(ctx, "tcp", addr); err == nil {
+			reused = true
+		} else {
+			a.log.Warn("admin_port_not_kept", zap.String("addr", addr), zap.Error(err))
+		}
+	}
+	if ln == nil {
+		if ln, err = (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0"); err != nil {
+			return nil, false, err
+		}
 	}
 	a.mu.Lock()
 	a.origin = "http://" + ln.Addr().String()
 	a.mu.Unlock()
-	return ln, nil
+	return ln, reused, nil
+}
+
+// Sessions are the page's open sessions, handed to the updated binary.
+func (a *Admin) Sessions() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]string, 0, len(a.sessions))
+	for tok := range a.sessions {
+		out = append(out, tok)
+	}
+	return out
+}
+
+// sessionToken is the shape of a token session() gives out: rand.Text(), 26 base32 letters.
+var sessionToken = regexp.MustCompile(`^[A-Z2-7]{26}$`)
+
+// Restore admits the sessions the binary before a self-update held: their tabs keep working.
+func (a *Admin) Restore(tokens []string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, tok := range tokens {
+		if sessionToken.MatchString(tok) {
+			a.sessions[tok] = true
+		}
+	}
 }
 
 // NewLink returns a one-time link to the page.

@@ -1,0 +1,20 @@
+/* One room's management (room-panel.js): the room page's Room settings and /admin's room view load
+   this one file, so both look the same (005-AC43). */
+#room-panel h2 { overflow-wrap: anywhere; }
+#room-panel h3 { font-size: var(--fs-md); margin: var(--sp-4) 0 var(--sp-1); }
+#room-panel .row { display: flex; flex-wrap: wrap; align-items: end; gap: var(--sp-2) var(--sp-3); margin: var(--sp-2) 0 var(--sp-3); }
+#room-panel .row label { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-sm); font-weight: 600; }
+#room-panel .scroll { overflow-x: auto; max-width: 100%; }
+#room-panel dl { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-6); margin: var(--sp-1) 0 var(--sp-3); }
+#room-panel dt { color: var(--text-muted); font-size: var(--fs-sm); }
+#room-panel dd { margin: 0; }
+#room-panel .link { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-sm); }
+#room-panel .link input { width: 100%; }
+#room-panel ul { padding-left: 0; list-style: none; }
+#room-panel li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-height: var(--control-h); }
+#room-panel .tab-panel { padding-top: var(--sp-2); }
+form.rename { display: inline-flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+form.rename input { width: 12rem; }
+#stt-glossary textarea { width: 100%; }
+.glossary-actions { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
+#glossary-used { font-size: var(--fs-sm); color: var(--text-muted); }

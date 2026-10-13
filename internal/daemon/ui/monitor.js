@@ -77,7 +77,7 @@ export function Monitoring({ instances }) {
   const fc = h?.facets;
   const exportCSV = () => download('/api/monitor/turns.csv?' + query(f), 'grill-room-turns.csv').catch((x) => setErr(x.message));
   return html`<section id="monitoring-section" aria-labelledby="monitoring-title">
-    <h2 id="monitoring-title">Monitoring</h2>
+    <h2 id="monitoring-title">Activity</h2>
     <p class="hint">Every turn this machine ran, kept on this machine only for the retention set above. Cost is Claude Code's estimate.</p>
     <form id="monitor-filter" class="row" onSubmit=${(/** @type {Event} */ e) => e.preventDefault()}>
       ${pick('instance', 'Instance', fc?.instances || [], url)} ${pick('room', 'Room', fc?.rooms || [])}

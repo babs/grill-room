@@ -126,6 +126,9 @@ Each AC names the audit findings it covers. `docs/design.md` holds the rules the
 - [ ] **AC42** The daemon page is titled "grill-room AI host", with its version, its state and Stop in the header. Its tabs keep their deep links and read Rooms, Servers, Accounts, Settings, Activity, Update. Rooms show their names, which the room server sends in the stream's hello; a room server from before shows the link. Settings is one card per topic, each with one Save. Errors are in sentence case and say what to do. (F24, F22)
 - [ ] **AC43** `/admin` has the room's header and tab bar. The Rooms list has a search box, relative dates with the full date in a tooltip, the import in a sheet ("Import a room"), and becomes cards under 40rem. A room's detail view looks exactly like Room settings, from the same component and the same classes. (F22, F26)
 - [ ] **AC44** The join page says "Join the room" in its title and heading, and an empty or invalid name shows an inline line under the field, never the browser's tooltip. Naming the room and the inviter waits for the user's decision on an invite preview API (Open questions). (F25)
+- [ ] **AC45** An admin page open during a self-update survives it. The updated binary binds the page's `127.0.0.1` port again and keeps its sessions, handed over in its environment and removed from it at once, so no worker inherits a token. The page says "Updating…", reconnects by itself and says which version it runs; when the port was taken meanwhile, it says after 90 s where to find the new link. A supervisor that cannot open a browser prints the link with the reason. A binary named after its version (`grill-room-daemon-v0.0.3`) becomes `grill-room-daemon` at the update, and a login item follows it. (user report, 2026-10-13)
+- [ ] **AC46** `grill-room-daemon admin` asks the running supervisor for a fresh one-time link, opens it (a `http://127.0.0.1:` link only), prints it and exits 0; with no supervisor running it says how to start one and exits 1. A plain second launch does the same and reads as a hint, not an error. (user report, 2026-10-13)
+- [ ] **AC47** An account's config dir may be typed as `~` or `~/…`: it is stored as the daemon user's absolute path and shown as `~/…` under the home dir, everywhere the page shows a path. Another user's `~name` and any other relative path are refused with a message that says what to type. (user report, 2026-10-13)
 
 ## Phases
 
@@ -161,9 +164,9 @@ Each AC names the audit findings it covers. `docs/design.md` holds the rules the
 
 ### Phase 6 — Redesigns
 - Work: the phone tab bar; the viewer's annotation panel and chat rail; the status strip and toasts; confirm sheets and Undo; the Personas sheet; the profile home page; the daemon page; the `/admin` layout; the join page.
-- **Covers**: AC36, AC37, AC38, AC39, AC40, AC41, AC42, AC43, AC44
+- **Covers**: AC36, AC37, AC38, AC39, AC40, AC41, AC42, AC43, AC44, AC45, AC46, AC47
 - **Data model impact**: none; the profile's room list gains each room's people count, last activity and the viewer's admin flag; the daemon stream's hello gains the room's name
-- **DoD**: e2e at 390 px for the tab bar (switching keeps each tab's scroll), at 1440 px for the annotation toggle and the chat rail; a test that no UI script calls `confirm(` or `alert(`; e2e for message Undo and document Undo; the AC30 bounding-box spec extended to the new screens; before and after screenshots in the tracking file; daemon release `v0.0.10` and lab redeploy (DB backup first).
+- **DoD**: e2e at 390 px for the tab bar (switching keeps each tab's scroll), at 1440 px for the annotation toggle and the chat rail; a test that no UI script calls `confirm(` or `alert(`; a test that the page's port and sessions survive a restart, one for `grill-room-daemon admin` with and without a supervisor, and one for `~` in account dirs; e2e for message Undo and document Undo; the AC30 bounding-box spec extended to the new screens; before and after screenshots in the tracking file; daemon release `v0.0.10` and lab redeploy (DB backup first).
 
 ## Data model impact (summary)
 
@@ -198,5 +201,6 @@ Each AC names the audit findings it covers. `docs/design.md` holds the rules the
 - Plain members see only the Glossary tab in Room settings (user decision C, 2026-10-13).
 - `profiles.name`, set by "Also use it for my profile", is accepted as routine (user, 2026-10-13).
 - The web manifest is `standalone`, which iOS needs for push (user, 2026-10-13).
+- Three daemon reports from live use join Phase 6 as AC45 to AC47: the page lost on a self-update, `grill-room-daemon admin`, `~` in account dirs (user, 2026-10-13).
 - The UX audit's findings become AC28 to AC44, grouped by theme, in two phases: polish (Phase 5), then the redesigns (Phase 6) (user, 2026-10-13).
 - Test campaigns run throttled on the workstation (`nice`, `ionice`, CPU cap, no stress); repetition goes to CI.

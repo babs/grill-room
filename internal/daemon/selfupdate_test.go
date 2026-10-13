@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -419,5 +420,73 @@ func TestInstanceVersionChangeRestartsWorker(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	if offline.Load() != 1 {
 		t.Fatalf("%d resolves for an unchanged version", offline.Load())
+	}
+}
+
+// 005-AC45: a supervisor downloaded under a versioned name updates to the version-neutral name,
+// and the old file goes: grill-room-daemon-v1.0.0 never runs v1.1.0.
+func TestSelfUpdateDropsVersionFromName(t *testing.T) {
+	key := trusttest.NewKey(t)
+	next := ownExe(t)
+	gh := fakeGitHub(t, "v1.1.0", next, key.Sign(t, next))
+	versioned := filepath.Join(t.TempDir(), "grill-room-daemon-v1.0.0")
+	if err := os.WriteFile(versioned, []byte("old binary"), 0o755); err != nil { //nolint:gosec // an executable fake
+		t.Fatal(err)
+	}
+	s, _, restarted := updateSupervisor(t, gh.URL, key, func(o *SupervisorOptions) { o.Executable = versioned })
+	s.checkUpdate(context.Background())
+	e := newAdminEnv(t, s)
+	if code, body := e.req(t, "POST", "/api/update", e.login(t), "", nil); code != http.StatusNoContent {
+		t.Fatalf("update: %d %s", code, body)
+	}
+	neutral := filepath.Join(filepath.Dir(versioned), "grill-room-daemon")
+	assertBinary(t, neutral, next)
+	if _, err := os.Stat(versioned); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old binary still there: %v", err)
+	}
+	if got := s.Executable(); got != neutral || !restarted.Load() {
+		t.Fatalf("executable %s, restarted %v", got, restarted.Load())
+	}
+}
+
+func TestNeutralName(t *testing.T) {
+	for _, c := range []struct{ exe, want string }{
+		{"/x/grill-room-daemon-v0.0.3", "/x/grill-room-daemon"},
+		{"/x/grill-room-daemon_v0.0.3.exe", "/x/grill-room-daemon.exe"},
+		{"/x/grill-room-daemon-v0.0.3-rc.1.exe", "/x/grill-room-daemon.exe"},
+		// Named after an older version: in-place updates before 005-AC45 left such names.
+		{"/x/grill-room-daemon-v0.0.2", "/x/grill-room-daemon"},
+		{"/x/grill-room-daemon", "/x/grill-room-daemon"},
+		{"/x/v0.0.3", "/x/v0.0.3"},
+		{"/x/grill-room-daemon-linux-amd64", "/x/grill-room-daemon-linux-amd64"},
+	} {
+		if got := neutralName(filepath.FromSlash(c.exe)); got != filepath.FromSlash(c.want) {
+			t.Errorf("%s: %s, want %s", c.exe, got, c.want)
+		}
+	}
+}
+
+// 005-AC45: a file already at the neutral name is someone's install: the update stays in place.
+func TestSelfUpdateKeepsNameWhenTaken(t *testing.T) {
+	key := trusttest.NewKey(t)
+	next := ownExe(t)
+	gh := fakeGitHub(t, "v1.1.0", next, key.Sign(t, next))
+	dir := t.TempDir()
+	versioned, other := filepath.Join(dir, "grill-room-daemon-v1.0.0"), filepath.Join(dir, "grill-room-daemon")
+	for _, f := range []string{versioned, other} {
+		if err := os.WriteFile(f, []byte("old binary"), 0o755); err != nil { //nolint:gosec // an executable fake
+			t.Fatal(err)
+		}
+	}
+	s, _, _ := updateSupervisor(t, gh.URL, key, func(o *SupervisorOptions) { o.Executable = versioned })
+	s.checkUpdate(context.Background())
+	e := newAdminEnv(t, s)
+	if code, body := e.req(t, "POST", "/api/update", e.login(t), "", nil); code != http.StatusNoContent {
+		t.Fatalf("update: %d %s", code, body)
+	}
+	assertBinary(t, versioned, next)
+	assertBinary(t, other, []byte("old binary"))
+	if s.Executable() != versioned {
+		t.Fatalf("executable %s", s.Executable())
 	}
 }

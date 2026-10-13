@@ -44,6 +44,11 @@ type ProfileRoom struct {
 	ParticipantID int64     `json:"participant_id"`
 	Name          string    `json:"name"`
 	JoinedAt      time.Time `json:"joined_at"`
+	// People counts the room's participants with a valid invite; LastActivity is its last line, or
+	// its creation; Admin says the profile is a room admin there (005-AC41).
+	People       int       `json:"people"`
+	LastActivity time.Time `json:"last_activity"`
+	Admin        bool      `json:"admin"`
 }
 
 // MagicLink is an emailed one-time sign-in link. Only the hash of its token is stored.
@@ -143,7 +148,12 @@ func (s *Store) profile(ctx context.Context, where string, args ...any) (*Profil
 // profileRooms lists the rooms a profile still has access to, newest join first, once each.
 func (s *Store) profileRooms(ctx context.Context, profileID int64) ([]ProfileRoom, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT r.id, r.name, pa.id, pa.name, pa.joined_at FROM participants pa
+		SELECT r.id, r.name, pa.id, pa.name, pa.joined_at,
+			(SELECT COUNT(DISTINCT COALESCE(p.profile_id, -p.id)) FROM participants p JOIN invites v ON v.id = p.invite_id
+				WHERE p.room_id = r.id AND v.revoked_at IS NULL),
+			COALESCE((SELECT ts FROM messages WHERE room_id = r.id ORDER BY id DESC LIMIT 1), r.created_at),
+			EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = r.id AND a.profile_id = pa.profile_id)
+		FROM participants pa
 		JOIN invites i ON i.id = pa.invite_id
 		JOIN rooms r ON r.id = pa.room_id
 		WHERE pa.profile_id = ? AND i.revoked_at IS NULL ORDER BY pa.id DESC`, profileID)
@@ -155,15 +165,15 @@ func (s *Store) profileRooms(ctx context.Context, profileID int64) ([]ProfileRoo
 	seen := map[string]bool{}
 	for rows.Next() {
 		var r ProfileRoom
-		var joined string
-		if err := rows.Scan(&r.RoomID, &r.RoomName, &r.ParticipantID, &r.Name, &joined); err != nil {
+		var joined, last string
+		if err := rows.Scan(&r.RoomID, &r.RoomName, &r.ParticipantID, &r.Name, &joined, &r.People, &last, &r.Admin); err != nil {
 			return nil, fmt.Errorf("scan profile room: %w", err)
 		}
 		if seen[r.RoomID] {
 			continue
 		}
 		seen[r.RoomID] = true
-		r.JoinedAt = parseTS(joined)
+		r.JoinedAt, r.LastActivity = parseTS(joined), parseTS(last)
 		out = append(out, r)
 	}
 	return out, rows.Err()

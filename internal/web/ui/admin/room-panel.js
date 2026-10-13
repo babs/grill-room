@@ -1,6 +1,6 @@
 // The panel that manages one room, shared by /admin (the super-admin, 004-AC2) and the room page
 // (its room admins, 004-AC8), with the tab bar and the helpers both pages use.
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import { html } from 'htm/preact';
 
 /**
@@ -35,6 +35,13 @@ export async function fetchJSON(method, path, body) {
 
 /** @param {string} t */
 export const when = (t) => new Date(t).toLocaleString();
+/**
+ * ago says how long ago t was, coarsely, for a list (005-AC43): the full date shows in a tooltip.
+ * @param {string} t
+ */
+export function ago(t) {
+  return html`<time datetime=${t} title=${when(t)}>${window.grillAgo(t)}</time>`;
+}
 /** @param {number} n bytes */
 export function size(n) {
   if (n < 1024) return n + ' B';
@@ -57,7 +64,10 @@ export const formAction = (work) => (/** @type {Event} */ e) => { e.preventDefau
  * @param {{tabs: string[][], active: string, href: (id: string) => string, label: string, cls?: string}} props
  */
 export function TabBar({ tabs, active, href, label, cls }) {
-  return html`<nav class=${'tabs' + (cls ? ' ' + cls : '')} aria-label=${label}>${tabs.map(([id, name]) => html`<a key=${id} href=${href(id)}
+  const nav = useRef(/** @type {HTMLElement | null} */ (null));
+  // A bar that scrolls sideways on a phone keeps its current tab in sight (005-AC35).
+  useEffect(() => { nav.current?.querySelector('[aria-current=page]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, [active]);
+  return html`<nav ref=${nav} class=${'tabs' + (cls ? ' ' + cls : '')} aria-label=${label}>${tabs.map(([id, name]) => html`<a key=${id} href=${href(id)}
     id=${'tab-' + id} aria-current=${id === active ? 'page' : undefined}>${name}</a>`)}</nav>`;
 }
 

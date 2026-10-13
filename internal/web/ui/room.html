@@ -11,7 +11,9 @@
 <link rel="manifest" href="/site.webmanifest">
 <meta name="theme-color" content="#159F8C">
 <link rel="stylesheet" href="/static/kit/tokens.css">
+<script src="/static/kit/ui.js" defer></script>
 <link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/admin/room-panel.css">
 <script src="/static/vendor/livekit-client.umd.js" defer></script>
 <script src="/static/bridge.js" defer></script>
 <script src="/static/room.js" defer></script>
@@ -43,7 +45,6 @@
       <button type="button" id="voice-mute" aria-pressed="false" hidden>Mute</button>
       <button type="button" id="voice-more" class="btn-icon" popovertarget="voice-menu" aria-label="Audio options" hidden>▾</button>
     </div>
-    <button type="button" id="people-open" class="btn-icon" aria-expanded="false" aria-controls="side">People</button>
     <button type="button" id="me" class="avatar" popovertarget="me-menu" title="You: your name, notifications, your profile"></button>
     <button type="button" id="more-open" class="btn-icon" popovertarget="more-menu" aria-label="More" title="More">⋯</button>
   </div>
@@ -72,11 +73,21 @@
   <button type="button" id="msg-edit">Edit</button>
   <button type="button" id="msg-delete">Delete</button>
 </div>
-<p id="voice-error" role="alert" hidden></p>
 <div id="voice-audio" hidden></div>
 <p id="banner" role="alert" hidden></p>
-<p id="notice" role="status" hidden><span id="notice-text"></span> <button type="button" id="notice-close" class="btn-ghost">OK</button></p>
-<p id="reconnecting" role="status" hidden>Reconnecting…</p>
+<!-- One status strip (005-AC38): the children in priority order; only the first shown one shows
+     until "+N more" opens the rest. -->
+<div id="strip" class="status-strip">
+<p id="reconnecting" class="strip" role="status" hidden>Reconnecting…</p>
+<p id="voice-error" class="strip" role="alert" hidden></p>
+<section id="approvals" class="strip" aria-label="Waiting for the AI host" hidden>
+  <ul id="approval-list"></ul>
+</section>
+<p id="chain-paused" class="strip" role="alert" hidden><span id="chain-paused-text"></span>
+  <button type="button" id="chain-rearm">Resume auto turns</button>
+  <button type="button" id="chain-suspend" class="btn-danger-outline">Remove the limit</button></p>
+<p id="chain-unlimited" class="strip" role="alert" hidden>No limit on auto turns: the personas may call each other without end. The AI host's own cap still applies.
+  <button type="button" id="chain-restore">Restore the limit</button></p>
 <div id="running" class="strip" hidden>
   <span>Answering:</span>
   <ol id="running-list" aria-label="Answers in progress"></ol>
@@ -85,14 +96,9 @@
   <span>Waiting:</span>
   <ol id="queue-list" aria-label="Waiting answers"></ol>
 </div>
-<p id="chain-unlimited" class="strip" role="alert" hidden>No limit on auto turns: the personas may call each other without end. The AI host's own cap still applies.
-  <button type="button" id="chain-restore">Restore the limit</button></p>
-<p id="chain-paused" class="strip" role="alert" hidden><span id="chain-paused-text"></span>
-  <button type="button" id="chain-rearm">Resume auto turns</button>
-  <button type="button" id="chain-suspend" class="btn-danger-outline">Remove the limit</button></p>
-<section id="approvals" class="strip" aria-label="Waiting for the AI host" hidden>
-  <ul id="approval-list"></ul>
-</section>
+<p id="notice" class="strip" role="status" hidden><span id="notice-text"></span> <button type="button" id="notice-close" class="btn-ghost">OK</button></p>
+<button type="button" id="strip-more" class="btn-ghost" aria-expanded="false" hidden></button>
+</div>
 <dialog id="personas" class="sheet wide" aria-labelledby="personas-title">
   <div class="sheet-head">
     <h2 id="personas-title">Personas</h2>
@@ -231,12 +237,10 @@
   </div>
 </section>
 <div class="layout">
-  <div id="sheet-backdrop" hidden></div>
   <aside id="side">
     <section id="people-pane" aria-labelledby="people-title">
       <div class="pane-head">
         <h2 id="people-title">People</h2>
-        <button type="button" id="people-close" class="btn-icon btn-ghost" aria-label="Close the list">✕</button>
       </div>
       <h3 class="people">In the room</h3>
       <ul id="participants"></ul>
@@ -264,6 +268,8 @@
         <a id="doc-window" class="btn btn-icon btn-ghost" aria-label="Open in a new window" title="Open in a new window">⧉</a>
         <button type="button" id="doc-rename" class="btn-icon btn-ghost" aria-label="Rename" title="Rename">✎</button>
         <button type="button" id="doc-delete" class="btn-icon btn-ghost danger" aria-label="Delete" title="Delete" hidden>🗑</button>
+        <button type="button" id="annot-toggle" class="btn-ghost" aria-pressed="false" aria-controls="annotations" title="Show or hide the annotations">💬 Notes <span id="annot-count"></span></button>
+        <button type="button" id="chat-fold" class="btn-icon btn-ghost" aria-pressed="false" title="Fold the chat away to read the document">⇥</button>
       </div>
     </div>
     <form id="doc-rename-form" class="row" hidden>
@@ -299,6 +305,7 @@
     </div>
   </section>
   <section class="chat">
+    <button type="button" id="chat-unfold" class="btn-icon btn-ghost" aria-label="Show the chat" title="Show the chat">💬</button>
     <ol id="messages" aria-live="polite"></ol>
     <div id="chat-empty" class="empty" hidden>
       <p>Invite people to start.</p>
@@ -314,6 +321,12 @@
     </form>
   </section>
 </div>
-<div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+<nav id="tabbar" class="tabbar" aria-label="Room sections">
+  <button type="button" data-tab="chat" aria-pressed="true">💬 Chat</button>
+  <button type="button" data-tab="docs" aria-pressed="false">📄 Docs <span id="tab-docs-count" class="count"></span></button>
+  <button type="button" data-tab="people" aria-pressed="false">👥 People <span id="tab-people-count" class="count"></span></button>
+</nav>
+<div id="toasts" class="toasts" popover="manual"></div>
+<p id="toast-live" class="sr-only" role="status" aria-live="polite"></p>
 </body>
 </html>

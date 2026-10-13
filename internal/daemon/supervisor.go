@@ -74,7 +74,9 @@ type Supervisor struct {
 	workers   map[string]*worker
 	current   string
 	autostart bool
-	set       SupervisorSettings
+	// autoMu orders changes of the login item: the page's switch and a self-update's move.
+	autoMu sync.Mutex
+	set    SupervisorSettings
 	// gate holds the global cap on concurrent turns (003-AC18).
 	gate *gate
 	upd  selfUpdate
@@ -800,7 +802,7 @@ func (s *Supervisor) Restart() {
 
 // Autostart reports whether the supervisor starts at login.
 func (s *Supervisor) Autostart() (bool, error) {
-	if s.o.Autostart == nil {
+	if s.autostartItem() == nil {
 		return false, errors.New("autostart is not available here")
 	}
 	s.mu.Lock()
@@ -808,9 +810,19 @@ func (s *Supervisor) Autostart() (bool, error) {
 	return s.autostart, nil
 }
 
+// autostartItem is the login item, moved by a self-update that renames the binary.
+func (s *Supervisor) autostartItem() *Autostart {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.o.Autostart
+}
+
 // SetAutostart installs or removes the login item (003-AC11).
 func (s *Supervisor) SetAutostart(on bool) error {
-	a := s.o.Autostart
+	// A self-update moving the login item must not interleave with this change.
+	s.autoMu.Lock()
+	defer s.autoMu.Unlock()
+	a := s.autostartItem()
 	if a == nil {
 		return errors.New("autostart is not available here")
 	}

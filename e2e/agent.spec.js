@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon, upload, menuItem } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, upload, menuItem, stopDaemon, confirmSheet, unfold } from './helpers.js';
 
 const led = (page) => page.locator('button.persona[data-name="Grill"] .led');
 const press = (page) => page.getByRole('button', { name: 'Ask Grill' });
@@ -40,7 +40,10 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
     await expect(alice.locator('#participants li', { hasText: 'Alice' }).locator('.host-badge')).toHaveText('host');
     await expect(press(alice)).toBeEnabled();
     await expect(press(bob)).toBeDisabled();
-    await withPanel(alice, () => expect(newSession(alice)).toBeVisible());
+    await withPanel(alice, async (panel) => {
+      await unfold(panel.locator('.persona-form').first(), 'more');
+      await expect(newSession(alice)).toBeVisible();
+    });
     await withPanel(bob, async (panel) => {
       await expect(panel.locator('.persona-form')).toHaveCount(1);
       await expect(newSession(bob)).toHaveCount(0);
@@ -87,9 +90,10 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
     await expect(alice.getByLabel('Let Bob ask the AI')).toHaveCount(0);
 
     // The host can start a new session after confirming.
-    bob.once('dialog', (d) => d.accept());
     await menuItem(bob, 'Personas');
+    await unfold(bob.locator('#personas .persona-form').first(), 'more');
     await newSession(bob).click();
+    await confirmSheet(bob, 'Start fresh');
     await bob.locator('#personas').getByRole('button', { name: 'Close' }).click();
     await expect(bob.locator('#messages li.msg.agent').last()).toContainText('turn 1.', { timeout: 60_000 });
     await expect(bob.locator('#messages li.msg.agent')).toHaveCount(2);
@@ -99,7 +103,7 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
     expect(await daemonB.exited).toBe(0);
     await expect(alice.locator('#participants li', { hasText: 'Alice' }).locator('.host-badge')).toHaveText('host');
     await expect(press(alice)).toBeEnabled();
-    await adminA.getByRole('button', { name: 'Stop the daemon' }).click();
+    await stopDaemon(adminA);
     expect(await daemonA.exited).toBe(0);
     for (const p of [alice, bob]) {
       await expect(led(p)).toHaveAttribute('aria-label', 'Grill offline');

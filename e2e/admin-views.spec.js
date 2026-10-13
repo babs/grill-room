@@ -1,7 +1,7 @@
 import { test, expect, request as pwRequest } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { adminToken } from './playwright.config.js';
-import { signIn, noOverflow, skillZip } from './helpers.js';
+import { signIn, noOverflow, skillZip, confirmSheet } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
@@ -47,15 +47,17 @@ for (const vp of widths) {
     await expect(row.locator('td').nth(5)).toHaveText('none');
     await fits(page, vp.width);
 
-    // Sorting by name, both ways.
-    const names = () => page.locator('#rooms tbody tr td:first-child').allTextContents();
-    const sorted = (list, desc) => [...list].sort((a, b) => (a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0) * (desc ? -1 : 1));
-    await page.getByRole('button', { name: 'Name', exact: true }).click();
-    await expect(page.locator('#rooms th[aria-sort="ascending"]')).toHaveText('Name');
-    expect(await names()).toEqual(sorted(await names(), false));
-    await page.getByRole('button', { name: 'Name', exact: true }).click();
-    await expect(page.locator('#rooms th[aria-sort="descending"]')).toHaveText('Name');
-    expect(await names()).toEqual(sorted(await names(), true));
+    // Sorting by name, both ways, from the column heads: a phone shows cards, newest first (005-AC43).
+    if (vp.width > 400) {
+      const names = () => page.locator('#rooms tbody tr td:first-child').allTextContents();
+      const sorted = (list, desc) => [...list].sort((a, b) => (a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0) * (desc ? -1 : 1));
+      await page.getByRole('button', { name: 'Name', exact: true }).click();
+      await expect(page.locator('#rooms th[aria-sort="ascending"]')).toHaveText('Name');
+      expect(await names()).toEqual(sorted(await names(), false));
+      await page.getByRole('button', { name: 'Name', exact: true }).click();
+      await expect(page.locator('#rooms th[aria-sort="descending"]')).toHaveText('Name');
+      expect(await names()).toEqual(sorted(await names(), true));
+    }
 
     // 005-AC16: a room opens its own view, with tabs, each a deep link.
     await row.getByRole('link', { name: 'Manage ' + name }).click();
@@ -163,8 +165,8 @@ for (const vp of widths) {
     await expect(row.locator('td').nth(2)).toHaveText('Profiles ' + name);
     await expect(row.locator('td').nth(3)).toHaveText('1');
     await fits(page, vp.width);
-    page.once('dialog', (d) => d.accept());
     await row.getByRole('button', { name: 'Delete' }).click();
+    await confirmSheet(page, 'Delete');
     await expect(row).toHaveCount(0);
     await audited(request, 'profile.delete', name);
     expect((await pat.ctx.get('/api/profile')).status()).toBe(200);
@@ -191,11 +193,11 @@ for (const vp of widths) {
     const k = page.locator('#skills tbody tr', { hasText: skill });
     await expect(k).toHaveText(new RegExp(`${skill}Libv1`));
     await fits(page, vp.width);
-    page.once('dialog', (d) => d.accept());
     await t.getByRole('button', { name: 'Remove' }).click();
+    await confirmSheet(page, 'Remove');
     await expect(t).toHaveCount(0);
-    page.once('dialog', (d) => d.accept());
     await k.getByRole('button', { name: 'Remove' }).click();
+    await confirmSheet(page, 'Remove');
     await expect(k).toHaveCount(0);
     await audited(request, 'template.remove', tpl.title);
     await audited(request, 'skill.remove', skill);

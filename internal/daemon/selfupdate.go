@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -150,7 +151,7 @@ func isRelease(v string) bool {
 // checkSelf verifies the supervisor's own binary against its bundle: one beside the binary, else
 // the release's on GitHub.
 func (s *Supervisor) checkSelf(ctx context.Context) SelfSignature {
-	exe, b := s.o.Executable, s.o.Bins
+	exe, b := s.Executable(), s.o.Bins
 	digest, err := fileSHA256(exe)
 	if err != nil {
 		return SelfSignature{State: "unknown", Detail: err.Error()}
@@ -268,7 +269,7 @@ func (s *Supervisor) Update(ctx context.Context) error {
 }
 
 func (s *Supervisor) applyUpdate(ctx context.Context, u selfUpdate) error {
-	exe := s.o.Executable
+	exe := s.Executable()
 	if exe == "" {
 		return errors.New("this supervisor cannot locate its own binary")
 	}
@@ -280,20 +281,88 @@ func (s *Supervisor) applyUpdate(ctx context.Context, u selfUpdate) error {
 	if err := os.Chmod(dl.bin, 0o755); err != nil { //nolint:gosec // an executable others may run, as before
 		return fmt.Errorf("chmod: %w", err)
 	}
-	if err := os.Rename(dl.bin, exe); err != nil {
+	target := neutralName(exe)
+	// Windows cannot delete a running binary nor exec in place: there the name stays. A file
+	// already at the neutral name is someone's install, never overwritten.
+	if _, err := os.Lstat(target); runtime.GOOS == "windows" || (target != exe && err == nil) {
+		target = exe
+	}
+	if err := os.Rename(dl.bin, target); err != nil {
 		return fmt.Errorf("replace %s: %w", exe, err)
 	}
 	// Kept beside the binary, so that the next start checks its own signature offline.
 	if dl.bundle != nil {
-		err = writeFileAtomic(exe+bundleExt, dl.bundle)
-	} else if err = os.Remove(exe + bundleExt); errors.Is(err, os.ErrNotExist) {
+		err = writeFileAtomic(target+bundleExt, dl.bundle)
+	} else if err = os.Remove(target + bundleExt); errors.Is(err, os.ErrNotExist) {
 		err = nil
 	}
 	if err != nil {
 		s.o.Log.Warn("self_bundle_not_saved", zap.Error(err))
 	}
-	s.o.Log.Info("update_applied", zap.String("version", u.available), zap.String("trust", r.Trust))
+	if target != exe {
+		s.moveTo(exe, target)
+	}
+	s.o.Log.Info("update_applied", zap.String("version", u.available), zap.String("trust", r.Trust), zap.String("binary", target))
 	return nil
+}
+
+// versionInName is a release version in a binary's name, as in grill-room-daemon-v0.0.3.
+var versionInName = regexp.MustCompile(`[-_.]v\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?`)
+
+// neutralName drops a version from a binary's name: a supervisor downloaded as
+// grill-room-daemon-v0.0.3 must not keep that name once it runs another version (005-AC45).
+func neutralName(exe string) string {
+	base := filepath.Base(exe)
+	ext := ""
+	if strings.EqualFold(filepath.Ext(base), ".exe") {
+		base, ext = strings.TrimSuffix(base, filepath.Ext(base)), filepath.Ext(base)
+	}
+	if n := versionInName.ReplaceAllString(base, ""); n != base && n != "" && !strings.HasPrefix(n, ".") {
+		return filepath.Join(filepath.Dir(exe), n+ext)
+	}
+	return exe
+}
+
+// moveTo retires the versioned binary once the update sits at target: the restart runs target,
+// and a login item that started exe starts target. The login item moves first; while it cannot,
+// exe stays so that it still starts something.
+func (s *Supervisor) moveTo(exe, target string) {
+	s.autoMu.Lock()
+	defer s.autoMu.Unlock()
+	s.mu.Lock()
+	a, on := s.o.Autostart, s.autostart
+	s.mu.Unlock()
+	keep := false
+	if a != nil {
+		moved := *a
+		moved.Exe = target
+		if on {
+			if err := moved.Enable(); err != nil {
+				s.o.Log.Warn("autostart_not_moved", zap.Error(err))
+				keep = true
+			}
+		}
+		if !keep {
+			a = &moved
+		}
+	}
+	if !keep {
+		for _, old := range []string{exe, exe + bundleExt} {
+			if err := os.Remove(old); err != nil && !errors.Is(err, os.ErrNotExist) {
+				s.o.Log.Warn("old_binary_not_removed", zap.String("path", old), zap.Error(err))
+			}
+		}
+	}
+	s.mu.Lock()
+	s.o.Executable, s.o.Autostart = target, a
+	s.mu.Unlock()
+}
+
+// Executable is the supervisor's binary, where an update put it.
+func (s *Supervisor) Executable() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.o.Executable
 }
 
 // SetUpdateChannel picks where the supervisor updates from: "github", or "instance" with the

@@ -12,7 +12,10 @@ export async function roomWith(browser, request, names) {
   const pages = [];
   for (const name of names) {
     const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
-    const page = await (await browser.newContext()).newPage();
+    const ctx = await browser.newContext();
+    // The annotations panel starts closed below 100rem (005-AC37); the specs read it open.
+    await ctx.addInitScript(() => { if (!localStorage.getItem('grill-room-annotations')) localStorage.setItem('grill-room-annotations', '1'); });
+    const page = await ctx.newPage();
     await page.goto(new URL(inv.url).pathname + new URL(inv.url).hash);
     await page.getByLabel('Your name').fill(name);
     await page.getByRole('button', { name: 'Join the room' }).click();
@@ -241,3 +244,26 @@ export const smallTargets = (page, min = 44) => page.evaluate((min) => {
     return r.width < min - 0.5 || r.height < min - 0.5;
   }).map((e) => `${e.tagName.toLowerCase()}${e.id ? '#' + e.id : ''} "${(e.getAttribute('aria-label') || e.textContent).trim().slice(0, 30)}" ${Math.round(e.getBoundingClientRect().width)}x${Math.round(e.getBoundingClientRect().height)}`);
 }, min);
+
+// stopDaemon stops the supervisor from its page: Stop, then the confirm sheet's Stop (005-AC39).
+export async function stopDaemon(admin) {
+  await admin.locator('#stop').click();
+  await admin.locator('dialog.confirm').getByRole('button', { name: 'Stop', exact: true }).click();
+}
+
+// confirmSheet answers the shared confirm sheet with its danger button (005-AC39).
+export async function confirmSheet(page, name) {
+  await page.locator('dialog.confirm').getByRole('button', { name, exact: true }).click();
+}
+
+// unfold opens a folded section of a persona's form: 'advanced' or 'more' (005-AC40).
+export async function unfold(form, which) {
+  const d = form.locator('details.' + which);
+  if (!(await d.evaluate((e) => e.open))) await d.locator('summary').click();
+}
+
+// openStrip shows every item of the status strip (005-AC38): only the most urgent shows folded.
+export async function openStrip(page) {
+  const more = page.locator('#strip-more');
+  if (await more.isVisible() && (await more.getAttribute('aria-expanded')) === 'false') await more.click();
+}

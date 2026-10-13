@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon, menuItem } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, menuItem, confirmSheet, unfold } from './helpers.js';
 
 const agentLines = (page) => page.locator('#messages li.msg.agent');
 
@@ -13,6 +13,7 @@ async function addSecretary(page, fields = {}) {
   const sec = panel.locator('.persona-form', { hasText: 'Secretary' });
   await expect(sec).toHaveCount(1);
   if (fields.everyN) {
+    await unfold(sec, 'advanced');
     await sec.getByLabel('Speaks up every N answers').fill(String(fields.everyN));
     await sec.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(panel.locator('#personas-status')).toHaveText('Secretary saved. It applies from its next turn.');
@@ -69,8 +70,8 @@ test('triggers: chain pause, re-arm, suspend', async ({ browser, request, baseUR
 
     // Suspending lifts the pause behind a permanent red warning; restoring the limit brings the
     // pause back, since the count is still at the budget.
-    alice.once('dialog', (d) => d.accept());
-    await alice.getByRole('button', { name: 'Remove the limit' }).click();
+    await alice.locator('#chain-suspend').click();
+    await confirmSheet(alice, 'Remove the limit');
     for (const p of [alice, phone]) {
       await expect(p.locator('#chain-unlimited')).toBeVisible();
       await expect(p.locator('#chain-unlimited')).toContainText("The AI host's own cap still applies.");

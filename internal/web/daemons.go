@@ -340,7 +340,12 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 	h.Set("Cache-Control", "no-cache")
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	hello, _ := json.Marshal(map[string]any{"daemon": d, "heartbeat_seconds": int(heartbeat / time.Second)})
+	// The room's name lets the daemon's page show it instead of its link (005-AC42).
+	var roomName string
+	if room, err := s.bus.Store.Room(r.Context(), d.RoomID); err == nil {
+		roomName = room.Name
+	}
+	hello, _ := json.Marshal(map[string]any{"daemon": d, "heartbeat_seconds": int(heartbeat / time.Second), "room_name": roomName})
 	if _, err := fmt.Fprintf(w, "event: hello\ndata: %s\n\n", hello); err != nil {
 		return
 	}

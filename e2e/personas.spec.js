@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon, menuItem } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, menuItem, openStrip } from './helpers.js';
 
 const led = (page, name) => page.locator(`button.persona[data-name="${name}"] .led`);
 
@@ -51,6 +51,8 @@ test('personas: add, edit, queue', async ({ browser, request, baseURL }) => {
       await expect(p.locator('#queue-list li')).toHaveText([/^📝 Secretary, pressed by Alice/]);
     }
     await expect(bob.getByRole('button', { name: 'Cancel the queued turn of Secretary' })).toHaveCount(0);
+    // Grill's answer runs: the strip shows it first, the queue behind "+1 more" (005-AC38).
+    await openStrip(alice);
     await alice.getByRole('button', { name: 'Cancel the queued turn of Secretary' }).click();
     await expect(alice.locator('#queue')).toBeHidden();
     await alice.locator('#body').fill('FAKE_WHOAMI');

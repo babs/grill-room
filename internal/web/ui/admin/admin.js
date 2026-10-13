@@ -2,10 +2,10 @@
 // vendored, no build step. The session cookie is HttpOnly: the page never sees a token after the
 // login form.
 import { render } from 'preact';
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { html } from 'htm/preact';
-import { RoomPanel, Rename, TabBar, fetchJSON, roomTabs, size, when, onInput, formAction } from './room-panel.js';
+import { RoomPanel, Rename, TabBar, fetchJSON, roomTabs, size, when, ago, onInput, formAction } from './room-panel.js';
 
 /**
  * @typedef {{id: number, created_at: string, last_used_at: string, expires_at: string, user_agent: string, ip: string,
@@ -195,7 +195,7 @@ const roomCols = [
   ['activity', 'Last activity', (r) => r.last_activity],
   ['participants', 'Participants', (r) => r.participants],
   ['personas', 'Personas', (r) => r.personas],
-  ['host', 'Host', (r) => r.host_online],
+  ['host', 'AI host', (r) => r.host_online],
   ['volume', 'Volume', (r) => r.volume.total],
   ['quota', 'Quota used', (r) => r.used / r.quota],
 ];
@@ -203,6 +203,7 @@ const roomCols = [
 function Rooms() {
   const [page, setPage] = useState(/** @type {RoomsPage | null} */ (null));
   const [sort, setSort] = useState({ col: 'activity', desc: true });
+  const [search, setSearch] = useState('');
   const load = () => api('GET', '/api/admin/rooms').then(setPage).catch(show);
   useEffect(() => { load(); }, []);
   if (!page) return html`<h2>Rooms</h2>`;
@@ -219,26 +220,31 @@ function Rooms() {
         : html`<p>No such room.</p>`}`;
   }
   const key = (roomCols.find(([id]) => id === sort.col) || roomCols[0])[2];
-  const rooms = [...page.rooms].sort((a, b) => {
+  const q = search.trim().toLowerCase();
+  const rooms = page.rooms.filter((r) => !q || r.name.toLowerCase().includes(q)).sort((a, b) => {
     const x = key(a), y = key(b);
     return (x < y ? -1 : x > y ? 1 : 0) * (sort.desc ? -1 : 1);
   });
   /** @param {string} col */
   const by = (col) => setSort({ col, desc: sort.col === col ? !sort.desc : col !== 'name' });
   return html`
-    <h2>Rooms</h2>
-    <p class="hint">${page.rooms.length} rooms. A room's quota counts its uploads and attachments; the default is ${size(page.default_quota)}.</p>
-    <${ImportRoom} reload=${load}/>
-    ${page.rooms.length ? html`<div class="scroll"><table id="rooms">
+    <div class="list-head">
+      <h2>Rooms (${q ? rooms.length + ' of ' + page.rooms.length : page.rooms.length})</h2>
+      <input type="search" id="room-search" aria-label="Search rooms" placeholder="Search rooms…" value=${search} onInput=${onInput(setSearch)}/>
+      <${ImportRoom} reload=${load}/>
+    </div>
+    <p class="hint">A room's quota counts its uploads and attachments; the default is ${size(page.default_quota)}.</p>
+    ${page.rooms.length ? html`<div class="scroll"><table id="rooms" class="cards">
       <thead><tr>${roomCols.map(([id, label]) => html`<th aria-sort=${sort.col === id ? (sort.desc ? 'descending' : 'ascending') : undefined}>
         <button type="button" class="sort" onClick=${() => by(id)}>${label}</button></th>`)}<th></th></tr></thead>
       <tbody>${rooms.map((r) => html`<tr id=${'room-' + r.id}>
-        <td class="wrap">${r.name}</td><td>${when(r.created_at)}</td><td>${when(r.last_activity)}</td>
-        <td>${r.participants}</td><td>${r.personas}</td><td>${!r.host_participant_id ? 'none' : r.host_online ? 'online' : 'offline'}</td><td>${size(r.volume.total)}</td>
-        <td><meter min="0" max=${r.quota} value=${r.used} title=${size(r.used) + ' of ' + size(r.quota)}></meter> ${size(r.used)} / ${size(r.quota)}</td>
+        <td class="wrap"><strong>${r.name}</strong></td><td data-label="Created">${ago(r.created_at)}</td><td data-label="Last activity">${ago(r.last_activity)}</td>
+        <td data-label="People">${r.participants}</td><td data-label="Personas">${r.personas}</td>
+        <td data-label="AI host">${!r.host_participant_id ? 'none' : r.host_online ? 'online' : 'offline'}</td><td data-label="Volume">${size(r.volume.total)}</td>
+        <td data-label="Quota used"><meter min="0" max=${r.quota} value=${r.used} title=${size(r.used) + ' of ' + size(r.quota)}></meter> ${size(r.used)} / ${size(r.quota)}</td>
         <td><a class="btn btn-secondary" href=${'#rooms/' + encodeURIComponent(r.id)} aria-label=${'Manage ' + r.name}>Manage</a></td>
       </tr>`)}</tbody>
-    </table></div>` : html`<p>No room yet.</p>`}`;
+    </table></div>${q && !rooms.length && html`<p class="hint" id="rooms-none">No room matches "${search.trim()}".</p>`}` : html`<p>No room yet.</p>`}`;
 }
 
 /**
@@ -287,6 +293,7 @@ const importKinds = [['participants', 'Participants'], ['messages', 'Lines'], ['
  * @param {{reload: () => void}} props
  */
 function ImportRoom({ reload }) {
+  const sheet = useRef(/** @type {HTMLDialogElement | null} */ (null));
   const [file, setFile] = useState(/** @type {File | null} */ (null));
   const [preview, setPreview] = useState(/** @type {ImportReport | null} */ (null));
   const [said, setSaid] = useState('');
@@ -324,7 +331,10 @@ function ImportRoom({ reload }) {
   };
   const p = preview;
   return html`
-    <h3>Import a room</h3>
+    <button type="button" id="import-open" class="btn-secondary" onClick=${() => sheet.current?.showModal()}>Import a room</button>
+    <dialog ref=${sheet} id="import-sheet" class="sheet wide" aria-labelledby="import-title">
+    <div class="sheet-head"><h2 id="import-title">Import a room</h2>
+      <button type="button" class="btn-icon btn-ghost" aria-label="Close" onClick=${() => sheet.current?.close()}>✕</button></div>
     <p class="hint">An export from this instance or another one becomes a new room. Nothing is created until you confirm the preview.</p>
     <form class="row" id="import-form" onSubmit=${formAction(() => send(true))}>
       <label>Archive (.tar.gz)<input id="import-file" type="file" accept=".gz,.tgz,application/gzip" required onChange=${pick}/></label>
@@ -344,7 +354,8 @@ function ImportRoom({ reload }) {
       <dl id="import-counts">${importKinds.map(([k, label]) => html`<div><dt>${label}</dt><dd>${p.counts[k] || 0}</dd></div>`)}</dl>
       ${p.warnings.length > 0 && html`<ul id="import-warnings" class="warn">${p.warnings.map((w) => html`<li>${w}</li>`)}</ul>`}
       <div class="row"><button type="button" id="import-confirm" disabled=${busy} onClick=${() => send(false)}>Import as a new room</button></div>
-    </section>`}`;
+    </section>`}
+    </dialog>`;
 }
 
 function Profiles() {
@@ -357,8 +368,8 @@ function Profiles() {
   }, []);
   /** @param {Profile} p */
   const remove = (p) => {
-    if (!window.confirm(`Delete the profile of ${p.name || p.uuid}? Its participants stay in their rooms, detached.`)) return;
-    api('DELETE', '/api/admin/profiles/' + p.id).then(load).catch(show);
+    window.grillConfirm(`Delete the profile of ${p.name || p.uuid}?`, 'Its participants stay in their rooms, detached.', 'Delete')
+      .then((yes) => { if (yes) api('DELETE', '/api/admin/profiles/' + p.id).then(load).catch(show); });
   };
   return html`
     <h2>Profiles</h2>
@@ -403,7 +414,8 @@ function Libraries() {
   useEffect(() => { load(); }, []);
   /** @param {string} what @param {string} path */
   const remove = (what, path) => {
-    if (window.confirm(`Remove ${what} from the library? Rooms keep the copies they use.`)) api('DELETE', path).then(load).catch(show);
+    window.grillConfirm(`Remove ${what} from the library?`, 'Rooms keep the copies they use.', 'Remove')
+      .then((yes) => { if (yes) api('DELETE', path).then(load).catch(show); });
   };
   return html`
     <h2>Persona templates</h2>

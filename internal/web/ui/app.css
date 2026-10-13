@@ -25,6 +25,23 @@ body.join .hint { text-align: left; }
 #skill-upload :is(input, select) { width: 100%; min-width: 0; }
 #skill-status { min-height: 1em; font-size: var(--fs-sm); text-align: left; overflow-wrap: anywhere; }
 #confirm .actions { justify-content: center; }
+/* Profile: a home page (005-AC41). */
+.home-main { width: 100%; max-width: 64rem; margin: 0 auto; padding: var(--sp-4); }
+.home-main h2 { font-size: var(--fs-lg); margin: var(--sp-6) 0 var(--sp-3); }
+.list-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.list-head h2 { margin: var(--sp-5) 0 var(--sp-3); }
+.room-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: var(--sp-3); list-style: none; margin: 0; padding: 0; }
+.room-cards .card { position: relative; }
+.room-cards .card p { margin: 0 0 var(--sp-1); }
+.room-line { font-weight: 600; overflow-wrap: anywhere; }
+.room-line a { color: var(--text); }
+.room-cards .badge { position: absolute; top: var(--sp-3); right: var(--sp-3); }
+.profile-facts { display: grid; gap: var(--sp-3); margin: 0; }
+.profile-facts dt { font-size: var(--fs-sm); color: var(--text-muted); }
+.profile-facts dd { margin: 0; }
+#bind { align-items: end; }
+#skills { margin-top: var(--sp-6); }
+#skills .stack { max-width: 28rem; }
 
 /* Room page */
 /* --vv-* follow the visual viewport (room.js): iOS Safari lays the keyboard over the page without
@@ -48,7 +65,6 @@ body.room { position: fixed; top: var(--vv-top, 0); left: 0; right: 0; height: 1
 .avatar { gap: var(--sp-2); padding: 0 var(--sp-2) 0 0; border: 0; background: transparent; color: var(--chrome-text); }
 .avatar::before { content: attr(data-initials); display: grid; place-items: center; flex: none; width: var(--control-h); height: var(--control-h); border-radius: 50%; background: var(--accent); color: var(--on-accent); font-size: var(--fs-sm); }
 #more-open { border-color: transparent; background: transparent; color: var(--chrome-text); font-size: var(--fs-lg); }
-#people-open { display: none; border-color: transparent; background: transparent; color: var(--chrome-text); }
 /* A persona pill: its colour as a stripe, its state as a shape with a ring and, wide, as a word (005-AC32). */
 button.persona { flex: none; min-height: var(--control-h); padding: 0 var(--sp-3) 0 var(--sp-2); border: 0; border-left: 4px solid var(--persona, var(--brand)); border-radius: var(--r-pill); background: var(--surface); color: var(--text); font-weight: 600; }
 button.persona { box-shadow: inset 0 0 0 1px var(--border-strong); }
@@ -62,6 +78,9 @@ button.persona .pstate { color: var(--text-muted); font-weight: 400; font-size: 
 .led.pending { border-style: dotted; background: var(--neutral-dot); }
 .led.locked { width: auto; height: auto; border: 0; background: none; font-size: var(--fs-xs); }
 .led.locked::before { content: "🔒"; }
+.status-strip { display: flex; flex-direction: column; }
+.status-strip > .extra { display: none !important; }
+#strip-more { align-self: flex-start; min-height: var(--control-h-sm); margin: 0 var(--sp-4); font-size: var(--fs-sm); }
 .strip { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); margin: 0; padding: var(--sp-1) var(--sp-4); font-size: var(--fs-sm); }
 .strip button { min-height: var(--control-h-sm); padding: 0 var(--sp-3); }
 .strip :is(ol, ul) { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-5); margin: 0; padding-left: var(--sp-4); }
@@ -82,7 +101,7 @@ button.persona .pstate { color: var(--text-muted); font-weight: 400; font-size: 
 .meta .capped { color: var(--warning); }
 
 /* Sheets and dialogs */
-.sheet.wide { width: min(44rem, calc(100vw - 1rem)); background: var(--bg); }
+.sheet.wide { background: var(--bg); }
 dialog#manage { width: min(64rem, calc(100vw - 1rem)); min-height: min(36rem, calc(100dvh - 1rem)); }
 /* Room settings is full screen on a phone (005-AC15). */
 @media (max-width: 40rem) { dialog#manage { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border: 0; border-radius: 0; } }
@@ -115,30 +134,13 @@ dialog#manage { width: min(64rem, calc(100vw - 1rem)); min-height: min(36rem, ca
 .persona-skills li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); padding: var(--sp-1) 0; overflow-wrap: anywhere; }
 .persona-skills .skill-add { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
 .persona-skills .skill-add select { flex: 1; min-width: 10rem; width: auto; }
-/* Room settings (admin/room-panel.js), shared with /admin. */
-#manage h2 { overflow-wrap: anywhere; }
-#manage h3 { font-size: var(--fs-md); margin: var(--sp-4) 0 var(--sp-1); }
-#manage .scroll { overflow-x: auto; max-width: 100%; }
-#manage dl { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-6); margin: var(--sp-1) 0 var(--sp-3); }
-#manage dt { color: var(--text-muted); font-size: var(--fs-sm); }
-#manage dd { margin: 0; }
 #manage .said { color: var(--danger); }
-#manage .link { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-sm); }
-#manage .link input { width: 100%; }
-#manage ul { padding-left: 0; list-style: none; }
-#manage li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-height: var(--control-h); }
-form.rename { display: inline-flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
-form.rename input { width: 12rem; }
-#stt-glossary textarea { width: 100%; }
-.glossary-actions { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
-#glossary-used { font-size: var(--fs-sm); color: var(--text-muted); }
 
 /* Side panel: people and documents */
 .layout { flex: 1; display: flex; min-height: 0; }
 #side { flex: none; width: 16rem; padding: var(--sp-3) var(--sp-4); border-right: 1px solid var(--border); overflow-y: auto; }
 .pane-head { display: flex; align-items: center; gap: var(--sp-1); }
 .pane-head h2 { flex: 1; font-size: var(--fs-sm); }
-#people-close { display: none; }
 #participants, #documents { list-style: none; padding: 0; margin: var(--sp-2) 0 var(--sp-4); }
 #participants li, #participants-away li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); padding: var(--sp-1) 0; }
 /* A name ends with an ellipsis, never breaks mid-word (005-AC35). */
@@ -188,6 +190,15 @@ button.doc:hover { background: var(--border); }
 body.drag-files #doc-frame iframe { pointer-events: none; }
 #doc-frame img { max-width: 100%; max-height: 100%; margin: auto; object-fit: contain; }
 .viewer-body { flex: 1; display: flex; min-height: 0; }
+body.annot-closed #annotations { display: none; }
+#annot-toggle[aria-pressed=true] { background: var(--primary-bg); }
+/* The chat folded into a rail beside a document (005-AC37); without one, nothing to fold for. */
+#chat-unfold { display: none; }
+body.chat-folded:has(#viewer:not([hidden])) .chat { flex: 0 0 56px; align-items: center; padding-top: var(--sp-2); border-left: 1px solid var(--border); }
+body.chat-folded:has(#viewer:not([hidden])) .chat > :not(#chat-unfold) { display: none; }
+body.chat-folded:has(#viewer:not([hidden])) #chat-unfold { display: inline-flex; }
+@media (max-width: 40rem) { #chat-fold { display: none; } }
+body.docs-window #chat-fold, body.docs-window #chat-unfold { display: none; }
 #annotations { width: 20rem; padding: var(--sp-3); border-left: 1px solid var(--border); overflow-y: auto; font-size: var(--fs-sm); }
 .annot-tools { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 #annot-pick[aria-pressed=true] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
@@ -276,29 +287,36 @@ mark.mention-chip.me { background: var(--accent); color: var(--on-accent); }
   button.persona .pstate { display: none; }
   #agent-status { display: none; }
 }
+/* The phone's tab bar (005-AC36), hidden on wider screens. */
+.tabbar { display: none; }
 @media (max-width: 40rem) {
-  /* Phones: the title row, then the personas on a strip of their own that scrolls sideways. */
-  .room-header { flex-wrap: wrap; row-gap: var(--sp-2); padding: var(--sp-1) var(--sp-2); }
+  /* Phones: one header row, the personas on a 44 px strip that scrolls sideways, then one tab. */
+  .room-header { flex-wrap: wrap; row-gap: 0; padding: var(--sp-1) var(--sp-2); }
   .zone-room { flex: 1 1 0; }
   .zone-agents { order: 1; flex: 1 0 100%; overflow-x: auto; scrollbar-width: none; }
   .zone-me { gap: 0; }
   #voice-join { padding: 0 var(--sp-3); }
-  #people-open { display: inline-flex; }
-  #side { display: none; }
-  /* The People list opens as a sheet over the chat (005-AC35). */
-  body.people-open #side { display: block; position: fixed; inset: auto 0 0 0; height: 80dvh; width: auto; z-index: var(--z-sheet);
-    padding-top: var(--sp-5); border: 0; border-radius: var(--r-lg) var(--r-lg) 0 0; background: var(--surface); box-shadow: var(--sh-2); }
-  body.people-open #side::before { content: ""; position: absolute; top: var(--sp-2); left: calc(50% - 20px); width: 40px; height: 4px; border-radius: 2px; background: var(--border-strong); }
-  body.people-open #sheet-backdrop { display: block; position: fixed; inset: 0; z-index: var(--z-sheet); background: var(--backdrop); }
-  #people-close { display: inline-flex; }
-  #viewer:not([hidden]) + .chat { display: none; }
+  .tabbar { display: flex; flex: none; height: calc(56px + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
+    border-top: 1px solid var(--border); background: var(--surface); }
+  .tabbar button { flex: 1; flex-direction: column; gap: 0; min-height: 56px; border: 0; border-radius: 0; background: none; color: var(--text-muted); font-size: var(--fs-xs); }
+  .tabbar button[aria-pressed=true] { color: var(--primary-text); box-shadow: inset 0 3px 0 var(--brand); }
+  .tabbar .count:empty { display: none; }
+  #side { display: none; width: 100%; border-right: 0; }
+  body[data-tab=chat] :is(#side, #viewer) { display: none; }
+  body[data-tab=docs] #side { display: block; }
+  body[data-tab=docs] #people-pane, body[data-tab=people] #docs-pane { display: none; }
+  body[data-tab=docs]:has(#viewer:not([hidden])) #side { display: none; }
+  body[data-tab=people] #side { display: block; }
+  body[data-tab=people] #viewer { display: none; }
+  body:not([data-tab=chat]) .chat { display: none; }
+  #viewer { border-right: 0; }
   .doc-tools { flex-wrap: wrap; justify-content: flex-end; }
   .msg { padding-right: calc(var(--control-h) + var(--sp-1)); }
+  .toasts { inset: auto var(--sp-2) calc(64px + env(safe-area-inset-bottom)) var(--sp-2); }
 }
-#sheet-backdrop[hidden] { display: none; }
 
 /* The document manager in a window of its own (005-AC11): the documents and the viewer only. */
-body.docs-window :is(#voice, #agent, #people-open, #more-open, #running, #queue, #chain-unlimited, #chain-paused, #approvals, #pairing, .chat, #docs-window, #people-pane) { display: none !important; }
+body.docs-window :is(#voice, #agent, #tabbar, #more-open, #running, #queue, #chain-unlimited, #chain-paused, #approvals, #pairing, .chat, #docs-window, #people-pane) { display: none !important; }
 body.docs-window #side { display: block; }
 body.docs-window #doc-window { display: none; }
 body.docs-window #viewer { flex: 1; border-right: 0; }
@@ -307,3 +325,4 @@ body.docs-window #viewer { flex: 1; border-right: 0; }
   body.docs-window:has(#viewer:not([hidden])) #side { display: none; }
 }
 body.docs-window:has(#viewer[hidden]) #side { flex: 1; width: auto; border-right: 0; }
+input[aria-invalid=true] { border-color: var(--danger); }

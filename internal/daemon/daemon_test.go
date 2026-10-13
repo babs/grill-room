@@ -253,6 +253,10 @@ func TestPairAndConnect(t *testing.T) {
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/pairings/"+pairID, alice, map[string]bool{"approve": true}, http.StatusOK, nil)
 
 	waitFor(t, "connected", func() bool { s := d.Status(); return s.Pairing == "paired" && s.Connection == "connected" })
+	// 005-AC42: the hello's room name reaches the page's room state.
+	if rooms := d.Status().Rooms; len(rooms) != 1 || rooms[0].Name != "R" {
+		t.Fatalf("room states: %+v", rooms)
+	}
 	tok, err := d.o.Tokens.Get(room)
 	if err != nil || tok == "" {
 		t.Fatalf("stored token: %q, %v", tok, err)

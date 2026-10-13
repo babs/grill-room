@@ -112,6 +112,7 @@
   border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--sh-2);
 }
 .sheet::backdrop, dialog::backdrop { background: var(--backdrop); }
+.sheet.wide { width: min(44rem, calc(100vw - 1rem)); }
 .sheet-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); margin-bottom: var(--sp-3); }
 .sheet-head h2 { margin: 0; font-size: var(--fs-lg); }
 .sheet .actions, .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--sp-2); margin-top: var(--sp-4); }
@@ -130,7 +131,9 @@
 .menu > :where(button, a):hover { background: var(--bg); }
 .menu .menu-head { margin: 0; padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: var(--fs-sm); }
 .menu hr { margin: var(--sp-1) 0; border: 0; border-top: 1px solid var(--border); }
-.toasts { position: fixed; right: var(--sp-4); bottom: var(--sp-4); z-index: var(--z-toast); display: grid; gap: var(--sp-2); }
+.toasts { position: fixed; inset: auto var(--sp-4) var(--sp-4) auto; z-index: var(--z-toast); gap: var(--sp-2);
+  margin: 0; padding: 0; border: 0; background: transparent; overflow: visible; }
+.toasts:popover-open { display: grid; }
 .toast { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-4); border-radius: var(--r-md); background: var(--chrome); color: var(--chrome-text); box-shadow: var(--sh-2); }
 @media (max-width: 40rem) {
   table.cards, table.cards :is(tbody, tr, td) { display: block; }

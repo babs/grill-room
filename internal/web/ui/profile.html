@@ -11,42 +11,49 @@
 <link rel="manifest" href="/site.webmanifest">
 <meta name="theme-color" content="#159F8C">
 <link rel="stylesheet" href="/static/kit/tokens.css">
+<script src="/static/kit/ui.js" defer></script>
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/profile.js" defer></script>
 </head>
-<body class="join">
+<body class="home">
 <header class="app-header">
   <img src="/static/logo.svg" alt="" class="logo" width="32" height="32">
   <span class="brand">grill-room</span>
+  <span class="spacer"></span>
+  <span id="who" class="muted"></span>
 </header>
-<main class="card join-card">
-  <h1>Your profile</h1>
+<main class="home-main">
+  <h1 class="sr-only">Your profile</h1>
   <p id="status" role="status"></p>
-  <section id="confirm" hidden>
+  <section id="confirm" class="card" hidden>
     <p id="confirm-text"></p>
     <div class="actions">
-      <button type="button" id="confirm-no">Cancel</button>
-      <button type="button" id="confirm-yes">Sign in to this profile</button>
+      <button type="button" id="confirm-no" class="btn-secondary">Cancel</button>
+      <button type="button" id="confirm-yes" class="btn-primary">Sign in to this profile</button>
     </div>
   </section>
   <section id="signed-in" hidden>
-    <h2>Your rooms</h2>
-    <ul id="rooms" class="rooms"></ul>
-    <button type="button" id="room-new">New room</button>
-    <form id="room-create" hidden>
-      <label for="room-create-name">Room name</label>
-      <input id="room-create-name" maxlength="100" required>
-      <label for="room-create-as">Your name in the room</label>
-      <input id="room-create-as" maxlength="40" autocomplete="nickname" required>
-      <p class="hint">You become the room's admin: you rename it, manage its invites and admins, and delete it.</p>
-      <button type="submit">Create the room</button>
-    </form>
-    <p id="room-create-status" role="status"></p>
-    <div id="skills">
-      <h2>Your skills</h2>
+    <div class="list-head">
+      <h2>Your rooms</h2>
+      <button type="button" id="room-new" class="btn-primary">+ New room</button>
+    </div>
+    <ul id="rooms" class="room-cards"></ul>
+    <h2>This profile</h2>
+    <dl class="profile-facts">
+      <div><dt>Name</dt><dd id="profile-name"></dd></div>
+      <div id="email" hidden><dt>Email</dt><dd><span id="email-state"></span>
+        <form id="bind" class="row">
+          <label for="bind-email">Bind an email to sign in from another device</label>
+          <input id="bind-email" type="email" maxlength="254" autocomplete="email" required>
+          <button type="submit">Send me a link</button>
+        </form></dd></div>
+      <div><dt>Use on another device</dt><dd id="device"></dd></div>
+    </dl>
+    <details id="skills">
+      <summary>Skills (for advanced users)</summary>
       <p class="hint">A skill is a Claude Code skill folder: a SKILL.md with a name and a description, and its files. Upload it again to publish its next version; rooms keep the version they turned on until they take the new one.</p>
       <ul id="skill-list" class="rooms"></ul>
-      <form id="skill-upload">
+      <form id="skill-upload" class="stack">
         <label for="skill-file">Upload a skill folder as a zip</label>
         <input id="skill-file" type="file" accept=".zip,application/zip" required>
         <label for="skill-scope">Offer it</label>
@@ -57,25 +64,31 @@
         <button type="submit">Upload</button>
       </form>
       <p id="skill-status" role="status"></p>
-    </div>
-    <div id="email" hidden>
-      <h2>Email</h2>
-      <p id="email-state"></p>
-      <form id="bind">
-        <label for="bind-email">Bind an email to sign in from another device</label>
-        <input id="bind-email" type="email" maxlength="254" autocomplete="email" required>
-        <button type="submit">Send me a link</button>
-      </form>
-    </div>
+    </details>
   </section>
-  <section id="signed-out" hidden>
+  <section id="signed-out" class="card" hidden>
     <p>This browser holds no profile. Join a room from an invite link, or open your recovery link here.</p>
-    <form id="signin" hidden>
+    <form id="signin" class="stack" hidden>
       <label for="signin-email">Or sign in with the email bound to your profile</label>
       <input id="signin-email" type="email" maxlength="254" autocomplete="email" required>
       <button type="submit">Email me a sign-in link</button>
     </form>
   </section>
 </main>
+<dialog id="room-create-sheet" class="sheet" aria-labelledby="room-create-title">
+  <form id="room-create" class="stack">
+    <h2 id="room-create-title">New room</h2>
+    <label for="room-create-name">Room name</label>
+    <input id="room-create-name" maxlength="100" required>
+    <label for="room-create-as">Your name in the room</label>
+    <input id="room-create-as" maxlength="40" autocomplete="nickname" required>
+    <p class="hint">You become the room's admin: you rename it, manage its invites and admins, and delete it.</p>
+    <p id="room-create-status" class="said error" role="status"></p>
+    <div class="actions">
+      <button type="button" id="room-create-cancel" class="btn-secondary">Cancel</button>
+      <button type="submit">Create the room</button>
+    </div>
+  </form>
+</dialog>
 </body>
 </html>

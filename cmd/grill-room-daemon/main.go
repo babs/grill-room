@@ -9,6 +9,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -160,6 +161,49 @@ type restartError struct {
 
 func (e restartError) Error() string { return "restart " + e.exe }
 
+// handedPage is what a self-update leaves for the new binary: the admin page's address and its
+// sessions, so that the open tab reconnects (005-AC45). It goes through an owner-only file in the
+// state dir, never the environment, which other processes of the user can read.
+type handedPage struct {
+	Addr     string    `json:"addr"`
+	Sessions []string  `json:"sessions"`
+	At       time.Time `json:"at"`
+}
+
+// handedPageTTL bounds how old a handover may be: one an exec failed to consume must not admit
+// its sessions at some later start.
+const handedPageTTL = 2 * time.Minute
+
+func handedPagePath(state string) string { return filepath.Join(state, "run", "admin-page.json") }
+
+// takeHandedPage reads and removes the handover, if a fresh one is there.
+func takeHandedPage(state string, now time.Time) handedPage {
+	path := handedPagePath(state)
+	b, err := os.ReadFile(path) //nolint:gosec // our own state dir
+	if err != nil {
+		return handedPage{}
+	}
+	_ = os.Remove(path)
+	var h handedPage
+	if json.Unmarshal(b, &h) != nil || now.Sub(h.At) > handedPageTTL || now.Before(h.At) {
+		return handedPage{}
+	}
+	return h
+}
+
+// handPage writes the handover for the binary about to replace this one.
+func handPage(state string, h handedPage) error {
+	path := handedPagePath(state)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	b, err := json.Marshal(h)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, 0o600)
+}
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	err := run(ctx, os.Args[1:], os.Stderr)
@@ -167,7 +211,7 @@ func main() {
 	var re restartError
 	if errors.As(err, &re) {
 		fmt.Fprintf(os.Stderr, "grill-room-daemon: restarting %s\n", re.exe)
-		// Same pid, same terminal: the new version prints and opens a new admin page.
+		// Same pid, same terminal, same admin port: the open page reconnects to the new version.
 		err = syscall.Exec(re.exe, append([]string{re.exe}, re.args...), os.Environ()) //nolint:gosec // our own binary, just verified
 	}
 	if err != nil {
@@ -181,7 +225,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	fs := flag.NewFlagSet("grill-room-daemon", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		_, _ = fmt.Fprintf(fs.Output(), "usage: grill-room-daemon [room-url]\n       grill-room-daemon check\n")
+		_, _ = fmt.Fprintf(fs.Output(), "usage: grill-room-daemon [room-url]\n       grill-room-daemon admin\n       grill-room-daemon check\n")
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -209,6 +253,9 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	if fs.Arg(0) == "check" {
 		return check(ctx, cfg, logger)
 	}
+	if fs.Arg(0) == "admin" {
+		return openAdmin(ctx, cfg, stderr, logger)
+	}
 	var room *daemon.Room
 	if fs.NArg() > 0 {
 		r, err := daemon.ParseRoomURL(fs.Arg(0))
@@ -219,7 +266,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 	}
 	release, err := daemon.LockSupervisor(cfg.Paths.State)
 	if errors.Is(err, daemon.ErrLocked) {
-		return handOver(ctx, cfg, room, stderr)
+		return handOver(ctx, cfg, room, stderr, logger)
 	}
 	if err != nil {
 		return err
@@ -276,9 +323,14 @@ func supervise(ctx context.Context, cfg Config, host string, room *daemon.Room, 
 	// Links are printed, never logged, so they stay on this terminal.
 	announce := func(link string) { _, _ = fmt.Fprintf(stderr, "\n  Admin page: %s\n\n", link) }
 	admin := daemon.NewAdmin(ctx, sup, ring, stop, announce, logger)
-	ln, err := admin.Listen(ctx)
+	handed := takeHandedPage(cfg.Paths.State, time.Now())
+	ln, reused, err := admin.ListenAt(ctx, handed.Addr)
 	if err != nil {
 		return fmt.Errorf("admin page: %w", err)
+	}
+	// On another port, whoever took the old one would get the tab's token: admit it only on ours.
+	if reused {
+		admin.Restore(handed.Sessions)
 	}
 	// Before the socket serves: a handed room starts a worker, which needs the running supervisor.
 	sup.Start(ctx)
@@ -305,10 +357,9 @@ func supervise(ctx context.Context, cfg Config, host string, room *daemon.Room, 
 	}
 	link := admin.NewLink()
 	announce(link)
-	if cfg.Browser == "auto" {
-		if err := daemon.Host().OpenURL(link); err != nil {
-			logger.Warn("browser_open_failed", zap.Error(err), zap.String("hint", "open the admin page link printed above"))
-		}
+	// After a self-update on the same port, the open tab reconnects: no second tab.
+	if tabKept := reused && len(handed.Sessions) > 0; cfg.Browser == "auto" && !tabKept {
+		openPage(link, stderr, logger)
 	}
 	err = daemon.Serve(ctx, srv, ln)
 	stop()
@@ -320,9 +371,22 @@ func supervise(ctx context.Context, cfg Config, host string, room *daemon.Room, 
 	logger.Info("shutdown")
 	if err == nil && restart.Load() {
 		// The rooms are in the instances' state: the new binary reconnects to them on its own.
-		return restartError{exe: exe}
+		if err := handPage(cfg.Paths.State, handedPage{Addr: ln.Addr().String(), Sessions: admin.Sessions(), At: time.Now()}); err != nil {
+			// The new binary starts anyway, on a new link.
+			logger.Warn("admin_page_not_handed", zap.Error(err))
+		}
+		return restartError{exe: sup.Executable()}
 	}
 	return err
+}
+
+// openPage opens link in the browser. A detached daemon has none: the error path then prints the
+// link itself, with why, so that whoever reads the output can open it (005-AC45).
+func openPage(link string, stderr io.Writer, logger *zap.Logger) {
+	if err := daemon.Host().OpenURL(link); err != nil {
+		logger.Warn("browser_open_failed", zap.Error(err))
+		_, _ = fmt.Fprintf(stderr, "grill-room-daemon: no browser could be opened (%v): open %s\n", err, link)
+	}
 }
 
 func loadAccounts(cfg Config, log *zap.Logger) (*daemon.Accounts, error) {
@@ -343,27 +407,40 @@ func workerEnv(env []string) []string {
 }
 
 // handOver gives room to the supervisor already running on this state dir and prints its admin
-// page link (003-AC6). With no room, this launch was a second supervisor: it is refused.
-func handOver(ctx context.Context, cfg Config, room *daemon.Room, stderr io.Writer) error {
+// page link (003-AC6). With no room, this launch only opens that page (005-AC46).
+func handOver(ctx context.Context, cfg Config, room *daemon.Room, stderr io.Writer, logger *zap.Logger) error {
 	u := ""
 	if room != nil {
 		u = room.String()
 	}
 	link, err := daemon.Handoff(ctx, cfg.Paths.State, u)
 	if err != nil {
-		return fmt.Errorf("a supervisor already runs for %s: %w", cfg.Paths.State, err)
+		return fmt.Errorf("the AI host app already runs for %s but does not answer: %w", cfg.Paths.State, err)
 	}
 	_, _ = fmt.Fprintf(stderr, "\n  Admin page: %s\n\n", link)
 	if room == nil {
-		return fmt.Errorf("a supervisor already runs for %s: this one stops; its admin page is above, and `grill-room-daemon <room-url>` hands it a room", cfg.Paths.State)
+		_, _ = fmt.Fprintf(stderr, "grill-room-daemon: the AI host app is already running; here is its admin page\n")
+	} else {
+		_, _ = fmt.Fprintf(stderr, "grill-room-daemon: handed %s to the running supervisor\n", room)
 	}
-	_, _ = fmt.Fprintf(stderr, "grill-room-daemon: handed %s to the running supervisor\n", room)
 	if cfg.Browser == "auto" {
-		if err := daemon.Host().OpenURL(link); err != nil {
-			_, _ = fmt.Fprintf(stderr, "grill-room-daemon: open the admin page link printed above (%v)\n", err)
-		}
+		openPage(link, stderr, logger)
 	}
 	return nil
+}
+
+// openAdmin is `grill-room-daemon admin`: a fresh one-time link to the running supervisor's page,
+// opened in the browser and printed (005-AC46).
+func openAdmin(ctx context.Context, cfg Config, stderr io.Writer, logger *zap.Logger) error {
+	release, err := daemon.LockSupervisor(cfg.Paths.State)
+	if err == nil {
+		release()
+		return fmt.Errorf("no AI host app runs for %s: start it with `grill-room-daemon <room-url>`, or `grill-room-daemon` alone to open its page", cfg.Paths.State)
+	}
+	if !errors.Is(err, daemon.ErrLocked) {
+		return err
+	}
+	return handOver(ctx, cfg, nil, stderr, logger)
 }
 
 // autostart is the login item for exe. It carries the environment the supervisor needs to find

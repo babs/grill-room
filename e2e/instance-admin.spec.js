@@ -81,6 +81,8 @@ test('audit view shows real admin actions, filters, and fits a phone', async ({ 
   await expect(rows.first()).toContainText('"via":"session"');
 
   await page.setViewportSize({ width: 390, height: 844 });
+  // The tab bar scrolls sideways on a phone (005-AC35): every tab is a scroll away.
+  await page.getByRole('link', { name: 'Sessions' }).scrollIntoViewIfNeeded();
   await expect(page.getByRole('link', { name: 'Sessions' })).toBeInViewport();
   await expect(page.locator('#logout')).toBeInViewport();
   expect(await noOverflow(page)).toEqual([]);

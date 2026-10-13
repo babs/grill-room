@@ -202,3 +202,48 @@ func TestColourLiteralShapes(t *testing.T) {
 		}
 	}
 }
+
+// nativeDialog finds a call of the browser's confirm() or alert(), bare or through window.
+var nativeDialog = regexp.MustCompile(`(?:^|[^\w.$])(?:(?:window|self|globalThis)\.)?(?:confirm|alert|prompt)\s*\(`)
+
+// 005-AC39: no page calls the browser's dialogs; destructive actions ask in the shared sheet.
+func TestNoNativeDialogs(t *testing.T) {
+	var scripts []string
+	for _, glob := range []string{"../web/ui/*.js", "../web/ui/admin/*.js", "../web/ui/doc/annotate.js", "../web/ui/doc/clipboard-copy.js",
+		"../daemon/ui/*.js", "kit/*.js", "../web/ui/*.html", "../daemon/ui/*.html", "../web/templates/*.html"} {
+		m, err := filepath.Glob(glob)
+		if err != nil {
+			t.Fatal(err)
+		}
+		scripts = append(scripts, m...)
+	}
+	if len(scripts) < 8 {
+		t.Fatalf("found only %v", scripts)
+	}
+	for _, p := range scripts {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(b), "\n") {
+			if nativeDialog.MatchString(line) {
+				t.Errorf("%s:%d: native dialog: %s", p, i+1, strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
+// The guard itself on the shapes the pages held, and on what it must let through.
+func TestNativeDialogShapes(t *testing.T) {
+	for _, s := range []string{"if (!confirm('Delete?')) return;", "window.confirm(`Remove ${x}?`)", "  alert('x')", "x = confirm(y)",
+		"self.confirm('x')", "globalThis.alert(1)", "confirm ('x')", "prompt('name?')"} {
+		if !nativeDialog.MatchString(s) {
+			t.Errorf("missed %q", s)
+		}
+	}
+	for _, s := range []string{"grillConfirm('Remove?', '', 'Remove')", "window.grillConfirm(a, b, c)", "function confirmIt(x) {", "const [confirm, setConfirm] = useState('');"} {
+		if nativeDialog.MatchString(s) {
+			t.Errorf("flagged %q", s)
+		}
+	}
+}

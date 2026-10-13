@@ -5,6 +5,8 @@ import { adminToken } from './playwright.config.js';
 const admin = { Authorization: `Bearer ${adminToken}` };
 
 async function uploadSkill(page, zip, scope, status) {
+  // Skills fold under "Skills (for advanced users)" on the profile page (005-AC41).
+  await page.locator('#skills').evaluate((d) => { d.open = true; });
   await page.locator('#skill-file').setInputFiles(zip);
   await page.locator('#skill-scope').selectOption(scope);
   await page.getByRole('button', { name: 'Upload', exact: true }).click();
@@ -107,6 +109,7 @@ test('skills: upload, disclaimer once, pinned through an update', async ({ brows
   await aliceProfile.setViewportSize({ width: 390, height: 844 });
   await aliceProfile.reload();
   await expect(aliceProfile.locator('#skill-list li')).toHaveText([/^stamp v2 · personal/]);
+  await aliceProfile.locator('#skills summary').click();
   await expect(aliceProfile.getByRole('button', { name: 'Upload', exact: true })).toBeVisible();
   expect(await aliceProfile.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
