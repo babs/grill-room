@@ -15,7 +15,16 @@ async function notify(p) {
     body, tag, renotify: true, icon: '/static/icons/icon-192.png', badge: '/static/icons/icon-192.png', data: { url: p.url, count },
   });
 }
-self.addEventListener('push', (e) => e.waitUntil(notify(e.data ? e.data.json() : {})));
+// payload is a push's JSON, {} when it has none or it does not parse: a generic notification
+// still shows, as Chrome warns of a site whose push shows nothing.
+function payload(data) {
+  try {
+    return data ? data.json() : {};
+  } catch {
+    return {};
+  }
+}
+self.addEventListener('push', (e) => e.waitUntil(notify(payload(e.data))));
 
 // A click opens the chat at the line that triggered the push: a tab of the room already open
 // scrolls there, otherwise a new one opens on the deep link.

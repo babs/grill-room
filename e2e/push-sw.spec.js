@@ -7,7 +7,7 @@ import { roomWith } from './helpers.js';
 // deliverPushMessage lost a push now and then, a dropped event no assertion can tell from a bug.
 
 // worker registers /sw.js on page and returns push(payload), which shows it as a push
-// would, and shown(), the notifications it shows.
+// would, raw(text), the same for a push's raw data, and shown(), the notifications it shows.
 async function worker(page) {
   await page.context().grantPermissions(['notifications']);
   await page.goto('/');
@@ -17,6 +17,8 @@ async function worker(page) {
   ]);
   return {
     push: (p) => sw.evaluate((p) => notify(p), p),
+    // raw shows a push whose data is text, or none for null.
+    raw: (text) => sw.evaluate((text) => notify(payload(text === null ? null : { json: () => JSON.parse(text) })), text),
     shown: () => page.evaluate(async () => (await (await navigator.serviceWorker.ready).getNotifications())
       .map((n) => ({ title: n.title, body: n.body, tag: n.tag, data: n.data }))),
   };
@@ -31,6 +33,16 @@ test('pushes for one room merge into one notification', async ({ page }) => {
   // Another room stands apart.
   await sw.push({ room: 'Roadmap', kind: 'synthesis', count: 1, url: '/r/def#m3' });
   expect((await sw.shown()).map((n) => n.tag).sort()).toEqual(['grill-room:/r/abc', 'grill-room:/r/def']);
+});
+
+// A push without data, or whose data is not JSON, shows a generic notification.
+test('a malformed push still shows a notification', async ({ page }) => {
+  const sw = await worker(page);
+  const generic = { title: 'grill-room', body: 'Something happened', tag: 'grill-room:/', data: { count: 1 } };
+  await sw.raw('{"room": "Pri');
+  expect(await sw.shown()).toEqual([generic]);
+  await sw.raw(null);
+  expect(await sw.shown()).toEqual([{ ...generic, body: 'Something happened · 2 events', data: { count: 2 } }]);
 });
 
 // fakePush stands in for the browser's push service in the page: one subscription, kept in
