@@ -26,6 +26,7 @@ type pushBrowser struct {
 	priv   *ecdh.PrivateKey
 	auth   []byte
 	status int
+	reply  string
 	mu     sync.Mutex
 	got    []pushPayload
 	auths  []string
@@ -100,9 +101,10 @@ func newPushBrowser(t *testing.T) *pushBrowser {
 		b.mu.Lock()
 		b.got = append(b.got, p)
 		b.auths = append(b.auths, r.Header.Get("Authorization"))
-		status := b.status
+		status, reply := b.status, b.reply
 		b.mu.Unlock()
 		w.WriteHeader(status)
+		_, _ = io.WriteString(w, reply)
 	}))
 	t.Cleanup(b.srv.Close)
 	return b
@@ -248,8 +250,8 @@ func TestPushHostAllowed(t *testing.T) {
 // 005-AC24: pushes go out on the default triggers (a mention, a synthesis, the end of a turn one
 // started) and on any line once opted in; never while one of the participant's tabs is focused,
 // never on their own lines. Events of one room gather into one push, which names the room and the
-// kind of event and links to it, never the text. A subscription the push service says is gone is
-// dropped.
+// kind of event and links to it, never the text. A subscription the push service says is gone or
+// made with another VAPID key is dropped; one refused for the server's own VAPID setup stays.
 func TestPushDispatch(t *testing.T) {
 	b := newPushBrowser(t)
 	e := pushEnv(t, b)
@@ -313,20 +315,27 @@ func TestPushDispatch(t *testing.T) {
 		t.Fatalf("opted-in push %+v", got[2])
 	}
 
-	// Gone: the next push drops the subscription.
-	b.mu.Lock()
-	b.status = http.StatusGone
-	b.mu.Unlock()
+	refuse := func(status int, reply string) {
+		b.mu.Lock()
+		b.status, b.reply = status, reply
+		b.mu.Unlock()
+	}
+	// A 401 that blames the server's own VAPID setup keeps the subscription: the next push goes.
+	refuse(http.StatusUnauthorized, `{"errno": 108, "message": "Invalid JWT"}`)
 	say(bob.Token, "@Ana_María one more")
 	waitPushes(t, b, 4)
-	// The send drops it once the 410 is back, after the browser counted the push.
+	// A 401 for another VAPID key, as after a key rotation: the next push drops the subscription.
+	refuse(http.StatusUnauthorized, `{"code": 401, "errno": 109, "message": "VAPID public key mismatch"}`)
+	say(bob.Token, "@Ana_María after a rotation")
+	waitPushes(t, b, 5)
+	// The send drops it once the 401 is back, after the browser counted the push.
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(pushTick) { // polls, bounded by the deadline
 		subs, err := e.st.PushSubscriptions(t.Context(), room.ID)
 		if err == nil && len(subs) == 0 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("a gone subscription stayed: %+v %v", subs, err)
+			t.Fatalf("a rejected subscription stayed: %+v %v", subs, err)
 		}
 	}
 }
