@@ -640,6 +640,35 @@ CREATE INDEX document_renames_message ON document_renames(message_id);
 -- 005-AC4: an imported mention keeps how its turn ended, as the turn history stays behind.
 ALTER TABLE message_turns ADD COLUMN final_status TEXT CHECK (final_status IN ('done', 'failed', 'stopped', 'cancelled'));
 ALTER TABLE message_turns ADD COLUMN final_line_id INTEGER REFERENCES messages(id) ON DELETE SET NULL;
+`, `
+-- 006-AC1 to 006-AC3: room starters. Built-ins belong to no profile; personal and instance ones
+-- cascade from the profile that owns or published them, like persona templates. A version is a
+-- manifest plus the blobs it names (document originals, skill tars), never changed once written.
+CREATE TABLE starters (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	builtin TEXT UNIQUE,
+	profile_id INTEGER REFERENCES profiles(id) ON DELETE CASCADE,
+	library TEXT NOT NULL CHECK (library IN ('builtin', 'personal', 'instance')),
+	created_at TEXT NOT NULL,
+	CHECK ((library = 'builtin') = (builtin IS NOT NULL) AND (library = 'builtin') = (profile_id IS NULL))
+);
+CREATE INDEX starters_profile ON starters(profile_id);
+CREATE TABLE starter_versions (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	starter_id INTEGER NOT NULL REFERENCES starters(id) ON DELETE CASCADE,
+	n INTEGER NOT NULL,
+	author TEXT NOT NULL,
+	manifest TEXT NOT NULL,
+	size INTEGER NOT NULL,
+	created_at TEXT NOT NULL,
+	UNIQUE (starter_id, n)
+);
+CREATE TABLE starter_files (
+	version_id INTEGER NOT NULL REFERENCES starter_versions(id) ON DELETE CASCADE,
+	name TEXT NOT NULL,
+	data BLOB NOT NULL,
+	PRIMARY KEY (version_id, name)
+);
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -666,6 +695,11 @@ func Open(path string) (*Store, error) {
 	}
 	// A preset whose shipped text changed gets a new version: rooms are offered it (002-AC14).
 	if err := ensurePresets(context.Background(), db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	// Likewise a built-in starter whose shipped content changed (006-AC2).
+	if err := ensureStarters(context.Background(), db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

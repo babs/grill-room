@@ -14,6 +14,15 @@
 <script src="/static/kit/ui.js" defer></script>
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/profile.js" defer></script>
+<script type="importmap">{"imports": {
+  "preact": "/static/esm/preact.js",
+  "preact/hooks": "/static/esm/preact-hooks.js",
+  "@preact/signals-core": "/static/esm/signals-core.js",
+  "@preact/signals": "/static/esm/signals.js",
+  "htm": "/static/esm/htm.js",
+  "htm/preact": "/static/esm/htm-preact.js"
+}}</script>
+<script type="module" src="/static/admin/profile-starters.js"></script>
 </head>
 <body class="home">
 <header class="app-header">
@@ -38,6 +47,7 @@
       <button type="button" id="room-new" class="btn-primary">+ New room</button>
     </div>
     <ul id="rooms" class="room-cards"></ul>
+    <section id="starters" aria-labelledby="starters-title"></section>
     <h2>This profile</h2>
     <dl class="profile-facts">
       <div><dt>Name</dt><dd id="profile-name"></dd></div>

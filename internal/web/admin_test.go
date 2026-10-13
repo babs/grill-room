@@ -334,8 +334,8 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 	// Every mutation action is exercised here; the admin.* ones, the room admins', the settings' and
 	// the archives' and the renames' have their own tests (TestAuditLogViewAPI, TestRoomAdmins,
 	// TestRoomSkillsAPI, TestProfileCreatesRooms, TestProfileMaxRoomsAPI, TestExportImportAPI,
-	// TestRenameParticipant, TestDeleteDocument).
-	covered := map[string]bool{ActionRoomAdminAdd: true, ActionRoomAdminRemove: true, ActionRoomSkillRemove: true, ActionSettings: true,
+	// TestRenameParticipant, TestDeleteDocument, TestStarterLibraryAPI).
+	covered := map[string]bool{ActionStarterPublish: true, ActionStarterDelete: true, ActionRoomAdminAdd: true, ActionRoomAdminRemove: true, ActionRoomSkillRemove: true, ActionSettings: true,
 		ActionProfileMaxRooms: true, ActionRoomExport: true, ActionRoomImport: true, ActionRename: true, ActionDocumentDelete: true,
 		ActionDocumentRestore: true}
 	for _, w := range want {
@@ -464,8 +464,9 @@ func TestAuditPurgeLoop(t *testing.T) {
 // the vendored modules are served.
 func TestAdminPage(t *testing.T) {
 	e := newEnv(t)
-	// The room page's admin panel is Preact too (004-AC19); its docs window is the same page (005-AC11).
-	for _, path := range []string{"/admin", "/r/some-room", "/r/some-room/docs", "/r/some-room/docs/some-doc"} {
+	// The room page's admin panel is Preact too (004-AC19); its docs window is the same page (005-AC11);
+	// the profile's starters are Preact (006).
+	for _, path := range []string{"/admin", "/r/some-room", "/r/some-room/docs", "/r/some-room/docs/some-doc", "/profile"} {
 		resp, err := http.Get(e.ts.URL + path) //nolint:noctx // test
 		if err != nil {
 			t.Fatal(err)
@@ -482,7 +483,7 @@ func TestAdminPage(t *testing.T) {
 		}
 	}
 	for _, p := range []string{"/static/esm/preact.js", "/static/esm/signals.js", "/static/esm/htm-preact.js", "/static/admin/admin.js",
-		"/static/admin/room-admin.js", "/static/admin/room-panel.js"} {
+		"/static/admin/room-admin.js", "/static/admin/room-panel.js", "/static/admin/starters.js", "/static/admin/profile-starters.js"} {
 		if code, _ := e.do(t, "GET", p, "", nil); code != http.StatusOK {
 			t.Errorf("%s: %d", p, code)
 		}

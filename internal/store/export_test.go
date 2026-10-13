@@ -671,6 +671,9 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"settings":                  server,
 		"admin_sessions":            server,
 		"audit_log":                 server,
+		"starters":                  server,
+		"starter_versions":          server,
+		"starter_files":             server,
 	}
 	rows, err := s.db.QueryContext(t.Context(), `SELECT m.name, group_concat(c.name, ' ') FROM sqlite_master m, pragma_table_xinfo(m.name) c
 		WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' GROUP BY m.name`)

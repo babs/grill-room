@@ -122,6 +122,12 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `GET /api/profile/skills` | profile cookie | the profile's personal skills and the shared ones it published, each at its latest version |
 | `POST /api/profile/skills` | profile cookie | upload a skill folder as an `application/zip` body, personal, or shared with `?scope=shared`; a name the profile already uploaded in that scope becomes its next version; 400 with the reason for an invalid zip, 409 for the same files as the latest version, a shared name another profile published, or past 20 skills per profile or 20 versions per skill |
 | `DELETE /api/profile/skills/{id}` | profile cookie | remove one of the profile's personal skills; 404 for a shared one |
+| `GET /api/profile/starters` | profile cookie | the room starters the profile sees: the built-ins, its own (`personal`) and the shared ones (`instance`), each at its latest version, with its author, version count and size |
+| `GET /api/profile/starters/{starter}` | profile cookie | one starter with the `manifest` of its version `?v=`, the latest by default: title, room name, agenda, fields, personas, skills, documents, auto-turn settings; 404 for another profile's personal starter |
+| `POST /api/profile/starters/{starter}/duplicate` | profile cookie | copy a starter the profile sees into its personal library as version 1; 409 past 50 starters per profile or the instance storage quota |
+| `POST /api/profile/starters/{starter}/publish` | profile cookie | move one of the profile's personal starters, with its versions, to the shared library, audited; 403 for a built-in or someone else's |
+| `DELETE /api/profile/starters/{starter}` | profile cookie | delete one of the profile's starters, personal or shared (audited); rooms created from it keep their copy |
+| `GET /api/admin/starters`, `DELETE /api/admin/starters/{starter}` | admin | list the shared starters, and remove one, audited; 403 for a built-in or a personal starter |
 | `GET /api/skills`, `DELETE /api/skills/{id}` | admin | every skill; remove one with its versions, and from every persona that had it |
 | `POST /api/profile/magic` | link token in the body | spends an emailed link: a sign-in link signs this browser in, a bind link binds the address to the profile this browser holds (403 from any other browser); 401 when unknown, used or expired, 409 when another profile holds the address; 404 without SMTP |
 | `GET /api/rooms/{room}` | participant | room, me, participants; `admin` marks the room admins |

@@ -378,3 +378,8 @@ input[aria-invalid=true] { border-color: var(--danger); }
 .menu .ico { margin-right: var(--sp-2); }
 /* A document's name stays on one line (008-AC14): the full name is its tooltip. */
 button.doc { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: var(--control-h); }
+/* Room starters (006): one row per starter, its text then its ⋯. */
+.starter-list { list-style: none; margin: 0; padding: 0; }
+.starter-list > li { display: flex; align-items: center; gap: var(--sp-2); min-height: 44px; padding: var(--sp-2) 0; border-bottom: 1px solid var(--border); }
+.starter-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.starter-text .hint { margin: 0; overflow-wrap: anywhere; }
