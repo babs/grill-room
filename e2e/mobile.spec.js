@@ -151,6 +151,57 @@ for (const name of ['iPhone 15', 'Pixel 7']) {
   });
 }
 
+// 002-AC39: a scroll up right after a viewport resize keeps a pinned chat at the newest line; any
+// other scroll up unpins it.
+test('a resize does not unpin the chat', async ({ browser, request }) => {
+  const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Phone pin' } })).json();
+  const bob = await joinAPI(request, room.id, 'Bob');
+  for (let i = 0; i < 40; i++) await post(request, room.id, bob, `line ${i}`);
+  const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
+  const page = await (await browser.newContext({ viewport: { width: 390, height: 844 } })).newPage();
+  await page.goto(new URL(inv.url).pathname + new URL(inv.url).hash);
+  await page.getByLabel('Your name').fill('Alice');
+  await page.getByRole('button', { name: 'Join the room' }).click();
+  await expect(page.locator('#messages')).toContainText('Alice joined');
+  const gap = () => page.evaluate(() => messages.lastElementChild.getBoundingClientRect().bottom - messages.getBoundingClientRect().bottom);
+  await expect.poll(gap).toBeLessThanOrEqual(1);
+  const pinned = () => page.evaluate(() => pinned);
+  const scrollUp = async (target, between) => {
+    await page.evaluate(({ target, between }) => {
+      if (target) globalThis[target].dispatchEvent(new Event('resize'));
+      if (between) messages.dispatchEvent(new Event(between));
+      messages.scrollTop -= 300;
+    }, { target, between });
+  };
+  const repin = async () => {
+    await page.evaluate(() => { messages.scrollTop = messages.scrollHeight; });
+    await expect.poll(pinned).toBe(true);
+  };
+  // No resize: a scroll up unpins, and a new line leaves the reader where they are.
+  await page.evaluate(() => { resizedAt = -Infinity; });
+  await scrollUp();
+  await expect.poll(pinned, 'a scroll up with no resize').toBe(false);
+  await post(request, room.id, bob, 'one more');
+  await expect(page.locator('#messages')).toContainText('one more');
+  expect(await gap()).toBeGreaterThan(250);
+  for (const target of ['window', 'visualViewport']) {
+    await repin();
+    await scrollUp(target);
+    await expect.poll(gap, target + ' resize').toBeLessThanOrEqual(1);
+    expect(await pinned(), target + ' resize').toBe(true);
+  }
+  // The reader's own input after the resize, or a pinch zoom, leaves the scroll up theirs.
+  for (const between of ['wheel', 'touchstart', 'keydown']) {
+    await repin();
+    await scrollUp('window', between);
+    await expect.poll(pinned, between).toBe(false);
+  }
+  await repin();
+  await page.evaluate(() => Object.defineProperty(visualViewport, 'scale', { get: () => 2, configurable: true }));
+  await scrollUp('visualViewport');
+  await expect.poll(pinned, 'pinch zoom').toBe(false);
+});
+
 // 002-AC15 on a phone: the persona buttons and the personas panel fit the screen, the panel scrolls
 // to every persona, and an edit made there is saved.
 for (const name of ['iPhone 15', 'Pixel 7']) {

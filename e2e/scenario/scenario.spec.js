@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
 import { launch, joinAudio, dropProfiles, admin, audioItem } from '../voice/helpers.js';
+import { snoozePush, snoozeKey } from '../quiet-push.js';
 import { upload, annotateSelection, pairDaemon, liveDaemon, logLines, messagesRequests, removeSandbox, adminAPI } from '../helpers.js';
 
 // The scenario driver (004-AC16; the library's lab runs, 004-AC17, go through it): it plays the
@@ -138,6 +139,7 @@ test(plan.name, async ({ request }) => {
       browsers[name] = await launch(plan.speakers.includes(name) ? join(micDir, `${name}.wav`) : undefined);
       const inv = await (await request.post(`${api}/invites`, { headers: admin })).json();
       const ctx = await browsers[name].newContext();
+      await ctx.addInitScript(snoozePush, snoozeKey);
       await ctx.addInitScript(probe);
       const page = await ctx.newPage();
       const url = new URL(inv.url);
@@ -301,7 +303,7 @@ test(plan.name, async ({ request }) => {
             }
           }
           expect(clicked, `a host page offers "${label}"`).toBe(true);
-          await expect(first.locator('#participants li', { hasText: step.to }).locator('.host-badge')).toHaveText('host');
+          await expect(first.locator('#participants li', { hasText: step.to }).locator('.host-badge')).toHaveAttribute('aria-label', 'host');
           break;
         }
         default:

@@ -66,9 +66,16 @@
   <button type="button" id="invite-open">Invite people</button>
   <button type="button" id="manage-open" hidden>Room settings</button>
   <button type="button" id="personas-open">Personas</button>
-  <a id="docs-window-menu">Open documents in a new window</a>
+  <a id="docs-window-menu"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg> Open documents in a new window</a>
   <button type="button" id="host-open" hidden>Run the AI on my computer</button>
 </div>
+<div id="doc-menu" class="menu" popover>
+  <a id="doc-original" hidden>Download</a>
+  <a id="doc-window"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg> Open in a new window</a>
+  <button type="button" id="doc-rename">Rename</button>
+  <button type="button" id="doc-delete" class="danger" hidden>Delete</button>
+</div>
+<div id="person-menu" class="menu" popover></div>
 <div id="msg-menu" class="menu msg-menu" popover>
   <button type="button" id="msg-edit">Edit</button>
   <button type="button" id="msg-delete">Delete</button>
@@ -173,12 +180,32 @@
   <label id="push-all-label" hidden><input type="checkbox" id="push-all"> Also every other line</label>
   <p id="push-status" class="said" role="status"></p>
 </dialog>
+<!-- The push explainer (008-AC10): the only way to the browser's permission prompt. -->
+<dialog id="push-explain" class="sheet" aria-labelledby="push-explain-title" aria-describedby="push-explain-text">
+  <div class="sheet-head">
+    <!-- autofocus: an offer that opens under a typing hand must not take a keystroke as an answer. -->
+    <h2 id="push-explain-title" tabindex="-1" autofocus>Turn on notifications?</h2>
+    <button type="button" class="btn-icon btn-ghost close" aria-label="Close">✕</button>
+  </div>
+  <p id="push-explain-text">Get notified when someone mentions you directly, even when this tab is closed.</p>
+  <p class="hint">Your browser will ask for permission next.</p>
+  <div class="actions">
+    <button type="button" id="push-later" class="btn-secondary">Not now</button>
+    <button type="button" id="push-yes" class="btn-primary">Turn on notifications</button>
+  </div>
+</dialog>
 <dialog id="host-agent" class="sheet" aria-labelledby="host-title">
   <div class="sheet-head">
     <h2 id="host-title">Run the AI on my computer</h2>
     <button type="button" class="btn-icon btn-ghost close" aria-label="Close">✕</button>
   </div>
   <p>The AI host app runs this room's personas on your computer, with your Claude subscription. It needs Docker.</p>
+  <h3>Already have the app?</h3>
+  <p>Open its page, Rooms, and paste this room's link under "Add a room".</p>
+  <p class="copy-row"><input id="host-room-link" readonly aria-label="This room's link">
+    <button type="button" id="host-room-copy">Copy link</button></p>
+  <div id="host-install" hidden>
+  <h3>Not yet? Install it</h3>
   <label>System <select id="host-os">
     <option value="linux">Linux</option>
     <option value="darwin">macOS</option>
@@ -196,6 +223,7 @@
     <pre id="host-oneliner"></pre>
     <button type="button" id="host-copy">Copy</button>
   </details>
+  </div>
 </dialog>
 <dialog id="recovery" class="sheet" aria-labelledby="recovery-title">
   <div class="sheet-head">
@@ -229,7 +257,10 @@
   </form>
 </dialog>
 <section id="pairing" aria-labelledby="pairing-title" hidden>
-  <h2 id="pairing-title">Connect the AI host app</h2>
+  <div class="sheet-head">
+    <h2 id="pairing-title">Connect the AI host app</h2>
+    <button type="button" id="pairing-close" class="btn-icon btn-ghost" aria-label="Close">✕</button>
+  </div>
   <p id="pairing-text"></p>
   <div class="actions" id="pairing-actions">
     <button type="button" id="pairing-deny" class="btn-secondary">Deny</button>
@@ -240,7 +271,8 @@
   <aside id="side">
     <section id="people-pane" aria-labelledby="people-title">
       <div class="pane-head">
-        <h2 id="people-title">People</h2>
+        <button type="button" id="people-fold" class="fold" aria-controls="participants" aria-expanded="true" aria-label="People"></button>
+        <h2 id="people-title"><span class="sec-icon" aria-hidden="true">👥</span> <span class="sec-label">People</span></h2>
       </div>
       <h3 class="people">In the room</h3>
       <ul id="participants"></ul>
@@ -248,9 +280,10 @@
     </section>
     <section id="docs-pane" aria-labelledby="docs-title">
       <div class="pane-head">
-        <h2 id="docs-title">Documents</h2>
-        <a id="docs-window" class="btn btn-icon btn-ghost" aria-label="Open documents in a new window" title="Open documents in a new window">⧉</a>
-        <button type="button" id="upload-open" class="btn-icon" aria-label="Add documents" title="Add documents">+</button>
+        <button type="button" id="docs-fold" class="fold" aria-controls="documents" aria-expanded="true" aria-label="Documents"></button>
+        <h2 id="docs-title"><span class="sec-icon" aria-hidden="true">📄</span> <span class="sec-label">Documents</span></h2>
+        <a id="docs-window" class="head-action" aria-label="Open documents in a new window" title="Open documents in a new window"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></a>
+        <button type="button" id="upload-open" class="head-action" aria-label="Add documents" title="Add documents">+</button>
       </div>
       <input type="file" id="upload-input" multiple hidden accept=".md,.markdown,.html,.htm,.pdf,.png,.jpg,.jpeg,.gif,.webp,.svg,.docx,.odt,.pptx">
       <ul id="documents"></ul>
@@ -259,17 +292,17 @@
       <div class="drop-overlay" aria-hidden="true">Drop to add to the room</div>
     </section>
   </aside>
+  <!-- Resize handles (008-AC2, 008-AC3): room.js drags them and stores the width. -->
+  <div id="side-handle" class="pane-handle" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="side" aria-label="Resize the side panel"></div>
   <section id="viewer" hidden>
     <div class="viewer-head">
       <button type="button" id="doc-close" class="btn-icon btn-ghost" aria-label="Close document" title="Close">✕</button>
       <div class="doc-title"><h2 id="doc-name"></h2><span id="doc-meta"></span></div>
       <div class="doc-tools">
-        <a id="doc-original" class="btn btn-icon btn-ghost" aria-label="Download" title="Download" hidden>⤓</a>
-        <a id="doc-window" class="btn btn-icon btn-ghost" aria-label="Open in a new window" title="Open in a new window">⧉</a>
-        <button type="button" id="doc-rename" class="btn-icon btn-ghost" aria-label="Rename" title="Rename">✎</button>
-        <button type="button" id="doc-delete" class="btn-icon btn-ghost danger" aria-label="Delete" title="Delete" hidden>🗑</button>
         <button type="button" id="annot-toggle" class="btn-ghost" aria-pressed="false" aria-controls="annotations" title="Show or hide the annotations">💬 Notes <span id="annot-count"></span></button>
+        <button type="button" id="doc-width" class="btn-icon btn-ghost" hidden>↔</button>
         <button type="button" id="chat-fold" class="btn-icon btn-ghost" aria-pressed="false" title="Fold the chat away to read the document">⇥</button>
+        <button type="button" id="doc-more" class="btn-icon btn-ghost" popovertarget="doc-menu" aria-label="Document actions" title="Document actions">⋯</button>
       </div>
     </div>
     <form id="doc-rename-form" class="row" hidden>
@@ -284,7 +317,10 @@
     </form>
     <div class="viewer-body">
       <div id="doc-frame"></div>
+      <div id="notes-handle" class="pane-handle" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="annotations" aria-label="Resize the notes"></div>
       <aside id="annotations" aria-label="Annotations">
+        <button type="button" id="notes-back" class="btn-secondary">← Back to the document</button>
+        <div class="pane-head"><h2 id="notes-title"><span class="sec-icon" aria-hidden="true">💬</span> <span class="sec-label">Notes</span></h2></div>
         <div class="annot-tools">
           <button type="button" id="annot-doc">Comment on the document</button>
           <button type="button" id="annot-pick" aria-pressed="false" hidden>Annotate an element</button>
@@ -304,6 +340,7 @@
       </aside>
     </div>
   </section>
+  <div id="viewer-empty"><p class="empty">Pick a document to read it here.</p></div>
   <section class="chat">
     <button type="button" id="chat-unfold" class="btn-icon btn-ghost" aria-label="Show the chat" title="Show the chat">💬</button>
     <ol id="messages" aria-live="polite"></ol>

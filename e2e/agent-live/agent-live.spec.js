@@ -71,7 +71,7 @@ test('two personas, two real daemons: takeover resumes each persona\'s session',
     await pairDaemon(bob, b);
     a.proc.kill('SIGTERM');
     await a.exited;
-    await expect(bob.locator('#participants li', { hasText: 'Bob' }).locator('.host-badge')).toHaveText('host', { timeout: 30_000 });
+    await expect(bob.locator('#participants li', { hasText: 'Bob' }).locator('.host-badge')).toHaveAttribute('aria-label', 'host', { timeout: 30_000 });
     await expect(bob.locator('button.persona[data-name="Grill"] .led')).toHaveAttribute('aria-label', 'Grill ready', { timeout: 30_000 });
 
     const marker = 'Memory check';

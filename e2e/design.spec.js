@@ -68,6 +68,20 @@ test('touch targets at phone width', async ({ browser, request, baseURL }) => {
   await expect(alice.locator('#viewer')).toBeVisible();
   expect(await smallTargets(alice), 'document open').toEqual([]);
   await shot(alice, 'after-phone-doc');
+  // 008-AC12: the document's ⋯ menu and its Notes pane.
+  await alice.locator('#doc-more').click();
+  expect(await smallTargets(alice), 'document menu').toEqual([]);
+  await alice.keyboard.press('Escape');
+  await alice.getByRole('button', { name: /Notes/ }).click();
+  expect(await smallTargets(alice), 'notes pane').toEqual([]);
+  await alice.getByRole('button', { name: '← Back to the document' }).click();
+  // 008-AC12: the push explainer.
+  await menuItem(alice, 'Notifications', 'me');
+  await alice.locator('#push-toggle').click();
+  await expect(alice.locator('#push-explain')).toBeVisible();
+  expect(await smallTargets(alice), 'push explainer').toEqual([]);
+  await alice.keyboard.press('Escape');
+  await alice.keyboard.press('Escape');
   await alice.locator('#doc-close').click();
 
   // Room settings, as a room admin.
@@ -277,7 +291,12 @@ test('phone tab bar', async ({ browser, request }) => {
   expect(Math.round(box.y + box.height)).toBe(phone.height);
   await expect(alice.locator('.chat')).toBeVisible();
   await expect(alice.locator('#side')).toBeHidden();
-  await alice.locator('#messages').evaluate((m) => { m.scrollTop = 200; });
+  // A scroll right after the viewport resize above counts as the layout's: repeat it until it unpins.
+  await expect.poll(() => alice.evaluate(async () => {
+    messages.scrollTop = 200;
+    await new Promise((r) => requestAnimationFrame(() => setTimeout(r)));
+    return pinned;
+  })).toBe(false);
   await bar.getByRole('button', { name: /Docs/ }).click();
   await expect(alice.locator('#docs-pane')).toBeVisible();
   await expect(alice.locator('#people-pane')).toBeHidden();
@@ -451,7 +470,7 @@ test('participant names never break mid-word, roles stay two badges', async ({ b
   expect((await request.put(`/api/rooms/${room.id}/admins/${me.me.id}`, { headers: admin })).status()).toBe(204);
   await alice.reload();
   const row = alice.locator('#participants li').first();
-  await expect(row.locator('.badge')).toHaveCount(2);
+  await expect(row.locator('.tag:not(.blank):is(.role-you, .role-admin)')).toHaveCount(2);
   const name = row.locator('.name');
   const [lines, clipped] = await name.evaluate((e) => [Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight)), e.scrollWidth > e.clientWidth]);
   expect(lines).toBe(1);
@@ -459,4 +478,35 @@ test('participant names never break mid-word, roles stay two badges', async ({ b
   await expect(name).toHaveCSS('text-overflow', 'ellipsis');
   await menuItem(alice, 'Personas');
   await expect(alice.locator('#personas')).toBeVisible();
+});
+
+// 008-AC12: the new controls at 1440 px share the one control height, the handles show the focus
+// ring, and nothing new moves under reduced motion.
+test('docs panes follow the design rules', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.setViewportSize(desktop);
+  await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
+  await expect(alice.locator('#viewer')).toBeVisible();
+  const heights = await alice.locator('.viewer-head button:visible').evaluateAll((els) => els.map((e) => [e.id, Math.round(e.getBoundingClientRect().height)]));
+  expect(heights.map(([id]) => id)).toEqual(expect.arrayContaining(['doc-more', 'doc-width']));
+  expect(new Set(heights.map(([, h]) => h)), JSON.stringify(heights)).toEqual(new Set([36]));
+  // The drawer headers' small actions: one 24 px size (008-AC14).
+  const heads = await alice.locator('.pane-head :is(button, a):visible').evaluateAll((els) => els.map((e) => [e.id, Math.round(e.getBoundingClientRect().height)]));
+  expect(heads.map(([id]) => id)).toEqual(['people-fold', 'docs-fold', 'docs-window', 'upload-open']);
+  expect(new Set(heads.map(([, h]) => h)), JSON.stringify(heads)).toEqual(new Set([24]));
+  await alice.emulateMedia({ reducedMotion: 'reduce' });
+  for (const id of ['side-handle', 'notes-handle']) {
+    await alice.locator('#' + id).focus();
+    const s = await alice.locator('#' + id).evaluate((e) => { const c = getComputedStyle(e); return [c.outlineStyle, c.outlineWidth, c.transitionDuration]; });
+    expect(s, id).toEqual(['solid', '2px', '0s']);
+  }
+  await alice.locator('#people-fold').click();
+  await alice.locator('#docs-fold').click();
+  expect(await alice.locator('#side').evaluate((e) => getComputedStyle(e).transitionDuration)).toBe('0s');
+  await shot(alice, 'after-desktop-rail');
+  await menuItem(alice, 'Notifications', 'me');
+  await alice.locator('#push-toggle').click();
+  await expect(alice.locator('#push-explain')).toBeVisible();
+  const sheet = await alice.locator('#push-explain button:visible').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)));
+  expect(new Set(sheet)).toEqual(new Set([36]));
 });
