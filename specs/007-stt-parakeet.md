@@ -75,7 +75,7 @@ The worker transcribes with parakeet-ultra. Lines arrive in about half the time,
 ### Rollout
 - [x] **AC15** With `APP_ENGINE=whisper`, the same image runs today's faster-whisper `small` path, `APP_GLOSSARY_PROMPT` included, and its tests stay green. It is kept for one release.
 - [ ] **AC16** A lab A/B run replays the S10 corpora (SUMM-RE meetings, the tech talk, the 38 Piper lines) through the worker's own segmenter, engines and filter, in a Job at the 4-CPU limit, with S10b scoring. With `parakeet`:
-  - meetings WER ≤ 0.25, talk ≤ 0.15, Piper English lines ≤ 0.08, each at or below `whisper` on the same run;
+  - meetings WER ≤ 0.25 and talk ≤ 0.15, each at or below `whisper` on the same run; Piper English lines ≤ 0.08;
   - English leak ≤ 0.01 on meetings and talk;
   - p95 latency ≤ 4 s for one talker, ≤ 5 s for two, and for four a target of 8 s with 10 s as the failure bound, with no drop;
   - peak pod memory ≤ 2.7 GiB.
@@ -137,6 +137,16 @@ None. The STT heartbeat gains in-memory `engine` and `glossary` fields; the drop
 - Attribution: the room's audio menu plus a third-party notices section in the docs.
 - Four-talker latency: p95 8 s is the target, 10 s (the product limit) is the failure bound.
 - Memory: a 3 Gi request fits the lab worker nodes (24-43 % of memory requested at the time of writing).
+
+## Decisions (A/B review, user, 2026-10-13)
+
+- The worker dated every cut 800 ms early, as if a pause had ended it. A 15 s forced cut has no pause, so its latency was overstated, in `grill_stt_line_latency_seconds` too. Fix that, then measure again with the one-talker bound unchanged (≤ 4 s).
+- Piper English lines need only WER ≤ 0.08, no longer "at or below whisper": the set is synthetic, and parakeet wins on real speech (spikes/S007-ab.md).
+
+## Follow-ups (not built in 007)
+
+- A babble filter on per-token confidence: parakeet gives no confidence the AC3 filter can use, and it turns TTS glitches into Latin-letter babble that posts (`stt/tests/fixtures/voices.json`). transcribe.cpp exposes a probability per token.
+- AC18's manual phone check stays open for the user. Its automated equivalent (`e2e/voice/talkers.spec.js` on the lab) passed.
 
 ## Decisions (grill, user, 2026-10-13)
 
