@@ -2562,12 +2562,16 @@ async function pushSubscription(create) {
   if (!res.ok) throw new Error('HTTP ' + res.status);
   const key = Uint8Array.from(atob((await res.json()).key.replaceAll('-', '+').replaceAll('_', '/')), (c) => c.charCodeAt(0));
   const held = sub && sub.options.applicationServerKey;
-  if (held && key.join() !== new Uint8Array(held).join()) {
+  if (sub && held && key.join() !== new Uint8Array(held).join()) {
     // Made with another VAPID key, as after the instance's key changed: push services refuse it.
     await sendJSON('DELETE', api + '/push', { subscription: { endpoint: sub.endpoint } });
     await sub.unsubscribe();
-  } else if (sub) return sub;
-  return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    const fresh = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    // The other rooms turned on in this browser held the old one too.
+    reg.active.postMessage({ resubscribe: fresh.toJSON() });
+    return fresh;
+  }
+  return sub || reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
 }
 
 async function savePush() {

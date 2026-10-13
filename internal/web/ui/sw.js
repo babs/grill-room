@@ -65,3 +65,7 @@ async function resubscribe(old, sub) {
   })));
 }
 self.addEventListener('pushsubscriptionchange', (e) => e.waitUntil(resubscribe(e.oldSubscription, e.newSubscription)));
+// A page that subscribed again, as after a VAPID key change, hands the new subscription over.
+self.addEventListener('message', (e) => {
+  if (e.data && e.data.resubscribe) e.waitUntil(resubscribe(null, { toJSON: () => e.data.resubscribe }));
+});

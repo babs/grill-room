@@ -99,14 +99,19 @@ test('a subscription with a stale VAPID key is made again', async ({ browser, re
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
   await fakePush(alice);
   const old = 'https://fcm.googleapis.com/fcm/send/old';
-  await alice.evaluate(([room, old]) => {
+  // Another room of this browser, turned on with every line: it gets the new subscription too.
+  await alice.evaluate(async ([room, old]) => {
     localStorage.setItem('grill-room-push:' + room, '1');
     localStorage.setItem('fake-push', JSON.stringify({ endpoint: old, key: [4, ...Array(64).fill(7)] }));
+    await (await caches.open('grill-room-push')).put('/rooms', Response.json({ [room]: false, other: true }));
   }, [room.id, old]);
+  const fromWorker = [];
+  alice.context().on('request', (r) => { if (r.serviceWorker()) fromWorker.push({ url: new URL(r.url()).pathname, body: r.postDataJSON() }); });
 
   const seen = await pushRequests(alice, () => alice.reload());
   const fresh = await alice.evaluate(() => JSON.parse(localStorage.getItem('fake-push')));
   expect(seen).toEqual([{ method: 'DELETE', endpoint: old }, { method: 'PUT', endpoint: fresh.endpoint }]);
+  await expect.poll(() => fromWorker.find((r) => r.url === '/api/rooms/other/push')?.body).toMatchObject({ subscription: { endpoint: fresh.endpoint }, all_messages: true });
   expect(await alice.evaluate(() => window.pushCalls)).toEqual(['unsubscribe', 'subscribe']);
   const { key } = await (await alice.request.get(`/api/rooms/${room.id}/push`)).json();
   expect(Buffer.from(fresh.key).toString('base64url')).toBe(key);
