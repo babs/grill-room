@@ -1,6 +1,6 @@
 # 007 — STT engine: parakeet-ultra
 
-**Status**: in progress (AC18: the phone check is manual and open)
+**Status**: shipped (AC18: the phone check is manual and open)
 **Requested by**: babs
 **Date**: 2026-10-13
 **Context**: spikes S10 (models), S10b (workstation bench), S10c (browser) and S10d (lab validation at the 4-CPU limit)
