@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import { quietPush } from '../quiet-push.js';
 
 // A room exported from the compose stack (`make dev-up`) and imported on the lab deployment
 // (`make k8s-apply`), then the reverse, with one real haiku turn on each side: this suite spends
@@ -14,5 +15,5 @@ export default defineConfig({
   timeout: 600_000,
   workers: 1,
   retries: 0,
-  use: { channel: 'chrome' },
+  use: { channel: 'chrome', storageState: quietPush(`https://grill-room.${process.env.DEV_DOMAIN}`, `https://grill-room.${process.env.K8S_DOMAIN}`) },
 });

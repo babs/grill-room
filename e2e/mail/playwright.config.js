@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import { quietPush } from '../quiet-push.js';
 
 // Magic links against a throwaway mailpit, with a short link lifetime so expiry fits in a test.
 // With GRILL_ROOM_E2E_LAB=1, against the lab deployment and its mailpit instead: K8S_DOMAIN,
@@ -24,7 +25,7 @@ export default defineConfig({
   testDir: '.',
   timeout: 60_000,
   workers: 1,
-  use: { baseURL, channel: 'chrome' },
+  use: { baseURL, channel: 'chrome', storageState: quietPush(baseURL) },
   // Under e2e/test-results/, which git ignores: traces hold invite and recovery links.
   outputDir: '../test-results/mail',
   globalTeardown: lab ? undefined : './teardown.js',

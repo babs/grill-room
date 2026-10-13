@@ -8,6 +8,7 @@ const api = '/api/rooms/' + encodeURIComponent(roomID);
 const roomPath = '/r/' + encodeURIComponent(roomID);
 const docsMode = location.pathname.split('/')[3] === 'docs';
 if (docsMode) document.body.classList.add('docs-window');
+const phone = () => matchMedia('(max-width: 40rem)').matches;
 const messages = $('messages');
 const sendForm = $('send');
 const bodyInput = $('body');
@@ -64,7 +65,17 @@ async function loadRoom() {
   if (!res.ok) throw new Error('room: HTTP ' + res.status);
   wasIn = true;
   const data = await res.json();
-  $('room-name').textContent = data.room.name;
+  // The docs window's room name leads back to the room (008-AC6). Each room event reloads this:
+  // the link is made once, so its focus and anything holding it survive.
+  const heading = $('room-name');
+  let link = heading.querySelector('a');
+  if (docsMode && !link) {
+    link = document.createElement('a');
+    link.href = roomPath;
+    link.title = 'Back to the room';
+    heading.replaceChildren(link);
+  }
+  (link || heading).textContent = data.room.name;
   roomName = data.room.name;
   showTitle();
   // Someone else renamed this participant (005-AC21): a rename of their own sets myName first.
@@ -100,12 +111,23 @@ function showMe() {
 const initials = (name) => name.trim().split(/\s+/).slice(0, 2).map((w) => [...w][0] || '').join('').toUpperCase();
 
 // The list shrinks under a keyboard, a toolbar or a wrapping header: keep the newest message in
-// view when it was. Only a scroll up unpins, as scroll events land after the layout changed.
+// view when it was. A scroll up unpins, as scroll events land after the layout changed, except
+// right after a viewport resize: a list that grew clamps its scroll down, and when it shrinks back
+// within the frame no resize of the list is observed to pin it again.
 let pinned = true;
 let lastTop = 0;
+let resizedAt = -Infinity;
+// A pinch zoom is no layout change, and a reader's own wheel, touch or key ends the window.
+for (const target of [window, window.visualViewport]) {
+  target?.addEventListener('resize', () => { if (!window.visualViewport || Math.abs(visualViewport.scale - 1) <= 0.01) resizedAt = performance.now(); });
+}
+for (const ev of ['wheel', 'touchstart', 'keydown']) messages.addEventListener(ev, () => { resizedAt = -Infinity; }, { passive: true });
 messages.addEventListener('scroll', () => {
   if (messages.scrollTop + messages.clientHeight >= messages.scrollHeight - 40) pinned = true;
-  else if (messages.scrollTop < lastTop) pinned = false;
+  else if (messages.scrollTop < lastTop) {
+    if (pinned && performance.now() - resizedAt < 1000) messages.scrollTop = messages.scrollHeight;
+    else pinned = false;
+  }
   lastTop = messages.scrollTop;
 });
 new ResizeObserver(() => { if (pinned) messages.scrollTop = messages.scrollHeight; }).observe(messages);
@@ -317,23 +339,29 @@ function showNotice(text) {
 }
 $('notice-close').addEventListener('click', () => { $('notice').hidden = true; });
 
-// Self-rename (005-AC1), with the validation of a join; the option also names their profile.
-$('rename-open').addEventListener('click', () => {
-  $('rename-name').value = myName;
+// Self-rename (005-AC1), with the validation of a join; the option also names their profile. A
+// room admin renames someone else from their ⋯ (008-AC13): renameTarget is that participant.
+let renameTarget = null;
+function openRename(p) {
+  renameTarget = p;
+  $('rename-title').textContent = p ? 'Rename ' + p.name : 'Your name in this room';
+  $('rename-name').value = p ? p.name : myName;
   $('rename-profile').checked = false;
-  $('rename-profile-label').hidden = !hasProfile;
+  $('rename-profile-label').hidden = !!p || !hasProfile;
   $('rename-status').textContent = '';
   $('rename').showModal();
   $('rename-name').select();
-});
+}
+$('rename-open').addEventListener('click', () => openRename(null));
 $('rename-cancel').addEventListener('click', () => $('rename').close());
 $('rename-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const name = $('rename-name').value.trim();
-  sendJSON('PUT', api + '/participants/' + myID + '/name', { name, profile: $('rename-profile').checked }).then((done) => {
+  const other = renameTarget;
+  sendJSON('PUT', api + '/participants/' + (other ? other.id : myID) + '/name', other ? { name } : { name, profile: $('rename-profile').checked }).then((done) => {
     if (!done) return;
     // Not an outside rename: no notice when loadRoom reads the new name.
-    myName = '';
+    if (!other) myName = '';
     $('rename').close();
     toast('Renamed');
     return loadRoom();
@@ -650,7 +678,8 @@ $('strip-more').addEventListener('click', () => {
 
 // Menus are popovers (005-AC32): the browser closes them on a click outside and on Escape; picking
 // an item closes them too.
-for (const menu of document.querySelectorAll('.menu')) {
+// The document's menu has its own (008-AC8).
+for (const menu of document.querySelectorAll('.menu:not(#doc-menu, #person-menu)')) {
   menu.addEventListener('click', (e) => { if (e.target.closest('button, a')) menu.hidePopover(); });
 }
 for (const b of document.querySelectorAll('dialog .close')) b.addEventListener('click', () => b.closest('dialog').close());
@@ -783,7 +812,8 @@ async function loadDocuments() {
     b.type = 'button';
     b.className = 'doc';
     b.textContent = d.name;
-    b.title = describe(d);
+    // One line with an ellipsis: the full name in the tooltip (008-AC14).
+    b.title = d.name + '\n' + describe(d);
     b.addEventListener('click', () => {
       showDocument(d.id).catch(console.error);
     });
@@ -808,7 +838,8 @@ function option(value, text) {
 }
 
 // showDocument opens a document; refresh keeps the revisions picked unless the latest was shown.
-async function showDocument(id, refresh) {
+// A deep link pushes no history entry: Chrome lets Back skip an entry pushed before any tap.
+async function showDocument(id, refresh, deepLink) {
   const res = await fetch(docURL(id, ''));
   if (!res.ok) throw new Error('document: HTTP ' + res.status);
   const { document: d, revisions } = await res.json();
@@ -816,14 +847,22 @@ async function showDocument(id, refresh) {
   if (refresh && (!openDoc || openDoc.id !== id)) return;
   const followLatest = !refresh || $('rev').value === String(openDoc.revisions);
   const keepFrom = refresh ? $('rev-from').value : '';
+  const opening = !refresh && !openDoc;
   openDoc = d;
   $('viewer').hidden = false;
   // A document opened from the chat (a single upload, a link) shows in the phone's Docs tab.
-  if (!refresh && !docsMode && matchMedia('(max-width: 40rem)').matches) showTab('docs');
+  if (!refresh && !docsMode && phone()) showTab('docs');
   $('doc-window').href = roomPath + '/docs/' + encodeURIComponent(d.id);
-  // The docs window's address follows the document shown: a deep link to reload or share.
-  if (docsMode) history.replaceState(null, '', $('doc-window').href);
+  // The docs window's address follows the document shown: a deep link to reload or share. On a
+  // phone the document is a step Back undoes (008-AC9).
+  const url = docsMode ? $('doc-window').href : location.href;
+  if (opening && phone() && !deepLink) {
+    history.pushState({ pane: 'doc' }, '', url);
+    docPushed = true;
+  } else if (docsMode) history.replaceState(history.state, '', url);
+  $('doc-width').hidden = d.format !== 'md';
   $('doc-name').textContent = d.name;
+  $('doc-name').title = d.name;
   $('doc-delete').hidden = !meAdmin;
   $('doc-meta').textContent = d.kind === 'upload' && d.format === 'md' && !/\.(md|markdown)$/i.test(d.name)
     ? describe(d) + ', shown as its Markdown copy'
@@ -866,6 +905,8 @@ function renderDocument() {
     } else {
       el.setAttribute('sandbox', 'allow-scripts');
       const q = new URLSearchParams();
+      // The first paint at the chosen width; later changes go to the frame as a message (008-AC7).
+      if (d.format === 'md' && mdWidth !== 'narrow') q.set('width', mdWidth);
       if (d.kind === 'agent') {
         q.set('rev', $('rev').value);
         if ($('rev-from').value) q.set('from', $('rev-from').value);
@@ -909,14 +950,48 @@ $('doc-delete').addEventListener('click', () => {
 
 $('rev').addEventListener('change', renderDocument);
 $('rev-from').addEventListener('change', renderDocument);
+// On a phone the document and Notes are history entries: closing one goes Back, so Back and ✕
+// stay in step (008-AC9).
+// The pane closes at once and the flags clear before going Back: a second tap meanwhile finds
+// nothing to step back from.
 $('doc-close').addEventListener('click', () => {
+  const steps = (docPushed ? 1 : 0) + (notesPushed ? 1 : 0);
+  docPushed = false;
+  notesPushed = false;
+  closeDocument();
+  if (steps) history.go(-steps);
+});
+function closeDocument() {
   if (docsMode) history.replaceState(null, '', roomPath + '/docs');
+  notesPane(false);
   openDoc = null;
   $('viewer').hidden = true;
   $('doc-frame').replaceChildren();
   closeNew();
   annotations = [];
   renderAnnotations();
+}
+window.addEventListener('popstate', (e) => {
+  const pane = e.state?.pane;
+  let closed = false;
+  if (notesPushed && pane !== 'notes') {
+    notesPushed = false;
+    notesPane(false);
+    closed = true;
+  }
+  if (docPushed && !pane) {
+    docPushed = false;
+    closeDocument();
+    closed = true;
+  } else if (pane === 'notes' && docPushed && openDoc) {
+    notesPushed = true;
+    notesPane(true);
+  } else if (pane && !(pane === 'doc' ? docPushed : notesPushed)) {
+    // Forward onto the step of a pane since closed, or one from before a reload: stay put.
+    history.replaceState(null, '', docsMode && !openDoc ? roomPath + '/docs' : location.href);
+  }
+  // Back from the phone's Chat or People tab steps past the hidden panes: it leaves the room.
+  if (closed && !docsMode && roomTab !== 'docs') history.back();
 });
 
 // Annotations. The document frame runs untrusted scripts, so it only ever proposes: an anchor to
@@ -965,6 +1040,7 @@ window.addEventListener('message', (ev) => {
   switch (msg.type) {
     case 'gr:ready':
       frameReady = true;
+      if (openDoc?.format === 'md') postToFrame({ type: 'gr:width', width: mdWidth });
       sendAnnotations();
       break;
     case 'gr:anchor':
@@ -973,7 +1049,7 @@ window.addEventListener('message', (ev) => {
       if (canCreate() && !(newAnchor !== undefined && $('annot-body').value.trim())) openNew(msg.anchor);
       break;
     case 'gr:open':
-      showAnnotations(true);
+      openNotes();
       focusItem(msg.id, false);
       break;
     case 'gr:pick':
@@ -1003,7 +1079,7 @@ function describeAnchor(a) {
 
 function openNew(anchor) {
   // An annotation started from the document needs its form in sight.
-  showAnnotations(true);
+  openNotes();
   newAnchor = anchor;
   $('annot-target').textContent = describeAnchor(anchor);
   $('annot-new').hidden = false;
@@ -1078,7 +1154,13 @@ function showAnnotations(on) {
   $('annot-toggle').setAttribute('aria-pressed', String(on));
 }
 showAnnotations(localStorage.getItem(annotKey) ? localStorage.getItem(annotKey) === '1' : matchMedia('(min-width: 100rem)').matches);
+if (phone()) notesPane(false);
 $('annot-toggle').addEventListener('click', () => {
+  if (phone()) {
+    if (!document.body.classList.contains('notes-pane')) openNotes();
+    else $('notes-back').click();
+    return;
+  }
   const on = document.body.classList.contains('annot-closed');
   localStorage.setItem(annotKey, on ? '1' : '0');
   showAnnotations(on);
@@ -1093,6 +1175,139 @@ function foldChat(on) {
 foldChat(localStorage.getItem(chatKey) === '1');
 $('chat-fold').addEventListener('click', () => foldChat(!document.body.classList.contains('chat-folded')));
 $('chat-unfold').addEventListener('click', () => foldChat(false));
+
+// A phone shows one pane at a time: the list, the document, then Notes (008-AC9). docPushed and
+// notesPushed say which of them this page pushed a history entry for; a reload keeps the browser's
+// entries but not these, so the current one starts plain.
+let docPushed = false;
+let notesPushed = false;
+if (history.state?.pane) history.replaceState(null, '', location.href);
+function notesPane(on) {
+  document.body.classList.toggle('notes-pane', on);
+  if (phone()) $('annot-toggle').setAttribute('aria-pressed', String(on));
+}
+// openNotes brings Notes in sight: a pane of its own on a phone, the side panel elsewhere.
+function openNotes() {
+  if (!phone()) {
+    showAnnotations(true);
+    return;
+  }
+  if (document.body.classList.contains('notes-pane')) return;
+  history.pushState({ pane: 'notes' }, '', location.href);
+  notesPushed = true;
+  notesPane(true);
+}
+$('notes-back').addEventListener('click', () => {
+  const pushed = notesPushed;
+  notesPushed = false;
+  notesPane(false);
+  if (pushed) history.back();
+});
+// The Notes button says what the layout shows: the Notes pane on a phone, the side panel wider.
+matchMedia('(max-width: 40rem)').addEventListener('change', () => {
+  const on = phone() ? document.body.classList.contains('notes-pane') : !document.body.classList.contains('annot-closed');
+  $('annot-toggle').setAttribute('aria-pressed', String(on));
+});
+
+// Pane widths and folds, per browser and shared by every room and both pages (008-AC2 to AC5).
+const panes = {
+  side: { key: 'grill-room-list-w', prop: '--list-w', min: 192, max: 480, def: 256, pane: $('side'), handle: $('side-handle'), edge: 'right' },
+  notes: { key: 'grill-room-notes-w', prop: '--notes-w', min: 256, max: 640, def: 320, pane: $('annotations'), handle: $('notes-handle'), edge: 'left' },
+};
+const clampWidth = (p, w) => Math.round(Math.min(p.max, Math.max(p.min, w)));
+function setWidth(p, w, store) {
+  w = clampWidth(p, w);
+  document.documentElement.style.setProperty(p.prop, w + 'px');
+  p.handle.setAttribute('aria-valuenow', String(w));
+  if (store) localStorage.setItem(p.key, String(w));
+}
+for (const p of Object.values(panes)) {
+  p.handle.setAttribute('aria-valuemin', String(p.min));
+  p.handle.setAttribute('aria-valuemax', String(p.max));
+  setWidth(p, Number(localStorage.getItem(p.key)) || p.def, false);
+  // Dragging the right edge of the side panel widens it; the left edge of Notes, the other way.
+  const sign = p.edge === 'right' ? 1 : -1;
+  p.handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    p.handle.setPointerCapture(e.pointerId);
+    p.handle.classList.add('dragging');
+    const r = p.pane.getBoundingClientRect();
+    const origin = p.edge === 'right' ? r.left : r.right;
+    const move = (ev) => setWidth(p, sign * (ev.clientX - origin), false);
+    const done = () => {
+      p.handle.classList.remove('dragging');
+      p.handle.removeEventListener('pointermove', move);
+      localStorage.setItem(p.key, p.handle.getAttribute('aria-valuenow'));
+    };
+    p.handle.addEventListener('pointermove', move);
+    p.handle.addEventListener('lostpointercapture', done, { once: true });
+  });
+  p.handle.addEventListener('keydown', (e) => {
+    const step = { ArrowRight: 16, ArrowLeft: -16 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    setWidth(p, Number(p.handle.getAttribute('aria-valuenow')) + sign * step, true);
+  });
+}
+// A drawer's disclosure triangle names the drawer and says its state in aria-expanded; the whole
+// header toggles it, its own actions aside (008-AC5).
+const drawers = [{ name: 'people', button: $('people-fold') }, { name: 'docs', button: $('docs-fold') }];
+function foldDrawer(d, on, store) {
+  document.body.classList.toggle('fold-' + d.name, on);
+  d.button.setAttribute('aria-expanded', String(!on));
+  if (store) localStorage.setItem('grill-room-fold-' + d.name, on ? '1' : '0');
+}
+for (const d of drawers) {
+  foldDrawer(d, localStorage.getItem('grill-room-fold-' + d.name) === '1', false);
+  d.button.addEventListener('click', () => foldDrawer(d, !document.body.classList.contains('fold-' + d.name), true));
+  d.button.closest('.pane-head').addEventListener('click', (e) => {
+    if (!phone() && !e.target.closest('a, button, input')) d.button.click();
+  });
+}
+
+// Markdown reads at one of three widths, as in gld (008-AC7).
+const mdWidths = { narrow: 'Narrow', large: 'Large', full: 'Full' };
+const mdWidthKey = 'grill-room-md-width';
+let mdWidth = mdWidths[localStorage.getItem(mdWidthKey)] ? localStorage.getItem(mdWidthKey) : 'narrow';
+const widthNames = Object.keys(mdWidths);
+const nextWidth = () => widthNames[(widthNames.indexOf(mdWidth) + 1) % widthNames.length];
+function showWidth() {
+  $('doc-width').setAttribute('aria-label', 'Text width: ' + mdWidths[mdWidth]);
+  $('doc-width').title = 'Text width: ' + mdWidths[mdWidth] + '. Press for ' + mdWidths[nextWidth()] + '.';
+}
+showWidth();
+$('doc-width').addEventListener('click', () => {
+  mdWidth = nextWidth();
+  localStorage.setItem(mdWidthKey, mdWidth);
+  showWidth();
+  postToFrame({ type: 'gr:width', width: mdWidth });
+});
+
+// arrowKeys moves the focus through a menu's shown items with ↑ and ↓ (008-AC8, 008-AC13).
+const menuItems = (menu) => [...menu.querySelectorAll(':scope > :is(a, button), :scope > label > input')].filter((e) => !e.hidden && e.offsetParent !== null);
+function arrowKeys(menu) {
+  menu.addEventListener('keydown', (e) => {
+    const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const items = menuItems(menu);
+    items[(items.indexOf(document.activeElement) + step + items.length) % items.length]?.focus();
+  });
+}
+
+// The document's actions menu (008-AC8): under its button, the first item focused, arrows move.
+const docMenu = $('doc-menu');
+docMenu.addEventListener('beforetoggle', (e) => {
+  if (e.newState !== 'open') return;
+  const r = $('doc-more').getBoundingClientRect();
+  docMenu.style.top = (r.bottom + 4) + 'px';
+  docMenu.style.right = Math.max(8, innerWidth - r.right) + 'px';
+});
+docMenu.addEventListener('toggle', (e) => { if (e.newState === 'open') menuItems(docMenu)[0]?.focus(); });
+arrowKeys(docMenu);
+// Capture: the menu closes, its focus back on ⋯, before the item's own action moves the focus.
+docMenu.addEventListener('click', (e) => { if (e.target.closest('a, button')) docMenu.hidePopover(); }, true);
 
 function renderAnnotations() {
   $('annot-count').textContent = annotations.length ? '(' + annotations.length + ')' : '';
@@ -1430,6 +1645,7 @@ function whyNot(p, st) {
 }
 
 function renderAgent() {
+  hidePairingOnceConnected();
   const bar = $('persona-buttons');
   const kept = new Map([...bar.children].map((b) => [b.dataset.id, b]));
   const buttons = agent.personas.map((p) => {
@@ -1999,45 +2215,6 @@ $('persona-add').addEventListener('submit', (e) => {
     .catch((err) => personasStatus(err.message));
 });
 
-// agentControls shows who hosts and, to the host, the button right and the hand-over per row.
-function agentControls(li, p) {
-  const id = p.id;
-  const host = agent.host_participant_id === id;
-  const manage = isHost() && !host;
-  let trigger = li.querySelector('label.trigger');
-  if (manage && !trigger) {
-    trigger = document.createElement('label');
-    trigger.className = 'trigger';
-    const box = document.createElement('input');
-    box.type = 'checkbox';
-    box.setAttribute('aria-label', 'Let ' + p.name + ' ask the AI');
-    box.addEventListener('change', () => {
-      sendJSON('PATCH', api + '/participants/' + id, { can_trigger: box.checked })
-        .catch((err) => { box.checked = !box.checked; agentError(err.message); });
-    });
-    trigger.append(box, 'Can ask the AI');
-    li.append(trigger);
-  } else if (!manage && trigger) {
-    trigger.remove();
-  }
-  if (trigger) trigger.querySelector('input').checked = agent.can_trigger.includes(id);
-  const daemon = agent.daemons.find((d) => d.participant_id === id && d.can_host);
-  let handOver = li.querySelector('button.make-host');
-  if (manage && daemon && !handOver) {
-    handOver = document.createElement('button');
-    handOver.type = 'button';
-    handOver.className = 'make-host';
-    handOver.textContent = 'Make AI host';
-    handOver.setAttribute('aria-label', 'Make ' + p.name + ' the AI host');
-    handOver.addEventListener('click', () => {
-      sendJSON('PUT', api + '/host', { participant_id: id }).catch((err) => { agentError(err.message); });
-    });
-    li.append(handOver);
-  } else if (!(manage && daemon) && handOver) {
-    handOver.remove();
-  }
-}
-
 // Voice. One LiveKit room per grill room; a participant's LiveKit identity is its participant id,
 // so each audio track, speaking flag and transcript line maps back to a name in the list.
 let voice = null;
@@ -2082,9 +2259,101 @@ function span(cls, text, title) {
   return el;
 }
 
+// tagColumns are the badges a person row may carry, in their fixed order (008-AC13): a column shows
+// in every row of a list once any row has it, so a badge sits at the same place on every row.
+const tagColumns = ['you', 'host', 'admin', 'ask', 'transcribed', 'audio'];
+
+// personTags are a participant's badges by column: [icon, accessible name, tooltip].
+function personTags(p, id, isHere) {
+  const t = {};
+  for (const [name, title, on, icon] of roles) if (on(p)) t[name] = [icon, name, title];
+  if (agent.can_trigger.includes(p.id) && agent.host_participant_id !== p.id) t.ask = ['✦', 'Can ask the AI', 'Can ask the AI'];
+  if (transcribed.has(id)) t.transcribed = ['✍', 'The transcription hears this voice', 'The transcription hears this voice'];
+  const st = isHere ? audioState(id) : { key: 'none', icon: '', text: 'Not in the audio' };
+  const deaf = isHere && !!presence.get(id)?.deaf;
+  // One glyph per square: deafened shows 🔕 alone, its audio state in the tooltip.
+  t.audio = [deaf ? '🔕' : st.icon, '', st.text + (deaf ? ', deafened: hears nobody' : ''), st.key, deaf];
+  return t;
+}
+
+// personActions are what the viewer may do about p, for its ⋯ menu (008-AC13): none, no menu.
+function personActions(p, id) {
+  const acts = [];
+  const other = id !== myID;
+  if (other && meAdmin) acts.push({ label: 'Rename', run: () => openRename(p) });
+  const host = agent.host_participant_id === p.id;
+  if (other && isHost() && !host) {
+    acts.push({ label: 'Can ask the AI', checked: agent.can_trigger.includes(p.id),
+      run: () => sendJSON('PATCH', api + '/participants/' + id, { can_trigger: !agent.can_trigger.includes(p.id) }).catch((err) => agentError(err.message)) });
+  }
+  if (other && meAdmin) {
+    acts.push({ label: p.admin ? 'Remove room admin' : 'Make room admin', run: () => {
+      // The list as it is now: another room admin may have changed it since the menu opened.
+      const now = participants.find((x) => String(x.id) === id) || p;
+      sendJSON(now.admin ? 'DELETE' : 'PUT', api + '/admins/' + id).then(() => loadRoom()).catch((err) => toast(err.message));
+    } });
+  }
+  if (other && isHost() && !host && agent.daemons.some((d) => d.participant_id === p.id && d.can_host)) {
+    acts.push({ label: 'Make AI host', run: () => sendJSON('PUT', api + '/host', { participant_id: p.id }).catch((err) => agentError(err.message)) });
+  }
+  if (other && voiceParticipant(id)) acts.push({ volume: true });
+  return acts;
+}
+
+// The person menu, built for the row it opens from; arrows move through it like the document's.
+let personFor = null;
+// openFor is the ⋯ whose menu was open when the press began: a light dismiss closes it before the
+// click, which must then not open it again.
+let openFor = null;
+function openPersonMenu(b, p, id, fromPointer) {
+  const menu = $('person-menu');
+  const was = openFor;
+  openFor = null;
+  if (menu.matches(':popover-open')) menu.hidePopover();
+  if (personFor) personFor.b.setAttribute('aria-expanded', 'false');
+  if (fromPointer && was === b) return;
+  personFor = { b, id };
+  const items = personActions(p, id).map((a) => {
+    if (a.volume) {
+      const label = document.createElement('label');
+      const vol = document.createElement('input');
+      vol.type = 'range';
+      vol.min = '0';
+      vol.max = '1';
+      vol.step = '0.05';
+      vol.value = String(volumes.get(id) ?? 1);
+      vol.addEventListener('input', () => {
+        volumes.set(id, Number(vol.value));
+        voiceParticipant(id)?.setVolume(Number(vol.value));
+      });
+      label.append('Volume ', vol);
+      return label;
+    }
+    const it = document.createElement('button');
+    it.type = 'button';
+    it.textContent = a.label;
+    if ('checked' in a) it.setAttribute('aria-pressed', String(a.checked));
+    it.addEventListener('click', () => { menu.hidePopover(); a.run(); });
+    return it;
+  });
+  const head = span('menu-head', p.name);
+  menu.replaceChildren(head, ...items);
+  const r = b.getBoundingClientRect();
+  menu.style.top = Math.min(r.bottom + 4, innerHeight - 200) + 'px';
+  menu.style.right = Math.max(8, innerWidth - r.right) + 'px';
+  menu.showPopover();
+  menu.style.top = Math.max(8, Math.min(r.bottom + 4, innerHeight - menu.offsetHeight - 8)) + 'px';
+  b.setAttribute('aria-expanded', 'true');
+  menu.querySelector('button, input')?.focus();
+}
+$('person-menu').addEventListener('toggle', (e) => {
+  if (e.newState === 'closed' && personFor) personFor.b.setAttribute('aria-expanded', 'false');
+});
+arrowKeys($('person-menu'));
+
 // renderParticipants splits the list into those in the room and those not here (005-AC7). Rows
-// update in place: speaker changes fire many times a second, and a rebuilt row would drop a
-// volume slider mid-drag.
+// update in place: speaker changes fire many times a second, and a rebuilt row would close a
+// menu or drop a focus.
 function renderParticipants() {
   const here = $('participants');
   const away = $('participants-away');
@@ -2096,65 +2365,66 @@ function renderParticipants() {
     if (!li) {
       li = document.createElement('li');
       li.dataset.pid = id;
-      li.append(span('voice-dot', ''), span('name', ''), span('badges', ''), span('audio', ''), span('seen', ''));
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'person-more';
+      more.textContent = '⋯';
+      more.setAttribute('aria-expanded', 'false');
+      li.append(span('voice-dot', ''), span('name', ''), span('tags', ''), more);
     }
-    const pr = presence.get(id);
-    const isHere = id === myID || !!(pr && pr.here);
+    const isHere = id === myID || !!presence.get(id)?.here;
     li.querySelector('.name').textContent = p.name;
-    const mine = roles.filter(([, , on]) => on(p));
-    li.querySelector('.badges').replaceChildren(...mine.map(([name, title, , icon]) => {
-      const b = span('badge role-' + name + (name === 'host' ? ' host-badge' : '') + (mine.length > 2 ? ' icon' : ''), mine.length > 2 ? icon : name, title);
-      if (mine.length > 2) b.setAttribute('aria-label', name);
-      return b;
-    }));
-    const vp = voiceParticipant(id);
-    const st = isHere ? audioState(id) : { key: 'none', icon: '', text: 'Not in the audio' };
-    const deaf = isHere && !!(pr && pr.deaf);
-    const audio = li.querySelector('.audio');
-    audio.dataset.state = st.key;
-    audio.textContent = st.icon + (deaf ? ' 🔕' : '');
-    audio.title = st.text + (deaf ? ', deafened: hears nobody' : '');
-    audio.setAttribute('aria-label', audio.title);
-    let tr = li.querySelector('.transcribed');
-    if (transcribed.has(id) && !tr) {
-      tr = span('badge transcribed', 'transcribed', 'The transcription hears this voice');
-      audio.after(tr);
-    } else if (!transcribed.has(id) && tr) {
-      tr.remove();
-    }
-    li.querySelector('.seen').textContent = isHere ? '' : 'seen ' + ago((pr && pr.seen_at) || p.last_seen_at || p.joined_at);
-    li.classList.toggle('in-voice', st.key !== 'none');
-    li.classList.toggle('speaking', st.key === 'live' && speaking.has(id));
-    li.classList.toggle('muted', st.key === 'muted');
+    const tags = personTags(p, id, isHere);
+    const [, , , key, deaf] = tags.audio;
+    li.classList.toggle('in-voice', key !== 'none');
+    li.classList.toggle('speaking', key === 'live' && speaking.has(id));
+    li.classList.toggle('muted', key === 'muted');
     li.classList.toggle('deaf', deaf);
-    li.querySelector('.voice-dot').title = st.key === 'none' ? '' : st.key === 'live' && speaking.has(id) ? 'Speaking' : st.text;
-    let vol = li.querySelector('input[type=range]');
-    if (vp && id !== myID && !vol) {
-      vol = document.createElement('input');
-      vol.type = 'range';
-      vol.min = '0';
-      vol.max = '1';
-      vol.step = '0.05';
-      vol.value = String(volumes.get(id) ?? 1);
-      vol.setAttribute('aria-label', 'Volume of ' + p.name);
-      vol.addEventListener('input', () => {
-        volumes.set(id, Number(vol.value));
-        const rp = voiceParticipant(id);
-        if (rp) rp.setVolume(Number(vol.value));
-      });
-      li.append(vol);
-    } else if (!vp && vol) {
-      vol.remove();
-    }
-    agentControls(li, p);
-    rows[isHere ? 'here' : 'away'].push(li);
+    li.querySelector('.voice-dot').title = key === 'none' ? '' : key === 'live' && speaking.has(id) ? 'Speaking' : tags.audio[2];
+    const more = li.querySelector('.person-more');
+    more.setAttribute('aria-label', 'Actions for ' + p.name);
+    more.onpointerdown = () => { openFor = $('person-menu').matches(':popover-open') ? personFor?.b : null; };
+    more.onclick = (e) => openPersonMenu(more, p, id, e.detail > 0);
+    const pr = presence.get(id);
+    rows[isHere ? 'here' : 'away'].push({ li, tags, menu: personActions(p, id).length > 0,
+      seen: isHere ? '' : 'seen ' + ago((pr && pr.seen_at) || p.last_seen_at || p.joined_at) });
   }
   for (const [list, want] of [[here, rows.here], [away, rows.away]]) {
-    if (want.length !== list.children.length || want.some((li, i) => list.children[i] !== li)) list.replaceChildren(...want);
+    const cols = tagColumns.filter((c) => c === 'audio' || want.some((r) => r.tags[c] && r.tags[c][0]));
+    const anyMenu = want.some((r) => r.menu);
+    for (const { li, tags, menu, seen } of want) {
+      li.querySelector('.tags').replaceChildren(...cols.map((c) => tagSpan(c, tags[c])), ...(seen ? [span('seen', seen)] : []));
+      const more = li.querySelector('.person-more');
+      more.hidden = !anyMenu;
+      more.classList.toggle('blank', !menu);
+      more.disabled = !menu;
+    }
+    const lis = want.map((r) => r.li);
+    if (lis.length !== list.children.length || lis.some((li, i) => list.children[i] !== li)) list.replaceChildren(...lis);
   }
   $('away').hidden = !rows.away.length;
   $('away-count').textContent = String(rows.away.length);
   $('tab-people-count').textContent = String(rows.here.length);
+}
+
+// tagSpan is one badge square, or an empty one keeping its column. The audio one is always there
+// with its state, for the people that are not in the audio too.
+function tagSpan(col, t) {
+  // The classes that name a state go on a filled square only.
+  const on = !!(t && t[0]);
+  const role = on && ['you', 'host', 'admin'].includes(col);
+  const el = span('tag tag-' + col + (role ? ' role-' + col : '') + (on && col === 'host' ? ' host-badge' : '') + (on && col === 'transcribed' ? ' transcribed' : '') + (col === 'audio' ? ' audio' : ''), t ? t[0] : '');
+  if (col === 'audio') {
+    el.dataset.state = t[3];
+    el.title = t[2];
+    el.setAttribute('aria-label', t[2]);
+  } else if (t) {
+    el.title = t[2];
+    el.setAttribute('aria-label', t[1]);
+  }
+  if (!on) el.classList.add('blank');
+  el.setAttribute('role', 'img');
+  return el;
 }
 setInterval(() => { if (participants.length) renderParticipants(); }, 30_000);
 
@@ -2302,22 +2572,74 @@ async function savePush() {
   if (done) localStorage.setItem(pushKey, '1');
 }
 
-$('push-toggle').addEventListener('click', () => (async () => {
+const pushDenied = 'The browser did not allow notifications: allow them in its site settings, then try again.';
+// The explainer comes before the browser's permission request (008-AC10), and once, unprompted, after the
+// first message of a page load (008-AC11). Dismissing it snoozes the offer for 14 days in this
+// browser; the Notifications sheet still reaches it.
+const pushSnoozeKey = 'grill-room-push-snooze';
+const pushSnooze = 14 * 24 * 3600e3;
+let pushAccepted = false;
+let pushOffered = false;
+const snoozePush = () => localStorage.setItem(pushSnoozeKey, String(Date.now() + pushSnooze));
+
+// pushReport says how turning on went: in the Notifications sheet, and in a toast when the
+// explainer came unprompted.
+function pushReport(text) {
+  pushStatus(text);
+  if (!$('notify').open) toast(text);
+}
+
+function turnOnPush() {
+  localStorage.removeItem(pushSnoozeKey);
+  savePush().then(() => 'Notifications on for this room.', (err) => 'Notifications: ' + err.message)
+    .then(pushReport).finally(renderPush);
+}
+
+$('push-toggle').addEventListener('click', () => {
   pushStatus('');
   if (localStorage.getItem(pushKey) === '1') {
-    const sub = await pushSubscription(false);
-    if (sub) await sendJSON('DELETE', api + '/push', { subscription: { endpoint: sub.endpoint } });
-    localStorage.removeItem(pushKey);
-    pushStatus('Notifications off for this room.');
+    (async () => {
+      const sub = await pushSubscription(false);
+      if (sub) await sendJSON('DELETE', api + '/push', { subscription: { endpoint: sub.endpoint } });
+      localStorage.removeItem(pushKey);
+      pushStatus('Notifications off for this room.');
+    })().catch((err) => pushStatus('Notifications: ' + err.message)).finally(renderPush);
+  } else if (Notification.permission === 'granted') {
+    // Allowed already, from another room: nothing to ask.
+    turnOnPush();
+  } else if (Notification.permission === 'denied') {
+    pushStatus(pushDenied);
   } else {
-    if (await Notification.requestPermission() !== 'granted') {
-      pushStatus('The browser did not allow notifications: allow them in its site settings, then try again.');
-      return;
-    }
-    await savePush();
-    pushStatus('Notifications on for this room.');
+    $('push-explain').showModal();
   }
-})().catch((err) => pushStatus('Notifications: ' + err.message)).finally(renderPush));
+});
+
+$('push-later').addEventListener('click', () => $('push-explain').close());
+$('push-yes').addEventListener('click', () => {
+  pushAccepted = true;
+  $('push-explain').close();
+  Notification.requestPermission().then((perm) => {
+    if (perm === 'granted') return turnOnPush();
+    // The browser's own prompt dismissed: snoozed too, as Chrome blocks a site that asks again
+    // and again.
+    if (perm === 'default') {
+      snoozePush();
+      pushReport('Notifications stay off. Turn them on under Notifications at any time.');
+    } else pushReport(pushDenied);
+  }).catch((err) => pushReport('Notifications: ' + err.message));
+});
+// A room that ends closes every sheet: that is no answer from the participant.
+$('push-explain').addEventListener('close', () => {
+  if (!pushAccepted && !ended) snoozePush();
+  pushAccepted = false;
+});
+function offerPush() {
+  if (pushOffered) return;
+  pushOffered = true;
+  if (!pushable || docsMode || (ios && !homeScreen) || Notification.permission !== 'default') return;
+  if (localStorage.getItem(pushKey) === '1' || Date.now() < Number(localStorage.getItem(pushSnoozeKey) || 0)) return;
+  if (!document.querySelector('dialog[open]')) $('push-explain').showModal();
+}
 $('push-all').addEventListener('change', () => {
   localStorage.setItem(pushKey + ':all', $('push-all').checked ? '1' : '0');
   savePush().catch((err) => pushStatus('Notifications: ' + err.message));
@@ -2471,6 +2793,7 @@ async function send() {
   // Only the line sent leaves the box: the next one may already be typed in it.
   if (bodyInput.value === typed) bodyInput.value = '';
   nudgeRecovery();
+  offerPush();
   const m = await res.json();
   if (m.mention_notices) {
     notices.set(m.id, m.mention_notices);
@@ -2591,6 +2914,17 @@ bodyInput.addEventListener('keydown', (e) => {
 
 // Pairing: the daemon's local page opens this room with ?pair=<id>. Approving here, in the
 // participant's own session, hands the daemon its token; nobody sees or types it.
+// The pairing notice goes once the approved app is connected to the room (its daemon is listed),
+// and ✕ dismisses it any time (008-AC17).
+let pairingApproved = false;
+let myDaemonsAtApproval = 0;
+const myDaemons = () => agent.daemons.filter((d) => String(d.participant_id) === myID).length;
+// Another of this participant's apps may already be connected: only one more counts.
+function hidePairingOnceConnected() {
+  if (pairingApproved && myDaemons() > myDaemonsAtApproval) $('pairing').hidden = true;
+}
+$('pairing-close').addEventListener('click', () => { $('pairing').hidden = true; });
+
 async function showPairing(id) {
   history.replaceState(null, '', location.pathname);
   const url = api + '/pairings/' + encodeURIComponent(id);
@@ -2610,6 +2944,8 @@ async function showPairing(id) {
     'Approve only if your daemon page shows the code ' + p.code + '.';
   const answer = async (approve) => {
     $('pairing-actions').hidden = true;
+    // Before the request: the approved app may announce itself before the answer is read.
+    myDaemonsAtApproval = myDaemons();
     const r = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2618,6 +2954,8 @@ async function showPairing(id) {
     const data = await r.json().catch(() => ({}));
     if (!r.ok) text.textContent = data.error || 'Pairing failed: HTTP ' + r.status;
     else text.textContent = approve ? 'Daemon paired. Its page shows it connected within a few seconds.' : 'Pairing denied.';
+    pairingApproved = approve && r.ok;
+    hidePairingOnceConnected();
   };
   $('pairing-approve').onclick = () => answer(true).catch(console.error);
   $('pairing-deny').onclick = () => answer(false).catch(console.error);
@@ -2666,8 +3004,14 @@ async function showHostAgent() {
   $('host-copy').addEventListener('click', () => {
     navigator.clipboard.writeText(oneLiner).then(() => toast('Copied'), console.error);
   });
-  $('host-open').hidden = false;
+  $('host-install').hidden = false;
 }
+
+// Both ways to run the AI for this room (008-AC16): the app already running takes the room's link
+// on its page; the install part shows when the server hands out a release.
+$('host-room-link').value = location.origin + roomPath;
+$('host-room-copy').addEventListener('click', () => copyField($('host-room-link'), $('host-room-copy')));
+$('host-open').hidden = docsMode;
 
 function fitViewport() {
   // A pinch zoom also shrinks the visual viewport: only the keyboard and toolbars should resize.
@@ -2686,7 +3030,7 @@ loadRoom().then((ok) => {
   connect();
   if (docsMode) {
     const doc = decodeURIComponent(location.pathname.split('/')[4] || '');
-    if (doc) showDocument(doc).catch(() => history.replaceState(null, '', roomPath + '/docs'));
+    if (doc) showDocument(doc, false, true).catch(() => history.replaceState(null, '', roomPath + '/docs'));
     return;
   }
   // A room just created from the profile opens on its invite card (005-AC34).

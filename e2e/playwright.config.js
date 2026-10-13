@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import { quietPush } from './quiet-push.js';
 
 const port = process.env.GRILL_ROOM_E2E_PORT || '7690';
 const baseURL = `http://127.0.0.1:${port}`;
@@ -15,7 +16,7 @@ export default defineConfig({
   timeout: 30_000,
   // The installed Chrome: no browser download.
   // On CI a failed test keeps its trace: what a flake did is in the artifact.
-  use: { baseURL, channel: 'chrome', trace: process.env.CI ? 'retain-on-failure' : 'off' },
+  use: { baseURL, channel: 'chrome', trace: process.env.CI ? 'retain-on-failure' : 'off', storageState: quietPush(baseURL) },
   webServer: {
     command: 'mkdir -p test-results && rm -f test-results/e2e.db* && ../bin/grill-room',
     url: `${baseURL}/healthz`,

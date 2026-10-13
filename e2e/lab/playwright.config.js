@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import { quietPush } from '../quiet-push.js';
 
 // The lab deployment (`make k8s-apply`), reached through its public hostnames like any participant.
 // K8S_DOMAIN and GRILL_ROOM_ADMIN_TOKEN come from the repo's untracked .env. The session test runs
@@ -13,5 +14,5 @@ export default defineConfig({
   timeout: 600_000,
   workers: 1,
   retries: 0,
-  use: { baseURL: `https://grill-room.${process.env.K8S_DOMAIN}`, channel: 'chrome' },
+  use: { baseURL: `https://grill-room.${process.env.K8S_DOMAIN}`, channel: 'chrome', storageState: quietPush(`https://grill-room.${process.env.K8S_DOMAIN}`) },
 });

@@ -275,7 +275,10 @@ export const smallTargets = (page, min = 44) => page.evaluate((min) => {
     const r = e.getBoundingClientRect();
     const s = getComputedStyle(e);
     if (!r.width || !r.height || s.visibility === 'hidden' || e.closest('[hidden], [inert]')) return false;
-    return r.width < min - 0.5 || r.height < min - 0.5;
+    // A small control may take its target from an absolute ::after around it (008-AC14).
+    const hit = getComputedStyle(e, '::after');
+    const grow = hit.content !== 'none' && hit.position === 'absolute' ? [-parseFloat(hit.left) - parseFloat(hit.right), -parseFloat(hit.top) - parseFloat(hit.bottom)] : [0, 0];
+    return r.width + Math.max(0, grow[0]) < min - 0.5 || r.height + Math.max(0, grow[1]) < min - 0.5;
   }).map((e) => `${e.tagName.toLowerCase()}${e.id ? '#' + e.id : ''} "${(e.getAttribute('aria-label') || e.textContent).trim().slice(0, 30)}" ${Math.round(e.getBoundingClientRect().width)}x${Math.round(e.getBoundingClientRect().height)}`);
 }, min);
 
@@ -311,4 +314,16 @@ export function sandboxHas(daemon, file, text) {
   } catch {
     return false;
   }
+}
+
+// docAction runs an item of the document's ⋯ menu (008-AC8).
+export async function docAction(page, name) {
+  await page.locator('#doc-more').click();
+  await page.locator('#doc-menu').getByRole(name === 'Download' || name === 'Open in a new window' ? 'link' : 'button', { name, exact: true }).click();
+}
+
+// personMenu opens the ⋯ of name's row in People (008-AC13) and returns the menu.
+export async function personMenu(page, name) {
+  await page.locator('#participants li, #participants-away li').filter({ has: page.locator('.name', { hasText: name }) }).locator('.person-more').click();
+  return page.locator('#person-menu');
 }

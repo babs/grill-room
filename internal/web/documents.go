@@ -344,6 +344,7 @@ func (s *Server) viewDocument(w http.ResponseWriter, r *http.Request, sess sessi
 			"CodeDark":  codeDark,
 			"Math":      bytes.Contains(body, []byte(`class="math `)),
 			"Mermaid":   bytes.Contains(body, []byte(`class="mermaid"`)),
+			"Width":     mdWidth(r.URL.Query().Get("width")),
 		})
 		if err != nil {
 			s.serverError(w, "view_document_failed", err)
@@ -355,6 +356,15 @@ func (s *Server) viewDocument(w http.ResponseWriter, r *http.Request, sess sessi
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
 	_, _ = w.Write(page.Bytes())
+}
+
+// mdWidth is the Markdown text width a view asks for (008-AC7): large or full, else the default
+// narrow one, which needs no attribute.
+func mdWidth(v string) string {
+	if v == "large" || v == "full" {
+		return v
+	}
+	return ""
 }
 
 // revisionHTML returns revision n of d as HTML: rendered for Markdown, as is for HTML.

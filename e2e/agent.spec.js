@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon, upload, menuItem, stopDaemon, confirmSheet, unfold } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, upload, menuItem, stopDaemon, confirmSheet, unfold, personMenu } from './helpers.js';
 
 const led = (page) => page.locator('button.persona[data-name="Grill"] .led');
 const press = (page) => page.getByRole('button', { name: 'Ask Grill' });
@@ -37,7 +37,7 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
     const adminA = await pairDaemon(alice, daemonA);
     for (const p of [alice, bob]) await expect(led(p)).toHaveAttribute('aria-label', 'Grill ready');
     await expect(led(alice)).toHaveClass(/\bon\b/);
-    await expect(alice.locator('#participants li', { hasText: 'Alice' }).locator('.host-badge')).toHaveText('host');
+    await expect(alice.locator('#participants li', { hasText: 'Alice' }).locator('.host-badge')).toHaveAttribute('aria-label', 'host');
     await expect(press(alice)).toBeEnabled();
     await expect(press(bob)).toBeDisabled();
     await withPanel(alice, async (panel) => {
@@ -49,7 +49,7 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
       await expect(newSession(bob)).toHaveCount(0);
     });
     // Only the host sees the rights controls.
-    await expect(bob.getByLabel('Let Alice ask the AI')).toHaveCount(0);
+    await expect(bob.locator('#participants li', { hasText: 'Alice' }).locator('.person-more')).toBeDisabled();
 
     // A refused press says why, even with the agent online.
     await alice.route('**/turns', (r) => r.fulfill({ status: 409, contentType: 'application/json', body: '{"error":"turn in progress"}' }));
@@ -57,7 +57,7 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
     await expect(alice.locator('#agent-status')).toHaveText('turn in progress');
     await alice.unroute('**/turns');
 
-    await alice.getByLabel('Let Bob ask the AI').check();
+    await (await personMenu(alice, 'Bob')).getByRole('button', { name: 'Can ask the AI', pressed: false }).click();
     await expect(press(bob)).toBeEnabled();
     await press(bob).click();
     await expect(led(alice)).toHaveAttribute('aria-label', 'Grill answering');
@@ -77,17 +77,18 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
     }
     await expect(led(bob)).toHaveAttribute('aria-label', 'Grill ready');
 
-    await alice.getByLabel('Let Bob ask the AI').uncheck();
+    await (await personMenu(alice, 'Bob')).getByRole('button', { name: 'Can ask the AI', pressed: true }).click();
     await expect(press(bob)).toBeDisabled();
 
     // Hand-over: Bob's daemon connects, Alice makes him host.
     await pairDaemon(bob, daemonB);
-    await alice.getByRole('button', { name: 'Make Bob the AI host' }).click();
-    await expect(bob.locator('#participants li', { hasText: 'Bob' }).locator('.host-badge')).toHaveText('host');
+    await (await personMenu(alice, 'Bob')).getByRole('button', { name: 'Make AI host' }).click();
+    await expect(bob.locator('#participants li', { hasText: 'Bob' }).locator('.host-badge')).toHaveAttribute('aria-label', 'host');
     await expect(press(bob)).toBeEnabled();
     await expect(press(alice)).toBeDisabled();
-    await expect(bob.getByLabel('Let Alice ask the AI')).toBeVisible();
-    await expect(alice.getByLabel('Let Bob ask the AI')).toHaveCount(0);
+    await expect((await personMenu(bob, 'Alice')).getByRole('button', { name: 'Can ask the AI' })).toBeVisible();
+    await bob.keyboard.press('Escape');
+    await expect(alice.locator('#participants li', { hasText: 'Bob' }).locator('.person-more')).toBeDisabled();
 
     // The host can start a new session after confirming.
     await menuItem(bob, 'Personas');
@@ -101,7 +102,7 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
     // Bob's daemon stops: Alice's daemon is the only one left and takes the role back.
     daemonB.proc.kill('SIGTERM');
     expect(await daemonB.exited).toBe(0);
-    await expect(alice.locator('#participants li', { hasText: 'Alice' }).locator('.host-badge')).toHaveText('host');
+    await expect(alice.locator('#participants li', { hasText: 'Alice' }).locator('.host-badge')).toHaveAttribute('aria-label', 'host');
     await expect(press(alice)).toBeEnabled();
     await stopDaemon(adminA);
     expect(await daemonA.exited).toBe(0);

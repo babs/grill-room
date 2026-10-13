@@ -143,17 +143,19 @@ dialog#manage { width: min(64rem, calc(100vw - 1rem)); min-height: min(36rem, ca
 .pane-head { display: flex; align-items: center; gap: var(--sp-1); }
 .pane-head h2 { flex: 1; font-size: var(--fs-sm); }
 #participants, #documents { list-style: none; padding: 0; margin: var(--sp-2) 0 var(--sp-4); }
-#participants li, #participants-away li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); padding: var(--sp-1) 0; }
+/* One row per person (008-AC13): dot, name, badges in fixed 20 px columns, then ⋯. */
+#participants li, #participants-away li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: var(--sp-2); padding: var(--sp-1) 0; }
 /* A name ends with an ellipsis, never breaks mid-word (005-AC35). */
-#participants .name, #participants-away .name { flex: 1 1 4rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#participants .badges { display: contents; }
-#participants .audio:not(:empty) { cursor: help; }
-#participants input[type=range] { width: 6rem; }
-#participants label.trigger { font-size: var(--fs-sm); color: var(--text-muted); }
-.badge.role-host, .badge.role-admin { background: var(--accent); color: var(--on-accent); }
-.badge.role-you { background: var(--primary-bg); color: var(--primary-text); }
-.badge.icon { padding: 0 2px; }
-.badge.transcribed { background: transparent; box-shadow: inset 0 0 0 1px var(--primary-text); color: var(--primary-text); }
+#participants .name, #participants-away .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tags { display: inline-flex; align-items: center; gap: var(--sp-1); white-space: nowrap; }
+.tag { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: var(--r-sm); font-size: var(--fs-xs); line-height: 1; cursor: help; }
+.tag.blank { visibility: hidden; }
+.tag.role-you, .tag.tag-ask { background: var(--primary-bg); color: var(--primary-text); }
+.tag.role-host, .tag.role-admin { background: var(--accent); color: var(--on-accent); }
+.tag.transcribed { box-shadow: inset 0 0 0 1px var(--primary-text); color: var(--primary-text); }
+.person-more { min-width: var(--control-h-sm); min-height: var(--control-h-sm); padding: 0; border-color: transparent; background: transparent; color: var(--text-muted); }
+.person-more.blank { visibility: hidden; }
+#person-menu input[type=range] { width: 8rem; }
 #participants-away .seen { font-size: var(--fs-xs); color: var(--text-muted); }
 h3.people { font-size: var(--fs-xs); color: var(--text-muted); font-weight: 400; margin: var(--sp-2) 0 0; }
 #away summary { font-size: var(--fs-sm); color: var(--text-muted); font-weight: 400; }
@@ -179,11 +181,12 @@ button.doc:hover { background: var(--border); }
 /* Document viewer */
 #viewer { flex: 2; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--border); }
 .viewer-head { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); }
-.doc-title { flex: 1; min-width: 0; }
-.doc-title h2 { font-size: var(--fs-md); overflow-wrap: anywhere; }
-#doc-meta { color: var(--text-muted); font-size: var(--fs-sm); }
-.doc-tools { display: flex; gap: var(--sp-1); }
-.btn-ghost.danger { color: var(--danger); }
+.doc-title { flex: 1; min-width: 0; contain: inline-size; }
+.doc-title h2, #doc-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-title h2 { font-size: var(--fs-md); }
+#doc-meta { display: block; color: var(--text-muted); font-size: var(--fs-sm); }
+.doc-tools { display: flex; flex: none; gap: var(--sp-1); }
+.btn-ghost.danger, .menu > .danger { color: var(--danger); }
 #doc-rename-form, #revisions { margin: 0; padding: var(--sp-2) var(--sp-4); border-bottom: 1px solid var(--border); }
 #doc-rename-form input { min-width: 12rem; }
 #doc-frame { flex: 1; display: flex; min-height: 0; background: var(--surface); }
@@ -311,7 +314,6 @@ mark.mention-chip.me { background: var(--accent); color: var(--on-accent); }
   body[data-tab=people] #viewer { display: none; }
   body:not([data-tab=chat]) .chat { display: none; }
   #viewer { border-right: 0; }
-  .doc-tools { flex-wrap: wrap; justify-content: flex-end; }
   .msg { padding-right: calc(var(--control-h) + var(--sp-1)); }
   .toasts { inset: auto var(--sp-2) calc(64px + env(safe-area-inset-bottom)) var(--sp-2); }
 }
@@ -325,5 +327,55 @@ body.docs-window #viewer { flex: 1; border-right: 0; }
   body.docs-window #side { width: 100%; border-right: 0; }
   body.docs-window:has(#viewer:not([hidden])) #side { display: none; }
 }
-body.docs-window:has(#viewer[hidden]) #side { flex: 1; width: auto; border-right: 0; }
 input[aria-invalid=true] { border-color: var(--danger); }
+
+/* Panes (008): the side panel and Notes keep the width the reader drags, from 64rem up; the
+   document keeps 24rem, Notes gives way first, then the side panel. */
+:root { --list-w: 256px; --notes-w: 320px; }
+.pane-handle, .fold, #notes-back, #viewer-empty { display: none; }
+@media (min-width: 64rem) {
+  #side { flex: 0 1 var(--list-w); width: auto; min-width: 12rem; }
+  /* With the chat beside it, the room page keeps the chat's share instead. */
+  body:is(.docs-window, .chat-folded) #viewer { min-width: auto; }
+  body:is(.docs-window, .chat-folded) #doc-frame { min-width: 24rem; }
+  #annotations { flex: 0 1 var(--notes-w); width: auto; min-width: 16rem; }
+  /* 12 px to grab, none of it taken from the panes. */
+  .pane-handle { display: block; position: relative; z-index: 1; flex: none; width: 12px; margin: 0 -6px; cursor: col-resize; touch-action: none; }
+  .pane-handle:is(:hover, :focus-visible, .dragging) { background: linear-gradient(var(--brand), var(--brand)) center / 2px 100% no-repeat; }
+  body.annot-closed #notes-handle { display: none; }
+}
+/* Each drawer of the side panel folds on its own; with every drawer shown folded, the panel is a
+   rail (008-AC5). The docs window shows the documents only. */
+@media (width > 40rem) {
+  .fold { display: inline-grid; }
+  .pane-head:has(.fold) { cursor: pointer; }
+  body.fold-people #people-pane > :not(.pane-head), body.fold-docs #docs-pane > :not(.pane-head) { display: none; }
+  body.fold-docs:is(.docs-window, .fold-people) #side { flex: 0 0 56px; width: 56px; min-width: 0; padding: var(--sp-2) 0; }
+  body.fold-docs:is(.docs-window, .fold-people) #side .pane-head { justify-content: center; }
+  body.fold-docs:is(.docs-window, .fold-people) #side :is(.head-action, .sec-label), body.fold-docs:is(.docs-window, .fold-people) #side-handle { display: none; }
+  body.docs-window #viewer[hidden] + #viewer-empty { display: flex; flex: 1; align-items: flex-start; padding: var(--sp-6); }
+}
+/* A phone shows one pane at a time: the list, the document, then Notes (008-AC9). */
+@media (max-width: 40rem) {
+  #annotations, body.annot-closed #annotations { display: none; }
+  body.notes-pane #annotations { display: block; flex: 1; max-height: none; border-top: 0; }
+  body.notes-pane #doc-frame { display: none; }
+  body.notes-pane #notes-back { display: inline-flex; margin-bottom: var(--sp-3); }
+}
+#room-name a { display: inline-flex; align-items: center; min-height: 44px; color: inherit; }
+/* The explainer's title takes the first focus only so no keystroke answers it: it is no control. */
+#push-explain-title:focus { outline: none; box-shadow: none; }
+/* Drawer headers (008-AC5, 008-AC14): a disclosure triangle, the section's icon and title, then
+   small actions. 24 px to the eye; ::after keeps the 44 px target (docs/design.md §6). */
+.pane-head { gap: var(--sp-2); }
+.pane-head h2 { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; }
+.fold, .head-action { position: relative; place-items: center; width: 24px; min-width: 24px; height: 24px; min-height: 24px; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--primary-text); font-size: var(--fs-md); font-weight: 600; line-height: 1; text-decoration: none; }
+.head-action { display: inline-grid; }
+.head-action + .head-action { margin-left: var(--sp-3); }
+.fold::after, .head-action::after { content: ""; position: absolute; inset: -10px; }
+.fold::before { content: "▾"; transition: transform 150ms ease-out; }
+.fold[aria-expanded=false]::before { transform: rotate(-90deg); }
+.ico { flex: none; vertical-align: -3px; }
+.menu .ico { margin-right: var(--sp-2); }
+/* A document's name stays on one line (008-AC14): the full name is its tooltip. */
+button.doc { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: var(--control-h); }

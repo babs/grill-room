@@ -329,6 +329,25 @@ func TestDocumentViews(t *testing.T) {
 			t.Error("MathJax loaded for a document without math")
 		}
 	})
+	// 008-AC7: the first paint at the reader's width; anything else is the default, narrow.
+	t.Run("markdown width from the query", func(t *testing.T) {
+		for query, want := range map[string]string{
+			"":                              `<html lang="en">`,
+			"?width=narrow":                 `<html lang="en">`,
+			"?width=large":                  `<html lang="en" data-width="large">`,
+			"?width=full":                   `<html lang="en" data-width="full">`,
+			"?width=full%22%3E%3Cscript%3E": `<html lang="en">`,
+			"?width=FULL&width=large":       `<html lang="en">`,
+		} {
+			_, body := e.get(t, docPath(room.ID, mdDoc.ID, "/view"+query), alice.Token)
+			if !strings.Contains(string(body), want) {
+				t.Errorf("%q: no %s in %.80s", query, want, body)
+			}
+		}
+		if _, body := e.get(t, docPath(room.ID, htmlDoc.ID, "/view?width=full"), alice.Token); strings.Contains(string(body), "data-width") {
+			t.Errorf("an HTML document got a width: %s", body)
+		}
+	})
 	t.Run("html is served as is, sandboxed, with the annotation script", func(t *testing.T) {
 		resp, body := e.get(t, docPath(room.ID, htmlDoc.ID, "/view"), alice.Token)
 		sandboxed(t, resp)

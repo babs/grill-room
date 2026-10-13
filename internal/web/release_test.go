@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/babs/grill-room/internal/daemon"
 )
 
 // fakeDaemon stands in for a release binary: install.sh execs it, and it prints its argument.
@@ -304,6 +306,9 @@ func TestInstallScriptRefuses(t *testing.T) {
 			{"no room URL", nil, 2, "usage:"},
 			{"plain http to another host", []string{"http://rooms.example/r/abc123"}, 2, "usage:"},
 			{"not a room URL", []string{e.ts.URL + "/join"}, 2, "usage:"},
+			{"the admin page", []string{e.ts.URL + "/admin"}, 2, "usage:"},
+			{"no room id", []string{e.ts.URL + "/r/"}, 2, "usage:"},
+			{"a bad room id", []string{e.ts.URL + "/r/AB$"}, 2, "usage:"},
 			{"two arguments", []string{e.ts.URL + "/r/abc123", "extra"}, 2, "usage:"},
 		} {
 			t.Run(fmt.Sprintf("%s/%s", sh[0], tt.name), func(t *testing.T) {
@@ -405,6 +410,39 @@ func TestInstallScriptChecksSignature(t *testing.T) {
 				}
 				if v2 := strings.Contains(tt.cosign, "v2."); v2 != strings.Contains(got, "--new-bundle-format\n") {
 					t.Errorf("cosign %s: --new-bundle-format passed = %v", tt.name, !v2)
+				}
+			})
+		}
+	}
+}
+
+// 008-AC15: install.sh reads a room link as the daemon does: one table through both. A link the
+// daemon takes starts it on the room itself; one it refuses is a usage error, and nothing runs.
+func TestInstallScriptReadsRoomLinksAsTheDaemon(t *testing.T) {
+	opts := testOptions
+	opts.Release, _ = LoadRelease(writeRelease(t, "v1.2.3", fakeDaemon))
+	e := newEnvOpts(t, opts)
+	u := e.ts.URL
+	host := strings.TrimPrefix(u, "http://")
+	links := []string{
+		u + "/r/abc123", u + "/r/abc123/", u + "/r/abc123/docs", u + "/r/abc123/docs/7", u + "/r/abc123?pair=x#m3",
+		u + "/r/abc123/docs?a=/r/zz#/r/yy",
+		u + "/admin", u + "/r/", u + "/r", u + "/r/AB", u + "/rooms/abc", u + "/r/" + strings.Repeat("a", 65),
+		"http://localhost:@" + host + "/r/abc123", "http://rooms.example/r/abc123",
+	}
+	for _, sh := range installShells(t) {
+		for _, link := range links {
+			t.Run(sh[0]+" "+link, func(t *testing.T) {
+				room, perr := daemon.ParseRoomURL(link)
+				out, err := runInstall(t, e, sh, toolPath(t, ""), t.TempDir(), link)
+				if perr == nil {
+					if err != nil || !strings.Contains(out, "daemon started for "+room.String()+"\n") {
+						t.Fatalf("the daemon takes %s as %s; install.sh: %v\n%s", link, room, err, out)
+					}
+					return
+				}
+				if ee, ok := err.(*exec.ExitError); !ok || ee.ExitCode() != 2 || strings.Contains(out, "daemon started") {
+					t.Fatalf("the daemon refuses %s (%v); install.sh: %v\n%s", link, perr, err, out)
 				}
 			})
 		}

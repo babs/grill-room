@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { createRoom, invite, join, joinAudio, inboundAudio, launch, admin, fixture, audioItem } from './helpers.js';
+import { personMenu } from '../helpers.js';
 
 // 001-AC6: two participants in a room hear each other, through LiveKit behind traefik. Two browser
 // profiles: Alice's microphone plays recorded speech, Bob's a beep.
@@ -17,7 +18,8 @@ test('two participants exchange audio', async ({ request }) => {
     const aliceID = await alice.evaluate(() => myID);
     const aliceRow = bob.locator(`#participants li[data-pid="${aliceID}"]`);
     await expect(aliceRow).toHaveClass(/in-voice/);
-    await expect(aliceRow.getByRole('slider', { name: 'Volume of Alice' })).toBeVisible();
+    await expect((await personMenu(bob, 'Alice')).getByRole('slider', { name: 'Volume' })).toBeVisible();
+    await bob.keyboard.press('Escape');
 
     // Audio flows both ways and keeps flowing.
     for (const page of [alice, bob]) {

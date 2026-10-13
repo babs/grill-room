@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import { quietPush } from '../quiet-push.js';
 
 // The compose stack behind the local traefik (`make dev-up`), with two real daemons running real
 // `claude -p --model haiku` turns: this suite spends Claude requests. DEV_DOMAIN and
@@ -13,5 +14,5 @@ export default defineConfig({
   timeout: 600_000,
   workers: 1,
   retries: 0,
-  use: { baseURL: `https://grill-room.${process.env.DEV_DOMAIN}`, channel: 'chrome' },
+  use: { baseURL: `https://grill-room.${process.env.DEV_DOMAIN}`, channel: 'chrome', storageState: quietPush(`https://grill-room.${process.env.DEV_DOMAIN}`) },
 });

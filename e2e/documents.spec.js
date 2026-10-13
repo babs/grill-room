@@ -102,7 +102,7 @@ test('uploads render for everyone', async ({ browser, request }) => {
   await upload(alice, 'plan.docx', 'application/octet-stream', readFileSync('../internal/convert/testdata/fixture.docx'));
   await expect(alice.locator('#doc-meta')).toContainText('Markdown copy');
   await expect(doc.locator('h1')).toHaveText('Grill plan');
-  await expect(alice.locator('#doc-original')).toBeVisible();
+  await expect(alice.locator('#doc-original')).not.toHaveAttribute('hidden');
   await expect(bob.locator('#documents')).toContainText('plan.docx');
 
   await upload(alice, 'shot.png', 'image/png', png);
