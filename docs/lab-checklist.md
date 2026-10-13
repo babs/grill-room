@@ -14,7 +14,7 @@ You need the deployment up (`make k8s-apply`), a laptop on the LAN, and a phone 
 2. Turn Wi-Fi off on the phone, check it shows 4G or 5G, and open one invite link in its browser. The padlock must show a valid certificate.
 3. Open the other link on the laptop. Join the room on both sides, then press Join audio on both.
 4. Speak on the phone and listen on the laptop, then the other way round. Each side must hear the other within a second or two, and the speaking dot must light next to the speaker's name.
-5. Say one sentence on the phone and wait. A voice line with the phone's display name must appear on both screens within about 10 s.
+5. Say one sentence on the phone and wait. With parakeet (spec 007), a voice line with the phone's display name must appear on both screens within 5 s. Then speak at the same time on the phone and the laptop: both get their lines.
 6. The phone can only reach LiveKit through `turns:grill-room-turn.<domain>:443`, so steps 4 and 5 passing prove that path. Firefox on the phone is worth a second try, because spike S4 tested Chrome only.
 7. Delete the room:
    ```sh
@@ -22,6 +22,16 @@ You need the deployment up (`make k8s-apply`), a laptop on the LAN, and a phone 
    ```
 
 If step 4 fails while `make e2e-lab` passes, look at the phone's network first: some carriers block TLS to unusual SNI. Then check the traefik logs for a `grill-room-turn` TCP connection.
+
+## STT engine rollback (007-AC17)
+
+One step: switch the worker back to faster-whisper and restart it. No data changes either way.
+
+```sh
+KUBECONFIG=<lab kubeconfig> kubectl -n grill-room set env deploy/stt APP_ENGINE=whisper
+```
+
+`set env` restarts the Deployment by itself. Set `APP_ENGINE=parakeet` the same way to come back. The image carries both engines for one release. `make k8s-apply` puts back the manifest's value, so make the change in `deploy/k8s/stt.yaml` to keep it. The second way out is the previous image tag: set `GRILL_STT_IMAGE` in `.env` to it, then `make k8s-apply`.
 
 ## Notifications on an Android phone (005-AC24)
 

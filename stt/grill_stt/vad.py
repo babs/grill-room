@@ -76,13 +76,22 @@ class Segmenter:
 
     def feed(self, samples: Audio) -> list[Audio]:
         """Adds samples; returns the utterances that ended in them."""
+        return [u for u, _ in self.feed_timed(samples)]
+
+    def flush(self) -> list[Audio]:
+        """Emits the speech in progress, when the track ends."""
+        return [u for u, _ in self.flush_timed()]
+
+    def feed_timed(self, samples: Audio) -> list[tuple[Audio, float]]:
+        """As feed, each utterance with the seconds since its speech ended: the pause a cut waited
+        for, and none for a cut forced at max_speech_s, where the speaker is still talking."""
         buf = np.concatenate([self._pending, samples])
         n = len(buf) // WINDOW
         self._pending = buf[n * WINDOW :]
         if n == 0:
             return []
         windows = buf[: n * WINDOW].reshape(n, WINDOW)
-        out: list[Audio] = []
+        out: list[tuple[Audio, float]] = []
         pad = self._windows(self.pad_ms)
         for w, p in zip(windows, self.probs(windows), strict=True):
             if not self._speech:
@@ -105,15 +114,15 @@ class Segmenter:
                 out += self._emit()
         return out
 
-    def flush(self) -> list[Audio]:
-        """Emits the speech in progress, when the track ends."""
+    def flush_timed(self) -> list[tuple[Audio, float]]:
         return self._emit() if self._speech else []
 
-    def _emit(self) -> list[Audio]:
+    def _emit(self) -> list[tuple[Audio, float]]:
         # Keep pad_ms of the trailing silence: Whisper clips the last word without it.
         keep = len(self._speech) - max(0, self._silent - self._windows(self.pad_ms))
         speech, voiced = self._speech[:keep], self._voiced
+        silent_s = self._silent * WINDOW / SR
         self._speech, self._voiced, self._silent = [], 0, 0
         if voiced < self._windows(self.min_speech_ms):
             return []  # a click or a cough: Whisper turns these into invented sentences (S1-bis)
-        return [np.concatenate(speech)]
+        return [(np.concatenate(speech), silent_s)]

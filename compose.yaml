@@ -53,7 +53,7 @@ services:
       - "${GRILL_ROOM_BIND:-127.0.0.1}:5349:5349/tcp"
     restart: unless-stopped
 
-  # 4 CPUs (spike S1-bis): 3 model threads, one CPU left for the VAD and LiveKit. 1.5 GiB holds the model.
+  # 4 CPUs and 3 GiB (spike S10d): two parakeet engine processes of 2 threads and 1.2 GB each.
   stt:
     build: ./stt
     image: grill-stt:local
@@ -63,11 +63,12 @@ services:
       APP_LIVEKIT_URL: ws://livekit:7880
       APP_LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
       APP_LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
-      APP_CPU_THREADS: "3"
+      APP_ENGINE_PROCESSES: "2"
+      APP_CPU_THREADS: "2"
     ports:
       - "127.0.0.1:${STT_METRICS_PORT:-7682}:9100"
     cpus: 4
-    mem_limit: 1536m
+    mem_limit: 3g
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/healthz')"]
       interval: 5s

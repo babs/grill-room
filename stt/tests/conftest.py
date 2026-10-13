@@ -1,12 +1,14 @@
 import json
 import os
 import wave
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pytest
 
+from grill_stt.transcribe import Line
 from grill_stt.vad import Audio
 
 FIXTURES = Path(__file__).resolve().parents[2] / "e2e" / "voice" / "fixtures"
@@ -35,3 +37,26 @@ def model() -> str:
         if os.getenv("CI"):
             pytest.fail(f"whisper model missing: {e}")
         pytest.skip(f"whisper model not downloaded: {e}")
+
+
+@pytest.fixture(scope="module")
+def parakeet() -> str:
+    """The parakeet GGUF the image bakes in (APP_PARAKEET_MODEL), loaded through TRANSCRIBE_LIBRARY."""
+    path = os.getenv("APP_PARAKEET_MODEL", "/models/parakeet/parakeet-ultra-Q8_0.gguf")
+    if Path(path).is_file() and os.getenv("TRANSCRIBE_LIBRARY"):
+        return path
+    if os.getenv("GRILL_STT_IMAGE_TEST"):
+        pytest.fail(f"parakeet model or TRANSCRIBE_LIBRARY missing in the image: {path}")
+    pytest.skip("parakeet runs in the image only: make stt-image-test")
+
+
+@pytest.fixture(scope="module", params=["whisper", "parakeet"])
+def transcriber(request: pytest.FixtureRequest) -> Callable[[Audio], Line]:
+    """Each engine as the worker loads it (spec 007, AC2 and AC15)."""
+    if request.param == "parakeet":
+        from grill_stt.parakeet import ParakeetTranscriber
+
+        return ParakeetTranscriber(request.getfixturevalue("parakeet"), cpu_threads=4)
+    from grill_stt.transcribe import Transcriber
+
+    return Transcriber(request.getfixturevalue("model"), cpu_threads=4)
