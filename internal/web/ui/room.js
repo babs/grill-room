@@ -65,16 +65,17 @@ async function loadRoom() {
   if (!res.ok) throw new Error('room: HTTP ' + res.status);
   wasIn = true;
   const data = await res.json();
-  // The docs window's room name leads back to the room (008-AC6).
-  if (docsMode) {
-    const a = document.createElement('a');
-    a.href = roomPath;
-    a.title = 'Back to the room';
-    a.textContent = data.room.name;
-    $('room-name').replaceChildren(a);
-  } else {
-    $('room-name').textContent = data.room.name;
+  // The docs window's room name leads back to the room (008-AC6). Each room event reloads this:
+  // the link is made once, so its focus and anything holding it survive.
+  const heading = $('room-name');
+  let link = heading.querySelector('a');
+  if (docsMode && !link) {
+    link = document.createElement('a');
+    link.href = roomPath;
+    link.title = 'Back to the room';
+    heading.replaceChildren(link);
   }
+  (link || heading).textContent = data.room.name;
   roomName = data.room.name;
   showTitle();
   // Someone else renamed this participant (005-AC21): a rename of their own sets myName first.

@@ -194,7 +194,16 @@ test('the docs window links back to the room', async ({ browser, request }) => {
   const back = docs.getByRole('link', { name: 'Docs room' });
   await expect(back).toHaveAttribute('title', 'Back to the room');
   expect((await back.boundingBox()).height).toBeGreaterThanOrEqual(44);
-  await back.click();
+  // Room events reload the header: the link stays the same element, with its focus, and follows a
+  // rename.
+  const held = await back.elementHandle();
+  await back.focus();
+  const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
+  expect((await request.post('/api/join', { data: { invite: inv.token, name: 'Bob' } })).status()).toBeLessThan(300);
+  expect((await request.patch(`/api/rooms/${room.id}`, { headers: admin, data: { name: 'Renamed room' } })).status()).toBeLessThan(300);
+  await expect(docs.locator('#room-name a')).toHaveText('Renamed room');
+  expect(await held.evaluate((e) => e.isConnected && document.activeElement === e)).toBe(true);
+  await held.click();
   await expect(docs).toHaveURL(new RegExp(`/r/${room.id}$`));
   await expect(docs.locator('#messages')).toBeVisible();
 });
