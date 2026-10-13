@@ -3025,7 +3025,20 @@ if (window.visualViewport) {
   fitViewport();
 }
 
-loadRoom().then((ok) => {
+// firstLoad retries the first room load until it answers: a request the browser drops (a network
+// change, a server restarting) must not leave the page empty for good.
+async function firstLoad() {
+  for (;;) {
+    try {
+      return await loadRoom();
+    } catch (err) {
+      console.error(err);
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
+}
+
+firstLoad().then((ok) => {
   if (!ok) return;
   connect();
   if (docsMode) {
