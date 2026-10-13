@@ -5,7 +5,7 @@ import { render } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
 import { html } from 'htm/preact';
 import { fetchJSON } from './room-panel.js';
-import { StarterList, NewRoom } from './starters.js';
+import { StarterList, NewRoom, Editor } from './starters.js';
 
 function Starters() {
   const [starters, setStarters] = useState(/** @type {import('./starters.js').Starter[] | null} */ (null));
@@ -17,7 +17,22 @@ function Starters() {
   return html`<h2 id="starters-title">Room starters</h2>
     <p class="hint">A starter sets a new room up: its agenda, personas, documents and skills. Rooms keep their own copy.</p>
     <p class="said" role="status">${said}</p>
-    <${StarterList} starters=${starters} api=${fetchJSON} reload=${load} say=${setSaid}/>`;
+    <${StarterList} starters=${starters} api=${fetchJSON} reload=${load} say=${setSaid} edit=${(/** @type {import('./starters.js').Starter} */ st) => editStarter(st, load, setSaid)}/>`;
+}
+
+/**
+ * editStarter opens one of the profile's starters in the editor; saving makes its next version
+ * (006-AC3).
+ * @param {import('./starters.js').Starter} st @param {() => void} reload @param {(s: string) => void} say
+ */
+async function editStarter(st, reload, say) {
+  const view = await fetchJSON('GET', '/api/profile/starters/' + st.id).catch((err) => { say(err.message); return null; });
+  if (!view) return;
+  render(html`<div class="sheet-head"><h2 id="room-create-title">Edit ${st.title}</h2>
+      <button type="button" class="btn-ghost btn-icon" aria-label="Close" onClick=${close}>✕</button></div>
+    <${Editor} view=${view} api=${fetchJSON} mode="edit" path=${'/api/profile/starters/' + st.id + '/versions'} back=${close}
+      done=${(/** @type {import('./starters.js').Starter} */ saved) => { close(); say('Saved "' + saved.title + '" v' + saved.version + '.'); reload(); }}/>`, sheet);
+  sheet.showModal();
 }
 
 render(html`<${Starters}/>`, /** @type {HTMLElement} */ (document.getElementById('starters')));

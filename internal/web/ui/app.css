@@ -399,3 +399,5 @@ button.doc { display: block; overflow: hidden; text-overflow: ellipsis; white-sp
 @media (max-width: 40rem) {
   .starter-picker { grid-template-columns: 1fr; }
 }
+.starter-field { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--sp-2); padding: var(--sp-2) 0; border-bottom: 1px solid var(--border); }
+.starter-editor .warn { color: var(--warning); }

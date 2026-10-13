@@ -76,9 +76,11 @@ export const meta = (st) => html`v${st.version} · by ${st.author}${st.size ? ' 
 /**
  * StarterList is the profile's view of the library (006-AC1 to 006-AC3): built-ins, its own and
  * the shared ones. Any starter duplicates into "Yours"; its own it shares with everyone or deletes.
- * @param {{starters: Starter[], api: import('./room-panel.js').Api, reload: () => void, say: (text: string) => void}} props
+ * Its own it also edits, which saves the next version (006-AC3).
+ * @param {{starters: Starter[], api: import('./room-panel.js').Api, reload: () => void, say: (text: string) => void,
+ *   edit?: (st: Starter) => void}} props
  */
-export function StarterList({ starters, api, reload, say }) {
+export function StarterList({ starters, api, reload, say, edit }) {
   /** @param {unknown} err */
   const show = (err) => say(/** @type {Error} */ (err).message);
   /** @param {Starter} st */
@@ -86,6 +88,7 @@ export function StarterList({ starters, api, reload, say }) {
     const base = '/api/profile/starters/' + st.id;
     /** @type {[string, () => void][]} */
     const out = [['Duplicate to yours', () => api('POST', base + '/duplicate').then(() => { say('Duplicated "' + st.title + '".'); reload(); }).catch(show)]];
+    if (st.mine && edit) out.push(['Edit', () => edit(st)]);
     if (st.mine && st.library === 'personal') {
       out.push(['Share with everyone', () => window.grillConfirm('Share "' + st.title + '" with everyone?', 'Every profile on this server will see it and create rooms from it. You stay its author.', 'Share')
         .then((yes) => { if (yes) api('POST', base + '/publish').then(() => { say('Shared "' + st.title + '".'); reload(); }).catch(show); })]);
@@ -167,9 +170,17 @@ export function Picker({ api, pick, close }) {
   /** @param {unknown} err */
   const show = (err) => setSaid(/** @type {Error} */ (err).message);
   useEffect(() => { api('GET', '/api/profile/starters').then(setList).catch(show); }, []);
+  // Only the latest pick shows: an earlier answer arriving late, the first Blank's included, is dropped.
+  const asked = useRef(0);
   /** @param {number} id */
-  const preview = (id) => api('GET', '/api/profile/starters/' + id).then(setChosen).catch(show);
-  useEffect(() => { api('GET', '/api/profile/starters/0').then((/** @type {StarterView} */ v) => { setChosen(v); setBlankText(v.description); }).catch(show); }, []);
+  const preview = (id) => {
+    const n = ++asked.current;
+    return api('GET', '/api/profile/starters/' + id).then((/** @type {StarterView} */ v) => {
+      if (!id) setBlankText(v.description);
+      if (n === asked.current) setChosen(v);
+    }).catch((err) => { if (n === asked.current) show(err); });
+  };
+  useEffect(() => { preview(0); }, []);
   const needle = q.trim().toLowerCase();
   /** @param {{id: number, title: string, description: string, author?: string, version?: number}} st @param {string} label */
   const entry = (st, label) => html`<li key=${st.id}><button type="button" class="starter-pick" aria-pressed=${chosen?.id === st.id || (!st.id && chosen?.library === 'blank')}
@@ -226,34 +237,120 @@ function PersonaEdit({ p, models, efforts, set, remove }) {
 }
 
 /**
- * Editor opens on a starter version, Blank included, prefilled: its fields first, required ones
- * starred, then the room's name, the agenda, the personas, the documents and skills to keep. What
- * it changes goes to the new room only, never to the starter (006-AC9, 006-AC10).
- * @param {{view: StarterView, api: import('./room-panel.js').Api, displayName: string, back: () => void}} props
+ * keyOf derives a field's key from its label (006-AC16): lowercase letters, digits and _.
+ * @param {string} label
  */
-export function Editor({ view, api, displayName, back }) {
+export const keyOf = (label) => label.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').replace(/[^a-z0-9]+/g, '_')
+  .replace(/^_+|_+$/g, '').slice(0, 30);
+
+/** @param {string} text @returns {string[]} the keys {{key}} names in text */
+const usedKeys = (text) => [...text.matchAll(/\{\{([a-z0-9_]+)\}\}/g)].map((x) => x[1]);
+
+/**
+ * freeKey is the key a field labelled label gets among the others' keys: keyOf, else field_N for a
+ * label with no Latin letter or digit, with _2, _3… until it is unused.
+ * @param {string} label @param {string[]} taken
+ */
+const freeKey = (label, taken) => {
+  const base = keyOf(label) || 'field_' + (taken.length + 1);
+  let key = base;
+  for (let n = 2; taken.includes(key); n++) key = base.slice(0, 27) + '_' + n;
+  return key;
+};
+
+/** The most fields a starter asks, as the server takes (006-AC16). */
+const maxFields = 10;
+
+/**
+ * FieldsEdit declares a starter's fields (006-AC16): a label, its key derived from it, required or
+ * not, an optional hint. A key follows its label until the agenda or the room name uses it:
+ * renaming such a field keeps its {{key}}.
+ * @param {{fields: Field[], set: (f: Field[]) => void, used: string[]}} props
+ */
+function FieldsEdit({ fields, set, used }) {
+  /** @param {number} i @param {Partial<Field>} patch */
+  const change = (i, patch) => set(fields.map((f, j) => (j === i ? { ...f, ...patch } : f)));
+  /** @param {number} i @param {string} label */
+  const relabel = (i, label) => {
+    const f = fields[i];
+    const others = fields.filter((_, j) => j !== i).map((x) => x.key);
+    const follows = !f.key || (f.key === freeKey(f.label, others) && !used.includes(f.key));
+    change(i, follows ? { label, key: freeKey(label, others) } : { label });
+  };
+  return html`<fieldset id="starter-fields-edit"><legend>Fields</legend>
+    <p class="hint">Asked when a room is created from the starter. Their values replace {{key}} in the agenda and the room name.</p>
+    ${fields.map((f, i) => html`<div class="starter-field" key=${i}>
+      <label>Label<input required maxlength="40" value=${f.label}
+        onInput=${(/** @type {Event} */ e) => relabel(i, /** @type {HTMLInputElement} */ (e.currentTarget).value)}/></label>
+      <span class="hint">Key: <code>{{${f.key}}}</code></span>
+      <label class="check"><input type="checkbox" checked=${!!f.required}
+        onChange=${(/** @type {Event} */ e) => change(i, { required: /** @type {HTMLInputElement} */ (e.currentTarget).checked })}/> Required</label>
+      <label>Hint<input maxlength="100" value=${f.hint || ''} onInput=${(/** @type {Event} */ e) => change(i, { hint: /** @type {HTMLInputElement} */ (e.currentTarget).value })}/></label>
+      <button type="button" class="btn-danger-outline" aria-label=${'Remove the field ' + f.label} onClick=${() => set(fields.filter((_, j) => j !== i))}>Remove</button>
+    </div>`)}
+    ${fields.length < maxFields ? html`<button type="button" class="btn-secondary" onClick=${() => set([...fields, { label: '', key: '', required: false }])}>+ Add a field</button>`
+      : html`<p class="hint">A starter asks at most ${maxFields} fields.</p>`}
+  </fieldset>`;
+}
+
+/**
+ * Editor opens on a starter version, Blank included, or on a room, prefilled (006-AC9, 006-AC15).
+ * mode "create" makes a room: the starter's fields first, required ones starred; what it changes
+ * goes to the new room only (006-AC10). mode "save" saves a room as a new starter, its documents
+ * unchecked; "edit" saves the next version of one of the profile's starters. Both declare fields,
+ * refuse an undeclared {{x}} and warn of a field used nowhere (006-AC16).
+ * @param {{view: StarterView, api: import('./room-panel.js').Api, displayName?: string, back: () => void,
+ *   mode?: 'create' | 'save' | 'edit', path?: string, done?: (st: Starter) => void}} props
+ */
+export function Editor({ view, api, displayName = '', back, mode = 'create', path = '', done }) {
   const m = view.manifest;
+  const creating = mode === 'create';
   const [values, setValues] = useState(/** @type {Record<string, string>} */ ({}));
+  const [title, setTitle] = useState(m.title || '');
+  const [description, setDescription] = useState(m.description || '');
+  const [fields, setFields] = useState(m.fields || []);
   const [name, setName] = useState(m.room_name || '');
   const [as, setAs] = useState(displayName);
   const [agenda, setAgenda] = useState(m.agenda || '');
   const [personas, setPersonas] = useState(m.personas);
-  const [docs, setDocs] = useState(m.documents.map((d) => d.name));
+  const [docs, setDocs] = useState(mode === 'save' ? [] : m.documents.map((d) => d.name));
   const [skills, setSkills] = useState(m.skills.map((k) => k.name));
   const [said, setSaid] = useState('');
   const [busy, setBusy] = useState(false);
-  const missing = (m.fields || []).filter((f) => f.required && !(values[f.key] || '').trim()).map((f) => f.label);
+  const area = useRef(/** @type {HTMLTextAreaElement | null} */ (null));
+  const missing = creating ? (m.fields || []).filter((f) => f.required && !(values[f.key] || '').trim()).map((f) => f.label) : [];
+  const keys = fields.map((f) => f.key);
+  const used = [...usedKeys(agenda), ...usedKeys(name)];
+  const undeclared = creating ? [] : [...new Set(used.filter((k) => !keys.includes(k)))];
+  const unused = creating ? [] : fields.filter((f) => f.key && !used.includes(f.key)).map((f) => f.label);
+  const unlabelled = !creating && fields.some((f) => !f.label.trim());
+  const blocked = missing.length > 0 || undeclared.length > 0 || unlabelled || busy;
   /** @param {string[]} list @param {string} item @param {boolean} on */
   const toggle = (list, item, on) => (on ? [...list, item] : list.filter((x) => x !== item));
-  const create = async () => {
+  /** Insert field puts {{key}} at the agenda's cursor (006-AC16). @param {string} key */
+  const insert = (key) => {
+    const ta = area.current;
+    const at = ta ? ta.selectionStart : agenda.length;
+    const end = ta ? ta.selectionEnd : at;
+    const token = '{{' + key + '}}';
+    setAgenda(agenda.slice(0, at) + token + agenda.slice(end));
+    requestAnimationFrame(() => { if (ta) { ta.focus(); ta.setSelectionRange(at + token.length, at + token.length); } });
+  };
+  const submit = async () => {
     setBusy(true);
     try {
-      const room = await api('POST', '/api/profile/rooms', {
-        name, display_name: as, fields: values, agenda, personas, documents: docs, skills,
-        starter: view.library === 'blank' ? undefined : { id: view.id, version: view.version },
-      });
-      // The new room opens on its invite card (005-AC34).
-      location.assign('/r/' + encodeURIComponent(room.id) + '?invite');
+      if (creating) {
+        const room = await api('POST', '/api/profile/rooms', {
+          name, display_name: as, fields: values, agenda, personas, documents: docs, skills,
+          starter: view.library === 'blank' ? undefined : { id: view.id, version: view.version },
+        });
+        // The new room opens on its invite card (005-AC34).
+        location.assign('/r/' + encodeURIComponent(room.id) + '?invite');
+        return;
+      }
+      const st = await api('POST', path, { version: view.version, title, description, room_name: name, agenda, fields, personas, documents: docs, skills });
+      setBusy(false);
+      done?.(st);
     } catch (err) {
       setSaid(/** @type {Error} */ (err).message);
       setBusy(false);
@@ -261,32 +358,46 @@ export function Editor({ view, api, displayName, back }) {
   };
   /** @param {Event} e */
   const val = (e) => /** @type {HTMLInputElement} */ (e.currentTarget).value;
-  return html`<form class="starter-editor stack" onSubmit=${(/** @type {Event} */ e) => { e.preventDefault(); if (!missing.length) create(); }}>
-    <p class="hint">From ${view.title}${view.library === 'blank' ? '' : ' v' + view.version}. Your changes go to this room only.</p>
-    ${(m.fields || []).length > 0 && html`<fieldset id="starter-fields"><legend>About this room</legend>${m.fields.map((f) => html`<label key=${f.key}>
+  return html`<form class="starter-editor stack" onSubmit=${(/** @type {Event} */ e) => { e.preventDefault(); if (!blocked) submit(); }}>
+    <p class="hint">${creating ? html`From ${view.title}${view.library === 'blank' ? '' : ' v' + view.version}. Your changes go to this room only.`
+      : mode === 'save' ? 'Check what goes in. It lands in your starters, which only you see until you share it.'
+      : `You edit version ${view.version}. Saving makes version ${view.versions + 1}; rooms keep theirs.`}</p>
+    ${!creating && html`<label>Title<input id="starter-title" required maxlength="60" value=${title} onInput=${(/** @type {Event} */ e) => setTitle(val(e))}/></label>
+      <label>Description<textarea id="starter-description" rows="2" maxlength="300" value=${description}
+        onInput=${(/** @type {Event} */ e) => setDescription(/** @type {HTMLTextAreaElement} */ (e.currentTarget).value)}></textarea></label>
+      <${FieldsEdit} fields=${fields} set=${setFields} used=${used}/>`}
+    ${creating && (m.fields || []).length > 0 && html`<fieldset id="starter-fields"><legend>About this room</legend>${m.fields.map((f) => html`<label key=${f.key}>
       ${f.label}${f.required && html`<span aria-hidden="true"> *</span>`}
       <input required=${!!f.required} maxlength="100" value=${values[f.key] || ''} aria-describedby=${f.hint ? 'hint-' + f.key : undefined}
         onInput=${(/** @type {Event} */ e) => setValues({ ...values, [f.key]: val(e) })}/>
       ${f.hint && html`<span class="hint" id=${'hint-' + f.key}>${f.hint}</span>`}</label>`)}</fieldset>`}
-    <label>Room name<input id="starter-room-name" required maxlength="200" value=${name} onInput=${(/** @type {Event} */ e) => setName(val(e))}/></label>
-    <label>Your name in the room<input id="starter-as" required maxlength="40" autocomplete="nickname" value=${as} onInput=${(/** @type {Event} */ e) => setAs(val(e))}/></label>
-    <label>Agenda (agenda.md)<textarea id="starter-agenda" rows="8" value=${agenda}
+    <label>${creating ? 'Room name' : 'Default room name'}<input id="starter-room-name" required maxlength="200" value=${name} onInput=${(/** @type {Event} */ e) => setName(val(e))}/></label>
+    ${creating && html`<label>Your name in the room<input id="starter-as" required maxlength="40" autocomplete="nickname" value=${as} onInput=${(/** @type {Event} */ e) => setAs(val(e))}/></label>`}
+    <label>Agenda (agenda.md)<textarea id="starter-agenda" ref=${area} rows="8" value=${agenda}
       onInput=${(/** @type {Event} */ e) => setAgenda(/** @type {HTMLTextAreaElement} */ (e.currentTarget).value)}></textarea></label>
     <span class="hint">Every AI persona aligns on it. Leave it empty for no agenda.</span>
+    ${!creating && fields.some((f) => f.key) && html`<div class="row" id="starter-insert">${fields.filter((f) => f.key).map((f) => html`<button type="button" key=${f.key}
+      class="btn-secondary" onClick=${() => insert(f.key)}>Insert ${f.label}</button>`)}</div>`}
     <h3>AI personas</h3>
     ${personas.length ? personas.map((p, i) => html`<${PersonaEdit} key=${i} p=${p} models=${view.models} efforts=${view.efforts}
       set=${(/** @type {StarterPersona} */ np) => setPersonas(personas.map((x, j) => (j === i ? np : x)))}
       remove=${() => setPersonas(personas.filter((_, j) => j !== i))}/>`) : html`<p class="hint">None: add them in the room.</p>`}
-    ${m.documents.length > 0 && html`<fieldset id="starter-docs"><legend>Documents</legend>${m.documents.map((d) => html`<label class="check" key=${d.name}>
+    ${m.documents.length > 0 && html`<fieldset id="starter-docs"><legend>Documents</legend>
+      ${mode === 'save' && html`<p class="hint">Each one you check goes in at its current revision.</p>`}
+      ${m.documents.map((d) => html`<label class="check" key=${d.name}>
       <input type="checkbox" checked=${docs.includes(d.name)} onChange=${(/** @type {Event} */ e) => setDocs(toggle(docs, d.name, /** @type {HTMLInputElement} */ (e.currentTarget).checked))}/> ${d.name}</label>`)}</fieldset>`}
     ${m.skills.length > 0 && html`<fieldset id="starter-skills"><legend>Skills</legend>${m.skills.map((k) => html`<label class="check" key=${k.name}>
       <input type="checkbox" checked=${skills.includes(k.name)} onChange=${(/** @type {Event} */ e) => setSkills(toggle(skills, k.name, /** @type {HTMLInputElement} */ (e.currentTarget).checked))}/> ${k.name} v${k.version}</label>`)}
-      ${view.library !== 'builtin' && html`<span class="hint">They wait for the AI host's approval when it approves everything.</span>`}</fieldset>`}
+      ${creating && view.library !== 'builtin' && html`<span class="hint">They wait for the AI host's approval when it approves everything.</span>`}</fieldset>`}
     <p class="hint" id="starter-missing">${missing.length ? 'Fill in ' + missing.join(', ') + ' to create the room.' : ''}</p>
+    ${undeclared.length > 0 && html`<p class="said error" id="starter-undeclared" role="alert">${undeclared.map((k) => '{{' + k + '}}').join(', ')} ${undeclared.length > 1 ? 'are' : 'is'} no field: add it to the fields, or remove it.</p>`}
+    ${unlabelled && html`<p class="said error" id="starter-unlabelled" role="alert">Every field needs a label: name it, or remove it.</p>`}
+    ${unused.length > 0 && html`<p class="hint warn" id="starter-unused">Not used in the agenda or the room name: ${unused.join(', ')}.</p>`}
     <p class="said error" id="room-create-status" role="status">${said}</p>
     <div class="actions">
-      <button type="button" class="btn-secondary" onClick=${back}>Back</button>
-      <button type="submit" class="btn-primary" id="starter-create" disabled=${missing.length > 0 || busy}>Create room</button>
+      <button type="button" class="btn-secondary" onClick=${back}>${creating ? 'Back' : 'Cancel'}</button>
+      <button type="submit" class="btn-primary" id="starter-create" disabled=${blocked}
+        aria-describedby=${undeclared.length ? 'starter-undeclared' : unlabelled ? 'starter-unlabelled' : missing.length ? 'starter-missing' : undefined}>${creating ? 'Create room' : mode === 'save' ? 'Save as starter' : 'Save version ' + (view.versions + 1)}</button>
     </div>
   </form>`;
 }

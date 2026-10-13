@@ -574,6 +574,9 @@ $('msg-edit').addEventListener('click', () => {
 });
 $('msg-delete').addEventListener('click', () => { if (menuFor) deleteMessage(menuFor.m); });
 
+// The Preact panels say what they did through a toast too (006-AC15).
+addEventListener('grill:toast', (e) => toast(e.detail));
+
 // toast says what an action did, with at most one action of its own (005-AC39); onEnd runs when it
 // goes, undone or not.
 function toast(text, action, onEnd) {

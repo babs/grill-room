@@ -36,7 +36,7 @@ test('starter library: duplicate, share, delete, /admin', async ({ browser, requ
   await more.click();
   await expect(alice.getByRole('menuitem', { name: 'Duplicate to yours' })).toBeFocused();
   await alice.keyboard.press('ArrowDown');
-  await expect(alice.getByRole('menuitem', { name: 'Share with everyone' })).toBeFocused();
+  await expect(alice.getByRole('menuitem', { name: 'Edit' })).toBeFocused();
   await alice.keyboard.press('Escape');
   await expect(more).toBeFocused();
 
@@ -143,3 +143,80 @@ for (const vp of widths) {
     await expect(page.locator('#created-from')).toHaveCount(0);
   });
 }
+
+// 006-AC15 006-AC16 006-AC17 006-AC3: a room admin saves a room as a starter from Room settings,
+// picking a document; an undeclared {{x}} in the agenda or the room name blocks the save, naming it,
+// and a field used nowhere only warns. Shared, the starter makes a room with the same personas,
+// agenda and document, the field filled in.
+test('save a room as a starter, share it, create a room from it', async ({ browser, request }) => {
+  test.setTimeout(90_000);
+  const me = 'Sam' + Date.now().toString(36);
+  const title = 'Kickoff ' + me;
+  const { pages: [page] } = await roomWith(browser, request, [me]);
+  await page.goto('/profile');
+  await page.getByRole('button', { name: 'New room' }).click();
+  await page.getByRole('button', { name: 'Built-in: Spec grill' }).click();
+  await page.getByRole('button', { name: 'Use this starter' }).click();
+  await page.getByLabel('Topic').fill('Search');
+  await page.getByRole('button', { name: 'Create room' }).click();
+  await expect(page.locator('#room-name')).toHaveText('Grill: Search');
+  await page.locator('#invites').getByRole('button', { name: 'Close' }).click();
+  await page.locator('#upload-input').setInputFiles({ name: 'plan.md', mimeType: 'text/markdown', buffer: Buffer.from('# Plan\n') });
+  await expect(page.locator('#documents li', { hasText: 'plan.md' })).toHaveCount(1);
+  await page.goto(page.url().split('?')[0].split('#')[0] + '#manage');
+  await page.getByRole('button', { name: 'Save as starter' }).click();
+  const sheet = page.locator('#starter-save-sheet');
+  await expect(sheet.getByLabel('Title')).toHaveValue('Grill: Search');
+  await expect(sheet.locator('#starter-docs input[type=checkbox]')).not.toBeChecked();
+  await sheet.getByLabel('Title').fill(title);
+  await sheet.locator('#starter-docs label', { hasText: 'plan.md' }).click();
+  const agenda = sheet.getByLabel('Agenda (agenda.md)');
+  await expect(agenda).toHaveValue(/grill of Search/);
+  await agenda.fill((await agenda.inputValue()) + '\n- [ ] Owner: {{owner}}');
+  const save = sheet.getByRole('button', { name: 'Save as starter' });
+  await expect(sheet.locator('#starter-undeclared')).toHaveText('{{owner}} is no field: add it to the fields, or remove it.');
+  await expect(save).toBeDisabled();
+  await sheet.getByRole('button', { name: '+ Add a field' }).click();
+  await sheet.locator('.starter-field').last().getByLabel('Label').fill('Owner');
+  await expect(sheet.locator('.starter-field').last()).toContainText('{{owner}}');
+  await expect(sheet.locator('#starter-undeclared')).toHaveCount(0);
+  await sheet.locator('.starter-field').last().getByLabel('Required').check();
+  // The room name too: an undeclared key blocks, a declared one passes.
+  await sheet.getByLabel('Default room name').fill('Kickoff {{team}}');
+  await expect(sheet.locator('#starter-undeclared')).toHaveText('{{team}} is no field: add it to the fields, or remove it.');
+  await sheet.getByLabel('Default room name').fill('Kickoff for ');
+  await sheet.getByRole('button', { name: 'Insert Owner' }).click();
+  await expect(sheet.locator('#starter-undeclared')).toHaveCount(0);
+  await sheet.getByRole('button', { name: '+ Add a field' }).click();
+  await sheet.locator('.starter-field').last().getByLabel('Label').fill('Unused');
+  await expect(sheet.locator('#starter-unused')).toHaveText('Not used in the agenda or the room name: Unused.');
+  await expect(save).toBeEnabled();
+  await sheet.getByRole('button', { name: 'Remove the field Unused' }).click();
+  await sheet.getByLabel('Default room name').fill('Kickoff for {{owner}}');
+  await save.click();
+  await expect(sheet).toBeHidden();
+  await expect(page.locator('.toast')).toContainText('to your starters');
+
+  await page.goto('/profile');
+  const mine = page.locator('#starters-personal li', { hasText: title });
+  await expect(mine).toContainText('v1 · by ' + me);
+  await mine.getByRole('button', { name: 'More actions for ' + title }).click();
+  await page.getByRole('menuitem', { name: 'Share with everyone' }).click();
+  await confirmSheet(page, 'Share');
+  await expect(page.locator('#starters-instance li', { hasText: title })).toHaveCount(1);
+
+  await page.getByRole('button', { name: 'New room' }).click();
+  await page.getByLabel('Search starters').fill(me);
+  await page.getByRole('button', { name: 'Shared: ' + title }).click();
+  await expect(page.locator('#starter-preview .starter-personas li')).toHaveText([/Grill/, /Secretary/]);
+  await page.getByRole('button', { name: 'Use this starter' }).click();
+  await expect(page.getByRole('button', { name: 'Create room' })).toBeDisabled();
+  await page.getByLabel('Owner').fill('Bea');
+  await page.getByRole('button', { name: 'Create room' }).click();
+  await expect(page.locator('#room-name')).toHaveText('Kickoff for Bea');
+  await page.locator('#invites').getByRole('button', { name: 'Close' }).click();
+  await expect(page.locator('button.persona')).toHaveText([/Grill/, /Secretary/]);
+  await expect(page.locator('#documents li')).toHaveCount(2);
+  await expect(page.locator('#documents li').first()).toContainText('agenda.md');
+  await expect(page.locator('#documents li').nth(1)).toContainText('plan.md');
+});

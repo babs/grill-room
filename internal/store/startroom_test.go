@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -274,5 +275,75 @@ func TestDecideStarterSkill(t *testing.T) {
 	}
 	if ks, _ := s.RoomSkills(ctx, "r"); ks[0].Pending || ks[0].FromStarter {
 		t.Fatalf("after: %+v", ks)
+	}
+}
+
+// 006-AC15 006-AC17: a room's draft holds its personas, the skills they use, agenda.md as the
+// agenda and its other documents at their current revision, blobs only on demand; a pending
+// persona or skill, older revisions and the chat are left out.
+func TestRoomDraft(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	alice := joinWithProfile(t, s, "lobby", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
+	setup := testSetup()
+	setup.SkillsPending = false
+	if _, err := s.CreateProfileRoom(ctx, "r", "Weekly", alice.ProfileID, "Ali", "inv-r", "tok-r", setup); err != nil {
+		t.Fatal(err)
+	}
+	docs, _ := s.Documents(ctx, "r")
+	if _, err := s.AddRevision(ctx, "r", docs[2].ID, "# Notes v2", "Grill"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO skills(name, created_at, room_id, pending) VALUES('held', ?, 'r', 1)`, now()); err != nil {
+		t.Fatal(err)
+	}
+	// An agent session holds everything Claude read: never in a starter (006-AC17).
+	ps, _ := s.RoomPersonas(ctx, "r")
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO agent_sessions(room_id, persona_id, session_id, data, updated_at) VALUES('r', ?, 'sid', 'SECRET-SESSION', ?)`,
+		ps[0].ID, now()); err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.RoomDraft(ctx, "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := json.Marshal(m); strings.Contains(string(raw), "SECRET-SESSION") {
+		t.Fatal("the draft holds an agent session")
+	}
+	if m.Title != "Weekly" || m.Agenda != "- [ ] news" || len(m.Personas) != 1 || m.Personas[0].EveryVoice != 2 || strings.Join(m.Personas[0].Skills, ",") != "stamp" ||
+		len(m.Skills) != 1 || m.Skills[0].Version != 3 || len(m.Documents) != 2 || m.Documents[1].Text != "# Notes v2" || m.Documents[0].File == "" ||
+		m.Chain.Budget != 9 || m.Glossary != "Kafka" {
+		t.Fatalf("draft: %+v", m)
+	}
+	files, err := s.RoomDraftFiles(ctx, "r", []string{m.Documents[0].File, m.Skills[0].File})
+	for _, f := range files {
+		if strings.Contains(string(f), "SECRET-SESSION") {
+			t.Fatal("a draft blob holds an agent session")
+		}
+	}
+	if err != nil || string(files[m.Documents[0].File]) != "# Plan" || string(files[m.Skills[0].File]) != "tar!" || len(files) != 2 {
+		t.Fatalf("files: %v %v", files, err)
+	}
+	// Another room's upload and skill, named by their ids: not this room's to read.
+	other := testSetup()
+	other.SkillsPending = false
+	if _, err := s.CreateProfileRoom(ctx, "o", "Other", alice.ProfileID, "Ali", "inv-o", "tok-o", other); err != nil {
+		t.Fatal(err)
+	}
+	om, _ := s.RoomDraft(ctx, "o")
+	for _, bad := range []string{"doc/999", "skill/999", "other/1", "doc", om.Documents[0].File, om.Skills[0].File} {
+		if _, err := s.RoomDraftFiles(ctx, "r", []string{bad}); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
+	if _, err := s.RoomDraft(ctx, "nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown room: %v", err)
+	}
+	// A skill waiting for the host stays out, and the persona goes without it.
+	if _, err := s.db.ExecContext(ctx, `UPDATE skills SET pending = 1 WHERE room_id = 'r' AND name = 'stamp'`); err != nil {
+		t.Fatal(err)
+	}
+	if m, _ := s.RoomDraft(ctx, "r"); len(m.Skills) != 0 || len(m.Personas[0].Skills) != 0 {
+		t.Fatalf("pending skill in the draft: %+v", m)
 	}
 }

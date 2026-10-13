@@ -289,7 +289,8 @@ func keep[T any](all []T, names []string, name func(T) string) ([]T, error) {
 	if names == nil {
 		return all, nil
 	}
-	var out []T
+	// Empty, not nil: a manifest lists none as [], which the pages read as a list.
+	out := []T{}
 	for j, n := range names {
 		if slices.Contains(names[:j], n) {
 			return nil, badRequest(n + " is named twice")
@@ -301,4 +302,216 @@ func keep[T any](all []T, names []string, name func(T) string) ([]T, error) {
 		out = append(out, all[i])
 	}
 	return out, nil
+}
+
+const (
+	maxStarterDesc = 300
+	maxFields      = 10
+	maxFieldLabel  = 40
+	maxFieldHint   = 100
+)
+
+// fieldKeyRe is a field's key, which the editor derives from its label (006-AC16).
+var fieldKeyRe = regexp.MustCompile(`^[a-z0-9_]{1,30}$`)
+
+// starterSaveReq is a starter from the editor (006-AC15, 006-AC16): what it holds of its source,
+// a room or a version, the names of the documents and skills to keep included.
+type starterSaveReq struct {
+	Title       string                 `json:"title"`
+	Description string                 `json:"description"`
+	RoomName    string                 `json:"room_name"`
+	Agenda      string                 `json:"agenda"`
+	Fields      []store.StarterField   `json:"fields"`
+	Personas    []store.StarterPersona `json:"personas"`
+	Documents   []string               `json:"documents"`
+	Skills      []string               `json:"skills"`
+}
+
+// starterFrom checks q against base, the room or version it is saved from, and returns the
+// manifest to store with the names of the blobs it keeps. An undeclared {{x}} in the agenda or
+// the room name is refused, naming it; a field used nowhere is only the editor's warning.
+func starterFrom(base *store.StarterManifest, q *starterSaveReq) (*store.StarterManifest, []string, error) {
+	m := &store.StarterManifest{Chain: base.Chain, Glossary: base.Glossary}
+	var ok bool
+	if m.Title, ok = cleanText(q.Title, store.MaxStarterTitle, false); !ok {
+		return nil, nil, badRequest(fmt.Sprintf("the title must be 1 to %d characters", store.MaxStarterTitle))
+	}
+	if q.Description = strings.TrimSpace(q.Description); q.Description != "" && !store.ValidText(q.Description, maxStarterDesc, true) {
+		return nil, nil, badRequest(fmt.Sprintf("the description must be at most %d characters", maxStarterDesc))
+	}
+	m.Description = q.Description
+	if m.RoomName, ok = cleanText(q.RoomName, 2*maxRoomName, false); !ok {
+		return nil, nil, badRequest(fmt.Sprintf("the room name must be 1 to %d characters", 2*maxRoomName))
+	}
+	m.Agenda = strings.TrimSpace(strings.ReplaceAll(q.Agenda, "\r\n", "\n"))
+	if len(m.Agenda) > maxAgenda || (m.Agenda != "" && !store.ValidText(m.Agenda, maxAgenda, true)) {
+		return nil, nil, badRequest(fmt.Sprintf("the agenda must be at most %d KB of text", maxAgenda>>10))
+	}
+	if len(q.Fields) > maxFields {
+		return nil, nil, badRequest(fmt.Sprintf("a starter asks at most %d fields", maxFields))
+	}
+	m.Fields = []store.StarterField{}
+	for _, f := range q.Fields {
+		label, ok := cleanText(f.Label, maxFieldLabel, false)
+		if !ok {
+			return nil, nil, badRequest(fmt.Sprintf("a field's label must be 1 to %d characters", maxFieldLabel))
+		}
+		if !fieldKeyRe.MatchString(f.Key) || slices.ContainsFunc(m.Fields, func(o store.StarterField) bool { return o.Key == f.Key }) {
+			return nil, nil, badRequest("field " + label + ": its key must be unique, lowercase letters, digits or _")
+		}
+		hint := strings.TrimSpace(f.Hint)
+		if hint != "" && !store.ValidText(hint, maxFieldHint, false) {
+			return nil, nil, badRequest(fmt.Sprintf("field %s: its hint must be at most %d characters on one line", label, maxFieldHint))
+		}
+		m.Fields = append(m.Fields, store.StarterField{Label: label, Key: f.Key, Required: f.Required, Hint: hint})
+	}
+	for where, text := range map[string]string{"the room name": m.RoomName, "the agenda": m.Agenda} {
+		for _, k := range fieldRe.FindAllStringSubmatch(text, -1) {
+			if !slices.ContainsFunc(m.Fields, func(f store.StarterField) bool { return f.Key == k[1] }) {
+				return nil, nil, badRequest("{{" + k[1] + "}} in " + where + " is no field: declare it, or remove it")
+			}
+		}
+	}
+	var err error
+	if m.Documents, err = keep(base.Documents, q.Documents, func(d store.StarterDocument) string { return d.Name }); err != nil {
+		return nil, nil, err
+	}
+	if m.Agenda != "" && slices.ContainsFunc(m.Documents, func(d store.StarterDocument) bool { return d.Name == store.AgendaName }) {
+		return nil, nil, badRequest("a document is named " + store.AgendaName + " already: leave it out, or empty the agenda")
+	}
+	if m.Skills, err = keep(base.Skills, q.Skills, func(k store.StarterSkill) string { return k.Name }); err != nil {
+		return nil, nil, err
+	}
+	if len(q.Personas) > store.MaxRoomPersonas {
+		return nil, nil, badRequest(fmt.Sprintf("a room holds at most %d personas", store.MaxRoomPersonas))
+	}
+	m.Personas = []store.StarterPersona{}
+	for _, p := range q.Personas {
+		p, err := cleanPersona(p)
+		if err != nil {
+			return nil, nil, badRequest("persona " + p.Name + ": " + err.Error())
+		}
+		if slices.ContainsFunc(m.Personas, func(o store.StarterPersona) bool { return strings.EqualFold(o.Name, p.Name) }) {
+			return nil, nil, badRequest("two personas are named " + p.Name)
+		}
+		for _, k := range p.Skills {
+			if !slices.ContainsFunc(m.Skills, func(x store.StarterSkill) bool { return x.Name == k }) {
+				return nil, nil, badRequest(p.Name + " uses the skill " + k + ": keep it, or turn it off for " + p.Name)
+			}
+		}
+		m.Personas = append(m.Personas, p)
+	}
+	var kept []string
+	for _, d := range m.Documents {
+		if d.File != "" {
+			kept = append(kept, d.File)
+		}
+	}
+	for _, k := range m.Skills {
+		kept = append(kept, k.File)
+	}
+	return m, kept, nil
+}
+
+// saved answers a starter save: the starter, or the refusal.
+func (s *Server) saved(w http.ResponseWriter, st *store.Starter, err error, from string) {
+	var bad badRequest
+	switch {
+	case errors.As(err, &bad):
+		httpError(w, http.StatusBadRequest, bad.Error())
+	case s.starterError(w, "save_starter_failed", err):
+	default:
+		s.log.Info("starter_saved", zap.Int64("starter", st.ID), zap.Int("version", st.Version), zap.String("from", from))
+		writeJSON(w, http.StatusCreated, st)
+	}
+}
+
+// starterDraft is the room as "Save as starter" opens it, for a room admin (006-AC15).
+func (s *Server) starterDraft(w http.ResponseWriter, r *http.Request, sess session) {
+	if !s.asRoomAdmin(w, r, &sess) {
+		return
+	}
+	m, err := s.bus.Store.RoomDraft(r.Context(), sess.p.RoomID)
+	if err != nil {
+		s.serverError(w, "starter_draft_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, starterView{&store.Starter{Library: "room", Title: m.Title}, m, turn.Models, turn.Efforts})
+}
+
+// saveRoomStarter saves the room, as the editor left it, as a new starter in the room admin's
+// personal library (006-AC15 to 006-AC17).
+func (s *Server) saveRoomStarter(w http.ResponseWriter, r *http.Request, sess session) {
+	var q starterSaveReq
+	if !decode(w, r, &q) || !s.asRoomAdmin(w, r, &sess) {
+		return
+	}
+	if sess.p.ProfileID == 0 {
+		httpError(w, http.StatusForbidden, "saving a starter needs a profile")
+		return
+	}
+	base, err := s.bus.Store.RoomDraft(r.Context(), sess.p.RoomID)
+	if err != nil {
+		s.serverError(w, "save_starter_failed", err)
+		return
+	}
+	// Only the blobs kept are read: a room's uploads may weigh its whole quota.
+	m, names, err := starterFrom(base, &q)
+	var files map[string][]byte
+	if err == nil {
+		files, err = s.bus.Store.RoomDraftFiles(r.Context(), sess.p.RoomID, names)
+		if errors.Is(err, store.ErrNotFound) {
+			httpError(w, http.StatusConflict, "a document or skill left the room meanwhile: open Save as starter again")
+			return
+		}
+	}
+	var st *store.Starter
+	if err == nil {
+		st, err = s.bus.Store.SaveStarter(r.Context(), sess.p.ProfileID, 0, m, files)
+	}
+	s.saved(w, st, err, "room")
+}
+
+// saveStarterVersion saves the editor's changes to one of the profile's starters as its next
+// version (006-AC3); documents and skills come from the version it was opened on, `version`.
+func (s *Server) saveStarterVersion(w http.ResponseWriter, r *http.Request) {
+	p := s.profileFor(w, r)
+	if p == nil {
+		return
+	}
+	var q struct {
+		starterSaveReq
+		Version int `json:"version"`
+	}
+	if !decode(w, r, &q) {
+		return
+	}
+	id := starterID(r)
+	st, base, err := s.bus.Store.StarterVersion(r.Context(), id, q.Version, p.ID)
+	if s.starterError(w, "save_starter_failed", err) {
+		return
+	}
+	if !st.Mine {
+		httpError(w, http.StatusForbidden, "only the starter's author can do this")
+		return
+	}
+	// The editor saves on top of the version it opened: another tab may have saved since.
+	if q.Version != 0 && q.Version != st.Versions {
+		httpError(w, http.StatusConflict, fmt.Sprintf("version %d exists: reopen the starter to edit it", st.Versions))
+		return
+	}
+	m, names, err := starterFrom(base, &q.starterSaveReq)
+	var files map[string][]byte
+	if err == nil {
+		files, err = s.bus.Store.StarterFiles(r.Context(), id, st.Version)
+	}
+	kept := map[string][]byte{}
+	for _, n := range names {
+		kept[n] = files[n]
+	}
+	var saved *store.Starter
+	if err == nil {
+		saved, err = s.bus.Store.SaveStarter(r.Context(), p.ID, id, m, kept)
+	}
+	s.saved(w, saved, err, "version")
 }

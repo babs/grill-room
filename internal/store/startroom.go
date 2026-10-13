@@ -4,9 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
+	"strconv"
+	"strings"
 	"time"
 )
+
+// MaxStarterTitle bounds a starter's title (006-AC15).
+const MaxStarterTitle = 60
 
 // AgendaName is the document every persona aligns on, pinned first in the list (006-AC14).
 const AgendaName = "agenda.md"
@@ -178,4 +185,130 @@ func (s *Store) ReleaseStarterSkills(ctx context.Context, roomID string) ([]stri
 		out = append(out, n)
 	}
 	return out, rows.Err()
+}
+
+// RoomDraft is room as a starter would hold it, for "Save as starter" (006-AC15): its name, its
+// agenda.md, its personas with their triggers and active skills, the skills those use and the
+// room's own, its documents at their current revision, its auto-turn settings and words to
+// recognise. Personas and skills waiting for the host are left out. Messages, transcripts,
+// sessions, participants, invites, annotations and older revisions never are part of it
+// (006-AC17). RoomDraftFiles reads the blobs it names.
+func (s *Store) RoomDraft(ctx context.Context, roomID string) (*StarterManifest, error) {
+	r, err := s.Room(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	glossary, err := s.STTGlossary(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	title := r.Name
+	if rs := []rune(title); len(rs) > MaxStarterTitle {
+		title = string(rs[:MaxStarterTitle])
+	}
+	m := &StarterManifest{Title: title, RoomName: r.Name, Fields: []StarterField{}, Personas: []StarterPersona{}, Skills: []StarterSkill{},
+		Documents: []StarterDocument{}, Chain: StarterChain{Budget: r.Chain.Budget, Suspended: r.Chain.Suspended, Parallel: r.ParallelTurns}, Glossary: glossary}
+	// Skills: those the personas have on, at their pins, then the room's own; approved ones only.
+	rows, err := s.db.QueryContext(ctx, `SELECT v.id, s.name, v.n, v.author, v.description, v.files, v.size, v.sha256 FROM (
+			SELECT k.skill_id, k.version, 0 AS o, p.id AS pid FROM room_persona_skills k JOIN room_personas p ON p.id = k.persona_id WHERE p.room_id = ? AND p.pending = 0
+			UNION ALL SELECT s.id, (SELECT MAX(n) FROM skill_versions WHERE skill_id = s.id), 1, 0 FROM skills s WHERE s.room_id = ? AND NOT s.pending
+		) x JOIN skills s ON s.id = x.skill_id AND NOT s.pending JOIN skill_versions v ON v.skill_id = x.skill_id AND v.n = x.version ORDER BY x.o, x.pid, s.name`,
+		roomID, roomID)
+	if err != nil {
+		return nil, fmt.Errorf("room draft skills: %w", err)
+	}
+	for rows.Next() {
+		var k StarterSkill
+		var vid int64
+		if err := rows.Scan(&vid, &k.Name, &k.Version, &k.Author, &k.Description, &k.Files, &k.Size, &k.SHA256); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("room draft skills: %w", err)
+		}
+		// A name the personas share keeps its first version: a persona names its skills.
+		if slices.ContainsFunc(m.Skills, func(x StarterSkill) bool { return x.Name == k.Name }) {
+			continue
+		}
+		k.File = fmt.Sprintf("skill/%d", vid)
+		m.Skills = append(m.Skills, k)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("room draft skills: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("room draft skills: %w", err)
+	}
+	ps, err := s.RoomPersonas(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range ps {
+		if p.Pending {
+			continue
+		}
+		sp := StarterPersona{PersonaFields: p.PersonaFields, EveryN: p.EveryN, EveryVoice: p.EveryVoice, EveryMinutes: p.EveryMinutes,
+			SelfCall: p.SelfCall, Autocompact: p.Autocompact}
+		for _, k := range p.Skills {
+			// A pending room skill is not in the draft: the persona goes without it.
+			if slices.ContainsFunc(m.Skills, func(x StarterSkill) bool { return x.Name == k.Name }) {
+				sp.Skills = append(sp.Skills, k.Name)
+			}
+		}
+		m.Personas = append(m.Personas, sp)
+	}
+	docs, err := s.Documents(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range docs {
+		var text string
+		if d.Revisions > 0 {
+			rev, err := s.Revision(ctx, d.ID, d.Revisions)
+			if err != nil {
+				return nil, err
+			}
+			text = rev.Body
+		}
+		if d.Kind == DocAgent && d.Name == AgendaName {
+			m.Agenda = text
+			continue
+		}
+		sd := StarterDocument{Name: d.Name, Kind: d.Kind, Format: d.Format, ContentType: d.ContentType, Text: text, Size: d.Size}
+		if d.Kind == DocUpload {
+			sd.File = fmt.Sprintf("doc/%d", d.ID)
+		}
+		m.Documents = append(m.Documents, sd)
+	}
+	return m, nil
+}
+
+// RoomDraftFiles reads the blobs of room's draft that names names: an upload's original or a
+// skill version's tar. A name the room does not hold is ErrNotFound.
+func (s *Store) RoomDraftFiles(ctx context.Context, roomID string, names []string) (map[string][]byte, error) {
+	out := map[string][]byte{}
+	for _, name := range names {
+		kind, id, ok := strings.Cut(name, "/")
+		n, err := strconv.ParseInt(id, 10, 64)
+		if !ok || err != nil {
+			return nil, ErrNotFound
+		}
+		var data []byte
+		switch kind {
+		case "doc":
+			data, err = s.Original(ctx, roomID, n)
+		case "skill":
+			err = s.db.QueryRowContext(ctx, `SELECT v.data FROM skill_versions v JOIN skills k ON k.id = v.skill_id WHERE v.id = ?
+				AND (k.room_id = ? OR v.id IN (SELECT sv.id FROM room_persona_skills ps JOIN room_personas p ON p.id = ps.persona_id
+					JOIN skill_versions sv ON sv.skill_id = ps.skill_id AND sv.n = ps.version WHERE p.room_id = ?))`, n, roomID, roomID).Scan(&data)
+			if errors.Is(err, sql.ErrNoRows) {
+				err = ErrNotFound
+			}
+		default:
+			err = ErrNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+		out[name] = data
+	}
+	return out, nil
 }

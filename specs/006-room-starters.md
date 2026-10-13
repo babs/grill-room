@@ -125,6 +125,13 @@ Reconciliations with specs 005 and 008, which shipped after this draft (2026-10-
 - A starter skill stays pending until a host connects: with "approve everything" on, the host decides as for a 004-AC10 copy-in; otherwise it turns on when the host connects. A pending skill never loads in a turn.
 - Voice-line and timer turns queue as "every N" chain links, with their own cause; the queue keeps its sources.
 
+Decisions taken in the loop (2026-10-13):
+
+- "Insert field" puts the text `{{key}}` at the agenda's cursor: the agenda is a plain textarea, so the chip is that text.
+- A voice-line or timer trigger counts from its persona's latest turn, or from when it was turned on; an imported room's lines are history and count for nothing.
+- A starter's documents and skills count against the instance storage quota when a room is created from it, as when it is saved.
+- The timer is checked every 15 s; marks are stamped with the server's clock, as turns are.
+
 
 - Starters are copied into the room at creation; no live link, no sync (user, Q1).
 - Personal and instance libraries plus read-only, duplicable built-ins (user, Q2).

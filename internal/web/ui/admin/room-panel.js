@@ -83,15 +83,15 @@ export const roomTabs = { general: 'General', invites: 'Invites', admins: 'Admin
  * names an invite's creator.
  * @param {{room: Room, base: string, api: Api, show: (err: unknown) => void, reload: () => void, close: () => void,
  *   tab: string, tabs: string[][], href: (id: string) => string, setQuota?: boolean, byName?: (id: number) => string, label?: string,
- *   children?: import('preact').ComponentChildren}} props
+ *   general?: import('preact').ComponentChildren, children?: import('preact').ComponentChildren}} props
  */
-export function RoomPanel({ room, base, api, show, reload, close, tab, tabs, href, setQuota, byName, label = 'Manage', children }) {
+export function RoomPanel({ room, base, api, show, reload, close, tab, tabs, href, setQuota, byName, label = 'Manage', general, children }) {
   return html`
     <section id="room-panel" aria-label=${label + ' ' + room.name}>
       <h2>${room.name}</h2>
       <${TabBar} tabs=${tabs} active=${tab} href=${href} label=${label + ' ' + room.name}/>
       <div class="tab-panel" id=${'panel-' + tab}>
-        ${tab === 'general' ? html`<${General} room=${room} base=${base} api=${api} show=${show} reload=${reload} close=${close} setQuota=${setQuota}/>`
+        ${tab === 'general' ? html`<${General} room=${room} base=${base} api=${api} show=${show} reload=${reload} close=${close} setQuota=${setQuota}/>${general}`
           : tab === 'invites' ? html`<${Invites} base=${base} api=${api} show=${show} byName=${byName}/>`
           : tab === 'export' ? html`<${Export} base=${base}/>`
           : children}
