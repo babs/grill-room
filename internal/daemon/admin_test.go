@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"maps"
+	"net"
 	"net/http"
 	"path"
 	"regexp"
@@ -297,4 +299,53 @@ func TestAdminPageSurvivesRestart(t *testing.T) {
 		t.Fatalf("off-loopback address: %v, reused %v, err %v", ln4, reused, err)
 	}
 	_ = ln4.Close()
+}
+
+// A stop is not an error when a connection lingers: Shutdown waits five seconds for one that never
+// sent a request, as a browser's spare socket, so the daemon exited 1 on a stop from its page.
+func TestServeStopsWithOpenConnections(t *testing.T) {
+	for _, inFlight := range []bool{false, true} {
+		t.Run(fmt.Sprintf("request in flight %v", inFlight), func(t *testing.T) {
+			release, accepted, entered := make(chan struct{}), make(chan struct{}, 1), make(chan struct{})
+			t.Cleanup(func() { close(release) })
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET /slow", func(http.ResponseWriter, *http.Request) { close(entered); <-release })
+			srv := &http.Server{Handler: mux, ReadHeaderTimeout: time.Minute, ConnState: func(_ net.Conn, s http.ConnState) {
+				if s == http.StateNew {
+					select {
+					case accepted <- struct{}{}:
+					default:
+					}
+				}
+			}}
+			ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- Serve(ctx, srv, ln) }()
+			if inFlight {
+				req, _ := http.NewRequestWithContext(t.Context(), "GET", "http://"+ln.Addr().String()+"/slow", nil)
+				go func() {
+					if res, err := http.DefaultClient.Do(req); err == nil {
+						_ = res.Body.Close()
+					}
+				}()
+				<-entered
+			} else {
+				c, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(t.Context(), "tcp", ln.Addr().String())
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = c.Close() })
+				<-accepted
+			}
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatalf("Serve: %v", err)
+			}
+		})
+	}
 }

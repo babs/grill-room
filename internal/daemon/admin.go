@@ -684,5 +684,12 @@ func Serve(ctx context.Context, srv *http.Server, ln net.Listener) error {
 	}
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
-	return srv.Shutdown(sctx)
+	err := srv.Shutdown(sctx)
+	if errors.Is(err, context.DeadlineExceeded) {
+		// Shutdown waits five seconds on a connection that never sent a request, as a browser's
+		// spare socket: a stop is not a failure, cut what is left.
+		_ = srv.Close()
+		return nil
+	}
+	return err
 }
