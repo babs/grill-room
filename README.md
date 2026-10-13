@@ -552,3 +552,4 @@ CI also runs a flake gate, `tools/flake-gate.sh`: on Linux and Windows, the Go t
 - Before acting, wait for the state the action needs. A page that shows "connected" may be ahead of the server that will accept the action.
 - A test that fails once in CI is a bug. Find the cause, fix it in the test or the product, and write the cause in the commit body. Rerunning until green is not a fix.
 - Repeat runs happen in CI, never on a workstation.
+- A spec whose daemon runs agent turns goes in `sandboxSpecs` in `e2e/playwright.config.js`. Chrome fails the requests it is opening whenever the host's interfaces change, and each sandbox adds and removes Docker networks, so those specs run one at a time, after the others.
