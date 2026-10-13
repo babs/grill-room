@@ -3,12 +3,17 @@ package web
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"regexp"
+	"slices"
 	"strconv"
+	"strings"
 
 	"go.uber.org/zap"
 
 	"github.com/babs/grill-room/internal/store"
+	"github.com/babs/grill-room/internal/turn"
 )
 
 // Audit actions of the starter library (006-AC5).
@@ -60,11 +65,19 @@ func (s *Server) myStarters(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ls)
 }
 
-// getStarter answers a starter with the manifest of its version `v`, the latest by default, for
+// getStarter answers a starter, 0 for Blank, with the manifest of its version `v`, the latest by default, for
 // the picker's preview and the editor (006-AC8).
 func (s *Server) getStarter(w http.ResponseWriter, r *http.Request) {
 	p := s.profileFor(w, r)
 	if p == nil {
+		return
+	}
+	if starterID(r) == 0 {
+		m, err := s.bus.Store.BlankManifest(r.Context())
+		if s.starterError(w, "get_starter_failed", err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, starterView{&store.Starter{Library: "blank", Title: m.Title, Description: m.Description}, m, turn.Models, turn.Efforts})
 		return
 	}
 	n, _ := strconv.Atoi(r.URL.Query().Get("v"))
@@ -72,10 +85,15 @@ func (s *Server) getStarter(w http.ResponseWriter, r *http.Request) {
 	if s.starterError(w, "get_starter_failed", err) {
 		return
 	}
-	writeJSON(w, http.StatusOK, struct {
-		*store.Starter
-		Manifest *store.StarterManifest `json:"manifest"`
-	}{st, m})
+	writeJSON(w, http.StatusOK, starterView{st, m, turn.Models, turn.Efforts})
+}
+
+// starterView is a starter version for the editor, with the models and efforts it offers.
+type starterView struct {
+	*store.Starter
+	Manifest *store.StarterManifest `json:"manifest"`
+	Models   []string               `json:"models"`
+	Efforts  []string               `json:"efforts"`
 }
 
 // duplicateStarter copies a starter the profile sees into its personal library (006-AC2).
@@ -144,4 +162,143 @@ func (s *Server) adminDeleteStarter(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Info("starter_deleted", zap.Int64("starter", id), zap.String("by", store.ActorSuperAdmin))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+const (
+	maxFieldValue = 100
+	maxAgenda     = 64 << 10
+)
+
+// fieldRe is a {{key}} in an agenda or a room name (006-AC10, 006-AC16).
+var fieldRe = regexp.MustCompile(`\{\{([a-z0-9_]+)\}\}`)
+
+// starterRoomReq is "Create room" from the editor (006-AC9): the starter version it started from
+// (none for Blank), the fields' values, and what the editor changed. Documents and skills name
+// what the room keeps of the starter's; nil keeps them all.
+type starterRoomReq struct {
+	Starter *struct {
+		ID      int64 `json:"id"`
+		Version int   `json:"version"`
+	} `json:"starter"`
+	Fields    map[string]string       `json:"fields"`
+	Agenda    *string                 `json:"agenda"`
+	Personas  *[]store.StarterPersona `json:"personas"`
+	Documents []string                `json:"documents"`
+	Skills    []string                `json:"skills"`
+}
+
+// badRequest is a refusal the editor shows as is.
+type badRequest string
+
+func (b badRequest) Error() string { return string(b) }
+
+// starterSetup checks q against the starter version it names and returns what the new room gets,
+// with name, its room name, once the fields are put in (006-AC9 to 006-AC13). A starter the profile
+// does not see is store.ErrNotFound; anything else wrong is a badRequest.
+func (s *Server) starterSetup(ctx context.Context, profileID int64, name string, q *starterRoomReq) (string, *store.RoomSetup, error) {
+	var m *store.StarterManifest
+	var files map[string][]byte
+	setup := &store.RoomSetup{UploadQuota: s.opts.MaxRoomBytes}
+	if q.Starter == nil {
+		var err error
+		if m, err = s.bus.Store.BlankManifest(ctx); err != nil {
+			return "", nil, err
+		}
+	} else {
+		st, man, err := s.bus.Store.StarterVersion(ctx, q.Starter.ID, q.Starter.Version, profileID)
+		if err != nil {
+			return "", nil, err
+		}
+		if files, err = s.bus.Store.StarterFiles(ctx, st.ID, st.Version); err != nil {
+			return "", nil, err
+		}
+		m, setup.From, setup.SkillsPending = man, &store.Provenance{Title: man.Title, Version: st.Version}, st.Library != store.LibraryBuiltin
+	}
+	values := map[string]string{}
+	for _, f := range m.Fields {
+		v := strings.TrimSpace(q.Fields[f.Key])
+		if v != "" && !store.ValidText(v, maxFieldValue, false) {
+			return "", nil, badRequest(fmt.Sprintf("%s must be at most %d characters on one line", f.Label, maxFieldValue))
+		}
+		if v == "" && f.Required {
+			return "", nil, badRequest("fill in " + f.Label)
+		}
+		values[f.Key] = v
+	}
+	// An empty optional field becomes an empty string; an undeclared {{x}} stays as typed.
+	fill := func(text string) string {
+		return fieldRe.ReplaceAllStringFunc(text, func(k string) string {
+			if v, ok := values[fieldRe.FindStringSubmatch(k)[1]]; ok {
+				return v
+			}
+			return k
+		})
+	}
+	room, ok := cleanText(strings.Join(strings.Fields(fill(name)), " "), maxRoomName, false)
+	if !ok {
+		return "", nil, badRequest(fmt.Sprintf("name must be 1 to %d characters", maxRoomName))
+	}
+	agenda := m.Agenda
+	if q.Agenda != nil {
+		agenda = *q.Agenda
+	}
+	agenda = strings.TrimSpace(strings.ReplaceAll(fill(agenda), "\r\n", "\n"))
+	if len(agenda) > maxAgenda || (agenda != "" && !store.ValidText(agenda, maxAgenda, true)) {
+		return "", nil, badRequest(fmt.Sprintf("the agenda must be at most %d KB of text", maxAgenda>>10))
+	}
+	setup.Agenda, setup.Chain, setup.Glossary, setup.Files = agenda, m.Chain, m.Glossary, files
+	var err error
+	if setup.Documents, err = keep(m.Documents, q.Documents, func(d store.StarterDocument) string { return d.Name }); err != nil {
+		return "", nil, err
+	}
+	if agenda != "" && slices.ContainsFunc(setup.Documents, func(d store.StarterDocument) bool { return d.Name == store.AgendaName }) {
+		return "", nil, badRequest("a document is named " + store.AgendaName + " already: leave it out, or empty the agenda")
+	}
+	if setup.Skills, err = keep(m.Skills, q.Skills, func(k store.StarterSkill) string { return k.Name }); err != nil {
+		return "", nil, err
+	}
+	personas := m.Personas
+	if q.Personas != nil {
+		personas = *q.Personas
+	}
+	if len(personas) > store.MaxRoomPersonas {
+		return "", nil, badRequest(fmt.Sprintf("a room holds at most %d personas", store.MaxRoomPersonas))
+	}
+	for i := range personas {
+		p, err := cleanPersona(personas[i])
+		if err != nil {
+			return "", nil, badRequest("persona " + personas[i].Name + ": " + err.Error())
+		}
+		if slices.ContainsFunc(personas[:i], func(o store.StarterPersona) bool { return strings.EqualFold(o.Name, p.Name) }) {
+			return "", nil, badRequest("two personas are named " + p.Name)
+		}
+		for _, k := range p.Skills {
+			if !slices.ContainsFunc(setup.Skills, func(x store.StarterSkill) bool { return x.Name == k }) {
+				return "", nil, badRequest(p.Name + " uses the skill " + k + ": keep it, or turn it off for " + p.Name)
+			}
+		}
+		personas[i] = p
+	}
+	setup.Personas = personas
+	return room, setup, nil
+}
+
+// keep returns the entries of all whose name is in names, all of them for nil names; a name of no
+// entry is a badRequest.
+func keep[T any](all []T, names []string, name func(T) string) ([]T, error) {
+	if names == nil {
+		return all, nil
+	}
+	var out []T
+	for j, n := range names {
+		if slices.Contains(names[:j], n) {
+			return nil, badRequest(n + " is named twice")
+		}
+		i := slices.IndexFunc(all, func(x T) bool { return name(x) == n })
+		if i < 0 {
+			return nil, badRequest("the starter has no " + n)
+		}
+		out = append(out, all[i])
+	}
+	return out, nil
 }

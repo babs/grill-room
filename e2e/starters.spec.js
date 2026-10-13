@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, confirmSheet } from './helpers.js';
+import { roomWith, signIn, confirmSheet, smallTargets, noOverflow } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -77,3 +77,69 @@ test('starter library: duplicate, share, delete, /admin', async ({ browser, requ
   await expect(alice.locator('#starters-personal')).toHaveCount(0);
   await expect(alice.locator('#starters-instance li', { hasText: me })).toHaveCount(0);
 });
+
+const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
+// Each built-in with the field it asks, and what the room then holds.
+const builtins = [
+  { title: 'Spec grill', search: 'SPEC GRILL', field: 'Topic', value: 'Billing', room: 'Grill: Billing', personas: ['Grill', 'Secretary'] },
+  { title: 'Retro', search: 'retro', field: 'Team', value: 'Ops', room: 'Retro: Ops', personas: ['Facilitator', 'Secretary'] },
+  { title: 'Doc review', search: 'doc review', field: 'Document', value: 'RFC 12', room: 'Review: RFC 12', personas: ['Reviewer', 'Secretary'] },
+];
+
+for (const vp of widths) {
+  // 006-AC8 006-AC9 006-AC10 006-AC11 006-AC14: "New room" opens the picker, with a search and a
+  // preview; every built-in and Blank lead to the editor, where a required field keeps "Create
+  // room" disabled with the reason; the room opens with the starter's personas, its agenda first
+  // in the documents, and Room settings names the starter.
+  test(`new room from each built-in and Blank, ${vp.name}`, async ({ browser, request }) => {
+    test.setTimeout(90_000);
+    const me = 'Ann' + Date.now().toString(36);
+    const { pages: [page] } = await roomWith(browser, request, [me]);
+    await page.setViewportSize(vp);
+    for (const b of builtins) {
+      await page.goto('/profile');
+      await page.getByRole('button', { name: 'New room' }).click();
+      const sheet = page.locator('#room-create-sheet');
+      await expect(sheet.locator('#starter-preview')).toContainText('Blank');
+      await sheet.getByLabel('Search starters').fill(b.search);
+      await expect(sheet.locator('#pick-builtin li')).toHaveCount(1);
+      await sheet.getByRole('button', { name: 'Built-in: ' + b.title }).click();
+      const preview = sheet.locator('#starter-preview');
+      await expect(preview.locator('h3')).toHaveText(b.title);
+      await expect(preview).toContainText('v1 · by grill-room');
+      await expect(preview.locator('.starter-personas li')).toHaveText([new RegExp(`${b.personas[0]} · sonnet · effort (high|medium) · only when asked`),
+        /Secretary · sonnet · effort medium · every 20 voice lines/]);
+      await expect(preview.locator('.starter-agenda')).toContainText('- [ ]');
+      await sheet.getByRole('button', { name: 'Use this starter' }).click();
+      const create = sheet.getByRole('button', { name: 'Create room' });
+      await expect(create).toBeDisabled();
+      await expect(sheet.locator('#starter-missing')).toHaveText(`Fill in ${b.field} to create the room.`);
+      await expect(sheet.getByLabel('Your name in the room')).toHaveValue(me);
+      if (vp.width < 400) {
+        expect(await smallTargets(page), b.title).toEqual([]);
+        expect(await noOverflow(page)).toEqual([]);
+      }
+      await sheet.getByLabel(b.field).fill(b.value);
+      await expect(create).toBeEnabled();
+      await create.click();
+      await expect(page.locator('#room-name')).toHaveText(b.room);
+      await page.locator('#invites').getByRole('button', { name: 'Close' }).click();
+      await expect(page.locator('button.persona')).toHaveText(b.personas.map((n) => new RegExp(n)));
+      if (vp.width > 400) await expect(page.locator('#documents li').first()).toContainText('agenda.md');
+      await page.goto(page.url().split('?')[0] + '#manage');
+      await expect(page.locator('#created-from')).toHaveText(`Created from the starter ${b.title} v1.`);
+    }
+    // Blank: Grill alone, no agenda, no starter named.
+    await page.goto('/profile');
+    await page.getByRole('button', { name: 'New room' }).click();
+    await page.getByRole('button', { name: 'Use this starter' }).click();
+    await page.getByLabel('Room name').fill('Plain ' + vp.name);
+    await page.getByRole('button', { name: 'Create room' }).click();
+    await expect(page.locator('#room-name')).toHaveText('Plain ' + vp.name);
+    await page.locator('#invites').getByRole('button', { name: 'Close' }).click();
+    await expect(page.locator('button.persona')).toHaveText([/Grill/]);
+    await page.goto(page.url().split('?')[0] + '#manage');
+    await expect(page.locator('#room-panel')).toBeVisible();
+    await expect(page.locator('#created-from')).toHaveCount(0);
+  });
+}

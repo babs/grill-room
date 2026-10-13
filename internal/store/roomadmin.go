@@ -116,7 +116,9 @@ func mb(n int64) string { return strconv.FormatFloat(float64(n)/(1<<20), 'f', 1,
 // invite of its own, inviteHash, whose token nobody holds. The guardrails are checked in the same
 // transaction as the insert, so two requests cannot both take the last room of a limit.
 // ErrCreationRefused, wrapped with the reason.
-func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileID int64, displayName, inviteHash, tokenHash string) (*Room, error) {
+//
+// With setup, the room holds the starter's copies instead of the Default persona (006-AC11).
+func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileID int64, displayName, inviteHash, tokenHash string, setup *RoomSetup) (*Room, error) {
 	var r *Room
 	err := s.withTx(ctx, "create room", func(tx *sql.Tx) error {
 		v, err := instanceSettings(ctx, tx)
@@ -134,8 +136,13 @@ func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileI
 			if used >= v.StorageQuota {
 				return fmt.Errorf("%w: the instance holds %s, at its %s storage quota", ErrCreationRefused, mb(used), mb(v.StorageQuota))
 			}
+			// A starter's documents and skills are copied in: they count too (006-AC12).
+			if size := setup.blobBytes(); used+size > v.StorageQuota {
+				return fmt.Errorf("%w: the instance holds %s, and the starter's %s would pass its %s storage quota", ErrCreationRefused,
+					mb(used), mb(size), mb(v.StorageQuota))
+			}
 		}
-		if r, err = insertRoom(ctx, tx, id, name, profileID); err != nil {
+		if r, err = insertRoom(ctx, tx, id, name, profileID, setup == nil); err != nil {
 			return err
 		}
 		var inv int64
@@ -152,6 +159,11 @@ func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileI
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO room_admins(room_id, profile_id, created_at) VALUES(?,?,?)`, id, profileID, now()); err != nil {
 			return fmt.Errorf("create room: %w", err)
+		}
+		if setup != nil {
+			if err := setUp(ctx, tx, r, p, setup); err != nil {
+				return err
+			}
 		}
 		return auditTx(ctx, tx, "", nil)
 	})

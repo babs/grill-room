@@ -40,7 +40,9 @@ type presencePersona struct {
 // presenceView is what presence.tmpl renders.
 type presenceView struct {
 	Room string
-	Self presencePersona
+	// Agenda is set when the room has its agenda.md, which every persona aligns on (006-AC14).
+	Agenda bool
+	Self   presencePersona
 	// Why is the turn's cause (003-AC22).
 	Why      string
 	SelfCall bool
@@ -91,9 +93,29 @@ func everyRounds(n int) string {
 	return fmt.Sprintf("every %d rounds", n)
 }
 
+// everyVoice and everyMinutes are the 006-AC18 triggers in words.
+func everyVoice(n int) string {
+	if n == 1 {
+		return "every voice line"
+	}
+	return fmt.Sprintf("every %d voice lines", n)
+}
+
+func everyMinutes(n int) string {
+	if n == 1 {
+		return "every minute"
+	}
+	return fmt.Sprintf("every %d minutes", n)
+}
+
 func triggerText(p *store.RoomPersona) string {
-	if p.EveryN > 0 {
+	switch {
+	case p.EveryN > 0:
 		return "on demand and " + everyRounds(p.EveryN)
+	case p.EveryVoice > 0:
+		return "on demand and " + everyVoice(p.EveryVoice)
+	case p.EveryMinutes > 0:
+		return "on demand and " + everyMinutes(p.EveryMinutes)
 	}
 	return "on demand"
 }
@@ -181,7 +203,11 @@ func (s *Server) presencePreamble(ctx context.Context, room *store.Room, self *s
 		runs, _ := capped(host, p)
 		return levelText(runs)
 	}
-	v := presenceView{Room: oneLine(room.Name), SelfCall: self.SelfCall, Chain: chainText(room.Chain), Why: oneLine(cause),
+	docs, err := st.Documents(ctx, room.ID)
+	if err != nil {
+		return "", err
+	}
+	v := presenceView{Room: oneLine(room.Name), Agenda: slices.ContainsFunc(docs, isAgenda), SelfCall: self.SelfCall, Chain: chainText(room.Chain), Why: oneLine(cause),
 		Self: presencePersona{Name: self.Name, Level: level(self), Trigger: triggerText(self)}}
 	for i := range personas {
 		p := &personas[i]
@@ -224,3 +250,6 @@ func (s *Server) presencePreamble(ctx context.Context, room *store.Room, self *s
 	}
 	return renderPresence(v)
 }
+
+// isAgenda tells the room's agenda: the agent document named agenda.md (006-AC14).
+func isAgenda(d store.Document) bool { return d.Kind == store.DocAgent && d.Name == store.AgendaName }

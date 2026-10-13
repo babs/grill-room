@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { adminToken } from './playwright.config.js';
-import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet, newRoomEditor } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const phone = { width: 390, height: 844 };
@@ -28,9 +28,9 @@ async function join(browser, request, roomID, name, viewport) {
 // newRoom creates a room from page's profile page, as its room admin, and opens it.
 async function newRoom(page, name) {
   await page.goto('/profile');
-  await page.getByRole('button', { name: 'New room' }).click();
+  await newRoomEditor(page);
   await page.getByLabel('Room name').fill(name);
-  await page.getByRole('button', { name: 'Create the room' }).click();
+  await page.getByRole('button', { name: 'Create room' }).click();
   await expect(page.locator('#room-name')).toHaveText(name);
   // A new room opens on its invite sheet (005-AC34).
   await page.locator('#invites').getByRole('button', { name: 'Close' }).click();
@@ -67,10 +67,10 @@ test('room creation from the profile page, within the limits', async ({ browser,
   }
   await page.goto('/profile');
   await expect(page.locator('#rooms li')).toHaveCount(11);
-  await page.getByRole('button', { name: 'New room' }).click();
+  await newRoomEditor(page);
   await expect(page.getByLabel('Your name in the room')).toHaveValue('Pia');
   await page.getByLabel('Room name').fill('Pia room 11');
-  await page.getByRole('button', { name: 'Create the room' }).click();
+  await page.getByRole('button', { name: 'Create room' }).click();
   await expect(page.locator('#room-create-status')).toHaveText('room creation refused: you have created 10 rooms, the most this instance allows per profile');
   await fits(page);
   // Deleting one frees its place.
@@ -85,12 +85,12 @@ test('room creation from the profile page, within the limits', async ({ browser,
     await form.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(form.getByRole('status')).toHaveText('Saved.');
     await fits(adminPage);
-    await page.getByRole('button', { name: 'Create the room' }).click();
+    await page.getByRole('button', { name: 'Create room' }).click();
     await expect(page.locator('#room-create-status')).toHaveText('room creation refused: only the super-admin creates rooms on this instance');
   } finally {
     expect((await request.put('/api/admin/settings', { headers: admin, data: { rooms_per_profile: 10, storage_quota_bytes: 0, room_creation: 'anyone' } })).status()).toBe(200);
   }
-  await page.getByRole('button', { name: 'Create the room' }).click();
+  await page.getByRole('button', { name: 'Create room' }).click();
   await expect(page.locator('#room-name')).toHaveText('Pia room 11');
   const log = await (await request.get('/api/admin/audit?action=instance.settings', { headers: admin })).json();
   expect(log.entries[1].details.room_creation).toBe('super-admin');
@@ -112,9 +112,9 @@ test('room creation from the profile page, within the limits', async ({ browser,
   await fits(adminPage);
   await newRoom(quinn, 'Quinn room 11');
   await page.goto('/profile');
-  await page.getByRole('button', { name: 'New room' }).click();
+  await newRoomEditor(page);
   await page.getByLabel('Room name').fill('Pia room 12');
-  await page.getByRole('button', { name: 'Create the room' }).click();
+  await page.getByRole('button', { name: 'Create room' }).click();
   await expect(page.locator('#room-create-status')).toHaveText('room creation refused: you have created 10 rooms, the most this instance allows per profile');
   const set = await (await request.get('/api/admin/audit?action=profile.max_rooms', { headers: admin })).json();
   expect(set.entries[0]).toMatchObject({ target_kind: 'profile', target_name: qn, details: { max_rooms: 12, via: 'session' } });

@@ -65,7 +65,7 @@ type ImportOptions struct {
 	// MaxAttachment bound one of each.
 	DefaultQuota, MaxUpload, MaxAttachment int64
 	// CheckPersona validates a persona as the room API would.
-	CheckPersona func(p PersonaFields, everyN, autocompact int) error
+	CheckPersona func(p StarterPersona) error
 	// DryRun runs the whole import and rolls it back: the preview (004-AC15).
 	DryRun bool
 }
@@ -205,11 +205,20 @@ func (im *importer) run() error {
 	if err := textIs("STT glossary", MaxSTTGlossary, true, true, x.STTGlossary); err != nil {
 		return err
 	}
+	var from any
+	if f := x.CreatedFrom; f != nil {
+		if err := textIs("starter title", maxImportRoomName, false, false, f.Title); err != nil {
+			return err
+		}
+		b, _ := json.Marshal(Provenance{Title: f.Title, Version: f.Version})
+		from = string(b)
+	}
 	if x.Chain.Budget < 1 || x.Chain.Count < 0 || len(x.Personas) > MaxRoomPersonas {
 		return refuseImport("%s: bad chain, or more than %d personas", fileRoom, MaxRoomPersonas)
 	}
-	_, err = im.tx.ExecContext(im.ctx, `INSERT INTO rooms(id, name, created_at, creator_profile_id, chain_budget, chain_count, chain_suspended, parallel_turns, stt_glossary)
-		VALUES(?,?,?,?,?,?,?,?,?)`, im.room, x.Name, now(), nullID(im.o.Importer), x.Chain.Budget, x.Chain.Count, x.Chain.Suspended, x.ParallelTurns, x.STTGlossary)
+	_, err = im.tx.ExecContext(im.ctx, `INSERT INTO rooms(id, name, created_at, creator_profile_id, chain_budget, chain_count, chain_suspended, parallel_turns, stt_glossary,
+		created_from) VALUES(?,?,?,?,?,?,?,?,?,?)`, im.room, x.Name, now(), nullID(im.o.Importer), x.Chain.Budget, x.Chain.Count, x.Chain.Suspended, x.ParallelTurns,
+		x.STTGlossary, from)
 	if err != nil {
 		return fmt.Errorf("import room: %w", err)
 	}
@@ -222,6 +231,11 @@ func (im *importer) run() error {
 		if err := step(); err != nil {
 			return err
 		}
+	}
+	// The imported lines are history, not new activity for the triggers (006-AC18).
+	if _, err := im.tx.ExecContext(im.ctx, `UPDATE room_personas SET mark_msg_id = (SELECT COALESCE(MAX(id), 0) FROM messages WHERE room_id = ?)
+		WHERE room_id = ?`, im.room, im.room); err != nil {
+		return fmt.Errorf("import room: %w", err)
 	}
 	used, _, err := roomUsage(im.ctx, im.tx, im.room, im.o.DefaultQuota)
 	if err != nil {
@@ -375,7 +389,8 @@ func (im *importer) personasStep(ps []xPersona) error {
 		if p.Effort == "" {
 			p.Effort = DefaultEffort
 		}
-		if err := im.o.CheckPersona(p.PersonaFields, p.EveryN, p.Autocompact); err != nil {
+		if err := im.o.CheckPersona(StarterPersona{PersonaFields: p.PersonaFields, EveryN: p.EveryN, EveryVoice: p.EveryVoice, EveryMinutes: p.EveryMinutes,
+			Autocompact: p.Autocompact}); err != nil {
 			return refuseImport("persona %s: %v", p.Name, err)
 		}
 		tpl, err := im.template(p)
@@ -384,8 +399,9 @@ func (im *importer) personasStep(ps []xPersona) error {
 		}
 		var id int64
 		err = im.tx.QueryRowContext(im.ctx, `INSERT INTO room_personas(room_id, template_id, template_version, name, badge, colour, text, model, effort,
-			every_n, self_call, autocompact, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
-			append(append([]any{im.room, tpl, p.TemplateVersion}, p.PersonaFields.args()...), nullID(int64(p.EveryN)), p.SelfCall, p.Autocompact, p.CreatedAt)...).Scan(&id)
+			every_n, self_call, autocompact, created_at, every_voice, every_minutes, mark_msg_id, mark_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,`+markNow+`) RETURNING id`,
+			append(append([]any{im.room, tpl, p.TemplateVersion}, p.PersonaFields.args()...), nullID(int64(p.EveryN)), p.SelfCall, p.Autocompact, p.CreatedAt,
+				nullInt(p.EveryVoice), nullInt(p.EveryMinutes), time.Now().UnixMilli())...).Scan(&id)
 		if err != nil {
 			return refuseImport("persona %s: %v", p.Name, err)
 		}

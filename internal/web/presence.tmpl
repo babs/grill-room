@@ -3,6 +3,9 @@ cut at about 100 characters after rendering, so keep what matters at the start o
 ## Who is here
 
 Room: {{.Room}}
+{{- if .Agenda}}
+Agenda: docs/agenda.md is the room's agenda. Align your work on it.
+{{- end}}
 You: @{{.Self.Name}}, {{.Self.Level}}, {{.Self.Trigger}}
 Why you are running: {{or .Why "asked for a turn"}}
 {{- range .Others}}

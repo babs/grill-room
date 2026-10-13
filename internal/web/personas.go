@@ -20,6 +20,8 @@ const (
 	maxBadge        = 8
 	maxTemplateName = 60
 	maxEveryN       = 100
+	maxEveryVoice   = 500
+	maxEveryMinutes = 240
 )
 
 var (
@@ -38,6 +40,9 @@ type personaReq struct {
 	Effort   *string `json:"effort"`
 	EveryN   *int    `json:"every_n"`
 	SelfCall *bool   `json:"self_call"`
+	// EveryVoice and EveryMinutes are the other automatic triggers; one at most (006-AC18).
+	EveryVoice   *int `json:"every_voice"`
+	EveryMinutes *int `json:"every_minutes"`
 	// Autocompact 0 is auto: Claude Code picks when to compact.
 	Autocompact *int `json:"autocompact"`
 }
@@ -73,6 +78,32 @@ func (q *personaReq) check() string {
 	}
 	if q.EveryN != nil && (*q.EveryN < 0 || *q.EveryN > maxEveryN) {
 		return fmt.Sprintf("every_n must be 0 (off) to %d", maxEveryN)
+	}
+	if q.EveryVoice != nil && (*q.EveryVoice < 0 || *q.EveryVoice > maxEveryVoice) {
+		return fmt.Sprintf("every_voice must be 0 (off) to %d", maxEveryVoice)
+	}
+	if q.EveryMinutes != nil && (*q.EveryMinutes < 0 || *q.EveryMinutes > maxEveryMinutes) {
+		return fmt.Sprintf("every_minutes must be 0 (off) to %d", maxEveryMinutes)
+	}
+	// One automatic trigger at most: setting one turns the other two off (006-AC18).
+	var on []*int
+	for _, v := range []*int{q.EveryN, q.EveryVoice, q.EveryMinutes} {
+		if v != nil && *v > 0 {
+			on = append(on, v)
+		}
+	}
+	if len(on) > 1 {
+		return "set one of every_n, every_voice and every_minutes, not several"
+	}
+	if len(on) == 1 {
+		zero := func(p **int) {
+			if *p == nil || **p == 0 {
+				*p = new(int)
+			}
+		}
+		zero(&q.EveryN)
+		zero(&q.EveryVoice)
+		zero(&q.EveryMinutes)
 	}
 	if a := q.Autocompact; a != nil && *a != 0 && (*a < turn.MinAutocompact || *a > turn.MaxAutocompact) {
 		return fmt.Sprintf("autocompact must be 0 (auto) or %d to %d tokens", turn.MinAutocompact, turn.MaxAutocompact)
@@ -250,7 +281,7 @@ func (s *Server) editPersona(w http.ResponseWriter, r *http.Request, sess sessio
 		return
 	}
 	patch := store.PersonaPatch{Name: req.Name, Badge: req.Badge, Colour: req.Colour, Text: req.Text, Model: req.Model, Effort: req.Effort,
-		EveryN: req.EveryN, SelfCall: req.SelfCall, Autocompact: req.Autocompact}
+		EveryN: req.EveryN, EveryVoice: req.EveryVoice, EveryMinutes: req.EveryMinutes, SelfCall: req.SelfCall, Autocompact: req.Autocompact}
 	p, m, held, err := s.bus.Store.EditPersona(r.Context(), sess.p.RoomID, personaID(r), patch, sess.p)
 	s.personaDone(w, sess, p, m, err, heldStatus(held))
 }

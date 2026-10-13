@@ -51,7 +51,6 @@ function render({ email_enabled: emailEnabled, profile }) {
   const name = profile.name || (profile.rooms[0] || {}).name || '';
   $('who').textContent = name;
   $('profile-name').textContent = name || 'Not set: it comes from the name you join rooms with.';
-  if (!$('room-create-as').value) $('room-create-as').value = name;
   $('email').hidden = !emailEnabled;
   $('email-state').textContent = profile.email ? 'Bound to ' + profile.email + '.' : 'No email bound.';
   // The recovery link lives in the tab that joined, until saved: the server keeps only its hash.
@@ -115,31 +114,6 @@ $('skill-upload').addEventListener('submit', async (e) => {
     await loadSkills();
   } catch {
     $('skill-status').textContent = 'Network error, try again.';
-  }
-  button.disabled = false;
-});
-
-// New room: the profile creates a room and becomes its admin, within the instance's limits (004-AC7).
-$('room-new').addEventListener('click', () => {
-  $('room-create-status').textContent = '';
-  $('room-create-sheet').showModal();
-  $('room-create-name').focus();
-});
-$('room-create-cancel').addEventListener('click', () => $('room-create-sheet').close());
-$('room-create').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const button = $('room-create').querySelector('button[type=submit]');
-  button.disabled = true;
-  try {
-    const { res, data } = await post('/api/profile/rooms', { name: $('room-create-name').value, display_name: $('room-create-as').value });
-    if (res.ok) {
-      // The new room opens on its invite card (005-AC34).
-      location.assign('/r/' + encodeURIComponent(data.id) + '?invite');
-      return;
-    }
-    $('room-create-status').textContent = data.error || 'HTTP ' + res.status;
-  } catch {
-    $('room-create-status').textContent = 'Network error, try again.';
   }
   button.disabled = false;
 });

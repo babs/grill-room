@@ -441,3 +441,15 @@ func ensureStarter(ctx context.Context, tx *sql.Tx, key string, raw []byte) erro
 	}
 	return insertStarterVersion(ctx, tx, id, n+1, presetAuthor, raw, nil)
 }
+
+// BlankManifest is the blank starter: the Default template's persona alone, as every room had
+// before 006. It is not stored (spec 006 Decisions).
+func (s *Store) BlankManifest(ctx context.Context) (*StarterManifest, error) {
+	t, err := scanTemplate(s.db.QueryRowContext(ctx, templateCols+`WHERE t.preset = ?`, PresetDefault))
+	if err != nil {
+		return nil, err
+	}
+	return &StarterManifest{Title: "Blank", Description: "One AI persona, " + t.Name + ", and nothing else.", Fields: []StarterField{},
+		Personas: []StarterPersona{{PersonaFields: t.PersonaFields}}, Skills: []StarterSkill{}, Documents: []StarterDocument{},
+		Chain: StarterChain{Budget: DefaultChainBudget}}, nil
+}

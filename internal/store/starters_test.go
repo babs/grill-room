@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testManifest(title string) *StarterManifest {
@@ -279,5 +280,38 @@ func TestDeleteProfileDropsItsStarters(t *testing.T) {
 	}
 	if n := count(t, s, `SELECT count(*) FROM starter_files`); n != 0 {
 		t.Fatalf("%d files left", n)
+	}
+}
+
+// Every starter call reports a failing database instead of answering empty.
+func TestStarterCallsFailOnAClosedStore(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	_ = s.Close()
+	for name, f := range map[string]func() error{
+		"list":      func() error { _, err := s.Starters(ctx, 1); return err },
+		"version":   func() error { _, _, err := s.StarterVersion(ctx, 1, 0, 1); return err },
+		"files":     func() error { _, err := s.StarterFiles(ctx, 1, 1); return err },
+		"save":      func() error { _, err := s.SaveStarter(ctx, 1, 0, testManifest("x"), nil); return err },
+		"duplicate": func() error { _, err := s.DuplicateStarter(ctx, 1, 1); return err },
+		"publish":   func() error { return s.PublishStarter(ctx, 1, 1) },
+		"delete":    func() error { return s.DeleteStarter(ctx, 1, 1) },
+		"blank":     func() error { _, err := s.BlankManifest(ctx); return err },
+		"voice":     func() error { _, err := s.DueVoicePersonas(ctx, "r"); return err },
+		"timer":     func() error { _, err := s.DueTimerPersonas(ctx, time.Now(), ""); return err },
+		"release":   func() error { _, err := s.ReleaseStarterSkills(ctx, "r"); return err },
+	} {
+		if err := f(); err == nil || errors.Is(err, ErrNotFound) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// The blank starter is the Default template's persona alone.
+func TestBlankManifest(t *testing.T) {
+	s := openTest(t)
+	m, err := s.BlankManifest(t.Context())
+	if err != nil || m.Title != "Blank" || len(m.Personas) != 1 || m.Personas[0].Name != "Grill" || m.Agenda != "" || m.Chain.Budget != DefaultChainBudget {
+		t.Fatalf("blank: %+v %v", m, err)
 	}
 }

@@ -283,6 +283,8 @@ func (s *Server) daemonStatus(w http.ResponseWriter, r *http.Request, d *store.D
 	case changed:
 		s.agentChanged(r.Context(), d.RoomID)
 	case settingsChanged:
+		// Turning "approve everything" off lets a starter's held skills through (006-AC13).
+		s.releaseStarterSkills(r.Context(), d.RoomID)
 		s.bus.Notify(d.RoomID)
 	}
 	w.WriteHeader(http.StatusNoContent)

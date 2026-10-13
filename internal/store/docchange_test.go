@@ -12,7 +12,7 @@ func TestDocumentRenameAndDelete(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	alice := joinWithProfile(t, s, "lobby", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
-	if _, err := s.CreateProfileRoom(ctx, "r", "Room", alice.ProfileID, "Alice", "inv-r", "tok-r"); err != nil {
+	if _, err := s.CreateProfileRoom(ctx, "r", "Room", alice.ProfileID, "Alice", "inv-r", "tok-r", nil); err != nil {
 		t.Fatal(err)
 	}
 	ps, _ := s.Participants(ctx, "r")

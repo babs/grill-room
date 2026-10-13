@@ -38,6 +38,8 @@ type Room struct {
 	// ParallelTurns lets two personas of the room run at once, each in its own sandbox; the host
 	// switches it (003-AC20).
 	ParallelTurns bool `json:"parallel_turns"`
+	// CreatedFrom is the starter version the room was created from, nil for a blank room (006-AC11).
+	CreatedFrom *Provenance `json:"created_from,omitempty"`
 }
 
 // Invite is a link token granting access to one room. Only its hash is stored.
@@ -669,6 +671,18 @@ CREATE TABLE starter_files (
 	data BLOB NOT NULL,
 	PRIMARY KEY (version_id, name)
 );
+`, `
+-- 006-AC11: the starter a room was created from, {"title": ..., "version": n}; NULL for a blank room.
+ALTER TABLE rooms ADD COLUMN created_from TEXT;
+-- 006-AC18: a persona speaks up every N voice lines or every T minutes. Its mark is the last
+-- message and the time its latest turn started: the counts and the timer run from there.
+ALTER TABLE room_personas ADD COLUMN every_voice INTEGER CHECK (every_voice IS NULL OR every_voice > 0);
+ALTER TABLE room_personas ADD COLUMN every_minutes INTEGER CHECK (every_minutes IS NULL OR every_minutes > 0);
+ALTER TABLE room_personas ADD COLUMN mark_msg_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE room_personas ADD COLUMN mark_at_ms INTEGER NOT NULL DEFAULT 0;
+UPDATE room_personas SET mark_msg_id = (SELECT COALESCE(MAX(id), 0) FROM messages), mark_at_ms = CAST(unixepoch('subsec') * 1000 AS INTEGER);
+-- 006-AC13: a skill a starter brought waits for the room's first host.
+ALTER TABLE skills ADD COLUMN from_starter INTEGER NOT NULL DEFAULT 0 CHECK (from_starter IN (0, 1));
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -790,7 +804,7 @@ func (s *Store) CreateRoom(ctx context.Context, id, name string) (*Room, error) 
 	var r *Room
 	err := s.withTx(ctx, "create room", func(tx *sql.Tx) error {
 		var err error
-		if r, err = insertRoom(ctx, tx, id, name, 0); err != nil {
+		if r, err = insertRoom(ctx, tx, id, name, 0, true); err != nil {
 			return err
 		}
 		return auditTx(ctx, tx, "", nil)
@@ -801,13 +815,16 @@ func (s *Store) CreateRoom(ctx context.Context, id, name string) (*Room, error) 
 	return r, nil
 }
 
-// insertRoom inserts a room created by profile creator (0 for the super-admin) with the Default
-// template's persona.
-func insertRoom(ctx context.Context, tx *sql.Tx, id, name string, creator int64) (*Room, error) {
+// insertRoom inserts a room created by profile creator (0 for the super-admin), with the Default
+// template's persona when withDefault.
+func insertRoom(ctx context.Context, tx *sql.Tx, id, name string, creator int64, withDefault bool) (*Room, error) {
 	r := &Room{ID: id, Name: name, CreatedAt: time.Now().UTC(), Chain: Chain{Budget: DefaultChainBudget}}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO rooms(id, name, created_at, creator_profile_id) VALUES(?,?,?,?)`,
 		r.ID, r.Name, r.CreatedAt.Format(time.RFC3339Nano), nullID(creator)); err != nil {
 		return nil, fmt.Errorf("create room: %w", err)
+	}
+	if !withDefault {
+		return r, nil
 	}
 	def, err := presetID(ctx, tx, PresetDefault)
 	if err != nil {
@@ -823,15 +840,17 @@ func insertRoom(ctx context.Context, tx *sql.Tx, id, name string, creator int64)
 func (s *Store) Room(ctx context.Context, id string) (*Room, error) {
 	var r Room
 	var created string
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at, COALESCE(host_participant_id, 0), chain_budget, chain_count, chain_suspended, parallel_turns
-		FROM rooms WHERE id = ?`, id).Scan(&r.ID, &r.Name, &created, &r.HostParticipantID, &r.Chain.Budget, &r.Chain.Count, &r.Chain.Suspended, &r.ParallelTurns)
+	var from sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at, COALESCE(host_participant_id, 0), chain_budget, chain_count, chain_suspended, parallel_turns,
+		created_from FROM rooms WHERE id = ?`, id).Scan(&r.ID, &r.Name, &created, &r.HostParticipantID, &r.Chain.Budget, &r.Chain.Count, &r.Chain.Suspended,
+		&r.ParallelTurns, &from)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("room %s: %w", id, err)
 	}
-	r.CreatedAt = parseTS(created)
+	r.CreatedAt, r.CreatedFrom = parseTS(created), parseProvenance(from)
 	return &r, nil
 }
 

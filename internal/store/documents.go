@@ -270,9 +270,11 @@ func scanDocument(sc scanner) (*Document, error) {
 	return &d, nil
 }
 
-// Documents lists a room's documents, oldest first.
+// Documents lists a room's documents, oldest first, the agenda ahead of them.
 func (s *Store) Documents(ctx context.Context, roomID string) ([]Document, error) {
-	rows, err := s.db.QueryContext(ctx, documentCols+` WHERE d.room_id = ? AND d.deleted_at IS NULL ORDER BY d.id`, roomID)
+	// The agenda leads the list (006-AC14).
+	rows, err := s.db.QueryContext(ctx, documentCols+` WHERE d.room_id = ? AND d.deleted_at IS NULL
+		ORDER BY d.kind = 'agent' AND d.name = '`+AgendaName+`' DESC, d.id`, roomID)
 	if err != nil {
 		return nil, fmt.Errorf("query documents: %w", err)
 	}

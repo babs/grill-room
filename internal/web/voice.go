@@ -202,6 +202,7 @@ func (s *Server) postVoiceLine(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "voice_line_failed", err)
 		return
 	}
+	s.voiceTriggers(r.Context(), p.RoomID)
 	writeJSON(w, http.StatusCreated, m)
 }
 

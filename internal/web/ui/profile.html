@@ -85,20 +85,6 @@
     </form>
   </section>
 </main>
-<dialog id="room-create-sheet" class="sheet" aria-labelledby="room-create-title">
-  <form id="room-create" class="stack">
-    <h2 id="room-create-title">New room</h2>
-    <label for="room-create-name">Room name</label>
-    <input id="room-create-name" maxlength="100" required>
-    <label for="room-create-as">Your name in the room</label>
-    <input id="room-create-as" maxlength="40" autocomplete="nickname" required>
-    <p class="hint">You become the room's admin: you rename it, manage its invites and admins, and delete it.</p>
-    <p id="room-create-status" class="said error" role="status"></p>
-    <div class="actions">
-      <button type="button" id="room-create-cancel" class="btn-secondary">Cancel</button>
-      <button type="submit">Create the room</button>
-    </div>
-  </form>
-</dialog>
+<dialog id="room-create-sheet" class="sheet wide full" aria-labelledby="room-create-title"></dialog>
 </body>
 </html>

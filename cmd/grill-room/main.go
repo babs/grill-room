@@ -406,6 +406,7 @@ func run() error {
 	g.Go(func() error { return web.Serve(gctx, appSrv, logger) })
 	g.Go(func() error { return web.Serve(gctx, metricsSrv, logger) })
 	g.Go(func() error { srv.PurgeAudit(gctx); return nil })
+	g.Go(func() error { srv.RunTimers(gctx); return nil })
 	g.Go(func() error { srv.PushLoop(gctx); return nil })
 	logger.Info("ready", zap.String("url", cfg.PublicURL))
 	err = g.Wait()

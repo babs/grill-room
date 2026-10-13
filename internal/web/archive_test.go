@@ -288,20 +288,27 @@ func TestArchiveStagingAndSlots(t *testing.T) {
 	}
 }
 
-// 004-AC14: an imported persona passes the checks of the room API.
+// 004-AC14 006-AC18: an imported or starter persona passes the checks of the room API, one
+// automatic trigger at most.
 func TestCheckPersona(t *testing.T) {
-	good := store.PersonaFields{Name: "Grill", Badge: "🔥", Colour: "#d9480f", Text: "Grill them.", Model: "sonnet", Effort: "medium"}
-	if err := checkPersona(good, 0, 0); err != nil {
+	good := store.StarterPersona{PersonaFields: store.PersonaFields{Name: "Grill", Badge: "🔥", Colour: "#d9480f", Text: "Grill them.", Model: "sonnet", Effort: "medium"},
+		EveryVoice: 20}
+	if err := checkPersona(good); err != nil {
 		t.Fatal(err)
 	}
-	for name, f := range map[string]func(*store.PersonaFields) int{
-		"colour":  func(p *store.PersonaFields) int { p.Colour = "red;background:url(x)"; return 0 },
-		"name":    func(p *store.PersonaFields) int { p.Name = "two words"; return 0 },
-		"model":   func(p *store.PersonaFields) int { p.Model = "gpt"; return 0 },
-		"every_n": func(_ *store.PersonaFields) int { return 1000 },
+	for name, f := range map[string]func(*store.StarterPersona){
+		"colour":        func(p *store.StarterPersona) { p.Colour = "red;background:url(x)" },
+		"name":          func(p *store.StarterPersona) { p.Name = "two words" },
+		"model":         func(p *store.StarterPersona) { p.Model = "gpt" },
+		"every_n":       func(p *store.StarterPersona) { p.EveryVoice, p.EveryN = 0, 1000 },
+		"every_voice":   func(p *store.StarterPersona) { p.EveryVoice = 501 },
+		"every_minutes": func(p *store.StarterPersona) { p.EveryVoice, p.EveryMinutes = 0, 241 },
+		"two triggers":  func(p *store.StarterPersona) { p.EveryMinutes = 5 },
+		"three":         func(p *store.StarterPersona) { p.EveryN, p.EveryMinutes = 2, 5 },
 	} {
 		p := good
-		if err := checkPersona(p, f(&p), 0); err == nil {
+		f(&p)
+		if err := checkPersona(p); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}

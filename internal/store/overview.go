@@ -36,6 +36,8 @@ type RoomOverview struct {
 	QuotaBytes int64      `json:"quota_bytes"`
 	Quota      int64      `json:"quota"`
 	Volume     RoomVolume `json:"volume"`
+	// CreatedFrom is the starter version the room was created from (006-AC11).
+	CreatedFrom *Provenance `json:"created_from,omitempty"`
 }
 
 // Counted is what the room's quota counts: upload originals and annotation attachments.
@@ -74,7 +76,8 @@ func (s *Store) roomOverviews(ctx context.Context, defaultQuota int64, roomID st
 		(SELECT COALESCE(SUM(length(data)), 0) FROM agent_sessions WHERE room_id = r.id),
 		(SELECT COALESCE(SUM(octet_length(body) + COALESCE(octet_length(html), 0)), 0) FROM messages WHERE room_id = r.id)
 		+ (SELECT COALESCE(SUM(octet_length(v.body)), 0) FROM message_versions v JOIN messages m ON m.id = v.message_id WHERE m.room_id = r.id),
-		(SELECT COALESCE(SUM(length(v.data)), 0) FROM skill_versions v JOIN skills k ON k.id = v.skill_id WHERE k.room_id = r.id)
+		(SELECT COALESCE(SUM(length(v.data)), 0) FROM skill_versions v JOIN skills k ON k.id = v.skill_id WHERE k.room_id = r.id),
+		r.created_from
 		FROM rooms r WHERE ? = '' OR r.id = ? ORDER BY r.rowid DESC`, defaultQuota, roomID, roomID)
 	if err != nil {
 		return nil, fmt.Errorf("room overviews: %w", err)
@@ -84,13 +87,14 @@ func (s *Store) roomOverviews(ctx context.Context, defaultQuota int64, roomID st
 	for rows.Next() {
 		var o RoomOverview
 		var created, last string
+		var from sql.NullString
 		v := &o.Volume
 		if err := rows.Scan(&o.ID, &o.Name, &created, &o.HostParticipantID, &o.QuotaBytes, &o.Quota, &last, &o.Participants, &o.Personas,
-			&v.Uploads, &v.Revisions, &v.Attachments, &v.AgentSessions, &v.Transcripts, &v.RoomSkills); err != nil {
+			&v.Uploads, &v.Revisions, &v.Attachments, &v.AgentSessions, &v.Transcripts, &v.RoomSkills, &from); err != nil {
 			return nil, fmt.Errorf("scan room overview: %w", err)
 		}
 		v.Total = v.Uploads + v.Revisions + v.Attachments + v.AgentSessions + v.Transcripts + v.RoomSkills
-		o.CreatedAt = parseTS(created)
+		o.CreatedAt, o.CreatedFrom = parseTS(created), parseProvenance(from)
 		o.LastActivity = o.CreatedAt
 		if last != "" {
 			o.LastActivity = parseTS(last)

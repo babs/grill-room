@@ -33,6 +33,12 @@ func (c *clock) now() time.Time {
 	return c.t
 }
 
+func (c *clock) set(t time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = t
+}
+
 func (c *clock) add(d time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

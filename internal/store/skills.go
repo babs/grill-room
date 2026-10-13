@@ -59,6 +59,8 @@ type Skill struct {
 	// Pending marks a room skill copied in while the host approves everything: it waits for the
 	// host, and no persona can turn it on yet.
 	Pending bool `json:"pending,omitempty"`
+	// FromStarter marks a pending room skill the room's starter brought (006-AC13).
+	FromStarter bool `json:"from_starter,omitempty"`
 	// Mine tells the asking profile that it owns the skill (personal) or published it (shared):
 	// it may upload versions.
 	Mine        bool      `json:"mine"`
@@ -73,14 +75,14 @@ type Skill struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-const skillCols = `SELECT s.id, s.name, s.scope, s.pending, COALESCE(s.profile_id, 0), COALESCE(s.publisher_id, 0),
+const skillCols = `SELECT s.id, s.name, s.scope, s.pending, s.from_starter, COALESCE(s.profile_id, 0), COALESCE(s.publisher_id, 0),
 	v.n, v.author, v.description, v.files, v.size, v.sha256, v.created_at
 	FROM skills s JOIN skill_versions v ON v.skill_id = s.id AND v.n = (SELECT MAX(n) FROM skill_versions WHERE skill_id = s.id) `
 
 func scanSkill(sc scanner) (*Skill, error) {
 	var k Skill
 	var updated string
-	err := sc.Scan(&k.ID, &k.Name, &k.Scope, &k.Pending, &k.ProfileID, &k.PublisherID, &k.Version, &k.Author, &k.Description, &k.Files, &k.Size, &k.SHA256, &updated)
+	err := sc.Scan(&k.ID, &k.Name, &k.Scope, &k.Pending, &k.FromStarter, &k.ProfileID, &k.PublisherID, &k.Version, &k.Author, &k.Description, &k.Files, &k.Size, &k.SHA256, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -428,12 +430,13 @@ type TurnSkill struct {
 
 // pinTurnSkills copies the persona's pinned skills onto turn id as it starts: a change during the
 // turn applies to the next (002-AC15). A personal skill rides only while its owner is in the room
-// (002-AC30); a room skill rides whoever copied it in (004-AC10).
+// (002-AC30); a room skill rides whoever copied it in (004-AC10), once the host approved it
+// (004-AC10, 006-AC13).
 func pinTurnSkills(ctx context.Context, tx *sql.Tx, roomID string, id, personaID int64) error {
 	_, err := tx.ExecContext(ctx, `UPDATE turns SET skills = (SELECT json_group_array(vid) FROM (
 			SELECT v.id AS vid FROM room_persona_skills k JOIN skills s ON s.id = k.skill_id
 			JOIN skill_versions v ON v.skill_id = k.skill_id AND v.n = k.version
-			WHERE k.persona_id = ? AND (s.scope = 'shared' OR (s.scope = 'room' AND s.room_id = ?)
+			WHERE k.persona_id = ? AND (s.scope = 'shared' OR (s.scope = 'room' AND s.room_id = ? AND NOT s.pending)
 				OR EXISTS (SELECT 1 FROM participants p JOIN invites i ON i.id = p.invite_id
 				WHERE p.room_id = ? AND p.profile_id = s.profile_id AND i.revoked_at IS NULL))
 			ORDER BY s.name))
@@ -557,10 +560,14 @@ func (s *Store) DecideRoomSkill(ctx context.Context, roomID string, id int64, ap
 		if err != nil {
 			return err
 		}
-		body := fmt.Sprintf("approved %s's copy of the skill %s v%d.", k.Author, k.Name, k.Version)
-		q := `UPDATE skills SET pending = 0 WHERE id = ?`
+		what := fmt.Sprintf("%s's copy of the skill %s v%d", k.Author, k.Name, k.Version)
+		if k.FromStarter {
+			what = fmt.Sprintf("the starter's skill %s v%d", k.Name, k.Version)
+		}
+		body := "approved " + what + "."
+		q := `UPDATE skills SET pending = 0, from_starter = 0 WHERE id = ?`
 		if !approve {
-			body = fmt.Sprintf("refused %s's copy of the skill %s v%d: it is removed.", k.Author, k.Name, k.Version)
+			body = "refused " + what + ": it is removed."
 			q = `DELETE FROM skills WHERE id = ?`
 		}
 		if _, err := tx.ExecContext(ctx, q, id); err != nil {
