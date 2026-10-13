@@ -15,9 +15,18 @@ test('daemon pairs through the room approval', async ({ browser, request, baseUR
     const code = await admin.locator('#code').textContent();
     expect(code).toMatch(/^\d{3}-\d{3}$/);
 
+    // A slow pairing request: Approve shows only once it answers, a click before would be lost.
+    let shown = '';
+    await alice.context().route('**/pairings/*', async (route) => {
+      if (route.request().method() !== 'GET') return route.continue();
+      const response = await route.fetch();
+      await new Promise((r) => setTimeout(r, 1000)); // holds the answer, no assertion waits on it
+      shown = (await response.json()).code;
+      return route.fulfill({ response });
+    });
     const [approval] = await Promise.all([alice.context().waitForEvent('page'), admin.getByRole('link', { name: 'approve in the room' }).click()]);
-    await expect(approval.locator('#pairing-text')).toContainText(code);
     await approval.getByRole('button', { name: 'Approve' }).click();
+    expect(shown).toBe(code);
     await expect(approval.locator('#pairing-text')).toContainText('Daemon paired');
 
     await expect(admin.locator('#pairing')).toHaveText('Paired. Connected.');

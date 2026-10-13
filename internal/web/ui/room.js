@@ -2579,6 +2579,8 @@ async function showPairing(id) {
   history.replaceState(null, '', location.pathname);
   const url = api + '/pairings/' + encodeURIComponent(id);
   const text = $('pairing-text');
+  // The buttons show once they answer: a click before the request loads would do nothing.
+  $('pairing-actions').hidden = true;
   $('pairing').hidden = false;
   const res = await fetch(url);
   if (!res.ok) {
@@ -2603,6 +2605,7 @@ async function showPairing(id) {
   };
   $('pairing-approve').onclick = () => answer(true).catch(console.error);
   $('pairing-deny').onclick = () => answer(false).catch(console.error);
+  $('pairing-actions').hidden = false;
 }
 
 // Host the agent: the daemon download for the visitor's platform and the install one-liner (AC36).
