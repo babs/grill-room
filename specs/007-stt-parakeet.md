@@ -1,6 +1,6 @@
 # 007 — STT engine: parakeet-ultra
 
-**Status**: in progress
+**Status**: in progress (AC16: one-talker p95 4.01 s against 4 s and Piper English WER above whisper's, see spikes/S007-ab.md; AC18: lab voice step automated, the phone check is manual)
 **Requested by**: babs
 **Date**: 2026-10-13
 **Context**: spikes S10 (models), S10b (workstation bench), S10c (browser) and S10d (lab validation at the 4-CPU limit)
@@ -40,40 +40,40 @@ The worker transcribes with parakeet-ultra. Lines arrive in about half the time,
 ## Acceptance criteria
 
 ### Engine
-- [ ] **AC1** `APP_ENGINE` selects the engine: `parakeet` (default) or `whisper`. Any other value stops the worker at start with a message that names the allowed values. The start log and a `grill_stt_engine_info{engine,model,revision}` gauge name the running engine.
-- [ ] **AC2** With `parakeet`, the worker transcribes each utterance with transcribe.cpp, the parakeet-ultra Q8_0 GGUF, greedy decoding, no language argument. The per-track subscription, the Silero cuts, the `voices` heartbeat and the line API are unchanged.
-- [ ] **AC3** With `parakeet`, a transcript is dropped when it is empty, when its gzip compression ratio is above 2.4 (repetition, computed on the text as Whisper does), or when less than 90 % of its letters are Latin (reason `script`). The language probability and language-script checks do not apply. The `IMPLAUSIBLE` reasons keep their names. With `whisper`, the filter is today's, unchanged.
-- [ ] **AC4** Each posted line gets a language guess, `fr`, `en` or `unknown`, from a function-word count. It replaces the engine's language label in the logs and feeds `grill_stt_lines_language_total{engine,guess}`. Nothing reaches the room server.
-- [ ] **AC5** An English leak shows in that metric. A test fixture of French dense in English terms (a Piper voice allowed by `scenarios/VOICES.md`) comes out guessed `fr` through parakeet, and an English fixture `en`. The A/B corpus reports the leak per set (AC16).
+- [x] **AC1** `APP_ENGINE` selects the engine: `parakeet` (default) or `whisper`. Any other value stops the worker at start with a message that names the allowed values. The start log and a `grill_stt_engine_info{engine,model,revision}` gauge name the running engine.
+- [x] **AC2** With `parakeet`, the worker transcribes each utterance with transcribe.cpp, the parakeet-ultra Q8_0 GGUF, greedy decoding, no language argument. The per-track subscription, the Silero cuts, the `voices` heartbeat and the line API are unchanged.
+- [x] **AC3** With `parakeet`, a transcript is dropped when it is empty, when its gzip compression ratio is above 2.4 (repetition, computed on the text as Whisper does), or when less than 90 % of its letters are Latin (reason `script`). The language probability and language-script checks do not apply. The `IMPLAUSIBLE` reasons keep their names. With `whisper`, the filter is today's, unchanged.
+- [x] **AC4** Each posted line gets a language guess, `fr`, `en` or `unknown`, from a function-word count. It replaces the engine's language label in the logs and feeds `grill_stt_lines_language_total{engine,guess}`. Nothing reaches the room server.
+- [x] **AC5** An English leak shows in that metric. A test fixture of French dense in English terms (a Piper voice allowed by `scenarios/VOICES.md`) comes out guessed `fr` through parakeet, and an English fixture `en`. The A/B corpus reports the leak per set (AC16).
 
 ### Capacity
-- [ ] **AC6** The worker runs `APP_ENGINE_PROCESSES` engine processes (default 2) with `APP_CPU_THREADS` threads each (default 2). Each takes the next utterance from the one queue when it is free. A process that dies is restarted. Its utterance counts as `error`, and the other process carries on. `/healthz` fails when no engine process has been up for 60 s.
-- [ ] **AC7** Lines of one speaker post in speech order. An utterance is not started while the same participant's previous one is still in an engine. Other speakers' utterances pass it.
-- [ ] **AC8** The queue stays bounded (`APP_QUEUE_SIZE`, default 64). When it is full, the new utterance is dropped, never silently:
+- [x] **AC6** The worker runs `APP_ENGINE_PROCESSES` engine processes (default 2) with `APP_CPU_THREADS` threads each (default 2). Each takes the next utterance from the one queue when it is free. A process that dies is restarted. Its utterance counts as `error`, and the other process carries on. `/healthz` fails when no engine process has been up for 60 s.
+- [x] **AC7** Lines of one speaker post in speech order. An utterance is not started while the same participant's previous one is still in an engine. Other speakers' utterances pass it.
+- [x] **AC8** The queue stays bounded (`APP_QUEUE_SIZE`, default 64). When it is full, the new utterance is dropped, never silently:
   - `grill_stt_utterances_dropped_total` counts it;
   - a log names the room and participant, never the words;
   - the room gets a system line, "Transcription overloaded: one line lost for <name>.", posted by the worker through a new STT route. At most one such line per speaker every 30 s, so a burst cannot flood the chat.
 
   A queued utterance is never dropped for its age: a late line still goes to the transcript.
-- [ ] **AC9** Metrics, in `docs/architecture.md`:
+- [x] **AC9** Metrics, in `docs/architecture.md`:
   - `grill_stt_queue_depth` (exists);
   - `grill_stt_queue_wait_seconds`, from the VAD cut to an engine taking the utterance, with a bucket at 10 s;
   - `grill_stt_transcribe_seconds` and `grill_stt_line_latency_seconds` (exist), labelled by engine;
   - `grill_stt_engines_busy`;
   - the drop counter (AC8).
-- [ ] **AC10** The manifest keeps the 4-CPU limit and the `Recreate` strategy. It requests 2 CPUs, sets memory to 3Gi for request and limit, and sets `APP_ENGINE`, `APP_ENGINE_PROCESSES` and `APP_CPU_THREADS`. Its sizing comment cites S10d and states the ceiling: one pod, about four continuous talkers across the instance.
-- [ ] **AC19** An utterance that waited more than 10 s in the queue logs a `queue_wait_slow` warning (room, participant, wait). An alert rule fires when any utterance waited more than 10 s in the last 5 minutes, from the `grill_stt_queue_wait_seconds` buckets. The rule and the scrape config ship as manifests applied apart from the app (the lab runs the VictoriaMetrics operator), and `docs/architecture.md` gives the expression for any other Prometheus.
+- [x] **AC10** The manifest keeps the 4-CPU limit and the `Recreate` strategy. It requests 2 CPUs, sets memory to 3Gi for request and limit, and sets `APP_ENGINE`, `APP_ENGINE_PROCESSES` and `APP_CPU_THREADS`. Its sizing comment cites S10d and states the ceiling: one pod, about four continuous talkers across the instance.
+- [x] **AC19** An utterance that waited more than 10 s in the queue logs a `queue_wait_slow` warning (room, participant, wait). An alert rule fires when any utterance waited more than 10 s in the last 5 minutes, from the `grill_stt_queue_wait_seconds` buckets. The rule and the scrape config ship as manifests applied apart from the app (the lab runs the VictoriaMetrics operator), and `docs/architecture.md` gives the expression for any other Prometheus.
 
 ### Packaging and licenses
-- [ ] **AC11** A build stage compiles transcribe.cpp from a commit pinned by full SHA. The build targets the AVX2 baseline: never `GGML_NATIVE`, so an image built on a newer CPU runs on the lab nodes. The final image gets only the runtime artefacts. It stays non-root, with a read-only root filesystem.
-- [ ] **AC12** The build fetches `parakeet-ultra-Q8_0.gguf` from `handy-computer/parakeet-ultra-gguf` at revision `39eeb55181f0d354fd934f06e92fd8d5037fed8e` and checks its sha256, `007a59761e9258779f189df396b50d12b83bb5b79e66df4b955c230d2f2a0a59`. A mismatch fails the build. At run time the worker loads it offline, as it does the Whisper model today.
-- [ ] **AC13** The image carries the license texts of transcribe.cpp and ggml (MIT) and the model's notice (CC-BY-4.0) under `/licenses`. The docs credit parakeet-ultra in a third-party notices section: Moondream's post-train of NVIDIA Parakeet TDT 0.6B v3, CC-BY-4.0, converted to Q8_0 GGUF by the transcribe.cpp authors (`handy-computer`). The room's audio menu shows the same credit, with a link to the license, while the worker reports `parakeet`.
+- [x] **AC11** A build stage compiles transcribe.cpp from a commit pinned by full SHA. The build targets the AVX2 baseline: never `GGML_NATIVE`, so an image built on a newer CPU runs on the lab nodes. The final image gets only the runtime artefacts. It stays non-root, with a read-only root filesystem.
+- [x] **AC12** The build fetches `parakeet-ultra-Q8_0.gguf` from `handy-computer/parakeet-ultra-gguf` at revision `39eeb55181f0d354fd934f06e92fd8d5037fed8e` and checks its sha256, `007a59761e9258779f189df396b50d12b83bb5b79e66df4b955c230d2f2a0a59`. A mismatch fails the build. At run time the worker loads it offline, as it does the Whisper model today.
+- [x] **AC13** The image carries the license texts of transcribe.cpp and ggml (MIT) and the model's notice (CC-BY-4.0) under `/licenses`. The docs credit parakeet-ultra in a third-party notices section: Moondream's post-train of NVIDIA Parakeet TDT 0.6B v3, CC-BY-4.0, converted to Q8_0 GGUF by the transcribe.cpp authors (`handy-computer`). The room's audio menu shows the same credit, with a link to the license, while the worker reports `parakeet`.
 
 ### Glossary
-- [ ] **AC14** The glossary stays stored, exported and imported, as in 005-AC23. With `parakeet` the worker never reads the room prompt. The worker's heartbeat carries its engine and whether it uses the glossary. While no live worker uses it, Room settings hides the "Words to recognise" tab and its deep link opens the first tab instead, and a plain member, whose only tab it was, no longer gets the Room settings button. With `whisper` and `APP_GLOSSARY_PROMPT` on, the tab is back with today's sentence.
+- [x] **AC14** The glossary stays stored, exported and imported, as in 005-AC23. With `parakeet` the worker never reads the room prompt. The worker's heartbeat carries its engine and whether it uses the glossary. While no live worker uses it, Room settings hides the "Words to recognise" tab and its deep link opens the first tab instead, and a plain member, whose only tab it was, no longer gets the Room settings button. With `whisper` and `APP_GLOSSARY_PROMPT` on, the tab is back with today's sentence.
 
 ### Rollout
-- [ ] **AC15** With `APP_ENGINE=whisper`, the same image runs today's faster-whisper `small` path, `APP_GLOSSARY_PROMPT` included, and its tests stay green. It is kept for one release.
+- [x] **AC15** With `APP_ENGINE=whisper`, the same image runs today's faster-whisper `small` path, `APP_GLOSSARY_PROMPT` included, and its tests stay green. It is kept for one release.
 - [ ] **AC16** A lab A/B run replays the S10 corpora (SUMM-RE meetings, the tech talk, the 38 Piper lines) through the worker's own segmenter, engines and filter, in a Job at the 4-CPU limit, with S10b scoring. With `parakeet`:
   - meetings WER ≤ 0.25, talk ≤ 0.15, Piper English lines ≤ 0.08, each at or below `whisper` on the same run;
   - English leak ≤ 0.01 on meetings and talk;
@@ -81,7 +81,7 @@ The worker transcribes with parakeet-ultra. Lines arrive in about half the time,
   - peak pod memory ≤ 2.7 GiB.
 
   The report lands in `spikes/`.
-- [ ] **AC17** Rollback is one step in the release notes and `docs/lab-checklist.md`: set `APP_ENGINE=whisper` and restart the Deployment. No data changes either way. Redeploying the previous image tag is the second way out.
+- [x] **AC17** Rollback is one step in the release notes and `docs/lab-checklist.md`: set `APP_ENGINE=whisper` and restart the Deployment. No data changes either way. Redeploying the previous image tag is the second way out.
 - [ ] **AC18** The lab checklist's voice step passes with `parakeet`. A sentence on the phone shows as a line within 5 s, and two people speaking at once both get their lines.
 
 ## Phases

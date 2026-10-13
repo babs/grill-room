@@ -22,6 +22,8 @@ test('two people speaking at once both get their lines', async ({ request }) => 
     ];
     pages.push(bob, alice, carol);
     await joinAudio(bob);
+    // The worker is in the room and hears Bob: Alice's and Carol's tracks are taken from their first word.
+    await expect(bob.locator('#stt-status')).toHaveText(/^1 voice is being written down/, { timeout: 30_000 });
     const start = Date.now();
     await Promise.all([joinAudio(alice), joinAudio(carol)]);
 
