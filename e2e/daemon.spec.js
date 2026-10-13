@@ -75,9 +75,20 @@ test('daemon page shows its signature and guards the unsigned toggle', async ({ 
   const daemon = startDaemon(`${baseURL}/r/${room.id}`, { GRILL_ROOM_GITHUB_URL: 'http://127.0.0.1:9' });
   try {
     const admin = await alice.context().newPage();
+    // One status poll fails, as Chrome fails requests when Docker adds or removes a network
+    // (ERR_NETWORK_CHANGED): the page says so and keeps polling.
+    let failed = false;
+    await admin.route('**/api/status', async (route) => {
+      if (failed || !(await route.fetch().then((r) => r.json())).instances?.length) return route.continue();
+      failed = true;
+      return route.abort('failed');
+    });
     await admin.goto(await daemon.link);
     await expect(admin.locator('#self-sig')).toHaveText('dev build');
-    await expect(admin.locator('#instances')).toContainText("Worker binary: the supervisor's own binary");
+    await expect.poll(() => failed).toBe(true);
+    // The worker binary shows once the worker runs, which a loaded machine takes a while to reach.
+    await expect(admin.locator('#instances')).toContainText("Worker binary: the supervisor's own binary", { timeout: 30_000 });
+    await expect(admin.locator('#banner')).toBeHidden();
     await expect(admin.locator('#relax-banner')).toBeHidden();
     await expect(admin.locator('#checked')).toContainText('127.0.0.1:9');
 

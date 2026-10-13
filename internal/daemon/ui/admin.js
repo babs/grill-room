@@ -27,12 +27,19 @@ const restarting = signal(0);
 // updatingFrom is the version before the update: the old process may still answer once.
 let updatingFrom = '';
 
+// pollErr is the banner a failed poll set: the next poll that works takes it down.
+let pollErr = '';
+
 async function poll() {
   try {
     await reload();
   } catch (err) {
     if (!restarting.value) {
-      if (!stopped.value) banner.value = /** @type {Error} */ (err).message;
+      if (stopped.value) return;
+      banner.value = pollErr = /** @type {Error} */ (err).message;
+      // A network failure passes: Chrome fails requests in flight when Docker adds or removes a
+      // network (ERR_NETWORK_CHANGED), as sandboxes starting and stopping do on this machine.
+      if (err instanceof TypeError) setTimeout(poll, 2000);
       return;
     }
     if (Date.now() - restarting.value > 90_000) {
@@ -41,6 +48,8 @@ async function poll() {
     setTimeout(poll, 2000);
     return;
   }
+  if (pollErr && banner.value === pollErr) banner.value = '';
+  pollErr = '';
   if (restarting.value && data.value?.status.version !== updatingFrom) {
     restarting.value = 0;
     banner.value = 'Updated to ' + (data.value?.status.version || 'the new version') + '.';
