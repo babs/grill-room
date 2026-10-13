@@ -319,8 +319,15 @@ func TestPushDispatch(t *testing.T) {
 	b.mu.Unlock()
 	say(bob.Token, "@Ana_María one more")
 	waitPushes(t, b, 4)
-	if subs, _ := e.st.PushSubscriptions(t.Context(), room.ID); len(subs) != 0 {
-		t.Fatalf("a gone subscription stayed: %+v", subs)
+	// The send drops it once the 410 is back, after the browser counted the push.
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(pushTick) { // polls, bounded by the deadline
+		subs, err := e.st.PushSubscriptions(t.Context(), room.ID)
+		if err == nil && len(subs) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("a gone subscription stayed: %+v %v", subs, err)
+		}
 	}
 }
 
