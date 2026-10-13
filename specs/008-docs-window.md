@@ -1,6 +1,6 @@
 # 008 — Docs window polish and push opt-in explainer
 
-**Status**: shipped
+**Status**: in progress
 **Requested by**: babs
 **Date**: 2026-10-13
 **Context**: follow-up to 005: the docs window (005-AC11, 005-AC37), document rename and delete (005-AC25, 005-AC26), push (005-AC24)
@@ -67,6 +67,14 @@ Widths are measured with Playwright bounding boxes. "Desktop" is a 1440 × 900 v
   A spy installed with `addInitScript` records every call. It shows 0 calls before the click on the primary button and exactly 1 after it. "Not now", Escape, a backdrop tap and ✕ each leave 0 calls. When the permission is already `granted` (from another room), turning on notifications subscribes with no explainer and no call. When it is `denied`, nothing is called, and the Notifications sheet keeps its text on how to allow notifications in the site settings.
 - [x] **AC11** The explainer is also offered once, unprompted, right after the participant's first message in a page load. It shows only if every condition holds: push is supported, the permission is `default`, push is off for this room, the page is not the docs window, the browser is not an iPhone or iPad outside the home screen, and no snooze is running. "Not now", Escape, a backdrop tap or ✕ start a 14-day snooze, which covers every room in this browser. With Playwright's clock: no unprompted explainer after a reload and a message 13 days 23 h later, and one at 14 days 1 min. Through the snooze, the Notifications sheet's button still opens the explainer. Turning notifications on clears the snooze.
 
+### People panel (user, 2026-10-13)
+- [ ] **AC13** Each person in People is one row: the status dot, the name (one line, ellipsis), then a group on the right that never wraps. Roles are text badges (`you`, `admin`, `host`, or their icons past two, as today); the audio state and "transcribed" are icons of one size with a tooltip and an accessible name. Controls only the AI host or a listener gets (Can ask the AI, Make AI host, a volume slider) sit on a line under the row. At 390 and 1440 px, every row without such controls has the same height, one line of text, with two roles, an audio state and "transcribed" on it.
+- [ ] **AC14** The actions in a drawer's header (Documents: ⧉ and +, and the fold buttons) share one icon-button style: same size, no border, same colour.
+
+### Hosting a room from a running AI host app (user, 2026-10-13)
+- [ ] **AC15** The AI host app's page, Rooms tab, always offers "Add a room": a room link is handed to the supervisor exactly as `grill-room-daemon <room-url>` does, also while another room is connected and before any room. The page then shows the pairing state, the code and the "approve in the room" link for that room. A link that is not a room link shows why, on the page.
+- [ ] **AC16** The room page's `⋯` › "Run the AI on my computer" is always there (outside the docs window) and explains the two ways: copy this room's link and paste it in the AI host app's page (Rooms, Add a room), or install the app (the download and the one-liner, when the server hands out a release).
+
 ### Design
 - [x] **AC12** Everything new follows `docs/design.md`: tokens only (`TestPageCSSHasNoColourLiterals` and `TestTokenContrast` green), `--control-h` buttons, the `.menu` and `.sheet` classes, the focus ring on the handles, sentence case and the wording table. Handles and rails show no motion under `prefers-reduced-motion`. The 005-AC30 bounding-box spec covers the new controls: 44 × 44 at 390 px, one height at 1440 px.
 
@@ -98,6 +106,15 @@ Widths are measured with Playwright bounding boxes. "Desktop" is a 1440 × 900 v
   - The existing push e2e (local test push endpoint) passes with the explainer in the flow.
   - The room server is redeployed on the lab, the database backed up first.
 
+### Phase 3 — People panel and hosting from the app's page
+- Work: one-row People entries and one icon-button style in the drawer headers; "Add a room" on the AI host app's page; the two ways in the room page's hosting sheet.
+- **Covers**: AC13, AC14, AC15, AC16, AC12
+- **Data model impact**: none
+- **DoD**:
+  - Playwright: one row height per person at 390 and 1440 px, no wrap; one style for the header actions.
+  - A Go test of "Add a room" while another room is connected, and before any room; an e2e with the fake daemon: pair room A from the command line, add room B from the page, approve it, both rooms listed.
+  - The room server redeployed on the lab, the database backed up first.
+
 ## Data model impact (summary)
 
 None. All new state is client-side `localStorage`: the list width, the Notes width, the folded drawers, the Markdown width and the push snooze.
@@ -119,3 +136,4 @@ None. All new state is client-side `localStorage`: the list width, the Notes wid
 - The Markdown widths follow gld: 896 px (the stylesheet's current cap), 1400 px, then no cap. They are labelled Narrow, Large and Full, as in the notes.
 - "Open in a new window" also moves into `⋯`, which frees space on a phone. The notes named only download, rename and delete.
 - The room's name opens the room in the same window rather than focusing the opener: a plain link works when the opener is closed too.
+- AC16 keeps the label "Run the AI on my computer" from `docs/design.md` §8, which replaced "Host the agent"; the request named the entry "Host this room's agents".
