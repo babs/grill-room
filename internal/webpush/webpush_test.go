@@ -177,8 +177,8 @@ func TestVAPIDAuthorization(t *testing.T) {
 }
 
 // 005-AC24: Send posts the encrypted body with its headers to a test push endpoint, which the user
-// agent's key decrypts; 404, 410, 403 and a 401 for another VAPID key are ErrGone, any other 401
-// ErrUnauthorized, any other refusal an error.
+// agent's key decrypts; 404, 410, a 403 and a 401 for another VAPID key are ErrGone, any other 401
+// and a 403 blaming the JWT ErrUnauthorized, any other refusal an error.
 func TestSend(t *testing.T) {
 	uaPriv, _ := ecdh.P256().NewPrivateKey(must(t, rfcUAPrivate))
 	raw, _ := NewVAPIDKey()
@@ -218,6 +218,9 @@ func TestSend(t *testing.T) {
 		{http.StatusGone, "", ErrGone},
 		{http.StatusNotFound, "", ErrGone},
 		{http.StatusForbidden, "", ErrGone},
+		{http.StatusForbidden, "the VAPID credentials in the authorization header do not correspond to the credentials used to create the subscriptions.", ErrGone},
+		{http.StatusForbidden, `{"reason":"BadJwtToken"}`, ErrUnauthorized},
+		{http.StatusForbidden, "bad jwt", ErrUnauthorized},
 		{http.StatusUnauthorized, `{"code": 401, "errno": 109, "error": "Unauthorized", "message": "VAPID public key mismatch"}`, ErrGone},
 		{http.StatusUnauthorized, `{"errno":109}`, ErrGone},
 		{http.StatusUnauthorized, "vapid public KEY mismatch", ErrGone},
