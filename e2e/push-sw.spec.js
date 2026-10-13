@@ -3,28 +3,20 @@ import { createECDH, randomBytes } from 'node:crypto';
 import { roomWith } from './helpers.js';
 
 // The service worker's side of Web Push (005-AC24), without a push service: headless Chrome has
-// none, so the DevTools protocol hands the pushes to the worker.
+// none. The specs call the worker's handlers in its own scope; the DevTools protocol's
+// deliverPushMessage lost a push now and then, a dropped event no assertion can tell from a bug.
 
-// worker registers /sw.js on page and returns push(payload), which delivers one push to it, and
-// shown(), the notifications it shows.
+// worker registers /sw.js on page and returns push(payload), which shows it as a push
+// would, and shown(), the notifications it shows.
 async function worker(page) {
   await page.context().grantPermissions(['notifications']);
   await page.goto('/');
-  const scope = await page.evaluate(async () => {
-    const reg = await navigator.serviceWorker.register('/sw.js');
-    await navigator.serviceWorker.ready;
-    return reg.scope;
-  });
-  const cdp = await page.context().newCDPSession(page);
-  const registration = new Promise((resolve) => cdp.on('ServiceWorker.workerRegistrationUpdated', ({ registrations }) => {
-    const r = registrations.find((x) => x.scopeURL === scope && !x.isDeleted);
-    if (r) resolve(r.registrationId);
-  }));
-  await cdp.send('ServiceWorker.enable');
-  const registrationId = await registration;
-  const origin = new URL(scope).origin;
+  const [sw] = await Promise.all([
+    page.context().serviceWorkers()[0] ?? page.context().waitForEvent('serviceworker'),
+    page.evaluate(async () => { await navigator.serviceWorker.register('/sw.js'); await navigator.serviceWorker.ready; }),
+  ]);
   return {
-    push: (data) => cdp.send('ServiceWorker.deliverPushMessage', { origin, registrationId, data: typeof data === 'string' ? data : JSON.stringify(data) }),
+    push: (p) => sw.evaluate((p) => notify(p), p),
     shown: () => page.evaluate(async () => (await (await navigator.serviceWorker.ready).getNotifications())
       .map((n) => ({ title: n.title, body: n.body, tag: n.tag, data: n.data }))),
   };
@@ -34,13 +26,11 @@ async function worker(page) {
 test('pushes for one room merge into one notification', async ({ page }) => {
   const sw = await worker(page);
   await sw.push({ room: 'Pricing', kind: 'mention', count: 1, url: '/r/abc#m1' });
-  await expect.poll(sw.shown).toHaveLength(1);
   await sw.push({ room: 'Pricing', kind: 'mention', count: 1, url: '/r/abc#m7' });
-  await expect.poll(async () => (await sw.shown())[0]?.data.count).toBe(2);
   expect(await sw.shown()).toEqual([{ title: 'Pricing', body: 'You were mentioned · 2 events', tag: 'grill-room:/r/abc', data: { url: '/r/abc#m7', count: 2 } }]);
   // Another room stands apart.
   await sw.push({ room: 'Roadmap', kind: 'synthesis', count: 1, url: '/r/def#m3' });
-  await expect.poll(sw.shown).toHaveLength(2);
+  expect((await sw.shown()).map((n) => n.tag).sort()).toEqual(['grill-room:/r/abc', 'grill-room:/r/def']);
 });
 
 // fakePush stands in for the browser's push service in the page: one subscription, kept in

@@ -4,19 +4,18 @@
 
 const what = { mention: 'You were mentioned', turn: 'Your agent turn ended', synthesis: 'A persona answered', message: 'New lines' };
 
-self.addEventListener('push', (e) => {
-  const p = e.data ? e.data.json() : {};
+// notify shows push p, its count added to the notification of p's room if one stands.
+async function notify(p) {
   // The url ends in #m<line>, a new one each batch: the tag keys on the room's path alone.
   const tag = 'grill-room:' + new URL(p.url || '/', self.location.origin).pathname;
-  e.waitUntil(self.registration.getNotifications({ tag }).then((shown) => {
-    const before = shown.reduce((n, x) => n + ((x.data && x.data.count) || 0), 0);
-    const count = before + (p.count || 1);
-    const body = (what[p.kind] || 'Something happened') + (count > 1 ? ' · ' + count + ' events' : '');
-    return self.registration.showNotification(p.room || 'grill-room', {
-      body, tag, renotify: true, icon: '/static/icons/icon-192.png', badge: '/static/icons/icon-192.png', data: { url: p.url, count },
-    });
-  }));
-});
+  const shown = await self.registration.getNotifications({ tag });
+  const count = shown.reduce((n, x) => n + ((x.data && x.data.count) || 0), 0) + (p.count || 1);
+  const body = (what[p.kind] || 'Something happened') + (count > 1 ? ' · ' + count + ' events' : '');
+  return self.registration.showNotification(p.room || 'grill-room', {
+    body, tag, renotify: true, icon: '/static/icons/icon-192.png', badge: '/static/icons/icon-192.png', data: { url: p.url, count },
+  });
+}
+self.addEventListener('push', (e) => e.waitUntil(notify(e.data ? e.data.json() : {})));
 
 // A click opens the chat at the line that triggered the push: a tab of the room already open
 // scrolls there, otherwise a new one opens on the deep link.
