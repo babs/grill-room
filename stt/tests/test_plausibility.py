@@ -1,12 +1,14 @@
 import json
 import wave
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from grill_stt.pipeline import Plausibility, implausible
-from grill_stt.transcribe import Line, Transcriber
+from grill_stt.parakeet import ParakeetTranscriber
+from grill_stt.pipeline import Plausibility, guess_language, implausible, implausible_parakeet
+from grill_stt.transcribe import Line
 from grill_stt.vad import SR, Audio, Segmenter, Silero
 
 FIXTURES = Path(__file__).with_name("fixtures")
@@ -77,22 +79,38 @@ def read(path: Path) -> Audio:
     return pcm.astype(np.float32) / np.float32(32768)
 
 
+def cut_one(path: Path) -> Audio:
+    seg = Segmenter(Silero())
+    audio = read(path)
+    cut: list[Audio] = []
+    for i in range(0, len(audio), 160):
+        cut += seg.feed(audio[i : i + 160])
+    (u,) = cut + seg.flush()
+    return u
+
+
 @pytest.mark.e2e
-def test_synthetic_voices_post_answers_and_drop_babble(model: str) -> None:
-    """001-AC8: the S5 TTS glitch is not posted; one-word answers are, with their words."""
-    transcribe = Transcriber(model, cpu_threads=4)
+def test_synthetic_voices_post_answers_and_drop_babble(transcriber: Callable[[Audio], Line]) -> None:
+    """001-AC8, 007-AC3: one-word answers are posted with their words; Whisper drops the S5 TTS glitch."""
+    parakeet = isinstance(transcriber, ParakeetTranscriber)
+    judge = implausible_parakeet if parakeet else implausible
     files = json.loads((FIXTURES / "voices.json").read_text())["files"]
     got = {}
     for f in files:
-        seg = Segmenter(Silero())
-        audio = read(FIXTURES / f["file"])
-        cut: list[Audio] = []
-        for i in range(0, len(audio), 160):
-            cut += seg.feed(audio[i : i + 160])
-        (u,) = cut + seg.flush()
-        ln = transcribe(u)
-        posted = implausible(ln, len(u) / SR, RULES) is None
+        u = cut_one(FIXTURES / f["file"])
+        ln = transcriber(u)
+        posted = bool(ln.text.strip()) and judge(ln, len(u) / SR, RULES) is None
         got[f["file"]] = posted
-        if posted:
+        if posted and "heard" in f:
             assert f["heard"] in ln.text.lower(), (f["file"], ln.text)
-    assert got == {f["file"]: f["post"] for f in files}
+    # Parakeet has no confidence to drop TTS glitches with: they post (voices.json, post_parakeet).
+    key = "post_parakeet" if parakeet else "post"
+    assert got == {f["file"]: f.get(key, f["post"]) for f in files}
+
+
+@pytest.mark.e2e
+def test_french_dense_in_english_terms_is_not_an_english_leak(transcriber: Callable[[Audio], Line]) -> None:
+    """007-AC5: a French sentence full of English tech terms is guessed fr, its English twin en."""
+    for f in json.loads((FIXTURES / "voices.json").read_text())["leak"]:
+        ln = transcriber(cut_one(FIXTURES / f["file"]))
+        assert guess_language(ln.text) == f["lang"], (f["file"], ln.text)

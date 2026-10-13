@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -215,6 +216,86 @@ func TestVoiceLines(t *testing.T) {
 	}
 }
 
+// 007-AC13, 007-AC14: the room learns each live worker's engine, and whether one reads the glossary.
+func TestSTTHeartbeatEngine(t *testing.T) {
+	oldPoll := pollEvery
+	pollEvery = 20 * time.Millisecond
+	t.Cleanup(func() { pollEvery = oldPoll })
+	e, _ := newVoiceEnv(t)
+	room := e.createRoom(t, "R")
+	p := e.join(t, e.createInvite(t, room.ID).Token, "A")
+	ev := e.openEvents(t, room.ID, p.Token, "")
+	nextMessage(t, ev)
+	sttOf(t, next(t, ev))
+	beat := func(body map[string]any) {
+		t.Helper()
+		if code, b := e.do(t, "POST", "/api/stt/heartbeat", sttToken, body); code != http.StatusNoContent {
+			t.Fatalf("heartbeat %v: %d %s", body, code, b)
+		}
+	}
+	expect := func(what string, engines []string, glossary bool) {
+		t.Helper()
+		st := sttOf(t, next(t, ev))
+		if !slices.Equal(st.Engines, engines) || st.Glossary != glossary || st.Engines == nil {
+			t.Fatalf("%s: %+v, want engines %v glossary %v", what, st, engines, glossary)
+		}
+	}
+	// A worker from before 007 names no engine: it reads no glossary.
+	beat(map[string]any{"worker": "old"})
+	expect("pre-007 worker", []string{}, false)
+	beat(map[string]any{"worker": "w1", "engine": " parakeet ", "glossary": false})
+	expect("parakeet", []string{"parakeet"}, false)
+	beat(map[string]any{"worker": "w2", "engine": "whisper", "glossary": true})
+	expect("whisper with the prompt on", []string{"parakeet", "whisper"}, true)
+	beat(map[string]any{"worker": "w2", "engine": "whisper", "glossary": false})
+	expect("whisper with the prompt off", []string{"parakeet", "whisper"}, false)
+
+	for name, body := range map[string]any{
+		"bidi engine":     map[string]any{"worker": "w", "engine": "a\u202eb"},
+		"long engine":     map[string]any{"worker": "w", "engine": strings.Repeat("e", maxEngineName+1)},
+		"multiline":       map[string]any{"worker": "w", "engine": "a\nb"},
+		"engine not text": map[string]any{"worker": "w", "engine": 3},
+	} {
+		if code, _ := e.do(t, "POST", "/api/stt/heartbeat", sttToken, body); code != http.StatusBadRequest {
+			t.Errorf("%s: %d", name, code)
+		}
+	}
+}
+
+// 007-AC8: an utterance the STT queue drops shows in the room as a system line naming the speaker.
+func TestVoiceDropped(t *testing.T) {
+	e, _ := newVoiceEnv(t)
+	room := e.createRoom(t, "R")
+	alice := e.join(t, e.createInvite(t, room.ID).Token, "Alice")
+	ev := e.openEvents(t, room.ID, alice.Token, "")
+	nextMessage(t, ev)
+	sttOf(t, next(t, ev))
+	path := "/api/rooms/" + room.ID + "/voice/dropped"
+	if code, b := e.do(t, "POST", path, sttToken, map[string]any{"participant_id": alice.Participant.ID}); code != http.StatusCreated {
+		t.Fatalf("dropped: %d %s", code, b)
+	}
+	m := nextMessage(t, ev)
+	if m.Kind != "system" || m.Sender != "Transcription" || m.Body != "Transcription overloaded: one line lost for Alice." {
+		t.Fatalf("message %+v", m)
+	}
+	stranger := e.join(t, e.createInvite(t, e.createRoom(t, "Other").ID).Token, "Eve")
+	for name, c := range map[string]struct {
+		token string
+		id    int64
+		code  int
+	}{
+		"no token":           {"", alice.Participant.ID, http.StatusUnauthorized},
+		"participant token":  {alice.Token, alice.Participant.ID, http.StatusUnauthorized},
+		"admin token":        {e.admin, alice.Participant.ID, http.StatusUnauthorized},
+		"unknown speaker":    {sttToken, 999, http.StatusNotFound},
+		"another room's one": {sttToken, stranger.Participant.ID, http.StatusNotFound},
+	} {
+		if code, b := e.do(t, "POST", path, c.token, map[string]any{"participant_id": c.id}); code != c.code {
+			t.Errorf("%s: %d %s, want %d", name, code, b, c.code)
+		}
+	}
+}
+
 func itoa(n int64) string { b, _ := json.Marshal(n); return string(b) }
 
 func sttOf(t *testing.T, ev sseEvent) sttState {
@@ -240,6 +321,9 @@ func TestSTTHeartbeatState(t *testing.T) {
 		t.Helper()
 		if want.Transcribed == nil {
 			want.Transcribed = []int64{}
+		}
+		if want.Engines == nil {
+			want.Engines = []string{}
 		}
 		if st := sttOf(t, next(t, ev)); !st.equal(want) || st.Transcribed == nil {
 			t.Fatalf("%s: %+v, want %+v", what, st, want)

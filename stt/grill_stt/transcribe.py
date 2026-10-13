@@ -1,26 +1,16 @@
 """faster-whisper on CPU: small int8, language detected per utterance (spike S1-bis)."""
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 import numpy as np
 from faster_whisper import WhisperModel
 from faster_whisper.audio import pad_or_trim
 from faster_whisper.tokenizer import Tokenizer
 
+from .line import Line
 from .vad import SR, Audio
 
-
-@dataclass(frozen=True)
-class Line:
-    text: str
-    language: str
-    # Whisper's confidence: in the language, and over the kept segments the lowest mean token
-    # log-probability, the highest chance of no speech and the highest gzip ratio (repetition). The
-    # pipeline judges plausibility on them.
-    language_probability: float = 1.0
-    avg_logprob: float = 0.0
-    no_speech_prob: float = 0.0
-    compression_ratio: float = 1.0
+__all__ = ["Line", "Transcriber"]
 
 
 class Transcriber:

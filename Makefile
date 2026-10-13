@@ -28,7 +28,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: ui-tools ui-vendor ui-check build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: ui-tools ui-vendor ui-check build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image stt-image-test stt-image-e2e cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -156,13 +156,30 @@ stt-test:
 scenarios-test:
 	cd scenarios && uv run ruff check . && uv run ruff format --check . && uv run mypy grill_scenarios tests && uv run pytest
 
+# transcribe.cpp compile jobs: CI passes its core count, the default spares a shared workstation.
+STT_BUILD_JOBS ?= 2
 stt-image:
 	docker build -t grill-stt:local \
+	  --build-arg BUILD_JOBS=$(STT_BUILD_JOBS) \
 	  --build-arg VERSION=$(VERSION) \
 	  --build-arg COMMIT_HASH=$(COMMIT_HASH) \
 	  --build-arg BUILD_TIMESTAMP=$(BUILD_TS) \
 	  --build-arg PROJECT_URL=$(PROJECT_URL) \
 	  stt/
+
+# 007: the e2e tests inside the built image with no network, so both engines must load their baked-in
+# models offline. STT_TEST_CPUS caps the container on a shared workstation.
+STT_TEST_CPUS ?= 2
+stt-image-test: stt-image
+	$(MAKE) stt-image-e2e
+
+# The same against an already built grill-stt:local (CI builds it with its layer cache).
+stt-image-e2e:
+	docker build -t grill-stt:test -f stt/Dockerfile.test stt/
+	docker run --rm --name grill-stt-test-e2e --network none --read-only --tmpfs /tmp --cpus $(STT_TEST_CPUS) \
+	  -e GRILL_STT_IMAGE_TEST=1 -v '$(CURDIR)/stt/pyproject.toml':/app/pyproject.toml:ro \
+	  -v '$(CURDIR)/stt/tests':/app/tests:ro -v '$(CURDIR)/e2e/voice/fixtures':/e2e/voice/fixtures:ro \
+	  grill-stt:test python -m pytest -p no:cacheprovider -m e2e tests
 
 cover:
 	go test -race -coverprofile=coverage.txt ./... && go tool cover -func=coverage.txt | tail -1
@@ -305,6 +322,16 @@ k8s-apply: k8s-render k8s-check
 # Removes what k8s-apply created, the data volume included. The namespace stays.
 k8s-delete: k8s-render k8s-check
 	$(KUBECTL) delete --ignore-not-found -f '$(K8S_OUT)'
+
+# 007-AC19: the STT queue alert and its scrape, for a cluster running the VictoriaMetrics operator.
+K8S_MONITORING_NAMESPACE ?= monitoring
+k8s-monitoring: k8s-check
+	K8S_MONITORING_NAMESPACE='$(K8S_MONITORING_NAMESPACE)' envsubst '$${K8S_MONITORING_NAMESPACE}' \
+	  < deploy/monitoring/stt.yaml | $(KUBECTL) apply -f -
+
+k8s-monitoring-delete: k8s-check
+	K8S_MONITORING_NAMESPACE='$(K8S_MONITORING_NAMESPACE)' envsubst '$${K8S_MONITORING_NAMESPACE}' \
+	  < deploy/monitoring/stt.yaml | $(KUBECTL) delete --ignore-not-found -f -
 
 # Office fixtures for the pandoc tests, written by the pandoc release the image ships.
 FIXTURES := internal/convert/testdata
