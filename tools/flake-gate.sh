@@ -32,11 +32,15 @@ go_gate() {
 		echo "flake-gate: no Go test file changed since $base"
 		return 0
 	fi
+	local failed=0
 	for dir in "${!tests[@]}"; do
 		echo "flake-gate: $dir: ${tests[$dir]}"
-		# A test of another OS (_windows_test.go on Linux) matches nothing here and passes.
-		go test -race -count=5 -run "^(${tests[$dir]})\$" "$dir"
+		# A test of another OS (_windows_test.go on Linux) matches nothing here and passes. The
+		# timeout covers five runs: internal/web alone takes about five minutes a run under -race.
+		# Every package runs, a failure or not, so one CI run names every flaky test.
+		go test -race -count=5 -timeout 60m -run "^(${tests[$dir]})\$" "$dir" || failed=1
 	done
+	return "$failed"
 }
 
 e2e_gate() {
