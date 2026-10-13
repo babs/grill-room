@@ -335,6 +335,8 @@ The image bakes both models in and runs with `HF_HUB_OFFLINE=1`, because a pod b
 
 Metrics: those in [docs/architecture.md](docs/architecture.md), plus `grill_stt_rooms` and `grill_stt_tracks`.
 
+`python -m grill_stt.replay` plays WAV tracks in real time, one or several speakers at once, through the worker's own segmenter, engine processes and filter, and writes each line with its latency: the lab A/B run of spec 007 (`spikes/s007-ab/`) uses it in the image.
+
 `make stt-image-test` runs the worker's e2e tests inside the built image with no network, for both engines: each must load its baked-in model offline.
 
 The voice e2e tests play `e2e/voice/fixtures/fr-en.wav` as a fake microphone. It holds four read sentences from Google FLEURS (CC-BY-4.0), alternating French and English. `fr-en.json` gives their source files, text and timings. `uv run ./scripts/make_fixture.py ../e2e/voice/fixtures` (from `stt/`) rebuilds them.
@@ -534,6 +536,7 @@ What gets deployed, with `<domain>` standing for `K8S_DOMAIN`:
 - The room server runs one replica with a `Recreate` strategy. SQLite has one writer, on a 2 GiB volume. Probes hit `/healthz`, and `/metrics` is on 7681.
 - LiveKit exposes no UDP. Browsers relay through TURN/TLS on 443. `allow_restricted_peer_cidrs` lists only the pod's own IP, where the relay hands media to the SFU.
 - The STT worker requests 2 CPUs and may burst to 4, with 3 GiB as request and limit: two parakeet engine processes of 2 threads (spike S10d). One pod serves every room, about four people talking at once. It updates with `Recreate`: no lab node has 2 CPUs free for a second worker beside the old one, so transcription stops for the minute a new pod takes to load the models.
+- Switching the STT engine back to faster-whisper is one command, in [docs/lab-checklist.md](docs/lab-checklist.md) (STT engine rollback).
 - `make k8s-monitoring` applies the STT queue alert and its scrape (`deploy/monitoring/stt.yaml`) for a cluster running the VictoriaMetrics operator; `make k8s-monitoring-delete` removes them. `K8S_MONITORING_NAMESPACE` (default `monitoring`) is where vmagent runs.
 - Every pod runs as non-root with a read-only root filesystem, no service account token and no service links.
 - A default-deny NetworkPolicy blocks everything, then one policy per flow opens DNS, traefik to the room server and LiveKit, the worker to both, the room server to LiveKit's API and, for Web Push, to TCP 443 anywhere (the server itself posts only to `GRILL_ROOM_PUSH_HOSTS`), media between LiveKit and the worker, and the worker's traces to the cluster's OpenTelemetry collector (a Kyverno policy there injects `OTEL_EXPORTER_OTLP_ENDPOINT` into every pod).
