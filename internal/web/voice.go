@@ -208,19 +208,50 @@ func (s *Server) postVoiceLine(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, fmt.Sprintf("body must be 1 to %d characters", maxBodyLen))
 		return
 	}
-	p, err := s.bus.Store.RoomParticipant(r.Context(), r.PathValue("room"), req.ParticipantID)
-	if errors.Is(err, store.ErrNotFound) {
-		// A participant revoked while speaking: the line is dropped with their access.
-		httpError(w, http.StatusNotFound, "no such participant in this room")
-		return
-	}
-	if err != nil {
-		s.serverError(w, "voice_line_failed", err)
+	p, ok := s.voiceSpeaker(w, r, req.ParticipantID)
+	if !ok {
 		return
 	}
 	m := &store.Message{RoomID: p.RoomID, Kind: store.KindVoice, ParticipantID: p.ID, Sender: p.Name, Body: body}
 	if err := s.bus.Post(r.Context(), m); err != nil {
 		s.serverError(w, "voice_line_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, m)
+}
+
+// voiceSpeaker is the room's participant a worker names; false once it answered the error.
+func (s *Server) voiceSpeaker(w http.ResponseWriter, r *http.Request, id int64) (*store.Participant, bool) {
+	p, err := s.bus.Store.RoomParticipant(r.Context(), r.PathValue("room"), id)
+	if errors.Is(err, store.ErrNotFound) {
+		// A participant revoked while speaking: the line is dropped with their access.
+		httpError(w, http.StatusNotFound, "no such participant in this room")
+		return nil, false
+	}
+	if err != nil {
+		s.serverError(w, "voice_speaker_failed", err)
+		return nil, false
+	}
+	return p, true
+}
+
+// postVoiceDropped says in the room that the STT worker's full queue lost a line of a speaker
+// (007-AC8): a drop is never silent. The worker spaces them out per speaker.
+func (s *Server) postVoiceDropped(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ParticipantID int64 `json:"participant_id"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	p, ok := s.voiceSpeaker(w, r, req.ParticipantID)
+	if !ok {
+		return
+	}
+	m := &store.Message{RoomID: p.RoomID, Kind: store.KindSystem, Sender: "Transcription",
+		Body: "Transcription overloaded: one line lost for " + p.Name + "."}
+	if err := s.bus.Post(r.Context(), m); err != nil {
+		s.serverError(w, "voice_dropped_failed", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, m)

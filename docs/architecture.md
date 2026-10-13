@@ -62,11 +62,31 @@ flowchart LR
 | Document iframe | anchors and selections via postMessage | room page only | none: opaque origin, CSP sandbox, no cookie |
 | Room server | `/api/*` REST, `/api/rooms/{room}/events` SSE, `/install.sh`, `/download/*`, `/healthz`; `/metrics` on its own port | SQLite, LiveKit server API, SMTP relay when configured | admin token, participant token or cookie, profile cookie, daemon token, STT token, pairing secret |
 | LiveKit | WebRTC signalling (WSS), TURN/TLS on 443, ICE/TCP | browsers, STT worker | 5 min JWT minted by the room server |
-| STT worker | `/metrics` | LiveKit (hidden participant), room server (`/api/stt/heartbeat`, `/voice/lines`) | STT token; LiveKit key pair |
+| STT worker | `/healthz`, `/metrics` | LiveKit (hidden participant), room server (`/api/stt/heartbeat`, `/voice/lines`, `/voice/dropped`), its own engine processes over pipes | STT token; LiveKit key pair |
 | Daemon: a supervisor and one worker per room server, [protocol](daemon-protocol.md) | local admin page on 127.0.0.1: instances, rooms, Claude accounts, global and per-instance settings, and the turn history in a local `monitor.db`; a local socket (named pipe on Windows) for a second launch to hand over its room | room server (SSE `daemon/events` with turns and whether it hosts, turn job, workspace manifest and tar, session, result, status with the host cap and approval mode), Docker, `/api/daemon/version` and `/download/` for each worker's binary and its sigstore bundle, GitHub releases (or an instance) for the supervisor's own update, the sigstore TUF repository for the trusted root | daemon token from pairing; admin page one-time link + Origin check |
 | Bearer-swap proxy | HTTP on the Docker bridge, one per account, in the supervisor | Anthropic API | swaps a worker's dummy bearer for the account's real token; counts each worker's requests and refuses a cut-off one |
 | Egress proxy (squid) | HTTP proxy on the sandbox network only | the host's allowlisted domains, `CONNECT` to 443; Anthropic's hosts denied | none; the allowlist is the control |
 | Sandbox | nothing | the bearer-swap proxy, the egress proxy, nothing else | dummy credentials only |
+
+## STT capacity and metrics, TL;DR
+
+- One STT pod joins every room with audio. Its two parakeet engine processes (2 threads each) keep up with about four people talking at once across the instance (spike S10d: 8.4x real time on a 4-vCPU lab node). That is the ceiling until rooms are spread over several pods.
+- Past it, utterances wait in one queue of 64 (`APP_QUEUE_SIZE`). An engine takes the oldest utterance whose speaker has none in an engine, so each speaker's lines post in order.
+- An utterance that waited over 10 s logs `queue_wait_slow`, and the alert `GrillSTTQueueWaitOver10s` fires (`deploy/monitoring/stt.yaml`). On another Prometheus: `sum(increase(grill_stt_queue_wait_seconds_count[5m])) - sum(increase(grill_stt_queue_wait_seconds_bucket{le="10.0"}[5m])) > 0`.
+- A full queue drops the new utterance, never silently. The room gets "Transcription overloaded: one line lost for <name>.", once per speaker per 30 s.
+- An engine process that dies or hangs past `APP_ENGINE_TIMEOUT_S` loses its utterance (an `error`) and is restarted. `/healthz` fails once no engine has been up for 60 s.
+
+| Metric | What it says |
+|---|---|
+| `grill_stt_engine_info{engine,model,revision}` | the running engine and model |
+| `grill_stt_queue_depth` | utterances waiting for an engine |
+| `grill_stt_queue_wait_seconds` | from the VAD cut to an engine taking the utterance |
+| `grill_stt_engines_busy` | engine processes transcribing now; at `APP_ENGINE_PROCESSES` for long, the pod is saturated |
+| `grill_stt_transcribe_seconds{engine}` | model time per utterance |
+| `grill_stt_line_latency_seconds{engine}` | end of speech to the line stored in the room |
+| `grill_stt_utterances_dropped_total` | utterances a full queue dropped |
+| `grill_stt_lines_total{result}`, `grill_stt_lines_implausible_total{reason}` | outcome per utterance |
+| `grill_stt_lines_language_total{engine,guess}` | stored lines by guessed language: the English leak |
 
 ## A turn, end to end
 

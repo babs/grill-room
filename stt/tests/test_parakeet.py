@@ -127,7 +127,7 @@ async def test_parakeet_pipeline_counts_the_guess_and_never_reads_the_prompt() -
     )
     client = httpx.AsyncClient(base_url="http://room", transport=httpx.MockTransport(handle))
     p = Pipeline(
-        lambda _a, _p: parakeet_line(next(texts)), RoomAPI(client), 4, use_prompt=False, engine="parakeet"
+        [lambda _a, _p: parakeet_line(next(texts))], RoomAPI(client), 4, use_prompt=False, engine="parakeet"
     )
     before = {
         "empty": metric("grill_stt_lines_total", result="empty"),

@@ -2,7 +2,6 @@
 
 import asyncio
 import contextlib
-import logging
 import os
 import signal
 import sys
@@ -17,10 +16,9 @@ from prometheus_client import CONTENT_TYPE_LATEST, Gauge, generate_latest
 from pydantic import ValidationError
 
 from .config import Settings
-from .parakeet import ParakeetTranscriber
+from .engines import ProcessEngine, argv
+from .logs import setup_logging
 from .pipeline import Pipeline, RoomAPI
-from .transcribe import Line, Transcriber
-from .vad import Audio
 from .worker import Worker, http_url
 
 log = structlog.get_logger()
@@ -42,34 +40,21 @@ def engine_info(s: Settings) -> None:
     ENGINE.labels(s.engine, Path(model).name, revision).set(1)
 
 
-def load(s: Settings) -> Callable[[Audio, str], Line]:
+def engines(s: Settings) -> list[ProcessEngine]:
     model, _ = engine(s)
-    if s.engine == "parakeet":
-        return ParakeetTranscriber(model, s.cpu_threads)
-    return Transcriber(model, s.cpu_threads)
+    return [
+        ProcessEngine(argv(s.engine, model, s.cpu_threads), s.engine_timeout_s)
+        for _ in range(s.engine_processes)
+    ]
 
 
-def setup_logging(level: str) -> None:
-    renderer: structlog.typing.Processor = (
-        structlog.dev.ConsoleRenderer() if sys.stdout.isatty() else structlog.processors.JSONRenderer()
-    )
-    structlog.configure(
-        processors=[
-            structlog.processors.add_log_level,
-            structlog.processors.TimeStamper(fmt="iso", utc=True),
-            # A traceback becomes one escaped field: one JSON object per line.
-            structlog.processors.dict_tracebacks,
-            renderer,
-        ],
-        wrapper_class=structlog.make_filtering_bound_logger(logging.getLevelNamesMapping()[level.upper()]),
-    )
-
-
-async def serve_http(port: int, ready: asyncio.Event) -> web.AppRunner:
+async def serve_http(port: int, ready: asyncio.Event, healthy: Callable[[], bool]) -> web.AppRunner:
     async def healthz(_: web.Request) -> web.Response:
-        # 503 while the model loads: nothing can be transcribed yet.
+        # 503 while the models load: nothing can be transcribed yet.
         if not ready.is_set():
             return web.json_response({"status": "loading"}, status=503)
+        if not healthy():
+            return web.json_response({"status": "no engine up for 60 s"}, status=503)
         return web.json_response({"status": "ok"})
 
     async def metrics(_: web.Request) -> web.Response:
@@ -85,31 +70,39 @@ async def serve_http(port: int, ready: asyncio.Event) -> web.AppRunner:
 
 
 async def run(s: Settings) -> None:
-    ready = asyncio.Event()
-    runner = await serve_http(s.port, ready)
-    model, revision = engine(s)
-    log.info("model_loading", engine=s.engine, model=model, revision=revision, cpu_threads=s.cpu_threads)
-    transcribe = await asyncio.to_thread(load, s)
-    engine_info(s)
-    ready.set()
-    log.info("model_ready", engine=s.engine)
     client = httpx.AsyncClient(
         base_url=s.room_url,
         timeout=httpx.Timeout(10.0, connect=5.0),
         headers={"Authorization": f"Bearer {s.room_token.get_secret_value()}"},
     )
-    lk = api.LiveKitAPI(http_url(s.livekit_url), s.livekit_api_key, s.livekit_api_secret.get_secret_value())
     room_api = RoomAPI(client)
     pipeline = Pipeline(
-        transcribe, room_api, s.queue_size, s.plausibility(), use_prompt=s.uses_glossary, engine=s.engine
+        engines(s), room_api, s.queue_size, s.plausibility(), use_prompt=s.uses_glossary, engine=s.engine
     )
+    ready = asyncio.Event()
+    runner = await serve_http(s.port, ready, pipeline.healthy)
+    lk = api.LiveKitAPI(http_url(s.livekit_url), s.livekit_api_key, s.livekit_api_secret.get_secret_value())
     worker = Worker(s, pipeline, room_api, lk)
     try:
+        model, revision = engine(s)
+        log.info(
+            "model_loading",
+            engine=s.engine,
+            model=model,
+            revision=revision,
+            processes=s.engine_processes,
+            cpu_threads=s.cpu_threads,
+        )
+        await pipeline.start()
+        engine_info(s)
+        ready.set()
+        log.info("model_ready", engine=s.engine)
         async with asyncio.TaskGroup() as tg:
             tg.create_task(pipeline.run())
             tg.create_task(worker.discover())
             tg.create_task(worker.heartbeat())
     finally:
+        pipeline.stop()
         await worker.close()
         await lk.aclose()
         await client.aclose()

@@ -31,7 +31,7 @@ def settings(**kw: Any) -> Settings:
 
 def worker(handler: httpx.MockTransport, **kw: Any) -> Worker:
     room_api = RoomAPI(httpx.AsyncClient(base_url="http://room", transport=handler))
-    pipeline = Pipeline(lambda _a, _p: Line("", "en"), room_api, size=1)
+    pipeline = Pipeline([lambda _a, _p: Line("", "en")], room_api, size=1)
     return Worker(settings(**kw), pipeline, room_api, lk=None)  # type: ignore[arg-type] # unused here
 
 

@@ -262,6 +262,40 @@ func TestSTTHeartbeatEngine(t *testing.T) {
 	}
 }
 
+// 007-AC8: an utterance the STT queue drops shows in the room as a system line naming the speaker.
+func TestVoiceDropped(t *testing.T) {
+	e, _ := newVoiceEnv(t)
+	room := e.createRoom(t, "R")
+	alice := e.join(t, e.createInvite(t, room.ID).Token, "Alice")
+	ev := e.openEvents(t, room.ID, alice.Token, "")
+	nextMessage(t, ev)
+	sttOf(t, next(t, ev))
+	path := "/api/rooms/" + room.ID + "/voice/dropped"
+	if code, b := e.do(t, "POST", path, sttToken, map[string]any{"participant_id": alice.Participant.ID}); code != http.StatusCreated {
+		t.Fatalf("dropped: %d %s", code, b)
+	}
+	m := nextMessage(t, ev)
+	if m.Kind != "system" || m.Sender != "Transcription" || m.Body != "Transcription overloaded: one line lost for Alice." {
+		t.Fatalf("message %+v", m)
+	}
+	stranger := e.join(t, e.createInvite(t, e.createRoom(t, "Other").ID).Token, "Eve")
+	for name, c := range map[string]struct {
+		token string
+		id    int64
+		code  int
+	}{
+		"no token":           {"", alice.Participant.ID, http.StatusUnauthorized},
+		"participant token":  {alice.Token, alice.Participant.ID, http.StatusUnauthorized},
+		"admin token":        {e.admin, alice.Participant.ID, http.StatusUnauthorized},
+		"unknown speaker":    {sttToken, 999, http.StatusNotFound},
+		"another room's one": {sttToken, stranger.Participant.ID, http.StatusNotFound},
+	} {
+		if code, b := e.do(t, "POST", path, c.token, map[string]any{"participant_id": c.id}); code != c.code {
+			t.Errorf("%s: %d %s, want %d", name, code, b, c.code)
+		}
+	}
+}
+
 func itoa(n int64) string { b, _ := json.Marshal(n); return string(b) }
 
 func sttOf(t *testing.T, ev sseEvent) sttState {

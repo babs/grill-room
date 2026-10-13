@@ -28,7 +28,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: ui-tools ui-vendor ui-check build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image stt-image-test stt-image-e2e cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: ui-tools ui-vendor ui-check build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image stt-image-test stt-image-e2e cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -317,6 +317,16 @@ k8s-apply: k8s-render k8s-check
 # Removes what k8s-apply created, the data volume included. The namespace stays.
 k8s-delete: k8s-render k8s-check
 	$(KUBECTL) delete --ignore-not-found -f '$(K8S_OUT)'
+
+# 007-AC19: the STT queue alert and its scrape, for a cluster running the VictoriaMetrics operator.
+K8S_MONITORING_NAMESPACE ?= monitoring
+k8s-monitoring: k8s-check
+	K8S_MONITORING_NAMESPACE='$(K8S_MONITORING_NAMESPACE)' envsubst '$${K8S_MONITORING_NAMESPACE}' \
+	  < deploy/monitoring/stt.yaml | $(KUBECTL) apply -f -
+
+k8s-monitoring-delete: k8s-check
+	K8S_MONITORING_NAMESPACE='$(K8S_MONITORING_NAMESPACE)' envsubst '$${K8S_MONITORING_NAMESPACE}' \
+	  < deploy/monitoring/stt.yaml | $(KUBECTL) delete --ignore-not-found -f -
 
 # Office fixtures for the pandoc tests, written by the pandoc release the image ships.
 FIXTURES := internal/convert/testdata

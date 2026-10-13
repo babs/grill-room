@@ -4,7 +4,7 @@ import zlib
 
 import structlog
 
-from .transcribe import Line
+from .line import Line
 from .vad import Audio
 
 log = structlog.get_logger()
