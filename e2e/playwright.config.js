@@ -14,7 +14,8 @@ export default defineConfig({
   testIgnore: ['voice/**', 'agent-live/**', 'install/**', 'lab/**', 'mail/**', 'supervisor/**', 'crossinstance/**', 'scenario/**', 'push/**'],
   timeout: 30_000,
   // The installed Chrome: no browser download.
-  use: { baseURL, channel: 'chrome' },
+  // On CI a failed test keeps its trace: what a flake did is in the artifact.
+  use: { baseURL, channel: 'chrome', trace: process.env.CI ? 'retain-on-failure' : 'off' },
   webServer: {
     command: 'mkdir -p test-results && rm -f test-results/e2e.db* && ../bin/grill-room',
     url: `${baseURL}/healthz`,

@@ -28,7 +28,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: ui-tools ui-vendor ui-check build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: ui-tools ui-vendor ui-check build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -81,6 +81,11 @@ test-docker: sandbox-image sandbox-fake-image
 e2e: build sandbox-fake-image
 	$(MAKE) release DIST=bin/e2e-release VERSION=$(VERSION)
 	cd e2e && pnpm install --frozen-lockfile && pnpm test && pnpm exec playwright test -c mail/playwright.config.js
+
+# CI's flake gate (tools/flake-gate.sh): the specs in SPECS, three times each, as `make e2e` runs them.
+e2e-repeat: build sandbox-fake-image
+	$(MAKE) release DIST=bin/e2e-release VERSION=$(VERSION)
+	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test --repeat-each=3 $(SPECS)
 
 # Voice tests against the compose stack behind the local traefik: run `make dev-up` first.
 e2e-voice:
