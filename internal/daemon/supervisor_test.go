@@ -868,3 +868,40 @@ func TestSupervisorStartsBeforeCleanup(t *testing.T) {
 	close(release)
 	waitFor(t, "the worker running", func() bool { return instance(t, s).State == "running" })
 }
+
+// 008-AC15: "Add a room" on the page hands any link inside a room to the supervisor, as a second
+// launch does: before any room and while another is connected. A link that is no room's says why.
+func TestAddRoomFromPage(t *testing.T) {
+	s := testSupervisor(t, strconv.Itoa(Proto), nil)
+	e := newAdminEnv(t, s)
+	tok := e.login(t)
+	for _, tc := range []struct{ body, want string }{
+		{`{"url":"https://rooms.example/admin"}`, "is not a room link"},
+		{`{"url":"https://rooms.example/elsewhere/x"}`, "is not a room link"},
+		{`{"url":"https://rooms.example/r/"}`, "is not a room link"},
+	} {
+		if code, body := e.req(t, "POST", "/api/room", tok, tc.body, nil); code != http.StatusBadRequest || !strings.Contains(body, tc.want) {
+			t.Fatalf("%s: %d %s", tc.body, code, body)
+		}
+	}
+	if v, _ := s.Instances(); len(v) != 0 {
+		t.Fatalf("a refused link added %+v", v)
+	}
+	rooms := func() []string {
+		v, _ := s.Instances()
+		if len(v) != 1 {
+			return nil
+		}
+		return v[0].Rooms
+	}
+	if code, body := e.req(t, "POST", "/api/room", tok, `{"url":"https://rooms.example/r/abc/docs"}`, nil); code != http.StatusNoContent {
+		t.Fatalf("first room: %d %s", code, body)
+	}
+	waitFor(t, "the worker running", func() bool { return s.Status().Connection == "connected" })
+	if code, body := e.req(t, "POST", "/api/room", tok, `{"url":"https://rooms.example/r/def/docs/7?x=1#m2"}`, nil); code != http.StatusNoContent {
+		t.Fatalf("second room: %d %s", code, body)
+	}
+	waitFor(t, "both rooms on the instance", func() bool {
+		return slices.Equal(rooms(), []string{"https://rooms.example/r/abc", "https://rooms.example/r/def"})
+	})
+}

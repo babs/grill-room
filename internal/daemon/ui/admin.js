@@ -207,7 +207,9 @@ const pairingText = /** @type {Record<string, string>} */ ({
   paired: 'Paired.',
 });
 
-// Room pairs this machine with a room link, then waits for the approval in the room.
+// Room pairs this machine with a room link, then waits for the approval in the room. "Add a room"
+// stays there once a room is connected: the link goes to the supervisor as a second launch's does
+// (008-AC15), and the status then shows that room's pairing.
 function Room() {
   const s = /** @type {StatusReply} */ (data.value).status;
   const [url, setURL] = useState('');
@@ -218,7 +220,7 @@ function Room() {
   const pair = (e) => {
     e.preventDefault();
     setErr('');
-    api('POST', '/api/room', { url }).then(reload).catch((x) => setErr(x.message));
+    api('POST', '/api/room', { url }).then(() => { setURL(''); return reload(); }).catch((x) => setErr(x.message));
   };
   return html`<${Section} id="room" title="Room">
     <p id="room">${s.room || 'No room yet: paste the room link below.'}</p>
@@ -227,11 +229,12 @@ function Room() {
       Check that the room page shows the code <strong id="code">${s.code}</strong>, then
       <a id="approve-link" href=${s.approve_url} target="_blank" rel="noopener noreferrer">approve in the room</a>.
     </p>`}
-    ${!(s.pairing === 'paired' && s.connection === 'connected') && html`<form id="room-form" class="row" onSubmit=${pair}>
+    <form id="room-form" class="row" onSubmit=${pair}>
       <label>Room link <input id="room-url" type="url" required placeholder="https://.../r/..." value=${url}
         onInput=${(/** @type {any} */ e) => setURL(e.currentTarget.value)} /></label>
-      <button type="submit">Pair with this room</button>
-    </form>`}
+      <button type="submit">Add a room</button>
+    </form>
+    <p class="hint">Any link inside the room works: the room page or its documents.</p>
     <p id="room-error" class="bad" role="alert">${err}</p>
   <//>`;
 }

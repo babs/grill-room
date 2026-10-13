@@ -87,7 +87,24 @@ main() {
 	command -v curl >/dev/null 2>&1 || die "curl is not installed"
 	[ -n "${HOME:-}" ] || die "HOME is not set"
 
-	base=${room_url%/r/*}
+	# Any link inside a room will do (its docs window, a query, a fragment): keep the room's own,
+	# read as the daemon reads it (internal/daemon/room.go ParseRoomURL).
+	room_url=${room_url%%#*}
+	room_url=${room_url%%\?*}
+	scheme=${room_url%%://*}
+	rest=${room_url#*://}
+	authority=${rest%%/*}
+	# Security: user info would hide the real host behind an allowed name.
+	case $authority in '' | *@*) usage ;; esac
+	path=${rest#"$authority"}
+	prefix=${path%%/r/*}
+	[ "$prefix" != "$path" ] || usage
+	room_id=${path#"$prefix"/r/}
+	room_id=${room_id%%/*}
+	case $room_id in '' | *[!a-z0-9]*) usage ;; esac
+	[ "${#room_id}" -le 64 ] || usage
+	base=$scheme://$authority$prefix
+	room_url=$base/r/$room_id
 	target=$(detect_target)
 	if [ -r /proc/sys/kernel/osrelease ] && grep -qi microsoft /proc/sys/kernel/osrelease; then
 		printf 'WSL detected: installing the Linux build.\n'
