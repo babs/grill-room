@@ -16,6 +16,7 @@ Live testing on the lab showed a room that leaves people guessing:
 - The documents can only be read inside the room page.
 - A background tab gives no sign of new messages.
 - Modals ignore clicks outside them.
+- A UX audit (2026-10-13, 29 findings F01 to F29) found the six UIs share no control scale, no colours and no wording: 7 button heights in the room header alone, a native file box as the only way to upload, white on teal at 3.30:1, and words like "Chain 0/25" or "holds the agent" a product manager cannot read.
 
 ## Solution
 
@@ -36,6 +37,7 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 - A per-room STT glossary.
 - Modal dismissal.
 - Renaming documents, and soft-deleting them for room admins.
+- A design system shared by the six UIs (`docs/design.md`), and the audit's fixes: upload, header, wording, touch targets, phone layout, profile, `/admin` and the daemon page.
 
 ## Out of scope
 
@@ -89,6 +91,42 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 - [x] **AC26** A room admin can delete a document, softly. It leaves the list, the workspace and the agents' view, and a chat line records it. Its data (revisions, annotations, original) stays and counts in the room's volume. A room admin restores it from Manage, unless another document took its name meanwhile. Only deleting the room purges it. An export carries deleted documents, flagged. As for a rename, an agent document is not deleted while a turn runs.
 - [x] **AC13** Every modal (persona panel, the "Manage" room-admin panel, and the others) closes on a click outside it and on Escape, and keeps focus correctly for keyboard users.
 
+### Design system and polish (UX audit, 2026-10-13)
+
+Each AC names the audit findings it covers. `docs/design.md` holds the rules these ACs refer to.
+
+- [ ] **AC28** One `tokens.css` holds the colour, type, spacing, size, radius, shadow and layer tokens and the component classes. Both binaries serve it at `/static/kit/tokens.css` from one Go package, and the room page, the docs window, join, profile, `/admin` and the daemon page link it before their own stylesheet. A page stylesheet holds no colour literal: every colour is a token, persona colours (user data) excepted. Dark tokens follow `prefers-color-scheme`, as the document frame already does, so a document matches the page around it. The six pages share one header: the chrome background, the logo and the title, 56 px high. (F21, F22)
+- [ ] **AC29** Colours are harmonized from the mapping table in `docs/design.md`, and only the pairs that fail WCAG AA change: primary buttons and teal text move to `#0f7d6e`, input and button outlines get a 3:1 border, warning text moves to `#8a5a00`, the "reopened" badge gets ink text, and status dots get a ring. A test computes every text pair at 4.5:1 or more and every non-text pair at 3:1 or more, light and dark, from the tokens file. (F29, F28)
+- [ ] **AC30** Every button, input, select, tab and summary uses one control height: 36 px on a desktop, 44 px under 40rem, with one control font size per scale. At 1440 px the room header's visible controls share one height. At 390 px every visible control of the room (as it opens, with a document open, and with Room settings open), the docs window, join, profile, `/admin` and the daemon page is at least 44 × 44 px. Links and chips inside a message's text are exempt, as WCAG 2.5.8 exempts inline targets. (F11)
+- [ ] **AC31** The Documents header has a `+` button, "Add documents", that picks several files at once; the native file box is never shown. The whole documents pane, and the docs window, take dropped files, with an overlay that reads "Drop to add to the room". Each file gets a row with its progress, then ✓, or ✗ with a short reason (the server's, or "This file type isn't supported…") and Retry. A finished row clears after 5 s; a failed one stays until retried or dismissed. (F01, F02, F03)
+- [ ] **AC32** The room header has three zones: the room's name, cut with an ellipsis; the personas, with the auto-turn counter shown only above 0 ("auto 3/25"); then the audio control, the user menu and a `⋯` menu, all at the control height, 8 px apart inside a group and 24 px between groups.
+  - The user menu (initials) holds: Change my name, Notifications, Use on another device, My rooms and profile.
+  - `⋯` holds: Invite people, Room settings, Personas, Open documents in a new window, Run the AI on my computer.
+  - The audio control is "Join audio"; once joined, a mic toggle and a menu with Mute the room (deafen), Keep my mic on, the transcribed voices and Leave audio. "Voice-to-text is off" shows only there, so only to people in the audio.
+  - A persona pill shows its state as a glyph with a ring (● ready, ◐ working, ○ offline, ⧗ queued, 🔒 not allowed) and, on a desktop, as a word.
+  - The recovery link no longer opens as a panel on the first join. It stays in the user menu while this tab holds it, and one notice offers it after the first message. Once the tab no longer holds it, the menu says how to sign in elsewhere: an email bound from the profile page. (F04, F08, F10, F28)
+- [ ] **AC33** The room, Room settings and the docs window use the plain words of the wording table in `docs/design.md`: no "Chain", "host" alone, "holds the agent", "Manage", "Transcribing", "Deafen", "Upload a document", "Download original", "Volume". The composer placeholder is "Message the room · @ to mention", and the Enter and Shift+Enter hint shows on the first focus. Room settings › General hides the room id behind "Copy room id", sums the volume as one line, "Storage: 37 B of 200 MB", and shows "Delete the room" as a danger outline before the name is typed. (F09, F15, F26)
+- [ ] **AC34** No screen starts blank. An empty chat says "Invite people to start" with a "Copy invite link" button for anyone who may create one. An empty Documents list says "No documents yet. Drop files here or press +." and names the accepted types. A room just created from the profile opens with its invite card. (F07)
+- [ ] **AC35** The small fixes:
+  - A participant who may not ask a persona can still tap its pill: a sheet says who can let them ("Only Alice can let you ask Grill").
+  - On a phone, the People list is a real sheet, with a handle, Close, a backdrop, Escape, and it closes when a document is picked.
+  - The document viewer has one toolbar: ✕ first, then the title and its meta, then icon buttons (download, new window, rename, delete), all at the control height.
+  - A participant's name never breaks mid-word: it ends with an ellipsis, and roles beyond two show as icons with a tooltip.
+  - Under 40rem, Room settings' tables become stacked cards, and every tab bar scrolls sideways instead of wrapping.
+  - A message's Edit and Delete sit in one `⋯` per message. On a desktop it shows on hover and focus; on a phone it always shows. (F06, F12, F13, F16, F19, F27)
+- [ ] **AC36** On a phone (under 40rem), the room is one 56 px header row, a 44 px persona strip that scrolls sideways, the content, the composer, and a 56 px bottom tab bar: Chat, Docs (count), People (count). It leaves room for the safe-area insets. Docs holds the list and the viewer. A tab keeps its scroll position when you come back to it. The People button and its sheet go. (F05, F12)
+- [ ] **AC37** With a document open on a desktop, annotations are a panel toggled from the viewer's toolbar, with their count. It is closed by default below 100rem and remembers its last state. The chat folds into a 56 px rail and opens again from it, so the document can take the width. (F14)
+- [ ] **AC38** One status strip under the header shows the most urgent state (reconnecting, then waiting for approval, then auto turns paused, then a running answer, then the queue) and "+N more", which opens the rest. Bars no longer stack. Action feedback goes to toasts: bottom right on a desktop, above the tab bar on a phone, `role=status`, 4 s, at most one action, worded after the button ("Copied", "Renamed", "Saved"). (F20)
+- [ ] **AC39** No page calls `confirm()` or `alert()`; a test checks the six UIs' scripts. A destructive action asks in one confirm sheet: a question as its title, one line on the consequence, then Cancel and a danger button. Deleting a message or a document acts at once and offers Undo in a toast for 5 s: the message is only deleted when the toast ends, and the document is restored by Undo. Deleting a room keeps the type-the-name form. On the daemon page, cutting an instance off from Claude, removing an account or a key, accepting unsigned binaries and stopping the daemon ask first. (F16, F17)
+- [ ] **AC40** The Personas sheet:
+  - Save is its only primary button. Remove is a danger outline. Start fresh and its handoff variant sit under "More".
+  - The memory size, "Speaks up every N messages" and "Can follow up on its own" sit under "Advanced".
+  - It opens from `⋯` › Personas, from Room settings › Personas, and from a right-click or long-press on a pill, which scrolls to that persona. (F18)
+- [ ] **AC41** The profile page is a home page. It has the room's header, "Your rooms" as cards (room name, your name there, how many people, last activity as "2 min ago" with the date in a tooltip, an admin badge), and "+ New room" as a sheet asking for the room's name and your name, prefilled. A new room opens with its invite card (AC34). A "This profile" section holds your name, your email and "Use on another device". Skills fold under "Skills (for advanced users)". (F23)
+- [ ] **AC42** The daemon page is titled "grill-room AI host", with its version, its state and Stop in the header. Its tabs keep their deep links and read Rooms, Servers, Accounts, Settings, Activity, Update. Rooms show their names, which the room server sends in the stream's hello; a room server from before shows the link. Settings is one card per topic, each with one Save. Errors are in sentence case and say what to do. (F24, F22)
+- [ ] **AC43** `/admin` has the room's header and tab bar. The Rooms list has a search box, relative dates with the full date in a tooltip, the import in a sheet ("Import a room"), and becomes cards under 40rem. A room's detail view looks exactly like Room settings, from the same component and the same classes. (F22, F26)
+- [ ] **AC44** The join page says "Join the room" in its title and heading, and an empty or invalid name shows an inline line under the field, never the browser's tooltip. Naming the room and the inviter waits for the user's decision on an invite preview API (Open questions). (F25)
+
 ## Phases
 
 ### Phase 1 — Models and labels
@@ -115,6 +153,18 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 - **Data model impact**: the message author snapshot gives the name history; `profiles.name`; `push_subscriptions`; VAPID keys in instance settings; `documents.deleted_at` and a change counter; `document_renames`; `message_turns` keeps the final state of an imported mention; export format 2
 - **DoD**: e2e for each, at phone and desktop width; push encryption (RFC 8291) and VAPID JWT tested against a local test push endpoint; a real notification received on an Android phone from the lab.
 
+### Phase 5 — Design system and polish
+- Work: `tokens.css` and its Go package, applied to the room, the docs window, join, profile, `/admin` and the daemon page; the colour mapping; upload with `+`, drag and drop, progress and errors; the room header and its menus; the wording table; empty states; touch targets; the small fixes.
+- **Covers**: AC28, AC29, AC30, AC31, AC32, AC33, AC34, AC35
+- **Data model impact**: none
+- **DoD**: Playwright bounding boxes: the room header's controls share one height at 1440 px, and every control of the AC30 screens is at least 44 × 44 px at 390 px; `TestTokenContrast` and `TestPageCSSHasNoColourLiterals` green; e2e for drag-and-drop upload (several files, one refused, Retry) in the room and the docs window; before and after screenshots listed in the tracking file; daemon release `v0.0.9` and lab redeploy (DB backup first).
+
+### Phase 6 — Redesigns
+- Work: the phone tab bar; the viewer's annotation panel and chat rail; the status strip and toasts; confirm sheets and Undo; the Personas sheet; the profile home page; the daemon page; the `/admin` layout; the join page.
+- **Covers**: AC36, AC37, AC38, AC39, AC40, AC41, AC42, AC43, AC44
+- **Data model impact**: none; the profile's room list gains each room's people count, last activity and the viewer's admin flag; the daemon stream's hello gains the room's name
+- **DoD**: e2e at 390 px for the tab bar (switching keeps each tab's scroll), at 1440 px for the annotation toggle and the chat rail; a test that no UI script calls `confirm(` or `alert(`; e2e for message Undo and document Undo; the AC30 bounding-box spec extended to the new screens; before and after screenshots in the tracking file; daemon release `v0.0.10` and lab redeploy (DB backup first).
+
 ## Data model impact (summary)
 
 - `room_personas` and template model and effort become explicit and NOT NULL.
@@ -125,10 +175,12 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 - `rooms.stt_glossary`.
 - `push_subscriptions` and the VAPID keys.
 - `documents.deleted_at` and a change counter; `document_renames`.
+- Phases 5 and 6 add no table; the profile's room list and the daemon hello gain fields.
 
 ## Open questions
 
-- (none)
+- F25: naming the room and the inviter on the join page needs a public invite preview API (`GET` by invite token, answering the room's name and the inviter's). The audit asks to check with the user first; AC44 leaves it out until then.
+- F08: a lost recovery link cannot be shown again: the server keeps only its hash. Issuing a new one needs a new endpoint that rotates it. AC32 points to the email sign-in instead.
 
 ## Decisions
 
@@ -142,4 +194,8 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 - The mention to turn link is stored, not kept as the latest 200 in memory, and travels in exports (user, 2026-10-13).
 - Mentions show as chips, resolved by the server's rule only, and a line mentioning the viewer is highlighted (user, 2026-10-13).
 - Documents: any member renames, room admins soft-delete and restore; only the room's deletion purges (user, 2026-10-13).
+- Plain members see only the Glossary tab in Room settings (user decision C, 2026-10-13).
+- `profiles.name`, set by "Also use it for my profile", is accepted as routine (user, 2026-10-13).
+- The web manifest is `standalone`, which iOS needs for push (user, 2026-10-13).
+- The UX audit's findings become AC28 to AC44, grouped by theme, in two phases: polish (Phase 5), then the redesigns (Phase 6) (user, 2026-10-13).
 - Test campaigns run throttled on the workstation (`nice`, `ionice`, CPU cap, no stress); repetition goes to CI.
