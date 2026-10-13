@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { createECDH, randomBytes } from 'node:crypto';
-import { roomWith } from './helpers.js';
+import { roomWith, menuItem } from './helpers.js';
 
 // The service worker's side of Web Push (005-AC24), without a push service: headless Chrome has
 // none. The specs call the worker's handlers in its own scope; the DevTools protocol's
@@ -30,6 +30,9 @@ test('pushes for one room merge into one notification', async ({ page }) => {
   await sw.push({ room: 'Pricing', kind: 'mention', count: 1, url: '/r/abc#m1' });
   await sw.push({ room: 'Pricing', kind: 'mention', count: 1, url: '/r/abc#m7' });
   expect(await sw.shown()).toEqual([{ title: 'Pricing', body: 'You were mentioned · 2 events', tag: 'grill-room:/r/abc', data: { url: '/r/abc#m7', count: 2 } }]);
+  const badge = await page.evaluate(async () => (await (await navigator.serviceWorker.ready).getNotifications())[0].badge);
+  expect(new URL(badge).pathname).toBe('/static/icons/badge-96.png');
+  expect((await page.request.get(badge)).headers()['content-type']).toBe('image/png');
   // Another room stands apart.
   await sw.push({ room: 'Roadmap', kind: 'synthesis', count: 1, url: '/r/def#m3' });
   expect((await sw.shown()).map((n) => n.tag).sort()).toEqual(['grill-room:/r/abc', 'grill-room:/r/def']);
@@ -43,6 +46,15 @@ test('a malformed push still shows a notification', async ({ page }) => {
   expect(await sw.shown()).toEqual([generic]);
   await sw.raw(null);
   expect(await sw.shown()).toEqual([{ ...generic, body: 'Something happened · 2 events', data: { count: 2 } }]);
+});
+
+// A click opens only a page of this origin: any other, or a url that does not parse, opens the home page.
+test('a notification opens only this origin', async ({ page, baseURL }) => {
+  await worker(page);
+  const sw = page.context().serviceWorkers()[0];
+  const opened = await sw.evaluate((urls) => urls.map((u) => sameOrigin(u).href),
+    ['/r/abc#m3', 'https://evil.example/r/abc', '//evil.example/r/abc', 'javascript:alert(1)', 'http://[', undefined]);
+  expect(opened).toEqual([`${baseURL}/r/abc#m3`, ...Array(5).fill(`${baseURL}/`)]);
 });
 
 // fakePush stands in for the browser's push service in the page: one subscription, kept in
@@ -102,3 +114,43 @@ test('a subscription with a stale VAPID key is made again', async ({ browser, re
   expect(await pushRequests(alice, () => alice.reload())).toEqual([{ method: 'PUT', endpoint: fresh.endpoint }]);
   expect(await alice.evaluate(() => window.pushCalls)).toEqual([]);
 });
+
+// A subscription the browser renews reaches the server for each room turned on in this browser,
+// with its "every line" choice; a room turned off is left out.
+test('a renewed subscription is handed to the server', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await fakePush(alice);
+  await alice.evaluate((room) => localStorage.setItem('grill-room-push:' + room, '1'), room.id);
+  await pushRequests(alice, () => alice.reload());
+  const sw = alice.context().serviceWorkers()[0];
+  const puts = [];
+  alice.context().on('request', (r) => { if (r.serviceWorker() && r.method() === 'PUT') puts.push(r); });
+  const renewed = await alice.evaluate(async () => {
+    const sub = (await (await navigator.serviceWorker.ready).pushManager.getSubscription()).toJSON();
+    return { ...sub, endpoint: 'https://fcm.googleapis.com/fcm/send/renewed' };
+  });
+  await sw.evaluate((sub) => resubscribe(null, { toJSON: () => sub }), renewed);
+  await expect.poll(() => puts.length).toBe(1);
+  expect(puts[0].url()).toMatch(new RegExp(`/api/rooms/${room.id}/push$`));
+  expect(puts[0].postDataJSON()).toEqual({ subscription: renewed, all_messages: false });
+  expect((await puts[0].response()).status()).toBe(204);
+
+  await menuItem(alice, 'Notifications', 'me');
+  await alice.locator('#push-toggle').click();
+  await expect(alice.locator('#push-status')).toHaveText('Notifications off for this room.');
+  expect(await sw.evaluate(async () => (await (await caches.open('grill-room-push')).match('/rooms')).json())).toEqual({});
+  await sw.evaluate((sub) => resubscribe(null, { toJSON: () => sub }), renewed);
+  expect(puts).toHaveLength(1);
+});
+
+// The toggle reads on only while the browser allows notifications: revoked, it offers them again.
+for (const [perm, label] of [['granted', 'Turn off notifications'], ['denied', 'Turn on notifications'], ['default', 'Turn on notifications']]) {
+  test(`turned on, permission ${perm}: the toggle says ${label}`, async ({ browser, request }) => {
+    const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+    await fakePush(alice);
+    await alice.context().addInitScript((perm) => Object.defineProperty(Notification, 'permission', { get: () => perm, configurable: true }), perm);
+    await alice.evaluate((room) => localStorage.setItem('grill-room-push:' + room, '1'), room.id);
+    await alice.reload();
+    await expect(alice.locator('#push-toggle')).toHaveText(label);
+  });
+}

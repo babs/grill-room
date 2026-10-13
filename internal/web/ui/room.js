@@ -2527,8 +2527,22 @@ function pushStatus(text) {
   $('push-status').textContent = text;
 }
 
+// pushOn: turned on here, and the browser still allows notifications; revoked in its settings, the
+// toggle offers to turn them on again.
+const pushOn = () => localStorage.getItem(pushKey) === '1' && pushable && Notification.permission === 'granted';
+
+// pushRooms records in Cache Storage the rooms with notifications on and their "every line"
+// choice: the service worker renews the subscription for each (sw.js resubscribe).
+async function pushRooms(edit) {
+  const cache = await caches.open('grill-room-push');
+  const saved = await cache.match('/rooms');
+  const rooms = saved ? await saved.json() : {};
+  edit(rooms);
+  await cache.put('/rooms', Response.json(rooms));
+}
+
 function renderPush() {
-  const on = localStorage.getItem(pushKey) === '1';
+  const on = pushOn();
   $('push-hint').hidden = !(ios && !homeScreen) && pushable;
   $('push-hint').textContent = ios && !homeScreen
     ? 'On iPhone and iPad, notifications work once the room is on the home screen: Share, Add to Home Screen, then open it from there.'
@@ -2558,8 +2572,11 @@ async function pushSubscription(create) {
 
 async function savePush() {
   const sub = await pushSubscription(true);
-  const done = await sendJSON('PUT', api + '/push', { subscription: sub.toJSON(), all_messages: $('push-all').checked });
-  if (done) localStorage.setItem(pushKey, '1');
+  const all = $('push-all').checked;
+  const done = await sendJSON('PUT', api + '/push', { subscription: sub.toJSON(), all_messages: all });
+  if (!done) return;
+  localStorage.setItem(pushKey, '1');
+  await pushRooms((rooms) => { rooms[roomID] = all; });
 }
 
 const pushDenied = 'The browser did not allow notifications: allow them in its site settings, then try again.';
@@ -2587,11 +2604,12 @@ function turnOnPush() {
 
 $('push-toggle').addEventListener('click', () => {
   pushStatus('');
-  if (localStorage.getItem(pushKey) === '1') {
+  if (pushOn()) {
     (async () => {
       const sub = await pushSubscription(false);
       if (sub) await sendJSON('DELETE', api + '/push', { subscription: { endpoint: sub.endpoint } });
       localStorage.removeItem(pushKey);
+      await pushRooms((rooms) => { delete rooms[roomID]; });
       pushStatus('Notifications off for this room.');
     })().catch((err) => pushStatus('Notifications: ' + err.message)).finally(renderPush);
   } else if (Notification.permission === 'granted') {
@@ -2636,7 +2654,7 @@ $('push-all').addEventListener('change', () => {
 });
 renderPush();
 // The browser may have renewed its subscription since: hand the server the current one.
-if (pushable && localStorage.getItem(pushKey) === '1' && Notification.permission === 'granted' && !docsMode) {
+if (pushOn() && !docsMode) {
   savePush().catch((err) => pushStatus('Notifications: ' + err.message));
 }
 

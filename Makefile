@@ -305,6 +305,7 @@ k8s-delete: k8s-render k8s-check
 FIXTURES := internal/convert/testdata
 # Favicons and app icons from the logo (D32), into both embedded UIs. Needs Inkscape and ImageMagick.
 # The apple-touch-icon is opaque: iOS paints transparent corners black and rounds them itself.
+# The notification badge is the logo's shapes in white, without the tile: Android keeps only its alpha.
 LOGO      := design/icons/round2/r2-03-b-three-quarter.svg
 ICON_DIRS := internal/web/ui internal/daemon/ui
 icons:
@@ -312,6 +313,8 @@ icons:
 	for n in 16 32 48 192 512; do inkscape '$(LOGO)' --export-type=png -w $$n -h $$n -o "$$tmp/$$n.png" || exit 1; done && \
 	inkscape '$(LOGO)' --export-type=png -w 180 -h 180 --export-background='#159F8C' --export-background-opacity=1 -o "$$tmp/180.png" && \
 	magick "$$tmp/16.png" "$$tmp/32.png" "$$tmp/48.png" "$$tmp/favicon.ico" && \
+	sed '/<rect /d' '$(LOGO)' | inkscape --pipe --export-type=png -w 96 -h 96 -o "$$tmp/badge.png" && \
+	magick "$$tmp/badge.png" -fill white -colorize 100 internal/web/ui/icons/badge-96.png && \
 	for d in $(ICON_DIRS); do \
 	  mkdir -p "$$d/icons" && cp '$(LOGO)' "$$d/logo.svg" && cp "$$tmp/favicon.ico" "$$d/favicon.ico" && \
 	  cp "$$tmp/32.png" "$$d/icons/icon-32.png" && cp "$$tmp/180.png" "$$d/icons/apple-touch-icon.png" && \
