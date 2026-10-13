@@ -33,6 +33,23 @@ type pushBrowser struct {
 	clock    time.Time
 	read     int64
 	lastLine func() int64
+	// sent counts the batches the push loop sent; seen is the clock of its last tick.
+	sent int
+	seen time.Time
+}
+
+func (b *pushBrowser) ticked(now time.Time, sent int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.sent += sent
+	b.seen = now
+}
+
+// flushed says whether a tick ran at the clock's current time, and how many batches went in all.
+func (b *pushBrowser) flushed() (bool, int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return !b.seen.Before(b.clock), b.sent
 }
 
 func (b *pushBrowser) now() time.Time {
@@ -115,6 +132,7 @@ func pushEnv(t *testing.T, b *pushBrowser) *env {
 	b.clock = time.Now()
 	e.srv.now = b.now
 	e.srv.pushRead = b.noteRead
+	e.srv.pushTicked = b.ticked
 	b.lastLine = func() int64 {
 		id, err := e.st.LastMessageID(context.Background())
 		if err != nil {
@@ -136,17 +154,23 @@ func pushEnv(t *testing.T, b *pushBrowser) *env {
 // waitPushes waits until b got n pushes, then a little longer to see no more come.
 func waitPushes(t *testing.T, b *pushBrowser, n int) []pushPayload {
 	t.Helper()
-	// Every line said so far is read, then the batches are due: the clock moves past the window.
 	deadline := time.Now().Add(5 * time.Second)
-	for b.readUpTo() < b.lastLine() && time.Now().Before(deadline) {
-		time.Sleep(pushTick)
+	// Polls observable state, bounded by the deadline: no wall-clock assertion.
+	wait := func(what string, done func() bool) {
+		for !done() {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+			time.Sleep(pushTick) // polls, bounded by the deadline
+		}
 	}
+	// Every line said so far is read; the clock moves past the window; a tick runs at that time and
+	// sends every batch due; the browser gets each one sent.
+	wait("the push loop to read every line", func() bool { return b.readUpTo() >= b.lastLine() })
 	b.advance(pushWindow)
-	for len(b.pushes()) < n && time.Now().Before(deadline) {
-		time.Sleep(pushTick)
-	}
-	// A few more ticks: a push due now and not counted yet would show.
-	time.Sleep(5 * pushTick)
+	wait("a tick past the window", func() bool { ok, _ := b.flushed(); return ok })
+	_, sent := b.flushed()
+	wait("the pushes sent", func() bool { return len(b.pushes()) >= sent })
 	got := b.pushes()
 	if len(got) != n {
 		t.Fatalf("%d pushes, want %d: %+v", len(got), n, got)

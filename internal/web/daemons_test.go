@@ -204,7 +204,7 @@ func TestDaemonConnection(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("daemon still listed after its stream closed")
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) // polls the list, bounded by the deadline
 	}
 
 	// Re-pairing hands out a new token and ends the old daemon's stream.

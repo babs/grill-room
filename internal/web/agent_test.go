@@ -78,7 +78,7 @@ func (e *env) waitAgent(t *testing.T, room, tok string, ok func(agentState) bool
 		if time.Now().After(deadline) {
 			t.Fatalf("agent state never matched: %+v", st)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) // polls the agent state, bounded by the deadline
 	}
 }
 

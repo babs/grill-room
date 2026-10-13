@@ -398,8 +398,10 @@ func TestInstanceVersionChangeRestartsWorker(t *testing.T) {
 	s.mu.Unlock()
 	s.SetRoom(context.Background(), Room{Base: "https://rooms.example", ID: "abc"})
 	waitFor(t, "the worker on v9.9.9", func() bool { in := instance(t, s); return in.State == "running" && in.Version == "v9.9.9" })
-	time.Sleep(300 * time.Millisecond)
-	if in := instance(t, s); calls.Load() != 2 || in.Restarts != 0 || len(s.checkNow) != 1 {
+	// Its status, which names v9.9.9 again, came before its last log line: once that is in, a
+	// second restart would already be under way.
+	waitStatusSeen(t, s, 2)
+	if in := instance(t, s); calls.Load() != 2 || in.Restarts != 0 || len(s.checkNow) != 1 || reloading(s) {
 		t.Fatalf("%d resolves, %d update checks asked, %+v", calls.Load(), len(s.checkNow), in)
 	}
 	in, err := loadInstance(s.o.Paths.InstanceConfig(id))
@@ -417,8 +419,8 @@ func TestInstanceVersionChangeRestartsWorker(t *testing.T) {
 	})
 	s.SetRoom(context.Background(), Room{Base: "https://rooms.example", ID: "abc"})
 	waitFor(t, "the worker", func() bool { return instance(t, s).State == "running" })
-	time.Sleep(300 * time.Millisecond)
-	if offline.Load() != 1 {
+	waitStatusSeen(t, s, 1)
+	if offline.Load() != 1 || reloading(s) {
 		t.Fatalf("%d resolves for an unchanged version", offline.Load())
 	}
 }
@@ -492,4 +494,25 @@ func TestSelfUpdateKeepsNameWhenTaken(t *testing.T) {
 	if s.Executable() != versioned {
 		t.Fatalf("executable %s", s.Executable())
 	}
+}
+
+// waitStatusSeen waits until n fake workers sent their last start-up log line: the supervisor reads
+// a worker's lines in order, so the status sent before it was handled.
+func waitStatusSeen(t *testing.T, s *Supervisor, n int) {
+	t.Helper()
+	waitFor(t, "the fake workers' start-up lines", func() bool {
+		return strings.Count(strings.Join(s.o.Ring.Lines(), "\n"), "fake_limits") >= n
+	})
+}
+
+// reloading says whether a worker restart was asked and not yet taken.
+func reloading(s *Supervisor) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, w := range s.workers {
+		if w.reload {
+			return true
+		}
+	}
+	return false
 }

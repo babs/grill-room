@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon, menuItem } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, menuItem, sandboxHas, openStrip } from './helpers.js';
 
 async function say(page, text) {
   await page.locator('#body').fill(text);
@@ -84,7 +84,9 @@ test('mentions: turn states, stop, pending and offline', async ({ browser, reque
     // Bob neither started it, hosts nor administers the room.
     await expect(bob.locator('#running-list')).toContainText('Grill answering');
     await expect(bob.locator('#running-list').getByRole('button', { name: 'Stop' })).toHaveCount(0);
-    await alice.waitForTimeout(3000);
+    // The fake has written its notes in the sandbox: the stop lands mid-run.
+    await expect.poll(() => sandboxHas(daemon, 'docs/notes.md', 'never ended'), { timeout: 30_000 }).toBe(true);
+    await openStrip(alice);
     await alice.locator('#running-list').getByRole('button', { name: 'Stop the turn of Grill' }).click();
     await expect(sleeping.locator('.mention-turn')).toHaveText('→ @Grill · stopped');
     await expect(alice.locator('#messages')).toContainText('Grill turn stopped by Alice.');

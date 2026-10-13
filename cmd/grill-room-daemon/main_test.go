@@ -142,7 +142,7 @@ func TestRunServesAdminPage(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("no admin link in: %s", stderr.String())
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) // polls stderr, bounded by the deadline
 	}
 	req, _ := http.NewRequestWithContext(t.Context(), "POST", m[1]+"/api/session", strings.NewReader(`{"code":"`+m[2]+`"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -192,7 +192,7 @@ func TestRunWithoutHandoffSocket(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("no admin link in: %s", stderr.String())
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) // polls stderr, bounded by the deadline
 	}
 	cancel()
 	if err := <-done; err != nil || !strings.Contains(stderr.String(), "handoff_socket_failed") {

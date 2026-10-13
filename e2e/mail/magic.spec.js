@@ -95,6 +95,8 @@ test('an expired magic link is refused', async ({ browser, request }) => {
   await page.getByLabel('Bind an email').fill(email);
   await page.getByRole('button', { name: 'Send me a link' }).click();
   const expired = await nextMail(request, email, 1);
+  // The server is a process of its own, with no clock to move: this waits out the short TTL the
+  // config gives it. TestMagicLinkExpires checks the rule itself on an injected clock.
   await page.waitForTimeout((magicLinkTTL + 1) * 1000);
   await page.goto(expired.link);
   await expect(page.locator('#status')).toHaveText('this link is invalid, already used or expired');

@@ -80,8 +80,12 @@ type Server struct {
 	loginLimit limiter
 	// now is the clock admin sessions and the audit log read; tests set it.
 	now func() time.Time
-	// pushRead, set by tests, learns the last line PushLoop has read for a room.
+	// pushRead and pushTicked, set by tests, learn the last line PushLoop read for a room, and
+	// each tick: its clock and how many batches it sent.
 	pushRead func(last int64)
+	// afterFunc runs a backstop later: time.AfterFunc, or a test's own schedule.
+	afterFunc  func(d time.Duration, f func())
+	pushTicked func(now time.Time, sent int)
 	// electMu serialises host elections and hand-overs.
 	electMu sync.Mutex
 	// turnMu serialises turn starts and queue draining, so presses run in the order they came.
@@ -127,6 +131,7 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 		adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
 		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, people: people{m: map[string]map[int64]*person{}}, stt: sttWorkers{m: map[string]*sttWorker{}}, clients: clients{m: map[int64]clientSeen{}},
 		magicLimit: limiter{window: magicWindow}, loginLimit: limiter{window: loginWindow}, now: time.Now, fallbacks: fallbackCounters(),
+		afterFunc: func(d time.Duration, f func()) { time.AfterFunc(d, f) },
 		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}, pushClient: opts.PushClient}
 	s.cleanStaging()
 	return s

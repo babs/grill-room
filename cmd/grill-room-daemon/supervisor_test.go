@@ -216,7 +216,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond) // polls cond, bounded by the deadline
 	}
 }
 

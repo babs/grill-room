@@ -67,7 +67,7 @@ func (rs *roomServer) turn(t *testing.T, tok, body string, fresh bool) agentView
 		if time.Now().After(deadline) {
 			t.Fatalf("turn %d still running", started.ID)
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond) // polls the turn, bounded by the deadline
 	}
 	return v
 }
@@ -115,8 +115,8 @@ func TestDockerTurnsAndTakeover(t *testing.T) {
 	bob, _ := sandboxHost(t, rs, "Bob", image)
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/messages", alice, map[string]string{"body": "FAKE_SLEEP"}, http.StatusCreated, nil)
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]bool{}, http.StatusCreated, nil)
-	// Let claude start in A's sandbox before A goes away.
-	time.Sleep(3 * time.Second)
+	// A goes away mid-turn: once its turn runs, FAKE_SLEEP keeps it running.
+	waitFor(t, "the turn running on A", func() bool { return rs.agent(t, alice).Turn.Status == "running" })
 	dropA()
 	waitFor(t, "bob hosts after the failed turn", func() bool {
 		v := rs.agent(t, bob)

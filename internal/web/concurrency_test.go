@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,21 @@ func TestHostQueuedTurn(t *testing.T) {
 	turnGrace = 0
 	t.Cleanup(func() { turnGrace = old })
 	e := newEnvOpts(t, Options{TurnTimeout: 150 * time.Millisecond})
+	// The backstops run when the test fires them, on a clock the test moves.
+	backstops := make(chan func(), 8)
+	e.srv.afterFunc = func(_ time.Duration, f func()) { backstops <- f }
+	var clock atomic.Int64
+	clock.Store(time.Now().UnixNano())
+	e.srv.now = func() time.Time { return time.Unix(0, clock.Load()) }
+	fire := func() {
+		t.Helper()
+		select {
+		case f := <-backstops:
+			f()
+		case <-time.After(5 * time.Second):
+			t.Fatal("no backstop armed")
+		}
+	}
 	r := newTurnRoom(t, e)
 	tok := r.alice.p.Token
 	tn := e.press(t, r, r.alice, tok, false)
@@ -43,7 +59,10 @@ func TestHostQueuedTurn(t *testing.T) {
 	if code := e.turnState(t, r, r.alice, tn.ID+100, false); code != http.StatusNotFound {
 		t.Fatalf("unknown turn: %d", code)
 	}
-	time.Sleep(400 * time.Millisecond)
+	// The backstop armed at the start goes off while the turn waits in the host's queue: well past
+	// the timeout, it leaves the turn alone.
+	clock.Add(int64(time.Hour))
+	fire()
 	if got, _ := e.st.Turn(t.Context(), r.room, tn.ID); got.Status != store.TurnRunning || !got.HostQueued {
 		t.Fatalf("the backstop failed a queued turn: %+v", got)
 	}
@@ -54,6 +73,9 @@ func TestHostQueuedTurn(t *testing.T) {
 	if got, _ := e.st.Turn(t.Context(), r.room, tn.ID); got.HostQueued || got.StartedAt.Before(asked) {
 		t.Fatalf("left the queue: %+v", got)
 	}
+	// Leaving the queue armed a new backstop; once the timeout is over it fails the turn.
+	clock.Store(time.Now().Add(time.Hour).UnixNano())
+	fire()
 	st = e.waitAgent(t, r.room, tok, func(st agentState) bool { return st.Turn.Status == store.TurnFailed })
 	if st.Turn.Error != "timed out after 150ms" || len(st.Running) != 0 {
 		t.Fatalf("after the run: %+v", st)

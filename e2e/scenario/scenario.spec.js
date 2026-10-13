@@ -197,12 +197,13 @@ test(plan.name, async ({ request }) => {
           for (const name of plan.speakers) micAt[name] = await pages[name].evaluate(() => window.scMicAt);
           await expect(first.locator('#stt-status')).toHaveText(/^\d+ voices? (is|are) being written down/, { timeout: 30_000 });
           const lastEnd = Math.max(...rnd.lines.map((l) => l.end));
+          // The recorded speech plays in real time: wait for its end. Not an assertion.
           await first.waitForTimeout(Math.max(0, Math.max(...Object.values(micAt)) + lastEnd * 1000 - Date.now()));
           // The worker lags behind speech: wait until no line has landed for 15 s, 2 minutes at most.
           const count = () => first.locator('#messages li.msg.voice').count();
           let n = await count();
           for (let quiet = Date.now(), cap = Date.now() + 120_000; Date.now() - quiet < 15_000 && Date.now() < cap;) {
-            await first.waitForTimeout(2000);
+            await first.waitForTimeout(2000); // polls the voice lines, bounded by the cap
             const c = await count();
             if (c !== n) [n, quiet] = [c, Date.now()];
           }
@@ -263,14 +264,14 @@ test(plan.name, async ({ request }) => {
         }
         case 'wait': {
           if (step.seconds) {
-            await first.waitForTimeout(step.seconds * 1000);
+            await first.waitForTimeout(step.seconds * 1000); // the script's own pause, part of the session
             break;
           }
           const until = Date.now() + step.timeout * 1000;
           while ((await first.locator('#messages li.msg.agent').count()) < step.turns) {
             guard();
             if (Date.now() > until) throw new Error(`waited ${step.timeout} s for ${step.turns} syntheses`);
-            await first.waitForTimeout(1000);
+            await first.waitForTimeout(1000); // polls the syntheses, bounded by the step's timeout
           }
           break;
         }

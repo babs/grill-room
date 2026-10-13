@@ -12,17 +12,18 @@ test('transcription resumes after LiveKit closes the empty room', async ({ reque
     const label = alice.locator('#stt-status');
     const lines = alice.locator('.msg.voice');
     await joinAudio(alice);
-    await expect(label).toHaveText(/^1 voice transcribed/, { timeout: 60_000 });
+    await expect(label).toHaveText(/^1 voice is being written down/, { timeout: 60_000 });
     await expect(lines.first()).toBeVisible({ timeout: 60_000 });
 
     await audioItem(alice, 'Leave audio');
     await expect(label).toHaveText('', { timeout: 60_000 });
-    // Past LiveKit's departure timeout (20 s by default): the room is closed.
+    // Past LiveKit's departure timeout (20 s by default): the room is closed. LiveKit runs in its
+    // own container with no clock to move: this waits for it, it asserts nothing.
     await alice.waitForTimeout(45_000);
     const before = await lines.count();
 
     await joinAudio(alice);
-    await expect(label).toHaveText(/^1 voice transcribed/, { timeout: 60_000 });
+    await expect(label).toHaveText(/^1 voice is being written down/, { timeout: 60_000 });
     await expect.poll(() => lines.count(), { timeout: 90_000 }).toBeGreaterThan(before);
     await request.delete(`/api/rooms/${room.id}`, { headers: admin });
   } finally {

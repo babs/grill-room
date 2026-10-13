@@ -426,7 +426,7 @@ func TestAuditPurgeLoop(t *testing.T) {
 	go func() { e.srv.PurgeAudit(loopCtx); close(done) }()
 	waitEntries := func(n int) {
 		t.Helper()
-		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) { // polls, bounded by the deadline
 			got, err := e.st.AuditLog(ctx, store.AuditQuery{Limit: 10})
 			if err != nil {
 				t.Fatal(err)
@@ -447,7 +447,7 @@ func TestAuditPurgeLoop(t *testing.T) {
 	clk.add(2 * 24 * time.Hour)
 	waitEntries(0)
 	// The expired session went with the same run, before any new login.
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) { // polls, bounded by the deadline
 		// Listed as of its creation, the session shows while its row exists.
 		if left, err := e.st.AdminSessions(ctx, created); err != nil || len(left) == 0 {
 			break

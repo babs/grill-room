@@ -267,3 +267,14 @@ export async function openStrip(page) {
   const more = page.locator('#strip-more');
   if (await more.isVisible() && (await more.getAttribute('aria-expanded')) === 'false') await more.click();
 }
+
+// sandboxHas says whether the daemon's sandbox holds text in file, a path under /workspace: what
+// a turn under way has written there, before the room sees any of it.
+export function sandboxHas(daemon, file, text) {
+  try {
+    execFileSync('docker', ['exec', 'grill-room-' + daemon.sandbox, 'grep', '-q', text, '/workspace/' + file]);
+    return true;
+  } catch {
+    return false;
+  }
+}

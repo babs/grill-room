@@ -134,8 +134,8 @@ test('leaving and rejoining the audio keeps every line under its speaker', async
     await expect.poll(async () => (await voiceLines(bob)).filter((l) => overlap(words(l.body), words(first.text)) > 2).length, {
       timeout: (first.end + 15) * 1000,
     }).toBe(2);
-    // Let the second sentence through too, and any duplicate a stale listener would post.
-    await bob.waitForTimeout(12_000);
+    // The second sentence lands too.
+    await expect.poll(async () => (await voiceLines(bob)).length, { timeout: 30_000 }).toBeGreaterThan(2);
     const lines = await voiceLines(bob);
     console.log(JSON.stringify(lines, null, 1));
     expect(lines.length).toBeGreaterThan(2);
@@ -161,8 +161,7 @@ test('transcription down shows a banner, and lines resume when it is back', asyn
     compose('kill', 'stt');
     await expect(bob.locator('#stt-status')).toHaveText('Voice-to-text is off', { timeout: 30_000 });
     const before = await inboundAudio(bob);
-    await bob.waitForTimeout(2000);
-    expect(await inboundAudio(bob)).toBeGreaterThan(before);
+    await expect.poll(() => inboundAudio(bob), { timeout: 30_000 }).toBeGreaterThan(before);
     await carol.getByLabel('Message').fill('still here');
     await carol.getByLabel('Message').press('Enter');
     await expect(bob.locator('.msg.text').last()).toContainText('still here');

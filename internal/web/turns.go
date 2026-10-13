@@ -208,13 +208,13 @@ func (s *Server) launch(ctx context.Context, room *store.Room, persona *store.Ro
 // neither answers nor drops its stream. A turn its host's daemon queued is not running yet: its
 // clock starts when it leaves that queue, which arms a new backstop (003-AC18).
 func (s *Server) backstop(room string, id int64, after time.Duration) {
-	time.AfterFunc(after, func() {
+	s.afterFunc(after, func() {
 		ctx := context.Background()
 		t, err := s.bus.Store.Turn(ctx, room, id)
 		if err != nil || t.Status != store.TurnRunning || t.HostQueued {
 			return
 		}
-		if left := time.Until(t.StartedAt.Add(s.opts.TurnTimeout + turnGrace)); left > 0 {
+		if left := t.StartedAt.Add(s.opts.TurnTimeout + turnGrace).Sub(s.now()); left > 0 {
 			s.backstop(room, id, left)
 			return
 		}

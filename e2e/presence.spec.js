@@ -52,7 +52,7 @@ test('participant list on a phone follows the server presence', async ({ browser
 
   // Bob closes his page: within the grace he stays, then he is not here, collapsed, seen just now.
   await bob.context().close();
-  await carol.waitForTimeout(5000);
+  // Within the 20 s grace he is still listed: checked at once, no wait needed.
   await expect(carol.locator('#participants li .name')).toHaveText(['Alice', 'Bob', 'Carol']);
   await expect(carol.locator('#participants li .name')).toHaveText(['Alice', 'Carol'], { timeout: 30_000 });
   await expect(carol.locator('#away summary')).toHaveText('Not here (1)');

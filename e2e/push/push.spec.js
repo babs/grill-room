@@ -29,8 +29,10 @@ test('a mention arrives as a real push notification', async ({ request, baseURL 
     // A fresh profile registers with the push service first: over 30 s at times.
     await expect(alice.locator('#push-status')).toHaveText('Notifications on for this room.', { timeout: 90_000 });
     // The tab loses the focus, as when another window comes in front, and its beat says so.
-    await alice.evaluate(() => { document.hasFocus = () => false; window.dispatchEvent(new Event('blur')); });
-    await alice.waitForTimeout(1000);
+    await Promise.all([
+      alice.waitForResponse((r) => r.url().endsWith('/presence') && JSON.parse(r.request().postData() || '{}').focused === false),
+      alice.evaluate(() => { document.hasFocus = () => false; window.dispatchEvent(new Event('blur')); }),
+    ]);
     const said = await request.post(`/api/rooms/${room.id}/messages`, { headers: { Authorization: 'Bearer ' + bob.token }, data: { body: '@Alice the secret plan' } });
     expect(said.status()).toBe(201);
     const shown = await alice.evaluate(async () => {

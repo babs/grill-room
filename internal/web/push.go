@@ -194,6 +194,7 @@ func (s *Server) PushLoop(ctx context.Context) {
 		case <-tick.C:
 			// The server's clock, as each batch's first event used: the tick only polls.
 			now := s.now()
+			sent := 0
 			for id, b := range pending {
 				if now.Sub(b.first) < pushWindow {
 					continue
@@ -209,11 +210,15 @@ func (s *Server) PushLoop(ctx context.Context) {
 					return
 				}
 				wg.Add(1)
+				sent++
 				go func() {
 					defer wg.Done()
 					defer func() { <-sends }()
 					s.sendPush(ctx, b)
 				}()
+			}
+			if s.pushTicked != nil {
+				s.pushTicked(now, sent)
 			}
 		}
 	}

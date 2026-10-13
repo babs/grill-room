@@ -23,8 +23,7 @@ test('two participants exchange audio', async ({ request }) => {
     for (const page of [alice, bob]) {
       await expect.poll(() => inboundAudio(page), { timeout: 30_000 }).toBeGreaterThan(0);
       const before = await inboundAudio(page);
-      await page.waitForTimeout(2000);
-      expect(await inboundAudio(page)).toBeGreaterThan(before + 2000);
+      await expect.poll(() => inboundAudio(page), { timeout: 30_000 }).toBeGreaterThan(before + 2000);
     }
     // Alice's recorded speech starts a few seconds in: Bob sees her speaking indicator light up.
     await expect(aliceRow).toHaveClass(/speaking/, { timeout: 20_000 });

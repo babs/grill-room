@@ -30,11 +30,8 @@ test('deafen', async ({ request }) => {
     await audioItem(bob, 'Hear the room again');
     await expect(bobRow).not.toHaveClass(/deaf/);
     await expect(state).toHaveAttribute('data-state', 'live');
-    await expect.poll(async () => {
-      const before = await inboundAudio(bob);
-      await bob.waitForTimeout(1000);
-      return (await inboundAudio(bob)) - before;
-    }, { timeout: 30_000 }).toBeGreaterThan(0);
+    const before = await inboundAudio(bob);
+    await expect.poll(() => inboundAudio(bob), { timeout: 30_000 }).toBeGreaterThan(before);
 
     // Undeafen restores the mic as it was: muted before, muted after.
     await bob.getByRole('button', { name: 'Mute' }).click();

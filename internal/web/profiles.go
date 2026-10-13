@@ -206,7 +206,7 @@ func (s *Server) afterAnswer(r *http.Request, work func(ctx context.Context)) {
 func (s *Server) mailLink(ctx context.Context, profileID int64, email, purpose string) {
 	tok := NewToken()
 	err := s.bus.Store.CreateMagicLink(ctx, store.MagicLink{
-		ProfileID: profileID, Email: email, Purpose: purpose, TokenHash: HashToken(tok), ExpiresAt: time.Now().Add(s.opts.MagicLinkTTL),
+		ProfileID: profileID, Email: email, Purpose: purpose, TokenHash: HashToken(tok), ExpiresAt: s.now().Add(s.opts.MagicLinkTTL),
 	})
 	if err != nil {
 		s.log.Error("magic_link_failed", zap.Int64("profile", profileID), zap.Error(err))

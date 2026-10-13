@@ -518,7 +518,9 @@ func (s *Supervisor) reload(w *worker) {
 	case "refused":
 		w.reload = false
 		w.state, w.err = "starting", ""
-		s.wg.Go(w.run)
+		w.ended = make(chan struct{})
+		ended := w.ended
+		s.wg.Go(func() { w.run(ended) })
 	case "running":
 		if c := w.conn; c != nil {
 			go func() { _ = c.Send(Msg{Type: "stop"}) }()

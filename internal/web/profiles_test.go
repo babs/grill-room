@@ -355,11 +355,12 @@ func TestMagicLinkExpires(t *testing.T) {
 	e, box := newMailEnv(t, time.Second)
 	d := e.device(t)
 	d.join(t, e.createRoom(t, "A").ID, "Alice")
+	// The link is made on a clock 2 s behind: its 1 s is over when it is used.
+	e.srv.now = func() time.Time { return time.Now().Add(-2 * time.Second) }
 	if code, _ := d.do(t, "POST", "/api/profile/email", map[string]string{"email": "alice@example.com"}); code != http.StatusAccepted {
 		t.Fatalf("bind: %d", code)
 	}
 	_, tok := box.next(t)
-	time.Sleep(1100 * time.Millisecond)
 	if code, _ := d.do(t, "POST", "/api/profile/magic", map[string]string{"token": tok, "purpose": "bind"}); code != http.StatusUnauthorized {
 		t.Fatalf("expired link: %d", code)
 	}
@@ -683,7 +684,7 @@ func TestSendFailureLogHidesTheAddress(t *testing.T) {
 		if line = logs.FilterMessage("magic_link_send_failed").All(); len(line) > 0 {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) // polls the log, bounded by the 50 rounds
 	}
 	if len(line) != 1 {
 		t.Fatal("no failure logged")

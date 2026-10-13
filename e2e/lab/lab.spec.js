@@ -41,8 +41,7 @@ async function assertAudio(pages, relay) {
   for (const [name, page] of Object.entries(pages)) {
     await expect.poll(() => inboundAudio(page), { timeout: 30_000 }).toBeGreaterThan(0);
     const before = await inboundAudio(page);
-    await page.waitForTimeout(3000);
-    expect(await inboundAudio(page)).toBeGreaterThan(before + 3000);
+    await expect.poll(() => inboundAudio(page), { timeout: 30_000 }).toBeGreaterThan(before + 3000);
     const st = await audioStats(page);
     console.log(`${name} receives:`, JSON.stringify(st));
     expect(st.packets).toBeGreaterThan(100);

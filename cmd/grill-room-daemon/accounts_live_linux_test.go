@@ -145,7 +145,7 @@ func (rs *roomServer) liveTurn(t *testing.T, tok string) {
 		if time.Now().After(deadline) {
 			t.Fatal("the turn did not end")
 		}
-		time.Sleep(time.Second)
+		time.Sleep(time.Second) // polls the live turn, bounded by the deadline
 	}
 }
 

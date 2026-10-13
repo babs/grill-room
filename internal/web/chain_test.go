@@ -449,6 +449,6 @@ func (e *env) waitPresent(t *testing.T, pid int64) {
 		if i > 500 {
 			t.Fatal("never present")
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) // polls presence, bounded by 500 rounds
 	}
 }
