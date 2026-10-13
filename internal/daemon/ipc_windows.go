@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"time"
 
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
@@ -36,7 +37,30 @@ func listenLocal(_ context.Context, stateDir string) (net.Listener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listen %s: %w", pipeName(stateDir), err)
 	}
-	return ln, nil
+	return pipeListener{ln}, nil
+}
+
+// pipeListener works around go-winio v0.6.2's Close, which can hang. Close hands its signal to a
+// pending Accept's connect; when that connect then ends with a pipe error other than "closed" (a
+// client hanging up at that moment), the listener goroutine keeps running, never sees the signal
+// again, and Close waits forever. Signalling again reaches it: each retry is another Close.
+type pipeListener struct{ net.Listener }
+
+func (l pipeListener) Close() error {
+	done := make(chan struct{})
+	go func() {
+		_ = l.Listener.Close()
+		close(done)
+	}()
+	for {
+		select {
+		case <-done:
+			return nil
+		case <-time.After(100 * time.Millisecond):
+			// Returns once the listener goroutine ends, with the first.
+			go func() { _ = l.Listener.Close() }()
+		}
+	}
 }
 
 // dialLocal connects to the supervisor's pipe. Security: pipe names are global, so another user
