@@ -117,7 +117,7 @@ test('touch targets at phone width', async ({ browser, request, baseURL }) => {
   try {
     const page = await (await browser.newContext({ viewport: phone })).newPage();
     await page.goto(await daemon.link);
-    await expect(page.locator('#pairing')).toHaveText('Waiting for your approval in the room.');
+    await expect(page.locator('#pairing')).toHaveText('Waiting for your approval in the room.', { timeout: 30_000 });
     for (const tab of ['rooms', 'instances', 'accounts', 'settings', 'monitoring', 'update']) {
       await page.locator('#tab-' + tab).click();
       expect(await smallTargets(page), 'daemon ' + tab).toEqual([]);

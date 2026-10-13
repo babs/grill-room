@@ -11,7 +11,7 @@ test('daemon pairs through the room approval', async ({ browser, request, baseUR
     const admin = await alice.context().newPage();
     await admin.goto(await daemon.link);
     await expect(admin).toHaveURL(/^http:\/\/127\.0\.0\.1:\d+\/$/);
-    await expect(admin.locator('#pairing')).toHaveText('Waiting for your approval in the room.');
+    await expect(admin.locator('#pairing')).toHaveText('Waiting for your approval in the room.', { timeout: 30_000 });
     const code = await admin.locator('#code').textContent();
     expect(code).toMatch(/^\d{3}-\d{3}$/);
 
@@ -29,7 +29,7 @@ test('daemon pairs through the room approval', async ({ browser, request, baseUR
     expect(shown).toBe(code);
     await expect(approval.locator('#pairing-text')).toContainText('Daemon paired');
 
-    await expect(admin.locator('#pairing')).toHaveText('Paired. Connected.');
+    await expect(admin.locator('#pairing')).toHaveText('Paired. Connected.', { timeout: 30_000 });
     // 003-AC12: the Claude account is the supervisor's CLAUDE_CONFIG_DIR, read only, with its status.
     await expect(admin.locator('#accounts li').first()).toContainText('default');
     await expect(admin.locator('#accounts li').first()).toContainText('valid');

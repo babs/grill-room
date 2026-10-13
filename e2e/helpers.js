@@ -73,10 +73,11 @@ export function startDaemon(roomURL, env = {}, { expiresIn = 3600e3 } = {}) {
 export async function pairDaemon(page, daemon) {
   const admin = await page.context().newPage();
   await admin.goto(await daemon.link);
-  await expect(admin.locator('#pairing')).toHaveText('Waiting for your approval in the room.');
+  // The worker asks to pair once the Docker orphan cleanup is done, seconds on a loaded runner.
+  await expect(admin.locator('#pairing')).toHaveText('Waiting for your approval in the room.', { timeout: 30_000 });
   const [approval] = await Promise.all([page.context().waitForEvent('page'), admin.getByRole('link', { name: 'approve in the room' }).click()]);
   await approval.getByRole('button', { name: 'Approve' }).click();
-  await expect(admin.locator('#pairing')).toHaveText('Paired. Connected.');
+  await expect(admin.locator('#pairing')).toHaveText('Paired. Connected.', { timeout: 30_000 });
   await approval.close();
   return admin;
 }
