@@ -14,19 +14,54 @@ function render({ email_enabled: emailEnabled, profile }) {
   $('signed-out').hidden = !!profile;
   $('signin').hidden = !emailEnabled;
   if (!profile) return;
+  // Each room is a card: its name, your name there, its people and last activity (005-AC41).
   $('rooms').replaceChildren(...profile.rooms.map((r) => {
     const li = document.createElement('li');
+    li.className = 'card';
+    const line = document.createElement('p');
+    line.className = 'room-line';
     const a = document.createElement('a');
     a.href = '/r/' + encodeURIComponent(r.room_id);
     a.textContent = r.room_name;
-    li.append(a, ' as ' + r.name);
+    line.append(a, ' as ' + r.name);
+    const meta = document.createElement('p');
+    meta.className = 'hint';
+    const when = document.createElement('time');
+    when.dateTime = r.last_activity;
+    when.title = new Date(r.last_activity).toLocaleString();
+    when.textContent = ago(r.last_activity);
+    meta.append((r.people === 1 ? '1 person' : r.people + ' people') + ' · active ', when);
+    li.append(line, meta);
+    if (r.admin) {
+      const badge = document.createElement('span');
+      badge.className = 'badge role';
+      badge.textContent = 'admin';
+      badge.title = 'You are a room admin here';
+      li.append(badge);
+    }
     return li;
   }));
-  if (!profile.rooms.length) $('rooms').textContent = 'None yet.';
-  if (!$('room-create-as').value && profile.rooms.length) $('room-create-as').value = profile.rooms[0].name;
+  if (!profile.rooms.length) {
+    const empty = document.createElement('li');
+    empty.className = 'empty';
+    empty.textContent = 'No room yet. Create one, or open an invite link.';
+    $('rooms').append(empty);
+  }
+  // The name the profile chose in a room (005-AC1), else the one it last joined with.
+  const name = profile.name || (profile.rooms[0] || {}).name || '';
+  $('who').textContent = name;
+  $('profile-name').textContent = name || 'Not set: it comes from the name you join rooms with.';
+  if (!$('room-create-as').value) $('room-create-as').value = name;
   $('email').hidden = !emailEnabled;
   $('email-state').textContent = profile.email ? 'Bound to ' + profile.email + '.' : 'No email bound.';
+  // The recovery link lives in the tab that joined, until saved: the server keeps only its hash.
+  const link = sessionStorage.getItem('grill_room_recovery');
+  $('device').textContent = link ? 'Open your rooms, then your initials › "Use on another device" to copy the link.'
+    : emailEnabled ? 'Bind an email above, then sign in with it on the other device.' : 'Open your recovery link on the other device.';
 }
+
+// ago says how long ago t was, coarsely (kit/ui.js); the full date is the tooltip.
+const ago = (t) => window.grillAgo(t);
 
 async function load() {
   const res = await fetch('/api/profile');
@@ -50,11 +85,10 @@ async function loadSkills() {
     if (!k.shared) {
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'small';
       b.textContent = 'Remove';
       b.setAttribute('aria-label', 'Remove skill ' + k.name);
       b.addEventListener('click', async () => {
-        if (!window.confirm('Remove ' + k.name + '? Personas that have it on lose it.')) return;
+        if (!(await window.grillConfirm('Remove ' + k.name + '?', 'Personas that have it on lose it.', 'Remove'))) return;
         const r = await fetch('/api/profile/skills/' + k.id, { method: 'DELETE' });
         $('skill-status').textContent = r.ok ? k.name + ' removed.' : ((await r.json().catch(() => ({}))).error || 'HTTP ' + r.status);
         await loadSkills();
@@ -87,18 +121,20 @@ $('skill-upload').addEventListener('submit', async (e) => {
 
 // New room: the profile creates a room and becomes its admin, within the instance's limits (004-AC7).
 $('room-new').addEventListener('click', () => {
-  $('room-new').hidden = true;
-  $('room-create').hidden = false;
+  $('room-create-status').textContent = '';
+  $('room-create-sheet').showModal();
   $('room-create-name').focus();
 });
+$('room-create-cancel').addEventListener('click', () => $('room-create-sheet').close());
 $('room-create').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const button = $('room-create').querySelector('button');
+  const button = $('room-create').querySelector('button[type=submit]');
   button.disabled = true;
   try {
     const { res, data } = await post('/api/profile/rooms', { name: $('room-create-name').value, display_name: $('room-create-as').value });
     if (res.ok) {
-      location.assign('/r/' + encodeURIComponent(data.id));
+      // The new room opens on its invite card (005-AC34).
+      location.assign('/r/' + encodeURIComponent(data.id) + '?invite');
       return;
     }
     $('room-create-status').textContent = data.error || 'HTTP ' + res.status;
@@ -108,10 +144,10 @@ $('room-create').addEventListener('submit', async (e) => {
   button.disabled = false;
 });
 
-// confirm resolves true once the person agrees to sign this browser in with a link: a link sent by
+// confirmSignIn resolves true once the person agrees to sign this browser in with a link: a link sent by
 // someone else would otherwise silently put this browser, and every room it joins next, in their
 // profile.
-function confirm(current) {
+function confirmSignIn(current) {
   $('confirm-text').textContent = (current
     ? 'This browser already holds a profile. If this link is for another one, signing in replaces it here: keep this browser\'s recovery link to get back. '
     : '') + 'Only continue if you asked for this link yourself.';
@@ -142,7 +178,7 @@ async function signInFromLink() {
   }
   const res = await fetch('/api/profile');
   const current = res.ok ? (await res.json()).profile : null;
-  if (!(await confirm(current))) {
+  if (!(await confirmSignIn(current))) {
     statusLine.textContent = 'Link not used.';
     return;
   }

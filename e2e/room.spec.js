@@ -41,7 +41,7 @@ test('join by invite, chat, revoke, delete', async ({ browser, request }) => {
   await join(bob, bobInv.path, 'Bob');
   await expect(bob.locator('#messages')).toContainText('hello from alice');
   await expect(alice.locator('#messages')).toContainText('Bob joined');
-  await expect(alice.locator('#participants li')).toHaveText(['Alice', 'Bob']);
+  await expect(alice.locator('#participants li .name, #participants-away li .name')).toHaveText(['Alice', 'Bob']);
 
   // Revoking Alice's invite ends her session live, without a reload.
   expect((await request.delete(`/api/rooms/${room.id}/invites/${aliceInv.id}`, { headers: admin })).status()).toBe(204);

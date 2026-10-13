@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"text/template"
 	"time"
 
@@ -31,26 +30,6 @@ const (
 	// speakerWindow is how recent a voice line must be for its speaker to be speaking now.
 	speakerWindow = 10 * time.Second
 )
-
-// viewers counts each participant's open room streams: those with one are present.
-type viewers struct {
-	mu sync.Mutex
-	m  map[int64]int // by participant id
-}
-
-func (v *viewers) add(pid int64, n int) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if v.m[pid] += n; v.m[pid] <= 0 {
-		delete(v.m, pid)
-	}
-}
-
-func (v *viewers) present(pid int64) bool {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	return v.m[pid] > 0
-}
 
 // presencePersona is one persona as the preamble shows it.
 type presencePersona struct {
@@ -234,7 +213,7 @@ func (s *Server) presencePreamble(ctx context.Context, room *store.Room, self *s
 		if h.ID == room.HostParticipantID {
 			v.Host = named(h.ID, h.Name)
 		}
-		if s.viewers.present(h.ID) {
+		if s.people.here(room.ID, h.ID, s.now()) {
 			v.Humans = append(v.Humans, named(h.ID, h.Name))
 		}
 	}

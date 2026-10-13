@@ -22,8 +22,10 @@ const bytes = (b) => (b >= 1 << 20 ? (b / (1 << 20)).toFixed(1) + ' MiB' : b >= 
 const secs = (ms) => (ms >= 60e3 ? Math.floor(ms / 60e3) + ' min ' + Math.round((ms % 60e3) / 1e3) + ' s' : (ms / 1e3).toFixed(1) + ' s');
 /** @param {number | null} c */
 const usd = (c) => (c === null ? 'unknown' : '$' + c.toFixed(c < 1 ? 4 : 2));
-/** @param {string} m @param {string} e */
-const level = (m, e) => (m || 'default') + ' · ' + (e || 'default');
+/** Turns before 005-AC9 may carry neither. @param {string} m @param {string} e */
+const level = (m, e) => (m || 'unset') + ' · effort ' + (e || 'unset');
+/** The other models of the turn, or what claude reported instead (005-AC10). @param {Turn} t */
+const note = (t) => (t.model_mismatch ? ' · ⚠ claude reported ' + (t.model_note || 'no model') : t.model_note ? ' · ' + t.model_note : '');
 
 /** @param {{t: Turn}} p */
 function TurnRow({ t }) {
@@ -33,7 +35,7 @@ function TurnRow({ t }) {
     <td class="wrap"><code>${t.room}</code></td>
     <td>${t.persona}</td>
     <td>${t.account}</td>
-    <td title="asked → ran">${level(t.asked_model, t.asked_effort)} → ${level(t.model, t.effort)}</td>
+    <td title="asked → ran" class=${t.model_mismatch ? 'bad' : ''}>${level(t.asked_model, t.asked_effort)} → ${level(t.model, t.effort)}${note(t)}</td>
     <td class="wrap">${t.cause}</td>
     <td>${secs(t.duration_ms)}</td>
     <td>${secs(t.queue_ms)}</td>
@@ -75,7 +77,7 @@ export function Monitoring({ instances }) {
   const fc = h?.facets;
   const exportCSV = () => download('/api/monitor/turns.csv?' + query(f), 'grill-room-turns.csv').catch((x) => setErr(x.message));
   return html`<section id="monitoring-section" aria-labelledby="monitoring-title">
-    <h2 id="monitoring-title">Monitoring</h2>
+    <h2 id="monitoring-title">Activity</h2>
     <p class="hint">Every turn this machine ran, kept on this machine only for the retention set above. Cost is Claude Code's estimate.</p>
     <form id="monitor-filter" class="row" onSubmit=${(/** @type {Event} */ e) => e.preventDefault()}>
       ${pick('instance', 'Instance', fc?.instances || [], url)} ${pick('room', 'Room', fc?.rooms || [])}

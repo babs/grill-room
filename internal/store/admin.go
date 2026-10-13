@@ -257,11 +257,11 @@ func (s *Store) PurgeAudit(ctx context.Context, before time.Time) (int64, error)
 	return n, nil
 }
 
-// targetNames reads the name an audit entry keeps for each target kind; a profile's is the name it
-// last joined a room with, else its uuid, as profiles have no name of their own.
+// targetNames reads the name an audit entry keeps for each target kind; a profile's is the one it
+// chose (005-AC1), else the name it last joined a room with, else its uuid.
 var targetNames = map[string]string{
 	TargetRoom:     `SELECT name FROM rooms WHERE id = ?`,
-	TargetProfile:  `SELECT COALESCE((SELECT name FROM participants WHERE profile_id = p.id ORDER BY id DESC LIMIT 1), p.uuid, '') FROM profiles p WHERE p.id = ?`,
+	TargetProfile:  `SELECT COALESCE(p.name, (SELECT name FROM participants WHERE profile_id = p.id ORDER BY id DESC LIMIT 1), p.uuid, '') FROM profiles p WHERE p.id = ?`,
 	TargetSkill:    `SELECT name FROM skills WHERE id = ?`,
 	TargetTemplate: `SELECT title FROM persona_templates WHERE id = ?`,
 }

@@ -216,7 +216,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond) // polls cond, bounded by the deadline
 	}
 }
 
@@ -241,12 +241,18 @@ func onlyInstance(t *testing.T, s pageStatus) daemon.InstanceView {
 	return s.Instances[0]
 }
 
-// 003-AC6: with a supervisor running, a launch with a room link starts no second supervisor: it
-// hands the room over through the local socket, prints the running supervisor's admin page and
-// exits. A launch with no room is refused with a clear message.
+// 003-AC6, 005-AC46: with a supervisor running, a launch with a room link starts no second
+// supervisor: it hands the room over through the local socket, prints the running supervisor's
+// admin page and exits. A launch with no room, or `grill-room-daemon admin`, only gives a fresh
+// link to that page; with no supervisor running, `admin` says how to start one.
 func TestSecondLaunchHandsOver(t *testing.T) {
 	rs := newRoomServer(t)
 	env := daemonEnv(t)
+	none := startProc(t, env, "admin")
+	if code := none.exit(t); code != 1 || !strings.Contains(none.out.String(), "no AI host app runs for") ||
+		!strings.Contains(none.out.String(), "grill-room-daemon <room-url>") {
+		t.Fatalf("admin with no supervisor: exit %d:\n%s", code, none.out.String())
+	}
 	first := startProc(t, env)
 	pg := first.open(t)
 	if s := pg.status(t); s.Instance != "" || len(s.Instances) != 0 {
@@ -270,9 +276,15 @@ func TestSecondLaunchHandsOver(t *testing.T) {
 		return s.Status.Room == rs.url() && s.Status.Pairing == "pending" && len(s.Instances) == 1
 	})
 
-	direct := startProc(t, env)
-	if code := direct.exit(t); code != 1 || !strings.Contains(direct.out.String(), "a supervisor already runs for") {
-		t.Fatalf("second supervisor: exit %d:\n%s", code, direct.out.String())
+	for _, args := range [][]string{nil, {"admin"}} {
+		again := startProc(t, env, args...)
+		if code := again.exit(t); code != 0 || !strings.Contains(again.out.String(), "the AI host app is already running") ||
+			strings.Contains(again.out.String(), `"startup"`) {
+			t.Fatalf("launch %v: exit %d:\n%s", args, code, again.out.String())
+		}
+		if p := again.open(t); p.base != pg.base {
+			t.Fatalf("launch %v: link %s, page %s", args, p.base, pg.base)
+		}
 	}
 	if pg.post(t, "/api/stop", nil) != http.StatusNoContent {
 		t.Fatal("stop refused")

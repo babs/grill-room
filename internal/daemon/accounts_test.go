@@ -492,3 +492,42 @@ func TestOnlyTheSupervisorReadsCredentials(t *testing.T) {
 		}
 	}
 }
+
+// 005-AC47: a config dir typed with ~ is the daemon user's home; another user's ~ and a relative
+// path are refused; the page shows a path under home as ~/….
+func TestConfigDirHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	abs := filepath.Join(home, "x")
+	other := t.TempDir()
+	for _, c := range []struct{ in, want, err string }{
+		{"~", home, ""},
+		{"~/x", abs, ""},
+		{other, other, ""},
+		{"", "", ""},
+		{".claude-work", "", "relative"},
+		{"~bob/x", "", "another user's"},
+	} {
+		got, err := expandHome(filepath.FromSlash(c.in))
+		if c.err != "" {
+			if err == nil || !strings.Contains(err.Error(), c.err) {
+				t.Errorf("%q: %v, want an error with %q", c.in, err, c.err)
+			}
+			continue
+		}
+		if err != nil || got != filepath.FromSlash(c.want) {
+			t.Errorf("%q: %q, %v; want %q", c.in, got, err, c.want)
+		}
+	}
+	if got := homeShort(abs); got != "~"+string(filepath.Separator)+"x" {
+		t.Errorf("short %s: %s", abs, got)
+	}
+	if got := homeShort(home); got != "~" {
+		t.Errorf("short home: %s", got)
+	}
+	if other := filepath.Join(filepath.Dir(home), "other"); homeShort(other) != other {
+		t.Errorf("short %s: %s", other, homeShort(other))
+	}
+}

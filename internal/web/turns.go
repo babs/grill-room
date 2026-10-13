@@ -188,7 +188,7 @@ func (s *Server) launch(ctx context.Context, room *store.Room, persona *store.Ro
 	if err != nil {
 		return nil, err
 	}
-	t.ParticipantID, t.DaemonID, t.RerunOf = q.ParticipantID, host.id, q.RerunOf
+	t.ParticipantID, t.DaemonID, t.RerunOf, t.QueueID = q.ParticipantID, host.id, q.RerunOf, q.ID
 	if err := s.bus.Store.StartTurn(ctx, t, room.ParallelTurns); err != nil {
 		return nil, err
 	}
@@ -208,13 +208,13 @@ func (s *Server) launch(ctx context.Context, room *store.Room, persona *store.Ro
 // neither answers nor drops its stream. A turn its host's daemon queued is not running yet: its
 // clock starts when it leaves that queue, which arms a new backstop (003-AC18).
 func (s *Server) backstop(room string, id int64, after time.Duration) {
-	time.AfterFunc(after, func() {
+	s.afterFunc(after, func() {
 		ctx := context.Background()
 		t, err := s.bus.Store.Turn(ctx, room, id)
 		if err != nil || t.Status != store.TurnRunning || t.HostQueued {
 			return
 		}
-		if left := time.Until(t.StartedAt.Add(s.opts.TurnTimeout + turnGrace)); left > 0 {
+		if left := t.StartedAt.Add(s.opts.TurnTimeout + turnGrace).Sub(s.now()); left > 0 {
 			s.backstop(room, id, left)
 			return
 		}
@@ -334,12 +334,19 @@ func (s *Server) prepareTurn(ctx context.Context, room *store.Room, persona *sto
 	if err != nil {
 		return nil, err
 	}
+	var renamed []string
+	// A resumed session remembers the old paths (005-AC25); a new one reads the workspace afresh.
+	if t.Resume != "" {
+		if renamed, err = s.renamedPaths(ctx, room.ID, prev.MessageCursor, t.MessageCursor, docs); err != nil {
+			return nil, err
+		}
+	}
 	preamble, err := s.presencePreamble(ctx, room, persona, t.Cause)
 	if err != nil {
 		return nil, err
 	}
 	t.Prompt = buildPrompt(promptInput{Preamble: preamble, Room: room.Name, Persona: persona.Name, Self: persona.ID, NewSession: t.Resume == "",
-		Handoff: t.Handoff, Msgs: msgs, Changes: changes, Anns: anns, AnnCursor: prev.AnnotationCursor, Paths: docPaths(docs)})
+		Handoff: t.Handoff, Msgs: msgs, Changes: changes, Anns: anns, AnnCursor: prev.AnnotationCursor, Paths: docPaths(docs), Renamed: renamed})
 	return t, nil
 }
 
@@ -473,6 +480,69 @@ func (s *Server) cancelQueued(w http.ResponseWriter, r *http.Request, sess sessi
 		s.bus.Notify(sess.p.RoomID)
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// stopTurn stops a running {turn}: whoever started it, the host or a room admin may. The turn ends
+// at once, its result is refused when it comes, and the host's daemon is told to kill claude
+// (005-AC5).
+func (s *Server) stopTurn(w http.ResponseWriter, r *http.Request, sess session) {
+	// The JSON body, empty, is what a cross-site form cannot send.
+	if !decode(w, r, &struct{}{}) {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("turn"), 10, 64)
+	if err != nil {
+		httpError(w, http.StatusNotFound, "no such turn")
+		return
+	}
+	ctx, room := r.Context(), sess.p.RoomID
+	t, err := s.bus.Store.Turn(ctx, room, id)
+	if errors.Is(err, store.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "no such turn")
+		return
+	}
+	if err != nil {
+		s.serverError(w, "stop_turn_failed", err)
+		return
+	}
+	if t.Status != store.TurnRunning {
+		httpError(w, http.StatusConflict, store.ErrTurnNotRunning.Error())
+		return
+	}
+	if allowed, err := s.mayStop(ctx, &sess, t); err != nil {
+		s.serverError(w, "stop_turn_failed", err)
+		return
+	} else if !allowed {
+		httpError(w, http.StatusForbidden, "only who started the turn, the host or a room admin can stop it")
+		return
+	}
+	switch _, err := s.bus.Store.StopTurn(ctx, room, id, oneLine(sess.p.Name)); {
+	case errors.Is(err, store.ErrTurnNotRunning):
+		httpError(w, http.StatusConflict, err.Error())
+		return
+	case err != nil:
+		s.serverError(w, "stop_turn_failed", err)
+		return
+	}
+	s.log.Info("turn_stopped", zap.String("room", room), zap.Int64("turn", id), zap.Int64("participant", sess.p.ID))
+	s.bus.Notify(room)
+	s.drain(ctx, room)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// mayStop reports whether the member may stop turn t: who started it, the host, or a room admin.
+func (s *Server) mayStop(ctx context.Context, sess *session, t *store.Turn) (bool, error) {
+	if t.ParticipantID == sess.p.ID {
+		return true, nil
+	}
+	room, err := s.bus.Store.Room(ctx, sess.p.RoomID)
+	if err != nil {
+		return false, err
+	}
+	if room.HostParticipantID == sess.p.ID {
+		return true, nil
+	}
+	return s.roomAdmin(ctx, sess)
 }
 
 // daemonTurn loads the {turn} of the daemon's room, provided it is running on this daemon.
@@ -658,6 +728,7 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 	o := turn.Classify(res.Changes)
 	out := &store.TurnOutcome{
 		Synthesis: sanitize(res.Synthesis, turn.MaxSynthesis), Model: sanitize(res.Model, turn.MaxModel), SessionID: res.SessionID,
+		ModelNote: sanitize(res.ModelNote, turn.MaxModelNote), ModelMismatch: res.ModelMismatch,
 		// An effort claude does not know is not shown as if it ran.
 		Effort:        knownOr(res.Effort, turn.Efforts),
 		Capped:        res.Capped,
@@ -717,6 +788,9 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 		s.failTurn(r.Context(), d.RoomID, t.ID, "the room could not apply the result")
 		httpError(w, http.StatusInternalServerError, "internal error")
 		return
+	}
+	if out.ModelMismatch {
+		s.log.Warn("turn_model_mismatch", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.String("asked", out.Model), zap.String("reported", out.ModelNote))
 	}
 	s.chainLinks(r.Context(), done, out.Synthesis)
 	s.bus.Notify(d.RoomID)

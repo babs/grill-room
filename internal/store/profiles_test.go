@@ -469,3 +469,36 @@ func TestRevokeInviteCascadesToInvitesItsJoinersMade(t *testing.T) {
 		t.Errorf("another branch's invite: %+v %v", inv, err)
 	}
 }
+
+// 005-AC41: the profile's room cards count the room's people, carry its last activity and say
+// where the profile is a room admin.
+func TestProfileRoomsCarryPeopleActivityAndAdmin(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
+	joinWithProfile(t, s, "b", "Ali", JoinProfile{ID: a.ProfileID})
+	if _, err := s.CreateInvite(ctx, "a", "inv-a2", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Join(ctx, "inv-a2", "Bob", "tok-a2", JoinProfile{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetRoomAdmin(ctx, "a", a.ID, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	prof, err := s.ProfileBySession(ctx, "sess")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]ProfileRoom{}
+	for _, r := range prof.Rooms {
+		got[r.RoomID] = r
+	}
+	if got["a"].People != 2 || !got["a"].Admin || got["b"].People != 1 || got["b"].Admin {
+		t.Fatalf("rooms: %+v", prof.Rooms)
+	}
+	// The last line is Alice's appointment, after both joins.
+	if got["a"].LastActivity.Before(got["a"].JoinedAt) || got["b"].LastActivity.IsZero() {
+		t.Fatalf("activity: %+v", prof.Rooms)
+	}
+}

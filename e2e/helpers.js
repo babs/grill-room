@@ -12,7 +12,10 @@ export async function roomWith(browser, request, names) {
   const pages = [];
   for (const name of names) {
     const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
-    const page = await (await browser.newContext()).newPage();
+    const ctx = await browser.newContext();
+    // The annotations panel starts closed below 100rem (005-AC37); the specs read it open.
+    await ctx.addInitScript(() => { if (!localStorage.getItem('grill-room-annotations')) localStorage.setItem('grill-room-annotations', '1'); });
+    const page = await ctx.newPage();
     await page.goto(new URL(inv.url).pathname + new URL(inv.url).hash);
     await page.getByLabel('Your name').fill(name);
     await page.getByRole('button', { name: 'Join the room' }).click();
@@ -70,10 +73,11 @@ export function startDaemon(roomURL, env = {}, { expiresIn = 3600e3 } = {}) {
 export async function pairDaemon(page, daemon) {
   const admin = await page.context().newPage();
   await admin.goto(await daemon.link);
-  await expect(admin.locator('#pairing')).toHaveText('Waiting for your approval in the room.');
+  // The worker asks to pair once the Docker orphan cleanup is done, seconds on a loaded runner.
+  await expect(admin.locator('#pairing')).toHaveText('Waiting for your approval in the room.', { timeout: 30_000 });
   const [approval] = await Promise.all([page.context().waitForEvent('page'), admin.getByRole('link', { name: 'approve in the room' }).click()]);
   await approval.getByRole('button', { name: 'Approve' }).click();
-  await expect(admin.locator('#pairing')).toHaveText('Paired. Connected.');
+  await expect(admin.locator('#pairing')).toHaveText('Paired. Connected.', { timeout: 30_000 });
   await approval.close();
   return admin;
 }
@@ -116,7 +120,7 @@ export function liveDaemon(dir, roomURL, env = {}) {
   const stateDir = join(dir, 'state');
   const log = join(dir, 'daemon.log');
   const proc = spawn('../bin/grill-room-daemon', [roomURL], {
-    env: { ...process.env, GRILL_ROOM_DAEMON_STATE_DIR: stateDir, GRILL_ROOM_DAEMON_BROWSER: 'none', GRILL_ROOM_AGENT_MODEL: 'haiku', LOG_LEVEL: 'info', ...env },
+    env: { ...process.env, GRILL_ROOM_DAEMON_STATE_DIR: stateDir, GRILL_ROOM_DAEMON_BROWSER: 'none', GRILL_ROOM_MAX_MODEL: 'haiku', LOG_LEVEL: 'info', ...env },
     stdio: ['ignore', 'ignore', openSync(log, 'w')],
   });
   const exited = new Promise((resolve) => proc.on('exit', resolve));
@@ -209,7 +213,69 @@ export async function signIn(page, token = adminToken, view = 'sessions') {
   return res.status();
 }
 
-// noOverflow lists what sticks out past the viewport, tables scrolling in their own box aside.
+// noOverflow lists what sticks out past the viewport, tables and tab bars scrolling in their own
+// box aside (005-AC35).
 export const noOverflow = (page) => page.evaluate(() => [...document.querySelectorAll('body *')]
-  .filter((e) => !e.parentElement?.closest('.scroll') && e.getBoundingClientRect().right > innerWidth + 1)
+  .filter((e) => !e.parentElement?.closest('.scroll, .tabs') && e.getBoundingClientRect().right > innerWidth + 1)
   .map((e) => `${e.tagName.toLowerCase()}#${e.id}.${e.className}`));
+
+// menuItem picks an item of a header menu (005-AC32): '⋯' (more), the user's initials (me) or the
+// audio options (voice).
+export async function menuItem(page, name, which = 'more') {
+  await page.locator({ more: '#more-open', me: '#me', voice: '#voice-more' }[which]).click();
+  const menu = page.locator({ more: '#more-menu', me: '#me-menu', voice: '#voice-menu' }[which]);
+  await menu.getByRole(name === 'My rooms and profile' || name === 'Open documents in a new window' ? 'link' : 'button', { name, exact: true }).click();
+}
+
+// messageAction runs Edit or Delete on a line through its actions button (005-AC35).
+export async function messageAction(line, name) {
+  await line.getByRole('button', { name: 'Line actions' }).click();
+  await line.page().locator('#msg-menu').getByRole('button', { name, exact: true }).click();
+}
+
+// smallTargets lists the visible controls under min px wide or high (005-AC30). Inline targets in
+// a message's text are exempt, as WCAG 2.5.8 exempts them; a checkbox counts by its label.
+export const smallTargets = (page, min = 44) => page.evaluate((min) => {
+  const sel = 'button, select, textarea, summary, .tabs a, a.btn, .menu a, input:not([type=checkbox]):not([type=radio]):not([type=hidden]):not([type=file]), label:has(> input[type=checkbox])';
+  return [...document.querySelectorAll(sel)].filter((e) => {
+    if (e.closest('.msg .body, .msg .meta, #doc-frame')) return false;
+    const r = e.getBoundingClientRect();
+    const s = getComputedStyle(e);
+    if (!r.width || !r.height || s.visibility === 'hidden' || e.closest('[hidden], [inert]')) return false;
+    return r.width < min - 0.5 || r.height < min - 0.5;
+  }).map((e) => `${e.tagName.toLowerCase()}${e.id ? '#' + e.id : ''} "${(e.getAttribute('aria-label') || e.textContent).trim().slice(0, 30)}" ${Math.round(e.getBoundingClientRect().width)}x${Math.round(e.getBoundingClientRect().height)}`);
+}, min);
+
+// stopDaemon stops the supervisor from its page: Stop, then the confirm sheet's Stop (005-AC39).
+export async function stopDaemon(admin) {
+  await admin.locator('#stop').click();
+  await admin.locator('dialog.confirm').getByRole('button', { name: 'Stop', exact: true }).click();
+}
+
+// confirmSheet answers the shared confirm sheet with its danger button (005-AC39).
+export async function confirmSheet(page, name) {
+  await page.locator('dialog.confirm').getByRole('button', { name, exact: true }).click();
+}
+
+// unfold opens a folded section of a persona's form: 'advanced' or 'more' (005-AC40).
+export async function unfold(form, which) {
+  const d = form.locator('details.' + which);
+  if (!(await d.evaluate((e) => e.open))) await d.locator('summary').click();
+}
+
+// openStrip shows every item of the status strip (005-AC38): only the most urgent shows folded.
+export async function openStrip(page) {
+  const more = page.locator('#strip-more');
+  if (await more.isVisible() && (await more.getAttribute('aria-expanded')) === 'false') await more.click();
+}
+
+// sandboxHas says whether the daemon's sandbox holds text in file, a path under /workspace: what
+// a turn under way has written there, before the room sees any of it.
+export function sandboxHas(daemon, file, text) {
+  try {
+    execFileSync('docker', ['exec', 'grill-room-' + daemon.sandbox, 'grep', '-q', text, '/workspace/' + file]);
+    return true;
+  } catch {
+    return false;
+  }
+}

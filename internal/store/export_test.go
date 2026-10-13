@@ -163,7 +163,21 @@ func richRoom(t *testing.T, s *Store, id string) (*Participant, *RoomPersona) {
 		Synthesis: "Synthesis: _ship it_", Model: "claude-haiku", ContextTokens: 1000, ContextWindow: 200000}); err != nil {
 		t.Fatal(err)
 	}
+	// 005-AC4: the line whose @mention asked for that turn, and its chip.
+	asked := say(alice, "@Grill go")
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO message_turns(message_id, persona_id, turn_id) VALUES(?,?,?)`, asked.ID, persona.ID, turn.ID); err != nil {
+		t.Fatal(err)
+	}
 	say(alice, "after the turn")
+	// 005-AC26: a deleted document travels, flagged.
+	gone, err := s.AddUpload(ctx, &Upload{RoomID: id, ParticipantID: bob.ID, Author: "Bob", Filename: "old.md", ContentType: "text/markdown; charset=utf-8",
+		Format: "md", Data: []byte("# Old\n"), Text: "# Old\n"}, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetDocumentDeleted(ctx, id, gone.ID, true, nil); err != nil {
+		t.Fatal(err)
+	}
 	if _, _, err := s.ControlChain(ctx, id, ChainControl{Budget: ptr(7)}, alice); err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +192,7 @@ const roomSID = "00000000-0000-4000-8000-000000000001"
 func checkPersona(PersonaFields, int, int) error { return nil }
 
 func importOpts(roomID string) ImportOptions {
-	return ImportOptions{RoomID: roomID, SameInstance: true, DefaultQuota: 1 << 20, MaxUpload: 1 << 20, MaxAttachment: 1 << 20, CheckPersona: checkPersona}
+	return ImportOptions{RoomID: roomID, Format: 2, SameInstance: true, DefaultQuota: 1 << 20, MaxUpload: 1 << 20, MaxAttachment: 1 << 20, CheckPersona: checkPersona}
 }
 
 func export(t *testing.T, s *Store, room string) string {
@@ -315,6 +329,10 @@ func TestExportImportRoundTrip(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	alice, persona := richRoom(t, s, "orig")
+	// 005-AC23: the STT glossary is room content.
+	if _, err := s.SetSTTGlossary(ctx, "orig", "Kubernetes\nHelm", alice); err != nil {
+		t.Fatal(err)
+	}
 	a := export(t, s, "orig")
 	for _, name := range []string{fileRoom, fileTranscript, "uploads", "attachments", "documents", "skills", "sessions"} {
 		if _, err := os.Stat(filepath.Join(a, name)); err != nil {
@@ -336,14 +354,36 @@ func TestExportImportRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]int{"participants": 3, "messages": 0, "message_versions": 2, "uploads": 2, "documents": 3, "revisions": 3, "annotations": 2,
-		"annotation_messages": 3, "attachments": 1, "personas": 1, "skills": 2, "skill_versions": 1, "sessions": 1}
+	want := map[string]int{"participants": 3, "messages": 0, "message_versions": 2, "uploads": 3, "documents": 4, "revisions": 4, "annotations": 2,
+		"annotation_messages": 3, "attachments": 1, "personas": 1, "skills": 2, "skill_versions": 1, "sessions": 1, "mentions": 1}
 	msgs, _ := s.Messages(ctx, "orig", 0, 1000)
 	want["messages"] = len(msgs)
 	if !reflect.DeepEqual(rep.Counts, want) || rep.Room == nil || rep.Room.ID != "copy" || rep.Relinked != 1 || rep.LinkedSkills != 1 {
 		t.Fatalf("report %+v, want counts %v", rep, want)
 	}
 	diffCanon(t, canon(t, a), canon(t, export(t, s, "copy")))
+	// 005-AC4: the copy's line keeps its chip, done, pointing at the copy's synthesis.
+	cmsgs, _ := s.Messages(ctx, "copy", 0, 1000)
+	chips, err := s.MessageMentions(ctx, "copy", 0, cmsgs[len(cmsgs)-1].ID)
+	var asked, synthesis int64
+	for _, m := range cmsgs {
+		switch {
+		case m.Body == "@Grill go":
+			asked = m.ID
+		case m.Kind == KindAgent:
+			synthesis = m.ID
+		}
+	}
+	if err != nil || len(chips) != 1 || len(chips[asked]) != 1 || chips[asked][0].Status != "done" || chips[asked][0].LineID != synthesis || synthesis == 0 {
+		t.Fatalf("chips in the copy: %+v %v (asked %d, synthesis %d)", chips, err, asked, synthesis)
+	}
+	// 005-AC26: deleted in the copy too.
+	if del, err := s.DeletedDocuments(ctx, "copy"); err != nil || len(del) != 1 || del[0].Name != "old.md" {
+		t.Fatalf("deleted documents in the copy: %+v %v", del, err)
+	}
+	if g, err := s.STTGlossary(ctx, "copy"); err != nil || g != "Kubernetes\nHelm" {
+		t.Fatalf("glossary in the copy: %q %v", g, err)
+	}
 
 	// Alice reaches the copy through her profile; nobody's old token or invite does.
 	if p, err := s.ProfileParticipant(ctx, "sess-orig", "copy"); err != nil || p.Name != "Alice" {
@@ -599,13 +639,13 @@ func TestExportCoversEveryColumn(t *testing.T) {
 	const server = "server-wide, not room content"
 	// Each table's columns: those the export carries, or why the table is left out.
 	tables := map[string]string{
-		"rooms":                     "id name created_at chain_budget chain_count chain_suspended parallel_turns | host_participant_id quota_bytes creator_profile_id",
-		"participants":              "id name joined_at can_trigger profile_id profile_uuid_hint room_id invite_id | token_hash",
+		"rooms":                     "id name created_at chain_budget chain_count chain_suspended parallel_turns stt_glossary | host_participant_id quota_bytes creator_profile_id",
+		"participants":              "id name joined_at can_trigger profile_id profile_uuid_hint room_id invite_id | token_hash last_seen_at join_ip join_ua last_ip last_ua",
 		"invites":                   "| id room_id token_hash created_at revoked_at created_by",
-		"messages":                  "id room_id ts kind participant_id sender body model edited_at deleted_at change_seq persona_id effort req_model req_effort | html",
+		"messages":                  "id room_id ts kind participant_id sender body model edited_at deleted_at change_seq persona_id effort req_model req_effort model_note model_mismatch | html turn_id",
 		"message_versions":          "id message_id seq body written_at |",
 		"uploads":                   "id room_id participant_id filename content_type size data created_at |",
-		"documents":                 "id room_id kind name format upload_id author created_at |",
+		"documents":                 "id room_id kind name format upload_id author created_at deleted_at | change_seq",
 		"revisions":                 "id document_id n body author created_at |",
 		"annotations":               "id room_id document_id revision anchor orphaned status version created_at |",
 		"annotation_messages":       "id annotation_id author_kind participant_id author body created_at persona_id |",
@@ -619,7 +659,10 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"room_admins":               "room_id profile_id | created_at",
 		"daemons":                   "| id room_id participant_id name token_hash created_at max_model max_effort approve_all",
 		"turn_queue":                "| id room_id persona_id participant_id source fresh created_at rerun_of cause handoff",
+		"message_turns":             "message_id persona_id final_status final_line_id | queue_id turn_id",
 		"persona_change_requests":   "| id room_id persona_id kind patch requested_by created_at",
+		"document_renames":          "| id document_id message_id from_name to_name created_at",         // the next turn's moves
+		"push_subscriptions":        "| id participant_id endpoint p256dh auth all_messages created_at", // a device's keys: a copy gets none
 		"persona_templates":         server,
 		"persona_template_versions": server,
 		"profiles":                  server,
@@ -867,6 +910,41 @@ func personaJSON(t *testing.T, dir string) string {
 	return string(out)
 }
 
+// 005-AC9: a persona from an archive made before explicit levels asks for sonnet / medium here,
+// as a migrated one does, and the room API's check sees those.
+func TestImportFillsMissingLevels(t *testing.T) {
+	s := openTest(t)
+	richRoom(t, s, "orig")
+	dir := export(t, s, "orig")
+	p := filepath.Join(dir, fileRoom)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := bytes.ReplaceAll(bytes.ReplaceAll(b, []byte(`"model": "sonnet"`), []byte(`"model": ""`)), []byte(`"effort": "medium"`), []byte(`"effort": ""`))
+	if bytes.Equal(old, b) {
+		t.Fatal("no persona level to blank")
+	}
+	if err := os.WriteFile(p, old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o := importOpts("copy")
+	var checked []PersonaFields
+	o.CheckPersona = func(f PersonaFields, _, _ int) error { checked = append(checked, f); return nil }
+	if _, err := s.ImportRoom(t.Context(), dir, o); err != nil {
+		t.Fatal(err)
+	}
+	ps, err := s.RoomPersonas(t.Context(), "copy")
+	if err != nil || len(ps) == 0 {
+		t.Fatalf("personas %v %v", ps, err)
+	}
+	for i, p := range ps {
+		if p.Model != DefaultModel || p.Effort != DefaultEffort || checked[i].Model != DefaultModel || checked[i].Effort != DefaultEffort {
+			t.Errorf("persona %s: %s / %s, checked %+v", p.Name, p.Model, p.Effort, checked[i])
+		}
+	}
+}
+
 // 004-AC12 004-AC13: an imported persona keeps its library template on the instance that exported
 // it, takes the shipped template of the same key anywhere, and has none for a template the other
 // instance does not have.
@@ -874,7 +952,7 @@ func TestImportPersonaTemplates(t *testing.T) {
 	src, dst := openTest(t), openTest(t)
 	ctx := t.Context()
 	alice, _ := richRoom(t, src, "orig")
-	tpl, err := src.PublishTemplate(ctx, alice.ProfileID, "Alice", "Critic", PersonaFields{Name: "Critic", Badge: "🧐", Colour: "#112233", Text: "Criticise."})
+	tpl, err := src.PublishTemplate(ctx, alice.ProfileID, "Alice", "Critic", PersonaFields{Name: "Critic", Badge: "🧐", Colour: "#112233", Text: "Criticise.", Model: "sonnet", Effort: "medium"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1000,5 +1078,36 @@ func TestImportRelinksOnlyWhatTheImporterMay(t *testing.T) {
 		if _, err := s.RoomAdmin(ctx, c.room, vic.ProfileID); c.importer != nil && !errors.Is(err, ErrForbidden) {
 			t.Errorf("%s: vic made room admin: %v", c.room, err)
 		}
+	}
+}
+
+// 005-AC4 005-AC26: a format 1 archive, with no mentions.jsonl and no deleted_at, still imports:
+// its lines have no chips and its documents are all live. A format 2 one with a bad mention is
+// refused.
+func TestImportFormat1(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	richRoom(t, s, "orig")
+	dir := export(t, s, "orig")
+	if err := os.Remove(filepath.Join(dir, fileMentions)); err != nil {
+		t.Fatal(err)
+	}
+	o := importOpts("old")
+	o.Format = 1
+	rep, err := s.ImportRoom(ctx, dir, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Counts["mentions"] != 0 {
+		t.Fatalf("mentions from a format 1 archive: %v", rep.Counts)
+	}
+	if _, err := s.ImportRoom(ctx, dir, importOpts("new")); err == nil || !strings.Contains(err.Error(), fileMentions+" is missing") {
+		t.Fatalf("format 2 without mentions: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, fileMentions), []byte(`{"message":1,"persona":999,"status":"done"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ImportRoom(ctx, dir, importOpts("bad")); err == nil || !strings.Contains(err.Error(), "unknown message, persona or status") {
+		t.Fatalf("a bad mention: %v", err)
 	}
 }

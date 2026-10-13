@@ -21,12 +21,38 @@ function reload() {
   return api('GET', '/api/status').then((r) => { data.value = r; });
 }
 
+// restarting is when an update restarted the app, 0 otherwise: the page waits for the new
+// version on the same address instead of giving up (005-AC45).
+const restarting = signal(0);
+// updatingFrom is the version before the update: the old process may still answer once.
+let updatingFrom = '';
+
+// pollErr is the banner a failed poll set: the next poll that works takes it down.
+let pollErr = '';
+
 async function poll() {
   try {
     await reload();
   } catch (err) {
-    if (!stopped.value) banner.value = /** @type {Error} */ (err).message;
+    if (!restarting.value) {
+      if (stopped.value) return;
+      banner.value = pollErr = /** @type {Error} */ (err).message;
+      // A network failure passes: Chrome fails requests in flight when Docker adds or removes a
+      // network (ERR_NETWORK_CHANGED), as sandboxes starting and stopping do on this machine.
+      if (err instanceof TypeError) setTimeout(poll, 2000);
+      return;
+    }
+    if (Date.now() - restarting.value > 90_000) {
+      banner.value = 'The AI host app did not come back on this address. Open the link it printed in its terminal or log, or run `grill-room-daemon admin`.';
+    }
+    setTimeout(poll, 2000);
     return;
+  }
+  if (pollErr && banner.value === pollErr) banner.value = '';
+  pollErr = '';
+  if (restarting.value && data.value?.status.version !== updatingFrom) {
+    restarting.value = 0;
+    banner.value = 'Updated to ' + (data.value?.status.version || 'the new version') + '.';
   }
   if (!stopped.value) setTimeout(poll, 2000);
 }
@@ -47,12 +73,18 @@ function useStatus() {
       setText(ok);
       return true;
     } catch (err) {
-      setText(/** @type {Error} */ (err).message);
+      setText(sentence(/** @type {Error} */ (err).message));
       return false;
     }
   };
   return [text, run];
 }
+
+/**
+ * sentence starts an error in upper case: the daemon's errors are Go errors, lower-case (005-AC42).
+ * @param {string} s
+ */
+const sentence = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** @param {string | undefined} t */
 const when = (t) => (t && !t.startsWith('0001') ? new Date(t).toLocaleString() : 'never');
@@ -84,30 +116,59 @@ function Header() {
   const d = data.value;
   const t = d?.trust;
   const [sig, cls] = t ? selfText[t.self.state] || [t.self.state, ''] : ['', ''];
-  const stop = () => api('POST', '/api/stop').then(() => {
-    stopped.value = true;
-    banner.value = 'The daemon stopped. You can close this tab.';
-  }).catch((err) => { banner.value = err.message; });
+  const stop = () => window.grillConfirm('Stop the AI host app?', 'Running answers fail, and rooms lose their AI until you start it again.', 'Stop')
+    .then((yes) => {
+      if (yes) return api('POST', '/api/stop').then(() => {
+        stopped.value = true;
+        banner.value = 'The AI host app stopped. You can close this tab.';
+      });
+    }).catch((err) => { banner.value = err.message; });
   return html`
-    <header>
-      <h1>grill-room daemon</h1>
-      <span id="host">${d ? d.status.host + ' · ' + d.status.version : ''}</span>
+    <header class="app-header">
+      <img src="/static/logo.svg" alt="" class="logo" width="32" height="32"/>
+      <h1>grill-room AI host</h1>
+      <span id="host" class="muted">${d ? d.status.host + ' · ' + d.status.version : ''}</span>
       ${t && html`<span id="self-sig" class=${'badge ' + cls}>${sig}</span>`}
-      <nav aria-label="Sections">
-        ${[['room', 'Room'], ['instances', 'Instances'], ['rooms', 'Rooms'], ['accounts', 'Accounts'], ['settings', 'Settings'],
-          ['monitoring', 'Monitoring'], ['logs', 'Logs']].map(([id, name]) => html`<a href=${'#' + id + '-section'}>${name}</a>`)}
-      </nav>
-      <button type="button" id="stop" onClick=${stop} disabled=${stopped.value}>Stop the daemon</button>
+      <span class="spacer"></span>
+      <span id="state" class="muted">${stopped.value ? '○ Stopped' : d ? '● Running' : ''}</span>
+      <button type="button" id="stop" class="btn-secondary" onClick=${stop} disabled=${stopped.value}>Stop</button>
     </header>`;
 }
 
-// Alerts are the page's warnings: logins near expiry, unsigned workers, full contexts and stuck
-// queues (003-AC29).
-function Alerts() {
-  const list = data.value?.alerts || [];
-  if (!list.length) return null;
-  return html`<ul id="alerts" role="alert">${list.map((a) => html`<li class=${'alert-' + a.kind}>${a.text}</li>`)}</ul>`;
+// The page's tabs (005-AC17), each a deep link (#accounts). Rooms comes first to the eye of whoever
+// pairs: the daemon opens its page there.
+// Labels in plain words (005-AC42); the ids, and so the deep links, stay.
+const tabs = [['rooms', 'Rooms'], ['instances', 'Servers'], ['accounts', 'Accounts'], ['settings', 'Settings'],
+  ['monitoring', 'Activity'], ['update', 'Update']];
+/** @param {string} hash */
+const tabOf = (hash) => tabs.find(([id]) => '#' + id === hash)?.[0] || 'rooms';
+const tab = signal(tabOf(location.hash));
+addEventListener('hashchange', () => { tab.value = tabOf(location.hash); });
+
+// Each alert kind belongs to the tab that resolves it: logins near expiry, unsigned workers, full
+// contexts and stuck queues (003-AC29).
+const alertTab = /** @type {Record<string, string>} */ ({ account: 'accounts', unsigned: 'instances', context: 'rooms', queue: 'settings' });
+/** @param {string} id */
+const alertsOf = (id) => (data.value?.alerts || []).filter((a) => (alertTab[a.kind] || 'monitoring') === id);
+
+// TabBar stays pinned at the top; a tab with alerts, or an update waiting, shows their count.
+function TabBar() {
+  return html`<nav id="tabs" aria-label="Sections">${tabs.map(([id, name]) => {
+    const n = alertsOf(id).length + (id === 'update' && data.value?.status.update?.available ? 1 : 0);
+    return html`<a key=${id} id=${'tab-' + id} href=${'#' + id} aria-current=${tab.value === id ? 'page' : undefined}>${name}${n
+      ? html` <span class="tab-badge" title=${n + (n === 1 ? ' alert' : ' alerts')}>${n}</span>` : ''}</a>`;
+  })}</nav>`;
 }
+
+/** @param {{id: string}} p */
+function Alerts({ id }) {
+  const list = alertsOf(id);
+  if (!list.length) return null;
+  return html`<ul id=${'alerts-' + id} class="alerts" role="alert">${list.map((a) => html`<li class=${'alert-' + a.kind}>${a.text}</li>`)}</ul>`;
+}
+
+/** @param {{id: string, children?: any}} p */
+const Panel = ({ id, children }) => html`<div id=${'panel-' + id} class="panel" hidden=${tab.value !== id}><${Alerts} id=${id} />${children}</div>`;
 
 function RelaxBanner() {
   const relaxed = (data.value?.instances || []).filter((i) => i.accept_unsigned);
@@ -122,13 +183,14 @@ function UpdateOffer() {
   const u = data.value?.status.update;
   const [busy, setBusy] = useState(false);
   const [text, setText] = useState('');
-  if (!u?.available) return null;
+  if (!u?.available) return html`<p class="hint">${u?.running ? 'Downloading…' : 'No update waiting.'}</p>`;
   const apply = () => {
     setBusy(true);
     setText('Downloading…');
+    updatingFrom = data.value?.status.version || '';
     api('POST', '/api/update').then(() => {
-      stopped.value = true;
-      banner.value = 'Updated. The daemon restarts and opens a new page; you can close this one.';
+      restarting.value = Date.now();
+      banner.value = 'Updating… the AI host app restarts, and this page reconnects by itself.';
     }).catch((err) => { setBusy(false); setText(err.message); });
   };
   return html`<p id="update">
@@ -208,6 +270,17 @@ const setAccount = (instance, room, account) =>
 /** @param {number} s */
 const uptime = (s) => (s < 120 ? s + ' s' : s < 7200 ? Math.round(s / 60) + ' min' : Math.round(s / 3600) + ' h');
 
+/**
+ * cutOff stops a server's worker from reaching Claude, once confirmed, or lets it again (003-AC15).
+ * @param {Instance} i
+ */
+function cutOff(i) {
+  const go = () => api('POST', '/api/cut-off', { instance: i.id, cut_off: !i.cut_off }).then(reload).catch((err) => { banner.value = err.message; });
+  if (i.cut_off) return go();
+  return window.grillConfirm('Cut ' + i.url + ' off from Claude?', 'Its running answers end and none starts until you let it again.', 'Cut it off')
+    .then((yes) => { if (yes) go(); });
+}
+
 /** @param {{i: Instance, current: boolean}} p */
 function InstanceCard({ i, current }) {
   const [host, setHost] = useState('');
@@ -231,7 +304,8 @@ function InstanceCard({ i, current }) {
         <button type="button" onClick=${() => relax(false, '')}>Stop accepting unsigned binaries</button>
       </div>` : html`<form class="row relax" onSubmit=${(/** @type {Event} */ e) => {
         e.preventDefault();
-        relax(true, host).then((ok) => { if (ok) setHost(''); });
+        window.grillConfirm('Accept unsigned binaries from ' + host + '?', 'This server could then run any program on this computer. Switch it off once you are done testing.', 'Accept')
+          .then((yes) => { if (yes) relax(true, host).then((ok) => { if (ok) setHost(''); }); });
       }}>
         <label>To accept its unsigned binaries, type its host <input class="relax-host" required size="24" autocomplete="off" spellcheck=${false}
           value=${host} onInput=${(/** @type {any} */ e) => setHost(e.currentTarget.value)} /></label>
@@ -241,8 +315,7 @@ function InstanceCard({ i, current }) {
     ${accounts && html`<div class="row account-map">
       Claude account <${AccountSelect} label=${'Claude account of ' + i.url} value=${i.account} onPick=${(/** @type {string} */ a) => setAccount(i.id, '', a)} />
       ${plural(i.requests, 'request')} through the proxies
-      <button type="button" onClick=${() => api('POST', '/api/cut-off', { instance: i.id, cut_off: !i.cut_off }).then(reload)
-        .catch((err) => { banner.value = err.message; })}>${i.cut_off ? 'Let it use Claude again' : 'Cut it off from Claude'}</button>
+      <button type="button" class=${i.cut_off ? 'btn-secondary' : 'btn-danger-outline'} onClick=${() => cutOff(i)}>${i.cut_off ? 'Let it use Claude again' : 'Cut it off from Claude'}</button>
       ${i.cut_off && html`<${Badge} text="cut off: its turns end and none starts" cls="danger" />`}
     </div>`}
   </li>`;
@@ -251,8 +324,8 @@ function InstanceCard({ i, current }) {
 function Instances() {
   const d = /** @type {StatusReply} */ (data.value);
   if (!d.instances) return null;
-  return html`<${Section} id="instances" title="Instances">
-    <p class="hint">One worker per room server, running the version that server hands out. The Room section above shows the last one you paired with.</p>
+  return html`<${Section} id="instances" title="Servers">
+    <p class="hint">One worker per room server, running the version that server hands out. The Rooms tab shows the last one you paired with.</p>
     <ul id="instances">${d.instances.map((i) => html`<${InstanceCard} key=${i.id} i=${i} current=${i.id === d.instance} />`)}</ul>
   <//>`;
 }
@@ -266,8 +339,8 @@ function Instances() {
 function roomText(st) {
   if (!st) return 'not served';
   const parts = [st.pairing === 'pending' ? 'waiting for your approval in the room' : st.connection];
-  if (st.host === true) parts.push('hosts the agent', 'parallel turns ' + (st.parallel_turns ? 'on' : 'off'));
-  if (st.host === false) parts.push('not the host');
+  if (st.host === true) parts.push('runs the AI', 'parallel answers ' + (st.parallel_turns ? 'on' : 'off'));
+  if (st.host === false) parts.push('another computer runs the AI');
   if (st.running) parts.push(st.running + ' running');
   if (st.queued) parts.push(st.queued + ' waiting for a slot');
   return parts.join(', ');
@@ -288,11 +361,16 @@ function Rooms() {
     <p class="hint" id="concurrency">${conc}</p>
     ${d.instances.map((i) => html`<div class="room-group">
       <h3><code>${i.url}</code></h3>
-      <ul class="rooms">${i.rooms.map((r) => html`<li>
-        <code class="room-link">${r}</code> <span class="room-state">${roomText((i.room_states || []).find((x) => x.room === r))}</span>
-        ${d.accounts && html` · <${AccountSelect} label=${'Claude account of ' + r} value=${(i.room_accounts || {})[r] || ''} roomDefault=${i.account}
-          onPick=${(/** @type {string} */ a) => setAccount(i.id, r, a)} />`}
-      </li>`)}</ul>
+      <ul class="rooms">${i.rooms.map((r) => {
+        const st = (i.room_states || []).find((x) => x.room === r);
+        // The room's name when its server sends one (005-AC42), the link otherwise.
+        return html`<li class="card room-card">
+          <strong class="room-name">${st?.name || r}</strong> <span class="room-state">${roomText(st)}</span>
+          ${st?.name && html`<div class="hint"><code class="room-link">${r}</code></div>`}
+          ${d.accounts && html`<div class="row">Claude account <${AccountSelect} label=${'Claude account of ' + r} value=${(i.room_accounts || {})[r] || ''} roomDefault=${i.account}
+            onPick=${(/** @type {string} */ a) => setAccount(i.id, r, a)} /></div>`}
+        </li>`;
+      })}</ul>
     </div>`)}
   <//>`;
 }
@@ -305,14 +383,14 @@ const stateText = /** @type {Record<string, [string, string]>} */ ({
 function AccountItem({ a, onError }) {
   const [text, cls] = stateText[a.state] || [a.state, ''];
   const kind = a.kind === 'setup_token' ? 'setup token, in the ' + (a.storage === 'keyring' ? 'OS keyring' : 'owner-only file')
-    : 'config dir ' + (a.config_dir || '~/.claude');
+    : 'config dir ' + (a.display_dir || a.config_dir || '~/.claude');
   const total = Object.values(a.requests || {}).reduce((n, x) => n + x, 0);
   const info = (a.expires_at ? (a.expiry_estimated ? 'expires about ' : 'access token expires ') + when(a.expires_at) + ' · ' : '') +
     'last use ' + when(a.last_use) + ' · ' + plural(total, 'request') + (a.checked_at ? ' · checked ' + when(a.checked_at) : '') +
     (a.detail ? ' · ' + a.detail : '');
   const remove = () => {
-    if (!confirm('Remove the Claude account ' + a.name + '?')) return;
-    api('POST', '/api/accounts/remove', { name: a.name }).then(reload).catch((err) => onError(err.message));
+    window.grillConfirm('Remove the Claude account ' + a.name + '?', 'Rooms that use it stop reaching Claude until they get another account.', 'Remove')
+      .then((yes) => { if (yes) api('POST', '/api/accounts/remove', { name: a.name }).then(reload).catch((err) => onError(err.message)); });
   };
   return html`<li>
     <code>${a.name}</code> · ${kind} <${Badge} text=${text} cls=${cls} />
@@ -356,7 +434,7 @@ function Accounts() {
         <option value="setup_token">a setup token</option>
       </select></label>
       ${kind === 'config_dir'
-        ? html`<label>Config dir <input id="account-dir" size="30" autocomplete="off" spellcheck=${false} placeholder="empty for ~/.claude"
+        ? html`<label>Config dir <input id="account-dir" size="30" autocomplete="off" spellcheck=${false} placeholder="~/.claude-work, empty for ~/.claude"
             value=${dir} onInput=${on(setDir)} /></label>`
         : html`<label>Token <input id="account-token" type="password" required size="30" autocomplete="off" spellcheck=${false}
             placeholder="from claude setup-token" value=${tok} onInput=${on(setTok)} /></label>`}
@@ -453,7 +531,7 @@ function Trust() {
         onChange=${(/** @type {any} */ e) => setFollow(e.currentTarget.value)}>
         ${instances.map((i) => html`<option value=${i.id}>${i.url}</option>`)}
       </select>`}
-      <button type="submit">Use this channel</button>
+      <button type="submit">Save</button>
       <span id="channel-status" role="status">${chText}</span>
     </form>
     <h3>Trusted dev keys</h3>
@@ -461,14 +539,15 @@ function Trust() {
     <ul id="dev-keys">
       ${!t.dev_keys.length && html`<li>None.</li>`}
       ${t.dev_keys.map((k) => html`<li><code>${k.name}</code> · ${k.fingerprint} <button type="button" aria-label=${'Remove ' + k.name}
-        onClick=${() => runKey(api('POST', '/api/dev-keys/remove', { name: k.name }))}>Remove</button></li>`)}
+        onClick=${() => window.grillConfirm('Remove the key ' + k.name + '?', 'Worker binaries it signed are refused from now on.', 'Remove')
+          .then((yes) => { if (yes) runKey(api('POST', '/api/dev-keys/remove', { name: k.name })); })}>Remove</button></li>`)}
     </ul>
     <form id="key-form" class="row" onSubmit=${addKey}>
       <label>Name <input id="key-name" required size="16" autocomplete="off" spellcheck=${false} pattern="[A-Za-z0-9][A-Za-z0-9._\\-]{0,63}"
         value=${keyName} onInput=${(/** @type {any} */ e) => setKeyName(e.currentTarget.value)} /></label>
       <label>Public key <textarea id="key-pem" required rows="4" spellcheck=${false} placeholder="-----BEGIN PUBLIC KEY-----"
         value=${pem} onInput=${(/** @type {any} */ e) => setPem(e.currentTarget.value)}></textarea></label>
-      <button type="submit">Trust this key</button>
+      <button type="submit">Add the key</button>
       <span id="key-status" role="status">${keyText}</span>
     </form>`;
 }
@@ -490,11 +569,11 @@ function Machine({ i, st }) {
     failed: img.error,
   })[img.state];
   return html`
-    <h3>This machine</h3>
+    <h3>This computer</h3>
     <dl>
       <dt>Docker</dt><${Mark} id="docker" ok=${st.docker.ok} text=${st.docker.ok ? 'running (' + st.docker.version + ')' : st.docker.reason || ''} />
       <dt>Sandbox image</dt><${Mark} id="image" ok=${img.state === 'ready'} text=${imageText || img.state} />
-      <dt>Hosting the agent</dt><${Mark} id="can-host" ok=${st.can_host} text=${st.can_host ? 'available' : 'unavailable: ' + st.reason} />
+      <dt>Running the AI</dt><${Mark} id="can-host" ok=${st.can_host} text=${st.can_host ? 'available' : 'unavailable: ' + st.reason} />
     </dl>
     <button type="button" id="recheck" onClick=${() => api('POST', '/api/recheck', { instance: i.id }).then(reload).catch((err) => { banner.value = err.message; })}>Check again</button>`;
 }
@@ -515,8 +594,8 @@ function Cap({ i, st }) {
   /** @param {string} k */
   const pick = (k) => (/** @type {any} */ e) => setSet({ ...set, [k]: e.currentTarget.value });
   return html`
-    <h3>Host cap</h3>
-    <p class="hint">A persona asking for more runs at this cap until you approve it in the room.</p>
+    <h3>Limit on models</h3>
+    <p class="hint">A persona asking for more runs at this limit until you approve it in the room.</p>
     <form id="settings-form" class="row" onSubmit=${save}>
       <label>Max model <select id="max-model" value=${set.max_model} onChange=${pick('max_model')}>
         <option value="">no cap</option>${d.models.map((m) => html`<option value=${m}>${m}</option>`)}</select></label>
@@ -553,7 +632,7 @@ function Egress({ i, st }) {
     save([...st.allowlist, domain.trim()]).then((ok) => { if (ok) setDomain(''); });
   };
   return html`
-    <h3>Egress allowlist</h3>
+    <h3>Websites the AI may reach</h3>
     <p class="hint">The sandbox reaches these domains, and nothing else, through its proxy and over HTTPS only. A leading dot, as in .example.com, also allows every subdomain. Anthropic's hosts stay blocked whatever the list says.</p>
     <ul id="allowlist">
       ${!st.allowlist.length && html`<li>No domain: the sandbox reaches nothing.</li>`}
@@ -563,10 +642,10 @@ function Egress({ i, st }) {
     <form id="allowlist-form" class="row" onSubmit=${add}>
       <label>Domain <input id="allowlist-add" required placeholder="example.com" size="30" autocomplete="off" spellcheck=${false}
         value=${domain} onInput=${(/** @type {any} */ e) => setDomain(e.currentTarget.value)} /></label>
-      <button type="submit">Allow</button>
+      <button type="submit">Add</button>
       <span id="allowlist-status" role="status">${text}</span>
     </form>
-    <h4 id="denied-title">Denied requests</h4>
+    <h4 id="denied-title">Blocked websites</h4>
     <p class="hint">What the proxy refused in the instance's sandboxes, newest first.</p>
     ${denied && denied.length ? html`<div class="scroll"><table id="denied" aria-labelledby="denied-title">
       <thead><tr><th scope="col">Time</th><th scope="col">Host</th></tr></thead>
@@ -584,19 +663,28 @@ function LimitsForm({ i }) {
   /** @param {Event} e */
   const save = (e) => {
     e.preventDefault();
-    if (busy && !confirm('A turn is running on this instance: restarting its worker fails it. Apply the limits now?')) return;
-    run(api('POST', '/api/limits', { instance: i.id, ...l }), 'Applied: the worker restarts.').then((ok) => { if (ok) setL(null); });
+    // Chrome fails a request in flight when Docker adds or removes the sandboxes' networks, as the
+    // restart does (ERR_NETWORK_CHANGED): the limits may have landed all the same.
+    const post = () => api('POST', '/api/limits', { instance: i.id, ...l }).catch(async (err) => {
+      if (!(err instanceof TypeError)) throw err;
+      const now = (await api('GET', '/api/status')).instances?.find((/** @type {Instance} */ x) => x.id === i.id)?.limits;
+      if (!now || Object.entries(l).some(([k, v]) => now[k] !== v)) throw err;
+    });
+    const apply = () => run(post(), 'Applied: the worker restarts.').then((ok) => { if (ok) setL(null); });
+    if (!busy) return apply();
+    window.grillConfirm('Apply the limits now?', 'An answer is running on this server: restarting its worker fails it.', 'Apply now')
+      .then((yes) => { if (yes) apply(); });
   };
   /** @param {'cpus' | 'memory' | 'egress_cpus' | 'egress_memory'} k @param {string} label @param {string} hint */
   const field = (k, label, hint) => html`<label>${label} <input id=${'limit-' + k.replace('_', '-')} size="6" autocomplete="off" spellcheck=${false}
     placeholder=${hint} value=${l[k]} onInput=${(/** @type {any} */ e) => setL({ ...l, [k]: e.currentTarget.value })} /></label>`;
   return html`
-    <h3>Resource limits</h3>
+    <h3>CPU and memory limits</h3>
     <p class="hint">Each sandbox and its egress proxy run within these CPUs and memory; 0 means no limit. Applying them restarts the instance's worker.</p>
     <form id="limits-form" class="row" onSubmit=${save}>
       ${field('cpus', 'Sandbox CPUs', '2')} ${field('memory', 'Sandbox memory', '4g')}
       ${field('egress_cpus', 'Egress proxy CPUs', '0.5')} ${field('egress_memory', 'Egress proxy memory', '256m')}
-      <button type="submit">Apply the limits</button>
+      <button type="submit">Save and restart</button>
       <span id="limits-status" role="status">${text}</span>
     </form>`;
 }
@@ -611,24 +699,25 @@ function Settings() {
   // LimitsForm stays out of the worker's settings: applying limits restarts the worker, and the
   // form's status line must outlive the restart.
   return html`<${Section} id="settings" title="Settings">
-    ${d.concurrency && html`<h3>This supervisor</h3>
+    ${d.concurrency && html`<div class="cards"><div class="card"><h3>Answers at once</h3>
       <${NumberForm} id="max-turns" label="Turns at once, across every instance and room" value=${d.concurrency.max_turns}
-        min=${1} max=${16} button="Set" path="/api/max-turns" field="max_turns" />
+        min=${1} max=${16} button="Save" path="/api/max-turns" field="max_turns" /></div>
+      <div class="card"><h3>History</h3>
       <${NumberForm} id="retention" label="Days the turn history keeps" value=${d.retention_days || 30} min=${1} max=${3650}
-        button="Keep" path="/api/retention" field="days" />
-      <${Autostart} />`}
-    <${Trust} />
+        button="Save" path="/api/retention" field="days" />
+      </div>
+      <div class="card"><h3>Start at login</h3><${Autostart} /></div></div>`}
     ${inst && html`<h3 id="instance-settings-title">Instance</h3>
       <p class="row"><label>Instance <select id="settings-instance" value=${id} onChange=${(/** @type {any} */ e) => { picked.value = e.currentTarget.value; }}>
         ${instances.map((i) => html`<option value=${i.id}>${i.url}</option>`)}
       </select></label></p>`}
     ${!inst ? html`<p class="hint">The instance settings show once you pair with a room.</p>`
-      : st ? html`<div key=${id} class="per-instance">
-        <${Machine} i=${inst} st=${st} />
-        <${Cap} i=${inst} st=${st} />
-        <${Egress} i=${inst} st=${st} />
+      : st ? html`<div key=${id} class="per-instance cards">
+        <div class="card"><${Machine} i=${inst} st=${st} /></div>
+        <div class="card"><${Cap} i=${inst} st=${st} /></div>
+        <div class="card"><${Egress} i=${inst} st=${st} /></div>
       </div>` : html`<p class="hint">The worker for ${inst.url} is ${inst.state}${inst.error ? ': ' + inst.error : ''}. Its settings show once it runs.</p>`}
-    ${inst && html`<${LimitsForm} key=${id} i=${inst} />`}
+    ${inst && html`<div class="card"><${LimitsForm} key=${id} i=${inst} /></div>`}
   <//>`;
 }
 
@@ -649,12 +738,16 @@ function App() {
   const live = d && !stopped.value;
   return html`
     <${Header} />
-    ${banner.value && html`<p id="banner" role="alert">${banner.value}</p>`}
-    ${live && html`<${Alerts} /><${RelaxBanner} /><${UpdateOffer} />`}
+    ${live && html`<${TabBar} />`}
+    ${banner.value && html`<p id="banner" role="alert">${sentence(banner.value)}</p>`}
+    ${live && html`<${RelaxBanner} />`}
     ${live && html`<main id="main">
-      <${Room} /><${Instances} /><${Rooms} /><${Accounts} /><${Settings} />
-      ${d.instances && html`<${Monitoring} instances=${d.instances} />`}
-      <${Logs} />
+      <${Panel} id="instances"><${Instances} /><//>
+      <${Panel} id="rooms"><${Room} /><${Rooms} /><//>
+      <${Panel} id="accounts"><${Accounts} /><//>
+      <${Panel} id="settings"><${Settings} /><//>
+      <${Panel} id="monitoring">${d.instances && html`<${Monitoring} instances=${d.instances} />`}<${Logs} /><//>
+      <${Panel} id="update"><${Section} id="update" title="Update"><${UpdateOffer} /><${Trust} /><//><//>
     </main>`}`;
 }
 

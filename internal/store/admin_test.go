@@ -171,7 +171,7 @@ func TestAuditWriteFailureRollsBackTheChange(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	p := seed(t, s, "a")
-	tpl, err := s.PublishTemplate(ctx, p.ProfileID, "Alice", "Critic", PersonaFields{Name: "Critic", Badge: "🧐", Colour: "#112233", Text: "v1"})
+	tpl, err := s.PublishTemplate(ctx, p.ProfileID, "Alice", "Critic", PersonaFields{Name: "Critic", Badge: "🧐", Colour: "#112233", Text: "v1", Model: "sonnet", Effort: "medium"})
 	if err != nil {
 		t.Fatal(err)
 	}

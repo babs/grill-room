@@ -23,8 +23,9 @@ import (
 	"time"
 )
 
-// Format is the archive format this code writes, and the newest it reads.
-const Format = 1
+// Format is the archive format this code writes, and the newest it reads. 2 adds the mention
+// chips and the deleted documents (005-AC4, 005-AC26); 1 still imports.
+const Format = 2
 
 // ManifestName is the manifest's path in the archive: its last entry.
 const ManifestName = "manifest.json"

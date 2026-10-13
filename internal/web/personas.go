@@ -64,11 +64,12 @@ func (q *personaReq) check() string {
 		}
 		*q.Text = t
 	}
-	if q.Model != nil && *q.Model != "" && !slices.Contains(turn.Models, *q.Model) {
-		return fmt.Sprintf("model must be empty for the host's default, or one of %v", turn.Models)
+	// 005-AC9: no "default" model or effort, which only the host could read.
+	if q.Model != nil && !slices.Contains(turn.Models, *q.Model) {
+		return fmt.Sprintf("model must be one of %v", turn.Models)
 	}
-	if q.Effort != nil && *q.Effort != "" && !slices.Contains(turn.Efforts, *q.Effort) {
-		return fmt.Sprintf("effort must be empty for the default, or one of %v", turn.Efforts)
+	if q.Effort != nil && !slices.Contains(turn.Efforts, *q.Effort) {
+		return fmt.Sprintf("effort must be one of %v", turn.Efforts)
 	}
 	if q.EveryN != nil && (*q.EveryN < 0 || *q.EveryN > maxEveryN) {
 		return fmt.Sprintf("every_n must be 0 (off) to %d", maxEveryN)
@@ -81,17 +82,10 @@ func (q *personaReq) check() string {
 
 // fields returns the persona the request describes in full; false when a field is missing.
 func (q *personaReq) fields() (store.PersonaFields, bool) {
-	if q.Name == nil || q.Badge == nil || q.Colour == nil || q.Text == nil {
+	if q.Name == nil || q.Badge == nil || q.Colour == nil || q.Text == nil || q.Model == nil || q.Effort == nil {
 		return store.PersonaFields{}, false
 	}
-	f := store.PersonaFields{Name: *q.Name, Badge: *q.Badge, Colour: *q.Colour, Text: *q.Text}
-	if q.Model != nil {
-		f.Model = *q.Model
-	}
-	if q.Effort != nil {
-		f.Effort = *q.Effort
-	}
-	return f, true
+	return store.PersonaFields{Name: *q.Name, Badge: *q.Badge, Colour: *q.Colour, Text: *q.Text, Model: *q.Model, Effort: *q.Effort}, true
 }
 
 // listTemplates shows the library to a room member, with the templates their profile published.
@@ -135,7 +129,7 @@ func (s *Server) publishTemplate(w http.ResponseWriter, r *http.Request, sess se
 	}
 	f, ok := req.fields()
 	if !ok {
-		httpError(w, http.StatusBadRequest, "name, badge, colour and text are required")
+		httpError(w, http.StatusBadRequest, "name, badge, colour, text, model and effort are required")
 		return
 	}
 	var t *store.Template

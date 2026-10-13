@@ -5,9 +5,11 @@ import { signIn, noOverflow } from './helpers.js';
 const admin = { Authorization: `Bearer ${adminToken}` };
 
 // 004-AC1: a wrong token is refused, and past 10 tries from one IP even the right one is, for 15
-// minutes. The browser gets an IP of its own: every other test signs in from 127.0.0.1.
-test('admin login refuses a wrong token, then rate-limits the IP', async ({ browser }) => {
-  const ctx = await browser.newContext({ extraHTTPHeaders: { 'X-Forwarded-For': '203.0.113.50' } });
+// minutes. The browser gets an IP of its own: every other test signs in from 127.0.0.1, and each
+// repeat or retry of this one from another, as the server and its limiter outlive them.
+test('admin login refuses a wrong token, then rate-limits the IP', async ({ browser }, info) => {
+  const ip = `203.0.113.${50 + info.repeatEachIndex * 10 + info.retry}`;
+  const ctx = await browser.newContext({ extraHTTPHeaders: { 'X-Forwarded-For': ip } });
   const page = await ctx.newPage();
   for (let i = 0; i < 10; i++) {
     expect(await signIn(page, 'wrong-' + i)).toBe(401);
@@ -37,7 +39,7 @@ test('admin sessions list and revoke', async ({ browser }) => {
   await expect(row).toHaveCount(0);
 
   expect((await bCtx.request.get('/api/admin/sessions')).status()).toBe(401);
-  await b.getByRole('link', { name: 'Audit log' }).click();
+  await b.getByRole('link', { name: 'Audit', exact: true }).click();
   await expect(b.getByLabel('Admin token')).toBeVisible();
   await expect(b.getByRole('alert')).toHaveText('Your session ended: sign in again.');
 
@@ -58,7 +60,7 @@ test('audit view shows real admin actions, filters, and fits a phone', async ({ 
 
   const page = await (await browser.newContext()).newPage();
   expect(await signIn(page)).toBe(201);
-  await page.getByRole('link', { name: 'Audit log' }).click();
+  await page.getByRole('link', { name: 'Audit', exact: true }).click();
   await page.locator('#audit-target').fill(room.id);
   await page.locator('#audit-target').press('Enter');
   const rows = page.locator('#audit tbody tr');
@@ -81,6 +83,8 @@ test('audit view shows real admin actions, filters, and fits a phone', async ({ 
   await expect(rows.first()).toContainText('"via":"session"');
 
   await page.setViewportSize({ width: 390, height: 844 });
+  // The tab bar scrolls sideways on a phone (005-AC35): every tab is a scroll away.
+  await page.getByRole('link', { name: 'Sessions' }).scrollIntoViewIfNeeded();
   await expect(page.getByRole('link', { name: 'Sessions' })).toBeInViewport();
   await expect(page.locator('#logout')).toBeInViewport();
   expect(await noOverflow(page)).toEqual([]);

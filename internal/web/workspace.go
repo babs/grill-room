@@ -75,6 +75,30 @@ type promptInput struct {
 	// AnnCursor is the last annotation message the persona's previous turn saw.
 	AnnCursor int64
 	Paths     map[int64]string
+	// Renamed are the workspace moves since the persona's last turn, "old → new" (005-AC25).
+	Renamed []string
+}
+
+// renamedPaths lists the documents of room renamed between the chat lines after and upTo, as
+// their workspace path moves, oldest first; a document deleted since is left out.
+func (s *Server) renamedPaths(ctx context.Context, room string, after, upTo int64, docs []store.Document) ([]string, error) {
+	rs, err := s.bus.Store.DocumentRenames(ctx, room, after)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, r := range rs {
+		i := slices.IndexFunc(docs, func(d store.Document) bool { return d.ID == r.DocumentID })
+		if i < 0 || r.LineID > upTo {
+			continue
+		}
+		old := docs[i]
+		old.Name = r.From
+		if from, to := textPath(old), textPath(docs[i]); from != to {
+			out = append(out, "`"+from+"` → `"+to+"`")
+		}
+	}
+	return out, nil
 }
 
 // ownMessage reports a thread message the persona self wrote.
@@ -141,6 +165,13 @@ func buildPrompt(in promptInput) string {
 		for _, a := range anns {
 			writeThread(&b, a, in.Paths, in.AnnCursor, in.Self)
 		}
+	}
+	if len(in.Renamed) > 0 {
+		b.WriteString("## Documents renamed since your last turn\n\nTheir old paths are gone from the workspace: use the new ones.\n\n")
+		for _, r := range in.Renamed {
+			b.WriteString("- " + r + "\n")
+		}
+		b.WriteString("\n")
 	}
 	if in.Handoff == store.HandoffWrite {
 		fmt.Fprintf(&b, "## Handoff\n\nThis is the last turn of your session: the host starts a new session for you after it, which remembers nothing of this one. Write %s for it: the decisions made, the current state, the open questions, and what to do next. The new session reads it, then transcript/.\n\n", doc)

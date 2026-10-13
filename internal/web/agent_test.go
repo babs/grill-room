@@ -78,7 +78,7 @@ func (e *env) waitAgent(t *testing.T, room, tok string, ok func(agentState) bool
 		if time.Now().After(deadline) {
 			t.Fatalf("agent state never matched: %+v", st)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) // polls the agent state, bounded by the deadline
 	}
 }
 
@@ -94,7 +94,7 @@ func TestHostElection(t *testing.T) {
 	alice, bob, carol := e.daemonFor(t, room, "Alice"), e.daemonFor(t, room, "Bob"), e.daemonFor(t, room, "Carol")
 	ch, _ := e.openStream(t, "/api/rooms/"+room+"/events", alice.p.Token, "")
 	first := decodeJSON[agentState](t, []byte(nextEvent(t, ch, "agent").data))
-	if first.Online || first.HostID != 0 || first.Reason != "No host daemon is connected." {
+	if first.Online || first.HostID != 0 || first.Reason != "No one runs the AI for this room right now." {
 		t.Fatalf("initial state %+v", first)
 	}
 
@@ -128,7 +128,7 @@ func TestHostElection(t *testing.T) {
 	alice.drop()
 	bob.drop()
 	off := e.waitAgent(t, room, alice.p.Token, hostIs(alice.p.Participant.ID, false))
-	if off.Reason != "No host daemon is connected." || len(off.Daemons) != 0 {
+	if off.Reason != "No one runs the AI for this room right now." || len(off.Daemons) != 0 {
 		t.Fatalf("offline state %+v", off)
 	}
 	msgs, _ := e.st.Messages(t.Context(), room, 0, 100)

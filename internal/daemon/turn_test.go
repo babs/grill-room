@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/babs/grill-room/internal/monitor"
 	"github.com/babs/grill-room/internal/sandbox"
 	"github.com/babs/grill-room/internal/skill"
 	"github.com/babs/grill-room/internal/store"
@@ -97,7 +98,6 @@ func pairedDaemon(t *testing.T, rs *roomServer, name string, ag *fakeAgent, set 
 	t.Helper()
 	participant, _ = rs.join(t, name)
 	d = newTestDaemon(t, dockerUp)
-	d.o.Model = "haiku"
 	d.o.NewAgent = func(Room, int, string, string) Agent { return ag }
 	for _, f := range set {
 		f(d)
@@ -175,7 +175,7 @@ func TestDaemonTurnsAndTakeover(t *testing.T) {
 			close(block)
 			return nil, ctx.Err()
 		}
-		if in.Model != "haiku" || in.Resume != "" || !strings.Contains(in.Prompt, "The code word is PAPRIKA") {
+		if in.Model != "sonnet" || in.Effort != "medium" || in.Resume != "" || !strings.Contains(in.Prompt, "The code word is PAPRIKA") {
 			return nil, errors.New("unexpected input")
 		}
 		if _, ok := files["transcript/"+time.Now().UTC().Format(time.DateOnly)+"/001.md"]; !ok {
@@ -190,7 +190,7 @@ func TestDaemonTurnsAndTakeover(t *testing.T) {
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/messages", alice, map[string]string{"body": "The code word is PAPRIKA."}, http.StatusCreated, nil)
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]bool{}, http.StatusCreated, nil)
 	waitFor(t, "turn 1 done", func() bool { v := rs.agent(t, alice); return v.Turn != nil && v.Turn.Status == "done" })
-	if m := rs.last(t); m.Body != "Noted." || m.Model != "haiku" {
+	if m := rs.last(t); m.Body != "Noted." || m.Model != "sonnet" || m.ModelMismatch {
 		t.Fatalf("synthesis %+v", m)
 	}
 	if docs, _ := rs.st.Documents(t.Context(), rs.room); len(docs) != 1 || docs[0].Name != "plan.md" || docs[0].Author != "Grill" {
@@ -225,10 +225,11 @@ func TestDaemonTurnsAndTakeover(t *testing.T) {
 	waitFor(t, "alice's sandbox closed", func() bool { agA.mu.Lock(); defer agA.mu.Unlock(); return agA.closed })
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", bob, map[string]bool{}, http.StatusCreated, nil)
 	waitFor(t, "turn 3 done", func() bool { v := rs.agent(t, bob); return v.Turn.Status == "done" })
-	if m := rs.last(t); m.Body != "PAPRIKA" || m.Model != "claude-opus-x" {
+	// 005-AC10: claude reports models but not the one asked for: the synthesis says so.
+	if m := rs.last(t); m.Body != "PAPRIKA" || m.Model != "sonnet" || !m.ModelMismatch || m.ModelNote != "opus 99%, claude-side-x <1%" {
 		t.Fatalf("synthesis %+v", m)
 	}
-	if done, _ := rs.st.LastDoneTurn(t.Context(), rs.room, rs.grill(t).ID); done.Model != "claude-opus-x" {
+	if done, _ := rs.st.LastDoneTurn(t.Context(), rs.room, rs.grill(t).ID); done.Model != "sonnet" {
 		t.Fatalf("turn model %q", done.Model)
 	}
 	if data, _ := rs.st.AgentSession(t.Context(), rs.room, rs.grill(t).ID, sid); string(data) != "line1\nline2\n" {
@@ -241,8 +242,7 @@ func TestDaemonTurnsAndTakeover(t *testing.T) {
 
 // 002-AC16 002-AC18: two personas in one room each keep their own session; after a takeover the
 // new host resumes each one's session, never the other's. Each turn gets its persona's text, the
-// model and effort it asks for (an empty model falls back to the daemon's), and its synthesis
-// carries them.
+// model and effort it asks for, and its synthesis carries them.
 func TestDaemonPersonasKeepTheirSessions(t *testing.T) {
 	rs := newRoomServer(t)
 	run := func(name string) func(ctx context.Context, in sandbox.TurnInput, _ map[string]string) (*sandbox.TurnOutput, error) {
@@ -281,7 +281,7 @@ func TestDaemonPersonasKeepTheirSessions(t *testing.T) {
 		}
 		return rs.last(t)
 	}
-	if m := press(alice, grill.ID); m.Body != "A new haiku/" || m.Sender != "Grill" || m.PersonaID != grill.ID || m.Model != "haiku" || m.Effort != "" {
+	if m := press(alice, grill.ID); m.Body != "A new sonnet/medium" || m.Sender != "Grill" || m.PersonaID != grill.ID || m.Model != "sonnet" || m.Effort != "medium" {
 		t.Fatalf("grill on A: %+v", m)
 	}
 	if m := press(alice, sec.ID); m.Body != "A new sonnet/low" || m.Sender != "Secretary" || m.Model != "sonnet" || m.Effort != "low" || m.Badge != "📝" {
@@ -333,7 +333,7 @@ func TestDaemonAutocompactAndContext(t *testing.T) {
 		}
 		res := &sandbox.Result{Result: "Done.", SessionID: sid}
 		if err := json.Unmarshal([]byte(`{"usage": {"input_tokens": 5, "cache_read_input_tokens": 150000, "cache_creation_input_tokens": 15000},
-			"modelUsage": {"claude-haiku-x": {"inputTokens": 7, "outputTokens": 9, "cacheReadInputTokens": 300000, "cacheCreationInputTokens": 15000,
+			"modelUsage": {"claude-sonnet-x": {"inputTokens": 7, "outputTokens": 9, "cacheReadInputTokens": 300000, "cacheCreationInputTokens": 15000,
 			"contextWindow": 200000}}, "total_cost_usd": 0.042}`), res); err != nil {
 			return nil, err
 		}
@@ -357,7 +357,7 @@ func TestDaemonAutocompactAndContext(t *testing.T) {
 		}
 		// 003-AC27: and what the supervisor's monitoring records.
 		if e.Persona != "Grill" || e.ContextTokens != 165_005 || e.ContextWindow != 200_000 || e.Cause != "pressed by Alice" ||
-			e.Model != "claude-haiku-x" || e.TokensIn != 7 || e.TokensOut != 9 || e.TokensCacheRead != 300_000 || e.TokensCacheWrite != 15_000 ||
+			e.Model != "sonnet" || e.ModelNote != "" || e.ModelMismatch || e.TokensIn != 7 || e.TokensOut != 9 || e.TokensCacheRead != 300_000 || e.TokensCacheWrite != 15_000 ||
 			e.CostUSD == nil || *e.CostUSD != 0.042 || e.WorkspaceBytes < 512 || e.Error != "" {
 			t.Fatalf("end event %+v", e)
 		}
@@ -502,25 +502,67 @@ func TestDaemonCutOff(t *testing.T) {
 	waitFor(t, "turn done", func() bool { v := rs.agent(t, alice); return v.Turn != nil && v.Turn.Status == "done" })
 }
 
+// 005-AC5: a turn stopped in the room cancels the agent's run with errStopped, posts no result,
+// and reports its end as stopped; the next turn runs.
+func TestDaemonStop(t *testing.T) {
+	rs := newRoomServer(t)
+	ag := &fakeAgent{}
+	started := make(chan struct{}, 1)
+	cause := make(chan error, 1)
+	ag.run = func(ctx context.Context, _ sandbox.TurnInput, _ map[string]string) (*sandbox.TurnOutput, error) {
+		if len(ag.inputs) == 1 {
+			started <- struct{}{}
+			<-ctx.Done()
+			cause <- context.Cause(ctx)
+			return nil, ctx.Err()
+		}
+		return &sandbox.TurnOutput{Result: &sandbox.Result{Result: "back", SessionID: sid}}, nil
+	}
+	ends := make(chan TurnEvent, 4)
+	alice, _, _ := pairedDaemon(t, rs, "Alice", ag, func(d *Daemon) {
+		d.o.OnTurn = func(e TurnEvent) {
+			if e.Phase == "end" {
+				ends <- e
+			}
+		}
+	})
+	var tn store.Turn
+	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]bool{}, http.StatusCreated, &tn)
+	<-started
+	rs.call(t, "POST", fmt.Sprintf("/api/rooms/%s/turns/%d/stop", rs.room, tn.ID), alice, struct{}{}, http.StatusNoContent, nil)
+	if err := <-cause; !errors.Is(err, errStopped) {
+		t.Fatalf("cause %v", err)
+	}
+	if e := <-ends; e.Error != errStopped.Error() || turnStatus(e.Error) != monitor.StatusStopped {
+		t.Fatalf("end %+v", e)
+	}
+	if m := rs.lastMessage(t); m != "Grill turn stopped by Alice." {
+		t.Fatalf("message %q", m)
+	}
+	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]bool{}, http.StatusCreated, nil)
+	waitFor(t, "turn done", func() bool { v := rs.agent(t, alice); return v.Turn != nil && v.Turn.Status == "done" })
+}
+
 // The model and effort a room asks for reach claude's argv only when claude knows them; anything
-// else falls back to the daemon's setting. 002-AC19 002-AC20: the cap clamps them, raised to what
-// the host approved, and an approval the room sent is sanitised like a request.
+// else, or none from a room server older than 005-AC9, leaves them to Claude Code. 002-AC19
+// 002-AC20: the cap clamps them, raised to what the host approved, and an approval the room sent
+// is sanitised like a request.
 func TestRunSettings(t *testing.T) {
-	d := &Daemon{o: Options{Model: "haiku"}, st: Status{Settings: Settings{MaxModel: "sonnet", MaxEffort: "high"}}}
+	d := &Daemon{st: Status{Settings: Settings{MaxModel: "sonnet", MaxEffort: "high"}}}
 	for _, c := range []struct {
 		model, effort      string
 		approved           turn.Level
 		wantModel, wantEff string
 		capped             bool
 	}{
-		{"", "", turn.Level{}, "haiku", "", false},
+		{"", "", turn.Level{}, "", "", false},
 		{"sonnet", "medium", turn.Level{}, "sonnet", "medium", false},
 		{"opus", "max", turn.Level{}, "sonnet", "high", true},
 		{"opus", "max", turn.Level{Model: "opus", Effort: "max"}, "opus", "max", false},
 		{"fable", "max", turn.Level{Model: "opus", Effort: "xhigh"}, "opus", "xhigh", true},
 		{"opus", "max", turn.Level{Model: "--verbose", Effort: "max;"}, "sonnet", "high", true},
-		{"--dangerously-skip-permissions", "--verbose", turn.Level{}, "haiku", "", false},
-		{"opus x", "high;", turn.Level{}, "haiku", "", false},
+		{"--dangerously-skip-permissions", "--verbose", turn.Level{}, "", "", false},
+		{"opus x", "high;", turn.Level{}, "", "", false},
 	} {
 		run, capped := d.runSettings(turn.Job{Model: c.model, Effort: c.effort, Approved: c.approved})
 		if run.Model != c.wantModel || run.Effort != c.wantEff || capped != c.capped {

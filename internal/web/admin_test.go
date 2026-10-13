@@ -279,7 +279,7 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 	if code, _ := e.do(t, "POST", "/api/rooms/"+room.ID+"/invites", tok, nil); code != http.StatusCreated {
 		t.Fatalf("member invite: %d", code)
 	}
-	tpl := map[string]any{"name": "Critic", "badge": "🧐", "colour": "#112233", "text": "Criticise."}
+	tpl := map[string]any{"name": "Critic", "badge": "🧐", "colour": "#112233", "text": "Criticise.", "model": "sonnet", "effort": "medium"}
 	code, b := e.do(t, "POST", "/api/rooms/"+room.ID+"/templates", tok, tpl)
 	if code != http.StatusCreated {
 		t.Fatalf("publish: %d %s", code, b)
@@ -332,10 +332,12 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 		t.Fatalf("entries: %+v", got)
 	}
 	// Every mutation action is exercised here; the admin.* ones, the room admins', the settings' and
-	// the archives' have their own tests (TestAuditLogViewAPI, TestRoomAdmins, TestRoomSkillsAPI,
-	// TestProfileCreatesRooms, TestProfileMaxRoomsAPI, TestExportImportAPI).
+	// the archives' and the renames' have their own tests (TestAuditLogViewAPI, TestRoomAdmins,
+	// TestRoomSkillsAPI, TestProfileCreatesRooms, TestProfileMaxRoomsAPI, TestExportImportAPI,
+	// TestRenameParticipant, TestDeleteDocument).
 	covered := map[string]bool{ActionRoomAdminAdd: true, ActionRoomAdminRemove: true, ActionRoomSkillRemove: true, ActionSettings: true,
-		ActionProfileMaxRooms: true, ActionRoomExport: true, ActionRoomImport: true}
+		ActionProfileMaxRooms: true, ActionRoomExport: true, ActionRoomImport: true, ActionRename: true, ActionDocumentDelete: true,
+		ActionDocumentRestore: true}
 	for _, w := range want {
 		covered[w.action] = true
 	}
@@ -424,7 +426,7 @@ func TestAuditPurgeLoop(t *testing.T) {
 	go func() { e.srv.PurgeAudit(loopCtx); close(done) }()
 	waitEntries := func(n int) {
 		t.Helper()
-		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) { // polls, bounded by the deadline
 			got, err := e.st.AuditLog(ctx, store.AuditQuery{Limit: 10})
 			if err != nil {
 				t.Fatal(err)
@@ -445,7 +447,7 @@ func TestAuditPurgeLoop(t *testing.T) {
 	clk.add(2 * 24 * time.Hour)
 	waitEntries(0)
 	// The expired session went with the same run, before any new login.
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) { // polls, bounded by the deadline
 		// Listed as of its creation, the session shows while its row exists.
 		if left, err := e.st.AdminSessions(ctx, created); err != nil || len(left) == 0 {
 			break
@@ -462,8 +464,8 @@ func TestAuditPurgeLoop(t *testing.T) {
 // the vendored modules are served.
 func TestAdminPage(t *testing.T) {
 	e := newEnv(t)
-	// The room page's admin panel is Preact too (004-AC19).
-	for _, path := range []string{"/admin", "/r/some-room"} {
+	// The room page's admin panel is Preact too (004-AC19); its docs window is the same page (005-AC11).
+	for _, path := range []string{"/admin", "/r/some-room", "/r/some-room/docs", "/r/some-room/docs/some-doc"} {
 		resp, err := http.Get(e.ts.URL + path) //nolint:noctx // test
 		if err != nil {
 			t.Fatal(err)

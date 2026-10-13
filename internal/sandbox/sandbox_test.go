@@ -478,8 +478,8 @@ func TestScanAndIsolated(t *testing.T) {
 	}
 }
 
-// The model a turn ran on is the one that wrote most of the answer: Claude Code calls a small model
-// on the side, and reports none when the run failed early.
+// The context window is the one of the model that wrote most of the answer: Claude Code calls a
+// small model on the side, and reports none when the run failed early.
 func TestResultModel(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{`{}`, ""},
@@ -579,6 +579,45 @@ func TestSandboxLabels(t *testing.T) {
 	}
 	if created != 7 {
 		t.Fatalf("%d objects created", created)
+	}
+}
+
+// 005-AC10: the label is the model asked for, checked against modelUsage, with every other model
+// and its cost share; a model asked for and not reported is a mismatch. Shapes as claude 2.1 reports
+// them: a single model, a session resumed on sonnet after haiku, haiku called on the side, a
+// mismatch, and the fake claude with no per-model cost.
+func TestResultLabel(t *testing.T) {
+	const haiku = `"claude-haiku-5-5": {"inputTokens": 2, "outputTokens": 4, "cacheReadInputTokens": 24885, "cacheCreationInputTokens": 0,
+		"webSearchRequests": 0, "costUSD": 0.00025105, "contextWindow": 1000000, "maxOutputTokens": 128000, "canonicalModel": "claude-haiku-5-5"}`
+	for name, tc := range map[string]struct {
+		in, asked, model, note string
+		mismatch               bool
+	}{
+		"no report":       {`{}`, "sonnet", "sonnet", "", false},
+		"single model":    {`{"modelUsage": {` + haiku + `}}`, "haiku", "haiku", "", false},
+		"older room":      {`{"modelUsage": {` + haiku + `}}`, "", "haiku", "", false},
+		"older room none": {`{}`, "", "", "", false},
+		// The orchestrator's real runs: the earlier model wrote more, the one asked for cost more.
+		"resumed on another model": {`{"modelUsage": {"claude-haiku-5-5": {"outputTokens": 812, "costUSD": 0.004},
+			"claude-sonnet-5-5": {"outputTokens": 40, "costUSD": 0.036}}}`, "sonnet", "sonnet", "+haiku 10%", false},
+		"background haiku": {`{"modelUsage": {"claude-opus-5-1": {"outputTokens": 900, "costUSD": 0.2955},
+			"claude-haiku-5-5": {"outputTokens": 30, "costUSD": 0.0045}}}`, "opus", "opus", "+haiku 2%", false},
+		"tiny share": {`{"modelUsage": {"claude-opus-5-1": {"costUSD": 1}, "claude-haiku-5-5": {"costUSD": 0.001}}}`, "opus", "opus", "+haiku <1%", false},
+		"same family twice": {`{"modelUsage": {"claude-sonnet-5-5": {"costUSD": 0.5}, "claude-sonnet-4-6": {"costUSD": 0.25},
+			"claude-haiku-5-5": {"costUSD": 0.25}}}`, "sonnet", "sonnet", "+haiku 25%", false},
+		"mismatch": {`{"modelUsage": {"claude-opus-5-1": {"outputTokens": 900, "costUSD": 0.97},
+			"claude-haiku-5-5": {"outputTokens": 30, "costUSD": 0.03}}}`, "sonnet", "sonnet", "opus 97%, haiku 3%", true},
+		"fake claude, by tokens": {`{"modelUsage": {"claude-sonnet-fake": {"inputTokens": 3, "outputTokens": 120, "cacheReadInputTokens": 400,
+			"cacheCreationInputTokens": 397}, "claude-side-fake": {"inputTokens": 50, "outputTokens": 3}}}`, "sonnet", "sonnet", "+claude-side-fake 5%", false},
+	} {
+		var r Result
+		if err := json.Unmarshal([]byte(tc.in), &r); err != nil {
+			t.Fatal(err)
+		}
+		model, note, mismatch := r.Label(tc.asked)
+		if model != tc.model || note != tc.note || mismatch != tc.mismatch {
+			t.Errorf("%s: Label(%q) = %q %q %v, want %q %q %v", name, tc.asked, model, note, mismatch, tc.model, tc.note, tc.mismatch)
+		}
 	}
 }
 

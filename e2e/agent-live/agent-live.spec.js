@@ -65,7 +65,7 @@ test('two personas, two real daemons: takeover resumes each persona\'s session',
       const syn = alice.locator('#messages li.msg.agent', { has: alice.locator('.meta strong', { hasText: name }) }).last();
       await expect(syn.locator('.meta strong')).toHaveText(`${badge} ${name}`);
       await expect(syn.locator('.model')).toContainText('haiku');
-      await expect(syn.locator('.effort')).toHaveText('effort default');
+      await expect(syn.locator('.effort')).toHaveText('effort medium');
     }
 
     await pairDaemon(bob, b);

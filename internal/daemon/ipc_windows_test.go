@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
@@ -58,5 +59,40 @@ func TestPipeServerOwner(t *testing.T) {
 	}
 	if err := checkProcessOwner(uint32(os.Getpid()), user.User.Sid); err != nil { //nolint:gosec // pids fit in 32 bits on Windows
 		t.Fatalf("own process refused: %v", err)
+	}
+}
+
+// Close returns even when a client hangs up while an Accept is pending: go-winio's own Close can
+// then wait forever, which once hung this package's test run for 10 minutes.
+func TestPipeCloseDuringHangup(t *testing.T) {
+	for i := range 50 {
+		dir := t.TempDir()
+		ln, err := listenLocal(context.Background(), dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				_ = c.Close()
+			}
+		}()
+		c, err := winio.DialPipeContext(context.Background(), pipeName(dir))
+		if err == nil {
+			go func() { _ = c.Close() }()
+		}
+		closed := make(chan struct{})
+		go func() {
+			_ = ln.Close()
+			close(closed)
+		}()
+		select {
+		case <-closed:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("round %d: Close did not return", i)
+		}
 	}
 }

@@ -225,52 +225,63 @@ func sttOf(t *testing.T, ev sseEvent) sttState {
 	return decodeJSON[sttState](t, []byte(ev.data))
 }
 
-// 001-AC10: the room learns when transcription goes away and when it comes back.
+// 001-AC10: the room learns when transcription goes away and when it comes back. 005-AC8: and whose
+// voices the workers transcribe, counted once over the workers, from those that say so.
 func TestSTTHeartbeatState(t *testing.T) {
-	oldTimeout, oldPoll := sttTimeout, sttPoll
-	sttTimeout, sttPoll = 300*time.Millisecond, 20*time.Millisecond
-	t.Cleanup(func() { sttTimeout, sttPoll = oldTimeout, oldPoll })
+	oldTimeout, oldPoll := sttTimeout, pollEvery
+	sttTimeout, pollEvery = 300*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { sttTimeout, pollEvery = oldTimeout, oldPoll })
 	e, _ := newVoiceEnv(t)
 	room := e.createRoom(t, "R")
 	p := e.join(t, e.createInvite(t, room.ID).Token, "A")
 	ev := e.openEvents(t, room.ID, p.Token, "")
 	nextMessage(t, ev)
-	if st := sttOf(t, next(t, ev)); st != (sttState{}) {
-		t.Fatalf("no worker yet: %+v", st)
-	}
-	beat := func(rooms ...string) {
+	expect := func(what string, want sttState) {
 		t.Helper()
-		if code, b := e.do(t, "POST", "/api/stt/heartbeat", sttToken, map[string]any{"worker": "w1", "rooms": rooms}); code != http.StatusNoContent {
+		if want.Transcribed == nil {
+			want.Transcribed = []int64{}
+		}
+		if st := sttOf(t, next(t, ev)); !st.equal(want) || st.Transcribed == nil {
+			t.Fatalf("%s: %+v, want %+v", what, st, want)
+		}
+	}
+	expect("no worker yet", sttState{})
+	beatAs := func(worker string, voices map[string][]int64, rooms ...string) {
+		t.Helper()
+		body := map[string]any{"worker": worker, "rooms": rooms}
+		if voices != nil {
+			body["voices"] = voices
+		}
+		if code, b := e.do(t, "POST", "/api/stt/heartbeat", sttToken, body); code != http.StatusNoContent {
 			t.Fatalf("heartbeat: %d %s", code, b)
 		}
 	}
+	beat := func(rooms ...string) { t.Helper(); beatAs("w1", nil, rooms...) }
 	beat()
-	if st := sttOf(t, next(t, ev)); st != (sttState{Available: true}) {
-		t.Fatalf("worker up, not in the room: %+v", st)
-	}
+	expect("worker up, not in the room", sttState{Available: true})
 	beat(room.ID)
-	if st := sttOf(t, next(t, ev)); st != (sttState{Available: true, Listening: true}) {
-		t.Fatalf("worker in the room: %+v", st)
-	}
+	expect("worker in the room", sttState{Available: true, Listening: true})
 	if n := e.srv.STTWorkers(); n != 1 {
 		t.Fatalf("workers %d", n)
 	}
-	// No heartbeat: the worker is gone once sttTimeout passes.
-	if st := sttOf(t, next(t, ev)); st != (sttState{}) {
-		t.Fatalf("worker gone: %+v", st)
-	}
+	beatAs("w1", map[string][]int64{room.ID: {99, p.Participant.ID}, "other": {9}}, room.ID)
+	expect("two voices", sttState{Available: true, Listening: true, Transcribed: []int64{p.Participant.ID, 99}})
+	beatAs("w2", map[string][]int64{room.ID: {99}}, room.ID)
+	beatAs("w1", map[string][]int64{room.ID: {99}}, room.ID)
+	expect("A's track gone, 99 on two workers", sttState{Available: true, Listening: true, Transcribed: []int64{99}})
+	// No heartbeat: the workers are gone once sttTimeout passes.
+	expect("workers gone", sttState{})
 	if n := e.srv.STTWorkers(); n != 0 {
 		t.Fatalf("workers after timeout %d", n)
 	}
 	beat(room.ID)
-	if st := sttOf(t, next(t, ev)); st != (sttState{Available: true, Listening: true}) {
-		t.Fatalf("worker back: %+v", st)
-	}
+	expect("worker back", sttState{Available: true, Listening: true})
 
 	for name, body := range map[string]any{
 		"no worker":   map[string]any{"rooms": []string{}},
 		"bidi worker": map[string]any{"worker": "a\u202eb"},
 		"many rooms":  map[string]any{"worker": "w", "rooms": make([]string, maxSTTRooms+1)},
+		"many voices": map[string]any{"worker": "w", "voices": map[string][]int64{"a": make([]int64, maxSTTVoices), "b": {1}}},
 	} {
 		if code, _ := e.do(t, "POST", "/api/stt/heartbeat", sttToken, body); code != http.StatusBadRequest {
 			t.Errorf("%s: %d", name, code)

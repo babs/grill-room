@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -140,8 +141,8 @@ func (e *env) join(t *testing.T, inviteToken, name string) joined {
 
 type sseEvent struct{ id, event, data string }
 
-// openEvents opens a room's event stream without its "agent" events, which tests of the agent read
-// with openAgentEvents; the channel closes when the server ends the stream.
+// openEvents opens a room's event stream without its "agent" and "presence" events, which their own
+// tests read; the channel closes when the server ends the stream.
 func (e *env) openEvents(t *testing.T, room, token, lastID string) <-chan sseEvent {
 	t.Helper()
 	ch, _ := e.openStream(t, "/api/rooms/"+room+"/events", token, lastID)
@@ -149,7 +150,7 @@ func (e *env) openEvents(t *testing.T, room, token, lastID string) <-chan sseEve
 	go func() {
 		defer close(out)
 		for ev := range ch {
-			if ev.event != "agent" {
+			if ev.event != "agent" && ev.event != "presence" {
 				out <- ev
 			}
 		}
@@ -698,4 +699,29 @@ func TestIconCopiesMatch(t *testing.T) {
 			t.Errorf("%s differs from %s: run make icons", p[0], p[1])
 		}
 	}
+}
+
+// 001-AC4: a room deleted between a stream's access check and its reads still ends the stream
+// with "revoked": the reads that fail then must not close it silently. CI once hit this race in
+// TestE2ERoomLifecycle; the hook makes it certain.
+func TestStreamRevokedWhenRoomGoesMidRead(t *testing.T) {
+	e := newEnv(t)
+	room := e.createRoom(t, "Doomed")
+	bob := e.join(t, e.createInvite(t, room.ID).Token, "Bob")
+	events := e.openEvents(t, room.ID, bob.Token, "")
+	if m := nextMessage(t, events); m.Body != "Bob joined" {
+		t.Fatalf("replay: %+v", m)
+	}
+	var once sync.Once
+	hook := func(string) {
+		once.Do(func() {
+			if err := e.st.DeleteRoom(context.Background(), room.ID); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	afterAccessCheck.Store(&hook)
+	t.Cleanup(func() { afterAccessCheck.Store(nil) })
+	e.bus.Notify(room.ID)
+	expectRevokedThenClosed(t, events)
 }

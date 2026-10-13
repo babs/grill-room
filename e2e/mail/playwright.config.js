@@ -49,6 +49,8 @@ export default defineConfig({
         GRILL_ROOM_SMTP_ADDR: `127.0.0.1:${mailpitSMTP}`,
         GRILL_ROOM_SMTP_FROM: 'grill-room <noreply@grill-room.invalid>',
         GRILL_ROOM_MAGIC_LINK_TTL: `${magicLinkTTL}s`,
+        // Specs send X-Forwarded-For as clients behind a proxy on loopback (005-AC20).
+        GRILL_ROOM_TRUSTED_PROXIES: '127.0.0.1',
         LOG_FORMAT: 'json',
       },
     },

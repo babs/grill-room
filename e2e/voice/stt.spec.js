@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { join as joinPath } from 'node:path';
-import { createRoom, invite, join, joinAudio, inboundAudio, launch, admin, fixture } from './helpers.js';
+import { createRoom, invite, join, joinAudio, inboundAudio, launch, admin, fixture, audioItem } from './helpers.js';
 
 const repo = new URL('../../', import.meta.url).pathname;
 const compose = (...args) => execFileSync('docker', ['compose', ...args], { cwd: repo, encoding: 'utf8' });
@@ -22,7 +22,7 @@ const voiceLines = (page) => page.locator('.msg.voice').evaluateAll((els) => els
 async function listener(browser, request, room) {
   const page = await join(browser, await invite(request, room.id), 'Bob');
   await joinAudio(page);
-  await expect(page.locator('#stt-status')).toHaveText('Transcribing', { timeout: 30_000 });
+  await expect(page.locator('#stt-status')).toHaveText(/^\d+ voices? (is|are) being written down/, { timeout: 30_000 });
   return page;
 }
 
@@ -114,7 +114,7 @@ test('leaving and rejoining the audio keeps every line under its speaker', async
     await joinAudio(carol);
     await expect.poll(sttTracks, { timeout: 15_000 }).toBe(2);
     // Carol's track goes away and its transceiver is free for the next one.
-    await carol.getByRole('button', { name: 'Leave audio' }).click();
+    await audioItem(carol, 'Leave audio');
     await expect.poll(sttTracks, { timeout: 15_000 }).toBe(1);
 
     const alice = await join(aliceBrowser, await invite(request, room.id), 'Alice');
@@ -126,7 +126,7 @@ test('leaving and rejoining the audio keeps every line under its speaker', async
     }).toBe(true);
 
     // Alice leaves and rejoins: her microphone restarts the fixture on a new track.
-    await alice.getByRole('button', { name: 'Leave audio' }).click();
+    await audioItem(alice, 'Leave audio');
     await expect.poll(sttTracks, { timeout: 15_000 }).toBe(1);
     await joinAudio(carol);
     await joinAudio(alice);
@@ -134,8 +134,8 @@ test('leaving and rejoining the audio keeps every line under its speaker', async
     await expect.poll(async () => (await voiceLines(bob)).filter((l) => overlap(words(l.body), words(first.text)) > 2).length, {
       timeout: (first.end + 15) * 1000,
     }).toBe(2);
-    // Let the second sentence through too, and any duplicate a stale listener would post.
-    await bob.waitForTimeout(12_000);
+    // The second sentence lands too.
+    await expect.poll(async () => (await voiceLines(bob)).length, { timeout: 30_000 }).toBeGreaterThan(2);
     const lines = await voiceLines(bob);
     console.log(JSON.stringify(lines, null, 1));
     expect(lines.length).toBeGreaterThan(2);
@@ -159,16 +159,15 @@ test('transcription down shows a banner, and lines resume when it is back', asyn
     await joinAudio(carol);
 
     compose('kill', 'stt');
-    await expect(bob.locator('#stt-status')).toHaveText('Transcription unavailable', { timeout: 30_000 });
+    await expect(bob.locator('#stt-status')).toHaveText('Voice-to-text is off', { timeout: 30_000 });
     const before = await inboundAudio(bob);
-    await bob.waitForTimeout(2000);
-    expect(await inboundAudio(bob)).toBeGreaterThan(before);
+    await expect.poll(() => inboundAudio(bob), { timeout: 30_000 }).toBeGreaterThan(before);
     await carol.getByLabel('Message').fill('still here');
     await carol.getByLabel('Message').press('Enter');
     await expect(bob.locator('.msg.text').last()).toContainText('still here');
 
     compose('start', 'stt');
-    await expect(bob.locator('#stt-status')).toHaveText('Transcribing', { timeout: 120_000 });
+    await expect(bob.locator('#stt-status')).toHaveText(/^\d+ voices? (is|are) being written down/, { timeout: 120_000 });
     aliceBrowser = await launch(fixture.wav);
     const alice = await join(aliceBrowser, await invite(request, room.id), 'Alice');
     await joinAudio(alice);

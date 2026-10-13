@@ -74,6 +74,25 @@ spec:
       ports:
         - { port: ${K8S_SMTP_PORT}, protocol: TCP }
 ---
+# Web Push to the browser vendors' push services (005-AC24). A policy cannot name hosts: HTTPS
+# anywhere, and the server itself posts only to the push services it allows (GRILL_ROOM_PUSH_HOSTS),
+# following no redirect.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: room-push
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grill-room
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - { port: 443, protocol: TCP }
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

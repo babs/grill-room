@@ -80,7 +80,7 @@ func TestEgressDocker(t *testing.T) {
 			if time.Now().After(deadline) {
 				t.Fatalf("CONNECT %s: %q, want %q", host, got, want)
 			}
-			time.Sleep(200 * time.Millisecond)
+			time.Sleep(200 * time.Millisecond) // polls the proxy, bounded by the deadline
 		}
 	}
 	// Squid listens a moment after its container starts.
@@ -89,7 +89,7 @@ func TestEgressDocker(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("the egress proxy never answered")
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond) // polls the proxy, bounded by the deadline
 	}
 
 	t.Run("tools", func(t *testing.T) {

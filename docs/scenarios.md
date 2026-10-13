@@ -48,7 +48,7 @@ participants:
     voices: {en: {model: en_US-joe-medium}, fr: {model: fr_FR-mls-medium, speaker: 84}}
 personas:
   # template: a preset key (secretary) or library title, for a persona the room lacks.
-  # effort (low to max) is optional; requests_per_turn: 1 with no tool, one more per round of
+  # effort (low to max) is optional, medium by default; requests_per_turn: 1 with no tool, one more per round of
   # tool calls. The budget comes from it.
   - {name: Grill, model: haiku, every_n: 0, requests_per_turn: 1}
 steps:

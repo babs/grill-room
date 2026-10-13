@@ -58,13 +58,10 @@ func knownAutocompact(n int) int {
 
 // runSettings is the one place where the model and effort a persona asks for become the ones its
 // turn runs with. The host cap, raised by what the host approved for the persona, clamps them
-// (002-AC19, 002-AC20); an empty model then falls back to this daemon's.
+// (002-AC19, 002-AC20). Personas always ask for both (005-AC9): only a room server older than that
+// sends neither, and Claude Code picks.
 func (d *Daemon) runSettings(job turn.Job) (run turn.Level, capped bool) {
-	run, capped = turn.Clamp(known(turn.Level{Model: job.Model, Effort: job.Effort}), d.Status().Settings.Limit(), known(job.Approved))
-	if run.Model == "" {
-		run.Model = d.o.Model
-	}
-	return run, capped
+	return turn.Clamp(known(turn.Level{Model: job.Model, Effort: job.Effort}), d.Status().Settings.Limit(), known(job.Approved))
 }
 
 // agent takes a free sandbox of the room for one turn, and returns it with the function that frees
@@ -151,7 +148,19 @@ func (r *roomRun) runTurn(ctx context.Context, tok string, id int64) {
 		r.d.turnEvent(ev)
 	}()
 	ids := strconv.FormatInt(id, 10)
-	jctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Cancellable from the start: a cut-off ends a turn still waiting for a slot, and a stop may
+	// come while the job is fetched.
+	cctx, cut := context.WithCancelCause(ctx)
+	defer cut(nil)
+	r.d.mu.Lock()
+	r.d.running[id] = cut
+	r.d.mu.Unlock()
+	defer func() {
+		r.d.mu.Lock()
+		delete(r.d.running, id)
+		r.d.mu.Unlock()
+	}()
+	jctx, cancel := context.WithTimeout(cctx, 30*time.Second)
 	resp, err := r.get(jctx, tok, "turns/"+ids)
 	if err == nil {
 		err = json.NewDecoder(resp.Body).Decode(&job)
@@ -162,22 +171,14 @@ func (r *roomRun) runTurn(ctx context.Context, tok string, id int64) {
 		log.Warn("turn_job_failed", zap.Error(err))
 		// Told now, the room frees the button instead of waiting for its timeout.
 		res.Error = "could not fetch the turn: " + err.Error()
+		if errors.Is(context.Cause(cctx), errCutOff) {
+			res.Error = errCutOff.Error()
+		}
 	} else {
 		timeout := time.Duration(job.TimeoutSeconds) * time.Second
 		if timeout <= 0 {
 			timeout = 15 * time.Minute
 		}
-		// Cancellable before the slot: a cut-off ends a turn still waiting for one.
-		cctx, cut := context.WithCancelCause(ctx)
-		defer cut(nil)
-		r.d.mu.Lock()
-		r.d.running[id] = cut
-		r.d.mu.Unlock()
-		defer func() {
-			r.d.mu.Lock()
-			delete(r.d.running, id)
-			r.d.mu.Unlock()
-		}()
 		release, waited, err := r.slot(cctx, tok, id)
 		queued = waited
 		switch {
@@ -205,6 +206,12 @@ func (r *roomRun) runTurn(ctx context.Context, tok string, id int64) {
 	if ctx.Err() != nil {
 		// The stream dropped: the room has failed the turn already.
 		log.Warn("turn_abandoned", zap.Error(ctx.Err()))
+		return
+	}
+	if errors.Is(context.Cause(cctx), errStopped) {
+		// The room ended the turn already and would refuse its result (005-AC5).
+		ended = errStopped.Error()
+		log.Info("turn_stopped")
 		return
 	}
 	pctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -306,11 +313,10 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 		plugin = resp.Body
 		r.d.o.Log.Info("turn_skills", zap.String("persona", job.Persona), zap.Any("skills", job.Skills))
 	}
-	model := run.Model
 	wsr := &countingReader{r: ws}
 	out, err := ag.RunTurn(ctx, sandbox.TurnInput{
 		Plugin: plugin, Bearer: px.Bearer, Autocompact: knownAutocompact(job.Autocompact),
-		Workspace: wsr, Prompt: job.Prompt, System: job.System, Model: model, Effort: run.Effort,
+		Workspace: wsr, Prompt: job.Prompt, System: job.System, Model: run.Model, Effort: run.Effort,
 		Resume: job.Resume, SessionSize: job.SessionSize, SessionSHA256: job.SessionSHA256,
 		FetchSession: func(ctx context.Context) ([]byte, error) {
 			resp, err := r.get(ctx, tok, "sessions/"+job.Resume)
@@ -325,14 +331,15 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 	if err != nil {
 		return turn.Result{Error: err.Error()}
 	}
-	// The model claude reports is the one that answered; the one asked for is a fallback.
-	if m := out.Result.Model(); m != "" {
-		model = m
+	model, note, mismatch := out.Result.Label(run.Model)
+	if mismatch {
+		r.d.o.Log.Warn("turn_model_mismatch", zap.String("persona", job.Persona), zap.String("asked", model), zap.String("reported", note))
 	}
-	ev.Model, ev.CostUSD = model, out.Result.TotalCostUSD
+	ev.Model, ev.ModelNote, ev.ModelMismatch, ev.CostUSD = model, note, mismatch, out.Result.TotalCostUSD
 	ev.TokensIn, ev.TokensOut, ev.TokensCacheRead, ev.TokensCacheWrite = out.Result.Tokens()
 	tokens, window := out.Result.Context()
-	return turn.Result{Synthesis: out.Result.Result, Model: model, Effort: run.Effort, Capped: capped, SessionID: out.Result.SessionID, SessionOffset: out.SessionOffset,
+	return turn.Result{Synthesis: out.Result.Result, Model: model, ModelNote: note, ModelMismatch: mismatch, Effort: run.Effort, Capped: capped,
+		SessionID: out.Result.SessionID, SessionOffset: out.SessionOffset,
 		Session: out.Session, Changes: out.Changes, ContextTokens: tokens, ContextWindow: window}
 }
 

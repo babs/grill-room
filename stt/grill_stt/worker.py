@@ -3,7 +3,7 @@
 import asyncio
 import contextlib
 import time
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Sequence
 from datetime import timedelta
 from typing import Any
 
@@ -36,11 +36,13 @@ class Worker:
         self._lk = lk
         self._identity = f"stt-{s.worker_name}"
         self.rooms: dict[str, rtc.Room] = {}
+        # The LiveKit room sid each room was listed with when joined.
+        self._sids: dict[str, str] = {}
         self._tracks: dict[str, set[asyncio.Task[None]]] = {}
-        # Open audio streams by track sid, with their participant's identity. LiveKit ends none of
-        # them when a track goes: the SFU hands the freed transceiver to the next track it sends,
-        # and a stream left open hears that newcomer under the old speaker's name (spike S5).
-        self._streams: dict[str, tuple[str, rtc.AudioStream]] = {}
+        # Open audio streams by track sid, with their participant's identity and room. LiveKit ends
+        # none of them when a track goes: the SFU hands the freed transceiver to the next track it
+        # sends, and a stream left open hears that newcomer under the old speaker's name (spike S5).
+        self._streams: dict[str, tuple[str, rtc.AudioStream, str]] = {}
         self._changed = asyncio.Event()
         self._background: set[asyncio.Task[None]] = set()
         ROOMS.set_function(lambda: len(self.rooms))
@@ -68,16 +70,40 @@ class Worker:
         while True:
             try:
                 resp = await self._lk.room.list_rooms(api.ListRoomsRequest())
-                for r in resp.rooms:
-                    if r.name not in self.rooms and r.num_participants > 0:
-                        await self._join(r.name)
+                await self.reconcile(resp.rooms)
             except Exception as e:  # LiveKit down: keep polling, it comes back
                 log.warning("discover_failed", error=str(e))
             await asyncio.sleep(self._s.poll_seconds)
 
-    async def _join(self, name: str) -> None:
+    async def reconcile(self, listed: Sequence[Any]) -> None:
+        """Drops the rooms LiveKit closed, then joins the ones with someone in them (005-AC18).
+
+        LiveKit can close an empty room without the SDK telling the worker, and a later join opens a
+        new room under the same name: a room gone from the list, under another sid, or no longer
+        connected is stale.
+        """
+        by_name = {r.name: r for r in listed}
+        for name, room in list(self.rooms.items()):
+            r = by_name.get(name)
+            sid = self._sids.get(name)
+            if r is None:
+                reason = "closed"
+            elif sid and r.sid != sid:
+                reason = "replaced"
+            elif not room.isconnected():
+                reason = "connection_lost"
+            else:
+                continue
+            self._forget(name, room, reason)
+            self._spawn(room.disconnect())
+        for r in listed:
+            if r.name not in self.rooms and r.num_participants > 0:
+                await self._join(r.name, r.sid)
+
+    async def _join(self, name: str, sid: str = "") -> None:
         room = rtc.Room()
         self.rooms[name] = room
+        self._sids[name] = sid
         self._tracks[name] = set()
         room.on("track_subscribed", lambda track, pub, p: self._on_track(name, track, pub, p))
         room.on("track_unsubscribed", lambda _track, pub, _p: self._close(pub.sid))
@@ -103,6 +129,7 @@ class Worker:
         if self.rooms.get(name) is not room:
             return
         del self.rooms[name]
+        self._sids.pop(name, None)
         for task in self._tracks.pop(name, set()):
             task.cancel()
         self._changed.set()
@@ -110,7 +137,7 @@ class Worker:
 
     def _on_participant_left(self, room: str, p: rtc.RemoteParticipant) -> None:
         # The Python SDK skips track_unsubscribed when the participant is already gone: close here too.
-        for sid in [sid for sid, (identity, _) in self._streams.items() if identity == p.identity]:
+        for sid in [sid for sid, (identity, _, _) in self._streams.items() if identity == p.identity]:
             self._close(sid)
         self._leave_if_alone(room)
 
@@ -118,6 +145,7 @@ class Worker:
         """Ends the stream of a track that went away; its listener flushes the speech in progress."""
         entry = self._streams.pop(sid, None)
         if entry is not None:
+            self._changed.set()
             self._spawn(entry[1].aclose())
 
     def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
@@ -138,7 +166,8 @@ class Worker:
             return
         self._close(pub.sid)  # a resubscription replaces the stream, never adds a second one
         stream = rtc.AudioStream(track, sample_rate=SR, num_channels=1, capacity=FRAME_CAPACITY)
-        self._streams[pub.sid] = (p.identity, stream)
+        self._streams[pub.sid] = (p.identity, stream, room)
+        self._changed.set()
         task = asyncio.create_task(self._listen(room, participant_id, pub.sid, stream))
         tasks = self._tracks.setdefault(room, set())
         tasks.add(task)
@@ -165,16 +194,25 @@ class Worker:
             log.exception("track_failed", room=room, participant=participant_id)
         finally:
             TRACKS.dec()
-            if self._streams.get(sid, (None, None))[1] is stream:
+            entry = self._streams.get(sid)
+            if entry is not None and entry[1] is stream:
                 del self._streams[sid]
+                self._changed.set()
             await stream.aclose()
             log.info("track_closed", room=room, participant=participant_id, track=sid)
 
+    def voices(self) -> dict[str, list[int]]:
+        """The participants whose track the worker is subscribed to, by room (005-AC8)."""
+        out: dict[str, set[int]] = {}
+        for identity, _, room in self._streams.values():
+            out.setdefault(room, set()).add(int(identity))
+        return {room: sorted(ids) for room, ids in out.items()}
+
     async def heartbeat(self) -> None:
-        """Tells the room server the worker is up and which rooms it hears, at once on every change."""
+        """Tells the room server the worker is up, which rooms and voices it hears, at once on a change."""
         while True:
             self._changed.clear()
-            await self._api.heartbeat(self._s.worker_name, sorted(self.rooms))
+            await self._api.heartbeat(self._s.worker_name, sorted(self.rooms), self.voices())
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._changed.wait(), self._s.heartbeat_seconds)
 

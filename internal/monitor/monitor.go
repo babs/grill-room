@@ -25,6 +25,7 @@ const (
 	StatusConflict = "conflict"
 	StatusExpired  = "expired"
 	StatusCutOff   = "cut off"
+	StatusStopped  = "stopped"
 )
 
 // Turn is one recorded turn. Day is At's date in At's location: the supervisor's local day.
@@ -40,16 +41,19 @@ type Turn struct {
 	AskedModel  string    `json:"asked_model"`
 	AskedEffort string    `json:"asked_effort"`
 	Model       string    `json:"model"`
-	Effort      string    `json:"effort"`
-	Cause       string    `json:"cause"`
-	DurationMS  int64     `json:"duration_ms"`
-	QueueMS     int64     `json:"queue_ms"`
-	Status      string    `json:"status"`
-	Error       string    `json:"error,omitempty"`
-	TokensIn    int64     `json:"tokens_in"`
-	TokensOut   int64     `json:"tokens_out"`
-	CacheRead   int64     `json:"tokens_cache_read"`
-	CacheWrite  int64     `json:"tokens_cache_write"`
+	// ModelNote and ModelMismatch qualify Model as the room's synthesis header does (005-AC10).
+	ModelNote     string `json:"model_note"`
+	ModelMismatch bool   `json:"model_mismatch"`
+	Effort        string `json:"effort"`
+	Cause         string `json:"cause"`
+	DurationMS    int64  `json:"duration_ms"`
+	QueueMS       int64  `json:"queue_ms"`
+	Status        string `json:"status"`
+	Error         string `json:"error,omitempty"`
+	TokensIn      int64  `json:"tokens_in"`
+	TokensOut     int64  `json:"tokens_out"`
+	CacheRead     int64  `json:"tokens_cache_read"`
+	CacheWrite    int64  `json:"tokens_cache_write"`
 	// CostUSD is claude's estimate; nil when it reported none.
 	CostUSD        *float64 `json:"cost_usd"`
 	ContextTokens  int64    `json:"context_tokens"`
@@ -96,6 +100,13 @@ CREATE INDEX turns_day ON turns (day);
 CREATE INDEX turns_persona ON turns (instance, room, persona, at);
 `
 
+// schemaV2 adds what qualifies a turn's model (005-AC10).
+const schemaV2 = `
+ALTER TABLE turns ADD COLUMN model_note TEXT NOT NULL DEFAULT '';
+ALTER TABLE turns ADD COLUMN model_mismatch INTEGER NOT NULL DEFAULT 0;
+PRAGMA user_version = 2;
+`
+
 // Open opens, creating it owner-only if needed, the history at path. now is the clock; nil is
 // time.Now.
 func Open(path string, now func() time.Time) (*DB, error) {
@@ -118,12 +129,29 @@ func Open(path string, now func() time.Time) (*DB, error) {
 	err = db.QueryRowContext(context.Background(), `PRAGMA user_version`).Scan(&version)
 	if err == nil && version == 0 {
 		_, err = db.ExecContext(context.Background(), schema+`PRAGMA user_version = 1;`)
+		version = 1
+	}
+	if err == nil && version == 1 {
+		err = upgrade(db, schemaV2)
 	}
 	if err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("monitor db schema: %w", err)
 	}
 	return &DB{db: db, now: now}, nil
+}
+
+// upgrade runs a schema change and its version bump all or nothing.
+func upgrade(db *sql.DB, change string) error {
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(context.Background(), change); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
 }
 
 // Close closes the database.
@@ -143,16 +171,16 @@ func clip(s *string) {
 func (d *DB) Record(ctx context.Context, t Turn) error {
 	t.At = d.now()
 	for _, s := range []*string{&t.Instance, &t.Room, &t.Persona, &t.Account, &t.AskedModel, &t.AskedEffort, &t.Model, &t.Effort,
-		&t.Cause, &t.Status, &t.Error} {
+		&t.Cause, &t.Status, &t.Error, &t.ModelNote} {
 		clip(s)
 	}
 	_, err := d.db.ExecContext(ctx, `INSERT INTO turns (at, day, instance, room, turn_id, persona, account, asked_model,
 		asked_effort, model, effort, cause, duration_ms, queue_ms, status, error, tokens_in, tokens_out, tokens_cache_read,
-		tokens_cache_write, cost_usd, context_tokens, context_window, workspace_bytes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		tokens_cache_write, cost_usd, context_tokens, context_window, workspace_bytes, model_note, model_mismatch)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.At.UnixMilli(), t.At.Format(time.DateOnly), t.Instance, t.Room, t.TurnID, t.Persona, t.Account, t.AskedModel, t.AskedEffort,
 		t.Model, t.Effort, t.Cause, t.DurationMS, t.QueueMS, t.Status, t.Error, t.TokensIn, t.TokensOut, t.CacheRead, t.CacheWrite,
-		t.CostUSD, t.ContextTokens, t.ContextWindow, t.WorkspaceBytes)
+		t.CostUSD, t.ContextTokens, t.ContextWindow, t.WorkspaceBytes, t.ModelNote, t.ModelMismatch)
 	if err != nil {
 		return fmt.Errorf("record turn: %w", err)
 	}
@@ -202,7 +230,7 @@ var ErrFilter = errors.New("bad filter")
 
 const turnCols = `id, at, day, instance, room, turn_id, persona, account, asked_model, asked_effort, model, effort, cause,
 	duration_ms, queue_ms, status, error, tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, cost_usd,
-	context_tokens, context_window, workspace_bytes`
+	context_tokens, context_window, workspace_bytes, model_note, model_mismatch`
 
 // Turns lists the turns f matches, newest first, at most limit of them; limit 0 lists them all.
 func (d *DB) Turns(ctx context.Context, f Filter, limit int) ([]Turn, error) {
@@ -225,7 +253,7 @@ func (d *DB) Turns(ctx context.Context, f Filter, limit int) ([]Turn, error) {
 		var at int64
 		if err := rows.Scan(&t.ID, &at, &t.Day, &t.Instance, &t.Room, &t.TurnID, &t.Persona, &t.Account, &t.AskedModel, &t.AskedEffort,
 			&t.Model, &t.Effort, &t.Cause, &t.DurationMS, &t.QueueMS, &t.Status, &t.Error, &t.TokensIn, &t.TokensOut, &t.CacheRead,
-			&t.CacheWrite, &t.CostUSD, &t.ContextTokens, &t.ContextWindow, &t.WorkspaceBytes); err != nil {
+			&t.CacheWrite, &t.CostUSD, &t.ContextTokens, &t.ContextWindow, &t.WorkspaceBytes, &t.ModelNote, &t.ModelMismatch); err != nil {
 			return nil, fmt.Errorf("list turns: %w", err)
 		}
 		t.At = time.UnixMilli(at).In(d.now().Location())
@@ -355,7 +383,7 @@ func (d *DB) Purge(ctx context.Context, retention time.Duration) (int64, error) 
 // csvHeader names WriteCSV's columns.
 var csvHeader = []string{"ended_at", "day", "instance", "room", "turn_id", "persona", "account", "asked_model", "asked_effort", "model",
 	"effort", "cause", "duration_ms", "queue_ms", "status", "error", "tokens_in", "tokens_out", "tokens_cache_read",
-	"tokens_cache_write", "cost_usd", "context_tokens", "context_window", "context_pct", "workspace_bytes"}
+	"tokens_cache_write", "cost_usd", "context_tokens", "context_window", "context_pct", "workspace_bytes", "model_note", "model_mismatch"}
 
 // WriteCSV writes ts as CSV, with a header line. An unknown cost or context is an empty cell.
 func WriteCSV(w io.Writer, ts []Turn) error {
@@ -375,7 +403,7 @@ func WriteCSV(w io.Writer, ts []Turn) error {
 		if err := cw.Write([]string{t.At.Format(time.RFC3339), t.Day, cell(t.Instance), cell(t.Room), n(t.TurnID), cell(t.Persona),
 			cell(t.Account), cell(t.AskedModel), cell(t.AskedEffort), cell(t.Model), cell(t.Effort), cell(t.Cause), n(t.DurationMS),
 			n(t.QueueMS), t.Status, cell(t.Error), n(t.TokensIn), n(t.TokensOut), n(t.CacheRead), n(t.CacheWrite), cost,
-			n(t.ContextTokens), n(t.ContextWindow), pct, n(t.WorkspaceBytes)}); err != nil {
+			n(t.ContextTokens), n(t.ContextWindow), pct, n(t.WorkspaceBytes), cell(t.ModelNote), strconv.FormatBool(t.ModelMismatch)}); err != nil {
 			return err
 		}
 	}

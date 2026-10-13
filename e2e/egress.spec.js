@@ -21,6 +21,7 @@ test('egress allowlist and denied requests on the daemon page', async ({ browser
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {
     const admin = await pairDaemon(alice, daemon);
+    await admin.locator('#tab-settings').click();
     const list = admin.locator('#allowlist');
     const status = admin.locator('#allowlist-status');
     for (const d of ['pypi.org', 'files.pythonhosted.org', 'github.com', 'registry.npmjs.org']) await expect(list).toContainText(d);
@@ -28,7 +29,7 @@ test('egress allowlist and denied requests on the daemon page', async ({ browser
 
     const add = async (domain) => {
       await admin.getByLabel('Domain').fill(domain);
-      await admin.getByRole('button', { name: 'Allow' }).click();
+      await admin.locator('#allowlist-form').getByRole('button', { name: 'Add' }).click();
     };
     for (const [bad, why] of [['*.example.com', 'no wildcards'], ['api.anthropic.com', 'Anthropic host'], ['https://example.com/x', 'not a domain name']]) {
       await add(bad);

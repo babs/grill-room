@@ -16,6 +16,8 @@ services:
       # Digest-pinned sandbox image advertised to daemons; empty lets each daemon build its own.
       GRILL_ROOM_SANDBOX_IMAGE: ${GRILL_ROOM_SANDBOX_IMAGE:-}
       # Magic links land in mailpit, whose inbox is on loopback port MAILPIT_PORT.
+      # traefik reaches the server through a docker bridge.
+      GRILL_ROOM_TRUSTED_PROXIES: ${GRILL_ROOM_TRUSTED_PROXIES:-172.16.0.0/12,192.168.0.0/16,10.0.0.0/8}
       GRILL_ROOM_SMTP_ADDR: mailpit:1025
       GRILL_ROOM_SMTP_FROM: noreply@grill-room.invalid
     ports:

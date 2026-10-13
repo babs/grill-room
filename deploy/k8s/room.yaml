@@ -70,6 +70,9 @@ spec:
                 secretKeyRef: { name: grill-room, key: stt-token }
             - name: GRILL_ROOM_SANDBOX_IMAGE
               value: "${GRILL_ROOM_SANDBOX_IMAGE}"
+            # The ingress controller's pod CIDR: its X-Forwarded-For names the client (005-AC20).
+            - name: GRILL_ROOM_TRUSTED_PROXIES
+              value: "${GRILL_ROOM_TRUSTED_PROXIES}"
             # Empty turns email sign-in off.
             - name: GRILL_ROOM_SMTP_ADDR
               value: "${GRILL_ROOM_SMTP_ADDR}"

@@ -355,11 +355,12 @@ func TestMagicLinkExpires(t *testing.T) {
 	e, box := newMailEnv(t, time.Second)
 	d := e.device(t)
 	d.join(t, e.createRoom(t, "A").ID, "Alice")
+	// The link is made on a clock 2 s behind: its 1 s is over when it is used.
+	e.srv.now = func() time.Time { return time.Now().Add(-2 * time.Second) }
 	if code, _ := d.do(t, "POST", "/api/profile/email", map[string]string{"email": "alice@example.com"}); code != http.StatusAccepted {
 		t.Fatalf("bind: %d", code)
 	}
 	_, tok := box.next(t)
-	time.Sleep(1100 * time.Millisecond)
 	if code, _ := d.do(t, "POST", "/api/profile/magic", map[string]string{"token": tok, "purpose": "bind"}); code != http.StatusUnauthorized {
 		t.Fatalf("expired link: %d", code)
 	}
@@ -428,25 +429,6 @@ func TestLimiterWindow(t *testing.T) {
 	}
 }
 
-func TestClientIP(t *testing.T) {
-	for _, tc := range []struct{ remote, xff, want string }{
-		{"203.0.113.1:5000", "", "203.0.113.1"},
-		{"203.0.113.1:5000", "198.51.100.9", "203.0.113.1"}, // a public peer is the client: its header is not trusted
-		{"10.0.0.5:5000", "198.51.100.9", "198.51.100.9"},
-		{"10.0.0.5:5000", "1.1.1.1, 198.51.100.9", "198.51.100.9"}, // the hop the proxy appended, not one the client wrote
-		{"127.0.0.1:5000", "garbage", "127.0.0.1"},
-		{"[::1]:5000", "2001:db8::1", "2001:db8::1"},
-	} {
-		r := &http.Request{RemoteAddr: tc.remote, Header: http.Header{}}
-		if tc.xff != "" {
-			r.Header.Set("X-Forwarded-For", tc.xff)
-		}
-		if got := clientIP(r); got != tc.want {
-			t.Errorf("%s %q: %s, want %s", tc.remote, tc.xff, got, tc.want)
-		}
-	}
-}
-
 // 002-AC5 004-AC3: a bound email reaches its owner and the admin's profiles view, never another
 // participant, nor any other admin view, even once its owner posted, published and was audited.
 func TestEmailStaysPrivate(t *testing.T) {
@@ -467,7 +449,7 @@ func TestEmailStaysPrivate(t *testing.T) {
 	if code, _ := alice.do(t, "POST", "/api/rooms/"+room.ID+"/messages", map[string]string{"body": "ping"}); code != http.StatusCreated {
 		t.Fatal("post")
 	}
-	critic := map[string]any{"name": "Critic", "badge": "🧐", "colour": "#112233", "text": "Find the flaw.", "title": "Critic"}
+	critic := map[string]any{"name": "Critic", "badge": "🧐", "colour": "#112233", "text": "Find the flaw.", "model": "sonnet", "effort": "medium", "title": "Critic"}
 	if code, b := alice.do(t, "POST", "/api/rooms/"+room.ID+"/templates", critic); code != http.StatusCreated {
 		t.Fatalf("publish: %d %s", code, b)
 	}
@@ -702,7 +684,7 @@ func TestSendFailureLogHidesTheAddress(t *testing.T) {
 		if line = logs.FilterMessage("magic_link_send_failed").All(); len(line) > 0 {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) // polls the log, bounded by the 50 rounds
 	}
 	if len(line) != 1 {
 		t.Fatal("no failure logged")

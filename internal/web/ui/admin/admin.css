@@ -1,45 +1,38 @@
-:root { --teal: #159f8c; --amber: #ffc23d; --ink: #1e2238; --paper: #f7f6f2; --line: #dedbd2; --muted: #6b6f80; --bad: #b3261e; font-family: system-ui, sans-serif; }
-body { margin: 0; color: var(--ink); background: var(--paper); overflow-wrap: anywhere; }
-header { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1rem; padding: 0.6rem 1rem; background: var(--teal); color: #fff; }
-header h1 { font-size: 1.1rem; margin: 0; }
-header nav { display: flex; flex-wrap: wrap; gap: 0.2rem 0.8rem; }
-header nav a { color: #fff; }
-header nav a[aria-current="page"] { font-weight: 700; }
-header button { margin-left: auto; }
-main { padding: 0 1rem 1rem; max-width: 72rem; }
-h2 { font-size: 1.05rem; margin: 1.2rem 0 0.4rem; }
-.login { max-width: 24rem; margin: 3rem auto; padding: 1rem; }
-.login label { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.6rem; }
-.said { min-height: 1.2em; font-size: 0.9rem; }
-.bad { color: var(--bad); }
-.hint { color: var(--muted); font-size: 0.85rem; margin: 0 0 0.6rem; }
-.row { display: flex; flex-wrap: wrap; align-items: end; gap: 0.4rem 1rem; margin: 0.3rem 0 0.6rem; }
-.row label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.85rem; }
+/* Layout of /admin. Colours, sizes and controls come from /static/kit/tokens.css (docs/design.md). */
+body { overflow-wrap: anywhere; }
+.app-header button { margin-left: auto; }
+main { max-width: 72rem; padding: 0 var(--sp-4) var(--sp-4); }
+h2 { font-size: var(--fs-lg); margin: var(--sp-5) 0 var(--sp-2); }
+h3 { font-size: var(--fs-md); margin: var(--sp-4) 0 var(--sp-1); }
+.login { max-width: 28rem; margin: var(--sp-7) auto; padding: var(--sp-4); }
+.login h1 { font-size: var(--fs-xl); }
+.login label { display: flex; flex-direction: column; gap: var(--sp-1); margin-bottom: var(--sp-3); font-size: var(--fs-sm); font-weight: 600; }
+.hint { margin: 0 0 var(--sp-3); }
+.row { display: flex; flex-wrap: wrap; align-items: end; gap: var(--sp-2) var(--sp-4); margin: var(--sp-1) 0 var(--sp-3); }
+.row label { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-sm); font-weight: 600; }
 .scroll { overflow-x: auto; max-width: 100%; }
-table { border-collapse: collapse; font-size: 0.85rem; }
-th, td { text-align: left; padding: 0.3rem 0.8rem 0.3rem 0; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: top; }
+th, td { white-space: nowrap; vertical-align: top; }
 td.wrap { white-space: normal; min-width: 10rem; max-width: 24rem; overflow-wrap: anywhere; }
-code { font-size: 0.8rem; }
-input, select, button { font: inherit; max-width: 100%; }
-@media (max-width: 40rem) {
-  main { padding: 0 0.6rem 1rem; }
-  header button { margin-left: 0; }
-}
-h3 { font-size: 0.95rem; margin: 1rem 0 0.3rem; }
-th button.sort { font: inherit; font-weight: 700; border: 0; background: none; padding: 0; cursor: pointer; color: inherit; }
+code { font-size: var(--fs-xs); }
+th button.sort { min-height: var(--control-h); min-width: var(--control-h); padding: 0; border: 0; background: none; color: inherit; font: inherit; font-weight: 600; }
 th[aria-sort="ascending"] button.sort::after { content: " ▲" / ""; }
 th[aria-sort="descending"] button.sort::after { content: " ▼" / ""; }
 meter { width: 4rem; vertical-align: middle; }
-dl { display: flex; flex-wrap: wrap; gap: 0.4rem 1.6rem; margin: 0.3rem 0 0.6rem; }
+dl { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-6); margin: var(--sp-1) 0 var(--sp-3); }
 dl div { min-width: 8rem; }
-dt { color: var(--muted); font-size: 0.8rem; }
+dt { color: var(--text-muted); font-size: var(--fs-sm); }
 dd { margin: 0; }
-#room-panel { margin-top: 1rem; padding: 0.2rem 1rem 0.8rem; border: 1px solid var(--line); background: #fff; }
-.link { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.85rem; margin-bottom: 0.6rem; }
-.link input { width: 100%; box-sizing: border-box; }
-button.danger:enabled { background: var(--bad); color: #fff; border: 1px solid var(--bad); }
-form.limit { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; min-width: 16rem; }
+#room-panel { margin-top: var(--sp-4); padding: var(--sp-1) var(--sp-4) var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg); }
+.list-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); margin: var(--sp-5) 0 var(--sp-2); }
+.list-head h2 { flex: 1; margin: 0; }
+#import-sheet .row label { display: flex; flex-direction: column; gap: var(--sp-1); }
+.link { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-sm); margin-bottom: var(--sp-3); }
+.link input { width: 100%; }
+form.limit { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); min-width: 16rem; }
 form.limit .hint { margin: 0; width: 100%; }
 form.limit input { width: 5rem; }
-.warn { background: #fff4d6; border-left: 3px solid var(--amber); padding: 0.4rem 0.6rem; font-size: 0.85rem; margin: 0 0 0.6rem; }
-a.button { display: inline-block; padding: 0.2rem 0.7rem; border: 1px solid var(--muted); border-radius: 3px; background: #efefef; color: inherit; text-decoration: none; }
+nav.tabs.views { position: sticky; top: 0; z-index: var(--z-sticky); margin: 0; padding: 0 var(--sp-4); background: var(--surface); }
+@media (max-width: 40rem) {
+  main { padding: 0 var(--sp-2) var(--sp-4); }
+  .app-header button { margin-left: 0; }
+}

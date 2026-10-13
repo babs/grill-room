@@ -66,6 +66,8 @@ type Participant struct {
 	ProfileUUID string `json:"-"`
 	// Admin tells that its profile administers the room (004-AC8). Set by Participants only.
 	Admin bool `json:"admin"`
+	// LastSeen is when the participant was last active (005-AC7). Set by Participants only.
+	LastSeen *time.Time `json:"last_seen_at,omitempty"`
 }
 
 // Message is one line in a room.
@@ -86,9 +88,13 @@ type Message struct {
 	PersonaID int64  `json:"persona_id,omitempty"`
 	Badge     string `json:"badge,omitempty"`
 	Colour    string `json:"colour,omitempty"`
-	// Model and Effort are what an agent synthesis ran with: the model as claude reported it.
-	Model  string `json:"model,omitempty"`
-	Effort string `json:"effort,omitempty"`
+	// Model and Effort are what an agent synthesis ran with. Since 005-AC10 the model is the one
+	// asked for, checked against claude's report, ModelNote and ModelMismatch as in turn.Result;
+	// before, the one claude reported.
+	Model         string `json:"model,omitempty"`
+	ModelNote     string `json:"model_note,omitempty"`
+	ModelMismatch bool   `json:"model_mismatch,omitempty"`
+	Effort        string `json:"effort,omitempty"`
 	// ReqModel and ReqEffort are what the persona asked for, set only when the host cap lowered
 	// them (002-AC19).
 	ReqModel  string     `json:"requested_model,omitempty"`
@@ -97,6 +103,14 @@ type Message struct {
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 	// ChangeSeq orders the room's edits and deletes: each one sets it past every other in the room.
 	ChangeSeq int64 `json:"change_seq,omitempty"`
+	// TurnID is the turn whose synthesis, failure or stop the message tells (005-AC4).
+	TurnID int64 `json:"-"`
+	// Named are the personas and members the line names with @name, as the server's rule reads it:
+	// the page draws them as chips (005-AC27).
+	Named []Named `json:"named,omitempty"`
+	// Mentions are where the turns this line's @mentions queued stand, as the event stream's
+	// replay sends them: the chips stay with a line however old (005-AC4).
+	Mentions []MentionState `json:"mentions,omitempty"`
 }
 
 // Store wraps the SQLite handle.
@@ -539,6 +553,93 @@ ALTER TABLE profiles ADD COLUMN max_rooms INTEGER CHECK (max_rooms IS NULL OR ma
 `, `
 -- 004-AC13: an imported participant whose profile uuid matches no profile here keeps it, unlinked.
 ALTER TABLE participants ADD COLUMN profile_uuid_hint TEXT;
+`, `
+-- 005-AC9: a persona always names its model and effort. Those left to the host run on sonnet,
+-- medium, held changes included; the triggers stand for a CHECK, which ALTER TABLE cannot add.
+UPDATE room_personas SET model = 'sonnet' WHERE model = '';
+UPDATE room_personas SET effort = 'medium' WHERE effort = '';
+UPDATE persona_template_versions SET model = 'sonnet' WHERE model = '';
+UPDATE persona_template_versions SET effort = 'medium' WHERE effort = '';
+UPDATE persona_change_requests SET patch = json_set(patch, '$.Model', 'sonnet') WHERE json_extract(patch, '$.Model') = '';
+UPDATE persona_change_requests SET patch = json_set(patch, '$.Effort', 'medium') WHERE json_extract(patch, '$.Effort') = '';
+CREATE TRIGGER room_personas_level_insert BEFORE INSERT ON room_personas WHEN NEW.model = '' OR NEW.effort = ''
+	BEGIN SELECT RAISE(ABORT, 'a persona needs a model and an effort'); END;
+CREATE TRIGGER room_personas_level_update BEFORE UPDATE OF model, effort ON room_personas WHEN NEW.model = '' OR NEW.effort = ''
+	BEGIN SELECT RAISE(ABORT, 'a persona needs a model and an effort'); END;
+CREATE TRIGGER persona_template_versions_level BEFORE INSERT ON persona_template_versions WHEN NEW.model = '' OR NEW.effort = ''
+	BEGIN SELECT RAISE(ABORT, 'a persona needs a model and an effort'); END;
+-- 005-AC10: the other models claude reported for a synthesis, or a mismatch with the one asked for.
+ALTER TABLE messages ADD COLUMN model_note TEXT NOT NULL DEFAULT '';
+ALTER TABLE messages ADD COLUMN model_mismatch INTEGER NOT NULL DEFAULT 0 CHECK (model_mismatch IN (0, 1));
+`, `
+-- 005-AC6, 005-AC20: when a participant was last active, and the client IP and user agent at join
+-- and at last activity, for the super-admin only. The retention purge clears the client fields.
+ALTER TABLE participants ADD COLUMN last_seen_at TEXT;
+ALTER TABLE participants ADD COLUMN join_ip TEXT;
+ALTER TABLE participants ADD COLUMN join_ua TEXT;
+ALTER TABLE participants ADD COLUMN last_ip TEXT;
+ALTER TABLE participants ADD COLUMN last_ua TEXT;
+`, `
+-- 005-AC23: the terms the STT worker is told to expect in the room.
+ALTER TABLE rooms ADD COLUMN stt_glossary TEXT NOT NULL DEFAULT '';
+`, `
+-- 005-AC5: a turn someone stopped. ALTER TABLE cannot change a CHECK, but loosening one in the
+-- stored schema is safe: no row on disk changes (sqlite.org/lang_altertable.html#otheralter).
+PRAGMA writable_schema = ON;
+UPDATE sqlite_schema SET sql = replace(sql, 'CHECK (status IN (''running'', ''done'', ''failed''))',
+	'CHECK (status IN (''running'', ''done'', ''failed'', ''stopped''))') WHERE type = 'table' AND name = 'turns';
+PRAGMA writable_schema = OFF;
+`, `
+-- 005-AC4: the turn a message's @mention queued: its queue entry, then the turn it became. Queue
+-- ids are never reused, and the entry is deleted as its turn starts, so queue_id has no key.
+CREATE TABLE message_turns (
+	message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+	persona_id INTEGER NOT NULL REFERENCES room_personas(id) ON DELETE CASCADE,
+	queue_id INTEGER,
+	turn_id INTEGER REFERENCES turns(id) ON DELETE SET NULL,
+	PRIMARY KEY (message_id, persona_id)
+);
+CREATE INDEX message_turns_queue ON message_turns(queue_id);
+CREATE INDEX message_turns_turn ON message_turns(turn_id);
+-- The turn whose synthesis, failure or stop a message tells.
+ALTER TABLE messages ADD COLUMN turn_id INTEGER REFERENCES turns(id) ON DELETE SET NULL;
+CREATE INDEX messages_turn ON messages(turn_id) WHERE turn_id IS NOT NULL;
+`, `
+-- 005-AC1: the name a profile chose for itself; NULL keeps the one it last joined a room with.
+ALTER TABLE profiles ADD COLUMN name TEXT;
+`, `
+-- 005-AC24: a participant's Web Push subscriptions, one per browser; they go with the participant
+-- and so with the room. all_messages opts in to every line, not only the default triggers.
+CREATE TABLE push_subscriptions (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	participant_id INTEGER NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+	endpoint TEXT NOT NULL,
+	p256dh TEXT NOT NULL,
+	auth TEXT NOT NULL,
+	all_messages INTEGER NOT NULL DEFAULT 0 CHECK (all_messages IN (0, 1)),
+	created_at TEXT NOT NULL,
+	UNIQUE (participant_id, endpoint)
+);
+`, `
+-- 005-AC25, 005-AC26: a document renamed or deleted, softly; change_seq moves the room's
+-- documents version on either. The renames tell the personas' next turns the old paths.
+ALTER TABLE documents ADD COLUMN deleted_at TEXT;
+ALTER TABLE documents ADD COLUMN change_seq INTEGER NOT NULL DEFAULT 0;
+-- A deleted agent document leaves its name to a new one; restoring it checks the name is free.
+DROP INDEX documents_agent_name;
+CREATE UNIQUE INDEX documents_agent_name ON documents(room_id, name) WHERE kind = 'agent' AND deleted_at IS NULL;
+CREATE TABLE document_renames (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+	message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+	from_name TEXT NOT NULL,
+	to_name TEXT NOT NULL,
+	created_at TEXT NOT NULL
+);
+CREATE INDEX document_renames_message ON document_renames(message_id);
+-- 005-AC4: an imported mention keeps how its turn ended, as the turn history stays behind.
+ALTER TABLE message_turns ADD COLUMN final_status TEXT CHECK (final_status IN ('done', 'failed', 'stopped', 'cancelled'));
+ALTER TABLE message_turns ADD COLUMN final_line_id INTEGER REFERENCES messages(id) ON DELETE SET NULL;
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -546,7 +647,7 @@ const uuidSQL = `lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' |
 	substr('89ab', 1 + abs(random() % 4), 1) || substr(hex(randomblob(2)), 2) || '-' || hex(randomblob(6)))`
 
 // migrationData runs Go code inside the transaction of the migration to version key, after its SQL.
-var migrationData = map[int]func(context.Context, *sql.Tx) error{9: migratePersonas}
+var migrationData = map[int]func(context.Context, *sql.Tx) error{9: migratePersonas, 24: migrateStopped}
 
 // Open opens (and migrates) the database at path.
 func Open(path string) (*Store, error) {
@@ -630,6 +731,24 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 		return fmt.Errorf("set setting %s: %w", key, err)
 	}
 	return nil
+}
+
+// LastMessageID is the newest line's id across rooms, 0 with none.
+func (s *Store) LastMessageID(ctx context.Context) (int64, error) {
+	var id int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM messages`).Scan(&id); err != nil {
+		return 0, fmt.Errorf("last message id: %w", err)
+	}
+	return id, nil
+}
+
+// SettingOrInit reads key, writing init first when it is absent: a key generated once, as the
+// VAPID key (005-AC24), keeps the first value written.
+func (s *Store) SettingOrInit(ctx context.Context, key, init string) (string, error) {
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO settings(key, value) VALUES(?,?) ON CONFLICT(key) DO NOTHING`, key, init); err != nil {
+		return "", fmt.Errorf("init setting %s: %w", key, err)
+	}
+	return s.Setting(ctx, key)
 }
 
 // CreateRoom inserts a room with the given id, and the Default template's persona (002-AC42).
@@ -951,7 +1070,7 @@ func (s *Store) ParticipantByToken(ctx context.Context, tokenHash string) (*Part
 func (s *Store) Participants(ctx context.Context, roomID string) ([]Participant, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger, COALESCE(p.profile_id, 0), COALESCE(f.uuid, ''),
-			EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = p.room_id AND a.profile_id = p.profile_id) FROM participants p
+			EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = p.room_id AND a.profile_id = p.profile_id), p.last_seen_at FROM participants p
 		JOIN invites i ON i.id = p.invite_id LEFT JOIN profiles f ON f.id = p.profile_id
 		WHERE p.room_id = ? AND i.revoked_at IS NULL ORDER BY p.id`, roomID)
 	if err != nil {
@@ -962,10 +1081,15 @@ func (s *Store) Participants(ctx context.Context, roomID string) ([]Participant,
 	for rows.Next() {
 		var p Participant
 		var joined string
-		if err := rows.Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID, &p.ProfileUUID, &p.Admin); err != nil {
+		var seen sql.NullString
+		if err := rows.Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID, &p.ProfileUUID, &p.Admin, &seen); err != nil {
 			return nil, fmt.Errorf("scan participant: %w", err)
 		}
 		p.JoinedAt = parseTS(joined)
+		if seen.Valid {
+			t := parseTS(seen.String)
+			p.LastSeen = &t
+		}
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -1004,8 +1128,10 @@ func insertMessage(ctx context.Context, db execer, m *Message) error {
 		m.HTML = render.MessageHTML(m.Body)
 	}
 	res, err := db.ExecContext(ctx,
-		`INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, html, model, effort, persona_id, req_model, req_effort) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-		m.RoomID, m.TS.Format(time.RFC3339Nano), m.Kind, pid, m.Sender, m.Body, nullStr(m.HTML), m.Model, m.Effort, nullID(m.PersonaID), m.ReqModel, m.ReqEffort)
+		`INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, html, model, effort, persona_id, req_model, req_effort, model_note, model_mismatch, turn_id)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		m.RoomID, m.TS.Format(time.RFC3339Nano), m.Kind, pid, m.Sender, m.Body, nullStr(m.HTML), m.Model, m.Effort, nullID(m.PersonaID), m.ReqModel, m.ReqEffort,
+		m.ModelNote, m.ModelMismatch, nullID(m.TurnID))
 	if err != nil {
 		return fmt.Errorf("insert message: %w", err)
 	}
@@ -1028,7 +1154,7 @@ func (s *Store) LastVoice(ctx context.Context, roomID string) (*Message, error) 
 const (
 	messageFields = `id, ts, room_id, kind, COALESCE(participant_id, 0), sender, body, COALESCE(html, ''), model, edited_at, deleted_at, change_seq,
 		COALESCE(persona_id, 0), effort, COALESCE((SELECT badge FROM room_personas WHERE id = messages.persona_id), ''),
-		COALESCE((SELECT colour FROM room_personas WHERE id = messages.persona_id), ''), req_model, req_effort`
+		COALESCE((SELECT colour FROM room_personas WHERE id = messages.persona_id), ''), req_model, req_effort, model_note, model_mismatch, COALESCE(turn_id, 0)`
 	messageCols = `SELECT ` + messageFields + ` FROM messages `
 )
 
@@ -1054,7 +1180,7 @@ func scanMessage(sc scanner, extra ...any) (*Message, error) {
 	var ts string
 	var edited, deleted sql.NullString
 	err := sc.Scan(append([]any{&m.ID, &ts, &m.RoomID, &m.Kind, &m.ParticipantID, &m.Sender, &m.Body, &m.HTML, &m.Model, &edited, &deleted, &m.ChangeSeq,
-		&m.PersonaID, &m.Effort, &m.Badge, &m.Colour, &m.ReqModel, &m.ReqEffort}, extra...)...)
+		&m.PersonaID, &m.Effort, &m.Badge, &m.Colour, &m.ReqModel, &m.ReqEffort, &m.ModelNote, &m.ModelMismatch, &m.TurnID}, extra...)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

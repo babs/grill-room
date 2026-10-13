@@ -41,8 +41,7 @@ async function assertAudio(pages, relay) {
   for (const [name, page] of Object.entries(pages)) {
     await expect.poll(() => inboundAudio(page), { timeout: 30_000 }).toBeGreaterThan(0);
     const before = await inboundAudio(page);
-    await page.waitForTimeout(3000);
-    expect(await inboundAudio(page)).toBeGreaterThan(before + 3000);
+    await expect.poll(() => inboundAudio(page), { timeout: 30_000 }).toBeGreaterThan(before + 3000);
     const st = await audioStats(page);
     console.log(`${name} receives:`, JSON.stringify(st));
     expect(st.packets).toBeGreaterThan(100);
@@ -77,7 +76,7 @@ test('grill session on the lab, audio over TURN/TLS', async ({ request, baseURL 
 
     // Bob listens first, so the worker is in the room when Alice's recorded speech starts.
     await joinAudio(bob);
-    await expect(bob.locator('#stt-status')).toHaveText('Transcribing', { timeout: 30_000 });
+    await expect(bob.locator('#stt-status')).toHaveText(/^\d+ voices? (is|are) being written down/, { timeout: 30_000 });
     await joinAudio(alice);
     await assertAudio({ alice, bob }, true);
     const first = fixture.utterances[0];

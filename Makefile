@@ -28,7 +28,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: ui-tools ui-vendor ui-check build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: ui-tools ui-vendor ui-check build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -82,6 +82,11 @@ e2e: build sandbox-fake-image
 	$(MAKE) release DIST=bin/e2e-release VERSION=$(VERSION)
 	cd e2e && pnpm install --frozen-lockfile && pnpm test && pnpm exec playwright test -c mail/playwright.config.js
 
+# CI's flake gate (tools/flake-gate.sh): the specs in SPECS, three times each, as `make e2e` runs them.
+e2e-repeat: build sandbox-fake-image
+	$(MAKE) release DIST=bin/e2e-release VERSION=$(VERSION)
+	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test --repeat-each=3 $(SPECS)
+
 # Voice tests against the compose stack behind the local traefik: run `make dev-up` first.
 e2e-voice:
 	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c voice/playwright.config.js
@@ -125,6 +130,17 @@ e2e-crossinstance: build
 # Magic links against the lab deployment and its mailpit (K8S_MAILPIT_URL in .env); no Claude request.
 e2e-lab-mail:
 	cd e2e && pnpm install --frozen-lockfile && GRILL_ROOM_E2E_LAB=1 pnpm exec playwright test -c mail/playwright.config.js
+
+# 005-AC24: a mention arrives as a real Web Push notification through the browser vendor's push
+# service, on the lab deployment (or PUSH_BASE). Push needs a headed Chrome: it runs under xvfb in
+# the Playwright image, with --network host so PUSH_BASE may be a local server. No Claude request.
+PLAYWRIGHT_IMAGE ?= mcr.microsoft.com/playwright:v1.64.0-noble
+e2e-push:
+	cd e2e && pnpm install --frozen-lockfile
+	docker run --rm --name grill-room-test-push --network host --cpus 2 -e HOME=/tmp -e PUSH_BASE -e PUSH_ADMIN_TOKEN \
+	  -v '$(CURDIR)/e2e':/repo/e2e:ro $(if $(wildcard .env),-v '$(CURDIR)/.env':/repo/.env:ro) -w /repo/e2e $(PLAYWRIGHT_IMAGE) \
+	  sh -c 'npx -y playwright@1.64.0 install chrome >/tmp/install.log 2>&1 || { tail -5 /tmp/install.log; exit 1; }; \
+	    xvfb-run -a npx playwright test -c push/playwright.config.js --output /tmp/out'
 
 # STT worker: lint, types and unit tests. The e2e-marked test runs too once the model is in the
 # Hugging Face cache, and skips otherwise.
@@ -247,7 +263,7 @@ KUBECTL        = kubectl -n '$(K8S_NAMESPACE)'
 # K8S_SMTP_PORT to the namespace K8S_SMTP_NAMESPACE, where the relay runs.
 K8S_SMTP_NAMESPACE ?= mailpit
 K8S_SMTP_PORT      ?= 1025
-K8S_OPTIONAL  := GRILL_ROOM_SANDBOX_IMAGE GRILL_ROOM_SMTP_ADDR GRILL_ROOM_SMTP_FROM K8S_SMTP_NAMESPACE K8S_SMTP_PORT
+K8S_OPTIONAL  := GRILL_ROOM_SANDBOX_IMAGE GRILL_ROOM_TRUSTED_PROXIES GRILL_ROOM_SMTP_ADDR GRILL_ROOM_SMTP_FROM K8S_SMTP_NAMESPACE K8S_SMTP_PORT
 # Exported to the render recipe only: no other recipe sees the secrets in its environment.
 $(foreach v,$(K8S_VARS) $(K8S_OPTIONAL),$(eval k8s-render: export $(v) := $$($(v))))
 
@@ -268,7 +284,7 @@ k8s-render:
 	rm -rf '$(K8S_OUT)' && (umask 077 && mkdir -p '$(K8S_OUT)')
 	@for f in deploy/k8s/*.yaml; do \
 	  (umask 077 && ROOM_HOST=grill-room.$$K8S_DOMAIN LIVEKIT_HOST=grill-room-livekit.$$K8S_DOMAIN TURN_HOST=grill-room-turn.$$K8S_DOMAIN \
-	    envsubst '$${K8S_STORAGE_CLASS} $${GRILL_ROOM_IMAGE} $${GRILL_STT_IMAGE} $${GRILL_ROOM_SANDBOX_IMAGE} $${GRILL_ROOM_SMTP_ADDR} $${GRILL_ROOM_SMTP_FROM} $${K8S_SMTP_NAMESPACE} $${K8S_SMTP_PORT} $${ROOM_HOST} $${LIVEKIT_HOST} $${TURN_HOST} $${GRILL_ROOM_ADMIN_TOKEN} $${STT_TOKEN} $${LIVEKIT_API_KEY} $${LIVEKIT_API_SECRET}' \
+	    envsubst '$${K8S_STORAGE_CLASS} $${GRILL_ROOM_IMAGE} $${GRILL_STT_IMAGE} $${GRILL_ROOM_SANDBOX_IMAGE} $${GRILL_ROOM_TRUSTED_PROXIES} $${GRILL_ROOM_SMTP_ADDR} $${GRILL_ROOM_SMTP_FROM} $${K8S_SMTP_NAMESPACE} $${K8S_SMTP_PORT} $${ROOM_HOST} $${LIVEKIT_HOST} $${TURN_HOST} $${GRILL_ROOM_ADMIN_TOKEN} $${STT_TOKEN} $${LIVEKIT_API_KEY} $${LIVEKIT_API_SECRET}' \
 	    < $$f > '$(K8S_OUT)'/$${f##*/}) || exit 1; \
 	done
 	@echo "rendered $(K8S_OUT): https://grill-room.$$K8S_DOMAIN/"

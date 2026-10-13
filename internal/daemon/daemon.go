@@ -39,8 +39,6 @@ type Options struct {
 	// room's first, the others serve its parallel turns (003-AC20). proxy is the address of the
 	// room's account proxy.
 	NewAgent func(r Room, slot int, image, proxy string) Agent
-	// Model is passed to claude --model when a persona asks for none; empty keeps Claude Code's default.
-	Model string
 	// Settings are the host cap and approval mode at start; SettingsPath is where the page saves
 	// them, "" to keep them in memory.
 	Settings     Settings
@@ -92,7 +90,9 @@ type Status struct {
 
 // RoomStatus is one served room's pairing, connection and turns.
 type RoomStatus struct {
-	Room       string `json:"room"`
+	Room string `json:"room"`
+	// Name is the room's name from the stream's hello, empty from a room server before 005-AC42.
+	Name       string `json:"name,omitempty"`
 	Pairing    string `json:"pairing"`
 	Code       string `json:"code,omitempty"`
 	ApproveURL string `json:"approve_url,omitempty"`
@@ -291,6 +291,20 @@ func (d *Daemon) Refresh(ctx context.Context) {
 
 // errCutOff ends the turns of a worker the host cut off (003-AC15). Its text reaches the room.
 var errCutOff = errors.New("the host cut this agent off from Claude for now")
+
+// errStopped ends a turn someone stopped in the room (005-AC5).
+var errStopped = errors.New("stopped in the room")
+
+// stopTurn kills turn id's claude, or ends it while it waits, when the room stopped it; a turn this
+// daemon no longer runs is left alone.
+func (d *Daemon) stopTurn(id int64) {
+	d.mu.Lock()
+	cut := d.running[id]
+	d.mu.Unlock()
+	if cut != nil {
+		cut(errStopped)
+	}
+}
 
 // SetAccess takes the rooms' proxies the supervisor hands out. Cutting off ends the running turns.
 func (d *Daemon) SetAccess(a Access) {
@@ -664,13 +678,14 @@ func (r *roomRun) stream(ctx context.Context, tok string) error {
 			event = line[len("event: "):]
 		case strings.HasPrefix(line, "data: ") && event == "hello":
 			var h struct {
-				Heartbeat int `json:"heartbeat_seconds"`
+				Heartbeat int    `json:"heartbeat_seconds"`
+				RoomName  string `json:"room_name"`
 			}
 			if json.Unmarshal([]byte(line[len("data: "):]), &h) == nil && h.Heartbeat > 0 {
 				silence = 3 * time.Duration(h.Heartbeat) * time.Second
 				watchdog.Reset(silence)
 			}
-			r.update(func(s *RoomStatus) { s.Connection, s.Error = "connected", "" })
+			r.update(func(s *RoomStatus) { s.Connection, s.Error, s.Name = "connected", "", h.RoomName })
 			d.o.Log.Info("room_connected", zap.String("room", room.String()))
 			wg.Go(func() { r.heartbeat(ctx, tok) })
 			// A reconnect often follows a room server upgrade: ask again what it hands out.
@@ -681,6 +696,13 @@ func (r *roomRun) stream(ctx context.Context, tok string) error {
 			}
 			if json.Unmarshal([]byte(line[len("data: "):]), &t) == nil && r.takeTurn(t.ID) {
 				wg.Go(func() { r.runTurn(ctx, tok, t.ID) })
+			}
+		case strings.HasPrefix(line, "data: ") && event == "stop":
+			var t struct {
+				ID int64 `json:"id"`
+			}
+			if json.Unmarshal([]byte(line[len("data: "):]), &t) == nil {
+				d.stopTurn(t.ID)
 			}
 		case strings.HasPrefix(line, "data: ") && event == "room":
 			var info struct {

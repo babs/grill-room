@@ -1,53 +1,55 @@
-:root { --line: #d8d2c8; --amber: #f4b942; --bad: #b3261e; --good: #1e7b34; font-family: system-ui, sans-serif; }
-body { margin: 0; color: #222; background: #fbf8f3; overflow-wrap: anywhere; }
-header { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1rem; padding: 0.6rem 1rem; border-bottom: 1px solid var(--line); }
-header h1 { font-size: 1.1rem; margin: 0; }
-header nav { display: flex; flex-wrap: wrap; gap: 0.2rem 0.8rem; font-size: 0.9rem; }
-header button { margin-left: auto; }
-#banner, #update, #alerts { margin: 0; padding: 0.6rem 1rem; background: var(--amber); }
-#alerts { padding-left: 2.2rem; }
-#alerts .alert-unsigned { font-weight: 600; }
-#relax-banner, .danger { background: var(--bad); color: #fff; }
-#relax-banner { margin: 0; padding: 0.6rem 1rem; font-weight: 600; }
-main { padding: 0 1rem 1rem; max-width: 72rem; }
-h2 { font-size: 1.05rem; margin: 1.4rem 0 0.4rem; padding-top: 0.4rem; border-top: 1px solid var(--line); }
-h3 { font-size: 0.95rem; margin: 1rem 0 0.3rem; }
-h4 { font-size: 0.9rem; margin: 0.8rem 0 0.3rem; }
-dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1rem; margin: 0 0 0.6rem; }
+/* Layout of the daemon's page. Colours, sizes and controls come from /static/kit/tokens.css
+   (docs/design.md). */
+body { overflow-wrap: anywhere; }
+.app-header button { margin-left: auto; }
+#banner, #update, .alerts { margin: 0; padding: var(--sp-2) var(--sp-4); background: var(--warning-bg); }
+#update { margin-top: var(--sp-2); }
+.alerts { margin: var(--sp-2) 0 0; padding-left: var(--sp-7); }
+.alerts .alert-unsigned { font-weight: 600; }
+/* The tab bar stays pinned while the page scrolls (005-AC17). */
+#tabs { position: sticky; top: 0; z-index: var(--z-sticky); padding: 0 var(--sp-4); background: var(--surface); }
+.tab-badge { display: inline-block; min-width: 1.2em; padding: 0 var(--sp-1); border-radius: var(--r-pill); background: var(--danger); color: var(--on-danger); font-size: var(--fs-xs); text-align: center; }
+.panel > section:first-of-type > h2, .panel > .alerts + section > h2 { border-top: 0; }
+#relax-banner { margin: 0; padding: var(--sp-2) var(--sp-4); background: var(--danger-bg); color: var(--danger); font-weight: 600; }
+main { max-width: 72rem; padding: 0 var(--sp-4) var(--sp-4); }
+h2 { font-size: var(--fs-lg); margin: var(--sp-5) 0 var(--sp-2); padding-top: var(--sp-2); border-top: 1px solid var(--border); }
+h3 { font-size: var(--fs-md); margin: var(--sp-4) 0 var(--sp-1); }
+h4 { font-size: var(--fs-sm); margin: var(--sp-3) 0 var(--sp-1); }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: var(--sp-1) var(--sp-4); margin: 0 0 var(--sp-3); }
 dt { font-weight: 600; }
 dd { margin: 0; overflow-wrap: anywhere; }
-ul { margin: 0 0 0.6rem; padding-left: 1.2rem; }
-li { margin: 0.3rem 0; }
+ul { margin: 0 0 var(--sp-3); padding-left: var(--sp-5); }
+li { margin: var(--sp-1) 0; }
 code { overflow-wrap: anywhere; }
-.ok { color: var(--good); }
-.bad { color: var(--bad); }
-.hint { margin: 0 0 0.4rem; color: #666; font-size: 0.85rem; }
-.row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1rem; }
-form.row { margin: 0.3rem 0; }
-#key-form label { display: flex; flex-direction: column; gap: 0.2rem; }
+.hint { margin: 0 0 var(--sp-2); }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-4); }
+.row label { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); }
+form.row { margin: var(--sp-1) 0; }
+#key-form label { display: flex; flex-direction: column; align-items: stretch; gap: var(--sp-1); }
 #key-pem { width: min(32rem, 90vw); }
-#code { font-size: 1.2rem; letter-spacing: 0.1em; }
-pre { background: #fff; border: 1px solid var(--line); padding: 0.5rem; max-height: 20rem; overflow: auto; font-size: 0.8rem; white-space: pre-wrap; }
-.badge { padding: 0.1rem 0.5rem; border-radius: 0.8rem; font-size: 0.8rem; border: 1px solid var(--line); white-space: nowrap; }
-.badge.ok { border-color: var(--good); }
-.badge.bad, .badge.danger { border-color: var(--bad); }
+#code { font-size: var(--fs-xl); letter-spacing: .1em; }
+pre { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); padding: var(--sp-2); max-height: 20rem; overflow: auto; font-size: var(--fs-xs); white-space: pre-wrap; }
 .badge.danger { font-weight: 600; }
-.instance { padding: 0.4rem 0; border-bottom: 1px dashed var(--line); }
-.instance.current > .row > code { font-weight: 700; }
-.relax, .account-map { font-size: 0.85rem; margin: 0.2rem 0; }
-.said { font-size: 0.85rem; }
-.rooms { font-size: 0.9rem; }
-.room-state { color: #444; }
+.instance { padding: var(--sp-2) 0; border-bottom: 1px dashed var(--border); }
+.instance.current > .row > code { font-weight: 600; }
+.relax, .account-map { font-size: var(--fs-sm); margin: var(--sp-1) 0; }
+.rooms { font-size: var(--fs-sm); }
+.room-state { color: var(--text-muted); }
 .scroll { overflow-x: auto; max-width: 100%; }
-table { border-collapse: collapse; font-size: 0.85rem; }
-th, td { text-align: left; padding: 0.25rem 0.8rem 0.25rem 0; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: top; }
+th, td { white-space: nowrap; vertical-align: top; }
 td.wrap { white-space: normal; min-width: 10rem; max-width: 20rem; overflow-wrap: anywhere; }
-tr.status-failed td, tr.status-conflict td, tr.status-expired td, tr.status-cut-off td { color: var(--bad); }
-input, select, textarea, button { font: inherit; max-width: 100%; }
+tr.status-failed td, tr.status-conflict td, tr.status-expired td, tr.status-cut-off td { color: var(--danger); }
 .row > * { max-width: 100%; min-width: 0; }
 select { text-overflow: ellipsis; }
 @media (max-width: 40rem) {
-  main { padding: 0 0.6rem 1rem; }
-  header button { margin-left: 0; }
-  label { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; }
+  main { padding: 0 var(--sp-2) var(--sp-4); }
+  .app-header button { margin-left: 0; }
 }
+/* Settings: one card per topic, one Save each (005-AC42). */
+.card { margin: var(--sp-3) 0; }
+.card h3 { margin-top: 0; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr)); gap: var(--sp-3); }
+.cards .card { margin: 0; }
+.room-card { list-style: none; }
+.room-card .row { margin-top: var(--sp-1); }
+ul.rooms { padding-left: 0; }

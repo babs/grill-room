@@ -1,12 +1,12 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon, upload } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, upload, menuItem, stopDaemon, confirmSheet, unfold } from './helpers.js';
 
 const led = (page) => page.locator('button.persona[data-name="Grill"] .led');
 const press = (page) => page.getByRole('button', { name: 'Ask Grill' });
 // newSession is the host's button for a persona, in the personas panel.
-const newSession = (page) => page.getByRole('button', { name: 'Start a new session for Grill' });
+const newSession = (page) => page.getByRole('button', { name: 'Start fresh for Grill' });
 async function withPanel(page, fn) {
-  await page.getByRole('button', { name: 'Personas' }).click();
+  await menuItem(page, 'Personas');
   await fn(page.locator('#personas'));
   await page.locator('#personas').getByRole('button', { name: 'Close' }).click();
 }
@@ -23,7 +23,7 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
     await expect(led(p)).toHaveAttribute('aria-label', 'Grill offline');
     await expect(led(p)).not.toHaveClass(/\bon\b/);
     await expect(press(p)).toBeDisabled();
-    await expect(p.locator('#agent-status')).toHaveText('No host daemon is connected.');
+    await expect(p.locator('#agent-status')).toHaveText('No one runs the AI for this room right now.');
   }
   // Transcripts keep recording with the agent off.
   await bob.locator('#body').fill('Still talking.');
@@ -40,13 +40,16 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
     await expect(alice.locator('#participants li', { hasText: 'Alice' }).locator('.host-badge')).toHaveText('host');
     await expect(press(alice)).toBeEnabled();
     await expect(press(bob)).toBeDisabled();
-    await withPanel(alice, () => expect(newSession(alice)).toBeVisible());
+    await withPanel(alice, async (panel) => {
+      await unfold(panel.locator('.persona-form').first(), 'more');
+      await expect(newSession(alice)).toBeVisible();
+    });
     await withPanel(bob, async (panel) => {
       await expect(panel.locator('.persona-form')).toHaveCount(1);
       await expect(newSession(bob)).toHaveCount(0);
     });
     // Only the host sees the rights controls.
-    await expect(bob.getByLabel('Let Alice press the agent button')).toHaveCount(0);
+    await expect(bob.getByLabel('Let Alice ask the AI')).toHaveCount(0);
 
     // A refused press says why, even with the agent online.
     await alice.route('**/turns', (r) => r.fulfill({ status: 409, contentType: 'application/json', body: '{"error":"turn in progress"}' }));
@@ -54,37 +57,43 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
     await expect(alice.locator('#agent-status')).toHaveText('turn in progress');
     await alice.unroute('**/turns');
 
-    await alice.getByLabel('Let Bob press the agent button').check();
+    await alice.getByLabel('Let Bob ask the AI').check();
     await expect(press(bob)).toBeEnabled();
     await press(bob).click();
-    await expect(led(alice)).toHaveAttribute('aria-label', 'Grill working');
+    await expect(led(alice)).toHaveAttribute('aria-label', 'Grill answering');
     for (const p of [alice, bob]) {
       await expect(p.locator('#messages li.msg.agent').last()).toContainText('Wrote docs/notes.md, turn 1.', { timeout: 60_000 });
-      // The fake claude reports the model like claude -p: the one that wrote most, not its side model.
-      await expect(p.locator('#messages li.msg.agent').last().locator('.model')).toHaveText('claude-default-fake');
+      // 005-AC10: the model asked for, found in what the fake claude reports, its side model second
+      // with its cost share.
+      const meta = p.locator('#messages li.msg.agent').last().locator('.meta');
+      await expect(meta.locator('.model')).toHaveText('sonnet');
+      await expect(meta.locator('.model-note')).toHaveText(/^\+claude-side-fake (<1|\d+)%$/);
+      await expect(meta.locator('.model-note')).not.toHaveClass(/mismatch/);
+      await expect(meta).toContainText(/sonnet · effort medium · \+claude-side-fake/);
       // 002-AC18 002-AC42: the synthesis names its persona and the effort it ran with.
-      await expect(p.locator('#messages li.msg.agent').last().locator('.meta strong')).toHaveText('🔥 Grill');
-      await expect(p.locator('#messages li.msg.agent').last().locator('.effort')).toHaveText('effort default');
+      await expect(meta.locator('strong')).toHaveText('🔥 Grill');
+      await expect(meta.locator('.effort')).toHaveText('effort medium');
       await expect(p.locator('#documents')).toContainText('notes.md');
     }
     await expect(led(bob)).toHaveAttribute('aria-label', 'Grill ready');
 
-    await alice.getByLabel('Let Bob press the agent button').uncheck();
+    await alice.getByLabel('Let Bob ask the AI').uncheck();
     await expect(press(bob)).toBeDisabled();
 
     // Hand-over: Bob's daemon connects, Alice makes him host.
     await pairDaemon(bob, daemonB);
-    await alice.getByRole('button', { name: 'Make Bob the agent host' }).click();
+    await alice.getByRole('button', { name: 'Make Bob the AI host' }).click();
     await expect(bob.locator('#participants li', { hasText: 'Bob' }).locator('.host-badge')).toHaveText('host');
     await expect(press(bob)).toBeEnabled();
     await expect(press(alice)).toBeDisabled();
-    await expect(bob.getByLabel('Let Alice press the agent button')).toBeVisible();
-    await expect(alice.getByLabel('Let Bob press the agent button')).toHaveCount(0);
+    await expect(bob.getByLabel('Let Alice ask the AI')).toBeVisible();
+    await expect(alice.getByLabel('Let Bob ask the AI')).toHaveCount(0);
 
     // The host can start a new session after confirming.
-    bob.once('dialog', (d) => d.accept());
-    await bob.getByRole('button', { name: 'Personas' }).click();
+    await menuItem(bob, 'Personas');
+    await unfold(bob.locator('#personas .persona-form').first(), 'more');
     await newSession(bob).click();
+    await confirmSheet(bob, 'Start fresh');
     await bob.locator('#personas').getByRole('button', { name: 'Close' }).click();
     await expect(bob.locator('#messages li.msg.agent').last()).toContainText('turn 1.', { timeout: 60_000 });
     await expect(bob.locator('#messages li.msg.agent')).toHaveCount(2);
@@ -94,7 +103,7 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
     expect(await daemonB.exited).toBe(0);
     await expect(alice.locator('#participants li', { hasText: 'Alice' }).locator('.host-badge')).toHaveText('host');
     await expect(press(alice)).toBeEnabled();
-    await adminA.getByRole('button', { name: 'Stop the daemon' }).click();
+    await stopDaemon(adminA);
     expect(await daemonA.exited).toBe(0);
     for (const p of [alice, bob]) {
       await expect(led(p)).toHaveAttribute('aria-label', 'Grill offline');

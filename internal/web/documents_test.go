@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"strconv"
@@ -22,6 +23,8 @@ import (
 
 // Small limits keep the 413 cases cheap; the defaults (20 MB, 200 MB) are config.
 var testOptions = Options{
+	// Tests send X-Forwarded-For as if behind a proxy on loopback.
+	TrustedProxies:     []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")},
 	MaxUploadBytes:     20000,
 	MaxRoomBytes:       50000,
 	MaxAttachmentBytes: 1000,

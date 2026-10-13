@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"regexp"
 	"slices"
 	"strings"
@@ -63,4 +64,56 @@ func mentioned(body string, personas []store.RoomPersona) []store.RoomPersona {
 		}
 	}
 	return out
+}
+
+// notToken is what a participant's name holds besides the characters an @name takes.
+var notToken = regexp.MustCompile(`[^\p{L}\p{N}_-]+`)
+
+// mentionToken is how "@" spells a participant's name: "Ana María" is @Ana_María. The room page's
+// autocompletion writes it the same way (005-AC2).
+func mentionToken(name string) string {
+	return strings.Trim(notToken.ReplaceAllString(name, "_"), "_")
+}
+
+// named returns the @names of body that name one of personas or of people, once each as written,
+// in order: a persona first, as a mention calls it before a person of the same name (005-AC27).
+// The one rule for every mention: chips, notices, turns and pushes.
+func named(body string, personas []store.RoomPersona, people []store.Participant) []store.Named {
+	if !strings.Contains(body, "@") {
+		return nil
+	}
+	var out []store.Named
+	for _, m := range mentionRe.FindAllStringSubmatch(proseText(body), -1) {
+		at := "@" + m[1]
+		if slices.ContainsFunc(out, func(n store.Named) bool { return n.At == at }) {
+			continue
+		}
+		if i := slices.IndexFunc(personas, func(p store.RoomPersona) bool { return strings.EqualFold(p.Name, m[1]) }); i >= 0 {
+			out = append(out, store.Named{At: at, PersonaID: personas[i].ID})
+		} else if i := slices.IndexFunc(people, func(p store.Participant) bool { return strings.EqualFold(mentionToken(p.Name), m[1]) }); i >= 0 {
+			out = append(out, store.Named{At: at, ParticipantID: people[i].ID})
+		}
+	}
+	return out
+}
+
+// nameMentions fills in the @names of msgs, all lines of room, for the page to draw (005-AC27).
+func (s *Server) nameMentions(ctx context.Context, room string, msgs []store.Message) error {
+	if !slices.ContainsFunc(msgs, func(m store.Message) bool { return strings.Contains(m.Body, "@") }) {
+		return nil
+	}
+	personas, err := s.bus.Store.RoomPersonas(ctx, room)
+	if err != nil {
+		return err
+	}
+	people, err := s.bus.Store.Participants(ctx, room)
+	if err != nil {
+		return err
+	}
+	for i := range msgs {
+		if msgs[i].Kind != store.KindSystem && msgs[i].DeletedAt == nil {
+			msgs[i].Named = named(msgs[i].Body, personas, people)
+		}
+	}
+	return nil
 }

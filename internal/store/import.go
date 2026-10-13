@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/babs/grill-room/internal/convert"
 	"github.com/babs/grill-room/internal/render"
 	"github.com/babs/grill-room/internal/skill"
+	"github.com/babs/grill-room/internal/turn"
 )
 
 // ErrImportRefused wraps every reason an import is refused; the message says which. Nothing is
@@ -43,6 +45,8 @@ const (
 type ImportOptions struct {
 	// RoomID is the new room's id.
 	RoomID string
+	// Format is the archive's format: 1 holds no mentions.jsonl.
+	Format int
 	// Importer is the importing profile, 0 for the super-admin. A profile imports within the
 	// room creation guardrails and becomes the room's admin, seated as DisplayName unless one of
 	// the relinked participants is already its own.
@@ -198,17 +202,20 @@ func (im *importer) run() error {
 	if err := textIs("room name", maxImportRoomName, false, false, x.Name); err != nil {
 		return err
 	}
+	if err := textIs("STT glossary", MaxSTTGlossary, true, true, x.STTGlossary); err != nil {
+		return err
+	}
 	if x.Chain.Budget < 1 || x.Chain.Count < 0 || len(x.Personas) > MaxRoomPersonas {
 		return refuseImport("%s: bad chain, or more than %d personas", fileRoom, MaxRoomPersonas)
 	}
-	_, err = im.tx.ExecContext(im.ctx, `INSERT INTO rooms(id, name, created_at, creator_profile_id, chain_budget, chain_count, chain_suspended, parallel_turns)
-		VALUES(?,?,?,?,?,?,?,?)`, im.room, x.Name, now(), nullID(im.o.Importer), x.Chain.Budget, x.Chain.Count, x.Chain.Suspended, x.ParallelTurns)
+	_, err = im.tx.ExecContext(im.ctx, `INSERT INTO rooms(id, name, created_at, creator_profile_id, chain_budget, chain_count, chain_suspended, parallel_turns, stt_glossary)
+		VALUES(?,?,?,?,?,?,?,?,?)`, im.room, x.Name, now(), nullID(im.o.Importer), x.Chain.Budget, x.Chain.Count, x.Chain.Suspended, x.ParallelTurns, x.STTGlossary)
 	if err != nil {
 		return fmt.Errorf("import room: %w", err)
 	}
 	for _, step := range []func() error{
 		func() error { return im.personasStep(x.Personas) },
-		im.participantsStep, im.messagesStep, im.documentsStep, im.annotationsStep, im.skillsStep,
+		im.participantsStep, im.messagesStep, im.mentionsStep, im.documentsStep, im.annotationsStep, im.skillsStep,
 		func() error { return im.pinsAndResume(x.Personas) },
 		im.sessionsStep, im.seatStep,
 	} {
@@ -258,6 +265,7 @@ const (
 	maxImportRoomName = 100
 	maxImportName     = 100
 	maxImportName40   = 40
+	maxImportNote     = turn.MaxModelNote
 	maxImportLineBody = 4000
 	maxImportAgent    = 20000
 	maxImportDocName  = 200
@@ -360,6 +368,13 @@ func ref(m map[int64]int64, what string, r int64, optional bool) (any, error) {
 
 func (im *importer) personasStep(ps []xPersona) error {
 	for _, p := range ps {
+		// An archive from before 005-AC9 may leave either to the host, as a migrated room did.
+		if p.Model == "" {
+			p.Model = DefaultModel
+		}
+		if p.Effort == "" {
+			p.Effort = DefaultEffort
+		}
 		if err := im.o.CheckPersona(p.PersonaFields, p.EveryN, p.Autocompact); err != nil {
 			return refuseImport("persona %s: %v", p.Name, err)
 		}
@@ -533,7 +548,10 @@ func checkMessage(m *xMessage) error {
 	if err := textIs(what, maxImportName, false, false, m.Sender); err != nil {
 		return err
 	}
-	return textIs(what, maxImportName, false, true, m.Model, m.Effort, m.ReqModel, m.ReqEffort)
+	if err := textIs(what, maxImportName, false, true, m.Model, m.Effort, m.ReqModel, m.ReqEffort); err != nil {
+		return err
+	}
+	return textIs(what, maxImportNote, false, true, m.ModelNote)
 }
 
 // renderAhead checks every line and writes its HTML to fileRendered, one JSON value per line in
@@ -590,8 +608,9 @@ func (im *importer) messagesStep() error {
 		}
 		var id int64
 		err = im.tx.QueryRowContext(im.ctx, `INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, html, model, effort, persona_id,
-			req_model, req_effort, edited_at, deleted_at, change_seq) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
-			im.room, m.TS, m.Kind, pid, m.Sender, m.Body, html, m.Model, m.Effort, persona, m.ReqModel, m.ReqEffort, m.EditedAt, m.DeletedAt, m.ChangeSeq).Scan(&id)
+			req_model, req_effort, model_note, model_mismatch, edited_at, deleted_at, change_seq) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
+			im.room, m.TS, m.Kind, pid, m.Sender, m.Body, html, m.Model, m.Effort, persona, m.ReqModel, m.ReqEffort, m.ModelNote, m.Mismatch,
+			m.EditedAt, m.DeletedAt, m.ChangeSeq).Scan(&id)
 		if err != nil {
 			return refuseImport("message %d: %v", m.Ref, err)
 		}
@@ -620,6 +639,39 @@ func (im *importer) messagesStep() error {
 
 // blob reads the blob file named by a row, refused past limit; what names the row for errors. The
 // export directory is an os.Root: a name cannot leave it.
+// mentionsStep links the imported lines to how their mentions' turns ended (005-AC4). The turn
+// history stays behind, so a turn still queued or running at export never ends here: cancelled.
+func (im *importer) mentionsStep() error {
+	if im.o.Format < 2 {
+		return nil
+	}
+	final := map[string]string{"done": "done", "failed": "failed", "stopped": "stopped", "cancelled": MentionCancelled,
+		"queued": MentionCancelled, "running": MentionCancelled}
+	return eachLine(im, fileMentions, func(x *xMention) error {
+		msg, ok := im.messages.get(x.Message)
+		status, known := final[x.Status]
+		persona, isPersona := im.personas[x.Persona]
+		if !ok || !known || !isPersona {
+			return refuseImport("mention of message %d: unknown message, persona or status %q", x.Message, x.Status)
+		}
+		var line any
+		if x.Line != 0 {
+			id, ok := im.messages.get(x.Line)
+			if !ok {
+				return refuseImport("mention of message %d: unknown line %d", x.Message, x.Line)
+			}
+			line = id
+		}
+		_, err := im.tx.ExecContext(im.ctx, `INSERT INTO message_turns(message_id, persona_id, final_status, final_line_id) VALUES(?,?,?,?)`,
+			msg, persona, status, line)
+		if err != nil {
+			return refuseImport("mention of message %d: %v", x.Message, err)
+		}
+		im.rep.Counts["mentions"]++
+		return nil
+	})
+}
+
 func (im *importer) blob(name, what string, limit int64) ([]byte, error) {
 	if name == "" {
 		return nil, refuseImport("%s names no file", what)
@@ -673,9 +725,16 @@ func (im *importer) documentsStep() error {
 		if d.Upload != 0 && im.uploadFormat[d.Upload] != d.Format {
 			return refuseImport("document %s: format %s, but its upload reads as %s", d.Name, d.Format, im.uploadFormat[d.Upload])
 		}
+		var deleted *string
+		if d.DeletedAt != "" {
+			if _, err := time.Parse(time.RFC3339Nano, d.DeletedAt); err != nil {
+				return refuseImport("document %d: deleted_at %q is not a time", d.Ref, d.DeletedAt)
+			}
+			deleted = &d.DeletedAt
+		}
 		var id int64
-		err = im.tx.QueryRowContext(im.ctx, `INSERT INTO documents(room_id, kind, name, format, upload_id, author, created_at) VALUES(?,?,?,?,?,?,?) RETURNING id`,
-			im.room, d.Kind, d.Name, d.Format, up, d.Author, d.CreatedAt).Scan(&id)
+		err = im.tx.QueryRowContext(im.ctx, `INSERT INTO documents(room_id, kind, name, format, upload_id, author, created_at, deleted_at)
+			VALUES(?,?,?,?,?,?,?,?) RETURNING id`, im.room, d.Kind, d.Name, d.Format, up, d.Author, d.CreatedAt, deleted).Scan(&id)
 		if err != nil {
 			return refuseImport("document %d: %v", d.Ref, err)
 		}

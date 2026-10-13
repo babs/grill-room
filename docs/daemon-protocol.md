@@ -25,7 +25,7 @@ The `config` object:
 | `instance` | the instance id; a worker refuses another instance's config |
 | `config_dir`, `state_dir`, `cache_dir` | the instance's directories: `settings.json` and `allowlist.json`, `tokens.json`, `workspace-cache/` |
 | `sandbox_root` | keys the sandbox names and the `grill-room-root` label, so that two supervisors never share a sandbox |
-| `log_level`, `model`, `image`, `cache_mb` | as the supervisor's environment sets them |
+| `log_level`, `image`, `cache_mb` | as the supervisor's environment sets them |
 | `settings` | the host cap and approval mode until the page saves the instance's own |
 | `limits` | `cpus`, `memory`, `egress_cpus`, `egress_memory` for the sandbox and its egress proxy |
 | `rooms` | the instance's room links, oldest first; the worker serves every one that holds a token |
@@ -64,7 +64,7 @@ A closed stdin means the same as `stop`, so a worker whose supervisor died stops
 |---|---|---|
 | `status` | `status`, the page's view of the worker; `update.served` is the version its room server hands out; `rooms` lists each room's pairing, connection, and turns `running` and `queued` | whenever it changes, checked every 250 ms |
 | `metrics` | `metrics`: `uptime_seconds`, `turns`, `failed_turns`, `heap_bytes`, `goroutines` | at start, then every 30 s |
-| `turn` | `turn`: `room`, `id`, `phase` (`start` or `end`), `error`, `duration_ms`, and at the end `queue_ms`, the wait for a slot, `persona`, the session's `context_tokens` and `context_window`, `cause`, `asked_model` and `asked_effort`, `model` and `effort` as run, `tokens_in`, `tokens_out`, `tokens_cache_read` and `tokens_cache_write` summed over every model claude called, `cost_usd` from claude's `total_cost_usd`, and `workspace_bytes`, the workspace tar's size. Absent fields are unknown | as a turn starts and ends |
+| `turn` | `turn`: `room`, `id`, `phase` (`start` or `end`), `error`, `duration_ms`, and at the end `queue_ms`, the wait for a slot, `persona`, the session's `context_tokens` and `context_window`, `cause`, `asked_model` and `asked_effort`, `model` and `effort` as run, `model_note` and `model_mismatch` as in the turn result, `tokens_in`, `tokens_out`, `tokens_cache_read` and `tokens_cache_write` summed over every model claude called, `cost_usd` from claude's `total_cost_usd`, and `workspace_bytes`, the workspace tar's size. Absent fields are unknown | as a turn starts and ends |
 | `acquire` | `slot`, a number the worker picks; `turn`: `room`, `id` | before each turn, version 3: the supervisor answers `grant`, or `wait` then `grant` |
 | `release` | `slot` | once the turn ran, or when it gives up waiting |
 | `log` | `log`, one zap JSON entry | for every log line. The supervisor re-encodes it before writing it to its stderr and to the page's log: it sets `instance` itself, and escapes control characters, C1 codes and Unicode format characters (bidi overrides, zero-width), so a worker binary cannot drive the terminal or fake a line. Entries over 16 KiB are dropped. The worker's stderr gets the same treatment, one entry per line with `"stream":"stderr"` |
@@ -75,7 +75,7 @@ The supervisor lets at most `max_turns` turns run at once, 2 by default, across 
 
 ## Monitoring
 
-The supervisor records every `turn` end in `monitor.db`, a SQLite file in its state directory, owner-only (003-AC27). A row holds the instance, room, persona and the account the room used at that moment, the event's fields, and a status sorted from the error: `ok`, `cut off`, `conflict` (the room refused the result for a document conflict), `expired` (the turn ran out of time, or the Claude login expired) or `failed`. The page lists the latest 500 turns a filter matches, sums them per account and day, and exports every match as CSV. Text cells starting with `=`, `+`, `-`, `@`, a tab or a carriage return get a leading `'` so that a spreadsheet does not run them.
+The supervisor records every `turn` end in `monitor.db`, a SQLite file in its state directory, owner-only (003-AC27). A row holds the instance, room, persona and the account the room used at that moment, the event's fields, and a status sorted from the error: `ok`, `cut off`, `stopped` (stopped from the room), `conflict` (the room refused the result for a document conflict), `expired` (the turn ran out of time, or the Claude login expired) or `failed`. The page lists the latest 500 turns a filter matches, sums them per account and day, and exports every match as CSV. Text cells starting with `=`, `+`, `-`, `@`, a tab or a carriage return get a leading `'` so that a spreadsheet does not run them.
 
 Rows older than the retention, 30 days unless the page sets 1 to 3650 in `supervisor.json`, are deleted at start, daily, and when the page shortens it (003-AC28).
 
@@ -84,6 +84,8 @@ The page shows four alerts (003-AC29): a Claude account's expiry warning, a runn
 ## Admin page
 
 The page is written with Preact, htm and @preact/signals, served from `internal/uivendor/esm/`, shared with the room server's `/admin`, as unmodified ESM files with their licenses, and mapped by an import map that the CSP admits by its hash. No CDN, no build step. `tools/ui/package.json` pins the versions; `make ui-vendor` copies them again, and `make ui-check` (part of `make lint`) runs `tsc --checkJs` on the page's JSDoc types.
+
+The stream opens with `hello`: `{"daemon":…, "heartbeat_seconds":20, "room_name":"…"}`. The daemon's page shows the room by that name; a room server from before 005-AC42 sends none, and the page shows the link. A rename reaches the page at the next connection.
 
 The room's stream tells each daemon whether it hosts the room's agent and whether the room runs personas in parallel: a `room` event, `{"host":true,"parallel_turns":false}`, sent after `hello` and whenever either changes. Daemons from before ignore it.
 
@@ -101,4 +103,6 @@ When the supervisor stops, it sends `stop` to every worker, waits up to 45 s for
 
 The supervisor holds an exclusive lock on `supervisor.lock` in its state directory: `flock` on Unix, `LockFileEx` on Windows. The kernel drops it when the process dies.
 
-A later launch that finds the lock taken connects to the local socket: `run/supervisor.sock` in the state directory, owner-only, or on Windows the named pipe `\\.\pipe\grill-room-<12 hex digits of the state dir's sha256>`, whose DACL admits only the current user. It sends one line, `{"room":"<room link>"}` or `{}`, and reads `{"link":"<admin page link>"}` or `{"error":"..."}`. With a room, the launch prints the link, opens it, and exits 0. Without one, it prints the link and exits 1: a second supervisor is refused. A launch opens a link only if it starts with `http://127.0.0.1:`.
+A later launch that finds the lock taken connects to the local socket: `run/supervisor.sock` in the state directory, owner-only, or on Windows the named pipe `\\.\pipe\grill-room-<12 hex digits of the state dir's sha256>`, whose DACL admits only the current user. It sends one line, `{"room":"<room link>"}` or `{}`, and reads `{"link":"<admin page link>"}` or `{"error":"..."}`. With a room, the launch prints the link, opens it, and exits 0. Without one, and for `grill-room-daemon admin`, it says the supervisor already runs, prints the link, opens it and exits 0: a second supervisor never starts. `grill-room-daemon admin` with no supervisor running says how to start one and exits 1.
+
+Before a self-update execs the new binary, the supervisor writes `run/admin-page.json` in the state directory, owner-only: the page's `127.0.0.1` address, its session tokens and the time. The new binary reads and deletes it at start, ignores one older than 2 minutes, binds that address again and, only if it got it, admits those sessions, so the open tab reconnects. Nothing goes through the environment, which other processes of the user can read. A launch opens a link only if it starts with `http://127.0.0.1:`.

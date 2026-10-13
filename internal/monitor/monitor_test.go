@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/csv"
 	"errors"
 	"os"
@@ -34,7 +35,7 @@ func cost(v float64) *float64 { return &v }
 func TestRecord(t *testing.T) {
 	d, c := open(t)
 	in := Turn{Instance: "i1", Room: "https://a/r/1", TurnID: 7, Persona: "Grill", Account: "default", AskedModel: "opus", AskedEffort: "high",
-		Model: "claude-sonnet-5-5", Effort: "medium", Cause: "pressed by Alice", DurationMS: 1200, QueueMS: 300, Status: StatusOK,
+		Model: "sonnet", ModelNote: "+haiku 3%", Effort: "medium", Cause: "pressed by Alice", DurationMS: 1200, QueueMS: 300, Status: StatusOK,
 		TokensIn: 1, TokensOut: 2, CacheRead: 3, CacheWrite: 4, CostUSD: cost(0.5), ContextTokens: 170000, ContextWindow: 200000, WorkspaceBytes: 4096}
 	if err := d.Record(t.Context(), in); err != nil {
 		t.Fatal(err)
@@ -263,5 +264,62 @@ func TestOpenOwnerOnly(t *testing.T) {
 	defer d.Close() //nolint:errcheck // test
 	if got, _ := d.Turns(t.Context(), Filter{}, 0); len(got) != 1 {
 		t.Fatalf("after reopen: %v", got)
+	}
+}
+
+// 005-AC10: a history from before the model note upgrades in place: its turns stay, with no note,
+// and new turns record theirs.
+func TestOpenUpgradesV1(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "monitor.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), schema+`PRAGMA user_version = 1;
+		INSERT INTO turns (at, day, instance, room, turn_id, persona, account, asked_model, asked_effort, model, effort, cause,
+		duration_ms, queue_ms, status, error, tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, context_tokens,
+		context_window, workspace_bytes) VALUES (1, '2026-10-01', 'i', 'r', 1, 'Grill', 'default', '', '', 'claude-opus-5', '', '',
+		0, 0, 'ok', '', 0, 0, 0, 0, 0, 0, 0);`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	for range 2 { // and opens again once upgraded
+		d, err := Open(path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := d.Record(t.Context(), Turn{Model: "sonnet", ModelNote: "opus 100%", ModelMismatch: true, Status: StatusOK}); err != nil {
+			t.Fatal(err)
+		}
+		ts, err := d.Turns(t.Context(), Filter{}, 0)
+		_ = d.Close()
+		if err != nil || ts[len(ts)-1].Model != "claude-opus-5" || ts[len(ts)-1].ModelNote != "" || !ts[0].ModelMismatch || ts[0].ModelNote != "opus 100%" {
+			t.Fatalf("turns %+v: %v", ts, err)
+		}
+	}
+}
+
+// An upgrade that fails leaves the history at its version: no half-applied schema.
+func TestOpenUpgradeFailsWhole(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "monitor.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Version 1 with a turns table that already has one of the new columns: the second ALTER fails.
+	if _, err := db.ExecContext(t.Context(), `CREATE TABLE turns (id INTEGER PRIMARY KEY, model_mismatch INTEGER); PRAGMA user_version = 1;`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(path, nil); err == nil {
+		t.Fatal("upgrade of a broken history passed")
+	}
+	var version int
+	var cols string
+	if err := db.QueryRowContext(t.Context(), `SELECT (SELECT user_version FROM pragma_user_version), group_concat(name, ' ') FROM pragma_table_info('turns')`).Scan(&version, &cols); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	if version != 1 || cols != "id model_mismatch" {
+		t.Fatalf("after a failed upgrade: version %d, columns %q", version, cols)
 	}
 }

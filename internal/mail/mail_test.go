@@ -109,7 +109,7 @@ func TestSendRefuses(t *testing.T) {
 	go func() {
 		if c, err := ln.Accept(); err == nil {
 			defer c.Close()
-			time.Sleep(2 * time.Second)
+			time.Sleep(2 * time.Second) // a server slower than the client's 200 ms deadline: no assertion on it
 		}
 	}()
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)

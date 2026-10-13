@@ -32,6 +32,7 @@ const (
 	fileSkills             = "skills.jsonl"
 	fileSkillVersions      = "skill_versions.jsonl"
 	fileSessions           = "sessions.jsonl"
+	fileMentions           = "mentions.jsonl"
 )
 
 type xRoom struct {
@@ -39,6 +40,7 @@ type xRoom struct {
 	CreatedAt     string     `json:"created_at"`
 	Chain         Chain      `json:"chain"`
 	ParallelTurns bool       `json:"parallel_turns"`
+	STTGlossary   string     `json:"stt_glossary,omitempty"`
 	Personas      []xPersona `json:"personas"`
 }
 
@@ -95,6 +97,8 @@ type xMessage struct {
 	Sender      string  `json:"sender"`
 	Body        string  `json:"body"`
 	Model       string  `json:"model,omitempty"`
+	ModelNote   string  `json:"model_note,omitempty"`
+	Mismatch    bool    `json:"model_mismatch,omitempty"`
 	Effort      string  `json:"effort,omitempty"`
 	ReqModel    string  `json:"requested_model,omitempty"`
 	ReqEffort   string  `json:"requested_effort,omitempty"`
@@ -128,6 +132,16 @@ type xDocument struct {
 	Upload    int64  `json:"upload,omitempty"`
 	Author    string `json:"author"`
 	CreatedAt string `json:"created_at"`
+	// DeletedAt flags a document a room admin deleted (005-AC26).
+	DeletedAt string `json:"deleted_at,omitempty"`
+}
+
+// xMention is how a line's @mention of a persona ended (005-AC4).
+type xMention struct {
+	Message int64  `json:"message"`
+	Persona int64  `json:"persona"`
+	Status  string `json:"status"`
+	Line    int64  `json:"line,omitempty"`
 }
 
 type xRevision struct {
@@ -337,8 +351,8 @@ func (s *Store) ExportRoom(ctx context.Context, roomID, dir string) (*Room, erro
 func exportRoom(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) (*Room, error) {
 	room := &Room{ID: roomID}
 	x := xRoom{Personas: []xPersona{}}
-	err := tx.QueryRowContext(ctx, `SELECT name, created_at, chain_budget, chain_count, chain_suspended, parallel_turns FROM rooms WHERE id = ?`, roomID).
-		Scan(&x.Name, &x.CreatedAt, &x.Chain.Budget, &x.Chain.Count, &x.Chain.Suspended, &x.ParallelTurns)
+	err := tx.QueryRowContext(ctx, `SELECT name, created_at, chain_budget, chain_count, chain_suspended, parallel_turns, stt_glossary FROM rooms WHERE id = ?`, roomID).
+		Scan(&x.Name, &x.CreatedAt, &x.Chain.Budget, &x.Chain.Count, &x.Chain.Suspended, &x.ParallelTurns, &x.STTGlossary)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -357,13 +371,32 @@ func exportRoom(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) (*
 		return nil, err
 	}
 	for _, step := range []func(context.Context, *sql.Tx, string, *exportDir) error{
-		exportParticipants, exportMessages, exportDocuments, exportAnnotations, exportSkills, exportSessions,
+		exportParticipants, exportMessages, exportMentions, exportDocuments, exportAnnotations, exportSkills, exportSessions,
 	} {
 		if err := step(ctx, tx, roomID, d); err != nil {
 			return nil, err
 		}
 	}
 	return room, nil
+}
+
+// exportMentions writes how each line's @mentions ended, for the personas the export carries.
+func exportMentions(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) error {
+	ms, err := queryMentions(ctx, tx, mentionCols+` JOIN room_personas p ON p.id = mt.persona_id
+		WHERE m.room_id = ? AND p.pending = 0 ORDER BY mt.message_id, mt.persona_id`, roomID)
+	if err != nil {
+		return err
+	}
+	l, err := d.lines(fileMentions)
+	if err != nil {
+		return err
+	}
+	for _, m := range ms {
+		if err := l.add(xMention{Message: m.MessageID, Persona: m.PersonaID, Status: m.Status, Line: m.LineID}); err != nil {
+			return err
+		}
+	}
+	return l.flush()
 }
 
 // exportPersonas lists the room's personas with their pins and resume points. A persona still
@@ -475,7 +508,7 @@ func exportMessages(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir
 		var pid, persona, seq sql.NullInt64
 		var vbody, vwritten sql.NullString
 		if err := rows.Scan(&m.Ref, &m.TS, &m.Kind, &pid, &persona, &m.Sender, &m.Body, &m.Model, &m.Effort, &m.ReqModel, &m.ReqEffort,
-			&m.EditedAt, &m.DeletedAt, &m.ChangeSeq, &seq, &vbody, &vwritten); err != nil {
+			&m.ModelNote, &m.Mismatch, &m.EditedAt, &m.DeletedAt, &m.ChangeSeq, &seq, &vbody, &vwritten); err != nil {
 			return fmt.Errorf("export messages: %w", err)
 		}
 		if cur == nil || cur.Ref != m.Ref {
@@ -490,7 +523,7 @@ func exportMessages(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir
 		}
 		return nil
 	}, `SELECT m.id, m.ts, m.kind, m.participant_id, m.persona_id, m.sender, m.body, m.model, m.effort, m.req_model, m.req_effort,
-		m.edited_at, m.deleted_at, m.change_seq, v.seq, v.body, v.written_at
+		m.model_note, m.model_mismatch, m.edited_at, m.deleted_at, m.change_seq, v.seq, v.body, v.written_at
 		FROM messages m LEFT JOIN message_versions v ON v.message_id = m.id WHERE m.room_id = ? ORDER BY m.id, v.seq`, roomID)
 	if err != nil {
 		return err
@@ -544,10 +577,11 @@ func exportDocuments(ctx context.Context, tx *sql.Tx, roomID string, d *exportDi
 		err = dump(ctx, tx, d, fileDocuments, func(rows *sql.Rows) (any, error) {
 			var x xDocument
 			var up sql.NullInt64
-			err := rows.Scan(&x.Ref, &x.Kind, &x.Name, &x.Format, &up, &x.Author, &x.CreatedAt)
-			x.Upload = up.Int64
+			var deleted sql.NullString
+			err := rows.Scan(&x.Ref, &x.Kind, &x.Name, &x.Format, &up, &x.Author, &x.CreatedAt, &deleted)
+			x.Upload, x.DeletedAt = up.Int64, deleted.String
 			return x, err
-		}, `SELECT id, kind, name, format, upload_id, author, created_at FROM documents WHERE room_id = ? ORDER BY id`, roomID)
+		}, `SELECT id, kind, name, format, upload_id, author, created_at, deleted_at FROM documents WHERE room_id = ? ORDER BY id`, roomID)
 	}
 	if err == nil {
 		err = dump(ctx, tx, d, fileRevisions, func(rows *sql.Rows) (any, error) {

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -155,7 +156,7 @@ func TestExportImportAPI(t *testing.T) {
 	code, b := e.send(t, nil, "/api/rooms/import?preview=1", e.admin, ar, "application/gzip")
 	pv := decodeJSON[importResp](t, b)
 	if code != http.StatusOK || pv.Room != nil || pv.Name != "Pricing" || pv.Counts["messages"] == 0 || pv.Counts["participants"] != 2 ||
-		!pv.SameInstance || pv.Format != 1 || pv.ArchiveBytes == 0 || rooms() != before {
+		!pv.SameInstance || pv.Format != archive.Format || pv.ArchiveBytes == 0 || rooms() != before {
 		t.Fatalf("preview: %d %s", code, b)
 	}
 	code, b = e.send(t, nil, "/api/rooms/import", e.admin, ar, "application/gzip")
@@ -216,8 +217,8 @@ func TestExportImportAPI(t *testing.T) {
 		"tampered": {e, nil, edit("messages.jsonl", func(_ *tar.Header, b []byte) []byte { return bytes.Replace(b, []byte("Bob"), []byte("Eve"), 1) }),
 			"application/gzip", 422, "sha256 mismatch on messages.jsonl"},
 		"newer format": {e, nil, edit(archive.ManifestName, func(_ *tar.Header, b []byte) []byte {
-			return bytes.Replace(b, []byte(`"format": 1`), []byte(`"format": 2`), 1)
-		}), "application/gzip", 422, "format 2 is newer"},
+			return bytes.Replace(b, []byte(fmt.Sprintf(`"format": %d`, archive.Format)), []byte(fmt.Sprintf(`"format": %d`, archive.Format+1)), 1)
+		}), "application/gzip", 422, fmt.Sprintf("format %d is newer", archive.Format+1)},
 		"traversal": {e, nil, edit("room.json", func(h *tar.Header, b []byte) []byte { h.Name = "../room.json"; return b }), "application/gzip", 422, "unsafe path"},
 		"symlink": {e, nil, edit("room.json", func(h *tar.Header, b []byte) []byte {
 			h.Typeflag, h.Linkname = tar.TypeSymlink, "/etc/passwd"
@@ -289,7 +290,7 @@ func TestArchiveStagingAndSlots(t *testing.T) {
 
 // 004-AC14: an imported persona passes the checks of the room API.
 func TestCheckPersona(t *testing.T) {
-	good := store.PersonaFields{Name: "Grill", Badge: "🔥", Colour: "#d9480f", Text: "Grill them."}
+	good := store.PersonaFields{Name: "Grill", Badge: "🔥", Colour: "#d9480f", Text: "Grill them.", Model: "sonnet", Effort: "medium"}
 	if err := checkPersona(good, 0, 0); err != nil {
 		t.Fatal(err)
 	}

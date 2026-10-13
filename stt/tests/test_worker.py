@@ -30,7 +30,7 @@ def settings(**kw: Any) -> Settings:
 
 def worker(handler: httpx.MockTransport) -> Worker:
     room_api = RoomAPI(httpx.AsyncClient(base_url="http://room", transport=handler))
-    pipeline = Pipeline(lambda _a: Line("", "en"), room_api, size=1)
+    pipeline = Pipeline(lambda _a, _p: Line("", "en"), room_api, size=1)
     return Worker(settings(), pipeline, room_api, lk=None)  # type: ignore[arg-type] # unused here
 
 
@@ -65,7 +65,7 @@ async def test_heartbeat_goes_out_at_once_when_the_rooms_change() -> None:
             break
         await asyncio.sleep(0.01)
     # heartbeat_seconds is 30: the second beat came from the change, not the timer.
-    assert beats == [b'{"worker":"w1","rooms":[]}', b'{"worker":"w1","rooms":["r1"]}']
+    assert beats == [b'{"worker":"w1","rooms":[],"voices":{}}', b'{"worker":"w1","rooms":["r1"],"voices":{}}']
     task.cancel()
 
 
@@ -240,3 +240,101 @@ async def test_a_listener_that_fails_to_start_still_closes_its_stream(
     subscribe(w, "TR_a", "7")
     await settle(lambda: streams[0].closed)
     assert not w._streams and tracks() == base
+
+
+async def test_voices_follow_the_subscribed_tracks(
+    listening: tuple[Worker, list[FakeStream], list[tuple[int, int]]],
+) -> None:
+    """005-AC8: the heartbeat's voices are the participants whose track a stream is open on, per room."""
+    w, streams, _ = listening
+    w._changed.clear()
+    subscribe(w, "TR_a", "7")
+    subscribe(w, "TR_b", "8")
+    subscribe(w, "TR_c", "8")
+    assert w._changed.is_set()
+    assert w.voices() == {"r1": [7, 8]}
+    w._changed.clear()
+    w._close("TR_a")
+    assert w._changed.is_set() and w.voices() == {"r1": [8]}
+    w._on_participant_left("r1", SimpleNamespace(identity="8"))  # type: ignore[arg-type]
+    assert w.voices() == {}
+    for s in streams:
+        await s.aclose()
+
+
+class FakeRoom:
+    """An rtc.Room the test connects and closes; it records its disconnect."""
+
+    def __init__(self) -> None:
+        self.connected = False
+        self.left = False
+        self.remote_participants = {"7": object()}
+
+    def on(self, _event: str, _cb: Any) -> None:
+        pass
+
+    async def connect(self, *_a: object) -> None:
+        self.connected = True
+
+    def isconnected(self) -> bool:
+        return self.connected
+
+    async def disconnect(self) -> None:
+        self.left = True
+
+
+def new_room(made: list[FakeRoom]) -> FakeRoom:
+    made.append(FakeRoom())
+    return made[-1]
+
+
+def listed(name: str, sid: str, people: int = 1) -> SimpleNamespace:
+    return SimpleNamespace(name=name, sid=sid, num_participants=people)
+
+
+@pytest.mark.parametrize("how", ["closed", "same_name", "dropped"])
+async def test_a_room_livekit_closed_is_dropped_and_joined_again(
+    monkeypatch: pytest.MonkeyPatch, how: str
+) -> None:
+    """005-AC18: LiveKit closes an empty room under the worker, people come back, the worker rejoins."""
+    made: list[FakeRoom] = []
+    monkeypatch.setattr(rtc, "Room", lambda: new_room(made))
+    w = worker(httpx.MockTransport(lambda _r: httpx.Response(204)))
+    await w.reconcile([listed("r1", "RM_a")])
+    assert w.rooms["r1"] is cast(object, made[0])
+    # Nothing changed: the room stays as it is.
+    await w.reconcile([listed("r1", "RM_a")])
+    assert len(made) == 1
+    w._changed.clear()
+    if how == "closed":
+        # Gone from the list: dropped, and not listening any more.
+        await w.reconcile([])
+        assert "r1" not in w.rooms and w._changed.is_set()
+        await w.reconcile([listed("r1", "RM_b")])
+    elif how == "same_name":
+        # The poll never saw it gone: a new room under the same name has another sid.
+        await w.reconcile([listed("r1", "RM_b")])
+    else:
+        # The SDK lost the connection without a "disconnected" event.
+        made[0].connected = False
+        await w.reconcile([listed("r1", "RM_a")])
+    await settle(lambda: made[0].left)
+    assert len(made) == 2 and w.rooms["r1"] is cast(object, made[1])
+    # A stale "disconnected" from the old room leaves the new one alone.
+    w._forget("r1", made[0], "late")  # type: ignore[arg-type]
+    assert w.rooms["r1"] is cast(object, made[1])
+
+
+async def test_an_empty_listed_room_is_not_joined(monkeypatch: pytest.MonkeyPatch) -> None:
+    made: list[FakeRoom] = []
+    monkeypatch.setattr(rtc, "Room", lambda: new_room(made))
+    w = worker(httpx.MockTransport(lambda _r: httpx.Response(204)))
+    await w.reconcile([listed("r1", "RM_a", people=0)])
+    assert not made and not w.rooms
+
+
+def test_glossary_prompt_is_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    """005-AC23 (spike S10b): off unless APP_GLOSSARY_PROMPT says on."""
+    assert settings().glossary_prompt is False
+    monkeypatch.setenv("APP_GLOSSARY_PROMPT", "on")
+    assert settings().glossary_prompt is True

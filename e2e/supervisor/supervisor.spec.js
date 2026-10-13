@@ -51,7 +51,7 @@ test('one supervisor, two instances, two accounts, two turns at once', async ({ 
     rooms.push(await joinRoom(browser, request, lab, 'Alice', 'AC31 lab'));
     const [mine, theirs] = rooms;
     proc = spawn(process.env.GRILL_ROOM_E2E_SUPERVISOR || '../bin/grill-room-daemon', [mine.url], {
-      env: { ...process.env, GRILL_ROOM_DAEMON_STATE_DIR: join(dir, 'state'), GRILL_ROOM_DAEMON_BROWSER: 'none', GRILL_ROOM_AGENT_MODEL: 'haiku', LOG_LEVEL: 'info' },
+      env: { ...process.env, GRILL_ROOM_DAEMON_STATE_DIR: join(dir, 'state'), GRILL_ROOM_DAEMON_BROWSER: 'none', GRILL_ROOM_MAX_MODEL: 'haiku', LOG_LEVEL: 'info' },
       stdio: ['ignore', 'ignore', openSync(log, 'w')],
     });
     // A binary that cannot start emits error, not exit.

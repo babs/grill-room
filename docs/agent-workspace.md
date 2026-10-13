@@ -71,7 +71,7 @@ The prompt opens with who is in the room, from one template, `internal/web/prese
   | the new session after it | `handoff from your previous session` |
 
 - each other persona: model and effort after the cap, state (`idle`, `running`, `queued`, or waiting for the host's approval), completed turns, triggers, and the first line of its latest synthesis on a line of its own;
-- the humans present (those with the room page open), the host, and who speaks now (the author of a voice line from the last 10 seconds). Each name carries a short id, `Alice ·a1b2`, so two people with the same name stay apart (003-AC32):
+- the humans present (those with the room page open, or who had it open in the last 20 seconds), the host, and who speaks now (the author of a voice line from the last 10 seconds). Each name carries a short id, `Alice ·a1b2`, so two people with the same name stay apart (003-AC32):
   - with a profile: the first 4 hex digits of the profile's uuid (`profiles.uuid`, random v4). When two profiles among the room's participants share those 4 digits, every profile id in that preamble shows 6, or 8 if 6 still clash;
   - without a profile: `#` and the participant's id in the server, `Bob ·#12`. A profile id never starts with `#`;
   - one person who joined twice under the same profile shows the same id twice.
@@ -115,7 +115,7 @@ The note is an ordinary agent document: the room sees it, and any persona may re
 | thread replies | `replies.json`: `[{"annotation": <id>, "body": "...", "status": "done"}]`, `status` optional | an annotation message by the persona; `"done"` also closes the thread |
 | new annotations | `annotations-new.json`: `[{"doc": "<path>", "exact": "...", "prefix": "...", "suffix": "...", "body": "..."}]` | an annotation by the persona on that quote, with `body` as its first message |
 | calls | `@name` in the synthesis, outside code | a queued turn of that persona, one chain link each; its own name only with self-call on |
-| model and effort | `modelUsage` in `claude -p`'s JSON; the effort the daemon passed | shown on the synthesis, stored on the turn |
+| model and effort | the model and effort the daemon passed, checked against `modelUsage` in `claude -p`'s JSON | shown on the synthesis, stored on the turn |
 
 Documents are the room's, not a persona's: any persona may revise any agent document.
 
@@ -125,7 +125,9 @@ An agent document never takes an upload's name, or the room would list two docum
 
 A participant reply on a thread the agent closed reopens it, as for any thread. A close is not applied when a participant wrote in the thread after the turn read it: the agent's reply lands, the thread stays open, and the report says why. The next prompt quotes that thread, with the reply flagged `(new)`. A thread holding only the agent's own messages is not quoted back to it.
 
-The daemon reports the model that wrote most of the answer: `claude -p` lists every model it called in `modelUsage`, a small one on the side included. With no `modelUsage`, it reports the model it asked for. A persona asks for a model (`haiku`, `sonnet`, `opus`, `fable`) and an effort (`low`, `medium`, `high`, `xhigh`, `max`), or leaves either empty. The daemon turns the request into what runs in one place: a value outside those lists is treated as empty, since it becomes a `claude` argument, then the host cap clamps model and effort apart, each to the higher of the cap and what the host approved for this persona on this daemon. An empty model then becomes its `GRILL_ROOM_AGENT_MODEL`, and an empty effort is left to Claude Code; neither is capped. The README's "Host cap and approvals" has the ranking rules. The server shows an effort only when it is one `--effort` accepts.
+A persona asks for a model (`haiku`, `sonnet`, `opus`, `fable`) and an effort (`low`, `medium`, `high`, `xhigh`, `max`), always both. The daemon turns the request into what runs in one place: a value outside those lists is dropped, since it becomes a `claude` argument, then the host cap clamps model and effort apart, each to the higher of the cap and what the host approved for this persona on this daemon. Only a room server from before explicit models sends neither; Claude Code then picks. The README's "Host cap and approvals" has the ranking rules. The server shows an effort only when it is one `--effort` accepts.
+
+The daemon reports the model it asked for, checked against `modelUsage`, where `claude -p` lists every model it called. A session resumed on another model lists its earlier model too, and Claude Code may call a small one on the side, so the model that wrote most is not the answer. Ids map to their family (`claude-sonnet-5-5` is `sonnet`). Every other model goes in `model_note` with its share of the turn's cost, `+haiku 3%` (by tokens when claude reports no cost). When `modelUsage` lists models but not the one asked for, `model_mismatch` is set, `model_note` lists what claude did report, and both the daemon and the server log `turn_model_mismatch`. With no `modelUsage` there is nothing to check against.
 
 Refused or ignored, and listed in a system message after the synthesis:
 
@@ -153,7 +155,9 @@ Anything else the agent writes, in `transcript/` or at the root, is scratch and 
    When the job lists `skills` (`[{"name", "version"}]`), `GET .../daemon/turns/N/skills` returns the plugin directory as a tar.
 4. If `resume` is set and the daemon's local `<id>.jsonl` does not match the size and hash, it fetches `GET .../daemon/sessions/<id>` and writes it into the sandbox home before running `claude -p --resume <id>` (D6). The cwd is always `/workspace`, so the session's project slug never changes (S2). Every persona's session lives in the same sandbox home under its own id; the room stores each under its persona, so a takeover resumes each persona's own session.
 5. The daemon hashes `/workspace` before and after the run and sends each changed path. It sends contents only for `docs/`, `replies.json` and `annotations-new.json`, so an edited 20 MB upload costs one path.
-6. `POST .../daemon/turns/N` with `{"synthesis", "model", "effort", "capped", "changes", "session_id", "session_offset", "session", "context_tokens", "context_window"}`, or `{"error"}`. The context fields are absent when unknown. `capped` is true when the host cap lowered what the persona asked for. `session` holds the jsonl bytes past `session_offset`: the server's size when resuming, 0 for a new session (D23). The server refuses a gap or an overlap. A document edit whose document is past its pinned revision, or was created after the pin, is a conflict: the server answers 409 `conflict on <name>` and keeps nothing of the result.
+6. `POST .../daemon/turns/N` with `{"synthesis", "model", "model_note", "model_mismatch", "effort", "capped", "changes", "session_id", "session_offset", "session", "context_tokens", "context_window"}`, or `{"error"}`. The context fields are absent when unknown. `capped` is true when the host cap lowered what the persona asked for. `session` holds the jsonl bytes past `session_offset`: the server's size when resuming, 0 for a new session (D23). The server refuses a gap or an overlap. A document edit whose document is past its pinned revision, or was created after the pin, is a conflict: the server answers 409 `conflict on <name>` and keeps nothing of the result.
+
+7. When a turn handed to the daemon ends on the server without its result, stopped from the room or failed there, the server sends `event: stop` with `{"id": N}`. The daemon kills `claude` in the sandbox, or ends the turn while it waits for a slot, and posts no result. A daemon from before ignores the event: its result then gets a 409. The supervisor's monitor records the turn as `stopped`.
 
 ## Failure rules
 
@@ -164,6 +168,7 @@ Anything else the agent writes, in `transcript/` or at the root, is scratch and 
 | press of a persona already queued | 409 |
 | persona removed during its turn | refused, 409 |
 | host daemon drops mid-turn | turn failed, nothing kept; a late result gets a 409 |
+| stopped from the room by who started it, the host or a room admin | turn `stopped` at once, the line "<persona> turn stopped by <name>." in the room, nothing kept; the daemon gets `event: stop`, and a late result gets a 409. The persona's next turn resumes its last done turn's session; a stopped turn triggers no chain link and does not count for "every N rounds" |
 | daemon reports an error (credentials expired, Claude failed) | turn failed, the error in the room |
 | result over 32 MB or malformed | 413 or 400, turn failed |
 | session bytes do not continue the stored copy | 409, turn failed |

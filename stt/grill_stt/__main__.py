@@ -70,7 +70,7 @@ async def run(s: Settings) -> None:
     )
     lk = api.LiveKitAPI(http_url(s.livekit_url), s.livekit_api_key, s.livekit_api_secret.get_secret_value())
     room_api = RoomAPI(client)
-    pipeline = Pipeline(transcribe, room_api, s.queue_size, s.plausibility())
+    pipeline = Pipeline(transcribe, room_api, s.queue_size, s.plausibility(), use_prompt=s.glossary_prompt)
     worker = Worker(s, pipeline, room_api, lk)
     try:
         async with asyncio.TaskGroup() as tg:

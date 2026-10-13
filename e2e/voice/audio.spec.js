@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { createRoom, invite, join, joinAudio, inboundAudio, launch, admin, fixture } from './helpers.js';
+import { createRoom, invite, join, joinAudio, inboundAudio, launch, admin, fixture, audioItem } from './helpers.js';
 
 // 001-AC6: two participants in a room hear each other, through LiveKit behind traefik. Two browser
 // profiles: Alice's microphone plays recorded speech, Bob's a beep.
@@ -23,8 +23,7 @@ test('two participants exchange audio', async ({ request }) => {
     for (const page of [alice, bob]) {
       await expect.poll(() => inboundAudio(page), { timeout: 30_000 }).toBeGreaterThan(0);
       const before = await inboundAudio(page);
-      await page.waitForTimeout(2000);
-      expect(await inboundAudio(page)).toBeGreaterThan(before + 2000);
+      await expect.poll(() => inboundAudio(page), { timeout: 30_000 }).toBeGreaterThan(before + 2000);
     }
     // Alice's recorded speech starts a few seconds in: Bob sees her speaking indicator light up.
     await expect(aliceRow).toHaveClass(/speaking/, { timeout: 20_000 });
@@ -40,7 +39,7 @@ test('two participants exchange audio', async ({ request }) => {
     await expect(alice.locator('#banner')).toHaveText('Your access to this room has ended.');
     await expect.poll(() => bob.evaluate((id) => voice.remoteParticipants.has(id), aliceID)).toBe(false);
 
-    await bob.getByRole('button', { name: 'Leave audio' }).click();
+    await audioItem(bob, 'Leave audio');
     await expect(bob.getByRole('button', { name: 'Join audio' })).toBeVisible();
     await request.delete(`/api/rooms/${room.id}`, { headers: admin });
   } finally {

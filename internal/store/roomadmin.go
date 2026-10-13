@@ -280,3 +280,54 @@ func (s *Store) SetRoomAdmin(ctx context.Context, roomID string, target int64, o
 	})
 	return m, err
 }
+
+// RenameParticipant gives participant target of room the name name, and says so in the chat. by
+// renames themselves (005-AC1), or another participant as a room admin, checked in the same
+// transaction; nil is the super-admin (005-AC21). toProfile also makes it the name of by's profile.
+// Past lines keep the name they were written under. A name unchanged writes nothing: nil message.
+func (s *Store) RenameParticipant(ctx context.Context, roomID string, target int64, name string, by *Participant, toProfile bool) (*Message, error) {
+	var m *Message
+	err := s.withTx(ctx, "rename participant", func(tx *sql.Tx) error {
+		self := by != nil && by.ID == target
+		if by != nil && !self {
+			if _, err := roomAdmin(ctx, tx, roomID, by.ProfileID); err != nil {
+				return err
+			}
+		}
+		var old string
+		err := tx.QueryRowContext(ctx, `SELECT p.name FROM participants p JOIN invites i ON i.id = p.invite_id
+			WHERE p.id = ? AND p.room_id = ? AND i.revoked_at IS NULL`, target, roomID).Scan(&old)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("rename participant: %w", err)
+		}
+		if self && toProfile && by.ProfileID != 0 {
+			if _, err := tx.ExecContext(ctx, `UPDATE profiles SET name = ? WHERE id = ?`, name, by.ProfileID); err != nil {
+				return fmt.Errorf("rename profile: %w", err)
+			}
+		}
+		if old == name {
+			return nil
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE participants SET name = ? WHERE id = ?`, name, target); err != nil {
+			return fmt.Errorf("rename participant: %w", err)
+		}
+		switch {
+		case self:
+			m = &Message{RoomID: roomID, Kind: KindSystem, ParticipantID: target, Sender: name, Body: old + " is now " + name}
+			err = insertMessage(ctx, tx, m)
+		case by == nil:
+			m = &Message{RoomID: roomID, Kind: KindSystem, Sender: "admin", Body: "The admin renamed " + old + " to " + name}
+			err = insertMessage(ctx, tx, m)
+		default:
+			m, err = memberLine(ctx, tx, roomID, by, "renamed "+old+" to "+name)
+		}
+		if err != nil {
+			return err
+		}
+		return auditTx(ctx, tx, "", map[string]any{"participant": target, "from": old, "to": name})
+	})
+	return m, err
+}

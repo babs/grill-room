@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, menuItem, confirmSheet, unfold } from './helpers.js';
 
 const agentLines = (page) => page.locator('#messages li.msg.agent');
 
@@ -7,14 +7,15 @@ const agentLines = (page) => page.locator('#messages li.msg.agent');
 // fields given, and leaves the panel open.
 async function addSecretary(page, fields = {}) {
   const panel = page.locator('#personas');
-  await page.getByRole('button', { name: 'Personas' }).click();
+  await menuItem(page, 'Personas');
   await panel.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
   await panel.getByRole('button', { name: 'Add', exact: true }).click();
   const sec = panel.locator('.persona-form', { hasText: 'Secretary' });
   await expect(sec).toHaveCount(1);
   if (fields.everyN) {
-    await sec.getByLabel('Every N rounds').fill(String(fields.everyN));
-    await sec.getByRole('button', { name: 'Save' }).click();
+    await unfold(sec, 'advanced');
+    await sec.getByLabel('Speaks up every N answers').fill(String(fields.everyN));
+    await sec.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(panel.locator('#personas-status')).toHaveText('Secretary saved. It applies from its next turn.');
   }
   return panel;
@@ -34,23 +35,24 @@ test('triggers: chain pause, re-arm, suspend', async ({ browser, request, baseUR
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
   let panel = await addSecretary(alice);
   // Only the host, or whom they allow to press, steers the chain: there is no host yet.
-  await expect(panel.getByLabel('Chain budget')).toBeDisabled();
+  await expect(panel.getByLabel('Auto-turn limit')).toBeDisabled();
   await panel.getByRole('button', { name: 'Close' }).click();
 
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {
     await pairDaemon(alice, daemon);
-    await alice.getByRole('button', { name: 'Personas' }).click();
+    await menuItem(alice, 'Personas');
     panel = alice.locator('#personas');
-    await panel.getByLabel('Chain budget').fill('3');
+    await panel.getByLabel('Auto-turn limit').fill('3');
     await panel.getByRole('button', { name: 'Set' }).click();
-    await expect(panel.locator('#personas-status')).toHaveText('Chain budget set to 3.');
+    await expect(panel.locator('#personas-status')).toHaveText('Auto-turn limit set to 3.');
     await panel.getByRole('button', { name: 'Close' }).click();
-    await expect(alice.locator('#chain-count')).toHaveText('Chain 0/3');
+    await expect(alice.locator('#chain-count')).toBeHidden();
+    await expect(alice.locator('#chain-count')).toHaveText('auto 0/3');
     await say(alice, 'FAKE_PINGPONG Grill Secretary');
     await alice.getByRole('button', { name: 'Ask Grill' }).click();
     await expect(alice.locator('#chain-paused')).toBeVisible({ timeout: 120_000 });
-    await expect(alice.locator('#chain-count')).toHaveText('Chain 3/3');
+    await expect(alice.locator('#chain-count')).toHaveText('auto 3/3');
     await expect(alice.locator('#messages')).toContainText('The agent chain reached its budget of 3 turns: Grill did not run.');
     await expect(agentLines(alice).locator('.meta strong')).toHaveText(['🔥 Grill', '📝 Secretary', '🔥 Grill', '📝 Secretary']);
     await expect(agentLines(alice).last().locator('.body')).toHaveText('FAKE_PINGPONG Grill Secretary: over to @Grill.');
@@ -62,29 +64,29 @@ test('triggers: chain pause, re-arm, suspend', async ({ browser, request, baseUR
     await phone.getByLabel('Your name').fill('Bob');
     await phone.getByRole('button', { name: 'Join the room' }).click();
     await expect(phone.locator('#chain-paused')).toBeVisible();
-    await expect(phone.locator('#chain-paused')).toContainText('The host, or someone they allow to press, can re-arm it.');
-    await expect(phone.getByRole('button', { name: 'Re-arm' })).toBeHidden();
+    await expect(phone.locator('#chain-paused')).toContainText('The AI host, or someone they let ask the AI, can resume them.');
+    await expect(phone.getByRole('button', { name: 'Resume auto turns' })).toBeHidden();
     await expect(phone.locator('#body')).toBeInViewport();
 
     // Suspending lifts the pause behind a permanent red warning; restoring the limit brings the
     // pause back, since the count is still at the budget.
-    alice.once('dialog', (d) => d.accept());
-    await alice.getByRole('button', { name: 'Suspend limit' }).click();
+    await alice.locator('#chain-suspend').click();
+    await confirmSheet(alice, 'Remove the limit');
     for (const p of [alice, phone]) {
       await expect(p.locator('#chain-unlimited')).toBeVisible();
-      await expect(p.locator('#chain-unlimited')).toContainText('The host cap still applies.');
+      await expect(p.locator('#chain-unlimited')).toContainText("The AI host's own cap still applies.");
       await expect(p.locator('#chain-paused')).toBeHidden();
-      await expect(p.locator('#chain-count')).toHaveText('Chain 3, no limit');
+      await expect(p.locator('#chain-count')).toHaveText('auto 3, no limit');
     }
     await alice.getByRole('button', { name: 'Restore the limit' }).click();
     await expect(phone.locator('#chain-unlimited')).toBeHidden();
     await expect(phone.locator('#chain-paused')).toBeVisible();
     await expect(phone.locator('#messages')).toContainText('Alice restored the chain limit of 3.');
 
-    await alice.getByRole('button', { name: 'Re-arm' }).click();
+    await alice.getByRole('button', { name: 'Resume auto turns' }).click();
     for (const p of [alice, phone]) {
       await expect(p.locator('#chain-paused')).toBeHidden();
-      await expect(p.locator('#chain-count')).toHaveText('Chain 0/3');
+      await expect(p.locator('#chain-count')).toHaveText('auto 0/3');
       await expect(p.locator('#messages')).toContainText('Alice re-armed the agent chain.');
     }
   } finally {
@@ -110,7 +112,7 @@ test('triggers: every N rounds', async ({ browser, request, baseURL }) => {
       await expect(agentLines(alice).filter({ has: alice.locator('.meta strong', { hasText: 'Grill' }) })).toHaveCount(round, { timeout: 60_000 });
     }
     await expect(agentLines(alice).locator('.meta strong')).toHaveText(['🔥 Grill', '🔥 Grill', '📝 Secretary'], { timeout: 60_000 });
-    await expect(alice.locator('#chain-count')).toHaveText('Chain 1/25');
+    await expect(alice.locator('#chain-count')).toHaveText('auto 1/25');
   } finally {
     daemon.cleanup();
   }
@@ -127,12 +129,14 @@ test('triggers: human @mention', async ({ browser, request, baseURL }) => {
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {
     await pairDaemon(alice, daemon);
+    // A mention calls no one until the room hears the host can run it.
+    await expect(alice.locator('button.persona[data-name="Secretary"] .led')).toHaveAttribute('aria-label', 'Secretary ready', { timeout: 30_000 });
     await say(alice, 'In code, `@secretary` calls no one.');
     await say(alice, '@SECRETARY FAKE_WHOAMI please');
     const sec = agentLines(alice).filter({ hasText: 'You are Secretary' });
     await expect(sec.locator('.meta strong')).toHaveText('📝 Secretary', { timeout: 60_000 });
     await expect(agentLines(alice)).toHaveCount(1);
-    await expect(alice.locator('#chain-count')).toHaveText('Chain 0/25');
+    await expect(alice.locator('#chain-count')).toHaveText('auto 0/25');
   } finally {
     daemon.cleanup();
   }

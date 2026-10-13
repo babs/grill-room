@@ -45,7 +45,7 @@ func fakeWorker(mode string) int {
 	conn := NewConn(os.Stdin, os.Stdout)
 	switch mode {
 	case "silent":
-		time.Sleep(time.Hour)
+		time.Sleep(time.Hour) // a worker that never says hello: the supervisor's own timeout ends it
 	case "early":
 		_ = conn.Send(Msg{Type: "status"})
 		_, _ = conn.Recv()
@@ -136,6 +136,22 @@ func testSupervisor(t *testing.T, mode string, a *Autostart, set ...func(*Superv
 	return s
 }
 
+// waitEnded waits until the only worker's run loop returned.
+func waitEnded(t *testing.T, s *Supervisor) {
+	t.Helper()
+	s.mu.Lock()
+	var ended chan struct{}
+	for _, w := range s.workers {
+		ended = w.ended
+	}
+	s.mu.Unlock()
+	select {
+	case <-ended:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the worker's run loop is still going")
+	}
+}
+
 func instance(t *testing.T, s *Supervisor) InstanceView {
 	t.Helper()
 	list, _ := s.Instances()
@@ -168,7 +184,8 @@ func TestProtocolSkew(t *testing.T) {
 				return
 			}
 			waitFor(t, "the worker refused", func() bool { return instance(t, s).State == "refused" })
-			time.Sleep(300 * time.Millisecond) // three backoffs: a restart would show
+			// Not restarted: its run loop is over, so no backoff can bring it back.
+			waitEnded(t, s)
 			in := instance(t, s)
 			want := "worker fake-" + strconv.Itoa(tc.proto) + " refused: protocol version " + strconv.Itoa(tc.proto) + " is outside the supported range " + strconv.Itoa(Proto-ProtoSkew) + " to " + strconv.Itoa(Proto+ProtoSkew)
 			if in.Restarts != 0 || !strings.HasPrefix(in.Error, want) {
@@ -785,10 +802,16 @@ func TestSupervisorSlots(t *testing.T) {
 	if v.MaxTurns != 1 || len(v.Running) != 1 || v.Running[0].Turn != 11 || v.Running[0].Room != "https://rooms.example/r/abc" || len(v.Queued) != 0 {
 		t.Fatalf("concurrency %+v", v)
 	}
+	slot := regexp.MustCompile(`fake_slot \w+ \d`)
 	var lines []string
-	for _, l := range s.o.Ring.Lines() {
-		lines = append(lines, regexp.MustCompile(`fake_slot \w+ \d`).FindAllString(l, -1)...)
-	}
+	// The worker logs each grant after it reads it, so the ring trails the supervisor's counters.
+	waitFor(t, "the worker's three slot lines", func() bool {
+		lines = nil
+		for _, l := range s.o.Ring.Lines() {
+			lines = append(lines, slot.FindAllString(l, -1)...)
+		}
+		return len(lines) >= 3
+	})
 	if !slices.Equal(lines, []string{"fake_slot grant 1", "fake_slot wait 2", "fake_slot grant 2"}) {
 		t.Fatalf("the worker heard %q", lines)
 	}
@@ -813,20 +836,32 @@ func TestSupervisorSlots(t *testing.T) {
 // beside it, and the workers start once it is done.
 func TestSupervisorStartsBeforeCleanup(t *testing.T) {
 	release := make(chan struct{})
+	cleaning := make(chan struct{}, 1)
 	docker := func(ctx context.Context, _ io.Reader, args ...string) ([]byte, error) {
+		select {
+		case cleaning <- struct{}{}:
+		default:
+		}
 		select {
 		case <-release:
 		case <-ctx.Done():
 		}
 		return nil, errors.New("no docker here")
 	}
-	started := time.Now()
+	// Start returns while Docker still blocks: it does not wait for the cleanup.
 	s := testSupervisor(t, "ok", nil, func(o *SupervisorOptions) { o.Docker = docker })
-	if time.Since(started) > time.Second {
-		t.Fatalf("Start took %s", time.Since(started))
-	}
 	s.SetRoom(context.Background(), Room{Base: "https://rooms.example", ID: "abc"})
-	time.Sleep(200 * time.Millisecond)
+	select {
+	case <-cleaning:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the orphan cleanup never called Docker")
+	}
+	// The workers wait on s.cleaned, still shut while the cleanup blocks.
+	select {
+	case <-s.cleaned:
+		t.Fatal("the cleanup counted as done while Docker blocks")
+	default:
+	}
 	if st := instance(t, s).State; st != "starting" {
 		t.Fatalf("a worker ran before the cleanup: %s", st)
 	}

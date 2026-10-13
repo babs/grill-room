@@ -74,7 +74,9 @@ type Supervisor struct {
 	workers   map[string]*worker
 	current   string
 	autostart bool
-	set       SupervisorSettings
+	// autoMu orders changes of the login item: the page's switch and a self-update's move.
+	autoMu sync.Mutex
+	set    SupervisorSettings
 	// gate holds the global cap on concurrent turns (003-AC18).
 	gate *gate
 	upd  selfUpdate
@@ -114,6 +116,9 @@ type worker struct {
 	// sentAccess is the last access the worker took, as JSON; accessMu orders the pushes.
 	sentAccess []byte
 	accessMu   sync.Mutex
+	// ended closes once the current run returns: a refused or stopped worker not restarted. A
+	// refused worker started again gets a new one.
+	ended chan struct{}
 }
 
 // InstanceView is an instance as the admin page lists it.
@@ -223,18 +228,21 @@ func (s *Supervisor) Start(ctx context.Context) {
 
 // start runs a worker for in, which has none yet.
 func (s *Supervisor) start(in Instance, pair string) *worker {
-	w := &worker{s: s, inst: in, state: "starting", pair: pair}
+	w := &worker{s: s, inst: in, state: "starting", pair: pair, ended: make(chan struct{})}
 	s.mu.Lock()
 	s.workers[in.ID] = w
+	ended := w.ended
 	s.mu.Unlock()
-	s.wg.Go(w.run)
+	s.wg.Go(func() { w.run(ended) })
 	return w
 }
 
 // Wait returns once every worker has stopped; cancel Start's context first.
 func (s *Supervisor) Wait() { s.wg.Wait() }
 
-func (w *worker) run() {
+// run runs the worker until it is refused or the supervisor stops, then closes ended.
+func (w *worker) run(ended chan struct{}) {
+	defer close(ended)
 	s := w.s
 	select {
 	case <-s.cleaned:
@@ -800,7 +808,7 @@ func (s *Supervisor) Restart() {
 
 // Autostart reports whether the supervisor starts at login.
 func (s *Supervisor) Autostart() (bool, error) {
-	if s.o.Autostart == nil {
+	if s.autostartItem() == nil {
 		return false, errors.New("autostart is not available here")
 	}
 	s.mu.Lock()
@@ -808,9 +816,19 @@ func (s *Supervisor) Autostart() (bool, error) {
 	return s.autostart, nil
 }
 
+// autostartItem is the login item, moved by a self-update that renames the binary.
+func (s *Supervisor) autostartItem() *Autostart {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.o.Autostart
+}
+
 // SetAutostart installs or removes the login item (003-AC11).
 func (s *Supervisor) SetAutostart(on bool) error {
-	a := s.o.Autostart
+	// A self-update moving the login item must not interleave with this change.
+	s.autoMu.Lock()
+	defer s.autoMu.Unlock()
+	a := s.autostartItem()
 	if a == nil {
 		return errors.New("autostart is not available here")
 	}

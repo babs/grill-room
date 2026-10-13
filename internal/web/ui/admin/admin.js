@@ -2,10 +2,10 @@
 // vendored, no build step. The session cookie is HttpOnly: the page never sees a token after the
 // login form.
 import { render } from 'preact';
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { html } from 'htm/preact';
-import { RoomPanel, fetchJSON, size, when, onInput, formAction } from './room-panel.js';
+import { RoomPanel, Rename, TabBar, fetchJSON, roomTabs, size, when, ago, onInput, formAction } from './room-panel.js';
 
 /**
  * @typedef {{id: number, created_at: string, last_used_at: string, expires_at: string, user_agent: string, ip: string,
@@ -22,7 +22,8 @@ import { RoomPanel, fetchJSON, size, when, onInput, formAction } from './room-pa
  * @typedef {{id: number, name: string, shared: boolean, version: number, author: string, size: number,
  *   updated_at: string}} Skill
  * @typedef {{rooms_per_profile: number, storage_quota_bytes: number, room_creation: string}} Settings
- * @typedef {{id: number, name: string, admin: boolean, has_profile: boolean}} Participant
+ * @typedef {{join_ip: string, join_ua: string, last_ip: string, last_ua: string, last_seen_at: string | null}} Client
+ * @typedef {{id: number, name: string, admin: boolean, has_profile: boolean, client?: Client}} Participant
  * @typedef {{name: string, counts: Record<string, number>, bytes: Record<string, number>, warnings: string[], format: number,
  *   instance_version: string, same_instance: boolean, exported_at: string, archive_bytes: number,
  *   room?: {id: string, name: string}}} ImportReport
@@ -35,11 +36,18 @@ import { RoomPanel, fetchJSON, size, when, onInput, formAction } from './room-pa
 const signedIn = signal(null);
 const notice = signal('');
 const views = [['rooms', 'Rooms'], ['profiles', 'Profiles'], ['libraries', 'Libraries'], ['instance', 'Instance'],
-  ['sessions', 'Sessions'], ['audit', 'Audit log']];
-/** @param {string} hash */
-const viewOf = (hash) => views.find(([id]) => '#' + id === hash)?.[0] || 'rooms';
-const view = signal(viewOf(location.hash));
-addEventListener('hashchange', () => { view.value = viewOf(location.hash); });
+  ['sessions', 'Sessions'], ['audit', 'Audit']];
+/**
+ * routeOf reads a deep link (005-AC16): #<view>, or #rooms/<room>/<tab> for one room's tab.
+ * @param {string} hash
+ */
+const routeOf = (hash) => {
+  const [v, room = '', tab = ''] = hash.slice(1).split('/').map(decodeURIComponent);
+  return { view: views.some(([id]) => id === v) ? v : 'rooms', room: v === 'rooms' ? room : '', tab };
+};
+const route = signal(routeOf(location.hash));
+addEventListener('hashchange', () => { route.value = routeOf(location.hash); });
+const roomTabList = Object.entries(roomTabs);
 
 /**
  * api is fetchJSON for this page. A 401 outside the login form means the session is gone: the
@@ -187,7 +195,7 @@ const roomCols = [
   ['activity', 'Last activity', (r) => r.last_activity],
   ['participants', 'Participants', (r) => r.participants],
   ['personas', 'Personas', (r) => r.personas],
-  ['host', 'Host', (r) => r.host_online],
+  ['host', 'AI host', (r) => r.host_online],
   ['volume', 'Volume', (r) => r.volume.total],
   ['quota', 'Quota used', (r) => r.used / r.quota],
 ];
@@ -195,34 +203,48 @@ const roomCols = [
 function Rooms() {
   const [page, setPage] = useState(/** @type {RoomsPage | null} */ (null));
   const [sort, setSort] = useState({ col: 'activity', desc: true });
-  const [open, setOpen] = useState('');
+  const [search, setSearch] = useState('');
   const load = () => api('GET', '/api/admin/rooms').then(setPage).catch(show);
   useEffect(() => { load(); }, []);
   if (!page) return html`<h2>Rooms</h2>`;
+  const { room: open, tab } = route.value;
+  if (open) {
+    const room = page.rooms.find((r) => r.id === open);
+    const base = '/api/admin/rooms/' + encodeURIComponent(open);
+    const t = roomTabList.some(([id]) => id === tab) ? tab : 'general';
+    return html`
+      <p><a href="#rooms" id="back-to-rooms">← All rooms</a></p>
+      ${room ? html`<${RoomPanel} key=${room.id} room=${room} base=${base} api=${api} show=${show} setQuota=${true} reload=${load}
+        tab=${t} tabs=${roomTabList} href=${(/** @type {string} */ id) => `#rooms/${encodeURIComponent(room.id)}/${id}`}
+        close=${() => { location.hash = '#rooms'; load(); }}>${t === 'admins' && html`<${RoomAdmins} base=${base}/>`}<//>`
+        : html`<p>No such room.</p>`}`;
+  }
   const key = (roomCols.find(([id]) => id === sort.col) || roomCols[0])[2];
-  const rooms = [...page.rooms].sort((a, b) => {
+  const q = search.trim().toLowerCase();
+  const rooms = page.rooms.filter((r) => !q || r.name.toLowerCase().includes(q)).sort((a, b) => {
     const x = key(a), y = key(b);
     return (x < y ? -1 : x > y ? 1 : 0) * (sort.desc ? -1 : 1);
   });
   /** @param {string} col */
   const by = (col) => setSort({ col, desc: sort.col === col ? !sort.desc : col !== 'name' });
-  const room = page.rooms.find((r) => r.id === open);
   return html`
-    <h2>Rooms</h2>
-    <p class="hint">${page.rooms.length} rooms. A room's quota counts its uploads and attachments; the default is ${size(page.default_quota)}.</p>
-    <${ImportRoom} reload=${load}/>
-    ${page.rooms.length ? html`<div class="scroll"><table id="rooms">
+    <div class="list-head">
+      <h2>Rooms (${q ? rooms.length + ' of ' + page.rooms.length : page.rooms.length})</h2>
+      <input type="search" id="room-search" aria-label="Search rooms" placeholder="Search rooms…" value=${search} onInput=${onInput(setSearch)}/>
+      <${ImportRoom} reload=${load}/>
+    </div>
+    <p class="hint">A room's quota counts its uploads and attachments; the default is ${size(page.default_quota)}.</p>
+    ${page.rooms.length ? html`<div class="scroll"><table id="rooms" class="cards">
       <thead><tr>${roomCols.map(([id, label]) => html`<th aria-sort=${sort.col === id ? (sort.desc ? 'descending' : 'ascending') : undefined}>
         <button type="button" class="sort" onClick=${() => by(id)}>${label}</button></th>`)}<th></th></tr></thead>
       <tbody>${rooms.map((r) => html`<tr id=${'room-' + r.id}>
-        <td class="wrap">${r.name}</td><td>${when(r.created_at)}</td><td>${when(r.last_activity)}</td>
-        <td>${r.participants}</td><td>${r.personas}</td><td>${!r.host_participant_id ? 'none' : r.host_online ? 'online' : 'offline'}</td><td>${size(r.volume.total)}</td>
-        <td><meter min="0" max=${r.quota} value=${r.used} title=${size(r.used) + ' of ' + size(r.quota)}></meter> ${size(r.used)} / ${size(r.quota)}</td>
-        <td><button type="button" onClick=${() => setOpen(open === r.id ? '' : r.id)}>${open === r.id ? 'Close' : 'Manage'}</button></td>
+        <td class="wrap"><strong>${r.name}</strong></td><td data-label="Created">${ago(r.created_at)}</td><td data-label="Last activity">${ago(r.last_activity)}</td>
+        <td data-label="People">${r.participants}</td><td data-label="Personas">${r.personas}</td>
+        <td data-label="AI host">${!r.host_participant_id ? 'none' : r.host_online ? 'online' : 'offline'}</td><td data-label="Volume">${size(r.volume.total)}</td>
+        <td data-label="Quota used"><meter min="0" max=${r.quota} value=${r.used} title=${size(r.used) + ' of ' + size(r.quota)}></meter> ${size(r.used)} / ${size(r.quota)}</td>
+        <td><a class="btn btn-secondary" href=${'#rooms/' + encodeURIComponent(r.id)} aria-label=${'Manage ' + r.name}>Manage</a></td>
       </tr>`)}</tbody>
-    </table></div>` : html`<p>No room yet.</p>`}
-    ${room && html`<${RoomPanel} key=${room.id} room=${room} base=${'/api/admin/rooms/' + room.id} api=${api} show=${show} setQuota=${true}
-      reload=${load} close=${() => { setOpen(''); load(); }}><${RoomAdmins} base=${'/api/admin/rooms/' + room.id}/><//>`}`;
+    </table></div>${q && !rooms.length && html`<p class="hint" id="rooms-none">No room matches "${search.trim()}".</p>`}` : html`<p>No room yet.</p>`}`;
 }
 
 /**
@@ -237,20 +259,32 @@ function RoomAdmins({ base }) {
   /** @param {Participant} p @param {boolean} on */
   const set = (p, on) => api(on ? 'PUT' : 'DELETE', `${base}/admins/${p.id}`).then(load).catch(show);
   return html`
-    <h3>Room admins</h3>
-    <p class="hint">Room admins rename the room, manage its invites, appoint other admins, export and delete it. Only participants with a profile can be appointed.</p>
+    <p class="hint">Room admins rename the room and its participants, manage its invites, appoint other admins, export and delete it. Only participants with a profile can be appointed.</p>
     ${list && (list.length ? html`<ul id="room-admins">${list.map((p) => html`<li key=${p.id}>
       ${p.name}${p.admin && html` <strong>admin</strong>`}${' '}
       ${!p.has_profile ? html`<span class="hint">no profile</span>`
-        : p.admin ? html`<button type="button" class="small" onClick=${() => set(p, false)} aria-label=${'Remove ' + p.name + ' from the room admins'}>Remove admin</button>`
-        : html`<button type="button" class="small" onClick=${() => set(p, true)} aria-label=${'Make ' + p.name + ' a room admin'}>Make admin</button>`}
+        : p.admin ? html`<button type="button" class="btn-secondary" onClick=${() => set(p, false)} aria-label=${'Remove ' + p.name + ' from the room admins'}>Remove admin</button>`
+        : html`<button type="button" class="btn-secondary" onClick=${() => set(p, true)} aria-label=${'Make ' + p.name + ' a room admin'}>Make admin</button>`}
+      ${' '}<${Rename} key=${p.name} name=${p.name} path=${`${base}/participants/${p.id}/name`} api=${api} show=${show} done=${load}/>
+      ${p.client && html`<${ClientLine} c=${p.client}/>`}
     </li>`)}</ul>` : html`<p class="hint">No participant yet.</p>`)}`;
+}
+
+/**
+ * ClientLine shows where a participant connected from, at join and at last activity (005-AC20).
+ * The purge leaves the fields empty past their retention.
+ * @param {{c: Client}} props
+ */
+function ClientLine({ c }) {
+  const at = (/** @type {string} */ ip, /** @type {string} */ ua) => ip ? `${ip} · ${ua || 'no user agent'}` : 'purged';
+  return html`<div class="hint client">Joined from ${at(c.join_ip, c.join_ua)}; last active${c.last_seen_at
+    ? ' ' + new Date(c.last_seen_at).toLocaleString() : ''} from ${at(c.last_ip, c.last_ua)}</div>`;
 }
 
 /** @type {[string, string][]} */
 const importKinds = [['participants', 'Participants'], ['messages', 'Lines'], ['message_versions', 'Earlier versions'],
   ['documents', 'Documents'], ['revisions', 'Revisions'], ['uploads', 'Uploads'], ['annotations', 'Annotations'],
-  ['annotation_messages', 'Thread messages'], ['attachments', 'Attachments'], ['personas', 'Personas'], ['skills', 'Skills'],
+  ['annotation_messages', 'Thread messages'], ['attachments', 'Attachments'], ['mentions', 'Mentions'], ['personas', 'Personas'], ['skills', 'Skills'],
   ['sessions', 'Agent sessions']];
 
 /**
@@ -259,6 +293,7 @@ const importKinds = [['participants', 'Participants'], ['messages', 'Lines'], ['
  * @param {{reload: () => void}} props
  */
 function ImportRoom({ reload }) {
+  const sheet = useRef(/** @type {HTMLDialogElement | null} */ (null));
   const [file, setFile] = useState(/** @type {File | null} */ (null));
   const [preview, setPreview] = useState(/** @type {ImportReport | null} */ (null));
   const [said, setSaid] = useState('');
@@ -296,7 +331,10 @@ function ImportRoom({ reload }) {
   };
   const p = preview;
   return html`
-    <h3>Import a room</h3>
+    <button type="button" id="import-open" class="btn-secondary" onClick=${() => sheet.current?.showModal()}>Import a room</button>
+    <dialog ref=${sheet} id="import-sheet" class="sheet wide" aria-labelledby="import-title">
+    <div class="sheet-head"><h2 id="import-title">Import a room</h2>
+      <button type="button" class="btn-icon btn-ghost" aria-label="Close" onClick=${() => sheet.current?.close()}>✕</button></div>
     <p class="hint">An export from this instance or another one becomes a new room. Nothing is created until you confirm the preview.</p>
     <form class="row" id="import-form" onSubmit=${formAction(() => send(true))}>
       <label>Archive (.tar.gz)<input id="import-file" type="file" accept=".gz,.tgz,application/gzip" required onChange=${pick}/></label>
@@ -316,7 +354,8 @@ function ImportRoom({ reload }) {
       <dl id="import-counts">${importKinds.map(([k, label]) => html`<div><dt>${label}</dt><dd>${p.counts[k] || 0}</dd></div>`)}</dl>
       ${p.warnings.length > 0 && html`<ul id="import-warnings" class="warn">${p.warnings.map((w) => html`<li>${w}</li>`)}</ul>`}
       <div class="row"><button type="button" id="import-confirm" disabled=${busy} onClick=${() => send(false)}>Import as a new room</button></div>
-    </section>`}`;
+    </section>`}
+    </dialog>`;
 }
 
 function Profiles() {
@@ -329,12 +368,12 @@ function Profiles() {
   }, []);
   /** @param {Profile} p */
   const remove = (p) => {
-    if (!window.confirm(`Delete the profile of ${p.name || p.uuid}? Its participants stay in their rooms, detached.`)) return;
-    api('DELETE', '/api/admin/profiles/' + p.id).then(load).catch(show);
+    window.grillConfirm(`Delete the profile of ${p.name || p.uuid}?`, 'Its participants stay in their rooms, detached.', 'Delete')
+      .then((yes) => { if (yes) api('DELETE', '/api/admin/profiles/' + p.id).then(load).catch(show); });
   };
   return html`
     <h2>Profiles</h2>
-    <p class="hint">Emails show here and nowhere else. A profile's name is the one it last joined a room with.</p>
+    <p class="hint">Emails show here and nowhere else. A profile's name is the one it chose in a room, else the one it last joined a room with.</p>
     ${list && (list.length ? html`<div class="scroll"><table id="profiles">
       <thead><tr><th>Name</th><th>Email</th><th>Rooms</th><th>Skills</th><th>Last activity</th><th>Rooms it may create</th><th></th></tr></thead>
       <tbody>${list.map((p) => html`<tr id=${'profile-' + p.id}>
@@ -375,7 +414,8 @@ function Libraries() {
   useEffect(() => { load(); }, []);
   /** @param {string} what @param {string} path */
   const remove = (what, path) => {
-    if (window.confirm(`Remove ${what} from the library? Rooms keep the copies they use.`)) api('DELETE', path).then(load).catch(show);
+    window.grillConfirm(`Remove ${what} from the library?`, 'Rooms keep the copies they use.', 'Remove')
+      .then((yes) => { if (yes) api('DELETE', path).then(load).catch(show); });
   };
   return html`
     <h2>Persona templates</h2>
@@ -451,18 +491,18 @@ function RoomCreation() {
 
 function Shell() {
   const logout = () => api('POST', '/api/admin/logout').then(() => { signedIn.value = false; }).catch(show);
-  /** @param {string} id @param {string} name */
-  const link = (id, name) => html`<a href=${'#' + id} aria-current=${view.value === id ? 'page' : undefined}>${name}</a>`;
+  const view = route.value.view;
   return html`
-    <header>
-      <h1>grill-room admin</h1>
-      <nav aria-label="Views">${views.map(([id, name]) => link(id, name))}</nav>
-      <button type="button" id="logout" onClick=${logout}>Sign out</button>
+    <header class="app-header">
+      <img src="/static/logo.svg" alt="" class="logo" width="32" height="32"/>
+      <h1>grill-room · Admin</h1>
+      <button type="button" id="logout" class="btn-secondary" onClick=${logout}>Sign out</button>
     </header>
+    <${TabBar} tabs=${views} active=${view} href=${(/** @type {string} */ id) => '#' + id} label="Views" cls="views"/>
     <main>
       ${notice.value && html`<p class="said bad" role="alert">${notice.value}</p>`}
       ${{ rooms: html`<${Rooms}/>`, profiles: html`<${Profiles}/>`, libraries: html`<${Libraries}/>`, instance: html`<${InstanceView}/>`,
-        sessions: html`<${Sessions}/>`, audit: html`<${Audit}/>` }[view.value]}
+        sessions: html`<${Sessions}/>`, audit: html`<${Audit}/>` }[view]}
     </main>`;
 }
 

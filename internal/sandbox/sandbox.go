@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/babs/grill-room/internal/turn"
 )
 
 const (
@@ -299,11 +301,12 @@ type Result struct {
 	Subtype   string `json:"subtype"`
 	// ModelUsage is keyed by model id; Claude Code may call a small model on the side.
 	ModelUsage map[string]struct {
-		InputTokens              int64 `json:"inputTokens"`
-		OutputTokens             int64 `json:"outputTokens"`
-		CacheReadInputTokens     int64 `json:"cacheReadInputTokens"`
-		CacheCreationInputTokens int64 `json:"cacheCreationInputTokens"`
-		ContextWindow            int64 `json:"contextWindow"`
+		InputTokens              int64   `json:"inputTokens"`
+		OutputTokens             int64   `json:"outputTokens"`
+		CacheReadInputTokens     int64   `json:"cacheReadInputTokens"`
+		CacheCreationInputTokens int64   `json:"cacheCreationInputTokens"`
+		ContextWindow            int64   `json:"contextWindow"`
+		CostUSD                  float64 `json:"costUSD"`
 	} `json:"modelUsage"`
 	// TotalCostUSD is claude's estimate of the turn's cost, nil when it reports none.
 	TotalCostUSD *float64 `json:"total_cost_usd"`
@@ -332,7 +335,8 @@ func (r *Result) Tokens() (in, out, cacheRead, cacheWrite int64) {
 	return in, out, cacheRead, cacheWrite
 }
 
-// Model is the model that wrote most of the answer, or "" when claude reported none.
+// Model is the model id that wrote most of the answer, whose window Context reports, or "" when
+// claude reported none. Label, not Model, names the model a turn ran on (005-AC10).
 func (r *Result) Model() string {
 	var best string
 	var most int64 = -1
@@ -342,6 +346,80 @@ func (r *Result) Model() string {
 		}
 	}
 	return best
+}
+
+// share is a model family's part of a turn, in percent.
+type share struct {
+	model string
+	pct   float64
+}
+
+// shares groups ModelUsage by model family, an id naming none standing for itself, weighted by
+// cost, or by tokens when claude reports no cost. Largest first.
+func (r *Result) shares() []share {
+	by := map[string]float64{}
+	var cost, tokens float64
+	for _, u := range r.ModelUsage {
+		cost += u.CostUSD
+		tokens += float64(u.InputTokens + u.OutputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens)
+	}
+	for id, u := range r.ModelUsage {
+		f := turn.ModelFamily(id)
+		if f == "" {
+			f = id
+		}
+		var w float64
+		switch {
+		case cost > 0:
+			w = 100 * u.CostUSD / cost
+		case tokens > 0:
+			w = 100 * float64(u.InputTokens+u.OutputTokens+u.CacheReadInputTokens+u.CacheCreationInputTokens) / tokens
+		}
+		by[f] += w
+	}
+	out := make([]share, 0, len(by))
+	for m, p := range by {
+		out = append(out, share{m, p})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].pct > out[j].pct || (out[i].pct == out[j].pct && out[i].model < out[j].model)
+	})
+	return out
+}
+
+func (s share) String() string {
+	if s.pct < 1 {
+		return s.model + " <1%"
+	}
+	return fmt.Sprintf("%s %.0f%%", s.model, s.pct)
+}
+
+// Label names the model a turn ran on, given the one it asked for after the host cap (005-AC10).
+// A resumed session reports its earlier model beside the new one, so the label is the one asked
+// for, checked against ModelUsage: the note lists the other models with their cost share,
+// "+haiku 3%". When claude reports models but not the one asked for, mismatch is set and the note
+// lists what it reported. Asking for none, from an older room server, labels the costliest model.
+func (r *Result) Label(asked string) (model, note string, mismatch bool) {
+	all := r.shares()
+	if asked == "" && len(all) > 0 {
+		asked = all[0].model
+	}
+	fam := turn.ModelFamily(asked)
+	var others []string
+	found := len(all) == 0
+	for _, s := range all {
+		if s.model == fam || s.model == asked {
+			found = true
+			continue
+		}
+		others = append(others, "+"+s.String())
+	}
+	if !found {
+		for i, s := range all {
+			others[i] = s.String()
+		}
+	}
+	return asked, strings.Join(others, ", "), !found
 }
 
 // RunClaude runs one turn in the sandbox.

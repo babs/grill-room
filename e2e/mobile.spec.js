@@ -1,7 +1,7 @@
 import { test, expect, devices } from '@playwright/test';
 import http from 'node:http';
 import { adminToken } from './playwright.config.js';
-import { roomWith } from './helpers.js';
+import { roomWith, menuItem } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -92,16 +92,18 @@ test('a page back from the background resumes the stream and reloads the room', 
   await alice.evaluate(() => { events.onmessage = null; });
   await setVisibility(alice, 'hidden');
 
+  // The stream delivers the line to the page, which no longer draws it.
+  const delivered = alice.evaluate(() => new Promise((ok) => events.addEventListener('message', (e) => { if (e.data.includes('sent while away')) ok(); })));
   const bob = await joinAPI(request, room.id, 'Bob');
   await post(request, room.id, bob, 'sent while away');
-  await alice.waitForTimeout(500);
+  await delivered;
   await expect(alice.locator('#messages')).not.toContainText('sent while away');
 
-  const resumed = alice.waitForRequest((r) => /\/events\?since=\d+$/.test(r.url()));
+  const resumed = alice.waitForRequest((r) => /\/events\?since=\d+&tab=\w+$/.test(r.url()));
   await setVisibility(alice, 'visible');
   await resumed;
   await expect(alice.locator('#messages')).toContainText('sent while away');
-  await expect(alice.locator('#participants li')).toHaveText(['Alice', 'Bob']);
+  await expect(alice.locator('#participants li .name, #participants-away li .name')).toHaveText(['Alice', 'Bob']);
   await expect(alice.locator('.msg', { hasText: 'Alice joined' })).toHaveCount(1);
   await post(request, room.id, bob, 'live after resume');
   await expect(alice.locator('#messages')).toContainText('live after resume');
@@ -168,7 +170,7 @@ for (const name of ['iPhone 15', 'Pixel 7']) {
       expect(b.x + b.width).toBeLessThanOrEqual(width + 1);
     };
 
-    await page.getByRole('button', { name: 'Personas' }).click();
+    await menuItem(page, 'Personas');
     const panel = page.locator('#personas');
     await panel.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
     await panel.getByRole('button', { name: 'Add', exact: true }).click();
@@ -178,13 +180,13 @@ for (const name of ['iPhone 15', 'Pixel 7']) {
     // The second persona's controls are reachable by scrolling the panel.
     const sec = panel.locator('.persona-form', { hasText: 'Secretary' });
     await sec.getByLabel('Model').selectOption('haiku');
-    const save = sec.getByRole('button', { name: 'Save' });
+    const save = sec.getByRole('button', { name: 'Save', exact: true });
     await save.scrollIntoViewIfNeeded();
     await inside(save);
     await save.click();
     await expect(panel.locator('#personas-status')).toHaveText('Secretary saved. It applies from its next turn.');
     await panel.getByRole('button', { name: 'Close' }).click();
-    await expect(page.locator('#messages')).toContainText('Alice changed 📝 Secretary: model default → haiku.');
+    await expect(page.locator('#messages')).toContainText('Alice changed 📝 Secretary: model sonnet → haiku.');
     for (const b of await page.locator('button.persona').all()) await inside(b);
     await inside(page.locator('#body'));
   });

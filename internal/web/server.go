@@ -17,6 +17,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,7 +29,9 @@ import (
 	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/turn"
+	"github.com/babs/grill-room/internal/uikit"
 	"github.com/babs/grill-room/internal/uivendor"
+	"github.com/babs/grill-room/internal/webpush"
 )
 
 //go:embed ui
@@ -51,6 +54,10 @@ const (
 // heartbeat keeps proxies from timing out an idle stream and re-checks access. A var for tests.
 var heartbeat = 20 * time.Second
 
+// afterAccessCheck runs between a stream's access check and its reads; tests delete the room
+// there, as a concurrent DELETE may.
+var afterAccessCheck atomic.Pointer[func(room string)]
+
 // Server serves the room API and UI.
 type Server struct {
 	bus     *bus.Bus
@@ -64,14 +71,21 @@ type Server struct {
 	streams   atomic.Int64
 	pairings  pairings
 	presence  presences
-	viewers   viewers
+	people    people
 	stt       sttWorkers
+	clients   clients
 	// magicLimit rate-limits magic link requests per address and per client IP.
 	magicLimit limiter
 	// loginLimit rate-limits /admin logins per client IP.
 	loginLimit limiter
 	// now is the clock admin sessions and the audit log read; tests set it.
 	now func() time.Time
+	// pushRead and pushTicked, set by tests, learn the last line PushLoop read for a room, and
+	// each tick: its clock and how many batches it sent.
+	pushRead func(last int64)
+	// afterFunc runs a backstop later: time.AfterFunc, or a test's own schedule.
+	afterFunc  func(d time.Duration, f func())
+	pushTicked func(now time.Time, sent int)
 	// electMu serialises host elections and hand-overs.
 	electMu sync.Mutex
 	// turnMu serialises turn starts and queue draining, so presses run in the order they came.
@@ -81,6 +95,10 @@ type Server struct {
 	fallbacks map[string]*atomic.Int64
 	// conflicts counts results rejected on a document conflict, by ConflictOutcomes (003-AC21).
 	conflicts map[string]*atomic.Int64
+	// vapid is the instance's Web Push identity, loaded or generated on first use (005-AC24).
+	vapid      *webpush.VAPID
+	vapidMu    sync.Mutex
+	pushClient *http.Client
 }
 
 // New builds a server. adminHash is HashToken of the admin token; baseURL prefixes invite links.
@@ -97,14 +115,24 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	if opts.AuditRetention <= 0 {
 		opts.AuditRetention = DefaultAuditRetention
 	}
+	if opts.ClientRetention <= 0 {
+		opts.ClientRetention = DefaultClientRetention
+	}
 	if opts.MaxImportBytes <= 0 {
 		opts.MaxImportBytes = DefaultMaxImportBytes
 	}
+	if opts.PushHosts == nil {
+		opts.PushHosts = DefaultPushHosts
+	}
+	if opts.PushClient == nil {
+		opts.PushClient = newPushClient()
+	}
 	s := &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), archives: make(chan struct{}, maxConcurrentArchives),
 		adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
-		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, viewers: viewers{m: map[int64]int{}}, stt: sttWorkers{m: map[string]*sttWorker{}},
+		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, people: people{m: map[string]map[int64]*person{}}, stt: sttWorkers{m: map[string]*sttWorker{}}, clients: clients{m: map[int64]clientSeen{}},
 		magicLimit: limiter{window: magicWindow}, loginLimit: limiter{window: loginWindow}, now: time.Now, fallbacks: fallbackCounters(),
-		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}}
+		afterFunc: func(d time.Duration, f func()) { time.AfterFunc(d, f) },
+		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}, pushClient: opts.PushClient}
 	s.cleanStaging()
 	return s
 }
@@ -149,12 +177,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /join", page("join.html"))
 	mux.HandleFunc("GET /favicon.ico", asset(ui, "ui/favicon.ico", "image/x-icon"))
 	mux.HandleFunc("GET /site.webmanifest", asset(ui, "ui/site.webmanifest", "application/manifest+json"))
+	// The Web Push service worker: served from the root, its scope covers every room (005-AC24).
+	mux.HandleFunc("GET /sw.js", asset(ui, "ui/sw.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("GET /r/{room}", s.roomPage)
+	// The document manager in a window of its own (005-AC11): the room page in its docs mode.
+	mux.HandleFunc("GET /r/{room}/docs", s.roomPage)
+	mux.HandleFunc("GET /r/{room}/docs/{doc}", s.roomPage)
 	mux.HandleFunc("GET /profile", page("profile.html"))
 	mux.HandleFunc("GET /admin", s.adminPage)
 	static, _ := fs.Sub(ui, "ui") // cannot fail: "ui" is a valid embedded path
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
 	mux.Handle("GET "+uivendor.Prefix, uivendor.Handler())
+	mux.Handle("GET "+uikit.Prefix, uikit.Handler())
 	mux.HandleFunc("GET /install.sh", s.installScript)
 	mux.HandleFunc("GET /download/{file}", s.download)
 	mux.HandleFunc("GET /api/daemon/version", s.daemonVersion)
@@ -189,6 +223,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/admin/rooms/import", s.admin(s.importRoom))
 	mux.Handle("PUT /api/admin/rooms/{room}/admins/{participant}", adminOnly(s.setRoomAdmin))
 	mux.Handle("DELETE /api/admin/rooms/{room}/admins/{participant}", adminOnly(s.setRoomAdmin))
+	mux.Handle("PUT /api/admin/rooms/{room}/participants/{participant}/name", adminOnly(s.renameParticipant))
 	mux.Handle("PUT /api/rooms/{room}/quota", s.memberOrAdmin(s.setQuota))
 	mux.Handle("GET /api/admin/rooms/{room}/invites", adminOnly(s.listInvites))
 	mux.Handle("POST /api/admin/rooms/{room}/invites", adminOnly(s.createInvite))
@@ -226,9 +261,17 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/rooms/{room}/messages/{msg}", s.participant(s.deleteMessage))
 	mux.Handle("GET /api/rooms/{room}/messages/{msg}/versions", s.participant(s.messageVersions))
 	mux.Handle("GET /api/rooms/{room}/events", s.participant(s.events))
+	mux.Handle("POST /api/rooms/{room}/presence", s.participant(s.postPresence))
+	mux.Handle("GET /api/rooms/{room}/push", s.participant(s.getPush))
+	mux.Handle("PUT /api/rooms/{room}/push", s.participant(s.putPush))
+	mux.Handle("DELETE /api/rooms/{room}/push", s.participant(s.putPush))
 	mux.Handle("GET /api/rooms/{room}/documents", s.participant(s.listDocuments))
 	mux.Handle("POST /api/rooms/{room}/documents", s.participant(s.uploadDocument))
 	mux.Handle("GET /api/rooms/{room}/documents/{doc}", s.participant(s.getDocument))
+	mux.Handle("PATCH /api/rooms/{room}/documents/{doc}", s.participant(s.renameDocument))
+	mux.Handle("DELETE /api/rooms/{room}/documents/{doc}", s.memberOrAdmin(s.setDocumentDeleted))
+	mux.Handle("POST /api/rooms/{room}/documents/{doc}/restore", s.memberOrAdmin(s.setDocumentDeleted))
+	mux.Handle("GET /api/rooms/{room}/documents/deleted", s.memberOrAdmin(s.deletedDocuments))
 	mux.Handle("GET /api/rooms/{room}/documents/{doc}/view", s.participant(s.viewDocument))
 	mux.Handle("GET /api/rooms/{room}/documents/{doc}/original", s.participant(s.originalDocument))
 	mux.Handle("GET /api/rooms/{room}/documents/{doc}/annotations", s.participant(s.listAnnotations))
@@ -247,8 +290,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rooms/{room}/agent", s.participant(s.getAgent))
 	mux.Handle("PATCH /api/rooms/{room}/agent", s.participant(s.setAgentMode))
 	mux.Handle("POST /api/rooms/{room}/turns", s.participant(s.startTurn))
+	mux.Handle("POST /api/rooms/{room}/turns/{turn}/stop", s.participant(s.stopTurn))
 	mux.Handle("PUT /api/rooms/{room}/host", s.participant(s.handOver))
 	mux.Handle("PATCH /api/rooms/{room}/participants/{participant}", s.participant(s.setCanTrigger))
+	mux.Handle("PUT /api/rooms/{room}/participants/{participant}/name", s.memberOrAdmin(s.renameParticipant))
 	mux.Handle("DELETE /api/rooms/{room}/queue/{queued}", s.participant(s.cancelQueued))
 	mux.Handle("PATCH /api/rooms/{room}/chain", s.participant(s.controlChain))
 	mux.Handle("GET /api/rooms/{room}/templates", s.participant(s.listTemplates))
@@ -279,6 +324,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rooms/{room}/voice", s.participant(s.getVoice))
 	mux.Handle("POST /api/stt/heartbeat", s.sttAuth(s.sttHeartbeat))
 	mux.Handle("POST /api/rooms/{room}/voice/lines", s.sttAuth(s.postVoiceLine))
+	mux.Handle("GET /api/stt/rooms/{room}/prompt", s.sttAuth(s.sttPromptFor))
+	mux.Handle("GET /api/rooms/{room}/glossary", s.participant(s.getGlossary))
+	mux.Handle("PUT /api/rooms/{room}/glossary", s.participant(s.putGlossary))
 
 	csp := "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" + s.connectSrc()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -399,6 +447,7 @@ func (s *Server) participant(next func(http.ResponseWriter, *http.Request, sessi
 			httpError(w, http.StatusInternalServerError, "auth failed")
 			return
 		}
+		s.seen(r.Context(), sess.p.ID, r)
 		next(w, r, sess)
 	})
 }
@@ -500,6 +549,7 @@ func (s *Server) deleteRoom(w http.ResponseWriter, r *http.Request, sess *sessio
 	// Before the error check: a failed post-delete checkpoint still leaves the room gone.
 	s.bus.Notify(room)
 	s.closeVoice(room)
+	s.people.forget(room)
 	if err != nil {
 		s.serverError(w, "delete_room_failed", err)
 		return
@@ -716,6 +766,9 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "join_failed", err)
 		return
 	}
+	if err := s.bus.Store.ParticipantJoined(r.Context(), p.ID, s.clientIP(r), userAgent(r), s.now()); err != nil {
+		s.log.Warn("participant_joined_client_failed", zap.Int64("participant", p.ID), zap.Error(err))
+	}
 	s.bus.Notify(m.RoomID)
 	s.log.Info("participant_joined", zap.String("room", p.RoomID), zap.Int64("participant", p.ID), zap.Int64("invite", p.InviteID))
 	http.SetCookie(w, &http.Cookie{
@@ -744,6 +797,8 @@ type roomResp struct {
 	Daemons []presence `json:"daemons"`
 	// Voice tells whether the server offers LiveKit audio.
 	Voice bool `json:"voice"`
+	// Profile tells whether the viewer has a profile, to which a rename may apply (005-AC1).
+	Profile bool `json:"profile"`
 }
 
 func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
@@ -762,7 +817,8 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
 			sess.p.Admin = p.Admin
 		}
 	}
-	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps, Daemons: s.connectedDaemons(room.ID), Voice: s.opts.Voice != nil})
+	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps, Daemons: s.connectedDaemons(room.ID), Voice: s.opts.Voice != nil,
+		Profile: sess.p.ProfileID != 0})
 }
 
 func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, sess session) {
@@ -782,16 +838,21 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, sess sessio
 		s.serverError(w, "post_message_failed", err)
 		return
 	}
-	s.mentionTurns(r.Context(), sess.p, body)
-	writeJSON(w, http.StatusCreated, viewMessage(*m))
+	notices := s.mentionTurns(r.Context(), sess.p, m)
+	writeJSON(w, http.StatusCreated, struct {
+		store.Message
+		// Notices go to the author alone: nobody else is told (005-AC3).
+		Notices []mentionNotice `json:"mention_notices,omitempty"`
+	}{viewMessage(*m), notices})
 }
 
 // events streams the room's messages after ?since= or Last-Event-ID, then live ones, a
 // "message_edited" event carrying a message edited or deleted past change seq ?edits=, a
 // "documents" event when a document or revision is added, an "annotations" event when an
 // annotation is added or changes, an "agent" event carrying the agent state at open and whenever
-// it changes, and with voice on, an "stt" event at open and whenever
-// transcription comes or goes. The stream ends with a "revoked" event as soon as the participant's
+// it changes, a "presence" event carrying who is here and their audio state at open and whenever it
+// changes (005-AC6), and with voice on, an "stt" event at open and whenever transcription comes or
+// goes. ?tab= names the page the stream belongs to, as its presence heartbeats do. The stream ends with a "revoked" event as soon as the participant's
 // access is gone.
 func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	flusher, ok := w.(http.Flusher)
@@ -829,8 +890,8 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	}
 	s.streams.Add(1)
 	defer s.streams.Add(-1)
-	s.viewers.add(sess.p.ID, 1)
-	defer s.viewers.add(sess.p.ID, -1)
+	release := s.people.open(room, sess.p.ID, r.URL.Query().Get("tab"), s.now())
+	defer func() { release(s.now()) }()
 	// The live channel is only a wake-up signal: every send reads from the store after the last id,
 	// so a dropped or out-of-order signal can never leave a gap in the stream.
 	live, cancel := s.bus.Subscribe(64)
@@ -842,19 +903,48 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	w.WriteHeader(http.StatusOK)
 
 	var agentSent string
-	// sync re-checks access, then sends what the store holds past last. False ends the stream.
+	// gone sends "revoked" once the participant's access is gone, as a room deleted or an invite
+	// revoked mid-read fails the read that follows the access check.
+	revoked := false
+	gone := func() {
+		if _, err := s.authorize(r.Context(), sess.creds, room); errors.Is(err, store.ErrNotFound) && !revoked {
+			revoked = true
+			_, _ = io.WriteString(w, "event: revoked\ndata: {}\n\n")
+			flusher.Flush()
+		}
+	}
+	// send re-checks access, then sends what the store holds past last. False ends the stream.
+	var send func() bool
 	sync := func() bool {
+		ok := send()
+		if !ok {
+			gone()
+		}
+		return ok
+	}
+	send = func() bool {
 		if _, err := s.authorize(r.Context(), sess.creds, room); err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				_, _ = io.WriteString(w, "event: revoked\ndata: {}\n\n")
-				flusher.Flush()
-			}
 			return false
+		}
+		if f := afterAccessCheck.Load(); f != nil {
+			(*f)(room)
 		}
 		for {
 			msgs, err := s.bus.Store.Messages(r.Context(), room, last, replayBatch)
 			if err != nil {
 				return false
+			}
+			if len(msgs) > 0 {
+				mentions, err := s.bus.Store.MessageMentions(r.Context(), room, last, msgs[len(msgs)-1].ID)
+				if err != nil {
+					return false
+				}
+				for i := range msgs {
+					msgs[i].Mentions = mentions[msgs[i].ID]
+				}
+				if s.nameMentions(r.Context(), room, msgs) != nil {
+					return false
+				}
 			}
 			for i := range msgs {
 				b, err := json.Marshal(viewMessage(msgs[i]))
@@ -874,7 +964,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 		// No id: line, so Last-Event-ID keeps naming the last message sent.
 		for {
 			msgs, err := s.bus.Store.ChangedMessages(r.Context(), room, edits, replayBatch)
-			if err != nil {
+			if err != nil || s.nameMentions(r.Context(), room, msgs) != nil {
 				return false
 			}
 			for i := range msgs {
@@ -932,27 +1022,40 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	if !sync() {
 		return
 	}
-	// A worker's absence shows as a missing heartbeat, which no bus signal announces: poll for it.
-	var sttTick <-chan time.Time
+	// A worker's absence and a participant's grace running out show as nothing happening, which
+	// no bus signal announces: poll for them.
+	ps := s.people.snapshot(room, s.now())
+	if _, err := io.WriteString(w, presenceEvent(ps)); err != nil {
+		return
+	}
 	var stt sttState
 	if s.opts.Voice != nil {
 		stt = s.stt.state(room, time.Now())
 		if _, err := io.WriteString(w, sttEvent(stt)); err != nil {
 			return
 		}
-		flusher.Flush()
-		t := time.NewTicker(sttPoll)
-		defer t.Stop()
-		sttTick = t.C
 	}
+	flusher.Flush()
+	poll := time.NewTicker(pollEvery)
+	defer poll.Stop()
 	tick := time.NewTicker(heartbeat)
 	defer tick.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-sttTick:
-			if now := s.stt.state(room, time.Now()); now != stt {
+		case <-poll.C:
+			if now := s.people.snapshot(room, s.now()); !slices.EqualFunc(now, ps, samePresence) {
+				ps = now
+				if _, err := io.WriteString(w, presenceEvent(ps)); err != nil {
+					return
+				}
+				flusher.Flush()
+			}
+			if s.opts.Voice == nil {
+				continue
+			}
+			if now := s.stt.state(room, time.Now()); !now.equal(stt) {
 				stt = now
 				if _, err := io.WriteString(w, sttEvent(stt)); err != nil {
 					return

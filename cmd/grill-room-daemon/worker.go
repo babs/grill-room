@@ -61,7 +61,7 @@ func runWorker(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		Settings: settings, SettingsPath: settingsPath, Allowlist: allowlist, AllowlistPath: allowlistPath,
 		Version: Version, Tokens: daemon.NewTokens(cfg.StateDir), Docker: sandbox.Docker, Access: access,
 		// No client timeout: it would cut the long-lived room stream; each request has its own deadline.
-		HTTP: &http.Client{}, Log: logger, Model: cfg.Model,
+		HTTP: &http.Client{}, Log: logger,
 		Image: cfg.Image, Stream: sandbox.DockerStream,
 		CacheDir: filepath.Join(cfg.CacheDir, "workspace-cache"), CacheMax: cfg.CacheMB << 20,
 		OnTurn: func(e daemon.TurnEvent) { _ = conn.Send(daemon.Msg{Type: "turn", Turn: &e}) },

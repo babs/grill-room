@@ -1,12 +1,13 @@
 import { test, expect } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { roomWith } from './helpers.js';
+import { roomWith, menuItem } from './helpers.js';
 
 // 001-AC36: the room offers the daemon for the visitor's platform, lets them pick another, and
 // shows the install one-liner carrying this room's URL. The binary served matches its sha256.
 test('host the agent: download and one-liner', async ({ browser, request }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
   const section = alice.locator('#host-agent');
+  await menuItem(alice, 'Run the AI on my computer');
   await expect(section).toBeVisible();
   await section.locator('summary').click();
 
