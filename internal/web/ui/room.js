@@ -18,6 +18,20 @@ let events;
 let lastID = 0;
 let editSeq = 0;
 let retryTimer;
+
+// netFetch is fetch, with a GET the browser dropped (a network change, ERR_NETWORK_CHANGED) tried
+// twice more: a read is safe to repeat, and a lost one left panels empty until a reload.
+async function netFetch(input, init) {
+  const get = (init?.method || 'GET').toUpperCase() === 'GET';
+  for (let i = 0; ; i++) {
+    try {
+      return await window.fetch(input, init);
+    } catch (err) {
+      if (!get || i >= 2 || !(err instanceof TypeError)) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 300 * (i + 1)));
+    }
+  }
+}
 let ended = false;
 let refreshTimer;
 let wasIn = false;
@@ -55,7 +69,7 @@ function end(text) {
 
 // loadRoom fetches the room header and participant list; false when access is gone.
 async function loadRoom() {
-  const res = await fetch(api);
+  const res = await netFetch(api);
   if (res.status === 401) {
     // A refresh can race the stream's "revoked" event: once in, both must tell the same thing.
     end(wasIn ? 'Your access to this room has ended.'
@@ -89,8 +103,7 @@ async function loadRoom() {
   $('doc-delete').hidden = !meAdmin;
   renameSenders();
   $('voice').hidden = !data.voice;
-  // Every member edits the transcription glossary there (005-AC23); the rest is for room admins.
-  $('manage-open').hidden = false;
+  showManage();
   renderParticipants();
   // The room admin panel (admin/room-admin.js) renders from the same answer.
   window.grillRoom = data;
@@ -491,7 +504,7 @@ async function toggleVersions(li, m) {
     shown.remove();
     return;
   }
-  const res = await fetch(api + '/messages/' + m.id + '/versions');
+  const res = await netFetch(api + '/messages/' + m.id + '/versions');
   if (!res.ok) return;
   const list = document.createElement('ol');
   list.className = 'versions';
@@ -612,7 +625,7 @@ function deleteMessage(m) {
   if (li) li.classList.add('deleting');
   const send = () => {
     pendingDeletes.delete(m.id);
-    fetch(api + '/messages/' + m.id, { method: 'DELETE', keepalive: true }).then((res) => {
+    netFetch(api + '/messages/' + m.id, { method: 'DELETE', keepalive: true }).then((res) => {
       if (res.status === 401) end('Your access to this room has ended.');
     }).catch(console.error);
   };
@@ -731,7 +744,7 @@ function nudgeRecovery() {
 // Invites: a member creates links and revokes the ones they created; a room admin, who gets every
 // invite, manages the others from Manage.
 async function loadInvites() {
-  const res = await fetch(api + '/invites');
+  const res = await netFetch(api + '/invites');
   if (!res.ok) return;
   const invites = (await res.json()).filter((i) => !i.revoked_at && String(i.created_by) === myID);
   $('invite-list').replaceChildren(...invites.map((inv) => {
@@ -803,7 +816,7 @@ function describe(d) {
 }
 
 async function loadDocuments() {
-  const res = await fetch(api + '/documents');
+  const res = await netFetch(api + '/documents');
   if (res.status === 401) return;
   if (!res.ok) throw new Error('documents: HTTP ' + res.status);
   const docs = await res.json();
@@ -841,7 +854,7 @@ function option(value, text) {
 // showDocument opens a document; refresh keeps the revisions picked unless the latest was shown.
 // A deep link pushes no history entry: Chrome lets Back skip an entry pushed before any tap.
 async function showDocument(id, refresh, deepLink) {
-  const res = await fetch(docURL(id, ''));
+  const res = await netFetch(docURL(id, ''));
   if (!res.ok) throw new Error('document: HTTP ' + res.status);
   const { document: d, revisions } = await res.json();
   // A refresh that lands after the viewer closed or moved to another document is stale.
@@ -1106,7 +1119,7 @@ function readImages(input) {
 }
 
 async function sendJSON(method, url, body) {
-  const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const res = await netFetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (res.status === 401) {
     end('Your access to this room has ended.');
     return null;
@@ -1133,7 +1146,7 @@ $('annot-new').addEventListener('submit', (e) => {
 async function loadAnnotations() {
   const d = openDoc;
   if (!d) return;
-  const res = await fetch(docURL(d.id, '/annotations'));
+  const res = await netFetch(docURL(d.id, '/annotations'));
   if (res.status === 401) return;
   if (!res.ok) throw new Error('annotations: HTTP ' + res.status);
   const list = await res.json();
@@ -1884,7 +1897,7 @@ function renderQueue() {
             cancel.textContent = 'Cancel';
       cancel.setAttribute('aria-label', 'Cancel the queued turn of ' + (p ? p.name : 'this persona'));
       cancel.addEventListener('click', () => {
-        fetch(api + '/queue/' + q.id, { method: 'DELETE' }).catch(console.error);
+        netFetch(api + '/queue/' + q.id, { method: 'DELETE' }).catch(console.error);
       });
       li.append(' ', cancel);
     }
@@ -2023,7 +2036,7 @@ function personaForm(p) {
   actions.append(save);
   act('Remove', 'Remove ' + p.name, async () => {
     if (!(await grillConfirm('Remove ' + p.name + '?', 'Its session goes; what it wrote stays.', 'Remove'))) return;
-    const res = await fetch(api + '/personas/' + p.id, { method: 'DELETE' });
+    const res = await netFetch(api + '/personas/' + p.id, { method: 'DELETE' });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'HTTP ' + res.status);
   }, actions, 'btn-danger-outline');
   form.append(head, from, grid, field('Persona text', text), skillsBlock(p), advanced, actions, fold('More', 'more', moreBox));
@@ -2147,7 +2160,7 @@ async function turnSkillOn(p, id) {
 }
 
 async function loadSkills() {
-  const [lib, st] = await Promise.all([fetch(api + '/skills'), fetch(api + '/agent')]);
+  const [lib, st] = await Promise.all([netFetch(api + '/skills'), netFetch(api + '/agent')]);
   if (!lib.ok) return;
   skillLib = await lib.json();
   [...$('persona-list').children].forEach((f) => { if (!f.dataset.dirty) delete f.dataset.seen; });
@@ -2185,7 +2198,7 @@ function renderPersonas() {
 }
 
 async function loadTemplates() {
-  const res = await fetch(api + '/templates');
+  const res = await netFetch(api + '/templates');
   if (!res.ok) return;
   templates = await res.json();
   // A choice made while the library loaded survives it.
@@ -2462,8 +2475,25 @@ function showSTT(st) {
   $('voice-mute').classList.toggle('captured', mine);
   $('voice-mute').title = mine ? 'Your voice is being written down' : '';
   $('voice-more').classList.toggle('down', sttDown);
+  // The model's license asks for credit wherever it runs (007-AC13).
+  $('stt-credit').hidden = !(st.engines || []).includes('parakeet');
+  if (sttGlossary !== !!st.glossary) {
+    sttGlossary = !!st.glossary;
+    showManage();
+    // The Room settings sheet (admin/room-admin.js) shows its glossary tab from the same state.
+    window.grillSTT = { glossary: sttGlossary };
+    window.dispatchEvent(new CustomEvent('grill:stt', { detail: window.grillSTT }));
+  }
 }
 let sttDown = false;
+// sttGlossary is true while a transcription worker reads room glossaries (007-AC14).
+let sttGlossary = false;
+
+// showManage offers Room settings to room admins, and to every member while the glossary, their
+// only tab (005-AC23), is in use.
+function showManage() {
+  $('manage-open').hidden = !meAdmin && !sttGlossary;
+}
 
 function voiceError(text) {
   $('voice-error').textContent = text;
@@ -2508,7 +2538,7 @@ function beat(gone) {
     focused: !gone && document.visibilityState === 'visible' && document.hasFocus(),
   });
   // keepalive lets the request outlive a closing page.
-  fetch(api + '/presence', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: !!gone })
+  netFetch(api + '/presence', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: !!gone })
     .catch(() => {});
 }
 setInterval(() => { if (events) beat(); }, 10_000);
@@ -2558,7 +2588,7 @@ async function pushSubscription(create) {
   await navigator.serviceWorker.ready;
   const sub = await reg.pushManager.getSubscription();
   if (!create) return sub;
-  const res = await fetch(api + '/push');
+  const res = await netFetch(api + '/push');
   if (!res.ok) throw new Error('HTTP ' + res.status);
   const key = Uint8Array.from(atob((await res.json()).key.replaceAll('-', '+').replaceAll('_', '/')), (c) => c.charCodeAt(0));
   const held = sub && sub.options.applicationServerKey;
@@ -2705,7 +2735,7 @@ async function joinVoice() {
   $('voice-join').disabled = true;
   let room;
   try {
-    const res = await fetch(api + '/voice');
+    const res = await netFetch(api + '/voice');
     if (res.status === 401) return end('Your access to this room has ended.');
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'HTTP ' + res.status);
     const { url, token } = await res.json();
@@ -2792,7 +2822,7 @@ async function send() {
   const typed = bodyInput.value;
   const body = typed.trim();
   if (!body) return;
-  const res = await fetch(api + '/messages', {
+  const res = await netFetch(api + '/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ body }),
@@ -2944,7 +2974,7 @@ async function showPairing(id) {
   // The buttons show once they answer: a click before the request loads would do nothing.
   $('pairing-actions').hidden = true;
   $('pairing').hidden = false;
-  const res = await fetch(url);
+  const res = await netFetch(url);
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     text.textContent = data.error || 'This pairing request could not be loaded.';
@@ -2958,7 +2988,7 @@ async function showPairing(id) {
     $('pairing-actions').hidden = true;
     // Before the request: the approved app may announce itself before the answer is read.
     myDaemonsAtApproval = myDaemons();
-    const r = await fetch(url, {
+    const r = await netFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ approve }),
@@ -2993,7 +3023,7 @@ async function guessPlatform() {
 }
 
 async function showHostAgent() {
-  const res = await fetch('/api/daemon/version');
+  const res = await netFetch('/api/daemon/version');
   if (!res.ok) return;
   const rel = await res.json();
   if (!rel.version) return;
@@ -3037,7 +3067,20 @@ if (window.visualViewport) {
   fitViewport();
 }
 
-loadRoom().then((ok) => {
+// firstLoad retries the first room load until it answers: a request the browser drops (a network
+// change, a server restarting) must not leave the page empty for good.
+async function firstLoad() {
+  for (;;) {
+    try {
+      return await loadRoom();
+    } catch (err) {
+      console.error(err);
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
+}
+
+firstLoad().then((ok) => {
   if (!ok) return;
   connect();
   if (docsMode) {

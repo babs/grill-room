@@ -1,0 +1,58 @@
+# STT queue alert and its scrape (spec 007, AC19), for the VictoriaMetrics operator. Applied apart
+# from deploy/k8s by `make k8s-monitoring`: a cluster without the operator has no VMRule kind.
+# Rendered from .env: ${K8S_MONITORING_NAMESPACE} is where vmagent runs.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: stt
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: stt
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: stt
+spec:
+  groups:
+    - name: grill-stt
+      rules:
+        # Some utterance waited more than 10 s for an engine: talkers past the one pod's ceiling.
+        - alert: GrillSTTQueueWaitOver10s
+          expr: >-
+            sum(increase(grill_stt_queue_wait_seconds_count[5m]))
+            - sum(increase(grill_stt_queue_wait_seconds_bucket{le="10.0"}[5m])) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: STT utterances waited more than 10 s in the queue
+            description: More people talk at once than the STT pod keeps up with; lines arrive late.
+        - alert: GrillSTTLinesDropped
+          expr: sum(increase(grill_stt_utterances_dropped_total[5m])) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: The STT queue was full and dropped utterances
+            description: Each room got a "Transcription overloaded" line for the speaker.
+---
+# vmagent scrapes the worker's metrics port from its namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: stt-metrics
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: stt
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ${K8S_MONITORING_NAMESPACE}
+      ports:
+        - { port: 9100, protocol: TCP }

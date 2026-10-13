@@ -1,0 +1,75 @@
+# Rendered by run.sh: __NAME__, __IMAGE__, __ENGINE__, __REQ__, __SPECS__.
+# RWX volume: the corpus is copied in once, A/B Jobs on several nodes read it at the same time.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: s007-ab
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: csi-cephfs
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __NAME__
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400
+  template:
+    metadata:
+      labels: { app: s007-ab }
+    spec:
+      restartPolicy: Never
+      # One replay per node: two would share the node's 4 CPUs and skew each other's latency.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector: { matchLabels: { app: s007-ab } }
+              topologyKey: kubernetes.io/hostname
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: replay
+          image: __IMAGE__
+          # One replay per spec "<set>:<talkers>", in order; one failing must not hide the others.
+          command:
+            - sh
+            - -c
+            - |
+              mkdir -p /data/out
+              for spec in __SPECS__; do
+                set=${spec%:*} n=${spec#*:}
+                echo "=== $(date -u +%T) node=$NODE_NAME $APP_ENGINE $set x$n"
+                python -m grill_stt.replay /data/ab/manifest.json "/data/out/$APP_ENGINE.$set.x$n.jsonl" --set "$set" --talkers "$n" \
+                  || echo "FAIL $spec"
+                grep -E 'nr_throttled|throttled_usec' /sys/fs/cgroup/cpu.stat | tr '\n' ' '; echo
+              done
+          env:
+            - { name: APP_ENGINE, value: __ENGINE__ }
+            - { name: APP_ENGINE_PROCESSES, value: "2" }
+            - { name: APP_CPU_THREADS, value: "2" }
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+          resources:
+            # The 4-CPU workers are mostly requested: ask for what fits, burst to the worker's limit.
+            requests: { cpu: __REQ__, memory: 3Gi }
+            limits: { cpu: "4", memory: 3Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: data, persistentVolumeClaim: { claimName: s007-ab } }
+        - { name: tmp, emptyDir: {} }

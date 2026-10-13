@@ -99,39 +99,84 @@ async def test_heartbeat_names_the_worker_and_its_rooms() -> None:
         bodies.append(json.loads(r.content))
         return httpx.Response(204 if r.url.path == "/api/stt/heartbeat" else 404)
 
-    assert await api(httpx.MockTransport(handle)).heartbeat("w1", ["a", "b"], {"a": [7, 8]})
-    assert bodies == [{"worker": "w1", "rooms": ["a", "b"], "voices": {"a": [7, 8]}}]
+    assert await api(httpx.MockTransport(handle)).heartbeat(
+        "w1", ["a", "b"], {"a": [7, 8]}, "parakeet", False
+    )
+    assert bodies == [
+        {
+            "worker": "w1",
+            "rooms": ["a", "b"],
+            "voices": {"a": [7, 8]},
+            "engine": "parakeet",
+            "glossary": False,
+        }
+    ]
 
     def down(r: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("down", request=r)
 
-    assert not await api(httpx.MockTransport(down)).heartbeat("w1", [], {})
-    assert not await api(httpx.MockTransport(lambda _r: httpx.Response(401))).heartbeat("w1", [], {})
+    assert not await api(httpx.MockTransport(down)).heartbeat("w1", [], {}, "whisper", True)
+    assert not await api(httpx.MockTransport(lambda _r: httpx.Response(401))).heartbeat(
+        "w1", [], {}, "whisper", True
+    )
 
 
 async def test_queue_is_bounded_and_its_depth_exported() -> None:
-    """001-AC7: overlapping speech queues up to a bound instead of growing without limit."""
-    stored = 0
+    """001-AC7: overlapping speech queues up to a bound instead of growing without limit. 007-AC8:
+    a drop is counted and announced in the room, once per speaker per 30 s."""
+    lines: list[str] = []
+    notices: list[tuple[str, object]] = []
 
     def handle(r: httpx.Request) -> httpx.Response:
-        nonlocal stored
-        if r.method == "GET":
-            return httpx.Response(200, json={"prompt": ""})
-        stored += 1
+        if r.url.path.endswith("/voice/dropped"):
+            notices.append((r.url.path, json.loads(r.content)["participant_id"]))
+        else:
+            lines.append(json.loads(r.content)["body"])
         return httpx.Response(201)
 
-    p = Pipeline(lambda _a, _p: Line("hello", "en"), api(httpx.MockTransport(handle)), size=2)
+    now = [100.0]
+    p = Pipeline(
+        [lambda _a, _p: Line("hello", "en")], api(httpx.MockTransport(handle)), size=2, clock=lambda: now[0]
+    )
     dropped = metric("grill_stt_utterances_dropped_total")
     assert p.submit(utterance()) and p.submit(utterance())
     assert metric("grill_stt_queue_depth") == 2
-    assert not p.submit(utterance())
-    assert metric("grill_stt_utterances_dropped_total") == dropped + 1
+    assert not p.submit(utterance(pid=7))
+    assert not p.submit(utterance(pid=7))  # same speaker within 30 s: counted, not announced again
+    assert not p.submit(utterance(pid=8))
+    now[0] += 31
+    assert not p.submit(utterance(pid=7))
+    assert metric("grill_stt_utterances_dropped_total") == dropped + 4
+    await asyncio.wait_for(asyncio.gather(*p._background), 5)
+    assert notices == [("/api/rooms/r1/voice/dropped", 7), ("/api/rooms/r1/voice/dropped", 8)] + [
+        ("/api/rooms/r1/voice/dropped", 7)
+    ]
 
     task = asyncio.create_task(p.run())
-    await asyncio.wait_for(p._queue.join(), 5)
+    await asyncio.wait_for(p.idle(), 5)
     task.cancel()
-    assert stored == 2
+    assert lines == ["hello", "hello"]
     assert metric("grill_stt_queue_depth") == 0
+
+
+async def test_drop_notice_route_and_its_failures() -> None:
+    """007-AC8: the notice goes to the STT route; a refusal or an outage is logged, not raised."""
+    seen: list[httpx.Request] = []
+
+    def handle(r: httpx.Request) -> httpx.Response:
+        seen.append(r)
+        return httpx.Response(201)
+
+    assert await api(httpx.MockTransport(handle)).post_dropped("r1", 7)
+    assert seen[0].url.path == "/api/rooms/r1/voice/dropped" and json.loads(seen[0].content) == {
+        "participant_id": 7
+    }
+
+    def down(r: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down", request=r)
+
+    assert not await api(httpx.MockTransport(down)).post_dropped("r1", 7)
+    assert not await api(httpx.MockTransport(lambda _r: httpx.Response(404))).post_dropped("r1", 7)
 
 
 async def test_empty_transcripts_are_not_posted_and_audio_is_released() -> None:
@@ -148,7 +193,7 @@ async def test_empty_transcripts_are_not_posted_and_audio_is_released() -> None:
 
     empty = metric("grill_stt_lines_total", result="empty")
     u = utterance()
-    await Pipeline(transcribe, api(httpx.MockTransport(handle)), size=1).process(u)
+    await Pipeline([transcribe], api(httpx.MockTransport(handle)), size=1).process(u)
     assert metric("grill_stt_lines_total", result="empty") == empty + 1
     assert len(seen[0]) == 16000
     # 001-AC9: the samples are dropped as soon as the line is done, not kept with the utterance.
@@ -173,11 +218,11 @@ async def test_a_failing_utterance_does_not_stop_the_queue() -> None:
         return Line(t, "en")
 
     errors = metric("grill_stt_lines_total", result="error")
-    p = Pipeline(transcribe, api(httpx.MockTransport(handle)), size=4)
+    p = Pipeline([transcribe], api(httpx.MockTransport(handle)), size=4)
     for _ in range(3):
         p.submit(utterance())
     task = asyncio.create_task(p.run())
-    await asyncio.wait_for(p._queue.join(), 5)
+    await asyncio.wait_for(p.idle(), 5)
     task.cancel()
     assert stored == ["first", "third"]
     assert metric("grill_stt_lines_total", result="error") == errors + 1
@@ -197,7 +242,7 @@ async def test_implausible_lines_are_counted_not_posted() -> None:
     texts = iter([babble, Line("Oui.", "en", 0.28, -0.43, 0.26, 0.33)])
     dropped = metric("grill_stt_lines_total", result="implausible")
     repeated = metric("grill_stt_lines_implausible_total", reason="repetition")
-    p = Pipeline(lambda _a, _p: next(texts), api(httpx.MockTransport(handle)), size=4)
+    p = Pipeline([lambda _a, _p: next(texts)], api(httpx.MockTransport(handle)), size=4)
     await p.process(utterance())
     await p.process(utterance())
     assert stored == ["Oui."]
@@ -226,7 +271,7 @@ async def test_each_utterance_reads_the_room_prompt() -> None:
         used.append(prompt)
         return Line("ok", "en")
 
-    p = Pipeline(transcribe, api(httpx.MockTransport(handle)), size=4, use_prompt=True)
+    p = Pipeline([transcribe], api(httpx.MockTransport(handle)), size=4, use_prompt=True)
     for _ in range(3):
         await p.process(utterance())
     assert used == ["On parle de Helm.", "On parle de Argo CD.", "On parle de Argo CD."]
@@ -250,7 +295,7 @@ async def test_no_prompt_by_default() -> None:
         used.append(prompt)
         return Line("ok", "en")
 
-    await Pipeline(transcribe, api(httpx.MockTransport(handle)), size=4).process(utterance())
+    await Pipeline([transcribe], api(httpx.MockTransport(handle)), size=4).process(utterance())
     assert used == [""]
     assert asked == []
 

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { adminToken } from './playwright.config.js';
-import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet, playSTT, stopSTT } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const phone = { width: 390, height: 844 };
@@ -133,11 +133,14 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     const carol = await join(browser, request, id, 'Carol', vp);
     const api = `/api/rooms/${id}`;
 
-    // Plain members: only the transcription glossary in Manage (005-AC23), and the API says no.
+    // Plain members: only the transcription glossary in Manage (005-AC23), while a worker reads it
+    // (007-AC14), and the API says no.
+    await playSTT(bob, id, { engines: ['whisper'], glossary: true });
     await menuItem(bob, 'Room settings');
     await expect(bob.locator('#manage #stt-glossary')).toBeVisible();
     await expect(bob.locator('#manage #room-panel')).toHaveCount(0);
     await bob.locator('#manage-close').click();
+    await stopSTT(bob);
     for (const [method, path] of [['patch', api], ['delete', api], ['get', api + '/overview'], ['put', `${api}/admins/1`]]) {
       expect((await carol.request[method](path, { data: { name: 'x' } })).status(), `${method} ${path}`).toBe(403);
     }

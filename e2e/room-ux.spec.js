@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, noOverflow, upload, annotateSelection, menuItem, docAction } from './helpers.js';
+import { roomWith, signIn, noOverflow, upload, annotateSelection, menuItem, docAction, playSTT } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
@@ -77,6 +77,7 @@ for (const vp of widths) {
     const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
     await makeAdmin(request, alice, room);
     await alice.setViewportSize(vp);
+    await playSTT(alice, room.id, { engines: ['whisper'], glossary: true });
     await alice.goto(`/r/${room.id}#manage/admins`);
     const sheet = alice.locator('#manage');
     await expect(sheet).toBeVisible();
@@ -119,8 +120,10 @@ for (const vp of widths) {
   // 005-AC13: every modal closes on a click outside it and on Escape, and gives focus back to what
   // opened it. A press that starts inside and ends outside does not close it.
   test(`modal dismissal, ${vp.name}`, async ({ browser, request }) => {
-    const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+    const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
     await alice.setViewportSize(vp);
+    // A plain member gets Room settings while a worker reads the glossary (007-AC14).
+    await playSTT(alice, room.id, { engines: ['whisper'], glossary: true });
     // Each opens from a header menu: focus goes back to that menu's button.
     for (const [item, which, id] of [['Personas', 'more', '#personas'], ['Room settings', 'more', '#manage'], ['Change my name', 'me', '#rename']]) {
       const opener = alice.locator(which === 'me' ? '#me' : '#more-open');

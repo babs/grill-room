@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, upload, startDaemon, smallTargets, menuItem } from './helpers.js';
+import { roomWith, signIn, upload, startDaemon, smallTargets, menuItem, playSTT } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const desktop = { width: 1440, height: 900 };
@@ -87,7 +87,7 @@ test('touch targets at phone width', async ({ browser, request, baseURL }) => {
   // Room settings, as a room admin.
   const me = await alice.evaluate((id) => fetch(`/api/rooms/${id}`).then((r) => r.json()), room.id);
   expect((await request.put(`/api/rooms/${room.id}/admins/${me.me.id}`, { headers: admin })).status()).toBe(204);
-  await alice.reload();
+  await playSTT(alice, room.id, { engines: ['whisper'], glossary: true });
   for (const tab of ['general', 'invites', 'admins', 'glossary']) {
     await alice.goto(`/r/${room.id}#manage/${tab}`);
     await expect(alice.locator('#manage #room-panel')).toBeVisible();

@@ -1,6 +1,8 @@
-# STT worker. On the lab's 4-core nodes one utterance costs about 3.4 s of model time (spike S5),
-# 1.5 GiB holds the model.
-# One worker joins every active room. Rendered by `make k8s-render`.
+# STT worker, parakeet-ultra (spec 007). One pod joins every active room: its ceiling is about four
+# continuous talkers across the instance. Sizing from spike S10d on the lab's 4-vCPU AVX2 nodes:
+# two engine processes of 2 threads give 8.4x real time (p95 3.9 s with two talkers), each holds
+# 1.2 GB. Past the ceiling the queue waits (grill_stt_queue_wait_seconds, alert at 10 s) and,
+# full, drops with a line in the room. Rendered by `make k8s-render`.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -41,9 +43,13 @@ spec:
               value: http://grill-room:7680
             - name: APP_LIVEKIT_URL
               value: ws://livekit:7880
-            # One CPU of the limit stays free for the event loop, the VAD and LiveKit's threads.
+            # APP_ENGINE=whisper is the rollback for one release (docs/lab-checklist.md).
+            - name: APP_ENGINE
+              value: parakeet
+            - name: APP_ENGINE_PROCESSES
+              value: "2"
             - name: APP_CPU_THREADS
-              value: "3"
+              value: "2"
             - name: APP_ROOM_TOKEN
               valueFrom:
                 secretKeyRef: { name: grill-room, key: stt-token }
@@ -55,7 +61,7 @@ spec:
                 secretKeyRef: { name: grill-room, key: livekit-api-secret }
           ports:
             - { name: metrics, containerPort: 9100 }
-          # Loading the model takes a while on a cold node.
+          # Loading the models takes a while on a cold node.
           startupProbe:
             httpGet: { path: /healthz, port: metrics }
             periodSeconds: 5
@@ -66,10 +72,11 @@ spec:
           livenessProbe:
             httpGet: { path: /healthz, port: metrics }
             periodSeconds: 20
-          # A 4-CPU worker node never has 4 CPUs free to request: ask for 2, burst to the S1-bis 4.
+          # A 4-CPU worker node never has 4 CPUs free to request: ask for 2, burst to 4. Memory:
+          # two engines of 1.2 GB plus the worker; request = limit, never evicted for memory.
           resources:
-            requests: { cpu: "2", memory: 1536Mi }
-            limits: { cpu: "4", memory: 1536Mi }
+            requests: { cpu: "2", memory: 3Gi }
+            limits: { cpu: "4", memory: 3Gi }
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

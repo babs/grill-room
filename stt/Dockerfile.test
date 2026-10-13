@@ -1,0 +1,11 @@
+# The runtime image plus the dev group, to run the e2e tests against the image's own models and
+# libtranscribe (`make stt-image-test`). Never pushed.
+ARG BASE=grill-stt:local
+FROM ${BASE}
+USER root
+COPY --from=ghcr.io/astral-sh/uv:0.12.0 /uv /usr/local/bin/uv
+COPY pyproject.toml uv.lock /tmp/lock/
+RUN uv export --frozen --only-group dev --no-hashes --project /tmp/lock -o /tmp/lock/dev.txt && \
+    uv pip install --no-cache --python /app/.venv/bin/python --requirement /tmp/lock/dev.txt && \
+    rm -rf /tmp/lock
+USER app
