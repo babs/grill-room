@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, noOverflow, upload, annotateSelection } from './helpers.js';
+import { roomWith, signIn, noOverflow, upload, annotateSelection, menuItem } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
@@ -23,7 +23,7 @@ for (const vp of widths) {
     await alice.locator('#body').press('Enter');
     await expect(bob.locator('#messages')).toContainText('Before the rename.');
 
-    await alice.getByRole('button', { name: 'Change your name' }).click();
+    await menuItem(alice, 'Change my name', 'me');
     const dialog = alice.locator('#rename');
     await expect(dialog.getByLabel('Display name')).toHaveValue('Alice');
     await dialog.getByLabel('Display name').fill('x'.repeat(40) + 'y');
@@ -36,7 +36,8 @@ for (const vp of widths) {
     await dialog.getByRole('button', { name: 'Rename' }).click();
     await expect(dialog).toBeHidden();
     await expect(alice.locator('#me')).toHaveText('Ali');
-    await expect(alice.locator('#notice')).toBeHidden();
+    // Her own rename raises no "your name is now" notice.
+    await expect(alice.locator('#notice-text')).not.toContainText('Your name in this room');
     for (const page of [alice, bob]) {
       await expect(page.locator('.msg.system').last()).toContainText('Alice is now Ali');
       const line = page.locator('.msg.text', { hasText: 'Before the rename.' }).locator('.sender');
@@ -64,7 +65,7 @@ for (const vp of widths) {
     expect(bobs).toHaveLength(1);
     expect((await request.delete(`/api/admin/profiles/${bobs[0].id}`, { headers: admin })).status()).toBe(204);
     await bob.reload();
-    await bob.getByRole('button', { name: 'Change your name' }).click();
+    await menuItem(bob, 'Change my name', 'me');
     await expect(bob.locator('#rename').getByLabel('Display name')).toHaveValue('Bob');
     await expect(bob.locator('#rename-profile-label')).toBeHidden();
   });
@@ -88,7 +89,7 @@ for (const vp of widths) {
 
     await sheet.getByRole('button', { name: 'Rename Bob' }).click();
     await sheet.getByLabel('New name for Bob').fill('Robert');
-    await sheet.getByRole('button', { name: 'Save' }).click();
+    await sheet.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(bob.locator('#notice')).toHaveText(/Your name in this room is now Robert\./);
     await expect(bob.locator('#me')).toHaveText('Robert');
     await expect(bob.locator('.msg.system').last()).toContainText('Alice renamed Bob to Robert');
@@ -107,7 +108,7 @@ for (const vp of widths) {
     const admins = page.locator('#room-panel #room-admins');
     await admins.getByRole('button', { name: 'Rename Robert' }).click();
     await admins.getByLabel('New name for Robert').fill('Bobby');
-    await admins.getByRole('button', { name: 'Save' }).click();
+    await admins.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(bob.locator('#me')).toHaveText('Bobby');
     await expect(bob.locator('.msg.system').last()).toContainText('The admin renamed Robert to Bobby');
     expect(await noOverflow(page)).toEqual([]);
@@ -120,16 +121,17 @@ for (const vp of widths) {
   test(`modal dismissal, ${vp.name}`, async ({ browser, request }) => {
     const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
     await alice.setViewportSize(vp);
-    for (const [button, id] of [['Personas', '#personas'], ['Manage', '#manage'], ['Change your name', '#rename']]) {
-      const opener = alice.getByRole('button', { name: button, exact: true });
+    // Each opens from a header menu: focus goes back to that menu's button.
+    for (const [item, which, id] of [['Personas', 'more', '#personas'], ['Room settings', 'more', '#manage'], ['Change my name', 'me', '#rename']]) {
+      const opener = alice.locator(which === 'me' ? '#me' : '#more-open');
       const dialog = alice.locator(id);
-      await opener.click();
+      await menuItem(alice, item, which);
       await expect(dialog).toBeVisible();
       await alice.keyboard.press('Escape');
       await expect(dialog).toBeHidden();
       await expect(opener).toBeFocused();
 
-      await opener.click();
+      await menuItem(alice, item, which);
       await expect(dialog).toBeVisible();
       const b = await dialog.boundingBox();
       // A drag from inside to outside keeps it open.
@@ -174,7 +176,7 @@ test('unread count in the title', async ({ browser, request }) => {
   const voice = () => alice.evaluate(() => countUnread({ kind: 'voice', ts: new Date().toISOString(), participant_id: -1 }));
   await voice();
   await expect(alice).toHaveTitle('(2) Docs room · grill-room');
-  await alice.locator('#notify summary').click();
+  await menuItem(alice, 'Notifications', 'me');
   await alice.getByLabel('Count voice lines in the tab title').check();
   await voice();
   await expect(alice).toHaveTitle('(3) Docs room · grill-room');
@@ -194,7 +196,7 @@ test('document manager in its own window', async ({ browser, request }) => {
   const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
   await upload(alice, 'plan.md', 'text/markdown', '# Rollout plan\n\nThe rollback step comes first.\n');
   await expect(alice.frameLocator('#doc-frame iframe').locator('h1')).toHaveText('Rollout plan');
-  const [docs] = await Promise.all([alice.context().waitForEvent('page'), alice.locator('#docs-pane').getByRole('link', { name: 'Open in a new window' }).click()]);
+  const [docs] = await Promise.all([alice.context().waitForEvent('page'), alice.locator('#docs-pane').getByRole('link', { name: 'Open documents in a new window' }).click()]);
   await expect(docs).toHaveURL(new RegExp(`/r/${room.id}/docs$`));
   await expect(docs).toHaveTitle('Documents · Docs room · grill-room');
   await expect(docs.locator('#messages')).toBeHidden();
@@ -230,7 +232,7 @@ test('document manager in its own window', async ({ browser, request }) => {
 // Chrome has no Push API in Playwright's contexts.
 test('notification controls, desktop and iPhone', async ({ browser, request }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
-  await alice.locator('#notify summary').click();
+  await menuItem(alice, 'Notifications', 'me');
   await expect(alice.getByRole('button', { name: 'Turn on notifications' })).toBeVisible();
   await expect(alice.locator('#push-hint')).toBeHidden();
   const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
@@ -239,8 +241,7 @@ test('notification controls, desktop and iPhone', async ({ browser, request }) =
   await phone.goto(new URL(inv.url).pathname + new URL(inv.url).hash);
   await phone.getByLabel('Your name').fill('Ian');
   await phone.getByRole('button', { name: 'Join the room' }).click();
-  await phone.getByRole('button', { name: /People/ }).click();
-  await phone.locator('#notify summary').click();
+  await menuItem(phone, 'Notifications', 'me');
   await expect(phone.locator('#push-hint')).toHaveText(/add.*home screen|Add to Home Screen/i);
   expect(await noOverflow(phone)).toEqual([]);
 });
@@ -274,10 +275,10 @@ for (const vp of widths) {
     await expect(bob.locator('#doc-delete')).toBeHidden();
     await bob.getByRole('button', { name: 'Rename', exact: true }).click();
     await bob.getByLabel('New name').fill('roadmap.txt');
-    await bob.locator('#doc-rename-form').getByRole('button', { name: 'Save' }).click();
+    await bob.locator('#doc-rename-form').getByRole('button', { name: 'Save', exact: true }).click();
     await expect(bob.locator('#doc-rename-status')).toHaveText('the name must keep the extension .md');
     await bob.getByLabel('New name').fill('roadmap.md');
-    await bob.locator('#doc-rename-form').getByRole('button', { name: 'Save' }).click();
+    await bob.locator('#doc-rename-form').getByRole('button', { name: 'Save', exact: true }).click();
     await expect(bob.locator('#doc-name')).toHaveText('roadmap.md');
     expect(await noOverflow(bob)).toEqual([]);
     await expect(alice.locator('#documents')).toHaveText('roadmap.md');

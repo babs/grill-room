@@ -209,7 +209,35 @@ export async function signIn(page, token = adminToken, view = 'sessions') {
   return res.status();
 }
 
-// noOverflow lists what sticks out past the viewport, tables scrolling in their own box aside.
+// noOverflow lists what sticks out past the viewport, tables and tab bars scrolling in their own
+// box aside (005-AC35).
 export const noOverflow = (page) => page.evaluate(() => [...document.querySelectorAll('body *')]
-  .filter((e) => !e.parentElement?.closest('.scroll') && e.getBoundingClientRect().right > innerWidth + 1)
+  .filter((e) => !e.parentElement?.closest('.scroll, .tabs') && e.getBoundingClientRect().right > innerWidth + 1)
   .map((e) => `${e.tagName.toLowerCase()}#${e.id}.${e.className}`));
+
+// menuItem picks an item of a header menu (005-AC32): '⋯' (more), the user's initials (me) or the
+// audio options (voice).
+export async function menuItem(page, name, which = 'more') {
+  await page.locator({ more: '#more-open', me: '#me', voice: '#voice-more' }[which]).click();
+  const menu = page.locator({ more: '#more-menu', me: '#me-menu', voice: '#voice-menu' }[which]);
+  await menu.getByRole(name === 'My rooms and profile' || name === 'Open documents in a new window' ? 'link' : 'button', { name, exact: true }).click();
+}
+
+// messageAction runs Edit or Delete on a line through its actions button (005-AC35).
+export async function messageAction(line, name) {
+  await line.getByRole('button', { name: 'Line actions' }).click();
+  await line.page().locator('#msg-menu').getByRole('button', { name, exact: true }).click();
+}
+
+// smallTargets lists the visible controls under min px wide or high (005-AC30). Inline targets in
+// a message's text are exempt, as WCAG 2.5.8 exempts them; a checkbox counts by its label.
+export const smallTargets = (page, min = 44) => page.evaluate((min) => {
+  const sel = 'button, select, textarea, summary, .tabs a, a.btn, .menu a, input:not([type=checkbox]):not([type=radio]):not([type=hidden]):not([type=file]), label:has(> input[type=checkbox])';
+  return [...document.querySelectorAll(sel)].filter((e) => {
+    if (e.closest('.msg .body, .msg .meta, #doc-frame')) return false;
+    const r = e.getBoundingClientRect();
+    const s = getComputedStyle(e);
+    if (!r.width || !r.height || s.visibility === 'hidden' || e.closest('[hidden], [inert]')) return false;
+    return r.width < min - 0.5 || r.height < min - 0.5;
+  }).map((e) => `${e.tagName.toLowerCase()}${e.id ? '#' + e.id : ''} "${(e.getAttribute('aria-label') || e.textContent).trim().slice(0, 30)}" ${Math.round(e.getBoundingClientRect().width)}x${Math.round(e.getBoundingClientRect().height)}`);
+}, min);

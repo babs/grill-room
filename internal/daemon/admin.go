@@ -19,6 +19,7 @@ import (
 	"github.com/babs/grill-room/internal/monitor"
 	"github.com/babs/grill-room/internal/sandbox"
 	"github.com/babs/grill-room/internal/turn"
+	"github.com/babs/grill-room/internal/uikit"
 	"github.com/babs/grill-room/internal/uivendor"
 )
 
@@ -124,6 +125,7 @@ func (a *Admin) Handler() http.Handler {
 	static, _ := fs.Sub(ui, "ui") // cannot fail: "ui" is a valid embedded path
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
 	mux.Handle("GET "+uivendor.Prefix, uivendor.Handler())
+	mux.Handle("GET "+uikit.Prefix, uikit.Handler())
 	mux.HandleFunc("POST /api/session", a.session)
 	mux.Handle("GET /api/status", a.auth(a.status))
 	mux.Handle("POST /api/room", a.auth(a.setRoom))

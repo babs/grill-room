@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, menuItem } from './helpers.js';
 
 const led = (page, name) => page.locator(`button.persona[data-name="${name}"] .led`);
 
@@ -15,7 +15,7 @@ test('personas: add, edit, queue', async ({ browser, request, baseURL }) => {
   await expect(alice.getByRole('button', { name: 'Ask Grill' })).toContainText('🔥');
 
   const panel = alice.locator('#personas');
-  await alice.getByRole('button', { name: 'Personas' }).click();
+  await menuItem(alice, 'Personas');
   await expect(panel.locator('.persona-form')).toHaveCount(1);
   await expect(panel.locator('#persona-template option')).toHaveCount(2);
   await panel.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
@@ -23,17 +23,17 @@ test('personas: add, edit, queue', async ({ browser, request, baseURL }) => {
   await expect(panel.locator('.persona-form')).toHaveCount(2);
   for (const p of [alice, bob]) {
     await expect(p.locator('#messages')).toContainText('Alice added the persona 📝 Secretary, from the template "Secretary" v1.');
-    await expect(p.locator('button.persona')).toHaveText(['🔥Grill', '📝Secretary']);
+    await expect(p.locator('button.persona')).toHaveText([/^🔥Grill/, /^📝Secretary/]);
   }
   const sec = panel.locator('.persona-form', { hasText: 'Secretary' });
   await sec.getByLabel('Effort').selectOption('low');
   await sec.getByLabel('Persona text').fill('You are Scribe, who writes it all down.\nNothing else.');
-  await sec.getByRole('button', { name: 'Save' }).click();
+  await sec.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(panel.locator('#personas-status')).toHaveText('Secretary saved. It applies from its next turn.');
   await expect(bob.locator('#messages')).toContainText('Alice changed 📝 Secretary: effort medium → low, persona text.');
   // A bad name is refused by the room, and says why.
   await sec.getByLabel('Name').fill('two words');
-  await sec.getByRole('button', { name: 'Save' }).click();
+  await sec.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(panel.locator('#personas-status')).toHaveText('name must be 1 to 30 letters, digits, - or _');
   await panel.getByRole('button', { name: 'Close' }).click();
 
@@ -44,10 +44,10 @@ test('personas: add, edit, queue', async ({ browser, request, baseURL }) => {
     await alice.locator('#body').fill('FAKE_SLOW');
     await alice.locator('#body').press('Enter');
     await alice.getByRole('button', { name: 'Ask Grill' }).click();
-    await expect(led(bob, 'Grill')).toHaveAttribute('aria-label', 'Grill working');
+    await expect(led(bob, 'Grill')).toHaveAttribute('aria-label', 'Grill answering');
     await alice.getByRole('button', { name: 'Ask Secretary' }).click();
     for (const p of [alice, bob]) {
-      await expect(led(p, 'Secretary')).toHaveAttribute('aria-label', 'Secretary queued, position 1');
+      await expect(led(p, 'Secretary')).toHaveAttribute('aria-label', 'Secretary waiting, position 1');
       await expect(p.locator('#queue-list li')).toHaveText([/^📝 Secretary, pressed by Alice/]);
     }
     await expect(bob.getByRole('button', { name: 'Cancel the queued turn of Secretary' })).toHaveCount(0);
@@ -57,7 +57,7 @@ test('personas: add, edit, queue', async ({ browser, request, baseURL }) => {
     await alice.locator('#body').press('Enter');
     await alice.getByRole('button', { name: 'Ask Secretary' }).click();
     await expect(alice.locator('#queue-list li')).toHaveCount(1);
-    await expect(led(alice, 'Grill')).toHaveAttribute('aria-label', 'Grill working');
+    await expect(led(alice, 'Grill')).toHaveAttribute('aria-label', 'Grill answering');
 
     const grill = alice.locator('#messages li.msg.agent', { hasText: 'Slow turn done.' });
     await expect(grill.locator('.meta strong')).toHaveText('🔥 Grill', { timeout: 60_000 });

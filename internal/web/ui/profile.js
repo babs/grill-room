@@ -51,7 +51,6 @@ async function loadSkills() {
     if (!k.shared) {
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'small';
       b.textContent = 'Remove';
       b.setAttribute('aria-label', 'Remove skill ' + k.name);
       b.addEventListener('click', async () => {
@@ -99,7 +98,8 @@ $('room-create').addEventListener('submit', async (e) => {
   try {
     const { res, data } = await post('/api/profile/rooms', { name: $('room-create-name').value, display_name: $('room-create-as').value });
     if (res.ok) {
-      location.assign('/r/' + encodeURIComponent(data.id));
+      // The new room opens on its invite card (005-AC34).
+      location.assign('/r/' + encodeURIComponent(data.id) + '?invite');
       return;
     }
     $('room-create-status').textContent = data.error || 'HTTP ' + res.status;

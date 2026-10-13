@@ -46,7 +46,7 @@ export async function join(browser, inv, name, init) {
 
 export async function joinAudio(page) {
   await page.getByRole('button', { name: 'Join audio' }).click();
-  await expect(page.getByRole('button', { name: 'Leave audio' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Audio options' })).toBeVisible();
 }
 
 // inboundAudio sums bytesReceived over the page's subscribed audio tracks, from getStats().
@@ -73,4 +73,10 @@ export async function dropProfiles(request, pages) {
   for (const id of ids) await request.delete(`/api/profiles/${id}`, { headers: admin });
   const left = (await (await request.get('/api/profiles', { headers: admin })).json()).filter((p) => ids.includes(p.id));
   expect(left, 'profiles left behind').toEqual([]);
+}
+
+// audioItem picks an item of the audio menu (005-AC32): Mute the room, Hear the room again, Leave audio.
+export async function audioItem(page, name) {
+  await page.getByRole('button', { name: 'Audio options' }).click();
+  await page.locator('#voice-menu').getByRole('button', { name, exact: true }).click();
 }

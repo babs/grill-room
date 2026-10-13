@@ -26,7 +26,7 @@ The palette is the one the room page and `/admin` already use, harmonized. The l
 | none | input and button outlines | `--border-strong` `#8e8b80` | **new**: `#dedbd2` is 1.28:1 and fails the 3:1 for non-text |
 | `#159f8c` (`--teal`) | buttons, active tab, links | `--brand` `#159f8c` | kept for borders, the active tab bar, the selected ring and large type |
 | none (derived from `#159f8c`) | primary buttons and teal text | `--primary` `#0f7d6e` | **AA fix**: white on `#159f8c` is 3.30:1 and fails; on `#0f7d6e` it is 5.03:1 |
-| `#e3f4f1` | notice | `--primary-bg` `#e3f4f1` | none |
+| `#e3f4f1` | notice, mention chip | `--primary-bg` `#eaf6f4` | **AA fix**: `--primary-text` on `#e3f4f1` is 4.42:1, on `#eaf6f4` 4.54:1 |
 | `#ffc23d` (`--amber`), `#f4b942` (daemon) | focus ring, banners, host badge | `--accent` `#ffc23d` | merge |
 | `#fff4d6`, `#fff4e5` | warn and approval backgrounds | `--warning-bg` `#fff4d6` | merge |
 | `#b06000`, `#8a5a00` | capped and notice text | `--warning` `#8a5a00` | **AA fix**: `#b06000` on bg is 4.30:1 |
@@ -60,7 +60,10 @@ The palette is the one the room page and `/admin` already use, harmonized. The l
 | `--success` | `#1e7b34` | `#4fd18a` | on surface 5.33 / 7.81 |
 | `--warning` | `#8a5a00` | `#ffd27a` | on bg 5.48, on `--warning-bg` 5.41 / 10.65 |
 | `--danger` | `#b3261e` | `#ff8a80` | white on danger 6.54; on dark surface 6.64; `#161a2c` on dark danger 7.55 |
-| `--warning-bg`, `--danger-bg`, `--primary-bg`, `--info-bg` | `#fff4d6`, `#fbe4e2`, `#e3f4f1`, `#e8f0fe` | 15 % tints of the dark token on `--surface` | ink on each ≥ 12.9 |
+| `--warning-bg`, `--danger-bg`, `--primary-bg`, `--info-bg` | `#fff4d6`, `#fbe4e2`, `#eaf6f4`, `#e8f0fe` | 15 % tints of the dark token on `--surface` | ink on each ≥ 12.9 |
+| `--on-accent`, `--on-flame-soft` | `#1e2238` | `#1e2238` | ink on amber 9.72, on `--flame-soft` 5.21 |
+| `--dot-ring` | `#1e2238` | `#e6e7ee` | the ring of status dots and focus, ≥ 3:1 on bg and surface |
+| `--highlight` | `#fff8e1` | amber at 12 % | the background of a line that mentions you |
 
 - **Persona colours** are user data. Use them only as the pill's left stripe and avatar ring, never behind text.
 - **Dark mode** follows `prefers-color-scheme`, and so does the document frame: a document is never darker or lighter than the UI around it.
@@ -104,7 +107,7 @@ The palette is the one the room page and `/admin` already use, harmonized. The l
 | **Button** | One height (`--control-h`), padding `0 var(--sp-4)`, `--fs-sm` (desktop) or `--fs-md` (phone), weight 600, `--r-md`, with an optional 16 px icon. **Primary:** `--primary` fill, white text, one per view. **Secondary:** `--surface` with a `--border-strong` outline and `--text`. **Ghost:** transparent with `--primary-text`, for toolbars. **Danger:** `--danger` fill. A danger action that is not yet armed uses the danger outline, never a pale primary. **Disabled:** 0.45 opacity with the reason in text nearby, never in a tooltip alone. |
 | **Input / select / textarea** | `--control-h` (textareas: min 2 lines), `--surface` background, `--border-strong` 1px, `--r-md`, `--fs-md` on a phone. The label sits above in `--fs-sm` 600, the hint below in `--text-muted`, the error below in `--danger` with an icon. A select has the same font and height as an input. |
 | **File input** | Never shown natively. Use a button or a drop zone; the native input stays hidden. |
-| **Focus** | `outline: 2px solid var(--accent); outline-offset: 2px` on every focusable element, including tabs, chips and menu items. |
+| **Focus** | `outline: 2px solid var(--accent); outline-offset: 2px` plus a 2px `--dot-ring` shadow on every focusable element, including tabs, chips and menu items. Amber alone is 1.4:1 on the page; the ring carries the 3:1. |
 | **Chip / pill** | `--r-pill`, height `--control-h-sm` (desktop) or `--control-h` (phone). **Persona pill:** a 4 px left stripe in the persona colour, then the badge, the name and a state glyph (● ready, ◐ working, ○ offline, ⧗ queued, 🔒 not allowed) with a 3:1 ring. A tap asks the persona; `▾` opens its menu. **Mention chip:** `--primary-bg` with `--primary-text`, `@Name`, and the turn state as a word. |
 | **Badge** | `--fs-xs`, `--r-sm`, `0 var(--sp-1)`, neutral (`--border`/`--text`), role (`--accent`/`--text`) or status (`*-bg`/`*` text). At most 2 per row; more become icons with tooltips. |
 | **Tabs** | 44 px targets, `--fs-sm` 600, a 3 px `--brand` underline on the current tab, `aria-current="page"`. They scroll sideways under 40rem (no wrapping) with a fade edge, and stay sticky in long pages. |
@@ -163,7 +166,7 @@ The palette is the one the room page and `/admin` already use, harmonized. The l
 | persona | AI persona in headings; the persona's name elsewhere |
 | synthesis | Grill's answer |
 | effort medium, sonnet, +model 6 % | "Sonnet · thinks more" in the persona sheet; the model mix in a tooltip only |
-| Every N rounds | Speaks up every N messages |
+| Every N rounds | Speaks up every N answers |
 | Self-call | Can follow up on its own |
 | Autocompact (k tokens) | (Advanced) Memory size |
 | New session (with handoff) | Start fresh (keep a summary) |

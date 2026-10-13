@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { createRoom, invite, join, joinAudio, launch, admin, fixture } from './helpers.js';
+import { createRoom, invite, join, joinAudio, launch, admin, fixture, audioItem } from './helpers.js';
 
 // 005-AC18: everyone leaves the audio, LiveKit closes the empty room, Alice comes back: the STT
 // worker joins the new LiveKit room of the same name and her lines resume, with no restart.
@@ -15,7 +15,7 @@ test('transcription resumes after LiveKit closes the empty room', async ({ reque
     await expect(label).toHaveText(/^1 voice transcribed/, { timeout: 60_000 });
     await expect(lines.first()).toBeVisible({ timeout: 60_000 });
 
-    await alice.getByRole('button', { name: 'Leave audio' }).click();
+    await audioItem(alice, 'Leave audio');
     await expect(label).toHaveText('', { timeout: 60_000 });
     // Past LiveKit's departure timeout (20 s by default): the room is closed.
     await alice.waitForTimeout(45_000);

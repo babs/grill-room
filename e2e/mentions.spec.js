@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, menuItem } from './helpers.js';
 
 async function say(page, text) {
   await page.locator('#body').fill(text);
@@ -82,7 +82,7 @@ test('mentions: turn states, stop, pending and offline', async ({ browser, reque
     const sleeping = line(alice, 'code word is BRAVO');
     await expect(sleeping.locator('.mention-turn')).toHaveText('→ @Grill · running', { timeout: 60_000 });
     // Bob neither started it, hosts nor administers the room.
-    await expect(bob.locator('#running-list')).toContainText('Grill working');
+    await expect(bob.locator('#running-list')).toContainText('Grill answering');
     await expect(bob.locator('#running-list').getByRole('button', { name: 'Stop' })).toHaveCount(0);
     await alice.waitForTimeout(3000);
     await alice.locator('#running-list').getByRole('button', { name: 'Stop the turn of Grill' }).click();
@@ -112,17 +112,17 @@ test('mentions: turn states, stop, pending and offline', async ({ browser, reque
     // With "approve everything", Bob's new persona waits for the host.
     await admin.locator('#tab-settings').click();
     await admin.getByLabel('Approve every new persona and persona change').check();
-    await admin.getByRole('button', { name: 'Save' }).click();
+    await admin.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(admin.locator('#settings-status')).toHaveText('Saved.');
-    await bob.getByRole('button', { name: 'Personas' }).click();
+    await menuItem(bob, 'Personas');
     await bob.locator('#persona-template').selectOption({ label: '🔥 Default v1' });
     await bob.locator('#personas').getByRole('button', { name: 'Add', exact: true }).click();
-    await expect(bob.locator('#personas-status')).toHaveText('Grill-2 added. It waits for the host\'s approval.');
+    await expect(bob.locator('#personas-status')).toHaveText('Grill-2 added. It waits for the AI host\'s approval.');
     await say(alice, '@Grill-2 are you there?');
     await expect(line(alice, 'are you there').locator('.notice')).toHaveText('@Grill-2: it waits for the host\'s approval. Only you see this.');
 
     daemon.cleanup();
-    await expect(alice.locator('#agent-status')).toHaveText('No host daemon is connected.', { timeout: 30_000 });
+    await expect(alice.locator('#agent-status')).toHaveText('No one runs the AI for this room right now.', { timeout: 30_000 });
     await say(alice, '@grill still there?');
     await expect(line(alice, 'still there').locator('.notice')).toHaveText('@Grill: no host is online to run it. Only you see this.');
   } finally {

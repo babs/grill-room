@@ -1,7 +1,7 @@
 import { test, expect, devices } from '@playwright/test';
 import http from 'node:http';
 import { adminToken } from './playwright.config.js';
-import { roomWith } from './helpers.js';
+import { roomWith, menuItem } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -168,7 +168,7 @@ for (const name of ['iPhone 15', 'Pixel 7']) {
       expect(b.x + b.width).toBeLessThanOrEqual(width + 1);
     };
 
-    await page.getByRole('button', { name: 'Personas' }).click();
+    await menuItem(page, 'Personas');
     const panel = page.locator('#personas');
     await panel.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
     await panel.getByRole('button', { name: 'Add', exact: true }).click();
@@ -178,7 +178,7 @@ for (const name of ['iPhone 15', 'Pixel 7']) {
     // The second persona's controls are reachable by scrolling the panel.
     const sec = panel.locator('.persona-form', { hasText: 'Secretary' });
     await sec.getByLabel('Model').selectOption('haiku');
-    const save = sec.getByRole('button', { name: 'Save' });
+    const save = sec.getByRole('button', { name: 'Save', exact: true });
     await save.scrollIntoViewIfNeeded();
     await inside(save);
     await save.click();

@@ -117,7 +117,7 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 	}
 	switch h := s.hostDaemon(room, r.HostParticipantID); {
 	case h == nil:
-		st.Reason = "No host daemon is connected."
+		st.Reason = "No one runs the AI for this room right now."
 	case !h.CanHost:
 		st.Reason = h.Reason
 	default:

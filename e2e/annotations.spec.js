@@ -80,7 +80,7 @@ test('element annotation follows a re-render', async ({ browser, request }) => {
   await aliceDoc.getByText('Ship behind a flag').click();
   await expect(alice.locator('#annot-target')).toHaveText('<li> element: Ship behind a flag');
   await alice.getByRole('textbox', { name: 'Annotation', exact: true }).fill('Which flag?');
-  await alice.locator('#annot-new').getByRole('button', { name: 'Save' }).click();
+  await alice.locator('#annot-new').getByRole('button', { name: 'Save', exact: true }).click();
 
   await bob.locator('#documents').getByRole('button', { name: 'board.html' }).click();
   const bobDoc = bob.frameLocator('#doc-frame iframe');
@@ -110,7 +110,7 @@ test('image attachment appears in the other browser', async ({ browser, request 
   await expect(alice.locator('#annot-target')).toHaveText('Whole document');
   await alice.getByRole('textbox', { name: 'Annotation', exact: true }).fill('See the chart');
   await alice.locator('#annot-files').setInputFiles({ name: 'chart.png', mimeType: 'image/png', buffer: png });
-  await alice.locator('#annot-new').getByRole('button', { name: 'Save' }).click();
+  await alice.locator('#annot-new').getByRole('button', { name: 'Save', exact: true }).click();
 
   const img = bob.locator('#annot-list img');
   await expect(img).toBeVisible();
@@ -123,7 +123,7 @@ test('image attachment appears in the other browser', async ({ browser, request 
   await alice.getByRole('button', { name: 'Comment on the document' }).click();
   await alice.getByRole('textbox', { name: 'Annotation', exact: true }).fill('Not an image');
   await alice.locator('#annot-files').setInputFiles({ name: 'x.png', mimeType: 'image/png', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>') });
-  await alice.locator('#annot-new').getByRole('button', { name: 'Save' }).click();
+  await alice.locator('#annot-new').getByRole('button', { name: 'Save', exact: true }).click();
   await expect(alice.locator('#annot-status')).toContainText('must be PNG, JPEG, GIF or WebP');
   await expect(bob.locator('#annot-list li.annot')).toHaveCount(1);
 });

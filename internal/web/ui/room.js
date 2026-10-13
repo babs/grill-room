@@ -42,12 +42,13 @@ function end(text) {
   $('banner').textContent = text;
   $('banner').hidden = false;
   sendForm.hidden = true;
-  document.querySelector('.upload').hidden = true;
-  $('manage-open').hidden = true;
-  if ($('manage').open) $('manage').close();
-  $('invites').hidden = true;
+  $('chat-empty').hidden = true;
+  $('upload-open').hidden = true;
+  $('docs-pane').classList.remove('dropping');
+  for (const id of ['manage-open', 'invite-open', 'personas-open', 'more-open']) $(id).hidden = true;
+  for (const d of document.querySelectorAll('dialog[open]')) d.close();
+  for (const m of document.querySelectorAll('.menu:popover-open')) m.hidePopover();
   $('agent').hidden = true;
-  if ($('personas').open) $('personas').close();
   $('annotations').hidden = true;
 }
 
@@ -69,7 +70,7 @@ async function loadRoom() {
   // Someone else renamed this participant (005-AC21): a rename of their own sets myName first.
   if (myName && data.me.name !== myName) showNotice('Your name in this room is now ' + data.me.name + '.');
   myName = data.me.name;
-  $('me').textContent = data.me.name;
+  showMe();
   participants = data.participants;
   myID = String(data.me.id);
   hasProfile = !!data.profile;
@@ -85,6 +86,19 @@ async function loadRoom() {
   window.dispatchEvent(new CustomEvent('grill:room', { detail: data }));
   return true;
 }
+
+// showMe draws the user menu's button: initials in a ring, and the name beside them when wide.
+function showMe() {
+  const who = document.createElement('span');
+  who.className = 'who';
+  who.textContent = myName;
+  $('me').replaceChildren(who);
+  $('me').dataset.initials = initials(myName);
+  $('me-head').textContent = myName;
+}
+
+// initials takes the first letter of the first two words, "Ana María" → "AM".
+const initials = (name) => name.trim().split(/\s+/).slice(0, 2).map((w) => [...w][0] || '').join('').toUpperCase();
 
 // The list shrinks under a keyboard, a toolbar or a wrapping header: keep the newest message in
 // view when it was. Only a scroll up unpins, as scroll events land after the layout changed.
@@ -156,6 +170,7 @@ function addMessage(m) {
     refreshTimer = setTimeout(() => loadRoom().catch(console.error), 200);
   }
   messages.append(renderMessage(m));
+  if (m.kind !== 'system') showEmpty();
   if (pinned) messages.scrollTop = messages.scrollHeight;
   if (m.id === jumpTo) jump(m.id);
 }
@@ -240,7 +255,7 @@ function renderMessage(m) {
       asked.textContent = 'requested ' + level({ model: m.requested_model, effort: m.requested_effort }) + ' → ran';
       const why = document.createElement('span');
       why.className = 'capped';
-      why.textContent = '(host cap)';
+      why.textContent = '(AI host\'s limit)';
       meta.append(' ', asked, ' ', ...ran, ' ', why);
     } else {
       meta.append(' ', ...ran);
@@ -261,11 +276,8 @@ function renderMessage(m) {
   if (m.edited_at) {
     meta.append(' ', button('(edited)', 'Show earlier versions', () => toggleVersions(li, m).catch(console.error)));
   }
-  if (String(m.participant_id) === myID && (m.kind === 'text' || m.kind === 'voice')) {
-    meta.append(' ', button('Edit', '', () => editMessage(li, m)),
-      ' ', button('Delete', '', () => deleteMessage(m)));
-  }
   li.append(meta, body);
+  if (String(m.participant_id) === myID && (m.kind === 'text' || m.kind === 'voice')) li.append(messageMenu(li, m));
   if (m.mentions) stored.set(m.id, m.mentions);
   if (m.kind === 'text') fillMentions(li);
   return li;
@@ -285,6 +297,19 @@ function renameSenders() {
     const el = li.querySelector(':scope > .meta > .sender');
     if (el) nameSender(li, el);
   }
+}
+
+// agentError says why an action on the AI failed: in the header's status where it shows, in the
+// notice where a narrow screen hides it.
+function agentError(text) {
+  $('agent-status').textContent = text;
+  if (!$('agent-status').offsetParent) showNotice(text);
+}
+
+function explain(title, text) {
+  $('why-title').textContent = title;
+  $('why-text').textContent = text;
+  $('why').showModal();
 }
 
 function showNotice(text) {
@@ -467,7 +492,8 @@ function editMessage(li, m) {
   const save = document.createElement('button');
   save.textContent = 'Save';
   const cancel = button('Cancel', '', () => li.replaceWith(renderMessage(m)));
-  form.append(box, save, ' ', cancel);
+  cancel.className = 'btn-secondary';
+  form.append(box, save, cancel);
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     sendJSON('PATCH', api + '/messages/' + m.id, { body: box.value }).then((saved) => {
@@ -486,6 +512,38 @@ function editMessage(li, m) {
   li.querySelector('.body').replaceWith(form);
   box.focus();
 }
+
+// messageMenu is a message's one actions button (005-AC35): its Edit and Delete sit in a menu shared
+// by every message, laid next to the button pressed.
+let menuFor = null;
+function messageMenu(li, m) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'msg-more btn-icon';
+  b.textContent = '⋯';
+  b.setAttribute('aria-label', 'Line actions');
+  b.setAttribute('aria-expanded', 'false');
+  b.addEventListener('click', () => {
+    const menu = $('msg-menu');
+    menuFor = { li, m, b };
+    const r = b.getBoundingClientRect();
+    menu.style.top = Math.min(r.bottom + 4, innerHeight - 120) + 'px';
+    menu.style.right = Math.max(8, innerWidth - r.right) + 'px';
+    menu.showPopover();
+    b.setAttribute('aria-expanded', 'true');
+    $('msg-edit').focus();
+  });
+  return b;
+}
+$('msg-menu').addEventListener('toggle', (e) => {
+  if (e.newState === 'closed' && menuFor) menuFor.b.setAttribute('aria-expanded', 'false');
+});
+// The line may have been redrawn since the menu opened (an edit from elsewhere): act on it as shown.
+$('msg-edit').addEventListener('click', () => {
+  const li = menuFor && messages.querySelector('li[data-id="' + menuFor.m.id + '"]');
+  if (li && li.querySelector(':scope > .body')) editMessage(li, menuFor.m);
+});
+$('msg-delete').addEventListener('click', () => { if (menuFor) deleteMessage(menuFor.m); });
 
 function deleteMessage(m) {
   if (!confirm('Delete this message? It shows as deleted for everyone.')) return;
@@ -512,7 +570,10 @@ document.addEventListener('click', (e) => {
 });
 let focusBefore = null;
 document.addEventListener('focusin', (e) => {
-  if (!e.target.closest('dialog[open]')) focusBefore = e.target;
+  if (e.target.closest('dialog[open]')) return;
+  // A menu item hides with its menu: focus goes back to the button that opened the menu.
+  const menu = e.target.closest('.menu');
+  focusBefore = menu ? document.querySelector('[popovertarget="' + menu.id + '"]') : e.target;
 });
 // close does not bubble: listen in the capture phase.
 document.addEventListener('close', (e) => {
@@ -521,24 +582,55 @@ document.addEventListener('close', (e) => {
 
 // Manage, its tabs and its deep links are admin/room-admin.js's (004-AC8, 005-AC15).
 
+// Menus are popovers (005-AC32): the browser closes them on a click outside and on Escape; picking
+// an item closes them too.
+for (const menu of document.querySelectorAll('.menu')) {
+  menu.addEventListener('click', (e) => { if (e.target.closest('button, a')) menu.hidePopover(); });
+}
+for (const b of document.querySelectorAll('dialog .close')) b.addEventListener('click', () => b.closest('dialog').close());
+$('notify-open').addEventListener('click', () => $('notify').showModal());
+$('invite-open').addEventListener('click', () => {
+  $('invites').showModal();
+  loadInvites().catch(console.error);
+});
+$('host-open').addEventListener('click', () => $('host-agent').showModal());
+$('docs-window-menu').addEventListener('click', (e) => {
+  e.preventDefault();
+  window.open(roomPath + '/docs', docsTarget);
+});
+
 // copyField copies a read-only field, and selects it for a manual copy when the clipboard refuses.
 function copyField(input, button) {
   navigator.clipboard.writeText(input.value).then(() => { button.textContent = 'Copied'; }, () => input.select());
 }
 
-// The join page leaves the recovery link of a profile it just created: shown here once.
-function showRecovery() {
-  const link = sessionStorage.getItem('grill_room_recovery');
-  if (!link) return;
-  sessionStorage.removeItem('grill_room_recovery');
-  $('recovery-link').value = link;
-  $('recovery').hidden = false;
-}
+// The join page leaves the recovery link of a profile it just created. This tab keeps it for the
+// user menu's "Use on another device" until its holder says they saved it (005-AC32); the server
+// keeps only its hash, so once gone it is gone.
+const recoveryKey = 'grill_room_recovery';
+// A window this page opens gets a copy of its session storage: the docs window has no use for the link.
+if (docsMode) sessionStorage.removeItem(recoveryKey);
+$('recovery-open').addEventListener('click', () => {
+  const link = sessionStorage.getItem(recoveryKey);
+  $('recovery-link').value = link || '';
+  $('recovery-has').hidden = !link;
+  $('recovery-none').hidden = !!link;
+  $('recovery-copy').textContent = 'Copy link';
+  $('recovery').showModal();
+});
 $('recovery-copy').addEventListener('click', () => copyField($('recovery-link'), $('recovery-copy')));
 $('recovery-done').addEventListener('click', () => {
+  sessionStorage.removeItem(recoveryKey);
   $('recovery-link').value = '';
-  $('recovery').hidden = true;
+  $('recovery').close();
 });
+
+// After the first message of a new profile, one notice offers the link.
+function nudgeRecovery() {
+  if (!sessionStorage.getItem(recoveryKey) || sessionStorage.getItem(recoveryKey + ':nudged')) return;
+  sessionStorage.setItem(recoveryKey + ':nudged', '1');
+  showNotice('To use this profile on another device, save its link: your initials, then "Use on another device".');
+}
 
 // Invites: a member creates links and revokes the ones they created; a room admin, who gets every
 // invite, manages the others from Manage.
@@ -562,7 +654,6 @@ async function loadInvites() {
     return li;
   }));
 }
-$('invites').addEventListener('toggle', () => { if ($('invites').open) loadInvites().catch(console.error); });
 $('invite-create').addEventListener('click', () => {
   sendJSON('POST', api + '/invites').then((inv) => {
     if (!inv) return;
@@ -574,6 +665,26 @@ $('invite-create').addEventListener('click', () => {
 });
 $('invite-copy').addEventListener('click', () => copyField($('invite-link'), $('invite-copy')));
 
+// The empty chat's card makes an invite and copies it in one press (005-AC34).
+$('chat-invite').addEventListener('click', () => {
+  sendJSON('POST', api + '/invites').then((inv) => {
+    if (!inv) return;
+    return navigator.clipboard.writeText(inv.url).then(() => { $('chat-invite-status').textContent = 'Copied. Paste it to the people you invite.'; },
+      () => {
+        $('invite-link').value = inv.url;
+        $('invite-new').hidden = false;
+        $('invites').showModal();
+        $('invite-link').select();
+        loadInvites().catch(console.error);
+      });
+  }).catch((err) => { $('chat-invite-status').textContent = err.message; });
+});
+
+// showEmpty shows the invite card while the chat holds only event lines.
+function showEmpty() {
+  $('chat-empty').hidden = ended || docsMode || !!messages.querySelector('li.msg:not(.system)');
+}
+
 // Documents. Text documents render in an iframe sandboxed without allow-same-origin: their
 // scripts get an opaque origin, so no room cookie and no same-origin call to the API.
 let openDoc = null;
@@ -584,13 +695,15 @@ function docURL(id, suffix) {
 
 // The docs window is one per room: a second "Open in a new window" reuses it.
 const docsTarget = 'grill-docs-' + roomID;
-$('docs-window').href = roomPath + '/docs';
-$('docs-window').target = docsTarget;
+for (const id of ['docs-window', 'docs-window-menu']) {
+  $(id).href = roomPath + '/docs';
+  $(id).target = docsTarget;
+}
 $('doc-window').target = docsTarget;
 
 function describe(d) {
-  if (d.kind === 'agent') return 'agent document by ' + personaLabel(d.author) + ', ' + d.revisions + (d.revisions === 1 ? ' revision' : ' revisions');
-  return 'uploaded by ' + d.author;
+  if (d.kind === 'agent') return 'written by ' + personaLabel(d.author) + ', ' + d.revisions + (d.revisions === 1 ? ' revision' : ' revisions');
+  return 'added by ' + d.author;
 }
 
 async function loadDocuments() {
@@ -605,10 +718,14 @@ async function loadDocuments() {
     b.className = 'doc';
     b.textContent = d.name;
     b.title = describe(d);
-    b.addEventListener('click', () => showDocument(d.id).catch(console.error));
+    b.addEventListener('click', () => {
+      showPeople(false);
+      showDocument(d.id).catch(console.error);
+    });
     li.append(b);
     return li;
   }));
+  $('docs-empty').hidden = docs.length > 0;
   if (openDoc) {
     const fresh = docs.find((d) => d.id === openDoc.id);
     // A room admin deleted it meanwhile: the viewer closes; renamed, it shows its new name.
@@ -972,29 +1089,112 @@ function fillItem(li, a) {
   return li;
 }
 
-async function upload(file) {
-  const status = $('upload-status');
-  status.textContent = 'Uploading ' + file.name + '…';
-  const form = new FormData();
-  form.append('file', file);
-  const res = await fetch(api + '/documents', { method: 'POST', body: form });
-  if (res.status === 401) {
-    end('Your access to this room has ended.');
-    return;
-  }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    status.textContent = data.error || 'Upload failed: HTTP ' + res.status;
-    return;
-  }
-  status.textContent = '';
-  await showDocument(data.id);
+// Adding documents (005-AC31): the + button picks several files, and the documents pane, or the
+// whole docs window, takes dropped ones. Each file gets a row with its progress, then ✓, or ✗ with
+// the server's reason and Retry.
+const accepted = $('upload-input').accept.split(',');
+const typeHint = "This file type isn't supported. Use PDF, Word, slides, images, Markdown or HTML.";
+
+function addFiles(files) {
+  const list = [...files];
+  for (const f of list) uploadRow(f, list.length === 1);
 }
 
+function uploadRow(file, open) {
+  if (ended) return;
+  const li = document.createElement('li');
+  const name = span('name', file.name);
+  const state = span('state', '');
+  const bar = document.createElement('progress');
+  bar.max = 1;
+  bar.value = 0;
+  bar.setAttribute('aria-label', 'Adding ' + file.name);
+  li.append(name, state, bar);
+  $('uploads').append(li);
+  const fail = (why) => {
+    bar.remove();
+    state.textContent = '✗';
+    state.title = 'Not added';
+    const btns = document.createElement('span');
+    btns.className = 'btns';
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'btn-ghost';
+    retry.textContent = 'Retry';
+    retry.setAttribute('aria-label', 'Retry ' + file.name);
+    retry.addEventListener('click', () => { li.remove(); uploadRow(file, open); });
+    const drop = document.createElement('button');
+    drop.type = 'button';
+    drop.className = 'btn-icon btn-ghost';
+    drop.textContent = '✕';
+    drop.setAttribute('aria-label', 'Dismiss ' + file.name);
+    drop.addEventListener('click', () => li.remove());
+    btns.append(retry, drop);
+    li.append(btns, span('why', why));
+  };
+  // The server checks the type by its content too; this only spares a pointless upload.
+  if (!accepted.some((ext) => file.name.toLowerCase().endsWith(ext))) return fail(typeHint);
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', api + '/documents');
+  xhr.responseType = 'json';
+  xhr.upload.addEventListener('progress', (e) => { if (e.lengthComputable) bar.value = e.loaded / e.total; });
+  xhr.addEventListener('load', () => {
+    if (xhr.status === 401) {
+      fail('Your access to this room has ended.');
+      return end('Your access to this room has ended.');
+    }
+    const data = xhr.response || {};
+    if (xhr.status < 200 || xhr.status >= 300 || !data.id) return fail(data.error || 'Not added: HTTP ' + xhr.status);
+    bar.remove();
+    state.textContent = '✓';
+    state.className = 'state done';
+    state.title = 'Added';
+    setTimeout(() => li.remove(), 5000);
+    if (open) showDocument(data.id).catch(console.error);
+  });
+  xhr.addEventListener('error', () => fail('The connection dropped. Check it, then retry.'));
+  const form = new FormData();
+  form.append('file', file);
+  xhr.send(form);
+}
+
+$('upload-open').addEventListener('click', () => $('upload-input').click());
 $('upload-input').addEventListener('change', (e) => {
-  const file = e.target.files[0];
+  addFiles(e.target.files);
   e.target.value = '';
-  if (file) upload(file).catch((err) => { $('upload-status').textContent = 'Upload failed.'; console.error(err); });
+});
+
+// A drop lands on the documents pane, or anywhere in the docs window. dragenter and dragleave fire
+// for every child crossed: a depth count tells when the drag really left.
+const zone = docsMode ? document.body : $('docs-pane');
+let dragDepth = 0;
+const carriesFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+const dropping = (on) => {
+  $('docs-pane').classList.toggle('dropping', on);
+  // The document frame would swallow the drag: it lets it through while files hover.
+  document.body.classList.toggle('drag-files', on);
+};
+// A file dropped anywhere else must not make the browser open it in place of the room.
+for (const type of ['dragover', 'drop']) document.addEventListener(type, (e) => { if (carriesFiles(e)) e.preventDefault(); });
+zone.addEventListener('dragenter', (e) => {
+  if (ended || !carriesFiles(e)) return;
+  e.preventDefault();
+  if (dragDepth++ === 0) dropping(true);
+});
+zone.addEventListener('dragleave', (e) => {
+  if (!carriesFiles(e)) return;
+  if (--dragDepth <= 0) {
+    dragDepth = 0;
+    dropping(false);
+  }
+});
+zone.addEventListener('dragover', (e) => { if (!ended && carriesFiles(e)) e.preventDefault(); });
+zone.addEventListener('drop', (e) => {
+  if (!carriesFiles(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  dropping(false);
+  if (!ended) addFiles(e.dataTransfer.files);
 });
 
 // connect opens the event stream, replacing any previous one. A new EventSource cannot send
@@ -1014,6 +1214,8 @@ function connect() {
   // Listing on open, not before: the stream announces only changes made after it opened.
   es.onopen = () => {
     $('reconnecting').hidden = true;
+    // The history replays right after the stream opens: judge emptiness once it did.
+    setTimeout(showEmpty, 500);
     beat();
     loadDocuments().then(loadAnnotations).catch(console.error);
   };
@@ -1099,16 +1301,28 @@ function personaLabel(name) {
 // A turn the host's machine holds in its own queue, behind turns of other rooms, is "queued (host
 // busy)" (003-AC18).
 const runningTurn = (p) => (agent.running || []).find((t) => t.persona_id === p.id);
-const turnText = (p, t) => p.name + (t.host_queued ? ' queued (host busy)' : ' working');
+const turnText = (p, t) => p.name + (t.host_queued ? ' waiting (the AI host is busy)' : ' answering');
 
+// personaState is a pill's state: its class draws the shape, word is what a wide screen writes.
 function personaState(p) {
   const running = runningTurn(p);
   const pos = agent.queue.findIndex((q) => q.persona_id === p.id);
-  if (p.pending) return { cls: 'pending', label: p.name + ' waits for the host\'s approval' };
-  if (!agent.online) return { cls: '', label: p.name + ' offline' };
-  if (running) return { cls: running.host_queued ? 'queued' : 'busy', label: turnText(p, running) };
-  if (pos >= 0) return { cls: 'queued', label: p.name + ' queued, position ' + (pos + 1) };
-  return { cls: 'on', label: p.name + ' ready' };
+  if (p.pending) return { cls: 'pending', word: 'needs approval', label: p.name + ' waits for the AI host\'s approval' };
+  if (!agent.online) return { cls: '', word: 'offline', label: p.name + ' offline' };
+  if (running) return { cls: running.host_queued ? 'queued' : 'busy', word: running.host_queued ? 'waiting' : 'answering', label: turnText(p, running) };
+  if (pos >= 0) return { cls: 'queued', word: 'waiting', label: p.name + ' waiting, position ' + (pos + 1) };
+  return { cls: 'on', word: 'ready', label: p.name + ' ready' };
+}
+
+// whyNot says why a pill does nothing on a press, or '' when it asks (005-AC35): a title tooltip
+// never shows on touch, so a press opens the reason instead.
+function whyNot(p, st) {
+  const host = participants.find((x) => x.id === agent.host_participant_id);
+  if (!agent.online) return host ? host.name + '\'s AI host app is not connected: ' + p.name + ' answers once it is.' : 'No one runs the AI for this room yet. Anyone can, from ⋯ › Run the AI on my computer.';
+  if (!canPress()) return 'Only ' + (host ? host.name : 'the AI host') + ' can let you ask ' + p.name + '. Ask them to tick "Can ask the AI" next to your name. You can still mention @' + p.name + ' in a message.';
+  if (st.cls === 'pending') return p.name + ' waits for the AI host\'s approval.';
+  if (st.cls === 'queued') return p.name + ' already waits for its turn.';
+  return '';
 }
 
 function renderAgent() {
@@ -1128,25 +1342,36 @@ function renderAgent() {
       badge.className = 'badge';
       const name = document.createElement('span');
       name.className = 'pname';
-      b.append(led, badge, name);
-      b.addEventListener('click', () => pressPersona(Number(b.dataset.id), false));
+      const word = document.createElement('span');
+      word.className = 'pstate';
+      b.append(led, badge, name, word);
+      b.addEventListener('click', () => {
+        const p = personaByID(Number(b.dataset.id));
+        const why = p && whyNot(p, personaState(p));
+        if (why) return explain(p.badge + ' ' + p.name, why);
+        pressPersona(Number(b.dataset.id), false);
+      });
     }
     const st = personaState(p);
+    const why = whyNot(p, st);
     b.style.setProperty('--persona', p.colour);
     b.setAttribute('aria-label', 'Ask ' + p.name);
     b.dataset.name = p.name;
     b.querySelector('.badge').textContent = p.badge;
     b.querySelector('.pname').textContent = p.name;
+    const locked = agent.online && !canPress();
+    b.querySelector('.pstate').textContent = locked ? 'locked' : st.word;
     const led = b.querySelector('.led');
-    led.className = 'led ' + st.cls;
+    led.className = 'led ' + st.cls + (locked ? ' locked' : '');
     led.setAttribute('aria-label', st.label);
-    b.disabled = !agent.online || !canPress() || st.cls === 'queued' || st.cls === 'pending';
-    b.title = !canPress() ? 'The host has not given you the agent button' : st.label;
+    // Not disabled: a press must still reach the reason.
+    b.setAttribute('aria-disabled', String(!!why));
+    b.title = why || st.label;
     return b;
   });
   if (buttons.length !== bar.children.length || buttons.some((b, i) => bar.children[i] !== b)) bar.replaceChildren(...buttons);
   const running = (agent.running || []).map((t) => [personaByID(t.persona_id), t]).filter(([p]) => p);
-  $('agent-status').textContent = !agent.online ? (agent.reason || 'Agent offline')
+  $('agent-status').textContent = !agent.online ? (agent.reason || 'AI offline')
     : running.length ? running.map(([p, t]) => turnText(p, t)).join(', ') + '…' : agent.personas.length === 0 ? 'No persona: add one.' : '';
   renderRunning();
   renderQueue();
@@ -1175,28 +1400,30 @@ $('parallel-turns').addEventListener('change', () => {
 function renderChain() {
   const c = agent.chain;
   const paused = !c.suspended && c.count >= c.budget;
-  $('chain-count').textContent = c.suspended ? 'Chain ' + c.count + ', no limit' : 'Chain ' + c.count + '/' + c.budget;
+  // The counter shows only while the personas call each other (005-AC32).
+  $('chain-count').textContent = c.suspended ? 'auto ' + c.count + ', no limit' : 'auto ' + c.count + '/' + c.budget;
+  $('chain-count').hidden = c.count === 0 && !c.suspended;
   $('chain-unlimited').hidden = !c.suspended;
   $('chain-paused').hidden = !paused;
-  $('chain-paused-text').textContent = 'The agent chain reached its budget of ' + c.budget + ' turns: agents cannot call each other until it is re-armed.'
-    + (canPress() ? '' : ' The host, or someone they allow to press, can re-arm it.');
+  $('chain-paused-text').textContent = 'The personas reached the limit of ' + c.budget + ' auto turns: they cannot call each other until someone resumes them.'
+    + (canPress() ? '' : ' The AI host, or someone they let ask the AI, can resume them.');
   for (const id of ['chain-rearm', 'chain-suspend', 'chain-restore']) $(id).hidden = !canPress();
   if (document.activeElement !== $('chain-budget')) $('chain-budget').value = c.budget;
   $('chain-budget').disabled = !canPress();
 }
 
 function steerChain(body) {
-  return sendJSON('PATCH', api + '/chain', body).catch((err) => { $('agent-status').textContent = err.message; });
+  return sendJSON('PATCH', api + '/chain', body).catch((err) => { agentError(err.message); });
 }
 $('chain-rearm').addEventListener('click', () => steerChain({ rearm: true }));
 $('chain-suspend').addEventListener('click', () => {
-  if (confirm('Suspend the chain limit? Agents may then call each other without end, on the host\'s subscription.')) steerChain({ suspended: true });
+  if (confirm('Remove the limit on auto turns? The personas may then call each other without end, on the AI host\'s subscription.')) steerChain({ suspended: true });
 });
 $('chain-restore').addEventListener('click', () => steerChain({ suspended: false }));
 $('chain-form').addEventListener('submit', (e) => {
   e.preventDefault();
   sendJSON('PATCH', api + '/chain', { budget: Number($('chain-budget').value) })
-    .then((c) => { if (c) personasStatus('Chain budget set to ' + c.budget + '.'); })
+    .then((c) => { if (c) personasStatus('Auto-turn limit set to ' + c.budget + '.'); })
     .catch((err) => personasStatus(err.message));
 });
 
@@ -1207,17 +1434,16 @@ function renderApprovals() {
   const items = [];
   const decide = (li, what, path, body) => {
     if (!isHost()) {
-      li.append(' The host decides.');
+      li.append(' The AI host decides.');
       return;
     }
     for (const approve of [true, false]) {
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'small';
-      b.textContent = approve ? 'Approve' : 'Refuse';
+            b.textContent = approve ? 'Approve' : 'Refuse';
       b.setAttribute('aria-label', (approve ? 'Approve ' : 'Refuse ') + what);
       b.addEventListener('click', () => {
-        sendJSON('POST', api + path, { ...body, approve }).catch((err) => { $('agent-status').textContent = err.message; });
+        sendJSON('POST', api + path, { ...body, approve }).catch((err) => { agentError(err.message); });
       });
       li.append(' ', b);
     }
@@ -1226,7 +1452,7 @@ function renderApprovals() {
     const p = personaByID(r.persona_id);
     if (!p) continue;
     const li = document.createElement('li');
-    li.textContent = p.badge + ' ' + p.name + ' asks for ' + level(r.asks) + ', above the host cap: it runs at ' + level(r.runs) + '.';
+    li.textContent = p.badge + ' ' + p.name + ' asks for ' + level(r.asks) + ', above the AI host\'s limit: it runs at ' + level(r.runs) + '.';
     decide(li, level(r.asks) + ' for ' + p.name, '/personas/' + p.id + '/cap', { model: r.asks.model || '', effort: r.asks.effort || '' });
     items.push(li);
   }
@@ -1238,13 +1464,12 @@ function renderApprovals() {
     if (isHost()) {
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'small';
-      b.textContent = 'New session with handoff';
-      b.setAttribute('aria-label', 'New session with handoff for ' + p.name);
-      b.addEventListener('click', () => handOff(p).catch((err) => { $('agent-status').textContent = err.message; }));
+            b.textContent = 'Start fresh, keep a summary';
+      b.setAttribute('aria-label', 'Start fresh with a summary for ' + p.name);
+      b.addEventListener('click', () => handOff(p).catch((err) => { agentError(err.message); }));
       li.append(' ', b);
     } else {
-      li.append(' The host can start a new session with a handoff.');
+      li.append(' The AI host can start it fresh, keeping a summary.');
     }
     items.push(li);
   }
@@ -1284,14 +1509,13 @@ function renderRunning() {
     if (mayStop(t)) {
       const stop = document.createElement('button');
       stop.type = 'button';
-      stop.className = 'small';
-      stop.textContent = 'Stop';
+            stop.textContent = 'Stop';
       stop.setAttribute('aria-label', 'Stop the turn of ' + p.name);
       stop.addEventListener('click', () => {
         stop.disabled = true;
         sendJSON('POST', api + '/turns/' + t.id + '/stop', {}).catch((err) => {
           stop.disabled = false;
-          $('agent-status').textContent = err.message;
+          agentError(err.message);
         });
       });
       li.append(' ', stop);
@@ -1306,15 +1530,14 @@ function renderQueue() {
     const li = document.createElement('li');
     const p = personaByID(q.persona_id);
     const who = participants.find((x) => x.id === q.participant_id);
-    const by = { mention: ', mentioned by ', call: ', called by an agent', every_n: ', every ' + (p ? p.every_n : 'N') + ' rounds' }[q.source];
+    const by = { mention: ', mentioned by ', call: ', called by a persona', every_n: ', every ' + (p ? p.every_n : 'N') + ' answers' }[q.source];
     const label = (p ? p.badge + ' ' + p.name : 'a persona') + (q.cause ? ', ' + q.cause
       : (by === undefined ? ', asked by ' : by) + (q.participant_id ? (who ? who.name : 'someone') : ''));
     li.append(label);
     if (String(q.participant_id) === myID || (!q.participant_id && canPress())) {
       const cancel = document.createElement('button');
       cancel.type = 'button';
-      cancel.className = 'small';
-      cancel.textContent = 'Cancel';
+            cancel.textContent = 'Cancel';
       cancel.setAttribute('aria-label', 'Cancel the queued turn of ' + (p ? p.name : 'this persona'));
       cancel.addEventListener('click', () => {
         fetch(api + '/queue/' + q.id, { method: 'DELETE' }).catch(console.error);
@@ -1330,7 +1553,7 @@ async function pressPersona(id, fresh) {
     await sendJSON('POST', api + '/turns', { persona_id: id, fresh });
   } catch (err) {
     renderAgent();
-    $('agent-status').textContent = err.message;
+    agentError(err.message);
   }
 }
 
@@ -1372,7 +1595,7 @@ function personaForm(p) {
   const use = contextUse(p);
   from.textContent = 'Runs on ' + level(p) + '. '
     + (tpl ? 'From "' + tpl.title + '" v' + p.template_version : 'Its template was removed from the library.')
-    + (p.pending ? ' Waits for the host\'s approval.' : '')
+    + (p.pending ? ' Waits for the AI host\'s approval.' : '')
     + (use === null ? '' : ' Its session holds ' + use + '% of its context window.');
   const input = (name, value, attrs) => {
     const i = document.createElement('input');
@@ -1394,14 +1617,14 @@ function personaForm(p) {
     field('Colour', input('colour', p.colour, { type: 'color' })),
     field('Model', picker('model', agent.models, p.model)),
     field('Effort', picker('effort', agent.efforts, p.effort)),
-    field('Every N rounds', input('every_n', p.every_n || 0, { type: 'number', min: 0, max: 100, title: '0 runs it on demand only' })),
-    field('Autocompact (k tokens)', input('autocompact', p.autocompact ? p.autocompact / 1000 : '', { type: 'number', min: 100, max: 1000,
-      placeholder: 'auto', title: 'Context size at which Claude Code compacts the session; empty for auto' })),
+    field('Speaks up every N answers', input('every_n', p.every_n || 0, { type: 'number', min: 0, max: 100, title: '0: it speaks only when asked' })),
+    field('Memory size (k tokens)', input('autocompact', p.autocompact ? p.autocompact / 1000 : '', { type: 'number', min: 100, max: 1000,
+      placeholder: 'auto', title: 'How much it remembers before it summarizes its session; empty for automatic' })),
   );
   const self = input('self_call', '', { type: 'checkbox', checked: p.self_call });
   const selfCall = field('', self);
   selfCall.className = 'check';
-  selfCall.append('Self-call: its own @' + p.name + ' gives it another turn');
+  selfCall.append('Can follow up on its own: its own @' + p.name + ' gives it another answer');
   const actions = document.createElement('div');
   actions.className = 'persona-actions';
   const save = document.createElement('button');
@@ -1420,22 +1643,22 @@ function personaForm(p) {
   if (p.update_version) {
     act('Update to v' + p.update_version, 'Update ' + p.name + ' to template version ' + p.update_version, async () => {
       const done = await sendJSON('POST', api + '/personas/' + p.id + '/update');
-      if (done) personasStatus(done.held ? p.name + ': the update waits for the host\'s approval.' : p.name + ' updated.');
+      if (done) personasStatus(done.held ? p.name + ': the update waits for the AI host\'s approval.' : p.name + ' updated.');
     });
   }
   const mine = tpl && tpl.mine;
-  act(mine ? 'Publish as v' + (tpl.version + 1) : 'Publish as a template', 'Publish ' + p.name + ' to the library', async () => {
+  act(mine ? 'Save to the library as v' + (tpl.version + 1) : 'Save to the library', 'Save ' + p.name + ' to the library', async () => {
     const body = formFields(form);
     if (mine) body.template_id = tpl.id;
     const t = await sendJSON('POST', api + '/templates', body);
-    if (t) personasStatus('Published "' + t.title + '" v' + t.version + ' to the library.');
+    if (t) personasStatus('Saved "' + t.title + '" v' + t.version + ' to the library.');
     await loadTemplates();
   });
   if (isHost()) {
-    act('New session', 'Start a new session for ' + p.name, async () => {
+    act('Start fresh', 'Start fresh for ' + p.name, async () => {
       if (confirm('Start a new session for ' + p.name + '? It forgets its earlier turns and rereads the room history.')) await pressPersona(p.id, true);
     });
-    act('New session with handoff', 'New session with handoff for ' + p.name, () => handOff(p));
+    act('Start fresh, keep a summary', 'Start fresh with a summary for ' + p.name, () => handOff(p));
   }
   act('Remove', 'Remove ' + p.name, async () => {
     if (!confirm('Remove ' + p.name + ' from the room? Its session goes; what it wrote stays.')) return;
@@ -1449,7 +1672,7 @@ function personaForm(p) {
     sendJSON('PATCH', api + '/personas/' + p.id, formFields(form)).then((saved) => {
       if (!saved) return;
       delete form.dataset.dirty;
-      personasStatus(saved.held ? saved.name + ': the change waits for the host\'s approval.' : saved.name + ' saved. It applies from its next turn.');
+      personasStatus(saved.held ? saved.name + ': the change waits for the AI host\'s approval.' : saved.name + ' saved. It applies from its next turn.');
     }).catch((err) => personasStatus(err.message));
   });
   return form;
@@ -1470,7 +1693,7 @@ function renderRoomSkills() {
   $('room-skill-list').replaceChildren(...own.map((k) => {
     const li = document.createElement('li');
     li.dataset.skill = k.name;
-    li.textContent = k.name + ' v' + k.version + ', copied by ' + k.author + (k.pending ? ': waits for the host\'s approval' : '');
+    li.textContent = k.name + ' v' + k.version + ', copied by ' + k.author + (k.pending ? ': waits for the AI host\'s approval' : '');
     return li;
   }));
   if (!own.length) $('room-skill-list').append(Object.assign(document.createElement('li'), { textContent: 'None yet.' }));
@@ -1483,7 +1706,7 @@ function renderRoomSkills() {
 $('room-skill-copy').addEventListener('submit', (e) => {
   e.preventDefault();
   sendJSON('POST', api + '/skills', { skill_id: Number($('room-skill-source').value) }).then((k) => {
-    if (k) personasStatus(k.name + ' v' + k.version + (k.pending ? ' copied. It waits for the host\'s approval.' : ' copied into the room.'));
+    if (k) personasStatus(k.name + ' v' + k.version + (k.pending ? ' copied. It waits for the AI host\'s approval.' : ' copied into the room.'));
   }).catch((err) => personasStatus(err.message)).finally(() => loadSkills().catch(console.error));
 });
 
@@ -1512,7 +1735,7 @@ function skillsBlock(p) {
     }
     li.append(button('Turn off', 'Turn off skill ' + k.name + ' for ' + p.name, async () => {
       const done = await sendJSON('DELETE', api + '/personas/' + p.id + '/skills/' + k.skill_id);
-      if (done) personasStatus(done.held ? p.name + ': the change waits for the host\'s approval.' : k.name + ' is off for ' + p.name + '.');
+      if (done) personasStatus(done.held ? p.name + ': the change waits for the AI host\'s approval.' : k.name + ' is off for ' + p.name + '.');
     }));
     list.append(li);
   }
@@ -1554,7 +1777,7 @@ async function turnSkillOn(p, id) {
     const done = await sendJSON('PUT', api + '/personas/' + p.id + '/skills/' + id, { accept_disclaimer: accept });
     if (done) {
       const k = (done.skills || []).find((x) => x.skill_id === id);
-      personasStatus(done.held ? p.name + ': the change waits for the host\'s approval.' : (k ? k.name + ' v' + k.version + ' is on for ' + p.name + '.' : ''));
+      personasStatus(done.held ? p.name + ': the change waits for the AI host\'s approval.' : (k ? k.name + ' v' + k.version + ' is on for ' + p.name + '.' : ''));
     }
   } finally {
     // A refusal may mean the library or the disclaimer state moved on: read them again.
@@ -1625,7 +1848,7 @@ $('personas-close').addEventListener('click', () => $('personas').close());
 $('persona-add').addEventListener('submit', (e) => {
   e.preventDefault();
   sendJSON('POST', api + '/personas', { template_id: Number($('persona-template').value) })
-    .then((p) => { if (p) personasStatus(p.name + (p.pending ? ' added. It waits for the host\'s approval.' : ' added.')); })
+    .then((p) => { if (p) personasStatus(p.name + (p.pending ? ' added. It waits for the AI host\'s approval.' : ' added.')); })
     .catch((err) => personasStatus(err.message));
 });
 
@@ -1640,12 +1863,12 @@ function agentControls(li, p) {
     trigger.className = 'trigger';
     const box = document.createElement('input');
     box.type = 'checkbox';
-    box.setAttribute('aria-label', 'Let ' + p.name + ' press the agent button');
+    box.setAttribute('aria-label', 'Let ' + p.name + ' ask the AI');
     box.addEventListener('change', () => {
       sendJSON('PATCH', api + '/participants/' + id, { can_trigger: box.checked })
-        .catch((err) => { box.checked = !box.checked; $('agent-status').textContent = err.message; });
+        .catch((err) => { box.checked = !box.checked; agentError(err.message); });
     });
-    trigger.append(box, 'can ask');
+    trigger.append(box, 'Can ask the AI');
     li.append(trigger);
   } else if (!manage && trigger) {
     trigger.remove();
@@ -1657,10 +1880,10 @@ function agentControls(li, p) {
     handOver = document.createElement('button');
     handOver.type = 'button';
     handOver.className = 'make-host';
-    handOver.textContent = 'Make host';
-    handOver.setAttribute('aria-label', 'Make ' + p.name + ' the agent host');
+    handOver.textContent = 'Make AI host';
+    handOver.setAttribute('aria-label', 'Make ' + p.name + ' the AI host');
     handOver.addEventListener('click', () => {
-      sendJSON('PUT', api + '/host', { participant_id: id }).catch((err) => { $('agent-status').textContent = err.message; });
+      sendJSON('PUT', api + '/host', { participant_id: id }).catch((err) => { agentError(err.message); });
     });
     li.append(handOver);
   } else if (!(manage && daemon) && handOver) {
@@ -1680,10 +1903,11 @@ function voiceParticipant(id) {
 }
 
 // Each role badge and its tooltip (005-AC14).
+// Each role badge, its tooltip and the icon it shrinks to when a row has more than two (005-AC35).
 const roles = [
-  ['you', 'This is you', (p) => String(p.id) === myID],
-  ['host', 'Host: holds the agents, which run on their machine', (p) => agent.host_participant_id === p.id],
-  ['admin', 'Room admin: manages the room, its invites and its admins', (p) => p.admin],
+  ['you', 'This is you', (p) => String(p.id) === myID, '●'],
+  ['host', 'AI host: the personas run on their computer', (p) => agent.host_participant_id === p.id, '⚙'],
+  ['admin', 'Room admin: manages the room, its invites and its admins', (p) => p.admin, '★'],
 ];
 
 // audioState is how a participant is in the audio: from the server's presence, which every
@@ -1736,8 +1960,12 @@ function renderParticipants() {
     const pr = presence.get(id);
     const isHere = id === myID || !!(pr && pr.here);
     li.querySelector('.name').textContent = p.name;
-    li.querySelector('.badges').replaceChildren(...roles.filter(([, , on]) => on(p))
-      .map(([name, title]) => span('badge role-' + name + (name === 'host' ? ' host-badge' : ''), name, title)));
+    const mine = roles.filter(([, , on]) => on(p));
+    li.querySelector('.badges').replaceChildren(...mine.map(([name, title, , icon]) => {
+      const b = span('badge role-' + name + (name === 'host' ? ' host-badge' : '') + (mine.length > 2 ? ' icon' : ''), mine.length > 2 ? icon : name, title);
+      if (mine.length > 2) b.setAttribute('aria-label', name);
+      return b;
+    }));
     const vp = voiceParticipant(id);
     const st = isHere ? audioState(id) : { key: 'none', icon: '', text: 'Not in the audio' };
     const deaf = isHere && !!(pr && pr.deaf);
@@ -1785,16 +2013,29 @@ function renderParticipants() {
   }
   $('away').hidden = !rows.away.length;
   $('away-count').textContent = String(rows.away.length);
-  $('people-open').textContent = 'People (' + rows.here.length + ')';
+  $('people-open').textContent = '👥 ' + rows.here.length;
+  $('people-open').setAttribute('aria-label', 'People (' + rows.here.length + ')');
 }
 setInterval(() => { if (participants.length) renderParticipants(); }, 30_000);
 
-// On a phone the list opens over the chat; Escape or the button closes it.
+// On a phone the list opens as a sheet over the chat (005-AC35): its ✕, a tap on the backdrop,
+// Escape and picking a document close it.
 function showPeople(on) {
+  if (!on && !document.body.classList.contains('people-open')) return;
   document.body.classList.toggle('people-open', on);
+  $('sheet-backdrop').hidden = !on;
+  // A sheet: the page behind it is out of reach until it closes.
+  for (const el of [document.querySelector('header'), $('viewer'), document.querySelector('.chat')]) el.inert = on;
+  if (on) $('side').setAttribute('role', 'dialog');
+  else $('side').removeAttribute('role');
+  $('side').setAttribute('aria-modal', String(on));
   $('people-open').setAttribute('aria-expanded', String(on));
+  if (on) $('people-close').focus();
+  else if (document.activeElement && $('side').contains(document.activeElement)) $('people-open').focus();
 }
 $('people-open').addEventListener('click', () => showPeople(!document.body.classList.contains('people-open')));
+$('people-close').addEventListener('click', () => showPeople(false));
+$('sheet-backdrop').addEventListener('click', () => showPeople(false));
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') showPeople(false); });
 
 // showSTT counts the voices the STT worker transcribes, and tells viewers only whether their own
@@ -1805,11 +2046,17 @@ function showSTT(st) {
   transcribed = new Set(voices.map(String));
   renderParticipants();
   const mine = voices.some((id) => String(id) === myID);
-  el.classList.toggle('down', !st.available);
-  el.textContent = !st.available ? 'Transcription unavailable'
+  sttDown = !st.available;
+  // It lives in the audio menu: only people in the audio read it (005-AC32).
+  el.classList.toggle('down', sttDown);
+  el.textContent = sttDown ? 'Voice-to-text is off'
     : !st.listening || !voices.length ? ''
-    : (voices.length === 1 ? '1 voice' : voices.length + ' voices') + ' transcribed' + (mine ? ' · your voice is being transcribed' : '');
+    : (voices.length === 1 ? '1 voice is' : voices.length + ' voices are') + ' being written down' + (mine ? ' · yours is one of them' : '');
+  $('voice-mute').classList.toggle('captured', mine);
+  $('voice-mute').title = mine ? 'Your voice is being written down' : '';
+  $('voice-more').classList.toggle('down', sttDown);
 }
+let sttDown = false;
 
 function voiceError(text) {
   $('voice-error').textContent = text;
@@ -1819,15 +2066,17 @@ function voiceError(text) {
 function voiceButtons() {
   const on = !!voice;
   $('voice-join').hidden = on;
-  $('voice-leave').hidden = !on;
   $('voice-mute').hidden = !on;
-  $('voice-deaf').hidden = !on;
-  $('voice-keepmic').hidden = !on;
+  $('voice-more').hidden = !on;
+  if (!on && $('voice-menu').matches(':popover-open')) $('voice-menu').hidePopover();
   $('voice-deaf').setAttribute('aria-pressed', String(on && deaf));
-  $('voice-deaf').textContent = on && deaf ? 'Undeafen' : 'Deafen';
+  $('voice-deaf').textContent = on && deaf ? 'Hear the room again' : 'Mute the room';
   const muted = on && !voice.localParticipant.isMicrophoneEnabled;
   $('voice-mute').setAttribute('aria-pressed', String(muted));
-  $('voice-mute').textContent = muted ? 'Unmute' : 'Mute';
+  const icon = document.createElement('span');
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = muted ? '🔇' : '🎙';
+  $('voice-mute').replaceChildren(icon, muted ? 'Unmute' : 'Mute');
   $('voice-unlock').hidden = !on || voice.canPlaybackAudio;
 }
 
@@ -2066,6 +2315,7 @@ async function send() {
   }
   if (!res.ok) throw new Error('send: HTTP ' + res.status);
   bodyInput.value = '';
+  nudgeRecovery();
   const m = await res.json();
   if (m.mention_notices) {
     notices.set(m.id, m.mention_notices);
@@ -2138,6 +2388,13 @@ function pickMention(i) {
   renderSuggestions();
 }
 
+// The keys' hint shows on the first focus only (005-AC33): the placeholder stays short.
+bodyInput.addEventListener('focus', () => {
+  if (localStorage.getItem('grill-room-send-hint')) return;
+  localStorage.setItem('grill-room-send-hint', '1');
+  $('send-hint').hidden = false;
+  setTimeout(() => { $('send-hint').hidden = true; }, 8000);
+}, { once: true });
 bodyInput.addEventListener('input', suggest);
 bodyInput.addEventListener('click', suggest);
 bodyInput.addEventListener('blur', () => {
@@ -2251,7 +2508,7 @@ async function showHostAgent() {
   $('host-copy').addEventListener('click', () => {
     navigator.clipboard.writeText(oneLiner).then(() => { $('host-copy').textContent = 'Copied'; }, console.error);
   });
-  $('host-agent').hidden = false;
+  $('host-open').hidden = false;
 }
 
 function fitViewport() {
@@ -2274,7 +2531,13 @@ loadRoom().then((ok) => {
     if (doc) showDocument(doc).catch(() => history.replaceState(null, '', roomPath + '/docs'));
     return;
   }
-  showRecovery();
+  // A room just created from the profile opens on its invite card (005-AC34).
+  const query = new URLSearchParams(location.search);
+  if (query.has('invite')) {
+    query.delete('invite');
+    history.replaceState(null, '', location.pathname + (query.size ? '?' + query : '') + location.hash);
+    $('invite-open').click();
+  }
   showHostAgent().catch(console.error);
   const pair = new URLSearchParams(location.search).get('pair');
   if (pair) showPairing(pair).catch(console.error);

@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { adminToken } from './playwright.config.js';
-import { roomWith, startDaemon, pairDaemon, removeSandbox, ask, signIn, noOverflow } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, removeSandbox, ask, signIn, noOverflow, menuItem } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
@@ -77,7 +77,7 @@ test('the room page offers its admins the export', async ({ browser, request }) 
   const me = await alice.evaluate((id) => fetch(`/api/rooms/${id}`).then((r) => r.json()), room.id);
   expect((await request.put(`/api/rooms/${room.id}/admins/${me.me.id}`, { headers: admin })).status()).toBe(204);
   await alice.reload();
-  await alice.getByRole('button', { name: 'Manage', exact: true }).click();
+  await menuItem(alice, 'Room settings');
   const dialog = alice.locator('#manage');
   await dialog.getByRole('link', { name: 'Export', exact: true }).click();
   await expect(dialog.locator('#export-warning')).toContainText('everything Claude read');

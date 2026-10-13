@@ -31,10 +31,10 @@ test('a turn waiting for the host shows queued (host busy)', async ({ browser, r
     await alice.locator('#body').fill('FAKE_SLOW');
     await alice.locator('#body').press('Enter');
     await alice.getByRole('button', { name: 'Ask Grill' }).click();
-    await expect(alice.locator('#agent-status')).toHaveText('Grill working…', { timeout: 30_000 });
+    await expect(alice.locator('#agent-status')).toHaveText('Grill answering…', { timeout: 30_000 });
     await bob.getByRole('button', { name: 'Ask Grill' }).click();
-    await expect(bob.locator('#agent-status')).toHaveText('Grill queued (host busy)…', { timeout: 30_000 });
-    await expect(bob.locator('button.persona[data-name="Grill"] .led')).toHaveAttribute('aria-label', 'Grill queued (host busy)');
+    await expect(bob.locator('#agent-status')).toHaveText('Grill waiting (the AI host is busy)…', { timeout: 30_000 });
+    await expect(bob.locator('button.persona[data-name="Grill"] .led')).toHaveAttribute('aria-label', 'Grill waiting (the AI host is busy)');
     await expect(admin.locator('#concurrency')).toContainText('Now 1 running, 1 waiting.');
     await expect(bob.locator('#messages li.msg.agent')).toHaveCount(1, { timeout: 60_000 });
     await expect(alice.locator('#messages li.msg.agent')).toHaveCount(1);

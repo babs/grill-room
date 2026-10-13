@@ -1,11 +1,11 @@
 import { test, expect } from '@playwright/test';
-import { roomWith } from './helpers.js';
+import { roomWith, menuItem } from './helpers.js';
 
 // 005-AC9: the personas panel offers explicit models and efforts only, never a default, and says
 // what a persona runs on in full words.
 test('persona panel: no default model or effort', async ({ browser, request }) => {
   const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
-  await alice.getByRole('button', { name: 'Personas' }).click();
+  await menuItem(alice, 'Personas');
   const grill = alice.locator('#personas .persona-form', { hasText: 'Grill' });
   await expect(grill.getByLabel('Model').locator('option')).toHaveText(['haiku', 'sonnet', 'opus', 'fable']);
   await expect(grill.getByLabel('Effort').locator('option')).toHaveText(['low', 'medium', 'high', 'xhigh', 'max']);
@@ -29,11 +29,11 @@ test('transcription label counts voices', async ({ browser, request }) => {
   };
   const label = (page) => page.locator('#stt-status');
   await play(alice, { available: true, listening: true, transcribed: [aliceID, aliceID + 1000] });
-  await expect(label(alice)).toHaveText('2 voices transcribed · your voice is being transcribed');
+  await expect(label(alice)).toHaveText('2 voices are being written down · yours is one of them');
   await play(bob, { available: true, listening: true, transcribed: [aliceID] });
-  await expect(label(bob)).toHaveText('1 voice transcribed');
+  await expect(label(bob)).toHaveText('1 voice is being written down');
   await play(bob, { available: true, listening: true, transcribed: [] });
   await expect(label(bob)).toHaveText('');
   await play(bob, { available: false, listening: false, transcribed: [] });
-  await expect(label(bob)).toHaveText('Transcription unavailable');
+  await expect(label(bob)).toHaveText('Voice-to-text is off');
 });

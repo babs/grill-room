@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon, ask, skillZip } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip, menuItem } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
@@ -12,7 +12,7 @@ async function uploadSkill(page, zip, scope, status) {
 }
 
 async function openPanel(page) {
-  await page.getByRole('button', { name: 'Personas' }).click();
+  await menuItem(page, 'Personas');
   return page.locator('#personas .persona-form', { hasText: 'Grill' }).first();
 }
 
@@ -42,10 +42,10 @@ test('skills: upload, disclaimer once, pinned through an update', async ({ brows
   await grill.getByRole('button', { name: 'Turn on the chosen skill for Grill' }).click();
   const disclaimer = alice.locator('#skills-disclaimer');
   await expect(disclaimer).toBeVisible();
-  await expect(disclaimer).toContainText('scripts run in the host\'s sandbox');
-  await expect(disclaimer).toContainText('ask the agent to print a skill\'s files');
-  await expect(disclaimer).toContainText('allowed domain that accepts uploads');
-  await expect(disclaimer).toContainText('only through the host\'s egress allowlist');
+  await expect(disclaimer).toContainText('scripts run in the AI host\'s sandbox');
+  await expect(disclaimer).toContainText('ask the AI to print a skill\'s files');
+  await expect(disclaimer).toContainText('allowed website that accepts uploads');
+  await expect(disclaimer).toContainText('only through the AI host\'s list of allowed websites');
   await disclaimer.getByRole('button', { name: 'Cancel' }).click();
   await expect(disclaimer).toBeHidden();
   await expect(grill.locator('.persona-skills li')).toHaveText(['None on.']);

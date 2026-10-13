@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, menuItem } from './helpers.js';
 
 const led = (page, name) => page.locator(`button.persona[data-name="${name}"] .led`);
 const lastAgent = (page) => page.locator('#messages li.msg.agent').last();
@@ -7,7 +7,7 @@ const lastAgent = (page) => page.locator('#messages li.msg.agent').last();
 // openPanel opens the personas panel once its library has loaded: the load replaces the template
 // options, and with them a choice made before it.
 async function openPanel(page) {
-  await Promise.all([page.waitForResponse((r) => r.url().endsWith('/templates')), page.getByRole('button', { name: 'Personas' }).click()]);
+  await Promise.all([page.waitForResponse((r) => r.url().endsWith('/templates')), menuItem(page, 'Personas')]);
   return page.locator('#personas');
 }
 
@@ -16,7 +16,7 @@ async function edit(page, name, fields) {
   const panel = await openPanel(page);
   const form = panel.locator('.persona-form', { has: page.getByRole('heading', { name: new RegExp(` ${name}$`) }) });
   for (const [label, value] of Object.entries(fields)) await form.getByLabel(label).selectOption(value);
-  await form.getByRole('button', { name: 'Save' }).click();
+  await form.getByRole('button', { name: 'Save', exact: true }).click();
   return { status: panel.locator('#personas-status') };
 }
 
@@ -46,7 +46,7 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
     await admin.locator('#tab-settings').click();
     await admin.getByLabel('Max model').selectOption('sonnet');
     await admin.getByLabel('Max effort').selectOption('high');
-    await admin.getByRole('button', { name: 'Save' }).click();
+    await admin.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(admin.locator('#settings-status')).toHaveText('Saved.');
     await admin.reload();
     await expect(admin.getByLabel('Max model')).toHaveValue('sonnet');
@@ -56,13 +56,13 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
     let { status } = await edit(bob, 'Grill', { Model: 'opus', Effort: 'max' });
     await expect(status).toHaveText('Grill saved. It applies from its next turn.');
     await close(bob);
-    const banner = '🔥 Grill asks for opus · effort max, above the host cap: it runs at sonnet · effort high.';
-    await expect(bob.locator('#approval-list li')).toHaveText([banner + ' The host decides.']);
+    const banner = '🔥 Grill asks for opus · effort max, above the AI host\'s limit: it runs at sonnet · effort high.';
+    await expect(bob.locator('#approval-list li')).toHaveText([banner + ' The AI host decides.']);
     await expect(alice.locator('#approval-list li')).toContainText([banner]);
 
     await ask(alice, 'Grill', 1);
     for (const p of [alice, bob]) {
-      await expect(lastAgent(p).locator('.meta')).toContainText(/requested opus · effort max → ran sonnet · effort high · \+claude-side-fake \S+ \(host cap\)/);
+      await expect(lastAgent(p).locator('.meta')).toContainText(/requested opus · effort max → ran sonnet · effort high · \+claude-side-fake \S+ \(AI host's limit\)/);
       await expect(lastAgent(p).locator('.body')).toContainText('(effort high)');
     }
 
@@ -94,34 +94,34 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
       'Alice refused opus · effort medium for 📝 Secretary: it keeps running at the host cap, sonnet · effort medium.');
     await expect(bob.locator('#approvals')).toBeHidden();
     await ask(alice, 'Secretary', 3);
-    await expect(lastAgent(bob).locator('.meta')).toContainText(/requested opus · effort medium → ran sonnet · effort medium · \+claude-side-fake \S+ \(host cap\)/);
+    await expect(lastAgent(bob).locator('.meta')).toContainText(/requested opus · effort medium → ran sonnet · effort medium · \+claude-side-fake \S+ \(AI host's limit\)/);
 
     // Approve everything: Bob's new persona and his change wait for Alice.
     await admin.locator('#tab-settings').click();
     await admin.getByLabel('Approve every new persona and persona change').check();
-    await admin.getByRole('button', { name: 'Save' }).click();
+    await admin.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(admin.locator('#settings-status')).toHaveText('Saved.');
     await openPanel(bob);
     await bob.locator('#persona-template').selectOption({ label: '🔥 Default v1' });
     await bob.locator('#personas').getByRole('button', { name: 'Add', exact: true }).click();
-    await expect(bob.locator('#personas-status')).toHaveText('Grill-2 added. It waits for the host\'s approval.');
+    await expect(bob.locator('#personas-status')).toHaveText('Grill-2 added. It waits for the AI host\'s approval.');
     await close(bob);
     ({ status } = await edit(bob, 'Secretary', { Effort: 'low' }));
-    await expect(status).toHaveText('Secretary: the change waits for the host\'s approval.');
+    await expect(status).toHaveText('Secretary: the change waits for the AI host\'s approval.');
     await close(bob);
     for (const p of [alice, bob]) {
-      await expect(led(p, 'Grill-2')).toHaveAttribute('aria-label', 'Grill-2 waits for the host\'s approval');
+      await expect(led(p, 'Grill-2')).toHaveAttribute('aria-label', 'Grill-2 waits for the AI host\'s approval');
       await expect(p.locator('button.persona[data-name="Grill-2"]')).toBeDisabled();
     }
     await expect(bob.locator('#approval-list li')).toHaveText([
-      '🔥 Grill-2, added by Bob: new persona. The host decides.',
-      'Bob asks to change 📝 Secretary: effort medium → low. The host decides.',
+      '🔥 Grill-2, added by Bob: new persona. The AI host decides.',
+      'Bob asks to change 📝 Secretary: effort medium → low. The AI host decides.',
     ]);
     await alice.getByRole('button', { name: 'Approve the persona Grill-2' }).click();
     await alice.getByRole('button', { name: 'Approve the change to Secretary' }).click();
     // A refusal settles the level it was asked for: asking opus with another effort asks again.
     await expect(bob.locator('#approval-list li')).toHaveText([
-      '📝 Secretary asks for opus · effort low, above the host cap: it runs at sonnet · effort low. The host decides.',
+      '📝 Secretary asks for opus · effort low, above the AI host\'s limit: it runs at sonnet · effort low. The AI host decides.',
     ]);
     await expect(led(bob, 'Grill-2')).toHaveAttribute('aria-label', 'Grill-2 ready');
     await expect(bob.locator('#messages')).toContainText('Alice approved Bob\'s change to 📝 Secretary: effort medium → low.');

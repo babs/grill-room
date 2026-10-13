@@ -89,11 +89,12 @@ function Header() {
     banner.value = 'The daemon stopped. You can close this tab.';
   }).catch((err) => { banner.value = err.message; });
   return html`
-    <header>
+    <header class="app-header">
+      <img src="/static/logo.svg" alt="" class="logo" width="32" height="32"/>
       <h1>grill-room daemon</h1>
-      <span id="host">${d ? d.status.host + ' · ' + d.status.version : ''}</span>
+      <span id="host" class="muted">${d ? d.status.host + ' · ' + d.status.version : ''}</span>
       ${t && html`<span id="self-sig" class=${'badge ' + cls}>${sig}</span>`}
-      <button type="button" id="stop" onClick=${stop} disabled=${stopped.value}>Stop the daemon</button>
+      <button type="button" id="stop" class="btn-secondary" onClick=${stop} disabled=${stopped.value}>Stop the daemon</button>
     </header>`;
 }
 

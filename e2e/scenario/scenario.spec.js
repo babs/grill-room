@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
-import { launch, joinAudio, dropProfiles, admin } from '../voice/helpers.js';
+import { launch, joinAudio, dropProfiles, admin, audioItem } from '../voice/helpers.js';
 import { upload, annotateSelection, pairDaemon, liveDaemon, logLines, messagesRequests, removeSandbox, adminAPI } from '../helpers.js';
 
 // The scenario driver (004-AC16; the library's lab runs, 004-AC17, go through it): it plays the
@@ -37,7 +37,7 @@ function probe() {
     const chain = document.getElementById('chain-count');
     if (chain) {
       new MutationObserver(() => {
-        const m = chain.textContent.match(/Chain (\d+)\//);
+        const m = chain.textContent.match(/auto (\d+)\//);
         if (m && window.scChain.at(-1) !== Number(m[1])) window.scChain.push(Number(m[1]));
       }).observe(chain, { childList: true, subtree: true, characterData: true });
     }
@@ -188,14 +188,14 @@ test(plan.name, async ({ request }) => {
           } else {
             // One at a time, as people do: the audio room never empties.
             for (const name of plan.speakers) {
-              await pages[name].getByRole('button', { name: 'Leave audio' }).click();
+              await audioItem(pages[name], 'Leave audio');
               await expect(pages[name].getByRole('button', { name: 'Join audio' })).toBeVisible();
               await joinAudio(pages[name]);
             }
           }
           const micAt = {};
           for (const name of plan.speakers) micAt[name] = await pages[name].evaluate(() => window.scMicAt);
-          await expect(first.locator('#stt-status')).toHaveText(/^\d+ voices? transcribed/, { timeout: 30_000 });
+          await expect(first.locator('#stt-status')).toHaveText(/^\d+ voices? (is|are) being written down/, { timeout: 30_000 });
           const lastEnd = Math.max(...rnd.lines.map((l) => l.end));
           await first.waitForTimeout(Math.max(0, Math.max(...Object.values(micAt)) + lastEnd * 1000 - Date.now()));
           // The worker lags behind speech: wait until no line has landed for 15 s, 2 minutes at most.

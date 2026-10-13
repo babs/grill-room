@@ -10,6 +10,7 @@
 <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
 <link rel="manifest" href="/site.webmanifest">
 <meta name="theme-color" content="#159F8C">
+<link rel="stylesheet" href="/static/kit/tokens.css">
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/vendor/livekit-client.umd.js" defer></script>
 <script src="/static/bridge.js" defer></script>
@@ -25,66 +26,89 @@
 <script type="module" src="/static/admin/room-admin.js"></script>
 </head>
 <body class="room">
-<header>
-  <img src="/static/logo.svg" alt="" class="logo" width="32" height="32">
-  <h1 id="room-name">grill-room</h1>
-  <button type="button" id="manage-open" class="small" hidden>Manage</button>
-  <button type="button" id="people-open" class="small" aria-expanded="false" aria-controls="participants">People</button>
-  <div id="voice" hidden>
-    <span id="stt-status" role="status"></span>
-    <button type="button" id="voice-join">Join audio</button>
-    <button type="button" id="voice-unlock" hidden>Play audio</button>
-    <button type="button" id="voice-mute" aria-pressed="false" hidden>Mute</button>
-    <button type="button" id="voice-deaf" aria-pressed="false" title="Stop hearing the others" hidden>Deafen</button>
-    <label id="voice-keepmic" title="Keep your voice published, and so transcribed, while deafened: when you share a physical room" hidden><input type="checkbox"> Keep my mic on while deafened</label>
-    <button type="button" id="voice-leave" hidden>Leave audio</button>
+<header class="app-header room-header">
+  <div class="zone zone-room">
+    <img src="/static/logo.svg" alt="" class="logo" width="32" height="32">
+    <h1 id="room-name">grill-room</h1>
   </div>
-  <div id="agent">
-    <div id="persona-buttons" role="group" aria-label="Agents"></div>
-    <button type="button" id="personas-open" class="small">Personas</button>
-    <span id="chain-count" title="Agent-triggered turns since a human last took the lead"></span>
-    <span id="agent-status" role="status"></span>
+  <div class="zone zone-agents" id="agent">
+    <div id="persona-buttons" role="group" aria-label="AI personas"></div>
+    <span id="chain-count" class="auto-turns" title="Answers the personas started on their own, one calling another. They pause at the limit; any message from a person starts the count over." hidden></span>
+    <span id="agent-status" class="muted" role="status"></span>
   </div>
-  <span class="me"><a id="me" href="/profile" title="Your profile"></a>
-    <button type="button" id="rename-open" class="small" aria-label="Change your name" title="Change your name">✎</button></span>
+  <div class="zone zone-me">
+    <div id="voice" class="audio" role="group" aria-label="Audio" hidden>
+      <button type="button" id="voice-join" class="btn-primary">Join audio</button>
+      <button type="button" id="voice-unlock" class="btn-primary" hidden>Play audio</button>
+      <button type="button" id="voice-mute" aria-pressed="false" hidden>Mute</button>
+      <button type="button" id="voice-more" class="btn-icon" popovertarget="voice-menu" aria-label="Audio options" hidden>▾</button>
+    </div>
+    <button type="button" id="people-open" class="btn-icon" aria-expanded="false" aria-controls="side">People</button>
+    <button type="button" id="me" class="avatar" popovertarget="me-menu" title="You: your name, notifications, your profile"></button>
+    <button type="button" id="more-open" class="btn-icon" popovertarget="more-menu" aria-label="More" title="More">⋯</button>
+  </div>
 </header>
+<div id="voice-menu" class="menu" popover>
+  <p id="stt-status" class="menu-head" role="status"></p>
+  <button type="button" id="voice-deaf" aria-pressed="false" title="Stop hearing the others">Mute the room</button>
+  <label id="voice-keepmic" title="Keep your voice going out, and written down, while the room is muted: useful when you share a physical room"><input type="checkbox"> Keep my mic on while the room is muted</label>
+  <button type="button" id="voice-leave">Leave audio</button>
+</div>
+<div id="me-menu" class="menu" popover>
+  <p class="menu-head" id="me-head"></p>
+  <button type="button" id="rename-open">Change my name</button>
+  <button type="button" id="notify-open">Notifications</button>
+  <button type="button" id="recovery-open">Use on another device</button>
+  <a href="/profile">My rooms and profile</a>
+</div>
+<div id="more-menu" class="menu" popover>
+  <button type="button" id="invite-open">Invite people</button>
+  <button type="button" id="manage-open" hidden>Room settings</button>
+  <button type="button" id="personas-open">Personas</button>
+  <a id="docs-window-menu">Open documents in a new window</a>
+  <button type="button" id="host-open" hidden>Run the AI on my computer</button>
+</div>
+<div id="msg-menu" class="menu msg-menu" popover>
+  <button type="button" id="msg-edit">Edit</button>
+  <button type="button" id="msg-delete">Delete</button>
+</div>
 <p id="voice-error" role="alert" hidden></p>
 <div id="voice-audio" hidden></div>
 <p id="banner" role="alert" hidden></p>
-<p id="notice" role="status" hidden><span id="notice-text"></span> <button type="button" id="notice-close" class="small">OK</button></p>
+<p id="notice" role="status" hidden><span id="notice-text"></span> <button type="button" id="notice-close" class="btn-ghost">OK</button></p>
 <p id="reconnecting" role="status" hidden>Reconnecting…</p>
-<div id="running" hidden>
-  <span>Running:</span>
-  <ol id="running-list" aria-label="Running turns"></ol>
+<div id="running" class="strip" hidden>
+  <span>Answering:</span>
+  <ol id="running-list" aria-label="Answers in progress"></ol>
 </div>
-<div id="queue" hidden>
-  <span>Queued:</span>
-  <ol id="queue-list" aria-label="Queued turns"></ol>
+<div id="queue" class="strip" hidden>
+  <span>Waiting:</span>
+  <ol id="queue-list" aria-label="Waiting answers"></ol>
 </div>
-<p id="chain-unlimited" role="alert" hidden>Chain limit suspended: agents may call each other without end. The host cap still applies.
-  <button type="button" id="chain-restore" class="small">Restore the limit</button></p>
-<p id="chain-paused" role="alert" hidden><span id="chain-paused-text"></span>
-  <button type="button" id="chain-rearm" class="small">Re-arm</button>
-  <button type="button" id="chain-suspend" class="small">Suspend limit</button></p>
-<section id="approvals" aria-label="Waiting for the host" hidden>
+<p id="chain-unlimited" class="strip" role="alert" hidden>No limit on auto turns: the personas may call each other without end. The AI host's own cap still applies.
+  <button type="button" id="chain-restore">Restore the limit</button></p>
+<p id="chain-paused" class="strip" role="alert" hidden><span id="chain-paused-text"></span>
+  <button type="button" id="chain-rearm">Resume auto turns</button>
+  <button type="button" id="chain-suspend" class="btn-danger-outline">Remove the limit</button></p>
+<section id="approvals" class="strip" aria-label="Waiting for the AI host" hidden>
   <ul id="approval-list"></ul>
 </section>
-<dialog id="personas" aria-labelledby="personas-title">
-  <div class="dialog-head">
+<dialog id="personas" class="sheet wide" aria-labelledby="personas-title">
+  <div class="sheet-head">
     <h2 id="personas-title">Personas</h2>
-    <button type="button" id="personas-close" class="small">Close</button>
+    <button type="button" id="personas-close" class="btn-icon btn-ghost" aria-label="Close">✕</button>
   </div>
-  <p class="hint">Each persona is an agent with its own Claude session. Changes apply from its next turn.</p>
-  <p id="personas-status" role="status"></p>
+  <p class="hint">Each persona is an AI with its own Claude session. Changes apply from its next answer.</p>
+  <p id="personas-status" class="said error" role="status"></p>
   <div id="persona-list"></div>
-  <form id="chain-form">
-    <label>Chain budget <input id="chain-budget" type="number" min="1" max="1000" required></label>
+  <form id="chain-form" class="row">
+    <label>Auto-turn limit <input id="chain-budget" type="number" min="1" max="1000" required></label>
     <button type="submit">Set</button>
   </form>
-  <p class="hint">Turns agents start one after another (every N rounds, @name in a synthesis) before the chain pauses. A press or an @name from a person starts it over.</p>
-  <label><input id="parallel-turns" type="checkbox"> Personas run at the same time</label>
-  <p class="hint" id="parallel-hint">Each one in its own sandbox on the host's machine. When two edit the same document, the second runs again on the new version. Only the host switches it.</p>
-  <form id="persona-add">
+  <p class="hint">Answers the personas start one after another (every N answers, or when an answer names another persona) before they pause. A message from a person starts the count over.</p>
+  <label><input id="parallel-turns" type="checkbox"> Personas answer at the same time</label>
+  <p class="hint" id="parallel-hint">Each one in its own sandbox on the AI host's computer. When two edit the same document, the second runs again on the new version. Only the AI host switches it.</p>
+  <form id="persona-add" class="row">
     <label>Add from the library <select id="persona-template" required></select></label>
     <button type="submit">Add</button>
   </form>
@@ -92,133 +116,163 @@
     <h3 id="room-skills-title">Room skills</h3>
     <p class="hint">The room's own copies of skills, at the version copied. They stay when whoever copied them leaves, and any persona can turn them on.</p>
     <ul id="room-skill-list"></ul>
-    <form id="room-skill-copy" hidden>
+    <form id="room-skill-copy" class="row" hidden>
       <label>Copy one of your personal skills into the room <select id="room-skill-source" required></select></label>
       <button type="submit">Copy</button>
     </form>
   </section>
 </dialog>
-<dialog id="manage" aria-labelledby="manage-title">
-  <div class="dialog-head">
-    <h2 id="manage-title">Manage the room</h2>
-    <button type="button" id="manage-close" class="small">Close</button>
+<dialog id="manage" class="sheet wide full" aria-labelledby="manage-title">
+  <div class="sheet-head">
+    <h2 id="manage-title">Room settings</h2>
+    <button type="button" id="manage-close" class="btn-icon btn-ghost" aria-label="Close">✕</button>
   </div>
   <div id="room-admin"></div>
 </dialog>
-<dialog id="rename" aria-labelledby="rename-title">
-  <form id="rename-form">
+<dialog id="rename" class="sheet" aria-labelledby="rename-title">
+  <form id="rename-form" class="stack">
     <h2 id="rename-title">Your name in this room</h2>
     <label>Display name <input id="rename-name" maxlength="40" required autocomplete="nickname"></label>
     <label id="rename-profile-label"><input type="checkbox" id="rename-profile"> Also use it for my profile</label>
-    <p id="rename-status" role="status"></p>
-    <div class="pairing-actions">
-      <button type="button" id="rename-cancel">Cancel</button>
+    <p id="rename-status" class="said error" role="status"></p>
+    <div class="actions">
+      <button type="button" id="rename-cancel" class="btn-secondary">Cancel</button>
       <button type="submit">Rename</button>
     </div>
   </form>
 </dialog>
-<dialog id="skills-disclaimer" aria-labelledby="skills-disclaimer-title">
+<dialog id="invites" class="sheet" aria-labelledby="invites-title">
+  <div class="sheet-head">
+    <h2 id="invites-title">Invite people</h2>
+    <button type="button" class="btn-icon btn-ghost close" aria-label="Close">✕</button>
+  </div>
+  <p>Anyone holding an invite link can join and read the room.</p>
+  <button type="button" id="invite-create" class="btn-primary">Create an invite link</button>
+  <p id="invite-new" class="copy-row" hidden>
+    <input id="invite-link" readonly aria-label="New invite link">
+    <button type="button" id="invite-copy">Copy invite</button>
+  </p>
+  <h3>Your invites</h3>
+  <ul id="invite-list" class="rows"></ul>
+</dialog>
+<dialog id="notify" class="sheet" aria-labelledby="notify-title">
+  <div class="sheet-head">
+    <h2 id="notify-title">Notifications</h2>
+    <button type="button" class="btn-icon btn-ghost close" aria-label="Close">✕</button>
+  </div>
+  <label><input type="checkbox" id="count-voice"> Count voice lines in the tab title</label>
+  <p class="hint">Browser notifications reach you while no tab of this room is focused, the browser closed too: when someone mentions you, when a persona answers, and when an answer you asked for ends.</p>
+  <p id="push-hint" class="hint" hidden></p>
+  <button type="button" id="push-toggle" class="btn-primary" hidden>Turn on notifications</button>
+  <label id="push-all-label" hidden><input type="checkbox" id="push-all"> Also every other line</label>
+  <p id="push-status" class="said" role="status"></p>
+</dialog>
+<dialog id="host-agent" class="sheet" aria-labelledby="host-title">
+  <div class="sheet-head">
+    <h2 id="host-title">Run the AI on my computer</h2>
+    <button type="button" class="btn-icon btn-ghost close" aria-label="Close">✕</button>
+  </div>
+  <p>The AI host app runs this room's personas on your computer, with your Claude subscription. It needs Docker.</p>
+  <label>System <select id="host-os">
+    <option value="linux">Linux</option>
+    <option value="darwin">macOS</option>
+    <option value="wsl">Windows (WSL)</option>
+  </select></label>
+  <label>Processor <select id="host-arch">
+    <option value="amd64">x86-64 (Intel, AMD)</option>
+    <option value="arm64">ARM64 (Apple silicon)</option>
+  </select></label>
+  <p id="host-wsl" hidden>Run it in a WSL terminal: the app needs Linux and Docker there.</p>
+  <p><a id="host-download" class="btn btn-primary" download></a></p>
+  <details>
+    <summary>Advanced: check the download, or install from a terminal</summary>
+    <p class="host-sha" id="host-sha"></p>
+    <pre id="host-oneliner"></pre>
+    <button type="button" id="host-copy">Copy</button>
+  </details>
+</dialog>
+<dialog id="recovery" class="sheet" aria-labelledby="recovery-title">
+  <div class="sheet-head">
+    <h2 id="recovery-title">Use on another device</h2>
+    <button type="button" class="btn-icon btn-ghost close" aria-label="Close">✕</button>
+  </div>
+  <div id="recovery-has">
+    <p>This browser holds your profile, which follows you from room to room. Open this link on another device to use the same profile there. Whoever holds it gets your profile.</p>
+    <p class="copy-row"><input id="recovery-link" readonly aria-label="Recovery link">
+      <button type="button" id="recovery-copy">Copy link</button></p>
+    <div class="actions"><button type="button" id="recovery-done" class="btn-secondary">I saved it</button></div>
+  </div>
+  <p id="recovery-none" hidden>Bind an email to your profile, then sign in with it on the other device: <a href="/profile">open your profile</a>.</p>
+</dialog>
+<dialog id="why" class="sheet" aria-labelledby="why-title">
+  <h2 id="why-title"></h2>
+  <p id="why-text"></p>
+  <form method="dialog" class="actions"><button type="submit" class="btn-secondary">OK</button></form>
+</dialog>
+<dialog id="skills-disclaimer" class="sheet" aria-labelledby="skills-disclaimer-title">
   <h2 id="skills-disclaimer-title">Before you turn on a skill</h2>
   <ul>
-    <li>A skill's scripts run in the host's sandbox, on the host's machine, with the room's documents and transcript in reach.</li>
-    <li>Anyone in the room can ask the agent to print a skill's files. Put no secret in a skill.</li>
-    <li>The sandbox reaches the Internet only through the host's egress allowlist, with no inspection of what goes through. A script can send room data to any allowed domain that accepts uploads, GitHub included when the script carries a token.</li>
+    <li>A skill's scripts run in the AI host's sandbox, on their computer, with the room's documents and transcript in reach.</li>
+    <li>Anyone in the room can ask the AI to print a skill's files. Put no secret in a skill.</li>
+    <li>The sandbox reaches the Internet only through the AI host's list of allowed websites, with no inspection of what goes through. A script can send room data to any allowed website that accepts uploads, GitHub included when the script carries a token.</li>
   </ul>
   <p class="hint">This shows once for your profile.</p>
-  <form method="dialog" class="pairing-actions">
-    <button type="submit" value="cancel">Cancel</button>
+  <form method="dialog" class="actions">
+    <button type="submit" value="cancel" class="btn-secondary">Cancel</button>
     <button type="submit" value="accept" id="skills-accept">I understand, turn it on</button>
   </form>
 </dialog>
 <section id="pairing" aria-labelledby="pairing-title" hidden>
-  <h2 id="pairing-title">Pair an agent daemon</h2>
+  <h2 id="pairing-title">Connect the AI host app</h2>
   <p id="pairing-text"></p>
-  <div class="pairing-actions" id="pairing-actions">
-    <button type="button" id="pairing-deny">Deny</button>
-    <button type="button" id="pairing-approve">Approve</button>
-  </div>
-</section>
-<section id="recovery" aria-labelledby="recovery-title" hidden>
-  <h2 id="recovery-title">Save your recovery link</h2>
-  <p>This browser now holds your profile, which follows you from room to room. Open this link on another device to use the same profile there. It is shown only once, and whoever holds it gets your profile.</p>
-  <input id="recovery-link" readonly aria-label="Recovery link">
-  <div class="pairing-actions">
-    <button type="button" id="recovery-copy">Copy link</button>
-    <button type="button" id="recovery-done">Done</button>
+  <div class="actions" id="pairing-actions">
+    <button type="button" id="pairing-deny" class="btn-secondary">Deny</button>
+    <button type="button" id="pairing-approve" class="btn-primary">Approve</button>
   </div>
 </section>
 <div class="layout">
-  <aside>
-    <h2>Participants</h2>
-    <h3 class="people">In the room</h3>
-    <ul id="participants"></ul>
-    <details id="away" hidden><summary>Not here (<span id="away-count">0</span>)</summary><ul id="participants-away"></ul></details>
-    <section id="docs-pane" aria-labelledby="docs-title">
-      <h2 id="docs-title">Documents</h2>
-      <a id="docs-window" class="docs-window-link" target="_blank">Open in a new window</a>
-      <ul id="documents"></ul>
-      <label class="upload">Upload a document
-        <input type="file" id="upload-input" accept=".md,.markdown,.html,.htm,.pdf,.png,.jpg,.jpeg,.gif,.webp,.svg,.docx,.odt,.pptx">
-      </label>
-      <p id="upload-status" role="status"></p>
+  <div id="sheet-backdrop" hidden></div>
+  <aside id="side">
+    <section id="people-pane" aria-labelledby="people-title">
+      <div class="pane-head">
+        <h2 id="people-title">People</h2>
+        <button type="button" id="people-close" class="btn-icon btn-ghost" aria-label="Close the list">✕</button>
+      </div>
+      <h3 class="people">In the room</h3>
+      <ul id="participants"></ul>
+      <details id="away" hidden><summary>Not here (<span id="away-count">0</span>)</summary><ul id="participants-away"></ul></details>
     </section>
-    <details id="invites">
-      <summary>Invite people</summary>
-      <p>Anyone holding an invite link can join and read the room.</p>
-      <button type="button" id="invite-create">Create an invite link</button>
-      <p id="invite-new" hidden>
-        <input id="invite-link" readonly aria-label="New invite link">
-        <button type="button" id="invite-copy">Copy invite</button>
-      </p>
-      <h3>Your invites</h3>
-      <ul id="invite-list"></ul>
-    </details>
-    <details id="notify">
-      <summary>Notifications</summary>
-      <label><input type="checkbox" id="count-voice"> Count voice lines in the tab title</label>
-      <p class="hint">Browser notifications reach you while no tab of this room is focused, the browser closed too: when someone mentions you, when a persona answers, and when a turn you started ends.</p>
-      <p id="push-hint" class="hint" hidden></p>
-      <button type="button" id="push-toggle" class="small" hidden>Turn on notifications</button>
-      <label id="push-all-label" hidden><input type="checkbox" id="push-all"> Also every other line</label>
-      <p id="push-status" role="status"></p>
-    </details>
-    <details id="host-agent" hidden>
-      <summary>Host the agent</summary>
-      <p>Runs the agent on your machine with your Claude subscription. Needs Docker.</p>
-      <label>System <select id="host-os">
-        <option value="linux">Linux</option>
-        <option value="darwin">macOS</option>
-        <option value="wsl">Windows (WSL)</option>
-      </select></label>
-      <label>Processor <select id="host-arch">
-        <option value="amd64">x86-64 (Intel, AMD)</option>
-        <option value="arm64">ARM64 (Apple silicon)</option>
-      </select></label>
-      <p id="host-wsl" hidden>Run it in a WSL terminal: the agent needs Linux and Docker there.</p>
-      <p><a id="host-download" download></a></p>
-      <p class="host-sha" id="host-sha"></p>
-      <p>Or install and start it from a terminal:</p>
-      <pre id="host-oneliner"></pre>
-      <button type="button" id="host-copy">Copy</button>
-    </details>
+    <section id="docs-pane" aria-labelledby="docs-title">
+      <div class="pane-head">
+        <h2 id="docs-title">Documents</h2>
+        <a id="docs-window" class="btn btn-icon btn-ghost" aria-label="Open documents in a new window" title="Open documents in a new window">⧉</a>
+        <button type="button" id="upload-open" class="btn-icon" aria-label="Add documents" title="Add documents">+</button>
+      </div>
+      <input type="file" id="upload-input" multiple hidden accept=".md,.markdown,.html,.htm,.pdf,.png,.jpg,.jpeg,.gif,.webp,.svg,.docx,.odt,.pptx">
+      <ul id="documents"></ul>
+      <div id="docs-empty" class="empty" hidden>No documents yet. Drop files here or press +.<br><span class="hint">PDF, Word, slides, images, Markdown or HTML.</span></div>
+      <ul id="uploads" aria-label="Uploads"></ul>
+      <div class="drop-overlay" aria-hidden="true">Drop to add to the room</div>
+    </section>
   </aside>
   <section id="viewer" hidden>
     <div class="viewer-head">
-      <h2 id="doc-name"></h2>
-      <span id="doc-meta"></span>
-      <a id="doc-original" hidden>Download original</a>
-      <a id="doc-window" class="docs-window-link" target="_blank">Open in a new window</a>
-      <button type="button" id="doc-rename" class="small">Rename</button>
-      <button type="button" id="doc-delete" class="small" hidden>Delete</button>
-      <button type="button" id="doc-close" aria-label="Close document">Close</button>
+      <button type="button" id="doc-close" class="btn-icon btn-ghost" aria-label="Close document" title="Close">✕</button>
+      <div class="doc-title"><h2 id="doc-name"></h2><span id="doc-meta"></span></div>
+      <div class="doc-tools">
+        <a id="doc-original" class="btn btn-icon btn-ghost" aria-label="Download" title="Download" hidden>⤓</a>
+        <a id="doc-window" class="btn btn-icon btn-ghost" aria-label="Open in a new window" title="Open in a new window">⧉</a>
+        <button type="button" id="doc-rename" class="btn-icon btn-ghost" aria-label="Rename" title="Rename">✎</button>
+        <button type="button" id="doc-delete" class="btn-icon btn-ghost danger" aria-label="Delete" title="Delete" hidden>🗑</button>
+      </div>
     </div>
-    <form id="doc-rename-form" hidden>
+    <form id="doc-rename-form" class="row" hidden>
       <label>New name <input id="doc-rename-name" required maxlength="200"></label>
-      <button type="submit" class="small">Save</button>
-      <button type="button" id="doc-rename-cancel" class="small">Cancel</button>
-      <span id="doc-rename-status" role="status"></span>
+      <button type="submit">Save</button>
+      <button type="button" id="doc-rename-cancel" class="btn-secondary">Cancel</button>
+      <span id="doc-rename-status" class="said error" role="status"></span>
     </form>
-    <form id="revisions" hidden>
+    <form id="revisions" class="row" hidden>
       <label>Revision <select id="rev"></select></label>
       <label>Compare with <select id="rev-from"></select></label>
     </form>
@@ -229,28 +283,34 @@
           <button type="button" id="annot-doc">Comment on the document</button>
           <button type="button" id="annot-pick" aria-pressed="false" hidden>Annotate an element</button>
         </div>
-        <p class="annot-hint">Select text in the document to annotate it.</p>
+        <p class="annot-hint hint">Select text in the document to annotate it.</p>
         <form id="annot-new" hidden>
           <p id="annot-target"></p>
           <textarea id="annot-body" rows="3" maxlength="4000" aria-label="Annotation" placeholder="What should change here?"></textarea>
           <label class="annot-file">Images <input type="file" id="annot-files" accept="image/png,image/jpeg,image/gif,image/webp" multiple></label>
           <div class="annot-actions">
-            <button type="button" id="annot-cancel">Cancel</button>
+            <button type="button" id="annot-cancel" class="btn-secondary">Cancel</button>
             <button type="submit">Save</button>
           </div>
         </form>
-        <p id="annot-status" role="status"></p>
+        <p id="annot-status" class="said error" role="status"></p>
         <ol id="annot-list"></ol>
       </aside>
     </div>
   </section>
   <section class="chat">
     <ol id="messages" aria-live="polite"></ol>
+    <div id="chat-empty" class="empty" hidden>
+      <p>Invite people to start.</p>
+      <button type="button" id="chat-invite" class="btn-primary">Copy invite link</button>
+      <p id="chat-invite-status" class="said" role="status"></p>
+    </div>
     <form id="send">
       <ul id="mention-list" role="listbox" aria-label="Mention" hidden></ul>
-      <textarea id="body" rows="2" maxlength="4000" placeholder="Write a message. Enter sends, Shift+Enter adds a line. @ names a persona or a person." aria-label="Message"
+      <textarea id="body" rows="2" maxlength="4000" placeholder="Message the room · @ to mention" aria-label="Message" aria-describedby="send-hint"
         aria-autocomplete="list" aria-controls="mention-list" aria-expanded="false"></textarea>
-      <button type="submit">Send</button>
+      <button type="submit" class="btn-icon" aria-label="Send" title="Send">➤</button>
+      <p id="send-hint" class="hint" hidden>Enter sends, Shift+Enter adds a line.</p>
     </form>
   </section>
 </div>

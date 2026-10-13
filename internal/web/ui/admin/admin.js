@@ -236,7 +236,7 @@ function Rooms() {
         <td class="wrap">${r.name}</td><td>${when(r.created_at)}</td><td>${when(r.last_activity)}</td>
         <td>${r.participants}</td><td>${r.personas}</td><td>${!r.host_participant_id ? 'none' : r.host_online ? 'online' : 'offline'}</td><td>${size(r.volume.total)}</td>
         <td><meter min="0" max=${r.quota} value=${r.used} title=${size(r.used) + ' of ' + size(r.quota)}></meter> ${size(r.used)} / ${size(r.quota)}</td>
-        <td><a class="button" href=${'#rooms/' + encodeURIComponent(r.id)} aria-label=${'Manage ' + r.name}>Manage</a></td>
+        <td><a class="btn btn-secondary" href=${'#rooms/' + encodeURIComponent(r.id)} aria-label=${'Manage ' + r.name}>Manage</a></td>
       </tr>`)}</tbody>
     </table></div>` : html`<p>No room yet.</p>`}`;
 }
@@ -257,8 +257,8 @@ function RoomAdmins({ base }) {
     ${list && (list.length ? html`<ul id="room-admins">${list.map((p) => html`<li key=${p.id}>
       ${p.name}${p.admin && html` <strong>admin</strong>`}${' '}
       ${!p.has_profile ? html`<span class="hint">no profile</span>`
-        : p.admin ? html`<button type="button" class="small" onClick=${() => set(p, false)} aria-label=${'Remove ' + p.name + ' from the room admins'}>Remove admin</button>`
-        : html`<button type="button" class="small" onClick=${() => set(p, true)} aria-label=${'Make ' + p.name + ' a room admin'}>Make admin</button>`}
+        : p.admin ? html`<button type="button" class="btn-secondary" onClick=${() => set(p, false)} aria-label=${'Remove ' + p.name + ' from the room admins'}>Remove admin</button>`
+        : html`<button type="button" class="btn-secondary" onClick=${() => set(p, true)} aria-label=${'Make ' + p.name + ' a room admin'}>Make admin</button>`}
       ${' '}<${Rename} key=${p.name} name=${p.name} path=${`${base}/participants/${p.id}/name`} api=${api} show=${show} done=${load}/>
       ${p.client && html`<${ClientLine} c=${p.client}/>`}
     </li>`)}</ul>` : html`<p class="hint">No participant yet.</p>`)}`;
@@ -481,9 +481,10 @@ function Shell() {
   const logout = () => api('POST', '/api/admin/logout').then(() => { signedIn.value = false; }).catch(show);
   const view = route.value.view;
   return html`
-    <header>
-      <h1>grill-room admin</h1>
-      <button type="button" id="logout" onClick=${logout}>Sign out</button>
+    <header class="app-header">
+      <img src="/static/logo.svg" alt="" class="logo" width="32" height="32"/>
+      <h1>grill-room · Admin</h1>
+      <button type="button" id="logout" class="btn-secondary" onClick=${logout}>Sign out</button>
     </header>
     <${TabBar} tabs=${views} active=${view} href=${(/** @type {string} */ id) => '#' + id} label="Views" cls="views"/>
     <main>

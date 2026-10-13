@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { adminToken } from './playwright.config.js';
-import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const phone = { width: 390, height: 844 };
@@ -32,12 +32,14 @@ async function newRoom(page, name) {
   await page.getByLabel('Room name').fill(name);
   await page.getByRole('button', { name: 'Create the room' }).click();
   await expect(page.locator('#room-name')).toHaveText(name);
+  // A new room opens on its invite sheet (005-AC34).
+  await page.locator('#invites').getByRole('button', { name: 'Close' }).click();
   return decodeURIComponent(new URL(page.url()).pathname.split('/')[2]);
 }
 
 // openManage opens the Manage sheet on its General tab (005-AC15).
 async function openManage(page) {
-  await page.getByRole('button', { name: 'Manage' }).click();
+  await menuItem(page, 'Room settings');
   const panel = page.locator('#manage #room-panel');
   await expect(panel).toBeVisible();
   await expect(panel.locator('#panel-general')).toBeVisible();
@@ -58,7 +60,7 @@ test('room creation from the profile page, within the limits', async ({ browser,
   const page = await join(browser, request, lobby.id, 'Pia', phone);
   const id = await newRoom(page, 'Pia room 1');
   await expect(page.locator('#me')).toHaveText('Pia');
-  await expect(page.getByRole('button', { name: 'Manage' })).toBeVisible();
+  await expect(page.locator('#manage-open')).not.toHaveAttribute('hidden');
   await fits(page);
   for (let i = 2; i <= 10; i++) {
     expect((await page.request.post('/api/profile/rooms', { data: { name: `Pia room ${i}`, display_name: 'Pia' } })).status()).toBe(201);
@@ -80,7 +82,7 @@ test('room creation from the profile page, within the limits', async ({ browser,
   await expect(form.getByLabel('Rooms per profile')).toHaveValue('10');
   try {
     await form.getByLabel('Who creates rooms').selectOption('super-admin');
-    await form.getByRole('button', { name: 'Save' }).click();
+    await form.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(form.getByRole('status')).toHaveText('Saved.');
     await fits(adminPage);
     await page.getByRole('button', { name: 'Create the room' }).click();
@@ -130,7 +132,7 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     const api = `/api/rooms/${id}`;
 
     // Plain members: only the transcription glossary in Manage (005-AC23), and the API says no.
-    await bob.getByRole('button', { name: 'Manage' }).click();
+    await menuItem(bob, 'Room settings');
     await expect(bob.locator('#manage #stt-glossary')).toBeVisible();
     await expect(bob.locator('#manage #room-panel')).toHaveCount(0);
     await bob.locator('#manage-close').click();
@@ -141,12 +143,13 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     // "Your invites" keeps to her own, the seat the room gave her; Manage lists them all. A phone
     // hides that sidebar.
     if (vp.width > 400) {
-      await alice.locator('#invites summary').click();
+      await menuItem(alice, 'Invite people');
       await expect(alice.locator('#invite-list li')).toHaveCount(1);
+      await alice.keyboard.press('Escape');
     }
     const panel = await openManage(alice);
     await expect(panel.locator('#volume')).toContainText('Transcripts');
-    await expect(panel).toContainText('Only the instance admin changes it.');
+    await expect(panel).toContainText('Only the instance admin changes the limit.');
     await expect(panel.locator('#quota')).toHaveCount(0);
     await tab(panel, 'Export');
     await expect(alice).toHaveURL(/#manage\/export$/);
@@ -162,7 +165,7 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     await expect(carol.locator('#messages')).toContainText('Alice made Bob a room admin.');
 
     // Bob, now an admin, removes Alice; she loses her panel.
-    await expect(bob.getByRole('button', { name: 'Manage' })).toBeVisible();
+    await expect(bob.locator('#manage-open')).not.toHaveAttribute('hidden');
     const bobPanel = await openManage(bob);
     await tab(bobPanel, 'Admins');
     await bobPanel.locator('#room-admins li', { hasText: 'Alice' }).getByRole('button', { name: 'Remove admin' }).click();
@@ -208,7 +211,7 @@ test('rename a room, with a name that is markup', async ({ browser, request }) =
     await expect(page).toHaveTitle(evil + ' · grill-room');
     expect(await page.evaluate(() => window.__xss)).toBeUndefined();
   }
-  await bob.locator('#me').click();
+  await menuItem(bob, 'My rooms and profile', 'me');
   await expect(bob.locator('#rooms li', { hasText: 'as Bob' })).toHaveText(`${evil} as Bob`);
   await expect(bob.locator('#rooms img, #rooms script')).toHaveCount(0);
   expect(await bob.evaluate(() => window.__xss)).toBeUndefined();
@@ -228,7 +231,7 @@ test('a room skill survives its author leaving', async ({ browser, request, base
   await expect(bobProfile.locator('#skill-status')).toHaveText('Uploaded bobs v1.');
 
   await bob.setViewportSize(phone);
-  await bob.getByRole('button', { name: 'Personas' }).click();
+  await menuItem(bob, 'Personas');
   const copy = bob.locator('#room-skill-copy');
   await expect(copy.getByLabel('Copy one of your personal skills into the room').locator('option')).toHaveText(['bobs v1']);
   await copy.getByRole('button', { name: 'Copy' }).scrollIntoViewIfNeeded();
@@ -240,7 +243,7 @@ test('a room skill survives its author leaving', async ({ browser, request, base
   await expect(alice.locator('#messages')).toContainText('Bob copied the skill bobs v1 into the room.');
   await bob.getByRole('button', { name: 'Close' }).click();
 
-  await alice.getByRole('button', { name: 'Personas' }).click();
+  await menuItem(alice, 'Personas');
   const grill = alice.locator('#personas .persona-form', { hasText: 'Grill' }).first();
   await grill.getByLabel('Skill to turn on for Grill').selectOption({ label: 'bobs v1 (room)' });
   await grill.getByRole('button', { name: 'Turn on the chosen skill for Grill' }).click();

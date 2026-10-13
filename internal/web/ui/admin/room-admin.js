@@ -23,7 +23,7 @@ addEventListener('grill:room', (e) => { roomData.value = /** @type {CustomEvent<
 addEventListener('grill:agent', (e) => { agentState.value = /** @type {CustomEvent<AgentState>} */ (e).detail; });
 
 const allTabs = [...Object.entries(roomTabs).slice(0, 3), ['personas', 'Personas'], ['skills', 'Skills'], ['documents', 'Documents'],
-  ['export', roomTabs.export], ['glossary', 'Glossary']];
+  ['export', roomTabs.export], ['glossary', 'Words to recognise']];
 // The tabs a plain member gets; a room admin gets them all. Pending the user's word (Phase 2 kept
 // members to the glossary): add an id here to open a tab to every member.
 const memberTabs = ['glossary'];
@@ -73,26 +73,26 @@ function Manage({ data, tab }) {
     document.getElementById('personas-open')?.click();
   };
   return html`
-    <p class="hint">You are a room admin. Every action here is recorded in the instance's audit log.</p>
+    <p class="hint">You are a room admin. The instance's audit log records every action here.</p>
     <p class="said" role="alert">${said}</p>
     ${room && html`<${RoomPanel} key=${room.id} room=${room} base=${base} api=${fetchJSON} show=${show} reload=${load} byName=${byName}
-      tab=${tab} tabs=${allTabs} href=${(/** @type {string} */ id) => '#manage/' + id} close=${() => location.assign('/profile')}>
+      tab=${tab} tabs=${allTabs} href=${(/** @type {string} */ id) => '#manage/' + id} close=${() => location.assign('/profile')} label="Room settings">
       ${tab === 'admins' && html`
         <p class="hint">Room admins rename the room and its participants, manage every invite, appoint other admins and delete the room. The room keeps at least one.</p>
         <ul id="room-admins">${data.participants.map((p) => html`<li key=${p.id}>
           ${p.name}${p.admin && html` <strong>admin</strong>`}${' '}
           ${p.admin
-            ? html`<button type="button" class="small" onClick=${() => setAdmin(p, false)}>${p.id === data.me.id ? 'Step down' : 'Remove admin'}</button>`
-            : html`<button type="button" class="small" onClick=${() => setAdmin(p, true)} aria-label=${'Make ' + p.name + ' a room admin'}>Make admin</button>`}
+            ? html`<button type="button" class="btn-secondary" onClick=${() => setAdmin(p, false)}>${p.id === data.me.id ? 'Step down' : 'Remove admin'}</button>`
+            : html`<button type="button" class="btn-secondary" onClick=${() => setAdmin(p, true)} aria-label=${'Make ' + p.name + ' a room admin'}>Make admin</button>`}
           ${' '}<${Rename} key=${p.name} name=${p.name} path=${`${base}/participants/${p.id}/name`} api=${fetchJSON} show=${show} done=${() => setSaid('')}/>
         </li>`)}</ul>`}
       ${tab === 'personas' && html`
-        <p class="hint">Every member adds and edits the room's personas from the Personas panel.</p>
-        <ul id="manage-personas">${personas.map((p) => html`<li key=${p.id}>${p.badge} ${p.name}: ${p.model}, effort ${p.effort}${p.pending ? ', waits for the host' : ''}</li>`)}</ul>
-        <button type="button" onClick=${openPersonas}>Open the Personas panel</button>`}
+        <p class="hint">Every member adds and edits the room's personas in the Personas sheet.</p>
+        <ul id="manage-personas">${personas.map((p) => html`<li key=${p.id}>${p.badge} ${p.name}: ${p.model}, effort ${p.effort}${p.pending ? ', waits for the AI host' : ''}</li>`)}</ul>
+        <button type="button" class="btn-primary" onClick=${openPersonas}>Open the Personas sheet</button>`}
       ${tab === 'skills' && (skills.length ? html`<ul id="room-admin-skills">${skills.map((k) => html`<li key=${k.id}>${k.name} v${k.version}, copied by ${k.author}
-          ${' '}<button type="button" class="small" onClick=${() => removeSkill(k)} aria-label=${'Remove the room skill ' + k.name}>Remove</button></li>`)}</ul>`
-        : html`<p class="hint">None yet. Members copy their personal skills in from the Personas panel.</p>`)}
+          ${' '}<button type="button" class="btn-secondary" onClick=${() => removeSkill(k)} aria-label=${'Remove the room skill ' + k.name}>Remove</button></li>`)}</ul>`
+        : html`<p class="hint">None yet. Members copy their personal skills in from the Personas sheet.</p>`)}
       ${tab === 'documents' && html`<${DeletedDocuments} base=${base} show=${show}/>`}
       ${tab === 'glossary' && html`<${STTGlossary} data=${data}/>`}
     <//>`}`;
@@ -109,9 +109,9 @@ function DeletedDocuments({ base, show }) {
   /** @param {number} id */
   const restore = (id) => fetchJSON('POST', `${base}/documents/${id}/restore`).then(load).catch(show);
   return html`
-    <p class="hint">Documents a room admin deleted. They left the room and the agents' workspace; their data stays until the room is deleted.</p>
+    <p class="hint">Documents a room admin deleted. They left the room and the AI's workspace; their data stays until the room is deleted.</p>
     ${list && (list.length ? html`<ul id="deleted-documents">${list.map((d) => html`<li key=${d.id}>${d.name}, by ${d.author}
-      ${' '}<button type="button" class="small" onClick=${() => restore(d.id)} aria-label=${'Restore ' + d.name}>Restore</button></li>`)}</ul>`
+      ${' '}<button type="button" class="btn-secondary" onClick=${() => restore(d.id)} aria-label=${'Restore ' + d.name}>Restore</button></li>`)}</ul>`
       : html`<p class="hint">No deleted document.</p>`)}`;
 }
 
@@ -136,14 +136,14 @@ function STTGlossary({ data }) {
     fetchJSON('PUT', base, { glossary: text }).then((v) => { got(v); setSaid('Saved: it applies from the next utterance.'); }).catch(show);
   };
   return html`
-    <p class="hint">Terms people will say: product names, jargon, acronyms. One per line or comma-separated.
-      The transcription also expects the participants' and personas' names, then the documents' titles, while they fit.</p>
+    <p class="hint">Words people will say, so that voice-to-text writes them right: product names, jargon, acronyms. One per line or comma-separated.
+      It also expects the participants' and personas' names, then the documents' titles, while they fit.</p>
     <p class="hint" id="glossary-engine">Used by the transcription engine when supported.</p>
     <form id="stt-glossary" onSubmit=${save}>
-      <textarea rows="5" aria-label="Transcription glossary" value=${text} onInput=${(/** @type {Event} */ e) => setText(/** @type {HTMLTextAreaElement} */ (e.target).value)}></textarea>
+      <textarea rows="5" aria-label="Words to recognise" value=${text} onInput=${(/** @type {Event} */ e) => setText(/** @type {HTMLTextAreaElement} */ (e.target).value)}></textarea>
       <div class="glossary-actions">
         <span id="glossary-used" title=${g ? g.prompt : ''}>${g ? `${g.used} / ~${g.capacity} terms used` : ''}</span>
-        <button type="submit" class="small">Save glossary</button>
+        <button type="submit">Save</button>
       </div>
     </form>
     <p class="said" role="status">${said}</p>`;
@@ -155,7 +155,7 @@ function App() {
   if (data.me.admin) return html`<${Manage} data=${data} tab=${allTabs.some(([id]) => id === tab.value) ? tab.value : 'general'}/>`;
   const mine = allTabs.filter(([id]) => memberTabs.includes(id));
   const t = memberTabs.includes(tab.value) ? tab.value : memberTabs[0];
-  return html`<${TabBar} tabs=${mine} active=${t} href=${(/** @type {string} */ id) => '#manage/' + id} label="Manage the room"/>
+  return html`<${TabBar} tabs=${mine} active=${t} href=${(/** @type {string} */ id) => '#manage/' + id} label="Room settings"/>
     <div class="tab-panel" id=${'panel-' + t}>${t === 'glossary' && html`<${STTGlossary} data=${data}/>`}</div>`;
 }
 

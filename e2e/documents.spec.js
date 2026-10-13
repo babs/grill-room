@@ -111,6 +111,6 @@ test('uploads render for everyone', async ({ browser, request }) => {
   expect(await img.evaluate((el) => el.complete && el.naturalWidth)).toBe(1);
 
   await upload(alice, 'notes.txt', 'text/plain', 'plain text');
-  await expect(alice.locator('#upload-status')).toContainText('unsupported file type, accepted: Markdown');
+  await expect(alice.locator('#uploads li', { hasText: 'notes.txt' }).locator('.why')).toHaveText("This file type isn't supported. Use PDF, Word, slides, images, Markdown or HTML.");
   await expect(bob.locator('#documents li')).toHaveCount(3);
 });

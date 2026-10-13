@@ -67,7 +67,7 @@ for (const vp of widths) {
     };
     await expect(panel.locator('#volume')).toContainText(`Uploads${Buffer.byteLength(plan)} B`);
     await expect(panel.locator('#volume')).toContainText('Room skills0 B');
-    await expect(panel).toContainText('of 200 MB used, the instance default.');
+    await expect(panel.locator('#storage')).toContainText('of 200 MB, the instance default.');
     await tab('Export');
     await expect(panel.locator('#export')).toHaveAttribute('href', `/api/admin/rooms/${room.id}/export`);
     await fits(page, vp.width);
@@ -76,13 +76,13 @@ for (const vp of widths) {
     // Quota: 1 MB, then an upload past it is refused; back to the default.
     await panel.locator('#quota').fill('1');
     await panel.getByRole('button', { name: 'Set quota' }).click();
-    await expect(panel).toContainText('of 1.0 MB used.');
+    await expect(panel.locator('#storage')).toContainText(/of 1\.0 MB\.$/);
     await audited(request, 'room.quota', room.id);
     const big = await alice.ctx.post(`/api/rooms/${room.id}/documents`, { multipart: { file: { name: 'big.md', mimeType: 'text/markdown', buffer: Buffer.alloc(1 << 20, 'a') } } });
     expect(big.status()).toBe(413);
     expect((await big.json()).error).toBe('this upload would take the room over its 1 MB limit');
     await panel.getByRole('button', { name: 'Use the default' }).click();
-    await expect(panel).toContainText('of 200 MB used, the instance default.');
+    await expect(panel.locator('#storage')).toContainText('of 200 MB, the instance default.');
 
     // Rename.
     await panel.locator('#room-name-input').fill(name + ' renamed');

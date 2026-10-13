@@ -29,6 +29,7 @@ import (
 	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/turn"
+	"github.com/babs/grill-room/internal/uikit"
 	"github.com/babs/grill-room/internal/uivendor"
 	"github.com/babs/grill-room/internal/webpush"
 )
@@ -180,6 +181,7 @@ func (s *Server) Handler() http.Handler {
 	static, _ := fs.Sub(ui, "ui") // cannot fail: "ui" is a valid embedded path
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
 	mux.Handle("GET "+uivendor.Prefix, uivendor.Handler())
+	mux.Handle("GET "+uikit.Prefix, uikit.Handler())
 	mux.HandleFunc("GET /install.sh", s.installScript)
 	mux.HandleFunc("GET /download/{file}", s.download)
 	mux.HandleFunc("GET /api/daemon/version", s.daemonVersion)

@@ -71,14 +71,14 @@ export const roomTabs = { general: 'General', invites: 'Invites', admins: 'Admin
  * the quota. tabs and href come from the page; children fill the tabs not built in here. byName
  * names an invite's creator.
  * @param {{room: Room, base: string, api: Api, show: (err: unknown) => void, reload: () => void, close: () => void,
- *   tab: string, tabs: string[][], href: (id: string) => string, setQuota?: boolean, byName?: (id: number) => string,
+ *   tab: string, tabs: string[][], href: (id: string) => string, setQuota?: boolean, byName?: (id: number) => string, label?: string,
  *   children?: import('preact').ComponentChildren}} props
  */
-export function RoomPanel({ room, base, api, show, reload, close, tab, tabs, href, setQuota, byName, children }) {
+export function RoomPanel({ room, base, api, show, reload, close, tab, tabs, href, setQuota, byName, label = 'Manage', children }) {
   return html`
-    <section id="room-panel" aria-label=${'Manage ' + room.name}>
-      <h2>${room.name} <code>${room.id}</code></h2>
-      <${TabBar} tabs=${tabs} active=${tab} href=${href} label=${'Manage ' + room.name}/>
+    <section id="room-panel" aria-label=${label + ' ' + room.name}>
+      <h2>${room.name}</h2>
+      <${TabBar} tabs=${tabs} active=${tab} href=${href} label=${label + ' ' + room.name}/>
       <div class="tab-panel" id=${'panel-' + tab}>
         ${tab === 'general' ? html`<${General} room=${room} base=${base} api=${api} show=${show} reload=${reload} close=${close} setQuota=${setQuota}/>`
           : tab === 'invites' ? html`<${Invites} base=${base} api=${api} show=${show} byName=${byName}/>`
@@ -96,32 +96,38 @@ function General({ room, base, api, show, reload, close, setQuota }) {
   const [name, setName] = useState(room.name);
   const [quota, setQuota_] = useState(String(Math.round(room.quota / 1048576)));
   const [confirm, setConfirm] = useState('');
+  const [copied, setCopied] = useState('');
   const v = room.volume;
   const kinds = [['Uploads', v.uploads], ['Revisions', v.revisions], ['Attachments', v.attachments],
-    ['Agent sessions', v.agent_sessions], ['Transcripts', v.transcripts], ['Room skills', v.room_skills]];
+    ['AI sessions', v.agent_sessions], ['Transcripts', v.transcripts], ['Room skills', v.room_skills]];
   /** @param {number} bytes */
   const setQuotaTo = (bytes) => api('PUT', base + '/quota', { quota_bytes: bytes }).then(reload).catch(show);
+  const copyID = () => navigator.clipboard.writeText(room.id).then(() => setCopied('Copied.'), () => setCopied(room.id));
   return html`
     <h3>Name</h3>
     <form class="row" onSubmit=${formAction(() => api('PATCH', base, { name }).then(reload).catch(show))}>
       <label>Room name<input id="room-name-input" required maxlength="100" value=${name} onInput=${onInput(setName)}/></label>
       <button type="submit" disabled=${name.trim() === room.name}>Rename</button>
+      <button type="button" class="btn-secondary" id="copy-room-id" onClick=${copyID}>Copy room id</button>
+      <span class="said" role="status">${copied}</span>
     </form>
-    <h3>Volume</h3>
-    <dl id="volume">${kinds.map(([k, n]) => html`<div><dt>${k}</dt><dd>${size(/** @type {number} */ (n))}</dd></div>`)}
-      <div><dt>Total</dt><dd>${size(v.total)}</dd></div></dl>
-    <h3>Quota</h3>
-    <p class="hint">${size(room.used)} of ${size(room.quota)} used${room.quota_bytes ? '' : ', the instance default'}.${setQuota ? '' : ' Only the instance admin changes it.'}</p>
+    <h3>Storage</h3>
+    <p id="storage">Storage: ${size(room.used)} of ${size(room.quota)}${room.quota_bytes ? '' : ', the instance default'}.${setQuota ? '' : ' Only the instance admin changes the limit.'}</p>
+    <details><summary>What takes the space</summary>
+      <dl id="volume">${kinds.map(([k, n]) => html`<div><dt>${k}</dt><dd>${size(/** @type {number} */ (n))}</dd></div>`)}
+        <div><dt>Total</dt><dd>${size(v.total)}</dd></div></dl>
+      <p class="hint">The limit counts uploads and attachments.</p>
+    </details>
     ${setQuota && html`<form class="row" onSubmit=${formAction(() => setQuotaTo(Math.round(Number(quota) * 1048576)))}>
       <label>Quota (MB)<input id="quota" type="number" min="1" step="1" required value=${quota} onInput=${onInput(setQuota_)}/></label>
       <button type="submit">Set quota</button>
-      <button type="button" disabled=${!room.quota_bytes} onClick=${() => setQuotaTo(0)}>Use the default</button>
+      <button type="button" class="btn-secondary" disabled=${!room.quota_bytes} onClick=${() => setQuotaTo(0)}>Use the default</button>
     </form>`}
     <h3>Delete</h3>
     <form class="row" onSubmit=${formAction(() => api('DELETE', base).then(close).catch(show))}>
       <label>Type the room name to delete it, with everything it holds
         <input id="delete-confirm" autocomplete="off" value=${confirm} onInput=${onInput(setConfirm)}/></label>
-      <button type="submit" class="danger" disabled=${confirm !== room.name}>Delete the room</button>
+      <button type="submit" class=${confirm === room.name ? 'btn-danger' : 'btn-danger-outline'} disabled=${confirm !== room.name}>Delete the room</button>
     </form>`;
 }
 
@@ -137,21 +143,21 @@ function Invites({ base, api, show, byName }) {
   /** @param {Invite} i */
   const by = (i) => (!i.created_by ? 'admin' : byName ? byName(i.created_by) : 'participant #' + i.created_by);
   return html`
-    <div class="row"><button type="button" onClick=${invite}>New invite link</button></div>
+    <div class="row"><button type="button" class="btn-primary" onClick=${invite}>New invite link</button></div>
     ${link && html`<label class="link">Invite link, shown once<input id="invite-link-new" readonly value=${link}/></label>`}
-    ${invites && html`<div class="scroll"><table id="invites-all">
+    ${invites && html`<div class="scroll"><table id="invites-all" class="cards">
       <thead><tr><th>Invite</th><th>Created</th><th>By</th><th>State</th><th></th></tr></thead>
-      <tbody>${invites.map((i) => html`<tr id=${'invite-' + i.id}><td>#${i.id}</td><td>${when(i.created_at)}</td>
-        <td>${by(i)}</td><td>${i.revoked_at ? 'revoked' : 'valid'}</td>
-        <td>${!i.revoked_at && html`<button type="button" onClick=${() => revoke(i)}>Revoke</button>`}</td></tr>`)}</tbody>
+      <tbody>${invites.map((i) => html`<tr id=${'invite-' + i.id}><td>#${i.id}</td><td data-label="Created">${when(i.created_at)}</td>
+        <td data-label="By">${by(i)}</td><td data-label="State">${i.revoked_at ? 'revoked' : 'valid'}</td>
+        <td>${!i.revoked_at && html`<button type="button" class="btn-secondary" onClick=${() => revoke(i)}>Revoke</button>`}</td></tr>`)}</tbody>
     </table></div>`}`;
 }
 
 /** @param {{base: string}} props */
 function Export({ base }) {
   return html`
-    <p class="warn" id="export-warning">The archive holds the room's agent sessions: everything Claude read in this room, documents and transcripts included. Whoever holds the file can read it all.</p>
-    <div class="row"><a id="export" class="button" href=${base + '/export'} download>Export the room</a></div>`;
+    <p class="warn" id="export-warning">The archive holds the room's AI sessions: everything Claude read in this room, documents and transcripts included. Whoever holds the file can read it all.</p>
+    <div class="row"><a id="export" class="btn btn-primary" href=${base + '/export'} download>Export the room</a></div>`;
 }
 
 /**
@@ -163,12 +169,12 @@ export function Rename({ name, path, api, show, done }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(name);
   if (!editing) {
-    return html`<button type="button" class="small" onClick=${() => { setValue(name); setEditing(true); }}
+    return html`<button type="button" class="btn-secondary" onClick=${() => { setValue(name); setEditing(true); }}
       aria-label=${'Rename ' + name}>Rename</button>`;
   }
   return html`<form class="rename" onSubmit=${formAction(() => api('PUT', path, { name: value }).then(() => { setEditing(false); done(); }).catch(show))}>
     <input required maxlength="40" value=${value} onInput=${onInput(setValue)} aria-label=${'New name for ' + name}/>
-    <button type="submit" class="small">Save</button>
-    <button type="button" class="small" onClick=${() => setEditing(false)}>Cancel</button>
+    <button type="submit">Save</button>
+    <button type="button" class="btn-secondary" onClick=${() => setEditing(false)}>Cancel</button>
   </form>`;
 }

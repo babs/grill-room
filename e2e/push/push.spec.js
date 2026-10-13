@@ -23,7 +23,8 @@ test('a mention arrives as a real push notification', async ({ request, baseURL 
     await expect(alice.locator('#me')).toHaveText('Alice');
     const bob = await (await request.post('/api/join', { data: { invite: (await invite()).token, name: 'Bob' } })).json();
 
-    await alice.locator('#notify summary').click();
+    await alice.locator('#me').click();
+    await alice.locator('#me-menu').getByRole('button', { name: 'Notifications' }).click();
     await alice.getByRole('button', { name: 'Turn on notifications' }).click();
     // A fresh profile registers with the push service first: over 30 s at times.
     await expect(alice.locator('#push-status')).toHaveText('Notifications on for this room.', { timeout: 90_000 });

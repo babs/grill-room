@@ -31,7 +31,7 @@ test('participant list on a phone follows the server presence', async ({ browser
   await carol.getByRole('button', { name: /^People/ }).click();
   await expect(carol.locator('.layout > aside')).toBeVisible();
   await expect(carol.locator('#participants li .name')).toHaveText(['Alice', 'Bob', 'Carol']);
-  await expect(carol.getByRole('button', { name: /^People/ })).toHaveText('People (3)');
+  await expect(carol.getByRole('button', { name: /^People/ })).toHaveAttribute('aria-label', 'People (3)');
   const me = row(carol, 'Carol');
   await expect(me.locator('.badge')).toHaveText(['you', 'admin']);
   await expect(me.locator('.badge.role-admin')).toHaveAttribute('title', /Room admin/);
