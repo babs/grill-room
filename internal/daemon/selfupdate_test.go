@@ -426,6 +426,9 @@ func TestInstanceVersionChangeRestartsWorker(t *testing.T) {
 // 005-AC45: a supervisor downloaded under a versioned name updates to the version-neutral name,
 // and the old file goes: grill-room-daemon-v1.0.0 never runs v1.1.0.
 func TestSelfUpdateDropsVersionFromName(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows keeps the name: it cannot remove a running binary nor exec in place")
+	}
 	key := trusttest.NewKey(t)
 	next := ownExe(t)
 	gh := fakeGitHub(t, "v1.1.0", next, key.Sign(t, next))

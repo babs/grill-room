@@ -501,10 +501,11 @@ func TestConfigDirHome(t *testing.T) {
 		t.Skip("no home dir")
 	}
 	abs := filepath.Join(home, "x")
+	other := t.TempDir()
 	for _, c := range []struct{ in, want, err string }{
 		{"~", home, ""},
 		{"~/x", abs, ""},
-		{"/opt/claude", "/opt/claude", ""},
+		{other, other, ""},
 		{"", "", ""},
 		{".claude-work", "", "relative"},
 		{"~bob/x", "", "another user's"},
