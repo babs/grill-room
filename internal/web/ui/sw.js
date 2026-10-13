@@ -6,7 +6,8 @@ const what = { mention: 'You were mentioned', turn: 'Your agent turn ended', syn
 
 self.addEventListener('push', (e) => {
   const p = e.data ? e.data.json() : {};
-  const tag = 'grill-room:' + p.url;
+  // The url ends in #m<line>, a new one each batch: the tag keys on the room's path alone.
+  const tag = 'grill-room:' + new URL(p.url || '/', self.location.origin).pathname;
   e.waitUntil(self.registration.getNotifications({ tag }).then((shown) => {
     const before = shown.reduce((n, x) => n + ((x.data && x.data.count) || 0), 0);
     const count = before + (p.count || 1);
