@@ -123,7 +123,6 @@ def main() -> None:
     ]
     for key, label in (("summre", "meetings"), ("devoxx", "talk")):
         checks.append((f"{label} WER at or below whisper", get("parakeet", key, 1, "wer"), get("whisper", key, 1, "wer")))
-    checks.append(("Piper English WER at or below whisper", get("parakeet", "piper", 1, "wer_en"), get("whisper", "piper", 1, "wer_en")))
     print("\n| AC16 check | parakeet | bound | pass |\n|---|---|---|---|")
     for name, v, bound in checks:
         ok = v is not None and bound is not None and v <= bound

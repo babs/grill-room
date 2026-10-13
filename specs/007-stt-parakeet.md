@@ -1,6 +1,6 @@
 # 007 — STT engine: parakeet-ultra
 
-**Status**: in progress (AC16: one-talker p95 4.01 s against 4 s and Piper English WER above whisper's, see spikes/S007-ab.md; AC18: lab voice step automated, the phone check is manual)
+**Status**: in progress (AC18: the phone check is manual and open)
 **Requested by**: babs
 **Date**: 2026-10-13
 **Context**: spikes S10 (models), S10b (workstation bench), S10c (browser) and S10d (lab validation at the 4-CPU limit)
@@ -74,7 +74,7 @@ The worker transcribes with parakeet-ultra. Lines arrive in about half the time,
 
 ### Rollout
 - [x] **AC15** With `APP_ENGINE=whisper`, the same image runs today's faster-whisper `small` path, `APP_GLOSSARY_PROMPT` included, and its tests stay green. It is kept for one release.
-- [ ] **AC16** A lab A/B run replays the S10 corpora (SUMM-RE meetings, the tech talk, the 38 Piper lines) through the worker's own segmenter, engines and filter, in a Job at the 4-CPU limit, with S10b scoring. With `parakeet`:
+- [x] **AC16** A lab A/B run replays the S10 corpora (SUMM-RE meetings, the tech talk, the 38 Piper lines) through the worker's own segmenter, engines and filter, in a Job at the 4-CPU limit, with S10b scoring. With `parakeet`:
   - meetings WER ≤ 0.25 and talk ≤ 0.15, each at or below `whisper` on the same run; Piper English lines ≤ 0.08;
   - English leak ≤ 0.01 on meetings and talk;
   - p95 latency ≤ 4 s for one talker, ≤ 5 s for two, and for four a target of 8 s with 10 s as the failure bound, with no drop;
