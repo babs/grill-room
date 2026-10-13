@@ -138,6 +138,7 @@ function STTGlossary({ data }) {
   return html`
     <p class="hint">Terms people will say: product names, jargon, acronyms. One per line or comma-separated.
       The transcription also expects the participants' and personas' names, then the documents' titles, while they fit.</p>
+    <p class="hint" id="glossary-engine">Used by the transcription engine when supported.</p>
     <form id="stt-glossary" onSubmit=${save}>
       <textarea rows="5" aria-label="Transcription glossary" value=${text} onInput=${(/** @type {Event} */ e) => setText(/** @type {HTMLTextAreaElement} */ (e.target).value)}></textarea>
       <div class="glossary-actions">

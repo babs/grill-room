@@ -289,7 +289,7 @@ Media needs no published UDP port (spike S4): ICE runs over TCP 7881, or TURN ov
 
 While an STT worker is in its audio, the room page counts the voices it transcribes, "2 voices transcribed": the participants whose track a worker is subscribed to. A participant whose own voice is one of them also reads "your voice is being transcribed"; one who left the audio, or never joined it, reads nothing about their own. "Transcription unavailable" shows when no worker has sent a heartbeat for 15 s. Audio and text keep working meanwhile.
 
-Each room has a transcription glossary: terms people will say, one per line or comma-separated, 60 characters each, 2000 in all. Any member edits it in Manage, and the room shows who changed it. Before each utterance, the worker reads the room's prompt (`GET /api/stt/rooms/{room}/prompt`, with its service token) and passes it to faster-whisper as `initial_prompt`, never as `hotwords` (spike S10). The prompt is one French sentence: the glossary, then the participants' and personas' names, then the documents' titles, taken in that order while an estimate stays under Whisper's limit of 223 tokens. Manage shows how many terms fit, "12 / ~70 terms used". The sentence puts the glossary last, so if Whisper cuts an overlong prompt from its start, the titles go first.
+Each room has a transcription glossary: terms people will say, one per line or comma-separated, 60 characters each, 2000 in all. Any member edits it in Manage, and the room shows who changed it. With `APP_GLOSSARY_PROMPT=on`, before each utterance, the worker reads the room's prompt (`GET /api/stt/rooms/{room}/prompt`, with its service token) and passes it to faster-whisper as `initial_prompt`, never as `hotwords` (spike S10). It is off by default: on real speech the prompt made `small` worse, as it loops on the prompt and drops text (spike S10b). The glossary is kept for an engine that takes a word list. The prompt is one French sentence: the glossary, then the participants' and personas' names, then the documents' titles, taken in that order while an estimate stays under Whisper's limit of 223 tokens. Manage shows how many terms fit, "12 / ~70 terms used". The sentence puts the glossary last, so if Whisper cuts an overlong prompt from its start, the titles go first.
 
 ### STT worker
 
@@ -318,6 +318,7 @@ The image bakes the model in at a pinned Hugging Face revision and runs with `HF
 | `APP_MODEL` | `small` (`/models/whisper` in the image) | model size or directory |
 | `APP_CPU_THREADS` | `3` | model threads |
 | `APP_QUEUE_SIZE` | `8` | utterances waiting for the model |
+| `APP_GLOSSARY_PROMPT` | `off` | pass the room's glossary prompt to Whisper as `initial_prompt` (spike S10b: worse on real speech) |
 | `APP_VAD_MIN_SILENCE_MS`, `APP_VAD_MAX_SPEECH_S` | `800`, `15` | silence that ends an utterance, longest utterance before a cut |
 | `APP_POLL_SECONDS`, `APP_HEARTBEAT_SECONDS` | `2`, `5` | room discovery and heartbeat periods |
 | `APP_PORT` | `9100` | `/healthz` (503 while the model loads) and `/metrics` |

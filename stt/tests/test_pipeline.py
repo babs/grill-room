@@ -226,11 +226,33 @@ async def test_each_utterance_reads_the_room_prompt() -> None:
         used.append(prompt)
         return Line("ok", "en")
 
-    p = Pipeline(transcribe, api(httpx.MockTransport(handle)), size=4)
+    p = Pipeline(transcribe, api(httpx.MockTransport(handle)), size=4, use_prompt=True)
     for _ in range(3):
         await p.process(utterance())
     assert used == ["On parle de Helm.", "On parle de Argo CD.", "On parle de Argo CD."]
     assert asked == ["/api/stt/rooms/r1/prompt"] * 3
+
+
+async def test_no_prompt_by_default() -> None:
+    """005-AC23 (spike S10b): by default the worker passes Whisper no prompt and does not even ask
+    the room server for one; APP_GLOSSARY_PROMPT=on turns it back on."""
+    asked: list[str] = []
+
+    def handle(r: httpx.Request) -> httpx.Response:
+        if r.method == "GET":
+            asked.append(r.url.path)
+            return httpx.Response(200, json={"prompt": "On parle de Helm."})
+        return httpx.Response(201)
+
+    used: list[str] = []
+
+    def transcribe(_a: Audio, prompt: str) -> Line:
+        used.append(prompt)
+        return Line("ok", "en")
+
+    await Pipeline(transcribe, api(httpx.MockTransport(handle)), size=4).process(utterance())
+    assert used == [""]
+    assert asked == []
 
 
 async def test_prompt_read_failures() -> None:

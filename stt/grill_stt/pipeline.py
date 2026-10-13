@@ -197,9 +197,11 @@ class Pipeline:
         api: RoomAPI,
         size: int,
         rules: Plausibility | None = None,
+        use_prompt: bool = False,
     ) -> None:
         self._transcribe = transcribe
         self._api = api
+        self._use_prompt = use_prompt
         # The last prompt read for each room: a room server that does not answer keeps it in use.
         self._prompts: dict[str, str] = {}
         self._rules = rules or Plausibility()
@@ -232,7 +234,8 @@ class Pipeline:
 
     async def process(self, u: Utterance) -> None:
         # Read before each utterance, so a glossary change applies from the next one (005-AC23).
-        prompt = await self._api.prompt(u.room)
+        # Off by default: the prompt hurts small on real speech (spike S10b).
+        prompt = await self._api.prompt(u.room) if self._use_prompt else ""
         if prompt is None:
             prompt = self._prompts.get(u.room, "")
         else:

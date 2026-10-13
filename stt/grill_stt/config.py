@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     min_language_probability: float = Plausibility.min_language_probability
     short_utterance_s: float = Plausibility.short_utterance_s
     min_script_share: float = Plausibility.min_script_share
+    # The room's glossary prompt as Whisper's initial_prompt. Off: on real speech it raised small's
+    # WER (meetings 0.327 to 0.398, a talk 0.252 to 0.552) by looping on the prompt (spike S10b).
+    glossary_prompt: bool = False
     poll_seconds: float = 2.0
     heartbeat_seconds: float = 5.0
     port: int = 9100

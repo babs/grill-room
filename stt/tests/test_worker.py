@@ -331,3 +331,10 @@ async def test_an_empty_listed_room_is_not_joined(monkeypatch: pytest.MonkeyPatc
     w = worker(httpx.MockTransport(lambda _r: httpx.Response(204)))
     await w.reconcile([listed("r1", "RM_a", people=0)])
     assert not made and not w.rooms
+
+
+def test_glossary_prompt_is_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    """005-AC23 (spike S10b): off unless APP_GLOSSARY_PROMPT says on."""
+    assert settings().glossary_prompt is False
+    monkeypatch.setenv("APP_GLOSSARY_PROMPT", "on")
+    assert settings().glossary_prompt is True
