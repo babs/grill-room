@@ -97,14 +97,16 @@ test('room creation from the profile page, within the limits', async ({ browser,
 
   // Quinn gets a limit of 12 from the profiles view: his 11th room goes through, where Pia's was
   // refused at the instance's 10.
-  const quinn = await join(browser, request, lobby.id, 'Quinn', phone);
+  // Unique: the profiles view lists every run's profiles, as --repeat-each reuses the server.
+  const qn = 'Quinn ' + Date.now().toString(36);
+  const quinn = await join(browser, request, lobby.id, qn, phone);
   for (let i = 1; i <= 10; i++) {
-    expect((await quinn.request.post('/api/profile/rooms', { data: { name: `Quinn room ${i}`, display_name: 'Quinn' } })).status()).toBe(201);
+    expect((await quinn.request.post('/api/profile/rooms', { data: { name: `Quinn room ${i}`, display_name: qn } })).status()).toBe(201);
   }
   await adminPage.goto('/admin#profiles');
-  const row = adminPage.locator('#profiles tbody tr', { hasText: 'Quinn' });
+  const row = adminPage.locator('#profiles tbody tr', { hasText: qn });
   await expect(row).toContainText("10 created, limit instance's (10)");
-  await row.getByLabel('Rooms Quinn may create').fill('12');
+  await row.getByLabel(`Rooms ${qn} may create`).fill('12');
   await row.getByRole('button', { name: 'Set' }).click();
   await expect(row).toContainText('10 created, limit 12');
   await fits(adminPage);
@@ -115,7 +117,7 @@ test('room creation from the profile page, within the limits', async ({ browser,
   await page.getByRole('button', { name: 'Create the room' }).click();
   await expect(page.locator('#room-create-status')).toHaveText('room creation refused: you have created 10 rooms, the most this instance allows per profile');
   const set = await (await request.get('/api/admin/audit?action=profile.max_rooms', { headers: admin })).json();
-  expect(set.entries[0]).toMatchObject({ target_kind: 'profile', target_name: 'Quinn', details: { max_rooms: 12, via: 'session' } });
+  expect(set.entries[0]).toMatchObject({ target_kind: 'profile', target_name: qn, details: { max_rooms: 12, via: 'session' } });
 });
 
 for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', ...phone }]) {

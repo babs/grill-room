@@ -5,9 +5,11 @@ import { signIn, noOverflow } from './helpers.js';
 const admin = { Authorization: `Bearer ${adminToken}` };
 
 // 004-AC1: a wrong token is refused, and past 10 tries from one IP even the right one is, for 15
-// minutes. The browser gets an IP of its own: every other test signs in from 127.0.0.1.
-test('admin login refuses a wrong token, then rate-limits the IP', async ({ browser }) => {
-  const ctx = await browser.newContext({ extraHTTPHeaders: { 'X-Forwarded-For': '203.0.113.50' } });
+// minutes. The browser gets an IP of its own: every other test signs in from 127.0.0.1, and each
+// repeat or retry of this one from another, as the server and its limiter outlive them.
+test('admin login refuses a wrong token, then rate-limits the IP', async ({ browser }, info) => {
+  const ip = `203.0.113.${50 + info.repeatEachIndex * 10 + info.retry}`;
+  const ctx = await browser.newContext({ extraHTTPHeaders: { 'X-Forwarded-For': ip } });
   const page = await ctx.newPage();
   for (let i = 0; i < 10; i++) {
     expect(await signIn(page, 'wrong-' + i)).toBe(401);

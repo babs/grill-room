@@ -802,10 +802,16 @@ func TestSupervisorSlots(t *testing.T) {
 	if v.MaxTurns != 1 || len(v.Running) != 1 || v.Running[0].Turn != 11 || v.Running[0].Room != "https://rooms.example/r/abc" || len(v.Queued) != 0 {
 		t.Fatalf("concurrency %+v", v)
 	}
+	slot := regexp.MustCompile(`fake_slot \w+ \d`)
 	var lines []string
-	for _, l := range s.o.Ring.Lines() {
-		lines = append(lines, regexp.MustCompile(`fake_slot \w+ \d`).FindAllString(l, -1)...)
-	}
+	// The worker logs each grant after it reads it, so the ring trails the supervisor's counters.
+	waitFor(t, "the worker's three slot lines", func() bool {
+		lines = nil
+		for _, l := range s.o.Ring.Lines() {
+			lines = append(lines, slot.FindAllString(l, -1)...)
+		}
+		return len(lines) >= 3
+	})
 	if !slices.Equal(lines, []string{"fake_slot grant 1", "fake_slot wait 2", "fake_slot grant 2"}) {
 		t.Fatalf("the worker heard %q", lines)
 	}

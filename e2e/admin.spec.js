@@ -122,6 +122,8 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
       applied = false;
       return route.continue();
     });
+    // The page may still show the reply's turn running, a status poll behind: saving then asks first.
+    await expect(roomCard.locator('.room-state')).toHaveText('connected, runs the AI, parallel answers off', { timeout: 30_000 });
     await admin.getByLabel('Sandbox memory').fill('2g');
     await admin.getByRole('button', { name: 'Save and restart' }).click();
     await expect(admin.locator('#limits-status')).toHaveText('Applied: the worker restarts.', { timeout: 10_000 });
