@@ -1,6 +1,6 @@
 # 005 — Room UX from live testing
 
-**Status**: in progress
+**Status**: shipped (AC24 waits on a manual Android check; AC45 applies to updates from v0.0.9 on)
 **Requested by**: babs
 **Date**: 2026-10-12
 **Context**: live tests of specs 001-004 on the lab, from a phone and a desktop
