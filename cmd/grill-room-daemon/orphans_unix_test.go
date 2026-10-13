@@ -48,7 +48,7 @@ func TestDockerOrphansRemovedAtStart(t *testing.T) {
 	sup := startProc(t, env, rs.url())
 	pg := sup.open(t)
 	rs.pair(t, pg, alice)
-	waitFor(t, "can host", func() bool { return pg.status(t).Status.CanHost })
+	rs.online(t, alice)
 
 	var templates []store.Template
 	rs.call(t, "GET", "/api/rooms/"+rs.room+"/templates", alice, nil, http.StatusOK, &templates)
