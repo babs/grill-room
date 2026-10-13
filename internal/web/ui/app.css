@@ -359,3 +359,5 @@ input[aria-invalid=true] { border-color: var(--danger); }
   body.notes-pane #notes-back { display: inline-flex; margin-bottom: var(--sp-3); }
 }
 #room-name a { display: inline-flex; align-items: center; min-height: 44px; color: inherit; }
+/* The explainer's title takes the first focus only so no keystroke answers it: it is no control. */
+#push-explain-title:focus { outline: none; box-shadow: none; }

@@ -1,6 +1,7 @@
 import { expect, chromium } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { snoozePush, snoozeKey } from '../quiet-push.js';
 
 // FR/EN read speech from FLEURS (CC-BY-4.0): source, license and timings are in fr-en.json.
 export const fixture = {
@@ -34,6 +35,7 @@ export async function invite(request, roomID) {
 // init, if given, is a script the context runs in every page before the room's own.
 export async function join(browser, inv, name, init) {
   const ctx = await browser.newContext();
+  await ctx.addInitScript(snoozePush, snoozeKey);
   if (init) await ctx.addInitScript(init);
   const page = await ctx.newPage();
   const url = new URL(inv.url);

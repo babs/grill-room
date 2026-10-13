@@ -75,6 +75,13 @@ test('touch targets at phone width', async ({ browser, request, baseURL }) => {
   await alice.getByRole('button', { name: /Notes/ }).click();
   expect(await smallTargets(alice), 'notes pane').toEqual([]);
   await alice.getByRole('button', { name: '← Back to the document' }).click();
+  // 008-AC12: the push explainer.
+  await menuItem(alice, 'Notifications', 'me');
+  await alice.locator('#push-toggle').click();
+  await expect(alice.locator('#push-explain')).toBeVisible();
+  expect(await smallTargets(alice), 'push explainer').toEqual([]);
+  await alice.keyboard.press('Escape');
+  await alice.keyboard.press('Escape');
   await alice.locator('#doc-close').click();
 
   // Room settings, as a room admin.
@@ -488,4 +495,9 @@ test('docs panes follow the design rules', async ({ browser, request }) => {
   await alice.getByRole('button', { name: 'Hide documents' }).click();
   expect(await alice.locator('#side').evaluate((e) => getComputedStyle(e).transitionDuration)).toBe('0s');
   await shot(alice, 'after-desktop-rail');
+  await menuItem(alice, 'Notifications', 'me');
+  await alice.locator('#push-toggle').click();
+  await expect(alice.locator('#push-explain')).toBeVisible();
+  const sheet = await alice.locator('#push-explain button:visible').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)));
+  expect(new Set(sheet)).toEqual(new Set([36]));
 });

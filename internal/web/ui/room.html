@@ -179,6 +179,20 @@
   <label id="push-all-label" hidden><input type="checkbox" id="push-all"> Also every other line</label>
   <p id="push-status" class="said" role="status"></p>
 </dialog>
+<!-- The push explainer (008-AC10): the only way to the browser's permission prompt. -->
+<dialog id="push-explain" class="sheet" aria-labelledby="push-explain-title" aria-describedby="push-explain-text">
+  <div class="sheet-head">
+    <!-- autofocus: an offer that opens under a typing hand must not take a keystroke as an answer. -->
+    <h2 id="push-explain-title" tabindex="-1" autofocus>Turn on notifications?</h2>
+    <button type="button" class="btn-icon btn-ghost close" aria-label="Close">✕</button>
+  </div>
+  <p id="push-explain-text">Get notified when someone mentions you directly, even when this tab is closed.</p>
+  <p class="hint">Your browser will ask for permission next.</p>
+  <div class="actions">
+    <button type="button" id="push-later" class="btn-secondary">Not now</button>
+    <button type="button" id="push-yes" class="btn-primary">Turn on notifications</button>
+  </div>
+</dialog>
 <dialog id="host-agent" class="sheet" aria-labelledby="host-title">
   <div class="sheet-head">
     <h2 id="host-title">Run the AI on my computer</h2>

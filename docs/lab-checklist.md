@@ -28,7 +28,7 @@ If step 4 fails while `make e2e-lab` passes, look at the phone's network first: 
 `make e2e-push` proves a push goes through Chrome's push service to a desktop Chrome. This check covers a phone, with the browser closed. It takes about five minutes.
 
 1. Create a room and two invites as above, open one invite on the phone in Chrome, the other on the laptop, and join on both.
-2. On the phone, open Notifications in the side panel (People on a narrow screen), press "Turn on notifications" and allow them.
+2. On the phone, open your name's menu in the header, then Notifications, press "Turn on notifications", then "Turn on notifications" in the sheet that explains them, and allow them.
 3. Close Chrome on the phone, or switch to another app.
 4. On the laptop, write a line that mentions the phone's participant, `@<their name>`. Within about 10 s the phone must show one notification named after the room, saying "You were mentioned" and nothing of the line.
 5. Write two more mentions. The same notification must update, counting the events, rather than stack new ones.

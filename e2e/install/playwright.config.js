@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import { quietPush } from '../quiet-push.js';
 
 // The compose stack behind the local traefik (`make dev-up`): a clean Debian container installs the
 // daemon with the room's one-liner, then the suite bumps the release the room server hands out.
@@ -14,5 +15,5 @@ export default defineConfig({
   timeout: 600_000,
   workers: 1,
   retries: 0,
-  use: { baseURL: `https://grill-room.${process.env.DEV_DOMAIN}`, channel: 'chrome' },
+  use: { baseURL: `https://grill-room.${process.env.DEV_DOMAIN}`, channel: 'chrome', storageState: quietPush(`https://grill-room.${process.env.DEV_DOMAIN}`) },
 });

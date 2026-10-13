@@ -2478,22 +2478,74 @@ async function savePush() {
   if (done) localStorage.setItem(pushKey, '1');
 }
 
-$('push-toggle').addEventListener('click', () => (async () => {
+const pushDenied = 'The browser did not allow notifications: allow them in its site settings, then try again.';
+// The explainer comes before the browser's permission request (008-AC10), and once, unprompted, after the
+// first message of a page load (008-AC11). Dismissing it snoozes the offer for 14 days in this
+// browser; the Notifications sheet still reaches it.
+const pushSnoozeKey = 'grill-room-push-snooze';
+const pushSnooze = 14 * 24 * 3600e3;
+let pushAccepted = false;
+let pushOffered = false;
+const snoozePush = () => localStorage.setItem(pushSnoozeKey, String(Date.now() + pushSnooze));
+
+// pushReport says how turning on went: in the Notifications sheet, and in a toast when the
+// explainer came unprompted.
+function pushReport(text) {
+  pushStatus(text);
+  if (!$('notify').open) toast(text);
+}
+
+function turnOnPush() {
+  localStorage.removeItem(pushSnoozeKey);
+  savePush().then(() => 'Notifications on for this room.', (err) => 'Notifications: ' + err.message)
+    .then(pushReport).finally(renderPush);
+}
+
+$('push-toggle').addEventListener('click', () => {
   pushStatus('');
   if (localStorage.getItem(pushKey) === '1') {
-    const sub = await pushSubscription(false);
-    if (sub) await sendJSON('DELETE', api + '/push', { subscription: { endpoint: sub.endpoint } });
-    localStorage.removeItem(pushKey);
-    pushStatus('Notifications off for this room.');
+    (async () => {
+      const sub = await pushSubscription(false);
+      if (sub) await sendJSON('DELETE', api + '/push', { subscription: { endpoint: sub.endpoint } });
+      localStorage.removeItem(pushKey);
+      pushStatus('Notifications off for this room.');
+    })().catch((err) => pushStatus('Notifications: ' + err.message)).finally(renderPush);
+  } else if (Notification.permission === 'granted') {
+    // Allowed already, from another room: nothing to ask.
+    turnOnPush();
+  } else if (Notification.permission === 'denied') {
+    pushStatus(pushDenied);
   } else {
-    if (await Notification.requestPermission() !== 'granted') {
-      pushStatus('The browser did not allow notifications: allow them in its site settings, then try again.');
-      return;
-    }
-    await savePush();
-    pushStatus('Notifications on for this room.');
+    $('push-explain').showModal();
   }
-})().catch((err) => pushStatus('Notifications: ' + err.message)).finally(renderPush));
+});
+
+$('push-later').addEventListener('click', () => $('push-explain').close());
+$('push-yes').addEventListener('click', () => {
+  pushAccepted = true;
+  $('push-explain').close();
+  Notification.requestPermission().then((perm) => {
+    if (perm === 'granted') return turnOnPush();
+    // The browser's own prompt dismissed: snoozed too, as Chrome blocks a site that asks again
+    // and again.
+    if (perm === 'default') {
+      snoozePush();
+      pushReport('Notifications stay off. Turn them on under Notifications at any time.');
+    } else pushReport(pushDenied);
+  }).catch((err) => pushReport('Notifications: ' + err.message));
+});
+// A room that ends closes every sheet: that is no answer from the participant.
+$('push-explain').addEventListener('close', () => {
+  if (!pushAccepted && !ended) snoozePush();
+  pushAccepted = false;
+});
+function offerPush() {
+  if (pushOffered) return;
+  pushOffered = true;
+  if (!pushable || docsMode || (ios && !homeScreen) || Notification.permission !== 'default') return;
+  if (localStorage.getItem(pushKey) === '1' || Date.now() < Number(localStorage.getItem(pushSnoozeKey) || 0)) return;
+  if (!document.querySelector('dialog[open]')) $('push-explain').showModal();
+}
 $('push-all').addEventListener('change', () => {
   localStorage.setItem(pushKey + ':all', $('push-all').checked ? '1' : '0');
   savePush().catch((err) => pushStatus('Notifications: ' + err.message));
@@ -2647,6 +2699,7 @@ async function send() {
   // Only the line sent leaves the box: the next one may already be typed in it.
   if (bodyInput.value === typed) bodyInput.value = '';
   nudgeRecovery();
+  offerPush();
   const m = await res.json();
   if (m.mention_notices) {
     notices.set(m.id, m.mention_notices);
