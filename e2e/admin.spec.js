@@ -32,7 +32,7 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
     const card = admin.locator('#instances li.instance');
     await expect(card).toContainText(`${baseURL} · running, v`);
     await expect(card.locator('.badge')).toHaveText("the supervisor's binary");
-    await expect(card).toContainText(/Worker pid \d+, protocol 3/);
+    await expect(card).toContainText(/Worker pid \d+, protocol 4/);
     // 005-AC42: the room by its name, its link below.
     const roomCard = admin.locator('#rooms-section li.room-card');
     await expect(roomCard.locator('.room-name')).toHaveText(room.name);
