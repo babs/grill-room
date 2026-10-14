@@ -42,7 +42,11 @@ for (const vp of widths) {
       await expect(page.locator('.msg.system').last()).toContainText('Alice is now Ali');
       const line = page.locator('.msg.text', { hasText: 'Before the rename.' }).locator('.sender');
       await expect(line).toHaveText('Ali');
-      await expect(line).toHaveAttribute('title', 'Written as Alice');
+      // 009-AC36: the details card says it, no native title.
+      await expect(line).not.toHaveAttribute('title');
+      await line.focus();
+      await expect(page.locator('#person-card')).toContainText('Written as Alice');
+      await page.keyboard.press('Escape');
       await expect(page.locator('#participants')).toContainText('Ali');
     }
     // A later join under another name leaves the profile's name alone.

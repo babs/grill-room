@@ -48,6 +48,11 @@ let presence = new Map();
 let transcribed = new Set();
 // cardFor is the name the open details card describes (009-AC36).
 let cardFor = null;
+// hoverTimer delays the card and the badge tip on hover.
+let hoverTimer;
+// tipFor is the badge the open tip describes; hideTimer, the grace before a card or tip closes.
+let tipFor = null;
+let hideTimer;
 
 function end(text) {
   ended = true;
@@ -328,7 +333,9 @@ function nameSender(li, el) {
   const p = participants.find((x) => String(x.id) === li.dataset.pid);
   const was = li.dataset.sender;
   el.textContent = p ? p.name : was;
-  el.title = p && p.name !== was ? 'Written as ' + was : '';
+  // The details card says it (009-AC36): no native tooltip on author names.
+  if (p && p.name !== was) el.dataset.writtenAs = was;
+  else delete el.dataset.writtenAs;
 }
 
 function renameSenders() {
@@ -1340,6 +1347,7 @@ actionMenu($('doc-menu'), $('doc-more'));
 
 function renderAnnotations() {
   $('annot-count').textContent = annotations.length ? '(' + annotations.length + ')' : '';
+  $('annot-empty').hidden = annotations.length > 0;
   const list = $('annot-list');
   const kept = new Map([...list.children].map((li) => [li.dataset.id, li]));
   const items = [...annotations].sort((x, y) => rank(x) - rank(y) || x.id - y.id)
@@ -2646,9 +2654,11 @@ $('person-menu').addEventListener('toggle', (e) => {
 });
 
 // The details card (009-AC36): hovering or focusing a person in People or their name on a chat
-// line shows it; on touch a tap does. A non-modal tooltip tied by aria-describedby.
+// line shows it; on touch a tap does. A non-modal tooltip tied by aria-describedby. The People
+// badges get the same styled tip for their meaning: no native title tooltip there.
 // personCardLines are its lines under the name, in order, each '' to skip: spec 010 adds one.
 const personCardLines = [
+  (p, id, el) => (el.dataset.writtenAs ? 'Written as ' + el.dataset.writtenAs : ''),
   (p) => (p.previous_name ? 'Earlier name: ' + p.previous_name : ''),
   (p, id) => 'Roles: ' + personRoles(p, id),
   (p) => (agent.can_trigger.includes(p.id) || agent.host_participant_id === p.id ? 'Can ask the AI' : ''),
@@ -2657,6 +2667,8 @@ const personCardLines = [
   (p, id) => cardHere(p, id),
   (p) => 'Joined ' + new Date(p.joined_at).toLocaleString(),
 ];
+// hoverDelay keeps a pointer passing over the list from flashing cards.
+const hoverDelay = 300;
 
 function personRoles(p, id) {
   const r = [];
@@ -2679,14 +2691,26 @@ function cardHere(p, id) {
   return 'Seen ' + ago(pr?.seen_at || p.last_seen_at || p.joined_at);
 }
 
+// placeBy puts popover pop below anchor, or above it when the bottom edge would cut it, left of
+// the row's ⋯ column so it never covers a ⋯, shifted left when the right edge would cut it.
+function placeBy(pop, anchor) {
+  const r = anchor.getBoundingClientRect();
+  const more = anchor.closest('li')?.querySelector('.person-more');
+  const right = more && !more.hidden ? more.getBoundingClientRect().left - 4 : innerWidth - 8;
+  pop.style.maxWidth = Math.min(20 * parseFloat(getComputedStyle(document.documentElement).fontSize), Math.max(160, right - 8)) + 'px';
+  pop.style.left = Math.max(8, Math.min(r.left, right - pop.offsetWidth)) + 'px';
+  pop.style.top = Math.max(8, r.bottom + 4 + pop.offsetHeight > innerHeight - 8 ? r.top - 4 - pop.offsetHeight : r.bottom + 4) + 'px';
+}
+
 function showCard(el) {
   const id = el.closest('li[data-pid]')?.dataset.pid;
   const p = participants.find((x) => String(x.id) === id);
   if (!p || $('person-menu').matches(':popover-open')) return;
+  hideTip();
   const card = $('person-card');
   const list = document.createElement('ul');
   for (const line of personCardLines) {
-    const text = line(p, id);
+    const text = line(p, id, el);
     if (!text) continue;
     const li = document.createElement('li');
     li.textContent = text;
@@ -2696,16 +2720,12 @@ function showCard(el) {
   name.textContent = p.name;
   card.replaceChildren(name, list);
   if (cardFor !== el) hideCard();
+  // A close pending for what was open before must not close this one.
+  clearTimeout(hideTimer);
   cardFor = el;
   el.setAttribute('aria-describedby', 'person-card');
   if (!card.matches(':popover-open')) card.showPopover();
-  // Left of the row's ⋯ column, so it never covers a ⋯; below the name, above it near the bottom.
-  const r = el.getBoundingClientRect();
-  const more = el.closest('li')?.querySelector('.person-more');
-  const right = more && !more.hidden ? more.getBoundingClientRect().left - 4 : innerWidth - 8;
-  card.style.maxWidth = Math.min(20 * parseFloat(getComputedStyle(document.documentElement).fontSize), Math.max(160, right - 8)) + 'px';
-  card.style.left = Math.max(8, Math.min(r.left, right - card.offsetWidth)) + 'px';
-  card.style.top = (r.bottom + 4 + card.offsetHeight > innerHeight - 8 ? r.top - 4 - card.offsetHeight : r.bottom + 4) + 'px';
+  placeBy(card, el);
 }
 
 function hideCard() {
@@ -2715,19 +2735,64 @@ function hideCard() {
   $('person-card').hidePopover();
 }
 
+// The badge tip: one line, for the eye; the badge's aria-label says the same to assistive tech.
+function showTip(el) {
+  const tip = $('person-tip');
+  clearTimeout(hideTimer);
+  tipFor = el;
+  tip.textContent = el.dataset.tip;
+  if (!tip.matches(':popover-open')) tip.showPopover();
+  placeBy(tip, el);
+}
+function hideTip() {
+  tipFor = null;
+  if ($('person-tip').matches(':popover-open')) $('person-tip').hidePopover();
+}
+
+// hideGrace lets the pointer cross the gap between a name or badge and its card or tip.
+const hideGrace = 150;
+function hideSoon(from) {
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(() => {
+    if (tipFor === from || from === $('person-tip')) hideTip();
+    if (cardFor === from || from === $('person-card')) hideCard();
+  }, hideGrace);
+}
+
 const cardTarget = (t) => (t instanceof Element ? t.closest('#participants .name, #participants-away .name, #messages li[data-pid] > .meta > .sender') : null);
+const tipTarget = (t) => (t instanceof Element ? t.closest('#participants [data-tip], #participants-away [data-tip]') : null);
 document.addEventListener('pointerover', (e) => {
+  if (e.pointerType !== 'mouse' || !(e.target instanceof Element)) return;
   const el = cardTarget(e.target);
-  if (el && e.pointerType === 'mouse') showCard(el);
+  const tipped = !el && tipTarget(e.target);
+  // Reaching the open card or tip, or coming back to its anchor, keeps it.
+  if (e.target.closest('#person-card, #person-tip') || (el && el === cardFor) || (tipped && tipped === tipFor)) {
+    clearTimeout(hideTimer);
+    return;
+  }
+  if (!el && !tipped) return;
+  clearTimeout(hoverTimer);
+  const [x, y] = [e.clientX, e.clientY];
+  hoverTimer = setTimeout(() => {
+    // A re-render may have replaced what the pointer rests on: take what is under it now.
+    const under = document.elementFromPoint(x, y);
+    const card = cardTarget(under);
+    const tip = !card && tipTarget(under);
+    if (card) showCard(card);
+    else if (tip?.dataset.tip && !cardFor) showTip(tip);
+  }, hoverDelay);
 });
-// The pointer may move onto the card and stay there to read it (WCAG 1.4.13).
+// The pointer may move onto the card or tip and stay there to read it (WCAG 1.4.13).
 document.addEventListener('pointerout', (e) => {
-  if (e.pointerType === 'mouse' && cardFor && cardTarget(e.target) === cardFor && !cardFor.contains(e.relatedTarget)
-    && !$('person-card').contains(e.relatedTarget)) hideCard();
+  if (e.pointerType !== 'mouse') return;
+  const from = cardTarget(e.target) || tipTarget(e.target);
+  if (!from || from.contains(e.relatedTarget)) return;
+  clearTimeout(hoverTimer);
+  if (from === cardFor || from === tipFor) hideSoon(from);
 });
-$('person-card').addEventListener('pointerleave', (e) => {
-  if (e.pointerType === 'mouse' && cardFor && !cardFor.contains(e.relatedTarget)) hideCard();
-});
+for (const id of ['person-card', 'person-tip']) {
+  $(id).addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') hideSoon($(id)); });
+}
 document.addEventListener('focusin', (e) => { if (cardTarget(e.target)) showCard(e.target); });
 document.addEventListener('focusout', (e) => { if (e.target === cardFor) hideCard(); });
 // A tap anywhere on a person's row but its ⋯, or on a chat name, opens the card; a tap elsewhere closes it.
@@ -2737,7 +2802,12 @@ document.addEventListener('click', (e) => {
   if (el) showCard(el);
   else if (!$('person-card').contains(e.target)) hideCard();
 });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideCard(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  clearTimeout(hoverTimer);
+  hideCard();
+  hideTip();
+});
 arrowKeys($('person-menu'));
 
 // renderParticipants splits the list into those in the room and those not here (005-AC7). Rows
@@ -2771,7 +2841,7 @@ function renderParticipants() {
     li.classList.toggle('speaking', key === 'live' && speaking.has(id));
     li.classList.toggle('muted', key === 'muted');
     li.classList.toggle('deaf', deaf);
-    li.querySelector('.voice-dot').title = key === 'none' ? '' : key === 'live' && speaking.has(id) ? 'Speaking' : tags.audio[2];
+    li.querySelector('.voice-dot').dataset.tip = key === 'none' ? '' : key === 'live' && speaking.has(id) ? 'Speaking' : tags.audio[2];
     const more = li.querySelector('.person-more');
     more.setAttribute('aria-label', 'Actions for ' + p.name);
     more.onpointerdown = () => { openFor = $('person-menu').matches(':popover-open') ? personFor?.b : null; };
@@ -2784,7 +2854,16 @@ function renderParticipants() {
     const cols = tagColumns.filter((c) => c === 'audio' || want.some((r) => r.tags[c] && r.tags[c][0]));
     const anyMenu = want.some((r) => r.menu);
     for (const { li, tags, menu, seen } of want) {
-      li.querySelector('.tags').replaceChildren(...cols.map((c) => tagSpan(c, tags[c])), ...(seen ? [span('seen', seen)] : []));
+      const box = li.querySelector('.tags');
+      const had = new Map([...box.children].map((x) => [x.dataset.col, x]));
+      const kids = cols.map((c) => tagSpan(c, tags[c], had.get(c)));
+      if (seen) {
+        const el = had.get('seen') || span('seen', '');
+        el.dataset.col = 'seen';
+        el.textContent = seen;
+        kids.push(el);
+      }
+      if (kids.length !== box.children.length || kids.some((k, i) => box.children[i] !== k)) box.replaceChildren(...kids);
       const more = li.querySelector('.person-more');
       more.hidden = !anyMenu;
       more.classList.toggle('blank', !menu);
@@ -2793,9 +2872,15 @@ function renderParticipants() {
     const lis = want.map((r) => r.li);
     if (lis.length !== list.children.length || lis.some((li, i) => list.children[i] !== li)) list.replaceChildren(...lis);
   }
-  // An open details card follows the agent and presence changes that re-render the list.
-  if (cardFor?.isConnected) showCard(cardFor);
-  else if (cardFor) hideCard();
+  // An open card or tip follows the agent and presence changes that re-render the list.
+  if (cardFor) {
+    if (cardFor.isConnected) showCard(cardFor);
+    else hideCard();
+  }
+  if (tipFor) {
+    if (tipFor.isConnected && tipFor.dataset.tip) showTip(tipFor);
+    else hideTip();
+  }
   $('away').hidden = !rows.away.length;
   $('away-count').textContent = String(rows.away.length);
   $('tab-people-count').textContent = String(rows.here.length);
@@ -2803,17 +2888,24 @@ function renderParticipants() {
 
 // tagSpan is one badge square, or an empty one keeping its column. The audio one is always there
 // with its state, for the people that are not in the audio too.
-function tagSpan(col, t) {
+// el, when given, is the column's square from the last render, updated in place: an open tip stays
+// on it.
+function tagSpan(col, t, el = document.createElement('span')) {
   // The classes that name a state go on a filled square only.
   const on = !!(t && t[0]);
   const role = on && ['you', 'host', 'admin'].includes(col);
-  const el = span('tag tag-' + col + (role ? ' role-' + col : '') + (on && col === 'host' ? ' host-badge' : '') + (on && col === 'transcribed' ? ' transcribed' : '') + (col === 'audio' ? ' audio' : ''), t ? t[0] : '');
+  el.className = 'tag tag-' + col + (role ? ' role-' + col : '') + (on && col === 'host' ? ' host-badge' : '') + (on && col === 'transcribed' ? ' transcribed' : '') + (col === 'audio' ? ' audio' : '');
+  if (el.textContent !== (t ? t[0] : '')) el.textContent = t ? t[0] : '';
+  el.dataset.col = col;
+  delete el.dataset.state;
+  delete el.dataset.tip;
+  el.removeAttribute('aria-label');
   if (col === 'audio') {
     el.dataset.state = t[3];
-    el.title = t[2];
+    el.dataset.tip = t[2];
     el.setAttribute('aria-label', t[2]);
   } else if (t) {
-    el.title = t[2];
+    el.dataset.tip = t[2];
     el.setAttribute('aria-label', t[1]);
   }
   if (!on) el.classList.add('blank');

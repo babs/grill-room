@@ -80,6 +80,7 @@
 </div>
 <div id="person-menu" class="menu" popover></div>
 <div id="person-card" class="person-card" role="tooltip" popover="manual"></div>
+<div id="person-tip" class="tip" popover="manual" aria-hidden="true"></div>
 <div id="msg-menu" class="menu msg-menu" popover>
   <button type="button" id="msg-edit">Edit</button>
   <button type="button" id="msg-delete">Delete</button>
@@ -291,7 +292,7 @@
     <section id="people-pane" aria-labelledby="people-title">
       <div class="pane-head">
         <button type="button" id="people-fold" class="fold" aria-controls="participants" aria-expanded="true" aria-label="People"></button>
-        <h2 id="people-title"><span class="sec-icon" aria-hidden="true">👥</span> <span class="sec-label">People</span></h2>
+        <h2 id="people-title"><svg class="ico sec-icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> <span class="sec-label">People</span></h2>
       </div>
       <h3 class="people">In the room</h3>
       <ul id="participants"></ul>
@@ -300,7 +301,7 @@
     <section id="docs-pane" aria-labelledby="docs-title">
       <div class="pane-head">
         <button type="button" id="docs-fold" class="fold" aria-controls="documents" aria-expanded="true" aria-label="Documents"></button>
-        <h2 id="docs-title"><span class="sec-icon" aria-hidden="true">📄</span> <span class="sec-label">Documents</span></h2>
+        <h2 id="docs-title"><svg class="ico sec-icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg> <span class="sec-label">Documents</span></h2>
         <a id="docs-window" class="head-action" aria-label="Open documents in a new window" title="Open documents in a new window"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></a>
         <button type="button" id="upload-open" class="head-action" aria-label="Add documents" title="Add documents">+</button>
       </div>
@@ -339,7 +340,7 @@
       <div id="notes-handle" class="pane-handle" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="annotations" aria-label="Resize the notes"></div>
       <aside id="annotations" aria-label="Annotations">
         <button type="button" id="notes-back" class="btn-secondary">← Back to the document</button>
-        <div class="pane-head"><h2 id="notes-title"><span class="sec-icon" aria-hidden="true">💬</span> <span class="sec-label">Notes</span></h2></div>
+        <div class="pane-head"><h2 id="notes-title"><svg class="ico sec-icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> <span class="sec-label">Notes</span></h2></div>
         <p id="notes-watcher" class="hint" hidden></p>
         <div class="annot-tools">
           <button type="button" id="annot-doc">Comment on the document</button>
@@ -357,6 +358,7 @@
         </form>
         <p id="annot-status" class="said error" role="status"></p>
         <ol id="annot-list"></ol>
+        <p id="annot-empty" class="empty" hidden>No notes yet.</p>
       </aside>
     </div>
   </section>

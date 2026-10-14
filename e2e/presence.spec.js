@@ -36,7 +36,7 @@ test('participant list on a phone follows the server presence', async ({ browser
   const me = row(carol, 'Carol');
   await expect(me.locator('.tag:not(.blank):is(.role-you, .role-host, .role-admin)')).toHaveCount(2);
   await expect(me.locator('.role-you')).toHaveAttribute('aria-label', 'you');
-  await expect(me.locator('.role-admin')).toHaveAttribute('title', /Room admin/);
+  await expect(me.locator('.role-admin')).toHaveAttribute('data-tip', /Room admin/);
   await expect(row(carol, 'Bob').locator('.tag:not(.blank):is(.role-you, .role-host, .role-admin)')).toHaveCount(0);
   await expect(row(carol, 'Bob').locator('.audio')).toHaveAttribute('data-state', 'none');
 
@@ -46,7 +46,7 @@ test('participant list on a phone follows the server presence', async ({ browser
   }).then((r) => r.status), [room.id, body]);
   expect(await beat({ tab: 'bob-second', audio: true, muted: true })).toBe(204);
   await expect(row(carol, 'Bob').locator('.audio')).toHaveAttribute('data-state', 'muted');
-  await expect(row(carol, 'Bob').locator('.audio')).toHaveAttribute('title', 'Muted');
+  await expect(row(carol, 'Bob').locator('.audio')).toHaveAttribute('data-tip', 'Muted');
   // That tab closes: its audio goes at once, Bob stays, his first tab still open.
   expect(await beat({ tab: 'bob-second', gone: true })).toBe(204);
   await expect(row(carol, 'Bob').locator('.audio')).toHaveAttribute('data-state', 'none');
@@ -87,10 +87,14 @@ test('participant list shows audio states and transcription', async ({ browser, 
   await alice.reload();
   const state = (name) => row(alice, name).locator('.audio');
   await expect(state('Alice')).toHaveAttribute('data-state', 'live');
-  await expect(state('Alice')).toHaveAttribute('title', 'Mic live');
+  await expect(state('Alice')).toHaveAttribute('data-tip', 'Mic live');
+  // 009-AC36: the meaning shows in the styled tip, not a native title.
+  await state('Alice').hover();
+  await expect(alice.locator('#person-tip')).toHaveText('Mic live');
+  await expect(alice.locator('#participants [title], #participants-away [title]')).toHaveCount(0);
   await expect(state('Bob')).toHaveAttribute('data-state', 'muted');
   await expect(state('Carol')).toHaveAttribute('data-state', 'listening');
-  await expect(state('Carol')).toHaveAttribute('title', 'Listening only, deafened: hears nobody');
+  await expect(state('Carol')).toHaveAttribute('data-tip', 'Listening only, deafened: hears nobody');
   await expect(state('Carol')).toContainText('🔕');
   await expect(state('Dan')).toHaveAttribute('data-state', 'none');
   for (const [name, n] of [['Alice', 1], ['Bob', 1], ['Carol', 0], ['Dan', 0]]) {
@@ -232,4 +236,24 @@ test('a person menu, not in-place settings', async ({ browser, request }) => {
   expect(await smallTargets(alice), 'person menu at 390 px').toEqual([]);
   await menu.getByRole('button', { name: 'Make room admin' }).click();
   await expect(row(alice, 'Robert').locator('.role-admin')).toHaveAttribute('aria-label', 'admin');
+});
+
+// 009-AC36: a presence change re-renders People while a badge tip is open: the tip follows its
+// badge's new meaning, anchored under it, never left at the page's corner.
+test('a badge tip survives a presence re-render', async ({ browser, request }) => {
+  const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  const audio = row(alice, 'Bob').locator('.audio');
+  const beat = (body) => bob.evaluate(([id, b]) => fetch(`/api/rooms/${id}/presence`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b),
+  }).then((r) => r.status), [room.id, body]);
+  expect(await beat({ tab: 'bob-second', audio: true })).toBe(204);
+  await expect(audio).toHaveAttribute('data-state', 'listening');
+  await audio.hover();
+  const tip = alice.locator('#person-tip');
+  await expect(tip).toHaveText('Listening only');
+  expect(await beat({ tab: 'bob-second', audio: true, muted: true })).toBe(204);
+  await expect(audio).toHaveAttribute('data-state', 'muted');
+  await expect(tip).toHaveText('Muted');
+  const [t, a] = [await tip.boundingBox(), await audio.boundingBox()];
+  expect(Math.abs(t.y - (a.y + a.height + 4)) <= 1 || Math.abs(t.y + t.height - (a.y - 4)) <= 1).toBe(true);
 });

@@ -69,7 +69,9 @@ Private repos are fetched by the host's daemon with the host's own git access, a
 
 ### People details card (user, 2026-10-14)
 
-- [ ] **AC36** Hovering or focusing a person in People, or their name on a chat line, shows a details card; on touch, a tap on the person opens it, and `⋯` stays its own target. The card lists the display name (and the earlier name after a rename), roles (you, room admin, AI host, standby host when their app is connected), "Can ask the AI", the audio state (mic live, muted, listening only, room muted, not in audio), transcribed or not, seen ago or here since, and joined at. It takes extra lines (spec 010 adds where transcription runs). It is a non-modal popover or `role=tooltip` tied by `aria-describedby`, closes on Escape, never covers the `⋯` menu, and follows `docs/design.md`. It never shows an IP or a user agent: those stay in `/admin`, super-admin only. Badges stay as they are.
+- [ ] **AC36** Hovering or focusing a person in People, or their name on a chat line, shows a details card; on touch, a tap on the person opens it, and `⋯` stays its own target. The card lists the display name (and the earlier name after a rename), roles (you, room admin, AI host, standby host when their app is connected), "Can ask the AI", the audio state (mic live, muted, listening only, room muted, not in audio), transcribed or not, seen ago or here since, and joined at. It takes extra lines (spec 010 adds where transcription runs). It is a non-modal popover or `role=tooltip` tied by `aria-describedby`, closes on Escape, never covers the `⋯` menu, and follows `docs/design.md`. It is a styled HTML card, never a native `title` tooltip: it opens after a short hover delay (about 300 ms), stays open while the pointer moves onto it, sits next to the row and flips at the viewport edges, with the normal cursor. People rows and chat author names carry no `title` attribute and no `cursor: help`; one-line badge meanings use the same styled tooltip. It never shows an IP or a user agent: those stay in `/admin`, super-admin only.
+
+- [ ] **AC37** The side panel's section headers (People, Documents, Notes) show no emoji: a monochrome inline SVG from the icon-button set (stroke, `currentColor`, text size), or no icon when the set has no clean match. The disclosure triangle stays on the left, set by one CSS class so moving it is a one-line change. An expanded, empty Documents shows "No documents yet" and a hint to drop files or press +; Notes shows "No notes yet"; every list in these panels that can be empty says so. `docs/design.md` says emoji are never UI icons in chrome, only where people put them (persona badges).
 
 ### Host transfer (notes, 2026-10-14)
 
@@ -122,7 +124,7 @@ Private repos are fetched by the host's daemon with the host's own git access, a
 
 ### Phase 1 — Persona management, note mentions, notes watcher, host transfer
 - Work: compact list, tabbed sheet with deep links, `⋯` menu, Capabilities with skills only; mentions in notes with their chip, thread ownership in the prompt and the result; the watcher setting, its debounce and badge; "Make AI host" for room admins and the super-admin.
-- **Covers**: AC1, AC2, AC3, AC4, AC35, AC29, AC30, AC31, AC32, AC33, AC34, AC36
+- **Covers**: AC1, AC2, AC3, AC4, AC35, AC29, AC30, AC31, AC32, AC33, AC34, AC36, AC37
 - **Data model impact**: `room_personas.watches_notes` (at most one per room, a partial unique index); note-message mention links (`annotation_message_turns`, like `message_turns`); a `notes_watch` turn source and cause; an audit action for host transfer
 - **DoD**:
   - Playwright at 390 and 1440 px: one-line rows (bounding boxes), each tab's deep link, keyboard-only through tabs and `⋯`; a test listing every control id of the 005 sheet finds each one in the new sheet; the existing persona e2e specs green on the new selectors; before and after screenshots in the tracking file;
@@ -130,6 +132,7 @@ Private repos are fetched by the host's daemon with the host's own git access, a
   - watcher unit tests with an injected clock: two messages 10 s apart start one turn 20 s after the second; its own reply starts nothing; a thread naming a persona starts nothing; the auto-turn limit stops it; moving the role leaves one watcher;
   - host transfer: room admin (not host) moves the role (204, chat line, audit entry), member 403, no daemon 409, super-admin route; a turn running on the old host finishes there while the next queued turn goes to the new host (two fake daemons);
   - Playwright: the details card opens on hover, focus and tap, with the right lines for a host, a room admin and a member, and no IP or user agent;
+  - Playwright: the empty-state lines of Documents and Notes, and no `\p{Extended_Pictographic}` character in the side panel's section headers;
   - one live haiku turn on the lab started by the watcher.
 
 ### Phase 2 — Public plugins: add, pin, snapshot, approval, delivery
@@ -180,6 +183,7 @@ Folded from the notes after the draft (2026-10-14):
 - 006 shipped: "Save as starter" and room creation from a starter are real code, so AC28 extends the starter manifest and `starter_files` (006-AC6) instead of a new store.
 - A thread belongs to a persona when a participant's message in it names that persona; a persona's own `@name` in its reply does not claim the thread (coordinator, overturnable).
 - Under 40rem a persona row reads "sonnet · medium · on mention only" and shows its state as the pill's state dot (shape per state, the word in its accessible name and tooltip), so the trigger always fits (009-AC1; routine call, overturnable).
+- AC37, plain section icons, the triangle as one CSS decision and empty states, is the user's (2026-10-14, after running 008 live).
 - AC36, the People details card, is the user's (2026-10-14); it joins Phase 1 next to the People `⋯` work.
 - AC35, a failed module load says so, was added by the coordinator after the v0.0.15 lab run (routine call, overturnable).
 - The watcher's turns use the room's queue and auto-turn limit, like "every N" turns; a press of the watcher by a human is a normal press (coordinator, overturnable).

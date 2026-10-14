@@ -15,7 +15,8 @@ async function lines(page) {
 // 009-AC36: hovering or focusing a person in People or their name on a chat line shows their
 // details card, which the pointer may move onto, closed by Escape. It lists the earlier name, the
 // roles, the right to ask the AI, audio, transcription, presence and join time, never an IP or a
-// user agent, and stays clear of the ⋯ column. On touch a tap opens it, and ⋯ still opens the menu.
+// user agent, flips above the last row at the bottom edge and stays clear of the ⋯ column. No native
+// title tooltip there. On touch a tap opens it, and ⋯ still opens the menu.
 test('the people details card', async ({ browser, request, baseURL }) => {
   const { room, pages: [alice, bob, carol] } = await roomWith(browser, request, ['Alice', 'Bob', 'Carol']);
   await appointAdmin(alice, request, room.id);
@@ -35,13 +36,45 @@ test('the people details card', async ({ browser, request, baseURL }) => {
     expect(host[5]).toMatch(/^Here since /);
     expect(host[6]).toMatch(/^Joined /);
     expect(host).toHaveLength(7);
-    await expect(bobName).toHaveAttribute('aria-describedby', 'person-card');
-    // The pointer can move onto the card to read it (WCAG 1.4.13), and leaving it closes it.
-    await alice.locator('#person-card').hover();
-    await expect(alice.locator('#person-card')).toBeVisible();
+    // A re-render, here Bob joining the audio from another tab, keeps the open card and refreshes it.
+    // Opened by focus: a resting pointer would reopen a closed card and hide the fault.
     await alice.mouse.move(0, 0);
     await expect(alice.locator('#person-card')).toBeHidden();
+    await bobName.focus();
+    const beat = (body) => bob.evaluate(([id, b]) => fetch(`/api/rooms/${id}/presence`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b),
+    }).then((r) => r.status), [room.id, body]);
+    expect(await beat({ tab: 'bob-second', audio: true })).toBe(204);
+    await expect(alice.locator('#person-card')).toContainText('Audio: listening only');
+    await expect(alice.locator('#person-card')).toBeVisible();
+    expect(await beat({ tab: 'bob-second', gone: true })).toBe(204);
+    await expect(alice.locator('#person-card')).toContainText('Audio: not in the audio');
+    await expect(alice.locator('#person-card')).toBeVisible();
+    await expect(row(alice, 'Bob').locator('.name')).toHaveAttribute('aria-describedby', 'person-card');
     await bobName.hover();
+    await expect(bobName).toHaveAttribute('aria-describedby', 'person-card');
+    // The pointer can travel onto the card to read it (WCAG 1.4.13), across the gap under the name,
+    // and leaving it closes it.
+    const cb = await alice.locator('#person-card').boundingBox();
+    await alice.mouse.move(cb.x + cb.width / 2, cb.y + cb.height / 2, { steps: 10 });
+    await expect(alice.locator('#person-card')).toBeVisible();
+    await expect(alice.locator('#person-card strong')).toHaveText('Bob');
+    await expect(bobName).toHaveAttribute('aria-describedby', 'person-card');
+    // The same for a badge's tip.
+    await alice.mouse.move(0, 0);
+    await expect(alice.locator('#person-card')).toBeHidden();
+    const hostTag = row(alice, 'Bob').locator('.role-host');
+    await hostTag.hover();
+    await expect(alice.locator('#person-tip')).toBeVisible();
+    const tb = await alice.locator('#person-tip').boundingBox();
+    await alice.mouse.move(tb.x + tb.width / 2, tb.y + tb.height / 2, { steps: 10 });
+    await expect(alice.locator('#person-tip')).toBeVisible();
+    await expect(alice.locator('#person-tip')).toHaveText(/AI host/);
+    await alice.mouse.move(0, 0);
+    await expect(alice.locator('#person-tip')).toBeHidden();
+    await expect(alice.locator('#person-card')).toBeHidden();
+    await bobName.hover();
+    await expect(alice.locator('#person-card')).toBeVisible();
     const card = await alice.locator('#person-card').boundingBox();
     const more = await row(alice, 'Bob').locator('.person-more').boundingBox();
     expect(card.x + card.width).toBeLessThanOrEqual(more.x);
@@ -80,6 +113,21 @@ test('the people details card', async ({ browser, request, baseURL }) => {
     expect((await lines(alice))[0]).toBe('Bob');
     await expect(line).toHaveAttribute('aria-describedby', 'person-card');
     await alice.keyboard.press('Escape');
+    // No native tooltip nor help cursor in People or on author names: the card and the tip say it.
+    await expect(alice.locator('#participants [title], #participants-away [title], #messages .sender[title]')).toHaveCount(0);
+    expect(await alice.locator('#participants .tag:not(.blank)').first().evaluate((el) => getComputedStyle(el).cursor)).not.toBe('help');
+
+    // The last row at the bottom edge: the card flips above it, still clear of the ⋯ column.
+    const last = alice.locator('#participants li').last();
+    const lb = await last.boundingBox();
+    await alice.setViewportSize({ width: 1280, height: Math.ceil(lb.y + lb.height + 12) });
+    await last.locator('.name').hover();
+    await expect(alice.locator('#person-card')).toBeVisible();
+    const flipped = await alice.locator('#person-card').boundingBox();
+    expect(flipped.y + flipped.height).toBeLessThanOrEqual((await last.locator('.name').boundingBox()).y);
+    expect(flipped.y).toBeGreaterThanOrEqual(0);
+    expect(flipped.x + flipped.width).toBeLessThanOrEqual((await last.locator('.person-more').boundingBox()).x);
+    await alice.mouse.move(0, 0);
 
     // Touch: a tap opens the card; ⋯ stays its own target, opens the menu and closes the card.
     const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
@@ -94,6 +142,10 @@ test('the people details card', async ({ browser, request, baseURL }) => {
     await phone.locator('#tabbar button[data-tab=people]').tap();
     await row(phone, 'Bob').locator('.name').tap();
     expect((await lines(phone)).slice(0, 2)).toEqual(['Bob', 'Roles: AI host']);
+    // On a narrow screen it stays inside the viewport, left of the ⋯ column.
+    const narrow = await phone.locator('#person-card').boundingBox();
+    expect(narrow.x).toBeGreaterThanOrEqual(0);
+    expect(narrow.x + narrow.width).toBeLessThanOrEqual((await row(phone, 'Bob').locator('.person-more').boundingBox()).x);
     await row(phone, 'Bob').locator('.person-more').tap();
     await expect(phone.locator('#person-menu')).toBeVisible();
     await expect(phone.locator('#person-card')).toBeHidden();
