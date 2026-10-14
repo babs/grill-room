@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
 import { roomWith, menuItem } from './helpers.js';
 import { snoozeKey } from './quiet-push.js';

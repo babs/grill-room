@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { roomWith, menuItem, playSTT } from './helpers.js';
 
 // 005-AC23: any member edits the transcription glossary in Manage, sees how many terms the prompt

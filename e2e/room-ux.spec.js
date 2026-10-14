@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
 import { roomWith, signIn, noOverflow, upload, annotateSelection, menuItem, docAction, playSTT, newRoomEditor } from './helpers.js';
 

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { readFileSync } from 'node:fs';
 import { adminToken } from './playwright.config.js';
 import { roomWith, upload, smallTargets, noOverflow } from './helpers.js';

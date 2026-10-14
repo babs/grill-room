@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { roomWith, startDaemon, pairDaemon } from './helpers.js';
 
 // 003-AC18: one supervisor serves two rooms. With the global cap at one, a press in the second

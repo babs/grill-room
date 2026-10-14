@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { roomWith, startDaemon, pairDaemon, upload, stopDaemon, confirmSheet, personMenu, personaSheet, personaAction, closePersonas } from './helpers.js';
 
 const led = (page) => page.locator('button.persona[data-name="Grill"] .led');

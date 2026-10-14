@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { roomWith } from './helpers.js';
 
 // 001-AC22: a pairing request is approved with one click in the participant's room session; the

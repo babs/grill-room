@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { roomWith, startDaemon, pairDaemon, menuItem, confirmSheet, personaRow, personaSheet, addSecretary, upload, commentOnDocument } from './helpers.js';
 
 const agentLines = (page) => page.locator('#messages li.msg.agent');

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { mkdirSync } from 'node:fs';
 import { adminToken } from './playwright.config.js';
 import { roomWith, signIn, upload, startDaemon, smallTargets, menuItem, playSTT, newRoomEditor, personaAction } from './helpers.js';

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { roomWith, upload, appointAdmin, personaSheet, closePersonas, commentOnDocument } from './helpers.js';
 
 // One guard per defect class of the v0.0.17 visual check (docs/design.md): each failed there.

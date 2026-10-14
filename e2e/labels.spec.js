@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { roomWith, menuItem, personaRow, personaSheet } from './helpers.js';
 
 // 005-AC9 009-AC1: the persona sheet offers explicit models and efforts only, never a default, and
