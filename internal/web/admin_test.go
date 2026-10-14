@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -488,8 +489,16 @@ func TestAdminPage(t *testing.T) {
 			t.Fatalf("%s csp: %s", path, csp)
 		}
 	}
-	for _, p := range []string{"/static/esm/preact.js", "/static/esm/signals.js", "/static/esm/htm-preact.js", "/static/admin/admin.js",
-		"/static/admin/room-admin.js", "/static/admin/room-panel.js", "/static/admin/starters.js", "/static/admin/profile-starters.js"} {
+	// Every module under ui/admin, so a new one cannot ship unserved.
+	mods, err := fs.Glob(ui, "ui/admin/*.js")
+	if err != nil || len(mods) < 6 {
+		t.Fatalf("admin modules: %v %v", mods, err)
+	}
+	paths := []string{"/static/esm/preact.js", "/static/esm/signals.js", "/static/esm/htm-preact.js"}
+	for _, m := range mods {
+		paths = append(paths, "/static/"+strings.TrimPrefix(m, "ui/"))
+	}
+	for _, p := range paths {
 		if code, _ := e.do(t, "GET", p, "", nil); code != http.StatusOK {
 			t.Errorf("%s: %d", p, code)
 		}

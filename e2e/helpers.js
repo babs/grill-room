@@ -397,9 +397,10 @@ export function sandboxPrompts(daemon) {
 }
 
 // fakeDaemon pairs an AI host app for page's participant through the API, as the daemon does,
-// keeps its stream open and reports it ready to host: enough for People and hand-overs, with no
-// Docker (009-AC33). Returns its disconnect.
-export async function fakeDaemon(page, baseURL, roomID, name) {
+// keeps its stream open and reports it ready to host, with settings (approve_all): enough for
+// People, hand-overs and plugin inspection reports, with no Docker (009-AC33). Returns its
+// disconnect, which carries the daemon's token as .token.
+export async function fakeDaemon(page, baseURL, roomID, name, settings = {}) {
   const base = `${baseURL}/api/rooms/${roomID}`;
   const json = { 'Content-Type': 'application/json' };
   const p = await (await fetch(`${base}/pairings`, { method: 'POST', headers: json, body: JSON.stringify({ name }) })).json();
@@ -410,9 +411,9 @@ export async function fakeDaemon(page, baseURL, roomID, name) {
   const stream = new AbortController();
   const events = await fetch(`${base}/daemon/events`, { headers: auth, signal: stream.signal });
   events.body.pipeTo(new WritableStream()).catch(() => {});
-  const st = await fetch(`${base}/daemon/status`, { method: 'POST', headers: { ...auth, ...json }, body: JSON.stringify({ can_host: true }) });
+  const st = await fetch(`${base}/daemon/status`, { method: 'POST', headers: { ...auth, ...json }, body: JSON.stringify({ can_host: true, ...settings }) });
   expect(st.status).toBe(204);
-  return () => stream.abort();
+  return Object.assign(() => stream.abort(), { token });
 }
 
 // appointAdmin makes page's participant a room admin, as the super-admin, and reloads the page.

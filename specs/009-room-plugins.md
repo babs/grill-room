@@ -73,6 +73,10 @@ Private repos are fetched by the host's daemon with the host's own git access, a
 
 - [ ] **AC37** The side panel's section headers (People, Documents, Notes) show no emoji: a monochrome inline SVG from the icon-button set (stroke, `currentColor`, text size), or no icon when the set has no clean match. The disclosure triangle stays on the left, set by one CSS class so moving it is a one-line change. An expanded, empty Documents shows "No documents yet" and a hint to drop files or press +; Notes shows "No notes yet"; every list in these panels that can be empty says so. `docs/design.md` says emoji are never UI icons in chrome, only where people put them (persona badges).
 
+- [ ] **AC38** Every `⋯` menu (room header, documents, People rows, persona sheet, docs window, `/admin`) uses one menu-item style for links and buttons alike: one font size, line height and padding, and an optional leading icon column of fixed width; when any item of a menu has an icon, every item's text starts at the same x (±1 px). An e2e opens each menu and asserts equal computed font size and height and the same text left edge on all its items. `docs/design.md` states the rule.
+
+- [ ] **AC39** In People rows and the side panel's section headers, every icon (status dot, badges, disclosure triangle, section icon, header buttons) sits on the text's centre line: its box's vertical centre equals the text's within ±1 px, at 390 and 1440 px. One shared rule: flex rows centred on a fixed line height, icons as block SVGs in fixed square boxes, badges as tall as the text line, no `vertical-align` tweaks.
+
 ### Host transfer (notes, 2026-10-14)
 
 - [ ] **AC33** A room admin, whether host or not, makes any participant whose AI host app is connected and can host the AI host, from People › `⋯` › "Make AI host". The super-admin does the same from `/admin`'s room view. A plain member who is not the host gets a 403; a participant without a connected app gets a 409 with the reason. The host's own hand-over (003) keeps working.
@@ -124,7 +128,7 @@ Private repos are fetched by the host's daemon with the host's own git access, a
 
 ### Phase 1 — Persona management, note mentions, notes watcher, host transfer
 - Work: compact list, tabbed sheet with deep links, `⋯` menu, Capabilities with skills only; mentions in notes with their chip, thread ownership in the prompt and the result; the watcher setting, its debounce and badge; "Make AI host" for room admins and the super-admin.
-- **Covers**: AC1, AC2, AC3, AC4, AC35, AC29, AC30, AC31, AC32, AC33, AC34, AC36, AC37
+- **Covers**: AC1, AC2, AC3, AC4, AC35, AC29, AC30, AC31, AC32, AC33, AC34, AC36, AC37, AC38, AC39
 - **Data model impact**: `room_personas.watches_notes` (at most one per room, a partial unique index); note-message mention links (`annotation_message_turns`, like `message_turns`); a `notes_watch` turn source and cause; an audit action for host transfer
 - **DoD**:
   - Playwright at 390 and 1440 px: one-line rows (bounding boxes), each tab's deep link, keyboard-only through tabs and `⋯`; a test listing every control id of the 005 sheet finds each one in the new sheet; the existing persona e2e specs green on the new selectors; before and after screenshots in the tracking file;
@@ -183,6 +187,7 @@ Folded from the notes after the draft (2026-10-14):
 - 006 shipped: "Save as starter" and room creation from a starter are real code, so AC28 extends the starter manifest and `starter_files` (006-AC6) instead of a new store.
 - A thread belongs to a persona when a participant's message in it names that persona; a persona's own `@name` in its reply does not claim the thread (coordinator, overturnable).
 - Under 40rem a persona row reads "sonnet · medium · on mention only" and shows its state as the pill's state dot (shape per state, the word in its accessible name and tooltip), so the trigger always fits (009-AC1; routine call, overturnable).
+- AC38, one menu-item style, and AC39, icons centred on the text line, are the user's (2026-10-14 screenshots: "Open documents in a new window" and "My rooms and profile" larger than their siblings; badges and header icons above the text's centre).
 - AC37, plain section icons, the triangle as one CSS decision and empty states, is the user's (2026-10-14, after running 008 live).
 - AC36, the People details card, is the user's (2026-10-14); it joins Phase 1 next to the People `⋯` work.
 - AC35, a failed module load says so, was added by the coordinator after the v0.0.15 lab run (routine call, overturnable).

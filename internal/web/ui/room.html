@@ -92,7 +92,7 @@
 <div id="strip" class="status-strip">
 <p id="reconnecting" class="strip" role="status" hidden>Reconnecting…</p>
 <p id="voice-error" class="strip" role="alert" hidden></p>
-<section id="approvals" class="strip" aria-label="Waiting for the AI host" hidden>
+<section id="approvals" class="strip" aria-label="Waiting for the AI host" tabindex="-1" hidden>
   <ul id="approval-list"></ul>
 </section>
 <p id="chain-paused" class="strip" role="alert" hidden><span id="chain-paused-text"></span>
@@ -162,6 +162,9 @@
   <div id="room-admin"></div>
 </dialog>
 <dialog id="starter-save-sheet" class="sheet wide full" aria-labelledby="starter-save-title"></dialog>
+<!-- Room plugins (admin/plugins.js, 009-AC5 to 009-AC15): the add sheet and the approval sheet. -->
+<dialog id="plugin-add" class="sheet wide full" aria-labelledby="plugin-add-title"></dialog>
+<dialog id="plugin-review" class="sheet wide full" aria-labelledby="plugin-review-title"></dialog>
 <dialog id="rename" class="sheet" aria-labelledby="rename-title">
   <form id="rename-form" class="stack">
     <h2 id="rename-title">Your name in this room</h2>

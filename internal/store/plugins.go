@@ -43,12 +43,12 @@ const purgePlugins = `DELETE FROM room_plugins WHERE removed_at IS NOT NULL AND 
 	SELECT v.plugin_id FROM turns t, json_each(t.plugins) j JOIN plugin_versions v ON v.id = json_extract(j.value, '$.version_id')
 	WHERE t.status = 'running')`
 
-// dropSuperseded empties the snapshots of versions older than their plugin's running one that no
+// dropSuperseded deletes the snapshots of versions older than their plugin's running one that no
 // running turn loads: no turn will load them again, and the room's quota counts their bytes. The
-// rows stay for the history; a change summary needs the running version's file list only.
-const dropSuperseded = `UPDATE plugin_versions SET data = x'' WHERE length(data) > 0 AND state != 'inspecting'
-	AND n < (SELECT max(w.n) FROM plugin_versions w WHERE w.plugin_id = plugin_versions.plugin_id AND w.state = 'approved')
-	AND id NOT IN (SELECT json_extract(j.value, '$.version_id') FROM turns t, json_each(t.plugins) j WHERE t.status = 'running')`
+// version rows stay for the history; a change summary needs the running version's file list only.
+const dropSuperseded = `DELETE FROM plugin_snapshots WHERE version_id IN (SELECT v.id FROM plugin_versions v WHERE v.state != 'inspecting'
+	AND v.n < (SELECT max(w.n) FROM plugin_versions w WHERE w.plugin_id = v.plugin_id AND w.state = 'approved'))
+	AND version_id NOT IN (SELECT json_extract(j.value, '$.version_id') FROM turns t, json_each(t.plugins) j WHERE t.status = 'running')`
 
 // PluginVersion is one snapshot of a room plugin. Manifest is what the server read from its files;
 // Report is what the host's daemon found when it inspected it. FileList is the snapshot's
@@ -199,11 +199,18 @@ func (s *Store) AddPlugins(ctx context.Context, roomID string, ps []NewPlugin, p
 }
 
 func insertPluginVersion(ctx context.Context, tx *sql.Tx, pluginID int64, n int, v PluginSnapshot, by *Participant) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO plugin_versions(plugin_id, n, commit_sha, sha256, size, files, file_list, data, manifest, state,
-		added_by_name, added_by_id, added_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		pluginID, n, v.Commit, v.SHA256, v.Size, v.Files, string(v.FileList), v.Data, string(v.Manifest), PluginInspecting, by.Name, nullID(by.ID), now())
+	res, err := tx.ExecContext(ctx, `INSERT INTO plugin_versions(plugin_id, n, commit_sha, sha256, size, files, file_list, manifest, state,
+		added_by_name, added_by_id, added_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		pluginID, n, v.Commit, v.SHA256, v.Size, v.Files, string(v.FileList), string(v.Manifest), PluginInspecting, by.Name, nullID(by.ID), now())
 	if err != nil {
 		return fmt.Errorf("insert plugin version: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("insert plugin version: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO plugin_snapshots(version_id, data) VALUES(?, ?)`, id, v.Data); err != nil {
+		return fmt.Errorf("insert plugin snapshot: %w", err)
 	}
 	return nil
 }
@@ -387,11 +394,12 @@ func (s *Store) InspectingVersions(ctx context.Context, roomID string) ([]int64,
 	return out, rows.Err()
 }
 
-// PluginVersionData returns the snapshot tar of version id, a version of a plugin of room.
-// ErrNotFound.
+// PluginVersionData returns the snapshot tar of version id, a version of a plugin of room, empty
+// once dropSuperseded deleted it. ErrNotFound.
 func (s *Store) PluginVersionData(ctx context.Context, roomID string, id int64) ([]byte, error) {
 	var data []byte
-	err := s.db.QueryRowContext(ctx, `SELECT v.data FROM plugin_versions v JOIN room_plugins p ON p.id = v.plugin_id
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(sn.data, x'') FROM plugin_versions v JOIN room_plugins p ON p.id = v.plugin_id
+		LEFT JOIN plugin_snapshots sn ON sn.version_id = v.id
 		WHERE v.id = ? AND p.room_id = ? AND p.removed_at IS NULL`, id, roomID).Scan(&data)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -508,8 +516,9 @@ func (s *Store) TurnPlugins(ctx context.Context, roomID string, id int64) ([]Tur
 // ErrNotFound.
 func (s *Store) TurnPluginData(ctx context.Context, roomID string, id int64, sha256 string) ([]byte, error) {
 	var data []byte
-	err := s.db.QueryRowContext(ctx, `SELECT v.data FROM turns t, json_each(t.plugins) j
+	err := s.db.QueryRowContext(ctx, `SELECT sn.data FROM turns t, json_each(t.plugins) j
 		JOIN plugin_versions v ON v.id = json_extract(j.value, '$.version_id')
+		JOIN plugin_snapshots sn ON sn.version_id = v.id
 		WHERE t.id = ? AND t.room_id = ? AND v.sha256 = ? AND json_extract(j.value, '$.sha256') = ? LIMIT 1`, id, roomID, sha256, sha256).Scan(&data)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -518,6 +527,26 @@ func (s *Store) TurnPluginData(ctx context.Context, roomID string, id int64, sha
 		return nil, fmt.Errorf("turn plugin data: %w", err)
 	}
 	return data, nil
+}
+
+// pluginsVersionSQL reads only indexes: plugin_versions_state covers the version ids and states.
+const pluginsVersionSQL = `SELECT COALESCE(group_concat(k, ','), '') FROM (
+	SELECT v.id || v.state AS k FROM plugin_versions v JOIN room_plugins p ON p.id = v.plugin_id
+		WHERE p.room_id = ? AND p.removed_at IS NULL
+	UNION ALL SELECT 'a' || pp.persona_id || '.' || pp.plugin_id FROM room_persona_plugins pp JOIN room_plugins p ON p.id = pp.plugin_id
+		WHERE p.room_id = ? AND p.removed_at IS NULL
+	ORDER BY 1)`
+
+// PluginsVersion changes whenever the room's plugin list does: a plugin added or removed, a
+// version added or moved to another state, a persona's activation. The room stream sends a
+// "plugins" event on a change rather than the list itself, which holds manifests, reports and change summaries.
+func (s *Store) PluginsVersion(ctx context.Context, roomID string) (string, error) {
+	var v string
+	err := s.db.QueryRowContext(ctx, pluginsVersionSQL, roomID, roomID).Scan(&v)
+	if err != nil {
+		return "", fmt.Errorf("plugins version: %w", err)
+	}
+	return v, nil
 }
 
 // RoomPlugins lists the room's plugins by name, removed ones aside.

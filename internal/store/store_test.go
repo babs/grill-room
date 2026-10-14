@@ -390,7 +390,7 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 		}
 	}
 	// These reach rooms through another table, so roomRows cannot see them.
-	indirect := []string{"revisions", "annotation_messages", "attachments", "message_versions", "room_persona_skills", "plugin_versions", "room_persona_plugins"}
+	indirect := []string{"revisions", "annotation_messages", "attachments", "message_versions", "room_persona_skills", "plugin_versions", "plugin_snapshots", "room_persona_plugins"}
 	count := func(table string) int {
 		var n int
 		if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM "`+table+`"`).Scan(&n); err != nil {

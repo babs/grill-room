@@ -80,7 +80,8 @@ func (s *Store) roomOverviews(ctx context.Context, defaultQuota int64, roomID st
 		(SELECT COALESCE(SUM(octet_length(body) + COALESCE(octet_length(html), 0)), 0) FROM messages WHERE room_id = r.id)
 		+ (SELECT COALESCE(SUM(octet_length(v.body)), 0) FROM message_versions v JOIN messages m ON m.id = v.message_id WHERE m.room_id = r.id),
 		(SELECT COALESCE(SUM(length(v.data)), 0) FROM skill_versions v JOIN skills k ON k.id = v.skill_id WHERE k.room_id = r.id),
-		(SELECT COALESCE(SUM(length(v.data)), 0) FROM plugin_versions v JOIN room_plugins p ON p.id = v.plugin_id WHERE p.room_id = r.id),
+		(SELECT COALESCE(SUM(length(sn.data)), 0) FROM plugin_snapshots sn JOIN plugin_versions v ON v.id = sn.version_id
+			JOIN room_plugins p ON p.id = v.plugin_id WHERE p.room_id = r.id),
 		r.created_from
 		FROM rooms r WHERE ? = '' OR r.id = ? ORDER BY r.rowid DESC`, defaultQuota, roomID, roomID)
 	if err != nil {

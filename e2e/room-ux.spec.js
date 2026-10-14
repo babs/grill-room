@@ -86,7 +86,7 @@ for (const vp of widths) {
     const sheet = alice.locator('#manage');
     await expect(sheet).toBeVisible();
     await expect(sheet.getByRole('link', { name: 'Admins', exact: true })).toHaveAttribute('aria-current', 'page');
-    await expect(sheet.locator('#tab-general, #tab-invites, #tab-admins, #tab-personas, #tab-skills, #tab-documents, #tab-export, #tab-glossary')).toHaveCount(8);
+    await expect(sheet.locator('#tab-general, #tab-invites, #tab-admins, #tab-personas, #tab-skills, #tab-plugins, #tab-documents, #tab-export, #tab-glossary')).toHaveCount(9);
     const box = await sheet.boundingBox();
     if (vp.width < 400) expect(box.width).toBe(vp.width);
     else expect(box.width).toBeGreaterThan(900);

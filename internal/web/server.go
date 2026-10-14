@@ -926,14 +926,19 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 		}
 	}
 
-	// Read before the headers go out: a client lists the documents once the stream is open, and
-	// any change after this point reaches it as a "documents" event.
+	// Read before the headers go out: a client lists the documents and the plugins once the
+	// stream is open, and any change after this point reaches it as a "documents" or "plugins" event.
 	docsVersion, err := s.bus.Store.DocumentsVersion(r.Context(), room)
 	if err != nil {
 		s.serverError(w, "events_failed", err)
 		return
 	}
 	annVersion, err := s.bus.Store.AnnotationsVersion(r.Context(), room)
+	if err != nil {
+		s.serverError(w, "events_failed", err)
+		return
+	}
+	pluginsVersion, err := s.bus.Store.PluginsVersion(r.Context(), room)
 	if err != nil {
 		s.serverError(w, "events_failed", err)
 		return
@@ -1054,6 +1059,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 		}{
 			{"documents", &docsVersion, s.bus.Store.DocumentsVersion},
 			{"annotations", &annVersion, s.bus.Store.AnnotationsVersion},
+			{"plugins", &pluginsVersion, s.bus.Store.PluginsVersion},
 		} {
 			v, err := c.read(r.Context(), room)
 			if err != nil {

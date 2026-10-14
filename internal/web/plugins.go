@@ -102,9 +102,9 @@ func viewPlugin(p store.RoomPlugin, hostOnline bool) pluginView {
 		case store.PluginInspecting, store.PluginInvalid:
 			v.Why = last.Reason
 		case store.PluginPending:
-			v.Why = "waiting for the host's approval"
+			v.Why = "waiting for the AI host's approval"
 		case store.PluginRefused:
-			v.Why = "refused by the host"
+			v.Why = "refused by the AI host"
 		}
 	}
 	return v

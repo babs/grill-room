@@ -81,7 +81,7 @@ func roomUsage(ctx context.Context, db queryer, roomID string, defaultQuota int6
 			+ (SELECT COALESCE(SUM(t.size), 0) FROM attachments t
 				JOIN annotation_messages m ON m.id = t.message_id
 				JOIN annotations a ON a.id = m.annotation_id WHERE a.room_id = ?)
-			+ (SELECT COALESCE(SUM(length(v.data)), 0) FROM plugin_versions v
+			+ (SELECT COALESCE(SUM(length(sn.data)), 0) FROM plugin_snapshots sn JOIN plugin_versions v ON v.id = sn.version_id
 				JOIN room_plugins p ON p.id = v.plugin_id WHERE p.room_id = ?)`, roomID, defaultQuota, roomID, roomID, roomID).Scan(&quota, &used)
 	if err != nil {
 		return 0, 0, fmt.Errorf("room usage: %w", err)

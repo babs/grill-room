@@ -157,6 +157,32 @@ dialog#manage { width: min(64rem, calc(100vw - 1rem)); min-height: min(36rem, ca
 .persona-skills .skill-add { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
 .persona-skills .skill-add select { flex: 1; min-width: 10rem; width: auto; }
 #manage .said { color: var(--danger); }
+/* Room plugins (admin/plugins.js): the list, the add sheet and the approval sheet. */
+.persona-plugins li { flex-direction: column; align-items: stretch; gap: 0; }
+.persona-plugins li > label { color: var(--text); }
+.persona-plugins .plugin-total { margin: 0; font-weight: 600; }
+.plugin-list { list-style: none; margin: 0; padding: 0; }
+.plugin-list > li { display: flex; align-items: center; gap: var(--sp-2); min-height: 44px; padding: var(--sp-2) 0; border-bottom: 1px solid var(--border); }
+.plugin-text { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 2px; overflow-wrap: anywhere; }
+.plugin-text .hint { margin: 0; }
+.plugin-form { display: grid; gap: var(--sp-3); }
+.plugin-form label { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-sm); font-weight: 600; }
+.plugin-form input { width: 100%; }
+.plugin-form .row { display: flex; gap: var(--sp-2); }
+.plugin-pick { margin: var(--sp-3) 0; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-md); }
+.plugin-pick legend { font-size: var(--fs-sm); font-weight: 600; }
+.plugin-pick .pick { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--sp-2); }
+.plugin-pick .hint { margin: 0; overflow-wrap: anywhere; }
+.plugin-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr)); gap: var(--sp-2) var(--sp-4); margin: 0 0 var(--sp-3); }
+.plugin-facts > div:first-child { grid-column: 1 / -1; }
+.plugin-facts dt { color: var(--text-muted); font-size: var(--fs-sm); }
+.plugin-facts dd { margin: 0; overflow-wrap: anywhere; }
+#plugin-review h3 { font-size: var(--fs-md); margin: var(--sp-4) 0 var(--sp-1); }
+#plugin-review ul { margin: 0; padding-left: var(--sp-4); overflow-wrap: anywhere; }
+#plugin-review .plugin-risky { display: grid; gap: var(--sp-2); list-style: none; padding: 0; }
+.plugin-risky li { display: grid; gap: var(--sp-1); }
+/* A hook's or a server's command runs on the host's computer: the host reads each one. */
+code.risk { display: block; padding: var(--sp-1) var(--sp-2); border-left: 3px solid var(--accent); background: var(--warning-bg); color: var(--text); font-size: var(--fs-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* Side panel: people and documents */
 .layout { flex: 1; display: flex; min-height: 0; }

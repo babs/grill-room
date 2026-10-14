@@ -375,7 +375,7 @@ func hostDaemon(t *testing.T, s *Store) int64 {
 func dataLen(t *testing.T, s *Store, id int64) int {
 	t.Helper()
 	var n int
-	if err := s.db.QueryRowContext(context.Background(), `SELECT length(data) FROM plugin_versions WHERE id = ?`, id).Scan(&n); err != nil {
+	if err := s.db.QueryRowContext(context.Background(), `SELECT COALESCE((SELECT length(data) FROM plugin_snapshots WHERE version_id = ?), 0)`, id).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n
@@ -570,5 +570,82 @@ func TestDecideSupersededVersion(t *testing.T) {
 	}
 	if p = plugin(t, s, "a", p.ID); versionStates(p) != "v1:pending v2:approved" || p.Running().N != 2 {
 		t.Fatalf("states: %s", versionStates(p))
+	}
+}
+
+// 009-AC5 009-AC16: the room stream's plugins version moves on an add, a report, a persona's
+// activation and a removal, and only for that room.
+func TestPluginsVersion(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	r := newTurnRoom(t, s, "a")
+	rb := newTurnRoom(t, s, "b")
+	ver := func(room string) string {
+		t.Helper()
+		v, err := s.PluginsVersion(ctx, room)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	addPlugin(t, s, "b", rb.p, "other", "c1")
+	other := ver("b")
+	seen := map[string]bool{ver("a"): true}
+	step := func(what string) {
+		t.Helper()
+		v := ver("a")
+		if seen[v] {
+			t.Fatalf("%s: version %q seen before", what, v)
+		}
+		seen[v] = true
+	}
+	p := addPlugin(t, s, "a", r.p, "babs", "c1")
+	step("add")
+	if _, _, err := s.ReportPluginVersion(ctx, "a", p.Versions[0].ID, hostDaemon(t, s), true, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	step("report")
+	if err := s.SetPersonaPlugin(ctx, "a", r.grill.ID, p.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	step("on")
+	if _, err := s.RemovePlugin(ctx, "a", p.ID, r.p); err != nil {
+		t.Fatal(err)
+	}
+	if v := ver("a"); v != "" || ver("b") != other || other == "" {
+		t.Fatalf("after the removal: %q, other room %q then %q", v, other, ver("b"))
+	}
+}
+
+// The room stream runs PluginsVersion on every change in the room: it reads plugin_versions
+// through its covering index only, never the table where the rows sit.
+func TestPluginsVersionUsesTheCoveringIndex(t *testing.T) {
+	s := openTest(t)
+	rows, err := s.db.QueryContext(context.Background(), `EXPLAIN QUERY PLAN `+pluginsVersionSQL, "a", "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	all := strings.Join(plan, "\n")
+	if !strings.Contains(all, "SEARCH v USING COVERING INDEX plugin_versions_state") || strings.Contains(all, "SCAN v") {
+		t.Fatalf("plan:\n%s", all)
+	}
+}
+
+// Snapshot bytes live outside plugin_versions, so a scan of its rows never reads a tar.
+func TestPluginVersionsHoldNoSnapshot(t *testing.T) {
+	s := openTest(t)
+	var n int
+	if err := s.db.QueryRowContext(context.Background(), `SELECT count(*) FROM pragma_table_info('plugin_versions') WHERE type = 'BLOB'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("blob columns in plugin_versions: %d %v", n, err)
 	}
 }

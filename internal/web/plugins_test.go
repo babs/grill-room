@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
@@ -386,6 +387,7 @@ func TestPluginWritesNeedARoomAdmin(t *testing.T) {
 	}
 	id := e.plugins(t, r.room, r.alice.p.Token)[0].ID
 	bob := e.join(t, e.createInvite(t, r.room).Token, "Bob")
+	bobEvents := e.openEvents(t, r.room, bob.Token, "")
 	for _, c := range []struct{ method, path string }{
 		{"POST", base + "/check"}, {"POST", base}, {"POST", fmt.Sprintf("%s/%d/update", base, id)}, {"DELETE", fmt.Sprintf("%s/%d", base, id)},
 		{"PUT", fmt.Sprintf("/api/rooms/%s/personas/%d/plugins/%d", r.room, r.grill.ID, id)},
@@ -401,9 +403,13 @@ func TestPluginWritesNeedARoomAdmin(t *testing.T) {
 	}
 	// The room admin toggles; a 6th plugin is past the persona's limit (009-AC10).
 	toggle := fmt.Sprintf("/api/rooms/%s/personas/%d/plugins/%d", r.room, r.grill.ID, id)
-	for _, m := range []string{"PUT", "PUT", "DELETE"} {
+	for i, m := range []string{"PUT", "PUT", "DELETE"} {
 		if code, b := e.do(t, m, toggle, r.alice.p.Token, nil); code != http.StatusNoContent {
 			t.Fatalf("%s toggle: %d %s", m, code, b)
+		}
+		if i == 0 {
+			// A member's page hears of the change and reads the list again (009-AC16).
+			nextEvent(t, bobEvents, "plugins")
 		}
 	}
 	// Bob's daemon is no host: it neither reads a snapshot nor reports.
@@ -425,23 +431,50 @@ func TestInspectEventGoesToTheHostOnly(t *testing.T) {
 	e.appoint(t, r.room, r.alice.p.Participant.ID)
 	bd := e.daemonFor(t, r.room, "Bobby")
 	e.connect(t, r.room, bd, true)
+	// The stream opens with the room's state; the "room" events below must be the switches' own.
+	nextEvent(t, bd.events, "room")
 	_, url := marketRepo(t, gs).commit("skills.git")
 	if code, b := e.do(t, "POST", "/api/rooms/"+r.room+"/plugins", r.alice.p.Token, map[string]any{"url": url, "entries": []string{"babs"}}); code != http.StatusCreated {
 		t.Fatalf("add: %d %s", code, b)
 	}
 	nextEvent(t, r.alice.events, "inspect")
-	// Each switch of parallel turns sends both daemons a "room" event after anything the
-	// preceding changes sent: two of them bound what Bob's stream got for the add.
+	// Each switch of parallel turns sends Bob's daemon a "room" event naming it, written after
+	// anything the add made its stream send. The stream sends a state, not each change: the
+	// next switch waits until Bob's daemon saw this one.
 	for _, on := range []bool{true, false} {
 		if code, b := e.do(t, "PATCH", "/api/rooms/"+r.room+"/agent", r.alice.p.Token, map[string]bool{"parallel_turns": on}); code != http.StatusNoContent {
 			t.Fatalf("parallel: %d %s", code, b)
 		}
-		for ev := next(t, bd.events); ev.event != "room"; ev = next(t, bd.events) {
+		want := fmt.Sprintf(`"parallel_turns":%v`, on)
+		for ev := next(t, bd.events); ev.event != "room" || !strings.Contains(ev.data, want); ev = next(t, bd.events) {
 			if ev.event == "inspect" {
 				t.Fatalf("a non-host daemon got %+v", ev)
 			}
 		}
 	}
+}
+
+// 009-AC13: a version stored without any signal on the bus, as when a full buffer drops one,
+// still reaches the host's daemon at its next heartbeat.
+func TestInspectWithoutASignal(t *testing.T) {
+	old := heartbeat
+	heartbeat = 50 * time.Millisecond
+	t.Cleanup(func() { heartbeat = old })
+	e := newEnv(t)
+	r := newTurnRoom(t, e)
+	// Once the stream shows this switch, it has read every signal sent before: none is left to
+	// carry the version below.
+	if code, b := e.do(t, "PATCH", "/api/rooms/"+r.room+"/agent", r.alice.p.Token, map[string]bool{"parallel_turns": true}); code != http.StatusNoContent {
+		t.Fatalf("parallel: %d %s", code, b)
+	}
+	for ev := nextEvent(t, r.alice.events, "room"); !strings.Contains(ev.data, `"parallel_turns":true`); ev = nextEvent(t, r.alice.events, "room") {
+	}
+	if _, err := e.st.AddPlugins(t.Context(), r.room, []store.NewPlugin{{Name: "x", URL: "https://example.com/x", RefName: "main",
+		PluginSnapshot: store.PluginSnapshot{Commit: strings.Repeat("a", 40), SHA256: "s", FileList: []byte("[]"), Manifest: []byte("{}"), Data: []byte("t")}}},
+		nil, &r.alice.p.Participant, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	nextEvent(t, r.alice.events, "inspect")
 }
 
 // 009-AC7: a link with credentials is refused with the sentence the room shows, and neither
@@ -738,7 +771,7 @@ func TestCandidates(t *testing.T) {
 // 009-AC18: why a plugin with no running version does not load, by its latest version's state;
 // a stored manifest that does not parse reads as none.
 func TestViewPluginWhy(t *testing.T) {
-	for state, why := range map[string]string{store.PluginPending: "waiting for the host's approval", store.PluginRefused: "refused by the host",
+	for state, why := range map[string]string{store.PluginPending: "waiting for the AI host's approval", store.PluginRefused: "refused by the AI host",
 		store.PluginInspecting: "waiting for the AI host to check it"} {
 		p := store.RoomPlugin{Versions: []store.PluginVersion{{N: 1, Commit: "abc", State: state}}}
 		if got := viewPlugin(p, false).Why; got != why {

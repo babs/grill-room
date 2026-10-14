@@ -466,7 +466,9 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 		case <-r.Context().Done():
 			return
 		case <-tick.C:
-			if !alive() {
+			// The bus drops a signal when this stream's buffer is full of other rooms' ones: the
+			// heartbeat re-reads the room, so a turn, a stop or an inspection is at most that late.
+			if !alive() || !sendTurn() || !sendRoom() || !sendInspect() {
 				return
 			}
 			if _, err := io.WriteString(w, ": ping\n\n"); err != nil {

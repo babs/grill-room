@@ -111,6 +111,8 @@ async function loadRoom() {
   renameSenders();
   $('voice').hidden = !data.voice;
   showManage();
+  // An appointment or a step-down changes who turns plugins on (Capabilities).
+  renderPersonaSheet();
   renderParticipants();
   // The room admin panel (admin/room-admin.js) renders from the same answer.
   window.grillRoom = data;
@@ -1582,6 +1584,7 @@ function connect() {
     setTimeout(showEmpty, 500);
     beat();
     loadDocuments().then(loadAnnotations).catch(console.error);
+    loadPlugins().catch(console.error);
   };
   es.addEventListener('message_edited', (e) => {
     const m = JSON.parse(e.data);
@@ -1590,6 +1593,7 @@ function connect() {
   });
   es.addEventListener('documents', () => loadDocuments().catch(console.error));
   es.addEventListener('annotations', () => loadAnnotations().catch(console.error));
+  es.addEventListener('plugins', () => loadPlugins().catch(console.error));
   es.addEventListener('revoked', () => end('Your access to this room has ended.'));
   es.addEventListener('stt', (e) => showSTT(JSON.parse(e.data)));
   es.addEventListener('presence', (e) => {
@@ -1598,7 +1602,10 @@ function connect() {
   });
   es.addEventListener('agent', (e) => {
     const wasHost = agentSeen && isHost();
+    const wasOnline = agent.online;
     agent = JSON.parse(e.data);
+    // A version under inspection says whether the AI host is there to check it (009-AC13).
+    if (agentSeen && wasOnline !== agent.online && plugins.length) loadPlugins().catch(console.error);
     // Someone else moved the role away from this participant (009-AC34).
     if (wasHost && !isHost() && agent.host_by) {
       const standby = agent.daemons.some((d) => String(d.participant_id) === myID);
@@ -1646,6 +1653,10 @@ window.addEventListener('focus', () => { if (events && events.readyState !== Eve
 // Agents. The host's daemon runs every persona of the room: a persona's LED is green only while
 // that daemon is connected and can host (D8). The host, and the participants the host allows,
 // press a persona's button (D18); a press during a turn waits in the room's queue (002-AC17).
+// The room's plugins, as GET .../plugins lists them, read again on each "plugins" event;
+// pluginsSeen tells the persona form that the list moved on.
+let plugins = [];
+let pluginsSeen = 0;
 let agent = { online: false, can_trigger: [], daemons: [], turn: null, running: [], personas: [], queue: [], models: [], efforts: [], cap_requests: [],
   changes: [], room_skills: [], chain: { budget: 25, count: 0, suspended: false }, parallel_turns: false };
 
@@ -1904,6 +1915,25 @@ function renderApprovals() {
     decide(li, 'the room skill ' + k.name, '/skills/' + k.id + '/decision', {});
     items.push(li);
   }
+  // A plugin version waiting for the host opens the approval sheet (admin/plugins.js): the host
+  // reads what it holds before deciding (009-AC14).
+  for (const pl of plugins) {
+    const v = pl.versions[pl.versions.length - 1];
+    if (!v || v.state !== 'pending') continue;
+    const li = document.createElement('li');
+    li.textContent = v.added_by + (v.n === 1 ? ' added the plugin ' : ' updated the plugin ') + pl.name + ', ' + pl.ref_name + ' @ ' + v.short_commit + '.';
+    if (isHost()) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = 'Review';
+      b.setAttribute('aria-label', 'Review the plugin ' + pl.name + ' v' + v.n);
+      b.addEventListener('click', () => dispatchEvent(new CustomEvent('grill:plugin-review', { detail: { id: pl.id, n: v.n } })));
+      li.append(' ', b);
+    } else {
+      li.append(' The AI host decides.');
+    }
+    items.push(li);
+  }
   $('approvals').hidden = items.length === 0;
   $('approval-list').replaceChildren(...items);
 }
@@ -2082,8 +2112,7 @@ function personaForm(p) {
     watch, hint('Answers note threads that name no persona, ' + agent.notes_watch_delay + ' s after the last new message.'),
     hint('An answer that names another persona makes it answer next. These auto turns pause at the room\'s limit of '
       + agent.chain.budget + ', set in Personas.'));
-  // Plugins join the skills here in Phase 2.
-  const capabilities = panel('capabilities', skillsBlock(p));
+  const capabilities = panel('capabilities', skillsBlock(p), pluginsBlock(p));
   const actions = document.createElement('div');
   actions.className = 'actions';
   const save = document.createElement('button');
@@ -2280,6 +2309,86 @@ async function loadSkills() {
   }
 }
 
+// loadPlugins reads the room's plugins (009-AC5); Room settings › Plugins and the approval sheet
+// (admin/plugins.js) get them as window.grillPlugins.
+async function loadPlugins() {
+  const res = await netFetch(api + '/plugins');
+  if (!res.ok) return;
+  plugins = (await res.json()).plugins;
+  pluginsSeen++;
+  window.grillPlugins = plugins;
+  dispatchEvent(new CustomEvent('grill:plugins', { detail: plugins }));
+  staleSheet();
+  renderApprovals();
+  renderPersonaSheet();
+}
+
+// pluginCost is a version's token cost per answer from its inspection, null while unknown.
+function pluginCost(v) {
+  const d = v && v.report && v.report.details;
+  return d && d.cost_known ? d.always_on_tokens : null;
+}
+const tokens = (n) => '~' + n.toLocaleString('en') + ' tokens';
+
+// pluginsBlock lists the room's plugins on the Capabilities tab (009-AC16, 009-AC18): on or off for
+// the persona, the version it loads, why one does not load, the token cost per answer, and the
+// total of those it loads. Only a room admin turns one on or off (009-AC10).
+function pluginsBlock(p) {
+  const box = document.createElement('fieldset');
+  box.className = 'persona-skills persona-plugins';
+  const legend = document.createElement('legend');
+  legend.textContent = 'Plugins';
+  const list = document.createElement('ul');
+  let total = 0;
+  let unknown = 0;
+  // Counted apart from the cost: a plugin that loads may cost 0 tokens.
+  let loaded = 0;
+  for (const pl of plugins) {
+    const on = pl.personas.includes(p.id);
+    const run = pl.versions.find((v) => v.n === pl.running);
+    const shown = run || pl.versions[pl.versions.length - 1];
+    const cost = pluginCost(shown);
+    if (on && run) {
+      loaded++;
+      if (cost === null) unknown++;
+      else total += cost;
+    }
+    const li = document.createElement('li');
+    li.dataset.plugin = pl.name;
+    const name = document.createElement('label');
+    name.className = 'check';
+    const toggle = Object.assign(document.createElement('input'), { type: 'checkbox', checked: on, disabled: !meAdmin });
+    toggle.setAttribute('aria-label', pl.name + ' for ' + p.name);
+    // Turning a plugin on is not an edit of the persona's fields: the form keeps refreshing.
+    for (const ev of ['input', 'change']) toggle.addEventListener(ev, (e) => e.stopPropagation());
+    // Not disabled while it saves: a disabled box loses the focus. A second press is idempotent.
+    toggle.addEventListener('change', () => {
+      const want = toggle.checked;
+      sendJSON(want ? 'PUT' : 'DELETE', api + '/personas/' + p.id + '/plugins/' + pl.id)
+        .then((done) => { if (done) personasStatus(pl.name + (want ? ' is on for ' : ' is off for ') + p.name + ' from its next answer.'); })
+        .catch((err) => { toggle.checked = !want; personasStatus(err.message, true); })
+        .finally(() => loadPlugins().catch(console.error));
+    });
+    name.append(toggle, ' ' + pl.name);
+    const meta = [(shown.manifest && shown.manifest.version ? shown.manifest.version + ', ' : '') + pl.ref_name + ' @ ' + shown.short_commit];
+    meta.push(run ? (cost === null ? 'cost unknown' : tokens(cost) + ' per answer') : pl.why || 'does not load');
+    if (on && run && run !== pl.versions[pl.versions.length - 1]) meta.push('a newer version waits');
+    li.append(name, span('hint', meta.join(' · ')));
+    list.append(li);
+  }
+  box.append(legend);
+  if (!plugins.length) {
+    box.append(Object.assign(document.createElement('p'), { className: 'hint', textContent: 'No plugins in this room yet. A room admin adds them in Room settings › Plugins.' }));
+    return box;
+  }
+  box.append(list);
+  const sum = !loaded ? 'None of them loads for ' + p.name + '.'
+    : 'Total: ' + tokens(total) + ' per answer' + (unknown ? ', plus ' + unknown + ' with an unknown cost' : '') + '.';
+  box.append(Object.assign(document.createElement('p'), { className: 'plugin-total', textContent: sum }));
+  if (!meAdmin) box.append(Object.assign(document.createElement('p'), { className: 'hint', textContent: 'Only room admins turn plugins on or off.' }));
+  return box;
+}
+
 // formFields reads the inputs' own values: FormData would turn the text's line breaks into CRLF.
 function formFields(form) {
   const v = (name) => form.elements.namedItem(name).value;
@@ -2309,8 +2418,9 @@ function nextTrigger(p) {
   return min > 0 ? ' Speaks up next in ' + min + ' min.' : ' Speaks up at the next activity, while someone is here.';
 }
 
-// seenKey is what a form shows: the persona, and the room's auto-turn limit (Triggers).
-const seenKey = (p) => JSON.stringify([p, agent.chain.budget]);
+// seenKey is what a form shows: the persona, the room's auto-turn limit (Triggers), its plugins and
+// whether this participant may turn them on (Capabilities).
+const seenKey = (p) => JSON.stringify([p, agent.chain.budget, pluginsSeen, meAdmin]);
 
 // staleSheet redraws the open persona form at the next render, unless someone is editing it.
 function staleSheet() {
@@ -2432,7 +2542,12 @@ function renderPersonaSheet() {
   }
   const body = $('persona-body');
   const f = body.firstElementChild;
-  if (!f || f.dataset.id !== String(p.id) || (!f.dataset.dirty && f.dataset.seen !== seenKey(p))) body.replaceChildren(personaForm(p));
+  if (!f || f.dataset.id !== String(p.id) || (!f.dataset.dirty && f.dataset.seen !== seenKey(p))) {
+    // A redraw keeps the focus on the control that had it: a plugin's toggle redraws the form.
+    const label = f && f.contains(document.activeElement) ? document.activeElement.getAttribute('aria-label') : null;
+    body.replaceChildren(personaForm(p));
+    if (label) [...body.querySelectorAll('[aria-label]')].find((el) => el.getAttribute('aria-label') === label)?.focus();
+  }
   showPersonaTab(r.tab);
 }
 
@@ -2961,10 +3076,10 @@ let sttDown = false;
 // sttGlossary is true while a transcription worker reads room glossaries (007-AC14).
 let sttGlossary = false;
 
-// showManage offers Room settings to room admins, and to every member while the glossary, their
-// only tab (005-AC23), is in use.
+// showManage offers Room settings to every member: each reads the room's plugins there (009-AC5),
+// and the glossary while one is in use (005-AC23).
 function showManage() {
-  $('manage-open').hidden = !meAdmin && !sttGlossary;
+  $('manage-open').hidden = false;
 }
 
 function voiceError(text) {

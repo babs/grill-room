@@ -15,7 +15,7 @@ import { html } from 'htm/preact';
 
 /**
  * fetchJSON sends a request with the page's cookies and returns its JSON answer, {} for none. A
- * refusal throws the server's reason, with the status.
+ * refusal throws the server's reason, with the status and the whole answer as data.
  * @param {string} method
  * @param {string} path
  * @param {unknown} [body]
@@ -30,7 +30,7 @@ export async function fetchJSON(method, path, body) {
   }
   const res = await fetch(path, opts);
   const data = res.status === 204 ? {} : await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.error || 'HTTP ' + res.status), { status: res.status });
+  if (!res.ok) throw Object.assign(new Error(data.error || 'HTTP ' + res.status), { status: res.status, data });
   return data;
 }
 

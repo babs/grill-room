@@ -8,13 +8,14 @@ import { signal } from '@preact/signals';
 import { html } from 'htm/preact';
 import { RoomPanel, Rename, TabBar, fetchJSON, roomTabs } from './room-panel.js';
 import { Editor } from './starters.js';
+import { PluginsTab, mountReview } from './plugins.js';
 
 /**
  * @typedef {{id: number, name: string, admin: boolean}} Participant
  * @typedef {{room: {id: string, name: string}, me: Participant, participants: Participant[]}} RoomData
  * @typedef {{id: number, name: string, version: number, author: string, pending?: boolean}} RoomSkill
  * @typedef {{id: number, name: string, badge: string, model: string, effort: string, pending?: boolean}} Persona
- * @typedef {{room_skills?: RoomSkill[], personas?: Persona[]}} AgentState
+ * @typedef {{room_skills?: RoomSkill[], personas?: Persona[], host_participant_id?: number}} AgentState
  * @typedef {{glossary: string, prompt: string, used: number, total: number, capacity: number}} Glossary
  * @typedef {{glossary: boolean}} STTState
  */
@@ -28,11 +29,11 @@ addEventListener('grill:room', (e) => { roomData.value = /** @type {CustomEvent<
 addEventListener('grill:agent', (e) => { agentState.value = /** @type {CustomEvent<AgentState>} */ (e).detail; });
 addEventListener('grill:stt', (e) => { sttGlossary.value = /** @type {CustomEvent<STTState>} */ (e).detail.glossary; });
 
-const allTabs = [...Object.entries(roomTabs).slice(0, 3), ['personas', 'Personas'], ['skills', 'Skills'], ['documents', 'Documents'],
-  ['export', roomTabs.export], ['glossary', 'Words to recognise']];
-// The tabs a plain member gets; a room admin gets them all. Pending the user's word (Phase 2 kept
-// members to the glossary): add an id here to open a tab to every member.
-const memberTabs = ['glossary'];
+const allTabs = [...Object.entries(roomTabs).slice(0, 3), ['personas', 'Personas'], ['skills', 'Skills'], ['plugins', 'Plugins'],
+  ['documents', 'Documents'], ['export', roomTabs.export], ['glossary', 'Words to recognise']];
+// The tabs a plain member gets; a room admin gets them all. Every member reads the room's plugins
+// (009-AC5).
+const memberTabs = ['plugins', 'glossary'];
 
 // tab is the open tab from #manage/<tab>, '' when the sheet is closed.
 /** @param {string} hash */
@@ -103,6 +104,7 @@ function Manage({ data, tab, tabs }) {
       ${tab === 'skills' && (skills.length ? html`<ul id="room-admin-skills">${skills.map((k) => html`<li key=${k.id}>${k.name} v${k.version}, copied by ${k.author}
           ${' '}<button type="button" class="btn-secondary" onClick=${() => removeSkill(k)} aria-label=${'Remove the room skill ' + k.name}>Remove</button></li>`)}</ul>`
         : html`<p class="hint">None yet. Members copy their personal skills in from the Personas sheet.</p>`)}
+      ${tab === 'plugins' && html`<${PluginsTab} base=${base} admin=${true} host=${isHost(data)} personas=${personas}/>`}
       ${tab === 'documents' && html`<${DeletedDocuments} base=${base} show=${show}/>`}
       ${tab === 'glossary' && html`<${STTGlossary} data=${data}/>`}
     <//>`}`;
@@ -187,11 +189,16 @@ function App() {
   const tabs = sttGlossary.value ? allTabs : allTabs.filter(([id]) => id !== 'glossary');
   if (data.me.admin) return html`<${Manage} data=${data} tabs=${tabs} tab=${tabs.some(([id]) => id === tab.value) ? tab.value : 'general'}/>`;
   const mine = tabs.filter(([id]) => memberTabs.includes(id));
-  // A stale #manage/glossary link while no engine reads the glossary.
-  if (!mine.length) return html`<p class="hint" id="manage-none">Room settings are for room admins.</p>`;
+  // A link to an admin's tab, or to the glossary while no engine reads it, opens the first one.
   const t = mine.some(([id]) => id === tab.value) ? tab.value : mine[0][0];
+  const base = '/api/rooms/' + encodeURIComponent(data.room.id);
   return html`<${TabBar} tabs=${mine} active=${t} href=${(/** @type {string} */ id) => '#manage/' + id} label="Room settings"/>
-    <div class="tab-panel" id=${'panel-' + t}>${t === 'glossary' && html`<${STTGlossary} data=${data}/>`}</div>`;
+    <div class="tab-panel" id=${'panel-' + t}>${t === 'glossary' && html`<${STTGlossary} data=${data}/>`}
+      ${t === 'plugins' && html`<${PluginsTab} base=${base} admin=${false} host=${isHost(data)} personas=${agentState.value?.personas || []}/>`}</div>`;
 }
 
+/** @param {RoomData} data */
+const isHost = (data) => agentState.value?.host_participant_id === data.me.id;
+
 render(html`<${App}/>`, /** @type {HTMLElement} */ (document.getElementById('room-admin')));
+mountReview(roomData, agentState);

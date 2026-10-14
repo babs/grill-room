@@ -739,7 +739,6 @@ CREATE TABLE plugin_versions (
 	size INTEGER NOT NULL,
 	files INTEGER NOT NULL,
 	file_list TEXT NOT NULL,
-	data BLOB NOT NULL,
 	manifest TEXT NOT NULL,
 	report TEXT,
 	state TEXT NOT NULL CHECK (state IN ('inspecting', 'pending', 'approved', 'refused', 'invalid')),
@@ -752,6 +751,14 @@ CREATE TABLE plugin_versions (
 	UNIQUE (plugin_id, n)
 );
 CREATE INDEX plugin_versions_inspecting ON plugin_versions(plugin_id) WHERE state = 'inspecting';
+-- Covers the room stream's PluginsVersion (version ids and states) without touching a row.
+CREATE INDEX plugin_versions_state ON plugin_versions(plugin_id, state);
+-- A version's tar sits in a table of its own: a scan of plugin_versions (the list, the stream's
+-- version) never walks a snapshot's overflow pages. dropSuperseded deletes the row.
+CREATE TABLE plugin_snapshots (
+	version_id INTEGER PRIMARY KEY NOT NULL REFERENCES plugin_versions(id) ON DELETE CASCADE,
+	data BLOB NOT NULL
+);
 CREATE TABLE room_persona_plugins (
 	persona_id INTEGER NOT NULL REFERENCES room_personas(id) ON DELETE CASCADE,
 	plugin_id INTEGER NOT NULL REFERENCES room_plugins(id) ON DELETE CASCADE,
