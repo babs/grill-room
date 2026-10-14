@@ -2,17 +2,22 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 
+	"github.com/babs/grill-room/internal/plugin"
 	"github.com/babs/grill-room/internal/sandbox"
 	"github.com/babs/grill-room/internal/store"
 )
@@ -29,6 +34,8 @@ func sandboxHost(t *testing.T, rs *roomServer, name, image string) (string, cont
 	if name == "Alice" {
 		d.cache = &wsCache{dir: t.TempDir(), max: 64 << 20}
 	}
+	// Plugin inspections run from the image turns run in (009-AC13).
+	d.st.Image.Ref, d.o.PluginCacheDir = image, t.TempDir()
 	label := fmt.Sprintf("test-%s-%d", strings.ToLower(name), time.Now().UnixNano())
 	// The fake claude sends nothing upstream: the relay only needs an address.
 	d.o.NewAgent = func(_ Room, _ int, _, proxy string) Agent {
@@ -233,4 +240,234 @@ func TestDockerSkills(t *testing.T) {
 	if v := rs.turn(t, alice, "FAKE_SKILLS off", false); v.Turn.Status != "done" || rs.lastMessage(t) != "No skills." {
 		t.Fatalf("off: %+v %q", v.Turn, rs.lastMessage(t))
 	}
+}
+
+// fixtureSnapshot is the 009 fixture plugin (github.com/babs/skills at 53195d8): from the local
+// checkout in .scratchpad/fixture/skills, else fetched under GRILL_ROOM_TEST_LIVE_GIT=1, else a
+// small synthetic plugin with the same skill.
+func fixtureSnapshot(t *testing.T) *plugin.Snapshot {
+	t.Helper()
+	if _, err := os.Stat("../../.scratchpad/fixture/skills/.claude-plugin/plugin.json"); err == nil {
+		s, err := plugin.FromDir("../../.scratchpad/fixture/skills", plugin.DefaultMaxBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	if os.Getenv("GRILL_ROOM_TEST_LIVE_GIT") == "1" {
+		const repo, pin = "https://github.com/babs/skills", "53195d86d96aa2917ab23a9729c51d1b0118dc82"
+		ctx, cancel := context.WithTimeout(t.Context(), plugin.Timeout)
+		defer cancel()
+		es, err := plugin.Fetch(ctx, plugin.NewClient(), repo, pin, plugin.DefaultMaxBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := plugin.FromTree(es, "./", nil, plugin.DefaultMaxBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	return snapshotOf(t, map[string]string{plugin.ManifestPath: `{"name":"babs","version":"1.0.0","description":"fixture"}`,
+		"skills/spec-feature/SKILL.md": "---\nname: spec-feature\ndescription: Write a spec.\n---\nWrite specs/NNN-slug.md.\n"})
+}
+
+// 009-AC13 009-AC17 in a real Docker sandbox with the fake claude: the host's daemon inspects the
+// fixture plugin in a throwaway container, which approves it; Grill's turn then gets two
+// --plugin-dir, grill-room's then the plugin's, which holds plugin.json and the spec-feature skill
+// at the snapshot's hashes. The Secretary, without the plugin, gets grill-room's only.
+func TestDockerPluginTurn(t *testing.T) {
+	if os.Getenv("GRILL_ROOM_TEST_DOCKER") != "1" {
+		t.Skip("set GRILL_ROOM_TEST_DOCKER=1 to run the Docker sandbox tests")
+	}
+	image := os.Getenv("GRILL_ROOM_SANDBOX_FAKE_IMAGE")
+	if image == "" {
+		image = "grill-room-sandbox:fake"
+	}
+	rs := newRoomServer(t)
+	alice, _ := sandboxHost(t, rs, "Alice", image)
+	waitFor(t, "alice hosts", func() bool { return rs.agent(t, alice).Online })
+	var templates []store.Template
+	rs.call(t, "GET", "/api/rooms/"+rs.room+"/templates", alice, nil, http.StatusOK, &templates)
+	var sec store.RoomPersona
+	rs.call(t, "POST", "/api/rooms/"+rs.room+"/personas", alice, map[string]int64{"template_id": templates[1].ID}, http.StatusCreated, &sec)
+	k := rs.publishSkill(t, alice, "stamp", "STAMP", true)
+	rs.call(t, "PUT", fmt.Sprintf("/api/rooms/%s/personas/%d/skills/%d", rs.room, sec.ID, k.ID), alice,
+		map[string]bool{"accept_disclaimer": true}, http.StatusOK, nil)
+	grill := rs.grill(t)
+	snap := fixtureSnapshot(t)
+	m, err := snap.Manifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs.addPlugin(t, alice, m.Name, snap, grill.ID)
+	deadline := time.Now().Add(90 * time.Second)
+	for rs.version(t, m.Name).State == store.PluginInspecting {
+		if time.Now().After(deadline) {
+			t.Fatal("the plugin is still waiting for inspection")
+		}
+		time.Sleep(100 * time.Millisecond) // polls the version, bounded by the deadline
+	}
+	if v := rs.version(t, m.Name); v.State != store.PluginApproved {
+		t.Fatalf("inspection: %s %q %s", v.State, v.Reason, v.Report)
+	}
+	hash := map[string]string{}
+	for _, f := range snap.Files {
+		hash[f.Path] = f.SHA256
+	}
+	ask := func(persona int64) string {
+		t.Helper()
+		rs.call(t, "POST", "/api/rooms/"+rs.room+"/messages", alice, map[string]string{"body": "FAKE_PLUGINS"}, http.StatusCreated, nil)
+		var started store.Turn
+		rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]int64{"persona_id": persona}, http.StatusCreated, &started)
+		deadline := time.Now().Add(90 * time.Second)
+		for v := rs.agent(t, alice); v.Turn.ID != started.ID || v.Turn.Status == "running"; v = rs.agent(t, alice) {
+			if time.Now().After(deadline) {
+				t.Fatalf("turn %d still running", started.ID)
+			}
+			time.Sleep(100 * time.Millisecond) // polls the turn, bounded by the deadline
+		}
+		return rs.lastMessage(t)
+	}
+	got := ask(grill.ID)
+	dirs := strings.Split(strings.TrimSuffix(strings.TrimPrefix(got, "Plugin dirs: "), "."), " | ")
+	if len(dirs) != 2 || !strings.HasPrefix(dirs[0], "/home/agent/.grill-room/plugin [") || !strings.HasPrefix(dirs[1], "/home/agent/.grill-room/plugins/"+m.Name+" [") {
+		t.Fatalf("grill's plugin dirs: %q", got)
+	}
+	for _, p := range []string{plugin.ManifestPath, "skills/spec-feature/SKILL.md"} {
+		if hash[p] == "" || !strings.Contains(dirs[1], p+"="+hash[p]) {
+			t.Fatalf("%s at %s missing from %q", p, hash[p], dirs[1])
+		}
+	}
+	if got := ask(sec.ID); strings.Count(got, "/home/agent/") != 1 || !strings.HasPrefix(got, "Plugin dirs: /home/agent/.grill-room/plugin [") {
+		t.Fatalf("secretary's plugin dirs: %q", got)
+	}
+}
+
+// 009-AC13, Phase 2 DoD: `claude plugin validate` passes on the stored fixture snapshot in the
+// real sandbox image (warnings allowed), through the daemon's own inspection; `plugin details`
+// lists its spec-feature skill and a token cost. Neither command calls the API.
+func TestDockerPluginValidateRealImage(t *testing.T) {
+	if os.Getenv("GRILL_ROOM_TEST_DOCKER") != "1" {
+		t.Skip("set GRILL_ROOM_TEST_DOCKER=1 to run the Docker sandbox tests")
+	}
+	image := os.Getenv("GRILL_ROOM_SANDBOX_IMAGE")
+	if image == "" {
+		image = "grill-room-sandbox:local"
+	}
+	rs := newRoomServer(t)
+	alice, _, _ := pairedDaemon(t, rs, "Alice", &fakeAgent{}, func(d *Daemon) {
+		d.o.Docker, d.st.Image.Ref = sandbox.Docker, image
+		d.o.Log = zaptest.NewLogger(t, zaptest.Level(zap.WarnLevel))
+	})
+	snap := fixtureSnapshot(t)
+	m, err := snap.Manifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs.addPlugin(t, alice, m.Name, snap)
+	deadline := time.Now().Add(90 * time.Second)
+	for rs.version(t, m.Name).State == store.PluginInspecting {
+		if time.Now().After(deadline) {
+			t.Fatal("the plugin is still waiting for inspection")
+		}
+		time.Sleep(100 * time.Millisecond) // polls the version, bounded by the deadline
+	}
+	v := rs.version(t, m.Name)
+	var rep pluginReport
+	if err := json.Unmarshal(v.Report, &rep); err != nil {
+		t.Fatal(err)
+	}
+	var skills []string
+	if rep.Details != nil {
+		for _, c := range rep.Details.Components {
+			if c.Kind == "Skills" {
+				skills = c.Names
+			}
+		}
+	}
+	if v.State != store.PluginApproved || !rep.OK || !rep.Details.CostKnown || !slices.Contains(skills, "spec-feature") {
+		t.Fatalf("inspection: %s %q %s", v.State, v.Reason, v.Report)
+	}
+	t.Logf("validate: %s; always-on %d tokens", rep.Validate, rep.Details.AlwaysOnTokens)
+}
+
+// 009-AC13: inspecting a plugin runs none of its code. A SessionStart hook and a stdio MCP server
+// that would each leave a file in the inspection's home leave nothing after `claude plugin
+// validate` and `claude plugin details`, run by the daemon in the real sandbox image; `claude -p`
+// in the same container, its API unreachable, does run the hook (the control).
+func TestDockerPluginInspectionRunsNoHook(t *testing.T) {
+	if os.Getenv("GRILL_ROOM_TEST_DOCKER") != "1" {
+		t.Skip("set GRILL_ROOM_TEST_DOCKER=1 to run the Docker sandbox tests")
+	}
+	image := os.Getenv("GRILL_ROOM_SANDBOX_IMAGE")
+	if image == "" {
+		image = "grill-room-sandbox:local"
+	}
+	var mu sync.Mutex
+	var home, control string
+	details := false
+	run := func(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error) {
+		mu.Lock()
+		look := args[0] == "rm" && details && home == ""
+		mu.Unlock()
+		if look {
+			// Before the container goes: what its home holds once both commands ran.
+			out, err := sandbox.Docker(ctx, nil, "exec", args[len(args)-1], "ls", "-A", "/tmp")
+			// Control, in the same container: claude -p runs the hook before its API call fails.
+			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			cout, cerr := sandbox.Docker(cctx, nil, "exec", "-e", "ANTHROPIC_API_KEY=dummy", "-e", "ANTHROPIC_BASE_URL=http://127.0.0.1:9",
+				args[len(args)-1], "sh", "-c", "timeout 20 claude -p --plugin-dir /tmp/p hi >/dev/null 2>&1; ls -A /tmp")
+			cancel()
+			mu.Lock()
+			home, control = string(out)+fmt.Sprint(err), string(cout)+fmt.Sprint(cerr)
+			mu.Unlock()
+		}
+		out, err := sandbox.Docker(ctx, stdin, args...)
+		if slices.Contains(args, "details") {
+			mu.Lock()
+			details = true
+			mu.Unlock()
+		}
+		return out, err
+	}
+	rs := newRoomServer(t)
+	alice, _, _ := pairedDaemon(t, rs, "Alice", &fakeAgent{}, func(d *Daemon) {
+		d.o.Docker, d.st.Image.Ref = run, image
+		d.o.Log = zaptest.NewLogger(t, zaptest.Level(zap.WarnLevel))
+	})
+	rs.addPlugin(t, alice, "hooked", snapshotOf(t, map[string]string{
+		plugin.ManifestPath:  `{"name":"hooked","version":"1.0.0","description":"d","author":{"name":"a"}}`,
+		"hooks/hooks.json":   `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"touch $HOME/hook.txt"}]}]}}`,
+		".mcp.json":          `{"mcpServers":{"local":{"command":"sh","args":["-c","touch $HOME/mcp.txt"]}}}`,
+		"skills/x/SKILL.md":  "---\nname: x\ndescription: d\n---\nx\n",
+		"bin/tool":           "#!/bin/sh\ntouch $HOME/bin.txt\n",
+		"agents/helper.md":   "---\nname: helper\ndescription: d\n---\nh\n",
+		"commands/run.md":    "run\n",
+		"skills/x/script.sh": "touch $HOME/script.txt\n",
+	}))
+	deadline := time.Now().Add(90 * time.Second)
+	for rs.version(t, "hooked").State == store.PluginInspecting {
+		if time.Now().After(deadline) {
+			t.Fatal("the plugin is still waiting for inspection")
+		}
+		time.Sleep(100 * time.Millisecond) // polls the version, bounded by the deadline
+	}
+	v := rs.version(t, "hooked")
+	var rep pluginReport
+	_ = json.Unmarshal(v.Report, &rep)
+	if v.State != store.PluginApproved || rep.Details == nil || len(rep.Details.Components) == 0 {
+		t.Fatalf("inspection: %s %q %s", v.State, v.Reason, v.Report)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, f := range []string{"hook.txt", "mcp.txt", "bin.txt", "script.txt"} {
+		if !strings.Contains(home, "p\n") || strings.Contains(home, f) {
+			t.Fatalf("the inspection's home after both commands: %q", home)
+		}
+	}
+	if !strings.Contains(control, "hook.txt") || !strings.Contains(control, "mcp.txt") {
+		t.Fatalf("control: claude -p left no hook.txt or mcp.txt, the check proves nothing: %q", control)
+	}
+	t.Logf("home: %q; control: %q; details: %+v", home, control, rep.Details.Components)
 }

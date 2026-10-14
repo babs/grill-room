@@ -100,10 +100,12 @@ func (e *emulator) run(_ context.Context, stdin io.Reader, args ...string) ([]by
 		}
 		return nil, err
 	case cmd[0] == "rm" && cmd[1] == "-rf":
-		prefix := strings.TrimPrefix(cmd[2], home+"/") + "/"
-		for p := range e.home {
-			if strings.HasPrefix(p, prefix) {
-				delete(e.home, p)
+		for _, dir := range cmd[2:] {
+			prefix := strings.TrimPrefix(dir, home+"/") + "/"
+			for p := range e.home {
+				if strings.HasPrefix(p, prefix) {
+					delete(e.home, p)
+				}
 			}
 		}
 	case cmd[0] == "tar" && cmd[1] == "-c":
@@ -229,6 +231,66 @@ func TestRunTurnLoadsSkills(t *testing.T) {
 	}
 	if !slices.Equal(seen, []string{pluginDir + " stamp v1", "none"}) {
 		t.Fatalf("claude saw %q", seen)
+	}
+}
+
+// 009-AC17: each room plugin lands in its own folder under the home's plugins directory and
+// reaches claude through its own --plugin-dir, after the skills' one and in the turn's order. A
+// later turn keeps none of an earlier one's plugins, and with none passes no flag. A name that
+// would leave the folder, or a second plugin of one name, fails the turn before claude runs.
+func TestRunTurnLoadsPlugins(t *testing.T) {
+	e := newEmulator()
+	var seen [][]string
+	e.claude = func(e *emulator, _ string, args []string) (string, error) {
+		var got []string
+		for i, a := range args {
+			if a == "--plugin-dir" {
+				got = append(got, args[i+1])
+			}
+		}
+		var files []string
+		for p, d := range e.home {
+			if strings.HasPrefix(p, ".grill-room/plugin") {
+				files = append(files, p+"="+string(d))
+			}
+		}
+		slices.Sort(files)
+		seen = append(seen, append(got, files...))
+		e.home[".claude/projects/-workspace/"+sid+".jsonl"] = []byte("l\n")
+		return `{"result":"done","session_id":"` + sid + `"}`, nil
+	}
+	s := newTurnSandbox(t, e)
+	tarOf := func(files map[string]string) io.Reader { return workspaceTar(t, files) }
+	for _, in := range []TurnInput{
+		{Plugin: tarOf(map[string]string{"skills/stamp/SKILL.md": "s"}), Plugins: []PluginTar{
+			{Name: "zeta", Tar: tarOf(map[string]string{".claude-plugin/plugin.json": "z"})},
+			{Name: "alpha", Tar: tarOf(map[string]string{"skills/a/SKILL.md": "a"})}}},
+		{Plugins: []PluginTar{{Name: "alpha", Tar: tarOf(map[string]string{"skills/a/SKILL.md": "a2"})}}},
+		{},
+	} {
+		in.Workspace, in.Prompt, in.Bearer = workspaceTar(t, nil), "p", testBearer
+		if _, err := s.RunTurn(context.Background(), in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := [][]string{
+		{pluginDir, pluginsDir + "/zeta", pluginsDir + "/alpha",
+			".grill-room/plugin/skills/stamp/SKILL.md=s", ".grill-room/plugins/alpha/skills/a/SKILL.md=a", ".grill-room/plugins/zeta/.claude-plugin/plugin.json=z"},
+		{pluginsDir + "/alpha", ".grill-room/plugins/alpha/skills/a/SKILL.md=a2"},
+		nil,
+	}
+	if fmt.Sprint(seen) != fmt.Sprint(want) {
+		t.Fatalf("claude saw\n%q\nwant\n%q", seen, want)
+	}
+	for _, bad := range [][]PluginTar{
+		{{Name: "../x", Tar: tarOf(nil)}},
+		{{Name: "grill-room", Tar: tarOf(nil)}},
+		{{Name: "a", Tar: tarOf(nil)}, {Name: "a", Tar: tarOf(nil)}},
+	} {
+		_, err := s.RunTurn(context.Background(), TurnInput{Workspace: workspaceTar(t, nil), Prompt: "p", Bearer: testBearer, Plugins: bad})
+		if err == nil || len(seen) != 3 {
+			t.Fatalf("plugins %+v: err %v, claude ran %d times", bad, err, len(seen))
+		}
 	}
 }
 

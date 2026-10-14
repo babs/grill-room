@@ -23,7 +23,7 @@ The `config` object:
 | Field | |
 |---|---|
 | `instance` | the instance id; a worker refuses another instance's config |
-| `config_dir`, `state_dir`, `cache_dir` | the instance's directories: `settings.json` and `allowlist.json`, `tokens.json`, `workspace-cache/` |
+| `config_dir`, `state_dir`, `cache_dir` | the instance's directories: `settings.json` and `allowlist.json`, `tokens.json`, `plugin-cache/`, `workspace-cache/` |
 | `sandbox_root` | keys the sandbox names and the `grill-room-root` label, so that two supervisors never share a sandbox |
 | `log_level`, `image`, `cache_mb` | as the supervisor's environment sets them |
 | `settings` | the host cap and approval mode until the page saves the instance's own |

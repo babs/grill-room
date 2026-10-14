@@ -9,11 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/babs/grill-room/internal/plugin"
 	"github.com/babs/grill-room/internal/turn"
 )
 
@@ -38,10 +41,20 @@ type TurnInput struct {
 	// Plugin is the tar of the plugin directory holding the persona's active skills, nil for none
 	// (002-AC31).
 	Plugin io.Reader
+	// Plugins are the room plugins the turn loads, each in its own --plugin-dir after Plugin's
+	// (009-AC17).
+	Plugins []PluginTar
 	// Bearer is the dummy token for the account's proxy (Request.Bearer).
 	Bearer string
 	// Autocompact is Request.Autocompact.
 	Autocompact int
+}
+
+// PluginTar is a room plugin a turn loads. Name becomes its folder; Tar is its snapshot, which
+// the caller checked with plugin.ValidateTar: regular files only, no path leaving the folder.
+type PluginTar struct {
+	Name string
+	Tar  io.Reader
 }
 
 // TurnOutput is what a turn produced for the room.
@@ -78,7 +91,7 @@ func (s *Sandbox) RunTurn(ctx context.Context, in TurnInput) (*TurnOutput, error
 		}
 	}
 	req := Request{Prompt: in.Prompt, System: in.System, Model: in.Model, Effort: in.Effort, Resume: in.Resume, Autocompact: in.Autocompact}
-	if req.PluginDir, err = s.loadPlugin(ctx, in.Plugin); err != nil {
+	if req.PluginDirs, err = s.loadPlugins(ctx, in.Plugin, in.Plugins); err != nil {
 		return nil, err
 	}
 	res, err := s.runClaude(ctx, req)
@@ -102,25 +115,48 @@ func (s *Sandbox) RunTurn(ctx context.Context, in TurnInput) (*TurnOutput, error
 	return out, nil
 }
 
-// pluginDir holds the turn's skills in the sandbox home, out of the workspace the agent edits.
-const pluginDir = home + "/.grill-room/plugin"
+// pluginDir holds the turn's skills and pluginsDir its room plugins, one folder each, in the
+// sandbox home, out of the workspace the agent edits.
+const (
+	pluginDir  = home + "/.grill-room/plugin"
+	pluginsDir = home + "/.grill-room/plugins"
+)
 
-// loadPlugin replaces the plugin directory with the turn's, and returns it for --plugin-dir; ""
-// when the turn has no skill. The previous turn's skills never carry over.
-func (s *Sandbox) loadPlugin(ctx context.Context, plugin io.Reader) (string, error) {
-	if _, err := s.run(ctx, nil, "exec", s.container(), "rm", "-rf", pluginDir); err != nil {
-		return "", fmt.Errorf("clear skills: %w", err)
+// loadPlugins replaces the skills' plugin directory and the room plugins' folders with the turn's,
+// and returns them for --plugin-dir, the skills' first. Nothing of a previous turn carries over
+// (002-AC31, 009-AC17).
+func (s *Sandbox) loadPlugins(ctx context.Context, skills io.Reader, plugins []PluginTar) ([]string, error) {
+	if _, err := s.run(ctx, nil, "exec", s.container(), "rm", "-rf", pluginDir, pluginsDir); err != nil {
+		return nil, fmt.Errorf("clear plugins: %w", err)
 	}
-	if plugin == nil {
-		return "", nil
+	var dirs []string
+	var tars []io.Reader
+	if skills != nil {
+		dirs, tars = append(dirs, pluginDir), append(tars, skills)
 	}
-	if _, err := s.run(ctx, nil, "exec", s.container(), "mkdir", "-p", pluginDir); err != nil {
-		return "", fmt.Errorf("load skills: %w", err)
+	for _, p := range plugins {
+		// The name becomes a path: checked here, whatever the caller did.
+		if err := plugin.CheckName(p.Name); err != nil {
+			return nil, err
+		}
+		dir := pluginsDir + "/" + p.Name
+		if slices.Contains(dirs, dir) {
+			return nil, fmt.Errorf("two plugins named %s", p.Name)
+		}
+		dirs, tars = append(dirs, dir), append(tars, p.Tar)
 	}
-	if _, err := s.run(ctx, plugin, "exec", "-i", s.container(), "tar", "-x", "-C", pluginDir); err != nil {
-		return "", fmt.Errorf("load skills: %w", err)
+	if len(dirs) == 0 {
+		return nil, nil
 	}
-	return pluginDir, nil
+	if _, err := s.run(ctx, nil, append([]string{"exec", s.container(), "mkdir", "-p"}, dirs...)...); err != nil {
+		return nil, fmt.Errorf("load plugins: %w", err)
+	}
+	for i, dir := range dirs {
+		if _, err := s.run(ctx, tars[i], "exec", "-i", s.container(), "tar", "-x", "-C", dir); err != nil {
+			return nil, fmt.Errorf("load plugin %s: %w", path.Base(dir), err)
+		}
+	}
+	return dirs, nil
 }
 
 func sessionPath(id string) string {

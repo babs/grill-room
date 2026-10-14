@@ -54,6 +54,10 @@ type Options struct {
 	// dir or a cap of 0 fetches every workspace whole (002-AC37).
 	CacheDir string
 	CacheMax int64
+	// PluginCacheDir keeps plugin snapshots by sha256; empty fetches each turn's (009-AC17).
+	PluginCacheDir string
+	// Labels, "key=value", mark the plugin inspection containers as the sandboxes' Labels do.
+	Labels []string
 	// OnTurn hears of every turn starting and ending; nil for none.
 	OnTurn func(TurnEvent)
 
@@ -164,6 +168,10 @@ type Daemon struct {
 	access Access
 	// running cancels the running turns by id, guarded by mu.
 	running map[int64]context.CancelCauseFunc
+	// inspectMu runs one plugin inspection at a time; inspected holds the versions reported, by
+	// room link and id, guarded by inspectMu (009-AC13).
+	inspectMu sync.Mutex
+	inspected map[string]bool
 }
 
 // New builds a daemon.
@@ -182,7 +190,7 @@ func New(o Options) *Daemon {
 	}
 	d := &Daemon{o: o, st: Status{Version: o.Version, Connection: "offline", Settings: o.Settings, Allowlist: o.Allowlist},
 		rooms: map[string]*roomRun{}, ready: map[string]string{}, changed: make(chan struct{}), access: o.Access,
-		running: map[int64]context.CancelCauseFunc{}}
+		running: map[int64]context.CancelCauseFunc{}, inspected: map[string]bool{}}
 	if o.CacheDir != "" && o.CacheMax > 0 {
 		d.cache = &wsCache{dir: o.CacheDir, max: o.CacheMax}
 	}
@@ -225,10 +233,13 @@ func (d *Daemon) Status() Status {
 }
 
 // update applies f, then recomputes each room's readiness under the same lock, so the status
-// never shows a readiness its parts contradict. A change wakes the heartbeats.
+// never shows a readiness its parts contradict. A change, or a new image state, which plugin
+// inspections wait on, wakes the heartbeats.
 func (d *Daemon) update(f func(*Status)) {
 	d.mu.Lock()
+	image := d.st.Image.State
 	f(&d.st)
+	imageChanged := d.st.Image.State != image
 	changed := map[string]string{}
 	for room := range d.rooms {
 		_, reason := d.readinessLocked(room)
@@ -241,7 +252,7 @@ func (d *Daemon) update(f func(*Status)) {
 	for room, reason := range changed {
 		d.o.Log.Info("readiness_changed", zap.String("room", room), zap.Bool("can_host", reason == ""), zap.String("reason", reason))
 	}
-	if len(changed) > 0 {
+	if len(changed) > 0 || imageChanged {
 		d.wake()
 	}
 }
@@ -696,6 +707,13 @@ func (r *roomRun) stream(ctx context.Context, tok string) error {
 			}
 			if json.Unmarshal([]byte(line[len("data: "):]), &t) == nil && r.takeTurn(t.ID) {
 				wg.Go(func() { r.runTurn(ctx, tok, t.ID) })
+			}
+		case strings.HasPrefix(line, "data: ") && event == "inspect":
+			var v struct {
+				ID int64 `json:"id"`
+			}
+			if json.Unmarshal([]byte(line[len("data: "):]), &v) == nil && v.ID > 0 {
+				wg.Go(func() { r.inspect(ctx, tok, v.ID) })
 			}
 		case strings.HasPrefix(line, "data: ") && event == "stop":
 			var t struct {

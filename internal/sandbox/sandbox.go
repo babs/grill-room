@@ -284,8 +284,9 @@ type Request struct {
 	Effort string
 	// Resume is the session id to continue; empty starts a new session.
 	Resume string
-	// PluginDir is a plugin directory to load, the persona's skills; empty for none.
-	PluginDir string
+	// PluginDirs are the plugin directories to load, in order: the persona's skills, then its room
+	// plugins (009-AC17).
+	PluginDirs []string
 	// Autocompact is passed to --autocompact, in tokens; 0 keeps Claude Code's auto.
 	Autocompact int
 	Args        []string
@@ -462,8 +463,8 @@ func (s *Sandbox) runClaude(ctx context.Context, req Request) (*Result, error) {
 	if req.Resume != "" {
 		args = append(args, "--resume", req.Resume)
 	}
-	if req.PluginDir != "" {
-		args = append(args, "--plugin-dir", req.PluginDir)
+	for _, dir := range req.PluginDirs {
+		args = append(args, "--plugin-dir", dir)
 	}
 	if req.Autocompact != 0 {
 		args = append(args, "--autocompact", strconv.Itoa(req.Autocompact))

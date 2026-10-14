@@ -50,6 +50,10 @@ var (
 // adminTokenSetting holds the admin token hash. Delete the row to have a new token generated.
 const adminTokenSetting = "admin_token_sha256" //nolint:gosec // a settings key, not a credential
 
+// testPluginClient returns the client plugin fetches use, nil for the guarded default. Only the
+// e2e build (e2e.go) sets one, for the browser tests' local git server.
+var testPluginClient = func(*zap.Logger) *http.Client { return nil }
+
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -384,6 +388,7 @@ func run() error {
 		PushHosts:          cfg.PushHosts,
 		Version:            Version,
 		DBPath:             cfg.DB,
+		PluginClient:       testPluginClient(logger),
 	}, logger)
 	if cfg.SMTP.Addr == "" {
 		logger.Info("email_signin_disabled", zap.String("hint", "set GRILL_ROOM_SMTP_ADDR and GRILL_ROOM_SMTP_FROM to send magic links"))

@@ -64,7 +64,9 @@ func runWorker(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		HTTP: &http.Client{}, Log: logger,
 		Image: cfg.Image, Stream: sandbox.DockerStream,
 		CacheDir: filepath.Join(cfg.CacheDir, "workspace-cache"), CacheMax: cfg.CacheMB << 20,
-		OnTurn: func(e daemon.TurnEvent) { _ = conn.Send(daemon.Msg{Type: "turn", Turn: &e}) },
+		PluginCacheDir: filepath.Join(cfg.StateDir, "plugin-cache"),
+		Labels:         []string{daemon.RootLabel(cfg.SandboxRoot), daemon.InstanceLabel(cfg.Instance)},
+		OnTurn:         func(e daemon.TurnEvent) { _ = conn.Send(daemon.Msg{Type: "turn", Turn: &e}) },
 		NewAgent: func(r daemon.Room, slot int, image, proxy string) daemon.Agent {
 			return sandbox.New(sandbox.Config{Image: image, Name: daemon.SlotSandboxName(cfg.SandboxRoot, r, slot), Proxy: proxy, Limits: cfg.Limits,
 				Labels: []string{daemon.RootLabel(cfg.SandboxRoot), daemon.InstanceLabel(cfg.Instance)}},

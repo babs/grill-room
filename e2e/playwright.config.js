@@ -3,6 +3,7 @@ import { quietPush } from './quiet-push.js';
 
 const port = process.env.GRILL_ROOM_E2E_PORT || '7690';
 const baseURL = `http://127.0.0.1:${port}`;
+export const gitPort = String(Number(port) + 2);
 
 export const adminToken = 'e2e-admin-token';
 
@@ -10,7 +11,7 @@ const otherStacks = ['voice/**', 'agent-live/**', 'install/**', 'lab/**', 'mail/
 
 // The specs whose daemons run agent turns, each in a Docker sandbox.
 const sandboxSpecs = ['admin', 'agent', 'approvals', 'concurrency', 'egress', 'export-import', 'handoff', 'mentions', 'personas',
-  'room-admins', 'skills', 'triggers'].map((n) => `${n}.spec.js`);
+  'plugins', 'room-admins', 'skills', 'triggers'].map((n) => `${n}.spec.js`);
 
 export default defineConfig({
   testDir: '.',
@@ -30,8 +31,13 @@ export default defineConfig({
   // The installed Chrome: no browser download.
   // On CI a failed test keeps its trace: what a flake did is in the artifact.
   use: { baseURL, channel: 'chrome', trace: process.env.CI ? 'retain-on-failure' : 'off', storageState: quietPush(baseURL) },
-  webServer: {
-    command: 'mkdir -p test-results && rm -f test-results/e2e.db* && ../bin/grill-room',
+  webServer: [{
+    // The plugins' git server (tools/e2egit): the e2e server build fetches from it as example.com.
+    command: `rm -rf test-results/git test-results/git-ca.pem && exec ../bin/e2egit -addr 127.0.0.1:${gitPort} -root test-results/git -ca test-results/git-ca.pem`,
+    port: Number(gitPort),
+    reuseExistingServer: false,
+  }, {
+    command: 'mkdir -p test-results && rm -f test-results/e2e.db* && ../bin/grill-room-e2e',
     url: `${baseURL}/healthz`,
     reuseExistingServer: false,
     env: {
@@ -46,7 +52,9 @@ export default defineConfig({
       GRILL_ROOM_TRUSTED_PROXIES: '127.0.0.1',
       // The notes watcher answers 1 s after the last note, not 20 s (009-AC32).
       GRILL_ROOM_NOTES_WATCH_DELAY: '1s',
+      GRILL_ROOM_TEST_GIT_ALLOW_LOOPBACK: '1',
+      GRILL_ROOM_TEST_GIT_CA: 'test-results/git-ca.pem',
       LOG_FORMAT: 'json',
     },
-  },
+  }],
 });

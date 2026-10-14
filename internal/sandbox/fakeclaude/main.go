@@ -12,13 +12,17 @@
 //	FAKE_WHOAMI       answer with the first line of --append-system-prompt-file, and --effort
 //	FAKE_AUTOCOMPACT  answer with --autocompact, "auto" without it
 //	FAKE_CONTEXT_FULL report a session context at 85% of the window
-//	FAKE_SKILLS       run every scripts/*.sh of each skill in --plugin-dir and write what they
-//	                  print to docs/skills.md, as an agent using its skills would
+//	FAKE_SKILLS       run every scripts/*.sh of each skill in the first --plugin-dir and write
+//	                  what they print to docs/skills.md, as an agent using its skills would
+//	FAKE_PLUGINS      answer with each --plugin-dir, in order, and its files with their sha256
 //	FAKE_PINGPONG A B as persona A call @B, as any other call @A, and repeat the marker so the
 //	                  called persona's prompt holds it too (an agent chain)
 //	FAKE_SLOW         take a few seconds (a turn others queue behind)
 //	FAKE_SLEEP        write docs/notes.md and the prompt to the session, as a turn under way
 //	                  does, then hang until killed
+//
+// `claude plugin validate --json <dir>` and `claude --plugin-dir <dir> plugin details <name>`
+// answer from the folder's contents, in Claude Code 2.1.296's shapes.
 //
 // Before them, the room's own handoff instructions: a prompt asking to write docs/_handoff-<name>.md
 // writes it with the latest code word, and a new session told to read it answers with what it says.
@@ -91,7 +95,11 @@ func uuid() string {
 }
 
 func run(args []string, stdin io.Reader, out io.Writer, cwd, home string) int {
-	resume, model, system, effort, plugin, autocompact := "", "default", "", "default", "", "auto"
+	if code, ok := pluginCommand(args, out); ok {
+		return code
+	}
+	resume, model, system, effort, autocompact := "", "default", "", "default", "auto"
+	var dirs []string
 	for i, a := range args {
 		if i+1 == len(args) {
 			break
@@ -106,7 +114,7 @@ func run(args []string, stdin io.Reader, out io.Writer, cwd, home string) int {
 		case "--effort":
 			effort = args[i+1]
 		case "--plugin-dir":
-			plugin = args[i+1]
+			dirs = append(dirs, args[i+1])
 		case "--autocompact":
 			autocompact = args[i+1]
 		}
@@ -129,9 +137,16 @@ func run(args []string, stdin io.Reader, out io.Writer, cwd, home string) int {
 		return result(out, model, sid, err.Error(), true, 0)
 	}
 	var answer string
-	if strings.Contains(string(prompt), "FAKE_SKILLS") {
+	switch {
+	case strings.Contains(string(prompt), "FAKE_SKILLS"):
+		plugin := ""
+		if len(dirs) > 0 {
+			plugin = dirs[0]
+		}
 		answer, err = useSkills(plugin, cwd)
-	} else {
+	case strings.Contains(string(prompt), "FAKE_PLUGINS"):
+		answer, err = listPlugins(dirs)
+	default:
 		answer, err = act(string(prompt), string(history), cwd, system, effort, autocompact, path)
 	}
 	if err != nil {
