@@ -335,3 +335,18 @@ export async function newRoomEditor(page) {
   await expect(page.locator('#starter-preview')).toContainText('Blank');
   await page.getByRole('button', { name: 'Use this starter' }).click();
 }
+
+// tableLayout measures a table in its scroll box: the cells the box clips (left of its start, or
+// past its scroll width), whether the first cell starts in the box, whether the table fits without
+// scrolling sideways, and its share of the viewport's width.
+export const tableLayout = (page, sel) => page.locator(sel).evaluate((t) => {
+  const box = t.closest('.scroll') || t.parentElement;
+  const b = box.getBoundingClientRect();
+  const start = b.left - box.scrollLeft;
+  const clipped = [...t.querySelectorAll('th, td')].filter((c) => {
+    const r = c.getBoundingClientRect();
+    return r.width && (r.left < start - 0.5 || r.right > start + box.scrollWidth + 0.5);
+  }).map((c) => c.dataset.label || c.textContent.trim().slice(0, 20));
+  const first = t.querySelector('tbody td').getBoundingClientRect();
+  return { clipped, firstInBox: first.left >= b.left - 0.5, fits: box.scrollWidth <= box.clientWidth + 1, share: t.getBoundingClientRect().width / innerWidth };
+});

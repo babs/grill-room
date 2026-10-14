@@ -118,7 +118,7 @@ The palette is the one the room page and `/admin` already use, harmonized. The l
 | **Toast** | Bottom right on desktop, bottom on a phone above the tab bar. `--chrome` background, white text, `--r-md`, 4 s, at most one action ("Undo"), `role=status`. Its wording matches the button: "Rename" → "Renamed". |
 | **Status strip** | One line under the header: the highest-priority state (running, paused, reconnecting) plus "+2 more". It never stacks bars. |
 | **Empty state** | A sentence that says what goes here and one action button. "No documents yet. Drop files here or press +." Never a blank area. |
-| **Table** | `--fs-sm`, rows at least 44 px, a `--border` bottom rule, numbers right-aligned, relative dates with an absolute-date tooltip, row actions in `⋯`. Under 40rem each row becomes a card. |
+| **Table** | `--fs-sm`, rows at least 44 px, a `--border` bottom rule, numbers right-aligned, relative dates with an absolute-date tooltip, row actions in `⋯`. Columns size to their content; long text ends in an ellipsis and its full value shows in a styled tip, never a native `title`. The header row sticks. A table scrolls sideways only when it cannot fit. Under 40rem each row becomes a card. |
 | **List** | Rows at least 44 px, primary text then meta in `--text-muted`, one trailing `⋯`. |
 | **Header (all UIs)** | `--chrome` background, 56 px high, logo + title on the left, actions on the right, all at `--control-h`. Same on the room page, `/admin`, the profile and the daemon page. |
 

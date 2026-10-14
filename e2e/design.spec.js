@@ -142,6 +142,58 @@ test('touch targets at phone width', async ({ browser, request, baseURL }) => {
   }
 });
 
+// 005-AC17: the daemon's tab bar looks like tabs at both widths. Tabs are found by the nav's
+// role, not by the .tabs class: v0.0.10 to v0.0.15 shipped the nav without that class.
+test('daemon tab bar keeps its tab styling', async ({ browser, request, baseURL }) => {
+  const { room } = await roomWith(browser, request, ['Alice']);
+  const daemon = startDaemon(`${baseURL}/r/${room.id}`);
+  try {
+    const page = await (await browser.newContext()).newPage();
+    await page.goto(await daemon.link);
+    await page.locator('#tab-accounts').click();
+    for (const viewport of [phone, desktop]) {
+      await page.setViewportSize(viewport);
+      const tabs = await page.locator('nav[aria-label=Sections] a').evaluateAll((els) => els.map((e) => {
+        const r = e.getBoundingClientRect();
+        const s = getComputedStyle(e);
+        return { name: e.id, current: e.getAttribute('aria-current') === 'page', left: r.left, right: r.right, height: r.height,
+          pad: Math.min(parseFloat(s.paddingLeft), parseFloat(s.paddingRight)), underline: s.textDecorationLine.includes('underline'),
+          border: parseFloat(s.borderBottomWidth) >= 2 && s.borderBottomStyle !== 'none' ? s.borderBottomColor : 'none' };
+      }));
+      const at = `${viewport.width}px ${JSON.stringify(tabs)}`;
+      expect(tabs.length, at).toBe(6);
+      expect(tabs.filter((t) => t.height < 43.5).map((t) => t.name), at).toEqual([]);
+      expect(tabs.filter((t) => t.underline).map((t) => t.name), at).toEqual([]);
+      const cramped = tabs.slice(1).filter((t, i) => {
+        const gap = t.left - tabs[i].right;
+        return gap < 8 && !(gap >= 0 && t.pad >= 8 && tabs[i].pad >= 8);
+      });
+      expect(cramped.map((t) => t.name), at).toEqual([]);
+      const [current, ...others] = [...tabs.filter((t) => t.current), ...tabs.filter((t) => !t.current)];
+      expect(current.name, at).toBe('tab-accounts');
+      expect(current.border, at).not.toMatch(/^none$|rgba\(0, 0, 0, 0\)/);
+      expect(others.filter((t) => t.border === current.border).map((t) => t.name), at).toEqual([]);
+      // Stuck at the top, the bar keeps 8 px between itself and the panel's first content.
+      await page.setViewportSize({ width: viewport.width, height: 400 });
+      const stuck = await page.evaluate(() => {
+        const nav = /** @type {HTMLElement} */ (document.querySelector('#tabs'));
+        // A short panel cannot scroll the bar into its stuck place: room below the content lets it.
+        document.body.style.paddingBottom = '100vh';
+        scrollTo(0, nav.offsetTop);
+        const first = [...document.querySelectorAll('.panel:not([hidden]) *')].find((e) => e.getBoundingClientRect().height > 0);
+        const ns = getComputedStyle(nav);
+        return { edge: ns.boxShadow !== 'none' || parseFloat(ns.borderBottomWidth) > 0, top: nav.getBoundingClientRect().top, gap: (first?.getBoundingClientRect().top ?? 0) - nav.getBoundingClientRect().bottom };
+      });
+      expect(stuck.top, at).toBeLessThan(1);
+      expect(stuck.edge, 'the stuck bar has a bottom border or shadow').toBe(true);
+      expect(stuck.gap, at).toBeGreaterThanOrEqual(8);
+      await page.evaluate(() => { document.body.style.paddingBottom = ''; scrollTo(0, 0); });
+    }
+  } finally {
+    daemon.cleanup();
+  }
+});
+
 // 005-AC31: several files dropped at once, each with its row: ✓, or ✗ with a reason and Retry.
 test('drag and drop upload, in the room and the docs window', async ({ browser, request }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
