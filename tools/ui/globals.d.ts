@@ -5,3 +5,11 @@ interface Window {
 interface Window {
   grillAgo(t: string): string;
 }
+interface Window {
+  grillDate(t: string | number | Date): string;
+  grillTime(t: string | number | Date): string;
+  grillIconHTML(name: string): string;
+  grillIcon(name: string): Element;
+  grillPlace(pop: HTMLElement, anchor: Element): void;
+  grillTip: { hide(): void; refresh(): void };
+}

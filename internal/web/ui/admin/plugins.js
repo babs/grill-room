@@ -6,7 +6,7 @@ import { render } from 'preact';
 import { useState, useEffect, useLayoutEffect } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { html } from 'htm/preact';
-import { fetchJSON, size, formAction } from './room-panel.js';
+import { fetchJSON, size, formAction, icon } from './room-panel.js';
 import { RowMenu } from './starters.js';
 
 /**
@@ -249,7 +249,7 @@ function AddSheet({ base, personas, close }) {
   /** @param {Candidate} c */
   const facts = (c) => [c.version && 'v' + c.version, c.size && size(c.size), c.files && c.files + ' files'].filter(Boolean).join(', ');
   return html`<div class="sheet-head"><h2 id="plugin-add-title">Add a plugin</h2>
-      <button type="button" class="btn-ghost btn-icon" aria-label="Close" onClick=${close}>✕</button></div>
+      <button type="button" class="btn-ghost btn-icon" aria-label="Close" onClick=${close} dangerouslySetInnerHTML=${icon('close')}></button></div>
     <form class="plugin-form" onSubmit=${formAction(run)}>
       <label>Repository link<input id="plugin-url" required autocomplete="off" spellcheck="false" inputmode="url" placeholder="https://github.com/owner/repo"
         readOnly=${busy} value=${url} onInput=${edit(setURL)}/></label>
@@ -265,7 +265,7 @@ function AddSheet({ base, personas, close }) {
       <fieldset class="plugin-pick" id="plugin-host-personas"><legend>Turn it on for</legend>
         ${personas.length ? personas.map((p) => html`<div key=${p.id} class="pick"><label><input type="checkbox" checked=${on.includes(p.id)}
           onChange=${(/** @type {Event} */ e) => setOn(toggle(on, p.id, /** @type {HTMLInputElement} */ (e.currentTarget).checked))}/> ${p.badge} ${p.name}</label></div>`)
-          : html`<p class="hint">No persona in the room yet.</p>`}</fieldset>
+          : html`<p class="empty">No persona in the room yet.</p>`}</fieldset>
       <div class="row"><button type="button" class="btn-primary" id="plugin-ask-host" disabled=${busy} onClick=${askHost}>Ask the AI host to fetch it</button></div>
     </div>`}
     ${check && html`<p id="plugin-found">Found ${check.ref_name} @ <${Commit} v=${check}/>${market ? `, the marketplace ${check.marketplace}` : ''}.</p>`}
@@ -280,7 +280,7 @@ function AddSheet({ base, personas, close }) {
     ${check && html`<fieldset class="plugin-pick" id="plugin-personas"><legend>Turn it on for</legend>
       ${personas.length ? personas.map((p) => html`<div key=${p.id} class="pick"><label><input type="checkbox" checked=${on.includes(p.id)}
         onChange=${(/** @type {Event} */ e) => setOn(toggle(on, p.id, /** @type {HTMLInputElement} */ (e.currentTarget).checked))}/> ${p.badge} ${p.name}</label></div>`)
-        : html`<p class="hint">No persona in the room yet.</p>`}
+        : html`<p class="empty">No persona in the room yet.</p>`}
       <p class="hint">None checked: turn it on later from a persona's Capabilities tab.</p></fieldset>`}
     <div class="actions"><button type="button" class="btn-secondary" onClick=${close}>Cancel</button>
       <button type="button" class="btn-primary" id="plugin-add-submit" disabled=${busy || !ready} onClick=${add}>Add</button></div>`;
@@ -366,7 +366,7 @@ function ReviewSheet({ data, host }) {
   if (!r) return null;
   if (!p || !v) {
     return html`<div class="sheet-head"><h2 id="plugin-review-title">Plugin</h2>
-      <button type="button" class="btn-ghost btn-icon" aria-label="Close" onClick=${close}>✕</button></div>
+      <button type="button" class="btn-ghost btn-icon" aria-label="Close" onClick=${close} dangerouslySetInnerHTML=${icon('close')}></button></div>
       <p>This plugin version is gone: someone removed it.</p>`;
   }
   const base = '/api/rooms/' + encodeURIComponent(data.room.id) + '/plugins';
@@ -390,7 +390,7 @@ function ReviewSheet({ data, host }) {
   const warned = warnings(v.report?.validate);
   const c = v.change;
   return html`<div class="sheet-head"><h2 id="plugin-review-title">Review ${p.name} v${v.n}</h2>
-      <button type="button" class="btn-ghost btn-icon" aria-label="Close" onClick=${close}>✕</button></div>
+      <button type="button" class="btn-ghost btn-icon" aria-label="Close" onClick=${close} dangerouslySetInnerHTML=${icon('close')}></button></div>
     <p class="hint">Added by ${v.added_by}, ${window.grillAgo(v.added_at)}. ${sentence(stateWords(v))}</p>
     ${v.imported && html`<p class="warn" id="plugin-imported">Files came from an archive, not from the repo: nothing proves they match this commit. Update fetches the repo's.</p>`}
     <dl class="plugin-facts">
@@ -408,7 +408,7 @@ function ReviewSheet({ data, host }) {
     })}</ul>
     <h3>What runs on the AI host's computer</h3>
     ${risky.length ? html`<ul class="plugin-risky" id="plugin-risky">${risky.map(([what, cmd]) => html`<li><span>${what}</span><code class="risk">${cmd}</code></li>`)}</ul>`
-      : html`<p class="hint">No hook and no server: nothing runs by itself.</p>`}
+      : html`<p class="empty">No hook and no server: nothing runs by itself.</p>`}
     <p id="plugin-domains">${m.domains?.length ? html`Websites its MCP servers name: ${m.domains.map((d, i) => html`${i ? ', ' : ''}<code>${d}</code>${
       v.report?.allowlist_missing?.includes(d) ? html` <span class="badge bad off-allowlist">not on the AI host's allowlist</span>` : ''}`)}.`
       : 'Its MCP servers name no website.'}</p>
@@ -419,7 +419,7 @@ function ReviewSheet({ data, host }) {
     ${v.state === 'inspecting' ? html`<p class="hint">${sentence(stateWords(v))}</p>`
       : v.state === 'invalid' ? html`<p class="error">${sentence(stateWords(v))}</p>`
       : warned.length ? html`<ul class="plugin-warnings" id="plugin-warnings">${warned.map((x) => html`<li>${x}</li>`)}</ul>`
-      : html`<p class="hint">No warnings.</p>`}
+      : html`<p class="empty">No warnings.</p>`}
     ${c && run && html`<h3>Changes since v${run.n}</h3>
       <ul class="plugin-change" id="plugin-change">
         <${Names} label="Components added" names=${c.components_added}/><${Names} label="Components removed" names=${c.components_removed}/>

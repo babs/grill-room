@@ -7,7 +7,8 @@ These rules apply to the room page, the docs window, the profile, the join page,
 - **Plain words for a PM.** Name things by what people do, not by how the system works (§8).
 - **One control scale.** Every button, input, select and tab uses the same height. Hierarchy comes from fill, not size.
 - **Brand from the logo, kept quiet.** Ink chrome, a teal primary and an amber focus or highlight. The flame orange marks the brand and nothing else; it never carries a state, so it can't be confused with danger.
-- **No emoji as UI icons in new chrome.** Section headers and every new button or menu use the monochrome inline SVG set (stroke, `currentColor`, text size), or no icon when the set has no clean match. The emoji glyphs listed under Icons (the phone tab bar, the Notes toggle, the Mute button) are the only exceptions until they are replaced. Otherwise emoji appear only where people put them: persona badges and messages.
+- **No emoji or arrow glyph as a UI icon.** Every icon comes from the monochrome inline SVG set in `kit/ui.js` (stroke, `currentColor`, text size), or there is no icon. Emoji appear only where people put them: persona badges and messages.
+- **No native `title` tooltip.** A hint shows in the styled tip (§5). The one `title` left in the room is the document frame's, which names the frame for screen readers.
 - **State is never colour alone.** A dot comes with a shape, a label or a tooltip that also works on touch.
 
 ## 2. Colour
@@ -48,12 +49,12 @@ The palette is the one the room page and `/admin` already use, harmonized. The l
 |---|---|---|---|
 | `--bg` | `#f7f6f2` | `#161a2c` | text 14.48 / 13.98 |
 | `--surface` | `#ffffff` | `#1f2440` | text 15.66 / 12.30 |
-| `--chrome` | `#1e2238` | `#1f2440` | `--chrome-text` `#fff` 15.66 / 12.30 |
+| `--chrome` | `#1e2238` | `#2a3054` | `--chrome-text` `#fff` 15.66 / 12.73; lighter than `--bg` in dark, so the header stands apart |
 | `--text` | `#1e2238` | `#e6e7ee` | see above |
 | `--text-muted` | `#6b6f80` | `#9a9fb3` | on bg 4.61 / 6.55; on surface 4.99 / 5.77 |
 | `--border` | `#dedbd2` | `#3a4062` | decorative |
 | `--border-strong` | `#8e8b80` | `#7a809c` | on bg 3.16 / 4.43; on surface 3.41 / 3.90 (≥ 3:1 non-text) |
-| `--brand` | `#159f8c` | `#3fc2ad` | on chrome 4.75 / 6.88 |
+| `--brand` | `#159f8c` | `#3fc2ad` | on chrome 4.75 / 5.78 |
 | `--primary` | `#0f7d6e` | `#3fc2ad` | button text: white 5.03 / `#161a2c` 7.82 |
 | `--primary-text` | `#0f7d6e` | `#3fc2ad` | on bg 4.65 / 7.82 |
 | `--secondary` | `--surface` + `--border-strong` outline | same | text 15.66 / 12.30 |
@@ -65,6 +66,7 @@ The palette is the one the room page and `/admin` already use, harmonized. The l
 | `--on-accent`, `--on-flame-soft` | `#1e2238` | `#1e2238` | ink on amber 9.72, on `--flame-soft` 5.21 |
 | `--dot-ring` | `#1e2238` | `#e6e7ee` | the ring of status dots and focus, ≥ 3:1 on bg and surface |
 | `--highlight` | `#fff8e1` | amber at 12 % | the background of a line that mentions you |
+| `--backdrop` | `rgb(30 34 56 / .45)` | `rgb(0 0 0 / .6)` | behind a sheet; the light value barely dims a dark page |
 
 - **Persona colours** are user data. Use them only as the pill's left stripe and avatar ring, never behind text.
 - **Dark mode** follows `prefers-color-scheme`, and so does the document frame: a document is never darker or lighter than the UI around it.
@@ -107,24 +109,26 @@ The palette is the one the room page and `/admin` already use, harmonized. The l
 |---|---|
 | **Button** | One height (`--control-h`), padding `0 var(--sp-4)`, `--fs-sm` (desktop) or `--fs-md` (phone), weight 600, `--r-md`, with an optional 16 px icon. **Primary:** `--primary` fill, white text, one per view. **Secondary:** `--surface` with a `--border-strong` outline and `--text`. **Ghost:** transparent with `--primary-text`, for toolbars. **Danger:** `--danger` fill. A danger action that is not yet armed uses the danger outline, never a pale primary. **Disabled:** 0.45 opacity with the reason in text nearby, never in a tooltip alone. |
 | **Input / select / textarea** | `--control-h` (textareas: min 2 lines), `--surface` background, `--border-strong` 1px, `--r-md`, `--fs-md` on a phone. The label sits above in `--fs-sm` 600, the hint below in `--text-muted`, the error below in `--danger` with an icon. A select has the same font and height as an input. |
-| **File input** | Never shown natively. Use a button or a drop zone; the native input stays hidden. |
+| **File input** | Never shown natively. Use a button or a drop zone; the native input stays hidden. A form that takes attachments shows a paperclip icon button, then a chip naming the files chosen (or "3 images") with an ✕ icon that drops them. |
 | **Focus** | `outline: 2px solid var(--accent); outline-offset: 2px` plus a 2px `--dot-ring` shadow on every focusable element, including tabs, chips and menu items. Amber alone is 1.4:1 on the page; the ring carries the 3:1. |
-| **Chip / pill** | `--r-pill`, height `--control-h-sm` (desktop) or `--control-h` (phone). **Persona pill:** a 4 px left stripe in the persona colour, then the badge, the name and a state glyph (● ready, ◐ working, ○ offline, ⧗ queued, 🔒 not allowed) with a 3:1 ring. A tap asks the persona; `▾` opens its menu. **Mention chip:** `--primary-bg` with `--primary-text`, `@Name`, and the turn state as a word. |
+| **Chip / pill** | `--r-pill`, height `--control-h-sm` (desktop) or `--control-h` (phone). **Persona pill:** a 4 px bar in the persona colour inside the pill's left end (a border on a round end draws a crescent), then the badge, the name and a state shape (filled ready, half working, ring offline, dashed queued, a lock icon when not allowed) with a 3:1 ring. A pill that cannot ask keeps the pointer cursor: a press says why. A tap asks the persona; `▾` opens its menu. **Mention chip:** `--primary-bg` with `--primary-text`, `@Name`, and the turn state as a word. |
 | **Badge** | `--fs-xs`, `--r-sm`, `0 var(--sp-1)`, neutral (`--border`/`--text`), role (`--accent`/`--text`) or status (`*-bg`/`*` text). At most 2 per row; more become icons, each with its meaning in a tip. In People, every badge is a 20 × 20 square holding a 14 px block SVG, in a fixed column, so a badge lines up from row to row; its meaning shows in the styled tip on hover and stays in its `aria-label`, never in a native `title`. |
 | **Drawer header** | From 40rem up, a disclosure triangle first (▾ open, ▸ folded, a clipped CSS square turned in CSS, never a text glyph, `aria-expanded`; its side is the `--fold-order` token), the section's SVG icon, the title, then its actions. The triangle and the actions are 24 px squares to the eye with a 44 px target from an `::after`; the whole header toggles the drawer. |
-| **Icons** | Section headers (People, Documents, Notes) use inline SVGs: people, a page, a speech bubble. The People badges are SVGs too: a dot for you, a gear for the AI host, a star for admin, a four-point star for can ask the AI, a pen for transcribed, a mic for mic live, a crossed speaker for muted, headphones for listening only, a crossed bell for deafened. + add is an SVG plus. The glyphs below are legacy exceptions to the rule in §1, still in use until replaced. ✕ close · ⋯ more actions · ↔ text width · ⇥ fold the chat · 💬 chat, notes · 📄 documents · 👥 people · 🎙 🔇 the Mute button · external link (an SVG square with an arrow out of its top-right corner, `currentColor`) open in a new window. A copy glyph means copy, nothing else. |
-| **Menu row** | Every `.menu` item (link, button or label) has one style: `--fs-control`, line height 1.2, `--control-h` high, `0 var(--sp-3)` padding, no border, weight 400. An item may lead with a 16 px `.ico` SVG and an 8 px gap. Once one item of a menu has an icon, the other items and the header indent by that column, so every text starts at the same x (±1 px). The header (`.menu-head`) is `--fs-sm` in `--text-muted`. Do not style a menu item one by one. |
+| **Icons** | One set, in `kit/ui.js`: 24-unit strokes in `currentColor`, 16 px. Markup names one with `data-icon="<name>"`; scripts call `grillIcon(name)`, Preact `grillIconHTML(name)`. close · more (three dots) · send · width · fold (the chat) · chat (also Notes) · docs · people · back · mic · mic-off · down (audio options) · clip (attach) · lock · eye (watches the notes) · check · alert · external (open in a new window) · plus · invite · settings · personas · host · rename · bell · device · profile · download · trash. The People badges are SVGs too: a dot for you, a gear for the AI host, a star for admin, a four-point star for can ask the AI, a pen for transcribed, a mic for mic live, a crossed speaker for muted, headphones for listening only, a crossed bell for deafened. An icon-only control names itself with `aria-label`. |
+| **Menu row** | Every `.menu` item (link, button or label) has one style: `--fs-control`, line height 1.2, `--control-h` high, `0 var(--sp-3)` padding, no border, weight 400. An item may lead with a 16 px `.ico` SVG and an 8 px gap. Once one item of a menu has an icon, the other items and the header indent by that column, so every text starts at the same x (±1 px); the header menus (⋯, you, the document's) give every item an icon. The header (`.menu-head`) is a block in `--fs-sm` `--text-muted`, its rule the menu's full width. A menu stays 8 px inside the viewport. Do not style a menu item one by one. |
 | **Icon on a text line** | Rows and headers are flex or grid rows with `align-items: center` and a fixed line height (People: 20 px, the badge height). Icons are block SVGs or plain boxes in fixed squares, centred on the text's cap-height middle within ±1 px, at 390 and 1440 px. No `vertical-align` offsets, no text glyph as an icon. |
-| **Tabs** | 44 px targets, `--fs-sm` 600, a 3 px `--brand` underline on the current tab, `aria-current="page"`. They scroll sideways under 40rem (no wrapping) with a fade edge, and stay sticky in long pages. |
-| **Sheet / dialog** | `--surface`, `--r-lg`, `--sh-2`, a backdrop `rgb(30 34 56 / .45)`. Close on Escape, on a backdrop tap and with an ✕ (44 px) in the top-right. Full screen under 40rem, with a drag handle for bottom sheets. One primary action at the bottom right (full width on a phone). |
+| **Tabs** | 44 px targets, `--fs-sm` 600, a 3 px `--brand` underline on the current tab, `aria-current="page"`. Under 40rem they take `0 var(--sp-3)` padding, so four tabs fit at 390 px; more scroll sideways (no wrapping) with a fade edge. They stay sticky in long pages. |
+| **Sheet / dialog** | `--surface`, `--r-lg`, `--sh-2`, a `--backdrop`. Close on Escape, on a backdrop tap and with a close icon (44 px) in the top-right. A tabbed sheet (`.sheet.wide`) hangs from a fixed top, `min(10dvh, 48px)`, so its head stays put when a tab changes its height. Full screen under 40rem, with a drag handle for bottom sheets. One primary action at the bottom right (full width on a phone). |
 | **Confirm** | A sheet with a title as a question ("Remove Grill?"), one line on the consequence, then [Cancel] and a [Remove] danger button. Reversible actions skip the confirm and show an undo toast. Typing the name is for room deletion only. Never use `confirm()` or `alert()`. |
 | **Toast** | Bottom right on desktop, bottom on a phone above the tab bar. `--chrome` background, white text, `--r-md`, 4 s, at most one action ("Undo"), `role=status`. Its wording matches the button: "Rename" → "Renamed". |
 | **Status strip** | One line under the header: the highest-priority state (running, paused, reconnecting) plus "+2 more". It never stacks bars. |
-| **Empty state** | A sentence that says what goes here and one action button. "No documents yet. Drop files here or press +." Never a blank area. |
-| **Hover card / tip** | A popover in `--surface` with a `--border` outline, `--sh-2`, `--fs-sm`: the card at `--r-lg` and `var(--sp-2) var(--sp-3)`, the one-line tip at `--r-md`, `--fs-xs` and `var(--sp-1) var(--sp-2)`. It opens after 300 ms of hover, at once on focus and on a tap, sits below its anchor or above it at the bottom edge, shifts left at the right edge, and never covers a row's `⋯`. The pointer can move onto it; leaving it or Escape closes it. The People list and chat author names use it, never a native `title` tooltip, and keep a normal cursor. |
-| **Table** | `--fs-sm`, rows at least 44 px, a `--border` bottom rule, numbers right-aligned, relative dates with an absolute-date tooltip, row actions in `⋯`. Columns size to their content; long text ends in an ellipsis and its full value shows in a styled tip, never a native `title`. The header row sticks. A table scrolls sideways only when it cannot fit. Under 40rem each row becomes a card. |
-| **List** | Rows at least 44 px, primary text then meta in `--text-muted`, one trailing `⋯`. |
-| **Header (all UIs)** | `--chrome` background, 56 px high, logo + title on the left, actions on the right, all at `--control-h`. Same on the room page, `/admin`, the profile and the daemon page. |
+| **Empty state** | One component, `.empty`, wherever a list or section has nothing: a dashed `--border-strong` box, `--text-muted`, `--fs-sm`, centred, `var(--sp-3) var(--sp-4)` padding. A sentence that says what goes here, and at most one action button. "No documents yet. Drop files here or press +." on a desktop; a phone, which cannot drop, gets the sentence and an Add documents button. Never a blank area, never a bare hint line. |
+| **Hover card / tip** | A popover in `--surface` with a `--border` outline, `--sh-2`, `--fs-sm`: the card at `--r-lg` and `var(--sp-2) var(--sp-3)`, the one-line tip at `--r-md`, `--fs-xs` and `var(--sp-1) var(--sp-2)`. It opens after 300 ms of hover, at once on keyboard focus (the card on a tap too), sits below its anchor or above it at the bottom edge, shifts left at the right edge, and never covers a row's `⋯`. The pointer can move onto it; leaving it or Escape closes it. Any element gets the tip from a `data-tip` attribute (`kit/ui.js`, every page); the People list and chat author names get the card. Never a native `title` tooltip. |
+| **Date** | One format, from `kit/ui.js`: `grillDate` writes a date with its time ("Oct 14, 2026, 8:12 PM" in the reader's locale), `grillTime` the time of a line ("08:12 PM"), `grillAgo` a coarse age for lists ("5 min ago"), whose tip is the `grillDate`. No page formats a date itself. |
+| **Table** | `--fs-sm`, rows at least 44 px, a `--border` bottom rule, numbers right-aligned, relative dates with the absolute date in the tip, row actions in `⋯`. Columns size to their content; long text ends in an ellipsis and its full value shows in a styled tip, never a native `title`. The header row sticks. A table scrolls sideways only when it cannot fit. Under 40rem each row becomes a card. |
+| **List** | Rows at least 44 px, primary text then meta in `--text-muted`, one trailing `⋯`. The side panel's People and Documents rows are both `--control-h` high. A list with actions per row lines them up in columns: Room settings › Admins puts the name, the role, the admin button and Rename at the same x on every row. |
+| **Fieldset** | No native frame: the legend reads as a `--fs-sm` 600 heading over its fields. |
+| **Header (all UIs)** | `--chrome` background, 56 px high, logo + title on the left, actions on the right, all at `--control-h`. Same on the room page, the docs window (whose room name is a link back, underlined on hover only), `/admin`, the profile and the daemon page. |
 
 ## 6. Layout
 
@@ -146,7 +150,8 @@ The palette is the one the room page and `/admin` already use, harmonized. The l
 | ≥ 100rem | annotations may stay open next to the chat |
 
 **Phone rules:**
-- Every target is at least 44 × 44 px with at least 8 px between targets.
+- Every target is at least 44 × 44 px of its own box, with at least 8 px between targets. The 24 px drawer-header actions grow to 44 px; a row of People is 44 px high.
+- An open document's name gets its own row under 40rem; its tools sit on the next one.
 - No hover-only actions: long-press or `⋯` instead.
 - Respect `env(safe-area-inset-*)`.
 - Input font is at least 16 px.

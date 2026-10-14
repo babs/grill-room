@@ -80,8 +80,9 @@ for (const [size, viewport] of Object.entries(sizes)) {
       expect(await sheet.boundingBox()).toEqual({ x: 0, y: 0, ...viewport });
       const nav = sheet.locator('#persona-tabs');
       await expect(nav).toHaveCSS('overflow-x', 'auto');
-      expect(await nav.evaluate((e) => e.scrollWidth > e.clientWidth && e.scrollLeft > 0)).toBe(true);
-      await expect(nav.locator('#persona-tab-capabilities')).toBeInViewport();
+      // The four tabs fit at 390 px: none hides under the fade edge.
+      expect(await nav.evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
+      await expect(nav.locator('#persona-tab-capabilities')).toBeInViewport({ ratio: 1 });
     }
     // An unknown tab is Identity; a persona the room does not have closes the sheet and its link.
     await alice.evaluate((h) => { location.hash = h; }, `#personas/${id}/nope`);

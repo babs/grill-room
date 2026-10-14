@@ -212,7 +212,7 @@ test('the docs window links back to the room', async ({ browser, request }) => {
   await expect(alice.locator('#room-name a')).toHaveCount(0);
   const docs = await docsWindow(alice, room, phone);
   const back = docs.getByRole('link', { name: 'Docs room' });
-  await expect(back).toHaveAttribute('title', 'Back to the room');
+  await expect(back).toHaveAttribute('data-tip', 'Back to the room');
   expect((await back.boundingBox()).height).toBeGreaterThanOrEqual(44);
   // Room events reload the header: the link stays the same element, with its focus, and follows a
   // rename.
@@ -350,12 +350,12 @@ test('document actions menu', async ({ browser, request }) => {
   expect(await smallTargets(docs), 'doc menu at 390 px').toEqual([]);
   await docs.keyboard.press('Escape');
 
-  // At 390 px: the title on one line, ellipsed, the full name as its tooltip; one row of tools.
+  // At 390 px: the title on one line of its own, ellipsed, the full name as its tip; one row of tools.
   const title = docs.locator('#doc-name');
-  await expect(title).toHaveAttribute('title', name);
+  await expect(title).toHaveAttribute('data-tip', name);
   const t = await title.evaluate((e) => ({ lines: Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight)), cut: e.scrollWidth > e.clientWidth }));
   expect(t).toEqual({ lines: 1, cut: true });
-  const tops = await docs.locator('.viewer-head button:visible').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
+  const tops = await docs.locator('.doc-tools button:visible').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
   expect(new Set(tops).size).toBe(1);
 });
 
@@ -391,7 +391,7 @@ test('phone: one pane at a time, Back steps back', async ({ browser, request }) 
     await page.getByRole('button', { name: /Notes/ }).click();
     expect(await panes(page)).toEqual({ list: false, doc: false, notes: true });
     await full(page, '#annotations');
-    await expect(page.getByRole('button', { name: '← Back to the document' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Back to the document' })).toBeVisible();
     expect(await smallTargets(page), 'notes').toEqual([]);
     await page.goBack();
     await expect(page.locator('#annotations')).toBeHidden();

@@ -6,7 +6,7 @@ import { render } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { html } from 'htm/preact';
-import { RoomPanel, Rename, TabBar, fetchJSON, roomTabs } from './room-panel.js';
+import { RoomPanel, Rename, TabBar, fetchJSON, roomTabs, icon } from './room-panel.js';
 import { Editor } from './starters.js';
 import { PluginsTab, mountReview } from './plugins.js';
 
@@ -90,20 +90,21 @@ function Manage({ data, tab, tabs }) {
         <div class="row"><button type="button" class="btn-secondary" id="save-starter" onClick=${() => saveAsStarter(base, setSaid)}>Save as starter</button></div>`}>
       ${tab === 'admins' && html`
         <p class="hint">Room admins rename the room and its participants, manage every invite, appoint other admins and delete the room. The room keeps at least one.</p>
-        <ul id="room-admins">${data.participants.map((p) => html`<li key=${p.id}>
-          ${p.name}${p.admin && html` <strong>admin</strong>`}${' '}
-          ${p.admin
+        <ul id="room-admins" class="admin-rows">${data.participants.map((p) => html`<li key=${p.id}>
+          <span class="who">${p.name}</span><span>${p.admin && html`<strong class="badge role">admin</strong>`}</span>
+          <span>${p.admin
             ? html`<button type="button" class="btn-secondary" onClick=${() => setAdmin(p, false)}>${p.id === data.me.id ? 'Step down' : 'Remove admin'}</button>`
-            : html`<button type="button" class="btn-secondary" onClick=${() => setAdmin(p, true)} aria-label=${'Make ' + p.name + ' a room admin'}>Make admin</button>`}
-          ${' '}<${Rename} key=${p.name} name=${p.name} path=${`${base}/participants/${p.id}/name`} api=${fetchJSON} show=${show} done=${() => setSaid('')}/>
+            : html`<button type="button" class="btn-secondary" onClick=${() => setAdmin(p, true)} aria-label=${'Make ' + p.name + ' a room admin'}>Make admin</button>`}</span>
+          <${Rename} key=${p.name} name=${p.name} path=${`${base}/participants/${p.id}/name`} api=${fetchJSON} show=${show} done=${() => setSaid('')}/>
         </li>`)}</ul>`}
       ${tab === 'personas' && html`
         <p class="hint">Every member adds and edits the room's personas in the Personas sheet. A persona's name opens its own sheet.</p>
-        <ul id="manage-personas">${personas.map((p) => html`<li key=${p.id}><a href=${'#personas/' + p.id + '/identity'}>${p.badge} ${p.name}</a>: ${p.model}, effort ${p.effort}${p.pending ? ', waits for the AI host' : ''}</li>`)}</ul>
+        <ul id="manage-personas">${personas.map((p) => html`<li key=${p.id}><span><span class="badge persona-badge">${p.badge}</span> <a href=${'#personas/' + p.id + '/identity'}
+          aria-label=${p.badge + ' ' + p.name}>${p.name}</a> <span class="hint">${p.model} · effort ${p.effort}${p.pending ? ' · waits for the AI host' : ''}</span></span></li>`)}</ul>
         <button type="button" class="btn-primary" onClick=${openPersonas}>Open the Personas sheet</button>`}
       ${tab === 'skills' && (skills.length ? html`<ul id="room-admin-skills">${skills.map((k) => html`<li key=${k.id}>${k.name} v${k.version}, copied by ${k.author}
           ${' '}<button type="button" class="btn-secondary" onClick=${() => removeSkill(k)} aria-label=${'Remove the room skill ' + k.name}>Remove</button></li>`)}</ul>`
-        : html`<p class="hint">None yet. Members copy their personal skills in from the Personas sheet.</p>`)}
+        : html`<p class="empty">None yet. Members copy their personal skills in from the Personas sheet.</p>`)}
       ${tab === 'plugins' && html`<${PluginsTab} base=${base} admin=${true} host=${isHost(data)} personas=${personas}/>`}
       ${tab === 'documents' && html`<${DeletedDocuments} base=${base} show=${show}/>`}
       ${tab === 'glossary' && html`<${STTGlossary} data=${data}/>`}
@@ -123,7 +124,7 @@ async function saveAsStarter(base, say) {
   if (!view) return;
   const close = () => starterSheet.close();
   render(html`<div class="sheet-head"><h2 id="starter-save-title">Save as starter</h2>
-      <button type="button" class="btn-ghost btn-icon" aria-label="Close" onClick=${close}>✕</button></div>
+      <button type="button" class="btn-ghost btn-icon" aria-label="Close" onClick=${close} dangerouslySetInnerHTML=${icon('close')}></button></div>
     <${Editor} view=${view} api=${fetchJSON} mode="save" path=${base + '/starters'} back=${close}
       done=${(/** @type {import('./starters.js').Starter} */ st) => {
         close();
@@ -146,7 +147,7 @@ function DeletedDocuments({ base, show }) {
     <p class="hint">Documents a room admin deleted. They left the room and the AI's workspace; their data stays until the room is deleted.</p>
     ${list && (list.length ? html`<ul id="deleted-documents">${list.map((d) => html`<li key=${d.id}>${d.name}, by ${d.author}
       ${' '}<button type="button" class="btn-secondary" onClick=${() => restore(d.id)} aria-label=${'Restore ' + d.name}>Restore</button></li>`)}</ul>`
-      : html`<p class="hint">No deleted document.</p>`)}`;
+      : html`<p class="empty">No deleted document.</p>`)}`;
 }
 
 /**
@@ -176,7 +177,7 @@ function STTGlossary({ data }) {
     <form id="stt-glossary" onSubmit=${save}>
       <textarea rows="5" aria-label="Words to recognise" value=${text} onInput=${(/** @type {Event} */ e) => setText(/** @type {HTMLTextAreaElement} */ (e.target).value)}></textarea>
       <div class="glossary-actions">
-        <span id="glossary-used" title=${g ? g.prompt : ''}>${g ? `${g.used} / ~${g.capacity} terms used` : ''}</span>
+        <span id="glossary-used" data-tip=${g ? g.prompt : ''}>${g ? `${g.used} / ~${g.capacity} terms used` : ''}</span>
         <button type="submit">Save</button>
       </div>
     </form>
