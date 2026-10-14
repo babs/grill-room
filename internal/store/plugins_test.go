@@ -621,7 +621,7 @@ func TestPluginsVersion(t *testing.T) {
 // through its covering index only, never the table where the rows sit.
 func TestPluginsVersionUsesTheCoveringIndex(t *testing.T) {
 	s := openTest(t)
-	rows, err := s.db.QueryContext(context.Background(), `EXPLAIN QUERY PLAN `+pluginsVersionSQL, "a", "a")
+	rows, err := s.db.QueryContext(context.Background(), `EXPLAIN QUERY PLAN `+pluginsVersionSQL, "a", "a", "a", "a")
 	if err != nil {
 		t.Fatal(err)
 	}

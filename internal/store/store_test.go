@@ -388,6 +388,10 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 		if _, err := s.AddPlugins(ctx, room, []NewPlugin{newPlugin("plug-"+room, "c1")}, []int64{sec.ID}, p, 1<<20); err != nil {
 			t.Fatal(err)
 		}
+		// 009-AC19: and its requests to the AI host.
+		if _, _, err := s.AddPluginFetch(ctx, room, NewPluginFetch{URL: "git@example.com:o/r.git"}, p); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// These reach rooms through another table, so roomRows cannot see them.
 	indirect := []string{"revisions", "annotation_messages", "attachments", "message_versions", "room_persona_skills", "plugin_versions", "plugin_snapshots", "room_persona_plugins"}

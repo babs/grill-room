@@ -44,10 +44,23 @@ type TurnInput struct {
 	// Plugins are the room plugins the turn loads, each in its own --plugin-dir after Plugin's
 	// (009-AC17).
 	Plugins []PluginTar
+	// PluginOptions are the values of the loaded plugins' options (009-AC23).
+	PluginOptions PluginOptions
+	// Redact are the values the turn's output must not hold: each becomes [redacted] in the
+	// synthesis, the changed files and the session, and in the session's local copy (009-AC23).
+	Redact []string
 	// Bearer is the dummy token for the account's proxy (Request.Bearer).
 	Bearer string
 	// Autocompact is Request.Autocompact.
 	Autocompact int
+}
+
+// PluginOptions are the values of the room plugins' options a turn hands Claude Code, by plugin
+// id, "<name>@inline" for a --plugin-dir plugin: Secrets go to .credentials.json as pluginSecrets,
+// Configs to settings.json as pluginConfigs, where Claude Code reads them (009-AC23).
+type PluginOptions struct {
+	Secrets map[string]map[string]any
+	Configs map[string]map[string]any
 }
 
 // PluginTar is a room plugin a turn loads. Name becomes its folder; Tar is its snapshot, which
@@ -71,7 +84,7 @@ type TurnOutput struct {
 func (s *Sandbox) RunTurn(ctx context.Context, in TurnInput) (*TurnOutput, error) {
 	s.turn.Lock()
 	defer s.turn.Unlock()
-	if err := s.prepare(ctx, in.Bearer); err != nil {
+	if err := s.prepare(ctx, in.Bearer, in.PluginOptions); err != nil {
 		return nil, err
 	}
 	// The agent owns every file, but may have taken its own write bit away.
@@ -112,7 +125,42 @@ func (s *Sandbox) RunTurn(ctx context.Context, in TurnInput) (*TurnOutput, error
 	if out.Session, err = s.ReadSession(ctx, res.SessionID, out.SessionOffset); err != nil {
 		return nil, err
 	}
+	if err := s.redact(ctx, out, in.Redact); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// redact replaces the secrets in what the turn produced for the room (009-AC23): JSON (the session,
+// replies.json, annotations-new.json) string by string, so it still parses; anything else as text.
+// The session's local copy gets the same bytes, so the next turn finds it equal to the room's and
+// resumes from it without fetching it.
+func (s *Sandbox) redact(ctx context.Context, out *TurnOutput, secrets []string) error {
+	r := NewRedactor(secrets)
+	if r == nil {
+		return nil
+	}
+	out.Result.Result = r.Text(out.Result.Result)
+	for i, c := range out.Changes {
+		switch {
+		case c.Content == nil:
+		case strings.HasSuffix(c.Path, ".json"):
+			out.Changes[i].Content = r.JSON(c.Content)
+		default:
+			out.Changes[i].Content = []byte(r.Text(string(c.Content)))
+		}
+	}
+	clean := r.JSON(out.Session)
+	if bytes.Equal(clean, out.Session) {
+		return nil
+	}
+	out.Session = clean
+	_, err := s.run(ctx, bytes.NewReader(clean), "exec", "-i", s.container(), "sh", "-c", `truncate -s "$2" "$1" && cat >> "$1"`,
+		"sh", sessionPath(out.Result.SessionID), strconv.FormatInt(out.SessionOffset, 10))
+	if err != nil {
+		return fmt.Errorf("redact the session: %w", err)
+	}
+	return nil
 }
 
 // pluginDir holds the turn's skills and pluginsDir its room plugins, one folder each, in the

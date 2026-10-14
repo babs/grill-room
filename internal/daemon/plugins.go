@@ -160,6 +160,9 @@ type pluginReport struct {
 	Validate json.RawMessage `json:"validate,omitempty"`
 	Details  *plugin.Details `json:"details,omitempty"`
 	Error    string          `json:"error,omitempty"`
+	// AllowlistMissing are the domains the plugin's MCP servers name that the egress allowlist
+	// does not let the sandbox reach, as it stood at the inspection (009-AC25).
+	AllowlistMissing []string `json:"allowlist_missing,omitempty"`
 }
 
 // validation is the part of `claude plugin validate --json` the daemon reads (Claude Code 2.1.296).
@@ -302,8 +305,15 @@ func (r *roomRun) runInspection(ctx context.Context, tok string, id int64, img I
 		return &pluginReport{Error: "the snapshot is not a valid plugin: " + err.Error()}, nil
 	}
 	var name string
+	var missing []string
 	if m, err := snap.Manifest(); err == nil && plugin.CheckName(m.Name) == nil {
 		name = m.Name
+		allow := r.d.Status().Allowlist
+		for _, dom := range m.Domains {
+			if !sandbox.Allowed(allow, dom) {
+				missing = append(missing, dom)
+			}
+		}
 	}
 	ictx, cancel := context.WithTimeout(ctx, inspectTimeout)
 	defer cancel()
@@ -350,7 +360,7 @@ func (r *roomRun) runInspection(ctx context.Context, tok string, id int64, img I
 		// Nothing printed: Docker failed, not the plugin.
 		return nil, fmt.Errorf("claude plugin validate: %w", errors.Join(runErr, err))
 	}
-	rep := &pluginReport{OK: v.Success && runErr == nil}
+	rep := &pluginReport{OK: v.Success && runErr == nil, AllowlistMissing: missing}
 	var compact bytes.Buffer
 	if json.Compact(&compact, out) == nil && compact.Len() <= maxValidateJSON {
 		rep.Validate = compact.Bytes()

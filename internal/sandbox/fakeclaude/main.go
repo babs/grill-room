@@ -15,11 +15,15 @@
 //	FAKE_SKILLS       run every scripts/*.sh of each skill in the first --plugin-dir and write
 //	                  what they print to docs/skills.md, as an agent using its skills would
 //	FAKE_PLUGINS      answer with each --plugin-dir, in order, and its files with their sha256
+//	FAKE_HOOKS        answer with what the plugins' SessionStart hooks printed
 //	FAKE_PINGPONG A B as persona A call @B, as any other call @A, and repeat the marker so the
 //	                  called persona's prompt holds it too (an agent chain)
 //	FAKE_SLOW         take a few seconds (a turn others queue behind)
 //	FAKE_SLEEP        write docs/notes.md and the prompt to the session, as a turn under way
 //	                  does, then hang until killed
+//
+// Every turn first runs the --plugin-dir plugins' SessionStart command hooks with their option
+// values, as Claude Code does, and keeps what they print in the session.
 //
 // `claude plugin validate --json <dir>` and `claude --plugin-dir <dir> plugin details <name>`
 // answer from the folder's contents, in Claude Code 2.1.296's shapes.
@@ -136,8 +140,14 @@ func run(args []string, stdin io.Reader, out io.Writer, cwd, home string) int {
 	if err := os.MkdirAll(dir, 0o700); err != nil { //nolint:gosec // see above
 		return result(out, model, sid, err.Error(), true, 0)
 	}
+	hooks := sessionStartHooks(dirs, home, cwd)
 	var answer string
 	switch {
+	case strings.Contains(string(prompt), "FAKE_HOOKS"):
+		answer, err = "Hooks: none.", nil
+		if len(hooks) > 0 {
+			answer = "Hooks: " + strings.Join(hooks, " | ") + "."
+		}
 	case strings.Contains(string(prompt), "FAKE_SKILLS"):
 		plugin := ""
 		if len(dirs) > 0 {
@@ -157,6 +167,9 @@ func run(args []string, stdin io.Reader, out io.Writer, cwd, home string) int {
 		return result(out, model, sid, err.Error(), true, 0)
 	}
 	enc := json.NewEncoder(f)
+	for _, h := range hooks {
+		_ = enc.Encode(map[string]string{"type": "hook", "event": "SessionStart", "output": h})
+	}
 	_ = enc.Encode(map[string]string{"type": "user", "prompt": string(prompt)})
 	_ = enc.Encode(map[string]string{"type": "assistant", "text": answer})
 	if err := f.Close(); err != nil {

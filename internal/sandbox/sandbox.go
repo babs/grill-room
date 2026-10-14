@@ -427,21 +427,21 @@ func (r *Result) Label(asked string) (model, note string, mismatch bool) {
 func (s *Sandbox) RunClaude(ctx context.Context, req Request) (*Result, error) {
 	s.turn.Lock()
 	defer s.turn.Unlock()
-	if err := s.prepare(ctx, req.Bearer); err != nil {
+	if err := s.prepare(ctx, req.Bearer, PluginOptions{}); err != nil {
 		return nil, err
 	}
 	return s.runClaude(ctx, req)
 }
 
-// prepare starts the sandbox and refreshes its stubs with bearer.
-func (s *Sandbox) prepare(ctx context.Context, bearer string) error {
+// prepare starts the sandbox and refreshes its stubs with bearer and the plugins' option values.
+func (s *Sandbox) prepare(ctx context.Context, bearer string, opts PluginOptions) error {
 	if bearer == "" {
 		return errors.New("no Claude account proxy for this sandbox")
 	}
 	if err := s.Start(ctx); err != nil {
 		return err
 	}
-	return s.writeStubs(ctx, bearer)
+	return s.writeStubs(ctx, bearer, opts)
 }
 
 // runClaude runs claude -p in the started sandbox; the caller holds s.turn.
@@ -494,15 +494,30 @@ func (s *Sandbox) runClaude(ctx context.Context, req Request) (*Result, error) {
 
 // writeStubs regenerates, before every turn, the dummy credentials (Claude Code wipes them after a
 // refused refresh, and the supervisor may have rotated the bearer) and the oauthAccount stub, which
-// skips the profile fetch only while under 24 h old.
-func (s *Sandbox) writeStubs(ctx context.Context, bearer string) error {
+// skips the profile fetch only while under 24 h old. The plugins' option values go where Claude
+// Code 2.1.296 reads a --plugin-dir plugin's: sensitive ones in .credentials.json, the others in
+// settings.json, both rewritten whole, so no value of an earlier turn stays (009-AC23, S12).
+func (s *Sandbox) writeStubs(ctx context.Context, bearer string, opts PluginOptions) error {
 	nowMS := time.Now().UnixMilli()
+	creds := map[string]any{"claudeAiOauth": map[string]any{
+		"accessToken": bearer, "refreshToken": "grill-room-dummy-refresh",
+		"expiresAt": time.Now().AddDate(10, 0, 0).UnixMilli(), "subscriptionType": "max",
+		"scopes": []string{"user:inference", "user:profile", "user:sessions:claude_code"},
+	}}
+	if len(opts.Secrets) > 0 {
+		creds["pluginSecrets"] = opts.Secrets
+	}
+	configs := map[string]any{}
+	for id, values := range opts.Configs {
+		configs[id] = map[string]any{"options": values}
+	}
+	settings := map[string]any{}
+	if len(configs) > 0 {
+		settings["pluginConfigs"] = configs
+	}
 	files := map[string]any{
-		".claude/.credentials.json": map[string]any{"claudeAiOauth": map[string]any{
-			"accessToken": bearer, "refreshToken": "grill-room-dummy-refresh",
-			"expiresAt": time.Now().AddDate(10, 0, 0).UnixMilli(), "subscriptionType": "max",
-			"scopes": []string{"user:inference", "user:profile", "user:sessions:claude_code"},
-		}},
+		".claude/.credentials.json": creds,
+		".claude/settings.json":     settings,
 		// Fake identity: keeps the host's account out of uploaded sessions (S2).
 		".claude.json": map[string]any{"oauthAccount": map[string]any{
 			"accountUuid":           "00000000-0000-4000-8000-000000000001",

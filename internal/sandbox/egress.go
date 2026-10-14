@@ -47,6 +47,12 @@ func covers(entry, host string) bool {
 	return host == entry[1:] || strings.HasSuffix(host, entry)
 }
 
+// Allowed reports whether the allowlist list lets the sandbox reach host (009-AC25).
+func Allowed(list []string, host string) bool {
+	host = strings.ToLower(host)
+	return slices.ContainsFunc(list, func(e string) bool { return covers(e, host) })
+}
+
 // NormalizeAllowlist validates the host's allowlist and returns it lowercased, sorted and without
 // duplicates. An entry a leading-dot entry already covers is dropped: squid refuses to start on it.
 func NormalizeAllowlist(in []string) ([]string, error) {

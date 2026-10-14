@@ -110,6 +110,8 @@ type roomServer struct {
 	srv   *web.Server
 	room  string
 	admin string
+	// dbPath is the store's file.
+	dbPath string
 }
 
 func newRoomServer(t *testing.T) *roomServer {
@@ -125,7 +127,14 @@ func newRoomServerOpts(t *testing.T, opts web.Options) *roomServer {
 // newRoomServerWrapped serves the room through wrap, when set.
 func newRoomServerWrapped(t *testing.T, opts web.Options, wrap func(http.Handler) http.Handler) *roomServer {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "room.db"))
+	return newRoomServerLog(t, opts, wrap, zap.NewNop())
+}
+
+// newRoomServerLog is newRoomServerWrapped with the server writing to log.
+func newRoomServerLog(t *testing.T, opts web.Options, wrap func(http.Handler) http.Handler, log *zap.Logger) *roomServer {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "room.db")
+	st, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,13 +142,13 @@ func newRoomServerWrapped(t *testing.T, opts web.Options, wrap func(http.Handler
 	admin := web.NewToken()
 	ts := httptest.NewUnstartedServer(nil)
 	ts.Start()
-	srv := web.New(bus.New(st), web.HashToken(admin), ts.URL, opts, zap.NewNop())
+	srv := web.New(bus.New(st), web.HashToken(admin), ts.URL, opts, log)
 	ts.Config.Handler = srv.Handler()
 	if wrap != nil {
 		ts.Config.Handler = wrap(ts.Config.Handler)
 	}
 	t.Cleanup(ts.Close)
-	rs := &roomServer{ts: ts, st: st, srv: srv, admin: admin}
+	rs := &roomServer{ts: ts, st: st, srv: srv, admin: admin, dbPath: dbPath}
 	var room store.Room
 	rs.call(t, "POST", "/api/rooms", admin, map[string]string{"name": "R"}, http.StatusCreated, &room)
 	rs.room = room.ID

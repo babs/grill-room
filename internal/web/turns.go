@@ -612,7 +612,13 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request, d *store.Daemon,
 		return
 	}
 	for _, p := range ps {
-		job.Plugins = append(job.Plugins, turn.Plugin{Name: p.Name, SHA256: p.SHA256, Version: p.N})
+		tp := turn.Plugin{ID: p.PluginID, Name: p.Name, SHA256: p.SHA256, Version: p.N}
+		if m := manifestOf(p.Manifest); m != nil {
+			for _, o := range m.Options {
+				tp.Options = append(tp.Options, turn.PluginOption{Key: o.Key, Sensitive: o.Sensitive, Required: o.Required, Default: o.Default})
+			}
+		}
+		job.Plugins = append(job.Plugins, tp)
 	}
 	if t.Resume != "" {
 		data, err := s.bus.Store.AgentSession(r.Context(), d.RoomID, t.PersonaID, t.Resume)
@@ -738,6 +744,7 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 		s.failTurn(r.Context(), d.RoomID, t.ID, "the result from the host's daemon was refused: too large or malformed")
 		return
 	}
+	s.recordSetup(r.Context(), d.RoomID, t.ID, res.SkippedPlugins)
 	if res.Error != "" {
 		s.failTurn(r.Context(), d.RoomID, t.ID, sanitize(res.Error, maxError))
 		w.WriteHeader(http.StatusNoContent)
@@ -828,6 +835,34 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 		zap.Strings("created", done.Report.Created), zap.Strings("rejected", done.Report.Rejected), zap.Int("annotated", done.Report.Annotated),
 		zap.Int("closed", done.Report.Closed), zap.String("model", done.Model), zap.String("effort", done.Effort), zap.Int("session_bytes", len(res.Session)))
 	writeJSON(w, http.StatusOK, done)
+}
+
+// recordSetup marks the turn's plugins the daemon left out for an option the host has not set,
+// and clears the mark on the others it pinned: the Capabilities tab says which (009-AC24). A
+// failure only logs: the turn's result matters more.
+func (s *Server) recordSetup(ctx context.Context, room string, id int64, skipped []turn.SkippedPlugin) {
+	ps, err := s.bus.Store.TurnPlugins(ctx, room, id)
+	if err != nil || len(ps) == 0 {
+		return
+	}
+	pinned := make([]string, len(ps))
+	for i, p := range ps {
+		pinned[i] = p.Name
+	}
+	var names []string
+	for _, k := range skipped {
+		if k.Reason == turn.NeedsHostSetup {
+			names = append(names, k.Name)
+		}
+	}
+	changed, err := s.bus.Store.SetPluginsSetup(ctx, room, pinned, names)
+	if err != nil {
+		s.log.Warn("plugin_setup_record_failed", zap.String("room", room), zap.Int64("turn", id), zap.Error(err))
+		return
+	}
+	if changed {
+		s.bus.Notify(room)
+	}
 }
 
 // refuseOthersThreads drops the replies and closes of turn t to threads that belong to other

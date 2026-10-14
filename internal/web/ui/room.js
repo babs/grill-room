@@ -2348,7 +2348,8 @@ function pluginsBlock(p) {
     const run = pl.versions.find((v) => v.n === pl.running);
     const shown = run || pl.versions[pl.versions.length - 1];
     const cost = pluginCost(shown);
-    if (on && run) {
+    // A plugin that needs host setup does not load (009-AC24).
+    if (on && run && !pl.needs_setup) {
       loaded++;
       if (cost === null) unknown++;
       else total += cost;
@@ -2371,7 +2372,7 @@ function pluginsBlock(p) {
     });
     name.append(toggle, ' ' + pl.name);
     const meta = [(shown.manifest && shown.manifest.version ? shown.manifest.version + ', ' : '') + pl.ref_name + ' @ ' + shown.short_commit];
-    meta.push(run ? (cost === null ? 'cost unknown' : tokens(cost) + ' per answer') : pl.why || 'does not load');
+    meta.push(run && !pl.needs_setup ? (cost === null ? 'cost unknown' : tokens(cost) + ' per answer') : pl.why || 'does not load');
     if (on && run && run !== pl.versions[pl.versions.length - 1]) meta.push('a newer version waits');
     li.append(name, span('hint', meta.join(' · ')));
     list.append(li);

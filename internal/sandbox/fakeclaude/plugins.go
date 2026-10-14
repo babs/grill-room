@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -174,4 +175,62 @@ func listPlugins(dirs []string) (string, error) {
 		parts = append(parts, dir+" ["+strings.Join(files, ", ")+"]")
 	}
 	return "Plugin dirs: " + strings.Join(parts, " | ") + ".", nil
+}
+
+// readJSON decodes the JSON file at path into v; a missing or broken file leaves v as it was.
+func readJSON(path string, v any) {
+	if b, err := os.ReadFile(path); err == nil { //nolint:gosec // the sandbox home's own files
+		_ = json.Unmarshal(b, v)
+	}
+}
+
+// sessionStartHooks runs each --plugin-dir's SessionStart command hooks, as Claude Code 2.1.296
+// does before any API call, in cwd with CLAUDE_PLUGIN_ROOT and one CLAUDE_PLUGIN_OPTION_<KEY> per
+// option value the daemon wrote: pluginConfigs in settings.json, pluginSecrets in
+// .credentials.json, both under "<name>@inline" (009-AC23). It returns what they print, trimmed.
+func sessionStartHooks(dirs []string, home, cwd string) []string {
+	var settings struct {
+		PluginConfigs map[string]struct {
+			Options map[string]any `json:"options"`
+		} `json:"pluginConfigs"`
+	}
+	var creds struct {
+		PluginSecrets map[string]map[string]any `json:"pluginSecrets"`
+	}
+	readJSON(filepath.Join(home, ".claude", "settings.json"), &settings)
+	readJSON(filepath.Join(home, ".claude", ".credentials.json"), &creds)
+	var out []string
+	for _, dir := range dirs {
+		var cfg struct {
+			Hooks map[string][]struct {
+				Hooks []struct {
+					Type    string `json:"type"`
+					Command string `json:"command"`
+				} `json:"hooks"`
+			} `json:"hooks"`
+		}
+		readJSON(filepath.Join(dir, "hooks", "hooks.json"), &cfg)
+		if len(cfg.Hooks["SessionStart"]) == 0 {
+			continue
+		}
+		name, _ := manifestName(dir)
+		env := append(os.Environ(), "CLAUDE_PLUGIN_ROOT="+dir)
+		for _, values := range []map[string]any{settings.PluginConfigs[name+"@inline"].Options, creds.PluginSecrets[name+"@inline"]} {
+			for k, v := range values {
+				env = append(env, "CLAUDE_PLUGIN_OPTION_"+strings.ToUpper(k)+"="+fmt.Sprint(v))
+			}
+		}
+		for _, m := range cfg.Hooks["SessionStart"] {
+			for _, h := range m.Hooks {
+				if h.Type != "command" {
+					continue
+				}
+				cmd := exec.Command("sh", "-c", h.Command) //nolint:gosec,noctx // a test double running the hook it was handed, as claude does
+				cmd.Dir, cmd.Env = cwd, env
+				b, _ := cmd.Output() // a failing hook prints what it printed, as in Claude Code
+				out = append(out, strings.TrimSpace(string(b)))
+			}
+		}
+	}
+	return out
 }

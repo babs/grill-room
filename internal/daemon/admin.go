@@ -177,6 +177,8 @@ func (a *Admin) Handler() http.Handler {
 	mux.Handle("POST /api/settings", a.auth(a.settings))
 	mux.Handle("POST /api/allowlist", a.auth(a.allowlist))
 	mux.Handle("GET /api/denied", a.auth(a.denied))
+	mux.Handle("POST /api/plugin-options", a.auth(a.pluginOptions))
+	mux.Handle("POST /api/plugin-fetch", a.auth(a.pluginFetch))
 	mux.Handle("POST /api/autostart", a.auth(a.setAutostart))
 	mux.Handle("POST /api/dev-keys", a.auth(a.host(a.addDevKey)))
 	mux.Handle("POST /api/dev-keys/remove", a.auth(a.host(a.removeDevKey)))
@@ -389,6 +391,45 @@ func (a *Admin) allowlist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// pluginOptions saves the values the host gives a room plugin's options; they stay on this
+// machine (009-AC22). A value is never sent back: the page sees which options hold one.
+func (a *Admin) pluginOptions(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Instance string         `json:"instance"`
+		Room     string         `json:"room"`
+		Plugin   int64          `json:"plugin"`
+		Values   map[string]any `json:"values"`
+		Clear    []string       `json:"clear"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	d, err := a.ops(req.Instance)
+	if err == nil {
+		err = d.SetPluginOptions(r.Context(), req.Room, req.Plugin, req.Values, req.Clear)
+	}
+	reply(w, err)
+}
+
+// pluginFetch fetches a room's request with this host's git, or declines it (009-AC19): the only
+// way a request reaches git.
+func (a *Admin) pluginFetch(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Instance string `json:"instance"`
+		Room     string `json:"room"`
+		ID       int64  `json:"id"`
+		Fetch    bool   `json:"fetch"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	d, err := a.ops(req.Instance)
+	if err == nil {
+		err = d.PluginFetch(a.ctx, req.Room, req.ID, req.Fetch)
+	}
+	reply(w, err)
 }
 
 // deniedShown is how many refused egress requests the page lists.

@@ -121,3 +121,44 @@ func TestFakePlugins(t *testing.T) {
 		t.Fatalf("no plugin: %q", o.Result)
 	}
 }
+
+// 009-AC23: every turn runs each plugin's SessionStart command hooks, as 2.1.296 does, with
+// CLAUDE_PLUGIN_OPTION_<KEY> from settings.json's pluginConfigs and .credentials.json's
+// pluginSecrets under "<name>@inline"; FAKE_HOOKS answers with what they printed, and the session
+// keeps it. A plugin without hooks, or another plugin's values, give nothing.
+func TestFakeSessionStartHooks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake claude runs in the Linux sandbox only")
+	}
+	cwd, home := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"settings.json":     `{"pluginConfigs":{"opt@inline":{"options":{"region":"eu"}},"other@inline":{"options":{"region":"us"}}}}`,
+		".credentials.json": `{"claudeAiOauth":{},"pluginSecrets":{"opt@inline":{"api_key":"s3cret"}}}`,
+	} {
+		if err := os.WriteFile(filepath.Join(home, ".claude", name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hook := `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo len=${#CLAUDE_PLUGIN_OPTION_API_KEY} region=$CLAUDE_PLUGIN_OPTION_REGION"}]}]}}`
+	opt := writeTree(t, map[string]string{".claude-plugin/plugin.json": `{"name":"opt"}`, "hooks/hooks.json": hook})
+	bare := writeTree(t, map[string]string{".claude-plugin/plugin.json": `{"name":"bare"}`})
+	o, code := call(t, cwd, home, "FAKE_HOOKS", "--plugin-dir", bare, "--plugin-dir", opt)
+	if code != 0 || o.Result != "Hooks: len=6 region=eu." {
+		t.Fatalf("got %q (%d)", o.Result, code)
+	}
+	if o, _ := call(t, cwd, home, "FAKE_HOOKS", "--plugin-dir", bare); o.Result != "Hooks: none." {
+		t.Fatalf("no hook: %q", o.Result)
+	}
+	sessions, _ := filepath.Glob(filepath.Join(home, ".claude", "projects", "*", "*.jsonl"))
+	var all string
+	for _, s := range sessions {
+		b, _ := os.ReadFile(s) //nolint:gosec // test temp dir
+		all += string(b)
+	}
+	if !strings.Contains(all, `"output":"len=6 region=eu"`) {
+		t.Fatalf("sessions %s", all)
+	}
+}

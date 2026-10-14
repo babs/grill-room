@@ -612,3 +612,21 @@ func TestPluginTarEdges(t *testing.T) {
 		t.Fatalf("%d fetches, want 2", f.tarRequests-before)
 	}
 }
+
+// 009-AC25: the report lists the domains of the version's MCP servers that the egress allowlist
+// leaves out, as it stands at the inspection.
+func TestInspectionAllowlistMissing(t *testing.T) {
+	snap := snapshotOf(t, map[string]string{plugin.ManifestPath: `{"name":"good"}`,
+		".mcp.json": `{"mcpServers":{"a":{"url":"https://mcp.example.com/x"},"b":{"url":"https://api.github.com/y"},"c":{"url":"http://10.1.2.3/z"}}}`})
+	f := &fakeRoom{snapshot: snap.Tar, reportCode: http.StatusOK}
+	r := f.serve(t)
+	r.d.o.Docker = (&fakeInspector{validate: validOutput, details: "good 1\n"}).run
+	r.d.st.Allowlist = []string{".github.com"}
+	tok := "t"
+	r.inspect(t.Context(), tok, 7)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.reports) != 1 || !slices.Equal(f.reports[0].AllowlistMissing, []string{"10.1.2.3", "mcp.example.com"}) {
+		t.Fatalf("reports %+v", f.reports)
+	}
+}

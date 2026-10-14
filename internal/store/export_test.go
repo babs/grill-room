@@ -697,7 +697,8 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"document_renames":         "| id document_id message_id from_name to_name created_at",         // the next turn's moves
 		"push_subscriptions":       "| id participant_id endpoint p256dh auth all_messages created_at", // a device's keys: a copy gets none
 		// 009 Phase 4 exports plugins (format 3); until then a copy has none.
-		"room_plugins":              "| id room_id name source_url ref ref_name entry private created_by_name created_at removed_at",
+		"room_plugins":              "| id room_id name source_url ref ref_name entry private created_by_name created_at removed_at needs_setup",
+		"plugin_fetches":            "| id room_id plugin_id source_url ref entries personas state reason requested_by_name requested_by_id created_at",
 		"plugin_versions":           "| id plugin_id n commit_sha sha256 size files file_list manifest report state reason added_by_name added_by_id added_at decided_by_name decided_at",
 		"plugin_snapshots":          "| version_id data",
 		"room_persona_plugins":      "| persona_id plugin_id",

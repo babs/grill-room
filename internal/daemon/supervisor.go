@@ -617,6 +617,9 @@ type instanceOps interface {
 	SetAllowlist(ctx context.Context, list []string) error
 	Denied(ctx context.Context, n int) ([]sandbox.Denied, error)
 	Recheck(ctx context.Context)
+	// SetPluginOptions and PluginFetch act on a room's plugins (009-AC19, 009-AC22).
+	SetPluginOptions(ctx context.Context, room string, plugin int64, values map[string]any, clear []string) error
+	PluginFetch(ctx context.Context, room string, id int64, accept bool) error
 }
 
 // workerOps drives one instance's worker; an empty id is the instance the page shows.
@@ -679,6 +682,33 @@ func (o workerOps) Denied(ctx context.Context, n int) ([]sandbox.Denied, error) 
 		r.Denied = []sandbox.Denied{}
 	}
 	return r.Denied, err
+}
+
+// pluginRequest sends a plugin request to a worker that takes it: one from before spec 009 Phase 3
+// would answer "unknown request".
+func (o workerOps) pluginRequest(ctx context.Context, m Msg) error {
+	w := o.worker()
+	if w == nil {
+		return errors.New("no room yet: pair with a room first")
+	}
+	o.s.mu.Lock()
+	agreed := w.proto
+	o.s.mu.Unlock()
+	if agreed < protoPlugins {
+		return errors.New("this server's worker is too old for room plugins: update the AI host app")
+	}
+	_, err := o.request(ctx, m)
+	return err
+}
+
+// SetPluginOptions saves the values the host gave a room plugin's options (009-AC22).
+func (o workerOps) SetPluginOptions(ctx context.Context, room string, plugin int64, values map[string]any, clear []string) error {
+	return o.pluginRequest(ctx, Msg{Type: "plugin_options", Room: room, Plugin: plugin, Values: values, Clear: clear})
+}
+
+// PluginFetch fetches or declines a room's request that this host fetch a repo (009-AC19).
+func (o workerOps) PluginFetch(ctx context.Context, room string, id int64, accept bool) error {
+	return o.pluginRequest(ctx, Msg{Type: "plugin_fetch", Room: room, Fetch: id, Accept: accept})
 }
 
 // Recheck re-runs the worker's readiness checks.
@@ -798,6 +828,37 @@ func (s *Supervisor) Denied(ctx context.Context, n int) ([]sandbox.Denied, error
 
 // Recheck re-runs the current worker's readiness checks.
 func (s *Supervisor) Recheck(ctx context.Context) { workerOps{s: s}.Recheck(ctx) }
+
+// roomOps is the worker of room's instance.
+func (s *Supervisor) roomOps(room string) (workerOps, error) {
+	r, err := ParseRoomURL(room)
+	if err != nil {
+		return workerOps{}, err
+	}
+	id, err := InstanceID(r.Base)
+	if err != nil {
+		return workerOps{}, err
+	}
+	return workerOps{s, id}, nil
+}
+
+// SetPluginOptions saves a room plugin's option values on the worker of the room's instance.
+func (s *Supervisor) SetPluginOptions(ctx context.Context, room string, plugin int64, values map[string]any, clear []string) error {
+	o, err := s.roomOps(room)
+	if err != nil {
+		return err
+	}
+	return o.SetPluginOptions(ctx, room, plugin, values, clear)
+}
+
+// PluginFetch answers a room's fetch request on the worker of the room's instance.
+func (s *Supervisor) PluginFetch(ctx context.Context, room string, id int64, accept bool) error {
+	o, err := s.roomOps(room)
+	if err != nil {
+		return err
+	}
+	return o.PluginFetch(ctx, room, id, accept)
+}
 
 // Restart ends the supervisor so that main starts the updated binary.
 func (s *Supervisor) Restart() {

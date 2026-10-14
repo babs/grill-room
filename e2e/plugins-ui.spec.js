@@ -222,9 +222,20 @@ for (const vp of [phone, desktop]) {
       await expect(change).toContainText('Files changed (1): skills/hello/SKILL.md');
       await expect(review.locator('#plugin-compare')).toHaveText(`Commits: v1 ${short1}, v2 ${short2}.`);
       await shot(alice, `plugin-review-update-${vp.width}`);
+      // The row's Review goes with the decision, and the focus lands on the list once the list
+      // says so. The new list is held until the sheet has closed, as a slow network delivers it.
+      let release;
+      const held = new Promise((r) => { release = r; });
+      const list = `**/api/rooms/${room.id}/plugins`;
+      await alice.route(list, async (route) => {
+        if (route.request().method() === 'GET') await held;
+        await route.continue();
+      });
       await review.getByRole('button', { name: 'Approve', exact: true }).click();
+      await expect(review).toBeHidden();
+      release();
       await expect(row.locator('.plugin-state')).toHaveText('v2 in use');
-      // The row's Review went with the decision: the focus lands on the list.
+      await alice.unroute(list);
       await expect(tab.locator('#plugin-list')).toBeFocused();
       await update();
       await toast(alice, 'Up to date');
@@ -302,6 +313,65 @@ test('plugins: hostile plugin content renders as text', async ({ browser, reques
     const caps = (await personaSheet(alice, 'Grill', 'Capabilities')).locator('.persona-plugins');
     await expect(caps.locator('li[data-plugin="evil"]')).toContainText('main @ ');
     await noMarkup('.persona-plugins');
+  } finally {
+    host();
+  }
+});
+
+// 009-AC19 009-AC21 009-AC25: an ssh link the server cannot fetch offers "Ask the AI host to fetch
+// it"; the request waits in Room settings › Plugins, reaches the host's daemon (a fake AI host app
+// reading the daemon API), and a host whose git cannot reach the repo fails it in those words; a
+// room admin dismisses it. The approval sheet marks the MCP websites off the host's allowlist.
+test('plugins: ask the AI host, and the allowlist marks', async ({ browser, request, baseURL }) => {
+  test.setTimeout(60_000);
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await appointAdmin(alice, request, room.id);
+  const host = await fakeDaemon(alice, baseURL, room.id, 'Alice laptop', { approve_all: true });
+  const daemonAPI = (path, init = {}) => fetch(`${baseURL}/api/rooms/${room.id}/daemon/${path}`,
+    { ...init, headers: { Authorization: 'Bearer ' + host.token, 'Content-Type': 'application/json' } });
+  try {
+    await alice.goto(`/r/${room.id}#manage/plugins`);
+    const tab = alice.locator('#manage');
+    await tab.locator('#plugin-add-open').click();
+    const add = alice.locator('#plugin-add');
+    await add.locator('#plugin-url').fill('git@example.com:team/private.git');
+    await add.getByRole('button', { name: 'Check', exact: true }).click();
+    await expect(add.getByRole('alert')).toHaveText('The server fetches https links only.');
+    await expect(add.locator('#plugin-host')).toContainText('Nothing is fetched until they press Fetch.');
+    await add.locator('#plugin-host-personas').getByLabel(/Grill$/).check();
+    await shot(alice, 'plugin-ask-host');
+    await add.getByRole('button', { name: 'Ask the AI host to fetch it' }).click();
+    await toast(alice, 'Asked the AI host.');
+    await expect(add).toBeHidden();
+    const req = tab.locator('#plugin-fetches li');
+    await expect(req.locator('.plugin-name')).toHaveText('git@example.com:team/private.git');
+    await expect(req.locator('.plugin-state')).toHaveText('waiting for the AI host to fetch it');
+
+    const listed = await (await daemonAPI('plugins')).json();
+    expect(listed.fetches.map((f) => [f.url, f.requested_by])).toEqual([['git@example.com:team/private.git', 'Alice']]);
+    const failed = await daemonAPI(`plugin-fetches/${listed.fetches[0].id}`, { method: 'POST', body: JSON.stringify({ error: 'This AI host cannot reach the repo' }) });
+    expect(failed.status).toBe(204);
+    await expect(req.locator('.plugin-state')).toHaveText('This AI host cannot reach the repo.');
+    await shot(alice, 'plugin-fetch-failed');
+    await req.getByRole('button', { name: 'Dismiss the request for git@example.com:team/private.git' }).click();
+    await expect(req).toHaveCount(0);
+
+    // 009-AC25: the inspection lists the domain off the host's allowlist; the sheet marks it.
+    const repo = newRepo('allow-' + Date.now().toString(36), {
+      '.claude-plugin/plugin.json': '{"name":"docs"}\n',
+      '.mcp.json': JSON.stringify({ mcpServers: { docs: { type: 'http', url: 'https://docs.example.com/mcp' }, wiki: { type: 'http', url: 'https://wiki.example.org/mcp' } } }),
+    });
+    const added = await call(alice, 'POST', `/api/rooms/${room.id}/plugins`, { url: repo.url });
+    expect(added.status, JSON.stringify(added.body)).toBe(201);
+    const v = added.body.plugins[0].versions[0];
+    expect((await daemonAPI(`plugins/${v.id}/report`, { method: 'POST', body: JSON.stringify({ ok: true, allowlist_missing: ['docs.example.com'] }) })).status).toBe(200);
+    const row = tab.locator('#plugin-list li[data-plugin="docs"]');
+    await row.getByRole('button', { name: 'Review the plugin docs v1' }).click();
+    const review = alice.locator('#plugin-review');
+    await expect(review.locator('#plugin-domains')).toHaveText("Websites its MCP servers name: docs.example.com not on the AI host's allowlist, wiki.example.org.");
+    await expect(review.locator('#plugin-domains .off-allowlist')).toHaveCount(1);
+    await expect(review).toContainText("the host adds these from their app's Rooms tab");
+    await shot(alice, 'plugin-review-allowlist');
   } finally {
     host();
   }

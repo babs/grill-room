@@ -3,7 +3,7 @@ import { readFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
-import { roomWith, startDaemon, pairDaemon, ask, skillZip, appointAdmin, agentState } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip, appointAdmin, agentState, personaSheet, closePersonas } from './helpers.js';
 import { gitPort } from './playwright.config.js';
 
 // The plugin the Phase 2 DoD names: its plugin.json and its spec-feature skill.
@@ -97,6 +97,118 @@ test('plugins: inspected, approved, loaded after the skills', async ({ browser, 
     expect(await dirs(alice, room.id, 'off')).toEqual([expect.stringMatching(new RegExp(`^${skillsDir} \\[`))]);
     const left = execFileSync('docker', ['exec', 'grill-room-' + daemon.sandbox, 'sh', '-c', 'ls -A /home/agent/.grill-room/plugins 2>&1 || true'], { encoding: 'utf8' });
     expect(left).toContain('No such file or directory');
+  } finally {
+    daemon.cleanup();
+  }
+});
+
+// SHOTS=<dir> keeps a screenshot of the daemon page's plugin screens, as plugins-ui.spec.js does.
+const shot = (page, name) => (process.env.SHOTS ? page.screenshot({ path: `${process.env.SHOTS}/${name}.png`, fullPage: true }) : null);
+
+// bareRepo commits files to a new repo and returns the absolute path of its bare clone, which the
+// daemon's git reaches through a fake ssh: no server, no key.
+function bareRepo(files) {
+  const work = mkdtempSync(join('test-results', 'private-'));
+  for (const [p, c] of Object.entries(files)) {
+    mkdirSync(join(work, p, '..'), { recursive: true });
+    writeFileSync(join(work, p), c);
+  }
+  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_AUTHOR_NAME: 'e2e',
+    GIT_AUTHOR_EMAIL: 'e2e@example.invalid', GIT_COMMITTER_NAME: 'e2e', GIT_COMMITTER_EMAIL: 'e2e@example.invalid' };
+  const git = (...args) => execFileSync('git', args, { cwd: work, env, stdio: 'pipe' });
+  git('init', '-q', '-b', 'main');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'private');
+  const bare = resolve(work + '.git');
+  execFileSync('git', ['clone', '-q', '--bare', work, bare], { env, stdio: 'pipe' });
+  return bare;
+}
+
+// 009-AC19 009-AC20 009-AC22 009-AC23 009-AC24 009-AC25, Phase 3 DoD: a room admin asks the AI
+// host to fetch a private ssh repo; the host's daemon page lists the request and the host's git
+// (a fake ssh running git-upload-pack on this machine) fetches it only on Fetch; the room lists the
+// plugin private and the daemon inspects it. Its required sensitive option unset, a turn runs
+// without it and the persona's Capabilities tab and the daemon page say it needs host setup. Set
+// on the daemon page, behind the warning, a SessionStart hook gets CLAUDE_PLUGIN_OPTION_API_KEY
+// and the value it printed reaches the room as [redacted]. The page adds one MCP website to the
+// allowlist and refuses an IP. Real daemon and Docker sandbox, fake claude.
+test('plugins: private repo through the host, options, allowlist', async ({ browser, request, baseURL }) => {
+  test.setTimeout(300_000);
+  const secret = 'e2e-s3cret-value';
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await appointAdmin(alice, request, room.id);
+  const hook = 'echo len=${#CLAUDE_PLUGIN_OPTION_API_KEY} key=$CLAUDE_PLUGIN_OPTION_API_KEY';
+  const bare = bareRepo({
+    '.claude-plugin/plugin.json': JSON.stringify({ name: 'opt', userConfig: { api_key: { type: 'string', title: 'API key', description: 'The service key.', sensitive: true, required: true } } }),
+    'hooks/hooks.json': JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: hook }] }] } }),
+    '.mcp.json': JSON.stringify({ mcpServers: { docs: { type: 'http', url: 'https://mcp.example.com/mcp' }, lan: { type: 'http', url: 'http://10.1.2.3:8080/mcp' } } }),
+  });
+  const ssh = resolve(mkdtempSync(join('test-results', 'ssh-')), 'ssh.sh');
+  writeFileSync(ssh, '#!/bin/sh\nfor a; do last=$a; done\nexec sh -c "$last"\n');
+  const url = 'git@example.invalid:' + bare;
+  const daemon = startDaemon(`${baseURL}/r/${room.id}`, { GIT_SSH_COMMAND: 'sh ' + ssh, GIT_SSH_VARIANT: 'simple', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' });
+  try {
+    const admin = await pairDaemon(alice, daemon);
+
+    await alice.goto(`/r/${room.id}#manage/plugins`);
+    const tab = alice.locator('#manage');
+    await tab.locator('#plugin-add-open').click();
+    const add = alice.locator('#plugin-add');
+    await add.locator('#plugin-url').fill(url);
+    await add.getByRole('button', { name: 'Check', exact: true }).click();
+    await add.locator('#plugin-host-personas').getByLabel(/Grill$/).check();
+    await add.getByRole('button', { name: 'Ask the AI host to fetch it' }).click();
+    await expect(tab.locator('#plugin-fetches li .plugin-state')).toHaveText('waiting for the AI host to fetch it');
+
+    await admin.locator('#tab-rooms').click();
+    const req = admin.locator('.fetch-request');
+    await expect(req).toContainText('Alice asks for a plugin');
+    await expect(req.locator('.fetch-url')).toHaveText(url);
+    await shot(admin, 'daemon-fetch-request');
+    await req.getByRole('button', { name: 'Fetch ' + url }).click();
+    const row = tab.locator('#plugin-list li[data-plugin="opt"]');
+    await expect(row.locator('.badge')).toHaveText('private', { timeout: 60_000 });
+    await expect(row.locator('.plugin-state')).toHaveText('v1 in use', { timeout: 90_000 });
+    await expect(tab.locator('#plugin-fetches')).toHaveCount(0);
+    await expect(admin.locator('.fetch-request')).toHaveCount(0);
+
+    await alice.locator('#manage-close').click();
+    expect((await ask(alice, room.id, 'FAKE_HOOKS unset')).trim()).toBe('Hooks: none.');
+    let caps = (await personaSheet(alice, 'Grill', 'Capabilities')).locator('.persona-plugins');
+    await expect(caps.locator('li[data-plugin="opt"]')).toContainText("needs host setup on the AI host's computer");
+    await expect(caps.locator('.plugin-total')).toHaveText('None of them loads for Grill.');
+    await closePersonas(alice);
+
+    const setup = admin.locator('.plugin-setup[data-plugin="opt"]');
+    await expect(setup.locator('.needs-setup')).toHaveText('Needs host setup: it does not load until its required options are set.');
+    await expect(setup.locator('.warn-line')).toHaveText('The AI can read these values during a turn. Anyone in the room can ask it to show them.');
+    await expect(setup).toContainText('The service key.');
+    const key = setup.getByLabel('API key (required)');
+    await expect(key).toHaveAttribute('type', 'password');
+    await expect(key).toHaveAttribute('placeholder', 'not set');
+    await shot(admin, 'daemon-plugin-setup');
+    await key.fill(secret);
+    await setup.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(setup.locator('.needs-setup')).toHaveCount(0);
+    await expect(key).toHaveValue('');
+    await expect(key).toHaveAttribute('placeholder', 'set: type to replace it');
+
+    expect((await ask(alice, room.id, 'FAKE_HOOKS set')).trim()).toBe(`Hooks: len=${secret.length} key=[redacted].`);
+    caps = (await personaSheet(alice, 'Grill', 'Capabilities')).locator('.persona-plugins');
+    await expect(caps.locator('li[data-plugin="opt"]')).not.toContainText('needs host setup');
+    await closePersonas(alice);
+
+    const domains = setup.locator('.plugin-domains li');
+    await expect(domains).toHaveText(['10.1.2.3 not on the allowlist Add to allowlist', 'mcp.example.com not on the allowlist Add to allowlist']);
+    await setup.getByRole('button', { name: 'Add mcp.example.com to the allowlist' }).click();
+    await expect(setup).toContainText('mcp.example.com added to the allowlist.');
+    await expect(domains.nth(1)).toHaveText('mcp.example.com on the allowlist');
+    await setup.getByRole('button', { name: 'Add 10.1.2.3 to the allowlist' }).click();
+    await expect(setup).toContainText('"10.1.2.3" is not a domain name');
+    await shot(admin, 'daemon-plugin-allowlist');
+    await admin.locator('#tab-settings').click();
+    await expect(admin.locator('#allowlist')).toContainText('mcp.example.com');
+    await expect(admin.locator('#allowlist')).not.toContainText('10.1.2.3');
   } finally {
     daemon.cleanup();
   }

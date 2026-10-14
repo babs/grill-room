@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 
 	"go.uber.org/zap"
@@ -52,6 +53,15 @@ func runWorker(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	if err != nil {
 		return fmt.Errorf("allowlist: %w", err)
 	}
+	fetchDir := filepath.Join(cfg.StateDir, "plugin-fetch")
+	// A fetch a crash or a kill cut short left its folder; no fetch runs yet.
+	if err := os.RemoveAll(fetchDir); err != nil {
+		return fmt.Errorf("plugin fetch folder: %w", err)
+	}
+	pluginOptions, err := daemon.NewPluginOptions(cfg.StateDir)
+	if err != nil {
+		return fmt.Errorf("plugin options: %w", err)
+	}
 	var access daemon.Access
 	if cfg.Access != nil {
 		access = *cfg.Access
@@ -65,6 +75,8 @@ func runWorker(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		Image: cfg.Image, Stream: sandbox.DockerStream,
 		CacheDir: filepath.Join(cfg.CacheDir, "workspace-cache"), CacheMax: cfg.CacheMB << 20,
 		PluginCacheDir: filepath.Join(cfg.StateDir, "plugin-cache"),
+		PluginOptions:  pluginOptions,
+		FetchDir:       fetchDir,
 		Labels:         []string{daemon.RootLabel(cfg.SandboxRoot), daemon.InstanceLabel(cfg.Instance)},
 		OnTurn:         func(e daemon.TurnEvent) { _ = conn.Send(daemon.Msg{Type: "turn", Turn: &e}) },
 		NewAgent: func(r daemon.Room, slot int, image, proxy string) daemon.Agent {

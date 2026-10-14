@@ -240,6 +240,10 @@ func (d *Daemon) handle(ctx context.Context, m Msg) Msg {
 		} else {
 			d.SetAccess(*m.Access)
 		}
+	case "plugin_options":
+		err = d.SetPluginOptions(ctx, m.Room, m.Plugin, m.Values, m.Clear)
+	case "plugin_fetch":
+		err = d.PluginFetch(ctx, m.Room, m.Fetch, m.Accept)
 	case "update":
 		// A worker runs a copy the supervisor verified: only the supervisor updates (003-AC5).
 		err = errors.New("updates go through the supervisor")

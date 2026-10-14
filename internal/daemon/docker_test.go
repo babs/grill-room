@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,20 +12,30 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/babs/grill-room/internal/plugin"
 	"github.com/babs/grill-room/internal/sandbox"
 	"github.com/babs/grill-room/internal/store"
+	"github.com/babs/grill-room/internal/web"
 )
 
 // sandboxHost pairs a daemon whose turns run in a real Docker sandbox built from the fake claude
 // image (make sandbox-fake-image), and returns its participant token and a func that drops it.
 func sandboxHost(t *testing.T, rs *roomServer, name, image string) (string, context.CancelFunc) {
+	t.Helper()
+	participant, _, cancel := sandboxDaemon(t, rs, name, image)
+	return participant, cancel
+}
+
+// sandboxDaemon is sandboxHost that also returns the daemon.
+func sandboxDaemon(t *testing.T, rs *roomServer, name, image string) (string, *Daemon, context.CancelFunc) {
 	t.Helper()
 	participant, _ := rs.join(t, name)
 	d := newTestDaemon(t, sandbox.Docker)
@@ -57,7 +68,7 @@ func sandboxHost(t *testing.T, rs *roomServer, name, image string) (string, cont
 	id := d.Status().ApproveURL[strings.Index(d.Status().ApproveURL, "=")+1:]
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/pairings/"+id, participant, map[string]bool{"approve": true}, http.StatusOK, nil)
 	waitFor(t, "can host", func() bool { return rs.hostsFor(t, participant) })
-	return participant, cancel
+	return participant, d, cancel
 }
 
 // turn posts body, presses the button as tok and waits for the turn to end.
@@ -470,4 +481,107 @@ func TestDockerPluginInspectionRunsNoHook(t *testing.T) {
 		t.Fatalf("control: claude -p left no hook.txt or mcp.txt, the check proves nothing: %q", control)
 	}
 	t.Logf("home: %q; control: %q; details: %+v", home, control, rep.Details.Components)
+}
+
+// 009-AC22 009-AC23 009-AC24, Phase 3 DoD, in a real sandbox with the fake claude: a plugin with a
+// required sensitive option and a SessionStart hook printing the option's length and value.
+// Unset, the turn runs without the plugin and the room says it needs host setup. Set on the
+// daemon, the hook gets CLAUDE_PLUGIN_OPTION_API_KEY from the files the daemon wrote, and the
+// value it printed reaches the room as [redacted]: no trace of it in the server's database, the
+// room's export or the server's log. The next turn resumes the session without fetching it.
+func TestDockerPluginOptions(t *testing.T) {
+	if os.Getenv("GRILL_ROOM_TEST_DOCKER") != "1" {
+		t.Skip("set GRILL_ROOM_TEST_DOCKER=1 to run the Docker sandbox tests")
+	}
+	image := os.Getenv("GRILL_ROOM_SANDBOX_FAKE_IMAGE")
+	if image == "" {
+		image = "grill-room-sandbox:fake"
+	}
+	const secret = "s3cret-Value-42"
+	core, logs := observer.New(zap.DebugLevel)
+	var sessionFetches atomic.Int64
+	rs := newRoomServerLog(t, web.Options{MaxUploadBytes: 1 << 20, MaxRoomBytes: 1 << 20, MaxAttachmentBytes: 1 << 20}, func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.URL.Path, "/daemon/sessions/") {
+				sessionFetches.Add(1)
+			}
+			h.ServeHTTP(w, r)
+		})
+	}, zap.New(core))
+	alice, d, _ := sandboxDaemon(t, rs, "Alice", image)
+	waitFor(t, "alice hosts", func() bool { return rs.agent(t, alice).Online })
+	hook := `{"hooks":{"SessionStart":[{"hooks":[{"type":"command",` +
+		`"command":"mkdir -p docs; printf 'key %s\\n' \"$CLAUDE_PLUGIN_OPTION_API_KEY\" > docs/hook.md; echo len=${#CLAUDE_PLUGIN_OPTION_API_KEY} key=$CLAUDE_PLUGIN_OPTION_API_KEY"}]}]}}`
+	snap := snapshotOf(t, map[string]string{
+		plugin.ManifestPath: `{"name":"opt","userConfig":{"api_key":{"type":"string","title":"API key","sensitive":true,"required":true}}}`,
+		"hooks/hooks.json":  hook,
+	})
+	rs.addPlugin(t, alice, "opt", snap, rs.grill(t).ID)
+	deadline := time.Now().Add(90 * time.Second)
+	for rs.version(t, "opt").State == store.PluginInspecting {
+		if time.Now().After(deadline) {
+			t.Fatal("the plugin is still waiting for inspection")
+		}
+		time.Sleep(100 * time.Millisecond) // polls the version, bounded by the deadline
+	}
+	if v := rs.version(t, "opt"); v.State != store.PluginApproved {
+		t.Fatalf("inspection: %s %q", v.State, v.Reason)
+	}
+	needs := func() bool {
+		ps, _ := rs.st.RoomPlugins(t.Context(), rs.room)
+		return len(ps) == 1 && ps[0].NeedsSetup
+	}
+	if v := rs.turn(t, alice, "FAKE_HOOKS", false); v.Turn.Status != "done" || rs.lastMessage(t) != "Hooks: none." || !needs() {
+		t.Fatalf("unset: %+v %q, needs setup %v", v.Turn, rs.lastMessage(t), needs())
+	}
+	waitFor(t, "the page lists the plugin", func() bool { rooms := d.Status().Rooms; return len(rooms) == 1 && len(rooms[0].Plugins) == 1 })
+	if err := d.SetPluginOptions(t.Context(), rs.ts.URL+"/r/"+rs.room, d.Status().Rooms[0].Plugins[0].ID, map[string]any{"api_key": secret}, nil); err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("Hooks: len=%d key=[redacted].", len(secret))
+	if v := rs.turn(t, alice, "FAKE_HOOKS", false); v.Turn.Status != "done" || rs.lastMessage(t) != want || needs() {
+		t.Fatalf("set: %+v %q, needs setup %v", v.Turn, rs.lastMessage(t), needs())
+	}
+	if v := rs.turn(t, alice, "FAKE_HOOKS", false); v.Turn.Status != "done" || rs.lastMessage(t) != want {
+		t.Fatalf("next turn: %+v %q", v.Turn, rs.lastMessage(t))
+	}
+	if n := sessionFetches.Load(); n != 0 {
+		t.Fatalf("the daemon fetched the session %d times", n)
+	}
+	var docs []store.Document
+	rs.call(t, "GET", "/api/rooms/"+rs.room+"/documents", alice, nil, http.StatusOK, &docs)
+	if !slices.ContainsFunc(docs, func(d store.Document) bool { return d.Name == "hook.md" }) {
+		t.Fatalf("the hook's document is missing: %+v", docs)
+	}
+
+	req, _ := http.NewRequestWithContext(t.Context(), "GET", rs.ts.URL+"/api/admin/rooms/"+rs.room+"/export", nil)
+	req.Header.Set("Authorization", "Bearer "+rs.admin)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	gz, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		t.Fatalf("export: %d %v", resp.StatusCode, err)
+	}
+	export, err := io.ReadAll(gz)
+	if err != nil || !strings.Contains(string(export), "[redacted]") {
+		t.Fatalf("export: %v, %d bytes", err, len(export))
+	}
+	var db []byte
+	for _, f := range []string{rs.dbPath, rs.dbPath + "-wal"} {
+		b, _ := os.ReadFile(f) //nolint:gosec // the test's own database
+		db = append(db, b...)
+	}
+	var logged strings.Builder
+	for _, e := range logs.All() {
+		b, _ := json.Marshal(e.ContextMap())
+		logged.WriteString(e.Message + string(b) + "\n")
+	}
+	for what, b := range map[string]string{"database": string(db), "export": string(export), "server log": logged.String()} {
+		if strings.Contains(b, secret) {
+			t.Errorf("the %s holds the option's value", what)
+		}
+	}
 }

@@ -3,7 +3,7 @@
 // event and hands it over as window.grillPlugins, followed by a grill:plugins event; its status
 // strip opens the approval sheet with a grill:plugin-review event.
 import { render } from 'preact';
-import { useState } from 'preact/hooks';
+import { useState, useEffect, useLayoutEffect } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { html } from 'htm/preact';
 import { fetchJSON, size, formAction } from './room-panel.js';
@@ -15,18 +15,20 @@ import { RowMenu } from './starters.js';
  * @typedef {{name: string, version?: string, description?: string, skills?: string[], commands?: string[], agents?: string[],
  *   hooks?: Hook[], mcp_servers?: Server[], lsp_servers?: Server[], bin?: string[], domains?: string[], problems?: string[]}} Manifest
  * @typedef {{always_on_tokens: number, cost_known: boolean}} Details
- * @typedef {{ok?: boolean, validate?: unknown, details?: Details, error?: string}} Report
+ * @typedef {{ok?: boolean, validate?: unknown, details?: Details, error?: string, allowlist_missing?: string[]}} Report
  * @typedef {{components_added?: string[], components_removed?: string[], files_added?: string[], files_removed?: string[],
  *   files_changed?: string[]}} Change
  * @typedef {{id: number, n: number, commit: string, short_commit: string, commit_url?: string, size: number, files: number,
  *   manifest: Manifest | null, report?: Report, state: string, reason?: string, added_by: string, added_at: string,
  *   change?: Change, compare_url?: string}} Version
  * @typedef {{id: number, name: string, url: string, ref: string, ref_name: string, private: boolean, personas: number[],
- *   running?: number, why?: string, versions: Version[]}} Plugin
+ *   running?: number, why?: string, needs_setup?: boolean, versions: Version[]}} Plugin
  * @typedef {{entry?: string, name: string, description?: string, version?: string, pickable: boolean, reason?: string,
  *   size?: number, files?: number}} Candidate
  * @typedef {{commit: string, short_commit: string, ref_name: string, commit_url?: string, marketplace: string, plugins: Candidate[]}} Check
  * @typedef {{id: number, name: string, badge: string}} Persona
+ * @typedef {{id: number, plugin_id?: number, plugin_name?: string, url: string, ref: string, entries: string[], personas: number[],
+ *   state: string, reason?: string, requested_by: string, created_at: string}} Fetch
  */
 
 const w = /** @type {Window & {grillPlugins?: Plugin[]}} */ (window);
@@ -108,11 +110,14 @@ export function PluginsTab({ base, admin, host, personas }) {
   /** @param {unknown} err */
   const show = (err) => setSaid(/** @type {Error} */ (err).message);
   const list = plugins.value;
+  // After a decision taken from a row, the redraw that drops its Review button moves the focus.
+  useLayoutEffect(() => { if (refocus?.home === 'plugin-list') landFocus(); });
   /** @param {Plugin} p */
   const actions = (p) => /** @type {[string, () => void][]} */ ([
-    ['Update', () => fetchJSON('POST', `${base}/plugins/${p.id}/update`).then((/** @type {Plugin & {up_to_date?: boolean}} */ r) => {
+    ['Update', () => fetchJSON('POST', `${base}/plugins/${p.id}/update`).then((/** @type {Plugin & {up_to_date?: boolean, host_fetch?: Fetch}} */ r) => {
       setSaid('');
       if (r.up_to_date) return toast('Up to date');
+      if (r.host_fetch) return toast(`Asked the AI host to fetch the update of ${p.name}`);
       const v = newest(r);
       toast(`${p.name}: new version v${v.n}, ${r.ref_name} @ ${v.short_commit}`);
     }).catch(show)],
@@ -121,6 +126,9 @@ export function PluginsTab({ base, admin, host, personas }) {
   ]);
   /** @param {Plugin} p */
   const on = (p) => p.personas.map((id) => personas.find((x) => x.id === id)?.name).filter(Boolean).join(', ');
+  const fetches = useFetches(base);
+  /** @param {Fetch} f */
+  const drop = (f) => fetchJSON('DELETE', `${base}/plugin-fetches/${f.id}`).then(() => setSaid('')).catch(show);
   return html`
     <p class="hint">Claude Code plugins from git repositories, pinned at a commit: nothing follows the branch by itself. A room admin adds them and turns them on per persona, in its Capabilities tab. The AI host checks each version first.</p>
     <p class="said" role="alert">${said}</p>
@@ -132,7 +140,7 @@ export function PluginsTab({ base, admin, host, personas }) {
       return html`<li key=${p.id} data-plugin=${p.name}>
         <div class="plugin-text">
           <span class="plugin-name"><strong>${p.name}</strong>, ${p.ref_name} @ <${Commit} v=${shown}/>${p.private && html` <span class="badge">private</span>`}</span>
-          <span class="hint plugin-state">${run ? `v${run.n} in use` : ''}${run && later ? ' · ' : ''}${later ? `v${later.n}: ${stateWords(later)}` : ''}</span>
+          <span class="hint plugin-state">${run ? `v${run.n} in use` : ''}${run && later ? ' · ' : ''}${later ? `v${later.n}: ${stateWords(later)}` : ''}${p.needs_setup ? ` · ${p.why}` : ''}</span>
           <span class="hint">${on(p) ? 'On for ' + on(p) : 'On for no persona yet'}</span>
         </div>
         ${host && later?.state === 'pending' && html`<button type="button" class="btn-secondary" aria-label=${`Review the plugin ${p.name} v${later.n}`}
@@ -141,7 +149,35 @@ export function PluginsTab({ base, admin, host, personas }) {
       </li>`;
     })}</ul>`
       : html`<p class="empty" id="plugins-empty">No plugins yet.${admin ? ' Add one from a git repository.' : ' A room admin adds them from git repositories.'}</p>`}
+    ${fetches.length ? html`<h3 class="plugin-fetches-title">Asked of the AI host</h3>
+      <ul class="plugin-list" id="plugin-fetches" aria-label="Requests to the AI host">${fetches.map((f) => html`<li key=${f.id} data-fetch=${f.id}>
+        <div class="plugin-text">
+          <span class="plugin-name">${f.plugin_name ? html`Update of <strong>${f.plugin_name}</strong>` : html`<code>${f.url}</code>`}${f.ref ? ', ' + f.ref : ''}</span>
+          <span class="hint plugin-state">${f.state === 'waiting' ? 'waiting for the AI host to fetch it' : sentence(f.reason || 'the fetch failed')}</span>
+          <span class="hint">Asked by ${f.requested_by}</span>
+        </div>
+        ${admin && html`<button type="button" class="btn-secondary" aria-label=${(f.state === 'waiting' ? 'Cancel the request for ' : 'Dismiss the request for ') + (f.plugin_name || f.url)}
+          onClick=${() => drop(f)}>${f.state === 'waiting' ? 'Cancel' : 'Dismiss'}</button>`}
+      </li>`)}</ul>` : ''}
     ${admin && html`<div class="row"><button type="button" class="btn-primary" id="plugin-add-open" onClick=${() => openAdd(base, personas)}>Add a plugin</button></div>`}`;
+}
+
+/**
+ * useFetches is the room's requests to the AI host (009-AC19), read again on each plugins event,
+ * which their changes raise too.
+ * @param {string} base
+ * @returns {Fetch[]}
+ */
+function useFetches(base) {
+  const [list, setList] = useState(/** @type {Fetch[]} */ ([]));
+  // plugins.value changes on each plugins event: read the requests again then.
+  const seen = plugins.value;
+  useEffect(() => {
+    let live = true;
+    fetchJSON('GET', base + '/plugins').then((r) => { if (live) setList(r.fetches || []); }).catch(() => {});
+    return () => { live = false; };
+  }, [base, seen]);
+  return list;
 }
 
 const addSheet = /** @type {HTMLDialogElement} */ (document.getElementById('plugin-add'));
@@ -172,13 +208,26 @@ function AddSheet({ base, personas, close }) {
   const [said, setSaid] = useState('');
   // The link and ref stay read-only while a request runs: Add must send what Check listed.
   const [busy, setBusy] = useState(false);
+  // viaHost is set once the server said it cannot fetch the repo: the AI host may (009-AC19).
+  const [viaHost, setViaHost] = useState(false);
+  const [names, setNames] = useState('');
   /** @param {unknown} err */
   const fail = (err) => {
     const e = /** @type {Error & {data?: {host_fetch?: boolean}}} */ (err);
-    setSaid(sentence(e.message) + (e.data?.host_fetch ? ' Check the link: a private repo or an ssh link cannot be added yet.' : ''));
+    setSaid(sentence(e.message));
+    if (e.data?.host_fetch) setViaHost(true);
   };
   /** @param {(v: string) => void} set */
-  const edit = (set) => (/** @type {Event} */ e) => { set(/** @type {HTMLInputElement} */ (e.currentTarget).value); setCheck(null); setEntries([]); };
+  const edit = (set) => (/** @type {Event} */ e) => { set(/** @type {HTMLInputElement} */ (e.currentTarget).value); setCheck(null); setEntries([]); setViaHost(false); };
+  const askHost = () => {
+    setBusy(true);
+    setSaid('');
+    const picked = names.split(/[\s,]+/).filter(Boolean);
+    fetchJSON('POST', base + '/plugins/host-fetch', { url, ref, entries: picked, personas: on }).then(() => {
+      close();
+      toast('Asked the AI host. The request waits in Room settings › Plugins until the host fetches it.');
+    }).catch((err) => setSaid(sentence(/** @type {Error} */ (err).message))).finally(() => setBusy(false));
+  };
   const run = () => {
     setBusy(true);
     setSaid('');
@@ -209,6 +258,16 @@ function AddSheet({ base, personas, close }) {
       <div class="row"><button type="submit" class="btn-secondary" disabled=${busy || !url.trim()}>Check</button></div>
     </form>
     <p class="said error" role="alert">${said}</p>
+    ${viaHost && html`<div class="plugin-host" id="plugin-host">
+      <p>The AI host can fetch it with the git access of their own computer: ssh keys, git logins. Nothing is fetched until they press Fetch.</p>
+      <div class="plugin-form"><label>Plugins to add, for a marketplace; empty for a repo that is one plugin<input id="plugin-names" autocomplete="off" spellcheck="false" placeholder="names, separated by commas"
+        readOnly=${busy} value=${names} onInput=${(/** @type {Event} */ e) => setNames(/** @type {HTMLInputElement} */ (e.currentTarget).value)}/></label></div>
+      <fieldset class="plugin-pick" id="plugin-host-personas"><legend>Turn it on for</legend>
+        ${personas.length ? personas.map((p) => html`<div key=${p.id} class="pick"><label><input type="checkbox" checked=${on.includes(p.id)}
+          onChange=${(/** @type {Event} */ e) => setOn(toggle(on, p.id, /** @type {HTMLInputElement} */ (e.currentTarget).checked))}/> ${p.badge} ${p.name}</label></div>`)
+          : html`<p class="hint">No persona in the room yet.</p>`}</fieldset>
+      <div class="row"><button type="button" class="btn-primary" id="plugin-ask-host" disabled=${busy} onClick=${askHost}>Ask the AI host to fetch it</button></div>
+    </div>`}
     ${check && html`<p id="plugin-found">Found ${check.ref_name} @ <${Commit} v=${check}/>${market ? `, the marketplace ${check.marketplace}` : ''}.</p>`}
     ${market && html`<fieldset class="plugin-pick" id="plugin-entries"><legend>Plugins to add</legend>
       ${check?.plugins.map((c, i) => html`<div key=${c.entry || c.name} class="pick">
@@ -231,10 +290,31 @@ const reviewing = signal(/** @type {{id: number, n: number} | null} */ (null));
 /** @type {Element | null} */
 let opener = null;
 let home = 'plugin-list';
-// A decision redraws the strip and the row, so the Review button that opened the sheet may be
-// gone: the focus then goes to the strip or the plugin list it was in, else the composer or ⋯.
+/** @type {{id: number, n: number, home: string} | null} */
+let refocus = null;
+/**
+ * landFocus moves the focus once the decided version shows as decided, so after the redraw that
+ * removed the Review button that opened the sheet: to the strip or the plugin list it was in, else
+ * the composer or ⋯. Until then it waits; the redraws call it again.
+ */
+function landFocus() {
+  const r = refocus;
+  const v = r && plugins.value.find((p) => p.id === r.id)?.versions.find((x) => x.n === r.n);
+  if (!r || v?.state === 'pending') return;
+  refocus = null;
+  const to = [document.getElementById(r.home), document.getElementById('body'), document.getElementById('more-open')]
+    .find((el) => el instanceof HTMLElement && el.isConnected && el.offsetParent !== null);
+  if (to instanceof HTMLElement) to.focus();
+}
+// room.js redraws the strip right after it hands the list over: a microtask runs after that.
+addEventListener('grill:plugins', () => queueMicrotask(() => { if (refocus?.home === 'approvals') landFocus(); }));
+// A sheet closed without a decision gives the focus back to what opened it.
 reviewSheet.addEventListener('close', () => {
   reviewing.value = null;
+  if (refocus) {
+    landFocus();
+    return;
+  }
   requestAnimationFrame(() => {
     const to = [opener, document.getElementById(home), document.getElementById('body'), document.getElementById('more-open')]
       .find((el) => el instanceof HTMLElement && el.isConnected && el.offsetParent !== null);
@@ -297,7 +377,8 @@ function ReviewSheet({ data, host }) {
     if (busy) return;
     setBusy(true);
     fetchJSON('POST', `${base}/${p.id}/versions/${v.n}/decision`, { approve }).then(() => {
-      // The Review button that opened the sheet goes with the decision.
+      // The Review button that opened the sheet goes with the decision: landFocus follows the redraw.
+      refocus = { id: p.id, n: v.n, home };
       opener = null;
       close();
       toast((approve ? 'Approved ' : 'Refused ') + p.name + ' v' + v.n);
@@ -327,8 +408,10 @@ function ReviewSheet({ data, host }) {
     <h3>What runs on the AI host's computer</h3>
     ${risky.length ? html`<ul class="plugin-risky" id="plugin-risky">${risky.map(([what, cmd]) => html`<li><span>${what}</span><code class="risk">${cmd}</code></li>`)}</ul>`
       : html`<p class="hint">No hook and no server: nothing runs by itself.</p>`}
-    <p id="plugin-domains">${m.domains?.length ? html`Websites its MCP servers name: ${m.domains.map((d, i) => html`${i ? ', ' : ''}<code>${d}</code>`)}.`
+    <p id="plugin-domains">${m.domains?.length ? html`Websites its MCP servers name: ${m.domains.map((d, i) => html`${i ? ', ' : ''}<code>${d}</code>${
+      v.report?.allowlist_missing?.includes(d) ? html` <span class="badge bad off-allowlist">not on the AI host's allowlist</span>` : ''}`)}.`
       : 'Its MCP servers name no website.'}</p>
+    ${v.report?.allowlist_missing?.some((d) => m.domains?.includes(d)) && html`<p class="hint">The sandbox reaches only the websites on the AI host's allowlist: the host adds these from their app's Rooms tab.</p>`}
     ${m.problems?.length ? html`<div class="warn" id="plugin-problems"><p>grill-room could not read all of it: what it missed may still run.</p>
       <ul>${m.problems.map((x) => html`<li>${x}</li>`)}</ul></div>` : ''}
     <h3>Claude Code's check</h3>

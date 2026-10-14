@@ -778,7 +778,7 @@ func TestViewPluginWhy(t *testing.T) {
 			t.Errorf("%s: %q", state, got)
 		}
 	}
-	if manifestOf(json.RawMessage("{")) != nil || repoName("::") != "" {
+	if manifestOf(json.RawMessage("{")) != nil || plugin.RepoName("::") != "" {
 		t.Fatal("bad input read")
 	}
 }

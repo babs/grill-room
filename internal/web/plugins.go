@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"path"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -27,11 +25,9 @@ const (
 	maxValidateJSON = 64 << 10
 	// maxPluginError bounds the first validation error kept as the reason.
 	maxPluginError = 500
+	// maxReportDomains bounds the domains a report lists off the allowlist.
+	maxReportDomains = 100
 )
-
-// scpLike is git's ssh shorthand, git@host:path: a private repo the host's daemon fetches
-// (009-AC19).
-var scpLike = regexp.MustCompile(`^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:`)
 
 func pluginID(r *http.Request) int64 {
 	id, _ := strconv.ParseInt(r.PathValue("plugin"), 10, 64)
@@ -49,7 +45,8 @@ type versionView struct {
 }
 
 // pluginView is a room plugin as the room sees it: Running is the version turns load, 0 for none,
-// and Why says why it does not load when it does not (009-AC18).
+// and Why says why it does not load when it does not (009-AC18), a running version included when
+// it needs host setup (009-AC24).
 type pluginView struct {
 	store.RoomPlugin
 	Versions []versionView `json:"versions"`
@@ -107,8 +104,15 @@ func viewPlugin(p store.RoomPlugin, hostOnline bool) pluginView {
 			v.Why = "refused by the AI host"
 		}
 	}
+	if p.NeedsSetup {
+		v.Why = needsSetupText
+	}
 	return v
 }
+
+// needsSetupText is why a plugin whose required option the host has not set does not load
+// (009-AC24).
+const needsSetupText = "needs host setup on the AI host's computer"
 
 // pluginViews lists the room's plugins as the room sees them.
 func (s *Server) pluginViews(ctx context.Context, room string) ([]pluginView, error) {
@@ -135,7 +139,12 @@ func (s *Server) listPlugins(w http.ResponseWriter, r *http.Request, sess sessio
 		s.serverError(w, "list_plugins_failed", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"plugins": ps})
+	fs, err := s.bus.Store.PluginFetches(r.Context(), sess.p.RoomID, false)
+	if err != nil {
+		s.serverError(w, "list_plugins_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"plugins": ps, "fetches": fs})
 }
 
 // pluginReq is a repo to check or add from.
@@ -204,7 +213,7 @@ func (s *Server) fetchRepo(w http.ResponseWriter, r *http.Request, room, repo, r
 		case errors.Is(err, plugin.ErrCredentials):
 			s.log.Info("plugin_url_refused", zap.String("room", room), zap.String("why", "credentials"))
 			httpError(w, http.StatusBadRequest, err.Error())
-		case errors.Is(err, plugin.ErrNotHTTPS) && (strings.HasPrefix(strings.ToLower(repo), "ssh://") || scpLike.MatchString(repo)):
+		case errors.Is(err, plugin.ErrNotHTTPS) && (strings.HasPrefix(strings.ToLower(repo), "ssh://") || plugin.IsSCP(repo)):
 			hostFetch(w, "the server fetches https links only")
 		default:
 			httpError(w, http.StatusBadRequest, err.Error())
@@ -278,15 +287,6 @@ type candidate struct {
 	snap        *plugin.Snapshot
 }
 
-// repoName is the last path element of a repo link, its .git cut.
-func repoName(repo string) string {
-	u, err := url.Parse(repo)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSuffix(path.Base(strings.TrimRight(u.Path, "/")), ".git")
-}
-
 // maxCandidates bounds the marketplace entries snapshotted: an entry rooted at the repo's root
 // costs a pass over the whole tree.
 // ponytail: later entries are listed but not pickable; snapshot on demand if marketplaces grow past it.
@@ -316,8 +316,8 @@ func candidates(ctx context.Context, f *fetched, repo string, keep func(entry st
 	}
 	if m == nil {
 		// Without a plugin.json, Claude Code names a plugin after its folder.
-		name, _ := json.Marshal(map[string]string{"name": repoName(repo)})
-		c := candidate{Name: repoName(repo), Pickable: true}
+		name, _ := json.Marshal(map[string]string{"name": plugin.RepoName(repo)})
+		c := candidate{Name: plugin.RepoName(repo), Pickable: true}
 		snap(&c, "", name)
 		return "", []candidate{c}, nil
 	}
@@ -482,7 +482,7 @@ func (s *Server) updatePlugin(w http.ResponseWriter, r *http.Request, sess sessi
 		return
 	}
 	if p.Private {
-		hostFetch(w, "a private plugin updates through the AI host")
+		s.askHostUpdate(w, r, sess, p)
 		return
 	}
 	f, release, upToDate, ok := s.fetchRepo(w, r, sess.p.RoomID, p.URL, p.Ref, p.Latest().Commit)
@@ -639,6 +639,9 @@ type pluginReport struct {
 	Validate json.RawMessage `json:"validate,omitempty"`
 	Details  *plugin.Details `json:"details,omitempty"`
 	Error    string          `json:"error,omitempty"`
+	// AllowlistMissing are the domains of the version's MCP servers off the host's egress
+	// allowlist (009-AC25); the approval sheet marks only those the manifest names.
+	AllowlistMissing []string `json:"allowlist_missing,omitempty"`
 }
 
 // postPluginReport records the host daemon's inspection of a version (009-AC13).
@@ -654,6 +657,7 @@ func (s *Server) postPluginReport(w http.ResponseWriter, r *http.Request, d *sto
 	if !s.asHostDaemon(w, r, d) {
 		return
 	}
+	rep.AllowlistMissing = rep.AllowlistMissing[:min(len(rep.AllowlistMissing), maxReportDomains)]
 	// Claude Code's errors may span lines: the reason is one line of the chat.
 	rep.Error, _ = cleanText(truncate(strings.Join(strings.Fields(rep.Error), " "), maxPluginError), maxPluginError, false)
 	if !rep.OK && rep.Error == "" {

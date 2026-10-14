@@ -16,13 +16,17 @@ import (
 //
 // Version 2 added the config's access and the access request: the accounts' proxies (003-AC14).
 // Version 3 added the slots under the host's global cap: acquire, wait, grant, release (003-AC18).
+// Version 4 added the room plugins' requests, plugin_options and plugin_fetch (009-AC19, 009-AC22).
 const (
-	Proto     = 3
+	Proto     = 4
 	ProtoSkew = 1
 )
 
 // protoSlots is the first version whose workers ask for a slot before each turn.
 const protoSlots = 3
+
+// protoPlugins is the first version whose workers take plugin_options and plugin_fetch.
+const protoPlugins = 4
 
 // Negotiate returns the version a peer at own talks with a peer at peer, or why they cannot.
 func Negotiate(own, peer int) (int, error) {
@@ -58,6 +62,14 @@ type Msg struct {
 	Turn      *TurnEvent       `json:"turn,omitempty"`
 	Log       json.RawMessage  `json:"log,omitempty"`
 	Access    *Access          `json:"access,omitempty"`
+	// Plugin, Values and Clear are a plugin_options request: the values the host gave the options
+	// of the room's plugin id Plugin in Room, and the options to forget. Fetch and Accept are a
+	// plugin_fetch request.
+	Plugin int64          `json:"plugin,omitempty"`
+	Values map[string]any `json:"values,omitempty"`
+	Clear  []string       `json:"clear,omitempty"`
+	Fetch  int64          `json:"fetch,omitempty"`
+	Accept bool           `json:"accept,omitempty"`
 }
 
 // Access is how a worker's rooms reach Claude: the bearer-swap proxy of each room's account, which

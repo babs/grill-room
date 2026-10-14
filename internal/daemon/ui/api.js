@@ -6,8 +6,14 @@
  * @typedef {{available?: string, served?: string, from?: string, running: boolean, error?: string}} Update
  * @typedef {{max_model: string, max_effort: string, approve_all: boolean}} Settings
  * @typedef {{cpus: string, memory: string, egress_cpus: string, egress_memory: string}} Limits
+ * @typedef {{key: string, title?: string, description?: string, type?: string, sensitive?: boolean, required?: boolean, default?: unknown}} PluginOption
+ * @typedef {{id: number, name: string, version: number, options?: PluginOption[], values?: Record<string, unknown>, set?: string[], needs_setup?: boolean,
+ *   domains?: string[], off_allowlist?: string[]}} HostPlugin
+ * @typedef {{id: number, plugin_name?: string, url: string, ref: string, entries?: string[], requested_by: string, created_at: string,
+ *   fetching?: boolean}} HostFetch
  * @typedef {{room: string, pairing: string, code?: string, approve_url?: string, connection: string, error?: string,
- *   can_host: boolean, reason?: string, running?: number, queued?: number, host?: boolean, parallel_turns?: boolean, name?: string}} RoomStatus
+ *   can_host: boolean, reason?: string, running?: number, queued?: number, host?: boolean, parallel_turns?: boolean, name?: string,
+ *   plugins?: HostPlugin[], fetches?: HostFetch[]}} RoomStatus
  * @typedef {{host: string, version: string, room?: string, pairing: string, code?: string, approve_url?: string,
  *   connection: string, error?: string, docker: Readiness, image: Image, update: Update, can_host: boolean, reason?: string,
  *   settings: Settings, allowlist: string[], rooms?: RoomStatus[]}} Status
