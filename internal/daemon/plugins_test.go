@@ -382,8 +382,9 @@ func TestPrunePluginCache(t *testing.T) {
 	}
 	past := filepath.Join(dir, "old.tar")
 	info, _ := os.Stat(past)
-	cutoff := info.ModTime().Add(1)
-	if err := os.Chtimes(filepath.Join(dir, "new.tar"), cutoff.Add(1), cutoff.Add(1)); err != nil {
+	// Whole seconds: NTFS keeps mtimes in 100 ns steps, so a 1 ns offset vanishes on Windows.
+	cutoff := info.ModTime().Add(time.Second)
+	if err := os.Chtimes(filepath.Join(dir, "new.tar"), cutoff.Add(time.Second), cutoff.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chtimes(filepath.Join(dir, "old.txt"), info.ModTime(), info.ModTime()); err != nil {

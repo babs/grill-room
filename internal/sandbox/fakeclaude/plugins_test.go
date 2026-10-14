@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -101,6 +102,9 @@ func TestFakeDetails(t *testing.T) {
 // 009-AC17: FAKE_PLUGINS lists each --plugin-dir in order with its files and their sha256,
 // sorted; with none it says so.
 func TestFakePlugins(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake claude runs in the Linux sandbox only; it names projects from POSIX paths")
+	}
 	cwd, home := t.TempDir(), t.TempDir()
 	if err := os.Mkdir(filepath.Join(cwd, "docs"), 0o755); err != nil {
 		t.Fatal(err)
