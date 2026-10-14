@@ -36,12 +36,14 @@ const (
 )
 
 type xRoom struct {
-	Name          string     `json:"name"`
-	CreatedAt     string     `json:"created_at"`
-	Chain         Chain      `json:"chain"`
-	ParallelTurns bool       `json:"parallel_turns"`
-	STTGlossary   string     `json:"stt_glossary,omitempty"`
-	Personas      []xPersona `json:"personas"`
+	Name          string `json:"name"`
+	CreatedAt     string `json:"created_at"`
+	Chain         Chain  `json:"chain"`
+	ParallelTurns bool   `json:"parallel_turns"`
+	STTGlossary   string `json:"stt_glossary,omitempty"`
+	// CreatedFrom is optional: an archive from before 006 has none, and the format stays (006-AC11).
+	CreatedFrom *Provenance `json:"created_from,omitempty"`
+	Personas    []xPersona  `json:"personas"`
 }
 
 type xPersona struct {
@@ -53,6 +55,8 @@ type xPersona struct {
 	TemplatePreset  string   `json:"template_preset,omitempty"`
 	TemplateVersion int      `json:"template_version"`
 	EveryN          int      `json:"every_n,omitempty"`
+	EveryVoice      int      `json:"every_voice,omitempty"`
+	EveryMinutes    int      `json:"every_minutes,omitempty"`
 	SelfCall        bool     `json:"self_call"`
 	Autocompact     int      `json:"autocompact"`
 	CreatedAt       string   `json:"created_at"`
@@ -351,15 +355,17 @@ func (s *Store) ExportRoom(ctx context.Context, roomID, dir string) (*Room, erro
 func exportRoom(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) (*Room, error) {
 	room := &Room{ID: roomID}
 	x := xRoom{Personas: []xPersona{}}
-	err := tx.QueryRowContext(ctx, `SELECT name, created_at, chain_budget, chain_count, chain_suspended, parallel_turns, stt_glossary FROM rooms WHERE id = ?`, roomID).
-		Scan(&x.Name, &x.CreatedAt, &x.Chain.Budget, &x.Chain.Count, &x.Chain.Suspended, &x.ParallelTurns, &x.STTGlossary)
+	var from sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT name, created_at, chain_budget, chain_count, chain_suspended, parallel_turns, stt_glossary, created_from FROM rooms WHERE id = ?`, roomID).
+		Scan(&x.Name, &x.CreatedAt, &x.Chain.Budget, &x.Chain.Count, &x.Chain.Suspended, &x.ParallelTurns, &x.STTGlossary, &from)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("export room: %w", err)
 	}
-	room.Name, room.CreatedAt, room.Chain, room.ParallelTurns = x.Name, parseTS(x.CreatedAt), x.Chain, x.ParallelTurns
+	x.CreatedFrom = parseProvenance(from)
+	room.Name, room.CreatedAt, room.Chain, room.ParallelTurns, room.CreatedFrom = x.Name, parseTS(x.CreatedAt), x.Chain, x.ParallelTurns, x.CreatedFrom
 	if x.Personas, err = exportPersonas(ctx, tx, roomID); err != nil {
 		return nil, err
 	}
@@ -409,14 +415,14 @@ func exportPersonas(ctx context.Context, tx *sql.Tx, roomID string) ([]xPersona,
 		var tpl sql.NullInt64
 		var preset sql.NullString
 		if err := rows.Scan(&p.Ref, &tpl, &preset, &p.TemplateVersion, &p.Name, &p.Badge, &p.Colour, &p.Text, &p.Model, &p.Effort,
-			&p.EveryN, &p.SelfCall, &p.Autocompact, &p.CreatedAt); err != nil {
+			&p.EveryN, &p.SelfCall, &p.Autocompact, &p.CreatedAt, &p.EveryVoice, &p.EveryMinutes); err != nil {
 			return fmt.Errorf("export personas: %w", err)
 		}
 		p.Template, p.TemplatePreset, p.Skills = tpl.Int64, preset.String, []xPin{}
 		out = append(out, p)
 		return nil
 	}, `SELECT p.id, p.template_id, t.preset, p.template_version, p.name, p.badge, p.colour, p.text, p.model, p.effort,
-		COALESCE(p.every_n, 0), p.self_call, p.autocompact, p.created_at
+		COALESCE(p.every_n, 0), p.self_call, p.autocompact, p.created_at, COALESCE(p.every_voice, 0), COALESCE(p.every_minutes, 0)
 		FROM room_personas p LEFT JOIN persona_templates t ON t.id = p.template_id WHERE p.room_id = ? AND p.pending = 0 ORDER BY p.id`, roomID)
 	if err != nil {
 		return nil, err

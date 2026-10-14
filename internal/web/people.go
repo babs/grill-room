@@ -249,3 +249,15 @@ func (s *Server) postPresence(w http.ResponseWriter, r *http.Request, sess sessi
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// anyoneHere reports a participant of room present at now (006-AC18).
+func (pp *people) anyoneHere(room string, now time.Time) bool {
+	pp.mu.Lock()
+	defer pp.mu.Unlock()
+	for _, p := range pp.m[room] {
+		if p.alive(now) {
+			return true
+		}
+	}
+	return false
+}

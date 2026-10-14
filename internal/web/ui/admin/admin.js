@@ -407,7 +407,9 @@ function RoomLimit({ p, perProfile, reload }) {
 function Libraries() {
   const [templates, setTemplates] = useState(/** @type {Template[] | null} */ (null));
   const [skills, setSkills] = useState(/** @type {Skill[] | null} */ (null));
+  const [starters, setStarters] = useState(/** @type {import('./starters.js').Starter[] | null} */ (null));
   const load = () => Promise.all([
+    api('GET', '/api/admin/starters').then(setStarters),
     api('GET', '/api/admin/templates').then(setTemplates),
     api('GET', '/api/admin/skills').then((/** @type {Skill[]} */ ks) => setSkills(ks.filter((k) => k.shared))),
   ]).catch(show);
@@ -434,7 +436,17 @@ function Libraries() {
         <td class="wrap">${k.name}</td><td>${k.author}</td><td>v${k.version}</td><td>${size(k.size)}</td><td>${when(k.updated_at)}</td>
         <td><button type="button" onClick=${() => remove(`the skill ${k.name}`, '/api/admin/skills/' + k.id)}>Remove</button></td>
       </tr>`)}</tbody>
-    </table></div>` : html`<p>No shared skill yet.</p>`)}`;
+    </table></div>` : html`<p>No shared skill yet.</p>`)}
+    <h2>Shared room starters</h2>
+    ${starters && (starters.length ? html`<div class="scroll"><table id="starters" class="cards">
+      <thead><tr><th>Title</th><th>Author</th><th>Versions</th><th>Size</th><th>Updated</th><th></th></tr></thead>
+      <tbody>${starters.map((st) => html`<tr id=${'starter-' + st.id}>
+        <td class="wrap">${st.title}</td><td data-label="Author">${st.author}</td><td data-label="Versions">${st.versions}</td>
+        <td data-label="Size">${size(st.size)}</td><td data-label="Updated">${ago(st.updated_at)}</td>
+        <td><button type="button" class="btn-danger-outline" onClick=${() => remove(`the starter ${st.title}`, '/api/admin/starters/' + st.id)}
+          aria-label=${'Remove the starter ' + st.title}>Remove</button></td>
+      </tr>`)}</tbody>
+    </table></div>` : html`<p>No shared starter yet.</p>`)}`;
 }
 
 function InstanceView() {

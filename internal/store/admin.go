@@ -129,6 +129,7 @@ const (
 	TargetProfile      = "profile"
 	TargetSkill        = "skill"
 	TargetTemplate     = "template"
+	TargetStarter      = "starter"
 	TargetAdminSession = "admin_session"
 	TargetInstance     = "instance"
 )
@@ -264,4 +265,5 @@ var targetNames = map[string]string{
 	TargetProfile:  `SELECT COALESCE(p.name, (SELECT name FROM participants WHERE profile_id = p.id ORDER BY id DESC LIMIT 1), p.uuid, '') FROM profiles p WHERE p.id = ?`,
 	TargetSkill:    `SELECT name FROM skills WHERE id = ?`,
 	TargetTemplate: `SELECT title FROM persona_templates WHERE id = ?`,
+	TargetStarter:  `SELECT json_extract(manifest, '$.title') FROM starter_versions WHERE starter_id = ? ORDER BY n DESC LIMIT 1`,
 }

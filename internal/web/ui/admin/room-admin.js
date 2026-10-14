@@ -7,6 +7,7 @@ import { useState, useEffect } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { html } from 'htm/preact';
 import { RoomPanel, Rename, TabBar, fetchJSON, roomTabs } from './room-panel.js';
+import { Editor } from './starters.js';
 
 /**
  * @typedef {{id: number, name: string, admin: boolean}} Participant
@@ -82,7 +83,10 @@ function Manage({ data, tab, tabs }) {
     <p class="hint">You are a room admin. The instance's audit log records every action here.</p>
     <p class="said" role="alert">${said}</p>
     ${room && html`<${RoomPanel} key=${room.id} room=${room} base=${base} api=${fetchJSON} show=${show} reload=${load} byName=${byName}
-      tab=${tab} tabs=${tabs} href=${(/** @type {string} */ id) => '#manage/' + id} close=${() => location.assign('/profile')} label="Room settings">
+      tab=${tab} tabs=${tabs} href=${(/** @type {string} */ id) => '#manage/' + id} close=${() => location.assign('/profile')} label="Room settings"
+      general=${html`<h3>Save as starter</h3>
+        <p class="hint">Keep this room's agenda, AI personas and skills, and the documents you pick, to start new rooms the same way.</p>
+        <div class="row"><button type="button" class="btn-secondary" id="save-starter" onClick=${() => saveAsStarter(base, setSaid)}>Save as starter</button></div>`}>
       ${tab === 'admins' && html`
         <p class="hint">Room admins rename the room and its participants, manage every invite, appoint other admins and delete the room. The room keeps at least one.</p>
         <ul id="room-admins">${data.participants.map((p) => html`<li key=${p.id}>
@@ -102,6 +106,28 @@ function Manage({ data, tab, tabs }) {
       ${tab === 'documents' && html`<${DeletedDocuments} base=${base} show=${show}/>`}
       ${tab === 'glossary' && html`<${STTGlossary} data=${data}/>`}
     <//>`}`;
+}
+
+const starterSheet = /** @type {HTMLDialogElement} */ (document.getElementById('starter-save-sheet'));
+starterSheet.addEventListener('close', () => render(null, starterSheet));
+
+/**
+ * saveAsStarter opens the editor on the room for a room admin; the starter lands in their own
+ * library (006-AC15).
+ * @param {string} base @param {(s: string) => void} say
+ */
+async function saveAsStarter(base, say) {
+  const view = await fetchJSON('GET', base + '/starter-draft').catch((err) => { say(err.message); return null; });
+  if (!view) return;
+  const close = () => starterSheet.close();
+  render(html`<div class="sheet-head"><h2 id="starter-save-title">Save as starter</h2>
+      <button type="button" class="btn-ghost btn-icon" aria-label="Close" onClick=${close}>✕</button></div>
+    <${Editor} view=${view} api=${fetchJSON} mode="save" path=${base + '/starters'} back=${close}
+      done=${(/** @type {import('./starters.js').Starter} */ st) => {
+        close();
+        dispatchEvent(new CustomEvent('grill:toast', { detail: 'Saved "' + st.title + '" to your starters, on your profile page' }));
+      }}/>`, starterSheet);
+  starterSheet.showModal();
 }
 
 /**

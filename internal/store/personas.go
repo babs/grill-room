@@ -291,6 +291,15 @@ type RoomPersona struct {
 	// one, 0 for off (002-AC22). SelfCall lets its synthesis queue itself with @name (002-AC24).
 	EveryN   int  `json:"every_n,omitempty"`
 	SelfCall bool `json:"self_call"`
+	// EveryVoice runs it after that many voice lines since its last turn, EveryMinutes that long
+	// after it, once the room had activity and someone is here; at most one of the three is set
+	// (006-AC18). NextVoice is the voice lines left before it, NextAt when the timer is due.
+	EveryVoice   int        `json:"every_voice,omitempty"`
+	EveryMinutes int        `json:"every_minutes,omitempty"`
+	NextVoice    int        `json:"next_voice,omitempty"`
+	NextAt       *time.Time `json:"next_at,omitempty"`
+	// resetMark starts the count and the timer from now: a voice or timer trigger was turned on.
+	resetMark bool
 	// Autocompact is the context size, in tokens, at which Claude Code compacts the persona's
 	// session; 0 leaves it to Claude Code (auto). Passed to claude -p --autocompact (003-AC24).
 	Autocompact int `json:"autocompact"`
@@ -312,17 +321,21 @@ const personaCols = `SELECT p.id, p.room_id, COALESCE(p.template_id, 0), p.templ
 	COALESCE((SELECT MAX(n) FROM persona_template_versions WHERE template_id = p.template_id), 0),
 	p.name, p.badge, p.colour, p.text, p.model, p.effort, COALESCE(p.every_n, 0), p.self_call, p.created_at,
 	p.pending, p.cap_decision, COALESCE(p.cap_daemon_id, 0), p.cap_model, p.cap_effort, p.autocompact,
-	COALESCE(s.context_tokens, 0), COALESCE(s.context_window, 0) FROM room_personas p
+	COALESCE(s.context_tokens, 0), COALESCE(s.context_window, 0), COALESCE(p.every_voice, 0), COALESCE(p.every_minutes, 0), p.mark_at_ms,
+	CASE WHEN p.every_voice IS NULL THEN 0 ELSE (SELECT COUNT(*) FROM messages m WHERE m.room_id = p.room_id AND m.kind = 'voice'
+		AND m.deleted_at IS NULL AND m.id > p.mark_msg_id) END FROM room_personas p
 	LEFT JOIN agent_sessions s ON s.persona_id = p.id
 		AND s.session_id = (SELECT session_id FROM turns WHERE persona_id = p.id AND status = 'done' ORDER BY id DESC LIMIT 1) `
 
 func scanPersona(sc scanner) (*RoomPersona, error) {
 	var p RoomPersona
 	var created string
+	var markMS int64
+	var voices int
 	err := sc.Scan(&p.ID, &p.RoomID, &p.TemplateID, &p.TemplateVersion, &p.UpdateVersion,
 		&p.Name, &p.Badge, &p.Colour, &p.Text, &p.Model, &p.Effort, &p.EveryN, &p.SelfCall, &created,
 		&p.Pending, &p.Cap.Status, &p.Cap.DaemonID, &p.Cap.Level.Model, &p.Cap.Level.Effort, &p.Autocompact,
-		&p.ContextTokens, &p.ContextWindow)
+		&p.ContextTokens, &p.ContextWindow, &p.EveryVoice, &p.EveryMinutes, &markMS, &voices)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -331,6 +344,13 @@ func scanPersona(sc scanner) (*RoomPersona, error) {
 	}
 	if p.UpdateVersion <= p.TemplateVersion {
 		p.UpdateVersion = 0
+	}
+	if p.EveryVoice > 0 {
+		p.NextVoice = max(p.EveryVoice-voices, 0)
+	}
+	if p.EveryMinutes > 0 {
+		at := time.UnixMilli(markMS + int64(p.EveryMinutes)*60_000).UTC()
+		p.NextAt = &at
 	}
 	p.CreatedAt = parseTS(created)
 	return &p, nil
@@ -409,9 +429,10 @@ func addPersona(ctx context.Context, tx *sql.Tx, roomID string, templateID int64
 		return nil, "", err
 	}
 	var id int64
-	err = tx.QueryRowContext(ctx, `INSERT INTO room_personas(room_id, template_id, template_version, name, badge, colour, text, model, effort, created_at)
-		SELECT id, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM rooms WHERE id = ? RETURNING id`,
-		append(append([]any{t.ID, t.Version}, t.PersonaFields.args()...), now(), roomID)...).Scan(&id)
+	err = tx.QueryRowContext(ctx, `INSERT INTO room_personas(room_id, template_id, template_version, name, badge, colour, text, model, effort, created_at,
+			mark_msg_id, mark_at_ms)
+		SELECT id, ?, ?, ?, ?, ?, ?, ?, ?, ?, `+markNow+` FROM rooms WHERE id = ? RETURNING id`,
+		append(append([]any{t.ID, t.Version}, t.PersonaFields.args()...), now(), time.Now().UnixMilli(), roomID)...).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", ErrNotFound
 	}
@@ -429,6 +450,9 @@ func presetID(ctx context.Context, tx *sql.Tx, key string) (int64, error) {
 	}
 	return id, nil
 }
+
+// markNow is a new persona's trigger mark: the latest message, and the time its ? receives in ms.
+const markNow = `(SELECT COALESCE(MAX(id), 0) FROM messages), ?`
 
 // memberLine records a member's change (a persona, the chain) in the room, signed by them.
 func memberLine(ctx context.Context, tx *sql.Tx, roomID string, by *Participant, body string) (*Message, error) {
@@ -492,9 +516,12 @@ func (s *Store) AddPersona(ctx context.Context, roomID string, templateID int64,
 // PersonaPatch is a change to a room persona; nil fields stay as they are.
 type PersonaPatch struct {
 	Name, Badge, Colour, Text, Model, Effort *string
-	// EveryN 0 turns the trigger off.
-	EveryN   *int
-	SelfCall *bool
+	// EveryN, EveryVoice and EveryMinutes 0 turn their trigger off; the room API sends the other two
+	// as 0 when it sets one (006-AC18).
+	EveryN       *int
+	EveryVoice   *int `json:",omitempty"`
+	EveryMinutes *int `json:",omitempty"`
+	SelfCall     *bool
 	// Autocompact 0 leaves compaction to Claude Code.
 	Autocompact *int `json:",omitempty"`
 	// TemplateVersion is set by a held template update.
@@ -533,6 +560,16 @@ func (c PersonaPatch) apply(p *RoomPersona) []string {
 	if c.EveryN != nil && *c.EveryN != p.EveryN {
 		out = append(out, fmt.Sprintf("every N rounds %s → %s", everyN(p.EveryN), everyN(*c.EveryN)))
 		p.EveryN = *c.EveryN
+	}
+	if c.EveryVoice != nil && *c.EveryVoice != p.EveryVoice {
+		out = append(out, fmt.Sprintf("every N voice lines %s → %s", everyN(p.EveryVoice), everyN(*c.EveryVoice)))
+		p.resetMark = p.resetMark || p.EveryVoice == 0
+		p.EveryVoice = *c.EveryVoice
+	}
+	if c.EveryMinutes != nil && *c.EveryMinutes != p.EveryMinutes {
+		out = append(out, fmt.Sprintf("every N minutes %s → %s", everyN(p.EveryMinutes), everyN(*c.EveryMinutes)))
+		p.resetMark = p.resetMark || p.EveryMinutes == 0
+		p.EveryMinutes = *c.EveryMinutes
 	}
 	if c.SelfCall != nil && *c.SelfCall != p.SelfCall {
 		out = append(out, fmt.Sprintf("self-call %s → %s", onOff(p.SelfCall), onOff(*c.SelfCall)))
@@ -579,13 +616,20 @@ func nullInt(n int) any {
 
 func updatePersona(ctx context.Context, tx *sql.Tx, p *RoomPersona) error {
 	_, err := tx.ExecContext(ctx, `UPDATE room_personas SET template_version = ?, name = ?, badge = ?, colour = ?, text = ?, model = ?, effort = ?,
-		every_n = ?, self_call = ?, pending = ?, autocompact = ? WHERE id = ?`,
-		append(append([]any{p.TemplateVersion}, p.args()...), nullInt(p.EveryN), p.SelfCall, p.Pending, p.Autocompact, p.ID)...)
+		every_n = ?, self_call = ?, pending = ?, autocompact = ?, every_voice = ?, every_minutes = ? WHERE id = ?`,
+		append(append([]any{p.TemplateVersion}, p.args()...), nullInt(p.EveryN), p.SelfCall, p.Pending, p.Autocompact,
+			nullInt(p.EveryVoice), nullInt(p.EveryMinutes), p.ID)...)
 	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
 		return ErrNameTaken
 	}
 	if err != nil {
 		return fmt.Errorf("update persona %d: %w", p.ID, err)
+	}
+	if p.resetMark {
+		// A trigger just turned on counts from now, not from a turn long past (006-AC18).
+		if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET mark_msg_id = (SELECT COALESCE(MAX(id), 0) FROM messages), mark_at_ms = ? WHERE id = ?`, time.Now().UnixMilli(), p.ID); err != nil {
+			return fmt.Errorf("update persona %d: %w", p.ID, err)
+		}
 	}
 	return saveSkills(ctx, tx, p)
 }
@@ -636,7 +680,12 @@ func changePersona(ctx context.Context, tx *sql.Tx, p *RoomPersona, c PersonaPat
 		if err := updatePersona(ctx, tx, p); err != nil {
 			return nil, nil, false, err
 		}
-		body = applied(before, changes)
+		// Read back: the next trigger is the store's to count (006-AC18).
+		updated, err := roomPersona(ctx, tx, p.RoomID, p.ID)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		p, body = updated, applied(before, changes)
 	}
 	m, err := memberLine(ctx, tx, p.RoomID, by, body)
 	return p, m, held, err

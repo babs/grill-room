@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, upload, startDaemon, smallTargets, menuItem, playSTT } from './helpers.js';
+import { roomWith, signIn, upload, startDaemon, smallTargets, menuItem, playSTT, newRoomEditor } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const desktop = { width: 1440, height: 900 };
@@ -236,9 +236,9 @@ test('header menus, wording and empty states', async ({ browser, request }) => {
 
   // A room just created from the profile opens on its invite card.
   await alice.goto('/profile');
-  await alice.getByRole('button', { name: 'New room' }).click();
+  await newRoomEditor(alice);
   await alice.getByLabel('Room name').fill('Launch plan');
-  await alice.getByRole('button', { name: 'Create the room' }).click();
+  await alice.getByRole('button', { name: 'Create room' }).click();
   await expect(alice.locator('#invites')).toBeVisible();
   await expect(alice).toHaveURL(/\/r\/[^?]+$/);
   await alice.locator('#invites').getByRole('button', { name: 'Close' }).click();
@@ -381,9 +381,9 @@ test('personas sheet and confirm sheet', async ({ browser, request }) => {
   await expect(form).toBeVisible();
   await expect(form.locator('button.btn-primary, button[type=submit]')).toHaveText(['Save']);
   await expect(form.getByRole('button', { name: /^Remove/ })).toHaveClass('btn-danger-outline');
-  await expect(form.getByLabel('Speaks up every N answers')).toBeHidden();
+  await expect(form.getByLabel('Speaks up')).toBeHidden();
   await form.locator('details.advanced summary').click();
-  await expect(form.getByLabel('Speaks up every N answers')).toBeVisible();
+  await expect(form.getByLabel('Speaks up')).toBeVisible();
   await expect(form.getByRole('button', { name: /library/ })).toBeHidden();
   await form.locator('details.more summary').click();
   await expect(form.getByRole('button', { name: /library/ })).toBeVisible();
@@ -411,12 +411,12 @@ test('profile home page', async ({ browser, request }) => {
   await expect(card.locator('time')).toHaveAttribute('title', /\d/);
   await expect(alice.locator('#profile-name')).toHaveText('Alice');
   await expect(alice.locator('#skills')).not.toHaveAttribute('open', '');
-  await alice.getByRole('button', { name: 'New room' }).click();
+  await newRoomEditor(alice);
   await expect(alice.locator('#room-create-sheet')).toBeVisible();
   await expect(alice.getByLabel('Your name in the room')).toHaveValue('Alice');
   await shot(alice, 'after-desktop-profile-new');
   await alice.getByLabel('Room name').fill('Launch plan');
-  await alice.getByRole('button', { name: 'Create the room' }).click();
+  await alice.getByRole('button', { name: 'Create room' }).click();
   await expect(alice.locator('#invites')).toBeVisible();
   await alice.goto('/profile');
   await expect(alice.locator('#rooms li.card', { hasText: 'Launch plan' }).locator('.badge')).toHaveText('admin');

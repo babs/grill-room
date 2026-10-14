@@ -58,7 +58,7 @@ func richRoom(t *testing.T, s *Store, id string) (*Participant, *RoomPersona) {
 	ctx := t.Context()
 	lobby := "lobby-" + id
 	alice := joinWithProfile(t, s, lobby, "Alice", JoinProfile{RecoveryHash: "rec-" + id, SessionHash: "sess-" + id})
-	if _, err := s.CreateProfileRoom(ctx, id, "Room "+id, alice.ProfileID, "Alice", "inv-"+id, "tok-"+id); err != nil {
+	if _, err := s.CreateProfileRoom(ctx, id, "Room "+id, alice.ProfileID, "Alice", "inv-"+id, "tok-"+id, nil); err != nil {
 		t.Fatal(err)
 	}
 	ps, _ := s.Participants(ctx, id)
@@ -189,7 +189,7 @@ func ptr[T any](v T) *T { return &v }
 // roomSID is the session richRoom's turn writes.
 const roomSID = "00000000-0000-4000-8000-000000000001"
 
-func checkPersona(PersonaFields, int, int) error { return nil }
+func checkPersona(StarterPersona) error { return nil }
 
 func importOpts(roomID string) ImportOptions {
 	return ImportOptions{RoomID: roomID, Format: 2, SameInstance: true, DefaultQuota: 1 << 20, MaxUpload: 1 << 20, MaxAttachment: 1 << 20, CheckPersona: checkPersona}
@@ -581,7 +581,7 @@ func TestImportRefusals(t *testing.T) {
 	ref := tamper(fileMessages, func(b []byte) []byte { return bytes.Replace(b, []byte(`"participant":`), []byte(`"participant":9`), 1) })
 	refused("unknown participant", importOpts("x"), ref, "unknown participant")
 	o = importOpts("x")
-	o.CheckPersona = func(PersonaFields, int, int) error { return errors.New("colour must be like #1a2b3c") }
+	o.CheckPersona = func(StarterPersona) error { return errors.New("colour must be like #1a2b3c") }
 	refused("bad persona", o, dir, "colour")
 }
 
@@ -639,7 +639,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 	const server = "server-wide, not room content"
 	// Each table's columns: those the export carries, or why the table is left out.
 	tables := map[string]string{
-		"rooms":                     "id name created_at chain_budget chain_count chain_suspended parallel_turns stt_glossary | host_participant_id quota_bytes creator_profile_id",
+		"rooms":                     "id name created_at chain_budget chain_count chain_suspended parallel_turns stt_glossary created_from | host_participant_id quota_bytes creator_profile_id",
 		"participants":              "id name joined_at can_trigger profile_id profile_uuid_hint room_id invite_id | token_hash last_seen_at join_ip join_ua last_ip last_ua",
 		"invites":                   "| id room_id token_hash created_at revoked_at created_by",
 		"messages":                  "id room_id ts kind participant_id sender body model edited_at deleted_at change_seq persona_id effort req_model req_effort model_note model_mismatch | html turn_id",
@@ -650,9 +650,9 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"annotations":               "id room_id document_id revision anchor orphaned status version created_at |",
 		"annotation_messages":       "id annotation_id author_kind participant_id author body created_at persona_id |",
 		"attachments":               "id message_id content_type size data created_at |",
-		"room_personas":             "id room_id template_id template_version name badge colour text model effort every_n self_call created_at autocompact pending | cap_decision cap_daemon_id cap_model cap_effort",
+		"room_personas":             "id room_id template_id template_version name badge colour text model effort every_n self_call created_at autocompact pending every_voice every_minutes | cap_decision cap_daemon_id cap_model cap_effort mark_msg_id mark_at_ms",
 		"room_persona_skills":       "persona_id skill_id version |",
-		"skills":                    "id name created_at room_id pending scope | profile_id publisher_id",
+		"skills":                    "id name created_at room_id pending scope | profile_id publisher_id from_starter",
 		"skill_versions":            "skill_id n author description files size sha256 data created_at | id author_id",
 		"agent_sessions":            "room_id persona_id session_id data updated_at context_tokens context_window context_updated_at |",
 		"turns":                     "session_id message_cursor annotation_cursor change_cursor model effort ended_at persona_id status | id room_id participant_id daemon_id host fresh resume prompt error report started_at persona_name persona_text req_model req_effort skills host_queued_at base_revisions rerun_of cause handoff",
@@ -671,6 +671,9 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"settings":                  server,
 		"admin_sessions":            server,
 		"audit_log":                 server,
+		"starters":                  server,
+		"starter_versions":          server,
+		"starter_files":             server,
 	}
 	rows, err := s.db.QueryContext(t.Context(), `SELECT m.name, group_concat(c.name, ' ') FROM sqlite_master m, pragma_table_xinfo(m.name) c
 		WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' GROUP BY m.name`)
@@ -930,7 +933,7 @@ func TestImportFillsMissingLevels(t *testing.T) {
 	}
 	o := importOpts("copy")
 	var checked []PersonaFields
-	o.CheckPersona = func(f PersonaFields, _, _ int) error { checked = append(checked, f); return nil }
+	o.CheckPersona = func(p StarterPersona) error { checked = append(checked, p.PersonaFields); return nil }
 	if _, err := s.ImportRoom(t.Context(), dir, o); err != nil {
 		t.Fatal(err)
 	}

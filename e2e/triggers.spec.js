@@ -14,7 +14,8 @@ async function addSecretary(page, fields = {}) {
   await expect(sec).toHaveCount(1);
   if (fields.everyN) {
     await unfold(sec, 'advanced');
-    await sec.getByLabel('Speaks up every N answers').fill(String(fields.everyN));
+    await sec.getByLabel('Speaks up').selectOption('every_n');
+    await sec.getByLabel('N', { exact: true }).fill(String(fields.everyN));
     await sec.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(panel.locator('#personas-status')).toHaveText('Secretary saved. It applies from its next turn.');
   }

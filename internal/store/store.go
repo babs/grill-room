@@ -38,6 +38,8 @@ type Room struct {
 	// ParallelTurns lets two personas of the room run at once, each in its own sandbox; the host
 	// switches it (003-AC20).
 	ParallelTurns bool `json:"parallel_turns"`
+	// CreatedFrom is the starter version the room was created from, nil for a blank room (006-AC11).
+	CreatedFrom *Provenance `json:"created_from,omitempty"`
 }
 
 // Invite is a link token granting access to one room. Only its hash is stored.
@@ -640,6 +642,47 @@ CREATE INDEX document_renames_message ON document_renames(message_id);
 -- 005-AC4: an imported mention keeps how its turn ended, as the turn history stays behind.
 ALTER TABLE message_turns ADD COLUMN final_status TEXT CHECK (final_status IN ('done', 'failed', 'stopped', 'cancelled'));
 ALTER TABLE message_turns ADD COLUMN final_line_id INTEGER REFERENCES messages(id) ON DELETE SET NULL;
+`, `
+-- 006-AC1 to 006-AC3: room starters. Built-ins belong to no profile; personal and instance ones
+-- cascade from the profile that owns or published them, like persona templates. A version is a
+-- manifest plus the blobs it names (document originals, skill tars), never changed once written.
+CREATE TABLE starters (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	builtin TEXT UNIQUE,
+	profile_id INTEGER REFERENCES profiles(id) ON DELETE CASCADE,
+	library TEXT NOT NULL CHECK (library IN ('builtin', 'personal', 'instance')),
+	created_at TEXT NOT NULL,
+	CHECK ((library = 'builtin') = (builtin IS NOT NULL) AND (library = 'builtin') = (profile_id IS NULL))
+);
+CREATE INDEX starters_profile ON starters(profile_id);
+CREATE TABLE starter_versions (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	starter_id INTEGER NOT NULL REFERENCES starters(id) ON DELETE CASCADE,
+	n INTEGER NOT NULL,
+	author TEXT NOT NULL,
+	manifest TEXT NOT NULL,
+	size INTEGER NOT NULL,
+	created_at TEXT NOT NULL,
+	UNIQUE (starter_id, n)
+);
+CREATE TABLE starter_files (
+	version_id INTEGER NOT NULL REFERENCES starter_versions(id) ON DELETE CASCADE,
+	name TEXT NOT NULL,
+	data BLOB NOT NULL,
+	PRIMARY KEY (version_id, name)
+);
+`, `
+-- 006-AC11: the starter a room was created from, {"title": ..., "version": n}; NULL for a blank room.
+ALTER TABLE rooms ADD COLUMN created_from TEXT;
+-- 006-AC18: a persona speaks up every N voice lines or every T minutes. Its mark is the last
+-- message and the time its latest turn started: the counts and the timer run from there.
+ALTER TABLE room_personas ADD COLUMN every_voice INTEGER CHECK (every_voice IS NULL OR every_voice > 0);
+ALTER TABLE room_personas ADD COLUMN every_minutes INTEGER CHECK (every_minutes IS NULL OR every_minutes > 0);
+ALTER TABLE room_personas ADD COLUMN mark_msg_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE room_personas ADD COLUMN mark_at_ms INTEGER NOT NULL DEFAULT 0;
+UPDATE room_personas SET mark_msg_id = (SELECT COALESCE(MAX(id), 0) FROM messages), mark_at_ms = CAST(unixepoch('subsec') * 1000 AS INTEGER);
+-- 006-AC13: a skill a starter brought waits for the room's first host.
+ALTER TABLE skills ADD COLUMN from_starter INTEGER NOT NULL DEFAULT 0 CHECK (from_starter IN (0, 1));
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -666,6 +709,11 @@ func Open(path string) (*Store, error) {
 	}
 	// A preset whose shipped text changed gets a new version: rooms are offered it (002-AC14).
 	if err := ensurePresets(context.Background(), db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	// Likewise a built-in starter whose shipped content changed (006-AC2).
+	if err := ensureStarters(context.Background(), db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -756,7 +804,7 @@ func (s *Store) CreateRoom(ctx context.Context, id, name string) (*Room, error) 
 	var r *Room
 	err := s.withTx(ctx, "create room", func(tx *sql.Tx) error {
 		var err error
-		if r, err = insertRoom(ctx, tx, id, name, 0); err != nil {
+		if r, err = insertRoom(ctx, tx, id, name, 0, true); err != nil {
 			return err
 		}
 		return auditTx(ctx, tx, "", nil)
@@ -767,13 +815,16 @@ func (s *Store) CreateRoom(ctx context.Context, id, name string) (*Room, error) 
 	return r, nil
 }
 
-// insertRoom inserts a room created by profile creator (0 for the super-admin) with the Default
-// template's persona.
-func insertRoom(ctx context.Context, tx *sql.Tx, id, name string, creator int64) (*Room, error) {
+// insertRoom inserts a room created by profile creator (0 for the super-admin), with the Default
+// template's persona when withDefault.
+func insertRoom(ctx context.Context, tx *sql.Tx, id, name string, creator int64, withDefault bool) (*Room, error) {
 	r := &Room{ID: id, Name: name, CreatedAt: time.Now().UTC(), Chain: Chain{Budget: DefaultChainBudget}}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO rooms(id, name, created_at, creator_profile_id) VALUES(?,?,?,?)`,
 		r.ID, r.Name, r.CreatedAt.Format(time.RFC3339Nano), nullID(creator)); err != nil {
 		return nil, fmt.Errorf("create room: %w", err)
+	}
+	if !withDefault {
+		return r, nil
 	}
 	def, err := presetID(ctx, tx, PresetDefault)
 	if err != nil {
@@ -789,15 +840,17 @@ func insertRoom(ctx context.Context, tx *sql.Tx, id, name string, creator int64)
 func (s *Store) Room(ctx context.Context, id string) (*Room, error) {
 	var r Room
 	var created string
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at, COALESCE(host_participant_id, 0), chain_budget, chain_count, chain_suspended, parallel_turns
-		FROM rooms WHERE id = ?`, id).Scan(&r.ID, &r.Name, &created, &r.HostParticipantID, &r.Chain.Budget, &r.Chain.Count, &r.Chain.Suspended, &r.ParallelTurns)
+	var from sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at, COALESCE(host_participant_id, 0), chain_budget, chain_count, chain_suspended, parallel_turns,
+		created_from FROM rooms WHERE id = ?`, id).Scan(&r.ID, &r.Name, &created, &r.HostParticipantID, &r.Chain.Budget, &r.Chain.Count, &r.Chain.Suspended,
+		&r.ParallelTurns, &from)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("room %s: %w", id, err)
 	}
-	r.CreatedAt = parseTS(created)
+	r.CreatedAt, r.CreatedFrom = parseTS(created), parseProvenance(from)
 	return &r, nil
 }
 

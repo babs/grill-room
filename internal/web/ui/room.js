@@ -587,6 +587,9 @@ $('msg-edit').addEventListener('click', () => {
 });
 $('msg-delete').addEventListener('click', () => { if (menuFor) deleteMessage(menuFor.m); });
 
+// The Preact panels say what they did through a toast too (006-AC15).
+addEventListener('grill:toast', (e) => toast(e.detail));
+
 // toast says what an action did, with at most one action of its own (005-AC39); onEnd runs when it
 // goes, undone or not.
 function toast(text, action, onEnd) {
@@ -1842,7 +1845,8 @@ function renderApprovals() {
   }
   for (const k of (agent.room_skills || []).filter((x) => x.pending)) {
     const li = document.createElement('li');
-    li.textContent = k.author + ' copied the skill ' + k.name + ' v' + k.version + ' into the room.';
+    li.textContent = k.from_starter ? 'The room\'s starter brought the skill ' + k.name + ' v' + k.version + '.'
+      : k.author + ' copied the skill ' + k.name + ' v' + k.version + ' into the room.';
     decide(li, 'the room skill ' + k.name, '/skills/' + k.id + '/decision', {});
     items.push(li);
   }
@@ -1953,7 +1957,8 @@ function personaForm(p) {
   from.textContent = 'Runs on ' + level(p) + '. '
     + (tpl ? 'From "' + tpl.title + '" v' + p.template_version : 'Its template was removed from the library.')
     + (p.pending ? ' Waits for the AI host\'s approval.' : '')
-    + (use === null ? '' : ' Its session holds ' + use + '% of its context window.');
+    + (use === null ? '' : ' Its session holds ' + use + '% of its context window.')
+    + nextTrigger(p);
   const input = (name, value, attrs) => {
     const i = document.createElement('input');
     i.name = name;
@@ -1991,8 +1996,26 @@ function personaForm(p) {
     d.append(sum, ...children);
     return d;
   };
+  // One automatic trigger at most (006-AC18): the choice, then its N.
+  const kind = p.every_n ? 'every_n' : p.every_voice ? 'every_voice' : p.every_minutes ? 'every_minutes' : '';
+  const speaks = picker('trigger', [], kind);
+  speaks.replaceChildren(...[['', 'Only when asked'], ['every_n', 'Every N answers'], ['every_voice', 'Every N voice lines'],
+    ['every_minutes', 'Every N minutes']].map(([v, label]) => option(v, label)));
+  speaks.required = false;
+  speaks.value = kind;
+  const every = input('every', p.every_n || p.every_voice || p.every_minutes || 1, { type: 'number', min: 1, max: 500 });
+  const everyField = field('N', every);
+  everyField.hidden = !kind;
+  // The server's bounds per kind (006-AC18).
+  // An empty N would turn the trigger off unseen: it is required while a trigger is chosen.
+  const bound = () => {
+    every.max = String({ every_n: 100, every_voice: 500, every_minutes: 240 }[speaks.value] || 500);
+    every.required = !!speaks.value;
+  };
+  bound();
+  speaks.addEventListener('change', () => { everyField.hidden = !speaks.value; bound(); });
   const advanced = fold('Advanced', 'advanced',
-    field('Speaks up every N answers', input('every_n', p.every_n || 0, { type: 'number', min: 0, max: 100, title: '0: it speaks only when asked' })),
+    field('Speaks up', speaks), everyField,
     field('Memory size (k tokens)', input('autocompact', p.autocompact ? p.autocompact / 1000 : '', { type: 'number', min: 100, max: 1000,
       placeholder: 'auto', title: 'How much it remembers before it summarizes its session; empty for automatic' })),
     selfCall);
@@ -2177,8 +2200,22 @@ async function loadSkills() {
 function formFields(form) {
   const v = (name) => form.elements.namedItem(name).value;
   return { name: v('name'), badge: v('badge'), colour: v('colour'), model: v('model'), effort: v('effort'), text: v('text'),
-    every_n: Number(v('every_n')), self_call: form.elements.namedItem('self_call').checked,
+    ...triggerFields(v('trigger'), Number(v('every'))), self_call: form.elements.namedItem('self_call').checked,
     autocompact: v('autocompact') ? Math.round(Number(v('autocompact')) * 1000) : 0 };
+}
+
+// triggerFields is the persona's automatic trigger as the API takes it: the one chosen at n, the
+// other two off (006-AC18).
+function triggerFields(kind, n) {
+  return { every_n: kind === 'every_n' ? n : 0, every_voice: kind === 'every_voice' ? n : 0, every_minutes: kind === 'every_minutes' ? n : 0 };
+}
+
+// nextTrigger says when the persona speaks up next on its own (006-AC18).
+function nextTrigger(p) {
+  if (p.every_voice) return p.next_voice ? ' Speaks up next in ' + p.next_voice + ' voice lines.' : ' Speaks up at the next voice line.';
+  if (!p.every_minutes || !p.next_at) return '';
+  const min = Math.ceil((new Date(p.next_at).getTime() - Date.now()) / 60000);
+  return min > 0 ? ' Speaks up next in ' + min + ' min.' : ' Speaks up at the next activity, while someone is here.';
 }
 
 // seenKey is what a form shows: the persona, and whether the viewer hosts (New session).

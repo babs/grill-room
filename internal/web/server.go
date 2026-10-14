@@ -183,7 +183,7 @@ func (s *Server) Handler() http.Handler {
 	// The document manager in a window of its own (005-AC11): the room page in its docs mode.
 	mux.HandleFunc("GET /r/{room}/docs", s.roomPage)
 	mux.HandleFunc("GET /r/{room}/docs/{doc}", s.roomPage)
-	mux.HandleFunc("GET /profile", page("profile.html"))
+	mux.HandleFunc("GET /profile", s.profilePage)
 	mux.HandleFunc("GET /admin", s.adminPage)
 	static, _ := fs.Sub(ui, "ui") // cannot fail: "ui" is a valid embedded path
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
@@ -248,6 +248,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/profile/skills", s.uploadSkill)
 	mux.HandleFunc("DELETE /api/profile/skills/{skill}", s.removeMySkill)
 	mux.HandleFunc("POST /api/profile/rooms", s.createProfileRoom)
+	mux.HandleFunc("GET /api/profile/starters", s.myStarters)
+	mux.HandleFunc("GET /api/profile/starters/{starter}", s.getStarter)
+	mux.HandleFunc("POST /api/profile/starters/{starter}/duplicate", s.duplicateStarter)
+	mux.HandleFunc("POST /api/profile/starters/{starter}/publish", s.publishStarter)
+	mux.HandleFunc("DELETE /api/profile/starters/{starter}", s.deleteMyStarter)
+	mux.HandleFunc("POST /api/profile/starters/{starter}/versions", s.saveStarterVersion)
+	mux.Handle("GET /api/rooms/{room}/starter-draft", s.participant(s.starterDraft))
+	mux.Handle("POST /api/rooms/{room}/starters", s.participant(s.saveRoomStarter))
+	mux.Handle("GET /api/admin/starters", s.admin(s.adminStarters))
+	mux.Handle("DELETE /api/admin/starters/{starter}", s.admin(s.adminDeleteStarter))
 	mux.Handle("GET /api/skills", s.admin(s.adminSkills))
 	mux.Handle("DELETE /api/skills/{skill}", s.admin(s.adminRemoveSkill))
 
@@ -354,6 +364,17 @@ var roomCSP = func() string {
 	page, _ := ui.ReadFile("ui/room.html") // embedded
 	return uivendor.CSP(page, "'self'")
 }()
+
+// profileCSP admits the profile page's import map: its starters are Preact (006).
+var profileCSP = func() string {
+	page, _ := ui.ReadFile("ui/profile.html") // embedded
+	return uivendor.CSP(page, "'self'")
+}()
+
+func (s *Server) profilePage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Security-Policy", profileCSP)
+	http.ServeFileFS(w, r, ui, "ui/profile.html")
+}
 
 func (s *Server) roomPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Security-Policy", roomCSP+s.connectSrc())

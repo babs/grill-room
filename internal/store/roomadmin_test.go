@@ -12,7 +12,7 @@ import (
 // createFor creates room id for the profile of p, joining as name.
 func createFor(t *testing.T, s *Store, id string, p *Participant, name string) (*Room, error) {
 	t.Helper()
-	return s.CreateProfileRoom(t.Context(), id, "Room "+id, p.ProfileID, name, "inv-"+id, "tok-"+id)
+	return s.CreateProfileRoom(t.Context(), id, "Room "+id, p.ProfileID, name, "inv-"+id, "tok-"+id, nil)
 }
 
 // 004-AC7 004-AC8: a profile's room has it as a participant and its first room admin, under an

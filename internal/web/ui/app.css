@@ -379,3 +379,26 @@ input[aria-invalid=true] { border-color: var(--danger); }
 .menu .ico { margin-right: var(--sp-2); }
 /* A document's name stays on one line (008-AC14): the full name is its tooltip. */
 button.doc { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: var(--control-h); }
+/* Room starters (006): one row per starter, its text then its ⋯. */
+.starter-list { list-style: none; margin: 0; padding: 0; }
+.starter-list > li { display: flex; align-items: center; gap: var(--sp-2); min-height: 44px; padding: var(--sp-2) 0; border-bottom: 1px solid var(--border); }
+.starter-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.starter-text .hint { margin: 0; overflow-wrap: anywhere; }
+/* New room (006-AC8, 006-AC9): the starters on the left, the selected one's preview on the right. */
+.starter-picker { display: grid; grid-template-columns: minmax(14rem, 1fr) 2fr; gap: var(--sp-4); }
+.starter-picker > .said, .starter-picker > .actions { grid-column: 1 / -1; }
+.starter-choices h3 { margin: var(--sp-3) 0 var(--sp-1); font-size: var(--fs-sm); }
+.starter-group { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); }
+#starter-search { width: 100%; }
+.starter-pick { display: flex; flex-direction: column; align-items: flex-start; width: 100%; height: auto; min-height: var(--control-h); padding: var(--sp-2) var(--sp-3); text-align: left; font-weight: 400; }
+.starter-pick[aria-pressed=true] { border-color: var(--brand); background: var(--primary-bg); }
+.starter-detail { min-width: 0; }
+.starter-detail h4 { margin: var(--sp-3) 0 var(--sp-1); font-size: var(--fs-sm); }
+.starter-agenda { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; padding: var(--sp-2); border: 1px solid var(--border); border-radius: var(--r-md); font-size: var(--fs-sm); }
+.starter-editor textarea { width: 100%; }
+.starter-persona { border: 1px solid var(--border); border-left: 4px solid var(--persona, var(--border)); border-radius: var(--r-md); }
+@media (max-width: 40rem) {
+  .starter-picker { grid-template-columns: 1fr; }
+}
+.starter-field { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--sp-2); padding: var(--sp-2) 0; border-bottom: 1px solid var(--border); }
+.starter-editor .warn { color: var(--warning); }

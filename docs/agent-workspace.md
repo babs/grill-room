@@ -57,6 +57,7 @@ A persona's active skills reach `claude -p` as one plugin directory, passed with
 The prompt opens with who is in the room, from one template, `internal/web/presence.tmpl`, embedded in the server. Edit that file to change what agents are told. It holds:
 
 - the room name;
+- when the room has an agent document named `agenda.md`, a line naming it the room's agenda, which every persona aligns on (006-AC14); a room without one gets no such line;
 - the persona itself: its name, the model and effort it runs at on the host's daemon after the cap, and its triggers;
 - why it runs, as `Why you are running: <cause>` (003-AC22). The cause is set when the turn is pressed or queued and stored on the turn (`turns.cause`):
 
@@ -66,6 +67,8 @@ The prompt opens with who is in the room, from one template, `internal/web/prese
   | a human's message naming `@persona` | `@mention by <name>: "<first 50 characters of the message>"`, with `…` when cut |
   | another persona's synthesis naming it | `called by @<persona>` |
   | its "every N rounds" trigger | `every <N> rounds` |
+  | its "every N voice lines" trigger, N voice lines after its latest turn started | `every <N> voice lines` |
+  | its "every T minutes" trigger, T minutes after its latest turn started, with a voice or text line since and someone here | `every <T> minutes` |
   | a re-run after a conflict | `re-run after a conflict on <doc>` |
   | the host's "New session with handoff", last turn | `the host <name> asked for a handoff note before a new session` |
   | the new session after it | `handoff from your previous session` |

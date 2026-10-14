@@ -142,7 +142,8 @@ func pick[T any](later, earlier *T) *T {
 func (c PersonaPatch) over(earlier PersonaPatch) PersonaPatch {
 	return PersonaPatch{Name: pick(c.Name, earlier.Name), Badge: pick(c.Badge, earlier.Badge), Colour: pick(c.Colour, earlier.Colour),
 		Text: pick(c.Text, earlier.Text), Model: pick(c.Model, earlier.Model), Effort: pick(c.Effort, earlier.Effort),
-		EveryN: pick(c.EveryN, earlier.EveryN), SelfCall: pick(c.SelfCall, earlier.SelfCall), TemplateVersion: pick(c.TemplateVersion, earlier.TemplateVersion),
+		EveryN: pick(c.EveryN, earlier.EveryN), EveryVoice: pick(c.EveryVoice, earlier.EveryVoice),
+		EveryMinutes: pick(c.EveryMinutes, earlier.EveryMinutes), SelfCall: pick(c.SelfCall, earlier.SelfCall), TemplateVersion: pick(c.TemplateVersion, earlier.TemplateVersion),
 		Skills: mergePins(c.Skills, earlier.Skills)}
 }
 

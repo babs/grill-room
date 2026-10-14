@@ -185,11 +185,31 @@ func (s *Server) createProfileRoom(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name        string `json:"name"`
 		DisplayName string `json:"display_name"`
+		starterRoomReq
 	}
 	if !decode(w, r, &req) {
 		return
 	}
 	name, ok := cleanText(req.Name, maxRoomName, false)
+	// The editor sends what a starter brings (006-AC9); a request without it gets the Default persona.
+	var setup *store.RoomSetup
+	if req.Starter != nil || req.Personas != nil {
+		var err error
+		name, setup, err = s.starterSetup(r.Context(), p.ID, req.Name, &req.starterRoomReq)
+		var bad badRequest
+		switch {
+		case errors.As(err, &bad):
+			httpError(w, http.StatusBadRequest, bad.Error())
+			return
+		case errors.Is(err, store.ErrNotFound):
+			httpError(w, http.StatusNotFound, "no such starter")
+			return
+		case err != nil:
+			s.serverError(w, "create_room_failed", err)
+			return
+		}
+		ok = true
+	}
 	if !ok {
 		httpError(w, http.StatusBadRequest, fmt.Sprintf("name must be 1 to %d characters", maxRoomName))
 		return
@@ -201,8 +221,12 @@ func (s *Server) createProfileRoom(w http.ResponseWriter, r *http.Request) {
 	}
 	id := strings.ToLower(NewToken())
 	e := store.AuditEntry{At: s.now(), Actor: ActorProfile + p.UUID, Action: ActionRoomCreate, TargetKind: store.TargetRoom, TargetID: id, TargetName: name}
-	ctx := store.WithAudit(r.Context(), e, map[string]any{"as": display})
-	room, err := s.bus.Store.CreateProfileRoom(ctx, id, name, p.ID, display, HashToken(NewToken()), HashToken(NewToken()))
+	details := map[string]any{"as": display}
+	if setup != nil && setup.From != nil {
+		details["starter"] = setup.From
+	}
+	ctx := store.WithAudit(r.Context(), e, details)
+	room, err := s.bus.Store.CreateProfileRoom(ctx, id, name, p.ID, display, HashToken(NewToken()), HashToken(NewToken()), setup)
 	switch {
 	case errors.Is(err, store.ErrCreationRefused):
 		httpError(w, http.StatusForbidden, err.Error())

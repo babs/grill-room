@@ -239,11 +239,18 @@ func (s *Server) importRoom(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, resp)
 }
 
-// checkPersona validates an imported persona as the room API validates one.
-func checkPersona(f store.PersonaFields, everyN, autocompact int) error {
-	q := personaReq{Name: &f.Name, Badge: &f.Badge, Colour: &f.Colour, Text: &f.Text, Model: &f.Model, Effort: &f.Effort, EveryN: &everyN, Autocompact: &autocompact}
+// checkPersona validates an imported or starter persona as the room API validates one.
+func checkPersona(p store.StarterPersona) error {
+	_, err := cleanPersona(p)
+	return err
+}
+
+// cleanPersona returns p as the room API would store it, or why it may not.
+func cleanPersona(p store.StarterPersona) (store.StarterPersona, error) {
+	q := personaReq{Name: &p.Name, Badge: &p.Badge, Colour: &p.Colour, Text: &p.Text, Model: &p.Model, Effort: &p.Effort, EveryN: &p.EveryN,
+		EveryVoice: &p.EveryVoice, EveryMinutes: &p.EveryMinutes, Autocompact: &p.Autocompact}
 	if why := q.check(); why != "" {
-		return errors.New(why)
+		return p, errors.New(why)
 	}
-	return nil
+	return p, nil
 }

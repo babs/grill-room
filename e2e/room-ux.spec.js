@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, noOverflow, upload, annotateSelection, menuItem, docAction, playSTT } from './helpers.js';
+import { roomWith, signIn, noOverflow, upload, annotateSelection, menuItem, docAction, playSTT, newRoomEditor } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
@@ -54,7 +54,7 @@ for (const vp of widths) {
     await prof.getByRole('button', { name: 'Join the room' }).click();
     await expect(prof.locator('#me')).toHaveText('Alice again');
     await prof.goto('/profile');
-    await prof.getByRole('button', { name: 'New room' }).click();
+    await newRoomEditor(prof);
     await expect(prof.getByLabel('Your name in the room')).toHaveValue('Ali');
     await prof.close();
     expect(await noOverflow(alice)).toEqual([]);

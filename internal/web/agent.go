@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -163,6 +164,7 @@ func (s *Server) agentChanged(ctx context.Context, room string) {
 	if err := s.elect(ctx, room); err != nil && !errors.Is(err, store.ErrNotFound) {
 		s.log.Error("host_election_failed", zap.String("room", room), zap.Error(err))
 	}
+	s.releaseStarterSkills(ctx, room)
 	s.bus.Notify(room)
 	s.drain(ctx, room)
 }
@@ -194,6 +196,35 @@ func (s *Server) elect(ctx context.Context, room string) error {
 		return nil
 	}
 	return s.setHost(ctx, room, eligible[0])
+}
+
+// releaseStarterSkills turns on the skills the room's starter brought once a host who approves
+// without asking is online; under "approve everything" they wait for that host (006-AC13).
+func (s *Server) releaseStarterSkills(ctx context.Context, room string) {
+	r, err := s.bus.Store.Room(ctx, room)
+	if err != nil {
+		return
+	}
+	if h := s.hostDaemon(room, r.HostParticipantID); h == nil || !h.CanHost {
+		return
+	}
+	names, err := s.bus.Store.ReleaseStarterSkills(ctx, room)
+	if err != nil {
+		s.log.Error("release_starter_skills_failed", zap.String("room", room), zap.Error(err))
+		return
+	}
+	if len(names) == 0 {
+		return
+	}
+	p, err := s.bus.Store.RoomParticipant(ctx, room, r.HostParticipantID)
+	if err != nil {
+		return
+	}
+	s.log.Info("starter_skills_released", zap.String("room", room), zap.Strings("skills", names))
+	if err := s.bus.Post(ctx, &store.Message{RoomID: room, Kind: store.KindSystem, ParticipantID: p.ID, Sender: p.Name,
+		Body: "The starter's skills are on, as " + p.Name + "'s AI host approves without asking: " + strings.Join(names, ", ") + "."}); err != nil {
+		s.log.Error("post_failed", zap.String("room", room), zap.Error(err))
+	}
 }
 
 // setHost records the new host and says so in the room.

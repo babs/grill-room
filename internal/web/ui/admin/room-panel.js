@@ -7,7 +7,8 @@ import { html } from 'htm/preact';
  * @typedef {{uploads: number, revisions: number, attachments: number, agent_sessions: number, transcripts: number,
  *   room_skills: number, total: number}} Volume
  * @typedef {{id: string, name: string, created_at: string, last_activity: string, participants: number, personas: number,
- *   host_participant_id?: number, quota_bytes: number, quota: number, used: number, host_online: boolean, volume: Volume}} Room
+ *   host_participant_id?: number, quota_bytes: number, quota: number, used: number, host_online: boolean, volume: Volume,
+ *   created_from?: {title: string, version: number}}} Room
  * @typedef {{id: number, created_at: string, created_by?: number, revoked_at?: string}} Invite
  * @typedef {(method: string, path: string, body?: unknown) => Promise<any>} Api
  */
@@ -82,15 +83,15 @@ export const roomTabs = { general: 'General', invites: 'Invites', admins: 'Admin
  * names an invite's creator.
  * @param {{room: Room, base: string, api: Api, show: (err: unknown) => void, reload: () => void, close: () => void,
  *   tab: string, tabs: string[][], href: (id: string) => string, setQuota?: boolean, byName?: (id: number) => string, label?: string,
- *   children?: import('preact').ComponentChildren}} props
+ *   general?: import('preact').ComponentChildren, children?: import('preact').ComponentChildren}} props
  */
-export function RoomPanel({ room, base, api, show, reload, close, tab, tabs, href, setQuota, byName, label = 'Manage', children }) {
+export function RoomPanel({ room, base, api, show, reload, close, tab, tabs, href, setQuota, byName, label = 'Manage', general, children }) {
   return html`
     <section id="room-panel" aria-label=${label + ' ' + room.name}>
       <h2>${room.name}</h2>
       <${TabBar} tabs=${tabs} active=${tab} href=${href} label=${label + ' ' + room.name}/>
       <div class="tab-panel" id=${'panel-' + tab}>
-        ${tab === 'general' ? html`<${General} room=${room} base=${base} api=${api} show=${show} reload=${reload} close=${close} setQuota=${setQuota}/>`
+        ${tab === 'general' ? html`<${General} room=${room} base=${base} api=${api} show=${show} reload=${reload} close=${close} setQuota=${setQuota}/>${general}`
           : tab === 'invites' ? html`<${Invites} base=${base} api=${api} show=${show} byName=${byName}/>`
           : tab === 'export' ? html`<${Export} base=${base}/>`
           : children}
@@ -121,6 +122,7 @@ function General({ room, base, api, show, reload, close, setQuota }) {
       <button type="button" class="btn-secondary" id="copy-room-id" onClick=${copyID}>Copy room id</button>
       <span class="said" role="status">${copied}</span>
     </form>
+    ${room.created_from && html`<p id="created-from">Created from the starter ${room.created_from.title} v${room.created_from.version}.</p>`}
     <h3>Storage</h3>
     <p id="storage">Storage: ${size(room.used)} of ${size(room.quota)}${room.quota_bytes ? '' : ', the instance default'}.${setQuota ? '' : ' Only the instance admin changes the limit.'}</p>
     <details><summary>What takes the space</summary>

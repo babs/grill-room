@@ -327,3 +327,11 @@ export async function personMenu(page, name) {
   await page.locator('#participants li, #participants-away li').filter({ has: page.locator('.name', { hasText: name }) }).locator('.person-more').click();
   return page.locator('#person-menu');
 }
+
+// newRoomEditor opens "New room" on the profile page and picks Blank, which the picker selects
+// first, to reach the editor (006-AC8, 006-AC9).
+export async function newRoomEditor(page) {
+  await page.getByRole('button', { name: 'New room' }).click();
+  await expect(page.locator('#starter-preview')).toContainText('Blank');
+  await page.getByRole('button', { name: 'Use this starter' }).click();
+}
