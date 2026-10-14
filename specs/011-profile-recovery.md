@@ -80,6 +80,8 @@ A signed-out browser sees "Recover my profile by email" on the join page. A prof
 - [ ] **AC23** Opening an emailed link ends on one of these outcomes, each with its next step: email bound (the address shown); signed in (the profile's name and its rooms); expired ("Send a new link", which opens the email field); already used (sign in by email or open your profile); a bind link opened in another browser (a confirmation naming the profile the address goes to, then bound, this browser's own profile unchanged); the address already bound to another profile (explains it, and that the admin can merge the two profiles).
 - [ ] **AC24** The mail, the page and the toasts use the same words. The mail says what its link does (adds the address to your profile, or signs you in) and how long it works.
 
+- [ ] **AC28** Asking for an emailed link (sign-in from the join page or `/profile`, binding from `/profile`, the marker or the banner) gives feedback in place. The button shows it is busy and stays disabled until the answer. The form is then replaced by a confirmation panel: "Link sent to <address>" for a bind, the neutral wording for a sign-in, the link's lifetime, "Check your spam folder", "Resend" with a visible countdown and "Use another address". Errors show in the same place with the next step: mail not going out (try again later, or tell the admin), too many requests (when to retry), an invalid address (fix it). Never a toast alone.
+
 ### Landing page (notes, 2026-10-14)
 - [ ] **AC25** With a profile in the browser, the join page (`/` and `/join`) shows "Your profile" with the profile's display name, a link to `/profile`. Signed out, it shows "Recover my profile by email" instead (AC4).
 
@@ -91,13 +93,13 @@ A signed-out browser sees "Recover my profile by email" on the join page. A prof
 
 ### Phase 1 — Recovery and email flows
 - Work: one-time recovery links (store, admin route, `/admin` button, `POST /api/profile/recover` also accepting them); the Email section states, pending address in `GET /api/profile`, link outcomes, mail wording; join page recovery link, profile link and focus re-check; anonymous marker, hover card, People card hook for 009, nudge banner with snooze; audit entries.
-- **Covers**: AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC8, AC9, AC21, AC22, AC23, AC24, AC25
+- **Covers**: AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC8, AC9, AC21, AC22, AC23, AC24, AC25, AC28
 - **Data model impact**: `recovery_links` (profile, token hash, created, expiry, used; cascades from `profiles`); `profiles.email_nudge_until`
 - **DoD**:
   - store tests: a recovery link works once, fails after 24 h with an injected clock, and a newer link voids the older; cascade invariant extended to `recovery_links`;
   - e2e (Playwright) for the admin recovery link on a fresh context, its second use refused;
   - mailpit e2e: signed-out join page → "Recover my profile by email" → mailed link → signed in, and the open join tab then shows the profile's name; the link absent with a profile and without SMTP;
-  - mailpit e2e per Email state and per link outcome of AC23;
+  - mailpit e2e per Email state and per link outcome of AC23; the AC28 states (busy, sent, resent, error) for sign-in and bind;
   - e2e: marker and hover card on your own avatar only (a second participant sees none), banner after the first message, "Later" hides it on a second context of the same profile, gone after binding an email;
   - `make test`, `make lint` and `tsc --checkJs` green.
 
@@ -119,7 +121,7 @@ A signed-out browser sees "Recover my profile by email" on the join page. A prof
   - merge store tests: a room where both are seated keeps every message's author seat and both seats on A; skills, templates and starters moved, a same-named skill renamed `-2`; room-admin rows deduplicated; sessions moved and B's links gone; email precedence in all four cases (A only, B only, both, neither); the audit entry's uuids and counts; B deleted; a failure injected mid-merge leaves both profiles unchanged;
   - e2e: merge from `/admin` with preview and swap, then B's browser opens A's `/profile` with the union of rooms;
   - purge tests with an injected clock: an empty profile at 23 h stays, at 25 h goes; one with an email, a valid seat, a skill, a template, a starter or an admin role stays at any age; the switch off deletes nothing; one audit entry per non-empty run;
-  - e2e: a purged profile's browser sees the join page's recovery link;
+  - a purged profile's browser is signed out: e2e on the join page and the next join (the e2e stack has no SMTP), and a web test with the fake relay that it is offered email recovery;
   - `make test`, `make lint` and `tsc --checkJs` green.
 
 ## Data model impact (summary)
@@ -183,3 +185,5 @@ Routine calls while folding the notes in, overturnable:
 - "Expired" and "already used" come from the stored link while it is still there; once swept, a link reads as invalid.
 - Resend waits 60 s in the page; the 002 rate limits still apply on the server.
 - Phase 1 of the draft was split in two (recovery and email flows, then invites) for size.
+- AC28 (user, 2026-10-14, after trying v0.0.17): a request for an emailed link confirms in place, with errors in place too. Added after Phases 1 and 2 shipped on the branch, built as a follow-up slice.
+- A bind mail goes out before the answer, so a relay failure shows on the page; the address is the requester's own, nothing leaks. A sign-in request answers before any lookup, as 002 requires; it reports "mail not going out" only from the server's last send having failed, a state that says nothing about the address asked for.
