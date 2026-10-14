@@ -153,7 +153,7 @@ const alertsOf = (id) => (data.value?.alerts || []).filter((a) => (alertTab[a.ki
 
 // TabBar stays pinned at the top; a tab with alerts, or an update waiting, shows their count.
 function TabBar() {
-  return html`<nav id="tabs" class="tabs" aria-label="Sections">${tabs.map(([id, name]) => {
+  return html`<nav id="tabs" aria-label="Sections">${tabs.map(([id, name]) => {
     const n = alertsOf(id).length + (id === 'update' && data.value?.status.update?.available ? 1 : 0);
     return html`<a key=${id} id=${'tab-' + id} href=${'#' + id} aria-current=${tab.value === id ? 'page' : undefined}>${name}${n
       ? html` <span class="tab-badge" title=${n + (n === 1 ? ' alert' : ' alerts')}>${n}</span>` : ''}</a>`;
