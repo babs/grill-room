@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { roomWith, startDaemon, pairDaemon, menuItem, confirmSheet, personaRow, personaSheet, addSecretary, upload, commentOnDocument } from './helpers.js';
 
 const agentLines = (page) => page.locator('#messages li.msg.agent');
@@ -143,7 +143,7 @@ test('triggers: the notes watcher', async ({ browser, request, baseURL }) => {
   await expect(personaRow(alice, 'Secretary')).toHaveAttribute('aria-label', /Secretary: .*, watches the notes, /);
   await expect(personaRow(alice, 'Grill').locator('.watch')).toBeHidden();
   await alice.locator('#personas').getByRole('button', { name: 'Close' }).click();
-  await expect(alice.getByRole('button', { name: 'Ask Secretary, watches the notes' }).locator('.watch')).toHaveAttribute('title', 'Watches the notes');
+  await expect(alice.getByRole('button', { name: 'Ask Secretary, watches the notes' }).locator('.watch')).toHaveAttribute('data-tip', 'Watches the notes');
 
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {

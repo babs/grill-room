@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { execFileSync } from 'node:child_process';
 import { roomWith, startDaemon, pairDaemon, removeSandbox } from './helpers.js';
 

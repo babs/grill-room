@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { hostname } from 'node:os';
 import { roomWith, startDaemon, pairDaemon, stopDaemon, confirmSheet } from './helpers.js';
 

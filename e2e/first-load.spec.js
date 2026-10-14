@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { roomWith, menuItem } from './helpers.js';
 
 // A room page whose first room request fails, as Chrome fails one on ERR_NETWORK_CHANGED, loads the

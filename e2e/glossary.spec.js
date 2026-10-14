@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { roomWith, menuItem, playSTT } from './helpers.js';
 
 // 005-AC23: any member edits the transcription glossary in Manage, sees how many terms the prompt
@@ -14,7 +14,7 @@ test('a member edits the transcription glossary', async ({ browser, request }) =
   await form.getByLabel('Words to recognise').fill('Kubernetes\nArgo CD, Helm');
   await form.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(form.locator('#glossary-used')).toHaveText('6 / ~70 terms used');
-  await expect(form.locator('#glossary-used')).toHaveAttribute('title', 'Avec Alice, Bob et Grill, on parle de Kubernetes, Argo CD et Helm.');
+  await expect(form.locator('#glossary-used')).toHaveAttribute('data-tip', 'Avec Alice, Bob et Grill, on parle de Kubernetes, Argo CD et Helm.');
   await expect(alice.locator('.msg.system', { hasText: 'Bob changed the transcription glossary' })).toHaveCount(1);
   await form.getByLabel('Words to recognise').fill('x'.repeat(61));
   await form.getByRole('button', { name: 'Save', exact: true }).click();

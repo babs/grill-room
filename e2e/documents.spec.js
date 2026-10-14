@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { roomWith, upload } from './helpers.js';
 
 // The script tries everything a malicious upload would, then prints what it got.

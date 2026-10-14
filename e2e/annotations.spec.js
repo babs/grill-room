@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { roomWith, upload, docFrame, annotateSelection } from './helpers.js';
 
 // 1x1 transparent PNG.

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
 import { roomWith, signIn, noOverflow, upload, annotateSelection, menuItem, docAction, playSTT, newRoomEditor } from './helpers.js';
 
@@ -330,7 +330,7 @@ for (const vp of widths) {
     await expect(chips).toHaveText(['@grill', '@Ana_María']);
     await expect(chips.first()).toHaveClass(/persona/);
     await expect(chips.first()).toHaveAttribute('data-badge', '🔥');
-    await expect(chips.first()).toHaveAttribute('title', 'Grill, persona');
+    await expect(chips.first()).toHaveAttribute('data-tip', 'Grill, persona');
     await expect(chips.nth(1)).toHaveClass(/\bme\b/);
     await expect(line).toHaveClass(/mentions-me/);
     await expect(line.locator('code')).toHaveText('@Grill');

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { roomWith, menuItem, personaRow, personaSheet, agentState } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
@@ -80,8 +80,8 @@ for (const [size, viewport] of Object.entries(sizes)) {
       expect(await sheet.boundingBox()).toEqual({ x: 0, y: 0, ...viewport });
       const nav = sheet.locator('#persona-tabs');
       await expect(nav).toHaveCSS('overflow-x', 'auto');
-      expect(await nav.evaluate((e) => e.scrollWidth > e.clientWidth && e.scrollLeft > 0)).toBe(true);
-      await expect(nav.locator('#persona-tab-capabilities')).toBeInViewport();
+      // The current tab, scrolled into view or not, ends clear of the 24 px fade edge.
+      await expect.poll(() => nav.evaluate((e) => e.querySelector('#persona-tab-capabilities').getBoundingClientRect().right <= e.getBoundingClientRect().right - 24 + 1)).toBe(true);
     }
     // An unknown tab is Identity; a persona the room does not have closes the sheet and its link.
     await alice.evaluate((h) => { location.hash = h; }, `#personas/${id}/nope`);

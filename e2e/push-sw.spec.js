@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { createECDH, randomBytes } from 'node:crypto';
 import { roomWith, menuItem } from './helpers.js';
 

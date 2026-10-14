@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { roomWith, startDaemon, pairDaemon, ask, confirmSheet, personaSheet, closePersonas } from './helpers.js';
 
 // 003-AC24 003-AC25: Alice sets Grill's autocompact, which reaches claude -p. A session past 80% of

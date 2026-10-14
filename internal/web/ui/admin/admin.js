@@ -5,7 +5,7 @@ import { render } from 'preact';
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { html } from 'htm/preact';
-import { RoomPanel, Rename, TabBar, fetchJSON, roomTabs, size, when, ago, onInput, formAction } from './room-panel.js';
+import { RoomPanel, Rename, TabBar, fetchJSON, roomTabs, size, when, ago, onInput, formAction, icon } from './room-panel.js';
 
 /**
  * @typedef {{id: number, created_at: string, last_used_at: string, expires_at: string, user_agent: string, ip: string,
@@ -241,7 +241,7 @@ function Rooms() {
         <td class="wrap"><strong>${r.name}</strong></td><td data-label="Created">${ago(r.created_at)}</td><td data-label="Last activity">${ago(r.last_activity)}</td>
         <td data-label="People">${r.participants}</td><td data-label="Personas">${r.personas}</td>
         <td data-label="AI host">${!r.host_participant_id ? 'none' : r.host_online ? 'online' : 'offline'}</td><td data-label="Volume">${size(r.volume.total)}</td>
-        <td data-label="Quota used"><meter min="0" max=${r.quota} value=${r.used} title=${size(r.used) + ' of ' + size(r.quota)}></meter> ${size(r.used)} / ${size(r.quota)}</td>
+        <td data-label="Quota used"><meter min="0" max=${r.quota} value=${r.used} data-tip=${size(r.used) + ' of ' + size(r.quota)}></meter> ${size(r.used)} / ${size(r.quota)}</td>
         <td><a class="btn btn-secondary" href=${'#rooms/' + encodeURIComponent(r.id)} aria-label=${'Manage ' + r.name}>Manage</a></td>
       </tr>`)}</tbody>
     </table></div>${q && !rooms.length && html`<p class="hint" id="rooms-none">No room matches "${search.trim()}".</p>`}` : html`<p>No room yet.</p>`}`;
@@ -284,7 +284,7 @@ function RoomAdmins({ base }) {
 function ClientLine({ c }) {
   const at = (/** @type {string} */ ip, /** @type {string} */ ua) => ip ? `${ip} · ${ua || 'no user agent'}` : 'purged';
   return html`<div class="hint client">Joined from ${at(c.join_ip, c.join_ua)}; last active${c.last_seen_at
-    ? ' ' + new Date(c.last_seen_at).toLocaleString() : ''} from ${at(c.last_ip, c.last_ua)}</div>`;
+    ? ' ' + when(c.last_seen_at) : ''} from ${at(c.last_ip, c.last_ua)}</div>`;
 }
 
 /** @type {[string, string][]} */
@@ -340,7 +340,7 @@ function ImportRoom({ reload }) {
     <button type="button" id="import-open" class="btn-secondary" onClick=${() => sheet.current?.showModal()}>Import a room</button>
     <dialog ref=${sheet} id="import-sheet" class="sheet wide" aria-labelledby="import-title">
     <div class="sheet-head"><h2 id="import-title">Import a room</h2>
-      <button type="button" class="btn-icon btn-ghost" aria-label="Close" onClick=${() => sheet.current?.close()}>✕</button></div>
+      <button type="button" class="btn-icon btn-ghost" aria-label="Close" onClick=${() => sheet.current?.close()} dangerouslySetInnerHTML=${icon('close')}></button></div>
     <p class="hint">An export from this instance or another one becomes a new room. Nothing is created until you confirm the preview.</p>
     <form class="row" id="import-form" onSubmit=${formAction(() => send(true))}>
       <label>Archive (.tar.gz)<input id="import-file" type="file" accept=".gz,.tgz,application/gzip" required onChange=${pick}/></label>
@@ -383,7 +383,7 @@ function Profiles() {
     ${list && (list.length ? html`<div class="scroll"><table id="profiles">
       <thead><tr><th>Name</th><th>Email</th><th>Rooms</th><th>Skills</th><th>Last activity</th><th>Rooms it may create</th><th></th></tr></thead>
       <tbody>${list.map((p) => html`<tr id=${'profile-' + p.id}>
-        <td>${p.name || '—'} <code title=${p.uuid}>${p.uuid.slice(0, 8)}</code></td><td>${p.email || '—'}</td>
+        <td>${p.name || '—'} <code data-tip=${p.uuid}>${p.uuid.slice(0, 8)}</code></td><td>${p.email || '—'}</td>
         <td class="wrap">${p.rooms.map((r) => r.room_name).join(', ') || '—'}</td><td>${p.skills}</td><td>${when(p.last_activity)}</td>
         <td><${RoomLimit} key=${p.id} p=${p} perProfile=${perProfile} reload=${load}/></td>
         <td><button type="button" onClick=${() => remove(p)}>Delete</button></td>

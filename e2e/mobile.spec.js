@@ -1,4 +1,5 @@
-import { test, expect, devices } from '@playwright/test';
+import { devices } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import http from 'node:http';
 import { adminToken } from './playwright.config.js';
 import { roomWith, menuItem, personaRow, personaSheet, closePersonas } from './helpers.js';

@@ -48,10 +48,8 @@ let presence = new Map();
 let transcribed = new Set();
 // cardFor is the name the open details card describes (009-AC36).
 let cardFor = null;
-// hoverTimer delays the card and the badge tip on hover.
+// hoverTimer delays the card on hover; hideTimer is the grace before it closes.
 let hoverTimer;
-// tipFor is the badge the open tip describes; hideTimer, the grace before a card or tip closes.
-let tipFor = null;
 let hideTimer;
 
 function end(text) {
@@ -93,7 +91,7 @@ async function loadRoom() {
   if (docsMode && !link) {
     link = document.createElement('a');
     link.href = roomPath;
-    link.title = 'Back to the room';
+    link.dataset.tip = 'Back to the room';
     heading.replaceChildren(link);
   }
   (link || heading).textContent = data.room.name;
@@ -239,8 +237,8 @@ function button(text, label, onClick) {
 function timeOf(ts) {
   const time = document.createElement('time');
   time.dateTime = ts;
-  time.textContent = new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  time.title = new Date(ts).toLocaleString();
+  time.textContent = grillTime(ts);
+  time.dataset.tip = grillDate(ts);
   return time;
 }
 
@@ -278,20 +276,20 @@ function renderMessage(m) {
     const model = document.createElement('span');
     model.className = 'model';
     model.textContent = m.model || 'model unknown';
-    model.title = 'Claude model of this turn';
+    model.dataset.tip = 'Claude model of this turn';
     const ran = [model];
     if (m.effort) {
       const effort = document.createElement('span');
       effort.className = 'effort';
       effort.textContent = 'effort ' + m.effort;
-      effort.title = 'Effort of this turn';
+      effort.dataset.tip = 'Effort of this turn';
       ran.push(' · ', effort);
     }
     if (m.model_note || m.model_mismatch) {
       const note = document.createElement('span');
       note.className = 'model-note' + (m.model_mismatch ? ' mismatch' : '');
       note.textContent = m.model_mismatch ? '⚠ claude reported ' + (m.model_note || 'no model') : m.model_note;
-      note.title = m.model_mismatch ? 'Claude did not report the model this turn asked for' : 'Other models of this turn, with their share of its cost';
+      note.dataset.tip = m.model_mismatch ? 'Claude did not report the model this turn asked for' : 'Other models of this turn, with their share of its cost';
       ran.push(' · ', note);
     }
     // The host cap lowered what the persona asked for (002-AC19).
@@ -415,7 +413,7 @@ function chip(n) {
     paintChip(el);
   } else {
     el.classList.add(String(n.participant_id) === myID ? 'me' : 'person');
-    el.title = (p ? p.name : n.at.slice(1)) + (String(n.participant_id) === myID ? ', you' : '');
+    el.dataset.tip = (p ? p.name : n.at.slice(1)) + (String(n.participant_id) === myID ? ', you' : '');
   }
   return el;
 }
@@ -423,7 +421,7 @@ function chip(n) {
 // paintChip gives a persona chip its persona's badge and colour, once the agent state names them.
 function paintChip(el) {
   const p = personaByID(Number(el.dataset.persona));
-  el.title = (p ? p.name : el.textContent.slice(1)) + ', persona';
+  el.dataset.tip = (p ? p.name : el.textContent.slice(1)) + ', persona';
   if (!p) return;
   el.dataset.badge = p.badge;
   el.style.setProperty('--persona', p.colour);
@@ -494,7 +492,7 @@ function mentionChip(s) {
   el.textContent = '→ @' + (p ? p.name : 'persona') + ' · ' + s.status;
   if (s.line_id) {
     el.href = '#';
-    el.title = s.status === 'done' ? 'Show the synthesis' : 'Show how the turn ended';
+    el.dataset.tip = s.status === 'done' ? 'Show the synthesis' : 'Show how the turn ended';
     el.addEventListener('click', (e) => {
       e.preventDefault();
       const line = messages.querySelector('li[data-id="' + s.line_id + '"]');
@@ -529,7 +527,7 @@ async function toggleVersions(li, m) {
     const item = document.createElement('li');
     const when = document.createElement('time');
     when.dateTime = v.written_at;
-    when.textContent = new Date(v.written_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+    when.textContent = grillDate(v.written_at);
     const text = document.createElement('span');
     text.textContent = v.body;
     item.append(when, ' ', text);
@@ -578,7 +576,7 @@ function messageMenu(li, m) {
   const b = document.createElement('button');
   b.type = 'button';
   b.className = 'msg-more btn-icon';
-  b.textContent = '⋯';
+  b.append(grillIcon('more'));
   b.setAttribute('aria-label', 'Line actions');
   b.setAttribute('aria-expanded', 'false');
   b.addEventListener('click', () => {
@@ -768,7 +766,7 @@ async function loadInvites() {
   const invites = (await res.json()).filter((i) => !i.revoked_at && String(i.created_by) === myID);
   $('invite-list').replaceChildren(...invites.map((inv) => {
     const li = document.createElement('li');
-    const when = new Date(inv.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+    const when = grillDate(inv.created_at);
     const label = document.createElement('span');
     label.textContent = 'Created ' + when;
     const revoke = document.createElement('button');
@@ -845,8 +843,8 @@ async function loadDocuments() {
     b.type = 'button';
     b.className = 'doc';
     b.textContent = d.name;
-    // One line with an ellipsis: the full name in the tooltip (008-AC14).
-    b.title = d.name + '\n' + describe(d);
+    // One line with an ellipsis: the full name in the tip (008-AC14).
+    b.dataset.tip = d.name + ', ' + describe(d);
     b.addEventListener('click', () => {
       showDocument(d.id).catch(console.error);
     });
@@ -895,7 +893,7 @@ async function showDocument(id, refresh, deepLink) {
   } else if (docsMode) history.replaceState(history.state, '', url);
   $('doc-width').hidden = d.format !== 'md';
   $('doc-name').textContent = d.name;
-  $('doc-name').title = d.name;
+  $('doc-name').dataset.tip = d.name;
   $('doc-delete').hidden = !meAdmin;
   $('doc-meta').textContent = d.kind === 'upload' && d.format === 'md' && !/\.(md|markdown)$/i.test(d.name)
     ? describe(d) + ', shown as its Markdown copy'
@@ -909,7 +907,7 @@ async function showDocument(id, refresh, deepLink) {
   $('revisions').hidden = !agent;
   if (agent) {
     const prev = $('rev').value;
-    $('rev').replaceChildren(...revisions.map((r) => option(r.n, 'r' + r.n + ' · ' + personaLabel(r.author) + ' · ' + new Date(r.created_at).toLocaleString())));
+    $('rev').replaceChildren(...revisions.map((r) => option(r.n, 'r' + r.n + ' · ' + personaLabel(r.author) + ' · ' + grillDate(r.created_at))));
     $('rev-from').replaceChildren(option('', 'nothing'), ...revisions.map((r) => option(r.n, 'r' + r.n)));
     $('rev').value = followLatest ? String(d.revisions) : prev;
     $('rev-from').value = keepFrom;
@@ -1120,11 +1118,45 @@ function openNew(anchor) {
   $('annot-body').focus();
 }
 
+// attachImages wires a notes form's paperclip (docs/design.md §5, File input): the native input
+// stays hidden, and the files chosen show as a chip whose ✕ drops them. Returns its redraw.
+function attachImages(wrap) {
+  const input = wrap.querySelector('input[type=file]');
+  wrap.querySelector('.attach-open').addEventListener('click', () => input.click());
+  const chip = document.createElement('span');
+  chip.className = 'chip file-chip';
+  chip.hidden = true;
+  const name = document.createElement('span');
+  name.className = 'file-name';
+  const drop = document.createElement('button');
+  drop.type = 'button';
+  drop.className = 'btn-icon btn-ghost';
+  drop.setAttribute('aria-label', 'Remove the images');
+  drop.append(grillIcon('close'));
+  const show = () => {
+    const n = input.files.length;
+    chip.hidden = !n;
+    name.textContent = n === 1 ? input.files[0].name : n + ' images';
+  };
+  drop.addEventListener('click', () => {
+    input.value = '';
+    show();
+  });
+  chip.append(name, drop);
+  wrap.append(chip);
+  input.addEventListener('change', show);
+  // A form's reset clears its inputs after its reset event.
+  input.form?.addEventListener('reset', () => queueMicrotask(show));
+  return show;
+}
+const showNewImages = attachImages($('annot-new').querySelector('.attach'));
+
 function closeNew() {
   newAnchor = undefined;
   $('annot-new').hidden = true;
   $('annot-body').value = '';
   $('annot-files').value = '';
+  showNewImages();
 }
 
 // readImages returns the chosen files as base64, the shape the API takes.
@@ -1309,7 +1341,7 @@ const widthNames = Object.keys(mdWidths);
 const nextWidth = () => widthNames[(widthNames.indexOf(mdWidth) + 1) % widthNames.length];
 function showWidth() {
   $('doc-width').setAttribute('aria-label', 'Text width: ' + mdWidths[mdWidth]);
-  $('doc-width').title = 'Text width: ' + mdWidths[mdWidth] + '. Press for ' + mdWidths[nextWidth()] + '.';
+  $('doc-width').dataset.tip = 'Text width: ' + mdWidths[mdWidth] + '. Press for ' + mdWidths[nextWidth()] + '.';
 }
 showWidth();
 $('doc-width').addEventListener('click', () => {
@@ -1379,10 +1411,13 @@ function newItem(id) {
   li.innerHTML = '<button type="button" class="annot-head"><span class="annot-badge"></span> <span class="annot-label"></span></button>'
     + '<p class="annot-note"></p><ol class="annot-thread"></ol>'
     + '<form class="annot-reply"><textarea rows="2" maxlength="4000" aria-label="Reply" placeholder="Reply"></textarea>'
-    + '<label class="annot-file">Images <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple></label>'
-    + '<div class="annot-actions"><button type="button" class="annot-state"></button><button type="submit">Reply</button></div>'
+    + '<div class="annot-actions"><span class="attach"><button type="button" class="btn-icon btn-ghost attach-open" aria-label="Attach images" data-tip="Attach images"></button>'
+    + '<input type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden></span>'
+    + '<button type="button" class="annot-state"></button><button type="submit">Reply</button></div>'
     + '<p class="annot-error" role="status"></p></form>';
   li.querySelector('.annot-head').addEventListener('click', () => focusItem(id, true));
+  li.querySelector('.attach-open').append(grillIcon('clip'));
+  attachImages(li.querySelector('.attach'));
   const form = li.querySelector('form');
   form.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -1425,7 +1460,7 @@ function fillItem(li, a) {
     who.textContent = m.badge ? m.badge + ' ' + m.author : m.author;
     const time = document.createElement('time');
     time.dateTime = m.created_at;
-    time.textContent = new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    time.textContent = grillTime(m.created_at);
     meta.append(who, ' ', time);
     item.append(meta);
     if (m.body) {
@@ -1479,8 +1514,9 @@ function uploadRow(file, open) {
   $('uploads').append(li);
   const fail = (why) => {
     bar.remove();
-    state.textContent = '✗';
-    state.title = 'Not added';
+    state.replaceChildren(grillIcon('alert'));
+    state.setAttribute('role', 'img');
+    state.setAttribute('aria-label', 'Not added');
     const btns = document.createElement('span');
     btns.className = 'btns';
     const retry = document.createElement('button');
@@ -1492,7 +1528,7 @@ function uploadRow(file, open) {
     const drop = document.createElement('button');
     drop.type = 'button';
     drop.className = 'btn-icon btn-ghost';
-    drop.textContent = '✕';
+    drop.append(grillIcon('close'));
     drop.setAttribute('aria-label', 'Dismiss ' + file.name);
     drop.addEventListener('click', () => li.remove());
     btns.append(retry, drop);
@@ -1512,9 +1548,10 @@ function uploadRow(file, open) {
     const data = xhr.response || {};
     if (xhr.status < 200 || xhr.status >= 300 || !data.id) return fail(data.error || 'Not added: HTTP ' + xhr.status);
     bar.remove();
-    state.textContent = '✓';
+    state.replaceChildren(grillIcon('check'));
     state.className = 'state done';
-    state.title = 'Added';
+    state.setAttribute('role', 'img');
+    state.setAttribute('aria-label', 'Added');
     setTimeout(() => li.remove(), 5000);
     if (open) showDocument(data.id).catch(console.error);
   });
@@ -1525,6 +1562,7 @@ function uploadRow(file, open) {
 }
 
 $('upload-open').addEventListener('click', () => $('upload-input').click());
+$('docs-empty-add').addEventListener('click', () => $('upload-input').click());
 $('upload-input').addEventListener('change', (e) => {
   addFiles(e.target.files);
   e.target.value = '';
@@ -1776,7 +1814,7 @@ function renderAgent() {
     led.setAttribute('aria-label', st.label);
     // Not disabled: a press must still reach the reason.
     b.setAttribute('aria-disabled', String(!!why));
-    b.title = why || st.label;
+    b.dataset.tip = why || st.label;
     return b;
   });
   if (buttons.length !== bar.children.length || buttons.some((b, i) => bar.children[i] !== b)) bar.replaceChildren(...buttons);
@@ -2079,8 +2117,9 @@ function personaForm(p) {
   const model = panel('model',
     grid(field('Model', picker('model', agent.models, p.model)), field('Effort', picker('effort', agent.efforts, p.effort)),
       field('Memory size (k tokens)', input('autocompact', p.autocompact ? p.autocompact / 1000 : '', { type: 'number', min: 100, max: 1000,
-        placeholder: 'auto', title: 'How much it remembers before it summarizes its session; empty for automatic' }))),
-    hint(use === null ? 'Context use: known after its next answer.' : 'Context use: its session holds ' + use + '% of its context window.'));
+        placeholder: 'auto' }))),
+    hint('Memory size is how much it remembers before it summarizes its session; empty for automatic. '
+      + (use === null ? 'Context use: known after its next answer.' : 'Context use: its session holds ' + use + '% of its context window.')));
   // One automatic trigger at most (006-AC18): the choice, then its N.
   const kind = p.every_n ? 'every_n' : p.every_voice ? 'every_voice' : p.every_minutes ? 'every_minutes' : '';
   const speaks = picker('trigger', [], kind);
@@ -2206,7 +2245,7 @@ function renderRoomSkills() {
     li.textContent = k.name + ' v' + k.version + ', copied by ' + k.author + (k.pending ? ': waits for the AI host\'s approval' : '');
     return li;
   }));
-  if (!own.length) $('room-skill-list').append(Object.assign(document.createElement('li'), { textContent: 'None yet.' }));
+  if (!own.length) $('room-skill-list').append(Object.assign(document.createElement('li'), { className: 'empty', textContent: 'None yet.' }));
   const mine = skillLib.skills.filter((x) => x.scope === 'personal' && !own.some((k) => k.name === x.name));
   $('room-skill-copy').hidden = !mine.length;
   const chosen = $('room-skill-source').value;
@@ -2249,7 +2288,7 @@ function skillsBlock(p) {
     }));
     list.append(li);
   }
-  if (!list.children.length) list.append(Object.assign(document.createElement('li'), { textContent: 'None on.' }));
+  if (!list.children.length) list.append(Object.assign(document.createElement('li'), { className: 'empty', textContent: 'None on.' }));
   box.append(legend, list);
   if (skillLib.no_profile) {
     box.append(Object.assign(document.createElement('p'), { className: 'hint', textContent: 'Turning skills on needs a profile.' }));
@@ -2379,7 +2418,7 @@ function pluginsBlock(p) {
   }
   box.append(legend);
   if (!plugins.length) {
-    box.append(Object.assign(document.createElement('p'), { className: 'hint', textContent: 'No plugins in this room yet. A room admin adds them in Room settings › Plugins.' }));
+    box.append(Object.assign(document.createElement('p'), { className: 'empty', textContent: 'No plugins in this room yet. A room admin adds them in Room settings › Plugins.' }));
     return box;
   }
   box.append(list);
@@ -2449,7 +2488,7 @@ function watchIcon() {
 // markWatch shows el, a watchIcon, for the notes watcher. Empty when hidden: a row's text is read whole.
 function markWatch(el, on) {
   el.hidden = !on;
-  el.textContent = on ? '👁' : '';
+  el.replaceChildren(...(on ? [grillIcon('eye')] : []));
 }
 
 // rowState is the list's word for a persona's state (009-AC1).
@@ -2487,8 +2526,7 @@ function renderPersonas() {
     a.querySelector('.led').className = 'led ' + personaState(p).cls;
     a.querySelector('.pr-state').textContent = state;
     markWatch(a.querySelector('.watch'), p.watches_notes);
-    a.title = p.name + ': ' + meta + (p.watches_notes ? ', watches the notes' : '') + ', ' + state;
-    a.setAttribute('aria-label', a.title);
+    a.setAttribute('aria-label', p.name + ': ' + meta + (p.watches_notes ? ', watches the notes' : '') + ', ' + state);
     return li;
   });
   if (rows.length !== list.children.length || rows.some((li, i) => list.children[i] !== li)) list.replaceChildren(...rows);
@@ -2525,7 +2563,7 @@ function renderPersonaSheet() {
     if (agentSeen) d.close();
     return;
   }
-  $('persona-sheet-title').textContent = p.badge + ' ' + p.name;
+  $('persona-sheet-title').replaceChildren(span('badge persona-badge', p.badge), ' ' + p.name);
   const nav = $('persona-tabs');
   if (nav.dataset.id !== String(p.id)) {
     nav.dataset.id = p.id;
@@ -2682,11 +2720,11 @@ function audioState(id) {
 // ago says how long ago a time was, coarsely (kit/ui.js): the list refreshes every 30 seconds.
 const ago = (ts) => grillAgo(ts);
 
-function span(cls, text, title) {
+function span(cls, text, tip) {
   const el = document.createElement('span');
   el.className = cls;
   el.textContent = text;
-  if (title) el.title = title;
+  if (tip) el.dataset.tip = tip;
   return el;
 }
 
@@ -2783,6 +2821,8 @@ function openPersonMenu(b, p, id, fromPointer) {
   menu.style.right = Math.max(8, innerWidth - r.right) + 'px';
   menu.showPopover();
   menu.style.top = Math.max(8, Math.min(r.bottom + 4, innerHeight - menu.offsetHeight - 8)) + 'px';
+  // Right-aligned on its ⋯, kept 8 px inside the left edge too: a row near it pushed it to 0.
+  menu.style.right = Math.max(8, Math.min(innerWidth - r.right, innerWidth - menu.offsetWidth - 8)) + 'px';
   b.setAttribute('aria-expanded', 'true');
   menu.querySelector('button, input')?.focus();
 }
@@ -2803,7 +2843,7 @@ const personCardLines = [
   (p, id) => 'Audio: ' + cardAudio(id),
   (p, id) => (transcribed.has(id) ? 'Transcribed' : 'Not transcribed'),
   (p, id) => cardHere(p, id),
-  (p) => 'Joined ' + new Date(p.joined_at).toLocaleString(),
+  (p) => 'Joined ' + grillDate(p.joined_at),
 ];
 // hoverDelay keeps a pointer passing over the list from flashing cards.
 const hoverDelay = 300;
@@ -2825,26 +2865,15 @@ function cardAudio(id) {
 
 function cardHere(p, id) {
   const pr = presence.get(id);
-  if (id === myID || pr?.here) return pr?.here_since ? 'Here since ' + new Date(pr.here_since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Here';
+  if (id === myID || pr?.here) return pr?.here_since ? 'Here since ' + grillTime(pr.here_since) : 'Here';
   return 'Seen ' + ago(pr?.seen_at || p.last_seen_at || p.joined_at);
-}
-
-// placeBy puts popover pop below anchor, or above it when the bottom edge would cut it, left of
-// the row's ⋯ column so it never covers a ⋯, shifted left when the right edge would cut it.
-function placeBy(pop, anchor) {
-  const r = anchor.getBoundingClientRect();
-  const more = anchor.closest('li')?.querySelector('.person-more');
-  const right = more && !more.hidden ? more.getBoundingClientRect().left - 4 : innerWidth - 8;
-  pop.style.maxWidth = Math.min(20 * parseFloat(getComputedStyle(document.documentElement).fontSize), Math.max(160, right - 8)) + 'px';
-  pop.style.left = Math.max(8, Math.min(r.left, right - pop.offsetWidth)) + 'px';
-  pop.style.top = Math.max(8, r.bottom + 4 + pop.offsetHeight > innerHeight - 8 ? r.top - 4 - pop.offsetHeight : r.bottom + 4) + 'px';
 }
 
 function showCard(el) {
   const id = el.closest('li[data-pid]')?.dataset.pid;
   const p = participants.find((x) => String(x.id) === id);
   if (!p || $('person-menu').matches(':popover-open')) return;
-  hideTip();
+  grillTip.hide();
   const card = $('person-card');
   const list = document.createElement('ul');
   for (const line of personCardLines) {
@@ -2863,7 +2892,7 @@ function showCard(el) {
   cardFor = el;
   el.setAttribute('aria-describedby', 'person-card');
   if (!card.matches(':popover-open')) card.showPopover();
-  placeBy(card, el);
+  grillPlace(card, el);
 }
 
 function hideCard() {
@@ -2873,64 +2902,43 @@ function hideCard() {
   $('person-card').hidePopover();
 }
 
-// The badge tip: one line, for the eye; the badge's aria-label says the same to assistive tech.
-function showTip(el) {
-  const tip = $('person-tip');
-  clearTimeout(hideTimer);
-  tipFor = el;
-  tip.textContent = el.dataset.tip;
-  if (!tip.matches(':popover-open')) tip.showPopover();
-  placeBy(tip, el);
-}
-function hideTip() {
-  tipFor = null;
-  if ($('person-tip').matches(':popover-open')) $('person-tip').hidePopover();
-}
-
-// hideGrace lets the pointer cross the gap between a name or badge and its card or tip.
+// hideGrace lets the pointer cross the gap between a name and its card.
 const hideGrace = 150;
 function hideSoon(from) {
   clearTimeout(hideTimer);
   hideTimer = setTimeout(() => {
-    if (tipFor === from || from === $('person-tip')) hideTip();
     if (cardFor === from || from === $('person-card')) hideCard();
   }, hideGrace);
 }
 
 const cardTarget = (t) => (t instanceof Element ? t.closest('#participants .name, #participants-away .name, #messages li[data-pid] > .meta > .sender') : null);
-const tipTarget = (t) => (t instanceof Element ? t.closest('#participants [data-tip], #participants-away [data-tip]') : null);
 document.addEventListener('pointerover', (e) => {
   if (e.pointerType !== 'mouse' || !(e.target instanceof Element)) return;
   const el = cardTarget(e.target);
-  const tipped = !el && tipTarget(e.target);
-  // Reaching the open card or tip, or coming back to its anchor, keeps it.
-  if (e.target.closest('#person-card, #person-tip') || (el && el === cardFor) || (tipped && tipped === tipFor)) {
+  // Reaching the open card, or coming back to its anchor, keeps it.
+  if (e.target.closest('#person-card') || (el && el === cardFor)) {
     clearTimeout(hideTimer);
     return;
   }
-  if (!el && !tipped) return;
+  if (!el) return;
   clearTimeout(hoverTimer);
   const [x, y] = [e.clientX, e.clientY];
   hoverTimer = setTimeout(() => {
     // A re-render may have replaced what the pointer rests on: take what is under it now.
     const under = document.elementFromPoint(x, y);
     const card = cardTarget(under);
-    const tip = !card && tipTarget(under);
     if (card) showCard(card);
-    else if (tip?.dataset.tip && !cardFor) showTip(tip);
   }, hoverDelay);
 });
 // The pointer may move onto the card or tip and stay there to read it (WCAG 1.4.13).
 document.addEventListener('pointerout', (e) => {
   if (e.pointerType !== 'mouse') return;
-  const from = cardTarget(e.target) || tipTarget(e.target);
+  const from = cardTarget(e.target);
   if (!from || from.contains(e.relatedTarget)) return;
   clearTimeout(hoverTimer);
-  if (from === cardFor || from === tipFor) hideSoon(from);
+  if (from === cardFor) hideSoon(from);
 });
-for (const id of ['person-card', 'person-tip']) {
-  $(id).addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') hideSoon($(id)); });
-}
+$('person-card').addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') hideSoon($('person-card')); });
 document.addEventListener('focusin', (e) => { if (cardTarget(e.target)) showCard(e.target); });
 document.addEventListener('focusout', (e) => { if (e.target === cardFor) hideCard(); });
 // A tap anywhere on a person's row but its ⋯, or on a chat name, opens the card; a tap elsewhere closes it.
@@ -2944,7 +2952,6 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   clearTimeout(hoverTimer);
   hideCard();
-  hideTip();
 });
 arrowKeys($('person-menu'));
 
@@ -2965,7 +2972,7 @@ function renderParticipants() {
       const more = document.createElement('button');
       more.type = 'button';
       more.className = 'person-more';
-      more.textContent = '⋯';
+      more.append(grillIcon('more'));
       more.setAttribute('aria-expanded', 'false');
       const name = span('name', '');
       name.tabIndex = 0;
@@ -3015,10 +3022,7 @@ function renderParticipants() {
     if (cardFor.isConnected) showCard(cardFor);
     else hideCard();
   }
-  if (tipFor) {
-    if (tipFor.isConnected && tipFor.dataset.tip) showTip(tipFor);
-    else hideTip();
-  }
+  grillTip.refresh();
   $('away').hidden = !rows.away.length;
   $('away-count').textContent = String(rows.away.length);
   $('tab-people-count').textContent = String(rows.here.length);
@@ -3087,7 +3091,7 @@ function showSTT(st) {
     : !st.listening || !voices.length ? ''
     : (voices.length === 1 ? '1 voice is' : voices.length + ' voices are') + ' being written down' + (mine ? ' · yours is one of them' : '');
   $('voice-mute').classList.toggle('captured', mine);
-  $('voice-mute').title = mine ? 'Your voice is being written down' : '';
+  $('voice-mute').dataset.tip = mine ? 'Your voice is being written down' : '';
   $('voice-more').classList.toggle('down', sttDown);
   // The model's license asks for credit wherever it runs (007-AC13).
   $('stt-credit').hidden = !(st.engines || []).includes('parakeet');
@@ -3124,10 +3128,7 @@ function voiceButtons() {
   $('voice-deaf').textContent = on && deaf ? 'Hear the room again' : 'Mute the room';
   const muted = on && !voice.localParticipant.isMicrophoneEnabled;
   $('voice-mute').setAttribute('aria-pressed', String(muted));
-  const icon = document.createElement('span');
-  icon.setAttribute('aria-hidden', 'true');
-  icon.textContent = muted ? '🔇' : '🎙';
-  $('voice-mute').replaceChildren(icon, muted ? 'Unmute' : 'Mute');
+  $('voice-mute').replaceChildren(grillIcon(muted ? 'mic-off' : 'mic'), muted ? 'Unmute' : 'Mute');
   $('voice-unlock').hidden = !on || voice.canPlaybackAudio;
 }
 
