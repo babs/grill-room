@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
-import { roomWith, startDaemon, pairDaemon, removeSandbox } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, removeSandbox, tableLayout } from './helpers.js';
 
 // Each tab of the page and the sections it holds (005-AC17).
 const tabs = { instances: ['Servers'], rooms: ['Room', 'Rooms'], accounts: ['Claude accounts'], settings: ['Settings'],
@@ -57,7 +57,7 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
     await admin.locator('#tab-monitoring').click();
     const rows = admin.locator('#turns tbody tr');
     await expect(rows).toHaveCount(1, { timeout: 15_000 });
-    for (const text of [roomURL, 'Grill', 'default', 'pressed by Alice', 'ok', '$0.0125', '85%']) await expect(rows.first()).toContainText(text);
+    for (const text of [room.name, 'Grill', 'default', 'pressed by Alice', 'ok', '$0.0125', '85%']) await expect(rows.first()).toContainText(text);
     await expect(admin.locator('#totals tbody tr').first()).toContainText(/\d{4}-\d{2}-\d{2}default1/);
     await expect(admin.locator('#alerts-rooms')).toContainText(`Grill in ${roomURL} uses 85% of its context`);
     await expect(admin.locator('#tab-rooms .tab-badge')).toHaveText('1');
@@ -78,6 +78,27 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
     expect([cell('room'), cell('persona'), cell('account'), cell('cause'), cell('status'), cell('cost_usd'), cell('context_pct')])
       .toEqual([roomURL, 'Grill', 'default', 'pressed by Alice', 'ok', '0.0125', '85']);
 
+    // The Activity tab's tables: the room by its name, its link in the tip; no cell clipped by the
+    // table's box at any width; the full width of a wide screen.
+    const roomCell = rows.first().locator('td[data-label=Room] .cut');
+    await expect(roomCell).toHaveText(room.name);
+    await expect(roomCell).toHaveAttribute('data-tip', roomURL);
+    await roomCell.hover();
+    await expect(admin.locator('#tip')).toHaveText(roomURL);
+    for (const width of [390, 1440, 1920]) {
+      await admin.setViewportSize({ width, height: 900 });
+      for (const sel of ['#turns', '#totals']) {
+        const l = await tableLayout(admin, sel);
+        expect(l.clipped, `${sel} at ${width}px`).toEqual([]);
+        expect(l.firstInBox, `${sel} at ${width}px`).toBe(true);
+        if (width === 1920 && sel === '#turns') {
+          expect(l.share).toBeGreaterThanOrEqual(0.9);
+          expect(l.fits, 'no sideways scroll at 1920px').toBe(true);
+        }
+      }
+    }
+    await expect(admin.locator('#turns [title]')).toHaveCount(0);
+
     // A phone: every tab reachable, nothing wider than the screen, the tab bar still on screen once
     // scrolled to the bottom.
     await admin.setViewportSize({ width: 390, height: 844 });
@@ -88,9 +109,9 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
         await h.scrollIntoViewIfNeeded();
         await expect(h).toBeInViewport();
       }
-      // Tables scroll inside their own box; anything else past the edge is named.
+      // Tables and the tab strip scroll inside their own box; anything else past the edge is named.
       const wide = await admin.evaluate(() => [...document.querySelectorAll('body *')]
-        .filter((e) => e.offsetParent !== null && !e.parentElement?.closest('.scroll') && !['pre', 'select'].includes(e.tagName.toLowerCase()) &&
+        .filter((e) => e.offsetParent !== null && !e.parentElement?.closest('.scroll, .tabs') && !['pre', 'select'].includes(e.tagName.toLowerCase()) &&
           (e.getBoundingClientRect().right > innerWidth + 1 || (getComputedStyle(e).overflowX === 'visible' && e.scrollWidth > e.clientWidth + 1)))
         .map((e) => `${e.tagName.toLowerCase()}#${e.id}.${e.className}`));
       expect(wide, id).toEqual([]);
