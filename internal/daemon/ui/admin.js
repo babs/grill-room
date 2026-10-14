@@ -153,7 +153,7 @@ const alertsOf = (id) => (data.value?.alerts || []).filter((a) => (alertTab[a.ki
 
 // TabBar stays pinned at the top; a tab with alerts, or an update waiting, shows their count.
 function TabBar() {
-  return html`<nav id="tabs" aria-label="Sections">${tabs.map(([id, name]) => {
+  return html`<nav id="tabs" class="tabs" aria-label="Sections">${tabs.map(([id, name]) => {
     const n = alertsOf(id).length + (id === 'update' && data.value?.status.update?.available ? 1 : 0);
     return html`<a key=${id} id=${'tab-' + id} href=${'#' + id} aria-current=${tab.value === id ? 'page' : undefined}>${name}${n
       ? html` <span class="tab-badge" title=${n + (n === 1 ? ' alert' : ' alerts')}>${n}</span>` : ''}</a>`;
@@ -861,6 +861,27 @@ function App() {
       <${Panel} id="update"><${Section} id="update" title="Update"><${UpdateOffer} /><${Trust} /><//><//>
     </main>`}`;
 }
+
+// The tip of a cut cell ([data-tip]) is a popover: the top layer, so a table's scroll box cannot clip it.
+const tip = Object.assign(document.createElement('div'), { id: 'tip', className: 'tip', popover: 'manual', role: 'tooltip' });
+document.body.append(tip);
+/** @param {Event} e */
+const showTip = (e) => {
+  const el = /** @type {HTMLElement | null} */ (/** @type {Element} */ (e.target).closest?.('[data-tip]'));
+  if (!el) return;
+  tip.textContent = el.dataset.tip || '';
+  tip.showPopover();
+  const r = el.getBoundingClientRect();
+  const below = r.bottom + tip.offsetHeight + 4 <= innerHeight;
+  tip.style.left = Math.max(4, Math.min(r.left, innerWidth - tip.offsetWidth - 4)) + 'px';
+  tip.style.top = (below ? r.bottom + 4 : r.top - tip.offsetHeight - 4) + 'px';
+};
+const hideTip = () => { if (tip.matches(':popover-open')) tip.hidePopover(); };
+addEventListener('pointerover', showTip);
+addEventListener('focusin', showTip);
+addEventListener('pointerout', hideTip);
+addEventListener('focusout', hideTip);
+addEventListener('scroll', hideTip, true);
 
 render(html`<${App} />`, /** @type {HTMLElement} */ (document.getElementById('app')));
 
