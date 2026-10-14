@@ -33,6 +33,9 @@ const (
 // maxStorageQuota bounds the instance storage quota: 1 PiB.
 const maxStorageQuota = 1 << 50
 
+// maxPluginMB bounds the plugin snapshot cap (009-AC9).
+const maxPluginMB = 200
+
 // roomAdmin reports whether the member's profile administers the room, and remembers its uuid in
 // sess for the audit log.
 func (s *Server) roomAdmin(ctx context.Context, sess *session) (bool, error) {
@@ -291,7 +294,12 @@ func (s *Server) instanceSettings(w http.ResponseWriter, r *http.Request) {
 
 // setInstanceSettings sets the guardrails on rooms profiles create (004-AC7).
 func (s *Server) setInstanceSettings(w http.ResponseWriter, r *http.Request) {
-	var v store.InstanceSettings
+	// A field the request leaves out keeps its value: a page from before plugin_max_mb sends none.
+	v, err := s.bus.Store.InstanceSettings(r.Context())
+	if err != nil {
+		s.serverError(w, "instance_settings_failed", err)
+		return
+	}
 	if !decode(w, r, &v) {
 		return
 	}
@@ -305,14 +313,18 @@ func (s *Server) setInstanceSettings(w http.ResponseWriter, r *http.Request) {
 	case v.RoomCreation != store.CreationAnyone && v.RoomCreation != store.CreationSuperAdmin:
 		httpError(w, http.StatusBadRequest, "room_creation must be anyone or super-admin")
 		return
+	case v.PluginMaxMB < 1 || v.PluginMaxMB > maxPluginMB:
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("plugin_max_mb must be 1 to %d", maxPluginMB))
+		return
 	}
-	details := map[string]any{"rooms_per_profile": v.RoomsPerProfile, "storage_quota_bytes": v.StorageQuota, "room_creation": v.RoomCreation}
+	details := map[string]any{"rooms_per_profile": v.RoomsPerProfile, "storage_quota_bytes": v.StorageQuota, "room_creation": v.RoomCreation,
+		"plugin_max_mb": v.PluginMaxMB}
 	if err := s.bus.Store.SetInstanceSettings(s.auditing(r, ActionSettings, store.TargetInstance, "", "", details), v); err != nil {
 		s.serverError(w, "set_instance_settings_failed", err)
 		return
 	}
 	s.log.Info("instance_settings_set", zap.Int("rooms_per_profile", v.RoomsPerProfile), zap.Int64("storage_quota_bytes", v.StorageQuota),
-		zap.String("room_creation", v.RoomCreation))
+		zap.String("room_creation", v.RoomCreation), zap.Int("plugin_max_mb", v.PluginMaxMB))
 	writeJSON(w, http.StatusOK, v)
 }
 

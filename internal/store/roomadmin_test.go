@@ -52,7 +52,7 @@ func TestCreateProfileRoomGuardrails(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	alice := joinWithProfile(t, s, "lobby", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
-	if v, err := s.InstanceSettings(ctx); err != nil || v != (InstanceSettings{RoomsPerProfile: DefaultRoomsPerProfile, RoomCreation: CreationAnyone}) {
+	if v, err := s.InstanceSettings(ctx); err != nil || v != (InstanceSettings{RoomsPerProfile: DefaultRoomsPerProfile, RoomCreation: CreationAnyone, PluginMaxMB: DefaultPluginMaxMB}) {
 		t.Fatalf("defaults %+v %v", v, err)
 	}
 	set := func(v InstanceSettings) {

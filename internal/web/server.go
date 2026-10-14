@@ -27,6 +27,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/babs/grill-room/internal/bus"
+	"github.com/babs/grill-room/internal/plugin"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/turn"
 	"github.com/babs/grill-room/internal/uikit"
@@ -102,6 +103,11 @@ type Server struct {
 	vapid      *webpush.VAPID
 	vapidMu    sync.Mutex
 	pushClient *http.Client
+	// pluginFetches bounds the git fetches running at once; pluginRooms holds the rooms with one
+	// running, one per room (009-AC8).
+	pluginFetches chan struct{}
+	pluginMu      sync.Mutex
+	pluginRooms   map[string]bool
 }
 
 // New builds a server. adminHash is HashToken of the admin token; baseURL prefixes invite links.
@@ -133,12 +139,16 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	if opts.PushClient == nil {
 		opts.PushClient = newPushClient()
 	}
+	if opts.PluginClient == nil {
+		opts.PluginClient = plugin.NewClient()
+	}
 	s := &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), archives: make(chan struct{}, maxConcurrentArchives),
 		adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
 		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, people: people{m: map[string]map[int64]*person{}}, stt: sttWorkers{m: map[string]*sttWorker{}}, clients: clients{m: map[int64]clientSeen{}},
 		magicLimit: limiter{window: magicWindow}, loginLimit: limiter{window: loginWindow}, now: time.Now, fallbacks: fallbackCounters(),
 		afterFunc: func(d time.Duration, f func()) { time.AfterFunc(d, f) },
-		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}, pushClient: opts.PushClient}
+		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}, pushClient: opts.PushClient,
+		pluginFetches: make(chan struct{}, maxPluginFetches), pluginRooms: map[string]bool{}}
 	s.cleanStaging()
 	return s
 }
@@ -323,6 +333,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms/{room}/skills", s.participant(s.copySkill))
 	mux.Handle("POST /api/rooms/{room}/skills/{skill}/decision", s.participant(s.decideRoomSkill))
 	mux.Handle("DELETE /api/rooms/{room}/skills/{skill}", s.participant(s.removeRoomSkill))
+	mux.Handle("GET /api/rooms/{room}/plugins", s.participant(s.listPlugins))
+	mux.Handle("POST /api/rooms/{room}/plugins/check", s.participant(s.checkPlugin))
+	mux.Handle("POST /api/rooms/{room}/plugins", s.participant(s.addPlugin))
+	mux.Handle("POST /api/rooms/{room}/plugins/{plugin}/update", s.participant(s.updatePlugin))
+	mux.Handle("DELETE /api/rooms/{room}/plugins/{plugin}", s.participant(s.removePlugin))
+	mux.Handle("POST /api/rooms/{room}/plugins/{plugin}/versions/{n}/decision", s.participant(s.decidePluginVersion))
+	mux.Handle("PUT /api/rooms/{room}/personas/{persona}/plugins/{plugin}", s.participant(s.setPersonaPlugin))
+	mux.Handle("DELETE /api/rooms/{room}/personas/{persona}/plugins/{plugin}", s.participant(s.setPersonaPlugin))
 	mux.Handle("PUT /api/rooms/{room}/personas/{persona}/skills/{skill}", s.participant(s.setPersonaSkill))
 	mux.Handle("DELETE /api/rooms/{room}/personas/{persona}/skills/{skill}", s.participant(s.setPersonaSkill))
 	mux.Handle("POST /api/rooms/{room}/personas/{persona}/cap", s.participant(s.decideCap))
@@ -334,6 +352,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms/{room}/daemon/turns/{turn}/workspace", s.daemonAuth(s.postWorkspace))
 	mux.Handle("GET /api/rooms/{room}/daemon/turns/{turn}/manifest", s.daemonAuth(s.getManifest))
 	mux.Handle("GET /api/rooms/{room}/daemon/turns/{turn}/skills", s.daemonAuth(s.getSkills))
+	mux.Handle("GET /api/rooms/{room}/daemon/turns/{turn}/plugins/{sha256}", s.daemonAuth(s.getTurnPlugin))
+	mux.Handle("GET /api/rooms/{room}/daemon/plugins/{version}/snapshot", s.daemonAuth(s.getPluginSnapshot))
+	mux.Handle("POST /api/rooms/{room}/daemon/plugins/{version}/report", s.daemonAuth(s.postPluginReport))
 	mux.Handle("POST /api/rooms/{room}/daemon/turns/{turn}", s.daemonAuth(s.postResult))
 	mux.Handle("POST /api/rooms/{room}/daemon/turns/{turn}/state", s.daemonAuth(s.postTurnState))
 	mux.Handle("GET /api/rooms/{room}/daemon/sessions/{session}", s.daemonAuth(s.getSession))

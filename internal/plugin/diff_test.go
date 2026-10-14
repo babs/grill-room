@@ -42,3 +42,17 @@ func TestCompareURL(t *testing.T) {
 	}
 	require.Empty(t, CompareURL("https://github.com/o/r", "main", b))
 }
+
+// 009-AC5: the room links the pinned commit on GitHub and GitLab, nothing elsewhere.
+func TestCommitURL(t *testing.T) {
+	c := strings.Repeat("c", 40)
+	for repo, want := range map[string]string{
+		"https://github.com/babs/skills.git":    "https://github.com/babs/skills/commit/" + c,
+		"https://gitlab.com/group/sub/repo.git": "https://gitlab.com/group/sub/repo/-/commit/" + c,
+		"https://codeberg.org/o/r":              "",
+		"https://u:p@github.com/o/r":            "",
+	} {
+		require.Equal(t, want, CommitURL(repo, c), repo)
+	}
+	require.Empty(t, CommitURL("https://github.com/o/r", "main"))
+}

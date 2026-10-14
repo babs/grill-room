@@ -325,6 +325,9 @@ func (s *Store) StartTurn(ctx context.Context, t *Turn, parallel bool) error {
 	if err := pinTurnSkills(ctx, tx, t.RoomID, t.ID, t.PersonaID); err != nil {
 		return err
 	}
+	if err := pinTurnPlugins(ctx, tx, t.ID, t.PersonaID); err != nil {
+		return err
+	}
 	// 006-AC18: the persona's voice-line count and timer start again from what this turn reads;
 	// 009-AC32: so does the notes watcher's wait.
 	if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET mark_msg_id = ?, mark_at_ms = ?, notes_mark = max(notes_mark, ?) WHERE id = ?`,

@@ -90,6 +90,10 @@ type Job struct {
 	// Skills are the persona's active skills at the versions the room pinned (002-AC31). When set,
 	// the daemon fetches them as a plugin directory and runs claude with --plugin-dir.
 	Skills []Skill `json:"skills,omitempty"`
+	// Plugins are the room plugins the persona has on, at the versions approved when the turn
+	// started (009-AC17). The daemon fetches each tar by SHA256 and passes one --plugin-dir per
+	// plugin after grill-room's.
+	Plugins []Plugin `json:"plugins,omitempty"`
 	// Autocompact is the persona's context size for claude -p --autocompact; 0 for auto (003-AC24).
 	Autocompact int `json:"autocompact,omitempty"`
 	// Cause is why the turn runs, as its preamble says; the daemon's monitoring records it (003-AC27).
@@ -99,6 +103,13 @@ type Job struct {
 // Skill names a skill a turn loads, at its pinned version.
 type Skill struct {
 	Name    string `json:"name"`
+	Version int    `json:"version"`
+}
+
+// Plugin names a room plugin a turn loads: its snapshot's sha256 and its version number.
+type Plugin struct {
+	Name    string `json:"name"`
+	SHA256  string `json:"sha256"`
 	Version int    `json:"version"`
 }
 

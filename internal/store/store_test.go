@@ -384,9 +384,13 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 			t.Fatal(err)
 		}
 		roomSkill[room] = rk.ID
+		// 009-AC12: the room's plugins, their versions and activations go with it.
+		if _, err := s.AddPlugins(ctx, room, []NewPlugin{newPlugin("plug-"+room, "c1")}, []int64{sec.ID}, p, 1<<20); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// These reach rooms through another table, so roomRows cannot see them.
-	indirect := []string{"revisions", "annotation_messages", "attachments", "message_versions", "room_persona_skills"}
+	indirect := []string{"revisions", "annotation_messages", "attachments", "message_versions", "room_persona_skills", "plugin_versions", "room_persona_plugins"}
 	count := func(table string) int {
 		var n int
 		if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM "`+table+`"`).Scan(&n); err != nil {

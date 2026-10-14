@@ -87,6 +87,9 @@ type Options struct {
 	// redirect.
 	PushHosts  []string
 	PushClient *http.Client
+	// PluginClient fetches plugins from git; nil means plugin.NewClient(), which reaches public
+	// https addresses only (009-AC8). Tests pass one that reaches their local git server.
+	PluginClient *http.Client
 	// MaxImportBytes bounds an imported archive, compressed and once uncompressed; 0 means
 	// DefaultMaxImportBytes.
 	MaxImportBytes int64

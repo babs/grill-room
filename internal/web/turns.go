@@ -606,6 +606,14 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request, d *store.Daemon,
 	for _, k := range ks {
 		job.Skills = append(job.Skills, turn.Skill{Name: k.Name, Version: k.Version})
 	}
+	ps, err := s.bus.Store.TurnPlugins(r.Context(), d.RoomID, t.ID)
+	if err != nil {
+		s.serverError(w, "get_job_failed", err)
+		return
+	}
+	for _, p := range ps {
+		job.Plugins = append(job.Plugins, turn.Plugin{Name: p.Name, SHA256: p.SHA256, Version: p.N})
+	}
 	if t.Resume != "" {
 		data, err := s.bus.Store.AgentSession(r.Context(), d.RoomID, t.PersonaID, t.Resume)
 		if err != nil {

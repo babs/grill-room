@@ -91,20 +91,38 @@ func setDiff(a, b []string) (added, removed []string) {
 // CompareURL links the forge's compare view between two commits, for github.com and GitLab
 // hosts (gitlab.com or a host named after it); "" elsewhere, where the UI links both commits.
 func CompareURL(repoURL, from, to string) string {
-	u, err := url.Parse(repoURL)
-	if err != nil || u.Scheme != "https" || u.User != nil || !hexRe.MatchString(from) || !hexRe.MatchString(to) {
+	base, sep := forge(repoURL)
+	if base == "" || !hexRe.MatchString(from) || !hexRe.MatchString(to) {
 		return ""
+	}
+	return base + sep + "compare/" + from + "..." + to
+}
+
+// CommitURL links a commit on github.com and GitLab hosts (009-AC5); "" elsewhere.
+func CommitURL(repoURL, commit string) string {
+	base, sep := forge(repoURL)
+	if base == "" || !hexRe.MatchString(commit) {
+		return ""
+	}
+	return base + sep + "commit/" + commit
+}
+
+// forge returns the web address of a repo on a known forge and the separator before its views.
+func forge(repoURL string) (base, sep string) {
+	u, err := url.Parse(repoURL)
+	if err != nil || u.Scheme != "https" || u.User != nil {
+		return "", ""
 	}
 	repo := strings.TrimSuffix(strings.TrimRight(u.EscapedPath(), "/"), ".git")
 	if strings.Count(repo, "/") < 2 {
-		return ""
+		return "", ""
 	}
 	host := strings.ToLower(u.Host)
 	switch {
 	case host == "github.com":
-		return "https://github.com" + repo + "/compare/" + from + "..." + to
+		return "https://github.com" + repo, "/"
 	case strings.Contains(host, "gitlab"):
-		return "https://" + host + repo + "/-/compare/" + from + "..." + to
+		return "https://" + host + repo, "/-/"
 	}
-	return ""
+	return "", ""
 }

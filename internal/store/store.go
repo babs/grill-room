@@ -710,6 +710,61 @@ PRAGMA writable_schema = OFF;
 `, `
 -- 009-AC36: the details card shows a participant's earlier name after a rename.
 ALTER TABLE participants ADD COLUMN previous_name TEXT;
+`, `
+-- 009-AC5 to 009-AC18: plugins a room admin adds from git. ref is what the admin typed ('' for the
+-- default branch), ref_name what the room shows. A removed plugin stays, removed_at set, while a
+-- running turn loads one of its versions; purgePlugins drops it once none does.
+CREATE TABLE room_plugins (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	name TEXT NOT NULL,
+	source_url TEXT NOT NULL,
+	ref TEXT NOT NULL,
+	ref_name TEXT NOT NULL,
+	entry TEXT NOT NULL DEFAULT '',
+	private INTEGER NOT NULL DEFAULT 0 CHECK (private IN (0, 1)),
+	created_by_name TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	removed_at TEXT
+);
+CREATE UNIQUE INDEX room_plugins_name ON room_plugins(room_id, name) WHERE removed_at IS NULL;
+-- A version is a snapshot pinned at a commit, never changed once written but for its state. The
+-- running version of a plugin is its latest approved one.
+CREATE TABLE plugin_versions (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	plugin_id INTEGER NOT NULL REFERENCES room_plugins(id) ON DELETE CASCADE,
+	n INTEGER NOT NULL,
+	commit_sha TEXT NOT NULL,
+	sha256 TEXT NOT NULL,
+	size INTEGER NOT NULL,
+	files INTEGER NOT NULL,
+	file_list TEXT NOT NULL,
+	data BLOB NOT NULL,
+	manifest TEXT NOT NULL,
+	report TEXT,
+	state TEXT NOT NULL CHECK (state IN ('inspecting', 'pending', 'approved', 'refused', 'invalid')),
+	reason TEXT NOT NULL DEFAULT '',
+	added_by_name TEXT NOT NULL,
+	added_by_id INTEGER REFERENCES participants(id) ON DELETE SET NULL,
+	added_at TEXT NOT NULL,
+	decided_by_name TEXT,
+	decided_at TEXT,
+	UNIQUE (plugin_id, n)
+);
+CREATE INDEX plugin_versions_inspecting ON plugin_versions(plugin_id) WHERE state = 'inspecting';
+CREATE TABLE room_persona_plugins (
+	persona_id INTEGER NOT NULL REFERENCES room_personas(id) ON DELETE CASCADE,
+	plugin_id INTEGER NOT NULL REFERENCES room_plugins(id) ON DELETE CASCADE,
+	PRIMARY KEY (persona_id, plugin_id)
+);
+CREATE INDEX room_persona_plugins_plugin ON room_persona_plugins(plugin_id);
+-- The versions a turn loads, copied as it starts: [{"name", "version_id", "n", "sha256"}].
+ALTER TABLE turns ADD COLUMN plugins TEXT NOT NULL DEFAULT '[]';
+-- 009-AC12: every way a turn ends updates its status, so the purges ride on that.
+CREATE TRIGGER turns_purge_plugins AFTER UPDATE OF status ON turns WHEN NEW.status != 'running' BEGIN
+	` + purgePlugins + `;
+	` + dropSuperseded + `;
+END;
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -743,6 +798,13 @@ func Open(path string) (*Store, error) {
 	if err := ensureStarters(context.Background(), db); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	// A removed plugin whose last turn ended while the server was down (009-AC12).
+	for _, q := range []string{purgePlugins, dropSuperseded} {
+		if _, err := db.ExecContext(context.Background(), q); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("purge plugins: %w", err)
+		}
 	}
 	return &Store{db: db}, nil
 }

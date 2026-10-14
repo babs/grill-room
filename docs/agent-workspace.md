@@ -52,6 +52,16 @@ A persona's active skills reach `claude -p` as one plugin directory, passed with
 - Scripts in a skill run in the sandbox as the agent user, with the workspace as their only room data. Anyone in the room can ask the agent to print a skill's files.
 - A script has Python with the Office libraries, uv, pip, node, pandoc, jq, yq, rg, git and curl, and reaches only the domains on the host's egress allowlist, through the `HTTPS_PROXY` the sandbox sets. The README's host daemon section lists both.
 
+### Plugins
+
+A room admin adds Claude Code plugins from git (spec 009). Each one reaches `claude -p` through its own `--plugin-dir`, after the `grill-room` one, never through the workspace or the prompt.
+
+- The server pins the commit the ref resolves to and stores the plugin's files as a normalised tar, a version. "Update" makes a new version when the ref moved.
+- A new version is `inspecting` until the host's daemon checks it, then `approved`, or `pending` while the host approves everything, or `invalid` when `claude plugin validate` fails. The host approves or refuses a pending one (`refused`). A plugin's running version is its latest approved one.
+- A turn copies, as it starts, the running version of each plugin its persona has on (`turns.plugins`). A plugin with no approved version is left out, and the turn runs without it.
+- Once a newer version is approved, an older one keeps its record but drops its files as soon as no running turn loads it, and the host can no longer approve it. Its `size` stays the original size; the room's volume and quota count only the files kept.
+- A removed plugin leaves every persona at once. Its versions stay while a running turn loads one of them, and go when that turn ends.
+
 ### Presence preamble
 
 The prompt opens with who is in the room, from one template, `internal/web/presence.tmpl`, embedded in the server. Edit that file to change what agents are told. It holds:
@@ -158,11 +168,23 @@ Anything else the agent writes, in `transcript/` or at the root, is scratch and 
    - A daemon without a cache, as before 002 or with the cap at 0, gets the full tar with a plain `GET .../daemon/turns/N/workspace`, which the server keeps for daemons not yet updated.
 
    When the job lists `skills` (`[{"name", "version"}]`), `GET .../daemon/turns/N/skills` returns the plugin directory as a tar.
+
+   When the job lists `plugins` (`[{"name", "sha256", "version"}]`, absent for none), `GET .../daemon/turns/N/plugins/<sha256>` returns each one's snapshot, a tar whose sha256 is that value. The server answers 404 for a sha256 the turn does not list. The daemon unpacks each under its own directory named after the plugin and passes one `--plugin-dir` per plugin after the `grill-room` one.
 4. If `resume` is set and the daemon's local `<id>.jsonl` does not match the size and hash, it fetches `GET .../daemon/sessions/<id>` and writes it into the sandbox home before running `claude -p --resume <id>` (D6). The cwd is always `/workspace`, so the session's project slug never changes (S2). Every persona's session lives in the same sandbox home under its own id; the room stores each under its persona, so a takeover resumes each persona's own session.
 5. The daemon hashes `/workspace` before and after the run and sends each changed path. It sends contents only for `docs/`, `replies.json` and `annotations-new.json`, so an edited 20 MB upload costs one path.
 6. `POST .../daemon/turns/N` with `{"synthesis", "model", "model_note", "model_mismatch", "effort", "capped", "changes", "session_id", "session_offset", "session", "context_tokens", "context_window"}`, or `{"error"}`. The context fields are absent when unknown. `capped` is true when the host cap lowered what the persona asked for. `session` holds the jsonl bytes past `session_offset`: the server's size when resuming, 0 for a new session (D23). The server refuses a gap or an overlap. A document edit whose document is past its pinned revision, or was created after the pin, is a conflict: the server answers 409 `conflict on <name>` and keeps nothing of the result.
 
 7. When a turn handed to the daemon ends on the server without its result, stopped from the room or failed there, the server sends `event: stop` with `{"id": N}`. The daemon kills `claude` in the sandbox, or ends the turn while it waits for a slot, and posts no result. A daemon from before ignores the event: its result then gets a 409. The supervisor's monitor records the turn as `stopped`.
+
+### Plugin inspection
+
+The host's daemon checks each new plugin version before it can load (009-AC13). Only the room's host daemon gets these events and may use these routes; another daemon gets a 403.
+
+1. The server sends `event: inspect` with `{"id": V}` for each version waiting for inspection, once per stream: when the stream opens, when a version is added, and when the daemon becomes the host.
+2. `GET .../daemon/plugins/V/snapshot` returns the version's tar.
+3. `POST .../daemon/plugins/V/report` with `{"ok", "validate", "details", "error"}`. `validate` is the output of `claude plugin validate --json`, at most 64 KiB. `details` is what `claude plugin details` showed: `components`, `always_on_tokens`, `cost_known`. `error` is the first validation error when `ok` is false. The server answers `{"state"}`: `invalid` when `ok` is false, `pending` while the host approves everything, `approved` otherwise. A version not waiting for inspection gets a 409.
+
+While no host daemon is connected, a version stays `inspecting` and the room shows "waiting for the AI host to check it".
 
 ## Failure rules
 
