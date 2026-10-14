@@ -1,28 +1,7 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon, menuItem, confirmSheet, personaRow, personaSheet } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, menuItem, confirmSheet, personaRow, personaSheet, addSecretary, upload, commentOnDocument } from './helpers.js';
 
 const agentLines = (page) => page.locator('#messages li.msg.agent');
-
-// addSecretary adds the Secretary from the library in the personas panel, applies the trigger
-// fields given on its Triggers tab (009-AC2), and leaves the panel open.
-async function addSecretary(page, fields = {}) {
-  const panel = page.locator('#personas');
-  await menuItem(page, 'Personas');
-  await panel.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
-  await panel.getByRole('button', { name: 'Add', exact: true }).click();
-  await expect(personaRow(page, 'Secretary')).toHaveCount(1);
-  if (fields.everyN) {
-    const sec = await personaSheet(page, 'Secretary', 'Triggers');
-    await sec.getByLabel('Speaks up').selectOption('every_n');
-    await sec.getByLabel('N', { exact: true }).fill(String(fields.everyN));
-    await sec.getByRole('button', { name: 'Save', exact: true }).click();
-    await expect(sec.locator('#persona-status')).toHaveText('Secretary saved. It applies from its next turn.');
-    await sec.getByRole('button', { name: 'Close' }).click();
-    // 009-AC1: the row says the trigger in words.
-    await expect(personaRow(page, 'Secretary').locator('.pr-meta')).toHaveText(`sonnet · effort medium · every ${fields.everyN} answers`);
-  }
-  return panel;
-}
 
 async function say(page, text) {
   await page.locator('#body').fill(text);
@@ -140,6 +119,42 @@ test('triggers: human @mention', async ({ browser, request, baseURL }) => {
     await expect(sec.locator('.meta strong')).toHaveText('📝 Secretary', { timeout: 60_000 });
     await expect(agentLines(alice)).toHaveCount(1);
     await expect(alice.locator('#chain-count')).toHaveText('auto 0/25');
+  } finally {
+    daemon.cleanup();
+  }
+});
+
+// 009-AC31 009-AC32: "Watches the notes" in the Triggers tab marks the Secretary in its row, on its
+// pill and above Notes, and the chat says so; its hint gives the server's delay (1 s here,
+// GRILL_ROOM_NOTES_WATCH_DELAY). A new note then runs it on its own once that delay passes, as one
+// chain link.
+test('triggers: the notes watcher', async ({ browser, request, baseURL }) => {
+  test.setTimeout(180_000);
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await addSecretary(alice);
+  const sheet = await personaSheet(alice, 'Secretary', 'Triggers');
+  await expect(sheet.getByText('Answers note threads that name no persona, 1 s after the last new message.')).toBeVisible();
+  await sheet.getByLabel('Watches the notes').check();
+  await sheet.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(sheet.locator('#persona-status')).toHaveText('Secretary saved. It applies from its next turn.');
+  await sheet.getByRole('button', { name: 'Close' }).click();
+  await expect(alice.locator('#messages')).toContainText('Alice changed 📝 Secretary: now watches the notes.');
+  await expect(personaRow(alice, 'Secretary').locator('.watch')).toBeVisible();
+  await expect(personaRow(alice, 'Secretary')).toHaveAttribute('aria-label', /Secretary: .*, watches the notes, /);
+  await expect(personaRow(alice, 'Grill').locator('.watch')).toBeHidden();
+  await alice.locator('#personas').getByRole('button', { name: 'Close' }).click();
+  await expect(alice.getByRole('button', { name: 'Ask Secretary, watches the notes' }).locator('.watch')).toHaveAttribute('title', 'Watches the notes');
+
+  const daemon = startDaemon(`${baseURL}/r/${room.id}`);
+  try {
+    await pairDaemon(alice, daemon);
+    await expect(alice.locator('button.persona[data-name="Secretary"] .led')).toHaveAttribute('aria-label', 'Secretary ready', { timeout: 30_000 });
+    await upload(alice, 'plan.md', 'text/markdown', '# Rollout plan\n\nShip behind a flag.\n');
+    await expect(alice.frameLocator('#doc-frame iframe').locator('h1')).toHaveText('Rollout plan');
+    await expect(alice.locator('#notes-watcher')).toHaveText('📝 Secretary watches the notes');
+    await commentOnDocument(alice, 'Who owns the rollback?');
+    await expect(agentLines(alice).locator('.meta strong')).toHaveText(['📝 Secretary'], { timeout: 60_000 });
+    await expect(alice.locator('#chain-count')).toHaveText('auto 1/25');
   } finally {
     daemon.cleanup();
   }

@@ -45,6 +45,8 @@ type personaReq struct {
 	EveryMinutes *int `json:"every_minutes"`
 	// Autocompact 0 is auto: Claude Code picks when to compact.
 	Autocompact *int `json:"autocompact"`
+	// WatchesNotes makes it the room's notes watcher, in place of any other (009-AC31).
+	WatchesNotes *bool `json:"watches_notes"`
 }
 
 // check cleans the fields present and says what is wrong with the first bad one, "" when none is.
@@ -281,7 +283,8 @@ func (s *Server) editPersona(w http.ResponseWriter, r *http.Request, sess sessio
 		return
 	}
 	patch := store.PersonaPatch{Name: req.Name, Badge: req.Badge, Colour: req.Colour, Text: req.Text, Model: req.Model, Effort: req.Effort,
-		EveryN: req.EveryN, EveryVoice: req.EveryVoice, EveryMinutes: req.EveryMinutes, SelfCall: req.SelfCall, Autocompact: req.Autocompact}
+		EveryN: req.EveryN, EveryVoice: req.EveryVoice, EveryMinutes: req.EveryMinutes, SelfCall: req.SelfCall, Autocompact: req.Autocompact,
+		WatchesNotes: req.WatchesNotes}
 	p, m, held, err := s.bus.Store.EditPersona(r.Context(), sess.p.RoomID, personaID(r), patch, sess.p)
 	s.personaDone(w, sess, p, m, err, heldStatus(held))
 }

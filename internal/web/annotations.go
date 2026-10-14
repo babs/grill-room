@@ -74,7 +74,7 @@ func (s *Server) newMessage(w http.ResponseWriter, req *messageReq, sess session
 		httpError(w, http.StatusBadRequest, fmt.Sprintf("message must be 1 to %d characters", maxBodyLen))
 		return nil, false
 	}
-	m := &store.NewMessage{ParticipantID: sess.p.ID, Author: sess.p.Name, Body: body}
+	m := &store.NewMessage{ParticipantID: sess.p.ID, Author: sess.p.Name, Body: body, At: s.now()}
 	for _, at := range req.Attachments {
 		if int64(len(at.Data)) > s.opts.MaxAttachmentBytes {
 			httpError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("image is over the %s limit", sizeText(s.opts.MaxAttachmentBytes)))
@@ -147,7 +147,10 @@ func (s *Server) createAnnotation(w http.ResponseWriter, r *http.Request, sess s
 	}
 	s.bus.Notify(d.RoomID)
 	s.log.Info("annotation_created", zap.String("room", d.RoomID), zap.Int64("document", d.ID), zap.Int64("annotation", a.ID))
-	writeJSON(w, http.StatusCreated, a)
+	writeJSON(w, http.StatusCreated, struct {
+		*store.Annotation
+		Notices []mentionNotice `json:"notices,omitempty"`
+	}{a, s.noteMentionTurns(r.Context(), sess.p, a.ID, &a.Messages[0])})
 }
 
 // annotationID reads {ann}; ok false answers 404.
@@ -180,7 +183,10 @@ func (s *Server) postAnnotationMessage(w http.ResponseWriter, r *http.Request, s
 		return
 	}
 	s.bus.Notify(sess.p.RoomID)
-	writeJSON(w, http.StatusCreated, m)
+	writeJSON(w, http.StatusCreated, struct {
+		*store.AnnotationMessage
+		Notices []mentionNotice `json:"notices,omitempty"`
+	}{m, s.noteMentionTurns(r.Context(), sess.p, id, m)})
 }
 
 func (s *Server) setAnnotationStatus(w http.ResponseWriter, r *http.Request, sess session) {

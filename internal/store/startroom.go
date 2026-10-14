@@ -105,10 +105,10 @@ func setUp(ctx context.Context, tx *sql.Tx, r *Room, by *Participant, setup *Roo
 	for _, p := range setup.Personas {
 		var id int64
 		err := tx.QueryRowContext(ctx, `INSERT INTO room_personas(room_id, template_version, name, badge, colour, text, model, effort, every_n, self_call,
-				autocompact, every_voice, every_minutes, created_at, mark_msg_id, mark_at_ms)
-			VALUES(?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, `+markNow+`) RETURNING id`,
+				autocompact, every_voice, every_minutes, watches_notes, created_at, mark_msg_id, mark_at_ms)
+			VALUES(?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, `+markNow+`) RETURNING id`,
 			append(append([]any{r.ID}, p.args()...), nullInt(p.EveryN), p.SelfCall, p.Autocompact, nullInt(p.EveryVoice), nullInt(p.EveryMinutes),
-				now(), time.Now().UnixMilli())...).Scan(&id)
+				p.WatchesNotes, now(), time.Now().UnixMilli())...).Scan(&id)
 		if err != nil {
 			return fmt.Errorf("set up room: persona %s: %w", p.Name, err)
 		}
@@ -246,7 +246,7 @@ func (s *Store) RoomDraft(ctx context.Context, roomID string) (*StarterManifest,
 			continue
 		}
 		sp := StarterPersona{PersonaFields: p.PersonaFields, EveryN: p.EveryN, EveryVoice: p.EveryVoice, EveryMinutes: p.EveryMinutes,
-			SelfCall: p.SelfCall, Autocompact: p.Autocompact}
+			SelfCall: p.SelfCall, WatchesNotes: p.WatchesNotes, Autocompact: p.Autocompact}
 		for _, k := range p.Skills {
 			// A pending room skill is not in the draft: the persona goes without it.
 			if slices.ContainsFunc(m.Skills, func(x StarterSkill) bool { return x.Name == k.Name }) {

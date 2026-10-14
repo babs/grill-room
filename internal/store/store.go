@@ -683,6 +683,28 @@ ALTER TABLE room_personas ADD COLUMN mark_at_ms INTEGER NOT NULL DEFAULT 0;
 UPDATE room_personas SET mark_msg_id = (SELECT COALESCE(MAX(id), 0) FROM messages), mark_at_ms = CAST(unixepoch('subsec') * 1000 AS INTEGER);
 -- 006-AC13: a skill a starter brought waits for the room's first host.
 ALTER TABLE skills ADD COLUMN from_starter INTEGER NOT NULL DEFAULT 0 CHECK (from_starter IN (0, 1));
+`, `
+-- 009-AC29: the turn a note message's @mention queued, as message_turns does for chat lines.
+CREATE TABLE annotation_message_turns (
+	message_id INTEGER NOT NULL REFERENCES annotation_messages(id) ON DELETE CASCADE,
+	persona_id INTEGER NOT NULL REFERENCES room_personas(id) ON DELETE CASCADE,
+	queue_id INTEGER,
+	turn_id INTEGER REFERENCES turns(id) ON DELETE SET NULL,
+	final_status TEXT CHECK (final_status IN ('done', 'failed', 'stopped', 'cancelled')),
+	final_line_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+	PRIMARY KEY (message_id, persona_id)
+);
+CREATE INDEX annotation_message_turns_queue ON annotation_message_turns(queue_id);
+CREATE INDEX annotation_message_turns_turn ON annotation_message_turns(turn_id);
+-- 009-AC31, 009-AC32: one persona per room watches the notes. notes_mark is the last note message
+-- its latest turn read, or the latest one when it started watching: newer ones may wake it.
+ALTER TABLE room_personas ADD COLUMN watches_notes INTEGER NOT NULL DEFAULT 0 CHECK (watches_notes IN (0, 1));
+ALTER TABLE room_personas ADD COLUMN notes_mark INTEGER NOT NULL DEFAULT 0;
+CREATE UNIQUE INDEX room_personas_watcher ON room_personas(room_id) WHERE watches_notes = 1;
+PRAGMA writable_schema = ON;
+UPDATE sqlite_schema SET sql = replace(sql, '''every_n'', ''call'')', '''every_n'', ''call'', ''notes_watch'')')
+	WHERE type = 'table' AND name = 'turn_queue';
+PRAGMA writable_schema = OFF;
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -690,7 +712,7 @@ const uuidSQL = `lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' |
 	substr('89ab', 1 + abs(random() % 4), 1) || substr(hex(randomblob(2)), 2) || '-' || hex(randomblob(6)))`
 
 // migrationData runs Go code inside the transaction of the migration to version key, after its SQL.
-var migrationData = map[int]func(context.Context, *sql.Tx) error{9: migratePersonas, 24: migrateStopped}
+var migrationData = map[int]func(context.Context, *sql.Tx) error{9: migratePersonas, 24: migrateStopped, 31: migrateNotesWatch}
 
 // Open opens (and migrates) the database at path.
 func Open(path string) (*Store, error) {

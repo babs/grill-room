@@ -117,3 +117,34 @@ func (s *Server) nameMentions(ctx context.Context, room string, msgs []store.Mes
 	}
 	return nil
 }
+
+// threadOwners returns the ids of the personas a note thread belongs to: those its participants'
+// messages name. A persona naming another in its reply claims nothing (009-AC30).
+func threadOwners(bodies []string, personas []store.RoomPersona) []int64 {
+	var out []int64
+	for _, b := range bodies {
+		for _, p := range mentioned(b, personas) {
+			if !slices.Contains(out, p.ID) {
+				out = append(out, p.ID)
+			}
+		}
+	}
+	return out
+}
+
+// othersThread reports a thread that belongs to personas, none of them self (009-AC30).
+func othersThread(bodies []string, personas []store.RoomPersona, self int64) bool {
+	owners := threadOwners(bodies, personas)
+	return len(owners) > 0 && !slices.Contains(owners, self)
+}
+
+// participantBodies returns what the participants wrote in thread a.
+func participantBodies(a store.Annotation) []string {
+	var out []string
+	for _, m := range a.Messages {
+		if m.By == store.ByParticipant {
+			out = append(out, m.Body)
+		}
+	}
+	return out
+}

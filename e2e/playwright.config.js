@@ -44,6 +44,8 @@ export default defineConfig({
       GRILL_ROOM_DAEMON_DIR: '../bin/e2e-release',
       // Specs send X-Forwarded-For as clients behind a proxy on loopback (005-AC20).
       GRILL_ROOM_TRUSTED_PROXIES: '127.0.0.1',
+      // The notes watcher answers 1 s after the last note, not 20 s (009-AC32).
+      GRILL_ROOM_NOTES_WATCH_DELAY: '1s',
       LOG_FORMAT: 'json',
     },
   },

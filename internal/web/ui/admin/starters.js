@@ -9,7 +9,7 @@ import { size, ago } from './room-panel.js';
  *   author: string, version: number, versions: number, size: number, updated_at: string}} Starter
  * @typedef {{label: string, key: string, required?: boolean, hint?: string}} Field
  * @typedef {{name: string, badge: string, colour: string, text: string, model: string, effort: string,
- *   every_n?: number, every_voice?: number, every_minutes?: number, self_call?: boolean, autocompact?: number,
+ *   every_n?: number, every_voice?: number, every_minutes?: number, self_call?: boolean, watches_notes?: boolean, autocompact?: number,
  *   skills?: string[]}} StarterPersona
  * @typedef {{name: string, version: number, author: string, description: string, size: number, file: string}} StarterSkill
  * @typedef {{name: string, kind: string, format: string, content_type?: string, text?: string, file?: string, size?: number}} StarterDocument

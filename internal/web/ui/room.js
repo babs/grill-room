@@ -471,6 +471,9 @@ function fillMentions(li) {
   }));
 }
 
+// noticeText says to a note's author why the personas it names will not run (009-AC29).
+const noticeText = (ns) => (ns || []).map((n) => '@' + n.name + ': ' + n.reason + '. Only you see this.').join(' ');
+
 function mentionChip(s) {
   const p = personaByID(s.persona_id);
   const el = document.createElement(s.line_id ? 'a' : 'span');
@@ -1143,6 +1146,8 @@ $('annot-new').addEventListener('submit', (e) => {
     closeNew();
     await loadAnnotations();
     focusItem(saved.id, true);
+    const said = $('annot-list').querySelector(`li[data-id="${saved.id}"] .annot-error`);
+    if (said) said.textContent = noticeText(saved.notices);
   })().catch((err) => { $('annot-status').textContent = 'Not saved: ' + err.message; });
 });
 
@@ -1370,9 +1375,10 @@ function newItem(id) {
     (async () => {
       const attachments = await readImages(form.querySelector('input[type=file]'));
       const body = form.querySelector('textarea').value;
-      if (!(await sendJSON('POST', api + '/annotations/' + id + '/messages', { body, attachments }))) return;
+      const sent = await sendJSON('POST', api + '/annotations/' + id + '/messages', { body, attachments });
+      if (!sent) return;
       form.reset();
-      form.querySelector('.annot-error').textContent = '';
+      form.querySelector('.annot-error').textContent = noticeText(sent.notices);
       await loadAnnotations();
     })().catch((err) => { form.querySelector('.annot-error').textContent = 'Not sent: ' + err.message; });
   });
@@ -1420,6 +1426,15 @@ function fillItem(li, a) {
       img.alt = 'Image from ' + m.author;
       img.loading = 'lazy';
       item.append(img);
+    }
+    // 009-AC29: the turns this message's @mentions queued, live from the agent state.
+    const live = (agent.note_mentions || []).filter((s) => s.message_id === m.id);
+    const states = live.length ? live : m.mentions || [];
+    if (states.length) {
+      const box = document.createElement('div');
+      box.className = 'mentions';
+      box.append(...states.map(mentionChip));
+      item.append(box);
     }
     return item;
   }));
@@ -1687,7 +1702,7 @@ function renderAgent() {
       name.className = 'pname';
       const word = document.createElement('span');
       word.className = 'pstate';
-      b.append(led, badge, name, word);
+      b.append(led, badge, name, watchIcon(), word);
       // A right-click, or a long press on a touch screen, opens that persona's sheet (009-AC4). iOS fires
       // no contextmenu: a press held 500 ms does it there, and the click that follows is dropped.
       let held = 0;
@@ -1720,7 +1735,8 @@ function renderAgent() {
     const st = personaState(p);
     const why = whyNot(p, st);
     b.style.setProperty('--persona', p.colour);
-    b.setAttribute('aria-label', 'Ask ' + p.name);
+    b.setAttribute('aria-label', 'Ask ' + p.name + (p.watches_notes ? ', watches the notes' : ''));
+    markWatch(b.querySelector('.watch'), p.watches_notes);
     b.dataset.name = p.name;
     b.querySelector('.badge').textContent = p.badge;
     b.querySelector('.pname').textContent = p.name;
@@ -1744,6 +1760,20 @@ function renderAgent() {
   renderChain();
   renderParallel();
   renderPersonas();
+  renderWatcher();
+}
+
+// renderWatcher names the notes watcher above Notes, and redraws the notes' chips when a turn they
+// queued moves on (009-AC29, 009-AC31).
+let noteChipsSeen = '';
+function renderWatcher() {
+  const w = agent.personas.find((p) => p.watches_notes);
+  $('notes-watcher').hidden = !w;
+  $('notes-watcher').textContent = w ? w.badge + ' ' + w.name + ' watches the notes' : '';
+  const chips = JSON.stringify(agent.note_mentions || []);
+  if (chips === noteChipsSeen) return;
+  noteChipsSeen = chips;
+  renderAnnotations();
 }
 
 // renderParallel shows the room's parallel mode; only the host switches it (003-AC20).
@@ -2025,8 +2055,13 @@ function personaForm(p) {
   const selfCall = field('', self);
   selfCall.className = 'check';
   selfCall.append('Can follow up on its own: its own @' + p.name + ' gives it another answer');
+  const watches = input('watches_notes', '', { type: 'checkbox', checked: !!p.watches_notes, defaultChecked: !!p.watches_notes });
+  const watch = field('', watches);
+  watch.className = 'check';
+  watch.append('Watches the notes');
   const next = nextTrigger(p).trim();
   const triggers = panel('triggers', grid(field('Speaks up', speaks), everyField), ...(next ? [hint(next)] : []), selfCall,
+    watch, hint('Answers note threads that name no persona, ' + agent.notes_watch_delay + ' s after the last new message.'),
     hint('An answer that names another persona makes it answer next. These auto turns pause at the room\'s limit of '
       + agent.chain.budget + ', set in Personas.'));
   // Plugins join the skills here in Phase 2.
@@ -2232,7 +2267,14 @@ function formFields(form) {
   const v = (name) => form.elements.namedItem(name).value;
   return { name: v('name'), badge: v('badge'), colour: v('colour'), model: v('model'), effort: v('effort'), text: v('text'),
     ...triggerFields(v('trigger'), Number(v('every'))), self_call: form.elements.namedItem('self_call').checked,
-    autocompact: v('autocompact') ? Math.round(Number(v('autocompact')) * 1000) : 0 };
+    autocompact: v('autocompact') ? Math.round(Number(v('autocompact')) * 1000) : 0, ...watchField(form) };
+}
+
+// watchField sends the notes watcher role only when the form changed it: a sheet drawn before
+// someone moved the role must not take it back (009-AC31).
+function watchField(form) {
+  const w = /** @type {HTMLInputElement} */ (form.elements.namedItem('watches_notes'));
+  return w.checked === w.defaultChecked ? {} : { watches_notes: w.checked };
 }
 
 // triggerFields is the persona's automatic trigger as the API takes it: the one chosen at n, the
@@ -2267,6 +2309,20 @@ function triggerWords(p) {
   return 'on mention only';
 }
 
+// watchIcon marks the notes watcher on its pill and its row; the label sits on the pill or row (009-AC31).
+function watchIcon() {
+  const el = span('watch', '', 'Watches the notes');
+  el.setAttribute('aria-hidden', 'true');
+  el.hidden = true;
+  return el;
+}
+
+// markWatch shows el, a watchIcon, for the notes watcher. Empty when hidden: a row's text is read whole.
+function markWatch(el, on) {
+  el.hidden = !on;
+  el.textContent = on ? '👁' : '';
+}
+
 // rowState is the list's word for a persona's state (009-AC1).
 const rowState = (p) => ({ pending: 'waiting for approval', busy: 'working', queued: 'queued', on: 'ready' }[personaState(p).cls] || 'offline');
 
@@ -2288,7 +2344,7 @@ function renderPersonas() {
       a.href = '#personas/' + p.id + '/identity';
       const led = span('led', '');
       led.setAttribute('aria-hidden', 'true');
-      a.append(span('badge', ''), span('pr-name', ''), span('pr-meta', ''), led, span('pr-state', ''));
+      a.append(span('badge', ''), span('pr-name', ''), watchIcon(), span('pr-meta', ''), led, span('pr-state', ''));
       li.append(a);
     }
     const a = li.firstElementChild;
@@ -2301,7 +2357,8 @@ function renderPersonas() {
     a.querySelector('.pr-meta').replaceChildren(p.model + ' · ', span('pr-long', 'effort '), p.effort + ' · ' + triggerWords(p));
     a.querySelector('.led').className = 'led ' + personaState(p).cls;
     a.querySelector('.pr-state').textContent = state;
-    a.title = p.name + ': ' + meta + ', ' + state;
+    markWatch(a.querySelector('.watch'), p.watches_notes);
+    a.title = p.name + ': ' + meta + (p.watches_notes ? ', watches the notes' : '') + ', ' + state;
     a.setAttribute('aria-label', a.title);
     return li;
   });

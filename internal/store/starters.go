@@ -43,6 +43,7 @@ type StarterPersona struct {
 	EveryVoice   int      `json:"every_voice,omitempty"`
 	EveryMinutes int      `json:"every_minutes,omitempty"`
 	SelfCall     bool     `json:"self_call,omitempty"`
+	WatchesNotes bool     `json:"watches_notes,omitempty"`
 	Autocompact  int      `json:"autocompact,omitempty"`
 	Skills       []string `json:"skills,omitempty"`
 }

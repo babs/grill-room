@@ -37,7 +37,7 @@ The server writes the prompt when the turn starts and stores it on the turn. The
 4. "This is a new session" when the turn does not resume: the persona's first turn, a fresh session (D15), or a lost session copy. The agent is told to read `transcript/`, oldest first. The first turn of a session started by a handoff is told to read `docs/_handoff-<persona>.md` first (see Handoff).
 5. "Changed since your last turn": lines the persona's last successful turn saw that their author edited or deleted since, as `edited: <the text it saw> → <the text now>` or `deleted: <the text it saw>`. A line edited back to the text the agent saw is left out.
 6. The messages since the persona's last successful turn, with day and time, sender, `(voice)` for speech and `(agent)` for another persona's synthesis. The persona's own syntheses are left out, since its session already holds them. Only the latest 100 KB are quoted; the prompt says how many earlier lines are in `transcript/`.
-7. The annotation threads with a message by anyone but this persona since its last successful turn, in full, with those messages flagged `(new)` and image paths listed.
+7. The annotation threads with a message by anyone but this persona since its last successful turn, in full, with those messages flagged `(new)` and image paths listed. A thread whose participants named other personas, and not this one, is theirs and left out (009-AC30); `annotations.md` still has it. A thread whose `@name` queued this turn comes first, under "You were mentioned in note #<id>" (009-AC29).
 8. On a handoff's last turn, a "Handoff" section asking for `docs/_handoff-<persona>.md`.
 9. "Your final answer is posted in the room as your synthesis."
 
@@ -58,17 +58,19 @@ The prompt opens with who is in the room, from one template, `internal/web/prese
 
 - the room name;
 - when the room has an agent document named `agenda.md`, a line naming it the room's agenda, which every persona aligns on (006-AC14); a room without one gets no such line;
-- the persona itself: its name, the model and effort it runs at on the host's daemon after the cap, and its triggers;
+- the persona itself: its name, the model and effort it runs at on the host's daemon after the cap, and its triggers, ending in `watches the notes` for the room's notes watcher;
 - why it runs, as `Why you are running: <cause>` (003-AC22). The cause is set when the turn is pressed or queued and stored on the turn (`turns.cause`):
 
   | Source | Cause |
   |---|---|
   | a persona's button | `pressed by <name>` |
   | a human's message naming `@persona` | `@mention by <name>: "<first 50 characters of the message>"`, with `…` when cut |
+  | a human's note message naming `@persona` | `@mention in note #<id> by <name>: "<the start of the message>"`, cut with `…` so the line fits |
   | another persona's synthesis naming it | `called by @<persona>` |
   | its "every N rounds" trigger | `every <N> rounds` |
   | its "every N voice lines" trigger, N voice lines after its latest turn started | `every <N> voice lines` |
   | its "every T minutes" trigger, T minutes after its latest turn started, with a voice or text line since and someone here | `every <T> minutes` |
+  | "Watches the notes": note messages by others since its latest turn started, in threads naming no persona, the last one 20 s old (`GRILL_ROOM_NOTES_WATCH_DELAY`) | `new notes: #<id>, #<id>`, ending `, …` past what fits the line |
   | a re-run after a conflict | `re-run after a conflict on <doc>` |
   | the host's "New session with handoff", last turn | `the host <name> asked for a handoff note before a new session` |
   | the new session after it | `handoff from your previous session` |
@@ -115,7 +117,7 @@ The note is an ordinary agent document: the room sees it, and any persona may re
 | synthesis | the final answer of `claude -p` | a room message of kind `agent`, signed with the persona's name and shown with its badge |
 | document edits | writing `docs/<name>.md` or `.html` | a new revision by the persona; annotations re-anchor on it |
 | new documents | a new file in `docs/` | a new agent document by the persona |
-| thread replies | `replies.json`: `[{"annotation": <id>, "body": "...", "status": "done"}]`, `status` optional | an annotation message by the persona; `"done"` also closes the thread |
+| thread replies | `replies.json`: `[{"annotation": <id>, "body": "...", "status": "done"}]`, `status` optional | an annotation message by the persona; `"done"` also closes the thread. Only on a thread that names no persona, or names this one |
 | new annotations | `annotations-new.json`: `[{"doc": "<path>", "exact": "...", "prefix": "...", "suffix": "...", "body": "..."}]` | an annotation by the persona on that quote, with `body` as its first message |
 | calls | `@name` in the synthesis, outside code | a queued turn of that persona, one chain link each; its own name only with self-call on |
 | model and effort | the model and effort the daemon passed, checked against `modelUsage` in `claude -p`'s JSON | shown on the synthesis, stored on the turn |
@@ -136,7 +138,7 @@ Refused or ignored, and listed in a system message after the synthesis:
 
 - any created, changed or deleted path under `uploads/` (AC16);
 - a deleted document, a file in a subdirectory of `docs/`, a name that is not `.md` or `.html`, a document over 2 MB or not UTF-8;
-- a `replies.json` that does not parse, a reply to an unknown annotation, a reply without an id or a body, a `status` other than `"done"`, a close on a thread a participant wrote in during the turn;
+- a `replies.json` that does not parse, a reply to an unknown annotation, a reply without an id or a body, a `status` other than `"done"`, a close on a thread a participant wrote in during the turn, a reply or close on a thread that belongs to other personas (`it belongs to @<persona>`);
 - an `annotations-new.json` that does not parse, an entry without a doc, a quote or a body, an unknown document, a document with no text (PDF, image), a quote not found, entries past the 50th.
 
 Anything else the agent writes, in `transcript/` or at the root, is scratch and is dropped silently.

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -50,6 +51,10 @@ type agentState struct {
 	Chain store.Chain `json:"chain"`
 	// Mentions are where the turns of the room's latest mentions stand, newest first (005-AC4).
 	Mentions []store.MentionState `json:"mentions"`
+	// NoteMentions are the same for the room's latest note mentions, by note message (009-AC29).
+	NoteMentions []store.MentionState `json:"note_mentions"`
+	// NotesWatchDelay is how long, in seconds, the notes watcher waits after the last new note (009-AC32).
+	NotesWatchDelay int `json:"notes_watch_delay"`
 }
 
 // mentionStates bounds the mentions the agent state carries.
@@ -110,7 +115,7 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 		return nil, err
 	}
 	st := &agentState{HostID: r.HostParticipantID, CanTrigger: []int64{}, Daemons: s.connectedDaemons(room), Models: turn.Models, Efforts: turn.Efforts,
-		Chain: r.Chain, ParallelTurns: r.ParallelTurns}
+		Chain: r.Chain, ParallelTurns: r.ParallelTurns, NotesWatchDelay: int(s.opts.NotesWatchDelay / time.Second)}
 	for _, p := range ps {
 		if p.CanTrigger {
 			st.CanTrigger = append(st.CanTrigger, p.ID)
@@ -153,6 +158,9 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 		return nil, err
 	}
 	if st.Mentions, err = s.bus.Store.MentionStates(ctx, room, mentionStates); err != nil {
+		return nil, err
+	}
+	if st.NoteMentions, err = s.bus.Store.NoteMentionStates(ctx, room, mentionStates); err != nil {
 		return nil, err
 	}
 	return st, nil

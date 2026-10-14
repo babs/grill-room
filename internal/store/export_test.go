@@ -168,6 +168,13 @@ func richRoom(t *testing.T, s *Store, id string) (*Participant, *RoomPersona) {
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO message_turns(message_id, persona_id, turn_id) VALUES(?,?,?)`, asked.ID, persona.ID, turn.ID); err != nil {
 		t.Fatal(err)
 	}
+	// 009-AC29, 009-AC31: the note message whose @mention asked for it too, and the notes watcher.
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO annotation_message_turns(message_id, persona_id, turn_id) VALUES(?,?,?)`, ann.Messages[0].ID, persona.ID, turn.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE room_personas SET watches_notes = 1 WHERE id = ?`, persona.ID); err != nil {
+		t.Fatal(err)
+	}
 	say(alice, "after the turn")
 	// 005-AC26: a deleted document travels, flagged.
 	gone, err := s.AddUpload(ctx, &Upload{RoomID: id, ParticipantID: bob.ID, Author: "Bob", Filename: "old.md", ContentType: "text/markdown; charset=utf-8",
@@ -355,7 +362,7 @@ func TestExportImportRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]int{"participants": 3, "messages": 0, "message_versions": 2, "uploads": 3, "documents": 4, "revisions": 4, "annotations": 2,
-		"annotation_messages": 3, "attachments": 1, "personas": 1, "skills": 2, "skill_versions": 1, "sessions": 1, "mentions": 1}
+		"annotation_messages": 3, "attachments": 1, "personas": 1, "skills": 2, "skill_versions": 1, "sessions": 1, "mentions": 1, "note_mentions": 1}
 	msgs, _ := s.Messages(ctx, "orig", 0, 1000)
 	want["messages"] = len(msgs)
 	if !reflect.DeepEqual(rep.Counts, want) || rep.Room == nil || rep.Room.ID != "copy" || rep.Relinked != 1 || rep.LinkedSkills != 1 {
@@ -376,6 +383,23 @@ func TestExportImportRoundTrip(t *testing.T) {
 	}
 	if err != nil || len(chips) != 1 || len(chips[asked]) != 1 || chips[asked][0].Status != "done" || chips[asked][0].LineID != synthesis || synthesis == 0 {
 		t.Fatalf("chips in the copy: %+v %v (asked %d, synthesis %d)", chips, err, asked, synthesis)
+	}
+	// 009-AC29: the copy's note message keeps its chip; 009-AC31: its persona still watches the notes.
+	cps0, _ := s.RoomPersonas(ctx, "copy")
+	canns, _, _ := s.AnnotationsSince(ctx, "copy", 0)
+	var noteChips []MentionState
+	for _, a := range canns {
+		full, _ := s.Annotations(ctx, "copy", a.DocumentID)
+		for _, fa := range full {
+			for _, m := range fa.Messages {
+				if m.Body == "why?" {
+					noteChips = m.Mentions
+				}
+			}
+		}
+	}
+	if len(noteChips) != 1 || noteChips[0].Status != "done" || noteChips[0].LineID != synthesis || len(cps0) != 1 || !cps0[0].WatchesNotes {
+		t.Fatalf("note chips in the copy: %+v, personas %+v", noteChips, cps0)
 	}
 	// 005-AC26: deleted in the copy too.
 	if del, err := s.DeletedDocuments(ctx, "copy"); err != nil || len(del) != 1 || del[0].Name != "old.md" {
@@ -650,7 +674,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"annotations":               "id room_id document_id revision anchor orphaned status version created_at |",
 		"annotation_messages":       "id annotation_id author_kind participant_id author body created_at persona_id |",
 		"attachments":               "id message_id content_type size data created_at |",
-		"room_personas":             "id room_id template_id template_version name badge colour text model effort every_n self_call created_at autocompact pending every_voice every_minutes | cap_decision cap_daemon_id cap_model cap_effort mark_msg_id mark_at_ms",
+		"room_personas":             "id room_id template_id template_version name badge colour text model effort every_n self_call created_at autocompact pending every_voice every_minutes watches_notes | cap_decision cap_daemon_id cap_model cap_effort mark_msg_id mark_at_ms notes_mark",
 		"room_persona_skills":       "persona_id skill_id version |",
 		"skills":                    "id name created_at room_id pending scope | profile_id publisher_id from_starter",
 		"skill_versions":            "skill_id n author description files size sha256 data created_at | id author_id",
@@ -660,6 +684,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"daemons":                   "| id room_id participant_id name token_hash created_at max_model max_effort approve_all",
 		"turn_queue":                "| id room_id persona_id participant_id source fresh created_at rerun_of cause handoff",
 		"message_turns":             "message_id persona_id final_status final_line_id | queue_id turn_id",
+		"annotation_message_turns":  "message_id persona_id final_status final_line_id | queue_id turn_id",
 		"persona_change_requests":   "| id room_id persona_id kind patch requested_by created_at",
 		"document_renames":          "| id document_id message_id from_name to_name created_at",         // the next turn's moves
 		"push_subscriptions":        "| id participant_id endpoint p256dh auth all_messages created_at", // a device's keys: a copy gets none

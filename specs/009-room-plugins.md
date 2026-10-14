@@ -62,10 +62,14 @@ Private repos are fetched by the host's daemon with the host's own git access, a
 
 ### Mentions in notes and the notes watcher (notes, 2026-10-14)
 
-- [ ] **AC29** An `@name` naming a persona in a note message, by a participant, queues that persona's turn, like a chat mention (005-AC4): the message shows "→ @Persona" with the turn's live state, kept after a reload. The cause is `@mention in note #<id> by <name>: "<first 50 characters>"`, and the prompt puts that thread first under "You were mentioned in note #<id>". A participant without "Can ask the AI" gets the same refusal as in the chat.
+- [ ] **AC29** An `@name` naming a persona in a note message, by a participant, queues that persona's turn, like a chat mention (005-AC4): the message shows "→ @Persona" with the turn's live state, kept after a reload. The cause is `@mention in note #<id> by <name>: "<the start of the message, cut to fit the line>"`, and the prompt puts that thread first under "You were mentioned in note #<id>". A participant without "Can ask the AI" gets the same refusal as in the chat.
 - [ ] **AC30** A thread whose messages name one or more personas belongs to them: another persona's prompt leaves it out of the threads it lists as new, and a reply or close it writes to that thread is refused and listed in the turn's report. A thread that names no persona goes to whichever persona runs next, as today. `annotations.md` still lists every thread.
 - [ ] **AC31** The Triggers tab has "Watches the notes", off by default. At most one persona per room has it: turning it on for one turns it off for the previous one, and the room's chat says so. The persona shows a badge in the list and on its pill, and the Documents view says "<Persona> watches the notes".
-- [ ] **AC32** The watcher runs when new note messages arrive in threads that name no persona, once 20 s pass with no new one (each new message restarts the wait). Its own messages and its own new notes never start it. Its cause is `new notes: #<id>, #<id>`. It counts as an automatic turn against the room's auto-turn limit, and waits while the limit is reached or suspended. A watcher already queued or running takes the new messages in its next prompt instead of queuing twice.
+- [ ] **AC32** The watcher runs when new note messages arrive in threads that name no persona, once 20 s pass with no new one (each new message restarts the wait). Its own messages and its own new notes never start it. Its cause is `new notes: #<id>, #<id>`. It counts as an automatic turn against the room's auto-turn limit, and waits while the limit is reached. A watcher already queued or running takes the new messages in its next prompt instead of queuing twice.
+
+### People details card (user, 2026-10-14)
+
+- [ ] **AC36** Hovering or focusing a person in People, or their name on a chat line, shows a details card; on touch, a tap on the person opens it, and `⋯` stays its own target. The card lists the display name (and the earlier name after a rename), roles (you, room admin, AI host, standby host when their app is connected), "Can ask the AI", the audio state (mic live, muted, listening only, room muted, not in audio), transcribed or not, seen ago or here since, and joined at. It takes extra lines (spec 010 adds where transcription runs). It is a non-modal popover or `role=tooltip` tied by `aria-describedby`, closes on Escape, never covers the `⋯` menu, and follows `docs/design.md`. It never shows an IP or a user agent: those stay in `/admin`, super-admin only. Badges stay as they are.
 
 ### Host transfer (notes, 2026-10-14)
 
@@ -118,13 +122,14 @@ Private repos are fetched by the host's daemon with the host's own git access, a
 
 ### Phase 1 — Persona management, note mentions, notes watcher, host transfer
 - Work: compact list, tabbed sheet with deep links, `⋯` menu, Capabilities with skills only; mentions in notes with their chip, thread ownership in the prompt and the result; the watcher setting, its debounce and badge; "Make AI host" for room admins and the super-admin.
-- **Covers**: AC1, AC2, AC3, AC4, AC35, AC29, AC30, AC31, AC32, AC33, AC34
+- **Covers**: AC1, AC2, AC3, AC4, AC35, AC29, AC30, AC31, AC32, AC33, AC34, AC36
 - **Data model impact**: `room_personas.watches_notes` (at most one per room, a partial unique index); note-message mention links (`annotation_message_turns`, like `message_turns`); a `notes_watch` turn source and cause; an audit action for host transfer
 - **DoD**:
   - Playwright at 390 and 1440 px: one-line rows (bounding boxes), each tab's deep link, keyboard-only through tabs and `⋯`; a test listing every control id of the 005 sheet finds each one in the new sheet; the existing persona e2e specs green on the new selectors; before and after screenshots in the tracking file;
   - fake-claude e2e: a note naming `@Secretary` queues Secretary with the chip; the prompt of another persona leaves that thread out; a reply to it from another persona is refused;
   - watcher unit tests with an injected clock: two messages 10 s apart start one turn 20 s after the second; its own reply starts nothing; a thread naming a persona starts nothing; the auto-turn limit stops it; moving the role leaves one watcher;
   - host transfer: room admin (not host) moves the role (204, chat line, audit entry), member 403, no daemon 409, super-admin route; a turn running on the old host finishes there while the next queued turn goes to the new host (two fake daemons);
+  - Playwright: the details card opens on hover, focus and tap, with the right lines for a host, a room admin and a member, and no IP or user agent;
   - one live haiku turn on the lab started by the watcher.
 
 ### Phase 2 — Public plugins: add, pin, snapshot, approval, delivery
@@ -175,6 +180,7 @@ Folded from the notes after the draft (2026-10-14):
 - 006 shipped: "Save as starter" and room creation from a starter are real code, so AC28 extends the starter manifest and `starter_files` (006-AC6) instead of a new store.
 - A thread belongs to a persona when a participant's message in it names that persona; a persona's own `@name` in its reply does not claim the thread (coordinator, overturnable).
 - Under 40rem a persona row reads "sonnet · medium · on mention only" and shows its state as the pill's state dot (shape per state, the word in its accessible name and tooltip), so the trigger always fits (009-AC1; routine call, overturnable).
+- AC36, the People details card, is the user's (2026-10-14); it joins Phase 1 next to the People `⋯` work.
 - AC35, a failed module load says so, was added by the coordinator after the v0.0.15 lab run (routine call, overturnable).
 - The watcher's turns use the room's queue and auto-turn limit, like "every N" turns; a press of the watcher by a human is a normal press (coordinator, overturnable).
 

@@ -25,10 +25,10 @@ func (e *env) why(t *testing.T, r *turnRoom, id int64) string {
 	return ""
 }
 
-// 003-AC22 003-AC25: every way a turn starts names its cause in the preamble, golden: a press, a
-// persona's call, a human @mention quoting the message's start, every N rounds, a re-run after a
-// conflict, and both turns of a handoff. The handoff's new session starts fresh and is told to
-// read the note its last turn wrote.
+// 003-AC22 003-AC25 009-AC29: every way a turn starts names its cause in the preamble, golden: a
+// press, a persona's call, a human @mention quoting the message's start, in the chat or a note,
+// every N rounds, a re-run after a conflict, and both turns of a handoff. The handoff's new
+// session starts fresh and is told to read the note its last turn wrote.
 func TestTurnCauses(t *testing.T) {
 	e := newEnv(t)
 	r := newTurnRoom(t, e)
@@ -48,6 +48,11 @@ func TestTurnCauses(t *testing.T) {
 	call := e.nextTurn(t, r, r.alice)
 	record("call", call)
 	e.finish(t, r, r.alice, call, "Minutes.")
+	// 009-AC29: a note naming a persona, quoted the same way.
+	e.note(t, r, tok, r.ann, "@Secretary is the brown fox in the minutes, or did it get lost on the way?")
+	noted := e.nextTurn(t, r, r.alice)
+	record("note mention", noted)
+	e.finish(t, r, r.alice, noted, "Minuted.")
 
 	e.postBody(t, r, tok, "@Grill is the rollback ready for Friday, and who signs the release notes before we ship?")
 	mention := e.nextTurn(t, r, r.alice)

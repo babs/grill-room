@@ -55,8 +55,8 @@ func (s *Server) controlChain(w http.ResponseWriter, r *http.Request, sess sessi
 	writeJSON(w, http.StatusOK, c)
 }
 
-// mentionQuote is how much of a mentioning message the called persona's preamble quotes, short
-// enough for the line to fit presenceLineMax with a short name (003-AC22).
+// mentionQuote is the most of a mentioning message the called persona's preamble quotes; less when
+// the rest of the cause leaves less room on the line (003-AC22, 009-AC29).
 const mentionQuote = 50
 
 // mentionNotice tells only the author of a message why a persona it names will not run (005-AC3).
@@ -80,7 +80,23 @@ const (
 // returns, for m's author only, why each named persona will not run and which names match nobody
 // (005-AC3).
 func (s *Server) mentionTurns(ctx context.Context, p *store.Participant, m *store.Message) []mentionNotice {
-	if !strings.Contains(m.Body, "@") {
+	return s.callMentioned(ctx, p, m.Body, "", func(ctx context.Context, q *store.QueuedTurn) error {
+		return s.bus.Store.EnqueueMention(ctx, m.ID, q)
+	})
+}
+
+// noteMentionTurns is mentionTurns for message m of note thread ann: the same rules, a cause that
+// names the note, and the link on the note message (009-AC29).
+func (s *Server) noteMentionTurns(ctx context.Context, p *store.Participant, ann int64, m *store.AnnotationMessage) []mentionNotice {
+	return s.callMentioned(ctx, p, m.Body, fmt.Sprintf(" in note #%d", ann), func(ctx context.Context, q *store.QueuedTurn) error {
+		return s.bus.Store.EnqueueNoteMention(ctx, m.ID, q)
+	})
+}
+
+// callMentioned queues, through enqueue, a turn of each persona body names, written by p where
+// says (" in note #3", or "" for the chat), and returns the notices for p.
+func (s *Server) callMentioned(ctx context.Context, p *store.Participant, body, where string, enqueue func(context.Context, *store.QueuedTurn) error) []mentionNotice {
+	if !strings.Contains(body, "@") {
 		return nil
 	}
 	ctx = context.WithoutCancel(ctx)
@@ -89,8 +105,8 @@ func (s *Server) mentionTurns(ctx context.Context, p *store.Participant, m *stor
 		s.log.Error("mention_failed", zap.String("room", p.RoomID), zap.Error(err))
 		return nil
 	}
-	notices := s.unknownMentions(ctx, p.RoomID, m.Body, personas)
-	called := mentioned(m.Body, personas)
+	notices := s.unknownMentions(ctx, p.RoomID, body, personas)
+	called := mentioned(body, personas)
 	if len(called) == 0 {
 		return notices
 	}
@@ -124,15 +140,12 @@ func (s *Server) mentionTurns(ctx context.Context, p *store.Participant, m *stor
 		s.log.Error("mention_failed", zap.String("room", room.ID), zap.Error(err))
 		return notices
 	}
-	quote := oneLine(m.Body)
-	if r := []rune(quote); len(r) > mentionQuote {
-		quote = string(r[:mentionQuote]) + "…"
-	}
-	cause := fmt.Sprintf("@mention by %s: %q", oneLine(p.Name), quote)
+	prefix := fmt.Sprintf("@mention%s by %s: ", where, oneLine(p.Name))
+	cause := prefix + `"` + fitQuote(oneLine(body), causeMax-len([]rune(prefix))-2) + `"`
 	s.turnMu.Lock()
 	for _, persona := range runnable {
 		q := &store.QueuedTurn{RoomID: room.ID, PersonaID: persona.ID, ParticipantID: p.ID, Cause: cause}
-		err := s.bus.Store.EnqueueMention(ctx, m.ID, q)
+		err := enqueue(ctx, q)
 		// ErrNotFound: removed since the list was read, so no longer a name to explain.
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			s.log.Error("queue_turn_failed", zap.String("room", room.ID), zap.Int64("persona", persona.ID), zap.Error(err))
@@ -143,6 +156,16 @@ func (s *Server) mentionTurns(ctx context.Context, p *store.Participant, m *stor
 	s.bus.Notify(room.ID)
 	s.drain(ctx, room.ID)
 	return notices
+}
+
+// fitQuote cuts quote to at most n runes, mentionQuote at most, its last one "…" when cut; a name too
+// long to leave room still gets a few words, which the preamble's line cut then trims.
+func fitQuote(quote string, n int) string {
+	n = max(min(n, mentionQuote+1), 10)
+	if r := []rune(quote); len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+	return quote
 }
 
 // unknownMentions returns a notice for each distinct @name of body that names no persona of the

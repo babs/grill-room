@@ -325,14 +325,18 @@ func (s *Store) StartTurn(ctx context.Context, t *Turn, parallel bool) error {
 	if err := pinTurnSkills(ctx, tx, t.RoomID, t.ID, t.PersonaID); err != nil {
 		return err
 	}
-	// 006-AC18: the persona's voice-line count and timer start again from what this turn reads.
-	if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET mark_msg_id = ?, mark_at_ms = ? WHERE id = ?`,
-		t.MessageCursor, t.StartedAt.UnixMilli(), t.PersonaID); err != nil {
+	// 006-AC18: the persona's voice-line count and timer start again from what this turn reads;
+	// 009-AC32: so does the notes watcher's wait.
+	if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET mark_msg_id = ?, mark_at_ms = ?, notes_mark = max(notes_mark, ?) WHERE id = ?`,
+		t.MessageCursor, t.StartedAt.UnixMilli(), t.AnnotationCursor, t.PersonaID); err != nil {
 		return fmt.Errorf("start turn: %w", err)
 	}
 	if t.QueueID != 0 {
-		if _, err := tx.ExecContext(ctx, `UPDATE message_turns SET turn_id = ? WHERE queue_id = ?`, t.ID, t.QueueID); err != nil {
-			return fmt.Errorf("start turn: %w", err)
+		for _, table := range mentionTables {
+			//nolint:gosec // table is one of mentionTables, never user input
+			if _, err := tx.ExecContext(ctx, `UPDATE `+table+` SET turn_id = ? WHERE queue_id = ?`, t.ID, t.QueueID); err != nil {
+				return fmt.Errorf("start turn: %w", err)
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {

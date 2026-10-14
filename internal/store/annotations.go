@@ -62,6 +62,8 @@ type AnnotationMessage struct {
 	Body        string       `json:"body"`
 	CreatedAt   time.Time    `json:"created_at"`
 	Attachments []Attachment `json:"attachments"`
+	// Mentions are the turns its @mentions queued, where each stands (009-AC29).
+	Mentions []MentionState `json:"mentions,omitempty"`
 }
 
 // Attachment is an image on an annotation message.
@@ -80,6 +82,8 @@ type NewMessage struct {
 	PersonaID     int64
 	Author        string
 	Body          string
+	// At is when it was written, now when zero: the server's clock times the notes watcher (009-AC32).
+	At time.Time
 	// Attachments need ContentType and Data; the caller has checked both.
 	Attachments []Attachment
 }
@@ -187,8 +191,12 @@ func insertAnnotationMessage(ctx context.Context, tx *sql.Tx, roomID string, ann
 			return nil, ErrRoomFull
 		}
 	}
+	at := msg.At
+	if at.IsZero() {
+		at = time.Now()
+	}
 	m := &AnnotationMessage{AnnotationID: annID, By: ByAgent, ParticipantID: msg.ParticipantID, PersonaID: msg.PersonaID, Author: msg.Author, Body: msg.Body,
-		CreatedAt: time.Now().UTC(), Attachments: []Attachment{}}
+		CreatedAt: at.UTC(), Attachments: []Attachment{}}
 	var pid any
 	if msg.ParticipantID != 0 {
 		m.By, pid = ByParticipant, msg.ParticipantID
@@ -234,7 +242,12 @@ func (s *Store) SetAnnotationStatus(ctx context.Context, roomID string, annID in
 // Annotations lists the annotations of a document of room, oldest first, with their threads.
 // Attachments come without their data.
 func (s *Store) Annotations(ctx context.Context, roomID string, docID int64) ([]Annotation, error) {
-	return s.loadAnnotations(ctx, false, `a.room_id = ? AND a.document_id = ?`, roomID, docID)
+	const cond = `a.room_id = ? AND a.document_id = ?`
+	out, err := s.loadAnnotations(ctx, false, cond, roomID, docID)
+	if err != nil {
+		return nil, err
+	}
+	return out, s.noteMentions(ctx, out, cond, roomID, docID)
 }
 
 // AnnotationsSince is what the agent reads at the start of a turn: every annotation of room with

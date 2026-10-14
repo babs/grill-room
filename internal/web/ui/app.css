@@ -72,6 +72,8 @@ button.persona { box-shadow: inset 0 0 0 1px var(--border-strong); }
 button.persona[aria-disabled=true] { opacity: .7; }
 button.persona .badge { padding: 0; background: none; font-size: var(--fs-md); }
 button.persona .pstate { color: var(--text-muted); font-weight: 400; font-size: var(--fs-xs); }
+.watch { flex: none; font-size: var(--fs-xs); }
+#notes-watcher { margin: 0 0 var(--sp-2); }
 .led { flex: none; width: .75rem; height: .75rem; border-radius: 50%; border: 2px solid var(--dot-ring); background: transparent; }
 .led.on { background: var(--success-dot); border-width: 1px; }
 .led.busy { background: linear-gradient(90deg, var(--accent) 50%, transparent 50%); }

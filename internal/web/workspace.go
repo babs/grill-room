@@ -72,6 +72,8 @@ type promptInput struct {
 	Msgs    []store.Message
 	Changes []store.MessageChange
 	Anns    []store.Annotation
+	// Named are the threads of Anns whose @mentions called this turn: they come first (009-AC29).
+	Named []int64
 	// AnnCursor is the last annotation message the persona's previous turn saw.
 	AnnCursor int64
 	Paths     map[int64]string
@@ -160,9 +162,16 @@ func buildPrompt(in promptInput) string {
 		}
 		b.WriteString("\n")
 	}
-	if len(anns) > 0 {
+	for _, id := range in.Named {
+		if i := slices.IndexFunc(anns, func(a store.Annotation) bool { return a.ID == id }); i >= 0 {
+			fmt.Fprintf(&b, "## You were mentioned in note #%d\n\n", id)
+			writeThread(&b, anns[i], in.Paths, in.AnnCursor, in.Self)
+		}
+	}
+	rest := slices.DeleteFunc(slices.Clone(anns), func(a store.Annotation) bool { return slices.Contains(in.Named, a.ID) })
+	if len(rest) > 0 {
 		b.WriteString("## Annotation threads with new messages\n\n")
-		for _, a := range anns {
+		for _, a := range rest {
 			writeThread(&b, a, in.Paths, in.AnnCursor, in.Self)
 		}
 	}

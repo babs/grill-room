@@ -279,8 +279,19 @@ func (s *Server) starterSetup(ctx context.Context, profileID int64, name string,
 		}
 		personas[i] = p
 	}
+	if err := oneWatcher(personas); err != nil {
+		return "", nil, err
+	}
 	setup.Personas = personas
 	return room, setup, nil
+}
+
+// oneWatcher refuses personas of which more than one watches the notes (009-AC31).
+func oneWatcher(ps []store.StarterPersona) error {
+	if len(slices.DeleteFunc(slices.Clone(ps), func(p store.StarterPersona) bool { return !p.WatchesNotes })) > 1 {
+		return badRequest("only one persona may watch the notes")
+	}
+	return nil
 }
 
 // keep returns the entries of all whose name is in names, all of them for nil names; a name of no
@@ -400,6 +411,9 @@ func starterFrom(base *store.StarterManifest, q *starterSaveReq) (*store.Starter
 			}
 		}
 		m.Personas = append(m.Personas, p)
+	}
+	if err := oneWatcher(m.Personas); err != nil {
+		return nil, nil, err
 	}
 	var kept []string
 	for _, d := range m.Documents {

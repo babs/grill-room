@@ -109,6 +109,9 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	if opts.MaxResultBytes <= 0 {
 		opts.MaxResultBytes = defaultMaxResult
 	}
+	if opts.NotesWatchDelay <= 0 {
+		opts.NotesWatchDelay = DefaultNotesWatchDelay
+	}
 	if opts.MagicLinkTTL <= 0 {
 		opts.MagicLinkTTL = DefaultMagicLinkTTL
 	}

@@ -33,6 +33,7 @@ const (
 	fileSkillVersions      = "skill_versions.jsonl"
 	fileSessions           = "sessions.jsonl"
 	fileMentions           = "mentions.jsonl"
+	fileNoteMentions       = "note_mentions.jsonl"
 )
 
 type xRoom struct {
@@ -51,17 +52,19 @@ type xPersona struct {
 	PersonaFields
 	// Template is the library template the persona was copied from: its ref, and its preset key
 	// for a shipped one, which every instance has.
-	Template        int64    `json:"template,omitempty"`
-	TemplatePreset  string   `json:"template_preset,omitempty"`
-	TemplateVersion int      `json:"template_version"`
-	EveryN          int      `json:"every_n,omitempty"`
-	EveryVoice      int      `json:"every_voice,omitempty"`
-	EveryMinutes    int      `json:"every_minutes,omitempty"`
-	SelfCall        bool     `json:"self_call"`
-	Autocompact     int      `json:"autocompact"`
-	CreatedAt       string   `json:"created_at"`
-	Skills          []xPin   `json:"skills"`
-	Resume          *xResume `json:"resume,omitempty"`
+	Template        int64  `json:"template,omitempty"`
+	TemplatePreset  string `json:"template_preset,omitempty"`
+	TemplateVersion int    `json:"template_version"`
+	EveryN          int    `json:"every_n,omitempty"`
+	EveryVoice      int    `json:"every_voice,omitempty"`
+	EveryMinutes    int    `json:"every_minutes,omitempty"`
+	SelfCall        bool   `json:"self_call"`
+	// WatchesNotes is optional: an archive from before 009 has none, and the format stays (009-AC31).
+	WatchesNotes bool     `json:"watches_notes,omitempty"`
+	Autocompact  int      `json:"autocompact"`
+	CreatedAt    string   `json:"created_at"`
+	Skills       []xPin   `json:"skills"`
+	Resume       *xResume `json:"resume,omitempty"`
 }
 
 // xPin is a skill a persona has on, at a version.
@@ -377,7 +380,7 @@ func exportRoom(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) (*
 		return nil, err
 	}
 	for _, step := range []func(context.Context, *sql.Tx, string, *exportDir) error{
-		exportParticipants, exportMessages, exportMentions, exportDocuments, exportAnnotations, exportSkills, exportSessions,
+		exportParticipants, exportMessages, exportMentions, exportDocuments, exportAnnotations, exportNoteMentions, exportSkills, exportSessions,
 	} {
 		if err := step(ctx, tx, roomID, d); err != nil {
 			return nil, err
@@ -405,6 +408,26 @@ func exportMentions(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir
 	return l.flush()
 }
 
+// exportNoteMentions writes how each note message's @mentions ended, as exportMentions does for
+// lines, on the documents the export carries (009-AC29).
+func exportNoteMentions(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) error {
+	ms, err := queryMentions(ctx, tx, noteMentionCols+` JOIN room_personas p ON p.id = mt.persona_id
+		WHERE a.room_id = ? AND p.pending = 0 ORDER BY mt.message_id, mt.persona_id`, roomID)
+	if err != nil {
+		return err
+	}
+	l, err := d.lines(fileNoteMentions)
+	if err != nil {
+		return err
+	}
+	for _, m := range ms {
+		if err := l.add(xMention{Message: m.MessageID, Persona: m.PersonaID, Status: m.Status, Line: m.LineID}); err != nil {
+			return err
+		}
+	}
+	return l.flush()
+}
+
 // exportPersonas lists the room's personas with their pins and resume points. A persona still
 // waiting for the host's approval is left out, with the held changes: they are requests, not room
 // content, and the importing room has another host.
@@ -415,14 +438,14 @@ func exportPersonas(ctx context.Context, tx *sql.Tx, roomID string) ([]xPersona,
 		var tpl sql.NullInt64
 		var preset sql.NullString
 		if err := rows.Scan(&p.Ref, &tpl, &preset, &p.TemplateVersion, &p.Name, &p.Badge, &p.Colour, &p.Text, &p.Model, &p.Effort,
-			&p.EveryN, &p.SelfCall, &p.Autocompact, &p.CreatedAt, &p.EveryVoice, &p.EveryMinutes); err != nil {
+			&p.EveryN, &p.SelfCall, &p.Autocompact, &p.CreatedAt, &p.EveryVoice, &p.EveryMinutes, &p.WatchesNotes); err != nil {
 			return fmt.Errorf("export personas: %w", err)
 		}
 		p.Template, p.TemplatePreset, p.Skills = tpl.Int64, preset.String, []xPin{}
 		out = append(out, p)
 		return nil
 	}, `SELECT p.id, p.template_id, t.preset, p.template_version, p.name, p.badge, p.colour, p.text, p.model, p.effort,
-		COALESCE(p.every_n, 0), p.self_call, p.autocompact, p.created_at, COALESCE(p.every_voice, 0), COALESCE(p.every_minutes, 0)
+		COALESCE(p.every_n, 0), p.self_call, p.autocompact, p.created_at, COALESCE(p.every_voice, 0), COALESCE(p.every_minutes, 0), p.watches_notes
 		FROM room_personas p LEFT JOIN persona_templates t ON t.id = p.template_id WHERE p.room_id = ? AND p.pending = 0 ORDER BY p.id`, roomID)
 	if err != nil {
 		return nil, err

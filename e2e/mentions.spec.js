@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon, menuItem, sandboxHas, openStrip } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, menuItem, sandboxHas, openStrip, addSecretary, upload, commentOnDocument, sandboxPrompts } from './helpers.js';
 
 async function say(page, text) {
   await page.locator('#body').fill(text);
@@ -127,6 +127,43 @@ test('mentions: turn states, stop, pending and offline', async ({ browser, reque
     await expect(alice.locator('#agent-status')).toHaveText('No one runs the AI for this room right now.', { timeout: 30_000 });
     await say(alice, '@grill still there?');
     await expect(line(alice, 'still there').locator('.notice')).toHaveText('@Grill: no host is online to run it. Only you see this.');
+  } finally {
+    daemon.cleanup();
+  }
+});
+
+// 009-AC29 009-AC30 with the real daemon and the fake claude: a note naming @Secretary queues it,
+// and the note message shows the turn's chip, kept after a reload. The thread is the Secretary's:
+// Grill's prompt leaves it out of the new threads, and Grill's reply to it (the fake's FAKE_REPLY
+// answers the first thread of annotations.md) is refused and reported in the chat.
+test('mentions: a note names the persona that owns its thread', async ({ browser, request, baseURL }) => {
+  test.setTimeout(240_000);
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const panel = await addSecretary(alice);
+  await panel.getByRole('button', { name: 'Close' }).click();
+  const daemon = startDaemon(`${baseURL}/r/${room.id}`);
+  try {
+    await pairDaemon(alice, daemon);
+    await expect(alice.locator('button.persona[data-name="Secretary"] .led')).toHaveAttribute('aria-label', 'Secretary ready', { timeout: 30_000 });
+    await upload(alice, 'plan.md', 'text/markdown', '# Rollout plan\n\nShip behind a flag.\n');
+    await expect(alice.frameLocator('#doc-frame iframe').locator('h1')).toHaveText('Rollout plan');
+    await commentOnDocument(alice, '@Secretary minute the rollout');
+    const chip = alice.locator('#annot-list .annot-msg', { hasText: 'minute the rollout' }).locator('.mention-turn');
+    await expect(chip).toHaveText('→ @Secretary · done', { timeout: 120_000 });
+    await alice.reload();
+    await alice.locator('#documents').getByRole('button', { name: 'plan.md' }).click();
+    await expect(chip).toHaveText('→ @Secretary · done');
+
+    await commentOnDocument(alice, 'Is the flag named?');
+    await say(alice, 'FAKE_REPLY to the first note');
+    await alice.getByRole('button', { name: 'Ask Grill' }).click();
+    const docs = await (await alice.request.get(`/api/rooms/${room.id}/documents`)).json();
+    const notes = await (await alice.request.get(`/api/rooms/${room.id}/documents/${docs.find((d) => d.name === 'plan.md').id}/annotations`)).json();
+    const [owned, free] = notes.map((a) => a.id);
+    await expect(alice.locator('#messages')).toContainText(`ignored: reply to annotation ${owned}: it belongs to @Secretary`, { timeout: 120_000 });
+    const grill = sandboxPrompts(daemon).filter((p) => p.includes('You: @Grill')).at(-1);
+    expect(grill).toContain(`### Annotation ${free} `);
+    expect(grill).not.toContain(`### Annotation ${owned} `);
   } finally {
     daemon.cleanup();
   }

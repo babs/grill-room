@@ -224,7 +224,7 @@ func (im *importer) run() error {
 	}
 	for _, step := range []func() error{
 		func() error { return im.personasStep(x.Personas) },
-		im.participantsStep, im.messagesStep, im.mentionsStep, im.documentsStep, im.annotationsStep, im.skillsStep,
+		im.participantsStep, im.messagesStep, im.mentionsStep, im.documentsStep, im.annotationsStep, im.noteMentionsStep, im.skillsStep,
 		func() error { return im.pinsAndResume(x.Personas) },
 		im.sessionsStep, im.seatStep,
 	} {
@@ -233,8 +233,8 @@ func (im *importer) run() error {
 		}
 	}
 	// The imported lines are history, not new activity for the triggers (006-AC18).
-	if _, err := im.tx.ExecContext(im.ctx, `UPDATE room_personas SET mark_msg_id = (SELECT COALESCE(MAX(id), 0) FROM messages WHERE room_id = ?)
-		WHERE room_id = ?`, im.room, im.room); err != nil {
+	if _, err := im.tx.ExecContext(im.ctx, `UPDATE room_personas SET mark_msg_id = (SELECT COALESCE(MAX(id), 0) FROM messages WHERE room_id = ?),
+		notes_mark = `+latestNote+` WHERE room_id = ?`, im.room, im.room); err != nil {
 		return fmt.Errorf("import room: %w", err)
 	}
 	used, _, err := roomUsage(im.ctx, im.tx, im.room, im.o.DefaultQuota)
@@ -393,15 +393,18 @@ func (im *importer) personasStep(ps []xPersona) error {
 			Autocompact: p.Autocompact}); err != nil {
 			return refuseImport("persona %s: %v", p.Name, err)
 		}
+		if p.WatchesNotes && slices.ContainsFunc(ps, func(o xPersona) bool { return o.WatchesNotes && o.Ref < p.Ref }) {
+			return refuseImport("persona %s: another persona watches the notes already", p.Name)
+		}
 		tpl, err := im.template(p)
 		if err != nil {
 			return err
 		}
 		var id int64
 		err = im.tx.QueryRowContext(im.ctx, `INSERT INTO room_personas(room_id, template_id, template_version, name, badge, colour, text, model, effort,
-			every_n, self_call, autocompact, created_at, every_voice, every_minutes, mark_msg_id, mark_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,`+markNow+`) RETURNING id`,
+			every_n, self_call, autocompact, created_at, every_voice, every_minutes, watches_notes, mark_msg_id, mark_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,`+markNow+`) RETURNING id`,
 			append(append([]any{im.room, tpl, p.TemplateVersion}, p.PersonaFields.args()...), nullID(int64(p.EveryN)), p.SelfCall, p.Autocompact, p.CreatedAt,
-				nullInt(p.EveryVoice), nullInt(p.EveryMinutes), time.Now().UnixMilli())...).Scan(&id)
+				nullInt(p.EveryVoice), nullInt(p.EveryMinutes), p.WatchesNotes, time.Now().UnixMilli())...).Scan(&id)
 		if err != nil {
 			return refuseImport("persona %s: %v", p.Name, err)
 		}
@@ -661,10 +664,24 @@ func (im *importer) mentionsStep() error {
 	if im.o.Format < 2 {
 		return nil
 	}
+	return im.linkMentions(fileMentions, "message_turns", "mentions", im.messages.get)
+}
+
+// noteMentionsStep does the same for the note messages (009-AC29). The file is optional in format
+// 2: an archive from before 009 has none.
+func (im *importer) noteMentionsStep() error {
+	if _, err := im.root.Stat(fileNoteMentions); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return im.linkMentions(fileNoteMentions, "annotation_message_turns", "note_mentions", im.annMessages.get)
+}
+
+// linkMentions reads file into table, its message refs mapped by message.
+func (im *importer) linkMentions(file, table, count string, message func(int64) (int64, bool)) error {
 	final := map[string]string{"done": "done", "failed": "failed", "stopped": "stopped", "cancelled": MentionCancelled,
 		"queued": MentionCancelled, "running": MentionCancelled}
-	return eachLine(im, fileMentions, func(x *xMention) error {
-		msg, ok := im.messages.get(x.Message)
+	return eachLine(im, file, func(x *xMention) error {
+		msg, ok := message(x.Message)
 		status, known := final[x.Status]
 		persona, isPersona := im.personas[x.Persona]
 		if !ok || !known || !isPersona {
@@ -678,12 +695,13 @@ func (im *importer) mentionsStep() error {
 			}
 			line = id
 		}
-		_, err := im.tx.ExecContext(im.ctx, `INSERT INTO message_turns(message_id, persona_id, final_status, final_line_id) VALUES(?,?,?,?)`,
+		//nolint:gosec // table is one of mentionTables, never user input
+		_, err := im.tx.ExecContext(im.ctx, `INSERT INTO `+table+`(message_id, persona_id, final_status, final_line_id) VALUES(?,?,?,?)`,
 			msg, persona, status, line)
 		if err != nil {
 			return refuseImport("mention of message %d: %v", x.Message, err)
 		}
-		im.rep.Counts["mentions"]++
+		im.rep.Counts[count]++
 		return nil
 	})
 }

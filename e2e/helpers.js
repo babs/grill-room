@@ -359,3 +359,39 @@ export async function newRoomEditor(page) {
   await expect(page.locator('#starter-preview')).toContainText('Blank');
   await page.getByRole('button', { name: 'Use this starter' }).click();
 }
+
+// addSecretary adds the Secretary from the library in the personas panel, applies the trigger
+// fields given on its Triggers tab (009-AC2), and leaves the panel open.
+export async function addSecretary(page, fields = {}) {
+  const panel = page.locator('#personas');
+  await menuItem(page, 'Personas');
+  await panel.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
+  await panel.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(personaRow(page, 'Secretary')).toHaveCount(1);
+  if (fields.everyN) {
+    const sec = await personaSheet(page, 'Secretary', 'Triggers');
+    await sec.getByLabel('Speaks up').selectOption('every_n');
+    await sec.getByLabel('N', { exact: true }).fill(String(fields.everyN));
+    await sec.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(sec.locator('#persona-status')).toHaveText('Secretary saved. It applies from its next turn.');
+    await sec.getByRole('button', { name: 'Close' }).click();
+    // 009-AC1: the row says the trigger in words.
+    await expect(personaRow(page, 'Secretary').locator('.pr-meta')).toHaveText(`sonnet · effort medium · every ${fields.everyN} answers`);
+  }
+  return panel;
+}
+
+// commentOnDocument saves a whole-document note on the open document (005-AC37 calls them notes).
+export async function commentOnDocument(page, text) {
+  await page.getByRole('button', { name: 'Comment on the document' }).click();
+  await page.getByRole('textbox', { name: 'Annotation', exact: true }).fill(text);
+  await page.locator('#annot-new').getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.locator('#annot-new')).toBeHidden();
+}
+
+// sandboxPrompts returns the prompts of every session in the daemon's sandbox, oldest first in
+// each session: what the fake claude kept of each turn.
+export function sandboxPrompts(daemon) {
+  const out = execFileSync('docker', ['exec', 'grill-room-' + daemon.sandbox, 'sh', '-c', 'cat "$HOME"/.claude/projects/-workspace/*.jsonl'], { encoding: 'utf8' });
+  return out.split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((l) => l.type === 'user').map((l) => l.prompt);
+}
