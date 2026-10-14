@@ -27,6 +27,7 @@ const (
 	ActionRename          = "participant.rename"
 	ActionDocumentDelete  = "document.delete"
 	ActionDocumentRestore = "document.restore"
+	ActionHostTransfer    = "room.host_transfer"
 )
 
 // maxStorageQuota bounds the instance storage quota: 1 PiB.
@@ -130,14 +131,22 @@ type adminParticipant struct {
 	HasProfile bool   `json:"has_profile"`
 	// Client is where the participant connected from (005-AC20): the super-admin's view only.
 	Client *store.Client `json:"client,omitempty"`
+	// Host is the AI host; CanHost, a connected daemon of theirs can take the role (009-AC33).
+	Host    bool `json:"host"`
+	CanHost bool `json:"can_host"`
 }
 
 // roomParticipants lists a room's participants for the super-admin, who appoints room admins among
 // those with a profile (004-AC8).
 func (s *Server) roomParticipants(w http.ResponseWriter, r *http.Request) {
 	room := r.PathValue("room")
-	if _, err := s.bus.Store.Room(r.Context(), room); errors.Is(err, store.ErrNotFound) {
+	rm, err := s.bus.Store.Room(r.Context(), room)
+	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "no such room")
+		return
+	}
+	if err != nil {
+		s.serverError(w, "room_participants_failed", err)
 		return
 	}
 	ps, err := s.bus.Store.Participants(r.Context(), room)
@@ -152,7 +161,8 @@ func (s *Server) roomParticipants(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]adminParticipant, len(ps))
 	for i, p := range ps {
-		out[i] = adminParticipant{ID: p.ID, Name: p.Name, Admin: p.Admin, HasProfile: p.ProfileID != 0}
+		out[i] = adminParticipant{ID: p.ID, Name: p.Name, Admin: p.Admin, HasProfile: p.ProfileID != 0, Host: p.ID == rm.HostParticipantID}
+		out[i].CanHost = s.canHostDaemon(room, p.ID) != nil
 		if c, ok := cs[p.ID]; ok {
 			out[i].Client = &c
 		}

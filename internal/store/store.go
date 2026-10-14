@@ -70,6 +70,8 @@ type Participant struct {
 	Admin bool `json:"admin"`
 	// LastSeen is when the participant was last active (005-AC7). Set by Participants only.
 	LastSeen *time.Time `json:"last_seen_at,omitempty"`
+	// PreviousName is the name before the latest rename (009-AC36). Set by Participants only.
+	PreviousName string `json:"previous_name,omitempty"`
 }
 
 // Message is one line in a room.
@@ -705,6 +707,9 @@ PRAGMA writable_schema = ON;
 UPDATE sqlite_schema SET sql = replace(sql, '''every_n'', ''call'')', '''every_n'', ''call'', ''notes_watch'')')
 	WHERE type = 'table' AND name = 'turn_queue';
 PRAGMA writable_schema = OFF;
+`, `
+-- 009-AC36: the details card shows a participant's earlier name after a rename.
+ALTER TABLE participants ADD COLUMN previous_name TEXT;
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -1145,7 +1150,8 @@ func (s *Store) ParticipantByToken(ctx context.Context, tokenHash string) (*Part
 func (s *Store) Participants(ctx context.Context, roomID string) ([]Participant, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger, COALESCE(p.profile_id, 0), COALESCE(f.uuid, ''),
-			EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = p.room_id AND a.profile_id = p.profile_id), p.last_seen_at FROM participants p
+			EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = p.room_id AND a.profile_id = p.profile_id), p.last_seen_at,
+			COALESCE(p.previous_name, '') FROM participants p
 		JOIN invites i ON i.id = p.invite_id LEFT JOIN profiles f ON f.id = p.profile_id
 		WHERE p.room_id = ? AND i.revoked_at IS NULL ORDER BY p.id`, roomID)
 	if err != nil {
@@ -1157,7 +1163,7 @@ func (s *Store) Participants(ctx context.Context, roomID string) ([]Participant,
 		var p Participant
 		var joined string
 		var seen sql.NullString
-		if err := rows.Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID, &p.ProfileUUID, &p.Admin, &seen); err != nil {
+		if err := rows.Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID, &p.ProfileUUID, &p.Admin, &seen, &p.PreviousName); err != nil {
 			return nil, fmt.Errorf("scan participant: %w", err)
 		}
 		p.JoinedAt = parseTS(joined)

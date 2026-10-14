@@ -80,6 +80,15 @@ func TestRenameParticipant(t *testing.T) {
 	if got := e.auditLog(t, "?action="+ActionRename).Entries; len(got) != 2 {
 		t.Fatalf("self rename audited: %+v", got)
 	}
+	// 009-AC36: the room keeps the name before the latest rename, for the details card.
+	_, b := bob.do(t, "GET", "/api/rooms/"+room.ID, nil)
+	earlier := map[string]string{}
+	for _, p := range decodeJSON[roomResp](t, b).Participants {
+		earlier[p.Name] = p.PreviousName
+	}
+	if earlier["Bobby"] != "Rob" || earlier["Ali"] != "Alice" || len(earlier) != 2 {
+		t.Fatalf("earlier names %v", earlier)
+	}
 }
 
 // 005-AC1: the short id the presence preamble shows after a human's name comes from their profile,

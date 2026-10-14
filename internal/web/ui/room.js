@@ -46,6 +46,8 @@ const tab = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).sli
 // the STT worker hears.
 let presence = new Map();
 let transcribed = new Set();
+// cardFor is the name the open details card describes (009-AC36).
+let cardFor = null;
 
 function end(text) {
   ended = true;
@@ -258,6 +260,8 @@ function renderMessage(m) {
   if (m.participant_id) {
     li.dataset.pid = m.participant_id;
     li.dataset.sender = m.sender;
+    // Focus shows the details card (009-AC36); not a Tab stop, or a long chat would take one per line.
+    sender.tabIndex = -1;
     nameSender(li, sender);
   }
   meta.append(sender, ' ', timeOf(m.ts));
@@ -1585,7 +1589,13 @@ function connect() {
     renderParticipants();
   });
   es.addEventListener('agent', (e) => {
+    const wasHost = agentSeen && isHost();
     agent = JSON.parse(e.data);
+    // Someone else moved the role away from this participant (009-AC34).
+    if (wasHost && !isHost() && agent.host_by) {
+      const standby = agent.daemons.some((d) => String(d.participant_id) === myID);
+      showNotice(agent.host_by + '.' + (standby ? ' Your AI host app stays connected as a standby.' : ''));
+    }
     // A deep link to a persona's sheet opens once the room's personas are known (009-AC2).
     if (!agentSeen) {
       agentSeen = true;
@@ -2568,11 +2578,20 @@ function personActions(p, id) {
       sendJSON(now.admin ? 'DELETE' : 'PUT', api + '/admins/' + id).then(() => loadRoom()).catch((err) => toast(err.message));
     } });
   }
-  if (other && isHost() && !host && agent.daemons.some((d) => d.participant_id === p.id && d.can_host)) {
-    acts.push({ label: 'Make AI host', run: () => sendJSON('PUT', api + '/host', { participant_id: p.id }).catch((err) => agentError(err.message)) });
+  // The host hands over; a room admin moves the role from someone else, asked first (009-AC33).
+  if (!host && (isHost() || meAdmin) && agent.daemons.some((d) => d.participant_id === p.id && d.can_host)) {
+    acts.push({ label: 'Make AI host', run: () => makeHost(p) });
   }
   if (other && voiceParticipant(id)) acts.push({ volume: true });
   return acts;
+}
+
+async function makeHost(p) {
+  const from = participants.find((x) => x.id === agent.host_participant_id);
+  const standby = from && agent.daemons.some((d) => d.participant_id === from.id);
+  if (!isHost() && !(await grillConfirm('Make ' + p.name + ' the AI host?', 'The personas run on ' + p.name + "'s computer from the next turn"
+    + (standby ? '; ' + from.name + "'s app stays connected as a standby." : '.'), 'Make AI host'))) return;
+  sendJSON('PUT', api + '/host', { participant_id: p.id }).catch((err) => agentError(err.message));
 }
 
 // The person menu, built for the row it opens from; arrows move through it like the document's.
@@ -2623,7 +2642,102 @@ function openPersonMenu(b, p, id, fromPointer) {
 }
 $('person-menu').addEventListener('toggle', (e) => {
   if (e.newState === 'closed' && personFor) personFor.b.setAttribute('aria-expanded', 'false');
+  if (e.newState === 'open') hideCard();
 });
+
+// The details card (009-AC36): hovering or focusing a person in People or their name on a chat
+// line shows it; on touch a tap does. A non-modal tooltip tied by aria-describedby.
+// personCardLines are its lines under the name, in order, each '' to skip: spec 010 adds one.
+const personCardLines = [
+  (p) => (p.previous_name ? 'Earlier name: ' + p.previous_name : ''),
+  (p, id) => 'Roles: ' + personRoles(p, id),
+  (p) => (agent.can_trigger.includes(p.id) || agent.host_participant_id === p.id ? 'Can ask the AI' : ''),
+  (p, id) => 'Audio: ' + cardAudio(id),
+  (p, id) => (transcribed.has(id) ? 'Transcribed' : 'Not transcribed'),
+  (p, id) => cardHere(p, id),
+  (p) => 'Joined ' + new Date(p.joined_at).toLocaleString(),
+];
+
+function personRoles(p, id) {
+  const r = [];
+  if (id === myID) r.push('you');
+  if (p.admin) r.push('room admin');
+  if (agent.host_participant_id === p.id) r.push('AI host');
+  else if (agent.daemons.some((d) => d.participant_id === p.id)) r.push('standby host');
+  return r.join(', ') || 'member';
+}
+
+function cardAudio(id) {
+  if (id !== myID && !presence.get(id)?.here) return 'not in the audio';
+  if (presence.get(id)?.deaf) return 'room muted';
+  return audioState(id).text.toLowerCase();
+}
+
+function cardHere(p, id) {
+  const pr = presence.get(id);
+  if (id === myID || pr?.here) return pr?.here_since ? 'Here since ' + new Date(pr.here_since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Here';
+  return 'Seen ' + ago(pr?.seen_at || p.last_seen_at || p.joined_at);
+}
+
+function showCard(el) {
+  const id = el.closest('li[data-pid]')?.dataset.pid;
+  const p = participants.find((x) => String(x.id) === id);
+  if (!p || $('person-menu').matches(':popover-open')) return;
+  const card = $('person-card');
+  const list = document.createElement('ul');
+  for (const line of personCardLines) {
+    const text = line(p, id);
+    if (!text) continue;
+    const li = document.createElement('li');
+    li.textContent = text;
+    list.append(li);
+  }
+  const name = document.createElement('strong');
+  name.textContent = p.name;
+  card.replaceChildren(name, list);
+  if (cardFor !== el) hideCard();
+  cardFor = el;
+  el.setAttribute('aria-describedby', 'person-card');
+  if (!card.matches(':popover-open')) card.showPopover();
+  // Left of the row's ⋯ column, so it never covers a ⋯; below the name, above it near the bottom.
+  const r = el.getBoundingClientRect();
+  const more = el.closest('li')?.querySelector('.person-more');
+  const right = more && !more.hidden ? more.getBoundingClientRect().left - 4 : innerWidth - 8;
+  card.style.maxWidth = Math.min(20 * parseFloat(getComputedStyle(document.documentElement).fontSize), Math.max(160, right - 8)) + 'px';
+  card.style.left = Math.max(8, Math.min(r.left, right - card.offsetWidth)) + 'px';
+  card.style.top = (r.bottom + 4 + card.offsetHeight > innerHeight - 8 ? r.top - 4 - card.offsetHeight : r.bottom + 4) + 'px';
+}
+
+function hideCard() {
+  if (!cardFor) return;
+  cardFor.removeAttribute('aria-describedby');
+  cardFor = null;
+  $('person-card').hidePopover();
+}
+
+const cardTarget = (t) => (t instanceof Element ? t.closest('#participants .name, #participants-away .name, #messages li[data-pid] > .meta > .sender') : null);
+document.addEventListener('pointerover', (e) => {
+  const el = cardTarget(e.target);
+  if (el && e.pointerType === 'mouse') showCard(el);
+});
+// The pointer may move onto the card and stay there to read it (WCAG 1.4.13).
+document.addEventListener('pointerout', (e) => {
+  if (e.pointerType === 'mouse' && cardFor && cardTarget(e.target) === cardFor && !cardFor.contains(e.relatedTarget)
+    && !$('person-card').contains(e.relatedTarget)) hideCard();
+});
+$('person-card').addEventListener('pointerleave', (e) => {
+  if (e.pointerType === 'mouse' && cardFor && !cardFor.contains(e.relatedTarget)) hideCard();
+});
+document.addEventListener('focusin', (e) => { if (cardTarget(e.target)) showCard(e.target); });
+document.addEventListener('focusout', (e) => { if (e.target === cardFor) hideCard(); });
+// A tap anywhere on a person's row but its ⋯, or on a chat name, opens the card; a tap elsewhere closes it.
+document.addEventListener('click', (e) => {
+  const row = e.target instanceof Element && !e.target.closest('.person-more') ? e.target.closest('#participants li, #participants-away li') : null;
+  const el = row ? row.querySelector('.name') : cardTarget(e.target);
+  if (el) showCard(el);
+  else if (!$('person-card').contains(e.target)) hideCard();
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideCard(); });
 arrowKeys($('person-menu'));
 
 // renderParticipants splits the list into those in the room and those not here (005-AC7). Rows
@@ -2645,7 +2759,9 @@ function renderParticipants() {
       more.className = 'person-more';
       more.textContent = '⋯';
       more.setAttribute('aria-expanded', 'false');
-      li.append(span('voice-dot', ''), span('name', ''), span('tags', ''), more);
+      const name = span('name', '');
+      name.tabIndex = 0;
+      li.append(span('voice-dot', ''), name, span('tags', ''), more);
     }
     const isHere = id === myID || !!presence.get(id)?.here;
     li.querySelector('.name').textContent = p.name;
@@ -2677,6 +2793,9 @@ function renderParticipants() {
     const lis = want.map((r) => r.li);
     if (lis.length !== list.children.length || lis.some((li, i) => list.children[i] !== li)) list.replaceChildren(...lis);
   }
+  // An open details card follows the agent and presence changes that re-render the list.
+  if (cardFor?.isConnected) showCard(cardFor);
+  else if (cardFor) hideCard();
   $('away').hidden = !rows.away.length;
   $('away-count').textContent = String(rows.away.length);
   $('tab-people-count').textContent = String(rows.here.length);

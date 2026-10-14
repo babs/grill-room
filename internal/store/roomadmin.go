@@ -323,7 +323,7 @@ func (s *Store) RenameParticipant(ctx context.Context, roomID string, target int
 		if old == name {
 			return nil
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE participants SET name = ? WHERE id = ?`, name, target); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE participants SET name = ?, previous_name = ? WHERE id = ?`, name, old, target); err != nil {
 			return fmt.Errorf("rename participant: %w", err)
 		}
 		switch {

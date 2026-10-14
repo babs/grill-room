@@ -36,10 +36,19 @@ type tab struct {
 	focused bool
 }
 
-// person is a participant's presence in their room: their tabs and their last sign of life.
+// person is a participant's presence in their room: their tabs, their last sign of life, and
+// since when they are here (009-AC36).
 type person struct {
-	tabs map[string]*tab
-	last time.Time
+	tabs  map[string]*tab
+	last  time.Time
+	since time.Time
+}
+
+// arrive starts p's stay at now unless p is here already. The caller holds the lock.
+func (p *person) arrive(now time.Time) {
+	if !p.alive(now) {
+		p.since = now
+	}
 }
 
 // people is the presence of every participant, by room then participant id (005-AC6). In memory:
@@ -73,6 +82,7 @@ func (pp *people) open(room string, pid int64, id string, now time.Time) (releas
 	pp.mu.Lock()
 	defer pp.mu.Unlock()
 	p := pp.person(room, pid)
+	p.arrive(now)
 	t := p.tabs[id]
 	if t == nil {
 		t = &tab{}
@@ -95,6 +105,9 @@ func (pp *people) beat(room string, pid int64, id string, st tab, gone bool, now
 	pp.mu.Lock()
 	defer pp.mu.Unlock()
 	p := pp.person(room, pid)
+	if !gone {
+		p.arrive(now)
+	}
 	p.last = now
 	t := p.tabs[id]
 	if gone {
@@ -174,6 +187,8 @@ type presenceOf struct {
 	Deaf  bool `json:"deaf"`
 	// SeenAt is when a participant who left was last here; nil while here.
 	SeenAt *time.Time `json:"seen_at,omitempty"`
+	// HereSince is when a participant here arrived; nil while away (009-AC36).
+	HereSince *time.Time `json:"here_since,omitempty"`
 }
 
 // snapshot is room's presence at now, by participant id, and sweeps the dead tabs and the people
@@ -191,6 +206,9 @@ func (pp *people) snapshot(room string, now time.Time) []presenceOf {
 		v := presenceOf{ID: pid, Here: p.alive(now)}
 		switch {
 		case v.Here:
+			if since := p.since; !since.IsZero() {
+				v.HereSince = &since
+			}
 			for _, t := range p.tabs {
 				v.Audio, v.Mic, v.Muted, v.Deaf = v.Audio || t.audio, v.Mic || t.mic, v.Muted || t.muted, v.Deaf || t.deaf
 			}
@@ -213,7 +231,11 @@ func (pp *people) snapshot(room string, now time.Time) []presenceOf {
 
 func samePresence(a, b presenceOf) bool {
 	return a.ID == b.ID && a.Here == b.Here && a.Audio == b.Audio && a.Mic == b.Mic && a.Muted == b.Muted && a.Deaf == b.Deaf &&
-		(a.SeenAt == nil) == (b.SeenAt == nil) && (a.SeenAt == nil || a.SeenAt.Equal(*b.SeenAt))
+		sameTime(a.SeenAt, b.SeenAt) && sameTime(a.HereSince, b.HereSince)
+}
+
+func sameTime(a, b *time.Time) bool {
+	return (a == nil) == (b == nil) && (a == nil || a.Equal(*b))
 }
 
 // presenceEvent renders the "presence" SSE event.

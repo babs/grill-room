@@ -53,6 +53,9 @@ type agentState struct {
 	Mentions []store.MentionState `json:"mentions"`
 	// NoteMentions are the same for the room's latest note mentions, by note message (009-AC29).
 	NoteMentions []store.MentionState `json:"note_mentions"`
+	// HostBy is the chat line of the latest move of the role by someone other than the previous
+	// host, "Alice made Bob the AI host", for the previous host's notice (009-AC34).
+	HostBy string `json:"host_by,omitempty"`
 	// NotesWatchDelay is how long, in seconds, the notes watcher waits after the last new note (009-AC32).
 	NotesWatchDelay int `json:"notes_watch_delay"`
 }
@@ -105,6 +108,20 @@ func (s *Server) hostDaemon(room string, pid int64) *presence {
 	return nil
 }
 
+// canHostDaemon returns the first connected daemon of participant pid in room able to host, nil if
+// none (009-AC33).
+func (s *Server) canHostDaemon(room string, pid int64) *presence {
+	s.presence.mu.Lock()
+	defer s.presence.mu.Unlock()
+	for _, p := range s.presence.m {
+		if p.room == room && p.conns > 0 && p.ParticipantID == pid && p.CanHost {
+			c := *p
+			return &c
+		}
+	}
+	return nil
+}
+
 func (s *Server) agentState(ctx context.Context, room string) (*agentState, error) {
 	r, err := s.bus.Store.Room(ctx, room)
 	if err != nil {
@@ -116,6 +133,9 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 	}
 	st := &agentState{HostID: r.HostParticipantID, CanTrigger: []int64{}, Daemons: s.connectedDaemons(room), Models: turn.Models, Efforts: turn.Efforts,
 		Chain: r.Chain, ParallelTurns: r.ParallelTurns, NotesWatchDelay: int(s.opts.NotesWatchDelay / time.Second)}
+	if v, ok := s.hostBy.Load(room); ok {
+		st.HostBy, _ = v.(string)
+	}
 	for _, p := range ps {
 		if p.CanTrigger {
 			st.CanTrigger = append(st.CanTrigger, p.ID)
@@ -244,6 +264,7 @@ func (s *Server) setHost(ctx context.Context, room string, d presence) error {
 	if err := s.bus.Store.SetHost(ctx, room, p.ID); err != nil {
 		return err
 	}
+	s.hostBy.Delete(room)
 	s.log.Info("host_elected", zap.String("room", room), zap.Int64("participant", p.ID))
 	return s.bus.Post(ctx, &store.Message{RoomID: room, Kind: store.KindSystem, ParticipantID: p.ID, Sender: p.Name,
 		Body: p.Name + " holds the agent(s)."})
@@ -302,35 +323,80 @@ func (s *Server) asHost(w http.ResponseWriter, r *http.Request, sess session) (*
 	return room, true
 }
 
-// handOver lets the host pass the role to a participant whose daemon is connected and can host.
-func (s *Server) handOver(w http.ResponseWriter, r *http.Request, sess session) {
+// handOver passes the AI host role to a participant whose daemon is connected and can host: the
+// host does it (003), so does a room admin, host or not, and the super-admin, sess nil (009-AC33).
+// A turn already running stays on its daemon, which alone may answer it; the queue drains to the
+// new host (009-AC34).
+func (s *Server) handOver(w http.ResponseWriter, r *http.Request, sess *session) {
 	var req struct {
 		ParticipantID int64 `json:"participant_id"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
-	room, ok := s.asHost(w, r, sess)
-	if !ok {
-		return
+	room := r.PathValue("room")
+	if s.transferHost(w, r, sess, room, req.ParticipantID) {
+		s.agentChanged(r.Context(), room)
 	}
-	if req.ParticipantID == room.HostParticipantID {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	// Held across the check and the write: an election in between would undo the hand-over.
+}
+
+// transferHost checks the right and moves the role, answering the request; true when it moved.
+func (s *Server) transferHost(w http.ResponseWriter, r *http.Request, sess *session, room string, to int64) bool {
+	// Held across the checks and the write: an election in between would undo the hand-over.
 	s.electMu.Lock()
 	defer s.electMu.Unlock()
-	d := s.hostDaemon(room.ID, req.ParticipantID)
-	if d == nil || !d.CanHost {
-		httpError(w, http.StatusConflict, "that participant has no connected daemon able to host")
-		return
+	rm, err := s.bus.Store.Room(r.Context(), room)
+	if errors.Is(err, store.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "no such room")
+		return false
 	}
-	if err := s.setHost(r.Context(), room.ID, *d); err != nil {
+	if err != nil {
 		s.serverError(w, "hand_over_failed", err)
-		return
+		return false
 	}
+	byHost := sess != nil && rm.HostParticipantID == sess.p.ID
+	if sess != nil {
+		// Looked up for the host too: a room admin's hand-over is audited either way.
+		admin, err := s.roomAdmin(r.Context(), sess)
+		if err != nil {
+			s.serverError(w, "hand_over_failed", err)
+			return false
+		}
+		if !byHost && !admin {
+			httpError(w, http.StatusForbidden, "only the AI host or a room admin can do this")
+			return false
+		}
+	}
+	if to == rm.HostParticipantID {
+		w.WriteHeader(http.StatusNoContent)
+		return false
+	}
+	if s.canHostDaemon(room, to) == nil {
+		httpError(w, http.StatusConflict, "that participant has no connected daemon able to host")
+		return false
+	}
+	var by *store.Participant
+	if sess != nil {
+		by = sess.p
+	}
+	line, err := s.bus.Store.HandOver(s.roomAuditing(r, sess, ActionHostTransfer, room, nil), room, to, by)
+	if errors.Is(err, store.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "no such participant in this room")
+		return false
+	}
+	if err != nil {
+		s.serverError(w, "hand_over_failed", err)
+		return false
+	}
+	if byHost {
+		s.hostBy.Delete(room)
+	} else {
+		s.hostBy.Store(room, line)
+	}
+	s.log.Info("host_handed_over", zap.String("room", room), zap.Int64("from", rm.HostParticipantID), zap.Int64("to", to), zap.Bool("by_host", byHost),
+		zap.Bool("super_admin", sess == nil))
 	w.WriteHeader(http.StatusNoContent)
+	return true
 }
 
 // setCanTrigger lets the host grant or revoke the agent button for a participant (D18).

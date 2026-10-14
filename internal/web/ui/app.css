@@ -177,6 +177,10 @@ dialog#manage { width: min(64rem, calc(100vw - 1rem)); min-height: min(36rem, ca
 .person-more { min-width: var(--control-h-sm); min-height: var(--control-h-sm); padding: 0; border-color: transparent; background: transparent; color: var(--text-muted); }
 .person-more.blank { visibility: hidden; }
 #person-menu input[type=range] { width: 8rem; }
+/* The details card (009-AC36). */
+.person-card { position: fixed; inset: auto; margin: 0; max-width: 20rem; padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); color: var(--text); box-shadow: var(--sh-2); font-size: var(--fs-sm); }
+.person-card ul { list-style: none; margin: var(--sp-1) 0 0; padding: 0; color: var(--text-muted); }
 #participants-away .seen { font-size: var(--fs-xs); color: var(--text-muted); }
 h3.people { font-size: var(--fs-xs); color: var(--text-muted); font-weight: 400; margin: var(--sp-2) 0 0; }
 #away summary { font-size: var(--fs-sm); color: var(--text-muted); font-weight: 400; }

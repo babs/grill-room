@@ -113,11 +113,13 @@ func TestParticipantClients(t *testing.T) {
 	if c := clients().Client; c.JoinIP != "198.51.100.1" || c.LastIP != "203.0.113.4" || c.LastUA != "Phone/2" {
 		t.Fatalf("after activity: %+v", c)
 	}
-	// A member's views carry none of it.
-	_, b = e.do(t, "GET", "/api/rooms/"+room.ID, alice.Token, nil)
-	for _, leak := range []string{"198.51.100.1", "203.0.113.4", "Phone/2", "JoinAgent"} {
-		if strings.Contains(string(b), leak) {
-			t.Fatalf("member view leaks %q: %s", leak, b)
+	// A member's views carry none of it: the room and the agent state the details card reads (009-AC36).
+	for _, path := range []string{"", "/agent"} {
+		_, b = e.do(t, "GET", "/api/rooms/"+room.ID+path, alice.Token, nil)
+		for _, leak := range []string{"198.51.100.1", "203.0.113.4", "Phone/2", "JoinAgent"} {
+			if strings.Contains(string(b), leak) {
+				t.Fatalf("member view %q leaks %q: %s", path, leak, b)
+			}
 		}
 	}
 	// Within the retention the purge keeps them; past it, it clears both.

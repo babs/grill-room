@@ -88,6 +88,9 @@ type Server struct {
 	pushTicked func(now time.Time, sent int)
 	// electMu serialises host elections and hand-overs.
 	electMu sync.Mutex
+	// hostBy holds, by room, the chat line of the latest move of its AI host role by someone other
+	// than the previous host: the previous host's page shows it (009-AC34). In memory, as presence is.
+	hostBy sync.Map
 	// turnMu serialises turn starts and queue draining, so presses run in the order they came.
 	// ponytail: one lock for every room; per-room locks if many busy rooms ever contend.
 	turnMu sync.Mutex
@@ -227,6 +230,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/admin/rooms/{room}/admins/{participant}", adminOnly(s.setRoomAdmin))
 	mux.Handle("DELETE /api/admin/rooms/{room}/admins/{participant}", adminOnly(s.setRoomAdmin))
 	mux.Handle("PUT /api/admin/rooms/{room}/participants/{participant}/name", adminOnly(s.renameParticipant))
+	mux.Handle("PUT /api/admin/rooms/{room}/host", adminOnly(s.handOver))
 	mux.Handle("PUT /api/rooms/{room}/quota", s.memberOrAdmin(s.setQuota))
 	mux.Handle("GET /api/admin/rooms/{room}/invites", adminOnly(s.listInvites))
 	mux.Handle("POST /api/admin/rooms/{room}/invites", adminOnly(s.createInvite))
@@ -304,7 +308,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PATCH /api/rooms/{room}/agent", s.participant(s.setAgentMode))
 	mux.Handle("POST /api/rooms/{room}/turns", s.participant(s.startTurn))
 	mux.Handle("POST /api/rooms/{room}/turns/{turn}/stop", s.participant(s.stopTurn))
-	mux.Handle("PUT /api/rooms/{room}/host", s.participant(s.handOver))
+	mux.Handle("PUT /api/rooms/{room}/host", s.memberOrAdmin(s.handOver))
 	mux.Handle("PATCH /api/rooms/{room}/participants/{participant}", s.participant(s.setCanTrigger))
 	mux.Handle("PUT /api/rooms/{room}/participants/{participant}/name", s.memberOrAdmin(s.renameParticipant))
 	mux.Handle("DELETE /api/rooms/{room}/queue/{queued}", s.participant(s.cancelQueued))

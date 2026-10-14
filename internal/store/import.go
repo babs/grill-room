@@ -509,6 +509,9 @@ func (im *importer) participantsStep() error {
 		if err := textIs(fmt.Sprintf("participant %d name", p.Ref), maxImportName40, false, false, p.Name); err != nil {
 			return err
 		}
+		if err := textIs(fmt.Sprintf("participant %d previous name", p.Ref), maxImportName40, false, true, p.PreviousName); err != nil {
+			return err
+		}
 		var profile, hint any
 		if p.ProfileUUID != "" && !im.relinkable(p.ProfileUUID) {
 			hint = p.ProfileUUID
@@ -528,8 +531,8 @@ func (im *importer) participantsStep() error {
 			}
 		}
 		var id int64
-		err := im.tx.QueryRowContext(im.ctx, `INSERT INTO participants(room_id, invite_id, name, token_hash, joined_at, can_trigger, profile_id, profile_uuid_hint)
-			VALUES(?,?,?,?,?,?,?,?) RETURNING id`, im.room, inv, p.Name, newHash(), p.JoinedAt, p.CanTrigger, profile, hint).Scan(&id)
+		err := im.tx.QueryRowContext(im.ctx, `INSERT INTO participants(room_id, invite_id, name, token_hash, joined_at, can_trigger, profile_id, profile_uuid_hint, previous_name)
+			VALUES(?,?,?,?,?,?,?,?,?) RETURNING id`, im.room, inv, p.Name, newHash(), p.JoinedAt, p.CanTrigger, profile, hint, nullStr(p.PreviousName)).Scan(&id)
 		if err != nil {
 			return refuseImport("participant %d: %v", p.Ref, err)
 		}

@@ -340,6 +340,11 @@ func TestExportImportRoundTrip(t *testing.T) {
 	if _, err := s.SetSTTGlossary(ctx, "orig", "Kubernetes\nHelm", alice); err != nil {
 		t.Fatal(err)
 	}
+	// 009-AC36: the name before a rename travels with the participant.
+	ps, _ := s.Participants(ctx, "orig")
+	if _, err := s.RenameParticipant(ctx, "orig", ps[1].ID, "Robert", nil, false); err != nil {
+		t.Fatal(err)
+	}
 	a := export(t, s, "orig")
 	for _, name := range []string{fileRoom, fileTranscript, "uploads", "attachments", "documents", "skills", "sessions"} {
 		if _, err := os.Stat(filepath.Join(a, name)); err != nil {
@@ -369,6 +374,9 @@ func TestExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("report %+v, want counts %v", rep, want)
 	}
 	diffCanon(t, canon(t, a), canon(t, export(t, s, "copy")))
+	if cps, _ := s.Participants(ctx, "copy"); cps[1].Name != "Robert" || cps[1].PreviousName != ps[1].Name {
+		t.Fatalf("copy's renamed participant %+v, was %q", cps[1], ps[1].Name)
+	}
 	// 005-AC4: the copy's line keeps its chip, done, pointing at the copy's synthesis.
 	cmsgs, _ := s.Messages(ctx, "copy", 0, 1000)
 	chips, err := s.MessageMentions(ctx, "copy", 0, cmsgs[len(cmsgs)-1].ID)
@@ -664,7 +672,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 	// Each table's columns: those the export carries, or why the table is left out.
 	tables := map[string]string{
 		"rooms":                     "id name created_at chain_budget chain_count chain_suspended parallel_turns stt_glossary created_from | host_participant_id quota_bytes creator_profile_id",
-		"participants":              "id name joined_at can_trigger profile_id profile_uuid_hint room_id invite_id | token_hash last_seen_at join_ip join_ua last_ip last_ua",
+		"participants":              "id name joined_at can_trigger profile_id profile_uuid_hint room_id invite_id previous_name | token_hash last_seen_at join_ip join_ua last_ip last_ua",
 		"invites":                   "| id room_id token_hash created_at revoked_at created_by",
 		"messages":                  "id room_id ts kind participant_id sender body model edited_at deleted_at change_seq persona_id effort req_model req_effort model_note model_mismatch | html turn_id",
 		"message_versions":          "id message_id seq body written_at |",

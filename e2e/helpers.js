@@ -395,3 +395,29 @@ export function sandboxPrompts(daemon) {
   const out = execFileSync('docker', ['exec', 'grill-room-' + daemon.sandbox, 'sh', '-c', 'cat "$HOME"/.claude/projects/-workspace/*.jsonl'], { encoding: 'utf8' });
   return out.split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((l) => l.type === 'user').map((l) => l.prompt);
 }
+
+// fakeDaemon pairs an AI host app for page's participant through the API, as the daemon does,
+// keeps its stream open and reports it ready to host: enough for People and hand-overs, with no
+// Docker (009-AC33). Returns its disconnect.
+export async function fakeDaemon(page, baseURL, roomID, name) {
+  const base = `${baseURL}/api/rooms/${roomID}`;
+  const json = { 'Content-Type': 'application/json' };
+  const p = await (await fetch(`${base}/pairings`, { method: 'POST', headers: json, body: JSON.stringify({ name }) })).json();
+  expect(await page.evaluate(([room, id]) => fetch(`/api/rooms/${room}/pairings/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ approve: true }) }).then((r) => r.status), [roomID, p.id])).toBe(200);
+  const { token } = await (await fetch(`${baseURL}/api/pairings/${p.id}`, { headers: { Authorization: 'Bearer ' + p.secret } })).json();
+  const auth = { Authorization: 'Bearer ' + token };
+  const stream = new AbortController();
+  const events = await fetch(`${base}/daemon/events`, { headers: auth, signal: stream.signal });
+  events.body.pipeTo(new WritableStream()).catch(() => {});
+  const st = await fetch(`${base}/daemon/status`, { method: 'POST', headers: { ...auth, ...json }, body: JSON.stringify({ can_host: true }) });
+  expect(st.status).toBe(204);
+  return () => stream.abort();
+}
+
+// appointAdmin makes page's participant a room admin, as the super-admin, and reloads the page.
+export async function appointAdmin(page, request, roomID) {
+  const me = await page.evaluate((id) => fetch(`/api/rooms/${id}`).then((r) => r.json()).then((d) => d.me.id), roomID);
+  expect((await request.put(`/api/admin/rooms/${roomID}/admins/${me}`, { headers: admin })).status()).toBe(204);
+  await page.reload();
+}

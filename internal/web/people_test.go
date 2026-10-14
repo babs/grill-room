@@ -181,3 +181,39 @@ func TestPresenceEvents(t *testing.T) {
 		t.Fatalf("no token: %d", code)
 	}
 }
+
+// 009-AC36: here since is when the current stay began: a reload within the grace keeps it, a
+// return after it starts a new one, a heartbeat alone starts one too, and none shows while away.
+func TestPresenceHereSince(t *testing.T) {
+	pp, t0 := newPeople(), time.Unix(1000, 0)
+	release := pp.open("r", 1, "tabA", t0)
+	if p := hereOf(t, pp, t0)[1]; p.HereSince == nil || !p.HereSince.Equal(t0) {
+		t.Fatalf("arrived: %+v", p)
+	}
+	reload := t0.Add(5 * time.Second)
+	release(reload)
+	release = pp.open("r", 1, "tabA", reload.Add(time.Second))
+	if p := hereOf(t, pp, reload.Add(time.Second))[1]; !p.HereSince.Equal(t0) {
+		t.Fatalf("after a reload: %+v", p.HereSince)
+	}
+	left := reload.Add(time.Minute)
+	release(left)
+	if p := hereOf(t, pp, left.Add(presenceGrace+time.Second))[1]; p.Here || p.HereSince != nil {
+		t.Fatalf("away: %+v", p)
+	}
+	back := left.Add(time.Hour / 2)
+	pp.open("r", 1, "tabA", back)
+	if p := hereOf(t, pp, back)[1]; !p.HereSince.Equal(back) {
+		t.Fatalf("back: %+v", p.HereSince)
+	}
+	pp.beat("r", 2, "tabB", tab{}, false, t0)
+	pp.beat("r", 2, "tabB", tab{}, false, t0.Add(10*time.Second))
+	if p := hereOf(t, pp, t0.Add(10*time.Second))[2]; !p.HereSince.Equal(t0) {
+		t.Fatalf("heartbeats: %+v", p.HereSince)
+	}
+	// A closing page's last beat is no arrival.
+	pp.beat("r", 3, "tabC", tab{}, true, t0)
+	if p := hereOf(t, pp, t0.Add(presenceGrace+time.Second))[3]; p.HereSince != nil {
+		t.Fatalf("gone beat: %+v", p)
+	}
+}
