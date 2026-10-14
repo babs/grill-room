@@ -191,12 +191,13 @@ code.risk { display: block; padding: var(--sp-1) var(--sp-2); border-left: 3px s
 .pane-head h2 { flex: 1; font-size: var(--fs-sm); }
 #participants, #documents { list-style: none; padding: 0; margin: var(--sp-2) 0 var(--sp-4); }
 /* One row per person (008-AC13): dot, name, badges in fixed 20 px columns, then ⋯. */
-#participants li, #participants-away li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: var(--sp-2); padding: var(--sp-1) 0; }
+#participants li, #participants-away li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: var(--sp-2); padding: var(--sp-1) 0; line-height: 20px; }
 /* A name ends with an ellipsis, never breaks mid-word (005-AC35). */
 #participants .name, #participants-away .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tags { display: inline-flex; align-items: center; gap: var(--sp-1); white-space: nowrap; }
 .tag { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: var(--r-sm); font-size: var(--fs-xs); line-height: 1; }
 .tag.blank { visibility: hidden; }
+.tag svg { display: block; width: 14px; height: 14px; }
 .tag.role-you, .tag.tag-ask { background: var(--primary-bg); color: var(--primary-text); }
 .tag.role-host, .tag.role-admin { background: var(--accent); color: var(--on-accent); }
 .tag.transcribed { box-shadow: inset 0 0 0 1px var(--primary-text); color: var(--primary-text); }
@@ -428,10 +429,12 @@ input[aria-invalid=true] { border-color: var(--danger); }
 /* The triangle's side (009-AC37): -1 puts it first, 99 last; the one place to move it. */
 :root { --fold-order: -1; }
 .pane-head .fold { order: var(--fold-order); }
-.fold::before { content: "▾"; transition: transform 150ms ease-out; }
+/* A clipped square, not the ▾ glyph: a glyph's ink sits where its font puts it, off the text's
+   centre line (009-AC39). */
+.fold::before { content: ""; width: 10px; height: 10px; background: currentColor; forced-color-adjust: none; clip-path: polygon(0 22%, 100% 22%, 50% 78%); transition: transform 150ms ease-out; }
 .fold[aria-expanded=false]::before { transform: rotate(-90deg); }
-.ico { flex: none; vertical-align: -3px; }
-.menu .ico { margin-right: var(--sp-2); }
+/* Icons are block SVGs that flex rows centre on the text's line (009-AC39). */
+.ico { display: block; flex: none; }
 /* A document's name stays on one line (008-AC14): the full name is its tooltip. */
 button.doc { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: var(--control-h); }
 /* Room starters (006): one row per starter, its text then its ⋯. */

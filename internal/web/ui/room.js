@@ -2637,10 +2637,32 @@ function voiceParticipant(id) {
 // Each role badge and its tooltip (005-AC14).
 // Each role badge, its tooltip and the icon it shrinks to when a row has more than two (005-AC35).
 const roles = [
-  ['you', 'This is you', (p) => String(p.id) === myID, '●'],
-  ['host', 'AI host: the personas run on their computer', (p) => agent.host_participant_id === p.id, '⚙'],
-  ['admin', 'Room admin: manages the room, its invites and its admins', (p) => p.admin, '★'],
+  ['you', 'This is you', (p) => String(p.id) === myID, 'you'],
+  ['host', 'AI host: the personas run on their computer', (p) => agent.host_participant_id === p.id, 'host'],
+  ['admin', 'Room admin: manages the room, its invites and its admins', (p) => p.admin, 'admin'],
 ];
+
+// badgeIcons are the People badges' shapes, drawn as block SVGs (009-AC39): an emoji's ink sits
+// wherever its font puts it, off the name's centre line.
+const badgeIcons = {
+  you: '<circle cx="12" cy="12" r="6" fill="currentColor" stroke="none"/>',
+  host: '<path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4a2 2 0 0 0 .7 2.7l.2.1a2 2 0 0 1 1 1.7v.5a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.5a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+  admin: '<path d="M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.5L12 17.3l-5.9 3.2 1.3-6.5-4.9-4.6 6.6-.8z" fill="currentColor"/>',
+  ask: '<path d="M12 3l2.2 6.8L21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2z" fill="currentColor"/>',
+  transcribed: '<path d="M12 20h9"/><path d="M16.4 3.6a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z"/>',
+  mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/>',
+  muted: '<path d="M11 5 6 9H2v6h4l5 4z"/><path d="m22 9-6 6M16 9l6 6"/>',
+  listening: '<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/>',
+  deafened: '<path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5M17 17H3s3-2 3-9a4.7 4.7 0 0 1 .3-1.7M10.3 21a1.9 1.9 0 0 0 3.4 0M2 2l20 20"/>',
+};
+
+function badgeIcon(name) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  for (const [k, v] of [['viewBox', '0 0 24 24'], ['fill', 'none'], ['stroke', 'currentColor'], ['stroke-width', '2'],
+    ['stroke-linecap', 'round'], ['stroke-linejoin', 'round'], ['aria-hidden', 'true']]) svg.setAttribute(k, v);
+  svg.innerHTML = badgeIcons[name];
+  return svg;
+}
 
 // audioState is how a participant is in the audio: from the server's presence, which every
 // viewer gets whether or not they joined the audio, with the LiveKit state for those they hear.
@@ -2651,9 +2673,9 @@ function audioState(id) {
   if (!audio) return { key: 'none', icon: '', text: 'Not in the audio' };
   const mic = vp ? vp.isMicrophoneEnabled : !!(pr && pr.mic);
   const muted = !mic && (vp ? !!vp.getTrackPublication(LivekitClient.Track.Source.Microphone) : !!(pr && pr.muted));
-  if (mic) return { key: 'live', icon: '🎙', text: 'Mic live' };
-  if (muted) return { key: 'muted', icon: '🔇', text: 'Muted' };
-  return { key: 'listening', icon: '🎧', text: 'Listening only' };
+  if (mic) return { key: 'live', icon: 'mic', text: 'Mic live' };
+  if (muted) return { key: 'muted', icon: 'muted', text: 'Muted' };
+  return { key: 'listening', icon: 'listening', text: 'Listening only' };
 }
 
 // ago says how long ago a time was, coarsely (kit/ui.js): the list refreshes every 30 seconds.
@@ -2675,12 +2697,12 @@ const tagColumns = ['you', 'host', 'admin', 'ask', 'transcribed', 'audio'];
 function personTags(p, id, isHere) {
   const t = {};
   for (const [name, title, on, icon] of roles) if (on(p)) t[name] = [icon, name, title];
-  if (agent.can_trigger.includes(p.id) && agent.host_participant_id !== p.id) t.ask = ['✦', 'Can ask the AI', 'Can ask the AI'];
-  if (transcribed.has(id)) t.transcribed = ['✍', 'The transcription hears this voice', 'The transcription hears this voice'];
+  if (agent.can_trigger.includes(p.id) && agent.host_participant_id !== p.id) t.ask = ['ask', 'Can ask the AI', 'Can ask the AI'];
+  if (transcribed.has(id)) t.transcribed = ['transcribed', 'The transcription hears this voice', 'The transcription hears this voice'];
   const st = isHere ? audioState(id) : { key: 'none', icon: '', text: 'Not in the audio' };
   const deaf = isHere && !!presence.get(id)?.deaf;
-  // One glyph per square: deafened shows 🔕 alone, its audio state in the tooltip.
-  t.audio = [deaf ? '🔕' : st.icon, '', st.text + (deaf ? ', deafened: hears nobody' : ''), st.key, deaf];
+  // One icon per square: deafened shows its own alone, its audio state in the tooltip.
+  t.audio = [deaf ? 'deafened' : st.icon, '', st.text + (deaf ? ', deafened: hears nobody' : ''), st.key, deaf];
   return t;
 }
 
@@ -3010,7 +3032,11 @@ function tagSpan(col, t, el = document.createElement('span')) {
   const on = !!(t && t[0]);
   const role = on && ['you', 'host', 'admin'].includes(col);
   el.className = 'tag tag-' + col + (role ? ' role-' + col : '') + (on && col === 'host' ? ' host-badge' : '') + (on && col === 'transcribed' ? ' transcribed' : '') + (col === 'audio' ? ' audio' : '');
-  if (el.textContent !== (t ? t[0] : '')) el.textContent = t ? t[0] : '';
+  const icon = t ? t[0] : '';
+  if (el.dataset.icon !== icon) {
+    el.replaceChildren(...(icon ? [badgeIcon(icon)] : []));
+    el.dataset.icon = icon;
+  }
   el.dataset.col = col;
   delete el.dataset.state;
   delete el.dataset.tip;

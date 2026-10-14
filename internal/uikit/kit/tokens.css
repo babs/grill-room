@@ -127,9 +127,15 @@
   padding: var(--sp-1); border: 1px solid var(--border); border-radius: var(--r-md);
   background: var(--surface); color: var(--text); box-shadow: var(--sh-2);
 }
-.menu > :where(button, a, label) { display: flex; align-items: center; min-height: var(--control-h); width: 100%; justify-content: flex-start; border-color: transparent; background: transparent; color: var(--text); font-weight: 400; text-decoration: none; padding: 0 var(--sp-3); }
+/* One row style for links, buttons and labels alike (009-AC38): a link otherwise keeps the body's
+   larger text, and a button's border shifts its text by 1 px. */
+.menu > :where(button, a, label) { display: flex; align-items: center; gap: var(--sp-2); min-height: var(--control-h); width: 100%; justify-content: flex-start; padding: 0 var(--sp-3); border: 0; background: transparent; color: var(--text); font: 400 var(--fs-control)/1.2 var(--font); text-decoration: none; }
 .menu > :where(button, a):hover { background: var(--bg); }
 .menu .menu-head { margin: 0; padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: var(--fs-sm); }
+/* The optional leading icon column: once any item has one, the other rows and the header indent by
+   it, so every text starts at the same x. */
+.menu .ico { display: block; flex: none; width: 16px; height: 16px; }
+.menu:has(> * > .ico) > :where(button, a, label, .menu-head):not(:has(> .ico)) { padding-left: calc(var(--sp-3) + 16px + var(--sp-2)); }
 .menu hr { margin: var(--sp-1) 0; border: 0; border-top: 1px solid var(--border); }
 .toasts { position: fixed; inset: auto var(--sp-4) var(--sp-4) auto; z-index: var(--z-toast); gap: var(--sp-2);
   margin: 0; padding: 0; border: 0; background: transparent; overflow: visible; }

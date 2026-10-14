@@ -95,7 +95,7 @@ test('participant list shows audio states and transcription', async ({ browser, 
   await expect(state('Bob')).toHaveAttribute('data-state', 'muted');
   await expect(state('Carol')).toHaveAttribute('data-state', 'listening');
   await expect(state('Carol')).toHaveAttribute('data-tip', 'Listening only, deafened: hears nobody');
-  await expect(state('Carol')).toContainText('🔕');
+  await expect(state('Carol')).toHaveAttribute('data-icon', 'deafened');
   await expect(state('Dan')).toHaveAttribute('data-state', 'none');
   for (const [name, n] of [['Alice', 1], ['Bob', 1], ['Carol', 0], ['Dan', 0]]) {
     await expect(row(alice, name).locator('.transcribed')).toHaveCount(n);
