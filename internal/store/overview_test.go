@@ -173,7 +173,7 @@ func TestProfilesForAdmin(t *testing.T) {
 	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec-a", SessionHash: "sess-a"})
 	joinWithProfile(t, s, "b", "Bob", JoinProfile{RecoveryHash: "rec-b", SessionHash: "sess-b"})
 	link(s, t, a.ProfileID, "alice@example.com", MagicBind, "bind", time.Minute)
-	if _, err := s.UseMagicLink(ctx, "bind", MagicBind, "", a.ProfileID); err != nil {
+	if _, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "bind", Purpose: MagicBind, SessionHash: "", Current: a.ProfileID, Now: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 	ps, err := s.Profiles(ctx)

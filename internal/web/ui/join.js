@@ -50,3 +50,59 @@ form.addEventListener('submit', async (e) => {
     button.disabled = false;
   }
 });
+
+// Who this browser is (011-AC25): signed in, a link to its profile; signed out with email set up,
+// the email recovery (011-AC4). A sign-in from a mailed link in another tab shows here once this
+// tab is back in front (011-AC5), and the join above then joins as that profile: it rides on the
+// cookie.
+const yourProfile = document.getElementById('your-profile');
+const recover = document.getElementById('recover');
+const recoverOpen = document.getElementById('recover-open');
+const recoverForm = document.getElementById('recover-form');
+const recoverStatus = document.getElementById('recover-status');
+
+// ttl is the emailed link's lifetime in seconds, as the server's mail words it.
+let ttl = 0;
+async function who() {
+  const res = await fetch('/api/profile');
+  if (!res.ok) return;
+  const { email_enabled: emailEnabled, profile, magic_link_ttl_s: linkTTL } = await res.json();
+  ttl = linkTTL || 0;
+  yourProfile.hidden = !profile;
+  document.getElementById('your-profile-name').textContent = profile ? profile.name || (profile.rooms[0] || {}).name || '' : '';
+  recover.hidden = !!profile || !emailEnabled;
+}
+who().catch(console.error);
+addEventListener('focus', () => who().catch(console.error));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) who().catch(console.error); });
+
+recoverOpen.addEventListener('click', () => {
+  recoverForm.hidden = false;
+  recoverOpen.hidden = true;
+  recoverOpen.setAttribute('aria-expanded', 'true');
+  document.getElementById('recover-email').focus();
+});
+
+// The answer is the same whether or not a profile holds the address (011-AC22).
+recoverForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const button = recoverForm.querySelector('button');
+  button.disabled = true;
+  try {
+    const res = await fetch('/api/profile/signin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: document.getElementById('recover-email').value }),
+    });
+    if (res.ok) {
+      recoverStatus.textContent = 'If a profile uses this address, a link is on its way (valid ' + window.grillDuration(ttl) + ').';
+      button.textContent = 'Resend';
+      window.grillCooldown(button, 60);
+      return;
+    }
+    recoverStatus.textContent = (await res.json().catch(() => ({}))).error || 'HTTP ' + res.status;
+  } catch {
+    recoverStatus.textContent = 'Network error, try again.';
+  }
+  button.disabled = false;
+});

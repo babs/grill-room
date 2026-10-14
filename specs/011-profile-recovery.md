@@ -44,7 +44,7 @@ A signed-out browser sees "Recover my profile by email" on the join page. A prof
 - [ ] **AC3** The audit log records the generation (admin, profile uuid and name, expiry) and the use (profile uuid). It never holds the token. Deleting the profile deletes its links.
 
 ### Email recovery from the join page
-- [ ] **AC4** With SMTP set and no profile in the browser, the join page (`/` and `/join`, with or without an invite) shows "Recover my profile by email". It opens an email field. Sending it answers "If a profile holds this address, a sign-in link is on its way" whether or not one does, under the 002 rate limits. A browser holding a profile, or an instance without SMTP, never sees the link.
+- [ ] **AC4** With SMTP set and no profile in the browser, the join page (`/` and `/join`, with or without an invite) shows "Recover my profile by email". It opens an email field. Sending it answers "If a profile uses this address, a link is on its way (valid 15 minutes)" whether or not one does, under the 002 rate limits. A browser holding a profile, or an instance without SMTP, never sees the link.
 - [ ] **AC5** The mailed link signs the browser in through the existing magic-link confirmation. A join page left open in another tab of that browser hides the recovery link and shows the profile's name once the tab is focused again, so the invite then joins as that profile.
 
 ### Anonymous marker and nudge
@@ -76,7 +76,7 @@ A signed-out browser sees "Recover my profile by email" on the join page. A prof
 
 ### Email flows (notes, 2026-10-14)
 - [ ] **AC21** `/profile` has one Email section with three states. No email: "Add an email" and an address field. Pending: "Check your inbox at <address>", "Resend" with a 60 s cooldown that counts down, and "Use another address". Bound: the address and "Change", which opens the field; the new address replaces the old one once its link is confirmed. The pending state survives a reload while its link is valid, and only the profile's owner sees the pending address.
-- [ ] **AC22** The signed-out request ("Recover my profile by email", AC4) is one field. Its answer is neutral and names the link's lifetime: "If a profile uses this address, a link is on its way (valid 15 min)", with "Resend" under the same cooldown.
+- [ ] **AC22** The signed-out request ("Recover my profile by email", AC4) is one field. Its answer is neutral and names the link's lifetime: "If a profile uses this address, a link is on its way (valid 15 minutes)", with "Resend" under the same cooldown.
 - [ ] **AC23** Opening an emailed link ends on one of these outcomes, each with its next step: email bound (the address shown); signed in (the profile's name and its rooms); expired ("Send a new link", which opens the email field); already used (sign in by email or open your profile); a bind link opened in another browser (a confirmation naming the profile the address goes to, then bound, this browser's own profile unchanged); the address already bound to another profile (explains it, and that the admin can merge the two profiles).
 - [ ] **AC24** The mail, the page and the toasts use the same words. The mail says what its link does (adds the address to your profile, or signs you in) and how long it works.
 

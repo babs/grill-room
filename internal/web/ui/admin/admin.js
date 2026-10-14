@@ -386,9 +386,38 @@ function Profiles() {
         <td>${p.name || '—'} <code title=${p.uuid}>${p.uuid.slice(0, 8)}</code></td><td>${p.email || '—'}</td>
         <td class="wrap">${p.rooms.map((r) => r.room_name).join(', ') || '—'}</td><td>${p.skills}</td><td>${when(p.last_activity)}</td>
         <td><${RoomLimit} key=${p.id} p=${p} perProfile=${perProfile} reload=${load}/></td>
-        <td><button type="button" onClick=${() => remove(p)}>Delete</button></td>
+        <td><${RecoveryLink} p=${p}/> <button type="button" onClick=${() => remove(p)}>Delete</button></td>
       </tr>`)}</tbody>
     </table></div>` : html`<p>No profile yet.</p>`)}`;
+}
+
+/**
+ * RecoveryLink makes a one-time recovery link for a profile and shows it once, to copy and hand
+ * over (011-AC1): the server keeps only its hash. Another one voids it and replaces it here.
+ * @param {{p: Profile}} props
+ */
+function RecoveryLink({ p }) {
+  const [link, setLink] = useState(/** @type {{url: string, expires_at: string} | null} */ (null));
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const field = useRef(/** @type {HTMLInputElement | null} */ (null));
+  const make = () => {
+    setBusy(true);
+    setCopied(false);
+    api('POST', `/api/admin/profiles/${p.id}/recovery-link`).then(setLink).catch(show).finally(() => setBusy(false));
+  };
+  // A refused clipboard leaves the link selected for a manual copy.
+  const copy = () => {
+    if (link) navigator.clipboard.writeText(link.url).then(() => setCopied(true), () => field.current?.select());
+  };
+  const who = p.name || p.uuid;
+  return html`<span class="recovery-link">
+    <button type="button" class="btn-secondary" disabled=${busy} onClick=${make} aria-label=${'Generate a recovery link for ' + who}>Generate a recovery link</button>
+    ${link && html`<span class="copy-row">
+      <input ref=${field} readonly value=${link.url} aria-label=${'Recovery link for ' + who}/>
+      <button type="button" onClick=${copy}>${copied ? 'Copied' : 'Copy'}</button>
+      <span class="hint">expires ${new Date(link.expires_at).toLocaleString()}</span></span>`}
+  </span>`;
 }
 
 /**

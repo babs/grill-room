@@ -5,11 +5,16 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 )
 
 // ProfileSessionMaxAge is how long a profile session stays valid: Chrome caps cookies at 400 days.
 const ProfileSessionMaxAge = 400 * 24 * time.Hour
+
+// RecoveryLinkTTL is how long an admin recovery link works: the admin hands it over by another
+// channel, which takes longer than an email (011-AC1).
+const RecoveryLinkTTL = 24 * time.Hour
 
 // Magic link purposes.
 const (
@@ -22,6 +27,10 @@ var (
 	ErrEmailTaken = errors.New("email bound to another profile")
 	// ErrWrongProfile is returned when a bind link is opened outside the profile that asked for it.
 	ErrWrongProfile = errors.New("bind link opened outside its profile")
+	// ErrLinkExpired is a stored magic link past its expiry, until a sweep drops it (011-AC23).
+	ErrLinkExpired = errors.New("link expired")
+	// ErrLinkUsed is a stored magic link already spent, until a sweep drops it (011-AC23).
+	ErrLinkUsed = errors.New("link already used")
 )
 
 // Profile is a person across rooms. Only hashes of its recovery and session tokens are stored.
@@ -35,6 +44,11 @@ type Profile struct {
 	UUID string `json:"-"`
 	// Name is the one the profile chose from a room (005-AC1); empty until it does.
 	Name string `json:"name,omitempty"`
+	// PendingEmail is the address of the newest unused bind link; only GET /api/profile sets it,
+	// for its owner (011-AC21).
+	PendingEmail string `json:"pending_email,omitempty"`
+	// EmailNudgeUntil hides the add-an-email banner until then (011-AC8).
+	EmailNudgeUntil *time.Time `json:"email_nudge_until,omitempty"`
 }
 
 // ProfileRoom is a room a profile is in, under the name it joined with.
@@ -130,8 +144,9 @@ func (s *Store) profile(ctx context.Context, where string, args ...any) (*Profil
 	var p Profile
 	var email sql.NullString
 	var created string
-	err := s.db.QueryRowContext(ctx, `SELECT id, email, created_at, COALESCE(uuid, ''), COALESCE(name, '') FROM profiles WHERE `+where, args...).
-		Scan(&p.ID, &email, &created, &p.UUID, &p.Name)
+	var nudge sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT id, email, created_at, COALESCE(uuid, ''), COALESCE(name, ''), email_nudge_until FROM profiles WHERE `+where, args...).
+		Scan(&p.ID, &email, &created, &p.UUID, &p.Name, &nudge)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -139,6 +154,10 @@ func (s *Store) profile(ctx context.Context, where string, args ...any) (*Profil
 		return nil, fmt.Errorf("profile: %w", err)
 	}
 	p.Email, p.CreatedAt = email.String, parseTS(created)
+	if nudge.Valid {
+		t := parseTS(nudge.String)
+		p.EmailNudgeUntil = &t
+	}
 	if p.Rooms, err = s.profileRooms(ctx, p.ID); err != nil {
 		return nil, err
 	}
@@ -221,68 +240,205 @@ func (s *Store) DeleteProfile(ctx context.Context, id int64) error {
 	return nil
 }
 
-// CreateMagicLink stores l, and drops the used and expired links of every profile.
-func (s *Store) CreateMagicLink(ctx context.Context, l MagicLink) error {
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM magic_links WHERE used_at IS NOT NULL OR expires_at_ms <= ?`, time.Now().UnixMilli()); err != nil {
+// magicLinkKeep is how long a used or expired magic link stays stored, so opening it again still
+// tells "used" or "expired" rather than "invalid" (011-AC23).
+const magicLinkKeep = 24 * time.Hour
+
+// CreateMagicLink stores l, and drops every profile's links used or expired over magicLinkKeep
+// before now.
+func (s *Store) CreateMagicLink(ctx context.Context, l MagicLink, now time.Time) error {
+	cutoff := now.Add(-magicLinkKeep)
+	// used_at is UTC RFC 3339: it orders as text, to within a second.
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM magic_links WHERE used_at < ? OR expires_at_ms <= ?`,
+		cutoff.UTC().Format(time.RFC3339Nano), cutoff.UnixMilli()); err != nil {
 		return fmt.Errorf("sweep magic links: %w", err)
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO magic_links(profile_id, email, purpose, token_hash, created_at, expires_at_ms) VALUES(?,?,?,?,?,?)`,
-		l.ProfileID, l.Email, l.Purpose, l.TokenHash, now(), l.ExpiresAt.UnixMilli())
+		l.ProfileID, l.Email, l.Purpose, l.TokenHash, now.UTC().Format(time.RFC3339Nano), l.ExpiresAt.UnixMilli())
 	if err != nil {
 		return fmt.Errorf("create magic link: %w", err)
 	}
 	return nil
 }
 
-// UseMagicLink spends the unused, unexpired link tokenHash of the purpose the caller expects, in one
-// transaction: a sign-in link offered as a bind link, or the reverse, is unknown. A sign-in link
-// opens a session with sessionHash on its profile, while the profile still holds its email. A bind
-// link binds its email to its profile and opens no session; current must be that profile, as only
-// the browser that asked may confirm. ErrNotFound for an unknown, used, expired or stale link;
-// ErrWrongProfile for a bind link opened elsewhere and ErrEmailTaken when another profile bound the
-// email meanwhile, both leaving the link unused.
-func (s *Store) UseMagicLink(ctx context.Context, tokenHash, purpose, sessionHash string, current int64) (*Profile, error) {
+// MagicUse is a request to spend a magic link.
+type MagicUse struct {
+	TokenHash string
+	// Purpose is the kind the caller expects: a sign-in link offered as a bind link, or the
+	// reverse, is unknown.
+	Purpose     string
+	SessionHash string
+	// Current is the profile of the browser opening the link, 0 for none.
+	Current int64
+	// Confirm binds a bind link opened outside its profile (011-AC23).
+	Confirm bool
+	Now     time.Time
+}
+
+// UseMagicLink spends the link u names, in one transaction. A sign-in link opens a session with
+// u.SessionHash on its profile, while the profile still holds its email. A bind link binds its
+// email to its profile and opens no session. Opened outside its profile without u.Confirm, it
+// answers ErrWrongProfile and stays unused; for both outside cases the profile returned holds only
+// the display name and the address, as the browser is not its owner. ErrNotFound for an unknown or
+// stale link, ErrLinkUsed and ErrLinkExpired for a stored one, ErrEmailTaken when another profile
+// bound the email meanwhile, leaving the link unused.
+func (s *Store) UseMagicLink(ctx context.Context, u MagicUse) (*Profile, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("use magic link: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
-	var id, profileID int64
+	var id, profileID, expires int64
 	var email string
-	err = tx.QueryRowContext(ctx, `SELECT id, profile_id, email FROM magic_links WHERE token_hash = ? AND purpose = ? AND used_at IS NULL AND expires_at_ms > ?`,
-		tokenHash, purpose, time.Now().UnixMilli()).Scan(&id, &profileID, &email)
-	if errors.Is(err, sql.ErrNoRows) {
+	var used sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT id, profile_id, email, used_at, expires_at_ms FROM magic_links WHERE token_hash = ? AND purpose = ?`,
+		u.TokenHash, u.Purpose).Scan(&id, &profileID, &email, &used, &expires)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
 		return nil, ErrNotFound
-	}
-	if err != nil {
+	case err != nil:
 		return nil, fmt.Errorf("use magic link: %w", err)
+	case used.Valid:
+		return nil, ErrLinkUsed
+	case expires <= u.Now.UnixMilli():
+		return nil, ErrLinkExpired
 	}
 	var holder int64
 	err = tx.QueryRowContext(ctx, `SELECT id FROM profiles WHERE email = ?`, email).Scan(&holder)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("use magic link: %w", err)
 	}
+	var elsewhere *Profile
+	usedAt := u.Now.UTC().Format(time.RFC3339Nano)
 	switch {
-	case purpose == MagicSignIn && holder != profileID:
+	case u.Purpose == MagicSignIn && holder != profileID:
 		return nil, ErrNotFound
-	case purpose == MagicSignIn:
-		if err := createSession(ctx, tx, profileID, sessionHash); err != nil {
+	case u.Purpose == MagicSignIn:
+		if err := createSession(ctx, tx, profileID, u.SessionHash); err != nil {
 			return nil, err
 		}
-	case current != profileID:
-		return nil, ErrWrongProfile
 	case holder != 0 && holder != profileID:
 		return nil, ErrEmailTaken
 	default:
+		if u.Current != profileID {
+			elsewhere = &Profile{ID: profileID, Email: email}
+			if err := tx.QueryRowContext(ctx, `SELECT `+displayNameSQL+` FROM profiles p WHERE p.id = ?`, profileID).Scan(&elsewhere.Name); err != nil {
+				return nil, fmt.Errorf("use magic link: %w", err)
+			}
+			if !u.Confirm {
+				return elsewhere, ErrWrongProfile
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE profiles SET email = ? WHERE id = ?`, email, profileID); err != nil {
 			return nil, fmt.Errorf("bind email: %w", err)
 		}
+		// The bind settles the address: the profile's other pending bind links are spent with it,
+		// so none of them shows as pending nor rebinds an older address (011-AC21).
+		if _, err := tx.ExecContext(ctx, `UPDATE magic_links SET used_at = ? WHERE profile_id = ? AND purpose = ? AND used_at IS NULL`,
+			usedAt, profileID, MagicBind); err != nil {
+			return nil, fmt.Errorf("use magic link: %w", err)
+		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE magic_links SET used_at = ? WHERE id = ?`, now(), id); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE magic_links SET used_at = ? WHERE id = ?`, usedAt, id); err != nil {
 		return nil, fmt.Errorf("use magic link: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("use magic link: %w", err)
 	}
+	if elsewhere != nil {
+		return elsewhere, nil
+	}
 	return s.profile(ctx, `id = ?`, profileID)
+}
+
+// displayNameSQL is the name a profile p shows: the one it chose, else its latest join's.
+const displayNameSQL = `COALESCE(p.name, (SELECT name FROM participants WHERE profile_id = p.id ORDER BY id DESC LIMIT 1), '')`
+
+// PendingEmail returns the address of profileID's newest bind link while it is unused and
+// unexpired, "" otherwise: an older link's address was replaced by the newer one (011-AC21).
+func (s *Store) PendingEmail(ctx context.Context, profileID int64, now time.Time) (string, error) {
+	var email string
+	err := s.db.QueryRowContext(ctx, `SELECT email FROM (SELECT email, used_at, expires_at_ms FROM magic_links WHERE profile_id = ? AND purpose = ?
+		ORDER BY id DESC LIMIT 1) WHERE used_at IS NULL AND expires_at_ms > ?`, profileID, MagicBind, now.UnixMilli()).Scan(&email)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("pending email: %w", err)
+	}
+	return email, nil
+}
+
+// SnoozeEmailNudge hides profileID's add-an-email banner until until. ErrNotFound for no profile.
+func (s *Store) SnoozeEmailNudge(ctx context.Context, profileID int64, until time.Time) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE profiles SET email_nudge_until = ? WHERE id = ?`, until.UTC().Format(time.RFC3339Nano), profileID)
+	if err != nil {
+		return fmt.Errorf("snooze email nudge: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("snooze email nudge: %w", err)
+	} else if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// CreateRecoveryLink stores a one-time recovery link tokenHash for profileID, valid
+// RecoveryLinkTTL from now, and returns its expiry. It voids the profile's earlier unused links
+// and sweeps every used or expired one. The audit entry ctx carries gets the profile's uuid, never
+// the token (011-AC1, 011-AC3). ErrNotFound for no profile.
+func (s *Store) CreateRecoveryLink(ctx context.Context, profileID int64, tokenHash string, now time.Time) (time.Time, error) {
+	expires := now.Add(RecoveryLinkTTL)
+	err := s.withTx(ctx, "create recovery link", func(tx *sql.Tx) error {
+		var uuid string
+		err := tx.QueryRowContext(ctx, `SELECT COALESCE(uuid, '') FROM profiles WHERE id = ?`, profileID).Scan(&uuid)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("create recovery link: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM recovery_links WHERE used_at IS NOT NULL OR expires_at_ms <= ? OR profile_id = ?`,
+			now.UnixMilli(), profileID); err != nil {
+			return fmt.Errorf("create recovery link: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO recovery_links(profile_id, token_hash, created_at, expires_at_ms) VALUES(?,?,?,?)`,
+			profileID, tokenHash, now.UTC().Format(time.RFC3339Nano), expires.UnixMilli()); err != nil {
+			return fmt.Errorf("create recovery link: %w", err)
+		}
+		return auditTx(ctx, tx, "", map[string]any{"profile_uuid": uuid})
+	})
+	if err != nil {
+		return time.Time{}, err
+	}
+	return expires, nil
+}
+
+// UseRecoveryLink spends the unused, unexpired recovery link tokenHash and opens a session with
+// sessionHash on its profile, in one transaction, writing the audit entry ctx carries for the
+// profile. ErrNotFound for an unknown, used, voided or expired link (011-AC2).
+func (s *Store) UseRecoveryLink(ctx context.Context, tokenHash, sessionHash string, now time.Time) (*Profile, error) {
+	var id int64
+	err := s.withTx(ctx, "use recovery link", func(tx *sql.Tx) error {
+		err := tx.QueryRowContext(ctx, `UPDATE recovery_links SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at_ms > ? RETURNING profile_id`,
+			now.UTC().Format(time.RFC3339Nano), tokenHash, now.UnixMilli()).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("use recovery link: %w", err)
+		}
+		if err := createSession(ctx, tx, id, sessionHash); err != nil {
+			return err
+		}
+		var uuid string
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(uuid, '') FROM profiles WHERE id = ?`, id).Scan(&uuid); err != nil {
+			return fmt.Errorf("use recovery link: %w", err)
+		}
+		return auditTx(ctx, tx, strconv.FormatInt(id, 10), map[string]any{"profile_uuid": uuid})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.profile(ctx, `id = ?`, id)
 }

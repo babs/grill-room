@@ -797,6 +797,19 @@ ALTER TABLE room_plugins ADD COLUMN needs_setup INTEGER NOT NULL DEFAULT 0 CHECK
 `, `
 -- 009-AC27: an imported version waits for the host's approval once inspected, whatever the mode.
 ALTER TABLE plugin_versions ADD COLUMN hold INTEGER NOT NULL DEFAULT 0 CHECK (hold IN (0, 1));
+`, `
+-- 011-AC1: one-time recovery links the admin hands over; only the token's hash is kept.
+CREATE TABLE recovery_links (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+	token_hash TEXT NOT NULL UNIQUE,
+	created_at TEXT NOT NULL,
+	expires_at_ms INTEGER NOT NULL,
+	used_at TEXT
+);
+CREATE INDEX recovery_links_profile ON recovery_links(profile_id);
+-- 011-AC8: the email nudge stays hidden until then, on every device of the profile.
+ALTER TABLE profiles ADD COLUMN email_nudge_until TEXT;
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.

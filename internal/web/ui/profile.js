@@ -9,7 +9,10 @@ async function post(url, body) {
   return { res, data };
 }
 
-function render({ email_enabled: emailEnabled, profile }) {
+// ttl is the emailed link's lifetime in seconds, as the server's mail words it.
+let ttl = 0;
+function render({ email_enabled: emailEnabled, profile, magic_link_ttl_s: linkTTL }) {
+  ttl = linkTTL || 0;
   $('signed-in').hidden = !profile;
   $('signed-out').hidden = !!profile;
   $('signin').hidden = !emailEnabled;
@@ -52,11 +55,39 @@ function render({ email_enabled: emailEnabled, profile }) {
   $('who').textContent = name;
   $('profile-name').textContent = name || 'Not set: it comes from the name you join rooms with.';
   $('email').hidden = !emailEnabled;
-  $('email-state').textContent = profile.email ? 'Bound to ' + profile.email + '.' : 'No email bound.';
+  $('profile-anon').hidden = !emailEnabled || !!profile.email;
+  shown = profile;
+  pending = profile.pending_email || '';
+  showEmail(false);
   // The recovery link lives in the tab that joined, until saved: the server keeps only its hash.
   const link = sessionStorage.getItem('grill_room_recovery');
   $('device').textContent = link ? 'Open your rooms, then your initials › "Use on another device" to copy the link.'
-    : emailEnabled ? 'Bind an email above, then sign in with it on the other device.' : 'Open your recovery link on the other device.';
+    : emailEnabled ? 'Add an email above, then sign in with it on the other device.' : 'Open your recovery link on the other device.';
+}
+
+// The Email section's states (011-AC21): none, a link pending at an address, or an address on
+// the profile. editing opens the address field over the pending and bound states.
+/** @type {{email?: string} | null} */
+let shown = null;
+let pending = '';
+function showEmail(editing) {
+  const email = shown ? shown.email || '' : '';
+  const state = pending ? 'pending' : email ? 'bound' : 'none';
+  $('email-state').textContent = state === 'pending' ? 'Check your inbox at ' + pending
+    : state === 'bound' ? email : 'No email on this profile yet.';
+  $('email-pending').hidden = state !== 'pending';
+  $('email-change').hidden = state !== 'bound' || editing;
+  $('bind').hidden = state !== 'none' && !editing;
+  $('bind-label').textContent = state === 'none' ? 'Add an email' : 'New address';
+}
+
+// openEmailField is the next step of a link that failed: a field to ask for a new one.
+function openEmailField() {
+  const signedIn = !$('signed-in').hidden;
+  if (signedIn) showEmail(true);
+  const input = signedIn ? $('bind-email') : $('signin-email');
+  input.scrollIntoView({ block: 'center' });
+  input.focus();
 }
 
 // ago says how long ago t was, coarsely (kit/ui.js); the full date is the tooltip.
@@ -118,13 +149,11 @@ $('skill-upload').addEventListener('submit', async (e) => {
   button.disabled = false;
 });
 
-// confirmSignIn resolves true once the person agrees to sign this browser in with a link: a link sent by
-// someone else would otherwise silently put this browser, and every room it joins next, in their
-// profile.
-function confirmSignIn(current) {
-  $('confirm-text').textContent = (current
-    ? 'This browser already holds a profile. If this link is for another one, signing in replaces it here: keep this browser\'s recovery link to get back. '
-    : '') + 'Only continue if you asked for this link yourself.';
+// ask shows the confirm card and resolves true once the person agrees: a link sent by someone else
+// would otherwise silently put this browser, or an address, in their profile.
+function ask(text, yes) {
+  $('confirm-text').textContent = text;
+  $('confirm-yes').textContent = yes;
   $('confirm').hidden = false;
   return new Promise((resolve) => {
     const done = (ok) => () => {
@@ -137,21 +166,62 @@ function confirmSignIn(current) {
   });
 }
 
+const confirmSignIn = (current) => ask((current
+  ? 'This browser already holds a profile. If this link is for another one, signing in replaces it here: keep this browser\'s recovery link to get back. '
+  : '') + 'Only continue if you asked for this link yourself.', 'Sign in to this profile');
+
+// next shows the step after a link's outcome, or none.
+function next(label, run) {
+  $('next').hidden = !label;
+  $('next-step').textContent = label || '';
+  $('next-step').onclick = run || null;
+}
+
+// failed says what happened to a link that did not work, and what to do next (011-AC23).
+function failed(data, signedIn) {
+  switch (data.reason) {
+    case 'expired':
+      statusLine.textContent = 'This link has expired.';
+      return next('Send a new link', openEmailField);
+    case 'used':
+      statusLine.textContent = 'This link was already used.' + (signedIn ? ' Your profile is below.' : '');
+      return signedIn ? next('') : next('Sign in by email', openEmailField);
+    case 'taken':
+      statusLine.textContent = 'This address is already on another profile. Sign in with it to open that profile, or ask the admin to merge the two profiles.';
+      return next('');
+  }
+  statusLine.textContent = data.error || 'This link did not work.';
+  next('');
+}
+
 // The link's secret rides in the fragment: read it and drop it from the address bar. A bind link
-// only binds the address to the profile this browser is in, so it is spent at once; a recovery or
-// sign-in link waits for a click.
+// adds the address to the profile that asked for it: at once in that browser, after a confirmation
+// naming the profile anywhere else (011-AC23). A recovery or sign-in link waits for a click.
 async function signInFromLink() {
   const hash = new URLSearchParams(location.hash.slice(1));
   const [kind, token] = ['bind', 'magic', 'recover'].map((k) => [k, hash.get(k)]).find(([, v]) => v) || [];
   if (!token) return;
   history.replaceState(null, '', location.pathname);
-  if (kind === 'bind') {
-    const { res, data } = await post('/api/profile/magic', { token, purpose: 'bind' });
-    statusLine.textContent = res.ok ? 'Email bound.' : data.error || 'Binding failed.';
-    return;
-  }
+  next('');
   const res = await fetch('/api/profile');
   const current = res.ok ? (await res.json()).profile : null;
+  if (kind === 'bind') {
+    let { res: bound, data } = await post('/api/profile/magic', { token, purpose: 'bind' });
+    if (bound.status === 409 && data.reason === 'confirm') {
+      if (!(await ask('This link adds ' + data.email + ' to ' + data.profile_name + '\'s profile. This browser stays as it is. Only continue if you asked for this link yourself.', 'Add the email'))) {
+        statusLine.textContent = 'Link not used.';
+        return;
+      }
+      ({ res: bound, data } = await post('/api/profile/magic', { token, purpose: 'bind', confirm: true }));
+      if (bound.ok) {
+        statusLine.textContent = 'Email added to ' + data.profile_name + '\'s profile.';
+        return;
+      }
+    }
+    if (bound.ok) statusLine.textContent = 'Email added to your profile: ' + data.profile.email + '.';
+    else failed(data, !!current);
+    return;
+  }
   if (!(await confirmSignIn(current))) {
     statusLine.textContent = 'Link not used.';
     return;
@@ -159,33 +229,79 @@ async function signInFromLink() {
   const { res: used, data } = kind === 'recover'
     ? await post('/api/profile/recover', { token })
     : await post('/api/profile/magic', { token, purpose: 'signin' });
-  statusLine.textContent = used.ok ? 'Signed in on this device.' : data.error || 'Sign-in failed.';
+  if (!used.ok) return failed(data, !!current);
+  const name = data.profile && (data.profile.name || (data.profile.rooms[0] || {}).name);
+  statusLine.textContent = kind === 'magic' && name ? 'Signed in as ' + name + ' on this device.' : 'Signed in on this device.';
 }
 
-function emailForm(form, input, url, sent) {
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const button = form.querySelector('button');
-    button.disabled = true;
-    try {
-      const { res, data } = await post(url, { email: input.value });
-      statusLine.textContent = res.ok ? sent : data.error || 'HTTP ' + res.status;
-    } catch {
-      statusLine.textContent = 'Network error, try again.';
+// sendLink asks for a link to email; on success the button turns into Resend for a minute (011-AC21, 011-AC22).
+async function sendLink(button, url, email, sent) {
+  button.disabled = true;
+  try {
+    const { res, data } = await post(url, { email });
+    if (res.ok) {
+      sent();
+      button.textContent = 'Resend';
+      window.grillCooldown(button, 60);
+      return true;
     }
-    button.disabled = false;
-  });
+    statusLine.textContent = data.error || 'HTTP ' + res.status;
+  } catch {
+    statusLine.textContent = 'Network error, try again.';
+  }
+  button.disabled = false;
+  return false;
 }
 
-emailForm($('bind'), $('bind-email'), '/api/profile/email', 'Check your mailbox. The link works once and expires after a few minutes.');
-emailForm($('signin'), $('signin-email'), '/api/profile/signin', 'If a profile holds this address, a sign-in link is on its way. It works once and expires after a few minutes.');
+$('bind').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const email = $('bind-email').value;
+  const button = $('bind').querySelector('button');
+  // The form's own button stays "Send me a link": the cooldown goes to Resend, which takes over.
+  button.disabled = true;
+  const { res, data } = await post('/api/profile/email', { email }).catch(() => ({ res: null, data: {} }));
+  button.disabled = false;
+  if (!res || !res.ok) {
+    statusLine.textContent = res ? data.error || 'HTTP ' + res.status : 'Network error, try again.';
+    return;
+  }
+  statusLine.textContent = '';
+  // The server stores the link after its answer: a reload now could still miss it.
+  pending = email;
+  $('bind').reset();
+  showEmail(false);
+  $('email-resend').textContent = 'Resend';
+  window.grillCooldown($('email-resend'), 60);
+});
+$('email-resend').addEventListener('click', () => sendLink($('email-resend'), '/api/profile/email', pending, () => { statusLine.textContent = ''; }));
+$('email-other').addEventListener('click', () => {
+  pending = '';
+  showEmail(true);
+  $('bind-email').focus();
+});
+$('email-change').addEventListener('click', () => {
+  showEmail(true);
+  $('bind-email').focus();
+});
+$('signin').addEventListener('submit', (e) => {
+  e.preventDefault();
+  sendLink($('signin').querySelector('button'), '/api/profile/signin', $('signin-email').value, () => {
+    statusLine.textContent = 'If a profile uses this address, a link is on its way (valid ' + window.grillDuration(ttl) + ').';
+  });
+});
 
 function start() {
-  signInFromLink().then(load).catch((err) => {
+  signInFromLink().then(load).then(toEmail).catch((err) => {
     console.error(err);
     statusLine.textContent = 'Could not load your profile.';
   });
 }
+// /profile#email comes from the room's marker and nudge (011-AC7): straight to the field.
+function toEmail() {
+  if (location.hash !== '#email' || $('email').hidden) return;
+  history.replaceState(null, '', location.pathname);
+  openEmailField();
+}
 // A link pasted into a tab already on this page changes only the fragment: no reload.
-window.addEventListener('hashchange', start);
+window.addEventListener('hashchange', () => (location.hash === '#email' ? toEmail() : start()));
 start();

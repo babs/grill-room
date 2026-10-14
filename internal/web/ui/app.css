@@ -65,6 +65,16 @@ body.room { position: fixed; top: var(--vv-top, 0); left: 0; right: 0; height: 1
 /* The user menu's button: initials in a ring, the name beside them on a wide screen. */
 .avatar { gap: var(--sp-2); padding: 0 var(--sp-2) 0 0; border: 0; background: transparent; color: var(--chrome-text); }
 .avatar::before { content: attr(data-initials); display: grid; place-items: center; flex: none; width: var(--control-h); height: var(--control-h); border-radius: 50%; background: var(--accent); color: var(--on-accent); font-size: var(--fs-sm); }
+/* The no-email marker (011-AC6) beside the avatar, with a 44 px target. */
+#me-anon { position: relative; display: grid; place-items: center; flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--dot-ring); }
+.tag.anon-mark { position: relative; }
+/* The hit area stops short of the neighbours: 8 px gaps in the header, 4 px between People badges. */
+#me-anon::after { content: ""; position: absolute; inset: -8px; }
+.tag.anon-mark::after { content: ""; position: absolute; inset: -2px; }
+#me-anon svg, #profile-anon svg { display: block; width: 14px; height: 14px; }
+.tag.tag-anon:not(.blank) { border-radius: 50%; box-shadow: inset 0 0 0 1px var(--border-strong); color: var(--text); }
+#profile-anon { display: inline-flex; align-items: center; gap: var(--sp-1); margin-left: var(--sp-2); font-size: var(--fs-sm); color: var(--text-muted); }
+#email-nudge { background: var(--primary-bg); }
 #more-open { border-color: transparent; background: transparent; color: var(--chrome-text); font-size: var(--fs-lg); }
 /* A persona pill: its colour as a stripe, its state as a shape with a ring and, wide, as a word (005-AC32). */
 button.persona { flex: none; min-height: var(--control-h); padding: 0 var(--sp-3) 0 var(--sp-2); border: 0; border-left: 4px solid var(--persona, var(--brand)); border-radius: var(--r-pill); background: var(--surface); color: var(--text); font-weight: 600; }

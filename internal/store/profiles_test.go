@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -118,7 +120,7 @@ func TestProfileParticipant(t *testing.T) {
 
 func link(s *Store, t *testing.T, profileID int64, email, purpose, token string, ttl time.Duration) {
 	t.Helper()
-	if err := s.CreateMagicLink(context.Background(), MagicLink{ProfileID: profileID, Email: email, Purpose: purpose, TokenHash: token, ExpiresAt: time.Now().Add(ttl)}); err != nil {
+	if err := s.CreateMagicLink(context.Background(), MagicLink{ProfileID: profileID, Email: email, Purpose: purpose, TokenHash: token, ExpiresAt: time.Now().Add(ttl)}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -133,22 +135,22 @@ func TestMagicLinks(t *testing.T) {
 	link(s, t, a.ProfileID, "alice@example.com", MagicBind, "bind-a", time.Minute)
 	// A bind link opened outside Alice's profile, or with none, binds nothing and stays usable.
 	for _, current := range []int64{0, b.ProfileID} {
-		if _, err := s.UseMagicLink(ctx, "bind-a", MagicBind, "dev2", current); !errors.Is(err, ErrWrongProfile) {
+		if _, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "bind-a", Purpose: MagicBind, SessionHash: "dev2", Current: current, Now: time.Now()}); !errors.Is(err, ErrWrongProfile) {
 			t.Fatalf("bind from profile %d: %v", current, err)
 		}
 	}
 	// Offered as the other kind, a link is unknown and stays unused.
-	if _, err := s.UseMagicLink(ctx, "bind-a", MagicSignIn, "dev2", a.ProfileID); !errors.Is(err, ErrNotFound) {
+	if _, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "bind-a", Purpose: MagicSignIn, SessionHash: "dev2", Current: a.ProfileID, Now: time.Now()}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("bind link as a sign-in: %v", err)
 	}
-	prof, err := s.UseMagicLink(ctx, "bind-a", MagicBind, "dev2", a.ProfileID)
+	prof, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "bind-a", Purpose: MagicBind, SessionHash: "dev2", Current: a.ProfileID, Now: time.Now()})
 	if err != nil || prof.Email != "alice@example.com" || prof.ID != a.ProfileID {
 		t.Fatalf("bind: %+v %v", prof, err)
 	}
 	if _, err := s.ProfileBySession(ctx, "dev2"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a bind link opened a session: %v", err)
 	}
-	if _, err := s.UseMagicLink(ctx, "bind-a", MagicBind, "dev3", a.ProfileID); !errors.Is(err, ErrNotFound) {
+	if _, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "bind-a", Purpose: MagicBind, SessionHash: "dev3", Current: a.ProfileID, Now: time.Now()}); !errors.Is(err, ErrLinkUsed) {
 		t.Fatalf("second use: %v", err)
 	}
 	if id, err := s.ProfileIDByEmail(ctx, "alice@example.com"); err != nil || id != a.ProfileID {
@@ -159,14 +161,14 @@ func TestMagicLinks(t *testing.T) {
 	}
 
 	link(s, t, a.ProfileID, "alice@example.com", MagicSignIn, "expired", -time.Second)
-	if _, err := s.UseMagicLink(ctx, "expired", MagicSignIn, "x", 0); !errors.Is(err, ErrNotFound) {
+	if _, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "expired", Purpose: MagicSignIn, SessionHash: "x", Current: 0, Now: time.Now()}); !errors.Is(err, ErrLinkExpired) {
 		t.Fatalf("expired: %v", err)
 	}
 	link(s, t, a.ProfileID, "alice@example.com", MagicSignIn, "signin", time.Minute)
-	if _, err := s.UseMagicLink(ctx, "signin", MagicBind, "dev4", a.ProfileID); !errors.Is(err, ErrNotFound) {
+	if _, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "signin", Purpose: MagicBind, SessionHash: "dev4", Current: a.ProfileID, Now: time.Now()}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("sign-in link as a bind: %v", err)
 	}
-	if prof, err := s.UseMagicLink(ctx, "signin", MagicSignIn, "dev4", b.ProfileID); err != nil || prof.ID != a.ProfileID {
+	if prof, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "signin", Purpose: MagicSignIn, SessionHash: "dev4", Current: b.ProfileID, Now: time.Now()}); err != nil || prof.ID != a.ProfileID {
 		t.Fatalf("sign in: %+v %v", prof, err)
 	}
 	if got, err := s.ProfileBySession(ctx, "dev4"); err != nil || got.ID != a.ProfileID {
@@ -175,7 +177,7 @@ func TestMagicLinks(t *testing.T) {
 
 	// Bob asks to bind Alice's address: the link stays unused, and the address stays hers.
 	link(s, t, b.ProfileID, "alice@example.com", MagicBind, "bind-b", time.Minute)
-	if _, err := s.UseMagicLink(ctx, "bind-b", MagicBind, "x", b.ProfileID); !errors.Is(err, ErrEmailTaken) {
+	if _, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "bind-b", Purpose: MagicBind, SessionHash: "x", Current: b.ProfileID, Now: time.Now()}); !errors.Is(err, ErrEmailTaken) {
 		t.Fatalf("taken: %v", err)
 	}
 	var used sql.NullString
@@ -185,12 +187,15 @@ func TestMagicLinks(t *testing.T) {
 
 	// Alice moves to another address: a sign-in link for the old one is stale.
 	link(s, t, a.ProfileID, "old@example.com", MagicSignIn, "stale", time.Minute)
-	if _, err := s.UseMagicLink(ctx, "stale", MagicSignIn, "x", 0); !errors.Is(err, ErrNotFound) {
+	if _, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "stale", Purpose: MagicSignIn, SessionHash: "x", Current: 0, Now: time.Now()}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("stale: %v", err)
 	}
 
-	// Creating a link sweeps the used and expired ones.
-	link(s, t, a.ProfileID, "alice@example.com", MagicSignIn, "fresh", time.Minute)
+	// Creating a link sweeps the ones used or expired over a day before (011-AC23).
+	if err := s.CreateMagicLink(ctx, MagicLink{ProfileID: a.ProfileID, Email: "alice@example.com", Purpose: MagicSignIn, TokenHash: "fresh",
+		ExpiresAt: time.Now().Add(25 * time.Hour)}, time.Now().Add(magicLinkKeep+time.Minute)); err != nil {
+		t.Fatal(err)
+	}
 	var n int
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM magic_links WHERE token_hash IN ('bind-a', 'expired', 'signin')`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("swept: %d left, %v", n, err)
@@ -221,7 +226,7 @@ func TestDeleteProfilePurges(t *testing.T) {
 	other := joinWithProfile(t, s, "c", "Carol", JoinProfile{RecoveryHash: "rec-c", SessionHash: "sess-c"})
 	const email = "secret-address@example.com"
 	link(s, t, a.ProfileID, email, MagicBind, "bind", time.Minute)
-	if _, err := s.UseMagicLink(ctx, "bind", MagicBind, "", a.ProfileID); err != nil {
+	if _, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "bind", Purpose: MagicBind, SessionHash: "", Current: a.ProfileID, Now: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 	link(s, t, a.ProfileID, email, MagicSignIn, "pending", time.Minute)
@@ -392,13 +397,20 @@ func TestProfileCallsFailOnAClosedStore(t *testing.T) {
 		"Profiles":           func() error { _, err := s.Profiles(ctx); return err },
 		"DeleteProfile":      func() error { return s.DeleteProfile(ctx, p.ProfileID) },
 		"CreateMagicLink": func() error {
-			return s.CreateMagicLink(ctx, MagicLink{ProfileID: 1, Email: "a@example.com", Purpose: MagicBind, TokenHash: "t", ExpiresAt: time.Now().Add(time.Minute)})
+			return s.CreateMagicLink(ctx, MagicLink{ProfileID: 1, Email: "a@example.com", Purpose: MagicBind, TokenHash: "t", ExpiresAt: time.Now().Add(time.Minute)}, time.Now())
 		},
-		"UseMagicLink": func() error { _, err := s.UseMagicLink(ctx, "t", MagicSignIn, "x", 0); return err },
-		"RenameRoom":   func() error { _, err := s.RenameRoom(ctx, "a", "x", p); return err },
-		"CreateInvite": func() error { _, err := s.CreateInvite(ctx, "a", "h", p.ID); return err },
-		"Invite":       func() error { _, err := s.Invite(ctx, "a", 1); return err },
-		"Invites":      func() error { _, err := s.Invites(ctx, "a", 0); return err },
+		"UseMagicLink": func() error {
+			_, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "t", Purpose: MagicSignIn, SessionHash: "x", Current: 0, Now: time.Now()})
+			return err
+		},
+		"PendingEmail":       func() error { _, err := s.PendingEmail(ctx, 1, time.Now()); return err },
+		"SnoozeEmailNudge":   func() error { return s.SnoozeEmailNudge(ctx, 1, time.Now()) },
+		"CreateRecoveryLink": func() error { _, err := s.CreateRecoveryLink(ctx, 1, "t", time.Now()); return err },
+		"UseRecoveryLink":    func() error { _, err := s.UseRecoveryLink(ctx, "t", "x", time.Now()); return err },
+		"RenameRoom":         func() error { _, err := s.RenameRoom(ctx, "a", "x", p); return err },
+		"CreateInvite":       func() error { _, err := s.CreateInvite(ctx, "a", "h", p.ID); return err },
+		"Invite":             func() error { _, err := s.Invite(ctx, "a", 1); return err },
+		"Invites":            func() error { _, err := s.Invites(ctx, "a", 0); return err },
 		"Join": func() error {
 			_, _, err := s.Join(ctx, "inv-a", "B", "t", JoinProfile{RecoveryHash: "r", SessionHash: "s"})
 			return err
@@ -500,5 +512,296 @@ func TestProfileRoomsCarryPeopleActivityAndAdmin(t *testing.T) {
 	// The last line is Alice's appointment, after both joins.
 	if got["a"].LastActivity.Before(got["a"].JoinedAt) || got["b"].LastActivity.IsZero() {
 		t.Fatalf("activity: %+v", prof.Rooms)
+	}
+}
+
+// 011-AC23: a bind link opened outside its profile names the profile and waits for a confirm, which
+// binds the address and leaves the opening browser as it was; the stored link tells expired from
+// used on the injected clock.
+func TestMagicLinkOutcomes(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec-a", SessionHash: "sess-a"})
+	b := joinWithProfile(t, s, "b", "Bob", JoinProfile{RecoveryHash: "rec-b", SessionHash: "sess-b"})
+	t0 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	if err := s.CreateMagicLink(ctx, MagicLink{ProfileID: a.ProfileID, Email: "alice@example.com", Purpose: MagicBind, TokenHash: "bind", ExpiresAt: t0.Add(time.Minute)}, t0); err != nil {
+		t.Fatal(err)
+	}
+	use := func(current int64, confirm bool, at time.Time) (*Profile, error) {
+		return s.UseMagicLink(ctx, MagicUse{TokenHash: "bind", Purpose: MagicBind, SessionHash: "x", Current: current, Confirm: confirm, Now: at})
+	}
+	for _, current := range []int64{0, b.ProfileID} {
+		p, err := use(current, false, t0)
+		if !errors.Is(err, ErrWrongProfile) || p.Name != "Alice" || p.Email != "alice@example.com" || p.Rooms != nil {
+			t.Fatalf("unconfirmed from %d: %+v %v", current, p, err)
+		}
+	}
+	if _, err := use(b.ProfileID, true, t0.Add(time.Minute)); !errors.Is(err, ErrLinkExpired) {
+		t.Fatalf("at its expiry: %v", err)
+	}
+	p, err := use(b.ProfileID, true, t0)
+	if err != nil || p.ID != a.ProfileID || p.Email != "alice@example.com" || p.Rooms != nil {
+		t.Fatalf("confirmed: %+v %v", p, err)
+	}
+	if got, _ := s.ProfileBySession(ctx, "sess-b"); got.Email != "" {
+		t.Fatal("the confirming browser's own profile changed")
+	}
+	if got, _ := s.ProfileBySession(ctx, "sess-a"); got.Email != "alice@example.com" {
+		t.Fatal("not bound to the profile that asked")
+	}
+	if _, err := s.ProfileBySession(ctx, "x"); !errors.Is(err, ErrNotFound) {
+		t.Fatal("a confirmed bind opened a session")
+	}
+	if _, err := use(b.ProfileID, true, t0); !errors.Is(err, ErrLinkUsed) {
+		t.Fatalf("again: %v", err)
+	}
+	// Bob asks for Alice's address: taken comes before any confirm, and names nobody.
+	if err := s.CreateMagicLink(ctx, MagicLink{ProfileID: b.ProfileID, Email: "alice@example.com", Purpose: MagicBind, TokenHash: "bob", ExpiresAt: t0.Add(time.Minute)}, t0); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "bob", Purpose: MagicBind, Current: a.ProfileID, Now: t0}); !errors.Is(err, ErrEmailTaken) || p != nil {
+		t.Fatalf("taken: %+v %v", p, err)
+	}
+}
+
+// 011-AC21: the pending address is the newest bind link's, while it is unused and unexpired.
+func TestPendingEmail(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec-a", SessionHash: "sess-a"})
+	b := joinWithProfile(t, s, "b", "Bob", JoinProfile{RecoveryHash: "rec-b", SessionHash: "sess-b"})
+	t0 := time.Now()
+	add := func(id int64, email, purpose, tok string) {
+		t.Helper()
+		if err := s.CreateMagicLink(ctx, MagicLink{ProfileID: id, Email: email, Purpose: purpose, TokenHash: tok, ExpiresAt: t0.Add(time.Minute)}, t0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending := func(id int64, at time.Time) string {
+		t.Helper()
+		got, err := s.PendingEmail(ctx, id, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := pending(a.ProfileID, t0); got != "" {
+		t.Fatalf("none yet: %q", got)
+	}
+	add(a.ProfileID, "old@example.com", MagicBind, "1")
+	add(a.ProfileID, "new@example.com", MagicBind, "2")
+	add(a.ProfileID, "signin@example.com", MagicSignIn, "3")
+	add(b.ProfileID, "bob@example.com", MagicBind, "4")
+	cases := []struct {
+		name string
+		id   int64
+		at   time.Time
+		want string
+	}{
+		{"newest bind link", a.ProfileID, t0, "new@example.com"},
+		{"another profile's", b.ProfileID, t0, "bob@example.com"},
+		{"expired", a.ProfileID, t0.Add(time.Minute), ""},
+	}
+	for _, c := range cases {
+		if got := pending(c.id, c.at); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+	if _, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "2", Purpose: MagicBind, Current: a.ProfileID, Now: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if got := pending(a.ProfileID, t0); got != "" {
+		t.Fatalf("after the newest is used: %q", got)
+	}
+}
+
+// 011-AC21: after a resend, opening the first link binds its address and spends the newer link, so
+// nothing stays pending and the newer link cannot rebind another address.
+func TestBindSpendsTheOtherBindLinks(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec-a", SessionHash: "sess-a"})
+	t0 := time.Now()
+	for _, l := range []struct{ email, tok string }{{"first@example.com", "first"}, {"second@example.com", "second"}} {
+		if err := s.CreateMagicLink(ctx, MagicLink{ProfileID: a.ProfileID, Email: l.email, Purpose: MagicBind, TokenHash: l.tok, ExpiresAt: t0.Add(time.Minute)}, t0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "first", Purpose: MagicBind, Current: a.ProfileID, Now: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.PendingEmail(ctx, a.ProfileID, t0); err != nil || got != "" {
+		t.Fatalf("pending after the first link: %q %v", got, err)
+	}
+	if _, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "second", Purpose: MagicBind, Current: a.ProfileID, Now: t0}); !errors.Is(err, ErrLinkUsed) {
+		t.Fatalf("the newer link: %v", err)
+	}
+	if p, _ := s.ProfileBySession(ctx, "sess-a"); p.Email != "first@example.com" {
+		t.Fatalf("bound %q", p.Email)
+	}
+}
+
+// 011-AC23: another request's link creation keeps a used or expired link readable as such for a
+// day on the injected clock, then sweeps it.
+func TestMagicLinkStateOutlivesOtherRequests(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec-a", SessionHash: "sess-a"})
+	b := joinWithProfile(t, s, "b", "Bob", JoinProfile{RecoveryHash: "rec-b", SessionHash: "sess-b"})
+	t0 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	create := func(id int64, email, tok string, at time.Time) {
+		t.Helper()
+		if err := s.CreateMagicLink(ctx, MagicLink{ProfileID: id, Email: email, Purpose: MagicBind, TokenHash: tok, ExpiresAt: at.Add(time.Minute)}, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	create(a.ProfileID, "a@example.com", "used", t0)
+	create(b.ProfileID, "b@example.com", "expired", t0)
+	if _, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "used", Purpose: MagicBind, Current: a.ProfileID, Now: t0}); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		at   time.Time
+		used error
+		exp  error
+	}{
+		{"another request an hour later", t0.Add(time.Hour), ErrLinkUsed, ErrLinkExpired},
+		{"another request past a day", t0.Add(magicLinkKeep + 2*time.Minute), ErrNotFound, ErrNotFound},
+	}
+	for i, c := range cases {
+		create(b.ProfileID, "other@example.com", fmt.Sprint("other", i), c.at)
+		if _, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "used", Purpose: MagicBind, Current: a.ProfileID, Now: c.at}); !errors.Is(err, c.used) {
+			t.Errorf("%s, used link: %v", c.name, err)
+		}
+		if _, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "expired", Purpose: MagicBind, Current: b.ProfileID, Now: c.at}); !errors.Is(err, c.exp) {
+			t.Errorf("%s, expired link: %v", c.name, err)
+		}
+	}
+}
+
+// 011-AC1: concurrent uses of one recovery link sign in exactly one browser.
+func TestRecoveryLinkConcurrentUse(t *testing.T) {
+	s := openTest(t)
+	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec-a", SessionHash: "sess-a"})
+	t0 := time.Now()
+	if _, err := s.CreateRecoveryLink(context.Background(), a.ProfileID, "tok", t0); err != nil {
+		t.Fatal(err)
+	}
+	const n = 8
+	errs := make(chan error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			_, err := s.UseRecoveryLink(context.Background(), "tok", fmt.Sprint("sess-", i), t0)
+			errs <- err
+		})
+	}
+	wg.Wait()
+	close(errs)
+	ok := 0
+	for err := range errs {
+		switch {
+		case err == nil:
+			ok++
+		case !errors.Is(err, ErrNotFound):
+			t.Errorf("use: %v", err)
+		}
+	}
+	if ok != 1 {
+		t.Fatalf("%d uses succeeded, want 1", ok)
+	}
+}
+
+// 011-AC8: the snooze is stored on the profile, so every device reads it.
+func TestSnoozeEmailNudge(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec-a", SessionHash: "sess-a"})
+	if p, _ := s.ProfileBySession(ctx, "sess-a"); p.EmailNudgeUntil != nil {
+		t.Fatal("snoozed from the start")
+	}
+	until := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	if err := s.SnoozeEmailNudge(ctx, a.ProfileID, until); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := s.SignInByRecovery(ctx, "rec-a", "other"); p.EmailNudgeUntil == nil || !p.EmailNudgeUntil.Equal(until) {
+		t.Fatalf("another device: %+v", p.EmailNudgeUntil)
+	}
+	if err := s.SnoozeEmailNudge(ctx, 999, until); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("no profile: %v", err)
+	}
+}
+
+// 011-AC1 011-AC2 011-AC3: a recovery link works once within 24 h on the injected clock, a newer
+// one voids the older, both uses are audited without the token, and a profile delete removes them.
+func TestRecoveryLinks(t *testing.T) {
+	s := openTest(t)
+	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec-a", SessionHash: "sess-a"})
+	b := joinWithProfile(t, s, "b", "Bob", JoinProfile{RecoveryHash: "rec-b", SessionHash: "sess-b"})
+	t0 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	audited := func(action string, id int64) context.Context {
+		return WithAudit(context.Background(), AuditEntry{At: t0, Actor: ActorSuperAdmin, Action: action, TargetKind: TargetProfile,
+			TargetID: strconv.FormatInt(id, 10)}, nil)
+	}
+	create := func(id int64, tok string) time.Time {
+		t.Helper()
+		exp, err := s.CreateRecoveryLink(audited("gen", id), id, tok, t0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return exp
+	}
+	use := func(tok, sess string, at time.Time) error {
+		_, err := s.UseRecoveryLink(audited("use", 0), tok, sess, at)
+		return err
+	}
+	if exp := create(a.ProfileID, "old-token"); !exp.Equal(t0.Add(24 * time.Hour)) {
+		t.Fatalf("expiry: %v", exp)
+	}
+	create(a.ProfileID, "new-token")
+	create(b.ProfileID, "bob-token")
+	if _, err := s.CreateRecoveryLink(context.Background(), 999, "x", t0); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown profile: %v", err)
+	}
+	cases := []struct {
+		name, tok string
+		at        time.Time
+		ok        bool
+	}{
+		{"voided by the newer", "old-token", t0, false},
+		{"unknown", "nope", t0, false},
+		{"expired", "bob-token", t0.Add(24 * time.Hour), false},
+		{"within 24 h", "new-token", t0.Add(24*time.Hour - time.Millisecond), true},
+		{"second use", "new-token", t0, false},
+	}
+	for _, c := range cases {
+		err := use(c.tok, "sess-"+c.name, c.at)
+		if c.ok != (err == nil) || (!c.ok && !errors.Is(err, ErrNotFound)) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+	if p, err := s.ProfileBySession(context.Background(), "sess-within 24 h"); err != nil || p.ID != a.ProfileID {
+		t.Fatalf("session from the link: %+v %v", p, err)
+	}
+	var uuid string
+	if err := s.db.QueryRowContext(context.Background(), `SELECT uuid FROM profiles WHERE id = ?`, a.ProfileID).Scan(&uuid); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM audit_log WHERE action IN ('gen', 'use') AND target_id = ? AND target_name = 'Alice' AND json_extract(details, '$.profile_uuid') = ?`,
+		strconv.FormatInt(a.ProfileID, 10), uuid); n != 3 {
+		t.Fatalf("audit entries for Alice: %d, want 2 generations and 1 use", n)
+	}
+	if n := count(t, s, `SELECT count(*) FROM audit_log WHERE action = 'use'`); n != 1 {
+		t.Fatalf("failed uses audited: %d", n)
+	}
+	if n := count(t, s, `SELECT count(*) FROM audit_log WHERE details LIKE '%token%' OR target_name LIKE '%token%'`); n != 0 {
+		t.Fatal("the audit log holds a token")
+	}
+	if err := s.DeleteProfile(context.Background(), a.ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM recovery_links WHERE profile_id = ?`, a.ProfileID); n != 0 {
+		t.Fatalf("links left after the profile delete: %d", n)
 	}
 }

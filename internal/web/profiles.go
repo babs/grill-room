@@ -28,6 +28,8 @@ const (
 	magicPerAddress   = 10
 	magicWindow       = 15 * time.Minute
 	sendMailTimeout   = 30 * time.Second
+	// emailNudgeSnooze is how long "Later" hides the add-an-email banner (011-AC8).
+	emailNudgeSnooze = 14 * 24 * time.Hour
 )
 
 func secure(r *http.Request) bool {
@@ -64,8 +66,18 @@ func (s *Server) profileFromCookie(r *http.Request) (*store.Profile, error) {
 
 type profileResp struct {
 	// EmailEnabled tells whether the server can send magic links: SMTP is configured.
-	EmailEnabled bool           `json:"email_enabled"`
-	Profile      *store.Profile `json:"profile"`
+	EmailEnabled bool `json:"email_enabled"`
+	// MagicLinkTTLS is how long an emailed link works, in seconds, for the page to say so (011-AC22).
+	MagicLinkTTLS int64          `json:"magic_link_ttl_s,omitempty"`
+	Profile       *store.Profile `json:"profile"`
+}
+
+func (s *Server) profileResp(p *store.Profile) profileResp {
+	r := profileResp{EmailEnabled: s.opts.SendMail != nil, Profile: p}
+	if r.EmailEnabled {
+		r.MagicLinkTTLS = int64(s.opts.MagicLinkTTL / time.Second)
+	}
+	return r
 }
 
 func (s *Server) getProfile(w http.ResponseWriter, r *http.Request) {
@@ -74,14 +86,42 @@ func (s *Server) getProfile(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "get_profile_failed", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, profileResp{EmailEnabled: s.opts.SendMail != nil, Profile: p})
+	if p != nil {
+		if p.PendingEmail, err = s.bus.Store.PendingEmail(r.Context(), p.ID, s.now()); err != nil {
+			s.serverError(w, "get_profile_failed", err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, s.profileResp(p))
+}
+
+// snoozeNudge hides the add-an-email banner for emailNudgeSnooze on every device of the profile.
+func (s *Server) snoozeNudge(w http.ResponseWriter, r *http.Request) {
+	if crossSite(r) {
+		httpError(w, http.StatusForbidden, "cross-site request refused")
+		return
+	}
+	p, err := s.profileFromCookie(r)
+	if err != nil {
+		s.serverError(w, "snooze_nudge_failed", err)
+		return
+	}
+	if p == nil {
+		httpError(w, http.StatusUnauthorized, "no profile on this browser")
+		return
+	}
+	if err := s.bus.Store.SnoozeEmailNudge(r.Context(), p.ID, s.now().Add(emailNudgeSnooze)); err != nil && !errors.Is(err, store.ErrNotFound) {
+		s.serverError(w, "snooze_nudge_failed", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // signedIn sets a fresh profile session cookie for p's device and answers with the profile.
 func (s *Server) signedIn(w http.ResponseWriter, r *http.Request, p *store.Profile, tok, how string) {
 	setProfileCookie(w, r, tok)
 	s.log.Info("profile_signed_in", zap.Int64("profile", p.ID), zap.String("how", how))
-	writeJSON(w, http.StatusOK, profileResp{EmailEnabled: s.opts.SendMail != nil, Profile: p})
+	writeJSON(w, http.StatusOK, s.profileResp(p))
 }
 
 func (s *Server) recoverProfile(w http.ResponseWriter, r *http.Request) {
@@ -95,8 +135,15 @@ func (s *Server) recoverProfile(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	tok := NewToken()
-	p, err := s.bus.Store.SignInByRecovery(r.Context(), HashToken(req.Token), HashToken(tok))
+	tok, hash := NewToken(), HashToken(req.Token)
+	how := "recovery"
+	p, err := s.bus.Store.SignInByRecovery(r.Context(), hash, HashToken(tok))
+	if errors.Is(err, store.ErrNotFound) {
+		how = "recovery_link"
+		ctx := store.WithAudit(r.Context(), store.AuditEntry{At: s.now(), Actor: store.ActorSystem, Action: ActionProfileRecoveryUsed,
+			TargetKind: store.TargetProfile}, nil)
+		p, err = s.bus.Store.UseRecoveryLink(ctx, hash, HashToken(tok), s.now())
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusUnauthorized, "this recovery link is invalid")
 		return
@@ -105,7 +152,36 @@ func (s *Server) recoverProfile(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "recover_profile_failed", err)
 		return
 	}
-	s.signedIn(w, r, p, tok, "recovery")
+	s.signedIn(w, r, p, tok, how)
+}
+
+type recoveryLinkResp struct {
+	URL       string    `json:"url"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// createRecoveryLink makes a one-time recovery link for the admin to hand over; the token is shown
+// here once and only its hash is kept (011-AC1).
+func (s *Server) createRecoveryLink(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httpError(w, http.StatusNotFound, "no such profile")
+		return
+	}
+	tok, now := NewToken(), s.now()
+	ctx := s.auditing(r, ActionProfileRecoveryLink, store.TargetProfile, strconv.FormatInt(id, 10), "",
+		map[string]any{"expires_at": now.Add(store.RecoveryLinkTTL).UTC()})
+	expires, err := s.bus.Store.CreateRecoveryLink(ctx, id, HashToken(tok), now)
+	if errors.Is(err, store.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "no such profile")
+		return
+	}
+	if err != nil {
+		s.serverError(w, "create_recovery_link_failed", err)
+		return
+	}
+	s.log.Info("recovery_link_created", zap.Int64("profile", id))
+	writeJSON(w, http.StatusCreated, recoveryLinkResp{URL: s.baseURL + "/profile#recover=" + tok, ExpiresAt: expires.UTC()})
 }
 
 // cleanEmail lowercases a bare address and accepts it if mail parses it back unchanged.
@@ -205,17 +281,18 @@ func (s *Server) afterAnswer(r *http.Request, work func(ctx context.Context)) {
 // spends at once; a sign-in link to #magic=, which waits for a click.
 func (s *Server) mailLink(ctx context.Context, profileID int64, email, purpose string) {
 	tok := NewToken()
+	now := s.now()
 	err := s.bus.Store.CreateMagicLink(ctx, store.MagicLink{
-		ProfileID: profileID, Email: email, Purpose: purpose, TokenHash: HashToken(tok), ExpiresAt: s.now().Add(s.opts.MagicLinkTTL),
-	})
+		ProfileID: profileID, Email: email, Purpose: purpose, TokenHash: HashToken(tok), ExpiresAt: now.Add(s.opts.MagicLinkTTL),
+	}, now)
 	if err != nil {
 		s.log.Error("magic_link_failed", zap.Int64("profile", profileID), zap.Error(err))
 		return
 	}
-	subject, intro, anchor := "Sign in to grill-room", "Open this link to sign in to your grill-room profile:", "magic"
+	// 011-AC24: the page and the toasts use these same words.
+	subject, intro, anchor := "Sign in to grill-room", "This link signs you in to your grill-room profile:", "magic"
 	if purpose == store.MagicBind {
-		subject, intro, anchor = "Confirm your email for grill-room",
-			"Open this link in the browser where you asked for it, to bind this address to your grill-room profile:", "bind"
+		subject, intro, anchor = "Add this email to your grill-room profile", "This link adds "+email+" to a grill-room profile:", "bind"
 	}
 	body := fmt.Sprintf("%s\n\n%s/profile#%s=%s\n\nIt works once, within %s. If you did not ask for it, ignore this mail.\n",
 		intro, s.baseURL, anchor, tok, durationText(s.opts.MagicLinkTTL))
@@ -238,8 +315,17 @@ func durationText(d time.Duration) string {
 	return d.String()
 }
 
+// magicError is an emailed link's failure: the page shows the outcome Reason names (011-AC23).
+type magicError struct {
+	Error       string `json:"error"`
+	Reason      string `json:"reason"`
+	ProfileName string `json:"profile_name,omitempty"`
+	Email       string `json:"email,omitempty"`
+}
+
 // useMagicLink spends an emailed link. A sign-in link signs this browser in; a bind link binds the
-// address to the profile this browser is already in, and only that one.
+// address to the profile this browser is in, or, once confirmed, to the profile that asked for it,
+// leaving this browser as it was.
 func (s *Server) useMagicLink(w http.ResponseWriter, r *http.Request) {
 	if s.opts.SendMail == nil {
 		httpError(w, http.StatusNotFound, "email sign-in is not configured")
@@ -254,6 +340,7 @@ func (s *Server) useMagicLink(w http.ResponseWriter, r *http.Request) {
 		// Purpose is the link kind the page expects from the URL it came from: the page asks before
 		// a sign-in and not before a bind, so the server must not take one for the other.
 		Purpose string `json:"purpose"`
+		Confirm bool   `json:"confirm"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -272,19 +359,29 @@ func (s *Server) useMagicLink(w http.ResponseWriter, r *http.Request) {
 		currentID = current.ID
 	}
 	tok := NewToken()
-	p, err := s.bus.Store.UseMagicLink(r.Context(), HashToken(req.Token), req.Purpose, HashToken(tok), currentID)
+	p, err := s.bus.Store.UseMagicLink(r.Context(), store.MagicUse{TokenHash: HashToken(req.Token), Purpose: req.Purpose,
+		SessionHash: HashToken(tok), Current: currentID, Confirm: req.Confirm, Now: s.now()})
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		httpError(w, http.StatusUnauthorized, "this link is invalid, already used or expired")
+		writeJSON(w, http.StatusUnauthorized, magicError{Reason: "invalid", Error: "this link is invalid"})
+	case errors.Is(err, store.ErrLinkExpired):
+		writeJSON(w, http.StatusGone, magicError{Reason: "expired", Error: "this link has expired"})
+	case errors.Is(err, store.ErrLinkUsed):
+		writeJSON(w, http.StatusGone, magicError{Reason: "used", Error: "this link was already used"})
 	case errors.Is(err, store.ErrWrongProfile):
-		httpError(w, http.StatusForbidden, "open this link in the browser where you asked for it")
+		writeJSON(w, http.StatusConflict, magicError{Reason: "confirm", Error: "this link adds the address to another profile",
+			ProfileName: p.Name, Email: p.Email})
 	case errors.Is(err, store.ErrEmailTaken):
-		httpError(w, http.StatusConflict, "this address is bound to another profile: sign in with it instead")
+		writeJSON(w, http.StatusConflict, magicError{Reason: "taken",
+			Error: "this address is bound to another profile: sign in with it, or ask the admin to merge the two profiles"})
 	case err != nil:
 		s.serverError(w, "use_magic_link_failed", err)
+	case req.Purpose == store.MagicBind && p.ID != currentID:
+		s.log.Info("profile_email_bound", zap.Int64("profile", p.ID), zap.Bool("elsewhere", true))
+		writeJSON(w, http.StatusOK, map[string]any{"bound": true, "email": p.Email, "profile_name": p.Name})
 	case req.Purpose == store.MagicBind:
 		s.log.Info("profile_email_bound", zap.Int64("profile", p.ID))
-		writeJSON(w, http.StatusOK, profileResp{EmailEnabled: true, Profile: p})
+		writeJSON(w, http.StatusOK, s.profileResp(p))
 	default:
 		s.signedIn(w, r, p, tok, "magic_link")
 	}

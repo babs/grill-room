@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -285,15 +286,15 @@ func TestMagicLinks(t *testing.T) {
 	if to != "alice@example.com" {
 		t.Fatalf("mailed %s", to)
 	}
-	// A bind link only binds, from the browser that asked: elsewhere it is refused and stays usable,
-	// so a link someone else asked for cannot bind a victim's address or sign the victim in.
+	// A bind link only binds; elsewhere it asks for a confirm and stays usable meanwhile (011-AC23),
+	// so it never signs anyone in.
 	tablet := e.device(t)
-	if code, _ := tablet.do(t, "POST", "/api/profile/magic", map[string]string{"token": tok, "purpose": "bind"}); code != http.StatusForbidden {
+	if code, _ := tablet.do(t, "POST", "/api/profile/magic", map[string]string{"token": tok, "purpose": "bind"}); code != http.StatusConflict {
 		t.Fatalf("bind link in a browser without the profile: %d", code)
 	}
 	other := e.device(t)
 	other.join(t, room.ID, "Mallory")
-	if code, _ := other.do(t, "POST", "/api/profile/magic", map[string]string{"token": tok, "purpose": "bind"}); code != http.StatusForbidden {
+	if code, _ := other.do(t, "POST", "/api/profile/magic", map[string]string{"token": tok, "purpose": "bind"}); code != http.StatusConflict {
 		t.Fatalf("bind link in another profile: %d", code)
 	}
 	if tablet.profile(t).Profile != nil || other.profile(t).Profile.Email != "" {
@@ -303,7 +304,7 @@ func TestMagicLinks(t *testing.T) {
 	if code != http.StatusOK || decodeJSON[profileResp](t, body).Profile.Email != "alice@example.com" {
 		t.Fatalf("bind link: %d %s", code, body)
 	}
-	if code, _ := laptop.do(t, "POST", "/api/profile/magic", map[string]string{"token": tok, "purpose": "bind"}); code != http.StatusUnauthorized {
+	if code, _ := laptop.do(t, "POST", "/api/profile/magic", map[string]string{"token": tok, "purpose": "bind"}); code != http.StatusGone {
 		t.Fatalf("second use: %d", code)
 	}
 
@@ -351,17 +352,25 @@ func TestMagicLinks(t *testing.T) {
 	}
 }
 
+// fixedClock pins e's server clock to t0 plus what the returned setter sets.
+func fixedClock(e *env) (t0 time.Time, set func(time.Duration)) {
+	var skew atomic.Int64
+	t0 = time.Now().UTC().Truncate(time.Second)
+	e.srv.now = func() time.Time { return t0.Add(time.Duration(skew.Load())) }
+	return t0, func(d time.Duration) { skew.Store(int64(d)) }
+}
+
 func TestMagicLinkExpires(t *testing.T) {
-	e, box := newMailEnv(t, time.Second)
+	e, box := newMailEnv(t, time.Minute)
+	_, skew := fixedClock(e)
 	d := e.device(t)
 	d.join(t, e.createRoom(t, "A").ID, "Alice")
-	// The link is made on a clock 2 s behind: its 1 s is over when it is used.
-	e.srv.now = func() time.Time { return time.Now().Add(-2 * time.Second) }
 	if code, _ := d.do(t, "POST", "/api/profile/email", map[string]string{"email": "alice@example.com"}); code != http.StatusAccepted {
 		t.Fatalf("bind: %d", code)
 	}
 	_, tok := box.next(t)
-	if code, _ := d.do(t, "POST", "/api/profile/magic", map[string]string{"token": tok, "purpose": "bind"}); code != http.StatusUnauthorized {
+	skew(time.Minute)
+	if code, _ := d.do(t, "POST", "/api/profile/magic", map[string]string{"token": tok, "purpose": "bind"}); code != http.StatusGone {
 		t.Fatalf("expired link: %d", code)
 	}
 	if d.profile(t).Profile.Email != "" {

@@ -199,8 +199,9 @@ func (c Config) Validate() error {
 	} else if c.SMTP != (mail.SMTP{}) {
 		return errors.New("GRILL_ROOM_SMTP_FROM, _USERNAME and _PASSWORD need GRILL_ROOM_SMTP_ADDR")
 	}
-	if c.MagicLinkTTL < time.Second || c.MagicLinkTTL > time.Hour {
-		return fmt.Errorf("GRILL_ROOM_MAGIC_LINK_TTL %s: want 1s to 1h", c.MagicLinkTTL)
+	// Whole seconds: pages word the lifetime from magic_link_ttl_s, and must say what the mail says.
+	if c.MagicLinkTTL < time.Second || c.MagicLinkTTL > time.Hour || c.MagicLinkTTL%time.Second != 0 {
+		return fmt.Errorf("GRILL_ROOM_MAGIC_LINK_TTL %s: want whole seconds, 1s to 1h", c.MagicLinkTTL)
 	}
 	if c.AuditRetention < 24*time.Hour {
 		return fmt.Errorf("GRILL_ROOM_AUDIT_RETENTION %s: want 24h or more", c.AuditRetention)

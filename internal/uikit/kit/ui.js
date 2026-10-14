@@ -84,6 +84,48 @@
     return Math.floor(s / 86400) + ' d ago';
   };
 
+  /** @type {WeakMap<HTMLButtonElement, number>} */
+  const cooldowns = new WeakMap();
+  /**
+   * grillCooldown keeps button disabled for seconds, counting down in its label (011-AC21,
+   * 011-AC22): a resend within a minute would only meet the server's rate limit. A new call on a
+   * button still counting replaces its countdown.
+   * @param {HTMLButtonElement} button
+   * @param {number} seconds
+   */
+  window.grillCooldown = (button, seconds) => {
+    clearTimeout(cooldowns.get(button));
+    const label = button.dataset.label || button.textContent || '';
+    button.dataset.label = label;
+    button.disabled = true;
+    const tick = () => {
+      if (seconds <= 0) {
+        cooldowns.delete(button);
+        button.textContent = label;
+        button.disabled = false;
+        delete button.dataset.label;
+        return;
+      }
+      button.textContent = label + ' (' + seconds + ' s)';
+      seconds--;
+      cooldowns.set(button, setTimeout(tick, 1000));
+    };
+    tick();
+  };
+
+  /**
+   * grillDuration words a link lifetime in seconds as the server's mails do (011-AC24): "1 minute",
+   * "N minutes", else Go's time.Duration form ("4s", "1m30s").
+   * @param {number} s
+   * @returns {string}
+   */
+  window.grillDuration = (s) => {
+    if (s === 60) return '1 minute';
+    if (s > 0 && s % 60 === 0) return s / 60 + ' minutes';
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return (h ? h + 'h' : '') + (h || m ? m + 'm' : '') + (s % 60) + 's';
+  };
+
   /**
    * grillLoadFailed says a module failed to load (a dropped connection, ERR_NETWORK_CHANGED): its
    * part of the page would otherwise do nothing, without a word. It shows once, and stays.

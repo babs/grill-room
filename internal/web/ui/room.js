@@ -753,11 +753,60 @@ $('recovery-done').addEventListener('click', () => {
   $('recovery').close();
 });
 
-// After the first message of a new profile, one notice offers the link.
-function nudgeRecovery() {
+// After the first message of a new profile, one notice offers the link. With email set up, the
+// email nudge replaces it (011-AC8).
+async function nudgeRecovery() {
+  // A message sent before the profile answered must still get the email nudge.
+  await ownLoaded;
+  if (own.email_enabled) {
+    nudgeEmail();
+    return;
+  }
   if (!sessionStorage.getItem(recoveryKey) || sessionStorage.getItem(recoveryKey + ':nudged')) return;
   sessionStorage.setItem(recoveryKey + ':nudged', '1');
   showNotice('To use this profile on another device, save its link: your initials, then "Use on another device".');
+}
+
+// own is GET /api/profile's answer: the room API says nothing of email state (011-AC6). It is read
+// on load and when the tab comes back, as an email bound on /profile then takes the marker away (011-AC9).
+let own = { email_enabled: false, profile: null };
+const anonText = 'Profile without email: add one to find it on another device';
+const noEmail = () => own.email_enabled && !!own.profile && !own.profile.email;
+// ownLoaded is the latest loadOwn, settled.
+let ownLoaded = Promise.resolve();
+const reloadOwn = () => { ownLoaded = loadOwn().catch(console.error); };
+async function loadOwn() {
+  const res = await netFetch('/api/profile');
+  if (!res.ok) return;
+  own = await res.json();
+  if (!$('me-anon').firstChild) {
+    $('me-anon').dataset.tip = anonText;
+    $('me-anon').setAttribute('aria-label', anonText);
+    $('me-anon').append(badgeIcon('anon'));
+  }
+  $('me-anon').hidden = !noEmail();
+  if (!noEmail()) $('email-nudge').hidden = true;
+  if (participants.length) renderParticipants();
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) reloadOwn(); });
+
+// nudgeEmail shows the banner once per page, unless "Later" snoozed it on this profile (011-AC8).
+let nudged = false;
+function nudgeEmail() {
+  const until = own.profile && own.profile.email_nudge_until;
+  if (nudged || !noEmail() || (until && new Date(until) > new Date())) return;
+  nudged = true;
+  $('email-nudge').hidden = false;
+}
+for (const id of ['email-nudge-later', 'email-nudge-close']) {
+  $(id).addEventListener('click', () => {
+    const b = $(id);
+    b.disabled = true;
+    netFetch('/api/profile/nudge', { method: 'POST' }).then((res) => {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      $('email-nudge').hidden = true;
+    }).catch((err) => toast("Couldn't snooze: " + err.message)).finally(() => { b.disabled = false; });
+  });
 }
 
 // Invites: a member creates links and revokes the ones they created; a room admin, who gets every
@@ -2647,6 +2696,7 @@ const roles = [
 // wherever its font puts it, off the name's centre line.
 const badgeIcons = {
   you: '<circle cx="12" cy="12" r="6" fill="currentColor" stroke="none"/>',
+  anon: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   host: '<path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4a2 2 0 0 0 .7 2.7l.2.1a2 2 0 0 1 1 1.7v.5a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.5a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   admin: '<path d="M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.5L12 17.3l-5.9 3.2 1.3-6.5-4.9-4.6 6.6-.8z" fill="currentColor"/>',
   ask: '<path d="M12 3l2.2 6.8L21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2z" fill="currentColor"/>',
@@ -2692,12 +2742,14 @@ function span(cls, text, title) {
 
 // tagColumns are the badges a person row may carry, in their fixed order (008-AC13): a column shows
 // in every row of a list once any row has it, so a badge sits at the same place on every row.
-const tagColumns = ['you', 'host', 'admin', 'ask', 'transcribed', 'audio'];
+const tagColumns = ['you', 'anon', 'host', 'admin', 'ask', 'transcribed', 'audio'];
 
 // personTags are a participant's badges by column: [icon, accessible name, tooltip].
 function personTags(p, id, isHere) {
   const t = {};
   for (const [name, title, on, icon] of roles) if (on(p)) t[name] = [icon, name, title];
+  // Only your own row: nobody else learns whether a profile has an email (011-AC6).
+  if (id === myID && noEmail()) t.anon = ['anon', anonText, anonText];
   if (agent.can_trigger.includes(p.id) && agent.host_participant_id !== p.id) t.ask = ['ask', 'Can ask the AI', 'Can ask the AI'];
   if (transcribed.has(id)) t.transcribed = ['transcribed', 'The transcription hears this voice', 'The transcription hears this voice'];
   const st = isHere ? audioState(id) : { key: 'none', icon: '', text: 'Not in the audio' };
@@ -2804,7 +2856,15 @@ const personCardLines = [
   (p, id) => (transcribed.has(id) ? 'Transcribed' : 'Not transcribed'),
   (p, id) => cardHere(p, id),
   (p) => 'Joined ' + new Date(p.joined_at).toLocaleString(),
+  (p, id) => (id === myID && noEmail() ? anonLink() : ''),
 ];
+
+function anonLink() {
+  const a = document.createElement('a');
+  a.href = '/profile#email';
+  a.textContent = anonText;
+  return a;
+}
 // hoverDelay keeps a pointer passing over the list from flashing cards.
 const hoverDelay = 300;
 
@@ -2851,7 +2911,7 @@ function showCard(el) {
     const text = line(p, id, el);
     if (!text) continue;
     const li = document.createElement('li');
-    li.textContent = text;
+    li.append(text);
     list.append(li);
   }
   const name = document.createElement('strong');
@@ -2898,7 +2958,7 @@ function hideSoon(from) {
 }
 
 const cardTarget = (t) => (t instanceof Element ? t.closest('#participants .name, #participants-away .name, #messages li[data-pid] > .meta > .sender') : null);
-const tipTarget = (t) => (t instanceof Element ? t.closest('#participants [data-tip], #participants-away [data-tip]') : null);
+const tipTarget = (t) => (t instanceof Element ? t.closest('#participants [data-tip], #participants-away [data-tip], #me-anon') : null);
 document.addEventListener('pointerover', (e) => {
   if (e.pointerType !== 'mouse' || !(e.target instanceof Element)) return;
   const el = cardTarget(e.target);
@@ -2931,11 +2991,24 @@ document.addEventListener('pointerout', (e) => {
 for (const id of ['person-card', 'person-tip']) {
   $(id).addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') hideSoon($(id)); });
 }
-document.addEventListener('focusin', (e) => { if (cardTarget(e.target)) showCard(e.target); });
-document.addEventListener('focusout', (e) => { if (e.target === cardFor) hideCard(); });
+document.addEventListener('focusin', (e) => {
+  if (cardTarget(e.target)) showCard(e.target);
+  else if (e.target instanceof Element && e.target.matches('.anon-mark')) showTip(e.target);
+});
+document.addEventListener('focusout', (e) => {
+  if (e.target === cardFor) hideCard();
+  if (e.target === tipFor) hideTip();
+});
+// The marker (011-AC7): on touch the first tap shows its tip, the next one opens the email form.
+document.addEventListener('click', (e) => {
+  const m = e.target instanceof Element && e.target.closest('.anon-mark');
+  if (!m || (e.pointerType !== 'touch' && e.pointerType !== 'pen') || tipFor === m) return;
+  e.preventDefault();
+  showTip(m);
+});
 // A tap anywhere on a person's row but its ⋯, or on a chat name, opens the card; a tap elsewhere closes it.
 document.addEventListener('click', (e) => {
-  const row = e.target instanceof Element && !e.target.closest('.person-more') ? e.target.closest('#participants li, #participants-away li') : null;
+  const row = e.target instanceof Element && !e.target.closest('.person-more, .anon-mark') ? e.target.closest('#participants li, #participants-away li') : null;
   const el = row ? row.querySelector('.name') : cardTarget(e.target);
   if (el) showCard(el);
   else if (!$('person-card').contains(e.target)) hideCard();
@@ -2994,7 +3067,7 @@ function renderParticipants() {
     for (const { li, tags, menu, seen } of want) {
       const box = li.querySelector('.tags');
       const had = new Map([...box.children].map((x) => [x.dataset.col, x]));
-      const kids = cols.map((c) => tagSpan(c, tags[c], had.get(c)));
+      const kids = cols.map((c) => tagSpan(c, tags[c], had.get(c) || (c === 'anon' && tags.anon ? anonMark() : undefined)));
       if (seen) {
         const el = had.get('seen') || span('seen', '');
         el.dataset.col = 'seen';
@@ -3051,8 +3124,16 @@ function tagSpan(col, t, el = document.createElement('span')) {
     el.setAttribute('aria-label', t[1]);
   }
   if (!on) el.classList.add('blank');
-  el.setAttribute('role', 'img');
+  if (el.tagName === 'A') el.classList.add('anon-mark');
+  else el.setAttribute('role', 'img');
   return el;
+}
+
+// anonMark is your own row's marker square: a link to the email form (011-AC7).
+function anonMark() {
+  const a = document.createElement('a');
+  a.href = '/profile#email';
+  return a;
 }
 setInterval(() => { if (participants.length) renderParticipants(); }, 30_000);
 
@@ -3448,7 +3529,7 @@ async function send() {
   if (!res.ok) throw new Error('send: HTTP ' + res.status);
   // Only the line sent leaves the box: the next one may already be typed in it.
   if (bodyInput.value === typed) bodyInput.value = '';
-  nudgeRecovery();
+  nudgeRecovery().catch(console.error);
   offerPush();
   const m = await res.json();
   if (m.mention_notices) {
@@ -3697,6 +3778,7 @@ async function firstLoad() {
 firstLoad().then((ok) => {
   if (!ok) return;
   connect();
+  reloadOwn();
   if (docsMode) {
     const doc = decodeURIComponent(location.pathname.split('/')[4] || '');
     if (doc) showDocument(doc, false, true).catch(() => history.replaceState(null, '', roomPath + '/docs'));

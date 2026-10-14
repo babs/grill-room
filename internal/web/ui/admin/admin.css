@@ -31,6 +31,10 @@ dd { margin: 0; }
 form.limit { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); min-width: 16rem; }
 form.limit .hint { margin: 0; width: 100%; }
 form.limit input { width: 5rem; }
+.recovery-link { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); }
+.recovery-link .copy-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); }
+.recovery-link input { width: 18rem; max-width: 100%; font-family: var(--mono); font-size: var(--fs-sm); }
+.recovery-link .hint { margin: 0; }
 nav.tabs.views { position: sticky; top: 0; z-index: var(--z-sticky); margin: 0; padding: 0 var(--sp-4); background: var(--surface); }
 @media (max-width: 40rem) {
   main { padding: 0 var(--sp-2) var(--sp-4); }
