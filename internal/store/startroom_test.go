@@ -212,7 +212,7 @@ func TestSetUpRoomStorageQuota(t *testing.T) {
 	ctx := t.Context()
 	alice := joinWithProfile(t, s, "lobby", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
 	used, _ := s.UsedBytes(ctx)
-	if err := s.SetInstanceSettings(ctx, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: used + 32<<10}); err != nil {
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: used + 32<<10}); err != nil {
 		t.Fatal(err)
 	}
 	setup := testSetup()

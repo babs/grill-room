@@ -255,6 +255,9 @@ func TestDeleteProfilePurges(t *testing.T) {
 	if prof, err := s.ProfileBySession(ctx, "sess-c"); err != nil || len(prof.Rooms) != 1 {
 		t.Errorf("other profile: %+v %v", prof, err)
 	}
+	if err := s.Checkpoint(ctx); err != nil {
+		t.Fatal(err)
+	}
 	for _, f := range []string{path, path + "-wal"} {
 		b, err := os.ReadFile(f)
 		if err != nil && !os.IsNotExist(err) {

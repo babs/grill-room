@@ -337,7 +337,7 @@ func (l *jsonLines) flush() error {
 func eachRow(ctx context.Context, tx *sql.Tx, scan func(*sql.Rows) error, query string, args ...any) error {
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
-		return fmt.Errorf("export: %w", err)
+		return fmt.Errorf("query: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -346,7 +346,7 @@ func eachRow(ctx context.Context, tx *sql.Tx, scan func(*sql.Rows) error, query 
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("export: %w", err)
+		return fmt.Errorf("query: %w", err)
 	}
 	return nil
 }

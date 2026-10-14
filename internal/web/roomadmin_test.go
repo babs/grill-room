@@ -50,7 +50,7 @@ func TestProfileCreatesRooms(t *testing.T) {
 	}
 
 	if code, b := e.do(t, "GET", "/api/admin/settings", e.admin, nil); code != http.StatusOK ||
-		decodeJSON[store.InstanceSettings](t, b) != (store.InstanceSettings{RoomsPerProfile: 10, RoomCreation: store.CreationAnyone, PluginMaxMB: store.DefaultPluginMaxMB}) {
+		decodeJSON[store.InstanceSettings](t, b) != (store.InstanceSettings{RoomsPerProfile: 10, RoomCreation: store.CreationAnyone, PluginMaxMB: store.DefaultPluginMaxMB, PurgeEmptyProfiles: true}) {
 		t.Fatalf("default settings: %d %s", code, b)
 	}
 	for _, bad := range []store.InstanceSettings{

@@ -513,7 +513,7 @@ func TestImportByProfile(t *testing.T) {
 	if _, err := s.RoomAdmin(ctx, "daves", dave.ProfileID); err != nil {
 		t.Fatalf("dave is not room admin: %v", err)
 	}
-	if err := s.SetInstanceSettings(ctx, InstanceSettings{RoomsPerProfile: 1, RoomCreation: CreationAnyone}); err != nil {
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 1, RoomCreation: CreationAnyone}); err != nil {
 		t.Fatal(err)
 	}
 	o.RoomID = "again"
@@ -592,13 +592,13 @@ func TestImportRefusals(t *testing.T) {
 	o = importOpts("x")
 	o.MaxUpload = 5
 	refused("upload size", o, dir, "too large for this instance")
-	if err := s.SetInstanceSettings(ctx, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: 1}); err != nil {
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: 1}); err != nil {
 		t.Fatal(err)
 	}
 	o = importOpts("x")
 	o.ArchiveBytes = 1
 	refused("storage quota", o, dir, "storage quota")
-	if err := s.SetInstanceSettings(ctx, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone}); err != nil {
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone}); err != nil {
 		t.Fatal(err)
 	}
 	tamper := func(name string, edit func([]byte) []byte) string {

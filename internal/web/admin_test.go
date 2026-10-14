@@ -342,8 +342,8 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 	// the archives' and the renames' have their own tests (TestAuditLogViewAPI, TestRoomAdmins,
 	// TestRoomSkillsAPI, TestProfileCreatesRooms, TestProfileMaxRoomsAPI, TestExportImportAPI,
 	// TestRenameParticipant, TestDeleteDocument, TestStarterLibraryAPI, TestHostTransfer,
-	// TestAdminRecoveryLink).
-	covered := map[string]bool{ActionProfileRecoveryLink: true, ActionProfileRecoveryUsed: true, ActionStarterPublish: true, ActionStarterDelete: true, ActionRoomAdminAdd: true, ActionRoomAdminRemove: true, ActionRoomSkillRemove: true, ActionSettings: true,
+	// TestAdminRecoveryLink, TestMergeAPI, TestPurgeProfilesLoopAndSwitch).
+	covered := map[string]bool{ActionProfileMerge: true, ActionProfilePurge: true, ActionProfileRecoveryLink: true, ActionProfileRecoveryUsed: true, ActionStarterPublish: true, ActionStarterDelete: true, ActionRoomAdminAdd: true, ActionRoomAdminRemove: true, ActionRoomSkillRemove: true, ActionSettings: true,
 		ActionProfileMaxRooms: true, ActionRoomExport: true, ActionRoomImport: true, ActionRename: true, ActionDocumentDelete: true,
 		ActionDocumentRestore: true, ActionHostTransfer: true}
 	for _, w := range want {

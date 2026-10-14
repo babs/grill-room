@@ -222,22 +222,15 @@ func (s *Store) ProfileParticipant(ctx context.Context, sessionHash, roomID stri
 }
 
 // DeleteProfile removes a profile with its sessions, magic links and email, and detaches its
-// participants, which keep their name and their room access.
+// participants, which keep their name and their room access. Run Checkpoint after it: the WAL holds
+// the deleted email's old pages until then.
 func (s *Store) DeleteProfile(ctx context.Context, id int64) error {
-	err := s.withTx(ctx, "delete profile", func(tx *sql.Tx) error {
+	return s.withTx(ctx, "delete profile", func(tx *sql.Tx) error {
 		if err := auditTx(ctx, tx, "", nil); err != nil {
 			return err
 		}
 		return execOne(ctx, tx, `DELETE FROM profiles WHERE id = ?`, id)
 	})
-	if err != nil {
-		return err
-	}
-	// The WAL still holds the deleted email's old pages until a checkpoint rewrites the main file.
-	if _, err := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
-		return fmt.Errorf("checkpoint after delete profile %d: %w", id, err)
-	}
-	return nil
 }
 
 // magicLinkKeep is how long a used or expired magic link stays stored, so opening it again still

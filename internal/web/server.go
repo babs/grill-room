@@ -55,6 +55,9 @@ const (
 // heartbeat keeps proxies from timing out an idle stream and re-checks access. A var for tests.
 var heartbeat = 20 * time.Second
 
+// e2eRoutes adds the browser tests' hooks; only the e2e build (e2e.go) sets it.
+var e2eRoutes func(s *Server, mux *http.ServeMux)
+
 // afterAccessCheck runs between a stream's access check and its reads; tests delete the room
 // there, as a concurrent DELETE may.
 var afterAccessCheck atomic.Pointer[func(room string)]
@@ -252,6 +255,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/admin/profiles/{id}", s.admin(s.deleteProfile))
 	mux.Handle("PUT /api/admin/profiles/{id}/max_rooms", s.admin(s.setProfileMaxRooms))
 	mux.Handle("POST /api/admin/profiles/{id}/recovery-link", s.admin(s.createRecoveryLink))
+	mux.Handle("GET /api/admin/profiles/merge-preview", s.admin(s.mergePreview))
+	mux.Handle("POST /api/admin/profiles/merge", s.admin(s.mergeProfiles))
 	mux.Handle("GET /api/admin/templates", s.admin(s.adminTemplates))
 	mux.Handle("DELETE /api/admin/templates/{template}", s.admin(s.removeTemplate))
 	mux.Handle("GET /api/admin/skills", s.admin(s.adminSkills))
@@ -375,6 +380,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/stt/rooms/{room}/prompt", s.sttAuth(s.sttPromptFor))
 	mux.Handle("GET /api/rooms/{room}/glossary", s.participant(s.getGlossary))
 	mux.Handle("PUT /api/rooms/{room}/glossary", s.participant(s.putGlossary))
+	if e2eRoutes != nil {
+		e2eRoutes(s, mux)
+	}
 
 	csp := "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" + s.connectSrc()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -605,14 +613,14 @@ func (s *Server) deleteRoom(w http.ResponseWriter, r *http.Request, sess *sessio
 		httpError(w, http.StatusNotFound, "no such room")
 		return
 	}
-	// Before the error check: a failed post-delete checkpoint still leaves the room gone.
-	s.bus.Notify(room)
-	s.closeVoice(room)
-	s.people.forget(room)
 	if err != nil {
 		s.serverError(w, "delete_room_failed", err)
 		return
 	}
+	s.bus.Notify(room)
+	s.closeVoice(room)
+	s.people.forget(room)
+	s.checkpoint(context.WithoutCancel(r.Context()))
 	s.log.Info("room_deleted", zap.String("room", room), zap.Bool("by_room_admin", sess != nil))
 	w.WriteHeader(http.StatusNoContent)
 }

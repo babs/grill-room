@@ -40,3 +40,7 @@ nav.tabs.views { position: sticky; top: 0; z-index: var(--z-sticky); margin: 0; 
   main { padding: 0 var(--sp-2) var(--sp-4); }
   .app-header button { margin-left: 0; }
 }
+.merge-pick label { min-width: 0; max-width: 100%; }
+.merge-pick select { max-width: 100%; }
+#merge-preview ul { padding-left: var(--sp-4); margin: var(--sp-1) 0 var(--sp-3); }
+label.check { display: flex; align-items: center; gap: var(--sp-2); min-height: var(--control-h); font-size: var(--fs-sm); }

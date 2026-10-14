@@ -47,18 +47,58 @@ func TestCreateProfileRoom(t *testing.T) {
 	}
 }
 
+// putSettings stores v whole, as a PUT sending every field does.
+func putSettings(ctx context.Context, s *Store, v InstanceSettings) error {
+	_, err := s.UpdateInstanceSettings(ctx, func(p *InstanceSettings) error { *p = v; return nil })
+	return err
+}
+
+// 011-AC17: concurrent patches of different settings both land: each reads and writes in one
+// transaction.
+func TestUpdateInstanceSettingsPatchesDoNotUndoEachOther(t *testing.T) {
+	s := openTest(t)
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, patch := range []func(*InstanceSettings) error{
+		func(v *InstanceSettings) error { v.PluginMaxMB = 7; return nil },
+		func(v *InstanceSettings) error { v.PurgeEmptyProfiles = false; return nil },
+	} {
+		wg.Go(func() {
+			_, err := s.UpdateInstanceSettings(t.Context(), patch)
+			errs <- err
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if v, err := s.InstanceSettings(t.Context()); err != nil || v.PluginMaxMB != 7 || v.PurgeEmptyProfiles || v.RoomsPerProfile != DefaultRoomsPerProfile {
+		t.Fatalf("after both patches: %+v %v", v, err)
+	}
+	refused := errors.New("refused")
+	if _, err := s.UpdateInstanceSettings(t.Context(), func(v *InstanceSettings) error { v.PluginMaxMB = 9; return refused }); !errors.Is(err, refused) {
+		t.Fatalf("refused patch: %v", err)
+	}
+	if v, _ := s.InstanceSettings(t.Context()); v.PluginMaxMB != 7 {
+		t.Fatalf("a refused patch was stored: %+v", v)
+	}
+}
+
 // 004-AC7: each guardrail refuses with its reason and creates nothing; the limit counts the rooms
 // a profile created and still has, and holds under concurrent requests.
 func TestCreateProfileRoomGuardrails(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	alice := joinWithProfile(t, s, "lobby", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
-	if v, err := s.InstanceSettings(ctx); err != nil || v != (InstanceSettings{RoomsPerProfile: DefaultRoomsPerProfile, RoomCreation: CreationAnyone, PluginMaxMB: DefaultPluginMaxMB}) {
+	if v, err := s.InstanceSettings(ctx); err != nil || v != (InstanceSettings{RoomsPerProfile: DefaultRoomsPerProfile, RoomCreation: CreationAnyone, PluginMaxMB: DefaultPluginMaxMB, PurgeEmptyProfiles: true}) {
 		t.Fatalf("defaults %+v %v", v, err)
 	}
 	set := func(v InstanceSettings) {
 		t.Helper()
-		if err := s.SetInstanceSettings(ctx, v); err != nil {
+		if err := putSettings(ctx, s, v); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -225,7 +265,7 @@ func TestRoomAdminCallsFailWithTheStore(t *testing.T) {
 	p := &Participant{ID: 1, ProfileID: 1}
 	for name, call := range map[string]func() error{
 		"settings":     func() error { _, err := s.InstanceSettings(ctx); return err },
-		"set settings": func() error { return s.SetInstanceSettings(ctx, InstanceSettings{}) },
+		"set settings": func() error { return putSettings(ctx, s, InstanceSettings{}) },
 		"used":         func() error { _, err := s.UsedBytes(ctx); return err },
 		"create":       func() error { _, err := createFor(t, s, "x", p, "A"); return err },
 		"room admin":   func() error { _, err := s.RoomAdmin(ctx, "x", 1); return err },
@@ -244,7 +284,7 @@ func TestProfileMaxRooms(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	alice := joinWithProfile(t, s, "lobby", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
-	if err := s.SetInstanceSettings(ctx, InstanceSettings{RoomsPerProfile: 2, RoomCreation: CreationAnyone}); err != nil {
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 2, RoomCreation: CreationAnyone}); err != nil {
 		t.Fatal(err)
 	}
 	set := func(n *int) {

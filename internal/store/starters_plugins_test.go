@@ -36,13 +36,13 @@ func TestStarterPlugins(t *testing.T) {
 	}
 
 	used, _ := s.UsedBytes(ctx)
-	if err := s.SetInstanceSettings(ctx, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: used + 1024}); err != nil {
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: used + 1024}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.SaveStarter(ctx, alice.ProfileID, 0, m, files); !errors.Is(err, ErrLimit) || !strings.Contains(err.Error(), "storage quota") {
 		t.Fatalf("a starter past the quota with its plugin: %v", err)
 	}
-	if err := s.SetInstanceSettings(ctx, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone}); err != nil {
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone}); err != nil {
 		t.Fatal(err)
 	}
 	st, err := s.SaveStarter(ctx, alice.ProfileID, 0, m, files)
@@ -70,7 +70,7 @@ func TestStarterPlugins(t *testing.T) {
 	}
 	// A plugin left out does not count against the storage quota either.
 	used, _ = s.UsedBytes(ctx)
-	if err := s.SetInstanceSettings(ctx, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: used + int64(len(vs[2].Data))/2}); err != nil {
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: used + int64(len(vs[2].Data))/2}); err != nil {
 		t.Fatal(err)
 	}
 	left("small", setup(16), "The room starts without the starter's plugin babs: it would take the room past its quota.", 0)
@@ -78,7 +78,7 @@ func TestStarterPlugins(t *testing.T) {
 		!strings.Contains(err.Error(), "storage quota") {
 		t.Fatalf("a kept plugin past the storage quota: %v", err)
 	}
-	if err := s.SetInstanceSettings(ctx, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone}); err != nil {
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone}); err != nil {
 		t.Fatal(err)
 	}
 	many := setup(1 << 20)
@@ -96,11 +96,11 @@ func TestStarterPlugins(t *testing.T) {
 	}
 	capped := setup(4 << 20)
 	capped.Files = map[string][]byte{sm.Plugins[0].File: big.Tar}
-	if err := s.SetInstanceSettings(ctx, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, PluginMaxMB: 1}); err != nil {
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, PluginMaxMB: 1}); err != nil {
 		t.Fatal(err)
 	}
 	left("capped", capped, "The room starts without the starter's plugin babs: too big: the plugin is bigger than 1 MB.", 0)
-	if err := s.SetInstanceSettings(ctx, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone}); err != nil {
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone}); err != nil {
 		t.Fatal(err)
 	}
 	for _, room := range []string{"held", "free"} {

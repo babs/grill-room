@@ -21,7 +21,13 @@ import { RoomPanel, Rename, TabBar, fetchJSON, roomTabs, size, when, ago, onInpu
  * @typedef {{id: number, preset?: string, title: string, version: number, author: string, created_at: string}} Template
  * @typedef {{id: number, name: string, shared: boolean, version: number, author: string, size: number,
  *   updated_at: string}} Skill
- * @typedef {{rooms_per_profile: number, storage_quota_bytes: number, room_creation: string}} Settings
+ * @typedef {{rooms_per_profile: number, storage_quota_bytes: number, room_creation: string, purge_empty_profiles: boolean}} Settings
+ * @typedef {{id: number, uuid: string, name: string, email: string}} MergeSide
+ * @typedef {{keep: number, merge: number}} MergeCount
+ * @typedef {{keep: MergeSide, merge: MergeSide, rooms: {room_id: string, room_name: string, keep: boolean, merge: boolean}[],
+ *   skills: {keep: string[], merge: string[], renamed: {from: string, to: string}[]}, seats: MergeCount, shared_skills: MergeCount, templates: MergeCount,
+ *   starters: MergeCount, rooms_created: MergeCount, room_admin: {keep: string[], merge: string[]},
+ *   over_limits: {kind: string, after: number, limit: number}[], email_after: string}} MergePreview
  * @typedef {{join_ip: string, join_ua: string, last_ip: string, last_ua: string, last_seen_at: string | null}} Client
  * @typedef {{id: number, name: string, admin: boolean, has_profile: boolean, host: boolean, can_host: boolean, client?: Client}} Participant
  * @typedef {{name: string, counts: Record<string, number>, bytes: Record<string, number>, warnings: string[], format: number,
@@ -89,6 +95,9 @@ addEventListener('grill:toast', (e) => {
     if (!toasts.children.length) toasts.hidePopover();
   }, 4000);
 });
+
+/** @param {string} text */
+const toast = (text) => dispatchEvent(new CustomEvent('grill:toast', { detail: text }));
 
 function Login() {
   const [token, setToken] = useState('');
@@ -388,6 +397,7 @@ function ImportRoom({ reload }) {
 function Profiles() {
   const [list, setList] = useState(/** @type {Profile[] | null} */ (null));
   const [perProfile, setPerProfile] = useState(0);
+  const [merging, setMerging] = useState(0);
   const load = () => api('GET', '/api/admin/profiles').then(setList).catch(show);
   useEffect(() => {
     load();
@@ -407,9 +417,129 @@ function Profiles() {
         <td>${p.name || '—'} <code title=${p.uuid}>${p.uuid.slice(0, 8)}</code></td><td>${p.email || '—'}</td>
         <td class="wrap">${p.rooms.map((r) => r.room_name).join(', ') || '—'}</td><td>${p.skills}</td><td>${when(p.last_activity)}</td>
         <td><${RoomLimit} key=${p.id} p=${p} perProfile=${perProfile} reload=${load}/></td>
-        <td><${RecoveryLink} p=${p}/> <button type="button" onClick=${() => remove(p)}>Delete</button></td>
+        <td><${RecoveryLink} p=${p}/> <button type="button" class="btn-secondary" onClick=${() => setMerging(p.id)}
+          aria-label=${'Merge ' + (p.name || p.uuid) + ' into another profile'}>Merge…</button>
+          <button type="button" onClick=${() => remove(p)}>Delete</button></td>
       </tr>`)}</tbody>
-    </table></div>` : html`<p>No profile yet.</p>`)}`;
+    </table></div>` : html`<p>No profile yet.</p>`)}
+    ${list && merging > 0 && html`<${MergeSheet} key=${merging} profiles=${list} from=${merging} done=${() => { setMerging(0); load(); }}/>`}`;
+}
+
+/** @param {Profile | MergeSide} p */
+const label = (p) => `${p.name || '—'}${p.email ? ' · ' + p.email : ''} · ${p.uuid.slice(0, 8)}`;
+/** @param {string[]} names */
+const listed = (names) => (names.length ? new Intl.ListFormat('en').format(names) : 'none');
+/** @type {[string, string, string][]} */
+const mergeKinds = [['seats', 'seat', 'seats'], ['skills', 'personal skill', 'personal skills'], ['shared_skills', 'shared skill', 'shared skills'],
+  ['templates', 'persona template', 'persona templates'], ['starters', 'starter', 'starters'], ['rooms_created', 'room created', 'rooms created'],
+  ['room_admins', 'room-admin role', 'room-admin roles'], ['sessions', 'sign-in', 'sign-ins']];
+/** @type {Record<string, string>} */
+const limitKinds = { skills: 'Personal skills', templates: 'Persona templates', starters: 'Starters', rooms_created: 'Rooms created' };
+
+/**
+ * MergeSheet merges profile B into profile A (011-AC10): it previews what moves and what A ends
+ * with, swaps the two, and refuses one profile into itself. B defaults to the row it opened from.
+ * @param {{profiles: Profile[], from: number, done: () => void}} props
+ */
+function MergeSheet({ profiles, from, done }) {
+  const ref = useRef(/** @type {HTMLDialogElement | null} */ (null));
+  const [keep, setKeep] = useState(0);
+  const [merge, setMerge] = useState(from);
+  const [preview, setPreview] = useState(/** @type {MergePreview | null} */ (null));
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState('');
+  // inflight, unlike busy, is current inside the close handler of the render that sent the merge.
+  const inflight = useRef(false);
+  useEffect(() => { ref.current?.showModal(); }, []);
+  useEffect(() => {
+    setPreview(null);
+    setSaid('');
+    if (!keep || !merge || keep === merge) return;
+    // A slower answer to an older pair must not overwrite the current one.
+    let current = true;
+    api('GET', `/api/admin/profiles/merge-preview?keep=${keep}&merge=${merge}`)
+      .then((p) => { if (current) setPreview(p); })
+      .catch((/** @type {Error} */ err) => { if (current) setSaid(err.message); });
+    return () => { current = false; };
+  }, [keep, merge]);
+  // A merge in flight keeps the sheet open: its error would have nowhere to show.
+  const close = () => { if (!busy) ref.current?.close(); };
+  // A second Escape closes a dialog whatever cancel does: reopen it until the answer comes.
+  const closed = () => {
+    if (inflight.current) ref.current?.showModal();
+    else done();
+  };
+  const run = () => {
+    inflight.current = true;
+    setBusy(true);
+    setSaid('');
+    api('POST', '/api/admin/profiles/merge', { keep, merge }).then((/** @type {{keep: {name: string}, moved: Record<string, number>}} */ r) => {
+      inflight.current = false;
+      const moved = mergeKinds.filter(([k]) => r.moved?.[k]).map(([k, one, many]) => `${r.moved[k]} ${r.moved[k] === 1 ? one : many}`);
+      toast(`Merged into ${r.keep.name || 'the kept profile'}. ${moved.length ? 'Moved ' + listed(moved) + '.' : 'Nothing to move.'}`);
+      ref.current?.close();
+    }).catch((/** @type {Error} */ err) => {
+      inflight.current = false;
+      setSaid(err.message);
+      setBusy(false);
+    });
+  };
+  /** @param {MouseEvent} e */
+  const outside = (e) => {
+    const d = /** @type {HTMLDialogElement} */ (e.currentTarget);
+    const r = d.getBoundingClientRect();
+    if (!busy && e.target === d && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) d.close();
+  };
+  /** @param {string} id @param {string} text @param {number} value @param {(v: number) => void} set */
+  const pick = (id, text, value, set) => html`<label>${text}
+    <select id=${id} value=${String(value)} disabled=${busy} onChange=${(/** @type {Event} */ e) => set(Number(/** @type {HTMLSelectElement} */ (e.currentTarget).value))}>
+      <option value="0">Pick a profile</option>
+      ${profiles.map((p) => html`<option value=${String(p.id)}>${label(p)}</option>`)}
+    </select></label>`;
+  const p = preview;
+  const same = keep > 0 && keep === merge;
+  return html`<dialog ref=${ref} id="merge-sheet" class="sheet wide full" aria-labelledby="merge-title" onClose=${closed} onClick=${outside}
+    onCancel=${(/** @type {Event} */ e) => { if (busy) e.preventDefault(); }}>
+    <div class="sheet-head"><h2 id="merge-title">Merge two profiles?</h2>
+      <button type="button" class="btn-icon btn-ghost" aria-label="Close" disabled=${busy} onClick=${close}>✕</button></div>
+    <p class="hint">Everything of the merged profile moves to the kept one, then the merged profile is deleted. This cannot be undone.</p>
+    <div class="row merge-pick">
+      ${pick('merge-keep', 'Keep', keep, setKeep)}
+      <button type="button" id="merge-swap" class="btn-secondary" disabled=${busy} onClick=${() => { setKeep(merge); setMerge(keep); }}>Swap</button>
+      ${pick('merge-from', 'Merge into it', merge, setMerge)}
+    </div>
+    ${same && html`<p id="merge-same" class="said bad">A profile cannot be merged into itself.</p>`}
+    ${p && html`<section id="merge-preview" aria-label="Merge preview">
+      <dl>
+        <div><dt>Keep</dt><dd id="merge-keep-who">${p.keep.name || '—'} · ${p.keep.email || 'no email'}</dd></div>
+        <div><dt>Merge into it</dt><dd id="merge-from-who">${p.merge.name || '—'} · ${p.merge.email || 'no email'}</dd></div>
+        <div><dt>Email after the merge</dt><dd id="merge-email">${p.email_after || 'none'}</dd></div>
+      </dl>
+      <h3>Rooms</h3>
+      ${p.rooms.length ? html`<ul id="merge-rooms">${p.rooms.map((r) => html`<li key=${r.room_id}>${r.room_name}${r.keep && r.merge
+        ? html` <span class="badge">both</span>` : ''}</li>`)}</ul>` : html`<p>No room.</p>`}
+      <h3>Personal skills</h3>
+      <dl id="merge-skills">
+        <div><dt>Kept</dt><dd>${listed(p.skills.keep)}</dd></div>
+        <div><dt>Moved</dt><dd>${listed(p.skills.merge)}</dd></div>
+      </dl>
+      ${p.skills.renamed.length > 0 && html`<ul id="merge-renamed">${p.skills.renamed.map((x) => html`<li>${x.from} becomes ${x.to}</li>`)}</ul>`}
+      <h3>The rest</h3>
+      <dl id="merge-counts">
+        ${[['Seats', p.seats], ['Shared skills', p.shared_skills], ['Persona templates', p.templates], ['Starters', p.starters], ['Rooms created', p.rooms_created]]
+          .map(([k, n]) => html`<div><dt>${k}</dt><dd>${(/** @type {MergeCount} */ (n)).keep} + ${(/** @type {MergeCount} */ (n)).merge}</dd></div>`)}
+        <div><dt>Room admin, kept</dt><dd>${listed(p.room_admin.keep)}</dd></div>
+        <div><dt>Room admin, moved</dt><dd>${listed(p.room_admin.merge)}</dd></div>
+      </dl>
+      ${p.over_limits.length > 0 && html`<ul id="merge-limits" class="warn">${p.over_limits.map((o) => html`<li>
+        ${limitKinds[o.kind] || o.kind}: ${o.after} after the merge, over the limit of ${o.limit}. The profile keeps them all and adds no more until under it.</li>`)}</ul>`}
+    </section>`}
+    <p class="said error" role="alert">${said}</p>
+    <div class="actions">
+      <button type="button" class="btn-secondary" disabled=${busy} onClick=${close}>Cancel</button>
+      <button type="button" id="merge-confirm" class="btn-danger" disabled=${busy || !p || same} onClick=${run}>Merge</button>
+    </div>
+  </dialog>`;
 }
 
 /**
@@ -522,7 +652,30 @@ function InstanceView() {
   return html`
     <h2>Instance</h2>
     <dl id="instance">${rows.map(([k, v]) => html`<div><dt>${k}</dt><dd>${v}</dd></div>`)}</dl>
-    <${RoomCreation}/>`;
+    <${RoomCreation}/>
+    <${Purge}/>`;
+}
+
+// Purge turns the hourly removal of empty profiles on and off (011-AC17).
+function Purge() {
+  const [on, setOn] = useState(/** @type {boolean | null} */ (null));
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api('GET', '/api/admin/settings').then((/** @type {Settings} */ v) => setOn(v.purge_empty_profiles)).catch(show); }, []);
+  /** @param {Event} e */
+  const set = (e) => {
+    const want = /** @type {HTMLInputElement} */ (e.currentTarget).checked;
+    // The box shows the choice while it saves, and the stored value again on a refusal.
+    setOn(want);
+    setBusy(true);
+    api('PUT', '/api/admin/settings', { purge_empty_profiles: want })
+      .then((/** @type {Settings} */ v) => { setOn(v.purge_empty_profiles); toast('Saved'); })
+      .catch((err) => { setOn(!want); show(err); }).finally(() => setBusy(false));
+  };
+  return html`
+    <h2>Empty profiles</h2>
+    <p class="hint">An empty profile has no email, no room it can still enter, nothing in the libraries and no room-admin role. Nobody can reach it again.</p>
+    ${on !== null && html`<label class="check"><input type="checkbox" id="purge-empty" checked=${on} disabled=${busy} onChange=${set}/>
+      Delete empty profiles after 24 h of inactivity</label>`}`;
 }
 
 // RoomCreation sets the guardrails on rooms profiles create from their profile page (004-AC7).

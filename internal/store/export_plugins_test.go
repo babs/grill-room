@@ -364,7 +364,7 @@ func TestImportPluginRefusals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetInstanceSettings(t.Context(), InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, PluginMaxMB: 1}); err != nil {
+	if err := putSettings(t.Context(), s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, PluginMaxMB: 1}); err != nil {
 		t.Fatal(err)
 	}
 	broken(big.Tar, big.SHA256, "bigger than 1 MB")

@@ -268,3 +268,49 @@ func TestParseTar(t *testing.T) {
 		}
 	}
 }
+
+// 011-AC11: a skill renamed by a merge keeps its stored files; the plugin's SKILL.md carries the
+// row's name, line endings and the body untouched. An unrenamed skill passes byte for byte, and a
+// header that cannot be renamed passes unchanged rather than failing the turn.
+func TestWritePluginUsesTheRowName(t *testing.T) {
+	renamed := strings.Replace(good, "name: hello-stamp", "name: hello-stamp-2", 1)
+	block := "---\nname: >-\n  hello-stamp\ndescription: Stamp it.\n--- \nname: body\n"
+	for name, c := range map[string]struct{ row, md, want string }{
+		"unrenamed":              {"hello-stamp", good, good},
+		"unrenamed block scalar": {"hello-stamp", block, block},
+		"lf":                     {"hello-stamp-2", good, renamed},
+		"crlf":                   {"hello-stamp-2", strings.ReplaceAll(good, "\n", "\r\n"), strings.ReplaceAll(renamed, "\n", "\r\n")},
+		"quoted, after the description": {"hello-stamp-2", "---\ndescription: Stamp it.\nname: \"hello-stamp\"\n---\nname: stays\n",
+			"---\ndescription: Stamp it.\nname: hello-stamp-2\n---\nname: stays\n"},
+		"block scalar": {"hello-stamp-2", block, "---\nname: hello-stamp-2\ndescription: Stamp it.\n--- \nname: body\n"},
+		"closing ----": {"hello-stamp-2", "---\nname: hello-stamp\ndescription: d\n----\nname: body\n", "---\nname: hello-stamp-2\ndescription: d\n----\nname: body\n"},
+		"quoted key":   {"hello-stamp-2", "---\n\"name\": hello-stamp\ndescription: d\n---\nname: body\n", "---\n\"name\": hello-stamp\ndescription: d\n---\nname: body\n"},
+		"spaced key":   {"hello-stamp-2", "---\nname : hello-stamp\ndescription: d\n---\nname: body\n", "---\nname : hello-stamp\ndescription: d\n---\nname: body\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stored := tarOf(t, map[*tar.Header]string{{Name: "SKILL.md", Mode: 0o644}: c.md})
+			var buf bytes.Buffer
+			err := WritePlugin(&buf, []Packed{{Name: c.row, Tar: stored}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tr := tar.NewReader(&buf)
+			var got []byte
+			for {
+				h, err := tr.Next()
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if h.Name == "skills/"+c.row+"/SKILL.md" {
+					got, _ = io.ReadAll(tr)
+				}
+			}
+			if string(got) != c.want {
+				t.Fatalf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}

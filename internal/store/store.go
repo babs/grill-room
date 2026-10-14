@@ -1016,22 +1016,15 @@ func (s *Store) Rooms(ctx context.Context) ([]Room, error) {
 	return out, rows.Err()
 }
 
-// DeleteRoom purges a room and, through ON DELETE CASCADE, every row that belongs to it.
+// DeleteRoom purges a room and, through ON DELETE CASCADE, every row that belongs to it. Run
+// Checkpoint after it: the WAL holds the deleted rows' old pages until then.
 func (s *Store) DeleteRoom(ctx context.Context, id string) error {
-	err := s.withTx(ctx, "delete room", func(tx *sql.Tx) error {
+	return s.withTx(ctx, "delete room", func(tx *sql.Tx) error {
 		if err := auditTx(ctx, tx, "", nil); err != nil {
 			return err
 		}
 		return execOne(ctx, tx, `DELETE FROM rooms WHERE id = ?`, id)
 	})
-	if err != nil {
-		return err
-	}
-	// The WAL still holds the deleted rows' old pages until a checkpoint rewrites the main file.
-	if _, err := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
-		return fmt.Errorf("checkpoint after delete room %s: %w", id, err)
-	}
-	return nil
 }
 
 // RenameRoom renames room and records who did it in a system message, in one transaction. by is
