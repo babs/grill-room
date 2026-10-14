@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon, menuItem, openStrip } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, menuItem, openStrip, personaSheet, closePersonas } from './helpers.js';
 
 const led = (page, name) => page.locator(`button.persona[data-name="${name}"] .led`);
 
@@ -16,26 +16,28 @@ test('personas: add, edit, queue', async ({ browser, request, baseURL }) => {
 
   const panel = alice.locator('#personas');
   await menuItem(alice, 'Personas');
-  await expect(panel.locator('.persona-form')).toHaveCount(1);
+  await expect(panel.locator('.persona-row')).toHaveCount(1);
   await expect(panel.locator('#persona-template option')).toHaveCount(2);
   await panel.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
   await panel.getByRole('button', { name: 'Add', exact: true }).click();
-  await expect(panel.locator('.persona-form')).toHaveCount(2);
+  await expect(panel.locator('.persona-row')).toHaveCount(2);
   for (const p of [alice, bob]) {
     await expect(p.locator('#messages')).toContainText('Alice added the persona 📝 Secretary, from the template "Secretary" v1.');
     await expect(p.locator('button.persona')).toHaveText([/^🔥Grill/, /^📝Secretary/]);
   }
-  const sec = panel.locator('.persona-form', { hasText: 'Secretary' });
+  // One Save sends every tab (009-AC3): an effort on Model and a text on Identity.
+  const sec = await personaSheet(alice, 'Secretary', 'Model');
   await sec.getByLabel('Effort').selectOption('low');
+  await sec.getByRole('link', { name: 'Identity', exact: true }).click();
   await sec.getByLabel('Persona text').fill('You are Scribe, who writes it all down.\nNothing else.');
   await sec.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(panel.locator('#personas-status')).toHaveText('Secretary saved. It applies from its next turn.');
+  await expect(sec.locator('#persona-status')).toHaveText('Secretary saved. It applies from its next turn.');
   await expect(bob.locator('#messages')).toContainText('Alice changed 📝 Secretary: effort medium → low, persona text.');
   // A bad name is refused by the room, and says why.
   await sec.getByLabel('Name').fill('two words');
   await sec.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(panel.locator('#personas-status')).toHaveText('name must be 1 to 30 letters, digits, - or _');
-  await panel.getByRole('button', { name: 'Close' }).click();
+  await expect(sec.locator('#persona-status')).toHaveText('name must be 1 to 30 letters, digits, - or _');
+  await closePersonas(alice);
 
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {

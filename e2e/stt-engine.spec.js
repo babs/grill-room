@@ -15,6 +15,7 @@ test('glossary tab and model credit follow the workers', async ({ browser, reque
   // A worker that reads it: every member gets the tab, and saves a glossary.
   await playSTT(bob, room.id, { engines: ['whisper'], glossary: true });
   await menuItem(bob, 'Room settings');
+  await bob.locator('#manage #tab-glossary').click();
   // Loaded first: a fill before the glossary arrives is overwritten by it.
   await expect(bob.locator('#glossary-used')).toHaveText('3 / ~70 terms used');
   await bob.locator('#stt-glossary').getByLabel('Words to recognise').fill('Kubernetes, Helm');
@@ -23,12 +24,14 @@ test('glossary tab and model credit follow the workers', async ({ browser, reque
   // The credit sits in the audio menu, which needs audio: check its state, not its pixels.
   await expect(bob.locator('#stt-credit')).toHaveAttribute('hidden', '');
 
-  // parakeet reads none: no tab for anyone, no Room settings for a plain member, and the credit.
+  // parakeet reads none: no tab for anyone, and the credit. A plain member keeps Room settings
+  // for the plugins (009-AC5), where a stale glossary link lands.
   for (const st of [{ engines: ['parakeet'] }, { engines: [], available: false }]) {
     await playSTT(bob, room.id, st);
-    await expect(bob.locator('#more-menu #manage-open')).toBeHidden();
+    await expect(bob.locator('#more-menu #manage-open')).not.toHaveAttribute('hidden');
     await bob.goto(`/r/${room.id}#manage/glossary`);
-    await expect(bob.locator('#manage-none')).toHaveText('Room settings are for room admins.');
+    await expect(bob.locator('#manage #tab-plugins')).toHaveAttribute('aria-current', 'page');
+    await expect(tabs(bob)).toHaveCount(1);
     await expect(bob.locator('#stt-glossary')).toHaveCount(0);
     if (st.engines.includes('parakeet')) await expect(bob.locator('#stt-credit')).not.toHaveAttribute('hidden');
     else await expect(bob.locator('#stt-credit')).toHaveAttribute('hidden', '');
@@ -36,7 +39,7 @@ test('glossary tab and model credit follow the workers', async ({ browser, reque
     await playSTT(alice, room.id, st);
     await alice.goto(`/r/${room.id}#manage/glossary`);
     await expect(alice.locator('#manage #room-panel')).toBeVisible();
-    await expect(tabs(alice)).toHaveCount(7);
+    await expect(tabs(alice)).toHaveCount(8);
     await expect(alice.locator('#tab-glossary')).toHaveCount(0);
     await expect(alice.locator('#tab-general')).toHaveAttribute('aria-current', 'page');
     await alice.goto(`/r/${room.id}`);
@@ -44,7 +47,7 @@ test('glossary tab and model credit follow the workers', async ({ browser, reque
   // The data stayed: with a reading worker back, the glossary is there.
   await playSTT(alice, room.id, { engines: ['parakeet', 'whisper'], glossary: true });
   await alice.goto(`/r/${room.id}#manage/glossary`);
-  await expect(tabs(alice)).toHaveCount(8);
+  await expect(tabs(alice)).toHaveCount(9);
   await expect(alice.locator('#stt-glossary').getByLabel('Words to recognise')).toHaveValue('Kubernetes, Helm');
   expect(await bob.evaluate((id) => fetch(`/api/rooms/${id}/glossary`).then((r) => r.json()), room.id)).toMatchObject({ glossary: 'Kubernetes, Helm' });
 });

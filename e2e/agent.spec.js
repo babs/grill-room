@@ -1,14 +1,16 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon, upload, menuItem, stopDaemon, confirmSheet, unfold, personMenu } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, upload, stopDaemon, confirmSheet, personMenu, personaSheet, personaAction, closePersonas } from './helpers.js';
 
 const led = (page) => page.locator('button.persona[data-name="Grill"] .led');
 const press = (page) => page.getByRole('button', { name: 'Ask Grill' });
-// newSession is the host's button for a persona, in the personas panel.
+// newSession is the host's item for a persona, in its sheet's ⋯ menu (009-AC3).
 const newSession = (page) => page.getByRole('button', { name: 'Start fresh for Grill' });
-async function withPanel(page, fn) {
-  await menuItem(page, 'Personas');
-  await fn(page.locator('#personas'));
-  await page.locator('#personas').getByRole('button', { name: 'Close' }).click();
+async function withMenu(page, fn) {
+  await personaSheet(page, 'Grill');
+  await page.locator('#persona-more').click();
+  await fn(page.locator('#persona-menu'));
+  await page.keyboard.press('Escape');
+  await closePersonas(page);
 }
 
 // 001-AC30 001-AC31 001-AC32: the LED is red and the button off with no host daemon; the first
@@ -40,12 +42,11 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
     await expect(alice.locator('#participants li', { hasText: 'Alice' }).locator('.host-badge')).toHaveAttribute('aria-label', 'host');
     await expect(press(alice)).toBeEnabled();
     await expect(press(bob)).toBeDisabled();
-    await withPanel(alice, async (panel) => {
-      await unfold(panel.locator('.persona-form').first(), 'more');
+    await withMenu(alice, async () => {
       await expect(newSession(alice)).toBeVisible();
     });
-    await withPanel(bob, async (panel) => {
-      await expect(panel.locator('.persona-form')).toHaveCount(1);
+    await withMenu(bob, async (menu) => {
+      await expect(menu.getByRole('button')).toHaveText(['Save to the library', 'Remove']);
       await expect(newSession(bob)).toHaveCount(0);
     });
     // Only the host sees the rights controls.
@@ -91,11 +92,10 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
     await expect(alice.locator('#participants li', { hasText: 'Bob' }).locator('.person-more')).toBeDisabled();
 
     // The host can start a new session after confirming.
-    await menuItem(bob, 'Personas');
-    await unfold(bob.locator('#personas .persona-form').first(), 'more');
-    await newSession(bob).click();
+    await personaSheet(bob, 'Grill');
+    await personaAction(bob, 'Start fresh for Grill');
     await confirmSheet(bob, 'Start fresh');
-    await bob.locator('#personas').getByRole('button', { name: 'Close' }).click();
+    await closePersonas(bob);
     // The previous synthesis also ends with "turn 1.": wait for the new one by count.
     await expect(bob.locator('#messages li.msg.agent')).toHaveCount(2, { timeout: 60_000 });
     await expect(bob.locator('#messages li.msg.agent').last()).toContainText('turn 1.');

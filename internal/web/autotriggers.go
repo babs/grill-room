@@ -3,6 +3,8 @@ package web
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"time"
 
 	"go.uber.org/zap"
@@ -18,7 +20,7 @@ var timerTick = 15 * time.Second
 // just started is no longer due, so two triggers at once queue it once. A link past the auto-turn
 // limit is dropped quietly: the status strip already says the auto turns are paused, and a line
 // per voice line or tick would flood the chat.
-func (s *Server) queueAuto(ctx context.Context, room string, due func() ([]store.RoomPersona, error), cause func(store.RoomPersona) string) {
+func (s *Server) queueAuto(ctx context.Context, room string, e store.ChainEvent, due func() ([]store.RoomPersona, error), cause func(store.RoomPersona) string) {
 	queued := 0
 	s.turnMu.Lock()
 	ps, err := due()
@@ -30,7 +32,7 @@ func (s *Server) queueAuto(ctx context.Context, room string, due func() ([]store
 		return
 	}
 	for _, p := range ps {
-		_, err := s.bus.Store.EnqueueLink(ctx, &store.QueuedTurn{RoomID: room, PersonaID: p.ID, Cause: cause(p)}, store.LinkEveryN)
+		_, err := s.bus.Store.EnqueueLink(ctx, &store.QueuedTurn{RoomID: room, PersonaID: p.ID, Cause: cause(p)}, e)
 		switch {
 		case err == nil:
 			queued++
@@ -52,7 +54,7 @@ func (s *Server) queueAuto(ctx context.Context, room string, due func() ([]store
 // (006-AC18).
 func (s *Server) voiceTriggers(ctx context.Context, room string) {
 	ctx = context.WithoutCancel(ctx)
-	s.queueAuto(ctx, room, func() ([]store.RoomPersona, error) { return s.bus.Store.DueVoicePersonas(ctx, room) },
+	s.queueAuto(ctx, room, store.LinkEveryN, func() ([]store.RoomPersona, error) { return s.bus.Store.DueVoicePersonas(ctx, room) },
 		func(p store.RoomPersona) string { return everyVoice(p.EveryVoice) })
 }
 
@@ -72,22 +74,130 @@ func (s *Server) timerTriggers(ctx context.Context) {
 		if !rooms[p.RoomID] && s.people.anyoneHere(p.RoomID, now) {
 			rooms[p.RoomID] = true
 			room := p.RoomID
-			s.queueAuto(ctx, room, func() ([]store.RoomPersona, error) { return s.bus.Store.DueTimerPersonas(ctx, now, room) },
+			s.queueAuto(ctx, room, store.LinkEveryN, func() ([]store.RoomPersona, error) { return s.bus.Store.DueTimerPersonas(ctx, now, room) },
 				func(p store.RoomPersona) string { return everyMinutes(p.EveryMinutes) })
 		}
 	}
 }
 
-// RunTimers checks the timer triggers every timerTick until ctx ends.
+// DefaultNotesWatchDelay is how long the notes watcher waits after the last new note message
+// (009-AC32).
+const DefaultNotesWatchDelay = 20 * time.Second
+
+// notesWatchTick is how often the notes watchers are checked. A var for tests.
+var notesWatchTick = 2 * time.Second
+
+// notesWatch queues each notes watcher due at s.now() as an automatic chain link (009-AC32).
+func (s *Server) notesWatch(ctx context.Context) {
+	ws, err := s.bus.Store.NotesWatchers(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.log.Error("notes_watch_failed", zap.Error(err))
+		}
+		return
+	}
+	for _, w := range ws {
+		var cause string
+		s.queueAuto(ctx, w.RoomID, store.LinkNotesWatch, func() ([]store.RoomPersona, error) {
+			p, c, err := s.watcherDue(ctx, w.RoomID, w.ID)
+			if p == nil || err != nil {
+				return nil, err
+			}
+			cause = c
+			return []store.RoomPersona{*p}, nil
+		}, func(store.RoomPersona) string { return cause })
+	}
+}
+
+// watcherDue returns persona id of room when, as the notes watcher, it is due at s.now(), with its
+// cause: note messages someone else wrote since its latest turn started, in threads that name no
+// persona, the last one NotesWatchDelay ago, and no turn of its own running. Messages that cannot
+// wake it are skipped for good. It runs under turnMu, as turns start.
+func (s *Server) watcherDue(ctx context.Context, room string, id int64) (*store.RoomPersona, string, error) {
+	st := s.bus.Store
+	p, err := st.RoomPersona(ctx, room, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, "", nil
+	}
+	if err != nil || !p.WatchesNotes || p.Pending {
+		return nil, "", err
+	}
+	running, err := st.RunningTurns(ctx, room)
+	if err != nil || slices.ContainsFunc(running, func(t store.Turn) bool { return t.PersonaID == id }) {
+		return nil, "", err
+	}
+	news, err := st.NotesNews(ctx, p)
+	if err != nil || len(news) == 0 {
+		return nil, "", err
+	}
+	var ids []int64
+	for _, n := range news {
+		if !slices.Contains(ids, n.AnnotationID) {
+			ids = append(ids, n.AnnotationID)
+		}
+	}
+	bodies, err := st.ParticipantNotes(ctx, room, ids)
+	if err != nil {
+		return nil, "", err
+	}
+	personas, err := st.RoomPersonas(ctx, room)
+	if err != nil {
+		return nil, "", err
+	}
+	var last time.Time
+	var threads []int64
+	for _, n := range news {
+		if len(threadOwners(bodies[n.AnnotationID], personas)) > 0 {
+			continue
+		}
+		if n.At.After(last) {
+			last = n.At
+		}
+		if !slices.Contains(threads, n.AnnotationID) {
+			threads = append(threads, n.AnnotationID)
+		}
+	}
+	if len(threads) == 0 {
+		return nil, "", st.SkipNotes(ctx, id, news[len(news)-1].MessageID)
+	}
+	if s.now().Sub(last) < s.opts.NotesWatchDelay {
+		return nil, "", nil
+	}
+	return p, notesCause(threads), nil
+}
+
+// notesCause is "new notes: #3, #5", as many ids as fit the preamble's line, then ", …".
+func notesCause(ids []int64) string {
+	cause := "new notes: "
+	for i, id := range ids {
+		next := fmt.Sprintf("#%d", id)
+		if i > 0 {
+			next = ", " + next
+		}
+		// Room for ", …" unless this is the last id.
+		if room := causeMax - len(cause) - len(next); room < 0 || (i < len(ids)-1 && room < len([]rune(", …"))) {
+			return cause + ", …"
+		}
+		cause += next
+	}
+	return cause
+}
+
+// RunTimers checks the timer triggers every timerTick, and the notes watchers every
+// notesWatchTick, until ctx ends.
 func (s *Server) RunTimers(ctx context.Context) {
 	t := time.NewTicker(timerTick)
 	defer t.Stop()
+	w := time.NewTicker(notesWatchTick)
+	defer w.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 			s.timerTriggers(ctx)
+		case <-w.C:
+			s.notesWatch(ctx)
 		}
 	}
 }

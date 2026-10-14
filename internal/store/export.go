@@ -33,6 +33,9 @@ const (
 	fileSkillVersions      = "skill_versions.jsonl"
 	fileSessions           = "sessions.jsonl"
 	fileMentions           = "mentions.jsonl"
+	fileNoteMentions       = "note_mentions.jsonl"
+	filePlugins            = "plugins.jsonl"
+	filePluginVersions     = "plugin_versions.jsonl"
 )
 
 type xRoom struct {
@@ -51,17 +54,21 @@ type xPersona struct {
 	PersonaFields
 	// Template is the library template the persona was copied from: its ref, and its preset key
 	// for a shipped one, which every instance has.
-	Template        int64    `json:"template,omitempty"`
-	TemplatePreset  string   `json:"template_preset,omitempty"`
-	TemplateVersion int      `json:"template_version"`
-	EveryN          int      `json:"every_n,omitempty"`
-	EveryVoice      int      `json:"every_voice,omitempty"`
-	EveryMinutes    int      `json:"every_minutes,omitempty"`
-	SelfCall        bool     `json:"self_call"`
-	Autocompact     int      `json:"autocompact"`
-	CreatedAt       string   `json:"created_at"`
-	Skills          []xPin   `json:"skills"`
-	Resume          *xResume `json:"resume,omitempty"`
+	Template        int64  `json:"template,omitempty"`
+	TemplatePreset  string `json:"template_preset,omitempty"`
+	TemplateVersion int    `json:"template_version"`
+	EveryN          int    `json:"every_n,omitempty"`
+	EveryVoice      int    `json:"every_voice,omitempty"`
+	EveryMinutes    int    `json:"every_minutes,omitempty"`
+	SelfCall        bool   `json:"self_call"`
+	// WatchesNotes is optional: an archive from before 009 has none, and the format stays (009-AC31).
+	WatchesNotes bool   `json:"watches_notes,omitempty"`
+	Autocompact  int    `json:"autocompact"`
+	CreatedAt    string `json:"created_at"`
+	Skills       []xPin `json:"skills"`
+	// Plugins are the refs of the room plugins the persona has on (009-AC26, format 3).
+	Plugins []int64  `json:"plugins,omitempty"`
+	Resume  *xResume `json:"resume,omitempty"`
 }
 
 // xPin is a skill a persona has on, at a version.
@@ -90,6 +97,8 @@ type xParticipant struct {
 	Active      bool   `json:"active"`
 	ProfileUUID string `json:"profile_uuid,omitempty"`
 	Admin       bool   `json:"admin,omitempty"`
+	// PreviousName is the name before the latest rename (009-AC36).
+	PreviousName string `json:"previous_name,omitempty"`
 }
 
 type xMessage struct {
@@ -207,6 +216,41 @@ type xSkillVersion struct {
 	SHA256      string `json:"sha256"`
 	CreatedAt   string `json:"created_at"`
 	File        string `json:"file"`
+}
+
+// xPlugin is a room plugin (009-AC26). GitRef is the ref its admin typed, "" for the default
+// branch: Ref is the row's ref, as in every file.
+type xPlugin struct {
+	Ref       int64  `json:"ref"`
+	Name      string `json:"name"`
+	URL       string `json:"url"`
+	GitRef    string `json:"git_ref"`
+	RefName   string `json:"ref_name"`
+	Entry     string `json:"entry,omitempty"`
+	Private   bool   `json:"private,omitempty"`
+	CreatedBy string `json:"created_by"`
+	CreatedAt string `json:"created_at"`
+}
+
+// xPluginVersion is one version of a plugin. File is empty once the version's snapshot was
+// dropped, superseded by a newer approved one.
+type xPluginVersion struct {
+	Plugin    int64           `json:"plugin"`
+	N         int             `json:"n"`
+	Commit    string          `json:"commit"`
+	SHA256    string          `json:"sha256"`
+	Size      int64           `json:"size"`
+	Files     int             `json:"files"`
+	FileList  json.RawMessage `json:"file_list"`
+	Manifest  json.RawMessage `json:"manifest"`
+	Report    json.RawMessage `json:"report,omitempty"`
+	State     string          `json:"state"`
+	Reason    string          `json:"reason,omitempty"`
+	AddedBy   string          `json:"added_by"`
+	AddedAt   string          `json:"added_at"`
+	DecidedBy string          `json:"decided_by,omitempty"`
+	DecidedAt string          `json:"decided_at,omitempty"`
+	File      string          `json:"file,omitempty"`
 }
 
 type xSession struct {
@@ -377,7 +421,7 @@ func exportRoom(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) (*
 		return nil, err
 	}
 	for _, step := range []func(context.Context, *sql.Tx, string, *exportDir) error{
-		exportParticipants, exportMessages, exportMentions, exportDocuments, exportAnnotations, exportSkills, exportSessions,
+		exportParticipants, exportMessages, exportMentions, exportDocuments, exportAnnotations, exportNoteMentions, exportSkills, exportPlugins, exportSessions,
 	} {
 		if err := step(ctx, tx, roomID, d); err != nil {
 			return nil, err
@@ -405,6 +449,26 @@ func exportMentions(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir
 	return l.flush()
 }
 
+// exportNoteMentions writes how each note message's @mentions ended, as exportMentions does for
+// lines, on the documents the export carries (009-AC29).
+func exportNoteMentions(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) error {
+	ms, err := queryMentions(ctx, tx, noteMentionCols+` JOIN room_personas p ON p.id = mt.persona_id
+		WHERE a.room_id = ? AND p.pending = 0 ORDER BY mt.message_id, mt.persona_id`, roomID)
+	if err != nil {
+		return err
+	}
+	l, err := d.lines(fileNoteMentions)
+	if err != nil {
+		return err
+	}
+	for _, m := range ms {
+		if err := l.add(xMention{Message: m.MessageID, Persona: m.PersonaID, Status: m.Status, Line: m.LineID}); err != nil {
+			return err
+		}
+	}
+	return l.flush()
+}
+
 // exportPersonas lists the room's personas with their pins and resume points. A persona still
 // waiting for the host's approval is left out, with the held changes: they are requests, not room
 // content, and the importing room has another host.
@@ -415,14 +479,14 @@ func exportPersonas(ctx context.Context, tx *sql.Tx, roomID string) ([]xPersona,
 		var tpl sql.NullInt64
 		var preset sql.NullString
 		if err := rows.Scan(&p.Ref, &tpl, &preset, &p.TemplateVersion, &p.Name, &p.Badge, &p.Colour, &p.Text, &p.Model, &p.Effort,
-			&p.EveryN, &p.SelfCall, &p.Autocompact, &p.CreatedAt, &p.EveryVoice, &p.EveryMinutes); err != nil {
+			&p.EveryN, &p.SelfCall, &p.Autocompact, &p.CreatedAt, &p.EveryVoice, &p.EveryMinutes, &p.WatchesNotes); err != nil {
 			return fmt.Errorf("export personas: %w", err)
 		}
 		p.Template, p.TemplatePreset, p.Skills = tpl.Int64, preset.String, []xPin{}
 		out = append(out, p)
 		return nil
 	}, `SELECT p.id, p.template_id, t.preset, p.template_version, p.name, p.badge, p.colour, p.text, p.model, p.effort,
-		COALESCE(p.every_n, 0), p.self_call, p.autocompact, p.created_at, COALESCE(p.every_voice, 0), COALESCE(p.every_minutes, 0)
+		COALESCE(p.every_n, 0), p.self_call, p.autocompact, p.created_at, COALESCE(p.every_voice, 0), COALESCE(p.every_minutes, 0), p.watches_notes
 		FROM room_personas p LEFT JOIN persona_templates t ON t.id = p.template_id WHERE p.room_id = ? AND p.pending = 0 ORDER BY p.id`, roomID)
 	if err != nil {
 		return nil, err
@@ -437,6 +501,18 @@ func exportPersonas(ctx context.Context, tx *sql.Tx, roomID string) ([]xPersona,
 			p.Skills = append(p.Skills, k)
 			return nil
 		}, `SELECT k.skill_id, k.version FROM room_persona_skills k JOIN skills s ON s.id = k.skill_id WHERE k.persona_id = ? ORDER BY s.name, k.skill_id`, p.Ref)
+		if err != nil {
+			return nil, err
+		}
+		err = eachRow(ctx, tx, func(rows *sql.Rows) error {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				return fmt.Errorf("export persona plugins: %w", err)
+			}
+			p.Plugins = append(p.Plugins, id)
+			return nil
+		}, `SELECT k.plugin_id FROM room_persona_plugins k JOIN room_plugins g ON g.id = k.plugin_id WHERE k.persona_id = ? AND g.removed_at IS NULL
+			ORDER BY k.plugin_id`, p.Ref)
 		if err != nil {
 			return nil, err
 		}
@@ -460,9 +536,9 @@ func exportPersonas(ctx context.Context, tx *sql.Tx, roomID string) ([]xPersona,
 func exportParticipants(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) error {
 	return dump(ctx, tx, d, fileParticipants, func(rows *sql.Rows) (any, error) {
 		var p xParticipant
-		return p, rows.Scan(&p.Ref, &p.Name, &p.JoinedAt, &p.CanTrigger, &p.Active, &p.ProfileUUID, &p.Admin)
+		return p, rows.Scan(&p.Ref, &p.Name, &p.JoinedAt, &p.CanTrigger, &p.Active, &p.ProfileUUID, &p.Admin, &p.PreviousName)
 	}, `SELECT p.id, p.name, p.joined_at, p.can_trigger, i.revoked_at IS NULL, COALESCE(f.uuid, p.profile_uuid_hint, ''),
-		EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = p.room_id AND a.profile_id = p.profile_id)
+		EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = p.room_id AND a.profile_id = p.profile_id), COALESCE(p.previous_name, '')
 		FROM participants p JOIN invites i ON i.id = p.invite_id LEFT JOIN profiles f ON f.id = p.profile_id
 		WHERE p.room_id = ? ORDER BY p.id`, roomID)
 }
@@ -668,6 +744,49 @@ func exportSkills(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) 
 	}, `SELECT v.skill_id, v.n, v.author, v.description, v.files, v.size, v.sha256, v.created_at, v.data
 		FROM skill_versions v JOIN skills s ON s.id = v.skill_id
 		WHERE s.room_id = ? OR (v.skill_id, v.n) IN (`+pinned+`) ORDER BY s.name, v.skill_id, v.n`, roomID, roomID)
+}
+
+// exportPlugins writes the room's plugins with every version and the snapshots still held
+// (009-AC26). Requests to the AI host and option values stay behind: the first are transient,
+// the second never reach the server.
+func exportPlugins(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) error {
+	err := dump(ctx, tx, d, filePlugins, func(rows *sql.Rows) (any, error) {
+		var p xPlugin
+		return p, rows.Scan(&p.Ref, &p.Name, &p.URL, &p.GitRef, &p.RefName, &p.Entry, &p.Private, &p.CreatedBy, &p.CreatedAt)
+	}, `SELECT id, name, source_url, ref, ref_name, entry, private, created_by_name, created_at FROM room_plugins
+		WHERE room_id = ? AND removed_at IS NULL ORDER BY id`, roomID)
+	if err != nil {
+		return err
+	}
+	// Two versions of a plugin may hold the same files: one blob serves both.
+	written := map[string]bool{}
+	return dump(ctx, tx, d, filePluginVersions, func(rows *sql.Rows) (any, error) {
+		var v xPluginVersion
+		var files, manifest string
+		var report, decidedBy, decidedAt sql.NullString
+		var data sql.RawBytes
+		err := rows.Scan(&v.Plugin, &v.N, &v.Commit, &v.SHA256, &v.Size, &v.Files, &files, &manifest, &report, &v.State, &v.Reason,
+			&v.AddedBy, &v.AddedAt, &decidedBy, &decidedAt, &data)
+		if err != nil {
+			return v, err
+		}
+		v.FileList, v.Manifest, v.DecidedBy, v.DecidedAt = json.RawMessage(files), json.RawMessage(manifest), decidedBy.String, decidedAt.String
+		if report.Valid {
+			v.Report = json.RawMessage(report.String)
+		}
+		if len(data) == 0 {
+			return v, nil
+		}
+		v.File = fmt.Sprintf("plugins/%d/%s.tar", v.Plugin, v.SHA256)
+		if written[v.File] {
+			return v, nil
+		}
+		written[v.File] = true
+		return v, d.blob(v.File, data)
+	}, `SELECT v.plugin_id, v.n, v.commit_sha, v.sha256, v.size, v.files, v.file_list, v.manifest, v.report, v.state, v.reason,
+		v.added_by_name, v.added_at, v.decided_by_name, v.decided_at, sn.data
+		FROM plugin_versions v JOIN room_plugins p ON p.id = v.plugin_id LEFT JOIN plugin_snapshots sn ON sn.version_id = v.id
+		WHERE p.room_id = ? AND p.removed_at IS NULL ORDER BY v.plugin_id, v.n`, roomID)
 }
 
 func exportSessions(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) error {

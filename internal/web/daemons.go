@@ -416,7 +416,59 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 		flusher.Flush()
 		return true
 	}
-	if !sendTurn() || !sendRoom() {
+	// sendInspect hands the room's host daemon each plugin version waiting for its inspection,
+	// once per stream (009-AC13); a daemon that becomes host gets them then.
+	inspect := map[int64]bool{}
+	sendInspect := func() bool {
+		host, err := s.bus.Store.HostDaemon(r.Context(), d.RoomID)
+		if err == nil && host.ID != d.ID || errors.Is(err, store.ErrNotFound) {
+			// Not the host: should it become host again, it gets every waiting version anew.
+			clear(inspect)
+			return true
+		}
+		if err != nil {
+			return true
+		}
+		ids, err := s.bus.Store.InspectingVersions(r.Context(), d.RoomID)
+		if err != nil {
+			return true
+		}
+		for _, id := range ids {
+			if inspect[id] {
+				continue
+			}
+			inspect[id] = true
+			if _, err := fmt.Fprintf(w, "event: inspect\ndata: {\"id\":%d}\n\n", id); err != nil { //nolint:gosec // an integer id on an event stream, never HTML
+				return false
+			}
+		}
+		flusher.Flush()
+		return true
+	}
+	// sendPlugins tells the room's host daemon that the room's plugins or its requests to the AI
+	// host changed, and once as the stream opens: its page reads them again (009-AC19, 009-AC22).
+	sentPlugins, pluginsSent := "", false
+	sendPlugins := func() bool {
+		host, err := s.bus.Store.HostDaemon(r.Context(), d.RoomID)
+		if err == nil && host.ID != d.ID || errors.Is(err, store.ErrNotFound) {
+			pluginsSent = false
+			return true
+		}
+		if err != nil {
+			return true
+		}
+		v, err := s.bus.Store.PluginsVersion(r.Context(), d.RoomID)
+		if err != nil || pluginsSent && v == sentPlugins {
+			return true
+		}
+		sentPlugins, pluginsSent = v, true
+		if _, err := io.WriteString(w, "event: plugins\ndata: {}\n\n"); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+	if !sendTurn() || !sendRoom() || !sendInspect() || !sendPlugins() {
 		return
 	}
 	// alive re-checks the token: a revoked invite, a deleted room or a re-pairing ends the stream.
@@ -437,7 +489,9 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 		case <-r.Context().Done():
 			return
 		case <-tick.C:
-			if !alive() {
+			// The bus drops a signal when this stream's buffer is full of other rooms' ones: the
+			// heartbeat re-reads the room, so a turn, a stop or an inspection is at most that late.
+			if !alive() || !sendTurn() || !sendRoom() || !sendInspect() || !sendPlugins() {
 				return
 			}
 			if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
@@ -445,7 +499,7 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 			}
 			flusher.Flush()
 		case changed := <-live:
-			if changed == d.RoomID && (!alive() || !sendTurn() || !sendRoom()) {
+			if changed == d.RoomID && (!alive() || !sendTurn() || !sendRoom() || !sendInspect() || !sendPlugins()) {
 				return
 			}
 		}

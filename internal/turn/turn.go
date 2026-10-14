@@ -90,6 +90,10 @@ type Job struct {
 	// Skills are the persona's active skills at the versions the room pinned (002-AC31). When set,
 	// the daemon fetches them as a plugin directory and runs claude with --plugin-dir.
 	Skills []Skill `json:"skills,omitempty"`
+	// Plugins are the room plugins the persona has on, at the versions approved when the turn
+	// started (009-AC17). The daemon fetches each tar by SHA256 and passes one --plugin-dir per
+	// plugin after grill-room's.
+	Plugins []Plugin `json:"plugins,omitempty"`
 	// Autocompact is the persona's context size for claude -p --autocompact; 0 for auto (003-AC24).
 	Autocompact int `json:"autocompact,omitempty"`
 	// Cause is why the turn runs, as its preamble says; the daemon's monitoring records it (003-AC27).
@@ -101,6 +105,35 @@ type Skill struct {
 	Name    string `json:"name"`
 	Version int    `json:"version"`
 }
+
+// Plugin names a room plugin a turn loads: its snapshot's sha256 and its version number.
+type Plugin struct {
+	// ID is the room's plugin id: the daemon keeps the option values under it (009-AC22).
+	ID      int64  `json:"id,omitempty"`
+	Name    string `json:"name"`
+	SHA256  string `json:"sha256"`
+	Version int    `json:"version"`
+	// Options are the userConfig options the version declares, never a value: the daemon leaves
+	// out a plugin whose required option the host has not set (009-AC24).
+	Options []PluginOption `json:"options,omitempty"`
+}
+
+// PluginOption is one userConfig option of a plugin, as the daemon needs it at turn time.
+type PluginOption struct {
+	Key       string `json:"key"`
+	Sensitive bool   `json:"sensitive,omitempty"`
+	Required  bool   `json:"required,omitempty"`
+	Default   any    `json:"default,omitempty"`
+}
+
+// SkippedPlugin is a plugin the daemon left out of a turn, and why (009-AC24).
+type SkippedPlugin struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
+}
+
+// NeedsHostSetup is why a plugin with a required option unset does not load (009-AC24).
+const NeedsHostSetup = "needs host setup"
 
 // Change is one workspace file the turn created, modified or deleted. Content is sent only for the
 // files NeedsContent names.
@@ -134,6 +167,8 @@ type Result struct {
 	// unknown (003-AC24).
 	ContextTokens int64 `json:"context_tokens,omitempty"`
 	ContextWindow int64 `json:"context_window,omitempty"`
+	// SkippedPlugins are the job's plugins the daemon left out (009-AC24).
+	SkippedPlugins []SkippedPlugin `json:"skipped_plugins,omitempty"`
 }
 
 // Manifest lists a turn's workspace (002-AC37): the daemon fetches only the files its cache lacks.

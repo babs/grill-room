@@ -27,6 +27,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/babs/grill-room/internal/bus"
+	"github.com/babs/grill-room/internal/plugin"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/turn"
 	"github.com/babs/grill-room/internal/uikit"
@@ -88,6 +89,9 @@ type Server struct {
 	pushTicked func(now time.Time, sent int)
 	// electMu serialises host elections and hand-overs.
 	electMu sync.Mutex
+	// hostBy holds, by room, the chat line of the latest move of its AI host role by someone other
+	// than the previous host: the previous host's page shows it (009-AC34). In memory, as presence is.
+	hostBy sync.Map
 	// turnMu serialises turn starts and queue draining, so presses run in the order they came.
 	// ponytail: one lock for every room; per-room locks if many busy rooms ever contend.
 	turnMu sync.Mutex
@@ -99,6 +103,11 @@ type Server struct {
 	vapid      *webpush.VAPID
 	vapidMu    sync.Mutex
 	pushClient *http.Client
+	// pluginFetches bounds the git fetches running at once; pluginRooms holds the rooms with one
+	// running, one per room (009-AC8).
+	pluginFetches chan struct{}
+	pluginMu      sync.Mutex
+	pluginRooms   map[string]bool
 }
 
 // New builds a server. adminHash is HashToken of the admin token; baseURL prefixes invite links.
@@ -108,6 +117,9 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	}
 	if opts.MaxResultBytes <= 0 {
 		opts.MaxResultBytes = defaultMaxResult
+	}
+	if opts.NotesWatchDelay <= 0 {
+		opts.NotesWatchDelay = DefaultNotesWatchDelay
 	}
 	if opts.MagicLinkTTL <= 0 {
 		opts.MagicLinkTTL = DefaultMagicLinkTTL
@@ -127,12 +139,16 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	if opts.PushClient == nil {
 		opts.PushClient = newPushClient()
 	}
+	if opts.PluginClient == nil {
+		opts.PluginClient = plugin.NewClient()
+	}
 	s := &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), archives: make(chan struct{}, maxConcurrentArchives),
 		adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
 		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, people: people{m: map[string]map[int64]*person{}}, stt: sttWorkers{m: map[string]*sttWorker{}}, clients: clients{m: map[int64]clientSeen{}},
 		magicLimit: limiter{window: magicWindow}, loginLimit: limiter{window: loginWindow}, now: time.Now, fallbacks: fallbackCounters(),
 		afterFunc: func(d time.Duration, f func()) { time.AfterFunc(d, f) },
-		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}, pushClient: opts.PushClient}
+		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}, pushClient: opts.PushClient,
+		pluginFetches: make(chan struct{}, maxPluginFetches), pluginRooms: map[string]bool{}}
 	s.cleanStaging()
 	return s
 }
@@ -224,6 +240,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/admin/rooms/{room}/admins/{participant}", adminOnly(s.setRoomAdmin))
 	mux.Handle("DELETE /api/admin/rooms/{room}/admins/{participant}", adminOnly(s.setRoomAdmin))
 	mux.Handle("PUT /api/admin/rooms/{room}/participants/{participant}/name", adminOnly(s.renameParticipant))
+	mux.Handle("PUT /api/admin/rooms/{room}/host", adminOnly(s.handOver))
 	mux.Handle("PUT /api/rooms/{room}/quota", s.memberOrAdmin(s.setQuota))
 	mux.Handle("GET /api/admin/rooms/{room}/invites", adminOnly(s.listInvites))
 	mux.Handle("POST /api/admin/rooms/{room}/invites", adminOnly(s.createInvite))
@@ -301,7 +318,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PATCH /api/rooms/{room}/agent", s.participant(s.setAgentMode))
 	mux.Handle("POST /api/rooms/{room}/turns", s.participant(s.startTurn))
 	mux.Handle("POST /api/rooms/{room}/turns/{turn}/stop", s.participant(s.stopTurn))
-	mux.Handle("PUT /api/rooms/{room}/host", s.participant(s.handOver))
+	mux.Handle("PUT /api/rooms/{room}/host", s.memberOrAdmin(s.handOver))
 	mux.Handle("PATCH /api/rooms/{room}/participants/{participant}", s.participant(s.setCanTrigger))
 	mux.Handle("PUT /api/rooms/{room}/participants/{participant}/name", s.memberOrAdmin(s.renameParticipant))
 	mux.Handle("DELETE /api/rooms/{room}/queue/{queued}", s.participant(s.cancelQueued))
@@ -316,6 +333,16 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms/{room}/skills", s.participant(s.copySkill))
 	mux.Handle("POST /api/rooms/{room}/skills/{skill}/decision", s.participant(s.decideRoomSkill))
 	mux.Handle("DELETE /api/rooms/{room}/skills/{skill}", s.participant(s.removeRoomSkill))
+	mux.Handle("GET /api/rooms/{room}/plugins", s.participant(s.listPlugins))
+	mux.Handle("POST /api/rooms/{room}/plugins/check", s.participant(s.checkPlugin))
+	mux.Handle("POST /api/rooms/{room}/plugins", s.participant(s.addPlugin))
+	mux.Handle("POST /api/rooms/{room}/plugins/{plugin}/update", s.participant(s.updatePlugin))
+	mux.Handle("POST /api/rooms/{room}/plugins/host-fetch", s.participant(s.askHostFetch))
+	mux.Handle("DELETE /api/rooms/{room}/plugin-fetches/{fetch}", s.participant(s.deletePluginFetch))
+	mux.Handle("DELETE /api/rooms/{room}/plugins/{plugin}", s.participant(s.removePlugin))
+	mux.Handle("POST /api/rooms/{room}/plugins/{plugin}/versions/{n}/decision", s.participant(s.decidePluginVersion))
+	mux.Handle("PUT /api/rooms/{room}/personas/{persona}/plugins/{plugin}", s.participant(s.setPersonaPlugin))
+	mux.Handle("DELETE /api/rooms/{room}/personas/{persona}/plugins/{plugin}", s.participant(s.setPersonaPlugin))
 	mux.Handle("PUT /api/rooms/{room}/personas/{persona}/skills/{skill}", s.participant(s.setPersonaSkill))
 	mux.Handle("DELETE /api/rooms/{room}/personas/{persona}/skills/{skill}", s.participant(s.setPersonaSkill))
 	mux.Handle("POST /api/rooms/{room}/personas/{persona}/cap", s.participant(s.decideCap))
@@ -327,6 +354,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms/{room}/daemon/turns/{turn}/workspace", s.daemonAuth(s.postWorkspace))
 	mux.Handle("GET /api/rooms/{room}/daemon/turns/{turn}/manifest", s.daemonAuth(s.getManifest))
 	mux.Handle("GET /api/rooms/{room}/daemon/turns/{turn}/skills", s.daemonAuth(s.getSkills))
+	mux.Handle("GET /api/rooms/{room}/daemon/turns/{turn}/plugins/{sha256}", s.daemonAuth(s.getTurnPlugin))
+	mux.Handle("GET /api/rooms/{room}/daemon/plugins", s.daemonAuth(s.daemonPlugins))
+	mux.Handle("POST /api/rooms/{room}/daemon/plugin-fetches/{fetch}", s.daemonAuth(s.postPluginFetch))
+	mux.Handle("GET /api/rooms/{room}/daemon/plugins/{version}/snapshot", s.daemonAuth(s.getPluginSnapshot))
+	mux.Handle("POST /api/rooms/{room}/daemon/plugins/{version}/report", s.daemonAuth(s.postPluginReport))
 	mux.Handle("POST /api/rooms/{room}/daemon/turns/{turn}", s.daemonAuth(s.postResult))
 	mux.Handle("POST /api/rooms/{room}/daemon/turns/{turn}/state", s.daemonAuth(s.postTurnState))
 	mux.Handle("GET /api/rooms/{room}/daemon/sessions/{session}", s.daemonAuth(s.getSession))
@@ -898,14 +930,19 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 		}
 	}
 
-	// Read before the headers go out: a client lists the documents once the stream is open, and
-	// any change after this point reaches it as a "documents" event.
+	// Read before the headers go out: a client lists the documents and the plugins once the
+	// stream is open, and any change after this point reaches it as a "documents" or "plugins" event.
 	docsVersion, err := s.bus.Store.DocumentsVersion(r.Context(), room)
 	if err != nil {
 		s.serverError(w, "events_failed", err)
 		return
 	}
 	annVersion, err := s.bus.Store.AnnotationsVersion(r.Context(), room)
+	if err != nil {
+		s.serverError(w, "events_failed", err)
+		return
+	}
+	pluginsVersion, err := s.bus.Store.PluginsVersion(r.Context(), room)
 	if err != nil {
 		s.serverError(w, "events_failed", err)
 		return
@@ -1026,6 +1063,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 		}{
 			{"documents", &docsVersion, s.bus.Store.DocumentsVersion},
 			{"annotations", &annVersion, s.bus.Store.AnnotationsVersion},
+			{"plugins", &pluginsVersion, s.bus.Store.PluginsVersion},
 		} {
 			v, err := c.read(r.Context(), room)
 			if err != nil {

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -18,7 +19,9 @@ type RoomVolume struct {
 	Transcripts int64 `json:"transcripts"`
 	// RoomSkills are the versions of the room's own skills (004-AC10).
 	RoomSkills int64 `json:"room_skills"`
-	Total      int64 `json:"total"`
+	// Plugins are the snapshots of the room's plugins (009-AC9).
+	Plugins int64 `json:"plugins"`
+	Total   int64 `json:"total"`
 }
 
 // RoomOverview is one row of the admin's rooms view (004-AC2).
@@ -38,10 +41,13 @@ type RoomOverview struct {
 	Volume     RoomVolume `json:"volume"`
 	// CreatedFrom is the starter version the room was created from (006-AC11).
 	CreatedFrom *Provenance `json:"created_from,omitempty"`
+	// PrivatePlugins names the plugins from private repos: the export dialog warns of them (009-AC26).
+	PrivatePlugins []string `json:"private_plugins,omitempty"`
 }
 
-// Counted is what the room's quota counts: upload originals and annotation attachments.
-func (v RoomVolume) Counted() int64 { return v.Uploads + v.Attachments }
+// Counted is what the room's quota counts: upload originals, annotation attachments and plugin
+// snapshots (009-AC9).
+func (v RoomVolume) Counted() int64 { return v.Uploads + v.Attachments + v.Plugins }
 
 // RoomOverviews lists every room with its counts, volume and quota, defaultQuota for those without
 // their own, newest first.
@@ -77,7 +83,10 @@ func (s *Store) roomOverviews(ctx context.Context, defaultQuota int64, roomID st
 		(SELECT COALESCE(SUM(octet_length(body) + COALESCE(octet_length(html), 0)), 0) FROM messages WHERE room_id = r.id)
 		+ (SELECT COALESCE(SUM(octet_length(v.body)), 0) FROM message_versions v JOIN messages m ON m.id = v.message_id WHERE m.room_id = r.id),
 		(SELECT COALESCE(SUM(length(v.data)), 0) FROM skill_versions v JOIN skills k ON k.id = v.skill_id WHERE k.room_id = r.id),
-		r.created_from
+		(SELECT COALESCE(SUM(length(sn.data)), 0) FROM plugin_snapshots sn JOIN plugin_versions v ON v.id = sn.version_id
+			JOIN room_plugins p ON p.id = v.plugin_id WHERE p.room_id = r.id),
+		r.created_from,
+		(SELECT json_group_array(name) FROM (SELECT name FROM room_plugins WHERE room_id = r.id AND private = 1 AND removed_at IS NULL ORDER BY name))
 		FROM rooms r WHERE ? = '' OR r.id = ? ORDER BY r.rowid DESC`, defaultQuota, roomID, roomID)
 	if err != nil {
 		return nil, fmt.Errorf("room overviews: %w", err)
@@ -88,12 +97,16 @@ func (s *Store) roomOverviews(ctx context.Context, defaultQuota int64, roomID st
 		var o RoomOverview
 		var created, last string
 		var from sql.NullString
+		var private string
 		v := &o.Volume
 		if err := rows.Scan(&o.ID, &o.Name, &created, &o.HostParticipantID, &o.QuotaBytes, &o.Quota, &last, &o.Participants, &o.Personas,
-			&v.Uploads, &v.Revisions, &v.Attachments, &v.AgentSessions, &v.Transcripts, &v.RoomSkills, &from); err != nil {
+			&v.Uploads, &v.Revisions, &v.Attachments, &v.AgentSessions, &v.Transcripts, &v.RoomSkills, &v.Plugins, &from, &private); err != nil {
 			return nil, fmt.Errorf("scan room overview: %w", err)
 		}
-		v.Total = v.Uploads + v.Revisions + v.Attachments + v.AgentSessions + v.Transcripts + v.RoomSkills
+		if err := json.Unmarshal([]byte(private), &o.PrivatePlugins); err != nil {
+			return nil, fmt.Errorf("scan room overview: %w", err)
+		}
+		v.Total = v.Uploads + v.Revisions + v.Attachments + v.AgentSessions + v.Transcripts + v.RoomSkills + v.Plugins
 		o.CreatedAt, o.CreatedFrom = parseTS(created), parseProvenance(from)
 		o.LastActivity = o.CreatedAt
 		if last != "" {

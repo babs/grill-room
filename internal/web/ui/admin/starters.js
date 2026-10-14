@@ -9,12 +9,14 @@ import { size, ago } from './room-panel.js';
  *   author: string, version: number, versions: number, size: number, updated_at: string}} Starter
  * @typedef {{label: string, key: string, required?: boolean, hint?: string}} Field
  * @typedef {{name: string, badge: string, colour: string, text: string, model: string, effort: string,
- *   every_n?: number, every_voice?: number, every_minutes?: number, self_call?: boolean, autocompact?: number,
- *   skills?: string[]}} StarterPersona
+ *   every_n?: number, every_voice?: number, every_minutes?: number, self_call?: boolean, watches_notes?: boolean, autocompact?: number,
+ *   skills?: string[], plugins?: string[]}} StarterPersona
  * @typedef {{name: string, version: number, author: string, description: string, size: number, file: string}} StarterSkill
+ * @typedef {{name: string, url: string, ref: string, ref_name: string, entry?: string, private?: boolean, commit: string, sha256: string,
+ *   size: number, files: number, file: string}} StarterPlugin
  * @typedef {{name: string, kind: string, format: string, content_type?: string, text?: string, file?: string, size?: number}} StarterDocument
  * @typedef {{title: string, description: string, room_name: string, agenda: string, fields: Field[],
- *   personas: StarterPersona[], skills: StarterSkill[], documents: StarterDocument[],
+ *   personas: StarterPersona[], skills: StarterSkill[], plugins?: StarterPlugin[], documents: StarterDocument[],
  *   chain: {budget: number, suspended?: boolean, parallel_turns?: boolean}, glossary?: string}} Manifest
  */
 
@@ -133,6 +135,12 @@ export function triggerText(p) {
 }
 
 /**
+ * pluginLabel names a starter's plugin as the room shows it: "<name>, <ref> @ <short commit>" (009-AC5).
+ * @param {StarterPlugin} p
+ */
+const pluginLabel = (p) => `${p.name}, ${p.ref_name} @ ${p.commit.slice(0, 7)}`;
+
+/**
  * search tells a starter matching q in its title, description or author (006-AC8).
  * @param {Starter} st @param {string} q
  */
@@ -153,6 +161,8 @@ function Preview({ view }) {
     <ul class="starter-personas">${m.personas.map((p) => html`<li key=${p.name}>${p.badge} ${p.name} · ${p.model} · effort ${p.effort} · ${triggerText(p)}</li>`)}</ul>
     <h4>Documents</h4>${m.documents.length ? html`<ul>${m.documents.map((d) => html`<li key=${d.name}>${d.name}</li>`)}</ul>` : html`<p class="hint">None.</p>`}
     <h4>Skills</h4>${m.skills.length ? html`<ul>${m.skills.map((k) => html`<li key=${k.name}>${k.name} v${k.version}</li>`)}</ul>` : html`<p class="hint">None.</p>`}
+    <h4>Plugins</h4>${m.plugins?.length ? html`<ul id="preview-plugins">${m.plugins.map((p) => html`<li key=${p.name}>${pluginLabel(p)}</li>`)}</ul>`
+      : html`<p class="hint">None.</p>`}
   </section>`;
 }
 
@@ -319,6 +329,8 @@ export function Editor({ view, api, displayName = '', back, mode = 'create', pat
   const [personas, setPersonas] = useState(m.personas);
   const [docs, setDocs] = useState(mode === 'save' ? [] : m.documents.map((d) => d.name));
   const [skills, setSkills] = useState(m.skills.map((k) => k.name));
+  // Plugins are picked one by one when saving a room, as documents are (009-AC28).
+  const [plugins, setPlugins] = useState(mode === 'save' ? [] : (m.plugins || []).map((p) => p.name));
   const [said, setSaid] = useState('');
   const [busy, setBusy] = useState(false);
   const area = useRef(/** @type {HTMLTextAreaElement | null} */ (null));
@@ -345,14 +357,14 @@ export function Editor({ view, api, displayName = '', back, mode = 'create', pat
     try {
       if (creating) {
         const room = await api('POST', '/api/profile/rooms', {
-          name, display_name: as, fields: values, agenda, personas, documents: docs, skills,
+          name, display_name: as, fields: values, agenda, personas, documents: docs, skills, plugins,
           starter: view.library === 'blank' ? undefined : { id: view.id, version: view.version },
         });
         // The new room opens on its invite card (005-AC34).
         location.assign('/r/' + encodeURIComponent(room.id) + '?invite');
         return;
       }
-      const st = await api('POST', path, { version: view.version, title, description, room_name: name, agenda, fields, personas, documents: docs, skills });
+      const st = await api('POST', path, { version: view.version, title, description, room_name: name, agenda, fields, personas, documents: docs, skills, plugins });
       setBusy(false);
       done?.(st);
     } catch (err) {
@@ -393,6 +405,11 @@ export function Editor({ view, api, displayName = '', back, mode = 'create', pat
     ${m.skills.length > 0 && html`<fieldset id="starter-skills"><legend>Skills</legend>${m.skills.map((k) => html`<label class="check" key=${k.name}>
       <input type="checkbox" checked=${skills.includes(k.name)} onChange=${(/** @type {Event} */ e) => setSkills(toggle(skills, k.name, /** @type {HTMLInputElement} */ (e.currentTarget).checked))}/> ${k.name} v${k.version}</label>`)}
       ${creating && view.library !== 'builtin' && html`<span class="hint">They wait for the AI host's approval when it approves everything.</span>`}</fieldset>`}
+    ${(m.plugins || []).length > 0 && html`<fieldset id="starter-plugins"><legend>Plugins</legend>
+      ${mode === 'save' && html`<p class="hint">Each one you check goes in at the version the room runs, with the personas that have it on.</p>`}
+      ${(m.plugins || []).map((p) => html`<label class="check" key=${p.name}>
+      <input type="checkbox" checked=${plugins.includes(p.name)} onChange=${(/** @type {Event} */ e) => setPlugins(toggle(plugins, p.name, /** @type {HTMLInputElement} */ (e.currentTarget).checked))}/> ${pluginLabel(p)}${p.private ? ' (private repo)' : ''}</label>`)}
+      ${creating && html`<span class="hint">The AI host checks each one first. They wait for its approval when it approves everything.</span>`}</fieldset>`}
     <p class="hint" id="starter-missing">${missing.length ? 'Fill in ' + missing.join(', ') + ' to create the room.' : ''}</p>
     ${undeclared.length > 0 && html`<p class="said error" id="starter-undeclared" role="alert">${undeclared.map((k) => '{{' + k + '}}').join(', ')} ${undeclared.length > 1 ? 'are' : 'is'} no field: add it to the fields, or remove it.</p>`}
     ${unlabelled && html`<p class="said error" id="starter-unlabelled" role="alert">Every field needs a label: name it, or remove it.</p>`}

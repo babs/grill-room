@@ -70,6 +70,8 @@ type Participant struct {
 	Admin bool `json:"admin"`
 	// LastSeen is when the participant was last active (005-AC7). Set by Participants only.
 	LastSeen *time.Time `json:"last_seen_at,omitempty"`
+	// PreviousName is the name before the latest rename (009-AC36). Set by Participants only.
+	PreviousName string `json:"previous_name,omitempty"`
 }
 
 // Message is one line in a room.
@@ -683,6 +685,118 @@ ALTER TABLE room_personas ADD COLUMN mark_at_ms INTEGER NOT NULL DEFAULT 0;
 UPDATE room_personas SET mark_msg_id = (SELECT COALESCE(MAX(id), 0) FROM messages), mark_at_ms = CAST(unixepoch('subsec') * 1000 AS INTEGER);
 -- 006-AC13: a skill a starter brought waits for the room's first host.
 ALTER TABLE skills ADD COLUMN from_starter INTEGER NOT NULL DEFAULT 0 CHECK (from_starter IN (0, 1));
+`, `
+-- 009-AC29: the turn a note message's @mention queued, as message_turns does for chat lines.
+CREATE TABLE annotation_message_turns (
+	message_id INTEGER NOT NULL REFERENCES annotation_messages(id) ON DELETE CASCADE,
+	persona_id INTEGER NOT NULL REFERENCES room_personas(id) ON DELETE CASCADE,
+	queue_id INTEGER,
+	turn_id INTEGER REFERENCES turns(id) ON DELETE SET NULL,
+	final_status TEXT CHECK (final_status IN ('done', 'failed', 'stopped', 'cancelled')),
+	final_line_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+	PRIMARY KEY (message_id, persona_id)
+);
+CREATE INDEX annotation_message_turns_queue ON annotation_message_turns(queue_id);
+CREATE INDEX annotation_message_turns_turn ON annotation_message_turns(turn_id);
+-- 009-AC31, 009-AC32: one persona per room watches the notes. notes_mark is the last note message
+-- its latest turn read, or the latest one when it started watching: newer ones may wake it.
+ALTER TABLE room_personas ADD COLUMN watches_notes INTEGER NOT NULL DEFAULT 0 CHECK (watches_notes IN (0, 1));
+ALTER TABLE room_personas ADD COLUMN notes_mark INTEGER NOT NULL DEFAULT 0;
+CREATE UNIQUE INDEX room_personas_watcher ON room_personas(room_id) WHERE watches_notes = 1;
+PRAGMA writable_schema = ON;
+UPDATE sqlite_schema SET sql = replace(sql, '''every_n'', ''call'')', '''every_n'', ''call'', ''notes_watch'')')
+	WHERE type = 'table' AND name = 'turn_queue';
+PRAGMA writable_schema = OFF;
+`, `
+-- 009-AC36: the details card shows a participant's earlier name after a rename.
+ALTER TABLE participants ADD COLUMN previous_name TEXT;
+`, `
+-- 009-AC5 to 009-AC18: plugins a room admin adds from git. ref is what the admin typed ('' for the
+-- default branch), ref_name what the room shows. A removed plugin stays, removed_at set, while a
+-- running turn loads one of its versions; purgePlugins drops it once none does.
+CREATE TABLE room_plugins (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	name TEXT NOT NULL,
+	source_url TEXT NOT NULL,
+	ref TEXT NOT NULL,
+	ref_name TEXT NOT NULL,
+	entry TEXT NOT NULL DEFAULT '',
+	private INTEGER NOT NULL DEFAULT 0 CHECK (private IN (0, 1)),
+	created_by_name TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	removed_at TEXT
+);
+CREATE UNIQUE INDEX room_plugins_name ON room_plugins(room_id, name) WHERE removed_at IS NULL;
+-- A version is a snapshot pinned at a commit, never changed once written but for its state. The
+-- running version of a plugin is its latest approved one.
+CREATE TABLE plugin_versions (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	plugin_id INTEGER NOT NULL REFERENCES room_plugins(id) ON DELETE CASCADE,
+	n INTEGER NOT NULL,
+	commit_sha TEXT NOT NULL,
+	sha256 TEXT NOT NULL,
+	size INTEGER NOT NULL,
+	files INTEGER NOT NULL,
+	file_list TEXT NOT NULL,
+	manifest TEXT NOT NULL,
+	report TEXT,
+	state TEXT NOT NULL CHECK (state IN ('inspecting', 'pending', 'approved', 'refused', 'invalid')),
+	reason TEXT NOT NULL DEFAULT '',
+	added_by_name TEXT NOT NULL,
+	added_by_id INTEGER REFERENCES participants(id) ON DELETE SET NULL,
+	added_at TEXT NOT NULL,
+	decided_by_name TEXT,
+	decided_at TEXT,
+	UNIQUE (plugin_id, n)
+);
+CREATE INDEX plugin_versions_inspecting ON plugin_versions(plugin_id) WHERE state = 'inspecting';
+-- Covers the room stream's PluginsVersion (version ids and states) without touching a row.
+CREATE INDEX plugin_versions_state ON plugin_versions(plugin_id, state);
+-- A version's tar sits in a table of its own: a scan of plugin_versions (the list, the stream's
+-- version) never walks a snapshot's overflow pages. dropSuperseded deletes the row.
+CREATE TABLE plugin_snapshots (
+	version_id INTEGER PRIMARY KEY NOT NULL REFERENCES plugin_versions(id) ON DELETE CASCADE,
+	data BLOB NOT NULL
+);
+CREATE TABLE room_persona_plugins (
+	persona_id INTEGER NOT NULL REFERENCES room_personas(id) ON DELETE CASCADE,
+	plugin_id INTEGER NOT NULL REFERENCES room_plugins(id) ON DELETE CASCADE,
+	PRIMARY KEY (persona_id, plugin_id)
+);
+CREATE INDEX room_persona_plugins_plugin ON room_persona_plugins(plugin_id);
+-- The versions a turn loads, copied as it starts: [{"name", "version_id", "n", "sha256"}].
+ALTER TABLE turns ADD COLUMN plugins TEXT NOT NULL DEFAULT '[]';
+-- 009-AC12: every way a turn ends updates its status, so the purges ride on that.
+CREATE TRIGGER turns_purge_plugins AFTER UPDATE OF status ON turns WHEN NEW.status != 'running' BEGIN
+	` + purgePlugins + `;
+	` + dropSuperseded + `;
+END;
+`, `
+-- 009-AC19 to 009-AC21: a room admin asks the AI host to fetch a repo the server cannot read.
+-- plugin_id is set for an update of that private plugin. A fetch done is deleted: the plugin or
+-- its version holds the result. A failed one stays, with its reason, until an admin dismisses it.
+CREATE TABLE plugin_fetches (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	plugin_id INTEGER REFERENCES room_plugins(id) ON DELETE CASCADE,
+	source_url TEXT NOT NULL,
+	ref TEXT NOT NULL,
+	entries TEXT NOT NULL DEFAULT '[]',
+	personas TEXT NOT NULL DEFAULT '[]',
+	state TEXT NOT NULL CHECK (state IN ('waiting', 'failed')),
+	reason TEXT NOT NULL DEFAULT '',
+	requested_by_name TEXT NOT NULL,
+	requested_by_id INTEGER REFERENCES participants(id) ON DELETE SET NULL,
+	created_at TEXT NOT NULL
+);
+CREATE INDEX plugin_fetches_room ON plugin_fetches(room_id);
+CREATE UNIQUE INDEX plugin_fetches_update ON plugin_fetches(plugin_id) WHERE state = 'waiting';
+-- 009-AC24: the last turn that pinned the plugin left it out for an option the host has not set.
+ALTER TABLE room_plugins ADD COLUMN needs_setup INTEGER NOT NULL DEFAULT 0 CHECK (needs_setup IN (0, 1));
+`, `
+-- 009-AC27: an imported version waits for the host's approval once inspected, whatever the mode.
+ALTER TABLE plugin_versions ADD COLUMN hold INTEGER NOT NULL DEFAULT 0 CHECK (hold IN (0, 1));
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -690,7 +804,7 @@ const uuidSQL = `lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' |
 	substr('89ab', 1 + abs(random() % 4), 1) || substr(hex(randomblob(2)), 2) || '-' || hex(randomblob(6)))`
 
 // migrationData runs Go code inside the transaction of the migration to version key, after its SQL.
-var migrationData = map[int]func(context.Context, *sql.Tx) error{9: migratePersonas, 24: migrateStopped}
+var migrationData = map[int]func(context.Context, *sql.Tx) error{9: migratePersonas, 24: migrateStopped, 31: migrateNotesWatch}
 
 // Open opens (and migrates) the database at path.
 func Open(path string) (*Store, error) {
@@ -716,6 +830,13 @@ func Open(path string) (*Store, error) {
 	if err := ensureStarters(context.Background(), db); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	// A removed plugin whose last turn ended while the server was down (009-AC12).
+	for _, q := range []string{purgePlugins, dropSuperseded} {
+		if _, err := db.ExecContext(context.Background(), q); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("purge plugins: %w", err)
+		}
 	}
 	return &Store{db: db}, nil
 }
@@ -1123,7 +1244,8 @@ func (s *Store) ParticipantByToken(ctx context.Context, tokenHash string) (*Part
 func (s *Store) Participants(ctx context.Context, roomID string) ([]Participant, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger, COALESCE(p.profile_id, 0), COALESCE(f.uuid, ''),
-			EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = p.room_id AND a.profile_id = p.profile_id), p.last_seen_at FROM participants p
+			EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = p.room_id AND a.profile_id = p.profile_id), p.last_seen_at,
+			COALESCE(p.previous_name, '') FROM participants p
 		JOIN invites i ON i.id = p.invite_id LEFT JOIN profiles f ON f.id = p.profile_id
 		WHERE p.room_id = ? AND i.revoked_at IS NULL ORDER BY p.id`, roomID)
 	if err != nil {
@@ -1135,7 +1257,7 @@ func (s *Store) Participants(ctx context.Context, roomID string) ([]Participant,
 		var p Participant
 		var joined string
 		var seen sql.NullString
-		if err := rows.Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID, &p.ProfileUUID, &p.Admin, &seen); err != nil {
+		if err := rows.Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID, &p.ProfileUUID, &p.Admin, &seen, &p.PreviousName); err != nil {
 			return nil, fmt.Errorf("scan participant: %w", err)
 		}
 		p.JoinedAt = parseTS(joined)

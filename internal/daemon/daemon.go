@@ -14,6 +14,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -54,6 +55,15 @@ type Options struct {
 	// dir or a cap of 0 fetches every workspace whole (002-AC37).
 	CacheDir string
 	CacheMax int64
+	// PluginCacheDir keeps plugin snapshots by sha256; empty fetches each turn's (009-AC17).
+	PluginCacheDir string
+	// PluginOptions keeps the values the host gives the room plugins' options (009-AC22); nil keeps
+	// them in memory. FetchDir holds the host's git fetches while they run, the system's temporary
+	// folder when empty (009-AC20).
+	PluginOptions *PluginOptions
+	FetchDir      string
+	// Labels, "key=value", mark the plugin inspection containers as the sandboxes' Labels do.
+	Labels []string
 	// OnTurn hears of every turn starting and ending; nil for none.
 	OnTurn func(TurnEvent)
 
@@ -108,6 +118,10 @@ type RoomStatus struct {
 	// from before spec 003 phase 7 never does); ParallelTurns is the room's parallel mode (003-AC26).
 	Host          *bool `json:"host,omitempty"`
 	ParallelTurns bool  `json:"parallel_turns,omitempty"`
+	// Plugins are the room's plugins as the host sets them up, and Fetches the room's requests that
+	// this host fetch a repo; both empty unless this daemon hosts the room (009-AC19, 009-AC22).
+	Plugins []HostPlugin `json:"plugins,omitempty"`
+	Fetches []HostFetch  `json:"fetches,omitempty"`
 }
 
 // Image is the sandbox image turns run in.
@@ -164,6 +178,10 @@ type Daemon struct {
 	access Access
 	// running cancels the running turns by id, guarded by mu.
 	running map[int64]context.CancelCauseFunc
+	// inspectMu runs one plugin inspection at a time; inspected holds the versions reported, by
+	// room link and id, guarded by inspectMu (009-AC13).
+	inspectMu sync.Mutex
+	inspected map[string]bool
 }
 
 // New builds a daemon.
@@ -180,9 +198,15 @@ func New(o Options) *Daemon {
 	if o.Allowlist == nil {
 		o.Allowlist = slices.Clone(sandbox.DefaultAllowlist)
 	}
+	if o.PluginOptions == nil {
+		o.PluginOptions, _ = NewPluginOptions("") // in memory: cannot fail
+	}
+	if o.FetchDir == "" {
+		o.FetchDir = os.TempDir()
+	}
 	d := &Daemon{o: o, st: Status{Version: o.Version, Connection: "offline", Settings: o.Settings, Allowlist: o.Allowlist},
 		rooms: map[string]*roomRun{}, ready: map[string]string{}, changed: make(chan struct{}), access: o.Access,
-		running: map[int64]context.CancelCauseFunc{}}
+		running: map[int64]context.CancelCauseFunc{}, inspected: map[string]bool{}}
 	if o.CacheDir != "" && o.CacheMax > 0 {
 		d.cache = &wsCache{dir: o.CacheDir, max: o.CacheMax}
 	}
@@ -214,6 +238,7 @@ func (d *Daemon) Status() Status {
 	for _, r := range d.rooms {
 		rs := r.st
 		rs.CanHost, rs.Reason = d.readinessLocked(rs.Room)
+		rs.Plugins, rs.Fetches = d.hostPluginsLocked(r), hostFetchesLocked(r)
 		st.Rooms = append(st.Rooms, rs)
 	}
 	slices.SortFunc(st.Rooms, func(a, b RoomStatus) int { return strings.Compare(a.Room, b.Room) })
@@ -225,10 +250,13 @@ func (d *Daemon) Status() Status {
 }
 
 // update applies f, then recomputes each room's readiness under the same lock, so the status
-// never shows a readiness its parts contradict. A change wakes the heartbeats.
+// never shows a readiness its parts contradict. A change, or a new image state, which plugin
+// inspections wait on, wakes the heartbeats.
 func (d *Daemon) update(f func(*Status)) {
 	d.mu.Lock()
+	image := d.st.Image.State
 	f(&d.st)
+	imageChanged := d.st.Image.State != image
 	changed := map[string]string{}
 	for room := range d.rooms {
 		_, reason := d.readinessLocked(room)
@@ -241,7 +269,7 @@ func (d *Daemon) update(f func(*Status)) {
 	for room, reason := range changed {
 		d.o.Log.Info("readiness_changed", zap.String("room", room), zap.Bool("can_host", reason == ""), zap.String("reason", reason))
 	}
-	if len(changed) > 0 {
+	if len(changed) > 0 || imageChanged {
 		d.wake()
 	}
 }
@@ -419,6 +447,12 @@ type roomRun struct {
 	sandboxes []*sandboxSlot
 	// lastTurn is the highest turn id taken: a stream reconnecting mid-turn announces it again.
 	lastTurn int64
+
+	// pluginsMu runs one read of the room's plugins at a time. plugins is the last read, nil
+	// before any, and fetching the requests this daemon fetches now; both guarded by d.mu.
+	pluginsMu sync.Mutex
+	plugins   *roomPlugins
+	fetching  map[int64]bool
 }
 
 // sandboxSlot is one of a room's sandboxes; busy while a turn runs in it.
@@ -697,6 +731,15 @@ func (r *roomRun) stream(ctx context.Context, tok string) error {
 			if json.Unmarshal([]byte(line[len("data: "):]), &t) == nil && r.takeTurn(t.ID) {
 				wg.Go(func() { r.runTurn(ctx, tok, t.ID) })
 			}
+		case strings.HasPrefix(line, "data: ") && event == "inspect":
+			var v struct {
+				ID int64 `json:"id"`
+			}
+			if json.Unmarshal([]byte(line[len("data: "):]), &v) == nil && v.ID > 0 {
+				wg.Go(func() { r.inspect(ctx, tok, v.ID) })
+			}
+		case strings.HasPrefix(line, "data: ") && event == "plugins":
+			wg.Go(func() { r.loadPlugins(ctx, tok) })
 		case strings.HasPrefix(line, "data: ") && event == "stop":
 			var t struct {
 				ID int64 `json:"id"`
@@ -711,6 +754,12 @@ func (r *roomRun) stream(ctx context.Context, tok string) error {
 			}
 			if json.Unmarshal([]byte(line[len("data: "):]), &info) == nil {
 				r.update(func(s *RoomStatus) { s.Host, s.ParallelTurns = &info.Host, info.Parallel })
+				if !info.Host {
+					// Another daemon hosts the room: its plugins and requests are not this page's.
+					d.mu.Lock()
+					r.plugins = nil
+					d.mu.Unlock()
+				}
 			}
 		case strings.HasPrefix(line, "data: ") && event == "revoked":
 			return errRevoked

@@ -46,6 +46,13 @@ const tab = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).sli
 // the STT worker hears.
 let presence = new Map();
 let transcribed = new Set();
+// cardFor is the name the open details card describes (009-AC36).
+let cardFor = null;
+// hoverTimer delays the card and the badge tip on hover.
+let hoverTimer;
+// tipFor is the badge the open tip describes; hideTimer, the grace before a card or tip closes.
+let tipFor = null;
+let hideTimer;
 
 function end(text) {
   ended = true;
@@ -104,6 +111,8 @@ async function loadRoom() {
   renameSenders();
   $('voice').hidden = !data.voice;
   showManage();
+  // An appointment or a step-down changes who turns plugins on (Capabilities).
+  renderPersonaSheet();
   renderParticipants();
   // The room admin panel (admin/room-admin.js) renders from the same answer.
   window.grillRoom = data;
@@ -258,6 +267,8 @@ function renderMessage(m) {
   if (m.participant_id) {
     li.dataset.pid = m.participant_id;
     li.dataset.sender = m.sender;
+    // Focus shows the details card (009-AC36); not a Tab stop, or a long chat would take one per line.
+    sender.tabIndex = -1;
     nameSender(li, sender);
   }
   meta.append(sender, ' ', timeOf(m.ts));
@@ -324,7 +335,9 @@ function nameSender(li, el) {
   const p = participants.find((x) => String(x.id) === li.dataset.pid);
   const was = li.dataset.sender;
   el.textContent = p ? p.name : was;
-  el.title = p && p.name !== was ? 'Written as ' + was : '';
+  // The details card says it (009-AC36): no native tooltip on author names.
+  if (p && p.name !== was) el.dataset.writtenAs = was;
+  else delete el.dataset.writtenAs;
 }
 
 function renameSenders() {
@@ -470,6 +483,9 @@ function fillMentions(li) {
     return el;
   }));
 }
+
+// noticeText says to a note's author why the personas it names will not run (009-AC29).
+const noticeText = (ns) => (ns || []).map((n) => '@' + n.name + ': ' + n.reason + '. Only you see this.').join(' ');
 
 function mentionChip(s) {
   const p = personaByID(s.persona_id);
@@ -695,8 +711,8 @@ $('strip-more').addEventListener('click', () => {
 
 // Menus are popovers (005-AC32): the browser closes them on a click outside and on Escape; picking
 // an item closes them too.
-// The document's menu has its own (008-AC8).
-for (const menu of document.querySelectorAll('.menu:not(#doc-menu, #person-menu)')) {
+// The document's and a persona's menus have their own (008-AC8).
+for (const menu of document.querySelectorAll('.menu:not(#doc-menu, #person-menu, #persona-menu)')) {
   menu.addEventListener('click', (e) => { if (e.target.closest('button, a')) menu.hidePopover(); });
 }
 for (const b of document.querySelectorAll('dialog .close')) b.addEventListener('click', () => b.closest('dialog').close());
@@ -1143,6 +1159,8 @@ $('annot-new').addEventListener('submit', (e) => {
     closeNew();
     await loadAnnotations();
     focusItem(saved.id, true);
+    const said = $('annot-list').querySelector(`li[data-id="${saved.id}"] .annot-error`);
+    if (said) said.textContent = noticeText(saved.notices);
   })().catch((err) => { $('annot-status').textContent = 'Not saved: ' + err.message; });
 });
 
@@ -1313,21 +1331,25 @@ function arrowKeys(menu) {
   });
 }
 
-// The document's actions menu (008-AC8): under its button, the first item focused, arrows move.
-const docMenu = $('doc-menu');
-docMenu.addEventListener('beforetoggle', (e) => {
-  if (e.newState !== 'open') return;
-  const r = $('doc-more').getBoundingClientRect();
-  docMenu.style.top = (r.bottom + 4) + 'px';
-  docMenu.style.right = Math.max(8, innerWidth - r.right) + 'px';
-});
-docMenu.addEventListener('toggle', (e) => { if (e.newState === 'open') menuItems(docMenu)[0]?.focus(); });
-arrowKeys(docMenu);
-// Capture: the menu closes, its focus back on ⋯, before the item's own action moves the focus.
-docMenu.addEventListener('click', (e) => { if (e.target.closest('a, button')) docMenu.hidePopover(); }, true);
+// actionMenu makes a ⋯ menu (008-AC8): under its button, the first item focused, arrows move.
+// The document's and a persona's sheet's use it.
+function actionMenu(menu, button) {
+  menu.addEventListener('beforetoggle', (e) => {
+    if (e.newState !== 'open') return;
+    const r = button.getBoundingClientRect();
+    menu.style.top = (r.bottom + 4) + 'px';
+    menu.style.right = Math.max(8, innerWidth - r.right) + 'px';
+  });
+  menu.addEventListener('toggle', (e) => { if (e.newState === 'open') menuItems(menu)[0]?.focus(); });
+  arrowKeys(menu);
+  // Capture: the menu closes, its focus back on ⋯, before the item's own action moves the focus.
+  menu.addEventListener('click', (e) => { if (e.target.closest('a, button')) menu.hidePopover(); }, true);
+}
+actionMenu($('doc-menu'), $('doc-more'));
 
 function renderAnnotations() {
   $('annot-count').textContent = annotations.length ? '(' + annotations.length + ')' : '';
+  $('annot-empty').hidden = annotations.length > 0;
   const list = $('annot-list');
   const kept = new Map([...list.children].map((li) => [li.dataset.id, li]));
   const items = [...annotations].sort((x, y) => rank(x) - rank(y) || x.id - y.id)
@@ -1367,9 +1389,10 @@ function newItem(id) {
     (async () => {
       const attachments = await readImages(form.querySelector('input[type=file]'));
       const body = form.querySelector('textarea').value;
-      if (!(await sendJSON('POST', api + '/annotations/' + id + '/messages', { body, attachments }))) return;
+      const sent = await sendJSON('POST', api + '/annotations/' + id + '/messages', { body, attachments });
+      if (!sent) return;
       form.reset();
-      form.querySelector('.annot-error').textContent = '';
+      form.querySelector('.annot-error').textContent = noticeText(sent.notices);
       await loadAnnotations();
     })().catch((err) => { form.querySelector('.annot-error').textContent = 'Not sent: ' + err.message; });
   });
@@ -1417,6 +1440,15 @@ function fillItem(li, a) {
       img.alt = 'Image from ' + m.author;
       img.loading = 'lazy';
       item.append(img);
+    }
+    // 009-AC29: the turns this message's @mentions queued, live from the agent state.
+    const live = (agent.note_mentions || []).filter((s) => s.message_id === m.id);
+    const states = live.length ? live : m.mentions || [];
+    if (states.length) {
+      const box = document.createElement('div');
+      box.className = 'mentions';
+      box.append(...states.map(mentionChip));
+      item.append(box);
     }
     return item;
   }));
@@ -1552,6 +1584,7 @@ function connect() {
     setTimeout(showEmpty, 500);
     beat();
     loadDocuments().then(loadAnnotations).catch(console.error);
+    loadPlugins().catch(console.error);
   };
   es.addEventListener('message_edited', (e) => {
     const m = JSON.parse(e.data);
@@ -1560,6 +1593,7 @@ function connect() {
   });
   es.addEventListener('documents', () => loadDocuments().catch(console.error));
   es.addEventListener('annotations', () => loadAnnotations().catch(console.error));
+  es.addEventListener('plugins', () => loadPlugins().catch(console.error));
   es.addEventListener('revoked', () => end('Your access to this room has ended.'));
   es.addEventListener('stt', (e) => showSTT(JSON.parse(e.data)));
   es.addEventListener('presence', (e) => {
@@ -1567,7 +1601,21 @@ function connect() {
     renderParticipants();
   });
   es.addEventListener('agent', (e) => {
+    const wasHost = agentSeen && isHost();
+    const wasOnline = agent.online;
     agent = JSON.parse(e.data);
+    // A version under inspection says whether the AI host is there to check it (009-AC13).
+    if (agentSeen && wasOnline !== agent.online && plugins.length) loadPlugins().catch(console.error);
+    // Someone else moved the role away from this participant (009-AC34).
+    if (wasHost && !isHost() && agent.host_by) {
+      const standby = agent.daemons.some((d) => String(d.participant_id) === myID);
+      showNotice(agent.host_by + '.' + (standby ? ' Your AI host app stays connected as a standby.' : ''));
+    }
+    // A deep link to a persona's sheet opens once the room's personas are known (009-AC2).
+    if (!agentSeen) {
+      agentSeen = true;
+      followPersona();
+    }
     renderAgent();
     renderMentions();
     messages.querySelectorAll('mark.mention-chip.persona').forEach(paintChip);
@@ -1605,6 +1653,10 @@ window.addEventListener('focus', () => { if (events && events.readyState !== Eve
 // Agents. The host's daemon runs every persona of the room: a persona's LED is green only while
 // that daemon is connected and can host (D8). The host, and the participants the host allows,
 // press a persona's button (D18); a press during a turn waits in the room's queue (002-AC17).
+// The room's plugins, as GET .../plugins lists them, read again on each "plugins" event;
+// pluginsSeen tells the persona form that the list moved on.
+let plugins = [];
+let pluginsSeen = 0;
 let agent = { online: false, can_trigger: [], daemons: [], turn: null, running: [], personas: [], queue: [], models: [], efforts: [], cap_requests: [],
   changes: [], room_skills: [], chain: { budget: 25, count: 0, suspended: false }, parallel_turns: false };
 
@@ -1626,8 +1678,6 @@ async function handOff(p) {
     + '.md, then a new session starts from that note and the transcripts.', 'Start fresh'))) return null;
   return sendJSON('POST', api + '/turns', { persona_id: p.id, handoff: true });
 }
-// unfolded holds the persona sheet's opened Advanced and More sections, by persona.
-const unfolded = new Set();
 // A persona signs documents and revisions by name: show its badge while one holds that name.
 function personaLabel(name) {
   const p = agent.personas.find((x) => x.name === name);
@@ -1681,21 +1731,21 @@ function renderAgent() {
       name.className = 'pname';
       const word = document.createElement('span');
       word.className = 'pstate';
-      b.append(led, badge, name, word);
-      // A right-click, or a long press on a touch screen, opens that persona's settings. iOS fires
+      b.append(led, badge, name, watchIcon(), word);
+      // A right-click, or a long press on a touch screen, opens that persona's sheet (009-AC4). iOS fires
       // no contextmenu: a press held 500 ms does it there, and the click that follows is dropped.
       let held = 0;
       let longPressed = false;
       b.addEventListener('contextmenu', (e) => {
         e.preventDefault();
-        openPersonas(Number(b.dataset.id));
+        openPersonaSheet(Number(b.dataset.id));
       });
       b.addEventListener('pointerdown', (e) => {
         if (e.pointerType !== 'touch') return;
         longPressed = false;
         held = setTimeout(() => {
           longPressed = true;
-          openPersonas(Number(b.dataset.id));
+          openPersonaSheet(Number(b.dataset.id));
         }, 500);
       });
       for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) b.addEventListener(ev, () => clearTimeout(held));
@@ -1714,7 +1764,8 @@ function renderAgent() {
     const st = personaState(p);
     const why = whyNot(p, st);
     b.style.setProperty('--persona', p.colour);
-    b.setAttribute('aria-label', 'Ask ' + p.name);
+    b.setAttribute('aria-label', 'Ask ' + p.name + (p.watches_notes ? ', watches the notes' : ''));
+    markWatch(b.querySelector('.watch'), p.watches_notes);
     b.dataset.name = p.name;
     b.querySelector('.badge').textContent = p.badge;
     b.querySelector('.pname').textContent = p.name;
@@ -1738,6 +1789,20 @@ function renderAgent() {
   renderChain();
   renderParallel();
   renderPersonas();
+  renderWatcher();
+}
+
+// renderWatcher names the notes watcher above Notes, and redraws the notes' chips when a turn they
+// queued moves on (009-AC29, 009-AC31).
+let noteChipsSeen = '';
+function renderWatcher() {
+  const w = agent.personas.find((p) => p.watches_notes);
+  $('notes-watcher').hidden = !w;
+  $('notes-watcher').textContent = w ? w.badge + ' ' + w.name + ' watches the notes' : '';
+  const chips = JSON.stringify(agent.note_mentions || []);
+  if (chips === noteChipsSeen) return;
+  noteChipsSeen = chips;
+  renderAnnotations();
 }
 
 // renderParallel shows the room's parallel mode; only the host switches it (003-AC20).
@@ -1750,7 +1815,7 @@ $('parallel-turns').addEventListener('change', () => {
   const box = $('parallel-turns');
   box.dataset.busy = '1';
   sendJSON('PATCH', api + '/agent', { parallel_turns: box.checked })
-    .catch((err) => { box.checked = !box.checked; personasStatus(err.message); })
+    .catch((err) => { box.checked = !box.checked; personasStatus(err.message, true); })
     .finally(() => { delete box.dataset.busy; });
 });
 
@@ -1784,7 +1849,7 @@ $('chain-form').addEventListener('submit', (e) => {
   e.preventDefault();
   sendJSON('PATCH', api + '/chain', { budget: Number($('chain-budget').value) })
     .then((c) => { if (c) personasStatus('Auto-turn limit set to ' + c.budget + '.'); })
-    .catch((err) => personasStatus(err.message));
+    .catch((err) => personasStatus(err.message, true));
 });
 
 // renderApprovals is the banner of what waits for the host: personas asking above the host cap
@@ -1848,6 +1913,25 @@ function renderApprovals() {
     li.textContent = k.from_starter ? 'The room\'s starter brought the skill ' + k.name + ' v' + k.version + '.'
       : k.author + ' copied the skill ' + k.name + ' v' + k.version + ' into the room.';
     decide(li, 'the room skill ' + k.name, '/skills/' + k.id + '/decision', {});
+    items.push(li);
+  }
+  // A plugin version waiting for the host opens the approval sheet (admin/plugins.js): the host
+  // reads what it holds before deciding (009-AC14).
+  for (const pl of plugins) {
+    const v = pl.versions[pl.versions.length - 1];
+    if (!v || v.state !== 'pending') continue;
+    const li = document.createElement('li');
+    li.textContent = v.added_by + (v.n === 1 ? ' added the plugin ' : ' updated the plugin ') + pl.name + ', ' + pl.ref_name + ' @ ' + v.short_commit + '.';
+    if (isHost()) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = 'Review';
+      b.setAttribute('aria-label', 'Review the plugin ' + pl.name + ' v' + v.n);
+      b.addEventListener('click', () => dispatchEvent(new CustomEvent('grill:plugin-review', { detail: { id: pl.id, n: v.n } })));
+      li.append(' ', b);
+    } else {
+      li.append(' The AI host decides.');
+    }
     items.push(li);
   }
   $('approvals').hidden = items.length === 0;
@@ -1922,8 +2006,12 @@ async function pressPersona(id, fresh) {
 // applies from that persona's next turn and shows in the chat (002-AC14, 002-AC15).
 let templates = [];
 
-function personasStatus(text) {
-  $('personas-status').textContent = text;
+// personasStatus says how an action went in both sheets; only a failure reads as an error.
+function personasStatus(text, error = false) {
+  for (const id of ['personas-status', 'persona-status']) {
+    $(id).textContent = text;
+    $(id).classList.toggle('error', error);
+  }
 }
 
 // picker offers values only: a persona always names its model and effort (005-AC9).
@@ -1942,23 +2030,20 @@ function field(labelText, input) {
   return l;
 }
 
+// The persona sheet's tabs, each a deep link #personas/<id>/<tab> (009-AC2).
+const personaTabs = [['identity', 'Identity'], ['model', 'Model'], ['triggers', 'Triggers'], ['capabilities', 'Capabilities']];
+
+// personaForm is one form across the four tabs: Save sends every tab at once (009-AC3).
 function personaForm(p) {
   const form = document.createElement('form');
   form.className = 'persona-form';
   form.dataset.id = p.id;
   form.dataset.seen = seenKey(p);
+  // A hidden tab's field cannot show the browser's bubble: the submit handler checks instead.
+  form.noValidate = true;
   form.style.setProperty('--persona', p.colour);
-  const head = document.createElement('h3');
-  head.textContent = p.badge + ' ' + p.name;
   const tpl = templates.find((t) => t.id === p.template_id);
-  const from = document.createElement('p');
-  from.className = 'hint';
-  const use = contextUse(p);
-  from.textContent = 'Runs on ' + level(p) + '. '
-    + (tpl ? 'From "' + tpl.title + '" v' + p.template_version : 'Its template was removed from the library.')
-    + (p.pending ? ' Waits for the AI host\'s approval.' : '')
-    + (use === null ? '' : ' Its session holds ' + use + '% of its context window.')
-    + nextTrigger(p);
+  const hint = (text) => Object.assign(document.createElement('p'), { className: 'hint', textContent: text });
   const input = (name, value, attrs) => {
     const i = document.createElement('input');
     i.name = name;
@@ -1966,36 +2051,36 @@ function personaForm(p) {
     Object.assign(i, attrs || {});
     return i;
   };
+  const grid = (...fields) => {
+    const g = document.createElement('div');
+    g.className = 'persona-fields';
+    g.append(...fields);
+    return g;
+  };
+  const panel = (tab, ...children) => {
+    const s = document.createElement('section');
+    s.dataset.tab = tab;
+    s.append(...children);
+    return s;
+  };
   const text = document.createElement('textarea');
   text.name = 'text';
   text.rows = 6;
   text.maxLength = 8000;
   text.value = p.text;
-  const grid = document.createElement('div');
-  grid.className = 'persona-fields';
-  grid.append(
-    field('Name', input('name', p.name, { maxLength: 30, required: true })),
-    field('Badge', input('badge', p.badge, { maxLength: 8, required: true })),
-    field('Colour', input('colour', p.colour, { type: 'color' })),
-    field('Model', picker('model', agent.models, p.model)),
-    field('Effort', picker('effort', agent.efforts, p.effort)),
-  );
-  const self = input('self_call', '', { type: 'checkbox', checked: p.self_call });
-  const selfCall = field('', self);
-  selfCall.className = 'check';
-  selfCall.append('Can follow up on its own: its own @' + p.name + ' gives it another answer');
-  // The rarely touched settings and actions fold away (005-AC40); a refresh keeps them as opened.
-  const fold = (label, cls, ...children) => {
-    const d = document.createElement('details');
-    d.className = cls;
-    const key = cls + ':' + p.id;
-    d.open = unfolded.has(key);
-    d.addEventListener('toggle', () => { if (d.open) unfolded.add(key); else unfolded.delete(key); });
-    const sum = document.createElement('summary');
-    sum.textContent = label;
-    d.append(sum, ...children);
-    return d;
-  };
+  const identity = panel('identity',
+    hint((tpl ? 'From "' + tpl.title + '" v' + p.template_version + '.' : 'Its template was removed from the library.')
+      + (p.pending ? ' Waits for the AI host\'s approval.' : '')),
+    grid(field('Name', input('name', p.name, { maxLength: 30, required: true })),
+      field('Badge', input('badge', p.badge, { maxLength: 8, required: true })),
+      field('Colour', input('colour', p.colour, { type: 'color' }))),
+    field('Persona text', text));
+  const use = contextUse(p);
+  const model = panel('model',
+    grid(field('Model', picker('model', agent.models, p.model)), field('Effort', picker('effort', agent.efforts, p.effort)),
+      field('Memory size (k tokens)', input('autocompact', p.autocompact ? p.autocompact / 1000 : '', { type: 'number', min: 100, max: 1000,
+        placeholder: 'auto', title: 'How much it remembers before it summarizes its session; empty for automatic' }))),
+    hint(use === null ? 'Context use: known after its next answer.' : 'Context use: its session holds ' + use + '% of its context window.'));
   // One automatic trigger at most (006-AC18): the choice, then its N.
   const kind = p.every_n ? 'every_n' : p.every_voice ? 'every_voice' : p.every_minutes ? 'every_minutes' : '';
   const speaks = picker('trigger', [], kind);
@@ -2014,65 +2099,93 @@ function personaForm(p) {
   };
   bound();
   speaks.addEventListener('change', () => { everyField.hidden = !speaks.value; bound(); });
-  const advanced = fold('Advanced', 'advanced',
-    field('Speaks up', speaks), everyField,
-    field('Memory size (k tokens)', input('autocompact', p.autocompact ? p.autocompact / 1000 : '', { type: 'number', min: 100, max: 1000,
-      placeholder: 'auto', title: 'How much it remembers before it summarizes its session; empty for automatic' })),
-    selfCall);
+  const self = input('self_call', '', { type: 'checkbox', checked: p.self_call });
+  const selfCall = field('', self);
+  selfCall.className = 'check';
+  selfCall.append('Can follow up on its own: its own @' + p.name + ' gives it another answer');
+  const watches = input('watches_notes', '', { type: 'checkbox', checked: !!p.watches_notes, defaultChecked: !!p.watches_notes });
+  const watch = field('', watches);
+  watch.className = 'check';
+  watch.append('Watches the notes');
+  const next = nextTrigger(p).trim();
+  const triggers = panel('triggers', grid(field('Speaks up', speaks), everyField), ...(next ? [hint(next)] : []), selfCall,
+    watch, hint('Answers note threads that name no persona, ' + agent.notes_watch_delay + ' s after the last new message.'),
+    hint('An answer that names another persona makes it answer next. These auto turns pause at the room\'s limit of '
+      + agent.chain.budget + ', set in Personas.'));
+  const capabilities = panel('capabilities', skillsBlock(p), pluginsBlock(p));
   const actions = document.createElement('div');
-  actions.className = 'persona-actions';
+  actions.className = 'actions';
   const save = document.createElement('button');
   save.type = 'submit';
+  save.className = 'btn-primary';
   save.textContent = 'Save';
-  const moreBox = document.createElement('div');
-  moreBox.className = 'persona-actions';
-  const act = (label, aria, fn, into = moreBox, cls = 'btn-secondary') => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = cls;
-    b.textContent = label;
-    b.setAttribute('aria-label', aria);
-    b.addEventListener('click', () => fn().catch((err) => personasStatus(err.message)));
-    into.append(b);
-    return b;
-  };
-  if (p.update_version) {
-    act('Update to v' + p.update_version, 'Update ' + p.name + ' to template version ' + p.update_version, async () => {
-      const done = await sendJSON('POST', api + '/personas/' + p.id + '/update');
-      if (done) personasStatus(done.held ? p.name + ': the update waits for the AI host\'s approval.' : p.name + ' updated.');
-    });
-  }
-  const mine = tpl && tpl.mine;
-  act(mine ? 'Save to the library as v' + (tpl.version + 1) : 'Save to the library', 'Save ' + p.name + ' to the library', async () => {
-    const body = formFields(form);
-    if (mine) body.template_id = tpl.id;
-    const t = await sendJSON('POST', api + '/templates', body);
-    if (t) personasStatus('Saved "' + t.title + '" v' + t.version + ' to the library.');
-    await loadTemplates();
-  });
-  if (isHost()) {
-    act('Start fresh', 'Start fresh for ' + p.name, async () => {
-      if (await grillConfirm('Start ' + p.name + ' fresh?', 'It forgets its earlier answers and rereads the room history.', 'Start fresh')) await pressPersona(p.id, true);
-    });
-    act('Start fresh, keep a summary', 'Start fresh with a summary for ' + p.name, () => handOff(p));
-  }
   actions.append(save);
-  act('Remove', 'Remove ' + p.name, async () => {
-    if (!(await grillConfirm('Remove ' + p.name + '?', 'Its session goes; what it wrote stays.', 'Remove'))) return;
-    const res = await netFetch(api + '/personas/' + p.id, { method: 'DELETE' });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'HTTP ' + res.status);
-  }, actions, 'btn-danger-outline');
-  form.append(head, from, grid, field('Persona text', text), skillsBlock(p), advanced, actions, fold('More', 'more', moreBox));
+  form.append(identity, model, triggers, capabilities, actions);
   form.addEventListener('input', () => { form.dataset.dirty = '1'; });
   form.addEventListener('submit', (e) => {
     e.preventDefault();
+    // An invalid field on another tab: show that tab, then the field's error.
+    const bad = form.querySelector('input:invalid, select:invalid, textarea:invalid');
+    if (bad) {
+      const tab = bad.closest('[data-tab]').dataset.tab;
+      history.replaceState(null, '', '#personas/' + p.id + '/' + tab);
+      showPersonaTab(tab);
+      bad.reportValidity();
+      return;
+    }
     sendJSON('PATCH', api + '/personas/' + p.id, formFields(form)).then((saved) => {
       if (!saved) return;
       delete form.dataset.dirty;
       personasStatus(saved.held ? saved.name + ': the change waits for the AI host\'s approval.' : saved.name + ' saved. It applies from its next turn.');
-    }).catch((err) => personasStatus(err.message));
+    }).catch((err) => personasStatus(err.message, true));
   });
   return form;
+}
+
+// fillPersonaMenu builds the sheet's ⋯ for the persona as it is when it opens (009-AC3): the
+// template update, the library, a fresh start for the host, then Remove.
+function fillPersonaMenu() {
+  const form = $('persona-body').firstElementChild;
+  const p = form && personaByID(Number(form.dataset.id));
+  const items = [];
+  const act = (label, aria, fn, cls) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.setAttribute('aria-label', aria);
+    if (cls) b.className = cls;
+    b.addEventListener('click', () => fn().catch((err) => personasStatus(err.message, true)));
+    items.push(b);
+  };
+  if (p) {
+    const tpl = templates.find((t) => t.id === p.template_id);
+    if (p.update_version) {
+      act('Update to v' + p.update_version, 'Update ' + p.name + ' to template version ' + p.update_version, async () => {
+        const done = await sendJSON('POST', api + '/personas/' + p.id + '/update');
+        if (done) personasStatus(done.held ? p.name + ': the update waits for the AI host\'s approval.' : p.name + ' updated.');
+      });
+    }
+    const mine = tpl && tpl.mine;
+    act(mine ? 'Save to the library as v' + (tpl.version + 1) : 'Save to the library', 'Save ' + p.name + ' to the library', async () => {
+      const body = formFields(form);
+      if (mine) body.template_id = tpl.id;
+      const t = await sendJSON('POST', api + '/templates', body);
+      if (t) personasStatus('Saved "' + t.title + '" v' + t.version + ' to the library.');
+      await loadTemplates();
+    });
+    if (isHost()) {
+      act('Start fresh', 'Start fresh for ' + p.name, async () => {
+        if (await grillConfirm('Start ' + p.name + ' fresh?', 'It forgets its earlier answers and rereads the room history.', 'Start fresh')) await pressPersona(p.id, true);
+      });
+      act('Start fresh, keep a summary', 'Start fresh with a summary for ' + p.name, () => handOff(p));
+    }
+    act('Remove', 'Remove ' + p.name, async () => {
+      if (!(await grillConfirm('Remove ' + p.name + '?', 'Its session goes; what it wrote stays.', 'Remove'))) return;
+      const res = await netFetch(api + '/personas/' + p.id, { method: 'DELETE' });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'HTTP ' + res.status);
+    }, 'danger');
+  }
+  $('persona-menu').replaceChildren(...items);
 }
 
 // Skills: a member turns a skill of the library or one of their own on for a persona, pinned at
@@ -2104,7 +2217,7 @@ $('room-skill-copy').addEventListener('submit', (e) => {
   e.preventDefault();
   sendJSON('POST', api + '/skills', { skill_id: Number($('room-skill-source').value) }).then((k) => {
     if (k) personasStatus(k.name + ' v' + k.version + (k.pending ? ' copied. It waits for the AI host\'s approval.' : ' copied into the room.'));
-  }).catch((err) => personasStatus(err.message)).finally(() => loadSkills().catch(console.error));
+  }).catch((err) => personasStatus(err.message, true)).finally(() => loadSkills().catch(console.error));
 });
 
 function skillsBlock(p) {
@@ -2118,7 +2231,7 @@ function skillsBlock(p) {
     b.type = 'button';
     b.textContent = label;
     b.setAttribute('aria-label', aria);
-    b.addEventListener('click', () => fn().catch((err) => personasStatus(err.message)));
+    b.addEventListener('click', () => fn().catch((err) => personasStatus(err.message, true)));
     return b;
   };
   for (const k of p.skills || []) {
@@ -2186,7 +2299,7 @@ async function loadSkills() {
   const [lib, st] = await Promise.all([netFetch(api + '/skills'), netFetch(api + '/agent')]);
   if (!lib.ok) return;
   skillLib = await lib.json();
-  [...$('persona-list').children].forEach((f) => { if (!f.dataset.dirty) delete f.dataset.seen; });
+  staleSheet();
   // An upload to the library does not wake the room: read the update offers afresh.
   if (st.ok) {
     agent = await st.json();
@@ -2196,12 +2309,100 @@ async function loadSkills() {
   }
 }
 
+// loadPlugins reads the room's plugins (009-AC5); Room settings › Plugins and the approval sheet
+// (admin/plugins.js) get them as window.grillPlugins.
+async function loadPlugins() {
+  const res = await netFetch(api + '/plugins');
+  if (!res.ok) return;
+  plugins = (await res.json()).plugins;
+  pluginsSeen++;
+  window.grillPlugins = plugins;
+  dispatchEvent(new CustomEvent('grill:plugins', { detail: plugins }));
+  staleSheet();
+  renderApprovals();
+  renderPersonaSheet();
+}
+
+// pluginCost is a version's token cost per answer from its inspection, null while unknown.
+function pluginCost(v) {
+  const d = v && v.report && v.report.details;
+  return d && d.cost_known ? d.always_on_tokens : null;
+}
+const tokens = (n) => '~' + n.toLocaleString('en') + ' tokens';
+
+// pluginsBlock lists the room's plugins on the Capabilities tab (009-AC16, 009-AC18): on or off for
+// the persona, the version it loads, why one does not load, the token cost per answer, and the
+// total of those it loads. Only a room admin turns one on or off (009-AC10).
+function pluginsBlock(p) {
+  const box = document.createElement('fieldset');
+  box.className = 'persona-skills persona-plugins';
+  const legend = document.createElement('legend');
+  legend.textContent = 'Plugins';
+  const list = document.createElement('ul');
+  let total = 0;
+  let unknown = 0;
+  // Counted apart from the cost: a plugin that loads may cost 0 tokens.
+  let loaded = 0;
+  for (const pl of plugins) {
+    const on = pl.personas.includes(p.id);
+    const run = pl.versions.find((v) => v.n === pl.running);
+    const shown = run || pl.versions[pl.versions.length - 1];
+    const cost = pluginCost(shown);
+    // A plugin that needs host setup does not load (009-AC24).
+    if (on && run && !pl.needs_setup) {
+      loaded++;
+      if (cost === null) unknown++;
+      else total += cost;
+    }
+    const li = document.createElement('li');
+    li.dataset.plugin = pl.name;
+    const name = document.createElement('label');
+    name.className = 'check';
+    const toggle = Object.assign(document.createElement('input'), { type: 'checkbox', checked: on, disabled: !meAdmin });
+    toggle.setAttribute('aria-label', pl.name + ' for ' + p.name);
+    // Turning a plugin on is not an edit of the persona's fields: the form keeps refreshing.
+    for (const ev of ['input', 'change']) toggle.addEventListener(ev, (e) => e.stopPropagation());
+    // Not disabled while it saves: a disabled box loses the focus. A second press is idempotent.
+    toggle.addEventListener('change', () => {
+      const want = toggle.checked;
+      sendJSON(want ? 'PUT' : 'DELETE', api + '/personas/' + p.id + '/plugins/' + pl.id)
+        .then((done) => { if (done) personasStatus(pl.name + (want ? ' is on for ' : ' is off for ') + p.name + ' from its next answer.'); })
+        .catch((err) => { toggle.checked = !want; personasStatus(err.message, true); })
+        .finally(() => loadPlugins().catch(console.error));
+    });
+    name.append(toggle, ' ' + pl.name);
+    const meta = [(shown.manifest && shown.manifest.version ? shown.manifest.version + ', ' : '') + pl.ref_name + ' @ ' + shown.short_commit];
+    meta.push(run && !pl.needs_setup ? (cost === null ? 'cost unknown' : tokens(cost) + ' per answer') : pl.why || 'does not load');
+    if (on && run && run !== pl.versions[pl.versions.length - 1]) meta.push('a newer version waits');
+    li.append(name, span('hint', meta.join(' · ')));
+    list.append(li);
+  }
+  box.append(legend);
+  if (!plugins.length) {
+    box.append(Object.assign(document.createElement('p'), { className: 'hint', textContent: 'No plugins in this room yet. A room admin adds them in Room settings › Plugins.' }));
+    return box;
+  }
+  box.append(list);
+  const sum = !loaded ? 'None of them loads for ' + p.name + '.'
+    : 'Total: ' + tokens(total) + ' per answer' + (unknown ? ', plus ' + unknown + ' with an unknown cost' : '') + '.';
+  box.append(Object.assign(document.createElement('p'), { className: 'plugin-total', textContent: sum }));
+  if (!meAdmin) box.append(Object.assign(document.createElement('p'), { className: 'hint', textContent: 'Only room admins turn plugins on or off.' }));
+  return box;
+}
+
 // formFields reads the inputs' own values: FormData would turn the text's line breaks into CRLF.
 function formFields(form) {
   const v = (name) => form.elements.namedItem(name).value;
   return { name: v('name'), badge: v('badge'), colour: v('colour'), model: v('model'), effort: v('effort'), text: v('text'),
     ...triggerFields(v('trigger'), Number(v('every'))), self_call: form.elements.namedItem('self_call').checked,
-    autocompact: v('autocompact') ? Math.round(Number(v('autocompact')) * 1000) : 0 };
+    autocompact: v('autocompact') ? Math.round(Number(v('autocompact')) * 1000) : 0, ...watchField(form) };
+}
+
+// watchField sends the notes watcher role only when the form changed it: a sheet drawn before
+// someone moved the role must not take it back (009-AC31).
+function watchField(form) {
+  const w = /** @type {HTMLInputElement} */ (form.elements.namedItem('watches_notes'));
+  return w.checked === w.defaultChecked ? {} : { watches_notes: w.checked };
 }
 
 // triggerFields is the persona's automatic trigger as the API takes it: the one chosen at n, the
@@ -2218,20 +2419,179 @@ function nextTrigger(p) {
   return min > 0 ? ' Speaks up next in ' + min + ' min.' : ' Speaks up at the next activity, while someone is here.';
 }
 
-// seenKey is what a form shows: the persona, and whether the viewer hosts (New session).
-const seenKey = (p) => JSON.stringify([p, isHost()]);
+// seenKey is what a form shows: the persona, the room's auto-turn limit (Triggers), its plugins and
+// whether this participant may turn them on (Capabilities).
+const seenKey = (p) => JSON.stringify([p, agent.chain.budget, pluginsSeen, meAdmin]);
 
-// renderPersonas refreshes the open panel; a form being edited keeps what its user typed.
+// staleSheet redraws the open persona form at the next render, unless someone is editing it.
+function staleSheet() {
+  const f = $('persona-body').firstElementChild;
+  if (f && !f.dataset.dirty) delete f.dataset.seen;
+}
+
+// triggerWords is a persona's automatic trigger in words (009-AC1, 006-AC18).
+function triggerWords(p) {
+  const every = (n, one, many) => 'every ' + (n === 1 ? one : n + ' ' + many);
+  if (p.every_n) return every(p.every_n, 'answer', 'answers');
+  if (p.every_voice) return every(p.every_voice, 'voice line', 'voice lines');
+  if (p.every_minutes) return every(p.every_minutes, 'minute', 'minutes');
+  return 'on mention only';
+}
+
+// watchIcon marks the notes watcher on its pill and its row; the label sits on the pill or row (009-AC31).
+function watchIcon() {
+  const el = span('watch', '', 'Watches the notes');
+  el.setAttribute('aria-hidden', 'true');
+  el.hidden = true;
+  return el;
+}
+
+// markWatch shows el, a watchIcon, for the notes watcher. Empty when hidden: a row's text is read whole.
+function markWatch(el, on) {
+  el.hidden = !on;
+  el.textContent = on ? '👁' : '';
+}
+
+// rowState is the list's word for a persona's state (009-AC1).
+const rowState = (p) => ({ pending: 'waiting for approval', busy: 'working', queued: 'queued', on: 'ready' }[personaState(p).cls] || 'offline');
+
+// renderPersonas refreshes the open sheets: the list of one-line rows (009-AC1), updated in place
+// so a focused row keeps its focus, and the open persona's sheet.
 function renderPersonas() {
+  renderPersonaSheet();
   if (!$('personas').open) return;
   renderRoomSkills();
   const list = $('persona-list');
-  const kept = new Map([...list.children].map((f) => [f.dataset.id, f]));
-  list.replaceChildren(...agent.personas.map((p) => {
-    const f = kept.get(String(p.id));
-    if (f && (f.dataset.dirty || f.dataset.seen === seenKey(p))) return f;
-    return personaForm(p);
-  }));
+  const kept = new Map([...list.children].map((li) => [li.dataset.id, li]));
+  const rows = agent.personas.map((p) => {
+    let li = kept.get(String(p.id));
+    if (!li) {
+      li = document.createElement('li');
+      li.dataset.id = p.id;
+      const a = document.createElement('a');
+      a.className = 'persona-row';
+      a.href = '#personas/' + p.id + '/identity';
+      const led = span('led', '');
+      led.setAttribute('aria-hidden', 'true');
+      a.append(span('badge', ''), span('pr-name', ''), watchIcon(), span('pr-meta', ''), led, span('pr-state', ''));
+      li.append(a);
+    }
+    const a = li.firstElementChild;
+    const meta = level(p) + ' · ' + triggerWords(p);
+    const state = rowState(p);
+    a.style.setProperty('--persona', p.colour);
+    a.querySelector('.badge').textContent = p.badge;
+    a.querySelector('.pr-name').textContent = p.name;
+    // A phone drops the word "effort" and says the state by the pill's shape: the trigger stays whole.
+    a.querySelector('.pr-meta').replaceChildren(p.model + ' · ', span('pr-long', 'effort '), p.effort + ' · ' + triggerWords(p));
+    a.querySelector('.led').className = 'led ' + personaState(p).cls;
+    a.querySelector('.pr-state').textContent = state;
+    markWatch(a.querySelector('.watch'), p.watches_notes);
+    a.title = p.name + ': ' + meta + (p.watches_notes ? ', watches the notes' : '') + ', ' + state;
+    a.setAttribute('aria-label', a.title);
+    return li;
+  });
+  if (rows.length !== list.children.length || rows.some((li, i) => list.children[i] !== li)) list.replaceChildren(...rows);
+}
+
+// sheetRoute reads #personas/<id>/<tab>; null on any other hash. An unknown tab is Identity.
+function sheetRoute() {
+  const m = location.hash.match(/^#personas\/(\d+)(?:\/([a-z]+))?$/);
+  if (!m) return null;
+  return { id: Number(m[1]), tab: personaTabs.some(([t]) => t === m[2]) ? m[2] : 'identity' };
+}
+
+// showPersonaTab shows one tab of the open form and marks it in the bar.
+function showPersonaTab(tab) {
+  for (const s of $('persona-body').querySelectorAll('[data-tab]')) s.hidden = s.dataset.tab !== tab;
+  for (const a of $('persona-tabs').children) {
+    if (a.id === 'persona-tab-' + tab) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  }
+  // A bar that scrolls sideways on a phone keeps its current tab in sight (005-AC35).
+  $('persona-tabs').querySelector('[aria-current]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+// agentSeen: the room's personas are known, so a deep link to a missing one closes its sheet.
+let agentSeen = false;
+
+// renderPersonaSheet draws the persona the hash names; a form being edited keeps what its user typed.
+function renderPersonaSheet() {
+  const d = $('persona-sheet');
+  const r = sheetRoute();
+  if (!d.open || !r) return;
+  const p = personaByID(r.id);
+  if (!p) {
+    if (agentSeen) d.close();
+    return;
+  }
+  $('persona-sheet-title').textContent = p.badge + ' ' + p.name;
+  const nav = $('persona-tabs');
+  if (nav.dataset.id !== String(p.id)) {
+    nav.dataset.id = p.id;
+    nav.replaceChildren(...personaTabs.map(([t, label]) => {
+      const a = Object.assign(document.createElement('a'), { id: 'persona-tab-' + t, href: '#personas/' + p.id + '/' + t, textContent: label });
+      // A tab replaces the sheet's history entry: Back after closing never reopens it (009-AC2).
+      a.addEventListener('click', (e) => {
+        if (e.ctrlKey || e.metaKey || e.shiftKey || e.button) return;
+        e.preventDefault();
+        location.replace(a.href);
+        renderPersonaSheet();
+      });
+      return a;
+    }));
+  }
+  const body = $('persona-body');
+  const f = body.firstElementChild;
+  if (!f || f.dataset.id !== String(p.id) || (!f.dataset.dirty && f.dataset.seen !== seenKey(p))) {
+    // A redraw keeps the focus on the control that had it: a plugin's toggle redraws the form.
+    const label = f && f.contains(document.activeElement) ? document.activeElement.getAttribute('aria-label') : null;
+    body.replaceChildren(personaForm(p));
+    if (label) [...body.querySelectorAll('[aria-label]')].find((el) => el.getAttribute('aria-label') === label)?.focus();
+  }
+  showPersonaTab(r.tab);
+}
+
+// sheetReturn is the Room settings link the sheet was opened from, to go back to on close.
+let sheetReturn = '';
+
+// followPersona opens, moves or closes the persona sheet as the hash says (009-AC2). Room settings
+// follows #manage on its own (admin/room-admin.js).
+function followPersona(e) {
+  const d = $('persona-sheet');
+  if (!sheetRoute()) {
+    if (d.open) d.close();
+    return;
+  }
+  if (!d.open) {
+    const from = e instanceof HashChangeEvent ? new URL(e.oldURL).hash : '';
+    sheetReturn = /^#manage(\/|$)/.test(from) ? from : '';
+    personasStatus('');
+    $('persona-body').replaceChildren();
+    d.showModal();
+    loadTemplates().catch(console.error);
+    loadSkills().catch(console.error);
+  }
+  renderPersonaSheet();
+}
+addEventListener('hashchange', followPersona);
+// Closed by Escape, a click outside or ✕: the deep link goes too, without a history entry.
+$('persona-sheet').addEventListener('close', () => {
+  if ($('persona-menu').matches(':popover-open')) $('persona-menu').hidePopover();
+  // Opened from Room settings › Personas, closing goes back there.
+  if (sheetRoute()) {
+    if (sheetReturn) location.replace(sheetReturn);
+    else history.replaceState(null, '', location.pathname + location.search);
+  }
+  sheetReturn = '';
+});
+$('persona-sheet-close').addEventListener('click', () => $('persona-sheet').close());
+$('persona-menu').addEventListener('beforetoggle', (e) => { if (e.newState === 'open') fillPersonaMenu(); });
+actionMenu($('persona-menu'), $('persona-more'));
+
+// openPersonaSheet opens a persona's sheet on its Identity tab (009-AC4).
+function openPersonaSheet(id) {
+  location.hash = '#personas/' + id + '/identity';
 }
 
 async function loadTemplates() {
@@ -2243,17 +2603,15 @@ async function loadTemplates() {
   $('persona-template').replaceChildren(...templates.map((t) =>
     option(t.id, t.badge + ' ' + t.title + ' v' + t.version + (t.preset ? '' : ', by ' + t.author))));
   if (templates.some((t) => String(t.id) === chosen)) $('persona-template').value = chosen;
-  [...$('persona-list').children].forEach((f) => { if (!f.dataset.dirty) delete f.dataset.seen; });
+  staleSheet();
   renderPersonas();
 }
 
-// openPersonas opens the Personas sheet, scrolled to persona id when given (005-AC40).
-function openPersonas(id) {
+// openPersonas opens the Personas sheet (005-AC40): the list, the room's limits and skills.
+function openPersonas() {
   personasStatus('');
-  $('persona-list').replaceChildren();
   if (!$('personas').open) $('personas').showModal();
   renderPersonas();
-  if (id) $('persona-list').querySelector('form[data-id="' + id + '"]')?.scrollIntoView({ block: 'start' });
   loadTemplates().catch(console.error);
   loadSkills().catch(console.error);
 }
@@ -2263,7 +2621,7 @@ $('persona-add').addEventListener('submit', (e) => {
   e.preventDefault();
   sendJSON('POST', api + '/personas', { template_id: Number($('persona-template').value) })
     .then((p) => { if (p) personasStatus(p.name + (p.pending ? ' added. It waits for the AI host\'s approval.' : ' added.')); })
-    .catch((err) => personasStatus(err.message));
+    .catch((err) => personasStatus(err.message, true));
 });
 
 // Voice. One LiveKit room per grill room; a participant's LiveKit identity is its participant id,
@@ -2280,10 +2638,32 @@ function voiceParticipant(id) {
 // Each role badge and its tooltip (005-AC14).
 // Each role badge, its tooltip and the icon it shrinks to when a row has more than two (005-AC35).
 const roles = [
-  ['you', 'This is you', (p) => String(p.id) === myID, '●'],
-  ['host', 'AI host: the personas run on their computer', (p) => agent.host_participant_id === p.id, '⚙'],
-  ['admin', 'Room admin: manages the room, its invites and its admins', (p) => p.admin, '★'],
+  ['you', 'This is you', (p) => String(p.id) === myID, 'you'],
+  ['host', 'AI host: the personas run on their computer', (p) => agent.host_participant_id === p.id, 'host'],
+  ['admin', 'Room admin: manages the room, its invites and its admins', (p) => p.admin, 'admin'],
 ];
+
+// badgeIcons are the People badges' shapes, drawn as block SVGs (009-AC39): an emoji's ink sits
+// wherever its font puts it, off the name's centre line.
+const badgeIcons = {
+  you: '<circle cx="12" cy="12" r="6" fill="currentColor" stroke="none"/>',
+  host: '<path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4a2 2 0 0 0 .7 2.7l.2.1a2 2 0 0 1 1 1.7v.5a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.5a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+  admin: '<path d="M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.5L12 17.3l-5.9 3.2 1.3-6.5-4.9-4.6 6.6-.8z" fill="currentColor"/>',
+  ask: '<path d="M12 3l2.2 6.8L21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2z" fill="currentColor"/>',
+  transcribed: '<path d="M12 20h9"/><path d="M16.4 3.6a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z"/>',
+  mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/>',
+  muted: '<path d="M11 5 6 9H2v6h4l5 4z"/><path d="m22 9-6 6M16 9l6 6"/>',
+  listening: '<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/>',
+  deafened: '<path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5M17 17H3s3-2 3-9a4.7 4.7 0 0 1 .3-1.7M10.3 21a1.9 1.9 0 0 0 3.4 0M2 2l20 20"/>',
+};
+
+function badgeIcon(name) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  for (const [k, v] of [['viewBox', '0 0 24 24'], ['fill', 'none'], ['stroke', 'currentColor'], ['stroke-width', '2'],
+    ['stroke-linecap', 'round'], ['stroke-linejoin', 'round'], ['aria-hidden', 'true']]) svg.setAttribute(k, v);
+  svg.innerHTML = badgeIcons[name];
+  return svg;
+}
 
 // audioState is how a participant is in the audio: from the server's presence, which every
 // viewer gets whether or not they joined the audio, with the LiveKit state for those they hear.
@@ -2294,9 +2674,9 @@ function audioState(id) {
   if (!audio) return { key: 'none', icon: '', text: 'Not in the audio' };
   const mic = vp ? vp.isMicrophoneEnabled : !!(pr && pr.mic);
   const muted = !mic && (vp ? !!vp.getTrackPublication(LivekitClient.Track.Source.Microphone) : !!(pr && pr.muted));
-  if (mic) return { key: 'live', icon: '🎙', text: 'Mic live' };
-  if (muted) return { key: 'muted', icon: '🔇', text: 'Muted' };
-  return { key: 'listening', icon: '🎧', text: 'Listening only' };
+  if (mic) return { key: 'live', icon: 'mic', text: 'Mic live' };
+  if (muted) return { key: 'muted', icon: 'muted', text: 'Muted' };
+  return { key: 'listening', icon: 'listening', text: 'Listening only' };
 }
 
 // ago says how long ago a time was, coarsely (kit/ui.js): the list refreshes every 30 seconds.
@@ -2318,12 +2698,12 @@ const tagColumns = ['you', 'host', 'admin', 'ask', 'transcribed', 'audio'];
 function personTags(p, id, isHere) {
   const t = {};
   for (const [name, title, on, icon] of roles) if (on(p)) t[name] = [icon, name, title];
-  if (agent.can_trigger.includes(p.id) && agent.host_participant_id !== p.id) t.ask = ['✦', 'Can ask the AI', 'Can ask the AI'];
-  if (transcribed.has(id)) t.transcribed = ['✍', 'The transcription hears this voice', 'The transcription hears this voice'];
+  if (agent.can_trigger.includes(p.id) && agent.host_participant_id !== p.id) t.ask = ['ask', 'Can ask the AI', 'Can ask the AI'];
+  if (transcribed.has(id)) t.transcribed = ['transcribed', 'The transcription hears this voice', 'The transcription hears this voice'];
   const st = isHere ? audioState(id) : { key: 'none', icon: '', text: 'Not in the audio' };
   const deaf = isHere && !!presence.get(id)?.deaf;
-  // One glyph per square: deafened shows 🔕 alone, its audio state in the tooltip.
-  t.audio = [deaf ? '🔕' : st.icon, '', st.text + (deaf ? ', deafened: hears nobody' : ''), st.key, deaf];
+  // One icon per square: deafened shows its own alone, its audio state in the tooltip.
+  t.audio = [deaf ? 'deafened' : st.icon, '', st.text + (deaf ? ', deafened: hears nobody' : ''), st.key, deaf];
   return t;
 }
 
@@ -2344,11 +2724,20 @@ function personActions(p, id) {
       sendJSON(now.admin ? 'DELETE' : 'PUT', api + '/admins/' + id).then(() => loadRoom()).catch((err) => toast(err.message));
     } });
   }
-  if (other && isHost() && !host && agent.daemons.some((d) => d.participant_id === p.id && d.can_host)) {
-    acts.push({ label: 'Make AI host', run: () => sendJSON('PUT', api + '/host', { participant_id: p.id }).catch((err) => agentError(err.message)) });
+  // The host hands over; a room admin moves the role from someone else, asked first (009-AC33).
+  if (!host && (isHost() || meAdmin) && agent.daemons.some((d) => d.participant_id === p.id && d.can_host)) {
+    acts.push({ label: 'Make AI host', run: () => makeHost(p) });
   }
   if (other && voiceParticipant(id)) acts.push({ volume: true });
   return acts;
+}
+
+async function makeHost(p) {
+  const from = participants.find((x) => x.id === agent.host_participant_id);
+  const standby = from && agent.daemons.some((d) => d.participant_id === from.id);
+  if (!isHost() && !(await grillConfirm('Make ' + p.name + ' the AI host?', 'The personas run on ' + p.name + "'s computer from the next turn"
+    + (standby ? '; ' + from.name + "'s app stays connected as a standby." : '.'), 'Make AI host'))) return;
+  sendJSON('PUT', api + '/host', { participant_id: p.id }).catch((err) => agentError(err.message));
 }
 
 // The person menu, built for the row it opens from; arrows move through it like the document's.
@@ -2399,6 +2788,163 @@ function openPersonMenu(b, p, id, fromPointer) {
 }
 $('person-menu').addEventListener('toggle', (e) => {
   if (e.newState === 'closed' && personFor) personFor.b.setAttribute('aria-expanded', 'false');
+  if (e.newState === 'open') hideCard();
+});
+
+// The details card (009-AC36): hovering or focusing a person in People or their name on a chat
+// line shows it; on touch a tap does. A non-modal tooltip tied by aria-describedby. The People
+// badges get the same styled tip for their meaning: no native title tooltip there.
+// personCardLines are its lines under the name, in order, each '' to skip: spec 010 adds one.
+const personCardLines = [
+  (p, id, el) => (el.dataset.writtenAs ? 'Written as ' + el.dataset.writtenAs : ''),
+  (p) => (p.previous_name ? 'Earlier name: ' + p.previous_name : ''),
+  (p, id) => 'Roles: ' + personRoles(p, id),
+  (p) => (agent.can_trigger.includes(p.id) || agent.host_participant_id === p.id ? 'Can ask the AI' : ''),
+  (p, id) => 'Audio: ' + cardAudio(id),
+  (p, id) => (transcribed.has(id) ? 'Transcribed' : 'Not transcribed'),
+  (p, id) => cardHere(p, id),
+  (p) => 'Joined ' + new Date(p.joined_at).toLocaleString(),
+];
+// hoverDelay keeps a pointer passing over the list from flashing cards.
+const hoverDelay = 300;
+
+function personRoles(p, id) {
+  const r = [];
+  if (id === myID) r.push('you');
+  if (p.admin) r.push('room admin');
+  if (agent.host_participant_id === p.id) r.push('AI host');
+  else if (agent.daemons.some((d) => d.participant_id === p.id)) r.push('standby host');
+  return r.join(', ') || 'member';
+}
+
+function cardAudio(id) {
+  if (id !== myID && !presence.get(id)?.here) return 'not in the audio';
+  if (presence.get(id)?.deaf) return 'room muted';
+  return audioState(id).text.toLowerCase();
+}
+
+function cardHere(p, id) {
+  const pr = presence.get(id);
+  if (id === myID || pr?.here) return pr?.here_since ? 'Here since ' + new Date(pr.here_since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Here';
+  return 'Seen ' + ago(pr?.seen_at || p.last_seen_at || p.joined_at);
+}
+
+// placeBy puts popover pop below anchor, or above it when the bottom edge would cut it, left of
+// the row's ⋯ column so it never covers a ⋯, shifted left when the right edge would cut it.
+function placeBy(pop, anchor) {
+  const r = anchor.getBoundingClientRect();
+  const more = anchor.closest('li')?.querySelector('.person-more');
+  const right = more && !more.hidden ? more.getBoundingClientRect().left - 4 : innerWidth - 8;
+  pop.style.maxWidth = Math.min(20 * parseFloat(getComputedStyle(document.documentElement).fontSize), Math.max(160, right - 8)) + 'px';
+  pop.style.left = Math.max(8, Math.min(r.left, right - pop.offsetWidth)) + 'px';
+  pop.style.top = Math.max(8, r.bottom + 4 + pop.offsetHeight > innerHeight - 8 ? r.top - 4 - pop.offsetHeight : r.bottom + 4) + 'px';
+}
+
+function showCard(el) {
+  const id = el.closest('li[data-pid]')?.dataset.pid;
+  const p = participants.find((x) => String(x.id) === id);
+  if (!p || $('person-menu').matches(':popover-open')) return;
+  hideTip();
+  const card = $('person-card');
+  const list = document.createElement('ul');
+  for (const line of personCardLines) {
+    const text = line(p, id, el);
+    if (!text) continue;
+    const li = document.createElement('li');
+    li.textContent = text;
+    list.append(li);
+  }
+  const name = document.createElement('strong');
+  name.textContent = p.name;
+  card.replaceChildren(name, list);
+  if (cardFor !== el) hideCard();
+  // A close pending for what was open before must not close this one.
+  clearTimeout(hideTimer);
+  cardFor = el;
+  el.setAttribute('aria-describedby', 'person-card');
+  if (!card.matches(':popover-open')) card.showPopover();
+  placeBy(card, el);
+}
+
+function hideCard() {
+  if (!cardFor) return;
+  cardFor.removeAttribute('aria-describedby');
+  cardFor = null;
+  $('person-card').hidePopover();
+}
+
+// The badge tip: one line, for the eye; the badge's aria-label says the same to assistive tech.
+function showTip(el) {
+  const tip = $('person-tip');
+  clearTimeout(hideTimer);
+  tipFor = el;
+  tip.textContent = el.dataset.tip;
+  if (!tip.matches(':popover-open')) tip.showPopover();
+  placeBy(tip, el);
+}
+function hideTip() {
+  tipFor = null;
+  if ($('person-tip').matches(':popover-open')) $('person-tip').hidePopover();
+}
+
+// hideGrace lets the pointer cross the gap between a name or badge and its card or tip.
+const hideGrace = 150;
+function hideSoon(from) {
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(() => {
+    if (tipFor === from || from === $('person-tip')) hideTip();
+    if (cardFor === from || from === $('person-card')) hideCard();
+  }, hideGrace);
+}
+
+const cardTarget = (t) => (t instanceof Element ? t.closest('#participants .name, #participants-away .name, #messages li[data-pid] > .meta > .sender') : null);
+const tipTarget = (t) => (t instanceof Element ? t.closest('#participants [data-tip], #participants-away [data-tip]') : null);
+document.addEventListener('pointerover', (e) => {
+  if (e.pointerType !== 'mouse' || !(e.target instanceof Element)) return;
+  const el = cardTarget(e.target);
+  const tipped = !el && tipTarget(e.target);
+  // Reaching the open card or tip, or coming back to its anchor, keeps it.
+  if (e.target.closest('#person-card, #person-tip') || (el && el === cardFor) || (tipped && tipped === tipFor)) {
+    clearTimeout(hideTimer);
+    return;
+  }
+  if (!el && !tipped) return;
+  clearTimeout(hoverTimer);
+  const [x, y] = [e.clientX, e.clientY];
+  hoverTimer = setTimeout(() => {
+    // A re-render may have replaced what the pointer rests on: take what is under it now.
+    const under = document.elementFromPoint(x, y);
+    const card = cardTarget(under);
+    const tip = !card && tipTarget(under);
+    if (card) showCard(card);
+    else if (tip?.dataset.tip && !cardFor) showTip(tip);
+  }, hoverDelay);
+});
+// The pointer may move onto the card or tip and stay there to read it (WCAG 1.4.13).
+document.addEventListener('pointerout', (e) => {
+  if (e.pointerType !== 'mouse') return;
+  const from = cardTarget(e.target) || tipTarget(e.target);
+  if (!from || from.contains(e.relatedTarget)) return;
+  clearTimeout(hoverTimer);
+  if (from === cardFor || from === tipFor) hideSoon(from);
+});
+for (const id of ['person-card', 'person-tip']) {
+  $(id).addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') hideSoon($(id)); });
+}
+document.addEventListener('focusin', (e) => { if (cardTarget(e.target)) showCard(e.target); });
+document.addEventListener('focusout', (e) => { if (e.target === cardFor) hideCard(); });
+// A tap anywhere on a person's row but its ⋯, or on a chat name, opens the card; a tap elsewhere closes it.
+document.addEventListener('click', (e) => {
+  const row = e.target instanceof Element && !e.target.closest('.person-more') ? e.target.closest('#participants li, #participants-away li') : null;
+  const el = row ? row.querySelector('.name') : cardTarget(e.target);
+  if (el) showCard(el);
+  else if (!$('person-card').contains(e.target)) hideCard();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  clearTimeout(hoverTimer);
+  hideCard();
+  hideTip();
 });
 arrowKeys($('person-menu'));
 
@@ -2421,7 +2967,9 @@ function renderParticipants() {
       more.className = 'person-more';
       more.textContent = '⋯';
       more.setAttribute('aria-expanded', 'false');
-      li.append(span('voice-dot', ''), span('name', ''), span('tags', ''), more);
+      const name = span('name', '');
+      name.tabIndex = 0;
+      li.append(span('voice-dot', ''), name, span('tags', ''), more);
     }
     const isHere = id === myID || !!presence.get(id)?.here;
     li.querySelector('.name').textContent = p.name;
@@ -2431,7 +2979,7 @@ function renderParticipants() {
     li.classList.toggle('speaking', key === 'live' && speaking.has(id));
     li.classList.toggle('muted', key === 'muted');
     li.classList.toggle('deaf', deaf);
-    li.querySelector('.voice-dot').title = key === 'none' ? '' : key === 'live' && speaking.has(id) ? 'Speaking' : tags.audio[2];
+    li.querySelector('.voice-dot').dataset.tip = key === 'none' ? '' : key === 'live' && speaking.has(id) ? 'Speaking' : tags.audio[2];
     const more = li.querySelector('.person-more');
     more.setAttribute('aria-label', 'Actions for ' + p.name);
     more.onpointerdown = () => { openFor = $('person-menu').matches(':popover-open') ? personFor?.b : null; };
@@ -2444,7 +2992,16 @@ function renderParticipants() {
     const cols = tagColumns.filter((c) => c === 'audio' || want.some((r) => r.tags[c] && r.tags[c][0]));
     const anyMenu = want.some((r) => r.menu);
     for (const { li, tags, menu, seen } of want) {
-      li.querySelector('.tags').replaceChildren(...cols.map((c) => tagSpan(c, tags[c])), ...(seen ? [span('seen', seen)] : []));
+      const box = li.querySelector('.tags');
+      const had = new Map([...box.children].map((x) => [x.dataset.col, x]));
+      const kids = cols.map((c) => tagSpan(c, tags[c], had.get(c)));
+      if (seen) {
+        const el = had.get('seen') || span('seen', '');
+        el.dataset.col = 'seen';
+        el.textContent = seen;
+        kids.push(el);
+      }
+      if (kids.length !== box.children.length || kids.some((k, i) => box.children[i] !== k)) box.replaceChildren(...kids);
       const more = li.querySelector('.person-more');
       more.hidden = !anyMenu;
       more.classList.toggle('blank', !menu);
@@ -2453,6 +3010,15 @@ function renderParticipants() {
     const lis = want.map((r) => r.li);
     if (lis.length !== list.children.length || lis.some((li, i) => list.children[i] !== li)) list.replaceChildren(...lis);
   }
+  // An open card or tip follows the agent and presence changes that re-render the list.
+  if (cardFor) {
+    if (cardFor.isConnected) showCard(cardFor);
+    else hideCard();
+  }
+  if (tipFor) {
+    if (tipFor.isConnected && tipFor.dataset.tip) showTip(tipFor);
+    else hideTip();
+  }
   $('away').hidden = !rows.away.length;
   $('away-count').textContent = String(rows.away.length);
   $('tab-people-count').textContent = String(rows.here.length);
@@ -2460,17 +3026,28 @@ function renderParticipants() {
 
 // tagSpan is one badge square, or an empty one keeping its column. The audio one is always there
 // with its state, for the people that are not in the audio too.
-function tagSpan(col, t) {
+// el, when given, is the column's square from the last render, updated in place: an open tip stays
+// on it.
+function tagSpan(col, t, el = document.createElement('span')) {
   // The classes that name a state go on a filled square only.
   const on = !!(t && t[0]);
   const role = on && ['you', 'host', 'admin'].includes(col);
-  const el = span('tag tag-' + col + (role ? ' role-' + col : '') + (on && col === 'host' ? ' host-badge' : '') + (on && col === 'transcribed' ? ' transcribed' : '') + (col === 'audio' ? ' audio' : ''), t ? t[0] : '');
+  el.className = 'tag tag-' + col + (role ? ' role-' + col : '') + (on && col === 'host' ? ' host-badge' : '') + (on && col === 'transcribed' ? ' transcribed' : '') + (col === 'audio' ? ' audio' : '');
+  const icon = t ? t[0] : '';
+  if (el.dataset.icon !== icon) {
+    el.replaceChildren(...(icon ? [badgeIcon(icon)] : []));
+    el.dataset.icon = icon;
+  }
+  el.dataset.col = col;
+  delete el.dataset.state;
+  delete el.dataset.tip;
+  el.removeAttribute('aria-label');
   if (col === 'audio') {
     el.dataset.state = t[3];
-    el.title = t[2];
+    el.dataset.tip = t[2];
     el.setAttribute('aria-label', t[2]);
   } else if (t) {
-    el.title = t[2];
+    el.dataset.tip = t[2];
     el.setAttribute('aria-label', t[1]);
   }
   if (!on) el.classList.add('blank');
@@ -2526,10 +3103,10 @@ let sttDown = false;
 // sttGlossary is true while a transcription worker reads room glossaries (007-AC14).
 let sttGlossary = false;
 
-// showManage offers Room settings to room admins, and to every member while the glossary, their
-// only tab (005-AC23), is in use.
+// showManage offers Room settings to every member: each reads the room's plugins there (009-AC5),
+// and the glossary while one is in use (005-AC23).
 function showManage() {
-  $('manage-open').hidden = !meAdmin && !sttGlossary;
+  $('manage-open').hidden = false;
 }
 
 function voiceError(text) {

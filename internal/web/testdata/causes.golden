@@ -1,5 +1,6 @@
 button: Why you are running: pressed by Alice
 call: Why you are running: called by @Grill
+note mention: Why you are running: @mention in note #1 by Alice: "@Secretary is the brown fox in the minutes, or…"
 mention: Why you are running: @mention by Alice: "@Grill is the rollback ready for Friday, and who s…"
 every_n: Why you are running: every round
 rerun: Why you are running: re-run after a conflict on synthesis.md

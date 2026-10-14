@@ -47,7 +47,7 @@ for (const vp of widths) {
     await expect(pv.locator('#import-version')).toContainText('this instance');
     await expect(pv.locator('#import-counts')).toContainText('Participants1');
     await expect(pv.locator('#import-counts')).toContainText('Personas1');
-    await expect(pv).toContainText('Format2');
+    await expect(pv).toContainText('Format3');
     if (vp.width < 400) {
       expect(await noOverflow(page)).toEqual([]);
     }

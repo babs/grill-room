@@ -107,7 +107,7 @@ The `windows` job runs `go test ./...` without `-race`. These checks skip there:
 |---|---|
 | `internal/web` `TestInstallScriptInstallsAndStarts`, `TestInstallScriptRefuses`, `TestInstallScriptChecksSignature` | `install.sh` targets Linux and macOS and refuses MSYS and MinGW |
 | `internal/sandbox` `TestDockerStream` | its fake `docker` is a sh script |
-| `internal/sandbox/fakeclaude` `TestFakeClaude` | the fake claude runs only in the Linux sandbox and builds project names from POSIX paths |
+| `internal/sandbox/fakeclaude` `TestFakeClaude`, `TestFakePlugins` | the fake claude runs only in the Linux sandbox and builds project names from POSIX paths |
 | `internal/daemon` `TestMigrateCutShort` | it makes a directory read-only, which Windows does not enforce |
 | `cmd/grill-room-daemon` `TestRunWithoutHandoffSocket` | it overflows the Unix socket path limit; Windows uses a named pipe |
 | `internal/monitor` `TestOpenOwnerOnly` | it checks mode bits; `monitor.db` sits in `%LOCALAPPDATA%`, which only the user reads |

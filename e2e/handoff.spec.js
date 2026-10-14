@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon, ask, menuItem, confirmSheet, unfold } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, confirmSheet, personaSheet, closePersonas } from './helpers.js';
 
 // 003-AC24 003-AC25: Alice sets Grill's autocompact, which reaches claude -p. A session past 80% of
 // its context window shows the share in the personas panel and a banner offering the host a new
@@ -14,14 +14,12 @@ test('handoff: autocompact, context banner, new session from the note', async ({
     await pairDaemon(alice, daemon);
     await expect(alice.locator('button.persona[data-name="Grill"] .led')).toHaveAttribute('aria-label', 'Grill ready', { timeout: 30_000 });
 
-    const panel = alice.locator('#personas');
-    await menuItem(alice, 'Personas');
-    const grill = panel.locator('.persona-form', { hasText: 'Grill' });
-    await unfold(grill, 'advanced');
+    // 009-AC2: the memory size sits on the Model tab.
+    const grill = await personaSheet(alice, 'Grill', 'Model');
     await grill.getByLabel('Memory size (k tokens)').fill('300');
     await grill.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(bob.locator('#messages')).toContainText('Alice changed 🔥 Grill: autocompact auto → 300k.');
-    await panel.getByRole('button', { name: 'Close' }).click();
+    await closePersonas(alice);
     expect((await ask(alice, room.id, 'FAKE_AUTOCOMPACT, and the code word is OSPREY.')).trim()).toBe('autocompact 300000');
 
     expect(await ask(alice, room.id, 'FAKE_CONTEXT_FULL')).toContain('Wrote docs/notes.md');
@@ -29,9 +27,9 @@ test('handoff: autocompact, context banner, new session from the note', async ({
     await expect(banner).toContainText('🔥 Grill\'s session holds 85% of its context window.');
     await expect(bob.locator('#approvals')).toContainText('The AI host can start it fresh, keeping a summary.');
     await expect(bob.getByRole('button', { name: 'Start fresh with a summary for Grill' })).toHaveCount(0);
-    await menuItem(alice, 'Personas');
-    await expect(grill.locator('.hint').first()).toContainText('Its session holds 85% of its context window.');
-    await panel.getByRole('button', { name: 'Close' }).click();
+    await personaSheet(alice, 'Grill', 'Model');
+    await expect(grill.locator('section[data-tab=model] .hint')).toContainText('its session holds 85% of its context window.');
+    await closePersonas(alice);
 
     await banner.getByRole('button', { name: 'Start fresh with a summary for Grill' }).click();
     await confirmSheet(alice, 'Start fresh');

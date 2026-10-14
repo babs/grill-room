@@ -292,3 +292,45 @@ func TestSupervisorPageMonitoring(t *testing.T) {
 		t.Fatalf("retention %d", s.RetentionDays())
 	}
 }
+
+// 009-AC19 009-AC22: the page's plugin requests reach the worker of the room's instance, named by
+// the request or found from the room's link; a worker from before protocol 4 is refused them
+// with why, and a link or an instance the supervisor does not serve is a 400.
+func TestSupervisorPluginRequests(t *testing.T) {
+	for _, mode := range []string{"plugins", strconv.Itoa(protoPlugins - 1)} {
+		t.Run(mode, func(t *testing.T) {
+			s := testSupervisor(t, mode, nil)
+			e := newAdminEnv(t, s)
+			tok := e.login(t)
+			s.SetRoom(context.Background(), Room{Base: "https://rooms.example", ID: "abc"})
+			waitFor(t, "the worker running", func() bool { return instance(t, s).State == "running" })
+			id := instance(t, s).ID
+			ok := http.StatusNoContent
+			if mode != "plugins" {
+				ok = http.StatusBadRequest
+			}
+			const room = `"room":"https://rooms.example/r/abc"`
+			for _, c := range []struct {
+				path, body string
+				want       int
+			}{
+				{"/api/plugin-options", `{"instance":"nope",` + room + `,"plugin":1,"values":{}}`, http.StatusBadRequest},
+				{"/api/plugin-options", `{"instance":"` + id + `",` + room + `,"plugin":1,"values":{"k":"v"}}`, ok},
+				{"/api/plugin-options", `{` + room + `,"plugin":1,"values":{}}`, ok},
+				{"/api/plugin-options", `{"room":"not a link","plugin":1}`, http.StatusBadRequest},
+				{"/api/plugin-options", `{"room":"https://other.example/r/x","plugin":1}`, http.StatusBadRequest},
+				{"/api/plugin-fetch", `{"instance":"` + id + `",` + room + `,"id":3,"fetch":true}`, ok},
+				{"/api/plugin-fetch", `{` + room + `,"id":3}`, ok},
+				{"/api/plugin-fetch", `{"room":"not a link","id":3}`, http.StatusBadRequest},
+			} {
+				code, b := e.req(t, "POST", c.path, tok, c.body, nil)
+				if code != c.want {
+					t.Errorf("%s %s: %d %s", c.path, c.body, code, b)
+				}
+				if mode != "plugins" && strings.Contains(c.body, "rooms.example") && !strings.Contains(b, "too old") && !strings.Contains(c.body, "nope") {
+					t.Errorf("%s %s: %s", c.path, c.body, b)
+				}
+			}
+		})
+	}
+}

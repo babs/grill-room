@@ -45,6 +45,12 @@ func newEnv(t *testing.T) *env {
 
 func newEnvOpts(t *testing.T, opts Options) *env {
 	t.Helper()
+	return newEnvLog(t, opts, zap.NewNop())
+}
+
+// newEnvLog is newEnvOpts with the server writing to log.
+func newEnvLog(t *testing.T, opts Options, log *zap.Logger) *env {
+	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "t.db")
 	st, err := store.Open(dbPath)
 	if err != nil {
@@ -53,7 +59,7 @@ func newEnvOpts(t *testing.T, opts Options) *env {
 	t.Cleanup(func() { _ = st.Close() })
 	admin := NewToken()
 	b := bus.New(st)
-	srv := New(b, HashToken(admin), baseURL+"/", opts, zap.NewNop())
+	srv := New(b, HashToken(admin), baseURL+"/", opts, log)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return &env{ts: ts, st: st, bus: b, srv: srv, admin: admin, dbPath: dbPath}

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon, menuItem } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, menuItem, personaSheet, closePersonas } from './helpers.js';
 
 const led = (page, name) => page.locator(`button.persona[data-name="${name}"] .led`);
 const lastAgent = (page) => page.locator('#messages li.msg.agent').last();
@@ -11,18 +11,17 @@ async function openPanel(page) {
   return page.locator('#personas');
 }
 
-// edit sets fields of a persona in the personas panel and saves; the panel stays open on its status.
+// edit sets model fields of a persona in its sheet's Model tab and saves (009-AC2); the sheet stays
+// open on its status.
 async function edit(page, name, fields) {
-  const panel = await openPanel(page);
-  const form = panel.locator('.persona-form', { has: page.getByRole('heading', { name: new RegExp(` ${name}$`) }) });
-  for (const [label, value] of Object.entries(fields)) await form.getByLabel(label).selectOption(value);
-  await form.getByRole('button', { name: 'Save', exact: true }).click();
-  return { status: panel.locator('#personas-status') };
+  await openPanel(page);
+  const sheet = await personaSheet(page, name, 'Model');
+  for (const [label, value] of Object.entries(fields)) await sheet.getByLabel(label).selectOption(value);
+  await sheet.getByRole('button', { name: 'Save', exact: true }).click();
+  return { status: sheet.locator('#persona-status') };
 }
 
-async function close(page) {
-  await page.locator('#personas').getByRole('button', { name: 'Close' }).click();
-}
+const close = closePersonas;
 
 async function ask(page, persona, count) {
   await page.locator('#body').fill('FAKE_WHOAMI');
@@ -84,7 +83,7 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
     await openPanel(bob);
     await bob.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
     await bob.locator('#personas').getByRole('button', { name: 'Add', exact: true }).click();
-    await expect(bob.locator('#personas .persona-form')).toHaveCount(2);
+    await expect(bob.locator('#personas .persona-row')).toHaveCount(2);
     await close(bob);
     ({ status } = await edit(bob, 'Secretary', { Model: 'opus' }));
     await expect(status).toHaveText('Secretary saved. It applies from its next turn.');

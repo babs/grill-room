@@ -1,4 +1,7 @@
 version: "2"
+# The e2e build's files (cmd/grill-room/e2e.go, internal/plugin/e2e.go) are linted too.
+run:
+  build-tags: [e2e]
 linters:
   enable:
     - bodyclose

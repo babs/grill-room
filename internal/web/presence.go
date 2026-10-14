@@ -10,6 +10,7 @@ import (
 	"strings"
 	"text/template"
 	"time"
+	"unicode"
 
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/turn"
@@ -27,6 +28,9 @@ var presenceTmpl = template.Must(template.New("presence").
 const (
 	// presenceLineMax caps each preamble line: a long synthesis or room must not crowd the rest.
 	presenceLineMax = 100
+	// causeMax is what is left of the line for a turn's cause after presence.tmpl's
+	// "Why you are running: ".
+	causeMax = presenceLineMax - len("Why you are running: ")
 	// speakerWindow is how recent a voice line must be for its speaker to be speaking now.
 	speakerWindow = 10 * time.Second
 )
@@ -54,7 +58,15 @@ type presenceView struct {
 }
 
 // oneLine folds s on one line: names and syntheses must not break the preamble's layout.
-func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+func oneLine(s string) string {
+	// A control character would end or garble the line it is quoted on, as a cause is quoted raw.
+	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)), " ")
+}
 
 // renderPresence renders v with each line cut at presenceLineMax runes.
 func renderPresence(v presenceView) (string, error) {
@@ -109,15 +121,19 @@ func everyMinutes(n int) string {
 }
 
 func triggerText(p *store.RoomPersona) string {
+	t := "on demand"
 	switch {
 	case p.EveryN > 0:
-		return "on demand and " + everyRounds(p.EveryN)
+		t += " and " + everyRounds(p.EveryN)
 	case p.EveryVoice > 0:
-		return "on demand and " + everyVoice(p.EveryVoice)
+		t += " and " + everyVoice(p.EveryVoice)
 	case p.EveryMinutes > 0:
-		return "on demand and " + everyMinutes(p.EveryMinutes)
+		t += " and " + everyMinutes(p.EveryMinutes)
 	}
-	return "on demand"
+	if p.WatchesNotes {
+		t += ", watches the notes"
+	}
+	return t
 }
 
 func chainText(c store.Chain) string {

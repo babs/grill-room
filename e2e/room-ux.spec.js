@@ -42,7 +42,11 @@ for (const vp of widths) {
       await expect(page.locator('.msg.system').last()).toContainText('Alice is now Ali');
       const line = page.locator('.msg.text', { hasText: 'Before the rename.' }).locator('.sender');
       await expect(line).toHaveText('Ali');
-      await expect(line).toHaveAttribute('title', 'Written as Alice');
+      // 009-AC36: the details card says it, no native title.
+      await expect(line).not.toHaveAttribute('title');
+      await line.focus();
+      await expect(page.locator('#person-card')).toContainText('Written as Alice');
+      await page.keyboard.press('Escape');
       await expect(page.locator('#participants')).toContainText('Ali');
     }
     // A later join under another name leaves the profile's name alone.
@@ -82,7 +86,7 @@ for (const vp of widths) {
     const sheet = alice.locator('#manage');
     await expect(sheet).toBeVisible();
     await expect(sheet.getByRole('link', { name: 'Admins', exact: true })).toHaveAttribute('aria-current', 'page');
-    await expect(sheet.locator('#tab-general, #tab-invites, #tab-admins, #tab-personas, #tab-skills, #tab-documents, #tab-export, #tab-glossary')).toHaveCount(8);
+    await expect(sheet.locator('#tab-general, #tab-invites, #tab-admins, #tab-personas, #tab-skills, #tab-plugins, #tab-documents, #tab-export, #tab-glossary')).toHaveCount(9);
     const box = await sheet.boundingBox();
     if (vp.width < 400) expect(box.width).toBe(vp.width);
     else expect(box.width).toBeGreaterThan(900);

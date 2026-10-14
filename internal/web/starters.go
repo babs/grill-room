@@ -185,6 +185,7 @@ type starterRoomReq struct {
 	Personas  *[]store.StarterPersona `json:"personas"`
 	Documents []string                `json:"documents"`
 	Skills    []string                `json:"skills"`
+	Plugins   []string                `json:"plugins"`
 }
 
 // badRequest is a refusal the editor shows as is.
@@ -257,6 +258,9 @@ func (s *Server) starterSetup(ctx context.Context, profileID int64, name string,
 	if setup.Skills, err = keep(m.Skills, q.Skills, func(k store.StarterSkill) string { return k.Name }); err != nil {
 		return "", nil, err
 	}
+	if setup.Plugins, err = keep(m.Plugins, q.Plugins, pluginName); err != nil {
+		return "", nil, err
+	}
 	personas := m.Personas
 	if q.Personas != nil {
 		personas = *q.Personas
@@ -277,10 +281,41 @@ func (s *Server) starterSetup(ctx context.Context, profileID int64, name string,
 				return "", nil, badRequest(p.Name + " uses the skill " + k + ": keep it, or turn it off for " + p.Name)
 			}
 		}
+		if p.Plugins, err = keptPlugins(p, setup.Plugins); err != nil {
+			return "", nil, err
+		}
 		personas[i] = p
+	}
+	if err := oneWatcher(personas); err != nil {
+		return "", nil, err
 	}
 	setup.Personas = personas
 	return room, setup, nil
+}
+
+func pluginName(p store.StarterPlugin) string { return p.Name }
+
+// keptPlugins is the plugins persona p has on among those kept: leaving a plugin out takes it off
+// its personas, as plugins are picked one by one (009-AC28).
+func keptPlugins(p store.StarterPersona, kept []store.StarterPlugin) ([]string, error) {
+	var out []string
+	for _, name := range p.Plugins {
+		if slices.ContainsFunc(kept, func(x store.StarterPlugin) bool { return x.Name == name }) && !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	if len(out) > store.MaxPersonaPlugins {
+		return nil, badRequest(fmt.Sprintf("%s has more than %d plugins on", p.Name, store.MaxPersonaPlugins))
+	}
+	return out, nil
+}
+
+// oneWatcher refuses personas of which more than one watches the notes (009-AC31).
+func oneWatcher(ps []store.StarterPersona) error {
+	if len(slices.DeleteFunc(slices.Clone(ps), func(p store.StarterPersona) bool { return !p.WatchesNotes })) > 1 {
+		return badRequest("only one persona may watch the notes")
+	}
+	return nil
 }
 
 // keep returns the entries of all whose name is in names, all of them for nil names; a name of no
@@ -325,6 +360,7 @@ type starterSaveReq struct {
 	Personas    []store.StarterPersona `json:"personas"`
 	Documents   []string               `json:"documents"`
 	Skills      []string               `json:"skills"`
+	Plugins     []string               `json:"plugins"`
 }
 
 // starterFrom checks q against base, the room or version it is saved from, and returns the
@@ -382,6 +418,9 @@ func starterFrom(base *store.StarterManifest, q *starterSaveReq) (*store.Starter
 	if m.Skills, err = keep(base.Skills, q.Skills, func(k store.StarterSkill) string { return k.Name }); err != nil {
 		return nil, nil, err
 	}
+	if m.Plugins, err = keep(base.Plugins, q.Plugins, pluginName); err != nil {
+		return nil, nil, err
+	}
 	if len(q.Personas) > store.MaxRoomPersonas {
 		return nil, nil, badRequest(fmt.Sprintf("a room holds at most %d personas", store.MaxRoomPersonas))
 	}
@@ -399,7 +438,13 @@ func starterFrom(base *store.StarterManifest, q *starterSaveReq) (*store.Starter
 				return nil, nil, badRequest(p.Name + " uses the skill " + k + ": keep it, or turn it off for " + p.Name)
 			}
 		}
+		if p.Plugins, err = keptPlugins(p, m.Plugins); err != nil {
+			return nil, nil, err
+		}
 		m.Personas = append(m.Personas, p)
+	}
+	if err := oneWatcher(m.Personas); err != nil {
+		return nil, nil, err
 	}
 	var kept []string
 	for _, d := range m.Documents {
@@ -409,6 +454,9 @@ func starterFrom(base *store.StarterManifest, q *starterSaveReq) (*store.Starter
 	}
 	for _, k := range m.Skills {
 		kept = append(kept, k.File)
+	}
+	for _, p := range m.Plugins {
+		kept = append(kept, p.File)
 	}
 	return m, kept, nil
 }
@@ -461,7 +509,7 @@ func (s *Server) saveRoomStarter(w http.ResponseWriter, r *http.Request, sess se
 	if err == nil {
 		files, err = s.bus.Store.RoomDraftFiles(r.Context(), sess.p.RoomID, names)
 		if errors.Is(err, store.ErrNotFound) {
-			httpError(w, http.StatusConflict, "a document or skill left the room meanwhile: open Save as starter again")
+			httpError(w, http.StatusConflict, "a document, skill or plugin left the room meanwhile: open Save as starter again")
 			return
 		}
 	}

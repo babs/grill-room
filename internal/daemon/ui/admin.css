@@ -63,3 +63,13 @@ div.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(20rem
 .room-card { list-style: none; }
 .room-card .row { margin-top: var(--sp-1); }
 ul.rooms { padding-left: 0; }
+/* A room's plugins on the Rooms tab (009-AC19, 009-AC22): requests, options, websites. */
+.room-plugins h4 { margin-top: var(--sp-3); }
+ul.fetches, ul.plugin-domains { padding-left: 0; list-style: none; }
+.fetch-request { margin: var(--sp-2) 0; }
+.plugin-options { display: flex; flex-direction: column; gap: var(--sp-3); margin: var(--sp-2) 0; }
+.option-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); }
+.option-row .option { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); }
+.option-row .hint { margin: 0; flex-basis: 100%; }
+.warn-line { font-weight: 600; }
+.room-plugins .muted { color: var(--text-muted); }

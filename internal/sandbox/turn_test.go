@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -78,6 +79,12 @@ func (e *emulator) run(_ context.Context, stdin io.Reader, args ...string) ([]by
 			fmt.Fprintf(&b, "%s  ./%s\x00", sum(d), p)
 		}
 		return []byte(b.String()), nil
+	case cmd[0] == "sh" && strings.Contains(cmd[2], "truncate -s"):
+		path := strings.TrimPrefix(cmd[4], home+"/")
+		var off int
+		_, _ = fmt.Sscanf(cmd[5], "%d", &off)
+		data, _ := io.ReadAll(stdin)
+		e.home[path] = append(e.home[path][:off:off], data...)
 	case cmd[0] == "sh" && strings.Contains(cmd[2], "stat -c %s"):
 		d, ok := e.home[strings.TrimPrefix(cmd[4], home+"/")]
 		if !ok {
@@ -100,10 +107,12 @@ func (e *emulator) run(_ context.Context, stdin io.Reader, args ...string) ([]by
 		}
 		return nil, err
 	case cmd[0] == "rm" && cmd[1] == "-rf":
-		prefix := strings.TrimPrefix(cmd[2], home+"/") + "/"
-		for p := range e.home {
-			if strings.HasPrefix(p, prefix) {
-				delete(e.home, p)
+		for _, dir := range cmd[2:] {
+			prefix := strings.TrimPrefix(dir, home+"/") + "/"
+			for p := range e.home {
+				if strings.HasPrefix(p, prefix) {
+					delete(e.home, p)
+				}
 			}
 		}
 	case cmd[0] == "tar" && cmd[1] == "-c":
@@ -232,6 +241,66 @@ func TestRunTurnLoadsSkills(t *testing.T) {
 	}
 }
 
+// 009-AC17: each room plugin lands in its own folder under the home's plugins directory and
+// reaches claude through its own --plugin-dir, after the skills' one and in the turn's order. A
+// later turn keeps none of an earlier one's plugins, and with none passes no flag. A name that
+// would leave the folder, or a second plugin of one name, fails the turn before claude runs.
+func TestRunTurnLoadsPlugins(t *testing.T) {
+	e := newEmulator()
+	var seen [][]string
+	e.claude = func(e *emulator, _ string, args []string) (string, error) {
+		var got []string
+		for i, a := range args {
+			if a == "--plugin-dir" {
+				got = append(got, args[i+1])
+			}
+		}
+		var files []string
+		for p, d := range e.home {
+			if strings.HasPrefix(p, ".grill-room/plugin") {
+				files = append(files, p+"="+string(d))
+			}
+		}
+		slices.Sort(files)
+		seen = append(seen, append(got, files...))
+		e.home[".claude/projects/-workspace/"+sid+".jsonl"] = []byte("l\n")
+		return `{"result":"done","session_id":"` + sid + `"}`, nil
+	}
+	s := newTurnSandbox(t, e)
+	tarOf := func(files map[string]string) io.Reader { return workspaceTar(t, files) }
+	for _, in := range []TurnInput{
+		{Plugin: tarOf(map[string]string{"skills/stamp/SKILL.md": "s"}), Plugins: []PluginTar{
+			{Name: "zeta", Tar: tarOf(map[string]string{".claude-plugin/plugin.json": "z"})},
+			{Name: "alpha", Tar: tarOf(map[string]string{"skills/a/SKILL.md": "a"})}}},
+		{Plugins: []PluginTar{{Name: "alpha", Tar: tarOf(map[string]string{"skills/a/SKILL.md": "a2"})}}},
+		{},
+	} {
+		in.Workspace, in.Prompt, in.Bearer = workspaceTar(t, nil), "p", testBearer
+		if _, err := s.RunTurn(context.Background(), in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := [][]string{
+		{pluginDir, pluginsDir + "/zeta", pluginsDir + "/alpha",
+			".grill-room/plugin/skills/stamp/SKILL.md=s", ".grill-room/plugins/alpha/skills/a/SKILL.md=a", ".grill-room/plugins/zeta/.claude-plugin/plugin.json=z"},
+		{pluginsDir + "/alpha", ".grill-room/plugins/alpha/skills/a/SKILL.md=a2"},
+		nil,
+	}
+	if fmt.Sprint(seen) != fmt.Sprint(want) {
+		t.Fatalf("claude saw\n%q\nwant\n%q", seen, want)
+	}
+	for _, bad := range [][]PluginTar{
+		{{Name: "../x", Tar: tarOf(nil)}},
+		{{Name: "grill-room", Tar: tarOf(nil)}},
+		{{Name: "a", Tar: tarOf(nil)}, {Name: "a", Tar: tarOf(nil)}},
+	} {
+		_, err := s.RunTurn(context.Background(), TurnInput{Workspace: workspaceTar(t, nil), Prompt: "p", Bearer: testBearer, Plugins: bad})
+		if err == nil || len(seen) != 3 {
+			t.Fatalf("plugins %+v: err %v, claude ran %d times", bad, err, len(seen))
+		}
+	}
+}
+
 // 001-AC34: resuming fetches the room's session when the local copy is missing or differs, keeps
 // a matching one, and uploads only the bytes past the room's copy.
 func TestRunTurnSyncsSession(t *testing.T) {
@@ -323,6 +392,114 @@ func TestParseHashes(t *testing.T) {
 	for _, bad := range []string{"nonsense\x00", h + " ./x\x00", h + "  x\x00", "abc  ./x\x00"} {
 		if _, err := parseHashes([]byte(bad)); err == nil {
 			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+// 009-AC23: a turn hands the plugins' option values to Claude Code where 2.1.296 reads them,
+// sensitive ones in .credentials.json beside the dummy login, the others in settings.json, and
+// the next turn rewrites both, keeping none. Each secret, as written or JSON-escaped, becomes
+// [redacted] in the synthesis, the documents and the session; the local session gets the same
+// bytes, so the next turn resumes from it without fetching the room's copy.
+func TestRunTurnPluginOptionsAndRedaction(t *testing.T) {
+	const secret = `s3cr"et<v>`
+	path := ".claude/projects/-workspace/" + sid + ".jsonl"
+	e := newEmulator()
+	var creds, settings []string
+	e.claude = func(e *emulator, _ string, _ []string) (string, error) {
+		creds, settings = append(creds, string(e.home[".claude/.credentials.json"])), append(settings, string(e.home[".claude/settings.json"]))
+		e.ws["docs/leak.md"] = []byte("key " + secret)
+		e.ws["replies.json"] = []byte(`[{"annotation":1,"body":"key s3cr\"et<v>"}]`)
+		e.home[path] = append(e.home[path], `{"hook":"key s3cr\"et<v>","short":"et<"}`+"\n"...)
+		return `{"result":"the key is ` + strings.ReplaceAll(secret, `"`, `\"`) + `","session_id":"` + sid + `"}`, nil
+	}
+	s := newTurnSandbox(t, e)
+	out, err := s.RunTurn(context.Background(), TurnInput{Bearer: testBearer, Workspace: workspaceTar(t, nil), Prompt: "p",
+		PluginOptions: PluginOptions{Secrets: map[string]map[string]any{"p@inline": {"api_key": secret}}, Configs: map[string]map[string]any{"p@inline": {"region": "eu"}}},
+		Redact:        []string{secret}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(creds[0], `"pluginSecrets":{"p@inline":{"api_key":"s3cr\"et\u003cv\u003e"}}`) || !strings.Contains(creds[0], `"claudeAiOauth"`) ||
+		settings[0] != `{"pluginConfigs":{"p@inline":{"options":{"region":"eu"}}}}` {
+		t.Fatalf("credentials %s\nsettings %s", creds[0], settings[0])
+	}
+	all := out.Result.Result + string(out.Session)
+	for _, c := range out.Changes {
+		all += string(c.Content)
+	}
+	if strings.Contains(all, "s3cr") || out.Result.Result != "the key is [redacted]" || !strings.Contains(string(out.Session), `"short":"et<"`) {
+		t.Fatalf("output %q", all)
+	}
+	if !bytes.Equal(e.home[path], out.Session) {
+		t.Fatalf("local session %q, posted %q", e.home[path], out.Session)
+	}
+	fetched := false
+	if _, err := s.RunTurn(context.Background(), TurnInput{Bearer: testBearer, Workspace: workspaceTar(t, nil), Prompt: "p",
+		Resume: sid, SessionSize: int64(len(out.Session)), SessionSHA256: sum(out.Session),
+		FetchSession: func(context.Context) ([]byte, error) { fetched = true; return nil, errors.New("no fetch expected") }}); err != nil {
+		t.Fatal(err)
+	}
+	if fetched || strings.Contains(creds[1], "pluginSecrets") || settings[1] != "{}" {
+		t.Fatalf("second turn: fetched %v, credentials %s, settings %s", fetched, creds[1], settings[1])
+	}
+}
+
+// 009-AC23: the redactor finds each secret as written, JSON-escaped with and without HTML
+// escaping, and escaped twice; overlapping secrets leave no part of either.
+func TestRedactorText(t *testing.T) {
+	if NewRedactor(nil) != nil || NewRedactor([]string{""}) != nil {
+		t.Fatal("a redactor for nothing")
+	}
+	r := NewRedactor([]string{"abcd", "cdef", `a<b"c`})
+	for in, want := range map[string]string{
+		"x abcdef y":     "x [redacted] y",
+		"abcd cdef":      "[redacted] [redacted]",
+		`a<b"c`:          "[redacted]",
+		`a<b\"c`:         "[redacted]",
+		`a\u003cb\"c`:    "[redacted]",
+		`a<b\\\"c`:       "[redacted]",
+		"nothing to see": "nothing to see",
+	} {
+		if got := r.Text(in); got != want {
+			t.Errorf("%q: %q, want %q", in, got, want)
+		}
+	}
+}
+
+// 009-AC23: JSON keeps parsing after the redaction, line by line for a session, whatever the
+// secret holds; numbers are left alone.
+func TestRedactorJSON(t *testing.T) {
+	secrets := []string{`s3"cr\et`, "1234", `a","b`}
+	r := NewRedactor(secrets)
+	lines := []map[string]any{
+		{"text": "key " + secrets[0] + " and " + secrets[2], "n": 12345},
+		{"nested": `{"inner":"` + jsonEscaped(secrets[0], false) + `"}`, "1234": "x"},
+		{"html": jsonEscaped(secrets[0], true), "list": []any{"1234", "safe"}},
+	}
+	var in []byte
+	for _, l := range lines {
+		b, _ := json.Marshal(l)
+		in = append(append(in, b...), '\n')
+	}
+	out := r.JSON(in)
+	for _, line := range bytes.Split(bytes.TrimSuffix(out, []byte("\n")), []byte("\n")) {
+		var v map[string]any
+		if err := json.Unmarshal(line, &v); err != nil {
+			t.Fatalf("line %s: %v", line, err)
+		}
+	}
+	for _, sec := range []string{"s3", "cr", `a\",\"b`} {
+		if bytes.Contains(out, []byte(sec)) {
+			t.Fatalf("%q left in %s", sec, out)
+		}
+	}
+	if !bytes.Contains(out, []byte(`"n":12345`)) {
+		t.Fatalf("a number touched: %s", out)
+	}
+	for _, bad := range []string{`{"broken": "abc 1234`, `[{"body": key 1234}]`, `body s3"cr\et end`} {
+		if got := string(r.JSON([]byte(bad))); strings.Contains(got, "1234") || strings.Contains(got, "s3") || !strings.Contains(got, "[redacted]") {
+			t.Fatalf("not JSON %q: %s", bad, got)
 		}
 	}
 }

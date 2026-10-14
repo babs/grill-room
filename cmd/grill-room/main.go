@@ -50,6 +50,10 @@ var (
 // adminTokenSetting holds the admin token hash. Delete the row to have a new token generated.
 const adminTokenSetting = "admin_token_sha256" //nolint:gosec // a settings key, not a credential
 
+// testPluginClient returns the client plugin fetches use, nil for the guarded default. Only the
+// e2e build (e2e.go) sets one, for the browser tests' local git server.
+var testPluginClient = func(*zap.Logger) *http.Client { return nil }
+
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -85,6 +89,8 @@ type Config struct {
 	STTToken string
 	// TurnTimeout bounds one agent turn.
 	TurnTimeout time.Duration
+	// NotesWatchDelay is how long the notes watcher waits after the last new note message.
+	NotesWatchDelay time.Duration
 	// DaemonDir holds the daemon release `make release` writes; empty offers no download.
 	DaemonDir string
 	// SandboxImage is the digest-pinned sandbox image advertised to daemons; empty lets them build it.
@@ -118,7 +124,9 @@ func loadConfig() (Config, error) {
 		err10 = fmt.Errorf("GRILL_ROOM_TRUSTED_PROXIES: %w", err10)
 	}
 	maxImport, err8 := strconv.ParseInt(getEnv("GRILL_ROOM_MAX_IMPORT_MB", strconv.Itoa(web.DefaultMaxImportBytes>>20)), 10, 64)
+	notesDelay, err11 := time.ParseDuration(getEnv("GRILL_ROOM_NOTES_WATCH_DELAY", web.DefaultNotesWatchDelay.String()))
 	return Config{
+		NotesWatchDelay: notesDelay,
 		SMTP: mail.SMTP{
 			Addr:     os.Getenv("GRILL_ROOM_SMTP_ADDR"),
 			From:     os.Getenv("GRILL_ROOM_SMTP_FROM"),
@@ -152,7 +160,7 @@ func loadConfig() (Config, error) {
 		LogFormat:        getEnv("LOG_FORMAT", "auto"),
 		DaemonDir:        os.Getenv("GRILL_ROOM_DAEMON_DIR"),
 		SandboxImage:     os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
-	}, errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9, err10)
+	}, errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9, err10, err11)
 }
 
 // Validate rejects a configuration the server cannot run with.
@@ -174,6 +182,9 @@ func (c Config) Validate() error {
 	}
 	if c.TurnTimeout < time.Minute || c.TurnTimeout > 24*time.Hour {
 		return fmt.Errorf("GRILL_ROOM_TURN_TIMEOUT %s: want 1m to 24h", c.TurnTimeout)
+	}
+	if c.NotesWatchDelay < time.Second || c.NotesWatchDelay > time.Hour {
+		return fmt.Errorf("GRILL_ROOM_NOTES_WATCH_DELAY %s: want 1s to 1h", c.NotesWatchDelay)
 	}
 	if c.PandocTimeout <= 0 {
 		return fmt.Errorf("GRILL_ROOM_PANDOC_TIMEOUT %s: want a positive duration", c.PandocTimeout)
@@ -360,6 +371,7 @@ func run() error {
 	b := bus.New(st)
 	srv := web.New(b, hash, cfg.PublicURL, web.Options{
 		TurnTimeout:        cfg.TurnTimeout,
+		NotesWatchDelay:    cfg.NotesWatchDelay,
 		MaxUploadBytes:     cfg.MaxUploadMB << 20,
 		MaxRoomBytes:       cfg.MaxRoomMB << 20,
 		MaxAttachmentBytes: cfg.MaxAttachmentMB << 20,
@@ -376,6 +388,7 @@ func run() error {
 		PushHosts:          cfg.PushHosts,
 		Version:            Version,
 		DBPath:             cfg.DB,
+		PluginClient:       testPluginClient(logger),
 	}, logger)
 	if cfg.SMTP.Addr == "" {
 		logger.Info("email_signin_disabled", zap.String("hint", "set GRILL_ROOM_SMTP_ADDR and GRILL_ROOM_SMTP_FROM to send magic links"))

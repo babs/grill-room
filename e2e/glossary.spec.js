@@ -7,6 +7,7 @@ test('a member edits the transcription glossary', async ({ browser, request }) =
   const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
   await playSTT(bob, room.id, { engines: ['whisper'], glossary: true });
   await menuItem(bob, 'Room settings');
+  await bob.locator('#manage #tab-glossary').click();
   const form = bob.locator('#stt-glossary');
   // Alice, Bob and the room's Grill persona.
   await expect(form.locator('#glossary-used')).toHaveText('3 / ~70 terms used');

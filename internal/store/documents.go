@@ -63,8 +63,9 @@ type Upload struct {
 	Text string
 }
 
-// RoomUsage returns what a room's blobs weigh, upload originals plus annotation attachments, and
-// the quota they count against: the room's own, else defaultQuota (004-AC9).
+// RoomUsage returns what a room's blobs weigh, upload originals, annotation attachments and plugin
+// snapshots (009-AC9), and the quota they count against: the room's own, else defaultQuota
+// (004-AC9).
 func (s *Store) RoomUsage(ctx context.Context, roomID string, defaultQuota int64) (used, quota int64, err error) {
 	return roomUsage(ctx, s.db, roomID, defaultQuota)
 }
@@ -79,7 +80,9 @@ func roomUsage(ctx context.Context, db queryer, roomID string, defaultQuota int6
 			(SELECT COALESCE(SUM(size), 0) FROM uploads WHERE room_id = ?)
 			+ (SELECT COALESCE(SUM(t.size), 0) FROM attachments t
 				JOIN annotation_messages m ON m.id = t.message_id
-				JOIN annotations a ON a.id = m.annotation_id WHERE a.room_id = ?)`, roomID, defaultQuota, roomID, roomID).Scan(&quota, &used)
+				JOIN annotations a ON a.id = m.annotation_id WHERE a.room_id = ?)
+			+ (SELECT COALESCE(SUM(length(sn.data)), 0) FROM plugin_snapshots sn JOIN plugin_versions v ON v.id = sn.version_id
+				JOIN room_plugins p ON p.id = v.plugin_id WHERE p.room_id = ?)`, roomID, defaultQuota, roomID, roomID, roomID).Scan(&quota, &used)
 	if err != nil {
 		return 0, 0, fmt.Errorf("room usage: %w", err)
 	}

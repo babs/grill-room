@@ -23,7 +23,7 @@ import { RoomPanel, Rename, TabBar, fetchJSON, roomTabs, size, when, ago, onInpu
  *   updated_at: string}} Skill
  * @typedef {{rooms_per_profile: number, storage_quota_bytes: number, room_creation: string}} Settings
  * @typedef {{join_ip: string, join_ua: string, last_ip: string, last_ua: string, last_seen_at: string | null}} Client
- * @typedef {{id: number, name: string, admin: boolean, has_profile: boolean, client?: Client}} Participant
+ * @typedef {{id: number, name: string, admin: boolean, has_profile: boolean, host: boolean, can_host: boolean, client?: Client}} Participant
  * @typedef {{name: string, counts: Record<string, number>, bytes: Record<string, number>, warnings: string[], format: number,
  *   instance_version: string, same_instance: boolean, exported_at: string, archive_bytes: number,
  *   room?: {id: string, name: string}}} ImportReport
@@ -258,10 +258,16 @@ function RoomAdmins({ base }) {
   useEffect(() => { load(); }, [base]);
   /** @param {Participant} p @param {boolean} on */
   const set = (p, on) => api(on ? 'PUT' : 'DELETE', `${base}/admins/${p.id}`).then(load).catch(show);
+  /** @param {Participant} p */
+  const makeHost = (p) => {
+    window.grillConfirm(`Make ${p.name} the AI host?`, `The personas run on ${p.name}'s computer from the next turn.`, 'Make AI host')
+      .then((yes) => { if (yes) api('PUT', base + '/host', { participant_id: p.id }).then(load).catch(show); });
+  };
   return html`
-    <p class="hint">Room admins rename the room and its participants, manage its invites, appoint other admins, export and delete it. Only participants with a profile can be appointed.</p>
+    <p class="hint">Room admins rename the room and its participants, manage its invites, appoint other admins, export and delete it. Only participants with a profile can be appointed. Make AI host shows for those whose AI host app is connected and can host.</p>
     ${list && (list.length ? html`<ul id="room-admins">${list.map((p) => html`<li key=${p.id}>
-      ${p.name}${p.admin && html` <strong>admin</strong>`}${' '}
+      ${p.name}${p.admin && html` <strong>admin</strong>`}${p.host && html` <strong>AI host</strong>`}${' '}
+      ${!p.host && p.can_host && html`<button type="button" class="btn-secondary" onClick=${() => makeHost(p)} aria-label=${'Make ' + p.name + ' the AI host'}>Make AI host</button> `}
       ${!p.has_profile ? html`<span class="hint">no profile</span>`
         : p.admin ? html`<button type="button" class="btn-secondary" onClick=${() => set(p, false)} aria-label=${'Remove ' + p.name + ' from the room admins'}>Remove admin</button>`
         : html`<button type="button" class="btn-secondary" onClick=${() => set(p, true)} aria-label=${'Make ' + p.name + ' a room admin'}>Make admin</button>`}
@@ -285,7 +291,7 @@ function ClientLine({ c }) {
 const importKinds = [['participants', 'Participants'], ['messages', 'Lines'], ['message_versions', 'Earlier versions'],
   ['documents', 'Documents'], ['revisions', 'Revisions'], ['uploads', 'Uploads'], ['annotations', 'Annotations'],
   ['annotation_messages', 'Thread messages'], ['attachments', 'Attachments'], ['mentions', 'Mentions'], ['personas', 'Personas'], ['skills', 'Skills'],
-  ['sessions', 'Agent sessions']];
+  ['plugins', 'Plugins'], ['sessions', 'Agent sessions']];
 
 /**
  * ImportRoom uploads an export for a preview of what it holds, which creates nothing, then imports

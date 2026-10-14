@@ -6,14 +6,14 @@ The instance id is the first 12 hex digits of the sha256 of the server's scheme,
 
 ## Versions
 
-Both sides carry a protocol version, `Proto` in `internal/daemon/proto.go`, currently 3. Version 2 added `access`, version 3 the slots under the global cap. A worker that settles on version 2 asks for no slot: its turns run outside the cap. Peers at most one version apart (`ProtoSkew`) talk at the lower of the two. Further apart, the side that notices sends `refused` and the worker exits. The supervisor marks the instance `refused` with the reason and does not restart it.
+Both sides carry a protocol version, `Proto` in `internal/daemon/proto.go`, currently 4. Version 2 added `access`, version 3 the slots under the global cap, version 4 the room plugins' `plugin_options` and `plugin_fetch`. A worker that settles on version 2 asks for no slot: its turns run outside the cap. The supervisor sends no plugin request to a worker below version 4, and the page says the worker is too old. Peers at most one version apart (`ProtoSkew`) talk at the lower of the two. Further apart, the side that notices sends `refused` and the worker exits. The supervisor marks the instance `refused` with the reason and does not restart it.
 
 A version bump must stay additive within that window: new fields and new message types only. Both sides ignore unknown fields and unknown message types. A supervisor must not send a request type its worker's agreed version lacks.
 
 ## Handshake
 
-1. The worker sends `{"type":"hello","proto":3,"version":"v0.0.3","instance":"<id>"}`.
-2. The supervisor answers either `{"type":"refused","proto":3,"error":"..."}`, or `{"type":"config","proto":3,"version":"v0.0.3","config":{...}}`.
+1. The worker sends `{"type":"hello","proto":4,"version":"v0.0.3","instance":"<id>"}`.
+2. The supervisor answers either `{"type":"refused","proto":4,"error":"..."}`, or `{"type":"config","proto":4,"version":"v0.0.3","config":{...}}`.
 3. The worker checks the supervisor's `proto` in turn, and may answer `refused` before it exits.
 
 A worker that says nothing within 10 s is killed and restarted.
@@ -23,7 +23,7 @@ The `config` object:
 | Field | |
 |---|---|
 | `instance` | the instance id; a worker refuses another instance's config |
-| `config_dir`, `state_dir`, `cache_dir` | the instance's directories: `settings.json` and `allowlist.json`, `tokens.json`, `workspace-cache/` |
+| `config_dir`, `state_dir`, `cache_dir` | the instance's directories: `settings.json` and `allowlist.json`; `tokens.json`, `plugin-options.json` (the plugins' option values by plugin id, owner-only), `plugin-cache/` and `plugin-fetch/` (the host's git fetches while they run, emptied as the worker starts); `workspace-cache/` |
 | `sandbox_root` | keys the sandbox names and the `grill-room-root` label, so that two supervisors never share a sandbox |
 | `log_level`, `image`, `cache_mb` | as the supervisor's environment sets them |
 | `settings` | the host cap and approval mode until the page saves the instance's own |
@@ -50,6 +50,8 @@ Requests carry an `id`; the worker answers each one with `{"type":"reply","id":N
 | `allowlist` | `allowlist` (absent for an empty list) | saves the egress allowlist; the running sandbox takes it at once |
 | `denied` | `n` | the reply's `denied` lists the last `n` refused egress requests |
 | `recheck` | | re-runs the Docker check, and retries a failed sandbox image |
+| `plugin_options` | `room`, `plugin` (the room's plugin id), `values`, `clear` | saves the values the host gave a room plugin's options, under its id, with which options are sensitive: an absent key keeps its value, an empty string or a key in `clear` forgets it; only the plugin's declared options, each of its type (version 4) |
+| `plugin_fetch` | `room`, `fetch`, `accept` | `accept` starts the room's fetch request `fetch` with the host's git and replies at once; the room status shows it `fetching`. Without `accept` it declines the request (version 4) |
 | `access` | `access` | replaces the access: a room whose proxy moved gets a new sandbox at its next turn, and a new `cut_off` ends the running turns. Sent whenever it changes: an account added, mapped or expired, a cut-off, Docker coming up |
 | `update` | | refused with an error: only the supervisor updates, and it updates itself (003-AC5). Phase 2 workers replaced their binary here |
 | `wait` | `slot` | no reply: the worker's turn waits in the supervisor's queue (version 3) |
@@ -62,7 +64,7 @@ A closed stdin means the same as `stop`, so a worker whose supervisor died stops
 
 | Type | Fields | When |
 |---|---|---|
-| `status` | `status`, the page's view of the worker; `update.served` is the version its room server hands out; `rooms` lists each room's pairing, connection, and turns `running` and `queued` | whenever it changes, checked every 250 ms |
+| `status` | `status`, the page's view of the worker; `update.served` is the version its room server hands out; `rooms` lists each room's pairing, connection, and turns `running` and `queued`, and for a room this daemon hosts its `plugins` (`name`, `version`, `options`, the non-sensitive `values`, `set` naming every option with a value, `needs_setup`, `domains`, `off_allowlist`) and `fetches` (the requests waiting for the host, `fetching` while one runs). A sensitive value never travels | whenever it changes, checked every 250 ms |
 | `metrics` | `metrics`: `uptime_seconds`, `turns`, `failed_turns`, `heap_bytes`, `goroutines` | at start, then every 30 s |
 | `turn` | `turn`: `room`, `id`, `phase` (`start` or `end`), `error`, `duration_ms`, and at the end `queue_ms`, the wait for a slot, `persona`, the session's `context_tokens` and `context_window`, `cause`, `asked_model` and `asked_effort`, `model` and `effort` as run, `model_note` and `model_mismatch` as in the turn result, `tokens_in`, `tokens_out`, `tokens_cache_read` and `tokens_cache_write` summed over every model claude called, `cost_usd` from claude's `total_cost_usd`, and `workspace_bytes`, the workspace tar's size. Absent fields are unknown | as a turn starts and ends |
 | `acquire` | `slot`, a number the worker picks; `turn`: `room`, `id` | before each turn, version 3: the supervisor answers `grant`, or `wait` then `grant` |

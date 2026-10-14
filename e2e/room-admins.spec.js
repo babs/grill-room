@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { adminToken } from './playwright.config.js';
-import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet, playSTT, stopSTT, newRoomEditor } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet, playSTT, stopSTT, newRoomEditor, personaSheet, closePersonas } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const phone = { width: 390, height: 844 };
@@ -122,7 +122,7 @@ test('room creation from the profile page, within the limits', async ({ browser,
 
 for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', ...phone }]) {
   // 004-AC8 004-AC19: the room admin panel, in Preact, at desktop and phone width. A plain member
-  // sees no Manage button and the API refuses them; Alice appoints Bob, who removes her; the last
+  // sees no admin tab and the API refuses them; Alice appoints Bob, who removes her; the last
   // admin cannot step down; Bob renames, then deletes the room once its name is typed. Every
   // action is audited under the acting profile.
   test(`room admin delegation, ${vp.name}`, async ({ browser, request }) => {
@@ -133,10 +133,11 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     const carol = await join(browser, request, id, 'Carol', vp);
     const api = `/api/rooms/${id}`;
 
-    // Plain members: only the transcription glossary in Manage (005-AC23), while a worker reads it
-    // (007-AC14), and the API says no.
+    // Plain members: only the plugins (009-AC5) and the transcription glossary in Manage (005-AC23),
+    // while a worker reads it (007-AC14), and the API says no.
     await playSTT(bob, id, { engines: ['whisper'], glossary: true });
     await menuItem(bob, 'Room settings');
+    await bob.locator('#manage #tab-glossary').click();
     await expect(bob.locator('#manage #stt-glossary')).toBeVisible();
     await expect(bob.locator('#manage #room-panel')).toHaveCount(0);
     await bob.locator('#manage-close').click();
@@ -249,14 +250,13 @@ test('a room skill survives its author leaving', async ({ browser, request, base
   await expect(alice.locator('#messages')).toContainText('Bob copied the skill bobs v1 into the room.');
   await bob.getByRole('button', { name: 'Close' }).click();
 
-  await menuItem(alice, 'Personas');
-  const grill = alice.locator('#personas .persona-form', { hasText: 'Grill' }).first();
+  const grill = await personaSheet(alice, 'Grill', 'Capabilities');
   await grill.getByLabel('Skill to turn on for Grill').selectOption({ label: 'bobs v1 (room)' });
   await grill.getByRole('button', { name: 'Turn on the chosen skill for Grill' }).click();
   await alice.locator('#skills-disclaimer').getByRole('button', { name: 'I understand, turn it on' }).click();
-  await expect(alice.locator('#personas-status')).toHaveText('bobs v1 is on for Grill.');
+  await expect(alice.locator('#persona-status')).toHaveText('bobs v1 is on for Grill.');
   await expect(grill.locator('.persona-skills li[data-skill]')).toHaveText([/^bobs v1 \(room\)/]);
-  await alice.getByRole('button', { name: 'Close' }).click();
+  await closePersonas(alice);
 
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {

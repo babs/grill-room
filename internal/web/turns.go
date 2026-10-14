@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"slices"
@@ -330,6 +331,20 @@ func (s *Server) prepareTurn(ctx context.Context, room *store.Room, persona *sto
 			return m.ID > prev.AnnotationCursor && !ownMessage(m, persona.ID)
 		})
 	})
+	var named []int64
+	if len(anns) > 0 {
+		// A thread naming other personas is theirs to answer (009-AC30).
+		personas, err := st.RoomPersonas(ctx, room.ID)
+		if err != nil {
+			return nil, err
+		}
+		anns = slices.DeleteFunc(anns, func(a store.Annotation) bool { return othersThread(participantBodies(a), personas, persona.ID) })
+		if q.ID != 0 {
+			if named, err = st.NoteMentionThreads(ctx, q.ID, persona.ID); err != nil {
+				return nil, err
+			}
+		}
+	}
 	docs, err := st.Documents(ctx, room.ID)
 	if err != nil {
 		return nil, err
@@ -346,7 +361,7 @@ func (s *Server) prepareTurn(ctx context.Context, room *store.Room, persona *sto
 		return nil, err
 	}
 	t.Prompt = buildPrompt(promptInput{Preamble: preamble, Room: room.Name, Persona: persona.Name, Self: persona.ID, NewSession: t.Resume == "",
-		Handoff: t.Handoff, Msgs: msgs, Changes: changes, Anns: anns, AnnCursor: prev.AnnotationCursor, Paths: docPaths(docs), Renamed: renamed})
+		Handoff: t.Handoff, Msgs: msgs, Changes: changes, Anns: anns, Named: named, AnnCursor: prev.AnnotationCursor, Paths: docPaths(docs), Renamed: renamed})
 	return t, nil
 }
 
@@ -591,6 +606,20 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request, d *store.Daemon,
 	for _, k := range ks {
 		job.Skills = append(job.Skills, turn.Skill{Name: k.Name, Version: k.Version})
 	}
+	ps, err := s.bus.Store.TurnPlugins(r.Context(), d.RoomID, t.ID)
+	if err != nil {
+		s.serverError(w, "get_job_failed", err)
+		return
+	}
+	for _, p := range ps {
+		tp := turn.Plugin{ID: p.PluginID, Name: p.Name, SHA256: p.SHA256, Version: p.N}
+		if m := manifestOf(p.Manifest); m != nil {
+			for _, o := range m.Options {
+				tp.Options = append(tp.Options, turn.PluginOption{Key: o.Key, Sensitive: o.Sensitive, Required: o.Required, Default: o.Default})
+			}
+		}
+		job.Plugins = append(job.Plugins, tp)
+	}
 	if t.Resume != "" {
 		data, err := s.bus.Store.AgentSession(r.Context(), d.RoomID, t.PersonaID, t.Resume)
 		if err != nil {
@@ -715,6 +744,7 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 		s.failTurn(r.Context(), d.RoomID, t.ID, "the result from the host's daemon was refused: too large or malformed")
 		return
 	}
+	s.recordSetup(r.Context(), d.RoomID, t.ID, res.SkippedPlugins)
 	if res.Error != "" {
 		s.failTurn(r.Context(), d.RoomID, t.ID, sanitize(res.Error, maxError))
 		w.WriteHeader(http.StatusNoContent)
@@ -746,6 +776,12 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 	}
 	for _, rp := range o.Replies {
 		out.Replies = append(out.Replies, store.AgentReply{AnnotationID: rp.Annotation, Body: rp.Body, Done: rp.Status == store.StatusDone})
+	}
+	if err := s.refuseOthersThreads(r.Context(), t, out); err != nil {
+		s.log.Error("complete_turn_failed", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.Error(err))
+		s.failTurn(r.Context(), d.RoomID, t.ID, "the room could not apply the result")
+		httpError(w, http.StatusInternalServerError, "internal error")
+		return
 	}
 	if len(o.Annotations) > 0 {
 		docs, err := s.bus.Store.Documents(r.Context(), d.RoomID)
@@ -799,6 +835,69 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 		zap.Strings("created", done.Report.Created), zap.Strings("rejected", done.Report.Rejected), zap.Int("annotated", done.Report.Annotated),
 		zap.Int("closed", done.Report.Closed), zap.String("model", done.Model), zap.String("effort", done.Effort), zap.Int("session_bytes", len(res.Session)))
 	writeJSON(w, http.StatusOK, done)
+}
+
+// recordSetup marks the turn's plugins the daemon left out for an option the host has not set,
+// and clears the mark on the others it pinned: the Capabilities tab says which (009-AC24). A
+// failure only logs: the turn's result matters more.
+func (s *Server) recordSetup(ctx context.Context, room string, id int64, skipped []turn.SkippedPlugin) {
+	ps, err := s.bus.Store.TurnPlugins(ctx, room, id)
+	if err != nil || len(ps) == 0 {
+		return
+	}
+	pinned := make([]string, len(ps))
+	for i, p := range ps {
+		pinned[i] = p.Name
+	}
+	var names []string
+	for _, k := range skipped {
+		if k.Reason == turn.NeedsHostSetup {
+			names = append(names, k.Name)
+		}
+	}
+	changed, err := s.bus.Store.SetPluginsSetup(ctx, room, pinned, names)
+	if err != nil {
+		s.log.Warn("plugin_setup_record_failed", zap.String("room", room), zap.Int64("turn", id), zap.Error(err))
+		return
+	}
+	if changed {
+		s.bus.Notify(room)
+	}
+}
+
+// refuseOthersThreads drops the replies and closes of turn t to threads that belong to other
+// personas, and lists each in its report (009-AC30).
+func (s *Server) refuseOthersThreads(ctx context.Context, t *store.Turn, out *store.TurnOutcome) error {
+	if len(out.Replies) == 0 {
+		return nil
+	}
+	ids := make([]int64, 0, len(out.Replies))
+	for _, r := range out.Replies {
+		ids = append(ids, r.AnnotationID)
+	}
+	bodies, err := s.bus.Store.ParticipantNotes(ctx, t.RoomID, ids)
+	if err != nil {
+		return err
+	}
+	personas, err := s.bus.Store.RoomPersonas(ctx, t.RoomID)
+	if err != nil {
+		return err
+	}
+	out.Replies = slices.DeleteFunc(out.Replies, func(r store.AgentReply) bool {
+		owners := threadOwners(bodies[r.AnnotationID], personas)
+		if len(owners) == 0 || slices.Contains(owners, t.PersonaID) {
+			return false
+		}
+		var names []string
+		for _, p := range personas {
+			if slices.Contains(owners, p.ID) {
+				names = append(names, "@"+p.Name)
+			}
+		}
+		out.Report.Ignored = append(out.Report.Ignored, fmt.Sprintf("reply to annotation %d: it belongs to %s", r.AnnotationID, strings.Join(names, ", ")))
+		return true
+	})
+	return nil
 }
 
 // sanitize keeps text the agent or a daemon wrote displayable: no control character but newline

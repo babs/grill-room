@@ -18,7 +18,7 @@ import (
 func TestConfigValidate(t *testing.T) {
 	ok := Config{Addr: "a:1", MetricsAddr: "a:2", DB: "x.db", LogLevel: "info", LogFormat: "auto",
 		MaxUploadMB: 20, MaxRoomMB: 200, MaxAttachmentMB: 5, MaxImportMB: 1024, Pandoc: "pandoc", PandocTimeout: time.Minute, TurnTimeout: 15 * time.Minute, MagicLinkTTL: 15 * time.Minute,
-		AuditRetention: 365 * 24 * time.Hour, ClientRetention: 720 * time.Hour}
+		AuditRetention: 365 * 24 * time.Hour, ClientRetention: 720 * time.Hour, NotesWatchDelay: 20 * time.Second}
 	cases := map[string]func(*Config){
 		"zero upload limit":       func(c *Config) { c.MaxUploadMB = 0 },
 		"room below upload limit": func(c *Config) { c.MaxRoomMB = 10 },
@@ -43,6 +43,9 @@ func TestConfigValidate(t *testing.T) {
 		"magic link ttl zero":     func(c *Config) { c.MagicLinkTTL = 0 },
 		"audit retention short":   func(c *Config) { c.AuditRetention = 23 * time.Hour },
 		"client retention short":  func(c *Config) { c.ClientRetention = 23 * time.Hour },
+		// 009-AC32: the notes watcher's delay.
+		"notes delay too short": func(c *Config) { c.NotesWatchDelay = 500 * time.Millisecond },
+		"notes delay too long":  func(c *Config) { c.NotesWatchDelay = 2 * time.Hour },
 		"sandbox digest too short": func(c *Config) {
 			c.SandboxImage = "registry.example/grill-room/sandbox@sha256:" + strings.Repeat("a", 63)
 		},
@@ -70,7 +73,7 @@ func TestConfigValidate(t *testing.T) {
 }
 
 func TestLoadConfigRejectsBadNumbers(t *testing.T) {
-	for key, val := range map[string]string{"GRILL_ROOM_MAX_UPLOAD_MB": "20MB", "GRILL_ROOM_MAX_ROOM_MB": "x", "GRILL_ROOM_PANDOC_TIMEOUT": "60", "GRILL_ROOM_MAX_ATTACHMENT_MB": "5MB", "GRILL_ROOM_TURN_TIMEOUT": "15", "GRILL_ROOM_MAGIC_LINK_TTL": "15", "GRILL_ROOM_AUDIT_RETENTION": "365", "GRILL_ROOM_CLIENT_RETENTION": "30", "GRILL_ROOM_TRUSTED_PROXIES": "10.0.0.0/33"} {
+	for key, val := range map[string]string{"GRILL_ROOM_MAX_UPLOAD_MB": "20MB", "GRILL_ROOM_MAX_ROOM_MB": "x", "GRILL_ROOM_PANDOC_TIMEOUT": "60", "GRILL_ROOM_MAX_ATTACHMENT_MB": "5MB", "GRILL_ROOM_TURN_TIMEOUT": "15", "GRILL_ROOM_MAGIC_LINK_TTL": "15", "GRILL_ROOM_AUDIT_RETENTION": "365", "GRILL_ROOM_CLIENT_RETENTION": "30", "GRILL_ROOM_TRUSTED_PROXIES": "10.0.0.0/33", "GRILL_ROOM_NOTES_WATCH_DELAY": "20"} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv(key, val)
 			if _, err := loadConfig(); err == nil {
@@ -79,7 +82,7 @@ func TestLoadConfigRejectsBadNumbers(t *testing.T) {
 		})
 	}
 	c, err := loadConfig()
-	if err != nil || c.MaxUploadMB != 20 || c.MaxRoomMB != 200 || c.MaxAttachmentMB != 5 || c.TurnTimeout != 15*time.Minute || c.MagicLinkTTL != 15*time.Minute || c.AuditRetention != 8760*time.Hour || c.ClientRetention != 720*time.Hour || c.TrustedProxies != nil || c.Validate() != nil {
+	if err != nil || c.MaxUploadMB != 20 || c.MaxRoomMB != 200 || c.MaxAttachmentMB != 5 || c.TurnTimeout != 15*time.Minute || c.MagicLinkTTL != 15*time.Minute || c.AuditRetention != 8760*time.Hour || c.ClientRetention != 720*time.Hour || c.TrustedProxies != nil || c.NotesWatchDelay != 20*time.Second || c.Validate() != nil {
 		t.Fatalf("defaults: %+v, %v", c, err)
 	}
 }

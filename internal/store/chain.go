@@ -47,7 +47,7 @@ func (c Chain) Paused() bool { return !c.Suspended && c.Count >= c.Budget }
 // stays as it is.
 func (c Chain) On(e ChainEvent) (Chain, bool) {
 	switch e {
-	case LinkEveryN, LinkCall:
+	case LinkEveryN, LinkCall, LinkNotesWatch:
 		if c.Paused() {
 			return c, false
 		}

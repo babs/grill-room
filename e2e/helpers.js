@@ -293,10 +293,34 @@ export async function confirmSheet(page, name) {
   await page.locator('dialog.confirm').getByRole('button', { name, exact: true }).click();
 }
 
-// unfold opens a folded section of a persona's form: 'advanced' or 'more' (005-AC40).
-export async function unfold(form, which) {
-  const d = form.locator('details.' + which);
-  if (!(await d.evaluate((e) => e.open))) await d.locator('summary').click();
+// personaRow is name's one-line row in the Personas list (009-AC1).
+export const personaRow = (page, name) => page.locator('#persona-list .persona-row')
+  .filter({ has: page.locator('.pr-name', { hasText: new RegExp(`^${name}$`) }) });
+
+// personaSheet opens name's sheet from its row in the Personas list, on tab (009-AC2), and returns
+// the sheet; the list stays open under it.
+export async function personaSheet(page, name, tab = 'Identity') {
+  if (!(await page.locator('#personas').isVisible())) await menuItem(page, 'Personas');
+  await personaRow(page, name).click();
+  const sheet = page.locator('#persona-sheet');
+  await expect(sheet.locator('#persona-sheet-title')).toHaveText(new RegExp(` ${name}$`));
+  await sheet.locator('#persona-tabs').getByRole('link', { name: tab, exact: true }).click();
+  await expect(sheet.locator(`section[data-tab="${tab.toLowerCase()}"]`)).toBeVisible();
+  return sheet;
+}
+
+// personaAction runs an item of the open persona sheet's ⋯ menu (009-AC3).
+export async function personaAction(page, name) {
+  await page.locator('#persona-more').click();
+  await page.locator('#persona-menu').getByRole('button', { name, exact: true }).click();
+}
+
+// closePersonas closes the persona sheet, when open, then the Personas list.
+export async function closePersonas(page) {
+  for (const id of ['#persona-sheet', '#personas']) {
+    const d = page.locator(id);
+    if (await d.isVisible()) await d.getByRole('button', { name: 'Close' }).first().click();
+  }
 }
 
 // openStrip shows every item of the status strip (005-AC38): only the most urgent shows folded.
@@ -334,6 +358,69 @@ export async function newRoomEditor(page) {
   await page.getByRole('button', { name: 'New room' }).click();
   await expect(page.locator('#starter-preview')).toContainText('Blank');
   await page.getByRole('button', { name: 'Use this starter' }).click();
+}
+
+// addSecretary adds the Secretary from the library in the personas panel, applies the trigger
+// fields given on its Triggers tab (009-AC2), and leaves the panel open.
+export async function addSecretary(page, fields = {}) {
+  const panel = page.locator('#personas');
+  await menuItem(page, 'Personas');
+  await panel.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
+  await panel.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(personaRow(page, 'Secretary')).toHaveCount(1);
+  if (fields.everyN) {
+    const sec = await personaSheet(page, 'Secretary', 'Triggers');
+    await sec.getByLabel('Speaks up').selectOption('every_n');
+    await sec.getByLabel('N', { exact: true }).fill(String(fields.everyN));
+    await sec.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(sec.locator('#persona-status')).toHaveText('Secretary saved. It applies from its next turn.');
+    await sec.getByRole('button', { name: 'Close' }).click();
+    // 009-AC1: the row says the trigger in words.
+    await expect(personaRow(page, 'Secretary').locator('.pr-meta')).toHaveText(`sonnet · effort medium · every ${fields.everyN} answers`);
+  }
+  return panel;
+}
+
+// commentOnDocument saves a whole-document note on the open document (005-AC37 calls them notes).
+export async function commentOnDocument(page, text) {
+  await page.getByRole('button', { name: 'Comment on the document' }).click();
+  await page.getByRole('textbox', { name: 'Annotation', exact: true }).fill(text);
+  await page.locator('#annot-new').getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.locator('#annot-new')).toBeHidden();
+}
+
+// sandboxPrompts returns the prompts of every session in the daemon's sandbox, oldest first in
+// each session: what the fake claude kept of each turn.
+export function sandboxPrompts(daemon) {
+  const out = execFileSync('docker', ['exec', 'grill-room-' + daemon.sandbox, 'sh', '-c', 'cat "$HOME"/.claude/projects/-workspace/*.jsonl'], { encoding: 'utf8' });
+  return out.split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((l) => l.type === 'user').map((l) => l.prompt);
+}
+
+// fakeDaemon pairs an AI host app for page's participant through the API, as the daemon does,
+// keeps its stream open and reports it ready to host, with settings (approve_all): enough for
+// People, hand-overs and plugin inspection reports, with no Docker (009-AC33). Returns its
+// disconnect, which carries the daemon's token as .token.
+export async function fakeDaemon(page, baseURL, roomID, name, settings = {}) {
+  const base = `${baseURL}/api/rooms/${roomID}`;
+  const json = { 'Content-Type': 'application/json' };
+  const p = await (await fetch(`${base}/pairings`, { method: 'POST', headers: json, body: JSON.stringify({ name }) })).json();
+  expect(await page.evaluate(([room, id]) => fetch(`/api/rooms/${room}/pairings/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ approve: true }) }).then((r) => r.status), [roomID, p.id])).toBe(200);
+  const { token } = await (await fetch(`${baseURL}/api/pairings/${p.id}`, { headers: { Authorization: 'Bearer ' + p.secret } })).json();
+  const auth = { Authorization: 'Bearer ' + token };
+  const stream = new AbortController();
+  const events = await fetch(`${base}/daemon/events`, { headers: auth, signal: stream.signal });
+  events.body.pipeTo(new WritableStream()).catch(() => {});
+  const st = await fetch(`${base}/daemon/status`, { method: 'POST', headers: { ...auth, ...json }, body: JSON.stringify({ can_host: true, ...settings }) });
+  expect(st.status).toBe(204);
+  return Object.assign(() => stream.abort(), { token });
+}
+
+// appointAdmin makes page's participant a room admin, as the super-admin, and reloads the page.
+export async function appointAdmin(page, request, roomID) {
+  const me = await page.evaluate((id) => fetch(`/api/rooms/${id}`).then((r) => r.json()).then((d) => d.me.id), roomID);
+  expect((await request.put(`/api/admin/rooms/${roomID}/admins/${me}`, { headers: admin })).status()).toBe(204);
+  await page.reload();
 }
 
 // tableLayout measures a table in its scroll box: the cells the box clips (left of its start, or

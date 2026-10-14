@@ -168,6 +168,13 @@ func richRoom(t *testing.T, s *Store, id string) (*Participant, *RoomPersona) {
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO message_turns(message_id, persona_id, turn_id) VALUES(?,?,?)`, asked.ID, persona.ID, turn.ID); err != nil {
 		t.Fatal(err)
 	}
+	// 009-AC29, 009-AC31: the note message whose @mention asked for it too, and the notes watcher.
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO annotation_message_turns(message_id, persona_id, turn_id) VALUES(?,?,?)`, ann.Messages[0].ID, persona.ID, turn.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE room_personas SET watches_notes = 1 WHERE id = ?`, persona.ID); err != nil {
+		t.Fatal(err)
+	}
 	say(alice, "after the turn")
 	// 005-AC26: a deleted document travels, flagged.
 	gone, err := s.AddUpload(ctx, &Upload{RoomID: id, ParticipantID: bob.ID, Author: "Bob", Filename: "old.md", ContentType: "text/markdown; charset=utf-8",
@@ -192,7 +199,7 @@ const roomSID = "00000000-0000-4000-8000-000000000001"
 func checkPersona(StarterPersona) error { return nil }
 
 func importOpts(roomID string) ImportOptions {
-	return ImportOptions{RoomID: roomID, Format: 2, SameInstance: true, DefaultQuota: 1 << 20, MaxUpload: 1 << 20, MaxAttachment: 1 << 20, CheckPersona: checkPersona}
+	return ImportOptions{RoomID: roomID, Format: 3, SameInstance: true, DefaultQuota: 1 << 20, MaxUpload: 1 << 20, MaxAttachment: 1 << 20, CheckPersona: checkPersona}
 }
 
 func export(t *testing.T, s *Store, room string) string {
@@ -219,6 +226,8 @@ var refKinds = map[string]map[string]string{
 	fileSkills:             {"ref": "skill"},
 	fileSkillVersions:      {"skill": "skill"},
 	fileSessions:           {"persona": "persona"},
+	filePlugins:            {"ref": "plugin"},
+	filePluginVersions:     {"plugin": "plugin"},
 }
 
 // canon reads an export as plain values, with refs replaced by ordinals, files by their sha256,
@@ -263,7 +272,7 @@ func canon(t *testing.T, dir string) map[string]any {
 		pm["ref"] = norm("persona", pm["ref"])
 	}
 	for _, name := range []string{fileParticipants, fileMessages, fileMessageVersions, fileUploads, fileDocuments, fileRevisions, fileAnnotations,
-		fileAnnotationMessages, fileAttachments, fileSkills, fileSkillVersions, fileSessions} {
+		fileAnnotationMessages, fileAttachments, fileSkills, fileSkillVersions, fileSessions, filePlugins, filePluginVersions} {
 		f, err := os.Open(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatal(err)
@@ -293,6 +302,11 @@ func canon(t *testing.T, dir string) map[string]any {
 		for _, k := range pm["skills"].([]any) {
 			km := k.(map[string]any)
 			km["skill"] = norm("skill", km["skill"])
+		}
+		if pl, ok := pm["plugins"].([]any); ok {
+			for i := range pl {
+				pl[i] = norm("plugin", pl[i])
+			}
 		}
 		if r, ok := pm["resume"].(map[string]any); ok {
 			r["message_cursor"] = norm("message", r["message_cursor"])
@@ -333,6 +347,11 @@ func TestExportImportRoundTrip(t *testing.T) {
 	if _, err := s.SetSTTGlossary(ctx, "orig", "Kubernetes\nHelm", alice); err != nil {
 		t.Fatal(err)
 	}
+	// 009-AC36: the name before a rename travels with the participant.
+	ps, _ := s.Participants(ctx, "orig")
+	if _, err := s.RenameParticipant(ctx, "orig", ps[1].ID, "Robert", nil, false); err != nil {
+		t.Fatal(err)
+	}
 	a := export(t, s, "orig")
 	for _, name := range []string{fileRoom, fileTranscript, "uploads", "attachments", "documents", "skills", "sessions"} {
 		if _, err := os.Stat(filepath.Join(a, name)); err != nil {
@@ -355,13 +374,16 @@ func TestExportImportRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]int{"participants": 3, "messages": 0, "message_versions": 2, "uploads": 3, "documents": 4, "revisions": 4, "annotations": 2,
-		"annotation_messages": 3, "attachments": 1, "personas": 1, "skills": 2, "skill_versions": 1, "sessions": 1, "mentions": 1}
+		"annotation_messages": 3, "attachments": 1, "personas": 1, "skills": 2, "skill_versions": 1, "sessions": 1, "mentions": 1, "note_mentions": 1}
 	msgs, _ := s.Messages(ctx, "orig", 0, 1000)
 	want["messages"] = len(msgs)
 	if !reflect.DeepEqual(rep.Counts, want) || rep.Room == nil || rep.Room.ID != "copy" || rep.Relinked != 1 || rep.LinkedSkills != 1 {
 		t.Fatalf("report %+v, want counts %v", rep, want)
 	}
 	diffCanon(t, canon(t, a), canon(t, export(t, s, "copy")))
+	if cps, _ := s.Participants(ctx, "copy"); cps[1].Name != "Robert" || cps[1].PreviousName != ps[1].Name {
+		t.Fatalf("copy's renamed participant %+v, was %q", cps[1], ps[1].Name)
+	}
 	// 005-AC4: the copy's line keeps its chip, done, pointing at the copy's synthesis.
 	cmsgs, _ := s.Messages(ctx, "copy", 0, 1000)
 	chips, err := s.MessageMentions(ctx, "copy", 0, cmsgs[len(cmsgs)-1].ID)
@@ -376,6 +398,23 @@ func TestExportImportRoundTrip(t *testing.T) {
 	}
 	if err != nil || len(chips) != 1 || len(chips[asked]) != 1 || chips[asked][0].Status != "done" || chips[asked][0].LineID != synthesis || synthesis == 0 {
 		t.Fatalf("chips in the copy: %+v %v (asked %d, synthesis %d)", chips, err, asked, synthesis)
+	}
+	// 009-AC29: the copy's note message keeps its chip; 009-AC31: its persona still watches the notes.
+	cps0, _ := s.RoomPersonas(ctx, "copy")
+	canns, _, _ := s.AnnotationsSince(ctx, "copy", 0)
+	var noteChips []MentionState
+	for _, a := range canns {
+		full, _ := s.Annotations(ctx, "copy", a.DocumentID)
+		for _, fa := range full {
+			for _, m := range fa.Messages {
+				if m.Body == "why?" {
+					noteChips = m.Mentions
+				}
+			}
+		}
+	}
+	if len(noteChips) != 1 || noteChips[0].Status != "done" || noteChips[0].LineID != synthesis || len(cps0) != 1 || !cps0[0].WatchesNotes {
+		t.Fatalf("note chips in the copy: %+v, personas %+v", noteChips, cps0)
 	}
 	// 005-AC26: deleted in the copy too.
 	if del, err := s.DeletedDocuments(ctx, "copy"); err != nil || len(del) != 1 || del[0].Name != "old.md" {
@@ -639,30 +678,38 @@ func TestExportCoversEveryColumn(t *testing.T) {
 	const server = "server-wide, not room content"
 	// Each table's columns: those the export carries, or why the table is left out.
 	tables := map[string]string{
-		"rooms":                     "id name created_at chain_budget chain_count chain_suspended parallel_turns stt_glossary created_from | host_participant_id quota_bytes creator_profile_id",
-		"participants":              "id name joined_at can_trigger profile_id profile_uuid_hint room_id invite_id | token_hash last_seen_at join_ip join_ua last_ip last_ua",
-		"invites":                   "| id room_id token_hash created_at revoked_at created_by",
-		"messages":                  "id room_id ts kind participant_id sender body model edited_at deleted_at change_seq persona_id effort req_model req_effort model_note model_mismatch | html turn_id",
-		"message_versions":          "id message_id seq body written_at |",
-		"uploads":                   "id room_id participant_id filename content_type size data created_at |",
-		"documents":                 "id room_id kind name format upload_id author created_at deleted_at | change_seq",
-		"revisions":                 "id document_id n body author created_at |",
-		"annotations":               "id room_id document_id revision anchor orphaned status version created_at |",
-		"annotation_messages":       "id annotation_id author_kind participant_id author body created_at persona_id |",
-		"attachments":               "id message_id content_type size data created_at |",
-		"room_personas":             "id room_id template_id template_version name badge colour text model effort every_n self_call created_at autocompact pending every_voice every_minutes | cap_decision cap_daemon_id cap_model cap_effort mark_msg_id mark_at_ms",
-		"room_persona_skills":       "persona_id skill_id version |",
-		"skills":                    "id name created_at room_id pending scope | profile_id publisher_id from_starter",
-		"skill_versions":            "skill_id n author description files size sha256 data created_at | id author_id",
-		"agent_sessions":            "room_id persona_id session_id data updated_at context_tokens context_window context_updated_at |",
-		"turns":                     "session_id message_cursor annotation_cursor change_cursor model effort ended_at persona_id status | id room_id participant_id daemon_id host fresh resume prompt error report started_at persona_name persona_text req_model req_effort skills host_queued_at base_revisions rerun_of cause handoff",
-		"room_admins":               "room_id profile_id | created_at",
-		"daemons":                   "| id room_id participant_id name token_hash created_at max_model max_effort approve_all",
-		"turn_queue":                "| id room_id persona_id participant_id source fresh created_at rerun_of cause handoff",
-		"message_turns":             "message_id persona_id final_status final_line_id | queue_id turn_id",
-		"persona_change_requests":   "| id room_id persona_id kind patch requested_by created_at",
-		"document_renames":          "| id document_id message_id from_name to_name created_at",         // the next turn's moves
-		"push_subscriptions":        "| id participant_id endpoint p256dh auth all_messages created_at", // a device's keys: a copy gets none
+		"rooms":                    "id name created_at chain_budget chain_count chain_suspended parallel_turns stt_glossary created_from | host_participant_id quota_bytes creator_profile_id",
+		"participants":             "id name joined_at can_trigger profile_id profile_uuid_hint room_id invite_id previous_name | token_hash last_seen_at join_ip join_ua last_ip last_ua",
+		"invites":                  "| id room_id token_hash created_at revoked_at created_by",
+		"messages":                 "id room_id ts kind participant_id sender body model edited_at deleted_at change_seq persona_id effort req_model req_effort model_note model_mismatch | html turn_id",
+		"message_versions":         "id message_id seq body written_at |",
+		"uploads":                  "id room_id participant_id filename content_type size data created_at |",
+		"documents":                "id room_id kind name format upload_id author created_at deleted_at | change_seq",
+		"revisions":                "id document_id n body author created_at |",
+		"annotations":              "id room_id document_id revision anchor orphaned status version created_at |",
+		"annotation_messages":      "id annotation_id author_kind participant_id author body created_at persona_id |",
+		"attachments":              "id message_id content_type size data created_at |",
+		"room_personas":            "id room_id template_id template_version name badge colour text model effort every_n self_call created_at autocompact pending every_voice every_minutes watches_notes | cap_decision cap_daemon_id cap_model cap_effort mark_msg_id mark_at_ms notes_mark",
+		"room_persona_skills":      "persona_id skill_id version |",
+		"skills":                   "id name created_at room_id pending scope | profile_id publisher_id from_starter",
+		"skill_versions":           "skill_id n author description files size sha256 data created_at | id author_id",
+		"agent_sessions":           "room_id persona_id session_id data updated_at context_tokens context_window context_updated_at |",
+		"turns":                    "session_id message_cursor annotation_cursor change_cursor model effort ended_at persona_id status | id room_id participant_id daemon_id host fresh resume prompt error report started_at persona_name persona_text req_model req_effort skills plugins host_queued_at base_revisions rerun_of cause handoff",
+		"room_admins":              "room_id profile_id | created_at",
+		"daemons":                  "| id room_id participant_id name token_hash created_at max_model max_effort approve_all",
+		"turn_queue":               "| id room_id persona_id participant_id source fresh created_at rerun_of cause handoff",
+		"message_turns":            "message_id persona_id final_status final_line_id | queue_id turn_id",
+		"annotation_message_turns": "message_id persona_id final_status final_line_id | queue_id turn_id",
+		"persona_change_requests":  "| id room_id persona_id kind patch requested_by created_at",
+		"document_renames":         "| id document_id message_id from_name to_name created_at",         // the next turn's moves
+		"push_subscriptions":       "| id participant_id endpoint p256dh auth all_messages created_at", // a device's keys: a copy gets none
+		// 009-AC26: a removed plugin and the AI host's setup state are not room content; requests
+		// to the AI host are transient; hold is the importing side's own.
+		"room_plugins":              "id name source_url ref ref_name entry private created_by_name created_at | room_id removed_at needs_setup",
+		"plugin_fetches":            "| id room_id plugin_id source_url ref entries personas state reason requested_by_name requested_by_id created_at",
+		"plugin_versions":           "plugin_id n commit_sha sha256 size files file_list manifest report state reason added_by_name added_at decided_by_name decided_at | id added_by_id hold",
+		"plugin_snapshots":          "data | version_id",
+		"room_persona_plugins":      "persona_id plugin_id |",
 		"persona_templates":         server,
 		"persona_template_versions": server,
 		"profiles":                  server,
@@ -1105,7 +1152,7 @@ func TestImportFormat1(t *testing.T) {
 		t.Fatalf("mentions from a format 1 archive: %v", rep.Counts)
 	}
 	if _, err := s.ImportRoom(ctx, dir, importOpts("new")); err == nil || !strings.Contains(err.Error(), fileMentions+" is missing") {
-		t.Fatalf("format 2 without mentions: %v", err)
+		t.Fatalf("format 2 or later without mentions: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, fileMentions), []byte(`{"message":1,"persona":999,"status":"done"}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)

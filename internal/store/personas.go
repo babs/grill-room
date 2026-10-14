@@ -300,6 +300,12 @@ type RoomPersona struct {
 	NextAt       *time.Time `json:"next_at,omitempty"`
 	// resetMark starts the count and the timer from now: a voice or timer trigger was turned on.
 	resetMark bool
+	// WatchesNotes makes it the room's notes watcher, one at most (009-AC31). NotesMark is the
+	// last note message its latest turn read: newer ones may wake it (009-AC32).
+	WatchesNotes bool  `json:"watches_notes,omitempty"`
+	NotesMark    int64 `json:"-"`
+	// watchFrom is the label of the persona that watched the notes before this one took over.
+	watchFrom string
 	// Autocompact is the context size, in tokens, at which Claude Code compacts the persona's
 	// session; 0 leaves it to Claude Code (auto). Passed to claude -p --autocompact (003-AC24).
 	Autocompact int `json:"autocompact"`
@@ -323,7 +329,7 @@ const personaCols = `SELECT p.id, p.room_id, COALESCE(p.template_id, 0), p.templ
 	p.pending, p.cap_decision, COALESCE(p.cap_daemon_id, 0), p.cap_model, p.cap_effort, p.autocompact,
 	COALESCE(s.context_tokens, 0), COALESCE(s.context_window, 0), COALESCE(p.every_voice, 0), COALESCE(p.every_minutes, 0), p.mark_at_ms,
 	CASE WHEN p.every_voice IS NULL THEN 0 ELSE (SELECT COUNT(*) FROM messages m WHERE m.room_id = p.room_id AND m.kind = 'voice'
-		AND m.deleted_at IS NULL AND m.id > p.mark_msg_id) END FROM room_personas p
+		AND m.deleted_at IS NULL AND m.id > p.mark_msg_id) END, p.watches_notes, p.notes_mark FROM room_personas p
 	LEFT JOIN agent_sessions s ON s.persona_id = p.id
 		AND s.session_id = (SELECT session_id FROM turns WHERE persona_id = p.id AND status = 'done' ORDER BY id DESC LIMIT 1) `
 
@@ -335,7 +341,7 @@ func scanPersona(sc scanner) (*RoomPersona, error) {
 	err := sc.Scan(&p.ID, &p.RoomID, &p.TemplateID, &p.TemplateVersion, &p.UpdateVersion,
 		&p.Name, &p.Badge, &p.Colour, &p.Text, &p.Model, &p.Effort, &p.EveryN, &p.SelfCall, &created,
 		&p.Pending, &p.Cap.Status, &p.Cap.DaemonID, &p.Cap.Level.Model, &p.Cap.Level.Effort, &p.Autocompact,
-		&p.ContextTokens, &p.ContextWindow, &p.EveryVoice, &p.EveryMinutes, &markMS, &voices)
+		&p.ContextTokens, &p.ContextWindow, &p.EveryVoice, &p.EveryMinutes, &markMS, &voices, &p.WatchesNotes, &p.NotesMark)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -522,6 +528,7 @@ type PersonaPatch struct {
 	EveryVoice   *int `json:",omitempty"`
 	EveryMinutes *int `json:",omitempty"`
 	SelfCall     *bool
+	WatchesNotes *bool `json:",omitempty"`
 	// Autocompact 0 leaves compaction to Claude Code.
 	Autocompact *int `json:",omitempty"`
 	// TemplateVersion is set by a held template update.
@@ -575,6 +582,10 @@ func (c PersonaPatch) apply(p *RoomPersona) []string {
 		out = append(out, fmt.Sprintf("self-call %s → %s", onOff(p.SelfCall), onOff(*c.SelfCall)))
 		p.SelfCall = *c.SelfCall
 	}
+	if c.WatchesNotes != nil && *c.WatchesNotes != p.WatchesNotes {
+		out = append(out, watchText(*c.WatchesNotes, p.watchFrom))
+		p.WatchesNotes = *c.WatchesNotes
+	}
 	if c.Autocompact != nil && *c.Autocompact != p.Autocompact {
 		out = append(out, fmt.Sprintf("autocompact %s → %s", autocompact(p.Autocompact), autocompact(*c.Autocompact)))
 		p.Autocompact = *c.Autocompact
@@ -600,6 +611,17 @@ func everyN(n int) string {
 	return strconv.Itoa(n)
 }
 
+// watchText says the notes watcher moved to a persona, from persona from if one watched, or left it.
+func watchText(on bool, from string) string {
+	switch {
+	case !on:
+		return "no longer watches the notes"
+	case from != "":
+		return "now watches the notes (was " + from + ")"
+	}
+	return "now watches the notes"
+}
+
 func onOff(b bool) string {
 	if b {
 		return "on"
@@ -615,10 +637,22 @@ func nullInt(n int) any {
 }
 
 func updatePersona(ctx context.Context, tx *sql.Tx, p *RoomPersona) error {
+	if p.WatchesNotes {
+		// One watcher per room: taking the role takes it from the previous one, with the notes it
+		// has not read yet; a first watcher starts from now (009-AC31, 009-AC32).
+		if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET notes_mark = max(notes_mark, COALESCE((SELECT o.notes_mark FROM room_personas o
+			WHERE o.room_id = room_personas.room_id AND o.id != room_personas.id AND o.watches_notes = 1), `+latestNote+`))
+			WHERE id = ? AND watches_notes = 0`, p.ID); err != nil {
+			return fmt.Errorf("update persona %d: %w", p.ID, err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET watches_notes = 0 WHERE room_id = ? AND id != ? AND watches_notes = 1`, p.RoomID, p.ID); err != nil {
+			return fmt.Errorf("update persona %d: %w", p.ID, err)
+		}
+	}
 	_, err := tx.ExecContext(ctx, `UPDATE room_personas SET template_version = ?, name = ?, badge = ?, colour = ?, text = ?, model = ?, effort = ?,
-		every_n = ?, self_call = ?, pending = ?, autocompact = ?, every_voice = ?, every_minutes = ? WHERE id = ?`,
+		every_n = ?, self_call = ?, pending = ?, autocompact = ?, every_voice = ?, every_minutes = ?, watches_notes = ? WHERE id = ?`,
 		append(append([]any{p.TemplateVersion}, p.args()...), nullInt(p.EveryN), p.SelfCall, p.Pending, p.Autocompact,
-			nullInt(p.EveryVoice), nullInt(p.EveryMinutes), p.ID)...)
+			nullInt(p.EveryVoice), nullInt(p.EveryMinutes), p.WatchesNotes, p.ID)...)
 	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
 		return ErrNameTaken
 	}
@@ -659,6 +693,14 @@ func changePersona(ctx context.Context, tx *sql.Tx, p *RoomPersona, c PersonaPat
 	before := p.label()
 	held, err := heldBy(ctx, tx, p.RoomID, by)
 	if err != nil {
+		return nil, nil, false, err
+	}
+	// A role the persona has already, or lacks already, is no change: held, it would flip the role
+	// back at approval after someone moved it (009-AC31).
+	if c.WatchesNotes != nil && *c.WatchesNotes == p.WatchesNotes {
+		c.WatchesNotes = nil
+	}
+	if err := otherWatcher(ctx, tx, p, c); err != nil {
 		return nil, nil, false, err
 	}
 	target := p
@@ -751,7 +793,8 @@ const (
 )
 
 // QueuedTurn is a turn waiting for the room to be free: a persona's button pressed while another
-// turn ran, a human's @mention, or an agent-triggered link of the chain (Source every_n or call).
+// turn ran, a human's @mention, or an agent-triggered link of the chain (Source every_n, call or
+// notes_watch).
 type QueuedTurn struct {
 	ID        int64  `json:"id"`
 	RoomID    string `json:"-"`

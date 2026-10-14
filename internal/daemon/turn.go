@@ -292,6 +292,22 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 	if err := ag.Start(ctx); err != nil {
 		return turn.Result{Error: err.Error()}
 	}
+	// Before the workspace too, whose tar holds the cache lock.
+	load, skipped, opts, redact := r.d.turnPluginsSetup(r.room.String(), job.Plugins)
+	// An error may quote what a hook printed: the room, the turn event and the log get it redacted.
+	red := sandbox.NewRedactor(redact)
+	if len(skipped) > 0 {
+		r.d.o.Log.Info("turn_plugins_skipped", zap.String("persona", job.Persona), zap.Any("plugins", skipped))
+	}
+	var plugins []sandbox.PluginTar
+	if len(load) > 0 {
+		var closePlugins func()
+		if plugins, closePlugins, err = r.turnPlugins(ctx, tok, ids, load); err != nil {
+			return turn.Result{Error: err.Error(), SkippedPlugins: skipped}
+		}
+		defer closePlugins()
+		r.d.o.Log.Info("turn_plugins", zap.String("persona", job.Persona), zap.Any("plugins", load))
+	}
 	ws, err := r.workspace(ctx, tok, id)
 	if err != nil {
 		return turn.Result{Error: "could not fetch the workspace: " + err.Error()}
@@ -315,7 +331,7 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 	}
 	wsr := &countingReader{r: ws}
 	out, err := ag.RunTurn(ctx, sandbox.TurnInput{
-		Plugin: plugin, Bearer: px.Bearer, Autocompact: knownAutocompact(job.Autocompact),
+		Plugin: plugin, Plugins: plugins, PluginOptions: opts, Redact: redact, Bearer: px.Bearer, Autocompact: knownAutocompact(job.Autocompact),
 		Workspace: wsr, Prompt: job.Prompt, System: job.System, Model: run.Model, Effort: run.Effort,
 		Resume: job.Resume, SessionSize: job.SessionSize, SessionSHA256: job.SessionSHA256,
 		FetchSession: func(ctx context.Context) ([]byte, error) {
@@ -329,7 +345,7 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 	})
 	ev.WorkspaceBytes = wsr.n.Load()
 	if err != nil {
-		return turn.Result{Error: err.Error()}
+		return turn.Result{Error: red.Text(err.Error()), SkippedPlugins: skipped}
 	}
 	model, note, mismatch := out.Result.Label(run.Model)
 	if mismatch {
@@ -340,7 +356,7 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 	tokens, window := out.Result.Context()
 	return turn.Result{Synthesis: out.Result.Result, Model: model, ModelNote: note, ModelMismatch: mismatch, Effort: run.Effort, Capped: capped,
 		SessionID: out.Result.SessionID, SessionOffset: out.SessionOffset,
-		Session: out.Session, Changes: out.Changes, ContextTokens: tokens, ContextWindow: window}
+		Session: out.Session, Changes: out.Changes, ContextTokens: tokens, ContextWindow: window, SkippedPlugins: skipped}
 }
 
 // maxManifest bounds the manifest a room sends: tens of thousands of files.

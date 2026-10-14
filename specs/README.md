@@ -10,3 +10,4 @@
 | [006](006-room-starters.md) | Room starters | shipped |
 | [007](007-stt-parakeet.md) | STT engine: parakeet-ultra | shipped |
 | [008](008-docs-window.md) | Docs window polish and push opt-in explainer | shipped |
+| [009](009-room-plugins.md) | Room plugins from git, persona management, note mentions, host transfer | shipped |

@@ -349,6 +349,113 @@ function roomText(st) {
   return parts.join(', ');
 }
 
+// optionsWarning is the form's warning, word for word from 009-AC23.
+const optionsWarning = 'The AI can read these values during a turn. Anyone in the room can ask it to show them.';
+
+/**
+ * FetchRequest is a room's request that this computer fetch a repo the room server cannot read
+ * (009-AC19): who asked, the link and ref, Fetch or Decline. Nothing runs git before Fetch.
+ * @param {{i: Instance, room: string, f: import('./api.js').HostFetch}} p
+ */
+function FetchRequest({ i, room, f }) {
+  const [text, run] = useStatus();
+  /** @param {boolean} fetch */
+  const answer = (fetch) => run(api('POST', '/api/plugin-fetch', { instance: i.id, room, id: f.id, fetch }),
+    fetch ? 'Fetching: the room gets the plugin, or why not, in a moment.' : 'Declined.');
+  const what = f.plugin_name ? 'an update of the plugin ' + f.plugin_name : f.entries?.length ? 'the plugins ' + f.entries.join(', ') : 'a plugin';
+  return html`<li class="fetch-request" data-fetch=${f.id}>
+    <div>${f.requested_by} asks for ${what}, ${when(f.created_at)}.</div>
+    <div class="hint"><code class="fetch-url">${f.url}</code>, ${f.ref ? html`ref <code>${f.ref}</code>` : 'default branch'}</div>
+    <div class="row">
+      <button type="button" class="btn-primary" disabled=${f.fetching} aria-label=${'Fetch ' + f.url} onClick=${() => answer(true)}>${f.fetching ? 'Fetching…' : 'Fetch'}</button>
+      <button type="button" class="btn-secondary" disabled=${f.fetching} aria-label=${'Decline ' + f.url} onClick=${() => answer(false)}>Decline</button>
+      <${Said} text=${text} />
+    </div>
+  </li>`;
+}
+
+/**
+ * optionInput is one option's field: a checkbox for yes or no, a number, or text; a sensitive one
+ * is masked and starts empty, its value never shown again (009-AC22).
+ * @param {{o: import('./api.js').PluginOption, id: string, value: unknown, set: boolean, onValue: (v: unknown) => void}} p
+ */
+function OptionInput({ o, id, value, set, onValue }) {
+  const label = o.title || o.key;
+  if (o.type === 'boolean') {
+    return html`<label class="option"><input id=${id} type="checkbox" checked=${value === true}
+      onChange=${(/** @type {any} */ e) => onValue(e.currentTarget.checked)} /> ${label}</label>`;
+  }
+  const kind = o.sensitive ? 'password' : o.type === 'number' ? 'number' : 'text';
+  const hint = o.sensitive ? (set ? 'set: type to replace it' : 'not set') : o.default !== undefined ? 'default: ' + String(o.default) : '';
+  return html`<label class="option">${label}${o.required ? ' (required)' : ''}
+    <input id=${id} type=${kind} autocomplete=${o.sensitive ? 'new-password' : 'off'} spellcheck=${false} placeholder=${hint}
+      value=${value === undefined || value === null ? '' : String(value)}
+      onInput=${(/** @type {any} */ e) => onValue(kind === 'number' && e.currentTarget.value !== '' ? Number(e.currentTarget.value) : e.currentTarget.value)} /></label>`;
+}
+
+/**
+ * PluginSetup is one room plugin's options form, and the websites its MCP servers name with an
+ * "Add to allowlist" button for each one off the allowlist (009-AC22, 009-AC24, 009-AC25).
+ * @param {{i: Instance, room: string, p: import('./api.js').HostPlugin, allowlist: string[]}} props
+ */
+function PluginSetup({ i, room, p, allowlist }) {
+  const opts = p.options || [];
+  const [draft, setDraft] = useState(/** @type {Record<string, unknown>} */ ({}));
+  const [text, run] = useStatus();
+  const [listText, runList] = useStatus();
+  const set = p.set || [];
+  /** @param {Event} e */
+  const save = (e) => {
+    e.preventDefault();
+    run(api('POST', '/api/plugin-options', { instance: i.id, room, plugin: p.id, values: draft }), 'Saved.').then((ok) => { if (ok) setDraft({}); });
+  };
+  /** @param {string} key */
+  const forget = (key) => run(api('POST', '/api/plugin-options', { instance: i.id, room, plugin: p.id, values: {}, clear: [key] }), 'Cleared.');
+  /** @param {string} dom */
+  const allow = (dom) => runList(api('POST', '/api/allowlist', { instance: i.id, allowlist: [...allowlist, dom] }), dom + ' added to the allowlist.');
+  const base = 'opt-' + p.name + '-';
+  return html`<div class="plugin-setup" data-plugin=${p.name}>
+    <h4>${p.name} <span class="muted">v${p.version}</span></h4>
+    ${p.needs_setup && html`<p class="bad needs-setup">Needs host setup: it does not load until its required options are set.</p>`}
+    ${opts.length ? html`<form class="plugin-options" onSubmit=${save}>
+      <p class="hint warn-line">${optionsWarning}</p>
+      ${opts.map((o) => html`<div class="option-row">
+        <${OptionInput} o=${o} id=${base + o.key} set=${set.includes(o.key)}
+          value=${o.key in draft ? draft[o.key] : o.sensitive ? '' : p.values?.[o.key] ?? o.default}
+          onValue=${(/** @type {unknown} */ v) => setDraft({ ...draft, [o.key]: v })} />
+        ${o.sensitive && set.includes(o.key) && html`<button type="button" class="btn-secondary" aria-label=${'Clear ' + (o.title || o.key)}
+          onClick=${() => forget(o.key)}>Clear</button>`}
+        ${o.description && html`<span class="hint">${o.description}</span>`}
+      </div>`)}
+      <div class="row"><button type="submit">Save</button><${Said} text=${text} /></div>
+    </form>` : ''}
+    ${p.domains?.length ? html`<p class="hint">Websites its MCP servers reach:</p>
+      <ul class="plugin-domains">${p.domains.map((dom) => {
+        const off = p.off_allowlist?.includes(dom);
+        return html`<li><code>${dom}</code> <span class=${off ? 'bad' : 'muted'}>${off ? 'not on the allowlist' : 'on the allowlist'}</span>
+          ${off && html` <button type="button" aria-label=${'Add ' + dom + ' to the allowlist'} onClick=${() => allow(dom)}>Add to allowlist</button>`}</li>`;
+      })}</ul><${Said} text=${listText} />` : ''}
+  </div>`;
+}
+
+/**
+ * RoomPlugins is what a room this computer hosts asks of it: the fetches waiting for it and the
+ * plugins to set up. Empty for a room another computer hosts.
+ * @param {{i: Instance, room: string, st: import('./api.js').RoomStatus}} p
+ */
+function RoomPlugins({ i, room, st }) {
+  const fetches = st.fetches || [];
+  const plugins = (st.plugins || []).filter((p) => p.options?.length || p.domains?.length);
+  if (!fetches.length && !st.plugins) return null;
+  return html`<div class="room-plugins">
+    ${fetches.length ? html`<h4>Asked to fetch</h4>
+      <p class="hint">Fetch runs this computer's git, with your ssh keys and git logins, outside every sandbox.</p>
+      <ul class="fetches">${fetches.map((f) => html`<${FetchRequest} key=${f.id} i=${i} room=${room} f=${f} />`)}</ul>` : ''}
+    ${st.plugins && (plugins.length ? plugins.map((p) => html`<${PluginSetup} key=${p.name} i=${i} room=${room} p=${p} allowlist=${i.status?.allowlist || []} />`)
+      : html`<p class="hint">No plugin of this room has options or reaches a website.</p>`)}
+  </div>`;
+}
+
 function Rooms() {
   const d = /** @type {StatusReply} */ (data.value);
   const c = d.concurrency;
@@ -372,6 +479,7 @@ function Rooms() {
           ${st?.name && html`<div class="hint"><code class="room-link">${r}</code></div>`}
           ${d.accounts && html`<div class="row">Claude account <${AccountSelect} label=${'Claude account of ' + r} value=${(i.room_accounts || {})[r] || ''} roomDefault=${i.account}
             onPick=${(/** @type {string} */ a) => setAccount(i.id, r, a)} /></div>`}
+          ${st && html`<${RoomPlugins} i=${i} room=${r} st=${st} />`}
         </li>`;
       })}</ul>
     </div>`)}

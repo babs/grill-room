@@ -27,10 +27,14 @@ const (
 	ActionRename          = "participant.rename"
 	ActionDocumentDelete  = "document.delete"
 	ActionDocumentRestore = "document.restore"
+	ActionHostTransfer    = "room.host_transfer"
 )
 
 // maxStorageQuota bounds the instance storage quota: 1 PiB.
 const maxStorageQuota = 1 << 50
+
+// maxPluginMB bounds the plugin snapshot cap (009-AC9).
+const maxPluginMB = 200
 
 // roomAdmin reports whether the member's profile administers the room, and remembers its uuid in
 // sess for the audit log.
@@ -130,14 +134,22 @@ type adminParticipant struct {
 	HasProfile bool   `json:"has_profile"`
 	// Client is where the participant connected from (005-AC20): the super-admin's view only.
 	Client *store.Client `json:"client,omitempty"`
+	// Host is the AI host; CanHost, a connected daemon of theirs can take the role (009-AC33).
+	Host    bool `json:"host"`
+	CanHost bool `json:"can_host"`
 }
 
 // roomParticipants lists a room's participants for the super-admin, who appoints room admins among
 // those with a profile (004-AC8).
 func (s *Server) roomParticipants(w http.ResponseWriter, r *http.Request) {
 	room := r.PathValue("room")
-	if _, err := s.bus.Store.Room(r.Context(), room); errors.Is(err, store.ErrNotFound) {
+	rm, err := s.bus.Store.Room(r.Context(), room)
+	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "no such room")
+		return
+	}
+	if err != nil {
+		s.serverError(w, "room_participants_failed", err)
 		return
 	}
 	ps, err := s.bus.Store.Participants(r.Context(), room)
@@ -152,7 +164,8 @@ func (s *Server) roomParticipants(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]adminParticipant, len(ps))
 	for i, p := range ps {
-		out[i] = adminParticipant{ID: p.ID, Name: p.Name, Admin: p.Admin, HasProfile: p.ProfileID != 0}
+		out[i] = adminParticipant{ID: p.ID, Name: p.Name, Admin: p.Admin, HasProfile: p.ProfileID != 0, Host: p.ID == rm.HostParticipantID}
+		out[i].CanHost = s.canHostDaemon(room, p.ID) != nil
 		if c, ok := cs[p.ID]; ok {
 			out[i].Client = &c
 		}
@@ -281,7 +294,12 @@ func (s *Server) instanceSettings(w http.ResponseWriter, r *http.Request) {
 
 // setInstanceSettings sets the guardrails on rooms profiles create (004-AC7).
 func (s *Server) setInstanceSettings(w http.ResponseWriter, r *http.Request) {
-	var v store.InstanceSettings
+	// A field the request leaves out keeps its value: a page from before plugin_max_mb sends none.
+	v, err := s.bus.Store.InstanceSettings(r.Context())
+	if err != nil {
+		s.serverError(w, "instance_settings_failed", err)
+		return
+	}
 	if !decode(w, r, &v) {
 		return
 	}
@@ -295,14 +313,18 @@ func (s *Server) setInstanceSettings(w http.ResponseWriter, r *http.Request) {
 	case v.RoomCreation != store.CreationAnyone && v.RoomCreation != store.CreationSuperAdmin:
 		httpError(w, http.StatusBadRequest, "room_creation must be anyone or super-admin")
 		return
+	case v.PluginMaxMB < 1 || v.PluginMaxMB > maxPluginMB:
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("plugin_max_mb must be 1 to %d", maxPluginMB))
+		return
 	}
-	details := map[string]any{"rooms_per_profile": v.RoomsPerProfile, "storage_quota_bytes": v.StorageQuota, "room_creation": v.RoomCreation}
+	details := map[string]any{"rooms_per_profile": v.RoomsPerProfile, "storage_quota_bytes": v.StorageQuota, "room_creation": v.RoomCreation,
+		"plugin_max_mb": v.PluginMaxMB}
 	if err := s.bus.Store.SetInstanceSettings(s.auditing(r, ActionSettings, store.TargetInstance, "", "", details), v); err != nil {
 		s.serverError(w, "set_instance_settings_failed", err)
 		return
 	}
 	s.log.Info("instance_settings_set", zap.Int("rooms_per_profile", v.RoomsPerProfile), zap.Int64("storage_quota_bytes", v.StorageQuota),
-		zap.String("room_creation", v.RoomCreation))
+		zap.String("room_creation", v.RoomCreation), zap.Int("plugin_max_mb", v.PluginMaxMB))
 	writeJSON(w, http.StatusOK, v)
 }
 

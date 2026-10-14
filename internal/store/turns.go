@@ -325,14 +325,21 @@ func (s *Store) StartTurn(ctx context.Context, t *Turn, parallel bool) error {
 	if err := pinTurnSkills(ctx, tx, t.RoomID, t.ID, t.PersonaID); err != nil {
 		return err
 	}
-	// 006-AC18: the persona's voice-line count and timer start again from what this turn reads.
-	if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET mark_msg_id = ?, mark_at_ms = ? WHERE id = ?`,
-		t.MessageCursor, t.StartedAt.UnixMilli(), t.PersonaID); err != nil {
+	if err := pinTurnPlugins(ctx, tx, t.ID, t.PersonaID); err != nil {
+		return err
+	}
+	// 006-AC18: the persona's voice-line count and timer start again from what this turn reads;
+	// 009-AC32: so does the notes watcher's wait.
+	if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET mark_msg_id = ?, mark_at_ms = ?, notes_mark = max(notes_mark, ?) WHERE id = ?`,
+		t.MessageCursor, t.StartedAt.UnixMilli(), t.AnnotationCursor, t.PersonaID); err != nil {
 		return fmt.Errorf("start turn: %w", err)
 	}
 	if t.QueueID != 0 {
-		if _, err := tx.ExecContext(ctx, `UPDATE message_turns SET turn_id = ? WHERE queue_id = ?`, t.ID, t.QueueID); err != nil {
-			return fmt.Errorf("start turn: %w", err)
+		for _, table := range mentionTables {
+			//nolint:gosec // table is one of mentionTables, never user input
+			if _, err := tx.ExecContext(ctx, `UPDATE `+table+` SET turn_id = ? WHERE queue_id = ?`, t.ID, t.QueueID); err != nil {
+				return fmt.Errorf("start turn: %w", err)
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -906,6 +913,57 @@ func (s *Store) SetHost(ctx context.Context, roomID string, pid int64) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// HandOver makes participant to the AI host of room on by's request, nil for the super-admin, and
+// says so in the chat: the host handing over keeps the 003 line, a room admin taking the role says
+// so, anyone else's line names who did it (009-AC34). It writes the audit entry ctx carries, with the previous and the new host. The
+// caller checked by's right. It returns the line, "" when to hosts already; ErrNotFound if to is not
+// in room.
+func (s *Store) HandOver(ctx context.Context, roomID string, to int64, by *Participant) (string, error) {
+	var line string
+	err := s.withTx(ctx, "hand over", func(tx *sql.Tx) error {
+		var from sql.NullInt64
+		var fromName, toName sql.NullString
+		err := tx.QueryRowContext(ctx, `SELECT r.host_participant_id, h.name, p.name FROM rooms r
+			JOIN participants p ON p.id = ? AND p.room_id = r.id LEFT JOIN participants h ON h.id = r.host_participant_id
+			WHERE r.id = ?`, to, roomID).Scan(&from, &fromName, &toName)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("hand over: %w", err)
+		}
+		if from.Int64 == to {
+			return nil
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE rooms SET host_participant_id = ? WHERE id = ?`, to, roomID); err != nil {
+			return fmt.Errorf("hand over: %w", err)
+		}
+		var m *Message
+		switch {
+		case by != nil && by.ID == from.Int64:
+			m = &Message{RoomID: roomID, Kind: KindSystem, ParticipantID: to, Sender: toName.String, Body: toName.String + " holds the agent(s)."}
+			err = insertMessage(ctx, tx, m)
+		case by == nil:
+			m = &Message{RoomID: roomID, Kind: KindSystem, Sender: "admin", Body: "The admin made " + toName.String + " the AI host"}
+			err = insertMessage(ctx, tx, m)
+		case by.ID == to:
+			m, err = memberLine(ctx, tx, roomID, by, "took the AI host role")
+		default:
+			m, err = memberLine(ctx, tx, roomID, by, "made "+toName.String+" the AI host")
+		}
+		if err != nil {
+			return err
+		}
+		line = m.Body
+		details := map[string]any{"to": to, "to_name": toName.String}
+		if from.Valid {
+			details["from"], details["from_name"] = from.Int64, fromName.String
+		}
+		return auditTx(ctx, tx, "", details)
+	})
+	return line, err
 }
 
 // SetCanTrigger grants or revokes the agent button for participant pid of room.

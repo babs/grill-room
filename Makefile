@@ -28,11 +28,17 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: ui-tools ui-vendor ui-check build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image stt-image-test stt-image-e2e cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: ui-tools ui-vendor ui-check build e2e-build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image stt-image-test stt-image-e2e cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME)-daemon ./cmd/grill-room-daemon
+
+# The browser tests' server: the e2e tag lets GRILL_ROOM_TEST_GIT_ALLOW_LOOPBACK send plugin fetches
+# to their local git server (tools/e2egit). Never built into a release or an image.
+e2e-build:
+	CGO_ENABLED=0 go build -tags e2e -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME)-e2e $(PKG)
+	CGO_ENABLED=0 go build -o bin/e2egit ./tools/e2egit
 
 # The daemon release the room server hands out (D28): one static binary per target, its sha256 file
 # (sha256sum format, checked by install.sh) and VERSION.
@@ -83,12 +89,12 @@ test-docker: sandbox-image sandbox-fake-image
 E2E_SPLIT = { pnpm exec playwright test --project=parallel --pass-with-no-tests $(1); p=$$?; \
 	pnpm exec playwright test --project=sandbox --pass-with-no-tests $(1) && test $$p -eq 0; }
 
-e2e: build sandbox-fake-image
+e2e: build e2e-build sandbox-fake-image
 	$(MAKE) release DIST=bin/e2e-release VERSION=$(VERSION)
 	cd e2e && pnpm install --frozen-lockfile && $(E2E_SPLIT) && pnpm exec playwright test -c mail/playwright.config.js
 
 # CI's flake gate (tools/flake-gate.sh): the specs in SPECS, three times each, as `make e2e` runs them.
-e2e-repeat: build sandbox-fake-image
+e2e-repeat: build e2e-build sandbox-fake-image
 	$(MAKE) release DIST=bin/e2e-release VERSION=$(VERSION)
 	cd e2e && pnpm install --frozen-lockfile && $(call E2E_SPLIT,--repeat-each=3 $(SPECS))
 

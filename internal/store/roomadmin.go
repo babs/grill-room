@@ -38,12 +38,18 @@ type InstanceSettings struct {
 	StorageQuota int64 `json:"storage_quota_bytes"`
 	// RoomCreation is CreationAnyone or CreationSuperAdmin.
 	RoomCreation string `json:"room_creation"`
+	// PluginMaxMB caps a plugin snapshot, while fetching and once extracted (009-AC9).
+	PluginMaxMB int `json:"plugin_max_mb,omitempty"`
 }
+
+// DefaultPluginMaxMB is the plugin snapshot cap until the super-admin sets one (009-AC9).
+const DefaultPluginMaxMB = 20
 
 const (
 	settingRoomsPerProfile = "rooms_per_profile"
 	settingStorageQuota    = "storage_quota_bytes"
 	settingRoomCreation    = "room_creation"
+	settingPluginMaxMB     = "plugin_max_mb"
 )
 
 type rowQuerier interface {
@@ -51,10 +57,11 @@ type rowQuerier interface {
 }
 
 func instanceSettings(ctx context.Context, db rowQuerier) (InstanceSettings, error) {
-	v := InstanceSettings{RoomsPerProfile: DefaultRoomsPerProfile, RoomCreation: CreationAnyone}
-	var per, quota, mode sql.NullString
+	v := InstanceSettings{RoomsPerProfile: DefaultRoomsPerProfile, RoomCreation: CreationAnyone, PluginMaxMB: DefaultPluginMaxMB}
+	var per, quota, mode, pluginMB sql.NullString
 	err := db.QueryRowContext(ctx, `SELECT (SELECT value FROM settings WHERE key = ?), (SELECT value FROM settings WHERE key = ?),
-		(SELECT value FROM settings WHERE key = ?)`, settingRoomsPerProfile, settingStorageQuota, settingRoomCreation).Scan(&per, &quota, &mode)
+		(SELECT value FROM settings WHERE key = ?), (SELECT value FROM settings WHERE key = ?)`,
+		settingRoomsPerProfile, settingStorageQuota, settingRoomCreation, settingPluginMaxMB).Scan(&per, &quota, &mode, &pluginMB)
 	if err != nil {
 		return v, fmt.Errorf("instance settings: %w", err)
 	}
@@ -66,6 +73,12 @@ func instanceSettings(ctx context.Context, db rowQuerier) (InstanceSettings, err
 	}
 	if mode.Valid {
 		v.RoomCreation = mode.String
+	}
+	if pluginMB.Valid {
+		v.PluginMaxMB, _ = strconv.Atoi(pluginMB.String)
+	}
+	if v.PluginMaxMB < 1 {
+		v.PluginMaxMB = DefaultPluginMaxMB
 	}
 	return v, nil
 }
@@ -79,7 +92,7 @@ func (s *Store) InstanceSettings(ctx context.Context) (InstanceSettings, error) 
 func (s *Store) SetInstanceSettings(ctx context.Context, v InstanceSettings) error {
 	return s.withTx(ctx, "set instance settings", func(tx *sql.Tx) error {
 		for k, val := range map[string]string{settingRoomsPerProfile: strconv.Itoa(v.RoomsPerProfile),
-			settingStorageQuota: strconv.FormatInt(v.StorageQuota, 10), settingRoomCreation: v.RoomCreation} {
+			settingStorageQuota: strconv.FormatInt(v.StorageQuota, 10), settingRoomCreation: v.RoomCreation, settingPluginMaxMB: strconv.Itoa(v.PluginMaxMB)} {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO settings(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, k, val); err != nil {
 				return fmt.Errorf("set instance settings: %w", err)
 			}
@@ -128,18 +141,13 @@ func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileI
 		if err := creationAllowed(ctx, tx, v, profileID); err != nil {
 			return err
 		}
+		var used int64
 		if v.StorageQuota > 0 {
-			used, err := usedBytes(ctx, tx)
-			if err != nil {
+			if used, err = usedBytes(ctx, tx); err != nil {
 				return err
 			}
 			if used >= v.StorageQuota {
 				return fmt.Errorf("%w: the instance holds %s, at its %s storage quota", ErrCreationRefused, mb(used), mb(v.StorageQuota))
-			}
-			// A starter's documents and skills are copied in: they count too (006-AC12).
-			if size := setup.blobBytes(); used+size > v.StorageQuota {
-				return fmt.Errorf("%w: the instance holds %s, and the starter's %s would pass its %s storage quota", ErrCreationRefused,
-					mb(used), mb(size), mb(v.StorageQuota))
 			}
 		}
 		if r, err = insertRoom(ctx, tx, id, name, profileID, setup == nil); err != nil {
@@ -161,8 +169,15 @@ func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileI
 			return fmt.Errorf("create room: %w", err)
 		}
 		if setup != nil {
-			if err := setUp(ctx, tx, r, p, setup); err != nil {
+			plugins, err := setUp(ctx, tx, r, p, setup)
+			if err != nil {
 				return err
+			}
+			// A starter's documents, skills and the plugins the room kept are copied in: they count
+			// too (006-AC12, 009-AC28).
+			if size := setup.blobBytes() + plugins; v.StorageQuota > 0 && used+size > v.StorageQuota {
+				return fmt.Errorf("%w: the instance holds %s, and the starter's %s would pass its %s storage quota", ErrCreationRefused,
+					mb(used), mb(size), mb(v.StorageQuota))
 			}
 		}
 		return auditTx(ctx, tx, "", nil)
@@ -323,7 +338,7 @@ func (s *Store) RenameParticipant(ctx context.Context, roomID string, target int
 		if old == name {
 			return nil
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE participants SET name = ? WHERE id = ?`, name, target); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE participants SET name = ?, previous_name = ? WHERE id = ?`, name, old, target); err != nil {
 			return fmt.Errorf("rename participant: %w", err)
 		}
 		switch {

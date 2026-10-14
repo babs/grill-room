@@ -83,4 +83,31 @@
     if (s < 86400) return Math.floor(s / 3600) + ' h ago';
     return Math.floor(s / 86400) + ' d ago';
   };
+
+  /**
+   * grillLoadFailed says a module failed to load (a dropped connection, ERR_NETWORK_CHANGED): its
+   * part of the page would otherwise do nothing, without a word. It shows once, and stays.
+   */
+  window.grillLoadFailed = () => {
+    if (document.getElementById('load-failed')) return;
+    const p = document.createElement('p');
+    p.id = 'load-failed';
+    p.className = 'toast load-failed';
+    p.setAttribute('role', 'alert');
+    const reload = document.createElement('button');
+    reload.type = 'button';
+    reload.className = 'btn-secondary';
+    reload.textContent = 'Reload';
+    reload.addEventListener('click', () => location.reload());
+    p.append("Couldn't load, reload the page", reload);
+    // A popover sits in the top layer: a sheet opened later must not cover the only way out.
+    p.popover = 'manual';
+    document.body.append(p);
+    p.showPopover?.();
+  };
+  // A module graph that fails to fetch fires error on its script element, which does not bubble.
+  // This file is a classic defer script ahead of every module script, so it listens in time.
+  addEventListener('error', (e) => {
+    if (e.target instanceof HTMLScriptElement && e.target.type === 'module') window.grillLoadFailed();
+  }, true);
 }
