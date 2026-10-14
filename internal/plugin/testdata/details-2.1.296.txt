@@ -1,0 +1,32 @@
+babs 1.18.0
+  Description: Daily-driver toolkit: spec-driven feature flow (spec → ship → review → commit), project init standards (FastAPI+PostgreSQL+React full-stack, Python, Go, Dockerfile), review workflows (iterative, swarm, full-project), conventional-commit flow, sharing utilities, and an optional quota-aware status line.
+  Source: babs@inline
+
+Component inventory
+  Skills (13)  dockerfile-init, fullstack-init, go-init, implement-loop, iterative-review, md-to-html-clipboard, my-review, privatebin, python-init, ship-feature, smart-commit, spec-feature, swarm-review
+  Agents (0)
+  Hooks (0)
+  MCP servers (0)
+  LSP servers (0)
+
+Projected token cost
+  Always-on:   ~1,513 tok   added to every session
+
+Per-component (rounded)
+  component             always-on  on-invoke
+  dockerfile-init             ~90      ~1.5k
+  fullstack-init             ~110      ~4.4k
+  go-init                     ~80      ~2.6k
+  implement-loop             ~140        ~5k
+  iterative-review           ~130        ~4k
+  md-to-html-clipboard       ~100       ~980
+  my-review                  ~120      ~3.4k
+  privatebin                  ~80        ~1k
+  python-init                ~120      ~2.9k
+  ship-feature               ~170      ~3.3k
+  smart-commit               ~120      ~4.7k
+  spec-feature               ~170      ~1.4k
+  swarm-review               ~110      ~4.3k
+
+  On-invoke cost is paid each time a skill or agent fires.
+  Token counts are estimates and may differ from actual usage.
