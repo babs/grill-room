@@ -86,7 +86,7 @@ function Manage({ data, tab, tabs }) {
     ${room && html`<${RoomPanel} key=${room.id} room=${room} base=${base} api=${fetchJSON} show=${show} reload=${load} byName=${byName}
       tab=${tab} tabs=${tabs} href=${(/** @type {string} */ id) => '#manage/' + id} close=${() => location.assign('/profile')} label="Room settings"
       general=${html`<h3>Save as starter</h3>
-        <p class="hint">Keep this room's agenda, AI personas and skills, and the documents you pick, to start new rooms the same way.</p>
+        <p class="hint">Keep this room's agenda, AI personas and skills, and the documents and plugins you pick, to start new rooms the same way.</p>
         <div class="row"><button type="button" class="btn-secondary" id="save-starter" onClick=${() => saveAsStarter(base, setSaid)}>Save as starter</button></div>`}>
       ${tab === 'admins' && html`
         <p class="hint">Room admins rename the room and its participants, manage every invite, appoint other admins and delete the room. The room keeps at least one.</p>

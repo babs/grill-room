@@ -87,10 +87,17 @@ func viewPlugin(p store.RoomPlugin, hostOnline bool) pluginView {
 		if pv.State == store.PluginInspecting {
 			pv.Reason = waitingText(hostOnline)
 		}
-		vv := versionView{PluginVersion: pv, ShortCommit: pv.Commit[:min(7, len(pv.Commit))], CommitURL: plugin.CommitURL(p.URL, pv.Commit)}
+		// An imported version's commit is the archive's word: no link vouches for its files (009-AC27).
+		vv := versionView{PluginVersion: pv, ShortCommit: pv.Commit[:min(7, len(pv.Commit))]}
+		if !pv.Imported {
+			vv.CommitURL = plugin.CommitURL(p.URL, pv.Commit)
+		}
 		if run != nil && pv.N > run.N {
 			c := plugin.Diff(filesOf(run.FileList), filesOf(pv.FileList), manifestOf(run.Manifest), manifestOf(pv.Manifest))
-			vv.Change, vv.CompareURL = &c, plugin.CompareURL(p.URL, run.Commit, pv.Commit)
+			vv.Change = &c
+			if !pv.Imported && !run.Imported {
+				vv.CompareURL = plugin.CompareURL(p.URL, run.Commit, pv.Commit)
+			}
 		}
 		v.Versions[i] = vv
 	}
@@ -485,7 +492,13 @@ func (s *Server) updatePlugin(w http.ResponseWriter, r *http.Request, sess sessi
 		s.askHostUpdate(w, r, sess, p)
 		return
 	}
-	f, release, upToDate, ok := s.fetchRepo(w, r, sess.p.RoomID, p.URL, p.Ref, p.Latest().Commit)
+	// An imported latest version is fetched again even at the same commit: its files came from an
+	// archive, the repo's replace them (009-AC27).
+	known := p.Latest().Commit
+	if p.Latest().Imported {
+		known = ""
+	}
+	f, release, upToDate, ok := s.fetchRepo(w, r, sess.p.RoomID, p.URL, p.Ref, known)
 	if !ok {
 		return
 	}

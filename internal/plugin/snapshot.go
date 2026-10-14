@@ -322,10 +322,13 @@ func readFile(root *os.Root, p string, left, maxBytes int64) (Entry, int64, erro
 	return Entry{Path: p, Kind: k, Data: data}, int64(len(data)), nil
 }
 
+// MaxTarBytes is the largest tar of a snapshot whose files hold at most maxBytes.
+func MaxTarBytes(maxBytes int64) int64 { return maxBytes + int64(MaxFiles+2)*headerAllowance }
+
 // ValidateTar checks a snapshot tar uploaded by a daemon or carried by an import against the
 // rules FromTree applies, and requires it normalised so its SHA256 is the snapshot's.
 func ValidateTar(r io.Reader, maxBytes int64) (*Snapshot, error) {
-	limit := maxBytes + int64(MaxFiles+2)*headerAllowance
+	limit := MaxTarBytes(maxBytes)
 	raw, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
 		return nil, fmt.Errorf("plugin tar: %w", err)

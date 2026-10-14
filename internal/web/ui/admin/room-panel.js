@@ -5,10 +5,10 @@ import { html } from 'htm/preact';
 
 /**
  * @typedef {{uploads: number, revisions: number, attachments: number, agent_sessions: number, transcripts: number,
- *   room_skills: number, total: number}} Volume
+ *   room_skills: number, plugins: number, total: number}} Volume
  * @typedef {{id: string, name: string, created_at: string, last_activity: string, participants: number, personas: number,
  *   host_participant_id?: number, quota_bytes: number, quota: number, used: number, host_online: boolean, volume: Volume,
- *   created_from?: {title: string, version: number}}} Room
+ *   created_from?: {title: string, version: number}, private_plugins?: string[]}} Room
  * @typedef {{id: number, created_at: string, created_by?: number, revoked_at?: string}} Invite
  * @typedef {(method: string, path: string, body?: unknown) => Promise<any>} Api
  */
@@ -93,7 +93,7 @@ export function RoomPanel({ room, base, api, show, reload, close, tab, tabs, hre
       <div class="tab-panel" id=${'panel-' + tab}>
         ${tab === 'general' ? html`<${General} room=${room} base=${base} api=${api} show=${show} reload=${reload} close=${close} setQuota=${setQuota}/>${general}`
           : tab === 'invites' ? html`<${Invites} base=${base} api=${api} show=${show} byName=${byName}/>`
-          : tab === 'export' ? html`<${Export} base=${base}/>`
+          : tab === 'export' ? html`<${Export} base=${base} room=${room}/>`
           : children}
       </div>
     </section>`;
@@ -110,7 +110,7 @@ function General({ room, base, api, show, reload, close, setQuota }) {
   const [copied, setCopied] = useState('');
   const v = room.volume;
   const kinds = [['Uploads', v.uploads], ['Revisions', v.revisions], ['Attachments', v.attachments],
-    ['AI sessions', v.agent_sessions], ['Transcripts', v.transcripts], ['Room skills', v.room_skills]];
+    ['AI sessions', v.agent_sessions], ['Transcripts', v.transcripts], ['Room skills', v.room_skills], ['Plugins', v.plugins]];
   /** @param {number} bytes */
   const setQuotaTo = (bytes) => api('PUT', base + '/quota', { quota_bytes: bytes }).then(reload).catch(show);
   const copyID = () => navigator.clipboard.writeText(room.id).then(() => setCopied('Copied.'), () => setCopied(room.id));
@@ -128,7 +128,7 @@ function General({ room, base, api, show, reload, close, setQuota }) {
     <details><summary>What takes the space</summary>
       <dl id="volume">${kinds.map(([k, n]) => html`<div><dt>${k}</dt><dd>${size(/** @type {number} */ (n))}</dd></div>`)}
         <div><dt>Total</dt><dd>${size(v.total)}</dd></div></dl>
-      <p class="hint">The limit counts uploads and attachments.</p>
+      <p class="hint">The limit counts uploads, attachments and plugins.</p>
     </details>
     ${setQuota && html`<form class="row" onSubmit=${formAction(() => setQuotaTo(Math.round(Number(quota) * 1048576)))}>
       <label>Quota (MB)<input id="quota" type="number" min="1" step="1" required value=${quota} onInput=${onInput(setQuota_)}/></label>
@@ -165,10 +165,15 @@ function Invites({ base, api, show, byName }) {
     </table></div>`}`;
 }
 
-/** @param {{base: string}} props */
-function Export({ base }) {
+/**
+ * Export also names the plugins from private repos: their files go in the archive (009-AC26).
+ * @param {{base: string, room: Room}} props
+ */
+function Export({ base, room }) {
+  const priv = room.private_plugins || [];
   return html`
     <p class="warn" id="export-warning">The archive holds the room's AI sessions: everything Claude read in this room, documents and transcripts included. Whoever holds the file can read it all.</p>
+    ${priv.length > 0 && html`<p class="warn" id="export-private">${priv.length > 1 ? 'These plugins come' : 'This plugin comes'} from a private repo: ${priv.join(', ')}. The archive holds ${priv.length > 1 ? 'their' : 'its'} files, which whoever holds it can read. Options and secrets stay on the AI host.</p>`}
     <div class="row"><a id="export" class="btn btn-primary" href=${base + '/export'} download>Export the room</a></div>`;
 }
 

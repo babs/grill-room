@@ -141,18 +141,13 @@ func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileI
 		if err := creationAllowed(ctx, tx, v, profileID); err != nil {
 			return err
 		}
+		var used int64
 		if v.StorageQuota > 0 {
-			used, err := usedBytes(ctx, tx)
-			if err != nil {
+			if used, err = usedBytes(ctx, tx); err != nil {
 				return err
 			}
 			if used >= v.StorageQuota {
 				return fmt.Errorf("%w: the instance holds %s, at its %s storage quota", ErrCreationRefused, mb(used), mb(v.StorageQuota))
-			}
-			// A starter's documents and skills are copied in: they count too (006-AC12).
-			if size := setup.blobBytes(); used+size > v.StorageQuota {
-				return fmt.Errorf("%w: the instance holds %s, and the starter's %s would pass its %s storage quota", ErrCreationRefused,
-					mb(used), mb(size), mb(v.StorageQuota))
 			}
 		}
 		if r, err = insertRoom(ctx, tx, id, name, profileID, setup == nil); err != nil {
@@ -174,8 +169,15 @@ func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileI
 			return fmt.Errorf("create room: %w", err)
 		}
 		if setup != nil {
-			if err := setUp(ctx, tx, r, p, setup); err != nil {
+			plugins, err := setUp(ctx, tx, r, p, setup)
+			if err != nil {
 				return err
+			}
+			// A starter's documents, skills and the plugins the room kept are copied in: they count
+			// too (006-AC12, 009-AC28).
+			if size := setup.blobBytes() + plugins; v.StorageQuota > 0 && used+size > v.StorageQuota {
+				return fmt.Errorf("%w: the instance holds %s, and the starter's %s would pass its %s storage quota", ErrCreationRefused,
+					mb(used), mb(size), mb(v.StorageQuota))
 			}
 		}
 		return auditTx(ctx, tx, "", nil)

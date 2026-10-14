@@ -2,9 +2,10 @@ import { test, expect } from '@playwright/test';
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
 import { join, resolve } from 'node:path';
 import { roomWith, startDaemon, pairDaemon, ask, skillZip, appointAdmin, agentState, personaSheet, closePersonas } from './helpers.js';
-import { gitPort } from './playwright.config.js';
+import { gitPort, adminToken } from './playwright.config.js';
 
 // The plugin the Phase 2 DoD names: its plugin.json and its spec-feature skill.
 const files = {
@@ -209,6 +210,26 @@ test('plugins: private repo through the host, options, allowlist', async ({ brow
     await admin.locator('#tab-settings').click();
     await expect(admin.locator('#allowlist')).toContainText('mcp.example.com');
     await expect(admin.locator('#allowlist')).not.toContainText('10.1.2.3');
+
+    // 009-AC26 009-AC27, Phase 4 DoD: the Export tab names the private plugin; the archive holds
+    // its snapshot and the session of the turn whose hook printed the option, but not the value set
+    // on the daemon page; another import lands the plugin waiting for a host.
+    await alice.goto(`/r/${room.id}#manage/export`);
+    await expect(alice.locator('#export-private')).toHaveText('This plugin comes from a private repo: opt. The archive holds its files, which whoever holds it can read. Options and secrets stay on the AI host.');
+    await shot(alice, 'export-private-plugin');
+    const auth = { Authorization: `Bearer ${adminToken}` };
+    const res = await request.get(`/api/rooms/${room.id}/export`, { headers: auth });
+    expect(res.status()).toBe(200);
+    const archive = await res.body();
+    const raw = gunzipSync(archive);
+    expect(raw.includes('"name":"opt"')).toBe(true);
+    expect(raw.includes('[redacted]')).toBe(true);
+    expect(raw.includes(secret)).toBe(false);
+    const imp = await request.post('/api/rooms/import', { headers: { ...auth, 'Content-Type': 'application/gzip' }, data: archive });
+    expect(imp.status()).toBe(201);
+    const rep = await imp.json();
+    expect(rep.counts.plugins).toBe(1);
+    expect(rep.warnings).toContain("Plugins: 1. None loads until this instance's AI host checks and approves it.");
   } finally {
     daemon.cleanup();
   }

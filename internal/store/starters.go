@@ -46,6 +46,8 @@ type StarterPersona struct {
 	WatchesNotes bool     `json:"watches_notes,omitempty"`
 	Autocompact  int      `json:"autocompact,omitempty"`
 	Skills       []string `json:"skills,omitempty"`
+	// Plugins are the plugins it has on, by name among the starter's plugins (009-AC28).
+	Plugins []string `json:"plugins,omitempty"`
 }
 
 // StarterSkill is a skill frozen at one version; File names its tar among the version's files.
@@ -58,6 +60,24 @@ type StarterSkill struct {
 	Size        int64  `json:"size"`
 	SHA256      string `json:"sha256"`
 	File        string `json:"file"`
+}
+
+// StarterPlugin is a room plugin at its running version (009-AC28); File names its snapshot tar
+// among the version's files. Private ones came through an AI host, and update through one.
+type StarterPlugin struct {
+	Name    string `json:"name"`
+	URL     string `json:"url"`
+	Ref     string `json:"ref"`
+	RefName string `json:"ref_name"`
+	Entry   string `json:"entry,omitempty"`
+	Private bool   `json:"private,omitempty"`
+	Commit  string `json:"commit"`
+	SHA256  string `json:"sha256"`
+	Size    int64  `json:"size"`
+	Files   int    `json:"files"`
+	File    string `json:"file"`
+	// Imported tells that its files came from an archive, not from the repo (009-AC27).
+	Imported bool `json:"imported,omitempty"`
 }
 
 // StarterDocument is a document at one revision: Text is what the room shows (an agent document's
@@ -82,16 +102,18 @@ type StarterChain struct {
 
 // StarterManifest is everything a starter version holds but its blobs (006-AC6).
 type StarterManifest struct {
-	Title       string            `json:"title"`
-	Description string            `json:"description"`
-	RoomName    string            `json:"room_name"`
-	Agenda      string            `json:"agenda"`
-	Fields      []StarterField    `json:"fields"`
-	Personas    []StarterPersona  `json:"personas"`
-	Skills      []StarterSkill    `json:"skills"`
-	Documents   []StarterDocument `json:"documents"`
-	Chain       StarterChain      `json:"chain"`
-	Glossary    string            `json:"glossary,omitempty"`
+	Title       string           `json:"title"`
+	Description string           `json:"description"`
+	RoomName    string           `json:"room_name"`
+	Agenda      string           `json:"agenda"`
+	Fields      []StarterField   `json:"fields"`
+	Personas    []StarterPersona `json:"personas"`
+	Skills      []StarterSkill   `json:"skills"`
+	// Plugins is absent from a starter saved before 009.
+	Plugins   []StarterPlugin   `json:"plugins,omitempty"`
+	Documents []StarterDocument `json:"documents"`
+	Chain     StarterChain      `json:"chain"`
+	Glossary  string            `json:"glossary,omitempty"`
 }
 
 // Starter is a starter of the library as its latest version has it.

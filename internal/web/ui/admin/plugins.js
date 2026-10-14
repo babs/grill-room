@@ -20,7 +20,7 @@ import { RowMenu } from './starters.js';
  *   files_changed?: string[]}} Change
  * @typedef {{id: number, n: number, commit: string, short_commit: string, commit_url?: string, size: number, files: number,
  *   manifest: Manifest | null, report?: Report, state: string, reason?: string, added_by: string, added_at: string,
- *   change?: Change, compare_url?: string}} Version
+ *   change?: Change, compare_url?: string, imported?: boolean}} Version
  * @typedef {{id: number, name: string, url: string, ref: string, ref_name: string, private: boolean, personas: number[],
  *   running?: number, why?: string, needs_setup?: boolean, versions: Version[]}} Plugin
  * @typedef {{entry?: string, name: string, description?: string, version?: string, pickable: boolean, reason?: string,
@@ -392,6 +392,7 @@ function ReviewSheet({ data, host }) {
   return html`<div class="sheet-head"><h2 id="plugin-review-title">Review ${p.name} v${v.n}</h2>
       <button type="button" class="btn-ghost btn-icon" aria-label="Close" onClick=${close}>✕</button></div>
     <p class="hint">Added by ${v.added_by}, ${window.grillAgo(v.added_at)}. ${sentence(stateWords(v))}</p>
+    ${v.imported && html`<p class="warn" id="plugin-imported">Files came from an archive, not from the repo: nothing proves they match this commit. Update fetches the repo's.</p>`}
     <dl class="plugin-facts">
       <div><dt>Repository</dt><dd><code>${p.url}</code>${p.private ? ' (private)' : ''}</dd></div>
       <div><dt>Ref</dt><dd>${p.ref_name}</dd></div>

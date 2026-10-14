@@ -2,6 +2,7 @@ package store
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/babs/grill-room/internal/anchor"
 	"github.com/babs/grill-room/internal/convert"
+	pluginpkg "github.com/babs/grill-room/internal/plugin"
 	"github.com/babs/grill-room/internal/render"
 	"github.com/babs/grill-room/internal/skill"
 	"github.com/babs/grill-room/internal/turn"
@@ -45,7 +47,7 @@ const (
 type ImportOptions struct {
 	// RoomID is the new room's id.
 	RoomID string
-	// Format is the archive's format: 1 holds no mentions.jsonl.
+	// Format is the archive's format: 1 holds no mentions.jsonl, 2 no plugins.
 	Format int
 	// Importer is the importing profile, 0 for the super-admin. A profile imports within the
 	// room creation guardrails and becomes the room's admin, seated as DisplayName unless one of
@@ -102,7 +104,7 @@ type importer struct {
 	rep  *ImportReport
 	room string
 
-	participants, personas, uploads, documents, annotations, skills map[int64]int64
+	participants, personas, uploads, documents, annotations, skills, plugins map[int64]int64
 	// messages and annMessages keep refs and ids in insertion order, refs ascending, for the
 	// resume cursors.
 	messages, annMessages idMap
@@ -164,7 +166,7 @@ func (s *Store) ImportRoom(ctx context.Context, dir string, o ImportOptions) (*I
 	err = s.withTx(ctx, "import room", func(tx *sql.Tx) error {
 		im := &importer{ctx: ctx, tx: tx, root: root, o: o, rep: rep, room: o.RoomID,
 			participants: map[int64]int64{}, personas: map[int64]int64{}, uploads: map[int64]int64{}, documents: map[int64]int64{},
-			annotations: map[int64]int64{}, skills: map[int64]int64{}, uploadFormat: map[int64]string{}, versions: map[int64][]int{},
+			annotations: map[int64]int64{}, skills: map[int64]int64{}, plugins: map[int64]int64{}, uploadFormat: map[int64]string{}, versions: map[int64][]int{},
 			roomSkillNames: map[string]bool{}}
 		if err := im.run(); err != nil {
 			return err
@@ -226,6 +228,7 @@ func (im *importer) run() error {
 		func() error { return im.personasStep(x.Personas) },
 		im.participantsStep, im.messagesStep, im.mentionsStep, im.documentsStep, im.annotationsStep, im.noteMentionsStep, im.skillsStep,
 		func() error { return im.pinsAndResume(x.Personas) },
+		func() error { return im.pluginsStep(x.Personas) },
 		im.sessionsStep, im.seatStep,
 	} {
 		if err := step(); err != nil {
@@ -242,13 +245,16 @@ func (im *importer) run() error {
 		return err
 	}
 	if used > im.o.DefaultQuota {
-		return refuseImport("its uploads and attachments weigh %s, over the %s room quota here", mb(used), mb(im.o.DefaultQuota))
+		return refuseImport("its uploads, attachments and plugins weigh %s, over the %s room quota here", mb(used), mb(im.o.DefaultQuota))
 	}
 	if im.rep.Counts["sessions"] > 0 {
 		im.rep.Warnings = append(im.rep.Warnings, "The agent sessions hold everything Claude read in the room: whoever holds this archive can read it.")
 	}
 	if im.rep.Unlinked > 0 {
 		im.rep.Warnings = append(im.rep.Warnings, fmt.Sprintf("Participants with no profile on this instance: %d. They keep their profile uuid, unlinked.", im.rep.Unlinked))
+	}
+	if n := im.rep.Counts["plugins"]; n > 0 {
+		im.rep.Warnings = append(im.rep.Warnings, fmt.Sprintf("Plugins: %d. None loads until this instance's AI host checks and approves it.", n))
 	}
 	if im.rep.RoomSkills > 0 {
 		im.rep.Warnings = append(im.rep.Warnings, fmt.Sprintf("Shared or personal skills landing as room skills: %d.", im.rep.RoomSkills))
@@ -1154,5 +1160,185 @@ func (im *importer) seatStep() error {
 		im.room, im.o.Importer, now()); err != nil {
 		return fmt.Errorf("import room admin: %w", err)
 	}
+	return nil
+}
+
+// pluginCommitRe is a git commit id, as the server pins it; sha256Re a snapshot's hash.
+var (
+	pluginCommitRe = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	sha256Re       = regexp.MustCompile(`^[0-9a-f]{64}$`)
+)
+
+// supersededReason is why a version whose snapshot stayed behind never loads here.
+const supersededReason = "superseded before the export: its files did not travel"
+
+// pluginsStep imports the room's plugins pinned at their versions, and turns them on for the
+// personas that had them (009-AC27). A version with its snapshot waits for this instance's AI
+// host: inspected again, then held for its approval whatever the mode, the archive's report and
+// decision set aside. One without, superseded before the export, stays a record that never loads.
+// Every snapshot is checked as a daemon's upload is, against the instance's cap. Format 2 and
+// older carry none.
+func (im *importer) pluginsStep(ps []xPersona) error {
+	if im.o.Format < 3 {
+		return nil
+	}
+	set, err := instanceSettings(im.ctx, im.tx)
+	if err != nil {
+		return err
+	}
+	maxBytes := int64(set.PluginMaxMB) << 20
+	names := map[int64]string{}
+	err = eachLine(im, filePlugins, func(p *xPlugin) error {
+		what := fmt.Sprintf("plugin %d", p.Ref)
+		if len(names) == MaxRoomPlugins {
+			return refuseImport("more than %d plugins", MaxRoomPlugins)
+		}
+		if _, dup := names[p.Ref]; dup {
+			return refuseImport("%s twice", what)
+		}
+		check := pluginpkg.CheckURL
+		if p.Private {
+			check = pluginpkg.CheckHostURL
+		}
+		if err := pluginpkg.CheckName(p.Name); err != nil {
+			return refuseImport("%s: %v", what, err)
+		}
+		if err := check(p.URL); err != nil {
+			return refuseImport("%s: its link: %v", what, err)
+		}
+		if err := pluginpkg.CheckRef(p.GitRef); err != nil {
+			return refuseImport("%s: %v", what, err)
+		}
+		if p.Entry != "" {
+			if err := pluginpkg.CheckName(p.Entry); err != nil {
+				return refuseImport("%s: its entry: %v", what, err)
+			}
+		}
+		if err := textIs(what, maxImportName, false, false, p.RefName, p.CreatedBy); err != nil {
+			return err
+		}
+		var id int64
+		err := im.tx.QueryRowContext(im.ctx, `INSERT INTO room_plugins(room_id, name, source_url, ref, ref_name, entry, private, created_by_name, created_at)
+			VALUES(?,?,?,?,?,?,?,?,?) RETURNING id`, im.room, p.Name, p.URL, p.GitRef, p.RefName, p.Entry, p.Private, p.CreatedBy, p.CreatedAt).Scan(&id)
+		if err != nil {
+			return refuseImport("%s: %v", what, err)
+		}
+		names[p.Ref], im.plugins[p.Ref] = p.Name, id
+		im.rep.Counts["plugins"]++
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	seen := map[int64][]int{}
+	err = eachLine(im, filePluginVersions, func(v *xPluginVersion) error {
+		id, ok := im.plugins[v.Plugin]
+		if !ok {
+			return refuseImport("version of unknown plugin %d", v.Plugin)
+		}
+		what := fmt.Sprintf("plugin %s v%d", names[v.Plugin], v.N)
+		if v.N < 1 || slices.Contains(seen[v.Plugin], v.N) {
+			return refuseImport("%s: a version twice, or numbered below 1", what)
+		}
+		seen[v.Plugin] = append(seen[v.Plugin], v.N)
+		if !pluginCommitRe.MatchString(v.Commit) {
+			return refuseImport("%s: %q is not a commit", what, v.Commit)
+		}
+		if err := textIs(what, maxImportName, false, false, v.AddedBy); err != nil {
+			return err
+		}
+		// A refused or invalid version never loads: its record travels, its files stay behind.
+		if v.File == "" || v.State == PluginRefused || v.State == PluginInvalid {
+			return im.supersededVersion(id, what, v)
+		}
+		data, err := im.blob(v.File, what, pluginpkg.MaxTarBytes(maxBytes))
+		if err != nil {
+			return err
+		}
+		sn, err := pluginpkg.ValidateTar(bytes.NewReader(data), maxBytes)
+		if err != nil {
+			return refuseImport("%s: %v", what, err)
+		}
+		if sn.SHA256 != v.SHA256 {
+			return refuseImport("%s: its files do not match its sha256", what)
+		}
+		m, err := sn.Manifest()
+		if err != nil {
+			return refuseImport("%s: %v", what, err)
+		}
+		files, _ := json.Marshal(sn.Files) // plain structs: cannot fail
+		manifest, _ := json.Marshal(m)     // idem
+		var vid int64
+		err = im.tx.QueryRowContext(im.ctx, `INSERT INTO plugin_versions(plugin_id, n, commit_sha, sha256, size, files, file_list, manifest, state,
+			added_by_name, added_at, hold) VALUES(?,?,?,?,?,?,?,?,?,?,?,1) RETURNING id`,
+			id, v.N, v.Commit, sn.SHA256, sn.Size, len(sn.Files), string(files), string(manifest), PluginInspecting, v.AddedBy, v.AddedAt).Scan(&vid)
+		if err != nil {
+			return refuseImport("%s: %v", what, err)
+		}
+		if _, err := im.tx.ExecContext(im.ctx, `INSERT INTO plugin_snapshots(version_id, data) VALUES(?,?)`, vid, sn.Tar); err != nil {
+			return fmt.Errorf("import plugin snapshot: %w", err)
+		}
+		im.rep.Counts["plugin_versions"]++
+		im.rep.Bytes["plugins"] += int64(len(sn.Tar))
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	for ref, name := range names {
+		if len(seen[ref]) == 0 {
+			return refuseImport("plugin %s has no version", name)
+		}
+	}
+	for _, p := range ps {
+		for _, ref := range p.Plugins {
+			id, ok := im.plugins[ref]
+			if !ok {
+				return refuseImport("persona %s has plugin %d on, which the archive does not hold", p.Name, ref)
+			}
+			if err := activatePlugin(im.ctx, im.tx, im.personas[p.Ref], id, names[ref]); err != nil {
+				return refuseImport("persona %s: plugin %s: %v", p.Name, names[ref], err)
+			}
+		}
+	}
+	return nil
+}
+
+// supersededVersion records version v of plugin id with no snapshot: one the export left out, or
+// one refused or invalid, which keeps its state and reason. It never loads: a version the archive
+// calls approved, pending or inspecting is recorded refused, so that it neither runs nor waits for
+// a decision.
+func (im *importer) supersededVersion(id int64, what string, v *xPluginVersion) error {
+	if !json.Valid(v.FileList) || !json.Valid(v.Manifest) || (len(v.Report) > 0 && !json.Valid(v.Report)) {
+		return refuseImport("%s: its file list, manifest or report is not JSON", what)
+	}
+	if !sha256Re.MatchString(v.SHA256) || v.Size < 0 || v.Files < 0 {
+		return refuseImport("%s: bad sha256, size or file count", what)
+	}
+	if err := textIs(what, maxImportLineBody, false, true, v.Reason); err != nil {
+		return err
+	}
+	if err := textIs(what, maxImportName, false, true, v.DecidedBy); err != nil {
+		return err
+	}
+	state, reason := v.State, v.Reason
+	switch state {
+	case PluginRefused, PluginInvalid:
+	case PluginApproved, PluginPending, PluginInspecting:
+		state, reason = PluginRefused, supersededReason
+	default:
+		return refuseImport("%s: unknown state %q", what, v.State)
+	}
+	var report any
+	if len(v.Report) > 0 {
+		report = string(v.Report)
+	}
+	if _, err := im.tx.ExecContext(im.ctx, `INSERT INTO plugin_versions(plugin_id, n, commit_sha, sha256, size, files, file_list, manifest, report, state,
+		reason, added_by_name, added_at, decided_by_name, decided_at, hold) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`,
+		id, v.N, v.Commit, v.SHA256, v.Size, v.Files, string(v.FileList), string(v.Manifest), report, state, reason, v.AddedBy, v.AddedAt,
+		nullStr(v.DecidedBy), nullStr(v.DecidedAt)); err != nil {
+		return refuseImport("%s: %v", what, err)
+	}
+	im.rep.Counts["plugin_versions"]++
 	return nil
 }

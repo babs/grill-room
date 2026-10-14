@@ -794,6 +794,9 @@ CREATE INDEX plugin_fetches_room ON plugin_fetches(room_id);
 CREATE UNIQUE INDEX plugin_fetches_update ON plugin_fetches(plugin_id) WHERE state = 'waiting';
 -- 009-AC24: the last turn that pinned the plugin left it out for an option the host has not set.
 ALTER TABLE room_plugins ADD COLUMN needs_setup INTEGER NOT NULL DEFAULT 0 CHECK (needs_setup IN (0, 1));
+`, `
+-- 009-AC27: an imported version waits for the host's approval once inspected, whatever the mode.
+ALTER TABLE plugin_versions ADD COLUMN hold INTEGER NOT NULL DEFAULT 0 CHECK (hold IN (0, 1));
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.

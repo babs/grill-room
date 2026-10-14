@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -40,6 +41,8 @@ type RoomOverview struct {
 	Volume     RoomVolume `json:"volume"`
 	// CreatedFrom is the starter version the room was created from (006-AC11).
 	CreatedFrom *Provenance `json:"created_from,omitempty"`
+	// PrivatePlugins names the plugins from private repos: the export dialog warns of them (009-AC26).
+	PrivatePlugins []string `json:"private_plugins,omitempty"`
 }
 
 // Counted is what the room's quota counts: upload originals, annotation attachments and plugin
@@ -82,7 +85,8 @@ func (s *Store) roomOverviews(ctx context.Context, defaultQuota int64, roomID st
 		(SELECT COALESCE(SUM(length(v.data)), 0) FROM skill_versions v JOIN skills k ON k.id = v.skill_id WHERE k.room_id = r.id),
 		(SELECT COALESCE(SUM(length(sn.data)), 0) FROM plugin_snapshots sn JOIN plugin_versions v ON v.id = sn.version_id
 			JOIN room_plugins p ON p.id = v.plugin_id WHERE p.room_id = r.id),
-		r.created_from
+		r.created_from,
+		(SELECT json_group_array(name) FROM (SELECT name FROM room_plugins WHERE room_id = r.id AND private = 1 AND removed_at IS NULL ORDER BY name))
 		FROM rooms r WHERE ? = '' OR r.id = ? ORDER BY r.rowid DESC`, defaultQuota, roomID, roomID)
 	if err != nil {
 		return nil, fmt.Errorf("room overviews: %w", err)
@@ -93,9 +97,13 @@ func (s *Store) roomOverviews(ctx context.Context, defaultQuota int64, roomID st
 		var o RoomOverview
 		var created, last string
 		var from sql.NullString
+		var private string
 		v := &o.Volume
 		if err := rows.Scan(&o.ID, &o.Name, &created, &o.HostParticipantID, &o.QuotaBytes, &o.Quota, &last, &o.Participants, &o.Personas,
-			&v.Uploads, &v.Revisions, &v.Attachments, &v.AgentSessions, &v.Transcripts, &v.RoomSkills, &v.Plugins, &from); err != nil {
+			&v.Uploads, &v.Revisions, &v.Attachments, &v.AgentSessions, &v.Transcripts, &v.RoomSkills, &v.Plugins, &from, &private); err != nil {
+			return nil, fmt.Errorf("scan room overview: %w", err)
+		}
+		if err := json.Unmarshal([]byte(private), &o.PrivatePlugins); err != nil {
 			return nil, fmt.Errorf("scan room overview: %w", err)
 		}
 		v.Total = v.Uploads + v.Revisions + v.Attachments + v.AgentSessions + v.Transcripts + v.RoomSkills + v.Plugins

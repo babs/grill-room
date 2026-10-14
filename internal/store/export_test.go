@@ -199,7 +199,7 @@ const roomSID = "00000000-0000-4000-8000-000000000001"
 func checkPersona(StarterPersona) error { return nil }
 
 func importOpts(roomID string) ImportOptions {
-	return ImportOptions{RoomID: roomID, Format: 2, SameInstance: true, DefaultQuota: 1 << 20, MaxUpload: 1 << 20, MaxAttachment: 1 << 20, CheckPersona: checkPersona}
+	return ImportOptions{RoomID: roomID, Format: 3, SameInstance: true, DefaultQuota: 1 << 20, MaxUpload: 1 << 20, MaxAttachment: 1 << 20, CheckPersona: checkPersona}
 }
 
 func export(t *testing.T, s *Store, room string) string {
@@ -226,6 +226,8 @@ var refKinds = map[string]map[string]string{
 	fileSkills:             {"ref": "skill"},
 	fileSkillVersions:      {"skill": "skill"},
 	fileSessions:           {"persona": "persona"},
+	filePlugins:            {"ref": "plugin"},
+	filePluginVersions:     {"plugin": "plugin"},
 }
 
 // canon reads an export as plain values, with refs replaced by ordinals, files by their sha256,
@@ -270,7 +272,7 @@ func canon(t *testing.T, dir string) map[string]any {
 		pm["ref"] = norm("persona", pm["ref"])
 	}
 	for _, name := range []string{fileParticipants, fileMessages, fileMessageVersions, fileUploads, fileDocuments, fileRevisions, fileAnnotations,
-		fileAnnotationMessages, fileAttachments, fileSkills, fileSkillVersions, fileSessions} {
+		fileAnnotationMessages, fileAttachments, fileSkills, fileSkillVersions, fileSessions, filePlugins, filePluginVersions} {
 		f, err := os.Open(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatal(err)
@@ -300,6 +302,11 @@ func canon(t *testing.T, dir string) map[string]any {
 		for _, k := range pm["skills"].([]any) {
 			km := k.(map[string]any)
 			km["skill"] = norm("skill", km["skill"])
+		}
+		if pl, ok := pm["plugins"].([]any); ok {
+			for i := range pl {
+				pl[i] = norm("plugin", pl[i])
+			}
 		}
 		if r, ok := pm["resume"].(map[string]any); ok {
 			r["message_cursor"] = norm("message", r["message_cursor"])
@@ -696,12 +703,13 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"persona_change_requests":  "| id room_id persona_id kind patch requested_by created_at",
 		"document_renames":         "| id document_id message_id from_name to_name created_at",         // the next turn's moves
 		"push_subscriptions":       "| id participant_id endpoint p256dh auth all_messages created_at", // a device's keys: a copy gets none
-		// 009 Phase 4 exports plugins (format 3); until then a copy has none.
-		"room_plugins":              "| id room_id name source_url ref ref_name entry private created_by_name created_at removed_at needs_setup",
+		// 009-AC26: a removed plugin and the AI host's setup state are not room content; requests
+		// to the AI host are transient; hold is the importing side's own.
+		"room_plugins":              "id name source_url ref ref_name entry private created_by_name created_at | room_id removed_at needs_setup",
 		"plugin_fetches":            "| id room_id plugin_id source_url ref entries personas state reason requested_by_name requested_by_id created_at",
-		"plugin_versions":           "| id plugin_id n commit_sha sha256 size files file_list manifest report state reason added_by_name added_by_id added_at decided_by_name decided_at",
-		"plugin_snapshots":          "| version_id data",
-		"room_persona_plugins":      "| persona_id plugin_id",
+		"plugin_versions":           "plugin_id n commit_sha sha256 size files file_list manifest report state reason added_by_name added_at decided_by_name decided_at | id added_by_id hold",
+		"plugin_snapshots":          "data | version_id",
+		"room_persona_plugins":      "persona_id plugin_id |",
 		"persona_templates":         server,
 		"persona_template_versions": server,
 		"profiles":                  server,
@@ -1144,7 +1152,7 @@ func TestImportFormat1(t *testing.T) {
 		t.Fatalf("mentions from a format 1 archive: %v", rep.Counts)
 	}
 	if _, err := s.ImportRoom(ctx, dir, importOpts("new")); err == nil || !strings.Contains(err.Error(), fileMentions+" is missing") {
-		t.Fatalf("format 2 without mentions: %v", err)
+		t.Fatalf("format 2 or later without mentions: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, fileMentions), []byte(`{"message":1,"persona":999,"status":"done"}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)

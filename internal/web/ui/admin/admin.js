@@ -291,7 +291,7 @@ function ClientLine({ c }) {
 const importKinds = [['participants', 'Participants'], ['messages', 'Lines'], ['message_versions', 'Earlier versions'],
   ['documents', 'Documents'], ['revisions', 'Revisions'], ['uploads', 'Uploads'], ['annotations', 'Annotations'],
   ['annotation_messages', 'Thread messages'], ['attachments', 'Attachments'], ['mentions', 'Mentions'], ['personas', 'Personas'], ['skills', 'Skills'],
-  ['sessions', 'Agent sessions']];
+  ['plugins', 'Plugins'], ['sessions', 'Agent sessions']];
 
 /**
  * ImportRoom uploads an export for a preview of what it holds, which creates nothing, then imports

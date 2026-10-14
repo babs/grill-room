@@ -70,6 +70,9 @@ type PluginVersion struct {
 	AddedAt   time.Time       `json:"added_at"`
 	DecidedBy string          `json:"decided_by,omitempty"`
 	DecidedAt *time.Time      `json:"decided_at,omitempty"`
+	// Imported tells that its files came from an archive, not from the repo: its commit is the
+	// archive's word (009-AC27).
+	Imported bool `json:"imported,omitempty"`
 }
 
 // RoomPlugin is a plugin of a room with its versions, oldest first, and the personas it is active
@@ -266,7 +269,8 @@ func activatePlugin(ctx context.Context, tx *sql.Tx, personaID, pluginID int64, 
 
 // AddPluginVersion stores a new version of plugin id from its re-resolved ref, waiting for
 // inspection; the approved version keeps running meanwhile (009-AC11). ErrUpToDate when the
-// latest version has that commit, ErrNotFound, ErrRoomFull.
+// latest version has that commit, unless it came with an import: then the same commit fetched
+// from the repo replaces the archive's files (009-AC27). ErrNotFound, ErrRoomFull.
 func (s *Store) AddPluginVersion(ctx context.Context, roomID string, id int64, refName string, v PluginSnapshot, by *Participant, defaultQuota int64) (*Message, error) {
 	var m *Message
 	err := s.withTx(ctx, "add plugin version", func(tx *sql.Tx) (err error) {
@@ -281,15 +285,16 @@ func addPluginVersion(ctx context.Context, tx *sql.Tx, roomID string, id int64, 
 	err := func() error {
 		var name, commit string
 		var n int
-		err := tx.QueryRowContext(ctx, `SELECT p.name, v.n, v.commit_sha FROM room_plugins p JOIN plugin_versions v ON v.plugin_id = p.id
-			WHERE p.id = ? AND p.room_id = ? AND p.removed_at IS NULL ORDER BY v.n DESC LIMIT 1`, id, roomID).Scan(&name, &n, &commit)
+		var imported bool
+		err := tx.QueryRowContext(ctx, `SELECT p.name, v.n, v.commit_sha, v.hold FROM room_plugins p JOIN plugin_versions v ON v.plugin_id = p.id
+			WHERE p.id = ? AND p.room_id = ? AND p.removed_at IS NULL ORDER BY v.n DESC LIMIT 1`, id, roomID).Scan(&name, &n, &commit, &imported)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
 		if err != nil {
 			return fmt.Errorf("add plugin version: %w", err)
 		}
-		if commit == v.Commit {
+		if commit == v.Commit && !imported {
 			return ErrUpToDate
 		}
 		if err := pluginsFit(ctx, tx, roomID, int64(len(v.Data)), defaultQuota); err != nil {
@@ -443,7 +448,7 @@ const pluginHostSender = "AI host"
 
 // ReportPluginVersion records the host daemon's inspection of version id (009-AC13): a failed
 // validation makes it invalid, with reason; a passed one waits for the host while their daemon
-// approves everything, else is approved at once. The chat says which. It returns the new state.
+// approves everything or the version came with an import (009-AC27), else is approved at once. The chat says which. It returns the new state.
 // ErrForbidden unless daemonID is the room's host daemon, checked in the transaction: a hand-over
 // meanwhile must not let the former host's daemon decide. ErrNotFound, ErrPluginState unless the
 // version waits for inspection.
@@ -453,8 +458,9 @@ func (s *Store) ReportPluginVersion(ctx context.Context, roomID string, id, daem
 	err := s.withTx(ctx, "report plugin version", func(tx *sql.Tx) error {
 		var name string
 		var n int
-		err := tx.QueryRowContext(ctx, `SELECT p.name, v.n, v.state FROM plugin_versions v JOIN room_plugins p ON p.id = v.plugin_id
-			WHERE v.id = ? AND p.room_id = ? AND p.removed_at IS NULL`, id, roomID).Scan(&name, &n, &state)
+		var hold bool
+		err := tx.QueryRowContext(ctx, `SELECT p.name, v.n, v.state, v.hold FROM plugin_versions v JOIN room_plugins p ON p.id = v.plugin_id
+			WHERE v.id = ? AND p.room_id = ? AND p.removed_at IS NULL`, id, roomID).Scan(&name, &n, &state, &hold)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -479,7 +485,7 @@ func (s *Store) ReportPluginVersion(ctx context.Context, roomID string, id, daem
 		case !ok:
 			state, reason = PluginInvalid, "refused by Claude Code: "+reason
 			body = fmt.Sprintf("The plugin %s v%d was %s.", name, n, reason)
-		case approveAll:
+		case approveAll || hold:
 			state, reason = PluginPending, ""
 			body = fmt.Sprintf("The AI host checked the plugin %s v%d.%s", name, n, waitsNote)
 		default:
@@ -657,7 +663,7 @@ func (s *Store) roomPlugins(ctx context.Context, roomID string, id int64) ([]Roo
 		return out, nil
 	}
 	rows, err = s.db.QueryContext(ctx, `SELECT v.plugin_id, v.id, v.n, v.commit_sha, v.sha256, v.size, v.files, v.file_list, v.manifest,
-		COALESCE(v.report, ''), v.state, v.reason, v.added_by_name, v.added_at, COALESCE(v.decided_by_name, ''), v.decided_at
+		COALESCE(v.report, ''), v.state, v.reason, v.added_by_name, v.added_at, COALESCE(v.decided_by_name, ''), v.decided_at, v.hold
 		FROM plugin_versions v JOIN room_plugins p ON p.id = v.plugin_id WHERE p.room_id = ? AND p.removed_at IS NULL ORDER BY v.plugin_id, v.n`, roomID)
 	if err != nil {
 		return nil, fmt.Errorf("plugin versions: %w", err)
@@ -668,7 +674,7 @@ func (s *Store) roomPlugins(ctx context.Context, roomID string, id int64) ([]Roo
 		var files, manifest, report, added string
 		var decided sql.NullString
 		if err := rows.Scan(&pid, &v.ID, &v.N, &v.Commit, &v.SHA256, &v.Size, &v.Files, &files, &manifest, &report, &v.State, &v.Reason,
-			&v.AddedBy, &added, &v.DecidedBy, &decided); err != nil {
+			&v.AddedBy, &added, &v.DecidedBy, &decided, &v.Imported); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("plugin versions: %w", err)
 		}

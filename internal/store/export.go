@@ -34,6 +34,8 @@ const (
 	fileSessions           = "sessions.jsonl"
 	fileMentions           = "mentions.jsonl"
 	fileNoteMentions       = "note_mentions.jsonl"
+	filePlugins            = "plugins.jsonl"
+	filePluginVersions     = "plugin_versions.jsonl"
 )
 
 type xRoom struct {
@@ -60,11 +62,13 @@ type xPersona struct {
 	EveryMinutes    int    `json:"every_minutes,omitempty"`
 	SelfCall        bool   `json:"self_call"`
 	// WatchesNotes is optional: an archive from before 009 has none, and the format stays (009-AC31).
-	WatchesNotes bool     `json:"watches_notes,omitempty"`
-	Autocompact  int      `json:"autocompact"`
-	CreatedAt    string   `json:"created_at"`
-	Skills       []xPin   `json:"skills"`
-	Resume       *xResume `json:"resume,omitempty"`
+	WatchesNotes bool   `json:"watches_notes,omitempty"`
+	Autocompact  int    `json:"autocompact"`
+	CreatedAt    string `json:"created_at"`
+	Skills       []xPin `json:"skills"`
+	// Plugins are the refs of the room plugins the persona has on (009-AC26, format 3).
+	Plugins []int64  `json:"plugins,omitempty"`
+	Resume  *xResume `json:"resume,omitempty"`
 }
 
 // xPin is a skill a persona has on, at a version.
@@ -212,6 +216,41 @@ type xSkillVersion struct {
 	SHA256      string `json:"sha256"`
 	CreatedAt   string `json:"created_at"`
 	File        string `json:"file"`
+}
+
+// xPlugin is a room plugin (009-AC26). GitRef is the ref its admin typed, "" for the default
+// branch: Ref is the row's ref, as in every file.
+type xPlugin struct {
+	Ref       int64  `json:"ref"`
+	Name      string `json:"name"`
+	URL       string `json:"url"`
+	GitRef    string `json:"git_ref"`
+	RefName   string `json:"ref_name"`
+	Entry     string `json:"entry,omitempty"`
+	Private   bool   `json:"private,omitempty"`
+	CreatedBy string `json:"created_by"`
+	CreatedAt string `json:"created_at"`
+}
+
+// xPluginVersion is one version of a plugin. File is empty once the version's snapshot was
+// dropped, superseded by a newer approved one.
+type xPluginVersion struct {
+	Plugin    int64           `json:"plugin"`
+	N         int             `json:"n"`
+	Commit    string          `json:"commit"`
+	SHA256    string          `json:"sha256"`
+	Size      int64           `json:"size"`
+	Files     int             `json:"files"`
+	FileList  json.RawMessage `json:"file_list"`
+	Manifest  json.RawMessage `json:"manifest"`
+	Report    json.RawMessage `json:"report,omitempty"`
+	State     string          `json:"state"`
+	Reason    string          `json:"reason,omitempty"`
+	AddedBy   string          `json:"added_by"`
+	AddedAt   string          `json:"added_at"`
+	DecidedBy string          `json:"decided_by,omitempty"`
+	DecidedAt string          `json:"decided_at,omitempty"`
+	File      string          `json:"file,omitempty"`
 }
 
 type xSession struct {
@@ -382,7 +421,7 @@ func exportRoom(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) (*
 		return nil, err
 	}
 	for _, step := range []func(context.Context, *sql.Tx, string, *exportDir) error{
-		exportParticipants, exportMessages, exportMentions, exportDocuments, exportAnnotations, exportNoteMentions, exportSkills, exportSessions,
+		exportParticipants, exportMessages, exportMentions, exportDocuments, exportAnnotations, exportNoteMentions, exportSkills, exportPlugins, exportSessions,
 	} {
 		if err := step(ctx, tx, roomID, d); err != nil {
 			return nil, err
@@ -462,6 +501,18 @@ func exportPersonas(ctx context.Context, tx *sql.Tx, roomID string) ([]xPersona,
 			p.Skills = append(p.Skills, k)
 			return nil
 		}, `SELECT k.skill_id, k.version FROM room_persona_skills k JOIN skills s ON s.id = k.skill_id WHERE k.persona_id = ? ORDER BY s.name, k.skill_id`, p.Ref)
+		if err != nil {
+			return nil, err
+		}
+		err = eachRow(ctx, tx, func(rows *sql.Rows) error {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				return fmt.Errorf("export persona plugins: %w", err)
+			}
+			p.Plugins = append(p.Plugins, id)
+			return nil
+		}, `SELECT k.plugin_id FROM room_persona_plugins k JOIN room_plugins g ON g.id = k.plugin_id WHERE k.persona_id = ? AND g.removed_at IS NULL
+			ORDER BY k.plugin_id`, p.Ref)
 		if err != nil {
 			return nil, err
 		}
@@ -693,6 +744,49 @@ func exportSkills(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) 
 	}, `SELECT v.skill_id, v.n, v.author, v.description, v.files, v.size, v.sha256, v.created_at, v.data
 		FROM skill_versions v JOIN skills s ON s.id = v.skill_id
 		WHERE s.room_id = ? OR (v.skill_id, v.n) IN (`+pinned+`) ORDER BY s.name, v.skill_id, v.n`, roomID, roomID)
+}
+
+// exportPlugins writes the room's plugins with every version and the snapshots still held
+// (009-AC26). Requests to the AI host and option values stay behind: the first are transient,
+// the second never reach the server.
+func exportPlugins(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) error {
+	err := dump(ctx, tx, d, filePlugins, func(rows *sql.Rows) (any, error) {
+		var p xPlugin
+		return p, rows.Scan(&p.Ref, &p.Name, &p.URL, &p.GitRef, &p.RefName, &p.Entry, &p.Private, &p.CreatedBy, &p.CreatedAt)
+	}, `SELECT id, name, source_url, ref, ref_name, entry, private, created_by_name, created_at FROM room_plugins
+		WHERE room_id = ? AND removed_at IS NULL ORDER BY id`, roomID)
+	if err != nil {
+		return err
+	}
+	// Two versions of a plugin may hold the same files: one blob serves both.
+	written := map[string]bool{}
+	return dump(ctx, tx, d, filePluginVersions, func(rows *sql.Rows) (any, error) {
+		var v xPluginVersion
+		var files, manifest string
+		var report, decidedBy, decidedAt sql.NullString
+		var data sql.RawBytes
+		err := rows.Scan(&v.Plugin, &v.N, &v.Commit, &v.SHA256, &v.Size, &v.Files, &files, &manifest, &report, &v.State, &v.Reason,
+			&v.AddedBy, &v.AddedAt, &decidedBy, &decidedAt, &data)
+		if err != nil {
+			return v, err
+		}
+		v.FileList, v.Manifest, v.DecidedBy, v.DecidedAt = json.RawMessage(files), json.RawMessage(manifest), decidedBy.String, decidedAt.String
+		if report.Valid {
+			v.Report = json.RawMessage(report.String)
+		}
+		if len(data) == 0 {
+			return v, nil
+		}
+		v.File = fmt.Sprintf("plugins/%d/%s.tar", v.Plugin, v.SHA256)
+		if written[v.File] {
+			return v, nil
+		}
+		written[v.File] = true
+		return v, d.blob(v.File, data)
+	}, `SELECT v.plugin_id, v.n, v.commit_sha, v.sha256, v.size, v.files, v.file_list, v.manifest, v.report, v.state, v.reason,
+		v.added_by_name, v.added_at, v.decided_by_name, v.decided_at, sn.data
+		FROM plugin_versions v JOIN room_plugins p ON p.id = v.plugin_id LEFT JOIN plugin_snapshots sn ON sn.version_id = v.id
+		WHERE p.room_id = ? AND p.removed_at IS NULL ORDER BY v.plugin_id, v.n`, roomID)
 }
 
 func exportSessions(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) error {

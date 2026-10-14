@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -10,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	pluginpkg "github.com/babs/grill-room/internal/plugin"
 )
 
 // MaxStarterTitle bounds a starter's title (006-AC15).
@@ -36,12 +39,15 @@ func parseProvenance(s sql.NullString) *Provenance {
 }
 
 // RoomSetup is what a starter puts in a new room, as copies: nothing links the room back to it
-// (006-AC11). The caller validated it; Files hold the blobs its documents and skills name.
+// (006-AC11). The caller validated it; Files hold the blobs its documents, skills and plugins name.
 type RoomSetup struct {
-	From      *Provenance
-	Agenda    string
-	Personas  []StarterPersona
-	Skills    []StarterSkill
+	From     *Provenance
+	Agenda   string
+	Personas []StarterPersona
+	Skills   []StarterSkill
+	// Plugins land waiting for the AI host's inspection; then the host's mode decides, as for
+	// a plugin a room admin adds (009-AC28, 006-AC13).
+	Plugins   []StarterPlugin
 	Documents []StarterDocument
 	Files     map[string][]byte
 	// SkillsPending holds the skills until the room's first host: those of a personal or shared
@@ -53,7 +59,8 @@ type RoomSetup struct {
 	UploadQuota int64
 }
 
-// blobBytes is what the documents and skills setup copies weigh; 0 for no setup.
+// blobBytes is what the documents and skills setup copies weigh; 0 for no setup. The plugins it
+// keeps are setUp's to count, as it may leave some out.
 func (setup *RoomSetup) blobBytes() int64 {
 	if setup == nil {
 		return 0
@@ -68,13 +75,14 @@ func (setup *RoomSetup) blobBytes() int64 {
 	return n
 }
 
-// setUp fills room r, just created by participant by, with setup's copies.
-func setUp(ctx context.Context, tx *sql.Tx, r *Room, by *Participant, setup *RoomSetup) error {
+// setUp fills room r, just created by participant by, with setup's copies, and returns the bytes
+// of the plugin snapshots it kept.
+func setUp(ctx context.Context, tx *sql.Tx, r *Room, by *Participant, setup *RoomSetup) (int64, error) {
 	var from any
 	if setup.From != nil {
 		b, err := json.Marshal(setup.From)
 		if err != nil {
-			return fmt.Errorf("set up room: %w", err)
+			return 0, fmt.Errorf("set up room: %w", err)
 		}
 		from = string(b)
 		r.CreatedFrom = setup.From
@@ -83,24 +91,28 @@ func setUp(ctx context.Context, tx *sql.Tx, r *Room, by *Participant, setup *Roo
 	r.ParallelTurns = setup.Chain.Parallel
 	if _, err := tx.ExecContext(ctx, `UPDATE rooms SET created_from = ?, chain_budget = ?, chain_suspended = ?, parallel_turns = ?, stt_glossary = ? WHERE id = ?`,
 		from, r.Chain.Budget, r.Chain.Suspended, r.ParallelTurns, setup.Glossary, r.ID); err != nil {
-		return fmt.Errorf("set up room: %w", err)
+		return 0, fmt.Errorf("set up room: %w", err)
 	}
 	skills := map[string][2]int64{}
 	for _, k := range setup.Skills {
 		data, ok := setup.Files[k.File]
 		if !ok {
-			return fmt.Errorf("set up room: skill %s: no file %q", k.Name, k.File)
+			return 0, fmt.Errorf("set up room: skill %s: no file %q", k.Name, k.File)
 		}
 		var id int64
 		if err := tx.QueryRowContext(ctx, `INSERT INTO skills(name, created_at, room_id, pending, from_starter) VALUES(?,?,?,?,?) RETURNING id`,
 			k.Name, now(), r.ID, setup.SkillsPending, setup.SkillsPending).Scan(&id); err != nil {
-			return fmt.Errorf("set up room: skill %s: %w", k.Name, err)
+			return 0, fmt.Errorf("set up room: skill %s: %w", k.Name, err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO skill_versions(skill_id, n, author, description, files, size, sha256, data, created_at) VALUES(?,?,?,?,?,?,?,?,?)`,
 			id, k.Version, k.Author, k.Description, k.Files, k.Size, k.SHA256, data, now()); err != nil {
-			return fmt.Errorf("set up room: skill %s: %w", k.Name, err)
+			return 0, fmt.Errorf("set up room: skill %s: %w", k.Name, err)
 		}
 		skills[k.Name] = [2]int64{id, int64(k.Version)}
+	}
+	plugins, kept, left, err := setUpPlugins(ctx, tx, r.ID, by, setup)
+	if err != nil {
+		return 0, err
 	}
 	for _, p := range setup.Personas {
 		var id int64
@@ -110,59 +122,142 @@ func setUp(ctx context.Context, tx *sql.Tx, r *Room, by *Participant, setup *Roo
 			append(append([]any{r.ID}, p.args()...), nullInt(p.EveryN), p.SelfCall, p.Autocompact, nullInt(p.EveryVoice), nullInt(p.EveryMinutes),
 				p.WatchesNotes, now(), time.Now().UnixMilli())...).Scan(&id)
 		if err != nil {
-			return fmt.Errorf("set up room: persona %s: %w", p.Name, err)
+			return 0, fmt.Errorf("set up room: persona %s: %w", p.Name, err)
 		}
 		for _, name := range p.Skills {
 			k, ok := skills[name]
 			if !ok {
-				return fmt.Errorf("set up room: persona %s: no skill %q", p.Name, name)
+				return 0, fmt.Errorf("set up room: persona %s: no skill %q", p.Name, name)
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO room_persona_skills(persona_id, skill_id, version) VALUES(?,?,?)`, id, k[0], k[1]); err != nil {
-				return fmt.Errorf("set up room: persona %s: %w", p.Name, err)
+				return 0, fmt.Errorf("set up room: persona %s: %w", p.Name, err)
+			}
+		}
+		for _, name := range p.Plugins {
+			pid, ok := plugins[name]
+			if !ok {
+				continue // left out by setUpPlugins, or never in the starter
+			}
+			if err := activatePlugin(ctx, tx, id, pid, name); err != nil {
+				return 0, fmt.Errorf("set up room: persona %s: %w", p.Name, err)
 			}
 		}
 	}
-	var uploaded int64
+	// The plugins' snapshots count in the room's quota, as an upload does (009-AC9).
+	uploaded := kept
 	for _, d := range setup.Documents {
 		if d.Kind == DocAgent {
 			if _, err := createAgentDocument(ctx, tx, r.ID, d.Name, d.Format, d.Text, by.Name); err != nil {
-				return err
+				return 0, err
 			}
 			continue
 		}
 		data, ok := setup.Files[d.File]
 		if !ok {
-			return fmt.Errorf("set up room: document %s: no file %q", d.Name, d.File)
+			return 0, fmt.Errorf("set up room: document %s: no file %q", d.Name, d.File)
 		}
-		if uploaded += int64(len(data)); uploaded > setup.UploadQuota {
-			return fmt.Errorf("%w: the starter's documents take more than the room's %s", ErrCreationRefused, mb(setup.UploadQuota))
-		}
+		uploaded += int64(len(data))
 		ts := now()
 		var upID int64
 		if err := tx.QueryRowContext(ctx, `INSERT INTO uploads(room_id, participant_id, filename, content_type, size, data, created_at) VALUES(?,?,?,?,?,?,?) RETURNING id`,
 			r.ID, by.ID, d.Name, d.ContentType, len(data), data, ts).Scan(&upID); err != nil {
-			return fmt.Errorf("set up room: document %s: %w", d.Name, err)
+			return 0, fmt.Errorf("set up room: document %s: %w", d.Name, err)
 		}
 		doc := &Document{RoomID: r.ID, Kind: DocUpload, Name: d.Name, Format: d.Format, Author: by.Name}
 		if err := insertDocument(ctx, tx, doc, upID, ts); err != nil {
-			return err
+			return 0, err
 		}
 		if d.Format == "md" || d.Format == "html" {
 			if _, err := insertRevision(ctx, tx, doc.ID, 1, d.Text, by.Name); err != nil {
-				return err
+				return 0, err
 			}
 		}
 	}
+	if uploaded > setup.UploadQuota {
+		return 0, fmt.Errorf("%w: the starter's documents and plugins take more than the room's %s", ErrCreationRefused, mb(setup.UploadQuota))
+	}
 	if setup.Agenda != "" {
 		if _, err := createAgentDocument(ctx, tx, r.ID, AgendaName, "md", setup.Agenda, by.Name); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	if setup.From == nil {
-		return nil
+		return kept, nil
 	}
-	_, err := memberLine(ctx, tx, r.ID, by, fmt.Sprintf("created the room from the starter %q v%d.", setup.From.Title, setup.From.Version))
-	return err
+	if _, err = memberLine(ctx, tx, r.ID, by, fmt.Sprintf("created the room from the starter %q v%d.", setup.From.Title, setup.From.Version)); err != nil {
+		return 0, err
+	}
+	for _, why := range left {
+		m := &Message{RoomID: r.ID, Kind: KindSystem, ParticipantID: by.ID, Sender: by.Name, Body: why}
+		if err := insertMessage(ctx, tx, m); err != nil {
+			return 0, err
+		}
+	}
+	return kept, nil
+}
+
+// setUpPlugins adds setup's plugins to room at their version 1, waiting for the AI host's
+// inspection, and returns their ids by name with the bytes they take. Each snapshot is read again,
+// as an import reads it: the manifest and file list come from its files. A plugin past the
+// instance's current cap, the room's plugin limit or its quota is left out, and the personas go
+// without it: a starter's plugin never fails the room's creation (006-AC13). left holds a chat
+// line for each.
+func setUpPlugins(ctx context.Context, tx *sql.Tx, roomID string, by *Participant, setup *RoomSetup) (ids map[string]int64, kept int64, left []string, err error) {
+	ids = map[string]int64{}
+	if len(setup.Plugins) == 0 {
+		return ids, 0, nil, nil
+	}
+	set, err := instanceSettings(ctx, tx)
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	leave := func(name, why string) {
+		left = append(left, fmt.Sprintf("The room starts without the starter's plugin %s: %s.", name, why))
+	}
+	for _, p := range setup.Plugins {
+		data, ok := setup.Files[p.File]
+		if !ok {
+			return nil, 0, nil, fmt.Errorf("set up room: plugin %s: no file %q", p.Name, p.File)
+		}
+		if len(ids) == MaxRoomPlugins {
+			leave(p.Name, fmt.Sprintf("a room holds at most %d plugins", MaxRoomPlugins))
+			continue
+		}
+		if kept+int64(len(data)) > setup.UploadQuota {
+			leave(p.Name, "it would take the room past its quota")
+			continue
+		}
+		sn, err := pluginpkg.ValidateTar(bytes.NewReader(data), int64(set.PluginMaxMB)<<20)
+		var m *pluginpkg.Manifest
+		if err == nil {
+			m, err = sn.Manifest()
+		}
+		if err != nil {
+			leave(p.Name, err.Error())
+			continue
+		}
+		files, _ := json.Marshal(sn.Files) // plain structs: cannot fail
+		manifest, _ := json.Marshal(m)     // idem
+		var id int64
+		err = tx.QueryRowContext(ctx, `INSERT INTO room_plugins(room_id, name, source_url, ref, ref_name, entry, private, created_by_name, created_at)
+			VALUES(?,?,?,?,?,?,?,?,?) RETURNING id`, roomID, p.Name, p.URL, p.Ref, p.RefName, p.Entry, p.Private, by.Name, now()).Scan(&id)
+		if err != nil {
+			return nil, 0, nil, fmt.Errorf("set up room: plugin %s: %w", p.Name, err)
+		}
+		v := PluginSnapshot{Commit: p.Commit, SHA256: sn.SHA256, Size: sn.Size, Files: len(sn.Files), FileList: files, Manifest: manifest, Data: sn.Tar}
+		if err := insertPluginVersion(ctx, tx, id, 1, v, by); err != nil {
+			return nil, 0, nil, err
+		}
+		// Files an import brought stay the archive's word through a starter (009-AC27).
+		if p.Imported {
+			if _, err := tx.ExecContext(ctx, `UPDATE plugin_versions SET hold = 1 WHERE plugin_id = ?`, id); err != nil {
+				return nil, 0, nil, fmt.Errorf("set up room: plugin %s: %w", p.Name, err)
+			}
+		}
+		ids[p.Name] = id
+		kept += int64(len(sn.Tar))
+	}
+	return ids, kept, left, nil
 }
 
 // ReleaseStarterSkills turns on the skills a starter brought into room once its host is one who
@@ -188,9 +283,10 @@ func (s *Store) ReleaseStarterSkills(ctx context.Context, roomID string) ([]stri
 }
 
 // RoomDraft is room as a starter would hold it, for "Save as starter" (006-AC15): its name, its
-// agenda.md, its personas with their triggers and active skills, the skills those use and the
-// room's own, its documents at their current revision, its auto-turn settings and words to
-// recognise. Personas and skills waiting for the host are left out. Messages, transcripts,
+// agenda.md, its personas with their triggers, active skills and plugins, the skills those use and
+// the room's own, its plugins at their running version, its documents at their current revision,
+// its auto-turn settings and words to recognise. Personas and skills waiting for the host are left
+// out. Messages, transcripts,
 // sessions, participants, invites, annotations and older revisions never are part of it
 // (006-AC17). RoomDraftFiles reads the blobs it names.
 func (s *Store) RoomDraft(ctx context.Context, roomID string) (*StarterManifest, error) {
@@ -237,6 +333,24 @@ func (s *Store) RoomDraft(ctx context.Context, roomID string) (*StarterManifest,
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("room draft skills: %w", err)
 	}
+	// Plugins at their running version: one with none has nothing a room could load (009-AC28).
+	rps, err := s.RoomPlugins(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	on := map[int64][]string{}
+	m.Plugins = []StarterPlugin{}
+	for _, p := range rps {
+		v := p.Running()
+		if v == nil {
+			continue
+		}
+		m.Plugins = append(m.Plugins, StarterPlugin{Name: p.Name, URL: p.URL, Ref: p.Ref, RefName: p.RefName, Entry: p.Entry, Private: p.Private,
+			Commit: v.Commit, SHA256: v.SHA256, Size: v.Size, Files: v.Files, File: fmt.Sprintf("plugin/%d", v.ID), Imported: v.Imported})
+		for _, pid := range p.Personas {
+			on[pid] = append(on[pid], p.Name)
+		}
+	}
 	ps, err := s.RoomPersonas(ctx, roomID)
 	if err != nil {
 		return nil, err
@@ -246,7 +360,7 @@ func (s *Store) RoomDraft(ctx context.Context, roomID string) (*StarterManifest,
 			continue
 		}
 		sp := StarterPersona{PersonaFields: p.PersonaFields, EveryN: p.EveryN, EveryVoice: p.EveryVoice, EveryMinutes: p.EveryMinutes,
-			SelfCall: p.SelfCall, WatchesNotes: p.WatchesNotes, Autocompact: p.Autocompact}
+			SelfCall: p.SelfCall, WatchesNotes: p.WatchesNotes, Autocompact: p.Autocompact, Plugins: on[p.ID]}
 		for _, k := range p.Skills {
 			// A pending room skill is not in the draft: the persona goes without it.
 			if slices.ContainsFunc(m.Skills, func(x StarterSkill) bool { return x.Name == k.Name }) {
@@ -281,8 +395,8 @@ func (s *Store) RoomDraft(ctx context.Context, roomID string) (*StarterManifest,
 	return m, nil
 }
 
-// RoomDraftFiles reads the blobs of room's draft that names names: an upload's original or a
-// skill version's tar. A name the room does not hold is ErrNotFound.
+// RoomDraftFiles reads the blobs of room's draft that names names: an upload's original, a skill
+// version's tar or a plugin version's snapshot. A name the room does not hold is ErrNotFound.
 func (s *Store) RoomDraftFiles(ctx context.Context, roomID string, names []string) (map[string][]byte, error) {
 	out := map[string][]byte{}
 	for _, name := range names {
@@ -295,6 +409,12 @@ func (s *Store) RoomDraftFiles(ctx context.Context, roomID string, names []strin
 		switch kind {
 		case "doc":
 			data, err = s.Original(ctx, roomID, n)
+		case "plugin":
+			err = s.db.QueryRowContext(ctx, `SELECT sn.data FROM plugin_snapshots sn JOIN plugin_versions v ON v.id = sn.version_id
+				JOIN room_plugins p ON p.id = v.plugin_id WHERE v.id = ? AND p.room_id = ? AND p.removed_at IS NULL`, n, roomID).Scan(&data)
+			if errors.Is(err, sql.ErrNoRows) {
+				err = ErrNotFound
+			}
 		case "skill":
 			err = s.db.QueryRowContext(ctx, `SELECT v.data FROM skill_versions v JOIN skills k ON k.id = v.skill_id WHERE v.id = ?
 				AND (k.room_id = ? OR v.id IN (SELECT sv.id FROM room_persona_skills ps JOIN room_personas p ON p.id = ps.persona_id

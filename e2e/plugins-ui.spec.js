@@ -376,3 +376,62 @@ test('plugins: ask the AI host, and the allowlist marks', async ({ browser, requ
     host();
   }
 });
+
+// 009-AC28, Phase 4 DoD: "Save as starter" lists the room's plugin at the version in use,
+// unchecked, as documents are; checked, it goes in with Grill's activation. A room created from
+// the starter has it on Grill, waiting for the AI host to check it; checked by a host that
+// approves everything, it waits for that host's approval (006-AC13).
+test('plugins: saved in a starter, pending in a room made from it', async ({ browser, request, baseURL }) => {
+  test.setTimeout(120_000);
+  const tag = Date.now().toString(36);
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Sam' + tag]);
+  await appointAdmin(alice, request, room.id);
+  /** report posts the fake host's inspection of plugin name's first version in roomID. */
+  const report = async (host, roomID, name) => {
+    const v = (await call(alice, 'GET', `/api/rooms/${roomID}/plugins`)).body.plugins.find((p) => p.name === name).versions[0];
+    const r = await fetch(`${baseURL}/api/rooms/${roomID}/daemon/plugins/${v.id}/report`, { method: 'POST',
+      headers: { Authorization: 'Bearer ' + host.token, 'Content-Type': 'application/json' }, body: JSON.stringify({ ok: true }) });
+    expect(r.status).toBe(200);
+  };
+  const hosts = [await fakeDaemon(alice, baseURL, room.id, 'Sam laptop')];
+  try {
+    const repo = newRepo('starter-' + tag, market);
+    const label = `lint, main @ ${repo.first.slice(0, 7)}`;
+    const grill = (await agentState(alice, room.id)).personas[0].id;
+    expect((await call(alice, 'POST', `/api/rooms/${room.id}/plugins`, { url: repo.url, entries: ['lint'], personas: [grill] })).status).toBe(201);
+    await report(hosts[0], room.id, 'lint');
+
+    await alice.goto(`/r/${room.id}#manage/general`);
+    await alice.locator('#save-starter').click();
+    const sheet = alice.locator('#starter-save-sheet');
+    const box = sheet.locator('#starter-plugins label', { hasText: label });
+    await expect(box.locator('input')).not.toBeChecked();
+    await sheet.getByLabel('Title').fill('Plugins ' + tag);
+    await box.click();
+    await shot(alice, 'starter-save-plugins');
+    await sheet.getByRole('button', { name: 'Save as starter' }).click();
+    await expect(sheet).toBeHidden();
+
+    await alice.goto('/profile');
+    await alice.getByRole('button', { name: 'New room' }).click();
+    await alice.getByLabel('Search starters').fill(tag);
+    await alice.getByRole('button', { name: 'Yours: Plugins ' + tag }).click();
+    await expect(alice.locator('#preview-plugins li')).toHaveText([label]);
+    await alice.getByRole('button', { name: 'Use this starter' }).click();
+    await expect(alice.locator('#starter-plugins input')).toBeChecked();
+    await alice.getByRole('button', { name: 'Create room' }).click();
+    await expect(alice.locator('#invites')).toBeVisible();
+    const copy = new URL(alice.url()).pathname.split('/')[2];
+    expect(copy).not.toBe(room.id);
+    await alice.goto(`/r/${copy}#manage/plugins`);
+    const row = alice.locator('#manage #plugin-list li[data-plugin="lint"]');
+    await expect(row.locator('.plugin-name')).toHaveText(label);
+    await expect(row).toContainText('On for Grill');
+    await expect(row.locator('.plugin-state')).toHaveText('v1: waiting for the AI host to check it');
+    hosts.push(await fakeDaemon(alice, baseURL, copy, 'Sam laptop', { approve_all: true }));
+    await report(hosts[1], copy, 'lint');
+    await expect(row.locator('.plugin-state')).toHaveText("v1: waiting for the AI host's approval");
+  } finally {
+    for (const h of hosts) h();
+  }
+});
