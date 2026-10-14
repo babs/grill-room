@@ -135,6 +135,7 @@
   margin: 0; padding: 0; border: 0; background: transparent; overflow: visible; }
 .toasts:popover-open { display: grid; }
 .toast { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-4); border-radius: var(--r-md); background: var(--chrome); color: var(--chrome-text); box-shadow: var(--sh-2); }
+.load-failed { position: fixed; inset: auto var(--sp-4) var(--sp-4); z-index: var(--z-toast); margin: 0; border: 0; justify-content: space-between; }
 @media (max-width: 40rem) {
   table.cards, table.cards :is(tbody, tr, td) { display: block; }
   table.cards thead { display: none; }

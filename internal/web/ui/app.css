@@ -119,14 +119,33 @@ dialog#manage { width: min(64rem, calc(100vw - 1rem)); min-height: min(36rem, ca
 #chain-form label { flex-direction: row; align-items: center; font-weight: 400; }
 #chain-form input { width: 7rem; }
 #persona-add label { flex: 1; min-width: 12rem; }
-.persona-form { margin-bottom: var(--sp-4); padding: var(--sp-3); background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--persona, var(--brand)); border-radius: var(--r-md); }
-.persona-form h3 { margin: 0; font-size: var(--fs-md); }
+/* The Personas list: one line per persona, its name and settings cut by an ellipsis (009-AC1). */
+.persona-rows { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); margin: 0 0 var(--sp-4); padding: 0; list-style: none; }
+.persona-row { display: flex; align-items: center; gap: var(--sp-2); min-height: 44px; padding: 0 var(--sp-3); white-space: nowrap; font-size: var(--fs-sm); color: var(--text); text-decoration: none;
+  background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--persona, var(--brand)); border-radius: var(--r-md); }
+.persona-row:hover { border-color: var(--border-strong); border-left-color: var(--persona, var(--brand)); }
+.persona-row .badge { flex: none; padding: 0; background: none; font-size: var(--fs-md); }
+.persona-row :is(.pr-name, .pr-meta) { overflow: hidden; text-overflow: ellipsis; }
+/* The name gives way first, down to 3 characters; only then the settings. */
+.persona-row .pr-name { flex: 0 1000 auto; min-width: 3ch; font-weight: 600; }
+.persona-row .pr-meta { flex: 0 1 auto; min-width: 0; color: var(--text-muted); }
+.persona-row .led { margin-left: auto; }
+.persona-row .pr-state { flex: none; color: var(--text-muted); font-size: var(--fs-xs); }
+@media (max-width: 40rem) {
+  .persona-row { gap: var(--sp-1); padding: 0 var(--sp-2); }
+  .persona-row :is(.pr-long, .pr-state) { display: none; }
+}
+/* A persona's sheet (009-AC2): ⋯ and ✕ in its head, its tabs, one form under them. */
+.sheet-tools { display: flex; flex: none; gap: var(--sp-1); }
+#persona-sheet-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.persona-form > section { padding-top: var(--sp-2); }
+#persona-tabs { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--bg); }
+#persona-status:empty { display: none; }
 .persona-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: var(--sp-2) var(--sp-3); margin: var(--sp-2) 0; }
 .persona-form label { display: grid; gap: var(--sp-1); font-size: var(--fs-sm); color: var(--text-muted); }
 .persona-form label.check { display: flex; align-items: center; gap: var(--sp-2); }
 .persona-form :is(input:not([type=checkbox]), select, textarea) { width: 100%; color: var(--text); }
 .persona-form textarea { resize: vertical; }
-.persona-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-2); }
 #room-skill-list { padding-left: var(--sp-5); font-size: var(--fs-sm); overflow-wrap: anywhere; }
 #room-skill-copy select { min-width: 10rem; max-width: 100%; }
 .persona-skills { margin: var(--sp-2) 0; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-md); font-size: var(--fs-sm); }
@@ -315,7 +334,7 @@ mark.mention-chip.me { background: var(--accent); color: var(--on-accent); }
   body:not([data-tab=chat]) .chat { display: none; }
   #viewer { border-right: 0; }
   .msg { padding-right: calc(var(--control-h) + var(--sp-1)); }
-  .toasts { inset: auto var(--sp-2) calc(64px + env(safe-area-inset-bottom)) var(--sp-2); }
+  :is(.toasts, .load-failed) { inset: auto var(--sp-2) calc(64px + env(safe-area-inset-bottom)) var(--sp-2); }
 }
 
 /* The document manager in a window of its own (005-AC11): the documents and the viewer only. */

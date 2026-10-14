@@ -97,8 +97,8 @@ function Manage({ data, tab, tabs }) {
           ${' '}<${Rename} key=${p.name} name=${p.name} path=${`${base}/participants/${p.id}/name`} api=${fetchJSON} show=${show} done=${() => setSaid('')}/>
         </li>`)}</ul>`}
       ${tab === 'personas' && html`
-        <p class="hint">Every member adds and edits the room's personas in the Personas sheet.</p>
-        <ul id="manage-personas">${personas.map((p) => html`<li key=${p.id}>${p.badge} ${p.name}: ${p.model}, effort ${p.effort}${p.pending ? ', waits for the AI host' : ''}</li>`)}</ul>
+        <p class="hint">Every member adds and edits the room's personas in the Personas sheet. A persona's name opens its own sheet.</p>
+        <ul id="manage-personas">${personas.map((p) => html`<li key=${p.id}><a href=${'#personas/' + p.id + '/identity'}>${p.badge} ${p.name}</a>: ${p.model}, effort ${p.effort}${p.pending ? ', waits for the AI host' : ''}</li>`)}</ul>
         <button type="button" class="btn-primary" onClick=${openPersonas}>Open the Personas sheet</button>`}
       ${tab === 'skills' && (skills.length ? html`<ul id="room-admin-skills">${skills.map((k) => html`<li key=${k.id}>${k.name} v${k.version}, copied by ${k.author}
           ${' '}<button type="button" class="btn-secondary" onClick=${() => removeSkill(k)} aria-label=${'Remove the room skill ' + k.name}>Remove</button></li>`)}</ul>`

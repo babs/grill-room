@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, upload, startDaemon, smallTargets, menuItem, playSTT, newRoomEditor } from './helpers.js';
+import { roomWith, signIn, upload, startDaemon, smallTargets, menuItem, playSTT, newRoomEditor, personaAction } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const desktop = { width: 1440, height: 900 };
@@ -371,32 +371,37 @@ test('status strip and toasts', async ({ browser, request }) => {
   await expect(alice.locator('#toasts .toast')).toHaveCount(0, { timeout: 8000 });
 });
 
-// 005-AC39, 005-AC40: the Personas sheet: one primary Save, Remove a danger outline, the rest folded;
-// a right-click on a pill opens it; a removal asks in the shared confirm sheet.
+// 005-AC39, 005-AC40, 009-AC3, 009-AC4: a right-click on a pill opens that persona's sheet on
+// Identity; one primary Save; the rare actions in ⋯; a removal asks in the shared confirm sheet.
 test('personas sheet and confirm sheet', async ({ browser, request }) => {
   const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
   await alice.setViewportSize(desktop);
   await alice.locator('button.persona').first().click({ button: 'right', force: true });
-  const form = alice.locator('#personas .persona-form').first();
-  await expect(form).toBeVisible();
-  await expect(form.locator('button.btn-primary, button[type=submit]')).toHaveText(['Save']);
-  await expect(form.getByRole('button', { name: /^Remove/ })).toHaveClass('btn-danger-outline');
-  await expect(form.getByLabel('Speaks up')).toBeHidden();
-  await form.locator('details.advanced summary').click();
-  await expect(form.getByLabel('Speaks up')).toBeVisible();
-  await expect(form.getByRole('button', { name: /library/ })).toBeHidden();
-  await form.locator('details.more summary').click();
-  await expect(form.getByRole('button', { name: /library/ })).toBeVisible();
+  const sheet = alice.locator('#persona-sheet');
+  await expect(sheet.locator('#persona-sheet-title')).toHaveText('🔥 Grill');
+  await expect(alice).toHaveURL(/#personas\/\d+\/identity$/);
+  await expect(sheet.locator('.btn-primary, button[type=submit]')).toHaveText(['Save']);
+  await expect(sheet.getByLabel('Speaks up')).toBeHidden();
+  await sheet.getByRole('link', { name: 'Triggers', exact: true }).click();
+  await expect(sheet.getByLabel('Speaks up')).toBeVisible();
+  await expect(sheet.getByRole('button', { name: /library|^Remove/ })).toHaveCount(0);
+  await sheet.locator('#persona-more').click();
+  const menu = alice.locator('#persona-menu');
+  await expect(menu.getByRole('button')).toHaveText(['Save to the library', 'Remove']);
+  await expect(menu.getByRole('button', { name: 'Remove Grill' })).toHaveClass('danger');
   await shot(alice, 'after-desktop-personas');
-  await form.getByRole('button', { name: /^Remove/ }).click();
-  const sheet = alice.locator('dialog.confirm');
-  await expect(sheet.locator('h2')).toHaveText('Remove Grill?');
-  await sheet.getByRole('button', { name: 'Cancel' }).click();
-  await expect(sheet).toHaveCount(0);
+  await menu.getByRole('button', { name: 'Remove Grill' }).click();
+  const confirm = alice.locator('dialog.confirm');
+  await expect(confirm.locator('h2')).toHaveText('Remove Grill?');
+  await confirm.getByRole('button', { name: 'Cancel' }).click();
+  await expect(confirm).toHaveCount(0);
   await expect(alice.locator('button.persona')).toHaveCount(1);
-  await form.getByRole('button', { name: /^Remove/ }).click();
+  await personaAction(alice, 'Remove Grill');
   await alice.locator('dialog.confirm').getByRole('button', { name: 'Remove' }).click();
   await expect(alice.locator('button.persona')).toHaveCount(0);
+  // A removed persona's sheet closes, and its deep link goes with it.
+  await expect(sheet).toBeHidden();
+  await expect(alice).not.toHaveURL(/#personas/);
 });
 
 // 005-AC41: the profile is a home page: room cards with people, activity and the admin badge; New

@@ -109,14 +109,14 @@
 <p id="notice" class="strip" role="status" hidden><span id="notice-text"></span> <button type="button" id="notice-close" class="btn-ghost">OK</button></p>
 <button type="button" id="strip-more" class="btn-ghost" aria-expanded="false" hidden></button>
 </div>
-<dialog id="personas" class="sheet wide" aria-labelledby="personas-title">
+<dialog id="personas" class="sheet wide full" aria-labelledby="personas-title">
   <div class="sheet-head">
     <h2 id="personas-title">Personas</h2>
     <button type="button" id="personas-close" class="btn-icon btn-ghost" aria-label="Close">✕</button>
   </div>
   <p class="hint">Each persona is an AI with its own Claude session. Changes apply from its next answer.</p>
-  <p id="personas-status" class="said error" role="status"></p>
-  <div id="persona-list"></div>
+  <p id="personas-status" class="said" role="status"></p>
+  <ul id="persona-list" class="persona-rows" aria-label="AI personas"></ul>
   <form id="chain-form" class="row">
     <label>Auto-turn limit <input id="chain-budget" type="number" min="1" max="1000" required></label>
     <button type="submit">Set</button>
@@ -137,6 +137,20 @@
       <button type="submit">Copy</button>
     </form>
   </section>
+</dialog>
+<!-- One persona's settings in four tabs, each a deep link #personas/<id>/<tab> (009-AC2). -->
+<dialog id="persona-sheet" class="sheet wide full" aria-labelledby="persona-sheet-title">
+  <div class="sheet-head">
+    <h2 id="persona-sheet-title"></h2>
+    <span class="sheet-tools">
+      <button type="button" id="persona-more" class="btn-icon btn-ghost" popovertarget="persona-menu" aria-label="Persona actions" title="Persona actions">⋯</button>
+      <button type="button" id="persona-sheet-close" class="btn-icon btn-ghost" aria-label="Close">✕</button>
+    </span>
+  </div>
+  <nav id="persona-tabs" class="tabs" aria-label="Persona settings"></nav>
+  <p id="persona-status" class="said" role="status"></p>
+  <div id="persona-body"></div>
+  <div id="persona-menu" class="menu" popover></div>
 </dialog>
 <dialog id="manage" class="sheet wide full" aria-labelledby="manage-title">
   <div class="sheet-head">

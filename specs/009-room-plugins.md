@@ -58,6 +58,8 @@ Private repos are fetched by the host's daemon with the host's own git access, a
 - [ ] **AC3** Start fresh, New session with handoff, and Remove move into the sheet's `⋯` menu (the 008 component and its keyboard rules). Remove keeps its confirm sheet (005-AC39). Save stays the only primary button and saves every tab at once.
 - [ ] **AC4** Nothing is lost: every field and action of the 005 sheet is reachable in the new one. The right-click or long-press on a persona pill opens that persona's sheet (005-AC40).
 
+- [ ] **AC35** When a Room settings or `/admin` module fails to load (a dropped request, `ERR_NETWORK_CHANGED`), the page shows "Couldn't load, reload the page" with a Reload button as soon as the load fails, above any open sheet, and keeps it until reload, never nothing. An e2e test blocks the module and expects the line.
+
 ### Mentions in notes and the notes watcher (notes, 2026-10-14)
 
 - [ ] **AC29** An `@name` naming a persona in a note message, by a participant, queues that persona's turn, like a chat mention (005-AC4): the message shows "→ @Persona" with the turn's live state, kept after a reload. The cause is `@mention in note #<id> by <name>: "<first 50 characters>"`, and the prompt puts that thread first under "You were mentioned in note #<id>". A participant without "Can ask the AI" gets the same refusal as in the chat.
@@ -116,7 +118,7 @@ Private repos are fetched by the host's daemon with the host's own git access, a
 
 ### Phase 1 — Persona management, note mentions, notes watcher, host transfer
 - Work: compact list, tabbed sheet with deep links, `⋯` menu, Capabilities with skills only; mentions in notes with their chip, thread ownership in the prompt and the result; the watcher setting, its debounce and badge; "Make AI host" for room admins and the super-admin.
-- **Covers**: AC1, AC2, AC3, AC4, AC29, AC30, AC31, AC32, AC33, AC34
+- **Covers**: AC1, AC2, AC3, AC4, AC35, AC29, AC30, AC31, AC32, AC33, AC34
 - **Data model impact**: `room_personas.watches_notes` (at most one per room, a partial unique index); note-message mention links (`annotation_message_turns`, like `message_turns`); a `notes_watch` turn source and cause; an audit action for host transfer
 - **DoD**:
   - Playwright at 390 and 1440 px: one-line rows (bounding boxes), each tab's deep link, keyboard-only through tabs and `⋯`; a test listing every control id of the 005 sheet finds each one in the new sheet; the existing persona e2e specs green on the new selectors; before and after screenshots in the tracking file;
@@ -172,6 +174,8 @@ Folded from the notes after the draft (2026-10-14):
 - Skills show no token cost until a skill inspection exists (overturnable).
 - 006 shipped: "Save as starter" and room creation from a starter are real code, so AC28 extends the starter manifest and `starter_files` (006-AC6) instead of a new store.
 - A thread belongs to a persona when a participant's message in it names that persona; a persona's own `@name` in its reply does not claim the thread (coordinator, overturnable).
+- Under 40rem a persona row reads "sonnet · medium · on mention only" and shows its state as the pill's state dot (shape per state, the word in its accessible name and tooltip), so the trigger always fits (009-AC1; routine call, overturnable).
+- AC35, a failed module load says so, was added by the coordinator after the v0.0.15 lab run (routine call, overturnable).
 - The watcher's turns use the room's queue and auto-turn limit, like "every N" turns; a press of the watcher by a human is a normal press (coordinator, overturnable).
 
 From the draft:

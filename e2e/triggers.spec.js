@@ -1,23 +1,25 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon, menuItem, confirmSheet, unfold } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, menuItem, confirmSheet, personaRow, personaSheet } from './helpers.js';
 
 const agentLines = (page) => page.locator('#messages li.msg.agent');
 
 // addSecretary adds the Secretary from the library in the personas panel, applies the trigger
-// fields given, and leaves the panel open.
+// fields given on its Triggers tab (009-AC2), and leaves the panel open.
 async function addSecretary(page, fields = {}) {
   const panel = page.locator('#personas');
   await menuItem(page, 'Personas');
   await panel.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
   await panel.getByRole('button', { name: 'Add', exact: true }).click();
-  const sec = panel.locator('.persona-form', { hasText: 'Secretary' });
-  await expect(sec).toHaveCount(1);
+  await expect(personaRow(page, 'Secretary')).toHaveCount(1);
   if (fields.everyN) {
-    await unfold(sec, 'advanced');
+    const sec = await personaSheet(page, 'Secretary', 'Triggers');
     await sec.getByLabel('Speaks up').selectOption('every_n');
     await sec.getByLabel('N', { exact: true }).fill(String(fields.everyN));
     await sec.getByRole('button', { name: 'Save', exact: true }).click();
-    await expect(panel.locator('#personas-status')).toHaveText('Secretary saved. It applies from its next turn.');
+    await expect(sec.locator('#persona-status')).toHaveText('Secretary saved. It applies from its next turn.');
+    await sec.getByRole('button', { name: 'Close' }).click();
+    // 009-AC1: the row says the trigger in words.
+    await expect(personaRow(page, 'Secretary').locator('.pr-meta')).toHaveText(`sonnet · effort medium · every ${fields.everyN} answers`);
   }
   return panel;
 }

@@ -293,10 +293,34 @@ export async function confirmSheet(page, name) {
   await page.locator('dialog.confirm').getByRole('button', { name, exact: true }).click();
 }
 
-// unfold opens a folded section of a persona's form: 'advanced' or 'more' (005-AC40).
-export async function unfold(form, which) {
-  const d = form.locator('details.' + which);
-  if (!(await d.evaluate((e) => e.open))) await d.locator('summary').click();
+// personaRow is name's one-line row in the Personas list (009-AC1).
+export const personaRow = (page, name) => page.locator('#persona-list .persona-row')
+  .filter({ has: page.locator('.pr-name', { hasText: new RegExp(`^${name}$`) }) });
+
+// personaSheet opens name's sheet from its row in the Personas list, on tab (009-AC2), and returns
+// the sheet; the list stays open under it.
+export async function personaSheet(page, name, tab = 'Identity') {
+  if (!(await page.locator('#personas').isVisible())) await menuItem(page, 'Personas');
+  await personaRow(page, name).click();
+  const sheet = page.locator('#persona-sheet');
+  await expect(sheet.locator('#persona-sheet-title')).toHaveText(new RegExp(` ${name}$`));
+  await sheet.locator('#persona-tabs').getByRole('link', { name: tab, exact: true }).click();
+  await expect(sheet.locator(`section[data-tab="${tab.toLowerCase()}"]`)).toBeVisible();
+  return sheet;
+}
+
+// personaAction runs an item of the open persona sheet's ⋯ menu (009-AC3).
+export async function personaAction(page, name) {
+  await page.locator('#persona-more').click();
+  await page.locator('#persona-menu').getByRole('button', { name, exact: true }).click();
+}
+
+// closePersonas closes the persona sheet, when open, then the Personas list.
+export async function closePersonas(page) {
+  for (const id of ['#persona-sheet', '#personas']) {
+    const d = page.locator(id);
+    if (await d.isVisible()) await d.getByRole('button', { name: 'Close' }).first().click();
+  }
 }
 
 // openStrip shows every item of the status strip (005-AC38): only the most urgent shows folded.

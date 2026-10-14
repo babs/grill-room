@@ -1,7 +1,7 @@
 import { test, expect, devices } from '@playwright/test';
 import http from 'node:http';
 import { adminToken } from './playwright.config.js';
-import { roomWith, menuItem } from './helpers.js';
+import { roomWith, menuItem, personaRow, personaSheet, closePersonas } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -202,8 +202,8 @@ test('a resize does not unpin the chat', async ({ browser, request }) => {
   await expect.poll(pinned, 'pinch zoom').toBe(false);
 });
 
-// 002-AC15 on a phone: the persona buttons and the personas panel fit the screen, the panel scrolls
-// to every persona, and an edit made there is saved.
+// 002-AC15 on a phone: the persona buttons, the personas panel and a persona's sheet fit the
+// screen, and an edit made there is saved.
 for (const name of ['iPhone 15', 'Pixel 7']) {
   test(`${name}: the personas panel fits the screen`, async ({ browser, request }) => {
     const { defaultBrowserType, ...device } = devices[name];
@@ -225,18 +225,20 @@ for (const name of ['iPhone 15', 'Pixel 7']) {
     const panel = page.locator('#personas');
     await panel.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
     await panel.getByRole('button', { name: 'Add', exact: true }).click();
-    await expect(panel.locator('.persona-form')).toHaveCount(2);
+    await expect(panel.locator('.persona-row')).toHaveCount(2);
     await inside(panel);
     expect((await panel.boundingBox()).height).toBeLessThanOrEqual(height + 1);
-    // The second persona's controls are reachable by scrolling the panel.
-    const sec = panel.locator('.persona-form', { hasText: 'Secretary' });
+    await inside(personaRow(page, 'Secretary'));
+    // The second persona's sheet fits too, its Save in reach (009-AC2).
+    const sec = await personaSheet(page, 'Secretary', 'Model');
+    await inside(sec);
     await sec.getByLabel('Model').selectOption('haiku');
     const save = sec.getByRole('button', { name: 'Save', exact: true });
     await save.scrollIntoViewIfNeeded();
     await inside(save);
     await save.click();
-    await expect(panel.locator('#personas-status')).toHaveText('Secretary saved. It applies from its next turn.');
-    await panel.getByRole('button', { name: 'Close' }).click();
+    await expect(sec.locator('#persona-status')).toHaveText('Secretary saved. It applies from its next turn.');
+    await closePersonas(page);
     await expect(page.locator('#messages')).toContainText('Alice changed 📝 Secretary: model sonnet → haiku.');
     for (const b of await page.locator('button.persona').all()) await inside(b);
     await inside(page.locator('#body'));

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, startDaemon, pairDaemon, ask, skillZip, menuItem } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip, personaSheet, closePersonas } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
@@ -13,10 +13,8 @@ async function uploadSkill(page, zip, scope, status) {
   await expect(page.locator('#skill-status')).toHaveText(status);
 }
 
-async function openPanel(page) {
-  await menuItem(page, 'Personas');
-  return page.locator('#personas .persona-form', { hasText: 'Grill' }).first();
-}
+// openPanel opens Grill's Capabilities tab, where its skills sit (009-AC2).
+const openPanel = (page) => personaSheet(page, 'Grill', 'Capabilities');
 
 // 002-AC29 002-AC30 002-AC31 002-AC32: Alice uploads a personal skill from her profile page (a
 // zip without frontmatter is refused, and says why) and Bob shares one; in the personas panel
@@ -58,12 +56,12 @@ test('skills: upload, disclaimer once, pinned through an update', async ({ brows
   await expect(grill.locator('.persona-skills li')).toHaveText(['None on.']);
   await grill.getByRole('button', { name: 'Turn on the chosen skill for Grill' }).click();
   await disclaimer.getByRole('button', { name: 'I understand, turn it on' }).click();
-  await expect(alice.locator('#personas-status')).toHaveText('stamp v1 is on for Grill.');
+  await expect(alice.locator('#persona-status')).toHaveText('stamp v1 is on for Grill.');
   await expect(bob.locator('#messages')).toContainText('Alice changed 🔥 Grill: skill stamp v1 on.');
   // Once per profile: the next activation goes straight through.
   await pick.selectOption({ label: `${pdf} v1` });
   await grill.getByRole('button', { name: 'Turn on the chosen skill for Grill' }).click();
-  await expect(alice.locator('#personas-status')).toHaveText(`${pdf} v1 is on for Grill.`);
+  await expect(alice.locator('#persona-status')).toHaveText(`${pdf} v1 is on for Grill.`);
   await expect(disclaimer).toBeHidden();
   await expect(grill.locator('.persona-skills li[data-skill]')).toHaveText([new RegExp(`^${pdf} v1`), /^stamp v1 \(personal\)/]);
 
@@ -72,9 +70,9 @@ test('skills: upload, disclaimer once, pinned through an update', async ({ brows
   const off = grill.getByRole('button', { name: `Turn off skill ${pdf} for Grill` });
   await off.scrollIntoViewIfNeeded();
   await expect(off).toBeInViewport();
-  expect(await alice.locator('#personas').evaluate((d) => d.scrollWidth <= d.clientWidth)).toBe(true);
+  expect(await alice.locator('#persona-sheet').evaluate((d) => d.scrollWidth <= d.clientWidth)).toBe(true);
   await alice.setViewportSize({ width: 1280, height: 720 });
-  await alice.getByRole('button', { name: 'Close' }).click();
+  await closePersonas(alice);
 
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {
@@ -84,16 +82,16 @@ test('skills: upload, disclaimer once, pinned through an update', async ({ brows
     const panel = await openPanel(alice);
     const update = panel.getByRole('button', { name: 'Update skill stamp of Grill to version 2' });
     await expect(update).toBeVisible();
-    await alice.getByRole('button', { name: 'Close' }).click();
+    await closePersonas(alice);
     // Bob sees the offer of Alice's personal skill nowhere: it is hers to take.
     const bobPanel = await openPanel(bob);
     await expect(bobPanel.locator('.persona-skills li[data-skill="stamp"]')).toHaveText(/^stamp v1 \(personal\)Turn off$/);
-    await bob.getByRole('button', { name: 'Close' }).click();
+    await closePersonas(bob);
     expect((await ask(alice, room.id, 'FAKE_SKILLS pinned')).trim()).toBe(`Skills used: ${pdf}: PDF-v1; stamp: STAMP-v1.`);
     await openPanel(alice);
     await update.click();
-    await expect(alice.locator('#personas-status')).toHaveText('stamp v2 is on for Grill.');
-    await alice.getByRole('button', { name: 'Close' }).click();
+    await expect(alice.locator('#persona-status')).toHaveText('stamp v2 is on for Grill.');
+    await closePersonas(alice);
     expect((await ask(alice, room.id, 'FAKE_SKILLS updated')).trim()).toBe(`Skills used: ${pdf}: PDF-v1; stamp: STAMP-v2.`);
   } finally {
     daemon.cleanup();
@@ -108,7 +106,7 @@ test('skills: upload, disclaimer once, pinned through an update', async ({ brows
   const second = await openPanel(alice);
   await second.getByLabel('Skill to turn on for Grill').selectOption({ label: `${pdf} v1` });
   await second.getByRole('button', { name: 'Turn on the chosen skill for Grill' }).click();
-  await expect(alice.locator('#personas-status')).toHaveText(`${pdf} v1 is on for Grill.`);
+  await expect(alice.locator('#persona-status')).toHaveText(`${pdf} v1 is on for Grill.`);
   await expect(disclaimer).toBeHidden();
 
   // The profile page fits a phone too.

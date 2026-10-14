@@ -1,18 +1,18 @@
 import { test, expect } from '@playwright/test';
-import { roomWith, menuItem } from './helpers.js';
+import { roomWith, menuItem, personaRow, personaSheet } from './helpers.js';
 
-// 005-AC9: the personas panel offers explicit models and efforts only, never a default, and says
-// what a persona runs on in full words.
+// 005-AC9 009-AC1: the persona sheet offers explicit models and efforts only, never a default, and
+// the Personas list says what a persona runs on in full words.
 test('persona panel: no default model or effort', async ({ browser, request }) => {
   const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
   await menuItem(alice, 'Personas');
-  const grill = alice.locator('#personas .persona-form', { hasText: 'Grill' });
+  await expect(personaRow(alice, 'Grill').locator('.pr-meta')).toHaveText('sonnet · effort medium · on mention only');
+  const grill = await personaSheet(alice, 'Grill', 'Model');
   await expect(grill.getByLabel('Model').locator('option')).toHaveText(['haiku', 'sonnet', 'opus', 'fable']);
   await expect(grill.getByLabel('Effort').locator('option')).toHaveText(['low', 'medium', 'high', 'xhigh', 'max']);
   await expect(grill.getByLabel('Model')).toHaveValue('sonnet');
   await expect(grill.getByLabel('Effort')).toHaveValue('medium');
-  await expect(grill.locator('.hint', { hasText: 'Runs on' })).toContainText('Runs on sonnet · effort medium.');
-  await expect(alice.locator('#personas')).not.toContainText('default');
+  for (const id of ['#personas', '#persona-sheet']) await expect(alice.locator(id)).not.toContainText('default');
 });
 
 // 005-AC8: the room counts the voices the STT worker transcribes, and tells a viewer only about

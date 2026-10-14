@@ -167,10 +167,10 @@ The palette is the one the room page and `/admin` already use, harmonized. The l
 | turn, turn running/queued | answer · Grill is answering… / waiting |
 | persona | AI persona in headings; the persona's name elsewhere |
 | synthesis | Grill's answer |
-| effort medium, sonnet, +model 6 % | "Sonnet · thinks more" in the persona sheet; the model mix in a tooltip only |
+| effort medium, sonnet, +model 6 % | "sonnet · effort medium" in the Personas list (009-AC1); the model mix in a tooltip only |
 | Every N rounds | Speaks up every N answers |
 | Self-call | Can follow up on its own |
-| Autocompact (k tokens) | (Advanced) Memory size |
+| Autocompact (k tokens) | Memory size, on the persona sheet's Model tab |
 | New session (with handoff) | Start fresh (keep a summary) |
 | Publish as a template | Save to the library |
 | Transcription unavailable / 2 voices transcribed | (audio menu) Voice-to-text is off · 2 voices are being written down |

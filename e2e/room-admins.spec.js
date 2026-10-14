@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { adminToken } from './playwright.config.js';
-import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet, playSTT, stopSTT, newRoomEditor } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet, playSTT, stopSTT, newRoomEditor, personaSheet, closePersonas } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const phone = { width: 390, height: 844 };
@@ -249,14 +249,13 @@ test('a room skill survives its author leaving', async ({ browser, request, base
   await expect(alice.locator('#messages')).toContainText('Bob copied the skill bobs v1 into the room.');
   await bob.getByRole('button', { name: 'Close' }).click();
 
-  await menuItem(alice, 'Personas');
-  const grill = alice.locator('#personas .persona-form', { hasText: 'Grill' }).first();
+  const grill = await personaSheet(alice, 'Grill', 'Capabilities');
   await grill.getByLabel('Skill to turn on for Grill').selectOption({ label: 'bobs v1 (room)' });
   await grill.getByRole('button', { name: 'Turn on the chosen skill for Grill' }).click();
   await alice.locator('#skills-disclaimer').getByRole('button', { name: 'I understand, turn it on' }).click();
-  await expect(alice.locator('#personas-status')).toHaveText('bobs v1 is on for Grill.');
+  await expect(alice.locator('#persona-status')).toHaveText('bobs v1 is on for Grill.');
   await expect(grill.locator('.persona-skills li[data-skill]')).toHaveText([/^bobs v1 \(room\)/]);
-  await alice.getByRole('button', { name: 'Close' }).click();
+  await closePersonas(alice);
 
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {

@@ -89,18 +89,18 @@ Lines show their current text. An edited line is tagged `(edited)`, and a delete
 
 ## Context use and autocompact
 
-Each persona has an `autocompact` setting (003-AC24), set in the personas panel like its model: `auto` (the default, stored as 0) or a token count from 100,000 to 1,000,000, the range `claude --autocompact` accepts in Claude Code 2.1.296. The job carries it as `autocompact`, and the daemon passes `--autocompact <tokens>`, or no flag for auto. A value out of that range never reaches `claude`.
+Each persona has an `autocompact` setting (003-AC24), set on the persona sheet's Model tab next to its model: `auto` (the default, stored as 0) or a token count from 100,000 to 1,000,000, the range `claude --autocompact` accepts in Claude Code 2.1.296. The job carries it as `autocompact`, and the daemon passes `--autocompact <tokens>`, or no flag for auto. A value out of that range never reaches `claude`.
 
 After each turn the daemon measures the session's context use from `claude -p`'s JSON result:
 
 - tokens: `usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens`. In Claude Code 2.1.296, `usage` is the turn's last request, the context the next turn starts from; `modelUsage` sums every request of the turn, so it would overcount;
 - window: the `contextWindow` that `modelUsage` reports for the model that wrote most of the answer. Claude Code knows each model's window, so there is no table to keep up to date. A result without it leaves the window unknown, and the room shows no percentage.
 
-The daemon posts both with the result (`context_tokens`, `context_window`). The server keeps them on the session (`agent_sessions.context_tokens`, `context_window`, `context_updated_at`), ignoring a window smaller than the tokens. The persona panel shows the use of the session the persona resumes next as a percentage, and the daemon reports both to its supervisor in the turn's end event for monitoring.
+The daemon posts both with the result (`context_tokens`, `context_window`). The server keeps them on the session (`agent_sessions.context_tokens`, `context_window`, `context_updated_at`), ignoring a window smaller than the tokens. The persona sheet's Model tab shows the use of the session the persona resumes next as a percentage, and the daemon reports both to its supervisor in the turn's end event for monitoring.
 
 ## Handoff
 
-"New session with handoff" (003-AC25) is the host's, per persona, in the personas panel. Above 80% context use the room also offers it in the "waiting for the host" banner. It needs a session to hand over: a persona with no successful turn answers 409.
+"New session with handoff" (003-AC25) is the host's, per persona, in the persona sheet's `⋯` menu as "Start fresh, keep a summary". Above 80% context use the room also offers it in the "waiting for the host" banner. It needs a session to hand over: a persona with no successful turn answers 409.
 
 1. It runs a last turn on the current session, cause `the host <name> asked for a handoff note before a new session`, queued like a press. The prompt asks the agent to write `docs/_handoff-<persona>.md`: decisions made, the current state, open questions, what to do next.
 2. When that turn is done and created or revised the note, the server queues a fresh turn of the persona in place of its queued one, cause `handoff from your previous session`. Its prompt says it is a new session and to read the note first, then `transcript/`.
