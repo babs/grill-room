@@ -208,9 +208,8 @@ code.risk { display: block; padding: var(--sp-1) var(--sp-2); border-left: 3px s
 .person-more.blank { visibility: hidden; }
 #person-menu input[type=range] { width: 8rem; }
 /* The details card and the badge tip (009-AC36): styled popovers, no native title tooltip. */
-.person-card, .tip { position: fixed; inset: auto; margin: 0; max-width: 20rem; padding: var(--sp-2) var(--sp-3);
+.person-card { position: fixed; inset: auto; margin: 0; max-width: 20rem; padding: var(--sp-2) var(--sp-3);
   border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); color: var(--text); box-shadow: var(--sh-2); font-size: var(--fs-sm); line-height: 1.45; }
-.tip { padding: var(--sp-1) var(--sp-2); border-radius: var(--r-md); font-size: var(--fs-xs); }
 .person-card ul { list-style: none; margin: var(--sp-1) 0 0; padding: 0; color: var(--text-muted); }
 #participants-away .seen { font-size: var(--fs-xs); color: var(--text-muted); }
 h3.people { font-size: var(--fs-xs); color: var(--text-muted); font-weight: 400; margin: var(--sp-2) 0 0; }

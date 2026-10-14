@@ -192,6 +192,8 @@
     clearTimeout(tipHide);
     tipFor = el;
     tip.textContent = /** @type {HTMLElement} */ (el).dataset.tip || '';
+    // A control's tip lets the pointer through: shown under a row, it would take the next row's click.
+    tip.classList.toggle('pass', el.matches('button, a, [role=button]'));
     if (!tip.matches(':popover-open')) tip.showPopover();
     window.grillPlace(tip, el);
   };
@@ -245,6 +247,8 @@
   });
   document.addEventListener('focusout', (e) => { if (e.target === tipFor) hideTip(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideTip(); });
+  // The pointer gone into a document frame sends no pointerout here.
+  addEventListener('blur', hideTip);
 
   /**
    * grillLoadFailed says a module failed to load (a dropped connection, ERR_NETWORK_CHANGED): its

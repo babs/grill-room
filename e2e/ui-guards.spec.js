@@ -185,3 +185,17 @@ test('one date format', async ({ browser, request }) => {
   dates.message = await alice.locator('#messages li.msg:not(.system) time').first().getAttribute('data-tip');
   for (const [where, d] of Object.entries(dates)) expect(d, where).toMatch(format);
 });
+
+test("a control's tip never takes the next row's click", async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.setViewportSize(desktop);
+  await upload(alice, 'a.md', 'text/markdown', '# A\n');
+  await upload(alice, 'b.md', 'text/markdown', '# B\n');
+  const rows = alice.locator('#documents button.doc');
+  await expect(rows).toHaveCount(2);
+  await rows.first().hover();
+  await expect(alice.locator('#person-tip')).toBeVisible();
+  // v0.0.17 had no tip there; a hoverable tip under the first row covered the second.
+  await rows.nth(1).click({ timeout: 3000 });
+  await expect(alice.locator('#doc-name')).toHaveText(await rows.nth(1).textContent());
+});

@@ -160,5 +160,9 @@
   table.cards td { padding: var(--sp-1) 0; border: 0; white-space: normal; }
   table.cards td[data-label]::before { content: attr(data-label) ": "; color: var(--text-muted); font-size: var(--fs-sm); }
 }
+/* The styled tip (kit/ui.js) for any [data-tip], on every page. */
+.tip { position: fixed; inset: auto; margin: 0; max-width: 20rem; padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); color: var(--text); box-shadow: var(--sh-2); font-size: var(--fs-xs); line-height: 1.45; }
+.tip.pass { pointer-events: none; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
