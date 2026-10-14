@@ -96,8 +96,9 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
     await newSession(bob).click();
     await confirmSheet(bob, 'Start fresh');
     await bob.locator('#personas').getByRole('button', { name: 'Close' }).click();
-    await expect(bob.locator('#messages li.msg.agent').last()).toContainText('turn 1.', { timeout: 60_000 });
-    await expect(bob.locator('#messages li.msg.agent')).toHaveCount(2);
+    // The previous synthesis also ends with "turn 1.": wait for the new one by count.
+    await expect(bob.locator('#messages li.msg.agent')).toHaveCount(2, { timeout: 60_000 });
+    await expect(bob.locator('#messages li.msg.agent').last()).toContainText('turn 1.');
 
     // Bob's daemon stops: Alice's daemon is the only one left and takes the role back.
     daemonB.proc.kill('SIGTERM');

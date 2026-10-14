@@ -285,6 +285,8 @@ func TestPairAndConnect(t *testing.T) {
 	// A restarted daemon reuses the stored token: no new pairing.
 	cancel()
 	waitFor(t, "room drops the daemon", func() bool { return len(rs.daemons(t, alice)) == 0 })
+	// SetRoom keeps a run that has not returned yet: until then the stopping one would serve the room.
+	d.Wait()
 	ctx, cancel = context.WithCancel(context.Background())
 	defer cancel()
 	d.SetRoom(ctx, room)

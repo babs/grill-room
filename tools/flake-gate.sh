@@ -1,17 +1,28 @@
 #!/usr/bin/env bash
 # CI's flake gate (test hygiene): the Go tests in the test files a change adds or edits run five
 # times under the race detector, and the e2e specs it adds or edits run three times each. A test
-# that passes once by luck fails here. CI only: never run it on a workstation.
+# that passes once by luck fails here. With "all" as the base, every Go package and every e2e spec
+# runs that way. CI only: never run it on a workstation.
 set -euo pipefail
 
-readonly usage="usage: tools/flake-gate.sh <base-ref> go|e2e"
+readonly usage="usage: tools/flake-gate.sh <base-ref>|all go|e2e"
 if [[ $# -ne 2 ]]; then
 	echo "$usage" >&2
 	exit 2
 fi
 readonly base=$1 what=$2
 
-if ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+if [[ $base == all ]]; then
+	case $what in
+	# The timeout covers five runs of the slowest package under -race on Windows.
+	go) exec go test -race -count=5 -timeout 120m ./... ;;
+	e2e) exec make e2e-repeat SPECS= ;;
+	*)
+		echo "$usage" >&2
+		exit 2
+		;;
+	esac
+elif ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
 	echo "flake-gate: base $base is not a commit here: fetch it first" >&2
 	exit 1
 fi

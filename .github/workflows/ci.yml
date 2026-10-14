@@ -6,12 +6,20 @@ on:
   push:
     # feat/**: a feature branch is green before its PR opens.
     branches: [develop, "feat/**"]
+  # The full flake gate: every Go package and every e2e spec, repeated, on demand.
+  workflow_dispatch:
+    inputs:
+      full:
+        description: Run the flake gate on every test, not only the changed ones
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # A full gate run must not cancel, or be cancelled by, the push or PR run on the same ref.
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -133,7 +141,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    timeout-minutes: ${{ inputs.full && 180 || 90 }}
     steps:
       - run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -146,13 +154,13 @@ jobs:
       # The race detector needs cgo; the Windows image ships gcc.
       - shell: bash
         env:
-          BASE: ${{ github.event.pull_request.base.sha || 'origin/develop' }}
+          BASE: ${{ inputs.full && 'all' || github.event.pull_request.base.sha || 'origin/develop' }}
           CGO_ENABLED: "1"
         run: tools/flake-gate.sh "$BASE" go
 
   flake-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: ${{ inputs.full && 120 || 60 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -172,7 +180,7 @@ jobs:
           cache-dependency-path: e2e/pnpm-lock.yaml
       - run: sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends pandoc
       - env:
-          BASE: ${{ github.event.pull_request.base.sha || 'origin/develop' }}
+          BASE: ${{ inputs.full && 'all' || github.event.pull_request.base.sha || 'origin/develop' }}
         run: tools/flake-gate.sh "$BASE" e2e
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

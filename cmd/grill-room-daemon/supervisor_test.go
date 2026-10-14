@@ -297,11 +297,17 @@ func TestSecondLaunchHandsOver(t *testing.T) {
 // 003-AC8: a worker that crashes is restarted, and its room reconnects with its stored token.
 // Stopping the supervisor stops the worker, and the supervisor exits cleanly.
 func TestWorkerCrashRestartsAndRoomReconnects(t *testing.T) {
+	// Each phase's time goes to the test log, shown on failure: a Windows run once ran out of time
+	// waiting for the reconnect, with no trace of which phase took it.
+	start := time.Now()
+	phase := func(what string) { t.Logf("%7.3fs %s", time.Since(start).Seconds(), what) }
 	rs := newRoomServer(t)
 	alice := rs.join(t, "Alice")
 	sup := startProc(t, daemonEnv(t), rs.url())
 	pg := sup.open(t)
+	phase("page open")
 	rs.pair(t, pg, alice)
+	phase("paired")
 	before := onlyInstance(t, pg.status(t))
 	if before.State != "running" || before.PID == 0 || before.Proto != daemon.Proto || before.Room != rs.url() {
 		t.Fatalf("instance: %+v", before)
@@ -313,11 +319,23 @@ func TestWorkerCrashRestartsAndRoomReconnects(t *testing.T) {
 	if err := worker.Kill(); err != nil {
 		t.Fatal(err)
 	}
+	phase("worker killed")
+	seen := map[string]bool{}
+	once := func(what string, ok bool) {
+		if ok && !seen[what] {
+			seen[what] = true
+			phase(what)
+		}
+	}
 	waitFor(t, "the restarted worker connected again", func() bool {
 		s := pg.status(t)
 		in := onlyInstance(t, s)
+		once("restart counted", in.Restarts == 1)
+		once("new worker running", in.PID != 0 && in.PID != before.PID)
+		once("new worker paired", in.PID != before.PID && s.Status.Pairing == "paired")
 		return in.Restarts == 1 && in.PID != 0 && in.PID != before.PID && s.Status.Pairing == "paired" && s.Status.Connection == "connected"
 	})
+	phase("reconnected")
 	after := onlyInstance(t, pg.status(t))
 	if pg.post(t, "/api/stop", nil) != http.StatusNoContent {
 		t.Fatal("stop refused")
@@ -352,15 +370,22 @@ func sandboxObjects(t *testing.T, name string) int {
 	return n
 }
 
-// turn posts a message, presses the agent button and waits for the turn to end. The room may not
-// have heard the host's readiness yet when its page shows it connected: it waits for that first.
-func (rs *roomServer) turn(t *testing.T, tok string) {
+// online waits for the room to hear its host can run turns: the supervisor's page shows the worker
+// able to host before the worker's first heartbeat reaches the room, and a press before that is
+// refused.
+func (rs *roomServer) online(t *testing.T, tok string) {
 	t.Helper()
 	waitFor(t, "the room sees its host online", func() bool {
 		var v struct{ Online bool }
 		rs.call(t, "GET", "/api/rooms/"+rs.room+"/agent", tok, nil, http.StatusOK, &v)
 		return v.Online
 	})
+}
+
+// turn posts a message, presses the agent button and waits for the turn to end.
+func (rs *roomServer) turn(t *testing.T, tok string) {
+	t.Helper()
+	rs.online(t, tok)
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/messages", tok, map[string]string{"body": "hello FAKE_MARK"}, http.StatusCreated, nil)
 	var started struct{ ID int64 }
 	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", tok, map[string]bool{}, http.StatusCreated, &started)

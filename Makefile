@@ -78,14 +78,19 @@ test-docker: sandbox-image sandbox-fake-image
 # fake claude. Magic links run against a second server and a throwaway mailpit container. The
 # server hands out the daemon's own version, so its workers run the daemon's binary: an unsigned
 # release at another version would be refused (003-AC2).
+# The sandbox specs run after the others, alone (e2e/playwright.config.js says why). Both run even
+# when the first fails; the recipe fails if either did.
+E2E_SPLIT = { pnpm exec playwright test --project=parallel --pass-with-no-tests $(1); p=$$?; \
+	pnpm exec playwright test --project=sandbox --pass-with-no-tests $(1) && test $$p -eq 0; }
+
 e2e: build sandbox-fake-image
 	$(MAKE) release DIST=bin/e2e-release VERSION=$(VERSION)
-	cd e2e && pnpm install --frozen-lockfile && pnpm test && pnpm exec playwright test -c mail/playwright.config.js
+	cd e2e && pnpm install --frozen-lockfile && $(E2E_SPLIT) && pnpm exec playwright test -c mail/playwright.config.js
 
 # CI's flake gate (tools/flake-gate.sh): the specs in SPECS, three times each, as `make e2e` runs them.
 e2e-repeat: build sandbox-fake-image
 	$(MAKE) release DIST=bin/e2e-release VERSION=$(VERSION)
-	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test --repeat-each=3 $(SPECS)
+	cd e2e && pnpm install --frozen-lockfile && $(call E2E_SPLIT,--repeat-each=3 $(SPECS))
 
 # Voice tests against the compose stack behind the local traefik: run `make dev-up` first.
 e2e-voice:
