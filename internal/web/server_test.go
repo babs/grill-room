@@ -327,7 +327,7 @@ func TestE2ERoomLifecycle(t *testing.T) {
 	}
 
 	// 001-AC3: revoking Alice's invite ends her open stream and every later request.
-	if code, b := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(inv.ID, 10), e.admin, nil); code != http.StatusNoContent {
+	if code, b := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(inv.ID, 10), e.admin, nil); code != http.StatusOK {
 		t.Fatalf("revoke: %d %s", code, b)
 	}
 	expectRevokedThenClosed(t, aliceEvents)
@@ -384,7 +384,7 @@ func TestRoomRoutesRequireValidRoomToken(t *testing.T) {
 	stranger := e.join(t, e.createInvite(t, other.ID).Token, "Stranger")
 	revInv := e.createInvite(t, room.ID)
 	revoked := e.join(t, revInv.Token, "Gone")
-	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(revInv.ID, 10), e.admin, nil); code != http.StatusNoContent {
+	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(revInv.ID, 10), e.admin, nil); code != http.StatusOK {
 		t.Fatal("revoke failed")
 	}
 	member := e.join(t, e.createInvite(t, room.ID).Token, "Member")

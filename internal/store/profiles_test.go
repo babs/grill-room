@@ -453,11 +453,13 @@ func TestRevokeInviteCascadesToInvitesItsJoinersMade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range 2 { // idempotent
-		got, err := s.RevokeInvite(ctx, "a", alice.InviteID)
-		if err != nil || !slices.Equal(got, chain) {
-			t.Fatalf("revoked %v %v, want %v", got, err, chain)
-		}
+	got, err := s.RevokeInvite(ctx, "a", alice.InviteID)
+	if err != nil || !slices.Equal(got.Invites, chain) {
+		t.Fatalf("revoked %v %v, want %v", got, err, chain)
+	}
+	// Idempotent: the second revoke finds nothing left to cut (011-AC20).
+	if got, err := s.RevokeInvite(ctx, "a", alice.InviteID); err != nil || len(got.Invites) != 0 || len(got.Lose) != 0 {
+		t.Fatalf("second revoke: %+v %v, want nothing cut", got, err)
 	}
 	for _, tok := range []string{"tok-a", "tok-Carol", "tok-Dave"} {
 		if _, err := s.ParticipantByToken(ctx, tok); !errors.Is(err, ErrNotFound) {

@@ -104,6 +104,9 @@ for (const vp of widths) {
     await expect(panel.locator('#invite-link-new')).toHaveValue(/\/join#\S+$/);
     await expect(invites).toHaveCount(2);
     await invites.nth(1).getByRole('button', { name: 'Revoke' }).click();
+    await expect(page.locator('#revoke-nobody')).toHaveText('Nobody joined through this invite.');
+    await page.locator('#revoke-sheet').getByRole('button', { name: 'Revoke', exact: true }).click();
+    await expect(page.locator('.toast')).toHaveText('Revoked. Nobody lost access.');
     await expect(invites.nth(1)).toContainText('revoked');
     await audited(request, 'invite.create', room.id);
     await audited(request, 'invite.revoke', room.id);

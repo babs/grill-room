@@ -126,12 +126,13 @@ func mb(n int64) string { return strconv.FormatFloat(float64(n)/(1<<20), 'f', 1,
 
 // CreateProfileRoom creates room id named name for profile profileID, which joins it as
 // displayName and becomes its first room admin (004-AC7, 004-AC8). The profile joins through an
-// invite of its own, inviteHash, whose token nobody holds. The guardrails are checked in the same
+// invite of its own, inviteHash, whose token nobody holds, and gets its shareable invite, link with
+// its hash linkHash (011-AC26). The guardrails are checked in the same
 // transaction as the insert, so two requests cannot both take the last room of a limit.
 // ErrCreationRefused, wrapped with the reason.
 //
 // With setup, the room holds the starter's copies instead of the Default persona (006-AC11).
-func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileID int64, displayName, inviteHash, tokenHash string, setup *RoomSetup) (*Room, error) {
+func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileID int64, displayName, inviteHash, tokenHash, link, linkHash string, setup *RoomSetup) (*Room, error) {
 	var r *Room
 	err := s.withTx(ctx, "create room", func(tx *sql.Tx) error {
 		v, err := instanceSettings(ctx, tx)
@@ -164,6 +165,9 @@ func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileI
 		// The creator's own seat: listed as their invite, revoking it lets them go like any other.
 		if _, err := tx.ExecContext(ctx, `UPDATE invites SET created_by = ? WHERE id = ?`, p.ID, inv); err != nil {
 			return fmt.Errorf("create room: %w", err)
+		}
+		if _, err := insertInvite(ctx, tx, id, linkHash, p.ID, link); err != nil {
+			return fmt.Errorf("create room: shareable invite: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO room_admins(room_id, profile_id, created_at) VALUES(?,?,?)`, id, profileID, now()); err != nil {
 			return fmt.Errorf("create room: %w", err)

@@ -69,6 +69,27 @@ async function api(method, path, body) {
 /** @param {unknown} err */
 const show = (err) => { if (signedIn.value) notice.value = /** @type {Error} */ (err).message; };
 
+// The room panel says what it did through a toast (011-AC20), in one region as on the room page: a
+// popover sits in the top layer, over a sheet still closing.
+const toasts = document.createElement('div');
+toasts.className = 'toasts';
+toasts.popover = 'manual';
+document.body.append(toasts);
+addEventListener('grill:toast', (e) => {
+  const t = document.createElement('p');
+  t.className = 'toast';
+  t.textContent = /** @type {CustomEvent<string>} */ (e).detail;
+  toasts.append(t);
+  // A region that only just appeared is often skipped by screen readers: admin.html's always is there.
+  const live = document.getElementById('toast-live');
+  if (live) live.textContent = t.textContent;
+  if (!toasts.matches(':popover-open')) toasts.showPopover();
+  setTimeout(() => {
+    t.remove();
+    if (!toasts.children.length) toasts.hidePopover();
+  }, 4000);
+});
+
 function Login() {
   const [token, setToken] = useState('');
   const [said, setSaid] = useState('');

@@ -55,7 +55,7 @@ test('audit view shows real admin actions, filters, and fits a phone', async ({ 
   const room = await (await request.post('/api/rooms', { headers: admin, data: { name } })).json();
   expect((await request.patch(`/api/rooms/${room.id}`, { headers: admin, data: { name: name + ' renamed' } })).status()).toBe(200);
   const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
-  expect((await request.delete(`/api/rooms/${room.id}/invites/${inv.id}`, { headers: admin })).status()).toBe(204);
+  expect((await request.delete(`/api/rooms/${room.id}/invites/${inv.id}`, { headers: admin })).status()).toBe(200);
   expect((await request.delete(`/api/rooms/${room.id}`, { headers: admin })).status()).toBe(204);
 
   const page = await (await browser.newContext()).newPage();

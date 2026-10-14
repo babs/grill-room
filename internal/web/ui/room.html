@@ -187,14 +187,13 @@
     <h2 id="invites-title">Invite people</h2>
     <button type="button" class="btn-icon btn-ghost close" aria-label="Close">✕</button>
   </div>
-  <p>Anyone holding an invite link can join and read the room.</p>
-  <button type="button" id="invite-create" class="btn-primary">Create an invite link</button>
-  <p id="invite-new" class="copy-row" hidden>
-    <input id="invite-link" readonly aria-label="New invite link">
-    <button type="button" id="invite-copy">Copy invite</button>
+  <p class="copy-row">
+    <input id="invite-link" readonly aria-label="Your invite link" placeholder="Getting your link…">
+    <button type="button" id="invite-copy" class="btn-primary" disabled>Copy</button>
   </p>
-  <h3>Your invites</h3>
-  <ul id="invite-list" class="rows"></ul>
+  <p class="hint">Anyone holding this link can join and read the room.</p>
+  <p id="invite-status" class="said error" role="status"></p>
+  <p><a href="#manage/invites" id="invite-manage">More links and revoking in Room settings › Invites</a></p>
 </dialog>
 <dialog id="notify" class="sheet" aria-labelledby="notify-title">
   <div class="sheet-head">

@@ -114,6 +114,7 @@ async function loadRoom() {
   // An appointment or a step-down changes who turns plugins on (Capabilities).
   renderPersonaSheet();
   renderParticipants();
+  showEmpty();
   // The room admin panel (admin/room-admin.js) renders from the same answer.
   window.grillRoom = data;
   window.dispatchEvent(new CustomEvent('grill:room', { detail: data }));
@@ -214,7 +215,6 @@ function addMessage(m) {
     refreshTimer = setTimeout(() => loadRoom().catch(console.error), 200);
   }
   messages.append(renderMessage(m));
-  if (m.kind !== 'system') showEmpty();
   if (pinned) messages.scrollTop = messages.scrollHeight;
   if (m.id === jumpTo) jump(m.id);
 }
@@ -605,6 +605,8 @@ $('msg-delete').addEventListener('click', () => { if (menuFor) deleteMessage(men
 
 // The Preact panels say what they did through a toast too (006-AC15).
 addEventListener('grill:toast', (e) => toast(e.detail));
+// A revoke from Room settings may have cut people off: People and the empty-chat card follow.
+addEventListener('grill:revoked', () => loadRoom().catch(console.error));
 
 // toast says what an action did, with at most one action of its own (005-AC39); onEnd runs when it
 // goes, undone or not.
@@ -717,10 +719,7 @@ for (const menu of document.querySelectorAll('.menu:not(#doc-menu, #person-menu,
 }
 for (const b of document.querySelectorAll('dialog .close')) b.addEventListener('click', () => b.closest('dialog').close());
 $('notify-open').addEventListener('click', () => $('notify').showModal());
-$('invite-open').addEventListener('click', () => {
-  $('invites').showModal();
-  loadInvites().catch(console.error);
-});
+$('invite-open').addEventListener('click', () => { openInvites(); });
 $('host-open').addEventListener('click', () => $('host-agent').showModal());
 $('docs-window-menu').addEventListener('click', (e) => {
   e.preventDefault();
@@ -809,57 +808,41 @@ for (const id of ['email-nudge-later', 'email-nudge-close']) {
   });
 }
 
-// Invites: a member creates links and revokes the ones they created; a room admin, who gets every
-// invite, manages the others from Manage.
-async function loadInvites() {
-  const res = await netFetch(api + '/invites');
-  if (!res.ok) return;
-  const invites = (await res.json()).filter((i) => !i.revoked_at && String(i.created_by) === myID);
-  $('invite-list').replaceChildren(...invites.map((inv) => {
-    const li = document.createElement('li');
-    const when = new Date(inv.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
-    const label = document.createElement('span');
-    label.textContent = 'Created ' + when;
-    const revoke = document.createElement('button');
-    revoke.type = 'button';
-    revoke.textContent = 'Revoke';
-    revoke.setAttribute('aria-label', 'Revoke the invite created ' + when);
-    revoke.addEventListener('click', () => {
-      sendJSON('DELETE', api + '/invites/' + inv.id).then(loadInvites).catch(console.error);
-    });
-    li.append(label, revoke);
-    return li;
-  }));
+// Invites (011-AC26): the popup and the empty chat's card show your one shareable link, which the
+// server makes on the first ask; extra links and revoking live in Room settings › Invites.
+const shareLink = () => sendJSON('POST', api + '/invites/share').then((inv) => inv && inv.url);
+function openInvites() {
+  $('invite-link').value = '';
+  $('invite-copy').disabled = true;
+  $('invite-status').textContent = '';
+  $('invites').showModal();
+  return shareLink().then((url) => {
+    if (!url) return;
+    $('invite-link').value = url;
+    $('invite-copy').disabled = false;
+  }).catch((err) => { $('invite-status').textContent = err.message; });
 }
-$('invite-create').addEventListener('click', () => {
-  sendJSON('POST', api + '/invites').then((inv) => {
-    if (!inv) return;
-    $('invite-link').value = inv.url;
-    $('invite-copy').textContent = 'Copy invite';
-    $('invite-new').hidden = false;
-    return loadInvites();
-  }).catch(console.error);
-});
-$('invite-copy').addEventListener('click', () => copyField($('invite-link'), $('invite-copy')));
+$('invite-copy').addEventListener('click', () => copyField($('invite-link')));
+$('invite-manage').addEventListener('click', () => $('invites').close());
 
-// The empty chat's card makes an invite and copies it in one press (005-AC34).
+// The empty chat's card copies the same link in one press (005-AC34); a refused clipboard opens
+// the popup on it.
 $('chat-invite').addEventListener('click', () => {
-  sendJSON('POST', api + '/invites').then((inv) => {
-    if (!inv) return;
-    return navigator.clipboard.writeText(inv.url).then(() => { $('chat-invite-status').textContent = 'Copied. Paste it to the people you invite.'; },
-      () => {
-        $('invite-link').value = inv.url;
-        $('invite-new').hidden = false;
-        $('invites').showModal();
-        $('invite-link').select();
-        loadInvites().catch(console.error);
-      });
-  }).catch((err) => { $('chat-invite-status').textContent = err.message; });
+  const b = $('chat-invite');
+  b.disabled = true;
+  $('chat-invite-status').textContent = '';
+  shareLink().then((url) => {
+    if (!url) return;
+    return navigator.clipboard.writeText(url).then(() => { $('chat-invite-status').textContent = 'Copied. Paste it to the people you invite.'; },
+      () => openInvites().then(() => $('invite-link').select()));
+  }).catch((err) => { $('chat-invite-status').textContent = err.message; }).finally(() => { b.disabled = false; });
 });
 
-// showEmpty shows the invite card while the chat holds only event lines.
+// showEmpty shows the invite card while nobody else has joined, whatever the chat holds (011-AC26):
+// the room's list holds only the participants whose invite is still valid, and self marks your
+// profile's other seats.
 function showEmpty() {
-  $('chat-empty').hidden = ended || docsMode || !!messages.querySelector('li.msg:not(.system)');
+  $('chat-empty').hidden = ended || docsMode || participants.some((p) => String(p.id) !== myID && !p.self);
 }
 
 // Documents. Text documents render in an iframe sandboxed without allow-same-origin: their
@@ -1629,8 +1612,6 @@ function connect() {
   // Listing on open, not before: the stream announces only changes made after it opened.
   es.onopen = () => {
     $('reconnecting').hidden = true;
-    // The history replays right after the stream opens: judge emptiness once it did.
-    setTimeout(showEmpty, 500);
     beat();
     loadDocuments().then(loadAnnotations).catch(console.error);
     loadPlugins().catch(console.error);

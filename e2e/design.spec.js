@@ -415,8 +415,7 @@ test('status strip and toasts', async ({ browser, request }) => {
 
   await alice.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   await menuItem(alice, 'Invite people');
-  await alice.getByRole('button', { name: 'Create an invite link' }).click();
-  await alice.getByRole('button', { name: 'Copy invite', exact: true }).click();
+  await alice.locator('#invites').getByRole('button', { name: 'Copy', exact: true }).click();
   await expect(alice.locator('#toasts .toast')).toHaveText('Copied');
   await expect(alice.locator('#toast-live')).toHaveText('Copied');
   await expect(alice.locator('#toast-live')).toHaveAttribute('role', 'status');

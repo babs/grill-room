@@ -169,7 +169,7 @@ func TestAdminViewsTakeTheSessionCookie(t *testing.T) {
 		{"PATCH", "/api/admin/rooms/" + room.ID, map[string]string{"name": "Renamed"}, http.StatusOK, ActionRoomRename},
 		{"PUT", "/api/admin/rooms/" + room.ID + "/quota", map[string]any{"quota_bytes": 1 << 20}, http.StatusNoContent, ActionRoomQuota},
 		{"POST", "/api/admin/rooms/" + room.ID + "/invites", nil, http.StatusCreated, ActionInviteCreate},
-		{"DELETE", "/api/admin/rooms/" + room.ID + "/invites/" + itoa(invs[0].ID), nil, http.StatusNoContent, ActionInviteRevoke},
+		{"DELETE", "/api/admin/rooms/" + room.ID + "/invites/" + itoa(invs[0].ID), nil, http.StatusOK, ActionInviteRevoke},
 		{"DELETE", "/api/admin/rooms/" + room.ID, nil, http.StatusNoContent, ActionRoomDelete},
 	}
 	for _, s := range steps {

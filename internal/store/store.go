@@ -8,7 +8,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go driver: keeps CGO_ENABLED=0 builds
@@ -50,6 +49,8 @@ type Invite struct {
 	// CreatedBy is the participant who created it; 0 for the admin.
 	CreatedBy int64      `json:"created_by,omitempty"`
 	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+	// Shareable marks its creator's shareable link (011-AC26); the token itself never leaves here.
+	Shareable bool `json:"shareable"`
 }
 
 // Participant is a guest who joined a room through an invite.
@@ -72,6 +73,8 @@ type Participant struct {
 	LastSeen *time.Time `json:"last_seen_at,omitempty"`
 	// PreviousName is the name before the latest rename (009-AC36). Set by Participants only.
 	PreviousName string `json:"previous_name,omitempty"`
+	// Self marks the caller's own seats in the room answer, so no profile id leaves (011-AC26).
+	Self bool `json:"self,omitempty"`
 }
 
 // Message is one line in a room.
@@ -810,6 +813,11 @@ CREATE TABLE recovery_links (
 CREATE INDEX recovery_links_profile ON recovery_links(profile_id);
 -- 011-AC8: the email nudge stays hidden until then, on every device of the profile.
 ALTER TABLE profiles ADD COLUMN email_nudge_until TEXT;
+`, `
+-- 011-AC26: a member's shareable invite keeps its token so the popup can show it again; NULL for
+-- every other invite. One valid one per member and room.
+ALTER TABLE invites ADD COLUMN link TEXT;
+CREATE UNIQUE INDEX invites_shareable ON invites(room_id, created_by) WHERE link IS NOT NULL AND revoked_at IS NULL;
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -1070,18 +1078,11 @@ func (s *Store) RenameRoom(ctx context.Context, roomID, name string, by *Partici
 // admin. ErrNotFound if the room does not exist, or createdBy is not in it with a valid invite: the
 // check and the insert are one statement, so a revoke cannot slip between them.
 func (s *Store) CreateInvite(ctx context.Context, roomID, tokenHash string, createdBy int64) (*Invite, error) {
-	inv := &Invite{RoomID: roomID, CreatedAt: time.Now().UTC(), CreatedBy: createdBy}
+	var inv *Invite
 	err := s.withTx(ctx, "create invite", func(tx *sql.Tx) error {
-		err := tx.QueryRowContext(ctx, `
-			INSERT INTO invites(room_id, token_hash, created_at, created_by) SELECT id, ?, ?, ? FROM rooms r WHERE r.id = ?
-			AND (? = 0 OR EXISTS (SELECT 1 FROM participants p JOIN invites i ON i.id = p.invite_id
-				WHERE p.id = ? AND p.room_id = r.id AND i.revoked_at IS NULL)) RETURNING id`,
-			tokenHash, inv.CreatedAt.Format(time.RFC3339Nano), nullID(createdBy), roomID, createdBy, createdBy).Scan(&inv.ID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
-		}
-		if err != nil {
-			return fmt.Errorf("create invite: %w", err)
+		var err error
+		if inv, err = insertInvite(ctx, tx, roomID, tokenHash, createdBy, ""); err != nil {
+			return err
 		}
 		return auditTx(ctx, tx, "", map[string]any{"invite": inv.ID})
 	})
@@ -1089,6 +1090,73 @@ func (s *Store) CreateInvite(ctx context.Context, roomID, tokenHash string, crea
 		return nil, err
 	}
 	return inv, nil
+}
+
+// insertInvite is CreateInvite in tx, storing link as the token of a shareable invite when not
+// empty. A shareable one the unique index refuses is ErrNotFound too: the caller looks again.
+func insertInvite(ctx context.Context, tx *sql.Tx, roomID, tokenHash string, createdBy int64, link string) (*Invite, error) {
+	inv := &Invite{RoomID: roomID, CreatedAt: time.Now().UTC(), CreatedBy: createdBy, Shareable: link != ""}
+	err := tx.QueryRowContext(ctx, `
+		INSERT INTO invites(room_id, token_hash, created_at, created_by, link) SELECT id, ?, ?, ?, ? FROM rooms r WHERE r.id = ?
+		AND (? = 0 OR EXISTS (SELECT 1 FROM participants p JOIN invites i ON i.id = p.invite_id
+			WHERE p.id = ? AND p.room_id = r.id AND i.revoked_at IS NULL))
+		ON CONFLICT(room_id, created_by) WHERE link IS NOT NULL AND revoked_at IS NULL DO NOTHING RETURNING id`,
+		tokenHash, inv.CreatedAt.Format(time.RFC3339Nano), nullID(createdBy), nullStr(link), roomID, createdBy, createdBy).Scan(&inv.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("create invite: %w", err)
+	}
+	return inv, nil
+}
+
+// ShareInvite returns participant by's shareable invite of room and its token, creating it with
+// link and its hash when by has none valid (011-AC26); created says which. ErrNotFound unless by is
+// a participant in room with a valid invite.
+func (s *Store) ShareInvite(ctx context.Context, roomID string, by int64, link, linkHash string) (inv *Invite, tok string, created bool, err error) {
+	if by == 0 {
+		// The super-admin has no shareable link: insertInvite would take 0 for it.
+		return nil, "", false, ErrNotFound
+	}
+	err = s.withTx(ctx, "share invite", func(tx *sql.Tx) error {
+		if inv, tok, err = shareable(ctx, tx, roomID, by); !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		inv, err = insertInvite(ctx, tx, roomID, linkHash, by, link)
+		if errors.Is(err, ErrNotFound) {
+			// Another request made it first, or by has no valid seat: either way, look again.
+			inv, tok, err = shareable(ctx, tx, roomID, by)
+			return err
+		}
+		if err != nil {
+			return err
+		}
+		tok, created = link, true
+		return auditTx(ctx, tx, "", map[string]any{"invite": inv.ID})
+	})
+	if err != nil {
+		return nil, "", false, err
+	}
+	return inv, tok, created, nil
+}
+
+// shareable returns by's valid shareable invite of room, provided by's own seat is valid.
+func shareable(ctx context.Context, tx *sql.Tx, roomID string, by int64) (*Invite, string, error) {
+	inv := &Invite{RoomID: roomID, CreatedBy: by, Shareable: true}
+	var created, link string
+	err := tx.QueryRowContext(ctx, `
+		SELECT s.id, s.created_at, s.link FROM invites s JOIN participants p ON p.id = s.created_by JOIN invites i ON i.id = p.invite_id
+		WHERE s.room_id = ? AND s.created_by = ? AND s.link IS NOT NULL AND s.revoked_at IS NULL AND i.revoked_at IS NULL`,
+		roomID, by).Scan(&inv.ID, &created, &link)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, "", ErrNotFound
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("shareable invite: %w", err)
+	}
+	inv.CreatedAt = parseTS(created)
+	return inv, link, nil
 }
 
 // Invite returns invite id of room; ErrNotFound if room has none.
@@ -1112,7 +1180,7 @@ func (s *Store) Invites(ctx context.Context, roomID string, createdBy int64) ([]
 // invites lists room's invites, narrowed to one id and to one creator when those are not 0.
 func (s *Store) invites(ctx context.Context, roomID string, id, createdBy int64) ([]Invite, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, room_id, created_at, COALESCE(created_by, 0), revoked_at FROM invites
+		SELECT id, room_id, created_at, COALESCE(created_by, 0), revoked_at, link IS NOT NULL FROM invites
 		WHERE room_id = ? AND (? = 0 OR id = ?) AND (? = 0 OR created_by = ?) ORDER BY id`, roomID, id, id, createdBy, createdBy)
 	if err != nil {
 		return nil, fmt.Errorf("query invites: %w", err)
@@ -1123,7 +1191,7 @@ func (s *Store) invites(ctx context.Context, roomID string, id, createdBy int64)
 		var inv Invite
 		var created string
 		var revoked sql.NullString
-		if err := rows.Scan(&inv.ID, &inv.RoomID, &created, &inv.CreatedBy, &revoked); err != nil {
+		if err := rows.Scan(&inv.ID, &inv.RoomID, &created, &inv.CreatedBy, &revoked, &inv.Shareable); err != nil {
 			return nil, fmt.Errorf("scan invite: %w", err)
 		}
 		inv.CreatedAt = parseTS(created)
@@ -1136,49 +1204,128 @@ func (s *Store) invites(ctx context.Context, roomID string, id, createdBy int64)
 	return out, rows.Err()
 }
 
-// RevokeInvite marks an invite revoked, with every invite created by someone who joined through a
-// revoked one: a member cut off must not walk back in through an invite they made. Idempotent.
-// Returns the ids of the invites it covers. ErrNotFound if inviteID is not in room.
-func (s *Store) RevokeInvite(ctx context.Context, roomID string, inviteID int64) ([]int64, error) {
-	var ids []int64
-	err := s.withTx(ctx, "revoke invite", func(tx *sql.Tx) error {
-		var err error
-		if ids, err = revokeInvite(ctx, tx, roomID, inviteID); err != nil {
-			return err
-		}
-		return auditTx(ctx, tx, "", map[string]any{"invite": inviteID, "revoked": ids})
-	})
-	return ids, err
+// RevokeSeat is a person a revoke concerns, by their seat in the invites it cuts (011-AC19).
+type RevokeSeat struct {
+	ParticipantID int64  `json:"participant_id"`
+	Name          string `json:"name"`
+	ProfileID     int64  `json:"-"`
+	Admin         bool   `json:"admin"`
 }
 
-func revokeInvite(ctx context.Context, tx *sql.Tx, roomID string, inviteID int64) ([]int64, error) {
-	rows, err := tx.QueryContext(ctx, `
-		WITH RECURSIVE gone(id) AS (
-			SELECT id FROM invites WHERE id = ? AND room_id = ?
-			UNION
-			SELECT i.id FROM invites i JOIN participants p ON p.id = i.created_by JOIN gone g ON g.id = p.invite_id
-		)
-		UPDATE invites SET revoked_at = COALESCE(revoked_at, ?) WHERE id IN gone RETURNING id`, inviteID, roomID, now())
-	if err != nil {
-		return nil, fmt.Errorf("revoke invite %d: %w", inviteID, err)
-	}
-	defer rows.Close()
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("revoke invite %d: %w", inviteID, err)
+// RevokePlan is what revoking an invite does: Invites, sorted, are the ones it cuts; Lose the
+// people it cuts off; Keep the people with a seat in Invites who keep access through another one.
+type RevokePlan struct {
+	Invites    []int64
+	Lose, Keep []RevokeSeat
+}
+
+// inviteCut names, for invite ?1 of room ?2, its chain (the invite and every invite made by someone
+// who joined through one in the chain) and cut, the chain's invites not yet revoked. The revoke and
+// its preview both start with it, so the preview cannot drift from what the revoke does (011-AC20).
+const inviteCut = `WITH RECURSIVE chain(id) AS (
+		SELECT id FROM invites WHERE id = ?1 AND room_id = ?2
+		UNION
+		SELECT i.id FROM invites i JOIN participants p ON p.id = i.created_by JOIN chain c ON c.id = p.invite_id
+	), cut(id) AS (SELECT id FROM invites WHERE id IN chain AND revoked_at IS NULL) `
+
+// RevokePreview returns what revoking invite inviteID of room would do now, writing nothing
+// (011-AC19). ErrNotFound if inviteID is not in room.
+func (s *Store) RevokePreview(ctx context.Context, roomID string, inviteID int64) (*RevokePlan, error) {
+	var plan *RevokePlan
+	err := s.withTx(ctx, "revoke preview", func(tx *sql.Tx) error {
+		var err error
+		plan, err = revokePlan(ctx, tx, roomID, inviteID)
+		return err
+	})
+	return plan, err
+}
+
+// RevokeInvite marks an invite revoked, with every invite created by someone who joined through a
+// revoked one: a member cut off must not walk back in through an invite they made. Idempotent: a
+// second call cuts nothing. Returns what it did, read in its own transaction so a joiner arriving
+// after a preview is counted (011-AC20). ErrNotFound if inviteID is not in room.
+func (s *Store) RevokeInvite(ctx context.Context, roomID string, inviteID int64) (*RevokePlan, error) {
+	var plan *RevokePlan
+	err := s.withTx(ctx, "revoke invite", func(tx *sql.Tx) error {
+		var err error
+		if plan, err = revokePlan(ctx, tx, roomID, inviteID); err != nil {
+			return err
 		}
-		ids = append(ids, id)
+		if _, err := tx.ExecContext(ctx, inviteCut+`UPDATE invites SET revoked_at = ?3 WHERE id IN cut`, inviteID, roomID, now()); err != nil {
+			return fmt.Errorf("revoke invite %d: %w", inviteID, err)
+		}
+		return auditTx(ctx, tx, "", map[string]any{"invite": inviteID, "revoked": plan.Invites})
+	})
+	return plan, err
+}
+
+func revokePlan(ctx context.Context, tx *sql.Tx, roomID string, inviteID int64) (*RevokePlan, error) {
+	plan := &RevokePlan{Invites: []int64{}, Lose: []RevokeSeat{}, Keep: []RevokeSeat{}}
+	found, err := cutInvites(ctx, tx, roomID, inviteID, plan)
+	if err != nil {
+		return nil, fmt.Errorf("revoke plan %d: %w", inviteID, err)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("revoke invite %d: %w", inviteID, err)
-	}
-	if len(ids) == 0 {
+	if !found {
 		return nil, ErrNotFound
 	}
-	slices.Sort(ids)
-	return ids, nil
+	// A person is a profile, or a seat without one; they keep access through any other valid seat.
+	rows, err := tx.QueryContext(ctx, inviteCut+`
+		SELECT p.id, p.name, COALESCE(p.profile_id, 0),
+			EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = p.room_id AND a.profile_id = p.profile_id),
+			EXISTS (SELECT 1 FROM participants q JOIN invites i ON i.id = q.invite_id WHERE q.room_id = p.room_id
+				AND q.profile_id = p.profile_id AND i.revoked_at IS NULL AND i.id NOT IN cut)
+		FROM participants p WHERE p.invite_id IN cut ORDER BY p.id`, inviteID, roomID)
+	if err != nil {
+		return nil, fmt.Errorf("revoke plan %d: %w", inviteID, err)
+	}
+	defer rows.Close()
+	seen := map[int64]bool{}
+	for rows.Next() {
+		var p RevokeSeat
+		var keeps bool
+		if err := rows.Scan(&p.ParticipantID, &p.Name, &p.ProfileID, &p.Admin, &keeps); err != nil {
+			return nil, fmt.Errorf("revoke plan %d: %w", inviteID, err)
+		}
+		person := -p.ParticipantID
+		if p.ProfileID != 0 {
+			person = p.ProfileID
+		}
+		if seen[person] {
+			continue
+		}
+		seen[person] = true
+		if keeps {
+			plan.Keep = append(plan.Keep, p)
+		} else {
+			plan.Lose = append(plan.Lose, p)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("revoke plan %d: %w", inviteID, err)
+	}
+	return plan, nil
+}
+
+// cutInvites fills plan.Invites with the invites a revoke cuts, and reports whether inviteID is in room.
+func cutInvites(ctx context.Context, tx *sql.Tx, roomID string, inviteID int64, plan *RevokePlan) (bool, error) {
+	rows, err := tx.QueryContext(ctx, inviteCut+`SELECT id, id IN cut FROM chain ORDER BY id`, inviteID, roomID)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var id int64
+		var cut bool
+		if err := rows.Scan(&id, &cut); err != nil {
+			return false, err
+		}
+		found = true
+		if cut {
+			plan.Invites = append(plan.Invites, id)
+		}
+	}
+	return found, rows.Err()
 }
 
 // JoinProfile says which profile a join attaches the participant to. ID names an existing one.

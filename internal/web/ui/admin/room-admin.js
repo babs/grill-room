@@ -6,7 +6,7 @@ import { render } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { html } from 'htm/preact';
-import { RoomPanel, Rename, TabBar, fetchJSON, roomTabs } from './room-panel.js';
+import { RoomPanel, Rename, TabBar, Invites, fetchJSON, roomTabs } from './room-panel.js';
 import { Editor } from './starters.js';
 import { PluginsTab, mountReview } from './plugins.js';
 
@@ -32,8 +32,8 @@ addEventListener('grill:stt', (e) => { sttGlossary.value = /** @type {CustomEven
 const allTabs = [...Object.entries(roomTabs).slice(0, 3), ['personas', 'Personas'], ['skills', 'Skills'], ['plugins', 'Plugins'],
   ['documents', 'Documents'], ['export', roomTabs.export], ['glossary', 'Words to recognise']];
 // The tabs a plain member gets; a room admin gets them all. Every member reads the room's plugins
-// (009-AC5).
-const memberTabs = ['plugins', 'glossary'];
+// (009-AC5) and manages their own invites (011-AC27).
+const memberTabs = ['invites', 'plugins', 'glossary'];
 
 // tab is the open tab from #manage/<tab>, '' when the sheet is closed.
 /** @param {string} hash */
@@ -83,7 +83,7 @@ function Manage({ data, tab, tabs }) {
   return html`
     <p class="hint">You are a room admin. The instance's audit log records every action here.</p>
     <p class="said" role="alert">${said}</p>
-    ${room && html`<${RoomPanel} key=${room.id} room=${room} base=${base} api=${fetchJSON} show=${show} reload=${load} byName=${byName}
+    ${room && html`<${RoomPanel} key=${room.id} room=${room} base=${base} api=${fetchJSON} show=${show} reload=${load} byName=${byName} me=${data.me.id}
       tab=${tab} tabs=${tabs} href=${(/** @type {string} */ id) => '#manage/' + id} close=${() => location.assign('/profile')} label="Room settings"
       general=${html`<h3>Save as starter</h3>
         <p class="hint">Keep this room's agenda, AI personas and skills, and the documents and plugins you pick, to start new rooms the same way.</p>
@@ -184,6 +184,9 @@ function STTGlossary({ data }) {
 }
 
 function App() {
+  const [said, setSaid] = useState('');
+  /** @param {unknown} err */
+  const show = (err) => setSaid(/** @type {Error} */ (err).message);
   const data = roomData.value;
   if (!tab.value || !data) return null;
   const tabs = sttGlossary.value ? allTabs : allTabs.filter(([id]) => id !== 'glossary');
@@ -192,8 +195,12 @@ function App() {
   // A link to an admin's tab, or to the glossary while no engine reads it, opens the first one.
   const t = mine.some(([id]) => id === tab.value) ? tab.value : mine[0][0];
   const base = '/api/rooms/' + encodeURIComponent(data.room.id);
+  /** @param {number} id */
+  const byName = (id) => data.participants.find((p) => p.id === id)?.name || 'a former participant';
   return html`<${TabBar} tabs=${mine} active=${t} href=${(/** @type {string} */ id) => '#manage/' + id} label="Room settings"/>
+    ${said && html`<p class="said" role="alert">${said}</p>`}
     <div class="tab-panel" id=${'panel-' + t}>${t === 'glossary' && html`<${STTGlossary} data=${data}/>`}
+      ${t === 'invites' && html`<${Invites} base=${base} api=${fetchJSON} show=${show} byName=${byName} me=${data.me.id}/>`}
       ${t === 'plugins' && html`<${PluginsTab} base=${base} admin=${false} host=${isHost(data)} personas=${agentState.value?.personas || []}/>`}</div>`;
 }
 

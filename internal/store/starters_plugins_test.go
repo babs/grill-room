@@ -59,7 +59,7 @@ func TestStarterPlugins(t *testing.T) {
 	// is created all the same (006-AC13).
 	left := func(room string, set *RoomSetup, want string, kept int) {
 		t.Helper()
-		if _, err := s.CreateProfileRoom(ctx, room, "R", alice.ProfileID, "Ali", "inv-"+room, "tok-"+room, set); err != nil {
+		if _, err := s.CreateProfileRoom(ctx, room, "R", alice.ProfileID, "Ali", "inv-"+room, "tok-"+room, "lnk-"+room, "lnkh-"+room, set); err != nil {
 			t.Fatalf("%s: %v", room, err)
 		}
 		ps, _ := s.RoomPlugins(ctx, room)
@@ -74,7 +74,7 @@ func TestStarterPlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	left("small", setup(16), "The room starts without the starter's plugin babs: it would take the room past its quota.", 0)
-	if _, err := s.CreateProfileRoom(ctx, "over", "R", alice.ProfileID, "Ali", "inv-over", "tok-over", setup(1<<20)); !errors.Is(err, ErrCreationRefused) ||
+	if _, err := s.CreateProfileRoom(ctx, "over", "R", alice.ProfileID, "Ali", "inv-over", "tok-over", "lnk-over", "lnkh-over", setup(1<<20)); !errors.Is(err, ErrCreationRefused) ||
 		!strings.Contains(err.Error(), "storage quota") {
 		t.Fatalf("a kept plugin past the storage quota: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestStarterPlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, room := range []string{"held", "free"} {
-		if _, err := s.CreateProfileRoom(ctx, room, "R", alice.ProfileID, "Ali", "inv-"+room, "tok-"+room, setup(1<<20)); err != nil {
+		if _, err := s.CreateProfileRoom(ctx, room, "R", alice.ProfileID, "Ali", "inv-"+room, "tok-"+room, "lnk-"+room, "lnkh-"+room, setup(1<<20)); err != nil {
 			t.Fatal(err)
 		}
 		ps, _ := s.RoomPlugins(ctx, room)

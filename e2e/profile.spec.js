@@ -88,7 +88,8 @@ test('profile across rooms and devices', async ({ browser, request }) => {
 
 // 002-AC6 moved to room-admins.spec.js: renaming is a room admin's since 004-AC8.
 
-// 002-AC7: a member creates an invite, a guest joins through it, the member revokes it.
+// 002-AC7, 011-AC26, 011-AC27: a member shares their link, a guest joins through it, the member
+// revokes it from Room settings › Invites.
 test('member invites and revokes', async ({ browser, request }) => {
   const room = await newRoom(request, 'Invites');
   const alice = await (await browser.newContext()).newPage();
@@ -96,20 +97,25 @@ test('member invites and revokes', async ({ browser, request }) => {
   await join(alice, await invitePath(request, room.id), 'Alice');
   await join(bob, await invitePath(request, room.id), 'Bob');
   await menuItem(alice, 'Invite people');
-  await alice.getByRole('button', { name: 'Create an invite link' }).click();
-  await expect(alice.locator('#invite-link')).toHaveValue(/\/join#[A-Z0-9]+$/);
+  await expect(alice.locator('#invite-link')).toHaveValue(/\/join#[A-Za-z0-9_-]+$/);
   const url = await alice.locator('#invite-link').inputValue();
-  await expect(alice.locator('#invite-list li')).toHaveCount(1);
 
   const carol = await (await browser.newContext()).newPage();
   await join(carol, new URL(url).pathname + new URL(url).hash, 'Carol');
   await expect(alice.locator('#participants')).toContainText('Carol');
 
-  // Bob sees only his own invites: none.
+  // Bob's link is his own.
   await menuItem(bob, 'Invite people');
-  await expect(bob.locator('#invite-list li')).toHaveCount(0);
+  await expect(bob.locator('#invite-link')).toHaveValue(/\/join#/);
+  expect(await bob.locator('#invite-link').inputValue()).not.toBe(url);
 
-  await alice.locator('#invite-list').getByRole('button', { name: /Revoke/ }).click();
-  await expect(alice.locator('#invite-list li')).toHaveCount(0);
+  await alice.locator('#invite-manage').click();
+  const rows = alice.locator('#manage #invites-all tbody tr');
+  await expect(rows).toHaveCount(1);
+  await rows.getByRole('button', { name: 'Revoke' }).click();
+  await expect(alice.locator('#revoke-lose')).toHaveText('Carol');
+  await alice.locator('#revoke-sheet').getByRole('button', { name: 'Revoke', exact: true }).click();
+  await expect(alice.locator('#toasts .toast')).toHaveText('Revoked. Carol lost access.');
+  await expect(rows).toContainText('revoked');
   await expect(carol.locator('#banner')).toHaveText('Your access to this room has ended.');
 });

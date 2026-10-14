@@ -9,7 +9,9 @@ import { html } from 'htm/preact';
  * @typedef {{id: string, name: string, created_at: string, last_activity: string, participants: number, personas: number,
  *   host_participant_id?: number, quota_bytes: number, quota: number, used: number, host_online: boolean, volume: Volume,
  *   created_from?: {title: string, version: number}, private_plugins?: string[]}} Room
- * @typedef {{id: number, created_at: string, created_by?: number, revoked_at?: string}} Invite
+ * @typedef {{id: number, created_at: string, created_by?: number, revoked_at?: string, shareable?: boolean}} Invite
+ * @typedef {{participant_id: number, name: string, admin: boolean, you: boolean}} Person
+ * @typedef {{id: number, invites: number[], lose: Person[], keep: Person[]}} Preview
  * @typedef {(method: string, path: string, body?: unknown) => Promise<any>} Api
  */
 
@@ -82,17 +84,17 @@ export const roomTabs = { general: 'General', invites: 'Invites', admins: 'Admin
  * the quota. tabs and href come from the page; children fill the tabs not built in here. byName
  * names an invite's creator.
  * @param {{room: Room, base: string, api: Api, show: (err: unknown) => void, reload: () => void, close: () => void,
- *   tab: string, tabs: string[][], href: (id: string) => string, setQuota?: boolean, byName?: (id: number) => string, label?: string,
+ *   tab: string, tabs: string[][], href: (id: string) => string, setQuota?: boolean, byName?: (id: number) => string, me?: number, label?: string,
  *   general?: import('preact').ComponentChildren, children?: import('preact').ComponentChildren}} props
  */
-export function RoomPanel({ room, base, api, show, reload, close, tab, tabs, href, setQuota, byName, label = 'Manage', general, children }) {
+export function RoomPanel({ room, base, api, show, reload, close, tab, tabs, href, setQuota, byName, me, label = 'Manage', general, children }) {
   return html`
     <section id="room-panel" aria-label=${label + ' ' + room.name}>
       <h2>${room.name}</h2>
       <${TabBar} tabs=${tabs} active=${tab} href=${href} label=${label + ' ' + room.name}/>
       <div class="tab-panel" id=${'panel-' + tab}>
         ${tab === 'general' ? html`<${General} room=${room} base=${base} api=${api} show=${show} reload=${reload} close=${close} setQuota=${setQuota}/>${general}`
-          : tab === 'invites' ? html`<${Invites} base=${base} api=${api} show=${show} byName=${byName}/>`
+          : tab === 'invites' ? html`<${Invites} base=${base} api=${api} show=${show} byName=${byName} me=${me}/>`
           : tab === 'export' ? html`<${Export} base=${base} room=${room}/>`
           : children}
       </div>
@@ -143,26 +145,113 @@ function General({ room, base, api, show, reload, close, setQuota }) {
     </form>`;
 }
 
-/** @param {{base: string, api: Api, show: (err: unknown) => void, byName?: (id: number) => string}} props */
-function Invites({ base, api, show, byName }) {
+/** @param {string} text */
+const toast = (text) => dispatchEvent(new CustomEvent('grill:toast', { detail: text }));
+
+/**
+ * Invites lists the room's invites, every one for an admin and a member's own for a member
+ * (011-AC27); me marks the viewer's shareable link. A revoke asks first in RevokeSheet (011-AC19).
+ * @param {{base: string, api: Api, show: (err: unknown) => void, byName?: (id: number) => string, me?: number}} props
+ */
+export function Invites({ base, api, show, byName, me }) {
   const [invites, setInvites] = useState(/** @type {Invite[] | null} */ (null));
   const [link, setLink] = useState('');
+  const [making, setMaking] = useState(false);
+  const [asking, setAsking] = useState(0);
+  const [preview, setPreview] = useState(/** @type {Preview | null} */ (null));
   const load = () => api('GET', base + '/invites').then(setInvites).catch(show);
   useEffect(() => { load(); }, [base]);
-  const invite = () => api('POST', base + '/invites').then((/** @type {{url: string}} */ i) => { setLink(i.url); load(); }).catch(show);
+  const invite = () => {
+    setMaking(true);
+    api('POST', base + '/invites').then((/** @type {{url: string}} */ i) => { setLink(i.url); load(); }).catch(show).finally(() => setMaking(false));
+  };
+  const copy = () => navigator.clipboard.writeText(link).then(() => toast('Copied'),
+    () => /** @type {HTMLInputElement | null} */ (document.getElementById('invite-link-new'))?.select());
   /** @param {Invite} i */
-  const revoke = (i) => api('DELETE', `${base}/invites/${i.id}`).then(load).catch(show);
+  const ask = (i) => {
+    setAsking(i.id);
+    api('GET', `${base}/invites/${i.id}/revoke-preview`).then((/** @type {Omit<Preview, 'id'>} */ p) => setPreview({ ...p, id: i.id }))
+      .catch(show).finally(() => setAsking(0));
+  };
   /** @param {Invite} i */
   const by = (i) => (!i.created_by ? 'admin' : byName ? byName(i.created_by) : 'participant #' + i.created_by);
+  /** @param {Invite} i */
+  const mark = (i) => (!i.shareable ? '' : i.created_by === me ? 'Your shareable link' : 'shareable');
   return html`
-    <div class="row"><button type="button" class="btn-primary" onClick=${invite}>New invite link</button></div>
-    ${link && html`<label class="link">Invite link, shown once<input id="invite-link-new" readonly value=${link}/></label>`}
-    ${invites && html`<div class="scroll"><table id="invites-all" class="cards">
+    <div class="row"><button type="button" class="btn-primary" disabled=${making} onClick=${invite}>New invite link</button></div>
+    ${link && html`<div class="row"><label class="link">Invite link, shown once<input id="invite-link-new" readonly value=${link}/></label>
+      <button type="button" class="btn-secondary" id="invite-link-copy" onClick=${copy}>Copy</button></div>`}
+    ${invites && (invites.length ? html`<div class="scroll"><table id="invites-all" class="cards">
       <thead><tr><th>Invite</th><th>Created</th><th>By</th><th>State</th><th></th></tr></thead>
-      <tbody>${invites.map((i) => html`<tr id=${'invite-' + i.id}><td>#${i.id}</td><td data-label="Created">${when(i.created_at)}</td>
+      <tbody>${invites.map((i) => html`<tr id=${'invite-' + i.id}><td>#${i.id}${mark(i) && html` <span class="badge">${mark(i)}</span>`}</td>
+        <td data-label="Created">${when(i.created_at)}</td>
         <td data-label="By">${by(i)}</td><td data-label="State">${i.revoked_at ? 'revoked' : 'valid'}</td>
-        <td>${!i.revoked_at && html`<button type="button" class="btn-secondary" onClick=${() => revoke(i)}>Revoke</button>`}</td></tr>`)}</tbody>
-    </table></div>`}`;
+        <td>${!i.revoked_at && html`<button type="button" class="btn-secondary" disabled=${asking === i.id} onClick=${() => ask(i)}>Revoke</button>`}</td></tr>`)}</tbody>
+    </table></div>`
+      : html`<p class="empty" id="invites-empty">No invite links yet. New invite link makes one to share.</p>`)}
+    ${preview && html`<${RevokeSheet} key=${preview.id} preview=${preview} base=${base} api=${api} done=${() => { setPreview(null); load(); }}/>`}`;
+}
+
+/**
+ * RevokeSheet confirms a revoke with who loses access and who keeps it (011-AC19), then says who
+ * the revoke cut, from its answer: the state may have moved since the preview (011-AC20).
+ * @param {{preview: Preview, base: string, api: Api, done: () => void}} props
+ */
+function RevokeSheet({ preview, base, api, done }) {
+  const ref = useRef(/** @type {HTMLDialogElement | null} */ (null));
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState('');
+  // inflight, unlike busy, is current inside the close handler of the render that sent the DELETE.
+  const inflight = useRef(false);
+  useEffect(() => { ref.current?.showModal(); }, []);
+  // A revoke in flight keeps the sheet open: its error would have nowhere to show.
+  const close = () => { if (!busy) ref.current?.close(); };
+  // A second Escape closes a dialog whatever cancel does: reopen it until the answer comes.
+  const closed = () => {
+    if (inflight.current) ref.current?.showModal();
+    else done();
+  };
+  const revoke = () => {
+    inflight.current = true;
+    setBusy(true);
+    setSaid('');
+    api('DELETE', `${base}/invites/${preview.id}`).then((/** @type {{lost: {name: string}[]}} */ r) => {
+      inflight.current = false;
+      const lost = (r.lost || []).map((p) => p.name);
+      toast(lost.length ? `Revoked. ${new Intl.ListFormat('en').format(lost)} lost access.` : 'Revoked. Nobody lost access.');
+      // The room page reloads its people and its empty-chat card (011-AC20).
+      dispatchEvent(new CustomEvent('grill:revoked'));
+      ref.current?.close();
+    }).catch((/** @type {Error} */ err) => {
+      inflight.current = false;
+      setSaid(err.message);
+      setBusy(false);
+    });
+  };
+  /** @param {MouseEvent} e */
+  const outside = (e) => {
+    const d = /** @type {HTMLDialogElement} */ (e.currentTarget);
+    const r = d.getBoundingClientRect();
+    if (!busy && e.target === d && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) d.close();
+  };
+  /** @param {Person[]} people @param {string} id */
+  const list = (people, id) => html`<ul id=${id}>${people.map((p) => html`<li key=${p.participant_id}>${p.name}
+    ${p.admin && html` <span class="badge role">admin</span>`}${p.you && html` <span class="badge">you</span>`}</li>`)}</ul>`;
+  const chained = preview.invites.length - 1;
+  return html`<dialog ref=${ref} id="revoke-sheet" class="sheet full" aria-labelledby="revoke-title" onClose=${closed} onClick=${outside}
+    onCancel=${(/** @type {Event} */ e) => { if (busy) e.preventDefault(); }}>
+    <div class="sheet-head"><h2 id="revoke-title">Revoke this invite?</h2>
+      <button type="button" class="btn-icon btn-ghost" aria-label="Close" disabled=${busy} onClick=${close}>✕</button></div>
+    ${preview.lose.length > 0 && html`<p>These people lose access:</p>${list(preview.lose, 'revoke-lose')}`}
+    ${preview.keep.length > 0 && html`<p>Keep access through another invite:</p>${list(preview.keep, 'revoke-keep')}`}
+    ${!preview.lose.length && !preview.keep.length && html`<p id="revoke-nobody">Nobody joined through this invite.</p>`}
+    ${chained > 0 && html`<p id="revoke-chain">Also revokes ${chained} ${chained > 1 ? 'invites' : 'invite'} made by people who joined through it.</p>`}
+    <p class="said error" role="alert">${said}</p>
+    <div class="actions">
+      <button type="button" class="btn-secondary" disabled=${busy} onClick=${close}>Cancel</button>
+      <button type="button" class="btn-danger" disabled=${busy} onClick=${revoke}>Revoke</button>
+    </div>
+  </dialog>`;
 }
 
 /**

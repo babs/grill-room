@@ -133,10 +133,11 @@ func TestRoomAdmins(t *testing.T) {
 	if ov := decodeJSON[roomOverview](t, b); code != http.StatusOK || ov.ID != room.ID || ov.Participants != 3 || ov.Quota != testOptions.MaxRoomBytes || ov.Volume.Transcripts == 0 {
 		t.Fatalf("overview: %d %s", code, b)
 	}
-	if _, b := alice.do(t, "GET", path+"/invites", nil); len(decodeJSON[[]store.Invite](t, b)) != 4 {
+	// Four, plus alice's shareable link made with the room (011-AC26).
+	if _, b := alice.do(t, "GET", path+"/invites", nil); len(decodeJSON[[]store.Invite](t, b)) != 5 {
 		t.Fatalf("every invite: %s", b)
 	}
-	if code, b := alice.do(t, "DELETE", fmt.Sprintf("%s/invites/%d", path, bobInvite.ID), nil); code != http.StatusNoContent {
+	if code, b := alice.do(t, "DELETE", fmt.Sprintf("%s/invites/%d", path, bobInvite.ID), nil); code != http.StatusOK {
 		t.Fatalf("revoke bob's invite: %d %s", code, b)
 	}
 	if code, b := alice.do(t, "PATCH", path, map[string]string{"name": "Pricing v2"}); code != http.StatusOK {
@@ -164,7 +165,7 @@ func TestRoomAdmins(t *testing.T) {
 	}
 	admins("Alice", "Bob")
 	// Bob, now a room admin, lists every invite and may remove Alice.
-	if _, b := bob.do(t, "GET", path+"/invites", nil); len(decodeJSON[[]store.Invite](t, b)) != 4 {
+	if _, b := bob.do(t, "GET", path+"/invites", nil); len(decodeJSON[[]store.Invite](t, b)) != 5 { // alice's shareable link included (011-AC26)
 		t.Fatalf("bob's view as an admin: %s", b)
 	}
 	if code, _ := bob.do(t, "DELETE", fmt.Sprintf("%s/admins/%d", path, me.ID), nil); code != http.StatusNoContent {

@@ -272,7 +272,7 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 		t.Fatalf("rename: %d %s", code, b)
 	}
 	inv := e.createInvite(t, room.ID)
-	if code, _ := e.do(t, "DELETE", fmt.Sprintf("/api/rooms/%s/invites/%d", room.ID, inv.ID), e.admin, nil); code != http.StatusNoContent {
+	if code, _ := e.do(t, "DELETE", fmt.Sprintf("/api/rooms/%s/invites/%d", room.ID, inv.ID), e.admin, nil); code != http.StatusOK {
 		t.Fatalf("revoke: %d", code)
 	}
 

@@ -25,13 +25,13 @@ test('glossary tab and model credit follow the workers', async ({ browser, reque
   await expect(bob.locator('#stt-credit')).toHaveAttribute('hidden', '');
 
   // parakeet reads none: no tab for anyone, and the credit. A plain member keeps Room settings
-  // for the plugins (009-AC5), where a stale glossary link lands.
+  // for their invites (011-AC27) and the plugins (009-AC5); a stale glossary link lands on the first.
   for (const st of [{ engines: ['parakeet'] }, { engines: [], available: false }]) {
     await playSTT(bob, room.id, st);
     await expect(bob.locator('#more-menu #manage-open')).not.toHaveAttribute('hidden');
     await bob.goto(`/r/${room.id}#manage/glossary`);
-    await expect(bob.locator('#manage #tab-plugins')).toHaveAttribute('aria-current', 'page');
-    await expect(tabs(bob)).toHaveCount(1);
+    await expect(bob.locator('#manage #tab-invites')).toHaveAttribute('aria-current', 'page');
+    await expect(tabs(bob)).toHaveCount(2);
     await expect(bob.locator('#stt-glossary')).toHaveCount(0);
     if (st.engines.includes('parakeet')) await expect(bob.locator('#stt-credit')).not.toHaveAttribute('hidden');
     else await expect(bob.locator('#stt-credit')).toHaveAttribute('hidden', '');

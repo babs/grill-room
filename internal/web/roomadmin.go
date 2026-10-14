@@ -239,7 +239,8 @@ func (s *Server) createProfileRoom(w http.ResponseWriter, r *http.Request) {
 		details["starter"] = setup.From
 	}
 	ctx := store.WithAudit(r.Context(), e, details)
-	room, err := s.bus.Store.CreateProfileRoom(ctx, id, name, p.ID, display, HashToken(NewToken()), HashToken(NewToken()), setup)
+	link := NewToken()
+	room, err := s.bus.Store.CreateProfileRoom(ctx, id, name, p.ID, display, HashToken(NewToken()), HashToken(NewToken()), link, HashToken(link), setup)
 	switch {
 	case errors.Is(err, store.ErrCreationRefused):
 		httpError(w, http.StatusForbidden, err.Error())

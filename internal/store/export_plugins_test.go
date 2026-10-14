@@ -207,7 +207,7 @@ func TestExportImportPlugins(t *testing.T) {
 	}
 	_, sm, _ := s.StarterVersion(ctx, st.ID, 0, prof.ProfileID)
 	sf, _ := s.StarterFiles(ctx, st.ID, st.Version)
-	if _, err := s.CreateProfileRoom(ctx, "third", "R", prof.ProfileID, "Pat", "inv-3", "tok-3", &RoomSetup{From: &Provenance{Title: sm.Title, Version: 1},
+	if _, err := s.CreateProfileRoom(ctx, "third", "R", prof.ProfileID, "Pat", "inv-3", "tok-3", "lnk-3", "lnkh-3", &RoomSetup{From: &Provenance{Title: sm.Title, Version: 1},
 		Personas: sm.Personas, Plugins: sm.Plugins, Files: sf, Chain: sm.Chain, UploadQuota: 1 << 20}); err != nil {
 		t.Fatal(err)
 	}

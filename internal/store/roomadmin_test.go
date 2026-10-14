@@ -12,7 +12,7 @@ import (
 // createFor creates room id for the profile of p, joining as name.
 func createFor(t *testing.T, s *Store, id string, p *Participant, name string) (*Room, error) {
 	t.Helper()
-	return s.CreateProfileRoom(t.Context(), id, "Room "+id, p.ProfileID, name, "inv-"+id, "tok-"+id, nil)
+	return s.CreateProfileRoom(t.Context(), id, "Room "+id, p.ProfileID, name, "inv-"+id, "tok-"+id, "lnk-"+id, "lnkh-"+id, nil)
 }
 
 // 004-AC7 004-AC8: a profile's room has it as a participant and its first room admin, under an
@@ -29,8 +29,9 @@ func TestCreateProfileRoom(t *testing.T) {
 	if err != nil || len(ps) != 1 || ps[0].Name != "Ali" || ps[0].ProfileID != alice.ProfileID || !ps[0].Admin {
 		t.Fatalf("participants %+v %v", ps, err)
 	}
-	if invs, _ := s.Invites(ctx, "mine", ps[0].ID); len(invs) != 1 {
-		t.Fatalf("own invite %+v", invs)
+	// 011-AC26: the seat's own invite, then the creator's shareable link, made with the room.
+	if invs, _ := s.Invites(ctx, "mine", ps[0].ID); len(invs) != 2 || invs[0].Shareable || !invs[1].Shareable {
+		t.Fatalf("own invites %+v", invs)
 	}
 	if uuid, err := s.RoomAdmin(ctx, "mine", alice.ProfileID); err != nil || !uuidRe.MatchString(uuid) {
 		t.Fatalf("room admin %q %v", uuid, err)

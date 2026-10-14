@@ -121,7 +121,7 @@ dialog#manage { width: min(64rem, calc(100vw - 1rem)); min-height: min(36rem, ca
 .sheet h2 { font-size: var(--fs-lg); }
 .sheet > label, .sheet details label { display: flex; flex-direction: column; gap: var(--sp-1); margin: var(--sp-2) 0; font-size: var(--fs-sm); font-weight: 600; }
 .sheet > label:has(> input[type=checkbox]) { flex-direction: row; font-weight: 400; }
-#invite-new { margin: var(--sp-3) 0; }
+#invites .copy-row { margin: var(--sp-3) 0; }
 #host-oneliner, .host-sha { font-family: var(--mono); font-size: var(--fs-xs); word-break: break-all; white-space: pre-wrap; }
 #host-oneliner { padding: var(--sp-2); background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-sm); }
 .host-sha { color: var(--text-muted); }
