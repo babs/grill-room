@@ -1,6 +1,6 @@
 # 006 — Room starters
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-10-13
 **Context**: specs 002, 004, 005 and 008 (Room settings tabs, document rename, the design rules and their `⋯` menus, sheets and icon buttons), grill notes (006)
@@ -34,15 +34,15 @@ Every new room starts the same way: one Default persona, no agenda, no documents
 ## Acceptance criteria
 
 ### Libraries
-- [ ] **AC1** Starters live in three libraries: built-in, personal (visible only to its profile) and instance (visible to every profile). Each entry shows its title, author and version.
-- [ ] **AC2** Built-ins ship with the binary and are read-only. Any profile can duplicate one into its personal library. A binary that ships a changed built-in adds a new version at start; existing rooms are untouched.
-- [ ] **AC3** Every save of a starter, personal or instance, is a new immutable version with its author. A profile publishes a personal starter to the instance library. Its owner deletes a personal starter; the author or the super-admin deletes an instance starter. Rooms created from a deleted starter are untouched.
-- [ ] **AC4** A starter's size (documents and skills) counts against the instance storage quota (004-AC7). A save past the quota, or past 50 starters or 100 versions per profile, is refused with the reason.
-- [ ] **AC5** Publishing to and deleting from the instance library are written to the audit log (who, which starter, which version). The `/admin` Libraries tab lists instance starters with author, versions and size, and removes one.
+- [x] **AC1** Starters live in three libraries: built-in, personal (visible only to its profile) and instance (visible to every profile). Each entry shows its title, author and version.
+- [x] **AC2** Built-ins ship with the binary and are read-only. Any profile can duplicate one into its personal library. A binary that ships a changed built-in adds a new version at start; existing rooms are untouched.
+- [x] **AC3** Every save of a starter, personal or instance, is a new immutable version with its author. A profile publishes a personal starter to the instance library. Its owner deletes a personal starter; the author or the super-admin deletes an instance starter. Rooms created from a deleted starter are untouched.
+- [x] **AC4** A starter's size (documents and skills) counts against the instance storage quota (004-AC7). A save past the quota, or past 50 starters or 100 versions per profile, is refused with the reason.
+- [x] **AC5** Publishing to and deleting from the instance library are written to the audit log (who, which starter, which version). The `/admin` Libraries tab lists instance starters with author, versions and size, and removes one.
 
 ### Content and built-ins
-- [ ] **AC6** A starter holds full copies, never references: title, description, default room name, `agenda.md`, fields, personas (name, badge, colour, text, model, effort, triggers, self-call, autocompact, active skills), room skills at a frozen version, documents at one revision (uploads with their original), chain settings (budget, suspended, parallel turns) and the room's words to recognise (STT glossary), carried as data only.
-- [ ] **AC7** The built-ins are:
+- [x] **AC6** A starter holds full copies, never references: title, description, default room name, `agenda.md`, fields, personas (name, badge, colour, text, model, effort, triggers, self-call, autocompact, active skills), room skills at a frozen version, documents at one revision (uploads with their original), chain settings (budget, suspended, parallel turns) and the room's words to recognise (STT glossary), carried as data only.
+- [x] **AC7** The built-ins are:
   - Spec grill: Grill (sonnet / high, on demand) + Secretary (sonnet / medium, every 20 voice lines);
   - Retro: Facilitator (sonnet / medium, on demand) + Secretary;
   - Doc review: Reviewer (sonnet / high, on demand, annotates the documents) + Secretary.
@@ -50,18 +50,18 @@ Every new room starts the same way: one Default persona, no agenda, no documents
   Prompts and agendas are in English; personas reply in the room's language. No built-in defaults to opus, and none carries skills.
 
 ### New room
-- [ ] **AC8** "New room" opens a picker: Blank, Built-in, Yours (personal) and Shared (instance), with a search on title, description and author. Selecting a starter previews its agenda, personas with model and effort, documents, skills, author and version.
-- [ ] **AC9** Picking any entry, Blank included, opens the editor prefilled; there is no direct create. The editor changes the name, agenda and personas, and leaves out documents and skills, for this room only, never the starter; documents are added in the room once it exists. "Create room" creates it.
-- [ ] **AC10** A starter's fields show at the top of the editor, required ones starred. "Create room" stays disabled until every required field is filled. Values replace `{{key}}` in `agenda.md` and the default room name; an empty optional field becomes an empty string. Persona prompts are never substituted.
-- [ ] **AC11** The new room holds copies. It records "created from <title> vN", shown in Room settings › General and in `/admin`, and carried in the export's `room.json`. A later version or the deletion of the starter changes nothing in the room.
-- [ ] **AC12** Room creation keeps the 004-AC7 guardrails, and the creator becomes room admin.
-- [ ] **AC13** Starter skills land as room skills. Those from personal or instance starters wait for the host under "approve everything", as a 004-AC10 copy-in does; built-in skills are pre-approved. A pending skill never blocks or fails room creation.
+- [x] **AC8** "New room" opens a picker: Blank, Built-in, Yours (personal) and Shared (instance), with a search on title, description and author. Selecting a starter previews its agenda, personas with model and effort, documents, skills, author and version.
+- [x] **AC9** Picking any entry, Blank included, opens the editor prefilled; there is no direct create. The editor changes the name, agenda and personas, and leaves out documents and skills, for this room only, never the starter; documents are added in the room once it exists. "Create room" creates it.
+- [x] **AC10** A starter's fields show at the top of the editor, required ones starred. "Create room" stays disabled until every required field is filled. Values replace `{{key}}` in `agenda.md` and the default room name; an empty optional field becomes an empty string. Persona prompts are never substituted.
+- [x] **AC11** The new room holds copies. It records "created from <title> vN", shown in Room settings › General and in `/admin`, and carried in the export's `room.json`. A later version or the deletion of the starter changes nothing in the room.
+- [x] **AC12** Room creation keeps the 004-AC7 guardrails, and the creator becomes room admin.
+- [x] **AC13** Starter skills land as room skills. Those from personal or instance starters wait for the host under "approve everything", as a 004-AC10 copy-in does; built-in skills are pre-approved. A pending skill never blocks or fails room creation.
 
 ### Agenda
-- [ ] **AC14** The room document named `agenda.md` is pinned first in the document list, versioned and annotable like any agent document. The presence preamble names it as the room's agenda and tells every persona to align on it; a room without one gets no such line. The built-in Secretary ticks done items (`- [x]`).
+- [x] **AC14** The room document named `agenda.md` is pinned first in the document list, versioned and annotable like any agent document. The presence preamble names it as the room's agenda and tells every persona to align on it; a room without one gets no such line. The built-in Secretary ticks done items (`- [x]`).
 
 ### Triggers
-- [ ] **AC18** A persona's automatic trigger is one of:
+- [x] **AC18** A persona's automatic trigger is one of:
   - none;
   - every N rounds (002);
   - every N voice lines;
@@ -70,9 +70,9 @@ Every new room starts the same way: one Default persona, no agenda, no documents
   A human can still run any persona on demand. The timer fires only when at least one human is present (005-AC6) and the room had new voice or text activity since that persona's last turn; otherwise it waits for the next tick. Voice-line and timer turns count against the room's turn limit like any automatic turn, and stop when it is reached or suspended. The persona panel shows the next trigger ("in 7 voice lines", "in 4 min"). The Personas sheet words the choice as "Speaks up": only when asked, every N answers, every N voice lines, every N minutes.
 
 ### Save as starter
-- [ ] **AC15** A room admin's "Save as starter" (Room settings › General) opens the same editor prefilled with the room's personas, their active skills and the room skills, `agenda.md`, chain settings and words to recognise. Documents are listed unchecked and added one by one, at their current revision. Everything is editable before saving. The result lands in the saver's personal library. A plain member sees no button and gets a 403 on the route.
-- [ ] **AC16** The editor's Fields section declares fields: label, key derived from the label, required checkbox, optional hint. "Insert field" puts a `{{key}}` chip at the cursor in `agenda.md`; typing `{{key}}` works too. The default room name may use fields. Saving is blocked by an undeclared `{{x}}` in the agenda or the name, naming it; a declared field used nowhere shows a warning only.
-- [ ] **AC17** A starter saved from a room never contains its messages, transcripts, agent sessions, participants, invites, annotations or older revisions.
+- [x] **AC15** A room admin's "Save as starter" (Room settings › General) opens the same editor prefilled with the room's personas, their active skills and the room skills, `agenda.md`, chain settings and words to recognise. Documents are listed unchecked and added one by one, at their current revision. Everything is editable before saving. The result lands in the saver's personal library. A plain member sees no button and gets a 403 on the route.
+- [x] **AC16** The editor's Fields section declares fields: label, key derived from the label, required checkbox, optional hint. "Insert field" puts a `{{key}}` chip at the cursor in `agenda.md`; typing `{{key}}` works too. The default room name may use fields. Saving is blocked by an undeclared `{{x}}` in the agenda or the name, naming it; a declared field used nowhere shows a warning only.
+- [x] **AC17** A starter saved from a room never contains its messages, transcripts, agent sessions, participants, invites, annotations or older revisions.
 
 ## Phases
 

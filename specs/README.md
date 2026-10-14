@@ -7,6 +7,6 @@
 | [003](003-daemon.md) | Daemon: one supervisor, many instances, rooms and agents | shipped |
 | [004](004-instance-ops.md) | Instance ops: admin UI, room admins, export/import, scenarios | shipped |
 | [005](005-room-ux.md) | Room UX from live testing | shipped |
-| [006](006-room-starters.md) | Room starters | in progress |
+| [006](006-room-starters.md) | Room starters | shipped |
 | [007](007-stt-parakeet.md) | STT engine: parakeet-ultra | shipped |
 | [008](008-docs-window.md) | Docs window polish and push opt-in explainer | shipped |
