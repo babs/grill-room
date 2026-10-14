@@ -107,7 +107,9 @@
 .tabs a[aria-current=page] { border-bottom-color: var(--brand); }
 .tabs a:focus-visible { outline-offset: -2px; }
 @media (max-width: 40rem) {
-  .tabs { mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
+  /* The last tab, or the one scrolled into view, stops clear of the 24 px fade edge. */
+  .tabs { mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); scroll-padding-inline-end: 24px; }
+  .tabs::after { content: ""; flex: none; width: 24px; }
   .tabs a { padding: 0 var(--sp-3); }
 }
 .empty { display: block; margin: var(--sp-2) 0; padding: var(--sp-3) var(--sp-4); border: 1px dashed var(--border-strong); border-radius: var(--r-md); color: var(--text-muted); font-size: var(--fs-sm); font-style: normal; text-align: center; list-style: none; }

@@ -2118,8 +2118,8 @@ function personaForm(p) {
     grid(field('Model', picker('model', agent.models, p.model)), field('Effort', picker('effort', agent.efforts, p.effort)),
       field('Memory size (k tokens)', input('autocompact', p.autocompact ? p.autocompact / 1000 : '', { type: 'number', min: 100, max: 1000,
         placeholder: 'auto' }))),
-    hint('Memory size is how much it remembers before it summarizes its session; empty for automatic.'),
-    hint(use === null ? 'Context use: known after its next answer.' : 'Context use: its session holds ' + use + '% of its context window.'));
+    hint('Memory size is how much it remembers before it summarizes its session; empty for automatic. '
+      + (use === null ? 'Context use: known after its next answer.' : 'Context use: its session holds ' + use + '% of its context window.')));
   // One automatic trigger at most (006-AC18): the choice, then its N.
   const kind = p.every_n ? 'every_n' : p.every_voice ? 'every_voice' : p.every_minutes ? 'every_minutes' : '';
   const speaks = picker('trigger', [], kind);
