@@ -1,0 +1,37 @@
+[project]
+name = "s14-persona-voice"
+version = "0.1.0"
+description = "Spike S14: CPU TTS bench and a LiveKit persona voice bot"
+# kokoro-onnx 0.6.1 caps Python below 3.14.
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "piper-tts==1.8.0",
+    "kokoro-onnx==0.6.1",
+    "pocket-tts==3.3.0",
+    "supertonic==1.3.1",
+    "livekit>=1.1",
+    "livekit-api>=1.2",
+    "numpy>=2.3",
+    "soundfile>=0.13",
+    "psutil>=7",
+    # Direct, so the CPU index below applies: the PyPI build drags ~3 GB of CUDA wheels.
+    "torch>=2.9",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP"]

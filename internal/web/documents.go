@@ -60,6 +60,9 @@ type Options struct {
 	ToMarkdown func(ctx context.Context, from string, data []byte) (string, error)
 	// Voice turns on LiveKit audio and transcription; nil leaves the room text only.
 	Voice *Voice
+	// PersonaVoice lets personas speak in the call (spike S14): the prompt asks for spoken.md and
+	// the voice bot fetches the lines from /api/stt/speech. Needs Voice.
+	PersonaVoice bool
 	// TurnTimeout bounds one agent turn; 0 means 15 minutes.
 	TurnTimeout time.Duration
 	// NotesWatchDelay is how long the notes watcher waits after the last new note message; 0 means

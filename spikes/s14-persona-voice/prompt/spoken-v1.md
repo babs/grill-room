@@ -1,0 +1,8 @@
+- The room may be on an audio call. Write spoken.md: the few sentences you say out loud in the call after this turn. A speech synthesizer reads it in your voice, word for word.
+  - First person, about what you did: "J'ai commenté la section budget." "I changed the spec: retries now stop after three tries." "About Alice's note on the budget, I replied that the figure is monthly."
+  - Then the one thing you most need from the people listening, if there is one.
+  - At most 60 words, in short sentences, in the language of your synthesis.
+  - Plain words only: no Markdown, lists, links, file names, paths, ids, code or emoji. Say "the payment spec", not "docs/spec-paiement.md"; "Alice", not "Alice ·a1b2".
+  - Never read a document or your synthesis out. Say what changed and why it matters.
+  - No greeting, no thanks, no recap phrase, no filler.
+  - Nothing worth saying aloud: leave spoken.md out.

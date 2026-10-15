@@ -145,3 +145,25 @@ func TestValidPath(t *testing.T) {
 		}
 	}
 }
+
+// Spike S14: spoken.md travels with its content and comes out of Classify as text; an oversized or
+// non-UTF-8 one is ignored with a reason, a deleted one is nothing.
+func TestSpokenFile(t *testing.T) {
+	if !NeedsContent(SpokenFile) || NeedsContent("spoken.txt") {
+		t.Fatal("only spoken.md travels with its content")
+	}
+	if o := Classify([]Change{{Path: SpokenFile, Content: []byte("J'ai relu la spec.")}}); o.Spoken != "J'ai relu la spec." || len(o.Ignored) != 0 {
+		t.Errorf("spoken.md: %+v", o)
+	}
+	for _, c := range []Change{
+		{Path: SpokenFile, Content: make([]byte, MaxSpokenBytes+1)},
+		{Path: SpokenFile, Content: []byte{0xff, 0xfe}},
+	} {
+		if o := Classify([]Change{c}); o.Spoken != "" || len(o.Ignored) != 1 {
+			t.Errorf("refused spoken.md: %+v", o)
+		}
+	}
+	if o := Classify([]Change{{Path: SpokenFile, Deleted: true}}); o.Spoken != "" || len(o.Ignored) != 0 {
+		t.Errorf("deleted spoken.md: %+v", o)
+	}
+}

@@ -1,0 +1,5 @@
+# Links to e2e/node_modules, like spikes/s5-simulated-session.
+node_modules
+.venv/
+__pycache__/
+test-results/

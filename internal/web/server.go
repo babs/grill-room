@@ -75,6 +75,7 @@ type Server struct {
 	streams   atomic.Int64
 	pairings  pairings
 	presence  presences
+	speech    speechQueue
 	people    people
 	stt       sttWorkers
 	clients   clients
@@ -383,6 +384,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms/{room}/voice/lines", s.sttAuth(s.postVoiceLine))
 	mux.Handle("POST /api/rooms/{room}/voice/dropped", s.sttAuth(s.postVoiceDropped))
 	mux.Handle("GET /api/stt/rooms/{room}/prompt", s.sttAuth(s.sttPromptFor))
+	if s.opts.PersonaVoice {
+		mux.Handle("GET /api/stt/speech", s.sttAuth(s.getSpeech))
+	}
 	mux.Handle("GET /api/rooms/{room}/glossary", s.participant(s.getGlossary))
 	mux.Handle("PUT /api/rooms/{room}/glossary", s.participant(s.putGlossary))
 	if e2eRoutes != nil {

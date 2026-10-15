@@ -2697,6 +2697,30 @@ $('persona-add').addEventListener('submit', (e) => {
 let voice = null;
 let speaking = new Set();
 const volumes = new Map();
+// Spike S14: the personas' voice bots join as persona-<id>; each one can be muted here, per room.
+const personaMutedKey = 'grill-room-persona-muted:' + roomID;
+const personaMuted = new Set(JSON.parse(localStorage.getItem(personaMutedKey) || '[]'));
+const isPersonaVoice = (p) => p.identity.startsWith('persona-');
+
+function renderPersonaVoices() {
+  // Direct children of the menu, so they take its item style; Leave audio stays last.
+  $('voice-menu').querySelectorAll('.persona-voice').forEach((l) => l.remove());
+  const bots = voice ? [...voice.remoteParticipants.values()].filter(isPersonaVoice) : [];
+  $('voice-leave').before(...bots.map((p) => {
+    const label = document.createElement('label');
+    label.className = 'persona-voice';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !personaMuted.has(p.identity);
+    cb.addEventListener('change', () => {
+      if (cb.checked) personaMuted.delete(p.identity); else personaMuted.add(p.identity);
+      localStorage.setItem(personaMutedKey, JSON.stringify([...personaMuted]));
+      p.setVolume(cb.checked ? 1 : 0);
+    });
+    label.append(cb, ' Hear ' + (p.name || p.identity));
+    return label;
+  }));
+}
 
 function voiceParticipant(id) {
   if (!voice) return null;
@@ -3190,6 +3214,7 @@ function voiceButtons() {
 
 function voiceChanged() {
   voiceButtons();
+  renderPersonaVoices();
   renderParticipants();
   clearTimeout(beatTimer);
   beatTimer = setTimeout(beat, 300);
@@ -3419,6 +3444,7 @@ async function joinVoice() {
       el.dataset.pid = p.identity;
       $('voice-audio').append(el);
       if (volumes.has(p.identity)) p.setVolume(volumes.get(p.identity));
+      if (isPersonaVoice(p) && personaMuted.has(p.identity)) p.setVolume(0);
     });
     room.on(LK.RoomEvent.TrackUnsubscribed, (track) => track.detach().forEach((el) => el.remove()));
     room.on(LK.RoomEvent.ActiveSpeakersChanged, (list) => {

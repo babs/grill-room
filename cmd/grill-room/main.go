@@ -89,6 +89,8 @@ type Config struct {
 	STTToken string
 	// TurnTimeout bounds one agent turn.
 	TurnTimeout time.Duration
+	// PersonaVoice is GRILL_ROOM_PERSONA_VOICE=on: personas speak in the call (spike S14).
+	PersonaVoice bool
 	// NotesWatchDelay is how long the notes watcher waits after the last new note message.
 	NotesWatchDelay time.Duration
 	// DaemonDir holds the daemon release `make release` writes; empty offers no download.
@@ -156,6 +158,7 @@ func loadConfig() (Config, error) {
 		LiveKitAPIKey:    os.Getenv("GRILL_ROOM_LIVEKIT_API_KEY"),
 		LiveKitAPISecret: os.Getenv("GRILL_ROOM_LIVEKIT_API_SECRET"),
 		STTToken:         os.Getenv("GRILL_ROOM_STT_TOKEN"),
+		PersonaVoice:     os.Getenv("GRILL_ROOM_PERSONA_VOICE") == "on",
 		LogLevel:         getEnv("LOG_LEVEL", "info"),
 		LogFormat:        getEnv("LOG_FORMAT", "auto"),
 		DaemonDir:        os.Getenv("GRILL_ROOM_DAEMON_DIR"),
@@ -379,6 +382,7 @@ func run() error {
 		MaxImportBytes:     cfg.MaxImportMB << 20,
 		ToMarkdown:         convert.NewPandoc(cfg.Pandoc, cfg.PandocTimeout).ToMarkdown,
 		Voice:              cfg.voice(),
+		PersonaVoice:       cfg.PersonaVoice && cfg.voice() != nil,
 		Release:            release,
 		SandboxImage:       cfg.SandboxImage,
 		SendMail:           cfg.sendMail(),

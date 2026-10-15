@@ -32,6 +32,7 @@ On first start the server logs an `admin_token_generated` line holding the admin
 | `GRILL_ROOM_LIVEKIT_API_URL` | `GRILL_ROOM_LIVEKIT_URL` as `https://` | LiveKit's HTTP API as the server reaches it |
 | `GRILL_ROOM_LIVEKIT_API_KEY`, `GRILL_ROOM_LIVEKIT_API_SECRET` | none | LiveKit API key pair; the secret needs 32+ characters |
 | `GRILL_ROOM_STT_TOKEN` | none | the STT worker's service token; unset refuses every worker |
+| `GRILL_ROOM_PERSONA_VOICE` | off | `on` lets personas speak in the audio call (spike S14 prototype): the prompt asks for `spoken.md` and the voice bot reads `GET /api/stt/speech`; needs LiveKit |
 | `GRILL_ROOM_TURN_TIMEOUT` | `15m` | one agent turn's time budget (1m to 24h) |
 | `GRILL_ROOM_NOTES_WATCH_DELAY` | `20s` | how long the persona that watches the notes waits after the last new note message (1s to 1h) |
 | `GRILL_ROOM_DAEMON_DIR` | none (`/daemon` in the image) | daemon release written by `make release` or `make dev-release`, or downloaded from a GitHub release; unset offers no download |
@@ -216,6 +217,7 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `POST /api/rooms/{room}/daemon/turns/{id}/state` | daemon running the turn | `host_queued`: true while the turn waits for a slot on the host's machine, false once it runs |
 | `POST /api/rooms/{room}/daemon/status` | daemon | heartbeat: `can_host`, `reason`, `version` |
 | `POST /api/stt/heartbeat` | STT token | `worker` name, the `rooms` whose audio it is in, `voices`, by room, the participant ids whose track it is subscribed to, its `engine` and whether it reads the `glossary`; a worker silent for 15 s counts as gone |
+| `GET /api/stt/speech` | STT token | only with `GRILL_ROOM_PERSONA_VOICE=on` (spike S14): `items`, the lines personas say in the call after their turns, those after `?after=<seq>`, oldest first, from an in-memory queue of 200; `last`, the latest seq, lower than the caller's after a server restart |
 | `POST /api/rooms/{room}/voice/lines` | STT token | one transcribed utterance: `participant_id`, `body`; stored as a `voice` message from that participant |
 | `POST /api/rooms/{room}/voice/dropped` | STT token | `participant_id`: the worker's full queue lost one of their utterances; posts the system line "Transcription overloaded: one line lost for <name>." |
 
