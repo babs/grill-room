@@ -36,6 +36,10 @@ class Silero:
             providers=["CPUExecutionProvider"],
             sess_options=opts,
         )
+        self.reset()
+
+    def reset(self) -> None:
+        """Forgets the audio heard so far, for a track resumed after a gap."""
         self._h = np.zeros((1, 1, 128), np.float32)
         self._c = np.zeros((1, 1, 128), np.float32)
         self._context = np.zeros(CONTEXT, np.float32)

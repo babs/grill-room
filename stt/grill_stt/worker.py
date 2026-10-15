@@ -13,13 +13,16 @@ from livekit import api, rtc
 from prometheus_client import Gauge
 
 from .config import Settings
-from .pipeline import Pipeline, RoomAPI, Utterance
-from .vad import SR, Segmenter, Silero
+from .pipeline import HEARTBEAT_TIMEOUT_S, Flags, Pipeline, RoomAPI, Utterance
+from .vad import SR, Audio, Segmenter, Silero
 
 log = structlog.get_logger()
 
 ROOMS = Gauge("grill_stt_rooms", "LiveKit rooms the worker is in.")
 TRACKS = Gauge("grill_stt_tracks", "Audio tracks the worker listens to.")
+DEVICE_TRACKS = Gauge(
+    "grill_stt_device_tracks", "Subscribed tracks skipped because a device transcribes them."
+)
 # Frames buffered per track between LiveKit and the VAD: 10 ms each, so 10 s.
 FRAME_CAPACITY = 1000
 
@@ -43,11 +46,16 @@ class Worker:
         # none of them when a track goes: the SFU hands the freed transceiver to the next track it
         # sends, and a stream left open hears that newcomer under the old speaker's name (spike S5).
         self._streams: dict[str, tuple[str, rtc.AudioStream, str]] = {}
+        # Read on every frame: a flagged participant's audio is dropped before the VAD (010-AC14).
+        self._device: Flags = frozenset()
         self._changed = asyncio.Event()
         self._background: set[asyncio.Task[None]] = set()
         # The pipeline's clock: an utterance's end and its line's latency are read on it.
         self._clock = time.monotonic
         ROOMS.set_function(lambda: len(self.rooms))
+        DEVICE_TRACKS.set_function(
+            lambda: sum((room, int(identity)) in self._device for identity, _, room in self._streams.values())
+        )
 
     def _token(self, room: str) -> str:
         grants = api.VideoGrants(
@@ -180,17 +188,34 @@ class Worker:
         TRACKS.inc()
         log.info("track_listening", room=room, participant=participant_id, track=sid)
         try:
-            seg = Segmenter(
-                Silero(), min_silence_ms=self._s.vad_min_silence_ms, max_speech_s=self._s.vad_max_speech_s
-            )
+            vad = Silero()
+
+            def segmenter() -> Segmenter:
+                return Segmenter(
+                    vad, min_silence_ms=self._s.vad_min_silence_ms, max_speech_s=self._s.vad_max_speech_s
+                )
+
+            def submit(cuts: list[tuple[Audio, float]]) -> None:
+                # The speech ended the silence the cut waited for ago; a forced cut waited none.
+                for audio, silent_s in cuts:
+                    self._pipeline.submit(Utterance(room, participant_id, audio, self._clock() - silent_s))
+
+            seg = segmenter()
+            skipped = False
             async for ev in stream:
+                if (room, participant_id) in self._device:
+                    if not skipped:
+                        # Posts the speech the flag cut; it may show next to the device's full line.
+                        submit(seg.flush_timed())
+                        skipped = True
+                    continue
+                if skipped:
+                    vad.reset()
+                    seg, skipped = segmenter(), False
                 samples = np.frombuffer(ev.frame.data, np.int16).astype(np.float32)
                 samples /= 32768
-                # The speech ended the silence the cut waited for ago; a forced cut waited none.
-                for audio, silent_s in seg.feed_timed(samples):
-                    self._pipeline.submit(Utterance(room, participant_id, audio, self._clock() - silent_s))
-            for audio, silent_s in seg.flush_timed():
-                self._pipeline.submit(Utterance(room, participant_id, audio, self._clock() - silent_s))
+                submit(seg.feed_timed(samples))
+            submit(seg.flush_timed())
         except Exception:
             # One broken track must not go unnoticed, nor take the room down with it.
             log.exception("track_failed", room=room, participant=participant_id)
@@ -204,21 +229,42 @@ class Worker:
             log.info("track_closed", room=room, participant=participant_id, track=sid)
 
     def voices(self) -> dict[str, list[int]]:
-        """The participants whose track the worker is subscribed to, by room (005-AC8)."""
+        """The participants whose track the worker transcribes, by room (005-AC8, 010-AC14)."""
         out: dict[str, set[int]] = {}
         for identity, _, room in self._streams.values():
-            out.setdefault(room, set()).add(int(identity))
+            if (room, int(identity)) not in self._device:
+                out.setdefault(room, set()).add(int(identity))
         return {room: sorted(ids) for room, ids in out.items()}
 
     async def heartbeat(self) -> None:
         """Tells the room server the worker is up, which rooms and voices it hears, at once on a change."""
         while True:
             self._changed.clear()
-            await self._api.heartbeat(
-                self._s.worker_name, sorted(self.rooms), self.voices(), self._s.engine, self._s.uses_glossary
+            started = self._clock()
+            device = await self._api.heartbeat(
+                self._s.worker_name,
+                sorted(self.rooms),
+                self.voices(),
+                self._s.engine,
+                self._s.uses_glossary,
+                timeout=min(self._s.heartbeat_seconds, HEARTBEAT_TIMEOUT_S),
             )
+            self.flag(device)
+            # Start to start: a slow answer must not stretch the period a cleared flag waits (010-AC15).
+            wait = max(0.0, self._s.heartbeat_seconds - (self._clock() - started))
             with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(self._changed.wait(), self._s.heartbeat_seconds)
+                await asyncio.wait_for(self._changed.wait(), wait)
+
+    def flag(self, device: Flags) -> None:
+        """Skips the participants a device transcribes; a change re-beats at once, voices changed."""
+        if device == self._device:
+            return
+        for room, participant in sorted(device - self._device):
+            log.info("track_device", room=room, participant=participant)
+        for room, participant in sorted(self._device - device):
+            log.info("track_resumed", room=room, participant=participant)
+        self._device = device
+        self._changed.set()
 
     async def close(self) -> None:
         for room in list(self.rooms.values()):

@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     # WER (meetings 0.327 to 0.398, a talk 0.252 to 0.552) by looping on the prompt (spike S10b).
     glossary_prompt: bool = False
     poll_seconds: float = 2.0
-    heartbeat_seconds: float = 5.0
+    heartbeat_seconds: float = 2.0
     port: int = 9100
     log_level: str = "info"
     worker_name: str = socket.gethostname()

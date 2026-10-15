@@ -1,11 +1,13 @@
 import asyncio
 import json
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
 
 import httpx
 import numpy as np
 import pytest
+import structlog.testing
 from livekit import rtc
 from prometheus_client import REGISTRY
 
@@ -13,6 +15,7 @@ import grill_stt.worker as worker_mod
 from grill_stt.config import Settings
 from grill_stt.pipeline import Pipeline, RoomAPI
 from grill_stt.transcribe import Line
+from grill_stt.vad import Segmenter
 from grill_stt.worker import Worker, http_url
 
 
@@ -174,6 +177,21 @@ def loud(windows: Any) -> Any:
     return np.where(np.abs(windows).mean(axis=1) > 0.3, 0.9, 0.0).astype(np.float32)
 
 
+class LoudVAD:
+    """A Silero stand-in: loud windows are speech; it counts the windows it judged and its resets."""
+
+    def __init__(self) -> None:
+        self.windows = 0
+        self.resets = 0
+
+    def __call__(self, windows: Any) -> Any:
+        self.windows += len(windows)
+        return loud(windows)
+
+    def reset(self) -> None:
+        self.resets += 1
+
+
 def tracks() -> float:
     return REGISTRY.get_sample_value("grill_stt_tracks") or 0.0
 
@@ -188,7 +206,7 @@ def listening(monkeypatch: pytest.MonkeyPatch) -> tuple[Worker, list[FakeStream]
         return streams[-1]
 
     monkeypatch.setattr(rtc, "AudioStream", stream)
-    monkeypatch.setattr(worker_mod, "Silero", lambda: loud)
+    monkeypatch.setattr(worker_mod, "Silero", LoudVAD)
     w = worker(httpx.MockTransport(lambda _r: httpx.Response(204)))
     submitted: list[tuple[int, int]] = []
     monkeypatch.setattr(w._pipeline, "submit", lambda u: submitted.append((u.participant_id, len(u.audio))))
@@ -246,7 +264,7 @@ async def test_an_utterance_ends_when_its_speech_does(monkeypatch: pytest.Monkey
         return streams[-1]
 
     monkeypatch.setattr(rtc, "AudioStream", stream)
-    monkeypatch.setattr(worker_mod, "Silero", lambda: loud)
+    monkeypatch.setattr(worker_mod, "Silero", LoudVAD)
     w = worker(httpx.MockTransport(lambda _r: httpx.Response(204)))
     w._clock = lambda: 1000.0
     ended: list[float] = []
@@ -394,3 +412,228 @@ def test_glossary_prompt_is_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings().glossary_prompt is False
     monkeypatch.setenv("APP_GLOSSARY_PROMPT", "on")
     assert settings().glossary_prompt is True
+
+
+def test_heartbeat_period_defaults_to_two_seconds() -> None:
+    """010-AC14: a cleared device flag reaches the worker within one 2 s beat (010-AC15)."""
+    assert Settings.model_fields["heartbeat_seconds"].default == 2.0
+
+
+def device_tracks() -> float:
+    return REGISTRY.get_sample_value("grill_stt_device_tracks") or 0.0
+
+
+def pause() -> bytes:
+    return bytes(int(0.9 * 16000) * 2)
+
+
+def pcm(data: bytes) -> Any:
+    samples = np.frombuffer(data, np.int16).astype(np.float32)
+    samples /= 32768
+    return samples
+
+
+async def drained(stream: FakeStream) -> None:
+    # The listener takes and handles every queued frame in one step: an empty queue means all handled.
+    await settle(stream.frames.empty)
+    await asyncio.sleep(0)
+
+
+async def test_a_flagged_track_stays_subscribed_and_its_audio_skips_the_vad(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """010-AC14: the worker keeps the stream, drops the speech in progress, leaves the participant out
+    of voices. 010-AC15: once cleared, the next frame goes to a fresh segmenter."""
+    streams: list[FakeStream] = []
+
+    def stream(track: object, **kw: object) -> FakeStream:
+        streams.append(FakeStream(track, **kw))
+        return streams[-1]
+
+    vad = LoudVAD()
+    monkeypatch.setattr(rtc, "AudioStream", stream)
+    monkeypatch.setattr(worker_mod, "Silero", lambda: vad)
+    w = worker(httpx.MockTransport(lambda _r: httpx.Response(204)))
+    submitted: list[tuple[int, int]] = []
+    monkeypatch.setattr(w._pipeline, "submit", lambda u: submitted.append((u.participant_id, len(u.audio))))
+    subscribe(w, "TR_a", "7")
+    subscribe(w, "TR_b", "8")
+    await settle(lambda: len(streams) == 2)
+    a = streams[0]
+
+    # Cut before the flag: submitted as usual.
+    a.frames.put_nowait(speech(1) + pause())
+    await settle(lambda: len(submitted) == 1)
+    whole = submitted[0]
+    # The device starts mid-sentence and may have missed its start: the first skipped frame posts it.
+    a.frames.put_nowait(speech(1))
+    await drained(a)
+    ref = Segmenter(loud)
+    ref.feed(pcm(speech(1) + pause()))
+    ref.feed(pcm(speech(1)))
+    half = (7, len(ref.flush()[0]))
+    w._changed.clear()
+    with structlog.testing.capture_logs() as logs:
+        w.flag(frozenset({("r1", 7)}))
+    assert logs == [{"event": "track_device", "room": "r1", "participant": 7, "log_level": "info"}]
+    assert w._changed.is_set()
+    assert w.voices() == {"r1": [8]} and device_tracks() == 1
+    seen = vad.windows
+    a.frames.put_nowait(pause() + speech(1) + pause())
+    await drained(a)
+    assert vad.windows == seen and submitted == [whole, half]
+    assert set(w._streams) == {"TR_a", "TR_b"} and not a.closed
+
+    # Cleared: the first frame reaches the VAD, and the half sentence does not come back.
+    w._changed.clear()
+    with structlog.testing.capture_logs() as logs:
+        w.flag(frozenset())
+    assert [e["event"] for e in logs] == ["track_resumed"]
+    assert w._changed.is_set() and w.voices() == {"r1": [7, 8]} and device_tracks() == 0
+    a.frames.put_nowait(pause())
+    await drained(a)
+    assert vad.windows > seen and vad.resets == 1 and submitted == [whole, half]
+    a.frames.put_nowait(speech(1) + pause())
+    await settle(lambda: len(submitted) == 3)
+    fresh = Segmenter(loud).feed(pcm(pause() + speech(1) + pause()))
+    assert submitted == [whole, half, (7, len(fresh[0]))]
+
+    # The same flags again change nothing, and send no extra beat.
+    w._changed.clear()
+    w.flag(frozenset())
+    assert not w._changed.is_set()
+    for s in streams:
+        await s.aclose()
+
+
+@pytest.mark.parametrize("frames_after_flag", [0, 2])
+async def test_speech_in_progress_when_the_flag_comes_posts_once(
+    listening: tuple[Worker, list[FakeStream], list[tuple[int, int]]], frames_after_flag: int
+) -> None:
+    """010-AC14: the speech the flag cut posts once, at the first skipped frame or when the track ends."""
+    w, streams, submitted = listening
+    base = tracks()
+    subscribe(w, "TR_a", "7")
+    await settle(lambda: tracks() == base + 1)
+    streams[0].frames.put_nowait(speech(1))
+    await drained(streams[0])
+    w.flag(frozenset({("r1", 7)}))
+    for _ in range(frames_after_flag):
+        streams[0].frames.put_nowait(speech(1))
+    w._close("TR_a")
+    await settle(lambda: tracks() == base)
+    assert [pid for pid, _ in submitted] == [7]
+
+
+async def test_an_utterance_cut_before_the_flag_still_posts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """010-AC14: the flag only stops new audio; the queue posts what was cut before it."""
+    streams: list[FakeStream] = []
+
+    def stream(track: object, **kw: object) -> FakeStream:
+        streams.append(FakeStream(track, **kw))
+        return streams[-1]
+
+    monkeypatch.setattr(rtc, "AudioStream", stream)
+    monkeypatch.setattr(worker_mod, "Silero", LoudVAD)
+    lines: list[object] = []
+
+    def handle(r: httpx.Request) -> httpx.Response:
+        if r.url.path.endswith("/voice/lines"):
+            lines.append(json.loads(r.content))
+        return httpx.Response(201)
+
+    room_api = RoomAPI(httpx.AsyncClient(base_url="http://room", transport=httpx.MockTransport(handle)))
+    pipeline = Pipeline([lambda _a, _p: Line("hello", "en")], room_api, size=4)
+    w = Worker(settings(), pipeline, room_api, lk=None)  # type: ignore[arg-type] # unused here
+    subscribe(w, "TR_a", "7")
+    await settle(lambda: streams)
+    streams[0].frames.put_nowait(speech(1) + pause())
+    await settle(lambda: len(pipeline._pending) == 1)
+    w.flag(frozenset({("r1", 7)}))
+    task = asyncio.create_task(pipeline.run())
+    await asyncio.wait_for(pipeline.idle(), 5)
+    task.cancel()
+    assert lines == [{"participant_id": 7, "body": "hello"}]
+    await streams[0].aclose()
+
+
+def stalled(r: httpx.Request) -> httpx.Response:
+    raise httpx.ReadTimeout("stalled", request=r)
+
+
+@pytest.mark.parametrize(
+    "cleared", [lambda _r: httpx.Response(200, json={"device": {}}), lambda _r: httpx.Response(503), stalled]
+)
+async def test_the_heartbeat_answer_flags_tracks_and_beats_again_at_once(
+    listening: tuple[Worker, list[FakeStream], list[tuple[int, int]]],
+    cleared: Callable[[httpx.Request], httpx.Response],
+) -> None:
+    """010-AC14: a 200 flags participant 7; the voices changed, so a second beat leaves without
+    waiting the period (30 s here). 010-AC15: a cleared flag is applied as soon as the beat returns;
+    a refused or timed-out beat clears it too, as the room's flag lapses meanwhile. The beat times out
+    at 2 s, under the room's 3 s lapse, though the period here is 30 s."""
+    w, streams, submitted = listening
+    flagged = {"device": {"r1": [7]}}
+    beats: list[dict[str, Any]] = []
+
+    def handle(r: httpx.Request) -> httpx.Response:
+        beats.append(json.loads(r.content))
+        return httpx.Response(200, json=flagged) if len(beats) <= 2 else cleared(r)
+
+    w._api = RoomAPI(httpx.AsyncClient(base_url="http://room", transport=httpx.MockTransport(handle)))
+    beat = w._api.heartbeat
+    timeouts: list[object] = []
+
+    async def timed(*a: Any, **kw: Any) -> frozenset[tuple[str, int]]:
+        timeouts.append(kw.get("timeout"))
+        return await beat(*a, **kw)
+
+    w._api.heartbeat = timed  # type: ignore[method-assign]
+    subscribe(w, "TR_a", "7")
+    subscribe(w, "TR_b", "8")
+    task = asyncio.create_task(w.heartbeat())
+    await settle(lambda: len(beats) == 2)
+    assert [b["voices"] for b in beats] == [{"r1": [7, 8]}, {"r1": [8]}]
+    assert w._device == frozenset({("r1", 7)})
+    # The third beat (any change will do) brings the clear back.
+    w._changed.set()
+    await settle(lambda: len(beats) == 4)
+    assert w._device == frozenset() and beats[3]["voices"] == {"r1": [7, 8]}
+    assert set(timeouts) == {2.0}
+    streams[0].frames.put_nowait(speech(1) + pause())
+    await settle(lambda: submitted)
+    assert [pid for pid, _ in submitted] == [7]
+    task.cancel()
+    for s in streams:
+        await s.aclose()
+
+
+class Stop(Exception):
+    pass
+
+
+@pytest.mark.parametrize(("took", "wait"), [(0.5, 1.5), (0.0, 2.0), (3.0, 0.0)])
+async def test_beats_are_spaced_start_to_start(
+    monkeypatch: pytest.MonkeyPatch, took: float, wait: float
+) -> None:
+    """010-AC15: a slow beat does not push back the next one, so a cleared flag arrives within 2 s."""
+    w = worker(httpx.MockTransport(lambda _r: httpx.Response(204)), heartbeat_seconds=2)
+    now = [100.0]
+    w._clock = lambda: now[0]
+
+    async def slow_beat(*_a: object, **_kw: object) -> frozenset[tuple[str, int]]:
+        now[0] += took
+        return frozenset()
+
+    waits: list[float] = []
+
+    async def record(aw: Any, timeout: float) -> None:
+        aw.close()
+        waits.append(timeout)
+        raise Stop
+
+    monkeypatch.setattr(w._api, "heartbeat", slow_beat)
+    monkeypatch.setattr(asyncio, "wait_for", record)
+    with pytest.raises(Stop):
+        await w.heartbeat()
+    assert waits == [wait]
