@@ -31,7 +31,7 @@ server_pid=""
 cleanup() {
 	docker logs "$stt" >"$out/stt.log" 2>&1 || true
 	docker rm -f "$browser" "$livekit" "$stt" >/dev/null 2>&1 || true
-	[[ -n $server_pid ]] && kill "$server_pid" 2>/dev/null || true
+	if [[ -n $server_pid ]]; then kill "$server_pid" 2>/dev/null || true; fi
 }
 
 wait_http() {
