@@ -200,14 +200,12 @@ class Worker:
                 for audio, silent_s in cuts:
                     self._pipeline.submit(Utterance(room, participant_id, audio, self._clock() - silent_s))
 
+            # Speech in progress when the flag comes is dropped: the device's capture predates its flag.
             seg = segmenter()
             skipped = False
             async for ev in stream:
                 if (room, participant_id) in self._device:
-                    if not skipped:
-                        # Posts the speech the flag cut; it may show next to the device's full line.
-                        submit(seg.flush_timed())
-                        skipped = True
+                    skipped = True
                     continue
                 if skipped:
                     vad.reset()
@@ -217,7 +215,8 @@ class Worker:
                 samples = np.frombuffer(ev.frame.data, np.int16).astype(np.float32)
                 samples /= 32768
                 submit(seg.feed_timed(samples))
-            submit(seg.flush_timed())
+            if not skipped and (room, participant_id) not in self._device:
+                submit(seg.flush_timed())
         except Exception:
             # One broken track must not go unnoticed, nor take the room down with it.
             log.exception("track_failed", room=room, participant=participant_id)

@@ -465,13 +465,9 @@ async def test_a_flagged_track_stays_subscribed_and_its_audio_skips_the_vad(
     a.frames.put_nowait(speech(1) + pause())
     await settle(lambda: len(submitted) == 1)
     whole = submitted[0]
-    # The device starts mid-sentence and may have missed its start: the first skipped frame posts it.
+    # The device starts mid-sentence: its capture predates the flag, so the half sentence is its own.
     a.frames.put_nowait(speech(1))
     await drained(a)
-    ref = Segmenter(loud)
-    ref.feed(pcm(speech(1) + pause()))
-    ref.feed(pcm(speech(1)))
-    half = (7, len(ref.flush()[0]))
     w._changed.clear()
     with structlog.testing.capture_logs() as logs:
         w.flag(frozenset({("r1", 7)}))
@@ -481,7 +477,7 @@ async def test_a_flagged_track_stays_subscribed_and_its_audio_skips_the_vad(
     seen = vad.windows
     a.frames.put_nowait(pause() + speech(1) + pause())
     await drained(a)
-    assert vad.windows == seen and submitted == [whole, half]
+    assert vad.windows == seen and submitted == [whole]
     assert set(w._streams) == {"TR_a", "TR_b"} and not a.closed
 
     # Cleared: the first frame reaches the VAD, and the half sentence does not come back.
@@ -500,11 +496,11 @@ async def test_a_flagged_track_stays_subscribed_and_its_audio_skips_the_vad(
     assert logs == [
         {"event": "track_resumed", "room": "r1", "participant": 7, "track": "TR_a", "log_level": "info"}
     ]
-    assert vad.windows > seen and vad.resets == 1 and submitted == [whole, half]
+    assert vad.windows > seen and vad.resets == 1 and submitted == [whole]
     a.frames.put_nowait(speech(1) + pause())
-    await settle(lambda: len(submitted) == 3)
+    await settle(lambda: len(submitted) == 2)
     fresh = Segmenter(loud).feed(pcm(pause() + speech(1) + pause()))
-    assert submitted == [whole, half, (7, len(fresh[0]))]
+    assert submitted == [whole, (7, len(fresh[0]))]
 
     # The same flags again change nothing, and send no extra beat.
     w._changed.clear()
@@ -514,11 +510,12 @@ async def test_a_flagged_track_stays_subscribed_and_its_audio_skips_the_vad(
         await s.aclose()
 
 
-@pytest.mark.parametrize("frames_after_flag", [0, 2])
-async def test_speech_in_progress_when_the_flag_comes_posts_once(
-    listening: tuple[Worker, list[FakeStream], list[tuple[int, int]]], frames_after_flag: int
+@pytest.mark.parametrize(("frames_after_flag", "unflag"), [(0, False), (2, False), (2, True)])
+async def test_speech_in_progress_when_the_flag_comes_is_dropped(
+    listening: tuple[Worker, list[FakeStream], list[tuple[int, int]]], frames_after_flag: int, unflag: bool
 ) -> None:
-    """010-AC14: the speech the flag cut posts once, at the first skipped frame or when the track ends."""
+    """010-AC14: the speech the flag cut is the device's, even when the track ends flagged, or ends
+    after an unflag before any new frame."""
     w, streams, submitted = listening
     base = tracks()
     subscribe(w, "TR_a", "7")
@@ -528,9 +525,12 @@ async def test_speech_in_progress_when_the_flag_comes_posts_once(
     w.flag(frozenset({("r1", 7)}))
     for _ in range(frames_after_flag):
         streams[0].frames.put_nowait(speech(1))
+    await drained(streams[0])
+    if unflag:
+        w.flag(frozenset())
     w._close("TR_a")
     await settle(lambda: tracks() == base)
-    assert [pid for pid, _ in submitted] == [7]
+    assert submitted == []
 
 
 async def test_an_utterance_cut_before_the_flag_still_posts(monkeypatch: pytest.MonkeyPatch) -> None:
