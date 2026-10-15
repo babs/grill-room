@@ -99,16 +99,22 @@ const serverLines = async () => [
   await metric(serverMetrics, 'grill_room_voice_lines_deduped_total{source="server"}'),
 ];
 
+// workerLog reads the worker's JSON log lines.
+function workerLog() {
+  const r = spawnSync('docker', ['logs', sttContainer], { encoding: 'utf8', timeout: 10_000 });
+  return `${r.stdout}\n${r.stderr}`.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
+}
+// tracksHeard counts the tracks the worker has started listening to in room.
+const tracksHeard = (room) => workerLog().filter((l) => l.event === 'track_listening' && l.room === room).length;
+
 // resumedAt reads the worker's first track_resumed log line for room after since (ms), as a time.
 function resumedAt(room, since) {
-  const r = spawnSync('docker', ['logs', sttContainer], { encoding: 'utf8', timeout: 10_000 });
-  const lines = `${r.stdout}\n${r.stderr}`.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
-  return lines.filter((l) => l.event === 'track_resumed' && l.room === room).map((l) => Date.parse(l.timestamp)).find((t) => t >= since);
+  return workerLog().filter((l) => l.event === 'track_resumed' && l.room === room).map((l) => Date.parse(l.timestamp)).find((t) => t >= since);
 }
 
-// 010-AC9, 010-AC10, 010-AC12, 010-AC13, 010-AC14, 010-AC15: Alice's voice goes to her device and
-// back to the server worker, announced and silent, through LiveKit, the real worker and the real
-// device model.
+// 010-AC9, 010-AC10, 010-AC12, 010-AC13, 010-AC14, 010-AC15, 010-AC21: Alice's voice goes to her
+// device and back to the server worker, announced, silent and across a reload, through LiveKit,
+// the real worker and the real device model.
 test('the voice hands over between the device and the server', async ({ request, baseURL }) => {
   const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Device voice' } })).json();
   // The counters live as long as the server, which serves every repeat of this test.
@@ -204,10 +210,35 @@ test('the voice hands over between the device and the server', async ({ request,
     await expect.poll(() => lineFor(2, serverTip), { timeout: 60_000 }).toMatchObject({ sender: 'Alice' });
     expect(await lineFor(2, deviceTip)).toBeUndefined();
 
-    // e. The device beats again, then the page closes and the flag drops. Playwright sees neither
-    // the route nor the request of a closing page's keepalive beat, so only the flag is asserted.
+    // f. 010-AC21: a reload with device mode on leaves the voice with the worker for the delay,
+    // the production 12 s, then the device takes it.
     silent = false;
     await expect.poll(flags, { timeout: 10_000 }).toBe(1);
+    const tracksBefore = tracksHeard(room.id);
+    const reloaded = Date.now();
+    await page.reload();
+    await page.getByRole('button', { name: 'Join audio' }).click();
+    await expect(page.getByRole('button', { name: 'Audio options' })).toBeVisible();
+    const delayed = 'Transcribed by the server: starting on this device in a few seconds';
+    await expect(said).toHaveText(delayed);
+    await expect.poll(flags, { timeout: 10_000 }).toBe(0);
+    await expect.poll(skipped, { timeout: 10_000 }).toBe(0);
+    // The worker hears the new track before the sentence starts.
+    await expect.poll(() => tracksHeard(room.id), { timeout: 10_000 }).toBeGreaterThan(tracksBefore);
+    await say(0);
+    timings.reloadSaid = Date.now() - reloaded;
+    // Still in the delay as the sentence ends: no device took any of it.
+    await expect(said).toHaveText(delayed);
+    expect([await flags(), await skipped()]).toEqual([0, 0]);
+    await expect.poll(() => lineFor(0, serverTip), { timeout: 60_000 }).toMatchObject({ sender: 'Alice' });
+    await expect(said).toHaveText('Transcribed on this device', { timeout: 60_000 });
+    await expect.poll(flags, { timeout: 10_000 }).toBe(1);
+    await expect.poll(skipped, { timeout: 10_000 }).toBe(1);
+    await say(1);
+    await expect.poll(() => lineFor(1, deviceTip), { timeout: 60_000 }).toMatchObject({ sender: 'Alice' });
+
+    // e. Then the page closes and the flag drops. Playwright sees neither the route nor the request
+    // of a closing page's keepalive beat, so only the flag is asserted.
     await expect.poll(skipped, { timeout: 10_000 }).toBe(1);
     stop = Date.now();
     await page.close({ runBeforeUnload: true });
@@ -216,7 +247,8 @@ test('the voice hands over between the device and the server', async ({ request,
     await expect.poll(flags, { timeout: 10_000 }).toBe(0);
   } finally {
     // 010-AC15, from the stop to the worker's track_resumed log line: at most 3 s announced, 5 s
-    // silent; closed is from page.close() to the worker's gauge at 0. Reported, not asserted: a
+    // silent; closed is from page.close() to the worker's gauge at 0; reloadSaid is when the
+    // reloaded page's sentence ended, inside the 12 s delay (010-AC21). Reported, not asserted: a
     // runner's clock jitter must not decide it.
     console.log('010-AC15 handover, ms:', JSON.stringify(timings));
     for (const [type, ms] of Object.entries(timings)) test.info().annotations.push({ type: `010-AC15 ${type} ms`, description: String(ms) });
