@@ -9,6 +9,7 @@ Dockerfile
 .dockerignore
 bin/
 .scratchpad/
+.device-stt-models/
 design/
 spikes/
 deploy/

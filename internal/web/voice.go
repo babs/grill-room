@@ -15,6 +15,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/babs/grill-room/internal/devicestt"
 	"github.com/babs/grill-room/internal/livekit"
 	"github.com/babs/grill-room/internal/store"
 )
@@ -79,11 +80,23 @@ type sttState struct {
 	// Glossary is true while a live worker reads room glossaries: Room settings shows the tab only
 	// then (007-AC14).
 	Glossary bool `json:"glossary"`
+	// Device is the device transcription offer, absent when the server makes none (010-AC5).
+	Device *devicestt.Offer `json:"device,omitempty"`
 }
 
+// equal compares Device by pointer: a server holds one offer for its lifetime.
 func (a sttState) equal(b sttState) bool {
 	return a.Available == b.Available && a.Listening == b.Listening && a.Glossary == b.Glossary &&
-		slices.Equal(a.Transcribed, b.Transcribed) && slices.Equal(a.Engines, b.Engines)
+		slices.Equal(a.Transcribed, b.Transcribed) && slices.Equal(a.Engines, b.Engines) && a.Device == b.Device
+}
+
+// sttState is the room's transcription state with the server's device offer.
+func (s *Server) sttState(room string, now time.Time) sttState {
+	st := s.stt.state(room, now)
+	if s.device != nil {
+		st.Device = s.device.offer
+	}
+	return st
 }
 
 func (w *sttWorkers) state(room string, now time.Time) sttState {
@@ -289,6 +302,6 @@ func (s *Server) closeVoice(room string) {
 
 // sttEvent renders the "stt" SSE event.
 func sttEvent(st sttState) string {
-	b, _ := json.Marshal(st) // two bools cannot fail to marshal
+	b, _ := json.Marshal(st) // plain fields cannot fail to marshal
 	return "event: stt\ndata: " + string(b) + "\n\n"
 }

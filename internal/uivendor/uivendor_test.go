@@ -24,6 +24,11 @@ func TestHandlerAndCSP(t *testing.T) {
 	if !strings.Contains(csp, "script-src 'self' 'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"';") || !strings.HasSuffix(csp, "form-action 'none'") {
 		t.Fatalf("csp: %s", csp)
 	}
+	// 010-AC4: the room page adds 'wasm-unsafe-eval' after its map's hash.
+	page := []byte(`<script type="importmap">` + m + `</script>`)
+	if csp := CSP(page, "'self'", "'wasm-unsafe-eval'"); !strings.Contains(csp, "'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"' 'wasm-unsafe-eval';") {
+		t.Fatalf("csp with a source: %s", csp)
+	}
 	defer func() {
 		if recover() == nil {
 			t.Fatal("a page without an import map passed")

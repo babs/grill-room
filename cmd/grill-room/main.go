@@ -30,6 +30,7 @@ import (
 
 	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/convert"
+	"github.com/babs/grill-room/internal/devicestt"
 	"github.com/babs/grill-room/internal/livekit"
 	"github.com/babs/grill-room/internal/mail"
 	"github.com/babs/grill-room/internal/sandbox"
@@ -107,6 +108,8 @@ type Config struct {
 	TrustedProxies []netip.Prefix
 	// PushHosts replaces the push services Web Push subscriptions may name; nil keeps the default.
 	PushHosts []string
+	// DeviceSTTModelDir holds the files `models fetch` writes; empty offers no device transcription.
+	DeviceSTTModelDir string
 }
 
 func loadConfig() (Config, error) {
@@ -153,13 +156,14 @@ func loadConfig() (Config, error) {
 		LiveKitURL:      os.Getenv("GRILL_ROOM_LIVEKIT_URL"),
 		LiveKitAPIURL: getEnv("GRILL_ROOM_LIVEKIT_API_URL",
 			strings.Replace(os.Getenv("GRILL_ROOM_LIVEKIT_URL"), "ws", "http", 1)),
-		LiveKitAPIKey:    os.Getenv("GRILL_ROOM_LIVEKIT_API_KEY"),
-		LiveKitAPISecret: os.Getenv("GRILL_ROOM_LIVEKIT_API_SECRET"),
-		STTToken:         os.Getenv("GRILL_ROOM_STT_TOKEN"),
-		LogLevel:         getEnv("LOG_LEVEL", "info"),
-		LogFormat:        getEnv("LOG_FORMAT", "auto"),
-		DaemonDir:        os.Getenv("GRILL_ROOM_DAEMON_DIR"),
-		SandboxImage:     os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
+		LiveKitAPIKey:     os.Getenv("GRILL_ROOM_LIVEKIT_API_KEY"),
+		LiveKitAPISecret:  os.Getenv("GRILL_ROOM_LIVEKIT_API_SECRET"),
+		STTToken:          os.Getenv("GRILL_ROOM_STT_TOKEN"),
+		LogLevel:          getEnv("LOG_LEVEL", "info"),
+		LogFormat:         getEnv("LOG_FORMAT", "auto"),
+		DaemonDir:         os.Getenv("GRILL_ROOM_DAEMON_DIR"),
+		SandboxImage:      os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
+		DeviceSTTModelDir: os.Getenv("GRILL_ROOM_DEVICE_STT_MODEL_DIR"),
 	}, errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9, err10, err11)
 }
 
@@ -303,6 +307,13 @@ func (c Config) voice() *web.Voice {
 }
 
 func main() {
+	if len(os.Args) > 1 {
+		if err := command(os.Args[1:], devicestt.Pinned, devicestt.NewClient()); err != nil {
+			fmt.Fprintf(os.Stderr, "grill-room: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "grill-room: %v\n", err)
 		os.Exit(1)
@@ -390,12 +401,16 @@ func run() error {
 		Version:            Version,
 		DBPath:             cfg.DB,
 		PluginClient:       testPluginClient(logger),
+		DeviceSTTDir:       cfg.DeviceSTTModelDir,
 	}, logger)
 	if cfg.SMTP.Addr == "" {
 		logger.Info("email_signin_disabled", zap.String("hint", "set GRILL_ROOM_SMTP_ADDR and GRILL_ROOM_SMTP_FROM to send magic links"))
 	}
 	if cfg.LiveKitURL == "" {
 		logger.Info("voice_disabled", zap.String("hint", "set GRILL_ROOM_LIVEKIT_URL to enable audio"))
+	}
+	if cfg.DeviceSTTModelDir == "" {
+		logger.Info("device_stt_disabled", zap.String("hint", "set GRILL_ROOM_DEVICE_STT_MODEL_DIR to offer on-device transcription"))
 	}
 	reg := newRegistry(b, srv)
 
