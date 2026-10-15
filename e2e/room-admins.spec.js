@@ -146,13 +146,11 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
       expect((await carol.request[method](path, { data: { name: 'x' } })).status(), `${method} ${path}`).toBe(403);
     }
 
-    // "Your invites" keeps to her own, the seat the room gave her; Manage lists them all. A phone
-    // hides that sidebar.
-    if (vp.width > 400) {
-      await menuItem(alice, 'Invite people');
-      await expect(alice.locator('#invite-list li')).toHaveCount(1);
-      await alice.keyboard.press('Escape');
-    }
+    // The popup opens on her shareable link, made with the room (011-AC26); Room settings lists
+    // every invite.
+    await menuItem(alice, 'Invite people');
+    await expect(alice.locator('#invite-link')).toHaveValue(/\/join#/);
+    await alice.keyboard.press('Escape');
     const panel = await openManage(alice);
     await expect(panel.locator('#volume')).toContainText('Transcripts');
     await expect(panel).toContainText('Only the instance admin changes the limit.');
@@ -162,7 +160,9 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     await expect(panel.locator('#export')).toHaveAttribute('href', `/api/rooms/${id}/export`);
     await expect(panel.locator('#export-warning')).toContainText('everything Claude read');
     await tab(panel, 'Invites');
-    await expect(panel.locator('#invites-all tbody tr')).toHaveCount(3);
+    // Her seat's invite, her shareable link made with the room (011-AC26), Bob's and Carol's.
+    await expect(panel.locator('#invites-all tbody tr')).toHaveCount(4);
+    await expect(panel.locator('#invites-all tbody tr', { hasText: 'Your shareable link' })).toHaveCount(1);
     await expect(panel.locator('#invites-all tbody tr').first()).toContainText('Alice');
     await fits(alice);
     await tab(panel, 'Admins');
@@ -265,7 +265,7 @@ test('a room skill survives its author leaving', async ({ browser, request, base
     // Bob leaves: the admin revokes the invite he joined through, the second roomWith made, and he
     // removes his skill.
     const invites = await (await request.get(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
-    expect((await request.delete(`/api/rooms/${room.id}/invites/${invites[1].id}`, { headers: admin })).status()).toBe(204);
+    expect((await request.delete(`/api/rooms/${room.id}/invites/${invites[1].id}`, { headers: admin })).status()).toBe(200);
     await expect(bob.locator('#banner')).toHaveText('Your access to this room has ended.');
     await bobProfile.reload();
     await bobProfile.locator('#skills summary').click();

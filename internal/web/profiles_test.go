@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -139,7 +140,7 @@ func TestProfileFollowsItsPersonAcrossRoomsAndDevices(t *testing.T) {
 	// The phone's event stream ends when the room drops the profile's participant.
 	ch := phone.events(t, a.ID)
 	_, invs := e.do(t, "GET", "/api/rooms/"+a.ID+"/invites", e.admin, nil)
-	if code, _ := e.do(t, "DELETE", "/api/rooms/"+a.ID+"/invites/"+strconv.FormatInt(decodeJSON[[]store.Invite](t, invs)[0].ID, 10), e.admin, nil); code != http.StatusNoContent {
+	if code, _ := e.do(t, "DELETE", "/api/rooms/"+a.ID+"/invites/"+strconv.FormatInt(decodeJSON[[]store.Invite](t, invs)[0].ID, 10), e.admin, nil); code != http.StatusOK {
 		t.Fatal("revoke failed")
 	}
 	waitRevoked(t, ch)
@@ -285,15 +286,15 @@ func TestMagicLinks(t *testing.T) {
 	if to != "alice@example.com" {
 		t.Fatalf("mailed %s", to)
 	}
-	// A bind link only binds, from the browser that asked: elsewhere it is refused and stays usable,
-	// so a link someone else asked for cannot bind a victim's address or sign the victim in.
+	// A bind link only binds; elsewhere it asks for a confirm and stays usable meanwhile (011-AC23),
+	// so it never signs anyone in.
 	tablet := e.device(t)
-	if code, _ := tablet.do(t, "POST", "/api/profile/magic", map[string]string{"token": tok, "purpose": "bind"}); code != http.StatusForbidden {
+	if code, _ := tablet.do(t, "POST", "/api/profile/magic", map[string]string{"token": tok, "purpose": "bind"}); code != http.StatusConflict {
 		t.Fatalf("bind link in a browser without the profile: %d", code)
 	}
 	other := e.device(t)
 	other.join(t, room.ID, "Mallory")
-	if code, _ := other.do(t, "POST", "/api/profile/magic", map[string]string{"token": tok, "purpose": "bind"}); code != http.StatusForbidden {
+	if code, _ := other.do(t, "POST", "/api/profile/magic", map[string]string{"token": tok, "purpose": "bind"}); code != http.StatusConflict {
 		t.Fatalf("bind link in another profile: %d", code)
 	}
 	if tablet.profile(t).Profile != nil || other.profile(t).Profile.Email != "" {
@@ -303,7 +304,7 @@ func TestMagicLinks(t *testing.T) {
 	if code != http.StatusOK || decodeJSON[profileResp](t, body).Profile.Email != "alice@example.com" {
 		t.Fatalf("bind link: %d %s", code, body)
 	}
-	if code, _ := laptop.do(t, "POST", "/api/profile/magic", map[string]string{"token": tok, "purpose": "bind"}); code != http.StatusUnauthorized {
+	if code, _ := laptop.do(t, "POST", "/api/profile/magic", map[string]string{"token": tok, "purpose": "bind"}); code != http.StatusGone {
 		t.Fatalf("second use: %d", code)
 	}
 
@@ -351,17 +352,25 @@ func TestMagicLinks(t *testing.T) {
 	}
 }
 
+// fixedClock pins e's server clock to t0 plus what the returned setter sets.
+func fixedClock(e *env) (t0 time.Time, set func(time.Duration)) {
+	var skew atomic.Int64
+	t0 = time.Now().UTC().Truncate(time.Second)
+	e.srv.now = func() time.Time { return t0.Add(time.Duration(skew.Load())) }
+	return t0, func(d time.Duration) { skew.Store(int64(d)) }
+}
+
 func TestMagicLinkExpires(t *testing.T) {
-	e, box := newMailEnv(t, time.Second)
+	e, box := newMailEnv(t, time.Minute)
+	_, skew := fixedClock(e)
 	d := e.device(t)
 	d.join(t, e.createRoom(t, "A").ID, "Alice")
-	// The link is made on a clock 2 s behind: its 1 s is over when it is used.
-	e.srv.now = func() time.Time { return time.Now().Add(-2 * time.Second) }
 	if code, _ := d.do(t, "POST", "/api/profile/email", map[string]string{"email": "alice@example.com"}); code != http.StatusAccepted {
 		t.Fatalf("bind: %d", code)
 	}
 	_, tok := box.next(t)
-	if code, _ := d.do(t, "POST", "/api/profile/magic", map[string]string{"token": tok, "purpose": "bind"}); code != http.StatusUnauthorized {
+	skew(time.Minute)
+	if code, _ := d.do(t, "POST", "/api/profile/magic", map[string]string{"token": tok, "purpose": "bind"}); code != http.StatusGone {
 		t.Fatalf("expired link: %d", code)
 	}
 	if d.profile(t).Profile.Email != "" {
@@ -634,13 +643,13 @@ func TestMemberInvites(t *testing.T) {
 	if code, _ := e.do(t, "DELETE", path+"/"+strconv.FormatInt(aliceInv.ID, 10), alice.Token, nil); code != http.StatusForbidden {
 		t.Fatalf("alice revokes the admin's invite: %d", code)
 	}
-	if code, _ := e.do(t, "DELETE", one, alice.Token, nil); code != http.StatusNoContent {
+	if code, _ := e.do(t, "DELETE", one, alice.Token, nil); code != http.StatusOK {
 		t.Fatalf("alice revokes hers: %d", code)
 	}
 	if code, _ := e.do(t, "GET", "/api/rooms/"+room.ID, carol.Token, nil); code != http.StatusUnauthorized {
 		t.Fatalf("carol after the revoke: %d", code)
 	}
-	if code, _ := e.do(t, "DELETE", path+"/"+strconv.FormatInt(bobInv.ID, 10), e.admin, nil); code != http.StatusNoContent {
+	if code, _ := e.do(t, "DELETE", path+"/"+strconv.FormatInt(bobInv.ID, 10), e.admin, nil); code != http.StatusOK {
 		t.Fatalf("admin revokes: %d", code)
 	}
 	other := e.join(t, e.createInvite(t, e.createRoom(t, "Other").ID).Token, "Mallory")
@@ -675,17 +684,12 @@ func TestSendFailureLogHidesTheAddress(t *testing.T) {
 	if code, _ := d.do(t, "POST", "/api/join", map[string]string{"invite": "inv", "name": "Alice"}); code != http.StatusCreated {
 		t.Fatal("join failed")
 	}
-	if code, _ := d.do(t, "POST", "/api/profile/email", map[string]string{"email": "secret@example.com"}); code != http.StatusAccepted {
-		t.Fatal("bind failed")
+	// 011-AC28: the bind mail goes out before the answer, so the failure is logged by then.
+	if code, b := d.do(t, "POST", "/api/profile/email", map[string]string{"email": "secret@example.com"}); code != http.StatusBadGateway || bytes.Contains(b, []byte("secret@")) {
+		t.Fatalf("bind: %d %s", code, b)
 	}
 	<-done
-	var line []observer.LoggedEntry
-	for range 50 {
-		if line = logs.FilterMessage("magic_link_send_failed").All(); len(line) > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond) // polls the log, bounded by the 50 rounds
-	}
+	line := logs.FilterMessage("magic_link_send_failed").All()
 	if len(line) != 1 {
 		t.Fatal("no failure logged")
 	}
@@ -708,7 +712,7 @@ func TestStaleRoomCookieFallsBackToTheProfile(t *testing.T) {
 	}
 	again := phone.join(t, room.ID, "Alice on the phone")
 	_, invs := e.do(t, "GET", "/api/rooms/"+room.ID+"/invites", e.admin, nil)
-	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(decodeJSON[[]store.Invite](t, invs)[0].ID, 10), e.admin, nil); code != http.StatusNoContent {
+	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(decodeJSON[[]store.Invite](t, invs)[0].ID, 10), e.admin, nil); code != http.StatusOK {
 		t.Fatal("revoke failed")
 	}
 	if code, body := laptop.do(t, "GET", "/api/rooms/"+room.ID, nil); code != http.StatusOK || decodeJSON[roomResp](t, body).Me.ID != again.Participant.ID {
@@ -732,7 +736,7 @@ func TestStreamSurvivesARevokedRoomCookieWithAValidProfile(t *testing.T) {
 	phone.join(t, room.ID, "Alice on the phone")
 	ch := laptop.events(t, room.ID)
 	_, invs := e.do(t, "GET", "/api/rooms/"+room.ID+"/invites", e.admin, nil)
-	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(decodeJSON[[]store.Invite](t, invs)[0].ID, 10), e.admin, nil); code != http.StatusNoContent {
+	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(decodeJSON[[]store.Invite](t, invs)[0].ID, 10), e.admin, nil); code != http.StatusOK {
 		t.Fatal("revoke failed")
 	}
 	if code, _ := phone.do(t, "POST", "/api/rooms/"+room.ID+"/messages", map[string]string{"body": "still here"}); code != http.StatusCreated {
@@ -765,7 +769,7 @@ func TestRevokedMemberCannotRejoinThroughTheirOwnInvite(t *testing.T) {
 		t.Fatal("member invite failed")
 	}
 	spare := decodeJSON[invite](t, b)
-	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(inv.ID, 10), e.admin, nil); code != http.StatusNoContent {
+	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(inv.ID, 10), e.admin, nil); code != http.StatusOK {
 		t.Fatal("revoke failed")
 	}
 	if code, _ := e.do(t, "POST", "/api/join", "", map[string]string{"invite": spare.Token, "name": "Alice"}); code != http.StatusUnauthorized {

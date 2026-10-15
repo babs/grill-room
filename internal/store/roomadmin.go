@@ -40,6 +40,9 @@ type InstanceSettings struct {
 	RoomCreation string `json:"room_creation"`
 	// PluginMaxMB caps a plugin snapshot, while fetching and once extracted (009-AC9).
 	PluginMaxMB int `json:"plugin_max_mb,omitempty"`
+	// PurgeEmptyProfiles deletes empty profiles after EmptyProfileIdle of inactivity; on by
+	// default (011-AC17).
+	PurgeEmptyProfiles bool `json:"purge_empty_profiles"`
 }
 
 // DefaultPluginMaxMB is the plugin snapshot cap until the super-admin sets one (009-AC9).
@@ -50,6 +53,7 @@ const (
 	settingStorageQuota    = "storage_quota_bytes"
 	settingRoomCreation    = "room_creation"
 	settingPluginMaxMB     = "plugin_max_mb"
+	settingPurgeProfiles   = "purge_empty_profiles"
 )
 
 type rowQuerier interface {
@@ -58,10 +62,10 @@ type rowQuerier interface {
 
 func instanceSettings(ctx context.Context, db rowQuerier) (InstanceSettings, error) {
 	v := InstanceSettings{RoomsPerProfile: DefaultRoomsPerProfile, RoomCreation: CreationAnyone, PluginMaxMB: DefaultPluginMaxMB}
-	var per, quota, mode, pluginMB sql.NullString
+	var per, quota, mode, pluginMB, purge sql.NullString
 	err := db.QueryRowContext(ctx, `SELECT (SELECT value FROM settings WHERE key = ?), (SELECT value FROM settings WHERE key = ?),
-		(SELECT value FROM settings WHERE key = ?), (SELECT value FROM settings WHERE key = ?)`,
-		settingRoomsPerProfile, settingStorageQuota, settingRoomCreation, settingPluginMaxMB).Scan(&per, &quota, &mode, &pluginMB)
+		(SELECT value FROM settings WHERE key = ?), (SELECT value FROM settings WHERE key = ?), (SELECT value FROM settings WHERE key = ?)`,
+		settingRoomsPerProfile, settingStorageQuota, settingRoomCreation, settingPluginMaxMB, settingPurgeProfiles).Scan(&per, &quota, &mode, &pluginMB, &purge)
 	if err != nil {
 		return v, fmt.Errorf("instance settings: %w", err)
 	}
@@ -80,6 +84,7 @@ func instanceSettings(ctx context.Context, db rowQuerier) (InstanceSettings, err
 	if v.PluginMaxMB < 1 {
 		v.PluginMaxMB = DefaultPluginMaxMB
 	}
+	v.PurgeEmptyProfiles = purge.String != "0"
 	return v, nil
 }
 
@@ -88,17 +93,37 @@ func (s *Store) InstanceSettings(ctx context.Context) (InstanceSettings, error) 
 	return instanceSettings(ctx, s.db)
 }
 
-// SetInstanceSettings stores v, which the caller validated.
-func (s *Store) SetInstanceSettings(ctx context.Context, v InstanceSettings) error {
-	return s.withTx(ctx, "set instance settings", func(tx *sql.Tx) error {
-		for k, val := range map[string]string{settingRoomsPerProfile: strconv.Itoa(v.RoomsPerProfile),
-			settingStorageQuota: strconv.FormatInt(v.StorageQuota, 10), settingRoomCreation: v.RoomCreation, settingPluginMaxMB: strconv.Itoa(v.PluginMaxMB)} {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO settings(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, k, val); err != nil {
-				return fmt.Errorf("set instance settings: %w", err)
-			}
+// UpdateInstanceSettings runs patch on the stored settings and stores the result, in one
+// transaction, so two requests patching different fields cannot undo each other. patch validates;
+// its error is returned as is. The audit entry ctx carries gets the resulting settings.
+func (s *Store) UpdateInstanceSettings(ctx context.Context, patch func(*InstanceSettings) error) (InstanceSettings, error) {
+	var v InstanceSettings
+	err := s.withTx(ctx, "update instance settings", func(tx *sql.Tx) error {
+		var err error
+		if v, err = instanceSettings(ctx, tx); err != nil {
+			return err
 		}
-		return auditTx(ctx, tx, "", nil)
+		if err := patch(&v); err != nil {
+			return err
+		}
+		if err := writeInstanceSettings(ctx, tx, v); err != nil {
+			return err
+		}
+		return auditTx(ctx, tx, "", map[string]any{settingRoomsPerProfile: v.RoomsPerProfile, settingStorageQuota: v.StorageQuota,
+			settingRoomCreation: v.RoomCreation, settingPluginMaxMB: v.PluginMaxMB, settingPurgeProfiles: v.PurgeEmptyProfiles})
 	})
+	return v, err
+}
+
+func writeInstanceSettings(ctx context.Context, tx *sql.Tx, v InstanceSettings) error {
+	for k, val := range map[string]string{settingRoomsPerProfile: strconv.Itoa(v.RoomsPerProfile),
+		settingStorageQuota: strconv.FormatInt(v.StorageQuota, 10), settingRoomCreation: v.RoomCreation, settingPluginMaxMB: strconv.Itoa(v.PluginMaxMB),
+		settingPurgeProfiles: map[bool]string{true: "1", false: "0"}[v.PurgeEmptyProfiles]} {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO settings(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, k, val); err != nil {
+			return fmt.Errorf("set instance settings: %w", err)
+		}
+	}
+	return nil
 }
 
 // InstanceID returns this instance's id, drawn once: an import tells its own exports by it.
@@ -126,12 +151,13 @@ func mb(n int64) string { return strconv.FormatFloat(float64(n)/(1<<20), 'f', 1,
 
 // CreateProfileRoom creates room id named name for profile profileID, which joins it as
 // displayName and becomes its first room admin (004-AC7, 004-AC8). The profile joins through an
-// invite of its own, inviteHash, whose token nobody holds. The guardrails are checked in the same
+// invite of its own, inviteHash, whose token nobody holds, and gets its shareable invite, link with
+// its hash linkHash (011-AC26). The guardrails are checked in the same
 // transaction as the insert, so two requests cannot both take the last room of a limit.
 // ErrCreationRefused, wrapped with the reason.
 //
 // With setup, the room holds the starter's copies instead of the Default persona (006-AC11).
-func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileID int64, displayName, inviteHash, tokenHash string, setup *RoomSetup) (*Room, error) {
+func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileID int64, displayName, inviteHash, tokenHash, link, linkHash string, setup *RoomSetup) (*Room, error) {
 	var r *Room
 	err := s.withTx(ctx, "create room", func(tx *sql.Tx) error {
 		v, err := instanceSettings(ctx, tx)
@@ -164,6 +190,9 @@ func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileI
 		// The creator's own seat: listed as their invite, revoking it lets them go like any other.
 		if _, err := tx.ExecContext(ctx, `UPDATE invites SET created_by = ? WHERE id = ?`, p.ID, inv); err != nil {
 			return fmt.Errorf("create room: %w", err)
+		}
+		if _, err := insertInvite(ctx, tx, id, linkHash, p.ID, link); err != nil {
+			return fmt.Errorf("create room: shareable invite: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO room_admins(room_id, profile_id, created_at) VALUES(?,?,?)`, id, profileID, now()); err != nil {
 			return fmt.Errorf("create room: %w", err)

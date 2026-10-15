@@ -225,7 +225,7 @@ func TestDaemonConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(ap.InviteID, 10), e.admin, nil); code != http.StatusNoContent {
+	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(ap.InviteID, 10), e.admin, nil); code != http.StatusOK {
 		t.Fatalf("revoke: %d", code)
 	}
 	expectRevokedThenClosed(t, ch)

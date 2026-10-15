@@ -46,6 +46,7 @@
       <button type="button" id="voice-more" class="btn-icon" popovertarget="voice-menu" aria-label="Audio options" data-icon="down" hidden></button>
     </div>
     <button type="button" id="me" class="avatar" popovertarget="me-menu" data-tip="You: your name, notifications, your profile"></button>
+    <a id="me-anon" class="anon-mark" href="/profile#email" hidden></a>
     <button type="button" id="more-open" class="btn-icon" popovertarget="more-menu" aria-label="More" data-tip="More" data-icon="more"></button>
   </div>
 </header>
@@ -108,6 +109,10 @@
   <span>Waiting:</span>
   <ol id="queue-list" aria-label="Waiting answers"></ol>
 </div>
+<p id="email-nudge" class="strip" role="status" hidden>Add an email to your profile to find it on another device.
+  <a href="/profile#email" class="btn btn-primary">Add an email</a>
+  <button type="button" id="email-nudge-later" class="btn-secondary">Later</button>
+  <button type="button" id="email-nudge-close" class="btn-icon" aria-label="Close" data-icon="close"></button></p>
 <p id="notice" class="strip" role="status" hidden><span id="notice-text"></span> <button type="button" id="notice-close" class="btn-ghost">OK</button></p>
 <button type="button" id="strip-more" class="btn-ghost" aria-expanded="false" hidden></button>
 </div>
@@ -182,14 +187,13 @@
     <h2 id="invites-title">Invite people</h2>
     <button type="button" class="btn-icon btn-ghost close" aria-label="Close" data-icon="close"></button>
   </div>
-  <p>Anyone holding an invite link can join and read the room.</p>
-  <button type="button" id="invite-create" class="btn-primary">Create an invite link</button>
-  <p id="invite-new" class="copy-row" hidden>
-    <input id="invite-link" readonly aria-label="New invite link">
-    <button type="button" id="invite-copy">Copy invite</button>
+  <p class="copy-row">
+    <input id="invite-link" readonly aria-label="Your invite link" placeholder="Getting your link…">
+    <button type="button" id="invite-copy" class="btn-primary" disabled>Copy</button>
   </p>
-  <h3>Your invites</h3>
-  <ul id="invite-list" class="rows"></ul>
+  <p class="hint">Anyone holding this link can join and read the room.</p>
+  <p id="invite-status" class="said error" role="status"></p>
+  <p><a href="#manage/invites" id="invite-manage">More links and revoking in Room settings › Invites</a></p>
 </dialog>
 <dialog id="notify" class="sheet" aria-labelledby="notify-title">
   <div class="sheet-head">
@@ -259,7 +263,7 @@
       <button type="button" id="recovery-copy">Copy link</button></p>
     <div class="actions"><button type="button" id="recovery-done" class="btn-secondary">I saved it</button></div>
   </div>
-  <p id="recovery-none" hidden>Bind an email to your profile, then sign in with it on the other device: <a href="/profile">open your profile</a>.</p>
+  <p id="recovery-none" hidden>Add an email to your profile, then sign in with it on the other device: <a href="/profile">open your profile</a>.</p>
 </dialog>
 <dialog id="why" class="sheet" aria-labelledby="why-title">
   <h2 id="why-title"></h2>

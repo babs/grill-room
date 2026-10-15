@@ -207,7 +207,7 @@ func TestExportImportPlugins(t *testing.T) {
 	}
 	_, sm, _ := s.StarterVersion(ctx, st.ID, 0, prof.ProfileID)
 	sf, _ := s.StarterFiles(ctx, st.ID, st.Version)
-	if _, err := s.CreateProfileRoom(ctx, "third", "R", prof.ProfileID, "Pat", "inv-3", "tok-3", &RoomSetup{From: &Provenance{Title: sm.Title, Version: 1},
+	if _, err := s.CreateProfileRoom(ctx, "third", "R", prof.ProfileID, "Pat", "inv-3", "tok-3", "lnk-3", "lnkh-3", &RoomSetup{From: &Provenance{Title: sm.Title, Version: 1},
 		Personas: sm.Personas, Plugins: sm.Plugins, Files: sf, Chain: sm.Chain, UploadQuota: 1 << 20}); err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +364,7 @@ func TestImportPluginRefusals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetInstanceSettings(t.Context(), InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, PluginMaxMB: 1}); err != nil {
+	if err := putSettings(t.Context(), s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, PluginMaxMB: 1}); err != nil {
 		t.Fatal(err)
 	}
 	broken(big.Tar, big.SHA256, "bigger than 1 MB")

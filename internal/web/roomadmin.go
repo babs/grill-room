@@ -239,7 +239,8 @@ func (s *Server) createProfileRoom(w http.ResponseWriter, r *http.Request) {
 		details["starter"] = setup.From
 	}
 	ctx := store.WithAudit(r.Context(), e, details)
-	room, err := s.bus.Store.CreateProfileRoom(ctx, id, name, p.ID, display, HashToken(NewToken()), HashToken(NewToken()), setup)
+	link := NewToken()
+	room, err := s.bus.Store.CreateProfileRoom(ctx, id, name, p.ID, display, HashToken(NewToken()), HashToken(NewToken()), link, HashToken(link), setup)
 	switch {
 	case errors.Is(err, store.ErrCreationRefused):
 		httpError(w, http.StatusForbidden, err.Error())
@@ -292,39 +293,42 @@ func (s *Server) instanceSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, v)
 }
 
-// setInstanceSettings sets the guardrails on rooms profiles create (004-AC7).
+// setInstanceSettings sets the guardrails on rooms profiles create (004-AC7) and the empty
+// profiles purge (011-AC17).
 func (s *Server) setInstanceSettings(w http.ResponseWriter, r *http.Request) {
+	var patch json.RawMessage
+	if !decode(w, r, &patch) {
+		return
+	}
 	// A field the request leaves out keeps its value: a page from before plugin_max_mb sends none.
-	v, err := s.bus.Store.InstanceSettings(r.Context())
-	if err != nil {
-		s.serverError(w, "instance_settings_failed", err)
-		return
-	}
-	if !decode(w, r, &v) {
-		return
-	}
+	v, err := s.bus.Store.UpdateInstanceSettings(s.auditing(r, ActionSettings, store.TargetInstance, "", "", nil), func(v *store.InstanceSettings) error {
+		if err := json.Unmarshal(patch, v); err != nil {
+			return badRequest("bad json: " + err.Error())
+		}
+		switch {
+		case v.RoomsPerProfile < 1 || v.RoomsPerProfile > 1000:
+			return badRequest("rooms_per_profile must be 1 to 1000")
+		case v.StorageQuota < 0 || v.StorageQuota > maxStorageQuota:
+			return badRequest("storage_quota_bytes must be 0 (no quota) to 1 PiB")
+		case v.RoomCreation != store.CreationAnyone && v.RoomCreation != store.CreationSuperAdmin:
+			return badRequest("room_creation must be anyone or super-admin")
+		case v.PluginMaxMB < 1 || v.PluginMaxMB > maxPluginMB:
+			return badRequest(fmt.Sprintf("plugin_max_mb must be 1 to %d", maxPluginMB))
+		}
+		return nil
+	})
+	var bad badRequest
 	switch {
-	case v.RoomsPerProfile < 1 || v.RoomsPerProfile > 1000:
-		httpError(w, http.StatusBadRequest, "rooms_per_profile must be 1 to 1000")
+	case errors.As(err, &bad):
+		httpError(w, http.StatusBadRequest, bad.Error())
 		return
-	case v.StorageQuota < 0 || v.StorageQuota > maxStorageQuota:
-		httpError(w, http.StatusBadRequest, "storage_quota_bytes must be 0 (no quota) to 1 PiB")
-		return
-	case v.RoomCreation != store.CreationAnyone && v.RoomCreation != store.CreationSuperAdmin:
-		httpError(w, http.StatusBadRequest, "room_creation must be anyone or super-admin")
-		return
-	case v.PluginMaxMB < 1 || v.PluginMaxMB > maxPluginMB:
-		httpError(w, http.StatusBadRequest, fmt.Sprintf("plugin_max_mb must be 1 to %d", maxPluginMB))
-		return
-	}
-	details := map[string]any{"rooms_per_profile": v.RoomsPerProfile, "storage_quota_bytes": v.StorageQuota, "room_creation": v.RoomCreation,
-		"plugin_max_mb": v.PluginMaxMB}
-	if err := s.bus.Store.SetInstanceSettings(s.auditing(r, ActionSettings, store.TargetInstance, "", "", details), v); err != nil {
+	case err != nil:
 		s.serverError(w, "set_instance_settings_failed", err)
 		return
 	}
 	s.log.Info("instance_settings_set", zap.Int("rooms_per_profile", v.RoomsPerProfile), zap.Int64("storage_quota_bytes", v.StorageQuota),
-		zap.String("room_creation", v.RoomCreation), zap.Int("plugin_max_mb", v.PluginMaxMB))
+		zap.String("room_creation", v.RoomCreation), zap.Int("plugin_max_mb", v.PluginMaxMB),
+		zap.Bool("purge_empty_profiles", v.PurgeEmptyProfiles))
 	writeJSON(w, http.StatusOK, v)
 }
 

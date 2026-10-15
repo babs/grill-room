@@ -43,8 +43,10 @@ test('join by invite, chat, revoke, delete', async ({ browser, request }) => {
   await expect(alice.locator('#messages')).toContainText('Bob joined');
   await expect(alice.locator('#participants li .name, #participants-away li .name')).toHaveText(['Alice', 'Bob']);
 
-  // Revoking Alice's invite ends her session live, without a reload.
-  expect((await request.delete(`/api/rooms/${room.id}/invites/${aliceInv.id}`, { headers: admin })).status()).toBe(204);
+  // Revoking Alice's invite ends her session live, without a reload; the answer names her (011-AC20).
+  const revoked = await request.delete(`/api/rooms/${room.id}/invites/${aliceInv.id}`, { headers: admin });
+  expect(revoked.status()).toBe(200);
+  expect(await revoked.json()).toMatchObject({ revoked: [aliceInv.id], lost: [{ name: 'Alice' }] });
   await expect(alice.locator('#banner')).toHaveText('Your access to this room has ended.');
   await expect(alice.locator('#send')).toBeHidden();
 

@@ -26,7 +26,7 @@ func TestSetUpRoom(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	alice := joinWithProfile(t, s, "lobby", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
-	r, err := s.CreateProfileRoom(ctx, "r", "Weekly", alice.ProfileID, "Ali", "inv-r", "tok-r", testSetup())
+	r, err := s.CreateProfileRoom(ctx, "r", "Weekly", alice.ProfileID, "Ali", "inv-r", "tok-r", "lnk-r", "lnkh-r", testSetup())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestSetUpRoomRefusals(t *testing.T) {
 		setup *RoomSetup
 		want  string
 	}{"quota": {full, "room creation refused"}, "skill blob": {lacking, `no file "skill/0"`}, "doc blob": {noDoc, `no file "doc/0"`}} {
-		_, err := s.CreateProfileRoom(ctx, "r", "R", alice.ProfileID, "Ali", "inv-"+name, "tok-"+name, c.setup)
+		_, err := s.CreateProfileRoom(ctx, "r", "R", alice.ProfileID, "Ali", "inv-"+name, "tok-"+name, "lnk-"+name, "lnkh-"+name, c.setup)
 		if err == nil || !strings.Contains(err.Error(), c.want) || (name == "quota" && !errors.Is(err, ErrCreationRefused)) {
 			t.Errorf("%s: %v", name, err)
 		}
@@ -109,7 +109,7 @@ func TestDueTimerPersonas(t *testing.T) {
 	alice := joinWithProfile(t, s, "lobby", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
 	setup := testSetup()
 	setup.Personas[0].EveryVoice, setup.Personas[0].EveryMinutes = 0, 5
-	if _, err := s.CreateProfileRoom(ctx, "r", "R", alice.ProfileID, "Ali", "inv-r", "tok-r", setup); err != nil {
+	if _, err := s.CreateProfileRoom(ctx, "r", "R", alice.ProfileID, "Ali", "inv-r", "tok-r", "lnk-r", "lnkh-r", setup); err != nil {
 		t.Fatal(err)
 	}
 	later := time.Now().Add(6 * time.Minute)
@@ -133,7 +133,7 @@ func TestReleaseStarterSkills(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	alice := joinWithProfile(t, s, "lobby", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
-	if _, err := s.CreateProfileRoom(ctx, "r", "R", alice.ProfileID, "Ali", "inv-r", "tok-r", testSetup()); err != nil {
+	if _, err := s.CreateProfileRoom(ctx, "r", "R", alice.ProfileID, "Ali", "inv-r", "tok-r", "lnk-r", "lnkh-r", testSetup()); err != nil {
 		t.Fatal(err)
 	}
 	if names, err := s.ReleaseStarterSkills(ctx, "r"); err != nil || len(names) != 0 {
@@ -186,7 +186,7 @@ func TestImportKeepsTriggersQuiet(t *testing.T) {
 	// Without skills: the import checks their tars, which the test setup fakes.
 	setup := testSetup()
 	setup.Skills, setup.Personas[0].Skills = nil, nil
-	if _, err := s.CreateProfileRoom(ctx, "orig", "R", alice.ProfileID, "Ali", "inv-r", "tok-r", setup); err != nil {
+	if _, err := s.CreateProfileRoom(ctx, "orig", "R", alice.ProfileID, "Ali", "inv-r", "tok-r", "lnk-r", "lnkh-r", setup); err != nil {
 		t.Fatal(err)
 	}
 	ps, _ := s.Participants(ctx, "orig")
@@ -212,16 +212,16 @@ func TestSetUpRoomStorageQuota(t *testing.T) {
 	ctx := t.Context()
 	alice := joinWithProfile(t, s, "lobby", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
 	used, _ := s.UsedBytes(ctx)
-	if err := s.SetInstanceSettings(ctx, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: used + 32<<10}); err != nil {
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: used + 32<<10}); err != nil {
 		t.Fatal(err)
 	}
 	setup := testSetup()
 	setup.Files["doc/0"] = make([]byte, 64<<10)
-	_, err := s.CreateProfileRoom(ctx, "r", "R", alice.ProfileID, "Ali", "inv-r", "tok-r", setup)
+	_, err := s.CreateProfileRoom(ctx, "r", "R", alice.ProfileID, "Ali", "inv-r", "tok-r", "lnk-r", "lnkh-r", setup)
 	if !errors.Is(err, ErrCreationRefused) || !strings.Contains(err.Error(), "the starter's") {
 		t.Fatalf("past the quota: %v", err)
 	}
-	if _, err := s.CreateProfileRoom(ctx, "r", "R", alice.ProfileID, "Ali", "inv-r", "tok-r", testSetup()); err != nil {
+	if _, err := s.CreateProfileRoom(ctx, "r", "R", alice.ProfileID, "Ali", "inv-r", "tok-r", "lnk-r", "lnkh-r", testSetup()); err != nil {
 		t.Fatalf("within the quota: %v", err)
 	}
 }
@@ -234,7 +234,7 @@ func TestTriggerOnCountsFromNow(t *testing.T) {
 	alice := joinWithProfile(t, s, "lobby", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
 	setup := testSetup()
 	setup.Personas[0].EveryVoice = 0
-	if _, err := s.CreateProfileRoom(ctx, "r", "R", alice.ProfileID, "Ali", "inv-r", "tok-r", setup); err != nil {
+	if _, err := s.CreateProfileRoom(ctx, "r", "R", alice.ProfileID, "Ali", "inv-r", "tok-r", "lnk-r", "lnkh-r", setup); err != nil {
 		t.Fatal(err)
 	}
 	ps, _ := s.Participants(ctx, "r")
@@ -261,7 +261,7 @@ func TestDecideStarterSkill(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	alice := joinWithProfile(t, s, "lobby", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
-	if _, err := s.CreateProfileRoom(ctx, "r", "R", alice.ProfileID, "Ali", "inv-r", "tok-r", testSetup()); err != nil {
+	if _, err := s.CreateProfileRoom(ctx, "r", "R", alice.ProfileID, "Ali", "inv-r", "tok-r", "lnk-r", "lnkh-r", testSetup()); err != nil {
 		t.Fatal(err)
 	}
 	ps, _ := s.Participants(ctx, "r")
@@ -287,7 +287,7 @@ func TestRoomDraft(t *testing.T) {
 	alice := joinWithProfile(t, s, "lobby", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
 	setup := testSetup()
 	setup.SkillsPending = false
-	if _, err := s.CreateProfileRoom(ctx, "r", "Weekly", alice.ProfileID, "Ali", "inv-r", "tok-r", setup); err != nil {
+	if _, err := s.CreateProfileRoom(ctx, "r", "Weekly", alice.ProfileID, "Ali", "inv-r", "tok-r", "lnk-r", "lnkh-r", setup); err != nil {
 		t.Fatal(err)
 	}
 	docs, _ := s.Documents(ctx, "r")
@@ -327,7 +327,7 @@ func TestRoomDraft(t *testing.T) {
 	// Another room's upload and skill, named by their ids: not this room's to read.
 	other := testSetup()
 	other.SkillsPending = false
-	if _, err := s.CreateProfileRoom(ctx, "o", "Other", alice.ProfileID, "Ali", "inv-o", "tok-o", other); err != nil {
+	if _, err := s.CreateProfileRoom(ctx, "o", "Other", alice.ProfileID, "Ali", "inv-o", "tok-o", "lnk-o", "lnkh-o", other); err != nil {
 		t.Fatal(err)
 	}
 	om, _ := s.RoomDraft(ctx, "o")

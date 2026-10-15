@@ -11,5 +11,5 @@ interface Window {
   grillIconHTML(name: string): string;
   grillIcon(name: string): Element;
   grillPlace(pop: HTMLElement, anchor: Element): void;
-  grillTip: { hide(): void; refresh(): void };
+  grillTip: { hide(): void; refresh(): void; show(el: Element): void; shownFor(): Element | null };
 }

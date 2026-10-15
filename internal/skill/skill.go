@@ -212,20 +212,39 @@ func strip(files []file) ([]file, error) {
 	return nil, invalid("no %s at the root of the zip or of its single folder", manifest)
 }
 
+// frontmatterSpan finds SKILL.md's YAML header in text: it runs from start, after the opening
+// "---" line, to end, before the first "\n---"; start is -1 without an opening line, ok false
+// without a closing one. LF and CRLF alike.
+func frontmatterSpan(text string) (start, end int, ok bool) {
+	switch {
+	case strings.HasPrefix(text, "---\n"):
+		start = 4
+	case strings.HasPrefix(text, "---\r\n"):
+		start = 5
+	default:
+		return -1, 0, false
+	}
+	i := strings.Index(text[start:], "\n---")
+	if i < 0 {
+		return start, 0, false
+	}
+	// A CRLF header's last line keeps its \r: the caller drops it with the other ones.
+	return start, start + i, true
+}
+
 // frontmatter reads SKILL.md's YAML header and checks the two fields Claude Code needs.
 func frontmatter(md []byte) (name, description string, err error) {
 	if len(md) > MaxSkillMD {
 		return "", "", invalid("%s is over %d KB", manifest, MaxSkillMD>>10)
 	}
-	text := strings.ReplaceAll(string(md), "\r\n", "\n")
-	rest, ok := strings.CutPrefix(text, "---\n")
-	if !ok {
+	start, end, ok := frontmatterSpan(string(md))
+	switch {
+	case start < 0:
 		return "", "", invalid("%s must start with a --- frontmatter block", manifest)
-	}
-	head, _, ok := strings.Cut(rest, "\n---")
-	if !ok {
+	case !ok:
 		return "", "", invalid("%s frontmatter has no closing ---", manifest)
 	}
+	head := strings.TrimSuffix(strings.ReplaceAll(string(md)[start:end], "\r\n", "\n"), "\r")
 	var fm struct {
 		Name        string `yaml:"name"`
 		Description string `yaml:"description"`
@@ -343,19 +362,66 @@ func copySkill(tw *tar.Writer, sk Packed, dir func(string) error) error {
 		if err := mkdirs(h.Name); err != nil {
 			return fmt.Errorf("plugin: %w", err)
 		}
+		var body io.Reader = tr
+		if h.Name == manifest {
+			md, err := io.ReadAll(io.LimitReader(tr, MaxSkillMD+1))
+			if err != nil {
+				return fmt.Errorf("plugin: skill %s: %w", sk.Name, err)
+			}
+			// A header the rename cannot rewrite keeps its old name: a mismatch beats failing every turn.
+			if renamed, err := withName(md, sk.Name); err == nil {
+				md = renamed
+			}
+			h.Size, body = int64(len(md)), bytes.NewReader(md)
+		}
 		h.Name = root + "/" + h.Name
 		if err := tw.WriteHeader(h); err != nil {
 			return fmt.Errorf("plugin: %w", err)
 		}
-		if _, err := io.Copy(tw, tr); err != nil { //nolint:gosec // the store's own tar, sized when it was parsed
+		if _, err := io.Copy(tw, body); err != nil { //nolint:gosec // the store's own tar, sized when it was parsed
 			return fmt.Errorf("plugin: %w", err)
 		}
 	}
 }
 
+// withName returns md with its frontmatter name set to name. A merge renames a skill row (x to x-2)
+// without touching its stored files, and the agent must see the row's name (011-AC11). An
+// unrenamed skill comes back byte for byte; a header whose name line cannot be rewritten to read
+// back as name is an error, and the caller keeps md as it is.
+func withName(md []byte, name string) ([]byte, error) {
+	if n, _, err := frontmatter(md); err == nil && n == name {
+		return md, nil
+	}
+	text := string(md)
+	start, end, ok := frontmatterSpan(text)
+	if !ok || start < 0 {
+		return nil, fmt.Errorf("SKILL.md has no frontmatter to name %s", name)
+	}
+	lines := strings.SplitAfter(text[start:end], "\n")
+	for i, l := range lines {
+		if !strings.HasPrefix(l, "name:") {
+			continue
+		}
+		eol := l[len(strings.TrimRight(l, "\r\n")):]
+		lines[i] = "name: " + name + eol
+		// A block scalar's indented lines belong to the old name.
+		j := i + 1
+		for j < len(lines) && (strings.HasPrefix(lines[j], " ") || strings.HasPrefix(lines[j], "\t")) {
+			j++
+		}
+		lines = append(lines[:i+1], lines[j:]...)
+		break
+	}
+	out := []byte(text[:start] + strings.Join(lines, "") + text[end:])
+	if n, _, err := frontmatter(out); err != nil || n != name {
+		return nil, fmt.Errorf("cannot set the SKILL.md frontmatter name to %s", name)
+	}
+	return out, nil
+}
+
 // ParseTar validates a skill's normalised tar, as the store keeps it and an import carries it,
 // with the rules of Parse, and requires it normalised: the store's copy hashes to its sha256, and
-// the plugin is built from it as is.
+// the plugin is built from it.
 func ParseTar(data []byte) (*Skill, error) {
 	if len(data) > MaxZipBytes {
 		return nil, invalid("the skill is over %d MB", MaxZipBytes>>20)

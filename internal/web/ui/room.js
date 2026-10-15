@@ -112,6 +112,7 @@ async function loadRoom() {
   // An appointment or a step-down changes who turns plugins on (Capabilities).
   renderPersonaSheet();
   renderParticipants();
+  showEmpty();
   // The room admin panel (admin/room-admin.js) renders from the same answer.
   window.grillRoom = data;
   window.dispatchEvent(new CustomEvent('grill:room', { detail: data }));
@@ -212,7 +213,6 @@ function addMessage(m) {
     refreshTimer = setTimeout(() => loadRoom().catch(console.error), 200);
   }
   messages.append(renderMessage(m));
-  if (m.kind !== 'system') showEmpty();
   if (pinned) messages.scrollTop = messages.scrollHeight;
   if (m.id === jumpTo) jump(m.id);
 }
@@ -603,6 +603,8 @@ $('msg-delete').addEventListener('click', () => { if (menuFor) deleteMessage(men
 
 // The Preact panels say what they did through a toast too (006-AC15).
 addEventListener('grill:toast', (e) => toast(e.detail));
+// A revoke from Room settings may have cut people off: People and the empty-chat card follow.
+addEventListener('grill:revoked', () => loadRoom().catch(console.error));
 
 // toast says what an action did, with at most one action of its own (005-AC39); onEnd runs when it
 // goes, undone or not.
@@ -715,10 +717,7 @@ for (const menu of document.querySelectorAll('.menu:not(#doc-menu, #person-menu,
 }
 for (const b of document.querySelectorAll('dialog .close')) b.addEventListener('click', () => b.closest('dialog').close());
 $('notify-open').addEventListener('click', () => $('notify').showModal());
-$('invite-open').addEventListener('click', () => {
-  $('invites').showModal();
-  loadInvites().catch(console.error);
-});
+$('invite-open').addEventListener('click', () => { openInvites(); });
 $('host-open').addEventListener('click', () => $('host-agent').showModal());
 $('docs-window-menu').addEventListener('click', (e) => {
   e.preventDefault();
@@ -751,64 +750,97 @@ $('recovery-done').addEventListener('click', () => {
   $('recovery').close();
 });
 
-// After the first message of a new profile, one notice offers the link.
-function nudgeRecovery() {
+// After the first message of a new profile, one notice offers the link. With email set up, the
+// email nudge replaces it (011-AC8).
+async function nudgeRecovery() {
+  // A message sent before the profile answered must still get the email nudge.
+  await ownLoaded;
+  if (own.email_enabled) {
+    nudgeEmail();
+    return;
+  }
   if (!sessionStorage.getItem(recoveryKey) || sessionStorage.getItem(recoveryKey + ':nudged')) return;
   sessionStorage.setItem(recoveryKey + ':nudged', '1');
   showNotice('To use this profile on another device, save its link: your initials, then "Use on another device".');
 }
 
-// Invites: a member creates links and revokes the ones they created; a room admin, who gets every
-// invite, manages the others from Manage.
-async function loadInvites() {
-  const res = await netFetch(api + '/invites');
+// own is GET /api/profile's answer: the room API says nothing of email state (011-AC6). It is read
+// on load and when the tab comes back, as an email bound on /profile then takes the marker away (011-AC9).
+let own = { email_enabled: false, profile: null };
+const anonText = 'Profile without email: add one to find it on another device';
+const noEmail = () => own.email_enabled && !!own.profile && !own.profile.email;
+// ownLoaded is the latest loadOwn, settled.
+let ownLoaded = Promise.resolve();
+const reloadOwn = () => { ownLoaded = loadOwn().catch(console.error); };
+async function loadOwn() {
+  const res = await netFetch('/api/profile');
   if (!res.ok) return;
-  const invites = (await res.json()).filter((i) => !i.revoked_at && String(i.created_by) === myID);
-  $('invite-list').replaceChildren(...invites.map((inv) => {
-    const li = document.createElement('li');
-    const when = grillDate(inv.created_at);
-    const label = document.createElement('span');
-    label.textContent = 'Created ' + when;
-    const revoke = document.createElement('button');
-    revoke.type = 'button';
-    revoke.textContent = 'Revoke';
-    revoke.setAttribute('aria-label', 'Revoke the invite created ' + when);
-    revoke.addEventListener('click', () => {
-      sendJSON('DELETE', api + '/invites/' + inv.id).then(loadInvites).catch(console.error);
-    });
-    li.append(label, revoke);
-    return li;
-  }));
+  own = await res.json();
+  if (!$('me-anon').firstChild) {
+    $('me-anon').dataset.tip = anonText;
+    $('me-anon').setAttribute('aria-label', anonText);
+    $('me-anon').append(badgeIcon('anon'));
+  }
+  $('me-anon').hidden = !noEmail();
+  if (!noEmail()) $('email-nudge').hidden = true;
+  if (participants.length) renderParticipants();
 }
-$('invite-create').addEventListener('click', () => {
-  sendJSON('POST', api + '/invites').then((inv) => {
-    if (!inv) return;
-    $('invite-link').value = inv.url;
-    $('invite-copy').textContent = 'Copy invite';
-    $('invite-new').hidden = false;
-    return loadInvites();
-  }).catch(console.error);
-});
-$('invite-copy').addEventListener('click', () => copyField($('invite-link'), $('invite-copy')));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) reloadOwn(); });
 
-// The empty chat's card makes an invite and copies it in one press (005-AC34).
+// nudgeEmail shows the banner once per page, unless "Later" snoozed it on this profile (011-AC8).
+let nudged = false;
+function nudgeEmail() {
+  const until = own.profile && own.profile.email_nudge_until;
+  if (nudged || !noEmail() || (until && new Date(until) > new Date())) return;
+  nudged = true;
+  $('email-nudge').hidden = false;
+}
+for (const id of ['email-nudge-later', 'email-nudge-close']) {
+  $(id).addEventListener('click', () => {
+    const b = $(id);
+    b.disabled = true;
+    netFetch('/api/profile/nudge', { method: 'POST' }).then((res) => {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      $('email-nudge').hidden = true;
+    }).catch((err) => toast("Couldn't snooze: " + err.message)).finally(() => { b.disabled = false; });
+  });
+}
+
+// Invites (011-AC26): the popup and the empty chat's card show your one shareable link, which the
+// server makes on the first ask; extra links and revoking live in Room settings › Invites.
+const shareLink = () => sendJSON('POST', api + '/invites/share').then((inv) => inv && inv.url);
+function openInvites() {
+  $('invite-link').value = '';
+  $('invite-copy').disabled = true;
+  $('invite-status').textContent = '';
+  $('invites').showModal();
+  return shareLink().then((url) => {
+    if (!url) return;
+    $('invite-link').value = url;
+    $('invite-copy').disabled = false;
+  }).catch((err) => { $('invite-status').textContent = err.message; });
+}
+$('invite-copy').addEventListener('click', () => copyField($('invite-link')));
+$('invite-manage').addEventListener('click', () => $('invites').close());
+
+// The empty chat's card copies the same link in one press (005-AC34); a refused clipboard opens
+// the popup on it.
 $('chat-invite').addEventListener('click', () => {
-  sendJSON('POST', api + '/invites').then((inv) => {
-    if (!inv) return;
-    return navigator.clipboard.writeText(inv.url).then(() => { $('chat-invite-status').textContent = 'Copied. Paste it to the people you invite.'; },
-      () => {
-        $('invite-link').value = inv.url;
-        $('invite-new').hidden = false;
-        $('invites').showModal();
-        $('invite-link').select();
-        loadInvites().catch(console.error);
-      });
-  }).catch((err) => { $('chat-invite-status').textContent = err.message; });
+  const b = $('chat-invite');
+  b.disabled = true;
+  $('chat-invite-status').textContent = '';
+  shareLink().then((url) => {
+    if (!url) return;
+    return navigator.clipboard.writeText(url).then(() => { $('chat-invite-status').textContent = 'Copied. Paste it to the people you invite.'; },
+      () => openInvites().then(() => $('invite-link').select()));
+  }).catch((err) => { $('chat-invite-status').textContent = err.message; }).finally(() => { b.disabled = false; });
 });
 
-// showEmpty shows the invite card while the chat holds only event lines.
+// showEmpty shows the invite card while nobody else has joined, whatever the chat holds (011-AC26):
+// the room's list holds only the participants whose invite is still valid, and self marks your
+// profile's other seats.
 function showEmpty() {
-  $('chat-empty').hidden = ended || docsMode || !!messages.querySelector('li.msg:not(.system)');
+  $('chat-empty').hidden = ended || docsMode || participants.some((p) => String(p.id) !== myID && !p.self);
 }
 
 // Documents. Text documents render in an iframe sandboxed without allow-same-origin: their
@@ -1618,8 +1650,6 @@ function connect() {
   // Listing on open, not before: the stream announces only changes made after it opened.
   es.onopen = () => {
     $('reconnecting').hidden = true;
-    // The history replays right after the stream opens: judge emptiness once it did.
-    setTimeout(showEmpty, 500);
     beat();
     loadDocuments().then(loadAnnotations).catch(console.error);
     loadPlugins().catch(console.error);
@@ -2685,6 +2715,7 @@ const roles = [
 // wherever its font puts it, off the name's centre line.
 const badgeIcons = {
   you: '<circle cx="12" cy="12" r="6" fill="currentColor" stroke="none"/>',
+  anon: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   host: '<path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4a2 2 0 0 0 .7 2.7l.2.1a2 2 0 0 1 1 1.7v.5a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.5a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   admin: '<path d="M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.5L12 17.3l-5.9 3.2 1.3-6.5-4.9-4.6 6.6-.8z" fill="currentColor"/>',
   ask: '<path d="M12 3l2.2 6.8L21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2z" fill="currentColor"/>',
@@ -2730,12 +2761,14 @@ function span(cls, text, tip) {
 
 // tagColumns are the badges a person row may carry, in their fixed order (008-AC13): a column shows
 // in every row of a list once any row has it, so a badge sits at the same place on every row.
-const tagColumns = ['you', 'host', 'admin', 'ask', 'transcribed', 'audio'];
+const tagColumns = ['you', 'anon', 'host', 'admin', 'ask', 'transcribed', 'audio'];
 
 // personTags are a participant's badges by column: [icon, accessible name, tooltip].
 function personTags(p, id, isHere) {
   const t = {};
   for (const [name, title, on, icon] of roles) if (on(p)) t[name] = [icon, name, title];
+  // Only your own row: nobody else learns whether a profile has an email (011-AC6).
+  if (id === myID && noEmail()) t.anon = ['anon', anonText, anonText];
   if (agent.can_trigger.includes(p.id) && agent.host_participant_id !== p.id) t.ask = ['ask', 'Can ask the AI', 'Can ask the AI'];
   if (transcribed.has(id)) t.transcribed = ['transcribed', 'The transcription hears this voice', 'The transcription hears this voice'];
   const st = isHere ? audioState(id) : { key: 'none', icon: '', text: 'Not in the audio' };
@@ -2844,7 +2877,15 @@ const personCardLines = [
   (p, id) => (transcribed.has(id) ? 'Transcribed' : 'Not transcribed'),
   (p, id) => cardHere(p, id),
   (p) => 'Joined ' + grillDate(p.joined_at),
+  (p, id) => (id === myID && noEmail() ? anonLink() : ''),
 ];
+
+function anonLink() {
+  const a = document.createElement('a');
+  a.href = '/profile#email';
+  a.textContent = anonText;
+  return a;
+}
 // hoverDelay keeps a pointer passing over the list from flashing cards.
 const hoverDelay = 300;
 
@@ -2880,7 +2921,7 @@ function showCard(el) {
     const text = line(p, id, el);
     if (!text) continue;
     const li = document.createElement('li');
-    li.textContent = text;
+    li.append(text);
     list.append(li);
   }
   const name = document.createElement('strong');
@@ -2941,9 +2982,16 @@ document.addEventListener('pointerout', (e) => {
 $('person-card').addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') hideSoon($('person-card')); });
 document.addEventListener('focusin', (e) => { if (cardTarget(e.target)) showCard(e.target); });
 document.addEventListener('focusout', (e) => { if (e.target === cardFor) hideCard(); });
+// The marker (011-AC7): on touch the first tap shows its tip, the next one opens the email form.
+document.addEventListener('click', (e) => {
+  const m = e.target instanceof Element && e.target.closest('.anon-mark');
+  if (!m || (e.pointerType !== 'touch' && e.pointerType !== 'pen') || grillTip.shownFor() === m) return;
+  e.preventDefault();
+  grillTip.show(m);
+});
 // A tap anywhere on a person's row but its ⋯, or on a chat name, opens the card; a tap elsewhere closes it.
 document.addEventListener('click', (e) => {
-  const row = e.target instanceof Element && !e.target.closest('.person-more') ? e.target.closest('#participants li, #participants-away li') : null;
+  const row = e.target instanceof Element && !e.target.closest('.person-more, .anon-mark') ? e.target.closest('#participants li, #participants-away li') : null;
   const el = row ? row.querySelector('.name') : cardTarget(e.target);
   if (el) showCard(el);
   else if (!$('person-card').contains(e.target)) hideCard();
@@ -3001,7 +3049,7 @@ function renderParticipants() {
     for (const { li, tags, menu, seen } of want) {
       const box = li.querySelector('.tags');
       const had = new Map([...box.children].map((x) => [x.dataset.col, x]));
-      const kids = cols.map((c) => tagSpan(c, tags[c], had.get(c)));
+      const kids = cols.map((c) => tagSpan(c, tags[c], had.get(c) || (c === 'anon' && tags.anon ? anonMark() : undefined)));
       if (seen) {
         const el = had.get('seen') || span('seen', '');
         el.dataset.col = 'seen';
@@ -3055,8 +3103,16 @@ function tagSpan(col, t, el = document.createElement('span')) {
     el.setAttribute('aria-label', t[1]);
   }
   if (!on) el.classList.add('blank');
-  el.setAttribute('role', 'img');
+  if (el.tagName === 'A') el.classList.add('anon-mark');
+  else el.setAttribute('role', 'img');
   return el;
+}
+
+// anonMark is your own row's marker square: a link to the email form (011-AC7).
+function anonMark() {
+  const a = document.createElement('a');
+  a.href = '/profile#email';
+  return a;
 }
 setInterval(() => { if (participants.length) renderParticipants(); }, 30_000);
 
@@ -3449,7 +3505,7 @@ async function send() {
   if (!res.ok) throw new Error('send: HTTP ' + res.status);
   // Only the line sent leaves the box: the next one may already be typed in it.
   if (bodyInput.value === typed) bodyInput.value = '';
-  nudgeRecovery();
+  nudgeRecovery().catch(console.error);
   offerPush();
   const m = await res.json();
   if (m.mention_notices) {
@@ -3698,6 +3754,7 @@ async function firstLoad() {
 firstLoad().then((ok) => {
   if (!ok) return;
   connect();
+  reloadOwn();
   if (docsMode) {
     const doc = decodeURIComponent(location.pathname.split('/')[4] || '');
     if (doc) showDocument(doc, false, true).catch(() => history.replaceState(null, '', roomPath + '/docs'));

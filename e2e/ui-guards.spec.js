@@ -172,11 +172,7 @@ test('one date format', async ({ browser, request }) => {
   const dates = {};
   await alice.locator('#participants .name').first().focus();
   dates.card = (await alice.locator('#person-card li', { hasText: /^Joined / }).textContent()).replace(/^Joined /, '');
-  await alice.locator('#more-open').click();
-  await alice.locator('#invite-open').click();
-  await alice.locator('#invite-create').click();
-  dates.invite = (await alice.locator('#invite-list li span').first().textContent()).replace(/^Created /, '');
-  await alice.keyboard.press('Escape');
+  // Invite dates show in Room settings › Invites only: the popup holds the shareable link (011-AC26).
   await alice.goto(alice.url().split('#')[0] + '#manage/invites');
   dates.settings = (await alice.locator('#invites-all td[data-label=Created]').first().textContent()).trim();
   await alice.goto(alice.url().split('#')[0]);

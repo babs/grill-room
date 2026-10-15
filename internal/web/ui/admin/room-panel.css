@@ -2,16 +2,17 @@
    this one file, so both look the same (005-AC43). */
 #room-panel h2 { overflow-wrap: anywhere; }
 #room-panel h3 { font-size: var(--fs-md); margin: var(--sp-4) 0 var(--sp-1); }
-#room-panel .row { display: flex; flex-wrap: wrap; align-items: end; gap: var(--sp-2) var(--sp-3); margin: var(--sp-2) 0 var(--sp-3); }
-#room-panel .row label { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-sm); font-weight: 600; }
-#room-panel .scroll { overflow-x: auto; max-width: 100%; }
+:is(#room-panel, #panel-invites) .row { display: flex; flex-wrap: wrap; align-items: end; gap: var(--sp-2) var(--sp-3); margin: var(--sp-2) 0 var(--sp-3); }
+:is(#room-panel, #panel-invites) .row label { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-sm); font-weight: 600; }
+:is(#room-panel, #panel-invites) .scroll { overflow-x: auto; max-width: 100%; }
 #room-panel dl { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-6); margin: var(--sp-1) 0 var(--sp-3); }
 #room-panel dt { color: var(--text-muted); font-size: var(--fs-sm); }
 #room-panel dd { margin: 0; }
-#room-panel .link { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-sm); }
-#room-panel .link input { width: 100%; }
-#room-panel ul { padding-left: 0; list-style: none; }
-#room-panel li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-height: var(--control-h); }
+:is(#room-panel, #panel-invites) .link { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-sm); }
+:is(#room-panel, #panel-invites) .link input { width: 100%; }
+:is(#room-panel, #panel-invites) .row .link { flex: 1 1 16rem; }
+:is(#room-panel, #panel-invites) ul { padding-left: 0; list-style: none; }
+:is(#room-panel, #panel-invites) li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-height: var(--control-h); }
 #room-panel .tab-panel { padding-top: var(--sp-2); }
 /* Admins in columns: name, role, the admin button, Rename; each starts at the same x on every row. */
 #room-panel .admin-rows li { display: grid; grid-template-columns: minmax(6rem, 14rem) 4rem 9rem auto; justify-content: start; align-items: center; gap: var(--sp-2) var(--sp-3);

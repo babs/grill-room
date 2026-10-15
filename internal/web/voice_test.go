@@ -193,7 +193,7 @@ func TestVoiceLines(t *testing.T) {
 		}
 	}
 	// A revoked speaker's line is dropped with their access.
-	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+itoa(inv.ID), e.admin, nil); code != http.StatusNoContent {
+	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+itoa(inv.ID), e.admin, nil); code != http.StatusOK {
 		t.Fatal("revoke")
 	}
 	if code, _ := e.do(t, "POST", path, sttToken, map[string]any{"participant_id": alice.Participant.ID, "body": "x"}); code != http.StatusNotFound {
@@ -395,7 +395,7 @@ func TestRevokeAndDeleteLeaveVoice(t *testing.T) {
 	a := e.join(t, inv.Token, "A")
 	b := e.join(t, inv.Token, "B")
 	e.join(t, e.createInvite(t, room.ID).Token, "C")
-	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+itoa(inv.ID), e.admin, nil); code != http.StatusNoContent {
+	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+itoa(inv.ID), e.admin, nil); code != http.StatusOK {
 		t.Fatal("revoke")
 	}
 	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID, e.admin, nil); code != http.StatusNoContent {

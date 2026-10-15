@@ -272,7 +272,7 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 		t.Fatalf("rename: %d %s", code, b)
 	}
 	inv := e.createInvite(t, room.ID)
-	if code, _ := e.do(t, "DELETE", fmt.Sprintf("/api/rooms/%s/invites/%d", room.ID, inv.ID), e.admin, nil); code != http.StatusNoContent {
+	if code, _ := e.do(t, "DELETE", fmt.Sprintf("/api/rooms/%s/invites/%d", room.ID, inv.ID), e.admin, nil); code != http.StatusOK {
 		t.Fatalf("revoke: %d", code)
 	}
 
@@ -341,8 +341,9 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 	// Every mutation action is exercised here; the admin.* ones, the room admins', the settings' and
 	// the archives' and the renames' have their own tests (TestAuditLogViewAPI, TestRoomAdmins,
 	// TestRoomSkillsAPI, TestProfileCreatesRooms, TestProfileMaxRoomsAPI, TestExportImportAPI,
-	// TestRenameParticipant, TestDeleteDocument, TestStarterLibraryAPI, TestHostTransfer).
-	covered := map[string]bool{ActionStarterPublish: true, ActionStarterDelete: true, ActionRoomAdminAdd: true, ActionRoomAdminRemove: true, ActionRoomSkillRemove: true, ActionSettings: true,
+	// TestRenameParticipant, TestDeleteDocument, TestStarterLibraryAPI, TestHostTransfer,
+	// TestAdminRecoveryLink, TestMergeAPI, TestPurgeProfilesLoopAndSwitch).
+	covered := map[string]bool{ActionProfileMerge: true, ActionProfilePurge: true, ActionProfileRecoveryLink: true, ActionProfileRecoveryUsed: true, ActionStarterPublish: true, ActionStarterDelete: true, ActionRoomAdminAdd: true, ActionRoomAdminRemove: true, ActionRoomSkillRemove: true, ActionSettings: true,
 		ActionProfileMaxRooms: true, ActionRoomExport: true, ActionRoomImport: true, ActionRename: true, ActionDocumentDelete: true,
 		ActionDocumentRestore: true, ActionHostTransfer: true}
 	for _, w := range want {

@@ -3,6 +3,7 @@ package mail
 import (
 	"bufio"
 	"context"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -146,5 +147,93 @@ func TestSendRefusesAuthWithoutTLS(t *testing.T) {
 	case s := <-got:
 		t.Fatalf("relay received %q", s)
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// refusingRelay answers one SMTP session, replying reply at step: MAIL, RCPT, DATA or END (the
+// data's final dot).
+func refusingRelay(t *testing.T, step, reply string) string {
+	t.Helper()
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		r := bufio.NewReader(c)
+		say := func(s string) { _, _ = c.Write([]byte(s + "\r\n")) }
+		at := func(s, ok string) {
+			if s == step {
+				say(reply)
+			} else {
+				say(ok)
+			}
+		}
+		say("220 fake")
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			switch cmd := strings.ToUpper(strings.TrimSpace(line)); {
+			case strings.HasPrefix(cmd, "MAIL"):
+				at("MAIL", "250 ok")
+			case strings.HasPrefix(cmd, "RCPT"):
+				at("RCPT", "250 ok")
+			case cmd == "DATA":
+				if step == "DATA" {
+					say(reply)
+					continue
+				}
+				say("354 go")
+				for {
+					if l, err := r.ReadString('\n'); err != nil || l == ".\r\n" {
+						break
+					}
+				}
+				at("END", "250 queued")
+			case cmd == "QUIT":
+				say("221 bye")
+				return
+			default:
+				say("250 ok")
+			}
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// 011-AC28: only a refusal of the recipient is ErrRecipient; policy, auth, the sender or a
+// temporary failure are the relay's problem.
+func TestSendRecipientRefusal(t *testing.T) {
+	for _, c := range []struct {
+		step, reply string
+		recipient   bool
+	}{
+		{"RCPT", "550 5.1.1 no such user", true},
+		{"RCPT", "553 mailbox name not allowed", true},
+		{"RCPT", "551 user not local", true},
+		{"RCPT", "554 5.1.2 bad destination domain", true},
+		{"END", "550 5.1.1 no such user", true},
+		{"RCPT", "550 5.7.1 relaying denied", false},
+		{"RCPT", "530 5.7.0 authentication required", false},
+		{"RCPT", "530 authentication required", false},
+		{"RCPT", "554 transaction failed", false},
+		{"DATA", "554 5.7.1 rejected", false},
+		{"END", "550 5.7.1 content refused", false},
+		{"RCPT", "451 4.3.0 try later", false},
+		{"MAIL", "550 5.1.8 sender refused", false},
+	} {
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		err := SMTP{Addr: refusingRelay(t, c.step, c.reply), From: "noreply@example.com"}.Send(ctx, "a@example.com", "x", "b")
+		cancel()
+		if err == nil || errors.Is(err, ErrRecipient) != c.recipient {
+			t.Errorf("%s %q: %v, recipient refusal %v", c.step, c.reply, err, c.recipient)
+		}
 	}
 }

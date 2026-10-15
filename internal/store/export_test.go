@@ -58,7 +58,7 @@ func richRoom(t *testing.T, s *Store, id string) (*Participant, *RoomPersona) {
 	ctx := t.Context()
 	lobby := "lobby-" + id
 	alice := joinWithProfile(t, s, lobby, "Alice", JoinProfile{RecoveryHash: "rec-" + id, SessionHash: "sess-" + id})
-	if _, err := s.CreateProfileRoom(ctx, id, "Room "+id, alice.ProfileID, "Alice", "inv-"+id, "tok-"+id, nil); err != nil {
+	if _, err := s.CreateProfileRoom(ctx, id, "Room "+id, alice.ProfileID, "Alice", "inv-"+id, "tok-"+id, "lnk-"+id, "lnkh-"+id, nil); err != nil {
 		t.Fatal(err)
 	}
 	ps, _ := s.Participants(ctx, id)
@@ -369,9 +369,27 @@ func TestExportImportRoundTrip(t *testing.T) {
 		t.Fatalf("participants carry a secret: %s", all)
 	}
 
+	// 011-AC26: the creator's shareable link never leaves, and an import makes none.
+	if err := filepath.WalkDir(a, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(path)
+		if bytes.Contains(b, []byte("lnk-orig")) {
+			t.Errorf("%s carries the shareable link", path)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	rep, err := s.ImportRoom(ctx, a, importOpts("copy"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	var links int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM invites WHERE room_id = 'copy' AND link IS NOT NULL`).Scan(&links); err != nil || links != 0 {
+		t.Errorf("the import made %d shareable links: %v", links, err)
 	}
 	want := map[string]int{"participants": 3, "messages": 0, "message_versions": 2, "uploads": 3, "documents": 4, "revisions": 4, "annotations": 2,
 		"annotation_messages": 3, "attachments": 1, "personas": 1, "skills": 2, "skill_versions": 1, "sessions": 1, "mentions": 1, "note_mentions": 1}
@@ -495,7 +513,7 @@ func TestImportByProfile(t *testing.T) {
 	if _, err := s.RoomAdmin(ctx, "daves", dave.ProfileID); err != nil {
 		t.Fatalf("dave is not room admin: %v", err)
 	}
-	if err := s.SetInstanceSettings(ctx, InstanceSettings{RoomsPerProfile: 1, RoomCreation: CreationAnyone}); err != nil {
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 1, RoomCreation: CreationAnyone}); err != nil {
 		t.Fatal(err)
 	}
 	o.RoomID = "again"
@@ -574,13 +592,13 @@ func TestImportRefusals(t *testing.T) {
 	o = importOpts("x")
 	o.MaxUpload = 5
 	refused("upload size", o, dir, "too large for this instance")
-	if err := s.SetInstanceSettings(ctx, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: 1}); err != nil {
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: 1}); err != nil {
 		t.Fatal(err)
 	}
 	o = importOpts("x")
 	o.ArchiveBytes = 1
 	refused("storage quota", o, dir, "storage quota")
-	if err := s.SetInstanceSettings(ctx, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone}); err != nil {
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone}); err != nil {
 		t.Fatal(err)
 	}
 	tamper := func(name string, edit func([]byte) []byte) string {
@@ -680,7 +698,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 	tables := map[string]string{
 		"rooms":                    "id name created_at chain_budget chain_count chain_suspended parallel_turns stt_glossary created_from | host_participant_id quota_bytes creator_profile_id",
 		"participants":             "id name joined_at can_trigger profile_id profile_uuid_hint room_id invite_id previous_name | token_hash last_seen_at join_ip join_ua last_ip last_ua",
-		"invites":                  "| id room_id token_hash created_at revoked_at created_by",
+		"invites":                  "| id room_id token_hash created_at revoked_at created_by link", // 011-AC26: a shareable token never leaves
 		"messages":                 "id room_id ts kind participant_id sender body model edited_at deleted_at change_seq persona_id effort req_model req_effort model_note model_mismatch | html turn_id",
 		"message_versions":         "id message_id seq body written_at |",
 		"uploads":                  "id room_id participant_id filename content_type size data created_at |",
@@ -715,6 +733,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"profiles":                  server,
 		"profile_sessions":          server,
 		"magic_links":               server,
+		"recovery_links":            server,
 		"settings":                  server,
 		"admin_sessions":            server,
 		"audit_log":                 server,

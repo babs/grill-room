@@ -49,9 +49,15 @@ const (
 	ActionSessionRevoke  = "admin.session_revoke"
 )
 
+// Recovery link actions; neither entry ever holds the token (011-AC3).
+const (
+	ActionProfileRecoveryLink = "profile.recovery_link"
+	ActionProfileRecoveryUsed = "profile.recovery_link_used"
+)
+
 // AuditActions lists every action, for the audit view's filter.
 var AuditActions = []string{ActionRoomCreate, ActionRoomRename, ActionRoomDelete, ActionRoomQuota, ActionRoomExport, ActionRoomImport, ActionInviteCreate, ActionInviteRevoke,
-	ActionRoomAdminAdd, ActionRoomAdminRemove, ActionRoomSkillRemove, ActionRename, ActionDocumentDelete, ActionDocumentRestore, ActionHostTransfer, ActionProfileDelete, ActionProfileMaxRooms, ActionTemplateRemove, ActionSkillRemove, ActionStarterPublish, ActionStarterDelete, ActionSettings,
+	ActionRoomAdminAdd, ActionRoomAdminRemove, ActionRoomSkillRemove, ActionRename, ActionDocumentDelete, ActionDocumentRestore, ActionHostTransfer, ActionProfileDelete, ActionProfileRecoveryLink, ActionProfileRecoveryUsed, ActionProfileMerge, ActionProfilePurge, ActionProfileMaxRooms, ActionTemplateRemove, ActionSkillRemove, ActionStarterPublish, ActionStarterDelete, ActionSettings,
 	ActionAdminLogin, ActionAdminLogout, ActionSessionRevoke}
 
 // adminCSP admits the /admin page's import map by its hash.

@@ -183,7 +183,7 @@ func TestStarterLimits(t *testing.T) {
 	ctx := t.Context()
 	alice := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec-a", SessionHash: "sess-a"})
 	used, _ := s.UsedBytes(ctx)
-	if err := s.SetInstanceSettings(ctx, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: used + 64<<10}); err != nil {
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: used + 64<<10}); err != nil {
 		t.Fatal(err)
 	}
 	big := map[string][]byte{"doc/0": make([]byte, 128<<10)}
@@ -193,7 +193,7 @@ func TestStarterLimits(t *testing.T) {
 	if n := count(t, s, `SELECT count(*) FROM starters WHERE profile_id = ?`, alice.ProfileID); n != 0 {
 		t.Fatalf("%d starters written", n)
 	}
-	if err := s.SetInstanceSettings(ctx, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone}); err != nil {
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone}); err != nil {
 		t.Fatal(err)
 	}
 	var first *Starter

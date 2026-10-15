@@ -123,6 +123,9 @@ func execOne(ctx context.Context, tx *sql.Tx, query string, args ...any) error {
 // ActorSuperAdmin is the audit actor of the admin token and its sessions.
 const ActorSuperAdmin = "super-admin"
 
+// ActorSystem is the audit actor of what no signed-in person did, such as using a recovery link.
+const ActorSystem = "system"
+
 // Audit target kinds.
 const (
 	TargetRoom         = "room"

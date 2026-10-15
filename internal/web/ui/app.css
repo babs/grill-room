@@ -18,6 +18,19 @@ body.join { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction
 .join-card label { font-size: var(--fs-sm); font-weight: 600; }
 #status { color: var(--text-muted); min-height: 1.2em; }
 .field-error { margin: 0; color: var(--danger); font-size: var(--fs-sm); }
+.field-error:empty { display: none; }
+/* An error says so with an icon too, not by colour alone (docs/design.md, Input). */
+.field-error:not(:empty) { display: flex; align-items: baseline; gap: var(--sp-1); }
+.field-error::before { content: ""; flex: none; align-self: center; width: 1em; height: 1em; background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 7v6M12 16.5v.5'/%3E%3C/svg%3E") center / contain no-repeat; }
+.row .field-error { flex-basis: 100%; }
+/* The sent panel takes the email form's place (011-AC28). */
+.link-sent { display: grid; gap: var(--sp-2); margin: var(--sp-3) 0; text-align: left; }
+.link-sent h3 { margin: 0; font-size: var(--fs-md); overflow-wrap: anywhere; }
+.link-sent h3:focus { outline: none; }
+.link-sent p { margin: 0; }
+.link-sent .again { color: var(--success); font-weight: 600; }
+.link-sent .actions { justify-content: flex-start; margin: 0; }
 body.join .rooms { list-style: none; padding: 0; text-align: left; }
 body.join .rooms li { padding: var(--sp-1) 0; overflow-wrap: anywhere; }
 body.join h2 { margin-top: var(--sp-5); font-size: var(--fs-md); text-align: left; }
@@ -65,6 +78,16 @@ body.room { position: fixed; top: var(--vv-top, 0); left: 0; right: 0; height: 1
 /* The user menu's button: initials in a ring, the name beside them on a wide screen. */
 .avatar { gap: var(--sp-2); padding: 0 var(--sp-2) 0 0; border: 0; background: transparent; color: var(--chrome-text); }
 .avatar::before { content: attr(data-initials); display: grid; place-items: center; flex: none; width: var(--control-h); height: var(--control-h); border-radius: 50%; background: var(--accent); color: var(--on-accent); font-size: var(--fs-sm); }
+/* The no-email marker (011-AC6) beside the avatar, with a 44 px target. */
+#me-anon { position: relative; display: grid; place-items: center; flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--dot-ring); }
+.tag.anon-mark { position: relative; }
+/* The hit area stops short of the neighbours: 8 px gaps in the header, 4 px between People badges. */
+#me-anon::after { content: ""; position: absolute; inset: -8px; }
+.tag.anon-mark::after { content: ""; position: absolute; inset: -2px; }
+#me-anon svg, #profile-anon svg { display: block; width: 14px; height: 14px; }
+.tag.tag-anon:not(.blank) { border-radius: 50%; box-shadow: inset 0 0 0 1px var(--border-strong); color: var(--text); }
+#profile-anon { display: inline-flex; align-items: center; gap: var(--sp-1); margin-left: var(--sp-2); font-size: var(--fs-sm); color: var(--text-muted); }
+#email-nudge { background: var(--primary-bg); }
 #more-open { border-color: transparent; background: transparent; color: var(--chrome-text); font-size: var(--fs-lg); }
 /* A persona pill: its colour as a stripe, its state as a shape with a ring and, wide, as a word (005-AC32). */
 button.persona { flex: none; min-height: var(--control-h); padding: 0 var(--sp-3) 0 var(--sp-2); border: 0; border-radius: var(--r-pill); background: var(--surface); color: var(--text); font-weight: 600; }
@@ -115,7 +138,7 @@ dialog#manage { width: min(64rem, calc(100vw - 1rem)); min-height: min(36rem, ca
 .sheet h2 { font-size: var(--fs-lg); }
 .sheet > label, .sheet details label { display: flex; flex-direction: column; gap: var(--sp-1); margin: var(--sp-2) 0; font-size: var(--fs-sm); font-weight: 600; }
 .sheet > label:has(> input[type=checkbox]) { flex-direction: row; font-weight: 400; }
-#invite-new { margin: var(--sp-3) 0; }
+#invites .copy-row { margin: var(--sp-3) 0; }
 #host-oneliner, .host-sha { font-family: var(--mono); font-size: var(--fs-xs); word-break: break-all; white-space: pre-wrap; }
 #host-oneliner { padding: var(--sp-2); background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-sm); }
 .host-sha { color: var(--text-muted); }

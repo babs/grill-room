@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -182,13 +183,13 @@ func TestStarterPluginsAPI(t *testing.T) {
 		t.Fatalf("a plugin left out stays: %+v", m)
 	}
 	used, _ := e.st.UsedBytes(ctx)
-	if err := e.st.SetInstanceSettings(ctx, store.InstanceSettings{RoomsPerProfile: 10, RoomCreation: store.CreationAnyone, StorageQuota: used + 512}); err != nil {
+	if err := putSettings(ctx, e.st, store.InstanceSettings{RoomsPerProfile: 10, RoomCreation: store.CreationAnyone, StorageQuota: used + 512}); err != nil {
 		t.Fatal(err)
 	}
 	if code, b := save([]string{"babs"}); code != http.StatusConflict || !strings.Contains(string(b), "storage quota") {
 		t.Fatalf("past the quota: %d %s", code, b)
 	}
-	if err := e.st.SetInstanceSettings(ctx, store.InstanceSettings{RoomsPerProfile: 10, RoomCreation: store.CreationAnyone}); err != nil {
+	if err := putSettings(ctx, e.st, store.InstanceSettings{RoomsPerProfile: 10, RoomCreation: store.CreationAnyone}); err != nil {
 		t.Fatal(err)
 	}
 	code, b = save([]string{"babs"})
@@ -224,4 +225,10 @@ func TestViewPluginImported(t *testing.T) {
 	if v := viewPlugin(p, true); v.Versions[0].CommitURL == "" || v.Versions[1].CompareURL == "" {
 		t.Fatalf("not imported %+v", v.Versions)
 	}
+}
+
+// putSettings stores v whole, as a PUT sending every field does.
+func putSettings(ctx context.Context, st *store.Store, v store.InstanceSettings) error {
+	_, err := st.UpdateInstanceSettings(ctx, func(p *store.InstanceSettings) error { *p = v; return nil })
+	return err
 }
