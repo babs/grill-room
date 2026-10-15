@@ -21,11 +21,22 @@ interface Window {
   grillSTT?: { glossary: boolean; device: DeviceOffer | null };
   // room.js: whether this tab is in the audio; "grill:voice" follows each change.
   grillVoiceOn?: boolean;
+  // room.js: the live mic's track, null while muted; "grill:mic" follows each change. grillTab names
+  // the page in its presence beats.
+  grillMic?: MediaStreamTrack | null;
+  grillTab: string;
   grillDeviceSTT: {
     readonly state: 'off' | 'loading' | 'testing' | 'ready';
     readonly checked: string | null | undefined;
     transcribe(pcm: Float32Array): Promise<{ text: string; ms: number }>;
+    // The pipeline worker's last counters (stt/pipeline.js), for the tests and the bench.
+    readonly pipeline: Record<string, any>;
     load?: object;
     selfTest?: { backend: string; rtfx: number; wer: number; text: string };
   };
 }
+// The AudioWorklet scope of stt/worklet.js, which the DOM library leaves out.
+declare class AudioWorkletProcessor {
+  readonly port: MessagePort;
+}
+declare function registerProcessor(name: string, ctor: new () => AudioWorkletProcessor): void;

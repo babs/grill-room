@@ -1,6 +1,6 @@
 // On-device transcription in the audio menu (010-AC1, 010-AC2, 010-AC8): the capability check, the
-// opt-in toggle, the download and the self-test. Phase 1 transcribes nothing yet: window.grillDeviceSTT
-// and the "grill:device-stt" event give the device pipeline its engine.
+// opt-in toggle, the download and the self-test. Once the engine is ready, and while this tab is in
+// the audio, the pipeline worker (stt/pipeline.js) transcribes the live mic (010-AC9, 010-AC17).
 
 /**
  * A message from stt/engine.js.
@@ -20,9 +20,23 @@ const CACHE = 'grill-room-stt:';
 const GB = 1e9;
 // The self-test's bars: decode at least this many times faster than real time, and this close to
 // the reference text.
-/** @type {Record<string, number>} */
-const MIN_RTFX = { wasm: 3, 'webgpu-hybrid': 8 };
+// Only a test sets grillSelfTestBar: a CI runner's speed must not decide the real-model specs.
+const bar = Object.freeze({ wasm: 3, webgpu: 8, .../** @type {any} */ (globalThis).grillSelfTestBar });
 const MAX_WER = 0.2;
+
+/**
+ * verdict is the self-test's outcome: '' on a pass, else the reason. The words come first, so a
+ * clip decoded to nothing reads as wrong, not as slow.
+ * @param {string} backend
+ * @param {number} rtfx
+ * @param {number} w the word error rate
+ */
+export function verdict(backend, rtfx, w) {
+  const min = backend === 'wasm' ? bar.wasm : bar.webgpu;
+  if (w > MAX_WER) return `This device got the test sentence wrong (${Math.round(w * 100)} % of words), so it can't write voices down.`;
+  if (rtfx < min) return `This device is too slow to write voices down: ${rtfx.toFixed(1)} times real time, it needs ${min}.`;
+  return '';
+}
 // A load that sends nothing for stallMs, or a self-test decode longer than testMs, is a hung
 // engine. Progress resets the stall clock, so a slow link is not a hang. Tests shorten them.
 export const timing = { stallMs: 120_000, testMs: 60_000 };
@@ -123,7 +137,135 @@ function say(text, error = false) {
 function setState(s) {
   state = s;
   box.checked = s !== 'off';
+  syncLive();
   window.dispatchEvent(new CustomEvent('grill:device-stt', { detail: { state: s } }));
+}
+
+/**
+ * The running pipeline: its worker, the audio graph that taps the mic, and the track tapped.
+ * @typedef {{w: Worker, ctx: AudioContext, tap: AudioWorkletNode | null, src: MediaStreamAudioSourceNode | null,
+ *   track: MediaStreamTrack | null}} Live
+ */
+/** @type {Live | null} */
+let live = null;
+// ending settles once the last pipeline stopped and its engine ended: the next engine waits for it,
+// so two never hold the model's memory at once.
+/** @type {Promise<unknown>} */
+let ending = Promise.resolve();
+// failed is set once the engine failed under the pipeline: the voice stays on the server until the
+// page reloads (010-AC17).
+let failed = false;
+// pipeline is the pipeline worker's last counters, for the page and the tests.
+/** @type {Record<string, any>} */
+let pipeline = {};
+/** @type {Record<string, string>} */
+const where = {
+  device: 'Transcribed on this device',
+  slow: 'Transcribed by the server: this device is too slow right now',
+  failed: 'Transcribed by the server: the voice-to-text engine failed on this device. Reload the page to try again.',
+  untapped: "Transcribed by the server: this browser can't pass your microphone to the voice-to-text engine.",
+};
+
+// engineFailed keeps the voice on the server until the page reloads (010-AC17). The engine goes
+// too, and its memory; the choice stays for the next page load.
+function engineFailed() {
+  failed = true;
+  pause();
+  if (offer) sessionStorage.setItem(reasonKey(offer.revision), where.failed);
+  say(where.failed, true);
+}
+
+// syncLive runs the pipeline while the engine is ready and this tab is in the audio.
+function syncLive() {
+  const want = state === 'ready' && inAudio && !!worker && !!offer;
+  if (want && !live) startLive();
+  else if (!want && live) stopLive();
+}
+
+function startLive() {
+  const base = `/models/${encodeURIComponent(offer?.revision || '')}/`;
+  const room = '/api/rooms/' + encodeURIComponent(decodeURIComponent(location.pathname.split('/')[2] || ''));
+  const w = new Worker('/static/stt/pipeline.js', { type: 'module' });
+  const toEngine = new MessageChannel();
+  const fromMic = new MessageChannel();
+  // The default rate: Firefox refuses a mic source in a context at any other; the pipeline resamples.
+  const ctx = new AudioContext();
+  worker?.postMessage({ cmd: 'pipe', port: toEngine.port1 }, [toEngine.port1]);
+  w.postMessage({ cmd: 'start', base, rate: ctx.sampleRate, engine: toEngine.port2, mic: fromMic.port2, presence: room + '/presence',
+    lines: room + '/voice/device-lines', tab: window.grillTab }, [toEngine.port2, fromMic.port2]);
+  const l = /** @type {Live} */ ({ w, ctx, tap: null, src: null, track: null });
+  live = l;
+  pipeline = {};
+  w.onmessage = (e) => {
+    if (live !== l) return;
+    const m = e.data;
+    if (m.ev === 'stats') {
+      pipeline = m;
+      window.dispatchEvent(new CustomEvent('grill:device-pipeline', { detail: m }));
+    } else if (m.ev === 'mode' && m.mode === 'failed') engineFailed();
+    else if (m.ev === 'mode') say(where[m.mode]);
+  };
+  l.ctx.audioWorklet.addModule('/static/stt/worklet.js').then(() => {
+    if (live !== l) return;
+    const tap = new AudioWorkletNode(l.ctx, 'tap');
+    tap.port.postMessage({ port: fromMic.port1 }, [fromMic.port1]);
+    // A node only runs when it leads to the output; the zero gain keeps the mic out of the speakers.
+    const mute = l.ctx.createGain();
+    mute.gain.value = 0;
+    tap.connect(mute).connect(l.ctx.destination);
+    l.tap = tap;
+    tapMic();
+  }).catch(untapped);
+}
+
+// untapped hands the voice back: without the tap the device would hold it and hear nothing.
+function untapped() {
+  if (!live) return;
+  // The engine goes too, and its memory; the choice stays.
+  pause();
+  say(where.untapped, true);
+}
+
+/**
+ * stopLive stops the pipeline: it drops the device flag, posts what it holds, then goes, with the
+ * engine it was given; a stuck one goes anyway after STOP_MS and a second.
+ * @param {Worker | null} [engine]
+ */
+function stopLive(engine = null) {
+  const l = live;
+  if (!l) return;
+  live = null;
+  l.src?.disconnect();
+  l.ctx.close().catch(() => {});
+  ending = new Promise((done) => {
+    const end = () => {
+      l.w.terminate();
+      engine?.terminate();
+      done(undefined);
+    };
+    l.w.onmessage = (e) => { if (e.data.ev === 'stopped') end(); };
+    setTimeout(end, 5000);
+  });
+  l.w.postMessage({ cmd: 'stop' });
+}
+
+// tapMic follows room.js's live mic: a muted mic is disconnected, so no audio reaches the pipeline.
+function tapMic() {
+  const l = live;
+  const track = window.grillMic || null;
+  if (!l?.tap || l.track === track) return;
+  l.src?.disconnect();
+  l.src = null;
+  l.w.postMessage({ cmd: 'muted', on: !track });
+  l.track = track;
+  if (!track) return;
+  try {
+    l.src = l.ctx.createMediaStreamSource(new MediaStream([track]));
+    l.src.connect(l.tap);
+  } catch {
+    return untapped();
+  }
+  l.ctx.resume().catch(() => {});
 }
 
 /** @type {Map<number, (m: EngineMsg) => void>} */
@@ -136,7 +278,9 @@ const HUNG = { ev: 'error', error: 'hung', message: 'the engine stopped respondi
 // stop ends the engine; what waited on it fails, so no caller hangs.
 function stop() {
   run++;
-  worker?.terminate();
+  // The pipeline posts what it still holds with the engine, then ends it.
+  if (live) stopLive(worker);
+  else worker?.terminate();
   worker = null;
   const gone = { ev: 'error', error: 'stopped', message: 'device transcription stopped' };
   for (const f of pending.values()) f(gone);
@@ -199,9 +343,9 @@ function startWorker(backend) {
       if (mine !== run) return;
       // Before it is ready: the script did not load, a network fault and no verdict on the device.
       if (abort) return fail({ ev: 'error', error: 'network', message: e.message || 'the engine did not load' });
-      // After: the engine died; whatever waits on it fails at once.
+      // After: the engine died; whatever waits on it fails at once, and the voice stays on the server.
       gen++;
-      if (offer) halted(offer.revision, 'The voice-to-text engine stopped. Turn it on again to restart it.');
+      engineFailed();
     };
     w.postMessage({ cmd: 'load', revision: offer?.revision, files: offer?.files, backend });
   });
@@ -250,9 +394,7 @@ async function selfTest(backend) {
   const rtfx = ref.seconds / (ms / 1000);
   const w = wer(ref.text, text);
   window.grillDeviceSTT.selfTest = { backend, rtfx, wer: w, text };
-  if (rtfx < MIN_RTFX[backend]) return `This device is too slow to write voices down: ${rtfx.toFixed(1)} times real time, it needs ${MIN_RTFX[backend]}.`;
-  if (w > MAX_WER) return `This device got the test sentence wrong (${Math.round(w * 100)} % of words), so it can't write voices down.`;
-  return '';
+  return verdict(backend, rtfx, w);
 }
 
 /**
@@ -285,11 +427,17 @@ async function refuse(rev, reason) {
 
 async function turnOn() {
   if (!offer) return;
+  if (failed) {
+    box.checked = false;
+    return say(where.failed, true);
+  }
   const rev = offer.revision;
   const mine = ++gen;
   sessionStorage.removeItem(reasonKey(rev));
   setState('loading');
   say('Downloading…');
+  await ending;
+  if (mine !== gen) return;
   // A device that passed loads the backend it passed on and skips the test. Otherwise a failure
   // on WebGPU gets a second chance on WASM before the device is refused (010-AC2). Only the
   // test's verdict, or an engine that runs on neither, refuses the device; a fetch error does not.
@@ -383,7 +531,8 @@ box.addEventListener('change', () => {
   } else turnOff();
 });
 
-window.grillDeviceSTT = { get state() { return state; }, get checked() { return checked; }, transcribe };
+window.grillDeviceSTT = { get state() { return state; }, get checked() { return checked; }, get pipeline() { return pipeline; }, transcribe };
 addEventListener('grill:stt', (e) => offered(/** @type {CustomEvent} */ (e).detail.device));
 addEventListener('grill:voice', (e) => voiceMoved(/** @type {CustomEvent} */ (e).detail.on));
+addEventListener('grill:mic', tapMic);
 offered(window.grillSTT?.device);

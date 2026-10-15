@@ -1,7 +1,8 @@
 // The on-device transcription engine, a module worker: decoding never runs on the page's thread
 // (010-AC2, 010-AC3). Messages in: {cmd: 'load', revision, files, backend?}, {cmd: 'transcribe',
-// id, pcm}. Out: {ev: 'progress', done, total}, {ev: 'ready', backend, isolated, ms}, {ev: 'text',
-// id, text, ms}, {ev: 'error', id?, error: 'integrity' | 'network' | 'engine', file, message, backend}.
+// id, pcm}, {cmd: 'pipe', port}. Out: {ev: 'progress', done, total}, {ev: 'ready', backend, isolated,
+// ms}, {ev: 'text', id, text, ms}, {ev: 'error', id?, error: 'integrity' | 'network' | 'engine', file,
+// message, backend}. A 'pipe' port gets {ev: 'vad', silero, wasm}, then takes 'transcribe' as above.
 import { ParakeetModel } from './vendor/parakeet/parakeet.js';
 
 const SR = 16000;
@@ -10,9 +11,11 @@ const CACHE = 'grill-room-stt:';
 let model = null;
 // backend is the one this load picked: an error names it, so the page knows whether WASM is left to try.
 let backend = '';
-// silero holds the VAD model's checked bytes for the segmenter role of Phase 2.
+// silero and wasm hold the VAD model's and the runtime's checked bytes, for the pipeline worker.
 /** @type {Uint8Array | null} */
 let silero = null;
+/** @type {Uint8Array | null} */
+let wasm = null;
 
 class LoadError extends Error {
   /**
@@ -149,7 +152,8 @@ async function load({ revision, files, backend: wanted }) {
   /** @type {any} */ (globalThis).ort = ort;
   ort.env.wasm.wasmPaths = base;
   // The checked bytes: ORT would otherwise fetch the .wasm again, unchecked.
-  ort.env.wasm.wasmBinary = pick(/\.wasm$/).buffer;
+  wasm = pick(/\.wasm$/);
+  ort.env.wasm.wasmBinary = wasm.buffer;
   ort.env.wasm.numThreads = 4;
   const m = await ParakeetModel.fromUrls({
     encoderUrl: pick(/^encoder/), decoderUrl: pick(/^decoder/), tokenizerUrl: pick(/^vocab/),
@@ -164,18 +168,31 @@ async function load({ revision, files, backend: wanted }) {
   postMessage({ ev: 'ready', backend, isolated: crossOriginIsolated, ms: { fetch: tFetch - t0, session: tSession - tFetch, warmup: tWarm - tSession } });
 }
 
-onmessage = async (e) => {
-  const d = e.data;
+/**
+ * run answers one command; reply goes to the page or to a pipeline's port.
+ * @param {any} d
+ * @param {(m: object) => void} reply
+ */
+async function run(d, reply) {
   try {
     if (d.cmd === 'load') await load(d);
-    else if (d.cmd === 'transcribe') {
+    else if (d.cmd === 'pipe') {
+      /** @type {MessagePort} */
+      const port = d.port;
+      port.onmessage = (e) => run(e.data, (m) => port.postMessage(m));
+      // Copies: ORT keeps reading its own.
+      if (silero && wasm) port.postMessage({ ev: 'vad', silero: silero.slice(), wasm: wasm.slice() });
+      else port.postMessage({ ev: 'error', error: 'engine', message: 'the engine is not loaded' });
+    } else if (d.cmd === 'transcribe') {
       if (!model) throw new LoadError('engine', '', 'the engine is not loaded');
       const t = performance.now();
       const r = await model.transcribe(d.pcm, SR, {});
-      postMessage({ ev: 'text', id: d.id, text: r.utterance_text || '', ms: performance.now() - t });
+      reply({ ev: 'text', id: d.id, text: r.utterance_text || '', ms: performance.now() - t });
     }
   } catch (err) {
     const le = err instanceof LoadError ? err : new LoadError('engine', '', err instanceof Error ? err.message : String(err));
-    postMessage({ ev: 'error', id: d.id, error: le.kind, file: le.file, message: le.message, backend });
+    reply({ ev: 'error', id: d.id, error: le.kind, file: le.file, message: le.message, backend });
   }
-};
+}
+
+onmessage = (e) => run(e.data, postMessage);

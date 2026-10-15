@@ -364,7 +364,7 @@ body.docs-window #chat-fold, body.docs-window #chat-unfold { display: none; }
 .msg.agent .meta strong { color: var(--primary-text); }
 .msg .meta :is(.model, .effort, .model-note) { font-size: var(--fs-xs); color: var(--text-muted); }
 .msg .meta .model-note.mismatch { color: var(--warning); font-weight: 600; }
-.msg.voice .meta strong::after { content: " (voice)"; font-weight: 400; color: var(--text-muted); }
+.msg.voice .meta .voice-src { color: var(--text-muted); }
 .msg .mentions { display: flex; flex-wrap: wrap; gap: 2px var(--sp-3); font-size: var(--fs-sm); color: var(--text-muted); }
 .msg .mention-turn.failed, .msg .mention-turn.stopped { color: var(--danger); }
 .msg .notice { font-size: var(--fs-sm); color: var(--warning); }

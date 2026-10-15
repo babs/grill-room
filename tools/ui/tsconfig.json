@@ -24,6 +24,12 @@
     "../../internal/web/ui/admin/*.js",
     "../../internal/web/ui/stt/device.js",
     "../../internal/web/ui/stt/engine.js",
+    "../../internal/web/ui/stt/filter.js",
+    "../../internal/web/ui/stt/pipeline.js",
+    "../../internal/web/ui/stt/policy.js",
+    "../../internal/web/ui/stt/resample.js",
+    "../../internal/web/ui/stt/segmenter.js",
+    "../../internal/web/ui/stt/worklet.js",
     "globals.d.ts"
   ]
 }
