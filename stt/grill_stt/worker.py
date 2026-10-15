@@ -212,6 +212,8 @@ class Worker:
                 if skipped:
                     vad.reset()
                     seg, skipped = segmenter(), False
+                    # 010-AC15 measures the handover up to this frame reaching the VAD.
+                    log.info("track_resumed", room=room, participant=participant_id, track=sid)
                 samples = np.frombuffer(ev.frame.data, np.int16).astype(np.float32)
                 samples /= 32768
                 submit(seg.feed_timed(samples))
@@ -262,7 +264,7 @@ class Worker:
         for room, participant in sorted(device - self._device):
             log.info("track_device", room=room, participant=participant)
         for room, participant in sorted(self._device - device):
-            log.info("track_resumed", room=room, participant=participant)
+            log.info("track_unflagged", room=room, participant=participant)
         self._device = device
         self._changed.set()
 

@@ -488,10 +488,18 @@ async def test_a_flagged_track_stays_subscribed_and_its_audio_skips_the_vad(
     w._changed.clear()
     with structlog.testing.capture_logs() as logs:
         w.flag(frozenset())
-    assert [e["event"] for e in logs] == ["track_resumed"]
+    assert [e["event"] for e in logs] == ["track_unflagged"]
     assert w._changed.is_set() and w.voices() == {"r1": [7, 8]} and device_tracks() == 0
-    a.frames.put_nowait(pause())
-    await drained(a)
+    with structlog.testing.capture_logs() as logs:
+        a.frames.put_nowait(pause())
+        await drained(a)
+        on_first = [e["event"] for e in logs]
+        a.frames.put_nowait(pause())
+        await drained(a)
+    assert on_first == ["track_resumed"]
+    assert logs == [
+        {"event": "track_resumed", "room": "r1", "participant": 7, "track": "TR_a", "log_level": "info"}
+    ]
     assert vad.windows > seen and vad.resets == 1 and submitted == [whole, half]
     a.frames.put_nowait(speech(1) + pause())
     await settle(lambda: len(submitted) == 3)
