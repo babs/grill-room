@@ -116,10 +116,16 @@ test('profile hierarchy, long names and room cards', async ({ browser, request }
   await tab.setViewportSize(desktop);
   for (const t of tabs) {
     await openTab(tab, t);
-    const wide = await tab.locator('main .hint').evaluateAll((els) => els.filter((e) => e.getClientRects().length)
-      .map((e) => e.getBoundingClientRect().width / parseFloat(getComputedStyle(e).fontSize)));
-    // 70ch of a proportional font is about 35 to 40 em.
-    for (const em of wide) expect(em, t).toBeLessThanOrEqual(42);
+    // Each hint's width in ch of its own font: the runner's fonts differ from a workstation's.
+    const wide = await tab.locator('main .hint').evaluateAll((els) => {
+      const ctx = document.createElement('canvas').getContext('2d');
+      return els.filter((e) => e.getClientRects().length).map((e) => {
+        ctx.font = getComputedStyle(e).font;
+        return e.getBoundingClientRect().width / ctx.measureText('0').width;
+      });
+    });
+    expect(wide.length, t).toBeGreaterThan(0);
+    for (const ch of wide) expect(ch, t).toBeLessThanOrEqual(70.5);
   }
 });
 
@@ -129,6 +135,11 @@ test('profile hierarchy, long names and room cards', async ({ browser, request }
 test('one primary per tab, empty states and the skill sheet', async ({ browser, request }) => {
   const { pages: [pat] } = await roomWith(browser, request, ['Pat']);
   const tab = await profilePage(pat);
+  // The shared library is the server's, filled by other specs: here it is empty.
+  await tab.route('**/api/profile/starters', async (route) => {
+    const res = await route.fetch();
+    await route.fulfill({ response: res, json: (await res.json()).filter((st) => st.library !== 'instance') });
+  });
   await tab.goto('/profile');
   const primary = { rooms: ['+ New room'], starters: [], skills: ['Add a skill'], account: ['Send me a link'] };
   for (const t of tabs) {
