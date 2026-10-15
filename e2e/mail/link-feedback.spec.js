@@ -54,6 +54,9 @@ async function feedback(page, { box, form, input, path, address, heading, vp }) 
   await expect(resend).toHaveText(/^Resend \(\d+ s\)$/);
   await expect(resend).toBeDisabled();
   await expect(panel.locator('.again')).toBeHidden();
+  // The actions start where the text does: the kit's .actions alone would push them right.
+  const [h3Box, resendBox] = [await panel.locator('h3').boundingBox(), await resend.boundingBox()];
+  expect(Math.abs(resendBox.x - h3Box.x)).toBeLessThan(1);
   if (vp.width < 400) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(vp.width);
   }

@@ -30,7 +30,7 @@ body.join { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction
 .link-sent h3:focus { outline: none; }
 .link-sent p { margin: 0; }
 .link-sent .again { color: var(--success); font-weight: 600; }
-.link-sent .actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.link-sent .actions { justify-content: flex-start; margin: 0; }
 body.join .rooms { list-style: none; padding: 0; text-align: left; }
 body.join .rooms li { padding: var(--sp-1) 0; overflow-wrap: anywhere; }
 body.join h2 { margin-top: var(--sp-5); font-size: var(--fs-md); text-align: left; }
