@@ -180,3 +180,108 @@ func TestRevokeEndsStreams(t *testing.T) {
 		t.Fatal("the stream outlived its client's revocation")
 	}
 }
+
+// The sandbox can read its dummy bearer: only Claude Code's own calls may reach upstream with the
+// real token (spike S16).
+func TestPathAllowlist(t *testing.T) {
+	var reached []string
+	up := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		reached = append(reached, r.Method+" "+r.URL.RequestURI())
+	}))
+	defer up.Close()
+	upURL, _ := url.Parse(up.URL)
+	dir := t.TempDir()
+	writeCreds(t, dir, "real-tok", time.Now())
+	core, logs := observer.New(zap.DebugLevel)
+	p := New(upURL, creds.NewSource(creds.Reader{ConfigDir: dir}), zap.New(core))
+	p.Allow("w1", "dummy")
+
+	long := "/v1/messages/" + strings.Repeat("a", 64<<10)
+	tests := []struct {
+		method, target string
+		want           int
+	}{
+		{"POST", "/v1/messages", 200},
+		{"POST", "/v1/messages?beta=true", 200},
+		{"POST", "/v1/messages/count_tokens?beta=true", 200},
+		{"HEAD", "/api/hello", 200},
+		{"GET", "/v1/mcp_servers", 403},
+		{"POST", "/v1/mcp_servers", 403},
+		{"GET", "/v1/organizations/org-1/usage", 403},
+		{"POST", "/api/oauth/claude_cli/create_api_key", 403},
+		{"GET", "/api/oauth/profile", 403},
+		{"POST", "/v1/mcp/srv_1", 403},
+		{"POST", "/v1/messages/../mcp_servers", 403},
+		{"POST", "/v1/messages/%2e%2e/mcp_servers", 403},
+		{"POST", "/v1/messages/%2E%2E/%2E%2E/api/oauth/profile", 403},
+		{"POST", "//v1/messages", 403},
+		{"POST", "/v1//messages", 403},
+		{"POST", "/v1%2Fmessages", 403},
+		{"POST", "/v1/messages%2F..%2Fmcp_servers", 403},
+		{"POST", "/v1/m%65ssages", 403},
+		{"POST", "/v1/messages/", 403},
+		{"POST", "/V1/messages", 403},
+		{"POST", "/v1/messages;x", 403},
+		{"POST", "http://api.anthropic.com/v1/mcp_servers", 403},
+		{"GET", "/v1/messages", 403},
+		{"PUT", "/v1/messages", 403},
+		{"DELETE", "/v1/messages", 403},
+		{"post", "/v1/messages", 403},
+		{"POST", "/api/hello", 403},
+		{"GET", "/v1/messages/count_tokens", 403},
+		{"POST", long, 403},
+		{strings.Repeat("X", 4096), "/v1/messages", 403},
+	}
+	var denied int64
+	for _, tc := range tests {
+		t.Run(tc.method[:min(len(tc.method), 16)]+" "+tc.target[:min(len(tc.target), 60)], func(t *testing.T) {
+			reached = nil
+			// httptest.NewRequestWithContext parses the target as the server does, so no client normalises it.
+			req := httptest.NewRequestWithContext(t.Context(), tc.method, tc.target, http.NoBody)
+			req.Header.Set("Authorization", "Bearer dummy")
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status %d, want %d", rec.Code, tc.want)
+			}
+			if tc.want == 403 {
+				denied++
+				if len(reached) != 0 {
+					t.Fatalf("reached upstream: %v", reached)
+				}
+				if !strings.Contains(rec.Body.String(), "only Claude Code's model calls") {
+					t.Fatalf("body %q", rec.Body.String())
+				}
+			} else if len(reached) != 1 || reached[0] != tc.method+" "+tc.target {
+				t.Fatalf("upstream saw %v", reached)
+			}
+		})
+	}
+	if st := p.Stats(); st.Denied["w1"] != denied || st.Requests["w1"] != int64(len(tests))-denied {
+		t.Fatalf("stats = %+v, want %d denied", st, denied)
+	}
+	entries := logs.FilterMessage("proxy_path_denied").All()
+	if int64(len(entries)) != denied {
+		t.Fatalf("%d proxy_path_denied lines, want %d", len(entries), denied)
+	}
+	for _, e := range entries {
+		m := e.ContextMap()
+		if m["worker"] != "w1" || m["method"] == "" || len(m["path"].(string)) > maxLogged+3 || len(m["method"].(string)) > maxLogged+3 {
+			t.Fatalf("log fields %v", m)
+		}
+	}
+	for _, e := range logs.All() {
+		if line := fmt.Sprint(e.Message, e.ContextMap()); strings.Contains(line, "real-tok") || strings.Contains(line, "dummy") {
+			t.Fatalf("bearer logged: %s", line)
+		}
+	}
+
+	// An unknown bearer is refused before the path is looked at, and counts for no worker.
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/v1/mcp_servers", http.NoBody)
+	req.Header.Set("Authorization", "Bearer nope")
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+	if rec.Code != 403 || len(p.Stats().Denied) != 1 {
+		t.Fatalf("unknown bearer: %d, denied %v", rec.Code, p.Stats().Denied)
+	}
+}
