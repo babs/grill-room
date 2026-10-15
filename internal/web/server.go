@@ -984,6 +984,8 @@ type roomResp struct {
 	Voice bool `json:"voice"`
 	// Profile tells whether the viewer has a profile, to which a rename may apply (005-AC1).
 	Profile bool `json:"profile"`
+	// Version is this server's, for the room page's Diagnostics (010-AC22).
+	Version string `json:"version"`
 }
 
 func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
@@ -1004,7 +1006,7 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
 		ps[i].Self = p.ID == sess.p.ID || (sess.p.ProfileID != 0 && p.ProfileID == sess.p.ProfileID)
 	}
 	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps, Daemons: s.connectedDaemons(room.ID), Voice: s.opts.Voice != nil,
-		Profile: sess.p.ProfileID != 0})
+		Profile: sess.p.ProfileID != 0, Version: s.opts.Version})
 }
 
 func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, sess session) {

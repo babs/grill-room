@@ -50,6 +50,8 @@ const realBar = (page) => page.addInitScript(() => { globalThis.grillSelfTestBar
 // machine reports them.
 async function stub(page, nav, isolated = true) {
   await page.addInitScript(([nav, isolated]) => {
+    // Every reload of these specs would otherwise wait 12 s for the engine (010-AC21).
+    globalThis.grillReloadDelayMs ??= 0;
     for (const [k, v] of Object.entries(nav)) Object.defineProperty(Navigator.prototype, k, { get: () => v, configurable: true });
     if (!isolated) Object.defineProperty(window, 'crossOriginIsolated', { get: () => false });
   }, [nav, isolated]);
@@ -758,6 +760,62 @@ test('a hung line post still measures the device', async ({ browser, request }) 
   } finally {
     for (const release of t.released) release();
   }
+});
+
+// 010-AC21: on a reload the engine waits, so the old page's memory goes first; the server keeps the
+// voice meanwhile. A fresh load starts at once.
+test('a reload starts the engine late, a fresh load at once', async ({ browser, request }) => {
+  test.setTimeout(90_000);
+  const offer = await realOffer(request);
+  const { room, pages: [page] } = await roomWith(browser, request, ['Alice']);
+  expect(await page.evaluate(() => import('/static/stt/device.js').then((m) => m.RELOAD_DELAY_MS))).toBe(12_000);
+  const delay = 4000;
+  await page.addInitScript((delay) => { globalThis.grillReloadDelayMs = delay; }, delay);
+  await stub(page, desktop);
+  await page.addInitScript(() => {
+    window.saidLines = [];
+    addEventListener('DOMContentLoaded', () => {
+      const el = document.getElementById('device-stt-status');
+      new MutationObserver(() => window.saidLines.push(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true });
+    });
+  });
+  // The stub engine stamps its ready with the time, to compare with the page's load.
+  const engine = stubEngine.replace('ms: {}', 'ms: { at: performance.timeOrigin + performance.now() }');
+  const log = [];
+  await page.context().route('**/static/stt/engine.js', async (r) => {
+    log.push('engine');
+    return r.fulfill({ response: await r.fetch(), body: engine });
+  });
+  await page.context().route(`**/api/rooms/${room.id}/presence`, (r) => {
+    const body = r.request().postDataJSON();
+    if (!('device_stt' in body)) return r.continue();
+    log.push('beat:' + body.device_stt);
+    return r.fulfill({ status: 204 });
+  });
+  // Chosen earlier, passed earlier; offerTo reloads the page.
+  await page.evaluate((rev) => {
+    localStorage.setItem('grill-room-device-stt', '1');
+    localStorage.setItem('grill-room-device-stt-passed:' + rev, 'wasm');
+  }, offer.revision);
+  await offerTo(page, room.id, offer);
+  expect(await page.evaluate(() => performance.getEntriesByType('navigation')[0].type)).toBe('reload');
+  await audio(page, true);
+  await expect(said(page)).toHaveText('Transcribed by the server: starting on this device in a few seconds');
+  expect(log).toEqual([]);
+  await expect(said(page)).toHaveText('Transcribed on this device', { timeout: 30_000 });
+  const startedAfter = await page.evaluate(() => window.grillDeviceSTT.load.at - performance.timeOrigin);
+  expect(startedAfter).toBeGreaterThanOrEqual(delay);
+  // The flag comes up only with the device's own pipeline, after the engine.
+  await expect.poll(() => log.includes('beat:true')).toBe(true);
+  expect(log[0]).toBe('engine');
+
+  // A fresh load of the same room: no wait.
+  await page.goto(page.url());
+  expect(await page.evaluate(() => performance.getEntriesByType('navigation')[0].type)).toBe('navigate');
+  await expect.poll(() => page.evaluate(() => window.grillDeviceSTT?.checked)).toBe(offer.revision);
+  await audio(page, true);
+  await expect(said(page)).toHaveText('Transcribed on this device', { timeout: 30_000 });
+  expect(await page.evaluate(() => window.saidLines)).not.toContain('Transcribed by the server: starting on this device in a few seconds');
 });
 
 // 010-AC17: an engine that dies while it transcribes leaves the voice on the server until the page

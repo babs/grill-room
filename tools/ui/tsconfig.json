@@ -22,6 +22,7 @@
   "include": [
     "../../internal/daemon/ui/*.js",
     "../../internal/web/ui/admin/*.js",
+    "../../internal/web/ui/diagnostics.js",
     "../../internal/web/ui/stt/device.js",
     "../../internal/web/ui/stt/engine.js",
     "../../internal/web/ui/stt/filter.js",

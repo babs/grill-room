@@ -24,6 +24,8 @@ interface Window {
   // room.js: the live mic's track, null while muted; "grill:mic" follows each change. grillTab names
   // the page in its presence beats.
   grillMic?: MediaStreamTrack | null;
+  // room.js: what the Diagnostics sheet reads of the room page (010-AC22).
+  grillDiag: { roomName(): string; stream(): string; voice(): Promise<{ state: string; stats: RTCStatsReport | null }> };
   grillTab: string;
   grillDeviceSTT: {
     readonly state: 'off' | 'loading' | 'testing' | 'ready';
@@ -31,6 +33,12 @@ interface Window {
     transcribe(pcm: Float32Array): Promise<{ text: string; ms: number }>;
     // The pipeline worker's last counters (stt/pipeline.js), for the tests and the bench.
     readonly pipeline: Record<string, any>;
+    // What the Diagnostics sheet reads (010-AC22).
+    readonly info: {
+      offer: DeviceOffer | null; offered: boolean; refused: boolean; on: boolean; inAudio: boolean; delayed: boolean;
+      failed: boolean; untapped: boolean;
+      live: boolean; handovers: { at: number; mode: string }[]; backend?: object;
+    };
     load?: object;
     selfTest?: { backend: string; rtfx: number; wer: number; text: string };
   };

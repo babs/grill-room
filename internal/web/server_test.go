@@ -731,3 +731,23 @@ func TestStreamRevokedWhenRoomGoesMidRead(t *testing.T) {
 	e.bus.Notify(room.ID)
 	expectRevokedThenClosed(t, events)
 }
+
+// TestGetRoomVersion: the room page reads the server's own version for Diagnostics (010-AC22).
+func TestGetRoomVersion(t *testing.T) {
+	for _, v := range []string{"v1.2.3", ""} {
+		opts := testOptions
+		opts.Version = v
+		e := newEnvOpts(t, opts)
+		room := e.createRoom(t, "R")
+		alice := e.join(t, e.createInvite(t, room.ID).Token, "Alice")
+		code, b := e.do(t, "GET", "/api/rooms/"+room.ID, alice.Token, nil)
+		if code != http.StatusOK {
+			t.Fatalf("get room: %d %s", code, b)
+		}
+		if got := decodeJSON[struct {
+			Version *string `json:"version"`
+		}](t, b).Version; got == nil || *got != v {
+			t.Fatalf("version = %v, want %q", got, v)
+		}
+	}
+}

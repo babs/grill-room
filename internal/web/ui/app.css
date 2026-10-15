@@ -524,3 +524,14 @@ button.doc { display: block; overflow: hidden; text-overflow: ellipsis; white-sp
 .starter-editor .warn { color: var(--warning); }
 /* A checkbox sits before its words, as in the persona form, not stacked above them. */
 #starter-docs label.check, #starter-skills label.check, #starter-plugins label.check { flex-direction: row; align-items: center; justify-content: flex-start; gap: var(--sp-2); font-weight: 400; }
+/* Diagnostics (010-AC22): one label width for both sections, so their values line up; long values wrap. */
+#diag h3 { font-size: var(--fs-md); margin: var(--sp-4) 0 var(--sp-2); }
+#diag .facts { display: grid; grid-template-columns: 10rem minmax(0, 1fr); gap: var(--sp-1) var(--sp-3); margin: 0; font-size: var(--fs-sm); }
+#diag .facts dt { color: var(--text-muted); }
+#diag .facts dd { margin: 0; overflow-wrap: anywhere; }
+/* The copy stays in reach while a long sheet scrolls, on a phone above all. */
+#diag .actions { position: sticky; bottom: calc(-1 * var(--sp-4)); margin-bottom: calc(-1 * var(--sp-4)); padding: var(--sp-3) 0 var(--sp-4); background: var(--surface); }
+@media (max-width: 40rem) {
+  #diag .facts { grid-template-columns: minmax(0, 1fr); }
+  #diag .facts dd { margin-bottom: var(--sp-2); }
+}

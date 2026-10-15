@@ -27,6 +27,7 @@
 }}</script>
 <script type="module" src="/static/admin/room-admin.js"></script>
 <script type="module" src="/static/stt/device.js"></script>
+<script type="module" src="/static/diagnostics.js"></script>
 </head>
 <body class="room">
 <header class="app-header room-header">
@@ -67,6 +68,7 @@
   <button type="button" id="rename-open" data-icon="rename">Change my name</button>
   <button type="button" id="notify-open" data-icon="bell">Notifications</button>
   <button type="button" id="recovery-open" data-icon="device">Use on another device</button>
+  <button type="button" id="diag-open" data-icon="pulse">Diagnostics</button>
   <a href="/profile" data-icon="profile">My rooms and profile</a>
 </div>
 <div id="more-menu" class="menu" popover>
@@ -197,6 +199,22 @@
   <p class="hint">Anyone holding this link can join and read the room.</p>
   <p id="invite-status" class="said error" role="status"></p>
   <p><a href="#manage/invites" id="invite-manage">More links and revoking in Room settings › Invites</a></p>
+</dialog>
+<dialog id="diag" class="sheet full" aria-labelledby="diag-title">
+  <div class="sheet-head">
+    <h2 id="diag-title">Diagnostics</h2>
+    <button type="button" class="btn-icon btn-ghost close" aria-label="Close" data-icon="close"></button>
+  </div>
+  <section aria-labelledby="diag-stt-title">
+    <h3 id="diag-stt-title">Transcription</h3>
+    <dl id="diag-stt" class="facts"></dl>
+  </section>
+  <section aria-labelledby="diag-net-title">
+    <h3 id="diag-net-title">Connection</h3>
+    <dl id="diag-net" class="facts"></dl>
+  </section>
+  <p id="diag-said" class="said" role="status"></p>
+  <div class="actions"><button type="button" id="diag-copy" class="btn-secondary">Copy diagnostics</button></div>
 </dialog>
 <dialog id="notify" class="sheet" aria-labelledby="notify-title">
   <div class="sheet-head">

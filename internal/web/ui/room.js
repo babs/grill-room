@@ -3508,6 +3508,22 @@ async function joinVoice() {
   }
 }
 
+// The Diagnostics sheet (diagnostics.js, 010-AC22) reads the event stream's state, the room's name
+// and the audio's connection from here; nothing leaves the page.
+window.grillDiag = {
+  roomName: () => roomName,
+  stream: () => (!events ? 'not open' : ['connecting', 'open', 'closed'][events.readyState]),
+  voice: async () => {
+    if (!voice) return { state: 'not in the audio', stats: null };
+    const lp = voice.localParticipant;
+    // A track's own report holds its transport and the candidate pair in use.
+    const track = lp.getTrackPublication(LivekitClient.Track.Source.Microphone)?.track
+      || [...voice.remoteParticipants.values()].flatMap((p) => [...p.audioTrackPublications.values()]).map((p) => p.track).find(Boolean);
+    const stats = await track?.getRTCStatsReport?.().catch(() => null);
+    return { state: voice.state, stats: stats || null };
+  },
+};
+
 function cleanupVoice() {
   voice = null;
   speaking = new Set();

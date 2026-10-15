@@ -40,6 +40,12 @@ export function verdict(backend, rtfx, w) {
 // A load that sends nothing for stallMs, or a self-test decode longer than testMs, is a hung
 // engine. Progress resets the stall clock, so a slow link is not a hang. Tests shorten them.
 export const timing = { stallMs: 120_000, testMs: 60_000 };
+// After a reload Chrome gives the old page's memory back about 9 s after the unload, in the same
+// renderer (S13 §4.1): an engine started at once would hold two models' worth until then (010-AC21).
+export const RELOAD_DELAY_MS = 12_000;
+// Only a test sets grillReloadDelayMs, so it need not wait 12 s.
+const reloadDelay = /** @type {any} */ (globalThis).grillReloadDelayMs ?? RELOAD_DELAY_MS;
+const reloaded = /** @type {PerformanceNavigationTiming | undefined} */ (performance.getEntriesByType('navigation')[0])?.type === 'reload';
 
 /** @param {string} id */
 const $ = (id) => /** @type {HTMLElement} */ (document.getElementById(id));
@@ -152,6 +158,20 @@ let live = null;
 // so two never hold the model's memory at once.
 /** @type {Promise<unknown>} */
 let ending = Promise.resolve();
+/** @type {{at: number, mode: string}[]} */
+let handovers = [];
+// micRefused is set once the audio graph refused the mic's track, until the next turn on.
+let micRefused = false;
+
+/**
+ * handover notes where the voice went, for the Diagnostics sheet (010-AC22).
+ * @param {string} mode
+ */
+function handover(mode) {
+  handovers = [...handovers, { at: Date.now(), mode }].slice(-20);
+}
+// delayed is set while a reloaded page waits before it starts the engine (010-AC21).
+let delayed = false;
 // failed is set once the engine failed under the pipeline: the voice stays on the server until the
 // page reloads (010-AC17).
 let failed = false;
@@ -164,11 +184,13 @@ const where = {
   slow: 'Transcribed by the server: this device is too slow right now',
   failed: 'Transcribed by the server: the voice-to-text engine failed on this device. Reload the page to try again.',
   untapped: "Transcribed by the server: this browser can't pass your microphone to the voice-to-text engine.",
+  delayed: 'Transcribed by the server: starting on this device in a few seconds',
 };
 
 // engineFailed keeps the voice on the server until the page reloads (010-AC17). The engine goes
 // too, and its memory; the choice stays for the next page load.
 function engineFailed() {
+  handover('failed');
   failed = true;
   pause();
   if (offer) sessionStorage.setItem(reasonKey(offer.revision), where.failed);
@@ -202,8 +224,13 @@ function startLive() {
     if (m.ev === 'stats') {
       pipeline = m;
       window.dispatchEvent(new CustomEvent('grill:device-pipeline', { detail: m }));
-    } else if (m.ev === 'mode' && m.mode === 'failed') engineFailed();
-    else if (m.ev === 'mode') say(where[m.mode]);
+    } else if (m.ev === 'mode') {
+      if (m.mode === 'failed') engineFailed();
+      else {
+        handover(m.mode);
+        say(where[m.mode]);
+      }
+    }
   };
   l.ctx.audioWorklet.addModule('/static/stt/worklet.js').then(() => {
     if (live !== l) return;
@@ -221,6 +248,8 @@ function startLive() {
 // untapped hands the voice back: without the tap the device would hold it and hear nothing.
 function untapped() {
   if (!live) return;
+  handover('untapped');
+  micRefused = true;
   // The engine goes too, and its memory; the choice stays.
   pause();
   say(where.untapped, true);
@@ -292,6 +321,7 @@ function stop() {
 // pause ends the engine and keeps the choice: it loads again when the tab is back in the audio.
 function pause() {
   gen++;
+  delayed = false;
   stop();
   setState('off');
 }
@@ -433,11 +463,22 @@ async function turnOn() {
   }
   const rev = offer.revision;
   const mine = ++gen;
+  micRefused = false;
   sessionStorage.removeItem(reasonKey(rev));
   setState('loading');
-  say('Downloading…');
   await ending;
   if (mine !== gen) return;
+  // The server keeps the voice meanwhile: no engine, no pipeline, no flag.
+  const wait = reloaded ? reloadDelay - performance.now() : 0;
+  if (wait > 0) {
+    delayed = true;
+    say(where.delayed);
+    await new Promise((r) => setTimeout(r, wait));
+    // A newer turn on may be waiting in its turn: only this one's own wait ends here.
+    if (mine !== gen) return;
+    delayed = false;
+  }
+  say('Downloading…');
   // A device that passed loads the backend it passed on and skips the test. Otherwise a failure
   // on WebGPU gets a second chance on WASM before the device is refused (010-AC2). Only the
   // test's verdict, or an engine that runs on neither, refuses the device; a fetch error does not.
@@ -531,7 +572,20 @@ box.addEventListener('change', () => {
   } else turnOff();
 });
 
-window.grillDeviceSTT = { get state() { return state; }, get checked() { return checked; }, get pipeline() { return pipeline; }, transcribe };
+window.grillDeviceSTT = {
+  get state() { return state; },
+  get checked() { return checked; },
+  get pipeline() { return pipeline; },
+  transcribe,
+  // What the Diagnostics sheet reads (010-AC22).
+  get info() {
+    return {
+      offer, offered: !!offer && !label.hidden, refused: !!offer && !!localStorage.getItem(failKey(offer.revision)),
+      on: !!localStorage.getItem(ON_KEY), inAudio, delayed, failed, untapped: micRefused,
+      live: !!live, handovers, backend: window.grillDeviceSTT.load,
+    };
+  },
+};
 addEventListener('grill:stt', (e) => offered(/** @type {CustomEvent} */ (e).detail.device));
 addEventListener('grill:voice', (e) => voiceMoved(/** @type {CustomEvent} */ (e).detail.on));
 addEventListener('grill:mic', tapMic);
