@@ -217,7 +217,7 @@ func TestChainLinks(t *testing.T) {
 	// Neither a voice line (the STT's lines go through bus.Post) nor plain text resets it; Bob, who
 	// may not press, cannot re-arm it.
 	e.postBody(t, r, tok, "plain text, no mention")
-	if err := e.bus.Post(t.Context(), &store.Message{RoomID: r.room, Kind: store.KindVoice, ParticipantID: alice.p.Participant.ID, Sender: "Alice", Body: "at grill"}); err != nil {
+	if err := e.bus.Post(t.Context(), &store.Message{RoomID: r.room, Kind: store.KindVoice, Source: store.VoiceSourceServer, ParticipantID: alice.p.Participant.ID, Sender: "Alice", Body: "at grill"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := count(); got != 3 {
@@ -404,7 +404,7 @@ func TestPresencePreamble(t *testing.T) {
 	e.openEvents(t, r.room, tok, "")
 	e.waitPresent(t, alice.p.Participant.ID)
 	bob := e.join(t, e.createInvite(t, r.room).Token, "Bob")
-	if err := e.bus.Post(t.Context(), &store.Message{RoomID: r.room, Kind: store.KindVoice, ParticipantID: bob.Participant.ID, Sender: "Bob", Body: "hello"}); err != nil {
+	if err := e.bus.Post(t.Context(), &store.Message{RoomID: r.room, Kind: store.KindVoice, Source: store.VoiceSourceServer, ParticipantID: bob.Participant.ID, Sender: "Bob", Body: "hello"}); err != nil {
 		t.Fatal(err)
 	}
 	if code, c := e.chain(t, r, tok, map[string]int{"budget": 10}); code != http.StatusOK || c.Budget != 10 {

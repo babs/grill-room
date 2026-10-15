@@ -229,7 +229,7 @@ func TestSTTHeartbeatEngine(t *testing.T) {
 	sttOf(t, next(t, ev))
 	beat := func(body map[string]any) {
 		t.Helper()
-		if code, b := e.do(t, "POST", "/api/stt/heartbeat", sttToken, body); code != http.StatusNoContent {
+		if code, b := e.do(t, "POST", "/api/stt/heartbeat", sttToken, body); code != http.StatusOK {
 			t.Fatalf("heartbeat %v: %d %s", body, code, b)
 		}
 	}
@@ -336,7 +336,7 @@ func TestSTTHeartbeatState(t *testing.T) {
 		if voices != nil {
 			body["voices"] = voices
 		}
-		if code, b := e.do(t, "POST", "/api/stt/heartbeat", sttToken, body); code != http.StatusNoContent {
+		if code, b := e.do(t, "POST", "/api/stt/heartbeat", sttToken, body); code != http.StatusOK {
 			t.Fatalf("heartbeat: %d %s", code, b)
 		}
 	}
@@ -377,7 +377,7 @@ func TestSTTHeartbeatState(t *testing.T) {
 		}
 	}
 	for i := range maxSTTWorkers - 1 {
-		if code, _ := e.do(t, "POST", "/api/stt/heartbeat", sttToken, map[string]any{"worker": "w" + itoa(int64(i+2))}); code != http.StatusNoContent {
+		if code, _ := e.do(t, "POST", "/api/stt/heartbeat", sttToken, map[string]any{"worker": "w" + itoa(int64(i+2))}); code != http.StatusOK {
 			t.Fatalf("worker %d: %d", i, code)
 		}
 	}

@@ -15,12 +15,19 @@ import (
 	"github.com/babs/grill-room/internal/render"
 )
 
-// Message kinds. The STT worker writes voice lines; agent is reserved for the agent turn.
+// Message kinds. The STT worker and device transcription write voice lines; agent is reserved for
+// the agent turn.
 const (
 	KindVoice  = "voice"
 	KindText   = "text"
 	KindAgent  = "agent"
 	KindSystem = "system"
+)
+
+// Voice line sources: the participant's own browser, or the server's STT worker (010-AC10).
+const (
+	VoiceSourceDevice = "device"
+	VoiceSourceServer = "server"
 )
 
 // ErrNotFound is returned when a row does not exist, or an invite or participant is no longer valid.
@@ -87,6 +94,9 @@ type Message struct {
 	ParticipantID int64  `json:"participant_id,omitempty"`
 	Sender        string `json:"sender"`
 	Body          string `json:"body"`
+	// Source is who transcribed a voice line, VoiceSourceDevice or VoiceSourceServer; empty on other kinds
+	// (010-AC10).
+	Source string `json:"source,omitempty"`
 	// HTML is Body rendered by render.MessageHTML when written; empty for system lines, and for
 	// lines written before rendering existed.
 	HTML string `json:"html,omitempty"`
@@ -818,6 +828,11 @@ ALTER TABLE profiles ADD COLUMN email_nudge_until TEXT;
 -- every other invite. One valid one per member and room.
 ALTER TABLE invites ADD COLUMN link TEXT;
 CREATE UNIQUE INDEX invites_shareable ON invites(room_id, created_by) WHERE link IS NOT NULL AND revoked_at IS NULL;
+`, `
+-- 010-AC10: who transcribed a voice line; NULL on every other kind. Lines before 010 came from the
+-- server's worker.
+ALTER TABLE messages ADD COLUMN source TEXT CHECK (source IN ('device', 'server'));
+UPDATE messages SET source = 'server' WHERE kind = 'voice';
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -1449,6 +1464,10 @@ func nullID(id int64) any {
 }
 
 func insertMessage(ctx context.Context, db execer, m *Message) error {
+	// A voice line without its source would read as neither device nor server (010-AC10).
+	if (m.Kind == KindVoice) != (m.Source != "") {
+		return fmt.Errorf("insert message: a %q line with source %q", m.Kind, m.Source)
+	}
 	m.TS = time.Now().UTC()
 	pid := nullID(m.ParticipantID)
 	// Rendered once here, not on every stream replay: a crafted 4000-character line takes ~10 ms.
@@ -1456,10 +1475,10 @@ func insertMessage(ctx context.Context, db execer, m *Message) error {
 		m.HTML = render.MessageHTML(m.Body)
 	}
 	res, err := db.ExecContext(ctx,
-		`INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, html, model, effort, persona_id, req_model, req_effort, model_note, model_mismatch, turn_id)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, html, model, effort, persona_id, req_model, req_effort, model_note, model_mismatch, turn_id, source)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		m.RoomID, m.TS.Format(time.RFC3339Nano), m.Kind, pid, m.Sender, m.Body, nullStr(m.HTML), m.Model, m.Effort, nullID(m.PersonaID), m.ReqModel, m.ReqEffort,
-		m.ModelNote, m.ModelMismatch, nullID(m.TurnID))
+		m.ModelNote, m.ModelMismatch, nullID(m.TurnID), nullStr(m.Source))
 	if err != nil {
 		return fmt.Errorf("insert message: %w", err)
 	}
@@ -1482,7 +1501,7 @@ func (s *Store) LastVoice(ctx context.Context, roomID string) (*Message, error) 
 const (
 	messageFields = `id, ts, room_id, kind, COALESCE(participant_id, 0), sender, body, COALESCE(html, ''), model, edited_at, deleted_at, change_seq,
 		COALESCE(persona_id, 0), effort, COALESCE((SELECT badge FROM room_personas WHERE id = messages.persona_id), ''),
-		COALESCE((SELECT colour FROM room_personas WHERE id = messages.persona_id), ''), req_model, req_effort, model_note, model_mismatch, COALESCE(turn_id, 0)`
+		COALESCE((SELECT colour FROM room_personas WHERE id = messages.persona_id), ''), req_model, req_effort, model_note, model_mismatch, COALESCE(turn_id, 0), COALESCE(source, '')`
 	messageCols = `SELECT ` + messageFields + ` FROM messages `
 )
 
@@ -1508,7 +1527,7 @@ func scanMessage(sc scanner, extra ...any) (*Message, error) {
 	var ts string
 	var edited, deleted sql.NullString
 	err := sc.Scan(append([]any{&m.ID, &ts, &m.RoomID, &m.Kind, &m.ParticipantID, &m.Sender, &m.Body, &m.HTML, &m.Model, &edited, &deleted, &m.ChangeSeq,
-		&m.PersonaID, &m.Effort, &m.Badge, &m.Colour, &m.ReqModel, &m.ReqEffort, &m.ModelNote, &m.ModelMismatch, &m.TurnID}, extra...)...)
+		&m.PersonaID, &m.Effort, &m.Badge, &m.Colour, &m.ReqModel, &m.ReqEffort, &m.ModelNote, &m.ModelMismatch, &m.TurnID, &m.Source}, extra...)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

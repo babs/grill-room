@@ -468,7 +468,17 @@ func newRegistry(b *bus.Bus, srv *web.Server) *prometheus.Registry {
 			func() float64 { return float64(srv.Streams()) }),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_stt_workers", Help: "STT workers with a recent heartbeat."},
 			func() float64 { return float64(srv.STTWorkers()) }),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_device_stt_participants", Help: "Participants whose voice their own device transcribes now."},
+			func() float64 { return float64(srv.DeviceSTTParticipants()) }),
 	)
+	for _, source := range web.VoiceSources {
+		reg.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_voice_lines_total",
+			Help: "Voice lines stored, by who transcribed them.", ConstLabels: prometheus.Labels{"source": source}},
+			func() float64 { return float64(srv.VoiceLines(source)) }),
+			prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_voice_lines_deduped_total",
+				Help: "Voice lines dropped as a repeat of the other source's line, by the dropped line's source.", ConstLabels: prometheus.Labels{"source": source}},
+				func() float64 { return float64(srv.VoiceLinesDeduped(source)) }))
+	}
 	for _, reason := range turn.FallbackReasons {
 		reg.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_workspace_fallbacks_total",
 			Help: "Full workspace fetches by daemons that keep a workspace cache.", ConstLabels: prometheus.Labels{"reason": reason}},

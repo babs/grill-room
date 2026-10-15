@@ -20,7 +20,7 @@ func twoSpeakers(t *testing.T, s *Store) (alice, bob *Participant, text, voice, 
 		t.Fatal(err)
 	}
 	text = &Message{RoomID: "r", Kind: KindText, ParticipantID: alice.ID, Sender: "Alice", Body: "first"}
-	voice = &Message{RoomID: "r", Kind: KindVoice, ParticipantID: alice.ID, Sender: "Alice", Body: "wreck a nice beach"}
+	voice = &Message{RoomID: "r", Kind: KindVoice, Source: VoiceSourceServer, ParticipantID: alice.ID, Sender: "Alice", Body: "wreck a nice beach"}
 	for _, m := range []*Message{text, voice} {
 		if err := s.InsertMessage(ctx, m); err != nil {
 			t.Fatal(err)

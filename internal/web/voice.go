@@ -125,7 +125,7 @@ func (w *sttWorkers) state(room string, now time.Time) sttState {
 
 // STTWorkers returns the number of STT workers heartbeating.
 func (s *Server) STTWorkers() int {
-	s.stt.state("", time.Now()) // sweeps the stale ones
+	s.stt.state("", s.now()) // sweeps the stale ones
 	s.stt.mu.Lock()
 	defer s.stt.mu.Unlock()
 	return len(s.stt.m)
@@ -167,7 +167,8 @@ func (s *Server) sttAuth(next http.HandlerFunc) http.Handler {
 
 // sttHeartbeat records that a worker is up, which rooms' audio it is in, and whose tracks it is
 // subscribed to there. A worker from before 005-AC8 sends no voices, one from before 007 no engine:
-// it counts as not reading glossaries.
+// it counts as not reading glossaries. It answers, for the worker's rooms, the participants who
+// transcribe on their device: the worker skips their tracks (010-AC14).
 func (s *Server) sttHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Worker   string             `json:"worker"`
@@ -195,19 +196,21 @@ func (s *Server) sttHeartbeat(w http.ResponseWriter, r *http.Request) {
 	for _, id := range req.Rooms {
 		rooms[id] = true
 	}
-	now := time.Now()
+	now := s.now()
 	s.stt.state("", now) // sweeps the stale ones before the bound applies
 	s.stt.mu.Lock()
-	defer s.stt.mu.Unlock()
 	if s.stt.m[name] == nil && len(s.stt.m) >= maxSTTWorkers {
+		s.stt.mu.Unlock()
 		httpError(w, http.StatusTooManyRequests, "too many STT workers")
 		return
 	}
 	s.stt.m[name] = &sttWorker{at: now, rooms: rooms, voices: req.Voices, engine: engine, glossary: req.Glossary}
-	w.WriteHeader(http.StatusNoContent)
+	s.stt.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"device": s.people.deviceFlags(req.Rooms, now)})
 }
 
-// postVoiceLine stores one transcribed utterance as a voice message from the participant who spoke.
+// postVoiceLine stores one utterance the STT worker transcribed as a voice message from the
+// participant who spoke.
 func (s *Server) postVoiceLine(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ParticipantID int64  `json:"participant_id"`
@@ -225,14 +228,70 @@ func (s *Server) postVoiceLine(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	m := &store.Message{RoomID: p.RoomID, Kind: store.KindVoice, ParticipantID: p.ID, Sender: p.Name, Body: body}
-	if err := s.bus.Post(r.Context(), m); err != nil {
+	s.storeVoiceLine(w, r, p, body, store.VoiceSourceServer)
+}
+
+// postDeviceLine stores one utterance the participant's own device transcribed, under their name
+// whatever the body says, like a chat message (010-AC10).
+func (s *Server) postDeviceLine(w http.ResponseWriter, r *http.Request, sess session) {
+	if s.device == nil {
+		httpError(w, http.StatusNotFound, "device transcription is not offered on this server")
+		return
+	}
+	var req struct {
+		Body string `json:"body"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	body, ok := cleanText(req.Body, maxBodyLen, true)
+	if !ok {
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("body must be 1 to %d characters", maxBodyLen))
+		return
+	}
+	s.storeVoiceLine(w, r, sess.p, body, store.VoiceSourceDevice)
+}
+
+// storeVoiceLine stores p's line from source and runs the voice triggers, unless it repeats a line
+// of p from the other source (010-AC16).
+func (s *Server) storeVoiceLine(w http.ResponseWriter, r *http.Request, p *store.Participant, body, source string) {
+	m := &store.Message{RoomID: p.RoomID, Kind: store.KindVoice, ParticipantID: p.ID, Sender: p.Name, Body: body, Source: source}
+	norm := normLine(body)
+	// ponytail: one lock over every room's check and insert; per-participant locks if voice
+	// lines ever contend.
+	s.voiceMu.Lock()
+	now := s.now()
+	if s.voiceRecent.dup(p.ID, source, norm, now) {
+		s.voiceMu.Unlock()
+		s.voiceDeduped[source].Add(1)
+		writeJSON(w, http.StatusOK, map[string]bool{"deduped": true})
+		return
+	}
+	err := s.bus.Post(r.Context(), m)
+	if err == nil {
+		s.voiceRecent.add(p.ID, source, norm, now)
+	}
+	s.voiceMu.Unlock()
+	if err != nil {
 		s.serverError(w, "voice_line_failed", err)
 		return
 	}
+	s.voiceLines[source].Add(1)
 	s.voiceTriggers(r.Context(), p.RoomID)
 	writeJSON(w, http.StatusCreated, m)
 }
+
+// VoiceSources are where a voice line is transcribed: the participant's device or the server.
+var VoiceSources = []string{store.VoiceSourceDevice, store.VoiceSourceServer}
+
+// VoiceLines counts the voice lines stored from source (010-AC20).
+func (s *Server) VoiceLines(source string) int64 { return s.voiceLines[source].Load() }
+
+// VoiceLinesDeduped counts the voice lines from source dropped as another source's repeat (010-AC16).
+func (s *Server) VoiceLinesDeduped(source string) int64 { return s.voiceDeduped[source].Load() }
+
+// DeviceSTTParticipants returns how many participants transcribe on their device now (010-AC20).
+func (s *Server) DeviceSTTParticipants() int { return s.people.deviceCount(s.now()) }
 
 // voiceSpeaker is the room's participant a worker names; false once it answered the error.
 func (s *Server) voiceSpeaker(w http.ResponseWriter, r *http.Request, id int64) (*store.Participant, bool) {

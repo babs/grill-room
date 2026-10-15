@@ -59,7 +59,7 @@ func TestSetUpRoom(t *testing.T) {
 	}
 	// Two voice lines make Grill due; a turn of it starts the count again.
 	for range 2 {
-		if err := s.InsertMessage(ctx, &Message{RoomID: "r", Kind: KindVoice, ParticipantID: ms[0].ParticipantID, Sender: "Ali", Body: "x"}); err != nil {
+		if err := s.InsertMessage(ctx, &Message{RoomID: "r", Kind: KindVoice, Source: VoiceSourceServer, ParticipantID: ms[0].ParticipantID, Sender: "Ali", Body: "x"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -171,7 +171,7 @@ func TestReleaseStarterSkills(t *testing.T) {
 func voices(t *testing.T, s *Store, room string, pid int64, n int) {
 	t.Helper()
 	for range n {
-		if err := s.InsertMessage(t.Context(), &Message{RoomID: room, Kind: KindVoice, ParticipantID: pid, Sender: "Ali", Body: "x"}); err != nil {
+		if err := s.InsertMessage(t.Context(), &Message{RoomID: room, Kind: KindVoice, Source: VoiceSourceServer, ParticipantID: pid, Sender: "Ali", Body: "x"}); err != nil {
 			t.Fatal(err)
 		}
 	}

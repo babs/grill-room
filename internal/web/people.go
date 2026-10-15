@@ -24,6 +24,11 @@ const (
 // background tab or a phone's suspended stream does not flap them (005-AC6). A var for tests.
 var presenceGrace = 20 * time.Second
 
+// deviceLapse is how long a tab's device transcription flag holds after its last device beat: the
+// worker beats every 1 s, so a stalled or closed pipeline hands the voice back to the server within
+// it (010-AC13).
+const deviceLapse = 3 * time.Second
+
 var tabID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // tab is one open room page of a participant: its event streams, its last heartbeat, and the audio
@@ -42,6 +47,22 @@ type person struct {
 	tabs  map[string]*tab
 	last  time.Time
 	since time.Time
+	// device holds, by tab id, the last device beat that said the tab transcribes on its device
+	// (010-AC13). Apart from tabs: a device beat comes from the page's worker, with no stream.
+	device map[string]time.Time
+}
+
+// deviceOn reports a tab of p transcribing on its device at now, and sweeps the lapsed tabs.
+func (p *person) deviceOn(now time.Time) bool {
+	on := false
+	for id, at := range p.device {
+		if now.Sub(at) < deviceLapse {
+			on = true
+		} else {
+			delete(p.device, id)
+		}
+	}
+	return on
 }
 
 // arrive starts p's stay at now unless p is here already. The caller holds the lock.
@@ -68,7 +89,7 @@ func (pp *people) person(room string, pid int64) *person {
 	}
 	p := r[pid]
 	if p == nil {
-		p = &person{tabs: map[string]*tab{}}
+		p = &person{tabs: map[string]*tab{}, device: map[string]time.Time{}}
 		r[pid] = p
 	}
 	return p
@@ -111,6 +132,7 @@ func (pp *people) beat(room string, pid int64, id string, st tab, gone bool, now
 	p.last = now
 	t := p.tabs[id]
 	if gone {
+		delete(p.device, id)
 		if t != nil && t.streams == 0 {
 			delete(p.tabs, id)
 		} else if t != nil {
@@ -127,6 +149,65 @@ func (pp *people) beat(room string, pid int64, id string, st tab, gone bool, now
 	}
 	t.beat, t.audio, t.mic, t.muted, t.deaf, t.focused = now, st.audio, st.mic, st.muted, st.deaf, st.focused
 	return true
+}
+
+// deviceBeat is a tab's device transcription beat: on holds the participant's flag for deviceLapse,
+// off drops the tab's at once (010-AC13). The tab's presence and audio state stay as they are.
+// False when the participant holds maxTabs flagged tabs already.
+func (pp *people) deviceBeat(room string, pid int64, id string, on bool, now time.Time) bool {
+	pp.mu.Lock()
+	defer pp.mu.Unlock()
+	p := pp.person(room, pid)
+	if !on {
+		delete(p.device, id)
+		return true
+	}
+	if _, ok := p.device[id]; !ok {
+		if p.deviceOn(now); len(p.device) >= maxTabs {
+			return false
+		}
+	}
+	p.device[id] = now
+	return true
+}
+
+// deviceFlags lists, for each of rooms with any, the participants transcribing on their device at
+// now, sorted (010-AC14).
+func (pp *people) deviceFlags(rooms []string, now time.Time) map[string][]int64 {
+	pp.mu.Lock()
+	defer pp.mu.Unlock()
+	out := map[string][]int64{}
+	for _, room := range rooms {
+		if _, done := out[room]; done {
+			continue
+		}
+		var ids []int64
+		for pid, p := range pp.m[room] {
+			if p.deviceOn(now) {
+				ids = append(ids, pid)
+			}
+		}
+		if len(ids) > 0 {
+			slices.Sort(ids)
+			out[room] = ids
+		}
+	}
+	return out
+}
+
+// deviceCount is how many participants transcribe on their device at now, over every room.
+func (pp *people) deviceCount(now time.Time) int {
+	pp.mu.Lock()
+	defer pp.mu.Unlock()
+	n := 0
+	for _, r := range pp.m {
+		for _, p := range r {
+			if p.deviceOn(now) {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // focused reports whether one of participant pid's live tabs in room has the focus.
@@ -189,6 +270,8 @@ type presenceOf struct {
 	SeenAt *time.Time `json:"seen_at,omitempty"`
 	// HereSince is when a participant here arrived; nil while away (009-AC36).
 	HereSince *time.Time `json:"here_since,omitempty"`
+	// DeviceSTT is true while their voice is transcribed on their own device (010-AC13).
+	DeviceSTT bool `json:"device_stt"`
 }
 
 // snapshot is room's presence at now, by participant id, and sweeps the dead tabs and the people
@@ -203,7 +286,7 @@ func (pp *people) snapshot(room string, now time.Time) []presenceOf {
 				delete(p.tabs, id)
 			}
 		}
-		v := presenceOf{ID: pid, Here: p.alive(now)}
+		v := presenceOf{ID: pid, Here: p.alive(now), DeviceSTT: p.deviceOn(now)}
 		switch {
 		case v.Here:
 			if since := p.since; !since.IsZero() {
@@ -213,10 +296,10 @@ func (pp *people) snapshot(room string, now time.Time) []presenceOf {
 				v.Audio, v.Mic, v.Muted, v.Deaf = v.Audio || t.audio, v.Mic || t.mic, v.Muted || t.muted, v.Deaf || t.deaf
 			}
 			v.Muted = v.Muted && !v.Mic
-		case now.Sub(p.last) > peopleForget:
+		case now.Sub(p.last) > peopleForget && !v.DeviceSTT:
 			delete(pp.m[room], pid)
 			continue
-		default:
+		case !p.last.IsZero():
 			last := p.last
 			v.SeenAt = &last
 		}
@@ -231,7 +314,7 @@ func (pp *people) snapshot(room string, now time.Time) []presenceOf {
 
 func samePresence(a, b presenceOf) bool {
 	return a.ID == b.ID && a.Here == b.Here && a.Audio == b.Audio && a.Mic == b.Mic && a.Muted == b.Muted && a.Deaf == b.Deaf &&
-		sameTime(a.SeenAt, b.SeenAt) && sameTime(a.HereSince, b.HereSince)
+		a.DeviceSTT == b.DeviceSTT && sameTime(a.SeenAt, b.SeenAt) && sameTime(a.HereSince, b.HereSince)
 }
 
 func sameTime(a, b *time.Time) bool {
@@ -245,7 +328,8 @@ func presenceEvent(ps []presenceOf) string {
 }
 
 // postPresence is a tab's heartbeat: it keeps its participant here and reports its audio state.
-// The page sends one with gone set as it closes (005-AC6).
+// The page sends one with gone set as it closes (005-AC6). A beat with device_stt is the device
+// transcription beat of the tab instead, sent by its worker (010-AC13).
 func (s *Server) postPresence(w http.ResponseWriter, r *http.Request, sess session) {
 	var req struct {
 		Tab   string `json:"tab"`
@@ -255,13 +339,27 @@ func (s *Server) postPresence(w http.ResponseWriter, r *http.Request, sess sessi
 		Deaf  bool   `json:"deaf"`
 		Gone  bool   `json:"gone"`
 		// Focused: the page is visible and has the focus (005-AC24).
-		Focused bool `json:"focused"`
+		Focused   bool  `json:"focused"`
+		DeviceSTT *bool `json:"device_stt"`
 	}
 	if !decode(w, r, &req) {
 		return
 	}
 	if !tabID.MatchString(req.Tab) {
 		httpError(w, http.StatusBadRequest, "tab must be 1 to 64 letters, digits, - or _")
+		return
+	}
+	if req.DeviceSTT != nil {
+		// Without the offer no page transcribes: a flag would make the worker skip a voice nobody hears.
+		if s.device == nil {
+			httpError(w, http.StatusNotFound, "device transcription is not offered on this server")
+			return
+		}
+		if !s.people.deviceBeat(sess.p.RoomID, sess.p.ID, req.Tab, *req.DeviceSTT, s.now()) {
+			httpError(w, http.StatusTooManyRequests, fmt.Sprintf("at most %d open tabs", maxTabs))
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	st := tab{audio: req.Audio, mic: req.Audio && req.Mic, muted: req.Audio && req.Muted && !req.Mic, deaf: req.Audio && req.Deaf, focused: req.Focused}

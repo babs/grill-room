@@ -118,6 +118,12 @@ type Server struct {
 	pluginRooms   map[string]bool
 	// device is the device transcription offer, nil when not offered (010-AC5).
 	device *deviceSTT
+	// voiceMu makes a voice line's repeat check and its insert one step; voiceRecent holds the
+	// lines it checks against (010-AC16).
+	voiceMu     sync.Mutex
+	voiceRecent recentLines
+	// voiceLines and voiceDeduped count the voice lines stored and dropped, by VoiceSources.
+	voiceLines, voiceDeduped map[string]*atomic.Int64
 }
 
 // New builds a server. adminHash is HashToken of the admin token; baseURL prefixes invite links.
@@ -158,7 +164,8 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 		magicLimit: limiter{window: magicWindow}, loginLimit: limiter{window: loginWindow}, now: time.Now, fallbacks: fallbackCounters(),
 		afterFunc: func(d time.Duration, f func()) { time.AfterFunc(d, f) },
 		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}, pushClient: opts.PushClient,
-		pluginFetches: make(chan struct{}, maxPluginFetches), pluginRooms: map[string]bool{}}
+		pluginFetches: make(chan struct{}, maxPluginFetches), pluginRooms: map[string]bool{},
+		voiceRecent: recentLines{}, voiceLines: sourceCounters(), voiceDeduped: sourceCounters()}
 	s.device = loadDeviceSTT(opts, log)
 	s.cleanStaging()
 	return s
@@ -385,6 +392,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/stt/heartbeat", s.sttAuth(s.sttHeartbeat))
 	mux.Handle("POST /api/rooms/{room}/voice/lines", s.sttAuth(s.postVoiceLine))
 	mux.Handle("POST /api/rooms/{room}/voice/dropped", s.sttAuth(s.postVoiceDropped))
+	mux.Handle("POST /api/rooms/{room}/voice/device-lines", s.participant(s.postDeviceLine))
 	mux.Handle("GET /api/stt/rooms/{room}/prompt", s.sttAuth(s.sttPromptFor))
 	mux.Handle("GET /api/rooms/{room}/glossary", s.participant(s.getGlossary))
 	mux.Handle("PUT /api/rooms/{room}/glossary", s.participant(s.putGlossary))
@@ -1214,7 +1222,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	}
 	var stt sttState
 	if s.opts.Voice != nil {
-		stt = s.sttState(room, time.Now())
+		stt = s.sttState(room, s.now())
 		if _, err := io.WriteString(w, sttEvent(stt)); err != nil {
 			return
 		}
@@ -1239,7 +1247,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 			if s.opts.Voice == nil {
 				continue
 			}
-			if now := s.sttState(room, time.Now()); !now.equal(stt) {
+			if now := s.sttState(room, s.now()); !now.equal(stt) {
 				stt = now
 				if _, err := io.WriteString(w, sttEvent(stt)); err != nil {
 					return
