@@ -22,6 +22,8 @@
   "include": [
     "../../internal/daemon/ui/*.js",
     "../../internal/web/ui/admin/*.js",
+    "../../internal/web/ui/stt/device.js",
+    "../../internal/web/ui/stt/engine.js",
     "globals.d.ts"
   ]
 }

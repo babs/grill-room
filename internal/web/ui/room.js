@@ -3149,17 +3149,26 @@ function showSTT(st) {
   $('voice-mute').classList.toggle('captured', mine);
   $('voice-mute').dataset.tip = mine ? 'Your voice is being written down' : '';
   $('voice-more').classList.toggle('down', sttDown);
-  // The model's license asks for credit wherever it runs (007-AC13).
-  $('stt-credit').hidden = !(st.engines || []).includes('parakeet');
+  sttEngines = st.engines || [];
+  showCredit();
   if (sttGlossary !== !!st.glossary) {
     sttGlossary = !!st.glossary;
     showManage();
-    // The Room settings sheet (admin/room-admin.js) shows its glossary tab from the same state.
-    window.grillSTT = { glossary: sttGlossary };
-    window.dispatchEvent(new CustomEvent('grill:stt', { detail: window.grillSTT }));
   }
+  // The Room settings sheet (admin/room-admin.js) shows its glossary tab from the same state, and
+  // stt/device.js offers device transcription from it, the credit included (010-AC8).
+  window.grillSTT = { glossary: sttGlossary, device: st.device || null };
+  window.dispatchEvent(new CustomEvent('grill:stt', { detail: window.grillSTT }));
 }
 let sttDown = false;
+let sttEngines = [];
+// The model's license asks for credit wherever it runs: on the server (007-AC13) or on this
+// device (010-AC8).
+function showCredit() {
+  const device = window.grillDeviceSTT && window.grillDeviceSTT.state !== 'off';
+  $('stt-credit').hidden = !(sttEngines.includes('parakeet') || device);
+}
+window.addEventListener('grill:device-stt', showCredit);
 // sttGlossary is true while a transcription worker reads room glossaries (007-AC14).
 let sttGlossary = false;
 
@@ -3176,6 +3185,11 @@ function voiceError(text) {
 
 function voiceButtons() {
   const on = !!voice;
+  // stt/device.js runs its engine only while this tab is in the audio (010).
+  if (window.grillVoiceOn !== on) {
+    window.grillVoiceOn = on;
+    window.dispatchEvent(new CustomEvent('grill:voice', { detail: { on } }));
+  }
   $('voice-join').hidden = on;
   $('voice-mute').hidden = !on;
   $('voice-more').hidden = !on;

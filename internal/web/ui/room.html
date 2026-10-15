@@ -26,6 +26,7 @@
   "htm/preact": "/static/esm/htm-preact.js"
 }}</script>
 <script type="module" src="/static/admin/room-admin.js"></script>
+<script type="module" src="/static/stt/device.js"></script>
 </head>
 <body class="room">
 <header class="app-header room-header">
@@ -54,6 +55,8 @@
   <p id="stt-status" class="menu-head" role="status"></p>
   <button type="button" id="voice-deaf" aria-pressed="false" data-tip="Stop hearing the others">Mute the room</button>
   <label id="voice-keepmic" data-tip="Keep your voice going out, and written down, while the room is muted: useful when you share a physical room"><input type="checkbox"> Keep my mic on while the room is muted</label>
+  <label id="voice-device" data-tip="Your browser writes your voice down instead of the server. It downloads the voice-to-text model once, then tests this device." hidden><input type="checkbox"> Transcribe on this device</label>
+  <p id="device-stt-status" class="hint" role="status" tabindex="-1"></p>
   <button type="button" id="voice-leave">Leave audio</button>
   <p id="stt-credit" class="hint" hidden>Voice-to-text by <a href="https://huggingface.co/moondream/parakeet-ultra" target="_blank" rel="noopener">parakeet-ultra</a>
     (Moondream, from NVIDIA Parakeet TDT 0.6B v3),

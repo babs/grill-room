@@ -74,6 +74,10 @@ body.room { position: fixed; top: var(--vv-top, 0); left: 0; right: 0; height: 1
 #voice-more.down::after { content: "!"; margin-left: 2px; color: var(--warning); }
 #stt-status:empty { display: none; }
 #stt-status.down { color: var(--warning); }
+#device-stt-status { margin: 0; padding: 0 var(--sp-3) var(--sp-2); max-width: 22rem; }
+#device-stt-status:empty { display: none; }
+#device-stt-status.error { display: flex; gap: var(--sp-2); align-items: flex-start; color: var(--danger); }
+#device-stt-status svg { flex: none; width: 16px; height: 16px; margin-top: 2px; }
 #stt-credit { margin: 0; padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--border); color: var(--text-muted); font-size: var(--fs-sm); }
 /* The user menu's button: initials in a ring, the name beside them on a wide screen. */
 .avatar { gap: var(--sp-2); padding: 0 var(--sp-2) 0 0; border: 0; background: transparent; color: var(--chrome-text); }

@@ -161,6 +161,8 @@ jobs:
   flake-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.full && 120 || 60 }}
+    env:
+      GRILL_ROOM_E2E_MODEL_DIR: ${{ github.workspace }}/.device-stt-models
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -169,6 +171,14 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      # The device transcription model the device-stt specs self-test on (010-AC2), cached per pin set.
+      - id: device-model
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .device-stt-models
+          key: device-stt-${{ hashFiles('internal/devicestt/manifest.go') }}
+      - if: steps.device-model.outputs.cache-hit != 'true'
+        run: go run ./cmd/grill-room models fetch --dir "$GRILL_ROOM_E2E_MODEL_DIR"
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 11.20.0
@@ -194,6 +204,8 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      GRILL_ROOM_E2E_MODEL_DIR: ${{ github.workspace }}/.device-stt-models
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -201,6 +213,14 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      # The device transcription model the device-stt specs self-test on (010-AC2), cached per pin set.
+      - id: device-model
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .device-stt-models
+          key: device-stt-${{ hashFiles('internal/devicestt/manifest.go') }}
+      - if: steps.device-model.outputs.cache-hit != 'true'
+        run: go run ./cmd/grill-room models fetch --dir "$GRILL_ROOM_E2E_MODEL_DIR"
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 11.20.0

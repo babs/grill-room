@@ -32,6 +32,7 @@ On first start the server logs an `admin_token_generated` line holding the admin
 | `GRILL_ROOM_LIVEKIT_API_URL` | `GRILL_ROOM_LIVEKIT_URL` as `https://` | LiveKit's HTTP API as the server reaches it |
 | `GRILL_ROOM_LIVEKIT_API_KEY`, `GRILL_ROOM_LIVEKIT_API_SECRET` | none | LiveKit API key pair; the secret needs 32+ characters |
 | `GRILL_ROOM_STT_TOKEN` | none | the STT worker's service token; unset refuses every worker |
+| `GRILL_ROOM_DEVICE_STT_MODEL_DIR` | none | on-device transcription files, filled by `grill-room models fetch --dir <dir>`; unset, or a file missing or failing its sha256 at start, offers no device mode |
 | `GRILL_ROOM_TURN_TIMEOUT` | `15m` | one agent turn's time budget (1m to 24h) |
 | `GRILL_ROOM_NOTES_WATCH_DELAY` | `20s` | how long the persona that watches the notes waits after the last new note message (1s to 1h) |
 | `GRILL_ROOM_DAEMON_DIR` | none (`/daemon` in the image) | daemon release written by `make release` or `make dev-release`, or downloaded from a GitHub release; unset offers no download |
@@ -318,6 +319,8 @@ One persona per room may watch the notes ("Watches the notes", in its sheet's Tr
 ## Voice
 
 With `GRILL_ROOM_LIVEKIT_URL` set, the room page shows a Join audio button; once joined, a mic toggle and an audio menu. Each grill room maps to one LiveKit room named after the room id. A participant joins it under their participant id with their display name, and may publish their microphone only. "Mute the room" (deafen) stops hearing the others and mutes the mic, unless "Keep my mic on while the room is muted" is checked, for people who share a physical room; "Hear the room again" restores the mic as it was. The state outlives a reconnect within the browser session.
+
+On-device transcription (spec 010) needs the model files: `grill-room models fetch --dir <dir>` downloads the manifest pinned in the binary (about 430 MB), skips files already there with the right sha256, and exits non-zero on a mismatch. With `--best-effort`, as the Kubernetes init container runs it, a failure logs one line and exits 0, and the server then offers no device mode. With `GRILL_ROOM_DEVICE_STT_MODEL_DIR` pointing there, `GET /models/<revision>/<file>` serves those files, cached as immutable, and the `stt` event carries a `device` object with the revision, total size and each file's integrity hash.
 
 ## Presence
 
@@ -637,3 +640,15 @@ The STT worker image ships these under `/licenses`:
 
 - parakeet-ultra, by Moondream, a post-train of NVIDIA's Parakeet TDT 0.6B v3 ([model card](https://huggingface.co/moondream/parakeet-ultra)). It runs as the Q8_0 GGUF that the transcribe.cpp authors converted ([handy-computer/parakeet-ultra-gguf](https://huggingface.co/handy-computer/parakeet-ultra-gguf)), unmodified. License: [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/). The room's audio menu gives the same credit while a worker runs it.
 - [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) and the ggml, miniz and Silero VAD code it vendors: MIT.
+
+On-device transcription (spec 010) runs in the browser from these:
+
+- parakeet-ultra again, as the ONNX export in [Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx](https://huggingface.co/Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx) (w4a8 encoder, int8 decoder), unmodified. License: [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/). The audio menu shows the same credit while device mode is on.
+- [parakeet.js](https://github.com/ysdede/parakeet.js) 1.4.4 (commit 44fe54a), MIT, vendored in `internal/web/ui/stt/vendor/parakeet/` with four local patches, each marked `grill-room patch`:
+  - `tokenizer.js` keeps the space before accented words: upstream's ASCII `\w` turned "cet écosystème" into "cetécosystème";
+  - `tokenizer.js` takes the vocabulary as bytes the page already checked, instead of fetching it again;
+  - `backend.js` takes onnxruntime-web from `globalThis.ort`, which the engine imports from `/models/`, instead of a bundler import;
+  - `backend.js` stops when `wasmPaths` is unset instead of falling back to a CDN.
+- [onnxruntime-web](https://github.com/microsoft/onnxruntime) 1.30.0, MIT, unmodified, served from the model volume.
+- [Silero VAD](https://github.com/snakers4/silero-vad) v6, MIT, the ONNX file that [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 1.2.1 ships, unmodified.
+- The self-test clip `internal/web/ui/stt/selftest-fr.wav`: two sentences from [Google FLEURS](https://huggingface.co/datasets/google/fleurs), joined and padded with silence to 10 s. License: [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/).

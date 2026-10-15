@@ -84,9 +84,10 @@ test-docker: sandbox-image sandbox-fake-image
 # fake claude. Magic links run against a second server and a throwaway mailpit container. The
 # server hands out the daemon's own version, so its workers run the daemon's binary: an unsigned
 # release at another version would be refused (003-AC2).
-# The sandbox specs run after the others, alone (e2e/playwright.config.js says why). Both run even
-# when the first fails; the recipe fails if either did.
+# The device and sandbox specs run after the others, each set alone (e2e/playwright.config.js says
+# why). All three run even when one fails; the recipe fails if any did.
 E2E_SPLIT = { pnpm exec playwright test --project=parallel --pass-with-no-tests $(1); p=$$?; \
+	pnpm exec playwright test --project=device --pass-with-no-tests $(1) || p=1; \
 	pnpm exec playwright test --project=sandbox --pass-with-no-tests $(1) && test $$p -eq 0; }
 
 e2e: build e2e-build sandbox-fake-image
