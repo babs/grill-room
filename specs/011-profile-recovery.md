@@ -1,6 +1,6 @@
 # 011 — Profile identity and recovery
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-10-14
 **Context**: specs 002 (profiles, recovery link, magic link), 004 (`/admin`, audit log), 005 (user menu, recovery notice, profile page), 009 (People details card), grill notes (011), notes on the email flows, the landing page and the invite popup (2026-10-14)
@@ -39,55 +39,55 @@ A signed-out browser sees "Recover my profile by email" on the join page. A prof
 ## Acceptance criteria
 
 ### Recovery link from the admin
-- [ ] **AC1** In `/admin` › Profiles, "Generate a recovery link" on a profile shows a link once, with a copy button and its expiry. The link works once, for 24 h. Generating another voids the earlier unused one.
-- [ ] **AC2** Opening the link in a browser shows the same confirmation as the permanent recovery link (005), including the warning when the browser already holds a profile, and confirming signs that browser into the profile. A second use, a voided link or an expired one gets "this recovery link is invalid" and signs nobody in.
-- [ ] **AC3** The audit log records the generation (admin, profile uuid and name, expiry) and the use (profile uuid). It never holds the token. Deleting the profile deletes its links.
+- [x] **AC1** In `/admin` › Profiles, "Generate a recovery link" on a profile shows a link once, with a copy button and its expiry. The link works once, for 24 h. Generating another voids the earlier unused one.
+- [x] **AC2** Opening the link in a browser shows the same confirmation as the permanent recovery link (005), including the warning when the browser already holds a profile, and confirming signs that browser into the profile. A second use, a voided link or an expired one gets "this recovery link is invalid" and signs nobody in.
+- [x] **AC3** The audit log records the generation (admin, profile uuid and name, expiry) and the use (profile uuid). It never holds the token. Deleting the profile deletes its links.
 
 ### Email recovery from the join page
-- [ ] **AC4** With SMTP set and no profile in the browser, the join page (`/` and `/join`, with or without an invite) shows "Recover my profile by email". It opens an email field. Sending it answers with the neutral confirmation of AC28 whether or not a profile holds the address, under the 002 rate limits. A browser holding a profile, or an instance without SMTP, never sees the link.
-- [ ] **AC5** The mailed link signs the browser in through the existing magic-link confirmation. A join page left open in another tab of that browser hides the recovery link and shows the profile's name once the tab is focused again, so the invite then joins as that profile.
+- [x] **AC4** With SMTP set and no profile in the browser, the join page (`/` and `/join`, with or without an invite) shows "Recover my profile by email". It opens an email field. Sending it answers with the neutral confirmation of AC28 whether or not a profile holds the address, under the 002 rate limits. A browser holding a profile, or an instance without SMTP, never sees the link.
+- [x] **AC5** The mailed link signs the browser in through the existing magic-link confirmation. A join page left open in another tab of that browser hides the recovery link and shows the profile's name once the tab is focused again, so the invite then joins as that profile.
 
 ### Anonymous marker and nudge
-- [ ] **AC6** With SMTP set, a profile without an email shows a small silhouette marker on its own avatar and name: in the room header's user menu, on its own lines and entries in People, and on `/profile`. Nobody else sees it, and no API returns another profile's email state.
-- [ ] **AC7** Hovering, focusing or tapping the marker shows "Profile without email: add one to find it on another device". Clicking it opens the email form. Where spec 009's People details card exists, the card for yourself carries the same text and link; other people's cards never do.
-- [ ] **AC8** After your first message in a room, a profile without an email gets one dismissible banner offering to add an email. "Later" or closing it snoozes the banner for 14 days on that profile, on every device. With SMTP set, this banner replaces the 005 recovery-link notice; without SMTP, the 005 notice stays and no marker or banner shows.
-- [ ] **AC9** Once an email is bound, the marker and the banner go, and `/profile` shows the address with "Change".
+- [x] **AC6** With SMTP set, a profile without an email shows a small silhouette marker on its own avatar and name: in the room header's user menu, on its own lines and entries in People, and on `/profile`. Nobody else sees it, and no API returns another profile's email state.
+- [x] **AC7** Hovering, focusing or tapping the marker shows "Profile without email: add one to find it on another device". Clicking it opens the email form. Where spec 009's People details card exists, the card for yourself carries the same text and link; other people's cards never do.
+- [x] **AC8** After your first message in a room, a profile without an email gets one dismissible banner offering to add an email. "Later" or closing it snoozes the banner for 14 days on that profile, on every device. With SMTP set, this banner replaces the 005 recovery-link notice; without SMTP, the 005 notice stays and no marker or banner shows.
+- [x] **AC9** Once an email is bound, the marker and the banner go, and `/profile` shows the address with "Change".
 
 ### Profile merge
-- [ ] **AC10** In `/admin` › Profiles, the admin picks a profile to keep (A) and one to merge into it (B), and sees a preview before anything changes: both names, emails, rooms (rooms where both have a seat marked), personal skills, persona templates, starters, rooms created and room-admin roles, the name collisions and how they resolve, the per-profile limits A would pass, and which email A ends up with. A swap button exchanges A and B. Merging a profile into itself is refused.
-- [ ] **AC11** Confirming moves everything of B to A in one transaction, then deletes B:
+- [x] **AC10** In `/admin` › Profiles, the admin picks a profile to keep (A) and one to merge into it (B), and sees a preview before anything changes: both names, emails, rooms (rooms where both have a seat marked), personal skills, persona templates, starters, rooms created and room-admin roles, the name collisions and how they resolve, the per-profile limits A would pass, and which email A ends up with. A swap button exchanges A and B. Merging a profile into itself is refused.
+- [x] **AC11** Confirming moves everything of B to A in one transaction, then deletes B:
   - B's participants point to A. In a room where both have a seat, both seats stay, history stays intact (messages keep their author seat), and both seats belong to A.
   - B's personal skills, published shared skills, persona templates, starters and created rooms move to A. A personal skill whose name A already has gets the suffix `-2` (then `-3`, ...).
   - B's room-admin roles move to A; a room where both were admins keeps one row.
   - B's browser sessions move to A, so B's devices are signed into A. B's pending magic and recovery links are deleted.
-- [ ] **AC12** A keeps its email. If A has none, it takes B's. B's email, if not taken, is deleted with B. A keeps its own name, limit override and email-nudge snooze. The skills disclaimer counts as accepted if either had accepted it.
-- [ ] **AC13** The merge writes one audit entry: admin, A and B uuids and names, and the counts moved per kind. B's earlier audit entries stay under B's uuid. A failure rolls everything back and leaves both profiles as they were.
-- [ ] **AC14** After a merge, A's room list shows the union of both lists with no duplicate room, and a merged profile may sit above a per-profile limit (skills, templates, starters, rooms created): it keeps everything and adds nothing more of that kind until under the limit.
+- [x] **AC12** A keeps its email. If A has none, it takes B's. B's email, if not taken, is deleted with B. A keeps its own name, limit override and email-nudge snooze. The skills disclaimer counts as accepted if either had accepted it.
+- [x] **AC13** The merge writes one audit entry: admin, A and B uuids and names, and the counts moved per kind. B's earlier audit entries stay under B's uuid. A failure rolls everything back and leaves both profiles as they were.
+- [x] **AC14** After a merge, A's room list shows the union of both lists with no duplicate room, and a merged profile may sit above a per-profile limit (skills, templates, starters, rooms created): it keeps everything and adds nothing more of that kind until under the limit.
 
 ### Purge of empty profiles
-- [ ] **AC15** A profile is empty when it has no email, no room it can still enter (no seat with a valid invite), no personal skill, published shared skill, persona template or starter, and no room-admin role. An empty profile whose last activity (creation, last join, last message, last sign-in) is older than 24 h is deleted as `DELETE /api/profiles/{id}` deletes one.
-- [ ] **AC16** The server checks at start and then every hour. A run that deletes profiles writes one audit entry (actor `system`) with the count and the uuids. A run that deletes nothing writes none.
-- [ ] **AC17** `/admin` › Instance has "Delete empty profiles after 24 h of inactivity", on by default. Changing it is audited. Off, no run deletes anything.
-- [ ] **AC18** A browser whose profile was purged is treated as signed out: the join page offers email recovery (AC4), and its next join creates a new profile.
+- [x] **AC15** A profile is empty when it has no email, no room it can still enter (no seat with a valid invite), no personal skill, published shared skill, persona template or starter, and no room-admin role. An empty profile whose last activity (creation, last join, last message, last sign-in) is older than 24 h is deleted as `DELETE /api/profiles/{id}` deletes one.
+- [x] **AC16** The server checks at start and then every hour. A run that deletes profiles writes one audit entry (actor `system`) with the count and the uuids. A run that deletes nothing writes none.
+- [x] **AC17** `/admin` › Instance has "Delete empty profiles after 24 h of inactivity", on by default. Changing it is audited. Off, no run deletes anything.
+- [x] **AC18** A browser whose profile was purged is treated as signed out: the join page offers email recovery (AC4), and its next join creates a new profile.
 
 ### Invite revoke confirmation
-- [ ] **AC19** Revoking an invite opens a confirm sheet before anything is revoked: from Room settings › Invites, from `/admin` › room › Invites, and from a member's own invites. It names everyone who loses access, through that invite and the invites its joiners made down the chain, and marks room admins and "you". People who keep access through another valid seat are listed apart as "keeps access". An invite nobody joined says so. The sheet counts the chained invites it also revokes.
-- [ ] **AC20** The list in the sheet matches what the revoke then cuts: the same invites, and the same people get a 401 on their next request. An invite revoked meanwhile, or a new joiner between the sheet and the click, makes the revoke cover the current state, and the result toast names who lost access.
+- [x] **AC19** Revoking an invite opens a confirm sheet before anything is revoked: from Room settings › Invites, from `/admin` › room › Invites, and from a member's own invites. It names everyone who loses access, through that invite and the invites its joiners made down the chain, and marks room admins and "you". People who keep access through another valid seat are listed apart as "keeps access". An invite nobody joined says so. The sheet counts the chained invites it also revokes.
+- [x] **AC20** The list in the sheet matches what the revoke then cuts: the same invites, and the same people get a 401 on their next request. An invite revoked meanwhile, or a new joiner between the sheet and the click, makes the revoke cover the current state, and the result toast names who lost access.
 
 ### Email flows (notes, 2026-10-14)
-- [ ] **AC21** `/profile` has one Email section with three states. No email: "Add an email" and an address field. Pending: the AC28 panel, "Link sent to <address>" with the lifetime left, "Resend" with a 60 s cooldown that counts down, and "Use another address". Bound: the address and "Change", which opens the field; the new address replaces the old one once its link is confirmed. The pending state survives a reload while its link is valid, and only the profile's owner sees the pending address.
-- [ ] **AC22** The signed-out request ("Recover my profile by email", AC4) is one field. Its answer is the neutral AC28 panel: "If a profile uses this address, a link is on its way", the link's lifetime, and "Resend" under the same cooldown.
-- [ ] **AC23** Opening an emailed link ends on one of these outcomes, each with its next step: email bound (the address shown); signed in (the profile's name and its rooms); expired ("Send a new link", which opens the email field); already used (sign in by email or open your profile); a bind link opened in another browser (a confirmation naming the profile the address goes to, then bound, this browser's own profile unchanged); the address already bound to another profile (explains it, and that the admin can merge the two profiles).
-- [ ] **AC24** The mail, the page and the toasts use the same words. The mail says what its link does (adds the address to your profile, or signs you in) and how long it works.
+- [x] **AC21** `/profile` has one Email section with three states. No email: "Add an email" and an address field. Pending: the AC28 panel, "Link sent to <address>" with the lifetime left, "Resend" with a 60 s cooldown that counts down, and "Use another address". Bound: the address and "Change", which opens the field; the new address replaces the old one once its link is confirmed. The pending state survives a reload while its link is valid, and only the profile's owner sees the pending address.
+- [x] **AC22** The signed-out request ("Recover my profile by email", AC4) is one field. Its answer is the neutral AC28 panel: "If a profile uses this address, a link is on its way", the link's lifetime, and "Resend" under the same cooldown.
+- [x] **AC23** Opening an emailed link ends on one of these outcomes, each with its next step: email bound (the address shown); signed in (the profile's name and its rooms); expired ("Send a new link", which opens the email field); already used (sign in by email or open your profile); a bind link opened in another browser (a confirmation naming the profile the address goes to, then bound, this browser's own profile unchanged); the address already bound to another profile (explains it, and that the admin can merge the two profiles).
+- [x] **AC24** The mail, the page and the toasts use the same words. The mail says what its link does (adds the address to your profile, or signs you in) and how long it works.
 
-- [ ] **AC28** Asking for an emailed link (sign-in from the join page or `/profile`, binding from `/profile`, the marker or the banner) gives feedback in place. The button shows it is busy and stays disabled until the answer. The form is then replaced by a confirmation panel: "Link sent to <address>" for a bind, the neutral wording for a sign-in, the link's lifetime, "Check your spam folder", "Resend" with a visible countdown and "Use another address". Errors show in the same place with the next step: mail not going out (try again later, or tell the admin), too many requests (when to retry), an invalid address (fix it). Never a toast alone.
+- [x] **AC28** Asking for an emailed link (sign-in from the join page or `/profile`, binding from `/profile`, the marker or the banner) gives feedback in place. The button shows it is busy and stays disabled until the answer. The form is then replaced by a confirmation panel: "Link sent to <address>" for a bind, the neutral wording for a sign-in, the link's lifetime, "Check your spam folder", "Resend" with a visible countdown and "Use another address". Errors show in the same place with the next step: mail not going out (try again later, or tell the admin), too many requests (when to retry), an invalid address (fix it). Never a toast alone.
 
 ### Landing page (notes, 2026-10-14)
-- [ ] **AC25** With a profile in the browser, the join page (`/` and `/join`) shows "Your profile" with the profile's display name, a link to `/profile`. Signed out, it shows "Recover my profile by email" instead (AC4).
+- [x] **AC25** With a profile in the browser, the join page (`/` and `/join`) shows "Your profile" with the profile's display name, a link to `/profile`. Signed out, it shows "Recover my profile by email" instead (AC4).
 
 ### Invite popup (notes, 2026-10-14)
-- [ ] **AC26** "Invite people" opens on your shareable link for the room with a Copy button, first thing. The server creates it on first open when you have none, and creates the room creator's with the room. Each member has one per room. The popup has no "new link" button. The empty chat's invite card copies the same link. Every button that sends a request is disabled until the answer comes.
-- [ ] **AC27** Room settings › Invites shows to every member: a plain member sees their own invites, a room admin every invite. "New invite link" there makes an extra link, shown once, revocable on its own. Revoke opens the AC19 sheet. Once your shareable link is revoked, the popup makes a new one on its next open.
+- [x] **AC26** "Invite people" opens on your shareable link for the room with a Copy button, first thing. The server creates it on first open when you have none, and creates the room creator's with the room. Each member has one per room. The popup has no "new link" button. The empty chat's invite card copies the same link. Every button that sends a request is disabled until the answer comes.
+- [x] **AC27** Room settings › Invites shows to every member: a plain member sees their own invites, a room admin every invite. "New invite link" there makes an extra link, shown once, revocable on its own. Revoke opens the AC19 sheet. Once your shareable link is revoked, the popup makes a new one on its next open.
 
 ## Phases
 
@@ -187,3 +187,10 @@ Routine calls while folding the notes in, overturnable:
 - Phase 1 of the draft was split in two (recovery and email flows, then invites) for size.
 - AC28 (user, 2026-10-14, after trying v0.0.17): a request for an emailed link confirms in place, with errors in place too. Added after Phases 1 and 2 shipped on the branch, built as a follow-up slice.
 - A bind mail goes out before the answer, so a relay failure shows on the page; the address is the requester's own, nothing leaks. A sign-in request answers before any lookup, as 002 requires; it reports "mail not going out" only from the last bind mail having failed at the relay (connection, login, sender). Sign-in mails never touch that state, and a relay refusing one recipient does not set it, so the answer says nothing about any address.
+
+Shipped (2026-10-15), loop notes:
+
+- Live on the lab (v0.0.20), desktop and phone widths: the join page's email recovery and its sent panel, the room's marker and invite popup, Room settings › Invites, the `/profile` Email section with the pending panel after a reload, and the `/admin` › Profiles merge preview. The v0.0.19 check found the sent panel's buttons right-aligned; fixed, with an e2e check of the alignment.
+- The first start with the purge on removed 7 empty profiles on the lab (AC16, on by default).
+- Not checked live: a merge confirmed, and a link opened from a real inbox; the mailpit e2e and the merge e2e cover both.
+- Owned: the shareable link is per seat, not per person (two seats of one profile in a room are rare); a merge pins the kept profile's display name; `address_rejected` tells a relay that verifies recipients (rate-limited; in-cluster relays usually accept and bounce); the marker is not repeated on chat lines (AC6 read as People rows, the header and `/profile`).
