@@ -47,6 +47,10 @@ type Profile struct {
 	// PendingEmail is the address of the newest unused bind link; only GET /api/profile sets it,
 	// for its owner (011-AC21).
 	PendingEmail string `json:"pending_email,omitempty"`
+	// PendingTTLS and PendingAgeS are that link's seconds left and seconds since it was sent, on
+	// the server clock, for the page's lifetime and resend cooldown; set with PendingEmail only.
+	PendingTTLS *int64 `json:"pending_ttl_s,omitempty"`
+	PendingAgeS *int64 `json:"pending_age_s,omitempty"`
 	// EmailNudgeUntil hides the add-an-email banner until then (011-AC8).
 	EmailNudgeUntil *time.Time `json:"email_nudge_until,omitempty"`
 }
@@ -347,19 +351,37 @@ func (s *Store) UseMagicLink(ctx context.Context, u MagicUse) (*Profile, error) 
 // displayNameSQL is the name a profile p shows: the one it chose, else its latest join's.
 const displayNameSQL = `COALESCE(p.name, (SELECT name FROM participants WHERE profile_id = p.id ORDER BY id DESC LIMIT 1), '')`
 
-// PendingEmail returns the address of profileID's newest bind link while it is unused and
-// unexpired, "" otherwise: an older link's address was replaced by the newer one (011-AC21).
-func (s *Store) PendingEmail(ctx context.Context, profileID int64, now time.Time) (string, error) {
-	var email string
-	err := s.db.QueryRowContext(ctx, `SELECT email FROM (SELECT email, used_at, expires_at_ms FROM magic_links WHERE profile_id = ? AND purpose = ?
-		ORDER BY id DESC LIMIT 1) WHERE used_at IS NULL AND expires_at_ms > ?`, profileID, MagicBind, now.UnixMilli()).Scan(&email)
+// PendingBind is a bind link waiting in its owner's inbox.
+type PendingBind struct {
+	Email             string
+	SentAt, ExpiresAt time.Time
+}
+
+// PendingEmail returns profileID's newest bind link while it is unused and unexpired, a zero
+// PendingBind otherwise: an older link's address was replaced by the newer one (011-AC21).
+func (s *Store) PendingEmail(ctx context.Context, profileID int64, now time.Time) (PendingBind, error) {
+	var pb PendingBind
+	var sent string
+	var expires int64
+	err := s.db.QueryRowContext(ctx, `SELECT email, created_at, expires_at_ms FROM (SELECT email, created_at, used_at, expires_at_ms FROM magic_links
+		WHERE profile_id = ? AND purpose = ? ORDER BY id DESC LIMIT 1) WHERE used_at IS NULL AND expires_at_ms > ?`,
+		profileID, MagicBind, now.UnixMilli()).Scan(&pb.Email, &sent, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+		return PendingBind{}, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("pending email: %w", err)
+		return PendingBind{}, fmt.Errorf("pending email: %w", err)
 	}
-	return email, nil
+	pb.SentAt, pb.ExpiresAt = parseTS(sent), time.UnixMilli(expires).UTC()
+	return pb, nil
+}
+
+// DeleteMagicLink drops the link tokenHash, one whose mail did not go out (011-AC28).
+func (s *Store) DeleteMagicLink(ctx context.Context, tokenHash string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM magic_links WHERE token_hash = ?`, tokenHash); err != nil {
+		return fmt.Errorf("delete magic link: %w", err)
+	}
+	return nil
 }
 
 // SnoozeEmailNudge hides profileID's add-an-email banner until until. ErrNotFound for no profile.

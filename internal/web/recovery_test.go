@@ -2,13 +2,18 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	smtpmail "github.com/babs/grill-room/internal/mail"
 	"github.com/babs/grill-room/internal/store"
 )
 
@@ -277,5 +282,218 @@ func TestProfileNamesMagicLinkTTL(t *testing.T) {
 	plain := newEnv(t)
 	if _, b := plain.device(t).do(t, "GET", "/api/profile", nil); bytes.Contains(b, []byte("magic_link_ttl_s")) {
 		t.Fatalf("without SMTP: %s", b)
+	}
+}
+
+// relay is a fake SMTP relay: down while fail is set, refusing every recipient while reject is.
+type relay struct {
+	fail, reject atomic.Bool
+	box          mailbox
+}
+
+func newRelayEnv(t *testing.T) (*env, *relay) {
+	t.Helper()
+	rl := &relay{box: mailbox{ch: make(chan [3]string, 16)}}
+	opts := testOptions
+	opts.MagicLinkTTL = 15 * time.Minute
+	opts.SendMail = func(ctx context.Context, to, subject, body string) error {
+		switch {
+		case rl.fail.Load():
+			return errors.New("dial: connection refused")
+		case rl.reject.Load():
+			return fmt.Errorf("rcpt to: %w: 550 no such user <%s>", smtpmail.ErrRecipient, to)
+		}
+		return rl.box.send(ctx, to, subject, body)
+	}
+	return newEnvOpts(t, opts), rl
+}
+
+// post sends a JSON body without cookies and returns the status, the Retry-After header and the body.
+func post(t *testing.T, e *env, path, body string) (int, string, map[string]any) {
+	t.Helper()
+	req, _ := http.NewRequestWithContext(t.Context(), "POST", e.ts.URL+path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var m map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&m)
+	return resp.StatusCode, resp.Header.Get("Retry-After"), m
+}
+
+// relayEnvWithAlice is a relay env on a fixed clock whose profile Alice holds alice@example.com.
+func relayEnvWithAlice(t *testing.T) (*env, *relay, *device, time.Time, func(time.Duration)) {
+	t.Helper()
+	e, rl := newRelayEnv(t)
+	t0, skew := fixedClock(e)
+	alice := e.device(t)
+	alice.join(t, e.createRoom(t, "A").ID, "Alice")
+	code, b := alice.do(t, "POST", "/api/profile/email", map[string]string{"email": "alice@example.com"})
+	if code != http.StatusAccepted || string(b) != `{"email":"alice@example.com","ttl_s":900}`+"\n" {
+		t.Fatalf("bind: %d %s", code, b)
+	}
+	_, tok := rl.box.next(t)
+	if code, _ := alice.do(t, "POST", "/api/profile/magic", map[string]string{"token": tok, "purpose": "bind"}); code != http.StatusOK {
+		t.Fatal("bind link")
+	}
+	return e, rl, alice, t0, skew
+}
+
+// 011-AC28: sign-in answers alike for known and unknown addresses; a failed bind send makes every
+// sign-in answer "mail failed" alike with when to retry, before the rate limit, and drops the
+// unsent link; a successful bind send clears it.
+func TestEmailRequestFeedback(t *testing.T) {
+	e, rl, alice, _, skew := relayEnvWithAlice(t)
+	n := 0
+	known := func() (int, string, map[string]any) {
+		return post(t, e, "/api/profile/signin", `{"email":"alice@example.com"}`)
+	}
+	// A fresh unknown address each time keeps clear of the per-address limit.
+	unknown := func() (int, string, map[string]any) {
+		n++
+		return post(t, e, "/api/profile/signin", fmt.Sprintf(`{"email":"nobody%d@example.com"}`, n))
+	}
+	kc, _, kb := known()
+	uc, _, ub := unknown()
+	if kc != http.StatusAccepted || kc != uc || fmt.Sprint(kb) != fmt.Sprint(ub) || kb["ttl_s"] != float64(900) {
+		t.Fatalf("known %d %v, unknown %d %v", kc, kb, uc, ub)
+	}
+	e.srv.WaitMail()
+	rl.box.next(t)
+
+	if code, b := alice.do(t, "POST", "/api/profile/email", map[string]string{"email": "nope"}); code != http.StatusBadRequest || !bytes.Contains(b, []byte(`"reason":"invalid_email"`)) {
+		t.Fatalf("invalid: %d %s", code, b)
+	}
+	rl.fail.Store(true)
+	code, b := alice.do(t, "POST", "/api/profile/email", map[string]string{"email": "alice.new@example.com"})
+	var m map[string]string
+	_ = json.Unmarshal(b, &m)
+	if code != http.StatusBadGateway || m["reason"] != "mail_failed" || m["error"] != mailFailedText {
+		t.Fatalf("bind on a failing relay: %d %s", code, b)
+	}
+	if p := alice.profile(t).Profile; p.PendingEmail != "" || p.PendingTTLS != nil || p.PendingAgeS != nil {
+		t.Fatalf("the unsent link shows as pending: %+v", p)
+	}
+	skew(time.Minute)
+	kc, kr, kb := known()
+	uc, ur, ub := unknown()
+	if kc != http.StatusServiceUnavailable || kc != uc || kr != ur || fmt.Sprint(kb) != fmt.Sprint(ub) || kb["reason"] != "mail_failed" ||
+		kb["retry_after_s"] != float64(240) || kr != "240" {
+		t.Fatalf("sign-in while failing: known %d %q %v, unknown %d %q %v", kc, kr, kb, uc, ur, ub)
+	}
+	// Nothing is sent while failing, so nothing counts against the rate limit.
+	for i := range magicPerAddressIP + 2 {
+		if code, _, _ := known(); code != http.StatusServiceUnavailable {
+			t.Fatalf("sign-in %d while failing: %d", i, code)
+		}
+	}
+	// Past the hold, sign-in is offered again.
+	skew(mailFailHold)
+	if code, _, _ := unknown(); code != http.StatusAccepted {
+		t.Fatalf("past the hold: %d", code)
+	}
+	skew(0)
+	rl.fail.Store(false)
+	if code, _ := alice.do(t, "POST", "/api/profile/email", map[string]string{"email": "alice.new@example.com"}); code != http.StatusAccepted {
+		t.Fatalf("bind once the relay works: %d", code)
+	}
+	rl.box.next(t)
+	// Seconds on the server clock, whatever the client's.
+	for _, c := range []struct{ at, ttl, age time.Duration }{{0, 900, 0}, {90 * time.Second, 810, 90}} {
+		skew(c.at)
+		if p := alice.profile(t).Profile; p.PendingEmail != "alice.new@example.com" || p.PendingTTLS == nil || *p.PendingTTLS != int64(c.ttl) ||
+			p.PendingAgeS == nil || *p.PendingAgeS != int64(c.age) {
+			t.Fatalf("pending at %v: %+v", c.at, p)
+		}
+	}
+	// profile.js reads these wire names; decoding through the struct would not notice a rename.
+	if _, b := alice.do(t, "GET", "/api/profile", nil); !bytes.Contains(b, []byte(`"pending_ttl_s":`)) || !bytes.Contains(b, []byte(`"pending_age_s":`)) {
+		t.Fatalf("pending wire names: %s", b)
+	}
+	if code, _, _ := known(); code != http.StatusAccepted {
+		t.Fatalf("after a successful send: %d", code)
+	}
+	e.srv.WaitMail()
+	rl.box.next(t)
+}
+
+// 011-AC28: a sign-in send happens for a known address only, so it never moves the mail failing
+// state: the next sign-in answers the same whichever address came before.
+func TestSignInSendLeavesMailStateAlone(t *testing.T) {
+	e, rl, _, _, _ := relayEnvWithAlice(t)
+	rl.fail.Store(true)
+	for i, order := range [][]string{{"alice@example.com", "nobody1@example.com"}, {"nobody2@example.com", "alice@example.com"}} {
+		for _, email := range order {
+			code, _, b := post(t, e, "/api/profile/signin", `{"email":"`+email+`"}`)
+			if code != http.StatusAccepted {
+				t.Fatalf("order %d, %s: %d %v", i, email, code, b)
+			}
+			if email == "alice@example.com" {
+				e.srv.WaitMail() // the failed send is over before the next request
+			}
+		}
+	}
+}
+
+// 011-AC28: a relay refusing one address answers that binder "address rejected" and leaves sign-in
+// to everyone else.
+func TestRejectedAddressDoesNotBlockSignIn(t *testing.T) {
+	e, rl, alice, _, _ := relayEnvWithAlice(t)
+	rl.reject.Store(true)
+	code, b := alice.do(t, "POST", "/api/profile/email", map[string]string{"email": "typo@example.con"})
+	var m map[string]string
+	_ = json.Unmarshal(b, &m)
+	if code != http.StatusBadGateway || m["reason"] != "address_rejected" || m["error"] != addressRejectedTxt || strings.Contains(string(b), "typo@") {
+		t.Fatalf("rejected bind: %d %s", code, b)
+	}
+	if alice.profile(t).Profile.PendingEmail != "" {
+		t.Fatal("the rejected link shows as pending")
+	}
+	if code, _, _ := post(t, e, "/api/profile/signin", `{"email":"nobody@example.com"}`); code != http.StatusAccepted {
+		t.Fatalf("sign-in after a rejected address: %d", code)
+	}
+}
+
+// 011-AC28: a rate-limited request says when to retry, in its body and its Retry-After header.
+func TestEmailRequestRetryAfter(t *testing.T) {
+	e, _ := newRelayEnv(t)
+	_, skew := fixedClock(e)
+	ask := func() (int, string, map[string]any) {
+		return post(t, e, "/api/profile/signin", `{"email":"same@example.com"}`)
+	}
+	for range magicPerAddressIP {
+		if code, _, _ := ask(); code != http.StatusAccepted {
+			t.Fatalf("within the limit: %d", code)
+		}
+	}
+	for _, c := range []struct {
+		after time.Duration
+		want  string
+	}{{0, "900"}, {5*time.Minute + 500*time.Millisecond, "600"}} {
+		skew(c.after)
+		code, header, m := ask()
+		if code != http.StatusTooManyRequests || m["reason"] != "rate_limited" || fmt.Sprint(m["retry_after_s"]) != c.want || header != c.want {
+			t.Fatalf("after %v: %d %v %q", c.after, code, m, header)
+		}
+	}
+}
+
+// 011-AC28: a bind whose mail did not go out gives its rate-limit allowance back.
+func TestFailedBindSpendsNoAllowance(t *testing.T) {
+	_, rl, alice, _, _ := relayEnvWithAlice(t)
+	for _, c := range []struct {
+		name   string
+		toggle *atomic.Bool
+	}{{"mail_failed", &rl.fail}, {"address_rejected", &rl.reject}} {
+		c.toggle.Store(true)
+		for i := range magicPerAddressIP + 1 {
+			code, b := alice.do(t, "POST", "/api/profile/email", map[string]string{"email": c.name + "@example.com"})
+			if code != http.StatusBadGateway || !bytes.Contains(b, []byte(c.name)) {
+				t.Fatalf("%s, bind %d: %d %s", c.name, i, code, b)
+			}
+		}
+		c.toggle.Store(false)
 	}
 }

@@ -13,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 
+	smtpmail "github.com/babs/grill-room/internal/mail"
 	"github.com/babs/grill-room/internal/store"
 )
 
@@ -30,7 +31,43 @@ const (
 	sendMailTimeout   = 30 * time.Second
 	// emailNudgeSnooze is how long "Later" hides the add-an-email banner (011-AC8).
 	emailNudgeSnooze = 14 * 24 * time.Hour
+	// mailFailHold is how long a failed bind send makes sign-in answer "mail failing": past it,
+	// sign-in is offered again, as only a bind send can clear the state (011-AC28).
+	mailFailHold       = 5 * time.Minute
+	mailFailedText     = "The mail could not be sent. Try again in a few minutes; if it keeps failing, tell the admin."
+	addressRejectedTxt = "The mail server refused this address. Check it, or use another one."
 )
+
+var (
+	// errMailFailed is a relay that refused the session or did not answer.
+	errMailFailed = errors.New("mail send failed")
+	// errAddressRejected is a relay that works but permanently refused this address or mail.
+	errAddressRejected = errors.New("mail address rejected")
+)
+
+// reasonError answers a failed request with a reason code the page maps to its next step.
+func reasonError(w http.ResponseWriter, code int, reason, msg string) {
+	writeJSON(w, code, map[string]string{"reason": reason, "error": msg})
+}
+
+// mailFailingFor returns how long sign-in still answers "mail failing": a bind send failed at the
+// relay within mailFailHold and none succeeded since. 0 when mail works.
+func (s *Server) mailFailingFor() time.Duration {
+	at := s.mailFailedAt.Load()
+	if at == 0 {
+		return 0
+	}
+	return max(mailFailHold-s.now().Sub(time.UnixMilli(at)), 0)
+}
+
+// retryAfter sets the Retry-After header for d and returns d in whole seconds, rounded up, at least 1.
+func retryAfter(w http.ResponseWriter, d time.Duration) int64 {
+	n := max(int64((d+time.Second-1)/time.Second), 1)
+	w.Header().Set("Retry-After", strconv.FormatInt(n, 10))
+	return n
+}
+
+func (s *Server) ttlSeconds() int64 { return int64(s.opts.MagicLinkTTL / time.Second) }
 
 func secure(r *http.Request) bool {
 	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
@@ -87,9 +124,16 @@ func (s *Server) getProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if p != nil {
-		if p.PendingEmail, err = s.bus.Store.PendingEmail(r.Context(), p.ID, s.now()); err != nil {
+		pb, err := s.bus.Store.PendingEmail(r.Context(), p.ID, s.now())
+		if err != nil {
 			s.serverError(w, "get_profile_failed", err)
 			return
+		}
+		if pb.Email != "" {
+			now := s.now()
+			// Relative to the server clock, so a wrong client clock does not matter.
+			ttl, age := int64((pb.ExpiresAt.Sub(now)+time.Second-1)/time.Second), int64(max(now.Sub(pb.SentAt), 0)/time.Second)
+			p.PendingEmail, p.PendingTTLS, p.PendingAgeS = pb.Email, &ttl, &age
 		}
 	}
 	writeJSON(w, http.StatusOK, s.profileResp(p))
@@ -196,33 +240,46 @@ func cleanEmail(s string) (string, bool) {
 
 // emailRequest checks a magic link request: SMTP on, same site, a valid address, within the rate
 // limits. It answers and returns false when the request must stop.
-func (s *Server) emailRequest(w http.ResponseWriter, r *http.Request) (string, bool) {
+// gate, when set, runs once the address is valid and before the rate limit; it answers and returns
+// false to stop.
+func (s *Server) emailRequest(w http.ResponseWriter, r *http.Request, gate func() bool) (string, []string, bool) {
 	if s.opts.SendMail == nil {
 		httpError(w, http.StatusNotFound, "email sign-in is not configured")
-		return "", false
+		return "", nil, false
 	}
 	if crossSite(r) {
 		httpError(w, http.StatusForbidden, "cross-site request refused")
-		return "", false
+		return "", nil, false
 	}
 	var req struct {
 		Email string `json:"email"`
 	}
 	if !decode(w, r, &req) {
-		return "", false
+		return "", nil, false
 	}
 	email, ok := cleanEmail(req.Email)
 	if !ok {
-		httpError(w, http.StatusBadRequest, "not an email address")
-		return "", false
+		reasonError(w, http.StatusBadRequest, "invalid_email", "not an email address")
+		return "", nil, false
 	}
-	now, ip := time.Now(), s.clientIP(r)
-	if !s.magicLimit.allow("ip:"+ip, magicPerIP, now) || !s.magicLimit.allow("to:"+email+" ip:"+ip, magicPerAddressIP, now) ||
-		!s.magicLimit.allow("to:"+email, magicPerAddress, now) {
-		httpError(w, http.StatusTooManyRequests, "too many links asked for, retry in 15 minutes")
-		return "", false
+	if gate != nil && !gate() {
+		return "", nil, false
 	}
-	return email, true
+	now, ip := s.now(), s.clientIP(r)
+	var hits []string
+	for _, k := range []struct {
+		key string
+		max int
+	}{{"ip:" + ip, magicPerIP}, {"to:" + email + " ip:" + ip, magicPerAddressIP}, {"to:" + email, magicPerAddress}} {
+		if !s.magicLimit.allow(k.key, k.max, now) {
+			wait := retryAfter(w, s.magicLimit.retryIn(k.key, now))
+			writeJSON(w, http.StatusTooManyRequests, map[string]any{"reason": "rate_limited", "retry_after_s": wait,
+				"error": "too many links asked for, retry in " + strconv.FormatInt((wait+59)/60, 10) + " min"})
+			return "", nil, false
+		}
+		hits = append(hits, k.key)
+	}
+	return email, hits, true
 }
 
 func (s *Server) bindEmail(w http.ResponseWriter, r *http.Request) {
@@ -239,18 +296,47 @@ func (s *Server) bindEmail(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusUnauthorized, "no profile on this browser")
 		return
 	}
-	email, ok := s.emailRequest(w, r)
+	email, hits, ok := s.emailRequest(w, r, nil)
 	if !ok {
 		return
 	}
-	s.afterAnswer(r, func(ctx context.Context) { s.mailLink(ctx, p.ID, email, store.MagicBind) })
-	w.WriteHeader(http.StatusAccepted)
+	// The bind mail goes out before the answer, so a relay failure shows on the page; the address
+	// is the requester's own (011-AC28).
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), sendMailTimeout)
+	defer cancel()
+	err = s.mailLink(ctx, p.ID, email, store.MagicBind)
+	if errors.Is(err, errMailFailed) || errors.Is(err, errAddressRejected) {
+		// A mail that did not go out spends no allowance: retrying is the page's next step.
+		for _, k := range hits {
+			s.magicLimit.unhit(k)
+		}
+	}
+	switch {
+	case errors.Is(err, errMailFailed):
+		reasonError(w, http.StatusBadGateway, "mail_failed", mailFailedText)
+	case errors.Is(err, errAddressRejected):
+		reasonError(w, http.StatusBadGateway, "address_rejected", addressRejectedTxt)
+	case err != nil:
+		s.serverError(w, "bind_email_failed", err)
+	default:
+		writeJSON(w, http.StatusAccepted, map[string]any{"email": email, "ttl_s": s.ttlSeconds()})
+	}
 }
 
 // emailSignIn mails a sign-in link when a profile holds the address. The lookup and the mail come
-// after the answer, which then neither says nor times whether the address is known.
+// after the answer, which then neither says nor times whether the address is known. "Mail failing"
+// comes from bind sends only: a sign-in send happens for known addresses alone, so letting it move
+// the state would tell them apart. It is checked before the rate limit, as nothing gets sent
+// (011-AC28).
 func (s *Server) emailSignIn(w http.ResponseWriter, r *http.Request) {
-	email, ok := s.emailRequest(w, r)
+	email, _, ok := s.emailRequest(w, r, func() bool {
+		d := s.mailFailingFor()
+		if d == 0 {
+			return true
+		}
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"reason": "mail_failed", "error": mailFailedText, "retry_after_s": retryAfter(w, d)})
+		return false
+	})
 	if !ok {
 		return
 	}
@@ -263,31 +349,40 @@ func (s *Server) emailSignIn(w http.ResponseWriter, r *http.Request) {
 			s.log.Error("email_signin_failed", zap.Error(err))
 			return
 		}
-		s.mailLink(ctx, id, email, store.MagicSignIn)
+		if err := s.mailLink(ctx, id, email, store.MagicSignIn); err != nil && !errors.Is(err, errMailFailed) && !errors.Is(err, errAddressRejected) {
+			s.log.Error("email_signin_failed", zap.Error(err))
+		}
 	})
-	w.WriteHeader(http.StatusAccepted)
+	writeJSON(w, http.StatusAccepted, map[string]any{"ttl_s": s.ttlSeconds()})
 }
 
-// afterAnswer runs work in the background, past the request, within sendMailTimeout.
+// afterAnswer runs work in the background, past the request, within sendMailTimeout. WaitMail
+// waits for it.
 func (s *Server) afterAnswer(r *http.Request, work func(ctx context.Context)) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), sendMailTimeout)
-	go func() {
+	s.mailWG.Go(func() {
 		defer cancel()
 		work(ctx)
-	}()
+	})
 }
 
+// WaitMail waits for the mail sends still running past their answers, each bounded by
+// sendMailTimeout: run it at shutdown, before the store closes.
+func (s *Server) WaitMail() { s.mailWG.Wait() }
+
 // mailLink stores a link for profileID and mails it. A bind link goes to #bind=, which the page
-// spends at once; a sign-in link to #magic=, which waits for a click.
-func (s *Server) mailLink(ctx context.Context, profileID int64, email, purpose string) {
+// spends at once; a sign-in link to #magic=, which waits for a click. A failed send, logged here,
+// drops the link, so it never shows as pending, and returns errAddressRejected when the relay
+// refused this address, errMailFailed otherwise. Only a bind send sets or clears the server's mail
+// failing state.
+func (s *Server) mailLink(ctx context.Context, profileID int64, email, purpose string) error {
 	tok := NewToken()
 	now := s.now()
 	err := s.bus.Store.CreateMagicLink(ctx, store.MagicLink{
 		ProfileID: profileID, Email: email, Purpose: purpose, TokenHash: HashToken(tok), ExpiresAt: now.Add(s.opts.MagicLinkTTL),
 	}, now)
 	if err != nil {
-		s.log.Error("magic_link_failed", zap.Int64("profile", profileID), zap.Error(err))
-		return
+		return fmt.Errorf("magic link for profile %d: %w", profileID, err)
 	}
 	// 011-AC24: the page and the toasts use these same words.
 	subject, intro, anchor := "Sign in to grill-room", "This link signs you in to your grill-room profile:", "magic"
@@ -300,9 +395,24 @@ func (s *Server) mailLink(ctx context.Context, profileID int64, email, purpose s
 		// Relays echo the recipient in their errors; the log must not hold it.
 		s.log.Error("magic_link_send_failed", zap.Int64("profile", profileID),
 			zap.String("error", strings.ReplaceAll(err.Error(), email, "<recipient>")))
-		return
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if derr := s.bus.Store.DeleteMagicLink(dctx, HashToken(tok)); derr != nil {
+			s.log.Error("magic_link_drop_failed", zap.Int64("profile", profileID), zap.Error(derr))
+		}
+		if errors.Is(err, smtpmail.ErrRecipient) {
+			return errAddressRejected
+		}
+		if purpose == store.MagicBind {
+			s.mailFailedAt.Store(s.now().UnixMilli())
+		}
+		return errMailFailed
+	}
+	if purpose == store.MagicBind {
+		s.mailFailedAt.Store(0)
 	}
 	s.log.Info("magic_link_sent", zap.Int64("profile", profileID), zap.String("purpose", purpose))
+	return nil
 }
 
 func durationText(d time.Duration) string {
@@ -448,6 +558,25 @@ func (l *limiter) allow(key string, maxHits int, now time.Time) bool {
 	}
 	l.hits[key] = append(ts, now)
 	return true
+}
+
+// retryIn returns how long until key's oldest event leaves the window, 0 if key has none.
+func (l *limiter) retryIn(key string, now time.Time) time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if ts := l.hits[key]; len(ts) > 0 {
+		return max(l.window-now.Sub(ts[0]), 0)
+	}
+	return 0
+}
+
+// unhit forgets key's newest event.
+func (l *limiter) unhit(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if ts := l.hits[key]; len(ts) > 0 {
+		l.hits[key] = ts[:len(ts)-1]
+	}
 }
 
 // reset forgets key's events.

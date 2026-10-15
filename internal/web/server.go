@@ -82,6 +82,11 @@ type Server struct {
 	magicLimit limiter
 	// loginLimit rate-limits /admin logins per client IP.
 	loginLimit limiter
+	// mailFailedAt is when the last bind send failed at the relay, in unix ms, 0 once a later bind
+	// send succeeded. Sign-in sends and refused addresses never move it (011-AC28).
+	mailFailedAt atomic.Int64
+	// mailWG counts the mail sends running past their answers.
+	mailWG sync.WaitGroup
 	// now is the clock admin sessions and the audit log read; tests set it.
 	now func() time.Time
 	// pushRead and pushTicked, set by tests, learn the last line PushLoop read for a room, and

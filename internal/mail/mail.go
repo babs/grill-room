@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
 	"strings"
 	"time"
 )
@@ -39,7 +40,34 @@ func (c SMTP) Validate() error {
 	return nil
 }
 
-// Send mails a plain-text body to one recipient. ctx bounds the whole exchange.
+// ErrRecipient is a relay's permanent refusal of the recipient: the relay works, this address
+// does not.
+var ErrRecipient = errors.New("recipient refused")
+
+// refused wraps a reply refusing the recipient in ErrRecipient, keeping err for the log: an
+// enhanced status 5.1.x (address), else a bare 550, 551 or 553. Policy (5.7.x), auth (530) and
+// other replies are the relay's failures.
+func refused(step string, err error) error {
+	var tp *textproto.Error
+	if errors.As(err, &tp) && recipientCode(tp) {
+		return fmt.Errorf("%s: %w: %w", step, ErrRecipient, err)
+	}
+	return fmt.Errorf("%s: %w", step, err)
+}
+
+func recipientCode(tp *textproto.Error) bool {
+	if tp.Code < 500 || tp.Code > 599 {
+		return false
+	}
+	// An enhanced status code (RFC 3463) names the class better than the basic one.
+	if f := strings.Fields(tp.Msg); len(f) > 0 && strings.Count(f[0], ".") == 2 && strings.HasPrefix(f[0], "5.") {
+		return strings.HasPrefix(f[0], "5.1.")
+	}
+	return tp.Code == 550 || tp.Code == 551 || tp.Code == 553
+}
+
+// Send mails a plain-text body to one recipient. ctx bounds the whole exchange. A refusal of the
+// recipient at RCPT, DATA or the end of the data wraps ErrRecipient.
 func (c SMTP) Send(ctx context.Context, to, subject, body string) error {
 	from, err := mail.ParseAddress(c.From)
 	if err != nil {
@@ -84,17 +112,17 @@ func (c SMTP) Send(ctx context.Context, to, subject, body string) error {
 		return fmt.Errorf("mail from: %w", err)
 	}
 	if err := cl.Rcpt(rcpt.Address); err != nil {
-		return fmt.Errorf("rcpt to: %w", err)
+		return refused("rcpt to", err)
 	}
 	w, err := cl.Data()
 	if err != nil {
-		return fmt.Errorf("data: %w", err)
+		return refused("data", err)
 	}
 	if _, err := w.Write(message(from, rcpt, subject, body, time.Now())); err != nil {
 		return fmt.Errorf("write: %w", err)
 	}
 	if err := w.Close(); err != nil {
-		return fmt.Errorf("data end: %w", err)
+		return refused("data end", err)
 	}
 	return cl.Quit()
 }

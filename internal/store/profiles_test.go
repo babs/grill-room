@@ -407,6 +407,7 @@ func TestProfileCallsFailOnAClosedStore(t *testing.T) {
 			return err
 		},
 		"PendingEmail":       func() error { _, err := s.PendingEmail(ctx, 1, time.Now()); return err },
+		"DeleteMagicLink":    func() error { return s.DeleteMagicLink(ctx, "t") },
 		"SnoozeEmailNudge":   func() error { return s.SnoozeEmailNudge(ctx, 1, time.Now()) },
 		"CreateRecoveryLink": func() error { _, err := s.CreateRecoveryLink(ctx, 1, "t", time.Now()); return err },
 		"UseRecoveryLink":    func() error { _, err := s.UseRecoveryLink(ctx, "t", "x", time.Now()); return err },
@@ -588,7 +589,7 @@ func TestPendingEmail(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return got
+		return got.Email
 	}
 	if got := pending(a.ProfileID, t0); got != "" {
 		t.Fatalf("none yet: %q", got)
@@ -611,6 +612,9 @@ func TestPendingEmail(t *testing.T) {
 		if got := pending(c.id, c.at); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
+	}
+	if pb, err := s.PendingEmail(ctx, a.ProfileID, t0); err != nil || !pb.SentAt.Equal(t0) || !pb.ExpiresAt.Equal(t0.Add(time.Minute).Truncate(time.Millisecond)) {
+		t.Fatalf("dates: %+v %v", pb, err)
 	}
 	if _, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "2", Purpose: MagicBind, Current: a.ProfileID, Now: t0}); err != nil {
 		t.Fatal(err)
@@ -635,7 +639,7 @@ func TestBindSpendsTheOtherBindLinks(t *testing.T) {
 	if _, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "first", Purpose: MagicBind, Current: a.ProfileID, Now: t0}); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.PendingEmail(ctx, a.ProfileID, t0); err != nil || got != "" {
+	if got, err := s.PendingEmail(ctx, a.ProfileID, t0); err != nil || got.Email != "" {
 		t.Fatalf("pending after the first link: %q %v", got, err)
 	}
 	if _, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "second", Purpose: MagicBind, Current: a.ProfileID, Now: t0}); !errors.Is(err, ErrLinkUsed) {

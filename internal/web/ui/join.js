@@ -59,7 +59,6 @@ const yourProfile = document.getElementById('your-profile');
 const recover = document.getElementById('recover');
 const recoverOpen = document.getElementById('recover-open');
 const recoverForm = document.getElementById('recover-form');
-const recoverStatus = document.getElementById('recover-status');
 
 // ttl is the emailed link's lifetime in seconds, as the server's mail words it.
 let ttl = 0;
@@ -83,26 +82,5 @@ recoverOpen.addEventListener('click', () => {
   document.getElementById('recover-email').focus();
 });
 
-// The answer is the same whether or not a profile holds the address (011-AC22).
-recoverForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const button = recoverForm.querySelector('button');
-  button.disabled = true;
-  try {
-    const res = await fetch('/api/profile/signin', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: document.getElementById('recover-email').value }),
-    });
-    if (res.ok) {
-      recoverStatus.textContent = 'If a profile uses this address, a link is on its way (valid ' + window.grillDuration(ttl) + ').';
-      button.textContent = 'Resend';
-      window.grillCooldown(button, 60);
-      return;
-    }
-    recoverStatus.textContent = (await res.json().catch(() => ({}))).error || 'HTTP ' + res.status;
-  } catch {
-    recoverStatus.textContent = 'Network error, try again.';
-  }
-  button.disabled = false;
-});
+// The answer is the same whether or not a profile holds the address (011-AC22), in place (011-AC28).
+window.grillLinkForm({ form: recoverForm, url: '/api/profile/signin', kind: 'signin', ttl: () => ttl });

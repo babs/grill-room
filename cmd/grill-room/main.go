@@ -425,6 +425,7 @@ func run() error {
 	g.Go(func() error { srv.PushLoop(gctx); return nil })
 	logger.Info("ready", zap.String("url", cfg.PublicURL))
 	err = g.Wait()
+	srv.WaitMail()
 	logger.Info("shutdown")
 	return err
 }

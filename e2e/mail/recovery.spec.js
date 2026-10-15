@@ -4,7 +4,7 @@ import { magicLinkTTL } from './playwright.config.js';
 
 // 011-AC22 011-AC24: the page names the lifetime the server's mail names.
 const lifetime = durationText(magicLinkTTL);
-const neutral = `If a profile uses this address, a link is on its way (valid ${lifetime}).`;
+const neutral = 'If a profile uses this address, a link is on its way';
 const anonText = 'Profile without email: add one to find it on another device';
 
 // Every spec here makes its own room and profiles; they go at the end, as on the lab they would pile up.
@@ -62,8 +62,9 @@ test('recover a profile by email from the join page', async ({ browser, request 
   // The same answer for an address nobody holds.
   await join.locator('#recover-email').fill(`nobody-${Date.now()}@example.com`);
   await join.getByRole('button', { name: 'Email me a sign-in link' }).click();
-  await expect(join.locator('#recover-status')).toHaveText(neutral);
-  const resend = join.locator('#recover-form button');
+  await expect(join.locator('#recover .link-sent h3')).toHaveText(neutral);
+  await expect(join.locator('#recover .link-sent')).toContainText(`The link works once, within ${lifetime}.`);
+  const resend = join.locator('#recover .link-sent').getByRole('button', { name: /^Resend/ });
   await expect(resend).toHaveText(/^Resend \(\d+ s\)$/);
   await expect(resend).toBeDisabled();
 
@@ -109,19 +110,29 @@ test('email section states', async ({ browser, request }) => {
   await expect(page.locator('#profile-anon')).toBeVisible();
   await page.getByLabel('Add an email').fill(first);
   await page.getByRole('button', { name: 'Send me a link' }).click();
-  await expect(page.locator('#email-state')).toHaveText('Check your inbox at ' + first);
-  await expect(page.locator('#email-resend')).toHaveText(/^Resend \(\d+ s\)$/);
-  await expect(page.locator('#email-resend')).toBeDisabled();
+  const sent = page.locator('#email .link-sent');
+  await expect(sent.locator('h3')).toHaveText('Link sent to ' + first);
+  await expect(sent.getByRole('button', { name: /^Resend/ })).toHaveText(/^Resend \(\d+ s\)$/);
+  await expect(sent.getByRole('button', { name: /^Resend/ })).toBeDisabled();
   await expect(page.locator('#bind')).toBeHidden();
   await nextMail(request, first, 1);
+  // The reload reads the pending link with dates set here: the config's 4 s links could expire
+  // before a slow reload answers.
+  await page.route('**/api/profile', async (route) => {
+    const body = await (await route.fetch()).json();
+    Object.assign(body.profile, { pending_email: first, pending_age_s: 0, pending_ttl_s: 10 * 60 });
+    await route.fulfill({ json: body });
+  });
   await page.reload();
-  await expect(page.locator('#email-state')).toHaveText('Check your inbox at ' + first);
+  await expect(sent.locator('h3')).toHaveText('Link sent to ' + first);
+  await page.unroute('**/api/profile');
 
   await page.getByRole('button', { name: 'Use another address' }).click();
   await expect(page.locator('#bind-email')).toBeFocused();
+  await expect(page.locator('#bind-email')).toHaveValue(first);
   await page.locator('#bind-email').fill(other);
   await page.getByRole('button', { name: 'Send me a link' }).click();
-  await expect(page.locator('#email-state')).toHaveText('Check your inbox at ' + other);
+  await expect(sent.locator('h3')).toHaveText('Link sent to ' + other);
   const bind = await nextMail(request, other, 1);
   expect(bind.text).toContain(`This link adds ${other} to a grill-room profile`);
   expect(bind.text).toContain(`within ${lifetime}.`);
@@ -133,7 +144,7 @@ test('email section states', async ({ browser, request }) => {
   await page.getByRole('button', { name: 'Change' }).click();
   await page.getByLabel('New address').fill(changed);
   await page.getByRole('button', { name: 'Send me a link' }).click();
-  await expect(page.locator('#email-state')).toHaveText('Check your inbox at ' + changed);
+  await expect(page.locator('#email .link-sent h3')).toHaveText('Link sent to ' + changed);
   const change = await nextMail(request, changed, 1);
   await page.goto(linkPath(change.link));
   await expect(page.locator('#email-state')).toHaveText(changed);

@@ -127,6 +127,150 @@
   };
 
   /**
+   * grillLinkError says why a request for an emailed link failed, with the next step (011-AC28).
+   * @param {{reason?: string, error?: string, retry_after_s?: number} | null} data null when the network failed
+   * @param {number} status
+   * @returns {string}
+   */
+  const grillLinkError = (data, status) => {
+    if (!data) return 'No connection. Check your network and try again.';
+    if (data.reason === 'rate_limited') return 'Too many requests. Try again in ' + Math.max(1, Math.ceil((data.retry_after_s || 60) / 60)) + ' min.';
+    if (data.reason === 'invalid_email') return 'Check the address: it does not look like an email.';
+    return data.error || 'Something went wrong (HTTP ' + status + '). Try again.';
+  };
+
+  /**
+   * grillLinkForm turns form, one email field and its submit button, into a request for an emailed
+   * link with feedback in place (011-AC28): a busy button, then a panel in the form's place saying
+   * where the link went, how long it works, Resend with a countdown and "Use another address";
+   * errors show under the field. show(email, ttl, cool) opens the panel for a link already pending,
+   * Resend waiting cool seconds.
+   * @param {{form: HTMLFormElement, url: string, kind: 'bind' | 'signin', ttl: () => number,
+   *   onSent?: (email: string) => void, onOther?: () => void}} opts
+   */
+  window.grillLinkForm = ({ form, url, kind, ttl, onSent, onOther }) => {
+    const input = /** @type {HTMLInputElement} */ (form.querySelector('input[type=email]'));
+    const submit = /** @type {HTMLButtonElement} */ (form.querySelector('button:not([type=button])'));
+    const error = document.createElement('p');
+    error.className = 'field-error';
+    error.setAttribute('role', 'alert');
+    // After the label when it wraps the field: inside it, the error would join the field's name.
+    (input.closest('label') || input).after(error);
+    input.setAttribute('aria-describedby', (input.id || 'email') + '-error');
+    error.id = (input.id || 'email') + '-error';
+
+    const panel = document.createElement('div');
+    panel.className = 'link-sent';
+    panel.setAttribute('role', 'status');
+    panel.hidden = true;
+    const head = document.createElement('h3');
+    head.tabIndex = -1;
+    const life = document.createElement('p');
+    const spam = document.createElement('p');
+    spam.className = 'hint';
+    spam.textContent = 'Check your spam folder if it does not arrive.';
+    const again = document.createElement('p');
+    again.className = 'again';
+    again.tabIndex = -1;
+    again.textContent = 'Sent again';
+    const panelError = document.createElement('p');
+    panelError.className = 'field-error';
+    panelError.setAttribute('role', 'alert');
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    const resend = document.createElement('button');
+    resend.type = 'button';
+    resend.className = 'btn-secondary';
+    resend.textContent = 'Resend';
+    const other = document.createElement('button');
+    other.type = 'button';
+    other.className = 'btn-ghost';
+    other.textContent = 'Use another address';
+    actions.append(resend, other);
+    panel.append(head, life, spam, again, panelError, actions);
+    form.after(panel);
+    let sentTo = '';
+
+    /** @param {HTMLButtonElement} b @param {boolean} on */
+    const busy = (b, on) => {
+      if (on) {
+        b.dataset.idle = b.textContent || '';
+        b.textContent = 'Sending…';
+        b.setAttribute('aria-busy', 'true');
+      } else {
+        b.textContent = b.dataset.idle || b.textContent;
+        b.removeAttribute('aria-busy');
+      }
+      b.disabled = on;
+    };
+    /** @param {string} email @returns {Promise<{ok: boolean, data: any, status: number}>} */
+    const ask = async (email) => {
+      try {
+        const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
+        return { ok: res.ok, data: await res.json().catch(() => ({})), status: res.status };
+      } catch {
+        return { ok: false, data: null, status: 0 };
+      }
+    };
+    /** @param {string} email @param {number} seconds @param {number} cool seconds left before Resend */
+    const show = (email, seconds, cool) => {
+      sentTo = email;
+      head.textContent = kind === 'bind' ? 'Link sent to ' + email : 'If a profile uses this address, a link is on its way';
+      life.textContent = 'The link works once, within ' + window.grillDuration(seconds || ttl()) + '.';
+      again.hidden = true;
+      panelError.textContent = '';
+      form.hidden = true;
+      panel.hidden = false;
+      if (cool > 0) window.grillCooldown(resend, cool);
+    };
+    const reset = () => {
+      panel.hidden = true;
+      form.hidden = false;
+      error.textContent = '';
+    };
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = input.value.trim();
+      error.textContent = '';
+      busy(submit, true);
+      const { ok, data, status } = await ask(email);
+      busy(submit, false);
+      // The busy button dropped focus: it goes where the answer is.
+      if (!ok) {
+        error.textContent = grillLinkError(data, status);
+        input.focus();
+        return;
+      }
+      if (onSent) onSent(email);
+      show(email, data.ttl_s, 60);
+      head.focus();
+    });
+    resend.addEventListener('click', async () => {
+      again.hidden = true;
+      panelError.textContent = '';
+      busy(resend, true);
+      const { ok, data, status } = await ask(sentTo);
+      busy(resend, false);
+      if (!ok) {
+        panelError.textContent = grillLinkError(data, status);
+        resend.focus();
+        return;
+      }
+      again.hidden = false;
+      window.grillCooldown(resend, 60);
+      again.focus();
+    });
+    other.addEventListener('click', () => {
+      const was = sentTo;
+      if (onOther) onOther();
+      reset();
+      input.value = was;
+      input.focus();
+    });
+    return { show: (/** @type {string} */ email, /** @type {number} */ seconds, cool = 0) => show(email, seconds, cool), reset };
+  };
+
+  /**
    * grillLoadFailed says a module failed to load (a dropped connection, ERR_NETWORK_CHANGED): its
    * part of the page would otherwise do nothing, without a word. It shows once, and stays.
    */

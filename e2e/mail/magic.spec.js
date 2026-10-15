@@ -16,7 +16,7 @@ test('magic links: bind, sign in elsewhere, single use', async ({ browser, reque
     await expect(laptop.locator('#email-state')).toHaveText('No email on this profile yet.');
     await laptop.getByLabel('Add an email').fill(email);
     await laptop.getByRole('button', { name: 'Send me a link' }).click();
-    await expect(laptop.locator('#email-state')).toHaveText('Check your inbox at ' + email);
+    await expect(laptop.locator('#email .link-sent h3')).toHaveText('Link sent to ' + email);
     const bind = await nextMail(request, email, 1);
     // 011-AC24: the subject says what the link does.
     expect(bind.subject).toBe('Add this email to your grill-room profile');
@@ -41,7 +41,8 @@ test('magic links: bind, sign in elsewhere, single use', async ({ browser, reque
     await phone.goto('/profile');
     await phone.getByLabel('Or sign in with the email').fill(email);
     await phone.getByRole('button', { name: 'Email me a sign-in link' }).click();
-    await expect(phone.locator('#status')).toHaveText(`If a profile uses this address, a link is on its way (valid ${durationText(magicLinkTTL)}).`);
+    await expect(phone.locator('#signed-out .link-sent h3')).toHaveText('If a profile uses this address, a link is on its way');
+    await expect(phone.locator('#signed-out .link-sent')).toContainText(`The link works once, within ${durationText(magicLinkTTL)}.`);
     const signin = await nextMail(request, email, 2);
     expect(signin.subject).toBe('Sign in to grill-room');
     await phone.goto(signin.link);

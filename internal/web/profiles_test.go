@@ -684,17 +684,12 @@ func TestSendFailureLogHidesTheAddress(t *testing.T) {
 	if code, _ := d.do(t, "POST", "/api/join", map[string]string{"invite": "inv", "name": "Alice"}); code != http.StatusCreated {
 		t.Fatal("join failed")
 	}
-	if code, _ := d.do(t, "POST", "/api/profile/email", map[string]string{"email": "secret@example.com"}); code != http.StatusAccepted {
-		t.Fatal("bind failed")
+	// 011-AC28: the bind mail goes out before the answer, so the failure is logged by then.
+	if code, b := d.do(t, "POST", "/api/profile/email", map[string]string{"email": "secret@example.com"}); code != http.StatusBadGateway || bytes.Contains(b, []byte("secret@")) {
+		t.Fatalf("bind: %d %s", code, b)
 	}
 	<-done
-	var line []observer.LoggedEntry
-	for range 50 {
-		if line = logs.FilterMessage("magic_link_send_failed").All(); len(line) > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond) // polls the log, bounded by the 50 rounds
-	}
+	line := logs.FilterMessage("magic_link_send_failed").All()
 	if len(line) != 1 {
 		t.Fatal("no failure logged")
 	}

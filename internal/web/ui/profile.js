@@ -58,6 +58,10 @@ function render({ email_enabled: emailEnabled, profile, magic_link_ttl_s: linkTT
   $('profile-anon').hidden = !emailEnabled || !!profile.email;
   shown = profile;
   pending = profile.pending_email || '';
+  // Seconds on the server clock, anchored to this one on arrival: a wrong client clock does not matter.
+  const at = Date.now();
+  pendingExpires = profile.pending_ttl_s != null ? at + profile.pending_ttl_s * 1000 : 0;
+  pendingSent = profile.pending_age_s != null ? at - profile.pending_age_s * 1000 : 0;
   showEmail(false);
   // The recovery link lives in the tab that joined, until saved: the server keeps only its hash.
   const link = sessionStorage.getItem('grill_room_recovery');
@@ -65,26 +69,36 @@ function render({ email_enabled: emailEnabled, profile, magic_link_ttl_s: linkTT
     : emailEnabled ? 'Add an email above, then sign in with it on the other device.' : 'Open your recovery link on the other device.';
 }
 
-// The Email section's states (011-AC21): none, a link pending at an address, or an address on
-// the profile. editing opens the address field over the pending and bound states.
+// The Email section's states (011-AC21): none, a link pending at an address (the sent panel,
+// 011-AC28), or an address on the profile. editing opens the address field over the other states.
 /** @type {{email?: string} | null} */
 let shown = null;
 let pending = '';
+// When the pending link expires and was sent, in local ms: a reload shows what is left of both.
+let pendingExpires = 0;
+let pendingSent = 0;
 function showEmail(editing) {
   const email = shown ? shown.email || '' : '';
-  const state = pending ? 'pending' : email ? 'bound' : 'none';
-  $('email-state').textContent = state === 'pending' ? 'Check your inbox at ' + pending
-    : state === 'bound' ? email : 'No email on this profile yet.';
-  $('email-pending').hidden = state !== 'pending';
-  $('email-change').hidden = state !== 'bound' || editing;
-  $('bind').hidden = state !== 'none' && !editing;
-  $('bind-label').textContent = state === 'none' ? 'Add an email' : 'New address';
+  $('email-state').textContent = email || (pending && !editing ? '' : 'No email on this profile yet.');
+  if (pending && !editing) {
+    const rest = pendingExpires ? Math.max(1, Math.ceil((pendingExpires - Date.now()) / 1000)) : ttl;
+    // Whole minutes, as the mail words it, unless under one.
+    const left = rest < 60 ? rest : Math.ceil(rest / 60) * 60;
+    const since = pendingSent ? (Date.now() - pendingSent) / 1000 : 60;
+    bindLink.show(pending, left, since < 60 ? Math.ceil(60 - since) : 0);
+  } else {
+    bindLink.reset();
+    $('bind').hidden = !!email && !editing;
+  }
+  $('email-change').hidden = !email || editing || !!pending;
+  $('bind-label').textContent = email ? 'New address' : 'Add an email';
 }
 
 // openEmailField is the next step of a link that failed: a field to ask for a new one.
 function openEmailField() {
   const signedIn = !$('signed-in').hidden;
   if (signedIn) showEmail(true);
+  else signinLink.reset();
   const input = signedIn ? $('bind-email') : $('signin-email');
   input.scrollIntoView({ block: 'center' });
   input.focus();
@@ -234,60 +248,22 @@ async function signInFromLink() {
   statusLine.textContent = kind === 'magic' && name ? 'Signed in as ' + name + ' on this device.' : 'Signed in on this device.';
 }
 
-// sendLink asks for a link to email; on success the button turns into Resend for a minute (011-AC21, 011-AC22).
-async function sendLink(button, url, email, sent) {
-  button.disabled = true;
-  try {
-    const { res, data } = await post(url, { email });
-    if (res.ok) {
-      sent();
-      button.textContent = 'Resend';
-      window.grillCooldown(button, 60);
-      return true;
-    }
-    statusLine.textContent = data.error || 'HTTP ' + res.status;
-  } catch {
-    statusLine.textContent = 'Network error, try again.';
-  }
-  button.disabled = false;
-  return false;
-}
-
-$('bind').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const email = $('bind-email').value;
-  const button = $('bind').querySelector('button');
-  // The form's own button stays "Send me a link": the cooldown goes to Resend, which takes over.
-  button.disabled = true;
-  const { res, data } = await post('/api/profile/email', { email }).catch(() => ({ res: null, data: {} }));
-  button.disabled = false;
-  if (!res || !res.ok) {
-    statusLine.textContent = res ? data.error || 'HTTP ' + res.status : 'Network error, try again.';
-    return;
-  }
-  statusLine.textContent = '';
-  // The server stores the link after its answer: a reload now could still miss it.
-  pending = email;
-  $('bind').reset();
-  showEmail(false);
-  $('email-resend').textContent = 'Resend';
-  window.grillCooldown($('email-resend'), 60);
-});
-$('email-resend').addEventListener('click', () => sendLink($('email-resend'), '/api/profile/email', pending, () => { statusLine.textContent = ''; }));
-$('email-other').addEventListener('click', () => {
-  pending = '';
-  showEmail(true);
-  $('bind-email').focus();
-});
+// Both email forms answer in place (011-AC28). A bind link sent is the pending state.
+const bindLink = window.grillLinkForm({ form: $('bind'), url: '/api/profile/email', kind: 'bind', ttl: () => ttl,
+  onSent: (email) => {
+    pending = email;
+    pendingExpires = pendingSent = 0;
+    $('email-change').hidden = true;
+    if (!(shown && shown.email)) $('email-state').textContent = '';
+  },
+  onOther: () => {
+    pending = '';
+    showEmail(true);
+  } });
+const signinLink = window.grillLinkForm({ form: $('signin'), url: '/api/profile/signin', kind: 'signin', ttl: () => ttl });
 $('email-change').addEventListener('click', () => {
   showEmail(true);
   $('bind-email').focus();
-});
-$('signin').addEventListener('submit', (e) => {
-  e.preventDefault();
-  sendLink($('signin').querySelector('button'), '/api/profile/signin', $('signin-email').value, () => {
-    statusLine.textContent = 'If a profile uses this address, a link is on its way (valid ' + window.grillDuration(ttl) + ').';
-  });
 });
 
 function start() {
