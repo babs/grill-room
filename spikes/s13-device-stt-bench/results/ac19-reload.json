@@ -183,5 +183,97 @@
     1247
    ]
   ]
+ },
+ "with_ac21_delay": {
+  "protocol": "3 runs x 3 reloads, production RELOAD_DELAY_MS (12 s), RSS sampled every 250 ms; another worker's stack shared the host, so a first run 2 failed the self-test at RTFx 2.8 and was run again",
+  "runs": [
+   {
+    "self_test_rtfx": 3.86,
+    "reloads": [
+     {
+      "peak_mb": 1873,
+      "engine_after_load_s": 12.0,
+      "max_rss_2_s_before_engine_mb": 255,
+      "ready_after_click_s": 15.92,
+      "old_page_below_600_mb_after_load_s": 2.3,
+      "engine_load_s": 4.34
+     },
+     {
+      "peak_mb": 1889,
+      "engine_after_load_s": 12.0,
+      "max_rss_2_s_before_engine_mb": 224,
+      "ready_after_click_s": 15.15,
+      "old_page_below_600_mb_after_load_s": 2.1,
+      "engine_load_s": 3.5
+     },
+     {
+      "peak_mb": 1868,
+      "engine_after_load_s": 12.0,
+      "max_rss_2_s_before_engine_mb": 250,
+      "ready_after_click_s": 15.84,
+      "old_page_below_600_mb_after_load_s": 2.3,
+      "engine_load_s": 4.14
+     }
+    ]
+   },
+   {
+    "self_test_rtfx": 4.23,
+    "reloads": [
+     {
+      "peak_mb": 1898,
+      "engine_after_load_s": 12.0,
+      "max_rss_2_s_before_engine_mb": 252,
+      "ready_after_click_s": 16.27,
+      "old_page_below_600_mb_after_load_s": 2.2,
+      "engine_load_s": 4.6
+     },
+     {
+      "peak_mb": 1857,
+      "engine_after_load_s": 12.0,
+      "max_rss_2_s_before_engine_mb": 239,
+      "ready_after_click_s": 15.81,
+      "old_page_below_600_mb_after_load_s": 2.1,
+      "engine_load_s": 4.11
+     },
+     {
+      "peak_mb": 1854,
+      "engine_after_load_s": 12.0,
+      "max_rss_2_s_before_engine_mb": 256,
+      "ready_after_click_s": 16.15,
+      "old_page_below_600_mb_after_load_s": 2.0,
+      "engine_load_s": 4.48
+     }
+    ]
+   },
+   {
+    "self_test_rtfx": 4.21,
+    "reloads": [
+     {
+      "peak_mb": 2009,
+      "engine_after_load_s": 12.0,
+      "max_rss_2_s_before_engine_mb": 257,
+      "ready_after_click_s": 16.22,
+      "old_page_below_600_mb_after_load_s": 2.1,
+      "engine_load_s": 4.6
+     },
+     {
+      "peak_mb": 1979,
+      "engine_after_load_s": 12.0,
+      "max_rss_2_s_before_engine_mb": 240,
+      "ready_after_click_s": 14.77,
+      "old_page_below_600_mb_after_load_s": 2.2,
+      "engine_load_s": 3.17
+     },
+     {
+      "peak_mb": 1850,
+      "engine_after_load_s": 12.0,
+      "max_rss_2_s_before_engine_mb": 255,
+      "ready_after_click_s": 16.48,
+      "old_page_below_600_mb_after_load_s": 2.1,
+      "engine_load_s": 4.82
+     }
+    ]
+   }
+  ]
  }
 }

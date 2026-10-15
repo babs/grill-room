@@ -5,7 +5,7 @@
 # ///
 """Scores an S13 run directory (run.sh's out-dir) and prints one JSON summary.
 
-usage: analyze.py ac19|ac18 <out-dir> <data-dir>
+usage: analyze.py ac19|ac18|reload <out-dir> <data-dir>
   data-dir: the manifest.json prep.py wrote. WER and English leak use ../s10-validation/score.py
   (same normalisation and heuristic as S10b and S11).
 """
@@ -298,8 +298,35 @@ def ac18(out: Path) -> dict:
     return res
 
 
+def reloads(out: Path) -> list[dict]:
+    """Per warm reload (010-AC21): the tab's peak, when the engine started and the tab's RSS just before."""
+    a = json.loads((out / "alice.json").read_text())
+    marks = sorted(a["marks"], key=lambda m: m[1])
+    starts = [t for n, t in marks if n.startswith("warm")]
+    ends = [t for n, t in marks if n.startswith("warm") or n == "idle"][1:]
+    mem = a["mem"]
+    res = []
+    for w, t1, t2 in zip(a["warm"], starts, ends, strict=True):
+        eng = w["engine"]
+        before = [r["renderer_max"] for r in mem if eng - 2000 <= r["t"] < eng]
+        res.append(
+            {
+                "peak_mb": round(
+                    max(r["renderer_max"] for r in mem if t1 <= r["t"] < t2)
+                ),
+                "engine_after_load_s": round((eng - w["origin"]) / 1000, 2),
+                "max_rss_2_s_before_engine_mb": round(max(before)),
+                "ready_after_click_s": round(w["sec"], 2),
+            }
+        )
+    return res
+
+
 def main() -> None:
     kind, out, data = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3])
+    if kind == "reload":
+        print(json.dumps(reloads(out), indent=1))
+        return
     man = json.loads((data / "manifest.json").read_text())
     print(
         json.dumps(

@@ -73,7 +73,9 @@ try {
         const s = window.__rec.states;
         const a = s.find((x) => x[1] === 'loading');
         const b = s.find((x) => x[1] === 'ready');
-        return { sec: a && b ? (b[0] - a[0]) / 1000 : null, load: window.grillDeviceSTT.load };
+        // engine: when the reloaded page started its engine worker, from the page's time origin (010-AC21).
+        const e = window.__rec.workers.find((x) => x[1].includes('engine'));
+        return { sec: a && b ? (b[0] - a[0]) / 1000 : null, load: window.grillDeviceSTT.load, origin: window.__rec.origin, engine: e ? e[0] : null };
       });
       res.warm.push(w);
       log(`warm ${JSON.stringify(w)}`);

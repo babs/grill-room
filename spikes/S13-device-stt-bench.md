@@ -8,12 +8,12 @@ Tags: **[M]** measured here, **[S11]** from the S11 spike, **[U]** unverified.
 
 - **AC18 passes on the latency path, no mitigation needed.** The room tab stayed hidden 600.2 s with the room muted. The device posted all 38 sentences, 33 of them while hidden, with an end-of-speech-to-line p95 of 1.65 s. It never fell back and the worker posted nothing for that voice [M].
 - **The S11 slowdown does not show in a room tab.** The page's own 1 s main-thread timer kept firing every second for the whole 10 minutes. A page without WebRTC, in the Phase 1 run, fell to one tick a minute after 5 minutes. The LiveKit connection most likely exempts the tab from intensive throttling [U on the mechanism]. Device mode only runs while the tab is in the audio, so it always holds that connection.
-- **AC19: every threshold passes on the 30-minute live run (peak 1.34 GB) and on fresh-tab loads; a page reload peaks at 2.2-4.0 GB, over the 2.5 GB bar, for about 9 s: open, for the user to decide (accept, delay the engine after a reload, or measure on an 8 GB machine).**
+- **AC19 is met with the AC21 reload delay.** Every threshold passes on the 30-minute live run (peak 1.34 GB), on fresh-tab loads, and on a reload once the 12 s delay has run (peak 1.85-2.01 GB over 9 reloads). Without the delay a reload peaked at 2.2-4.0 GB.
   - p95 2.16 s on pause cuts and 2.19 s on all cuts, and no 5-minute slice above 2.43 s;
   - talk WER 0.120 on the device against 0.127 for the server on the same audio, English leak 0.001;
   - the tab peaked at 1.34 GB during the 30 minutes and at 1.54-1.96 GB while loading the model in a fresh tab;
   - warm load to ready took 2.09-2.73 s.
-- **Why the reload peaks.** Chrome keeps the same renderer across a reload and gives the old page's memory back about 9 s after it unloads. The new page loads its engine in about 3 s, inside that window. Ending the workers on `pagehide` did not change it (§4.1). The tab settles at 1.19-1.25 GB.
+- **Why a reload peaked.** Chrome keeps the same renderer across a reload. With a new engine loading at once, the old page's memory stayed until about 9 s after the unload, so both models sat in one tab. Ending the workers on `pagehide` did not change it. With the engine held back 12 s (AC21), the old page's memory goes 2.0-2.3 s after the reload and the engine starts on a 224-257 MB tab (§4.1).
 
 ## 2. Setup
 
@@ -88,8 +88,9 @@ Alice (device mode on) and Bob (device mode off, so the server worker transcribe
 | English leak, French items | ≤ 0.01 | 0.001 | 0.009 |
 | Peak tab memory, 30 minutes live | ≤ 2.5 GB | 1.34 GB (median 1.28) | 1.16 GB |
 | Peak tab memory, model load in a fresh tab (2 cold, 3 warm) | ≤ 2.5 GB | 1.54-1.96 GB | 0.54 GB |
-| Peak tab memory, warm load by page reload (21 loads, §4.1) | ≤ 2.5 GB | **2.22-4.04 GB** | **-1.54 GB** |
-| Warm load to ready (3 reloads, 3 new tabs) | ≤ 10 s | 2.09-2.73 s (S11: 5.6) | 7.27 s |
+| Peak tab memory, reload with the AC21 delay (9 reloads, §4.1) | ≤ 2.5 GB | 1.85-2.01 GB | 0.49 GB |
+| Peak tab memory, reload without the delay (21 loads, §4.1) | no longer the shipped path | 2.22-4.04 GB | |
+| Warm load to ready (3 reloads, 3 new tabs, no delay) | ≤ 10 s | 2.09-2.73 s (S11: 5.6) | 7.27 s |
 
 Other figures [M]:
 
@@ -111,18 +112,23 @@ Other figures [M]:
 
 ### 4.1 Reload peak
 
-Each row is 3 runs of 3 warm loads by `page.reload()`, on the same profile, with nothing played. The sampler reads the RSS of the largest renderer every 2 s. The second row ends the engine and pipeline workers synchronously on `pagehide` (`Worker.terminate()`, skipped for a back/forward cache entry).
+Each row is 3 runs of 3 warm loads by `page.reload()`, on the same profile, with nothing played. The sampler reads the RSS of the largest renderer every 2 s, every 250 ms for the AC21 row. The second row ends the engine and pipeline workers synchronously on `pagehide` (`Worker.terminate()`, skipped for a back/forward cache entry); it was reverted. The AC21 row is the code the user chose: on a reload the engine starts 12 s after the page loads (`RELOAD_DELAY_MS`, production value, no test override).
 
 | | Peak per warm load | 20 s after the third load | Settled |
 |---|---|---|---|
 | Shipped code | 2.30-4.04 GB (median 3.09) | 2.31-2.35 GB | 1.19 GB |
 | Workers ended on `pagehide` | 2.22-4.04 GB (median 3.25) | 2.31-2.35 GB | 1.19 GB |
 | New tab instead of reload (one run) | 1.63-1.96 GB | 1.58 GB | 1.22 GB |
+| **AC21: engine 12 s after a reload** | **1.85-2.01 GB** (median 1.87) | | |
 
 - **The 250 ms trace,** with the change, starts at the third reload. The renderer spikes to 3.4 GB at 1.6 s. The page is ready at 3.3 s. The renderer then holds a 2.2-2.3 GB plateau until 8.2 s and falls to 1.25 GB by 9.7 s.
 - **About 0.7 GB of the plateau is the old page.** A load in a fresh tab ends at 1.6 GB, and the old page's share goes some 9 s after it unloaded.
 - **Ending the workers changes nothing.** The browser already ends a page's dedicated workers when the page goes, so `terminate()` adds nothing. The delay is in Chrome giving the memory back, not in workers outliving the page [U on Chrome's internals]. The change was reverted.
-- **Untested.** Chrome may reclaim that memory sooner under memory pressure on an 8 GB machine.
+- **With the AC21 delay**, on all 9 reloads:
+  - the engine worker started 12.0 s after the page's time origin;
+  - the old page's memory was gone first: the tab fell from 1.57-1.76 GB just after the reload to under 600 MB by 2.0-2.3 s, and held 224-257 MB in the 2 s before the engine started;
+  - the engine then loaded in 3.2-4.8 s (fetch, sessions, warm-up), and Join audio to ready took 14.8-16.5 s, the delay included.
+- **Untested.** Chrome may reclaim the old page's memory sooner under memory pressure on an 8 GB machine.
 
 ## 5. Gaps
 
@@ -130,6 +136,7 @@ Each row is 3 runs of 3 warm loads by `page.reload()`, on the same profile, with
 - **The hand-back branch of AC18 did not fire**, because nothing degraded. The cause of the missing throttling is inferred, not proven. A room tab that leaves the audio stops device mode anyway.
 - **Piper lines differ from S11's.** Synthesised again, each line is up to 1.3 s shorter or longer. The talk and SUMM-RE audio is identical. The 30-minute window holds 8 of the corpus's 14 SUMM-RE tracks.
 - **One run per configuration** for AC18 and AC19, with other work on the host.
+- **The AC21 runs shared the host** with another worker's STT stack. The self-test fell to RTFx 3.9-4.2, and one run failed it at 2.8 and was run again. This slows the engine load, not the memory figures.
 - **Playwright did the reloads.** `page.reload()` stood in for a user's F5; Chrome keeping the renderer for a same-site reload is not verified for F5 [U].
 
 ## 6. Harness
@@ -141,7 +148,7 @@ Each row is 3 runs of 3 warm loads by `page.reload()`, on the same profile, with
 - `ac19.mjs` drives the bench, one process per participant (`BENCH_SECS=1800`).
 - §4.1 reruns `run.sh ac19` with `BENCH_SECS=1`, 3 times per build. `WARM_NEW_TAB=1` gives the new-tab row, and `SAMPLE_MS=250` gives the fine trace.
 - `lib.mjs` holds the scripted mic, the recorder, the pipeline probe and the memory sampler.
-- `analyze.py ac18|ac19 <out> <data>` scores a run.
+- `analyze.py ac18|ac19 <out> <data>` scores a run; `analyze.py reload <out> <data>` gives the per-reload peak, engine start and memory before it.
 - `results/` holds the summaries: `ac18.json`, `ac19.json`, `ac19-warm-new-tab.json`, and `ac19-reload.json` for §4.1.
 
 The corpus audio, the model files and the run directories stay outside the repository.

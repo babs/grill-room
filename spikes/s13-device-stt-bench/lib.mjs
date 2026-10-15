@@ -46,12 +46,13 @@ export function fakeMic() {
   };
 }
 
-// recorder (init script) keeps, in window.__rec: visibility changes, a 1 s main-thread tick (it shows
-// timer throttling), the device states, every end-of-speech-to-line latency the pipeline reports, its
-// mode changes and the probe records a pipeline hook sends.
+// recorder (init script) keeps, in window.__rec: the page's time origin, each worker started,
+// visibility changes, a 1 s main-thread tick (it shows timer throttling), the device states, every
+// end-of-speech-to-line latency the pipeline reports, its mode changes and the probe records a
+// pipeline hook sends.
 export function recorder() {
   const now = () => performance.timeOrigin + performance.now();
-  const rec = (window.__rec = { vis: [[now(), document.visibilityState]], ticks: [], states: [], lat: [], modes: [], probes: [], last: null });
+  const rec = (window.__rec = { origin: performance.timeOrigin, workers: [], vis: [[now(), document.visibilityState]], ticks: [], states: [], lat: [], modes: [], probes: [], last: null });
   document.addEventListener('visibilitychange', () => rec.vis.push([now(), document.visibilityState]));
   setInterval(() => rec.ticks.push(now()), 1000);
   addEventListener('grill:device-stt', (e) => rec.states.push([now(), e.detail.state]));
@@ -73,6 +74,7 @@ export function recorder() {
   window.Worker = class extends W {
     constructor(u, o) {
       super(u, o);
+      rec.workers.push([now(), String(u)]);
       if (!String(u).includes('pipeline')) return;
       rec.lat.push([now(), null, 'new-pipeline', 0]);
       prev = [];
