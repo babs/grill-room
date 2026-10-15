@@ -113,7 +113,7 @@ async function transcription() {
     ['Model', i.offer ? `parakeet-ultra${enc ? ' ' + enc : ''}, revision ${i.offer.revision}, ${mb(i.offer.bytes)}, ${cached}` : 'none offered'],
     ['Device memory', `${nav.deviceMemory ? nav.deviceMemory + ' GB' : 'not reported'} (Chrome and Edge only, rounded and capped by the browser)`],
     ['Tab memory', memory],
-    ['End of speech to line', lat.length ? `p50 ${(pct(lat, 0.5) / 1000).toFixed(1)} s, p95 ${(pct(lat, 0.95) / 1000).toFixed(1)} s over the last ${lat.length} lines` : 'no line yet'],
+    ['End of speech to line', lat.length ? `p50 ${(pct(lat, 0.5) / 1000).toFixed(1)} s, p95 ${(pct(lat, 0.95) / 1000).toFixed(1)} s ${lat.length === 1 ? 'from 1 line' : `over the last ${lat.length} lines`}` : 'no line yet'],
     ['Hand-overs', i.handovers.length ? i.handovers.map((h) => `${window.grillTime(h.at)} ${HANDOVER[h.mode] || h.mode}`).join('; ') : 'none'],
   ];
 }
