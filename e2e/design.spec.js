@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { mkdirSync } from 'node:fs';
 import { adminToken } from './playwright.config.js';
 import { roomWith, signIn, upload, startDaemon, smallTargets, menuItem, playSTT, newRoomEditor, personaAction } from './helpers.js';
@@ -74,7 +74,7 @@ test('touch targets at phone width', async ({ browser, request, baseURL }) => {
   await alice.keyboard.press('Escape');
   await alice.getByRole('button', { name: /Notes/ }).click();
   expect(await smallTargets(alice), 'notes pane').toEqual([]);
-  await alice.getByRole('button', { name: '← Back to the document' }).click();
+  await alice.getByRole('button', { name: 'Back to the document' }).click();
   // 008-AC12: the push explainer.
   await menuItem(alice, 'Notifications', 'me');
   await alice.locator('#push-toggle').click();
@@ -213,19 +213,19 @@ test('drag and drop upload, in the room and the docs window', async ({ browser, 
     { name: 'fake.pdf', type: 'application/pdf', body: 'not a pdf at all' },
   ]);
   const rows = alice.locator('#uploads li');
-  await expect(rows.filter({ hasText: 'brief.md' }).locator('.state')).toHaveText('✓');
+  await expect(rows.filter({ hasText: 'brief.md' }).locator('.state')).toHaveAttribute('aria-label', 'Added');
   await expect(alice.locator('#documents')).toContainText('brief.md');
   const exe = rows.filter({ hasText: 'tool.exe' });
   await expect(exe.locator('.why')).toHaveText("This file type isn't supported. Use PDF, Word, slides, images, Markdown or HTML.");
   const pdf = rows.filter({ hasText: 'fake.pdf' });
-  await expect(pdf.locator('.state')).toHaveText('✗');
+  await expect(pdf.locator('.state')).toHaveAttribute('aria-label', 'Not added');
   await expect(pdf.locator('.why')).not.toBeEmpty();
   await shot(alice, 'after-desktop-uploads');
   // Retry sends it again: the server refuses it again, the row stays.
   const [again] = await Promise.all([alice.waitForResponse((r) => r.url().endsWith('/documents') && r.request().method() === 'POST'),
     pdf.getByRole('button', { name: 'Retry fake.pdf' }).click()]);
   expect(again.status()).toBe(415);
-  await expect(rows.filter({ hasText: 'fake.pdf' }).locator('.state')).toHaveText('✗');
+  await expect(rows.filter({ hasText: 'fake.pdf' }).locator('.state')).toHaveAttribute('aria-label', 'Not added');
   await exe.getByRole('button', { name: 'Dismiss tool.exe' }).click();
   await expect(rows.filter({ hasText: 'tool.exe' })).toHaveCount(0);
   // A finished row clears itself; a failed one stays.
@@ -277,8 +277,8 @@ test('header menus, wording and empty states', async ({ browser, request }) => {
 
   // No jargon in the room's own words: the header, its menus, the side panel and the composer.
   const words = await alice.evaluate(() => [...document.querySelectorAll('header, .menu, #side, #send, #chat-empty, #viewer, dialog')]
-    .map((e) => e.innerText + ' ' + [...e.querySelectorAll('[placeholder], [aria-label], [title]')]
-      .map((x) => [x.getAttribute('placeholder'), x.getAttribute('aria-label'), x.getAttribute('title')].join(' ')).join(' ')).join(' '));
+    .map((e) => e.innerText + ' ' + [...e.querySelectorAll('[placeholder], [aria-label], [data-tip]')]
+      .map((x) => [x.getAttribute('placeholder'), x.getAttribute('aria-label'), x.getAttribute('data-tip')].join(' ')).join(' ')).join(' '));
   for (const bad of [/\bchain\b/i, /\bManage\b/, /Transcribing/, /\bDeafen\b/, /Upload a document/, /Download original/, /\bVolume\b/, /holds the agent/, /(?<!AI )\bhost\b/]) {
     expect(words, String(bad)).not.toMatch(bad);
   }
@@ -464,7 +464,7 @@ test('profile home page', async ({ browser, request }) => {
   const card = alice.locator('#rooms li.card').first();
   await expect(card.locator('.room-line')).toHaveText('Docs room as Alice');
   await expect(card).toContainText('1 person · active');
-  await expect(card.locator('time')).toHaveAttribute('title', /\d/);
+  await expect(card.locator('time')).toHaveAttribute('data-tip', /\d/);
   await expect(alice.locator('#profile-name')).toHaveText('Alice');
   await expect(alice.locator('#skills')).not.toHaveAttribute('open', '');
   await newRoomEditor(alice);
@@ -487,7 +487,7 @@ test('admin rooms list', async ({ browser, request }) => {
   const adm = await (await browser.newContext({ viewport: desktop })).newPage();
   expect(await signIn(adm, adminToken, 'rooms')).toBe(201);
   const row = adm.locator(`#room-${room.id}`);
-  await expect(row.locator('time').first()).toHaveAttribute('title', /\d/);
+  await expect(row.locator('time').first()).toHaveAttribute('data-tip', /\d/);
   await expect(row.locator('time').first()).toHaveText(/ago|just now/);
   await adm.getByLabel('Search rooms').fill('no such room');
   await expect(row).toHaveCount(0);

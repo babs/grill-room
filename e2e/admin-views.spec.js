@@ -1,4 +1,5 @@
-import { test, expect, request as pwRequest } from '@playwright/test';
+import { request as pwRequest } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { readFileSync } from 'node:fs';
 import { adminToken } from './playwright.config.js';
 import { signIn, noOverflow, skillZip, confirmSheet } from './helpers.js';

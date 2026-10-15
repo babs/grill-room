@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { roomWith, fakeDaemon, appointAdmin, personMenu, confirmSheet, signIn } from './helpers.js';
 
 const hostBadge = (page, name) => page.locator('#participants li', { hasText: name }).locator('.host-badge');

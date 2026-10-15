@@ -37,14 +37,19 @@ export async function fetchJSON(method, path, body) {
 }
 
 /** @param {string} t */
-export const when = (t) => new Date(t).toLocaleString();
+export const when = (t) => window.grillDate(t);
 /**
- * ago says how long ago t was, coarsely, for a list (005-AC43): the full date shows in a tooltip.
+ * ago says how long ago t was, coarsely, for a list (005-AC43): the full date shows in the tip.
  * @param {string} t
  */
 export function ago(t) {
-  return html`<time datetime=${t} title=${when(t)}>${window.grillAgo(t)}</time>`;
+  return html`<time datetime=${t} data-tip=${when(t)}>${window.grillAgo(t)}</time>`;
 }
+/**
+ * icon is an icon of the shared set (kit/ui.js) as a control's content: the control names itself.
+ * @param {string} name
+ */
+export const icon = (name) => ({ __html: window.grillIconHTML(name) });
 /** @param {number} n bytes */
 export function size(n) {
   if (n < 1024) return n + ' B';

@@ -31,7 +31,7 @@ function render({ email_enabled: emailEnabled, profile, magic_link_ttl_s: linkTT
     meta.className = 'hint';
     const when = document.createElement('time');
     when.dateTime = r.last_activity;
-    when.title = new Date(r.last_activity).toLocaleString();
+    when.dataset.tip = grillDate(r.last_activity);
     when.textContent = ago(r.last_activity);
     meta.append((r.people === 1 ? '1 person' : r.people + ' people') + ' · active ', when);
     li.append(line, meta);
@@ -39,7 +39,7 @@ function render({ email_enabled: emailEnabled, profile, magic_link_ttl_s: linkTT
       const badge = document.createElement('span');
       badge.className = 'badge role';
       badge.textContent = 'admin';
-      badge.title = 'You are a room admin here';
+      badge.dataset.tip = 'You are a room admin here';
       li.append(badge);
     }
     return li;

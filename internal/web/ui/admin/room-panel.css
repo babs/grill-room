@@ -14,6 +14,11 @@
 :is(#room-panel, #panel-invites) ul { padding-left: 0; list-style: none; }
 :is(#room-panel, #panel-invites) li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-height: var(--control-h); }
 #room-panel .tab-panel { padding-top: var(--sp-2); }
+/* Admins in columns: name, role, the admin button, Rename; each starts at the same x on every row. */
+#room-panel .admin-rows li { display: grid; grid-template-columns: minmax(6rem, 14rem) 4rem 9rem auto; justify-content: start; align-items: center; gap: var(--sp-2) var(--sp-3);
+  min-height: 44px; padding: var(--sp-1) 0; border-bottom: 1px solid var(--border); }
+.admin-rows .who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 40rem) { #room-panel .admin-rows li { grid-template-columns: minmax(0, 1fr) auto; } }
 form.rename { display: inline-flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
 form.rename input { width: 12rem; }
 #stt-glossary textarea { width: 100%; }

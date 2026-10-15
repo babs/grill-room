@@ -4,7 +4,7 @@
 import { render } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
 import { html } from 'htm/preact';
-import { fetchJSON } from './room-panel.js';
+import { fetchJSON, icon } from './room-panel.js';
 import { StarterList, NewRoom, Editor } from './starters.js';
 
 function Starters() {
@@ -29,7 +29,7 @@ async function editStarter(st, reload, say) {
   const view = await fetchJSON('GET', '/api/profile/starters/' + st.id).catch((err) => { say(err.message); return null; });
   if (!view) return;
   render(html`<div class="sheet-head"><h2 id="room-create-title">Edit ${st.title}</h2>
-      <button type="button" class="btn-ghost btn-icon" aria-label="Close" onClick=${close}>✕</button></div>
+      <button type="button" class="btn-ghost btn-icon" aria-label="Close" onClick=${close} dangerouslySetInnerHTML=${icon('close')}></button></div>
     <${Editor} view=${view} api=${fetchJSON} mode="edit" path=${'/api/profile/starters/' + st.id + '/versions'} back=${close}
       done=${(/** @type {import('./starters.js').Starter} */ saved) => { close(); say('Saved "' + saved.title + '" v' + saved.version + '.'); reload(); }}/>`, sheet);
   sheet.showModal();

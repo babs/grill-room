@@ -22,12 +22,12 @@
 /* Under 40rem every target is 44 px and controls take 16 px text, which stops iOS zooming in. */
 @media (max-width: 40rem) { :root { --control-h: 44px; --control-h-sm: 44px; --fs-control: var(--fs-md); } }
 @media (prefers-color-scheme: dark) { :root {
-  --bg: #161a2c; --surface: #1f2440; --chrome: #1f2440; --chrome-muted: #9a9fb3;
+  --bg: #161a2c; --surface: #1f2440; --chrome: #2a3054; --chrome-muted: #9a9fb3;
   --text: #e6e7ee; --text-muted: #9a9fb3; --border: #3a4062; --border-strong: #7a809c;
   --brand: #3fc2ad; --primary: #3fc2ad; --primary-text: #3fc2ad; --on-primary: #161a2c;
   --success: #4fd18a; --warning: #ffd27a; --danger: #ff8a80; --on-danger: #161a2c;
   --primary-bg: rgb(63 194 173 / .15); --warning-bg: rgb(255 210 122 / .15); --danger-bg: rgb(255 138 128 / .15); --info-bg: rgb(138 180 248 / .15);
-  --dot-ring: #e6e7ee; --highlight: rgb(255 194 61 / .12);
+  --dot-ring: #e6e7ee; --highlight: rgb(255 194 61 / .12); --backdrop: rgb(0 0 0 / .6);
   --sh-1: 0 1px 2px rgb(0 0 0 / .4); --sh-2: 0 4px 16px rgb(0 0 0 / .5);
 } }
 
@@ -70,6 +70,9 @@
 :where(table) { border-collapse: collapse; font-size: var(--fs-sm); }
 :where(th, td) { text-align: left; padding: var(--sp-2) var(--sp-3) var(--sp-2) 0; border-bottom: 1px solid var(--border); }
 :where(dialog) { color: var(--text); }
+/* A group of fields reads as a section: its legend a heading, no native frame broken by it. */
+:where(fieldset) { min-width: 0; margin: 0 0 var(--sp-4); padding: 0; border: 0; }
+:where(legend) { margin-bottom: var(--sp-2); padding: 0; font-size: var(--fs-sm); font-weight: 600; }
 
 /* Components */
 .app-header {
@@ -103,9 +106,15 @@
 }
 .tabs a[aria-current=page] { border-bottom-color: var(--brand); }
 .tabs a:focus-visible { outline-offset: -2px; }
-@media (max-width: 40rem) { .tabs { mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); } }
-.empty { padding: var(--sp-4); border: 1px dashed var(--border-strong); border-radius: var(--r-md); color: var(--text-muted); text-align: center; }
-.empty .btn, .empty button { margin-top: var(--sp-2); }
+@media (max-width: 40rem) {
+  /* The last tab, or the one scrolled into view, stops clear of the 24 px fade edge. */
+  .tabs { mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); scroll-padding-inline-end: 24px; }
+  .tabs::after { content: ""; flex: none; width: 24px; }
+  .tabs a { padding: 0 var(--sp-3); }
+}
+.empty { display: block; margin: var(--sp-2) 0; padding: var(--sp-3) var(--sp-4); border: 1px dashed var(--border-strong); border-radius: var(--r-md); color: var(--text-muted); font-size: var(--fs-sm); font-style: normal; text-align: center; list-style: none; }
+.empty > p { margin: 0; }
+.empty > * + * { margin-top: var(--sp-2); }
 .card { padding: var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); box-shadow: var(--sh-1); }
 .sheet {
   width: min(32rem, calc(100vw - 1rem)); max-height: calc(100dvh - 1rem); padding: var(--sp-4);
@@ -113,6 +122,8 @@
 }
 .sheet::backdrop, dialog::backdrop { background: var(--backdrop); }
 .sheet.wide { width: min(44rem, calc(100vw - 1rem)); }
+/* A tabbed sheet hangs from a fixed top: its head stays put while a tab changes its height. */
+.sheet.wide { margin-block: min(10dvh, var(--sp-7)) auto; max-height: calc(100dvh - 2 * min(10dvh, var(--sp-7))); }
 .sheet-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); margin-bottom: var(--sp-3); }
 .sheet-head h2 { margin: 0; font-size: var(--fs-lg); }
 .sheet .actions, .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--sp-2); margin-top: var(--sp-4); }
@@ -131,7 +142,7 @@
    larger text, and a button's border shifts its text by 1 px. */
 .menu > :where(button, a, label) { display: flex; align-items: center; gap: var(--sp-2); min-height: var(--control-h); width: 100%; justify-content: flex-start; padding: 0 var(--sp-3); border: 0; background: transparent; color: var(--text); font: 400 var(--fs-control)/1.2 var(--font); text-decoration: none; }
 .menu > :where(button, a):hover { background: var(--bg); }
-.menu .menu-head { margin: 0; padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: var(--fs-sm); }
+.menu .menu-head { display: block; margin: 0; padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: var(--fs-sm); }
 /* The optional leading icon column: once any item has one, the other rows and the header indent by
    it, so every text starts at the same x. */
 .menu .ico { display: block; flex: none; width: 16px; height: 16px; }
@@ -149,5 +160,9 @@
   table.cards td { padding: var(--sp-1) 0; border: 0; white-space: normal; }
   table.cards td[data-label]::before { content: attr(data-label) ": "; color: var(--text-muted); font-size: var(--fs-sm); }
 }
+/* The styled tip (kit/ui.js) for any [data-tip], on every page. */
+.tip { position: fixed; inset: auto; margin: 0; max-width: 20rem; padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); color: var(--text); box-shadow: var(--sh-2); font-size: var(--fs-xs); line-height: 1.45; }
+.tip.pass { pointer-events: none; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }

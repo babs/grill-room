@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { roomWith } from './helpers.js';
 
 const notice = (page) => page.getByRole('alert').filter({ hasText: "Couldn't load, reload the page" });

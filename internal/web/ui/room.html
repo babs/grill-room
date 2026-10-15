@@ -35,7 +35,7 @@
   </div>
   <div class="zone zone-agents" id="agent">
     <div id="persona-buttons" role="group" aria-label="AI personas"></div>
-    <span id="chain-count" class="auto-turns" title="Answers the personas started on their own, one calling another. They pause at the limit; any message from a person starts the count over." hidden></span>
+    <span id="chain-count" class="auto-turns" data-tip="Answers the personas started on their own, one calling another. They pause at the limit; any message from a person starts the count over." hidden></span>
     <span id="agent-status" class="muted" role="status"></span>
   </div>
   <div class="zone zone-me">
@@ -43,17 +43,17 @@
       <button type="button" id="voice-join" class="btn-primary">Join audio</button>
       <button type="button" id="voice-unlock" class="btn-primary" hidden>Play audio</button>
       <button type="button" id="voice-mute" aria-pressed="false" hidden>Mute</button>
-      <button type="button" id="voice-more" class="btn-icon" popovertarget="voice-menu" aria-label="Audio options" hidden>▾</button>
+      <button type="button" id="voice-more" class="btn-icon" popovertarget="voice-menu" aria-label="Audio options" data-icon="down" hidden></button>
     </div>
-    <button type="button" id="me" class="avatar" popovertarget="me-menu" title="You: your name, notifications, your profile"></button>
+    <button type="button" id="me" class="avatar" popovertarget="me-menu" data-tip="You: your name, notifications, your profile"></button>
     <a id="me-anon" class="anon-mark" href="/profile#email" hidden></a>
-    <button type="button" id="more-open" class="btn-icon" popovertarget="more-menu" aria-label="More" title="More">⋯</button>
+    <button type="button" id="more-open" class="btn-icon" popovertarget="more-menu" aria-label="More" data-tip="More" data-icon="more"></button>
   </div>
 </header>
 <div id="voice-menu" class="menu" popover>
   <p id="stt-status" class="menu-head" role="status"></p>
-  <button type="button" id="voice-deaf" aria-pressed="false" title="Stop hearing the others">Mute the room</button>
-  <label id="voice-keepmic" title="Keep your voice going out, and written down, while the room is muted: useful when you share a physical room"><input type="checkbox"> Keep my mic on while the room is muted</label>
+  <button type="button" id="voice-deaf" aria-pressed="false" data-tip="Stop hearing the others">Mute the room</button>
+  <label id="voice-keepmic" data-tip="Keep your voice going out, and written down, while the room is muted: useful when you share a physical room"><input type="checkbox"> Keep my mic on while the room is muted</label>
   <button type="button" id="voice-leave">Leave audio</button>
   <p id="stt-credit" class="hint" hidden>Voice-to-text by <a href="https://huggingface.co/moondream/parakeet-ultra" target="_blank" rel="noopener">parakeet-ultra</a>
     (Moondream, from NVIDIA Parakeet TDT 0.6B v3),
@@ -61,23 +61,23 @@
 </div>
 <div id="me-menu" class="menu" popover>
   <p class="menu-head" id="me-head"></p>
-  <button type="button" id="rename-open">Change my name</button>
-  <button type="button" id="notify-open">Notifications</button>
-  <button type="button" id="recovery-open">Use on another device</button>
-  <a href="/profile">My rooms and profile</a>
+  <button type="button" id="rename-open" data-icon="rename">Change my name</button>
+  <button type="button" id="notify-open" data-icon="bell">Notifications</button>
+  <button type="button" id="recovery-open" data-icon="device">Use on another device</button>
+  <a href="/profile" data-icon="profile">My rooms and profile</a>
 </div>
 <div id="more-menu" class="menu" popover>
-  <button type="button" id="invite-open">Invite people</button>
-  <button type="button" id="manage-open" hidden>Room settings</button>
-  <button type="button" id="personas-open">Personas</button>
-  <a id="docs-window-menu"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg> Open documents in a new window</a>
-  <button type="button" id="host-open" hidden>Run the AI on my computer</button>
+  <button type="button" id="invite-open" data-icon="invite">Invite people</button>
+  <button type="button" id="manage-open" data-icon="settings" hidden>Room settings</button>
+  <button type="button" id="personas-open" data-icon="personas">Personas</button>
+  <a id="docs-window-menu" data-icon="external">Open documents in a new window</a>
+  <button type="button" id="host-open" data-icon="host" hidden>Run the AI on my computer</button>
 </div>
 <div id="doc-menu" class="menu" popover>
-  <a id="doc-original" hidden>Download</a>
-  <a id="doc-window"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg> Open in a new window</a>
-  <button type="button" id="doc-rename">Rename</button>
-  <button type="button" id="doc-delete" class="danger" hidden>Delete</button>
+  <a id="doc-original" data-icon="download" hidden>Download</a>
+  <a id="doc-window" data-icon="external">Open in a new window</a>
+  <button type="button" id="doc-rename" data-icon="rename">Rename</button>
+  <button type="button" id="doc-delete" class="danger" data-icon="trash" hidden>Delete</button>
 </div>
 <div id="person-menu" class="menu" popover></div>
 <div id="person-card" class="person-card" role="tooltip" popover="manual"></div>
@@ -112,14 +112,14 @@
 <p id="email-nudge" class="strip" role="status" hidden>Add an email to your profile to find it on another device.
   <a href="/profile#email" class="btn btn-primary">Add an email</a>
   <button type="button" id="email-nudge-later" class="btn-secondary">Later</button>
-  <button type="button" id="email-nudge-close" class="btn-icon" aria-label="Close">✕</button></p>
+  <button type="button" id="email-nudge-close" class="btn-icon" aria-label="Close" data-icon="close"></button></p>
 <p id="notice" class="strip" role="status" hidden><span id="notice-text"></span> <button type="button" id="notice-close" class="btn-ghost">OK</button></p>
 <button type="button" id="strip-more" class="btn-ghost" aria-expanded="false" hidden></button>
 </div>
 <dialog id="personas" class="sheet wide full" aria-labelledby="personas-title">
   <div class="sheet-head">
     <h2 id="personas-title">Personas</h2>
-    <button type="button" id="personas-close" class="btn-icon btn-ghost" aria-label="Close">✕</button>
+    <button type="button" id="personas-close" class="btn-icon btn-ghost" aria-label="Close" data-icon="close"></button>
   </div>
   <p class="hint">Each persona is an AI with its own Claude session. Changes apply from its next answer.</p>
   <p id="personas-status" class="said" role="status"></p>
@@ -150,8 +150,8 @@
   <div class="sheet-head">
     <h2 id="persona-sheet-title"></h2>
     <span class="sheet-tools">
-      <button type="button" id="persona-more" class="btn-icon btn-ghost" popovertarget="persona-menu" aria-label="Persona actions" title="Persona actions">⋯</button>
-      <button type="button" id="persona-sheet-close" class="btn-icon btn-ghost" aria-label="Close">✕</button>
+      <button type="button" id="persona-more" class="btn-icon btn-ghost" popovertarget="persona-menu" aria-label="Persona actions" data-icon="more"></button>
+      <button type="button" id="persona-sheet-close" class="btn-icon btn-ghost" aria-label="Close" data-icon="close"></button>
     </span>
   </div>
   <nav id="persona-tabs" class="tabs" aria-label="Persona settings"></nav>
@@ -162,7 +162,7 @@
 <dialog id="manage" class="sheet wide full" aria-labelledby="manage-title">
   <div class="sheet-head">
     <h2 id="manage-title">Room settings</h2>
-    <button type="button" id="manage-close" class="btn-icon btn-ghost" aria-label="Close">✕</button>
+    <button type="button" id="manage-close" class="btn-icon btn-ghost" aria-label="Close" data-icon="close"></button>
   </div>
   <div id="room-admin"></div>
 </dialog>
@@ -185,7 +185,7 @@
 <dialog id="invites" class="sheet" aria-labelledby="invites-title">
   <div class="sheet-head">
     <h2 id="invites-title">Invite people</h2>
-    <button type="button" class="btn-icon btn-ghost close" aria-label="Close">✕</button>
+    <button type="button" class="btn-icon btn-ghost close" aria-label="Close" data-icon="close"></button>
   </div>
   <p class="copy-row">
     <input id="invite-link" readonly aria-label="Your invite link" placeholder="Getting your link…">
@@ -198,7 +198,7 @@
 <dialog id="notify" class="sheet" aria-labelledby="notify-title">
   <div class="sheet-head">
     <h2 id="notify-title">Notifications</h2>
-    <button type="button" class="btn-icon btn-ghost close" aria-label="Close">✕</button>
+    <button type="button" class="btn-icon btn-ghost close" aria-label="Close" data-icon="close"></button>
   </div>
   <label><input type="checkbox" id="count-voice"> Count voice lines in the tab title</label>
   <p class="hint">Browser notifications reach you while no tab of this room is focused, the browser closed too: when someone mentions you, when a persona answers, and when an answer you asked for ends.</p>
@@ -212,7 +212,7 @@
   <div class="sheet-head">
     <!-- autofocus: an offer that opens under a typing hand must not take a keystroke as an answer. -->
     <h2 id="push-explain-title" tabindex="-1" autofocus>Turn on notifications?</h2>
-    <button type="button" class="btn-icon btn-ghost close" aria-label="Close">✕</button>
+    <button type="button" class="btn-icon btn-ghost close" aria-label="Close" data-icon="close"></button>
   </div>
   <p id="push-explain-text">Get notified when someone mentions you directly, even when this tab is closed.</p>
   <p class="hint">Your browser will ask for permission next.</p>
@@ -224,7 +224,7 @@
 <dialog id="host-agent" class="sheet" aria-labelledby="host-title">
   <div class="sheet-head">
     <h2 id="host-title">Run the AI on my computer</h2>
-    <button type="button" class="btn-icon btn-ghost close" aria-label="Close">✕</button>
+    <button type="button" class="btn-icon btn-ghost close" aria-label="Close" data-icon="close"></button>
   </div>
   <p>The AI host app runs this room's personas on your computer, with your Claude subscription. It needs Docker.</p>
   <h3>Already have the app?</h3>
@@ -255,7 +255,7 @@
 <dialog id="recovery" class="sheet" aria-labelledby="recovery-title">
   <div class="sheet-head">
     <h2 id="recovery-title">Use on another device</h2>
-    <button type="button" class="btn-icon btn-ghost close" aria-label="Close">✕</button>
+    <button type="button" class="btn-icon btn-ghost close" aria-label="Close" data-icon="close"></button>
   </div>
   <div id="recovery-has">
     <p>This browser holds your profile, which follows you from room to room. Open this link on another device to use the same profile there. Whoever holds it gets your profile.</p>
@@ -286,7 +286,7 @@
 <section id="pairing" aria-labelledby="pairing-title" hidden>
   <div class="sheet-head">
     <h2 id="pairing-title">Connect the AI host app</h2>
-    <button type="button" id="pairing-close" class="btn-icon btn-ghost" aria-label="Close">✕</button>
+    <button type="button" id="pairing-close" class="btn-icon btn-ghost" aria-label="Close" data-icon="close"></button>
   </div>
   <p id="pairing-text"></p>
   <div class="actions" id="pairing-actions">
@@ -309,12 +309,14 @@
       <div class="pane-head">
         <button type="button" id="docs-fold" class="fold" aria-controls="documents" aria-expanded="true" aria-label="Documents"></button>
         <h2 id="docs-title"><svg class="ico sec-icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg> <span class="sec-label">Documents</span></h2>
-        <a id="docs-window" class="head-action" aria-label="Open documents in a new window" title="Open documents in a new window"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></a>
-        <button type="button" id="upload-open" class="head-action" aria-label="Add documents" title="Add documents"><svg class="ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+        <a id="docs-window" class="head-action" aria-label="Open documents in a new window" data-tip="Open documents in a new window" data-icon="external"></a>
+        <button type="button" id="upload-open" class="head-action" aria-label="Add documents" data-tip="Add documents" data-icon="plus"></button>
       </div>
       <input type="file" id="upload-input" multiple hidden accept=".md,.markdown,.html,.htm,.pdf,.png,.jpg,.jpeg,.gif,.webp,.svg,.docx,.odt,.pptx">
       <ul id="documents"></ul>
-      <div id="docs-empty" class="empty" hidden>No documents yet. Drop files here or press +.<br><span class="hint">PDF, Word, slides, images, Markdown or HTML.</span></div>
+      <div id="docs-empty" class="empty" hidden><p>No documents yet.<span class="wide-only"> Drop files here or press <span class="nowrap">+.</span></span></p>
+        <button type="button" id="docs-empty-add" class="btn-secondary phone-only">Add documents</button>
+        <p class="hint">PDF, Word, slides, images, Markdown or HTML.</p></div>
       <ul id="uploads" aria-label="Uploads"></ul>
       <div class="drop-overlay" aria-hidden="true">Drop to add to the room</div>
     </section>
@@ -323,13 +325,13 @@
   <div id="side-handle" class="pane-handle" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="side" aria-label="Resize the side panel"></div>
   <section id="viewer" hidden>
     <div class="viewer-head">
-      <button type="button" id="doc-close" class="btn-icon btn-ghost" aria-label="Close document" title="Close">✕</button>
+      <button type="button" id="doc-close" class="btn-icon btn-ghost" aria-label="Close document" data-tip="Close" data-icon="close"></button>
       <div class="doc-title"><h2 id="doc-name"></h2><span id="doc-meta"></span></div>
       <div class="doc-tools">
-        <button type="button" id="annot-toggle" class="btn-ghost" aria-pressed="false" aria-controls="annotations" title="Show or hide the annotations">💬 Notes <span id="annot-count"></span></button>
-        <button type="button" id="doc-width" class="btn-icon btn-ghost" hidden>↔</button>
-        <button type="button" id="chat-fold" class="btn-icon btn-ghost" aria-pressed="false" title="Fold the chat away to read the document">⇥</button>
-        <button type="button" id="doc-more" class="btn-icon btn-ghost" popovertarget="doc-menu" aria-label="Document actions" title="Document actions">⋯</button>
+        <button type="button" id="annot-toggle" class="btn-ghost" aria-pressed="false" aria-controls="annotations" data-tip="Show or hide the notes" data-icon="chat">Notes <span id="annot-count"></span></button>
+        <button type="button" id="doc-width" class="btn-icon btn-ghost" data-icon="width" hidden></button>
+        <button type="button" id="chat-fold" class="btn-icon btn-ghost" aria-pressed="false" aria-label="Fold the chat" data-tip="Fold the chat away to read the document" data-icon="fold"></button>
+        <button type="button" id="doc-more" class="btn-icon btn-ghost" popovertarget="doc-menu" aria-label="Document actions" data-tip="Document actions" data-icon="more"></button>
       </div>
     </div>
     <form id="doc-rename-form" class="row" hidden>
@@ -346,7 +348,7 @@
       <div id="doc-frame"></div>
       <div id="notes-handle" class="pane-handle" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="annotations" aria-label="Resize the notes"></div>
       <aside id="annotations" aria-label="Annotations">
-        <button type="button" id="notes-back" class="btn-secondary">← Back to the document</button>
+        <button type="button" id="notes-back" class="btn-secondary" data-icon="back">Back to the document</button>
         <div class="pane-head"><h2 id="notes-title"><svg class="ico sec-icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> <span class="sec-label">Notes</span></h2></div>
         <p id="notes-watcher" class="hint" hidden></p>
         <div class="annot-tools">
@@ -357,8 +359,8 @@
         <form id="annot-new" hidden>
           <p id="annot-target"></p>
           <textarea id="annot-body" rows="3" maxlength="4000" aria-label="Annotation" placeholder="What should change here?"></textarea>
-          <label class="annot-file">Images <input type="file" id="annot-files" accept="image/png,image/jpeg,image/gif,image/webp" multiple></label>
           <div class="annot-actions">
+            <span class="attach"><button type="button" class="btn-icon btn-ghost attach-open" aria-label="Attach images" data-tip="Attach images" data-icon="clip"></button><input type="file" id="annot-files" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden></span>
             <button type="button" id="annot-cancel" class="btn-secondary">Cancel</button>
             <button type="submit">Save</button>
           </div>
@@ -371,7 +373,7 @@
   </section>
   <div id="viewer-empty"><p class="empty">Pick a document to read it here.</p></div>
   <section class="chat">
-    <button type="button" id="chat-unfold" class="btn-icon btn-ghost" aria-label="Show the chat" title="Show the chat">💬</button>
+    <button type="button" id="chat-unfold" class="btn-icon btn-ghost" aria-label="Show the chat" data-tip="Show the chat" data-icon="chat"></button>
     <ol id="messages" aria-live="polite"></ol>
     <div id="chat-empty" class="empty" hidden>
       <p>Invite people to start.</p>
@@ -382,15 +384,15 @@
       <ul id="mention-list" role="listbox" aria-label="Mention" hidden></ul>
       <textarea id="body" rows="2" maxlength="4000" placeholder="Message the room · @ to mention" aria-label="Message" aria-describedby="send-hint"
         aria-autocomplete="list" aria-controls="mention-list" aria-expanded="false"></textarea>
-      <button type="submit" class="btn-icon" aria-label="Send" title="Send">➤</button>
+      <button type="submit" class="btn-icon" aria-label="Send" data-tip="Send" data-icon="send"></button>
       <p id="send-hint" class="hint" hidden>Enter sends, Shift+Enter adds a line.</p>
     </form>
   </section>
 </div>
 <nav id="tabbar" class="tabbar" aria-label="Room sections">
-  <button type="button" data-tab="chat" aria-pressed="true">💬 Chat</button>
-  <button type="button" data-tab="docs" aria-pressed="false">📄 Docs <span id="tab-docs-count" class="count"></span></button>
-  <button type="button" data-tab="people" aria-pressed="false">👥 People <span id="tab-people-count" class="count"></span></button>
+  <button type="button" data-tab="chat" aria-pressed="true" data-icon="chat"><span>Chat</span></button>
+  <button type="button" data-tab="docs" aria-pressed="false" data-icon="docs"><span>Docs <span id="tab-docs-count" class="count"></span></span></button>
+  <button type="button" data-tab="people" aria-pressed="false" data-icon="people"><span>People <span id="tab-people-count" class="count"></span></span></button>
 </nav>
 <div id="toasts" class="toasts" popover="manual"></div>
 <p id="toast-live" class="sr-only" role="status" aria-live="polite"></p>

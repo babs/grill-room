@@ -2,7 +2,7 @@
 // with its row menus, and the helpers both use. Preact, htm and signals, like /admin.
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { html } from 'htm/preact';
-import { size, ago } from './room-panel.js';
+import { size, ago, icon } from './room-panel.js';
 
 /**
  * @typedef {{id: number, builtin?: string, library: string, mine: boolean, title: string, description: string,
@@ -64,7 +64,7 @@ export function RowMenu({ id, label, items }) {
     return () => { m.removeEventListener('beforetoggle', place); m.removeEventListener('toggle', focus); m.removeEventListener('keydown', keys); };
   }, []);
   if (!items.length) return null;
-  return html`<button ref=${btn} type="button" class="btn-ghost btn-icon" popovertarget=${id} aria-label=${label}>⋯</button>
+  return html`<button ref=${btn} type="button" class="btn-ghost btn-icon" popovertarget=${id} aria-label=${label} dangerouslySetInnerHTML=${icon('more')}></button>
     <div ref=${menu} id=${id} popover="auto" class="menu" role="menu">${items.map(([name, run]) => html`<button key=${name} type="button" role="menuitem"
       onClick=${() => { menu.current?.hidePopover(); btn.current?.focus(); run(); }}>${name}</button>`)}</div>`;
 }
@@ -109,7 +109,7 @@ export function StarterList({ starters, api, reload, say, edit }) {
             ${st.description && html`<span class="hint">${st.description}</span>`}</div>
           <${RowMenu} id=${'starter-menu-' + st.id} label=${'More actions for ' + st.title} items=${actions(st)}/>
         </li>`)}</ul>`
-      : html`<p class="hint">${lib === 'personal' ? 'None yet. Duplicate one, or save a room as a starter from its settings.' : 'None yet.'}</p>`}`;
+      : html`<p class="empty">${lib === 'personal' ? 'None yet. Duplicate one, or save a room as a starter from its settings.' : 'None yet.'}</p>`}`;
   })}`;
 }
 
@@ -156,13 +156,13 @@ function Preview({ view }) {
     <h3>${view.title}</h3>
     <p class="hint">${view.library === 'blank' ? 'A room as it always started' : meta(view)}</p>
     ${m.description && html`<p>${m.description}</p>`}
-    <h4>Agenda</h4>${m.agenda ? html`<pre class="starter-agenda">${m.agenda}</pre>` : html`<p class="hint">None.</p>`}
+    <h4>Agenda</h4>${m.agenda ? html`<pre class="starter-agenda">${m.agenda}</pre>` : html`<p class="empty">None.</p>`}
     <h4>AI personas</h4>
     <ul class="starter-personas">${m.personas.map((p) => html`<li key=${p.name}>${p.badge} ${p.name} · ${p.model} · effort ${p.effort} · ${triggerText(p)}</li>`)}</ul>
-    <h4>Documents</h4>${m.documents.length ? html`<ul>${m.documents.map((d) => html`<li key=${d.name}>${d.name}</li>`)}</ul>` : html`<p class="hint">None.</p>`}
-    <h4>Skills</h4>${m.skills.length ? html`<ul>${m.skills.map((k) => html`<li key=${k.name}>${k.name} v${k.version}</li>`)}</ul>` : html`<p class="hint">None.</p>`}
+    <h4>Documents</h4>${m.documents.length ? html`<ul>${m.documents.map((d) => html`<li key=${d.name}>${d.name}</li>`)}</ul>` : html`<p class="empty">None.</p>`}
+    <h4>Skills</h4>${m.skills.length ? html`<ul>${m.skills.map((k) => html`<li key=${k.name}>${k.name} v${k.version}</li>`)}</ul>` : html`<p class="empty">None.</p>`}
     <h4>Plugins</h4>${m.plugins?.length ? html`<ul id="preview-plugins">${m.plugins.map((p) => html`<li key=${p.name}>${pluginLabel(p)}</li>`)}</ul>`
-      : html`<p class="hint">None.</p>`}
+      : html`<p class="empty">None.</p>`}
   </section>`;
 }
 
@@ -397,7 +397,7 @@ export function Editor({ view, api, displayName = '', back, mode = 'create', pat
     <h3>AI personas</h3>
     ${personas.length ? personas.map((p, i) => html`<${PersonaEdit} key=${i} p=${p} models=${view.models} efforts=${view.efforts}
       set=${(/** @type {StarterPersona} */ np) => setPersonas(personas.map((x, j) => (j === i ? np : x)))}
-      remove=${() => setPersonas(personas.filter((_, j) => j !== i))}/>`) : html`<p class="hint">None: add them in the room.</p>`}
+      remove=${() => setPersonas(personas.filter((_, j) => j !== i))}/>`) : html`<p class="empty">None: add them in the room.</p>`}
     ${m.documents.length > 0 && html`<fieldset id="starter-docs"><legend>Documents</legend>
       ${mode === 'save' && html`<p class="hint">Each one you check goes in at its current revision.</p>`}
       ${m.documents.map((d) => html`<label class="check" key=${d.name}>
@@ -430,7 +430,7 @@ export function Editor({ view, api, displayName = '', back, mode = 'create', pat
 export function NewRoom({ api, displayName, close }) {
   const [view, setView] = useState(/** @type {StarterView | null} */ (null));
   return html`<div class="sheet-head"><h2 id="room-create-title">${view ? 'New room' : 'New room: pick a starter'}</h2>
-      <button type="button" class="btn-ghost btn-icon" aria-label="Close" onClick=${close}>✕</button></div>
+      <button type="button" class="btn-ghost btn-icon" aria-label="Close" onClick=${close} dangerouslySetInnerHTML=${icon('close')}></button></div>
     ${view ? html`<${Editor} key=${view.id} view=${view} api=${api} displayName=${displayName} back=${() => setView(null)}/>`
       : html`<${Picker} api=${api} pick=${setView} close=${close}/>`}`;
 }

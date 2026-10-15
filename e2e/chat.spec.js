@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { roomWith, messageAction } from './helpers.js';
 
 // 002-AC8 002-AC9 002-AC11: Markdown renders inert; an author edits and deletes a line and the

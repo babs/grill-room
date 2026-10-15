@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { menuItem } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
