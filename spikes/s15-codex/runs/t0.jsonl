@@ -1,0 +1,14 @@
+{"type":"thread.started","thread_id":"01a14159-eba2-7370-8418-21c5d487bb94"}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 2/5 (selected workspace missing from routing discovery)"}
+{"type":"error","message":"Reconnecting... 3/5 (selected workspace missing from routing discovery)"}
+{"type":"error","message":"Reconnecting... 4/5 (selected workspace missing from routing discovery)"}
+{"type":"error","message":"Reconnecting... 5/5 (selected workspace missing from routing discovery)"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Falling back from WebSockets to HTTPS transport. selected workspace missing from routing discovery"}}
+{"type":"error","message":"Reconnecting... 1/5 (selected workspace missing from routing discovery)"}
+{"type":"error","message":"Reconnecting... 2/5 (selected workspace missing from routing discovery)"}
+{"type":"error","message":"Reconnecting... 3/5 (selected workspace missing from routing discovery)"}
+{"type":"error","message":"Reconnecting... 4/5 (selected workspace missing from routing discovery)"}
+{"type":"error","message":"Reconnecting... 5/5 (selected workspace missing from routing discovery)"}
+{"type":"error","message":"selected workspace missing from routing discovery"}
+{"type":"turn.failed","error":{"message":"selected workspace missing from routing discovery"}}

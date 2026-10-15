@@ -1,0 +1,21 @@
+1 bearer_rejected GET /backend-api/codex/models
+4 bearer_rejected POST /backend-api/ps/mcp
+3 egress_refused CONNECT ab.chatgpt.com:443
+3 egress_refused CONNECT api.github.com:443
+2 egress_refused CONNECT auth.openai.com:443
+6 egress_refused CONNECT chatgpt.com:443
+3 egress_refused CONNECT github.com:443
+2 egress_refused CONNECT sdmntprcentralindia.oaiusercontent.com:443
+2 egress_refused CONNECT sdmntprcentralus.oaiusercontent.com:443
+10 egress_refused CONNECT sdmntprsouthcentralus.oaiusercontent.com:443
+5 listening
+2 upstream_error /backend-api/ps/plugins/list
+2 upstream_response GET /backend-api/codex/models 200
+2 upstream_response GET /backend-api/plugins/featured 200
+4 upstream_response GET /backend-api/ps/plugins/installed 200
+48 upstream_response GET /backend-api/ps/plugins/list 200
+2 upstream_response GET /backend-api/ps/plugins/suggested/codex 200
+18 upstream_response GET /backend-api/wham/accounts/check 200
+1 upstream_response GET /backend-api/wham/settings/user 200
+2 upstream_response POST /backend-api/codex/analytics-events/events 200
+7 upstream_response POST /backend-api/codex/responses 200

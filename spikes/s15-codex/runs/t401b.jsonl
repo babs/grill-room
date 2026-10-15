@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a14161-2331-7e62-9a0d-d4cb474bb97a"}
+{"type":"turn.started"}
+{"type":"error","message":"unexpected status 401 Unauthorized: {\"detail\":\"Could not parse your authentication token. Please try signing in again.\"}, url: http://127.0.0.1:8787/backend-api/codex/responses, cf-ray: a4b1c63f7b2e01c7-CDG, request id: 265fcec7-2d38-47e7-aa0f-2da39ba6e694"}
+{"type":"turn.failed","error":{"message":"unexpected status 401 Unauthorized: {\"detail\":\"Could not parse your authentication token. Please try signing in again.\"}, url: http://127.0.0.1:8787/backend-api/codex/responses, cf-ray: a4b1c63f7b2e01c7-CDG, request id: 265fcec7-2d38-47e7-aa0f-2da39ba6e694"}}
