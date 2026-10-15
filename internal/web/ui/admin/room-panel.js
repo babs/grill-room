@@ -246,7 +246,7 @@ function RevokeSheet({ preview, base, api, done }) {
   return html`<dialog ref=${ref} id="revoke-sheet" class="sheet full" aria-labelledby="revoke-title" onClose=${closed} onClick=${outside}
     onCancel=${(/** @type {Event} */ e) => { if (busy) e.preventDefault(); }}>
     <div class="sheet-head"><h2 id="revoke-title">Revoke this invite?</h2>
-      <button type="button" class="btn-icon btn-ghost" aria-label="Close" disabled=${busy} onClick=${close}>✕</button></div>
+      <button type="button" class="btn-icon btn-ghost" aria-label="Close" disabled=${busy} onClick=${close} dangerouslySetInnerHTML=${icon('close')}></button></div>
     ${preview.lose.length > 0 && html`<p>These people lose access:</p>${list(preview.lose, 'revoke-lose')}`}
     ${preview.keep.length > 0 && html`<p>Keep access through another invite:</p>${list(preview.keep, 'revoke-keep')}`}
     ${!preview.lose.length && !preview.keep.length && html`<p id="revoke-nobody">Nobody joined through this invite.</p>`}

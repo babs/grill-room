@@ -501,7 +501,7 @@ function MergeSheet({ profiles, from, done }) {
   return html`<dialog ref=${ref} id="merge-sheet" class="sheet wide full" aria-labelledby="merge-title" onClose=${closed} onClick=${outside}
     onCancel=${(/** @type {Event} */ e) => { if (busy) e.preventDefault(); }}>
     <div class="sheet-head"><h2 id="merge-title">Merge two profiles?</h2>
-      <button type="button" class="btn-icon btn-ghost" aria-label="Close" disabled=${busy} onClick=${close}>✕</button></div>
+      <button type="button" class="btn-icon btn-ghost" aria-label="Close" disabled=${busy} onClick=${close} dangerouslySetInnerHTML=${icon('close')}></button></div>
     <p class="hint">Everything of the merged profile moves to the kept one, then the merged profile is deleted. This cannot be undone.</p>
     <div class="row merge-pick">
       ${pick('merge-keep', 'Keep', keep, setKeep)}
@@ -567,7 +567,7 @@ function RecoveryLink({ p }) {
     ${link && html`<span class="copy-row">
       <input ref=${field} readonly value=${link.url} aria-label=${'Recovery link for ' + who}/>
       <button type="button" onClick=${copy}>${copied ? 'Copied' : 'Copy'}</button>
-      <span class="hint">expires ${new Date(link.expires_at).toLocaleString()}</span></span>`}
+      <span class="hint">expires ${when(link.expires_at)}</span></span>`}
   </span>`;
 }
 
