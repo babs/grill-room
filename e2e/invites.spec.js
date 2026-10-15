@@ -1,4 +1,5 @@
-import { test, expect, request as pwRequest } from '@playwright/test';
+import { request as pwRequest } from '@playwright/test';
+import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
 import { roomWith, menuItem, appointAdmin, signIn, noOverflow } from './helpers.js';
 

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../fixtures.js';
 import { admin, nextMail, joinRoom, linkPath, ownProfile, newContext, durationText } from './helpers.js';
 import { magicLinkTTL } from './playwright.config.js';
 
@@ -244,12 +244,17 @@ test('no-email marker and nudge', async ({ browser, request }) => {
 
   // A second device of the same profile, signed in with an admin recovery link: snoozed there too.
   const link = await (await request.post(`/api/admin/profiles/${(await ownProfile(alice)).id}/recovery-link`, { headers: admin })).json();
-  const tablet = await (await newContext(browser)).newPage();
+  const tablet = await (await newContext(browser, { hasTouch: true })).newPage();
   await tablet.goto(linkPath(link.url));
   await tablet.getByRole('button', { name: 'Sign in to this profile' }).click();
   await expect(tablet.locator('#status')).toHaveText('Signed in on this device.');
   await tablet.getByRole('link', { name: room.name }).click();
   await expect(tablet.locator('#me-anon')).toBeVisible();
+  // 011-AC7: touch has no hover, so the first tap shows the tip and stays on the room.
+  const roomURL = tablet.url();
+  await tablet.locator('#me-anon').tap();
+  await expect(tablet.locator('#person-tip')).toHaveText(anonText);
+  expect(tablet.url()).toBe(roomURL);
   await tablet.locator('#body').fill('from the tablet');
   await tablet.locator('#body').press('Enter');
   await expect(tablet.locator('.msg.text').last()).toContainText('from the tablet');

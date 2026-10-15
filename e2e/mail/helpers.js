@@ -25,9 +25,9 @@ export async function nextMail(request, to, n) {
 // limits emailed-link requests per client IP (002-AC4), which every spec would otherwise share.
 // 198.18.0.0/15 is a benchmarking range the rate-limit spec does not use.
 let clients = 0;
-export const newContext = (browser) => {
+export const newContext = (browser, options = {}) => {
   clients++;
-  return browser.newContext({ extraHTTPHeaders: { 'X-Forwarded-For': `198.18.${clients >> 8}.${clients & 255}` } });
+  return browser.newContext({ ...options, extraHTTPHeaders: { 'X-Forwarded-For': `198.18.${clients >> 8}.${clients & 255}` } });
 };
 
 // joinRoom joins roomID as name in a fresh browser context, which makes a new profile.

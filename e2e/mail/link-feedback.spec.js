@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../fixtures.js';
 import { admin, joinRoom, newContext, durationText, ownProfile } from './helpers.js';
 import { magicLinkTTL } from './playwright.config.js';
 

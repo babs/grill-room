@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../fixtures.js';
 import { magicLinkTTL, lab } from './playwright.config.js';
 import { admin, nextMail, joinRoom, newContext, durationText } from './helpers.js';
 
