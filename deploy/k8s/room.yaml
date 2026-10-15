@@ -14,6 +14,21 @@ spec:
     requests:
       storage: 2Gi
 ---
+# The on-device transcription files the browser downloads (spec 010), filled by the init container.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grill-room-models
+  labels:
+    app.kubernetes.io/name: grill-room
+    app.kubernetes.io/part-of: grill-room
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ${K8S_STORAGE_CLASS}
+  resources:
+    requests:
+      storage: 1Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -46,6 +61,23 @@ spec:
         fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
+      # Pinned model files for on-device transcription (010-AC7). A file already there with the
+      # right sha256 is skipped, so a deploy with a full volume downloads nothing. Egress: room-push.
+      # --best-effort: a failed download must not block the server; it then offers no device mode.
+      initContainers:
+        - name: models
+          image: ${GRILL_ROOM_IMAGE}
+          args: [models, fetch, --best-effort, --dir, /models]
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { cpu: "1", memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - { name: models, mountPath: /models }
       containers:
         - name: grill-room
           image: ${GRILL_ROOM_IMAGE}
@@ -78,6 +110,8 @@ spec:
               value: "${GRILL_ROOM_SMTP_ADDR}"
             - name: GRILL_ROOM_SMTP_FROM
               value: "${GRILL_ROOM_SMTP_FROM}"
+            - name: GRILL_ROOM_DEVICE_STT_MODEL_DIR
+              value: /models
           ports:
             - { name: http, containerPort: 7680 }
             - { name: metrics, containerPort: 7681 }
@@ -100,10 +134,14 @@ spec:
           volumeMounts:
             - { name: data, mountPath: /data }
             - { name: tmp, mountPath: /tmp }
+            - { name: models, mountPath: /models, readOnly: true }
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: grill-room-data
+        - name: models
+          persistentVolumeClaim:
+            claimName: grill-room-models
         - name: tmp
           emptyDir:
             sizeLimit: 256Mi
