@@ -101,11 +101,18 @@ People can tell who transcribed a line: its tooltip says "Transcribed on <name>'
 - [ ] **AC19** A bench reruns the S11 harness on the shipped code, WASM on 4 threads, in a visible tab, live for 30 minutes on the S11 corpus:
   - end of speech to line p95 ≤ 3.0 s on pause cuts (S11: 2.15 s) and ≤ 3.5 s on all cuts (S11: 2.63 s);
   - talk WER ≤ the server's on the same run + 0.01, English leak ≤ 0.01;
-  - peak tab memory ≤ 2.5 GB;
-  - warm load to ready ≤ 10 s (S11: 5.6 s).
+  - peak tab memory ≤ 2.5 GB, live, on a load in a fresh tab and on a reload once the AC21 delay has run;
+  - warm load to ready ≤ 10 s (S11: 5.6 s), not counting the AC21 delay after a reload.
 
   The report lands in `spikes/`.
 - [ ] **AC20** The server exports `grill_room_device_stt_participants` (flags held now), `grill_room_voice_lines_total{source}` and the AC16 counter. `docs/architecture.md` shows the device path, the handover and these metrics.
+- [ ] **AC21** On a page reload (`performance.getEntriesByType('navigation')[0].type === 'reload'`) with device mode on, the engine starts 12 s after the page loads, not at once: Chrome keeps the reloaded page's renderer and gives the old page's memory back about 9 s after the unload (S13 §4.1). Until then the voice stays with the server worker through the normal handover, so no line is lost. A fresh tab or a navigation starts the engine at once, as before.
+- [ ] **AC22** "Diagnostics" in the avatar user menu opens a read-only sheet that follows `docs/design.md`:
+  - **Transcription:** the mode (on this device, or by the server and why: not offered, fallback, reload delay); the backend (WASM or WebGPU) and threads; the model id, revision, size and whether it is cached; the `deviceMemory` class, noted "Chrome and Edge only, rounded and capped by the browser"; this tab's memory from `performance.measureUserAgentSpecificMemory()`, refreshed every few seconds while the sheet is open and measured only then, or "not available in this browser"; p50 and p95 end of speech to line over the last 20 lines; the fallback and return events with their times.
+  - **Connection:** the app version; the event stream state; the LiveKit connection state and the ICE path (direct, TCP, TURN/TLS) from `getStats`.
+  - **Copy diagnostics** copies a plain-text block for a bug report. It holds no token, no room id and no name but the room's.
+
+  Nothing in it is sent to the server, and nothing polls while the sheet is closed.
 
 ## Phases
 
@@ -132,11 +139,13 @@ People can tell who transcribed a line: its tooltip says "Transcribed on <name>'
   - the migration applies on a fresh DB and on a copy of the lab DB; an export and import round trip keeps `source`; `/metrics` shows every AC20 series.
 
 ### Phase 3 — Real Chrome, bench, rollout
-- Work: the background-tab run on real Chrome, the mitigation if needed, the bench, the report, the docs, the lab deploy and checklist step.
-- **Covers**: AC18, AC19
+- Work: the background-tab run on real Chrome, the mitigation if needed, the bench, the report, the reload delay, the Diagnostics sheet, the docs, the lab deploy and checklist step.
+- **Covers**: AC18, AC19, AC21, AC22
 - **Data model impact**: none
 - **DoD**:
   - the AC18 run and the AC19 thresholds met, the report committed under `spikes/`;
+  - the reload peak re-measured with the S13 harness under 2.5 GB after the AC21 delay; an e2e check that the server keeps the voice during the delay and the device takes it after;
+  - an e2e check that opens Diagnostics on a desktop and a phone and finds each section, with `measureUserAgentSpecificMemory` stubbed where the browser lacks it;
   - a lab deploy with a DB backup; the lab checklist step passes on a desktop: toggle on, a sentence posts with the device tooltip, toggle off, the next sentence posts with the server tooltip.
 
 ## Data model impact (summary)
@@ -163,3 +172,5 @@ People can tell who transcribed a line: its tooltip says "Transcribed on <name>'
 - No chat-style rate limit is added: chat has none today, and Q2 says device lines get the same limits as chat.
 - `parakeet.js` is pinned with the spacing fix applied locally; the fix goes upstream as a PR. The 007 CC-BY credit covers device mode.
 - The People details card carries the device or server line (user, 2026-10-14), next to the 009 "transcribed" line.
+- After a page reload the engine waits 12 s before it starts, and the server keeps the voice meanwhile (user, 2026-10-15): a reload otherwise peaked at 2.2-4.0 GB (S13). Not a server metric.
+- Memory and the transcription state are shown in a Diagnostics sheet, on the device only, never sent (user, 2026-10-15).
