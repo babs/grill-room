@@ -128,7 +128,7 @@ for (const [size, viewport] of Object.entries(widths)) {
     await docs.locator('#doc-more').click();
     await expectOneStyle(docs, docs.locator('#doc-menu'), `${size}-docs-window-doc-menu`);
 
-    await alice.goto('/profile');
+    await alice.goto('/profile#starters');
     await alice.locator('#starters-builtin li', { hasText: 'Retro' }).getByRole('button', { name: 'More actions for Retro' }).click();
     await expectOneStyle(alice, alice.locator('#starters-builtin [role=menu]:popover-open'), `${size}-starter-menu`);
   });

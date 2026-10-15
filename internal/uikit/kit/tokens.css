@@ -105,6 +105,8 @@
   border-bottom: 3px solid transparent; color: var(--text); font: 600 var(--fs-sm)/1 var(--font); text-decoration: none; white-space: nowrap;
 }
 .tabs a[aria-current=page] { border-bottom-color: var(--brand); }
+/* Tabs stay in reach in a long page (docs/design.md §5). */
+.tabs.sticky { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--bg); }
 .tabs a:focus-visible { outline-offset: -2px; }
 @media (max-width: 40rem) {
   /* The last tab, or the one scrolled into view, stops clear of the 24 px fade edge. */
@@ -112,6 +114,8 @@
   .tabs::after { content: ""; flex: none; width: 24px; }
   .tabs a { padding: 0 var(--sp-3); }
 }
+/* A page's content column, left-aligned under its tabs (docs/design.md §6). */
+.page { width: 100%; max-width: 72rem; padding: var(--sp-4); }
 .empty { display: block; margin: var(--sp-2) 0; padding: var(--sp-3) var(--sp-4); border: 1px dashed var(--border-strong); border-radius: var(--r-md); color: var(--text-muted); font-size: var(--fs-sm); font-style: normal; text-align: center; list-style: none; }
 .empty > p { margin: 0; }
 .empty > * + * { margin-top: var(--sp-2); }

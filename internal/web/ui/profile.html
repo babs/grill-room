@@ -26,12 +26,16 @@
 </head>
 <body class="home">
 <header class="app-header">
-  <img src="/static/logo.svg" alt="" class="logo" width="32" height="32">
-  <span class="brand">grill-room</span>
+  <a href="/" class="home-link"><img src="/static/logo.svg" alt="" class="logo" width="32" height="32"><span class="brand">grill-room</span></a>
   <span class="spacer"></span>
-  <span id="who" class="muted"></span>
+  <button type="button" id="me" class="avatar" popovertarget="me-menu" hidden></button>
 </header>
-<main class="home-main">
+<div id="me-menu" class="menu" popover>
+  <p class="menu-head" id="me-head"></p>
+  <a href="#rooms" data-icon="chat">Your rooms</a>
+  <a href="#account" data-icon="profile">Account and email</a>
+</div>
+<main class="page home-main">
   <p id="status" role="status"></p>
   <p id="next" hidden><button type="button" id="next-step" class="btn-secondary"></button></p>
   <section id="confirm" class="card" hidden>
@@ -41,51 +45,57 @@
       <button type="button" id="confirm-yes" class="btn-primary">Sign in to this profile</button>
     </div>
   </section>
-  <section id="signed-in" hidden>
-    <h1 class="page-title">Your profile</h1>
-    <div class="list-head">
-      <h2>Rooms</h2>
-      <button type="button" id="room-new" class="btn-primary">+ New room</button>
-    </div>
-    <ul id="rooms" class="room-cards"></ul>
-    <section id="starters" aria-labelledby="starters-title"></section>
-    <h2>Account</h2>
-    <dl class="profile-facts">
-      <div><dt>Name</dt><dd><span id="profile-name"></span>
-        <a id="profile-anon" class="anon-mark" href="#email" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
-          No email yet</a></dd></div>
-      <div id="email" hidden><dt>Email</dt><dd><span id="email-state"></span>
-        <button type="button" id="email-change" class="btn-secondary" hidden>Change</button>
-        <form id="bind" class="row" hidden>
-          <label for="bind-email"><span id="bind-label">Add an email</span>
-            <input id="bind-email" type="email" maxlength="254" autocomplete="email" required></label>
-          <button type="submit" class="btn-secondary">Send me a link</button>
-        </form></dd></div>
-      <div><dt>Other devices</dt><dd id="device"></dd></div>
-    </dl>
-    <details id="skills">
-      <summary>Skills</summary>
-      <p class="hint">Skills give your AI personas extra abilities. Add one as a .zip. Adding it again makes a new version; rooms keep theirs until they update.</p>
-      <details class="how">
-        <summary>How do I make one?</summary>
-        <p class="hint">A skill is a Claude Code skill folder: a SKILL.md that starts with a name and a description, and the files it uses. Zip the folder.</p>
-      </details>
-      <ul id="skill-list" class="rows"></ul>
-      <form id="skill-upload" class="stack">
-        <span class="field-label" id="skill-file-label">Skill file (.zip)</span>
-        <span class="file-pick"><button type="button" id="skill-pick" class="btn-secondary" aria-describedby="skill-file-label" data-icon="clip">Choose a file</button>
-          <span id="skill-file-name" class="hint">No file chosen</span>
-          <input id="skill-file" type="file" accept=".zip,application/zip" hidden></span>
-        <label for="skill-scope">Who can use it</label>
-        <select id="skill-scope">
-          <option value="personal">Only my rooms</option>
-          <option value="shared">Everyone on this server</option>
-        </select>
-        <button type="submit" class="btn-secondary">Add skill</button>
-      </form>
+  <div id="signed-in" hidden>
+    <section class="identity" aria-labelledby="page-title">
+      <h1 id="page-title" class="page-title">Your profile</h1>
+      <p class="identity-line"><strong id="profile-name"></strong>
+        <span id="profile-anon" class="email-line" hidden><span class="anon-dot" data-icon="profile"></span>No email yet. Add one to sign in on other devices.
+          <a href="#email" class="btn btn-secondary">Add an email</a></span>
+        <span id="profile-pending" class="email-line" hidden><span id="profile-pending-text"></span>
+          <a href="#account" class="btn btn-secondary">Open Account</a></span>
+        <span id="profile-email" class="email-line" hidden><span id="profile-email-text"></span><span class="verified" data-icon="check"></span><span class="sr-only">, confirmed</span></span></p>
+    </section>
+    <nav class="tabs sticky" id="profile-tabs" aria-label="Profile">
+      <a href="#rooms" id="tab-rooms">Rooms <span class="badge" id="count-rooms"></span></a>
+      <a href="#starters" id="tab-starters">Starters <span class="badge" id="count-starters"></span></a>
+      <a href="#skills" id="tab-skills">Skills <span class="badge" id="count-skills"></span></a>
+      <a href="#account" id="tab-account">Account</a>
+    </nav>
+    <section id="panel-rooms" class="tab-panel" aria-labelledby="tab-rooms">
+      <div class="list-head">
+        <h2>Rooms</h2>
+        <button type="button" id="room-new" class="btn-primary">+ New room</button>
+      </div>
+      <ul id="rooms" class="room-cards"></ul>
+    </section>
+    <section id="panel-starters" class="tab-panel" aria-labelledby="tab-starters" hidden>
+      <section id="starters" aria-labelledby="starters-title"></section>
+    </section>
+    <section id="panel-skills" class="tab-panel" aria-labelledby="tab-skills" hidden>
+      <div class="list-head">
+        <h2>Skills</h2>
+        <button type="button" id="skill-add" class="btn-primary">Add a skill</button>
+      </div>
+      <p class="hint">Extra abilities your AI personas can use. Adding a skill again makes a new version; rooms keep theirs until they update.</p>
       <p id="skill-status" role="status"></p>
-    </details>
-  </section>
+      <ul id="skill-list" class="rows"></ul>
+    </section>
+    <section id="panel-account" class="tab-panel" aria-labelledby="tab-account" hidden>
+      <h2>Account</h2>
+      <dl class="profile-facts">
+        <div><dt>Name</dt><dd><span id="account-name"></span><p class="hint">Set in each room when you join.</p></dd></div>
+        <div id="email" hidden><dt>Email</dt><dd><div class="email-row"><span id="email-state"></span>
+          <button type="button" id="email-change" class="btn-secondary" hidden>Change</button></div>
+          <p id="email-note" class="hint" hidden>You can sign in with it on any device.</p>
+          <form id="bind" class="row" hidden>
+            <label for="bind-email"><span id="bind-label">Add an email</span>
+              <input id="bind-email" type="email" maxlength="254" autocomplete="email" required></label>
+            <button type="submit">Send me a link</button>
+          </form></dd></div>
+        <div><dt>Other devices</dt><dd id="device"></dd></div>
+      </dl>
+    </section>
+  </div>
   <section id="signed-out" class="card join-card" hidden>
     <h1>Your profile</h1>
     <p id="signed-out-text"></p>
@@ -97,5 +107,30 @@
   </section>
 </main>
 <dialog id="room-create-sheet" class="sheet wide full" aria-labelledby="room-create-title"></dialog>
+<dialog id="skill-sheet" class="sheet full" aria-labelledby="skill-sheet-title">
+  <div class="sheet-head"><h2 id="skill-sheet-title">Add a skill</h2>
+    <button type="button" class="btn-ghost btn-icon" id="skill-close" aria-label="Close" data-icon="close"></button></div>
+  <form id="skill-upload" class="stack">
+    <p class="hint">Skills give your AI personas extra abilities. Add one as a .zip.</p>
+    <details class="how">
+      <summary>How do I make one?</summary>
+      <p class="hint">A skill is a Claude Code skill folder: a SKILL.md that starts with a name and a description, and the files it uses. Zip the folder.</p>
+    </details>
+    <span class="field-label" id="skill-file-label">Skill file (.zip)</span>
+    <span class="file-pick"><button type="button" id="skill-pick" class="btn-secondary" aria-describedby="skill-file-label" data-icon="clip">Choose a file</button>
+      <span id="skill-file-name" class="hint">No file chosen</span>
+      <input id="skill-file" type="file" accept=".zip,application/zip" hidden></span>
+    <label for="skill-scope">Who can use it</label>
+    <select id="skill-scope">
+      <option value="personal">Only my rooms</option>
+      <option value="shared">Everyone on this server</option>
+    </select>
+    <p id="skill-error" class="field-error" role="alert"></p>
+    <div class="actions">
+      <button type="button" id="skill-cancel" class="btn-secondary">Cancel</button>
+      <button type="submit">Add skill</button>
+    </div>
+  </form>
+</dialog>
 </body>
 </html>

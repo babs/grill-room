@@ -35,38 +35,68 @@ body.join .rooms { list-style: none; padding: 0; text-align: left; }
 body.join .rooms li { padding: var(--sp-1) 0; overflow-wrap: anywhere; }
 body.join h2 { margin-top: var(--sp-5); font-size: var(--fs-md); text-align: left; }
 body.join .hint { text-align: left; }
-#skill-upload :is(input, select) { width: 100%; min-width: 0; }
-#skill-status { min-height: 1em; font-size: var(--fs-sm); text-align: left; overflow-wrap: anywhere; }
+#skill-status { font-size: var(--fs-sm); overflow-wrap: anywhere; }
 #confirm .actions { justify-content: center; }
-/* Profile: a home page (005-AC41). */
-.home-main { width: 100%; max-width: 64rem; margin: 0 auto; padding: var(--sp-4); }
-.home-main h2 { font-size: var(--fs-lg); margin: var(--sp-6) 0 var(--sp-3); }
+/* Profile: a home page (005-AC41), in tabs under the identity strip (011b). */
+.home-main h2 { margin: var(--sp-4) 0 var(--sp-3); font-size: var(--fs-lg); }
 .home-main .page-title { margin: 0; font-size: var(--fs-xl); }
-/* Sub-headings sit under their section's h2 (006 starters: Built-in, Yours, Shared). */
+/* Sub-headings sit under their section's h2 (006 starters: Yours, Shared, Built-in). */
 #starters h3 { margin: var(--sp-4) 0 var(--sp-2); font-size: var(--fs-md); font-weight: 600; }
-.home-main .hint { max-width: 70ch; }
+.home-main .hint, .home-main .empty { max-width: 70ch; }
+.home-main #starters .empty { max-width: none; }
 /* An empty status line holds no room: the title starts right under the header. */
 .home-main > #status:empty { display: none; }
+/* Signed out, the sign-in card sits in the middle of the screen, as the join page's does. */
+.home-main:has(> #signed-out:not([hidden])) { max-width: none; }
 .home-main .join-card { margin: var(--sp-6) auto; }
 .home-main .join-card p { text-align: left; }
+.app-header .home-link { display: flex; align-items: center; gap: var(--sp-5); color: inherit; text-decoration: none; }
+/* The identity strip (011b-AC11): the name, then the email state, on every tab. */
+.identity { padding-bottom: var(--sp-3); }
+.identity-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); margin: var(--sp-2) 0 0; }
+.email-line { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); color: var(--text-muted); font-size: var(--fs-sm); }
+#profile-email .verified { display: inline-flex; color: var(--success); }
+.anon-dot { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--border-strong); color: var(--text); }
+.anon-dot .ico { width: 14px; height: 14px; }
+.tab-panel { padding-top: var(--sp-1); }
+.tabs .badge:empty { display: none; }
 .file-pick { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); }
 .file-pick .hint { margin: 0; overflow-wrap: anywhere; }
 .field-label { font-size: var(--fs-sm); font-weight: 600; }
-#skills .how summary { font-size: var(--fs-sm); }
-#skill-list .empty { display: grid; justify-items: center; }
+#skill-sheet .how summary { font-size: var(--fs-sm); }
+#skill-sheet .hint { margin: 0; }
+#skill-upload select { width: 100%; min-width: 0; }
+#skill-status:empty { display: none; }
+#skill-list .empty { display: block; }
+#starters .said:empty { display: none; }
+/* On the Account tab the field is right there: the strip's shortcut would point at itself. */
+.home-main:has(#panel-account:not([hidden])) .email-line .btn { display: none; }
+#skill-list > li:not(.empty) { min-height: 44px; padding: var(--sp-2) 0; }
+.skill-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.skill-text .hint { margin: 0; overflow-wrap: anywhere; }
 .list-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
-.list-head h2 { margin: var(--sp-5) 0 var(--sp-3); }
 .room-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: var(--sp-3); list-style: none; margin: 0; padding: 0; }
-.room-cards .card { position: relative; }
+.room-cards .card { position: relative; min-height: 64px; }
+.room-cards .card:hover { border-color: var(--border-strong); }
 .room-cards .card p { margin: 0 0 var(--sp-1); }
 .room-line { font-weight: 600; overflow-wrap: anywhere; }
 .room-line a { color: var(--text); }
-.profile-facts { display: grid; gap: var(--sp-3); margin: 0; }
+/* The name's link covers the card: the whole card opens the room (011b-AC16). */
+.room-line a::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
+.room-cards .card :is(.badge, time) { position: relative; }
+.profile-facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--sp-4) var(--sp-6); margin: 0; max-width: 48rem; }
+.profile-facts > div { display: contents; }
 .profile-facts dt { font-size: var(--fs-sm); color: var(--text-muted); }
-.profile-facts dd { margin: 0; }
-#bind { align-items: end; }
-#skills { margin-top: var(--sp-6); }
-#skills .stack { max-width: 28rem; }
+.profile-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.profile-facts dd .hint { margin: var(--sp-1) 0 0; }
+.email-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-2) var(--sp-3); }
+#bind { align-items: end; margin-top: 0; }
+@media (max-width: 40rem) {
+  /* Label above value; Change takes the full width under the address. */
+  .profile-facts { grid-template-columns: 1fr; gap: var(--sp-1); }
+  .profile-facts dd { margin-bottom: var(--sp-3); }
+  #email-change { flex: 1 0 100%; }
+}
 
 /* Room page */
 /* --vv-* follow the visual viewport (room.js): iOS Safari lays the keyboard over the page without

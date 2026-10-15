@@ -13,6 +13,11 @@ function Starters() {
   // A browser with no profile gets a 401: the section stays empty, as the rest of the page does.
   const load = () => fetchJSON('GET', '/api/profile/starters').then(setStarters).catch(() => setStarters(null));
   useEffect(() => { load(); }, []);
+  // The Starters tab counts the profile's own (011b-AC12).
+  useEffect(() => {
+    const count = document.getElementById('count-starters');
+    if (count && starters) count.textContent = String(starters.filter((st) => st.library === 'personal').length);
+  }, [starters]);
   if (!starters) return null;
   return html`<h2 id="starters-title">Room starters</h2>
     <p class="hint">Set up a new room in one go: agenda, AI personas, documents and skills. Changing a starter later leaves existing rooms alone.</p>

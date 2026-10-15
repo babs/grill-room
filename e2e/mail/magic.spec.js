@@ -12,7 +12,7 @@ test('magic links: bind, sign in elsewhere, single use', async ({ browser, reque
     const laptop = await joinRoom(browser, request, room.id, 'Alice');
     profile = (await (await laptop.request.get('/api/profile')).json()).profile.id;
 
-    await laptop.goto('/profile');
+    await laptop.goto('/profile#account');
     await expect(laptop.locator('#email-state')).toHaveText('No email yet. Add one to sign in on other devices.');
     await laptop.getByLabel('Add an email').fill(email);
     await laptop.getByRole('button', { name: 'Send me a link' }).click();
@@ -31,8 +31,8 @@ test('magic links: bind, sign in elsewhere, single use', async ({ browser, reque
     await laptop.goto(bind.link);
     await expect(laptop.locator('#status')).toHaveText(`Email added to your profile: ${email}.`);
     await expect(laptop.locator('#email-state')).toHaveText(email);
-    // The secret leaves the address bar once read.
-    expect(new URL(laptop.url()).hash).toBe('');
+    // The secret leaves the address bar once read; a bind lands on Account (011b-AC12).
+    expect(new URL(laptop.url()).hash).toBe('#account');
     await laptop.goto(bind.link);
     await expect(laptop.locator('#status')).toHaveText('This link was already used. Your profile is below.');
 
@@ -66,7 +66,7 @@ test('an expired magic link is refused', async ({ browser, request }) => {
   const email = `late-${Date.now()}@example.com`;
   const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Late room' } })).json();
   const page = await joinRoom(browser, request, room.id, 'Late');
-  await page.goto('/profile');
+  await page.goto('/profile#account');
   await page.getByLabel('Add an email').fill(email);
   await page.getByRole('button', { name: 'Send me a link' }).click();
   const expired = await nextMail(request, email, 1);

@@ -4,13 +4,18 @@ import { adminToken } from './playwright.config.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
+// uploadSkill adds a skill from the profile's Skills tab and its sheet (011b-AC15): a refused
+// file says why in the sheet, which stays open until closed.
 async function uploadSkill(page, zip, scope, status) {
-  // Skills fold under "Skills" on the profile page (005-AC41).
-  await page.locator('#skills').evaluate((d) => { d.open = true; });
+  await page.locator('#tab-skills').click();
+  await page.locator('#panel-skills').getByRole('button', { name: 'Add a skill' }).click();
   await page.locator('#skill-file').setInputFiles(zip);
   await page.locator('#skill-scope').selectOption(scope);
-  await page.getByRole('button', { name: 'Add skill', exact: true }).click();
-  await expect(page.locator('#skill-status')).toHaveText(status);
+  await page.locator('#skill-sheet').getByRole('button', { name: 'Add skill', exact: true }).click();
+  if (status instanceof RegExp) {
+    await expect(page.locator('#skill-error')).toHaveText(status);
+    await page.locator('#skill-sheet').getByRole('button', { name: 'Cancel' }).click();
+  } else await expect(page.locator('#skill-status')).toHaveText(status);
 }
 
 // openPanel opens Grill's Capabilities tab, where its skills sit (009-AC2).
@@ -31,7 +36,7 @@ test('skills: upload, disclaimer once, pinned through an update', async ({ brows
   await aliceProfile.goto('/profile');
   await uploadSkill(aliceProfile, skillZip('broken', 'X', false), 'personal', /SKILL.md must start with a --- frontmatter block/);
   await uploadSkill(aliceProfile, skillZip('stamp', 'STAMP-v1'), 'personal', 'Added stamp v1.');
-  await expect(aliceProfile.locator('#skill-list li')).toHaveText(['stamp v1 · Only my rooms · Prints STAMP-v1. Remove']);
+  await expect(aliceProfile.locator('#skill-list .skill-text')).toHaveText(['stamp v1 · Only my rooms Prints STAMP-v1.'], { useInnerText: true });
   const bobProfile = await bob.context().newPage();
   await bobProfile.goto('/profile');
   await uploadSkill(bobProfile, skillZip(pdf, 'PDF-v1'), 'shared', `Added ${pdf} v1.`);
@@ -112,8 +117,8 @@ test('skills: upload, disclaimer once, pinned through an update', async ({ brows
   // The profile page fits a phone too.
   await aliceProfile.setViewportSize({ width: 390, height: 844 });
   await aliceProfile.reload();
-  await expect(aliceProfile.locator('#skill-list li')).toHaveText([/^stamp v2 · Only my rooms/]);
-  await aliceProfile.locator('#skills summary').click();
-  await expect(aliceProfile.getByRole('button', { name: 'Add skill', exact: true })).toBeVisible();
+  await aliceProfile.locator('#tab-skills').click();
+  await expect(aliceProfile.locator('#skill-list .skill-text')).toHaveText([/^stamp\s+v2 · Only my rooms/], { useInnerText: true });
+  await expect(aliceProfile.locator('#skill-add')).toBeVisible();
   expect(await aliceProfile.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });

@@ -23,9 +23,9 @@ function render({ email_enabled: enabled, profile, magic_link_ttl_s: linkTTL }) 
   if (!profile) return;
   // The name the profile chose in a room (005-AC1), else the one it last joined with.
   const name = profile.name || (profile.rooms[0] || {}).name || '';
-  // Each room is a card: its name, its people and last activity (005-AC41); the admin badge leads
-  // the meta line, where a long name cannot run under it, and your name there shows only when it
-  // differs from the profile's.
+  // Each room is a card, a link as a whole (011b-AC16): its name, its people and last activity
+  // (005-AC41); the admin badge leads the meta line, where a long name cannot run under it, and
+  // your name there shows only when it differs from the profile's.
   $('rooms').replaceChildren(...profile.rooms.map((r) => {
     const li = document.createElement('li');
     li.className = 'card';
@@ -59,10 +59,11 @@ function render({ email_enabled: enabled, profile, magic_link_ttl_s: linkTTL }) 
     empty.textContent = 'No room yet. Create one, or open an invite link.';
     $('rooms').append(empty);
   }
-  $('who').textContent = name;
-  $('profile-name').textContent = name || 'Set when you join a room.';
+  $('count-rooms').textContent = String(profile.rooms.length);
+  showMe(name);
+  $('profile-name').textContent = name;
+  $('account-name').textContent = name || 'Set when you join a room.';
   $('email').hidden = !emailEnabled;
-  $('profile-anon').hidden = !emailEnabled || !!profile.email;
   shown = profile;
   pending = profile.pending_email || '';
   // Seconds on the server clock, anchored to this one on arrival: a wrong client clock does not matter.
@@ -70,6 +71,32 @@ function render({ email_enabled: enabled, profile, magic_link_ttl_s: linkTTL }) 
   pendingExpires = profile.pending_ttl_s != null ? at + profile.pending_ttl_s * 1000 : 0;
   pendingSent = profile.pending_age_s != null ? at - profile.pending_age_s * 1000 : 0;
   showEmail(false);
+}
+
+// showMe draws the header's user menu button as the room does (011b-AC17): initials in a ring, the
+// name beside them on a wide screen.
+function showMe(name) {
+  const who = document.createElement('span');
+  who.className = 'who';
+  who.textContent = name;
+  $('me').replaceChildren(who);
+  $('me').dataset.initials = name.trim().split(/\s+/).slice(0, 2).map((w) => [...w][0] || '').join('').toUpperCase();
+  $('me').hidden = false;
+  $('me-head').textContent = name;
+}
+for (const a of $('me-menu').querySelectorAll('a')) a.addEventListener('click', () => $('me-menu').hidePopover());
+
+// leftSeconds is what is left of the pending link's life, on this clock.
+const leftSeconds = () => (pendingExpires ? Math.max(1, Math.ceil((pendingExpires - Date.now()) / 1000)) : ttl);
+
+// showStrip puts the email state under the name, on every tab (011b-AC11). Without SMTP there is
+// no state to show.
+function showStrip(email) {
+  $('profile-email').hidden = !emailEnabled || !email;
+  $('profile-email-text').textContent = email;
+  $('profile-pending').hidden = !emailEnabled || !!email || !pending;
+  $('profile-pending-text').textContent = 'Link sent to ' + pending + ', ' + Math.ceil(leftSeconds() / 60) + ' min left';
+  $('profile-anon').hidden = !emailEnabled || !!email || !!pending;
 }
 
 // deviceText says how to reach this profile from another device, from the Email state. The
@@ -93,8 +120,10 @@ function showEmail(editing) {
   const email = shown ? shown.email || '' : '';
   $('email-state').textContent = email || (pending && !editing ? '' : 'No email yet. Add one to sign in on other devices.');
   $('device').textContent = deviceText(email);
+  $('email-note').hidden = !email || editing;
+  showStrip(email);
   if (pending && !editing) {
-    const rest = pendingExpires ? Math.max(1, Math.ceil((pendingExpires - Date.now()) / 1000)) : ttl;
+    const rest = leftSeconds();
     // Whole minutes, as the mail words it, unless under one.
     const left = rest < 60 ? rest : Math.ceil(rest / 60) * 60;
     const since = pendingSent ? (Date.now() - pendingSent) / 1000 : 60;
@@ -107,11 +136,15 @@ function showEmail(editing) {
   $('bind-label').textContent = email ? 'New address' : 'Add an email';
 }
 
-// openEmailField is the next step of a link that failed: a field to ask for a new one.
+// openEmailField is the next step of a link that failed, and where /profile#email lands: a field
+// to ask for a new one, on the Account tab.
 function openEmailField() {
   const signedIn = !$('signed-in').hidden;
-  if (signedIn) showEmail(true);
-  else signinLink.reset();
+  if (signedIn) {
+    history.replaceState(null, '', '#account');
+    showTab();
+    showEmail(true);
+  } else signinLink.reset();
   const input = signedIn ? $('bind-email') : $('signin-email');
   input.scrollIntoView({ block: 'center' });
   input.focus();
@@ -133,25 +166,30 @@ async function loadSkills() {
   const res = await fetch('/api/profile/skills');
   if (!res.ok) return;
   const skills = await res.json();
+  $('count-skills').textContent = String(skills.length);
+  $('skill-add').hidden = !skills.length;
   $('skill-list').replaceChildren(...skills.map((k) => {
     const li = document.createElement('li');
     li.dataset.skill = k.name;
+    const text = document.createElement('div');
+    text.className = 'skill-text';
     const name = document.createElement('strong');
     name.textContent = k.name;
-    li.append(name, ' v' + k.version + ' · ' + (k.shared ? 'Everyone on this server' : 'Only my rooms') + ' · ' + k.description);
-    if (!k.shared) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = 'Remove';
-      b.setAttribute('aria-label', 'Remove skill ' + k.name);
-      b.addEventListener('click', async () => {
-        if (!(await window.grillConfirm('Remove ' + k.name + '?', 'Personas that have it on lose it.', 'Remove'))) return;
-        const r = await fetch('/api/profile/skills/' + k.id, { method: 'DELETE' });
-        $('skill-status').textContent = r.ok ? k.name + ' removed.' : ((await r.json().catch(() => ({}))).error || 'HTTP ' + r.status);
-        await loadSkills();
-      });
-      li.append(' ', b);
-    }
+    const meta = document.createElement('span');
+    meta.className = 'hint';
+    meta.textContent = 'v' + k.version + ' · ' + (k.shared ? 'Everyone on this server' : 'Only my rooms');
+    const about = document.createElement('span');
+    about.className = 'hint';
+    about.textContent = k.description;
+    text.append(name, meta, about);
+    li.append(text);
+    // A shared skill is the server's library now: only the admin removes it.
+    if (!k.shared) li.append(...rowMenu('skill-menu-' + k.id, 'More actions for ' + k.name, [['Remove', async () => {
+      if (!(await window.grillConfirm('Remove ' + k.name + '?', 'Personas that have it on lose it.', 'Remove'))) return;
+      const r = await fetch('/api/profile/skills/' + k.id, { method: 'DELETE' });
+      $('skill-status').textContent = r.ok ? k.name + ' removed.' : ((await r.json().catch(() => ({}))).error || 'HTTP ' + r.status);
+      await loadSkills();
+    }]]));
     return li;
   }));
   if (!skills.length) {
@@ -161,13 +199,67 @@ async function loadSkills() {
     p.textContent = 'No skills yet. Add a .zip to give your AI personas a new ability.';
     const add = document.createElement('button');
     add.type = 'button';
-    add.className = 'btn-secondary';
+    add.className = 'btn-primary';
     add.textContent = 'Add a skill';
-    add.addEventListener('click', () => $('skill-file').click());
+    add.addEventListener('click', openSkillSheet);
     empty.append(p, add);
     $('skill-list').append(empty);
   }
 }
+
+// rowMenu is a row's ⋯ and its menu (docs/design.md §5), as the starters' rows have: a popover
+// under its button.
+function rowMenu(id, label, items) {
+  const more = document.createElement('button');
+  more.type = 'button';
+  more.className = 'btn-ghost btn-icon';
+  more.setAttribute('aria-label', label);
+  more.append(window.grillIcon('more'));
+  const menu = document.createElement('div');
+  menu.id = id;
+  menu.className = 'menu';
+  menu.popover = 'auto';
+  menu.setAttribute('role', 'menu');
+  more.popoverTargetElement = menu;
+  menu.addEventListener('beforetoggle', (e) => {
+    if (e.newState !== 'open') return;
+    const r = more.getBoundingClientRect();
+    menu.style.top = Math.max(8, Math.min(r.bottom + 4, innerHeight - 160)) + 'px';
+    menu.style.right = Math.max(8, innerWidth - r.right) + 'px';
+  });
+  menu.addEventListener('toggle', (e) => { if (e.newState === 'open') menu.querySelector('button').focus(); });
+  for (const [name, run] of items) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.setAttribute('role', 'menuitem');
+    b.textContent = name;
+    b.addEventListener('click', () => {
+      menu.hidePopover();
+      more.focus();
+      run();
+    });
+    menu.append(b);
+  }
+  return [more, menu];
+}
+
+// The skill sheet (011b-AC15): the file and who can use it. Each opening starts empty.
+const skillSheet = $('skill-sheet');
+function openSkillSheet() {
+  $('skill-upload').reset();
+  $('skill-file-name').textContent = 'No file chosen';
+  $('skill-error').textContent = '';
+  skillSheet.showModal();
+  $('skill-pick').focus();
+}
+$('skill-add').addEventListener('click', openSkillSheet);
+$('skill-close').addEventListener('click', () => skillSheet.close());
+$('skill-cancel').addEventListener('click', () => skillSheet.close());
+// A press outside closes it, as every sheet does (005-AC13).
+skillSheet.addEventListener('click', (e) => {
+  const r = skillSheet.getBoundingClientRect();
+  if (e.target === skillSheet && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) skillSheet.close();
+});
 
 // The file input stays hidden: the native one cannot take the kit's button style.
 $('skill-pick').addEventListener('click', () => $('skill-file').click());
@@ -180,24 +272,24 @@ $('skill-upload').addEventListener('submit', async (e) => {
   e.preventDefault();
   const file = $('skill-file').files[0];
   if (!file) {
-    $('skill-status').textContent = 'Choose a .zip first.';
+    $('skill-error').textContent = 'Choose a .zip first.';
     $('skill-pick').focus();
     return;
   }
   const button = $('skill-upload').querySelector('button[type=submit]');
   button.disabled = true;
+  $('skill-error').textContent = '';
   try {
     const res = await fetch('/api/profile/skills?scope=' + $('skill-scope').value,
       { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: file });
     const data = await res.json().catch(() => ({}));
-    $('skill-status').textContent = res.ok ? 'Added ' + data.name + ' v' + data.version + '.' : data.error || 'HTTP ' + res.status;
     if (res.ok) {
-      $('skill-upload').reset();
-      $('skill-file-name').textContent = 'No file chosen';
-    }
-    await loadSkills();
+      skillSheet.close();
+      $('skill-status').textContent = 'Added ' + data.name + ' v' + data.version + '.';
+      await loadSkills();
+    } else $('skill-error').textContent = data.error || 'HTTP ' + res.status;
   } catch {
-    $('skill-status').textContent = 'Network error, try again.';
+    $('skill-error').textContent = 'Network error, try again.';
   }
   button.disabled = false;
 });
@@ -254,7 +346,8 @@ async function signInFromLink() {
   const hash = new URLSearchParams(location.hash.slice(1));
   const [kind, token] = ['bind', 'magic', 'recover'].map((k) => [k, hash.get(k)]).find(([, v]) => v) || [];
   if (!token) return;
-  history.replaceState(null, '', location.pathname);
+  // A bind lands on Account, where the address shows; a sign-in on the rooms.
+  history.replaceState(null, '', location.pathname + (kind === 'bind' ? '#account' : ''));
   next('');
   const res = await fetch('/api/profile');
   const current = res.ok ? (await res.json()).profile : null;
@@ -293,6 +386,7 @@ const bindLink = window.grillLinkForm({ form: $('bind'), url: '/api/profile/emai
     pending = email;
     pendingExpires = pendingSent = 0;
     $('device').textContent = deviceText(shown && shown.email);
+    showStrip((shown && shown.email) || '');
     $('email-change').hidden = true;
     if (!(shown && shown.email)) $('email-state').textContent = '';
   },
@@ -306,18 +400,34 @@ $('email-change').addEventListener('click', () => {
   $('bind-email').focus();
 });
 
+// The tabs (011b-AC12): the hash names the tab, #email the Account tab's address field (011-AC7).
+const tabs = ['rooms', 'starters', 'skills', 'account'];
+function showTab() {
+  const id = location.hash.slice(1);
+  const tab = id === 'email' ? 'account' : tabs.includes(id) ? id : 'rooms';
+  for (const t of tabs) {
+    $('panel-' + t).hidden = t !== tab;
+    if (t === tab) $('tab-' + t).setAttribute('aria-current', 'page');
+    else $('tab-' + t).removeAttribute('aria-current');
+  }
+  // A bar that scrolls sideways on a phone keeps its current tab in sight (005-AC35).
+  $('tab-' + tab).scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  // The browser jumped to the element the hash names, if any: a tab opens at the page's top, under
+  // the identity strip.
+  scrollTo(0, 0);
+}
+
+function route() {
+  showTab();
+  if (location.hash === '#email' && !$('email').hidden) openEmailField();
+}
+
 function start() {
-  signInFromLink().then(load).then(toEmail).catch((err) => {
+  signInFromLink().then(load).then(route).catch((err) => {
     console.error(err);
     statusLine.textContent = 'Could not load your profile.';
   });
 }
-// /profile#email comes from the room's marker and nudge (011-AC7): straight to the field.
-function toEmail() {
-  if (location.hash !== '#email' || $('email').hidden) return;
-  history.replaceState(null, '', location.pathname);
-  openEmailField();
-}
 // A link pasted into a tab already on this page changes only the fragment: no reload.
-window.addEventListener('hashchange', () => (location.hash === '#email' ? toEmail() : start()));
+window.addEventListener('hashchange', () => (/^#(bind|magic|recover)=/.test(location.hash) ? start() : route()));
 start();

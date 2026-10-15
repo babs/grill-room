@@ -76,8 +76,8 @@ export function RowMenu({ id, label, items }) {
 export const meta = (st) => html`v${st.version} · by ${st.author}${st.size ? ' · ' + size(st.size) : ''} · ${ago(st.updated_at)}`;
 
 /**
- * StarterList is the profile's view of the library (006-AC1 to 006-AC3): built-ins, its own and
- * the shared ones. Any starter duplicates into "Yours"; its own it shares with everyone or deletes.
+ * StarterList is the profile's view of the library (006-AC1 to 006-AC3): its own, the shared ones and
+ * the built-ins. Any starter duplicates into "Yours"; its own it shares with everyone or deletes.
  * Its own it also edits, which saves the next version (006-AC3).
  * @param {{starters: Starter[], api: import('./room-panel.js').Api, reload: () => void, say: (text: string) => void,
  *   edit?: (st: Starter) => void}} props
@@ -101,7 +101,9 @@ export function StarterList({ starters, api, reload, say, edit }) {
     }
     return out;
   };
-  return html`${libraries.map(([lib, label]) => {
+  // Yours first, then what others share, then the built-ins everyone has (011b-AC14).
+  return html`${['personal', 'instance', 'builtin'].map((lib) => {
+    const label = /** @type {[string, string]} */ (libraries.find(([id]) => id === lib))[1];
     const list = starters.filter((st) => st.library === lib);
     return html`<h3 key=${lib}>${label}</h3>${list.length
       ? html`<ul class="starter-list" id=${'starters-' + lib}>${list.map((st) => html`<li key=${st.id} data-starter=${st.id}>

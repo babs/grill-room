@@ -466,7 +466,6 @@ test('profile home page', async ({ browser, request }) => {
   await expect(card).toContainText('1 person · active');
   await expect(card.locator('time')).toHaveAttribute('data-tip', /\d/);
   await expect(alice.locator('#profile-name')).toHaveText('Alice');
-  await expect(alice.locator('#skills')).not.toHaveAttribute('open', '');
   await newRoomEditor(alice);
   await expect(alice.locator('#room-create-sheet')).toBeVisible();
   await expect(alice.getByLabel('Your name in the room')).toHaveValue('Alice');

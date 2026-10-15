@@ -225,7 +225,7 @@ Request bodies must be JSON with `Content-Type: application/json` (415 otherwise
 
 ## Profiles
 
-The first join from a browser creates a profile and sets its cookie: HttpOnly, SameSite=Strict, valid for the whole site for 400 days. Every later join from that browser attaches the new participant to the same profile. `/profile` lists the profile's rooms, and the name in the room header links there.
+The first join from a browser creates a profile and sets its cookie: HttpOnly, SameSite=Strict, valid for the whole site for 400 days. Every later join from that browser attaches the new participant to the same profile. `/profile` lists the profile's rooms, and the name in the room header links there. Its tabs are Rooms, Starters, Skills and Account, each a deep link (`/profile#skills`); the line under your name always shows whether an email is on the profile.
 
 After that first join, the room page's user menu (your initials) offers the profile's recovery link under "Use on another device", with a copy button. Without SMTP, a notice points there after the first message; with SMTP, a banner suggesting an email takes its place. The tab keeps it until "I saved it"; after that, the menu points to email sign-in instead. Opening it in another browser and confirming signs that browser into the profile, and from there into all its rooms. The page asks first, and warns when the browser already holds a profile: a link someone else sent would otherwise put the browser, and every room it joins next, in their profile. The link stays valid, so whoever holds it holds the profile. The server keeps only its hash.
 

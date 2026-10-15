@@ -1,6 +1,6 @@
 # 011b — Profile page rework
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-10-15
 **Context**: addendum to spec 011. A review of `/profile` on v0.0.22 at 1440×900 and 390×844, light and dark, found 18 defects.
@@ -35,14 +35,14 @@ Two steps on one branch. First, fixes that keep the layout: the wording, the hea
 
 ### Layout
 
-- [ ] **AC11** An identity strip under the header: the name, then the email state (the bound address with a check, "No email yet" with "Add an email", or "Link sent to <address>, N min left"). It shows on every tab.
-- [ ] **AC12** Tabs Rooms, Starters, Skills and Account, with the kit's tab component: sticky, scrolling sideways on a phone, counts in the labels, the tab in the hash (`#rooms`, `#starters`, `#skills`, `#account`). `/profile#email` (011-AC7) opens Account with the field focused. A tab can be added for spec 012's API tokens.
-- [ ] **AC13** Content `max-width: 72rem`, left-aligned with the tabs, as `/admin`. docs/design.md §6 says so for the profile.
-- [ ] **AC14** The Starters tab lists Yours, then Shared with everyone, then Built-in.
-- [ ] **AC15** Skills: "Add a skill" opens a sheet with the file and "Who can use it". The list shows the name, version, scope and a `⋯` with Remove.
-- [ ] **AC16** Room cards are clickable in full (at least 44 px), show the role in the meta line, and say "as <name>" only when that name differs from the profile's.
-- [ ] **AC17** The header matches the room: the logo links to `/`, the avatar shows initials and the name, and its menu holds the profile's links.
-- [ ] **AC18** e2e at 1440 and 390 px, light and dark: no horizontal overflow, every target at least 44 px on a phone, the email state above the fold in all three states, tab deep links, one filled button per tab.
+- [x] **AC11** An identity strip under the header: the name, then the email state (the bound address with a check, "No email yet" with "Add an email", or "Link sent to <address>, N min left"). It shows on every tab.
+- [x] **AC12** Tabs Rooms, Starters, Skills and Account, with the kit's tab component: sticky, scrolling sideways on a phone, counts in the labels, the tab in the hash (`#rooms`, `#starters`, `#skills`, `#account`). `/profile#email` (011-AC7) opens Account with the field focused. A tab can be added for spec 012's API tokens.
+- [x] **AC13** Content `max-width: 72rem`, left-aligned with the tabs, as `/admin`. docs/design.md §6 says so for the profile.
+- [x] **AC14** The Starters tab lists Yours, then Shared with everyone, then Built-in.
+- [x] **AC15** Skills: "Add a skill" opens a sheet with the file and "Who can use it". The list shows the name, version, scope and a `⋯` with Remove.
+- [x] **AC16** Room cards are clickable in full (at least 44 px), show the role in the meta line, and say "as <name>" only when that name differs from the profile's.
+- [x] **AC17** The header matches the room: the logo links to `/`, the avatar shows initials and the name, and its menu holds the profile's links.
+- [x] **AC18** e2e at 1440 and 390 px, light and dark: no horizontal overflow, every target at least 44 px on a phone, the email state above the fold in all three states, tab deep links, one filled button per tab.
 
 ## Wording
 
@@ -86,3 +86,7 @@ Two steps on one branch. First, fixes that keep the layout: the wording, the hea
 - User approved the proposal, both parts, 2026-10-15.
 - One branch, one PR: the fixes, then the tabs, as two commit series.
 - Without SMTP the identity strip shows the name only: there is no email state to show.
+- No "Sign out of this browser" exists, so the header menu holds "Your rooms" and "Account and email" (AC17).
+- The Starters tab has no primary button: a starter comes from duplicating one or from a room's settings, not from a blank form.
+- A bind link lands on `#account`, where the address shows; a sign-in or recovery link lands on the rooms.
+- The kit gains `.page` (72rem, left-aligned) and `.tabs.sticky`; `/admin`, the daemon page and the persona sheet still carry their own sticky rules.
