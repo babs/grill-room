@@ -7,7 +7,7 @@ export const WINDOW = 512;
 
 /**
  * An utterance cut by the segmenter.
- * @typedef {{pcm: Float32Array, silentS: number, lastVoiced: number}} Utterance
+ * @typedef {{pcm: Float32Array, silentS: number, firstVoiced: number, lastVoiced: number}} Utterance
  */
 
 /**
@@ -37,7 +37,9 @@ export class Segmenter {
     this.speech = [];
     this.voiced = 0;
     this.silent = 0;
-    // lastVoiced is the time the caller gave with the last voiced window: the end of speech.
+    // firstVoiced and lastVoiced are the times the caller gave with the first and the last voiced
+    // windows: the start and the end of speech.
+    this.firstVoiced = 0;
     this.lastVoiced = 0;
   }
 
@@ -58,6 +60,7 @@ export class Segmenter {
         this.preroll = [];
         this.voiced = 1;
         this.silent = 0;
+        this.firstVoiced = at;
         this.lastVoiced = at;
       }
       return null;
@@ -94,6 +97,6 @@ export class Segmenter {
     if (voiced < this.minWindows) return null;
     const pcm = new Float32Array(parts.length * WINDOW);
     parts.forEach((x, i) => pcm.set(x, i * WINDOW));
-    return { pcm, silentS, lastVoiced: this.lastVoiced };
+    return { pcm, silentS, firstVoiced: this.firstVoiced, lastVoiced: this.lastVoiced };
   }
 }

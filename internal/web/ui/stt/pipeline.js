@@ -29,6 +29,8 @@ const policy = new Policy(() => performance.now());
 // The counters the page and the tests read; mode is 'loading' until Silero runs.
 const stats = {
   windows: 0, utterances: 0, decoded: 0, posted: 0, dropped: 0, lost: 0, beats: 0, ticks: 0, queue: 0,
+  // graced counts the utterances cut after a fall back that the device still posts (policy.posts).
+  graced: 0,
   /** @type {'loading' | import('./policy.js').Mode} */
   mode: 'loading',
   /** @type {number[]} */
@@ -190,9 +192,10 @@ async function run() {
 function enqueue(u) {
   if (!u || stats.mode === 'failed') return;
   stats.utterances++;
-  // Speech cut while the flag was up: the server skipped that audio, so the device posts it even
-  // if it fell back since.
-  queue.push({ ...u, post: stats.mode === 'device' });
+  // Speech the worker skipped is the device's to post, even after a fall back (policy.posts).
+  const post = policy.posts(u.firstVoiced);
+  if (post && stats.mode === 'slow') stats.graced++;
+  queue.push({ ...u, post });
   const kept = shed(queue);
   queue.splice(0, queue.length, ...kept);
   setMode(policy.waiting(queue.length));

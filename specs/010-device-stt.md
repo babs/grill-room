@@ -94,7 +94,7 @@ People can tell who transcribed a line: its tooltip says "Transcribed on <name>'
   - more than 2 utterances wait in the device queue;
   - the engine fails, or the model fails to load.
 
-  After a latency or queue fallback the device keeps decoding without posting. It takes the track back when, over the last 60 s and at least 3 utterances, p95 is at most 3 s and the queue is empty, and at most once every 2 minutes. After an engine or model failure it stays on the server until the page reloads. The audio menu says where the voice goes: "Transcribed on this device" or "Transcribed by the server: this device is too slow right now".
+  After a latency or queue fallback the device keeps decoding without posting, except the utterances whose speech started before the hand-back or less than 5 s after it, while the worker takes the track back. The server drops a duplicate when both lines land within 5 s and match (AC16); otherwise both stay: a duplicate beats a loss. It takes the track back when, over the last 60 s and at least 3 utterances, p95 is at most 3 s and the queue is empty, and at most once every 2 minutes. After an engine or model failure it stays on the server until the page reloads. The audio menu says where the voice goes: "Transcribed on this device" or "Transcribed by the server: this device is too slow right now".
 - [ ] **AC18** On real Chrome, headed, with the room tab hidden for 10 minutes and the room audio muted, either p95 stays ≤ 4 s, or the fallback fires and the worker transcribes every utterance after the hand-back. If the hidden-tab slowdown shows, a mitigation ships (STT in a SharedWorker, or an audible-silent output) and the check runs again. The report says which.
 
 ### Measures and observability

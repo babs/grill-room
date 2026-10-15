@@ -10,6 +10,9 @@ const RETURN_P95_MS = 3_000;
 const MAX_QUEUE = 2;
 const RETURN_GAP_MS = 120_000;
 const MAX_UNPOSTED = 3;
+// How long after a fall back the worker may still skip the voice: the false beat may wait up to 2 s
+// behind a beat on its way, then the worker resumes within 3 s of it (010-AC15).
+const RESUME_MS = 5_000;
 
 /**
  * deadline is how long the engine may take on an utterance of this many seconds before it counts
@@ -54,6 +57,19 @@ export class Policy {
     this.queue = 0;
     /** @type {number | null} */
     this.returnedAt = null;
+    /** @type {number | null} */
+    this.handedBackAt = null;
+  }
+
+  /**
+   * posts says whether the device posts an utterance whose speech started at start. After a hand-back
+   * it still posts what started before the worker can have resumed: a duplicate, which the server
+   * drops, beats a line nobody wrote down.
+   * @param {number} start
+   */
+  posts(start) {
+    if (this.mode === 'device') return true;
+    return this.mode === 'slow' && this.handedBackAt !== null && start < this.handedBackAt + RESUME_MS;
   }
 
   /** recent is the latencies of the last 60 s. */
@@ -93,7 +109,10 @@ export class Policy {
     const xs = this.recent();
     const enough = xs.length >= MIN_UTTERANCES;
     if (this.mode === 'device') {
-      if ((enough && p95(xs) > LEAVE_P95_MS) || this.queue > MAX_QUEUE) this.mode = 'slow';
+      if ((enough && p95(xs) > LEAVE_P95_MS) || this.queue > MAX_QUEUE) {
+        this.mode = 'slow';
+        this.handedBackAt = this.now();
+      }
     } else if (enough && p95(xs) <= RETURN_P95_MS && this.queue === 0
       && (this.returnedAt === null || this.now() - this.returnedAt >= RETURN_GAP_MS)) {
       this.mode = 'device';

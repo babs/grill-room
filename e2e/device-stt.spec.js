@@ -358,15 +358,16 @@ test('the segmenter cuts as the worker does', async ({ browser, request }) => {
     }, probs);
     expect(got, name).toEqual({ cuts, flushed });
   }
-  // The end of speech is the time of the last voiced window, not the cut's.
-  const lastVoiced = await page.evaluate(async () => {
+  // The start and the end of speech are the times of the first and the last voiced windows, not
+  // the pad's or the cut's.
+  const voiced = await page.evaluate(async () => {
     const { Segmenter, WINDOW } = await import('/static/stt/segmenter.js');
     const seg = new Segmenter();
     let u = null;
     for (let i = 0; !u && i < 100; i++) u = seg.push(new Float32Array(WINDOW), i >= 5 && i < 25 ? 0.9 : 0.1, 1000 + i);
-    return u.lastVoiced;
+    return [u.firstVoiced, u.lastVoiced];
   });
-  expect(lastVoiced).toBe(1024);
+  expect(voiced).toEqual([1005, 1024]);
 });
 
 // 010-AC9: the worker's plausibility filter on device lines. The ratios are Python's
@@ -413,6 +414,7 @@ test('the fallback policy', async ({ browser, request }) => {
       else if (op === 'lat') out.push(p.record(v * 1000));
       else if (op === 'queue') out.push(p.waiting(v));
       else if (op === 'fail') out.push(p.fail());
+      else if (op === 'posts') out.push(p.posts(v * 1000));
     }
     return out;
   }, script);
@@ -429,6 +431,15 @@ test('the fallback policy', async ({ browser, request }) => {
   // Between 3 s and 4 s it stays where it is: no flapping.
   expect(await run([['lat', 5], ['lat', 5], ['lat', 5], ['at', 61], ['lat', 3.5], ['lat', 3.5], ['lat', 3.5], ['lat', 3]]))
     .toEqual(['device', 'device', 'slow', 'slow', 'slow', 'slow', 'slow']);
+  // Handed back at 10 s, the worker may skip the voice until 15 s: speech that started before then
+  // still posts from the device, later speech is only measured.
+  expect(await run([['posts', 9], ['at', 10], ['queue', 3], ['posts', 5], ['posts', 11], ['posts', 14.9], ['posts', 15], ['posts', 16],
+    ['at', 30], ['posts', 11], ['posts', 31]])).toEqual([true, 'slow', true, true, true, false, false, true, false]);
+  // A return posts everything again; the next fall back opens a window of its own.
+  expect(await run([['lat', 5], ['lat', 5], ['lat', 5], ['at', 61], ['lat', 1], ['lat', 1], ['lat', 1], ['posts', 61], ['at', 70], ['queue', 3], ['posts', 74.9], ['posts', 75]]))
+    .toEqual(['device', 'device', 'slow', 'slow', 'slow', 'device', true, 'slow', true, false]);
+  // An engine failure posts nothing more.
+  expect(await run([['fail'], ['posts', 0]])).toEqual(['failed', false]);
   // A hung engine fails after 4 times the utterance's length, never under 10 s.
   expect(await page.evaluate(() => import('/static/stt/policy.js').then((m) => [0.5, 2.5, 3, 15].map(m.deadline)))).toEqual([10_000, 10_000, 12_000, 60_000]);
   // In fallback, utterances decoded only to measure the device are kept to 3, the newest; a line to
@@ -696,12 +707,16 @@ test('a lagging device falls back and returns', async ({ browser, request }) => 
     await expect.poll(async () => (await t.stats()).mode, { timeout: 60_000 }).toBe('slow');
     await expect(said(t.page)).toHaveText('Transcribed by the server: this device is too slow right now');
     await expect.poll(() => t.beats.at(-1)?.device_stt).toBe(false);
+    // The next chopped utterance starts within 5 s of the fall back: the device still posts it.
+    const posted = t.lines.length;
+    await expect.poll(async () => (await t.stats()).graced, { timeout: 30_000 }).toBeGreaterThanOrEqual(1);
     await t.page.evaluate(() => {
       window.seen = [];
       addEventListener('grill:device-pipeline', (e) => window.seen.push({ mode: e.detail.mode, beats: e.detail.beats }));
     });
     // Fast again: once the slow lines left the last 60 s, the voice comes back.
     await engine(0);
+    await expect.poll(() => t.lines.length).toBeGreaterThan(posted);
     await expect.poll(async () => (await t.stats()).mode, { timeout: 150_000, intervals: [1000] }).toBe('device');
     await expect(said(t.page)).toHaveText('Transcribed on this device');
     // The counters sent with the return already count its beat: it left with the mode change.
