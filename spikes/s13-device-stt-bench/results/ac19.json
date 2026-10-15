@@ -1,0 +1,197 @@
+{
+ "errors": [
+  null,
+  null
+ ],
+ "live_end_s": 1790.6,
+ "counts": {
+  "latencies": 219,
+  "probes": 219,
+  "utterances": 219,
+  "decoded": 219,
+  "posted": 217,
+  "dropped": 2,
+  "lost": 0
+ },
+ "latency_s": {
+  "all": {
+   "p50": 1.49,
+   "p95": 2.19,
+   "max": 2.53,
+   "n": 219
+  },
+  "pause_cut": {
+   "p50": 1.44,
+   "p95": 2.16,
+   "max": 2.43,
+   "n": 187
+  },
+  "maxlen_cut": {
+   "p50": 1.83,
+   "p95": 2.32,
+   "max": 2.53,
+   "n": 32
+  },
+  "per_5_min": {
+   "0-5 min": {
+    "p50": 1.83,
+    "p95": 2.43,
+    "max": 2.43,
+    "n": 20
+   },
+   "5-10 min": {
+    "p50": 1.56,
+    "p95": 1.89,
+    "max": 2.05,
+    "n": 38
+   },
+   "10-15 min": {
+    "p50": 1.43,
+    "p95": 1.95,
+    "max": 2.39,
+    "n": 47
+   },
+   "15-20 min": {
+    "p50": 1.4,
+    "p95": 1.91,
+    "max": 2.38,
+    "n": 45
+   },
+   "20-25 min": {
+    "p50": 1.55,
+    "p95": 2.23,
+    "max": 2.53,
+    "n": 33
+   },
+   "25-30 min": {
+    "p50": 1.48,
+    "p95": 2.32,
+    "max": 2.37,
+    "n": 36
+   }
+  }
+ },
+ "modes": [
+  [
+   1792074082501.67,
+   "device",
+   ""
+  ]
+ ],
+ "mode_end": "device",
+ "device": {
+  "lines": 217,
+  "other_source": 0,
+  "lag_s": 1.75,
+  "talk": {
+   "wer": 0.12,
+   "ref_words": 1356,
+   "en_leak": 0.0
+  },
+  "summre": {
+   "wer": 0.153,
+   "ref_words": 2589,
+   "en_leak": 0.002
+  },
+  "piper_fr": {
+   "wer": 0.26,
+   "ref_words": 342,
+   "en_leak": 0.0
+  },
+  "piper_en": {
+   "wer": 0.094,
+   "ref_words": 64,
+   "en_leak": 0.0
+  },
+  "fr_all": {
+   "wer": 0.151,
+   "ref_words": 4287,
+   "en_leak": 0.001
+  }
+ },
+ "server": {
+  "lines": 219,
+  "other_source": 0,
+  "lag_s": 1.45,
+  "talk": {
+   "wer": 0.127,
+   "ref_words": 1356,
+   "en_leak": 0.0
+  },
+  "summre": {
+   "wer": 0.16,
+   "ref_words": 2589,
+   "en_leak": 0.001
+  },
+  "piper_fr": {
+   "wer": 0.251,
+   "ref_words": 342,
+   "en_leak": 0.0
+  },
+  "piper_en": {
+   "wer": 0.031,
+   "ref_words": 64,
+   "en_leak": 0.0
+  },
+  "fr_all": {
+   "wer": 0.157,
+   "ref_words": 4287,
+   "en_leak": 0.001
+  }
+ },
+ "memory_mb": {
+  "chrome_total_peak": 5064,
+  "tab_peak_cold": 1535,
+  "tab_peak_warm0": 3590,
+  "tab_peak_warm1": 4035,
+  "tab_peak_warm2": 2340,
+  "tab_peak_idle": 2304,
+  "tab_peak_live": 1340,
+  "tab_peak_after": 1257,
+  "tab_median_live": 1279
+ },
+ "cpu_cores_mean_playing": 0.54,
+ "cold": {
+  "sec": 6.509,
+  "self_test": {
+   "backend": "wasm",
+   "rtfx": 6.334185278804815,
+   "wer": 0
+  },
+  "load_ms": {
+   "fetch": 2459.3949995040894,
+   "session": 815.5900001525879,
+   "warmup": 1313.1999998092651,
+   "backend": "wasm",
+   "isolated": true
+  }
+ },
+ "warm_s": [
+  2.38,
+  2.6,
+  2.09
+ ],
+ "warm_load_ms": [
+  {
+   "fetch": 542.829999923706,
+   "session": 557.5750007629395,
+   "warmup": 1269.5899991989136,
+   "backend": "wasm",
+   "isolated": true
+  },
+  {
+   "fetch": 593.460000038147,
+   "session": 611.1450004577637,
+   "warmup": 1372.4849996566772,
+   "backend": "wasm",
+   "isolated": true
+  },
+  {
+   "fetch": 568.25,
+   "session": 507.69999980926514,
+   "warmup": 1000.9300003051758,
+   "backend": "wasm",
+   "isolated": true
+  }
+ ]
+}

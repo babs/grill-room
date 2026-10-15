@@ -1,0 +1,437 @@
+{
+ "errors": [
+  null,
+  null
+ ],
+ "status": "Transcribed on this device",
+ "deafened": "true",
+ "mic_muted": "false",
+ "self_test": {
+  "backend": "wasm",
+  "rtfx": 5.5533804817689125,
+  "wer": 0
+ },
+ "load_ms": {
+  "fetch": 2378.6850004196167,
+  "session": 824.079999923706,
+  "warmup": 1039.630000114441,
+  "backend": "wasm",
+  "isolated": true
+ },
+ "visibility": [
+  [
+   -67.39,
+   "visible"
+  ],
+  [
+   0.04,
+   "hidden"
+  ],
+  [
+   600.26,
+   "visible"
+  ]
+ ],
+ "hidden_s": 600.2,
+ "main_thread_1s_timer_while_hidden": {
+  "ticks": 599,
+  "max_gap_s": 1.0,
+  "ticks_last_5_min": 300
+ },
+ "pipeline_end": {
+  "utterances": 38,
+  "decoded": 38,
+  "posted": 38,
+  "dropped": 0,
+  "lost": 0,
+  "beats": 711,
+  "ticks": 711,
+  "mode": "device"
+ },
+ "modes": [
+  [
+   -60.6,
+   "device",
+   ""
+  ]
+ ],
+ "device_latency_s": {
+  "hidden": {
+   "p50": 1.48,
+   "p95": 1.65,
+   "max": 1.77,
+   "n": 33
+  },
+  "all": {
+   "p50": 1.48,
+   "p95": 1.69,
+   "max": 1.77,
+   "n": 38
+  }
+ },
+ "sentences": {
+  "total": 38,
+  "hidden": 33,
+  "missed": [],
+  "server_lines": 0
+ },
+ "end_to_line_s": {
+  "hidden": {
+   "p50": 1.07,
+   "p95": 1.24,
+   "max": 1.25,
+   "n": 33
+  },
+  "visible": {
+   "p50": 1.11,
+   "p95": 1.26,
+   "max": 1.26,
+   "n": 5
+  }
+ },
+ "verdict": "no fallback, hidden p95 <= 4.0 s",
+ "per_sentence": [
+  {
+   "item": "f01",
+   "when": "visible",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.26,
+   "wer": 0.08
+  },
+  {
+   "item": "f02",
+   "when": "visible",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.11,
+   "wer": 0.3
+  },
+  {
+   "item": "f03",
+   "when": "visible",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.14,
+   "wer": 0.0
+  },
+  {
+   "item": "f04",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.24,
+   "wer": 0.09
+  },
+  {
+   "item": "f05",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.16,
+   "wer": 0.09
+  },
+  {
+   "item": "f06",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.07,
+   "wer": 0.73
+  },
+  {
+   "item": "f07",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.06,
+   "wer": 0.25
+  },
+  {
+   "item": "f08",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 0.6,
+   "wer": 0.27
+  },
+  {
+   "item": "f09",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.09,
+   "wer": 0.11
+  },
+  {
+   "item": "f10",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": -0.59,
+   "wer": 0.27
+  },
+  {
+   "item": "f11",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.11,
+   "wer": 0.09
+  },
+  {
+   "item": "f12",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.25,
+   "wer": 0.89
+  },
+  {
+   "item": "f13",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.17,
+   "wer": 0.13
+  },
+  {
+   "item": "f14",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.07,
+   "wer": 0.45
+  },
+  {
+   "item": "f15",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.06,
+   "wer": 0.27
+  },
+  {
+   "item": "f16",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 0.62,
+   "wer": 0.67
+  },
+  {
+   "item": "f17",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.07,
+   "wer": 0.11
+  },
+  {
+   "item": "f18",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 0.85,
+   "wer": 0.3
+  },
+  {
+   "item": "f19",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.03,
+   "wer": 0.22
+  },
+  {
+   "item": "f20",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.22,
+   "wer": 0.6
+  },
+  {
+   "item": "f21",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.14,
+   "wer": 0.0
+  },
+  {
+   "item": "f22",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 0.98,
+   "wer": 0.09
+  },
+  {
+   "item": "f23",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.05,
+   "wer": 0.27
+  },
+  {
+   "item": "f24",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": -0.82,
+   "wer": 0.5
+  },
+  {
+   "item": "f25",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.09,
+   "wer": 0.0
+  },
+  {
+   "item": "f26",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.13,
+   "wer": 0.1
+  },
+  {
+   "item": "f27",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.02,
+   "wer": 0.09
+  },
+  {
+   "item": "f28",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.02,
+   "wer": 0.42
+  },
+  {
+   "item": "f29",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.2,
+   "wer": 0.44
+  },
+  {
+   "item": "f30",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.23,
+   "wer": 0.5
+  },
+  {
+   "item": "f31",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.13,
+   "wer": 0.11
+  },
+  {
+   "item": "f32",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.06,
+   "wer": 0.33
+  },
+  {
+   "item": "e01",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.15,
+   "wer": 0.1
+  },
+  {
+   "item": "e02",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 0.96,
+   "wer": 0.18
+  },
+  {
+   "item": "e03",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.09,
+   "wer": 0.0
+  },
+  {
+   "item": "e04",
+   "when": "hidden",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.22,
+   "wer": 0.27
+  },
+  {
+   "item": "e05",
+   "when": "visible",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 0.92,
+   "wer": 0.0
+  },
+  {
+   "item": "e06",
+   "when": "visible",
+   "sources": [
+    "device"
+   ],
+   "line_after_end_s": 1.05,
+   "wer": 0.0
+  }
+ ]
+}
