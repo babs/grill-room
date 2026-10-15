@@ -121,7 +121,7 @@ for (const vp of widths) {
     const page = await joinRoom(browser, request, room.id, 'Fay');
     made.profiles.push((await ownProfile(page)).id);
     await page.setViewportSize(vp);
-    await page.goto('/profile');
+    await page.goto('/profile#account');
     const address = `ac28-bind-${vp.name}-${Date.now()}@example.com`;
     await feedback(page, {
       box: page.locator('#email'), form: page.locator('#bind'), input: page.locator('#bind-email'),

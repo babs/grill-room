@@ -23,7 +23,7 @@ test('starter library: duplicate, share, delete, /admin', async ({ browser, requ
   // Unique names: repeated runs share the server and its library.
   const me = 'Alice' + Date.now().toString(36);
   const { pages: [alice, bob] } = await roomWith(browser, request, [me, 'Bob']);
-  await alice.goto('/profile');
+  await alice.goto('/profile#starters');
   await expect(alice.locator('#starters-builtin li')).toHaveCount(3);
   await expect(alice.locator('#starters-builtin li').first()).toContainText('Spec grill');
   await expect(alice.locator('#starters-builtin li').first()).toContainText('by grill-room');
@@ -40,7 +40,7 @@ test('starter library: duplicate, share, delete, /admin', async ({ browser, requ
   await alice.keyboard.press('Escape');
   await expect(more).toBeFocused();
 
-  await bob.goto('/profile');
+  await bob.goto('/profile#starters');
   await expect(bob.locator('#starters-builtin li')).toHaveCount(3);
   await expect(bob.locator('#starters-personal')).toHaveCount(0);
   await expect(bob.locator('#starters-instance li', { hasText: me })).toHaveCount(0);
@@ -197,7 +197,7 @@ test('save a room as a starter, share it, create a room from it', async ({ brows
   await expect(sheet).toBeHidden();
   await expect(page.locator('.toast')).toContainText('to your starters');
 
-  await page.goto('/profile');
+  await page.goto('/profile#starters');
   const mine = page.locator('#starters-personal li', { hasText: title });
   await expect(mine).toContainText('v1 · by ' + me);
   await mine.getByRole('button', { name: 'More actions for ' + title }).click();
@@ -205,9 +205,10 @@ test('save a room as a starter, share it, create a room from it', async ({ brows
   await confirmSheet(page, 'Share');
   await expect(page.locator('#starters-instance li', { hasText: title })).toHaveCount(1);
 
+  await page.locator('#tab-rooms').click();
   await page.getByRole('button', { name: 'New room' }).click();
   await page.getByLabel('Search starters').fill(me);
-  await page.getByRole('button', { name: 'Shared: ' + title }).click();
+  await page.getByRole('button', { name: 'Shared with everyone: ' + title }).click();
   await expect(page.locator('#starter-preview .starter-personas li')).toHaveText([/Grill/, /Secretary/]);
   await page.getByRole('button', { name: 'Use this starter' }).click();
   await expect(page.getByRole('button', { name: 'Create room' })).toBeDisabled();

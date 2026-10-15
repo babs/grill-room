@@ -80,7 +80,7 @@ test('recover a profile by email from the join page', async ({ browser, request 
   await tab.goto(linkPath(mail.link));
   await tab.getByRole('button', { name: 'Sign in to this profile' }).click();
   await expect(tab.locator('#status')).toHaveText('Signed in as Alice on this device.');
-  await expect(tab.locator('#rooms li .room-line')).toContainText([room.name + ' as Alice']);
+  await expect(tab.locator('#rooms li .room-line')).toContainText([room.name]);
 
   await join.bringToFront();
   await join.evaluate(() => window.dispatchEvent(new Event('focus')));
@@ -105,8 +105,8 @@ test('email section states', async ({ browser, request }) => {
   const [first, other, changed] = ['first', 'other', 'changed'].map((k) => `${k}-${stamp}@example.com`);
   const room = await newRoom(request, 'States');
   const page = await member(browser, request, room, 'Sam');
-  await page.goto('/profile');
-  await expect(page.locator('#email-state')).toHaveText('No email on this profile yet.');
+  await page.goto('/profile#account');
+  await expect(page.locator('#email-state')).toHaveText('No email yet. Add one to sign in on other devices.');
   await expect(page.locator('#profile-anon')).toBeVisible();
   await page.getByLabel('Add an email').fill(first);
   await page.getByRole('button', { name: 'Send me a link' }).click();
@@ -263,7 +263,7 @@ test('no-email marker and nudge', async ({ browser, request }) => {
 
   // The marker opens the email form.
   await alice.locator('#me-anon').click();
-  await expect(alice).toHaveURL(/\/profile$/);
+  await expect(alice).toHaveURL(/\/profile#account$/);
   await expect(alice.locator('#bind-email')).toBeFocused();
 
   await bindEmail(alice, request, `marked-${Date.now()}@example.com`);
@@ -274,7 +274,7 @@ test('no-email marker and nudge', async ({ browser, request }) => {
   await expect(tablet.locator('#me-anon')).toBeHidden();
   await expect(aliceRow(tablet).locator('.anon-mark')).toHaveCount(0);
   expect(await tablet.evaluate(async () => { await nudgeRecovery(); return document.getElementById('email-nudge').hidden; })).toBe(true);
-  await tablet.goto('/profile');
+  await tablet.goto('/profile#account');
   await expect(tablet.locator('#email-state')).toHaveText(/^marked-\d+@example\.com$/);
   await expect(tablet.getByRole('button', { name: 'Change' })).toBeVisible();
 });

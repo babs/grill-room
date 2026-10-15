@@ -462,11 +462,10 @@ test('profile home page', async ({ browser, request }) => {
   await alice.setViewportSize(desktop);
   await alice.goto('/profile');
   const card = alice.locator('#rooms li.card').first();
-  await expect(card.locator('.room-line')).toHaveText('Docs room as Alice');
+  await expect(card.locator('.room-line')).toHaveText('Docs room');
   await expect(card).toContainText('1 person · active');
   await expect(card.locator('time')).toHaveAttribute('data-tip', /\d/);
   await expect(alice.locator('#profile-name')).toHaveText('Alice');
-  await expect(alice.locator('#skills')).not.toHaveAttribute('open', '');
   await newRoomEditor(alice);
   await expect(alice.locator('#room-create-sheet')).toBeVisible();
   await expect(alice.getByLabel('Your name in the room')).toHaveValue('Alice');
@@ -475,7 +474,7 @@ test('profile home page', async ({ browser, request }) => {
   await alice.getByRole('button', { name: 'Create room' }).click();
   await expect(alice.locator('#invites')).toBeVisible();
   await alice.goto('/profile');
-  await expect(alice.locator('#rooms li.card', { hasText: 'Launch plan' }).locator('.badge')).toHaveText('admin');
+  await expect(alice.locator('#rooms li.card', { hasText: 'Launch plan' }).locator('.badge')).toHaveText('Admin');
   await shot(alice, 'after-desktop-profile');
   await alice.setViewportSize(phone);
   expect(await smallTargets(alice), 'profile').toEqual([]);

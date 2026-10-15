@@ -218,7 +218,7 @@ test('rename a room, with a name that is markup', async ({ browser, request }) =
     expect(await page.evaluate(() => window.__xss)).toBeUndefined();
   }
   await menuItem(bob, 'My rooms and profile', 'me');
-  await expect(bob.locator('#rooms li .room-line', { hasText: 'as Bob' })).toHaveText(`${evil} as Bob`);
+  await expect(bob.locator('#rooms li .room-line', { hasText: evil })).toHaveText(evil);
   await expect(bob.locator('#rooms img, #rooms script')).toHaveCount(0);
   expect(await bob.evaluate(() => window.__xss)).toBeUndefined();
 });
@@ -232,10 +232,11 @@ test('a room skill survives its author leaving', async ({ browser, request, base
   const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
   const bobProfile = await bob.context().newPage();
   await bobProfile.goto('/profile');
+  await bobProfile.locator('#tab-skills').click();
+  await bobProfile.locator('#panel-skills').getByRole('button', { name: 'Add a skill' }).click();
   await bobProfile.locator('#skill-file').setInputFiles(skillZip('bobs', 'BOB-v1'));
-  await bobProfile.locator('#skills summary').click();
-  await bobProfile.getByRole('button', { name: 'Upload', exact: true }).click();
-  await expect(bobProfile.locator('#skill-status')).toHaveText('Uploaded bobs v1.');
+  await bobProfile.locator('#skill-sheet').getByRole('button', { name: 'Add skill', exact: true }).click();
+  await expect(bobProfile.locator('#skill-status')).toHaveText('Added bobs v1.');
 
   await bob.setViewportSize(phone);
   await menuItem(bob, 'Personas');
@@ -268,8 +269,9 @@ test('a room skill survives its author leaving', async ({ browser, request, base
     expect((await request.delete(`/api/rooms/${room.id}/invites/${invites[1].id}`, { headers: admin })).status()).toBe(200);
     await expect(bob.locator('#banner')).toHaveText('Your access to this room has ended.');
     await bobProfile.reload();
-    await bobProfile.locator('#skills summary').click();
-    await bobProfile.getByRole('button', { name: 'Remove skill bobs' }).click();
+    await bobProfile.locator('#tab-skills').click();
+    await bobProfile.getByRole('button', { name: 'More actions for bobs' }).click();
+    await bobProfile.getByRole('menuitem', { name: 'Remove' }).click();
     await confirmSheet(bobProfile, 'Remove');
     await expect(bobProfile.locator('#skill-status')).toHaveText('bobs removed.');
     expect((await ask(alice, room.id, 'FAKE_SKILLS without Bob')).trim()).toBe('Skills used: bobs: BOB-v1.');

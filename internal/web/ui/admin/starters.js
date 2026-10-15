@@ -21,7 +21,7 @@ import { size, ago, icon } from './room-panel.js';
  */
 
 /** The picker's groups, in the words of docs/design.md §8 (006-AC8). */
-export const libraries = /** @type {const} */ ([['builtin', 'Built-in'], ['personal', 'Yours'], ['instance', 'Shared']]);
+export const libraries = /** @type {const} */ ([['builtin', 'Built-in'], ['personal', 'Yours'], ['instance', 'Shared with everyone']]);
 
 /**
  * RowMenu is a row's ⋯ (docs/design.md §5, 008-AC13): a popover under its button, its first item
@@ -76,8 +76,8 @@ export function RowMenu({ id, label, items }) {
 export const meta = (st) => html`v${st.version} · by ${st.author}${st.size ? ' · ' + size(st.size) : ''} · ${ago(st.updated_at)}`;
 
 /**
- * StarterList is the profile's view of the library (006-AC1 to 006-AC3): built-ins, its own and
- * the shared ones. Any starter duplicates into "Yours"; its own it shares with everyone or deletes.
+ * StarterList is the profile's view of the library (006-AC1 to 006-AC3): its own, the shared ones and
+ * the built-ins. Any starter duplicates into "Yours"; its own it shares with everyone or deletes.
  * Its own it also edits, which saves the next version (006-AC3).
  * @param {{starters: Starter[], api: import('./room-panel.js').Api, reload: () => void, say: (text: string) => void,
  *   edit?: (st: Starter) => void}} props
@@ -101,7 +101,9 @@ export function StarterList({ starters, api, reload, say, edit }) {
     }
     return out;
   };
-  return html`${libraries.map(([lib, label]) => {
+  // Yours first, then what others share, then the built-ins everyone has (011b-AC14).
+  return html`${['personal', 'instance', 'builtin'].map((lib) => {
+    const label = /** @type {[string, string]} */ (libraries.find(([id]) => id === lib))[1];
     const list = starters.filter((st) => st.library === lib);
     return html`<h3 key=${lib}>${label}</h3>${list.length
       ? html`<ul class="starter-list" id=${'starters-' + lib}>${list.map((st) => html`<li key=${st.id} data-starter=${st.id}>
@@ -109,7 +111,7 @@ export function StarterList({ starters, api, reload, say, edit }) {
             ${st.description && html`<span class="hint">${st.description}</span>`}</div>
           <${RowMenu} id=${'starter-menu-' + st.id} label=${'More actions for ' + st.title} items=${actions(st)}/>
         </li>`)}</ul>`
-      : html`<p class="empty">${lib === 'personal' ? 'None yet. Duplicate one, or save a room as a starter from its settings.' : 'None yet.'}</p>`}`;
+      : html`<p class="empty">${lib === 'personal' ? 'No starters of yours yet. Duplicate one, or save a room as a starter from its settings.' : 'Nobody has shared a starter yet. Anyone can share one of theirs from its More actions menu.'}</p>`}`;
   })}`;
 }
 

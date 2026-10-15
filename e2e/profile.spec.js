@@ -53,7 +53,7 @@ test('profile across rooms and devices', async ({ browser, request }) => {
   await expect(page.locator('#recovery')).toBeHidden();
   await menuItem(page, 'My rooms and profile', 'me');
   await expect(page).toHaveURL('/profile');
-  await expect(page.locator('#rooms li .room-line')).toHaveText(['Room B as Ali', 'Room A as Alice']);
+  await expect(page.locator('#rooms li .room-line')).toHaveText(['Room B', 'Room A as Alice']);
 
   // A browser holding its own profile is warned, and Cancel leaves it as it was.
   const bob = await (await browser.newContext()).newPage();
@@ -62,7 +62,7 @@ test('profile across rooms and devices', async ({ browser, request }) => {
   await expect(bob.locator('#confirm-text')).toContainText('This browser already holds a profile.');
   await bob.getByRole('button', { name: 'Cancel' }).click();
   await expect(bob.locator('#status')).toHaveText('Link not used.');
-  await expect(bob.locator('#rooms li .room-line')).toHaveText(['Room B as Bob']);
+  await expect(bob.locator('#rooms li .room-line')).toHaveText(['Room B']);
   expect(new URL(bob.url()).hash).toBe('');
 
   const other = await (await browser.newContext()).newPage();
@@ -70,7 +70,7 @@ test('profile across rooms and devices', async ({ browser, request }) => {
   await expect(other.locator('#confirm-text')).toHaveText('Only continue if you asked for this link yourself.');
   await other.getByRole('button', { name: 'Sign in to this profile' }).click();
   await expect(other.locator('#status')).toHaveText('Signed in on this device.');
-  await expect(other.locator('#rooms li .room-line')).toHaveText(['Room B as Ali', 'Room A as Alice']);
+  await expect(other.locator('#rooms li .room-line')).toHaveText(['Room B', 'Room A as Alice']);
   await other.getByRole('link', { name: 'Room A' }).click();
   await expect(other.locator('#me')).toHaveText('Alice');
   await other.getByLabel('Message').fill('from the other device');
