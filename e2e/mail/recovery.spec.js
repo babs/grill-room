@@ -80,7 +80,7 @@ test('recover a profile by email from the join page', async ({ browser, request 
   await tab.goto(linkPath(mail.link));
   await tab.getByRole('button', { name: 'Sign in to this profile' }).click();
   await expect(tab.locator('#status')).toHaveText('Signed in as Alice on this device.');
-  await expect(tab.locator('#rooms li .room-line')).toContainText([room.name + ' as Alice']);
+  await expect(tab.locator('#rooms li .room-line')).toContainText([room.name]);
 
   await join.bringToFront();
   await join.evaluate(() => window.dispatchEvent(new Event('focus')));
@@ -106,7 +106,7 @@ test('email section states', async ({ browser, request }) => {
   const room = await newRoom(request, 'States');
   const page = await member(browser, request, room, 'Sam');
   await page.goto('/profile');
-  await expect(page.locator('#email-state')).toHaveText('No email on this profile yet.');
+  await expect(page.locator('#email-state')).toHaveText('No email yet. Add one to sign in on other devices.');
   await expect(page.locator('#profile-anon')).toBeVisible();
   await page.getByLabel('Add an email').fill(first);
   await page.getByRole('button', { name: 'Send me a link' }).click();

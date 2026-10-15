@@ -13,3 +13,4 @@
 | [009](009-room-plugins.md) | Room plugins from git, persona management, note mentions, host transfer | shipped |
 | [010](010-device-stt.md) | On-device transcription (opt-in) | shipped |
 | [011](011-profile-recovery.md) | Profile identity and recovery | shipped |
+| [011b](011b-profile-rework.md) | Profile page rework | in progress |

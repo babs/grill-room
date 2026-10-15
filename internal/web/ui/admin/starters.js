@@ -21,7 +21,7 @@ import { size, ago, icon } from './room-panel.js';
  */
 
 /** The picker's groups, in the words of docs/design.md §8 (006-AC8). */
-export const libraries = /** @type {const} */ ([['builtin', 'Built-in'], ['personal', 'Yours'], ['instance', 'Shared']]);
+export const libraries = /** @type {const} */ ([['builtin', 'Built-in'], ['personal', 'Yours'], ['instance', 'Shared with everyone']]);
 
 /**
  * RowMenu is a row's ⋯ (docs/design.md §5, 008-AC13): a popover under its button, its first item
@@ -109,7 +109,7 @@ export function StarterList({ starters, api, reload, say, edit }) {
             ${st.description && html`<span class="hint">${st.description}</span>`}</div>
           <${RowMenu} id=${'starter-menu-' + st.id} label=${'More actions for ' + st.title} items=${actions(st)}/>
         </li>`)}</ul>`
-      : html`<p class="empty">${lib === 'personal' ? 'None yet. Duplicate one, or save a room as a starter from its settings.' : 'None yet.'}</p>`}`;
+      : html`<p class="empty">${lib === 'personal' ? 'No starters of yours yet. Duplicate one, or save a room as a starter from its settings.' : 'Nobody has shared a starter yet. Anyone can share one of theirs from its More actions menu.'}</p>`}`;
   })}`;
 }
 

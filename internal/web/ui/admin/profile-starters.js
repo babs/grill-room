@@ -15,7 +15,7 @@ function Starters() {
   useEffect(() => { load(); }, []);
   if (!starters) return null;
   return html`<h2 id="starters-title">Room starters</h2>
-    <p class="hint">A starter sets a new room up: its agenda, personas, documents and skills. Rooms keep their own copy.</p>
+    <p class="hint">Set up a new room in one go: agenda, AI personas, documents and skills. Changing a starter later leaves existing rooms alone.</p>
     <p class="said" role="status">${said}</p>
     <${StarterList} starters=${starters} api=${fetchJSON} reload=${load} say=${setSaid} edit=${(/** @type {import('./starters.js').Starter} */ st) => editStarter(st, load, setSaid)}/>`;
 }

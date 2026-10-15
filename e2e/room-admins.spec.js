@@ -218,7 +218,7 @@ test('rename a room, with a name that is markup', async ({ browser, request }) =
     expect(await page.evaluate(() => window.__xss)).toBeUndefined();
   }
   await menuItem(bob, 'My rooms and profile', 'me');
-  await expect(bob.locator('#rooms li .room-line', { hasText: 'as Bob' })).toHaveText(`${evil} as Bob`);
+  await expect(bob.locator('#rooms li .room-line', { hasText: evil })).toHaveText(evil);
   await expect(bob.locator('#rooms img, #rooms script')).toHaveCount(0);
   expect(await bob.evaluate(() => window.__xss)).toBeUndefined();
 });
@@ -233,9 +233,9 @@ test('a room skill survives its author leaving', async ({ browser, request, base
   const bobProfile = await bob.context().newPage();
   await bobProfile.goto('/profile');
   await bobProfile.locator('#skill-file').setInputFiles(skillZip('bobs', 'BOB-v1'));
-  await bobProfile.locator('#skills summary').click();
-  await bobProfile.getByRole('button', { name: 'Upload', exact: true }).click();
-  await expect(bobProfile.locator('#skill-status')).toHaveText('Uploaded bobs v1.');
+  await bobProfile.locator('#skills > summary').click();
+  await bobProfile.getByRole('button', { name: 'Add skill', exact: true }).click();
+  await expect(bobProfile.locator('#skill-status')).toHaveText('Added bobs v1.');
 
   await bob.setViewportSize(phone);
   await menuItem(bob, 'Personas');

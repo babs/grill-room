@@ -13,7 +13,7 @@ test('magic links: bind, sign in elsewhere, single use', async ({ browser, reque
     profile = (await (await laptop.request.get('/api/profile')).json()).profile.id;
 
     await laptop.goto('/profile');
-    await expect(laptop.locator('#email-state')).toHaveText('No email on this profile yet.');
+    await expect(laptop.locator('#email-state')).toHaveText('No email yet. Add one to sign in on other devices.');
     await laptop.getByLabel('Add an email').fill(email);
     await laptop.getByRole('button', { name: 'Send me a link' }).click();
     await expect(laptop.locator('#email .link-sent h3')).toHaveText('Link sent to ' + email);
@@ -39,7 +39,7 @@ test('magic links: bind, sign in elsewhere, single use', async ({ browser, reque
     // Sign in on a phone with the bound address.
     const phone = await (await newContext(browser)).newPage();
     await phone.goto('/profile');
-    await phone.getByLabel('Or sign in with the email').fill(email);
+    await phone.getByLabel('Sign in with your email').fill(email);
     await phone.getByRole('button', { name: 'Email me a sign-in link' }).click();
     await expect(phone.locator('#signed-out .link-sent h3')).toHaveText('If a profile uses this address, a link is on its way');
     await expect(phone.locator('#signed-out .link-sent')).toContainText(`The link works once, within ${durationText(magicLinkTTL)}.`);
@@ -77,7 +77,7 @@ test('an expired magic link is refused', async ({ browser, request }) => {
     { timeout: (magicLinkTTL + 5) * 1000 }).toBeUndefined();
   await page.goto(expired.link);
   await expect(page.locator('#status')).toHaveText('This link has expired.');
-  await expect(page.locator('#email-state')).toHaveText('No email on this profile yet.');
+  await expect(page.locator('#email-state')).toHaveText('No email yet. Add one to sign in on other devices.');
   await page.getByRole('button', { name: 'Send a new link' }).click();
   await expect(page.locator('#bind-email')).toBeFocused();
 });

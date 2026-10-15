@@ -207,7 +207,7 @@ test('save a room as a starter, share it, create a room from it', async ({ brows
 
   await page.getByRole('button', { name: 'New room' }).click();
   await page.getByLabel('Search starters').fill(me);
-  await page.getByRole('button', { name: 'Shared: ' + title }).click();
+  await page.getByRole('button', { name: 'Shared with everyone: ' + title }).click();
   await expect(page.locator('#starter-preview .starter-personas li')).toHaveText([/Grill/, /Secretary/]);
   await page.getByRole('button', { name: 'Use this starter' }).click();
   await expect(page.getByRole('button', { name: 'Create room' })).toBeDisabled();

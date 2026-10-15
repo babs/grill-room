@@ -32,7 +32,6 @@
   <span id="who" class="muted"></span>
 </header>
 <main class="home-main">
-  <h1 class="sr-only">Your profile</h1>
   <p id="status" role="status"></p>
   <p id="next" hidden><button type="button" id="next-step" class="btn-secondary"></button></p>
   <section id="confirm" class="card" hidden>
@@ -43,47 +42,55 @@
     </div>
   </section>
   <section id="signed-in" hidden>
+    <h1 class="page-title">Your profile</h1>
     <div class="list-head">
-      <h2>Your rooms</h2>
+      <h2>Rooms</h2>
       <button type="button" id="room-new" class="btn-primary">+ New room</button>
     </div>
     <ul id="rooms" class="room-cards"></ul>
     <section id="starters" aria-labelledby="starters-title"></section>
-    <h2>This profile</h2>
+    <h2>Account</h2>
     <dl class="profile-facts">
       <div><dt>Name</dt><dd><span id="profile-name"></span>
         <a id="profile-anon" class="anon-mark" href="#email" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
-          Profile without email: add one to find it on another device</a></dd></div>
+          No email yet</a></dd></div>
       <div id="email" hidden><dt>Email</dt><dd><span id="email-state"></span>
         <button type="button" id="email-change" class="btn-secondary" hidden>Change</button>
         <form id="bind" class="row" hidden>
           <label for="bind-email"><span id="bind-label">Add an email</span>
             <input id="bind-email" type="email" maxlength="254" autocomplete="email" required></label>
-          <button type="submit">Send me a link</button>
+          <button type="submit" class="btn-secondary">Send me a link</button>
         </form></dd></div>
-      <div><dt>Use on another device</dt><dd id="device"></dd></div>
+      <div><dt>Other devices</dt><dd id="device"></dd></div>
     </dl>
     <details id="skills">
-      <summary>Skills (for advanced users)</summary>
-      <p class="hint">A skill is a Claude Code skill folder: a SKILL.md with a name and a description, and its files. Upload it again to publish its next version; rooms keep the version they turned on until they take the new one.</p>
-      <ul id="skill-list" class="rooms"></ul>
+      <summary>Skills</summary>
+      <p class="hint">Skills give your AI personas extra abilities. Add one as a .zip. Adding it again makes a new version; rooms keep theirs until they update.</p>
+      <details class="how">
+        <summary>How do I make one?</summary>
+        <p class="hint">A skill is a Claude Code skill folder: a SKILL.md that starts with a name and a description, and the files it uses. Zip the folder.</p>
+      </details>
+      <ul id="skill-list" class="rows"></ul>
       <form id="skill-upload" class="stack">
-        <label for="skill-file">Upload a skill folder as a zip</label>
-        <input id="skill-file" type="file" accept=".zip,application/zip" required>
-        <label for="skill-scope">Offer it</label>
+        <span class="field-label" id="skill-file-label">Skill file (.zip)</span>
+        <span class="file-pick"><button type="button" id="skill-pick" class="btn-secondary" aria-describedby="skill-file-label" data-icon="clip">Choose a file</button>
+          <span id="skill-file-name" class="hint">No file chosen</span>
+          <input id="skill-file" type="file" accept=".zip,application/zip" hidden></span>
+        <label for="skill-scope">Who can use it</label>
         <select id="skill-scope">
-          <option value="personal">Only in my rooms (personal)</option>
-          <option value="shared">In every room (shared library)</option>
+          <option value="personal">Only my rooms</option>
+          <option value="shared">Everyone on this server</option>
         </select>
-        <button type="submit">Upload</button>
+        <button type="submit" class="btn-secondary">Add skill</button>
       </form>
       <p id="skill-status" role="status"></p>
     </details>
   </section>
-  <section id="signed-out" class="card" hidden>
-    <p>This browser holds no profile. Join a room from an invite link, or open your recovery link here.</p>
+  <section id="signed-out" class="card join-card" hidden>
+    <h1>Your profile</h1>
+    <p id="signed-out-text"></p>
     <form id="signin" class="stack" hidden>
-      <label for="signin-email">Or sign in with the email bound to your profile</label>
+      <label for="signin-email">Sign in with your email</label>
       <input id="signin-email" type="email" maxlength="254" autocomplete="email" required>
       <button type="submit">Email me a sign-in link</button>
     </form>

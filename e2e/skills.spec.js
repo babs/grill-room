@@ -5,11 +5,11 @@ import { adminToken } from './playwright.config.js';
 const admin = { Authorization: `Bearer ${adminToken}` };
 
 async function uploadSkill(page, zip, scope, status) {
-  // Skills fold under "Skills (for advanced users)" on the profile page (005-AC41).
+  // Skills fold under "Skills" on the profile page (005-AC41).
   await page.locator('#skills').evaluate((d) => { d.open = true; });
   await page.locator('#skill-file').setInputFiles(zip);
   await page.locator('#skill-scope').selectOption(scope);
-  await page.getByRole('button', { name: 'Upload', exact: true }).click();
+  await page.getByRole('button', { name: 'Add skill', exact: true }).click();
   await expect(page.locator('#skill-status')).toHaveText(status);
 }
 
@@ -30,12 +30,12 @@ test('skills: upload, disclaimer once, pinned through an update', async ({ brows
   const aliceProfile = await alice.context().newPage();
   await aliceProfile.goto('/profile');
   await uploadSkill(aliceProfile, skillZip('broken', 'X', false), 'personal', /SKILL.md must start with a --- frontmatter block/);
-  await uploadSkill(aliceProfile, skillZip('stamp', 'STAMP-v1'), 'personal', 'Uploaded stamp v1.');
-  await expect(aliceProfile.locator('#skill-list li')).toHaveText(['stamp v1 · personal · Prints STAMP-v1. Remove']);
+  await uploadSkill(aliceProfile, skillZip('stamp', 'STAMP-v1'), 'personal', 'Added stamp v1.');
+  await expect(aliceProfile.locator('#skill-list li')).toHaveText(['stamp v1 · Only my rooms · Prints STAMP-v1. Remove']);
   const bobProfile = await bob.context().newPage();
   await bobProfile.goto('/profile');
-  await uploadSkill(bobProfile, skillZip(pdf, 'PDF-v1'), 'shared', `Uploaded ${pdf} v1.`);
-  await uploadSkill(bobProfile, skillZip('bobs', 'BOB'), 'personal', 'Uploaded bobs v1.');
+  await uploadSkill(bobProfile, skillZip(pdf, 'PDF-v1'), 'shared', `Added ${pdf} v1.`);
+  await uploadSkill(bobProfile, skillZip('bobs', 'BOB'), 'personal', 'Added bobs v1.');
 
   const grill = await openPanel(alice);
   const pick = grill.getByLabel('Skill to turn on for Grill');
@@ -78,7 +78,7 @@ test('skills: upload, disclaimer once, pinned through an update', async ({ brows
   try {
     await pairDaemon(alice, daemon);
     expect((await ask(alice, room.id, 'FAKE_SKILLS first')).trim()).toBe(`Skills used: ${pdf}: PDF-v1; stamp: STAMP-v1.`);
-    await uploadSkill(aliceProfile, skillZip('stamp', 'STAMP-v2'), 'personal', 'Uploaded stamp v2.');
+    await uploadSkill(aliceProfile, skillZip('stamp', 'STAMP-v2'), 'personal', 'Added stamp v2.');
     const panel = await openPanel(alice);
     const update = panel.getByRole('button', { name: 'Update skill stamp of Grill to version 2' });
     await expect(update).toBeVisible();
@@ -112,8 +112,8 @@ test('skills: upload, disclaimer once, pinned through an update', async ({ brows
   // The profile page fits a phone too.
   await aliceProfile.setViewportSize({ width: 390, height: 844 });
   await aliceProfile.reload();
-  await expect(aliceProfile.locator('#skill-list li')).toHaveText([/^stamp v2 · personal/]);
+  await expect(aliceProfile.locator('#skill-list li')).toHaveText([/^stamp v2 · Only my rooms/]);
   await aliceProfile.locator('#skills summary').click();
-  await expect(aliceProfile.getByRole('button', { name: 'Upload', exact: true })).toBeVisible();
+  await expect(aliceProfile.getByRole('button', { name: 'Add skill', exact: true })).toBeVisible();
   expect(await aliceProfile.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });

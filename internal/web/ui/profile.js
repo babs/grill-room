@@ -11,13 +11,21 @@ async function post(url, body) {
 
 // ttl is the emailed link's lifetime in seconds, as the server's mail words it.
 let ttl = 0;
-function render({ email_enabled: emailEnabled, profile, magic_link_ttl_s: linkTTL }) {
+let emailEnabled = false;
+function render({ email_enabled: enabled, profile, magic_link_ttl_s: linkTTL }) {
   ttl = linkTTL || 0;
+  emailEnabled = !!enabled;
   $('signed-in').hidden = !profile;
   $('signed-out').hidden = !!profile;
   $('signin').hidden = !emailEnabled;
+  $('signed-out-text').textContent = 'You\'re not signed in on this browser. Open an invite link to join a room, or '
+    + (emailEnabled ? 'sign in below.' : 'open your recovery link here.');
   if (!profile) return;
-  // Each room is a card: its name, your name there, its people and last activity (005-AC41).
+  // The name the profile chose in a room (005-AC1), else the one it last joined with.
+  const name = profile.name || (profile.rooms[0] || {}).name || '';
+  // Each room is a card: its name, its people and last activity (005-AC41); the admin badge leads
+  // the meta line, where a long name cannot run under it, and your name there shows only when it
+  // differs from the profile's.
   $('rooms').replaceChildren(...profile.rooms.map((r) => {
     const li = document.createElement('li');
     li.className = 'card';
@@ -26,22 +34,23 @@ function render({ email_enabled: emailEnabled, profile, magic_link_ttl_s: linkTT
     const a = document.createElement('a');
     a.href = '/r/' + encodeURIComponent(r.room_id);
     a.textContent = r.room_name;
-    line.append(a, ' as ' + r.name);
+    line.append(a);
+    if (r.name !== name) line.append(' as ' + r.name);
     const meta = document.createElement('p');
     meta.className = 'hint';
+    if (r.admin) {
+      const badge = document.createElement('span');
+      badge.className = 'badge role';
+      badge.textContent = 'Admin';
+      badge.dataset.tip = 'You are a room admin here';
+      meta.append(badge, ' · ');
+    }
     const when = document.createElement('time');
     when.dateTime = r.last_activity;
     when.dataset.tip = grillDate(r.last_activity);
     when.textContent = ago(r.last_activity);
     meta.append((r.people === 1 ? '1 person' : r.people + ' people') + ' · active ', when);
     li.append(line, meta);
-    if (r.admin) {
-      const badge = document.createElement('span');
-      badge.className = 'badge role';
-      badge.textContent = 'admin';
-      badge.dataset.tip = 'You are a room admin here';
-      li.append(badge);
-    }
     return li;
   }));
   if (!profile.rooms.length) {
@@ -50,10 +59,8 @@ function render({ email_enabled: emailEnabled, profile, magic_link_ttl_s: linkTT
     empty.textContent = 'No room yet. Create one, or open an invite link.';
     $('rooms').append(empty);
   }
-  // The name the profile chose in a room (005-AC1), else the one it last joined with.
-  const name = profile.name || (profile.rooms[0] || {}).name || '';
   $('who').textContent = name;
-  $('profile-name').textContent = name || 'Not set: it comes from the name you join rooms with.';
+  $('profile-name').textContent = name || 'Set when you join a room.';
   $('email').hidden = !emailEnabled;
   $('profile-anon').hidden = !emailEnabled || !!profile.email;
   shown = profile;
@@ -63,10 +70,15 @@ function render({ email_enabled: emailEnabled, profile, magic_link_ttl_s: linkTT
   pendingExpires = profile.pending_ttl_s != null ? at + profile.pending_ttl_s * 1000 : 0;
   pendingSent = profile.pending_age_s != null ? at - profile.pending_age_s * 1000 : 0;
   showEmail(false);
-  // The recovery link lives in the tab that joined, until saved: the server keeps only its hash.
-  const link = sessionStorage.getItem('grill_room_recovery');
-  $('device').textContent = link ? 'Open your rooms, then your initials › "Use on another device" to copy the link.'
-    : emailEnabled ? 'Add an email above, then sign in with it on the other device.' : 'Open your recovery link on the other device.';
+}
+
+// deviceText says how to reach this profile from another device, from the Email state. The
+// recovery link lives in the tab that joined, until saved: the server keeps only its hash.
+function deviceText(email) {
+  if (emailEnabled && email) return 'Sign in with ' + email + ' on the other device.';
+  if (sessionStorage.getItem('grill_room_recovery')) return 'Open your rooms, then your initials › "Use on another device" to copy the link.';
+  if (!emailEnabled) return 'Open your recovery link on the other device.';
+  return pending ? 'Confirm the link we sent, then sign in on the other device.' : 'Add an email, then sign in with it on the other device.';
 }
 
 // The Email section's states (011-AC21): none, a link pending at an address (the sent panel,
@@ -79,7 +91,8 @@ let pendingExpires = 0;
 let pendingSent = 0;
 function showEmail(editing) {
   const email = shown ? shown.email || '' : '';
-  $('email-state').textContent = email || (pending && !editing ? '' : 'No email on this profile yet.');
+  $('email-state').textContent = email || (pending && !editing ? '' : 'No email yet. Add one to sign in on other devices.');
+  $('device').textContent = deviceText(email);
   if (pending && !editing) {
     const rest = pendingExpires ? Math.max(1, Math.ceil((pendingExpires - Date.now()) / 1000)) : ttl;
     // Whole minutes, as the mail words it, unless under one.
@@ -125,7 +138,7 @@ async function loadSkills() {
     li.dataset.skill = k.name;
     const name = document.createElement('strong');
     name.textContent = k.name;
-    li.append(name, ' v' + k.version + ' · ' + (k.shared ? 'shared' : 'personal') + ' · ' + k.description);
+    li.append(name, ' v' + k.version + ' · ' + (k.shared ? 'Everyone on this server' : 'Only my rooms') + ' · ' + k.description);
     if (!k.shared) {
       const b = document.createElement('button');
       b.type = 'button';
@@ -141,21 +154,47 @@ async function loadSkills() {
     }
     return li;
   }));
-  if (!skills.length) $('skill-list').textContent = 'None yet.';
+  if (!skills.length) {
+    const empty = document.createElement('li');
+    empty.className = 'empty';
+    const p = document.createElement('p');
+    p.textContent = 'No skills yet. Add a .zip to give your AI personas a new ability.';
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'btn-secondary';
+    add.textContent = 'Add a skill';
+    add.addEventListener('click', () => $('skill-file').click());
+    empty.append(p, add);
+    $('skill-list').append(empty);
+  }
 }
+
+// The file input stays hidden: the native one cannot take the kit's button style.
+$('skill-pick').addEventListener('click', () => $('skill-file').click());
+$('skill-file').addEventListener('change', () => {
+  const file = $('skill-file').files[0];
+  $('skill-file-name').textContent = file ? file.name : 'No file chosen';
+});
 
 $('skill-upload').addEventListener('submit', async (e) => {
   e.preventDefault();
   const file = $('skill-file').files[0];
-  if (!file) return;
-  const button = $('skill-upload').querySelector('button');
+  if (!file) {
+    $('skill-status').textContent = 'Choose a .zip first.';
+    $('skill-pick').focus();
+    return;
+  }
+  const button = $('skill-upload').querySelector('button[type=submit]');
   button.disabled = true;
   try {
     const res = await fetch('/api/profile/skills?scope=' + $('skill-scope').value,
       { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: file });
     const data = await res.json().catch(() => ({}));
-    $('skill-status').textContent = res.ok ? 'Uploaded ' + data.name + ' v' + data.version + '.' : data.error || 'HTTP ' + res.status;
-    if (res.ok) $('skill-upload').reset();
+    $('skill-status').textContent = res.ok ? 'Added ' + data.name + ' v' + data.version + '.' : data.error || 'HTTP ' + res.status;
+    if (res.ok) {
+      $('skill-upload').reset();
+      $('skill-file-name').textContent = 'No file chosen';
+    }
     await loadSkills();
   } catch {
     $('skill-status').textContent = 'Network error, try again.';
@@ -253,6 +292,7 @@ const bindLink = window.grillLinkForm({ form: $('bind'), url: '/api/profile/emai
   onSent: (email) => {
     pending = email;
     pendingExpires = pendingSent = 0;
+    $('device').textContent = deviceText(shown && shown.email);
     $('email-change').hidden = true;
     if (!(shown && shown.email)) $('email-state').textContent = '';
   },

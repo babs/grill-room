@@ -50,7 +50,7 @@ test('admin recovery link', async ({ browser, request }) => {
   await expect(fresh.locator('#confirm-text')).toHaveText('Only continue if you asked for this link yourself.');
   await fresh.getByRole('button', { name: 'Sign in to this profile' }).click();
   await expect(fresh.locator('#status')).toHaveText('Signed in on this device.');
-  await expect(fresh.locator('#rooms li .room-line')).toHaveText([`${room.name} as ${name}`]);
+  await expect(fresh.locator('#rooms li .room-line')).toHaveText([room.name]);
   expect((await (await fresh.request.get('/api/profile')).json()).profile.id)
     .toBe((await (await rita.request.get('/api/profile')).json()).profile.id);
 

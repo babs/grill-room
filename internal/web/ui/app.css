@@ -41,6 +41,19 @@ body.join .hint { text-align: left; }
 /* Profile: a home page (005-AC41). */
 .home-main { width: 100%; max-width: 64rem; margin: 0 auto; padding: var(--sp-4); }
 .home-main h2 { font-size: var(--fs-lg); margin: var(--sp-6) 0 var(--sp-3); }
+.home-main .page-title { margin: 0; font-size: var(--fs-xl); }
+/* Sub-headings sit under their section's h2 (006 starters: Built-in, Yours, Shared). */
+#starters h3 { margin: var(--sp-4) 0 var(--sp-2); font-size: var(--fs-md); font-weight: 600; }
+.home-main .hint { max-width: 70ch; }
+/* An empty status line holds no room: the title starts right under the header. */
+.home-main > #status:empty { display: none; }
+.home-main .join-card { margin: var(--sp-6) auto; }
+.home-main .join-card p { text-align: left; }
+.file-pick { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); }
+.file-pick .hint { margin: 0; overflow-wrap: anywhere; }
+.field-label { font-size: var(--fs-sm); font-weight: 600; }
+#skills .how summary { font-size: var(--fs-sm); }
+#skill-list .empty { display: grid; justify-items: center; }
 .list-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
 .list-head h2 { margin: var(--sp-5) 0 var(--sp-3); }
 .room-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: var(--sp-3); list-style: none; margin: 0; padding: 0; }
@@ -48,7 +61,6 @@ body.join .hint { text-align: left; }
 .room-cards .card p { margin: 0 0 var(--sp-1); }
 .room-line { font-weight: 600; overflow-wrap: anywhere; }
 .room-line a { color: var(--text); }
-.room-cards .badge { position: absolute; top: var(--sp-3); right: var(--sp-3); }
 .profile-facts { display: grid; gap: var(--sp-3); margin: 0; }
 .profile-facts dt { font-size: var(--fs-sm); color: var(--text-muted); }
 .profile-facts dd { margin: 0; }
