@@ -109,7 +109,7 @@ e2e-voice:
 DEVICE_STT_MODEL_DIR ?= $(CURDIR)/.device-stt-models
 e2e-device-voice: build e2e-build
 	bin/$(APP_NAME) models fetch --dir '$(DEVICE_STT_MODEL_DIR)'
-	cd e2e && pnpm install --frozen-lockfile && GRILL_ROOM_E2E_MODEL_DIR='$(DEVICE_STT_MODEL_DIR)' device-voice/run.sh
+	cd e2e && pnpm install --frozen-lockfile && GRILL_ROOM_E2E_MODEL_DIR='$(DEVICE_STT_MODEL_DIR)' device-voice/run.sh $(DEVICE_VOICE_ARGS)
 
 # Agent turns with real daemons against the compose stack: run `make dev-up sandbox-image` first.
 # Spends four to eight real Claude requests (haiku) with this machine's Claude Code login, plus at

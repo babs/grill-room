@@ -111,6 +111,8 @@ function resumedAt(room, since) {
 // device model.
 test('the voice hands over between the device and the server', async ({ request, baseURL }) => {
   const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Device voice' } })).json();
+  // The counters live as long as the server, which serves every repeat of this test.
+  const [lines0, deduped0] = await serverLines();
   const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
   // A private context keeps Cache Storage in memory and refuses the 383 MB encoder: a profile on disk,
   // outside test-results/, which a failed CI run uploads.
@@ -190,7 +192,7 @@ test('the voice hands over between the device and the server', async ({ request,
     await say(1);
     await expect.poll(() => lineFor(1, serverTip), { timeout: 60_000 }).toMatchObject({ sender: 'Alice' });
     // The worker posts in order: had it heard sentence 0, that line would be stored or deduped already.
-    expect(await serverLines()).toEqual([1, 0]);
+    expect(await serverLines()).toEqual([lines0 + 1, deduped0]);
 
     // c. Silent stop: the device's beats and lines stop reaching the server, the flag lapses.
     await deviceOn(120_000);
