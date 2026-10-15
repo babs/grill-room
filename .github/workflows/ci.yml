@@ -199,6 +199,59 @@ jobs:
           path: e2e/test-results/
           retention-days: 7
 
+  # 010: the voice handover between a participant's device and the STT worker, with LiveKit, the
+  # worker image, the real device model and Chrome on one runner (make e2e-device-voice).
+  device-voice:
+    # After stt-image, so the worker image comes from a warm layer cache.
+    needs: [stt-image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DEVICE_STT_MODEL_DIR: ${{ github.workspace }}/.device-stt-models
+      # 4 vCPUs: two for the worker, the rest for Chrome's model, LiveKit and the server.
+      DEVICE_VOICE_STT_CPUS: "2"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - id: build
+        run: echo "jobs=$(nproc)" >> "$GITHUB_OUTPUT"
+      # The stt-image job's layer cache: a warm run only loads the image.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: stt
+          tags: grill-stt:local
+          load: true
+          build-args: |
+            BUILD_JOBS=${{ steps.build.outputs.jobs }}
+          cache-from: type=gha,scope=stt
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - id: device-model
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .device-stt-models
+          key: device-stt-${{ hashFiles('internal/devicestt/manifest.go') }}
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 11.20.0
+          package_json_file: e2e/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: e2e/pnpm-lock.yaml
+      - run: make e2e-device-voice
+      # The worker's log (test-results/device-voice/stt.log) and the Playwright results.
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: device-voice-results
+          path: e2e/test-results/
+          retention-days: 7
+
   # Browser tests against fresh servers, agent turns with the fake claude in Docker, magic links
   # against a throwaway mailpit: no Claude request.
   e2e:
