@@ -19,6 +19,11 @@ from .vad import SR, Audio
 
 log = structlog.get_logger()
 
+# (room, participant id) pairs the room server says a device transcribes (spec 010, AC14).
+Flags = frozenset[tuple[str, int]]
+# Below the room's 3 s flag lapse: a hung beat must not keep a lapsed flag past it (010-AC15).
+HEARTBEAT_TIMEOUT_S = 2.0
+
 QUEUE_DEPTH = Gauge("grill_stt_queue_depth", "Utterances waiting for an engine.")
 QUEUE_WAIT = Histogram(
     "grill_stt_queue_wait_seconds",
@@ -201,6 +206,7 @@ class RoomAPI:
 
     def __init__(self, client: httpx.AsyncClient) -> None:
         self._client = client
+        self._bad_device_logged = False
 
     async def post_line(self, room: str, participant_id: int, text: str) -> bool:
         """Stores one line; False when the room refused it or could not be reached."""
@@ -218,6 +224,10 @@ class RoomAPI:
                 log.warning("line_post_failed", room=room, error=str(e))
                 return False
             if r.status_code == 201:
+                return True
+            if r.status_code == 200:
+                # 010-AC16: the room kept the device's copy of this line and dropped ours.
+                log.info("line_deduped", room=room, participant=participant_id)
                 return True
             # 404: the speaker's access was revoked meanwhile; the line goes with it.
             log.warning("line_refused", room=room, participant=participant_id, status=r.status_code)
@@ -252,8 +262,15 @@ class RoomAPI:
         return None
 
     async def heartbeat(
-        self, worker: str, rooms: list[str], voices: dict[str, list[int]], engine: str, glossary: bool
-    ) -> bool:
+        self,
+        worker: str,
+        rooms: list[str],
+        voices: dict[str, list[int]],
+        engine: str,
+        glossary: bool,
+        timeout: float = HEARTBEAT_TIMEOUT_S,
+    ) -> Flags:
+        """The participants a device transcribes; a failed or late beat flags nobody."""
         try:
             # engine and glossary drive the audio menu's credit and the glossary tab (spec 007, AC13-14).
             body = {
@@ -263,14 +280,28 @@ class RoomAPI:
                 "engine": engine,
                 "glossary": glossary,
             }
-            r = await self._client.post("/api/stt/heartbeat", json=body)
-        except httpx.HTTPError as e:
+            # httpx times each read alone: a body that trickles in would outlive the room's flag lapse.
+            async with asyncio.timeout(timeout):
+                r = await self._client.post("/api/stt/heartbeat", json=body)
+        except (httpx.HTTPError, TimeoutError) as e:
             log.warning("heartbeat_failed", error=str(e))
-            return False
-        if r.status_code != 204:
+            return frozenset()
+        if r.status_code == 204:  # a server from before spec 010 flags nobody
+            return frozenset()
+        if r.status_code != 200:
             log.warning("heartbeat_refused", status=r.status_code)
-            return False
-        return True
+            return frozenset()
+        try:
+            flags = frozenset((room, pid) for room, pids in r.json()["device"].items() for pid in pids)
+            if not all(type(pid) is int for _, pid in flags):
+                raise TypeError("participant id is not an int")
+            self._bad_device_logged = False
+            return flags
+        except (ValueError, KeyError, TypeError, AttributeError) as e:
+            if not self._bad_device_logged:
+                self._bad_device_logged = True
+                log.warning("heartbeat_device_unreadable", error=str(e))
+            return frozenset()
 
 
 class Pipeline:

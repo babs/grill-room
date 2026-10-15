@@ -28,7 +28,7 @@ func TestInstanceHealth(t *testing.T) {
 	ve.srv.opts.Version, ve.srv.opts.DBPath, ve.srv.opts.SendMail = "v1.2.3", ve.dbPath, func(context.Context, string, string, string) error { return nil }
 	room, alice := ve.member(t)
 	ve.uploadDoc(t, room.ID, alice.Token, "plan.md", md(5000))
-	if code, _ := ve.do(t, "POST", "/api/stt/heartbeat", sttToken, map[string]any{"worker": "w1", "rooms": []string{room.ID}}); code != http.StatusNoContent {
+	if code, _ := ve.do(t, "POST", "/api/stt/heartbeat", sttToken, map[string]any{"worker": "w1", "rooms": []string{room.ID}}); code != http.StatusOK {
 		t.Fatal("heartbeat")
 	}
 	for i, v := range []string{"v0.0.3", "v0.0.3", "v0.0.4"} {

@@ -26,6 +26,8 @@
   "htm/preact": "/static/esm/htm-preact.js"
 }}</script>
 <script type="module" src="/static/admin/room-admin.js"></script>
+<script type="module" src="/static/stt/device.js"></script>
+<script type="module" src="/static/diagnostics.js"></script>
 </head>
 <body class="room">
 <header class="app-header room-header">
@@ -54,6 +56,8 @@
   <p id="stt-status" class="menu-head" role="status"></p>
   <button type="button" id="voice-deaf" aria-pressed="false" data-tip="Stop hearing the others">Mute the room</button>
   <label id="voice-keepmic" data-tip="Keep your voice going out, and written down, while the room is muted: useful when you share a physical room"><input type="checkbox"> Keep my mic on while the room is muted</label>
+  <label id="voice-device" data-tip="Your browser writes your voice down instead of the server. It downloads the voice-to-text model once, then tests this device." hidden><input type="checkbox"> Transcribe on this device</label>
+  <p id="device-stt-status" class="hint" role="status" tabindex="-1"></p>
   <button type="button" id="voice-leave">Leave audio</button>
   <p id="stt-credit" class="hint" hidden>Voice-to-text by <a href="https://huggingface.co/moondream/parakeet-ultra" target="_blank" rel="noopener">parakeet-ultra</a>
     (Moondream, from NVIDIA Parakeet TDT 0.6B v3),
@@ -64,6 +68,7 @@
   <button type="button" id="rename-open" data-icon="rename">Change my name</button>
   <button type="button" id="notify-open" data-icon="bell">Notifications</button>
   <button type="button" id="recovery-open" data-icon="device">Use on another device</button>
+  <button type="button" id="diag-open" data-icon="pulse">Diagnostics</button>
   <a href="/profile" data-icon="profile">My rooms and profile</a>
 </div>
 <div id="more-menu" class="menu" popover>
@@ -194,6 +199,22 @@
   <p class="hint">Anyone holding this link can join and read the room.</p>
   <p id="invite-status" class="said error" role="status"></p>
   <p><a href="#manage/invites" id="invite-manage">More links and revoking in Room settings › Invites</a></p>
+</dialog>
+<dialog id="diag" class="sheet full" aria-labelledby="diag-title">
+  <div class="sheet-head">
+    <h2 id="diag-title">Diagnostics</h2>
+    <button type="button" class="btn-icon btn-ghost close" aria-label="Close" data-icon="close"></button>
+  </div>
+  <section aria-labelledby="diag-stt-title">
+    <h3 id="diag-stt-title">Transcription</h3>
+    <dl id="diag-stt" class="facts"></dl>
+  </section>
+  <section aria-labelledby="diag-net-title">
+    <h3 id="diag-net-title">Connection</h3>
+    <dl id="diag-net" class="facts"></dl>
+  </section>
+  <p id="diag-said" class="said" role="status"></p>
+  <div class="actions"><button type="button" id="diag-copy" class="btn-secondary">Copy diagnostics</button></div>
 </dialog>
 <dialog id="notify" class="sheet" aria-labelledby="notify-title">
   <div class="sheet-head">

@@ -30,8 +30,15 @@ export async function roomWith(browser, request, names) {
 // glossary and Room settings has no glossary tab (007-AC14).
 export async function playSTT(page, roomID, st) {
   const body = { available: true, listening: false, transcribed: [], engines: [], glossary: false, ...st };
+  await playEvents(page, roomID, [['stt', body]]);
+}
+
+// playEvents replaces the page's event stream with these [event, data] pairs, a message for an
+// empty event name, and reloads.
+export async function playEvents(page, roomID, events) {
   await page.route(`**/api/rooms/${roomID}/events*`, (r) => r.fulfill({
-    status: 200, headers: { 'Content-Type': 'text/event-stream' }, body: `event: stt\ndata: ${JSON.stringify(body)}\n\n`,
+    status: 200, headers: { 'Content-Type': 'text/event-stream' },
+    body: events.map(([ev, data]) => (ev ? `event: ${ev}\n` : '') + `data: ${JSON.stringify(data)}\n\n`).join(''),
   }));
   await settled(page, () => page.reload());
 }

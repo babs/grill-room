@@ -7,7 +7,9 @@ export const gitPort = String(Number(port) + 2);
 
 export const adminToken = 'e2e-admin-token';
 
-const otherStacks = ['voice/**', 'agent-live/**', 'install/**', 'lab/**', 'mail/**', 'supervisor/**', 'crossinstance/**', 'scenario/**', 'push/**'];
+const otherStacks = ['voice/**', 'agent-live/**', 'install/**', 'lab/**', 'mail/**', 'supervisor/**', 'crossinstance/**', 'scenario/**', 'push/**', 'device-voice/**'];
+
+const deviceSpec = 'device-stt.spec.js';
 
 // The specs whose daemons run agent turns, each in a Docker sandbox.
 const sandboxSpecs = ['admin', 'agent', 'approvals', 'concurrency', 'egress', 'export-import', 'handoff', 'mentions', 'personas',
@@ -17,15 +19,18 @@ export default defineConfig({
   testDir: '.',
   // voice/, agent-live/ and install/ run against the compose stack, lab/ against the lab
   // deployment, supervisor/ and crossinstance/ against both, mail/ against its own server and
-  // mailpit, scenario/ wherever grill-scenario points it, push/ against the lab, each with its own
-  // config.
+  // mailpit, scenario/ wherever grill-scenario points it, push/ against the lab, device-voice/ against
+  // LiveKit and the STT worker in Docker, each with its own config.
   testIgnore: otherStacks,
   timeout: 30_000,
   // Chrome fails the requests it is opening when the host's interfaces change, as Docker adds or
   // removes a sandbox's networks. The specs that start sandboxes run one at a time, and `make e2e`
   // runs them apart from the others (two invocations), so no other spec runs beside them.
+  // device-stt.spec.js loads the real model, 430 MB into one tab: it runs alone too, never beside
+  // other specs' browsers.
   projects: [
-    { name: 'parallel', testIgnore: [...otherStacks, ...sandboxSpecs], outputDir: 'test-results/parallel' },
+    { name: 'parallel', testIgnore: [...otherStacks, ...sandboxSpecs, deviceSpec], outputDir: 'test-results/parallel' },
+    { name: 'device', testMatch: deviceSpec, testIgnore: otherStacks, workers: 1, outputDir: 'test-results/device' },
     { name: 'sandbox', testMatch: sandboxSpecs, testIgnore: otherStacks, workers: 1, outputDir: 'test-results/sandbox' },
   ],
   // The installed Chrome: no browser download.
@@ -55,6 +60,8 @@ export default defineConfig({
       GRILL_ROOM_TEST_GIT_ALLOW_LOOPBACK: '1',
       GRILL_ROOM_TEST_GIT_CA: 'test-results/git-ca.pem',
       LOG_FORMAT: 'json',
+      // The real model files, when there: device-stt.spec.js self-tests on them (010-AC2).
+      ...(process.env.GRILL_ROOM_E2E_MODEL_DIR && { GRILL_ROOM_DEVICE_STT_MODEL_DIR: process.env.GRILL_ROOM_E2E_MODEL_DIR }),
     },
   }],
 });

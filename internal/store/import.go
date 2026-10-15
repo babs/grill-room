@@ -579,7 +579,22 @@ func checkMessage(m *xMessage) error {
 	if err := textIs(what, maxImportName, false, true, m.Model, m.Effort, m.ReqModel, m.ReqEffort); err != nil {
 		return err
 	}
+	switch {
+	case m.Kind != KindVoice && m.Source != "":
+		return refuseImport("%s: source on a %q line", what, m.Kind)
+	case m.Kind == KindVoice && m.Source != "" && m.Source != VoiceSourceDevice && m.Source != VoiceSourceServer:
+		return refuseImport("%s: unknown source %q", what, m.Source)
+	}
 	return textIs(what, maxImportNote, false, true, m.ModelNote)
+}
+
+// importSource is the source a checked line is stored with: an archive from before 010 names none,
+// and its voice lines came from the server's worker (010-AC11).
+func importSource(m *xMessage) any {
+	if m.Kind == KindVoice && m.Source == "" {
+		return VoiceSourceServer
+	}
+	return nullStr(m.Source)
 }
 
 // renderAhead checks every line and writes its HTML to fileRendered, one JSON value per line in
@@ -636,9 +651,9 @@ func (im *importer) messagesStep() error {
 		}
 		var id int64
 		err = im.tx.QueryRowContext(im.ctx, `INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, html, model, effort, persona_id,
-			req_model, req_effort, model_note, model_mismatch, edited_at, deleted_at, change_seq) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
+			req_model, req_effort, model_note, model_mismatch, edited_at, deleted_at, change_seq, source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
 			im.room, m.TS, m.Kind, pid, m.Sender, m.Body, html, m.Model, m.Effort, persona, m.ReqModel, m.ReqEffort, m.ModelNote, m.Mismatch,
-			m.EditedAt, m.DeletedAt, m.ChangeSeq).Scan(&id)
+			m.EditedAt, m.DeletedAt, m.ChangeSeq, importSource(m)).Scan(&id)
 		if err != nil {
 			return refuseImport("message %d: %v", m.Ref, err)
 		}

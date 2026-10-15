@@ -7,6 +7,7 @@ flowchart LR
   subgraph Browser["Participant browser"]
     UI["Room page<br/>(vanilla JS)"]
     Frame["Document iframe<br/>(sandboxed, opaque origin)"]
+    DevSTT["Device transcription<br/>(opt-in, page workers)"]
   end
 
   subgraph Server["Room server (Go, SQLite)"]
@@ -39,6 +40,7 @@ flowchart LR
   UI <-->|"WebRTC audio<br/>TURN/TLS 443 or ICE/TCP"| LK
   STT -->|"subscribes to audio tracks"| LK
   STT -->|"POST voice lines, heartbeat"| API
+  DevSTT -->|"GET /models/, POST device lines, device beat"| API
   API --> Store
   API -->|"room admin: kick"| LK
   Daemon -->|"outbound only: SSE + POST"| API
@@ -57,12 +59,12 @@ flowchart LR
 |---|---|---|---|
 | Instance admin | nothing | room server: `GET/POST /api/rooms`, `PATCH/DELETE /api/rooms/{room}`, `GET/POST/DELETE .../invites`, `GET/DELETE /api/profiles`, `GET/DELETE /api/templates`, `GET/DELETE /api/skills`, and `/admin` with its `/api/admin/*` routes | admin token (one per server), or an `/admin` session |
 | Room admin | nothing | room server: rename, invites, room admins, overview and delete of their room, from the room page | profile cookie of a profile in `room_admins` |
-| Room page | nothing | room server (REST + SSE), LiveKit (WebRTC), document iframe (postMessage, validated) | room cookie, or the profile cookie |
+| Room page | nothing | room server (REST + SSE), LiveKit (WebRTC), document iframe (postMessage, validated); with device transcription on, `/models/`, `/voice/device-lines` and the device beat on `/presence` from its workers | room cookie, or the profile cookie |
 | Profile page | nothing | room server: `/api/profile/*` | profile cookie; recovery or emailed link token |
 | Document iframe | anchors and selections via postMessage | room page only | none: opaque origin, CSP sandbox, no cookie |
 | Room server | `/api/*` REST, `/api/rooms/{room}/events` SSE, `/install.sh`, `/download/*`, `/healthz`; `/metrics` on its own port | SQLite, LiveKit server API, SMTP relay when configured | admin token, participant token or cookie, profile cookie, daemon token, STT token, pairing secret |
 | LiveKit | WebRTC signalling (WSS), TURN/TLS on 443, ICE/TCP | browsers, STT worker | 5 min JWT minted by the room server |
-| STT worker | `/healthz`, `/metrics` | LiveKit (hidden participant), room server (`/api/stt/heartbeat`, `/voice/lines`, `/voice/dropped`), its own engine processes over pipes | STT token; LiveKit key pair |
+| STT worker | `/healthz`, `/metrics` | LiveKit (hidden participant), room server (`/api/stt/heartbeat`, whose answer names the tracks to skip, `/voice/lines`, `/voice/dropped`), its own engine processes over pipes | STT token; LiveKit key pair |
 | Daemon: a supervisor and one worker per room server, [protocol](daemon-protocol.md) | local admin page on 127.0.0.1: instances, rooms, Claude accounts, global and per-instance settings, and the turn history in a local `monitor.db`; a local socket (named pipe on Windows) for a second launch to hand over its room | room server (SSE `daemon/events` with turns and whether it hosts, turn job, workspace manifest and tar, session, result, status with the host cap and approval mode), Docker, `/api/daemon/version` and `/download/` for each worker's binary and its sigstore bundle, GitHub releases (or an instance) for the supervisor's own update, the sigstore TUF repository for the trusted root | daemon token from pairing; admin page one-time link + Origin check |
 | Bearer-swap proxy | HTTP on the Docker bridge, one per account, in the supervisor | Anthropic API | swaps a worker's dummy bearer for the account's real token; counts each worker's requests and refuses a cut-off one |
 | Egress proxy (squid) | HTTP proxy on the sandbox network only | the host's allowlisted domains, `CONNECT` to 443; Anthropic's hosts denied | none; the allowlist is the control |
@@ -87,6 +89,26 @@ flowchart LR
 | `grill_stt_utterances_dropped_total` | utterances a full queue dropped |
 | `grill_stt_lines_total{result}`, `grill_stt_lines_implausible_total{reason}` | outcome per utterance |
 | `grill_stt_lines_language_total{engine,guess}` | stored lines by guessed language: the English leak |
+
+## On-device transcription, TL;DR
+
+A participant on a capable desktop may tick "Transcribe on this device" (spec 010). Their browser then transcribes their own microphone and the worker skips their track.
+
+- Lines: the page posts each utterance to `POST /api/rooms/{room}/voice/device-lines` with its session. The server stores it as a voice line from the session's participant with `source=device`; worker lines get `source=server`. Both count for voice triggers.
+- Handover:
+  1. The page's transcription worker sends `{"tab", "device_stt": true}` to `/presence` every 1 s while device mode is on and the mic is tapped or muted, one beat at a time. It touches no presence or audio state.
+  2. The server holds a per-participant device flag while any of their tabs beat in the last 3 s.
+  3. The worker heartbeats every 2 s. The answer lists the flagged participants of the rooms it named: `{"device": {"<room>": [ids]}}`.
+  4. The worker stays subscribed to a flagged track and discards its audio.
+  5. `device_stt: false` (toggle off, fallback) or a `gone` beat (tab closed) drops the flag at once, so the worker resumes within one heartbeat. A crashed or frozen page or a dead mic tap stops the beats: the flag lapses after 3 s and the worker resumes within about 5 s.
+- Dedupe: around a handover both sides may transcribe one utterance. A line is dropped, answered `200 {"deduped": true}`, when the same participant has a line from the other source stored in the last 5 s at 0.8 similarity or more (Levenshtein over lowercase letters and digits, accents dropped). Lines from one source are never dropped.
+- The flag and the recent lines live in the room server's memory: one replica.
+
+| Metric (room server) | What it says |
+|---|---|
+| `grill_room_device_stt_participants` | participants whose device transcribes them now |
+| `grill_room_voice_lines_total{source}` | voice lines stored, `device` or `server` |
+| `grill_room_voice_lines_deduped_total{source}` | lines dropped as a repeat of the other source's, by the dropped line's source |
 
 ## A turn, end to end
 

@@ -1,0 +1,7 @@
+{
+ "source": "Google FLEURS, https://huggingface.co/datasets/google/fleurs",
+ "license": "CC-BY-4.0, https://creativecommons.org/licenses/by/4.0/",
+ "changes": "the two French sentences of e2e/voice/fixtures/fr-en.wav, joined, padded with silence to 10 s",
+ "seconds": 10,
+ "text": "L'eau se déverse sur la digue dans une section de 100 pieds de large. Les voies navigables intérieures peuvent être un excellent thème pour des vacances."
+}

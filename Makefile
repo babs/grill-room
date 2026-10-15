@@ -28,7 +28,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: ui-tools ui-vendor ui-check build e2e-build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image stt-image-test stt-image-e2e cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: ui-tools ui-vendor ui-check build e2e-build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-device-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image stt-image-test stt-image-e2e cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -84,9 +84,10 @@ test-docker: sandbox-image sandbox-fake-image
 # fake claude. Magic links run against a second server and a throwaway mailpit container. The
 # server hands out the daemon's own version, so its workers run the daemon's binary: an unsigned
 # release at another version would be refused (003-AC2).
-# The sandbox specs run after the others, alone (e2e/playwright.config.js says why). Both run even
-# when the first fails; the recipe fails if either did.
+# The device and sandbox specs run after the others, each set alone (e2e/playwright.config.js says
+# why). All three run even when one fails; the recipe fails if any did.
 E2E_SPLIT = { pnpm exec playwright test --project=parallel --pass-with-no-tests $(1); p=$$?; \
+	pnpm exec playwright test --project=device --pass-with-no-tests $(1) || p=1; \
 	pnpm exec playwright test --project=sandbox --pass-with-no-tests $(1) && test $$p -eq 0; }
 
 e2e: build e2e-build sandbox-fake-image
@@ -101,6 +102,14 @@ e2e-repeat: build e2e-build sandbox-fake-image
 # Voice tests against the compose stack behind the local traefik: run `make dev-up` first.
 e2e-voice:
 	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c voice/playwright.config.js
+
+# 010: the device-to-server voice handover with LiveKit, the STT worker (grill-stt:local, `make
+# stt-image`), the real device model and Chrome, on its own loopback stack (e2e/device-voice/run.sh).
+# Already fetched model files are only checked.
+DEVICE_STT_MODEL_DIR ?= $(CURDIR)/.device-stt-models
+e2e-device-voice: build e2e-build
+	bin/$(APP_NAME) models fetch --dir '$(DEVICE_STT_MODEL_DIR)'
+	cd e2e && pnpm install --frozen-lockfile && GRILL_ROOM_E2E_MODEL_DIR='$(DEVICE_STT_MODEL_DIR)' device-voice/run.sh $(DEVICE_VOICE_ARGS)
 
 # Agent turns with real daemons against the compose stack: run `make dev-up sandbox-image` first.
 # Spends four to eight real Claude requests (haiku) with this machine's Claude Code login, plus at

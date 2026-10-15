@@ -116,6 +116,14 @@ type Server struct {
 	pluginFetches chan struct{}
 	pluginMu      sync.Mutex
 	pluginRooms   map[string]bool
+	// device is the device transcription offer, nil when not offered (010-AC5).
+	device *deviceSTT
+	// voiceMu makes a voice line's repeat check and its insert one step; voiceRecent holds the
+	// lines it checks against (010-AC16).
+	voiceMu     sync.Mutex
+	voiceRecent recentLines
+	// voiceLines and voiceDeduped count the voice lines stored and dropped, by VoiceSources.
+	voiceLines, voiceDeduped map[string]*atomic.Int64
 }
 
 // New builds a server. adminHash is HashToken of the admin token; baseURL prefixes invite links.
@@ -156,7 +164,9 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 		magicLimit: limiter{window: magicWindow}, loginLimit: limiter{window: loginWindow}, now: time.Now, fallbacks: fallbackCounters(),
 		afterFunc: func(d time.Duration, f func()) { time.AfterFunc(d, f) },
 		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}, pushClient: opts.PushClient,
-		pluginFetches: make(chan struct{}, maxPluginFetches), pluginRooms: map[string]bool{}}
+		pluginFetches: make(chan struct{}, maxPluginFetches), pluginRooms: map[string]bool{},
+		voiceRecent: recentLines{}, voiceLines: sourceCounters(), voiceDeduped: sourceCounters()}
+	s.device = loadDeviceSTT(opts, log)
 	s.cleanStaging()
 	return s
 }
@@ -382,6 +392,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/stt/heartbeat", s.sttAuth(s.sttHeartbeat))
 	mux.Handle("POST /api/rooms/{room}/voice/lines", s.sttAuth(s.postVoiceLine))
 	mux.Handle("POST /api/rooms/{room}/voice/dropped", s.sttAuth(s.postVoiceDropped))
+	mux.Handle("POST /api/rooms/{room}/voice/device-lines", s.participant(s.postDeviceLine))
 	mux.Handle("GET /api/stt/rooms/{room}/prompt", s.sttAuth(s.sttPromptFor))
 	mux.Handle("GET /api/rooms/{room}/glossary", s.participant(s.getGlossary))
 	mux.Handle("PUT /api/rooms/{room}/glossary", s.participant(s.putGlossary))
@@ -395,6 +406,18 @@ func (s *Server) Handler() http.Handler {
 		h.Set("Content-Security-Policy", csp)
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
+		// Every page the room page frames must embed under its COEP (010-AC4); a response that is
+		// not a document ignores it. credentialless, not require-corp: the sandboxed document
+		// frame loads /static/doc/ from its opaque origin, a cross-origin load with no CORP header.
+		h.Set("Cross-Origin-Embedder-Policy", "credentialless")
+		switch {
+		case strings.HasPrefix(r.URL.Path, modelsPrefix):
+			h.Set("Content-Security-Policy", workerCSP)
+			s.serveModel(w, r)
+			return
+		case strings.HasPrefix(r.URL.Path, sttStaticPrefix):
+			h.Set("Content-Security-Policy", workerCSP)
+		}
 		mux.ServeHTTP(w, r)
 	})
 }
@@ -410,9 +433,10 @@ func (s *Server) connectSrc() string {
 }
 
 // roomCSP admits the room page's import map by its hash: its room admin panel is Preact (004-AC19).
+// Device transcription compiles WebAssembly and runs it in workers from this server (010-AC4).
 var roomCSP = func() string {
 	page, _ := ui.ReadFile("ui/room.html") // embedded
-	return uivendor.CSP(page, "'self'")
+	return uivendor.CSP(page, "'self'", "'wasm-unsafe-eval'") + "; worker-src 'self'"
 }()
 
 // profileCSP admits the profile page's import map: its starters are Preact (006).
@@ -427,7 +451,10 @@ func (s *Server) profilePage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) roomPage(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Security-Policy", roomCSP+s.connectSrc())
+	h := w.Header()
+	h.Set("Content-Security-Policy", roomCSP+s.connectSrc())
+	// With the global COEP, isolates the page: WebAssembly threads need SharedArrayBuffer (010-AC4).
+	h.Set("Cross-Origin-Opener-Policy", "same-origin")
 	http.ServeFileFS(w, r, ui, "ui/room.html")
 }
 
@@ -957,6 +984,8 @@ type roomResp struct {
 	Voice bool `json:"voice"`
 	// Profile tells whether the viewer has a profile, to which a rename may apply (005-AC1).
 	Profile bool `json:"profile"`
+	// Version is this server's, for the room page's Diagnostics (010-AC22).
+	Version string `json:"version"`
 }
 
 func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
@@ -977,7 +1006,7 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
 		ps[i].Self = p.ID == sess.p.ID || (sess.p.ProfileID != 0 && p.ProfileID == sess.p.ProfileID)
 	}
 	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps, Daemons: s.connectedDaemons(room.ID), Voice: s.opts.Voice != nil,
-		Profile: sess.p.ProfileID != 0})
+		Profile: sess.p.ProfileID != 0, Version: s.opts.Version})
 }
 
 func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, sess session) {
@@ -1195,7 +1224,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	}
 	var stt sttState
 	if s.opts.Voice != nil {
-		stt = s.stt.state(room, time.Now())
+		stt = s.sttState(room, s.now())
 		if _, err := io.WriteString(w, sttEvent(stt)); err != nil {
 			return
 		}
@@ -1220,7 +1249,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 			if s.opts.Voice == nil {
 				continue
 			}
-			if now := s.stt.state(room, time.Now()); !now.equal(stt) {
+			if now := s.sttState(room, s.now()); !now.equal(stt) {
 				stt = now
 				if _, err := io.WriteString(w, sttEvent(stt)); err != nil {
 					return

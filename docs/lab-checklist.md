@@ -33,6 +33,16 @@ KUBECONFIG=<lab kubeconfig> kubectl -n grill-room set env deploy/stt APP_ENGINE=
 
 `set env` restarts the Deployment by itself. Set `APP_ENGINE=parakeet` the same way to come back. The image carries both engines for one release. `make k8s-apply` puts back the manifest's value, so make the change in `deploy/k8s/stt.yaml` to keep it. The second way out is the previous image tag: set `GRILL_STT_IMAGE` in `.env` to it, then `make k8s-apply`.
 
+## On-device transcription (010)
+
+On a desktop Chrome with 4 cores or more, after a deploy. It takes about two minutes, plus the first download of about 430 MB.
+
+1. Check the model volume: the `models` init container's log lists seven files, downloaded or skipped, and `curl -sI https://grill-room.<domain>/models/<revision>/vocab.txt` answers 200 with `Cache-Control: public, max-age=31536000, immutable` and `Cross-Origin-Resource-Policy: same-origin`. The revision is in the `device_stt_offered` log line of the room server.
+2. Join a room, join the audio, open the audio menu and turn on "Transcribe on this device". The menu shows the download size, the progress, then "Testing this device…", then that this device can write your voice down.
+3. Say a sentence. It shows as a voice line whose "(voice)" mark reads "Transcribed on <your name>'s device"; People shows the device badge on you, and your details card says "Transcribed on their device".
+4. Turn the option off and say another sentence. Within about 5 s the next line reads "Transcribed by the server".
+5. Delete the room as above.
+
 ## Notifications on an Android phone (005-AC24)
 
 `make e2e-push` proves a push goes through Chrome's push service to a desktop Chrome. This check covers a phone, with the browser closed. It takes about five minutes.

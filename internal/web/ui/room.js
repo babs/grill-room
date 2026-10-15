@@ -42,6 +42,8 @@ let hasProfile = false;
 let roomName = '';
 // tab names this page to the server's presence: its stream and heartbeats (005-AC6).
 const tab = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)).replaceAll('-', '');
+// stt/device.js's pipeline sends its device beats under the same tab (010-AC13).
+window.grillTab = tab;
 // presence holds the server's "presence" event by participant id; transcribed, the participants
 // the STT worker hears.
 let presence = new Map();
@@ -269,7 +271,10 @@ function renderMessage(m) {
     sender.tabIndex = -1;
     nameSender(li, sender);
   }
-  meta.append(sender, ' ', timeOf(m.ts));
+  meta.append(sender, ' ');
+  // Who wrote a voice line down shows in its tip only (010-AC12); a line from before 010 is the server's.
+  if (m.kind === 'voice') meta.append(voiceSource(m), ' ');
+  meta.append(timeOf(m.ts));
   if (m.kind === 'agent') {
     // The model and effort the turn ran with (002-AC18), the model checked against what claude
     // reported (005-AC10). Lines from before 005-AC9 may carry no effort.
@@ -326,6 +331,22 @@ function renderMessage(m) {
   if (m.kind === 'text') fillMentions(li);
   return li;
 }
+
+// voiceSource is a voice line's "(voice)" mark, which says who wrote it down in its tip, to the
+// keyboard and the screen reader too, and on a tap (010-AC12).
+function voiceSource(m) {
+  const tip = m.source === 'device' ? 'Transcribed on ' + m.sender + "'s device" : 'Transcribed by the server';
+  const el = span('voice-src', '(voice)', tip);
+  el.tabIndex = 0;
+  el.setAttribute('role', 'img');
+  el.setAttribute('aria-label', 'Voice line. ' + tip);
+  return el;
+}
+// Touch has no hover: a tap shows the tip.
+document.addEventListener('click', (e) => {
+  const v = e.target instanceof Element && e.target.closest('.voice-src');
+  if (v && (e.pointerType === 'touch' || e.pointerType === 'pen')) grillTip.show(v);
+});
 
 // nameSender shows a person's line under their current name, and the name it was written under on
 // hover once they renamed (005-AC1).
@@ -2720,6 +2741,7 @@ const badgeIcons = {
   admin: '<path d="M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.5L12 17.3l-5.9 3.2 1.3-6.5-4.9-4.6 6.6-.8z" fill="currentColor"/>',
   ask: '<path d="M12 3l2.2 6.8L21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2z" fill="currentColor"/>',
   transcribed: '<path d="M12 20h9"/><path d="M16.4 3.6a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z"/>',
+  'transcribed-device': '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4M7 10h5"/>',
   mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/>',
   muted: '<path d="M11 5 6 9H2v6h4l5 4z"/><path d="m22 9-6 6M16 9l6 6"/>',
   listening: '<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/>',
@@ -2770,7 +2792,9 @@ function personTags(p, id, isHere) {
   // Only your own row: nobody else learns whether a profile has an email (011-AC6).
   if (id === myID && noEmail()) t.anon = ['anon', anonText, anonText];
   if (agent.can_trigger.includes(p.id) && agent.host_participant_id !== p.id) t.ask = ['ask', 'Can ask the AI', 'Can ask the AI'];
-  if (transcribed.has(id)) t.transcribed = ['transcribed', 'The transcription hears this voice', 'The transcription hears this voice'];
+  // Their own browser writes their voice down instead of the server (010-AC12).
+  if (presence.get(id)?.device_stt) t.transcribed = ['transcribed-device', 'Their device transcribes this voice', 'Their device transcribes this voice'];
+  else if (transcribed.has(id)) t.transcribed = ['transcribed', 'The transcription hears this voice', 'The transcription hears this voice'];
   const st = isHere ? audioState(id) : { key: 'none', icon: '', text: 'Not in the audio' };
   const deaf = isHere && !!presence.get(id)?.deaf;
   // One icon per square: deafened shows its own alone, its audio state in the tooltip.
@@ -2867,14 +2891,14 @@ $('person-menu').addEventListener('toggle', (e) => {
 // The details card (009-AC36): hovering or focusing a person in People or their name on a chat
 // line shows it; on touch a tap does. A non-modal tooltip tied by aria-describedby. The People
 // badges get the same styled tip for their meaning: no native title tooltip there.
-// personCardLines are its lines under the name, in order, each '' to skip: spec 010 adds one.
+// personCardLines are its lines under the name, in order, each '' to skip.
 const personCardLines = [
   (p, id, el) => (el.dataset.writtenAs ? 'Written as ' + el.dataset.writtenAs : ''),
   (p) => (p.previous_name ? 'Earlier name: ' + p.previous_name : ''),
   (p, id) => 'Roles: ' + personRoles(p, id),
   (p) => (agent.can_trigger.includes(p.id) || agent.host_participant_id === p.id ? 'Can ask the AI' : ''),
   (p, id) => 'Audio: ' + cardAudio(id),
-  (p, id) => (transcribed.has(id) ? 'Transcribed' : 'Not transcribed'),
+  (p, id) => (presence.get(id)?.device_stt ? 'Transcribed on their device' : transcribed.has(id) ? 'Transcribed by the server' : 'Not transcribed'),
   (p, id) => cardHere(p, id),
   (p) => 'Joined ' + grillDate(p.joined_at),
   (p, id) => (id === myID && noEmail() ? anonLink() : ''),
@@ -3149,17 +3173,26 @@ function showSTT(st) {
   $('voice-mute').classList.toggle('captured', mine);
   $('voice-mute').dataset.tip = mine ? 'Your voice is being written down' : '';
   $('voice-more').classList.toggle('down', sttDown);
-  // The model's license asks for credit wherever it runs (007-AC13).
-  $('stt-credit').hidden = !(st.engines || []).includes('parakeet');
+  sttEngines = st.engines || [];
+  showCredit();
   if (sttGlossary !== !!st.glossary) {
     sttGlossary = !!st.glossary;
     showManage();
-    // The Room settings sheet (admin/room-admin.js) shows its glossary tab from the same state.
-    window.grillSTT = { glossary: sttGlossary };
-    window.dispatchEvent(new CustomEvent('grill:stt', { detail: window.grillSTT }));
   }
+  // The Room settings sheet (admin/room-admin.js) shows its glossary tab from the same state, and
+  // stt/device.js offers device transcription from it, the credit included (010-AC8).
+  window.grillSTT = { glossary: sttGlossary, device: st.device || null };
+  window.dispatchEvent(new CustomEvent('grill:stt', { detail: window.grillSTT }));
 }
 let sttDown = false;
+let sttEngines = [];
+// The model's license asks for credit wherever it runs: on the server (007-AC13) or on this
+// device (010-AC8).
+function showCredit() {
+  const device = window.grillDeviceSTT && window.grillDeviceSTT.state !== 'off';
+  $('stt-credit').hidden = !(sttEngines.includes('parakeet') || device);
+}
+window.addEventListener('grill:device-stt', showCredit);
 // sttGlossary is true while a transcription worker reads room glossaries (007-AC14).
 let sttGlossary = false;
 
@@ -3176,6 +3209,11 @@ function voiceError(text) {
 
 function voiceButtons() {
   const on = !!voice;
+  // stt/device.js runs its engine only while this tab is in the audio (010).
+  if (window.grillVoiceOn !== on) {
+    window.grillVoiceOn = on;
+    window.dispatchEvent(new CustomEvent('grill:voice', { detail: { on } }));
+  }
   $('voice-join').hidden = on;
   $('voice-mute').hidden = !on;
   $('voice-more').hidden = !on;
@@ -3183,6 +3221,12 @@ function voiceButtons() {
   $('voice-deaf').setAttribute('aria-pressed', String(on && deaf));
   $('voice-deaf').textContent = on && deaf ? 'Hear the room again' : 'Mute the room';
   const muted = on && !voice.localParticipant.isMicrophoneEnabled;
+  // stt/device.js taps the live mic only: muted, or deafened without keeping it, it hears nothing (010-AC9).
+  const track = muted || !on ? null : voice.localParticipant.getTrackPublication(LivekitClient.Track.Source.Microphone)?.track?.mediaStreamTrack || null;
+  if (window.grillMic !== track) {
+    window.grillMic = track;
+    window.dispatchEvent(new CustomEvent('grill:mic', { detail: { track } }));
+  }
   $('voice-mute').setAttribute('aria-pressed', String(muted));
   $('voice-mute').replaceChildren(grillIcon(muted ? 'mic-off' : 'mic'), muted ? 'Unmute' : 'Mute');
   $('voice-unlock').hidden = !on || voice.canPlaybackAudio;
@@ -3425,10 +3469,12 @@ async function joinVoice() {
       speaking = new Set(list.map((p) => p.identity));
       renderParticipants();
     });
+    // ActiveDeviceChanged and a restarted track carry a new mic track: stt/device.js taps that one.
     for (const ev of ['ParticipantConnected', 'ParticipantDisconnected', 'TrackMuted', 'TrackUnmuted',
-      'LocalTrackPublished', 'LocalTrackUnpublished', 'AudioPlaybackStatusChanged']) {
+      'LocalTrackPublished', 'LocalTrackUnpublished', 'AudioPlaybackStatusChanged', 'ActiveDeviceChanged']) {
       room.on(LK.RoomEvent[ev], voiceChanged);
     }
+    room.on(LK.RoomEvent.LocalTrackPublished, (pub) => pub.track?.on(LK.TrackEvent.Restarted, voiceChanged));
     room.on(LK.RoomEvent.Disconnected, (reason) => {
       if (voice !== room) return;
       cleanupVoice();
@@ -3461,6 +3507,22 @@ async function joinVoice() {
     $('voice-join').disabled = false;
   }
 }
+
+// The Diagnostics sheet (diagnostics.js, 010-AC22) reads the event stream's state, the room's name
+// and the audio's connection from here; nothing leaves the page.
+window.grillDiag = {
+  roomName: () => roomName,
+  stream: () => (!events ? 'not open' : ['connecting', 'open', 'closed'][events.readyState]),
+  voice: async () => {
+    if (!voice) return { state: 'not in the audio', stats: null };
+    const lp = voice.localParticipant;
+    // A track's own report holds its transport and the candidate pair in use.
+    const track = lp.getTrackPublication(LivekitClient.Track.Source.Microphone)?.track
+      || [...voice.remoteParticipants.values()].flatMap((p) => [...p.audioTrackPublications.values()]).map((p) => p.track).find(Boolean);
+    const stats = await track?.getRTCStatsReport?.().catch(() => null);
+    return { state: voice.state, stats: stats || null };
+  },
+};
 
 function cleanupVoice() {
   voice = null;

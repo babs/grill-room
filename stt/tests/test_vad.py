@@ -4,7 +4,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from grill_stt.vad import SR, Audio, Segmenter, Silero
+from grill_stt.vad import SR, WINDOW, Audio, Segmenter, Silero
 
 
 def loudness(windows: Audio) -> npt.NDArray[np.float32]:
@@ -105,3 +105,20 @@ def test_each_cut_says_how_long_ago_its_speech_ended() -> None:
     seg.feed_timed(np.concatenate([tone(1), silence(0.3)]))
     ((_, tail),) = seg.flush_timed()
     assert abs(tail - 0.3) < 0.07  # two 32 ms windows
+
+
+def test_a_reset_silero_judges_as_a_new_one(speech: tuple[Audio, list[dict[str, Any]]]) -> None:
+    """010-AC15: a track resumed after a device flag starts from no memory of the audio before it."""
+    audio, utts = speech
+    start = int((utts[0]["start"] + 0.5) * SR)
+    windows = audio[start : start + 20 * WINDOW].reshape(20, WINDOW)
+    assert windows[-1, -64:].any()
+    heard = Silero()
+    heard(windows)
+    fresh = Silero()(windows)
+    assert not np.allclose(heard(windows), fresh)
+    heard(windows)
+    heard.reset()
+    # The 64-sample context barely moves the output: check every piece of state is gone.
+    assert not (heard._h.any() or heard._c.any() or heard._context.any())
+    np.testing.assert_allclose(heard(windows), fresh)

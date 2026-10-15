@@ -197,3 +197,37 @@ func TestRegistryCountsWorkspaceFallbacks(t *testing.T) {
 		t.Fatalf("reasons %v", reasons)
 	}
 }
+
+// 010-AC20: /metrics carries the device flags held now, the voice lines stored by source and those
+// dropped as a repeat, one series per source.
+func TestRegistryCountsVoiceSources(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "m.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	b := bus.New(st)
+	mfs, err := newRegistry(b, web.New(b, "", "http://x", web.Options{}, zap.NewNop())).Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string][]string{}
+	for _, mf := range mfs {
+		for _, m := range mf.GetMetric() {
+			series := ""
+			for _, l := range m.GetLabel() {
+				series += l.GetName() + "=" + l.GetValue()
+			}
+			got[mf.GetName()] = append(got[mf.GetName()], series)
+		}
+	}
+	for name, want := range map[string]string{
+		"grill_room_device_stt_participants":   "",
+		"grill_room_voice_lines_total":         "source=device,source=server",
+		"grill_room_voice_lines_deduped_total": "source=device,source=server",
+	} {
+		if s := strings.Join(got[name], ","); s != want || got[name] == nil {
+			t.Errorf("%s: series %q, want %q", name, s, want)
+		}
+	}
+}

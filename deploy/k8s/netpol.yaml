@@ -77,6 +77,8 @@ spec:
 # Web Push to the browser vendors' push services (005-AC24). A policy cannot name hosts: HTTPS
 # anywhere, and the server itself posts only to the push services it allows (GRILL_ROOM_PUSH_HOSTS),
 # following no redirect.
+# The models init container (010-AC7) fetches its pinned files over it too: Hugging Face, the npm
+# registry and GitHub, each file checked against its sha256.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

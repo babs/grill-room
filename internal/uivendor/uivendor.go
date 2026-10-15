@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net/http"
 	"regexp"
+	"strings"
 )
 
 //go:embed esm
@@ -27,13 +28,13 @@ var importMap = regexp.MustCompile(`(?s)<script type="importmap">(.*?)</script>`
 
 // CSP is the policy of a page whose only inline script is its import map: the map is allowed by its
 // hash, every other script must come from the server itself. It panics on a page with no map, a
-// build-time mistake.
-func CSP(page []byte, formAction string) string {
+// build-time mistake. scriptSrc adds sources to script-src.
+func CSP(page []byte, formAction string, scriptSrc ...string) string {
 	m := importMap.FindSubmatch(page)
 	if m == nil {
 		panic("page has no import map")
 	}
 	sum := sha256.Sum256(m[1])
-	return "default-src 'self'; script-src 'self' 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) +
-		"'; base-uri 'none'; frame-ancestors 'none'; form-action " + formAction
+	return "default-src 'self'; script-src 'self' 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'" +
+		strings.Join(append([]string{""}, scriptSrc...), " ") + "; base-uri 'none'; frame-ancestors 'none'; form-action " + formAction
 }

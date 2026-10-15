@@ -16,7 +16,7 @@ import (
 // voice triggers it calls.
 func (e *env) voice(t *testing.T, r *turnRoom, pid int64, body string) {
 	t.Helper()
-	if err := e.bus.Post(t.Context(), &store.Message{RoomID: r.room, Kind: store.KindVoice, ParticipantID: pid, Sender: "Alice", Body: body}); err != nil {
+	if err := e.bus.Post(t.Context(), &store.Message{RoomID: r.room, Kind: store.KindVoice, Source: store.VoiceSourceServer, ParticipantID: pid, Sender: "Alice", Body: body}); err != nil {
 		t.Fatal(err)
 	}
 	e.srv.voiceTriggers(t.Context(), r.room)

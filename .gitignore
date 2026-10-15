@@ -11,4 +11,5 @@ e2e/test-results/
 e2e/playwright-report/
 dist/
 deploy/k8s/out/
+.device-stt-models/
 tools/ui/node_modules/

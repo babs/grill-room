@@ -74,6 +74,10 @@ body.room { position: fixed; top: var(--vv-top, 0); left: 0; right: 0; height: 1
 #voice-more.down::after { content: "!"; margin-left: 2px; color: var(--warning); }
 #stt-status:empty { display: none; }
 #stt-status.down { color: var(--warning); }
+#device-stt-status { margin: 0; padding: 0 var(--sp-3) var(--sp-2); max-width: 22rem; }
+#device-stt-status:empty { display: none; }
+#device-stt-status.error { display: flex; gap: var(--sp-2); align-items: flex-start; color: var(--danger); }
+#device-stt-status svg { flex: none; width: 16px; height: 16px; margin-top: 2px; }
 #stt-credit { margin: 0; padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--border); color: var(--text-muted); font-size: var(--fs-sm); }
 /* The user menu's button: initials in a ring, the name beside them on a wide screen. */
 .avatar { gap: var(--sp-2); padding: 0 var(--sp-2) 0 0; border: 0; background: transparent; color: var(--chrome-text); }
@@ -360,7 +364,7 @@ body.docs-window #chat-fold, body.docs-window #chat-unfold { display: none; }
 .msg.agent .meta strong { color: var(--primary-text); }
 .msg .meta :is(.model, .effort, .model-note) { font-size: var(--fs-xs); color: var(--text-muted); }
 .msg .meta .model-note.mismatch { color: var(--warning); font-weight: 600; }
-.msg.voice .meta strong::after { content: " (voice)"; font-weight: 400; color: var(--text-muted); }
+.msg.voice .meta .voice-src { color: var(--text-muted); }
 .msg .mentions { display: flex; flex-wrap: wrap; gap: 2px var(--sp-3); font-size: var(--fs-sm); color: var(--text-muted); }
 .msg .mention-turn.failed, .msg .mention-turn.stopped { color: var(--danger); }
 .msg .notice { font-size: var(--fs-sm); color: var(--warning); }
@@ -520,3 +524,14 @@ button.doc { display: block; overflow: hidden; text-overflow: ellipsis; white-sp
 .starter-editor .warn { color: var(--warning); }
 /* A checkbox sits before its words, as in the persona form, not stacked above them. */
 #starter-docs label.check, #starter-skills label.check, #starter-plugins label.check { flex-direction: row; align-items: center; justify-content: flex-start; gap: var(--sp-2); font-weight: 400; }
+/* Diagnostics (010-AC22): one label width for both sections, so their values line up; long values wrap. */
+#diag h3 { font-size: var(--fs-md); margin: var(--sp-4) 0 var(--sp-2); }
+#diag .facts { display: grid; grid-template-columns: 10rem minmax(0, 1fr); gap: var(--sp-1) var(--sp-3); margin: 0; font-size: var(--fs-sm); }
+#diag .facts dt { color: var(--text-muted); }
+#diag .facts dd { margin: 0; overflow-wrap: anywhere; }
+/* The copy stays in reach while a long sheet scrolls, on a phone above all. */
+#diag .actions { position: sticky; bottom: calc(-1 * var(--sp-4)); margin-bottom: calc(-1 * var(--sp-4)); padding: var(--sp-3) 0 var(--sp-4); background: var(--surface); }
+@media (max-width: 40rem) {
+  #diag .facts { grid-template-columns: minmax(0, 1fr); }
+  #diag .facts dd { margin-bottom: var(--sp-2); }
+}

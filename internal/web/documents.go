@@ -23,6 +23,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/babs/grill-room/internal/convert"
+	"github.com/babs/grill-room/internal/devicestt"
 	"github.com/babs/grill-room/internal/render"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/turn"
@@ -97,6 +98,10 @@ type Options struct {
 	// exports and imports stage beside the database.
 	Version string
 	DBPath  string
+	// DeviceSTTDir holds the device transcription files; empty, or incomplete at start, offers no
+	// device mode (010-AC5). DeviceSTTManifest is what it must hold; nil means devicestt.Pinned.
+	DeviceSTTDir      string
+	DeviceSTTManifest *devicestt.Manifest
 }
 
 //go:embed templates

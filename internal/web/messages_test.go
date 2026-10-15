@@ -60,7 +60,7 @@ func TestEditAndDeleteMessages(t *testing.T) {
 	if text.Body != "**hi** <script>x</script>" || text.HTML != "<p><strong>hi</strong> &lt;script&gt;x&lt;/script&gt;</p>\n" {
 		t.Fatalf("a message carries its source and its render: %+v", text)
 	}
-	voice := &store.Message{RoomID: room, Kind: store.KindVoice, ParticipantID: alice.Participant.ID, Sender: "Alice", Body: "wreck a nice beach"}
+	voice := &store.Message{RoomID: room, Kind: store.KindVoice, Source: store.VoiceSourceServer, ParticipantID: alice.Participant.ID, Sender: "Alice", Body: "wreck a nice beach"}
 	if err := e.bus.Post(t.Context(), voice); err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestPromptFlagsChangedMessages(t *testing.T) {
 	}
 	budget := post("Budget is 10k.")
 	same := post("Unchanged in the end.")
-	voice := &store.Message{RoomID: r.room, Kind: store.KindVoice, ParticipantID: alice.p.Participant.ID, Sender: "Alice", Body: "we need a role back"}
+	voice := &store.Message{RoomID: r.room, Kind: store.KindVoice, Source: store.VoiceSourceServer, ParticipantID: alice.p.Participant.ID, Sender: "Alice", Body: "we need a role back"}
 	if err := e.bus.Post(t.Context(), voice); err != nil {
 		t.Fatal(err)
 	}

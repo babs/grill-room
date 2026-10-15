@@ -504,8 +504,10 @@ func TestMessagesKindAndPaging(t *testing.T) {
 	if err := s.InsertMessage(ctx, &Message{RoomID: "a", Kind: "shout", Sender: p.Name, Body: "x"}); err == nil {
 		t.Fatal("unknown kind accepted")
 	}
-	for _, k := range []string{KindVoice, KindAgent} {
-		if err := s.InsertMessage(ctx, &Message{RoomID: "a", Kind: k, Sender: "x", Body: k}); err != nil {
+	for _, m := range []*Message{{Kind: KindVoice, Source: VoiceSourceServer}, {Kind: KindAgent}} {
+		k := m.Kind
+		m.RoomID, m.Sender, m.Body = "a", "x", k
+		if err := s.InsertMessage(ctx, m); err != nil {
 			t.Fatalf("kind %s: %v", k, err)
 		}
 	}

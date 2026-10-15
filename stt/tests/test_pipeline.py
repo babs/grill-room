@@ -5,6 +5,7 @@ import time
 import httpx
 import numpy as np
 import pytest
+import structlog.testing
 from prometheus_client import REGISTRY
 
 from grill_stt.pipeline import Pipeline, RoomAPI, Utterance
@@ -99,8 +100,9 @@ async def test_heartbeat_names_the_worker_and_its_rooms() -> None:
         bodies.append(json.loads(r.content))
         return httpx.Response(204 if r.url.path == "/api/stt/heartbeat" else 404)
 
-    assert await api(httpx.MockTransport(handle)).heartbeat(
-        "w1", ["a", "b"], {"a": [7, 8]}, "parakeet", False
+    assert (
+        await api(httpx.MockTransport(handle)).heartbeat("w1", ["a", "b"], {"a": [7, 8]}, "parakeet", False)
+        == frozenset()
     )
     assert bodies == [
         {
@@ -115,10 +117,92 @@ async def test_heartbeat_names_the_worker_and_its_rooms() -> None:
     def down(r: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("down", request=r)
 
-    assert not await api(httpx.MockTransport(down)).heartbeat("w1", [], {}, "whisper", True)
-    assert not await api(httpx.MockTransport(lambda _r: httpx.Response(401))).heartbeat(
-        "w1", [], {}, "whisper", True
-    )
+    assert await api(httpx.MockTransport(down)).heartbeat("w1", [], {}, "whisper", True) == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "flags"),
+    [
+        (200, {"device": {"a": [7, 8], "b": [9]}}, frozenset({("a", 7), ("a", 8), ("b", 9)})),
+        (200, {"device": {}}, frozenset()),
+        (200, {"device": {"a": []}}, frozenset()),
+        # A server from before spec 010 answers 204: skip nobody.
+        (204, None, frozenset()),
+        # Garbage: skip nobody.
+        (200, None, frozenset()),
+        (200, {}, frozenset()),
+        (200, {"device": [7]}, frozenset()),
+        (200, {"device": {"a": 7}}, frozenset()),
+        (200, {"device": {"a": ["7"]}}, frozenset()),
+        (200, {"device": {"a": [7, True]}}, frozenset()),
+        (200, {"device": {"a": [[7]]}}, frozenset()),
+        (200, [1], frozenset()),
+        # Refused: the room's flags lapse meanwhile, so skip nobody.
+        (401, None, frozenset()),
+        (500, {"device": {"a": [7]}}, frozenset()),
+    ],
+)
+async def test_heartbeat_answer_names_the_participants_a_device_transcribes(
+    status: int, body: object, flags: frozenset[tuple[str, int]]
+) -> None:
+    """010-AC14: the 200 answer's device map; 204, an older server, flags nobody."""
+
+    def handle(_r: httpx.Request) -> httpx.Response:
+        if body is None:
+            return httpx.Response(status, content=b"not json" if status == 200 else b"")
+        return httpx.Response(status, json=body)
+
+    assert await api(httpx.MockTransport(handle)).heartbeat("w1", ["a"], {}, "parakeet", False) == flags
+
+
+async def test_an_unreadable_device_map_is_logged_once_per_bad_spell() -> None:
+    answers = iter([{"device": 1}, {"device": 1}, {"device": {"a": [7]}}, {"device": "x"}, {"device": 1}])
+    room_api = api(httpx.MockTransport(lambda _r: httpx.Response(200, json=next(answers))))
+    with structlog.testing.capture_logs() as logs:
+        got = [await room_api.heartbeat("w1", [], {}, "parakeet", False) for _ in range(5)]
+    assert got == [frozenset()] * 2 + [frozenset({("a", 7)})] + [frozenset()] * 2
+    assert [e["event"] for e in logs] == ["heartbeat_device_unreadable"] * 2
+
+
+async def test_a_beat_whose_answer_trickles_in_gives_up_at_its_timeout() -> None:
+    """010-AC15: httpx times each read alone; a body dripping in under that must still end the beat
+    in time, flagging nobody, before the room's 3 s flag lapse."""
+    body = b'{"device": {"a": [7]}}'
+
+    async def drip(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.readuntil(b"\r\n\r\n")
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n")
+        writer.write(b"Content-Length: %d\r\n\r\n" % len(body))
+        try:
+            for byte in body:
+                writer.write(bytes([byte]))
+                await writer.drain()
+                await asyncio.sleep(0.1)
+        except ConnectionError:
+            pass
+        finally:
+            writer.close()
+
+    server = await asyncio.start_server(drip, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=5.0) as client:
+            started = time.monotonic()
+            flags = await RoomAPI(client).heartbeat("w1", ["a"], {}, "parakeet", False, timeout=0.3)
+            took = time.monotonic() - started
+    finally:
+        server.close()
+        await asyncio.wait_for(server.wait_closed(), 5)
+    # The whole body takes 2.2 s; each read waits only 0.1 s.
+    assert flags == frozenset() and took < 1.3
+
+
+async def test_a_deduped_line_counts_as_posted() -> None:
+    """010-AC16: the room dropped our copy of a line the device already stored; not a refusal."""
+    room_api = api(httpx.MockTransport(lambda _r: httpx.Response(200, json={"deduped": True})))
+    with structlog.testing.capture_logs() as logs:
+        assert await room_api.post_line("r1", 7, "x")
+    assert [(e["event"], e["log_level"]) for e in logs] == [("line_deduped", "info")]
 
 
 async def test_queue_is_bounded_and_its_depth_exported() -> None:
