@@ -83,7 +83,8 @@ People can tell who transcribed a line: its tooltip says "Transcribed on <name>'
 - [ ] **AC13** While device mode is on, the device pipeline sends a presence beat with `device_stt: true` every 1 s, from its worker, so a stalled pipeline stops the beats and main-thread timer throttling does not. The beat leaves the tab's audio state untouched. The server keeps a per-participant device flag. It lapses 3 s after the last device beat, and at once on a beat with `device_stt: false` or `gone`. The `presence` event carries the flag per participant.
 - [ ] **AC14** `POST /api/stt/heartbeat` answers 200 with `{"device": {"<room>": [<participant ids>]}}` instead of 204. The worker keeps its subscription to a flagged track, discards its audio, and leaves the participant out of `voices`. An utterance already cut when the flag arrives still posts. The worker heartbeats every 2 s instead of 5. A worker that ignores the answer still transcribes everyone, and a 204 from an older server means it skips nobody.
 - [ ] **AC15** After device transcription stops, the worker transcribes that participant again within about 5 s. Measured from the stop to the worker's first subscribed audio frame going to the VAD:
-  - ≤ 3 s when the page announces the stop (toggle off, fallback, tab close);
+  - ≤ 3 s when the page announces the stop (toggle off, fallback);
+  - a closed tab leaves the audio, so there is nothing left to transcribe: its flag drops at once on the `gone` beat, or 3 s later if that beat is lost.
   - ≤ 5 s when it goes silent (crash, frozen tab).
 - [ ] **AC16** The server drops a voice line when the same participant has a line from the other source stored in the last 5 s whose text is near-identical: similarity ≥ 0.8 (1 minus Levenshtein distance over the longer length) after lowercasing, keeping letters and digits, and collapsing spaces. The drop answers 200 with `{"deduped": true}` and counts in `grill_room_voice_lines_deduped_total{source}`. Two lines from the same source are never deduped, so a person can repeat themselves.
 
@@ -124,7 +125,7 @@ People can tell who transcribed a line: its tooltip says "Transcribed on <name>'
 - **Covers**: AC9, AC10, AC11, AC12, AC13, AC14, AC15, AC16, AC17, AC20
 - **Data model impact**: `messages.source TEXT` (`device`, `server`, or NULL for non-voice messages), with existing voice lines backfilled to `server`. In memory: the per-participant device flag.
 - **DoD**:
-  - e2e with a fake mic (`--use-file-for-fake-audio-capture`) and the real model in CI: a device line shows with `source=device` and the device tooltip; the worker's heartbeat answer lists the participant and the worker posts no line for that track; after the toggle goes off, and after the page is closed, a sentence spoken 5 s later posts as `source=server`;
+  - e2e with a scripted mic (a WebAudio stream the test feeds sentence by sentence, so it decides when each one is spoken), LiveKit, the real worker and the real model in CI: a device line shows with `source=device` and the device tooltip; the worker's heartbeat answer lists the participant and the worker posts no line for that track; after the toggle goes off, and after the device goes silent, a sentence spoken 5 s later posts as `source=server`; after the page is closed, the server and worker drop the flag;
   - Go tests for AC15 on an injected clock: an announced stop clears the flag at once, a silent one after 3 s;
   - dedupe tests: dropped for a case or accent change and for trailing punctuation; kept for the same source twice, for a different sentence, and for a 6 s gap;
   - fallback tests on injected latencies: degrade on p95, on queue and on an engine error; return after recovery; no second return within 2 minutes;
