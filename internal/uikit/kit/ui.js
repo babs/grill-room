@@ -318,6 +318,7 @@
     profile: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
     download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
     trash: '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>',
+    copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   };
 
   /**
@@ -439,6 +440,73 @@
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideTip(); });
   // The pointer gone into a document frame sends no pointerout here.
   addEventListener('blur', hideTip);
+
+  /**
+   * grillToast says what an action did, 4 s, bottom right (docs/design.md §5). It shares the page's
+   * #toasts region when there is one (the room page's), and #toast-live for screen readers.
+   * @param {string} text
+   */
+  window.grillToast = (text) => {
+    let region = document.getElementById('toasts');
+    if (!region) {
+      region = Object.assign(document.createElement('div'), { id: 'toasts', className: 'toasts' });
+      // A popover sits in the top layer: a toast shows over an open sheet too.
+      region.popover = 'manual';
+      document.body.append(region);
+    }
+    const t = Object.assign(document.createElement('p'), { className: 'toast', textContent: text });
+    region.append(t);
+    const live = document.getElementById('toast-live');
+    if (live) live.textContent = text;
+    if (!region.matches(':popover-open')) region.showPopover();
+    setTimeout(() => {
+      t.remove();
+      if (region && !region.children.length && region.matches(':popover-open')) region.hidePopover();
+    }, 4000);
+  };
+
+  // A .value's copy button copies the whole value, not the cut text on screen.
+  document.addEventListener('click', (e) => {
+    const b = e.target instanceof Element ? e.target.closest('.value .copy') : null;
+    const v = /** @type {HTMLElement | null} */ (b?.closest('.value'));
+    if (!v) return;
+    (navigator.clipboard?.writeText(v.dataset.value || '') ?? Promise.reject()).then(() => window.grillToast('Copied'), () => window.grillToast("Couldn't copy: select the text instead"));
+  });
+
+  /**
+   * grillShowTab scrolls a tab bar that overflows so its current tab shows whole, clear of the fade,
+   * with a whole tab at its left edge: a scroll that only just reveals the current tab cuts the one
+   * before ("ooms" for Rooms). When that tab start lies past the scroll end, an end padding makes it
+   * reachable.
+   * @param {Element | null} nav
+   */
+  window.grillShowTab = (nav) => {
+    const cur = nav?.querySelector('[aria-current=page]');
+    if (!(nav instanceof HTMLElement) || !cur) return;
+    nav.style.paddingInlineEnd = '';
+    const max = nav.scrollWidth - nav.clientWidth;
+    if (max <= 0) return;
+    const at = (/** @type {Element} */ a) => a.getBoundingClientRect().left - nav.getBoundingClientRect().left - nav.clientLeft + nav.scrollLeft;
+    const fade = matchMedia('(max-width: 40rem)').matches ? 24 : 0;
+    const [left, right] = [at(cur), at(cur) + cur.getBoundingClientRect().width];
+    // At the scroll end the fade is gone (tokens.css).
+    const fits = (/** @type {number} */ s) => left >= s - 0.5 && right <= s + nav.clientWidth - (s < max - 0.5 ? fade : 0) + 0.5;
+    const s = [...nav.children].map(at).find((x) => x >= -0.5 && fits(Math.min(x, max))) ?? left;
+    if (s > max) nav.style.paddingInlineEnd = s - max + 'px';
+    nav.scrollLeft = s;
+  };
+
+  // A ⋯ menu (.menu.row-menu) hangs under its button, its right edge on the button's, and above it
+  // at the bottom of the screen.
+  document.addEventListener('toggle', (e) => {
+    const m = /** @type {HTMLElement} */ (e.target);
+    if (/** @type {ToggleEvent} */ (e).newState !== 'open' || !m.classList?.contains('row-menu') || !m.id) return;
+    const by = document.querySelector('[popovertarget="' + CSS.escape(m.id) + '"]');
+    if (!by) return;
+    const r = by.getBoundingClientRect();
+    m.style.left = Math.max(8, Math.min(r.right - m.offsetWidth, innerWidth - 8 - m.offsetWidth)) + 'px';
+    m.style.top = (r.bottom + 4 + m.offsetHeight > innerHeight - 8 ? Math.max(8, r.top - 4 - m.offsetHeight) : r.bottom + 4) + 'px';
+  }, true);
 
   /**
    * grillLoadFailed says a module failed to load (a dropped connection, ERR_NETWORK_CHANGED): its

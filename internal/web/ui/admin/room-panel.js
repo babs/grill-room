@@ -74,7 +74,7 @@ export const formAction = (work) => (/** @type {Event} */ e) => { e.preventDefau
 export function TabBar({ tabs, active, href, label, cls }) {
   const nav = useRef(/** @type {HTMLElement | null} */ (null));
   // A bar that scrolls sideways on a phone keeps its current tab in sight (005-AC35).
-  useEffect(() => { nav.current?.querySelector('[aria-current=page]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, [active]);
+  useEffect(() => { window.grillShowTab(nav.current); }, [active]);
   return html`<nav ref=${nav} class=${'tabs' + (cls ? ' ' + cls : '')} aria-label=${label}>${tabs.map(([id, name]) => html`<a key=${id} href=${href(id)}
     id=${'tab-' + id} aria-current=${id === active ? 'page' : undefined}>${name}</a>`)}</nav>`;
 }

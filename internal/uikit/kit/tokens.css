@@ -54,7 +54,11 @@
 .btn-danger { background: var(--danger); border-color: var(--danger); color: var(--on-danger); }
 .btn-danger-outline { background: transparent; border-color: var(--danger); color: var(--danger); }
 .btn-icon { min-width: var(--control-h); padding: 0; }
-:where(button, .btn):disabled, [aria-disabled=true]:where(button, .btn) { opacity: .45; cursor: default; }
+/* A faded fill drops under 3:1 in dark mode (dark text on dark teal): a disabled button keeps its
+   shape in --border and its text in --text-muted, 4.5:1 or more on the page and on a card. */
+:is(button, .btn):disabled, [aria-disabled=true]:is(.btn, .btn-primary, .btn-secondary, .btn-ghost, .btn-danger, .btn-danger-outline) { background: transparent; border-color: var(--border); color: var(--text-muted); cursor: default; }
+.btn-ghost:disabled { border-color: transparent; }
+.app-header :is(button, .btn):disabled { color: var(--chrome-muted); }
 :where(input:not([type=checkbox], [type=radio], [type=range], [type=color], [type=file]), select, textarea) {
   min-height: var(--control-h); max-width: 100%; padding: 0 var(--sp-3);
   border: 1px solid var(--border-strong); border-radius: var(--r-md);
@@ -100,22 +104,28 @@
   display: flex; gap: var(--sp-1); overflow-x: auto; scrollbar-width: none;
   border-bottom: 1px solid var(--border);
 }
+@property --tabs-fade-end { syntax: '<length>'; inherits: false; initial-value: 0px; }
+/* The fade shows only while tabs remain to the right: a bar that fits, or is scrolled to its end,
+   has none. Without scroll timelines, or under reduced motion, there is no fade. */
+@keyframes tabs-fade { from, 99% { --tabs-fade-end: 24px; } to { --tabs-fade-end: 0px; } }
 .tabs a {
   display: inline-flex; align-items: center; gap: var(--sp-1); flex: none; min-height: 44px; padding: 0 var(--sp-4);
   border-bottom: 3px solid transparent; color: var(--text); font: 600 var(--fs-sm)/1 var(--font); text-decoration: none; white-space: nowrap;
 }
 .tabs a[aria-current=page] { border-bottom-color: var(--brand); }
-/* Tabs stay in reach in a long page (docs/design.md §5). */
+/* Tabs stay in reach in a long page or sheet (docs/design.md §5), on what they cover. */
 .tabs.sticky { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--bg); }
+.sheet .tabs.sticky { top: calc(-1 * var(--sp-4)); background: var(--surface); }
 .tabs a:focus-visible { outline-offset: -2px; }
 @media (max-width: 40rem) {
-  /* The last tab, or the one scrolled into view, stops clear of the 24 px fade edge. */
-  .tabs { mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); scroll-padding-inline-end: 24px; }
-  .tabs::after { content: ""; flex: none; width: 24px; }
+  .tabs { gap: 0; mask-image: linear-gradient(to right, #000 calc(100% - var(--tabs-fade-end)), transparent);
+    animation: tabs-fade linear both; animation-timeline: scroll(self inline); }
   .tabs a { padding: 0 var(--sp-3); }
 }
-/* A page's content column, left-aligned under its tabs (docs/design.md §6). */
+/* A page's content column, left-aligned under its tabs (docs/design.md §6); tables take the full
+   width. */
 .page { width: 100%; max-width: 72rem; padding: var(--sp-4); }
+.page-wide { width: 100%; padding: var(--sp-4); }
 .empty { display: block; margin: var(--sp-2) 0; padding: var(--sp-3) var(--sp-4); border: 1px dashed var(--border-strong); border-radius: var(--r-md); color: var(--text-muted); font-size: var(--fs-sm); font-style: normal; text-align: center; list-style: none; }
 .empty > p { margin: 0; }
 .empty > * + * { margin-top: var(--sp-2); }
@@ -164,6 +174,48 @@
   table.cards td { padding: var(--sp-1) 0; border: 0; white-space: normal; }
   table.cards td[data-label]::before { content: attr(data-label) ": "; color: var(--text-muted); font-size: var(--fs-sm); }
 }
+/* A state: a shape and a word in the state's token, never colour alone (docs/design.md §5). */
+.status { display: inline-flex; align-items: center; gap: var(--sp-1); min-height: 1.5rem; padding: 0 var(--sp-2);
+  border: 1px solid currentColor; border-radius: var(--r-pill); color: var(--text-muted); font-size: var(--fs-xs); font-weight: 600; line-height: 1.2; vertical-align: middle; }
+.status::before { content: ""; flex: none; width: .5rem; height: .5rem; border: 1.5px solid currentColor; border-radius: 50%; }
+.status.ok { color: var(--success); }
+.status.ok::before { background: currentColor; }
+.status.busy { color: var(--primary-text); }
+.status.busy::before { background: linear-gradient(90deg, currentColor 50%, transparent 50%); }
+.status.off { border-style: dashed; }
+.status.off::before { border-style: dashed; }
+.status.failed { color: var(--danger); }
+.status.failed::before { border-radius: 1px; background: currentColor; }
+/* On the header's ink the dots' tokens keep 3:1 and more. */
+.app-header .status { color: var(--chrome-muted); }
+.app-header .status.ok { color: var(--success-dot); }
+/* A value people copy (a link, a key, a digest): one line, cut with an ellipsis, the whole value in
+   the tip and a copy button (kit/ui.js). */
+.value { display: inline-flex; align-items: center; gap: var(--sp-1); min-width: 0; max-width: 100%; vertical-align: middle; }
+.value-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.value.copyable .value-text { font-family: var(--mono); font-size: var(--fs-sm); }
+.value .copy { flex: none; min-height: var(--control-h-sm); min-width: var(--control-h-sm); }
+/* A list row: the name, its meta in muted text, then the actions in fixed columns, a ⋯ last. */
+.list-rows { margin: 0 0 var(--sp-3); padding: 0; list-style: none; }
+.list-row { display: flex; align-items: center; gap: var(--sp-2) var(--sp-3); min-height: 44px; margin: 0; padding: var(--sp-1) 0; border-bottom: 1px solid var(--border); }
+.list-row > .main { flex: 1; min-width: 0; }
+.list-row .name { font-weight: 600; overflow-wrap: anywhere; }
+.list-row .meta { color: var(--text-muted); font-size: var(--fs-sm); }
+.list-row > .actions { flex: none; display: flex; align-items: center; gap: var(--sp-1); margin: 0; }
+/* A ⋯ menu hangs from its button (kit/ui.js places it). */
+.menu.row-menu { inset: auto; }
+/* Settings in one form: label, control and hint in columns, one footer that counts the unsaved
+   changes next to the only Save. A toggle applies at once and says so in a toast. */
+.settings-group { display: grid; grid-template-columns: minmax(8rem, max-content) minmax(0, 1fr); gap: var(--sp-3) var(--sp-4); align-items: center; }
+.settings-group > :is(label, .label) { font-size: var(--fs-sm); font-weight: 600; }
+.settings-group > label:has(> input[type=checkbox]) { font-size: var(--fs-control); font-weight: 400; }
+.settings-group > .control { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
+.settings-group > .hint, .settings-group > .full { grid-column: 1 / -1; margin: 0; }
+.settings-group > .hint { margin-top: calc(-1 * var(--sp-2)); }
+.settings-foot { grid-column: 1 / -1; position: sticky; bottom: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) 0; border-top: 1px solid var(--border); background: var(--surface); }
+.settings-foot .dirty { color: var(--text-muted); font-size: var(--fs-sm); }
+@media (max-width: 40rem) { .settings-group { grid-template-columns: minmax(0, 1fr); gap: var(--sp-1) 0; } .settings-group > .control { margin-bottom: var(--sp-2); } }
 /* The styled tip (kit/ui.js) for any [data-tip], on every page. */
 .tip { position: fixed; inset: auto; margin: 0; max-width: 20rem; padding: var(--sp-1) var(--sp-2);
   border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); color: var(--text); box-shadow: var(--sh-2); font-size: var(--fs-xs); line-height: 1.45; }

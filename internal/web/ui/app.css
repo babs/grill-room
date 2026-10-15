@@ -177,7 +177,6 @@ button.persona .pstate { color: var(--text-muted); font-weight: 400; font-size: 
 .meta .capped { color: var(--warning); }
 
 /* Sheets and dialogs */
-.sheet.wide { background: var(--bg); }
 dialog#manage { width: min(64rem, calc(100vw - 1rem)); min-height: min(36rem, calc(100dvh - 2 * min(10dvh, var(--sp-7)))); }
 /* Room settings is full screen on a phone (005-AC15). */
 @media (max-width: 40rem) { dialog#manage { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border: 0; border-radius: 0; } }
@@ -214,7 +213,6 @@ dialog#manage { width: min(64rem, calc(100vw - 1rem)); min-height: min(36rem, ca
 .sheet-tools { display: flex; flex: none; gap: var(--sp-1); }
 #persona-sheet-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .persona-form > section { padding-top: var(--sp-2); }
-#persona-tabs { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--bg); }
 #persona-status:empty { display: none; }
 .persona-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: var(--sp-2) var(--sp-3); margin: var(--sp-2) 0; }
 .persona-form label { display: grid; gap: var(--sp-1); font-size: var(--fs-sm); color: var(--text-muted); }

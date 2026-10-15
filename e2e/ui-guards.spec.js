@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, upload, appointAdmin, personaSheet, closePersonas, commentOnDocument } from './helpers.js';
+import { roomWith, upload, appointAdmin, personaSheet, closePersonas, commentOnDocument, signIn, startDaemon } from './helpers.js';
 
 // One guard per defect class of the v0.0.17 visual check (docs/design.md): each failed there.
 const desktop = { width: 1440, height: 900 };
@@ -194,4 +194,243 @@ test("a control's tip never takes the next row's click", async ({ browser, reque
   // v0.0.17 had no tip there; a hoverable tip under the first row covered the second.
   await rows.nth(1).click({ timeout: 3000 });
   await expect(alice.locator('#doc-name')).toHaveText(await rows.nth(1).textContent());
+});
+
+// The shared components (docs/design.md §5, the panels review's kit branch): each guard failed on
+// the pages as they were.
+
+// tabBars opens the four tabbed views on their last tab and runs check(page, nav selector, name) on
+// each: /profile, /admin, the daemon page and the persona sheet.
+async function tabBars(browser, request, size, check) {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await appointAdmin(alice, request, room.id);
+  const profile = await alice.context().newPage();
+  await profile.setViewportSize(size);
+  await profile.goto('/profile#account');
+  await expect(profile.locator('#panel-account')).toBeVisible();
+  await check(profile, '#profile-tabs', 'profile');
+  const admin = await browser.newPage({ viewport: size });
+  await signIn(admin, undefined, 'audit');
+  await expect(admin.locator('#tab-audit')).toHaveAttribute('aria-current', 'page');
+  await check(admin, 'nav.tabs[aria-label=Views]', 'admin');
+  const daemon = startDaemon(alice.url().split('#')[0]);
+  try {
+    const host = await browser.newPage({ viewport: size });
+    await host.goto((await daemon.link) + '#update');
+    await expect(host.locator('#tab-update')).toHaveAttribute('aria-current', 'page');
+    await check(host, 'nav.tabs[aria-label=Sections]', 'daemon');
+  } finally {
+    daemon.cleanup();
+  }
+  await alice.setViewportSize(size);
+  await personaSheet(alice, persona, 'Capabilities');
+  await check(alice, '#persona-tabs', 'persona sheet');
+}
+
+test('one sticky tab bar stays in view', async ({ browser, request }) => {
+  const looks = {};
+  await tabBars(browser, request, desktop, async (page, sel, name) => {
+    const nav = page.locator(sel);
+    await expect(nav).toHaveClass(/\bsticky\b/);
+    // A long panel, then the bottom of its scroll box: the bar stays at the box's top, uncovered.
+    const at = await nav.evaluate((n) => {
+      const spacer = Object.assign(document.createElement('div'), { className: 'guard-spacer' });
+      spacer.style.height = '4000px';
+      n.parentElement.append(spacer);
+      let box = n.parentElement;
+      while (box && !(['auto', 'scroll'].includes(getComputedStyle(box).overflowY) && box.scrollHeight > box.clientHeight)) box = box.parentElement;
+      const scroller = box || document.scrollingElement;
+      scroller.scrollTop = scroller.scrollHeight;
+      const top = box ? box.getBoundingClientRect().top + box.clientTop : 0;
+      const r = n.getBoundingClientRect();
+      const a = n.querySelector('[aria-current=page]').getBoundingClientRect();
+      const hit = document.elementFromPoint(a.left + a.width / 2, a.top + a.height / 2);
+      const s = getComputedStyle(n);
+      spacer.remove();
+      return { offset: Math.round(r.top - top), covered: !n.contains(hit), look: [s.position, s.borderBottomWidth, s.borderBottomStyle, s.zIndex].join(' ') };
+    });
+    expect(at.offset, `${name} bar top in its scroll box`).toBeGreaterThanOrEqual(-1);
+    expect(at.offset, `${name} bar top in its scroll box`).toBeLessThanOrEqual(1);
+    expect(at.covered, `${name} current tab covered`).toBe(false);
+    looks[name] = at.look;
+  });
+  expect(new Set(Object.values(looks)).size, JSON.stringify(looks)).toBe(1);
+});
+
+test('phone: the first and the current tab are never cut', async ({ browser, request }) => {
+  await tabBars(browser, request, phone, async (page, sel, name) => {
+    const nav = page.locator(sel);
+    await expect(nav.locator('[aria-current=page]')).toBeVisible();
+    // Visible means inside the bar and clear of its fade; the first tab may also be scrolled out
+    // whole, never shown in part ("ooms" for Rooms).
+    // The fade follows the scroll a frame late: wait for the bar to settle.
+    const cut = () => nav.evaluate((n) => {
+      const b = n.getBoundingClientRect();
+      const fade = parseFloat(getComputedStyle(n).getPropertyValue('--tabs-fade-end')) || 0;
+      const [lo, hi] = [b.left + n.clientLeft, b.left + n.clientLeft + n.clientWidth - fade];
+      const state = (a) => {
+        const r = a.getBoundingClientRect();
+        if (r.right <= lo + 0.5 || r.left >= hi - 0.5) return 'out';
+        return r.left >= lo - 0.5 && r.right <= hi + 0.5 ? 'whole' : `cut ${Math.round(r.left)}..${Math.round(r.right)} in ${Math.round(lo)}..${Math.round(hi)}`;
+      };
+      // Whichever tab meets the left edge is whole too: the fade is on the right only.
+      const left = [...n.querySelectorAll('a')].filter((a) => { const r = a.getBoundingClientRect(); return r.left < lo - 0.5 && r.right > lo + 0.5; }).length;
+      return `first ${state(n.querySelector('a'))}, current ${state(n.querySelector('[aria-current=page]'))}, cut at the left ${left}`;
+    });
+    await expect.poll(cut, name).toMatch(/^first (whole|out), current whole, cut at the left 0$/);
+  });
+});
+
+// token resolves a custom property to the colour the page computes for it.
+const token = (page, name) => page.evaluate((n) => {
+  const probe = document.createElement('span');
+  probe.style.color = `var(${n})`;
+  document.body.append(probe);
+  const c = getComputedStyle(probe).color;
+  probe.remove();
+  return c;
+}, name);
+
+// A state pill's colour by its kind; on the header's chrome the dots' tokens carry the contrast.
+const pillTokens = { ok: '--success', busy: '--primary-text', idle: '--text-muted', off: '--text-muted', failed: '--danger' };
+
+test('status pills take their colour from the tokens', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const daemon = startDaemon(alice.url().split('#')[0]);
+  try {
+    const host = await browser.newPage({ viewport: desktop });
+    await host.goto((await daemon.link) + '#settings');
+    for (const scheme of ['light', 'dark']) {
+      await host.emulateMedia({ colorScheme: scheme });
+      const running = host.locator('.app-header .status', { hasText: 'Running' });
+      await expect(running, scheme).toHaveClass(/\bok\b/);
+      expect(await running.evaluate((e) => getComputedStyle(e).color), `Running on the header, ${scheme}`).toBe(await token(host, '--success-dot'));
+      await expect(host.locator('#panel-settings .status').first()).toBeVisible({ timeout: 30_000 });
+      const pills = await host.locator('main .status').evaluateAll((els) => els.filter((e) => e.getClientRects().length)
+        .map((e) => [e.textContent.trim(), ['ok', 'busy', 'idle', 'off', 'failed'].find((k) => e.classList.contains(k)), getComputedStyle(e).color]));
+      expect(pills.length, scheme).toBeGreaterThan(0);
+      for (const [text, kind, color] of pills) expect(color, `${text} (${kind}), ${scheme}`).toBe(await token(host, pillTokens[kind] || '--none'));
+    }
+  } finally {
+    daemon.cleanup();
+  }
+  const admin = await browser.newPage({ viewport: desktop });
+  await signIn(admin, undefined, 'rooms');
+  const cell = admin.locator('#room-' + room.id + ' .status');
+  await expect(cell).toHaveText('No AI host');
+  expect(await cell.evaluate((e) => getComputedStyle(e).color)).toBe(await token(admin, '--text-muted'));
+});
+
+test('a cut value keeps a copy button and its full text in the tip', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const roomURL = alice.url().split('#')[0];
+  const daemon = startDaemon(roomURL);
+  try {
+    const ctx = await browser.newContext({ viewport: phone, permissions: ['clipboard-read', 'clipboard-write'] });
+    const host = await ctx.newPage();
+    await host.goto(await daemon.link);
+    const value = host.locator('#room .value');
+    await expect(value).toBeVisible();
+    const text = value.locator('.value-text');
+    // One line, cut at the phone's width, the whole link in the tip.
+    expect(await text.evaluate((e) => [getComputedStyle(e).whiteSpace, getComputedStyle(e).textOverflow, e.scrollWidth > e.clientWidth])).toEqual(['nowrap', 'ellipsis', true]);
+    await expect(text).toHaveAttribute('data-tip', roomURL);
+    const copy = value.getByRole('button', { name: /^Copy/ });
+    const box = await copy.boundingBox();
+    expect(box.x + box.width, 'copy button on screen').toBeLessThanOrEqual(phone.width);
+    await copy.click();
+    expect(await host.evaluate(() => navigator.clipboard.readText())).toBe(roomURL);
+    await expect(host.locator('.toast', { hasText: 'Copied' })).toBeVisible();
+  } finally {
+    daemon.cleanup();
+  }
+});
+
+test('the daemon page draws one tip', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const daemon = startDaemon(alice.url().split('#')[0]);
+  try {
+    const host = await browser.newPage({ viewport: desktop });
+    await host.goto(await daemon.link);
+    await expect(host.locator('#tab-rooms')).toBeVisible();
+    // Any [data-tip] gets the tip: the page's own probe, so the check needs no data.
+    await host.locator('main').evaluate((m) => m.prepend(Object.assign(document.createElement('span'), { id: 'tip-probe', textContent: 'probe' })));
+    await host.locator('#tip-probe').evaluate((e) => { e.dataset.tip = 'a probe'; });
+    await host.locator('#tip-probe').hover();
+    await expect(host.locator('#person-tip')).toBeVisible();
+    const tips = await host.evaluate(() => [...document.querySelectorAll('body *')].filter((e) => e.getClientRects().length && e.textContent === 'a probe' && e.id !== 'tip-probe').map((e) => e.id));
+    expect(tips).toEqual(['person-tip']);
+  } finally {
+    daemon.cleanup();
+  }
+});
+
+test('wide sheets paint the card surface', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await appointAdmin(alice, request, room.id);
+  await alice.setViewportSize(desktop);
+  for (const scheme of ['light', 'dark']) {
+    await alice.emulateMedia({ colorScheme: scheme });
+    const surface = await token(alice, '--surface');
+    await personaSheet(alice, persona);
+    for (const id of ['#personas', '#persona-sheet']) expect(await alice.locator(id).evaluate((e) => getComputedStyle(e).backgroundColor), `${id} ${scheme}`).toBe(surface);
+    await closePersonas(alice);
+    await alice.goto(alice.url().split('#')[0] + '#manage/general');
+    expect(await alice.locator('#manage').evaluate((e) => getComputedStyle(e).backgroundColor), `#manage ${scheme}`).toBe(surface);
+    await alice.goto(alice.url().split('#')[0]);
+  }
+});
+
+// disabledContrast lists the visible disabled buttons whose text, as painted, is under 4.5:1 on what
+// is behind it: the button's and its ancestors' opacity and backgrounds blended in.
+const disabledContrast = (page) => page.evaluate(() => {
+  const rgba = (c) => { const m = c.match(/[\d.]+/g).map(Number); return [m[0], m[1], m[2], m.length > 3 ? m[3] : 1]; };
+  const over = (top, under) => top.slice(0, 3).map((v, i) => v * top[3] + under[i] * (1 - top[3])).concat(1);
+  const behind = (e) => {
+    const chain = [];
+    for (let p = e; p; p = p.parentElement) chain.push(p);
+    let bg = [255, 255, 255, 1];
+    for (const p of chain.reverse()) bg = over(rgba(getComputedStyle(p).backgroundColor), bg);
+    return bg;
+  };
+  const lum = (c) => { const [r, g, b] = c.slice(0, 3).map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+  const bad = [];
+  for (const b of document.querySelectorAll('button:disabled, .btn[aria-disabled=true]')) {
+    if (!b.getClientRects().length || !b.textContent.trim()) continue;
+    let opacity = 1;
+    for (let p = b; p; p = p.parentElement) opacity *= Number(getComputedStyle(p).opacity);
+    const under = behind(b.parentElement);
+    const face = over(rgba(getComputedStyle(b).backgroundColor), under);
+    const text = over(rgba(getComputedStyle(b).color), face);
+    const r = ratio(over([...text.slice(0, 3), opacity], under), over([...face.slice(0, 3), opacity], under));
+    if (r < 4.5) bad.push(`${b.textContent.trim().slice(0, 30)}: ${r.toFixed(2)}`);
+  }
+  return bad;
+});
+
+test('disabled buttons stay readable in both themes', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await appointAdmin(alice, request, room.id);
+  await alice.setViewportSize(desktop);
+  const admin = await browser.newPage({ viewport: desktop });
+  await signIn(admin, undefined, 'audit');
+  const views = [
+    [alice, alice.url().split('#')[0] + '#manage/general', 'room settings', alice.locator('#manage').getByRole('button', { name: 'Rename', exact: true })],
+    [admin, '/admin#rooms/' + room.id + '/general', '/admin room', admin.locator('#room-panel').getByRole('button', { name: 'Rename', exact: true })],
+    [admin, '/admin#audit', '/admin audit', admin.getByRole('button', { name: 'Newer' })],
+  ];
+  for (const scheme of ['light', 'dark']) {
+    for (const [page, url, name, disabled] of views) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.goto(url);
+      await expect(disabled, `${name} ${scheme}`).toBeDisabled();
+      expect(await disabledContrast(page), `${name} ${scheme}`).toEqual([]);
+    }
+    // A persona pill that cannot ask is aria-disabled but keeps its own look: the kit's rule is for its buttons.
+    await alice.goto(alice.url().split('#')[0]);
+    const pill = alice.locator('button.persona[aria-disabled=true]').first();
+    await expect(pill).toBeVisible();
+    expect(await pill.evaluate((b) => getComputedStyle(b).backgroundColor), `persona pill ${scheme}`).toBe(await token(alice, '--surface'));
+  }
 });

@@ -75,26 +75,8 @@ async function api(method, path, body) {
 /** @param {unknown} err */
 const show = (err) => { if (signedIn.value) notice.value = /** @type {Error} */ (err).message; };
 
-// The room panel says what it did through a toast (011-AC20), in one region as on the room page: a
-// popover sits in the top layer, over a sheet still closing.
-const toasts = document.createElement('div');
-toasts.className = 'toasts';
-toasts.popover = 'manual';
-document.body.append(toasts);
-addEventListener('grill:toast', (e) => {
-  const t = document.createElement('p');
-  t.className = 'toast';
-  t.textContent = /** @type {CustomEvent<string>} */ (e).detail;
-  toasts.append(t);
-  // A region that only just appeared is often skipped by screen readers: admin.html's always is there.
-  const live = document.getElementById('toast-live');
-  if (live) live.textContent = t.textContent;
-  if (!toasts.matches(':popover-open')) toasts.showPopover();
-  setTimeout(() => {
-    t.remove();
-    if (!toasts.children.length) toasts.hidePopover();
-  }, 4000);
-});
+// The room panel says what it did through a toast (011-AC20), the kit's, as on every page.
+addEventListener('grill:toast', (e) => window.grillToast(/** @type {CustomEvent<string>} */ (e).detail));
 
 /** @param {string} text */
 const toast = (text) => dispatchEvent(new CustomEvent('grill:toast', { detail: text }));
@@ -141,12 +123,12 @@ function Sessions() {
   return html`
     <h2>Sessions</h2>
     <p class="hint">Browsers signed in with the admin token, for 12 hours each. Revoking one signs it out at its next request.</p>
-    ${list && html`<div class="scroll"><table id="sessions">
+    ${list && html`<div class="scroll"><table id="sessions" class="cards">
       <thead><tr><th>Signed in</th><th>Last used</th><th>Expires</th><th>IP</th><th>Browser</th><th></th></tr></thead>
       <tbody>${list.map((s) => html`<tr id=${'session-' + s.id}>
-        <td>${when(s.created_at)}${s.current && html` <strong>(this browser)</strong>`}</td>
-        <td>${when(s.last_used_at)}</td><td>${when(s.expires_at)}</td><td>${s.ip}</td>
-        <td class="wrap">${s.user_agent}</td>
+        <td data-label="Signed in">${when(s.created_at)}${s.current && html` <strong>(this browser)</strong>`}</td>
+        <td data-label="Last used">${when(s.last_used_at)}</td><td data-label="Expires">${when(s.expires_at)}</td><td data-label="IP">${s.ip}</td>
+        <td class="wrap" data-label="Browser">${s.user_agent}</td>
         <td><button type="button" onClick=${() => revoke(s)}>${s.current ? 'Sign out' : 'Revoke'}</button></td>
       </tr>`)}</tbody>
     </table></div>`}`;
@@ -204,12 +186,12 @@ function Audit() {
         <input id="audit-target" type="search" onChange=${filter(setTarget)}/>
       </label>
     </div>
-    ${page && (page.entries.length ? html`<div class="scroll"><table id="audit">
+    ${page && (page.entries.length ? html`<div class="scroll"><table id="audit" class="cards">
       <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Details</th></tr></thead>
       <tbody>${page.entries.map((e) => html`<tr id=${'audit-' + e.id}>
-        <td>${when(e.at)}</td><td>${actor(e)}</td><td>${e.action}</td>
-        <td class="wrap">${e.target_kind} ${e.target_name && html`<strong>${e.target_name}</strong>`} <code>${e.target_id}</code></td>
-        <td class="wrap"><code>${JSON.stringify(e.details)}</code></td>
+        <td data-label="When">${when(e.at)}</td><td data-label="Who">${actor(e)}</td><td data-label="Action">${e.action}</td>
+        <td class="wrap" data-label="Target">${e.target_kind} ${e.target_name && html`<strong>${e.target_name}</strong>`} <code>${e.target_id}</code></td>
+        <td class="wrap" data-label="Details"><code>${JSON.stringify(e.details)}</code></td>
       </tr>`)}</tbody>
     </table></div>` : html`<p>No entry matches.</p>`)}
     <div class="row">
@@ -270,7 +252,8 @@ function Rooms() {
       <tbody>${rooms.map((r) => html`<tr id=${'room-' + r.id}>
         <td class="wrap"><strong>${r.name}</strong></td><td data-label="Created">${ago(r.created_at)}</td><td data-label="Last activity">${ago(r.last_activity)}</td>
         <td data-label="People">${r.participants}</td><td data-label="Personas">${r.personas}</td>
-        <td data-label="AI host">${!r.host_participant_id ? 'none' : r.host_online ? 'online' : 'offline'}</td><td data-label="Volume">${size(r.volume.total)}</td>
+        <td data-label="AI host">${!r.host_participant_id ? html`<span class="status off">No AI host</span>`
+          : r.host_online ? html`<span class="status ok">Online</span>` : html`<span class="status idle">Offline</span>`}</td><td data-label="Volume">${size(r.volume.total)}</td>
         <td data-label="Quota used"><meter min="0" max=${r.quota} value=${r.used} data-tip=${size(r.used) + ' of ' + size(r.quota)}></meter> ${size(r.used)} / ${size(r.quota)}</td>
         <td><a class="btn btn-secondary" href=${'#rooms/' + encodeURIComponent(r.id)} aria-label=${'Manage ' + r.name}>Manage</a></td>
       </tr>`)}</tbody>
@@ -411,12 +394,12 @@ function Profiles() {
   return html`
     <h2>Profiles</h2>
     <p class="hint">Emails show here and nowhere else. A profile's name is the one it chose in a room, else the one it last joined a room with.</p>
-    ${list && (list.length ? html`<div class="scroll"><table id="profiles">
+    ${list && (list.length ? html`<div class="scroll"><table id="profiles" class="cards">
       <thead><tr><th>Name</th><th>Email</th><th>Rooms</th><th>Skills</th><th>Last activity</th><th>Rooms it may create</th><th></th></tr></thead>
       <tbody>${list.map((p) => html`<tr id=${'profile-' + p.id}>
-        <td>${p.name || '—'} <code data-tip=${p.uuid}>${p.uuid.slice(0, 8)}</code></td><td>${p.email || '—'}</td>
-        <td class="wrap">${p.rooms.map((r) => r.room_name).join(', ') || '—'}</td><td>${p.skills}</td><td>${when(p.last_activity)}</td>
-        <td><${RoomLimit} key=${p.id} p=${p} perProfile=${perProfile} reload=${load}/></td>
+        <td>${p.name || '—'} <code data-tip=${p.uuid}>${p.uuid.slice(0, 8)}</code></td><td data-label="Email">${p.email || '—'}</td>
+        <td class="wrap" data-label="Rooms">${p.rooms.map((r) => r.room_name).join(', ') || '—'}</td><td data-label="Skills">${p.skills}</td><td data-label="Last activity">${when(p.last_activity)}</td>
+        <td data-label="Rooms it may create"><${RoomLimit} key=${p.id} p=${p} perProfile=${perProfile} reload=${load}/></td>
         <td><${RecoveryLink} p=${p}/> <button type="button" class="btn-secondary" onClick=${() => setMerging(p.id)}
           aria-label=${'Merge ' + (p.name || p.uuid) + ' into another profile'}>Merge…</button>
           <button type="button" onClick=${() => remove(p)}>Delete</button></td>
@@ -719,8 +702,8 @@ function Shell() {
       <h1>grill-room · Admin</h1>
       <button type="button" id="logout" class="btn-secondary" onClick=${logout}>Sign out</button>
     </header>
-    <${TabBar} tabs=${views} active=${view} href=${(/** @type {string} */ id) => '#' + id} label="Views" cls="views"/>
-    <main>
+    <main class=${view === 'instance' ? 'page' : 'page-wide'}>
+      <${TabBar} tabs=${views} active=${view} href=${(/** @type {string} */ id) => '#' + id} label="Views" cls="views sticky"/>
       ${notice.value && html`<p class="said bad" role="alert">${notice.value}</p>`}
       ${{ rooms: html`<${Rooms}/>`, profiles: html`<${Profiles}/>`, libraries: html`<${Libraries}/>`, instance: html`<${InstanceView}/>`,
         sessions: html`<${Sessions}/>`, audit: html`<${Audit}/>` }[view]}

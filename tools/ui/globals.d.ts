@@ -12,6 +12,8 @@ interface Window {
   grillIcon(name: string): Element;
   grillPlace(pop: HTMLElement, anchor: Element): void;
   grillTip: { hide(): void; refresh(): void; show(el: Element): void; shownFor(): Element | null };
+  grillToast(text: string): void;
+  grillShowTab(nav: Element | null): void;
 }
 // The server's device transcription offer, in the "stt" event (010-AC5), and the page's device
 // engine (stt/device.js) that the Phase 2 pipeline drives.

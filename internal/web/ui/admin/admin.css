@@ -1,7 +1,6 @@
 /* Layout of /admin. Colours, sizes and controls come from /static/kit/tokens.css (docs/design.md). */
 body { overflow-wrap: anywhere; }
 .app-header button { margin-left: auto; }
-main { max-width: 72rem; padding: 0 var(--sp-4) var(--sp-4); }
 h2 { font-size: var(--fs-lg); margin: var(--sp-5) 0 var(--sp-2); }
 h3 { font-size: var(--fs-md); margin: var(--sp-4) 0 var(--sp-1); }
 .login { max-width: 28rem; margin: var(--sp-7) auto; padding: var(--sp-4); }
@@ -35,9 +34,7 @@ form.limit input { width: 5rem; }
 .recovery-link .copy-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); }
 .recovery-link input { width: 18rem; max-width: 100%; font-family: var(--mono); font-size: var(--fs-sm); }
 .recovery-link .hint { margin: 0; }
-nav.tabs.views { position: sticky; top: 0; z-index: var(--z-sticky); margin: 0; padding: 0 var(--sp-4); background: var(--surface); }
 @media (max-width: 40rem) {
-  main { padding: 0 var(--sp-2) var(--sp-4); }
   .app-header button { margin-left: 0; }
 }
 .merge-pick label { min-width: 0; max-width: 100%; }
