@@ -191,6 +191,15 @@ func TestSandboxDocker(t *testing.T) {
 		t.Logf("curl api.anthropic.com: %v: %s", err, bytes.TrimSpace(out))
 	})
 
+	t.Run("proxy refuses other Anthropic APIs", func(t *testing.T) {
+		// Spike S16: the agent reads its dummy bearer, so the proxy must refuse it anything but model calls.
+		out, err := Docker(ctx, nil, "exec", s.container(), "curl", "-s", "-o", "/dev/null", "-m", "10", "-w", "%{http_code}",
+			"-H", "Authorization: Bearer "+bearer, "http://proxy:8787/v1/mcp_servers")
+		if code := strings.TrimSpace(string(out)); err != nil || code != "403" {
+			t.Errorf("GET /v1/mcp_servers from the sandbox: %q %v, want 403", code, err)
+		}
+	})
+
 	t.Run("no host token in the container", func(t *testing.T) {
 		export := exec.CommandContext(ctx, "docker", "export", s.container())
 		fsTar, err := export.Output()

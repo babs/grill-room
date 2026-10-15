@@ -9,6 +9,7 @@ package proxy
 import (
 	"context"
 	"crypto/sha256"
+	"maps"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -33,10 +34,31 @@ type TokenSource interface {
 	Invalidate()
 }
 
+// allowed holds every "METHOD escaped-path" Claude Code 2.1.296 sends through the proxy (spike S16).
+// Security: the sandbox can read its dummy bearer, so any other path would let its code spend the
+// account's real token on any Anthropic API (connectors, OAuth, API keys).
+var allowed = map[string]bool{
+	"POST /v1/messages":              true,
+	"POST /v1/messages/count_tokens": true,
+	"HEAD /api/hello":                true,
+}
+
+// maxLogged caps a denied method or path in the log: the sandbox picks their length.
+const maxLogged = 256
+
+func capped(s string) string {
+	if len(s) > maxLogged {
+		return s[:maxLogged] + "..."
+	}
+	return s
+}
+
 // Stats is what the proxy forwarded.
 type Stats struct {
 	// Requests counts the forwarded requests per client.
 	Requests map[string]int64
+	// Denied counts per client the requests refused for their method or path.
+	Denied map[string]int64
 	// LastUse is when the last request was forwarded, zero before any.
 	LastUse time.Time
 	// Unauthorized counts upstream 401s: the account's token was refused.
@@ -56,6 +78,7 @@ type Proxy struct {
 	live     map[string]context.Context
 	stop     map[string]context.CancelFunc
 	requests map[string]int64
+	denied   map[string]int64
 	lastUse  time.Time
 
 	unauthorized atomic.Int64
@@ -64,7 +87,7 @@ type Proxy struct {
 // New builds a proxy to upstream that swaps in src's token. It allows no client until Allow.
 func New(upstream *url.URL, src TokenSource, log *zap.Logger) *Proxy {
 	p := &Proxy{log: log, clients: map[[32]byte]string{}, byClient: map[string][32]byte{}, requests: map[string]int64{},
-		live: map[string]context.Context{}, stop: map[string]context.CancelFunc{}}
+		denied: map[string]int64{}, live: map[string]context.Context{}, stop: map[string]context.CancelFunc{}}
 	p.rp = &httputil.ReverseProxy{
 		FlushInterval: -1, // SSE streaming
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -138,19 +161,22 @@ func (p *Proxy) Revoke(client string) {
 func (p *Proxy) Stats() Stats {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	req := make(map[string]int64, len(p.requests))
-	for k, v := range p.requests {
-		req[k] = v
-	}
-	return Stats{Requests: req, LastUse: p.lastUse, Unauthorized: p.unauthorized.Load()}
+	return Stats{Requests: maps.Clone(p.requests), Denied: maps.Clone(p.denied), LastUse: p.lastUse, Unauthorized: p.unauthorized.Load()}
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h := sha256.Sum256([]byte(r.Header.Get("Authorization")))
+	// EscapedPath, matched exactly: dot segments, doubled or encoded slashes never match, and the
+	// path forwarded is the one checked. The query string is not part of it.
+	path := r.URL.EscapedPath()
+	pathOK := allowed[r.Method+" "+path]
 	p.mu.Lock()
 	client, ok := p.clients[h]
 	var live context.Context
-	if ok {
+	if ok && !pathOK {
+		p.denied[client]++
+	}
+	if ok && pathOK {
 		p.requests[client]++
 		p.lastUse = time.Now()
 		live = p.live[client]
@@ -162,6 +188,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			zap.String("method", r.Method), zap.String("path", r.URL.Path),
 		}, headerSummary(r.Header)...)...)
 		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if !pathOK {
+		p.log.Warn("proxy_path_denied", zap.String("method", capped(r.Method)), zap.String("path", capped(path)), zap.String("worker", client))
+		http.Error(w, "forbidden: this proxy forwards only Claude Code's model calls", http.StatusForbidden)
 		return
 	}
 	// A revoked client's streams end now, not when the model stops talking (003-AC15).
