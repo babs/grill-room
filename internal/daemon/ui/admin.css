@@ -89,12 +89,18 @@ ul.fetches, ul.plugin-domains { padding-left: 0; list-style: none; }
 .settings-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 30rem), 1fr)); gap: var(--sp-3) var(--sp-6); }
 .settings-col { min-width: 0; }
 .settings-group .control .hint { margin: 0; }
-table.allowlist { width: 100%; max-width: 40rem; }
+/* One save bar per tab, under its groups (daemon-r2). */
+#general-form .save-bar { margin-top: var(--sp-4); }
+.save-bar .said { margin-right: auto; }
+.network-head { margin: var(--sp-2) 0 0; max-width: 30rem; }
+table.allowlist { width: 100%; }
+table.allowlist tr.pending { opacity: .6; }
+.room-chip { margin-left: var(--sp-1); white-space: nowrap; }
 table.allowlist td { vertical-align: middle; }
 table.allowlist .num { text-align: right; width: 5rem; }
 table.allowlist .act { width: 1%; padding-right: 0; }
 table.allowlist code.domain { overflow-wrap: anywhere; white-space: normal; }
-.egress-switches { max-width: 40rem; margin-top: var(--sp-3); }
+.egress-switches { max-width: 40rem; }
 .egress-switches .hint { margin: 0 0 var(--sp-2); }
 .egress-switches .nested { margin-left: var(--sp-5); }
 table.allowlist tr.reached .hint { margin-left: var(--sp-1); }

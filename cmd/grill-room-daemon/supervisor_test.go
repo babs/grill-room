@@ -131,7 +131,7 @@ func daemonEnv(t *testing.T) []string {
 func startProc(t *testing.T, env []string, args ...string) *proc {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], args...) //nolint:gosec,noctx // this test binary, run as the daemon
-	cmd.Env = append(append(os.Environ(), "GRILL_ROOM_TEST_MAIN=1", "GRILL_ROOM_DAEMON_BROWSER=none", "LOG_LEVEL=info"), env...)
+	cmd.Env = append(append(os.Environ(), "GRILL_ROOM_TEST_MAIN=1", "GRILL_ROOM_DAEMON_BROWSER=none", "GRILL_ROOM_DAEMON_ADMIN_PORT=0", "LOG_LEVEL=info"), env...)
 	p := &proc{cmd: cmd, out: &syncBuf{}, done: make(chan struct{})}
 	cmd.Stdout, cmd.Stderr = p.out, p.out
 	if err := cmd.Start(); err != nil {

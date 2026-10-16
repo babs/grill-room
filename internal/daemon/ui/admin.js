@@ -3,7 +3,7 @@ import { render } from 'preact';
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { html } from 'htm/preact';
-import { startSession, api } from './api.js';
+import { startSession, api, forgetToken } from './api.js';
 import { Monitoring } from './monitor.js';
 
 /** @typedef {import('./api.js').StatusReply} StatusReply */
@@ -60,19 +60,19 @@ async function poll() {
 }
 
 /**
- * useStatus is a form's status line and the function that runs its request: the text says it
- * worked, or why not, and the page reloads its data.
+ * useStatus runs a form's request: once it worked, the page reloads its data and a toast says so,
+ * then fades; when it failed, the returned text says why until the next try (daemon-r2).
  * @returns {[string, (p: Promise<unknown>, ok?: string) => Promise<boolean>]}
  */
 function useStatus() {
   const [text, setText] = useState('');
   /** @type {(p: Promise<unknown>, ok?: string) => Promise<boolean>} */
-  const run = async (p, ok = '') => {
+  const run = async (p, ok = 'Saved') => {
     setText('');
     try {
       await p;
       await reload();
-      setText(ok);
+      window.grillToast(ok);
       return true;
     } catch (err) {
       setText(sentence(/** @type {Error} */ (err).message));
@@ -101,7 +101,7 @@ const roomID = (url) => url.replace(/\/+$/, '').split('/').pop() || url;
 const Badge = ({ text, cls = '' }) => html`<span class=${'badge ' + cls}>${text}</span>`;
 
 /** @param {{text: string, id?: string}} p */
-const Said = ({ text, id }) => html`<span id=${id} class="said" role="status">${text}</span>`;
+const Said = ({ text, id }) => html`<span id=${id} class="said bad" role="alert">${text}</span>`;
 
 /**
  * Pill is a state as the kit's .status: a shape and a word, its reason in the tip.
@@ -181,15 +181,16 @@ function Header() {
 // The page's tabs (005-AC17), each a deep link (#accounts). Rooms comes first to the eye of whoever
 // pairs: the daemon opens its page there. The servers live on Rooms now; #instances still opens it
 // (003b-AC1).
-const tabs = [['rooms', 'Rooms'], ['accounts', 'AI accounts'], ['settings', 'Settings'], ['monitoring', 'Activity'], ['update', 'Update']];
+// Settings are two tabs, General and Network (daemon-r2); #settings still opens General.
+const tabs = [['rooms', 'Rooms'], ['accounts', 'AI accounts'], ['general', 'General'], ['network', 'Network'], ['monitoring', 'Activity'], ['update', 'Update']];
 /** @param {string} hash */
-const tabOf = (hash) => tabs.find(([id]) => '#' + id === hash)?.[0] || 'rooms';
+const tabOf = (hash) => (hash === '#settings' ? 'general' : tabs.find(([id]) => '#' + id === hash)?.[0] || 'rooms');
 const tab = signal(tabOf(location.hash));
 addEventListener('hashchange', () => { tab.value = tabOf(location.hash); });
 
 // Each alert kind belongs to the tab that resolves it: logins near expiry, unsigned binaries, full
 // contexts and stuck queues (003-AC29).
-const alertTab = /** @type {Record<string, string>} */ ({ account: 'accounts', unsigned: 'rooms', context: 'rooms', queue: 'settings' });
+const alertTab = /** @type {Record<string, string>} */ ({ account: 'accounts', unsigned: 'rooms', context: 'rooms', queue: 'general' });
 /** @param {string} id */
 const alertsOf = (id) => (data.value?.alerts || []).filter((a) => (alertTab[a.kind] || 'monitoring') === id);
 
@@ -375,7 +376,7 @@ function Relax({ i, onDone }) {
   const submit = (e) => {
     e.preventDefault();
     window.grillConfirm('Accept unsigned binaries from ' + host + '?', 'This server could then run any program on this computer. Switch it off once you are done testing.', 'Accept')
-      .then((yes) => { if (yes) run(api('POST', '/api/relax', { instance: i.id, enabled: true, host }), 'Unsigned binaries accepted.').then((ok) => { if (ok) onDone(); }); });
+      .then((yes) => { if (yes) run(api('POST', '/api/relax', { instance: i.id, enabled: true, host }), 'Unsigned binaries accepted').then((ok) => { if (ok) onDone(); }); });
   };
   return html`<form class="relax" onSubmit=${submit}>
     <label>To accept its unsigned binaries, type its host <input class="relax-host" required size="24" autocomplete="off" spellcheck=${false}
@@ -621,12 +622,12 @@ function PluginSetup({ i, room, p, allowlist }) {
   /** @param {Event} e */
   const save = (e) => {
     e.preventDefault();
-    run(api('POST', '/api/plugin-options', { instance: i.id, room, plugin: p.id, values: draft }), 'Saved.').then((ok) => { if (ok) setDraft({}); });
+    run(api('POST', '/api/plugin-options', { instance: i.id, room, plugin: p.id, values: draft }), 'Saved').then((ok) => { if (ok) setDraft({}); });
   };
   /** @param {string} key */
-  const forget = (key) => run(api('POST', '/api/plugin-options', { instance: i.id, room, plugin: p.id, values: {}, clear: [key] }), 'Cleared.');
+  const forget = (key) => run(api('POST', '/api/plugin-options', { instance: i.id, room, plugin: p.id, values: {}, clear: [key] }), 'Cleared');
   /** @param {string} dom */
-  const allow = (dom) => runList(api('POST', '/api/allowlist', { instance: i.id, allowlist: [...allowlist, dom] }), dom + ' added to the allowlist.');
+  const allow = (dom) => runList(api('POST', '/api/allowlist', { instance: i.id, allowlist: [...allowlist, dom] }), dom + ' added to the allowlist');
   const base = 'opt-' + p.name + '-';
   return html`<div class="plugin-setup" data-plugin=${p.name}>
     <h4>${p.name} <span class="muted">v${p.version}</span></h4>
@@ -726,7 +727,7 @@ function Accounts() {
   const add = (e) => {
     e.preventDefault();
     run(api('POST', '/api/accounts', { name: name.trim(), kind, config_dir: kind === 'config_dir' ? dir.trim() : '', token: kind === 'setup_token' ? tok : '' }),
-      'Added.').then((ok) => { if (ok) { setName(''); setDir(''); } });
+      'Account ' + name.trim() + ' added').then((ok) => { if (ok) { setName(''); setDir(''); } });
     // The token is never shown again, not even in this field.
     setTok('');
   };
@@ -751,7 +752,8 @@ function Accounts() {
             placeholder="from claude setup-token" value=${tok} onInput=${on(setTok)} /></label>`}
       <button type="submit">Add the account</button>
     </form>
-    <p class="hint">A config folder is read only: Claude Code, run by you, refreshes its login. A setup token goes to the OS keyring, or to a file only you can read; it is not shown again. <span id="account-status" role="status">${text}</span></p>
+    <p class="hint">A config folder is read only: Claude Code, run by you, refreshes its login. A setup token goes to the OS keyring, or to a file only you can read; it is not shown again. </p>
+    <${Said} id="account-error" text=${text} />
   <//>`;
 }
 
@@ -787,12 +789,12 @@ function Trust() {
   /** @param {Event} e */
   const saveChannel = (e) => {
     e.preventDefault();
-    runCh(api('POST', '/api/update-channel', { channel, instance: channel === 'instance' ? followed : '' }), 'Saved. Checking for an update…');
+    runCh(api('POST', '/api/update-channel', { channel, instance: channel === 'instance' ? followed : '' }), 'Saved: checking for an update');
   };
   /** @param {Event} e */
   const addKey = (e) => {
     e.preventDefault();
-    runKey(api('POST', '/api/dev-keys', { name: keyName.trim(), pem }), 'Trusted.').then((ok) => { if (ok) { setKeyName(''); setPem(''); } });
+    runKey(api('POST', '/api/dev-keys', { name: keyName.trim(), pem }), 'Key ' + keyName.trim() + ' trusted').then((ok) => { if (ok) { setKeyName(''); setPem(''); } });
   };
   return html`
     <h3>Signature</h3>
@@ -808,7 +810,7 @@ function Trust() {
         ${instances.map((i) => html`<option value=${i.id}>${hostOf(i.url)}</option>`)}
       </select>`}
       <button type="submit">Save</button>
-      <span id="channel-status" role="status">${chText}</span>
+      <${Said} id="channel-error" text=${chText} />
     </form>
     <h3>Trusted dev keys</h3>
     <p class="hint">Binaries signed with one of these cosign public keys run like project releases. Keys also load from the dev-keys folder of this app's config.</p>
@@ -817,16 +819,17 @@ function Trust() {
       ${t.dev_keys.map((k) => html`<li class="list-row"><div class="main"><span class="name">${k.name}</span> <${Value} text=${k.fingerprint} label=${'fingerprint of ' + k.name} /></div>
         <div class="actions"><button type="button" class="btn-icon btn-ghost" aria-label=${'Remove ' + k.name} dangerouslySetInnerHTML=${icon('trash')}
         onClick=${() => window.grillConfirm('Remove the key ' + k.name + '?', 'Binaries it signed are refused from now on.', 'Remove')
-          .then((yes) => { if (yes) runKey(api('POST', '/api/dev-keys/remove', { name: k.name })); })}></button></div></li>`)}
+          .then((yes) => { if (yes) runKey(api('POST', '/api/dev-keys/remove', { name: k.name }), 'Key ' + k.name + ' removed'); })}></button></div></li>`)}
     </ul>
-    <form id="key-form" class="stack-form" onSubmit=${addKey}>
-      <label>Name <input id="key-name" required size="16" autocomplete="off" spellcheck=${false} pattern="[A-Za-z0-9][A-Za-z0-9._\\-]{0,63}"
-        value=${keyName} onInput=${(/** @type {any} */ e) => setKeyName(e.currentTarget.value)} /></label>
-      <label class="wide">Public key <textarea id="key-pem" required rows="4" spellcheck=${false} placeholder="-----BEGIN PUBLIC KEY-----"
-        value=${pem} onInput=${(/** @type {any} */ e) => setPem(e.currentTarget.value)}></textarea></label>
-      <button type="submit">Add the key</button>
-    </form>
-    <p><span id="key-status" role="status">${keyText}</span></p>`;
+    <form id="key-form" class="settings-group stacked" aria-label="Add a dev key" onSubmit=${addKey}>
+      <label for="key-name">Name</label>
+      <div class="control"><input id="key-name" required size="24" autocomplete="off" spellcheck=${false} pattern="[A-Za-z0-9][A-Za-z0-9._\\-]{0,63}"
+        value=${keyName} onInput=${(/** @type {any} */ e) => setKeyName(e.currentTarget.value)} /></div>
+      <label for="key-pem">Public key</label>
+      <div class="control"><textarea id="key-pem" required rows="4" spellcheck=${false} placeholder="-----BEGIN PUBLIC KEY-----"
+        value=${pem} onInput=${(/** @type {any} */ e) => setPem(e.currentTarget.value)}></textarea></div>
+      <div class="control"><button type="submit">Add the key</button><${Said} id="key-error" text=${keyText} /></div>
+    </form>`;
 }
 
 /** @param {StatusReply} d */
@@ -865,31 +868,71 @@ function MachineStrip() {
 /** @type {['cpus', 'memory', 'egress_cpus', 'egress_memory']} */
 const limitKeys = ['cpus', 'memory', 'egress_cpus', 'egress_memory'];
 
-// Machine holds what applies to the whole computer, one Save for all of it; Start at login applies
-// at once (003b-AC14). The limits are stored per server: they show the first server's and save to
-// every one.
-function Machine() {
+/**
+ * SaveBar is a tab's one save bar, stuck to the bottom while its form scrolls: what is unsaved, why
+ * the last save failed, and Save (daemon-r2).
+ * @param {{id: string, changed: number, error: string, busy: boolean}} p
+ */
+const SaveBar = ({ id, changed, error, busy }) => html`<div id=${id} class="settings-foot save-bar">
+  <${Said} text=${error} />
+  <span class="dirty">${changed ? (changed === 1 ? '1 unsaved change' : changed + ' unsaved changes') : 'Everything saved'}</span>
+  <button type="submit" disabled=${!changed || busy}>Save</button>
+</div>`;
+
+/**
+ * ServerPicker picks the server whose settings the tab shows, at the top of its group.
+ * @param {{inst: Instance}} p
+ */
+function ServerPicker({ inst }) {
+  const instances = data.value?.instances || [];
+  return html`<label for="settings-instance">Server</label><div class="control">
+    <select id="settings-instance" value=${inst.id} disabled=${instances.length < 2}
+      onChange=${(/** @type {any} */ e) => { picked.value = e.currentTarget.value; }}>
+      ${instances.map((i) => html`<option value=${i.id}>${hostOf(i.url)}</option>`)}
+    </select></div>`;
+}
+
+// General is this computer's settings and one server's, side by side, in one form with one save
+// bar; Start at login and approve-all apply at once (003b-AC13 to AC17, daemon-r2).
+function General() {
   const d = /** @type {StatusReply} */ (data.value);
   const instances = d.instances || [];
-  const saved = {
+  const inst = currentInstance(d);
+  const st = inst?.status;
+  // draft holds the fields the host changed, a server's under "<id>:<field>": switching the picker
+  // keeps them, and Save applies each to its own server.
+  const [draft, setDraft] = useState(/** @type {Record<string, string>} */ ({}));
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [approving, setApproving] = useState(/** @type {boolean | null} */ (null));
+  const machine = {
     max_turns: String(d.concurrency?.max_turns ?? ''),
     retention: String(d.retention_days || 30),
     ...(instances[0]?.limits || { cpus: '', memory: '', egress_cpus: '', egress_memory: '' }),
   };
-  const [draft, setDraft] = useState(/** @type {Record<string, string>} */ ({}));
-  const [text, run] = useStatus();
-  const [busy, setBusy] = useState(false);
-  const v = { ...saved, ...draft };
-  const changed = Object.keys(draft).filter((k) => draft[k] !== /** @type {Record<string, string>} */ (saved)[k]);
+  /** @param {Instance} i @returns {Record<string, string>} */
+  const serverSaved = (i) => ({ account: i.account, max_model: i.status?.settings.max_model || '', max_effort: i.status?.settings.max_effort || '' });
   /** @param {string} k */
-  const field = (k) => ({ value: v[/** @type {keyof typeof v} */ (k)], onInput: (/** @type {any} */ e) => setDraft({ ...draft, [k]: e.currentTarget.value }) });
+  const savedOf = (k) => {
+    const [id, f] = k.includes(':') ? k.split(':') : ['', k];
+    const i = instances.find((x) => x.id === id);
+    return id ? (i ? serverSaved(i)[f] : undefined) : /** @type {Record<string, string>} */ (machine)[f];
+  };
+  const changed = Object.keys(draft).filter((k) => savedOf(k) !== undefined && draft[k] !== savedOf(k));
+  /** @param {string} k */
+  const value = (k) => (k in draft ? draft[k] : savedOf(k) ?? '');
+  /** @param {string} k */
+  const edit = (k) => (/** @type {any} */ e) => { setError(''); setDraft({ ...draft, [k]: e.currentTarget.value }); };
+  /** @param {string} k */
+  const field = (k) => ({ value: value(k), onInput: edit(k) });
   /** @param {Event} e */
   const save = async (e) => {
     e.preventDefault();
-    const limits = changed.some((k) => /** @type {string[]} */ (limitKeys).includes(k));
+    const has = (/** @type {string} */ k) => changed.includes(k);
+    const limits = limitKeys.some(has);
     const answering = instances.some((i) => (i.room_states || []).some((r) => r.running || r.queued));
     if (limits && answering && !await window.grillConfirm('Apply the limits now?', 'An answer is running: restarting its server connection fails it.', 'Apply now')) return;
-    const l = Object.fromEntries(limitKeys.map((k) => [k, v[k]]));
+    const l = Object.fromEntries(limitKeys.map((k) => [k, value(k)]));
     // Chrome fails a request in flight when Docker adds or removes the sandboxes' networks, as the
     // restart does (ERR_NETWORK_CHANGED): the limits may have landed all the same.
     /** @param {Instance} i */
@@ -898,128 +941,143 @@ function Machine() {
       const now = (await api('GET', '/api/status')).instances?.find((/** @type {Instance} */ x) => x.id === i.id)?.limits;
       if (!now || limitKeys.some((k) => now[k] !== l[k])) throw err;
     });
-    const steps = (async () => {
-      if (changed.includes('max_turns')) await api('POST', '/api/max-turns', { max_turns: Number(v.max_turns) });
-      if (changed.includes('retention')) await api('POST', '/api/retention', { days: Number(v.retention) });
-      if (limits) for (const i of instances) await post(i);
-    })();
     setBusy(true);
-    if (await run(steps, limits ? 'Saved: the servers reconnect with the new limits.' : 'Saved.')) setDraft({});
-    setBusy(false);
+    try {
+      if (has('max_turns')) await api('POST', '/api/max-turns', { max_turns: Number(value('max_turns')) });
+      if (has('retention')) await api('POST', '/api/retention', { days: Number(value('retention')) });
+      if (limits) for (const i of instances) await post(i);
+      for (const i of instances) {
+        if (has(i.id + ':account')) await api('POST', '/api/instance-account', { instance: i.id, room: '', account: value(i.id + ':account') });
+        if (i.status && (has(i.id + ':max_model') || has(i.id + ':max_effort'))) {
+          await api('POST', '/api/settings', { instance: i.id, max_model: value(i.id + ':max_model'), max_effort: value(i.id + ':max_effort'), approve_all: i.status.settings.approve_all });
+        }
+      }
+      await reload();
+      setDraft({});
+      window.grillToast(limits ? 'Saved: the servers reconnect with the new limits' : 'Saved');
+    } catch (err) {
+      // What saved before the failure shows as saved: only the rest stays counted.
+      await reload().catch(() => {});
+      setError(sentence(/** @type {Error} */ (err).message));
+    } finally {
+      setBusy(false);
+    }
+  };
+  /** @param {any} e */
+  const approveAll = (e) => {
+    if (!inst || !st) return;
+    const on = e.currentTarget.checked;
+    setApproving(on);
+    api('POST', '/api/settings', { instance: inst.id, max_model: st.settings.max_model, max_effort: st.settings.max_effort, approve_all: on }).then(reload)
+      .then(() => window.grillToast(on ? 'New AI personas and changes are approved at once' : 'New AI personas and changes wait for your approval'))
+      .catch((err) => setError(sentence(err.message)))
+      .finally(() => setApproving(null));
   };
   /** @param {string} id @param {string} k @param {string} label @param {string} hint */
   const limit = (id, k, label, hint) => html`<label for=${id}>${label}</label><div class="control"><input id=${id} size="6" autocomplete="off"
     spellcheck=${false} placeholder=${hint} ...${field(k)} /></div>`;
-  return html`<h3 id="machine-title">This machine</h3>
-    <form id="machine-form" class="settings-group" aria-labelledby="machine-title" onSubmit=${save}>
-      ${d.concurrency && html`<label for="max-turns">Answers at once</label><div class="control">
-        <input id="max-turns" type="number" inputmode="numeric" min="1" max="16" required ...${field('max_turns')} /><span class="hint">across every server and room</span></div>`}
-      <label for="retention">Days of history</label><div class="control">
-        <input id="retention" type="number" inputmode="numeric" min="1" max="3650" required ...${field('retention')} /><span class="hint">of the answers listed on Activity</span></div>
-      <${Autostart} />
-      ${instances.length ? html`
-        ${limit('limit-cpus', 'cpus', 'Sandbox CPUs', '2')}${limit('limit-memory', 'memory', 'Sandbox memory', '4g')}
-        ${limit('limit-egress-cpus', 'egress_cpus', 'Proxy CPUs', '0.5')}${limit('limit-egress-memory', 'egress_memory', 'Proxy memory', '256m')}
-        <p class="hint">Each sandbox and its web proxy run within these; 0 means no limit. Saving them reconnects every server.</p>` : ''}
-      <div class="settings-foot">
-        <span id="machine-status" role="status">${text}</span>
-        ${changed.length > 0 && html`<span class="dirty">${changed.length === 1 ? '1 unsaved change' : changed.length + ' unsaved changes'}</span>`}
-        <button type="submit" disabled=${!changed.length || busy}>Save</button>
+  const sk = (/** @type {string} */ f) => (inst ? inst.id + ':' + f : f);
+  return html`<${Section} id="general" title="General">
+    <${MachineStrip} />
+    <form id="general-form" onSubmit=${save}>
+      <div class="settings-cols">
+        <div class="settings-col">
+          <h3 id="machine-title">This machine</h3>
+          <div id="machine-group" class="settings-group" role="group" aria-labelledby="machine-title">
+            ${d.concurrency && html`<label for="max-turns">Answers at once</label><div class="control">
+              <input id="max-turns" type="number" inputmode="numeric" min="1" max="16" required ...${field('max_turns')} /><span class="hint">across every server and room</span></div>`}
+            <label for="retention">Days of history</label><div class="control">
+              <input id="retention" type="number" inputmode="numeric" min="1" max="3650" required ...${field('retention')} /><span class="hint">of the answers listed on Activity</span></div>
+            <${Autostart} onError=${setError} />
+            ${instances.length ? html`
+              ${limit('limit-cpus', 'cpus', 'Sandbox CPUs', '2')}${limit('limit-memory', 'memory', 'Sandbox memory', '4g')}
+              ${limit('limit-egress-cpus', 'egress_cpus', 'Proxy CPUs', '0.5')}${limit('limit-egress-memory', 'egress_memory', 'Proxy memory', '256m')}
+              <p class="hint">Each sandbox and its web proxy run within these; 0 means no limit. Saving them reconnects every server.</p>` : ''}
+          </div>
+        </div>
+        <div class="settings-col">
+          <h3 id="server-settings-title">Server</h3>
+          ${!inst ? html`<p class="hint">Server settings show once you add a room.</p>`
+            : html`<div id="server-group" class="settings-group" role="group" aria-labelledby="server-settings-title">
+              <${ServerPicker} inst=${inst} />
+              ${d.accounts && html`<label for="server-account">AI account</label><div class="control">
+                <${AccountSelect} id="server-account" label="AI account" value=${value(sk('account'))}
+                  onPick=${(/** @type {string} */ a) => { setError(''); setDraft({ ...draft, [sk('account')]: a }); }} />
+                <span class="hint">for its rooms that do not pick their own</span></div>`}
+              ${st ? html`<label for="max-model">Max model</label><div class="control"><select id="max-model" value=${value(sk('max_model'))} onChange=${edit(sk('max_model'))}>
+                  <option value="">no cap</option>${d.models.map((m) => html`<option value=${m}>${m}</option>`)}</select></div>
+                <label for="max-effort">Max effort</label><div class="control"><select id="max-effort" value=${value(sk('max_effort'))} onChange=${edit(sk('max_effort'))}>
+                  <option value="">no cap</option>${d.efforts.map((m) => html`<option value=${m}>${m}</option>`)}</select></div>
+                <p class="hint">An AI persona asking for more runs at this limit until you approve it in the room.</p>
+                <label class="full"><input id="approve-all" type="checkbox" checked=${approving ?? st.settings.approve_all} onChange=${approveAll} /> Approve every new AI persona and change</label>`
+              : html`<p class="hint">The app for ${hostOf(inst.url)} is ${inst.state}${inst.error ? ': ' + inst.error : ''}. Its limits show once it runs.</p>`}
+            </div>`}
+        </div>
       </div>
-    </form>`;
+      <${SaveBar} id="general-save" changed=${changed.length} error=${error} busy=${busy} />
+    </form>
+    <${Browsers} />
+  <//>`;
 }
 
-// Autostart is a toggle: it applies at once and says so in a toast (docs/design.md §5).
-function Autostart() {
+/**
+ * Autostart is a toggle: it applies at once and says so in a toast (docs/design.md §5).
+ * @param {{onError: (t: string) => void}} p
+ */
+function Autostart({ onError }) {
   const on = data.value?.autostart;
   const [busy, setBusy] = useState(false);
-  const [text, setText] = useState('');
   if (on === undefined) return null;
   /** @param {any} e */
   const change = (e) => {
     const want = e.currentTarget.checked;
     setBusy(true);
-    setText('');
     api('POST', '/api/autostart', { enabled: want }).then(reload)
       .then(() => window.grillToast(want ? 'Starts at your next login' : 'No longer starts at login'))
-      .catch((err) => setText(sentence(err.message))).finally(() => setBusy(false));
+      .catch((err) => onError(sentence(err.message))).finally(() => setBusy(false));
   };
-  return html`<label class="full"><input id="autostart" type="checkbox" checked=${on} disabled=${busy} onChange=${change} /> Start at login${' '}<span id="autostart-status" class="bad" role="status">${text}</span></label>`;
+  return html`<label class="full"><input id="autostart" type="checkbox" checked=${on} disabled=${busy} onChange=${change} /> Start at login</label>`;
 }
 
-// ServerSettings is one server's settings, its picker at the top: its AI account and model limits
-// (one Save), approve-all (at once), then its websites (003b-AC15, 003b-AC16).
-function ServerSettings() {
-  const d = /** @type {StatusReply} */ (data.value);
-  const inst = currentInstance(d);
-  if (!inst) return html`<h3>Per server</h3><p class="hint">Server settings show once you add a room.</p>`;
-  // Keyed: a draft belongs to its server and never follows the picker to another one.
-  return html`<h3 id="server-settings-title">Per server</h3>
-    <${ServerForm} key=${inst.id} inst=${inst} />
-    ${inst.status && html`<${Egress} key=${inst.id} i=${inst} st=${inst.status} />`}`;
-}
-
-/** @param {{inst: Instance}} p */
-function ServerForm({ inst }) {
-  const d = /** @type {StatusReply} */ (data.value);
-  const instances = d.instances || [];
-  const st = inst.status;
-  // draft holds only the fields the host changed: the others follow the server's values.
-  const [draft, setDraft] = useState(/** @type {Record<string, string>} */ ({}));
-  const [busy, setBusy] = useState(false);
-  // The box shows the host's click until the server confirms it: a status poll landing in between
-  // would otherwise redraw the old value and undo the click.
-  const [approving, setApproving] = useState(/** @type {boolean | null} */ (null));
-  const [text, run] = useStatus();
-  const saved = { max_model: st?.settings.max_model || '', max_effort: st?.settings.max_effort || '', account: inst.account };
-  const v = { ...saved, ...draft };
-  const changed = /** @type {const} */ (['account', 'max_model', 'max_effort']).filter((k) => k in draft && draft[k] !== saved[k]);
-  /** @param {string} k */
-  const pick = (k) => (/** @type {any} */ e) => setDraft({ ...draft, [k]: e.currentTarget.value });
-  /** @param {Event} e */
-  const save = async (e) => {
-    e.preventDefault();
-    const steps = (async () => {
-      if (changed.includes('account')) await api('POST', '/api/instance-account', { instance: inst.id, room: '', account: v.account });
-      if (st && (changed.includes('max_model') || changed.includes('max_effort'))) {
-        await api('POST', '/api/settings', { instance: inst.id, max_model: v.max_model, max_effort: v.max_effort, approve_all: st.settings.approve_all });
-      }
-    })();
-    setBusy(true);
-    if (await run(steps, 'Saved.')) setDraft({});
-    setBusy(false);
+// Browsers lists the browsers that stay signed in to this page, so that a bookmark opens it; the
+// host forgets one, or all of them (daemon-r2).
+function Browsers() {
+  const [list, setList] = useState(/** @type {import('./api.js').Browser[] | null} */ (null));
+  const [err, setErr] = useState('');
+  const load = () => api('GET', '/api/browsers').then((r) => { setList(r.browsers); setErr(''); }).catch((x) => setErr(sentence(x.message)));
+  useEffect(() => { load(); }, []);
+  /** @param {{id?: string, all?: boolean}} what @param {boolean} mine @param {string} ok */
+  const forget = async (what, mine, ok) => {
+    if (!await window.grillConfirm(what.all ? 'Sign every browser out?' : mine ? 'Sign this browser out?' : 'Sign that browser out?',
+      'It opens this page again only with a new link: run `grill-room-daemon admin` on this computer.', 'Sign out')) return;
+    try {
+      await api('POST', '/api/browsers/forget', what);
+    } catch (x) {
+      setErr(sentence(/** @type {Error} */ (x).message));
+      return;
+    }
+    if (mine) {
+      forgetToken();
+      stopped.value = true;
+      banner.value = 'This browser is signed out. Run `grill-room-daemon admin` on this computer to open the page again.';
+      return;
+    }
+    window.grillToast(ok);
+    load();
   };
-  /** @param {any} e */
-  const approveAll = (e) => {
-    const on = e.currentTarget.checked;
-    setApproving(on);
-    api('POST', '/api/settings', { instance: inst.id, max_model: saved.max_model, max_effort: saved.max_effort, approve_all: on }).then(reload)
-      .then(() => window.grillToast(on ? 'New AI personas and changes are approved at once' : 'New AI personas and changes wait for your approval'))
-      .catch((err) => { banner.value = err.message; })
-      .finally(() => setApproving(null));
-  };
-  return html`<form id="settings-form" class="settings-group" aria-labelledby="server-settings-title" onSubmit=${save}>
-      <label for="settings-instance">Server</label><div class="control">
-        <select id="settings-instance" value=${inst.id} disabled=${instances.length < 2}
-          onChange=${(/** @type {any} */ e) => { picked.value = e.currentTarget.value; }}>
-          ${instances.map((i) => html`<option value=${i.id}>${hostOf(i.url)}</option>`)}
-        </select></div>
-      ${d.accounts && html`<label for="server-account">AI account</label><div class="control">
-        <${AccountSelect} id="server-account" label="AI account" value=${v.account} onPick=${(/** @type {string} */ a) => setDraft({ ...draft, account: a })} />
-        <span class="hint">for its rooms that do not pick their own</span></div>`}
-      ${st ? html`<label for="max-model">Max model</label><div class="control"><select id="max-model" value=${v.max_model} onChange=${pick('max_model')}>
-          <option value="">no cap</option>${d.models.map((m) => html`<option value=${m}>${m}</option>`)}</select></div>
-        <label for="max-effort">Max effort</label><div class="control"><select id="max-effort" value=${v.max_effort} onChange=${pick('max_effort')}>
-          <option value="">no cap</option>${d.efforts.map((m) => html`<option value=${m}>${m}</option>`)}</select></div>
-        <p class="hint">An AI persona asking for more runs at this limit until you approve it in the room.</p>
-        <label class="full"><input id="approve-all" type="checkbox" checked=${approving ?? st.settings.approve_all} onChange=${approveAll} /> Approve every new AI persona and change</label>`
-      : html`<p class="hint">The app for ${hostOf(inst.url)} is ${inst.state}${inst.error ? ': ' + inst.error : ''}. Its limits show once it runs.</p>`}
-      <div class="settings-foot">
-        <span id="settings-status" role="status">${text}</span>
-        ${changed.length > 0 && html`<span class="dirty">${changed.length === 1 ? '1 unsaved change' : changed.length + ' unsaved changes'}</span>`}
-        <button type="submit" disabled=${!changed.length || busy}>Save</button>
-      </div>
-    </form>`;
+  if (!list) return err ? html`<p class="said bad" role="alert">${err}</p>` : null;
+  const mine = list.some((b) => b.this) || false;
+  return html`<h3 id="browsers-title">Browsers signed in</h3>
+    <p class="hint">A bookmark of this page works in these browsers, on this computer only. Sign one out when you no longer use it.</p>
+    <ul id="browsers" class="list-rows" aria-labelledby="browsers-title">
+      ${!list.length && html`<li class="empty">None: this page was opened from a one-time link.</li>`}
+      ${list.map((b) => html`<li class="list-row" key=${b.id}><div class="main"><span class="name">${b.this ? 'This browser' : 'Another browser'}</span>
+        <div class="meta">signed in <${Ago} t=${b.created} />, last used <${Ago} t=${b.used} /></div></div>
+        <div class="actions"><button type="button" class="btn-secondary" aria-label=${'Sign out ' + (b.this ? 'this browser' : 'browser ' + b.id)}
+          onClick=${() => forget({ id: b.id }, !!b.this, 'Signed out')}>Sign out</button></div></li>`)}
+    </ul>
+    ${list.length > 1 && html`<p><button type="button" id="browsers-all" class="btn-ghost" onClick=${() => forget({ all: true }, mine, 'Every other browser signed out')}>Sign every browser out</button></p>`}
+    ${err && html`<p class="said bad" role="alert">${err}</p>`}`;
 }
 
 /**
@@ -1048,12 +1106,61 @@ function Domain({ dom, entry }) {
   return html`<code class="domain" tabindex=${tip ? 0 : undefined} data-tip=${tip}>${dom}</code>`;
 }
 
+// Network is one server's websites: its picker, the allowlist, both allow-all switches and what the
+// proxy refused (daemon-r2).
+function Network() {
+  const d = /** @type {StatusReply} */ (data.value);
+  const inst = currentInstance(d);
+  return html`<${Section} id="network" title="Network">
+    ${!inst ? html`<p class="hint">Network settings show once you add a room.</p>` : html`
+      <div class="settings-group network-head"><${ServerPicker} inst=${inst} /></div>
+      ${inst.status ? html`<${Egress} key=${inst.id} i=${inst} st=${inst.status} />`
+        : html`<p class="hint">The app for ${hostOf(inst.url)} is ${inst.state}${inst.error ? ': ' + inst.error : ''}. Its websites show once it runs.</p>`}`}
+  <//>`;
+}
+
+/**
+ * A change to the list not confirmed yet: the row shows it at once and goes back if it fails.
+ * @typedef {{key: string, add?: string, remove?: string, room?: string, ok?: boolean}} ListOp
+ */
+
+/**
+ * useOptimistic keeps the changes on their way to the app, shown at once and sent one after the
+ * other: each request is built when its turn comes, from the list as the earlier ones left it, so
+ * a refused one never rides along with the next. settle drops a confirmed one once the status
+ * shows it.
+ * @returns {[ListOp[], (op: ListOp, req: () => Promise<unknown>, ok: string, onError: (t: string) => void) => void, (keep: (op: ListOp) => boolean) => void]}
+ */
+function useOptimistic() {
+  const [ops, setOps] = useState(/** @type {ListOp[]} */ ([]));
+  const queue = useRef(/** @type {Promise<unknown>} */ (Promise.resolve()));
+  /** @type {(op: ListOp, req: () => Promise<unknown>, ok: string, onError: (t: string) => void) => void} */
+  const start = (op, req, ok, onError) => {
+    setOps((o) => [...o, op]);
+    queue.current = queue.current.then(req).then(() => {
+      window.grillToast(ok);
+      setOps((o) => o.map((x) => (x === op ? { ...x, ok: true } : x)));
+      // The app applies it in a moment; past that, the status wins whatever it shows.
+      setTimeout(() => setOps((o) => o.filter((x) => x !== op)), 15_000);
+      return reload();
+    }).catch((err) => {
+      setOps((o) => o.filter((x) => x !== op));
+      onError(sentence(err.message));
+    });
+  };
+  /** @type {(keep: (op: ListOp) => boolean) => void} */
+  const settle = (keep) => setOps((o) => (o.some((x) => x.ok && !keep(x)) ? o.filter((x) => !x.ok || keep(x)) : o));
+  return [ops, start, settle];
+}
+
 // Egress is the server's allowlist as a table with its hits, and the requests its proxy refused
-// (002-AC34 to 002-AC36, 003b-AC16).
+// (002-AC34 to 002-AC36, 003b-AC16). An add or a remove shows in its row at once and goes back if
+// the app refuses it (daemon-r2); a room's own entry carries the room's name as a chip.
 /** @param {{i: Instance, st: import('./api.js').Status}} p */
 function Egress({ i, st }) {
   const [domain, setDomain] = useState('');
-  const [text, run] = useStatus();
+  const [error, setError] = useState('');
+  const [ops, start, settle] = useOptimistic();
   const [log, setLog] = useState(/** @type {{denied: import('./api.js').Denied[], hits: Record<string, number> | null, room_hits?: Record<string, Record<string, number>>} | null} */ (null));
   const [logErr, setLogErr] = useState('');
   // The switches show the host's click until the server confirms it, as approve-all does.
@@ -1069,13 +1176,50 @@ function Egress({ i, st }) {
     load();
     return () => { live = false; clearTimeout(timer); };
   }, [i.id]);
-  /** @param {string[]} list @param {string} ok */
-  const save = (list, ok) => run(api('POST', '/api/allowlist', { instance: i.id, allowlist: list }), ok);
+  const eg = st.egress;
+  const roomEntries = Object.entries(eg?.rooms || {}).flatMap(([room, es]) => es.map((e) => /** @type {[string, AllowEntry]} */ ([room, e])));
+  // A confirmed change the status shows already needs no overlay.
+  useEffect(() => settle((op) => (op.room !== undefined ? roomEntries.some(([r, e]) => r === op.room && e.domain === op.remove)
+    : op.add ? !st.allowlist.includes(op.add) : st.allowlist.includes(/** @type {string} */ (op.remove)))), [st.allowlist, eg]);
+  const removed = (/** @type {string} */ dom, room = '') => ops.some((o) => o.remove === dom && (o.room ?? '') === room);
+  // The list as the host sees it: the server's, minus what is on its way out, plus what is on its way in.
+  const list = [...st.allowlist.filter((x) => !removed(x)), ...ops.filter((o) => o.add && !st.allowlist.includes(o.add)).map((o) => /** @type {string} */ (o.add))];
+  const roomRows = roomEntries.filter(([room, e]) => !removed(e.domain, room));
+  // A queued request reads these when it leaves: the earlier changes landed or went back by then.
+  const base = useRef(st.allowlist);
+  base.current = st.allowlist;
+  const confirmed = useRef(ops);
+  confirmed.current = ops;
+  /**
+   * sendList is the app's list with the changes it confirmed and this one: changes queued behind
+   * it go in their own request, and a refused one in none.
+   * @param {string} plus @param {string} minus
+   */
+  const sendList = (plus, minus) => {
+    const done = confirmed.current.filter((o) => o.ok && o.room === undefined);
+    const now = [...base.current, ...done.map((o) => o.add || ''), plus];
+    const gone = [minus, ...done.map((o) => o.remove || '')];
+    return [...new Set(now.filter((x) => x && !gone.includes(x)))];
+  };
   /** @param {Event} e */
   const add = (e) => {
     e.preventDefault();
-    const dom = domain.trim();
-    save([...st.allowlist, dom], 'Saved.').then((ok) => { if (ok) setDomain(''); });
+    const dom = domain.trim().toLowerCase();
+    setError('');
+    if (list.includes(dom)) { setDomain(''); return; }
+    setDomain('');
+    start({ key: 'add:' + dom, add: dom }, () => api('POST', '/api/allowlist', { instance: i.id, allowlist: sendList(dom, '') }), dom + ' added',
+      (t) => { setError(t); setDomain((cur) => cur || dom); });
+  };
+  /** @param {string} dom */
+  const remove = (dom) => {
+    setError('');
+    start({ key: 'rm:' + dom, remove: dom }, () => api('POST', '/api/allowlist', { instance: i.id, allowlist: sendList('', dom) }), dom + ' removed', setError);
+  };
+  /** @param {string} room @param {string} dom */
+  const removeRoomEntry = (room, dom) => {
+    setError('');
+    start({ key: 'rm:' + room + ' ' + dom, remove: dom, room }, () => api('POST', '/api/room-allowlist-remove', { instance: i.id, room, domain: dom }), dom + ' removed from ' + roomName(room), setError);
   };
   const hits = log?.hits;
   const saved = { all_websites: !!st.egress?.all_websites, local_network: !!st.egress?.local_network };
@@ -1083,86 +1227,73 @@ function Egress({ i, st }) {
     if (pending && pending.all_websites === saved.all_websites && pending.local_network === saved.local_network) setPending(null);
   }, [pending, saved.all_websites, saved.local_network]);
   const sw = pending ?? saved;
-  const eg = st.egress;
   const all = sw.all_websites;
-  // 014-AC3: under "Allow every website", hosts reached that no entry covers get a row of their own.
-  // 014-AC15: each room's own entries, after the server's, by room.
-  const roomRows = Object.entries(eg?.rooms || {}).flatMap(([room, es]) => es.map((e) => /** @type {[string, AllowEntry]} */ ([room, e])));
   /** @param {string} room */
   const roomName = (room) => (i.room_states || []).find((r) => r.room === room)?.name || roomID(room);
-  const reached = all && hits ? Object.keys(hits).filter((h) => !st.allowlist.some((e) => covers(e, h))
+  // 014-AC3: under "Allow every website", hosts reached that no entry covers get a row of their own.
+  const reached = all && hits ? Object.keys(hits).filter((h) => !list.some((e) => covers(e, h))
     && !roomRows.some(([, e]) => covers(e.domain, h))).sort() : [];
-  const missingDocs = (data.value?.anthropic_docs || []).filter((x) => !st.allowlist.includes(x));
   /** @param {{all_websites: boolean, local_network: boolean}} next @param {string} ok */
   const setSwitches = (next, ok) => {
     setPending(next);
-    return run(api('POST', '/api/egress-switches', { instance: i.id, ...next }), ok).then((done) => { if (!done) setPending(null); });
+    setError('');
+    api('POST', '/api/egress-switches', { instance: i.id, ...next }).then(reload).then(() => window.grillToast(ok))
+      .catch((err) => { setPending(null); setError(sentence(err.message)); });
   };
   const toggleAll = (/** @type {any} */ e) => {
-    if (!e.currentTarget.checked) return setSwitches({ all_websites: false, local_network: false }, 'Every website off.');
+    if (!e.currentTarget.checked) return setSwitches({ all_websites: false, local_network: false }, 'Every website off');
     e.currentTarget.checked = false;
     window.grillConfirm('Allow every website?', 'Agents in every room of this server can reach any website over HTTPS. Anything they read can steer them, and anything they hold can leave.', 'Allow every website', true)
-      .then((yes) => { if (yes) setSwitches({ all_websites: true, local_network: false }, 'Every website on.'); });
+      .then((yes) => { if (yes) setSwitches({ all_websites: true, local_network: false }, 'Every website on'); });
   };
   const toggleLocal = (/** @type {any} */ e) => {
-    if (!e.currentTarget.checked) return setSwitches({ all_websites: true, local_network: false }, 'Local network off.');
+    if (!e.currentTarget.checked) return setSwitches({ all_websites: true, local_network: false }, 'Local network off');
     e.currentTarget.checked = false;
     window.grillConfirm('Also allow your local network?', 'Agents can also reach your own network: the router, a NAS, admin pages, other machines and this computer, by name or by IP address. A page they read can send them there.', 'Allow the local network', true)
-      .then((yes) => { if (yes) setSwitches({ all_websites: true, local_network: true }, 'Local network on.'); });
+      .then((yes) => { if (yes) setSwitches({ all_websites: true, local_network: true }, 'Local network on'); });
   };
-  return html`
-    <h4 id="allowlist-title">Websites the AI may reach</h4>
+  const pendingRow = (/** @type {string} */ dom) => ops.some((o) => o.add === dom && !o.ok);
+  return html`<div class="settings-cols network-cols"><div class="settings-col">
+    <h3 id="allowlist-title">Websites the AI may reach</h3>
     <p class="hint">The sandbox reaches these domains, and nothing else, over HTTPS only. A leading dot, as in .example.com, also allows every subdomain. Anthropic's hosts stay blocked whatever the list says.</p>
-    ${!st.allowlist.length && !reached.length && !roomRows.length ? html`<p class="empty" id="allowlist-empty">No domain: the sandbox reaches nothing.</p>`
+    ${!list.length && !reached.length && !roomRows.length ? html`<p class="empty" id="allowlist-empty">No domain: the sandbox reaches nothing.</p>`
       : html`<table id="allowlist" class="allowlist" aria-labelledby="allowlist-title">
-      <thead><tr><th scope="col">Domain</th><th scope="col">Scope</th><th scope="col" class="num"><span tabindex="0" data-tip="Requests let through, from the running sandboxes' recent proxy log. A restart resets them.">Hits</span></th><th scope="col"><span class="sr-only">Remove</span></th></tr></thead>
-      <tbody>${st.allowlist.map((dom) => html`<tr>
+      <thead><tr><th scope="col">Domain</th><th scope="col" class="num"><span tabindex="0" data-tip="Requests let through, from the running sandboxes' recent proxy log. A restart resets them.">Hits</span></th><th scope="col"><span class="sr-only">Remove</span></th></tr></thead>
+      <tbody>${list.map((dom) => html`<tr key=${'s ' + dom} class=${pendingRow(dom) ? 'pending' : undefined}>
         <td><${Domain} dom=${dom} entry=${eg?.server.find((e) => e.domain === dom)} /></td>
-        <td class="scope">Every room</td>
         <td class="num">${hits ? hitsFor(hits, dom) : '–'}</td>
         <td class="act"><button type="button" class="btn-icon btn-ghost" aria-label=${'Remove ' + dom} dangerouslySetInnerHTML=${icon('trash')}
-          onClick=${() => save(st.allowlist.filter((x) => x !== dom), 'Saved.')}></button></td>
-      </tr>`)}${roomRows.map(([room, e]) => html`<tr class="room-entry">
-        <td><${Domain} dom=${e.domain} entry=${e} /></td>
-        <td class="scope">${roomName(room)}</td>
+          onClick=${() => remove(dom)}></button></td>
+      </tr>`)}${roomRows.map(([room, e]) => html`<tr key=${'r ' + room + ' ' + e.domain} class="room-entry">
+        <td><${Domain} dom=${e.domain} entry=${e} /> <span class="badge room-chip" data-tip=${'Allowed for ' + roomName(room) + ' only'}>${roomName(room) + ' only'}</span></td>
         <td class="num">${log?.room_hits?.[room] ? hitsFor(log.room_hits[room], e.domain) : '–'}</td>
         <td class="act"><button type="button" class="btn-icon btn-ghost" aria-label=${'Remove ' + e.domain + ' from ' + roomName(room)} dangerouslySetInnerHTML=${icon('trash')}
-          onClick=${() => run(api('POST', '/api/room-allowlist-remove', { instance: i.id, room, domain: e.domain }), 'Removed.')}></button></td>
-      </tr>`)}${reached.map((h) => html`<tr class="reached">
+          onClick=${() => removeRoomEntry(room, e.domain)}></button></td>
+      </tr>`)}${reached.map((h) => html`<tr key=${'h ' + h} class="reached">
         <td><code class="domain">${h}</code> <span class="hint">reached via Allow every website</span></td>
-        <td class="scope">Every room</td><td class="num">${hits?.[h]}</td><td></td>
+        <td class="num">${hits?.[h]}</td><td></td>
       </tr>`)}</tbody></table>`}
     <form id="allowlist-form" class="add-room" onSubmit=${add}>
       <input id="allowlist-add" required aria-label="Domain" placeholder="example.com" autocomplete="off" spellcheck=${false}
-        value=${domain} onInput=${(/** @type {any} */ e) => setDomain(e.currentTarget.value)} />
+        value=${domain} onInput=${(/** @type {any} */ e) => { setError(''); setDomain(e.currentTarget.value); }} />
       <button type="submit">Add</button>
     </form>
-    ${missingDocs.length > 0 && html`<p><button type="button" id="add-docs" class="btn-secondary" title=${missingDocs.join(', ')}
-      onClick=${() => save([...st.allowlist, ...missingDocs], 'Anthropic docs sites added.')}>Add Anthropic docs sites</button></p>`}
-    <div class="egress-switches">
+    <${Said} id="allowlist-error" text=${error} />
+    </div><div class="settings-col">
+    <h3 id="switches-title">Every website</h3>
+    <div class="egress-switches" role="group" aria-labelledby="switches-title">
       <label class="full"><input id="all-websites" type="checkbox" checked=${all} onChange=${toggleAll} /> Allow every website</label>
       <p class="hint">Any website over HTTPS, without listing it. Anthropic's hosts stay blocked and every request is counted.</p>
       <label class="full nested"><input id="local-network" type="checkbox" disabled=${!all} checked=${sw.local_network} onChange=${toggleLocal} /> Also allow the local network and IP addresses</label>
       <p class="hint nested">Your own network and raw IP addresses too. Cloud metadata addresses stay blocked.</p>
     </div>
-    <p><span id="allowlist-status" role="status">${text}</span></p>
-    <h4 id="denied-title">Blocked websites</h4>
+    <h3 id="denied-title">Blocked websites</h3>
     <p class="hint">What the proxy refused in this server's sandboxes, newest first.</p>
     ${log && log.denied.length ? html`<div class="scroll"><table id="denied" aria-labelledby="denied-title">
       <thead><tr><th scope="col">Time</th><th scope="col">Host</th></tr></thead>
       <tbody>${log.denied.map((x) => html`<tr><td>${window.grillDate(x.time)}</td><td>${x.host}</td></tr>`)}</tbody>
-    </table></div>` : html`<p id="denied-empty">${logErr || 'None yet.'}</p>`}`;
-}
-
-// Settings: this computer's state, then its own settings, then one server's (003b-AC13 to AC17).
-function Settings() {
-  return html`<${Section} id="settings" title="Settings">
-    <${MachineStrip} />
-    <div class="settings-cols">
-      <div class="settings-col"><${Machine} /></div>
-      <div class="settings-col"><${ServerSettings} /></div>
-    </div>
-  <//>`;
+    </table></div>` : html`<p id="denied-empty">${logErr || 'None yet.'}</p>`}
+  </div></div>`;
 }
 
 // The log levels the filter keeps: a console line names its level in upper case, a JSON one in "level".
@@ -1194,11 +1325,12 @@ function App() {
     ${banner.value && html`<p id="banner" role="alert">${sentence(banner.value)}</p>`}
     ${live && html`<${RelaxBanner} />`}
     ${live && html`<${KeepHosting} />`}
-    ${live && html`<main id="main" class=${tab.value === 'monitoring' || tab.value === 'rooms' ? 'page-wide' : 'page'}>
+    ${live && html`<main id="main" class=${tab.value === 'accounts' ? 'page' : 'page-wide'}>
       <${TabBar} />
       <${Panel} id="rooms"><${Rooms} /><//>
       <${Panel} id="accounts"><${Accounts} /><//>
-      <${Panel} id="settings"><${Settings} /><//>
+      <${Panel} id="general"><${General} /><//>
+      <${Panel} id="network"><${Network} /><//>
       <${Panel} id="monitoring">${d.instances && html`<${Monitoring} instances=${d.instances} />`}<${Logs} /><//>
       <${Panel} id="update"><${Section} id="update" title="Update"><${UpdateOffer} /><${Trust} /><//><//>
     </main>`}`;

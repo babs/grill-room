@@ -22,9 +22,9 @@ test('egress allowlist and denied requests on the daemon page', async ({ browser
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {
     const admin = await pairDaemon(alice, daemon);
-    await admin.locator('#tab-settings').click();
+    await admin.locator('#tab-network').click();
     const list = admin.locator('#allowlist');
-    const status = admin.locator('#allowlist-status');
+    const status = admin.locator('#allowlist-error');
     for (const d of ['pypi.org', 'files.pythonhosted.org', 'github.com', 'registry.npmjs.org']) await expect(list).toContainText(d);
     await expect(admin.locator('#denied-empty')).toHaveText('None yet.');
 
@@ -38,7 +38,8 @@ test('egress allowlist and denied requests on the daemon page', async ({ browser
       await expect(list).not.toContainText(bad);
     }
     await add('Example.COM');
-    await expect(status).toHaveText('Saved.');
+    await expect(admin.locator('.toast', { hasText: 'example.com added' })).toBeVisible();
+    await expect(status).toBeEmpty();
     await expect(list.locator('tbody tr', { hasText: 'example.com' })).toHaveCount(1);
     await expect(admin.getByLabel('Domain')).toHaveValue('');
     await admin.getByRole('button', { name: 'Remove github.com' }).click();
@@ -71,8 +72,7 @@ test('egress allowlist and denied requests on the daemon page', async ({ browser
   }
 });
 
-// 014-AC1 014-AC2 014-AC3 014-AC26 014-AC27: the docs hosts come back in one click; "Allow every
-// website" asks first behind a red warning, lets any public name through and counts it as reached
+// 014-AC1 014-AC2 014-AC3 014-AC26: "Allow every website" asks first behind a red warning, lets any public name through and counts it as reached
 // without an entry, still refusing the metadata address; the local-network switch needs it, asks
 // with its own warning, and both go off with one click. Real daemon and Docker sandbox, fake
 // claude; the public hosts need Internet access.
@@ -82,17 +82,8 @@ test('allow every website and its local-network extension', async ({ browser, re
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {
     const admin = await pairDaemon(alice, daemon);
-    await admin.locator('#tab-settings').click();
+    await admin.locator('#tab-network').click();
     const list = admin.locator('#allowlist');
-    const status = admin.locator('#allowlist-status');
-
-    await expect(admin.locator('#add-docs')).toHaveCount(0);
-    await admin.getByRole('button', { name: 'Remove code.claude.com' }).click();
-    await expect(admin.locator('#add-docs')).toBeVisible();
-    await admin.locator('#add-docs').click();
-    await expect(status).toHaveText('Anthropic docs sites added.');
-    await expect(list.locator('code', { hasText: /^code\.claude\.com$/ })).toHaveCount(1);
-    await expect(admin.locator('#add-docs')).toHaveCount(0);
 
     const all = admin.locator('#all-websites');
     const local = admin.locator('#local-network');
@@ -190,11 +181,11 @@ test('blocked websites in the chat, allowed by the host and a delegated admin', 
     await line(bob, 'example.org').getByRole('button', { name: 'Allow for this room' }).click();
     await expect(line(alice, 'example.org')).toContainText('Bob allowed example.org for this room');
 
-    // The daemon page: both entries scoped to the room, one removed.
-    await admin.locator('#tab-settings').click();
+    // The daemon page: both entries scoped to the room, each with the room's chip, one removed.
+    await admin.locator('#tab-network').click();
     const rows = admin.locator('#allowlist tr.room-entry');
     await expect(rows).toHaveCount(2);
-    await expect(rows.filter({ hasText: 'example.org' })).toContainText('Docs room');
+    await expect(rows.filter({ hasText: 'example.org' }).locator('.room-chip')).toHaveText('Docs room only');
     await admin.getByRole('button', { name: 'Remove example.org from Docs room' }).click();
     await expect(rows).toHaveCount(1);
     await expect(alice.locator('#messages li.msg.system', { hasText: 'Alice removed example.org from this room\'s websites' })).toHaveCount(1);

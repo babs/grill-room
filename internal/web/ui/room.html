@@ -77,6 +77,7 @@
   <button type="button" id="personas-open" data-icon="personas">Personas</button>
   <a id="docs-window-menu" data-icon="external">Open documents in a new window</a>
   <button type="button" id="host-open" data-icon="host" hidden>Run the AI on my computer</button>
+  <a id="host-app-open" data-icon="external" href="http://127.0.0.1:47680/" target="_blank" rel="noopener noreferrer" hidden>Open my AI host app</a>
 </div>
 <div id="doc-menu" class="menu" popover>
   <a id="doc-original" data-icon="download" hidden>Download</a>
@@ -214,6 +215,11 @@
     <h3 id="diag-net-title">Connection</h3>
     <dl id="diag-net" class="facts"></dl>
   </section>
+  <section aria-labelledby="diag-host-title">
+    <h3 id="diag-host-title">AI host app</h3>
+    <p><a id="diag-host-app" href="http://127.0.0.1:47680/" target="_blank" rel="noopener noreferrer">Open my AI host app</a>
+      <span class="hint">on the computer that runs it</span></p>
+  </section>
   <p id="diag-said" class="said" role="status"></p>
   <div class="actions"><button type="button" id="diag-copy" class="btn-secondary">Copy diagnostics</button></div>
 </dialog>
@@ -251,7 +257,7 @@
   </div>
   <p>The AI host app runs this room's personas on your computer, with your Claude subscription. It needs Docker.</p>
   <h3>Already have the app?</h3>
-  <p>Open its page, Rooms, and paste this room's link under "Add a room".</p>
+  <p>Open <a href="http://127.0.0.1:47680/" target="_blank" rel="noopener noreferrer">its page</a> on the computer that runs it, Rooms, and paste this room's link under "Add a room".</p>
   <p class="copy-row"><input id="host-room-link" readonly aria-label="This room's link">
     <button type="button" id="host-room-copy">Copy link</button></p>
   <div id="host-install" hidden>

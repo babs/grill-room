@@ -199,12 +199,12 @@ test('plugins: private repo through the host, options, allowlist', async ({ brow
     const domains = setup.locator('.plugin-domains li');
     await expect(domains).toHaveText(['10.1.2.3 not on the allowlist Add to allowlist', 'mcp.example.com not on the allowlist Add to allowlist']);
     await setup.getByRole('button', { name: 'Add mcp.example.com to the allowlist' }).click();
-    await expect(setup).toContainText('mcp.example.com added to the allowlist.');
+    await expect(admin.locator('.toast', { hasText: 'mcp.example.com added to the allowlist' })).toBeVisible();
     await expect(domains.nth(1)).toHaveText('mcp.example.com on the allowlist');
     await setup.getByRole('button', { name: 'Add 10.1.2.3 to the allowlist' }).click();
     await expect(setup).toContainText('"10.1.2.3" is not a domain name');
     await shot(admin, 'daemon-plugin-allowlist');
-    await admin.locator('#tab-settings').click();
+    await admin.locator('#tab-network').click();
     await expect(admin.locator('#allowlist')).toContainText('mcp.example.com');
     await expect(admin.locator('#allowlist')).not.toContainText('10.1.2.3');
 

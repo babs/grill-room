@@ -5,6 +5,7 @@ import { roomWith, startDaemon, pairDaemon, confirmSheet, connectedRow } from '.
 
 const desktop = { width: 1440, height: 900 };
 const phone = { width: 390, height: 844 };
+const wide = { width: 1920, height: 1080 };
 
 // token resolves a custom property to the colour the page computes for it.
 const token = (page, name) => page.evaluate((n) => {
@@ -26,11 +27,13 @@ function daemonToken(daemon, roomURL) {
 const tokenWorks = async (request, roomID, tok) => (await request.post(`/api/rooms/${roomID}/daemon/status`,
   { headers: { Authorization: `Bearer ${tok}` }, data: { can_host: false, reason: 'probe' } })).status() !== 401;
 
-// 003b-AC2 003b-AC3 003b-AC14 003b-AC15 003b-AC16 003b-AC17 003b-AC20 003b-AC23: at 1440 and 390 px
-// the rooms are rows, not cards, at most 64 px high at 1440; each settings group has one Save; the
-// allowlist's remove buttons sit on their domain's line; the pills take their token's colour; no
-// tab overflows; the page says none of the words docs/design.md §8 retires.
-test('daemon page layout at desktop and phone width', async ({ browser, request, baseURL }) => {
+// 003b-AC2 003b-AC3 003b-AC16 003b-AC20 003b-AC23, daemon-r2: at 390, 1440 and 1920 px the rooms
+// are rows, not cards, at most 64 px high on a desktop; General and Network each have one save bar;
+// the websites table has no Scope column and its remove buttons sit on their domain's line; the
+// dev-key form stacks Name, Public key and its button, left-aligned; General, Network and Update
+// use the wide page; the pills take their token's colour; no tab overflows; the page says none of
+// the words docs/design.md §8 retires.
+test('daemon page layout at phone, desktop and wide width', async ({ browser, request, baseURL }) => {
   test.setTimeout(90_000);
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
   const daemon = startDaemon(`${baseURL}/r/${room.id}`, { GRILL_ROOM_GITHUB_URL: 'http://127.0.0.1:9' });
@@ -38,7 +41,7 @@ test('daemon page layout at desktop and phone width', async ({ browser, request,
     const admin = await pairDaemon(alice, daemon);
     const row = admin.locator('#instances .room-row');
     await expect(row.locator('.status')).toHaveText('runs the AI', { timeout: 30_000 });
-    for (const size of [desktop, phone]) {
+    for (const size of [desktop, phone, wide]) {
       await admin.setViewportSize(size);
       const at = size.width + 'px';
       await admin.locator('#tab-rooms').click();
@@ -49,7 +52,7 @@ test('daemon page layout at desktop and phone width', async ({ browser, request,
         const top = (sel) => e.querySelector(sel).getBoundingClientRect().top - box.top;
         return { height: box.height, name: top('.room-name'), more: top('.actions .more'), pause: top('.controls button') };
       });
-      if (size === desktop) {
+      if (size !== phone) {
         expect(r.height, at).toBeLessThanOrEqual(64);
         expect(Math.abs(r.pause - r.name), `Pause on the name's line, ${at}`).toBeLessThan(16);
       } else {
@@ -58,12 +61,23 @@ test('daemon page layout at desktop and phone width', async ({ browser, request,
       }
       expect(await token(admin, '--success'), at).toBe(await row.locator('.status').evaluate((e) => getComputedStyle(e).color));
 
-      await admin.locator('#tab-settings').click();
-      for (const form of ['#machine-form', '#settings-form']) {
-        await expect(admin.locator(form + ' button[type=submit]'), `${form} ${at}`).toHaveCount(1);
-        await expect(admin.locator(form + ' button[type=submit]'), `${form} ${at}`).toHaveText('Save');
+      // One save bar per settings tab, and nothing else that saves there.
+      for (const tab of ['general', 'network']) {
+        await admin.locator('#tab-' + tab).click();
+        await expect(admin.locator(`#panel-${tab} .save-bar`), `${tab} ${at}`).toHaveCount(tab === 'general' ? 1 : 0);
+        await expect(admin.locator(`#panel-${tab} button`, { hasText: /^Save$/ }), `${tab} ${at}`).toHaveCount(tab === 'general' ? 1 : 0);
       }
-      await expect(admin.locator('#panel-settings form button', { hasText: /^Save/ }), at).toHaveCount(2);
+      await admin.locator('#tab-general').click();
+      await expect(admin.locator('#server-group'), at).toBeVisible();
+      // The two groups side by side on a desktop, one above the other on a phone.
+      const [m, s] = await Promise.all(['#machine-group', '#server-group'].map((f) => admin.locator(f).boundingBox()));
+      expect(size === phone ? m.x === s.x && m.y < s.y : m.x < s.x, `groups ${at}`).toBe(true);
+      // The server picker heads its group.
+      await expect(admin.locator('#server-group > label').first(), at).toHaveText('Server');
+
+      await admin.locator('#tab-network').click();
+      await expect(admin.locator('#allowlist th'), at).toHaveText(['Domain', 'Hits', 'Remove']);
+      await expect(admin.locator('#add-docs'), at).toHaveCount(0);
       // Every remove button on its domain's line, in one column.
       const removes = await admin.locator('#allowlist tbody tr').evaluateAll((trs) => trs.map((tr) => {
         const b = tr.querySelector('button').getBoundingClientRect();
@@ -73,11 +87,24 @@ test('daemon page layout at desktop and phone width', async ({ browser, request,
       expect(removes.length, at).toBeGreaterThan(3);
       expect(removes.filter((x) => x.dy > 12).map((x) => x.dom), `remove buttons off their line, ${at}`).toEqual([]);
       expect(new Set(removes.map((x) => x.x)).size, `remove buttons in one column, ${at}`).toBe(1);
-      // The two groups side by side at 1440, one above the other at 390.
-      const [m, s] = await Promise.all(['#machine-form', '#settings-form'].map((f) => admin.locator(f).boundingBox()));
-      expect(size === desktop ? m.x < s.x : m.x === s.x && m.y < s.y, `groups ${at}`).toBe(true);
 
-      for (const tab of ['rooms', 'accounts', 'settings', 'monitoring', 'update']) {
+      // The dev-key form: Name, then Public key, then the button, each starting at the same left edge.
+      await admin.locator('#tab-update').click();
+      const f = await admin.locator('#key-form').evaluate((form) => ['#key-name', '#key-pem', 'button[type=submit]'].map((sel) => {
+        const b = form.querySelector(sel).getBoundingClientRect();
+        return { top: b.top, bottom: b.bottom, left: Math.round(b.left) };
+      }));
+      expect(f[0].bottom <= f[1].top && f[1].bottom <= f[2].top, `stacked, ${at}`).toBe(true);
+      expect(new Set(f.map((x) => x.left)).size, `left-aligned, ${at}`).toBe(1);
+
+      // Wide tabs fill the window past the narrow column's 72rem (1152 px) on a wide screen.
+      for (const tab of ['general', 'network', 'update']) {
+        await admin.locator('#tab-' + tab).click();
+        const w = await admin.locator('#main').evaluate((e) => e.getBoundingClientRect().width);
+        if (size === wide) expect(w, `${tab} page width, ${at}`).toBeGreaterThan(1800);
+      }
+
+      for (const tab of ['rooms', 'accounts', 'general', 'network', 'monitoring', 'update']) {
         await admin.locator('#tab-' + tab).click();
         expect(await admin.evaluate(() => document.documentElement.scrollWidth), `${tab} ${at}`).toBeLessThanOrEqual(size.width);
         // 003b-AC20: what the page says, its tips and its labels included; the log lines are the app's own.
@@ -156,5 +183,99 @@ test('pause fails over, connect pairs again, remove revokes the token', async ({
   } finally {
     da.cleanup();
     db.cleanup();
+  }
+});
+
+// daemon-r2: adding or removing a website shows in the list at once, before the app answers; a
+// refused change goes back and says why; "added" is a toast that fades, and no status text stays.
+// The room offers its host the app's page.
+test('the websites list updates at once and rolls back on error', async ({ browser, request, baseURL }) => {
+  test.setTimeout(90_000);
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const daemon = startDaemon(`${baseURL}/r/${room.id}`, { GRILL_ROOM_GITHUB_URL: 'http://127.0.0.1:9' });
+  try {
+    const admin = await pairDaemon(alice, daemon);
+    // The room links its host to the app's page, from ⋯ and from Diagnostics, once the app is connected.
+    await expect(alice.locator('#host-app-open')).not.toHaveAttribute('hidden', '');
+    await expect(alice.locator('#host-app-open')).toHaveAttribute('href', 'http://127.0.0.1:47680/');
+    await expect(alice.locator('#diag-host-app')).toHaveAttribute('href', 'http://127.0.0.1:47680/');
+    await admin.locator('#tab-network').click();
+    const list = admin.locator('#allowlist');
+    const domainRow = (d) => list.locator('tbody tr', { has: admin.locator('code', { hasText: new RegExp('^' + d.replaceAll('.', '\\.') + '$') }) });
+    await expect(domainRow('pypi.org')).toHaveCount(1);
+
+    // Each request waits for the test to let it through: the row shows while it is held.
+    let release;
+    let fail = false;
+    await admin.route('**/api/allowlist', async (route) => {
+      await new Promise((r) => { release = r; });
+      if (fail) return route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ error: 'the app did not answer' }) });
+      return route.continue();
+    });
+    const held = () => expect.poll(() => typeof release).toBe('function');
+
+    await admin.getByLabel('Domain').fill('optimistic.example');
+    await admin.locator('#allowlist-form').getByRole('button', { name: 'Add' }).click();
+    await held();
+    await expect(domainRow('optimistic.example')).toHaveClass(/\bpending\b/);
+    await expect(admin.getByLabel('Domain')).toHaveValue('');
+    release();
+    release = undefined;
+    const toast = admin.locator('.toast', { hasText: 'optimistic.example added' });
+    await expect(toast).toBeVisible();
+    await expect(domainRow('optimistic.example')).not.toHaveClass(/\bpending\b/);
+    await expect(admin.locator('#allowlist-error')).toBeEmpty();
+    // The toast fades on its own; nothing on the page keeps saying it.
+    await expect(toast).toHaveCount(0, { timeout: 10_000 });
+    await expect(admin.locator('#panel-network')).not.toContainText('Saved');
+    await expect(admin.locator('#panel-network')).not.toContainText('added');
+
+    // A remove leaves at once; refused, the row comes back with the reason.
+    fail = true;
+    await admin.getByRole('button', { name: 'Remove pypi.org' }).click();
+    await held();
+    await expect(domainRow('pypi.org')).toHaveCount(0);
+    release();
+    release = undefined;
+    await expect(domainRow('pypi.org')).toHaveCount(1);
+    await expect(admin.locator('#allowlist-error')).toHaveText('The app did not answer');
+
+    // A remove that lands stays gone, and the error goes with the next try.
+    fail = false;
+    await admin.getByRole('button', { name: 'Remove optimistic.example' }).click();
+    await held();
+    await expect(domainRow('optimistic.example')).toHaveCount(0);
+    await expect(admin.locator('#allowlist-error')).toBeEmpty();
+    release();
+    await expect(admin.locator('.toast', { hasText: 'optimistic.example removed' })).toBeVisible();
+    release = undefined;
+    await admin.reload();
+    await expect(domainRow('pypi.org')).toHaveCount(1);
+    await expect(domainRow('optimistic.example')).toHaveCount(0);
+
+    // Two adds in a row go one after the other: the first refused, it does not ride along with the second.
+    fail = true;
+    for (const d of ['first.example', 'second.example']) {
+      await admin.getByLabel('Domain').fill(d);
+      await admin.locator('#allowlist-form').getByRole('button', { name: 'Add' }).click();
+    }
+    await held();
+    await expect(domainRow('first.example')).toHaveCount(1);
+    await expect(domainRow('second.example')).toHaveCount(1);
+    const sent = [];
+    admin.on('request', (req) => { if (req.url().endsWith('/api/allowlist')) sent.push(req.postDataJSON().allowlist); });
+    release();
+    release = undefined;
+    await expect(domainRow('first.example')).toHaveCount(0);
+    fail = false;
+    await held();
+    release();
+    await expect(admin.locator('.toast', { hasText: 'second.example added' })).toBeVisible();
+    await admin.reload();
+    await expect(domainRow('second.example')).toHaveCount(1);
+    await expect(domainRow('first.example')).toHaveCount(0);
+    expect(sent.flat()).not.toContain('first.example');
+  } finally {
+    daemon.cleanup();
   }
 });

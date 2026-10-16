@@ -34,7 +34,7 @@ test('daemon pairs through the room approval', async ({ browser, request, baseUR
     await expect(admin.locator('#accounts li').first()).toContainText('default');
     await expect(admin.locator('#accounts li').first()).toContainText('valid');
     await expect(admin.locator('.alerts')).toHaveCount(0);
-    await admin.locator('#tab-settings').click();
+    await admin.locator('#tab-general').click();
     await expect(admin.locator('#can-host')).toBeVisible();
     // The page reloads into the same session; the one-time link is spent.
     await admin.reload();
