@@ -43,7 +43,17 @@ type Policy struct {
 	Allow        []string
 	AllWebsites  bool
 	LocalNetwork bool
+	// Hold asks the daemon, through the hold socket, about a public name off the list, and lets
+	// the CONNECT wait for its answer (014-AC29). It needs Config.HoldDir.
+	Hold bool
 }
+
+// HoldSocket is where the egress container reaches the daemon's hold server: Config.HoldDir,
+// mounted, holds it as hold.sock.
+const (
+	holdMount  = "/run/grill-hold"
+	HoldSocket = "hold.sock"
+)
 
 const (
 	egressPort = "3128"
@@ -156,6 +166,15 @@ http_access deny !SSL_ports
 	if len(p.Allow) > 0 {
 		b.WriteString("acl allowlist dstdomain -n " + strings.Join(p.Allow, " ") + "\nhttp_access allow allowlist\n")
 	}
+	if !p.AllWebsites && p.Hold {
+		// Never asked: link-local, IP literals, private destinations. One helper takes every
+		// question at once, so a wait never stalls other traffic.
+		b.WriteString("acl link_local dst " + linkLocal + "\nhttp_access deny link_local\n")
+		b.WriteString("acl ip_literal dstdom_regex -n ^[0-9.]+$ :\nhttp_access deny ip_literal\n")
+		b.WriteString("acl private dst " + privateRanges + "\nhttp_access deny private\n")
+		b.WriteString("external_acl_type hold concurrency=100 ttl=0 negative_ttl=0 children-max=1 children-startup=1 %DST /usr/bin/socat -t 3600 - UNIX-CONNECT:" +
+			holdMount + "/" + HoldSocket + "\nacl held external hold\nhttp_access allow held\n")
+	}
 	if !p.AllWebsites {
 		b.WriteString("http_access deny all\n")
 		return b.String()
@@ -250,6 +269,7 @@ func (s *Sandbox) SetPolicy(ctx context.Context, p Policy) error {
 	}
 	p.Allow = list
 	p.LocalNetwork = p.LocalNetwork && p.AllWebsites
+	p.Hold = p.Hold && s.cfg.HoldDir != ""
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.policy = p
@@ -294,4 +314,12 @@ func (s *Sandbox) Egress(ctx context.Context, n int) (Egress, error) {
 		return Egress{}, fmt.Errorf("egress log: %w", err)
 	}
 	return parseEgress(out, n), nil
+}
+
+// holdMount is the egress proxy's mount of the hold socket's folder, none without one.
+func (s *Sandbox) holdMount() []string {
+	if s.cfg.HoldDir == "" {
+		return nil
+	}
+	return []string{"-v", s.cfg.HoldDir + ":" + holdMount}
 }

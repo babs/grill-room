@@ -12,6 +12,7 @@ import (
 	"io"
 	"maps"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -38,8 +39,10 @@ type Options struct {
 	Access Access
 	// NewAgent builds a sandbox of room r, from image, when a turn finds none free: slot 0 is the
 	// room's first, the others serve its parallel turns (003-AC20). proxy is the address of the
-	// room's account proxy.
-	NewAgent func(r Room, slot int, image, proxy string) Agent
+	// room's account proxy, holdDir the folder of its hold socket, "" for none (014-AC29).
+	NewAgent func(r Room, slot int, image, proxy, holdDir string) Agent
+	// HoldRoot holds the sandboxes' hold sockets; "" turns the hold off.
+	HoldRoot string
 	// Settings are the host cap and approval mode at start; SettingsPath is where the page saves
 	// them, "" to keep them in memory.
 	Settings     Settings
@@ -469,6 +472,16 @@ type roomRun struct {
 	// lastTurn is the highest turn id taken: a stream reconnecting mid-turn announces it again.
 	lastTurn int64
 
+	// holdMu guards holds, the questions the room's sandboxes wait on, by domain, and reported, when
+	// each domain was last put before the room by a hold (014-AC29).
+	holdMu   sync.Mutex
+	holds    map[string]*holdWait
+	reported map[string]time.Time
+	// answering counts the held requests whose answer is not written yet; policyDue marks a
+	// policy change held back meanwhile: squid's reconfigure would drop their lookups.
+	answering int
+	policyDue bool
+
 	// pluginsMu runs one read of the room's plugins at a time. plugins is the last read, nil
 	// before any, and fetching the requests this daemon fetches now; both guarded by d.mu.
 	pluginsMu sync.Mutex
@@ -482,6 +495,10 @@ type sandboxSlot struct {
 	// proxy is the proxy address ag was built with.
 	proxy string
 	busy  bool
+	// persona is the persona of the turn running in it, hold its hold socket's listener, guarded
+	// by the room's agentMu.
+	persona string
+	hold    net.Listener
 }
 
 // update changes the room's status.

@@ -1,14 +1,18 @@
 package sandbox
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -288,4 +292,108 @@ func anthropicTunnels(log []byte) int {
 		}
 	}
 	return n
+}
+
+// 014-AC29 in a real sandbox: a public name off the list is asked about through the mounted hold
+// socket, and its CONNECT waits for the answer: OK lets it through, ERR refuses it; a private name
+// or an IP is refused without asking; other requests flow while one waits.
+func TestEgressHoldDocker(t *testing.T) {
+	img := dockerTest(t)
+	ctx := context.Background()
+	dir, err := os.MkdirTemp(t.TempDir(), "hold")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The container's user is not the test's: the folder and socket are open to it.
+	if err := os.Chmod(dir, 0o755); err != nil { //nolint:gosec // inside a 0700 temp folder
+		t.Fatal(err)
+	}
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "unix", filepath.Join(dir, HoldSocket))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	if err := os.Chmod(filepath.Join(dir, HoldSocket), 0o666); err != nil { //nolint:gosec // see above
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var asked []string
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				sc := bufio.NewScanner(c)
+				var wmu sync.Mutex
+				for sc.Scan() {
+					// "<id> <host> -": squid adds a "-" for its own (empty) acl arguments.
+					f := strings.Fields(sc.Text())
+					if len(f) < 2 {
+						continue
+					}
+					id, host := f[0], f[1]
+					mu.Lock()
+					asked = append(asked, host)
+					mu.Unlock()
+					go func() {
+						answer := "ERR"
+						if host == "example.com" {
+							time.Sleep(3 * time.Second) // the host deciding
+							answer = "OK"
+						}
+						wmu.Lock()
+						fmt.Fprintf(c, "%s %s\n", id, answer)
+						wmu.Unlock()
+					}()
+				}
+			}()
+		}
+	}()
+	s := New(Config{Image: img, Name: fmt.Sprintf("hold-%d", time.Now().UnixNano()), Proxy: "host-gateway:1", HoldDir: dir}, Docker,
+		zaptest.NewLogger(t, zaptest.Level(zap.WarnLevel)))
+	t.Cleanup(func() { s.Close(context.Background()) })
+	if err := s.SetPolicy(ctx, Policy{Allow: DefaultAllowlist, Hold: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	code := func(host string) string {
+		out, _ := Docker(ctx, nil, "exec", s.container(), "curl", "-s", "-o", "/dev/null", "-m", "30", "-w", "%{http_connect}", "https://"+host+"/")
+		return strings.TrimSpace(string(out))
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for code("pypi.org") != "200" {
+		if time.Now().After(deadline) {
+			t.Fatal("the egress proxy never answered")
+		}
+		time.Sleep(200 * time.Millisecond) // polls the proxy, bounded by the deadline
+	}
+	held := make(chan string, 1)
+	start := time.Now()
+	go func() { held <- code("example.com") }()
+	// While example.com waits, a listed host and a refused one answer at once.
+	if c := code("pypi.org"); c != "200" {
+		t.Errorf("listed host during a hold: %q", c)
+	}
+	if c := code("example.org"); c != "403" {
+		t.Errorf("refused by the helper: %q", c)
+	}
+	if c := <-held; c != "200" || time.Since(start) < 3*time.Second {
+		t.Errorf("held host: %q after %s", c, time.Since(start))
+	}
+	for _, never := range []string{"10.0.0.1.nip.io", "1.1.1.1", "169.254.169.254", "api.anthropic.com"} {
+		if c := code(never); c != "403" {
+			t.Errorf("%s: %q", never, c)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, never := range []string{"10.0.0.1.nip.io", "1.1.1.1", "169.254.169.254", "api.anthropic.com", "pypi.org"} {
+		if slices.Contains(asked, never) {
+			t.Errorf("%s was asked about: %v", never, asked)
+		}
+	}
 }

@@ -135,11 +135,15 @@ test('sheets keep their top across tabs', async ({ browser, request }) => {
   expect(new Set(settings).size, 'room settings ' + settings).toBe(1);
 });
 
-// emptyStyle is the look of an empty state: one class, one set of computed styles.
-const emptyStyle = (loc) => loc.evaluate((e) => {
-  const s = getComputedStyle(e);
-  return [e.classList.contains('empty'), s.display, s.borderTopStyle, s.color, s.textAlign, s.fontSize, s.fontStyle, s.paddingTop, s.paddingLeft].join(' ');
-});
+// emptyStyle is the look of an empty state: one class, one set of computed styles. Read once it
+// shows: an empty state is hidden until its list has loaded.
+const emptyStyle = async (loc) => {
+  await expect(loc).toBeVisible();
+  return loc.evaluate((e) => {
+    const s = getComputedStyle(e);
+    return [e.classList.contains('empty'), s.display, s.borderTopStyle, s.color, s.textAlign, s.fontSize, s.fontStyle, s.paddingTop, s.paddingLeft].join(' ');
+  });
+};
 
 test('one empty-state style', async ({ browser, request }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);

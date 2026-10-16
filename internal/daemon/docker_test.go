@@ -49,7 +49,7 @@ func sandboxDaemon(t *testing.T, rs *roomServer, name, image string) (string, *D
 	d.st.Image.Ref, d.o.PluginCacheDir = image, t.TempDir()
 	label := fmt.Sprintf("test-%s-%d", strings.ToLower(name), time.Now().UnixNano())
 	// The fake claude sends nothing upstream: the relay only needs an address.
-	d.o.NewAgent = func(_ Room, _ int, _, proxy string) Agent {
+	d.o.NewAgent = func(_ Room, _ int, _, proxy, _ string) Agent {
 		return sandbox.New(sandbox.Config{Image: image, Name: label, Proxy: proxy}, sandbox.Docker, d.o.Log)
 	}
 	t.Cleanup(func() {

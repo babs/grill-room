@@ -23,10 +23,13 @@ import (
 // holds it (014): the two "Allow every website" switches, the entries for every room of the server,
 // and each room's own entries by room link.
 type EgressState struct {
-	AllWebsites  bool                    `json:"all_websites"`
-	LocalNetwork bool                    `json:"local_network"`
-	Server       []AllowEntry            `json:"server"`
-	Rooms        map[string][]AllowEntry `json:"rooms,omitempty"`
+	AllWebsites  bool `json:"all_websites"`
+	LocalNetwork bool `json:"local_network"`
+	// HoldSeconds is how long a refused CONNECT waits for the AI host's answer, 0 for the default
+	// (014-AC29).
+	HoldSeconds int                     `json:"hold_seconds,omitempty"`
+	Server      []AllowEntry            `json:"server"`
+	Rooms       map[string][]AllowEntry `json:"rooms,omitempty"`
 }
 
 // AllowEntry is one domain of a list; By and At say who added it from a room's chat, and when
@@ -41,6 +44,8 @@ type AllowEntry struct {
 type EgressSwitches struct {
 	AllWebsites  bool `json:"all_websites"`
 	LocalNetwork bool `json:"local_network"`
+	// HoldSeconds, 30 to 60, keeps the saved value when 0.
+	HoldSeconds int `json:"hold_seconds,omitempty"`
 }
 
 func domains(es []AllowEntry) []string {
@@ -106,7 +111,8 @@ func LoadEgress(path string) (EgressState, error) {
 // the server's switches; the caller holds d.mu.
 func (d *Daemon) policyLocked(room string) sandbox.Policy {
 	e := d.st.Egress
-	return sandbox.Policy{Allow: append(domains(e.Server), domains(e.Rooms[room])...), AllWebsites: e.AllWebsites, LocalNetwork: e.LocalNetwork}
+	return sandbox.Policy{Allow: append(domains(e.Server), domains(e.Rooms[room])...), AllWebsites: e.AllWebsites, LocalNetwork: e.LocalNetwork,
+		Hold: d.holdLocked()}
 }
 
 func (d *Daemon) policy(room string) sandbox.Policy {
@@ -134,6 +140,9 @@ func (d *Daemon) setEgress(ctx context.Context, next EgressState) error {
 		zap.Bool("local_network", next.LocalNetwork))
 	var errs []error
 	for _, r := range d.runs() {
+		if r.deferPolicy() {
+			continue
+		}
 		// Under agentMu, as agent() reads the policy for a sandbox it builds.
 		r.agentMu.Lock()
 		p := d.policy(r.room.String())
@@ -190,6 +199,9 @@ func (d *Daemon) SetEgressSwitches(ctx context.Context, sw EgressSwitches) error
 	defer d.settingsMu.Unlock()
 	next := d.Status().Egress
 	next.AllWebsites, next.LocalNetwork = sw.AllWebsites, sw.LocalNetwork && sw.AllWebsites
+	if sw.HoldSeconds != 0 {
+		next.HoldSeconds = holdSeconds(sw.HoldSeconds)
+	}
 	return d.setEgress(ctx, next)
 }
 

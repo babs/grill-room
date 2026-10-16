@@ -79,8 +79,9 @@ func runWorker(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		FetchDir:       fetchDir,
 		Labels:         []string{daemon.RootLabel(cfg.SandboxRoot), daemon.InstanceLabel(cfg.Instance)},
 		OnTurn:         func(e daemon.TurnEvent) { _ = conn.Send(daemon.Msg{Type: "turn", Turn: &e}) },
-		NewAgent: func(r daemon.Room, slot int, image, proxy string) daemon.Agent {
-			return sandbox.New(sandbox.Config{Image: image, Name: daemon.SlotSandboxName(cfg.SandboxRoot, r, slot), Proxy: proxy, Limits: cfg.Limits,
+		HoldRoot:       daemon.HoldRootFor(cfg.StateDir),
+		NewAgent: func(r daemon.Room, slot int, image, proxy, holdDir string) daemon.Agent {
+			return sandbox.New(sandbox.Config{Image: image, Name: daemon.SlotSandboxName(cfg.SandboxRoot, r, slot), Proxy: proxy, Limits: cfg.Limits, HoldDir: holdDir,
 				Labels: []string{daemon.RootLabel(cfg.SandboxRoot), daemon.InstanceLabel(cfg.Instance)}},
 				sandbox.Docker, logger.Named("sandbox"))
 		},

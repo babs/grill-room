@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/turn"
@@ -297,6 +298,101 @@ func TestConnectorEvents(t *testing.T) {
 	}
 	bob := e.daemonFor(t, r.room, "Bob")
 	if code, _ := e.do(t, "POST", r.daemonPath("connector-event"), bob.tok, map[string]any{"name": "X", "kind": "enable"}); code != http.StatusForbidden {
+		t.Fatalf("another daemon: %d", code)
+	}
+}
+
+// hold asks the room, as d, about domain, and returns the decision; done closes once answered.
+func (e *env) hold(t *testing.T, r *turnRoom, d *testDaemon, domain string, seconds int) <-chan string {
+	t.Helper()
+	out := make(chan string, 1)
+	go func() {
+		code, b := e.do(t, "POST", r.daemonPath("egress-hold"), d.tok, map[string]any{"domain": domain, "persona": "Grill", "seconds": seconds})
+		var v struct{ Decision string }
+		_ = json.Unmarshal(b, &v)
+		if code != http.StatusOK {
+			v.Decision = fmt.Sprintf("HTTP %d", code)
+		}
+		out <- v.Decision
+	}()
+	return out
+}
+
+// 014-AC29: a held CONNECT puts its website before the room at once; with no one in the room who
+// may allow it the answer is "nobody" straight away; else it waits for the host: allowed once the
+// host's app confirms, dismissed, or timeout at the daemon's deadline. A second question about the
+// same website joins its line.
+func TestEgressHold(t *testing.T) {
+	e := newEnv(t)
+	r := newTurnRoom(t, e)
+	e.egressStatus(t, r.room, r.alice, false)
+	if got := <-e.hold(t, r, r.alice, "nobody.example", 5); got != "nobody" {
+		t.Fatalf("no one in the room: %q", got)
+	}
+	if m := e.lastLine(t, r.room); m.Blocked == nil || m.Blocked.Domain != "nobody.example" {
+		t.Fatalf("no line for a website no one could allow: %+v", m)
+	}
+	// Alice, the host, opens the room.
+	ev := e.openEvents(t, r.room, r.alice.p.Token, "")
+	_ = ev
+	e.waitAgent(t, r.room, r.alice.p.Token, func(st agentState) bool { return st.Online })
+	if got := <-e.hold(t, r, r.alice, "slow.example", 1); got != "timeout" {
+		t.Fatalf("no answer: %q", got)
+	}
+	pending := e.hold(t, r, r.alice, "example.com", 20)
+	var id int64
+	waitFor := func(what string, ok func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for !ok() {
+			if time.Now().After(deadline) {
+				t.Fatalf("never %s", what)
+			}
+			time.Sleep(20 * time.Millisecond) // polls the store, bounded by the deadline
+		}
+	}
+	waitFor("the banner", func() bool {
+		for _, b := range e.agent(t, r.room, r.alice.p.Token).BlockedRequests {
+			if b.Domain == "example.com" {
+				id = b.MessageID
+				return true
+			}
+		}
+		return false
+	})
+	if code, b := e.allow(t, r.room, id, r.alice.p.Token, store.EgressRoom); code != http.StatusAccepted {
+		t.Fatalf("allow: %d %s", code, b)
+	}
+	nextEvent(t, r.alice.events, "egress_allow")
+	if code, _ := e.do(t, "POST", r.daemonPath(fmt.Sprintf("blocked/%d", id)), r.alice.tok, map[string]string{}); code != http.StatusNoContent {
+		t.Fatal(code)
+	}
+	if got := <-pending; got != "allowed" {
+		t.Fatalf("allowed: %q", got)
+	}
+	dismissed := e.hold(t, r, r.alice, "docs.rs", 20)
+	waitFor("the second banner", func() bool {
+		for _, b := range e.agent(t, r.room, r.alice.p.Token).BlockedRequests {
+			if b.Domain == "docs.rs" {
+				id = b.MessageID
+				return true
+			}
+		}
+		return false
+	})
+	if code, _ := e.do(t, "POST", fmt.Sprintf("/api/rooms/%s/blocked/%d/dismiss", r.room, id), r.alice.p.Token, nil); code != http.StatusOK {
+		t.Fatal(code)
+	}
+	if got := <-dismissed; got != "dismissed" {
+		t.Fatalf("dismissed: %q", got)
+	}
+	for _, bad := range []map[string]any{{"domain": "10.0.0.1"}, {"domain": "api.anthropic.com"}, {"domain": ".example.com"}} {
+		if code, _ := e.do(t, "POST", r.daemonPath("egress-hold"), r.alice.tok, bad); code != http.StatusBadRequest {
+			t.Errorf("%v: %d", bad, code)
+		}
+	}
+	bob := e.daemonFor(t, r.room, "Bob")
+	if code, _ := e.do(t, "POST", r.daemonPath("egress-hold"), bob.tok, map[string]any{"domain": "x.example"}); code != http.StatusForbidden {
 		t.Fatalf("another daemon: %d", code)
 	}
 }

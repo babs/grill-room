@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -301,4 +302,110 @@ func (s *Server) connectorEvent(w http.ResponseWriter, r *http.Request, d *store
 	}
 	s.bus.Notify(d.RoomID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// holdMax bounds how long a daemon's question waits for an answer, in seconds.
+const holdMax = 60
+
+// someoneCanAllow reports whether a person who may allow a website for room is in it now: the AI
+// host, or a room admin while the host lets them.
+func (s *Server) someoneCanAllow(ctx context.Context, room *store.Room) (bool, error) {
+	now := s.now()
+	if room.HostParticipantID != 0 && s.people.here(room.ID, room.HostParticipantID, now) {
+		return true, nil
+	}
+	if !room.EgressAdmins {
+		return false, nil
+	}
+	ps, err := s.bus.Store.Participants(ctx, room.ID)
+	if err != nil {
+		return false, err
+	}
+	for _, p := range ps {
+		if p.Admin && s.people.here(room.ID, p.ID, now) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// egressHold is the host daemon asking, while a CONNECT waits, whether a refused website may go:
+// the room gets its line and banner at once, and the answer comes when the host or a delegated
+// admin decides, or at the daemon's deadline: "allowed", "dismissed", "timeout", or "nobody"
+// straight away when no one who may allow it is in the room (014-AC29).
+func (s *Server) egressHold(w http.ResponseWriter, r *http.Request, d *store.Daemon, _ string) {
+	if !s.asHostDaemon(w, r, d) {
+		return
+	}
+	var req struct {
+		Domain  string `json:"domain"`
+		Persona string `json:"persona"`
+		Seconds int    `json:"seconds"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	list, err := sandbox.NormalizeAllowlist([]string{req.Domain})
+	if err != nil || len(list) != 1 || list[0][0] == '.' {
+		httpError(w, http.StatusBadRequest, "one domain name")
+		return
+	}
+	persona, _ := cleanText(truncate(req.Persona, maxNameLen), maxNameLen, false)
+	if persona == "" {
+		persona = "The AI"
+	}
+	ctx := r.Context()
+	lines, err := s.bus.Store.RecordBlocked(ctx, d.RoomID, persona, list)
+	if err != nil {
+		s.serverError(w, "egress_hold_failed", err)
+		return
+	}
+	s.bus.Notify(d.RoomID)
+	id := lines[0].ID
+	room, err := s.bus.Store.Room(ctx, d.RoomID)
+	if err != nil {
+		s.serverError(w, "egress_hold_failed", err)
+		return
+	}
+	answer := func(decision string) {
+		s.log.Info("egress_hold", zap.String("room", d.RoomID), zap.String("domain", list[0]), zap.String("decision", decision))
+		writeJSON(w, http.StatusOK, map[string]string{"decision": decision})
+	}
+	if ok, err := s.someoneCanAllow(ctx, room); err != nil {
+		s.serverError(w, "egress_hold_failed", err)
+		return
+	} else if !ok {
+		answer("nobody")
+		return
+	}
+	live, cancel := s.bus.Subscribe(16)
+	defer cancel()
+	deadline := time.NewTimer(time.Duration(min(max(req.Seconds, 1), holdMax)) * time.Second)
+	defer deadline.Stop()
+	// The bus drops a signal when this subscriber's buffer is full: a tick re-reads the line.
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		m, err := s.bus.Store.BlockedLine(ctx, d.RoomID, id)
+		switch {
+		case err != nil:
+			answer("gone")
+			return
+		case m.Blocked.Decision != "":
+			answer("allowed")
+			return
+		case m.Blocked.DismissedBy != "":
+			answer("dismissed")
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-deadline.C:
+			answer("timeout")
+			return
+		case <-tick.C:
+		case <-live:
+		}
+	}
 }

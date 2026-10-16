@@ -62,6 +62,7 @@ A host who wants it can turn on "Allow every website" for a server, behind a red
 - [x] **AC8** When a turn ends, each domain its sandbox was refused gives the room one chat line with its time: "<Persona> tried to reach example.com (blocked)". Only CONNECT to 443 of a domain name counts. Anthropic hosts, IP literals and other methods stay on the daemon page only. One line per domain per turn. While a line for the same domain in the same room is still undecided, a new refusal adds to its count ("3 times") instead of posting again.
 - [x] **AC9** The AI host sees "Allow for this room" and "Allow everywhere" on an undecided line. A room admin sees "Allow for this room" only when delegation is on (AC12). Everyone else sees the line without buttons. With the host's app offline, or older than this feature, the buttons are disabled with "AI host app offline" or "Update the AI host app".
 - [x] **AC28** (user, 2026-10-16) A website still waiting for the AI host also sits in the banner under the room's header, one entry per domain with its count, for the AI host ("Allow for this room", "Allow everywhere", "Dismiss") and for a room admin the host lets ("Allow for this room", "Dismiss"). It stays until it is allowed or dismissed, across a reload and a host change; a dismissed one comes back at its next refusal. The chat line stays as the record, and anyone who cannot allow it reads "Pending: only the AI host, <name>, can allow it."
+- [x] **AC29** (user, 2026-10-16) A CONNECT to a public name off the list, during a turn, waits while the room decides. The egress proxy asks the daemon through a socket only that sandbox's egress proxy mounts (squid `external_acl_type`, concurrent), after every rule that never asks: Anthropic hosts, anything but CONNECT to 443, link-local, IP literals, private destinations. The website gets its chat line and banner at once. Allowed in time, the same CONNECT goes on in the same turn. Dismissed, unanswered for the hold time (45 s by default, 30 to 60 on the daemon page), or with neither the AI host nor a room admin the host lets in the room, which is refused at once, it is refused as before and the banner stays. One question per website per room at a time, which later requests join; other traffic keeps flowing. Requests outside a turn are refused at once. Only on Linux with Docker Engine: Docker Desktop's VM cannot mount the host socket, and those hosts keep the refusal at the turn's end.
 - [x] **AC10** "Allow for this room" adds the domain to the room's own list. The room's sandboxes reach it from their next request; other rooms on the same server still get refused. The line becomes "<who> allowed example.com for this room".
 - [x] **AC11** "Allow everywhere" adds the domain to the server's list (the existing table), for every room of that server. The line becomes "<who> allowed example.com for every room on this AI host".
 - [x] **AC12** Room settings has a switch, shown to the AI host only: "Room admins may allow websites for this room", off by default. Changing it posts a chat line and writes an audit entry. It never lets a room admin use "Allow everywhere". It turns off when the AI host role moves to someone else (009-AC33).
@@ -124,6 +125,16 @@ A host who wants it can turn on "Allow every website" for a server, behind a red
 - Room server: `rooms.egress_admins_allow`; blocked lines, `system` messages with a `blocked_requests` row; audit actions `egress.allow`, `egress.revoke`, `egress.delegate`, `connector.enable`, `connector.disable`, `connector.actions`.
 - Supervisor-worker protocol version 6 and new room stream messages, additive.
 - No export change: per-room entries and connectors stay on the host; `egress_admins_allow` is not exported.
+
+## Measured for AC29 (2026-10-16, Claude Code 2.1.296)
+
+| Tool | Under a held CONNECT |
+|---|---|
+| WebFetch | a 45 s hold, then OK: the page fetched, the turn took 50 s in all (1 haiku turn). Its domain preflight has a 10 s timeout, but `skipWebFetchPreflight` turns it off |
+| curl | waits: a 60 s hold, then 200 (no default connect timeout) |
+| pip | a 15 s read timeout with retries: a 60 s hold passed after 121 s |
+
+60 s with WebFetch was not measured, within the haiku budget: the default stays at the measured 45 s.
 
 ## Open questions
 
