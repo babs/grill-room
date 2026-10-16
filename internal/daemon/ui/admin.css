@@ -90,7 +90,7 @@ ul.fetches, ul.plugin-domains { padding-left: 0; list-style: none; }
 .settings-col { min-width: 0; }
 .settings-group .control .hint { margin: 0; }
 /* One save bar per tab, under its groups (daemon-r2). */
-#general-form .save-bar { margin-top: var(--sp-4); }
+#general-form .save-bar, #network-form .save-bar { margin-top: var(--sp-4); }
 .save-bar .said { margin-right: auto; }
 .network-head { margin: var(--sp-2) 0 0; max-width: 30rem; }
 table.allowlist { width: 100%; }

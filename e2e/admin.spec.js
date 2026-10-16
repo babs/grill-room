@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { roomWith, startDaemon, pairDaemon, removeSandbox, tableLayout } from './helpers.js';
 
 // Each tab of the page and the sections it holds (005-AC17).
-const tabs = { rooms: ['Rooms'], accounts: ['AI accounts'], settings: ['Settings', 'This machine', 'Per server'],
+const tabs = { rooms: ['Rooms'], accounts: ['AI accounts'], general: ['General', 'This machine', 'Server'], network: ['Network', 'Websites the AI may reach'],
   monitoring: ['Activity', 'Logs'], update: ['Update'] };
 
 // 003-AC26 003-AC27 003-AC28 003-AC29 005-AC17: the supervisor's page shows every section in its

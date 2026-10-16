@@ -880,13 +880,14 @@ const SaveBar = ({ id, changed, error, busy }) => html`<div id=${id} class="sett
 </div>`;
 
 /**
- * ServerPicker picks the server whose settings the tab shows, at the top of its group.
- * @param {{inst: Instance}} p
+ * ServerPicker picks the server whose settings the tab shows, at the top of its group; both tabs
+ * follow the same pick.
+ * @param {{inst: Instance, id: string}} p
  */
-function ServerPicker({ inst }) {
+function ServerPicker({ inst, id }) {
   const instances = data.value?.instances || [];
-  return html`<label for="settings-instance">Server</label><div class="control">
-    <select id="settings-instance" value=${inst.id} disabled=${instances.length < 2}
+  return html`<label for=${id}>Server</label><div class="control">
+    <select id=${id} value=${inst.id} disabled=${instances.length < 2}
       onChange=${(/** @type {any} */ e) => { picked.value = e.currentTarget.value; }}>
       ${instances.map((i) => html`<option value=${i.id}>${hostOf(i.url)}</option>`)}
     </select></div>`;
@@ -999,7 +1000,7 @@ function General() {
           <h3 id="server-settings-title">Server</h3>
           ${!inst ? html`<p class="hint">Server settings show once you add a room.</p>`
             : html`<div id="server-group" class="settings-group" role="group" aria-labelledby="server-settings-title">
-              <${ServerPicker} inst=${inst} />
+              <${ServerPicker} inst=${inst} id="settings-instance" />
               ${d.accounts && html`<label for="server-account">AI account</label><div class="control">
                 <${AccountSelect} id="server-account" label="AI account" value=${value(sk('account'))}
                   onPick=${(/** @type {string} */ a) => { setError(''); setDraft({ ...draft, [sk('account')]: a }); }} />
@@ -1098,13 +1099,39 @@ const hitsFor = (hits, entry) => Object.entries(hits).reduce((n, [h, c]) => n + 
 
 /**
  * HoldTimeout is how long a website off the list waits for the room's answer, 30 to 60 s
- * (014-AC29); save sends it with the server's switches.
- * @param {{i: Instance, sw: {all_websites: boolean, local_network: boolean}, seconds: number, save: (s: number) => unknown}} p
+ * (014-AC29): the Network tab's one field to save, with its save bar (daemon-r2). It goes with the
+ * server's switches as they are.
+ * @param {{i: Instance, sw: {all_websites: boolean, local_network: boolean}, seconds: number}} p
  */
-function HoldTimeout({ seconds, save }) {
-  return html`<label class="full">Wait for an answer <input id="hold-seconds" type="number" min="30" max="60" step="5" value=${seconds}
-      onChange=${(/** @type {any} */ e) => save(Number(e.currentTarget.value))} /> seconds</label>
-    <p class="hint">A website off the list waits this long for you, or a room admin you let, to allow it from the room's banner: allowed in time, the same answer goes on. Linux with Docker Engine only.</p>`;
+function HoldTimeout({ i, sw, seconds }) {
+  const [draft, setDraft] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const changed = draft !== '' && Number(draft) !== seconds ? 1 : 0;
+  /** @param {Event} e */
+  const save = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await api('POST', '/api/egress-switches', { instance: i.id, ...sw, hold_seconds: Number(draft) });
+      await reload();
+      setDraft('');
+      window.grillToast('Saved');
+    } catch (err) {
+      setError(sentence(/** @type {Error} */ (err).message));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return html`<form id="network-form" onSubmit=${save}>
+    <div class="settings-group">
+      <label for="hold-seconds">Wait for an answer</label>
+      <div class="control"><input id="hold-seconds" type="number" min="30" max="60" step="5" required value=${draft === '' ? seconds : draft}
+        onInput=${(/** @type {any} */ e) => { setError(''); setDraft(e.currentTarget.value); }} /><span class="hint">seconds</span></div>
+      <p class="hint">A website off the list waits this long for you, or a room admin you let, to allow it from the room's banner: allowed in time, the same answer goes on. Linux with Docker Engine only.</p>
+    </div>
+    <${SaveBar} id="network-save" changed=${changed} error=${error} busy=${busy} />
+  </form>`;
 }
 
 /**
@@ -1124,7 +1151,7 @@ function Network() {
   const inst = currentInstance(d);
   return html`<${Section} id="network" title="Network">
     ${!inst ? html`<p class="hint">Network settings show once you add a room.</p>` : html`
-      <div class="settings-group network-head"><${ServerPicker} inst=${inst} /></div>
+      <div class="settings-group network-head"><${ServerPicker} inst=${inst} id="network-instance" /></div>
       ${inst.status ? html`<${Egress} key=${inst.id} i=${inst} st=${inst.status} />`
         : html`<p class="hint">The app for ${hostOf(inst.url)} is ${inst.state}${inst.error ? ': ' + inst.error : ''}. Its websites show once it runs.</p>`}`}
   <//>`;
@@ -1297,8 +1324,8 @@ function Egress({ i, st }) {
       <p class="hint">Any website over HTTPS, without listing it. Anthropic's hosts stay blocked and every request is counted.</p>
       <label class="full nested"><input id="local-network" type="checkbox" disabled=${!all} checked=${sw.local_network} onChange=${toggleLocal} /> Also allow the local network and IP addresses</label>
       <p class="hint nested">Your own network and raw IP addresses too. Cloud metadata addresses stay blocked.</p>
-      <${HoldTimeout} i=${i} sw=${sw} seconds=${eg?.hold_seconds || 45} save=${(/** @type {number} */ s) => run(api('POST', '/api/egress-switches', { instance: i.id, ...sw, hold_seconds: s }), 'Saved.')} />
     </div>
+    <${HoldTimeout} i=${i} sw=${saved} seconds=${eg?.hold_seconds || 45} />
     <h3 id="denied-title">Blocked websites</h3>
     <p class="hint">What the proxy refused in this server's sandboxes, newest first.</p>
     ${log && log.denied.length ? html`<div class="scroll"><table id="denied" aria-labelledby="denied-title">

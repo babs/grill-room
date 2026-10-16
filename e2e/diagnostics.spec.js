@@ -65,7 +65,7 @@ for (const [label, size] of [['desktop', { width: 1440, height: 900 }], ['phone'
     expect(await alice.evaluate(() => window.measures)).toBe(0);
     await menuItem(alice, 'Diagnostics', 'me');
     await expect(sheet(alice)).toBeVisible();
-    await expect(sheet(alice).getByRole('heading')).toHaveText(['Diagnostics', 'Transcription', 'Connection']);
+    await expect(sheet(alice).getByRole('heading')).toHaveText(['Diagnostics', 'Transcription', 'Connection', 'AI host app']);
     await expect.poll(() => facts(alice, '#diag-stt')).toMatchObject({ 'Tab memory': '123 MB' });
     const stt = await facts(alice, '#diag-stt');
     expect(Object.keys(stt)).toEqual(['Mode', 'Engine', 'Model', 'Device memory', 'Tab memory', 'End of speech to line', 'Hand-overs']);

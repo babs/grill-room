@@ -105,15 +105,15 @@ for (const [size, viewport] of Object.entries(sizes)) {
   });
 }
 
-// 004b-AC9: the daemon page's data tabs, Rooms and Activity, take the wide screen; Settings keeps
-// the 72rem column.
+// 004b-AC9, daemon-r2: the daemon page's tabs take the wide screen, General, Network and Update
+// too; AI accounts keeps the 72rem column.
 test('daemon page widths at 1920 px', async ({ browser, request, baseURL }) => {
   const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Wide daemon' } })).json();
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {
     const page = await (await browser.newContext({ viewport: sizes.wide })).newPage();
     await page.goto(await daemon.link);
-    for (const [tab, wide] of [['rooms', true], ['monitoring', true], ['settings', false]]) {
+    for (const [tab, wide] of [['rooms', true], ['monitoring', true], ['general', true], ['network', true], ['update', true], ['accounts', false]]) {
       await page.locator('#tab-' + tab).click();
       await expect(page.locator('#tab-' + tab)).toHaveAttribute('aria-current', 'page');
       const w = () => page.locator('#main').evaluate((e) => e.getBoundingClientRect().width);

@@ -64,8 +64,8 @@ test('daemon page layout at phone, desktop and wide width', async ({ browser, re
       // One save bar per settings tab, and nothing else that saves there.
       for (const tab of ['general', 'network']) {
         await admin.locator('#tab-' + tab).click();
-        await expect(admin.locator(`#panel-${tab} .save-bar`), `${tab} ${at}`).toHaveCount(tab === 'general' ? 1 : 0);
-        await expect(admin.locator(`#panel-${tab} button`, { hasText: /^Save$/ }), `${tab} ${at}`).toHaveCount(tab === 'general' ? 1 : 0);
+        await expect(admin.locator(`#panel-${tab} .save-bar`), `${tab} ${at}`).toHaveCount(1);
+        await expect(admin.locator(`#panel-${tab} button`, { hasText: /^Save$/ }), `${tab} ${at}`).toHaveCount(1);
       }
       await admin.locator('#tab-general').click();
       await expect(admin.locator('#server-group'), at).toBeVisible();
@@ -200,6 +200,12 @@ test('the websites list updates at once and rolls back on error', async ({ brows
     await expect(alice.locator('#host-app-open')).toHaveAttribute('href', 'http://127.0.0.1:47680/');
     await expect(alice.locator('#diag-host-app')).toHaveAttribute('href', 'http://127.0.0.1:47680/');
     await admin.locator('#tab-network').click();
+    // The hold timeout is the tab's one field to save, through its save bar.
+    await admin.getByLabel('Wait for an answer').fill('50');
+    await expect(admin.locator('#network-save .dirty')).toHaveText('1 unsaved change');
+    await admin.locator('#network-save').getByRole('button', { name: 'Save' }).click();
+    await expect(admin.locator('#network-save .dirty')).toHaveText('Everything saved');
+    await expect(admin.getByLabel('Wait for an answer')).toHaveValue('50');
     const list = admin.locator('#allowlist');
     const domainRow = (d) => list.locator('tbody tr', { has: admin.locator('code', { hasText: new RegExp('^' + d.replaceAll('.', '\\.') + '$') }) });
     await expect(domainRow('pypi.org')).toHaveCount(1);

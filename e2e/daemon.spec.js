@@ -119,7 +119,7 @@ test('daemon page shows its signature and guards the unsigned toggle', async ({ 
     await accept.click();
     // 005-AC39: it asks first.
     await confirmSheet(admin, 'Accept');
-    await expect(card.locator('.relax').getByRole('status')).toContainText("Type the server's host exactly");
+    await expect(card.locator('.relax').getByRole('alert')).toContainText("Type the server's host exactly");
     await expect(admin.locator('#relax-banner')).toBeHidden();
     await host.fill(new URL(baseURL).host);
     await accept.click();
