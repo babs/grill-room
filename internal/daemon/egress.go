@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -149,17 +153,34 @@ func (d *Daemon) setEgress(ctx context.Context, next EgressState) error {
 }
 
 // SetAllowlist saves the domains every room's sandboxes may reach and hands them to the running
-// ones (002-AC36). An entry added from a room keeps who added it while it stays on the list.
+// ones (002-AC36). An entry added from a room keeps who added it while it stays on the list; its
+// removal is told to the connected rooms (014-AC15).
 func (d *Daemon) SetAllowlist(ctx context.Context, list []string) error {
 	list, err := sandbox.NormalizeAllowlist(list)
 	if err != nil {
 		return err
 	}
 	d.settingsMu.Lock()
-	defer d.settingsMu.Unlock()
+	prev := d.Status().Egress.Server
 	next := d.Status().Egress
 	next.Server = entriesFor(list, next.Server)
-	return d.setEgress(ctx, next)
+	err = d.setEgress(ctx, next)
+	d.settingsMu.Unlock()
+	var gone []string
+	for _, e := range prev {
+		if e.By != "" && !slices.Contains(list, e.Domain) {
+			gone = append(gone, e.Domain)
+		}
+	}
+	if len(gone) > 0 {
+		// The page's answer does not wait for the rooms: each may take its timeout.
+		d.loops.Go(func() {
+			for _, dom := range gone {
+				d.tellRevoked(context.WithoutCancel(ctx), "", dom, "server")
+			}
+		})
+	}
+	return err
 }
 
 // SetEgressSwitches saves the server's "Allow every website" switch and its local-network
@@ -220,5 +241,162 @@ func (d *Daemon) logEgress(room, persona string, reqs []sandbox.EgressRequest) {
 		}
 		d.o.Log.Info("egress", zap.String("room", room), zap.String("persona", persona), zap.String("host", q.Host),
 			zap.String("method", q.Method), zap.String("verdict", verdict))
+	}
+}
+
+// covered reports whether p lets the sandbox reach domain (014-AC17).
+func covered(p sandbox.Policy, domain string) bool {
+	return p.AllWebsites || sandbox.Allowed(p.Allow, domain)
+}
+
+// blockedDomains are the domains reqs were refused a CONNECT to port 443 of, once each, in order: an
+// IP, an Anthropic host or another port stays on the daemon page only (014-AC8).
+func blockedDomains(reqs []sandbox.EgressRequest) []string {
+	var out []string
+	for _, q := range reqs {
+		if q.Allowed || q.Method != "CONNECT" || strings.Contains(q.Host, ":") || slices.Contains(out, q.Host) {
+			continue
+		}
+		if _, err := sandbox.NormalizeAllowlist([]string{q.Host}); err == nil {
+			out = append(out, q.Host)
+		}
+	}
+	return out
+}
+
+// AllowEgress adds domain to room's own list, scope "room", or to every room's, scope "server", as
+// by approved it in the room; the running sandboxes take it at once (014-AC10, 014-AC11, 014-AC16).
+func (d *Daemon) AllowEgress(ctx context.Context, room, domain, scope, by string) error {
+	list, err := sandbox.NormalizeAllowlist([]string{domain})
+	if err != nil {
+		return err
+	}
+	if len(list) != 1 || strings.HasPrefix(list[0], ".") {
+		return fmt.Errorf("%q: one domain name, without a leading dot", domain)
+	}
+	at := time.Now().UTC()
+	add := AllowEntry{Domain: list[0], By: by, At: &at}
+	d.settingsMu.Lock()
+	defer d.settingsMu.Unlock()
+	next := d.Status().Egress
+	switch scope {
+	case "room":
+		es := next.Rooms[room]
+		if slices.ContainsFunc(es, func(e AllowEntry) bool { return e.Domain == add.Domain }) {
+			return nil
+		}
+		if es, err = normalizeEntries(append(slices.Clone(es), add)); err != nil {
+			return fmt.Errorf("this room's websites: %w", err)
+		}
+		next.Rooms = maps.Clone(next.Rooms)
+		if next.Rooms == nil {
+			next.Rooms = map[string][]AllowEntry{}
+		}
+		next.Rooms[room] = es
+	case "server":
+		if slices.ContainsFunc(next.Server, func(e AllowEntry) bool { return e.Domain == add.Domain }) {
+			return nil
+		}
+		if next.Server, err = normalizeEntries(append(slices.Clone(next.Server), add)); err != nil {
+			return fmt.Errorf("every room's websites: %w", err)
+		}
+	default:
+		return fmt.Errorf("scope %q: room or server", scope)
+	}
+	return d.setEgress(ctx, next)
+}
+
+// RemoveRoomEgress takes domain off room's own list; the running sandboxes lose it at once and the
+// room, when connected, hears of it (014-AC15).
+func (d *Daemon) RemoveRoomEgress(ctx context.Context, room, domain string) error {
+	d.settingsMu.Lock()
+	next := d.Status().Egress
+	es := slices.DeleteFunc(slices.Clone(next.Rooms[room]), func(e AllowEntry) bool { return e.Domain == domain })
+	if len(es) == len(next.Rooms[room]) {
+		d.settingsMu.Unlock()
+		return fmt.Errorf("%s is not on this room's websites", domain)
+	}
+	next.Rooms = maps.Clone(next.Rooms)
+	if len(es) == 0 {
+		delete(next.Rooms, room)
+	} else {
+		next.Rooms[room] = es
+	}
+	err := d.setEgress(ctx, next)
+	d.settingsMu.Unlock()
+	if err != nil {
+		return err
+	}
+	d.tellRevoked(ctx, room, domain, "room")
+	return nil
+}
+
+// forgetRoomEgress drops a removed room's own list (014-AC16).
+func (d *Daemon) forgetRoomEgress(ctx context.Context, room string) error {
+	d.settingsMu.Lock()
+	defer d.settingsMu.Unlock()
+	next := d.Status().Egress
+	if _, ok := next.Rooms[room]; !ok {
+		return nil
+	}
+	next.Rooms = maps.Clone(next.Rooms)
+	delete(next.Rooms, room)
+	return d.setEgress(ctx, next)
+}
+
+// tellRevoked posts to room, or to every connected room when room is "", that the host removed
+// domain from scope's list; a room not connected only gets the daemon's log line (014-AC15).
+func (d *Daemon) tellRevoked(ctx context.Context, room, domain, scope string) {
+	d.o.Log.Info("egress_revoked", zap.String("room", room), zap.String("domain", domain), zap.String("scope", scope))
+	for _, r := range d.runs() {
+		if room != "" && r.room.String() != room {
+			continue
+		}
+		d.mu.Lock()
+		connected := r.st.Connection == "connected"
+		d.mu.Unlock()
+		if !connected {
+			continue
+		}
+		tok, err := d.o.Tokens.Get(r.room)
+		if err != nil || tok == "" {
+			continue
+		}
+		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		resp, err := d.roomRequest(rctx, http.MethodPost, r.daemonURL("egress-revoked"), tok, map[string]string{"domain": domain, "scope": scope})
+		if err == nil {
+			if resp.StatusCode/100 != 2 {
+				err = apiError(resp)
+			}
+			_ = resp.Body.Close()
+		}
+		cancel()
+		if err != nil {
+			d.o.Log.Warn("egress_revoked_post_failed", zap.String("room", r.room.String()), zap.Error(err))
+		}
+	}
+}
+
+// applyAllow applies a website approval the room handed this daemon, and tells the room whether
+// it did (014-AC10).
+func (r *roomRun) applyAllow(ctx context.Context, tok string, id int64, domain, scope, by string) {
+	err := r.d.AllowEgress(ctx, r.room.String(), domain, scope, by)
+	r.d.o.Log.Info("egress_allowed", zap.String("room", r.room.String()), zap.String("domain", domain), zap.String("scope", scope),
+		zap.String("by", by), zap.Error(err))
+	body := map[string]string{"error": ""}
+	if err != nil {
+		body["error"] = err.Error()
+	}
+	rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	resp, err := r.d.roomRequest(rctx, http.MethodPost, r.daemonURL("blocked/"+strconv.FormatInt(id, 10)), tok, body)
+	if err == nil {
+		if resp.StatusCode/100 != 2 {
+			err = apiError(resp)
+		}
+		_ = resp.Body.Close()
+	}
+	if err != nil {
+		r.d.o.Log.Warn("egress_allow_confirm_failed", zap.String("room", r.room.String()), zap.Int64("message", id), zap.Error(err))
 	}
 }

@@ -15,7 +15,7 @@ import { PluginsTab, mountReview } from './plugins.js';
  * @typedef {{room: {id: string, name: string}, me: Participant, participants: Participant[]}} RoomData
  * @typedef {{id: number, name: string, version: number, author: string, pending?: boolean}} RoomSkill
  * @typedef {{id: number, name: string, badge: string, model: string, effort: string, pending?: boolean}} Persona
- * @typedef {{room_skills?: RoomSkill[], personas?: Persona[], host_participant_id?: number}} AgentState
+ * @typedef {{room_skills?: RoomSkill[], personas?: Persona[], host_participant_id?: number, egress_admins_allow?: boolean}} AgentState
  * @typedef {{glossary: string, prompt: string, used: number, total: number, capacity: number}} Glossary
  * @typedef {{glossary: boolean}} STTState
  */
@@ -30,10 +30,10 @@ addEventListener('grill:agent', (e) => { agentState.value = /** @type {CustomEve
 addEventListener('grill:stt', (e) => { sttGlossary.value = /** @type {CustomEvent<STTState>} */ (e).detail.glossary; });
 
 const allTabs = [...Object.entries(roomTabs).slice(0, 3), ['personas', 'Personas'], ['skills', 'Skills'], ['plugins', 'Plugins'],
-  ['documents', 'Documents'], ['export', roomTabs.export], ['glossary', 'Words to recognise']];
+  ['network', 'Websites'], ['documents', 'Documents'], ['export', roomTabs.export], ['glossary', 'Words to recognise']];
 // The tabs a plain member gets; a room admin gets them all. Every member reads the room's plugins
-// (009-AC5) and manages their own invites (011-AC27).
-const memberTabs = ['invites', 'plugins', 'glossary'];
+// (009-AC5), its websites (014) and manages their own invites (011-AC27).
+const memberTabs = ['invites', 'plugins', 'network', 'glossary'];
 
 // tab is the open tab from #manage/<tab>, '' when the sheet is closed.
 /** @param {string} hash */
@@ -98,6 +98,7 @@ function Manage({ data, tab, tabs }) {
           ${' '}<button type="button" class="btn-secondary" onClick=${() => removeSkill(k)} aria-label=${'Remove the room skill ' + k.name}>Remove</button></li>`)}</ul>`
         : html`<p class="empty">None yet. Members copy their personal skills in from the Personas sheet.</p>`)}
       ${tab === 'plugins' && html`<${PluginsTab} base=${base} admin=${true} host=${isHost(data)} personas=${personas}/>`}
+      ${tab === 'network' && html`<${NetworkTab} base=${base} host=${isHost(data)} show=${show}/>`}
       ${tab === 'documents' && html`<${DeletedDocuments} base=${base} show=${show}/>`}
       ${tab === 'glossary' && html`<${STTGlossary} data=${data}/>`}
     <//>`}`;
@@ -198,7 +199,31 @@ function App() {
     ${said && html`<p class="said" role="alert">${said}</p>`}
     <div class="tab-panel" id=${'panel-' + t}>${t === 'glossary' && html`<${STTGlossary} data=${data}/>`}
       ${t === 'invites' && html`<${Invites} base=${base} api=${fetchJSON} show=${show} byName=${byName} me=${data.me.id}/>`}
-      ${t === 'plugins' && html`<${PluginsTab} base=${base} admin=${false} host=${isHost(data)} personas=${agentState.value?.personas || []}/>`}</div>`;
+      ${t === 'plugins' && html`<${PluginsTab} base=${base} admin=${false} host=${isHost(data)} personas=${agentState.value?.personas || []}/>`}
+      ${t === 'network' && html`<${NetworkTab} base=${base} host=${isHost(data)} show=${show}/>`}</div>`;
+}
+
+/**
+ * NetworkTab is what the room's agents may reach (014): the AI host lets the room's admins allow
+ * websites for the room, or not (014-AC12); everyone else reads which.
+ * @param {{base: string, host: boolean, show: (err: unknown) => void}} props
+ */
+function NetworkTab({ base, host, show }) {
+  const on = !!agentState.value?.egress_admins_allow;
+  // The box shows the host's click until the agent state confirms it.
+  const [clicked, setClicked] = useState(/** @type {boolean | null} */ (null));
+  useEffect(() => { if (clicked === on) setClicked(null); }, [on, clicked]);
+  /** @param {Event} e */
+  const toggle = (e) => {
+    const next = /** @type {HTMLInputElement} */ (e.currentTarget).checked;
+    setClicked(next);
+    fetchJSON('PUT', base + '/egress-delegation', { on: next }).catch((err) => { setClicked(null); show(err); });
+  };
+  return html`<h3>Websites</h3>
+    <p class="hint">When a persona is refused a website, the chat says so. The AI host allows it for this room, or for every room on their computer.</p>
+    ${host ? html`<label><input id="egress-admins" type="checkbox" checked=${clicked ?? on} onChange=${toggle}/> Room admins may allow websites for this room</label>
+      <p class="hint">For this room only. It turns off when someone else becomes the AI host.</p>`
+    : html`<p id="egress-admins-state">${on ? 'Room admins may allow websites for this room.' : 'Only the AI host allows websites for this room.'}</p>`}`;
 }
 
 /** @param {RoomData} data */

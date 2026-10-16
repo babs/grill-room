@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -236,6 +238,20 @@ func TestEgressSwitches(t *testing.T) {
 	if code, _ := e.req(t, "POST", "/api/egress-switches", "", `{"all_websites":true}`, nil); code != http.StatusUnauthorized {
 		t.Fatalf("switches without a session: %d", code)
 	}
+	// 014-AC15: the page removes a room's entry; one not on the room's list is an error.
+	link := d.Status().Rooms[0].Room
+	if err := d.AllowEgress(t.Context(), link, "docs.rs", "room", "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	if code, b := e.req(t, "POST", "/api/room-allowlist-remove", tok, `{"room":"`+link+`","domain":"docs.rs"}`, nil); code != http.StatusNoContent {
+		t.Fatalf("remove: %d %s", code, b)
+	}
+	if code, b := e.req(t, "POST", "/api/room-allowlist-remove", tok, `{"room":"`+link+`","domain":"docs.rs"}`, nil); code != http.StatusBadRequest || !strings.Contains(b, "not on this room") {
+		t.Fatalf("remove again: %d %s", code, b)
+	}
+	if p := policy(); slices.Contains(p.Allow, "docs.rs") {
+		t.Fatalf("removed entry still on the sandbox: %+v", p)
+	}
 }
 
 // 014: allowlist.json from before 014 holds a bare list, loaded as the server's entries; the
@@ -306,5 +322,175 @@ func TestEgressLogLines(t *testing.T) {
 	ag.mu.Unlock()
 	if len(since) != 1 || since[0].Before(before) {
 		t.Fatalf("requests asked since %v, turn pressed at %v", since, before)
+	}
+}
+
+// 014-AC8: a turn's refusals give the room each domain once; IPs, Anthropic hosts, other ports and
+// methods, and tunnels let through give none.
+func TestBlockedDomains(t *testing.T) {
+	q := func(host, method string, allowed bool) sandbox.EgressRequest {
+		return sandbox.EgressRequest{Host: host, Method: method, Allowed: allowed}
+	}
+	got := blockedDomains([]sandbox.EgressRequest{
+		q("example.com", "CONNECT", false), q("pypi.org", "CONNECT", true), q("example.com", "CONNECT", false),
+		q("10.0.0.1", "CONNECT", false), q("[::1]", "CONNECT", false), q("api.anthropic.com", "CONNECT", false),
+		q("platform.claude.com", "CONNECT", false), q("example.org:8443", "CONNECT", false), q("plain.example", "GET", false),
+		q("docs.rs", "CONNECT", false), q("code.claude.com", "CONNECT", false),
+	})
+	if want := []string{"example.com", "docs.rs", "code.claude.com"}; !slices.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+// 014-AC10 014-AC11 014-AC15 014-AC16 014-AC17: the host approves a refused website from the room;
+// a room's approval reaches its own sandboxes only, an everywhere one every room's; the page's
+// removal applies at once and the room hears of it; a room's list holds 100 entries; a removed
+// room's list goes; the lists survive a restart; the plugin assist counts the room's list.
+func TestRoomEgressLists(t *testing.T) {
+	rs := newRoomServer(t)
+	desk := map[string]*fakeAgent{}
+	var deskMu sync.Mutex
+	d := newTestDaemon(t, dockerUp)
+	d.o.AllowlistPath = filepath.Join(t.TempDir(), "allowlist.json")
+	d.o.NewAgent = func(r Room, _ int, _, _ string) Agent {
+		deskMu.Lock()
+		defer deskMu.Unlock()
+		ag := &fakeAgent{run: okTurn}
+		// The first room's sandbox, A's, was refused two websites.
+		if len(desk) == 0 {
+			ag.requests = []sandbox.EgressRequest{{Host: "example.com", Method: "CONNECT"}, {Host: "docs.rs", Method: "CONNECT"}}
+		}
+		desk[r.String()] = ag
+		return ag
+	}
+	d.Refresh(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() { cancel(); d.Wait() })
+	a := rs.hostRoom(t, d, ctx, "A")
+	b := rs.hostRoom(t, d, ctx, "B")
+	linkA, linkB := rs.ts.URL+"/r/"+a.id, rs.ts.URL+"/r/"+b.id
+	for _, r := range []hostedRoom{a, b} {
+		rs.waitDone(t, r, rs.press(t, r, rs.personaOf(t, r)).ID)
+	}
+	agentOf := func(link string) *fakeAgent { deskMu.Lock(); defer deskMu.Unlock(); return desk[link] }
+	allowed := func(link, dom string) bool {
+		ag := agentOf(link)
+		ag.mu.Lock()
+		defer ag.mu.Unlock()
+		return covered(ag.policy, dom)
+	}
+	// The first room's turn was refused two websites: two lines.
+	var lines []store.Message
+	waitFor(t, "blocked lines", func() bool {
+		msgs, _ := rs.st.Messages(t.Context(), a.id, 0, 1000)
+		lines = lines[:0]
+		for _, m := range msgs {
+			if m.Blocked != nil {
+				lines = append(lines, m)
+			}
+		}
+		return len(lines) == 2
+	})
+	approve := func(id int64, scope string) {
+		t.Helper()
+		rs.call(t, "POST", fmt.Sprintf("/api/rooms/%s/blocked/%d/allow", a.id, id), a.host, map[string]string{"scope": scope}, http.StatusAccepted, nil)
+		waitFor(t, "the approval confirmed", func() bool {
+			m, err := rs.st.Message(t.Context(), a.id, id)
+			return err == nil && m.Blocked.Decision == scope
+		})
+	}
+	approve(lines[0].ID, "room")
+	if !allowed(linkA, "example.com") || allowed(linkB, "example.com") {
+		t.Fatal("a room's approval reached the wrong sandboxes")
+	}
+	if e := d.Status().Egress.Rooms[linkA]; len(e) != 1 || e[0].By != "Alice" || e[0].At == nil {
+		t.Fatalf("room entries %+v", e)
+	}
+	approve(lines[1].ID, "server")
+	if !allowed(linkA, "docs.rs") || !allowed(linkB, "docs.rs") {
+		t.Fatal("an everywhere approval missed a room")
+	}
+	// 014-AC17: the plugin assist counts the room's own list.
+	if p := d.policy(linkA); !covered(p, "example.com") || covered(d.policy(linkB), "example.com") {
+		t.Fatalf("assist policy %+v", p)
+	}
+	// The page removes the room's entry: the sandbox loses it now, the room is told.
+	if err := d.RemoveRoomEgress(ctx, linkA, "example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if allowed(linkA, "example.com") {
+		t.Fatal("a removed entry stayed")
+	}
+	waitFor(t, "the revocation line", func() bool {
+		msgs, _ := rs.st.Messages(t.Context(), a.id, 0, 1000)
+		return msgs[len(msgs)-1].Body == "Alice removed example.com from this room's websites"
+	})
+	if err := d.RemoveRoomEgress(ctx, linkA, "example.com"); err == nil {
+		t.Fatal("removed twice")
+	}
+	// A server entry added from a room: its removal on the page is told to the rooms.
+	if err := d.SetAllowlist(ctx, sandbox.DefaultAllowlist); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the everywhere revocation line", func() bool {
+		msgs, _ := rs.st.Messages(t.Context(), b.id, 0, 1000)
+		return msgs[len(msgs)-1].Body == "Alice removed docs.rs from every room"
+	})
+	// 014-AC16: 100 entries a room.
+	for i := range 100 {
+		if err := d.AllowEgress(ctx, linkB, fmt.Sprintf("h%d.example", i), "room", "Alice"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.AllowEgress(ctx, linkB, "h100.example", "room", "Alice"); err == nil || !strings.Contains(err.Error(), "at most 100") {
+		t.Fatalf("101st entry: %v", err)
+	}
+	for _, bad := range []string{"10.0.0.1", "api.anthropic.com", ".dotted.example", "*.x"} {
+		if err := d.AllowEgress(ctx, linkB, bad, "room", "Alice"); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+	if err := d.AllowEgress(ctx, linkB, "x.example", "planet", "Alice"); err == nil {
+		t.Error("bad scope accepted")
+	}
+	// A full room list: the host's approval fails, and the room's line says why.
+	for i := range 100 {
+		if err := d.AllowEgress(ctx, linkA, fmt.Sprintf("a%d.example", i), "room", "Alice"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	full, err := rs.st.RecordBlocked(t.Context(), a.id, "Grill", []string{"full.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs.call(t, "POST", fmt.Sprintf("/api/rooms/%s/blocked/%d/allow", a.id, full[0].ID), a.host, map[string]string{"scope": "room"}, http.StatusAccepted, nil)
+	waitFor(t, "the refusal on the line", func() bool {
+		m, err := rs.st.Message(t.Context(), a.id, full[0].ID)
+		return err == nil && strings.Contains(m.Blocked.Error, "at most 100")
+	})
+	saved, err := LoadEgress(d.o.AllowlistPath)
+	if err != nil || len(saved.Rooms[linkB]) != 100 {
+		t.Fatalf("after a restart: %d entries, %v", len(saved.Rooms[linkB]), err)
+	}
+	if err := d.RemoveRoom(ctx, linkB, true); err != nil {
+		t.Fatal(err)
+	}
+	if saved, err := LoadEgress(d.o.AllowlistPath); err != nil || saved.Rooms[linkB] != nil {
+		t.Fatalf("a removed room's list stayed: %v", err)
+	}
+}
+
+// 014-AC3 014-AC8: a sandbox whose log cannot be read leaves the turn with no blocked domain and a
+// warning, not a failure.
+func TestReadEgressFailure(t *testing.T) {
+	core, logs := observer.New(zap.WarnLevel)
+	d := newTestDaemon(t, nil)
+	d.o.Log = zap.New(core)
+	r := &roomRun{d: d, room: Room{Base: "https://h", ID: "a"}}
+	if got := r.readEgress(t.Context(), &fakeAgent{requestsErr: errors.New("no log")}, time.Now(), "Grill"); got != nil {
+		t.Fatalf("blocked = %v", got)
+	}
+	if logs.FilterMessage("egress_read_failed").Len() != 1 {
+		t.Fatal("no warning")
 	}
 }

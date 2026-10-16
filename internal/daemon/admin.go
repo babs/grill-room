@@ -179,6 +179,7 @@ func (a *Admin) Handler() http.Handler {
 	mux.Handle("POST /api/settings", a.auth(a.settings))
 	mux.Handle("POST /api/allowlist", a.auth(a.allowlist))
 	mux.Handle("POST /api/egress-switches", a.auth(a.egressSwitches))
+	mux.Handle("POST /api/room-allowlist-remove", a.auth(a.roomAllowlistRemove))
 	mux.Handle("GET /api/denied", a.auth(a.denied))
 	mux.Handle("POST /api/plugin-options", a.auth(a.pluginOptions))
 	mux.Handle("POST /api/plugin-fetch", a.auth(a.pluginFetch))
@@ -414,6 +415,24 @@ func (a *Admin) egressSwitches(w http.ResponseWriter, r *http.Request) {
 	d, err := a.ops(req.Instance)
 	if err == nil {
 		err = d.SetEgressSwitches(r.Context(), req.EgressSwitches)
+	}
+	reply(w, err)
+}
+
+// roomAllowlistRemove takes a website off one room's own list; the room's sandboxes lose it at once
+// (014-AC15).
+func (a *Admin) roomAllowlistRemove(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Instance string `json:"instance"`
+		Room     string `json:"room"`
+		Domain   string `json:"domain"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	d, err := a.ops(req.Instance)
+	if err == nil {
+		err = d.RemoveRoomEgress(r.Context(), req.Room, req.Domain)
 	}
 	reply(w, err)
 }

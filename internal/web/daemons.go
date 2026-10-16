@@ -60,9 +60,11 @@ type presence struct {
 	// Reason says why the daemon cannot host (Docker missing, credentials unreadable).
 	Reason  string `json:"reason,omitempty"`
 	Version string `json:"version,omitempty"`
-	room    string
-	conns   int
-	id      int64
+	// Egress says the daemon applies website approvals from the room (014-AC9).
+	Egress bool `json:"egress,omitempty"`
+	room   string
+	conns  int
+	id     int64
 	// since is when the current run of connections started: the earliest eligible one hosts.
 	since time.Time
 }
@@ -255,6 +257,7 @@ func (s *Server) daemonStatus(w http.ResponseWriter, r *http.Request, d *store.D
 		CanHost bool   `json:"can_host"`
 		Reason  string `json:"reason"`
 		Version string `json:"version"`
+		Egress  bool   `json:"egress"`
 		store.DaemonSettings
 	}
 	if !decode(w, r, &req) {
@@ -275,9 +278,9 @@ func (s *Server) daemonStatus(w http.ResponseWriter, r *http.Request, d *store.D
 		p = &presence{}
 		s.presence.m[d.ID] = p
 	}
-	changed := p.CanHost != req.CanHost || p.Reason != reason
+	changed := p.CanHost != req.CanHost || p.Reason != reason || p.Egress != req.Egress
 	p.room, p.ParticipantID, p.id = d.RoomID, d.ParticipantID, d.ID
-	p.CanHost, p.Reason, p.Version = req.CanHost, reason, version
+	p.CanHost, p.Reason, p.Version, p.Egress = req.CanHost, reason, version, req.Egress
 	s.presence.mu.Unlock()
 	switch {
 	case changed:
@@ -490,7 +493,40 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 		flusher.Flush()
 		return true
 	}
-	if !sendTurn() || !sendRoom() || !sendInspect() || !sendPlugins() {
+	// sendEgress hands the room's host daemon each website approval waiting for it, once per
+	// stream; one dropped since, decided or refused, may come again (014-AC10).
+	egress := map[int64]bool{}
+	sendEgress := func() bool {
+		host, err := s.bus.Store.HostDaemon(r.Context(), d.RoomID)
+		if err != nil || host.ID != d.ID {
+			clear(egress)
+			return true
+		}
+		pending, err := s.bus.Store.PendingAllows(r.Context(), d.RoomID)
+		if err != nil {
+			return true
+		}
+		live := map[int64]bool{}
+		for _, p := range pending {
+			live[p.ID] = true
+			if egress[p.ID] {
+				continue
+			}
+			egress[p.ID] = true
+			b, _ := json.Marshal(p)
+			if _, err := fmt.Fprintf(w, "event: egress_allow\ndata: %s\n\n", b); err != nil {
+				return false
+			}
+		}
+		for id := range egress {
+			if !live[id] {
+				delete(egress, id)
+			}
+		}
+		flusher.Flush()
+		return true
+	}
+	if !sendTurn() || !sendRoom() || !sendInspect() || !sendPlugins() || !sendEgress() {
 		return
 	}
 	// alive re-checks the token: a revoked invite, a deleted room or a re-pairing ends the stream.
@@ -513,7 +549,7 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 		case <-tick.C:
 			// The bus drops a signal when this stream's buffer is full of other rooms' ones: the
 			// heartbeat re-reads the room, so a turn, a stop or an inspection is at most that late.
-			if !alive() || !sendTurn() || !sendRoom() || !sendInspect() || !sendPlugins() {
+			if !alive() || !sendTurn() || !sendRoom() || !sendInspect() || !sendPlugins() || !sendEgress() {
 				return
 			}
 			if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
@@ -521,7 +557,7 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 			}
 			flusher.Flush()
 		case changed := <-live:
-			if changed == d.RoomID && (!alive() || !sendTurn() || !sendRoom() || !sendInspect() || !sendPlugins()) {
+			if changed == d.RoomID && (!alive() || !sendTurn() || !sendRoom() || !sendInspect() || !sendPlugins() || !sendEgress()) {
 				return
 			}
 		}

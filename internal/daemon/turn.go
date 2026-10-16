@@ -333,7 +333,6 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 	}
 	wsr := &countingReader{r: ws}
 	ran := time.Now()
-	defer r.readEgress(ctx, ag, ran, job.Persona)
 	out, err := ag.RunTurn(ctx, sandbox.TurnInput{
 		Plugin: plugin, Plugins: plugins, PluginOptions: opts, Redact: redact, Bearer: px.Bearer, Autocompact: knownAutocompact(job.Autocompact),
 		Workspace: wsr, Prompt: job.Prompt, System: job.System, Model: run.Model, Effort: run.Effort,
@@ -348,8 +347,9 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 		},
 	})
 	ev.WorkspaceBytes = wsr.n.Load()
+	blocked := r.readEgress(ctx, ag, ran, job.Persona)
 	if err != nil {
-		return turn.Result{Error: red.Text(err.Error()), SkippedPlugins: skipped}
+		return turn.Result{Error: red.Text(err.Error()), SkippedPlugins: skipped, Blocked: blocked}
 	}
 	model, note, mismatch := out.Result.Label(run.Model)
 	if mismatch {
@@ -360,7 +360,7 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 	tokens, window := out.Result.Context()
 	return turn.Result{Synthesis: out.Result.Result, Model: model, ModelNote: note, ModelMismatch: mismatch, Effort: run.Effort, Capped: capped,
 		SessionID: out.Result.SessionID, SessionOffset: out.SessionOffset,
-		Session: out.Session, Changes: out.Changes, ContextTokens: tokens, ContextWindow: window, SkippedPlugins: skipped}
+		Session: out.Session, Changes: out.Changes, ContextTokens: tokens, ContextWindow: window, SkippedPlugins: skipped, Blocked: blocked}
 }
 
 // maxManifest bounds the manifest a room sends: tens of thousands of files.
@@ -480,15 +480,17 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// readEgress logs the egress requests of the turn that ran in ag since since (014-AC3). The turn's
-// context may be over: the read gets its own deadline.
-func (r *roomRun) readEgress(ctx context.Context, ag Agent, since time.Time, persona string) {
+// readEgress logs the egress requests of the turn that ran in ag since since (014-AC3) and returns
+// the domains it was refused (014-AC8). The turn's context may be over: the read gets its own
+// deadline.
+func (r *roomRun) readEgress(ctx context.Context, ag Agent, since time.Time, persona string) []string {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancel()
 	reqs, err := ag.Requests(ctx, since)
 	if err != nil {
 		r.d.o.Log.Warn("egress_read_failed", zap.String("room", r.room.String()), zap.Error(err))
-		return
+		return nil
 	}
 	r.d.logEgress(r.room.String(), persona, reqs)
+	return blockedDomains(reqs)
 }

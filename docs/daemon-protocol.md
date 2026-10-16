@@ -6,7 +6,7 @@ The instance id is the first 12 hex digits of the sha256 of the server's scheme,
 
 ## Versions
 
-Both sides carry a protocol version, `Proto` in `internal/daemon/proto.go`, currently 6. Version 2 added `access`, version 3 the slots under the global cap, version 4 the room plugins' `plugin_options` and `plugin_fetch`, version 5 `remove_room`, version 6 `egress_switches` and the `denied` reply's `room_hits`. A worker that settles on version 2 asks for no slot: its turns run outside the cap. The supervisor sends no plugin request to a worker below version 4, nor `remove_room` below 5, nor `egress_switches` below 6, and the page says the worker is too old. Peers at most one version apart (`ProtoSkew`) talk at the lower of the two. Further apart, the side that notices sends `refused` and the worker exits. The supervisor marks the instance `refused` with the reason and does not restart it.
+Both sides carry a protocol version, `Proto` in `internal/daemon/proto.go`, currently 6. Version 2 added `access`, version 3 the slots under the global cap, version 4 the room plugins' `plugin_options` and `plugin_fetch`, version 5 `remove_room`, version 6 `egress_switches`, `room_allowlist_remove` and the `denied` reply's `room_hits`. A worker that settles on version 2 asks for no slot: its turns run outside the cap. The supervisor sends no plugin request to a worker below version 4, nor `remove_room` below 5, nor `egress_switches` or `room_allowlist_remove` below 6, and the page says the worker is too old. Peers at most one version apart (`ProtoSkew`) talk at the lower of the two. Further apart, the side that notices sends `refused` and the worker exits. The supervisor marks the instance `refused` with the reason and does not restart it.
 
 A version bump must stay additive within that window: new fields and new message types only. Both sides ignore unknown fields and unknown message types. A supervisor must not send a request type its worker's agreed version lacks.
 
@@ -50,6 +50,7 @@ Requests carry an `id`; the worker answers each one with `{"type":"reply","id":N
 | `pair` | `room` | serves that room beside the others, pairing first if no token is stored for it |
 | `settings` | `settings` | saves the host cap and approval mode, and tells the room |
 | `allowlist` | `allowlist` (absent for an empty list) | saves the egress allowlist every room of the server shares; the running sandboxes take it at once. An entry that stays keeps who added it from a room |
+| `room_allowlist_remove` | `room`, `domain` | takes a website off the room's own list; the room's sandboxes lose it at once and the room, when connected, gets a chat line (version 6) |
 | `egress_switches` | `switches` (`all_websites`, `local_network`) | saves "Allow every website" and its local-network extension, which needs the first; the running sandboxes take them at once (version 6) |
 | `denied` | `n` | the reply's `denied` lists the last `n` refused egress requests, its `hits` counts the requests let through, by host, from the last 2,000 lines of each running egress proxy's log, and `room_hits` the same by room link; workers before 003b send no `hits`, before 6 no `room_hits` |
 | `recheck` | | re-runs the Docker check, and retries a failed sandbox image |

@@ -567,7 +567,7 @@ func (d *Daemon) roomRequest(ctx context.Context, method, url, token string, bod
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, url, rd)
+	req, err := http.NewRequestWithContext(ctx, method, url, rd) //nolint:gosec // G704: url is a paired room server's base plus this package's own path
 	if err != nil {
 		return nil, fmt.Errorf("request: %w", err)
 	}
@@ -577,7 +577,7 @@ func (d *Daemon) roomRequest(ctx context.Context, method, url, token string, bod
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := d.o.HTTP.Do(req)
+	resp, err := d.o.HTTP.Do(req) //nolint:gosec // G704: see NewRequestWithContext above
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: %w", method, url, err)
 	}
@@ -781,6 +781,16 @@ func (r *roomRun) stream(ctx context.Context, tok string) error {
 			if json.Unmarshal([]byte(line[len("data: "):]), &v) == nil && v.ID > 0 {
 				wg.Go(func() { r.inspect(ctx, tok, v.ID) })
 			}
+		case strings.HasPrefix(line, "data: ") && event == "egress_allow":
+			var p struct {
+				ID     int64  `json:"id"`
+				Domain string `json:"domain"`
+				Scope  string `json:"scope"`
+				By     string `json:"by"`
+			}
+			if json.Unmarshal([]byte(line[len("data: "):]), &p) == nil && p.ID > 0 {
+				wg.Go(func() { r.applyAllow(ctx, tok, p.ID, p.Domain, p.Scope, p.By) })
+			}
 		case strings.HasPrefix(line, "data: ") && event == "plugins":
 			wg.Go(func() { r.loadPlugins(ctx, tok) })
 		case strings.HasPrefix(line, "data: ") && event == "stop":
@@ -827,7 +837,7 @@ func (r *roomRun) heartbeat(ctx context.Context, tok string) {
 		canHost, reason := d.readiness(room.String())
 		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		resp, err := d.roomRequest(rctx, http.MethodPost, room.Base+"/api/rooms/"+room.ID+"/daemon/status", tok,
-			map[string]any{"can_host": canHost, "reason": reason, "version": d.o.Version,
+			map[string]any{"can_host": canHost, "reason": reason, "version": d.o.Version, "egress": true,
 				"max_model": st.Settings.MaxModel, "max_effort": st.Settings.MaxEffort, "approve_all": st.Settings.ApproveAll})
 		if err == nil {
 			if resp.StatusCode != http.StatusNoContent {

@@ -1,6 +1,7 @@
 import { test, expect } from './fixtures.js';
 import { execFileSync } from 'node:child_process';
-import { roomWith, startDaemon, pairDaemon, removeSandbox } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, removeSandbox, menuItem } from './helpers.js';
+import { adminToken } from './playwright.config.js';
 
 // curlInSandbox asks the egress proxy for host from inside the sandbox and returns its CONNECT answer.
 function curlInSandbox(sandbox, host) {
@@ -130,6 +131,69 @@ test('allow every website and its local-network extension', async ({ browser, re
     await expect(local).not.toBeChecked();
     await expect(local).toBeDisabled();
     await expect.poll(() => curlInSandbox(daemon.sandbox, 'example.com'), { timeout: 20_000 }).toBe('403');
+  } finally {
+    daemon.cleanup();
+    await daemon.exited;
+    removeSandbox(daemon.sandbox);
+  }
+});
+
+// ask posts text as page and presses the Grill, then waits for its n-th answer.
+async function ask(page, text, n) {
+  await page.locator('#body').fill(text);
+  await page.locator('#body').press('Enter');
+  await page.getByRole('button', { name: 'Ask Grill' }).click();
+  await expect(page.locator('#messages li.msg.agent')).toHaveCount(n, { timeout: 60_000 });
+}
+
+// 014-AC8 to 014-AC15: a website the agent was refused shows in the chat; the AI host allows it for
+// the room and the next answer reaches it; with the host's delegation a room admin allows a second
+// one for the room only, while a plain member never gets a button; the daemon page lists both
+// with the room as scope and removes one, which the chat hears of. Real daemon and sandbox, fake
+// claude; example.com and example.org need Internet access.
+test('blocked websites in the chat, allowed by the host and a delegated admin', async ({ browser, request, baseURL }) => {
+  test.setTimeout(240_000);
+  const { room, pages: [alice, bob, carol] } = await roomWith(browser, request, ['Alice', 'Bob', 'Carol']);
+  const me = await bob.evaluate((id) => fetch(`/api/rooms/${id}`).then((r) => r.json()), room.id);
+  expect((await request.put(`/api/rooms/${room.id}/admins/${me.me.id}`, { headers: { Authorization: `Bearer ${adminToken}` } })).status()).toBe(204);
+  await bob.reload();
+  const daemon = startDaemon(`${baseURL}/r/${room.id}`);
+  try {
+    const admin = await pairDaemon(alice, daemon);
+    const line = (page, domain) => page.locator('#messages li.msg.blocked', { hasText: domain });
+
+    await ask(alice, 'FAKE_FETCH example.com', 1);
+    await expect(line(alice, 'example.com')).toContainText('Grill tried to reach example.com (blocked)', { timeout: 15_000 });
+    await expect(line(alice, 'example.com').getByRole('button')).toHaveText(['Allow for this room', 'Allow everywhere']);
+    await expect(line(bob, 'example.com')).toBeVisible();
+    await expect(line(bob, 'example.com').getByRole('button')).toHaveCount(0);
+    await expect(line(carol, 'example.com').getByRole('button')).toHaveCount(0);
+    await line(alice, 'example.com').getByRole('button', { name: 'Allow for this room' }).click();
+    await expect(line(alice, 'example.com')).toContainText('Alice allowed example.com for this room');
+    await expect(line(carol, 'example.com')).toContainText('Alice allowed example.com for this room');
+    await ask(alice, 'FAKE_FETCH example.com', 2);
+    await expect(alice.locator('#messages li.msg.agent').last()).toContainText('Fetched example.com: 200');
+
+    await ask(alice, 'FAKE_FETCH example.org', 3);
+    await expect(line(alice, 'example.org')).toContainText('(blocked)', { timeout: 15_000 });
+    await menuItem(alice, 'Room settings');
+    await alice.locator('#manage').getByRole('link', { name: 'Websites' }).click();
+    await alice.locator('#egress-admins').check();
+    await expect(alice.locator('#messages li.msg.system', { hasText: 'Alice let the room admins allow websites for this room.' })).toHaveCount(1);
+    await alice.locator('#manage-close').click();
+    await expect(line(bob, 'example.org').getByRole('button')).toHaveText(['Allow for this room']);
+    await expect(line(carol, 'example.org').getByRole('button')).toHaveCount(0);
+    await line(bob, 'example.org').getByRole('button', { name: 'Allow for this room' }).click();
+    await expect(line(alice, 'example.org')).toContainText('Bob allowed example.org for this room');
+
+    // The daemon page: both entries scoped to the room, one removed.
+    await admin.locator('#tab-settings').click();
+    const rows = admin.locator('#allowlist tr.room-entry');
+    await expect(rows).toHaveCount(2);
+    await expect(rows.filter({ hasText: 'example.org' })).toContainText('Docs room');
+    await admin.getByRole('button', { name: 'Remove example.org from Docs room' }).click();
+    await expect(rows).toHaveCount(1);
+    await expect(alice.locator('#messages li.msg.system', { hasText: 'Alice removed example.org from this room\'s websites' })).toHaveCount(1);
   } finally {
     daemon.cleanup();
     await daemon.exited;

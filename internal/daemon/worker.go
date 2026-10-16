@@ -235,6 +235,8 @@ func (d *Daemon) handle(ctx context.Context, m Msg) Msg {
 		var eg sandbox.Egress
 		eg, err = d.Egress(ctx, m.N)
 		out.Denied, out.Hits, out.RoomHits = eg.Denied, eg.Hits, eg.RoomHits
+	case "room_allowlist_remove":
+		err = d.RemoveRoomEgress(ctx, m.Room, m.Domain)
 	case "egress_switches":
 		if m.Switches == nil {
 			err = errors.New("switches missing")

@@ -109,6 +109,7 @@ async function loadRoom() {
   meAdmin = !!data.me.admin;
   $('doc-delete').hidden = !meAdmin;
   renameSenders();
+  renderBlocked();
   $('voice').hidden = !data.voice;
   showManage();
   // An appointment or a step-down changes who turns plugins on (Capabilities).
@@ -226,6 +227,54 @@ function replaceMessage(m) {
   if (li && m.change_seq > Number(li.dataset.seq)) li.replaceWith(renderMessage(m));
 }
 
+// blockedLines are the shown lines of websites a turn was refused, by id: their buttons follow the
+// agent state (014-AC9).
+const blockedLines = new Map();
+
+// blockedActions are an undecided blocked line's buttons for whoever may approve it: the AI host
+// for the room or everywhere, a room admin the host lets for the room only; disabled, with why,
+// while the host's app cannot take it (014-AC9).
+function blockedActions(m) {
+  const b = m.blocked;
+  if (b.decision) return null;
+  const box = document.createElement('span');
+  box.className = 'blocked-actions';
+  if (b.pending) {
+    box.textContent = 'Allowing…';
+    return box;
+  }
+  const scopes = isHost() ? [['room', 'Allow for this room'], ['server', 'Allow everywhere']]
+    : meAdmin && agent.egress_admins_allow ? [['room', 'Allow for this room']] : [];
+  if (!scopes.length) return null;
+  const why = agent.egress_host || '';
+  for (const [scope, label] of scopes) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn-secondary';
+    btn.textContent = label;
+    btn.disabled = !!why;
+    btn.addEventListener('click', () => {
+      for (const x of box.querySelectorAll('button')) x.disabled = true;
+      sendJSON('POST', api + '/blocked/' + m.id + '/allow', { scope }).catch((err) => {
+        showNotice(err.message);
+        for (const x of box.querySelectorAll('button')) x.disabled = !!why;
+      });
+    });
+    box.append(btn, ' ');
+  }
+  const note = why || (b.error ? 'Not allowed: ' + b.error : '');
+  if (note) box.append(Object.assign(document.createElement('span'), { className: 'hint', textContent: note }));
+  return box;
+}
+
+// renderBlocked redraws the blocked lines' buttons after the agent state changed.
+function renderBlocked() {
+  for (const m of blockedLines.values()) {
+    const li = messages.querySelector('li[data-id="' + m.id + '"]');
+    if (li) li.replaceWith(renderMessage(m));
+  }
+}
+
 function button(text, label, onClick) {
   const b = document.createElement('button');
   b.type = 'button';
@@ -255,6 +304,12 @@ function renderMessage(m) {
     body.className = 'body';
     body.textContent = m.body;
     li.append(timeOf(m.ts), ' ', body);
+    if (m.blocked) {
+      blockedLines.set(m.id, m);
+      li.classList.add('blocked');
+      const acts = blockedActions(m);
+      if (acts) li.append(' ', acts);
+    }
     return li;
   }
   const meta = document.createElement('div');
@@ -1707,6 +1762,7 @@ function connect() {
     }
     renderAgent();
     renderMentions();
+    renderBlocked();
     messages.querySelectorAll('mark.mention-chip.persona').forEach(paintChip);
     renderParticipants();
     window.grillAgent = agent;

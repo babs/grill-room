@@ -610,7 +610,7 @@ func (s *Server) asHostDaemon(w http.ResponseWriter, r *http.Request, d *store.D
 		return false
 	}
 	if host == nil || host.ID != d.ID {
-		httpError(w, http.StatusForbidden, "only the host's daemon inspects plugins")
+		httpError(w, http.StatusForbidden, "only the room's AI host daemon can do this")
 		return false
 	}
 	return true

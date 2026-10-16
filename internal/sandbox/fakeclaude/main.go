@@ -21,6 +21,8 @@
 //	FAKE_SLOW         take a few seconds (a turn others queue behind)
 //	FAKE_SLEEP        write docs/notes.md and the prompt to the session, as a turn under way
 //	                  does, then hang until killed
+//	FAKE_FETCH D      GET https://D/ through the egress proxy, the prompt's last D, and answer
+//	                  with the status or the error
 //
 // Every turn first runs the --plugin-dir plugins' SessionStart command hooks with their option
 // values, as Claude Code does, and keeps what they print in the session.
@@ -42,6 +44,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -202,6 +205,12 @@ func act(prompt, history, cwd, system, effort, autocompact, session string) (str
 	switch {
 	case strings.Contains(prompt, "FAKE_AUTOCOMPACT"):
 		return "autocompact " + autocompact, nil
+	case strings.Contains(prompt, "FAKE_FETCH"):
+		ms := fetchMark.FindAllStringSubmatch(prompt, -1)
+		if ms == nil {
+			return "", fmt.Errorf("FAKE_FETCH wants a domain")
+		}
+		return fetch(ms[len(ms)-1][1]), nil
 	case strings.Contains(prompt, "FAKE_EDIT_UPLOAD"):
 		ups, _ := filepath.Glob(ws("uploads/*"))
 		if len(ups) == 0 {
@@ -333,4 +342,17 @@ func useSkills(plugin, cwd string) (string, error) {
 		return "", err
 	}
 	return "Skills used: " + strings.Join(lines, "; ") + ".", nil
+}
+
+var fetchMark = regexp.MustCompile(`FAKE_FETCH ([a-z0-9][a-z0-9.-]*[a-z0-9])`)
+
+// fetch GETs https://domain/ through the sandbox's HTTPS_PROXY, the egress proxy, as WebFetch does.
+func fetch(domain string) string {
+	c := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment}}
+	resp, err := c.Get("https://" + domain + "/") //nolint:noctx,gosec // a test fake: fetching what the prompt names is its job; the timeout bounds it
+	if err != nil {
+		return "Could not fetch " + domain + ": " + err.Error()
+	}
+	_ = resp.Body.Close()
+	return "Fetched " + domain + ": " + resp.Status
 }

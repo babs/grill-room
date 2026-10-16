@@ -72,7 +72,7 @@ type Tokens struct {
 func NewTokens(dir string) *Tokens { return &Tokens{path: filepath.Join(dir, "tokens.json")} }
 
 func (t *Tokens) load() (map[string]string, error) {
-	b, err := os.ReadFile(t.path)
+	b, err := os.ReadFile(t.path) //nolint:gosec // G703: the instance's own state dir, from the supervisor's config
 	if errors.Is(err, os.ErrNotExist) {
 		return map[string]string{}, nil
 	}

@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -182,5 +184,26 @@ func TestFakeClaude(t *testing.T) {
 	// Two lines per turn of the session: the first prompt, the recall, two context reads, the note.
 	if n := strings.Count(string(b), "\n"); n != 10 {
 		t.Fatalf("session holds %d lines", n)
+	}
+}
+
+// 014-AC8: FAKE_FETCH fetches the prompt's last domain through HTTPS_PROXY and says how it went: a
+// proxy refusing the CONNECT shows as an error, a page answering as its status.
+func TestFakeFetch(t *testing.T) {
+	cwd, home := t.TempDir(), t.TempDir()
+	refuse := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect || r.Host != "second.example:443" {
+			t.Errorf("proxy got %s %s", r.Method, r.Host)
+		}
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer refuse.Close()
+	t.Setenv("HTTPS_PROXY", refuse.URL)
+	o, code := call(t, cwd, home, "FAKE_FETCH first.example\nlater FAKE_FETCH second.example")
+	if code != 0 || !strings.HasPrefix(o.Result, "Could not fetch second.example: ") {
+		t.Fatalf("refused: %d %q", code, o.Result)
+	}
+	if o, code := call(t, cwd, home, "FAKE_FETCH"); code != 1 || !o.IsError {
+		t.Fatalf("no domain: %d %+v", code, o)
 	}
 }

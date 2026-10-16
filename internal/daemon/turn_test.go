@@ -35,8 +35,8 @@ type fakeAgent struct {
 	// requests are what Requests returns, and since the times it was asked from.
 	requests []sandbox.EgressRequest
 	since    []time.Time
-	// allowErr, deniedErr and startErr fail SetPolicy, Denied and Start.
-	allowErr, deniedErr, startErr error
+	// allowErr, deniedErr, startErr and requestsErr fail SetPolicy, Denied, Start and Requests.
+	allowErr, deniedErr, startErr, requestsErr error
 }
 
 func (f *fakeAgent) RunTurn(ctx context.Context, in sandbox.TurnInput) (*sandbox.TurnOutput, error) {
@@ -79,7 +79,7 @@ func (f *fakeAgent) Requests(_ context.Context, since time.Time) ([]sandbox.Egre
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.since = append(f.since, since)
-	return f.requests, nil
+	return f.requests, f.requestsErr
 }
 
 func (f *fakeAgent) Egress(context.Context, int) (sandbox.Egress, error) {

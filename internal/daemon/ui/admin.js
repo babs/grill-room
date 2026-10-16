@@ -10,6 +10,7 @@ import { Monitoring } from './monitor.js';
 /** @typedef {import('./api.js').Instance} Instance */
 /** @typedef {import('./api.js').Account} Account */
 /** @typedef {import('./api.js').RoomStatus} RoomStatus */
+/** @typedef {import('./api.js').AllowEntry} AllowEntry */
 
 /** @type {import('@preact/signals').Signal<StatusReply | null>} */
 const data = signal(null);
@@ -967,13 +968,23 @@ const covers = (entry, host) => {
  */
 const hitsFor = (hits, entry) => Object.entries(hits).reduce((n, [h, c]) => n + (covers(entry, h) ? c : 0), 0);
 
+/**
+ * Domain is an allowlist entry's domain; one added from a room's chat says by whom and when in its
+ * tooltip (014-AC15).
+ * @param {{dom: string, entry?: AllowEntry}} p
+ */
+function Domain({ dom, entry }) {
+  const tip = entry?.by ? 'Allowed by ' + entry.by + ' from the room' + (entry.at ? ', ' + window.grillDate(entry.at) : '') : undefined;
+  return html`<code class="domain" tabindex=${tip ? 0 : undefined} data-tip=${tip}>${dom}</code>`;
+}
+
 // Egress is the server's allowlist as a table with its hits, and the requests its proxy refused
 // (002-AC34 to 002-AC36, 003b-AC16).
 /** @param {{i: Instance, st: import('./api.js').Status}} p */
 function Egress({ i, st }) {
   const [domain, setDomain] = useState('');
   const [text, run] = useStatus();
-  const [log, setLog] = useState(/** @type {{denied: import('./api.js').Denied[], hits: Record<string, number> | null} | null} */ (null));
+  const [log, setLog] = useState(/** @type {{denied: import('./api.js').Denied[], hits: Record<string, number> | null, room_hits?: Record<string, Record<string, number>>} | null} */ (null));
   const [logErr, setLogErr] = useState('');
   // The switches show the host's click until the server confirms it, as approve-all does.
   const [pending, setPending] = useState(/** @type {{all_websites: boolean, local_network: boolean} | null} */ (null));
@@ -982,7 +993,7 @@ function Egress({ i, st }) {
     // live stops a load already in flight from starting the next one once the server changes.
     let live = true;
     const load = () => api('GET', '/api/denied?instance=' + encodeURIComponent(i.id))
-      .then((r) => { if (live) { setLog({ denied: r.denied, hits: r.hits || null }); setLogErr(''); } })
+      .then((r) => { if (live) { setLog({ denied: r.denied, hits: r.hits || null, room_hits: r.room_hits }); setLogErr(''); } })
       .catch((err) => { if (live) setLogErr(err.message); })
       .finally(() => { if (live && !stopped.value) timer = setTimeout(load, 5000); });
     load();
@@ -997,15 +1008,25 @@ function Egress({ i, st }) {
     save([...st.allowlist, dom], 'Saved.').then((ok) => { if (ok) setDomain(''); });
   };
   const hits = log?.hits;
-  const sw = pending ?? { all_websites: !!st.egress?.all_websites, local_network: !!st.egress?.local_network };
+  const saved = { all_websites: !!st.egress?.all_websites, local_network: !!st.egress?.local_network };
+  useEffect(() => {
+    if (pending && pending.all_websites === saved.all_websites && pending.local_network === saved.local_network) setPending(null);
+  }, [pending, saved.all_websites, saved.local_network]);
+  const sw = pending ?? saved;
+  const eg = st.egress;
   const all = sw.all_websites;
   // 014-AC3: under "Allow every website", hosts reached that no entry covers get a row of their own.
-  const reached = all && hits ? Object.keys(hits).filter((h) => !st.allowlist.some((e) => covers(e, h))).sort() : [];
+  // 014-AC15: each room's own entries, after the server's, by room.
+  const roomRows = Object.entries(eg?.rooms || {}).flatMap(([room, es]) => es.map((e) => /** @type {[string, AllowEntry]} */ ([room, e])));
+  /** @param {string} room */
+  const roomName = (room) => (i.room_states || []).find((r) => r.room === room)?.name || roomID(room);
+  const reached = all && hits ? Object.keys(hits).filter((h) => !st.allowlist.some((e) => covers(e, h))
+    && !roomRows.some(([, e]) => covers(e.domain, h))).sort() : [];
   const missingDocs = (data.value?.anthropic_docs || []).filter((x) => !st.allowlist.includes(x));
   /** @param {{all_websites: boolean, local_network: boolean}} next @param {string} ok */
   const setSwitches = (next, ok) => {
     setPending(next);
-    return run(api('POST', '/api/egress-switches', { instance: i.id, ...next }), ok).then(reload).finally(() => setPending(null));
+    return run(api('POST', '/api/egress-switches', { instance: i.id, ...next }), ok).then((done) => { if (!done) setPending(null); });
   };
   const toggleAll = (/** @type {any} */ e) => {
     if (!e.currentTarget.checked) return setSwitches({ all_websites: false, local_network: false }, 'Every website off.');
@@ -1022,17 +1043,24 @@ function Egress({ i, st }) {
   return html`
     <h4 id="allowlist-title">Websites the AI may reach</h4>
     <p class="hint">The sandbox reaches these domains, and nothing else, over HTTPS only. A leading dot, as in .example.com, also allows every subdomain. Anthropic's hosts stay blocked whatever the list says.</p>
-    ${!st.allowlist.length && !reached.length ? html`<p class="empty" id="allowlist-empty">No domain: the sandbox reaches nothing.</p>`
+    ${!st.allowlist.length && !reached.length && !roomRows.length ? html`<p class="empty" id="allowlist-empty">No domain: the sandbox reaches nothing.</p>`
       : html`<table id="allowlist" class="allowlist" aria-labelledby="allowlist-title">
-      <thead><tr><th scope="col">Domain</th><th scope="col" class="num"><span tabindex="0" data-tip="Requests let through, from the running sandboxes' recent proxy log. A restart resets them.">Hits</span></th><th scope="col"><span class="sr-only">Remove</span></th></tr></thead>
+      <thead><tr><th scope="col">Domain</th><th scope="col">Scope</th><th scope="col" class="num"><span tabindex="0" data-tip="Requests let through, from the running sandboxes' recent proxy log. A restart resets them.">Hits</span></th><th scope="col"><span class="sr-only">Remove</span></th></tr></thead>
       <tbody>${st.allowlist.map((dom) => html`<tr>
-        <td><code class="domain">${dom}</code></td>
+        <td><${Domain} dom=${dom} entry=${eg?.server.find((e) => e.domain === dom)} /></td>
+        <td class="scope">Every room</td>
         <td class="num">${hits ? hitsFor(hits, dom) : '–'}</td>
         <td class="act"><button type="button" class="btn-icon btn-ghost" aria-label=${'Remove ' + dom} dangerouslySetInnerHTML=${icon('trash')}
           onClick=${() => save(st.allowlist.filter((x) => x !== dom), 'Saved.')}></button></td>
+      </tr>`)}${roomRows.map(([room, e]) => html`<tr class="room-entry">
+        <td><${Domain} dom=${e.domain} entry=${e} /></td>
+        <td class="scope">${roomName(room)}</td>
+        <td class="num">${log?.room_hits?.[room] ? hitsFor(log.room_hits[room], e.domain) : '–'}</td>
+        <td class="act"><button type="button" class="btn-icon btn-ghost" aria-label=${'Remove ' + e.domain + ' from ' + roomName(room)} dangerouslySetInnerHTML=${icon('trash')}
+          onClick=${() => run(api('POST', '/api/room-allowlist-remove', { instance: i.id, room, domain: e.domain }), 'Removed.')}></button></td>
       </tr>`)}${reached.map((h) => html`<tr class="reached">
         <td><code class="domain">${h}</code> <span class="hint">reached via Allow every website</span></td>
-        <td class="num">${hits?.[h]}</td><td></td>
+        <td class="scope">Every room</td><td class="num">${hits?.[h]}</td><td></td>
       </tr>`)}</tbody></table>`}
     <form id="allowlist-form" class="add-room" onSubmit=${add}>
       <input id="allowlist-add" required aria-label="Domain" placeholder="example.com" autocomplete="off" spellcheck=${false}

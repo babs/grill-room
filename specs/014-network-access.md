@@ -98,7 +98,7 @@ A host who wants it can turn on "Allow every website" for a server, behind a red
 ### Phase 2 — Blocked requests in the chat, per-room allow, delegation
 - Work: per-turn read of the sandbox's egress log since the turn's start; the blocked line (new message kind with its state and count); the approve routes and their checks; delegation switch in room settings; per-room lists on the daemon, merged with the server list into each room's sandboxes; supervisor-worker protocol version 6 and the room stream messages (additive); scope column, tooltip and revocation in the daemon table; the assist change; fake claude `FAKE_FETCH=<domain>`, which makes a CONNECT through the egress proxy.
 - **Covers**: AC8, AC9, AC10, AC11, AC12, AC13, AC14, AC15, AC16, AC17
-- **Data model impact**: room server: `rooms.egress_admins_allow` (0 or 1, default 0); a `blocked` message kind holding persona, domain, count and decision; audit actions `egress.allow`, `egress.revoke`, `egress.delegate`. Daemon: the `rooms` part of the allowlist file.
+- **Data model impact**: room server: `rooms.egress_admins_allow` (0 or 1, default 0); a blocked line is a `system` message with a `blocked_requests` row holding persona, domain, count, decision and the approval waiting for the host's app; audit actions `egress.allow`, `egress.revoke`, `egress.delegate`. Daemon: the `rooms` part of the allowlist file.
 - **DoD**:
   - Go tests: one room's merged list reaches its sandboxes and no other room's; "everywhere" reaches every room of the server; removal applies at once; 101st room entry refused; a removed room's entries gone; restart keeps them;
   - Go table test of the approve route over actor × scope × delegation × room: host room 200, host everywhere 200, delegated admin room 200, delegated admin everywhere 403, undelegated admin 403, admin of another room 403, member 403; delegation off after a host transfer; Anthropic host, IP and `*.x` give 400;
@@ -120,7 +120,7 @@ A host who wants it can turn on "Allow every website" for a server, behind a red
 ## Data model impact (summary)
 
 - Daemon, per server: the allowlist file becomes an object with the two switches, server entries and room entries (Phases 1 and 2); a connectors file (Phase 3). The legacy array still loads.
-- Room server: `rooms.egress_admins_allow`; a `blocked` message kind; audit actions `egress.allow`, `egress.revoke`, `egress.delegate`, `connector.enable`, `connector.disable`, `connector.actions`.
+- Room server: `rooms.egress_admins_allow`; blocked lines, `system` messages with a `blocked_requests` row; audit actions `egress.allow`, `egress.revoke`, `egress.delegate`, `connector.enable`, `connector.disable`, `connector.actions`.
 - Supervisor-worker protocol version 6 and new room stream messages, additive.
 - No export change: per-room entries and connectors stay on the host; `egress_admins_allow` is not exported.
 
@@ -149,6 +149,10 @@ Made while drafting (overturnable):
 - The Anthropic deny covers `.claude.com` too: the token host, the platform docs and the hosted connectors live there. The binary already names hosts under it that today's list missed.
 - "Allow everywhere" from the chat stays within the server whose room it came from. A room server can only widen its own rooms' access.
 - Delegation lives on the room server, which knows the room's admins, and resets on a host transfer: the new host never inherits a choice they did not make.
+- A blocked line is a `system` message with a `blocked_requests` row, not a new message kind: the kinds are a CHECK on `messages`, which SQLite changes only by rebuilding the table.
+- An approval goes to the host's app first, which applies it and confirms; only then does the line say who allowed it, with its audit entry. A full room list or a lost connection leaves the line undecided, with why, rather than claiming an approval that did not apply.
+- A host change also drops the approvals the previous host's app had not applied: they would land on the new host's computer. The line says why and takes a new approval.
+- Removing from the server list on the daemon page tells the rooms only of entries added from a room's chat: the host's own edits of the default list are not room events.
 - A revocation from the daemon page applies at once. Its chat line and audit entry are written only if the room server is connected then; the daemon log always has it.
 - Hits come from each sandbox's recent proxy log, as 003b's do, and reset with the sandbox; the daemon log line is the durable record.
 - Connector tools without `readOnlyHint: true` are disallowed by default (S16 risk: an agent with a connector acts as the user there).

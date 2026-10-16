@@ -308,9 +308,9 @@ func (r *roomRun) runInspection(ctx context.Context, tok string, id int64, img I
 	var missing []string
 	if m, err := snap.Manifest(); err == nil && plugin.CheckName(m.Name) == nil {
 		name = m.Name
-		allow := r.d.Status().Allowlist
+		policy := r.d.policy(r.room.String())
 		for _, dom := range m.Domains {
-			if !sandbox.Allowed(allow, dom) {
+			if !covered(policy, dom) {
 				missing = append(missing, dom)
 			}
 		}

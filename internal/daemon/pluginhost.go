@@ -104,8 +104,9 @@ func (d *Daemon) hostPluginsLocked(r *roomRun) []HostPlugin {
 			}
 		}
 		hp.NeedsSetup = needsSetup(turnOptions(p.Options), vs)
+		policy := d.policyLocked(r.room.String())
 		for _, dom := range p.Domains {
-			if !sandbox.Allowed(d.st.Allowlist, dom) {
+			if !covered(policy, dom) {
 				hp.OffAllowlist = append(hp.OffAllowlist, dom)
 			}
 		}

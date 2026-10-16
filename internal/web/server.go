@@ -353,6 +353,8 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("GET /api/rooms/{room}/agent", s.participant(s.getAgent))
 	mux.Handle("PATCH /api/rooms/{room}/agent", s.participant(s.setAgentMode))
+	mux.Handle("POST /api/rooms/{room}/blocked/{msg}/allow", s.participant(s.allowBlocked))
+	mux.Handle("PUT /api/rooms/{room}/egress-delegation", s.participant(s.setEgressDelegation))
 	mux.Handle("POST /api/rooms/{room}/turns", s.participant(s.startTurn))
 	mux.Handle("POST /api/rooms/{room}/turns/{turn}/stop", s.participant(s.stopTurn))
 	mux.Handle("PUT /api/rooms/{room}/host", s.memberOrAdmin(s.handOver))
@@ -398,6 +400,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms/{room}/daemon/plugins/{version}/report", s.daemonAuth(s.postPluginReport))
 	mux.Handle("POST /api/rooms/{room}/daemon/turns/{turn}", s.daemonAuth(s.postResult))
 	mux.Handle("POST /api/rooms/{room}/daemon/turns/{turn}/state", s.daemonAuth(s.postTurnState))
+	mux.Handle("POST /api/rooms/{room}/daemon/blocked/{msg}", s.daemonAuth(s.confirmAllow))
+	mux.Handle("POST /api/rooms/{room}/daemon/egress-revoked", s.daemonAuth(s.egressRevoked))
 	mux.Handle("GET /api/rooms/{room}/daemon/sessions/{session}", s.daemonAuth(s.getSession))
 
 	mux.Handle("GET /api/rooms/{room}/voice", s.participant(s.getVoice))

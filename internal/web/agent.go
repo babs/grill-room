@@ -58,6 +58,10 @@ type agentState struct {
 	HostBy string `json:"host_by,omitempty"`
 	// NotesWatchDelay is how long, in seconds, the notes watcher waits after the last new note (009-AC32).
 	NotesWatchDelay int `json:"notes_watch_delay"`
+	// EgressAdmins lets the room's admins allow websites for the room (014-AC12); EgressHost says
+	// why no one can now, "" when the AI host's app takes approvals (014-AC9).
+	EgressAdmins bool   `json:"egress_admins_allow"`
+	EgressHost   string `json:"egress_host,omitempty"`
 }
 
 // mentionStates bounds the mentions the agent state carries.
@@ -132,7 +136,8 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 		return nil, err
 	}
 	st := &agentState{HostID: r.HostParticipantID, CanTrigger: []int64{}, Daemons: s.connectedDaemons(room), Models: turn.Models, Efforts: turn.Efforts,
-		Chain: r.Chain, ParallelTurns: r.ParallelTurns, NotesWatchDelay: int(s.opts.NotesWatchDelay / time.Second)}
+		Chain: r.Chain, ParallelTurns: r.ParallelTurns, NotesWatchDelay: int(s.opts.NotesWatchDelay / time.Second),
+		EgressAdmins: r.EgressAdmins, EgressHost: s.hostEgress(room, r.HostParticipantID)}
 	if v, ok := s.hostBy.Load(room); ok {
 		st.HostBy, _ = v.(string)
 	}

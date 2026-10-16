@@ -123,7 +123,8 @@ func TestServeWorker(t *testing.T) {
 	}
 	waitFor(t, "both switches on", func() bool { e := f.lastStatus().Egress; return e.AllWebsites && e.LocalNetwork })
 	for _, bad := range []Msg{{Type: "settings"}, {Type: "settings", Settings: &Settings{MaxEffort: "turbo"}}, {Type: "pair", Room: "http://x/r/a"},
-		{Type: "update"}, {Type: "dance"}, {Type: "allowlist", Allowlist: []string{"not a domain!"}}, {Type: "egress_switches"}} {
+		{Type: "update"}, {Type: "dance"}, {Type: "allowlist", Allowlist: []string{"not a domain!"}}, {Type: "egress_switches"},
+		{Type: "room_allowlist_remove", Room: "https://x/r/a", Domain: "not.listed.example"}} {
 		if r := f.request(t, bad); r.Error == "" {
 			t.Errorf("%+v answered without error", bad)
 		}

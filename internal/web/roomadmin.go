@@ -15,7 +15,7 @@ import (
 )
 
 // ActorProfile prefixes the profile uuid of a room admin as an audit actor (004-AC6).
-const ActorProfile = "profile:"
+const ActorProfile = store.ActorProfile
 
 // Audit actions of room admins and instance settings (004-AC6 to 004-AC8).
 const (

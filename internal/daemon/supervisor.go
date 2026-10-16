@@ -620,6 +620,7 @@ type instanceOps interface {
 	SetSettings(s Settings) error
 	SetAllowlist(ctx context.Context, list []string) error
 	SetEgressSwitches(ctx context.Context, sw EgressSwitches) error
+	RemoveRoomEgress(ctx context.Context, room, domain string) error
 	Egress(ctx context.Context, n int) (sandbox.Egress, error)
 	Recheck(ctx context.Context)
 	// SetPluginOptions and PluginFetch act on a room's plugins (009-AC19, 009-AC22).
@@ -676,9 +677,9 @@ func (o workerOps) SetAllowlist(ctx context.Context, list []string) error {
 	return err
 }
 
-// SetEgressSwitches saves the instance's "Allow every website" switches; a worker from before 014
-// would answer "unknown request".
-func (o workerOps) SetEgressSwitches(ctx context.Context, sw EgressSwitches) error {
+// egressRequest sends an egress request to a worker that takes it: one from before 014 would
+// answer "unknown request".
+func (o workerOps) egressRequest(ctx context.Context, m Msg) error {
 	w := o.worker()
 	if w == nil {
 		return errors.New("no room yet: pair with a room first")
@@ -689,8 +690,18 @@ func (o workerOps) SetEgressSwitches(ctx context.Context, sw EgressSwitches) err
 	if agreed < protoEgress {
 		return errors.New("this server's app is too old for this setting: update the AI host app")
 	}
-	_, err := o.request(ctx, Msg{Type: "egress_switches", Switches: &sw})
+	_, err := o.request(ctx, m)
 	return err
+}
+
+// SetEgressSwitches saves the instance's "Allow every website" switches.
+func (o workerOps) SetEgressSwitches(ctx context.Context, sw EgressSwitches) error {
+	return o.egressRequest(ctx, Msg{Type: "egress_switches", Switches: &sw})
+}
+
+// RemoveRoomEgress takes a website off one room's own list (014-AC15).
+func (o workerOps) RemoveRoomEgress(ctx context.Context, room, domain string) error {
+	return o.egressRequest(ctx, Msg{Type: "room_allowlist_remove", Room: room, Domain: domain})
 }
 
 // Egress lists the egress requests the instance's sandboxes were refused, and those let through by
@@ -859,6 +870,11 @@ func (s *Supervisor) SetAllowlist(ctx context.Context, list []string) error {
 // SetEgressSwitches saves the current instance's "Allow every website" switches.
 func (s *Supervisor) SetEgressSwitches(ctx context.Context, sw EgressSwitches) error {
 	return workerOps{s: s}.SetEgressSwitches(ctx, sw)
+}
+
+// RemoveRoomEgress takes a website off one room's own list on the current instance.
+func (s *Supervisor) RemoveRoomEgress(ctx context.Context, room, domain string) error {
+	return workerOps{s: s}.RemoveRoomEgress(ctx, room, domain)
 }
 
 // Egress lists the egress requests of the current instance's sandboxes.
