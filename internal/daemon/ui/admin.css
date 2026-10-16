@@ -55,7 +55,6 @@ th, td { white-space: nowrap; vertical-align: top; }
 .room-row .room-name:hover { text-decoration: underline; }
 .room-row > .controls { flex: none; display: flex; align-items: center; gap: var(--sp-2); }
 .room-row > .controls select { width: 12rem; }
-.menu .danger { color: var(--danger); }
 .room-extra { list-style: none; padding: 0 0 var(--sp-2) var(--sp-4); border-bottom: 1px solid var(--border); }
 /* A room's plugins (009-AC19, 009-AC22): requests shown, options folded (003b-AC8). */
 .room-plugins h4 { margin-top: var(--sp-2); }

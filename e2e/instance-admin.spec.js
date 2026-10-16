@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { signIn, noOverflow } from './helpers.js';
+import { signIn, noOverflow, rowAction } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -32,10 +32,10 @@ test('admin sessions list and revoke', async ({ browser }) => {
   await expect(b.getByRole('heading', { name: 'Sessions' })).toBeVisible();
 
   await a.reload();
-  await expect(a.locator('#sessions tbody tr', { hasText: '(this browser)' })).toHaveCount(1);
-  const row = a.locator('#sessions tbody tr', { hasText: 'e2e-second-browser' });
+  await expect(a.locator('#sessions .list-row', { hasText: 'this browser' })).toHaveCount(1);
+  const row = a.locator('#sessions .list-row', { hasText: 'e2e-second-browser' });
   await expect(row).toHaveCount(1);
-  await row.getByRole('button', { name: 'Revoke' }).click();
+  await rowAction(row, /^Revoke/);
   await expect(row).toHaveCount(0);
 
   expect((await bCtx.request.get('/api/admin/sessions')).status()).toBe(401);
@@ -63,24 +63,25 @@ test('audit view shows real admin actions, filters, and fits a phone', async ({ 
   await page.getByRole('link', { name: 'Audit', exact: true }).click();
   await page.locator('#audit-target').fill(room.id);
   await page.locator('#audit-target').press('Enter');
-  const rows = page.locator('#audit tbody tr');
+  const rows = page.locator('#audit .list-row:not(.head)');
   await expect(rows).toHaveCount(5);
-  const want = [['room.delete', name + ' renamed'], ['invite.revoke', name + ' renamed'], ['invite.create', name + ' renamed'],
-    ['room.rename', name + ' renamed'], ['room.create', name]];
+  // Actions read in words (004b-AC7), their code in the tip.
+  const want = [['Room deleted', name + ' renamed'], ['Invite revoked', name + ' renamed'], ['Invite created', name + ' renamed'],
+    ['Room renamed', name + ' renamed'], ['Room created', name]];
   for (const [i, [action, target]] of want.entries()) {
     await expect(rows.nth(i)).toContainText(action);
     await expect(rows.nth(i)).toContainText(target);
     await expect(rows.nth(i)).toContainText('super-admin');
   }
-  await expect(rows.nth(3)).toContainText(`"from":"${name}"`);
+  await expect(rows.nth(3)).toContainText(`from: ${name}`);
   await page.locator('#audit-action').selectOption('room.delete');
   await expect(rows).toHaveCount(1);
-  await expect(rows.first()).toContainText(room.id);
+  await expect(rows.first().locator(`[data-tip="${room.id}"]`)).toHaveCount(1);
   // The login just made is there too, under this session.
   await page.locator('#audit-target').fill('');
   await page.locator('#audit-target').press('Enter');
   await page.locator('#audit-action').selectOption('admin.login');
-  await expect(rows.first()).toContainText('"via":"session"');
+  await expect(rows.first()).toContainText('via: session');
 
   await page.setViewportSize({ width: 390, height: 844 });
   // The tab bar scrolls sideways on a phone (005-AC35): every tab is a scroll away.

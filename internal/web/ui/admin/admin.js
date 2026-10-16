@@ -1,11 +1,11 @@
-// The instance admin page (004-AC1 to 004-AC6, 004-AC9, 004-AC19): Preact, htm and signals,
+// The server admin page (004-AC1 to 004-AC6, 004-AC9, 004-AC19, 004b): Preact, htm and signals,
 // vendored, no build step. The session cookie is HttpOnly: the page never sees a token after the
 // login form.
 import { render } from 'preact';
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { html } from 'htm/preact';
-import { RoomPanel, Rename, TabBar, fetchJSON, roomTabs, size, when, ago, onInput, formAction, icon } from './room-panel.js';
+import { RoomPanel, AdminRows, RowMenu, Meter, TabBar, fetchJSON, roomTabs, size, when, ago, onInput, formAction, icon, uaName } from './room-panel.js';
 
 /**
  * @typedef {{id: number, created_at: string, last_used_at: string, expires_at: string, user_agent: string, ip: string,
@@ -28,8 +28,7 @@ import { RoomPanel, Rename, TabBar, fetchJSON, roomTabs, size, when, ago, onInpu
  *   skills: {keep: string[], merge: string[], renamed: {from: string, to: string}[]}, seats: MergeCount, shared_skills: MergeCount, templates: MergeCount,
  *   starters: MergeCount, rooms_created: MergeCount, room_admin: {keep: string[], merge: string[]},
  *   over_limits: {kind: string, after: number, limit: number}[], email_after: string}} MergePreview
- * @typedef {{join_ip: string, join_ua: string, last_ip: string, last_ua: string, last_seen_at: string | null}} Client
- * @typedef {{id: number, name: string, admin: boolean, has_profile: boolean, host: boolean, can_host: boolean, client?: Client}} Participant
+ * @typedef {import('./room-panel.js').Member} Participant
  * @typedef {{name: string, counts: Record<string, number>, bytes: Record<string, number>, warnings: string[], format: number,
  *   instance_version: string, same_instance: boolean, exported_at: string, archive_bytes: number,
  *   room?: {id: string, name: string}}} ImportReport
@@ -41,7 +40,7 @@ import { RoomPanel, Rename, TabBar, fetchJSON, roomTabs, size, when, ago, onInpu
 /** @type {import('@preact/signals').Signal<boolean | null>} null until the first answer says. */
 const signedIn = signal(null);
 const notice = signal('');
-const views = [['rooms', 'Rooms'], ['profiles', 'Profiles'], ['libraries', 'Libraries'], ['instance', 'Instance'],
+const views = [['rooms', 'Rooms'], ['profiles', 'Profiles'], ['libraries', 'Libraries'], ['instance', 'Server'],
   ['sessions', 'Sessions'], ['audit', 'Audit']];
 /**
  * routeOf reads a deep link (005-AC16): #<view>, or #rooms/<room>/<tab> for one room's tab.
@@ -117,22 +116,46 @@ function Sessions() {
   const load = () => api('GET', '/api/admin/sessions').then(setList).catch(show);
   useEffect(() => { load(); }, []);
   /** @param {Session} s */
-  const revoke = (s) => api('DELETE', `/api/admin/sessions/${s.id}`)
-    .then(() => { if (s.current) signedIn.value = false; else load(); })
-    .catch(show);
+  const revoke = (s) => api('DELETE', `/api/admin/sessions/${s.id}`).then(load).catch(show);
   return html`
     <h2>Sessions</h2>
-    <p class="hint">Browsers signed in with the admin token, for 12 hours each. Revoking one signs it out at its next request.</p>
-    ${list && html`<div class="scroll"><table id="sessions" class="cards">
-      <thead><tr><th>Signed in</th><th>Last used</th><th>Expires</th><th>IP</th><th>Browser</th><th></th></tr></thead>
-      <tbody>${list.map((s) => html`<tr id=${'session-' + s.id}>
-        <td data-label="Signed in">${when(s.created_at)}${s.current && html` <strong>(this browser)</strong>`}</td>
-        <td data-label="Last used">${when(s.last_used_at)}</td><td data-label="Expires">${when(s.expires_at)}</td><td data-label="IP">${s.ip}</td>
-        <td class="wrap" data-label="Browser">${s.user_agent}</td>
-        <td><button type="button" onClick=${() => revoke(s)}>${s.current ? 'Sign out' : 'Revoke'}</button></td>
-      </tr>`)}</tbody>
-    </table></div>`}`;
+    <p class="hint">Browsers signed in with the admin token, for 12 hours each. Revoking one signs it out at its next request. Sign out of this one from the header.</p>
+    ${list && html`<div class="cols" id="sessions">
+      <div class="list-row head"><span>Browser</span><span>Signed in</span><span>Last used</span><span>Expires</span><span></span></div>
+      <ul class="list-rows">${list.map((s) => html`<li class="list-row" id=${'session-' + s.id} key=${s.id}>
+        <div class="main"><span class="name" data-tip=${s.user_agent}>${uaName(s.user_agent)}</span>${s.current && html` <span class="badge">this browser</span>`}
+          <div class="meta">${s.ip}</div></div>
+        <div class="cells"><span class="cell signed-in" data-label="Signed in">${ago(s.created_at)}</span><span class="cell" data-label="Last used">${ago(s.last_used_at)}</span>
+          <span class="cell" data-label="Expires">${when(s.expires_at)}</span></div>
+        <div class="actions">${!s.current && html`<${RowMenu} id=${'session-menu-' + s.id} label=${'More actions on the session ' + s.id}
+          items=${[['Revoke', () => revoke(s), 'danger', 'Revoke the session of ' + uaName(s.user_agent) + ' at ' + s.ip]]}/>`}</div>
+      </li>`)}</ul></div>`}`;
 }
+
+/**
+ * actionLabels name the audit actions in words (docs/design.md §8); an action without one shows
+ * its code. A test checks every action of the server has one.
+ * @type {Record<string, string>}
+ */
+const actionLabels = {
+  'room.create': 'Room created', 'room.rename': 'Room renamed', 'room.delete': 'Room deleted', 'room.quota': 'Room quota set',
+  'room.export': 'Room exported', 'room.import': 'Room imported', 'room.host_transfer': 'AI host changed',
+  'invite.create': 'Invite created', 'invite.revoke': 'Invite revoked', 'room_admin.add': 'Room admin added', 'room_admin.remove': 'Room admin removed',
+  'room_skill.remove': 'Room skill removed', 'participant.rename': 'Participant renamed', 'document.delete': 'Document deleted',
+  'document.restore': 'Document restored', 'profile.delete': 'Profile deleted', 'profile.recovery_link': 'Recovery link made',
+  'profile.recovery_link_used': 'Recovery link used', 'profile.merge': 'Profiles merged', 'profile.purge': 'Empty profiles deleted',
+  'profile.max_rooms': 'Room limit set', 'template.remove': 'Persona template removed', 'skill.remove': 'Shared skill removed',
+  'starter.publish': 'Starter shared', 'starter.delete': 'Starter removed', 'instance.settings': 'Server settings changed',
+  'admin.login': 'Admin signed in', 'admin.logout': 'Admin signed out', 'admin.session_revoke': 'Admin session revoked',
+};
+/** @param {string} a */
+const actionLabel = (a) => actionLabels[a] || a;
+
+/**
+ * detailText reads an entry's details as "key: value" pairs, not JSON.
+ * @param {Record<string, unknown>} d
+ */
+const detailText = (d) => Object.entries(d || {}).map(([k, v]) => k.replace(/_/g, ' ') + ': ' + (v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v))).join(' · ');
 
 /**
  * actor names who acted: the super-admin, or a room admin's profile by the name it acted as.
@@ -172,45 +195,47 @@ function Audit() {
     setBefore(newer[newer.length - 1]);
     setNewer(newer.slice(0, -1));
   };
+  const pager = html`<div class="pager">
+      <button type="button" class="btn-secondary" onClick=${back} disabled=${!newer.length}>Newer</button>
+      <button type="button" class="btn-secondary" onClick=${older} disabled=${!page?.next}>Older</button></div>`;
   return html`
     <h2>Audit log</h2>
     <p class="hint">Every admin action, kept a year. Read only.</p>
-    <div class="row">
+    <div class="row filters">
       <label>Action
         <select id="audit-action" onChange=${filter(setAction)}>
-          <option value="">any</option>
-          ${(page?.actions || []).map((a) => html`<option value=${a} selected=${a === action}>${a}</option>`)}
+          <option value="">Any action</option>
+          ${(page?.actions || []).map((a) => html`<option value=${a} selected=${a === action}>${actionLabel(a)}</option>`)}
         </select>
       </label>
       <label>Target (id or name)
         <input id="audit-target" type="search" onChange=${filter(setTarget)}/>
       </label>
+      <span class="spacer"></span>${pager}
     </div>
-    ${page && (page.entries.length ? html`<div class="scroll"><table id="audit" class="cards">
-      <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Details</th></tr></thead>
-      <tbody>${page.entries.map((e) => html`<tr id=${'audit-' + e.id}>
-        <td data-label="When">${when(e.at)}</td><td data-label="Who">${actor(e)}</td><td data-label="Action">${e.action}</td>
-        <td class="wrap" data-label="Target">${e.target_kind} ${e.target_name && html`<strong>${e.target_name}</strong>`} <code>${e.target_id}</code></td>
-        <td class="wrap" data-label="Details"><code>${JSON.stringify(e.details)}</code></td>
-      </tr>`)}</tbody>
-    </table></div>` : html`<p>No entry matches.</p>`)}
-    <div class="row">
-      <button type="button" onClick=${back} disabled=${!newer.length}>Newer</button>
-      <button type="button" onClick=${older} disabled=${!page?.next}>Older</button>
-    </div>`;
+    ${page && (page.entries.length ? html`<div class="cols" id="audit">
+      <div class="list-row head"><span>Action</span><span>When</span><span>Who</span><span>Details</span></div>
+      <ul class="list-rows">${page.entries.map((e) => html`<li class="list-row" id=${'audit-' + e.id} key=${e.id}>
+        <div class="main"><span class="name" data-tip=${e.action}>${actionLabel(e.action)}</span>
+          <div class="meta">${e.target_kind.replace(/_/g, " ")} ${e.target_name && html`<strong>${e.target_name}</strong>`} <span data-tip=${e.target_id}>${e.target_id.length > 12 ? e.target_id.slice(0, 8) + '…' : e.target_id}</span></div></div>
+        <div class="cells"><span class="cell" data-label="When">${ago(e.at)}</span><span class="cell" data-label="Who">${actor(e)}</span>
+          <span class="cell details" data-tip=${detailText(e.details)}>${detailText(e.details)}</span></div>
+      </li>`)}</ul></div>${pager}` : html`<p class="empty">No entry matches.</p>`)}`;
 }
 
 /** @type {[string, string, (r: Room) => string | number | boolean][]} */
 const roomCols = [
   ['name', 'Name', (r) => r.name.toLowerCase()],
-  ['created', 'Created', (r) => r.created_at],
   ['activity', 'Last activity', (r) => r.last_activity],
-  ['participants', 'Participants', (r) => r.participants],
+  ['participants', 'People', (r) => r.participants],
   ['personas', 'Personas', (r) => r.personas],
   ['host', 'AI host', (r) => r.host_online],
-  ['volume', 'Volume', (r) => r.volume.total],
-  ['quota', 'Quota used', (r) => r.used / r.quota],
+  ['quota', 'Storage', (r) => r.used / r.quota],
 ];
+
+/** @param {Room} r */
+const hostPill = (r) => (!r.host_participant_id ? html`<span class="status off">No AI host</span>`
+  : r.host_online ? html`<span class="status ok">Online</span>` : html`<span class="status idle">Offline</span>`);
 
 function Rooms() {
   const [page, setPage] = useState(/** @type {RoomsPage | null} */ (null));
@@ -225,7 +250,7 @@ function Rooms() {
     const base = '/api/admin/rooms/' + encodeURIComponent(open);
     const t = roomTabList.some(([id]) => id === tab) ? tab : 'general';
     return html`
-      <p><a href="#rooms" id="back-to-rooms">← All rooms</a></p>
+      <p><a href="#rooms" id="back-to-rooms" class="back" dangerouslySetInnerHTML=${{ __html: window.grillIconHTML('back') + 'All rooms' }}></a></p>
       ${room ? html`<${RoomPanel} key=${room.id} room=${room} base=${base} api=${api} show=${show} setQuota=${true} reload=${load}
         tab=${t} tabs=${roomTabList} href=${(/** @type {string} */ id) => `#rooms/${encodeURIComponent(room.id)}/${id}`}
         close=${() => { location.hash = '#rooms'; load(); }}>${t === 'admins' && html`<${RoomAdmins} base=${base}/>`}<//>`
@@ -239,6 +264,8 @@ function Rooms() {
   });
   /** @param {string} col */
   const by = (col) => setSort({ col, desc: sort.col === col ? !sort.desc : col !== 'name' });
+  /** @param {Room} r @param {string} t */
+  const go = (r, t) => () => { location.hash = `#rooms/${encodeURIComponent(r.id)}/${t}`; };
   return html`
     <div class="list-head">
       <h2>Rooms (${q ? rooms.length + ' of ' + page.rooms.length : page.rooms.length})</h2>
@@ -246,58 +273,39 @@ function Rooms() {
       <${ImportRoom} reload=${load}/>
     </div>
     <p class="hint">A room's quota counts its uploads and attachments; the default is ${size(page.default_quota)}.</p>
-    ${page.rooms.length ? html`<div class="scroll"><table id="rooms" class="cards">
-      <thead><tr>${roomCols.map(([id, label]) => html`<th aria-sort=${sort.col === id ? (sort.desc ? 'descending' : 'ascending') : undefined}>
-        <button type="button" class="sort" onClick=${() => by(id)}>${label}</button></th>`)}<th></th></tr></thead>
-      <tbody>${rooms.map((r) => html`<tr id=${'room-' + r.id}>
-        <td class="wrap"><strong>${r.name}</strong></td><td data-label="Created">${ago(r.created_at)}</td><td data-label="Last activity">${ago(r.last_activity)}</td>
-        <td data-label="People">${r.participants}</td><td data-label="Personas">${r.personas}</td>
-        <td data-label="AI host">${!r.host_participant_id ? html`<span class="status off">No AI host</span>`
-          : r.host_online ? html`<span class="status ok">Online</span>` : html`<span class="status idle">Offline</span>`}</td><td data-label="Volume">${size(r.volume.total)}</td>
-        <td data-label="Quota used"><meter min="0" max=${r.quota} value=${r.used} data-tip=${size(r.used) + ' of ' + size(r.quota)}></meter> ${size(r.used)} / ${size(r.quota)}</td>
-        <td><a class="btn btn-secondary" href=${'#rooms/' + encodeURIComponent(r.id)} aria-label=${'Manage ' + r.name}>Manage</a></td>
-      </tr>`)}</tbody>
-    </table></div>${q && !rooms.length && html`<p class="hint" id="rooms-none">No room matches "${search.trim()}".</p>`}` : html`<p>No room yet.</p>`}`;
+    ${page.rooms.length ? html`<div class="cols" id="rooms">
+      <div class="list-row head">${roomCols.map(([id, label]) => html`<span aria-sort=${sort.col === id ? (sort.desc ? 'descending' : 'ascending') : undefined}>
+        <button type="button" class="sort" onClick=${() => by(id)}>${label}</button></span>`)}<span></span></div>
+      <ul class="list-rows">${rooms.map((r) => html`<li class="list-row" id=${'room-' + r.id} key=${r.id}>
+        <div class="main"><a class="name" href=${'#rooms/' + encodeURIComponent(r.id)} aria-label=${'Manage ' + r.name}>${r.name}</a>
+          <div class="meta">created ${ago(r.created_at)}</div></div>
+        <div class="cells"><span class="cell" data-label="Last activity">${ago(r.last_activity)}</span>
+          <span class="cell" data-label="People">${r.participants}</span><span class="cell" data-label="Personas">${r.personas}</span>
+          <span class="cell">${hostPill(r)}</span>
+          <span class="cell storage"><${Meter} used=${r.used} max=${r.quota} label=${size(r.used) + ' of ' + size(r.quota)}/> ${size(r.used)} / ${size(r.quota)}</span></div>
+        <div class="actions"><${RowMenu} id=${'room-menu-' + r.id} label=${'More actions on ' + r.name} items=${[
+          ['Manage', go(r, 'general')], ['Invites', go(r, 'invites')], ['Admins', go(r, 'admins')], ['Export', go(r, 'export')]]}/></div>
+      </li>`)}</ul></div>${q && !rooms.length && html`<p class="hint" id="rooms-none">No room matches "${search.trim()}".</p>`}` : html`<p class="empty">No room yet.</p>`}`;
 }
 
 /**
  * RoomAdmins appoints and removes room admins among the room's participants with a profile: a room
- * the super-admin created starts with none (004-AC8).
+ * the super-admin created starts with none (004-AC8). Same rows as the room's own Admins tab.
  * @param {{base: string}} props
  */
 function RoomAdmins({ base }) {
   const [list, setList] = useState(/** @type {Participant[] | null} */ (null));
   const load = () => api('GET', base + '/participants').then(setList).catch(show);
   useEffect(() => { load(); }, [base]);
-  /** @param {Participant} p @param {boolean} on */
-  const set = (p, on) => api(on ? 'PUT' : 'DELETE', `${base}/admins/${p.id}`).then(load).catch(show);
   /** @param {Participant} p */
   const makeHost = (p) => {
     window.grillConfirm(`Make ${p.name} the AI host?`, `The personas run on ${p.name}'s computer from the next turn.`, 'Make AI host')
       .then((yes) => { if (yes) api('PUT', base + '/host', { participant_id: p.id }).then(load).catch(show); });
   };
   return html`
-    <p class="hint">Room admins rename the room and its participants, manage its invites, appoint other admins, export and delete it. Only participants with a profile can be appointed. Make AI host shows for those whose AI host app is connected and can host.</p>
-    ${list && (list.length ? html`<ul id="room-admins">${list.map((p) => html`<li key=${p.id}>
-      ${p.name}${p.admin && html` <strong>admin</strong>`}${p.host && html` <strong>AI host</strong>`}${' '}
-      ${!p.host && p.can_host && html`<button type="button" class="btn-secondary" onClick=${() => makeHost(p)} aria-label=${'Make ' + p.name + ' the AI host'}>Make AI host</button> `}
-      ${!p.has_profile ? html`<span class="hint">no profile</span>`
-        : p.admin ? html`<button type="button" class="btn-secondary" onClick=${() => set(p, false)} aria-label=${'Remove ' + p.name + ' from the room admins'}>Remove admin</button>`
-        : html`<button type="button" class="btn-secondary" onClick=${() => set(p, true)} aria-label=${'Make ' + p.name + ' a room admin'}>Make admin</button>`}
-      ${' '}<${Rename} key=${p.name} name=${p.name} path=${`${base}/participants/${p.id}/name`} api=${api} show=${show} done=${load}/>
-      ${p.client && html`<${ClientLine} c=${p.client}/>`}
-    </li>`)}</ul>` : html`<p class="hint">No participant yet.</p>`)}`;
-}
-
-/**
- * ClientLine shows where a participant connected from, at join and at last activity (005-AC20).
- * The purge leaves the fields empty past their retention.
- * @param {{c: Client}} props
- */
-function ClientLine({ c }) {
-  const at = (/** @type {string} */ ip, /** @type {string} */ ua) => ip ? `${ip} · ${ua || 'no user agent'}` : 'purged';
-  return html`<div class="hint client">Joined from ${at(c.join_ip, c.join_ua)}; last active${c.last_seen_at
-    ? ' ' + when(c.last_seen_at) : ''} from ${at(c.last_ip, c.last_ua)}</div>`;
+    <p class="hint">Room admins rename the room and its participants, manage its invites, appoint other admins, export and delete it. Only participants with a profile can be appointed. Make AI host, in a row's ⋯, shows for those whose AI host app is connected and can host.</p>
+    ${list && (list.length ? html`<${AdminRows} people=${list} base=${base} api=${api} show=${show} done=${load} makeHost=${makeHost}/>`
+      : html`<p class="empty">No participant yet.</p>`)}`;
 }
 
 /** @type {[string, string][]} */
@@ -354,7 +362,7 @@ function ImportRoom({ reload }) {
     <dialog ref=${sheet} id="import-sheet" class="sheet wide" aria-labelledby="import-title">
     <div class="sheet-head"><h2 id="import-title">Import a room</h2>
       <button type="button" class="btn-icon btn-ghost" aria-label="Close" onClick=${() => sheet.current?.close()} dangerouslySetInnerHTML=${icon('close')}></button></div>
-    <p class="hint">An export from this instance or another one becomes a new room. Nothing is created until you confirm the preview.</p>
+    <p class="hint">An export from this server or another one becomes a new room. Nothing is created until you confirm the preview.</p>
     <form class="row" id="import-form" onSubmit=${formAction(() => send(true))}>
       <label>Archive (.tar.gz)<input id="import-file" type="file" accept=".gz,.tgz,application/gzip" required onChange=${pick}/></label>
       <button type="submit" disabled=${!file || busy}>Preview</button>
@@ -364,7 +372,7 @@ function ImportRoom({ reload }) {
       <dl>
         <div><dt>Room</dt><dd id="import-name">${p.name}</dd></div>
         <div><dt>Format</dt><dd>${p.format}</dd></div>
-        <div><dt>Exported by</dt><dd id="import-version">${p.instance_version || 'unknown'}${p.same_instance ? ', this instance' : ', another instance'}</dd></div>
+        <div><dt>Exported by</dt><dd id="import-version">${p.instance_version || 'unknown'}${p.same_instance ? ', this server' : ', another server'}</dd></div>
         <div><dt>Exported</dt><dd>${when(p.exported_at)}</dd></div>
         <div><dt>Archive</dt><dd>${size(p.archive_bytes)}</dd></div>
         <div><dt>Uploads and attachments</dt><dd>${size((p.bytes.uploads || 0) + (p.bytes.attachments || 0))}</dd></div>
@@ -381,6 +389,8 @@ function Profiles() {
   const [list, setList] = useState(/** @type {Profile[] | null} */ (null));
   const [perProfile, setPerProfile] = useState(0);
   const [merging, setMerging] = useState(0);
+  const [limiting, setLimiting] = useState(0);
+  const [recovering, setRecovering] = useState(0);
   const load = () => api('GET', '/api/admin/profiles').then(setList).catch(show);
   useEffect(() => {
     load();
@@ -391,21 +401,53 @@ function Profiles() {
     window.grillConfirm(`Delete the profile of ${p.name || p.uuid}?`, 'Its participants stay in their rooms, detached.', 'Delete')
       .then((yes) => { if (yes) api('DELETE', '/api/admin/profiles/' + p.id).then(load).catch(show); });
   };
+  /** @param {Profile} p */
+  const limit = (p) => (p.max_rooms === null ? `${perProfile}, the server's` : p.max_rooms === -1 ? 'unlimited' : String(p.max_rooms));
+  const byID = (/** @type {number} */ id) => list?.find((p) => p.id === id);
   return html`
     <h2>Profiles</h2>
     <p class="hint">Emails show here and nowhere else. A profile's name is the one it chose in a room, else the one it last joined a room with.</p>
-    ${list && (list.length ? html`<div class="scroll"><table id="profiles" class="cards">
-      <thead><tr><th>Name</th><th>Email</th><th>Rooms</th><th>Skills</th><th>Last activity</th><th>Rooms it may create</th><th></th></tr></thead>
-      <tbody>${list.map((p) => html`<tr id=${'profile-' + p.id}>
-        <td>${p.name || '—'} <code data-tip=${p.uuid}>${p.uuid.slice(0, 8)}</code></td><td data-label="Email">${p.email || '—'}</td>
-        <td class="wrap" data-label="Rooms">${p.rooms.map((r) => r.room_name).join(', ') || '—'}</td><td data-label="Skills">${p.skills}</td><td data-label="Last activity">${when(p.last_activity)}</td>
-        <td data-label="Rooms it may create"><${RoomLimit} key=${p.id} p=${p} perProfile=${perProfile} reload=${load}/></td>
-        <td><${RecoveryLink} p=${p}/> <button type="button" class="btn-secondary" onClick=${() => setMerging(p.id)}
-          aria-label=${'Merge ' + (p.name || p.uuid) + ' into another profile'}>Merge…</button>
-          <button type="button" onClick=${() => remove(p)}>Delete</button></td>
-      </tr>`)}</tbody>
-    </table></div>` : html`<p>No profile yet.</p>`)}
-    ${list && merging > 0 && html`<${MergeSheet} key=${merging} profiles=${list} from=${merging} done=${() => { setMerging(0); load(); }}/>`}`;
+    ${list && (list.length ? html`<div class="cols" id="profiles">
+      <div class="list-row head"><span>Name</span><span>Rooms</span><span>Skills</span><span>Last activity</span><span>Rooms created</span><span></span></div>
+      <ul class="list-rows">${list.map((p) => {
+        const who = p.name || p.uuid;
+        return html`<li class="list-row" id=${'profile-' + p.id} key=${p.id}>
+        <div class="main"><span class="name" data-tip=${'Profile ' + p.uuid}>${p.name || 'no name'}</span><div class="meta">${p.email || 'no email'}</div></div>
+        <div class="cells"><span class="cell rooms" data-tip=${p.rooms.map((r) => r.room_name).join(', ')}>${p.rooms.length} ${p.rooms.length === 1 ? 'room' : 'rooms'}</span>
+          <span class="cell" data-label="Skills">${p.skills}</span><span class="cell" data-label="Last activity">${ago(p.last_activity)}</span>
+          <span class="cell" data-label="Rooms created">${p.rooms_created} of ${limit(p)}</span></div>
+        <div class="actions"><${RowMenu} id=${'profile-menu-' + p.id} label=${'More actions on ' + who} items=${[
+          ['Set the room limit…', () => setLimiting(p.id), '', 'Set the room limit of ' + who],
+          ['Generate a recovery link…', () => setRecovering(p.id), '', 'Generate a recovery link for ' + who],
+          ['Merge into another profile…', () => setMerging(p.id), '', 'Merge ' + who + ' into another profile'],
+          ['Delete…', () => remove(p), 'danger', 'Delete the profile of ' + who]]}/></div>
+      </li>`;
+      })}</ul></div>` : html`<p class="empty">No profile yet.</p>`)}
+    ${list && merging > 0 && html`<${MergeSheet} key=${merging} profiles=${list} from=${merging} done=${() => { setMerging(0); load(); }}/>`}
+    ${limiting > 0 && byID(limiting) && html`<${RoomLimit} key=${limiting} p=${/** @type {Profile} */ (byID(limiting))} perProfile=${perProfile}
+      done=${() => setLimiting(0)} reload=${load}/>`}
+    ${recovering > 0 && byID(recovering) && html`<${RecoveryLink} key=${recovering} p=${/** @type {Profile} */ (byID(recovering))} done=${() => setRecovering(0)}/>`}`;
+}
+
+/**
+ * Sheet is a small sheet open while mounted; done runs once it closes, by Close, Escape or a click
+ * outside.
+ * @param {{id: string, title: string, done: () => void, children?: import('preact').ComponentChildren}} props
+ */
+function Sheet({ id, title, done, children }) {
+  const ref = useRef(/** @type {HTMLDialogElement | null} */ (null));
+  useEffect(() => { ref.current?.showModal(); }, []);
+  /** @param {MouseEvent} e */
+  const outside = (e) => {
+    const d = /** @type {HTMLDialogElement} */ (e.currentTarget);
+    const r = d.getBoundingClientRect();
+    if (e.target === d && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) d.close();
+  };
+  return html`<dialog ref=${ref} id=${id} class="sheet" aria-labelledby=${id + '-title'} onClose=${done} onClick=${outside}>
+    <div class="sheet-head"><h2 id=${id + '-title'}>${title}</h2>
+      <button type="button" class="btn-icon btn-ghost" aria-label="Close" onClick=${() => ref.current?.close()} dangerouslySetInnerHTML=${icon('close')}></button></div>
+    ${children}
+  </dialog>`;
 }
 
 /** @param {Profile | MergeSide} p */
@@ -526,51 +568,58 @@ function MergeSheet({ profiles, from, done }) {
 }
 
 /**
- * RecoveryLink makes a one-time recovery link for a profile and shows it once, to copy and hand
- * over (011-AC1): the server keeps only its hash. Another one voids it and replaces it here.
- * @param {{p: Profile}} props
+ * RecoveryLink makes a one-time recovery link for a profile as it opens and shows it once, to copy
+ * and hand over (011-AC1): the server keeps only its hash. Another one voids it.
+ * @param {{p: Profile, done: () => void}} props
  */
-function RecoveryLink({ p }) {
+function RecoveryLink({ p, done }) {
   const [link, setLink] = useState(/** @type {{url: string, expires_at: string} | null} */ (null));
-  const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [said, setSaid] = useState('');
   const field = useRef(/** @type {HTMLInputElement | null} */ (null));
-  const make = () => {
-    setBusy(true);
-    setCopied(false);
-    api('POST', `/api/admin/profiles/${p.id}/recovery-link`).then(setLink).catch(show).finally(() => setBusy(false));
-  };
+  const who = p.name || p.uuid;
+  useEffect(() => {
+    api('POST', `/api/admin/profiles/${p.id}/recovery-link`).then(setLink).catch((/** @type {Error} */ err) => setSaid(err.message));
+  }, []);
   // A refused clipboard leaves the link selected for a manual copy.
   const copy = () => {
-    if (link) navigator.clipboard.writeText(link.url).then(() => setCopied(true), () => field.current?.select());
+    if (link) navigator.clipboard.writeText(link.url).then(() => toast('Copied'), () => field.current?.select());
   };
-  const who = p.name || p.uuid;
-  return html`<span class="recovery-link">
-    <button type="button" class="btn-secondary" disabled=${busy} onClick=${make} aria-label=${'Generate a recovery link for ' + who}>Generate a recovery link</button>
-    ${link && html`<span class="copy-row">
-      <input ref=${field} readonly value=${link.url} aria-label=${'Recovery link for ' + who}/>
-      <button type="button" onClick=${copy}>${copied ? 'Copied' : 'Copy'}</button>
-      <span class="hint">expires ${when(link.expires_at)}</span></span>`}
-  </span>`;
+  return html`<${Sheet} id="recovery-sheet" title=${'Recovery link for ' + who} done=${done}>
+    <p class="hint">It signs in as this profile once. Hand it over yourself; a new one voids it.</p>
+    ${link && html`<label class="link">Recovery link<input ref=${field} readonly value=${link.url} aria-label=${'Recovery link for ' + who}/></label>
+      <p class="hint">Expires ${when(link.expires_at)}.</p>
+      <div class="actions"><button type="button" class="btn-primary" onClick=${copy}>Copy</button></div>`}
+    <p class="said error" role="alert">${said}</p>
+  <//>`;
 }
 
 /**
  * RoomLimit sets a profile's own limit on the rooms it creates: a number, unlimited, or the
- * instance's (004-AC7).
- * @param {{p: Profile, perProfile: number, reload: () => void}} props
+ * server's (004-AC7).
+ * @param {{p: Profile, perProfile: number, reload: () => void, done: () => void}} props
  */
-function RoomLimit({ p, perProfile, reload }) {
+function RoomLimit({ p, perProfile, reload, done }) {
   const [n, setN] = useState(p.max_rooms && p.max_rooms > 0 ? String(p.max_rooms) : '');
+  const ref = useRef(/** @type {HTMLFormElement | null} */ (null));
+  const who = p.name || p.uuid;
   /** @param {number | null} v */
-  const set = (v) => api('PUT', `/api/admin/profiles/${p.id}/max_rooms`, { max_rooms: v }).then(reload).catch(show);
-  const now = p.max_rooms === null ? `instance's (${perProfile})` : p.max_rooms === -1 ? 'unlimited' : String(p.max_rooms);
-  return html`<form class="limit" onSubmit=${formAction(() => set(Number(n)))}>
-    <span class="hint">${p.rooms_created} created, limit ${now}</span>
-    <input type="number" min="1" max="1000" step="1" required value=${n} onInput=${onInput(setN)} aria-label=${'Rooms ' + (p.name || p.uuid) + ' may create'}/>
-    <button type="submit">Set</button>
-    <button type="button" onClick=${() => set(-1)} disabled=${p.max_rooms === -1}>Unlimited</button>
-    <button type="button" onClick=${() => set(null)} disabled=${p.max_rooms === null}>Instance's</button>
-  </form>`;
+  const set = (v) => api('PUT', `/api/admin/profiles/${p.id}/max_rooms`, { max_rooms: v }).then(() => {
+    reload();
+    toast('Room limit of ' + who + ' set');
+    ref.current?.closest('dialog')?.close();
+  }).catch(show);
+  const now = p.max_rooms === null ? `the server's (${perProfile})` : p.max_rooms === -1 ? 'unlimited' : String(p.max_rooms);
+  return html`<${Sheet} id="limit-sheet" title=${'Rooms ' + who + ' may create'} done=${done}>
+    <p class="hint">${p.rooms_created} created so far; the limit is ${now}.</p>
+    <form ref=${ref} class="limit" onSubmit=${formAction(() => set(Number(n)))}>
+      <label>Limit<input type="number" min="1" max="1000" step="1" required value=${n} onInput=${onInput(setN)} aria-label=${'Rooms ' + who + ' may create'}/></label>
+      <div class="actions">
+        <button type="button" class="btn-secondary" onClick=${() => set(null)} disabled=${p.max_rooms === null}>Use the server's</button>
+        <button type="button" class="btn-secondary" onClick=${() => set(-1)} disabled=${p.max_rooms === -1}>Unlimited</button>
+        <button type="submit">Set</button>
+      </div>
+    </form>
+  <//>`;
 }
 
 function Libraries() {
@@ -588,108 +637,114 @@ function Libraries() {
     window.grillConfirm(`Remove ${what} from the library?`, 'Rooms keep the copies they use.', 'Remove')
       .then((yes) => { if (yes) api('DELETE', path).then(load).catch(show); });
   };
+  /** @param {string} id @param {string} what @param {string} path */
+  const menu = (id, what, path) => html`<${RowMenu} id=${id} label=${'More actions on ' + what}
+    items=${[['Remove…', () => remove(what, path), 'danger', 'Remove ' + what]]}/>`;
   return html`
     <h2>Persona templates</h2>
-    ${templates && html`<div class="scroll"><table id="templates">
-      <thead><tr><th>Title</th><th>Author</th><th>Version</th><th>Updated</th><th></th></tr></thead>
-      <tbody>${templates.map((t) => html`<tr id=${'template-' + t.id}>
-        <td class="wrap">${t.title}</td><td>${t.author}</td><td>v${t.version}</td><td>${when(t.created_at)}</td>
-        <td>${t.preset ? html`<span class="hint">shipped</span>`
-          : html`<button type="button" onClick=${() => remove(`the template ${t.title}`, '/api/admin/templates/' + t.id)}>Remove</button>`}</td>
-      </tr>`)}</tbody>
-    </table></div>`}
+    ${templates && (templates.length ? html`<div class="cols" id="templates">
+      <div class="list-row head"><span>Title</span><span>Author</span><span>Version</span><span>Updated</span><span></span></div>
+      <ul class="list-rows">${templates.map((t) => html`<li class="list-row" id=${'template-' + t.id} key=${t.id}>
+        <div class="main"><span class="name">${t.title}</span>${t.preset && html` <span class="badge" data-tip="Ships with grill-room: it cannot be removed.">shipped</span>`}</div>
+        <div class="cells"><span class="cell" data-label="Author">${t.author}</span><span class="cell" data-label="Version">v${t.version}</span>
+          <span class="cell" data-label="Updated">${ago(t.created_at)}</span></div>
+        <div class="actions">${!t.preset && menu('template-menu-' + t.id, `the template ${t.title}`, '/api/admin/templates/' + t.id)}</div>
+      </li>`)}</ul></div>` : html`<p class="empty">No persona template yet.</p>`)}
     <h2>Shared skills</h2>
-    ${skills && (skills.length ? html`<div class="scroll"><table id="skills">
-      <thead><tr><th>Name</th><th>Author</th><th>Version</th><th>Size</th><th>Updated</th><th></th></tr></thead>
-      <tbody>${skills.map((k) => html`<tr id=${'skill-' + k.id}>
-        <td class="wrap">${k.name}</td><td>${k.author}</td><td>v${k.version}</td><td>${size(k.size)}</td><td>${when(k.updated_at)}</td>
-        <td><button type="button" onClick=${() => remove(`the skill ${k.name}`, '/api/admin/skills/' + k.id)}>Remove</button></td>
-      </tr>`)}</tbody>
-    </table></div>` : html`<p>No shared skill yet.</p>`)}
+    ${skills && (skills.length ? html`<div class="cols" id="skills">
+      <div class="list-row head"><span>Name</span><span>Author</span><span>Version</span><span>Size</span><span>Updated</span><span></span></div>
+      <ul class="list-rows">${skills.map((k) => html`<li class="list-row" id=${'skill-' + k.id} key=${k.id}>
+        <div class="main"><span class="name">${k.name}</span></div>
+        <div class="cells"><span class="cell" data-label="Author">${k.author}</span><span class="cell" data-label="Version">v${k.version}</span>
+          <span class="cell" data-label="Size">${size(k.size)}</span><span class="cell" data-label="Updated">${ago(k.updated_at)}</span></div>
+        <div class="actions">${menu('skill-menu-' + k.id, `the skill ${k.name}`, '/api/admin/skills/' + k.id)}</div>
+      </li>`)}</ul></div>` : html`<p class="empty">No shared skill yet.</p>`)}
     <h2>Shared room starters</h2>
-    ${starters && (starters.length ? html`<div class="scroll"><table id="starters" class="cards">
-      <thead><tr><th>Title</th><th>Author</th><th>Versions</th><th>Size</th><th>Updated</th><th></th></tr></thead>
-      <tbody>${starters.map((st) => html`<tr id=${'starter-' + st.id}>
-        <td class="wrap">${st.title}</td><td data-label="Author">${st.author}</td><td data-label="Versions">${st.versions}</td>
-        <td data-label="Size">${size(st.size)}</td><td data-label="Updated">${ago(st.updated_at)}</td>
-        <td><button type="button" class="btn-danger-outline" onClick=${() => remove(`the starter ${st.title}`, '/api/admin/starters/' + st.id)}
-          aria-label=${'Remove the starter ' + st.title}>Remove</button></td>
-      </tr>`)}</tbody>
-    </table></div>` : html`<p>No shared starter yet.</p>`)}`;
+    ${starters && (starters.length ? html`<div class="cols" id="starters">
+      <div class="list-row head"><span>Title</span><span>Author</span><span>Versions</span><span>Size</span><span>Updated</span><span></span></div>
+      <ul class="list-rows">${starters.map((st) => html`<li class="list-row" id=${'starter-' + st.id} key=${st.id}>
+        <div class="main"><span class="name">${st.title}</span></div>
+        <div class="cells"><span class="cell" data-label="Author">${st.author}</span><span class="cell" data-label="Versions">${st.versions}</span>
+          <span class="cell" data-label="Size">${size(st.size)}</span><span class="cell" data-label="Updated">${ago(st.updated_at)}</span></div>
+        <div class="actions">${menu('starter-menu-' + st.id, `the starter ${st.title}`, '/api/admin/starters/' + st.id)}</div>
+      </li>`)}</ul></div>` : html`<p class="empty">No shared starter yet.</p>`)}`;
 }
 
 function InstanceView() {
   const [it, setIt] = useState(/** @type {Instance | null} */ (null));
   useEffect(() => { api('GET', '/api/admin/instance').then(setIt).catch(show); }, []);
-  if (!it) return html`<h2>Instance</h2>`;
+  if (!it) return html`<h2>Server</h2>`;
   const versions = Object.entries(it.daemons.versions).map(([v, n]) => `${v || 'unknown'} × ${n}`).join(', ');
   const rows = [
     ['Version', it.version || 'unknown'],
     ['Database', size(it.db_bytes)],
     ['Disk', it.disk_free < 0 ? 'unknown' : `${size(it.disk_free)} free of ${size(it.disk_total)}`],
     ['Speech to text', !it.stt.voice ? 'off: no audio' : !it.stt.configured ? 'off: no STT token'
-      : `${it.stt.workers} worker${it.stt.workers === 1 ? '' : 's'} up`],
-    ['Daemons', `${it.daemons.connected} connected${versions ? ': ' + versions : ''}`],
+      : `${it.stt.workers} transcriber${it.stt.workers === 1 ? '' : 's'} up`],
+    ['AI host apps', `${it.daemons.connected} connected${versions ? ': ' + versions : ''}`],
     ['Email (SMTP)', it.smtp ? 'configured' : 'not configured'],
   ];
   return html`
-    <h2>Instance</h2>
+    <h2>Server</h2>
     <dl id="instance">${rows.map(([k, v]) => html`<div><dt>${k}</dt><dd>${v}</dd></div>`)}</dl>
-    <${RoomCreation}/>
-    <${Purge}/>`;
+    <${ServerSettings}/>`;
 }
 
-// Purge turns the hourly removal of empty profiles on and off (011-AC17).
-function Purge() {
-  const [on, setOn] = useState(/** @type {boolean | null} */ (null));
-  const [busy, setBusy] = useState(false);
-  useEffect(() => { api('GET', '/api/admin/settings').then((/** @type {Settings} */ v) => setOn(v.purge_empty_profiles)).catch(show); }, []);
-  /** @param {Event} e */
-  const set = (e) => {
-    const want = /** @type {HTMLInputElement} */ (e.currentTarget).checked;
-    // The box shows the choice while it saves, and the stored value again on a refusal.
-    setOn(want);
-    setBusy(true);
-    api('PUT', '/api/admin/settings', { purge_empty_profiles: want })
-      .then((/** @type {Settings} */ v) => { setOn(v.purge_empty_profiles); toast('Saved'); })
-      .catch((err) => { setOn(!want); show(err); }).finally(() => setBusy(false));
-  };
-  return html`
-    <h2>Empty profiles</h2>
-    <p class="hint">An empty profile has no email, no room it can still enter, nothing in the libraries and no room-admin role. Nobody can reach it again.</p>
-    ${on !== null && html`<label class="check"><input type="checkbox" id="purge-empty" checked=${on} disabled=${busy} onChange=${set}/>
-      Delete empty profiles after 24 h of inactivity</label>`}`;
-}
-
-// RoomCreation sets the guardrails on rooms profiles create from their profile page (004-AC7).
-function RoomCreation() {
+/**
+ * ServerSettings is one settings group (docs/design.md §5): the guardrails on rooms profiles create
+ * from their profile page (004-AC7), saved together by one Save, and the hourly removal of empty
+ * profiles (011-AC17), a toggle that applies at once and says so.
+ */
+function ServerSettings() {
+  const [saved, setSaved] = useState(/** @type {Settings | null} */ (null));
   const [per, setPer] = useState('');
   const [quota, setQuota] = useState('');
   const [mode, setMode] = useState('anyone');
-  const [said, setSaid] = useState('');
+  const [purge, setPurge] = useState(false);
+  const [busy, setBusy] = useState(false);
   /** @param {Settings} v */
   const fill = (v) => {
+    setSaved(v);
     setPer(String(v.rooms_per_profile));
     setQuota(v.storage_quota_bytes ? String(Math.round(v.storage_quota_bytes / 1048576)) : '');
     setMode(v.room_creation);
+    setPurge(v.purge_empty_profiles);
   };
   useEffect(() => { api('GET', '/api/admin/settings').then(fill).catch(show); }, []);
-  const save = () => api('PUT', '/api/admin/settings', {
-    rooms_per_profile: Number(per), storage_quota_bytes: Math.round(Number(quota || 0) * 1048576), room_creation: mode,
-  }).then((/** @type {Settings} */ v) => { fill(v); setSaid('Saved.'); }).catch(show);
+  if (!saved) return null;
+  const quotaBytes = Math.round(Number(quota || 0) * 1048576);
+  const dirty = [mode !== saved.room_creation, per !== String(saved.rooms_per_profile), quotaBytes !== (saved.storage_quota_bytes || 0)].filter(Boolean).length;
+  const save = () => api('PUT', '/api/admin/settings', { rooms_per_profile: Number(per), storage_quota_bytes: quotaBytes, room_creation: mode })
+    .then((/** @type {Settings} */ v) => { fill(v); toast('Saved'); }).catch(show);
+  /** @param {Event} e */
+  const togglePurge = (e) => {
+    const want = /** @type {HTMLInputElement} */ (e.currentTarget).checked;
+    // The box shows the choice while it saves, and the stored value again on a refusal.
+    setPurge(want);
+    setBusy(true);
+    api('PUT', '/api/admin/settings', { purge_empty_profiles: want })
+      .then((/** @type {Settings} */ v) => { setPurge(v.purge_empty_profiles); setSaved({ ...saved, purge_empty_profiles: v.purge_empty_profiles });
+        toast(v.purge_empty_profiles ? 'Empty profiles will be deleted' : 'Empty profiles are kept'); })
+      .catch((err) => { setPurge(!want); show(err); }).finally(() => setBusy(false));
+  };
   return html`
-    <h2>Room creation</h2>
+    <h2>Room creation and profiles</h2>
     <p class="hint">Profiles create rooms from their profile page and administer them. These limits apply to them, not to you.</p>
-    <form class="row" id="room-creation" onSubmit=${formAction(save)}>
-      <label>Who creates rooms
-        <select id="room-creation-mode" value=${mode} onChange=${onInput(setMode)}>
-          <option value="anyone">Anyone with a profile</option>
-          <option value="super-admin">The instance admin only</option>
-        </select></label>
-      <label>Rooms per profile<input id="rooms-per-profile" type="number" min="1" max="1000" step="1" required value=${per} onInput=${onInput(setPer)}/></label>
-      <label>Storage quota (MB, empty for none)<input id="storage-quota" type="number" min="1" step="1" value=${quota} onInput=${onInput(setQuota)}/></label>
-      <button type="submit">Save</button>
-      <span class="said" role="status">${said}</span>
+    <form class="settings-group" id="room-creation" onSubmit=${formAction(save)}>
+      <label for="room-creation-mode">Who creates rooms</label>
+      <div class="control"><select id="room-creation-mode" value=${mode} onChange=${onInput(setMode)}>
+        <option value="anyone">Anyone with a profile</option>
+        <option value="super-admin">The server admin only</option>
+      </select></div>
+      <label for="rooms-per-profile">Rooms per profile</label>
+      <div class="control"><input id="rooms-per-profile" type="number" min="1" max="1000" step="1" required value=${per} onInput=${onInput(setPer)}/></div>
+      <label for="storage-quota">Storage quota (MB)</label>
+      <div class="control"><input id="storage-quota" type="number" min="1" step="1" placeholder="none" value=${quota} onInput=${onInput(setQuota)}/></div>
+      <label class="full"><input type="checkbox" id="purge-empty" checked=${purge} disabled=${busy} onChange=${togglePurge}/>
+        Delete empty profiles after 24 h of inactivity</label>
+      <p class="hint">An empty profile has no email, no room it can still enter, nothing in the libraries and no room-admin role. Nobody can reach it again. This switch applies at once.</p>
+      <div class="settings-foot"><span class="dirty">${dirty ? dirty + ' unsaved change' + (dirty > 1 ? 's' : '') : 'No unsaved changes'}</span>
+        <button type="submit" disabled=${!dirty}>Save</button></div>
     </form>`;
 }
 

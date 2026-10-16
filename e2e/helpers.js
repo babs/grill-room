@@ -116,6 +116,12 @@ export function connectedRow(page, id) {
   return id ? rows : rows.first();
 }
 
+// rowAction runs an item of a list row's ⋯ menu (004b-AC1); name matches the item's label.
+export async function rowAction(row, name) {
+  await row.locator('.actions .more').click();
+  await row.locator('.menu').getByRole('button', { name }).click();
+}
+
 // pairDaemon approves the daemon's pairing from the participant's room page, as a person would.
 export async function pairDaemon(page, daemon) {
   const admin = await page.context().newPage();
@@ -125,7 +131,7 @@ export async function pairDaemon(page, daemon) {
   const [approval] = await Promise.all([page.context().waitForEvent('page'), admin.getByRole('link', { name: 'approve in the room' }).click()]);
   await approval.getByRole('button', { name: 'Approve' }).click();
   await expect(connectedRow(admin)).toBeAttached({ timeout: 30_000 });
-  // Once paired, no status line stays under Add a room: the row says it (003b-AC4).
+  // Once paired, no status line stays under Add a room: the row says it (003b-AC4, 004b-AC14).
   await expect(admin.locator('#pairing')).toHaveCount(0);
   await approval.close();
   return admin;

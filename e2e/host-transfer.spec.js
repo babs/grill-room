@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, fakeDaemon, appointAdmin, personMenu, confirmSheet, signIn } from './helpers.js';
+import { roomWith, fakeDaemon, appointAdmin, personMenu, confirmSheet, signIn, rowAction } from './helpers.js';
 
 const hostBadge = (page, name) => page.locator('#participants li', { hasText: name }).locator('.host-badge');
 
@@ -29,7 +29,7 @@ test('a room admin and the super-admin move the AI host', async ({ browser, requ
     expect(await signIn(admin, undefined, `rooms/${room.id}/admins`)).toBe(201);
     const list = admin.locator('#room-panel #room-admins');
     await expect(list.locator('li', { hasText: 'Carol' })).toContainText('AI host');
-    await list.getByRole('button', { name: 'Make Bob the AI host' }).click();
+    await rowAction(list.locator('> li', { hasText: 'Bob' }), 'Make Bob the AI host');
     await confirmSheet(admin, 'Make AI host');
     await expect(list.locator('li', { hasText: 'Bob' })).toContainText('AI host');
     await expect(hostBadge(alice, 'Bob')).toHaveAttribute('aria-label', 'host');

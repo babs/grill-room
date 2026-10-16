@@ -2203,15 +2203,30 @@ function personaForm(p) {
     hint('An answer that names another persona makes it answer next. These auto turns pause at the room\'s limit of '
       + agent.chain.budget + ', set in Personas.'));
   const capabilities = panel('capabilities', skillsBlock(p), pluginsBlock(p));
+  // One footer for the four tabs: the changes it would save, counted across them, and Save (004b-AC10).
   const actions = document.createElement('div');
-  actions.className = 'actions';
+  actions.className = 'settings-foot';
+  const dirty = span('dirty', '');
   const save = document.createElement('button');
   save.type = 'submit';
   save.className = 'btn-primary';
   save.textContent = 'Save';
-  actions.append(save);
+  actions.append(dirty, save);
   form.append(identity, model, triggers, capabilities, actions);
-  form.addEventListener('input', () => { form.dataset.dirty = '1'; });
+  // The capabilities' switches apply at once and carry no name: only named fields wait for Save.
+  const fields = [...form.elements].filter((el) => el.name);
+  const valueOf = (el) => (el.type === 'checkbox' ? el.checked : el.value);
+  let initial = fields.map(valueOf);
+  const mark = () => {
+    const n = fields.filter((el, i) => valueOf(el) !== initial[i]).length;
+    if (n) form.dataset.dirty = '1';
+    else delete form.dataset.dirty;
+    dirty.textContent = n ? n + ' unsaved change' + (n > 1 ? 's' : '') : 'No unsaved changes';
+    save.disabled = !n;
+  };
+  mark();
+  form.addEventListener('input', mark);
+  form.addEventListener('change', mark);
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     // An invalid field on another tab: show that tab, then the field's error.
@@ -2225,7 +2240,8 @@ function personaForm(p) {
     }
     sendJSON('PATCH', api + '/personas/' + p.id, formFields(form)).then((saved) => {
       if (!saved) return;
-      delete form.dataset.dirty;
+      initial = fields.map(valueOf);
+      mark();
       personasStatus(saved.held ? saved.name + ': the change waits for the AI host\'s approval.' : saved.name + ' saved. It applies from its next turn.');
     }).catch((err) => personasStatus(err.message, true));
   });

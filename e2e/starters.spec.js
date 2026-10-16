@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, confirmSheet, smallTargets, noOverflow } from './helpers.js';
+import { roomWith, signIn, confirmSheet, smallTargets, noOverflow, rowAction } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -58,10 +58,10 @@ test('starter library: duplicate, share, delete, /admin', async ({ browser, requ
 
   const page = await (await browser.newContext()).newPage();
   expect(await signIn(page, adminToken, 'libraries')).toBe(201);
-  const row = page.locator('#starters tbody tr', { hasText: 'Retro' }).filter({ hasText: me });
+  const row = page.locator('#starters .list-row', { hasText: 'Retro' }).filter({ hasText: me });
   await expect(row).toHaveCount(1);
-  await expect(row.locator('td').nth(2)).toHaveText('1');
-  await row.getByRole('button', { name: 'Remove the starter Retro' }).click();
+  await expect(row.locator('.cell').nth(1)).toHaveText(/1$/);
+  await rowAction(row, 'Remove the starter Retro');
   await confirmSheet(page, 'Remove');
   await expect(row).toHaveCount(0);
   const removed = await audited(request, 'starter.delete', 'Retro');

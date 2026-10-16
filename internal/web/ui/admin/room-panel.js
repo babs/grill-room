@@ -67,6 +67,85 @@ export const onInput = (set) => (/** @type {Event} */ e) => set(/** @type {HTMLI
 export const formAction = (work) => (/** @type {Event} */ e) => { e.preventDefault(); work(); };
 
 /**
+ * RowMenu is a row's ⋯ and its menu of actions (docs/design.md §5); each item closes the menu. An
+ * item is [text, run, class, aria-label].
+ * @param {{id: string, label: string, items: [string, () => void, string?, string?][]}} props
+ */
+export function RowMenu({ id, label, items }) {
+  return html`<button type="button" class="btn-icon btn-ghost more" popovertarget=${id} aria-label=${label} dangerouslySetInnerHTML=${icon('more')}></button>
+    <div id=${id} class="menu row-menu" popover>${items.map(([text, run, cls, aria]) => html`<button type="button" class=${cls}
+      popovertarget=${id} popovertargetaction="hide" aria-label=${aria} onClick=${run}>${text}</button>`)}</div>`;
+}
+
+/**
+ * Meter is a share used, as a bar and the words for it (the native meter draws per browser).
+ * @param {{used: number, max: number, label: string}} props
+ */
+export function Meter({ used, max, label }) {
+  const pct = max > 0 ? Math.min(100, Math.round((used / max) * 100)) : 0;
+  return html`<span class="meter" role="img" aria-label=${label} data-tip=${label}><span style=${{ width: pct + '%' }}></span></span>`;
+}
+
+/**
+ * uaName words a user agent as people read it, "Chrome 155 on Linux"; the raw string goes in a tip.
+ * @param {string} ua
+ */
+export function uaName(ua) {
+  if (!ua) return 'unknown browser';
+  const b = ua.match(/(Edg|OPR|Firefox|Chrome|CriOS|FxiOS)\/(\d+)/) || (/Safari\//.test(ua) && ua.match(/(Version)\/(\d+)/));
+  const names = /** @type {Record<string, string>} */ ({ Edg: 'Edge', OPR: 'Opera', CriOS: 'Chrome', FxiOS: 'Firefox', Version: 'Safari' });
+  const os = ua.match(/Windows|Android|iPhone|iPad|Mac OS X|CrOS|Linux/)?.[0];
+  const osNames = /** @type {Record<string, string>} */ ({ 'Mac OS X': 'macOS', CrOS: 'ChromeOS' });
+  const name = b ? (names[b[1]] || b[1]) + ' ' + b[2] : ua.split(/[ /]/)[0];
+  return os ? name + ' on ' + (osNames[os] || os) : name;
+}
+
+/**
+ * @typedef {{join_ip: string, join_ua: string, last_ip: string, last_ua: string, last_seen_at: string | null}} Client
+ * @typedef {{id: number, name: string, admin: boolean, has_profile?: boolean, host?: boolean, can_host?: boolean, client?: Client}} Member
+ */
+
+/**
+ * AdminRows lists a room's participants in columns, for /admin and the room's Room settings alike
+ * (005-AC21, 004b-AC4): the name with where they were last seen, the role, the admin button, and a
+ * ⋯ with Rename and, where offered, Make AI host. Only a participant with a profile can be made an
+ * admin (has_profile, when the page knows it).
+ * @param {{people: Member[], base: string, api: Api, show: (err: unknown) => void, done: () => void, me?: number,
+ *   makeHost?: (p: Member) => void}} props
+ */
+export function AdminRows({ people, base, api, show, done, me, makeHost }) {
+  return html`<div class="cols admin-cols"><ul id="room-admins" class="list-rows">${people.map((p) => html`<${AdminRow} key=${p.id} p=${p}
+    base=${base} api=${api} show=${show} done=${done} me=${me} makeHost=${makeHost}/>`)}</ul></div>`;
+}
+
+/** @param {{p: Member, base: string, api: Api, show: (err: unknown) => void, done: () => void, me?: number, makeHost?: (p: Member) => void}} props */
+function AdminRow({ p, base, api, show, done, me, makeHost }) {
+  const [renaming, setRenaming] = useState(false);
+  /** @param {boolean} on */
+  const set = (on) => api(on ? 'PUT' : 'DELETE', `${base}/admins/${p.id}`).then(done).catch(show);
+  const c = p.client;
+  const seen = c && c.last_ip ? [c.last_seen_at ? 'last active ' + window.grillAgo(c.last_seen_at) : '', uaName(c.last_ua)].filter(Boolean).join(' · ') : '';
+  const tip = c && c.last_ip ? `Joined from ${c.join_ip || 'unknown'}, ${c.join_ua || 'no user agent'}. Last from ${c.last_ip}, ${c.last_ua || 'no user agent'}.` : '';
+  /** @type {[string, () => void, string?, string?][]} */
+  const items = [['Rename…', () => setRenaming(true), '', 'Rename ' + p.name]];
+  if (makeHost && !p.host && p.can_host) items.push(['Make AI host', () => makeHost(p), '', 'Make ' + p.name + ' the AI host']);
+  return html`<li class="list-row">
+    <div class="main">${renaming ? html`<${Rename} name=${p.name} path=${`${base}/participants/${p.id}/name`} api=${api} show=${show}
+        done=${() => { setRenaming(false); done(); }} cancel=${() => setRenaming(false)}/>`
+      : html`<span class="name who">${p.name}</span>${p.host && html` <span class="badge">AI host</span>`}
+        ${seen && html`<div class="meta" data-tip=${tip}>${seen}</div>`}`}</div>
+    <div class="cells">
+      <span class="cell" data-label="Role">${p.admin ? html`<span class="badge role">admin</span>` : 'member'}</span>
+      <span class="cell">${p.has_profile === false ? html`<span class="hint" data-tip="Only a participant with a profile can be an admin.">no profile</span>`
+        : p.admin ? html`<button type="button" class="btn-secondary admin-toggle" onClick=${() => set(false)}
+          aria-label=${p.id === me ? 'Step down as a room admin' : 'Remove ' + p.name + ' from the room admins'}>${p.id === me ? 'Step down' : 'Remove admin'}</button>`
+        : html`<button type="button" class="btn-secondary admin-toggle" onClick=${() => set(true)} aria-label=${'Make ' + p.name + ' a room admin'}>Make admin</button>`}</span>
+    </div>
+    <div class="actions"><${RowMenu} id=${'admin-menu-' + p.id} label=${'More actions on ' + p.name} items=${items}/></div>
+  </li>`;
+}
+
+/**
  * TabBar is a row of tab links, each a deep link (005-AC15, 005-AC16): links keep every tab in the
  * keyboard's reach and in the history, with no ARIA tab widget to drive.
  * @param {{tabs: string[][], active: string, href: (id: string) => string, label: string, cls?: string}} props
@@ -89,16 +168,16 @@ export const roomTabs = { general: 'General', invites: 'Invites', admins: 'Admin
  * the quota. tabs and href come from the page; children fill the tabs not built in here. byName
  * names an invite's creator.
  * @param {{room: Room, base: string, api: Api, show: (err: unknown) => void, reload: () => void, close: () => void,
- *   tab: string, tabs: string[][], href: (id: string) => string, setQuota?: boolean, byName?: (id: number) => string, me?: number, label?: string,
+ *   tab: string, tabs: string[][], href: (id: string) => string, setQuota?: boolean, byName?: (id: number) => string, me?: number, label?: string, heading?: boolean,
  *   general?: import('preact').ComponentChildren, children?: import('preact').ComponentChildren}} props
  */
-export function RoomPanel({ room, base, api, show, reload, close, tab, tabs, href, setQuota, byName, me, label = 'Manage', general, children }) {
+export function RoomPanel({ room, base, api, show, reload, close, tab, tabs, href, setQuota, byName, me, label = 'Manage', heading = true, general, children }) {
   return html`
     <section id="room-panel" aria-label=${label + ' ' + room.name}>
-      <h2>${room.name}</h2>
+      ${heading && html`<h2>${room.name}</h2>`}
       <${TabBar} tabs=${tabs} active=${tab} href=${href} label=${label + ' ' + room.name}/>
       <div class="tab-panel" id=${'panel-' + tab}>
-        ${tab === 'general' ? html`<${General} room=${room} base=${base} api=${api} show=${show} reload=${reload} close=${close} setQuota=${setQuota}/>${general}`
+        ${tab === 'general' ? html`<${General} room=${room} base=${base} api=${api} show=${show} reload=${reload} close=${close} setQuota=${setQuota} extra=${general}/>`
           : tab === 'invites' ? html`<${Invites} base=${base} api=${api} show=${show} byName=${byName} me=${me}/>`
           : tab === 'export' ? html`<${Export} base=${base} room=${room}/>`
           : children}
@@ -107,10 +186,11 @@ export function RoomPanel({ room, base, api, show, reload, close, tab, tabs, hre
 }
 
 /**
+ * General: the name, the storage, what the page adds (extra), then Delete, last.
  * @param {{room: Room, base: string, api: Api, show: (err: unknown) => void, reload: () => void, close: () => void,
- *   setQuota?: boolean}} props
+ *   setQuota?: boolean, extra?: import('preact').ComponentChildren}} props
  */
-function General({ room, base, api, show, reload, close, setQuota }) {
+function General({ room, base, api, show, reload, close, setQuota, extra }) {
   const [name, setName] = useState(room.name);
   const [quota, setQuota_] = useState(String(Math.round(room.quota / 1048576)));
   const [confirm, setConfirm] = useState('');
@@ -131,17 +211,18 @@ function General({ room, base, api, show, reload, close, setQuota }) {
     </form>
     ${room.created_from && html`<p id="created-from">Created from the starter ${room.created_from.title} v${room.created_from.version}.</p>`}
     <h3>Storage</h3>
-    <p id="storage">Storage: ${size(room.used)} of ${size(room.quota)}${room.quota_bytes ? '' : ', the instance default'}.${setQuota ? '' : ' Only the instance admin changes the limit.'}</p>
-    <details><summary>What takes the space</summary>
+    <p id="storage"><${Meter} used=${room.used} max=${room.quota} label=${size(room.used) + ' of ' + size(room.quota)}/> ${size(room.used)} of ${size(room.quota)}${room.quota_bytes ? '' : ', the server default'}.${setQuota ? '' : ' Only the server admin changes the limit.'}</p>
+    <details class="disclosure"><summary>What takes the space</summary>
       <dl id="volume">${kinds.map(([k, n]) => html`<div><dt>${k}</dt><dd>${size(/** @type {number} */ (n))}</dd></div>`)}
         <div><dt>Total</dt><dd>${size(v.total)}</dd></div></dl>
       <p class="hint">The limit counts uploads, attachments and plugins.</p>
     </details>
     ${setQuota && html`<form class="row" onSubmit=${formAction(() => setQuotaTo(Math.round(Number(quota) * 1048576)))}>
       <label>Quota (MB)<input id="quota" type="number" min="1" step="1" required value=${quota} onInput=${onInput(setQuota_)}/></label>
-      <button type="submit">Set quota</button>
+      <button type="submit" class="btn-secondary">Set quota</button>
       <button type="button" class="btn-secondary" disabled=${!room.quota_bytes} onClick=${() => setQuotaTo(0)}>Use the default</button>
     </form>`}
+    ${extra}
     <h3>Delete</h3>
     <form class="row" onSubmit=${formAction(() => api('DELETE', base).then(close).catch(show))}>
       <label>Type the room name to delete it, with everything it holds
@@ -174,6 +255,7 @@ export function Invites({ base, api, show, byName, me }) {
     () => /** @type {HTMLInputElement | null} */ (document.getElementById('invite-link-new'))?.select());
   /** @param {Invite} i */
   const ask = (i) => {
+    if (asking) return;
     setAsking(i.id);
     api('GET', `${base}/invites/${i.id}/revoke-preview`).then((/** @type {Omit<Preview, 'id'>} */ p) => setPreview({ ...p, id: i.id }))
       .catch(show).finally(() => setAsking(0));
@@ -186,13 +268,14 @@ export function Invites({ base, api, show, byName, me }) {
     <div class="row"><button type="button" class="btn-primary" disabled=${making} onClick=${invite}>New invite link</button></div>
     ${link && html`<div class="row"><label class="link">Invite link, shown once<input id="invite-link-new" readonly value=${link}/></label>
       <button type="button" class="btn-secondary" id="invite-link-copy" onClick=${copy}>Copy</button></div>`}
-    ${invites && (invites.length ? html`<div class="scroll"><table id="invites-all" class="cards">
-      <thead><tr><th>Invite</th><th>Created</th><th>By</th><th>State</th><th></th></tr></thead>
-      <tbody>${invites.map((i) => html`<tr id=${'invite-' + i.id}><td>#${i.id}${mark(i) && html` <span class="badge">${mark(i)}</span>`}</td>
-        <td data-label="Created">${when(i.created_at)}</td>
-        <td data-label="By">${by(i)}</td><td data-label="State">${i.revoked_at ? 'revoked' : 'valid'}</td>
-        <td>${!i.revoked_at && html`<button type="button" class="btn-secondary" disabled=${asking === i.id} onClick=${() => ask(i)}>Revoke</button>`}</td></tr>`)}</tbody>
-    </table></div>`
+    ${invites && (invites.length ? html`<div class="cols" id="invites-all">
+      <div class="list-row head"><span>Made by</span><span>Created</span><span>State</span><span></span></div>
+      <ul class="list-rows">${invites.map((i) => html`<li class="list-row" id=${'invite-' + i.id} key=${i.id}>
+        <div class="main"><span class="name">${by(i)}</span>${mark(i) && html` <span class="badge">${mark(i)}</span>`}<div class="meta">link ${i.id}</div></div>
+        <div class="cells"><span class="cell" data-label="Created">${ago(i.created_at)}</span>
+          <span class="cell">${i.revoked_at ? html`<span class="status off">revoked</span>` : html`<span class="status ok">valid</span>`}</span></div>
+        <div class="actions">${!i.revoked_at && html`<${RowMenu} id=${'invite-menu-' + i.id} label=${'More actions on link ' + i.id}
+          items=${[['Revoke…', () => ask(i), 'danger', 'Revoke link ' + i.id]]}/>`}</div></li>`)}</ul></div>`
       : html`<p class="empty" id="invites-empty">No invite links yet. New invite link makes one to share.</p>`)}
     ${preview && html`<${RevokeSheet} key=${preview.id} preview=${preview} base=${base} api=${api} done=${() => { setPreview(null); load(); }}/>`}`;
 }
@@ -272,12 +355,13 @@ function Export({ base, room }) {
 }
 
 /**
- * Rename lets a room admin or the super-admin rename a participant (005-AC21): a button that opens
- * a one-field form in place.
- * @param {{name: string, path: string, api: Api, show: (err: unknown) => void, done: () => void}} props
+ * Rename lets a room admin or the super-admin rename a participant (005-AC21): a one-field form in
+ * place, opened at once when the caller has a cancel, else behind a Rename button.
+ * @param {{name: string, path: string, api: Api, show: (err: unknown) => void, done: () => void, cancel?: () => void}} props
  */
-export function Rename({ name, path, api, show, done }) {
-  const [editing, setEditing] = useState(false);
+export function Rename({ name, path, api, show, done, cancel }) {
+  const [editing, setEditing_] = useState(!!cancel);
+  const setEditing = (/** @type {boolean} */ on) => { if (!on && cancel) cancel(); setEditing_(on); };
   const [value, setValue] = useState(name);
   if (!editing) {
     return html`<button type="button" class="btn-secondary" onClick=${() => { setValue(name); setEditing(true); }}

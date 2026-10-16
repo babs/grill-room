@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet, playSTT, stopSTT, newRoomEditor, personaSheet, closePersonas } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet, playSTT, stopSTT, newRoomEditor, personaSheet, closePersonas, rowAction } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const phone = { width: 390, height: 844 };
@@ -82,8 +82,11 @@ test('room creation from the profile page, within the limits', async ({ browser,
   await expect(form.getByLabel('Rooms per profile')).toHaveValue('10');
   try {
     await form.getByLabel('Who creates rooms').selectOption('super-admin');
+    // One settings group, one Save that counts what it would save (004b-AC8).
+    await expect(form.locator('.dirty')).toHaveText('1 unsaved change');
     await form.getByRole('button', { name: 'Save', exact: true }).click();
-    await expect(form.getByRole('status')).toHaveText('Saved.');
+    await expect(adminPage.locator('.toast')).toHaveText('Saved');
+    await expect(form.locator('.dirty')).toHaveText('No unsaved changes');
     await fits(adminPage);
     await page.getByRole('button', { name: 'Create room' }).click();
     await expect(page.locator('#room-create-status')).toHaveText('room creation refused: only the super-admin creates rooms on this instance');
@@ -104,11 +107,15 @@ test('room creation from the profile page, within the limits', async ({ browser,
     expect((await quinn.request.post('/api/profile/rooms', { data: { name: `Quinn room ${i}`, display_name: qn } })).status()).toBe(201);
   }
   await adminPage.goto('/admin#profiles');
-  const row = adminPage.locator('#profiles tbody tr', { hasText: qn });
-  await expect(row).toContainText("10 created, limit instance's (10)");
-  await row.getByLabel(`Rooms ${qn} may create`).fill('12');
-  await row.getByRole('button', { name: 'Set' }).click();
-  await expect(row).toContainText('10 created, limit 12');
+  const row = adminPage.locator('#profiles .list-row', { hasText: qn });
+  await expect(row).toContainText("10 of 10, the server's");
+  // The row's ⋯ opens the limit in a sheet (004b-AC2).
+  await rowAction(row, `Set the room limit of ${qn}`);
+  const limit = adminPage.locator('#limit-sheet');
+  await limit.getByLabel(`Rooms ${qn} may create`).fill('12');
+  await limit.getByRole('button', { name: 'Set', exact: true }).click();
+  await expect(limit).toBeHidden();
+  await expect(row).toContainText('10 of 12');
   await fits(adminPage);
   await newRoom(quinn, 'Quinn room 11');
   await page.goto('/profile');
@@ -153,7 +160,7 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     await alice.keyboard.press('Escape');
     const panel = await openManage(alice);
     await expect(panel.locator('#volume')).toContainText('Transcripts');
-    await expect(panel).toContainText('Only the instance admin changes the limit.');
+    await expect(panel).toContainText('Only the server admin changes the limit.');
     await expect(panel.locator('#quota')).toHaveCount(0);
     await tab(panel, 'Export');
     await expect(alice).toHaveURL(/#manage\/export$/);
@@ -161,22 +168,22 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     await expect(panel.locator('#export-warning')).toContainText('everything Claude read');
     await tab(panel, 'Invites');
     // Her seat's invite, her shareable link made with the room (011-AC26), Bob's and Carol's.
-    await expect(panel.locator('#invites-all tbody tr')).toHaveCount(4);
-    await expect(panel.locator('#invites-all tbody tr', { hasText: 'Your shareable link' })).toHaveCount(1);
-    await expect(panel.locator('#invites-all tbody tr').first()).toContainText('Alice');
+    await expect(panel.locator('#invites-all .list-row:not(.head)')).toHaveCount(4);
+    await expect(panel.locator('#invites-all .list-row', { hasText: 'Your shareable link' })).toHaveCount(1);
+    await expect(panel.locator('#invites-all .list-row:not(.head)').first()).toContainText('Alice');
     await fits(alice);
     await tab(panel, 'Admins');
     await panel.getByRole('button', { name: 'Make Bob a room admin' }).click();
-    await expect(panel.locator('#room-admins li', { hasText: 'Bob' }).locator('strong')).toHaveText('admin');
+    await expect(panel.locator('#room-admins > li', { hasText: 'Bob' }).locator('.badge.role')).toHaveText('admin');
     await expect(carol.locator('#messages')).toContainText('Alice made Bob a room admin.');
 
     // Bob, now an admin, removes Alice; she loses her panel.
     await expect(bob.locator('#manage-open')).not.toHaveAttribute('hidden');
     const bobPanel = await openManage(bob);
     await tab(bobPanel, 'Admins');
-    await bobPanel.locator('#room-admins li', { hasText: 'Alice' }).getByRole('button', { name: 'Remove admin' }).click();
+    await bobPanel.getByRole('button', { name: 'Remove Alice from the room admins' }).click();
     await expect(alice.locator('#manage #room-panel')).toHaveCount(0);
-    await bobPanel.locator('#room-admins li', { hasText: 'Bob' }).getByRole('button', { name: 'Step down' }).click();
+    await bobPanel.getByRole('button', { name: 'Step down as a room admin' }).click();
     await expect(bob.locator('#manage [role="alert"]')).toHaveText("you are the room's last admin: appoint another one first");
     await tab(bobPanel, 'General');
 

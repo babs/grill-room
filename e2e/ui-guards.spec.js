@@ -174,7 +174,7 @@ test('one date format', async ({ browser, request }) => {
   dates.card = (await alice.locator('#person-card li', { hasText: /^Joined / }).textContent()).replace(/^Joined /, '');
   // Invite dates show in Room settings › Invites only: the popup holds the shareable link (011-AC26).
   await alice.goto(alice.url().split('#')[0] + '#manage/invites');
-  dates.settings = (await alice.locator('#invites-all td[data-label=Created]').first().textContent()).trim();
+  dates.settings = await alice.locator('#invites-all .cell[data-label=Created] time').first().getAttribute('data-tip');
   await alice.goto(alice.url().split('#')[0]);
   await alice.locator('#body').fill('hello');
   await alice.locator('#body').press('Enter');
@@ -420,7 +420,7 @@ test('disabled buttons stay readable in both themes', async ({ browser, request 
   const views = [
     [alice, alice.url().split('#')[0] + '#manage/general', 'room settings', alice.locator('#manage').getByRole('button', { name: 'Rename', exact: true })],
     [admin, '/admin#rooms/' + room.id + '/general', '/admin room', admin.locator('#room-panel').getByRole('button', { name: 'Rename', exact: true })],
-    [admin, '/admin#audit', '/admin audit', admin.getByRole('button', { name: 'Newer' })],
+    [admin, '/admin#audit', '/admin audit', admin.getByRole('button', { name: 'Newer' }).first()],
   ];
   for (const scheme of ['light', 'dark']) {
     for (const [page, url, name, disabled] of views) {

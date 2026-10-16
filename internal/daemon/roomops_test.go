@@ -193,7 +193,7 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.ResponseWriter.WriteHeader(code)
 }
 
-// 003b-AC6 003b-AC7: Connect while the room is being removed is refused, as is a second removal;
+// 003b-AC6 003b-AC7 004b-AC14: Connect while the room is being removed is refused, as is a second removal;
 // once the removal is done, Connect pairs the room again.
 func TestConnectDuringRemoval(t *testing.T) {
 	release, seen := make(chan struct{}), make(chan int, 4)
@@ -228,7 +228,7 @@ func TestConnectDuringRemoval(t *testing.T) {
 	waitFor(t, "a new pairing", func() bool { return d.Status().Pairing == "pending" })
 }
 
-// 003b-AC6: a room removed while its pairing waits for approval stores no token; an approval that
+// 003b-AC6 004b-AC14: a room removed while its pairing waits for approval stores no token; an approval that
 // comes after is revoked at once, so the room server lists no computer for it.
 func TestRemoveWhilePairing(t *testing.T) {
 	release, seen := make(chan struct{}), make(chan int, 4)
@@ -268,7 +268,7 @@ func TestRemoveWhilePairing(t *testing.T) {
 	}
 }
 
-// 003b-AC6: a forced removal while the server's app is not running forgets the room's token,
+// 003b-AC6 004b-AC14: a forced removal while the server's app is not running forgets the room's token,
 // option values and cache here, and drops the room; unforced, it refuses.
 func TestSupervisorForcedRemoveNoApp(t *testing.T) {
 	s := testSupervisor(t, "refuse", nil)

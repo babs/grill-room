@@ -1050,7 +1050,7 @@ function App() {
     <${Header} />
     ${banner.value && html`<p id="banner" role="alert">${sentence(banner.value)}</p>`}
     ${live && html`<${RelaxBanner} />`}
-    ${live && html`<main id="main" class=${tab.value === 'monitoring' ? 'page-wide' : 'page'}>
+    ${live && html`<main id="main" class=${tab.value === 'monitoring' || tab.value === 'rooms' ? 'page-wide' : 'page'}>
       <${TabBar} />
       <${Panel} id="rooms"><${Rooms} /><//>
       <${Panel} id="accounts"><${Accounts} /><//>

@@ -423,7 +423,7 @@ func TestPktAndSideband(t *testing.T) {
 	require.Equal(t, strings.Repeat("a", 40), refs["refs/heads/main"].oid)
 }
 
-// A pack whose sideband packets end in 0x0a parses whole: the newline is pack data, not a line end.
+// 004b-AC15: a pack whose sideband packets end in 0x0a parses whole: the newline is pack data, not a line end.
 // The random blobs of TestFetchDeltas hit this about once in a hundred runs.
 func TestPackPacketsEndingInNewline(t *testing.T) {
 	data := make([]byte, 8<<10)
