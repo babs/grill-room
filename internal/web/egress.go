@@ -88,22 +88,8 @@ func (s *Server) allowBlocked(w http.ResponseWriter, r *http.Request, sess sessi
 		s.serverError(w, "allow_blocked_failed", err)
 		return
 	}
-	if room.HostParticipantID != sess.p.ID {
-		admin, err := s.roomAdmin(ctx, &sess)
-		switch {
-		case err != nil:
-			s.serverError(w, "room_admin_lookup_failed", err)
-			return
-		case !admin:
-			httpError(w, http.StatusForbidden, "only the AI host, or a room admin they let, can allow a website")
-			return
-		case !room.EgressAdmins:
-			httpError(w, http.StatusForbidden, "the AI host has not let room admins allow websites")
-			return
-		case req.Scope != store.EgressRoom:
-			httpError(w, http.StatusForbidden, "only the AI host can allow a website for every room")
-			return
-		}
+	if !s.mayAllow(w, r, &sess, room, req.Scope) {
+		return
 	}
 	if _, err := sandbox.NormalizeAllowlist([]string{m.Blocked.Domain}); err != nil {
 		httpError(w, http.StatusBadRequest, err.Error())
@@ -125,6 +111,56 @@ func (s *Server) allowBlocked(w http.ResponseWriter, r *http.Request, sess sessi
 	s.log.Info("egress_allow_requested", zap.String("room", room.ID), zap.Int64("message", id), zap.String("scope", req.Scope))
 	s.bus.Notify(room.ID)
 	writeJSON(w, http.StatusAccepted, viewMessage(*m))
+}
+
+// mayAllow answers 403 and returns false unless sess may decide a blocked website of room for
+// scope: the AI host, or for the room only a room admin while the host lets them (014-AC13).
+func (s *Server) mayAllow(w http.ResponseWriter, r *http.Request, sess *session, room *store.Room, scope string) bool {
+	if room.HostParticipantID == sess.p.ID {
+		return true
+	}
+	admin, err := s.roomAdmin(r.Context(), sess)
+	switch {
+	case err != nil:
+		s.serverError(w, "room_admin_lookup_failed", err)
+	case !admin:
+		httpError(w, http.StatusForbidden, "only the AI host, or a room admin they let, can allow a website")
+	case !room.EgressAdmins:
+		httpError(w, http.StatusForbidden, "the AI host has not let room admins allow websites")
+	case scope != store.EgressRoom:
+		httpError(w, http.StatusForbidden, "only the AI host can allow a website for every room")
+	default:
+		return true
+	}
+	return false
+}
+
+// dismissBlocked puts a blocked website aside, off the banner, for whoever may allow it for the
+// room; its next refusal raises it again.
+func (s *Server) dismissBlocked(w http.ResponseWriter, r *http.Request, sess session) {
+	id, ok := messageID(w, r)
+	if !ok {
+		return
+	}
+	room, err := s.bus.Store.Room(r.Context(), sess.p.RoomID)
+	if err != nil {
+		s.serverError(w, "dismiss_blocked_failed", err)
+		return
+	}
+	if !s.mayAllow(w, r, &sess, room, store.EgressRoom) {
+		return
+	}
+	m, err := s.bus.Store.DismissBlocked(r.Context(), room.ID, id, sess.p)
+	if errors.Is(err, store.ErrDecided) {
+		httpError(w, http.StatusConflict, "this website was decided already, or waits for the AI host's app")
+		return
+	}
+	if err != nil {
+		s.serverError(w, "dismiss_blocked_failed", err)
+		return
+	}
+	s.bus.Notify(room.ID)
+	writeJSON(w, http.StatusOK, viewMessage(*m))
 }
 
 // setEgressDelegation lets the room's admins allow websites for the room, or stops it; the AI host

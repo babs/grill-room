@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -136,6 +137,23 @@ func TestAllowBlockedRights(t *testing.T) {
 		if code, b := e.allow(t, r.room, e.blocked(t, r.room, domain), hank, store.EgressRoom); code != http.StatusBadRequest || !strings.Contains(b, want) {
 			t.Errorf("%s: %d %s", domain, code, b)
 		}
+	}
+	// The banner lists what waits; the host, not a member, dismisses one; a refusal raises it again.
+	banner := e.blocked(t, r.room, "banner.example")
+	if st := e.agent(t, r.room, r.mia.Token); !slices.ContainsFunc(st.BlockedRequests, func(b store.BlockedRequest) bool { return b.MessageID == banner }) {
+		t.Fatalf("banner %+v", st.BlockedRequests)
+	}
+	if code, _ := e.do(t, "POST", fmt.Sprintf("/api/rooms/%s/blocked/%d/dismiss", r.room, banner), r.mia.Token, nil); code != http.StatusForbidden {
+		t.Fatalf("member dismisses: %d", code)
+	}
+	if code, b := e.do(t, "POST", fmt.Sprintf("/api/rooms/%s/blocked/%d/dismiss", r.room, banner), hank, nil); code != http.StatusOK {
+		t.Fatalf("host dismisses: %d %s", code, b)
+	}
+	if code, _ := e.do(t, "POST", fmt.Sprintf("/api/rooms/%s/blocked/%d/dismiss", r.room, banner), hank, nil); code != http.StatusConflict {
+		t.Fatalf("dismissed twice: %d", code)
+	}
+	if st := e.agent(t, r.room, hank); slices.ContainsFunc(st.BlockedRequests, func(b store.BlockedRequest) bool { return b.MessageID == banner }) {
+		t.Fatal("a dismissed website stayed on the banner")
 	}
 	// A decided line, a line that is no blocked one.
 	id := e.blocked(t, r.room, "twice.example")

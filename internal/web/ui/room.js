@@ -110,6 +110,7 @@ async function loadRoom() {
   $('doc-delete').hidden = !meAdmin;
   renameSenders();
   renderBlocked();
+  renderApprovals();
   $('voice').hidden = !data.voice;
   showManage();
   // An appointment or a step-down changes who turns plugins on (Capabilities).
@@ -236,7 +237,7 @@ const blockedLines = new Map();
 // while the host's app cannot take it (014-AC9).
 function blockedActions(m) {
   const b = m.blocked;
-  if (b.decision) return null;
+  if (b.decision || b.dismissed_by) return null;
   const box = document.createElement('span');
   box.className = 'blocked-actions';
   if (b.pending) {
@@ -274,9 +275,9 @@ function blockedActions(m) {
 // whoAllows names who may allow a blocked website, for a viewer who may not (014-AC9).
 function whoAllows() {
   const host = participants.find((p) => p.id === agent.host_participant_id);
-  if (!host) return 'No one runs the AI for this room now: whoever does can allow it.';
-  if (host.self) return 'You run the AI as ' + host.name + ': open the room as ' + host.name + ' to allow it.';
-  return 'Only the AI host, ' + host.name + (agent.egress_admins_allow ? ', or a room admin' : ',') + ' can allow it.';
+  if (!host) return 'Pending: whoever runs the AI for this room can allow it.';
+  if (host.self) return 'Pending: you run the AI as ' + host.name + ': open the room as ' + host.name + ' to allow it.';
+  return 'Pending: only the AI host, ' + host.name + (agent.egress_admins_allow ? ', or a room admin' : ',') + ' can allow it.';
 }
 
 // renderBlocked redraws the blocked lines' buttons after the agent state changed.
@@ -2091,8 +2092,45 @@ function renderApprovals() {
     }
     items.push(li);
   }
+  items.push(...blockedItems());
   $('approvals').hidden = items.length === 0;
   $('approval-list').replaceChildren(...items);
+}
+
+// blockedItems are the banner's websites a turn was refused, one per domain, for whoever may
+// allow them: the AI host for the room or everywhere, a room admin the host lets for the room. It
+// holds them until decided or dismissed, across reloads and host changes (014-AC9).
+function blockedItems() {
+  const host = isHost();
+  if (!host && !(meAdmin && agent.egress_admins_allow)) return [];
+  const why = agent.egress_host || '';
+  return (agent.blocked_requests || []).map((b) => {
+    const li = document.createElement('li');
+    li.className = 'blocked-request';
+    li.textContent = b.persona + ' tried to reach ' + b.domain + (b.count > 1 ? ' (' + b.count + ' times)' : '') + '.';
+    if (b.pending) {
+      li.append(' Allowing…');
+      return li;
+    }
+    const acts = [['Allow for this room', () => sendJSON('POST', api + '/blocked/' + b.message_id + '/allow', { scope: 'room' })]];
+    if (host) acts.push(['Allow everywhere', () => sendJSON('POST', api + '/blocked/' + b.message_id + '/allow', { scope: 'server' })]);
+    acts.push(['Dismiss', () => sendJSON('POST', api + '/blocked/' + b.message_id + '/dismiss')]);
+    for (const [label, run] of acts) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = label;
+      btn.setAttribute('aria-label', label + ': ' + b.domain);
+      btn.disabled = !!why && label !== 'Dismiss';
+      btn.addEventListener('click', () => {
+        btn.disabled = true;
+        run().catch((err) => { btn.disabled = false; agentError(err.message); });
+      });
+      li.append(' ', btn);
+    }
+    const note = why || (b.error ? 'Not allowed: ' + b.error : '');
+    if (note) li.append(' ', Object.assign(document.createElement('span'), { className: 'hint', textContent: note }));
+    return li;
+  });
 }
 
 // Whoever started a turn, the host or a room admin stops it while it runs (005-AC5).
