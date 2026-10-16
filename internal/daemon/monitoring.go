@@ -130,7 +130,7 @@ func (s *Supervisor) SetLimits(id string, l sandbox.Limits) error {
 	defer s.mu.Unlock()
 	w := s.workers[id]
 	if w == nil {
-		return errors.New("no such instance")
+		return errors.New("no such server")
 	}
 	w.inst.Limits = &l
 	s.save(w)
@@ -172,7 +172,7 @@ func alerts(accounts []AccountView, insts []InstanceView, c ConcurrencyView, ctx
 	served := map[string]bool{}
 	for _, in := range insts {
 		if in.Unsigned {
-			out = append(out, Alert{"unsigned", fmt.Sprintf("The worker for %s runs an unsigned binary (%s).", in.URL, in.Version)})
+			out = append(out, Alert{"unsigned", fmt.Sprintf("The app for %s runs an unsigned binary (%s).", in.URL, in.Version)})
 		}
 		for _, r := range in.Rooms {
 			served[in.ID+" "+r] = true
@@ -189,7 +189,7 @@ func alerts(accounts []AccountView, insts []InstanceView, c ConcurrencyView, ctx
 	}
 	for _, q := range c.Queued {
 		if wait := time.Duration(q.SinceMS) * time.Millisecond; wait > queueAlertAfter {
-			out = append(out, Alert{"queue", fmt.Sprintf("A turn of %s has waited %d minutes for a slot: raise the turns at once, or check the running turns.",
+			out = append(out, Alert{"queue", fmt.Sprintf("An answer in %s has waited %d minutes for a slot: raise the answers at once, or check the running ones.",
 				q.Room, int(wait.Minutes()))})
 		}
 	}

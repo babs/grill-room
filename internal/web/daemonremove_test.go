@@ -16,6 +16,10 @@ func TestRemoveDaemon(t *testing.T) {
 	r := newTurnRoom(t, e)
 	alice := r.alice
 	tn := e.press(t, r, alice, alice.p.Token, false)
+	// A press queued behind the running turn waits for the next host: the removed daemon never gets it.
+	if code, b := e.do(t, "POST", "/api/rooms/"+r.room+"/turns", alice.p.Token, map[string]bool{}); code != http.StatusAccepted {
+		t.Fatalf("queued press: %d %s", code, b)
+	}
 	bob := e.daemonFor(t, r.room, "Bob")
 
 	if code, b := e.do(t, "DELETE", "/api/rooms/"+r.room+"/daemon", "nope", nil); code != http.StatusUnauthorized {
@@ -51,9 +55,19 @@ func TestRemoveDaemon(t *testing.T) {
 		t.Fatalf("room after remove: %+v", gone)
 	}
 
+	if q, err := e.st.Queue(t.Context(), r.room); err != nil || len(q) != 1 {
+		t.Fatalf("queue after remove: %+v %v", q, err)
+	}
+	if running, err := e.st.RunningTurns(t.Context(), r.room); err != nil || len(running) != 0 {
+		t.Fatalf("running after remove: %+v %v", running, err)
+	}
+
 	e.connect(t, r.room, bob, true)
 	if st := e.waitAgent(t, r.room, alice.p.Token, hostIs(bob.p.Participant.ID, true)); st.Reason != "" {
 		t.Fatalf("bob hosting: %+v", st)
+	}
+	if ev := nextEvent(t, bob.events, "turn"); ev.event != "turn" {
+		t.Fatalf("bob got %+v, want the queued turn", ev)
 	}
 }
 

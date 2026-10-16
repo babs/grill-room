@@ -34,8 +34,8 @@ type Autostart struct {
 const DefaultMemoryMax = "4G"
 
 // memoryMax is what systemd takes for MemoryMax: bytes with an optional K, M, G or T, a
-// percentage, or infinity.
-var memoryMax = regexp.MustCompile(`^(infinity|[0-9]+[KMGT]?|[0-9]{1,3}%)$`)
+// percentage up to 100, or infinity. Not 0: the unit would be killed as it starts.
+var memoryMax = regexp.MustCompile(`^(infinity|[1-9][0-9]*[KMGT]?|([1-9][0-9]?|100)%)$`)
 
 const (
 	autostartName = "grill-room"

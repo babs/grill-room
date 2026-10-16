@@ -96,7 +96,7 @@ func TestAutostartMemoryMax(t *testing.T) {
 			t.Errorf("MemoryMax %q gave:\n%s", tc.max, unit)
 		}
 	}
-	for _, bad := range []string{"4 GB", "4G\nExecStartPre=/bin/true", "-1", "lots"} {
+	for _, bad := range []string{"4 GB", "4G\nExecStartPre=/bin/true", "-1", "lots", "0", "0G", "999%"} {
 		a.MemoryMax = bad
 		if err := a.Enable(); err == nil {
 			t.Errorf("MemoryMax %q accepted", bad)

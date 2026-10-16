@@ -660,6 +660,11 @@ func (r *roomRun) connect(ctx context.Context, tok string) error {
 	d := r.d
 	backoff := d.o.MinBackoff
 	for {
+		// A Connect pressed while connected must not cut the next backoff short.
+		select {
+		case <-r.kick:
+		default:
+		}
 		r.update(func(s *RoomStatus) { s.Connection = "connecting" })
 		start := time.Now()
 		err := r.stream(ctx, tok)

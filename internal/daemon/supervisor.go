@@ -577,7 +577,7 @@ func (w *worker) request(ctx context.Context, m Msg) (Msg, error) {
 	}
 	if err := conn.Send(m); err != nil {
 		drop()
-		return Msg{}, fmt.Errorf("the worker for %s: %w", w.inst.URL, err)
+		return Msg{}, fmt.Errorf("the app for %s: %w", w.inst.URL, err)
 	}
 	select {
 	case r := <-ch:
@@ -587,7 +587,7 @@ func (w *worker) request(ctx context.Context, m Msg) (Msg, error) {
 		return r, nil
 	case <-ctx.Done():
 		drop()
-		return Msg{}, fmt.Errorf("the worker for %s did not answer: %w", w.inst.URL, ctx.Err())
+		return Msg{}, fmt.Errorf("the app for %s did not answer: %w", w.inst.URL, ctx.Err())
 	}
 }
 
@@ -602,7 +602,7 @@ func (w *worker) describe() string {
 	if w.err != "" {
 		return w.err
 	}
-	return "the worker for " + w.inst.URL + " is " + w.state
+	return "the app for " + w.inst.URL + " is " + w.state
 }
 
 // currentWorker is the worker the page shows, nil before any room.
@@ -635,7 +635,7 @@ func (s *Supervisor) InstanceOps(id string) (instanceOps, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.workers[id] == nil {
-		return nil, errors.New("no such instance")
+		return nil, errors.New("no such server")
 	}
 	return workerOps{s, id}, nil
 }
@@ -702,7 +702,7 @@ func (o workerOps) pluginRequest(ctx context.Context, m Msg) error {
 	agreed := w.proto
 	o.s.mu.Unlock()
 	if agreed < protoPlugins {
-		return errors.New("this server's worker is too old for room plugins: update the AI host app")
+		return errors.New("this server's app is too old for room plugins: update the AI host app")
 	}
 	_, err := o.request(ctx, m)
 	return err

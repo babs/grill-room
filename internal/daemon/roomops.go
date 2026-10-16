@@ -39,20 +39,23 @@ func (d *Daemon) RemoveRoom(ctx context.Context, link string, force bool) error 
 	d.mu.Unlock()
 	if r != nil {
 		r.cancel()
-		// The loop removes the room's sandboxes as it ends.
-		select {
-		case <-r.done:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
 	}
-	errs := []error{d.o.Tokens.Set(room, ""), d.o.PluginOptions.Keep(key, nil)}
-	if d.cache != nil {
-		errs = append(errs, d.cache.forget(room))
-	}
+	err = errors.Join(d.o.Tokens.Set(room, ""), d.o.PluginOptions.Keep(key, nil))
 	d.update(func(*Status) {})
 	d.o.Log.Info("room_removed", zap.String("room", key), zap.Bool("revoked_here_only", force))
-	return errors.Join(errs...)
+	// The reply goes now, within the supervisor's request timeout: removing the sandboxes of a
+	// running answer takes up to 30 s each. The loop removes them as it ends, then the cache goes.
+	d.loops.Go(func() {
+		if r != nil {
+			<-r.done
+		}
+		if d.cache != nil {
+			if err := d.cache.forget(room); err != nil {
+				d.o.Log.Error("workspace_cache_delete_failed", zap.Error(err))
+			}
+		}
+	})
+	return err
 }
 
 // revoke asks the room server to delete this daemon. A token the room no longer knows (401) is as

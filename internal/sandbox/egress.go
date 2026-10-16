@@ -154,7 +154,7 @@ func parseEgress(log []byte, n int) Egress {
 		if len(f) != 5 || f[0] != logTag {
 			continue
 		}
-		host := f[4]
+		host := strings.ToLower(f[4])
 		if f[3] == "CONNECT" {
 			host = strings.TrimSuffix(host, ":443")
 		} else if u, err := url.Parse(host); err == nil && u.Host != "" {

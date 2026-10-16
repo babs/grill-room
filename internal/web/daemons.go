@@ -295,7 +295,12 @@ func (s *Server) daemonStatus(w http.ResponseWriter, r *http.Request, d *store.D
 // (003b-AC9).
 func (s *Server) removeDaemon(w http.ResponseWriter, r *http.Request, d *store.Daemon, _ string) {
 	ctx := r.Context()
-	// First: the delete sets the turns' daemon_id to NULL, and failDaemonTurn finds them by it.
+	// Out of the room's daemons before anything else: the drain that failing the turn runs must not
+	// hand the next queued turn to this daemon, whose row goes next.
+	s.presence.mu.Lock()
+	delete(s.presence.m, d.ID)
+	s.presence.mu.Unlock()
+	// Then the turns: the delete sets their daemon_id to NULL, and failDaemonTurn finds them by it.
 	s.failDaemonTurn(ctx, d, "the AI host removed this room from their computer")
 	if err := s.bus.Store.RemoveDaemon(ctx, d.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
 		s.serverError(w, "remove_daemon_failed", err)

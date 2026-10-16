@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"slices"
 	"time"
 
@@ -171,14 +172,14 @@ func (s *Supervisor) SetAccount(id, room, account string) error {
 	w := s.workers[id]
 	if w == nil {
 		s.mu.Unlock()
-		return errors.New("no such instance")
+		return errors.New("no such server")
 	}
 	switch {
 	case room == "":
 		w.inst.Account = account
 	case !slices.Contains(w.inst.Rooms, room):
 		s.mu.Unlock()
-		return errors.New("no such room on this instance")
+		return errors.New("no such room on this server")
 	case account == "":
 		delete(w.inst.RoomAccounts, room)
 	default:
@@ -205,7 +206,7 @@ func (s *Supervisor) SetCutOff(id string, on bool) error {
 	w := s.workers[id]
 	if w == nil {
 		s.mu.Unlock()
-		return errors.New("no such instance")
+		return errors.New("no such server")
 	}
 	w.inst.CutOff = on
 	s.save(w)
@@ -269,6 +270,11 @@ func (s *Supervisor) RemoveRoom(ctx context.Context, room string, force bool) er
 		}
 	case !force:
 		return errors.New("the app for this server is not running, so the room server still lists this computer")
+	default:
+		// No worker holds the files: forget the room's token, option values and cache here.
+		if err := s.forgetRoom(o.id, room); err != nil {
+			return err
+		}
 	}
 	s.mu.Lock()
 	w.inst.dropRoom(room)
@@ -277,4 +283,19 @@ func (s *Supervisor) RemoveRoom(ctx context.Context, room string, force bool) er
 	s.o.Log.Info("room_dropped", zap.String("instance", o.id))
 	s.pushAccess(w)
 	return nil
+}
+
+// forgetRoom deletes what a worker keeps of room on disk, for an instance whose worker does not
+// run: as RemoveRoom does in the worker, without the room server.
+func (s *Supervisor) forgetRoom(id, link string) error {
+	room, err := ParseRoomURL(link)
+	if err != nil {
+		return err
+	}
+	opts, err := NewPluginOptions(s.o.Paths.InstanceState(id))
+	if err != nil {
+		return err
+	}
+	cache := &wsCache{dir: filepath.Join(s.o.Paths.InstanceCache(id), "workspace-cache")}
+	return errors.Join(NewTokens(s.o.Paths.InstanceState(id)).Set(room, ""), opts.Keep(room.String(), nil), cache.forget(room))
 }

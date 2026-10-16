@@ -104,7 +104,7 @@ func TestParseEgress(t *testing.T) {
 	log := strings.Join([]string{
 		"2026/10/11 03:51:29| Accepting HTTP Socket connections",
 		"grill-egress 1791690691 TCP_TUNNEL/200 CONNECT pypi.org:443",
-		"grill-egress 1791690691 TCP_TUNNEL/200 CONNECT pypi.org:443",
+		"grill-egress 1791690691 TCP_TUNNEL/200 CONNECT PyPI.org:443",
 		"grill-egress 1791690691 TCP_TUNNEL_ABORTED/200 CONNECT files.pythonhosted.org:443",
 		"grill-egress 1791690691 NONE_NONE/000 CONNECT never.example:443",
 		"grill-egress 1791690692 TCP_DENIED/403 CONNECT api.anthropic.com:443",
