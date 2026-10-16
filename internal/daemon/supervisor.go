@@ -153,6 +153,8 @@ type InstanceView struct {
 	Limits sandbox.Limits `json:"limits"`
 	// Status is the running worker's own view: readiness, host cap, allowlist (003-AC26).
 	Status *Status `json:"status,omitempty"`
+	// Paused are the rooms the host paused (003b-AC5).
+	Paused []string `json:"paused,omitempty"`
 }
 
 // errRefused is a worker the handshake turned down; restarting it would not help.
@@ -409,7 +411,7 @@ func (w *worker) serve(conn *Conn, cmd *exec.Cmd, log *zap.Logger) error {
 	if agreed >= 2 && s.o.Accounts != nil {
 		s.mu.Lock()
 		in := w.inst
-		in.Rooms, in.RoomAccounts = slices.Clone(in.Rooms), maps.Clone(in.RoomAccounts)
+		in.Rooms, in.RoomAccounts, in.Paused = slices.Clone(in.Rooms), maps.Clone(in.RoomAccounts), slices.Clone(in.Paused)
 		s.mu.Unlock()
 		a := s.access(in)
 		access = &a
@@ -575,7 +577,7 @@ func (w *worker) request(ctx context.Context, m Msg) (Msg, error) {
 	}
 	if err := conn.Send(m); err != nil {
 		drop()
-		return Msg{}, fmt.Errorf("the worker for %s: %w", w.inst.URL, err)
+		return Msg{}, fmt.Errorf("the app for %s: %w", w.inst.URL, err)
 	}
 	select {
 	case r := <-ch:
@@ -585,7 +587,7 @@ func (w *worker) request(ctx context.Context, m Msg) (Msg, error) {
 		return r, nil
 	case <-ctx.Done():
 		drop()
-		return Msg{}, fmt.Errorf("the worker for %s did not answer: %w", w.inst.URL, ctx.Err())
+		return Msg{}, fmt.Errorf("the app for %s did not answer: %w", w.inst.URL, ctx.Err())
 	}
 }
 
@@ -600,7 +602,7 @@ func (w *worker) describe() string {
 	if w.err != "" {
 		return w.err
 	}
-	return "the worker for " + w.inst.URL + " is " + w.state
+	return "the app for " + w.inst.URL + " is " + w.state
 }
 
 // currentWorker is the worker the page shows, nil before any room.
@@ -615,7 +617,7 @@ func (s *Supervisor) currentWorker() *worker {
 type instanceOps interface {
 	SetSettings(s Settings) error
 	SetAllowlist(ctx context.Context, list []string) error
-	Denied(ctx context.Context, n int) ([]sandbox.Denied, error)
+	Egress(ctx context.Context, n int) (sandbox.Egress, error)
 	Recheck(ctx context.Context)
 	// SetPluginOptions and PluginFetch act on a room's plugins (009-AC19, 009-AC22).
 	SetPluginOptions(ctx context.Context, room string, plugin int64, values map[string]any, clear []string) error
@@ -633,7 +635,7 @@ func (s *Supervisor) InstanceOps(id string) (instanceOps, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.workers[id] == nil {
-		return nil, errors.New("no such instance")
+		return nil, errors.New("no such server")
 	}
 	return workerOps{s, id}, nil
 }
@@ -671,17 +673,22 @@ func (o workerOps) SetAllowlist(ctx context.Context, list []string) error {
 	return err
 }
 
-// Denied lists the egress requests the instance's sandboxes were refused.
-func (o workerOps) Denied(ctx context.Context, n int) ([]sandbox.Denied, error) {
+// Egress lists the egress requests the instance's sandboxes were refused, and those let through by
+// host; a worker from before 003b sends no hits.
+func (o workerOps) Egress(ctx context.Context, n int) (sandbox.Egress, error) {
+	out := sandbox.Egress{Denied: []sandbox.Denied{}, Hits: map[string]int{}}
 	// No worker, or one still starting, has refused nothing yet.
 	if w := o.worker(); w == nil || w.isStarting() {
-		return []sandbox.Denied{}, nil
+		return out, nil
 	}
 	r, err := o.request(ctx, Msg{Type: "denied", N: n})
-	if r.Denied == nil {
-		r.Denied = []sandbox.Denied{}
+	if r.Denied != nil {
+		out.Denied = r.Denied
 	}
-	return r.Denied, err
+	if r.Hits != nil {
+		out.Hits = r.Hits
+	}
+	return out, err
 }
 
 // pluginRequest sends a plugin request to a worker that takes it: one from before spec 009 Phase 3
@@ -695,7 +702,7 @@ func (o workerOps) pluginRequest(ctx context.Context, m Msg) error {
 	agreed := w.proto
 	o.s.mu.Unlock()
 	if agreed < protoPlugins {
-		return errors.New("this server's worker is too old for room plugins: update the AI host app")
+		return errors.New("this server's app is too old for room plugins: update the AI host app")
 	}
 	_, err := o.request(ctx, m)
 	return err
@@ -795,7 +802,7 @@ func (s *Supervisor) Instances() ([]InstanceView, string) {
 		v := InstanceView{ID: w.inst.ID, URL: w.inst.URL, Rooms: slices.Clone(w.inst.Rooms), State: w.state, Error: w.err, PID: w.pid,
 			Proto: w.proto, Restarts: w.restarts, Metrics: w.metrics, LastTurn: w.lastTurn, Version: w.version, Trust: w.trust,
 			AcceptUnsigned: w.inst.Relax, Account: w.inst.accountFor(""), RoomAccounts: maps.Clone(w.inst.RoomAccounts), CutOff: w.inst.CutOff,
-			Unsigned: w.unsigned && w.state == "running", Limits: s.o.Worker.Limits}
+			Unsigned: w.unsigned && w.state == "running", Limits: s.o.Worker.Limits, Paused: slices.Clone(w.inst.Paused)}
 		if w.inst.Limits != nil {
 			v.Limits = *w.inst.Limits
 		}
@@ -821,9 +828,9 @@ func (s *Supervisor) SetAllowlist(ctx context.Context, list []string) error {
 	return workerOps{s: s}.SetAllowlist(ctx, list)
 }
 
-// Denied lists the egress requests the current room's sandbox was refused.
-func (s *Supervisor) Denied(ctx context.Context, n int) ([]sandbox.Denied, error) {
-	return workerOps{s: s}.Denied(ctx, n)
+// Egress lists the egress requests of the current instance's sandboxes.
+func (s *Supervisor) Egress(ctx context.Context, n int) (sandbox.Egress, error) {
+	return workerOps{s: s}.Egress(ctx, n)
 }
 
 // Recheck re-runs the current worker's readiness checks.

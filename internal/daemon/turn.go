@@ -27,8 +27,8 @@ type Agent interface {
 	RunTurn(ctx context.Context, in sandbox.TurnInput) (*sandbox.TurnOutput, error)
 	// SetAllowlist sets the egress allowlist; a running sandbox takes it at once.
 	SetAllowlist(ctx context.Context, list []string) error
-	// Denied returns the last n refused egress requests, newest first.
-	Denied(ctx context.Context, n int) ([]sandbox.Denied, error)
+	// Egress returns the last n refused egress requests, newest first, and the requests let through by host.
+	Egress(ctx context.Context, n int) (sandbox.Egress, error)
 	Close(ctx context.Context)
 }
 

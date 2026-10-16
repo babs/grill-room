@@ -197,7 +197,7 @@ func (s *Supervisor) checkUpdate(ctx context.Context) {
 	var err error
 	switch {
 	case set.UpdateChannel == "instance" && in.ID == "":
-		err = errors.New("the followed instance is gone: pick one again")
+		err = errors.New("the followed server is gone: pick one again")
 	case set.UpdateChannel == "instance":
 		var info serverInfo
 		if info, err = fetchServerInfo(ctx, s.o.Bins.HTTP, in.URL); err == nil {
@@ -382,7 +382,7 @@ func (s *Supervisor) SetUpdateChannel(channel, instance string) error {
 			instance = s.current
 		}
 		if s.workers[instance] == nil {
-			return errors.New("no such instance: pair with a room on it first")
+			return errors.New("no such server: pair with a room on it first")
 		}
 		set.UpdateInstance = instance
 	default:
@@ -438,12 +438,12 @@ func (s *Supervisor) SetRelax(id string, on bool, host string) error {
 	defer s.mu.Unlock()
 	w := s.workers[id]
 	if w == nil {
-		return errors.New("no such instance")
+		return errors.New("no such server")
 	}
 	if on {
 		u, err := url.Parse(w.inst.URL)
 		if err != nil || host != u.Host {
-			return errors.New("type the instance's host exactly, as in its URL, to accept its unsigned binaries")
+			return errors.New("type the server's host exactly, as in its URL, to accept its unsigned binaries")
 		}
 	}
 	if w.inst.Relax == on {

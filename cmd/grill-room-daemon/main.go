@@ -461,7 +461,11 @@ func autostart(exe string) *daemon.Autostart {
 			env = append(env, k+"="+v)
 		}
 	}
-	return &daemon.Autostart{GOOS: runtime.GOOS, Home: home, ConfigHome: configHome, Exe: exe, Env: env, Run: runCommand}
+	mem := os.Getenv("GRILL_ROOM_DAEMON_MEMORY_MAX")
+	if mem == "" {
+		mem = daemon.DefaultMemoryMax
+	}
+	return &daemon.Autostart{GOOS: runtime.GOOS, Home: home, ConfigHome: configHome, Exe: exe, Env: env, Run: runCommand, MemoryMax: mem}
 }
 
 func runCommand(name string, args ...string) error {

@@ -38,7 +38,7 @@ test('egress allowlist and denied requests on the daemon page', async ({ browser
     }
     await add('Example.COM');
     await expect(status).toHaveText('Saved.');
-    await expect(list.locator('li', { hasText: 'example.com' })).toHaveCount(1);
+    await expect(list.locator('tbody tr', { hasText: 'example.com' })).toHaveCount(1);
     await expect(admin.getByLabel('Domain')).toHaveValue('');
     await admin.getByRole('button', { name: 'Remove github.com' }).click();
     await expect(list.locator('code', { hasText: /^github\.com$/ })).toHaveCount(0);
@@ -59,6 +59,10 @@ test('egress allowlist and denied requests on the daemon page', async ({ browser
     await expect(rows.nth(1)).toContainText('github.com');
     await expect(admin.locator('#denied-empty')).toBeHidden();
     await expect(rows.first().locator('td').first()).toContainText(String(new Date().getFullYear()));
+
+    // 003b-AC16: a request the proxy lets through counts as a hit on its domain's row.
+    expect(curlInSandbox(daemon.sandbox, 'pypi.org')).toBe('200');
+    await expect(list.locator('tbody tr', { hasText: /^pypi\.org/ }).locator('td.num')).not.toHaveText(/^[0–]$/, { timeout: 15_000 });
   } finally {
     daemon.cleanup();
     await daemon.exited;

@@ -132,7 +132,7 @@ test('touch targets at phone width', async ({ browser, request, baseURL }) => {
     const page = await (await browser.newContext({ viewport: phone })).newPage();
     await page.goto(await daemon.link);
     await expect(page.locator('#pairing')).toHaveText('Waiting for your approval in the room.', { timeout: 30_000 });
-    for (const tab of ['rooms', 'instances', 'accounts', 'settings', 'monitoring', 'update']) {
+    for (const tab of ['rooms', 'accounts', 'settings', 'monitoring', 'update']) {
       await page.locator('#tab-' + tab).click();
       expect(await smallTargets(page), 'daemon ' + tab).toEqual([]);
     }
@@ -161,7 +161,7 @@ test('daemon tab bar keeps its tab styling', async ({ browser, request, baseURL 
           border: parseFloat(s.borderBottomWidth) >= 2 && s.borderBottomStyle !== 'none' ? s.borderBottomColor : 'none' };
       }));
       const at = `${viewport.width}px ${JSON.stringify(tabs)}`;
-      expect(tabs.length, at).toBe(6);
+      expect(tabs.length, at).toBe(5);
       expect(tabs.filter((t) => t.height < 43.5).map((t) => t.name), at).toEqual([]);
       expect(tabs.filter((t) => t.underline).map((t) => t.name), at).toEqual([]);
       const cramped = tabs.slice(1).filter((t, i) => {

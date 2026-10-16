@@ -62,13 +62,16 @@ test('daemon page cuts a worker off from Claude and lets it back', async ({ brow
     const led = alice.locator('button.persona[data-name="Grill"] .led');
     await expect(led).toHaveAttribute('aria-label', 'Grill ready', { timeout: 30_000 });
     await expect(alice.locator('#messages')).toContainText('Alice holds the agent(s).');
-    await expect(admin.getByLabel('Claude account of ' + baseURL, { exact: true })).toHaveValue('default');
-    await admin.locator('#tab-instances').click();
-    await admin.getByRole('button', { name: 'Cut it off from Claude' }).click();
+    await expect(admin.locator('#server-account')).toHaveValue('default');
+    // 003b-AC1: the cut-off sits in the server's ⋯ menu on Rooms.
+    const host = new URL(baseURL).host;
+    await admin.getByRole('button', { name: 'More actions on ' + host }).click();
+    await admin.getByRole('button', { name: 'Cut it off from the AI' }).click();
     await confirmSheet(admin, 'Cut it off');
-    await expect(admin.locator('#instances')).toContainText('cut off: its turns end and none starts');
+    await expect(admin.locator('#instances')).toContainText('cut off: its answers end and none starts');
     await expect(led).toHaveAttribute('aria-label', 'Grill offline');
-    await admin.getByRole('button', { name: 'Let it use Claude again' }).click();
+    await admin.getByRole('button', { name: 'More actions on ' + host }).click();
+    await admin.getByRole('button', { name: 'Let it use the AI again' }).click();
     await expect(led).toHaveAttribute('aria-label', 'Grill ready');
     await expect(alice.locator('body')).not.toContainText(hostname());
   } finally {
@@ -95,21 +98,28 @@ test('daemon page shows its signature and guards the unsigned toggle', async ({ 
     await admin.goto(await daemon.link);
     await expect(admin.locator('#self-sig')).toHaveText('dev build');
     await expect.poll(() => failed).toBe(true);
-    // The worker binary shows once the worker runs, which a loaded machine takes a while to reach.
-    await expect(admin.locator('#instances')).toContainText("Worker binary: the supervisor's own binary", { timeout: 30_000 });
+    // The app's binary shows once the server's app runs, which a loaded machine takes a while to
+    // reach; it sits in the server's details (003b-AC1).
+    const menu = admin.getByRole('button', { name: 'More actions on ' + new URL(baseURL).host });
+    await menu.click();
+    await admin.getByRole('button', { name: 'App details' }).click();
+    await expect(admin.locator('#instances')).toContainText("App binary: this app's own binary.", { timeout: 30_000 });
     await expect(admin.locator('#banner')).toBeHidden();
     await expect(admin.locator('#relax-banner')).toBeHidden();
     await expect(admin.locator('#checked')).toContainText('127.0.0.1:9');
 
-    await admin.locator('#tab-instances').click();
-    const card = admin.locator('#instances li.instance', { hasText: baseURL });
-    const accept = card.getByRole('button', { name: 'Accept unsigned binaries' });
+    // 003b-AC19: behind the server's menu, a secondary button.
+    await menu.click();
+    await admin.getByRole('button', { name: 'Accept unsigned binaries…' }).click();
+    const card = admin.locator('#instances section.server');
+    const accept = card.getByRole('button', { name: 'Accept unsigned binaries', exact: true });
+    await expect(accept).toHaveClass(/btn-danger-outline/);
     const host = card.getByLabel('To accept its unsigned binaries, type its host');
     await host.fill('127.0.0.1');
     await accept.click();
     // 005-AC39: it asks first.
     await confirmSheet(admin, 'Accept');
-    await expect(card.getByRole('status')).toContainText("Type the instance's host exactly");
+    await expect(card.locator('.relax').getByRole('status')).toContainText("Type the server's host exactly");
     await expect(admin.locator('#relax-banner')).toBeHidden();
     await host.fill(new URL(baseURL).host);
     await accept.click();
@@ -117,6 +127,7 @@ test('daemon page shows its signature and guards the unsigned toggle', async ({ 
     await expect(admin.locator('#relax-banner')).toBeVisible();
     await expect(admin.locator('#relax-banner')).toContainText(baseURL);
     await expect(admin.locator('#instances .badge.danger')).toHaveText('accepts unsigned binaries');
+    await menu.click();
     await admin.getByRole('button', { name: 'Stop accepting unsigned binaries' }).click();
     await expect(admin.locator('#relax-banner')).toBeHidden();
     await expect(admin.locator('#instances .badge.danger')).toHaveCount(0);

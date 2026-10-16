@@ -6,7 +6,7 @@ The instance id is the first 12 hex digits of the sha256 of the server's scheme,
 
 ## Versions
 
-Both sides carry a protocol version, `Proto` in `internal/daemon/proto.go`, currently 4. Version 2 added `access`, version 3 the slots under the global cap, version 4 the room plugins' `plugin_options` and `plugin_fetch`. A worker that settles on version 2 asks for no slot: its turns run outside the cap. The supervisor sends no plugin request to a worker below version 4, and the page says the worker is too old. Peers at most one version apart (`ProtoSkew`) talk at the lower of the two. Further apart, the side that notices sends `refused` and the worker exits. The supervisor marks the instance `refused` with the reason and does not restart it.
+Both sides carry a protocol version, `Proto` in `internal/daemon/proto.go`, currently 5. Version 2 added `access`, version 3 the slots under the global cap, version 4 the room plugins' `plugin_options` and `plugin_fetch`, version 5 `remove_room`. A worker that settles on version 2 asks for no slot: its turns run outside the cap. The supervisor sends no plugin request to a worker below version 4, nor `remove_room` below 5, and the page says the worker is too old. Peers at most one version apart (`ProtoSkew`) talk at the lower of the two. Further apart, the side that notices sends `refused` and the worker exits. The supervisor marks the instance `refused` with the reason and does not restart it.
 
 A version bump must stay additive within that window: new fields and new message types only. Both sides ignore unknown fields and unknown message types. A supervisor must not send a request type its worker's agreed version lacks.
 
@@ -39,6 +39,8 @@ The `access` object never holds a Claude token, an account name or a config dir 
 | `proxies` | by room link: `addr`, the `<gateway>:<port>` the sandbox relay dials for the room's account proxy (`host-gateway` under Docker Desktop), and `bearer`, the dummy token that proxy knows this worker by; or `error`, why the room cannot reach Claude now, in words the room may show |
 | `cut_off` | the host cut this worker off: it ends its running turns with an error and starts none |
 
+A room the host paused gets `error` "paused on the host's machine" instead of a proxy (003b-AC5). The worker then reports to the room that it cannot host, with that reason, and the room moves the AI host role to another daemon able to host. The paused room keeps its account's bearer, so an answer running as it pauses finishes. The pause is saved in the instance's `instance.json` (`paused`).
+
 ## Supervisor to worker
 
 Requests carry an `id`; the worker answers each one with `{"type":"reply","id":N}`, plus `"error"` when it failed. The supervisor gives up on a reply after 30 s.
@@ -48,11 +50,12 @@ Requests carry an `id`; the worker answers each one with `{"type":"reply","id":N
 | `pair` | `room` | serves that room beside the others, pairing first if no token is stored for it |
 | `settings` | `settings` | saves the host cap and approval mode, and tells the room |
 | `allowlist` | `allowlist` (absent for an empty list) | saves the egress allowlist; the running sandbox takes it at once |
-| `denied` | `n` | the reply's `denied` lists the last `n` refused egress requests |
+| `denied` | `n` | the reply's `denied` lists the last `n` refused egress requests, and its `hits` counts the requests let through, by host, from the last 2,000 lines of each running egress proxy's log; workers before 003b send no `hits` |
 | `recheck` | | re-runs the Docker check, and retries a failed sandbox image |
 | `plugin_options` | `room`, `plugin` (the room's plugin id), `values`, `clear` | saves the values the host gave a room plugin's options, under its id, with which options are sensitive: an absent key keeps its value, an empty string or a key in `clear` forgets it; only the plugin's declared options, each of its type (version 4) |
 | `plugin_fetch` | `room`, `fetch`, `accept` | `accept` starts the room's fetch request `fetch` with the host's git and replies at once; the room status shows it `fetching`. Without `accept` it declines the request (version 4) |
 | `access` | `access` | replaces the access: a room whose proxy moved gets a new sandbox at its next turn, and a new `cut_off` ends the running turns. Sent whenever it changes: an account added, mapped or expired, a cut-off, Docker coming up |
+| `remove_room` | `room`, `force` | revokes the room's daemon token on the room server (`DELETE /api/rooms/{room}/daemon`), ends the room's run and sandboxes, and deletes its token, workspace cache and plugin option values. A room server that does not answer, or one too old for the endpoint, fails the request unless `force`, which removes the room here only (version 5) |
 | `update` | | refused with an error: only the supervisor updates, and it updates itself (003-AC5). Phase 2 workers replaced their binary here |
 | `wait` | `slot` | no reply: the worker's turn waits in the supervisor's queue (version 3) |
 | `grant` | `slot` | no reply: the turn may run (version 3) |

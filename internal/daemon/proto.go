@@ -17,8 +17,9 @@ import (
 // Version 2 added the config's access and the access request: the accounts' proxies (003-AC14).
 // Version 3 added the slots under the host's global cap: acquire, wait, grant, release (003-AC18).
 // Version 4 added the room plugins' requests, plugin_options and plugin_fetch (009-AC19, 009-AC22).
+// Version 5 added remove_room (003b-AC6).
 const (
-	Proto     = 4
+	Proto     = 5
 	ProtoSkew = 1
 )
 
@@ -27,6 +28,9 @@ const protoSlots = 3
 
 // protoPlugins is the first version whose workers take plugin_options and plugin_fetch.
 const protoPlugins = 4
+
+// protoRemove is the first version whose workers take remove_room.
+const protoRemove = 5
 
 // Negotiate returns the version a peer at own talks with a peer at peer, or why they cannot.
 func Negotiate(own, peer int) (int, error) {
@@ -58,10 +62,12 @@ type Msg struct {
 	N         int              `json:"n,omitempty"`
 	Status    *Status          `json:"status,omitempty"`
 	Denied    []sandbox.Denied `json:"denied,omitempty"`
-	Metrics   *Metrics         `json:"metrics,omitempty"`
-	Turn      *TurnEvent       `json:"turn,omitempty"`
-	Log       json.RawMessage  `json:"log,omitempty"`
-	Access    *Access          `json:"access,omitempty"`
+	// Hits, in a denied reply, counts the egress requests let through, by host (003b-AC16).
+	Hits    map[string]int  `json:"hits,omitempty"`
+	Metrics *Metrics        `json:"metrics,omitempty"`
+	Turn    *TurnEvent      `json:"turn,omitempty"`
+	Log     json.RawMessage `json:"log,omitempty"`
+	Access  *Access         `json:"access,omitempty"`
 	// Plugin, Values and Clear are a plugin_options request: the values the host gave the options
 	// of the room's plugin id Plugin in Room, and the options to forget. Fetch and Accept are a
 	// plugin_fetch request.
@@ -70,6 +76,8 @@ type Msg struct {
 	Clear  []string       `json:"clear,omitempty"`
 	Fetch  int64          `json:"fetch,omitempty"`
 	Accept bool           `json:"accept,omitempty"`
+	// Force, in remove_room, removes the room here even when its server does not forget this daemon.
+	Force bool `json:"force,omitempty"`
 }
 
 // Access is how a worker's rooms reach Claude: the bearer-swap proxy of each room's account, which

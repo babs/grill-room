@@ -106,7 +106,7 @@ export function startDaemon(roomURL, env = {}, { expiresIn = 3600e3 } = {}) {
     });
     proc.on('exit', (code) => reject(new Error('daemon exited ' + code + ': ' + out)));
   });
-  return { proc, link, exited, handOver, sandbox: sandboxName(stateDir, roomURL), cleanup: () => { proc.kill(); rmSync(dir, { recursive: true, force: true }); } };
+  return { proc, link, exited, handOver, stateDir, sandbox: sandboxName(stateDir, roomURL), cleanup: () => { proc.kill(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
 // pairDaemon approves the daemon's pairing from the participant's room page, as a person would.
@@ -444,3 +444,11 @@ export const tableLayout = (page, sel) => page.locator(sel).evaluate((t) => {
   const first = t.querySelector('tbody td').getBoundingClientRect();
   return { clipped, firstInBox: first.left >= b.left - 0.5, fits: box.scrollWidth <= box.clientWidth + 1, share: t.getBoundingClientRect().width / innerWidth };
 });
+
+// approveEverything switches the daemon page's "approve every new AI persona and change" on: it
+// applies at once and says so in a toast (003b-AC15).
+export async function approveEverything(admin) {
+  await admin.locator('#tab-settings').click();
+  await admin.getByLabel('Approve every new AI persona and change').check();
+  await expect(admin.locator('.toast', { hasText: 'approved at once' })).toBeVisible();
+}

@@ -165,6 +165,10 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		host = nil
+		// A host with no daemon row removed the room from their app: pairing again keeps the row (003b-AC10).
+		if !st.Online && r.HostParticipantID != 0 {
+			st.Reason = "The AI host removed this room from their computer."
+		}
 	case err != nil:
 		return nil, err
 	default:

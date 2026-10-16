@@ -338,6 +338,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms/{room}/pairings/{id}", s.participant(s.answerPairing))
 	mux.Handle("GET /api/rooms/{room}/daemon/events", s.daemonAuth(s.daemonEvents))
 	mux.Handle("POST /api/rooms/{room}/daemon/status", s.daemonAuth(s.daemonStatus))
+	mux.Handle("DELETE /api/rooms/{room}/daemon", s.daemonAuth(s.removeDaemon))
 
 	mux.Handle("GET /api/rooms/{room}/agent", s.participant(s.getAgent))
 	mux.Handle("PATCH /api/rooms/{room}/agent", s.participant(s.setAgentMode))

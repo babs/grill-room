@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, startDaemon, pairDaemon, menuItem, personaSheet, closePersonas } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, menuItem, personaSheet, closePersonas, approveEverything } from './helpers.js';
 
 const led = (page, name) => page.locator(`button.persona[data-name="${name}"] .led`);
 const lastAgent = (page) => page.locator('#messages li.msg.agent').last();
@@ -96,10 +96,7 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
     await expect(lastAgent(bob).locator('.meta')).toContainText(/requested opus · effort medium → ran sonnet · effort medium · \+claude-side-fake \S+ \(AI host's limit\)/);
 
     // Approve everything: Bob's new persona and his change wait for Alice.
-    await admin.locator('#tab-settings').click();
-    await admin.getByLabel('Approve every new persona and persona change').check();
-    await admin.locator('#settings-form').getByRole('button', { name: 'Save' }).click();
-    await expect(admin.locator('#settings-status')).toHaveText('Saved.');
+    await approveEverything(admin);
     await openPanel(bob);
     await bob.locator('#persona-template').selectOption({ label: '🔥 Default v1' });
     await bob.locator('#personas').getByRole('button', { name: 'Add', exact: true }).click();

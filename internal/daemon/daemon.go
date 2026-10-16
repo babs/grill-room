@@ -70,6 +70,7 @@ type Options struct {
 	CheckEvery  time.Duration // readiness re-check
 	StatusEvery time.Duration // heartbeat to the room
 	PollEvery   time.Duration // pairing answer poll
+	MinBackoff  time.Duration // first reconnect wait
 	MaxBackoff  time.Duration
 }
 
@@ -194,6 +195,7 @@ func New(o Options) *Daemon {
 	def(&o.CheckEvery, 30*time.Second)
 	def(&o.StatusEvery, 15*time.Second)
 	def(&o.PollEvery, 2*time.Second)
+	def(&o.MinBackoff, time.Second)
 	def(&o.MaxBackoff, 30*time.Second)
 	if o.Allowlist == nil {
 		o.Allowlist = slices.Clone(sandbox.DefaultAllowlist)
@@ -403,13 +405,19 @@ func (d *Daemon) SetRoom(ctx context.Context, room Room) {
 	if old != nil && !old.ended() {
 		d.cur = old
 		d.mu.Unlock()
+		// Connect on the page: a room waiting out its backoff reconnects now (003b-AC7).
+		select {
+		case old.kick <- struct{}{}:
+		default:
+		}
 		return
 	}
 	if old != nil {
 		old.cancel()
 	}
 	ctx, cancel := context.WithCancel(ctx) //nolint:gosec // kept in the run: cancelled when it is replaced, or with ctx
-	r := &roomRun{d: d, room: room, ctx: ctx, cancel: cancel, done: make(chan struct{}), st: RoomStatus{Room: key, Connection: "offline"}}
+	r := &roomRun{d: d, room: room, ctx: ctx, cancel: cancel, done: make(chan struct{}), kick: make(chan struct{}, 1),
+		st: RoomStatus{Room: key, Connection: "offline"}}
 	d.rooms[key], d.cur = r, r
 	d.mu.Unlock()
 	// Readiness depends on the room's account.
@@ -439,6 +447,8 @@ type roomRun struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan struct{}
+	// kick cuts a reconnect backoff short.
+	kick chan struct{}
 	// st is the room's status, guarded by d.mu.
 	st RoomStatus
 
@@ -648,8 +658,13 @@ func (d *Daemon) pollPairing(ctx context.Context, room Room, id, secret string) 
 // room revokes the token.
 func (r *roomRun) connect(ctx context.Context, tok string) error {
 	d := r.d
-	backoff := time.Second
+	backoff := d.o.MinBackoff
 	for {
+		// A Connect pressed while connected must not cut the next backoff short.
+		select {
+		case <-r.kick:
+		default:
+		}
 		r.update(func(s *RoomStatus) { s.Connection = "connecting" })
 		start := time.Now()
 		err := r.stream(ctx, tok)
@@ -661,7 +676,7 @@ func (r *roomRun) connect(ctx context.Context, tok string) error {
 			return err
 		}
 		if time.Since(start) > time.Minute {
-			backoff = time.Second
+			backoff = d.o.MinBackoff
 		}
 		// Jitter: daemons cut by the same server restart must not reconnect in lockstep.
 		wait := backoff/2 + rand.N(backoff) //nolint:gosec // jitter needs no crypto randomness
@@ -672,6 +687,9 @@ func (r *roomRun) connect(ctx context.Context, tok string) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-r.kick:
+			backoff = d.o.MinBackoff
+			continue
 		case <-time.After(wait):
 		}
 		backoff = min(backoff*2, d.o.MaxBackoff)

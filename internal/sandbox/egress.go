@@ -135,30 +135,46 @@ type Denied struct {
 	Time time.Time `json:"time"`
 }
 
-// parseDenied returns the last n refusals in squid's access log, newest first.
-func parseDenied(log []byte, n int) []Denied {
+// Egress is what the proxy's recent log says: the last refusals, newest first, and the requests it
+// let through, by host (003b-AC16).
+type Egress struct {
+	Denied []Denied       `json:"denied"`
+	Hits   map[string]int `json:"hits"`
+}
+
+// parseEgress reads squid's access log: the last n refusals, newest first, and every request let
+// through, counted by host.
+func parseEgress(log []byte, n int) Egress {
 	all := []Denied{}
+	hits := map[string]int{}
 	sc := bufio.NewScanner(bytes.NewReader(log))
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
 		f := strings.Fields(sc.Text())
-		if len(f) != 5 || f[0] != logTag || !strings.HasPrefix(f[2], "TCP_DENIED") {
+		if len(f) != 5 || f[0] != logTag {
+			continue
+		}
+		host := strings.ToLower(f[4])
+		if f[3] == "CONNECT" {
+			host = strings.TrimSuffix(host, ":443")
+		} else if u, err := url.Parse(host); err == nil && u.Host != "" {
+			host = u.Host
+		}
+		if !strings.HasPrefix(f[2], "TCP_DENIED") {
+			// Only an HTTPS tunnel gets through: squid denies everything else.
+			if strings.HasPrefix(f[2], "TCP_TUNNEL") {
+				hits[host]++
+			}
 			continue
 		}
 		sec, err := strconv.ParseInt(f[1], 10, 64)
 		if err != nil {
 			continue
 		}
-		host := f[4]
-		if f[3] == "CONNECT" {
-			host = strings.TrimSuffix(host, ":443")
-		} else if u, err := url.Parse(host); err == nil && u.Host != "" {
-			host = u.Host
-		}
 		all = append(all, Denied{Host: host, Time: time.Unix(sec, 0).UTC()})
 	}
 	slices.Reverse(all)
-	return all[:min(n, len(all))]
+	return Egress{Denied: all[:min(n, len(all))], Hits: hits}
 }
 
 // SetAllowlist sets the domains the sandbox may reach, normalized; a running proxy takes them at
@@ -182,18 +198,18 @@ func (s *Sandbox) SetAllowlist(ctx context.Context, list []string) error {
 	return nil
 }
 
-// Denied returns the last n egress requests the proxy refused, newest first; none before the
-// sandbox starts.
-func (s *Sandbox) Denied(ctx context.Context, n int) ([]Denied, error) {
+// Egress returns the last n egress requests the proxy refused, newest first, and the requests it
+// let through by host; none before the sandbox starts.
+func (s *Sandbox) Egress(ctx context.Context, n int) (Egress, error) {
 	s.mu.Lock()
 	started := s.started
 	s.mu.Unlock()
 	if !started {
-		return []Denied{}, nil
+		return Egress{Denied: []Denied{}, Hits: map[string]int{}}, nil
 	}
 	out, err := s.run(ctx, nil, "logs", "--tail", "2000", s.egress())
 	if err != nil {
-		return nil, fmt.Errorf("egress log: %w", err)
+		return Egress{}, fmt.Errorf("egress log: %w", err)
 	}
-	return parseDenied(out, n), nil
+	return parseEgress(out, n), nil
 }

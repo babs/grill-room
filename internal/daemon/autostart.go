@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -23,7 +24,18 @@ type Autostart struct {
 	Env []string
 	// Run runs a command and returns its error with its output.
 	Run func(name string, args ...string) error
+	// MemoryMax caps the systemd unit's memory, "" for none (003b-AC22): a leak then kills the app,
+	// not the user's session.
+	MemoryMax string
 }
+
+// DefaultMemoryMax is the unit's cap unless GRILL_ROOM_DAEMON_MEMORY_MAX says otherwise. The
+// sandboxes run under Docker, outside it.
+const DefaultMemoryMax = "4G"
+
+// memoryMax is what systemd takes for MemoryMax: bytes with an optional K, M, G or T, a
+// percentage up to 100, or infinity. Not 0: the unit would be killed as it starts.
+var memoryMax = regexp.MustCompile(`^(infinity|[1-9][0-9]*[KMGT]?|([1-9][0-9]?|100)%)$`)
 
 const (
 	autostartName = "grill-room"
@@ -123,6 +135,12 @@ func (a Autostart) unit() ([]byte, error) {
 	}
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "[Unit]\nDescription=grill-room daemon supervisor\n\n[Service]\nExecStart=%s\n", exe)
+	if a.MemoryMax != "" {
+		if !memoryMax.MatchString(a.MemoryMax) {
+			return nil, fmt.Errorf("memory cap %q: use bytes with K, M, G or T, a percentage, or infinity", a.MemoryMax)
+		}
+		fmt.Fprintf(&b, "MemoryMax=%s\n", a.MemoryMax)
+	}
 	for _, kv := range a.Env {
 		q, err := systemdQuote(kv, false)
 		if err != nil {

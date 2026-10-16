@@ -64,19 +64,23 @@ func (d *Daemon) SetAllowlist(ctx context.Context, list []string) error {
 	return nil
 }
 
-// Denied returns the last n egress requests the rooms' sandboxes were refused, newest first.
-func (d *Daemon) Denied(ctx context.Context, n int) ([]sandbox.Denied, error) {
-	out := []sandbox.Denied{}
+// Egress returns the last n egress requests the rooms' sandboxes were refused, newest first, and
+// the requests they let through, by host, summed over the sandboxes (003b-AC16).
+func (d *Daemon) Egress(ctx context.Context, n int) (sandbox.Egress, error) {
+	out := sandbox.Egress{Denied: []sandbox.Denied{}, Hits: map[string]int{}}
 	for _, ag := range d.agents() {
-		got, err := ag.Denied(ctx, n)
+		got, err := ag.Egress(ctx, n)
 		if err != nil {
-			return nil, err
+			return sandbox.Egress{}, err
 		}
-		out = append(out, got...)
+		out.Denied = append(out.Denied, got.Denied...)
+		for h, c := range got.Hits {
+			out.Hits[h] += c
+		}
 	}
-	slices.SortStableFunc(out, func(a, b sandbox.Denied) int { return b.Time.Compare(a.Time) })
-	if n >= 0 && n < len(out) {
-		out = out[:n]
+	slices.SortStableFunc(out.Denied, func(a, b sandbox.Denied) int { return b.Time.Compare(a.Time) })
+	if n >= 0 && n < len(out.Denied) {
+		out.Denied = out.Denied[:n]
 	}
 	return out, nil
 }

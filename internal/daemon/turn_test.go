@@ -71,13 +71,13 @@ func (f *fakeAgent) SetAllowlist(_ context.Context, list []string) error {
 	return nil
 }
 
-func (f *fakeAgent) Denied(context.Context, int) ([]sandbox.Denied, error) {
+func (f *fakeAgent) Egress(context.Context, int) (sandbox.Egress, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.deniedErr != nil {
-		return nil, f.deniedErr
+		return sandbox.Egress{}, f.deniedErr
 	}
-	return []sandbox.Denied{{Host: "example.com", Time: time.Unix(1791690692, 0).UTC()}}, nil
+	return sandbox.Egress{Denied: []sandbox.Denied{{Host: "example.com", Time: time.Unix(1791690692, 0).UTC()}}, Hits: map[string]int{"pypi.org": 3}}, nil
 }
 
 func (f *fakeAgent) Close(context.Context) {

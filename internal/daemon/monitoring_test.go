@@ -66,11 +66,11 @@ func TestAlerts(t *testing.T) {
 		{name: "none", insts: []InstanceView{inst}, ctxs: []monitor.Context{ctx("https://rooms.example/r/a", 800)}, c: queued(10 * 60e3), want: []string{}},
 		{name: "account", accounts: []AccountView{{Account: Account{Name: "work"}, Warning: "the access token expires in 20m0s"}, {Account: Account{Name: "home"}}},
 			want: []string{"account"}, text: "Claude account work: the access token expires in 20m0s."},
-		{name: "unsigned", insts: []InstanceView{unsigned}, want: []string{"unsigned"}, text: "The worker for https://rooms.example runs an unsigned binary (v0.0.9)."},
+		{name: "unsigned", insts: []InstanceView{unsigned}, want: []string{"unsigned"}, text: "The app for https://rooms.example runs an unsigned binary (v0.0.9)."},
 		{name: "context", insts: []InstanceView{inst}, ctxs: []monitor.Context{ctx("https://rooms.example/r/a", 801)}, want: []string{"context"},
 			text: "Grill in https://rooms.example/r/a uses 80% of its context"},
 		{name: "context in a room no longer served", insts: []InstanceView{inst}, ctxs: []monitor.Context{ctx("https://rooms.example/r/gone", 950)}, want: []string{}},
-		{name: "queue", c: queued(10*60e3 + 1000), want: []string{"queue"}, text: "A turn of https://rooms.example/r/a has waited 10 minutes for a slot"},
+		{name: "queue", c: queued(10*60e3 + 1000), want: []string{"queue"}, text: "An answer in https://rooms.example/r/a has waited 10 minutes for a slot"},
 	} {
 		got := alerts(tc.accounts, tc.insts, tc.c, tc.ctxs)
 		if !slices.Equal(kinds(got), tc.want) || (tc.text != "" && !strings.Contains(got[0].Text, tc.text)) {
@@ -297,7 +297,12 @@ func TestSupervisorPageMonitoring(t *testing.T) {
 // the request or found from the room's link; a worker from before protocol 4 is refused them
 // with why, and a link or an instance the supervisor does not serve is a 400.
 func TestSupervisorPluginRequests(t *testing.T) {
-	for _, mode := range []string{"plugins", strconv.Itoa(protoPlugins - 1)} {
+	modes := []string{"plugins"}
+	// Since protocol 5 a worker before 4 fails the handshake: it never gets this far.
+	if protoPlugins-1 >= Proto-ProtoSkew {
+		modes = append(modes, strconv.Itoa(protoPlugins-1))
+	}
+	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			s := testSupervisor(t, mode, nil)
 			e := newAdminEnv(t, s)

@@ -60,6 +60,8 @@ type hostBackend interface {
 	ProbeAccount(ctx context.Context, name string) error
 	SetAccount(instance, room, account string) error
 	SetCutOff(instance string, on bool) error
+	SetPaused(instance, room string, paused bool) error
+	RemoveRoom(ctx context.Context, room string, force bool) error
 	Concurrency() ConcurrencyView
 	SetMaxTurns(n int) error
 	InstanceOps(id string) (instanceOps, error)
@@ -189,6 +191,8 @@ func (a *Admin) Handler() http.Handler {
 	mux.Handle("POST /api/accounts/probe", a.auth(a.host(a.probeAccount)))
 	mux.Handle("POST /api/instance-account", a.auth(a.host(a.instanceAccount)))
 	mux.Handle("POST /api/cut-off", a.auth(a.host(a.cutOff)))
+	mux.Handle("POST /api/room-pause", a.auth(a.host(a.roomPause)))
+	mux.Handle("POST /api/room-remove", a.auth(a.host(a.roomRemove)))
 	mux.Handle("POST /api/max-turns", a.auth(a.host(a.maxTurns)))
 	mux.Handle("POST /api/limits", a.auth(a.host(a.limits)))
 	mux.Handle("POST /api/retention", a.auth(a.host(a.retention)))
@@ -442,12 +446,12 @@ func (a *Admin) denied(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	list, err := d.Denied(r.Context(), deniedShown)
+	eg, err := d.Egress(r.Context(), deniedShown)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"denied": list})
+	writeJSON(w, http.StatusOK, map[string]any{"denied": eg.Denied, "hits": eg.Hits})
 }
 
 func (a *Admin) recheck(w http.ResponseWriter, r *http.Request) {
@@ -606,6 +610,30 @@ func (a *Admin) cutOff(w http.ResponseWriter, r *http.Request, h hostBackend) {
 	}
 	if decodeJSON(w, r, &req) {
 		reply(w, h.SetCutOff(req.Instance, req.CutOff))
+	}
+}
+
+// roomPause pauses a room's hosting on this computer, or resumes it (003b-AC5).
+func (a *Admin) roomPause(w http.ResponseWriter, r *http.Request, h hostBackend) {
+	var req struct {
+		Instance string `json:"instance"`
+		Room     string `json:"room"`
+		Paused   bool   `json:"paused"`
+	}
+	if decodeJSON(w, r, &req) {
+		reply(w, h.SetPaused(req.Instance, req.Room, req.Paused))
+	}
+}
+
+// roomRemove takes a room off this computer; force removes it here when its server does not
+// answer (003b-AC6). The daemon's context: a closed tab must not stop a removal halfway.
+func (a *Admin) roomRemove(w http.ResponseWriter, r *http.Request, h hostBackend) {
+	var req struct {
+		Room  string `json:"room"`
+		Force bool   `json:"force"`
+	}
+	if decodeJSON(w, r, &req) {
+		reply(w, h.RemoveRoom(a.ctx, req.Room, req.Force))
 	}
 }
 

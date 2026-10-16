@@ -21,9 +21,9 @@ test('a turn waiting for the host shows queued (host busy)', async ({ browser, r
     await expect(admin.locator('#pairing')).toHaveText('Paired. Connected.', { timeout: 30_000 });
     await approval.close();
     await admin.locator('#tab-settings').click();
-    await admin.getByLabel('Turns at once, across every instance and room').fill('1');
-    await admin.locator('#max-turns-form').getByRole('button', { name: 'Save' }).click();
-    await expect(admin.locator('#max-turns-status')).toHaveText('Saved.');
+    await admin.getByLabel('Answers at once').fill('1');
+    await admin.locator('#machine-form').getByRole('button', { name: 'Save' }).click();
+    await expect(admin.locator('#machine-status')).toHaveText('Saved.');
 
     for (const page of [alice, bob]) {
       await expect(page.locator('button.persona[data-name="Grill"] .led')).toHaveAttribute('aria-label', 'Grill ready', { timeout: 30_000 });
@@ -35,7 +35,7 @@ test('a turn waiting for the host shows queued (host busy)', async ({ browser, r
     await bob.getByRole('button', { name: 'Ask Grill' }).click();
     await expect(bob.locator('#agent-status')).toHaveText('Grill waiting (the AI host is busy)…', { timeout: 30_000 });
     await expect(bob.locator('button.persona[data-name="Grill"] .led')).toHaveAttribute('aria-label', 'Grill waiting (the AI host is busy)');
-    await expect(admin.locator('#concurrency')).toContainText('Now 1 running, 1 waiting.');
+    await expect(admin.locator('#concurrency')).toContainText('Now 1 answering, 1 waiting.');
     await expect(bob.locator('#messages li.msg.agent')).toHaveCount(1, { timeout: 60_000 });
     await expect(alice.locator('#messages li.msg.agent')).toHaveCount(1);
     await expect(bob.locator('#agent-status')).toHaveText('');
