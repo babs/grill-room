@@ -364,6 +364,9 @@ func (s *Server) viewDocument(w http.ResponseWriter, r *http.Request, sess sessi
 	}
 	h := w.Header()
 	h.Set("Content-Security-Policy", docCSP)
+	// Firefox checks the sandboxed frame's navigation as cross-origin under the room page's COEP and
+	// refuses it without this; same-origin and same-site fail there. The cookies are SameSite=Strict.
+	h.Set("Cross-Origin-Resource-Policy", "cross-origin")
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
 	_, _ = w.Write(page.Bytes())

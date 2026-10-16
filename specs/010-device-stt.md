@@ -156,7 +156,7 @@ People can tell who transcribed a line: its tooltip says "Transcribed on <name>'
 
 ## Open questions
 
-- [x] **COEP and the document iframe.** Settled in Phase 1: `credentialless` on every response keeps the sandboxed document iframe, the PDF iframe, uploads, push and the docs window working; the room page alone gets COOP. COEP on the room page only refuses the iframe, and `require-corp` blocks the opaque-origin frame's `/static/doc/` loads (no CORP). No cookie-gated fallback needed.
+- [x] **COEP and the document iframe.** Settled in Phase 1: `credentialless` on every response keeps the sandboxed document iframe, the PDF iframe, uploads, push and the docs window working; the room page alone gets COOP. COEP on the room page only refuses the iframe, and `require-corp` blocks the opaque-origin frame's `/static/doc/` loads (no CORP). No cookie-gated fallback needed. Firefox also refuses the sandboxed frame's navigation without `Cross-Origin-Resource-Policy: cross-origin` on `/view` (fixed in v0.0.31; `e2e/doc-frames.spec.js` runs in Firefox).
 - [x] **Dedicated workers and background throttling.** Settled in Phase 1 on Google Chrome 155, headed, tab hidden 8 minutes behind another tab: the main thread's 1 s timer fell to one tick a minute after 5 minutes (intensive throttling), the dedicated worker's 1 s timer never drifted past 1.004 s over 480 ticks. A Playwright-driven tab never goes hidden, so AC18 hides it with a second plain Chrome invocation.
 
 ## Decisions

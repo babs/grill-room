@@ -189,6 +189,8 @@ jobs:
           cache: pnpm
           cache-dependency-path: e2e/pnpm-lock.yaml
       - run: sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends pandoc
+      # The firefox project's browser (e2e/playwright.config.js); Chrome is the runner's.
+      - run: cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright install --with-deps firefox
       - env:
           BASE: ${{ inputs.full && 'all' || github.event.pull_request.base.sha || 'origin/develop' }}
         run: tools/flake-gate.sh "$BASE" e2e
@@ -286,6 +288,8 @@ jobs:
           cache-dependency-path: e2e/pnpm-lock.yaml
       # Office uploads convert through pandoc; the runner's Chrome is the one the specs drive.
       - run: sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends pandoc
+      # The firefox project's browser (e2e/playwright.config.js).
+      - run: cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright install --with-deps firefox
       - run: make e2e
       # Traces and screenshots of a failed run; the invite links in them died with its server.
       - if: failure()
