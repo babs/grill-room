@@ -175,6 +175,10 @@ func (c Config) Validate() error {
 	if c.DB == "" {
 		return errors.New("GRILL_ROOM_DB is empty")
 	}
+	// 012-AC5: the server tells API tokens from the admin token by this prefix.
+	if strings.HasPrefix(c.AdminToken, web.APITokenPrefix) {
+		return fmt.Errorf("GRILL_ROOM_ADMIN_TOKEN must not start with %s, the API tokens' prefix", web.APITokenPrefix)
+	}
 	if c.MaxUploadMB < 1 || c.MaxRoomMB < c.MaxUploadMB || c.MaxRoomMB > 1<<20 {
 		return fmt.Errorf("GRILL_ROOM_MAX_UPLOAD_MB %d, GRILL_ROOM_MAX_ROOM_MB %d: want 1 <= upload <= room <= %d", c.MaxUploadMB, c.MaxRoomMB, 1<<20)
 	}
@@ -483,6 +487,13 @@ func newRegistry(b *bus.Bus, srv *web.Server) *prometheus.Registry {
 		reg.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_workspace_fallbacks_total",
 			Help: "Full workspace fetches by daemons that keep a workspace cache.", ConstLabels: prometheus.Labels{"reason": reason}},
 			func() float64 { return float64(srv.WorkspaceFallbacks(reason)) }))
+	}
+	for _, tool := range web.MCPTools() {
+		for _, result := range web.MCPResults {
+			reg.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_mcp_tool_calls_total",
+				Help: "MCP tool calls, by tool and result: ok, error (a refusal the agent reads) or server_error.", ConstLabels: prometheus.Labels{"tool": tool, "result": result}},
+				func() float64 { return float64(srv.MCPToolCalls(tool, result)) }))
+		}
 	}
 	for _, outcome := range web.ConflictOutcomes {
 		reg.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_turn_conflicts_total",

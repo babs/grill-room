@@ -78,6 +78,8 @@ type MergePreview struct {
 	RoomAdmin    MergeAdmin   `json:"room_admin"`
 	OverLimits   []MergeLimit `json:"over_limits"`
 	EmailAfter   string       `json:"email_after"`
+	// APITokens counts the merged profile's API tokens, which the merge deletes (012-AC12).
+	APITokens int `json:"api_tokens"`
 }
 
 // MergeMoved counts what a merge moved, per kind.
@@ -90,6 +92,8 @@ type MergeMoved struct {
 	RoomsCreated int64 `json:"rooms_created"`
 	RoomAdmins   int64 `json:"room_admins"`
 	Sessions     int64 `json:"sessions"`
+	// APITokensRevoked counts the merged profile's API tokens deleted, not moved (012-AC12).
+	APITokensRevoked int64 `json:"api_tokens_revoked"`
 }
 
 // mergeFault, set by tests, fails a merge after its moves and before it deletes the merged profile.
@@ -182,6 +186,9 @@ func mergePreview(ctx context.Context, db *sql.Tx, keep, merge int64) (*MergePre
 		if err != nil {
 			return nil, fmt.Errorf("merge preview: counts: %w", err)
 		}
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM api_tokens WHERE profile_id = ?`, merge).Scan(&p.APITokens); err != nil {
+		return nil, fmt.Errorf("merge preview: api tokens: %w", err)
 	}
 	v, err := instanceSettings(ctx, db)
 	if err != nil {
@@ -292,6 +299,8 @@ func (s *Store) MergeProfiles(ctx context.Context, keep, merge int64) (*MergePro
 			{&moved.Sessions, `UPDATE profile_sessions SET profile_id = ?1 WHERE profile_id = ?2`},
 			{nil, `DELETE FROM magic_links WHERE profile_id = ?2`},
 			{nil, `DELETE FROM recovery_links WHERE profile_id = ?2`},
+			// A token was granted from B's browsers: moving it would hand A's rights to whoever holds it.
+			{&moved.APITokensRevoked, `DELETE FROM api_tokens WHERE profile_id = ?2`},
 			{nil, `UPDATE profiles SET skills_disclaimer_at = COALESCE(skills_disclaimer_at, (SELECT skills_disclaimer_at FROM profiles WHERE id = ?2)) WHERE id = ?1`},
 		}
 		for _, st := range steps {
@@ -384,7 +393,8 @@ func (s *Store) PurgeEmptyProfiles(ctx context.Context, now time.Time, idle time
 			AND NOT EXISTS (SELECT 1 FROM persona_templates WHERE profile_id = p.id)
 			AND NOT EXISTS (SELECT 1 FROM starters WHERE profile_id = p.id)
 			AND NOT EXISTS (SELECT 1 FROM room_admins WHERE profile_id = p.id)
-			ORDER BY p.id`)
+			AND NOT EXISTS (SELECT 1 FROM api_tokens WHERE profile_id = p.id AND (expires_at_ms IS NULL OR expires_at_ms > ?))
+			ORDER BY p.id`, now.UnixMilli())
 		if err != nil {
 			return fmt.Errorf("purge empty profiles: %w", err)
 		}

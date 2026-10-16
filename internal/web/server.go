@@ -124,6 +124,12 @@ type Server struct {
 	voiceRecent recentLines
 	// voiceLines and voiceDeduped count the voice lines stored and dropped, by VoiceSources.
 	voiceLines, voiceDeduped map[string]*atomic.Int64
+	// routes are the patterns Handler registered; mux routes them and gate is the token gate in
+	// front of it, which MCP tools send their sub-requests through.
+	routes   []string
+	mux      *http.ServeMux
+	gate     http.Handler
+	mcpCalls mcpCounters
 }
 
 // New builds a server. adminHash is HashToken of the admin token; baseURL prefixes invite links.
@@ -165,7 +171,7 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 		afterFunc: func(d time.Duration, f func()) { time.AfterFunc(d, f) },
 		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}, pushClient: opts.PushClient,
 		pluginFetches: make(chan struct{}, maxPluginFetches), pluginRooms: map[string]bool{},
-		voiceRecent: recentLines{}, voiceLines: sourceCounters(), voiceDeduped: sourceCounters()}
+		voiceRecent: recentLines{}, voiceLines: sourceCounters(), voiceDeduped: sourceCounters(), mcpCalls: newMCPCounters()}
 	s.device = loadDeviceSTT(opts, log)
 	s.cleanStaging()
 	return s
@@ -202,7 +208,7 @@ func HashToken(tok string) string {
 
 // Handler returns the routed handler.
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
+	mux := &routeMux{ServeMux: http.NewServeMux()}
 	mux.HandleFunc("GET /healthz", s.healthz)
 	page := func(name string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) { http.ServeFileFS(w, r, ui, "ui/"+name) }
@@ -286,6 +292,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/profile/signin", s.emailSignIn)
 	mux.HandleFunc("POST /api/profile/magic", s.useMagicLink)
 	mux.HandleFunc("POST /api/profile/nudge", s.snoozeNudge)
+	mux.HandleFunc("GET /api/profile/tokens", s.listTokens)
+	mux.HandleFunc("POST /api/profile/tokens", s.createToken)
+	mux.HandleFunc("DELETE /api/profile/tokens/{id}", s.revokeToken)
 	mux.HandleFunc("GET /api/profile/skills", s.mySkills)
 	mux.HandleFunc("POST /api/profile/skills", s.uploadSkill)
 	mux.HandleFunc("DELETE /api/profile/skills/{skill}", s.removeMySkill)
@@ -312,6 +321,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PATCH /api/rooms/{room}/messages/{msg}", s.participant(s.editMessage))
 	mux.Handle("DELETE /api/rooms/{room}/messages/{msg}", s.participant(s.deleteMessage))
 	mux.Handle("GET /api/rooms/{room}/messages/{msg}/versions", s.participant(s.messageVersions))
+	mux.Handle("GET /api/rooms/{room}/messages", s.participant(s.listMessages))
 	mux.Handle("GET /api/rooms/{room}/events", s.participant(s.events))
 	mux.Handle("POST /api/rooms/{room}/presence", s.participant(s.postPresence))
 	mux.Handle("GET /api/rooms/{room}/push", s.participant(s.getPush))
@@ -326,6 +336,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rooms/{room}/documents/deleted", s.memberOrAdmin(s.deletedDocuments))
 	mux.Handle("GET /api/rooms/{room}/documents/{doc}/view", s.participant(s.viewDocument))
 	mux.Handle("GET /api/rooms/{room}/documents/{doc}/original", s.participant(s.originalDocument))
+	mux.Handle("GET /api/rooms/{room}/documents/{doc}/text", s.participant(s.documentText))
 	mux.Handle("GET /api/rooms/{room}/documents/{doc}/annotations", s.participant(s.listAnnotations))
 	mux.Handle("POST /api/rooms/{room}/documents/{doc}/annotations", s.participant(s.createAnnotation))
 	mux.Handle("POST /api/rooms/{room}/annotations/{ann}/messages", s.participant(s.postAnnotationMessage))
@@ -397,9 +408,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/stt/rooms/{room}/prompt", s.sttAuth(s.sttPromptFor))
 	mux.Handle("GET /api/rooms/{room}/glossary", s.participant(s.getGlossary))
 	mux.Handle("PUT /api/rooms/{room}/glossary", s.participant(s.putGlossary))
+	mux.Handle("POST /mcp", s.mcpHandler())
 	if e2eRoutes != nil {
-		e2eRoutes(s, mux)
+		e2eRoutes(s, mux.ServeMux)
 	}
+	s.routes, s.mux = mux.patterns, mux.ServeMux
+	s.gate = s.tokenGate(mux.ServeMux)
+	gate := s.gate
 
 	csp := "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" + s.connectSrc()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -419,8 +434,23 @@ func (s *Server) Handler() http.Handler {
 		case strings.HasPrefix(r.URL.Path, sttStaticPrefix):
 			h.Set("Content-Security-Policy", workerCSP)
 		}
-		mux.ServeHTTP(w, r)
+		gate.ServeHTTP(w, r)
 	})
+}
+
+// routeMux records the patterns it registers: tests walk them (012-AC5).
+type routeMux struct {
+	*http.ServeMux
+	patterns []string
+}
+
+func (m *routeMux) Handle(pattern string, h http.Handler) {
+	m.patterns = append(m.patterns, pattern)
+	m.ServeMux.Handle(pattern, h)
+}
+
+func (m *routeMux) HandleFunc(pattern string, h func(http.ResponseWriter, *http.Request)) {
+	m.Handle(pattern, http.HandlerFunc(h))
 }
 
 // connectSrc is the CSP directive letting livekit-client signal over a WebSocket to LiveKit and
@@ -488,10 +518,11 @@ func bearer(r *http.Request) string {
 }
 
 // cred is the hash of a token a request offers: a participant token, or with viaProfile, a
-// profile session.
+// profile session, or with apiToken, a personal API token (012-AC3).
 type cred struct {
 	hash       string
 	viaProfile bool
+	apiToken   bool
 }
 
 // session is an authenticated participant and the credentials the request offered, which every
@@ -518,7 +549,9 @@ func (s *Server) participant(next func(http.ResponseWriter, *http.Request, sessi
 		// A bearer token is all an API client offers. A browser may hold a room cookie its
 		// participant lost while its profile still has another participant in the room: try both.
 		var sess session
-		if tok := bearer(r); tok != "" {
+		if tok := bearer(r); apiTokenOf(r) != nil {
+			sess.creds = append(sess.creds, cred{hash: HashToken(tok), apiToken: true})
+		} else if tok != "" {
 			sess.creds = append(sess.creds, cred{hash: HashToken(tok)})
 		} else {
 			if c, err := r.Cookie(cookieName); err == nil && c.Value != "" {
@@ -538,6 +571,11 @@ func (s *Server) participant(next func(http.ResponseWriter, *http.Request, sessi
 		}
 		var err error
 		sess.p, err = s.authorize(r.Context(), sess.creds, r.PathValue("room"))
+		if errors.Is(err, store.ErrNotFound) && apiTokenOf(r) != nil {
+			// The gate found the token live: what is missing is a seat (012-AC3).
+			httpError(w, http.StatusForbidden, msgTokenNotHere)
+			return
+		}
 		if errors.Is(err, store.ErrNotFound) {
 			httpError(w, http.StatusUnauthorized, "invalid or revoked token")
 			return
@@ -558,7 +596,10 @@ func (s *Server) authorize(ctx context.Context, creds []cred, room string) (*sto
 	for _, c := range creds {
 		var p *store.Participant
 		var err error
-		if c.viaProfile {
+		if c.apiToken {
+			// Each check reads the token's row: a revoke or an expiry ends an open stream too.
+			p, err = s.bus.Store.APITokenParticipant(ctx, c.hash, room, s.now())
+		} else if c.viaProfile {
 			p, err = s.bus.Store.ProfileParticipant(ctx, c.hash, room)
 		} else if p, err = s.bus.Store.ParticipantByToken(ctx, c.hash); err == nil && p.RoomID != room {
 			err = store.ErrNotFound

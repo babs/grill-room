@@ -58,7 +58,7 @@ const (
 // AuditActions lists every action, for the audit view's filter.
 var AuditActions = []string{ActionRoomCreate, ActionRoomRename, ActionRoomDelete, ActionRoomQuota, ActionRoomExport, ActionRoomImport, ActionInviteCreate, ActionInviteRevoke,
 	ActionRoomAdminAdd, ActionRoomAdminRemove, ActionRoomSkillRemove, ActionRename, ActionDocumentDelete, ActionDocumentRestore, ActionHostTransfer, ActionProfileDelete, ActionProfileRecoveryLink, ActionProfileRecoveryUsed, ActionProfileMerge, ActionProfilePurge, ActionProfileMaxRooms, ActionTemplateRemove, ActionSkillRemove, ActionStarterPublish, ActionStarterDelete, ActionSettings,
-	ActionAdminLogin, ActionAdminLogout, ActionSessionRevoke}
+	ActionAPITokenCreate, ActionAPITokenRevoke, ActionPersonaRemove, ActionAdminLogin, ActionAdminLogout, ActionSessionRevoke}
 
 // adminCSP admits the /admin page's import map by its hash.
 var adminCSP = func() string {
@@ -105,8 +105,13 @@ func (s *Server) asAdmin(w http.ResponseWriter, r *http.Request) (admin *http.Re
 	return r.WithContext(context.WithValue(r.Context(), adminKey{}, adminCaller{Session: id})), false
 }
 
+// adminHandler is a route behind the admin check: the token gate refuses API tokens there (012-AC5).
+type adminHandler http.HandlerFunc
+
+func (h adminHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h(w, r) }
+
 func (s *Server) admin(next http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return adminHandler(func(w http.ResponseWriter, r *http.Request) {
 		ar, answered := s.asAdmin(w, r)
 		if answered {
 			return
@@ -314,7 +319,8 @@ func (s *Server) auditLog(w http.ResponseWriter, r *http.Request) {
 }
 
 // PurgeAudit deletes the audit entries past the retention, the participants' client fields past theirs
-// (005-AC20) and the expired admin sessions now, then
+// (005-AC20), the expired admin sessions, and the API tokens expired 30 days ago with the IPs of
+// their last uses past the client retention (012-AC7, 012-AC9) now, then
 // every auditPurgeEvery, until ctx ends (004-AC6).
 func (s *Server) PurgeAudit(ctx context.Context) {
 	for {
@@ -333,6 +339,11 @@ func (s *Server) PurgeAudit(ctx context.Context) {
 		}
 		if _, err := s.bus.Store.PurgeAdminSessions(ctx, now); err != nil && ctx.Err() == nil {
 			s.log.Error("admin_session_purge_failed", zap.Error(err))
+		}
+		if n, err := s.bus.Store.PurgeAPITokens(ctx, now, now.Add(-s.opts.ClientRetention)); err != nil && ctx.Err() == nil {
+			s.log.Error("api_token_purge_failed", zap.Error(err))
+		} else if n > 0 {
+			s.log.Info("api_tokens_purged", zap.Int64("tokens", n))
 		}
 		t := time.NewTimer(auditPurgeEvery)
 		select {

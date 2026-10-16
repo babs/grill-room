@@ -777,6 +777,9 @@ func (s *Store) RemovePersona(ctx context.Context, roomID string, id int64, by *
 		if busy {
 			return ErrPersonaBusy
 		}
+		if err := auditTx(ctx, tx, "", map[string]any{"persona": id, "name": p.Name}); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM room_personas WHERE id = ?`, id); err != nil {
 			return fmt.Errorf("remove persona: %w", err)
 		}

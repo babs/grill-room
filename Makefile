@@ -28,7 +28,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: ui-tools ui-vendor ui-check build e2e-build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-device-voice e2e-agent-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image stt-image-test stt-image-e2e cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: ui-tools ui-vendor ui-check build e2e-build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-device-voice e2e-agent-live e2e-mcp-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image stt-image-test stt-image-e2e cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -71,7 +71,7 @@ run: build
 	./bin/$(APP_NAME)
 
 test:
-	go test -race -cover ./...
+	go test -race -cover -timeout 20m ./...
 
 # Sandbox and agent turn tests against real Docker, a fake Anthropic upstream and a fake claude:
 # no subscription use. The egress test needs Internet access to PyPI, npm and GitHub. -p 1: the
@@ -116,6 +116,12 @@ e2e-device-voice: build e2e-build
 # most four for the skill turn (skills-live.spec.js, three when last run).
 e2e-agent-live: build
 	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c agent-live/playwright.config.js
+
+# 012: a real Claude Code adds the server from the /profile token sheet and sets up a room through
+# /mcp, against a server of its own on loopback. Spends at most six real Claude requests (haiku)
+# with this machine's Claude Code login; claude runs on a throwaway config dir.
+e2e-mcp-live: build
+	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c mcp-live/playwright.config.js
 
 # The one-liner on a clean Debian container, pairing, self-update and tampered releases against the
 # compose stack: run `make dev-up` first. Copies releases into the grill-room container and

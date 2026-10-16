@@ -32,6 +32,9 @@ test('merge two profiles from /admin', async ({ browser, request }) => {
   await join(b, request, own.id, bea);
   const [idA, idB] = [(await profileOf(a)).id, (await profileOf(b)).id];
   expect(idA).not.toBe(idB);
+  // 012-AC12: B's API token is revoked by the merge, not moved.
+  const made = await b.evaluate(() => fetch('/api/profile/tokens', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'ci', scope: 'read' }) }).then((r) => r.json()));
 
   const page = await (await browser.newContext({ viewport: { width: 1280, height: 800 } })).newPage();
   expect(await signIn(page, adminToken, 'profiles')).toBe(201);
@@ -50,6 +53,7 @@ test('merge two profiles from /admin', async ({ browser, request }) => {
   await expect(sheet.locator('#merge-from-who')).toContainText(bea);
   await expect(sheet.locator('#merge-email')).toHaveText('none');
   await expect(sheet.locator('#merge-counts')).toContainText('Seats1 + 2');
+  await expect(sheet.locator('#merge-tokens')).toHaveText('1');
   const rooms = sheet.locator('#merge-rooms li');
   await expect(rooms).toHaveCount(2);
   await expect(rooms.filter({ hasText: shared.name })).toContainText('both');
@@ -72,6 +76,8 @@ test('merge two profiles from /admin', async ({ browser, request }) => {
   await sheet.locator('#merge-confirm').click();
   await expect(sheet).toBeHidden();
   await expect(page.locator('.toasts .toast')).toContainText(`Merged into ${anna}. Moved 2 seats`);
+  await expect(page.locator('.toasts .toast')).toContainText('Revoked 1 API token.');
+  expect((await request.get('/api/profile', { headers: { Authorization: `Bearer ${made.token}` } })).status()).toBe(401);
   await expect(page.locator('#profile-' + idB)).toHaveCount(0);
   await expect(page.locator('#profile-' + idA + ' .rooms')).toHaveAttribute('data-tip', new RegExp(own.name));
 

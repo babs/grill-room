@@ -537,3 +537,35 @@ func (s *Server) deletedDocuments(w http.ResponseWriter, r *http.Request, sess *
 	}
 	writeJSON(w, http.StatusOK, docs)
 }
+
+// documentText answers a text revision of a document as Markdown, the latest by default or ?rev=,
+// for agents: the room shows it as HTML (012, read_document).
+func (s *Server) documentText(w http.ResponseWriter, r *http.Request, sess session) {
+	d, ok := s.document(w, r, sess)
+	if !ok {
+		return
+	}
+	n := d.Revisions
+	if v := r.URL.Query().Get("rev"); v != "" {
+		var err error
+		if n, err = strconv.Atoi(v); err != nil || n < 1 {
+			httpError(w, http.StatusBadRequest, "rev must be a revision number from 1")
+			return
+		}
+	}
+	if d.Revisions == 0 {
+		httpError(w, http.StatusUnprocessableEntity, "this document has no text: it is a "+d.Format)
+		return
+	}
+	rev, err := s.bus.Store.Revision(r.Context(), d.ID, n)
+	if errors.Is(err, store.ErrNotFound) {
+		httpError(w, http.StatusNotFound, fmt.Sprintf("no revision %d; the document has %d", n, d.Revisions))
+		return
+	}
+	if err != nil {
+		s.serverError(w, "document_text_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"document": d.ID, "name": d.Name, "revision": rev.N, "revisions": d.Revisions,
+		"author": rev.Author, "created_at": rev.CreatedAt, "text": rev.Body})
+}

@@ -295,7 +295,13 @@ func (s *Server) updatePersona(w http.ResponseWriter, r *http.Request, sess sess
 	s.personaDone(w, sess, p, m, err, heldStatus(held))
 }
 
+// removePersona removes a room persona; any member may. Audited only when done with an API token
+// (012-AC20): the room's line says who did it otherwise.
 func (s *Server) removePersona(w http.ResponseWriter, r *http.Request, sess session) {
-	m, err := s.bus.Store.RemovePersona(r.Context(), sess.p.RoomID, personaID(r), sess.p)
+	ctx := r.Context()
+	if apiTokenOf(r) != nil {
+		ctx = s.roomAuditing(r, &sess, ActionPersonaRemove, sess.p.RoomID, nil)
+	}
+	m, err := s.bus.Store.RemovePersona(ctx, sess.p.RoomID, personaID(r), sess.p)
 	s.personaDone(w, sess, nil, m, err, http.StatusNoContent)
 }

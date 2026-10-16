@@ -15,14 +15,14 @@ import (
 	"github.com/babs/grill-room/internal/store"
 )
 
-// profileFor answers the request itself and returns nil unless the profile cookie names a profile;
-// a write must also come from this site.
+// profileFor answers the request itself and returns nil unless the request's API token or profile
+// cookie names a profile; a write must also come from this site.
 func (s *Server) profileFor(w http.ResponseWriter, r *http.Request) *store.Profile {
 	if crossSite(r) {
 		httpError(w, http.StatusForbidden, "cross-site request refused")
 		return nil
 	}
-	p, err := s.profileFromCookie(r)
+	p, err := s.sessionProfile(r)
 	if err != nil {
 		s.serverError(w, "profile_lookup_failed", err)
 		return nil

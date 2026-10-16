@@ -127,3 +127,42 @@ func (s *Server) messageVersions(w http.ResponseWriter, r *http.Request, sess se
 	}
 	writeJSON(w, http.StatusOK, vs)
 }
+
+// maxMessagesPage bounds one page of GET .../messages.
+const maxMessagesPage = 500
+
+// listMessages answers the room's lines after ?since=, at most ?limit= (200 by default), oldest
+// first, as text without their HTML, for agents: the room reads them through its event stream
+// (012, get_transcript). next is the since= of the following page, 0 on the last one.
+func (s *Server) listMessages(w http.ResponseWriter, r *http.Request, sess session) {
+	q := r.URL.Query()
+	since, limit := int64(0), 200
+	var err error
+	if v := q.Get("since"); v != "" {
+		if since, err = strconv.ParseInt(v, 10, 64); err != nil || since < 0 {
+			httpError(w, http.StatusBadRequest, "since must be a message id from 0")
+			return
+		}
+	}
+	if v := q.Get("limit"); v != "" {
+		if limit, err = strconv.Atoi(v); err != nil || limit < 1 || limit > maxMessagesPage {
+			httpError(w, http.StatusBadRequest, fmt.Sprintf("limit must be 1 to %d", maxMessagesPage))
+			return
+		}
+	}
+	ms, err := s.bus.Store.Messages(r.Context(), sess.p.RoomID, since, limit)
+	if err != nil {
+		s.serverError(w, "list_messages_failed", err)
+		return
+	}
+	out := make([]store.Message, len(ms))
+	for i, m := range ms {
+		out[i] = viewMessage(m)
+		out[i].HTML = ""
+	}
+	var next int64
+	if len(ms) == limit {
+		next = ms[len(ms)-1].ID
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"messages": out, "next": next})
+}

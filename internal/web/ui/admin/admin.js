@@ -27,7 +27,7 @@ import { RoomPanel, AdminRows, RowMenu, Meter, TabBar, fetchJSON, roomTabs, size
  * @typedef {{keep: MergeSide, merge: MergeSide, rooms: {room_id: string, room_name: string, keep: boolean, merge: boolean}[],
  *   skills: {keep: string[], merge: string[], renamed: {from: string, to: string}[]}, seats: MergeCount, shared_skills: MergeCount, templates: MergeCount,
  *   starters: MergeCount, rooms_created: MergeCount, room_admin: {keep: string[], merge: string[]},
- *   over_limits: {kind: string, after: number, limit: number}[], email_after: string}} MergePreview
+ *   over_limits: {kind: string, after: number, limit: number}[], email_after: string, api_tokens: number}} MergePreview
  * @typedef {import('./room-panel.js').Member} Participant
  * @typedef {{name: string, counts: Record<string, number>, bytes: Record<string, number>, warnings: string[], format: number,
  *   instance_version: string, same_instance: boolean, exported_at: string, archive_bytes: number,
@@ -146,6 +146,7 @@ const actionLabels = {
   'profile.recovery_link_used': 'Recovery link used', 'profile.merge': 'Profiles merged', 'profile.purge': 'Empty profiles deleted',
   'profile.max_rooms': 'Room limit set', 'template.remove': 'Persona template removed', 'skill.remove': 'Shared skill removed',
   'starter.publish': 'Starter shared', 'starter.delete': 'Starter removed', 'instance.settings': 'Server settings changed',
+  'api_token.create': 'API token created', 'api_token.revoke': 'API token revoked', 'persona.remove': 'Persona removed',
   'admin.login': 'Admin signed in', 'admin.logout': 'Admin signed out', 'admin.session_revoke': 'Admin session revoked',
 };
 /** @param {string} a */
@@ -458,6 +459,8 @@ const listed = (names) => (names.length ? new Intl.ListFormat('en').format(names
 const mergeKinds = [['seats', 'seat', 'seats'], ['skills', 'personal skill', 'personal skills'], ['shared_skills', 'shared skill', 'shared skills'],
   ['templates', 'persona template', 'persona templates'], ['starters', 'starter', 'starters'], ['rooms_created', 'room created', 'rooms created'],
   ['room_admins', 'room-admin role', 'room-admin roles'], ['sessions', 'sign-in', 'sign-ins']];
+/** @type {[string, string, string][]} */
+const revokedKinds = [['api_tokens_revoked', 'API token', 'API tokens']];
 /** @type {Record<string, string>} */
 const limitKinds = { skills: 'Personal skills', templates: 'Persona templates', starters: 'Starters', rooms_created: 'Rooms created' };
 
@@ -500,8 +503,10 @@ function MergeSheet({ profiles, from, done }) {
     setSaid('');
     api('POST', '/api/admin/profiles/merge', { keep, merge }).then((/** @type {{keep: {name: string}, moved: Record<string, number>}} */ r) => {
       inflight.current = false;
-      const moved = mergeKinds.filter(([k]) => r.moved?.[k]).map(([k, one, many]) => `${r.moved[k]} ${r.moved[k] === 1 ? one : many}`);
-      toast(`Merged into ${r.keep.name || 'the kept profile'}. ${moved.length ? 'Moved ' + listed(moved) + '.' : 'Nothing to move.'}`);
+      const count = (/** @type {[string, string, string][]} */ kinds) => kinds.filter(([k]) => r.moved?.[k]).map(([k, one, many]) => `${r.moved[k]} ${r.moved[k] === 1 ? one : many}`);
+      const moved = count(mergeKinds);
+      const revoked = count(revokedKinds);
+      toast(`Merged into ${r.keep.name || 'the kept profile'}. ${moved.length ? 'Moved ' + listed(moved) + '.' : 'Nothing to move.'}${revoked.length ? ' Revoked ' + listed(revoked) + '.' : ''}`);
       ref.current?.close();
     }).catch((/** @type {Error} */ err) => {
       inflight.current = false;
@@ -555,6 +560,7 @@ function MergeSheet({ profiles, from, done }) {
           .map(([k, n]) => html`<div><dt>${k}</dt><dd>${(/** @type {MergeCount} */ (n)).keep} + ${(/** @type {MergeCount} */ (n)).merge}</dd></div>`)}
         <div><dt>Room admin, kept</dt><dd>${listed(p.room_admin.keep)}</dd></div>
         <div><dt>Room admin, moved</dt><dd>${listed(p.room_admin.merge)}</dd></div>
+        <div><dt>API tokens, revoked</dt><dd id="merge-tokens">${p.api_tokens}</dd></div>
       </dl>
       ${p.over_limits.length > 0 && html`<ul id="merge-limits" class="warn">${p.over_limits.map((o) => html`<li>
         ${limitKinds[o.kind] || o.kind}: ${o.after} after the merge, over the limit of ${o.limit}. The profile keeps them all and adds no more until under it.</li>`)}</ul>`}

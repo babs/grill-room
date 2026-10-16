@@ -12,7 +12,7 @@ const states = {
   pending: { pending_email: address, pending_ttl_s: 14 * 60, pending_age_s: 90 },
   bound: { email: address },
 };
-const tabs = ['rooms', 'starters', 'skills', 'account'];
+const tabs = ['rooms', 'starters', 'skills', 'tokens', 'account'];
 
 // SHOTS=<dir> saves full-page screenshots for the visual check.
 const shots = process.env.SHOTS;
@@ -141,7 +141,7 @@ test('one primary per tab, empty states and the skill sheet', async ({ browser, 
     await route.fulfill({ response: res, json: (await res.json()).filter((st) => st.library !== 'instance') });
   });
   await tab.goto('/profile');
-  const primary = { rooms: ['+ New room'], starters: [], skills: ['Add a skill'], account: ['Send me a link'] };
+  const primary = { rooms: ['+ New room'], starters: [], skills: ['Add a skill'], tokens: ['New token'], account: ['Send me a link'] };
   for (const t of tabs) {
     await openTab(tab, t);
     expect(await filled(tab), t).toEqual(primary[t]);

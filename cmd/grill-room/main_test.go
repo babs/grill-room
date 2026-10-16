@@ -88,6 +88,18 @@ func TestLoadConfigRejectsBadNumbers(t *testing.T) {
 	}
 }
 
+// 012-AC5: an admin token that looks like an API token is refused at start.
+func TestAdminTokenNotAPIToken(t *testing.T) {
+	t.Setenv("GRILL_ROOM_ADMIN_TOKEN", "grt_x")
+	c, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "grt_") {
+		t.Fatalf("validate: %v", err)
+	}
+}
+
 func TestAdminTokenHash(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
@@ -229,5 +241,28 @@ func TestRegistryCountsVoiceSources(t *testing.T) {
 		if s := strings.Join(got[name], ","); s != want || got[name] == nil {
 			t.Errorf("%s: series %q, want %q", name, s, want)
 		}
+	}
+}
+
+// 012 Phase 2: /metrics carries one MCP tool-call series per tool and result.
+func TestRegistryCountsMCPToolCalls(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "m.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	b := bus.New(st)
+	mfs, err := newRegistry(b, web.New(b, "", "http://x", web.Options{}, zap.NewNop())).Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, mf := range mfs {
+		if mf.GetName() == "grill_room_mcp_tool_calls_total" {
+			n = len(mf.GetMetric())
+		}
+	}
+	if n != len(web.MCPTools())*len(web.MCPResults) || n != 27*3 {
+		t.Fatalf("%d series", n)
 	}
 }
