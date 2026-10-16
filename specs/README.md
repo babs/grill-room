@@ -7,6 +7,7 @@
 | [003](003-daemon.md) | Daemon: one supervisor, many instances, rooms and agents | shipped |
 | [003b](003b-daemon-page-rework.md) | Daemon page rework: rooms per server, pause and remove, two settings groups | in progress |
 | [004](004-instance-ops.md) | Instance ops: admin UI, room admins, export/import, scenarios | shipped |
+| [004b](004b-admin-lists-and-sheets.md) | Admin lists and room sheets: rows with ⋯, phone cards, wide data pages, one Save per sheet | in progress |
 | [005](005-room-ux.md) | Room UX from live testing | shipped |
 | [006](006-room-starters.md) | Room starters | shipped |
 | [007](007-stt-parakeet.md) | STT engine: parakeet-ultra | shipped |
