@@ -11,7 +11,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path"
-	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -25,6 +24,7 @@ import (
 	"github.com/babs/grill-room/internal/bus"
 	_ "github.com/babs/grill-room/internal/sqlitetest"
 	"github.com/babs/grill-room/internal/store"
+	"github.com/babs/grill-room/internal/store/storetest"
 )
 
 const baseURL = "https://rooms.example"
@@ -52,7 +52,7 @@ func newEnvOpts(t *testing.T, opts Options) *env {
 // newEnvLog is newEnvOpts with the server writing to log.
 func newEnvLog(t *testing.T, opts Options, log *zap.Logger) *env {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "t.db")
+	dbPath := storetest.Path(t, "t.db")
 	st, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatal(err)

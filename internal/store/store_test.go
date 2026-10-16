@@ -10,12 +10,18 @@ import (
 	"testing"
 
 	"github.com/babs/grill-room/internal/anchor"
-	_ "github.com/babs/grill-room/internal/sqlitetest"
+	"github.com/babs/grill-room/internal/sqlitetest"
 )
 
 func openTest(t *testing.T) *Store {
 	t.Helper()
-	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	s, err := Open(sqlitetest.Template(t, "test.db", func(p string) error {
+		s, err := Open(p)
+		if err != nil {
+			return err
+		}
+		return s.Close()
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

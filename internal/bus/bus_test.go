@@ -2,15 +2,15 @@ package bus
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	_ "github.com/babs/grill-room/internal/sqlitetest"
 	"github.com/babs/grill-room/internal/store"
+	"github.com/babs/grill-room/internal/store/storetest"
 )
 
 func TestPostPersistsAndNotifies(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	st, err := store.Open(storetest.Path(t, "t.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

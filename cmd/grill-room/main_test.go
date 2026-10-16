@@ -1,7 +1,6 @@
 package main
 
 import (
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +12,7 @@ import (
 	"github.com/babs/grill-room/internal/mail"
 	_ "github.com/babs/grill-room/internal/sqlitetest"
 	"github.com/babs/grill-room/internal/store"
+	"github.com/babs/grill-room/internal/store/storetest"
 	"github.com/babs/grill-room/internal/web"
 )
 
@@ -102,7 +102,7 @@ func TestAdminTokenNotAPIToken(t *testing.T) {
 }
 
 func TestAdminTokenHash(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	st, err := store.Open(storetest.Path(t, "t.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestPushHosts(t *testing.T) {
 
 // 002-AC38: workspace fallbacks are counted on /metrics, one series per reason.
 func TestRegistryCountsWorkspaceFallbacks(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "m.db"))
+	st, err := store.Open(storetest.Path(t, "m.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestRegistryCountsWorkspaceFallbacks(t *testing.T) {
 // 010-AC20: /metrics carries the device flags held now, the voice lines stored by source and those
 // dropped as a repeat, one series per source.
 func TestRegistryCountsVoiceSources(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "m.db"))
+	st, err := store.Open(storetest.Path(t, "m.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestRegistryCountsVoiceSources(t *testing.T) {
 
 // 012 Phase 2: /metrics carries one MCP tool-call series per tool and result.
 func TestRegistryCountsMCPToolCalls(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "m.db"))
+	st, err := store.Open(storetest.Path(t, "m.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
