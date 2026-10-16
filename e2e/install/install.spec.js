@@ -97,20 +97,25 @@ test('one-liner install, pairing, dev key, self-update, tampered release refused
     await expect(admin.locator('#host')).toContainText(versions[0]);
     await expect(admin.locator('#docker')).toHaveText('Docker is not installed');
     await expect(admin.locator('#self-sig')).toHaveText('dev build');
-    await expect(admin.locator('#instances')).toContainText("Worker binary: the supervisor's own binary");
+    // 003b-AC1: the app's binary is in the server's details, behind its ⋯.
+    await admin.locator('#instances .server-head button.more').click();
+    await admin.getByRole('button', { name: 'App details' }).click();
+    await expect(admin.locator('#instances')).toContainText("App binary: this app's own binary");
     await expect(admin.locator('#update')).toBeHidden();
 
     // A newer release on the room server: its worker restarts on it, and refuses an unknown key.
     await serve(request, `${out}/${versions[1]}`);
-    await expect(admin.locator('#instances')).toContainText('refused: signature refused', { timeout: 120_000 });
+    await expect(admin.locator('#instances .server-head .status')).toHaveText('refused', { timeout: 120_000 });
+    await expect(admin.locator('#instances .server-error')).toContainText('ignature refused');
     expect(stored()).toBe('');
     // Trusted on the page, the key lets it run from bin/<version>/.
     await admin.locator('#tab-update').click();
     await admin.locator('#key-name').fill('e2e');
     await admin.locator('#key-pem').fill(readFileSync(`${out}/e2e-cosign.pub`, 'utf8'));
     await admin.getByRole('button', { name: 'Add the key' }).click();
-    await expect(admin.locator('#instances')).toContainText(`running, ${versions[1]}`, { timeout: 60_000 });
-    await expect(admin.locator('#instances')).toContainText('Worker binary: signed with the dev key e2e');
+    await expect(admin.locator('#instances .server-head')).toContainText(versions[1], { timeout: 60_000 });
+    await expect(admin.locator('#instances .server-head .status')).toHaveText('connected', { timeout: 60_000 });
+    await expect(admin.locator('#instances')).toContainText('App binary: signed with the dev key e2e');
     await expect(admin.locator('#pairing')).toHaveText('Paired. Connected.', { timeout: 30_000 });
     expect(stored()).toBe(versions[1]);
     expect(inBox(`sha256sum /root/.local/state/grill-room/bin/${versions[1]}/${bin}`).split(' ')[0]).toBe(sha256(readFileSync(`${out}/${versions[1]}/${bin}`)));
@@ -131,7 +136,12 @@ test('one-liner install, pairing, dev key, self-update, tampered release refused
     await expect(next.locator('#update')).toBeHidden();
     expect(installed()).toBe(sha256(readFileSync(`${out}/${versions[1]}/${bin}`)));
     // The worker now runs the supervisor's own binary: the stored copy is gone.
-    await expect(next.locator('#instances')).toContainText("Worker binary: the supervisor's own binary");
+    await next.locator('#tab-rooms').click();
+    if (!(await next.locator('.server-details').count())) {
+      await next.locator('#instances .server-head button.more').click();
+      await next.getByRole('button', { name: 'App details' }).click();
+    }
+    await expect(next.locator('#instances')).toContainText("App binary: this app's own binary");
     expect(stored()).toBe('');
 
     // A tampered release: the worker and the update refuse it; the current binary stays.

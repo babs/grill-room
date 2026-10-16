@@ -106,7 +106,7 @@ export function startDaemon(roomURL, env = {}, { expiresIn = 3600e3 } = {}) {
     });
     proc.on('exit', (code) => reject(new Error('daemon exited ' + code + ': ' + out)));
   });
-  return { proc, link, exited, handOver, sandbox: sandboxName(stateDir, roomURL), cleanup: () => { proc.kill(); rmSync(dir, { recursive: true, force: true }); } };
+  return { proc, link, exited, handOver, stateDir, sandbox: sandboxName(stateDir, roomURL), cleanup: () => { proc.kill(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
 // pairDaemon approves the daemon's pairing from the participant's room page, as a person would.

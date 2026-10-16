@@ -59,8 +59,8 @@ test('add a room from the AI host app page', async ({ browser, request, baseURL 
     await expect(approval2).toHaveURL(new RegExp(`/r/${second.id}$`));
     await expect(page.locator('#pairing')).toHaveText('Paired. Connected.', { timeout: 30_000 });
     await expect(approval2.locator('#pairing')).toBeHidden();
-    await expect(page.locator('.room-card')).toHaveCount(2);
-    for (const name of ['Docs room', 'Second room']) await expect(page.locator('.room-card', { hasText: name })).toHaveCount(1);
+    await expect(page.locator('.room-row')).toHaveCount(2);
+    for (const name of ['Docs room', 'Second room']) await expect(page.locator('.room-row', { hasText: name })).toHaveCount(1);
 
     await stopDaemon(page);
     expect(await daemon.exited).toBe(0);

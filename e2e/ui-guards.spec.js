@@ -328,18 +328,20 @@ test('a cut value keeps a copy button and its full text in the tip', async ({ br
   try {
     const ctx = await browser.newContext({ viewport: phone, permissions: ['clipboard-read', 'clipboard-write'] });
     const host = await ctx.newPage();
-    await host.goto(await daemon.link);
-    const value = host.locator('#room .value');
-    await expect(value).toBeVisible();
+    await host.goto((await daemon.link) + '#settings');
+    // The sandbox image on the Settings strip, once the server's app runs.
+    const image = process.env.GRILL_ROOM_SANDBOX_FAKE_IMAGE || 'grill-room-sandbox:fake';
+    const value = host.locator('.machine-strip .value');
+    await expect(value).toBeVisible({ timeout: 30_000 });
     const text = value.locator('.value-text');
-    // One line, cut at the phone's width, the whole link in the tip.
+    // One line, cut at the phone's width, the whole value in the tip.
     expect(await text.evaluate((e) => [getComputedStyle(e).whiteSpace, getComputedStyle(e).textOverflow, e.scrollWidth > e.clientWidth])).toEqual(['nowrap', 'ellipsis', true]);
-    await expect(text).toHaveAttribute('data-tip', roomURL);
+    await expect(text).toHaveAttribute('data-tip', image);
     const copy = value.getByRole('button', { name: /^Copy/ });
     const box = await copy.boundingBox();
     expect(box.x + box.width, 'copy button on screen').toBeLessThanOrEqual(phone.width);
     await copy.click();
-    expect(await host.evaluate(() => navigator.clipboard.readText())).toBe(roomURL);
+    expect(await host.evaluate(() => navigator.clipboard.readText())).toBe(image);
     await expect(host.locator('.toast', { hasText: 'Copied' })).toBeVisible();
   } finally {
     daemon.cleanup();
