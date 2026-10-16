@@ -281,6 +281,25 @@ test('phone: the first and the current tab are never cut', async ({ browser, req
   });
 });
 
+// 005-AC35 004b-AC3: whatever the font draws, the tab scrolled to leaves no sliver of the tab before
+// it: CI's fonts, wider than a workstation's, hit fractional tab edges. Each size changes the edges.
+test('phone: a tab bar scrolls to whole pixels at any glyph width', async ({ browser }) => {
+  // The page's CSP refuses an injected style: only this test bypasses it.
+  const page = await (await browser.newContext({ viewport: phone, bypassCSP: true })).newPage();
+  await signIn(page, undefined, 'audit');
+  await expect(page.locator('#tab-audit')).toHaveAttribute('aria-current', 'page');
+  const nav = page.locator('nav.tabs[aria-label=Views]');
+  for (const px of [13, 13.13, 13.52, 14.56, 14.69, 15.08]) {
+    await page.addStyleTag({ content: `.tabs a { font-size: ${px}px !important }` });
+    await page.goto('/admin#libraries');
+    await page.goto('/admin#audit');
+    await expect.poll(() => nav.evaluate((n) => {
+      const lo = n.getBoundingClientRect().left + n.clientLeft;
+      return [...n.querySelectorAll('a')].filter((a) => { const r = a.getBoundingClientRect(); return r.left < lo - 0.5 && r.right > lo + 0.5; }).length;
+    }), `${px} px`).toBe(0);
+  }
+});
+
 // token resolves a custom property to the colour the page computes for it.
 const token = (page, name) => page.evaluate((n) => {
   const probe = document.createElement('span');
