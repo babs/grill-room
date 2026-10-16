@@ -139,15 +139,13 @@ for (const [size, viewport] of Object.entries(widths)) {
     const { room, pages: [alice] } = await roomWith(browser, request, ['Alice', 'Bob']);
     await alice.setViewportSize(viewport);
     await appointAdmin(alice, request, room.id);
-    // Alice's app hosts the AI and Bob may ask it: the rows get every badge but audio and transcribed.
+    // Alice's app hosts the AI: the rows get every badge but audio and transcribed.
     const stop = await fakeDaemon(alice, baseURL, room.id, 'laptop');
     try {
       await expect(alice.locator('#participants .tag.role-host')).toHaveCount(1);
       if (size === 'phone') await alice.locator('#tabbar').getByRole('button', { name: /People/ }).click();
       await expect(alice.locator('#participants li')).toHaveCount(2);
-      await expect(alice.locator('#participants .tag.role-admin')).toHaveCount(1);
-      await (await personMenu(alice, 'Bob')).getByRole('button', { name: 'Can ask the AI' }).click();
-      await expect(alice.locator('#participants .tag.tag-ask:not(.blank)')).toHaveCount(1);
+      await expect(alice.locator('#participants .sigil', { hasText: '@' })).toHaveCount(1);
       expect.soft(await offCentre(alice, '#participants li', '.name', '.voice-dot, .tag, .tag svg, .person-more')).toEqual([]);
       expect.soft(await offCentre(alice, '#people-pane .pane-head', '.sec-label', '.fold, .sec-icon, .head-action, .head-action svg')).toEqual([]);
       await shot(alice, `${size}-people`);

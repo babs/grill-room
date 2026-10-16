@@ -72,16 +72,17 @@
   };
 
   /**
-   * grillAgo says how long ago t was, coarsely: "just now", "5 min ago", "3 h ago", "2 d ago".
+   * grillAgo says how long ago t was, coarsely: "just now", "5 min ago", "3 h ago", "2 d ago"; with
+   * words, as a card has room for: "5 minutes ago", "1 hour ago", "2 days ago".
    * @param {string} t
+   * @param {boolean} [words]
    * @returns {string}
    */
-  window.grillAgo = (t) => {
+  window.grillAgo = (t, words = false) => {
     const s = Math.max(0, (Date.now() - new Date(t).getTime()) / 1000);
     if (s < 60) return 'just now';
-    if (s < 3600) return Math.floor(s / 60) + ' min ago';
-    if (s < 86400) return Math.floor(s / 3600) + ' h ago';
-    return Math.floor(s / 86400) + ' d ago';
+    const [n, unit, short] = s < 3600 ? [Math.floor(s / 60), 'minute', 'min'] : s < 86400 ? [Math.floor(s / 3600), 'hour', 'h'] : [Math.floor(s / 86400), 'day', 'd'];
+    return n + ' ' + (words ? unit + (n === 1 ? '' : 's') : short) + ' ago';
   };
 
   /** @type {WeakMap<HTMLButtonElement, number>} */
