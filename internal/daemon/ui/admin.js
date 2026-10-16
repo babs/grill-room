@@ -896,6 +896,9 @@ function ServerForm({ inst }) {
   // draft holds only the fields the host changed: the others follow the server's values.
   const [draft, setDraft] = useState(/** @type {Record<string, string>} */ ({}));
   const [busy, setBusy] = useState(false);
+  // The box shows the host's click until the server confirms it: a status poll landing in between
+  // would otherwise redraw the old value and undo the click.
+  const [approving, setApproving] = useState(/** @type {boolean | null} */ (null));
   const [text, run] = useStatus();
   const saved = { max_model: st?.settings.max_model || '', max_effort: st?.settings.max_effort || '', account: inst.account };
   const v = { ...saved, ...draft };
@@ -918,9 +921,11 @@ function ServerForm({ inst }) {
   /** @param {any} e */
   const approveAll = (e) => {
     const on = e.currentTarget.checked;
+    setApproving(on);
     api('POST', '/api/settings', { instance: inst.id, max_model: saved.max_model, max_effort: saved.max_effort, approve_all: on }).then(reload)
       .then(() => window.grillToast(on ? 'New AI personas and changes are approved at once' : 'New AI personas and changes wait for your approval'))
-      .catch((err) => { banner.value = err.message; });
+      .catch((err) => { banner.value = err.message; })
+      .finally(() => setApproving(null));
   };
   return html`<form id="settings-form" class="settings-group" aria-labelledby="server-settings-title" onSubmit=${save}>
       <label for="settings-instance">Server</label><div class="control">
@@ -936,7 +941,7 @@ function ServerForm({ inst }) {
         <label for="max-effort">Max effort</label><div class="control"><select id="max-effort" value=${v.max_effort} onChange=${pick('max_effort')}>
           <option value="">no cap</option>${d.efforts.map((m) => html`<option value=${m}>${m}</option>`)}</select></div>
         <p class="hint">An AI persona asking for more runs at this limit until you approve it in the room.</p>
-        <label class="full"><input id="approve-all" type="checkbox" checked=${st.settings.approve_all} onChange=${approveAll} /> Approve every new AI persona and change</label>`
+        <label class="full"><input id="approve-all" type="checkbox" checked=${approving ?? st.settings.approve_all} onChange=${approveAll} /> Approve every new AI persona and change</label>`
       : html`<p class="hint">The app for ${hostOf(inst.url)} is ${inst.state}${inst.error ? ': ' + inst.error : ''}. Its limits show once it runs.</p>`}
       <div class="settings-foot">
         <span id="settings-status" role="status">${text}</span>
