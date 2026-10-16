@@ -87,7 +87,8 @@ export function startDaemon(roomURL, env = {}, { expiresIn = 3600e3 } = {}) {
   writeFileSync(join(dir, '.credentials.json'),
     JSON.stringify({ claudeAiOauth: { accessToken: 'e2e-fake', expiresAt: Date.now() + expiresIn } }), { mode: 0o600 });
   const daemonEnv = {
-    ...process.env, CLAUDE_CONFIG_DIR: dir, GRILL_ROOM_DAEMON_STATE_DIR: stateDir, GRILL_ROOM_DAEMON_BROWSER: 'none',
+    // A random page port: the usual one belongs to this machine's own app.
+    ...process.env, CLAUDE_CONFIG_DIR: dir, GRILL_ROOM_DAEMON_STATE_DIR: stateDir, GRILL_ROOM_DAEMON_BROWSER: 'none', GRILL_ROOM_DAEMON_ADMIN_PORT: '0',
     GRILL_ROOM_SANDBOX_IMAGE: process.env.GRILL_ROOM_SANDBOX_FAKE_IMAGE || 'grill-room-sandbox:fake', LOG_LEVEL: 'info', ...env,
   };
   const proc = spawn('../bin/grill-room-daemon', [roomURL], { env: daemonEnv, stdio: ['ignore', 'ignore', 'pipe'] });
@@ -175,7 +176,7 @@ export function liveDaemon(dir, roomURL, env = {}) {
   const stateDir = join(dir, 'state');
   const log = join(dir, 'daemon.log');
   const proc = spawn('../bin/grill-room-daemon', [roomURL], {
-    env: { ...process.env, GRILL_ROOM_DAEMON_STATE_DIR: stateDir, GRILL_ROOM_DAEMON_BROWSER: 'none', GRILL_ROOM_MAX_MODEL: 'haiku', LOG_LEVEL: 'info', ...env },
+    env: { ...process.env, GRILL_ROOM_DAEMON_STATE_DIR: stateDir, GRILL_ROOM_DAEMON_BROWSER: 'none', GRILL_ROOM_DAEMON_ADMIN_PORT: '0', GRILL_ROOM_MAX_MODEL: 'haiku', LOG_LEVEL: 'info', ...env },
     stdio: ['ignore', 'ignore', openSync(log, 'w')],
   });
   const exited = new Promise((resolve) => proc.on('exit', resolve));
@@ -463,7 +464,7 @@ export const tableLayout = (page, sel) => page.locator(sel).evaluate((t) => {
 // approveEverything switches the daemon page's "approve every new AI persona and change" on: it
 // applies at once and says so in a toast (003b-AC15).
 export async function approveEverything(admin) {
-  await admin.locator('#tab-settings').click();
+  await admin.locator('#tab-general').click();
   await admin.getByLabel('Approve every new AI persona and change').check();
   await expect(admin.locator('.toast', { hasText: 'approved at once' })).toBeVisible();
 }

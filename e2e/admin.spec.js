@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { roomWith, startDaemon, pairDaemon, removeSandbox, tableLayout } from './helpers.js';
 
 // Each tab of the page and the sections it holds (005-AC17).
-const tabs = { rooms: ['Rooms'], accounts: ['AI accounts'], settings: ['Settings', 'This machine', 'Per server'],
+const tabs = { rooms: ['Rooms'], accounts: ['AI accounts'], general: ['General', 'This machine', 'Server'], network: ['Network', 'Websites the AI may reach'],
   monitoring: ['Activity', 'Logs'], update: ['Update'] };
 
 // 003-AC26 003-AC27 003-AC28 003-AC29 005-AC17: the supervisor's page shows every section in its
@@ -48,11 +48,12 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
     await expect(admin.locator('#alerts-accounts')).toContainText('Claude account default: the access token expires in');
     await expect(admin.locator('#tab-accounts .tab-badge')).toHaveText('1');
 
-    await admin.locator('#tab-settings').click();
+    await admin.locator('#tab-general').click();
     await admin.getByLabel('Days of history').fill('7');
-    await expect(admin.locator('#machine-form .dirty')).toHaveText('1 unsaved change');
-    await admin.locator('#machine-form').getByRole('button', { name: 'Save' }).click();
-    await expect(admin.locator('#machine-status')).toHaveText('Saved.');
+    await expect(admin.locator('#general-save .dirty')).toHaveText('1 unsaved change');
+    await admin.locator('#general-save').getByRole('button', { name: 'Save' }).click();
+    await expect(admin.locator('.toast', { hasText: /^Saved$/ })).toBeVisible();
+    await expect(admin.locator('#general-save .dirty')).toHaveText('Everything saved');
     await expect(admin.locator('#settings-instance')).toHaveValue(/^[0-9a-f]{12}$/);
     await expect(admin.getByLabel('Sandbox CPUs')).toHaveValue('2');
 
@@ -134,7 +135,7 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
     }
     await admin.locator('#tab-rooms').click();
     await expect(admin.locator('#alerts-rooms')).toBeInViewport();
-    await admin.locator('#tab-settings').click();
+    await admin.locator('#tab-general').click();
 
     // Limits apply by restarting the worker, which comes back. The page's next status is held until
     // one shows the worker down, as a loaded machine delivers it: the status line must survive. A
@@ -165,8 +166,8 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
     // The page may still show the reply's turn running, a status poll behind: saving then asks first.
     await expect(roomCard.locator('.meta')).toHaveCount(0, { timeout: 30_000 });
     await admin.getByLabel('Sandbox memory').fill('2g');
-    await admin.locator('#machine-form').getByRole('button', { name: 'Save' }).click();
-    await expect(admin.locator('#machine-status')).toHaveText('Saved: the servers reconnect with the new limits.', { timeout: 10_000 });
+    await admin.locator('#general-save').getByRole('button', { name: 'Save' }).click();
+    await expect(admin.locator('.toast', { hasText: 'Saved: the servers reconnect with the new limits' })).toBeVisible({ timeout: 10_000 });
     await expect(card.locator('.server-head .status')).toHaveText('connected', { timeout: 30_000 });
     await expect(admin.getByLabel('Sandbox memory')).toHaveValue('2g');
   } finally {

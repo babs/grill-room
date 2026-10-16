@@ -380,7 +380,7 @@ func TestDevKeyOnPage(t *testing.T) {
 }
 
 // 003-AC7: when a worker reports that its instance serves another version, the worker restarts
-// on it, once.
+// on it, once, after that version's binary was picked and checked.
 func TestInstanceVersionChangeRestartsWorker(t *testing.T) {
 	var calls atomic.Int32
 	s := testSupervisor(t, "served", nil, func(o *SupervisorOptions) {
@@ -401,7 +401,8 @@ func TestInstanceVersionChangeRestartsWorker(t *testing.T) {
 	// Its status, which names v9.9.9 again, came before its last log line: once that is in, a
 	// second restart would already be under way.
 	waitStatusSeen(t, s, 2)
-	if in := instance(t, s); calls.Load() != 2 || in.Restarts != 0 || len(s.checkNow) != 1 || reloading(s) {
+	// Three resolves: the start, the check before the swap (daemon-r2) and the restart.
+	if in := instance(t, s); calls.Load() != 3 || in.Restarts != 0 || len(s.checkNow) != 1 || reloading(s) {
 		t.Fatalf("%d resolves, %d update checks asked, %+v", calls.Load(), len(s.checkNow), in)
 	}
 	in, err := loadInstance(s.o.Paths.InstanceConfig(id))

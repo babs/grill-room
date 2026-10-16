@@ -3,14 +3,19 @@ package daemon
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"mime"
 	"net"
 	"net/http"
+	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -75,8 +80,12 @@ type hostBackend interface {
 }
 
 // Admin is the local admin page. Only someone holding a link this process printed or opened can
-// use it: the link's one-time code is traded for a session token the page keeps in sessionStorage
-// and sends as a bearer. No cookie, so no request from another site carries a credential.
+// use it: the link's one-time code is traded for a session token the page keeps in localStorage,
+// which only its own origin (127.0.0.1 and its port) reads, and sends as a bearer. No cookie, so no
+// request from another site, another localhost port included, carries a credential.
+//
+// A session is remembered for its port, in the state dir, so that a bookmark of the page works
+// after a restart; the page lists them and forgets one, or all.
 type Admin struct {
 	ctx  context.Context
 	d    Backend
@@ -90,7 +99,24 @@ type Admin struct {
 	origin   string
 	codes    map[string]bool
 	sessions map[string]bool
+	// rememberPath is where the remembered sessions live; empty remembers none.
+	rememberPath string
+	remembered   []rememberedSession
 }
+
+// rememberedSession is a session kept across restarts: only its token's sha256 is stored.
+type rememberedSession struct {
+	Hash    string    `json:"hash"`
+	Port    string    `json:"port"`
+	Created time.Time `json:"created"`
+	Used    time.Time `json:"used"`
+}
+
+// rememberTTL forgets a session unused that long; maxRemembered bounds the file.
+const (
+	rememberTTL   = 30 * 24 * time.Hour
+	maxRemembered = 16
+)
 
 // NewAdmin serves d's page; stop ends the daemon. ctx bounds the room work the page starts.
 // announce receives a new link each time one is used, so a closed tab can be reopened.
@@ -105,15 +131,20 @@ func (a *Admin) Listen(ctx context.Context) (net.Listener, error) {
 }
 
 // ListenAt binds addr, the port the page had before a self-update restarted the supervisor, so
-// that its open tab reconnects (005-AC45). With addr taken or empty it binds a random port on
-// 127.0.0.1; reused says whether addr was kept.
-func (a *Admin) ListenAt(ctx context.Context, addr string) (ln net.Listener, reused bool, err error) {
-	if host, _, e := net.SplitHostPort(addr); e == nil && host == "127.0.0.1" {
-		if ln, err = (&net.ListenConfig{}).Listen(ctx, "tcp", addr); err == nil {
-			reused = true
-		} else {
-			a.log.Warn("admin_port_not_kept", zap.String("addr", addr), zap.Error(err))
+// that its open tab reconnects (005-AC45), else the first of fallback that is free: the page's
+// usual port. With all of them taken or empty it binds a random port on 127.0.0.1; reused says
+// whether addr was kept. Only 127.0.0.1 addresses are bound.
+func (a *Admin) ListenAt(ctx context.Context, addr string, fallback ...string) (ln net.Listener, reused bool, err error) {
+	for i, at := range append([]string{addr}, fallback...) {
+		if host, _, e := net.SplitHostPort(at); e != nil || host != "127.0.0.1" {
+			continue
 		}
+		if ln, err = (&net.ListenConfig{}).Listen(ctx, "tcp", at); err == nil {
+			reused = i == 0
+			break
+		}
+		a.log.Warn("admin_port_taken", zap.String("addr", at), zap.Error(err))
+		ln = nil
 	}
 	if ln == nil {
 		if ln, err = (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0"); err != nil {
@@ -124,6 +155,82 @@ func (a *Admin) ListenAt(ctx context.Context, addr string) (ln net.Listener, reu
 	a.origin = "http://" + ln.Addr().String()
 	a.mu.Unlock()
 	return ln, reused, nil
+}
+
+// Remember keeps the sessions opened from now on in path, owner-only, and admits those it holds
+// for this page's port. Call it after ListenAt.
+func (a *Admin) Remember(path string) {
+	var list []rememberedSession
+	if b, err := os.ReadFile(path); err == nil { //nolint:gosec // our own state dir
+		if err := json.Unmarshal(b, &list); err != nil {
+			a.log.Warn("admin_sessions_unreadable", zap.Error(err))
+		}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.rememberPath = path
+	now := time.Now()
+	a.remembered = slices.DeleteFunc(list, func(r rememberedSession) bool { return now.Sub(r.Used) > rememberTTL || len(r.Hash) != 64 })
+}
+
+// saveRemembered writes the remembered sessions; the caller holds mu.
+func (a *Admin) saveRemembered() {
+	if a.rememberPath == "" {
+		return
+	}
+	b, err := json.Marshal(a.remembered)
+	if err == nil {
+		err = writeFileAtomic(a.rememberPath, b)
+	}
+	if err != nil {
+		a.log.Warn("admin_sessions_not_saved", zap.Error(err))
+	}
+}
+
+func tokenHash(tok string) string {
+	h := sha256.Sum256([]byte(tok))
+	return hex.EncodeToString(h[:])
+}
+
+// port is the page's port; the caller holds mu.
+func (a *Admin) port() string {
+	_, p, _ := net.SplitHostPort(strings.TrimPrefix(a.origin, "http://"))
+	return p
+}
+
+// admits reports whether tok opens a session: one of this process, or one remembered for this
+// port. The caller holds mu.
+func (a *Admin) admits(tok string, now time.Time) bool {
+	if tok == "" {
+		return false
+	}
+	// The remembered entry first, so that a session of this process keeps its "last used" fresh.
+	h, port := tokenHash(tok), a.port()
+	for i := range a.remembered {
+		r := &a.remembered[i]
+		if subtle.ConstantTimeCompare([]byte(r.Hash), []byte(h)) == 1 && r.Port == port && now.Sub(r.Used) <= rememberTTL {
+			// Written at most hourly: a poll every 2 s must not rewrite the file.
+			if now.Sub(r.Used) > time.Hour {
+				r.Used = now
+				a.saveRemembered()
+			}
+			return true
+		}
+	}
+	return a.sessions[tok]
+}
+
+// remember keeps tok for this port; the oldest go past maxRemembered. The caller holds mu.
+func (a *Admin) remember(tok string, now time.Time) {
+	if a.rememberPath == "" {
+		return
+	}
+	a.remembered = append(a.remembered, rememberedSession{Hash: tokenHash(tok), Port: a.port(), Created: now, Used: now})
+	slices.SortFunc(a.remembered, func(x, y rememberedSession) int { return y.Used.Compare(x.Used) })
+	if len(a.remembered) > maxRemembered {
+		a.remembered = a.remembered[:maxRemembered]
+	}
+	a.saveRemembered()
 }
 
 // Sessions are the page's open sessions, handed to the updated binary.
@@ -173,6 +280,8 @@ func (a *Admin) Handler() http.Handler {
 	mux.Handle("GET "+uivendor.Prefix, uivendor.Handler())
 	mux.Handle("GET "+uikit.Prefix, uikit.Handler())
 	mux.HandleFunc("POST /api/session", a.session)
+	mux.Handle("GET /api/browsers", a.auth(a.browsers))
+	mux.Handle("POST /api/browsers/forget", a.auth(a.forgetBrowsers))
 	mux.Handle("GET /api/status", a.auth(a.status))
 	mux.Handle("POST /api/room", a.auth(a.setRoom))
 	mux.Handle("POST /api/recheck", a.auth(a.recheck))
@@ -240,10 +349,10 @@ func (a *Admin) auth(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		a.mu.Lock()
-		ok := tok != "" && a.sessions[tok]
+		ok := a.admits(tok, time.Now())
 		a.mu.Unlock()
 		if !ok {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "this page session ended: open the latest link the daemon printed in its terminal"})
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "this page session ended: run `grill-room-daemon admin`, or open the latest link the app printed in its terminal"})
 			return
 		}
 		next(w, r)
@@ -282,6 +391,7 @@ func (a *Admin) session(w http.ResponseWriter, r *http.Request) {
 	tok := rand.Text()
 	if ok {
 		a.sessions[tok] = true
+		a.remember(tok, time.Now())
 	}
 	a.mu.Unlock()
 	if !ok {
@@ -294,8 +404,68 @@ func (a *Admin) session(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 }
 
+// browserView is a remembered session as the page lists it: never its hash whole.
+type browserView struct {
+	ID      string    `json:"id"`
+	Created time.Time `json:"created"`
+	Used    time.Time `json:"used"`
+	This    bool      `json:"this,omitempty"`
+}
+
+// browserID names a remembered session on the page.
+func browserID(hash string) string { return hash[:16] }
+
+// browsers lists the sessions remembered for this port, the asking one marked.
+func (a *Admin) browsers(w http.ResponseWriter, r *http.Request) {
+	tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	mine := tokenHash(tok)
+	a.mu.Lock()
+	out := []browserView{}
+	for _, s := range a.remembered {
+		if s.Port == a.port() {
+			out = append(out, browserView{ID: browserID(s.Hash), Created: s.Created, Used: s.Used, This: s.Hash == mine})
+		}
+	}
+	a.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"browsers": out})
+}
+
+// forgetBrowsers forgets one remembered session, or all of them: those browsers need a new link.
+func (a *Admin) forgetBrowsers(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID  string `json:"id"`
+		All bool   `json:"all"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	a.mu.Lock()
+	gone := map[string]bool{}
+	port := a.port()
+	a.remembered = slices.DeleteFunc(a.remembered, func(s rememberedSession) bool {
+		if req.All || (s.Port == port && browserID(s.Hash) == req.ID) {
+			gone[s.Hash] = true
+		}
+		return gone[s.Hash]
+	})
+	// The process's own sessions of those browsers end too; all of them, remembered or not, on All.
+	for tok := range a.sessions {
+		if req.All || gone[tokenHash(tok)] {
+			delete(a.sessions, tok)
+		}
+	}
+	a.saveRemembered()
+	a.mu.Unlock()
+	if len(gone) == 0 && !req.All {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such browser"})
+		return
+	}
+	a.log.Info("admin_browsers_forgotten", zap.Int("count", len(gone)))
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (a *Admin) status(w http.ResponseWriter, r *http.Request) {
-	v := map[string]any{"status": a.d.Status(), "logs": a.logs.Lines(), "models": turn.Models, "efforts": turn.Efforts, "anthropic_docs": sandbox.AnthropicDocs}
+	v := map[string]any{"status": a.d.Status(), "logs": a.logs.Lines(), "models": turn.Models, "efforts": turn.Efforts}
 	if h, ok := a.d.(hostBackend); ok {
 		insts, current := h.Instances()
 		accounts, conc := h.AccountViews(r.Context()), h.Concurrency()

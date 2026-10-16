@@ -231,6 +231,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET "+uikit.Prefix, uikit.Handler())
 	mux.HandleFunc("GET /install.sh", s.installScript)
 	mux.HandleFunc("GET /download/{file}", s.download)
+	mux.HandleFunc("GET /download/prev/{file}", s.download)
 	mux.HandleFunc("GET /api/daemon/version", s.daemonVersion)
 
 	mux.Handle("GET /api/rooms", s.admin(s.listRooms))
@@ -1225,6 +1226,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 			}
 		}
 		agent, err := s.agentState(r.Context(), room)
+		if err == nil {
+			agent.YouHost, err = s.bus.Store.HostsAs(r.Context(), room, sess.p)
+		}
 		if err != nil {
 			return false
 		}

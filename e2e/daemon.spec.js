@@ -34,7 +34,7 @@ test('daemon pairs through the room approval', async ({ browser, request, baseUR
     await expect(admin.locator('#accounts li').first()).toContainText('default');
     await expect(admin.locator('#accounts li').first()).toContainText('valid');
     await expect(admin.locator('.alerts')).toHaveCount(0);
-    await admin.locator('#tab-settings').click();
+    await admin.locator('#tab-general').click();
     await expect(admin.locator('#can-host')).toBeVisible();
     // The page reloads into the same session; the one-time link is spent.
     await admin.reload();
@@ -119,7 +119,7 @@ test('daemon page shows its signature and guards the unsigned toggle', async ({ 
     await accept.click();
     // 005-AC39: it asks first.
     await confirmSheet(admin, 'Accept');
-    await expect(card.locator('.relax').getByRole('status')).toContainText("Type the server's host exactly");
+    await expect(card.locator('.relax').getByRole('alert')).toContainText("Type the server's host exactly");
     await expect(admin.locator('#relax-banner')).toBeHidden();
     await host.fill(new URL(baseURL).host);
     await accept.click();

@@ -10,6 +10,17 @@ Both sides carry a protocol version, `Proto` in `internal/daemon/proto.go`, curr
 
 A version bump must stay additive within that window: new fields and new message types only. Both sides ignore unknown fields and unknown message types. A supervisor must not send a request type its worker's agreed version lacks.
 
+### Compatibility window
+
+A supervisor runs the worker its room server hands out, and that worker may come from a newer release than the supervisor. The rule that keeps rooms hosted across a protocol bump:
+
+- A release bumps `Proto` by one at most. Its workers then still talk to supervisors of the previous version (N-1), so a supervisor one release behind keeps working.
+- The supervisor asks `GET /api/daemon/version?proto=<lo>-<hi>`, its own range (`Proto ± ProtoSkew`). The answer carries `proto`, the protocol of the version it hands out, from the release's `PROTO` file. When that protocol is outside the range and the server keeps a previous release that fits (`GRILL_ROOM_DAEMON_PREV_DIR`), it hands that one out instead, with `download`, the directory of its files (`/download/prev/`), and `latest`, the current version. Without the query, the server answers with the current release, as before.
+- The supervisor never swaps to a worker outside its range. When the answer's `proto` is outside it, it keeps the worker it runs, or the copy it ran last, or else its own binary. A server too old to send `proto` is caught at the handshake: a worker of another release that fails it, or refuses the supervisor, is not marked refused; the supervisor starts its last copy or its own binary instead and avoids that version until the server hands out another one.
+- Meanwhile the instance carries `update_needed`, the page shows "Update the app to keep hosting" with a one-click update, and the supervisor checks its update channel at once.
+
+The supervisor's own update check asks without the query: it wants the latest release, not the one that fits.
+
 ## Handshake
 
 1. The worker sends `{"type":"hello","proto":4,"version":"v0.0.3","instance":"<id>"}`.
@@ -112,5 +123,7 @@ When the supervisor stops, it sends `stop` to every worker, waits up to 45 s for
 The supervisor holds an exclusive lock on `supervisor.lock` in its state directory: `flock` on Unix, `LockFileEx` on Windows. The kernel drops it when the process dies.
 
 A later launch that finds the lock taken connects to the local socket: `run/supervisor.sock` in the state directory, owner-only, or on Windows the named pipe `\\.\pipe\grill-room-<12 hex digits of the state dir's sha256>`, whose DACL admits only the current user. It sends one line, `{"room":"<room link>"}` or `{}`, and reads `{"link":"<admin page link>"}` or `{"error":"..."}`. With a room, the launch prints the link, opens it, and exits 0. Without one, and for `grill-room-daemon admin`, it says the supervisor already runs, prints the link, opens it and exits 0: a second supervisor never starts. `grill-room-daemon admin` with no supervisor running says how to start one and exits 1.
+
+The page listens on `127.0.0.1:47680` unless `GRILL_ROOM_DAEMON_ADMIN_PORT` names another port, `0` for a random one; a taken port falls back to a random one. A session the page opens with a one-time link is remembered for that port: `admin-sessions.json` in the state directory, owner-only, holds its token's sha256, its port, and when it was opened and last used (written at most hourly). A remembered session opens the page on its own port only, expires 30 days after its last use, and the file keeps the 16 newest. `GET /api/browsers` lists them by the first 16 hex digits of their hash, the asking one marked `this`; `POST /api/browsers/forget` with `{"id":…}` or `{"all":true}` forgets them and ends their sessions in the running process.
 
 Before a self-update execs the new binary, the supervisor writes `run/admin-page.json` in the state directory, owner-only: the page's `127.0.0.1` address, its session tokens and the time. The new binary reads and deletes it at start, ignores one older than 2 minutes, binds that address again and, only if it got it, admits those sessions, so the open tab reconnects. Nothing goes through the environment, which other processes of the user can read. A launch opens a link only if it starts with `http://127.0.0.1:`.

@@ -200,7 +200,7 @@ func (s *Supervisor) checkUpdate(ctx context.Context) {
 		err = errors.New("the followed server is gone: pick one again")
 	case set.UpdateChannel == "instance":
 		var info serverInfo
-		if info, err = fetchServerInfo(ctx, s.o.Bins.HTTP, in.URL); err == nil {
+		if info, err = fetchServerInfo(ctx, s.o.Bins.HTTP, in.URL, false); err == nil {
 			v, sum := info.Version, info.SHA256[target]
 			if semver.IsValid(v) && v != s.o.Version && sum != "" {
 				u.available, u.from, u.binURL, u.sha, u.relax = v, in.URL, in.URL+"/download/"+file, sum, in.Relax
@@ -393,10 +393,7 @@ func (s *Supervisor) SetUpdateChannel(channel, instance string) error {
 	}
 	s.upd = selfUpdate{}
 	s.o.Log.Info("update_channel_changed", zap.String("channel", channel), zap.String("instance", instance))
-	select {
-	case s.checkNow <- struct{}{}:
-	default:
-	}
+	s.askUpdateCheck()
 	return nil
 }
 

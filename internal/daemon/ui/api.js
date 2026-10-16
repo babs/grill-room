@@ -24,7 +24,8 @@
  * @typedef {{id: string, url: string, rooms: string[], state: string, error?: string, pid?: number, proto?: number,
  *   restarts: number, version?: string, trust?: string, accept_unsigned: boolean, account: string,
  *   room_accounts?: Record<string, string>, room_states?: RoomStatus[], requests: number, cut_off?: boolean,
- *   room?: string, connection?: string, metrics?: Metrics, unsigned?: boolean, limits: Limits, status?: Status, paused?: string[]}} Instance
+ *   room?: string, connection?: string, metrics?: Metrics, unsigned?: boolean, limits: Limits, status?: Status, paused?: string[],
+ *   update_needed?: string}} Instance
  * @typedef {{name: string, kind: string, config_dir?: string, display_dir?: string, storage?: string, state: string, detail?: string,
  *   expires_at?: string, expiry_estimated?: boolean, checked_at?: string, last_use?: string,
  *   requests: Record<string, number>, warning?: string}} Account
@@ -37,7 +38,8 @@
  * @typedef {{kind: string, text: string}} Alert
  * @typedef {{status: Status, logs: string[], models: string[], efforts: string[], instances?: Instance[], instance?: string,
  *   autostart?: boolean, trust?: Trust, accounts?: Account[], concurrency?: Concurrency, retention_days?: number,
- *   alerts?: Alert[], anthropic_docs?: string[]}} StatusReply
+ *   alerts?: Alert[]}} StatusReply
+ * @typedef {{id: string, created: string, used: string, this?: boolean}} Browser
  * @typedef {{host: string, time: string}} Denied
  * @typedef {{id: number, at: string, day: string, instance: string, room: string, turn_id: number, persona: string,
  *   account: string, asked_model: string, asked_effort: string, model: string, model_note?: string,
@@ -54,8 +56,10 @@
 /** @type {string} */
 let token = '';
 
-// The link's one-time code is traded for a session token kept in sessionStorage: it survives a
-// reload of this tab and is never sent by the browser on its own, so other sites cannot use it.
+// The link's one-time code is traded for a session token kept in localStorage: only this page's
+// origin, 127.0.0.1 and its port, reads it, and the browser never sends it on its own, so other
+// sites, other localhost ports included, cannot use it. The app remembers the session, so a
+// bookmark of the page keeps working until the session is forgotten on the General tab.
 export async function startSession() {
   const m = location.pathname.match(/^\/s\/([^/]+)$/);
   if (m) {
@@ -67,10 +71,24 @@ export async function startSession() {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
-    sessionStorage.setItem('token', data.token);
+    localStorage.setItem('token', data.token);
   }
-  token = sessionStorage.getItem('token') || '';
-  if (!token) throw new Error('Open the latest link the daemon printed in its terminal.');
+  // A tab of a version before localStorage kept its token in sessionStorage; a self-update admits it.
+  const old = sessionStorage.getItem('token');
+  if (old) {
+    if (!localStorage.getItem('token')) localStorage.setItem('token', old);
+    sessionStorage.removeItem('token');
+  }
+  token = localStorage.getItem('token') || '';
+  if (!token) throw new Error(signIn);
+}
+
+const signIn = 'This browser is not signed in to the AI host app: run `grill-room-daemon admin` on this computer, or open the latest link the app printed.';
+
+/** forgetToken drops this browser's session, which the app forgot. */
+export function forgetToken() {
+  localStorage.removeItem('token');
+  token = '';
 }
 
 /**
@@ -88,6 +106,11 @@ async function fetchAPI(method, path, body) {
     opts.body = JSON.stringify(body);
   }
   const res = await fetch(path, opts);
+  if (res.status === 401 && token) {
+    // The session was forgotten or expired: the next visit asks for a new link.
+    forgetToken();
+    throw new Error(signIn);
+  }
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || 'HTTP ' + res.status);

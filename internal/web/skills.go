@@ -259,7 +259,7 @@ func (s *Server) decideRoomSkill(w http.ResponseWriter, r *http.Request, sess se
 	if !decode(w, r, &req) {
 		return
 	}
-	room, ok := s.asHost(w, r, sess)
+	room, ok := s.asApprover(w, r, sess)
 	if !ok {
 		return
 	}

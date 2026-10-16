@@ -20,10 +20,10 @@ test('a turn waiting for the host shows queued (host busy)', async ({ browser, r
     await approval.getByRole('button', { name: 'Approve' }).click();
     await expect(connectedRow(admin, second.id)).toBeAttached({ timeout: 30_000 });
     await approval.close();
-    await admin.locator('#tab-settings').click();
+    await admin.locator('#tab-general').click();
     await admin.getByLabel('Answers at once').fill('1');
-    await admin.locator('#machine-form').getByRole('button', { name: 'Save' }).click();
-    await expect(admin.locator('#machine-status')).toHaveText('Saved.');
+    await admin.locator('#general-save').getByRole('button', { name: 'Save' }).click();
+    await expect(admin.locator('.toast', { hasText: /^Saved$/ })).toBeVisible();
 
     for (const page of [alice, bob]) {
       await expect(page.locator('button.persona[data-name="Grill"] .led')).toHaveAttribute('aria-label', 'Grill ready', { timeout: 30_000 });

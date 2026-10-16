@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -65,6 +66,9 @@ type Resolved struct {
 	Relaxed bool
 	// DevKey names the dev key that signed it, if one did.
 	DevKey string
+	// Blocked says why the served version does not run: its workers speak a protocol this
+	// supervisor does not. Another binary runs meanwhile, and the app must update.
+	Blocked string
 }
 
 // Init records the versions the instances ran last, then removes every other one and any
@@ -133,11 +137,11 @@ func (b *Binaries) own(instance, served string) Resolved {
 // Resolve returns the binary in's worker runs. A binary that fails the checks is an errRefused:
 // retrying does not help until the instance, the dev keys or the relax toggle change.
 func (b *Binaries) Resolve(ctx context.Context, in Instance) (Resolved, error) {
-	info, err := fetchServerInfo(ctx, b.HTTP, in.URL)
+	info, err := fetchServerInfo(ctx, b.HTTP, in.URL, true)
 	if err != nil {
 		// Offline: the copy verified last time still runs, re-verified from disk.
 		b.Log.Warn("instance_version_unknown", zap.String("instance", in.ID), zap.Error(err))
-		if in.Version != "" && in.Version != b.Version && semver.Compare(in.Version, minWorkerVersion) >= 0 {
+		if in.Version != "" && in.Version != b.Version && in.Version != in.Avoid && semver.Compare(in.Version, minWorkerVersion) >= 0 {
 			if r, err := b.stored(in, in.Version, ""); err == nil {
 				return r, nil
 			}
@@ -147,6 +151,9 @@ func (b *Binaries) Resolve(ctx context.Context, in Instance) (Resolved, error) {
 	v := info.Version
 	if v == "" || v == b.Version {
 		return b.own(in.ID, v), nil
+	}
+	if lo, hi := ProtoRange(); v == in.Avoid || (info.Proto != 0 && (info.Proto < lo || info.Proto > hi)) {
+		return b.keep(in, v, fmt.Sprintf("%s hands out %s, which this app (%s) cannot run", urlHost(in.URL), v, b.Version)), nil
 	}
 	if !semver.IsValid(v) {
 		return Resolved{}, errRefused{fmt.Sprintf("the instance serves version %q, which is not a semver", v)}
@@ -168,7 +175,7 @@ func (b *Binaries) Resolve(ctx context.Context, in Instance) (Resolved, error) {
 	if p := info.Bundles[target]; strings.HasPrefix(p, "/") {
 		bundleURL = in.URL + p
 	}
-	tmp, r, err := b.obtain(ctx, in.URL+"/download/"+releaseFile(runtime.GOOS, runtime.GOARCH), bundleURL, sum, b.Dir, v, in.Relax)
+	tmp, r, err := b.obtain(ctx, in.URL+downloadDir(info.Download)+releaseFile(runtime.GOOS, runtime.GOARCH), bundleURL, sum, b.Dir, v, in.Relax)
 	if err != nil {
 		return Resolved{}, err
 	}
@@ -198,6 +205,39 @@ func (b *Binaries) Resolve(ctx context.Context, in Instance) (Resolved, error) {
 	}
 	b.Log.Info("binary_stored", zap.String("instance", in.ID), zap.String("version", v), zap.String("trust", r.Trust))
 	return r, nil
+}
+
+// keep is the binary an instance runs while the version it serves is one this supervisor cannot
+// talk to: the copy it ran last, else the supervisor's own. The rooms stay hosted; the page asks for
+// an update.
+func (b *Binaries) keep(in Instance, served, reason string) Resolved {
+	b.Log.Warn("instance_version_incompatible", zap.String("instance", in.ID), zap.String("served", served))
+	if v := in.Version; v != "" && v != b.Version && v != served && v != in.Avoid && semver.Compare(v, minWorkerVersion) >= 0 {
+		if r, err := b.stored(in, v, ""); err == nil {
+			r.Served, r.Blocked = served, reason
+			return r
+		}
+	}
+	r := b.own(in.ID, served)
+	r.Blocked = reason
+	return r
+}
+
+// urlHost is a server's host name, as the page names it.
+func urlHost(u string) string {
+	if p, err := url.Parse(u); err == nil && p.Host != "" {
+		return p.Host
+	}
+	return u
+}
+
+// downloadDir is where the server says its binaries are, "/download/" unless it names another
+// directory of its own: a previous release it keeps for older supervisors.
+func downloadDir(dir string) string {
+	if strings.HasPrefix(dir, "/download/") && strings.HasSuffix(dir, "/") && !strings.Contains(dir, "..") {
+		return dir
+	}
+	return "/download/"
 }
 
 // stored verifies the copy of version kept on disk; sum, when set, is the digest the instance
@@ -388,12 +428,17 @@ func get(ctx context.Context, hc *http.Client, url string, limit int64, w io.Wri
 	return err
 }
 
-// fetchServerInfo asks a room server what daemon release it hands out.
-func fetchServerInfo(ctx context.Context, hc *http.Client, base string) (serverInfo, error) {
+// fetchServerInfo asks a room server what daemon release it hands out: for a worker, one whose
+// protocol is in ProtoRange when the server keeps one; for the supervisor itself, the latest.
+func fetchServerInfo(ctx context.Context, hc *http.Client, base string, worker bool) (serverInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	var buf strings.Builder
-	if err := get(ctx, hc, base+"/api/daemon/version", 64<<10, &buf); err != nil {
+	u := base + "/api/daemon/version"
+	if lo, hi := ProtoRange(); worker {
+		u += fmt.Sprintf("?proto=%d-%d", lo, hi)
+	}
+	if err := get(ctx, hc, u, 64<<10, &buf); err != nil {
 		return serverInfo{}, err
 	}
 	var info serverInfo

@@ -41,7 +41,7 @@ e2e-build:
 	CGO_ENABLED=0 go build -o bin/e2egit ./tools/e2egit
 
 # The daemon release the room server hands out (D28): one static binary per target, its sha256 file
-# (sha256sum format, checked by install.sh) and VERSION.
+# (sha256sum format, checked by install.sh), VERSION and PROTO, its worker protocol version.
 DIST           ?= dist
 DAEMON_TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 # The room server refuses to start on a VERSION that is not semver: fail the build instead.
@@ -55,6 +55,8 @@ release:
 	  (cd '$(DIST)' && { sha256sum $$f 2>/dev/null || shasum -a 256 $$f; } > $$f.sha256) || exit 1; \
 	done
 	echo '$(VERSION)' > '$(DIST)/VERSION'
+	sed -n 's/^[[:space:]]*Proto[[:space:]]*=[[:space:]]*\([0-9][0-9]*\)$$/\1/p' internal/daemon/proto.go > '$(DIST)/PROTO'
+	grep -Eq '^[0-9]+$$' '$(DIST)/PROTO' || { echo 'no worker protocol version in internal/daemon/proto.go' >&2; exit 1; }
 
 # `make release` signed with a local cosign key pair (docs/release.md): COSIGN_KEY from .env, its
 # password from COSIGN_PASSWORD. Offline: no transparency log entry, nothing leaves the machine.
@@ -256,9 +258,10 @@ lint: ui-check
 	git ls-files -co --exclude-standard '*.sh' | xargs shellcheck
 
 # DAEMON_DIST=<dir> ships that daemon release (a GitHub release or `make dev-release`, bundles
-# included) instead of building an unsigned one in the image.
+# included) instead of building an unsigned one in the image. DAEMON_PREV_DIST=<dir> adds the
+# previous release, for supervisors too old for this one's workers.
 docker-build:
-	docker build -t $(APP_NAME):local $(if $(DAEMON_DIST),--build-context daemon-dist='$(DAEMON_DIST)') \
+	docker build -t $(APP_NAME):local $(if $(DAEMON_DIST),--build-context daemon-dist='$(DAEMON_DIST)') $(if $(DAEMON_PREV_DIST),--build-context daemon-prev='$(DAEMON_PREV_DIST)') \
 	  --build-arg VERSION=$(VERSION) \
 	  --build-arg COMMIT_HASH=$(COMMIT_HASH) \
 	  --build-arg BUILD_TIMESTAMP=$(BUILD_TS) \

@@ -244,7 +244,7 @@ function blockedActions(m) {
     box.textContent = 'Allowing…';
     return box;
   }
-  const scopes = isHost() ? [['room', 'Allow for this room'], ['server', 'Allow everywhere']]
+  const scopes = approves() ? [['room', 'Allow for this room'], ['server', 'Allow everywhere']]
     : meAdmin && agent.egress_admins_allow ? [['room', 'Allow for this room']] : [];
   if (!scopes.length) {
     // Whoever cannot allow it learns who can, the same person on another seat included.
@@ -1833,6 +1833,8 @@ let agent = { online: false, can_trigger: [], daemons: [], turn: null, running: 
 const level = (l) => (l.model || 'unset') + ' · effort ' + (l.effort || 'unset');
 
 const isHost = () => String(agent.host_participant_id || '') === myID;
+// Approvals follow the host's profile: any of its seats in this room answers them (daemon-r2).
+const approves = () => isHost() || !!agent.you_host;
 const canPress = () => isHost() || agent.can_trigger.includes(Number(myID));
 const personaByID = (id) => agent.personas.find((p) => p.id === id);
 // contextUse is the share of its model's window that a persona's session holds, in percent; null
@@ -1881,6 +1883,8 @@ function whyNot(p, st) {
 
 function renderAgent() {
   hidePairingOnceConnected();
+  // The app's page is on this computer only when one of my apps is connected (daemon-r2).
+  $('host-app-open').hidden = docsMode || !agent.daemons.some((d) => String(d.participant_id) === myID);
   const bar = $('persona-buttons');
   const kept = new Map([...bar.children].map((b) => [b.dataset.id, b]));
   const buttons = agent.personas.map((p) => {
@@ -2026,7 +2030,7 @@ $('chain-form').addEventListener('submit', (e) => {
 function renderApprovals() {
   const items = [];
   const decide = (li, what, path, body) => {
-    if (!isHost()) {
+    if (!approves()) {
       li.append(' The AI host decides.');
       return;
     }
@@ -2090,7 +2094,7 @@ function renderApprovals() {
     if (!v || v.state !== 'pending') continue;
     const li = document.createElement('li');
     li.textContent = v.added_by + (v.n === 1 ? ' added the plugin ' : ' updated the plugin ') + pl.name + ', ' + pl.ref_name + ' @ ' + v.short_commit + '.';
-    if (isHost()) {
+    if (approves()) {
       const b = document.createElement('button');
       b.type = 'button';
       b.textContent = 'Review';
@@ -2111,7 +2115,7 @@ function renderApprovals() {
 // allow them: the AI host for the room or everywhere, a room admin the host lets for the room. It
 // holds them until decided or dismissed, across reloads and host changes (014-AC9).
 function blockedItems() {
-  const host = isHost();
+  const host = approves();
   if (!host && !(meAdmin && agent.egress_admins_allow)) return [];
   const why = agent.egress_host || '';
   return (agent.blocked_requests || []).map((b) => {

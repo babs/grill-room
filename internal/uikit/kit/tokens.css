@@ -244,6 +244,10 @@ details.disclosure[open] > summary::before { transform: rotate(45deg); }
 .settings-foot { grid-column: 1 / -1; position: sticky; bottom: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--sp-2) var(--sp-3);
   padding: var(--sp-2) 0; border-top: 1px solid var(--border); background: var(--surface); }
 .settings-foot .dirty { color: var(--text-muted); font-size: var(--fs-sm); }
+/* A stacked form: each label above its field, then the button under them, left-aligned. */
+.settings-group.stacked { grid-template-columns: minmax(0, 40rem); gap: var(--sp-1) 0; }
+.settings-group.stacked > .control { margin-bottom: var(--sp-2); }
+.settings-group.stacked > .control > :is(input, textarea, select) { flex: 1; }
 @media (max-width: 40rem) { .settings-group { grid-template-columns: minmax(0, 1fr); gap: var(--sp-1) 0; } .settings-group > .control { margin-bottom: var(--sp-2); } }
 /* The styled tip (kit/ui.js) for any [data-tip], on every page. */
 .tip { position: fixed; inset: auto; margin: 0; max-width: 20rem; padding: var(--sp-1) var(--sp-2);

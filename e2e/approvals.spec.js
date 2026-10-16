@@ -42,11 +42,11 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {
     const admin = await pairDaemon(alice, daemon);
-    await admin.locator('#tab-settings').click();
+    await admin.locator('#tab-general').click();
     await admin.getByLabel('Max model').selectOption('sonnet');
     await admin.getByLabel('Max effort').selectOption('high');
-    await admin.locator('#settings-form').getByRole('button', { name: 'Save' }).click();
-    await expect(admin.locator('#settings-status')).toHaveText('Saved.');
+    await admin.locator('#general-save').getByRole('button', { name: 'Save' }).click();
+    await expect(admin.locator('.toast', { hasText: /^Saved$/ })).toBeVisible();
     await admin.reload();
     await expect(admin.getByLabel('Max model')).toHaveValue('sonnet');
     await expect(admin.getByLabel('Max effort')).toHaveValue('high');

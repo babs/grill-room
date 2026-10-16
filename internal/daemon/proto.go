@@ -25,6 +25,9 @@ const (
 	ProtoSkew = 1
 )
 
+// ProtoRange is the worker protocols a supervisor at Proto talks.
+func ProtoRange() (lo, hi int) { return Proto - ProtoSkew, Proto + ProtoSkew }
+
 // protoEgress is the first version whose workers take egress_switches and room_allowlist_remove.
 const protoEgress = 6
 

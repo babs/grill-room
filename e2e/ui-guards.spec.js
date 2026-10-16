@@ -322,13 +322,13 @@ test('status pills take their colour from the tokens', async ({ browser, request
   const daemon = startDaemon(alice.url().split('#')[0]);
   try {
     const host = await browser.newPage({ viewport: desktop });
-    await host.goto((await daemon.link) + '#settings');
+    await host.goto((await daemon.link) + '#general');
     for (const scheme of ['light', 'dark']) {
       await host.emulateMedia({ colorScheme: scheme });
       const running = host.locator('.app-header .status', { hasText: 'Running' });
       await expect(running, scheme).toHaveClass(/\bok\b/);
       expect(await running.evaluate((e) => getComputedStyle(e).color), `Running on the header, ${scheme}`).toBe(await token(host, '--success-dot'));
-      await expect(host.locator('#panel-settings .status').first()).toBeVisible({ timeout: 30_000 });
+      await expect(host.locator('#panel-general .status').first()).toBeVisible({ timeout: 30_000 });
       const pills = await host.locator('main .status').evaluateAll((els) => els.filter((e) => e.getClientRects().length)
         .map((e) => [e.textContent.trim(), ['ok', 'busy', 'idle', 'off', 'failed'].find((k) => e.classList.contains(k)), getComputedStyle(e).color]));
       expect(pills.length, scheme).toBeGreaterThan(0);
@@ -352,7 +352,7 @@ test('a cut value keeps a copy button and its full text in the tip', async ({ br
   try {
     const ctx = await browser.newContext({ viewport: phone, permissions: ['clipboard-read', 'clipboard-write'] });
     const host = await ctx.newPage();
-    await host.goto((await daemon.link) + '#settings');
+    await host.goto((await daemon.link) + '#general');
     // The sandbox image on the Settings strip, once the server's app runs.
     const image = process.env.GRILL_ROOM_SANDBOX_FAKE_IMAGE || 'grill-room-sandbox:fake';
     const value = host.locator('.machine-strip .value');

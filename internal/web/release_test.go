@@ -448,3 +448,87 @@ func TestInstallScriptReadsRoomLinksAsTheDaemon(t *testing.T) {
 		}
 	}
 }
+
+// daemon-r2: a supervisor names its worker protocols. Outside them, the server hands out its
+// previous release, from /download/prev/, and names the latest one; with no previous release that
+// fits, it hands out the current one with its protocol, so the supervisor keeps its worker.
+func TestReleaseProtocolWindow(t *testing.T) {
+	cur, prev := writeRelease(t, "v1.3.0", fakeDaemon), writeRelease(t, "v1.2.0", "#!/bin/sh\necho previous\n")
+	for dir, p := range map[string]string{cur: "8\n", prev: "7\n"} {
+		if err := os.WriteFile(filepath.Join(dir, "PROTO"), []byte(p), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opts := testOptions
+	var err error
+	if opts.Release, err = LoadRelease(cur); err != nil {
+		t.Fatal(err)
+	}
+	if opts.PrevRelease, err = LoadPrevRelease(prev); err != nil {
+		t.Fatal(err)
+	}
+	e := newEnvOpts(t, opts)
+	type answer struct {
+		Version  string            `json:"version"`
+		Proto    int               `json:"proto"`
+		Download string            `json:"download"`
+		Latest   string            `json:"latest"`
+		SHA256   map[string]string `json:"sha256"`
+	}
+	for _, tt := range []struct {
+		query string
+		want  answer
+	}{
+		{"", answer{Version: "v1.3.0", Proto: 8}},
+		{"?proto=7-9", answer{Version: "v1.3.0", Proto: 8}},
+		{"?proto=6-7", answer{Version: "v1.2.0", Proto: 7, Download: "/download/prev/", Latest: "v1.3.0"}},
+		{"?proto=4-6", answer{Version: "v1.3.0", Proto: 8}},
+		{"?proto=9-x", answer{Version: "v1.3.0", Proto: 8}},
+		{"?proto=7-6", answer{Version: "v1.3.0", Proto: 8}},
+	} {
+		code, body := e.do(t, http.MethodGet, "/api/daemon/version"+tt.query, "", nil)
+		got := decodeJSON[answer](t, body)
+		want := opts.Release
+		if tt.want.Download != "" {
+			want = opts.PrevRelease
+		}
+		if code != http.StatusOK || got.Version != tt.want.Version || got.Proto != tt.want.Proto || got.Download != tt.want.Download ||
+			got.Latest != tt.want.Latest || got.SHA256["linux-amd64"] != want.SHA256["linux-amd64"] {
+			t.Errorf("%q: %d %s", tt.query, code, body)
+		}
+	}
+	if code, body := e.do(t, http.MethodGet, "/download/prev/grill-room-daemon-linux-amd64", "", nil); code != http.StatusOK || !strings.Contains(string(body), "previous") {
+		t.Errorf("previous binary: %d %q", code, body)
+	}
+	if code, _ := e.do(t, http.MethodGet, "/download/prev/VERSION", "", nil); code != http.StatusNotFound {
+		t.Errorf("previous VERSION served: %d", code)
+	}
+
+	// A previous release must say its protocol; a PROTO that is not one fails either release.
+	if err := os.Remove(filepath.Join(prev, "PROTO")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPrevRelease(prev); err == nil || !strings.Contains(err.Error(), "PROTO missing") {
+		t.Errorf("previous release without PROTO: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cur, "PROTO"), []byte("six\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRelease(cur); err == nil || !strings.Contains(err.Error(), "not a protocol version") {
+		t.Errorf("bad PROTO: %v", err)
+	}
+}
+
+// daemon-r2: no previous release, or none on this server: the protocol query changes nothing.
+func TestReleaseProtocolWindowWithoutPrevious(t *testing.T) {
+	opts := testOptions
+	opts.Release, _ = LoadRelease(writeRelease(t, "v1.2.3", fakeDaemon))
+	e := newEnvOpts(t, opts)
+	if code, body := e.do(t, http.MethodGet, "/api/daemon/version?proto=1-2", "", nil); code != http.StatusOK ||
+		!strings.Contains(string(body), `"version":"v1.2.3"`) || strings.Contains(string(body), `"proto"`) {
+		t.Errorf("%d %s", code, body)
+	}
+	if code, _ := e.do(t, http.MethodGet, "/download/prev/grill-room-daemon-linux-amd64", "", nil); code != http.StatusNotFound {
+		t.Errorf("previous binary without a previous release: %d", code)
+	}
+}

@@ -117,7 +117,13 @@ func (s *Server) allowBlocked(w http.ResponseWriter, r *http.Request, sess sessi
 // mayAllow answers 403 and returns false unless sess may decide a blocked website of room for
 // scope: the AI host, or for the room only a room admin while the host lets them (014-AC13).
 func (s *Server) mayAllow(w http.ResponseWriter, r *http.Request, sess *session, room *store.Room, scope string) bool {
-	if room.HostParticipantID == sess.p.ID {
+	// Any seat of the host's profile allows as the host (daemon-r2).
+	host, err := s.bus.Store.HostsAs(r.Context(), room.ID, sess.p)
+	if err != nil {
+		s.serverError(w, "host_check_failed", err)
+		return false
+	}
+	if host {
 		return true
 	}
 	admin, err := s.roomAdmin(r.Context(), sess)

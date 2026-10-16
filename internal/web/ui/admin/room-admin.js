@@ -15,7 +15,7 @@ import { PluginsTab, mountReview } from './plugins.js';
  * @typedef {{room: {id: string, name: string}, me: Participant, participants: Participant[]}} RoomData
  * @typedef {{id: number, name: string, version: number, author: string, pending?: boolean}} RoomSkill
  * @typedef {{id: number, name: string, badge: string, model: string, effort: string, pending?: boolean}} Persona
- * @typedef {{room_skills?: RoomSkill[], personas?: Persona[], host_participant_id?: number, egress_admins_allow?: boolean,
+ * @typedef {{room_skills?: RoomSkill[], personas?: Persona[], host_participant_id?: number, you_host?: boolean, egress_admins_allow?: boolean,
  *   connectors?: {name: string, actions?: boolean}[]}} AgentState
  * @typedef {{glossary: string, prompt: string, used: number, total: number, capacity: number}} Glossary
  * @typedef {{glossary: boolean}} STTState
@@ -98,7 +98,7 @@ function Manage({ data, tab, tabs }) {
       ${tab === 'skills' && (skills.length ? html`<ul id="room-admin-skills">${skills.map((k) => html`<li key=${k.id}>${k.name} v${k.version}, copied by ${k.author}
           ${' '}<button type="button" class="btn-secondary" onClick=${() => removeSkill(k)} aria-label=${'Remove the room skill ' + k.name}>Remove</button></li>`)}</ul>`
         : html`<p class="empty">None yet. Members copy their personal skills in from the Personas sheet.</p>`)}
-      ${tab === 'plugins' && html`<${PluginsTab} base=${base} admin=${true} host=${isHost(data)} personas=${personas}/>`}
+      ${tab === 'plugins' && html`<${PluginsTab} base=${base} admin=${true} host=${approves(data)} personas=${personas}/>`}
       ${tab === 'network' && html`<${NetworkTab} base=${base} host=${isHost(data)} show=${show}/>`}
       ${tab === 'documents' && html`<${DeletedDocuments} base=${base} show=${show}/>`}
       ${tab === 'glossary' && html`<${STTGlossary} data=${data}/>`}
@@ -200,7 +200,7 @@ function App() {
     ${said && html`<p class="said" role="alert">${said}</p>`}
     <div class="tab-panel" id=${'panel-' + t}>${t === 'glossary' && html`<${STTGlossary} data=${data}/>`}
       ${t === 'invites' && html`<${Invites} base=${base} api=${fetchJSON} show=${show} byName=${byName} me=${data.me.id}/>`}
-      ${t === 'plugins' && html`<${PluginsTab} base=${base} admin=${false} host=${isHost(data)} personas=${agentState.value?.personas || []}/>`}
+      ${t === 'plugins' && html`<${PluginsTab} base=${base} admin=${false} host=${approves(data)} personas=${agentState.value?.personas || []}/>`}
       ${t === 'network' && html`<${NetworkTab} base=${base} host=${isHost(data)} show=${show}/>`}</div>`;
 }
 
@@ -235,6 +235,8 @@ function NetworkTab({ base, host, show }) {
 
 /** @param {RoomData} data */
 const isHost = (data) => agentState.value?.host_participant_id === data.me.id;
+/** Approvals follow the host's profile: any of its seats here reviews a plugin (daemon-r2). @param {RoomData} data */
+const approves = (data) => isHost(data) || !!agentState.value?.you_host;
 
 render(html`<${App}/>`, /** @type {HTMLElement} */ (document.getElementById('room-admin')));
 mountReview(roomData, agentState);

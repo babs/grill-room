@@ -256,3 +256,63 @@ func TestDecideCap(t *testing.T) {
 		t.Fatalf("unknown persona: %v", err)
 	}
 }
+
+// daemon-r2: approvals follow the hosting profile. Alice's second seat in the room, on her
+// profile, approves a held change, decides a cap, and her own changes from it are not held; Bob,
+// and a seat with no profile, still cannot. A seat of her profile in another room does not count.
+func TestApprovalsFollowHostProfile(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	alice, bob, grill, d := approvingRoom(t, s, "a")
+	if alice.ProfileID == 0 {
+		t.Fatal("Alice has no profile")
+	}
+	phone, _, err := s.Join(ctx, "inv-a", "Alice-phone", "a2-a", JoinProfile{ID: alice.ProfileID})
+	if err != nil || phone.ProfileID != alice.ProfileID {
+		t.Fatalf("second seat %+v %v", phone, err)
+	}
+	carol, _, err := s.Join(ctx, "inv-a", "Carol", "c-a", JoinProfile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	personaRoom(t, s, "b")
+	elsewhere, _, err := s.Join(ctx, "inv-b", "Alice-b", "a3-b", JoinProfile{ID: alice.ProfileID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	elsewhere.RoomID = "a"
+	for _, tc := range []struct {
+		p    *Participant
+		want bool
+	}{{alice, true}, {phone, true}, {bob, false}, {carol, false}, {elsewhere, false}} {
+		if got, err := s.HostsAs(ctx, "a", tc.p); err != nil || got != tc.want {
+			t.Errorf("HostsAs(%s) = %v %v", tc.p.Name, got, err)
+		}
+	}
+
+	if _, _, held, err := s.EditPersona(ctx, "a", grill.ID, PersonaPatch{Badge: str("🌶")}, phone); err != nil || held {
+		t.Fatalf("host's other seat held: %v %v", held, err)
+	}
+	if _, _, held, err := s.EditPersona(ctx, "a", grill.ID, PersonaPatch{Model: str("opus")}, bob); err != nil || !held {
+		t.Fatalf("member edit not held: %v %v", held, err)
+	}
+	for _, who := range []*Participant{bob, carol, elsewhere} {
+		if _, err := s.DecideChange(ctx, "a", s.onlyChange(t, "a").ID, true, who); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("%s decided: %v", who.Name, err)
+		}
+	}
+	if m, err := s.DecideChange(ctx, "a", s.onlyChange(t, "a").ID, true, phone); err != nil || !strings.HasPrefix(m.Body, "Alice-phone approved") {
+		t.Fatalf("approve from the other seat: %+v %v", m, err)
+	}
+	now, err := s.RoomPersona(ctx, "a", grill.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asks := now.Asks()
+	if _, err := s.DecideCap(ctx, "a", grill.ID, d, asks, turn.Level{Model: "sonnet"}, true, carol); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("cap decided without a profile: %v", err)
+	}
+	if _, err := s.DecideCap(ctx, "a", grill.ID, d, asks, turn.Level{Model: "sonnet"}, true, phone); err != nil {
+		t.Fatalf("cap from the other seat: %v", err)
+	}
+}

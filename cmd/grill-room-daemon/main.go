@@ -14,6 +14,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -73,7 +74,14 @@ type Config struct {
 	CacheMB int64
 	// GitHub is the repository the default update channel follows.
 	GitHub string
+	// AdminPort is the page's usual port on 127.0.0.1, so that a bookmark keeps working; 0 picks a
+	// random one each start.
+	AdminPort int
 }
+
+// DefaultAdminPort is the admin page's port unless GRILL_ROOM_DAEMON_ADMIN_PORT says otherwise.
+// The room page links to it.
+const DefaultAdminPort = 47680
 
 func loadConfig() (Config, error) {
 	home, _ := os.UserHomeDir() // ResolvePaths reports a missing home where it needs one
@@ -89,15 +97,20 @@ func loadConfig() (Config, error) {
 	if err != nil || cacheMB < 0 {
 		return Config{}, fmt.Errorf("GRILL_ROOM_DAEMON_CACHE_MB: want a size in MiB, 0 to disable the cache")
 	}
+	adminPort, err := strconv.Atoi(getEnv("GRILL_ROOM_DAEMON_ADMIN_PORT", strconv.Itoa(DefaultAdminPort)))
+	if err != nil || adminPort < 0 || adminPort > 65535 {
+		return Config{}, fmt.Errorf("GRILL_ROOM_DAEMON_ADMIN_PORT: want a port number, 0 for a random one")
+	}
 	return Config{
-		CacheMB:  cacheMB,
-		GitHub:   strings.TrimRight(getEnv("GRILL_ROOM_GITHUB_URL", "https://github.com/babs/grill-room"), "/"),
-		Paths:    paths,
-		Legacy:   legacy,
-		Browser:  getEnv("GRILL_ROOM_DAEMON_BROWSER", "auto"),
-		Image:    os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
-		LogLevel: getEnv("LOG_LEVEL", "info"),
-		Settings: daemon.Settings{MaxModel: os.Getenv("GRILL_ROOM_MAX_MODEL"), MaxEffort: os.Getenv("GRILL_ROOM_MAX_EFFORT"), ApproveAll: approveAll},
+		AdminPort: adminPort,
+		CacheMB:   cacheMB,
+		GitHub:    strings.TrimRight(getEnv("GRILL_ROOM_GITHUB_URL", "https://github.com/babs/grill-room"), "/"),
+		Paths:     paths,
+		Legacy:    legacy,
+		Browser:   getEnv("GRILL_ROOM_DAEMON_BROWSER", "auto"),
+		Image:     os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
+		LogLevel:  getEnv("LOG_LEVEL", "info"),
+		Settings:  daemon.Settings{MaxModel: os.Getenv("GRILL_ROOM_MAX_MODEL"), MaxEffort: os.Getenv("GRILL_ROOM_MAX_EFFORT"), ApproveAll: approveAll},
 		Limits: sandbox.Limits{
 			CPUs: getEnv("GRILL_ROOM_SANDBOX_CPUS", "2"), Memory: getEnv("GRILL_ROOM_SANDBOX_MEMORY", "4g"),
 			EgressCPUs: getEnv("GRILL_ROOM_EGRESS_CPUS", "0.5"), EgressMemory: getEnv("GRILL_ROOM_EGRESS_MEMORY", "256m"),
@@ -324,9 +337,17 @@ func supervise(ctx context.Context, cfg Config, host string, room *daemon.Room, 
 	announce := func(link string) { _, _ = fmt.Fprintf(stderr, "\n  Admin page: %s\n\n", link) }
 	admin := daemon.NewAdmin(ctx, sup, ring, stop, announce, logger)
 	handed := takeHandedPage(cfg.Paths.State, time.Now())
-	ln, reused, err := admin.ListenAt(ctx, handed.Addr)
+	var usual []string
+	if cfg.AdminPort != 0 {
+		usual = append(usual, "127.0.0.1:"+strconv.Itoa(cfg.AdminPort))
+	}
+	ln, reused, err := admin.ListenAt(ctx, handed.Addr, usual...)
 	if err != nil {
 		return fmt.Errorf("admin page: %w", err)
+	}
+	// A random port changes at the next start: a session remembered for it could never be used.
+	if _, p, _ := net.SplitHostPort(ln.Addr().String()); cfg.AdminPort != 0 && p == strconv.Itoa(cfg.AdminPort) {
+		admin.Remember(filepath.Join(cfg.Paths.State, "admin-sessions.json"))
 	}
 	// On another port, whoever took the old one would get the tab's token: admit it only on ours.
 	if reused {
@@ -455,7 +476,7 @@ func autostart(exe string) *daemon.Autostart {
 		configHome = filepath.Join(home, ".config")
 	}
 	env := []string{"GRILL_ROOM_DAEMON_BROWSER=none"}
-	for _, k := range []string{"PATH", "CLAUDE_CONFIG_DIR", "GRILL_ROOM_DAEMON_STATE_DIR"} {
+	for _, k := range []string{"PATH", "CLAUDE_CONFIG_DIR", "GRILL_ROOM_DAEMON_STATE_DIR", "GRILL_ROOM_DAEMON_ADMIN_PORT"} {
 		v := os.Getenv(k)
 		if k == "GRILL_ROOM_DAEMON_STATE_DIR" && v != "" {
 			v, _ = filepath.Abs(v)
