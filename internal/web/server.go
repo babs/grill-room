@@ -354,6 +354,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rooms/{room}/agent", s.participant(s.getAgent))
 	mux.Handle("PATCH /api/rooms/{room}/agent", s.participant(s.setAgentMode))
 	mux.Handle("POST /api/rooms/{room}/blocked/{msg}/allow", s.participant(s.allowBlocked))
+	mux.Handle("POST /api/rooms/{room}/blocked/{msg}/dismiss", s.participant(s.dismissBlocked))
 	mux.Handle("PUT /api/rooms/{room}/egress-delegation", s.participant(s.setEgressDelegation))
 	mux.Handle("POST /api/rooms/{room}/turns", s.participant(s.startTurn))
 	mux.Handle("POST /api/rooms/{room}/turns/{turn}/stop", s.participant(s.stopTurn))
