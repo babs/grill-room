@@ -444,3 +444,11 @@ export const tableLayout = (page, sel) => page.locator(sel).evaluate((t) => {
   const first = t.querySelector('tbody td').getBoundingClientRect();
   return { clipped, firstInBox: first.left >= b.left - 0.5, fits: box.scrollWidth <= box.clientWidth + 1, share: t.getBoundingClientRect().width / innerWidth };
 });
+
+// approveEverything switches the daemon page's "approve every new AI persona and change" on: it
+// applies at once and says so in a toast (003b-AC15).
+export async function approveEverything(admin) {
+  await admin.locator('#tab-settings').click();
+  await admin.getByLabel('Approve every new AI persona and change').check();
+  await expect(admin.locator('.toast', { hasText: 'approved at once' })).toBeVisible();
+}

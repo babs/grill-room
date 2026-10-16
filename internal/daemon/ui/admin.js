@@ -590,12 +590,23 @@ function RoomPlugins({ i, room, st }) {
     ${fetches.length ? html`<h4>Asked to fetch</h4>
       <p class="hint">Fetch runs this computer's git, with your ssh keys and git logins, outside every sandbox.</p>
       <ul class="fetches">${fetches.map((f) => html`<${FetchRequest} key=${f.id} i=${i} room=${room} f=${f} />`)}</ul>` : ''}
-    ${st.plugins && html`<details class="plugins" open=${setup}>
-      <summary>Plugins${plugins.length ? ' (' + plugins.length + ')' : ''}</summary>
+    ${st.plugins && html`<${Plugins} setup=${setup} count=${plugins.length}>
       ${plugins.length ? plugins.map((p) => html`<${PluginSetup} key=${p.name} i=${i} room=${room} p=${p} allowlist=${i.status?.allowlist || []} />`)
         : html`<p class="hint">No plugin of this room has options or reaches a website.</p>`}
-    </details>`}
+    <//>`}
   </div>`;
+}
+
+/**
+ * Plugins is the room's plugins folded away; a plugin needing setup opens it, and only the host
+ * closes it again: saving the options must not fold the form being filled.
+ * @param {{setup: boolean, count: number, children?: any}} p
+ */
+function Plugins({ setup, count, children }) {
+  const [open, setOpen] = useState(setup);
+  useEffect(() => { if (setup) setOpen(true); }, [setup]);
+  return html`<details class="plugins" open=${open} onToggle=${(/** @type {any} */ e) => setOpen(e.currentTarget.open)}>
+    <summary>Plugins${count ? ' (' + count + ')' : ''}</summary>${children}</details>`;
 }
 
 // An account's state: its words and its pill kind.

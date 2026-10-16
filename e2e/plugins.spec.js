@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { join, resolve } from 'node:path';
-import { roomWith, startDaemon, pairDaemon, ask, skillZip, appointAdmin, agentState, personaSheet, closePersonas } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip, appointAdmin, agentState, personaSheet, closePersonas, approveEverything } from './helpers.js';
 import { gitPort, adminToken } from './playwright.config.js';
 
 // The plugin the Phase 2 DoD names: its plugin.json and its spec-feature skill.
@@ -71,10 +71,7 @@ test('plugins: inspected, approved, loaded after the skills', async ({ browser, 
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {
     const admin = await pairDaemon(alice, daemon);
-    await admin.locator('#tab-settings').click();
-    await admin.getByLabel('Approve every new persona and persona change').check();
-    await admin.locator('#settings-form').getByRole('button', { name: 'Save' }).click();
-    await expect(admin.locator('#settings-status')).toHaveText('Saved.');
+    await approveEverything(admin);
 
     expect(await dirs(alice, room.id, 'before')).toEqual([expect.stringMatching(new RegExp(`^${skillsDir} \\[`))]);
 

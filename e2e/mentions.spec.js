@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, startDaemon, pairDaemon, menuItem, sandboxHas, openStrip, addSecretary, upload, commentOnDocument, sandboxPrompts } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, menuItem, sandboxHas, openStrip, addSecretary, upload, commentOnDocument, sandboxPrompts, approveEverything } from './helpers.js';
 
 async function say(page, text) {
   await page.locator('#body').fill(text);
@@ -112,10 +112,7 @@ test('mentions: turn states, stop, pending and offline', async ({ browser, reque
     await again.close();
 
     // With "approve everything", Bob's new persona waits for the host.
-    await admin.locator('#tab-settings').click();
-    await admin.getByLabel('Approve every new persona and persona change').check();
-    await admin.locator('#settings-form').getByRole('button', { name: 'Save' }).click();
-    await expect(admin.locator('#settings-status')).toHaveText('Saved.');
+    await approveEverything(admin);
     await menuItem(bob, 'Personas');
     await bob.locator('#persona-template').selectOption({ label: '🔥 Default v1' });
     await bob.locator('#personas').getByRole('button', { name: 'Add', exact: true }).click();
