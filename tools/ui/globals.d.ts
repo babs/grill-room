@@ -3,7 +3,7 @@ interface Window {
   grillConfirm(title: string, text: string, action: string): Promise<boolean>;
 }
 interface Window {
-  grillAgo(t: string): string;
+  grillAgo(t: string, words?: boolean): string;
 }
 interface Window {
   grillDate(t: string | number | Date): string;

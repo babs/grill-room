@@ -2740,22 +2740,11 @@ function voiceParticipant(id) {
   return id === myID ? voice.localParticipant : voice.remoteParticipants.get(id);
 }
 
-// Each role badge and its tooltip (005-AC14).
-// Each role badge, its tooltip and the icon it shrinks to when a row has more than two (005-AC35).
-const roles = [
-  ['you', 'This is you', (p) => String(p.id) === myID, 'you'],
-  ['host', 'AI host: the personas run on their computer', (p) => agent.host_participant_id === p.id, 'host'],
-  ['admin', 'Room admin: manages the room, its invites and its admins', (p) => p.admin, 'admin'],
-];
-
 // badgeIcons are the People badges' shapes, drawn as block SVGs (009-AC39): an emoji's ink sits
 // wherever its font puts it, off the name's centre line.
 const badgeIcons = {
-  you: '<circle cx="12" cy="12" r="6" fill="currentColor" stroke="none"/>',
   anon: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   host: '<path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4a2 2 0 0 0 .7 2.7l.2.1a2 2 0 0 1 1 1.7v.5a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.5a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
-  admin: '<path d="M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.5L12 17.3l-5.9 3.2 1.3-6.5-4.9-4.6 6.6-.8z" fill="currentColor"/>',
-  ask: '<path d="M12 3l2.2 6.8L21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2z" fill="currentColor"/>',
   transcribed: '<path d="M12 20h9"/><path d="M16.4 3.6a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z"/>',
   'transcribed-device': '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4M7 10h5"/>',
   mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/>',
@@ -2786,8 +2775,6 @@ function audioState(id) {
   return { key: 'listening', icon: 'listening', text: 'Listening only' };
 }
 
-// ago says how long ago a time was, coarsely (kit/ui.js): the list refreshes every 30 seconds.
-const ago = (ts) => grillAgo(ts);
 
 function span(cls, text, tip) {
   const el = document.createElement('span');
@@ -2798,16 +2785,16 @@ function span(cls, text, tip) {
 }
 
 // tagColumns are the badges a person row may carry, in their fixed order (008-AC13): a column shows
-// in every row of a list once any row has it, so a badge sits at the same place on every row.
-const tagColumns = ['you', 'anon', 'host', 'admin', 'ask', 'transcribed', 'audio'];
+// in every row of a list once any row has it, so a badge sits at the same place on every row. You
+// and room admins are marked on the name, can ask the AI in the card (008-AC18).
+const tagColumns = ['anon', 'host', 'transcribed', 'audio'];
 
 // personTags are a participant's badges by column: [icon, accessible name, tooltip].
 function personTags(p, id, isHere) {
   const t = {};
-  for (const [name, title, on, icon] of roles) if (on(p)) t[name] = [icon, name, title];
+  if (agent.host_participant_id === p.id) t.host = ['host', 'host', 'AI host: the personas run on their computer'];
   // Only your own row: nobody else learns whether a profile has an email (011-AC6).
   if (id === myID && noEmail()) t.anon = ['anon', anonText, anonText];
-  if (agent.can_trigger.includes(p.id) && agent.host_participant_id !== p.id) t.ask = ['ask', 'Can ask the AI', 'Can ask the AI'];
   // Their own browser writes their voice down instead of the server (010-AC12).
   if (presence.get(id)?.device_stt) t.transcribed = ['transcribed-device', 'Their device transcribes this voice', 'Their device transcribes this voice'];
   else if (transcribed.has(id)) t.transcribed = ['transcribed', 'The transcription hears this voice', 'The transcription hears this voice'];
@@ -2947,7 +2934,7 @@ function cardAudio(id) {
 function cardHere(p, id) {
   const pr = presence.get(id);
   if (id === myID || pr?.here) return pr?.here_since ? 'Here since ' + grillTime(pr.here_since) : 'Here';
-  return 'Seen ' + ago(pr?.seen_at || p.last_seen_at || p.joined_at);
+  return 'Seen ' + grillAgo(pr?.seen_at || p.last_seen_at || p.joined_at, true);
 }
 
 function showCard(el) {
@@ -3064,10 +3051,18 @@ function renderParticipants() {
       more.setAttribute('aria-expanded', 'false');
       const name = span('name', '');
       name.tabIndex = 0;
-      li.append(span('voice-dot', ''), name, span('tags', ''), more);
+      const sigil = span('sigil', '');
+      sigil.setAttribute('aria-hidden', 'true');
+      li.append(span('voice-dot', ''), sigil, name, span('tags', ''), more);
     }
     const isHere = id === myID || !!presence.get(id)?.here;
-    li.querySelector('.name').textContent = p.name;
+    const name = li.querySelector('.name');
+    name.textContent = p.name;
+    // IRC's @ for a room admin, in its own column so every name starts at the same x (008-AC18).
+    const sigil = li.querySelector('.sigil');
+    sigil.textContent = p.admin ? '@' : '';
+    sigil.dataset.tip = p.admin ? 'Room admin' : '';
+    name.classList.toggle('me', id === myID);
     const tags = personTags(p, id, isHere);
     const [, , , key, deaf] = tags.audio;
     li.classList.toggle('in-voice', key !== 'none');
@@ -3079,23 +3074,15 @@ function renderParticipants() {
     more.setAttribute('aria-label', 'Actions for ' + p.name);
     more.onpointerdown = () => { openFor = $('person-menu').matches(':popover-open') ? personFor?.b : null; };
     more.onclick = (e) => openPersonMenu(more, p, id, e.detail > 0);
-    const pr = presence.get(id);
-    rows[isHere ? 'here' : 'away'].push({ li, tags, menu: personActions(p, id).length > 0,
-      seen: isHere ? '' : 'seen ' + ago((pr && pr.seen_at) || p.last_seen_at || p.joined_at) });
+    rows[isHere ? 'here' : 'away'].push({ li, tags, menu: personActions(p, id).length > 0 });
   }
   for (const [list, want] of [[here, rows.here], [away, rows.away]]) {
     const cols = tagColumns.filter((c) => c === 'audio' || want.some((r) => r.tags[c] && r.tags[c][0]));
     const anyMenu = want.some((r) => r.menu);
-    for (const { li, tags, menu, seen } of want) {
+    for (const { li, tags, menu } of want) {
       const box = li.querySelector('.tags');
       const had = new Map([...box.children].map((x) => [x.dataset.col, x]));
       const kids = cols.map((c) => tagSpan(c, tags[c], had.get(c) || (c === 'anon' && tags.anon ? anonMark() : undefined)));
-      if (seen) {
-        const el = had.get('seen') || span('seen', '');
-        el.dataset.col = 'seen';
-        el.textContent = seen;
-        kids.push(el);
-      }
       if (kids.length !== box.children.length || kids.some((k, i) => box.children[i] !== k)) box.replaceChildren(...kids);
       const more = li.querySelector('.person-more');
       more.hidden = !anyMenu;
@@ -3123,7 +3110,7 @@ function renderParticipants() {
 function tagSpan(col, t, el = document.createElement('span')) {
   // The classes that name a state go on a filled square only.
   const on = !!(t && t[0]);
-  const role = on && ['you', 'host', 'admin'].includes(col);
+  const role = on && col === 'host';
   el.className = 'tag tag-' + col + (role ? ' role-' + col : '') + (on && col === 'host' ? ' host-badge' : '') + (on && col === 'transcribed' ? ' transcribed' : '') + (col === 'audio' ? ' audio' : '');
   const icon = t ? t[0] : '';
   if (el.dataset.icon !== icon) {
@@ -3219,8 +3206,17 @@ function showManage() {
 }
 
 function voiceError(text) {
-  $('voice-error').textContent = text;
+  $('voice-error-text').textContent = text;
   $('voice-error').hidden = !text;
+}
+$('voice-error-close').addEventListener('click', () => voiceError(''));
+
+// The browser's own NotAllowedError text ("not allowed by the user agent or the platform") names no
+// way out; the site's mic permission is the one.
+function micError(err) {
+  return err?.name === 'NotAllowedError'
+    ? 'Your browser blocks the microphone here. Allow it in the site settings (the icon left of the address), then try again.'
+    : 'Microphone unavailable: ' + String(err?.message).replace(/\.?$/, '.');
 }
 
 function voiceButtons() {
@@ -3249,6 +3245,8 @@ function voiceButtons() {
 }
 
 function voiceChanged() {
+  // A live mic settles any earlier mic error: the browser let it through after all.
+  if (voice?.localParticipant.isMicrophoneEnabled) voiceError('');
   voiceButtons();
   renderParticipants();
   clearTimeout(beatTimer);
@@ -3454,7 +3452,7 @@ async function setDeaf(on, before) {
       await lp.setMicrophoneEnabled(micBefore);
     }
   } catch (err) {
-    voiceError('Microphone: ' + err.message);
+    voiceError(micError(err));
   }
   saveDeaf();
   voiceChanged();
@@ -3504,7 +3502,7 @@ async function joinVoice() {
       await room.localParticipant.setMicrophoneEnabled(true);
     } catch (err) {
       // Without a microphone the participant still hears the others.
-      voiceError('Microphone unavailable: ' + err.message + '. You can still listen.');
+      voiceError(micError(err) + ' You can still listen.');
     }
     // A reconnect in the same session comes back deafened, with the mic it had before.
     const saved = JSON.parse(sessionStorage.getItem(deafKey) || '{}');
@@ -3562,7 +3560,7 @@ $('voice-mute').addEventListener('click', () => {
   if (!voice) return;
   voice.localParticipant.setMicrophoneEnabled(!voice.localParticipant.isMicrophoneEnabled)
     .then(voiceChanged)
-    .catch((err) => voiceError('Microphone: ' + err.message));
+    .catch((err) => voiceError(micError(err)));
 });
 // Browsers block playback without a gesture; LiveKit flags it and this button lifts it.
 $('voice-unlock').addEventListener('click', () => voice && voice.startAudio().then(voiceChanged).catch(console.error));

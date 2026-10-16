@@ -97,7 +97,8 @@
      until "+N more" opens the rest. -->
 <div id="strip" class="status-strip">
 <p id="reconnecting" class="strip" role="status" hidden>Reconnecting…</p>
-<p id="voice-error" class="strip" role="alert" hidden></p>
+<p id="voice-error" class="strip" role="alert" hidden><span data-icon="alert"></span><span id="voice-error-text"></span>
+  <button type="button" id="voice-error-close" class="btn-icon" aria-label="Dismiss" data-icon="close"></button></p>
 <section id="approvals" class="strip" aria-label="Waiting for the AI host" tabindex="-1" hidden>
   <ul id="approval-list"></ul>
 </section>

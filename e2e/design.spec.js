@@ -521,14 +521,14 @@ test('join page', async ({ browser, request }) => {
 });
 
 // 005-AC35: a long name ends with an ellipsis instead of breaking.
-test('participant names never break mid-word, roles stay two badges', async ({ browser, request }) => {
+test('participant names never break mid-word', async ({ browser, request }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alexandrina-Wilhelmina']);
   await alice.setViewportSize(desktop);
   const me = await alice.evaluate((id) => fetch(`/api/rooms/${id}`).then((r) => r.json()), room.id);
   expect((await request.put(`/api/rooms/${room.id}/admins/${me.me.id}`, { headers: admin })).status()).toBe(204);
   await alice.reload();
   const row = alice.locator('#participants li').first();
-  await expect(row.locator('.tag:not(.blank):is(.role-you, .role-admin)')).toHaveCount(2);
+  await expect(row.locator('.sigil')).toHaveText('@');
   const name = row.locator('.name');
   const [lines, clipped] = await name.evaluate((e) => [Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight)), e.scrollWidth > e.clientWidth]);
   expect(lines).toBe(1);

@@ -33,11 +33,13 @@ test('participant list on a phone follows the server presence', async ({ browser
   await expect(carol.locator('.layout > aside')).toBeVisible();
   await expect(carol.locator('#participants li .name')).toHaveText(['Alice', 'Bob', 'Carol']);
   await expect(carol.locator('#tab-people-count')).toHaveText('3');
+  // 008-AC18: you on the name, a room admin's @ in the sigil column.
   const me = row(carol, 'Carol');
-  await expect(me.locator('.tag:not(.blank):is(.role-you, .role-host, .role-admin)')).toHaveCount(2);
-  await expect(me.locator('.role-you')).toHaveAttribute('aria-label', 'you');
-  await expect(me.locator('.role-admin')).toHaveAttribute('data-tip', /Room admin/);
-  await expect(row(carol, 'Bob').locator('.tag:not(.blank):is(.role-you, .role-host, .role-admin)')).toHaveCount(0);
+  await expect(me.locator('.name')).toHaveClass(/\bme\b/);
+  await expect(me.locator('.sigil')).toHaveText('@');
+  await expect(me.locator('.sigil')).toHaveAttribute('data-tip', 'Room admin');
+  await expect(row(carol, 'Bob').locator('.name')).not.toHaveClass(/\bme\b/);
+  await expect(row(carol, 'Bob').locator('.sigil')).toHaveText('');
   await expect(row(carol, 'Bob').locator('.audio')).toHaveAttribute('data-state', 'none');
 
   // A second tab of Bob's in the audio, muted: everyone sees it, in the audio or not.
@@ -59,7 +61,7 @@ test('participant list on a phone follows the server presence', async ({ browser
   await expect(carol.locator('#away summary')).toHaveText('Not here (1)');
   await expect(row(carol, 'Bob')).toBeHidden();
   await carol.locator('#away summary').click();
-  await expect(row(carol, 'Bob').locator('.seen')).toHaveText('seen just now');
+  await expect(row(carol, 'Bob')).not.toContainText('seen');
 
   await carol.locator('#tabbar').getByRole('button', { name: /Chat/ }).click();
   await expect(carol.locator('.layout > aside')).toBeHidden();
@@ -103,7 +105,10 @@ test('participant list shows audio states and transcription', async ({ browser, 
   await expect(alice.locator('#participants li .name')).toHaveText(['Alice', 'Bob', 'Carol', 'Dan']);
   await expect(alice.locator('#away summary')).toHaveText('Not here (1)');
   await alice.locator('#away summary').click();
-  await expect(row(alice, 'Eve').locator('.seen')).toHaveText('seen 5 min ago');
+  // 008-AC18: when they were seen is in the card, not the row.
+  await expect(row(alice, 'Eve')).not.toContainText('seen');
+  await row(alice, 'Eve').locator('.name').focus();
+  await expect(alice.locator('#person-card')).toContainText('Seen 5 minutes ago');
 });
 
 // 005-AC19: event lines show their time, as messages do.
@@ -137,7 +142,7 @@ for (const [label, size] of [['desktop', { width: 1440, height: 900 }], ['phone'
     await alice.reload();
     if (label === 'phone') await alice.locator('#tabbar').getByRole('button', { name: /People/ }).click();
     const alices = alice.locator('#participants li', { hasText: 'Alice' });
-    await expect(alices.locator('.tag:not(.blank):is(.role-you, .role-admin)')).toHaveCount(2);
+    await expect(alices.locator('.sigil')).toHaveText('@');
     await expect(alices.locator('.transcribed')).toHaveAccessibleName('The transcription hears this voice');
     await expect(alice.locator('#participants li .audio[data-state=live]')).toHaveCount(1);
     const rows = await alice.locator('#participants li').evaluateAll((lis) => lis.map((li) => {
@@ -160,7 +165,7 @@ for (const [label, size] of [['desktop', { width: 1440, height: 900 }], ['phone'
       expect(r, JSON.stringify(r)).toMatchObject({ oneLine: true, nameLines: 1, inside: true, spill: [] });
       expect(new Set(r.icons).size, JSON.stringify(r)).toBeLessThanOrEqual(1);
     }
-    expect(rows[0].icons.length).toBe(4);
+    expect(rows[0].icons.length).toBe(2);
     // 008-AC13: each badge column at one x and one 20 px square on every row.
     const cols = await alice.locator('#participants li').evaluateAll((lis) => {
       const by = {};
@@ -173,7 +178,7 @@ for (const [label, size] of [['desktop', { width: 1440, height: 900 }], ['phone'
       }
       return Object.fromEntries(Object.entries(by).map(([k, v]) => [k, [...v]]));
     });
-    expect(Object.keys(cols)).toEqual(['tag-you', 'tag-admin', 'tag-transcribed', 'tag-audio']);
+    expect(Object.keys(cols)).toEqual(['tag-transcribed', 'tag-audio']);
     for (const [col, boxes] of Object.entries(cols)) {
       expect(boxes, col).toHaveLength(1);
       expect(boxes[0].split(',').slice(1), col).toEqual(['20', '20']);
@@ -235,7 +240,7 @@ test('a person menu, not in-place settings', async ({ browser, request }) => {
   await row(alice, 'Robert').locator('.person-more').click();
   expect(await smallTargets(alice), 'person menu at 390 px').toEqual([]);
   await menu.getByRole('button', { name: 'Make room admin' }).click();
-  await expect(row(alice, 'Robert').locator('.role-admin')).toHaveAttribute('aria-label', 'admin');
+  await expect(row(alice, 'Robert').locator('.sigil')).toHaveText('@');
 });
 
 // 009-AC36: a presence change re-renders People while a badge tip is open: the tip follows its
@@ -257,3 +262,59 @@ test('a badge tip survives a presence re-render', async ({ browser, request }) =
   const [t, a] = [await tip.boundingBox(), await audio.boundingBox()];
   expect(Math.abs(t.y - (a.y + a.height + 4)) <= 1 || Math.abs(t.y + t.height - (a.y - 4)) <= 1).toBe(true);
 });
+
+// 008-AC18: in a narrow side panel, a phone and a desktop, every name shows and starts at one x, @
+// marks a room admin in its own column, you are marked on the name, and no row says when it was seen.
+for (const [label, size, side] of [['260 px panel', { width: 1440, height: 900 }, 260], ['phone', { width: 390, height: 844 }, 0],
+  ['desktop', { width: 1440, height: 900 }, 0]]) {
+  test(`people names win the row, ${label}`, async ({ browser, request }) => {
+    const long = 'Babs (laptop), a long name to cut it';
+    const { room, pages: [alice] } = await roomWith(browser, request, ['Damien', 'Eric', 'Eric', long, 'Babs (host)']);
+    const ids = await alice.evaluate((id) => fetch(`/api/rooms/${id}`).then((r) => r.json()).then((d) => d.participants.map((p) => p.id)), room.id);
+    const [me, eric, , babs, host] = ids;
+    for (const id of [me, babs]) expect((await request.put(`/api/rooms/${room.id}/admins/${id}`, { headers: admin })).status()).toBe(204);
+    const seen = new Date(Date.now() - 5 * 86_400_000).toISOString();
+    const people = [{ id: me, here: true, audio: true, mic: true }, { id: eric, here: true, audio: true, muted: true }]
+      .concat(ids.slice(2).map((id) => ({ id, here: false, seen_at: seen })));
+    const agent = { online: true, can_trigger: [eric, babs], daemons: [], turn: null, running: [], personas: [], queue: [], models: [], efforts: [],
+      cap_requests: [], changes: [], room_skills: [], chain: { budget: 25, count: 0, suspended: false }, parallel_turns: false, host_participant_id: host };
+    await alice.route(`**/api/rooms/${room.id}/events*`, (r) => r.fulfill({
+      status: 200, headers: { 'Content-Type': 'text/event-stream' },
+      body: `event: presence\ndata: ${JSON.stringify({ people })}\n\nevent: agent\ndata: ${JSON.stringify(agent)}\n\n`,
+    }));
+    await alice.setViewportSize(size);
+    await alice.reload();
+    // The page's CSP refuses a style tag; CSSOM is allowed.
+    if (side) await alice.evaluate((w) => { for (const [k, v] of [['flex', 'none'], ['width', w + 'px']]) document.getElementById('side').style.setProperty(k, v, 'important'); }, side);
+    if (label === 'phone') await alice.locator('#tabbar').getByRole('button', { name: /People/ }).click();
+    await alice.locator('#away summary').click();
+    const rows = alice.locator('#participants li, #participants-away li');
+    await expect(rows).toHaveCount(5);
+    await expect(alice.locator('#participants-away .host-badge')).toHaveCount(1);
+    const got = await rows.evaluateAll((lis) => lis.map((li) => {
+      const name = li.querySelector('.name');
+      const r = name.getBoundingClientRect();
+      return { text: name.textContent, left: Math.round(r.left), width: Math.round(r.width), cut: name.scrollWidth > name.clientWidth,
+        sigil: li.querySelector('.sigil')?.textContent ?? '', me: name.classList.contains('me'), row: li.textContent };
+    }));
+    const by = (t) => got.find((g) => g.text === t);
+    for (const g of got) {
+      expect(g.width, JSON.stringify(g)).toBeGreaterThanOrEqual(24);
+      expect(g.row, JSON.stringify(g)).not.toMatch(/seen/i);
+    }
+    expect(new Set(got.map((g) => g.left)).size, JSON.stringify(got)).toBe(1);
+    expect(by('Damien')).toMatchObject({ sigil: '@', me: true });
+    expect(by(long)).toMatchObject({ sigil: '@', me: false });
+    if (side) expect(by(long).cut).toBe(true);
+    expect(got.filter((g) => g.text === 'Eric').map((g) => g.sigil)).toEqual(['', '']);
+    // No badge stands for you, an admin or can ask the AI any more.
+    await expect(alice.locator('.tag:is(.tag-you, .tag-admin, .tag-ask)')).toHaveCount(0);
+    // Two people of one name: the card tells them apart.
+    await rows.filter({ has: alice.locator('.name', { hasText: /^Eric$/ }) }).last().locator('.name').focus();
+    await expect(alice.locator('#person-card')).toContainText('Seen 5 days ago');
+    await expect(alice.locator('#person-card')).toContainText(/Joined /);
+    // Can ask the AI left the row for the card.
+    await rows.filter({ hasText: long }).locator('.name').focus();
+    await expect(alice.locator('#person-card')).toContainText('Can ask the AI');
+  });
+}

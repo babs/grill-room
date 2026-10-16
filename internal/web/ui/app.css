@@ -167,7 +167,10 @@ button.persona .pstate { color: var(--text-muted); font-weight: 400; font-size: 
 #approval-list li { margin: var(--sp-1) 0; }
 #chain-paused { background: var(--warning-bg); border-left: 3px solid var(--accent); }
 #chain-unlimited { background: var(--danger-bg); color: var(--danger); font-weight: 600; }
-#voice-error { margin: 0; padding: var(--sp-2) var(--sp-4); background: var(--danger-bg); color: var(--danger); }
+#voice-error { flex-wrap: nowrap; margin: 0; padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-4); background: var(--danger-bg); color: var(--danger); }
+#voice-error-text { flex: 1; min-width: 0; }
+#voice-error > [data-icon] svg { display: block; }
+#voice-error-close { flex: none; color: inherit; background: transparent; border-color: transparent; }
 #banner, #reconnecting { margin: 0; padding: var(--sp-2) var(--sp-4); background: var(--warning-bg); color: var(--text); }
 #notice { display: flex; align-items: center; gap: var(--sp-2); margin: 0; padding: var(--sp-1) var(--sp-4); background: var(--primary-bg); font-size: var(--fs-sm); }
 #pairing { margin: 0; padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--border); background: var(--surface); }
@@ -267,15 +270,19 @@ code.risk { display: block; padding: var(--sp-1) var(--sp-2); border-left: 3px s
 #participants, #documents { list-style: none; padding: 0; margin: var(--sp-2) 0 var(--sp-4); }
 /* One row per person (008-AC13): dot, name, badges in fixed 20 px columns, then ⋯. */
 /* A row is one control high, as a document's row is (44 px on a phone). */
-#participants li, #participants-away li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: var(--sp-2); min-height: var(--control-h); line-height: 20px; }
+/* The name wins a narrow panel (008-AC18): it truncates first, down to 5ch; only then do the badges
+   give way. Its 0 basis keeps the badge columns aligned on rows with longer names. */
+#participants li, #participants-away li { display: flex; align-items: center; gap: var(--sp-2); min-height: var(--control-h); line-height: 20px; }
+#participants li > :not(.name, .tags), #participants-away li > :not(.name, .tags) { flex: none; }
 /* A name ends with an ellipsis, never breaks mid-word (005-AC35). */
-#participants .name, #participants-away .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tags { display: inline-flex; align-items: center; gap: var(--sp-1); white-space: nowrap; }
+#participants .name, #participants-away .name { flex: 1 1 0; min-width: 5ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:is(#participants, #participants-away) .sigil { width: 1ch; font-family: var(--mono); text-align: right; color: var(--text-muted); }
+:is(#participants, #participants-away) .name.me { font-weight: 700; color: var(--primary-text); }
+.tags { display: inline-flex; flex: 0 1 auto; min-width: 0; overflow: hidden; align-items: center; gap: var(--sp-1); white-space: nowrap; }
 .tag { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: var(--r-sm); font-size: var(--fs-xs); line-height: 1; }
 .tag.blank { visibility: hidden; }
 .tag svg { display: block; width: 14px; height: 14px; }
-.tag.role-you, .tag.tag-ask { background: var(--primary-bg); color: var(--primary-text); }
-.tag.role-host, .tag.role-admin { background: var(--accent); color: var(--on-accent); }
+.tag.role-host { background: var(--accent); color: var(--on-accent); }
 .tag.transcribed { box-shadow: inset 0 0 0 1px var(--primary-text); color: var(--primary-text); }
 .person-more { min-width: var(--control-h-sm); min-height: var(--control-h-sm); padding: 0; border-color: transparent; background: transparent; color: var(--text-muted); }
 .person-more.blank { visibility: hidden; }
@@ -284,7 +291,6 @@ code.risk { display: block; padding: var(--sp-1) var(--sp-2); border-left: 3px s
 .person-card { position: fixed; inset: auto; margin: 0; max-width: 20rem; padding: var(--sp-2) var(--sp-3);
   border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); color: var(--text); box-shadow: var(--sh-2); font-size: var(--fs-sm); line-height: 1.45; }
 .person-card ul { list-style: none; margin: var(--sp-1) 0 0; padding: 0; color: var(--text-muted); }
-#participants-away .seen { font-size: var(--fs-xs); color: var(--text-muted); }
 h3.people { font-size: var(--fs-xs); color: var(--text-muted); font-weight: 400; margin: var(--sp-2) 0 0; }
 #away summary { font-size: var(--fs-sm); color: var(--text-muted); font-weight: 400; }
 #participants-away { list-style: none; padding: 0; margin: var(--sp-1) 0 var(--sp-4); }
