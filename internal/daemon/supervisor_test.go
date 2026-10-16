@@ -635,11 +635,22 @@ func TestSupervisorSetRoomFailures(t *testing.T) {
 
 // A worker that never says hello is killed and restarted; one that talks before hello is cut off.
 func TestSupervisorHandshakeFailures(t *testing.T) {
-	for mode, want := range map[string]string{"silent": "no hello from the worker", "early": `the worker sent "status" before hello`} {
+	for mode, c := range map[string]struct {
+		want  string
+		hello time.Duration
+	}{
+		"silent": {"no hello from the worker", 200 * time.Millisecond},
+		// The default timeout: a short one killed this worker before it spoke on a loaded runner.
+		"early": {`the worker sent "status" before hello`, 0},
+	} {
 		t.Run(mode, func(t *testing.T) {
-			s := testSupervisor(t, mode, nil, func(o *SupervisorOptions) { o.HelloTimeout = 200 * time.Millisecond })
+			s := testSupervisor(t, mode, nil, func(o *SupervisorOptions) {
+				if c.hello != 0 {
+					o.HelloTimeout = c.hello
+				}
+			})
 			s.SetRoom(context.Background(), Room{Base: "https://rooms.example", ID: "abc"})
-			waitFor(t, "a restart", func() bool { in := instance(t, s); return in.Restarts >= 1 && strings.Contains(in.Error, want) })
+			waitFor(t, "a restart", func() bool { in := instance(t, s); return in.Restarts >= 1 && strings.Contains(in.Error, c.want) })
 		})
 	}
 }
