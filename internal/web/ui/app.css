@@ -276,7 +276,8 @@ code.risk { display: block; padding: var(--sp-1) var(--sp-2); border-left: 3px s
 #participants li > :not(.name, .tags), #participants-away li > :not(.name, .tags) { flex: none; }
 /* A name ends with an ellipsis, never breaks mid-word (005-AC35). */
 #participants .name, #participants-away .name { flex: 1 1 0; min-width: 5ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-:is(#participants, #participants-away) .sigil { width: 1ch; font-family: var(--mono); text-align: right; color: var(--text-muted); }
+/* The name's own font, so the @ sits on the name's baseline; 1em holds one glyph. */
+:is(#participants, #participants-away) .sigil { width: 1em; text-align: right; color: var(--text-muted); }
 :is(#participants, #participants-away) .name.me { font-weight: 700; color: var(--primary-text); }
 .tags { display: inline-flex; flex: 0 1 auto; min-width: 0; overflow: hidden; align-items: center; gap: var(--sp-1); white-space: nowrap; }
 .tag { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: var(--r-sm); font-size: var(--fs-xs); line-height: 1; }

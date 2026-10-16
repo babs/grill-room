@@ -146,7 +146,7 @@ for (const [size, viewport] of Object.entries(widths)) {
       if (size === 'phone') await alice.locator('#tabbar').getByRole('button', { name: /People/ }).click();
       await expect(alice.locator('#participants li')).toHaveCount(2);
       await expect(alice.locator('#participants .sigil', { hasText: '@' })).toHaveCount(1);
-      expect.soft(await offCentre(alice, '#participants li', '.name', '.voice-dot, .sigil, .tag, .tag svg, .person-more')).toEqual([]);
+      expect.soft(await offCentre(alice, '#participants li', '.name', '.voice-dot, .tag, .tag svg, .person-more')).toEqual([]);
       expect.soft(await offCentre(alice, '#people-pane .pane-head', '.sec-label', '.fold, .sec-icon, .head-action, .head-action svg')).toEqual([]);
       await shot(alice, `${size}-people`);
       if (size === 'phone') await alice.locator('#tabbar').getByRole('button', { name: /Docs/ }).click();

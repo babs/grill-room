@@ -295,12 +295,15 @@ for (const [label, size, side] of [['260 px panel', { width: 1440, height: 900 }
       const name = li.querySelector('.name');
       const r = name.getBoundingClientRect();
       return { text: name.textContent, left: Math.round(r.left), width: Math.round(r.width), cut: name.scrollWidth > name.clientWidth,
-        sigil: li.querySelector('.sigil')?.textContent ?? '', me: name.classList.contains('me'), row: li.textContent };
+        sigil: li.querySelector('.sigil')?.textContent ?? '', me: name.classList.contains('me'), row: li.textContent,
+        // The @ shares the name's line box, so its baseline: the same top and height.
+        line: (() => { const s = li.querySelector('.sigil')?.getBoundingClientRect(); return s ? Math.abs(s.top - r.top) + Math.abs(s.height - r.height) : 99; })() };
     }));
     const by = (t) => got.find((g) => g.text === t);
     for (const g of got) {
       expect(g.width, JSON.stringify(g)).toBeGreaterThanOrEqual(24);
       expect(g.row, JSON.stringify(g)).not.toMatch(/seen/i);
+      if (g.sigil) expect(g.line, JSON.stringify(g)).toBeLessThanOrEqual(1);
     }
     expect(new Set(got.map((g) => g.left)).size, JSON.stringify(got)).toBe(1);
     expect(by('Damien')).toMatchObject({ sigil: '@', me: true });
