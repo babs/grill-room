@@ -43,7 +43,7 @@ var (
 func newTurnDesk() *turnDesk { return &turnDesk{started: make(chan *heldTurn, 32)} }
 
 // newAgent builds the fake sandbox slot of r: its turns go to the desk.
-func (k *turnDesk) newAgent(r Room, slot int, _, _ string) Agent {
+func (k *turnDesk) newAgent(r Room, slot int, _, _, _ string) Agent {
 	k.mu.Lock()
 	k.sandboxes = append(k.sandboxes, fmt.Sprintf("%s/%d", r.ID, slot))
 	k.mu.Unlock()

@@ -19,7 +19,7 @@
  *   settings: Settings, allowlist: string[], egress?: EgressState, rooms?: RoomStatus[]}} Status
  * @typedef {{domain: string, by?: string, at?: string}} AllowEntry
  * @typedef {{id: string, name: string, state: string, detail?: string, on: boolean, actions: boolean}} ConnectorView
- * @typedef {{all_websites: boolean, local_network: boolean, server: AllowEntry[], rooms?: Record<string, AllowEntry[]>}} EgressState
+ * @typedef {{all_websites: boolean, local_network: boolean, hold_seconds?: number, server: AllowEntry[], rooms?: Record<string, AllowEntry[]>}} EgressState
  * @typedef {{uptime_seconds: number, turns: number, failed_turns: number, heap_bytes: number, goroutines: number}} Metrics
  * @typedef {{id: string, url: string, rooms: string[], state: string, error?: string, pid?: number, proto?: number,
  *   restarts: number, version?: string, trust?: string, accept_unsigned: boolean, account: string,

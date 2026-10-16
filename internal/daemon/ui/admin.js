@@ -1010,6 +1010,17 @@ const covers = (entry, host) => {
 const hitsFor = (hits, entry) => Object.entries(hits).reduce((n, [h, c]) => n + (covers(entry, h) ? c : 0), 0);
 
 /**
+ * HoldTimeout is how long a website off the list waits for the room's answer, 30 to 60 s
+ * (014-AC29); save sends it with the server's switches.
+ * @param {{i: Instance, sw: {all_websites: boolean, local_network: boolean}, seconds: number, save: (s: number) => unknown}} p
+ */
+function HoldTimeout({ seconds, save }) {
+  return html`<label class="full">Wait for an answer <input id="hold-seconds" type="number" min="30" max="60" step="5" value=${seconds}
+      onChange=${(/** @type {any} */ e) => save(Number(e.currentTarget.value))} /> seconds</label>
+    <p class="hint">A website off the list waits this long for you, or a room admin you let, to allow it from the room's banner: allowed in time, the same answer goes on. Linux with Docker Engine only.</p>`;
+}
+
+/**
  * Domain is an allowlist entry's domain; one added from a room's chat says by whom and when in its
  * tooltip (014-AC15).
  * @param {{dom: string, entry?: AllowEntry}} p
@@ -1115,6 +1126,7 @@ function Egress({ i, st }) {
       <p class="hint">Any website over HTTPS, without listing it. Anthropic's hosts stay blocked and every request is counted.</p>
       <label class="full nested"><input id="local-network" type="checkbox" disabled=${!all} checked=${sw.local_network} onChange=${toggleLocal} /> Also allow the local network and IP addresses</label>
       <p class="hint nested">Your own network and raw IP addresses too. Cloud metadata addresses stay blocked.</p>
+      <${HoldTimeout} i=${i} sw=${sw} seconds=${eg?.hold_seconds || 45} save=${(/** @type {number} */ s) => run(api('POST', '/api/egress-switches', { instance: i.id, ...sw, hold_seconds: s }), 'Saved.')} />
     </div>
     <p><span id="allowlist-status" role="status">${text}</span></p>
     <h4 id="denied-title">Blocked websites</h4>

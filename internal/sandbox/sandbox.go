@@ -45,6 +45,9 @@ type Config struct {
 	Limits Limits
 	// Labels, "key=value", mark every Docker object besides Label, for RemoveLabelled.
 	Labels []string
+	// HoldDir is the host folder of the daemon's hold socket, mounted into the egress proxy; empty
+	// for no hold (014-AC29).
+	HoldDir string
 }
 
 // Limits are docker run --cpus and --memory values.
@@ -160,8 +163,8 @@ func (s *Sandbox) Start(ctx context.Context) error {
 		// network as "egress" (002-AC34).
 		append(append([]string{"network", "create"}, labels...), s.egress()),
 		// The local log driver is bounded and readable by docker logs, which the denied list reads.
-		append(append(append([]string{"run", "-d", "--name", s.egress(), "--network", s.egress(), "--log-driver", "local"}, hardening...),
-			limitFlags(s.cfg.Limits.EgressCPUs, s.cfg.Limits.EgressMemory)...),
+		append(append(append(append([]string{"run", "-d", "--name", s.egress(), "--network", s.egress(), "--log-driver", "local"}, hardening...),
+			limitFlags(s.cfg.Limits.EgressCPUs, s.cfg.Limits.EgressMemory)...), s.holdMount()...),
 			"--tmpfs", "/tmp", "--pids-limit", "64", "-e", "GRILL_SQUID_CONF="+squidConf(s.policy),
 			"--entrypoint", "sh", s.cfg.Image, "-c", `printf '%s' "$GRILL_SQUID_CONF" > /tmp/squid.conf && exec squid -N -f /tmp/squid.conf`),
 		{"network", "connect", "--alias", "egress", s.network(), s.egress()},

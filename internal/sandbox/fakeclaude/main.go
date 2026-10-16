@@ -348,7 +348,8 @@ var fetchMark = regexp.MustCompile(`FAKE_FETCH ([a-z0-9][a-z0-9.-]*[a-z0-9])`)
 
 // fetch GETs https://domain/ through the sandbox's HTTPS_PROXY, the egress proxy, as WebFetch does.
 func fetch(domain string) string {
-	c := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment}}
+	// Past the daemon's longest hold: an approval in the window lets the fetch go on.
+	c := &http.Client{Timeout: 90 * time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment}}
 	resp, err := c.Get("https://" + domain + "/") //nolint:noctx,gosec // a test fake: fetching what the prompt names is its job; the timeout bounds it
 	if err != nil {
 		return "Could not fetch " + domain + ": " + err.Error()

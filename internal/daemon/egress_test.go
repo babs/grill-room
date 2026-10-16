@@ -238,6 +238,18 @@ func TestEgressSwitches(t *testing.T) {
 	if code, _ := e.req(t, "POST", "/api/egress-switches", "", `{"all_websites":true}`, nil); code != http.StatusUnauthorized {
 		t.Fatalf("switches without a session: %d", code)
 	}
+	// 014-AC29: the hold time, kept within bounds, survives a restart and a switch saved without it.
+	for _, c := range []struct {
+		body string
+		want int
+	}{{`{"hold_seconds":50}`, 50}, {`{"hold_seconds":99}`, HoldMax}, {`{"all_websites":false}`, HoldMax}} {
+		if code, b := e.req(t, "POST", "/api/egress-switches", tok, c.body, nil); code != http.StatusNoContent {
+			t.Fatalf("%s: %d %s", c.body, code, b)
+		}
+		if st, err := LoadEgress(d.o.AllowlistPath); err != nil || st.HoldSeconds != c.want {
+			t.Fatalf("%s: saved %d %v", c.body, st.HoldSeconds, err)
+		}
+	}
 	// 014-AC15: the page removes a room's entry; one not on the room's list is an error.
 	link := d.Status().Rooms[0].Room
 	if err := d.AllowEgress(t.Context(), link, "docs.rs", "room", "Alice"); err != nil {
@@ -352,7 +364,7 @@ func TestRoomEgressLists(t *testing.T) {
 	var deskMu sync.Mutex
 	d := newTestDaemon(t, dockerUp)
 	d.o.AllowlistPath = filepath.Join(t.TempDir(), "allowlist.json")
-	d.o.NewAgent = func(r Room, _ int, _, _ string) Agent {
+	d.o.NewAgent = func(r Room, _ int, _, _, _ string) Agent {
 		deskMu.Lock()
 		defer deskMu.Unlock()
 		ag := &fakeAgent{run: okTurn}

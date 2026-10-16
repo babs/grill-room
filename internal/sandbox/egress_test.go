@@ -129,6 +129,11 @@ func TestSquidConf(t *testing.T) {
 		{"every website", Policy{Allow: allow, AllWebsites: true}, squidHead + list + linkLocalDeny + privateDeny + "http_access allow all\n"},
 		{"every website, empty list", Policy{AllWebsites: true}, squidHead + linkLocalDeny + privateDeny + "http_access allow all\n"},
 		{"local network", Policy{Allow: allow, AllWebsites: true, LocalNetwork: true}, squidHead + list + linkLocalDeny + "http_access allow all\n"},
+		// 014-AC29: the hold asks after every never-asked deny, then refuses what it does not allow.
+		{"hold", Policy{Allow: allow, Hold: true}, squidHead + list + linkLocalDeny + privateDeny +
+			"external_acl_type hold concurrency=100 ttl=0 negative_ttl=0 children-max=1 children-startup=1 %DST /usr/bin/socat -t 3600 - UNIX-CONNECT:/run/grill-hold/hold.sock\n" +
+			"acl held external hold\nhttp_access allow held\nhttp_access deny all\n"},
+		{"hold under every website", Policy{Allow: allow, AllWebsites: true, Hold: true}, squidHead + list + linkLocalDeny + privateDeny + "http_access allow all\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := squidConf(tc.p); got != tc.want {
