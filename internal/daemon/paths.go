@@ -130,6 +130,8 @@ type Instance struct {
 	Relax bool `json:"accept_unsigned,omitempty"`
 	// Limits replace the supervisor's sandbox limits for this instance, set on the page (003-AC26).
 	Limits *sandbox.Limits `json:"limits,omitempty"`
+	// Paused are the room links the host paused: they stay paired but report they cannot host (003b-AC5).
+	Paused []string `json:"paused,omitempty"`
 }
 
 // accountFor names the account room's turns use (003-AC13).
@@ -141,6 +143,13 @@ func (i *Instance) accountFor(room string) string {
 		return i.Account
 	}
 	return "default"
+}
+
+// dropRoom forgets room: its place, its account and its pause (003b-AC6).
+func (i *Instance) dropRoom(room string) {
+	i.Rooms = slices.DeleteFunc(i.Rooms, func(r string) bool { return r == room })
+	i.Paused = slices.DeleteFunc(i.Paused, func(r string) bool { return r == room })
+	delete(i.RoomAccounts, room)
 }
 
 // addRoom puts room last, as the newest.

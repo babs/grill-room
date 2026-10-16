@@ -81,7 +81,7 @@ func TestAdminAllowlist(t *testing.T) {
 		}
 	}
 	code, body = e.req(t, "GET", "/api/denied", tok, "", nil)
-	if code != http.StatusOK || strings.TrimSpace(body) != `{"denied":[]}` {
+	if code != http.StatusOK || strings.TrimSpace(body) != `{"denied":[],"hits":{}}` {
 		t.Fatalf("denied with no sandbox: %d %s", code, body)
 	}
 }
@@ -97,7 +97,7 @@ func TestDaemonAllowlistReachesSandbox(t *testing.T) {
 	}
 	alice, d, _ := pairedDaemon(t, rs, "Alice", ag)
 	ctx := context.Background()
-	if got, err := d.Denied(ctx, 5); err != nil || len(got) != 0 {
+	if got, err := d.Egress(ctx, 5); err != nil || len(got.Denied) != 0 || len(got.Hits) != 0 {
 		t.Fatalf("denied before the first turn: %v %v", got, err)
 	}
 	if err := d.SetAllowlist(ctx, []string{"pypi.org"}); err != nil {
@@ -121,7 +121,8 @@ func TestDaemonAllowlistReachesSandbox(t *testing.T) {
 	if !slices.Equal(second, []string{"github.com", "pypi.org"}) {
 		t.Fatalf("running sandbox has %v", second)
 	}
-	if got, err := d.Denied(ctx, 5); err != nil || len(got) != 1 || got[0].Host != "example.com" {
+	// 003b-AC16: the hits come with the denied list.
+	if got, err := d.Egress(ctx, 5); err != nil || len(got.Denied) != 1 || got.Denied[0].Host != "example.com" || got.Hits["pypi.org"] != 3 {
 		t.Fatalf("denied = %v %v", got, err)
 	}
 }

@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -97,12 +98,15 @@ func TestSquidConf(t *testing.T) {
 	}
 }
 
-// 002-AC36: the denied list comes from squid's access log lines, newest first, the last n only;
-// allowed requests and squid's own messages are skipped.
-func TestParseDenied(t *testing.T) {
+// 002-AC36 003b-AC16: the denied list comes from squid's access log lines, newest first, the last n
+// only; squid's own messages are skipped; tunnels let through count as hits by host.
+func TestParseEgress(t *testing.T) {
 	log := strings.Join([]string{
 		"2026/10/11 03:51:29| Accepting HTTP Socket connections",
 		"grill-egress 1791690691 TCP_TUNNEL/200 CONNECT pypi.org:443",
+		"grill-egress 1791690691 TCP_TUNNEL/200 CONNECT pypi.org:443",
+		"grill-egress 1791690691 TCP_TUNNEL_ABORTED/200 CONNECT files.pythonhosted.org:443",
+		"grill-egress 1791690691 NONE_NONE/000 CONNECT never.example:443",
 		"grill-egress 1791690692 TCP_DENIED/403 CONNECT api.anthropic.com:443",
 		"grill-egress 1791690693 TCP_DENIED/403 GET http://example.com/path",
 		"grill-egress 1791690694 TCP_DENIED/403 CONNECT example.org:8443",
@@ -111,7 +115,11 @@ func TestParseDenied(t *testing.T) {
 		"grill-egress 1791690695 TCP_DENIED/403 CONNECT",
 		"other 1791690696 TCP_DENIED/403 CONNECT y.com:443",
 	}, "\n")
-	got := parseDenied([]byte(log), 10)
+	eg := parseEgress([]byte(log), 10)
+	got := eg.Denied
+	if want := map[string]int{"pypi.org": 2, "files.pythonhosted.org": 1}; !maps.Equal(eg.Hits, want) {
+		t.Fatalf("hits = %v, want %v", eg.Hits, want)
+	}
 	want := []Denied{
 		{"aborted.example", time.Unix(1791690694, 0).UTC()},
 		{"example.org:8443", time.Unix(1791690694, 0).UTC()},
@@ -121,10 +129,10 @@ func TestParseDenied(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("got %+v", got)
 	}
-	if got := parseDenied([]byte(log), 1); len(got) != 1 || got[0].Host != "aborted.example" {
+	if got := parseEgress([]byte(log), 1).Denied; len(got) != 1 || got[0].Host != "aborted.example" {
 		t.Fatalf("last 1 = %+v", got)
 	}
-	if got := parseDenied(nil, 5); got == nil || len(got) != 0 {
+	if got := parseEgress(nil, 5); got.Denied == nil || len(got.Denied) != 0 || got.Hits == nil {
 		t.Fatalf("empty log = %#v", got)
 	}
 }
@@ -146,7 +154,7 @@ func TestSetAllowlist(t *testing.T) {
 	}}
 	s := New(Config{Image: "img", Name: "t", Proxy: testProxy}, f.run, zap.NewNop())
 	ctx := context.Background()
-	if d, err := s.Denied(ctx, 5); err != nil || len(d) != 0 {
+	if d, err := s.Egress(ctx, 5); err != nil || len(d.Denied) != 0 {
 		t.Fatalf("denied before start = %v, %v", d, err)
 	}
 	if err := s.SetAllowlist(ctx, []string{"Example.com"}); err != nil {
@@ -180,7 +188,8 @@ func TestSetAllowlist(t *testing.T) {
 	if last := f.stdin[len(f.stdin)-1]; last != squidConf([]string{"pypi.org"}) {
 		t.Fatalf("conf sent = %q", last)
 	}
-	d, err := s.Denied(ctx, 5)
+	eg, err := s.Egress(ctx, 5)
+	d := eg.Denied
 	if err != nil || len(d) != 1 || d[0].Host != "example.com" {
 		t.Fatalf("denied = %v, %v", d, err)
 	}

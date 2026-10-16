@@ -231,7 +231,9 @@ func (d *Daemon) handle(ctx context.Context, m Msg) Msg {
 		}
 		err = d.SetAllowlist(ctx, list)
 	case "denied":
-		out.Denied, err = d.Denied(ctx, m.N)
+		var eg sandbox.Egress
+		eg, err = d.Egress(ctx, m.N)
+		out.Denied, out.Hits = eg.Denied, eg.Hits
 	case "recheck":
 		d.Recheck(ctx)
 	case "access":
@@ -244,6 +246,8 @@ func (d *Daemon) handle(ctx context.Context, m Msg) Msg {
 		err = d.SetPluginOptions(ctx, m.Room, m.Plugin, m.Values, m.Clear)
 	case "plugin_fetch":
 		err = d.PluginFetch(ctx, m.Room, m.Fetch, m.Accept)
+	case "remove_room":
+		err = d.RemoveRoom(ctx, m.Room, m.Force)
 	case "update":
 		// A worker runs a copy the supervisor verified: only the supervisor updates (003-AC5).
 		err = errors.New("updates go through the supervisor")

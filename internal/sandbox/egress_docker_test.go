@@ -169,10 +169,11 @@ func TestEgressDocker(t *testing.T) {
 	})
 
 	t.Run("denied list and log", func(t *testing.T) {
-		denied, err := s.Denied(ctx, 50)
+		eg, err := s.Egress(ctx, 50)
 		if err != nil {
 			t.Fatal(err)
 		}
+		denied := eg.Denied
 		hosts := map[string]bool{}
 		for _, d := range denied {
 			hosts[d.Host] = true

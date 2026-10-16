@@ -23,8 +23,19 @@ func (s *Supervisor) access(in Instance) Access {
 	for _, r := range in.Rooms {
 		rooms[r] = in.accountFor(r)
 	}
-	return s.o.Accounts.Access(s.ctx, in.ID, rooms, in.CutOff)
+	a := s.o.Accounts.Access(s.ctx, in.ID, rooms, in.CutOff)
+	// A paused room keeps its account's bearer, so an answer running as it pauses finishes; the
+	// error makes the worker report it cannot host, which the room shows (003b-AC5).
+	for _, r := range in.Paused {
+		if _, ok := rooms[r]; ok && !a.CutOff {
+			a.Proxies[r] = Proxy{Error: pausedReason}
+		}
+	}
+	return a
 }
+
+// pausedReason is what a paused room shows, word for word from 003b-AC5.
+const pausedReason = "paused on the host's machine"
 
 // pushAccess sends w its access when it changed. One push at a time per worker, in order.
 func (s *Supervisor) pushAccess(w *worker) {
@@ -36,7 +47,7 @@ func (s *Supervisor) pushAccess(w *worker) {
 	s.mu.Lock()
 	ready := w.state == "running" && w.conn != nil && w.proto >= 2
 	in := w.inst
-	in.Rooms, in.RoomAccounts = slices.Clone(in.Rooms), maps.Clone(in.RoomAccounts)
+	in.Rooms, in.RoomAccounts, in.Paused = slices.Clone(in.Rooms), maps.Clone(in.RoomAccounts), slices.Clone(in.Paused)
 	s.mu.Unlock()
 	if !ready {
 		return
@@ -204,6 +215,66 @@ func (s *Supervisor) SetCutOff(id string, on bool) error {
 		a.Revoke(id)
 	}
 	s.o.Log.Warn("worker_cut_off", zap.String("instance", id), zap.Bool("cut_off", on))
+	s.pushAccess(w)
+	return nil
+}
+
+// SetPaused pauses room of instance id, or resumes it: a paused room stays paired and connected but
+// reports that it cannot host, with pausedReason, so the room moves the AI host role elsewhere
+// (003b-AC5). The pause is saved with the instance.
+func (s *Supervisor) SetPaused(id, room string, paused bool) error {
+	s.mu.Lock()
+	w := s.workers[id]
+	switch {
+	case w == nil:
+		s.mu.Unlock()
+		return errors.New("no such server")
+	case !slices.Contains(w.inst.Rooms, room):
+		s.mu.Unlock()
+		return errors.New("no such room on this server")
+	}
+	w.inst.Paused = slices.DeleteFunc(w.inst.Paused, func(r string) bool { return r == room })
+	if paused {
+		w.inst.Paused = append(w.inst.Paused, room)
+	}
+	s.save(w)
+	s.mu.Unlock()
+	s.o.Log.Info("room_paused", zap.String("instance", id), zap.Bool("paused", paused))
+	s.pushAccess(w)
+	return nil
+}
+
+// RemoveRoom takes room off this computer: its worker revokes the token on the room server and
+// deletes the room's state and sandboxes, then the instance forgets it (003b-AC6). force removes it
+// here even when the room server does not answer, or the worker does not run.
+func (s *Supervisor) RemoveRoom(ctx context.Context, room string, force bool) error {
+	o, err := s.roomOps(room)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	w := s.workers[o.id]
+	if w == nil || !slices.Contains(w.inst.Rooms, room) {
+		s.mu.Unlock()
+		return errors.New("no such room on this computer")
+	}
+	running, agreed := w.state == "running" && w.conn != nil, w.proto
+	s.mu.Unlock()
+	switch {
+	case running && agreed < protoRemove:
+		return errors.New("this server's app is too old to remove a room: update the AI host app")
+	case running:
+		if _, err := w.request(ctx, Msg{Type: "remove_room", Room: room, Force: force}); err != nil {
+			return err
+		}
+	case !force:
+		return errors.New("the app for this server is not running, so the room server still lists this computer")
+	}
+	s.mu.Lock()
+	w.inst.dropRoom(room)
+	s.save(w)
+	s.mu.Unlock()
+	s.o.Log.Info("room_dropped", zap.String("instance", o.id))
 	s.pushAccess(w)
 	return nil
 }

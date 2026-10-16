@@ -78,6 +78,32 @@ func TestAutostartLinux(t *testing.T) {
 	}
 }
 
+// 003b-AC22: the unit caps its memory with MemoryMax; no cap writes no line; a value systemd would
+// misread, or one smuggling another directive, is refused before the unit is written.
+func TestAutostartMemoryMax(t *testing.T) {
+	a, _ := newAutostart(t, "linux")
+	path := filepath.Join(a.ConfigHome, "systemd", "user", "grill-room.service")
+	for _, tc := range []struct{ max, want string }{{DefaultMemoryMax, "MemoryMax=4G\n"}, {"infinity", "MemoryMax=infinity\n"}, {"75%", "MemoryMax=75%\n"}, {"", ""}} {
+		a.MemoryMax = tc.max
+		if err := a.Enable(); err != nil {
+			t.Fatal(err)
+		}
+		unit, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Count(string(unit), "MemoryMax="); tc.want == "" && got != 0 || tc.want != "" && !strings.Contains(string(unit), tc.want) {
+			t.Errorf("MemoryMax %q gave:\n%s", tc.max, unit)
+		}
+	}
+	for _, bad := range []string{"4 GB", "4G\nExecStartPre=/bin/true", "-1", "lots"} {
+		a.MemoryMax = bad
+		if err := a.Enable(); err == nil {
+			t.Errorf("MemoryMax %q accepted", bad)
+		}
+	}
+}
+
 // systemd specifiers and variables in a path cannot change what the unit runs.
 func TestSystemdQuote(t *testing.T) {
 	for in, want := range map[string]string{`/a b/c`: `"/a b/c"`, `/x/%h$HOME"\`: `"/x/%%h$$HOME\"\\"`} {

@@ -297,7 +297,12 @@ func TestSupervisorPageMonitoring(t *testing.T) {
 // the request or found from the room's link; a worker from before protocol 4 is refused them
 // with why, and a link or an instance the supervisor does not serve is a 400.
 func TestSupervisorPluginRequests(t *testing.T) {
-	for _, mode := range []string{"plugins", strconv.Itoa(protoPlugins - 1)} {
+	modes := []string{"plugins"}
+	// Since protocol 5 a worker before 4 fails the handshake: it never gets this far.
+	if protoPlugins-1 >= Proto-ProtoSkew {
+		modes = append(modes, strconv.Itoa(protoPlugins-1))
+	}
+	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			s := testSupervisor(t, mode, nil)
 			e := newAdminEnv(t, s)
