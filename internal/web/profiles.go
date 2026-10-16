@@ -118,7 +118,7 @@ func (s *Server) profileResp(p *store.Profile) profileResp {
 }
 
 func (s *Server) getProfile(w http.ResponseWriter, r *http.Request) {
-	p, err := s.profileFromCookie(r)
+	p, err := s.sessionProfile(r)
 	if err != nil {
 		s.serverError(w, "get_profile_failed", err)
 		return

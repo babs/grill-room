@@ -209,6 +209,9 @@ func auditTx(ctx context.Context, tx *sql.Tx, id string, extra map[string]any) e
 		details = map[string]any{}
 	}
 	maps.Copy(details, extra)
+	if id, ok := ctx.Value(apiTokenKey{}).(int64); ok {
+		details["api_token"] = id
+	}
 	var err error
 	if e.Details, err = json.Marshal(details); err != nil {
 		return fmt.Errorf("audit %s: %w", e.Action, err)

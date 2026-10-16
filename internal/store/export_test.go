@@ -734,6 +734,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"profile_sessions":          server,
 		"magic_links":               server,
 		"recovery_links":            server,
+		"api_tokens":                server,
 		"settings":                  server,
 		"admin_sessions":            server,
 		"audit_log":                 server,

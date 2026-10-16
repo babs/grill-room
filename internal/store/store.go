@@ -833,6 +833,21 @@ CREATE UNIQUE INDEX invites_shareable ON invites(room_id, created_by) WHERE link
 -- server's worker.
 ALTER TABLE messages ADD COLUMN source TEXT CHECK (source IN ('device', 'server'));
 UPDATE messages SET source = 'server' WHERE kind = 'voice';
+`, `
+-- 012-AC1: personal API tokens; only the token's hash is kept. expires_at_ms NULL never expires.
+CREATE TABLE api_tokens (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+	name TEXT NOT NULL,
+	token_hash TEXT NOT NULL UNIQUE,
+	scope TEXT NOT NULL CHECK (scope IN ('read', 'full')),
+	created_at TEXT NOT NULL,
+	expires_at_ms INTEGER,
+	last_used_at_ms INTEGER,
+	last_used_ip TEXT
+);
+CREATE INDEX api_tokens_profile ON api_tokens(profile_id);
+CREATE INDEX api_tokens_expires ON api_tokens(expires_at_ms);
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.

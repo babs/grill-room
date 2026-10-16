@@ -88,6 +88,18 @@ func TestLoadConfigRejectsBadNumbers(t *testing.T) {
 	}
 }
 
+// 012-AC5: an admin token that looks like an API token is refused at start.
+func TestAdminTokenNotAPIToken(t *testing.T) {
+	t.Setenv("GRILL_ROOM_ADMIN_TOKEN", "grt_x")
+	c, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "grt_") {
+		t.Fatalf("validate: %v", err)
+	}
+}
+
 func TestAdminTokenHash(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {

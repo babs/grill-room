@@ -59,6 +59,7 @@
       <a href="#rooms" id="tab-rooms">Rooms <span class="badge" id="count-rooms"></span></a>
       <a href="#starters" id="tab-starters">Starters <span class="badge" id="count-starters"></span></a>
       <a href="#skills" id="tab-skills">Skills <span class="badge" id="count-skills"></span></a>
+      <a href="#tokens" id="tab-tokens">API tokens <span class="badge" id="count-tokens"></span></a>
       <a href="#account" id="tab-account">Account</a>
     </nav>
     <section id="panel-rooms" class="tab-panel" aria-labelledby="tab-rooms">
@@ -79,6 +80,17 @@
       <p class="hint">Extra abilities your AI personas can use. Adding a skill again makes a new version; rooms keep theirs until they update.</p>
       <p id="skill-status" role="status"></p>
       <ul id="skill-list" class="rows"></ul>
+    </section>
+    <section id="panel-tokens" class="tab-panel" aria-labelledby="tab-tokens" hidden>
+      <div class="list-head">
+        <h2>API tokens</h2>
+        <button type="button" id="token-new" class="btn-primary">New token</button>
+      </div>
+      <p class="hint">A token lets a script or an AI agent use grill-room as you: your rooms, with your rights. It never opens the admin pages.</p>
+      <div class="cols" id="tokens">
+        <div class="list-row head"><span>Name</span><span>Created</span><span>Expires</span><span>Last used</span><span></span></div>
+        <ul id="token-list" class="list-rows"></ul>
+      </div>
     </section>
     <section id="panel-account" class="tab-panel" aria-labelledby="tab-account" hidden>
       <h2>Account</h2>
@@ -107,6 +119,38 @@
   </section>
 </main>
 <dialog id="room-create-sheet" class="sheet wide full" aria-labelledby="room-create-title"></dialog>
+<dialog id="token-sheet" class="sheet" aria-labelledby="token-sheet-title">
+  <div class="sheet-head"><h2 id="token-sheet-title">New API token</h2>
+    <button type="button" class="btn-ghost btn-icon" id="token-close" aria-label="Close" data-icon="close"></button></div>
+  <form id="token-form" class="stack">
+    <label for="token-name">Name
+      <input id="token-name" maxlength="60" required autocomplete="off" placeholder="Claude Code on my laptop"></label>
+    <label for="token-expiry">Expires
+      <select id="token-expiry">
+        <option value="30">In 30 days</option>
+        <option value="90" selected>In 90 days</option>
+        <option value="365">In 1 year</option>
+        <option value="0">Never</option>
+      </select></label>
+    <fieldset class="token-scope"><legend>Scope</legend>
+      <label><input type="radio" name="token-scope" value="read" checked> Read only</label>
+      <label><input type="radio" name="token-scope" value="full"> Full: what your profile can do</label>
+    </fieldset>
+    <p id="token-error" class="field-error" role="alert"></p>
+    <div class="actions">
+      <button type="button" id="token-cancel" class="btn-secondary">Cancel</button>
+      <button type="submit">Create token</button>
+    </div>
+  </form>
+  <div id="token-made" class="stack" hidden>
+    <p><strong>You won't see this token again.</strong> Copy it now.</p>
+    <div id="token-value"></div>
+    <p class="hint">Send it as a bearer token, for example:</p>
+    <div id="token-curl"></div>
+    <p class="hint">An invite link made with this token keeps working after you revoke it.</p>
+    <div class="actions"><button type="button" id="token-done">Done</button></div>
+  </div>
+</dialog>
 <dialog id="skill-sheet" class="sheet full" aria-labelledby="skill-sheet-title">
   <div class="sheet-head"><h2 id="skill-sheet-title">Add a skill</h2>
     <button type="button" class="btn-ghost btn-icon" id="skill-close" aria-label="Close" data-icon="close"></button></div>

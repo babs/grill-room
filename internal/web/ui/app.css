@@ -588,3 +588,13 @@ dialog#diag { width: min(44rem, calc(100vw - 1rem)); }
 #notify[open] { display: flex; flex-direction: column; }
 #notify h3 { margin: var(--sp-4) 0 var(--sp-1); font-size: var(--fs-md); }
 #notify .actions { margin-top: auto; padding-top: var(--sp-4); }
+/* API tokens (012-AC1, 012-AC2). */
+#tokens { --cols: minmax(12rem, 2fr) minmax(6rem, 1fr) minmax(8rem, 1fr) minmax(8rem, 1fr) var(--control-h); }
+#tokens .empty { display: block; padding: var(--sp-3) 0; }
+#tokens:has(.empty) > .head { display: none; }
+/* Grid tracks grow to a nowrap value's width unless told not to: it would push the sheet past a phone. */
+#token-made { grid-template-columns: minmax(0, 1fr); }
+#token-sheet .value { width: 100%; }
+.token-scope { display: grid; gap: var(--sp-2); margin: 0; padding: 0; border: 0; }
+.token-scope legend { padding: 0; margin-bottom: var(--sp-1); font-size: var(--fs-sm); font-weight: 600; }
+.token-scope label { flex-direction: row; align-items: center; gap: var(--sp-2); font-weight: 400; }

@@ -158,7 +158,7 @@ async function load() {
   if (!res.ok) throw new Error('profile: HTTP ' + res.status);
   const data = await res.json();
   render(data);
-  if (data.profile) await loadSkills();
+  if (data.profile) await Promise.all([loadSkills(), loadTokens()]);
 }
 
 // Skills: the profile's personal skills and the shared ones it published (002-AC29, 002-AC30).
@@ -206,6 +206,150 @@ async function loadSkills() {
     $('skill-list').append(empty);
   }
 }
+
+// Personal API tokens (012-AC1, 012-AC2, 012-AC8): one row each, shown once at creation.
+let serverURL = location.origin;
+async function loadTokens() {
+  const res = await fetch('/api/profile/tokens');
+  if (!res.ok) return;
+  const { tokens, url } = await res.json();
+  serverURL = url || location.origin;
+  $('count-tokens').textContent = String(tokens.length);
+  $('token-new').hidden = !tokens.length;
+  $('token-list').replaceChildren(...tokens.map(tokenRow));
+  if (!tokens.length) {
+    const empty = document.createElement('li');
+    empty.className = 'empty';
+    const p = document.createElement('p');
+    p.textContent = 'No token yet. Make one to let a script or an AI agent set up your rooms.';
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'btn-primary';
+    add.textContent = 'New token';
+    add.addEventListener('click', openTokenSheet);
+    empty.append(p, add);
+    $('token-list').append(empty);
+  }
+}
+
+// until says when t comes, coarsely, as grillAgo says when it was: "in 12 days", "in 3 h".
+function until(t) {
+  const s = (new Date(t).getTime() - Date.now()) / 1000;
+  if (s < 3600) return 'in ' + Math.max(1, Math.ceil(s / 60)) + ' min';
+  if (s < 86400) return 'in ' + Math.floor(s / 3600) + ' h';
+  const d = Math.round(s / 86400);
+  return 'in ' + d + (d === 1 ? ' day' : ' days');
+}
+
+function cell(label, text, tip) {
+  const c = document.createElement('span');
+  c.className = 'cell';
+  c.dataset.label = label;
+  c.textContent = text;
+  if (tip) {
+    c.dataset.tip = tip;
+    c.tabIndex = 0;
+  }
+  return c;
+}
+
+function tokenRow(k) {
+  const li = document.createElement('li');
+  li.className = 'list-row';
+  li.id = 'token-' + k.id;
+  const main = document.createElement('div');
+  main.className = 'main';
+  const name = document.createElement('span');
+  name.className = 'name';
+  name.textContent = k.name;
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = k.scope === 'full' ? 'Full' : 'Read only';
+  main.append(name, meta);
+  const expired = k.expires_at && new Date(k.expires_at).getTime() <= Date.now();
+  const expires = !k.expires_at ? 'never expires' : expired ? 'expired ' + ago(k.expires_at) : 'expires ' + until(k.expires_at);
+  const used = k.last_used_at ? 'used ' + ago(k.last_used_at) : 'never used';
+  const cells = document.createElement('div');
+  cells.className = 'cells';
+  cells.append(cell('Created', ago(k.created_at), grillDate(k.created_at)),
+    cell('', expires, k.expires_at ? grillDate(k.expires_at) : ''),
+    cell('', used, k.last_used_at ? grillDate(k.last_used_at) + (k.last_used_ip ? ' from ' + k.last_used_ip : '') : ''));
+  if (expired) cells.children[1].classList.add('bad');
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  // One click and no sheet to agree to (Q1): revoking only takes access away.
+  actions.append(...rowMenu('token-menu-' + k.id, 'More actions for the token ' + k.name, [['Revoke', async () => {
+    const r = await fetch('/api/profile/tokens/' + k.id, { method: 'DELETE' });
+    window.grillToast(r.ok ? 'Revoked' : ((await r.json().catch(() => ({}))).error || 'HTTP ' + r.status));
+    await loadTokens();
+  }]]));
+  li.append(main, cells, actions);
+  return li;
+}
+
+// value is a kit .value: the whole text in its tip and its copy button (docs/design.md, Value).
+function value(text, label) {
+  const v = document.createElement('span');
+  v.className = 'value copyable';
+  v.dataset.value = text;
+  const t = document.createElement('span');
+  t.className = 'value-text';
+  t.tabIndex = 0;
+  t.dataset.tip = text;
+  t.textContent = text;
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'btn-icon btn-ghost copy';
+  copy.setAttribute('aria-label', 'Copy the ' + label);
+  copy.append(window.grillIcon('copy'));
+  v.append(t, copy);
+  return v;
+}
+
+const tokenSheet = $('token-sheet');
+function openTokenSheet() {
+  $('token-form').reset();
+  $('token-form').hidden = false;
+  $('token-made').hidden = true;
+  $('token-error').textContent = '';
+  $('token-sheet-title').textContent = 'New API token';
+  tokenSheet.showModal();
+  $('token-name').focus();
+}
+// The plaintext leaves the page with the sheet: it lives nowhere else.
+tokenSheet.addEventListener('close', () => {
+  $('token-value').replaceChildren();
+  $('token-curl').replaceChildren();
+});
+// A press outside closes it as every sheet does (005-AC13), but not over a token not yet copied.
+tokenSheet.addEventListener('click', (e) => {
+  const r = tokenSheet.getBoundingClientRect();
+  if ($('token-made').hidden && e.target === tokenSheet && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) tokenSheet.close();
+});
+$('token-new').addEventListener('click', openTokenSheet);
+for (const id of ['token-close', 'token-cancel', 'token-done']) $(id).addEventListener('click', () => tokenSheet.close());
+$('token-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const button = $('token-form').querySelector('button[type=submit]');
+  button.disabled = true;
+  $('token-error').textContent = '';
+  try {
+    const scope = $('token-form').querySelector('input[name=token-scope]:checked').value;
+    const { res, data } = await post('/api/profile/tokens', { name: $('token-name').value, scope, expires_days: Number($('token-expiry').value) });
+    if (res.ok) {
+      $('token-sheet-title').textContent = 'Token "' + data.name + '" created';
+      $('token-value').replaceChildren(value(data.token, 'token'));
+      $('token-curl').replaceChildren(value('curl -H "Authorization: Bearer ' + data.token + '" ' + serverURL + '/api/profile', 'curl command'));
+      $('token-form').hidden = true;
+      $('token-made').hidden = false;
+      $('token-done').focus();
+      await loadTokens();
+    } else $('token-error').textContent = data.error || 'HTTP ' + res.status;
+  } catch {
+    $('token-error').textContent = 'Network error, try again.';
+  }
+  button.disabled = false;
+});
 
 // rowMenu is a row's ⋯ and its menu (docs/design.md §5), as the starters' rows have: a popover
 // under its button.
@@ -401,7 +545,7 @@ $('email-change').addEventListener('click', () => {
 });
 
 // The tabs (011b-AC12): the hash names the tab, #email the Account tab's address field (011-AC7).
-const tabs = ['rooms', 'starters', 'skills', 'account'];
+const tabs = ['rooms', 'starters', 'skills', 'tokens', 'account'];
 function showTab() {
   const id = location.hash.slice(1);
   const tab = id === 'email' ? 'account' : tabs.includes(id) ? id : 'rooms';
@@ -416,6 +560,11 @@ function showTab() {
   // the identity strip.
   scrollTo(0, 0);
 }
+
+// The starters module fills its count after the bar was placed: a tab that widens later must not
+// push the current one out of sight on a phone.
+const tabSizes = new ResizeObserver(() => window.grillShowTab($('profile-tabs')));
+for (const a of $('profile-tabs').querySelectorAll('a')) tabSizes.observe(a);
 
 function route() {
   showTab();

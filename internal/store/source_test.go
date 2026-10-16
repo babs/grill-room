@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -20,7 +21,8 @@ func TestMigrationToVoiceSource(t *testing.T) {
 	db.SetMaxOpenConns(1)
 	defer db.Close()
 	ctx := context.Background()
-	before := len(migrations) - 1
+	// The migration before 010's: later ones append after it.
+	before := slices.IndexFunc(migrations, func(m string) bool { return strings.Contains(m, "010-AC10") })
 	if err := migrateTo(ctx, db, before); err != nil {
 		t.Fatal(err)
 	}

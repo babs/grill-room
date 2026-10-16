@@ -175,6 +175,10 @@ func (c Config) Validate() error {
 	if c.DB == "" {
 		return errors.New("GRILL_ROOM_DB is empty")
 	}
+	// 012-AC5: the server tells API tokens from the admin token by this prefix.
+	if strings.HasPrefix(c.AdminToken, web.APITokenPrefix) {
+		return fmt.Errorf("GRILL_ROOM_ADMIN_TOKEN must not start with %s, the API tokens' prefix", web.APITokenPrefix)
+	}
 	if c.MaxUploadMB < 1 || c.MaxRoomMB < c.MaxUploadMB || c.MaxRoomMB > 1<<20 {
 		return fmt.Errorf("GRILL_ROOM_MAX_UPLOAD_MB %d, GRILL_ROOM_MAX_ROOM_MB %d: want 1 <= upload <= room <= %d", c.MaxUploadMB, c.MaxRoomMB, 1<<20)
 	}
