@@ -131,7 +131,7 @@ func readRefs(r io.Reader) (map[string]lsRef, error) {
 	pr := &pktReader{r: r}
 	refs := map[string]lsRef{}
 	for {
-		kind, line, err := pr.next()
+		kind, line, err := pr.line()
 		if err != nil {
 			return nil, err
 		}
@@ -192,7 +192,7 @@ func fetchObjects(ctx context.Context, c *http.Client, repoURL, commit string, m
 	defer resp.Body.Close()
 	pr := &pktReader{r: &capReader{r: resp.Body, left: maxBytes, max: maxBytes}}
 	for {
-		kind, line, err := pr.next()
+		kind, line, err := pr.line()
 		if err != nil {
 			return nil, st, err
 		}
@@ -228,15 +228,15 @@ func discover(ctx context.Context, c *http.Client, repoURL string) (string, erro
 		return "", ErrNoV2
 	}
 	pr := &pktReader{r: io.LimitReader(resp.Body, maxRefsBody)}
-	_, line, err := pr.next()
+	_, line, err := pr.line()
 	if err != nil {
 		return "", err
 	}
 	if strings.HasPrefix(string(line), "# service=") {
-		if kind, _, err := pr.next(); err != nil || kind != pktFlush {
+		if kind, _, err := pr.line(); err != nil || kind != pktFlush {
 			return "", ErrNoV2
 		}
-		if _, line, err = pr.next(); err != nil {
+		if _, line, err = pr.line(); err != nil {
 			return "", err
 		}
 	}
@@ -330,7 +330,14 @@ func (p *pktReader) next() (int, []byte, error) {
 	if msg, ok := bytes.CutPrefix(data, []byte("ERR ")); ok {
 		return 0, nil, fmt.Errorf("git server: %s", truncate(msg))
 	}
-	return pktData, bytes.TrimSuffix(data, []byte("\n")), nil
+	// Raw: a sideband packet of pack data may end in a 0x0a byte that belongs to the pack.
+	return pktData, data, nil
+}
+
+// line reads a text pkt-line, without its trailing newline.
+func (p *pktReader) line() (int, []byte, error) {
+	kind, data, err := p.next()
+	return kind, bytes.TrimSuffix(data, []byte("\n")), err
 }
 
 func noEOF(err error) error {

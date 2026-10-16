@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	mrand "math/rand/v2"
 	"net"
 	"net/http"
 	"net/http/cgi"
@@ -411,6 +412,57 @@ func TestPktAndSideband(t *testing.T) {
 	sb = &sideband{pr: &pktReader{r: strings.NewReader(pktString("\x05what"))}}
 	_, err = sb.Read(b)
 	require.ErrorContains(t, err, "unknown sideband channel 5")
+
+	// Pack data keeps a trailing 0x0a, alone in its packet or after other bytes; text lines drop it.
+	sb = &sideband{pr: &pktReader{r: strings.NewReader(pktString("\x01ab\n", "\x01\n", ""))}}
+	got, err := io.ReadAll(sb)
+	require.NoError(t, err)
+	require.Equal(t, "ab\n\n", string(got))
+	refs, err := readRefs(strings.NewReader(pktString(strings.Repeat("a", 40)+" refs/heads/main\n", "")))
+	require.NoError(t, err)
+	require.Equal(t, strings.Repeat("a", 40), refs["refs/heads/main"].oid)
+}
+
+// A pack whose sideband packets end in 0x0a parses whole: the newline is pack data, not a line end.
+// The random blobs of TestFetchDeltas hit this about once in a hundred runs.
+func TestPackPacketsEndingInNewline(t *testing.T) {
+	data := make([]byte, 8<<10)
+	rng := mrand.New(mrand.NewChaCha8([32]byte{1}))
+	for i := range data {
+		data[i] = byte(rng.Uint32())
+	}
+	var z bytes.Buffer
+	zw := zlib.NewWriter(&z)
+	_, _ = zw.Write(data)
+	require.NoError(t, zw.Close())
+	pack := []byte("PACK\x00\x00\x00\x02\x00\x00\x00\x01")
+	size := len(data)
+	pack = append(pack, byte(0x80|objBlob<<4|size&0x0f))
+	for size >>= 4; size > 0; size >>= 7 {
+		c := byte(size & 0x7f)
+		if size > 0x7f {
+			c |= 0x80
+		}
+		pack = append(pack, c)
+	}
+	pack = append(pack, z.Bytes()...)
+	require.Greater(t, bytes.Count(pack, []byte("\n")), 1)
+	// Cut after every 0x0a: each packet but maybe the last ends in one.
+	var lines []string
+	for rest := pack; len(rest) > 0; {
+		i := bytes.IndexByte(rest, '\n') + 1
+		if i == 0 {
+			i = len(rest)
+		}
+		lines = append(lines, "\x01"+string(rest[:i]))
+		rest = rest[i:]
+	}
+	objs, _, err := parsePack(t.Context(), &sideband{pr: &pktReader{r: strings.NewReader(pktString(append(lines, "")...))}}, 1<<20)
+	require.NoError(t, err)
+	require.Len(t, objs, 1)
+	for _, o := range objs {
+		require.Equal(t, data, o.data)
+	}
 }
 
 func TestPackErrors(t *testing.T) {
