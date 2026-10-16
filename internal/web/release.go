@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"go.uber.org/zap"
@@ -33,6 +34,10 @@ const bundleExt = ".sigstore.json"
 type Release struct {
 	Dir     string
 	Version string
+	// Proto is the worker protocol its daemons speak, from PROTO; 0 for a release from before it.
+	Proto int
+	// Prefix is where its files are downloaded: /download/, or /download/prev/ for the previous one.
+	Prefix string
 	// SHA256 maps a target to its binary's hex digest, as published in its .sha256 file.
 	SHA256 map[string]string
 	// Bundles maps a signed target to its bundle's download path; an unsigned build has none.
@@ -41,7 +46,19 @@ type Release struct {
 
 // LoadRelease reads the release in dir. Every target must be there: install.sh and the room page
 // offer them all.
-func LoadRelease(dir string) (*Release, error) {
+func LoadRelease(dir string) (*Release, error) { return loadRelease(dir, "/download/") }
+
+// LoadPrevRelease reads the previous release, kept for supervisors too old for the current one's
+// workers. It needs PROTO: without it no supervisor can be told it fits.
+func LoadPrevRelease(dir string) (*Release, error) {
+	r, err := loadRelease(dir, "/download/prev/")
+	if err == nil && r.Proto == 0 {
+		err = fmt.Errorf("previous daemon release %s: PROTO missing", r.Version)
+	}
+	return r, err
+}
+
+func loadRelease(dir, prefix string) (*Release, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return nil, fmt.Errorf("daemon release: %w", err)
@@ -51,9 +68,18 @@ func LoadRelease(dir string) (*Release, error) {
 	if err != nil {
 		return nil, fmt.Errorf("daemon release: %w", err)
 	}
-	r := &Release{Dir: dir, Version: strings.TrimSpace(string(b)), SHA256: map[string]string{}, Bundles: map[string]string{}}
+	r := &Release{Dir: dir, Version: strings.TrimSpace(string(b)), Prefix: prefix, SHA256: map[string]string{}, Bundles: map[string]string{}}
 	if !semver.IsValid(r.Version) {
 		return nil, fmt.Errorf("daemon release: VERSION %q is not a semver like v1.2.3", r.Version)
+	}
+	switch b, err := root.ReadFile("PROTO"); {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		return nil, fmt.Errorf("daemon release: %w", err)
+	default:
+		if r.Proto, err = strconv.Atoi(strings.TrimSpace(string(b))); err != nil || r.Proto < 1 {
+			return nil, fmt.Errorf("daemon release: PROTO %q is not a protocol version", strings.TrimSpace(string(b)))
+		}
 	}
 	for _, t := range DaemonTargets {
 		f := DaemonFile(t)
@@ -83,24 +109,49 @@ func LoadRelease(dir string) (*Release, error) {
 		if err != nil || !st.Mode().IsRegular() {
 			return nil, fmt.Errorf("daemon release: %s%s is not a readable file", f, bundleExt)
 		}
-		r.Bundles[t] = "/download/" + f + bundleExt
+		r.Bundles[t] = prefix + f + bundleExt
 	}
 	return r, nil
 }
 
 // daemonVersion tells daemons and the room page what this server hands out. Public: install.sh
 // and a daemon that is not paired yet have no token.
-func (s *Server) daemonVersion(w http.ResponseWriter, _ *http.Request) {
+//
+// A supervisor names the worker protocols it speaks, ?proto=<lo>-<hi>. When the release's workers
+// speak another one and the previous release fits, that one is handed out instead, with download,
+// the directory of its files, and latest, the version to update to: the supervisor keeps hosting.
+func (s *Server) daemonVersion(w http.ResponseWriter, r *http.Request) {
 	v := map[string]any{"version": "", "sha256": map[string]string{}, "bundles": map[string]string{}, "sandbox_image": s.opts.SandboxImage}
-	if r := s.opts.Release; r != nil {
-		v["version"], v["sha256"], v["bundles"] = r.Version, r.SHA256, r.Bundles
+	rel := s.opts.Release
+	if lo, hi, ok := protoRange(r.URL.Query().Get("proto")); ok && rel != nil && rel.Proto != 0 && (rel.Proto < lo || rel.Proto > hi) {
+		if p := s.opts.PrevRelease; p != nil && p.Proto >= lo && p.Proto <= hi {
+			v["download"], v["latest"] = p.Prefix, rel.Version
+			rel = p
+		}
+	}
+	if rel != nil {
+		v["version"], v["sha256"], v["bundles"] = rel.Version, rel.SHA256, rel.Bundles
+		if rel.Proto != 0 {
+			v["proto"] = rel.Proto
+		}
 	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+// protoRange parses "<lo>-<hi>".
+func protoRange(q string) (lo, hi int, ok bool) {
+	a, b, found := strings.Cut(q, "-")
+	lo, err1 := strconv.Atoi(a)
+	hi, err2 := strconv.Atoi(b)
+	return lo, hi, found && err1 == nil && err2 == nil && 0 < lo && lo <= hi
 }
 
 // download serves a release binary, its .sha256 file or its sigstore bundle, by exact name only.
 func (s *Server) download(w http.ResponseWriter, r *http.Request) {
 	rel := s.opts.Release
+	if strings.HasPrefix(r.URL.Path, "/download/prev/") {
+		rel = s.opts.PrevRelease
+	}
 	if rel == nil {
 		httpError(w, http.StatusNotFound, "this server hands out no daemon release")
 		return

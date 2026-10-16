@@ -74,6 +74,20 @@ make docker-build VERSION=v0.0.1 DAEMON_DIST=dist
 
 The build fails when `dist/VERSION` differs from `VERSION`. Put `sandbox-image.txt`'s content in `GRILL_ROOM_SANDBOX_IMAGE` so daemons pull the released image by digest.
 
+## Protocol bumps
+
+`Proto` in `internal/daemon/proto.go` is the supervisor-worker protocol. `make release` writes it to `PROTO` in the release. A release that bumps it:
+
+- bumps it by one, and keeps the change additive, so that supervisors of the previous protocol still talk to the new workers (N-1, `docs/daemon-protocol.md`);
+- ships the previous release beside it in the room server image, for supervisors that cannot take the new workers:
+
+```sh
+gh release download v0.0.40 -R babs/grill-room -D dist-prev --clobber
+make docker-build VERSION=v0.0.41 DAEMON_DIST=dist DAEMON_PREV_DIST=dist-prev
+```
+
+The previous release needs its `PROTO` file. Releases from before it have none: write the number by hand (`echo 6 > dist-prev/PROTO`). A supervisor that fits neither release keeps the worker it runs and asks its host to update.
+
 ## Dev signing
 
 Local builds can be signed with a cosign key pair, for a supervisor told to trust that key (003-AC4): on its page under "Trusted dev keys", or as `dev-keys/<name>.pub` in its config root. Signing stays offline: no certificate, no Rekor entry.

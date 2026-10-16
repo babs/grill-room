@@ -134,6 +134,8 @@ type Instance struct {
 	Paused []string `json:"paused,omitempty"`
 	// Connectors are the claude.ai connectors the host turned on, by room link (014-AC18).
 	Connectors map[string][]RoomConnector `json:"connectors,omitempty"`
+	// Avoid is a version whose worker failed the handshake on protocol: Binary picks another.
+	Avoid string `json:"-"`
 }
 
 // accountFor names the account room's turns use (003-AC13).

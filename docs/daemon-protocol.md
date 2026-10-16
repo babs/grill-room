@@ -10,6 +10,17 @@ Both sides carry a protocol version, `Proto` in `internal/daemon/proto.go`, curr
 
 A version bump must stay additive within that window: new fields and new message types only. Both sides ignore unknown fields and unknown message types. A supervisor must not send a request type its worker's agreed version lacks.
 
+### Compatibility window
+
+A supervisor runs the worker its room server hands out, and that worker may come from a newer release than the supervisor. The rule that keeps rooms hosted across a protocol bump:
+
+- A release bumps `Proto` by one at most. Its workers then still talk to supervisors of the previous version (N-1), so a supervisor one release behind keeps working.
+- The supervisor asks `GET /api/daemon/version?proto=<lo>-<hi>`, its own range (`Proto ± ProtoSkew`). The answer carries `proto`, the protocol of the version it hands out, from the release's `PROTO` file. When that protocol is outside the range and the server keeps a previous release that fits (`GRILL_ROOM_DAEMON_PREV_DIR`), it hands that one out instead, with `download`, the directory of its files (`/download/prev/`), and `latest`, the current version. Without the query, the server answers with the current release, as before.
+- The supervisor never swaps to a worker outside its range. When the answer's `proto` is outside it, it keeps the worker it runs, or the copy it ran last, or else its own binary. A server too old to send `proto` is caught at the handshake: a worker of another release that fails it, or refuses the supervisor, is not marked refused; the supervisor starts its last copy or its own binary instead and avoids that version until the server hands out another one.
+- Meanwhile the instance carries `update_needed`, the page shows "Update the app to keep hosting" with a one-click update, and the supervisor checks its update channel at once.
+
+The supervisor's own update check asks without the query: it wants the latest release, not the one that fits.
+
 ## Handshake
 
 1. The worker sends `{"type":"hello","proto":4,"version":"v0.0.3","instance":"<id>"}`.

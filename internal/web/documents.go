@@ -70,6 +70,9 @@ type Options struct {
 	MaxResultBytes int64
 	// Release is the daemon release handed out to hosts; nil offers no download.
 	Release *Release
+	// PrevRelease is the release before it, handed out to supervisors whose protocol window the
+	// current one's workers fall outside; nil keeps none.
+	PrevRelease *Release
 	// SandboxImage is the digest-pinned sandbox image daemons pull; empty lets them build their own.
 	SandboxImage string
 	// SendMail mails a plain-text message; nil turns email sign-in off.

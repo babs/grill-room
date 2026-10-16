@@ -222,6 +222,39 @@ function RelaxBanner() {
   </p>`;
 }
 
+/**
+ * startUpdate applies the update on offer; the page then waits for the new version (005-AC45).
+ * @returns {Promise<void>}
+ */
+function startUpdate() {
+  updatingFrom = data.value?.status.version || '';
+  return api('POST', '/api/update').then(() => {
+    restarting.value = Date.now();
+    banner.value = 'Updating… the AI host app restarts, and this page reconnects by itself.';
+  });
+}
+
+// KeepHosting says a server hands out a version this app cannot run: its rooms stay hosted on the
+// worker this app runs now, and one click updates the app (daemon-r2).
+function KeepHosting() {
+  const stuck = (data.value?.instances || []).filter((i) => i.update_needed);
+  const u = data.value?.status.update;
+  const [busy, setBusy] = useState(false);
+  const [text, setText] = useState('');
+  if (!stuck.length) return null;
+  const apply = () => {
+    setBusy(true);
+    startUpdate().catch((err) => { setBusy(false); setText(sentence(err.message)); });
+  };
+  return html`<div id="keep-hosting" class="keep-hosting" role="alert">
+    <strong>Update the app to keep hosting.</strong>
+    ${stuck.map((i) => html`<span class="hint">${sentence(i.update_needed || '')}.</span>`)}
+    ${u?.available ? html`<button type="button" id="keep-hosting-update" onClick=${apply} disabled=${busy || u.running}>Update to ${u.available}</button>`
+      : html`<span class="hint">${u?.running ? 'Downloading…' : u?.error || 'Looking for the update…'}</span>`}
+    <span role="status">${text}</span>
+  </div>`;
+}
+
 // UpdateOffer is the supervisor's own update, applied only on approval (003-AC5).
 function UpdateOffer() {
   const u = data.value?.status.update;
@@ -231,11 +264,7 @@ function UpdateOffer() {
   const apply = () => {
     setBusy(true);
     setText('Downloading…');
-    updatingFrom = data.value?.status.version || '';
-    api('POST', '/api/update').then(() => {
-      restarting.value = Date.now();
-      banner.value = 'Updating… the AI host app restarts, and this page reconnects by itself.';
-    }).catch((err) => { setBusy(false); setText(err.message); });
+    startUpdate().catch((err) => { setBusy(false); setText(err.message); });
   };
   return html`<p id="update">
     Version <strong id="update-version">${u.available}</strong> of the AI host app is available from <span id="update-from">${u.from || 'the room server'}</span>.
@@ -1164,6 +1193,7 @@ function App() {
     <${Header} />
     ${banner.value && html`<p id="banner" role="alert">${sentence(banner.value)}</p>`}
     ${live && html`<${RelaxBanner} />`}
+    ${live && html`<${KeepHosting} />`}
     ${live && html`<main id="main" class=${tab.value === 'monitoring' || tab.value === 'rooms' ? 'page-wide' : 'page'}>
       <${TabBar} />
       <${Panel} id="rooms"><${Rooms} /><//>

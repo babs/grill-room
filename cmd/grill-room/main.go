@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -94,6 +95,9 @@ type Config struct {
 	NotesWatchDelay time.Duration
 	// DaemonDir holds the daemon release `make release` writes; empty offers no download.
 	DaemonDir string
+	// DaemonPrevDir holds the previous release, for supervisors too old for this one's workers;
+	// empty, or a directory with no VERSION, keeps none.
+	DaemonPrevDir string
 	// SandboxImage is the digest-pinned sandbox image advertised to daemons; empty lets them build it.
 	SandboxImage string
 	// SMTP sends magic links; an empty Addr turns email sign-in off.
@@ -162,6 +166,7 @@ func loadConfig() (Config, error) {
 		LogLevel:          getEnv("LOG_LEVEL", "info"),
 		LogFormat:         getEnv("LOG_FORMAT", "auto"),
 		DaemonDir:         os.Getenv("GRILL_ROOM_DAEMON_DIR"),
+		DaemonPrevDir:     os.Getenv("GRILL_ROOM_DAEMON_PREV_DIR"),
 		SandboxImage:      os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
 		DeviceSTTModelDir: os.Getenv("GRILL_ROOM_DEVICE_STT_MODEL_DIR"),
 	}, errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9, err10, err11)
@@ -383,6 +388,13 @@ func run() error {
 	} else {
 		logger.Info("daemon_release_disabled", zap.String("hint", "set GRILL_ROOM_DAEMON_DIR to offer the daemon download"))
 	}
+	var prev *web.Release
+	if _, err := os.Stat(filepath.Join(cfg.DaemonPrevDir, "VERSION")); cfg.DaemonPrevDir != "" && err == nil {
+		if prev, err = web.LoadPrevRelease(cfg.DaemonPrevDir); err != nil {
+			return err
+		}
+		logger.Info("daemon_prev_release", zap.String("version", prev.Version), zap.Int("proto", prev.Proto))
+	}
 
 	b := bus.New(st)
 	srv := web.New(b, hash, cfg.PublicURL, web.Options{
@@ -395,6 +407,7 @@ func run() error {
 		ToMarkdown:         convert.NewPandoc(cfg.Pandoc, cfg.PandocTimeout).ToMarkdown,
 		Voice:              cfg.voice(),
 		Release:            release,
+		PrevRelease:        prev,
 		SandboxImage:       cfg.SandboxImage,
 		SendMail:           cfg.sendMail(),
 		MagicLinkTTL:       cfg.MagicLinkTTL,

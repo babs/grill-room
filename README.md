@@ -36,6 +36,7 @@ On first start the server logs an `admin_token_generated` line holding the admin
 | `GRILL_ROOM_TURN_TIMEOUT` | `15m` | one agent turn's time budget (1m to 24h) |
 | `GRILL_ROOM_NOTES_WATCH_DELAY` | `20s` | how long the persona that watches the notes waits after the last new note message (1s to 1h) |
 | `GRILL_ROOM_DAEMON_DIR` | none (`/daemon` in the image) | daemon release written by `make release` or `make dev-release`, or downloaded from a GitHub release; unset offers no download |
+| `GRILL_ROOM_DAEMON_PREV_DIR` | none (`/daemon-prev` in the image) | the previous daemon release, with its `PROTO`, handed out to supervisors too old for the current one's workers (docs/release.md); a directory with no `VERSION` keeps none |
 | `GRILL_ROOM_SANDBOX_IMAGE` | none | sandbox image advertised to daemons, pinned by digest (`<repo>[:tag]@sha256:<hex>`); unset lets each daemon build it |
 | `GRILL_ROOM_SMTP_ADDR` | none | SMTP relay (`host:port`) for magic links; unset turns email sign-in off |
 | `GRILL_ROOM_SMTP_FROM` | none | sender address, needed with `GRILL_ROOM_SMTP_ADDR` |

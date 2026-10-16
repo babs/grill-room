@@ -115,6 +115,9 @@ type worker struct {
 	unsigned bool
 	// reload restarts the worker at once, for a new binary or a new trust policy.
 	reload bool
+	// avoid is a version whose worker failed the handshake on protocol; blocked says why the
+	// version the instance serves does not run, for the page.
+	avoid, blocked string
 	// sentAccess is the last access the worker took, as JSON; accessMu orders the pushes.
 	sentAccess []byte
 	accessMu   sync.Mutex
@@ -157,7 +160,16 @@ type InstanceView struct {
 	Status *Status `json:"status,omitempty"`
 	// Paused are the rooms the host paused (003b-AC5).
 	Paused []string `json:"paused,omitempty"`
+	// UpdateNeeded says why the version the server hands out does not run here: the app must update
+	// to take it, and runs another worker meanwhile.
+	UpdateNeeded string `json:"update_needed,omitempty"`
 }
+
+// errIncompatible is a worker of another release that does not speak this supervisor's protocol:
+// the next run picks another binary instead of leaving the rooms without a host.
+type errIncompatible struct{ version, reason string }
+
+func (e errIncompatible) Error() string { return e.reason }
 
 // errRefused is a worker the handshake turned down; restarting it would not help.
 type errRefused struct{ reason string }
@@ -263,6 +275,16 @@ func (w *worker) run(ended chan struct{}) {
 			w.set(func() { w.state, w.err = "stopped", "" })
 			return
 		}
+		var inc errIncompatible
+		if errors.As(err, &inc) {
+			w.set(func() {
+				// Binary handed the avoided version out again: stop there rather than loop on it.
+				if w.avoid == inc.version {
+					err = errRefused{inc.reason}
+				}
+				w.avoid = inc.version
+			})
+		}
 		var refused errRefused
 		s.mu.Lock()
 		// One critical section with reload: a reload is either seen here or starts a new run.
@@ -275,6 +297,11 @@ func (w *worker) run(ended chan struct{}) {
 		s.mu.Unlock()
 		if reload {
 			log.Info("worker_reloading", zap.NamedError("exit", err))
+			backoff = time.Second
+			continue
+		}
+		if errors.As(err, &inc) {
+			log.Warn("worker_incompatible", zap.String("version", inc.version), zap.Error(err))
 			backoff = time.Second
 			continue
 		}
@@ -310,13 +337,17 @@ func (w *worker) set(f func()) {
 func (w *worker) once(log *zap.Logger) error {
 	s := w.s
 	var in Instance
-	w.set(func() { w.state, in = "starting", w.inst })
+	w.set(func() { w.state, in = "starting", w.inst; in.Avoid = w.avoid })
 	res, err := s.o.Binary(s.ctx, in)
 	if err != nil {
 		return fmt.Errorf("worker binary: %w", err)
 	}
 	s.mu.Lock()
-	w.version, w.trust, w.devKey, w.unsigned = res.Version, res.Trust, res.DevKey, res.Relaxed
+	w.version, w.trust, w.devKey, w.unsigned, w.blocked = res.Version, res.Trust, res.DevKey, res.Relaxed, res.Blocked
+	if res.Blocked != "" {
+		// The page offers the update that lets this instance's version run.
+		s.askUpdateCheck()
+	}
 	// Unknown when the instance did not answer: the version its worker reports stays the last seen.
 	if res.Served != "" {
 		w.served = res.Served
@@ -400,10 +431,18 @@ func (w *worker) serve(conn *Conn, cmd *exec.Cmd, log *zap.Logger) error {
 	if hello.Type != "hello" {
 		return fmt.Errorf("the worker sent %q before hello", hello.Type)
 	}
+	s.mu.Lock()
+	// A binary of another release: refusing it must not leave the rooms without a host.
+	foreign := w.version != s.o.Version
+	ran := w.version
+	s.mu.Unlock()
 	agreed, err := Negotiate(Proto, hello.Proto)
 	if err != nil {
 		reason := fmt.Sprintf("worker %s refused: %v", hello.Version, err)
 		_ = conn.Send(Msg{Type: "refused", Proto: Proto, Error: reason})
+		if foreign {
+			return errIncompatible{ran, reason}
+		}
 		return errRefused{reason}
 	}
 	// Before the worker shows as running: a request sent ahead of the config would kill it, and
@@ -460,14 +499,10 @@ func (w *worker) serve(conn *Conn, cmd *exec.Cmd, log *zap.Logger) error {
 					w.served = sv
 					if s.set.UpdateChannel == "instance" && s.set.UpdateInstance == w.inst.ID {
 						// The supervisor follows this instance: its new version is on offer now.
-						select {
-						case s.checkNow <- struct{}{}:
-						default:
-						}
+						s.askUpdateCheck()
 					}
 					if sv != w.version {
-						log.Info("instance_version_changed", zap.String("served", sv), zap.String("running", w.version))
-						s.reload(w)
+						s.wg.Go(func() { s.followServed(w, sv, log) })
 					}
 				}
 			})
@@ -494,8 +529,42 @@ func (w *worker) serve(conn *Conn, cmd *exec.Cmd, log *zap.Logger) error {
 				}
 			})
 		case "refused":
-			refused = errRefused{"the worker refused this supervisor: " + m.Error}
+			reason := "the worker refused this supervisor: " + m.Error
+			refused = errRefused{reason}
+			if foreign {
+				refused = errIncompatible{ran, reason}
+			}
 		}
+	}
+}
+
+// followServed runs the version w's instance now hands out (003-AC7), once Binary picked and
+// checked it: when that version's workers do not speak this supervisor's protocol, Binary keeps
+// the running one and the worker is not restarted.
+func (s *Supervisor) followServed(w *worker, served string, log *zap.Logger) {
+	s.mu.Lock()
+	in := w.inst
+	in.Avoid = w.avoid
+	s.mu.Unlock()
+	res, err := s.o.Binary(s.ctx, in)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err == nil && res.Version == w.version {
+		w.blocked = res.Blocked
+		if res.Blocked != "" {
+			s.askUpdateCheck()
+		}
+		return
+	}
+	log.Info("instance_version_changed", zap.String("served", served), zap.String("running", w.version))
+	s.reload(w)
+}
+
+// askUpdateCheck asks the update loop for a check now; one already asked for is enough.
+func (s *Supervisor) askUpdateCheck() {
+	select {
+	case s.checkNow <- struct{}{}:
+	default:
 	}
 }
 
@@ -841,7 +910,7 @@ func (s *Supervisor) Instances() ([]InstanceView, string) {
 		v := InstanceView{ID: w.inst.ID, URL: w.inst.URL, Rooms: slices.Clone(w.inst.Rooms), State: w.state, Error: w.err, PID: w.pid,
 			Proto: w.proto, Restarts: w.restarts, Metrics: w.metrics, LastTurn: w.lastTurn, Version: w.version, Trust: w.trust,
 			AcceptUnsigned: w.inst.Relax, Account: w.inst.accountFor(""), RoomAccounts: maps.Clone(w.inst.RoomAccounts), CutOff: w.inst.CutOff,
-			Unsigned: w.unsigned && w.state == "running", Limits: s.o.Worker.Limits, Paused: slices.Clone(w.inst.Paused)}
+			Unsigned: w.unsigned && w.state == "running", Limits: s.o.Worker.Limits, Paused: slices.Clone(w.inst.Paused), UpdateNeeded: w.blocked}
 		if w.inst.Limits != nil {
 			v.Limits = *w.inst.Limits
 		}

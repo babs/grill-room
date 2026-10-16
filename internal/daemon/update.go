@@ -35,6 +35,12 @@ type serverInfo struct {
 	SHA256       map[string]string `json:"sha256"`
 	Bundles      map[string]string `json:"bundles"`
 	SandboxImage string            `json:"sandbox_image"`
+	// Proto is the worker protocol of Version; 0 from a server that does not say.
+	Proto int `json:"proto,omitempty"`
+	// Download is the directory of Version's files when not /download/, and Latest the newest
+	// release, when the server hands out an older one for the protocols the request named.
+	Download string `json:"download,omitempty"`
+	Latest   string `json:"latest,omitempty"`
 }
 
 // imageJob tracks the sandbox image the room server asked for.

@@ -42,6 +42,10 @@ func fakeWorker(mode string) int {
 	if err != nil {
 		proto = Proto
 	}
+	// A copy named worker-next is a release two protocol versions ahead (protowindow_test.go).
+	if strings.HasPrefix(filepath.Base(os.Args[0]), "worker-next") {
+		proto = Proto + 2
+	}
 	conn := NewConn(os.Stdin, os.Stdout)
 	switch mode {
 	case "silent":

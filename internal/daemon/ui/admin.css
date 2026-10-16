@@ -1,8 +1,10 @@
 /* Layout of the daemon's page. Colours, sizes and controls come from /static/kit/tokens.css
    (docs/design.md). */
 body { overflow-wrap: anywhere; }
-#banner, #update, .alerts { margin: 0; padding: var(--sp-2) var(--sp-4); background: var(--warning-bg); }
+#banner, #update, .alerts, .keep-hosting { margin: 0; padding: var(--sp-2) var(--sp-4); background: var(--warning-bg); }
 #update { margin-top: var(--sp-2); }
+.keep-hosting { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); }
+.keep-hosting .hint { margin: 0; }
 .alerts { margin: var(--sp-2) 0 0; padding-left: var(--sp-7); }
 .alerts .alert-unsigned { font-weight: 600; }
 .tab-badge { display: inline-block; min-width: 1.2em; padding: 0 var(--sp-1); border-radius: var(--r-pill); background: var(--danger); color: var(--on-danger); font-size: var(--fs-xs); text-align: center; }

@@ -24,7 +24,8 @@
  * @typedef {{id: string, url: string, rooms: string[], state: string, error?: string, pid?: number, proto?: number,
  *   restarts: number, version?: string, trust?: string, accept_unsigned: boolean, account: string,
  *   room_accounts?: Record<string, string>, room_states?: RoomStatus[], requests: number, cut_off?: boolean,
- *   room?: string, connection?: string, metrics?: Metrics, unsigned?: boolean, limits: Limits, status?: Status, paused?: string[]}} Instance
+ *   room?: string, connection?: string, metrics?: Metrics, unsigned?: boolean, limits: Limits, status?: Status, paused?: string[],
+ *   update_needed?: string}} Instance
  * @typedef {{name: string, kind: string, config_dir?: string, display_dir?: string, storage?: string, state: string, detail?: string,
  *   expires_at?: string, expiry_estimated?: boolean, checked_at?: string, last_use?: string,
  *   requests: Record<string, number>, warning?: string}} Account

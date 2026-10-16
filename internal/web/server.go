@@ -231,6 +231,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET "+uikit.Prefix, uikit.Handler())
 	mux.HandleFunc("GET /install.sh", s.installScript)
 	mux.HandleFunc("GET /download/{file}", s.download)
+	mux.HandleFunc("GET /download/prev/{file}", s.download)
 	mux.HandleFunc("GET /api/daemon/version", s.daemonVersion)
 
 	mux.Handle("GET /api/rooms", s.admin(s.listRooms))
