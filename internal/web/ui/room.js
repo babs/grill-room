@@ -245,7 +245,11 @@ function blockedActions(m) {
   }
   const scopes = isHost() ? [['room', 'Allow for this room'], ['server', 'Allow everywhere']]
     : meAdmin && agent.egress_admins_allow ? [['room', 'Allow for this room']] : [];
-  if (!scopes.length) return null;
+  if (!scopes.length) {
+    // Whoever cannot allow it learns who can, the same person on another seat included.
+    box.append(Object.assign(document.createElement('span'), { className: 'hint', textContent: whoAllows() }));
+    return box;
+  }
   const why = agent.egress_host || '';
   for (const [scope, label] of scopes) {
     const btn = document.createElement('button');
@@ -265,6 +269,14 @@ function blockedActions(m) {
   const note = why || (b.error ? 'Not allowed: ' + b.error : '');
   if (note) box.append(Object.assign(document.createElement('span'), { className: 'hint', textContent: note }));
   return box;
+}
+
+// whoAllows names who may allow a blocked website, for a viewer who may not (014-AC9).
+function whoAllows() {
+  const host = participants.find((p) => p.id === agent.host_participant_id);
+  if (!host) return 'No one runs the AI for this room now: whoever does can allow it.';
+  if (host.self) return 'You run the AI as ' + host.name + ': open the room as ' + host.name + ' to allow it.';
+  return 'Only the AI host, ' + host.name + (agent.egress_admins_allow ? ', or a room admin' : ',') + ' can allow it.';
 }
 
 // renderBlocked redraws the blocked lines' buttons after the agent state changed.

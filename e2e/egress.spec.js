@@ -168,6 +168,9 @@ test('blocked websites in the chat, allowed by the host and a delegated admin', 
     await expect(line(bob, 'example.com')).toBeVisible();
     await expect(line(bob, 'example.com').getByRole('button')).toHaveCount(0);
     await expect(line(carol, 'example.com').getByRole('button')).toHaveCount(0);
+    // Whoever cannot allow it is told who can: the line never looks like a dead end.
+    await expect(line(carol, 'example.com')).toContainText('Only the AI host, Alice, can allow it.');
+    await expect(line(bob, 'example.com')).toContainText('Only the AI host, Alice, can allow it.');
     await line(alice, 'example.com').getByRole('button', { name: 'Allow for this room' }).click();
     await expect(line(alice, 'example.com')).toContainText('Alice allowed example.com for this room');
     await expect(line(carol, 'example.com')).toContainText('Alice allowed example.com for this room');
@@ -183,6 +186,7 @@ test('blocked websites in the chat, allowed by the host and a delegated admin', 
     await alice.locator('#manage-close').click();
     await expect(line(bob, 'example.org').getByRole('button')).toHaveText(['Allow for this room']);
     await expect(line(carol, 'example.org').getByRole('button')).toHaveCount(0);
+    await expect(line(carol, 'example.org')).toContainText('Only the AI host, Alice, or a room admin can allow it.');
     await line(bob, 'example.org').getByRole('button', { name: 'Allow for this room' }).click();
     await expect(line(alice, 'example.org')).toContainText('Bob allowed example.org for this room');
 

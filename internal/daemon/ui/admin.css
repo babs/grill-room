@@ -59,6 +59,7 @@ th, td { white-space: nowrap; vertical-align: top; }
 details.connectors summary { cursor: pointer; padding: var(--sp-1) 0; }
 table.connectors-list { width: 100%; max-width: 40rem; }
 table.connectors-list td:nth-child(n+3), table.connectors-list th:nth-child(n+3) { text-align: center; }
+table.connectors-list .badge { white-space: normal; }
 /* A room's plugins (009-AC19, 009-AC22): requests shown, options folded (003b-AC8). */
 .room-plugins h4 { margin-top: var(--sp-2); }
 ul.fetches, ul.plugin-domains { padding-left: 0; list-style: none; }
