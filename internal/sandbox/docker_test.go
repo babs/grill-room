@@ -362,3 +362,41 @@ For every tool call that fails, quote its exact error text. Do not use any other
 		t.Errorf("want pypi.org let through and example.com refused: %v", seen)
 	}
 }
+
+// 014 against a fake upstream, with no Claude request: the credential-wipe case of S3 and S16. The
+// account's token is refused (401), Claude Code tries its own refresh, which the egress proxy
+// refuses with every Anthropic host, and the sandbox's dummy credentials stay as written, even
+// with every website and the local network allowed.
+func TestCredentialWipeRefused(t *testing.T) {
+	img := dockerTest(t)
+	ctx := context.Background()
+	var accept atomic.Value
+	accept.Store("not-this-token")
+	up := fakeAnthropic(t, &accept)
+	upURL, _ := url.Parse(up.URL)
+	host := t.TempDir()
+	writeHostCreds(t, host, "host-token", time.Now().Add(time.Hour))
+	addr, bearer := accountProxy(t, upURL, creds.NewSource(creds.ForConfigDir(host)))
+	s := New(Config{Image: img, Name: fmt.Sprintf("wipe-%d", time.Now().UnixNano()), Proxy: addr}, Docker, zaptest.NewLogger(t, zaptest.Level(zap.ErrorLevel)))
+	t.Cleanup(func() { s.Close(context.Background()) })
+	if err := s.SetPolicy(ctx, Policy{Allow: DefaultAllowlist, AllWebsites: true, LocalNetwork: true}); err != nil {
+		t.Fatal(err)
+	}
+	tctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	if _, err := s.RunClaude(tctx, Request{Prompt: "say ok", Model: "haiku", Bearer: bearer}); err == nil {
+		t.Fatal("a refused token answered")
+	}
+	b, err := Docker(ctx, nil, "exec", s.container(), "cat", home+"/.claude/.credentials.json")
+	if err != nil || !bytes.Contains(b, []byte(bearer)) || !bytes.Contains(b, []byte("grill-room-dummy-refresh")) {
+		t.Fatalf("credentials after the 401: %v, %d bytes, bearer kept %v", err, len(b), bytes.Contains(b, []byte(bearer)))
+	}
+	log, err := Docker(ctx, nil, "logs", s.egress())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("egress log:\n%s", log)
+	if n := anthropicTunnels(log); n != 0 {
+		t.Fatalf("%d Anthropic tunnels", n)
+	}
+}
