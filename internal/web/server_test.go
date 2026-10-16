@@ -23,6 +23,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/babs/grill-room/internal/bus"
+	_ "github.com/babs/grill-room/internal/sqlitetest"
 	"github.com/babs/grill-room/internal/store"
 )
 

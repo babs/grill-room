@@ -20,6 +20,7 @@ import (
 	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/daemon"
 	"github.com/babs/grill-room/internal/sandbox"
+	_ "github.com/babs/grill-room/internal/sqlitetest"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/web"
 )

@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	_ "github.com/babs/grill-room/internal/sqlitetest"
 )
 
 // TestMain lets the supervisor tests run this test binary as a fake worker speaking the protocol

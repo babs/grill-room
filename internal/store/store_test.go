@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/babs/grill-room/internal/anchor"
+	_ "github.com/babs/grill-room/internal/sqlitetest"
 )
 
 func openTest(t *testing.T) *Store {
