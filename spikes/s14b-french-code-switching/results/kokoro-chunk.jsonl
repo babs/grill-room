@@ -1,0 +1,10 @@
+{"id": "en01", "ttfa_s": 2.295, "synth_s": 2.29, "audio_s": 4.05, "spans": 1}
+{"id": "en02", "ttfa_s": 2.919, "synth_s": 2.92, "audio_s": 5.38, "spans": 1}
+{"id": "en03", "ttfa_s": 3.809, "synth_s": 3.81, "audio_s": 7.08, "spans": 1}
+{"id": "en04", "ttfa_s": 2.125, "synth_s": 2.12, "audio_s": 3.63, "spans": 1}
+{"fr": "kokoro:bf_emma", "en": "kokoro:bf_emma", "mode": "raw", "threads": 4, "n": 4, "load_s": 2.7, "rtf": 0.554, "cpu_per_audio_s": 2.22, "rss_peak_mb": 624}
+{"id": "en01", "ttfa_s": 1.142, "synth_s": 2.57, "audio_s": 4.16, "spans": 1}
+{"id": "en02", "ttfa_s": 2.956, "synth_s": 2.96, "audio_s": 5.38, "spans": 1}
+{"id": "en03", "ttfa_s": 3.986, "synth_s": 3.99, "audio_s": 7.08, "spans": 1}
+{"id": "en04", "ttfa_s": 1.339, "synth_s": 2.51, "audio_s": 3.88, "spans": 1}
+{"fr": "kokoro:bf_emma", "en": "kokoro:bf_emma", "mode": "raw", "threads": 4, "n": 4, "load_s": 2.2, "rtf": 0.586, "cpu_per_audio_s": 2.35, "rss_peak_mb": 626}

@@ -1,0 +1,1446 @@
+{
+ "raw": {
+  "fr01": [
+   [
+    "fr",
+    "J'ai repoussé le rollout à jeudi, le feature flag reste coupé en staging."
+   ]
+  ],
+  "fr02": [
+   [
+    "fr",
+    "Le sidecar LiveKit renvoie des 502 dès que le pod Kubernetes redémarre."
+   ]
+  ],
+  "fr03": [
+   [
+    "fr",
+    "Alice a écrit dans la merge request, je cite, ship it and we'll fix it later."
+   ]
+  ],
+  "fr04": [
+   [
+    "fr",
+    "La latence p95 est passée de 180 à 420 millisecondes depuis la version 2.3.1."
+   ]
+  ],
+  "fr05": [
+   [
+    "fr",
+    "ArgoCD a synchronisé la mauvaise branche, donc j'ai fait un rollback à la main."
+   ]
+  ],
+  "fr06": [
+   [
+    "fr",
+    "On a sorti trois tickets du backlog pour ce sprint, dont le fix sur l'OAuth."
+   ]
+  ],
+  "fr07": [
+   [
+    "fr",
+    "Bob, tu peux relancer le pipeline CI avant le code freeze de vendredi ?"
+   ]
+  ],
+  "fr08": [
+   [
+    "fr",
+    "J'ai mis un retry avec un backoff exponentiel sur le webhook GitHub."
+   ]
+  ],
+  "fr09": [
+   [
+    "fr",
+    "Le health check du load balancer échoue, le endpoint renvoie une 404."
+   ]
+  ],
+  "fr10": [
+   [
+    "fr",
+    "Le SLO de 99,9 % tient, mais l'error budget fond trop vite cette semaine."
+   ]
+  ],
+  "fr11": [
+   [
+    "fr",
+    "Comme dit Dana, it's not a bug, it's a feature, mais là c'est un vrai bug."
+   ]
+  ],
+  "fr12": [
+   [
+    "fr",
+    "On passe de PostgreSQL 15 à 17 et on garde Redis pour le cache."
+   ]
+  ],
+  "fr13": [
+   [
+    "fr",
+    "Le canary à 10 % est vert, j'ouvre le trafic à 50 % demain matin."
+   ]
+  ],
+  "fr14": [
+   [
+    "fr",
+    "Le README dit npm install, mais on utilise pnpm partout depuis la v4."
+   ]
+  ],
+  "fr15": [
+   [
+    "fr",
+    "J'ai approuvé la pull request, il manque juste un test end-to-end sur le login."
+   ]
+  ],
+  "fr16": [
+   [
+    "fr",
+    "Le cluster tourne sur AWS en eu-west-3, avec 3 nœuds et 12 Go de RAM chacun."
+   ]
+  ],
+  "fr17": [
+   [
+    "fr",
+    "J'ai mergé la branche sur GitLab, le deploy part en prod après la review."
+   ]
+  ],
+  "en01": [
+   [
+    "en",
+    "I pushed the rollout to Thursday, and the feature flag stays off in staging."
+   ]
+  ],
+  "en02": [
+   [
+    "en",
+    "The LiveKit sidecar returns a 502 whenever the Kubernetes pod restarts."
+   ]
+  ],
+  "en03": [
+   [
+    "en",
+    "Our p95 latency went from 180 to 420 milliseconds since version 2.3.1."
+   ]
+  ],
+  "en04": [
+   [
+    "en",
+    "ArgoCD synced the wrong branch, so I rolled it back by hand."
+   ]
+  ]
+ },
+ "num": {
+  "fr01": [
+   [
+    "fr",
+    "J'ai repoussé le rollout à jeudi, le feature flag reste coupé en staging."
+   ]
+  ],
+  "fr02": [
+   [
+    "fr",
+    "Le sidecar Live Kit renvoie des cinq cent deux dès que le pod Kubernetes redémarre."
+   ]
+  ],
+  "fr03": [
+   [
+    "fr",
+    "Alice a écrit dans la merge request, je cite, ship it and we'll fix it later."
+   ]
+  ],
+  "fr04": [
+   [
+    "fr",
+    "La latence pé quatre-vingt-quinze est passée de cent quatre-vingts à quatre cent vingt millisecondes depuis la version deux point trois point un."
+   ]
+  ],
+  "fr05": [
+   [
+    "fr",
+    "Argo C D a synchronisé la mauvaise branche, donc j'ai fait un rollback à la main."
+   ]
+  ],
+  "fr06": [
+   [
+    "fr",
+    "On a sorti trois tickets du backlog pour ce sprint, dont le fix sur l'O Auth."
+   ]
+  ],
+  "fr07": [
+   [
+    "fr",
+    "Bob, tu peux relancer le pipeline cé i avant le code freeze de vendredi ?"
+   ]
+  ],
+  "fr08": [
+   [
+    "fr",
+    "J'ai mis un retry avec un backoff exponentiel sur le webhook GitHub."
+   ]
+  ],
+  "fr09": [
+   [
+    "fr",
+    "Le health check du load balancer échoue, le endpoint renvoie une quatre cent quatre."
+   ]
+  ],
+  "fr10": [
+   [
+    "fr",
+    "Le èss èl o de quatre-vingt-dix-neuf virgule neuf pour cent tient, mais l'error budget fond trop vite cette semaine."
+   ]
+  ],
+  "fr11": [
+   [
+    "fr",
+    "Comme dit Dana, it's not a bug, it's a feature, mais là c'est un vrai bug."
+   ]
+  ],
+  "fr12": [
+   [
+    "fr",
+    "On passe de Postgres quinze à dix-sept et on garde Redis pour le cache."
+   ]
+  ],
+  "fr13": [
+   [
+    "fr",
+    "Le canary à dix pour cent est vert, j'ouvre le trafic à cinquante pour cent demain matin."
+   ]
+  ],
+  "fr14": [
+   [
+    "fr",
+    "Le read me dit N P M install, mais on utilise P N P M partout depuis la version quatre."
+   ]
+  ],
+  "fr15": [
+   [
+    "fr",
+    "J'ai approuvé la pull request, il manque juste un test end-to-end sur le login."
+   ]
+  ],
+  "fr16": [
+   [
+    "fr",
+    "Le cluster tourne sur a double-vé èss en E U west three, avec trois nœuds et douze Go de rame chacun."
+   ]
+  ],
+  "fr17": [
+   [
+    "fr",
+    "J'ai mergé la branche sur GitLab, le deploy part en prod après la review."
+   ]
+  ],
+  "en01": [
+   [
+    "en",
+    "I pushed the rollout to Thursday, and the feature flag stays off in staging."
+   ]
+  ],
+  "en02": [
+   [
+    "en",
+    "The Live Kit sidecar returns a five oh two whenever the Kubernetes pod restarts."
+   ]
+  ],
+  "en03": [
+   [
+    "en",
+    "Our P ninety-five latency went from one hundred and eighty to four hundred and twenty milliseconds since version two point three point one."
+   ]
+  ],
+  "en04": [
+   [
+    "en",
+    "Argo C D synced the wrong branch, so I rolled it back by hand."
+   ]
+  ]
+ },
+ "respell": {
+  "fr01": [
+   [
+    "fr",
+    "J'ai repoussé le rol-aoute à jeudi, le fitcheur flag reste coupé en stéïdjinng."
+   ]
+  ],
+  "fr02": [
+   [
+    "fr",
+    "Le saïde-car laïve-kit renvoie des cinq cent deux dès que le pod koubeurnétisse redémarre."
+   ]
+  ],
+  "fr03": [
+   [
+    "fr",
+    "Alice a écrit dans la meurdje riquouest, je cite, ship it and we'll fixe it later."
+   ]
+  ],
+  "fr04": [
+   [
+    "fr",
+    "La latence pé quatre-vingt-quinze est passée de cent quatre-vingts à quatre cent vingt millisecondes depuis la version deux point trois point un."
+   ]
+  ],
+  "fr05": [
+   [
+    "fr",
+    "argo cédé a synchronisé la mauvaise branche, donc j'ai fait un rol-bak à la main."
+   ]
+  ],
+  "fr06": [
+   [
+    "fr",
+    "On a sorti trois tickets du bak-logue pour ce sprinnte, dont le fixe sur l'o-oss."
+   ]
+  ],
+  "fr07": [
+   [
+    "fr",
+    "Bob, tu peux relancer le païpe-laïne cé i avant le code frize de vendredi ?"
+   ]
+  ],
+  "fr08": [
+   [
+    "fr",
+    "J'ai mis un ri-traï avec un bak-offe exponentiel sur le ouèbe-houk guite-heub."
+   ]
+  ],
+  "fr09": [
+   [
+    "fr",
+    "Le hèlse-tchèque du laude balanceur échoue, le ènde-pointe renvoie une quatre cent quatre."
+   ]
+  ],
+  "fr10": [
+   [
+    "fr",
+    "Le èss èl o de quatre-vingt-dix-neuf virgule neuf pour cent tient, mais l'èreur beudjette fond trop vite cette semaine."
+   ]
+  ],
+  "fr11": [
+   [
+    "fr",
+    "Comme dit Dana, it's not a bug, it's a feature, mais là c'est un vrai bug."
+   ]
+  ],
+  "fr12": [
+   [
+    "fr",
+    "On passe de postgrèsse quinze à dix-sept et on garde rédisse pour le cache."
+   ]
+  ],
+  "fr13": [
+   [
+    "fr",
+    "Le canari à dix pour cent est vert, j'ouvre le trafic à cinquante pour cent demain matin."
+   ]
+  ],
+  "fr14": [
+   [
+    "fr",
+    "Le ride-mi dit N P M instol, mais on utilise P N P M partout depuis la version quatre."
+   ]
+  ],
+  "fr15": [
+   [
+    "fr",
+    "J'ai approuvé la poule riquouest, il manque juste un test ènde tou ènde sur le loguine."
+   ]
+  ],
+  "fr16": [
+   [
+    "fr",
+    "Le cleuss-teur tourne sur a double-vé èss en e u ouest trois, avec trois nœuds et douze Go de rame chacun."
+   ]
+  ],
+  "fr17": [
+   [
+    "fr",
+    "J'ai meurdjé la branche sur guite-lab, le di-ploï part en prod après la ri-viou."
+   ]
+  ],
+  "en01": [
+   [
+    "en",
+    "I pushed the rollout to Thursday, and the feature flag stays off in staging."
+   ]
+  ],
+  "en02": [
+   [
+    "en",
+    "The Live Kit sidecar returns a five oh two whenever the Kubernetes pod restarts."
+   ]
+  ],
+  "en03": [
+   [
+    "en",
+    "Our P ninety-five latency went from one hundred and eighty to four hundred and twenty milliseconds since version two point three point one."
+   ]
+  ],
+  "en04": [
+   [
+    "en",
+    "Argo C D synced the wrong branch, so I rolled it back by hand."
+   ]
+  ]
+ },
+ "spans": {
+  "fr01": [
+   [
+    "fr",
+    "J'ai repoussé le"
+   ],
+   [
+    "en",
+    "rollout"
+   ],
+   [
+    "fr",
+    "à jeudi, le"
+   ],
+   [
+    "en",
+    "feature flag"
+   ],
+   [
+    "fr",
+    "reste coupé en"
+   ],
+   [
+    "en",
+    "staging ."
+   ]
+  ],
+  "fr02": [
+   [
+    "fr",
+    "Le"
+   ],
+   [
+    "en",
+    "sidecar Live Kit"
+   ],
+   [
+    "fr",
+    "renvoie des cinq cent deux dès que le pod"
+   ],
+   [
+    "en",
+    "Kubernetes"
+   ],
+   [
+    "fr",
+    "redémarre."
+   ]
+  ],
+  "fr03": [
+   [
+    "fr",
+    "Alice a écrit dans la"
+   ],
+   [
+    "en",
+    "merge request ,"
+   ],
+   [
+    "fr",
+    "je cite,"
+   ],
+   [
+    "en",
+    "ship it and we'll fix it later."
+   ]
+  ],
+  "fr04": [
+   [
+    "fr",
+    "La latence pé quatre-vingt-quinze est passée de cent quatre-vingts à quatre cent vingt millisecondes depuis la version deux point trois point un."
+   ]
+  ],
+  "fr05": [
+   [
+    "en",
+    "Argo C D"
+   ],
+   [
+    "fr",
+    "a synchronisé la mauvaise branche, donc j'ai fait un"
+   ],
+   [
+    "en",
+    "rollback"
+   ],
+   [
+    "fr",
+    "à la main."
+   ]
+  ],
+  "fr06": [
+   [
+    "fr",
+    "On a sorti trois tickets du"
+   ],
+   [
+    "en",
+    "backlog"
+   ],
+   [
+    "fr",
+    "pour ce"
+   ],
+   [
+    "en",
+    "sprint ,"
+   ],
+   [
+    "fr",
+    "dont le"
+   ],
+   [
+    "en",
+    "fix"
+   ],
+   [
+    "fr",
+    "sur l'"
+   ],
+   [
+    "en",
+    "O Auth ."
+   ]
+  ],
+  "fr07": [
+   [
+    "fr",
+    "Bob, tu peux relancer le"
+   ],
+   [
+    "en",
+    "pipeline"
+   ],
+   [
+    "fr",
+    "cé i avant le"
+   ],
+   [
+    "en",
+    "code freeze"
+   ],
+   [
+    "fr",
+    "de vendredi ?"
+   ]
+  ],
+  "fr08": [
+   [
+    "fr",
+    "J'ai mis un"
+   ],
+   [
+    "en",
+    "retry"
+   ],
+   [
+    "fr",
+    "avec un"
+   ],
+   [
+    "en",
+    "backoff"
+   ],
+   [
+    "fr",
+    "exponentiel sur le"
+   ],
+   [
+    "en",
+    "webhook GitHub ."
+   ]
+  ],
+  "fr09": [
+   [
+    "fr",
+    "Le"
+   ],
+   [
+    "en",
+    "health check"
+   ],
+   [
+    "fr",
+    "du"
+   ],
+   [
+    "en",
+    "load balancer"
+   ],
+   [
+    "fr",
+    "échoue, le"
+   ],
+   [
+    "en",
+    "endpoint"
+   ],
+   [
+    "fr",
+    "renvoie une quatre cent quatre."
+   ]
+  ],
+  "fr10": [
+   [
+    "fr",
+    "Le èss èl o de quatre-vingt-dix-neuf virgule neuf pour cent tient, mais l'"
+   ],
+   [
+    "en",
+    "error budget"
+   ],
+   [
+    "fr",
+    "fond trop vite cette semaine."
+   ]
+  ],
+  "fr11": [
+   [
+    "fr",
+    "Comme dit Dana,"
+   ],
+   [
+    "en",
+    "it's not a bug, it's a feature,"
+   ],
+   [
+    "fr",
+    "mais là c'est un vrai bug."
+   ]
+  ],
+  "fr12": [
+   [
+    "fr",
+    "On passe de"
+   ],
+   [
+    "en",
+    "Postgres"
+   ],
+   [
+    "fr",
+    "quinze à dix-sept et on garde"
+   ],
+   [
+    "en",
+    "Redis"
+   ],
+   [
+    "fr",
+    "pour le cache."
+   ]
+  ],
+  "fr13": [
+   [
+    "fr",
+    "Le"
+   ],
+   [
+    "en",
+    "canary"
+   ],
+   [
+    "fr",
+    "à dix pour cent est vert, j'ouvre le trafic à cinquante pour cent demain matin."
+   ]
+  ],
+  "fr14": [
+   [
+    "fr",
+    "Le"
+   ],
+   [
+    "en",
+    "read me"
+   ],
+   [
+    "fr",
+    "dit N P M"
+   ],
+   [
+    "en",
+    "install ,"
+   ],
+   [
+    "fr",
+    "mais on utilise P N P M partout depuis la version quatre."
+   ]
+  ],
+  "fr15": [
+   [
+    "fr",
+    "J'ai approuvé la"
+   ],
+   [
+    "en",
+    "pull request ,"
+   ],
+   [
+    "fr",
+    "il manque juste un test"
+   ],
+   [
+    "en",
+    "end-to-end"
+   ],
+   [
+    "fr",
+    "sur le"
+   ],
+   [
+    "en",
+    "login ."
+   ]
+  ],
+  "fr16": [
+   [
+    "fr",
+    "Le"
+   ],
+   [
+    "en",
+    "cluster"
+   ],
+   [
+    "fr",
+    "tourne sur a double-vé èss en"
+   ],
+   [
+    "en",
+    "E U west three ,"
+   ],
+   [
+    "fr",
+    "avec trois nœuds et douze Go de rame chacun."
+   ]
+  ],
+  "fr17": [
+   [
+    "fr",
+    "J'ai"
+   ],
+   [
+    "en",
+    "merged"
+   ],
+   [
+    "fr",
+    "la branche sur"
+   ],
+   [
+    "en",
+    "GitLab ,"
+   ],
+   [
+    "fr",
+    "le"
+   ],
+   [
+    "en",
+    "deploy"
+   ],
+   [
+    "fr",
+    "part en prod après la"
+   ],
+   [
+    "en",
+    "review ."
+   ]
+  ],
+  "en01": [
+   [
+    "en",
+    "I pushed the rollout to Thursday, and the feature flag stays off in staging."
+   ]
+  ],
+  "en02": [
+   [
+    "en",
+    "The Live Kit sidecar returns a five oh two whenever the Kubernetes pod restarts."
+   ]
+  ],
+  "en03": [
+   [
+    "en",
+    "Our P ninety-five latency went from one hundred and eighty to four hundred and twenty milliseconds since version two point three point one."
+   ]
+  ],
+  "en04": [
+   [
+    "en",
+    "Argo C D synced the wrong branch, so I rolled it back by hand."
+   ]
+  ]
+ },
+ "hybrid": {
+  "fr01": [
+   [
+    "fr",
+    "J'ai repoussé le rol-aoute à jeudi, le fitcheur flag reste coupé en stéïdjinng."
+   ]
+  ],
+  "fr02": [
+   [
+    "fr",
+    "Le saïde-car laïve-kit renvoie des cinq cent deux dès que le pod koubeurnétisse redémarre."
+   ]
+  ],
+  "fr03": [
+   [
+    "fr",
+    "Alice a écrit dans la meurdje riquouest, je cite,"
+   ],
+   [
+    "en",
+    "ship it and we'll fix it later."
+   ]
+  ],
+  "fr04": [
+   [
+    "fr",
+    "La latence pé quatre-vingt-quinze est passée de cent quatre-vingts à quatre cent vingt millisecondes depuis la version deux point trois point un."
+   ]
+  ],
+  "fr05": [
+   [
+    "fr",
+    "argo cédé a synchronisé la mauvaise branche, donc j'ai fait un rol-bak à la main."
+   ]
+  ],
+  "fr06": [
+   [
+    "fr",
+    "On a sorti trois tickets du bak-logue pour ce sprinnte, dont le fixe sur l'o-oss."
+   ]
+  ],
+  "fr07": [
+   [
+    "fr",
+    "Bob, tu peux relancer le païpe-laïne cé i avant le code frize de vendredi ?"
+   ]
+  ],
+  "fr08": [
+   [
+    "fr",
+    "J'ai mis un ri-traï avec un bak-offe exponentiel sur le ouèbe-houk guite-heub."
+   ]
+  ],
+  "fr09": [
+   [
+    "fr",
+    "Le hèlse-tchèque du laude balanceur échoue, le ènde-pointe renvoie une quatre cent quatre."
+   ]
+  ],
+  "fr10": [
+   [
+    "fr",
+    "Le èss èl o de quatre-vingt-dix-neuf virgule neuf pour cent tient, mais l'èreur beudjette fond trop vite cette semaine."
+   ]
+  ],
+  "fr11": [
+   [
+    "fr",
+    "Comme dit Dana,"
+   ],
+   [
+    "en",
+    "it's not a bug, it's a feature,"
+   ],
+   [
+    "fr",
+    "mais là c'est un vrai bug."
+   ]
+  ],
+  "fr12": [
+   [
+    "fr",
+    "On passe de postgrèsse quinze à dix-sept et on garde rédisse pour le cache."
+   ]
+  ],
+  "fr13": [
+   [
+    "fr",
+    "Le canari à dix pour cent est vert, j'ouvre le trafic à cinquante pour cent demain matin."
+   ]
+  ],
+  "fr14": [
+   [
+    "fr",
+    "Le ride-mi dit N P M instol, mais on utilise P N P M partout depuis la version quatre."
+   ]
+  ],
+  "fr15": [
+   [
+    "fr",
+    "J'ai approuvé la poule riquouest, il manque juste un test ènde tou ènde sur le loguine."
+   ]
+  ],
+  "fr16": [
+   [
+    "fr",
+    "Le cleuss-teur tourne sur a double-vé èss en e u ouest trois, avec trois nœuds et douze Go de rame chacun."
+   ]
+  ],
+  "fr17": [
+   [
+    "fr",
+    "J'ai meurdjé la branche sur guite-lab, le di-ploï part en prod après la ri-viou."
+   ]
+  ],
+  "en01": [
+   [
+    "en",
+    "I pushed the rollout to Thursday, and the feature flag stays off in staging."
+   ]
+  ],
+  "en02": [
+   [
+    "en",
+    "The Live Kit sidecar returns a five oh two whenever the Kubernetes pod restarts."
+   ]
+  ],
+  "en03": [
+   [
+    "en",
+    "Our P ninety-five latency went from one hundred and eighty to four hundred and twenty milliseconds since version two point three point one."
+   ]
+  ],
+  "en04": [
+   [
+    "en",
+    "Argo C D synced the wrong branch, so I rolled it back by hand."
+   ]
+  ]
+ },
+ "ipa": {
+  "fr01": [
+   [
+    "fr",
+    "J'ai repoussé le | ɹ ˈ o ʊ l a ʊ t | à jeudi, le | f ˈ i ː t ʃ ɚ | | f l ˈ æ ɡ | reste coupé en | s t ˈ e ɪ d ʒ ɪ ŋ |."
+   ]
+  ],
+  "fr02": [
+   [
+    "fr",
+    "Le | s ˈ a ɪ d k ɑ ː ɹ | | l ˈ a ɪ v | | k ˈ ɪ t | renvoie des cinq cent deux dès que le pod | k j ˈ u ː b ɚ n ˌ i ː t s | redémarre."
+   ]
+  ],
+  "fr03": [
+   [
+    "fr",
+    "Alice a écrit dans la | m ˈ ɜ ː d ʒ | | ɹ ɪ k w ˈ ɛ s t |, je cite, | ʃ ˈ ɪ p | | ɪ t | | æ n d | | w i ː l | | f ˈ ɪ k s | | ɪ t | | l ˈ e ɪ ɾ ɚ |."
+   ]
+  ],
+  "fr04": [
+   [
+    "fr",
+    "La latence pé quatre-vingt-quinze est passée de cent quatre-vingts à quatre cent vingt millisecondes depuis la version deux point trois point un."
+   ]
+  ],
+  "fr05": [
+   [
+    "fr",
+    "| ˈ ɑ ː ɹ ɡ o ʊ | | s ˈ i ː | | d ˈ i ː | a synchronisé la mauvaise branche, donc j'ai fait un | ɹ ˈ o ʊ l b æ k | à la main."
+   ]
+  ],
+  "fr06": [
+   [
+    "fr",
+    "On a sorti trois tickets du | b ˈ æ k l ɑ ː ɡ | pour ce | s p ɹ ˈ ɪ n t |, dont le | f ˈ ɪ k s | sur l'| ˈ o ʊ | | ˈ ɔ ː θ |."
+   ]
+  ],
+  "fr07": [
+   [
+    "fr",
+    "Bob, tu peux relancer le | p ˈ a ɪ p l a ɪ n | cé i avant le | k ˈ o ʊ d | | f ɹ ˈ i ː z | de vendredi ?"
+   ]
+  ],
+  "fr08": [
+   [
+    "fr",
+    "J'ai mis un | ɹ ˈ i ː t ɹ a ɪ | avec un | b ˈ æ k ɔ f | exponentiel sur le | w ˈ ɛ b h ʊ k | | ɡ ˈ ɪ t | | h ˈ ʌ b |."
+   ]
+  ],
+  "fr09": [
+   [
+    "fr",
+    "Le | h ˈ ɛ l θ | | t ʃ ˈ ɛ k | du | l ˈ o ʊ d | | b ˈ æ l ə n s ɚ | échoue, le | ˈ ɛ n d p ɔ ɪ n t | renvoie une quatre cent quatre."
+   ]
+  ],
+  "fr10": [
+   [
+    "fr",
+    "Le èss èl o de quatre-vingt-dix-neuf virgule neuf pour cent tient, mais l'| ˈ ɛ ɹ ɚ | | b ˈ ʌ d ʒ ɪ t | fond trop vite cette semaine."
+   ]
+  ],
+  "fr11": [
+   [
+    "fr",
+    "Comme dit Dana, | ɪ t s | | n ˌ ɑ ː ɾ ə | | b ˈ ʌ ɡ |, | ɪ t s | | ɐ | | f ˈ i ː t ʃ ɚ |, mais là c'est un vrai bug."
+   ]
+  ],
+  "fr12": [
+   [
+    "fr",
+    "On passe de | p ˈ o ʊ s t ɡ ɚ z | quinze à dix-sept et on garde | ɹ ɪ d ˈ i z | pour le cache."
+   ]
+  ],
+  "fr13": [
+   [
+    "fr",
+    "Le | k ə n ˈ ɛ ɹ i | à dix pour cent est vert, j'ouvre le trafic à cinquante pour cent demain matin."
+   ]
+  ],
+  "fr14": [
+   [
+    "fr",
+    "Le | ɹ ˈ i ː d | | m ˌ i ː | dit N P M | ɪ n s t ˈ ɔ ː l |, mais on utilise P N P M partout depuis la version quatre."
+   ]
+  ],
+  "fr15": [
+   [
+    "fr",
+    "J'ai approuvé la | p ˈ ʊ l | | ɹ ɪ k w ˈ ɛ s t |, il manque juste un test | ˈ ɛ n d t ʊ ˈ ɛ n d | sur le | l ˈ ɑ ː ɡ ɪ n |."
+   ]
+  ],
+  "fr16": [
+   [
+    "fr",
+    "Le | k l ˈ ʌ s t ɚ | tourne sur a double-vé èss en | ˈ i ː | | j ˈ u ː | | w ˈ ɛ s t | | θ ɹ ˈ i ː |, avec trois nœuds et douze Go de rame chacun."
+   ]
+  ],
+  "fr17": [
+   [
+    "fr",
+    "J'ai | m ˈ ɜ ː d ʒ d | la branche sur | ɡ ˈ ɪ t | | l ˈ æ b |, le | d ɪ p l ˈ ɔ ɪ | part en prod après la | ɹ ɪ v j ˈ u ː |."
+   ]
+  ],
+  "en01": [
+   [
+    "en",
+    "I pushed the rollout to Thursday, and the feature flag stays off in staging."
+   ]
+  ],
+  "en02": [
+   [
+    "en",
+    "The Live Kit sidecar returns a five oh two whenever the Kubernetes pod restarts."
+   ]
+  ],
+  "en03": [
+   [
+    "en",
+    "Our P ninety-five latency went from one hundred and eighty to four hundred and twenty milliseconds since version two point three point one."
+   ]
+  ],
+  "en04": [
+   [
+    "en",
+    "Argo C D synced the wrong branch, so I rolled it back by hand."
+   ]
+  ]
+ },
+ "ipaspans": {
+  "fr01": [
+   [
+    "fr",
+    "J'ai repoussé le"
+   ],
+   [
+    "en",
+    "| ɹ ˈ o ʊ l a ʊ t |"
+   ],
+   [
+    "fr",
+    "à jeudi, le"
+   ],
+   [
+    "en",
+    "| f ˈ i ː t ʃ ɚ | | f l ˈ æ ɡ |"
+   ],
+   [
+    "fr",
+    "reste coupé en"
+   ],
+   [
+    "en",
+    "| s t ˈ e ɪ d ʒ ɪ ŋ |"
+   ]
+  ],
+  "fr02": [
+   [
+    "fr",
+    "Le"
+   ],
+   [
+    "en",
+    "| s ˈ a ɪ d k ɑ ː ɹ | | l ˈ a ɪ v | | k ˈ ɪ t |"
+   ],
+   [
+    "fr",
+    "renvoie des cinq cent deux dès que le pod"
+   ],
+   [
+    "en",
+    "| k j ˈ u ː b ɚ n ˌ i ː t s |"
+   ],
+   [
+    "fr",
+    "redémarre."
+   ]
+  ],
+  "fr03": [
+   [
+    "fr",
+    "Alice a écrit dans la"
+   ],
+   [
+    "en",
+    "| m ˈ ɜ ː d ʒ | | ɹ ɪ k w ˈ ɛ s t |"
+   ],
+   [
+    "fr",
+    "je cite,"
+   ],
+   [
+    "en",
+    "ship it and we'll fix it later."
+   ]
+  ],
+  "fr04": [
+   [
+    "fr",
+    "La latence pé quatre-vingt-quinze est passée de cent quatre-vingts à quatre cent vingt millisecondes depuis la version deux point trois point un."
+   ]
+  ],
+  "fr05": [
+   [
+    "en",
+    "| ˈ ɑ ː ɹ ɡ o ʊ | | s ˈ i ː | | d ˈ i ː |"
+   ],
+   [
+    "fr",
+    "a synchronisé la mauvaise branche, donc j'ai fait un"
+   ],
+   [
+    "en",
+    "| ɹ ˈ o ʊ l b æ k |"
+   ],
+   [
+    "fr",
+    "à la main."
+   ]
+  ],
+  "fr06": [
+   [
+    "fr",
+    "On a sorti trois tickets du"
+   ],
+   [
+    "en",
+    "| b ˈ æ k l ɑ ː ɡ |"
+   ],
+   [
+    "fr",
+    "pour ce"
+   ],
+   [
+    "en",
+    "| s p ɹ ˈ ɪ n t |"
+   ],
+   [
+    "fr",
+    "dont le"
+   ],
+   [
+    "en",
+    "| f ˈ ɪ k s |"
+   ],
+   [
+    "fr",
+    "sur l'"
+   ],
+   [
+    "en",
+    "| ˈ o ʊ | | ˈ ɔ ː θ |"
+   ]
+  ],
+  "fr07": [
+   [
+    "fr",
+    "Bob, tu peux relancer le"
+   ],
+   [
+    "en",
+    "| p ˈ a ɪ p l a ɪ n |"
+   ],
+   [
+    "fr",
+    "cé i avant le"
+   ],
+   [
+    "en",
+    "| k ˈ o ʊ d | | f ɹ ˈ i ː z |"
+   ],
+   [
+    "fr",
+    "de vendredi ?"
+   ]
+  ],
+  "fr08": [
+   [
+    "fr",
+    "J'ai mis un"
+   ],
+   [
+    "en",
+    "| ɹ ˈ i ː t ɹ a ɪ |"
+   ],
+   [
+    "fr",
+    "avec un"
+   ],
+   [
+    "en",
+    "| b ˈ æ k ɔ f |"
+   ],
+   [
+    "fr",
+    "exponentiel sur le"
+   ],
+   [
+    "en",
+    "| w ˈ ɛ b h ʊ k | | ɡ ˈ ɪ t | | h ˈ ʌ b |"
+   ]
+  ],
+  "fr09": [
+   [
+    "fr",
+    "Le"
+   ],
+   [
+    "en",
+    "| h ˈ ɛ l θ | | t ʃ ˈ ɛ k |"
+   ],
+   [
+    "fr",
+    "du"
+   ],
+   [
+    "en",
+    "| l ˈ o ʊ d | | b ˈ æ l ə n s ɚ |"
+   ],
+   [
+    "fr",
+    "échoue, le"
+   ],
+   [
+    "en",
+    "| ˈ ɛ n d p ɔ ɪ n t |"
+   ],
+   [
+    "fr",
+    "renvoie une quatre cent quatre."
+   ]
+  ],
+  "fr10": [
+   [
+    "fr",
+    "Le èss èl o de quatre-vingt-dix-neuf virgule neuf pour cent tient, mais l'"
+   ],
+   [
+    "en",
+    "| ˈ ɛ ɹ ɚ | | b ˈ ʌ d ʒ ɪ t |"
+   ],
+   [
+    "fr",
+    "fond trop vite cette semaine."
+   ]
+  ],
+  "fr11": [
+   [
+    "fr",
+    "Comme dit Dana,"
+   ],
+   [
+    "en",
+    "it's not a bug, it's a feature,"
+   ],
+   [
+    "fr",
+    "mais là c'est un vrai bug."
+   ]
+  ],
+  "fr12": [
+   [
+    "fr",
+    "On passe de"
+   ],
+   [
+    "en",
+    "| p ˈ o ʊ s t ɡ ɚ z |"
+   ],
+   [
+    "fr",
+    "quinze à dix-sept et on garde"
+   ],
+   [
+    "en",
+    "| ɹ ɪ d ˈ i z |"
+   ],
+   [
+    "fr",
+    "pour le cache."
+   ]
+  ],
+  "fr13": [
+   [
+    "fr",
+    "Le"
+   ],
+   [
+    "en",
+    "| k ə n ˈ ɛ ɹ i |"
+   ],
+   [
+    "fr",
+    "à dix pour cent est vert, j'ouvre le trafic à cinquante pour cent demain matin."
+   ]
+  ],
+  "fr14": [
+   [
+    "fr",
+    "Le"
+   ],
+   [
+    "en",
+    "| ɹ ˈ i ː d | | m ˌ i ː |"
+   ],
+   [
+    "fr",
+    "dit N P M"
+   ],
+   [
+    "en",
+    "| ɪ n s t ˈ ɔ ː l |"
+   ],
+   [
+    "fr",
+    "mais on utilise P N P M partout depuis la version quatre."
+   ]
+  ],
+  "fr15": [
+   [
+    "fr",
+    "J'ai approuvé la"
+   ],
+   [
+    "en",
+    "| p ˈ ʊ l | | ɹ ɪ k w ˈ ɛ s t |"
+   ],
+   [
+    "fr",
+    "il manque juste un test"
+   ],
+   [
+    "en",
+    "| ˈ ɛ n d t ʊ ˈ ɛ n d |"
+   ],
+   [
+    "fr",
+    "sur le"
+   ],
+   [
+    "en",
+    "| l ˈ ɑ ː ɡ ɪ n |"
+   ]
+  ],
+  "fr16": [
+   [
+    "fr",
+    "Le"
+   ],
+   [
+    "en",
+    "| k l ˈ ʌ s t ɚ |"
+   ],
+   [
+    "fr",
+    "tourne sur a double-vé èss en"
+   ],
+   [
+    "en",
+    "| ˈ i ː | | j ˈ u ː | | w ˈ ɛ s t | | θ ɹ ˈ i ː |"
+   ],
+   [
+    "fr",
+    "avec trois nœuds et douze Go de rame chacun."
+   ]
+  ],
+  "fr17": [
+   [
+    "fr",
+    "J'ai"
+   ],
+   [
+    "en",
+    "| m ˈ ɜ ː d ʒ d |"
+   ],
+   [
+    "fr",
+    "la branche sur"
+   ],
+   [
+    "en",
+    "| ɡ ˈ ɪ t | | l ˈ æ b |"
+   ],
+   [
+    "fr",
+    "le"
+   ],
+   [
+    "en",
+    "| d ɪ p l ˈ ɔ ɪ |"
+   ],
+   [
+    "fr",
+    "part en prod après la"
+   ],
+   [
+    "en",
+    "| ɹ ɪ v j ˈ u ː |"
+   ]
+  ],
+  "en01": [
+   [
+    "en",
+    "I pushed the rollout to Thursday, and the feature flag stays off in staging."
+   ]
+  ],
+  "en02": [
+   [
+    "en",
+    "The Live Kit sidecar returns a five oh two whenever the Kubernetes pod restarts."
+   ]
+  ],
+  "en03": [
+   [
+    "en",
+    "Our P ninety-five latency went from one hundred and eighty to four hundred and twenty milliseconds since version two point three point one."
+   ]
+  ],
+  "en04": [
+   [
+    "en",
+    "Argo C D synced the wrong branch, so I rolled it back by hand."
+   ]
+  ]
+ }
+}
