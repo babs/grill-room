@@ -872,6 +872,9 @@ CREATE TABLE blocked_requests (
 	pending_error TEXT NOT NULL DEFAULT ''
 );
 CREATE UNIQUE INDEX blocked_requests_open ON blocked_requests(room_id, domain) WHERE decision = '';
+`, `
+-- 014: the host or a delegated admin put a blocked website aside; its next refusal raises it again.
+ALTER TABLE blocked_requests ADD COLUMN dismissed_by TEXT NOT NULL DEFAULT '';
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -1541,7 +1544,8 @@ const (
 	messageFields = `id, ts, room_id, kind, COALESCE(participant_id, 0), sender, body, COALESCE(html, ''), model, edited_at, deleted_at, change_seq,
 		COALESCE(persona_id, 0), effort, COALESCE((SELECT badge FROM room_personas WHERE id = messages.persona_id), ''),
 		COALESCE((SELECT colour FROM room_personas WHERE id = messages.persona_id), ''), req_model, req_effort, model_note, model_mismatch, COALESCE(turn_id, 0), COALESCE(source, ''),
-		(SELECT json_object('domain', domain, 'persona', persona, 'count', count, 'decision', decision, 'pending', pending_scope, 'error', pending_error)
+		(SELECT json_object('domain', domain, 'persona', persona, 'count', count, 'decision', decision, 'pending', pending_scope, 'error', pending_error,
+			'dismissed_by', dismissed_by)
 			FROM blocked_requests WHERE message_id = messages.id)`
 	messageCols = `SELECT ` + messageFields + ` FROM messages `
 )

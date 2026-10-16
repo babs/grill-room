@@ -410,9 +410,8 @@
       <p id="chat-invite-status" class="said" role="status"></p>
     </div>
     <form id="send">
-      <ul id="mention-list" role="listbox" aria-label="Mention" hidden></ul>
-      <textarea id="body" rows="2" maxlength="4000" placeholder="Message the room · @ to mention" aria-label="Message" aria-describedby="send-hint"
-        aria-autocomplete="list" aria-controls="mention-list" aria-expanded="false"></textarea>
+      <ul id="mention-list" class="mention-list" role="listbox" aria-label="Mention" hidden></ul>
+      <textarea id="body" rows="2" maxlength="4000" placeholder="Message the room · @ to mention" aria-label="Message" aria-describedby="send-hint"></textarea>
       <button type="submit" class="btn-icon" aria-label="Send" data-tip="Send" data-icon="send"></button>
       <p id="send-hint" class="hint" hidden>Enter sends, Shift+Enter adds a line.</p>
     </form>

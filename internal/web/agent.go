@@ -69,6 +69,9 @@ type agentState struct {
 	// Connectors are the claude.ai connectors the host turned on for the room, as their app last
 	// said; none while it is offline (014-AC19).
 	Connectors []roomConnector `json:"connectors"`
+	// BlockedRequests are the websites a turn was refused that wait for the AI host, one per
+	// domain: the banner (014-AC9).
+	BlockedRequests []store.BlockedRequest `json:"blocked_requests"`
 }
 
 // mentionStates bounds the mentions the agent state carries.
@@ -192,6 +195,9 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 	}
 	st.CapRequests = capRequests(host, st.Personas)
 	if st.Changes, err = s.bus.Store.PersonaChanges(ctx, room); err != nil {
+		return nil, err
+	}
+	if st.BlockedRequests, err = s.bus.Store.BlockedRequests(ctx, room); err != nil {
 		return nil, err
 	}
 	if st.RoomSkills, err = s.bus.Store.RoomSkills(ctx, room); err != nil {

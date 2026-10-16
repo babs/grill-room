@@ -20,6 +20,61 @@ type Blocked struct {
 	Decision string `json:"decision"`
 	Pending  string `json:"pending,omitempty"`
 	Error    string `json:"error,omitempty"`
+	// DismissedBy names who put it aside, undecided; its next refusal clears it.
+	DismissedBy string `json:"dismissed_by,omitempty"`
+}
+
+// BlockedRequest is a website a turn was refused that still waits for the AI host: the banner's
+// entry, one per domain (014-AC9).
+type BlockedRequest struct {
+	MessageID int64 `json:"message_id"`
+	Blocked
+}
+
+// BlockedRequests lists room's undecided, undismissed blocked websites, oldest first.
+func (s *Store) BlockedRequests(ctx context.Context, roomID string) ([]BlockedRequest, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT message_id, domain, persona, count, pending_scope, pending_error FROM blocked_requests
+		WHERE room_id = ? AND decision = '' AND dismissed_by = '' ORDER BY message_id`, roomID)
+	if err != nil {
+		return nil, fmt.Errorf("blocked requests: %w", err)
+	}
+	defer rows.Close()
+	out := []BlockedRequest{}
+	for rows.Next() {
+		var b BlockedRequest
+		if err := rows.Scan(&b.MessageID, &b.Domain, &b.Persona, &b.Count, &b.Pending, &b.Error); err != nil {
+			return nil, fmt.Errorf("blocked requests: %w", err)
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// DismissBlocked puts room's undecided blocked line id aside for by, the line saying so; the next
+// refusal of its website raises it again. ErrDecided for a line decided or waiting for the host's app.
+func (s *Store) DismissBlocked(ctx context.Context, roomID string, id int64, by *Participant) (*Message, error) {
+	var m *Message
+	err := s.withTx(ctx, "dismiss blocked", func(tx *sql.Tx) error {
+		var persona, domain string
+		var count int
+		err := tx.QueryRowContext(ctx, `SELECT persona, domain, count FROM blocked_requests
+			WHERE message_id = ? AND room_id = ? AND decision = '' AND pending_scope = '' AND dismissed_by = ''`, id, roomID).Scan(&persona, &domain, &count)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrDecided
+		}
+		if err != nil {
+			return fmt.Errorf("dismiss blocked: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE blocked_requests SET dismissed_by = ? WHERE message_id = ?`, by.Name, id); err != nil {
+			return fmt.Errorf("dismiss blocked: %w", err)
+		}
+		if err := touchMessage(ctx, tx, roomID, id, blockedBody(persona, domain, count)+"; "+by.Name+" dismissed it"); err != nil {
+			return err
+		}
+		m, err = scanMessage(tx.QueryRowContext(ctx, messageCols+`WHERE id = ?`, id))
+		return err
+	})
+	return m, err
 }
 
 // Egress scopes: the room's own list, or the AI host's server list, every room of it.
@@ -108,7 +163,7 @@ func (s *Store) RecordBlocked(ctx context.Context, roomID, persona string, domai
 				if err := tx.QueryRowContext(ctx, `SELECT persona FROM blocked_requests WHERE message_id = ?`, id).Scan(&first); err != nil {
 					return fmt.Errorf("record blocked: %w", err)
 				}
-				if _, err := tx.ExecContext(ctx, `UPDATE blocked_requests SET count = count + 1 WHERE message_id = ?`, id); err != nil {
+				if _, err := tx.ExecContext(ctx, `UPDATE blocked_requests SET count = count + 1, dismissed_by = '' WHERE message_id = ?`, id); err != nil {
 					return fmt.Errorf("record blocked: %w", err)
 				}
 				if err := touchMessage(ctx, tx, roomID, id, blockedBody(first, d, count+1)); err != nil {

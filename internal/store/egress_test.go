@@ -255,3 +255,49 @@ func TestConnectorChanged(t *testing.T) {
 		t.Fatalf("bad kind: %v", err)
 	}
 }
+
+// 014-AC9: the banner lists the undecided websites, one per domain, the pending one included; a
+// dismissed one leaves it, with a note on its line, and its next refusal raises it again; a decided
+// one is gone.
+func TestBlockedRequests(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	seed(t, s, "a")
+	alice := participantNamed(t, s, "a", "Alice")
+	lines, err := s.RecordBlocked(ctx, "a", "Grill", []string{"example.com", "docs.rs", "jazk.in"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RecordBlocked(ctx, "a", "Grill", []string{"jazk.in"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RequestAllow(ctx, "a", lines[0].ID, EgressRoom, alice); err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.DismissBlocked(ctx, "a", lines[1].ID, alice)
+	if err != nil || m.Body != "Grill tried to reach docs.rs (blocked); Alice dismissed it" || m.Blocked.DismissedBy != "Alice" {
+		t.Fatalf("dismiss = %+v %v", m, err)
+	}
+	if _, err := s.DismissBlocked(ctx, "a", lines[1].ID, alice); !errors.Is(err, ErrDecided) {
+		t.Fatalf("dismiss twice: %v", err)
+	}
+	if _, err := s.DismissBlocked(ctx, "a", lines[0].ID, alice); !errors.Is(err, ErrDecided) {
+		t.Fatalf("dismiss a pending approval: %v", err)
+	}
+	got, err := s.BlockedRequests(ctx, "a")
+	if err != nil || len(got) != 2 || got[0].Domain != "example.com" || got[0].Pending != EgressRoom || got[1].Domain != "jazk.in" || got[1].Count != 2 || got[1].MessageID != lines[2].ID {
+		t.Fatalf("requests = %+v %v", got, err)
+	}
+	if _, err := s.RecordBlocked(ctx, "a", "Grill", []string{"docs.rs"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.BlockedRequests(ctx, "a"); len(got) != 3 {
+		t.Fatalf("a dismissed website refused again: %+v", got)
+	}
+	if _, err := s.ConfirmAllow(ctx, "a", lines[0].ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.BlockedRequests(ctx, "a"); len(got) != 2 {
+		t.Fatalf("after a decision: %+v", got)
+	}
+}

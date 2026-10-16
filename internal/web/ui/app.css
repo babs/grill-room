@@ -413,6 +413,8 @@ body.docs-window #chat-fold, body.docs-window #chat-unfold { display: none; }
 .msg .versions time { margin-right: var(--sp-1); }
 .msg form.edit { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 .msg form.edit textarea { flex: 1 1 100%; }
+/* In flow: an absolute list would be clipped by the scrolling #messages. */
+.msg form.edit .mention-list { position: static; flex: 1 1 100%; }
 .msg.system { color: var(--text-muted); font-size: var(--fs-sm); font-style: italic; }
 .msg.system.blocked .blocked-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); font-style: normal; }
 .msg.system.blocked .blocked-actions button { padding: 2px var(--sp-2); font-size: var(--fs-sm); }
@@ -434,11 +436,11 @@ mark.mention-chip.me { background: var(--accent); color: var(--on-accent); }
 #send { position: relative; display: flex; flex-wrap: wrap; align-items: end; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--border); }
 #send textarea { flex: 1; resize: vertical; }
 #send-hint { flex-basis: 100%; margin: 0; }
-#mention-list { position: absolute; bottom: 100%; left: var(--sp-4); z-index: var(--z-dropdown); max-height: 14rem; min-width: 12rem; overflow-y: auto; margin: 0; padding: var(--sp-1) 0;
+.mention-list { position: absolute; bottom: 100%; left: var(--sp-4); z-index: var(--z-dropdown); max-height: 14rem; min-width: 12rem; overflow-y: auto; margin: 0; padding: var(--sp-1) 0;
   list-style: none; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--sh-2); }
-#mention-list li { display: flex; align-items: center; min-height: 44px; padding: 0 var(--sp-3); cursor: pointer; }
-#mention-list li[aria-selected=true] { background: var(--info-bg); }
-#mention-list .kind { margin-left: var(--sp-2); font-size: var(--fs-xs); color: var(--text-muted); }
+.mention-list li { display: flex; align-items: center; min-height: 44px; padding: 0 var(--sp-3); cursor: pointer; }
+.mention-list li[aria-selected=true] { background: var(--info-bg); }
+.mention-list .kind { margin-left: var(--sp-2); font-size: var(--fs-xs); color: var(--text-muted); }
 
 /* The name stays in the button's accessible name when only the initials show. */
 #me .who { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
