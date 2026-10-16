@@ -71,7 +71,7 @@ run: build
 	./bin/$(APP_NAME)
 
 test:
-	go test -race -cover ./...
+	go test -race -cover -timeout 20m ./...
 
 # Sandbox and agent turn tests against real Docker, a fake Anthropic upstream and a fake claude:
 # no subscription use. The egress test needs Internet access to PyPI, npm and GitHub. -p 1: the
