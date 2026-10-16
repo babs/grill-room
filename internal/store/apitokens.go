@@ -25,12 +25,14 @@ var ErrTokenExpired = errors.New("token expired")
 
 // APIToken is a personal API token as its owner lists it: never the token, never its hash.
 type APIToken struct {
-	ID        int64      `json:"id"`
-	ProfileID int64      `json:"-"`
-	Name      string     `json:"name"`
-	Scope     string     `json:"scope"`
-	CreatedAt time.Time  `json:"created_at"`
-	ExpiresAt *time.Time `json:"expires_at"`
+	ID        int64 `json:"id"`
+	ProfileID int64 `json:"-"`
+	// ProfileUUID names the profile in the audit log.
+	ProfileUUID string     `json:"-"`
+	Name        string     `json:"name"`
+	Scope       string     `json:"scope"`
+	CreatedAt   time.Time  `json:"created_at"`
+	ExpiresAt   *time.Time `json:"expires_at"`
 	// LastUsedAt and LastUsedIP are the owner's to see (012-AC9); the purge clears the IP.
 	LastUsedAt *time.Time `json:"last_used_at"`
 	LastUsedIP string     `json:"last_used_ip,omitempty"`
@@ -57,13 +59,13 @@ func msTime(ms sql.NullInt64) *time.Time {
 	return &t
 }
 
-const apiTokenCols = `id, profile_id, name, scope, created_at, expires_at_ms, last_used_at_ms, COALESCE(last_used_ip, '')` //nolint:gosec // G101: column names, no credential
+const apiTokenCols = `id, profile_id, (SELECT COALESCE(uuid, '') FROM profiles WHERE id = profile_id), name, scope, created_at, expires_at_ms, last_used_at_ms, COALESCE(last_used_ip, '')` //nolint:gosec // G101: column names, no credential
 
 func scanAPIToken(sc interface{ Scan(...any) error }) (*APIToken, error) {
 	var t APIToken
 	var created string
 	var expires, used sql.NullInt64
-	if err := sc.Scan(&t.ID, &t.ProfileID, &t.Name, &t.Scope, &created, &expires, &used, &t.LastUsedIP); err != nil {
+	if err := sc.Scan(&t.ID, &t.ProfileID, &t.ProfileUUID, &t.Name, &t.Scope, &created, &expires, &used, &t.LastUsedIP); err != nil {
 		return nil, err
 	}
 	t.CreatedAt, t.ExpiresAt, t.LastUsedAt = parseTS(created), msTime(expires), msTime(used)

@@ -488,6 +488,13 @@ func newRegistry(b *bus.Bus, srv *web.Server) *prometheus.Registry {
 			Help: "Full workspace fetches by daemons that keep a workspace cache.", ConstLabels: prometheus.Labels{"reason": reason}},
 			func() float64 { return float64(srv.WorkspaceFallbacks(reason)) }))
 	}
+	for _, tool := range web.MCPTools() {
+		for _, result := range web.MCPResults {
+			reg.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_mcp_tool_calls_total",
+				Help: "MCP tool calls, by tool and result: ok, error (a refusal the agent reads) or server_error.", ConstLabels: prometheus.Labels{"tool": tool, "result": result}},
+				func() float64 { return float64(srv.MCPToolCalls(tool, result)) }))
+		}
+	}
 	for _, outcome := range web.ConflictOutcomes {
 		reg.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_turn_conflicts_total",
 			Help: "Turn results rejected because a document they edit changed during the turn.", ConstLabels: prometheus.Labels{"outcome": outcome}},

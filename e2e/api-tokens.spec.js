@@ -33,6 +33,12 @@ for (const [vp, size] of Object.entries(sizes)) {
     const token = await value.getAttribute('data-value');
     expect(token).toMatch(/^grt_[A-Z2-7]{26}$/);
     await expect(sheet.locator('#token-curl .value')).toHaveAttribute('data-value', new RegExp(`Bearer ${token}" https?://`));
+    // 012-AC22: the Claude Code command, with the public URL and the token, copies whole.
+    const command = `claude mcp add --transport http grill-room ${new URL(page.url()).origin}/mcp --header "Authorization: Bearer ${token}"`;
+    const mcpValue = sheet.locator('#token-mcp .value');
+    await expect(mcpValue).toHaveAttribute('data-value', command);
+    await mcpValue.getByRole('button', { name: 'Copy the Claude Code command' }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(command);
     await value.getByRole('button', { name: 'Copy the token' }).click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(token);
     expect(await noOverflow(page)).toEqual([]);

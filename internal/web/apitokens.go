@@ -102,7 +102,8 @@ func (s *Server) tokenGate(mux *http.ServeMux) http.Handler {
 		case cookieOnly[pattern]:
 			httpError(w, http.StatusForbidden, msgTokenCookie)
 			return
-		case t.Scope == store.ScopeRead && r.Method != http.MethodGet && r.Method != http.MethodHead:
+		// /mcp is POST for every call; its sub-requests come back through here with the token.
+		case t.Scope == store.ScopeRead && r.Method != http.MethodGet && r.Method != http.MethodHead && pattern != "POST /mcp":
 			httpError(w, http.StatusForbidden, msgTokenReadOnly)
 			return
 		}

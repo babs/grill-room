@@ -319,6 +319,7 @@ function openTokenSheet() {
 // The plaintext leaves the page with the sheet: it lives nowhere else.
 tokenSheet.addEventListener('close', () => {
   $('token-value').replaceChildren();
+  $('token-mcp').replaceChildren();
   $('token-curl').replaceChildren();
 });
 // A press outside closes it as every sheet does (005-AC13), but not over a token not yet copied.
@@ -339,6 +340,8 @@ $('token-form').addEventListener('submit', async (e) => {
     if (res.ok) {
       $('token-sheet-title').textContent = 'Token "' + data.name + '" created';
       $('token-value').replaceChildren(value(data.token, 'token'));
+      // 012-AC22: pasted as is, it adds the server at Claude Code's default scope.
+      $('token-mcp').replaceChildren(value('claude mcp add --transport http grill-room ' + serverURL + '/mcp --header "Authorization: Bearer ' + data.token + '"', 'Claude Code command'));
       $('token-curl').replaceChildren(value('curl -H "Authorization: Bearer ' + data.token + '" ' + serverURL + '/api/profile', 'curl command'));
       $('token-form').hidden = true;
       $('token-made').hidden = false;

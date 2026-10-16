@@ -146,7 +146,7 @@ const actionLabels = {
   'profile.recovery_link_used': 'Recovery link used', 'profile.merge': 'Profiles merged', 'profile.purge': 'Empty profiles deleted',
   'profile.max_rooms': 'Room limit set', 'template.remove': 'Persona template removed', 'skill.remove': 'Shared skill removed',
   'starter.publish': 'Starter shared', 'starter.delete': 'Starter removed', 'instance.settings': 'Server settings changed',
-  'api_token.create': 'API token created', 'api_token.revoke': 'API token revoked',
+  'api_token.create': 'API token created', 'api_token.revoke': 'API token revoked', 'persona.remove': 'Persona removed',
   'admin.login': 'Admin signed in', 'admin.logout': 'Admin signed out', 'admin.session_revoke': 'Admin session revoked',
 };
 /** @param {string} a */

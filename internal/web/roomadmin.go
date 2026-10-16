@@ -28,6 +28,8 @@ const (
 	ActionDocumentDelete  = "document.delete"
 	ActionDocumentRestore = "document.restore"
 	ActionHostTransfer    = "room.host_transfer"
+	// ActionPersonaRemove is audited for API token calls only (012-AC20).
+	ActionPersonaRemove = "persona.remove"
 )
 
 // maxStorageQuota bounds the instance storage quota: 1 PiB.
@@ -73,20 +75,24 @@ func (s *Server) asRoomAdmin(w http.ResponseWriter, r *http.Request, sess *sessi
 }
 
 // roomAuditing is auditing for an action on room: by the super-admin when sess is nil, by the
-// member's profile when sess was checked as a room admin, and not audited otherwise: a plain
-// member's own invites are no admin action.
+// member's profile when sess was checked as a room admin or came with an API token (012-AC20), and
+// not audited otherwise: a plain member's own invites are no admin action.
 func (s *Server) roomAuditing(r *http.Request, sess *session, action, room string, details map[string]any) context.Context {
 	if sess == nil {
 		return s.auditing(r, action, store.TargetRoom, room, "", details)
 	}
-	if sess.adminUUID == "" {
+	uuid := sess.adminUUID
+	if t := apiTokenOf(r); uuid == "" && t != nil {
+		uuid = t.ProfileUUID
+	}
+	if uuid == "" {
 		return r.Context()
 	}
 	if details == nil {
 		details = map[string]any{}
 	}
 	details["as"], details["participant"] = sess.p.Name, sess.p.ID
-	e := store.AuditEntry{At: s.now(), Actor: ActorProfile + sess.adminUUID, Action: action, TargetKind: store.TargetRoom, TargetID: room}
+	e := store.AuditEntry{At: s.now(), Actor: ActorProfile + uuid, Action: action, TargetKind: store.TargetRoom, TargetID: room}
 	return store.WithAudit(r.Context(), e, details)
 }
 

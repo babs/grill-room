@@ -124,8 +124,12 @@ type Server struct {
 	voiceRecent recentLines
 	// voiceLines and voiceDeduped count the voice lines stored and dropped, by VoiceSources.
 	voiceLines, voiceDeduped map[string]*atomic.Int64
-	// routes are the patterns Handler registered.
-	routes []string
+	// routes are the patterns Handler registered; mux routes them and gate is the token gate in
+	// front of it, which MCP tools send their sub-requests through.
+	routes   []string
+	mux      *http.ServeMux
+	gate     http.Handler
+	mcpCalls mcpCounters
 }
 
 // New builds a server. adminHash is HashToken of the admin token; baseURL prefixes invite links.
@@ -167,7 +171,7 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 		afterFunc: func(d time.Duration, f func()) { time.AfterFunc(d, f) },
 		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}, pushClient: opts.PushClient,
 		pluginFetches: make(chan struct{}, maxPluginFetches), pluginRooms: map[string]bool{},
-		voiceRecent: recentLines{}, voiceLines: sourceCounters(), voiceDeduped: sourceCounters()}
+		voiceRecent: recentLines{}, voiceLines: sourceCounters(), voiceDeduped: sourceCounters(), mcpCalls: newMCPCounters()}
 	s.device = loadDeviceSTT(opts, log)
 	s.cleanStaging()
 	return s
@@ -317,6 +321,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PATCH /api/rooms/{room}/messages/{msg}", s.participant(s.editMessage))
 	mux.Handle("DELETE /api/rooms/{room}/messages/{msg}", s.participant(s.deleteMessage))
 	mux.Handle("GET /api/rooms/{room}/messages/{msg}/versions", s.participant(s.messageVersions))
+	mux.Handle("GET /api/rooms/{room}/messages", s.participant(s.listMessages))
 	mux.Handle("GET /api/rooms/{room}/events", s.participant(s.events))
 	mux.Handle("POST /api/rooms/{room}/presence", s.participant(s.postPresence))
 	mux.Handle("GET /api/rooms/{room}/push", s.participant(s.getPush))
@@ -331,6 +336,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rooms/{room}/documents/deleted", s.memberOrAdmin(s.deletedDocuments))
 	mux.Handle("GET /api/rooms/{room}/documents/{doc}/view", s.participant(s.viewDocument))
 	mux.Handle("GET /api/rooms/{room}/documents/{doc}/original", s.participant(s.originalDocument))
+	mux.Handle("GET /api/rooms/{room}/documents/{doc}/text", s.participant(s.documentText))
 	mux.Handle("GET /api/rooms/{room}/documents/{doc}/annotations", s.participant(s.listAnnotations))
 	mux.Handle("POST /api/rooms/{room}/documents/{doc}/annotations", s.participant(s.createAnnotation))
 	mux.Handle("POST /api/rooms/{room}/annotations/{ann}/messages", s.participant(s.postAnnotationMessage))
@@ -402,11 +408,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/stt/rooms/{room}/prompt", s.sttAuth(s.sttPromptFor))
 	mux.Handle("GET /api/rooms/{room}/glossary", s.participant(s.getGlossary))
 	mux.Handle("PUT /api/rooms/{room}/glossary", s.participant(s.putGlossary))
+	mux.Handle("POST /mcp", s.mcpHandler())
 	if e2eRoutes != nil {
 		e2eRoutes(s, mux.ServeMux)
 	}
-	s.routes = mux.patterns
-	gate := s.tokenGate(mux.ServeMux)
+	s.routes, s.mux = mux.patterns, mux.ServeMux
+	s.gate = s.tokenGate(mux.ServeMux)
+	gate := s.gate
 
 	csp := "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" + s.connectSrc()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
