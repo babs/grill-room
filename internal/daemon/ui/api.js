@@ -16,7 +16,9 @@
  *   plugins?: HostPlugin[], fetches?: HostFetch[]}} RoomStatus
  * @typedef {{host: string, version: string, room?: string, pairing: string, code?: string, approve_url?: string,
  *   connection: string, error?: string, docker: Readiness, image: Image, update: Update, can_host: boolean, reason?: string,
- *   settings: Settings, allowlist: string[], rooms?: RoomStatus[]}} Status
+ *   settings: Settings, allowlist: string[], egress?: EgressState, rooms?: RoomStatus[]}} Status
+ * @typedef {{domain: string, by?: string, at?: string}} AllowEntry
+ * @typedef {{all_websites: boolean, local_network: boolean, server: AllowEntry[], rooms?: Record<string, AllowEntry[]>}} EgressState
  * @typedef {{uptime_seconds: number, turns: number, failed_turns: number, heap_bytes: number, goroutines: number}} Metrics
  * @typedef {{id: string, url: string, rooms: string[], state: string, error?: string, pid?: number, proto?: number,
  *   restarts: number, version?: string, trust?: string, accept_unsigned: boolean, account: string,
@@ -34,7 +36,7 @@
  * @typedef {{kind: string, text: string}} Alert
  * @typedef {{status: Status, logs: string[], models: string[], efforts: string[], instances?: Instance[], instance?: string,
  *   autostart?: boolean, trust?: Trust, accounts?: Account[], concurrency?: Concurrency, retention_days?: number,
- *   alerts?: Alert[]}} StatusReply
+ *   alerts?: Alert[], anthropic_docs?: string[]}} StatusReply
  * @typedef {{host: string, time: string}} Denied
  * @typedef {{id: number, at: string, day: string, instance: string, room: string, turn_id: number, persona: string,
  *   account: string, asked_model: string, asked_effort: string, model: string, model_note?: string,

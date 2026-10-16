@@ -88,7 +88,7 @@ func checkMigrated(t *testing.T, p Paths, account string, a1, a2, b1 Room) {
 		if s, err := LoadSettings(filepath.Join(p.InstanceConfig(id), "settings.json"), Settings{}); err != nil || s.MaxModel != "sonnet" {
 			t.Errorf("settings of %s: %+v %v", id, s, err)
 		}
-		if l, err := LoadAllowlist(filepath.Join(p.InstanceConfig(id), "allowlist.json")); err != nil || !slices.Equal(l, []string{"pypi.org"}) {
+		if l, err := LoadEgress(filepath.Join(p.InstanceConfig(id), "allowlist.json")); err != nil || !slices.Equal(domains(l.Server), []string{"pypi.org"}) {
 			t.Errorf("allowlist of %s: %v %v", id, l, err)
 		}
 	}

@@ -154,7 +154,11 @@ func TestSupervisorPauseAndRemove(t *testing.T) {
 		t.Fatalf("after remove: %+v, saved %+v %v", in, saved, err)
 	}
 
-	old := testSupervisor(t, strconv.Itoa(Proto-1), nil, withAccounts)
+	// Since protocol 6 a worker before 5 fails the handshake: it never gets this far.
+	if protoRemove-1 < Proto-ProtoSkew {
+		return
+	}
+	old := testSupervisor(t, strconv.Itoa(protoRemove-1), nil, withAccounts)
 	old.SetRoom(context.Background(), room)
 	waitFor(t, "the old worker runs", func() bool { return instance(t, old).State == "running" })
 	if err := old.RemoveRoom(context.Background(), key, false); err == nil || !strings.Contains(err.Error(), "too old") {

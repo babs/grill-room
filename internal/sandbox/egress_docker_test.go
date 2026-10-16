@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -124,7 +125,8 @@ func TestEgressDocker(t *testing.T) {
 	})
 
 	t.Run("refused hosts", func(t *testing.T) {
-		for _, host := range []string{"example.com", "api.anthropic.com", "anthropic.com", "statsig.anthropic.com", "claude.ai", "platform.claude.com"} {
+		for _, host := range []string{"example.com", "api.anthropic.com", "anthropic.com", "statsig.anthropic.com", "claude.ai", "platform.claude.com",
+			"claude.com", "docs.claude.com", "slack.mcp.claude.com", "mcp-proxy.anthropic.com"} {
 			if code := connectCode(t, host); code != "403" {
 				t.Errorf("CONNECT %s through the proxy: %q, want 403", host, code)
 			}
@@ -142,13 +144,72 @@ func TestEgressDocker(t *testing.T) {
 		}
 	})
 
+	// 014-AC6: the docs hosts on the default list get through the Anthropic deny.
+	t.Run("docs hosts", func(t *testing.T) {
+		for _, host := range AnthropicDocs {
+			if code := connectCode(t, host); code != "200" {
+				t.Errorf("CONNECT %s through the proxy: %q, want 200", host, code)
+			}
+		}
+	})
+
+	// 014-AC2 014-AC26: each level, parsed by squid -k parse before it applies (SetPolicy fails
+	// otherwise). nip.io names resolve to the address they spell.
+	t.Run("every website", func(t *testing.T) {
+		start := time.Now()
+		if err := s.SetPolicy(ctx, Policy{Allow: DefaultAllowlist, AllWebsites: true}); err != nil {
+			t.Fatal(err)
+		}
+		waitCode(t, "example.com", "200")
+		for _, host := range []string{"api.anthropic.com", "platform.claude.com", "example.com:22", "1.1.1.1", "[2606:4700:4700::1111]",
+			"127.0.0.1.nip.io", "10.0.0.1.nip.io", "172.16.0.1.nip.io", "192.168.1.1.nip.io", "169.254.169.254.nip.io"} {
+			if code := connectCode(t, host); code != "403" {
+				t.Errorf("every website: CONNECT %s: %q, want 403", host, code)
+			}
+		}
+		if out, _ := sh(t, "curl -s -o /dev/null -m 20 -w '%{http_code}' http://example.com/ || true"); strings.TrimSpace(out) != "403" {
+			t.Errorf("every website: plain HTTP to example.com: %q", out)
+		}
+		if err := s.SetPolicy(ctx, Policy{Allow: DefaultAllowlist, AllWebsites: true, LocalNetwork: true}); err != nil {
+			t.Fatal(err)
+		}
+		waitCode(t, "1.1.1.1", "200")
+		// Nothing listens on the egress container's own 443: squid lets the CONNECT through and fails to connect.
+		if code := connectCode(t, "127.0.0.1"); code == "403" || code == "200" {
+			t.Errorf("local network: CONNECT 127.0.0.1: %q, want a connect failure", code)
+		}
+		for _, host := range []string{"169.254.169.254", "169.254.169.254.nip.io", "api.anthropic.com", "platform.claude.com", "example.com:22"} {
+			if code := connectCode(t, host); code != "403" {
+				t.Errorf("local network: CONNECT %s: %q, want 403", host, code)
+			}
+		}
+		// 014-AC3: the requests since a time come with their verdict.
+		reqs, err := s.Requests(ctx, start)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := map[string]bool{}
+		for _, q := range reqs {
+			seen[q.Host+" "+strconv.FormatBool(q.Allowed)] = true
+		}
+		for _, want := range []string{"example.com true", "1.1.1.1 true", "api.anthropic.com false", "169.254.169.254 false"} {
+			if !seen[want] {
+				t.Errorf("requests since the start lack %q: %v", want, reqs)
+			}
+		}
+		if err := s.SetPolicy(ctx, Policy{Allow: DefaultAllowlist}); err != nil {
+			t.Fatal(err)
+		}
+		waitCode(t, "example.com", "403")
+	})
+
 	t.Run("allowlist change reaches the running proxy", func(t *testing.T) {
-		if err := s.SetAllowlist(ctx, append(slices.Clone(DefaultAllowlist), "example.com")); err != nil {
+		if err := s.SetPolicy(ctx, Policy{Allow: append(slices.Clone(DefaultAllowlist), "example.com")}); err != nil {
 			t.Fatal(err)
 		}
 		waitCode(t, "example.com", "200")
 		// A raw IP whose PTR is under an allowed domain stays refused: no reverse lookup.
-		if err := s.SetAllowlist(ctx, []string{".github.com"}); err != nil {
+		if err := s.SetPolicy(ctx, Policy{Allow: []string{".github.com"}}); err != nil {
 			t.Fatal(err)
 		}
 		waitCode(t, "api.github.com", "200")
@@ -162,7 +223,7 @@ func TestEgressDocker(t *testing.T) {
 		if code := connectCode(t, ips[0]); code != "403" {
 			t.Errorf("CONNECT %s with .github.com allowed: %q, want 403", ips[0], code)
 		}
-		if err := s.SetAllowlist(ctx, DefaultAllowlist); err != nil {
+		if err := s.SetPolicy(ctx, Policy{Allow: DefaultAllowlist}); err != nil {
 			t.Fatal(err)
 		}
 		waitCode(t, "example.com", "403")
@@ -207,7 +268,8 @@ func TestEgressDocker(t *testing.T) {
 	})
 }
 
-// anthropicTunnels counts access log lines where squid let a request to an Anthropic host through.
+// anthropicTunnels counts access log lines where squid let a request to an Anthropic host other
+// than a docs host through.
 func anthropicTunnels(log []byte) int {
 	n := 0
 	for l := range strings.SplitSeq(string(log), "\n") {
@@ -220,7 +282,7 @@ func anthropicTunnels(log []byte) int {
 			host = u.Hostname()
 		}
 		for _, a := range anthropicDomains {
-			if covers(a, host) {
+			if covers(a, host) && !slices.Contains(AnthropicDocs, host) {
 				n++
 			}
 		}

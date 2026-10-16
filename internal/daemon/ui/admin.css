@@ -88,6 +88,10 @@ table.allowlist td { vertical-align: middle; }
 table.allowlist .num { text-align: right; width: 5rem; }
 table.allowlist .act { width: 1%; padding-right: 0; }
 table.allowlist code.domain { overflow-wrap: anywhere; white-space: normal; }
+.egress-switches { max-width: 40rem; margin-top: var(--sp-3); }
+.egress-switches .hint { margin: 0 0 var(--sp-2); }
+.egress-switches .nested { margin-left: var(--sp-5); }
+table.allowlist tr.reached .hint { margin-left: var(--sp-1); }
 
 /* Activity: filters in a grid of their own, labels above (DY1). */
 .filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: var(--sp-2) var(--sp-3); align-items: end; }

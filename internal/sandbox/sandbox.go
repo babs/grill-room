@@ -105,13 +105,13 @@ type Sandbox struct {
 	turn    sync.Mutex
 	mu      sync.Mutex
 	started bool
-	// allow is the egress allowlist the proxy runs with.
-	allow []string
+	// policy is what the egress proxy lets through.
+	policy Policy
 }
 
 // New prepares a sandbox; Start creates it.
 func New(cfg Config, run Runner, log *zap.Logger) *Sandbox {
-	return &Sandbox{cfg: cfg, run: run, log: log, allow: DefaultAllowlist}
+	return &Sandbox{cfg: cfg, run: run, log: log, policy: Policy{Allow: DefaultAllowlist}}
 }
 
 // NewBearer returns a dummy bearer for a sandbox: the bearer-swap proxy knows it, upstream never sees it.
@@ -162,7 +162,7 @@ func (s *Sandbox) Start(ctx context.Context) error {
 		// The local log driver is bounded and readable by docker logs, which the denied list reads.
 		append(append(append([]string{"run", "-d", "--name", s.egress(), "--network", s.egress(), "--log-driver", "local"}, hardening...),
 			limitFlags(s.cfg.Limits.EgressCPUs, s.cfg.Limits.EgressMemory)...),
-			"--tmpfs", "/tmp", "--pids-limit", "64", "-e", "GRILL_SQUID_CONF="+squidConf(s.allow),
+			"--tmpfs", "/tmp", "--pids-limit", "64", "-e", "GRILL_SQUID_CONF="+squidConf(s.policy),
 			"--entrypoint", "sh", s.cfg.Image, "-c", `printf '%s' "$GRILL_SQUID_CONF" > /tmp/squid.conf && exec squid -N -f /tmp/squid.conf`),
 		{"network", "connect", "--alias", "egress", s.network(), s.egress()},
 		append(append([]string{"volume", "create"}, labels...), s.homeVol()),
@@ -511,7 +511,9 @@ func (s *Sandbox) writeStubs(ctx context.Context, bearer string, opts PluginOpti
 	for id, values := range opts.Configs {
 		configs[id] = map[string]any{"options": values}
 	}
-	settings := map[string]any{}
+	// The WebFetch preflight asks api.anthropic.com about each domain: refused, it fails every fetch
+	// (S16). The fetch itself still goes through the egress proxy (014-AC4).
+	settings := map[string]any{"skipWebFetchPreflight": true}
 	if len(configs) > 0 {
 		settings["pluginConfigs"] = configs
 	}

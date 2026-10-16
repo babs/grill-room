@@ -44,9 +44,9 @@ type Options struct {
 	// them, "" to keep them in memory.
 	Settings     Settings
 	SettingsPath string
-	// Allowlist is the egress allowlist at start, nil for the default; AllowlistPath is where the
-	// page saves it, "" to keep it in memory.
-	Allowlist     []string
+	// Egress is the egress policy at start, nil for the default list with both switches off;
+	// AllowlistPath is where the page saves it, "" to keep it in memory.
+	Egress        *EgressState
 	AllowlistPath string
 	// Image pins the sandbox image; empty takes the room server's, or builds the embedded one.
 	Image  string
@@ -93,8 +93,10 @@ type Status struct {
 	CanHost    bool              `json:"can_host"`
 	Reason     string            `json:"reason,omitempty"`
 	Settings   Settings          `json:"settings"`
-	// Allowlist is the domains the sandbox may reach through its egress proxy.
-	Allowlist []string `json:"allowlist"`
+	// Allowlist is the domains every room's sandboxes may reach through their egress proxy, and
+	// Egress the whole policy: the switches and the entries with who added them (014).
+	Allowlist []string    `json:"allowlist"`
+	Egress    EgressState `json:"egress"`
 	// Rooms are every room the daemon serves, by link.
 	Rooms []RoomStatus `json:"rooms,omitempty"`
 }
@@ -199,8 +201,8 @@ func New(o Options) *Daemon {
 	def(&o.PollEvery, 2*time.Second)
 	def(&o.MinBackoff, time.Second)
 	def(&o.MaxBackoff, 30*time.Second)
-	if o.Allowlist == nil {
-		o.Allowlist = slices.Clone(sandbox.DefaultAllowlist)
+	if o.Egress == nil {
+		o.Egress = &EgressState{Server: entriesFor(sandbox.DefaultAllowlist, nil)}
 	}
 	if o.PluginOptions == nil {
 		o.PluginOptions, _ = NewPluginOptions("") // in memory: cannot fail
@@ -208,7 +210,7 @@ func New(o Options) *Daemon {
 	if o.FetchDir == "" {
 		o.FetchDir = os.TempDir()
 	}
-	d := &Daemon{o: o, st: Status{Version: o.Version, Connection: "offline", Settings: o.Settings, Allowlist: o.Allowlist},
+	d := &Daemon{o: o, st: Status{Version: o.Version, Connection: "offline", Settings: o.Settings, Allowlist: domains(o.Egress.Server), Egress: *o.Egress},
 		rooms: map[string]*roomRun{}, removing: map[string]bool{}, ready: map[string]string{}, changed: make(chan struct{}), access: o.Access,
 		running: map[int64]context.CancelCauseFunc{}, inspected: map[string]bool{}}
 	if o.CacheDir != "" && o.CacheMax > 0 {

@@ -619,6 +619,7 @@ func (s *Supervisor) currentWorker() *worker {
 type instanceOps interface {
 	SetSettings(s Settings) error
 	SetAllowlist(ctx context.Context, list []string) error
+	SetEgressSwitches(ctx context.Context, sw EgressSwitches) error
 	Egress(ctx context.Context, n int) (sandbox.Egress, error)
 	Recheck(ctx context.Context)
 	// SetPluginOptions and PluginFetch act on a room's plugins (009-AC19, 009-AC22).
@@ -675,6 +676,23 @@ func (o workerOps) SetAllowlist(ctx context.Context, list []string) error {
 	return err
 }
 
+// SetEgressSwitches saves the instance's "Allow every website" switches; a worker from before 014
+// would answer "unknown request".
+func (o workerOps) SetEgressSwitches(ctx context.Context, sw EgressSwitches) error {
+	w := o.worker()
+	if w == nil {
+		return errors.New("no room yet: pair with a room first")
+	}
+	o.s.mu.Lock()
+	agreed := w.proto
+	o.s.mu.Unlock()
+	if agreed < protoEgress {
+		return errors.New("this server's app is too old for this setting: update the AI host app")
+	}
+	_, err := o.request(ctx, Msg{Type: "egress_switches", Switches: &sw})
+	return err
+}
+
 // Egress lists the egress requests the instance's sandboxes were refused, and those let through by
 // host; a worker from before 003b sends no hits.
 func (o workerOps) Egress(ctx context.Context, n int) (sandbox.Egress, error) {
@@ -690,6 +708,7 @@ func (o workerOps) Egress(ctx context.Context, n int) (sandbox.Egress, error) {
 	if r.Hits != nil {
 		out.Hits = r.Hits
 	}
+	out.RoomHits = r.RoomHits
 	return out, err
 }
 
@@ -835,6 +854,11 @@ func (s *Supervisor) SetSettings(set Settings) error { return workerOps{s: s}.Se
 // SetAllowlist saves the current instance's egress allowlist.
 func (s *Supervisor) SetAllowlist(ctx context.Context, list []string) error {
 	return workerOps{s: s}.SetAllowlist(ctx, list)
+}
+
+// SetEgressSwitches saves the current instance's "Allow every website" switches.
+func (s *Supervisor) SetEgressSwitches(ctx context.Context, sw EgressSwitches) error {
+	return workerOps{s: s}.SetEgressSwitches(ctx, sw)
 }
 
 // Egress lists the egress requests of the current instance's sandboxes.

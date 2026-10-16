@@ -952,15 +952,20 @@ function ServerForm({ inst }) {
 }
 
 /**
- * hitsFor sums the hits of the hosts an allowlist entry covers: a leading dot also covers the
- * subdomains.
+ * covers says whether an allowlist entry covers host: a leading dot also covers the subdomains.
+ * @param {string} entry @param {string} host
+ */
+const covers = (entry, host) => {
+  const e = entry.toLowerCase();
+  const h = host.toLowerCase();
+  return h === e.replace(/^\./, '') || (e.startsWith('.') && h.endsWith(e));
+};
+
+/**
+ * hitsFor sums the hits of the hosts an allowlist entry covers.
  * @param {Record<string, number>} hits @param {string} entry
  */
-const hitsFor = (hits, entry) => Object.entries(hits).reduce((n, [h, c]) => {
-  const e = entry.toLowerCase();
-  const host = h.toLowerCase();
-  return n + (host === e.replace(/^\./, '') || (e.startsWith('.') && host.endsWith(e)) ? c : 0);
-}, 0);
+const hitsFor = (hits, entry) => Object.entries(hits).reduce((n, [h, c]) => n + (covers(entry, h) ? c : 0), 0);
 
 // Egress is the server's allowlist as a table with its hits, and the requests its proxy refused
 // (002-AC34 to 002-AC36, 003b-AC16).
@@ -970,6 +975,8 @@ function Egress({ i, st }) {
   const [text, run] = useStatus();
   const [log, setLog] = useState(/** @type {{denied: import('./api.js').Denied[], hits: Record<string, number> | null} | null} */ (null));
   const [logErr, setLogErr] = useState('');
+  // The switches show the host's click until the server confirms it, as approve-all does.
+  const [pending, setPending] = useState(/** @type {{all_websites: boolean, local_network: boolean} | null} */ (null));
   useEffect(() => {
     let timer = 0;
     // live stops a load already in flight from starting the next one once the server changes.
@@ -990,10 +997,32 @@ function Egress({ i, st }) {
     save([...st.allowlist, dom], 'Saved.').then((ok) => { if (ok) setDomain(''); });
   };
   const hits = log?.hits;
+  const sw = pending ?? { all_websites: !!st.egress?.all_websites, local_network: !!st.egress?.local_network };
+  const all = sw.all_websites;
+  // 014-AC3: under "Allow every website", hosts reached that no entry covers get a row of their own.
+  const reached = all && hits ? Object.keys(hits).filter((h) => !st.allowlist.some((e) => covers(e, h))).sort() : [];
+  const missingDocs = (data.value?.anthropic_docs || []).filter((x) => !st.allowlist.includes(x));
+  /** @param {{all_websites: boolean, local_network: boolean}} next @param {string} ok */
+  const setSwitches = (next, ok) => {
+    setPending(next);
+    return run(api('POST', '/api/egress-switches', { instance: i.id, ...next }), ok).then(reload).finally(() => setPending(null));
+  };
+  const toggleAll = (/** @type {any} */ e) => {
+    if (!e.currentTarget.checked) return setSwitches({ all_websites: false, local_network: false }, 'Every website off.');
+    e.currentTarget.checked = false;
+    window.grillConfirm('Allow every website?', 'Agents in every room of this server can reach any website over HTTPS. Anything they read can steer them, and anything they hold can leave.', 'Allow every website', true)
+      .then((yes) => { if (yes) setSwitches({ all_websites: true, local_network: false }, 'Every website on.'); });
+  };
+  const toggleLocal = (/** @type {any} */ e) => {
+    if (!e.currentTarget.checked) return setSwitches({ all_websites: true, local_network: false }, 'Local network off.');
+    e.currentTarget.checked = false;
+    window.grillConfirm('Also allow your local network?', 'Agents can also reach your own network: the router, a NAS, admin pages, other machines and this computer, by name or by IP address. A page they read can send them there.', 'Allow the local network', true)
+      .then((yes) => { if (yes) setSwitches({ all_websites: true, local_network: true }, 'Local network on.'); });
+  };
   return html`
     <h4 id="allowlist-title">Websites the AI may reach</h4>
     <p class="hint">The sandbox reaches these domains, and nothing else, over HTTPS only. A leading dot, as in .example.com, also allows every subdomain. Anthropic's hosts stay blocked whatever the list says.</p>
-    ${!st.allowlist.length ? html`<p class="empty" id="allowlist-empty">No domain: the sandbox reaches nothing.</p>`
+    ${!st.allowlist.length && !reached.length ? html`<p class="empty" id="allowlist-empty">No domain: the sandbox reaches nothing.</p>`
       : html`<table id="allowlist" class="allowlist" aria-labelledby="allowlist-title">
       <thead><tr><th scope="col">Domain</th><th scope="col" class="num"><span tabindex="0" data-tip="Requests let through, from the running sandboxes' recent proxy log. A restart resets them.">Hits</span></th><th scope="col"><span class="sr-only">Remove</span></th></tr></thead>
       <tbody>${st.allowlist.map((dom) => html`<tr>
@@ -1001,12 +1030,23 @@ function Egress({ i, st }) {
         <td class="num">${hits ? hitsFor(hits, dom) : '–'}</td>
         <td class="act"><button type="button" class="btn-icon btn-ghost" aria-label=${'Remove ' + dom} dangerouslySetInnerHTML=${icon('trash')}
           onClick=${() => save(st.allowlist.filter((x) => x !== dom), 'Saved.')}></button></td>
+      </tr>`)}${reached.map((h) => html`<tr class="reached">
+        <td><code class="domain">${h}</code> <span class="hint">reached via Allow every website</span></td>
+        <td class="num">${hits?.[h]}</td><td></td>
       </tr>`)}</tbody></table>`}
     <form id="allowlist-form" class="add-room" onSubmit=${add}>
       <input id="allowlist-add" required aria-label="Domain" placeholder="example.com" autocomplete="off" spellcheck=${false}
         value=${domain} onInput=${(/** @type {any} */ e) => setDomain(e.currentTarget.value)} />
       <button type="submit">Add</button>
     </form>
+    ${missingDocs.length > 0 && html`<p><button type="button" id="add-docs" class="btn-secondary" title=${missingDocs.join(', ')}
+      onClick=${() => save([...st.allowlist, ...missingDocs], 'Anthropic docs sites added.')}>Add Anthropic docs sites</button></p>`}
+    <div class="egress-switches">
+      <label class="full"><input id="all-websites" type="checkbox" checked=${all} onChange=${toggleAll} /> Allow every website</label>
+      <p class="hint">Any website over HTTPS, without listing it. Anthropic's hosts stay blocked and every request is counted.</p>
+      <label class="full nested"><input id="local-network" type="checkbox" disabled=${!all} checked=${sw.local_network} onChange=${toggleLocal} /> Also allow the local network and IP addresses</label>
+      <p class="hint nested">Your own network and raw IP addresses too. Cloud metadata addresses stay blocked.</p>
+    </div>
     <p><span id="allowlist-status" role="status">${text}</span></p>
     <h4 id="denied-title">Blocked websites</h4>
     <p class="hint">What the proxy refused in this server's sandboxes, newest first.</p>

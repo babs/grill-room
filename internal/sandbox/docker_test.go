@@ -317,3 +317,48 @@ func TestRealClaude(t *testing.T) {
 		}
 	}
 }
+
+// TestRealWebFetch spends one real haiku request, with GRILL_ROOM_TEST_REAL_CLAUDE=1 as
+// TestRealClaude. 014-AC4 014-AC5 014-AC7: with the turn's settings.json, WebSearch and a WebFetch
+// of a listed domain go through, a WebFetch off the list meets the proxy's refusal, and the egress
+// log holds no CONNECT to an Anthropic host, the WebFetch preflight's included.
+func TestRealWebFetch(t *testing.T) {
+	img := dockerTest(t)
+	if os.Getenv("GRILL_ROOM_TEST_REAL_CLAUDE") != "1" {
+		t.Skip("set GRILL_ROOM_TEST_REAL_CLAUDE=1 to spend one haiku request")
+	}
+	ctx := context.Background()
+	r := creds.ForConfigDir(os.Getenv("CLAUDE_CONFIG_DIR"))
+	upURL, _ := url.Parse("https://api.anthropic.com")
+	addr, bearer := accountProxy(t, upURL, creds.NewSource(r))
+	s := New(Config{Image: img, Name: fmt.Sprintf("fetch-%d", time.Now().UnixNano()), Proxy: addr}, Docker, zaptest.NewLogger(t, zaptest.Level(zap.WarnLevel)))
+	t.Cleanup(func() { s.Close(context.Background()) })
+	tctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	res, err := s.RunClaude(tctx, Request{Model: "haiku", Bearer: bearer, Prompt: `Do these three steps in order, then reply with a short report.
+1) Use the WebSearch tool to search the web for "Debian 13 trixie release date" and cite 1 source URL.
+2) Use the WebFetch tool on https://pypi.org/project/requests/ and give the latest version shown.
+3) Use the WebFetch tool on https://example.com/ and give the page title.
+For every tool call that fails, quote its exact error text. Do not use any other tool.`})
+	if err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+	t.Logf("result=%q", res.Result)
+	log, err := Docker(ctx, nil, "logs", s.egress())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("egress log:\n%s", log)
+	seen := map[string]bool{}
+	for _, q := range parseRequests(log) {
+		seen[q.Host+" "+strconv.FormatBool(q.Allowed)] = true
+		for _, a := range anthropicDomains {
+			if covers(a, q.Host) {
+				t.Errorf("a CONNECT to %s reached the egress proxy", q.Host)
+			}
+		}
+	}
+	if !seen["pypi.org true"] || !seen["example.com false"] {
+		t.Errorf("want pypi.org let through and example.com refused: %v", seen)
+	}
+}

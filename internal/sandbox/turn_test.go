@@ -400,7 +400,8 @@ func TestParseHashes(t *testing.T) {
 // sensitive ones in .credentials.json beside the dummy login, the others in settings.json, and
 // the next turn rewrites both, keeping none. Each secret, as written or JSON-escaped, becomes
 // [redacted] in the synthesis, the documents and the session; the local session gets the same
-// bytes, so the next turn resumes from it without fetching the room's copy.
+// bytes, so the next turn resumes from it without fetching the room's copy. 014-AC4: every turn's
+// settings.json turns the WebFetch preflight off, plugins or none.
 func TestRunTurnPluginOptionsAndRedaction(t *testing.T) {
 	const secret = `s3cr"et<v>`
 	path := ".claude/projects/-workspace/" + sid + ".jsonl"
@@ -421,7 +422,7 @@ func TestRunTurnPluginOptionsAndRedaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(creds[0], `"pluginSecrets":{"p@inline":{"api_key":"s3cr\"et\u003cv\u003e"}}`) || !strings.Contains(creds[0], `"claudeAiOauth"`) ||
-		settings[0] != `{"pluginConfigs":{"p@inline":{"options":{"region":"eu"}}}}` {
+		settings[0] != `{"pluginConfigs":{"p@inline":{"options":{"region":"eu"}}},"skipWebFetchPreflight":true}` {
 		t.Fatalf("credentials %s\nsettings %s", creds[0], settings[0])
 	}
 	all := out.Result.Result + string(out.Session)
@@ -440,7 +441,7 @@ func TestRunTurnPluginOptionsAndRedaction(t *testing.T) {
 		FetchSession: func(context.Context) ([]byte, error) { fetched = true; return nil, errors.New("no fetch expected") }}); err != nil {
 		t.Fatal(err)
 	}
-	if fetched || strings.Contains(creds[1], "pluginSecrets") || settings[1] != "{}" {
+	if fetched || strings.Contains(creds[1], "pluginSecrets") || settings[1] != `{"skipWebFetchPreflight":true}` {
 		t.Fatalf("second turn: fetched %v, credentials %s, settings %s", fetched, creds[1], settings[1])
 	}
 }

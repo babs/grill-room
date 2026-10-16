@@ -69,3 +69,70 @@ test('egress allowlist and denied requests on the daemon page', async ({ browser
     removeSandbox(daemon.sandbox);
   }
 });
+
+// 014-AC1 014-AC2 014-AC3 014-AC26 014-AC27: the docs hosts come back in one click; "Allow every
+// website" asks first behind a red warning, lets any public name through and counts it as reached
+// without an entry, still refusing the metadata address; the local-network switch needs it, asks
+// with its own warning, and both go off with one click. Real daemon and Docker sandbox, fake
+// claude; the public hosts need Internet access.
+test('allow every website and its local-network extension', async ({ browser, request, baseURL }) => {
+  test.setTimeout(150_000);
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const daemon = startDaemon(`${baseURL}/r/${room.id}`);
+  try {
+    const admin = await pairDaemon(alice, daemon);
+    await admin.locator('#tab-settings').click();
+    const list = admin.locator('#allowlist');
+    const status = admin.locator('#allowlist-status');
+
+    await expect(admin.locator('#add-docs')).toHaveCount(0);
+    await admin.getByRole('button', { name: 'Remove code.claude.com' }).click();
+    await expect(admin.locator('#add-docs')).toBeVisible();
+    await admin.locator('#add-docs').click();
+    await expect(status).toHaveText('Anthropic docs sites added.');
+    await expect(list.locator('code', { hasText: /^code\.claude\.com$/ })).toHaveCount(1);
+    await expect(admin.locator('#add-docs')).toHaveCount(0);
+
+    const all = admin.locator('#all-websites');
+    const local = admin.locator('#local-network');
+    await expect(all).not.toBeChecked();
+    await expect(local).toBeDisabled();
+    const sheet = admin.locator('dialog.confirm');
+    await all.click();
+    await expect(sheet.locator('.warning')).toContainText('anything they hold can leave');
+    await sheet.getByRole('button', { name: 'Cancel' }).click();
+    await expect(all).not.toBeChecked();
+    await all.click();
+    await sheet.getByRole('button', { name: 'Allow every website' }).click();
+    await expect(all).toBeChecked();
+    await expect(local).toBeEnabled();
+    await local.click();
+    await expect(sheet.locator('.warning')).toContainText('your own network');
+    await sheet.getByRole('button', { name: 'Allow the local network' }).click();
+    await expect(local).toBeChecked();
+    await admin.reload();
+    await expect(all).toBeChecked();
+    await expect(local).toBeChecked();
+
+    // A turn starts the sandbox and its proxy under both switches.
+    await alice.locator('#body').fill('FAKE_WHOAMI');
+    await alice.locator('#body').press('Enter');
+    await alice.getByRole('button', { name: 'Ask Grill' }).click();
+    await expect(alice.locator('#messages li.msg.agent')).toHaveCount(1, { timeout: 60_000 });
+    await expect.poll(() => curlInSandbox(daemon.sandbox, 'example.com'), { timeout: 20_000 }).toBe('200');
+    expect(curlInSandbox(daemon.sandbox, '169.254.169.254')).toBe('403');
+    expect(curlInSandbox(daemon.sandbox, 'api.anthropic.com')).toBe('403');
+    await expect(list.locator('tr.reached', { hasText: 'example.com' })).toContainText('reached via Allow every website', { timeout: 15_000 });
+
+    // Off needs no confirmation and takes the extension with it.
+    await all.click();
+    await expect(all).not.toBeChecked();
+    await expect(local).not.toBeChecked();
+    await expect(local).toBeDisabled();
+    await expect.poll(() => curlInSandbox(daemon.sandbox, 'example.com'), { timeout: 20_000 }).toBe('403');
+  } finally {
+    daemon.cleanup();
+    await daemon.exited;
+    removeSandbox(daemon.sandbox);
+  }
+});

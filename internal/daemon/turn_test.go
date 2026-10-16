@@ -31,7 +31,11 @@ type fakeAgent struct {
 	inputs []sandbox.TurnInput
 	closed bool
 	allow  []string
-	// allowErr, deniedErr and startErr fail SetAllowlist, Denied and Start.
+	policy sandbox.Policy
+	// requests are what Requests returns, and since the times it was asked from.
+	requests []sandbox.EgressRequest
+	since    []time.Time
+	// allowErr, deniedErr and startErr fail SetPolicy, Denied and Start.
 	allowErr, deniedErr, startErr error
 }
 
@@ -61,14 +65,21 @@ func (f *fakeAgent) Start(context.Context) error {
 	return f.startErr
 }
 
-func (f *fakeAgent) SetAllowlist(_ context.Context, list []string) error {
+func (f *fakeAgent) SetPolicy(_ context.Context, p sandbox.Policy) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.allowErr != nil {
 		return f.allowErr
 	}
-	f.allow = list
+	f.allow, f.policy = p.Allow, p
 	return nil
+}
+
+func (f *fakeAgent) Requests(_ context.Context, since time.Time) ([]sandbox.EgressRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.since = append(f.since, since)
+	return f.requests, nil
 }
 
 func (f *fakeAgent) Egress(context.Context, int) (sandbox.Egress, error) {

@@ -339,3 +339,20 @@ func TestSupervisorPluginRequests(t *testing.T) {
 		})
 	}
 }
+
+// 014-AC1: the switches reach a worker at protocol 6; one from before is refused them with why.
+func TestSupervisorEgressSwitches(t *testing.T) {
+	for _, mode := range []string{strconv.Itoa(Proto), strconv.Itoa(protoEgress - 1)} {
+		t.Run(mode, func(t *testing.T) {
+			s := testSupervisor(t, mode, nil)
+			e := newAdminEnv(t, s)
+			tok := e.login(t)
+			s.SetRoom(context.Background(), Room{Base: "https://rooms.example", ID: "abc"})
+			waitFor(t, "the worker running", func() bool { return instance(t, s).State == "running" })
+			code, b := e.req(t, "POST", "/api/egress-switches", tok, `{"instance":"`+instance(t, s).ID+`","all_websites":true}`, nil)
+			if mode == strconv.Itoa(Proto) && code != http.StatusNoContent || mode != strconv.Itoa(Proto) && (code != http.StatusBadRequest || !strings.Contains(b, "too old")) {
+				t.Fatalf("%d %s", code, b)
+			}
+		})
+	}
+}

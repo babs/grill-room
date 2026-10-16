@@ -234,7 +234,13 @@ func (d *Daemon) handle(ctx context.Context, m Msg) Msg {
 	case "denied":
 		var eg sandbox.Egress
 		eg, err = d.Egress(ctx, m.N)
-		out.Denied, out.Hits = eg.Denied, eg.Hits
+		out.Denied, out.Hits, out.RoomHits = eg.Denied, eg.Hits, eg.RoomHits
+	case "egress_switches":
+		if m.Switches == nil {
+			err = errors.New("switches missing")
+		} else {
+			err = d.SetEgressSwitches(ctx, *m.Switches)
+		}
 	case "recheck":
 		d.Recheck(ctx)
 	case "access":

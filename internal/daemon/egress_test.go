@@ -7,9 +7,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/babs/grill-room/internal/sandbox"
 	"github.com/babs/grill-room/internal/store"
@@ -57,7 +62,7 @@ func TestAdminAllowlist(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &st); code != http.StatusOK || err != nil || !slices.Equal(st.Status.Allowlist, want) {
 		t.Fatalf("status: %d %s", code, body)
 	}
-	if got, err := LoadAllowlist(d.o.AllowlistPath); err != nil || !slices.Equal(got, want) {
+	if got, err := LoadEgress(d.o.AllowlistPath); err != nil || !slices.Equal(domains(got.Server), want) {
 		t.Fatalf("after a restart: %v %v", got, err)
 	}
 	assertPerm(t, d.o.AllowlistPath, 0o600)
@@ -65,23 +70,24 @@ func TestAdminAllowlist(t *testing.T) {
 	if code, body := e.req(t, "POST", "/api/allowlist", tok, `{"allowlist":[]}`, nil); code != http.StatusNoContent {
 		t.Fatalf("empty allowlist: %d %s", code, body)
 	}
-	if got, err := LoadAllowlist(d.o.AllowlistPath); err != nil || got == nil || len(got) != 0 {
+	if got, err := LoadEgress(d.o.AllowlistPath); err != nil || got.Server == nil || len(got.Server) != 0 {
 		t.Fatalf("empty list after a restart: %#v %v", got, err)
 	}
-	if got, err := LoadAllowlist(filepath.Join(t.TempDir(), "none.json")); err != nil || !slices.Equal(got, sandbox.DefaultAllowlist) {
+	if got, err := LoadEgress(filepath.Join(t.TempDir(), "none.json")); err != nil || !slices.Equal(domains(got.Server), sandbox.DefaultAllowlist) || got.AllWebsites {
 		t.Fatalf("no file: %v %v", got, err)
 	}
-	for name, content := range map[string]string{"corrupt": "[", "bad entry": `["*.x.com"]`} {
+	for name, content := range map[string]string{"corrupt": "[", "bad entry": `["*.x.com"]`, "bad object entry": `{"server":[{"domain":"api.anthropic.com"}]}`,
+		"bad room entry": `{"server":[],"rooms":{"r":[{"domain":"10.0.0.1"}]}}`} {
 		p := filepath.Join(t.TempDir(), "allowlist.json")
 		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := LoadAllowlist(p); err == nil {
+		if _, err := LoadEgress(p); err == nil {
 			t.Errorf("%s file loaded", name)
 		}
 	}
 	code, body = e.req(t, "GET", "/api/denied", tok, "", nil)
-	if code != http.StatusOK || strings.TrimSpace(body) != `{"denied":[],"hits":{}}` {
+	if code != http.StatusOK || strings.TrimSpace(body) != `{"denied":[],"hits":{},"room_hits":{}}` {
 		t.Fatalf("denied with no sandbox: %d %s", code, body)
 	}
 }
@@ -121,8 +127,9 @@ func TestDaemonAllowlistReachesSandbox(t *testing.T) {
 	if !slices.Equal(second, []string{"github.com", "pypi.org"}) {
 		t.Fatalf("running sandbox has %v", second)
 	}
-	// 003b-AC16: the hits come with the denied list.
-	if got, err := d.Egress(ctx, 5); err != nil || len(got.Denied) != 1 || got.Denied[0].Host != "example.com" || got.Hits["pypi.org"] != 3 {
+	// 003b-AC16 014-AC3: the hits come with the denied list, by host and by room.
+	if got, err := d.Egress(ctx, 5); err != nil || len(got.Denied) != 1 || got.Denied[0].Host != "example.com" || got.Hits["pypi.org"] != 3 ||
+		got.RoomHits[d.Status().Rooms[0].Room]["pypi.org"] != 3 {
 		t.Fatalf("denied = %v %v", got, err)
 	}
 }
@@ -176,5 +183,128 @@ func TestDaemonAllowlistFailures(t *testing.T) {
 	}
 	if slices.Contains(d.Status().Allowlist, "github.com") {
 		t.Fatalf("an unsaved list applied: %v", d.Status().Allowlist)
+	}
+}
+
+// okTurn answers every turn with a short synthesis.
+func okTurn(_ context.Context, in sandbox.TurnInput, _ map[string]string) (*sandbox.TurnOutput, error) {
+	return &sandbox.TurnOutput{Result: &sandbox.Result{Result: "ok", SessionID: "33333333-3333-4333-8333-333333333333"}, Session: []byte("x\n"),
+		SessionOffset: in.SessionSize}, nil
+}
+
+// pressGrill starts a turn of the room's Grill and waits until it ended.
+func pressGrill(t *testing.T, rs *roomServer, tok string) {
+	t.Helper()
+	var started store.Turn
+	rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", tok, map[string]int64{"persona_id": rs.grill(t).ID}, http.StatusCreated, &started)
+	waitFor(t, "turn ended", func() bool { v := rs.agent(t, tok); return v.Turn.ID == started.ID && v.Turn.Status != "running" })
+}
+
+// 014-AC1 014-AC26: the page's switches reach the running sandboxes and survive a restart; the
+// local network never comes on without every website, and goes off with it.
+func TestEgressSwitches(t *testing.T) {
+	rs := newRoomServer(t)
+	ag := &fakeAgent{run: okTurn}
+	alice, d, _ := pairedDaemon(t, rs, "Alice", ag, func(d *Daemon) { d.o.AllowlistPath = filepath.Join(t.TempDir(), "allowlist.json") })
+	pressGrill(t, rs, alice)
+	e := newAdminEnv(t, d)
+	tok := e.login(t)
+	policy := func() sandbox.Policy { ag.mu.Lock(); defer ag.mu.Unlock(); return ag.policy }
+	for _, tc := range []struct {
+		body       string
+		all, local bool
+	}{
+		{`{"local_network":true}`, false, false},
+		{`{"all_websites":true}`, true, false},
+		{`{"all_websites":true,"local_network":true}`, true, true},
+		{`{"local_network":true}`, false, false},
+	} {
+		if code, body := e.req(t, "POST", "/api/egress-switches", tok, tc.body, nil); code != http.StatusNoContent {
+			t.Fatalf("%s: %d %s", tc.body, code, body)
+		}
+		if p := policy(); p.AllWebsites != tc.all || p.LocalNetwork != tc.local || !slices.Equal(p.Allow, sandbox.DefaultAllowlist) {
+			t.Fatalf("%s: running sandbox has %+v", tc.body, p)
+		}
+		st, err := LoadEgress(d.o.AllowlistPath)
+		if err != nil || st.AllWebsites != tc.all || st.LocalNetwork != tc.local || !slices.Equal(domains(st.Server), sandbox.DefaultAllowlist) {
+			t.Fatalf("%s: after a restart %+v %v", tc.body, st, err)
+		}
+		if e := d.Status().Egress; e.AllWebsites != tc.all || e.LocalNetwork != tc.local {
+			t.Fatalf("%s: status %+v", tc.body, e)
+		}
+	}
+	if code, _ := e.req(t, "POST", "/api/egress-switches", "", `{"all_websites":true}`, nil); code != http.StatusUnauthorized {
+		t.Fatalf("switches without a session: %d", code)
+	}
+}
+
+// 014: allowlist.json from before 014 holds a bare list, loaded as the server's entries; the
+// object form round-trips with who added an entry; a page save keeps that for the domains it keeps.
+func TestLoadEgressForms(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, "legacy.json")
+	if err := os.WriteFile(legacy, []byte(`["PyPI.org","github.com"]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := LoadEgress(legacy); err != nil || !slices.Equal(domains(st.Server), []string{"github.com", "pypi.org"}) || st.AllWebsites || st.Rooms != nil {
+		t.Fatalf("legacy: %+v %v", st, err)
+	}
+	at := time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)
+	want := EgressState{AllWebsites: true, LocalNetwork: true, Server: []AllowEntry{{Domain: "example.com", By: "Alice", At: &at}, {Domain: "pypi.org"}},
+		Rooms: map[string][]AllowEntry{"https://x/r/a": {{Domain: "docs.rs", By: "Bob", At: &at}}}}
+	d := newTestDaemon(t, nil)
+	d.o.AllowlistPath = filepath.Join(dir, "allowlist.json")
+	d.settingsMu.Lock()
+	err := d.setEgress(context.Background(), want)
+	d.settingsMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := LoadEgress(d.o.AllowlistPath); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("round trip: %+v %v", got, err)
+	}
+	if err := d.SetAllowlist(context.Background(), []string{"example.com", "github.com"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadEgress(d.o.AllowlistPath)
+	if err != nil || len(got.Server) != 2 || got.Server[0].By != "Alice" || !got.Server[0].At.Equal(at) || got.Server[1].By != "" || !reflect.DeepEqual(got.Rooms, want.Rooms) || !got.AllWebsites {
+		t.Fatalf("after a page save: %+v %v", got, err)
+	}
+	// A local network saved without every website does not load on.
+	half := filepath.Join(dir, "half.json")
+	if err := os.WriteFile(half, []byte(`{"local_network":true,"server":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := LoadEgress(half); err != nil || st.LocalNetwork {
+		t.Fatalf("half: %+v %v", st, err)
+	}
+}
+
+// 014-AC3: after a turn the daemon logs one egress line per request its sandbox's proxy saw since
+// the turn ran, with room, persona, host and verdict; the worker's logger adds the server.
+func TestEgressLogLines(t *testing.T) {
+	rs := newRoomServer(t)
+	at := time.Unix(1791690692, 0).UTC()
+	ag := &fakeAgent{run: okTurn, requests: []sandbox.EgressRequest{
+		{Host: "pypi.org", Method: "CONNECT", Allowed: true, Time: at}, {Host: "example.com", Method: "CONNECT", Time: at}}}
+	core, logs := observer.New(zap.InfoLevel)
+	alice, d, _ := pairedDaemon(t, rs, "Alice", ag, func(d *Daemon) { d.o.Log = zap.New(core) })
+	before := time.Now()
+	pressGrill(t, rs, alice)
+	waitFor(t, "egress lines", func() bool { return logs.FilterMessage("egress").Len() == 2 })
+	room := d.Status().Rooms[0].Room
+	for i, want := range []map[string]any{
+		{"room": room, "persona": "Grill", "host": "pypi.org", "method": "CONNECT", "verdict": "allowed"},
+		{"room": room, "persona": "Grill", "host": "example.com", "method": "CONNECT", "verdict": "denied"},
+	} {
+		if got := logs.FilterMessage("egress").All()[i].ContextMap(); !reflect.DeepEqual(got, want) {
+			t.Errorf("line %d = %v, want %v", i, got, want)
+		}
+	}
+	ag.mu.Lock()
+	since := ag.since
+	ag.mu.Unlock()
+	if len(since) != 1 || since[0].Before(before) {
+		t.Fatalf("requests asked since %v, turn pressed at %v", since, before)
 	}
 }

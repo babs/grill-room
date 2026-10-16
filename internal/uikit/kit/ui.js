@@ -11,12 +11,14 @@
    * grillConfirm asks a question in a sheet: a title, one line on the consequence, Cancel and a
    * danger button. It resolves true once the danger button is pressed, false on Cancel, Escape or
    * a click outside. While one is open, another call answers false at once: a double click acts once.
+   * A warning shows the consequence in red.
    * @param {string} title
    * @param {string} text
    * @param {string} action
+   * @param {boolean} [warning]
    * @returns {Promise<boolean>}
    */
-  window.grillConfirm = (title, text, action) => {
+  window.grillConfirm = (title, text, action, warning = false) => {
     if (open) return open.then(() => false);
     open = new Promise((resolve) => {
       const d = document.createElement('dialog');
@@ -29,6 +31,7 @@
       const p = document.createElement('p');
       p.id = 'confirm-text';
       p.textContent = text;
+      if (warning) p.className = 'warning';
       const actions = document.createElement('div');
       actions.className = 'actions';
       const cancel = document.createElement('button');

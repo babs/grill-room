@@ -114,8 +114,16 @@ func TestServeWorker(t *testing.T) {
 		t.Fatalf("empty allowlist: %+v", r)
 	}
 	waitFor(t, "the empty allowlist", func() bool { s := f.lastStatus(); return s.Allowlist != nil && len(s.Allowlist) == 0 })
+	// 014-AC1 014-AC26: the switches reach the worker; the local network needs every website.
+	if r := f.request(t, Msg{Type: "egress_switches", Switches: &EgressSwitches{LocalNetwork: true}}); r.Error != "" {
+		t.Fatalf("egress switches: %+v", r)
+	}
+	if r := f.request(t, Msg{Type: "egress_switches", Switches: &EgressSwitches{AllWebsites: true, LocalNetwork: true}}); r.Error != "" {
+		t.Fatalf("egress switches: %+v", r)
+	}
+	waitFor(t, "both switches on", func() bool { e := f.lastStatus().Egress; return e.AllWebsites && e.LocalNetwork })
 	for _, bad := range []Msg{{Type: "settings"}, {Type: "settings", Settings: &Settings{MaxEffort: "turbo"}}, {Type: "pair", Room: "http://x/r/a"},
-		{Type: "update"}, {Type: "dance"}, {Type: "allowlist", Allowlist: []string{"not a domain!"}}} {
+		{Type: "update"}, {Type: "dance"}, {Type: "allowlist", Allowlist: []string{"not a domain!"}}, {Type: "egress_switches"}} {
 		if r := f.request(t, bad); r.Error == "" {
 			t.Errorf("%+v answered without error", bad)
 		}

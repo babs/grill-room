@@ -178,6 +178,7 @@ func (a *Admin) Handler() http.Handler {
 	mux.Handle("POST /api/update", a.auth(a.update))
 	mux.Handle("POST /api/settings", a.auth(a.settings))
 	mux.Handle("POST /api/allowlist", a.auth(a.allowlist))
+	mux.Handle("POST /api/egress-switches", a.auth(a.egressSwitches))
 	mux.Handle("GET /api/denied", a.auth(a.denied))
 	mux.Handle("POST /api/plugin-options", a.auth(a.pluginOptions))
 	mux.Handle("POST /api/plugin-fetch", a.auth(a.pluginFetch))
@@ -289,7 +290,7 @@ func (a *Admin) session(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Admin) status(w http.ResponseWriter, r *http.Request) {
-	v := map[string]any{"status": a.d.Status(), "logs": a.logs.Lines(), "models": turn.Models, "efforts": turn.Efforts}
+	v := map[string]any{"status": a.d.Status(), "logs": a.logs.Lines(), "models": turn.Models, "efforts": turn.Efforts, "anthropic_docs": sandbox.AnthropicDocs}
 	if h, ok := a.d.(hostBackend); ok {
 		insts, current := h.Instances()
 		accounts, conc := h.AccountViews(r.Context()), h.Concurrency()
@@ -400,6 +401,23 @@ func (a *Admin) allowlist(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// egressSwitches saves "Allow every website" and its local-network extension; the running
+// sandboxes take them at once (014-AC1, 014-AC26).
+func (a *Admin) egressSwitches(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		EgressSwitches
+		Instance string `json:"instance"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	d, err := a.ops(req.Instance)
+	if err == nil {
+		err = d.SetEgressSwitches(r.Context(), req.EgressSwitches)
+	}
+	reply(w, err)
+}
+
 // pluginOptions saves the values the host gives a room plugin's options; they stay on this
 // machine (009-AC22). A value is never sent back: the page sees which options hold one.
 func (a *Admin) pluginOptions(w http.ResponseWriter, r *http.Request) {
@@ -454,7 +472,7 @@ func (a *Admin) denied(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"denied": eg.Denied, "hits": eg.Hits})
+	writeJSON(w, http.StatusOK, map[string]any{"denied": eg.Denied, "hits": eg.Hits, "room_hits": eg.RoomHits})
 }
 
 func (a *Admin) recheck(w http.ResponseWriter, r *http.Request) {

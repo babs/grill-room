@@ -6,7 +6,7 @@ The instance id is the first 12 hex digits of the sha256 of the server's scheme,
 
 ## Versions
 
-Both sides carry a protocol version, `Proto` in `internal/daemon/proto.go`, currently 5. Version 2 added `access`, version 3 the slots under the global cap, version 4 the room plugins' `plugin_options` and `plugin_fetch`, version 5 `remove_room`. A worker that settles on version 2 asks for no slot: its turns run outside the cap. The supervisor sends no plugin request to a worker below version 4, nor `remove_room` below 5, and the page says the worker is too old. Peers at most one version apart (`ProtoSkew`) talk at the lower of the two. Further apart, the side that notices sends `refused` and the worker exits. The supervisor marks the instance `refused` with the reason and does not restart it.
+Both sides carry a protocol version, `Proto` in `internal/daemon/proto.go`, currently 6. Version 2 added `access`, version 3 the slots under the global cap, version 4 the room plugins' `plugin_options` and `plugin_fetch`, version 5 `remove_room`, version 6 `egress_switches` and the `denied` reply's `room_hits`. A worker that settles on version 2 asks for no slot: its turns run outside the cap. The supervisor sends no plugin request to a worker below version 4, nor `remove_room` below 5, nor `egress_switches` below 6, and the page says the worker is too old. Peers at most one version apart (`ProtoSkew`) talk at the lower of the two. Further apart, the side that notices sends `refused` and the worker exits. The supervisor marks the instance `refused` with the reason and does not restart it.
 
 A version bump must stay additive within that window: new fields and new message types only. Both sides ignore unknown fields and unknown message types. A supervisor must not send a request type its worker's agreed version lacks.
 
@@ -49,8 +49,9 @@ Requests carry an `id`; the worker answers each one with `{"type":"reply","id":N
 |---|---|---|
 | `pair` | `room` | serves that room beside the others, pairing first if no token is stored for it |
 | `settings` | `settings` | saves the host cap and approval mode, and tells the room |
-| `allowlist` | `allowlist` (absent for an empty list) | saves the egress allowlist; the running sandbox takes it at once |
-| `denied` | `n` | the reply's `denied` lists the last `n` refused egress requests, and its `hits` counts the requests let through, by host, from the last 2,000 lines of each running egress proxy's log; workers before 003b send no `hits` |
+| `allowlist` | `allowlist` (absent for an empty list) | saves the egress allowlist every room of the server shares; the running sandboxes take it at once. An entry that stays keeps who added it from a room |
+| `egress_switches` | `switches` (`all_websites`, `local_network`) | saves "Allow every website" and its local-network extension, which needs the first; the running sandboxes take them at once (version 6) |
+| `denied` | `n` | the reply's `denied` lists the last `n` refused egress requests, its `hits` counts the requests let through, by host, from the last 2,000 lines of each running egress proxy's log, and `room_hits` the same by room link; workers before 003b send no `hits`, before 6 no `room_hits` |
 | `recheck` | | re-runs the Docker check, and retries a failed sandbox image |
 | `plugin_options` | `room`, `plugin` (the room's plugin id), `values`, `clear` | saves the values the host gave a room plugin's options, under its id, with which options are sensitive: an absent key keeps its value, an empty string or a key in `clear` forgets it; only the plugin's declared options, each of its type (version 4) |
 | `plugin_fetch` | `room`, `fetch`, `accept` | `accept` starts the room's fetch request `fetch` with the host's git and replies at once; the room status shows it `fetching`. Without `accept` it declines the request (version 4) |
