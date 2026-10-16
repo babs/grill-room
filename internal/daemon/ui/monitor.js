@@ -53,7 +53,8 @@ const ran = (t) => level(t.asked_model, t.asked_effort) + ', ran ' + level(t.mod
  * @param {{t: Turn, room: string, onOpen: () => void}} p
  */
 function TurnRow({ t, room, onOpen }) {
-  return html`<tr class="turn-row" tabindex="0" onClick=${onOpen} onKeyDown=${(/** @type {KeyboardEvent} */ e) => { if (e.key === 'Enter') onOpen(); }}>
+  return html`<tr class="turn-row" tabindex="0" role="button" aria-label=${'Details of ' + t.persona + ' in ' + room + ', ' + window.grillDate(t.at)} onClick=${onOpen}
+    onKeyDown=${(/** @type {KeyboardEvent} */ e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}>
     <td data-label="Ended"><span data-tip=${window.grillDate(t.at)}>${window.grillAgo(t.at)}</span></td>
     <td data-label="Room"><${Cut} text=${room} tip=${t.room} /></td>
     <td data-label="AI persona">${t.persona}</td>
@@ -70,7 +71,11 @@ function TurnRow({ t, room, onOpen }) {
  */
 function TurnSheet({ t, room, onClose }) {
   const ref = useRef(/** @type {HTMLDialogElement | null} */ (null));
-  useEffect(() => { if (t && ref.current && !ref.current.open) ref.current.showModal(); }, [t]);
+  useEffect(() => {
+    if (t && ref.current && !ref.current.open) ref.current.showModal();
+    // The answer dropped out of the list (a filter, or newer ones): an empty sheet has no Close.
+    if (!t && ref.current?.open) ref.current.close();
+  }, [t]);
   const pct = t && t.context_window ? Math.floor((t.context_tokens * 100) / t.context_window) + '%' : 'unknown';
   return html`<dialog id="turn-sheet" ref=${ref} class="sheet full" aria-labelledby="turn-sheet-title" onClose=${onClose}>
     ${t && html`<div class="sheet-head"><h2 id="turn-sheet-title">${t.persona} in ${room}</h2>

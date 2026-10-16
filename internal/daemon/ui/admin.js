@@ -269,10 +269,8 @@ function AddRoom() {
         data-tip="Any link inside the room works: the room page or its documents." onInput=${(/** @type {any} */ e) => setURL(e.currentTarget.value)} />
       <button type="submit">Add a room</button>
     </form>
-    <p class="pairing-line"><span id="pairing" role="status">${text + (s.room && s.error ? ' ' + s.error : '')}</span>
-      ${s.room && s.pairing === 'pending' && /^https?:\/\//.test(s.approve_url || '') && html`<span id="approve">
-        Check that the room page shows the code <strong id="code">${s.code}</strong>, then
-        <a id="approve-link" href=${s.approve_url} target="_blank" rel="noopener noreferrer">approve in the room</a>.
+    <p class="pairing-line"><span id="pairing" role="status">${text + (s.room && s.error ? ' ' + s.error : '')}</span>${' '}${s.room && s.pairing === 'pending' && /^https?:\/\//.test(s.approve_url || '') && html`<span id="approve">
+        Check that the room page shows the code <strong id="code">${s.code}</strong>, then${' '}<a id="approve-link" href=${s.approve_url} target="_blank" rel="noopener noreferrer">approve in the room</a>.
       </span>`}</p>
     <p id="room-error" class="bad" role="alert">${err}</p>`;
 }
@@ -325,6 +323,7 @@ function cutOff(i) {
 function serverPill(i) {
   if (i.state !== 'running') return { word: i.state, look: i.state === 'starting' ? 'busy' : 'failed', tip: i.error };
   const rs = i.room_states || [];
+  if (!rs.length) return { word: 'running', look: 'idle' };
   if (rs.some((r) => r.connection === 'connected')) return { word: 'connected', look: 'ok' };
   if (rs.some((r) => r.connection === 'connecting' || r.pairing === 'pending' || r.pairing === 'requesting')) return { word: 'connecting', look: 'busy' };
   return { word: 'offline', look: 'failed' };
@@ -382,8 +381,16 @@ async function removeRoom(room, name) {
   try {
     await api('POST', '/api/room-remove', { room });
   } catch (err) {
-    if (!await window.grillConfirm('Remove it here anyway?', sentence(/** @type {Error} */ (err).message) + '. The room keeps listing this computer until someone removes it there.', 'Remove anyway')) return;
-    await api('POST', '/api/room-remove', { room, force: true }).catch((x) => { banner.value = x.message; });
+    const msg = /** @type {Error} */ (err).message;
+    // Only a server that cannot hear of it, or an app that does not run, is worth removing here alone.
+    if (!/did not answer|too old to forget|is not running/.test(msg)) { banner.value = msg; return; }
+    if (!await window.grillConfirm('Remove it here anyway?', sentence(msg) + '. The room keeps listing this computer until someone removes it there.', 'Remove anyway')) return;
+    try {
+      await api('POST', '/api/room-remove', { room, force: true });
+    } catch (x) {
+      banner.value = /** @type {Error} */ (x).message;
+      return;
+    }
   }
   await reload();
   window.grillToast('Removed ' + name);
@@ -400,7 +407,8 @@ function RoomRow({ i, room }) {
   const paused = (i.paused || []).includes(room);
   const name = st?.name || roomID(room);
   const pill = roomPill(st, paused);
-  const down = !st || st.pairing === '' || st.connection === 'offline';
+  // Connect for a room not paired, or paired but neither connected nor connecting; Pause otherwise.
+  const down = !st || st.pairing === '' || (st.pairing === 'paired' && st.connection !== 'connected' && st.connection !== 'connecting');
   const act = (/** @type {Promise<unknown>} */ p, /** @type {string} */ ok) => p.then(reload).then(() => window.grillToast(ok)).catch((err) => { banner.value = err.message; });
   const pause = () => act(api('POST', '/api/room-pause', { instance: i.id, room, paused: !paused }),
     paused ? 'Resumed: this computer can run the AI for ' + name : 'Paused: ' + name + ' runs its AI elsewhere, or waits');
@@ -850,35 +858,47 @@ function Autostart() {
       .then(() => window.grillToast(want ? 'Starts at your next login' : 'No longer starts at login'))
       .catch((err) => setText(sentence(err.message))).finally(() => setBusy(false));
   };
-  return html`<label class="full"><input id="autostart" type="checkbox" checked=${on} disabled=${busy} onChange=${change} /> Start at login
-    <span id="autostart-status" class="bad" role="status">${text}</span></label>`;
+  return html`<label class="full"><input id="autostart" type="checkbox" checked=${on} disabled=${busy} onChange=${change} /> Start at login${' '}<span id="autostart-status" class="bad" role="status">${text}</span></label>`;
 }
 
 // ServerSettings is one server's settings, its picker at the top: its AI account and model limits
 // (one Save), approve-all (at once), then its websites (003b-AC15, 003b-AC16).
 function ServerSettings() {
   const d = /** @type {StatusReply} */ (data.value);
-  const instances = d.instances || [];
   const inst = currentInstance(d);
-  const st = inst?.status;
-  const [draft, setDraft] = useState(/** @type {(import('./api.js').Settings & {account: string}) | null} */ (null));
-  const [text, run] = useStatus();
   if (!inst) return html`<h3>Per server</h3><p class="hint">Server settings show once you add a room.</p>`;
-  const saved = { ...(st?.settings || { max_model: '', max_effort: '', approve_all: false }), account: inst.account };
-  const v = { ...saved, ...(draft || {}) };
-  const changed = /** @type {const} */ (['account', 'max_model', 'max_effort']).filter((k) => draft && draft[k] !== saved[k]);
+  // Keyed: a draft belongs to its server and never follows the picker to another one.
+  return html`<h3 id="server-settings-title">Per server</h3>
+    <${ServerForm} key=${inst.id} inst=${inst} />
+    ${inst.status && html`<${Egress} key=${inst.id} i=${inst} st=${inst.status} />`}`;
+}
+
+/** @param {{inst: Instance}} p */
+function ServerForm({ inst }) {
+  const d = /** @type {StatusReply} */ (data.value);
+  const instances = d.instances || [];
+  const st = inst.status;
+  // draft holds only the fields the host changed: the others follow the server's values.
+  const [draft, setDraft] = useState(/** @type {Record<string, string>} */ ({}));
+  const [busy, setBusy] = useState(false);
+  const [text, run] = useStatus();
+  const saved = { max_model: st?.settings.max_model || '', max_effort: st?.settings.max_effort || '', account: inst.account };
+  const v = { ...saved, ...draft };
+  const changed = /** @type {const} */ (['account', 'max_model', 'max_effort']).filter((k) => k in draft && draft[k] !== saved[k]);
   /** @param {string} k */
-  const pick = (k) => (/** @type {any} */ e) => setDraft({ ...v, [k]: e.currentTarget.value });
+  const pick = (k) => (/** @type {any} */ e) => setDraft({ ...draft, [k]: e.currentTarget.value });
   /** @param {Event} e */
-  const save = (e) => {
+  const save = async (e) => {
     e.preventDefault();
     const steps = (async () => {
       if (changed.includes('account')) await api('POST', '/api/instance-account', { instance: inst.id, room: '', account: v.account });
       if (st && (changed.includes('max_model') || changed.includes('max_effort'))) {
-        await api('POST', '/api/settings', { instance: inst.id, max_model: v.max_model, max_effort: v.max_effort, approve_all: saved.approve_all });
+        await api('POST', '/api/settings', { instance: inst.id, max_model: v.max_model, max_effort: v.max_effort, approve_all: st.settings.approve_all });
       }
     })();
-    run(steps, 'Saved.').then((ok) => { if (ok) setDraft(null); });
+    setBusy(true);
+    if (await run(steps, 'Saved.')) setDraft({});
+    setBusy(false);
   };
   /** @param {any} e */
   const approveAll = (e) => {
@@ -887,30 +907,28 @@ function ServerSettings() {
       .then(() => window.grillToast(on ? 'New AI personas and changes are approved at once' : 'New AI personas and changes wait for your approval'))
       .catch((err) => { banner.value = err.message; });
   };
-  return html`<h3 id="server-settings-title">Per server</h3>
-    <form id="settings-form" key=${inst.id} class="settings-group" aria-labelledby="server-settings-title" onSubmit=${save}>
+  return html`<form id="settings-form" class="settings-group" aria-labelledby="server-settings-title" onSubmit=${save}>
       <label for="settings-instance">Server</label><div class="control">
         <select id="settings-instance" value=${inst.id} disabled=${instances.length < 2}
-          onChange=${(/** @type {any} */ e) => { picked.value = e.currentTarget.value; setDraft(null); }}>
+          onChange=${(/** @type {any} */ e) => { picked.value = e.currentTarget.value; }}>
           ${instances.map((i) => html`<option value=${i.id}>${hostOf(i.url)}</option>`)}
         </select></div>
       ${d.accounts && html`<label for="server-account">AI account</label><div class="control">
-        <${AccountSelect} id="server-account" label="AI account" value=${v.account} onPick=${(/** @type {string} */ a) => setDraft({ ...v, account: a })} />
+        <${AccountSelect} id="server-account" label="AI account" value=${v.account} onPick=${(/** @type {string} */ a) => setDraft({ ...draft, account: a })} />
         <span class="hint">for its rooms that do not pick their own</span></div>`}
       ${st ? html`<label for="max-model">Max model</label><div class="control"><select id="max-model" value=${v.max_model} onChange=${pick('max_model')}>
           <option value="">no cap</option>${d.models.map((m) => html`<option value=${m}>${m}</option>`)}</select></div>
         <label for="max-effort">Max effort</label><div class="control"><select id="max-effort" value=${v.max_effort} onChange=${pick('max_effort')}>
           <option value="">no cap</option>${d.efforts.map((m) => html`<option value=${m}>${m}</option>`)}</select></div>
         <p class="hint">An AI persona asking for more runs at this limit until you approve it in the room.</p>
-        <label class="full"><input id="approve-all" type="checkbox" checked=${saved.approve_all} onChange=${approveAll} /> Approve every new AI persona and change</label>`
+        <label class="full"><input id="approve-all" type="checkbox" checked=${st.settings.approve_all} onChange=${approveAll} /> Approve every new AI persona and change</label>`
       : html`<p class="hint">The app for ${hostOf(inst.url)} is ${inst.state}${inst.error ? ': ' + inst.error : ''}. Its limits show once it runs.</p>`}
       <div class="settings-foot">
         <span id="settings-status" role="status">${text}</span>
         ${changed.length > 0 && html`<span class="dirty">${changed.length === 1 ? '1 unsaved change' : changed.length + ' unsaved changes'}</span>`}
-        <button type="submit" disabled=${!changed.length}>Save</button>
+        <button type="submit" disabled=${!changed.length || busy}>Save</button>
       </div>
-    </form>
-    ${st && html`<${Egress} key=${inst.id} i=${inst} st=${st} />`}`;
+    </form>`;
 }
 
 /**
@@ -934,12 +952,14 @@ function Egress({ i, st }) {
   const [logErr, setLogErr] = useState('');
   useEffect(() => {
     let timer = 0;
+    // live stops a load already in flight from starting the next one once the server changes.
+    let live = true;
     const load = () => api('GET', '/api/denied?instance=' + encodeURIComponent(i.id))
-      .then((r) => { setLog({ denied: r.denied, hits: r.hits || null }); setLogErr(''); })
-      .catch((err) => setLogErr(err.message))
-      .finally(() => { if (!stopped.value) timer = setTimeout(load, 5000); });
+      .then((r) => { if (live) { setLog({ denied: r.denied, hits: r.hits || null }); setLogErr(''); } })
+      .catch((err) => { if (live) setLogErr(err.message); })
+      .finally(() => { if (live && !stopped.value) timer = setTimeout(load, 5000); });
     load();
-    return () => clearTimeout(timer);
+    return () => { live = false; clearTimeout(timer); };
   }, [i.id]);
   /** @param {string[]} list @param {string} ok */
   const save = (list, ok) => run(api('POST', '/api/allowlist', { instance: i.id, allowlist: list }), ok);
