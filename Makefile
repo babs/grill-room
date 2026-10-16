@@ -80,7 +80,7 @@ test-docker: sandbox-image sandbox-fake-image
 	GRILL_ROOM_TEST_DOCKER=1 GRILL_ROOM_SANDBOX_IMAGE=$(SANDBOX_IMAGE) GRILL_ROOM_SANDBOX_FAKE_IMAGE=$(SANDBOX_FAKE_IMAGE) \
 	  go test -race -p 1 -run 'Docker' ./internal/sandbox/ ./internal/daemon/ ./cmd/grill-room-daemon/
 
-# Browser tests against a fresh server, in the installed Chrome (doc-frames.spec.js in Playwright's
+# Browser tests against a fresh server, in the installed Chrome (firefoxSpecs in Playwright's
 # Firefox too: `pnpm exec playwright install firefox`); agent turns run in Docker with the
 # fake claude. Magic links run against a second server and a throwaway mailpit container. The
 # server hands out the daemon's own version, so its workers run the daemon's binary: an unsigned

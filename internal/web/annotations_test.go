@@ -187,7 +187,7 @@ func TestThreadRepliesStatusAndAttachments(t *testing.T) {
 	att := fmt.Sprintf("/api/rooms/%s/attachments/%d", room.ID, m.Attachments[0].ID)
 	resp, img := e.get(t, att, alice.Token)
 	if resp.StatusCode != http.StatusOK || !bytes.Equal(img, png) || resp.Header.Get("Content-Type") != "image/png" ||
-		!strings.HasPrefix(resp.Header.Get("Content-Security-Policy"), "sandbox") {
+		!strings.HasPrefix(resp.Header.Get("Content-Security-Policy"), "sandbox") || resp.Header.Get("Cross-Origin-Resource-Policy") != "same-origin" {
 		t.Fatalf("attachment: %d %v", resp.StatusCode, resp.Header)
 	}
 	other, stranger := e.member(t)

@@ -440,6 +440,8 @@ func (s *Server) originalDocument(w http.ResponseWriter, r *http.Request, sess s
 		disposition = "inline"
 	}
 	h.Set("Content-Security-Policy", csp)
+	// Only the room page loads it, never the sandboxed frame: no other origin needs it.
+	h.Set("Cross-Origin-Resource-Policy", "same-origin")
 	h.Set("Content-Type", d.ContentType)
 	h.Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": d.Name}))
 	h.Set("Content-Length", strconv.Itoa(len(data)))

@@ -260,6 +260,12 @@ func TestIsolationHeaders(t *testing.T) {
 			t.Errorf("%s: %d %v", path, code, hdr)
 		}
 	}
+	// Only the room page loads an original, inline or as a download.
+	for _, path := range []string{docs + itoa(pdf.ID) + "/original", docs + itoa(doc.ID) + "/original"} {
+		if code, hdr := e.getHeaders(t, path, p.Token); code != http.StatusOK || hdr.Get("Cross-Origin-Resource-Policy") != "same-origin" {
+			t.Errorf("%s: %d %v", path, code, hdr)
+		}
+	}
 	for path, want := range map[string]string{
 		"/static/stt/engine.js": workerCSP,
 		"/static/room.js":       "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",

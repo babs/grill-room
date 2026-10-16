@@ -12,7 +12,7 @@ const otherStacks = ['voice/**', 'agent-live/**', 'mcp-live/**', 'install/**', '
 const deviceSpec = 'device-stt.spec.js';
 
 // The specs that also run in Firefox.
-const firefoxSpecs = ['doc-frames.spec.js'];
+const firefoxSpecs = ['doc-frames.spec.js', 'documents.spec.js', 'ui-guards.spec.js', 'isolation.spec.js'];
 
 // The specs whose daemons run agent turns, each in a Docker sandbox.
 const sandboxSpecs = ['admin', 'agent', 'approvals', 'concurrency', 'egress', 'export-import', 'handoff', 'mentions', 'personas',

@@ -231,6 +231,7 @@ func (s *Server) getAttachment(w http.ResponseWriter, r *http.Request, sess sess
 	}
 	h := w.Header()
 	h.Set("Content-Security-Policy", originalCSP)
+	h.Set("Cross-Origin-Resource-Policy", "same-origin")
 	h.Set("Content-Type", at.ContentType)
 	h.Set("Content-Disposition", "inline")
 	h.Set("Content-Length", strconv.FormatInt(at.Size, 10))
