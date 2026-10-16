@@ -19,8 +19,18 @@ const stopped = signal(false);
 // picked is the server the per-server settings show; empty follows the page's current one.
 const picked = signal('');
 
+// sent counts the status reads and shown is the newest one on the page: a poll sent before a
+// change may land after the reload that follows it, and must not undo the change on screen.
+let sent = 0;
+let shown = 0;
+
 function reload() {
-  return api('GET', '/api/status').then((r) => { data.value = r; });
+  const n = ++sent;
+  return api('GET', '/api/status').then((r) => {
+    if (n < shown) return;
+    shown = n;
+    data.value = r;
+  });
 }
 
 // restarting is when an update restarted the app, 0 otherwise: the page waits for the new
@@ -58,6 +68,7 @@ async function poll() {
   }
   if (!stopped.value) setTimeout(poll, 2000);
 }
+
 
 /**
  * useStatus runs a form's request: once it worked, the page reloads its data and a toast says so,
