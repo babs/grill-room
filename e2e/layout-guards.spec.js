@@ -34,10 +34,13 @@ const probe = (page, scope) => page.locator(scope).first().evaluate((root) => {
   }).map(name);
   const sideways = [root, ...root.querySelectorAll('*')].filter((e) => shown(e) && !e.matches('.tabs, .tabs *')
     && ['auto', 'scroll'].includes(getComputedStyle(e).overflowX) && e.scrollWidth > e.clientWidth + 1).map(name);
-  const rows = [...root.querySelectorAll('.list-row:not(.head), tbody tr')].filter(shown).map((e) => e.getBoundingClientRect().height);
+  // A row's text, its lines split by " | ": a failure names the row and what took its height.
+  const rows = [...root.querySelectorAll('.list-row:not(.head), tbody tr')].filter(shown)
+    .map((e) => ({ height: e.getBoundingClientRect().height, text: e.innerText.trim().replace(/\s*\n\s*/g, ' | ') }));
+  const tallest = rows.reduce((a, r) => (r.height > a.height ? r : a), { height: 0, text: '' });
   const lists = [...root.querySelectorAll('.list-rows, table')].filter(shown).map((e) => e.getBoundingClientRect().width);
   const width = root.getBoundingClientRect().width - parseFloat(getComputedStyle(root).paddingLeft) - parseFloat(getComputedStyle(root).paddingRight);
-  return { primaries, clipped, sideways, tallest: Math.max(0, ...rows), share: lists.length ? Math.max(...lists) / width : 1, width,
+  return { primaries, clipped, sideways, tallest: tallest.height, tallestText: tallest.text, share: lists.length ? Math.max(...lists) / width : 1, width,
     pageOverflow: document.documentElement.scrollWidth - innerWidth };
 });
 
@@ -71,7 +74,7 @@ for (const [size, viewport] of Object.entries(sizes)) {
       expect.soft(m.pageOverflow, `${view}: page wider than the screen`).toBeLessThanOrEqual(0);
       if (size === 'phone') {
         expect.soft(m.sideways, `${view}: scrolls sideways`).toEqual([]);
-        expect.soft(m.tallest, `${view}: tallest row`).toBeLessThanOrEqual(120);
+        expect.soft(m.tallest, `${view}: tallest row, ${m.tallestText}`).toBeLessThanOrEqual(120);
       }
       if (size === 'wide') {
         if (view === 'instance') expect.soft(m.width, 'a form keeps 72rem').toBeLessThanOrEqual(72 * 16);
