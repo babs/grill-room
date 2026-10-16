@@ -22,6 +22,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/babs/grill-room/internal/sandbox"
 	_ "github.com/babs/grill-room/internal/sqlitetest"
 )
 
@@ -38,7 +39,7 @@ func TestMain(m *testing.M) {
 // status, answers requests and stops when told. "crash" exits right after its config, "mute"
 // never answers, "silent" never says hello, "early" talks before it, "served" reports that its
 // instance serves v9.9.9, "slots" asks for two slots and frees the first once granted, "turns"
-// reports two ended turns.
+// reports two ended turns, "nodocker" and "docker" report Docker down or up and exit.
 func fakeWorker(mode string) int {
 	proto, err := strconv.Atoi(mode)
 	if err != nil {
@@ -74,7 +75,10 @@ func fakeWorker(mode string) int {
 		served = "v9.9.9"
 	}
 	_ = conn.Send(Msg{Type: "status", Status: &Status{Host: "fake-worker", Room: m.Config.Pair, Pairing: "paired", Connection: "connected",
-		Update: Update{Available: "v9.9.9", Served: served}}})
+		Docker: sandbox.Readiness{OK: mode == "docker"}, Update: Update{Available: "v9.9.9", Served: served}}})
+	if mode == "nodocker" || mode == "docker" {
+		return 1
+	}
 	_ = conn.Send(Msg{Type: "log", Log: []byte(`{"msg":"fake_worker_ready"}`)})
 	logAccess := func(a *Access) {
 		if a != nil {
@@ -476,6 +480,32 @@ func TestSupervisorCleansUpAfterCrash(t *testing.T) {
 	}
 	if _, err := (workerOps{s: s}).request(context.Background(), Msg{Type: "recheck"}); err == nil {
 		t.Fatal("a request reached a crashed worker")
+	}
+}
+
+// A worker that last saw Docker down is restarted without a cleanup, which would wait on that
+// Docker: a Windows runner's hung for over 30 s, the room without a host meanwhile. One that saw it
+// up gets its cleanup.
+func TestSupervisorCrashCleanupFollowsDocker(t *testing.T) {
+	for mode, cleans := range map[string]bool{"nodocker": false, "docker": true} {
+		t.Run(mode, func(t *testing.T) {
+			var mu sync.Mutex
+			var calls []string
+			docker := func(_ context.Context, _ io.Reader, args ...string) ([]byte, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				calls = append(calls, strings.Join(args, " "))
+				return nil, errors.New("docker: no answer")
+			}
+			s := testSupervisor(t, mode, nil, func(o *SupervisorOptions) { o.Docker = docker })
+			s.SetRoom(context.Background(), Room{Base: "https://rooms.example", ID: "abc"})
+			waitFor(t, "two restarts", func() bool { return instance(t, s).Restarts >= 2 })
+			mu.Lock()
+			defer mu.Unlock()
+			if slices.ContainsFunc(calls, func(c string) bool { return strings.HasPrefix(c, "container ls") }) != cleans {
+				t.Fatalf("docker calls %q, want a cleanup: %v", calls, cleans)
+			}
+		})
 	}
 }
 
