@@ -637,7 +637,16 @@ function editMessage(li, m) {
   save.textContent = 'Save';
   const cancel = button('Cancel', '', () => li.replaceWith(renderMessage(m)));
   cancel.className = 'btn-secondary';
-  form.append(box, save, cancel);
+  const list = document.createElement('ul');
+  list.className = 'mention-list';
+  list.id = 'edit-mention-list-' + m.id;
+  list.setAttribute('role', 'listbox');
+  list.setAttribute('aria-label', 'Mention');
+  list.hidden = true;
+  // #messages is a live region: the suggestions must not be read out on each keystroke.
+  list.setAttribute('aria-live', 'off');
+  const mentions = mentionAutocomplete(box, list);
+  form.append(list, box, save, cancel);
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     sendJSON('PATCH', api + '/messages/' + m.id, { body: box.value }).then((saved) => {
@@ -646,6 +655,7 @@ function editMessage(li, m) {
   });
   box.addEventListener('input', () => box.setCustomValidity(''));
   box.addEventListener('keydown', (e) => {
+    if (mentions.keydown(e)) return;
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       form.requestSubmit();
@@ -3659,69 +3669,103 @@ async function send() {
   }
 }
 
-// @ autocompletion (005-AC2): the room's personas first, then the people, filtered as you type;
-// arrows, Enter or Tab, and a tap pick one.
-const mentionList = $('mention-list');
-let mentionHits = [];
-let mentionAt = -1;
-let mentionPick = 0;
+// @ autocompletion (005-AC2), on the send box and on an edit box: the room's personas first, then
+// the people, filtered as you type; arrows, Enter or Tab, and a tap pick one. keydown answers
+// whether it took the key, so the box's own Enter/Escape run only when the list did not.
+function mentionAutocomplete(input, list) {
+  let hits = [];
+  let at = -1;
+  let pick = 0;
 
-function suggest() {
-  const before = bodyInput.value.slice(0, bodyInput.selectionStart);
-  const found = bodyInput.selectionStart === bodyInput.selectionEnd && before.match(/(?:^|[^\p{L}\p{N}_@])@([\p{L}\p{N}_-]*)$/u);
-  mentionHits = [];
-  if (found) {
-    const q = found[1].toLowerCase();
-    mentionAt = before.length - found[1].length - 1;
-    const all = [...agent.personas.map((p) => ({ token: p.name, label: p.badge + ' ' + p.name, kind: 'agent' })),
-      ...participants.filter((p) => String(p.id) !== myID).map((p) => ({ token: mentionToken(p.name), label: p.name, kind: 'person' }))];
-    const seen = new Set();
-    for (const h of all) {
-      const key = h.token.toLowerCase();
-      if (h.token && key.startsWith(q) && !seen.has(key)) {
-        seen.add(key);
-        mentionHits.push(h);
+  function suggest() {
+    const before = input.value.slice(0, input.selectionStart);
+    const found = input.selectionStart === input.selectionEnd && before.match(/(?:^|[^\p{L}\p{N}_@])@([\p{L}\p{N}_-]*)$/u);
+    hits = [];
+    if (found) {
+      const q = found[1].toLowerCase();
+      at = before.length - found[1].length - 1;
+      const all = [...agent.personas.map((p) => ({ token: p.name, label: p.badge + ' ' + p.name, kind: 'agent' })),
+        ...participants.filter((p) => String(p.id) !== myID).map((p) => ({ token: mentionToken(p.name), label: p.name, kind: 'person' }))];
+      const seen = new Set();
+      for (const h of all) {
+        const key = h.token.toLowerCase();
+        if (h.token && key.startsWith(q) && !seen.has(key)) {
+          seen.add(key);
+          hits.push(h);
+        }
       }
+      hits = hits.slice(0, 8);
     }
-    mentionHits = mentionHits.slice(0, 8);
+    pick = 0;
+    render();
   }
-  mentionPick = 0;
-  renderSuggestions();
-}
 
-function renderSuggestions() {
-  const open = mentionHits.length > 0;
-  mentionList.hidden = !open;
-  bodyInput.setAttribute('aria-expanded', String(open));
-  mentionList.replaceChildren(...mentionHits.map((h, i) => {
-    const li = document.createElement('li');
-    li.id = 'mention-' + i;
-    li.setAttribute('role', 'option');
-    li.setAttribute('aria-selected', String(i === mentionPick));
-    const kind = document.createElement('span');
-    kind.className = 'kind';
-    kind.textContent = h.kind;
-    li.append(h.label, kind);
-    // On pointerdown, before the textarea loses focus to the tap.
-    li.addEventListener('pointerdown', (e) => {
+  function render() {
+    const open = hits.length > 0;
+    list.hidden = !open;
+    input.setAttribute('aria-expanded', String(open));
+    list.replaceChildren(...hits.map((h, i) => {
+      const li = document.createElement('li');
+      li.id = list.id + '-' + i;
+      li.setAttribute('role', 'option');
+      li.setAttribute('aria-selected', String(i === pick));
+      const kind = document.createElement('span');
+      kind.className = 'kind';
+      kind.textContent = h.kind;
+      li.append(h.label, kind);
+      // On pointerdown, before the textarea loses focus to the tap.
+      li.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        choose(i);
+      });
+      return li;
+    }));
+    if (open) input.setAttribute('aria-activedescendant', list.id + '-' + pick);
+    else input.removeAttribute('aria-activedescendant');
+  }
+
+  function choose(i) {
+    const text = '@' + hits[i].token + ' ';
+    const v = input.value;
+    input.value = v.slice(0, at) + text + v.slice(input.selectionStart);
+    input.setSelectionRange(at + text.length, at + text.length);
+    input.focus();
+    hits = [];
+    render();
+  }
+
+  input.setAttribute('aria-autocomplete', 'list');
+  input.setAttribute('aria-controls', list.id);
+  input.setAttribute('aria-expanded', 'false');
+  input.addEventListener('input', suggest);
+  input.addEventListener('click', suggest);
+  input.addEventListener('blur', () => {
+    hits = [];
+    render();
+  });
+
+  return {
+    keydown(e) {
+      if (!hits.length || e.isComposing) return false;
+      const move = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+      if (move) {
+        pick = (pick + move + hits.length) % hits.length;
+        render();
+      } else if (e.key === 'Enter' || e.key === 'Tab') {
+        choose(pick);
+      } else if (e.key === 'Escape') {
+        e.stopPropagation();
+        hits = [];
+        render();
+      } else {
+        return false;
+      }
       e.preventDefault();
-      pickMention(i);
-    });
-    return li;
-  }));
-  if (open) bodyInput.setAttribute('aria-activedescendant', 'mention-' + mentionPick);
-  else bodyInput.removeAttribute('aria-activedescendant');
+      return true;
+    },
+  };
 }
-
-function pickMention(i) {
-  const text = '@' + mentionHits[i].token + ' ';
-  const v = bodyInput.value;
-  bodyInput.value = v.slice(0, mentionAt) + text + v.slice(bodyInput.selectionStart);
-  bodyInput.setSelectionRange(mentionAt + text.length, mentionAt + text.length);
-  bodyInput.focus();
-  mentionHits = [];
-  renderSuggestions();
-}
+const sendMentions = mentionAutocomplete(bodyInput, $('mention-list'));
 
 // The keys' hint shows on the first focus only (005-AC33): the placeholder stays short.
 bodyInput.addEventListener('focus', () => {
@@ -3730,39 +3774,13 @@ bodyInput.addEventListener('focus', () => {
   $('send-hint').hidden = false;
   setTimeout(() => { $('send-hint').hidden = true; }, 8000);
 }, { once: true });
-bodyInput.addEventListener('input', suggest);
-bodyInput.addEventListener('click', suggest);
-bodyInput.addEventListener('blur', () => {
-  mentionHits = [];
-  renderSuggestions();
-});
 
 sendForm.addEventListener('submit', (e) => {
   e.preventDefault();
   send().catch(console.error);
 });
 bodyInput.addEventListener('keydown', (e) => {
-  if (mentionHits.length && !e.isComposing) {
-    const move = { ArrowDown: 1, ArrowUp: -1 }[e.key];
-    if (move) {
-      e.preventDefault();
-      mentionPick = (mentionPick + move + mentionHits.length) % mentionHits.length;
-      renderSuggestions();
-      return;
-    }
-    if (e.key === 'Enter' || e.key === 'Tab') {
-      e.preventDefault();
-      pickMention(mentionPick);
-      return;
-    }
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      mentionHits = [];
-      renderSuggestions();
-      return;
-    }
-  }
+  if (sendMentions.keydown(e)) return;
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
     send().catch(console.error);
