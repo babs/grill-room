@@ -463,10 +463,10 @@ func TestRevokedInviteInvalidatesItsParticipants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RevokeInvite(ctx, "a", p.InviteID); err != nil {
+	if _, err := s.RevokeInvite(ctx, "a", p.InviteID, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RevokeInvite(ctx, "a", p.InviteID); err != nil {
+	if _, err := s.RevokeInvite(ctx, "a", p.InviteID, true, "Admin"); err != nil {
 		t.Fatalf("revoke is idempotent, got %v", err)
 	}
 	if _, err := s.ParticipantByToken(ctx, "tok-a"); !errors.Is(err, ErrNotFound) {
@@ -482,7 +482,7 @@ func TestRevokedInviteInvalidatesItsParticipants(t *testing.T) {
 	if err != nil || len(ps) != 1 || ps[0].ID != other.ID {
 		t.Fatalf("participants after revoke: %v, %v", ps, err)
 	}
-	if _, err := s.RevokeInvite(ctx, "b", inv2.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := s.RevokeInvite(ctx, "b", inv2.ID, true, "Admin"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("revoke through the wrong room: got %v, want ErrNotFound", err)
 	}
 }
@@ -565,7 +565,7 @@ func TestRoomsAndSettings(t *testing.T) {
 	}
 }
 
-func TestRoomParticipantAndInviteParticipants(t *testing.T) {
+func TestRoomParticipant(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	p := seed(t, s, "a")
@@ -577,26 +577,11 @@ func TestRoomParticipantAndInviteParticipants(t *testing.T) {
 	if _, err := s.RoomParticipant(ctx, "b", p.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("through another room: %v", err)
 	}
-	second, _, err := s.Join(ctx, "inv-a", "Bob", "tok-bob", JoinProfile{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ids, err := s.InviteParticipantIDs(ctx, "a", p.InviteID)
-	if err != nil || len(ids) != 2 || ids[0] != p.ID || ids[1] != second.ID {
-		t.Fatalf("invite participants: %v %v", ids, err)
-	}
-	if ids, err := s.InviteParticipantIDs(ctx, "b", p.InviteID); err != nil || len(ids) != 0 {
-		t.Fatalf("through another room: %v %v", ids, err)
-	}
-	if _, err := s.RevokeInvite(ctx, "a", p.InviteID); err != nil {
+	if _, err := s.RevokeInvite(ctx, "a", p.InviteID, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.RoomParticipant(ctx, "a", p.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("revoked: %v", err)
-	}
-	// Revoked participants are still listed: they are who must leave the audio.
-	if ids, err := s.InviteParticipantIDs(ctx, "a", p.InviteID); err != nil || len(ids) != 2 {
-		t.Fatalf("after revoke: %v %v", ids, err)
+		t.Fatalf("removed: %v", err)
 	}
 }
 

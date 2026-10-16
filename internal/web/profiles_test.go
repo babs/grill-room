@@ -140,7 +140,7 @@ func TestProfileFollowsItsPersonAcrossRoomsAndDevices(t *testing.T) {
 	// The phone's event stream ends when the room drops the profile's participant.
 	ch := phone.events(t, a.ID)
 	_, invs := e.do(t, "GET", "/api/rooms/"+a.ID+"/invites", e.admin, nil)
-	if code, _ := e.do(t, "DELETE", "/api/rooms/"+a.ID+"/invites/"+strconv.FormatInt(decodeJSON[[]store.Invite](t, invs)[0].ID, 10), e.admin, nil); code != http.StatusOK {
+	if code, _ := e.do(t, "DELETE", "/api/rooms/"+a.ID+"/invites/"+strconv.FormatInt(decodeJSON[[]store.Invite](t, invs)[0].ID, 10)+"?cut=1", e.admin, nil); code != http.StatusOK {
 		t.Fatal("revoke failed")
 	}
 	waitRevoked(t, ch)
@@ -643,10 +643,15 @@ func TestMemberInvites(t *testing.T) {
 	if code, _ := e.do(t, "DELETE", path+"/"+strconv.FormatInt(aliceInv.ID, 10), alice.Token, nil); code != http.StatusForbidden {
 		t.Fatalf("alice revokes the admin's invite: %d", code)
 	}
+	// 016-AC5: removing people is a room admin's act.
+	if code, b := e.do(t, "DELETE", one+"?cut=1", alice.Token, nil); code != http.StatusForbidden || !strings.Contains(string(b), "Only a room admin can remove people") {
+		t.Fatalf("alice cuts with hers: %d %s", code, b)
+	}
 	if code, _ := e.do(t, "DELETE", one, alice.Token, nil); code != http.StatusOK {
 		t.Fatalf("alice revokes hers: %d", code)
 	}
-	if code, _ := e.do(t, "GET", "/api/rooms/"+room.ID, carol.Token, nil); code != http.StatusUnauthorized {
+	// 016-AC3: a revoke stops new joins; who joined through it stays.
+	if code, _ := e.do(t, "GET", "/api/rooms/"+room.ID, carol.Token, nil); code != http.StatusOK {
 		t.Fatalf("carol after the revoke: %d", code)
 	}
 	if code, _ := e.do(t, "DELETE", path+"/"+strconv.FormatInt(bobInv.ID, 10), e.admin, nil); code != http.StatusOK {
@@ -712,7 +717,7 @@ func TestStaleRoomCookieFallsBackToTheProfile(t *testing.T) {
 	}
 	again := phone.join(t, room.ID, "Alice on the phone")
 	_, invs := e.do(t, "GET", "/api/rooms/"+room.ID+"/invites", e.admin, nil)
-	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(decodeJSON[[]store.Invite](t, invs)[0].ID, 10), e.admin, nil); code != http.StatusOK {
+	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(decodeJSON[[]store.Invite](t, invs)[0].ID, 10)+"?cut=1", e.admin, nil); code != http.StatusOK {
 		t.Fatal("revoke failed")
 	}
 	if code, body := laptop.do(t, "GET", "/api/rooms/"+room.ID, nil); code != http.StatusOK || decodeJSON[roomResp](t, body).Me.ID != again.Participant.ID {
@@ -736,7 +741,7 @@ func TestStreamSurvivesARevokedRoomCookieWithAValidProfile(t *testing.T) {
 	phone.join(t, room.ID, "Alice on the phone")
 	ch := laptop.events(t, room.ID)
 	_, invs := e.do(t, "GET", "/api/rooms/"+room.ID+"/invites", e.admin, nil)
-	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(decodeJSON[[]store.Invite](t, invs)[0].ID, 10), e.admin, nil); code != http.StatusOK {
+	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(decodeJSON[[]store.Invite](t, invs)[0].ID, 10)+"?cut=1", e.admin, nil); code != http.StatusOK {
 		t.Fatal("revoke failed")
 	}
 	if code, _ := phone.do(t, "POST", "/api/rooms/"+room.ID+"/messages", map[string]string{"body": "still here"}); code != http.StatusCreated {
@@ -769,7 +774,7 @@ func TestRevokedMemberCannotRejoinThroughTheirOwnInvite(t *testing.T) {
 		t.Fatal("member invite failed")
 	}
 	spare := decodeJSON[invite](t, b)
-	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(inv.ID, 10), e.admin, nil); code != http.StatusOK {
+	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(inv.ID, 10)+"?cut=1", e.admin, nil); code != http.StatusOK {
 		t.Fatal("revoke failed")
 	}
 	if code, _ := e.do(t, "POST", "/api/join", "", map[string]string{"invite": spare.Token, "name": "Alice"}); code != http.StatusUnauthorized {

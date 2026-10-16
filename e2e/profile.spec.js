@@ -88,8 +88,8 @@ test('profile across rooms and devices', async ({ browser, request }) => {
 
 // 002-AC6 moved to room-admins.spec.js: renaming is a room admin's since 004-AC8.
 
-// 002-AC7, 011-AC26, 011-AC27: a member shares their link, a guest joins through it, the member
-// revokes it from Room settings › Invites.
+// 002-AC7, 011-AC26, 011-AC27, 016-AC3: a member shares their link, a guest joins through it, the
+// member revokes it from Room settings › Invites, and the guest stays.
 test('member invites and revokes', async ({ browser, request }) => {
   const room = await newRoom(request, 'Invites');
   const alice = await (await browser.newContext()).newPage();
@@ -113,9 +113,13 @@ test('member invites and revokes', async ({ browser, request }) => {
   const rows = alice.locator('#manage #invites-all .list-row:not(.head)');
   await expect(rows).toHaveCount(1);
   await rowAction(rows, /^Revoke/);
-  await expect(alice.locator('#revoke-lose')).toHaveText('Carol');
+  // 016-AC3: a member's revoke stops new joins; Carol keeps her seat.
+  await expect(alice.locator('#revoke-stays')).toBeVisible();
+  await expect(alice.locator('#revoke-cut')).toHaveCount(0);
   await alice.locator('#revoke-sheet').getByRole('button', { name: 'Revoke', exact: true }).click();
-  await expect(alice.locator('#toasts .toast')).toHaveText('Revoked. Carol lost access.');
+  await expect(alice.locator('#toasts .toast')).toHaveText('Revoked. Nobody lost access.');
   await expect(rows).toContainText('revoked');
-  await expect(carol.locator('#banner')).toHaveText('Your access to this room has ended.');
+  await carol.locator('#body').fill('Carol stays');
+  await carol.locator('#body').press('Enter');
+  await expect(alice.locator('#messages')).toContainText('Carol stays');
 });

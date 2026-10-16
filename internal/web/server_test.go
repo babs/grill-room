@@ -327,7 +327,7 @@ func TestE2ERoomLifecycle(t *testing.T) {
 	}
 
 	// 001-AC3: revoking Alice's invite ends her open stream and every later request.
-	if code, b := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(inv.ID, 10), e.admin, nil); code != http.StatusOK {
+	if code, b := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(inv.ID, 10)+"?cut=1", e.admin, nil); code != http.StatusOK {
 		t.Fatalf("revoke: %d %s", code, b)
 	}
 	expectRevokedThenClosed(t, aliceEvents)
@@ -348,9 +348,12 @@ func TestE2ERoomLifecycle(t *testing.T) {
 	if code, _ := e.do(t, "POST", "/api/join", "", map[string]string{"invite": inv.Token, "name": "Mallory"}); code != http.StatusUnauthorized {
 		t.Errorf("join with revoked invite: %d, want 401", code)
 	}
-	// Bob joined through another invite and stays in.
+	// Bob joined through another invite and stays in, told who was removed (016 Q4).
 	if code, _ := e.do(t, "GET", "/api/rooms/"+room.ID, bob.Token, nil); code != http.StatusOK {
 		t.Fatalf("Bob after Alice's revoke: %d", code)
+	}
+	if m := nextMessage(t, bobEvents); m.Kind != store.KindSystem || m.Body != "The admin revoked an invite; Alice was removed" {
+		t.Fatalf("revoke line: %+v", m)
 	}
 
 	// 001-AC4: deleting the room ends the remaining streams and leaves nothing behind.
@@ -384,7 +387,7 @@ func TestRoomRoutesRequireValidRoomToken(t *testing.T) {
 	stranger := e.join(t, e.createInvite(t, other.ID).Token, "Stranger")
 	revInv := e.createInvite(t, room.ID)
 	revoked := e.join(t, revInv.Token, "Gone")
-	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(revInv.ID, 10), e.admin, nil); code != http.StatusOK {
+	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID+"/invites/"+strconv.FormatInt(revInv.ID, 10)+"?cut=1", e.admin, nil); code != http.StatusOK {
 		t.Fatal("revoke failed")
 	}
 	member := e.join(t, e.createInvite(t, room.ID).Token, "Member")
@@ -582,7 +585,7 @@ func TestHeartbeatRechecksAccess(t *testing.T) {
 	ev := e.openEvents(t, room.ID, p.Token, "")
 	nextMessage(t, ev)
 	// Straight to the store: no bus signal.
-	if _, err := e.st.RevokeInvite(t.Context(), room.ID, inv.ID); err != nil {
+	if _, err := e.st.RevokeInvite(t.Context(), room.ID, inv.ID, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
 	expectRevokedThenClosed(t, ev)

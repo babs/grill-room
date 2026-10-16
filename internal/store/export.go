@@ -93,7 +93,7 @@ type xParticipant struct {
 	Name       string `json:"name"`
 	JoinedAt   string `json:"joined_at"`
 	CanTrigger bool   `json:"can_trigger"`
-	// Active is false for a participant whose invite was revoked: it signs old lines, nothing more.
+	// Active is false for a participant whose seat ended: it signs old lines, nothing more (016-AC18).
 	Active      bool   `json:"active"`
 	ProfileUUID string `json:"profile_uuid,omitempty"`
 	Admin       bool   `json:"admin,omitempty"`
@@ -538,9 +538,9 @@ func exportParticipants(ctx context.Context, tx *sql.Tx, roomID string, d *expor
 	return dump(ctx, tx, d, fileParticipants, func(rows *sql.Rows) (any, error) {
 		var p xParticipant
 		return p, rows.Scan(&p.Ref, &p.Name, &p.JoinedAt, &p.CanTrigger, &p.Active, &p.ProfileUUID, &p.Admin, &p.PreviousName)
-	}, `SELECT p.id, p.name, p.joined_at, p.can_trigger, i.revoked_at IS NULL, COALESCE(f.uuid, p.profile_uuid_hint, ''),
+	}, `SELECT p.id, p.name, p.joined_at, p.can_trigger, p.removed_at IS NULL, COALESCE(f.uuid, p.profile_uuid_hint, ''),
 		EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = p.room_id AND a.profile_id = p.profile_id), COALESCE(p.previous_name, '')
-		FROM participants p JOIN invites i ON i.id = p.invite_id LEFT JOIN profiles f ON f.id = p.profile_id
+		FROM participants p LEFT JOIN profiles f ON f.id = p.profile_id
 		WHERE p.room_id = ? ORDER BY p.id`, roomID)
 }
 

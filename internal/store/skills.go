@@ -437,8 +437,8 @@ func pinTurnSkills(ctx context.Context, tx *sql.Tx, roomID string, id, personaID
 			SELECT v.id AS vid FROM room_persona_skills k JOIN skills s ON s.id = k.skill_id
 			JOIN skill_versions v ON v.skill_id = k.skill_id AND v.n = k.version
 			WHERE k.persona_id = ? AND (s.scope = 'shared' OR (s.scope = 'room' AND s.room_id = ? AND NOT s.pending)
-				OR EXISTS (SELECT 1 FROM participants p JOIN invites i ON i.id = p.invite_id
-				WHERE p.room_id = ? AND p.profile_id = s.profile_id AND i.revoked_at IS NULL))
+				OR EXISTS (SELECT 1 FROM participants p
+				WHERE p.room_id = ? AND p.profile_id = s.profile_id AND p.removed_at IS NULL))
 			ORDER BY s.name))
 		WHERE id = ?`, personaID, roomID, roomID, id)
 	if err != nil {

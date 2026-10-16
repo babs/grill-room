@@ -178,7 +178,7 @@ export function RoomPanel({ room, base, api, show, reload, close, tab, tabs, hre
       <${TabBar} tabs=${tabs} active=${tab} href=${href} label=${label + ' ' + room.name}/>
       <div class="tab-panel" id=${'panel-' + tab}>
         ${tab === 'general' ? html`<${General} room=${room} base=${base} api=${api} show=${show} reload=${reload} close=${close} setQuota=${setQuota} extra=${general}/>`
-          : tab === 'invites' ? html`<${Invites} base=${base} api=${api} show=${show} byName=${byName} me=${me}/>`
+          : tab === 'invites' ? html`<${Invites} base=${base} api=${api} show=${show} byName=${byName} me=${me} cut/>`
           : tab === 'export' ? html`<${Export} base=${base} room=${room}/>`
           : children}
       </div>
@@ -236,10 +236,11 @@ const toast = (text) => dispatchEvent(new CustomEvent('grill:toast', { detail: t
 
 /**
  * Invites lists the room's invites, every one for an admin and a member's own for a member
- * (011-AC27); me marks the viewer's shareable link. A revoke asks first in RevokeSheet (011-AC19).
- * @param {{base: string, api: Api, show: (err: unknown) => void, byName?: (id: number) => string, me?: number}} props
+ * (011-AC27); me marks the viewer's shareable link. A revoke asks first in RevokeSheet (011-AC19);
+ * cut, for a room admin or the super-admin, lets it remove the people who joined (016-AC4).
+ * @param {{base: string, api: Api, show: (err: unknown) => void, byName?: (id: number) => string, me?: number, cut?: boolean}} props
  */
-export function Invites({ base, api, show, byName, me }) {
+export function Invites({ base, api, show, byName, me, cut = false }) {
   const [invites, setInvites] = useState(/** @type {Invite[] | null} */ (null));
   const [link, setLink] = useState('');
   const [making, setMaking] = useState(false);
@@ -277,17 +278,20 @@ export function Invites({ base, api, show, byName, me }) {
         <div class="actions">${!i.revoked_at && html`<${RowMenu} id=${'invite-menu-' + i.id} label=${'More actions on link ' + i.id}
           items=${[['Revoke…', () => ask(i), 'danger', 'Revoke link ' + i.id]]}/>`}</div></li>`)}</ul></div>`
       : html`<p class="empty" id="invites-empty">No invite links yet. New invite link makes one to share.</p>`)}
-    ${preview && html`<${RevokeSheet} key=${preview.id} preview=${preview} base=${base} api=${api} done=${() => { setPreview(null); load(); }}/>`}`;
+    ${preview && html`<${RevokeSheet} key=${preview.id} preview=${preview} base=${base} api=${api} cut=${cut} done=${() => { setPreview(null); load(); }}/>`}`;
 }
 
 /**
- * RevokeSheet confirms a revoke with who loses access and who keeps it (011-AC19), then says who
- * the revoke cut, from its answer: the state may have moved since the preview (011-AC20).
- * @param {{preview: Preview, base: string, api: Api, done: () => void}} props
+ * RevokeSheet confirms a revoke, which stops new joins only (016-AC3). With cut, someone joined
+ * through the invite, it offers to remove them too, unticked, with who would lose access and who
+ * keeps it (011-AC19, 016-AC4), then says who the revoke cut, from its answer: the state may have
+ * moved since the preview (011-AC20).
+ * @param {{preview: Preview, base: string, api: Api, cut: boolean, done: () => void}} props
  */
-function RevokeSheet({ preview, base, api, done }) {
+function RevokeSheet({ preview, base, api, cut, done }) {
   const ref = useRef(/** @type {HTMLDialogElement | null} */ (null));
   const [busy, setBusy] = useState(false);
+  const [ticked, setTicked] = useState(false);
   const [said, setSaid] = useState('');
   // inflight, unlike busy, is current inside the close handler of the render that sent the DELETE.
   const inflight = useRef(false);
@@ -303,7 +307,7 @@ function RevokeSheet({ preview, base, api, done }) {
     inflight.current = true;
     setBusy(true);
     setSaid('');
-    api('DELETE', `${base}/invites/${preview.id}`).then((/** @type {{lost: {name: string}[]}} */ r) => {
+    api('DELETE', `${base}/invites/${preview.id}${ticked ? '?cut=1' : ''}`).then((/** @type {{lost: {name: string}[]}} */ r) => {
       inflight.current = false;
       const lost = (r.lost || []).map((p) => p.name);
       toast(lost.length ? `Revoked. ${new Intl.ListFormat('en').format(lost)} lost access.` : 'Revoked. Nobody lost access.');
@@ -326,14 +330,20 @@ function RevokeSheet({ preview, base, api, done }) {
   const list = (people, id) => html`<ul id=${id}>${people.map((p) => html`<li key=${p.participant_id}>${p.name}
     ${p.admin && html` <span class="badge role">admin</span>`}${p.you && html` <span class="badge">you</span>`}</li>`)}</ul>`;
   const chained = preview.invites.length - 1;
+  const n = preview.lose.length;
+  const box = cut && n > 0;
   return html`<dialog ref=${ref} id="revoke-sheet" class="sheet full" aria-labelledby="revoke-title" onClose=${closed} onClick=${outside}
     onCancel=${(/** @type {Event} */ e) => { if (busy) e.preventDefault(); }}>
     <div class="sheet-head"><h2 id="revoke-title">Revoke this invite?</h2>
       <button type="button" class="btn-icon btn-ghost" aria-label="Close" disabled=${busy} onClick=${close} dangerouslySetInnerHTML=${icon('close')}></button></div>
-    ${preview.lose.length > 0 && html`<p>These people lose access:</p>${list(preview.lose, 'revoke-lose')}`}
-    ${preview.keep.length > 0 && html`<p>Keep access through another invite:</p>${list(preview.keep, 'revoke-keep')}`}
+    <p id="revoke-stays">No one can join through it any more. Who joined through it keeps their seat.</p>
     ${!preview.lose.length && !preview.keep.length && html`<p id="revoke-nobody">Nobody joined through this invite.</p>`}
-    ${chained > 0 && html`<p id="revoke-chain">Also revokes ${chained} ${chained > 1 ? 'invites' : 'invite'} made by people who joined through it.</p>`}
+    ${box && html`<label id="revoke-cut-label"><input type="checkbox" id="revoke-cut" checked=${ticked} disabled=${busy}
+        onChange=${(/** @type {Event} */ e) => setTicked(/** @type {HTMLInputElement} */ (e.target).checked)}/>
+        Also remove the ${n} ${n > 1 ? 'people' : 'person'} who joined through it</label>
+      <p>Ticked, these people lose access:</p>${list(preview.lose, 'revoke-lose')}
+      ${preview.keep.length > 0 && html`<p>Keep access through another invite:</p>${list(preview.keep, 'revoke-keep')}`}
+      ${chained > 0 && html`<p id="revoke-chain">Ticked, it also revokes ${chained} ${chained > 1 ? 'invites' : 'invite'} made by people who joined through it.</p>`}`}
     <p class="said error" role="alert">${said}</p>
     <div class="actions">
       <button type="button" class="btn-secondary" disabled=${busy} onClick=${close}>Cancel</button>

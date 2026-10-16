@@ -479,7 +479,7 @@ func TestPurgeEmptyProfiles(t *testing.T) {
 	}
 	empty := newProfile(t, s, "empty")
 	revoked := joinWithProfile(t, s, "rv", "Rev", JoinProfile{RecoveryHash: "rec-rv", SessionHash: "sess-rv"})
-	if _, err := s.RevokeInvite(ctx, "rv", revoked.InviteID); err != nil {
+	if _, err := s.RevokeInvite(ctx, "rv", revoked.InviteID, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
 	keepers := map[string]int64{}
@@ -505,13 +505,13 @@ func TestPurgeEmptyProfiles(t *testing.T) {
 	if _, err := s.SetRoomAdmin(ctx, "adm", adm.ID, true, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RevokeInvite(ctx, "adm", adm.InviteID); err != nil {
+	if _, err := s.RevokeInvite(ctx, "adm", adm.InviteID, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
 	keepers["admin"] = adm.ProfileID
 	// Recent activity keeps an otherwise empty profile: a line by its revoked seat, a sign-in.
 	talker := joinWithProfile(t, s, "tk", "Talker", JoinProfile{RecoveryHash: "rec-tk", SessionHash: "sess-tk"})
-	if _, err := s.RevokeInvite(ctx, "tk", talker.InviteID); err != nil {
+	if _, err := s.RevokeInvite(ctx, "tk", talker.InviteID, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
 	signer := newProfile(t, s, "signer")

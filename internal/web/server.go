@@ -811,35 +811,35 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, sess *sess
 
 // revocable returns the request's invite id, provided sess may revoke it: the super-admin and room
 // admins any, a plain member only the ones they created. It answers the request otherwise.
-func (s *Server) revocable(w http.ResponseWriter, r *http.Request, sess *session) (int64, bool) {
+func (s *Server) revocable(w http.ResponseWriter, r *http.Request, sess *session) (id int64, admin, ok bool) {
 	id, err := strconv.ParseInt(r.PathValue("invite"), 10, 64)
 	if err != nil {
 		httpError(w, http.StatusNotFound, "no such invite")
-		return 0, false
+		return 0, false, false
 	}
-	admin := sess == nil
+	admin = sess == nil
 	if !admin {
 		if admin, err = s.roomAdmin(r.Context(), sess); err != nil {
 			s.serverError(w, "revoke_invite_failed", err)
-			return 0, false
+			return 0, false, false
 		}
 	}
 	if !admin {
 		inv, err := s.bus.Store.Invite(r.Context(), r.PathValue("room"), id)
 		if errors.Is(err, store.ErrNotFound) {
 			httpError(w, http.StatusNotFound, "no such invite")
-			return 0, false
+			return 0, false, false
 		}
 		if err != nil {
 			s.serverError(w, "revoke_invite_failed", err)
-			return 0, false
+			return 0, false, false
 		}
 		if inv.CreatedBy != sess.p.ID {
 			httpError(w, http.StatusForbidden, "you can revoke only the invites you created")
-			return 0, false
+			return 0, false, false
 		}
 	}
-	return id, true
+	return id, admin, true
 }
 
 type previewSeat struct {
@@ -849,7 +849,7 @@ type previewSeat struct {
 
 // revokePreview answers what revoking the invite would do now, for whoever may revoke it (011-AC19).
 func (s *Server) revokePreview(w http.ResponseWriter, r *http.Request, sess *session) {
-	id, ok := s.revocable(w, r, sess)
+	id, _, ok := s.revocable(w, r, sess)
 	if !ok {
 		return
 	}
@@ -879,14 +879,26 @@ type lostSeat struct {
 }
 
 // revokeInvite revokes any invite for the super-admin and room admins, and only the ones they
-// created for a plain member. It answers the invites it cut and who lost access (011-AC20).
+// created for a plain member: no one joins through it any more (016-AC3). With ?cut=1, for a room
+// admin or the super-admin only, it also revokes the invite's chain and removes the people who
+// joined through it (011-AC20, 016-AC4, 016-AC5). It answers the invites it revoked and who lost
+// access.
 func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request, sess *session) {
 	room := r.PathValue("room")
-	id, ok := s.revocable(w, r, sess)
+	id, admin, ok := s.revocable(w, r, sess)
 	if !ok {
 		return
 	}
-	plan, err := s.bus.Store.RevokeInvite(s.roomAuditing(r, sess, ActionInviteRevoke, room, nil), room, id)
+	cut := r.URL.Query().Get("cut") == "1"
+	if cut && !admin {
+		httpError(w, http.StatusForbidden, "Only a room admin can remove people")
+		return
+	}
+	who := "The admin"
+	if sess != nil {
+		who = sess.p.Name
+	}
+	plan, err := s.bus.Store.RevokeInvite(s.roomAuditing(r, sess, ActionInviteRevoke, room, nil), room, id, cut, who)
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "no such invite")
 		return
@@ -897,17 +909,9 @@ func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request, sess *sess
 	}
 	// Wakes the room's event streams, which re-check access and close.
 	s.bus.Notify(room)
-	// The revoke stands either way: a failed lookup only leaves the browser to leave audio itself.
-	// Past the commit, a client hanging up must not skip the kick.
-	ctx := context.WithoutCancel(r.Context())
-	for _, inv := range plan.Invites {
-		if ids, err := s.bus.Store.InviteParticipantIDs(ctx, room, inv); err != nil {
-			s.log.Error("voice_kick_lookup_failed", zap.String("room", room), zap.Error(err))
-		} else {
-			s.kickFromVoice(room, ids)
-		}
-	}
-	s.log.Info("invite_revoked", zap.String("room", room), zap.Int64("invite", id), zap.Int64s("with", plan.Invites))
+	s.kickFromVoice(room, plan.Removed)
+	s.log.Info("invite_revoked", zap.String("room", room), zap.Int64("invite", id), zap.Int64s("with", plan.Invites),
+		zap.Bool("cut", cut), zap.Int64s("removed", plan.Removed))
 	lost := make([]lostSeat, len(plan.Lose))
 	for i, p := range plan.Lose {
 		lost[i] = lostSeat{ParticipantID: p.ParticipantID, Name: p.Name}

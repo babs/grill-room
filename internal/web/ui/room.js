@@ -943,7 +943,7 @@ $('chat-invite').addEventListener('click', () => {
 });
 
 // showEmpty shows the invite card while nobody else has joined, whatever the chat holds (011-AC26):
-// the room's list holds only the participants whose invite is still valid, and self marks your
+// the room's list holds only the participants whose seat is valid, and self marks your
 // profile's other seats.
 function showEmpty() {
   $('chat-empty').hidden = ended || docsMode || participants.some((p) => String(p.id) !== myID && !p.self);

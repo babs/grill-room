@@ -112,7 +112,7 @@ func TestAPITokenParticipant(t *testing.T) {
 	if _, err := s.APITokenParticipant(ctx, "h", "r", now.Add(time.Hour)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expired: %v", err)
 	}
-	if _, err := s.RevokeInvite(ctx, "r", pa.InviteID); err != nil {
+	if _, err := s.RevokeInvite(ctx, "r", pa.InviteID, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.APITokenParticipant(ctx, "h", "r", now); !errors.Is(err, ErrNotFound) {

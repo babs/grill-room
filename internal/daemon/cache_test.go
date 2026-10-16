@@ -434,7 +434,7 @@ func TestWorkspaceCacheForgottenWithTheRoom(t *testing.T) {
 			}
 			sr.rs.call(t, "GET", "/api/rooms/"+sr.rs.room+"/invites", sr.rs.admin, nil, http.StatusOK, &invites)
 			for _, inv := range invites {
-				sr.rs.call(t, "DELETE", "/api/rooms/"+sr.rs.room+"/invites/"+strconv.FormatInt(inv.ID, 10), sr.rs.admin, nil, http.StatusOK, nil)
+				sr.rs.call(t, "DELETE", "/api/rooms/"+sr.rs.room+"/invites/"+strconv.FormatInt(inv.ID, 10)+"?cut=1", sr.rs.admin, nil, http.StatusOK, nil)
 			}
 		} else {
 			sr.rs.call(t, "DELETE", "/api/rooms/"+sr.rs.room, sr.rs.admin, nil, http.StatusNoContent, nil)

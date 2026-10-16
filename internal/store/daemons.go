@@ -61,12 +61,11 @@ func (s *Store) PairDaemon(ctx context.Context, roomID string, participantID int
 	return d, nil
 }
 
-// DaemonByToken returns the daemon holding tokenHash, provided its participant's invite is not revoked.
+// DaemonByToken returns the daemon holding tokenHash, provided its participant's seat is valid.
 func (s *Store) DaemonByToken(ctx context.Context, tokenHash string) (*Daemon, error) {
 	return scanDaemon(s.db.QueryRowContext(ctx, daemonCols+`
 		JOIN participants p ON p.id = d.participant_id
-		JOIN invites i ON i.id = p.invite_id
-		WHERE d.token_hash = ? AND i.revoked_at IS NULL`, tokenHash))
+		WHERE d.token_hash = ? AND p.removed_at IS NULL`, tokenHash))
 }
 
 // HostDaemon returns the paired daemon of the room's host, connected or not; ErrNotFound when the

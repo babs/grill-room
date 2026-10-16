@@ -270,10 +270,10 @@ test('a room skill survives its author leaving', async ({ browser, request, base
   try {
     await pairDaemon(alice, daemon);
     expect((await ask(alice, room.id, 'FAKE_SKILLS with Bob')).trim()).toBe('Skills used: bobs: BOB-v1.');
-    // Bob leaves: the admin revokes the invite he joined through, the second roomWith made, and he
+    // Bob leaves: the admin revokes the invite he joined through, removing him, and he
     // removes his skill.
     const invites = await (await request.get(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
-    expect((await request.delete(`/api/rooms/${room.id}/invites/${invites[1].id}`, { headers: admin })).status()).toBe(200);
+    expect((await request.delete(`/api/rooms/${room.id}/invites/${invites[1].id}?cut=1`, { headers: admin })).status()).toBe(200);
     await expect(bob.locator('#banner')).toHaveText('Your access to this room has ended.');
     await bobProfile.reload();
     await bobProfile.locator('#tab-skills').click();
