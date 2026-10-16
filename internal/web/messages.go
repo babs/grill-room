@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -67,7 +68,7 @@ func (s *Server) editMessage(w http.ResponseWriter, r *http.Request, sess sessio
 		httpError(w, http.StatusBadRequest, fmt.Sprintf("message must be 1 to %d characters", maxBodyLen))
 		return
 	}
-	m, err := s.bus.Store.EditMessage(r.Context(), sess.p.RoomID, id, sess.p.ID, body)
+	m, prev, err := s.bus.Store.EditMessage(r.Context(), sess.p.RoomID, id, sess.p.ID, body)
 	if messageChangeError(w, err) {
 		return
 	}
@@ -82,7 +83,32 @@ func (s *Server) editMessage(w http.ResponseWriter, r *http.Request, sess sessio
 	if err := s.nameMentions(r.Context(), sess.p.RoomID, edited); err != nil {
 		s.log.Warn("name_mentions_failed", zap.String("room", sess.p.RoomID), zap.Error(err))
 	}
-	writeJSON(w, http.StatusOK, viewMessage(edited[0]))
+	var notices []mentionNotice
+	if m.Body != prev {
+		notices = s.editMentions(r.Context(), sess.p, m, prev)
+	}
+	writeJSON(w, http.StatusOK, struct {
+		store.Message
+		Notices []mentionNotice `json:"mention_notices,omitempty"`
+	}{viewMessage(edited[0]), notices})
+}
+
+// editMentions is mentionTurns for line m edited from body prev: only the personas m names that
+// prev did not and that the line never queued run; unknown-name notices cover the new names only.
+// An edit never re-runs a persona: named, edited out, then edited back (016-AC19, 016-AC20).
+func (s *Server) editMentions(ctx context.Context, p *store.Participant, m *store.Message, prev string) []mentionNotice {
+	states, err := s.bus.Store.MessageMentions(ctx, m.RoomID, m.ID-1, m.ID)
+	if err != nil {
+		s.log.Error("mention_failed", zap.String("room", m.RoomID), zap.Error(err))
+		return nil
+	}
+	var linked []int64
+	for _, st := range states[m.ID] {
+		linked = append(linked, st.PersonaID)
+	}
+	return s.callMentioned(ctx, p, m.Body, prev, "", linked, func(ctx context.Context, q *store.QueuedTurn) error {
+		return s.bus.Store.EnqueueMention(ctx, m.ID, q)
+	})
 }
 
 // deleteMessage soft-deletes an author's text or voice line.

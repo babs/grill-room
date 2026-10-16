@@ -84,10 +84,10 @@ func richRoom(t *testing.T, s *Store, id string) (*Participant, *RoomPersona) {
 		return m
 	}
 	hello := say(alice, "hello **world**")
-	if _, err := s.EditMessage(ctx, id, hello.ID, alice.ID, "hello again"); err != nil {
+	if _, _, err := s.EditMessage(ctx, id, hello.ID, alice.ID, "hello again"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.EditMessage(ctx, id, hello.ID, alice.ID, "hello, third time"); err != nil {
+	if _, _, err := s.EditMessage(ctx, id, hello.ID, alice.ID, "hello, third time"); err != nil {
 		t.Fatal(err)
 	}
 	oops := say(bob, "oops")

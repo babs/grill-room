@@ -80,7 +80,7 @@ const (
 // returns, for m's author only, why each named persona will not run and which names match nobody
 // (005-AC3).
 func (s *Server) mentionTurns(ctx context.Context, p *store.Participant, m *store.Message) []mentionNotice {
-	return s.callMentioned(ctx, p, m.Body, "", func(ctx context.Context, q *store.QueuedTurn) error {
+	return s.callMentioned(ctx, p, m.Body, "", "", nil, func(ctx context.Context, q *store.QueuedTurn) error {
 		return s.bus.Store.EnqueueMention(ctx, m.ID, q)
 	})
 }
@@ -88,14 +88,15 @@ func (s *Server) mentionTurns(ctx context.Context, p *store.Participant, m *stor
 // noteMentionTurns is mentionTurns for message m of note thread ann: the same rules, a cause that
 // names the note, and the link on the note message (009-AC29).
 func (s *Server) noteMentionTurns(ctx context.Context, p *store.Participant, ann int64, m *store.AnnotationMessage) []mentionNotice {
-	return s.callMentioned(ctx, p, m.Body, fmt.Sprintf(" in note #%d", ann), func(ctx context.Context, q *store.QueuedTurn) error {
+	return s.callMentioned(ctx, p, m.Body, "", fmt.Sprintf(" in note #%d", ann), nil, func(ctx context.Context, q *store.QueuedTurn) error {
 		return s.bus.Store.EnqueueNoteMention(ctx, m.ID, q)
 	})
 }
 
 // callMentioned queues, through enqueue, a turn of each persona body names, written by p where
-// says (" in note #3", or "" for the chat), and returns the notices for p.
-func (s *Server) callMentioned(ctx context.Context, p *store.Participant, body, where string, enqueue func(context.Context, *store.QueuedTurn) error) []mentionNotice {
+// says (" in note #3", or "" for the chat), and returns the notices for p. A persona or name prev
+// already held, and a persona in skip, count for nothing.
+func (s *Server) callMentioned(ctx context.Context, p *store.Participant, body, prev, where string, skip []int64, enqueue func(context.Context, *store.QueuedTurn) error) []mentionNotice {
 	if !strings.Contains(body, "@") {
 		return nil
 	}
@@ -107,6 +108,16 @@ func (s *Server) callMentioned(ctx context.Context, p *store.Participant, body, 
 	}
 	notices := s.unknownMentions(ctx, p.RoomID, body, personas)
 	called := mentioned(body, personas)
+	if prev != "" || len(skip) > 0 {
+		before := mentionRe.FindAllStringSubmatch(proseText(prev), -1)
+		notices = slices.DeleteFunc(notices, func(n mentionNotice) bool {
+			return slices.ContainsFunc(before, func(m []string) bool { return strings.EqualFold(truncate(m[1], maxNoticeLen), n.Name) })
+		})
+		was := mentioned(prev, personas)
+		called = slices.DeleteFunc(called, func(c store.RoomPersona) bool {
+			return slices.Contains(skip, c.ID) || slices.ContainsFunc(was, func(w store.RoomPersona) bool { return w.ID == c.ID })
+		})
+	}
 	if len(called) == 0 {
 		return notices
 	}

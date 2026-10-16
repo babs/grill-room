@@ -63,6 +63,18 @@ test('mentions: autocomplete and notices without a host', async ({ browser, requ
   ]);
   await expect(line(alice, 'what does')).toBeVisible();
   await expect(line(alice, 'what does').locator('.mentions')).toHaveCount(0);
+
+  // 016-AC21: an edit that names a persona tells its author why it will not run, as a send does.
+  await say(bob, 'Second thought');
+  await messageAction(line(bob, 'Second thought'), 'Edit');
+  const box = bob.getByRole('textbox', { name: 'New text' });
+  await box.press('End');
+  await box.pressSequentially(' @grill now');
+  await box.press('Enter');
+  await expect(line(bob, 'Second thought').locator('.notice')).toHaveText(
+    '@Grill: you may not trigger agents in this room: the host can allow you. Only you see this.');
+  await expect(line(alice, 'Second thought')).toBeVisible();
+  await expect(line(alice, 'Second thought').locator('.mentions')).toHaveCount(0);
 });
 
 // 005-AC2 in the edit box: editing a line offers the same @ list as the send box, keyboard and
@@ -138,6 +150,14 @@ test('mentions: turn states, stop, pending and offline', async ({ browser, reque
     await expect(alice.locator('#messages li.msg.agent.flash')).toHaveText(/Wrote docs\/notes\.md, turn 1\./);
     const notes = async () => (await (await alice.request.get(`/api/rooms/${room.id}/documents`)).json()).find((d) => d.name === 'notes.md');
     expect((await notes()).revisions).toBe(1);
+
+    // 016-AC21: an edit naming @Grill queues it as a send would, and the line shows the chip.
+    await say(alice, 'Before the edit');
+    await messageAction(line(alice, 'Before the edit'), 'Edit');
+    await alice.getByRole('textbox', { name: 'New text' }).fill('After the edit, @grill FAKE_RECALL');
+    await alice.getByRole('textbox', { name: 'New text' }).press('Enter');
+    await expect(line(alice, 'After the edit').locator('.mention-turn')).toHaveText(/→ @Grill · (queued|running|done)/);
+    await expect(line(alice, 'After the edit').locator('.mention-turn')).toHaveText('→ @Grill · done', { timeout: 60_000 });
 
     // Stopped mid-run: the fake writes docs/notes.md and the session, then hangs.
     await say(alice, '@grill FAKE_SLEEP and the code word is BRAVO');

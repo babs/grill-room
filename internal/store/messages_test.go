@@ -44,31 +44,31 @@ func TestEditAndDeleteRules(t *testing.T) {
 		"a system line":        {system.ID, bob.ID, ErrForbidden},
 		"another room's id":    {text.ID + 1000, alice.ID, ErrNotFound},
 	} {
-		if _, err := s.EditMessage(ctx, "r", tc.id, tc.by, "x"); !errors.Is(err, tc.want) {
+		if _, _, err := s.EditMessage(ctx, "r", tc.id, tc.by, "x"); !errors.Is(err, tc.want) {
 			t.Errorf("edit %s: got %v, want %v", name, err, tc.want)
 		}
 		if _, err := s.DeleteMessage(ctx, "r", tc.id, tc.by); !errors.Is(err, tc.want) {
 			t.Errorf("delete %s: got %v, want %v", name, err, tc.want)
 		}
 	}
-	if _, err := s.EditMessage(ctx, "other", text.ID, alice.ID, "x"); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.EditMessage(ctx, "other", text.ID, alice.ID, "x"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("edit through another room: got %v", err)
 	}
 
 	if voice.HTML != "<p>wreck a nice beach</p>\n" || system.HTML != "" {
 		t.Fatalf("rendered on write, system lines excepted: %q %q", voice.HTML, system.HTML)
 	}
-	m, err := s.EditMessage(ctx, "r", voice.ID, alice.ID, "recognize *speech*")
+	m, _, err := s.EditMessage(ctx, "r", voice.ID, alice.ID, "recognize *speech*")
 	if err != nil || m.Body != "recognize *speech*" || m.EditedAt == nil || m.ChangeSeq == 0 {
 		t.Fatalf("voice correction: %+v %v", m, err)
 	}
 	if got, err := s.Message(ctx, "r", voice.ID); err != nil || got.HTML != "<p>recognize <em>speech</em></p>\n" {
 		t.Fatalf("edit re-renders: %+v %v", got, err)
 	}
-	if again, err := s.EditMessage(ctx, "r", voice.ID, alice.ID, "recognize *speech*"); err != nil || again.ChangeSeq != m.ChangeSeq {
+	if again, _, err := s.EditMessage(ctx, "r", voice.ID, alice.ID, "recognize *speech*"); err != nil || again.ChangeSeq != m.ChangeSeq {
 		t.Fatalf("same body must change nothing: %+v %v", again, err)
 	}
-	if _, err := s.EditMessage(ctx, "r", voice.ID, alice.ID, "recognise speech"); err != nil {
+	if _, _, err := s.EditMessage(ctx, "r", voice.ID, alice.ID, "recognise speech"); err != nil {
 		t.Fatal(err)
 	}
 	vs, err := s.MessageVersions(ctx, "r", voice.ID)
@@ -86,7 +86,7 @@ func TestEditAndDeleteRules(t *testing.T) {
 	if again, err := s.DeleteMessage(ctx, "r", text.ID, alice.ID); err != nil || again.ChangeSeq != d.ChangeSeq {
 		t.Fatalf("second delete must change nothing: %+v %v", again, err)
 	}
-	if _, err := s.EditMessage(ctx, "r", text.ID, alice.ID, "x"); !errors.Is(err, ErrMessageDeleted) {
+	if _, _, err := s.EditMessage(ctx, "r", text.ID, alice.ID, "x"); !errors.Is(err, ErrMessageDeleted) {
 		t.Fatalf("edit after delete: %v", err)
 	}
 	// The body stays in the store.
@@ -105,13 +105,13 @@ func TestChangedMessagesAndCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.EditMessage(ctx, "r", voice.ID, alice.ID, "v2"); err != nil {
+	if _, _, err := s.EditMessage(ctx, "r", voice.ID, alice.ID, "v2"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.DeleteMessage(ctx, "r", text.ID, alice.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.EditMessage(ctx, "r", voice.ID, alice.ID, "v3"); err != nil {
+	if _, _, err := s.EditMessage(ctx, "r", voice.ID, alice.ID, "v3"); err != nil {
 		t.Fatal(err)
 	}
 	cur, err := s.ChangeCursor(ctx, "r")
@@ -134,7 +134,7 @@ func TestMessageChanges(t *testing.T) {
 	alice, _, text, voice, _ := twoSpeakers(t, s)
 	edit := func(id int64, body string) {
 		t.Helper()
-		if _, err := s.EditMessage(ctx, "r", id, alice.ID, body); err != nil {
+		if _, _, err := s.EditMessage(ctx, "r", id, alice.ID, body); err != nil {
 			t.Fatal(err)
 		}
 	}

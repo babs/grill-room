@@ -43,7 +43,7 @@ func seed(t *testing.T, s *Store, room string) *Participant {
 	if err := s.InsertMessage(ctx, hello); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.EditMessage(ctx, room, hello.ID, p.ID, "hello again"); err != nil {
+	if _, _, err := s.EditMessage(ctx, room, hello.ID, p.ID, "hello again"); err != nil {
 		t.Fatal(err)
 	}
 	up := &Upload{RoomID: room, ParticipantID: p.ID, Author: p.Name, Filename: "plan.md", ContentType: "text/markdown", Format: "md", Data: []byte("# Plan"), Text: "# Plan"}
