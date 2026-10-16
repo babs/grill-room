@@ -66,9 +66,19 @@ async function poll() {
     restarting.value = 0;
     banner.value = 'Updated to ' + (data.value?.status.version || 'the new version') + '.';
   }
-  if (!stopped.value) setTimeout(poll, 2000);
+  if (!stopped.value) setTimeout(poll, data.value && settling(data.value) ? 500 : 2000);
 }
 
+/**
+ * settling is a page caught mid-change: a worker starting, a pairing waiting or a room connecting.
+ * The page then polls faster, so the host who just approved sees it at once.
+ * @param {StatusReply} r
+ */
+function settling(r) {
+  /** @param {{pairing: string, connection: string}} s */
+  const busy = (s) => s.pairing === 'requesting' || s.pairing === 'pending' || s.connection === 'connecting';
+  return busy(r.status) || (r.status.rooms || []).some(busy) || (r.instances || []).some((i) => i.state === 'starting' || i.state === 'restarting');
+}
 
 /**
  * useStatus runs a form's request: once it worked, the page reloads its data and a toast says so,
