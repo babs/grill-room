@@ -167,6 +167,9 @@ func TestHoldSeconds(t *testing.T) {
 // 014-AC29: the sockets' root is short whatever the state dir, private to the user, and one per
 // state dir.
 func TestHoldRootFor(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the hold runs with a native Docker on Linux only")
+	}
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	deep := filepath.Join(t.TempDir(), strings.Repeat("deep/", 30))
 	root := HoldRootFor(deep)
