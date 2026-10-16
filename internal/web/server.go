@@ -1224,6 +1224,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 			}
 		}
 		agent, err := s.agentState(r.Context(), room)
+		if err == nil {
+			agent.YouHost, err = s.bus.Store.HostsAs(r.Context(), room, sess.p)
+		}
 		if err != nil {
 			return false
 		}

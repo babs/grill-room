@@ -19,6 +19,10 @@ import (
 // (the LED), the last turn, and who may press the button. Sent as the "agent" event.
 type agentState struct {
 	HostID int64 `json:"host_participant_id,omitempty"`
+	// YouHost, for the participant asking, is set when they decide as the AI host: the host's
+	// seat, or another seat of the host's profile in the room (daemon-r2). It names no seat, so it
+	// tells no one else which seats share a profile.
+	YouHost bool `json:"you_host,omitempty"`
 	// Online is true when the host's daemon is connected and can host (D8).
 	Online bool `json:"online"`
 	// Reason says why the agent is offline.
@@ -288,6 +292,9 @@ func (s *Server) setHost(ctx context.Context, room string, d presence) error {
 
 func (s *Server) getAgent(w http.ResponseWriter, r *http.Request, sess session) {
 	st, err := s.agentState(r.Context(), sess.p.RoomID)
+	if err == nil {
+		st.YouHost, err = s.bus.Store.HostsAs(r.Context(), sess.p.RoomID, sess.p)
+	}
 	if err != nil {
 		s.serverError(w, "get_agent_failed", err)
 		return
@@ -333,6 +340,26 @@ func (s *Server) asHost(w http.ResponseWriter, r *http.Request, sess session) (*
 		return nil, false
 	}
 	if room.HostParticipantID != sess.p.ID {
+		httpError(w, http.StatusForbidden, "only the agent host can do this")
+		return nil, false
+	}
+	return room, true
+}
+
+// asApprover is asHost for an approval: any seat of the host's profile in the room answers it
+// (daemon-r2).
+func (s *Server) asApprover(w http.ResponseWriter, r *http.Request, sess session) (*store.Room, bool) {
+	room, err := s.bus.Store.Room(r.Context(), sess.p.RoomID)
+	if err != nil {
+		s.serverError(w, "host_check_failed", err)
+		return nil, false
+	}
+	host, err := s.bus.Store.HostsAs(r.Context(), room.ID, sess.p)
+	if err != nil {
+		s.serverError(w, "host_check_failed", err)
+		return nil, false
+	}
+	if !host {
 		httpError(w, http.StatusForbidden, "only the agent host can do this")
 		return nil, false
 	}

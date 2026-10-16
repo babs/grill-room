@@ -21,7 +21,7 @@ func (s *Server) decideCap(w http.ResponseWriter, r *http.Request, sess session)
 	if !decode(w, r, &req) {
 		return
 	}
-	room, ok := s.asHost(w, r, sess)
+	room, ok := s.asApprover(w, r, sess)
 	if !ok {
 		return
 	}
@@ -61,7 +61,7 @@ func (s *Server) decideChange(w http.ResponseWriter, r *http.Request, sess sessi
 	if !decode(w, r, &req) {
 		return
 	}
-	room, ok := s.asHost(w, r, sess)
+	room, ok := s.asApprover(w, r, sess)
 	if !ok {
 		return
 	}

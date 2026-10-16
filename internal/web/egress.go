@@ -88,7 +88,12 @@ func (s *Server) allowBlocked(w http.ResponseWriter, r *http.Request, sess sessi
 		s.serverError(w, "allow_blocked_failed", err)
 		return
 	}
-	if room.HostParticipantID != sess.p.ID {
+	host, err := s.bus.Store.HostsAs(ctx, room.ID, sess.p)
+	if err != nil {
+		s.serverError(w, "host_check_failed", err)
+		return
+	}
+	if !host {
 		admin, err := s.roomAdmin(ctx, &sess)
 		switch {
 		case err != nil:

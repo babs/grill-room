@@ -438,16 +438,16 @@ function ReviewSheet({ data, host }) {
 
 /**
  * mountReview draws the approval sheet into its dialog, following the room and the agent state the
- * page hands over: only the host gets Approve and Refuse.
+ * page hands over: only the host, on any seat of their profile, gets Approve and Refuse.
  * @param {import('@preact/signals').Signal<{room: {id: string}, me: {id: number}} | undefined>} room
- * @param {import('@preact/signals').Signal<{host_participant_id?: number} | undefined>} agent
+ * @param {import('@preact/signals').Signal<{host_participant_id?: number, you_host?: boolean} | undefined>} agent
  */
 export function mountReview(room, agent) {
   const App = () => {
     const d = room.value;
     const r = reviewing.value;
     if (!d || !r) return null;
-    return html`<${ReviewSheet} key=${r.id + '-' + r.n} data=${d} host=${agent.value?.host_participant_id === d.me.id}/>`;
+    return html`<${ReviewSheet} key=${r.id + '-' + r.n} data=${d} host=${agent.value?.host_participant_id === d.me.id || !!agent.value?.you_host}/>`;
   };
   render(html`<${App}/>`, reviewSheet);
 }

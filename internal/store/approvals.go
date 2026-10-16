@@ -47,21 +47,48 @@ func (c CapDecision) Settles(daemonID int64, asked turn.Level) bool {
 // Asks is the level persona p asks for.
 func (p *RoomPersona) Asks() turn.Level { return turn.Level{Model: p.Model, Effort: p.Effort} }
 
+// hostSeatSQL holds when participant ? (bound twice) is the AI host of room r: the host's seat, or
+// another seat of the host's profile in that room (daemon-r2).
+const hostSeatSQL = `(r.host_participant_id = ? OR EXISTS (SELECT 1 FROM participants h JOIN participants b
+	ON b.profile_id = h.profile_id AND b.room_id = h.room_id WHERE h.id = r.host_participant_id AND b.id = ?))`
+
 // asHost returns ErrForbidden unless by hosts the room, checked inside the decision's transaction:
-// a hand-over between a handler's check and the write must not let the former host decide.
+// a hand-over between a handler's check and the write must not let the former host decide. Any
+// seat of the host's profile in the room decides as the host.
 func asHost(ctx context.Context, tx *sql.Tx, roomID string, by *Participant) error {
-	var host sql.NullInt64
-	err := tx.QueryRowContext(ctx, `SELECT host_participant_id FROM rooms WHERE id = ?`, roomID).Scan(&host)
+	_, err := hostOf(ctx, tx, roomID, by)
+	return err
+}
+
+// HostsAs reports whether by decides as room's AI host: the host's seat, or another seat of the
+// host's profile in the room (daemon-r2).
+func (s *Store) HostsAs(ctx context.Context, roomID string, by *Participant) (bool, error) {
+	var is bool
+	err := s.db.QueryRowContext(ctx, `SELECT `+hostSeatSQL+` FROM rooms r WHERE r.id = ? AND r.host_participant_id IS NOT NULL`, by.ID, by.ID, roomID).Scan(&is)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ErrNotFound
+		return false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("host check: %w", err)
+		return false, fmt.Errorf("host check: %w", err)
 	}
-	if host.Int64 != by.ID {
-		return ErrForbidden
+	return is, nil
+}
+
+// hostOf returns the room's host seat when by decides as its host, ErrForbidden otherwise.
+func hostOf(ctx context.Context, tx *sql.Tx, roomID string, by *Participant) (int64, error) {
+	var host sql.NullInt64
+	var is bool
+	err := tx.QueryRowContext(ctx, `SELECT r.host_participant_id, `+hostSeatSQL+` FROM rooms r WHERE r.id = ?`, by.ID, by.ID, roomID).Scan(&host, &is)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
 	}
-	return nil
+	if err != nil {
+		return 0, fmt.Errorf("host check: %w", err)
+	}
+	if !host.Valid || !is {
+		return 0, ErrForbidden
+	}
+	return host.Int64, nil
 }
 
 // DecideCap records the host's answer on persona id asking for asked above the cap of host daemon
@@ -71,10 +98,11 @@ func asHost(ctx context.Context, tx *sql.Tx, roomID string, by *Participant) err
 func (s *Store) DecideCap(ctx context.Context, roomID string, id int64, d *Daemon, asked, runs turn.Level, approve bool, by *Participant) (*Message, error) {
 	var m *Message
 	err := s.withTx(ctx, "decide cap", func(tx *sql.Tx) error {
-		if err := asHost(ctx, tx, roomID, by); err != nil {
+		host, err := hostOf(ctx, tx, roomID, by)
+		if err != nil {
 			return err
 		}
-		if d.ParticipantID != by.ID {
+		if d.ParticipantID != host {
 			return ErrForbidden
 		}
 		p, err := roomPersona(ctx, tx, roomID, id)
@@ -120,11 +148,12 @@ type PersonaChange struct {
 }
 
 // heldBy reports whether a persona change by participant by waits for the host: the host daemon
-// approves everything, and by is not the host. The host's daemon setting holds while it is offline.
+// approves everything, and by is not the host, nor another seat of the host's profile. The host's
+// daemon setting holds while it is offline.
 func heldBy(ctx context.Context, tx *sql.Tx, roomID string, by *Participant) (bool, error) {
 	var held bool
 	err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM rooms r JOIN daemons d ON d.participant_id = r.host_participant_id
-		WHERE r.id = ? AND d.approve_all = 1 AND r.host_participant_id != ?)`, roomID, by.ID).Scan(&held)
+		WHERE r.id = ? AND d.approve_all = 1 AND NOT `+hostSeatSQL+`)`, roomID, by.ID, by.ID).Scan(&held)
 	if err != nil {
 		return false, fmt.Errorf("approval mode: %w", err)
 	}
