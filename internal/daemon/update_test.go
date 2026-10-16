@@ -198,7 +198,7 @@ func TestSandboxImageCancelledWithRoom(t *testing.T) {
 func TestTurnWithoutImageFails(t *testing.T) {
 	d := imageDaemon(t, dockerUp, nil)
 	r := &roomRun{d: d}
-	if _, _, err := r.agent("127.0.0.1:1"); err == nil || !strings.Contains(err.Error(), "not ready") {
+	if _, _, err := r.agent("127.0.0.1:1", "Grill"); err == nil || !strings.Contains(err.Error(), "not ready") {
 		t.Fatalf("agent() err = %v", err)
 	}
 }

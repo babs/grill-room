@@ -109,7 +109,7 @@ func pairedDaemon(t *testing.T, rs *roomServer, name string, ag *fakeAgent, set 
 	t.Helper()
 	participant, _ = rs.join(t, name)
 	d = newTestDaemon(t, dockerUp)
-	d.o.NewAgent = func(Room, int, string, string) Agent { return ag }
+	d.o.NewAgent = func(Room, int, string, string, string) Agent { return ag }
 	for _, f := range set {
 		f(d)
 	}
@@ -457,7 +457,7 @@ func TestRunTurnReportsFetchFailureAndDefaultsTimeout(t *testing.T) {
 	defer ts.Close()
 	d := newTestDaemon(t, dockerUp)
 	var deadline time.Duration
-	d.o.NewAgent = func(Room, int, string, string) Agent {
+	d.o.NewAgent = func(Room, int, string, string, string) Agent {
 		return &fakeAgent{run: func(ctx context.Context, _ sandbox.TurnInput, _ map[string]string) (*sandbox.TurnOutput, error) {
 			dl, _ := ctx.Deadline()
 			deadline = time.Until(dl)

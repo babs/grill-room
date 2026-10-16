@@ -70,7 +70,7 @@ func (d *Daemon) runSettings(job turn.Job) (run turn.Level, capped bool) {
 // it again. The room's first sandbox serves its turns one after the other; a parallel turn finds
 // it busy and gets one of its own (003-AC20). A free sandbox built for another account's proxy is
 // rebuilt.
-func (r *roomRun) agent(proxy string) (Agent, func(), error) {
+func (r *roomRun) agent(proxy, persona string) (Agent, func(), error) {
 	r.agentMu.Lock()
 	defer r.agentMu.Unlock()
 	i := slices.IndexFunc(r.sandboxes, func(sl *sandboxSlot) bool { return !sl.busy })
@@ -82,20 +82,24 @@ func (r *roomRun) agent(proxy string) (Agent, func(), error) {
 	if sl.ag != nil && sl.proxy != proxy {
 		sl.ag.Close(r.ctx)
 		sl.ag = nil
+		if sl.hold != nil {
+			_ = sl.hold.Close()
+			sl.hold = nil
+		}
 	}
 	if sl.ag == nil {
 		img := r.d.Status().Image
 		if img.State != "ready" {
 			return nil, nil, errors.New("the sandbox image is not ready on the host's machine")
 		}
-		ag := r.d.o.NewAgent(r.room, i, img.Ref, proxy)
+		ag := r.d.o.NewAgent(r.room, i, img.Ref, proxy, r.startHold(i, sl))
 		// Under agentMu, read after any saved policy: setEgress hands later ones to every sandbox.
 		if err := ag.SetPolicy(r.ctx, r.d.policy(r.room.String())); err != nil {
 			return nil, nil, fmt.Errorf("egress allowlist: %w", err)
 		}
 		sl.ag, sl.proxy = ag, proxy
 	}
-	sl.busy = true
+	sl.busy, sl.persona = true, persona
 	return sl.ag, func() {
 		r.agentMu.Lock()
 		sl.busy = false
@@ -110,6 +114,9 @@ func (r *roomRun) closeAgent(ctx context.Context) {
 	for _, sl := range r.sandboxes {
 		if sl.ag != nil {
 			sl.ag.Close(ctx)
+		}
+		if sl.hold != nil {
+			_ = sl.hold.Close()
 		}
 	}
 	r.sandboxes = nil
@@ -284,7 +291,7 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 	if err != nil {
 		return turn.Result{Error: err.Error()}
 	}
-	ag, free, err := r.agent(px.Addr)
+	ag, free, err := r.agent(px.Addr, job.Persona)
 	if err != nil {
 		return turn.Result{Error: err.Error()}
 	}
@@ -500,5 +507,5 @@ func (r *roomRun) readEgress(ctx context.Context, ag Agent, since time.Time, per
 		return nil
 	}
 	r.d.logEgress(r.room.String(), persona, reqs)
-	return blockedDomains(reqs)
+	return r.reportedSince(blockedDomains(reqs), since)
 }

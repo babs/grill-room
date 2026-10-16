@@ -138,20 +138,20 @@ test('allow every website and its local-network extension', async ({ browser, re
   }
 });
 
-// ask posts text as page and presses the Grill, then waits for its n-th answer.
-async function ask(page, text, n) {
+// press posts text as page and presses the Grill, without waiting for its answer.
+async function press(page, text) {
   await page.locator('#body').fill(text);
   await page.locator('#body').press('Enter');
   await page.getByRole('button', { name: 'Ask Grill' }).click();
-  await expect(page.locator('#messages li.msg.agent')).toHaveCount(n, { timeout: 60_000 });
 }
 
-// 014-AC8 to 014-AC15: a website the agent was refused shows in the chat; the AI host allows it for
-// the room and the next answer reaches it; with the host's delegation a room admin allows a second
-// one for the room only, while a plain member never gets a button; the daemon page lists both
-// with the room as scope and removes one, which the chat hears of. Real daemon and sandbox, fake
-// claude; example.com and example.org need Internet access.
-test('blocked websites in the chat, allowed by the host and a delegated admin', async ({ browser, request, baseURL }) => {
+// 014-AC8 to 014-AC15, 014-AC28, 014-AC29: a website the agent is refused waits, its CONNECT held,
+// while the AI host, who has the room open, sees it in the banner and on its chat line; allowed in
+// time, the same answer fetches it. With the host's delegation a room admin allows a second one for
+// the room only, while a plain member never gets a button and reads who can. The daemon page lists
+// both with the room as scope and removes one, which the chat hears of. Real daemon and sandbox,
+// fake claude; example.com and example.org need Internet access.
+test('blocked websites held for the host and a delegated admin', async ({ browser, request, baseURL }) => {
   test.setTimeout(240_000);
   const { room, pages: [alice, bob, carol] } = await roomWith(browser, request, ['Alice', 'Bob', 'Carol']);
   const me = await bob.evaluate((id) => fetch(`/api/rooms/${id}`).then((r) => r.json()), room.id);
@@ -161,25 +161,20 @@ test('blocked websites in the chat, allowed by the host and a delegated admin', 
   try {
     const admin = await pairDaemon(alice, daemon);
     const line = (page, domain) => page.locator('#messages li.msg.blocked', { hasText: domain });
-
-    await ask(alice, 'FAKE_FETCH example.com', 1);
-    await expect(line(alice, 'example.com')).toContainText('Grill tried to reach example.com (blocked)', { timeout: 15_000 });
-    await expect(line(alice, 'example.com').getByRole('button')).toHaveText(['Allow for this room', 'Allow everywhere']);
-    await expect(line(bob, 'example.com')).toBeVisible();
-    await expect(line(bob, 'example.com').getByRole('button')).toHaveCount(0);
-    await expect(line(carol, 'example.com').getByRole('button')).toHaveCount(0);
-    // Whoever cannot allow it is told who can: the line never looks like a dead end.
-    await expect(line(carol, 'example.com')).toContainText('Pending: only the AI host, Alice, can allow it.');
-    await expect(line(bob, 'example.com')).toContainText('Pending: only the AI host, Alice, can allow it.');
-    // The banner holds it for the host until decided, across a reload; a plain member gets none.
     const banner = (page) => page.locator('#approval-list li.blocked-request');
-    await expect(banner(alice)).toHaveCount(1);
-    await expect(banner(alice)).toContainText('Grill tried to reach example.com.');
+    const answers = alice.locator('#messages li.msg.agent');
+
+    await press(alice, 'FAKE_FETCH example.com');
+    // The turn waits: its website is in the host's banner and on its line before any answer.
+    await expect(banner(alice)).toContainText('Grill tried to reach example.com.', { timeout: 30_000 });
+    await expect(answers).toHaveCount(0);
     await expect(banner(alice).getByRole('button')).toHaveText(['Allow for this room', 'Allow everywhere', 'Dismiss']);
+    await expect(line(alice, 'example.com')).toContainText('Grill tried to reach example.com (blocked)');
+    await expect(line(alice, 'example.com').getByRole('button')).toHaveText(['Allow for this room', 'Allow everywhere']);
     await expect(banner(carol)).toHaveCount(0);
     await expect(banner(bob)).toHaveCount(0);
-    await alice.reload();
-    await expect(banner(alice)).toHaveCount(1);
+    await expect(line(bob, 'example.com').getByRole('button')).toHaveCount(0);
+    await expect(line(carol, 'example.com')).toContainText('Pending: only the AI host, Alice, can allow it.');
     // 390 and 1440 wide, the banner stays on screen.
     for (const width of [390, 1440]) {
       await alice.setViewportSize({ width, height: 900 });
@@ -187,25 +182,25 @@ test('blocked websites in the chat, allowed by the host and a delegated admin', 
       expect(await alice.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
     }
     await banner(alice).getByRole('button', { name: 'Allow for this room: example.com' }).click();
+    await expect(answers).toHaveCount(1, { timeout: 30_000 });
+    await expect(answers.last()).toContainText('Fetched example.com: 200');
     await expect(line(alice, 'example.com')).toContainText('Alice allowed example.com for this room');
     await expect(banner(alice)).toHaveCount(0);
     await expect(line(carol, 'example.com')).toContainText('Alice allowed example.com for this room');
-    await ask(alice, 'FAKE_FETCH example.com', 2);
-    await expect(alice.locator('#messages li.msg.agent').last()).toContainText('Fetched example.com: 200');
 
-    await ask(alice, 'FAKE_FETCH example.org', 3);
-    await expect(line(alice, 'example.org')).toContainText('(blocked)', { timeout: 15_000 });
     await menuItem(alice, 'Room settings');
     await alice.locator('#manage').getByRole('link', { name: 'Websites and connectors' }).click();
     await alice.locator('#egress-admins').check();
     await expect(alice.locator('#messages li.msg.system', { hasText: 'Alice let the room admins allow websites for this room.' })).toHaveCount(1);
     await alice.locator('#manage-close').click();
+    await press(alice, 'FAKE_FETCH example.org');
+    await expect(banner(bob).getByRole('button')).toHaveText(['Allow for this room', 'Dismiss'], { timeout: 30_000 });
     await expect(line(bob, 'example.org').getByRole('button')).toHaveText(['Allow for this room']);
-    await expect(banner(bob).getByRole('button')).toHaveText(['Allow for this room', 'Dismiss']);
     await expect(banner(carol)).toHaveCount(0);
-    await expect(line(carol, 'example.org').getByRole('button')).toHaveCount(0);
     await expect(line(carol, 'example.org')).toContainText('Pending: only the AI host, Alice, or a room admin can allow it.');
-    await line(bob, 'example.org').getByRole('button', { name: 'Allow for this room' }).click();
+    await banner(bob).getByRole('button', { name: 'Allow for this room: example.org' }).click();
+    await expect(answers).toHaveCount(2, { timeout: 30_000 });
+    await expect(answers.last()).toContainText('Fetched example.org: 200');
     await expect(line(alice, 'example.org')).toContainText('Bob allowed example.org for this room');
 
     // The daemon page: both entries scoped to the room, one removed.
