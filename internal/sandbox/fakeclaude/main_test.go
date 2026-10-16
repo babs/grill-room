@@ -190,6 +190,9 @@ func TestFakeClaude(t *testing.T) {
 // 014-AC8: FAKE_FETCH fetches the prompt's last domain through HTTPS_PROXY and says how it went: a
 // proxy refusing the CONNECT shows as an error, a page answering as its status.
 func TestFakeFetch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake claude runs in the Linux sandbox only; it names projects from POSIX paths")
+	}
 	cwd, home := t.TempDir(), t.TempDir()
 	refuse := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodConnect || r.Host != "second.example:443" {
