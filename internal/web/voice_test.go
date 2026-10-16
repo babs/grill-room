@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -309,10 +310,15 @@ func sttOf(t *testing.T, ev sseEvent) sttState {
 // 001-AC10: the room learns when transcription goes away and when it comes back. 005-AC8: and whose
 // voices the workers transcribe, counted once over the workers, from those that say so.
 func TestSTTHeartbeatState(t *testing.T) {
-	oldTimeout, oldPoll := sttTimeout, pollEvery
-	sttTimeout, pollEvery = 300*time.Millisecond, 20*time.Millisecond
-	t.Cleanup(func() { sttTimeout, pollEvery = oldTimeout, oldPoll })
+	oldPoll := pollEvery
+	pollEvery = 20 * time.Millisecond
+	t.Cleanup(func() { pollEvery = oldPoll })
 	e, _ := newVoiceEnv(t)
+	// Workers expire on a clock the test moves: on wall time, a slow runner let the first of the 99
+	// workers below expire before the last one beat, and the bound never applied.
+	var clock atomic.Int64
+	clock.Store(time.Now().UnixNano())
+	e.srv.now = func() time.Time { return time.Unix(0, clock.Load()) }
 	room := e.createRoom(t, "R")
 	p := e.join(t, e.createInvite(t, room.ID).Token, "A")
 	ev := e.openEvents(t, room.ID, p.Token, "")
@@ -354,6 +360,7 @@ func TestSTTHeartbeatState(t *testing.T) {
 	beatAs("w1", map[string][]int64{room.ID: {99}}, room.ID)
 	expect("A's track gone, 99 on two workers", sttState{Available: true, Listening: true, Transcribed: []int64{99}})
 	// No heartbeat: the workers are gone once sttTimeout passes.
+	clock.Add(int64(sttTimeout + time.Second))
 	expect("workers gone", sttState{})
 	if n := e.srv.STTWorkers(); n != 0 {
 		t.Fatalf("workers after timeout %d", n)
