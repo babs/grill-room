@@ -70,6 +70,8 @@ type hostBackend interface {
 	RetentionDays() int
 	SetRetention(days int) error
 	Alerts(ctx context.Context, accounts []AccountView, insts []InstanceView, c ConcurrencyView) []Alert
+	RoomConnectors(ctx context.Context, id, room string, refresh bool) ([]ConnectorView, error)
+	SetRoomConnector(ctx context.Context, id, room, cid string, on, actions bool) error
 }
 
 // Admin is the local admin page. Only someone holding a link this process printed or opened can
@@ -195,6 +197,8 @@ func (a *Admin) Handler() http.Handler {
 	mux.Handle("POST /api/cut-off", a.auth(a.host(a.cutOff)))
 	mux.Handle("POST /api/room-pause", a.auth(a.host(a.roomPause)))
 	mux.Handle("POST /api/room-remove", a.auth(a.host(a.roomRemove)))
+	mux.Handle("GET /api/connectors", a.auth(a.host(a.connectors)))
+	mux.Handle("POST /api/connectors", a.auth(a.host(a.setConnector)))
 	mux.Handle("POST /api/max-turns", a.auth(a.host(a.maxTurns)))
 	mux.Handle("POST /api/limits", a.auth(a.host(a.limits)))
 	mux.Handle("POST /api/retention", a.auth(a.host(a.retention)))
@@ -662,6 +666,33 @@ func (a *Admin) roomPause(w http.ResponseWriter, r *http.Request, h hostBackend)
 	}
 	if decodeJSON(w, r, &req) {
 		reply(w, h.SetPaused(req.Instance, req.Room, req.Paused))
+	}
+}
+
+// connectors lists a room's account's claude.ai connectors with which ones are on for the room
+// (014-AC18); refresh=1 reads them again.
+func (a *Admin) connectors(w http.ResponseWriter, r *http.Request, h hostBackend) {
+	q := r.URL.Query()
+	list, err := h.RoomConnectors(r.Context(), q.Get("instance"), q.Get("room"), q.Get("refresh") == "1")
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"connectors": list})
+}
+
+// setConnector turns a connector on or off for a room, with its actions allowed or not (014-AC18,
+// 014-AC23).
+func (a *Admin) setConnector(w http.ResponseWriter, r *http.Request, h hostBackend) {
+	var req struct {
+		Instance string `json:"instance"`
+		Room     string `json:"room"`
+		ID       string `json:"id"`
+		On       bool   `json:"on"`
+		Actions  bool   `json:"actions"`
+	}
+	if decodeJSON(w, r, &req) {
+		reply(w, h.SetRoomConnector(a.ctx, req.Instance, req.Room, req.ID, req.On, req.Actions))
 	}
 }
 

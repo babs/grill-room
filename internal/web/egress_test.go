@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -245,5 +246,39 @@ func TestAllowBlockedFlow(t *testing.T) {
 	}
 	if code, _ := e.do(t, "POST", fmt.Sprintf("/api/rooms/%s/blocked/x/allow", r.room), r.alice.p.Token, map[string]string{"scope": "room"}); code != http.StatusNotFound {
 		t.Fatalf("allow a bad id: %d", code)
+	}
+}
+
+// 014-AC19: members see the connectors the host's app says are on; each change the host makes is
+// the host's line and audit entry; only the host's daemon tells it.
+func TestConnectorEvents(t *testing.T) {
+	e := newEnv(t)
+	r := newTurnRoom(t, e)
+	if code, b := e.do(t, "POST", r.daemonPath("status"), r.alice.tok, map[string]any{"can_host": true, "egress": true,
+		"connectors": []map[string]any{{"name": "Google Calendar", "actions": true}, {"name": "\x00"}}}); code != http.StatusNoContent {
+		t.Fatalf("status: %d %s", code, b)
+	}
+	mia := e.join(t, e.createInvite(t, r.room).Token, "Mia")
+	st := e.waitAgent(t, r.room, mia.Token, func(st agentState) bool { return len(st.Connectors) > 0 })
+	if !reflect.DeepEqual(st.Connectors, []roomConnector{{Name: "Google Calendar", Actions: true}}) {
+		t.Fatalf("connectors %+v", st.Connectors)
+	}
+	if code, b := e.do(t, "POST", r.daemonPath("connector-event"), r.alice.tok, map[string]any{"name": "Google Calendar", "kind": "enable"}); code != http.StatusNoContent {
+		t.Fatalf("event: %d %s", code, b)
+	}
+	if m := e.lastLine(t, r.room); m.Body != "Alice turned on the connector Google Calendar for this room, read only" {
+		t.Fatalf("line %q", m.Body)
+	}
+	if es := e.auditLog(t, "?action="+store.ActionConnectorEnable).Entries; len(es) != 1 || es[0].TargetID != r.room {
+		t.Fatalf("audit %+v", es)
+	}
+	for _, bad := range []map[string]any{{"name": "X", "kind": "explode"}, {"name": "", "kind": "enable"}} {
+		if code, _ := e.do(t, "POST", r.daemonPath("connector-event"), r.alice.tok, bad); code != http.StatusBadRequest {
+			t.Errorf("%v: %d", bad, code)
+		}
+	}
+	bob := e.daemonFor(t, r.room, "Bob")
+	if code, _ := e.do(t, "POST", r.daemonPath("connector-event"), bob.tok, map[string]any{"name": "X", "kind": "enable"}); code != http.StatusForbidden {
+		t.Fatalf("another daemon: %d", code)
 	}
 }

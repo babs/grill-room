@@ -292,6 +292,52 @@ type Request struct {
 	Args        []string
 	// Bearer is the dummy token the sandbox sends to its proxy, written before each turn.
 	Bearer string
+	// Connectors are the claude.ai connectors the turn reaches, through its proxy with
+	// ConnectorBearer (014-AC20).
+	Connectors      []Connector
+	ConnectorBearer string
+}
+
+// Connector is one claude.ai connector a turn reaches: its MCP server is Key, its relay id ID, and
+// Disallowed its tools the turn may not call (014-AC20, 014-AC23).
+type Connector struct {
+	Key, ID    string
+	Disallowed []string
+}
+
+// mcpConfigFile is where a turn's connectors config goes, under the sandbox home.
+const mcpConfigFile = ".claude/grill-connectors.json"
+
+// connectorArgs writes the turn's --mcp-config file, one http server per connector at the
+// proxy's connector route, and returns the claude arguments and the exec environment it needs. A
+// turn with no connector gets neither (014-AC20).
+func (s *Sandbox) connectorArgs(ctx context.Context, req Request) (args, env []string, err error) {
+	if len(req.Connectors) == 0 {
+		return nil, nil, nil
+	}
+	servers := map[string]any{}
+	var disallowed []string
+	// The relay wants a client session id; one per turn, as Claude Code's own connectors do.
+	session := rand.Text()
+	for _, c := range req.Connectors {
+		servers[c.Key] = map[string]any{"type": "http", "url": "http://proxy:" + relayPort + "/v1/mcp/" + c.ID,
+			"headers": map[string]string{"Authorization": "Bearer " + req.ConnectorBearer, "X-Mcp-Client-Session-Id": session}}
+		disallowed = append(disallowed, c.Disallowed...)
+	}
+	b, err := json.Marshal(map[string]any{"mcpServers": servers})
+	if err != nil {
+		return nil, nil, fmt.Errorf("connectors config: %w", err)
+	}
+	if err := s.writeHome(ctx, map[string][]byte{mcpConfigFile: b}); err != nil {
+		return nil, nil, fmt.Errorf("write connectors config: %w", err)
+	}
+	args = []string{"--mcp-config", home + "/" + mcpConfigFile}
+	if len(disallowed) > 0 {
+		args = append(args, "--disallowedTools", strings.Join(disallowed, ","))
+	}
+	// With a non-Anthropic base URL Claude Code turns tool search off; connectors bring dozens of
+	// tools (S16).
+	return args, []string{"ENABLE_TOOL_SEARCH=true"}, nil
 }
 
 // Result is claude's --output-format json answer.
@@ -446,7 +492,15 @@ func (s *Sandbox) prepare(ctx context.Context, bearer string, opts PluginOptions
 
 // runClaude runs claude -p in the started sandbox; the caller holds s.turn.
 func (s *Sandbox) runClaude(ctx context.Context, req Request) (*Result, error) {
-	args := []string{"exec", "-i", s.container(), "claude", "-p", "--output-format", "json"}
+	cargs, env, err := s.connectorArgs(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"exec", "-i"}
+	for _, e := range env {
+		args = append(args, "-e", e)
+	}
+	args = append(args, s.container(), "claude", "-p", "--output-format", "json")
 	if req.Model != "" {
 		args = append(args, "--model", req.Model)
 	}
@@ -469,6 +523,7 @@ func (s *Sandbox) runClaude(ctx context.Context, req Request) (*Result, error) {
 	if req.Autocompact != 0 {
 		args = append(args, "--autocompact", strconv.Itoa(req.Autocompact))
 	}
+	args = append(args, cargs...)
 	args = append(args, req.Args...)
 	out, runErr := s.run(ctx, strings.NewReader(req.Prompt), args...)
 	if ctx.Err() != nil {

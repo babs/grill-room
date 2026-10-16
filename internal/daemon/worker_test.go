@@ -122,9 +122,13 @@ func TestServeWorker(t *testing.T) {
 		t.Fatalf("egress switches: %+v", r)
 	}
 	waitFor(t, "both switches on", func() bool { e := f.lastStatus().Egress; return e.AllWebsites && e.LocalNetwork })
+	// 014-AC19: a connector change for a room this worker does not serve is told to nobody.
+	if r := f.request(t, Msg{Type: "connector_event", Room: "https://x/r/none", Connector: &ConnectorEvent{Name: "Gmail", Kind: "enable"}}); r.Error != "" {
+		t.Fatalf("connector event: %+v", r)
+	}
 	for _, bad := range []Msg{{Type: "settings"}, {Type: "settings", Settings: &Settings{MaxEffort: "turbo"}}, {Type: "pair", Room: "http://x/r/a"},
 		{Type: "update"}, {Type: "dance"}, {Type: "allowlist", Allowlist: []string{"not a domain!"}}, {Type: "egress_switches"},
-		{Type: "room_allowlist_remove", Room: "https://x/r/a", Domain: "not.listed.example"}} {
+		{Type: "room_allowlist_remove", Room: "https://x/r/a", Domain: "not.listed.example"}, {Type: "connector_event", Room: "https://x/r/a"}} {
 		if r := f.request(t, bad); r.Error == "" {
 			t.Errorf("%+v answered without error", bad)
 		}

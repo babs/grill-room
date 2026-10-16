@@ -6,7 +6,7 @@ The instance id is the first 12 hex digits of the sha256 of the server's scheme,
 
 ## Versions
 
-Both sides carry a protocol version, `Proto` in `internal/daemon/proto.go`, currently 6. Version 2 added `access`, version 3 the slots under the global cap, version 4 the room plugins' `plugin_options` and `plugin_fetch`, version 5 `remove_room`, version 6 `egress_switches`, `room_allowlist_remove` and the `denied` reply's `room_hits`. A worker that settles on version 2 asks for no slot: its turns run outside the cap. The supervisor sends no plugin request to a worker below version 4, nor `remove_room` below 5, nor `egress_switches` or `room_allowlist_remove` below 6, and the page says the worker is too old. Peers at most one version apart (`ProtoSkew`) talk at the lower of the two. Further apart, the side that notices sends `refused` and the worker exits. The supervisor marks the instance `refused` with the reason and does not restart it.
+Both sides carry a protocol version, `Proto` in `internal/daemon/proto.go`, currently 6. Version 2 added `access`, version 3 the slots under the global cap, version 4 the room plugins' `plugin_options` and `plugin_fetch`, version 5 `remove_room`, version 6 `egress_switches`, `room_allowlist_remove`, `connector_event`, the access proxies' `connectors` and `connector_bearer`, and the `denied` reply's `room_hits`. A worker that settles on version 2 asks for no slot: its turns run outside the cap. The supervisor sends no plugin request to a worker below version 4, nor `remove_room` below 5, nor `egress_switches`, `room_allowlist_remove` or a connector change below 6, and the page says the worker is too old. Peers at most one version apart (`ProtoSkew`) talk at the lower of the two. Further apart, the side that notices sends `refused` and the worker exits. The supervisor marks the instance `refused` with the reason and does not restart it.
 
 A version bump must stay additive within that window: new fields and new message types only. Both sides ignore unknown fields and unknown message types. A supervisor must not send a request type its worker's agreed version lacks.
 
@@ -36,7 +36,7 @@ The `access` object never holds a Claude token, an account name or a config dir 
 
 | Field | |
 |---|---|
-| `proxies` | by room link: `addr`, the `<gateway>:<port>` the sandbox relay dials for the room's account proxy (`host-gateway` under Docker Desktop), and `bearer`, the dummy token that proxy knows this worker by; or `error`, why the room cannot reach Claude now, in words the room may show |
+| `proxies` | by room link: `addr`, the `<gateway>:<port>` the sandbox relay dials for the room's account proxy (`host-gateway` under Docker Desktop), and `bearer`, the dummy token that proxy knows this worker by; with claude.ai connectors on for the room, `connectors` (each `id`, `name`, `key`, its MCP server name in the turn, `actions`, and `disallowed`, the tools a turn may not call) and `connector_bearer`, the room's own token for the proxy's `/v1/mcp/<id>` route (version 6); or `error`, why the room cannot reach Claude now, in words the room may show |
 | `cut_off` | the host cut this worker off: it ends its running turns with an error and starts none |
 
 A room the host paused gets `error` "paused on the host's machine" instead of a proxy (003b-AC5). The worker then reports to the room that it cannot host, with that reason, and the room moves the AI host role to another daemon able to host. The paused room keeps its account's bearer, so an answer running as it pauses finishes. The pause is saved in the instance's `instance.json` (`paused`).
@@ -50,6 +50,7 @@ Requests carry an `id`; the worker answers each one with `{"type":"reply","id":N
 | `pair` | `room` | serves that room beside the others, pairing first if no token is stored for it |
 | `settings` | `settings` | saves the host cap and approval mode, and tells the room |
 | `allowlist` | `allowlist` (absent for an empty list) | saves the egress allowlist every room of the server shares; the running sandboxes take it at once. An entry that stays keeps who added it from a room |
+| `connector_event` | `room`, `connector` (`name`, `kind`: `enable`, `disable` or `actions`, `actions`) | tells the room, when connected, what the host changed of its claude.ai connectors: a chat line and an audit entry there (version 6) |
 | `room_allowlist_remove` | `room`, `domain` | takes a website off the room's own list; the room's sandboxes lose it at once and the room, when connected, gets a chat line (version 6) |
 | `egress_switches` | `switches` (`all_websites`, `local_network`) | saves "Allow every website" and its local-network extension, which needs the first; the running sandboxes take them at once (version 6) |
 | `denied` | `n` | the reply's `denied` lists the last `n` refused egress requests, its `hits` counts the requests let through, by host, from the last 2,000 lines of each running egress proxy's log, and `room_hits` the same by room link; workers before 003b send no `hits`, before 6 no `room_hits` |
@@ -98,7 +99,7 @@ The room's stream tells each daemon whether it hosts the room's agent and whethe
 
 ## Claude accounts
 
-Only the supervisor reads Claude tokens. It runs one bearer-swap proxy per account and gives each worker its own dummy bearer for each proxy, so the proxy counts the worker's requests and a cut-off revokes them alone. Workers start with every `CLAUDE_*` and `ANTHROPIC_*` variable removed from their environment. A worker binary older than v0.0.3 is refused: it read the credentials itself.
+Only the supervisor reads Claude tokens. It runs one bearer-swap proxy per account and gives each worker its own dummy bearer for each proxy, so the proxy counts the worker's requests and a cut-off revokes them alone. A room with connectors on gets one more dummy bearer, its own: the proxy forwards it only to `POST /v1/mcp/<id>` on `mcp-proxy.anthropic.com`, for the ids on for that room, and a cut-off revokes it too. Workers start with every `CLAUDE_*` and `ANTHROPIC_*` variable removed from their environment. A worker binary older than v0.0.3 is refused: it read the credentials itself.
 
 ## Supervision
 

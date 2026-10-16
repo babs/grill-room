@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -275,7 +276,7 @@ func TestAccountsProbe(t *testing.T) {
 	}
 	// A proxied 401 brings the next probe forward to a minute after the last one; only the probe
 	// decides. A sandbox provoking 401s with a bad request cannot block the account.
-	p := e.a.Access(ctx, "inst", map[string]string{"r": "work"}, false).Proxies["r"]
+	p := e.a.Access(ctx, "inst", map[string]string{"r": "work"}, nil, false).Proxies["r"]
 	e.upSay.Store(http.StatusUnauthorized)
 	if code := post(t, "http://127.0.0.1:"+p.Addr[strings.LastIndex(p.Addr, ":")+1:], p.Bearer); code != http.StatusUnauthorized {
 		t.Fatalf("proxied %d", code)
@@ -301,7 +302,7 @@ func TestAccountsProbe(t *testing.T) {
 	if v := view(t, e.a, "work"); e.probes.Load() != 5 || v.State != "refused" {
 		t.Fatalf("after a real refusal: probes %d, %+v", e.probes.Load(), v)
 	}
-	if p := e.a.Access(ctx, "inst", map[string]string{"r": "work"}, false).Proxies["r"]; p.Error != "Anthropic refused the host's Claude login" {
+	if p := e.a.Access(ctx, "inst", map[string]string{"r": "work"}, nil, false).Proxies["r"]; p.Error != "Anthropic refused the host's Claude login" {
 		t.Fatalf("access after a refusal: %+v", p)
 	}
 }
@@ -401,7 +402,7 @@ func TestAccountsAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	rooms := map[string]string{"https://a/r/1": "default", "https://a/r/2": "work", "https://a/r/3": "nobody"}
-	acc := e.a.Access(ctx, "inst1", rooms, false)
+	acc := e.a.Access(ctx, "inst1", rooms, nil, false)
 	p1, p2 := acc.Proxies["https://a/r/1"], acc.Proxies["https://a/r/2"]
 	if acc.CutOff || p1.Addr == "" || p2.Addr == "" || p1.Addr == p2.Addr || p1.Bearer == p2.Bearer || p1.Error != "" ||
 		acc.Proxies["https://a/r/3"].Error != "the host has no Claude account for this room" {
@@ -410,11 +411,11 @@ func TestAccountsAccess(t *testing.T) {
 	if !strings.HasPrefix(p1.Addr, "host-gateway:") {
 		t.Fatalf("addr %s: Docker Desktop relays dial host-gateway", p1.Addr)
 	}
-	other := e.a.Access(ctx, "inst2", map[string]string{"https://b/r/1": "default"}, false).Proxies["https://b/r/1"]
+	other := e.a.Access(ctx, "inst2", map[string]string{"https://b/r/1": "default"}, nil, false).Proxies["https://b/r/1"]
 	if other.Addr != p1.Addr || other.Bearer == p1.Bearer {
 		t.Fatalf("second worker %+v", other)
 	}
-	if again := e.a.Access(ctx, "inst1", rooms, false); again.Proxies["https://a/r/1"] != p1 {
+	if again := e.a.Access(ctx, "inst1", rooms, nil, false); !reflect.DeepEqual(again.Proxies["https://a/r/1"], p1) {
 		t.Fatal("a worker's bearer changed between two accesses")
 	}
 	local := func(p Proxy) string { return "http://127.0.0.1:" + p.Addr[strings.LastIndex(p.Addr, ":")+1:] }
@@ -437,28 +438,28 @@ func TestAccountsAccess(t *testing.T) {
 		t.Fatalf("default %+v", v)
 	}
 	// 003-AC15: cut off, the worker's bearers are refused and it gets none.
-	cut := e.a.Access(ctx, "inst1", rooms, true)
+	cut := e.a.Access(ctx, "inst1", rooms, nil, true)
 	if !cut.CutOff || len(cut.Proxies) != 0 || post(t, local(p1), p1.Bearer) != http.StatusForbidden || post(t, local(other), other.Bearer) != 200 {
 		t.Fatalf("cut off: %+v", cut)
 	}
 	// Let back, it gets fresh bearers.
-	back := e.a.Access(ctx, "inst1", rooms, false).Proxies["https://a/r/1"]
+	back := e.a.Access(ctx, "inst1", rooms, nil, false).Proxies["https://a/r/1"]
 	if back.Bearer == p1.Bearer || post(t, local(back), back.Bearer) != 200 {
 		t.Fatal("not let back with a new bearer")
 	}
 	// A room moved to another account: its worker's bearer for the old one stops working.
-	moved := e.a.Access(ctx, "inst1", map[string]string{"https://a/r/1": "work", "https://a/r/2": "work"}, false)
+	moved := e.a.Access(ctx, "inst1", map[string]string{"https://a/r/1": "work", "https://a/r/2": "work"}, nil, false)
 	if post(t, local(back), back.Bearer) != http.StatusForbidden || post(t, local(moved.Proxies["https://a/r/1"]), moved.Proxies["https://a/r/1"].Bearer) != 200 {
 		t.Fatal("the old account's bearer outlived the move")
 	}
 	// An expired account: the room is told, in words free of the account (003-AC17).
 	writeClaudeCreds(t, claude, "cfg-secret", time.Now().Add(-time.Minute))
 	e.clk.set(time.Now())
-	exp := e.a.Access(ctx, "inst1", rooms, false).Proxies["https://a/r/1"]
+	exp := e.a.Access(ctx, "inst1", rooms, nil, false).Proxies["https://a/r/1"]
 	if exp.Error != "the host's Claude login has expired" || exp.Bearer != "" {
 		t.Fatalf("expired %+v", exp)
 	}
-	b, _ := json.Marshal(e.a.Access(ctx, "inst1", rooms, false))
+	b, _ := json.Marshal(e.a.Access(ctx, "inst1", rooms, nil, false))
 	for _, private := range []string{claude, "default", "work", "cfg-secret", setupToken} {
 		if strings.Contains(string(b), private) {
 			t.Errorf("the access a worker gets holds %q", private)

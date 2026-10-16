@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -129,7 +130,10 @@ func TestSupervisorPauseAndRemove(t *testing.T) {
 	if err := s.SetPaused(id, key, true); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the pause", func() bool { a := lastAccess(s); return a != nil && a.Proxies[key] == Proxy{Error: pausedReason} })
+	waitFor(t, "the pause", func() bool {
+		a := lastAccess(s)
+		return a != nil && reflect.DeepEqual(a.Proxies[key], Proxy{Error: pausedReason})
+	})
 	saved, err := loadInstance(s.o.Paths.InstanceConfig(id))
 	if err != nil || !slices.Equal(saved.Paused, []string{key}) || !slices.Equal(instance(t, s).Paused, []string{key}) {
 		t.Fatalf("saved %+v %v", saved, err)

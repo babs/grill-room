@@ -208,6 +208,10 @@ func TestSetPolicy(t *testing.T) {
 	if d, err := s.Egress(ctx, 5); err != nil || len(d.Denied) != 0 {
 		t.Fatalf("denied before start = %v, %v", d, err)
 	}
+	// 014-AC3: no request before the start.
+	if r, err := s.Requests(ctx, time.Now()); err != nil || r != nil {
+		t.Fatalf("requests before start = %v, %v", r, err)
+	}
 	if err := s.SetPolicy(ctx, Policy{Allow: []string{"Example.com"}, AllWebsites: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -251,5 +255,13 @@ func TestSetPolicy(t *testing.T) {
 	d := eg.Denied
 	if err != nil || len(d) != 1 || d[0].Host != "example.com" {
 		t.Fatalf("denied = %v, %v", d, err)
+	}
+	since := time.Date(2026, 10, 16, 9, 0, 0, 5, time.UTC)
+	reqs, err := s.Requests(ctx, since)
+	if err != nil || len(reqs) != 1 || reqs[0].Host != "example.com" || reqs[0].Allowed || reqs[0].Method != "CONNECT" {
+		t.Fatalf("requests = %+v, %v", reqs, err)
+	}
+	if c := f.find("logs", "--since", "2026-10-16T09:00:00.000000005Z"); c == nil {
+		t.Fatalf("logs call: %v", f.calls)
 	}
 }

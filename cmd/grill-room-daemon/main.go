@@ -511,7 +511,7 @@ func check(ctx context.Context, cfg Config, log *zap.Logger) error {
 	}
 	fmt.Printf("account default: ok, from %s\n", tok.Origin)
 	const room = "check"
-	px := accounts.Access(ctx, room, map[string]string{room: "default"}, false).Proxies[room]
+	px := accounts.Access(ctx, room, map[string]string{room: "default"}, nil, false).Proxies[room]
 	if px.Error != "" {
 		return fmt.Errorf("account default: %s", px.Error)
 	}

@@ -136,8 +136,10 @@ type AccountsOptions struct {
 	Paths Paths
 	// ClaudeConfigDir becomes account "default" when no accounts.json exists yet.
 	ClaudeConfigDir string
-	// Upstream is Anthropic's API, for the proxies and the status probe.
-	Upstream *url.URL
+	// Upstream is Anthropic's API, for the proxies and the status probe; MCPUpstream the
+	// connector relay, nil for proxy.DefaultMCPUpstream (014).
+	Upstream    *url.URL
+	MCPUpstream *url.URL
 	// Docker finds where the proxies listen so that sandboxes reach them.
 	Docker  sandbox.Runner
 	Keyring Keyring
@@ -158,6 +160,11 @@ type Accounts struct {
 	px     map[string]*accountProxy
 	// bearers are each worker's dummy bearers, by instance then account.
 	bearers map[string]map[string]string
+	// connBearers are the rooms' connector bearers and connAccount the account whose proxy has
+	// each room's grant, by "instance|room"; conn caches the accounts' connector lists (014).
+	connBearers map[string]string
+	connAccount map[string]string
+	conn        connectorCache
 
 	// bindMu serialises the search for where the proxies listen, cached once found.
 	bindMu        sync.Mutex
@@ -258,6 +265,10 @@ func (a *Accounts) newProxy(acc Account) *accountProxy {
 		ap.src = &secretSource{a: a, acc: acc}
 	}
 	ap.p = proxy.New(a.o.Upstream, ap.src, a.o.Log.Named("proxy").With(zap.String("account", acc.Name)))
+	if a.o.MCPUpstream != nil {
+		ap.p.SetMCPUpstream(a.o.MCPUpstream, ap.src)
+	}
+	ap.p.OnConnectorUnauthorized = func(_, id string) { a.connectorLapsed(acc.Name, id) }
 	return ap
 }
 
@@ -662,7 +673,7 @@ func (a *Accounts) roomError(ctx context.Context, ap *accountProxy) string {
 // Access is what a worker's rooms use (003-AC13, 003-AC14): for each room, the proxy of the
 // account roomAccount names, and the worker's own dummy bearer for it. A cut-off worker gets no
 // bearer, and its old ones are refused at the proxy (003-AC15).
-func (a *Accounts) Access(ctx context.Context, instance string, roomAccount map[string]string, cutOff bool) Access {
+func (a *Accounts) Access(ctx context.Context, instance string, roomAccount map[string]string, roomConnectors map[string][]RoomConnector, cutOff bool) Access {
 	out := Access{Proxies: map[string]Proxy{}, CutOff: cutOff}
 	if cutOff {
 		a.Revoke(instance)
@@ -687,8 +698,18 @@ func (a *Accounts) Access(ctx context.Context, instance string, roomAccount map[
 			out.Proxies[room] = Proxy{Error: "Claude access is not ready on the host's machine: Docker is not ready"}
 			continue
 		}
-		out.Proxies[room] = Proxy{Addr: addr, Bearer: a.bearer(instance, ap)}
+		px := Proxy{Addr: addr, Bearer: a.bearer(instance, ap)}
+		if on := roomConnectors[room]; len(on) > 0 {
+			list, err := a.Connectors(ctx, name, false)
+			if err != nil {
+				a.o.Log.Warn("connectors_unavailable", zap.String("account", name), zap.Error(err))
+			}
+			px.Connectors = grants(on, list)
+		}
+		px.ConnectorBearer = a.grantConnectors(instance, room, ap, px.Connectors)
+		out.Proxies[room] = px
 	}
+	a.dropConnectorRooms(instance, roomAccount)
 	return out
 }
 

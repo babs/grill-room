@@ -177,7 +177,7 @@ test('blocked websites in the chat, allowed by the host and a delegated admin', 
     await ask(alice, 'FAKE_FETCH example.org', 3);
     await expect(line(alice, 'example.org')).toContainText('(blocked)', { timeout: 15_000 });
     await menuItem(alice, 'Room settings');
-    await alice.locator('#manage').getByRole('link', { name: 'Websites' }).click();
+    await alice.locator('#manage').getByRole('link', { name: 'Websites and connectors' }).click();
     await alice.locator('#egress-admins').check();
     await expect(alice.locator('#messages li.msg.system', { hasText: 'Alice let the room admins allow websites for this room.' })).toHaveCount(1);
     await alice.locator('#manage-close').click();

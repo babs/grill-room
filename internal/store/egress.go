@@ -240,8 +240,48 @@ func (s *Store) ConfirmAllow(ctx context.Context, roomID string, id int64, failu
 // EgressRevoked says in room that its AI host removed domain from the room's websites, or from
 // every room's, and audits it as the host (014-AC15).
 func (s *Store) EgressRevoked(ctx context.Context, roomID, domain, scope string) (*Message, error) {
+	where := "this room's websites"
+	if scope == EgressServer {
+		where = "every room"
+	}
+	return s.hostEvent(ctx, roomID, "removed "+domain+" from "+where, ActionEgressRevoke, map[string]any{"domain": domain, "scope": scope})
+}
+
+// Audit actions of the rooms' claude.ai connectors (014-AC19, 014-AC23).
+const (
+	ActionConnectorEnable  = "connector.enable"
+	ActionConnectorDisable = "connector.disable"
+	ActionConnectorActions = "connector.actions"
+)
+
+// ConnectorChanged says in room what its AI host changed of connector name on their computer, and
+// audits it as the host: kind "enable", "disable" or "actions", actions allowed or not (014-AC19,
+// 014-AC23). ErrNotFound for a room with no host, or another kind.
+func (s *Store) ConnectorChanged(ctx context.Context, roomID, name, kind string, actions bool) (*Message, error) {
+	var body, action string
+	switch kind {
+	case "enable":
+		body, action = "turned on the connector "+name+" for this room, read only", ActionConnectorEnable
+		if actions {
+			body = "turned on the connector " + name + " for this room, with its actions"
+		}
+	case "disable":
+		body, action = "turned off the connector "+name+" for this room", ActionConnectorDisable
+	case "actions":
+		body, action = "limited the connector "+name+" to reading", ActionConnectorActions
+		if actions {
+			body = "let the connector " + name + " act: send, create, change"
+		}
+	default:
+		return nil, ErrNotFound
+	}
+	return s.hostEvent(ctx, roomID, body, action, map[string]any{"connector": name, "actions": actions})
+}
+
+// hostEvent is a line in room as its AI host, "<host> <body>", with its audit entry as them.
+func (s *Store) hostEvent(ctx context.Context, roomID, body, action string, details map[string]any) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "egress revoked", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, action, func(tx *sql.Tx) error {
 		var host int64
 		var name string
 		err := tx.QueryRowContext(ctx, `SELECT p.id, p.name FROM rooms r JOIN participants p ON p.id = r.host_participant_id WHERE r.id = ?`, roomID).Scan(&host, &name)
@@ -249,21 +289,18 @@ func (s *Store) EgressRevoked(ctx context.Context, roomID, domain, scope string)
 			return ErrNotFound
 		}
 		if err != nil {
-			return fmt.Errorf("egress revoked: %w", err)
+			return fmt.Errorf("%s: %w", action, err)
 		}
 		actor, err := participantActor(ctx, tx, host)
 		if err != nil {
 			return err
 		}
-		where := "this room's websites"
-		if scope == EgressServer {
-			where = "every room"
-		}
-		m = &Message{RoomID: roomID, Kind: KindSystem, ParticipantID: host, Sender: name, Body: name + " removed " + domain + " from " + where}
+		m = &Message{RoomID: roomID, Kind: KindSystem, ParticipantID: host, Sender: name, Body: name + " " + body}
 		if err := insertMessage(ctx, tx, m); err != nil {
 			return err
 		}
-		return egressAudit(ctx, tx, roomID, actor, ActionEgressRevoke, map[string]any{"domain": domain, "scope": scope, "as": name})
+		details["as"] = name
+		return egressAudit(ctx, tx, roomID, actor, action, details)
 	})
 	return m, err
 }

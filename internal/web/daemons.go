@@ -10,6 +10,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -62,9 +63,11 @@ type presence struct {
 	Version string `json:"version,omitempty"`
 	// Egress says the daemon applies website approvals from the room (014-AC9).
 	Egress bool `json:"egress,omitempty"`
-	room   string
-	conns  int
-	id     int64
+	// Connectors are the claude.ai connectors its host turned on for the room (014-AC19).
+	Connectors []roomConnector `json:"connectors,omitempty"`
+	room       string
+	conns      int
+	id         int64
 	// since is when the current run of connections started: the earliest eligible one hosts.
 	since time.Time
 }
@@ -258,6 +261,8 @@ func (s *Server) daemonStatus(w http.ResponseWriter, r *http.Request, d *store.D
 		Reason  string `json:"reason"`
 		Version string `json:"version"`
 		Egress  bool   `json:"egress"`
+		// Connectors comes from a daemon of 014 on; a missing one keeps none.
+		Connectors []roomConnector `json:"connectors"`
 		store.DaemonSettings
 	}
 	if !decode(w, r, &req) {
@@ -278,9 +283,10 @@ func (s *Server) daemonStatus(w http.ResponseWriter, r *http.Request, d *store.D
 		p = &presence{}
 		s.presence.m[d.ID] = p
 	}
-	changed := p.CanHost != req.CanHost || p.Reason != reason || p.Egress != req.Egress
+	conns := cleanConnectors(req.Connectors)
+	changed := p.CanHost != req.CanHost || p.Reason != reason || p.Egress != req.Egress || !slices.Equal(p.Connectors, conns)
 	p.room, p.ParticipantID, p.id = d.RoomID, d.ParticipantID, d.ID
-	p.CanHost, p.Reason, p.Version, p.Egress = req.CanHost, reason, version, req.Egress
+	p.CanHost, p.Reason, p.Version, p.Egress, p.Connectors = req.CanHost, reason, version, req.Egress, conns
 	s.presence.mu.Unlock()
 	switch {
 	case changed:

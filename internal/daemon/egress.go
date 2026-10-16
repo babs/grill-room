@@ -348,6 +348,21 @@ func (d *Daemon) forgetRoomEgress(ctx context.Context, room string) error {
 // domain from scope's list; a room not connected only gets the daemon's log line (014-AC15).
 func (d *Daemon) tellRevoked(ctx context.Context, room, domain, scope string) {
 	d.o.Log.Info("egress_revoked", zap.String("room", room), zap.String("domain", domain), zap.String("scope", scope))
+	d.tellRooms(ctx, room, "egress-revoked", map[string]string{"domain": domain, "scope": scope})
+}
+
+// tellConnector posts to room, when connected, the change the host made to its connectors
+// (014-AC19).
+func (d *Daemon) tellConnector(ctx context.Context, room string, ev ConnectorEvent) {
+	if room == "" {
+		return
+	}
+	d.tellRooms(ctx, room, "connector-event", ev)
+}
+
+// tellRooms posts body to path under room's daemon routes, or every connected room's when room is
+// ""; a room not connected is skipped, a failure logged.
+func (d *Daemon) tellRooms(ctx context.Context, room, path string, body any) {
 	for _, r := range d.runs() {
 		if room != "" && r.room.String() != room {
 			continue
@@ -363,7 +378,7 @@ func (d *Daemon) tellRevoked(ctx context.Context, room, domain, scope string) {
 			continue
 		}
 		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		resp, err := d.roomRequest(rctx, http.MethodPost, r.daemonURL("egress-revoked"), tok, map[string]string{"domain": domain, "scope": scope})
+		resp, err := d.roomRequest(rctx, http.MethodPost, r.daemonURL(path), tok, body)
 		if err == nil {
 			if resp.StatusCode/100 != 2 {
 				err = apiError(resp)
@@ -372,7 +387,7 @@ func (d *Daemon) tellRevoked(ctx context.Context, room, domain, scope string) {
 		}
 		cancel()
 		if err != nil {
-			d.o.Log.Warn("egress_revoked_post_failed", zap.String("room", r.room.String()), zap.Error(err))
+			d.o.Log.Warn("room_post_failed", zap.String("room", r.room.String()), zap.String("path", path), zap.Error(err))
 		}
 	}
 }

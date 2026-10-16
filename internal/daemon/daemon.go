@@ -835,9 +835,16 @@ func (r *roomRun) heartbeat(ctx context.Context, tok string) {
 		changed := d.changes()
 		st := d.Status()
 		canHost, reason := d.readiness(room.String())
+		// 014-AC19: the room shows which connectors are on, from its host's word.
+		connectors := []map[string]any{}
+		if px, err := d.proxyFor(room.String()); err == nil {
+			for _, c := range px.Connectors {
+				connectors = append(connectors, map[string]any{"name": c.Name, "actions": c.Actions})
+			}
+		}
 		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		resp, err := d.roomRequest(rctx, http.MethodPost, room.Base+"/api/rooms/"+room.ID+"/daemon/status", tok,
-			map[string]any{"can_host": canHost, "reason": reason, "version": d.o.Version, "egress": true,
+			map[string]any{"can_host": canHost, "reason": reason, "version": d.o.Version, "egress": true, "connectors": connectors,
 				"max_model": st.Settings.MaxModel, "max_effort": st.Settings.MaxEffort, "approve_all": st.Settings.ApproveAll})
 		if err == nil {
 			if resp.StatusCode != http.StatusNoContent {

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -45,6 +46,22 @@ var allowed = map[string]bool{
 
 // maxLogged caps a denied method or path in the log: the sandbox picks their length.
 const maxLogged = 256
+
+// DefaultMCPUpstream is where Claude Code sends claude.ai connector calls, /v1/mcp/<id> (S16).
+const DefaultMCPUpstream = "https://mcp-proxy.anthropic.com"
+
+// mcpPrefix starts the one route a connector bearer reaches, with a connector id after it.
+const mcpPrefix = "/v1/mcp/"
+
+// connectorID is the shape of a connector id: no slash, dot or escape, so the path is exactly the
+// prefix and the id.
+var connectorID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
+// connectors is one room's grant: its worker, the room key, the connector ids on (014-AC21).
+type connectors struct {
+	client, key string
+	ids         map[string]bool
+}
 
 func capped(s string) string {
 	if len(s) > maxLogged {
@@ -80,14 +97,25 @@ type Proxy struct {
 	requests map[string]int64
 	denied   map[string]int64
 	lastUse  time.Time
+	// conn are the rooms' connector grants by bearer hash, connKey their hash by room key.
+	conn    map[[32]byte]*connectors
+	connKey map[string][32]byte
 
 	unauthorized atomic.Int64
+
+	mcp *httputil.ReverseProxy
+	// OnConnectorUnauthorized hears of a connector the relay refused the account's token for: its
+	// claude.ai login lapsed (014-AC22). Set before serving.
+	OnConnectorUnauthorized func(key, id string)
 }
 
 // New builds a proxy to upstream that swaps in src's token. It allows no client until Allow.
 func New(upstream *url.URL, src TokenSource, log *zap.Logger) *Proxy {
 	p := &Proxy{log: log, clients: map[[32]byte]string{}, byClient: map[string][32]byte{}, requests: map[string]int64{},
-		denied: map[string]int64{}, live: map[string]context.Context{}, stop: map[string]context.CancelFunc{}}
+		denied: map[string]int64{}, live: map[string]context.Context{}, stop: map[string]context.CancelFunc{},
+		conn: map[[32]byte]*connectors{}, connKey: map[string][32]byte{}}
+	mcpUp, _ := url.Parse(DefaultMCPUpstream) // a constant URL: cannot fail
+	p.mcp = p.connectorProxy(mcpUp, src)
 	p.rp = &httputil.ReverseProxy{
 		FlushInterval: -1, // SSE streaming
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -126,6 +154,65 @@ func New(upstream *url.URL, src TokenSource, log *zap.Logger) *Proxy {
 	return p
 }
 
+// SetMCPUpstream points the connector route elsewhere, for tests.
+func (p *Proxy) SetMCPUpstream(u *url.URL, src TokenSource) { p.mcp = p.connectorProxy(u, src) }
+
+// connectorProxy forwards a connector call to up with the account's token. A 401 is the
+// connector's own claude.ai login, not the account's token: it neither invalidates the token nor
+// counts as unauthorized (014-AC22).
+func (p *Proxy) connectorProxy(up *url.URL, src TokenSource) *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{
+		FlushInterval: -1,
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(up)
+			pr.Out.Host = up.Host
+			tok, err := src.Get(pr.In.Context())
+			if err != nil {
+				p.log.Error("token_read_failed", zap.Error(err))
+				pr.Out.Header.Del("Authorization")
+				return
+			}
+			pr.Out.Header.Set("Authorization", "Bearer "+tok.AccessToken)
+		},
+		ModifyResponse: func(resp *http.Response) error {
+			id := strings.TrimPrefix(resp.Request.URL.Path, mcpPrefix)
+			if resp.StatusCode == http.StatusUnauthorized {
+				if key, _ := resp.Request.Context().Value(connKeyCtx{}).(string); p.OnConnectorUnauthorized != nil {
+					p.OnConnectorUnauthorized(key, id)
+				}
+			}
+			p.log.Info("connector_response", zap.String("connector", id), zap.Int("status", resp.StatusCode))
+			return nil
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			p.log.Error("connector_upstream_error", zap.String("path", r.URL.Path), zap.Error(err))
+			w.WriteHeader(http.StatusBadGateway)
+		},
+	}
+}
+
+type connKeyCtx struct{}
+
+// AllowConnectors lets the room key of client call the connectors ids with bearer, replacing the
+// room's previous grant; no ids revokes it (014-AC20, 014-AC24).
+func (p *Proxy) AllowConnectors(client, key, bearer string, ids []string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if old, ok := p.connKey[key]; ok {
+		delete(p.conn, old)
+		delete(p.connKey, key)
+	}
+	if len(ids) == 0 {
+		return
+	}
+	c := &connectors{client: client, key: key, ids: map[string]bool{}}
+	for _, id := range ids {
+		c.ids[id] = true
+	}
+	h := hashBearer(bearer)
+	p.conn[h], p.connKey[key] = c, h
+}
+
 func hashBearer(b string) [32]byte { return sha256.Sum256([]byte("Bearer " + b)) }
 
 // Allow lets client in with bearer, replacing the client's previous bearer.
@@ -150,6 +237,12 @@ func (p *Proxy) Revoke(client string) {
 		delete(p.clients, h)
 		delete(p.byClient, client)
 	}
+	for key, h := range p.connKey {
+		if p.conn[h].client == client {
+			delete(p.conn, h)
+			delete(p.connKey, key)
+		}
+	}
 	if stop := p.stop[client]; stop != nil {
 		stop()
 		delete(p.stop, client)
@@ -171,6 +264,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.EscapedPath()
 	pathOK := allowed[r.Method+" "+path]
 	p.mu.Lock()
+	if c := p.conn[h]; c != nil {
+		p.mu.Unlock()
+		p.serveConnector(w, r, h, path)
+		return
+	}
 	client, ok := p.clients[h]
 	var live context.Context
 	if ok && !pathOK {
@@ -216,4 +314,38 @@ func headerSummary(h http.Header) []zap.Field {
 		}
 	}
 	return fields
+}
+
+// serveConnector forwards a connector bearer's call: POST to /v1/mcp/<id> exactly, for an id on in
+// the bearer's room at the time of the request; anything else is 403 (014-AC21, 014-AC24).
+func (p *Proxy) serveConnector(w http.ResponseWriter, r *http.Request, h [32]byte, path string) {
+	id, isMCP := strings.CutPrefix(path, mcpPrefix)
+	p.mu.Lock()
+	c := p.conn[h]
+	ok := c != nil && r.Method == http.MethodPost && isMCP && connectorID.MatchString(id) && c.ids[id]
+	var live context.Context
+	var client, key string
+	if c != nil {
+		client, key = c.client, c.key
+		// A grant outlives no revocation of its worker: Revoke drops both.
+		ok = ok && p.live[client] != nil
+		if ok {
+			p.requests[client]++
+			p.lastUse = time.Now()
+			live = p.live[client]
+		} else {
+			p.denied[client]++
+		}
+	}
+	p.mu.Unlock()
+	if !ok {
+		p.log.Warn("proxy_path_denied", zap.String("method", capped(r.Method)), zap.String("path", capped(path)), zap.String("worker", client), zap.String("room", key))
+		http.Error(w, "forbidden: this connector is not on for this room", http.StatusForbidden)
+		return
+	}
+	ctx, cancel := context.WithCancel(context.WithValue(r.Context(), connKeyCtx{}, key))
+	defer cancel()
+	unhook := context.AfterFunc(live, cancel)
+	defer unhook()
+	p.mcp.ServeHTTP(w, r.WithContext(ctx))
 }

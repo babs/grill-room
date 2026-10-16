@@ -62,6 +62,9 @@ type agentState struct {
 	// why no one can now, "" when the AI host's app takes approvals (014-AC9).
 	EgressAdmins bool   `json:"egress_admins_allow"`
 	EgressHost   string `json:"egress_host,omitempty"`
+	// Connectors are the claude.ai connectors the host turned on for the room, as their app last
+	// said; none while it is offline (014-AC19).
+	Connectors []roomConnector `json:"connectors"`
 }
 
 // mentionStates bounds the mentions the agent state carries.
@@ -145,6 +148,10 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 		if p.CanTrigger {
 			st.CanTrigger = append(st.CanTrigger, p.ID)
 		}
+	}
+	st.Connectors = []roomConnector{}
+	if h := s.hostDaemon(room, r.HostParticipantID); h != nil && h.Connectors != nil {
+		st.Connectors = h.Connectors
 	}
 	switch h := s.hostDaemon(room, r.HostParticipantID); {
 	case h == nil:

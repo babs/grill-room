@@ -333,7 +333,15 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 	}
 	wsr := &countingReader{r: ws}
 	ran := time.Now()
+	var connectors []sandbox.Connector
+	for _, c := range px.Connectors {
+		connectors = append(connectors, sandbox.Connector{Key: c.Key, ID: c.ID, Disallowed: c.Disallowed})
+	}
+	if len(connectors) > 0 {
+		r.d.o.Log.Info("turn_connectors", zap.String("persona", job.Persona), zap.Int("connectors", len(connectors)))
+	}
 	out, err := ag.RunTurn(ctx, sandbox.TurnInput{
+		Connectors: connectors, ConnectorBearer: px.ConnectorBearer,
 		Plugin: plugin, Plugins: plugins, PluginOptions: opts, Redact: redact, Bearer: px.Bearer, Autocompact: knownAutocompact(job.Autocompact),
 		Workspace: wsr, Prompt: job.Prompt, System: job.System, Model: run.Model, Effort: run.Effort,
 		Resume: job.Resume, SessionSize: job.SessionSize, SessionSHA256: job.SessionSHA256,

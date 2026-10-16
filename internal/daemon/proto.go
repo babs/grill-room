@@ -18,7 +18,8 @@ import (
 // Version 3 added the slots under the host's global cap: acquire, wait, grant, release (003-AC18).
 // Version 4 added the room plugins' requests, plugin_options and plugin_fetch (009-AC19, 009-AC22).
 // Version 5 added remove_room (003b-AC6).
-// Version 6 added egress_switches, room_allowlist_remove and the denied reply's room_hits (014).
+// Version 6 added egress_switches, room_allowlist_remove, connector_event, the access proxies'
+// connectors and the denied reply's room_hits (014).
 const (
 	Proto     = 6
 	ProtoSkew = 1
@@ -70,6 +71,8 @@ type Msg struct {
 	// RoomHits by room link too (014-AC3).
 	Hits     map[string]int            `json:"hits,omitempty"`
 	RoomHits map[string]map[string]int `json:"room_hits,omitempty"`
+	// Connector, with Room, is a connector_event request (014-AC19).
+	Connector *ConnectorEvent `json:"connector,omitempty"`
 	// Switches is an egress_switches request (014-AC1, 014-AC26); Domain, with Room, a
 	// room_allowlist_remove one (014-AC15).
 	Switches *EgressSwitches `json:"switches,omitempty"`
@@ -105,6 +108,10 @@ type Proxy struct {
 	Addr string `json:"addr,omitempty"`
 	// Bearer is the dummy token the proxy knows this worker by.
 	Bearer string `json:"bearer,omitempty"`
+	// Connectors are the claude.ai connectors on for the room, reached with ConnectorBearer, the
+	// room's own (014-AC20).
+	Connectors      []ConnectorGrant `json:"connectors,omitempty"`
+	ConnectorBearer string           `json:"connector_bearer,omitempty"`
 	// Error says, in words fit for the room, why the room cannot reach Claude now. It never names
 	// the account (003-AC17).
 	Error string `json:"error,omitempty"`

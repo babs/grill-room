@@ -434,7 +434,48 @@ function RoomRow({ i, room }) {
         ['Remove this room', () => removeRoom(room, name), 'danger'],
       ]} /></div>
     </li>
-    ${extra ? html`<li class="room-extra"><${RoomPlugins} i=${i} room=${room} st=${/** @type {RoomStatus} */ (st)} /></li>` : ''}`;
+    ${extra ? html`<li class="room-extra"><${RoomPlugins} i=${i} room=${room} st=${/** @type {RoomStatus} */ (st)} /></li>` : ''}
+    ${d.accounts && html`<li class="room-extra"><${RoomConnectors} i=${i} room=${room} name=${name} /></li>`}`;
+}
+
+/**
+ * RoomConnectors are the claude.ai connectors of a room's AI account, listed by this computer with
+ * the account's login: the host turns each on for the room, and lets it act; none is on by default
+ * (014-AC18, 014-AC23). The list loads when opened.
+ * @param {{i: Instance, room: string, name: string}} p
+ */
+function RoomConnectors({ i, room, name }) {
+  const [list, setList] = useState(/** @type {import('./api.js').ConnectorView[] | null} */ (null));
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  /** @param {boolean} refresh */
+  const load = (refresh) => api('GET', '/api/connectors?instance=' + encodeURIComponent(i.id) + '&room=' + encodeURIComponent(room) + (refresh ? '&refresh=1' : ''))
+    .then((r) => { setList(r.connectors); setErr(''); })
+    .catch((e) => setErr(sentence(e.message)));
+  /** @param {import('./api.js').ConnectorView} c @param {boolean} on @param {boolean} actions */
+  const set = (c, on, actions) => {
+    setBusy(true);
+    api('POST', '/api/connectors', { instance: i.id, room, id: c.id, on, actions })
+      .then(() => load(false))
+      .then(() => window.grillToast(!on ? c.name + ' off for ' + name : actions ? c.name + ' may act in ' + name : c.name + ' on for ' + name + ', read only'))
+      .catch((e) => setErr(sentence(e.message)))
+      .finally(() => setBusy(false));
+  };
+  const on = list ? list.filter((c) => c.on).length : 0;
+  return html`<details class="connectors" onToggle=${(/** @type {any} */ e) => { if (e.currentTarget.open && !list) load(false); }}>
+    <summary>Connectors${list ? ' · ' + (on ? on + ' on' : 'none on') : ''}</summary>
+    <p class="hint">The claude.ai connectors of this room's AI account. None is on until you turn it on here. Actions, such as sending or changing, stay off unless you allow them.</p>
+    ${err && html`<p class="said" role="alert">${err}</p>`}
+    ${list && (list.length ? html`<table class="connectors-list"><thead><tr><th scope="col">Connector</th><th scope="col">State</th>
+      <th scope="col">On for this room</th><th scope="col">Allow actions</th></tr></thead><tbody>
+      ${list.map((c) => html`<tr key=${c.id}><td>${c.name}</td><td><${Badge} text=${c.state} cls=${c.state === 'ready' ? 'ok' : 'bad'} /></td>
+        <td><input type="checkbox" aria-label=${'Turn on ' + c.name + ' for ' + name} checked=${c.on} disabled=${busy}
+          onChange=${(/** @type {any} */ e) => set(c, e.currentTarget.checked, false)} /></td>
+        <td><input type="checkbox" aria-label=${'Allow ' + c.name + ' actions in ' + name} checked=${c.actions} disabled=${busy || !c.on}
+          onChange=${(/** @type {any} */ e) => set(c, true, e.currentTarget.checked)} /></td></tr>`)}
+    </tbody></table>` : html`<p class="empty">This account has no connector.</p>`)}
+    <p><button type="button" class="btn-ghost" onClick=${() => load(true)}>Refresh</button></p>
+  </details>`;
 }
 
 /**

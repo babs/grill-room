@@ -110,7 +110,7 @@ A host who wants it can turn on "Allow every website" for a server, behind a red
 ### Phase 3 — claude.ai connectors through the proxy
 - Work: host-side connector listing per AI account; per-room choice and "Allow actions" on the daemon page; room settings display; per-room connector bearers on the proxy and the `/v1/mcp/<id>` route; 401 handling on that route; `--mcp-config`, `--disallowedTools` and `ENABLE_TOOL_SEARCH` in the turn.
 - **Covers**: AC18, AC19, AC20, AC21, AC22, AC23, AC24, AC25
-- **Data model impact**: daemon: a per-server connectors file (room, connector id, name, actions allowed). Room server: audit actions `connector.enable`, `connector.disable`, `connector.actions`; the room's connector names come with the host's status, not stored.
+- **Data model impact**: daemon: the server's connectors by room (connector id, name, actions allowed), in its `instance.json`. Room server: audit actions `connector.enable`, `connector.disable`, `connector.actions`; the room's connector names come with the host's status, not stored.
 - **DoD**:
   - proxy tests against a fake relay: enabled id forwarded with the real token and the session header; unknown id, other room's id, `GET`, a sub-path, a dot segment and an encoded slash all 403 and counted in `Denied`; a relay 401 leaves `Unauthorized` at 0 and calls no `Invalidate`; disabling an id refuses the next request;
   - turn tests: the `--mcp-config` JSON for two connectors, write tools in `--disallowedTools`, none of it for a room with no connector;
@@ -119,7 +119,7 @@ A host who wants it can turn on "Allow every website" for a server, behind a red
 
 ## Data model impact (summary)
 
-- Daemon, per server: the allowlist file becomes an object with the two switches, server entries and room entries (Phases 1 and 2); a connectors file (Phase 3). The legacy array still loads.
+- Daemon, per server: the allowlist file becomes an object with the two switches, server entries and room entries (Phases 1 and 2); the connectors by room in its `instance.json` (Phase 3). The legacy array still loads.
 - Room server: `rooms.egress_admins_allow`; blocked lines, `system` messages with a `blocked_requests` row; audit actions `egress.allow`, `egress.revoke`, `egress.delegate`, `connector.enable`, `connector.disable`, `connector.actions`.
 - Supervisor-worker protocol version 6 and new room stream messages, additive.
 - No export change: per-room entries and connectors stay on the host; `egress_admins_allow` is not exported.
@@ -155,5 +155,7 @@ Made while drafting (overturnable):
 - Removing from the server list on the daemon page tells the rooms only of entries added from a room's chat: the host's own edits of the default list are not room events.
 - A revocation from the daemon page applies at once. Its chat line and audit entry are written only if the room server is connected then; the daemon log always has it.
 - Hits come from each sandbox's recent proxy log, as 003b's do, and reset with the sandbox; the daemon log line is the durable record.
+- A connector whose tools could not be read is left out of a turn unless its actions are allowed: its write tools could not be disallowed.
+- The supervisor keeps each room's connectors in the server's `instance.json`: it holds the accounts and the proxies, and the worker never sees a token.
 - Connector tools without `readOnlyHint: true` are disallowed by default (S16 risk: an agent with a connector acts as the user there).
 - `ENABLE_TOOL_SEARCH=true` once a connector is on: with a non-Anthropic `ANTHROPIC_BASE_URL`, Claude Code turns ToolSearch off, and connectors bring dozens of tools (S16).

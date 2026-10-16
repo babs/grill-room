@@ -402,6 +402,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms/{room}/daemon/turns/{turn}/state", s.daemonAuth(s.postTurnState))
 	mux.Handle("POST /api/rooms/{room}/daemon/blocked/{msg}", s.daemonAuth(s.confirmAllow))
 	mux.Handle("POST /api/rooms/{room}/daemon/egress-revoked", s.daemonAuth(s.egressRevoked))
+	mux.Handle("POST /api/rooms/{room}/daemon/connector-event", s.daemonAuth(s.connectorEvent))
 	mux.Handle("GET /api/rooms/{room}/daemon/sessions/{session}", s.daemonAuth(s.getSession))
 
 	mux.Handle("GET /api/rooms/{room}/voice", s.participant(s.getVoice))

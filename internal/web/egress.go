@@ -210,3 +210,53 @@ func (s *Server) egressRevoked(w http.ResponseWriter, r *http.Request, d *store.
 	s.bus.Notify(d.RoomID)
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// roomConnector is a claude.ai connector on for the room, as its host's daemon reports it.
+type roomConnector struct {
+	Name    string `json:"name"`
+	Actions bool   `json:"actions,omitempty"`
+}
+
+// maxConnectors bounds what a daemon reports: the account's connectors number in the tens.
+const maxConnectors = 50
+
+// cleanConnectors keeps what the room shows of a daemon's report: names as text, bounded.
+func cleanConnectors(in []roomConnector) []roomConnector {
+	var out []roomConnector
+	for _, c := range in[:min(len(in), maxConnectors)] {
+		if name, _ := cleanText(truncate(c.Name, maxNameLen), maxNameLen, false); name != "" {
+			out = append(out, roomConnector{Name: name, Actions: c.Actions})
+		}
+	}
+	return out
+}
+
+// connectorEvent is the host daemon telling what its host changed of the room's connectors: a chat
+// line and an audit entry as the host (014-AC19, 014-AC23).
+func (s *Server) connectorEvent(w http.ResponseWriter, r *http.Request, d *store.Daemon, _ string) {
+	if !s.asHostDaemon(w, r, d) {
+		return
+	}
+	var req struct {
+		Name    string `json:"name"`
+		Kind    string `json:"kind"`
+		Actions bool   `json:"actions"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	name, _ := cleanText(truncate(req.Name, maxNameLen), maxNameLen, false)
+	if name == "" {
+		httpError(w, http.StatusBadRequest, "a connector name")
+		return
+	}
+	if _, err := s.bus.Store.ConnectorChanged(r.Context(), d.RoomID, name, req.Kind, req.Actions); errors.Is(err, store.ErrNotFound) {
+		httpError(w, http.StatusBadRequest, "kind must be enable, disable or actions")
+		return
+	} else if err != nil {
+		s.serverError(w, "connector_event_failed", err)
+		return
+	}
+	s.bus.Notify(d.RoomID)
+	w.WriteHeader(http.StatusNoContent)
+}

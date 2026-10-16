@@ -28,6 +28,8 @@ type emulator struct {
 	home   map[string][]byte
 	claude func(e *emulator, prompt string, args []string) (string, error)
 	calls  []string
+	// env is the last claude exec's -e values.
+	env []string
 }
 
 func newEmulator() *emulator {
@@ -65,11 +67,20 @@ func (e *emulator) run(_ context.Context, stdin io.Reader, args ...string) ([]by
 	if args[0] != "exec" {
 		return nil, nil
 	}
-	cmd := args[2:]
-	if args[1] == "-i" {
-		cmd = args[3:]
+	// docker exec [-i] [-e VAR]... container cmd...
+	rest := args[1:]
+	var env []string
+	for strings.HasPrefix(rest[0], "-") {
+		if rest[0] == "-e" {
+			env, rest = append(env, rest[1]), rest[1:]
+		}
+		rest = rest[1:]
 	}
+	cmd := rest[1:]
 	e.calls = append(e.calls, strings.Join(cmd, " "))
+	if cmd[0] == "claude" {
+		e.env = env
+	}
 	switch {
 	case cmd[0] == "sh" && strings.Contains(cmd[2], "-mindepth 1 -delete"):
 		e.ws = map[string][]byte{}
@@ -502,5 +513,62 @@ func TestRedactorJSON(t *testing.T) {
 		if got := string(r.JSON([]byte(bad))); strings.Contains(got, "1234") || strings.Contains(got, "s3") || !strings.Contains(got, "[redacted]") {
 			t.Fatalf("not JSON %q: %s", bad, got)
 		}
+	}
+}
+
+// 014-AC20 014-AC23: a turn with connectors gets one http MCP server per connector at the proxy's
+// connector route, with the room's connector bearer, their write tools disallowed and tool search
+// on; a turn without gets none of it.
+func TestRunTurnConnectors(t *testing.T) {
+	e := newEmulator()
+	var args [][]string
+	var configs []string
+	var envs [][]string
+	e.claude = func(e *emulator, _ string, a []string) (string, error) {
+		args, envs = append(args, a), append(envs, e.env)
+		configs = append(configs, string(e.home[mcpConfigFile]))
+		e.home[".claude/projects/-workspace/"+sid+".jsonl"] = []byte("l\n")
+		return `{"result":"done","session_id":"` + sid + `"}`, nil
+	}
+	s := newTurnSandbox(t, e)
+	in := TurnInput{Bearer: testBearer, Prompt: "p", ConnectorBearer: "conn-bearer", Connectors: []Connector{
+		{Key: "google_calendar", ID: "srv_cal", Disallowed: []string{"mcp__google_calendar__create_event", "mcp__google_calendar__delete_event"}},
+		{Key: "gmail", ID: "srv_mail"},
+	}}
+	in.Workspace = workspaceTar(t, nil)
+	if _, err := s.RunTurn(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		MCPServers map[string]struct {
+			Type    string            `json:"type"`
+			URL     string            `json:"url"`
+			Headers map[string]string `json:"headers"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal([]byte(configs[0]), &cfg); err != nil {
+		t.Fatalf("config %q: %v", configs[0], err)
+	}
+	cal, mail := cfg.MCPServers["google_calendar"], cfg.MCPServers["gmail"]
+	if len(cfg.MCPServers) != 2 || cal.Type != "http" || cal.URL != "http://proxy:"+relayPort+"/v1/mcp/srv_cal" || mail.URL != "http://proxy:"+relayPort+"/v1/mcp/srv_mail" ||
+		cal.Headers["Authorization"] != "Bearer conn-bearer" || cal.Headers["X-Mcp-Client-Session-Id"] == "" {
+		t.Fatalf("config %+v", cfg)
+	}
+	a := args[0]
+	if i := slices.Index(a, "--mcp-config"); i < 0 || a[i+1] != home+"/"+mcpConfigFile {
+		t.Fatalf("args %v", a)
+	}
+	if i := slices.Index(a, "--disallowedTools"); i < 0 || a[i+1] != "mcp__google_calendar__create_event,mcp__google_calendar__delete_event" {
+		t.Fatalf("args %v", a)
+	}
+	if !slices.Equal(envs[0], []string{"ENABLE_TOOL_SEARCH=true"}) {
+		t.Fatalf("env %v", envs[0])
+	}
+	in.Connectors, in.ConnectorBearer, in.Workspace = nil, "", workspaceTar(t, nil)
+	if _, err := s.RunTurn(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(args[1], "--mcp-config") || slices.Contains(args[1], "--disallowedTools") || len(envs[1]) != 0 {
+		t.Fatalf("a turn without connectors: %v %v", args[1], envs[1])
 	}
 }

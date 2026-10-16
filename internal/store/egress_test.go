@@ -225,3 +225,33 @@ func TestEgressRevoked(t *testing.T) {
 		t.Fatalf("no host: %v", err)
 	}
 }
+
+// 014-AC19 014-AC23: each connector change by the host is their line and audit entry.
+func TestConnectorChanged(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	seed(t, s, "a")
+	for _, c := range []struct {
+		kind    string
+		actions bool
+		body    string
+		action  string
+	}{
+		{"enable", false, "Alice turned on the connector Google Calendar for this room, read only", ActionConnectorEnable},
+		{"enable", true, "Alice turned on the connector Google Calendar for this room, with its actions", ActionConnectorEnable},
+		{"actions", true, "Alice let the connector Google Calendar act: send, create, change", ActionConnectorActions},
+		{"actions", false, "Alice limited the connector Google Calendar to reading", ActionConnectorActions},
+		{"disable", false, "Alice turned off the connector Google Calendar for this room", ActionConnectorDisable},
+	} {
+		m, err := s.ConnectorChanged(ctx, "a", "Google Calendar", c.kind, c.actions)
+		if err != nil || m.Body != c.body {
+			t.Fatalf("%s %v: %+v %v", c.kind, c.actions, m, err)
+		}
+		if e := lastAudit(t, s); e.Action != c.action || !strings.Contains(string(e.Details), `"connector":"Google Calendar"`) {
+			t.Fatalf("audit %+v", e)
+		}
+	}
+	if _, err := s.ConnectorChanged(ctx, "a", "X", "explode", false); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("bad kind: %v", err)
+	}
+}
