@@ -109,6 +109,13 @@ export function startDaemon(roomURL, env = {}, { expiresIn = 3600e3 } = {}) {
   return { proc, link, exited, handOver, stateDir, sandbox: sandboxName(stateDir, roomURL), cleanup: () => { proc.kill(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
+// connectedRow is the daemon page's row of a room paired and connected, the room ending in /r/id
+// when given, else the first one (003b-AC4: the state lives in the row, not in a status line).
+export function connectedRow(page, id) {
+  const rows = page.locator('.room-row[data-pairing="paired"][data-connection="connected"]' + (id ? `[data-room$="/r/${id}"]` : ''));
+  return id ? rows : rows.first();
+}
+
 // pairDaemon approves the daemon's pairing from the participant's room page, as a person would.
 export async function pairDaemon(page, daemon) {
   const admin = await page.context().newPage();
@@ -117,7 +124,9 @@ export async function pairDaemon(page, daemon) {
   await expect(admin.locator('#pairing')).toHaveText('Waiting for your approval in the room.', { timeout: 30_000 });
   const [approval] = await Promise.all([page.context().waitForEvent('page'), admin.getByRole('link', { name: 'approve in the room' }).click()]);
   await approval.getByRole('button', { name: 'Approve' }).click();
-  await expect(admin.locator('#pairing')).toHaveText('Paired. Connected.', { timeout: 30_000 });
+  await expect(connectedRow(admin)).toBeAttached({ timeout: 30_000 });
+  // Once paired, no status line stays under Add a room: the row says it (003b-AC4).
+  await expect(admin.locator('#pairing')).toHaveCount(0);
   await approval.close();
   return admin;
 }

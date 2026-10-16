@@ -20,6 +20,18 @@ func (d *Daemon) RemoveRoom(ctx context.Context, link string, force bool) error 
 		return err
 	}
 	key := room.String()
+	d.mu.Lock()
+	if d.removing[key] {
+		d.mu.Unlock()
+		return errRemoving
+	}
+	d.removing[key] = true
+	d.mu.Unlock()
+	defer func() {
+		d.mu.Lock()
+		delete(d.removing, key)
+		d.mu.Unlock()
+	}()
 	tok, err := d.o.Tokens.Get(room)
 	if err != nil {
 		return err
@@ -36,9 +48,22 @@ func (d *Daemon) RemoveRoom(ctx context.Context, link string, force bool) error 
 	if d.cur == r {
 		d.cur = nil
 	}
+	// A pairing waiting for approval keeps polling, dropped from the list: an approval that comes
+	// later is revoked by its loop, not left as a computer the room server lists. It ends when the
+	// request is answered or expires.
+	pairing := r != nil && (r.st.Pairing == "requesting" || r.st.Pairing == "pending")
 	d.mu.Unlock()
-	if r != nil {
+	if r != nil && !pairing {
 		r.cancel()
+	}
+	// A pairing approved before the run was dropped has stored its token since the read above;
+	// none can land now (roomRun.loop stores only for a live run).
+	if tok == "" {
+		if late, gerr := d.o.Tokens.Get(room); gerr == nil && late != "" {
+			if rerr := d.revoke(ctx, room, late); rerr != nil {
+				d.o.Log.Warn("pairing_revoke_failed", zap.String("room", key), zap.Error(rerr))
+			}
+		}
 	}
 	err = errors.Join(d.o.Tokens.Set(room, ""), d.o.PluginOptions.Keep(key, nil))
 	d.update(func(*Status) {})

@@ -158,6 +158,8 @@ type Daemon struct {
 	// rooms are the room runs by room link, and cur the one handed over last, guarded by mu.
 	rooms map[string]*roomRun
 	cur   *roomRun
+	// removing holds the rooms a RemoveRoom is taking off, guarded by mu: a Connect waits it out.
+	removing map[string]bool
 	// ready is each room's readiness as last told, "" when it can host, guarded by mu.
 	ready map[string]string
 	// changed is closed, and replaced, whenever the settings or a room's readiness change: it
@@ -207,7 +209,7 @@ func New(o Options) *Daemon {
 		o.FetchDir = os.TempDir()
 	}
 	d := &Daemon{o: o, st: Status{Version: o.Version, Connection: "offline", Settings: o.Settings, Allowlist: o.Allowlist},
-		rooms: map[string]*roomRun{}, ready: map[string]string{}, changed: make(chan struct{}), access: o.Access,
+		rooms: map[string]*roomRun{}, removing: map[string]bool{}, ready: map[string]string{}, changed: make(chan struct{}), access: o.Access,
 		running: map[int64]context.CancelCauseFunc{}, inspected: map[string]bool{}}
 	if o.CacheDir != "" && o.CacheMax > 0 {
 		d.cache = &wsCache{dir: o.CacheDir, max: o.CacheMax}
@@ -398,9 +400,13 @@ func (d *Daemon) readinessLocked(room string) (bool, string) {
 // SetRoom serves room beside the others, pairing first if no token is stored for it, and makes it
 // the one the page shows. A room served already keeps its connection; one whose run ended, revoked
 // or failed, starts again.
-func (d *Daemon) SetRoom(ctx context.Context, room Room) {
+func (d *Daemon) SetRoom(ctx context.Context, room Room) error {
 	key := room.String()
 	d.mu.Lock()
+	if d.removing[key] {
+		d.mu.Unlock()
+		return errRemoving
+	}
 	old := d.rooms[key]
 	if old != nil && !old.ended() {
 		d.cur = old
@@ -410,7 +416,7 @@ func (d *Daemon) SetRoom(ctx context.Context, room Room) {
 		case old.kick <- struct{}{}:
 		default:
 		}
-		return
+		return nil
 	}
 	if old != nil {
 		old.cancel()
@@ -426,7 +432,10 @@ func (d *Daemon) SetRoom(ctx context.Context, room Room) {
 		defer close(r.done)
 		r.loop(ctx)
 	})
+	return nil
 }
+
+var errRemoving = errors.New("this room is being removed from this computer")
 
 // Wait returns once every room loop has ended and removed its sandboxes; cancel their context first.
 func (d *Daemon) Wait() { d.loops.Wait() }
@@ -512,7 +521,21 @@ func (r *roomRun) loop(ctx context.Context) {
 			}
 			return
 		}
-		if err := d.o.Tokens.Set(room, tok); err != nil {
+		// A removal that came during the pairing has dropped this run: the token it got is
+		// revoked rather than stored, or the room server would list a computer that forgot the room.
+		d.mu.Lock()
+		live := d.rooms[room.String()] == r
+		if live {
+			err = d.o.Tokens.Set(room, tok)
+		}
+		d.mu.Unlock()
+		if !live {
+			if err := d.revoke(context.WithoutCancel(ctx), room, tok); err != nil {
+				d.o.Log.Warn("pairing_revoke_failed", zap.String("room", room.String()), zap.Error(err))
+			}
+			return
+		}
+		if err != nil {
 			fail(err)
 			return
 		}

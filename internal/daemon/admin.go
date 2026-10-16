@@ -37,7 +37,7 @@ var csp = func() string {
 // on the instance the page shows.
 type Backend interface {
 	Status() Status
-	SetRoom(ctx context.Context, r Room)
+	SetRoom(ctx context.Context, r Room) error
 	instanceOps
 }
 
@@ -344,7 +344,10 @@ func (a *Admin) setRoom(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	a.d.SetRoom(a.ctx, room)
+	if err := a.d.SetRoom(a.ctx, room); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

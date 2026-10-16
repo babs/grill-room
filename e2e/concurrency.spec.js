@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, startDaemon, pairDaemon } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, connectedRow } from './helpers.js';
 
 // 003-AC18: one supervisor serves two rooms. With the global cap at one, a press in the second
 // room while the first one's turn runs shows "queued (host busy)" there, and runs once the first
@@ -18,7 +18,7 @@ test('a turn waiting for the host shows queued (host busy)', async ({ browser, r
       await bob.evaluate((href) => window.open(href), link);
     })()]);
     await approval.getByRole('button', { name: 'Approve' }).click();
-    await expect(admin.locator('#pairing')).toHaveText('Paired. Connected.', { timeout: 30_000 });
+    await expect(connectedRow(admin, second.id)).toBeAttached({ timeout: 30_000 });
     await approval.close();
     await admin.locator('#tab-settings').click();
     await admin.getByLabel('Answers at once').fill('1');

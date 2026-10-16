@@ -2,8 +2,10 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -11,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/babs/grill-room/internal/web"
 	"go.uber.org/zap"
 )
 
@@ -156,5 +159,162 @@ func TestSupervisorPauseAndRemove(t *testing.T) {
 	waitFor(t, "the old worker runs", func() bool { return instance(t, old).State == "running" })
 	if err := old.RemoveRoom(context.Background(), key, false); err == nil || !strings.Contains(err.Error(), "too old") {
 		t.Fatalf("remove through a protocol 4 worker: %v", err)
+	}
+}
+
+// revokes serves rs with every DELETE of a daemon held until release closes, and counts them on
+// seen once answered.
+func revokes(release <-chan struct{}, seen chan<- int) func(http.Handler) http.Handler {
+	return func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodDelete || !strings.HasSuffix(r.URL.Path, "/daemon") {
+				h.ServeHTTP(w, r)
+				return
+			}
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+			rec := &statusRecorder{ResponseWriter: w}
+			h.ServeHTTP(rec, r)
+			seen <- rec.status
+		})
+	}
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
+}
+
+// 003b-AC6 003b-AC7: Connect while the room is being removed is refused, as is a second removal;
+// once the removal is done, Connect pairs the room again.
+func TestConnectDuringRemoval(t *testing.T) {
+	release, seen := make(chan struct{}), make(chan int, 4)
+	rs := newRoomServerWrapped(t, web.Options{}, revokes(release, seen))
+	alice, _ := rs.join(t, "Alice")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d, room := backoffDaemon(t, rs, alice, ctx)
+	done := make(chan error, 1)
+	go func() { done <- d.RemoveRoom(ctx, room.String(), false) }()
+	waitFor(t, "the removal under way", func() bool {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return d.removing[room.String()]
+	})
+	if err := d.SetRoom(ctx, room); !errors.Is(err, errRemoving) {
+		t.Fatalf("Connect during the removal: %v", err)
+	}
+	if err := d.RemoveRoom(ctx, room.String(), false); !errors.Is(err, errRemoving) {
+		t.Fatalf("second removal: %v", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got := <-seen; got != http.StatusNoContent {
+		t.Fatalf("revoke answered %d", got)
+	}
+	if err := d.SetRoom(ctx, room); err != nil {
+		t.Fatalf("Connect after the removal: %v", err)
+	}
+	waitFor(t, "a new pairing", func() bool { return d.Status().Pairing == "pending" })
+}
+
+// 003b-AC6: a room removed while its pairing waits for approval stores no token; an approval that
+// comes after is revoked at once, so the room server lists no computer for it.
+func TestRemoveWhilePairing(t *testing.T) {
+	release, seen := make(chan struct{}), make(chan int, 4)
+	close(release)
+	rs := newRoomServerWrapped(t, web.Options{}, revokes(release, seen))
+	alice, _ := rs.join(t, "Alice")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d := newTestDaemon(t, nil)
+	room, err := ParseRoomURL(rs.ts.URL + "/r/" + rs.room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetRoom(ctx, room); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "pending pairing", func() bool { return d.Status().Pairing == "pending" })
+	approve := d.Status().ApproveURL
+	if err := d.RemoveRoom(ctx, room.String(), false); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Status().Rooms) != 0 {
+		t.Fatalf("room left behind: %+v", d.Status().Rooms)
+	}
+	rs.call(t, "POST", "/api/rooms/"+rs.room+"/pairings/"+approve[strings.Index(approve, "=")+1:], alice,
+		map[string]bool{"approve": true}, http.StatusOK, nil)
+	select {
+	case got := <-seen:
+		if got != http.StatusNoContent {
+			t.Fatalf("revoke answered %d", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the late approval was never revoked")
+	}
+	if tok, _ := d.o.Tokens.Get(room); tok != "" {
+		t.Fatal("the late approval's token was stored")
+	}
+}
+
+// 003b-AC6: a forced removal while the server's app is not running forgets the room's token,
+// option values and cache here, and drops the room; unforced, it refuses.
+func TestSupervisorForcedRemoveNoApp(t *testing.T) {
+	s := testSupervisor(t, "refuse", nil)
+	room := Room{Base: "https://rooms.example", ID: "abc"}
+	key := room.String()
+	if err := s.SetRoom(context.Background(), room); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the app refused", func() bool { return instance(t, s).State == "refused" })
+	id := instance(t, s).ID
+	tokens := NewTokens(s.o.Paths.InstanceState(id))
+	if err := tokens.Set(room, "tok"); err != nil {
+		t.Fatal(err)
+	}
+	opts, err := NewPluginOptions(s.o.Paths.InstanceState(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := opts.Set(key, 1, OptionValues{Name: "p", Values: map[string]any{"k": "v"}}); err != nil {
+		t.Fatal(err)
+	}
+	cache := &wsCache{dir: filepath.Join(s.o.Paths.InstanceCache(id), "workspace-cache")}
+	cached := filepath.Join(cache.roomDir(room), "f")
+	if err := os.MkdirAll(filepath.Dir(cached), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cached, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveRoom(context.Background(), key, false); err == nil || !strings.Contains(err.Error(), "not running") {
+		t.Fatalf("unforced remove with no app: %v", err)
+	}
+	if err := s.RemoveRoom(context.Background(), key, true); err != nil {
+		t.Fatal(err)
+	}
+	if tok, _ := tokens.Get(room); tok != "" {
+		t.Fatal("token kept")
+	}
+	opts, err = NewPluginOptions(s.o.Paths.InstanceState(id))
+	if err != nil || len(opts.Room(key)) != 0 {
+		t.Fatalf("option values kept: %v", err)
+	}
+	if _, err := os.Stat(cached); !os.IsNotExist(err) {
+		t.Fatalf("cache kept: %v", err)
+	}
+	if rooms := instance(t, s).Rooms; len(rooms) != 0 {
+		t.Fatalf("room kept: %v", rooms)
 	}
 }

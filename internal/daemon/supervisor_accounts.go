@@ -259,8 +259,18 @@ func (s *Supervisor) RemoveRoom(ctx context.Context, room string, force bool) er
 		s.mu.Unlock()
 		return errors.New("no such room on this computer")
 	}
+	if s.removing[room] {
+		s.mu.Unlock()
+		return errRemoving
+	}
+	s.removing[room] = true
 	running, agreed := w.state == "running" && w.conn != nil, w.proto
 	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.removing, room)
+		s.mu.Unlock()
+	}()
 	switch {
 	case running && agreed < protoRemove:
 		return errors.New("this server's app is too old to remove a room: update the AI host app")
