@@ -264,11 +264,11 @@ func TestBlockedRequests(t *testing.T) {
 	ctx := context.Background()
 	seed(t, s, "a")
 	alice := participantNamed(t, s, "a", "Alice")
-	lines, err := s.RecordBlocked(ctx, "a", "Grill", []string{"example.com", "docs.rs", "jazk.in"})
+	lines, err := s.RecordBlocked(ctx, "a", "Grill", []string{"example.com", "docs.rs", "docs.example.net"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RecordBlocked(ctx, "a", "Grill", []string{"jazk.in"}); err != nil {
+	if _, err := s.RecordBlocked(ctx, "a", "Grill", []string{"docs.example.net"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.RequestAllow(ctx, "a", lines[0].ID, EgressRoom, alice); err != nil {
@@ -285,7 +285,7 @@ func TestBlockedRequests(t *testing.T) {
 		t.Fatalf("dismiss a pending approval: %v", err)
 	}
 	got, err := s.BlockedRequests(ctx, "a")
-	if err != nil || len(got) != 2 || got[0].Domain != "example.com" || got[0].Pending != EgressRoom || got[1].Domain != "jazk.in" || got[1].Count != 2 || got[1].MessageID != lines[2].ID {
+	if err != nil || len(got) != 2 || got[0].Domain != "example.com" || got[0].Pending != EgressRoom || got[1].Domain != "docs.example.net" || got[1].Count != 2 || got[1].MessageID != lines[2].ID {
 		t.Fatalf("requests = %+v %v", got, err)
 	}
 	if _, err := s.RecordBlocked(ctx, "a", "Grill", []string{"docs.rs"}); err != nil {
