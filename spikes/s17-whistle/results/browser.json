@@ -1,0 +1,548 @@
+[
+ {
+  "tag": "load-smoke",
+  "mode": "load",
+  "error": null,
+  "offset": 0.0,
+  "utts": 0,
+  "env": {
+   "ev": "env",
+   "cores": 4,
+   "isolated": true,
+   "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+   "mem": 32,
+   "vw": 1280,
+   "gpu": null,
+   "mode": "load",
+   "t": 1792109579162
+  },
+  "load": [
+   {
+    "fetchMs": 236.88000011444092,
+    "sessionMs": 31.84999942779541,
+    "warmupMs": 4.840000152587891,
+    "files": {
+     "wasm": {
+      "ms": 21,
+      "hit": false
+     },
+     "cact": {
+      "ms": 208,
+      "hit": false
+     }
+    }
+   },
+   {
+    "fetchMs": 17.540000915527344,
+    "sessionMs": 28.734999656677246,
+    "warmupMs": 1.4049997329711914,
+    "files": {
+     "wasm": {
+      "ms": 1,
+      "hit": true
+     },
+     "cact": {
+      "ms": 12,
+      "hit": true
+     }
+    }
+   },
+   {
+    "fetchMs": 19.34500026702881,
+    "sessionMs": 38.859999656677246,
+    "warmupMs": 2.359999656677246,
+    "files": {
+     "wasm": {
+      "ms": 2,
+      "hit": true
+     },
+     "cact": {
+      "ms": 17,
+      "hit": true
+     }
+    }
+   },
+   {
+    "fetchMs": 17.81999969482422,
+    "sessionMs": 33.3100004196167,
+    "warmupMs": 1.5399999618530273,
+    "files": {
+     "wasm": {
+      "ms": 2,
+      "hit": true
+     },
+     "cact": {
+      "ms": 13,
+      "hit": true
+     }
+    }
+   }
+  ],
+  "loaded_ms": [
+   294,
+   54,
+   71,
+   61
+  ],
+  "talk": {
+   "wer": 1.0,
+   "ref_words": 1356,
+   "hyp_ref": 0.0,
+   "en_leak": 0.0
+  },
+  "summre": {
+   "wer": 1.0,
+   "ref_words": 3948,
+   "hyp_ref": 0.0,
+   "en_leak": 0.0
+  },
+  "piper": {
+   "wer": 1.0,
+   "ref_words": 406,
+   "hyp_ref": 0.0,
+   "en_leak": 0.0
+  },
+  "piper_fr": {
+   "wer": 1.0,
+   "ref_words": 342,
+   "hyp_ref": 0.0,
+   "en_leak": 0.0
+  },
+  "piper_en": {
+   "wer": 1.0,
+   "ref_words": 64,
+   "hyp_ref": 0.0,
+   "en_leak": 0.0
+  },
+  "rtfx": null,
+  "decode_s": {},
+  "speech_min": 0.0,
+  "rss_mb": {
+   "peak": 1010,
+   "median": 1004,
+   "renderer_peak": 210
+  },
+  "cpu_cores_mean": 0.05
+ },
+ {
+  "tag": "bench-desktop",
+  "mode": "bench",
+  "error": null,
+  "offset": 0.0,
+  "utts": 321,
+  "env": {
+   "ev": "env",
+   "cores": 4,
+   "isolated": true,
+   "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+   "mem": 32,
+   "vw": 1280,
+   "gpu": null,
+   "mode": "bench",
+   "t": 1792109603389
+  },
+  "load": [
+   {
+    "fetchMs": 238.2150001525879,
+    "sessionMs": 32.31999969482422,
+    "warmupMs": 4.760000228881836,
+    "files": {
+     "wasm": {
+      "ms": 35,
+      "hit": false
+     },
+     "cact": {
+      "ms": 195,
+      "hit": false
+     }
+    }
+   }
+  ],
+  "loaded_ms": [
+   301
+  ],
+  "talk": {
+   "wer": 0.213,
+   "ref_words": 1356,
+   "hyp_ref": 0.991,
+   "en_leak": 0.0
+  },
+  "summre": {
+   "wer": 0.362,
+   "ref_words": 3948,
+   "hyp_ref": 0.926,
+   "en_leak": 0.01
+  },
+  "piper": {
+   "wer": 0.389,
+   "ref_words": 406,
+   "hyp_ref": 1.091,
+   "en_leak": 0.0
+  },
+  "piper_fr": {
+   "wer": 0.444,
+   "ref_words": 342,
+   "hyp_ref": 1.105,
+   "en_leak": 0.0
+  },
+  "piper_en": {
+   "wer": 0.094,
+   "ref_words": 64,
+   "hyp_ref": 1.016,
+   "en_leak": 0.0
+  },
+  "rtfx": 7.02,
+  "decode_s": {
+   "p50": 0.44,
+   "p95": 2.32,
+   "max": 3.28,
+   "n": 321
+  },
+  "speech_min": 25.8,
+  "rss_mb": {
+   "peak": 1977,
+   "median": 1347,
+   "renderer_peak": 1143
+  },
+  "cpu_cores_mean": 1.09,
+  "vad_ms_per_window": 0.209
+ },
+ {
+  "tag": "live-desktop",
+  "mode": "live",
+  "error": null,
+  "offset": -0.15,
+  "utts": 218,
+  "env": {
+   "ev": "env",
+   "cores": 4,
+   "isolated": true,
+   "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+   "mem": 32,
+   "vw": 1280,
+   "gpu": null,
+   "mode": "live",
+   "t": 1792110826006
+  },
+  "load": [
+   {
+    "fetchMs": 237.55999946594238,
+    "sessionMs": 31.785000801086426,
+    "warmupMs": 1.7699995040893555,
+    "files": {
+     "wasm": {
+      "ms": 19,
+      "hit": false
+     },
+     "cact": {
+      "ms": 214,
+      "hit": false
+     }
+    }
+   }
+  ],
+  "loaded_ms": [
+   286
+  ],
+  "talk": {
+   "wer": 0.221,
+   "ref_words": 1356,
+   "hyp_ref": 0.975,
+   "en_leak": 0.0
+  },
+  "summre": {
+   "wer": 0.37,
+   "ref_words": 2589,
+   "hyp_ref": 0.917,
+   "en_leak": 0.007
+  },
+  "piper": {
+   "wer": 0.394,
+   "ref_words": 406,
+   "hyp_ref": 1.086,
+   "en_leak": 0.0
+  },
+  "piper_fr": {
+   "wer": 0.456,
+   "ref_words": 342,
+   "hyp_ref": 1.102,
+   "en_leak": 0.0
+  },
+  "piper_en": {
+   "wer": 0.062,
+   "ref_words": 64,
+   "hyp_ref": 1.0,
+   "en_leak": 0.0
+  },
+  "rtfx": 7.17,
+  "decode_s": {
+   "p50": 0.44,
+   "p95": 2.29,
+   "max": 2.92,
+   "n": 218
+  },
+  "speech_min": 19.3,
+  "lat_all": {
+   "p50": 1.26,
+   "p95": 2.49,
+   "max": 3.36,
+   "n": 218
+  },
+  "lat_pause_cut": {
+   "p50": 1.23,
+   "p95": 2.16,
+   "max": 3.36,
+   "n": 186
+  },
+  "lat_maxlen_cut": {
+   "p50": 2.18,
+   "p95": 2.89,
+   "max": 2.92,
+   "n": 32
+  },
+  "queue_s": {
+   "p50": 0.0,
+   "p95": 0.0,
+   "max": 0.0,
+   "n": 218
+  },
+  "vad_wait_s": {
+   "p50": 0.83,
+   "p95": 0.89,
+   "max": 0.96,
+   "n": 186
+  },
+  "in_pause": [],
+  "rss_mb": {
+   "peak": 1335,
+   "median": 1286,
+   "renderer_peak": 368
+  },
+  "cpu_cores_mean": 0.13,
+  "vad_ms_per_window": 0.529
+ },
+ {
+  "tag": "bench-phone",
+  "mode": "bench",
+  "error": null,
+  "offset": 0.0,
+  "utts": 220,
+  "env": {
+   "ev": "env",
+   "cores": 1,
+   "isolated": true,
+   "ua": "Mozilla/5.0 (Linux; Android 14; Pixel 7a) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Mobile Safari/537.36",
+   "mem": 32,
+   "vw": 390,
+   "gpu": null,
+   "mode": "bench",
+   "t": 1792113306937
+  },
+  "load": [
+   {
+    "fetchMs": 1508.7200002670288,
+    "sessionMs": 209.24499988555908,
+    "warmupMs": 19.644999504089355,
+    "files": {
+     "wasm": {
+      "ms": 363,
+      "hit": false
+     },
+     "cact": {
+      "ms": 908,
+      "hit": false
+     }
+    }
+   }
+  ],
+  "loaded_ms": [
+   2040
+  ],
+  "talk": {
+   "wer": 0.213,
+   "ref_words": 1356,
+   "hyp_ref": 0.991,
+   "en_leak": 0.0
+  },
+  "summre": {
+   "wer": 0.575,
+   "ref_words": 3948,
+   "hyp_ref": 0.606,
+   "en_leak": 0.011
+  },
+  "piper": {
+   "wer": 0.389,
+   "ref_words": 406,
+   "hyp_ref": 1.091,
+   "en_leak": 0.0
+  },
+  "piper_fr": {
+   "wer": 0.444,
+   "ref_words": 342,
+   "hyp_ref": 1.105,
+   "en_leak": 0.0
+  },
+  "piper_en": {
+   "wer": 0.094,
+   "ref_words": 64,
+   "hyp_ref": 1.016,
+   "en_leak": 0.0
+  },
+  "rtfx": 1.22,
+  "decode_s": {
+   "p50": 2.4,
+   "p95": 14.82,
+   "max": 41.12,
+   "n": 220
+  },
+  "speech_min": 19.4,
+  "rss_mb": {
+   "peak": 1629,
+   "median": 1312,
+   "renderer_peak": 813
+  },
+  "cpu_cores_mean": 0.25,
+  "vad_ms_per_window": 2.368
+ },
+ {
+  "tag": "live-phone-starved-audio",
+  "mode": "live",
+  "error": null,
+  "offset": -1.75,
+  "utts": 49,
+  "env": {
+   "ev": "env",
+   "cores": 1,
+   "isolated": true,
+   "ua": "Mozilla/5.0 (Linux; Android 14; Pixel 7a) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Mobile Safari/537.36",
+   "mem": 32,
+   "vw": 390,
+   "gpu": null,
+   "mode": "live",
+   "t": 1792112657965
+  },
+  "load": [
+   {
+    "fetchMs": 1593.244999885559,
+    "sessionMs": 247.73000049591064,
+    "warmupMs": 19.614999771118164,
+    "files": {
+     "wasm": {
+      "ms": 421,
+      "hit": false
+     },
+     "cact": {
+      "ms": 1032,
+      "hit": false
+     }
+    }
+   }
+  ],
+  "loaded_ms": [
+   2100
+  ],
+  "talk": {
+   "wer": 0.962,
+   "ref_words": 1356,
+   "hyp_ref": 1.18,
+   "en_leak": 0.0
+  },
+  "summre": {
+   "wer": null,
+   "ref_words": 0,
+   "hyp_ref": null,
+   "en_leak": 0.0
+  },
+  "piper": {
+   "wer": 1.035,
+   "ref_words": 342,
+   "hyp_ref": 0.225,
+   "en_leak": 0.0
+  },
+  "piper_fr": {
+   "wer": 1.035,
+   "ref_words": 342,
+   "hyp_ref": 0.225,
+   "en_leak": 0.0
+  },
+  "piper_en": {
+   "wer": null,
+   "ref_words": 0,
+   "hyp_ref": null,
+   "en_leak": 0.0
+  },
+  "rtfx": 0.92,
+  "decode_s": {
+   "p50": 3.14,
+   "p95": 27.25,
+   "max": 29.48,
+   "n": 49
+  },
+  "speech_min": 6.0,
+  "lat_all": {
+   "p50": 4.19,
+   "p95": 27.25,
+   "max": 32.12,
+   "n": 49
+  },
+  "lat_pause_cut": {
+   "p50": 3.27,
+   "p95": 18.72,
+   "max": 32.12,
+   "n": 34
+  },
+  "lat_maxlen_cut": {
+   "p50": 16.28,
+   "p95": 28.49,
+   "max": 28.49,
+   "n": 15
+  },
+  "queue_s": {
+   "p50": 0.0,
+   "p95": 1.02,
+   "max": 14.56,
+   "n": 49
+  },
+  "vad_wait_s": {
+   "p50": 0.83,
+   "p95": 1.54,
+   "max": 1.62,
+   "n": 34
+  },
+  "in_pause": [
+   "c'est une petite approche, c'est à faire ça qu'on peut le voir dire, et pour avoir des voyelles, l'ensemble des services qu'ils proposent. Donc là, l'homme, ils gèrent plus des machines, ils gèrent plus des équipements réseaux lui-même. Non, il fait plus ça en fait, l'homme, ils gèrent à faire à ce code. Ils ont provisionné son infrarat avec l'enfant notamment. Et il va pour confirmer ses environnements avec des confirmations de la même chose. En fait, le code, il devient au mené présent.",
+   "Le hôtel par enrilise ce soir, après la revue.",
+   "Les lobbyistes carrefes quittent montre des erreurs web vertessées."
+  ],
+  "rss_mb": {
+   "peak": 1293,
+   "median": 1264,
+   "renderer_peak": 372
+  },
+  "cpu_cores_mean": 0.17,
+  "vad_ms_per_window": 2.248,
+  "note": "discarded: the CPU quota starved the fake-mic capture (section 5.1)"
+ },
+ {
+  "tag": "bench-desktop",
+  "n": 220,
+  "pause_p50": 1.26,
+  "pause_p95": 2.18,
+  "all_p50": 1.3,
+  "all_p95": 2.66,
+  "max": 3.28,
+  "queue_p95": 0.0,
+  "queue_max": 0.0
+ },
+ {
+  "tag": "bench-phone",
+  "n": 220,
+  "pause_p50": 3.33,
+  "pause_p95": 12.5,
+  "all_p50": 3.65,
+  "all_p95": 44.96,
+  "max": 73.59,
+  "queue_p95": 27.89,
+  "queue_max": 69.75
+ }
+]
