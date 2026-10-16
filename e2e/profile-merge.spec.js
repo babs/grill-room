@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { signIn, noOverflow } from './helpers.js';
+import { signIn, noOverflow, rowAction } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
@@ -35,7 +35,7 @@ test('merge two profiles from /admin', async ({ browser, request }) => {
 
   const page = await (await browser.newContext({ viewport: { width: 1280, height: 800 } })).newPage();
   expect(await signIn(page, adminToken, 'profiles')).toBe(201);
-  await page.locator('#profile-' + idB).getByRole('button', { name: `Merge ${bea} into another profile` }).click();
+  await rowAction(page.locator('#profile-' + idB), `Merge ${bea} into another profile`);
   const sheet = page.locator('#merge-sheet');
   await expect(sheet).toBeVisible();
   await expect(sheet.locator('#merge-from')).toHaveValue(String(idB));
@@ -73,7 +73,7 @@ test('merge two profiles from /admin', async ({ browser, request }) => {
   await expect(sheet).toBeHidden();
   await expect(page.locator('.toasts .toast')).toContainText(`Merged into ${anna}. Moved 2 seats`);
   await expect(page.locator('#profile-' + idB)).toHaveCount(0);
-  await expect(page.locator('#profile-' + idA)).toContainText(own.name);
+  await expect(page.locator('#profile-' + idA + ' .rooms')).toHaveAttribute('data-tip', new RegExp(own.name));
 
   // A had no chosen name: it keeps its join name, not one of B's seats' (011-AC12).
   await b.goto('/profile');
@@ -107,7 +107,7 @@ test('purge of an empty profile and the Instance switch', async ({ browser, requ
   await expect(box).toBeChecked();
   try {
     await box.uncheck();
-    await expect(page.locator('.toasts .toast')).toHaveText('Saved');
+    await expect(page.locator('.toasts .toast')).toHaveText('Empty profiles are kept');
     await expect(box).toBeEnabled();
     expect((await (await request.get('/api/admin/settings', { headers: admin })).json()).purge_empty_profiles).toBe(false);
     const log = await (await request.get('/api/admin/audit?action=instance.settings', { headers: admin })).json();
