@@ -2598,7 +2598,7 @@ function showPersonaTab(tab) {
     else a.removeAttribute('aria-current');
   }
   // A bar that scrolls sideways on a phone keeps its current tab in sight (005-AC35).
-  $('persona-tabs').querySelector('[aria-current]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  window.grillShowTab($('persona-tabs'));
 }
 
 // agentSeen: the room's personas are known, so a deep link to a missing one closes its sheet.

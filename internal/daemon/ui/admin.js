@@ -97,6 +97,17 @@ const Badge = ({ text, cls = '' }) => html`<span class=${'badge ' + cls}>${text}
 /** @param {{text: string}} p */
 const Said = ({ text }) => html`<span class="said" role="status">${text}</span>`;
 
+/** icon is an icon of the shared set (kit/ui.js) as a control's content: the control names itself. @param {string} name */
+const icon = (name) => ({ __html: window.grillIconHTML(name) });
+
+/**
+ * Value is a value people copy, cut to one line, whole in the tip and the copy button (kit .value).
+ * @param {{text: string, label: string, id?: string}} p
+ */
+const Value = ({ text, label, id }) => html`<span id=${id} class="value copyable" data-value=${text}>
+  <span class="value-text" tabindex="0" data-tip=${text}>${text}</span>
+  <button type="button" class="btn-icon btn-ghost copy" aria-label=${'Copy the ' + label} dangerouslySetInnerHTML=${icon('copy')}></button></span>`;
+
 /** @param {{id: string, title: string, children?: any}} p */
 const Section = ({ id, title, children }) => html`
   <section id=${id + '-section'} aria-labelledby=${id + '-title'}>
@@ -130,7 +141,7 @@ function Header() {
       <span id="host" class="muted">${d ? d.status.host + ' · ' + d.status.version : ''}</span>
       ${t && html`<span id="self-sig" class=${'badge ' + cls}>${sig}</span>`}
       <span class="spacer"></span>
-      <span id="state" class="muted">${stopped.value ? '○ Stopped' : d ? '● Running' : ''}</span>
+      ${(d || stopped.value) && html`<span id="state" class=${'status ' + (stopped.value ? 'off' : 'ok')}>${stopped.value ? 'Stopped' : 'Running'}</span>`}
       <button type="button" id="stop" class="btn-secondary" onClick=${stop} disabled=${stopped.value}>Stop</button>
     </header>`;
 }
@@ -153,10 +164,12 @@ const alertsOf = (id) => (data.value?.alerts || []).filter((a) => (alertTab[a.ki
 
 // TabBar stays pinned at the top; a tab with alerts, or an update waiting, shows their count.
 function TabBar() {
-  return html`<nav id="tabs" class="tabs" aria-label="Sections">${tabs.map(([id, name]) => {
+  const nav = useRef(/** @type {HTMLElement | null} */ (null));
+  useEffect(() => { window.grillShowTab(nav.current); }, [tab.value]);
+  return html`<nav id="tabs" ref=${nav} class="tabs sticky" aria-label="Sections">${tabs.map(([id, name]) => {
     const n = alertsOf(id).length + (id === 'update' && data.value?.status.update?.available ? 1 : 0);
     return html`<a key=${id} id=${'tab-' + id} href=${'#' + id} aria-current=${tab.value === id ? 'page' : undefined}>${name}${n
-      ? html` <span class="tab-badge" title=${n + (n === 1 ? ' alert' : ' alerts')}>${n}</span>` : ''}</a>`;
+      ? html` <span class="tab-badge" data-tip=${n + (n === 1 ? ' alert' : ' alerts')}>${n}</span>` : ''}</a>`;
   })}</nav>`;
 }
 
@@ -223,7 +236,7 @@ function Room() {
     api('POST', '/api/room', { url }).then(() => { setURL(''); return reload(); }).catch((x) => setErr(x.message));
   };
   return html`<${Section} id="room" title="Room">
-    <p id="room">${s.room || 'No room yet: paste the room link below.'}</p>
+    <p id="room">${s.room ? html`<${Value} text=${s.room} label="room link" />` : 'No room yet: paste the room link below.'}</p>
     <p id="pairing" role="status">${text + (s.error ? ' ' + s.error : '')}</p>
     ${s.pairing === 'pending' && /^https?:\/\//.test(s.approve_url || '') && html`<p id="approve">
       Check that the room page shows the code <strong id="code">${s.code}</strong>, then
@@ -486,13 +499,14 @@ function Rooms() {
   <//>`;
 }
 
+// An account's state: its words and its pill kind.
 const stateText = /** @type {Record<string, [string, string]>} */ ({
-  valid: ['valid', 'ok'], expired: ['expired', 'bad'], refused: ['refused', 'bad'], unknown: ['not checked yet', ''], error: ['unreadable', 'bad'],
+  valid: ['valid', 'ok'], expired: ['expired', 'failed'], refused: ['refused', 'failed'], unknown: ['not checked yet', 'idle'], error: ['unreadable', 'failed'],
 });
 
 /** @param {{a: Account, onError: (t: string) => void}} p */
 function AccountItem({ a, onError }) {
-  const [text, cls] = stateText[a.state] || [a.state, ''];
+  const [text, look] = stateText[a.state] || [a.state, 'idle'];
   const kind = a.kind === 'setup_token' ? 'setup token, in the ' + (a.storage === 'keyring' ? 'OS keyring' : 'owner-only file')
     : 'config dir ' + (a.display_dir || a.config_dir || '~/.claude');
   const total = Object.values(a.requests || {}).reduce((n, x) => n + x, 0);
@@ -503,12 +517,18 @@ function AccountItem({ a, onError }) {
     window.grillConfirm('Remove the Claude account ' + a.name + '?', 'Rooms that use it stop reaching Claude until they get another account.', 'Remove')
       .then((yes) => { if (yes) api('POST', '/api/accounts/remove', { name: a.name }).then(reload).catch((err) => onError(err.message)); });
   };
-  return html`<li>
-    <code>${a.name}</code> · ${kind} <${Badge} text=${text} cls=${cls} />
-    <div class="hint">${info}</div>
-    ${a.kind === 'setup_token' && html`<button type="button" aria-label=${'Check ' + a.name + ' now'}
-      onClick=${() => api('POST', '/api/accounts/probe', { name: a.name }).then(reload).catch((err) => onError(err.message))}>Check now</button> `}
-    <button type="button" aria-label=${'Remove ' + a.name} onClick=${remove}>Remove</button>
+  const menu = 'account-menu-' + a.name;
+  return html`<li class="list-row">
+    <div class="main"><span class="name">${a.name}</span> <span class=${'status ' + look}>${text}</span>
+      <div class="meta">${kind}</div><div class="meta">${info}</div></div>
+    <div class="actions">
+      <button type="button" class="btn-icon btn-ghost" popovertarget=${menu} aria-label=${'Actions on ' + a.name} dangerouslySetInnerHTML=${icon('more')}></button>
+      <div id=${menu} class="menu row-menu" popover>
+        ${a.kind === 'setup_token' && html`<button type="button" aria-label=${'Check ' + a.name + ' now'} popovertarget=${menu} popovertargetaction="hide"
+          onClick=${() => api('POST', '/api/accounts/probe', { name: a.name }).then(reload).catch((err) => onError(err.message))}>Check now</button>`}
+        <button type="button" aria-label=${'Remove ' + a.name} popovertarget=${menu} popovertargetaction="hide" onClick=${remove}>Remove</button>
+      </div>
+    </div>
   </li>`;
 }
 
@@ -535,7 +555,7 @@ function Accounts() {
   const on = (set) => (/** @type {any} */ e) => set(e.currentTarget.value);
   return html`<${Section} id="accounts" title="Claude accounts">
     <p class="hint">Each account has its own proxy in this supervisor: the workers and their sandboxes get its address, never a token. Rooms see none of this page.</p>
-    <ul id="accounts">${accounts.map((a) => html`<${AccountItem} key=${a.name} a=${a} onError=${setListErr} />`)}</ul>
+    <ul id="accounts" class="list-rows">${accounts.map((a) => html`<${AccountItem} key=${a.name} a=${a} onError=${setListErr} />`)}</ul>
     <p class="bad" role="alert">${listErr}</p>
     <form id="account-form" class="row" onSubmit=${add}>
       <label>Name <input id="account-name" required size="16" autocomplete="off" spellcheck=${false} pattern="[A-Za-z0-9][A-Za-z0-9._\\-]{0,63}"
@@ -578,6 +598,7 @@ function NumberForm({ id, label, value, min, max, button, path, field }) {
   </form>`;
 }
 
+// Autostart is a toggle: it applies at once and says so in a toast (docs/design.md §5).
 function Autostart() {
   const on = data.value?.autostart;
   const [busy, setBusy] = useState(false);
@@ -589,11 +610,11 @@ function Autostart() {
     setBusy(true);
     setText('');
     api('POST', '/api/autostart', { enabled: want }).then(reload)
-      .then(() => setText(want ? 'Starts at your next login.' : 'Removed.'))
-      .catch((err) => setText(err.message)).finally(() => setBusy(false));
+      .then(() => window.grillToast(want ? 'Starts at your next login' : 'No longer starts at login'))
+      .catch((err) => setText(sentence(err.message))).finally(() => setBusy(false));
   };
   return html`<p class="row"><label><input id="autostart" type="checkbox" checked=${on} disabled=${busy} onChange=${change} /> Start at login</label>
-    <span id="autostart-status" role="status">${text}</span></p>`;
+    <span id="autostart-status" class="bad" role="status">${text}</span></p>`;
 }
 
 // Trust shows the supervisor's signature and update channel, and the trusted dev keys (003-AC4,
@@ -628,7 +649,8 @@ function Trust() {
   return html`
     <h3>Signatures and updates</h3>
     <dl>
-      <dt>This supervisor</dt><dd id="self-detail" class=${t.self.state === 'unsigned' ? 'bad' : 'ok'}>${sig + (t.self.detail ? ': ' + t.self.detail : '')}</dd>
+      <dt>This supervisor</dt><dd id="self-detail"><span class=${'status ' + (t.self.state === 'unsigned' ? 'failed' : 'ok')}>${sig}</span>
+        ${t.self.detail && (['project', 'dev-key'].includes(t.self.state) ? html` <${Value} text=${t.self.detail} label="signer identity" />` : ' ' + t.self.detail)}</dd>
       <dt>Trusted root</dt><dd id="root">${root}</dd>
       <dt>Last update check</dt><dd id="checked">${(t.checked && !t.checked.startsWith('0001') ? new Date(t.checked).toLocaleString() : 'not yet') +
         (t.check_error ? ': ' + t.check_error : '')}</dd>
@@ -647,11 +669,12 @@ function Trust() {
     </form>
     <h3>Trusted dev keys</h3>
     <p class="hint">Worker binaries signed with one of these cosign public keys run like project releases. Keys also load from the dev-keys folder of the supervisor's config.</p>
-    <ul id="dev-keys">
-      ${!t.dev_keys.length && html`<li>None.</li>`}
-      ${t.dev_keys.map((k) => html`<li><code>${k.name}</code> · ${k.fingerprint} <button type="button" aria-label=${'Remove ' + k.name}
+    <ul id="dev-keys" class="list-rows">
+      ${!t.dev_keys.length && html`<li class="empty">No dev key yet.</li>`}
+      ${t.dev_keys.map((k) => html`<li class="list-row"><div class="main"><span class="name">${k.name}</span> <${Value} text=${k.fingerprint} label=${'fingerprint of ' + k.name} /></div>
+        <div class="actions"><button type="button" class="btn-icon btn-ghost" aria-label=${'Remove ' + k.name} dangerouslySetInnerHTML=${icon('trash')}
         onClick=${() => window.grillConfirm('Remove the key ' + k.name + '?', 'Worker binaries it signed are refused from now on.', 'Remove')
-          .then((yes) => { if (yes) runKey(api('POST', '/api/dev-keys/remove', { name: k.name })); })}>Remove</button></li>`)}
+          .then((yes) => { if (yes) runKey(api('POST', '/api/dev-keys/remove', { name: k.name })); })}></button></div></li>`)}
     </ul>
     <form id="key-form" class="row" onSubmit=${addKey}>
       <label>Name <input id="key-name" required size="16" autocomplete="off" spellcheck=${false} pattern="[A-Za-z0-9][A-Za-z0-9._\\-]{0,63}"
@@ -664,7 +687,7 @@ function Trust() {
 }
 
 /** @param {{ok: boolean, text: string, id: string}} p */
-const Mark = ({ ok, text, id }) => html`<dd id=${id} class=${ok ? 'ok' : 'bad'}>${text}</dd>`;
+const Mark = ({ ok, text, id }) => html`<dd id=${id}><span class=${'status ' + (ok ? 'ok' : 'failed')}>${text}</span></dd>`;
 
 // Machine is the instance worker's readiness: Docker, the sandbox image, hosting.
 /** @param {{i: Instance, st: import('./api.js').Status}} p */
@@ -704,18 +727,22 @@ function Cap({ i, st }) {
   };
   /** @param {string} k */
   const pick = (k) => (/** @type {any} */ e) => setSet({ ...set, [k]: e.currentTarget.value });
+  const dirty = draft ? /** @type {const} */ (['max_model', 'max_effort', 'approve_all']).filter((k) => draft[k] !== st.settings[k]).length : 0;
   return html`
     <h3>Limit on models</h3>
-    <p class="hint">A persona asking for more runs at this limit until you approve it in the room.</p>
-    <form id="settings-form" class="row" onSubmit=${save}>
-      <label>Max model <select id="max-model" value=${set.max_model} onChange=${pick('max_model')}>
-        <option value="">no cap</option>${d.models.map((m) => html`<option value=${m}>${m}</option>`)}</select></label>
-      <label>Max effort <select id="max-effort" value=${set.max_effort} onChange=${pick('max_effort')}>
-        <option value="">no cap</option>${d.efforts.map((m) => html`<option value=${m}>${m}</option>`)}</select></label>
-      <label><input id="approve-all" type="checkbox" checked=${set.approve_all}
+    <form id="settings-form" class="settings-group" onSubmit=${save}>
+      <label for="max-model">Max model</label><div class="control"><select id="max-model" value=${set.max_model} onChange=${pick('max_model')}>
+        <option value="">no cap</option>${d.models.map((m) => html`<option value=${m}>${m}</option>`)}</select></div>
+      <label for="max-effort">Max effort</label><div class="control"><select id="max-effort" value=${set.max_effort} onChange=${pick('max_effort')}>
+        <option value="">no cap</option>${d.efforts.map((m) => html`<option value=${m}>${m}</option>`)}</select></div>
+      <p class="hint">A persona asking for more runs at this limit until you approve it in the room.</p>
+      <label class="full"><input id="approve-all" type="checkbox" checked=${set.approve_all}
         onChange=${(/** @type {any} */ e) => setSet({ ...set, approve_all: e.currentTarget.checked })} /> Approve every new persona and persona change</label>
-      <button type="submit">Save</button>
-      <span id="settings-status" role="status">${text}</span>
+      <div class="settings-foot">
+        <span id="settings-status" role="status">${text}</span>
+        ${dirty > 0 && html`<span class="dirty">${dirty === 1 ? '1 unsaved change' : dirty + ' unsaved changes'}</span>`}
+        <button type="submit" disabled=${!dirty}>Save</button>
+      </div>
     </form>`;
 }
 
@@ -745,10 +772,10 @@ function Egress({ i, st }) {
   return html`
     <h3>Websites the AI may reach</h3>
     <p class="hint">The sandbox reaches these domains, and nothing else, through its proxy and over HTTPS only. A leading dot, as in .example.com, also allows every subdomain. Anthropic's hosts stay blocked whatever the list says.</p>
-    <ul id="allowlist">
-      ${!st.allowlist.length && html`<li>No domain: the sandbox reaches nothing.</li>`}
-      ${st.allowlist.map((dom) => html`<li><code>${dom}</code> <button type="button" aria-label=${'Remove ' + dom}
-        onClick=${() => save(st.allowlist.filter((x) => x !== dom))}>Remove</button></li>`)}
+    <ul id="allowlist" class="list-rows">
+      ${!st.allowlist.length && html`<li class="empty">No domain: the sandbox reaches nothing.</li>`}
+      ${st.allowlist.map((dom) => html`<li class="list-row"><code class="main">${dom}</code><div class="actions"><button type="button" class="btn-icon btn-ghost"
+        aria-label=${'Remove ' + dom} dangerouslySetInnerHTML=${icon('trash')} onClick=${() => save(st.allowlist.filter((x) => x !== dom))}></button></div></li>`)}
     </ul>
     <form id="allowlist-form" class="row" onSubmit=${add}>
       <label>Domain <input id="allowlist-add" required placeholder="example.com" size="30" autocomplete="off" spellcheck=${false}
@@ -849,10 +876,10 @@ function App() {
   const live = d && !stopped.value;
   return html`
     <${Header} />
-    ${live && html`<${TabBar} />`}
     ${banner.value && html`<p id="banner" role="alert">${sentence(banner.value)}</p>`}
     ${live && html`<${RelaxBanner} />`}
-    ${live && html`<main id="main">
+    ${live && html`<main id="main" class=${tab.value === 'monitoring' ? 'page-wide' : 'page'}>
+      <${TabBar} />
       <${Panel} id="instances"><${Instances} /><//>
       <${Panel} id="rooms"><${Room} /><${Rooms} /><//>
       <${Panel} id="accounts"><${Accounts} /><//>
@@ -861,27 +888,6 @@ function App() {
       <${Panel} id="update"><${Section} id="update" title="Update"><${UpdateOffer} /><${Trust} /><//><//>
     </main>`}`;
 }
-
-// The tip of a cut cell ([data-tip]) is a popover: the top layer, so a table's scroll box cannot clip it.
-const tip = Object.assign(document.createElement('div'), { id: 'tip', className: 'tip', popover: 'manual', role: 'tooltip' });
-document.body.append(tip);
-/** @param {Event} e */
-const showTip = (e) => {
-  const el = /** @type {HTMLElement | null} */ (/** @type {Element} */ (e.target).closest?.('[data-tip]'));
-  if (!el) return;
-  tip.textContent = el.dataset.tip || '';
-  tip.showPopover();
-  const r = el.getBoundingClientRect();
-  const below = r.bottom + tip.offsetHeight + 4 <= innerHeight;
-  tip.style.left = Math.max(4, Math.min(r.left, innerWidth - tip.offsetWidth - 4)) + 'px';
-  tip.style.top = (below ? r.bottom + 4 : r.top - tip.offsetHeight - 4) + 'px';
-};
-const hideTip = () => { if (tip.matches(':popover-open')) tip.hidePopover(); };
-addEventListener('pointerover', showTip);
-addEventListener('focusin', showTip);
-addEventListener('pointerout', hideTip);
-addEventListener('focusout', hideTip);
-addEventListener('scroll', hideTip, true);
 
 render(html`<${App} />`, /** @type {HTMLElement} */ (document.getElementById('app')));
 

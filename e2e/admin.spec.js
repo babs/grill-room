@@ -84,7 +84,7 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
     await expect(roomCell).toHaveText(room.name);
     await expect(roomCell).toHaveAttribute('data-tip', roomURL);
     await roomCell.hover();
-    await expect(admin.locator('#tip')).toHaveText(roomURL);
+    await expect(admin.locator('#person-tip')).toHaveText(roomURL);
     for (const width of [390, 1440, 1920]) {
       await admin.setViewportSize({ width, height: 900 });
       for (const sel of ['#turns', '#totals']) {

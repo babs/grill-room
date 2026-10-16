@@ -45,7 +45,7 @@ for (const vp of widths) {
     await expect(row).toContainText(name);
     await expect(row.locator('td').nth(3)).toHaveText('1');
     await expect(row.locator('td').nth(4)).toHaveText('1');
-    await expect(row.locator('td').nth(5)).toHaveText('none');
+    await expect(row.locator('td').nth(5)).toHaveText('No AI host');
     await fits(page, vp.width);
 
     // Sorting by name, both ways, from the column heads: a phone shows cards, newest first (005-AC43).

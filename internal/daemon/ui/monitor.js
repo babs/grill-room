@@ -34,13 +34,20 @@ const note = (t) => (t.model_mismatch ? ' · ⚠ claude reported ' + (t.model_no
  */
 const Cut = ({ text, tip = text }) => html`<span class="cut" tabindex="0" data-tip=${tip}>${text}</span>`;
 
+/**
+ * Status is a turn's status as a pill (docs/design.md §5), its error in the tip.
+ * @param {{t: Turn}} p
+ */
+const Status = ({ t }) => html`<span class=${'status ' + (t.status === 'ok' ? 'ok' : ['failed', 'conflict', 'expired', 'cut off'].includes(t.status) ? 'failed' : 'idle')}
+  tabindex=${t.error ? 0 : undefined} data-tip=${t.error || undefined}>${t.status}</span>`;
+
 /** The room's id, the tail of its link, for a room no longer served. @param {string} url */
 const roomID = (url) => url.replace(/\/+$/, '').split('/').pop() || url;
 
 /** @param {{t: Turn, room: string}} p */
 function TurnRow({ t, room }) {
   const pct = t.context_window ? Math.floor((t.context_tokens * 100) / t.context_window) + '%' : '';
-  return html`<tr class=${'status-' + t.status.replace(' ', '-')}>
+  return html`<tr>
     <td data-label="Ended">${new Date(t.at).toLocaleString()}</td>
     <td data-label="Room"><${Cut} text=${room} tip=${t.room} /></td>
     <td data-label="Persona">${t.persona}</td>
@@ -49,7 +56,7 @@ function TurnRow({ t, room }) {
     <td data-label="Why"><${Cut} text=${t.cause} /></td>
     <td data-label="Took">${secs(t.duration_ms)}</td>
     <td data-label="Queued">${secs(t.queue_ms)}</td>
-    <td data-label="Status">${t.error ? html`<${Cut} text=${t.status} tip=${t.error} />` : t.status}</td>
+    <td data-label="Status"><${Status} t=${t} /></td>
     <td data-label="Tokens">${t.model ? count(t.tokens_in) + ' / ' + count(t.tokens_out) + ' / ' + count(t.tokens_cache_read + t.tokens_cache_write) : 'unknown'}</td>
     <td data-label="Cost">${usd(t.cost_usd)}</td>
     <td data-label="Context" class=${pct && t.context_tokens * 100 > 80 * t.context_window ? 'bad' : ''}>${pct}</td>

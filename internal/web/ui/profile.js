@@ -411,7 +411,7 @@ function showTab() {
     else $('tab-' + t).removeAttribute('aria-current');
   }
   // A bar that scrolls sideways on a phone keeps its current tab in sight (005-AC35).
-  $('tab-' + tab).scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  window.grillShowTab($('profile-tabs'));
   // The browser jumped to the element the hash names, if any: a tab opens at the page's top, under
   // the identity strip.
   scrollTo(0, 0);

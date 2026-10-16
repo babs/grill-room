@@ -6,19 +6,15 @@ body { overflow-wrap: anywhere; }
 #update { margin-top: var(--sp-2); }
 .alerts { margin: var(--sp-2) 0 0; padding-left: var(--sp-7); }
 .alerts .alert-unsigned { font-weight: 600; }
-/* The tab bar stays pinned while the page scrolls (005-AC17). */
-#tabs { position: sticky; top: 0; z-index: var(--z-sticky); padding: var(--sp-1) var(--sp-4) 0; background: var(--surface); box-shadow: var(--sh-1); }
 .tab-badge { display: inline-block; min-width: 1.2em; padding: 0 var(--sp-1); border-radius: var(--r-pill); background: var(--danger); color: var(--on-danger); font-size: var(--fs-xs); text-align: center; }
 .panel > section:first-of-type > h2, .panel > .alerts + section > h2 { border-top: 0; }
 #relax-banner { margin: 0; padding: var(--sp-2) var(--sp-4); background: var(--danger-bg); color: var(--danger); font-weight: 600; }
-/* Data panels take the full width, forms and cards stay at 72rem, prose at 70ch (docs/design.md §6). */
-main { padding: var(--sp-3) var(--sp-4) var(--sp-4); }
-#panel-accounts, #panel-settings, #panel-update { max-width: 72rem; }
+/* Prose at 70ch; the page column comes from the kit's .page and .page-wide (docs/design.md §6). */
 .hint { max-width: 70ch; }
 h2 { font-size: var(--fs-lg); margin: var(--sp-5) 0 var(--sp-2); padding-top: var(--sp-2); border-top: 1px solid var(--border); }
 h3 { font-size: var(--fs-md); margin: var(--sp-4) 0 var(--sp-1); }
 h4 { font-size: var(--fs-sm); margin: var(--sp-3) 0 var(--sp-1); }
-dl { display: grid; grid-template-columns: max-content 1fr; gap: var(--sp-1) var(--sp-4); margin: 0 0 var(--sp-3); }
+dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--sp-1) var(--sp-4); margin: 0 0 var(--sp-3); }
 dt { font-weight: 600; }
 dd { margin: 0; overflow-wrap: anywhere; }
 ul { margin: 0 0 var(--sp-3); padding-left: var(--sp-5); }
@@ -44,13 +40,9 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
 .scroll thead th { position: sticky; top: 0; z-index: 1; background: var(--bg); white-space: normal; overflow-wrap: normal; vertical-align: bottom; }
 th, td { white-space: nowrap; vertical-align: top; }
 .cut { display: block; max-width: 14rem; overflow: hidden; text-overflow: ellipsis; }
-.tip { inset: auto; margin: 0; pointer-events: none; max-width: min(32rem, 90vw); padding: var(--sp-1) var(--sp-2); border: 0; border-radius: var(--r-sm);
-  background: var(--chrome); color: var(--chrome-text); box-shadow: var(--sh-2); font-size: var(--fs-sm); overflow-wrap: anywhere; }
-tr.status-failed td, tr.status-conflict td, tr.status-expired td, tr.status-cut-off td { color: var(--danger); }
 .row > * { max-width: 100%; min-width: 0; }
 select { text-overflow: ellipsis; }
 @media (max-width: 40rem) {
-  main { padding: var(--sp-3) var(--sp-2) var(--sp-4); }
   .scroll { max-height: none; }
   table.cards .cut { display: inline; max-width: none; white-space: normal; overflow-wrap: anywhere; }
   .app-header button { margin-left: 0; }
