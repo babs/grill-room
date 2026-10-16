@@ -16,4 +16,4 @@
 | [010](010-device-stt.md) | On-device transcription (opt-in) | shipped |
 | [011](011-profile-recovery.md) | Profile identity and recovery | shipped |
 | [011b](011b-profile-rework.md) | Profile page rework | shipped |
-| [012](012-agent-api.md) | Agent access: personal API tokens and a built-in MCP server | in progress |
+| [012](012-agent-api.md) | Agent access: personal API tokens and a built-in MCP server | shipped |
