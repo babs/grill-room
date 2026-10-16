@@ -109,11 +109,16 @@ func TestServeWorker(t *testing.T) {
 	if r := f.request(t, Msg{Type: "settings", Settings: &Settings{MaxModel: "claude-sonnet-5-5"}}); r.Error != "" {
 		t.Fatalf("settings: %+v", r)
 	}
-	waitFor(t, "the new cap in the status", func() bool { return f.lastStatus().Settings.MaxModel == "sonnet" })
+	// The status a request changed comes before its reply: a page reloading on the reply sees it.
+	if got := f.lastStatus().Settings.MaxModel; got != "sonnet" {
+		t.Errorf("status at the settings reply: max model %q", got)
+	}
 	if r := f.request(t, Msg{Type: "allowlist"}); r.Error != "" {
 		t.Fatalf("empty allowlist: %+v", r)
 	}
-	waitFor(t, "the empty allowlist", func() bool { s := f.lastStatus(); return s.Allowlist != nil && len(s.Allowlist) == 0 })
+	if s := f.lastStatus(); s.Allowlist == nil || len(s.Allowlist) != 0 {
+		t.Errorf("status at the allowlist reply: %v", s.Allowlist)
+	}
 	// 014-AC1 014-AC26: the switches reach the worker; the local network needs every website.
 	if r := f.request(t, Msg{Type: "egress_switches", Switches: &EgressSwitches{LocalNetwork: true}}); r.Error != "" {
 		t.Fatalf("egress switches: %+v", r)
@@ -121,7 +126,9 @@ func TestServeWorker(t *testing.T) {
 	if r := f.request(t, Msg{Type: "egress_switches", Switches: &EgressSwitches{AllWebsites: true, LocalNetwork: true}}); r.Error != "" {
 		t.Fatalf("egress switches: %+v", r)
 	}
-	waitFor(t, "both switches on", func() bool { e := f.lastStatus().Egress; return e.AllWebsites && e.LocalNetwork })
+	if e := f.lastStatus().Egress; !e.AllWebsites || !e.LocalNetwork {
+		t.Errorf("status at the switches' reply: %+v", e)
+	}
 	// 014-AC19: a connector change for a room this worker does not serve is told to nobody.
 	if r := f.request(t, Msg{Type: "connector_event", Room: "https://x/r/none", Connector: &ConnectorEvent{Name: "Gmail", Kind: "enable"}}); r.Error != "" {
 		t.Fatalf("connector event: %+v", r)

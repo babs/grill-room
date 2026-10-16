@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, startDaemon, pairDaemon, menuItem, sandboxHas, openStrip, addSecretary, upload, commentOnDocument, sandboxPrompts, approveEverything } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, menuItem, sandboxHas, openStrip, addSecretary, upload, commentOnDocument, sandboxPrompts, approveEverything, messageAction } from './helpers.js';
 
 async function say(page, text) {
   await page.locator('#body').fill(text);
@@ -12,7 +12,14 @@ const line = (page, text) => page.locator('#messages li.msg', { hasText: text })
 // 005-AC2: "@" suggests the room's personas, then the people, filtered as you type; arrows and
 // Enter pick with the keyboard, a tap picks on a phone. 005-AC3: a mention that cannot run tells
 // its author why, and nobody else sees it.
-test('mentions: autocomplete and notices without a host', async ({ browser, request }) => {
+// The specs that start a daemon run in the sandbox project only: the firefox project runs beside others.
+const noSandbox = (browserName) => test.skip(browserName === 'firefox', 'agent turns run in the sandbox project, in Chrome');
+
+// phoneContext is a touch phone; Firefox has no isMobile.
+const phoneContext = (browser, browserName) =>
+  browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: browserName !== 'firefox', hasTouch: true });
+
+test('mentions: autocomplete and notices without a host', async ({ browser, request, browserName }) => {
   const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob Smith']);
   const body = alice.locator('#body');
   const list = alice.locator('#mention-list');
@@ -37,7 +44,7 @@ test('mentions: autocomplete and notices without a host', async ({ browser, requ
 
   // On a phone, a tap picks.
   const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: { Authorization: 'Bearer e2e-admin-token' } })).json();
-  const phone = await (await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })).newPage();
+  const phone = await (await phoneContext(browser, browserName)).newPage();
   await phone.goto(new URL(inv.url).pathname + new URL(inv.url).hash);
   await phone.getByLabel('Your name').fill('Carol');
   await phone.getByRole('button', { name: 'Join the room' }).click();
@@ -58,11 +65,66 @@ test('mentions: autocomplete and notices without a host', async ({ browser, requ
   await expect(line(alice, 'what does').locator('.mentions')).toHaveCount(0);
 });
 
+// 005-AC2 in the edit box: editing a line offers the same @ list as the send box, keyboard and
+// tap; Enter picks while the list is open and saves once it is closed, and the saved line shows
+// its chips (005-AC27).
+test('mentions: autocomplete in the edit box', async ({ browser, request, browserName }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice', 'Bob Smith']);
+  await expect(alice.locator('#participants')).toContainText('Bob Smith');
+  await say(alice, 'Hi there');
+  await messageAction(line(alice, 'Hi there'), 'Edit');
+  const box = alice.getByRole('textbox', { name: 'New text' });
+  // The line's text sits in the box while it is edited: the edit form finds it.
+  const list = alice.locator('#messages form.edit').getByRole('listbox', { name: 'Mention' });
+  await box.press('End');
+  await box.pressSequentially(' @');
+  await expect(list.getByRole('option')).toHaveText(['🔥 Grillagent', 'Bob Smithperson']);
+  await expect(box).toHaveAttribute('aria-expanded', 'true');
+  // Inside the #messages live region, the list is not read out on each keystroke.
+  await expect(list).toHaveAttribute('aria-live', 'off');
+  await box.press('ArrowDown');
+  await expect(list.getByRole('option').nth(1)).toHaveAttribute('aria-selected', 'true');
+  await box.press('Enter');
+  await expect(box).toHaveValue('Hi there @Bob_Smith ');
+  await expect(list).toBeHidden();
+  await box.pressSequentially('and @g');
+  await expect(list.getByRole('option')).toHaveText(['🔥 Grillagent']);
+  // Escape closes the list and keeps the edit open.
+  await box.press('Escape');
+  await expect(list).toBeHidden();
+  await expect(box).toBeVisible();
+  await box.pressSequentially('r');
+  await box.press('Tab');
+  await expect(box).toHaveValue('Hi there @Bob_Smith and @Grill ');
+  await box.press('Enter');
+  const saved = line(alice, 'Hi there').locator('mark.mention-chip');
+  await expect(saved).toHaveText(['@Bob_Smith', '@Grill']);
+  await expect(saved.nth(1)).toHaveClass(/persona/);
+  // The send box's list stayed shut throughout.
+  await expect(alice.locator('#mention-list')).toBeHidden();
+
+  // On a phone, a tap picks in the edit box too.
+  const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: { Authorization: 'Bearer e2e-admin-token' } })).json();
+  const phone = await (await phoneContext(browser, browserName)).newPage();
+  await phone.goto(new URL(inv.url).pathname + new URL(inv.url).hash);
+  await phone.getByLabel('Your name').fill('Carol');
+  await phone.getByRole('button', { name: 'Join the room' }).click();
+  await say(phone, 'Carol here');
+  await messageAction(line(phone, 'Carol here'), 'Edit');
+  const pbox = phone.getByRole('textbox', { name: 'New text' });
+  await pbox.press('End');
+  await pbox.pressSequentially(' @bo');
+  await phone.locator('#messages form.edit').getByRole('option', { name: /Bob Smith/ }).tap();
+  await expect(pbox).toHaveValue('Carol here @Bob_Smith ');
+  await expect(pbox).toBeFocused();
+});
+
 // 005-AC3 005-AC4 005-AC5 with the real daemon, a Docker sandbox and the fake claude: a mention
 // shows its turn done, linked to the synthesis. A running one is stopped from the room with nothing
 // applied, and the next turn resumes the session as the last done turn left it. One that fails
 // shows failed. A persona waiting for approval, and an offline host, give notices.
-test('mentions: turn states, stop, pending and offline', async ({ browser, request, baseURL }) => {
+test('mentions: turn states, stop, pending and offline', async ({ browser, request, baseURL, browserName }) => {
+  noSandbox(browserName);
   test.setTimeout(240_000);
   const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
@@ -133,7 +195,8 @@ test('mentions: turn states, stop, pending and offline', async ({ browser, reque
 // and the note message shows the turn's chip, kept after a reload. The thread is the Secretary's:
 // Grill's prompt leaves it out of the new threads, and Grill's reply to it (the fake's FAKE_REPLY
 // answers the first thread of annotations.md) is refused and reported in the chat.
-test('mentions: a note names the persona that owns its thread', async ({ browser, request, baseURL }) => {
+test('mentions: a note names the persona that owns its thread', async ({ browser, request, baseURL, browserName }) => {
+  noSandbox(browserName);
   test.setTimeout(240_000);
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
   const panel = await addSecretary(alice);

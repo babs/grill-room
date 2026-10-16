@@ -71,7 +71,8 @@ func ServeWorker(ctx context.Context, conn *Conn, d *Daemon, cfg WorkerConfig) e
 	for _, room := range d.startRooms(cfg) {
 		_ = d.SetRoom(ctx, room)
 	}
-	wg.Go(func() { pushStatus(ctx, conn, d) })
+	st := &statusSender{conn: conn, d: d}
+	wg.Go(func() { st.push(ctx) })
 	wg.Go(func() { pushMetrics(ctx, conn, d, started) })
 
 	// The reader outlives this function when stdin stays open; the process exits right after.
@@ -107,7 +108,12 @@ loop:
 				continue
 			}
 			wg.Go(func() {
-				if err := conn.Send(d.handle(ctx, m)); err != nil {
+				reply := d.handle(ctx, m)
+				// The status goes before the reply: whoever reloads on the reply reads the change.
+				if err := st.send(); err != nil {
+					d.o.Log.Warn("status_failed", zap.String("request", m.Type), zap.Error(err))
+				}
+				if err := conn.Send(reply); err != nil {
 					d.o.Log.Warn("reply_failed", zap.String("request", m.Type), zap.Error(err))
 				}
 			})
@@ -275,18 +281,38 @@ func (d *Daemon) handle(ctx context.Context, m Msg) Msg {
 	return out
 }
 
-// pushStatus sends the status whenever it changes.
-func pushStatus(ctx context.Context, conn *Conn, d *Daemon) {
+// statusSender sends the worker's status. One lock spans reading and sending it: a status sent
+// later was read later, so a ticker's older copy never lands after a request's newer one.
+type statusSender struct {
+	conn *Conn
+	d    *Daemon
+	mu   sync.Mutex
+	last []byte
+}
+
+// send sends the status if it changed since the last one sent.
+func (s *statusSender) send() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := s.d.Status()
+	b, err := json.Marshal(st)
+	if err != nil || bytes.Equal(b, s.last) {
+		return nil
+	}
+	if err := s.conn.Send(Msg{Type: "status", Status: &st}); err != nil {
+		return err
+	}
+	s.last = b
+	return nil
+}
+
+// push sends the status whenever it changes.
+func (s *statusSender) push(ctx context.Context) {
 	tick := time.NewTicker(statusEvery)
 	defer tick.Stop()
-	var last []byte
 	for {
-		st := d.Status()
-		if b, err := json.Marshal(st); err == nil && !bytes.Equal(b, last) {
-			if err := conn.Send(Msg{Type: "status", Status: &st}); err != nil {
-				return
-			}
-			last = b
+		if s.send() != nil {
+			return
 		}
 		select {
 		case <-ctx.Done():
