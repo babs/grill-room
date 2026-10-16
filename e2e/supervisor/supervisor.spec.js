@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, openSync, readFileSync, rmSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import { adminAPI, ask, latestLink, logLines, messagesRequests } from '../helpers.js';
+import { adminAPI, ask, latestLink, logLines, messagesRequests, connectedRow } from '../helpers.js';
 
 const local = `https://grill-room.${process.env.DEV_DOMAIN}`;
 const lab = `https://grill-room.${process.env.K8S_DOMAIN}`;
@@ -29,7 +29,7 @@ async function approve(adminPage, room) {
   expect(link.startsWith(room.base)).toBeTruthy();
   const [approval] = await Promise.all([room.page.context().waitForEvent('page'), room.page.evaluate((href) => window.open(href), link)]);
   await approval.getByRole('button', { name: 'Approve' }).click();
-  await expect(adminPage.locator('#pairing')).toHaveText('Paired. Connected.', { timeout: 60_000 });
+  await expect(connectedRow(adminPage)).toBeAttached({ timeout: 60_000 });
   await approval.close();
 }
 

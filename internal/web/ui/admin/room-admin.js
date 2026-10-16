@@ -6,7 +6,7 @@ import { render } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { html } from 'htm/preact';
-import { RoomPanel, Rename, TabBar, Invites, fetchJSON, roomTabs, icon } from './room-panel.js';
+import { RoomPanel, AdminRows, TabBar, Invites, fetchJSON, roomTabs, icon } from './room-panel.js';
 import { Editor } from './starters.js';
 import { PluginsTab, mountReview } from './plugins.js';
 
@@ -67,8 +67,6 @@ function Manage({ data, tab, tabs }) {
   useEffect(() => { load(); }, [data]);
   /** @param {number} id */
   const byName = (id) => data.participants.find((p) => p.id === id)?.name || 'a former participant';
-  /** @param {Participant} p @param {boolean} on */
-  const setAdmin = (p, on) => fetchJSON(on ? 'PUT' : 'DELETE', `${base}/admins/${p.id}`).then(() => setSaid('')).catch(show);
   /** @param {RoomSkill} k */
   const removeSkill = (k) => {
     window.grillConfirm(`Remove the room skill ${k.name}?`, 'Personas that have it on lose it.', 'Remove')
@@ -81,22 +79,16 @@ function Manage({ data, tab, tabs }) {
     document.getElementById('personas-open')?.click();
   };
   return html`
-    <p class="hint">You are a room admin. The instance's audit log records every action here.</p>
     <p class="said" role="alert">${said}</p>
     ${room && html`<${RoomPanel} key=${room.id} room=${room} base=${base} api=${fetchJSON} show=${show} reload=${load} byName=${byName} me=${data.me.id}
-      tab=${tab} tabs=${tabs} href=${(/** @type {string} */ id) => '#manage/' + id} close=${() => location.assign('/profile')} label="Room settings"
+      tab=${tab} tabs=${tabs} href=${(/** @type {string} */ id) => '#manage/' + id} close=${() => location.assign('/profile')} label="Room settings" heading=${false}
       general=${html`<h3>Save as starter</h3>
         <p class="hint">Keep this room's agenda, AI personas and skills, and the documents and plugins you pick, to start new rooms the same way.</p>
-        <div class="row"><button type="button" class="btn-secondary" id="save-starter" onClick=${() => saveAsStarter(base, setSaid)}>Save as starter</button></div>`}>
+        <div class="row"><button type="button" class="btn-secondary" id="save-starter" onClick=${() => saveAsStarter(base, setSaid)}>Save as starter</button></div>
+        <p class="hint">The server's audit log records what room admins do here.</p>`}>
       ${tab === 'admins' && html`
         <p class="hint">Room admins rename the room and its participants, manage every invite, appoint other admins and delete the room. The room keeps at least one.</p>
-        <ul id="room-admins" class="admin-rows">${data.participants.map((p) => html`<li key=${p.id}>
-          <span class="who">${p.name}</span><span>${p.admin && html`<strong class="badge role">admin</strong>`}</span>
-          <span>${p.admin
-            ? html`<button type="button" class="btn-secondary" onClick=${() => setAdmin(p, false)}>${p.id === data.me.id ? 'Step down' : 'Remove admin'}</button>`
-            : html`<button type="button" class="btn-secondary" onClick=${() => setAdmin(p, true)} aria-label=${'Make ' + p.name + ' a room admin'}>Make admin</button>`}</span>
-          <${Rename} key=${p.name} name=${p.name} path=${`${base}/participants/${p.id}/name`} api=${fetchJSON} show=${show} done=${() => setSaid('')}/>
-        </li>`)}</ul>`}
+        <${AdminRows} people=${data.participants} base=${base} api=${fetchJSON} show=${show} done=${() => setSaid('')} me=${data.me.id}/>`}
       ${tab === 'personas' && html`
         <p class="hint">Every member adds and edits the room's personas in the Personas sheet. A persona's name opens its own sheet.</p>
         <ul id="manage-personas">${personas.map((p) => html`<li key=${p.id}><span><span class="badge persona-badge">${p.badge}</span> <a href=${'#personas/' + p.id + '/identity'}
@@ -184,11 +176,15 @@ function STTGlossary({ data }) {
     <p class="said" role="status">${said}</p>`;
 }
 
+// The sheet's one heading names the room (004b-AC11).
+const title = /** @type {HTMLElement} */ (document.getElementById('manage-title'));
+
 function App() {
   const [said, setSaid] = useState('');
   /** @param {unknown} err */
   const show = (err) => setSaid(/** @type {Error} */ (err).message);
   const data = roomData.value;
+  if (data) title.textContent = 'Room settings · ' + data.room.name;
   if (!tab.value || !data) return null;
   const tabs = sttGlossary.value ? allTabs : allTabs.filter(([id]) => id !== 'glossary');
   if (data.me.admin) return html`<${Manage} data=${data} tabs=${tabs} tab=${tabs.some(([id]) => id === tab.value) ? tab.value : 'general'}/>`;

@@ -491,8 +491,10 @@
     const [left, right] = [at(cur), at(cur) + cur.getBoundingClientRect().width];
     // At the scroll end the fade is gone (tokens.css).
     const fits = (/** @type {number} */ s) => left >= s - 0.5 && right <= s + nav.clientWidth - (s < max - 0.5 ? fade : 0) + 0.5;
-    const s = [...nav.children].map(at).find((x) => x >= -0.5 && fits(Math.min(x, max))) ?? left;
-    if (s > max) nav.style.paddingInlineEnd = s - max + 'px';
+    // Scrolling snaps to whole pixels and the scroll width rounds: a fractional target or padding
+    // stops short and leaves a sliver of the tab before. The nearest pixel stays within half of one.
+    const s = Math.round([...nav.children].map(at).find((x) => x >= -0.5 && fits(Math.min(x, max))) ?? left);
+    if (s > max) nav.style.paddingInlineEnd = Math.ceil(s - max) + 'px';
     nav.scrollLeft = s;
   };
 

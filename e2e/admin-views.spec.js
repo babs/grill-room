@@ -2,7 +2,7 @@ import { request as pwRequest } from '@playwright/test';
 import { test, expect } from './fixtures.js';
 import { readFileSync } from 'node:fs';
 import { adminToken } from './playwright.config.js';
-import { signIn, noOverflow, skillZip, confirmSheet } from './helpers.js';
+import { signIn, noOverflow, skillZip, confirmSheet, rowAction } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
@@ -43,20 +43,20 @@ for (const vp of widths) {
     expect(await signIn(page, adminToken, 'rooms')).toBe(201);
     const row = page.locator('#room-' + room.id);
     await expect(row).toContainText(name);
-    await expect(row.locator('td').nth(3)).toHaveText('1');
-    await expect(row.locator('td').nth(4)).toHaveText('1');
-    await expect(row.locator('td').nth(5)).toHaveText('No AI host');
+    await expect(row.locator('.cell').nth(1)).toHaveText(/1$/);
+    await expect(row.locator('.cell').nth(2)).toHaveText(/1$/);
+    await expect(row.locator('.cell').nth(3)).toHaveText('No AI host');
     await fits(page, vp.width);
 
-    // Sorting by name, both ways, from the column heads: a phone shows cards, newest first (005-AC43).
+    // Sorting by name, both ways, from the column heads: a phone shows cards, newest first (005-AC43, 004b-AC1).
     if (vp.width > 400) {
-      const names = () => page.locator('#rooms tbody tr td:first-child').allTextContents();
+      const names = () => page.locator('#rooms .list-row:not(.head) .name').allTextContents();
       const sorted = (list, desc) => [...list].sort((a, b) => (a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0) * (desc ? -1 : 1));
       await page.getByRole('button', { name: 'Name', exact: true }).click();
-      await expect(page.locator('#rooms th[aria-sort="ascending"]')).toHaveText('Name');
+      await expect(page.locator('#rooms .head [aria-sort="ascending"]')).toHaveText('Name');
       expect(await names()).toEqual(sorted(await names(), false));
       await page.getByRole('button', { name: 'Name', exact: true }).click();
-      await expect(page.locator('#rooms th[aria-sort="descending"]')).toHaveText('Name');
+      await expect(page.locator('#rooms .head [aria-sort="descending"]')).toHaveText('Name');
       expect(await names()).toEqual(sorted(await names(), true));
     }
 
@@ -70,7 +70,7 @@ for (const vp of widths) {
     };
     await expect(panel.locator('#volume')).toContainText(`Uploads${Buffer.byteLength(plan)} B`);
     await expect(panel.locator('#volume')).toContainText('Room skills0 B');
-    await expect(panel.locator('#storage')).toContainText('of 200 MB, the instance default.');
+    await expect(panel.locator('#storage')).toContainText('of 200 MB, the server default.');
     await tab('Export');
     await expect(panel.locator('#export')).toHaveAttribute('href', `/api/admin/rooms/${room.id}/export`);
     await fits(page, vp.width);
@@ -85,26 +85,26 @@ for (const vp of widths) {
     expect(big.status()).toBe(413);
     expect((await big.json()).error).toBe('this upload would take the room over its 1 MB limit');
     await panel.getByRole('button', { name: 'Use the default' }).click();
-    await expect(panel.locator('#storage')).toContainText('of 200 MB, the instance default.');
+    await expect(panel.locator('#storage')).toContainText('of 200 MB, the server default.');
 
     // Rename.
     await panel.locator('#room-name-input').fill(name + ' renamed');
     await panel.getByRole('button', { name: 'Rename' }).click();
     await expect(panel.locator('h2')).toContainText(name + ' renamed');
     await audited(request, 'room.rename', room.id);
-    await page.getByRole('link', { name: '← All rooms' }).click();
-    await expect(row.locator('td').first()).toHaveText(name + ' renamed');
+    await page.getByRole('link', { name: 'All rooms' }).click();
+    await expect(row.locator('.name')).toHaveText(name + ' renamed');
     await expect(row).toContainText('/ 200 MB');
 
     // Invites, from a deep link: a new link shown once, then revoked.
     await page.goto(`/admin#rooms/${room.id}/invites`);
     await expect(panel.getByRole('link', { name: 'Invites', exact: true })).toHaveAttribute('aria-current', 'page');
-    const invites = panel.locator('#invites-all tbody tr');
+    const invites = panel.locator('#invites-all .list-row:not(.head)');
     await expect(invites).toHaveCount(1);
     await panel.getByRole('button', { name: 'New invite link' }).click();
     await expect(panel.locator('#invite-link-new')).toHaveValue(/\/join#\S+$/);
     await expect(invites).toHaveCount(2);
-    await invites.nth(1).getByRole('button', { name: 'Revoke' }).click();
+    await rowAction(invites.nth(1), /^Revoke/);
     await expect(page.locator('#revoke-nobody')).toHaveText('Nobody joined through this invite.');
     await page.locator('#revoke-sheet').getByRole('button', { name: 'Revoke', exact: true }).click();
     await expect(page.locator('.toast')).toHaveText('Revoked. Nobody lost access.');
@@ -141,9 +141,9 @@ for (const vp of widths) {
     await page.locator('#room-' + room.id).getByRole('link', { name: 'Manage ' + name }).click();
     await page.locator('#room-panel').getByRole('link', { name: 'Admins', exact: true }).click();
     const admins = page.locator('#room-panel #room-admins');
-    await expect(admins.locator('li')).toHaveCount(1);
+    await expect(admins.locator('> li')).toHaveCount(1);
     await admins.getByRole('button', { name: 'Make Alice a room admin' }).click();
-    await expect(admins.locator('li')).toContainText('Alice admin');
+    await expect(admins.locator('> li', { hasText: 'Alice' }).locator('.badge.role')).toHaveText('admin');
     await audited(request, 'room_admin.add', room.id);
     await fits(page, vp.width);
     expect((await alice.ctx.patch(`/api/rooms/${room.id}`, { data: { name: name + ' by Alice' } })).status()).toBe(200);
@@ -163,13 +163,14 @@ for (const vp of widths) {
     expect((await pat.ctx.post('/api/profile/skills', { headers: { 'Content-Type': 'application/zip' }, data: readFileSync(skillZip('mine' + Date.now(), 'X')) })).status()).toBe(201);
     const page = await (await browser.newContext({ viewport: vp })).newPage();
     expect(await signIn(page, adminToken, 'profiles')).toBe(201);
-    const row = page.locator('#profiles tbody tr', { hasText: name });
+    const row = page.locator('#profiles .list-row', { hasText: name });
     await expect(row).toHaveCount(1);
-    await expect(row.locator('td').nth(1)).toHaveText('—');
-    await expect(row.locator('td').nth(2)).toHaveText('Profiles ' + name);
-    await expect(row.locator('td').nth(3)).toHaveText('1');
+    await expect(row.locator('.meta')).toHaveText('no email');
+    await expect(row.locator('.rooms')).toHaveText('1 room');
+    await expect(row.locator('.rooms')).toHaveAttribute('data-tip', 'Profiles ' + name);
+    await expect(row.locator('.cell').nth(1)).toHaveText(/1$/);
     await fits(page, vp.width);
-    await row.getByRole('button', { name: 'Delete' }).click();
+    await rowAction(row, /^Delete the profile/);
     await confirmSheet(page, 'Delete');
     await expect(row).toHaveCount(0);
     await audited(request, 'profile.delete', name);
@@ -191,16 +192,16 @@ for (const vp of widths) {
     expect((await lib.ctx.post('/api/profile/skills?scope=shared', { headers: { 'Content-Type': 'application/zip' }, data: readFileSync(skillZip(skill, 'X')) })).status()).toBe(201);
     const page = await (await browser.newContext({ viewport: vp })).newPage();
     expect(await signIn(page, adminToken, 'libraries')).toBe(201);
-    const t = page.locator('#templates tbody tr', { hasText: tpl.title });
+    const t = page.locator('#templates .list-row', { hasText: tpl.title });
     await expect(t).toHaveText(new RegExp(`${tpl.title}Libv1`));
-    await expect(page.locator('#templates tbody tr', { hasText: 'shipped' }).first()).toBeVisible();
-    const k = page.locator('#skills tbody tr', { hasText: skill });
+    await expect(page.locator('#templates .list-row', { hasText: 'shipped' }).first()).toBeVisible();
+    const k = page.locator('#skills .list-row', { hasText: skill });
     await expect(k).toHaveText(new RegExp(`${skill}Libv1`));
     await fits(page, vp.width);
-    await t.getByRole('button', { name: 'Remove' }).click();
+    await rowAction(t, /^Remove/);
     await confirmSheet(page, 'Remove');
     await expect(t).toHaveCount(0);
-    await k.getByRole('button', { name: 'Remove' }).click();
+    await rowAction(k, /^Remove/);
     await confirmSheet(page, 'Remove');
     await expect(k).toHaveCount(0);
     await audited(request, 'template.remove', tpl.title);
@@ -208,7 +209,7 @@ for (const vp of widths) {
     await lib.ctx.dispose();
   });
 
-  // 004-AC5: the instance view shows version, database size and free disk, STT, daemons and SMTP.
+  // 004-AC5: the Server view shows version, database size and free disk, STT, AI host apps and SMTP.
   test(`instance view, ${vp.name}`, async ({ browser }) => {
     const page = await (await browser.newContext({ viewport: vp })).newPage();
     expect(await signIn(page, adminToken, 'instance')).toBe(201);
@@ -217,7 +218,7 @@ for (const vp of widths) {
     await expect(dl).toContainText(/Database\d+(\.\d)? (KB|MB)/);
     await expect(dl).toContainText(/Disk\d+(\.\d)? (MB|GB|TB) free of \d+(\.\d)? (GB|TB)/);
     await expect(dl).toContainText('Speech to textoff: no audio');
-    await expect(dl).toContainText(/Daemons\d+ connected/);
+    await expect(dl).toContainText(/AI host apps\d+ connected/);
     await expect(dl).toContainText('Email (SMTP)not configured');
     await fits(page, vp.width);
   });

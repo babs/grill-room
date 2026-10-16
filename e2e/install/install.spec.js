@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createRoom, invite, join } from '../voice/helpers.js';
-import { pairDaemon } from '../helpers.js';
+import { pairDaemon, connectedRow } from '../helpers.js';
 
 const repo = resolve('..');
 const out = resolve('test-results', 'install');
@@ -116,7 +116,7 @@ test('one-liner install, pairing, dev key, self-update, tampered release refused
     await expect(admin.locator('#instances .server-head')).toContainText(versions[1], { timeout: 60_000 });
     await expect(admin.locator('#instances .server-head .status')).toHaveText('connected', { timeout: 60_000 });
     await expect(admin.locator('#instances')).toContainText('App binary: signed with the dev key e2e');
-    await expect(admin.locator('#pairing')).toHaveText('Paired. Connected.', { timeout: 30_000 });
+    await expect(connectedRow(admin)).toBeAttached({ timeout: 30_000 });
     expect(stored()).toBe(versions[1]);
     expect(inBox(`sha256sum /root/.local/state/grill-room/bin/${versions[1]}/${bin}`).split(' ')[0]).toBe(sha256(readFileSync(`${out}/${versions[1]}/${bin}`)));
 
@@ -132,7 +132,7 @@ test('one-liner install, pairing, dev key, self-update, tampered release refused
     const next = admin;
     await expect(next.locator('#host')).toContainText(versions[1]);
     await expect(next.locator('#self-sig')).toHaveText('signed with a dev key');
-    await expect(next.locator('#pairing')).toHaveText('Paired. Connected.', { timeout: 30_000 });
+    await expect(connectedRow(next)).toBeAttached({ timeout: 30_000 });
     await expect(next.locator('#update')).toBeHidden();
     expect(installed()).toBe(sha256(readFileSync(`${out}/${versions[1]}/${bin}`)));
     // The worker now runs the supervisor's own binary: the stored copy is gone.

@@ -346,14 +346,17 @@ func supervise(ctx context.Context, cfg Config, host string, room *daemon.Room, 
 				if err != nil {
 					return "", err
 				}
-				sup.SetRoom(ctx, r)
+				if err := sup.SetRoom(ctx, r); err != nil {
+					return "", err
+				}
 			}
 			return admin.NewLink(), nil
 		}, logger)
 	}
 	srv := &http.Server{Handler: admin.Handler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
 	if room != nil {
-		sup.SetRoom(ctx, *room)
+		// Nothing is being removed before the page serves.
+		_ = sup.SetRoom(ctx, *room)
 	}
 	link := admin.NewLink()
 	announce(link)

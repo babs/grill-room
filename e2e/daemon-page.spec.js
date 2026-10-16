@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures.js';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { roomWith, startDaemon, pairDaemon, confirmSheet } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, confirmSheet, connectedRow } from './helpers.js';
 
 const desktop = { width: 1440, height: 900 };
 const phone = { width: 390, height: 844 };
@@ -140,7 +140,7 @@ test('pause fails over, connect pairs again, remove revokes the token', async ({
     await expect(rowA.locator('.status')).toHaveClass(/\bbusy\b/);
     const [approval] = await Promise.all([alice.context().waitForEvent('page'), pa.getByRole('link', { name: 'approve in the room' }).click()]);
     await approval.getByRole('button', { name: 'Approve' }).click();
-    await expect(pa.locator('#pairing')).toHaveText('Paired. Connected.', { timeout: 30_000 });
+    await expect(connectedRow(pa, room.id)).toBeAttached({ timeout: 30_000 });
     await expect(rowA.locator('.status')).toHaveText('standby', { timeout: 30_000 });
     await approval.close();
 

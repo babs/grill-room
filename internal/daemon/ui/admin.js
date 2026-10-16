@@ -247,17 +247,21 @@ const pairingText = /** @type {Record<string, string>} */ ({
   '': 'Not paired.',
   requesting: 'Asking the room to pair…',
   pending: 'Waiting for your approval in the room.',
-  paired: 'Paired.',
 });
 
-// AddRoom pairs this computer with a room link, as a second launch would (008-AC15); its status
-// line says how the room just added pairs (003b-AC4).
+// AddRoom pairs this computer with a room link, as a second launch would (008-AC15). Its status
+// line shows only while the room just added pairs, with the code (003b-AC4); once paired, a toast
+// says so and the room's row carries its state.
 function AddRoom() {
   const s = /** @type {StatusReply} */ (data.value).status;
   const [url, setURL] = useState('');
   const [err, setErr] = useState('');
-  let text = s.room ? pairingText[s.pairing] ?? s.pairing : 'No room yet: paste a room link.';
-  if (s.room && s.pairing === 'paired') text += ' ' + ({ connected: 'Connected.', connecting: 'Connecting…', offline: 'Offline.' }[s.connection] || '');
+  const was = useRef(s.pairing);
+  useEffect(() => {
+    if (s.room && s.pairing === 'paired' && (was.current === 'pending' || was.current === 'requesting')) window.grillToast('Paired with ' + (s.rooms?.find((r) => r.room === s.room)?.name || roomID(s.room)));
+    was.current = s.pairing;
+  }, [s.room, s.pairing]);
+  const text = !s.room || s.pairing === 'paired' ? '' : (pairingText[s.pairing] ?? s.pairing) + (s.error ? ' ' + s.error : '');
   /** @param {Event} e */
   const pair = (e) => {
     e.preventDefault();
@@ -269,9 +273,9 @@ function AddRoom() {
         data-tip="Any link inside the room works: the room page or its documents." onInput=${(/** @type {any} */ e) => setURL(e.currentTarget.value)} />
       <button type="submit">Add a room</button>
     </form>
-    <p class="pairing-line"><span id="pairing" role="status">${text + (s.room && s.error ? ' ' + s.error : '')}</span>${' '}${s.room && s.pairing === 'pending' && /^https?:\/\//.test(s.approve_url || '') && html`<span id="approve">
+    ${text && html`<p class="pairing-line"><span id="pairing" role="status">${text}</span>${' '}${s.pairing === 'pending' && /^https?:\/\//.test(s.approve_url || '') && html`<span id="approve">
         Check that the room page shows the code <strong id="code">${s.code}</strong>, then${' '}<a id="approve-link" href=${s.approve_url} target="_blank" rel="noopener noreferrer">approve in the room</a>.
-      </span>`}</p>
+      </span>`}</p>`}
     <p id="room-error" class="bad" role="alert">${err}</p>`;
 }
 
@@ -414,7 +418,7 @@ function RoomRow({ i, room }) {
     paused ? 'Resumed: this computer can run the AI for ' + name : 'Paused: ' + name + ' runs its AI elsewhere, or waits');
   const connect = () => act(api('POST', '/api/room', { url: room }), 'Connecting to ' + name);
   const extra = st && (st.fetches?.length || st.plugins);
-  return html`<li class="list-row room-row" data-room=${room}>
+  return html`<li class="list-row room-row" data-room=${room} data-pairing=${st?.pairing ?? ''} data-connection=${st?.connection ?? ''}>
       <div class="main"><a class="name room-name" href=${room} target="_blank" rel="noopener noreferrer" data-tip=${room}>${name}</a>
         <${Pill} ...${pill} />${st?.running ? html` <span class="meta">${st.running} answering</span>` : ''}${st?.queued ? html` <span class="meta">${st.queued} waiting</span>` : ''}</div>
       <div class="controls">
@@ -1046,7 +1050,7 @@ function App() {
     <${Header} />
     ${banner.value && html`<p id="banner" role="alert">${sentence(banner.value)}</p>`}
     ${live && html`<${RelaxBanner} />`}
-    ${live && html`<main id="main" class=${tab.value === 'monitoring' ? 'page-wide' : 'page'}>
+    ${live && html`<main id="main" class=${tab.value === 'monitoring' || tab.value === 'rooms' ? 'page-wide' : 'page'}>
       <${TabBar} />
       <${Panel} id="rooms"><${Rooms} /><//>
       <${Panel} id="accounts"><${Accounts} /><//>

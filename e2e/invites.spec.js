@@ -1,7 +1,7 @@
 import { request as pwRequest } from '@playwright/test';
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, menuItem, appointAdmin, signIn, noOverflow } from './helpers.js';
+import { roomWith, menuItem, appointAdmin, signIn, noOverflow, rowAction } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
@@ -145,7 +145,7 @@ test('a plain member manages their own invites in Room settings', async ({ brows
   await expect(panel.locator('#invite-link-new')).toHaveValue(/\/join#[A-Za-z0-9_-]+$/);
   await expect(panel.getByRole('button', { name: 'Copy', exact: true })).toBeVisible();
   await expect(make).toBeEnabled();
-  const rows = panel.locator('#invites-all tbody tr');
+  const rows = panel.locator('#invites-all .list-row:not(.head)');
   await expect(rows).toHaveCount(1);
   await expect(rows).not.toContainText('shareable');
   await bob.keyboard.press('Escape');
@@ -173,7 +173,7 @@ test('a revoke from Room settings updates People and the empty chat card', async
   await expect(alice.locator('#chat-empty')).toBeHidden();
 
   await alice.goto(`/r/${room.id}#manage/invites`);
-  await alice.locator('#manage #invites-all tbody tr').getByRole('button', { name: 'Revoke' }).click();
+  await rowAction(alice.locator('#manage #invites-all .list-row:not(.head)'), /^Revoke/);
   await alice.locator('#revoke-sheet').getByRole('button', { name: 'Revoke', exact: true }).click();
   await expect(alice.locator('#toasts .toast')).toHaveText('Revoked. Bob lost access.');
   await alice.locator('#manage-close').click();
@@ -194,7 +194,7 @@ for (const vp of widths) {
     await expect(panel.locator(`#invite-${sB}`)).not.toContainText('Your');
 
     const sheet = alice.locator('#revoke-sheet');
-    await panel.locator(`#invite-${i0}`).getByRole('button', { name: 'Revoke' }).click();
+    await rowAction(panel.locator(`#invite-${i0}`), /^Revoke/);
     await expect(sheet.locator('#revoke-title')).toHaveText('Revoke this invite?');
     await expect(sheet).toContainText('These people lose access:');
     expect(await people(sheet, 'revoke-lose')).toEqual(['Alice admin you', 'Bob', 'Carol']);
@@ -209,7 +209,7 @@ for (const vp of widths) {
     await expect(sheet).toHaveCount(0);
     await expect(panel.locator(`#invite-${i0}`)).toContainText('valid');
 
-    await panel.locator(`#invite-${sA}`).getByRole('button', { name: 'Revoke' }).click();
+    await rowAction(panel.locator(`#invite-${sA}`), /^Revoke/);
     expect(await people(sheet, 'revoke-lose')).toEqual(['Bob', 'Carol']);
     expect(await people(sheet, 'revoke-keep')).toEqual(['Dan']);
     await expect(sheet.locator('#revoke-chain')).toHaveText('Also revokes 1 invite made by people who joined through it.');
@@ -241,7 +241,7 @@ for (const vp of widths) {
     await expect(panel.locator(`#invite-${sA}`)).not.toContainText('Your');
 
     const sheet = page.locator('#revoke-sheet');
-    await panel.locator(`#invite-${i0}`).getByRole('button', { name: 'Revoke' }).click();
+    await rowAction(panel.locator(`#invite-${i0}`), /^Revoke/);
     expect(await people(sheet, 'revoke-lose')).toEqual(['Alice admin', 'Bob', 'Carol']);
     expect(await people(sheet, 'revoke-keep')).toEqual(['Dan']);
     await expect(sheet.locator('#revoke-chain')).toHaveText('Also revokes 2 invites made by people who joined through it.');

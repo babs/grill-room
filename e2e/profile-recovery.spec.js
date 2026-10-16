@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { signIn } from './helpers.js';
+import { signIn, rowAction } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
@@ -24,17 +24,20 @@ test('admin recovery link', async ({ browser, request }) => {
   const ctx = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });
   const page = await ctx.newPage();
   expect(await signIn(page, adminToken, 'profiles')).toBe(201);
-  const row = page.locator('#profiles tbody tr', { hasText: name });
-  const generate = row.getByRole('button', { name: `Generate a recovery link for ${name}` });
-  const field = row.getByLabel(`Recovery link for ${name}`, { exact: true });
-  await generate.click();
+  const row = page.locator('#profiles .list-row', { hasText: name });
+  const sheet = page.locator('#recovery-sheet');
+  const field = sheet.getByLabel(`Recovery link for ${name}`, { exact: true });
+  // The row's ⋯ makes the link and shows it in a sheet (004b-AC2).
+  await rowAction(row, `Generate a recovery link for ${name}`);
   await expect(field).toHaveValue(/\/profile#recover=\S+$/);
-  await expect(row.locator('.recovery-link .hint')).toContainText('expires ');
+  await expect(sheet).toContainText('Expires ');
   const first = await field.inputValue();
-  await row.getByRole('button', { name: 'Copy', exact: true }).click();
-  await expect(row.getByRole('button', { name: 'Copied', exact: true })).toBeVisible();
+  await sheet.getByRole('button', { name: 'Copy', exact: true }).click();
+  await expect(page.locator('.toast')).toHaveText('Copied');
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(first);
-  await generate.click();
+  await sheet.getByRole('button', { name: 'Close' }).click();
+  await rowAction(row, `Generate a recovery link for ${name}`);
+  await expect(field).toHaveValue(/\/profile#recover=\S+$/);
   await expect(field).not.toHaveValue(first);
   const second = await field.inputValue();
 

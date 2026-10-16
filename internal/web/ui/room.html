@@ -216,17 +216,18 @@
   <p id="diag-said" class="said" role="status"></p>
   <div class="actions"><button type="button" id="diag-copy" class="btn-secondary">Copy diagnostics</button></div>
 </dialog>
-<dialog id="notify" class="sheet" aria-labelledby="notify-title">
+<dialog id="notify" class="sheet full" aria-labelledby="notify-title">
   <div class="sheet-head">
     <h2 id="notify-title">Notifications</h2>
     <button type="button" class="btn-icon btn-ghost close" aria-label="Close" data-icon="close"></button>
   </div>
-  <label><input type="checkbox" id="count-voice"> Count voice lines in the tab title</label>
   <p class="hint">Browser notifications reach you while no tab of this room is focused, the browser closed too: when someone mentions you, when a persona answers, and when an answer you asked for ends.</p>
   <p id="push-hint" class="hint" hidden></p>
-  <button type="button" id="push-toggle" class="btn-primary" hidden>Turn on notifications</button>
   <label id="push-all-label" hidden><input type="checkbox" id="push-all"> Also every other line</label>
   <p id="push-status" class="said" role="status"></p>
+  <h3>This tab</h3>
+  <label><input type="checkbox" id="count-voice"> Count voice lines in the tab title</label>
+  <div class="actions"><button type="button" id="push-toggle" class="btn-primary" hidden>Turn on notifications</button></div>
 </dialog>
 <!-- The push explainer (008-AC10): the only way to the browser's permission prompt. -->
 <dialog id="push-explain" class="sheet" aria-labelledby="push-explain-title" aria-describedby="push-explain-text">

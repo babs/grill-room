@@ -177,7 +177,7 @@ button.persona .pstate { color: var(--text-muted); font-weight: 400; font-size: 
 .meta .capped { color: var(--warning); }
 
 /* Sheets and dialogs */
-dialog#manage { width: min(64rem, calc(100vw - 1rem)); min-height: min(36rem, calc(100dvh - 2 * min(10dvh, var(--sp-7)))); }
+dialog#manage { width: min(64rem, calc(100vw - 1rem)); }
 /* Room settings is full screen on a phone (005-AC15). */
 @media (max-width: 40rem) { dialog#manage { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border: 0; border-radius: 0; } }
 .sheet h2 { font-size: var(--fs-lg); }
@@ -219,6 +219,10 @@ dialog#manage { width: min(64rem, calc(100vw - 1rem)); min-height: min(36rem, ca
 .persona-form label.check { display: flex; align-items: center; gap: var(--sp-2); }
 .persona-form :is(input:not([type=checkbox]), select, textarea) { width: 100%; color: var(--text); }
 .persona-form textarea { resize: vertical; }
+/* A persona's text runs to 40 lines: the box grows with it, up to most of the screen (RQ2). */
+.persona-form textarea[name=text] { field-sizing: content; min-height: 9rem; max-height: 60vh; }
+/* The sheet's one footer stays at its bottom edge while a long tab scrolls. */
+#persona-sheet .settings-foot { bottom: calc(-1 * var(--sp-4)); margin: var(--sp-3) 0 calc(-1 * var(--sp-4)); padding-bottom: var(--sp-4); }
 #room-skill-list { padding-left: var(--sp-5); font-size: var(--fs-sm); overflow-wrap: anywhere; }
 #room-skill-copy select { min-width: 10rem; max-width: 100%; }
 .persona-skills { margin: var(--sp-3) 0; font-size: var(--fs-sm); }
@@ -227,6 +231,8 @@ dialog#manage { width: min(64rem, calc(100vw - 1rem)); min-height: min(36rem, ca
 .persona-skills .skill-add { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
 .persona-skills .skill-add select { flex: 1; min-width: 10rem; width: auto; }
 #manage .said { color: var(--danger); }
+/* No room taken above the tabs until there is something to say. */
+#manage .said:empty { min-height: 0; margin: 0; }
 /* Room plugins (admin/plugins.js): the list, the add sheet and the approval sheet. */
 .persona-plugins li { flex-direction: column; align-items: stretch; gap: 0; }
 .persona-plugins li > label { color: var(--text); }
@@ -322,7 +328,7 @@ button.doc:hover { background: var(--border); }
   .doc-title { flex: 1 1 calc(100% - var(--control-h) - var(--sp-2)); }
   .doc-tools { margin-left: auto; }
 }
-.btn-ghost.danger, .menu > .danger { color: var(--danger); }
+.btn-ghost.danger { color: var(--danger); }
 #doc-rename-form, #revisions { margin: 0; padding: var(--sp-2) var(--sp-4); border-bottom: 1px solid var(--border); }
 #doc-rename-form input { min-width: 12rem; }
 #doc-frame { flex: 1; display: flex; min-height: 0; background: var(--surface); }
@@ -566,6 +572,8 @@ button.doc { display: block; overflow: hidden; text-overflow: ellipsis; white-sp
 #starter-docs label.check, #starter-skills label.check, #starter-plugins label.check { flex-direction: row; align-items: center; justify-content: flex-start; gap: var(--sp-2); font-weight: 400; }
 /* Diagnostics (010-AC22): one label width for both sections, so their values line up; long values wrap. */
 #diag h3 { font-size: var(--fs-md); margin: var(--sp-4) 0 var(--sp-2); }
+/* Wide enough that a value fits its line beside the label column (RD1). */
+dialog#diag { width: min(44rem, calc(100vw - 1rem)); }
 #diag .facts { display: grid; grid-template-columns: 10rem minmax(0, 1fr); gap: var(--sp-1) var(--sp-3); margin: 0; font-size: var(--fs-sm); }
 #diag .facts dt { color: var(--text-muted); }
 #diag .facts dd { margin: 0; overflow-wrap: anywhere; }
@@ -575,3 +583,8 @@ button.doc { display: block; overflow: hidden; text-overflow: ellipsis; white-sp
   #diag .facts { grid-template-columns: minmax(0, 1fr); }
   #diag .facts dd { margin-bottom: var(--sp-2); }
 }
+/* Notifications: the push explanation first, this tab's setting after, the primary at the bottom
+   right, at the bottom of the screen on a phone (RN1 to RN3). */
+#notify[open] { display: flex; flex-direction: column; }
+#notify h3 { margin: var(--sp-4) 0 var(--sp-1); font-size: var(--fs-md); }
+#notify .actions { margin-top: auto; padding-top: var(--sp-4); }

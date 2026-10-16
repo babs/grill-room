@@ -67,8 +67,9 @@ func ServeWorker(ctx context.Context, conn *Conn, d *Daemon, cfg WorkerConfig) e
 	}
 	var wg sync.WaitGroup
 	wg.Go(func() { d.Run(ctx) })
+	// No removal runs before the requests loop: SetRoom cannot refuse here.
 	for _, room := range d.startRooms(cfg) {
-		d.SetRoom(ctx, room)
+		_ = d.SetRoom(ctx, room)
 	}
 	wg.Go(func() { pushStatus(ctx, conn, d) })
 	wg.Go(func() { pushMetrics(ctx, conn, d, started) })
@@ -215,7 +216,7 @@ func (d *Daemon) handle(ctx context.Context, m Msg) Msg {
 	case "pair":
 		var r Room
 		if r, err = ParseRoomURL(m.Room); err == nil {
-			d.SetRoom(ctx, r)
+			err = d.SetRoom(ctx, r)
 		}
 	case "settings":
 		if m.Settings == nil {

@@ -70,8 +70,10 @@ type Supervisor struct {
 	// logMu serialises the worker log lines written to Stderr.
 	logMu sync.Mutex
 
-	mu        sync.Mutex
-	workers   map[string]*worker
+	mu      sync.Mutex
+	workers map[string]*worker
+	// removing holds the rooms a RemoveRoom is taking off: SetRoom refuses them meanwhile.
+	removing  map[string]bool
 	current   string
 	autostart bool
 	// autoMu orders changes of the login item: the page's switch and a self-update's move.
@@ -180,7 +182,7 @@ func NewSupervisor(o SupervisorOptions) *Supervisor {
 	if o.Ring == nil {
 		o.Ring = NewRing(200)
 	}
-	s := &Supervisor{o: o, workers: map[string]*worker{}, checkNow: make(chan struct{}, 1), cleaned: make(chan struct{}), self: SelfSignature{State: "unknown", Detail: "not checked yet"}}
+	s := &Supervisor{o: o, workers: map[string]*worker{}, removing: map[string]bool{}, checkNow: make(chan struct{}, 1), cleaned: make(chan struct{}), self: SelfSignature{State: "unknown", Detail: "not checked yet"}}
 	set, err := loadSupervisorSettings(o.Paths.supervisorSettings())
 	if err != nil {
 		o.Log.Warn("supervisor_settings_unreadable", zap.Error(err))
@@ -725,14 +727,19 @@ func (o workerOps) Recheck(ctx context.Context) {
 	}
 }
 
-// SetRoom hands room to its instance's worker, starting the worker if the instance is new.
-func (s *Supervisor) SetRoom(ctx context.Context, room Room) {
+// SetRoom hands room to its instance's worker, starting the worker if the instance is new. A
+// room being removed is refused: its pairing would outlive the removal.
+func (s *Supervisor) SetRoom(ctx context.Context, room Room) error {
 	id, err := InstanceID(room.Base)
 	if err != nil {
 		s.o.Log.Error("room_refused", zap.Error(err))
-		return
+		return err
 	}
 	s.mu.Lock()
+	if s.removing[room.String()] {
+		s.mu.Unlock()
+		return errRemoving
+	}
 	w := s.workers[id]
 	fresh := w == nil
 	var in Instance
@@ -758,13 +765,15 @@ func (s *Supervisor) SetRoom(ctx context.Context, room Room) {
 	s.o.Log.Info("room_handed", zap.String("instance", id), zap.String("room", room.String()))
 	if fresh {
 		s.start(in, room.String())
-		return
+		return nil
 	}
 	if running {
 		if _, err := w.request(ctx, Msg{Type: "pair", Room: room.String()}); err != nil {
 			s.o.Log.Warn("pair_failed", zap.String("instance", id), zap.Error(err))
+			return err
 		}
 	}
+	return nil
 }
 
 // Status is the current instance's worker status, or what the page shows before any room.

@@ -299,8 +299,10 @@ test('header menus, wording and empty states', async ({ browser, request }) => {
   await alice.locator('#more-open').click();
   await alice.locator('#more-menu').getByRole('button', { name: 'Room settings' }).click();
   const panel = alice.locator('#manage #room-panel');
-  await expect(panel.locator('h2')).toHaveText('Launch plan');
-  await expect(panel.locator('#storage')).toHaveText(/^Storage: 0 B of \d+ MB/);
+  // One heading names the room (004b-AC11); the storage is said once (AD5).
+  await expect(alice.locator('#manage-title')).toHaveText('Room settings · Launch plan');
+  await expect(panel.locator('h2')).toHaveCount(0);
+  await expect(panel.locator('#storage')).toHaveText(/^\s*0 B of \d+ MB/);
   await expect(panel.getByRole('button', { name: 'Delete the room' })).toHaveClass('btn-danger-outline');
   await expect(panel.getByRole('button', { name: 'Copy room id' })).toBeVisible();
   await shot(alice, 'after-desktop-settings');
@@ -497,7 +499,8 @@ test('admin rooms list', async ({ browser, request }) => {
   await shot(adm, 'after-desktop-admin-import');
   await adm.keyboard.press('Escape');
   await adm.setViewportSize(phone);
-  await expect(row.locator('td').first()).toHaveCSS('display', 'block');
+  // A row turns into a card: its values on one wrapped line under the name (004b-AC5).
+  await expect(row.locator('.cells')).toHaveCSS('display', 'flex');
   expect(await smallTargets(adm), 'admin rooms').toEqual([]);
 });
 

@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { menuItem } from './helpers.js';
+import { menuItem, rowAction } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
@@ -110,9 +110,9 @@ test('member invites and revokes', async ({ browser, request }) => {
   expect(await bob.locator('#invite-link').inputValue()).not.toBe(url);
 
   await alice.locator('#invite-manage').click();
-  const rows = alice.locator('#manage #invites-all tbody tr');
+  const rows = alice.locator('#manage #invites-all .list-row:not(.head)');
   await expect(rows).toHaveCount(1);
-  await rows.getByRole('button', { name: 'Revoke' }).click();
+  await rowAction(rows, /^Revoke/);
   await expect(alice.locator('#revoke-lose')).toHaveText('Carol');
   await alice.locator('#revoke-sheet').getByRole('button', { name: 'Revoke', exact: true }).click();
   await expect(alice.locator('#toasts .toast')).toHaveText('Revoked. Carol lost access.');

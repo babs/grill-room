@@ -4,21 +4,19 @@
 #room-panel h3 { font-size: var(--fs-md); margin: var(--sp-4) 0 var(--sp-1); }
 :is(#room-panel, #panel-invites) .row { display: flex; flex-wrap: wrap; align-items: end; gap: var(--sp-2) var(--sp-3); margin: var(--sp-2) 0 var(--sp-3); }
 :is(#room-panel, #panel-invites) .row label { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-sm); font-weight: 600; }
-:is(#room-panel, #panel-invites) .scroll { overflow-x: auto; max-width: 100%; }
 #room-panel dl { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-6); margin: var(--sp-1) 0 var(--sp-3); }
 #room-panel dt { color: var(--text-muted); font-size: var(--fs-sm); }
 #room-panel dd { margin: 0; }
 :is(#room-panel, #panel-invites) .link { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-sm); }
 :is(#room-panel, #panel-invites) .link input { width: 100%; }
 :is(#room-panel, #panel-invites) .row .link { flex: 1 1 16rem; }
-:is(#room-panel, #panel-invites) ul { padding-left: 0; list-style: none; }
-:is(#room-panel, #panel-invites) li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-height: var(--control-h); }
+:is(#room-panel, #panel-invites) ul:not(.list-rows) { padding-left: 0; list-style: none; }
+:is(#room-panel, #panel-invites) ul:not(.list-rows) > li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-height: var(--control-h); }
 #room-panel .tab-panel { padding-top: var(--sp-2); }
-/* Admins in columns: name, role, the admin button, Rename; each starts at the same x on every row. */
-#room-panel .admin-rows li { display: grid; grid-template-columns: minmax(6rem, 14rem) 4rem 9rem auto; justify-content: start; align-items: center; gap: var(--sp-2) var(--sp-3);
-  min-height: 44px; padding: var(--sp-1) 0; border-bottom: 1px solid var(--border); }
-.admin-rows .who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-@media (max-width: 40rem) { #room-panel .admin-rows li { grid-template-columns: minmax(0, 1fr) auto; } }
+/* Admins in columns, one template on both pages: name, role, the admin button, ⋯. */
+.admin-cols { --cols: minmax(10rem, 1fr) 7rem 11rem var(--control-h); }
+.admin-cols .who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#invites-all { --cols: minmax(10rem, 2fr) minmax(7rem, 1fr) minmax(6rem, 1fr) var(--control-h); }
 form.rename { display: inline-flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
 form.rename input { width: 12rem; }
 #stt-glossary textarea { width: 100%; }

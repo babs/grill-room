@@ -559,3 +559,17 @@ func TestAdminRoutesFailWithTheStore(t *testing.T) {
 		}
 	}
 }
+
+// 004b-AC7: the audit view names every action the server logs in words: a new action without a
+// label in admin.js fails here.
+func TestAuditActionLabels(t *testing.T) {
+	page, err := ui.ReadFile("ui/admin/admin.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range AuditActions {
+		if !strings.Contains(string(page), "'"+a+"': '") {
+			t.Errorf("audit action %q has no label in admin.js actionLabels", a)
+		}
+	}
+}

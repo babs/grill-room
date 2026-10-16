@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, noOverflow, upload, annotateSelection, menuItem, docAction, playSTT, newRoomEditor } from './helpers.js';
+import { roomWith, signIn, noOverflow, upload, annotateSelection, menuItem, docAction, playSTT, newRoomEditor, rowAction } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
@@ -92,7 +92,7 @@ for (const vp of widths) {
     else expect(box.width).toBeGreaterThan(900);
     expect(await noOverflow(alice)).toEqual([]);
 
-    await sheet.getByRole('button', { name: 'Rename Bob' }).click();
+    await rowAction(sheet.locator('#room-admins > li', { hasText: 'Bob' }), 'Rename Bob');
     await sheet.getByLabel('New name for Bob').fill('Robert');
     await sheet.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(bob.locator('#notice')).toHaveText(/Your name in this room is now Robert\./);
@@ -111,7 +111,7 @@ for (const vp of widths) {
     const page = await (await browser.newContext({ viewport: vp })).newPage();
     expect(await signIn(page, adminToken, `rooms/${room.id}/admins`)).toBe(201);
     const admins = page.locator('#room-panel #room-admins');
-    await admins.getByRole('button', { name: 'Rename Robert' }).click();
+    await rowAction(admins.locator('> li', { hasText: 'Robert' }), 'Rename Robert');
     await admins.getByLabel('New name for Robert').fill('Bobby');
     await admins.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(bob.locator('#me')).toHaveText('Bobby');

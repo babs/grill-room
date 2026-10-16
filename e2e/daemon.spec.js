@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { hostname } from 'node:os';
-import { roomWith, startDaemon, pairDaemon, stopDaemon, confirmSheet } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, stopDaemon, confirmSheet, connectedRow } from './helpers.js';
 
 // 001-AC22: run the daemon with the room URL, open its local page, approve in the room session
 // with one click: the daemon is paired and connected, and no token was shown or typed.
@@ -29,7 +29,7 @@ test('daemon pairs through the room approval', async ({ browser, request, baseUR
     expect(shown).toBe(code);
     await expect(approval.locator('#pairing-text')).toContainText('Daemon paired');
 
-    await expect(admin.locator('#pairing')).toHaveText('Paired. Connected.', { timeout: 30_000 });
+    await expect(connectedRow(admin, room.id)).toBeAttached({ timeout: 30_000 });
     // 003-AC12: the Claude account is the supervisor's CLAUDE_CONFIG_DIR, read only, with its status.
     await expect(admin.locator('#accounts li').first()).toContainText('default');
     await expect(admin.locator('#accounts li').first()).toContainText('valid');
@@ -38,7 +38,7 @@ test('daemon pairs through the room approval', async ({ browser, request, baseUR
     await expect(admin.locator('#can-host')).toBeVisible();
     // The page reloads into the same session; the one-time link is spent.
     await admin.reload();
-    await expect(admin.locator('#pairing')).toHaveText('Paired. Connected.');
+    await expect(connectedRow(admin, room.id)).toBeAttached();
     const spent = await alice.context().newPage();
     await spent.goto(await daemon.link);
     await expect(spent.locator('#banner')).toContainText('already used');

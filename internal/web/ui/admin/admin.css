@@ -9,35 +9,44 @@ h3 { font-size: var(--fs-md); margin: var(--sp-4) 0 var(--sp-1); }
 .hint { margin: 0 0 var(--sp-3); }
 .row { display: flex; flex-wrap: wrap; align-items: end; gap: var(--sp-2) var(--sp-4); margin: var(--sp-1) 0 var(--sp-3); }
 .row label { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-sm); font-weight: 600; }
-.scroll { overflow-x: auto; max-width: 100%; }
-th, td { white-space: nowrap; vertical-align: top; }
-td.wrap { white-space: normal; min-width: 10rem; max-width: 24rem; overflow-wrap: anywhere; }
-code { font-size: var(--fs-xs); }
-th button.sort { min-height: var(--control-h); min-width: var(--control-h); padding: 0; border: 0; background: none; color: inherit; font: inherit; font-weight: 600; }
-th[aria-sort="ascending"] button.sort::after { content: " ▲" / ""; }
-th[aria-sort="descending"] button.sort::after { content: " ▼" / ""; }
-meter { width: 4rem; vertical-align: middle; }
+.spacer { flex: 1; }
+.pager { display: flex; gap: var(--sp-2); margin: var(--sp-2) 0; }
 dl { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-6); margin: var(--sp-1) 0 var(--sp-3); }
 dl div { min-width: 8rem; }
 dt { color: var(--text-muted); font-size: var(--fs-sm); }
 dd { margin: 0; }
+.back { display: inline-flex; align-items: center; gap: var(--sp-1); }
 #room-panel { margin-top: var(--sp-4); padding: var(--sp-1) var(--sp-4) var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg); }
 .list-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); margin: var(--sp-5) 0 var(--sp-2); }
 .list-head h2 { flex: 1; margin: 0; }
 #import-sheet .row label { display: flex; flex-direction: column; gap: var(--sp-1); }
 .link { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-sm); margin-bottom: var(--sp-3); }
-.link input { width: 100%; }
-form.limit { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); min-width: 16rem; }
-form.limit .hint { margin: 0; width: 100%; }
-form.limit input { width: 5rem; }
-.recovery-link { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); }
-.recovery-link .copy-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); }
-.recovery-link input { width: 18rem; max-width: 100%; font-family: var(--mono); font-size: var(--fs-sm); }
-.recovery-link .hint { margin: 0; }
+.link input { width: 100%; font-family: var(--mono); }
+form.limit label { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-sm); font-weight: 600; }
+form.limit input { width: 8rem; }
+/* The column templates of the lists (kit .cols): the name takes what the others leave. */
+#rooms { --cols: minmax(12rem, 3fr) minmax(7rem, 1fr) minmax(5rem, .6fr) minmax(5rem, .6fr) minmax(7rem, 1fr) minmax(11rem, 1.5fr) var(--control-h); }
+#profiles { --cols: minmax(12rem, 3fr) minmax(6rem, 1fr) minmax(4rem, .5fr) minmax(7rem, 1fr) minmax(8rem, 1fr) var(--control-h); }
+#templates { --cols: minmax(12rem, 3fr) minmax(8rem, 1fr) minmax(4rem, .5fr) minmax(7rem, 1fr) var(--control-h); }
+:is(#skills, #starters) { --cols: minmax(12rem, 3fr) minmax(8rem, 1fr) minmax(4rem, .5fr) minmax(5rem, .6fr) minmax(7rem, 1fr) var(--control-h); }
+#sessions { --cols: minmax(12rem, 2fr) minmax(7rem, 1fr) minmax(7rem, 1fr) minmax(10rem, 1fr) var(--control-h); }
+#audit { --cols: minmax(12rem, 2fr) minmax(7rem, .7fr) minmax(9rem, 1fr) minmax(12rem, 3fr); }
+#audit .details { color: var(--text-muted); font-size: var(--fs-sm); }
+.cols .storage { display: inline-flex; align-items: center; gap: var(--sp-2); }
+.list-row.head button.sort { min-height: var(--control-h); padding: 0; border: 0; background: none; color: inherit; font: inherit; }
+.list-row.head [aria-sort=ascending] button.sort::after, .list-row.head [aria-sort=descending] button.sort::after {
+  content: ""; display: inline-block; width: .4rem; height: .4rem; margin-left: var(--sp-2); border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; }
+.list-row.head [aria-sort=ascending] button.sort::after { transform: translateY(2px) rotate(-135deg); }
+.list-row.head [aria-sort=descending] button.sort::after { transform: translateY(-2px) rotate(45deg); }
 @media (max-width: 40rem) {
   .app-header button { margin-left: 0; }
+  /* A card keeps to its name and a line or two of values (004b-AC5): the creation and sign-in
+     dates, the value labels of the audit and long details give way. */
+  #rooms .main .meta { display: none; }
+  #audit .details { flex-basis: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #audit .cell[data-label]::before { content: none; }
+  #sessions .signed-in { display: none; }
 }
 .merge-pick label { min-width: 0; max-width: 100%; }
 .merge-pick select { max-width: 100%; }
 #merge-preview ul { padding-left: var(--sp-4); margin: var(--sp-1) 0 var(--sp-3); }
-label.check { display: flex; align-items: center; gap: var(--sp-2); min-height: var(--control-h); font-size: var(--fs-sm); }

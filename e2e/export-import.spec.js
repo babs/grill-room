@@ -38,13 +38,13 @@ for (const vp of widths) {
     const log = await (await request.get(`/api/admin/audit?action=room.export&target=${room.id}`, { headers: admin })).json();
     expect(log.entries[0].details.via).toBe('session');
 
-    await page.getByRole('link', { name: '← All rooms' }).click();
+    await page.getByRole('link', { name: 'All rooms' }).click();
     await page.getByRole('button', { name: 'Import a room' }).click();
     await page.locator('#import-file').setInputFiles(file);
     await page.getByRole('button', { name: 'Preview' }).click();
     const pv = page.locator('#import-preview');
     await expect(pv.locator('#import-name')).toHaveText(name);
-    await expect(pv.locator('#import-version')).toContainText('this instance');
+    await expect(pv.locator('#import-version')).toContainText('this server');
     await expect(pv.locator('#import-counts')).toContainText('Participants1');
     await expect(pv.locator('#import-counts')).toContainText('Personas1');
     await expect(pv).toContainText('Format3');

@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, startDaemon, stopDaemon, menuItem } from './helpers.js';
+import { roomWith, startDaemon, stopDaemon, menuItem, connectedRow } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -41,14 +41,14 @@ test('add a room from the AI host app page', async ({ browser, request, baseURL 
     await expect(page.locator('#pairing')).toHaveText('Waiting for your approval in the room.', { timeout: 30_000 });
     const approval = await approve(page, alice.context());
     await expect(approval.locator('#pairing-text')).toContainText('Daemon paired');
-    await expect(page.locator('#pairing')).toHaveText('Paired. Connected.', { timeout: 30_000 });
+    await expect(connectedRow(page, first.id)).toBeAttached({ timeout: 30_000 });
     await expect(approval.locator('#pairing')).toBeHidden();
 
     // Not a room link: the page says why and nothing changes.
     await page.locator('#room-url').fill(`${baseURL}/admin`);
     await page.getByRole('button', { name: 'Add a room' }).click();
     await expect(page.locator('#room-error')).toContainText('is not a room link');
-    await expect(page.locator('#pairing')).toHaveText('Paired. Connected.');
+    await expect(connectedRow(page, first.id)).toBeAttached();
 
     await page.locator('#room-url').fill(`${baseURL}/r/${second.id}/docs/1?x=1#m2`);
     await page.getByRole('button', { name: 'Add a room' }).click();
@@ -57,7 +57,7 @@ test('add a room from the AI host app page', async ({ browser, request, baseURL 
     await expect(page.locator('#code')).toHaveText(/^\d{3}-\d{3}$/);
     const approval2 = await approve(page, alice.context());
     await expect(approval2).toHaveURL(new RegExp(`/r/${second.id}$`));
-    await expect(page.locator('#pairing')).toHaveText('Paired. Connected.', { timeout: 30_000 });
+    await expect(connectedRow(page, second.id)).toBeAttached({ timeout: 30_000 });
     await expect(approval2.locator('#pairing')).toBeHidden();
     await expect(page.locator('.room-row')).toHaveCount(2);
     for (const name of ['Docs room', 'Second room']) await expect(page.locator('.room-row', { hasText: name })).toHaveCount(1);

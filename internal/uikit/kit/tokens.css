@@ -162,6 +162,7 @@
 .menu .ico { display: block; flex: none; width: 16px; height: 16px; }
 .menu:has(> * > .ico) > :where(button, a, label, .menu-head):not(:has(> .ico)) { padding-left: calc(var(--sp-3) + 16px + var(--sp-2)); }
 .menu hr { margin: var(--sp-1) 0; border: 0; border-top: 1px solid var(--border); }
+.menu > .danger { color: var(--danger); }
 .toasts { position: fixed; inset: auto var(--sp-4) var(--sp-4) auto; z-index: var(--z-toast); gap: var(--sp-2);
   margin: 0; padding: 0; border: 0; background: transparent; overflow: visible; }
 .toasts:popover-open { display: grid; }
@@ -202,6 +203,32 @@
 .list-row .name { font-weight: 600; overflow-wrap: anywhere; }
 .list-row .meta { color: var(--text-muted); font-size: var(--fs-sm); }
 .list-row > .actions { flex: none; display: flex; align-items: center; gap: var(--sp-1); margin: 0; }
+/* A list in columns: inside .cols (which sets --cols), a .head row names the columns and each row's
+   .cells line up under it. Under 40rem a row is a card: the name and ⋯ on its first line, the
+   cells in one muted line under them, each after its label. */
+.cols > .list-row, .cols > .list-rows > .list-row { display: grid; grid-template-columns: var(--cols, minmax(0, 1fr) auto); }
+.cols .cells { display: contents; }
+.cols .cell { min-width: 0; }
+.list-row.head { min-height: 0; padding-block: var(--sp-1); color: var(--text-muted); font-size: var(--fs-sm); font-weight: 600; }
+@media (max-width: 40rem) {
+  .cols > .list-row, .cols > .list-rows > .list-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .cols > .list-row.head { display: none; }
+  .cols .cells { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); grid-column: 1 / -1; grid-row: 2; color: var(--text-muted); font-size: var(--fs-sm); }
+  .cols .cell:empty { display: none; }
+  .cols .cell[data-label]::before { content: attr(data-label) " "; }
+  .cols .list-row > .actions { grid-column: 2; grid-row: 1; }
+  /* A card's height must not follow its content: the name keeps to two lines, the meta to one. */
+  .cols .list-row .meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cols .list-row .name { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+}
+/* A share used: a bar in --primary on --border, its words beside it or in its tip. */
+.meter { display: inline-block; width: 4rem; height: .5rem; overflow: hidden; border-radius: var(--r-pill); background: var(--border); vertical-align: middle; }
+.meter > span { display: block; height: 100%; background: var(--primary); }
+/* A disclosure: a chevron that turns, not the browser's triangle. */
+details.disclosure > summary { display: inline-flex; align-items: center; gap: var(--sp-2); list-style: none; }
+details.disclosure > summary::-webkit-details-marker { display: none; }
+details.disclosure > summary::before { content: ""; width: .45rem; height: .45rem; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg); transition: transform .15s; }
+details.disclosure[open] > summary::before { transform: rotate(45deg); }
 /* A ⋯ menu hangs from its button (kit/ui.js places it). */
 .menu.row-menu { inset: auto; }
 /* Settings in one form: label, control and hint in columns, one footer that counts the unsaved
