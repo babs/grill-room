@@ -11,6 +11,9 @@ const otherStacks = ['voice/**', 'agent-live/**', 'mcp-live/**', 'install/**', '
 
 const deviceSpec = 'device-stt.spec.js';
 
+// The specs that also run in Firefox.
+const firefoxSpecs = ['doc-frames.spec.js', 'documents.spec.js', 'ui-guards.spec.js', 'isolation.spec.js'];
+
 // The specs whose daemons run agent turns, each in a Docker sandbox.
 const sandboxSpecs = ['admin', 'agent', 'approvals', 'concurrency', 'egress', 'export-import', 'handoff', 'mentions', 'personas',
   'plugins', 'room-admins', 'skills', 'triggers'].map((n) => `${n}.spec.js`);
@@ -32,6 +35,10 @@ export default defineConfig({
     { name: 'parallel', testIgnore: [...otherStacks, ...sandboxSpecs, deviceSpec], outputDir: 'test-results/parallel' },
     { name: 'device', testMatch: deviceSpec, testIgnore: otherStacks, workers: 1, outputDir: 'test-results/device' },
     { name: 'sandbox', testMatch: sandboxSpecs, testIgnore: otherStacks, workers: 1, outputDir: 'test-results/sandbox' },
+    // Firefox enforces COEP on the sandboxed document frame where Chrome does not. Playwright's
+    // Firefox ships with its PDF viewer off.
+    { name: 'firefox', testMatch: firefoxSpecs, testIgnore: otherStacks, outputDir: 'test-results/firefox',
+      use: { browserName: 'firefox', channel: '', launchOptions: { firefoxUserPrefs: { 'pdfjs.disabled': false } } } },
   ],
   // The installed Chrome: no browser download.
   // On CI a failed test keeps its trace: what a flake did is in the artifact.

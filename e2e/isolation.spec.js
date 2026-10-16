@@ -26,7 +26,8 @@ test('the room page is isolated and its frames still load', async ({ browser, re
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
   const failed = [];
   const docFiles = [];
-  alice.on('requestfailed', (r) => failed.push(r.url() + ' ' + r.failure()?.errorText));
+  // Firefox reports the event stream it drops on a page change as failed: not a COEP refusal.
+  alice.on('requestfailed', (r) => { if (!r.url().includes('/events?')) failed.push(r.url() + ' ' + r.failure()?.errorText); });
   alice.on('response', (r) => { if (r.url().includes('/static/doc/')) docFiles.push(r.status()); });
   expect(await alice.evaluate(() => crossOriginIsolated)).toBe(true);
 

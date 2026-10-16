@@ -340,7 +340,8 @@ test('status pills take their colour from the tokens', async ({ browser, request
   expect(await cell.evaluate((e) => getComputedStyle(e).color)).toBe(await token(admin, '--text-muted'));
 });
 
-test('a cut value keeps a copy button and its full text in the tip', async ({ browser, request }) => {
+test('a cut value keeps a copy button and its full text in the tip', async ({ browser, request, browserName }) => {
+  test.skip(browserName === 'firefox', 'Playwright cannot grant clipboard-read in Firefox');
   const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
   const roomURL = alice.url().split('#')[0];
   const daemon = startDaemon(roomURL);
