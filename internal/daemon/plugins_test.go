@@ -621,7 +621,7 @@ func TestInspectionAllowlistMissing(t *testing.T) {
 	f := &fakeRoom{snapshot: snap.Tar, reportCode: http.StatusOK}
 	r := f.serve(t)
 	r.d.o.Docker = (&fakeInspector{validate: validOutput, details: "good 1\n"}).run
-	r.d.st.Allowlist = []string{".github.com"}
+	r.d.st.Egress.Server = entriesFor([]string{".github.com"}, nil)
 	tok := "t"
 	r.inspect(t.Context(), tok, 7)
 	f.mu.Lock()

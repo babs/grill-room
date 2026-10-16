@@ -56,6 +56,9 @@ th, td { white-space: nowrap; vertical-align: top; }
 .room-row > .controls { flex: none; display: flex; align-items: center; gap: var(--sp-2); }
 .room-row > .controls select { width: 12rem; }
 .room-extra { list-style: none; padding: 0 0 var(--sp-2) var(--sp-4); border-bottom: 1px solid var(--border); }
+details.connectors summary { cursor: pointer; padding: var(--sp-1) 0; }
+table.connectors-list { width: 100%; max-width: 40rem; }
+table.connectors-list td:nth-child(n+3), table.connectors-list th:nth-child(n+3) { text-align: center; }
 /* A room's plugins (009-AC19, 009-AC22): requests shown, options folded (003b-AC8). */
 .room-plugins h4 { margin-top: var(--sp-2); }
 ul.fetches, ul.plugin-domains { padding-left: 0; list-style: none; }
@@ -88,6 +91,10 @@ table.allowlist td { vertical-align: middle; }
 table.allowlist .num { text-align: right; width: 5rem; }
 table.allowlist .act { width: 1%; padding-right: 0; }
 table.allowlist code.domain { overflow-wrap: anywhere; white-space: normal; }
+.egress-switches { max-width: 40rem; margin-top: var(--sp-3); }
+.egress-switches .hint { margin: 0 0 var(--sp-2); }
+.egress-switches .nested { margin-left: var(--sp-5); }
+table.allowlist tr.reached .hint { margin-left: var(--sp-1); }
 
 /* Activity: filters in a grid of their own, labels above (DY1). */
 .filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: var(--sp-2) var(--sp-3); align-items: end; }

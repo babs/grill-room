@@ -44,9 +44,9 @@ type Options struct {
 	// them, "" to keep them in memory.
 	Settings     Settings
 	SettingsPath string
-	// Allowlist is the egress allowlist at start, nil for the default; AllowlistPath is where the
-	// page saves it, "" to keep it in memory.
-	Allowlist     []string
+	// Egress is the egress policy at start, nil for the default list with both switches off;
+	// AllowlistPath is where the page saves it, "" to keep it in memory.
+	Egress        *EgressState
 	AllowlistPath string
 	// Image pins the sandbox image; empty takes the room server's, or builds the embedded one.
 	Image  string
@@ -93,8 +93,10 @@ type Status struct {
 	CanHost    bool              `json:"can_host"`
 	Reason     string            `json:"reason,omitempty"`
 	Settings   Settings          `json:"settings"`
-	// Allowlist is the domains the sandbox may reach through its egress proxy.
-	Allowlist []string `json:"allowlist"`
+	// Allowlist is the domains every room's sandboxes may reach through their egress proxy, and
+	// Egress the whole policy: the switches and the entries with who added them (014).
+	Allowlist []string    `json:"allowlist"`
+	Egress    EgressState `json:"egress"`
 	// Rooms are every room the daemon serves, by link.
 	Rooms []RoomStatus `json:"rooms,omitempty"`
 }
@@ -199,8 +201,8 @@ func New(o Options) *Daemon {
 	def(&o.PollEvery, 2*time.Second)
 	def(&o.MinBackoff, time.Second)
 	def(&o.MaxBackoff, 30*time.Second)
-	if o.Allowlist == nil {
-		o.Allowlist = slices.Clone(sandbox.DefaultAllowlist)
+	if o.Egress == nil {
+		o.Egress = &EgressState{Server: entriesFor(sandbox.DefaultAllowlist, nil)}
 	}
 	if o.PluginOptions == nil {
 		o.PluginOptions, _ = NewPluginOptions("") // in memory: cannot fail
@@ -208,7 +210,7 @@ func New(o Options) *Daemon {
 	if o.FetchDir == "" {
 		o.FetchDir = os.TempDir()
 	}
-	d := &Daemon{o: o, st: Status{Version: o.Version, Connection: "offline", Settings: o.Settings, Allowlist: o.Allowlist},
+	d := &Daemon{o: o, st: Status{Version: o.Version, Connection: "offline", Settings: o.Settings, Allowlist: domains(o.Egress.Server), Egress: *o.Egress},
 		rooms: map[string]*roomRun{}, removing: map[string]bool{}, ready: map[string]string{}, changed: make(chan struct{}), access: o.Access,
 		running: map[int64]context.CancelCauseFunc{}, inspected: map[string]bool{}}
 	if o.CacheDir != "" && o.CacheMax > 0 {
@@ -565,7 +567,7 @@ func (d *Daemon) roomRequest(ctx context.Context, method, url, token string, bod
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, url, rd)
+	req, err := http.NewRequestWithContext(ctx, method, url, rd) //nolint:gosec // G704: url is a paired room server's base plus this package's own path
 	if err != nil {
 		return nil, fmt.Errorf("request: %w", err)
 	}
@@ -575,7 +577,7 @@ func (d *Daemon) roomRequest(ctx context.Context, method, url, token string, bod
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := d.o.HTTP.Do(req)
+	resp, err := d.o.HTTP.Do(req) //nolint:gosec // G704: see NewRequestWithContext above
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: %w", method, url, err)
 	}
@@ -779,6 +781,16 @@ func (r *roomRun) stream(ctx context.Context, tok string) error {
 			if json.Unmarshal([]byte(line[len("data: "):]), &v) == nil && v.ID > 0 {
 				wg.Go(func() { r.inspect(ctx, tok, v.ID) })
 			}
+		case strings.HasPrefix(line, "data: ") && event == "egress_allow":
+			var p struct {
+				ID     int64  `json:"id"`
+				Domain string `json:"domain"`
+				Scope  string `json:"scope"`
+				By     string `json:"by"`
+			}
+			if json.Unmarshal([]byte(line[len("data: "):]), &p) == nil && p.ID > 0 {
+				wg.Go(func() { r.applyAllow(ctx, tok, p.ID, p.Domain, p.Scope, p.By) })
+			}
 		case strings.HasPrefix(line, "data: ") && event == "plugins":
 			wg.Go(func() { r.loadPlugins(ctx, tok) })
 		case strings.HasPrefix(line, "data: ") && event == "stop":
@@ -823,9 +835,16 @@ func (r *roomRun) heartbeat(ctx context.Context, tok string) {
 		changed := d.changes()
 		st := d.Status()
 		canHost, reason := d.readiness(room.String())
+		// 014-AC19: the room shows which connectors are on, from its host's word.
+		connectors := []map[string]any{}
+		if px, err := d.proxyFor(room.String()); err == nil {
+			for _, c := range px.Connectors {
+				connectors = append(connectors, map[string]any{"name": c.Name, "actions": c.Actions})
+			}
+		}
 		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		resp, err := d.roomRequest(rctx, http.MethodPost, room.Base+"/api/rooms/"+room.ID+"/daemon/status", tok,
-			map[string]any{"can_host": canHost, "reason": reason, "version": d.o.Version,
+			map[string]any{"can_host": canHost, "reason": reason, "version": d.o.Version, "egress": true, "connectors": connectors,
 				"max_model": st.Settings.MaxModel, "max_effort": st.Settings.MaxEffort, "approve_all": st.Settings.ApproveAll})
 		if err == nil {
 			if resp.StatusCode != http.StatusNoContent {

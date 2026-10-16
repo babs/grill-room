@@ -339,6 +339,10 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 	for _, room := range []string{"a", "b"} {
 		p := seed(t, s, room)
 		seedHeld(t, s, room)
+		// 014-AC8: a website a turn was refused.
+		if _, err := s.RecordBlocked(ctx, room, "Grill", []string{"example.com"}); err != nil {
+			t.Fatal(err)
+		}
 		// A turn an agent queued: no participant holds it, only the room (002-AC24).
 		sec, _, err := s.AddPersona(ctx, room, templateByPreset(t, s, "secretary").ID, p)
 		if err != nil {

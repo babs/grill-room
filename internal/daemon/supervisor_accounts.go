@@ -24,7 +24,7 @@ func (s *Supervisor) access(in Instance) Access {
 	for _, r := range in.Rooms {
 		rooms[r] = in.accountFor(r)
 	}
-	a := s.o.Accounts.Access(s.ctx, in.ID, rooms, in.CutOff)
+	a := s.o.Accounts.Access(s.ctx, in.ID, rooms, in.Connectors, in.CutOff)
 	// A paused room keeps its account's bearer, so an answer running as it pauses finishes; the
 	// error makes the worker report it cannot host, which the room shows (003b-AC5).
 	for _, r := range in.Paused {
@@ -308,4 +308,108 @@ func (s *Supervisor) forgetRoom(id, link string) error {
 	}
 	cache := &wsCache{dir: filepath.Join(s.o.Paths.InstanceCache(id), "workspace-cache")}
 	return errors.Join(NewTokens(s.o.Paths.InstanceState(id)).Set(room, ""), opts.Keep(room.String(), nil), cache.forget(room))
+}
+
+// roomOf returns instance id's worker and room's account; an error when either is unknown.
+func (s *Supervisor) roomOf(id, room string) (*worker, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w := s.workers[id]
+	switch {
+	case w == nil:
+		return nil, "", errors.New("no such server")
+	case !slices.Contains(w.inst.Rooms, room):
+		return nil, "", errors.New("no such room on this server")
+	}
+	return w, w.inst.accountFor(room), nil
+}
+
+// RoomConnectors lists the connectors of room's account, with which ones the host turned on for
+// the room (014-AC18); refresh reads them again from Anthropic.
+func (s *Supervisor) RoomConnectors(ctx context.Context, id, room string, refresh bool) ([]ConnectorView, error) {
+	a, err := s.accounts()
+	if err != nil {
+		return nil, err
+	}
+	w, account, err := s.roomOf(id, room)
+	if err != nil {
+		return nil, err
+	}
+	list, err := a.Connectors(ctx, account, refresh)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	on := slices.Clone(w.inst.Connectors[room])
+	s.mu.Unlock()
+	out := make([]ConnectorView, len(list))
+	for i, c := range list {
+		out[i].ConnectorInfo = c
+		if j := slices.IndexFunc(on, func(rc RoomConnector) bool { return rc.ID == c.ID }); j >= 0 {
+			out[i].On, out[i].Actions = true, on[j].Actions
+		}
+	}
+	return out, nil
+}
+
+// SetRoomConnector turns connector cid of room's account on or off for the room, with its actions
+// allowed or not; the room's sandboxes and its chat hear of it (014-AC18, 014-AC19, 014-AC23,
+// 014-AC24).
+func (s *Supervisor) SetRoomConnector(ctx context.Context, id, room, cid string, on, actions bool) error {
+	a, err := s.accounts()
+	if err != nil {
+		return err
+	}
+	w, account, err := s.roomOf(id, room)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	agreed := w.proto
+	s.mu.Unlock()
+	if agreed < protoEgress {
+		return errors.New("this server's app is too old for connectors: update the AI host app")
+	}
+	list, err := a.Connectors(ctx, account, false)
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(list, func(c ConnectorInfo) bool { return c.ID == cid })
+	if i < 0 {
+		return errors.New("no such connector on this room's account")
+	}
+	name := list[i].Name
+	actions = actions && on
+	s.mu.Lock()
+	cur := slices.Clone(w.inst.Connectors[room])
+	j := slices.IndexFunc(cur, func(rc RoomConnector) bool { return rc.ID == cid })
+	var ev ConnectorEvent
+	switch {
+	case on && j < 0:
+		cur, ev = append(cur, RoomConnector{ID: cid, Name: name, Actions: actions}), ConnectorEvent{Name: name, Kind: "enable", Actions: actions}
+	case !on && j >= 0:
+		cur, ev = slices.Delete(cur, j, j+1), ConnectorEvent{Name: name, Kind: "disable"}
+	case on && cur[j].Actions != actions:
+		cur[j].Actions, ev = actions, ConnectorEvent{Name: name, Kind: "actions", Actions: actions}
+	default:
+		s.mu.Unlock()
+		return nil
+	}
+	if w.inst.Connectors == nil {
+		w.inst.Connectors = map[string][]RoomConnector{}
+	}
+	if len(cur) == 0 {
+		delete(w.inst.Connectors, room)
+	} else {
+		w.inst.Connectors[room] = cur
+	}
+	s.save(w)
+	s.mu.Unlock()
+	s.o.Log.Info("connector_changed", zap.String("instance", id), zap.String("room", room), zap.String("connector", name), zap.String("kind", ev.Kind),
+		zap.Bool("actions", ev.Actions))
+	s.pushAccess(w)
+	if _, err := w.request(ctx, Msg{Type: "connector_event", Room: room, Connector: &ev}); err != nil {
+		s.o.Log.Warn("connector_event_failed", zap.String("instance", id), zap.Error(err))
+	}
+	return nil
 }

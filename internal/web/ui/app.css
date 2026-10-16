@@ -414,6 +414,8 @@ body.docs-window #chat-fold, body.docs-window #chat-unfold { display: none; }
 .msg form.edit { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 .msg form.edit textarea { flex: 1 1 100%; }
 .msg.system { color: var(--text-muted); font-size: var(--fs-sm); font-style: italic; }
+.msg.system.blocked .blocked-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); font-style: normal; }
+.msg.system.blocked .blocked-actions button { padding: 2px var(--sp-2); font-size: var(--fs-sm); }
 .msg.agent .meta strong { color: var(--primary-text); }
 .msg .meta :is(.model, .effort, .model-note) { font-size: var(--fs-xs); color: var(--text-muted); }
 .msg .meta .model-note.mismatch { color: var(--warning); font-weight: 600; }

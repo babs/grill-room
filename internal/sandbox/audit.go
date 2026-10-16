@@ -51,10 +51,13 @@ func (s *Sandbox) Isolated(ctx context.Context) error {
 	if err := dial("proxy/" + relayPort); err != nil {
 		return fmt.Errorf("the proxy is unreachable from the sandbox: %w", err)
 	}
-	// The sandbox's https_proxy sends curl through squid, which must answer the CONNECT with 403.
-	out, _ := s.run(ctx, nil, "exec", s.container(), "curl", "-s", "-o", "/dev/null", "-m", "10", "-w", "%{http_connect}", "https://api.anthropic.com")
-	if code := strings.TrimSpace(string(out)); code != "403" {
-		return fmt.Errorf("the egress proxy answered %q to api.anthropic.com, want 403", code)
+	// The sandbox's https_proxy sends curl through squid, which must answer the CONNECT with 403:
+	// the token host too, or a refresh gets an answer and wipes the credentials (S16, 014-AC6).
+	for _, host := range []string{"api.anthropic.com", "platform.claude.com"} {
+		out, _ := s.run(ctx, nil, "exec", s.container(), "curl", "-s", "-o", "/dev/null", "-m", "10", "-w", "%{http_connect}", "https://"+host)
+		if code := strings.TrimSpace(string(out)); code != "403" {
+			return fmt.Errorf("the egress proxy answered %q to %s, want 403", code, host)
+		}
 	}
 	return nil
 }

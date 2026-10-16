@@ -37,7 +37,7 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
     await expect(card.locator('.server-head .status')).toHaveText('connected');
     await card.getByRole('button', { name: 'More actions on ' + host }).click();
     await admin.getByRole('button', { name: 'App details' }).click();
-    await expect(card.locator('.server-details')).toContainText(/App binary: this app's own binary\. Process \d+, protocol 5/);
+    await expect(card.locator('.server-details')).toContainText(/App binary: this app's own binary\. Process \d+, protocol 6/);
     // 005-AC42 003b-AC2: the room by its name, a link to it, its link in the tip.
     const roomCard = admin.locator('#rooms-section li.room-row');
     await expect(roomCard.locator('.room-name')).toHaveText(room.name);

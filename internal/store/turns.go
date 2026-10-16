@@ -899,20 +899,31 @@ func (r TurnReport) Note(name string) string {
 	return name + " turn: " + strings.Join(parts, ". ") + "."
 }
 
-// SetHost makes participant pid of room the agent host. ErrNotFound if pid is not in room.
+// SetHost makes participant pid of room the agent host. A new host never inherits the previous
+// one's delegation of website approvals, nor the approvals its app had not applied yet (014-AC12).
+// ErrNotFound if pid is not in room.
 func (s *Store) SetHost(ctx context.Context, roomID string, pid int64) error {
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE rooms SET host_participant_id = ? WHERE id = ? AND EXISTS (SELECT 1 FROM participants WHERE id = ? AND room_id = ?)`,
-		pid, roomID, pid, roomID)
-	if err != nil {
-		return fmt.Errorf("set host: %w", err)
-	}
-	if n, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("set host: %w", err)
-	} else if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.withTx(ctx, "set host", func(tx *sql.Tx) error {
+		var prev sql.NullInt64
+		if err := tx.QueryRowContext(ctx, `SELECT host_participant_id FROM rooms WHERE id = ?`, roomID).Scan(&prev); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("set host: %w", err)
+		}
+		res, err := tx.ExecContext(ctx, `
+			UPDATE rooms SET host_participant_id = ? WHERE id = ? AND EXISTS (SELECT 1 FROM participants WHERE id = ? AND room_id = ?)`,
+			pid, roomID, pid, roomID)
+		if err != nil {
+			return fmt.Errorf("set host: %w", err)
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return fmt.Errorf("set host: %w", err)
+		} else if n == 0 {
+			return ErrNotFound
+		}
+		if prev.Int64 == pid {
+			return nil
+		}
+		return hostChanged(ctx, tx, roomID)
+	})
 }
 
 // HandOver makes participant to the AI host of room on by's request, nil for the super-admin, and
@@ -939,6 +950,9 @@ func (s *Store) HandOver(ctx context.Context, roomID string, to int64, by *Parti
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE rooms SET host_participant_id = ? WHERE id = ?`, to, roomID); err != nil {
 			return fmt.Errorf("hand over: %w", err)
+		}
+		if err := hostChanged(ctx, tx, roomID); err != nil {
+			return err
 		}
 		var m *Message
 		switch {

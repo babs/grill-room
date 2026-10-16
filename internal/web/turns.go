@@ -745,6 +745,7 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 		return
 	}
 	s.recordSetup(r.Context(), d.RoomID, t.ID, res.SkippedPlugins)
+	s.recordBlocked(r.Context(), d.RoomID, t.PersonaName, res.Blocked)
 	if res.Error != "" {
 		s.failTurn(r.Context(), d.RoomID, t.ID, sanitize(res.Error, maxError))
 		w.WriteHeader(http.StatusNoContent)

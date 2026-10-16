@@ -65,7 +65,7 @@ func (d *Daemon) RemoveRoom(ctx context.Context, link string, force bool) error 
 			}
 		}
 	}
-	err = errors.Join(d.o.Tokens.Set(room, ""), d.o.PluginOptions.Keep(key, nil))
+	err = errors.Join(d.o.Tokens.Set(room, ""), d.o.PluginOptions.Keep(key, nil), d.forgetRoomEgress(ctx, key))
 	d.update(func(*Status) {})
 	d.o.Log.Info("room_removed", zap.String("room", key), zap.Bool("revoked_here_only", force))
 	// The reply goes now, within the supervisor's request timeout: removing the sandboxes of a

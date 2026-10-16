@@ -18,10 +18,15 @@ import (
 // Version 3 added the slots under the host's global cap: acquire, wait, grant, release (003-AC18).
 // Version 4 added the room plugins' requests, plugin_options and plugin_fetch (009-AC19, 009-AC22).
 // Version 5 added remove_room (003b-AC6).
+// Version 6 added egress_switches, room_allowlist_remove, connector_event, the access proxies'
+// connectors and the denied reply's room_hits (014).
 const (
-	Proto     = 5
+	Proto     = 6
 	ProtoSkew = 1
 )
+
+// protoEgress is the first version whose workers take egress_switches and room_allowlist_remove.
+const protoEgress = 6
 
 // protoSlots is the first version whose workers ask for a slot before each turn.
 const protoSlots = 3
@@ -62,12 +67,20 @@ type Msg struct {
 	N         int              `json:"n,omitempty"`
 	Status    *Status          `json:"status,omitempty"`
 	Denied    []sandbox.Denied `json:"denied,omitempty"`
-	// Hits, in a denied reply, counts the egress requests let through, by host (003b-AC16).
-	Hits    map[string]int  `json:"hits,omitempty"`
-	Metrics *Metrics        `json:"metrics,omitempty"`
-	Turn    *TurnEvent      `json:"turn,omitempty"`
-	Log     json.RawMessage `json:"log,omitempty"`
-	Access  *Access         `json:"access,omitempty"`
+	// Hits, in a denied reply, counts the egress requests let through, by host (003b-AC16), and
+	// RoomHits by room link too (014-AC3).
+	Hits     map[string]int            `json:"hits,omitempty"`
+	RoomHits map[string]map[string]int `json:"room_hits,omitempty"`
+	// Connector, with Room, is a connector_event request (014-AC19).
+	Connector *ConnectorEvent `json:"connector,omitempty"`
+	// Switches is an egress_switches request (014-AC1, 014-AC26); Domain, with Room, a
+	// room_allowlist_remove one (014-AC15).
+	Switches *EgressSwitches `json:"switches,omitempty"`
+	Domain   string          `json:"domain,omitempty"`
+	Metrics  *Metrics        `json:"metrics,omitempty"`
+	Turn     *TurnEvent      `json:"turn,omitempty"`
+	Log      json.RawMessage `json:"log,omitempty"`
+	Access   *Access         `json:"access,omitempty"`
 	// Plugin, Values and Clear are a plugin_options request: the values the host gave the options
 	// of the room's plugin id Plugin in Room, and the options to forget. Fetch and Accept are a
 	// plugin_fetch request.
@@ -95,6 +108,10 @@ type Proxy struct {
 	Addr string `json:"addr,omitempty"`
 	// Bearer is the dummy token the proxy knows this worker by.
 	Bearer string `json:"bearer,omitempty"`
+	// Connectors are the claude.ai connectors on for the room, reached with ConnectorBearer, the
+	// room's own (014-AC20).
+	Connectors      []ConnectorGrant `json:"connectors,omitempty"`
+	ConnectorBearer string           `json:"connector_bearer,omitempty"`
 	// Error says, in words fit for the room, why the room cannot reach Claude now. It never names
 	// the account (003-AC17).
 	Error string `json:"error,omitempty"`

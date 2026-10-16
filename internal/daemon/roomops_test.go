@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -129,7 +130,10 @@ func TestSupervisorPauseAndRemove(t *testing.T) {
 	if err := s.SetPaused(id, key, true); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the pause", func() bool { a := lastAccess(s); return a != nil && a.Proxies[key] == Proxy{Error: pausedReason} })
+	waitFor(t, "the pause", func() bool {
+		a := lastAccess(s)
+		return a != nil && reflect.DeepEqual(a.Proxies[key], Proxy{Error: pausedReason})
+	})
 	saved, err := loadInstance(s.o.Paths.InstanceConfig(id))
 	if err != nil || !slices.Equal(saved.Paused, []string{key}) || !slices.Equal(instance(t, s).Paused, []string{key}) {
 		t.Fatalf("saved %+v %v", saved, err)
@@ -154,7 +158,11 @@ func TestSupervisorPauseAndRemove(t *testing.T) {
 		t.Fatalf("after remove: %+v, saved %+v %v", in, saved, err)
 	}
 
-	old := testSupervisor(t, strconv.Itoa(Proto-1), nil, withAccounts)
+	// Since protocol 6 a worker before 5 fails the handshake: it never gets this far.
+	if protoRemove-1 < Proto-ProtoSkew {
+		return
+	}
+	old := testSupervisor(t, strconv.Itoa(protoRemove-1), nil, withAccounts)
 	old.SetRoom(context.Background(), room)
 	waitFor(t, "the old worker runs", func() bool { return instance(t, old).State == "running" })
 	if err := old.RemoveRoom(context.Background(), key, false); err == nil || !strings.Contains(err.Error(), "too old") {

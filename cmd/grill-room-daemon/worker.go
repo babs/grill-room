@@ -49,7 +49,7 @@ func runWorker(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		return fmt.Errorf("settings: %w", err)
 	}
 	allowlistPath := filepath.Join(cfg.ConfigDir, "allowlist.json")
-	allowlist, err := daemon.LoadAllowlist(allowlistPath)
+	egress, err := daemon.LoadEgress(allowlistPath)
 	if err != nil {
 		return fmt.Errorf("allowlist: %w", err)
 	}
@@ -68,7 +68,7 @@ func runWorker(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	}
 	// No Claude credentials here: the supervisor's proxies hold them (003-AC14).
 	d := daemon.New(daemon.Options{
-		Settings: settings, SettingsPath: settingsPath, Allowlist: allowlist, AllowlistPath: allowlistPath,
+		Settings: settings, SettingsPath: settingsPath, Egress: &egress, AllowlistPath: allowlistPath,
 		Version: Version, Tokens: daemon.NewTokens(cfg.StateDir), Docker: sandbox.Docker, Access: access,
 		// No client timeout: it would cut the long-lived room stream; each request has its own deadline.
 		HTTP: &http.Client{}, Log: logger,

@@ -132,6 +132,8 @@ type Instance struct {
 	Limits *sandbox.Limits `json:"limits,omitempty"`
 	// Paused are the room links the host paused: they stay paired but report they cannot host (003b-AC5).
 	Paused []string `json:"paused,omitempty"`
+	// Connectors are the claude.ai connectors the host turned on, by room link (014-AC18).
+	Connectors map[string][]RoomConnector `json:"connectors,omitempty"`
 }
 
 // accountFor names the account room's turns use (003-AC13).
@@ -150,6 +152,7 @@ func (i *Instance) dropRoom(room string) {
 	i.Rooms = slices.DeleteFunc(i.Rooms, func(r string) bool { return r == room })
 	i.Paused = slices.DeleteFunc(i.Paused, func(r string) bool { return r == room })
 	delete(i.RoomAccounts, room)
+	delete(i.Connectors, room)
 }
 
 // addRoom puts room last, as the newest.

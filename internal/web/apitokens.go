@@ -52,6 +52,9 @@ var cookieOnly = map[string]bool{
 	"GET /api/rooms/{room}/push":           true,
 	"PUT /api/rooms/{room}/push":           true,
 	"DELETE /api/rooms/{room}/push":        true,
+	// 014: what the agents may reach is decided in the room, by a person.
+	"POST /api/rooms/{room}/blocked/{msg}/allow": true,
+	"PUT /api/rooms/{room}/egress-delegation":    true,
 }
 
 const (

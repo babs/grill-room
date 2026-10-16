@@ -169,6 +169,9 @@ type Result struct {
 	ContextWindow int64 `json:"context_window,omitempty"`
 	// SkippedPlugins are the job's plugins the daemon left out (009-AC24).
 	SkippedPlugins []SkippedPlugin `json:"skipped_plugins,omitempty"`
+	// Blocked are the domains the turn's sandbox was refused a CONNECT to port 443 of, once each
+	// (014-AC8).
+	Blocked []string `json:"blocked,omitempty"`
 }
 
 // Manifest lists a turn's workspace (002-AC37): the daemon fetches only the files its cache lacks.

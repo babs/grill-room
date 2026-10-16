@@ -53,6 +53,9 @@ type TurnInput struct {
 	Bearer string
 	// Autocompact is Request.Autocompact.
 	Autocompact int
+	// Connectors and ConnectorBearer are Request's (014-AC20).
+	Connectors      []Connector
+	ConnectorBearer string
 }
 
 // PluginOptions are the values of the room plugins' options a turn hands Claude Code, by plugin
@@ -103,7 +106,8 @@ func (s *Sandbox) RunTurn(ctx context.Context, in TurnInput) (*TurnOutput, error
 			return nil, err
 		}
 	}
-	req := Request{Prompt: in.Prompt, System: in.System, Model: in.Model, Effort: in.Effort, Resume: in.Resume, Autocompact: in.Autocompact}
+	req := Request{Prompt: in.Prompt, System: in.System, Model: in.Model, Effort: in.Effort, Resume: in.Resume, Autocompact: in.Autocompact,
+		Connectors: in.Connectors, ConnectorBearer: in.ConnectorBearer}
 	if req.PluginDirs, err = s.loadPlugins(ctx, in.Plugin, in.Plugins); err != nil {
 		return nil, err
 	}

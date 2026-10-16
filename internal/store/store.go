@@ -6,6 +6,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -46,6 +47,9 @@ type Room struct {
 	ParallelTurns bool `json:"parallel_turns"`
 	// CreatedFrom is the starter version the room was created from, nil for a blank room (006-AC11).
 	CreatedFrom *Provenance `json:"created_from,omitempty"`
+	// EgressAdmins lets the room's admins allow websites for the room; the AI host switches it
+	// (014-AC12).
+	EgressAdmins bool `json:"egress_admins_allow"`
 }
 
 // Invite is a link token granting access to one room. Only its hash is stored.
@@ -128,6 +132,8 @@ type Message struct {
 	// Mentions are where the turns this line's @mentions queued stand, as the event stream's
 	// replay sends them: the chips stay with a line however old (005-AC4).
 	Mentions []MentionState `json:"mentions,omitempty"`
+	// Blocked is set on the system line of a website a turn was refused (014-AC8).
+	Blocked *Blocked `json:"blocked,omitempty"`
 }
 
 // Store wraps the SQLite handle.
@@ -848,6 +854,24 @@ CREATE TABLE api_tokens (
 );
 CREATE INDEX api_tokens_profile ON api_tokens(profile_id);
 CREATE INDEX api_tokens_expires ON api_tokens(expires_at_ms);
+`, `
+-- 014-AC12: the AI host lets the room's admins allow websites for the room; off on a host change.
+ALTER TABLE rooms ADD COLUMN egress_admins_allow INTEGER NOT NULL DEFAULT 0 CHECK (egress_admins_allow IN (0, 1));
+-- 014-AC8: the website a turn was refused, on its system line. decision is '' until someone's
+-- approval is confirmed by the AI host's app; pending_* hold one it has not confirmed yet.
+CREATE TABLE blocked_requests (
+	message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	persona TEXT NOT NULL,
+	domain TEXT NOT NULL,
+	count INTEGER NOT NULL DEFAULT 1 CHECK (count > 0),
+	decision TEXT NOT NULL DEFAULT '' CHECK (decision IN ('', 'room', 'server')),
+	pending_scope TEXT NOT NULL DEFAULT '' CHECK (pending_scope IN ('', 'room', 'server')),
+	pending_by TEXT NOT NULL DEFAULT '',
+	pending_actor TEXT NOT NULL DEFAULT '',
+	pending_error TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX blocked_requests_open ON blocked_requests(room_id, domain) WHERE decision = '';
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -1014,8 +1038,8 @@ func (s *Store) Room(ctx context.Context, id string) (*Room, error) {
 	var created string
 	var from sql.NullString
 	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at, COALESCE(host_participant_id, 0), chain_budget, chain_count, chain_suspended, parallel_turns,
-		created_from FROM rooms WHERE id = ?`, id).Scan(&r.ID, &r.Name, &created, &r.HostParticipantID, &r.Chain.Budget, &r.Chain.Count, &r.Chain.Suspended,
-		&r.ParallelTurns, &from)
+		created_from, egress_admins_allow FROM rooms WHERE id = ?`, id).Scan(&r.ID, &r.Name, &created, &r.HostParticipantID, &r.Chain.Budget, &r.Chain.Count, &r.Chain.Suspended,
+		&r.ParallelTurns, &from, &r.EgressAdmins)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -1516,7 +1540,9 @@ func (s *Store) LastVoice(ctx context.Context, roomID string) (*Message, error) 
 const (
 	messageFields = `id, ts, room_id, kind, COALESCE(participant_id, 0), sender, body, COALESCE(html, ''), model, edited_at, deleted_at, change_seq,
 		COALESCE(persona_id, 0), effort, COALESCE((SELECT badge FROM room_personas WHERE id = messages.persona_id), ''),
-		COALESCE((SELECT colour FROM room_personas WHERE id = messages.persona_id), ''), req_model, req_effort, model_note, model_mismatch, COALESCE(turn_id, 0), COALESCE(source, '')`
+		COALESCE((SELECT colour FROM room_personas WHERE id = messages.persona_id), ''), req_model, req_effort, model_note, model_mismatch, COALESCE(turn_id, 0), COALESCE(source, ''),
+		(SELECT json_object('domain', domain, 'persona', persona, 'count', count, 'decision', decision, 'pending', pending_scope, 'error', pending_error)
+			FROM blocked_requests WHERE message_id = messages.id)`
 	messageCols = `SELECT ` + messageFields + ` FROM messages `
 )
 
@@ -1540,9 +1566,9 @@ func (s *Store) queryMessages(ctx context.Context, where string, args ...any) ([
 func scanMessage(sc scanner, extra ...any) (*Message, error) {
 	var m Message
 	var ts string
-	var edited, deleted sql.NullString
+	var edited, deleted, blocked sql.NullString
 	err := sc.Scan(append([]any{&m.ID, &ts, &m.RoomID, &m.Kind, &m.ParticipantID, &m.Sender, &m.Body, &m.HTML, &m.Model, &edited, &deleted, &m.ChangeSeq,
-		&m.PersonaID, &m.Effort, &m.Badge, &m.Colour, &m.ReqModel, &m.ReqEffort, &m.ModelNote, &m.ModelMismatch, &m.TurnID, &m.Source}, extra...)...)
+		&m.PersonaID, &m.Effort, &m.Badge, &m.Colour, &m.ReqModel, &m.ReqEffort, &m.ModelNote, &m.ModelMismatch, &m.TurnID, &m.Source, &blocked}, extra...)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -1551,6 +1577,12 @@ func scanMessage(sc scanner, extra ...any) (*Message, error) {
 	}
 	m.TS = parseTS(ts)
 	m.EditedAt, m.DeletedAt = parseNullTS(edited), parseNullTS(deleted)
+	if blocked.Valid {
+		m.Blocked = &Blocked{}
+		if err := json.Unmarshal([]byte(blocked.String), m.Blocked); err != nil {
+			return nil, fmt.Errorf("scan message %d: blocked: %w", m.ID, err)
+		}
+	}
 	return &m, nil
 }
 

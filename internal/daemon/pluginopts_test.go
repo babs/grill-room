@@ -93,7 +93,7 @@ var optPlugin = listed{ID: 7, Name: "opt", Version: 2, Options: []plugin.Option{
 // no value makes the plugin need host setup; the domains off the allowlist are listed.
 func TestSetPluginOptions(t *testing.T) {
 	d := newTestDaemon(t, nil)
-	d.st.Allowlist = []string{".github.com"}
+	d.st.Egress.Server = entriesFor([]string{".github.com"}, nil)
 	const link = "https://h/r/a"
 	hostRoom(d, link, optPlugin)
 	ctx := context.Background()
