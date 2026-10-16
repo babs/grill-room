@@ -25,13 +25,14 @@ test('glossary tab and model credit follow the workers', async ({ browser, reque
   await expect(bob.locator('#stt-credit')).toHaveAttribute('hidden', '');
 
   // parakeet reads none: no tab for anyone, and the credit. A plain member keeps Room settings
-  // for their invites (011-AC27) and the plugins (009-AC5); a stale glossary link lands on the first.
+  // for their invites (011-AC27), the plugins (009-AC5) and the websites and connectors (014); a
+  // stale glossary link lands on the first.
   for (const st of [{ engines: ['parakeet'] }, { engines: [], available: false }]) {
     await playSTT(bob, room.id, st);
     await expect(bob.locator('#more-menu #manage-open')).not.toHaveAttribute('hidden');
     await bob.goto(`/r/${room.id}#manage/glossary`);
     await expect(bob.locator('#manage #tab-invites')).toHaveAttribute('aria-current', 'page');
-    await expect(tabs(bob)).toHaveCount(2);
+    await expect(tabs(bob)).toHaveCount(3);
     await expect(bob.locator('#stt-glossary')).toHaveCount(0);
     if (st.engines.includes('parakeet')) await expect(bob.locator('#stt-credit')).not.toHaveAttribute('hidden');
     else await expect(bob.locator('#stt-credit')).toHaveAttribute('hidden', '');
@@ -39,7 +40,7 @@ test('glossary tab and model credit follow the workers', async ({ browser, reque
     await playSTT(alice, room.id, st);
     await alice.goto(`/r/${room.id}#manage/glossary`);
     await expect(alice.locator('#manage #room-panel')).toBeVisible();
-    await expect(tabs(alice)).toHaveCount(8);
+    await expect(tabs(alice)).toHaveCount(9);
     await expect(alice.locator('#tab-glossary')).toHaveCount(0);
     await expect(alice.locator('#tab-general')).toHaveAttribute('aria-current', 'page');
     await alice.goto(`/r/${room.id}`);
@@ -47,7 +48,7 @@ test('glossary tab and model credit follow the workers', async ({ browser, reque
   // The data stayed: with a reading worker back, the glossary is there.
   await playSTT(alice, room.id, { engines: ['parakeet', 'whisper'], glossary: true });
   await alice.goto(`/r/${room.id}#manage/glossary`);
-  await expect(tabs(alice)).toHaveCount(9);
+  await expect(tabs(alice)).toHaveCount(10);
   await expect(alice.locator('#stt-glossary').getByLabel('Words to recognise')).toHaveValue('Kubernetes, Helm');
   expect(await bob.evaluate((id) => fetch(`/api/rooms/${id}/glossary`).then((r) => r.json()), room.id)).toMatchObject({ glossary: 'Kubernetes, Helm' });
 });
