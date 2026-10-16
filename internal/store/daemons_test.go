@@ -50,6 +50,30 @@ func TestDaemons(t *testing.T) {
 	}
 }
 
+// 003b-AC9: removing a daemon deletes its token; a second removal finds nothing; pairing again
+// works afterwards.
+func TestRemoveDaemon(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	p := seed(t, s, "r1")
+	d, err := s.PairDaemon(ctx, "r1", p.ID, "h1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveDaemon(ctx, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DaemonByToken(ctx, "h1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("removed daemon's token still valid: %v", err)
+	}
+	if err := s.RemoveDaemon(ctx, d.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second removal: %v", err)
+	}
+	if _, err := s.PairDaemon(ctx, "r1", p.ID, "h2"); err != nil {
+		t.Fatalf("pair after removal: %v", err)
+	}
+}
+
 // 003-AC17: the migration drops the machine names a room kept: the host-elected messages read
 // "<name> holds the agent(s).", and the daemons' and turns' host columns are blank. A participant's
 // text that happens to hold the phrase stays as written.

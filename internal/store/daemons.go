@@ -89,3 +89,18 @@ func (s *Store) SetDaemonSettings(ctx context.Context, id int64, set DaemonSetti
 	}
 	return n > 0, nil
 }
+
+// RemoveDaemon deletes daemon id, and with it its token: the host removed the room from their
+// computer (003b-AC9). ErrNotFound if it is gone already.
+func (s *Store) RemoveDaemon(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM daemons WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("remove daemon: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("remove daemon: %w", err)
+	} else if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}

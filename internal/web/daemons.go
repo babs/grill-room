@@ -290,6 +290,23 @@ func (s *Server) daemonStatus(w http.ResponseWriter, r *http.Request, d *store.D
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// removeDaemon is the host removing the room from their computer: the daemon's token stops
+// working, its stream ends with "revoked", its running turn fails and the room elects another host
+// (003b-AC9).
+func (s *Server) removeDaemon(w http.ResponseWriter, r *http.Request, d *store.Daemon, _ string) {
+	ctx := r.Context()
+	// First: the delete sets the turns' daemon_id to NULL, and failDaemonTurn finds them by it.
+	s.failDaemonTurn(ctx, d, "the AI host removed this room from their computer")
+	if err := s.bus.Store.RemoveDaemon(ctx, d.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
+		s.serverError(w, "remove_daemon_failed", err)
+		return
+	}
+	s.log.Info("daemon_removed", zap.String("room", d.RoomID), zap.Int64("daemon", d.ID))
+	// Wakes the daemon's stream, which then finds its token gone, and the room's.
+	s.agentChanged(ctx, d.RoomID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func truncate(s string, n int) string {
 	if r := []rune(s); len(r) > n {
 		return string(r[:n])
