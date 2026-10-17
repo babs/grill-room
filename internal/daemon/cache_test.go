@@ -294,7 +294,7 @@ func TestTranscriptChunksTransferOnlyChanges(t *testing.T) {
 	if got := fetched(appended); !slices.Equal(got, []string{day + "004.md"}) {
 		t.Fatalf("turn 2 fetched %v", got)
 	}
-	if _, err := sr.rs.st.EditMessage(ctx, sr.rs.room, first, ps[0].ID, "line 0, edited"); err != nil {
+	if _, _, err := sr.rs.st.EditMessage(ctx, sr.rs.room, first, ps[0].ID, "line 0, edited"); err != nil {
 		t.Fatal(err)
 	}
 	edited := sr.turn(t)

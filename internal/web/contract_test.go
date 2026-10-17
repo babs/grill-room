@@ -331,7 +331,7 @@ func TestTranscriptChunks(t *testing.T) {
 	}
 	before := hashes(tn.ID)
 	e.finish(t, r, r.alice, tn, "Read it all.")
-	if _, err := e.st.EditMessage(t.Context(), r.room, first, pid, "line 0, edited"); err != nil {
+	if _, _, err := e.st.EditMessage(t.Context(), r.room, first, pid, "line 0, edited"); err != nil {
 		t.Fatal(err)
 	}
 	e.postBody(t, r, tok, "One more.")

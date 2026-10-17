@@ -36,12 +36,15 @@ func (s *Store) Message(ctx context.Context, roomID string, id int64) (*Message,
 
 // EditMessage replaces the body of message id, keeping the old one as a version. Only participant
 // by may, on their own text or voice line: ErrForbidden otherwise, ErrMessageDeleted once deleted,
-// ErrNotFound if the room has no such message. The same body changes nothing. The caller broadcasts.
-func (s *Store) EditMessage(ctx context.Context, roomID string, id, by int64, body string) (*Message, error) {
-	return s.changeMessage(ctx, roomID, id, by, func(tx *sql.Tx, m *Message, seq int64) error {
+// ErrNotFound if the room has no such message. The same body changes nothing. It returns the
+// message and its body before the edit (016-AC19). The caller broadcasts.
+func (s *Store) EditMessage(ctx context.Context, roomID string, id, by int64, body string) (*Message, string, error) {
+	var prev string
+	m, err := s.changeMessage(ctx, roomID, id, by, func(tx *sql.Tx, m *Message, seq int64) error {
 		if m.DeletedAt != nil {
 			return ErrMessageDeleted
 		}
+		prev = m.Body
 		if m.Body == body {
 			return nil
 		}
@@ -62,6 +65,7 @@ func (s *Store) EditMessage(ctx context.Context, roomID string, id, by int64, bo
 		m.Body, m.HTML, m.EditedAt, m.ChangeSeq = body, html, &t, seq
 		return nil
 	})
+	return m, prev, err
 }
 
 // DeleteMessage soft-deletes message id: its body stays for the agent and for export. Same rules

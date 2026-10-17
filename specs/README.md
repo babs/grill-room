@@ -19,3 +19,4 @@
 | [012](012-agent-api.md) | Agent access: personal API tokens and a built-in MCP server | shipped |
 | [013](013-persona-voices.md) | Personas speak in the call | in progress |
 | [014](014-network-access.md) | Agents' network access: allow every website, blocked requests in the chat, claude.ai connectors | in progress |
+| [016](016-membership.md) | Membership: remove a person, invites apart from seats, mentions on edit | in progress |

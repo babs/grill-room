@@ -396,7 +396,7 @@ function renderMessage(m) {
   li.append(meta, body);
   if (String(m.participant_id) === myID && (m.kind === 'text' || m.kind === 'voice')) li.append(messageMenu(li, m));
   if (m.mentions) stored.set(m.id, m.mentions);
-  if (m.kind === 'text') fillMentions(li);
+  if (m.kind === 'text' || m.kind === 'voice') fillMentions(li);
   return li;
 }
 
@@ -652,6 +652,13 @@ function editMessage(li, m) {
     e.preventDefault();
     sendJSON('PATCH', api + '/messages/' + m.id, { body: box.value }).then((saved) => {
       if (saved && form.isConnected) li.replaceWith(renderMessage(saved));
+      // An edit naming a new persona tells its author why it will not run, as a send does
+      // (016-AC21); the stream may have redrawn the line before this answer came.
+      if (saved && saved.mention_notices) {
+        notices.set(saved.id, saved.mention_notices);
+        const live = messages.querySelector('li[data-id="' + saved.id + '"]');
+        if (live) fillMentions(live);
+      }
     }).catch((err) => { box.setCustomValidity(err.message); box.reportValidity(); });
   });
   box.addEventListener('input', () => box.setCustomValidity(''));
