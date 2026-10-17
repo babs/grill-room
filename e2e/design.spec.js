@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures.js';
 import { mkdirSync } from 'node:fs';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, upload, startDaemon, smallTargets, menuItem, playSTT, newRoomEditor, personaAction, unfoldTabs } from './helpers.js';
+import { roomWith, signIn, upload, startDaemon, openDaemonPage, smallTargets, menuItem, playSTT, newRoomEditor, personaAction, unfoldTabs } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const desktop = { width: 1440, height: 900 };
@@ -130,7 +130,7 @@ test('touch targets at phone width', async ({ browser, request, baseURL }) => {
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {
     const page = await (await browser.newContext({ viewport: phone })).newPage();
-    await page.goto(await daemon.link);
+    await openDaemonPage(page, await daemon.link);
     await expect(page.locator('#pairing')).toHaveText('Waiting for your approval in the room.', { timeout: 30_000 });
     for (const tab of ['rooms', 'accounts', 'general', 'network', 'monitoring', 'update']) {
       await unfoldTabs(page.locator('#tabs'));
@@ -150,7 +150,7 @@ test('daemon tab bar keeps its tab styling', async ({ browser, request, baseURL 
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {
     const page = await (await browser.newContext()).newPage();
-    await page.goto(await daemon.link);
+    await openDaemonPage(page, await daemon.link);
     await page.locator('#tab-accounts').click();
     for (const viewport of [phone, desktop]) {
       await page.setViewportSize(viewport);

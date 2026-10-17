@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { execFileSync } from 'node:child_process';
-import { roomWith, startDaemon, pairDaemon, removeSandbox, menuItem } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, reloadDaemonPage, removeSandbox, menuItem } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
 // curlInSandbox asks the egress proxy for host from inside the sandbox and returns its CONNECT answer.
@@ -44,7 +44,7 @@ test('egress allowlist and denied requests on the daemon page', async ({ browser
     await expect(admin.getByLabel('Domain')).toHaveValue('');
     await admin.getByRole('button', { name: 'Remove github.com' }).click();
     await expect(list.locator('code', { hasText: /^github\.com$/ })).toHaveCount(0);
-    await admin.reload();
+    await reloadDaemonPage(admin);
     await expect(list.locator('code', { hasText: /^example\.com$/ })).toHaveCount(1);
     await expect(list.locator('code', { hasText: /^github\.com$/ })).toHaveCount(0);
 
@@ -102,7 +102,7 @@ test('allow every website and its local-network extension', async ({ browser, re
     await expect(sheet.locator('.warning')).toContainText('your own network');
     await sheet.getByRole('button', { name: 'Allow the local network' }).click();
     await expect(local).toBeChecked();
-    await admin.reload();
+    await reloadDaemonPage(admin);
     await expect(all).toBeChecked();
     await expect(local).toBeChecked();
 

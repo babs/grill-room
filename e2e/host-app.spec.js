@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, startDaemon, stopDaemon, menuItem, connectedRow } from './helpers.js';
+import { roomWith, startDaemon, openDaemonPage, stopDaemon, menuItem, connectedRow } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -37,7 +37,7 @@ test('add a room from the AI host app page', async ({ browser, request, baseURL 
   const daemon = startDaemon(`${baseURL}/r/${first.id}/docs?from=link#top`);
   try {
     const page = await alice.context().newPage();
-    await page.goto(await daemon.link);
+    await openDaemonPage(page, await daemon.link);
     await expect(page.locator('#pairing')).toHaveText('Waiting for your approval in the room.', { timeout: 30_000 });
     const approval = await approve(page, alice.context());
     await expect(approval.locator('#pairing-text')).toContainText('Daemon paired');

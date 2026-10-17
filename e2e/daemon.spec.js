@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { hostname } from 'node:os';
-import { roomWith, startDaemon, pairDaemon, stopDaemon, confirmSheet, connectedRow } from './helpers.js';
+import { roomWith, startDaemon, openDaemonPage, reloadDaemonPage, pairDaemon, stopDaemon, confirmSheet, connectedRow } from './helpers.js';
 
 // 001-AC22: run the daemon with the room URL, open its local page, approve in the room session
 // with one click: the daemon is paired and connected, and no token was shown or typed.
@@ -9,7 +9,7 @@ test('daemon pairs through the room approval', async ({ browser, request, baseUR
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {
     const admin = await alice.context().newPage();
-    await admin.goto(await daemon.link);
+    await openDaemonPage(admin, await daemon.link);
     await expect(admin).toHaveURL(/^http:\/\/127\.0\.0\.1:\d+\/$/);
     await expect(admin.locator('#pairing')).toHaveText('Waiting for your approval in the room.', { timeout: 30_000 });
     const code = await admin.locator('#code').textContent();
@@ -37,10 +37,10 @@ test('daemon pairs through the room approval', async ({ browser, request, baseUR
     await admin.locator('#tab-general').click();
     await expect(admin.locator('#can-host')).toBeVisible();
     // The page reloads into the same session; the one-time link is spent.
-    await admin.reload();
+    await reloadDaemonPage(admin);
     await expect(connectedRow(admin, room.id)).toBeAttached();
     const spent = await alice.context().newPage();
-    await spent.goto(await daemon.link);
+    await openDaemonPage(spent, await daemon.link);
     await expect(spent.locator('#banner')).toContainText('already used');
     for (const p of [admin, approval, alice]) await expect(p.locator('body')).not.toContainText('e2e-fake');
 
@@ -66,7 +66,7 @@ test('daemon page signs in through a lost session request', async ({ browser, re
       dropped = true;
       return route.abort('failed');
     });
-    await admin.goto(await daemon.link);
+    await openDaemonPage(admin, await daemon.link);
     await expect(admin.locator('#pairing')).toHaveText('Waiting for your approval in the room.', { timeout: 30_000 });
     expect(dropped).toBe(true);
     await expect(admin).toHaveURL(/^http:\/\/127\.0\.0\.1:\d+\/$/);
@@ -164,7 +164,7 @@ test('daemon page shows its signature and guards the unsigned toggle', async ({ 
       failed = true;
       return route.abort('failed');
     });
-    await admin.goto(await daemon.link);
+    await openDaemonPage(admin, await daemon.link);
     await expect(admin.locator('#self-sig')).toHaveText('dev build');
     await expect.poll(() => failed).toBe(true);
     // The app's binary shows once the server's app runs, which a loaded machine takes a while to
