@@ -135,6 +135,7 @@ The note is an ordinary agent document: the room sees it, and any persona may re
 | new documents | a new file in `docs/` | a new agent document by the persona |
 | thread replies | `replies.json`: `[{"annotation": <id>, "body": "...", "status": "done"}]`, `status` optional | an annotation message by the persona; `"done"` also closes the thread. Only on a thread that names no persona, or names this one |
 | new annotations | `annotations-new.json`: `[{"doc": "<path>", "exact": "...", "prefix": "...", "suffix": "...", "body": "..."}]` | an annotation by the persona on that quote, with `body` as its first message |
+| spoken line, asked only while the persona speaks in the call and someone listens (spec 013) | `spoken.md`: what the persona says out loud, first person, plain words, at most 4 KB | the line the `tts` pod says in the persona's voice, after the server strips Markdown, code, links, URLs, emoji and short ids and keeps whole sentences up to the room's word cap. Without it, a summary of the turn's actions ("I changed the payment spec."). Never a document, a chat message or part of an export, and never logged |
 | calls | `@name` in the synthesis, outside code | a queued turn of that persona, one chain link each; its own name only with self-call on |
 | model and effort | the model and effort the daemon passed, checked against `modelUsage` in `claude -p`'s JSON | shown on the synthesis, stored on the turn |
 
@@ -155,7 +156,8 @@ Refused or ignored, and listed in a system message after the synthesis:
 - any created, changed or deleted path under `uploads/` (AC16);
 - a deleted document, a file in a subdirectory of `docs/`, a name that is not `.md` or `.html`, a document over 2 MB or not UTF-8;
 - a `replies.json` that does not parse, a reply to an unknown annotation, a reply without an id or a body, a `status` other than `"done"`, a close on a thread a participant wrote in during the turn, a reply or close on a thread that belongs to other personas (`it belongs to @<persona>`);
-- an `annotations-new.json` that does not parse, an entry without a doc, a quote or a body, an unknown document, a document with no text (PDF, image), a quote not found, entries past the 50th.
+- an `annotations-new.json` that does not parse, an entry without a doc, a quote or a body, an unknown document, a document with no text (PDF, image), a quote not found, entries past the 50th;
+- a `spoken.md` over 4 KB or not UTF-8.
 
 Anything else the agent writes, in `transcript/` or at the root, is scratch and is dropped silently.
 
@@ -177,7 +179,7 @@ Anything else the agent writes, in `transcript/` or at the root, is scratch and 
 
    When the job lists `plugins` (`[{"id", "name", "sha256", "version", "options"}]`, absent for none; `id` is the room's plugin id; `options` lists each option's `key`, `sensitive`, `required` and `default`, never a value), `GET .../daemon/turns/N/plugins/<sha256>` returns each one's snapshot, a tar whose sha256 is that value. The server answers 404 for a sha256 the turn does not list. The daemon unpacks each under its own directory named after the plugin and passes one `--plugin-dir` per plugin after the `grill-room` one.
 4. If `resume` is set and the daemon's local `<id>.jsonl` does not match the size and hash, it fetches `GET .../daemon/sessions/<id>` and writes it into the sandbox home before running `claude -p --resume <id>` (D6). The cwd is always `/workspace`, so the session's project slug never changes (S2). Every persona's session lives in the same sandbox home under its own id; the room stores each under its persona, so a takeover resumes each persona's own session.
-5. The daemon hashes `/workspace` before and after the run and sends each changed path. It sends contents only for `docs/`, `replies.json` and `annotations-new.json`, so an edited 20 MB upload costs one path.
+5. The daemon hashes `/workspace` before and after the run and sends each changed path. It sends contents only for `docs/`, `replies.json`, `annotations-new.json` and `spoken.md`, so an edited 20 MB upload costs one path.
 6. `POST .../daemon/turns/N` with `{"synthesis", "model", "model_note", "model_mismatch", "effort", "capped", "changes", "session_id", "session_offset", "session", "context_tokens", "context_window", "skipped_plugins"}`, or `{"error"}`, which may carry `skipped_plugins` too. `skipped_plugins` lists the job's plugins the daemon left out, `[{"name", "reason"}]`. The context fields are absent when unknown. `capped` is true when the host cap lowered what the persona asked for. `session` holds the jsonl bytes past `session_offset`: the server's size when resuming, 0 for a new session (D23). The server refuses a gap or an overlap. A document edit whose document is past its pinned revision, or was created after the pin, is a conflict: the server answers 409 `conflict on <name>` and keeps nothing of the result.
 
 7. When a turn handed to the daemon ends on the server without its result, stopped from the room or failed there, the server sends `event: stop` with `{"id": N}`. The daemon kills `claude` in the sandbox, or ends the turn while it waits for a slot, and posts no result. A daemon from before ignores the event: its result then gets a 409. The supervisor's monitor records the turn as `stopped`.

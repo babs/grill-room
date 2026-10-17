@@ -321,6 +321,11 @@ type RoomPersona struct {
 	// Skills are its active skills, by name, each pinned at a version (002-AC31).
 	Skills    []PersonaSkill `json:"skills"`
 	CreatedAt time.Time      `json:"created_at"`
+	// Speaks puts the persona's spoken line in the audio call (013-AC26). Voice is its catalogue
+	// voice, empty until it first speaks (013-AC16); VoiceRate its speaking rate (013-AC37).
+	Speaks    bool    `json:"speaks"`
+	Voice     string  `json:"voice"`
+	VoiceRate float64 `json:"voice_rate"`
 }
 
 const personaCols = `SELECT p.id, p.room_id, COALESCE(p.template_id, 0), p.template_version,
@@ -329,7 +334,7 @@ const personaCols = `SELECT p.id, p.room_id, COALESCE(p.template_id, 0), p.templ
 	p.pending, p.cap_decision, COALESCE(p.cap_daemon_id, 0), p.cap_model, p.cap_effort, p.autocompact,
 	COALESCE(s.context_tokens, 0), COALESCE(s.context_window, 0), COALESCE(p.every_voice, 0), COALESCE(p.every_minutes, 0), p.mark_at_ms,
 	CASE WHEN p.every_voice IS NULL THEN 0 ELSE (SELECT COUNT(*) FROM messages m WHERE m.room_id = p.room_id AND m.kind = 'voice'
-		AND m.deleted_at IS NULL AND m.id > p.mark_msg_id) END, p.watches_notes, p.notes_mark FROM room_personas p
+		AND m.deleted_at IS NULL AND m.id > p.mark_msg_id) END, p.watches_notes, p.notes_mark, p.speaks, p.voice, p.voice_rate FROM room_personas p
 	LEFT JOIN agent_sessions s ON s.persona_id = p.id
 		AND s.session_id = (SELECT session_id FROM turns WHERE persona_id = p.id AND status = 'done' ORDER BY id DESC LIMIT 1) `
 
@@ -341,7 +346,7 @@ func scanPersona(sc scanner) (*RoomPersona, error) {
 	err := sc.Scan(&p.ID, &p.RoomID, &p.TemplateID, &p.TemplateVersion, &p.UpdateVersion,
 		&p.Name, &p.Badge, &p.Colour, &p.Text, &p.Model, &p.Effort, &p.EveryN, &p.SelfCall, &created,
 		&p.Pending, &p.Cap.Status, &p.Cap.DaemonID, &p.Cap.Level.Model, &p.Cap.Level.Effort, &p.Autocompact,
-		&p.ContextTokens, &p.ContextWindow, &p.EveryVoice, &p.EveryMinutes, &markMS, &voices, &p.WatchesNotes, &p.NotesMark)
+		&p.ContextTokens, &p.ContextWindow, &p.EveryVoice, &p.EveryMinutes, &markMS, &voices, &p.WatchesNotes, &p.NotesMark, &p.Speaks, &p.Voice, &p.VoiceRate)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -535,6 +540,11 @@ type PersonaPatch struct {
 	TemplateVersion *int
 	// Skills turns skills on at a version, or off, by skill id.
 	Skills map[int64]SkillPin `json:",omitempty"`
+	// Speaks, Voice and VoiceRate: the persona in the call (013-AC26, 013-AC37); the caller checks
+	// the voice against the catalogue and the rate's range.
+	Speaks    *bool    `json:",omitempty"`
+	Voice     *string  `json:",omitempty"`
+	VoiceRate *float64 `json:",omitempty"`
 }
 
 func orDefault(s string) string {
@@ -589,6 +599,15 @@ func (c PersonaPatch) apply(p *RoomPersona) []string {
 	if c.Autocompact != nil && *c.Autocompact != p.Autocompact {
 		out = append(out, fmt.Sprintf("autocompact %s → %s", autocompact(p.Autocompact), autocompact(*c.Autocompact)))
 		p.Autocompact = *c.Autocompact
+	}
+	if c.Speaks != nil && *c.Speaks != p.Speaks {
+		out = append(out, fmt.Sprintf("speaks in the call %s → %s", onOff(p.Speaks), onOff(*c.Speaks)))
+		p.Speaks = *c.Speaks
+	}
+	set(&p.Voice, c.Voice, "voice", true)
+	if c.VoiceRate != nil && *c.VoiceRate != p.VoiceRate {
+		out = append(out, fmt.Sprintf("speaking rate %g → %g", p.VoiceRate, *c.VoiceRate))
+		p.VoiceRate = *c.VoiceRate
 	}
 	if c.TemplateVersion != nil && *c.TemplateVersion != p.TemplateVersion {
 		out = append(out, fmt.Sprintf("template v%d → v%d", p.TemplateVersion, *c.TemplateVersion))
@@ -650,9 +669,9 @@ func updatePersona(ctx context.Context, tx *sql.Tx, p *RoomPersona) error {
 		}
 	}
 	_, err := tx.ExecContext(ctx, `UPDATE room_personas SET template_version = ?, name = ?, badge = ?, colour = ?, text = ?, model = ?, effort = ?,
-		every_n = ?, self_call = ?, pending = ?, autocompact = ?, every_voice = ?, every_minutes = ?, watches_notes = ? WHERE id = ?`,
+		every_n = ?, self_call = ?, pending = ?, autocompact = ?, every_voice = ?, every_minutes = ?, watches_notes = ?, speaks = ?, voice = ?, voice_rate = ? WHERE id = ?`,
 		append(append([]any{p.TemplateVersion}, p.args()...), nullInt(p.EveryN), p.SelfCall, p.Pending, p.Autocompact,
-			nullInt(p.EveryVoice), nullInt(p.EveryMinutes), p.WatchesNotes, p.ID)...)
+			nullInt(p.EveryVoice), nullInt(p.EveryMinutes), p.WatchesNotes, p.Speaks, p.Voice, p.VoiceRate, p.ID)...)
 	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
 		return ErrNameTaken
 	}
@@ -1003,4 +1022,15 @@ func migratePersonas(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+// DefaultVoice stores voice as persona id's voice when it has none yet, without a chat line: a
+// default is not a change anyone made (013-AC16). It reports whether it stored it.
+func (s *Store) DefaultVoice(ctx context.Context, roomID string, id int64, voice string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE room_personas SET voice = ? WHERE room_id = ? AND id = ? AND voice = ''`, voice, roomID, id)
+	if err != nil {
+		return false, fmt.Errorf("default voice: %w", err)
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }

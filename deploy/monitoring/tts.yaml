@@ -1,0 +1,31 @@
+# The tts pod's scrape (spec 013, AC20), for the VictoriaMetrics operator; applied with the STT one
+# by `make k8s-monitoring`. ${K8S_MONITORING_NAMESPACE} is where vmagent runs.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: tts
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tts
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+---
+# vmagent scrapes the pod's metrics port from its namespace: the only way in (013-AC9).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tts-metrics
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: tts
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ${K8S_MONITORING_NAMESPACE}
+      ports:
+        - { port: 9100, protocol: TCP }

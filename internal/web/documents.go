@@ -61,6 +61,9 @@ type Options struct {
 	ToMarkdown func(ctx context.Context, from string, data []byte) (string, error)
 	// Voice turns on LiveKit audio and transcription; nil leaves the room text only.
 	Voice *Voice
+	// TTSTokenHash is HashToken of the tts pod's token: set with Voice, personas speak in the call
+	// (013-AC13); empty, every /api/tts route answers 404.
+	TTSTokenHash string
 	// TurnTimeout bounds one agent turn; 0 means 15 minutes.
 	TurnTimeout time.Duration
 	// NotesWatchDelay is how long the notes watcher waits after the last new note message; 0 means
