@@ -47,6 +47,9 @@ cleanup() {
 		kill "$tts_pid" 2>/dev/null || true
 		wait "$tts_pid" 2>/dev/null || true
 	fi
+	if [[ -n $image_echo ]]; then
+		docker logs "$echo" >"$out/echo.log" 2>&1 || true
+	fi
 	docker rm -f "$livekit" "$stt" "$tts" "$echo" >/dev/null 2>&1 || true
 }
 

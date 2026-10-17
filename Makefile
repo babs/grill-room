@@ -121,8 +121,8 @@ e2e-persona-voice: build e2e-build
 	cd e2e && pnpm install --frozen-lockfile && persona-voice/run.sh $(PERSONA_VOICE_ARGS)
 
 # 013-AC35: a Chrome whose microphone hears its own speakers (persona-voice/echo/) posts no line
-# with echo cancellation on, and some with it off. The tts pod runs Pocket's ungated weights from
-# source: no token, the weights fetched into the Hugging Face cache on first run.
+# with echo cancellation on; with it off, its echo cuts the persona off. The tts pod runs Pocket's
+# ungated weights from source: no token, the weights fetched into the Hugging Face cache on first run.
 e2e-persona-echo: build e2e-build
 	docker build -q -t grill-room-test-echo:local e2e/persona-voice/echo
 	cd e2e && pnpm install --frozen-lockfile && PERSONA_VOICE_SOURCE_ENGINE=pocket PERSONA_VOICE_ECHO_IMAGE=grill-room-test-echo:local \
@@ -209,7 +209,7 @@ tts-image:
 	  --build-arg PROJECT_URL=$(PROJECT_URL) \
 	  tts/
 
-# 013-AC33: each seed lexicon entry said 3 times and heard by the STT image (grill-stt:local).
+# 013-AC33: each seed lexicon entry said 10 times and heard by the STT image (grill-stt:local) at least 6 times.
 # Without a Hugging Face token Pocket loads its ungated weights: the predefined voices it renders
 # with are the same. LEXCHECK_THREADS is the synthesis threads; the report lands in LEXCHECK_DIR.
 LEXCHECK_DIR ?= tts/.lexcheck

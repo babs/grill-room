@@ -462,13 +462,6 @@
     "en": ""
   },
   {
-    "term": "flaky",
-    "style": "en",
-    "fr_en": "flèï-ki",
-    "fr_fr": "",
-    "en": ""
-  },
-  {
     "term": "PR",
     "style": "en",
     "fr_en": "pé èr",
@@ -590,7 +583,7 @@
   {
     "term": "WebRTC",
     "style": "en",
-    "fr_en": "ouèbe èr té cé",
+    "fr_en": "",
     "fr_fr": "",
     "en": "web R T C"
   },
@@ -807,7 +800,7 @@
   {
     "term": "OKR",
     "style": "en",
-    "fr_en": "o ka èr",
+    "fr_en": "",
     "fr_fr": "",
     "en": "O K R"
   },

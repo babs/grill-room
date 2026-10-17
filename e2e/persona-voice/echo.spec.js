@@ -36,8 +36,8 @@ async function metrics() {
   return sum(/^grill_tts_lines_spoken_total (\S+)$/gm) + sum(/^grill_tts_lines_dropped_total\{[^}]*\} (\S+)$/gm);
 }
 
-// A human whose microphone is the loop joins the call; Grill says LINES lines; the STT worker's
-// lines for that human come back.
+// A human whose microphone is the loop joins the call. Echo on: Grill says LINES lines, the STT
+// worker's lines for that human come back. Echo off: Grill says one, the times its echo cut it come back.
 async function run(request, room, name, echoCancellation) {
   const browser = await chromium.connect(ws, { headers: { 'x-playwright-launch-options': JSON.stringify({
     headless: false, args: ['--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'] }) } });
@@ -67,13 +67,15 @@ async function run(request, room, name, echoCancellation) {
       const b = await (await page.request.get(`/api/rooms/${room}/messages?limit=500`)).json();
       return (b.messages ?? b).filter((m) => m.kind === 'voice' && m.participant_id === me).map((m) => m.body);
     };
+    const tts = async (name) => gauge(await (await fetch(ttsMetrics)).text(), name);
     if (!echoCancellation) {
       // Its own echo cuts the persona off and resumes it, over and over: the first line is enough.
+      // Each fragment is shorter than the STT's 400 ms VAD minimum, so the cut, not a line, proves the loop.
+      const before = await tts('grill_tts_lines_interrupted_total');
       expect((await request.post('/api/admin/test/speak', { headers: admin, data: { room, persona: 'Grill', spoken: lines[0] } })).status()).toBe(204);
-      await expect.poll(async () => (await heard()).length, { timeout: 90_000 }).toBeGreaterThan(0);
-      return await heard();
+      await expect.poll(() => tts('grill_tts_lines_interrupted_total'), { timeout: 90_000 }).toBeGreaterThan(before);
+      return { cut: await tts('grill_tts_lines_interrupted_total') - before, heard: await heard() };
     }
-    const tts = async (name) => gauge(await (await fetch(ttsMetrics)).text(), name);
     const cutBefore = await tts('grill_tts_lines_interrupted_total');
     const spokenBefore = await tts('grill_tts_lines_spoken_total');
     for (let i = 0; i < LINES; i++) {
@@ -93,7 +95,8 @@ async function run(request, room, name, echoCancellation) {
 }
 
 // 013-AC35: with echoCancellation on, a silent human whose microphone hears the call's own audio
-// posts no line while a persona says 10; with it off the loop carries the persona's voice back.
+// posts no line while a persona says 10; with it off the loop carries the persona's voice back and
+// cuts it off.
 test('no persona echo through a listener with echo cancellation', async ({ request }) => {
   test.skip(!ws, 'ECHO_BROWSER_WS is not set: run with PERSONA_VOICE_ECHO_IMAGE');
   test.skip(engine === 'fake', 'needs speech: run on Pocket');
@@ -105,5 +108,5 @@ test('no persona echo through a listener with echo cancellation', async ({ reque
   writeFileSync('test-results/persona-voice/echo.json', JSON.stringify({ on, off }, null, 1) + '\n');
   console.log('echo lines', JSON.stringify({ on, off }));
   expect(on).toEqual([]);
-  expect(off.length).toBeGreaterThan(0);
+  expect(off.cut).toBeGreaterThan(0);
 });

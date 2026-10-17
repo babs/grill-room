@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Lexicon round trip (013-AC33): each seed entry said in a carrier sentence of each language it has
-a form for, 3 times by that language's first default voice, then heard by the room's STT worker.
+a form for, 10 times by that language's first default voice, then heard by the room's STT worker.
 
     lexcheck.py render <dir>                 16 kHz tracks and the manifest the STT replay reads
     lexcheck.py score <out.jsonl> <report>   hits per entry; exits 1 when one entry fails
@@ -24,8 +24,8 @@ from .engine import Engine
 from .roundtrip import render_one
 from .textlayer import Entry, Lang, TextLayer, load_seed
 
-RENDERS = 3
-NEEDED = 2
+RENDERS = 10
+NEEDED = 6
 # The first default voice of each language (013-AC16); both ship as Pocket's own states.
 VOICE: dict[Lang, str] = {"fr": "estelle", "en": "alba"}
 # The names a term is said by, which the STT writes out: they count as heard.

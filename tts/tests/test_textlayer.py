@@ -455,6 +455,10 @@ def test_seed_lexicon() -> None:
     assert by["retry"] == Entry("retry", "en", "ri-traï", "", "")
     assert by["cluster"] == Entry("cluster", "en", "clusteur", "", "")
     assert by["LiveKit"] == Entry("LiveKit", "en", "laïve-kit", "", "Live Kit")
+    # 013-AC33: French forms the STT never heard back are dropped, the English ones kept.
+    assert "flaky" not in by
+    assert by["OKR"] == Entry("OKR", "en", "", "", "O K R")
+    assert by["WebRTC"] == Entry("WebRTC", "en", "", "", "web R T C")
     naturalised = {e.term for e in seed if e.style == "fr"}
     assert {"bug", "web", "email", "parking", "week-end", "OK"} <= naturalised
     assert all(not e.fr_en for e in seed if e.style == "fr")
