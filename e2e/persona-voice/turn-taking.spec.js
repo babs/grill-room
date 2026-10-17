@@ -180,7 +180,7 @@ function silentFrom(rows, t, ms) {
 test('turn-taking in the call', async ({ browser, request }) => {
   test.setTimeout(420_000);
   const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Turns' } })).json();
-  // A short quiet time keeps ten interruptions inside one line.
+  // A short quiet time keeps every interruption inside one line.
   expect((await request.patch(`/api/rooms/${room.id}/speech`, { headers: admin, data: { quiet_ms: 500, resume_s: 20, queue_s: 300 } })).status()).toBe(200);
   const inv = async () => (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
   const alice = await join(browser, await inv(), 'Alice', [meter, silentMic]);
@@ -197,7 +197,9 @@ test('turn-taking in the call', async ({ browser, request }) => {
       const r = await request.post('/api/admin/test/speak', { headers: admin, data: { room: room.id, persona, spoken } });
       expect(r.status()).toBe(204);
     };
-    const sentence = 'one two three four five six.';
+    // Each interruption says the cut sentence again from its start, so the line ends only once a
+    // sentence plays through: two 30-word sentences (the room's 60-word cap) outlast the 22.
+    const sentence = Array(3).fill('one two three four five six seven eight nine ten').join(' ') + '.';
 
     // AC21: Bob talks; the line queued meanwhile starts only after he stopped and the room was quiet.
     // Both bots hear both humans: LiveKit names a speaker to a bot only once it hears their track.
@@ -208,7 +210,7 @@ test('turn-taking in the call', async ({ browser, request }) => {
     const humanLoud = ([t, loud]) => Object.entries(window.levels)
       .some(([id, rows]) => !id.startsWith('persona-') && rows.some(([at, db]) => at >= t && db > loud));
     await expect.poll(() => alice.page.evaluate(humanLoud, [t0, LOUD]), { timeout: 15_000 }).toBe(true);
-    await speak('Grill', Array(10).fill(sentence).join(' '));
+    await speak('Grill', `${sentence} ${sentence}`);
     await talking;
     await expect.poll(async () => onsetAfter((await levels())[ids.Grill] || [], 0), { timeout: 20_000 }).toBeTruthy();
     let L = await levels();
@@ -256,9 +258,11 @@ test('turn-taking in the call', async ({ browser, request }) => {
     const queued = await now();
     await speak('Secretary', 'Noted.');
     await expect.poll(async () => onsetAfter((await levels())[ids.Secretary] || [], queued), { timeout: 120_000 }).toBeTruthy();
+    // Over the 300 ms the silence cap leaves between sentences: a 1 s quiet is the line's end.
+    await expect.poll(async () => silentFrom((await levels())[ids.Grill], queued, 1000), { timeout: 10_000 }).not.toBeNull();
     L = await levels();
     const secStart = onsetAfter(L[ids.Secretary], queued);
-    expect(silentFrom(L[ids.Grill], queued, 300)).toBeLessThanOrEqual(secStart);
+    expect(silentFrom(L[ids.Grill], queued, 1000)).toBeLessThanOrEqual(secStart);
     expect(L[ids.Grill].filter(([at, db]) => at > secStart && db > LOUD)).toEqual([]);
   } finally {
     await alice.ctx.close();
