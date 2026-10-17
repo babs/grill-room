@@ -361,7 +361,8 @@ func (s *Server) prepareTurn(ctx context.Context, room *store.Room, persona *sto
 		return nil, err
 	}
 	t.Prompt = buildPrompt(promptInput{Preamble: preamble, Room: room.Name, Persona: persona.Name, Self: persona.ID, NewSession: t.Resume == "",
-		Handoff: t.Handoff, Msgs: msgs, Changes: changes, Anns: anns, Named: named, AnnCursor: prev.AnnotationCursor, Paths: docPaths(docs), Renamed: renamed})
+		Handoff: t.Handoff, Msgs: msgs, Changes: changes, Anns: anns, Named: named, AnnCursor: prev.AnnotationCursor, Paths: docPaths(docs), Renamed: renamed,
+		SpokenWords: s.speakingWords(room.ID, persona)})
 	return t, nil
 }
 
@@ -830,6 +831,7 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 		s.log.Warn("turn_model_mismatch", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.String("asked", out.Model), zap.String("reported", out.ModelNote))
 	}
 	s.chainLinks(r.Context(), done, out.Synthesis)
+	s.queueSpeech(r.Context(), done, o.Spoken, out.Synthesis)
 	s.bus.Notify(d.RoomID)
 	s.drain(r.Context(), d.RoomID)
 	s.log.Info("turn_done", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.Strings("revised", done.Report.Revised),

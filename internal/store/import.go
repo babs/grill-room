@@ -3,6 +3,7 @@ package store
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -26,6 +27,7 @@ import (
 	"github.com/babs/grill-room/internal/render"
 	"github.com/babs/grill-room/internal/skill"
 	"github.com/babs/grill-room/internal/turn"
+	voicecat "github.com/babs/grill-room/internal/voices"
 )
 
 // ErrImportRefused wraps every reason an import is refused; the message says which. Nothing is
@@ -408,9 +410,11 @@ func (im *importer) personasStep(ps []xPersona) error {
 		}
 		var id int64
 		err = im.tx.QueryRowContext(im.ctx, `INSERT INTO room_personas(room_id, template_id, template_version, name, badge, colour, text, model, effort,
-			every_n, self_call, autocompact, created_at, every_voice, every_minutes, watches_notes, mark_msg_id, mark_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,`+markNow+`) RETURNING id`,
+			every_n, self_call, autocompact, created_at, every_voice, every_minutes, watches_notes, speaks, voice, voice_rate, mark_msg_id, mark_at_ms)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,`+markNow+`) RETURNING id`,
 			append(append([]any{im.room, tpl, p.TemplateVersion}, p.PersonaFields.args()...), nullID(int64(p.EveryN)), p.SelfCall, p.Autocompact, p.CreatedAt,
-				nullInt(p.EveryVoice), nullInt(p.EveryMinutes), p.WatchesNotes, time.Now().UnixMilli())...).Scan(&id)
+				nullInt(p.EveryVoice), nullInt(p.EveryMinutes), p.WatchesNotes, p.Speaks == nil || *p.Speaks, voicecat.Known(p.Voice),
+				cmp.Or(p.VoiceRate, 1), time.Now().UnixMilli())...).Scan(&id)
 		if err != nil {
 			return refuseImport("persona %s: %v", p.Name, err)
 		}

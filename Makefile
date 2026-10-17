@@ -28,7 +28,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: ui-tools ui-vendor ui-check build e2e-build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-device-voice e2e-agent-live e2e-mcp-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image stt-image-test stt-image-e2e cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: ui-tools ui-vendor ui-check build e2e-build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-device-voice e2e-persona-voice e2e-agent-live e2e-mcp-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image stt-image-test stt-image-e2e tts-test tts-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -114,6 +114,12 @@ e2e-device-voice: build e2e-build
 	bin/$(APP_NAME) models fetch --dir '$(DEVICE_STT_MODEL_DIR)'
 	cd e2e && pnpm install --frozen-lockfile && GRILL_ROOM_E2E_MODEL_DIR='$(DEVICE_STT_MODEL_DIR)' device-voice/run.sh $(DEVICE_VOICE_ARGS)
 
+# 013: a persona speaks in the call through LiveKit, with the STT worker (grill-stt:local) and the tts
+# pod on its fake engine, on its own loopback stack (e2e/persona-voice/run.sh). With
+# PERSONA_VOICE_TTS_IMAGE=grill-tts:local the pod runs the real engine instead.
+e2e-persona-voice: build e2e-build
+	cd e2e && pnpm install --frozen-lockfile && persona-voice/run.sh $(PERSONA_VOICE_ARGS)
+
 # Agent turns with real daemons against the compose stack: run `make dev-up sandbox-image` first.
 # Spends four to eight real Claude requests (haiku) with this machine's Claude Code login, plus at
 # most four for the skill turn (skills-live.spec.js, three when last run).
@@ -175,6 +181,25 @@ e2e-push:
 # Hugging Face cache, and skips otherwise.
 stt-test:
 	cd stt && uv run ruff check . && uv run ruff format --check . && uv run mypy grill_stt tests scripts && uv run pytest
+
+# The tts pod (spec 013): lint, types and unit tests, on the fake engine. No weights needed.
+tts-test:
+	cd tts && uv run ruff check . && uv run ruff format --check . && uv run mypy grill_tts tests && uv run pytest
+
+# The tts image holds the gated Pocket TTS weights: it goes to a private registry only (spec 013).
+# HF_TOKEN_FILE is a file with a Hugging Face read token whose account accepted Kyutai's terms; it
+# reaches the build as a BuildKit secret only.
+TTS_BUILD_THREADS ?= 2
+tts-image:
+	@test -n "$(HF_TOKEN_FILE)" && test -r "$(HF_TOKEN_FILE)" || { echo "HF_TOKEN_FILE must name a readable token file, see .env.example" >&2; exit 1; }
+	DOCKER_BUILDKIT=1 docker build -t grill-tts:local \
+	  --secret id=hf,src='$(HF_TOKEN_FILE)' \
+	  --build-arg BUILD_THREADS=$(TTS_BUILD_THREADS) \
+	  --build-arg VERSION=$(VERSION) \
+	  --build-arg COMMIT_HASH=$(COMMIT_HASH) \
+	  --build-arg BUILD_TIMESTAMP=$(BUILD_TS) \
+	  --build-arg PROJECT_URL=$(PROJECT_URL) \
+	  tts/
 
 # The scenario tool (scenarios/, 004-AC16): lint, types and unit tests. No audio, no Claude request.
 scenarios-test:
@@ -304,7 +329,7 @@ sandbox-push: sandbox-image
 # existing namespace. Set KUBECONFIG explicitly: the targets refuse to fall back to the default one.
 K8S_NAMESPACE ?= grill-room
 K8S_OUT       := deploy/k8s/out
-K8S_VARS      := K8S_DOMAIN K8S_STORAGE_CLASS GRILL_ROOM_IMAGE GRILL_STT_IMAGE GRILL_ROOM_ADMIN_TOKEN STT_TOKEN LIVEKIT_API_KEY LIVEKIT_API_SECRET
+K8S_VARS      := K8S_DOMAIN K8S_STORAGE_CLASS GRILL_ROOM_IMAGE GRILL_STT_IMAGE GRILL_TTS_IMAGE GRILL_ROOM_ADMIN_TOKEN STT_TOKEN TTS_TOKEN LIVEKIT_API_KEY LIVEKIT_API_SECRET
 KUBECTL        = kubectl -n '$(K8S_NAMESPACE)'
 # Optional: an empty GRILL_ROOM_SMTP_ADDR turns email sign-in off. The NetworkPolicy opens
 # K8S_SMTP_PORT to the namespace K8S_SMTP_NAMESPACE, where the relay runs.
@@ -314,24 +339,26 @@ K8S_OPTIONAL  := GRILL_ROOM_SANDBOX_IMAGE GRILL_ROOM_TRUSTED_PROXIES GRILL_ROOM_
 # Exported to the render recipe only: no other recipe sees the secrets in its environment.
 $(foreach v,$(K8S_VARS) $(K8S_OPTIONAL),$(eval k8s-render: export $(v) := $$($(v))))
 
-# The room server and STT images, pushed for the lab; prints the .env lines to paste.
-k8s-push: docker-build stt-image
+# The room server, STT and tts images, pushed for the lab; prints the .env lines to paste. REGISTRY
+# must be private: the tts image holds gated weights (spec 013).
+k8s-push: docker-build stt-image tts-image
 	$(call push,$(APP_NAME):local,server,GRILL_ROOM_IMAGE)
 	$(call push,grill-stt:local,stt,GRILL_STT_IMAGE)
+	$(call push,grill-tts:local,tts,GRILL_TTS_IMAGE)
 
 # Secrets land in $(K8S_OUT) (untracked, owner-only): the templates hold none.
 k8s-render:
 	@for v in $(K8S_VARS); do test -n "$$(printenv "$$v")" || { echo "$$v is not set, see .env.example" >&2; exit 1; }; done
-	@for v in GRILL_ROOM_IMAGE GRILL_STT_IMAGE; do printenv "$$v" | grep -Eq '@sha256:[0-9a-f]{64}$$' \
+	@for v in GRILL_ROOM_IMAGE GRILL_STT_IMAGE GRILL_TTS_IMAGE; do printenv "$$v" | grep -Eq '@sha256:[0-9a-f]{64}$$' \
 	  || { echo "$$v must be pinned by digest: run make k8s-push" >&2; exit 1; }; done
-	@for v in GRILL_ROOM_ADMIN_TOKEN STT_TOKEN LIVEKIT_API_KEY LIVEKIT_API_SECRET; do printenv "$$v" | grep -Eq '^[A-Za-z0-9._~+/=-]+$$' \
+	@for v in GRILL_ROOM_ADMIN_TOKEN STT_TOKEN TTS_TOKEN LIVEKIT_API_KEY LIVEKIT_API_SECRET; do printenv "$$v" | grep -Eq '^[A-Za-z0-9._~+/=-]+$$' \
 	  || { echo "$$v holds characters the Secret template cannot quote: use [A-Za-z0-9._~+/=-]" >&2; exit 1; }; done
 	@printenv K8S_SMTP_PORT | grep -Eq '^[0-9]+$$' || { echo "K8S_SMTP_PORT must be a port number" >&2; exit 1; }
 	@printenv GRILL_ROOM_SMTP_FROM | grep -q '"' && { echo "GRILL_ROOM_SMTP_FROM must not hold a double quote" >&2; exit 1; } || true
 	rm -rf '$(K8S_OUT)' && (umask 077 && mkdir -p '$(K8S_OUT)')
 	@for f in deploy/k8s/*.yaml; do \
 	  (umask 077 && ROOM_HOST=grill-room.$$K8S_DOMAIN LIVEKIT_HOST=grill-room-livekit.$$K8S_DOMAIN TURN_HOST=grill-room-turn.$$K8S_DOMAIN \
-	    envsubst '$${K8S_STORAGE_CLASS} $${GRILL_ROOM_IMAGE} $${GRILL_STT_IMAGE} $${GRILL_ROOM_SANDBOX_IMAGE} $${GRILL_ROOM_TRUSTED_PROXIES} $${GRILL_ROOM_SMTP_ADDR} $${GRILL_ROOM_SMTP_FROM} $${K8S_SMTP_NAMESPACE} $${K8S_SMTP_PORT} $${ROOM_HOST} $${LIVEKIT_HOST} $${TURN_HOST} $${GRILL_ROOM_ADMIN_TOKEN} $${STT_TOKEN} $${LIVEKIT_API_KEY} $${LIVEKIT_API_SECRET}' \
+	    envsubst '$${K8S_STORAGE_CLASS} $${GRILL_ROOM_IMAGE} $${GRILL_STT_IMAGE} $${GRILL_TTS_IMAGE} $${GRILL_ROOM_SANDBOX_IMAGE} $${GRILL_ROOM_TRUSTED_PROXIES} $${GRILL_ROOM_SMTP_ADDR} $${GRILL_ROOM_SMTP_FROM} $${K8S_SMTP_NAMESPACE} $${K8S_SMTP_PORT} $${ROOM_HOST} $${LIVEKIT_HOST} $${TURN_HOST} $${GRILL_ROOM_ADMIN_TOKEN} $${STT_TOKEN} $${TTS_TOKEN} $${LIVEKIT_API_KEY} $${LIVEKIT_API_SECRET}' \
 	    < $$f > '$(K8S_OUT)'/$${f##*/}) || exit 1; \
 	done
 	@echo "rendered $(K8S_OUT): https://grill-room.$$K8S_DOMAIN/"
@@ -351,12 +378,12 @@ k8s-delete: k8s-render k8s-check
 # 007-AC19: the STT queue alert and its scrape, for a cluster running the VictoriaMetrics operator.
 K8S_MONITORING_NAMESPACE ?= monitoring
 k8s-monitoring: k8s-check
-	K8S_MONITORING_NAMESPACE='$(K8S_MONITORING_NAMESPACE)' envsubst '$${K8S_MONITORING_NAMESPACE}' \
-	  < deploy/monitoring/stt.yaml | $(KUBECTL) apply -f -
+	for f in deploy/monitoring/*.yaml; do K8S_MONITORING_NAMESPACE='$(K8S_MONITORING_NAMESPACE)' envsubst '$${K8S_MONITORING_NAMESPACE}' \
+	  < "$$f" | $(KUBECTL) apply -f - || exit 1; done
 
 k8s-monitoring-delete: k8s-check
-	K8S_MONITORING_NAMESPACE='$(K8S_MONITORING_NAMESPACE)' envsubst '$${K8S_MONITORING_NAMESPACE}' \
-	  < deploy/monitoring/stt.yaml | $(KUBECTL) delete --ignore-not-found -f -
+	for f in deploy/monitoring/*.yaml; do K8S_MONITORING_NAMESPACE='$(K8S_MONITORING_NAMESPACE)' envsubst '$${K8S_MONITORING_NAMESPACE}' \
+	  < "$$f" | $(KUBECTL) delete --ignore-not-found -f - || exit 1; done
 
 # Office fixtures for the pandoc tests, written by the pandoc release the image ships.
 FIXTURES := internal/convert/testdata

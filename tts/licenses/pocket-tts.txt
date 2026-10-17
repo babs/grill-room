@@ -1,0 +1,13 @@
+Pocket TTS 3.3.0, by Kyutai.
+  https://github.com/kyutai-labs/pocket-tts
+  https://huggingface.co/kyutai/pocket-tts
+
+Code: MIT, its LICENSE file is in python/pocket_tts-3.3.0/.
+Weights: Creative Commons Attribution 4.0 International (CC-BY-4.0), CC-BY-4.0.txt here.
+  The French and English models with voice cloning (kyutai/pocket-tts), the tokenizers and the
+  catalogue voice states (kyutai/pocket-tts-without-voice-cloning), each at the revision and
+  sha256 listed in models.lock.json here. grill-room uses them unmodified.
+  Its use is subject to Kyutai's terms for the gated weights: no impersonation without consent.
+  grill-room ships catalogue voices only and accepts no uploaded voice.
+
+Voices: voices.txt here, each with its source, licence and credit.

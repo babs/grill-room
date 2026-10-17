@@ -111,6 +111,31 @@ A participant on a capable desktop may tick "Transcribe on this device" (spec 01
 | `grill_room_voice_lines_total{source}` | voice lines stored, `device` or `server` |
 | `grill_room_voice_lines_deduped_total{source}` | lines dropped as a repeat of the other source's, by the dropped line's source |
 
+## Persona voices, TL;DR
+
+A persona with "Speaks in the call" on says a short line in the LiveKit call after its turn (spec 013).
+
+- What: its `spoken.md`, sanitised and cut at a sentence end by the room server, or a summary of its actions (`internal/web/speech.go`). Never the chat text or a document. No log carries the words.
+- Flow: the room server queues the line in memory; the `tts` pod reads `GET /api/tts/events` with its own token (`GRILL_ROOM_TTS_TOKEN`), resumes after `Last-Event-ID`, and heartbeats states back every 2 s. A line no pod took within the room's queue maximum (40 s) is dropped as `no_service`.
+- Bots: one LiveKit participant per speaking persona, identity `persona-<id>`, kind `agent`, while a human is in the call and not deafened; it leaves 60 s after. It subscribes to the humans' audio, without which LiveKit never names them as speakers (S14). The STT worker never subscribes to an agent and leaves a room where only agents remain.
+- Engine: Pocket TTS 3.3.0, French and English models in one process; a rule-based text layer reads numbers, acronyms and English tech words in each sentence's language (S14b). The audio chain levels each voice, shortens pauses to 300 ms, applies the persona's rate without changing its pitch, and doubles 24 kHz to 48 kHz.
+- Sizing: one synthesis takes one torch thread at RTF 0.47 (S14, workstation E-cores), so 2 CPUs speak two rooms at once. Two threads under a 2-CPU limit starved LiveKit's media threads and left gaps; one does not.
+
+| Metric | What it says |
+|---|---|
+| `grill_room_tts_lines_queued_total` (room server) | lines personas were to say |
+| `grill_room_tts_lines_dropped_total{reason="no_service"}` (room server) | lines no pod took in time |
+| `grill_room_tts_pod_up` (room server) | 1 while the pod heartbeats |
+| `grill_tts_lines_received_total`, `grill_tts_lines_spoken_total` | lines taken, lines said to their end |
+| `grill_tts_lines_interrupted_total`, `grill_tts_lines_resumed_total` | humans cutting a persona off, and lines picked up again |
+| `grill_tts_lines_dropped_total{reason}` | `interrupted`, `stale`, `no_listener`, `no_service`, `error` |
+| `grill_tts_queue_wait_seconds` | a line's arrival to its start |
+| `grill_tts_first_audio_seconds` | a line's arrival to its first frame on the track |
+| `grill_tts_stop_seconds` | LiveKit naming a human speaker to the persona's audio cleared |
+| `grill_tts_synthesis_rtf` | synthesis time over audio time, per span |
+| `grill_tts_underruns_total` | gaps over 100 ms inside a sentence: synthesis fell behind |
+| `grill_tts_bots`, `grill_tts_bots_joined_total` | bots in a call now, and bots that joined |
+
 ## A turn, end to end
 
 1. A participant presses a persona's button: `POST /api/rooms/{room}/turns`. While another turn runs, the press waits in the room's queue.

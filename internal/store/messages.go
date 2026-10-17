@@ -173,3 +173,23 @@ func (s *Store) MessageChanges(ctx context.Context, roomID string, seen, after, 
 	}
 	return out, rows.Err()
 }
+
+// RecentText returns the bodies of the room's last n chat, voice and agent lines, newest first:
+// what a room's language is guessed from (013-AC16).
+func (s *Store) RecentText(ctx context.Context, roomID string, n int) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT body FROM messages WHERE room_id = ? AND deleted_at IS NULL
+		AND kind IN ('voice', 'text', 'agent') ORDER BY id DESC LIMIT ?`, roomID, n)
+	if err != nil {
+		return nil, fmt.Errorf("recent text: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var b string
+		if err := rows.Scan(&b); err != nil {
+			return nil, fmt.Errorf("recent text: %w", err)
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
