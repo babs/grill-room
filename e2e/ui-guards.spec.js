@@ -311,6 +311,17 @@ test('phone: a tab bar that overflows folds into a menu', async ({ browser, requ
         return rest.filter((r) => r.top >= menu.bottom - 0.5).length;
       });
       expect(below, `${name}: header items on a second row`).toBe(0);
+      // The header's last control (Sign out, the avatar) keeps to the right edge, on a wider phone
+      // too: at 390 px a long title alone pushes it there.
+      for (const width of [phone.width, 480]) {
+        await page.setViewportSize({ ...phone, width });
+        const gap = await page.locator('.app-header').evaluate((h) => {
+          const last = [...h.children].filter((c) => c.getClientRects().length).at(-1).getBoundingClientRect();
+          return h.getBoundingClientRect().right - parseFloat(getComputedStyle(h).paddingRight) - last.right;
+        });
+        expect(gap, `${name}: last header item off the right edge at ${width} px`).toBeLessThanOrEqual(1);
+      }
+      await page.setViewportSize(phone);
       // The header ☰ stays in reach at the bottom of a long page, as the sticky bar did.
       await nav.evaluate((n) => {
         const spacer = Object.assign(document.createElement('div'), { className: 'guard-spacer' });

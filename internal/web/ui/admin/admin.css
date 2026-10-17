@@ -1,6 +1,6 @@
 /* Layout of /admin. Colours, sizes and controls come from /static/kit/tokens.css (docs/design.md). */
 body { overflow-wrap: anywhere; }
-.app-header button { margin-left: auto; }
+#logout { margin-left: auto; }
 h2 { font-size: var(--fs-lg); margin: var(--sp-5) 0 var(--sp-2); }
 h3 { font-size: var(--fs-md); margin: var(--sp-4) 0 var(--sp-1); }
 .login { max-width: 28rem; margin: var(--sp-7) auto; padding: var(--sp-4); }
@@ -42,7 +42,6 @@ form.limit input { width: 8rem; }
 .list-row.head [aria-sort=ascending] button.sort::after { transform: translateY(2px) rotate(-135deg); }
 .list-row.head [aria-sort=descending] button.sort::after { transform: translateY(-2px) rotate(45deg); }
 @media (max-width: 40rem) {
-  .app-header button { margin-left: 0; }
   /* A card keeps to its name and a line or two of values (004b-AC5): the creation and sign-in
      dates, the value labels of the audit and long details give way. */
   #rooms .main .meta { display: none; }
