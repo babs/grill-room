@@ -17,5 +17,6 @@
 | [011](011-profile-recovery.md) | Profile identity and recovery | shipped |
 | [011b](011b-profile-rework.md) | Profile page rework | shipped |
 | [012](012-agent-api.md) | Agent access: personal API tokens and a built-in MCP server | shipped |
+| [013](013-persona-voices.md) | Personas speak in the call | in progress |
 | [014](014-network-access.md) | Agents' network access: allow every website, blocked requests in the chat, claude.ai connectors | in progress |
 | [016](016-membership.md) | Membership: remove a person, invites apart from seats, mentions on edit | shipped |

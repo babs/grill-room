@@ -100,6 +100,10 @@ spec:
             - name: GRILL_ROOM_STT_TOKEN
               valueFrom:
                 secretKeyRef: { name: grill-room, key: stt-token }
+            # Personas speak in the call (spec 013): on in the lab.
+            - name: GRILL_ROOM_TTS_TOKEN
+              valueFrom:
+                secretKeyRef: { name: grill-room, key: tts-token }
             - name: GRILL_ROOM_SANDBOX_IMAGE
               value: "${GRILL_ROOM_SANDBOX_IMAGE}"
             # The ingress controller's pod CIDR: its X-Forwarded-For names the client (005-AC20).

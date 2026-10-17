@@ -31,6 +31,10 @@ const (
 	RepliesFile = "replies.json"
 	// NewAnnotationsFile is where the agent opens annotations of its own.
 	NewAnnotationsFile = "annotations-new.json"
+	// SpokenFile is what the agent says in the audio call after its turn (013-AC2).
+	SpokenFile = "spoken.md"
+	// MaxSpokenBytes caps it: 60 words fit many times over.
+	MaxSpokenBytes = 4096
 	// PluginName names the plugin that carries a persona's active skills: claude -p shows them as
 	// "grill-room:<skill>".
 	PluginName = "grill-room"
@@ -206,7 +210,7 @@ func ValidPath(p string) bool { return p != "." && fs.ValidPath(p) }
 // NeedsContent reports whether the server needs a changed file's bytes; for any other change the
 // path is enough, which keeps an edited 20 MB upload out of the result.
 func NeedsContent(p string) bool {
-	return p == RepliesFile || p == NewAnnotationsFile || strings.HasPrefix(p, DocsDir+"/")
+	return p == RepliesFile || p == NewAnnotationsFile || p == SpokenFile || strings.HasPrefix(p, DocsDir+"/")
 }
 
 // Doc is an agent document as a turn wrote it.
@@ -238,6 +242,8 @@ type Outcome struct {
 	Docs        []Doc
 	Replies     []Reply
 	Annotations []NewAnnotation
+	// Spoken is spoken.md as the agent wrote it, unsanitised; empty when it wrote none.
+	Spoken string
 	// Rejected lists changed upload paths; Ignored, changes outside the contract with why.
 	Rejected []string
 	Ignored  []string
@@ -264,6 +270,12 @@ func Classify(changes []Change) Outcome {
 				o.Ignored = append(o.Ignored, fmt.Sprintf("%s: %v", p, err))
 			}
 			o.Annotations = append(o.Annotations, anns...)
+		case p == SpokenFile && !c.Deleted:
+			if len(c.Content) > MaxSpokenBytes || !utf8.Valid(c.Content) {
+				o.Ignored = append(o.Ignored, fmt.Sprintf("%s: over %d bytes or not UTF-8", p, MaxSpokenBytes))
+				continue
+			}
+			o.Spoken = string(c.Content)
 		case strings.HasPrefix(p, DocsDir+"/"):
 			d, err := doc(p, c)
 			if err != nil {

@@ -27,7 +27,8 @@ spec:
         - { port: 53, protocol: UDP }
         - { port: 53, protocol: TCP }
 ---
-# Browsers and daemons reach the room through traefik; the STT worker posts voice lines.
+# Browsers and daemons reach the room through traefik; the STT worker posts voice lines; the tts pod
+# reads its lines and posts its heartbeat.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -45,6 +46,9 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: stt
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: tts
       ports:
         - { port: 7680, protocol: TCP }
   # LiveKit's API: kick revoked participants, close deleted rooms.
@@ -119,21 +123,27 @@ spec:
               app.kubernetes.io/name: grill-room
       ports:
         - { port: 7880, protocol: TCP }
-    # The STT worker joins rooms as a participant: signalling, then media over ICE.
+    # The STT worker and the personas' bots join rooms as participants: signalling, then media over ICE.
     - from:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: stt
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: tts
       ports:
         - { port: 7880, protocol: TCP }
         - { port: 7881, protocol: TCP }
         - { port: 7882, protocol: UDP }
-  # ICE checks from the SFU to the worker's candidates, on ports the worker picks.
+  # ICE checks from the SFU to the worker's and the bots' candidates, on ports they pick.
   egress:
     - to:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: stt
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: tts
       ports:
         - { port: 1024, endPort: 65535, protocol: UDP }
 ---
@@ -176,3 +186,37 @@ spec:
               kubernetes.io/metadata.name: opentelemetry-collector
       ports:
         - { port: 4317, protocol: TCP }
+---
+# The tts pod reaches the room server and LiveKit only (013-AC9); LiveKit's media comes back over
+# ICE. Its metrics scrape is opened by deploy/monitoring/tts.yaml.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tts
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: tts
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: livekit
+      ports:
+        - { port: 1024, endPort: 65535, protocol: UDP }
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grill-room
+      ports:
+        - { port: 7680, protocol: TCP }
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: livekit
+      ports:
+        - { port: 7880, protocol: TCP }
+        - { port: 7881, protocol: TCP }
+        - { port: 7882, protocol: UDP }

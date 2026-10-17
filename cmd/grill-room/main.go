@@ -89,6 +89,8 @@ type Config struct {
 	LiveKitAPISecret string
 	// STTToken is the STT worker's service token; empty refuses every worker.
 	STTToken string
+	// TTSToken is the tts pod's service token: set, personas speak in the call (013-AC13).
+	TTSToken string
 	// TurnTimeout bounds one agent turn.
 	TurnTimeout time.Duration
 	// NotesWatchDelay is how long the notes watcher waits after the last new note message.
@@ -163,6 +165,7 @@ func loadConfig() (Config, error) {
 		LiveKitAPIKey:     os.Getenv("GRILL_ROOM_LIVEKIT_API_KEY"),
 		LiveKitAPISecret:  os.Getenv("GRILL_ROOM_LIVEKIT_API_SECRET"),
 		STTToken:          os.Getenv("GRILL_ROOM_STT_TOKEN"),
+		TTSToken:          os.Getenv("GRILL_ROOM_TTS_TOKEN"),
 		LogLevel:          getEnv("LOG_LEVEL", "info"),
 		LogFormat:         getEnv("LOG_FORMAT", "auto"),
 		DaemonDir:         os.Getenv("GRILL_ROOM_DAEMON_DIR"),
@@ -242,6 +245,9 @@ func (c Config) validateVoice() error {
 		if c.STTToken != "" {
 			return errors.New("GRILL_ROOM_STT_TOKEN needs GRILL_ROOM_LIVEKIT_URL")
 		}
+		if c.TTSToken != "" {
+			return errors.New("GRILL_ROOM_TTS_TOKEN needs GRILL_ROOM_LIVEKIT_URL")
+		}
 		return nil
 	}
 	if u, err := url.Parse(c.LiveKitURL); err != nil || (u.Scheme != "wss" && u.Scheme != "ws") || u.Host == "" {
@@ -313,6 +319,14 @@ func (c Config) voice() *web.Voice {
 		v.STTTokenHash = web.HashToken(c.STTToken)
 	}
 	return v
+}
+
+// ttsTokenHash is the tts pod's token hash, "" when personas do not speak.
+func (c Config) ttsTokenHash() string {
+	if c.TTSToken == "" {
+		return ""
+	}
+	return web.HashToken(c.TTSToken)
 }
 
 func main() {
@@ -406,6 +420,7 @@ func run() error {
 		MaxImportBytes:     cfg.MaxImportMB << 20,
 		ToMarkdown:         convert.NewPandoc(cfg.Pandoc, cfg.PandocTimeout).ToMarkdown,
 		Voice:              cfg.voice(),
+		TTSTokenHash:       cfg.ttsTokenHash(),
 		Release:            release,
 		PrevRelease:        prev,
 		SandboxImage:       cfg.SandboxImage,
@@ -488,6 +503,22 @@ func newRegistry(b *bus.Bus, srv *web.Server) *prometheus.Registry {
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_device_stt_participants", Help: "Participants whose voice their own device transcribes now."},
 			func() float64 { return float64(srv.DeviceSTTParticipants()) }),
 	)
+	if _, ok := srv.TTSStats(); ok {
+		stat := func() web.TTSStats { st, _ := srv.TTSStats(); return st }
+		reg.MustRegister(
+			prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_tts_lines_queued_total", Help: "Lines personas were to say in the call (013-AC20)."},
+				func() float64 { return float64(stat().Queued) }),
+			prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_tts_lines_dropped_total",
+				Help: "Lines dropped before the tts pod took them (013-AC20).", ConstLabels: prometheus.Labels{"reason": "no_service"}},
+				func() float64 { return float64(stat().NoService) }),
+			prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_tts_pod_up", Help: "1 while the tts pod heartbeats (013-AC14)."},
+				func() float64 {
+					if stat().PodUp {
+						return 1
+					}
+					return 0
+				}))
+	}
 	for _, source := range web.VoiceSources {
 		reg.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_voice_lines_total",
 			Help: "Voice lines stored, by who transcribed them.", ConstLabels: prometheus.Labels{"source": source}},

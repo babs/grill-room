@@ -1,0 +1,463 @@
+{
+ "_note": "013-AC18 round trip: spike S14b's French set and English controls (sentences.json there), plus S14's four English sentences. terms: the words checked one by one, with the spellings that count as heard.",
+ "sentences": [
+  {
+   "id": "fr01",
+   "lang": "fr",
+   "text": "J'ai repoussé le rollout à jeudi, le feature flag reste coupé en staging.",
+   "terms": {
+    "rollout": [
+     "rollout",
+     "roll out"
+    ],
+    "feature flag": [
+     "feature flag",
+     "feature flags"
+    ],
+    "staging": [
+     "staging"
+    ]
+   }
+  },
+  {
+   "id": "fr02",
+   "lang": "fr",
+   "text": "Le sidecar LiveKit renvoie des 502 dès que le pod Kubernetes redémarre.",
+   "terms": {
+    "sidecar": [
+     "sidecar",
+     "side car"
+    ],
+    "LiveKit": [
+     "livekit",
+     "live kit"
+    ],
+    "502": [
+     "502",
+     "cinq cent deux"
+    ],
+    "Kubernetes": [
+     "kubernetes"
+    ]
+   }
+  },
+  {
+   "id": "fr03",
+   "lang": "fr",
+   "text": "Alice a écrit dans la merge request, je cite, ship it and we'll fix it later.",
+   "terms": {
+    "merge request": [
+     "merge request"
+    ],
+    "ship it": [
+     "ship it"
+    ],
+    "fix it later": [
+     "fix it later"
+    ]
+   }
+  },
+  {
+   "id": "fr04",
+   "lang": "fr",
+   "text": "La latence p95 est passée de 180 à 420 millisecondes depuis la version 2.3.1.",
+   "terms": {
+    "p95": [
+     "p95",
+     "p 95",
+     "p quatre-vingt-quinze"
+    ],
+    "180": [
+     "180",
+     "cent quatre-vingts"
+    ],
+    "420": [
+     "420",
+     "quatre cent vingt",
+     "quatre cents vingt"
+    ],
+    "2.3.1": [
+     "2.3.1",
+     "2 3 1",
+     "deux point trois point un"
+    ]
+   }
+  },
+  {
+   "id": "fr05",
+   "lang": "fr",
+   "text": "ArgoCD a synchronisé la mauvaise branche, donc j'ai fait un rollback à la main.",
+   "terms": {
+    "ArgoCD": [
+     "argocd",
+     "argo cd",
+     "argo"
+    ],
+    "rollback": [
+     "rollback",
+     "roll back"
+    ]
+   }
+  },
+  {
+   "id": "fr06",
+   "lang": "fr",
+   "text": "On a sorti trois tickets du backlog pour ce sprint, dont le fix sur l'OAuth.",
+   "terms": {
+    "backlog": [
+     "backlog",
+     "back log"
+    ],
+    "sprint": [
+     "sprint"
+    ],
+    "fix": [
+     "fix"
+    ],
+    "OAuth": [
+     "oauth",
+     "o auth"
+    ]
+   }
+  },
+  {
+   "id": "fr07",
+   "lang": "fr",
+   "text": "Bob, tu peux relancer le pipeline CI avant le code freeze de vendredi ?",
+   "terms": {
+    "pipeline": [
+     "pipeline"
+    ],
+    "CI": [
+     "ci",
+     "c i"
+    ],
+    "code freeze": [
+     "code freeze"
+    ]
+   }
+  },
+  {
+   "id": "fr08",
+   "lang": "fr",
+   "text": "J'ai mis un retry avec un backoff exponentiel sur le webhook GitHub.",
+   "terms": {
+    "retry": [
+     "retry"
+    ],
+    "backoff": [
+     "backoff",
+     "back off"
+    ],
+    "webhook": [
+     "webhook",
+     "web hook"
+    ],
+    "GitHub": [
+     "github",
+     "git hub"
+    ]
+   }
+  },
+  {
+   "id": "fr09",
+   "lang": "fr",
+   "text": "Le health check du load balancer échoue, le endpoint renvoie une 404.",
+   "terms": {
+    "health check": [
+     "health check",
+     "healthcheck"
+    ],
+    "load balancer": [
+     "load balancer"
+    ],
+    "endpoint": [
+     "endpoint",
+     "end point"
+    ],
+    "404": [
+     "404",
+     "quatre cent quatre"
+    ]
+   }
+  },
+  {
+   "id": "fr10",
+   "lang": "fr",
+   "text": "Le SLO de 99,9 % tient, mais l'error budget fond trop vite cette semaine.",
+   "terms": {
+    "SLO": [
+     "slo",
+     "s l o"
+    ],
+    "99,9": [
+     "99,9",
+     "99.9",
+     "quatre-vingt-dix-neuf virgule neuf"
+    ],
+    "error budget": [
+     "error budget"
+    ]
+   }
+  },
+  {
+   "id": "fr11",
+   "lang": "fr",
+   "text": "Comme dit Dana, it's not a bug, it's a feature, mais là c'est un vrai bug.",
+   "terms": {
+    "it's not a bug": [
+     "it's not a bug"
+    ],
+    "it's a feature": [
+     "it's a feature"
+    ]
+   }
+  },
+  {
+   "id": "fr12",
+   "lang": "fr",
+   "text": "On passe de PostgreSQL 15 à 17 et on garde Redis pour le cache.",
+   "terms": {
+    "PostgreSQL": [
+     "postgresql",
+     "postgres",
+     "postgre sql",
+     "postgre"
+    ],
+    "15": [
+     "15",
+     "quinze"
+    ],
+    "17": [
+     "17",
+     "dix-sept"
+    ],
+    "Redis": [
+     "redis"
+    ],
+    "cache": [
+     "cache"
+    ]
+   }
+  },
+  {
+   "id": "fr13",
+   "lang": "fr",
+   "text": "Le canary à 10 % est vert, j'ouvre le trafic à 50 % demain matin.",
+   "terms": {
+    "canary": [
+     "canary",
+     "canari"
+    ],
+    "10": [
+     "10",
+     "dix"
+    ],
+    "50": [
+     "50",
+     "cinquante"
+    ]
+   }
+  },
+  {
+   "id": "fr14",
+   "lang": "fr",
+   "text": "Le README dit npm install, mais on utilise pnpm partout depuis la v4.",
+   "terms": {
+    "README": [
+     "readme",
+     "read me"
+    ],
+    "npm install": [
+     "npm install"
+    ],
+    "pnpm": [
+     "pnpm"
+    ],
+    "v4": [
+     "v4",
+     "v 4",
+     "version 4",
+     "v quatre",
+     "version quatre"
+    ]
+   }
+  },
+  {
+   "id": "fr15",
+   "lang": "fr",
+   "text": "J'ai approuvé la pull request, il manque juste un test end-to-end sur le login.",
+   "terms": {
+    "pull request": [
+     "pull request"
+    ],
+    "end-to-end": [
+     "end-to-end",
+     "end to end"
+    ],
+    "login": [
+     "login",
+     "log in"
+    ]
+   }
+  },
+  {
+   "id": "fr16",
+   "lang": "fr",
+   "text": "Le cluster tourne sur AWS en eu-west-3, avec 3 nœuds et 12 Go de RAM chacun.",
+   "terms": {
+    "cluster": [
+     "cluster"
+    ],
+    "AWS": [
+     "aws",
+     "a w s"
+    ],
+    "eu-west-3": [
+     "eu-west-3",
+     "eu west 3",
+     "eu west trois"
+    ],
+    "12": [
+     "12",
+     "douze"
+    ],
+    "RAM": [
+     "ram"
+    ]
+   }
+  },
+  {
+   "id": "fr17",
+   "lang": "fr",
+   "text": "J'ai mergé la branche sur GitLab, le deploy part en prod après la review.",
+   "terms": {
+    "mergé": [
+     "mergé",
+     "merger",
+     "merge",
+     "mergée"
+    ],
+    "GitLab": [
+     "gitlab",
+     "git lab"
+    ],
+    "deploy": [
+     "deploy",
+     "déploie"
+    ],
+    "review": [
+     "review"
+    ]
+   }
+  },
+  {
+   "id": "en01",
+   "lang": "en",
+   "text": "I pushed the rollout to Thursday, and the feature flag stays off in staging.",
+   "terms": {
+    "rollout": [
+     "rollout",
+     "roll out"
+    ],
+    "feature flag": [
+     "feature flag"
+    ],
+    "staging": [
+     "staging"
+    ]
+   }
+  },
+  {
+   "id": "en02",
+   "lang": "en",
+   "text": "The LiveKit sidecar returns a 502 whenever the Kubernetes pod restarts.",
+   "terms": {
+    "LiveKit": [
+     "livekit",
+     "live kit"
+    ],
+    "sidecar": [
+     "sidecar",
+     "side car"
+    ],
+    "502": [
+     "502",
+     "five oh two",
+     "five hundred two"
+    ],
+    "Kubernetes": [
+     "kubernetes"
+    ]
+   }
+  },
+  {
+   "id": "en03",
+   "lang": "en",
+   "text": "Our p95 latency went from 180 to 420 milliseconds since version 2.3.1.",
+   "terms": {
+    "p95": [
+     "p95",
+     "p 95",
+     "p ninety five",
+     "p ninety-five"
+    ],
+    "180": [
+     "180",
+     "one hundred eighty",
+     "one eighty"
+    ],
+    "420": [
+     "420",
+     "four hundred twenty",
+     "four twenty"
+    ],
+    "2.3.1": [
+     "2.3.1",
+     "2 3 1",
+     "two point three point one"
+    ]
+   }
+  },
+  {
+   "id": "en04",
+   "lang": "en",
+   "text": "ArgoCD synced the wrong branch, so I rolled it back by hand.",
+   "terms": {
+    "ArgoCD": [
+     "argocd",
+     "argo cd",
+     "argo"
+    ],
+    "rolled it back": [
+     "rolled it back",
+     "rolled back"
+    ]
+   }
+  },
+  {
+   "id": "en05",
+   "lang": "en",
+   "text": "I read the spec again.",
+   "terms": {}
+  },
+  {
+   "id": "en06",
+   "lang": "en",
+   "text": "The GitHub webhook returns a 502 when the Kubernetes pod restarts, so I added a retry with exponential backoff.",
+   "terms": {}
+  },
+  {
+   "id": "en07",
+   "lang": "en",
+   "text": "About Alice's comment on the budget, I replied that the PostgreSQL cluster costs about three hundred euros a month.",
+   "terms": {}
+  },
+  {
+   "id": "en08",
+   "lang": "en",
+   "text": "I opened two notes on the OAuth section: the refresh token never expires, and the p95 latency of LiveKit is over two hundred milliseconds.",
+   "terms": {}
+  }
+ ]
+}

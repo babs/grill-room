@@ -3,6 +3,7 @@ package web
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"regexp"
 	"slices"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/turn"
+	"github.com/babs/grill-room/internal/voices"
 )
 
 const (
@@ -22,6 +24,9 @@ const (
 	maxEveryN       = 100
 	maxEveryVoice   = 500
 	maxEveryMinutes = 240
+	// A persona's speaking rate (013-AC37).
+	minVoiceRate = 0.9
+	maxVoiceRate = 1.3
 )
 
 var (
@@ -47,6 +52,10 @@ type personaReq struct {
 	Autocompact *int `json:"autocompact"`
 	// WatchesNotes makes it the room's notes watcher, in place of any other (009-AC31).
 	WatchesNotes *bool `json:"watches_notes"`
+	// Speaks, Voice and VoiceRate: the persona in the audio call (013-AC26, 013-AC11, 013-AC37).
+	Speaks    *bool    `json:"speaks"`
+	Voice     *string  `json:"voice"`
+	VoiceRate *float64 `json:"voice_rate"`
 }
 
 // check cleans the fields present and says what is wrong with the first bad one, "" when none is.
@@ -70,6 +79,16 @@ func (q *personaReq) check() string {
 			return fmt.Sprintf("text must be 1 to %d characters", maxPersonaText)
 		}
 		*q.Text = t
+	}
+	if q.Voice != nil && *q.Voice != "" && voices.Known(*q.Voice) == "" {
+		return "voice must be a catalogue voice id, or empty for the default"
+	}
+	if q.VoiceRate != nil {
+		if r := math.Round(*q.VoiceRate*100) / 100; r >= minVoiceRate && r <= maxVoiceRate {
+			*q.VoiceRate = r
+		} else {
+			return fmt.Sprintf("voice_rate must be %g to %g", minVoiceRate, maxVoiceRate)
+		}
 	}
 	// 005-AC9: no "default" model or effort, which only the host could read.
 	if q.Model != nil && !slices.Contains(turn.Models, *q.Model) {
@@ -284,7 +303,7 @@ func (s *Server) editPersona(w http.ResponseWriter, r *http.Request, sess sessio
 	}
 	patch := store.PersonaPatch{Name: req.Name, Badge: req.Badge, Colour: req.Colour, Text: req.Text, Model: req.Model, Effort: req.Effort,
 		EveryN: req.EveryN, EveryVoice: req.EveryVoice, EveryMinutes: req.EveryMinutes, SelfCall: req.SelfCall, Autocompact: req.Autocompact,
-		WatchesNotes: req.WatchesNotes}
+		WatchesNotes: req.WatchesNotes, Speaks: req.Speaks, Voice: req.Voice, VoiceRate: req.VoiceRate}
 	p, m, held, err := s.bus.Store.EditPersona(r.Context(), sess.p.RoomID, personaID(r), patch, sess.p)
 	s.personaDone(w, sess, p, m, err, heldStatus(held))
 }

@@ -880,6 +880,12 @@ CREATE UNIQUE INDEX blocked_requests_open ON blocked_requests(room_id, domain) W
 -- 014: the host or a delegated admin put a blocked website aside; its next refusal raises it again.
 ALTER TABLE blocked_requests ADD COLUMN dismissed_by TEXT NOT NULL DEFAULT '';
 `, `
+-- 013-AC26: every persona speaks in the call by default, existing ones too. voice '' takes a
+-- default when it first speaks (013-AC16); voice_rate is its speaking rate (013-AC37).
+ALTER TABLE room_personas ADD COLUMN speaks INTEGER NOT NULL DEFAULT 1 CHECK (speaks IN (0, 1));
+ALTER TABLE room_personas ADD COLUMN voice TEXT NOT NULL DEFAULT '';
+ALTER TABLE room_personas ADD COLUMN voice_rate REAL NOT NULL DEFAULT 1.0 CHECK (voice_rate BETWEEN 0.9 AND 1.3);
+`, `
 -- 016-AC1: a seat is valid on its own, no longer through its invite. A seat whose invite was
 -- revoked ends when the invite did.
 ALTER TABLE participants ADD COLUMN removed_at TEXT;
