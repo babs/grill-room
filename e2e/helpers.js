@@ -304,7 +304,8 @@ export const noOverflow = (page) => page.evaluate(() => [...document.querySelect
 export async function unfoldTabs(nav) {
   // A page folds its bar after drawing it, and again on a resize.
   await expect.poll(() => nav.evaluate((n) => 'menu' in n.dataset || n.scrollWidth <= n.clientWidth || !matchMedia('(max-width: 40rem)').matches)).toBe(true);
-  const menu = nav.locator('.tabs-menu');
+  // A page's own bar folds into its header's ☰.
+  const menu = (await nav.evaluate((n) => 'header' in n.dataset)) ? nav.page().locator('.app-header > .tabs-menu') : nav.locator('.tabs-menu');
   if ((await menu.isVisible()) && (await menu.getAttribute('aria-expanded')) === 'false') await menu.click();
 }
 

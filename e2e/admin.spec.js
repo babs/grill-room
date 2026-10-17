@@ -117,8 +117,8 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
     // A phone: every tab reachable, nothing wider than the screen, the tab bar still on screen once
     // scrolled to the bottom.
     await admin.setViewportSize({ width: 390, height: 844 });
-    // Folded, the bar's button says a tab has alerts (005-AC17).
-    await expect.poll(() => admin.locator('#tabs .tabs-menu').evaluate((b) => getComputedStyle(b, '::after').content)).toBe('""');
+    // Folded, the header's ☰ says a tab has alerts (005-AC17).
+    await expect.poll(() => admin.locator('.app-header > .tabs-menu').evaluate((b) => getComputedStyle(b, '::after').content)).toBe('""');
     for (const [id, names] of Object.entries(tabs)) {
       await unfoldTabs(admin.locator('#tabs'));
       await admin.locator('#tab-' + id).click();
@@ -135,7 +135,7 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
       expect(wide, id).toEqual([]);
       expect(await admin.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
       await admin.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-      await expect(admin.locator('#tabs')).toBeInViewport();
+      await expect(admin.locator('.app-header > .tabs-menu')).toBeInViewport();
     }
     await unfoldTabs(admin.locator('#tabs'));
     await admin.locator('#tab-rooms').click();

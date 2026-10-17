@@ -219,7 +219,7 @@ const alertsOf = (id) => (data.value?.alerts || []).filter((a) => (alertTab[a.ki
 function TabBar() {
   const nav = useRef(/** @type {HTMLElement | null} */ (null));
   useEffect(() => { window.grillShowTab(nav.current); }, [tab.value]);
-  return html`<nav id="tabs" ref=${nav} class="tabs sticky" aria-label="Sections">${tabs.map(([id, name]) => {
+  return html`<nav id="tabs" ref=${nav} class="tabs sticky" data-header aria-label="Sections">${tabs.map(([id, name]) => {
     const n = alertsOf(id).length + (id === 'update' && data.value?.status.update?.available ? 1 : 0);
     return html`<a key=${id} id=${'tab-' + id} href=${'#' + id} aria-current=${tab.value === id ? 'page' : undefined}>${name}${n
       ? html` <span class="tab-badge" data-tip=${n + (n === 1 ? ' alert' : ' alerts')}>${n}</span>` : ''}</a>`;

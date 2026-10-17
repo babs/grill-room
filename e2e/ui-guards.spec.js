@@ -226,6 +226,13 @@ async function tabBars(browser, request, size, check) {
     await openDaemonPage(host, (await daemon.link) + '#update');
     await expect(host.locator('#tab-update')).toHaveAttribute('aria-current', 'page');
     await check(host, 'nav.tabs[aria-label=Sections]', 'daemon');
+    if (size === phone) {
+      // Stopped, the page drops its bar: the header's ☰ goes with it.
+      await host.locator('#stop').click();
+      await host.getByRole('button', { name: 'Stop', exact: true }).last().click();
+      await expect(host.locator('#tabs')).toHaveCount(0);
+      await expect(host.locator('.app-header > .tabs-menu')).toBeHidden();
+    }
   } finally {
     daemon.cleanup();
   }
@@ -241,6 +248,7 @@ test('one sticky tab bar stays in view', async ({ browser, request }) => {
     await expect(nav).toHaveClass(/\bsticky\b/);
     // A wide screen keeps the tabs in a row: no folded menu.
     await expect(nav.locator('.tabs-menu')).toBeHidden();
+    await expect(page.locator('.app-header > .tabs-menu')).toBeHidden();
     for (const a of await nav.locator(':scope > a').all()) await expect(a).toBeVisible();
     // A long panel, then the bottom of its scroll box: the bar stays at the box's top, uncovered.
     const at = await nav.evaluate((n) => {
@@ -269,11 +277,15 @@ test('one sticky tab bar stays in view', async ({ browser, request }) => {
 
 // On a phone a bar scrolled sideways hides that more tabs exist (2026-10-17): one that overflows
 // folds into ☰ and the current tab's name, which lists every tab; one that fits shows them whole.
+// A page's own bar folds into a ☰ at the left of the app header instead: a button in the content
+// repeated the section heading under it (user, 2026-10-17). A sheet's bar keeps its own button.
+const pageBars = ['profile', 'admin', 'daemon'];
 test('phone: a tab bar that overflows folds into a menu', async ({ browser, request }) => {
   const folded = [];
   await tabBars(browser, request, phone, async (page, sel, name) => {
     const nav = page.locator(sel);
-    const button = nav.locator('.tabs-menu');
+    const header = page.locator('.app-header > .tabs-menu');
+    const button = pageBars.includes(name) ? header : nav.locator('.tabs-menu');
     const links = nav.locator(':scope > a');
     const current = async () => (await nav.locator('[aria-current=page]').evaluate((a) => a.firstChild.textContent)).trim();
     // A page folds its bar once drawn: wait for it to settle.
@@ -288,6 +300,29 @@ test('phone: a tab bar that overflows folds into a menu', async ({ browser, requ
       return;
     }
     folded.push(name);
+    if (pageBars.includes(name)) {
+      await expect(nav.locator('.tabs-menu'), `${name}: button in the content`).toHaveCount(0);
+      expect(await nav.evaluate((n) => n.getBoundingClientRect().height), `${name}: folded bar's row`).toBe(0);
+      const [b, first] = [await button.boundingBox(), await page.locator('.app-header > :not(.tabs-menu)').first().boundingBox()];
+      expect(b.x + b.width, `${name}: ☰ before the logo`).toBeLessThanOrEqual(first.x + 0.5);
+      // The ☰ takes no row of its own, in the header either.
+      const below = await page.locator('.app-header').evaluate((h) => {
+        const [menu, ...rest] = [...h.children].filter((c) => c.getClientRects().length).map((c) => c.getBoundingClientRect());
+        return rest.filter((r) => r.top >= menu.bottom - 0.5).length;
+      });
+      expect(below, `${name}: header items on a second row`).toBe(0);
+      // The header ☰ stays in reach at the bottom of a long page, as the sticky bar did.
+      await nav.evaluate((n) => {
+        const spacer = Object.assign(document.createElement('div'), { className: 'guard-spacer' });
+        spacer.style.height = '4000px';
+        n.parentElement.append(spacer);
+        scrollTo(0, document.scrollingElement.scrollHeight);
+      });
+      expect((await button.boundingBox()).y, `${name}: ☰ scrolled away`).toBeGreaterThanOrEqual(-1);
+      await page.evaluate(() => { document.querySelector('.guard-spacer').remove(); scrollTo(0, 0); });
+    } else {
+      await expect(header, `${name}: ☰ in the header`).toHaveCount(0);
+    }
     const count = await links.count();
     await expect(button).toHaveAttribute('aria-expanded', 'false');
     await expect(button).toHaveText(await current());
@@ -323,7 +358,22 @@ test('phone: a tab bar that overflows folds into a menu', async ({ browser, requ
     await expect(button).toHaveAttribute('aria-expanded', 'false');
     await expect(links.first()).toBeHidden();
   });
-  expect(folded).toEqual(expect.arrayContaining(['profile', 'admin', 'daemon']));
+  expect(folded).toEqual(expect.arrayContaining(pageBars));
+});
+
+// A sheet has no header of its own: its folded bar keeps the button in the bar. Room settings has
+// the most tabs, folded whatever the font; the persona sheet's four fit in some.
+test("phone: a sheet's folded tab bar keeps its own button", async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await appointAdmin(alice, request, room.id);
+  await alice.setViewportSize(phone);
+  await alice.goto(alice.url().split('#')[0] + '#manage/general');
+  const nav = alice.locator('#manage nav.tabs');
+  await expect(nav).toHaveAttribute('data-menu');
+  await expect(nav.locator(':scope > .tabs-menu')).toBeVisible();
+  await expect(alice.locator('.app-header > .tabs-menu')).toHaveCount(0);
+  await unfoldTabs(nav);
+  await expect(nav.locator(':scope > a').first()).toBeVisible();
 });
 
 // 005-AC35 004b-AC3: whatever the font draws, the tab scrolled to leaves no sliver of the tab before
