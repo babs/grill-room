@@ -78,7 +78,7 @@ French and English rooms both ship. A rule-based text layer reads numbers, acron
 
 ### Call behaviour
 - [ ] **AC21** A persona starts a line only after the room's quiet time (default 1 s) with no human active speaker.
-- [ ] **AC22** When a human starts speaking, the persona's audio stops at a listener within 300 ms of the speech onset (p95 over 10 interruptions), and the pod clears its buffered audio.
+- [ ] **AC22** When a human starts speaking, the persona's audio stops at a listener within 300 ms of the speech onset (p95 over 20 interruptions), and the pod clears its buffered audio. CI measures the stop from when the listener hears the human; the full 300 ms from the onset in the human's file is checked by hand from a workstation (lab checklist).
 - [ ] **AC23** After an interruption, if the room is quiet again within the resume window (default 20 s), the persona says the interrupted sentence again from its start and goes on. Otherwise it drops the rest of the line (reason `interrupted`). The chat keeps the synthesis in both cases.
 - [ ] **AC24** One persona speaks at a time per room, in queue order; rooms do not wait on each other. A line not started within the room's queue maximum (default 40 s) is dropped (reason `stale`). A line whose room has no human in the audio when its turn comes is dropped (reason `no_listener`). A dropped line posts nothing in the chat.
 - [ ] **AC25** Room settings has the three timeouts and the word cap, edited by room admins: quiet before speaking (0.5 to 5 s, default 1), resume window (0 to 60 s, default 20), queue maximum (10 to 300 s, default 40), spoken words (40 to 60, default 60). A value out of range gets 400. A change applies to the next line. Room export and import carry them.
@@ -93,11 +93,11 @@ French and English rooms both ship. A rule-based text layer reads numbers, acron
 ### Lexicon
 - [ ] **AC31** `/admin` has a Pronunciation page for the server admin: list, search, add, edit, delete. An entry is a term (1 to 40 characters, unique ignoring case), a style (English or French) and three spoken forms: English-style French, French-style French and English, at least one set. The list shows each term's style and flips it in one click. At most 1000 entries. Each change writes an audit entry (004-AC6) and reaches the pod for the next line, with no restart. Anyone else is refused, as on every `/api/admin` route: 401 without the admin's token or session, 403 with an API token.
 - [ ] **AC32** A migration inserts Appendix A (about 140 terms) once. Later edits and deletions stand; the server never re-seeds at start.
-- [ ] **AC33** A CI job renders each Appendix A entry in a carrier sentence of each language it has a form for, 3 times with the first default voice of that language, and passes the entry when the room's STT hears one of its accepted spellings in at least 2 of 3 renders. One failing entry fails the job. The job's report lists every entry's hits.
+- [ ] **AC33** A CI job renders each Appendix A entry in a carrier sentence of each language it has a form for, 10 times with the first default voice of that language, and passes the entry when the room's STT hears one of its accepted spellings in at least 6 of 10 renders. One failing entry fails the job. The job's report lists every entry's hits.
 
 ### Scale to zero and echo
 - [ ] **AC34** The room server exports `grill_room_tts_demand`, the number of rooms with a speaking persona and at least one human in the audio. A KEDA `ScaledObject`, shipped apart from the app like the 007 alert rules and off by default, scales `tts` between 0 and 1 on it. A line queued while the pod starts waits within the queue maximum (AC24), and is dropped `stale` past it. The cold start (scale-up to first audio) is measured and written in `docs/architecture.md`.
-- [ ] **AC35** On CI or a lab node, Chrome in a container with its own PipeWire loop (a null sink whose monitor is the capture source, never the host's audio session) joins as a silent human while a persona says 10 lines. With `echoCancellation` on, the STT worker posts no line for that human. With it off, it posts at least one, which proves the loop carries audio. If neither CI nor the lab can host the loop, this AC is struck through with the reason in Decisions.
+- [ ] **AC35** On CI or a lab node, Chrome in a container with its own PipeWire loop (a null sink whose monitor is the capture source, never the host's audio session) joins as a silent human while a persona says 10 lines. With `echoCancellation` on, the STT worker posts no line for that human. With it off, the persona's own echo cuts it off at least once (`grill_tts_lines_interrupted_total` rises), which proves the loop carries audio. If neither CI nor the lab can host the loop, this AC is struck through with the reason in Decisions.
 - [ ] **AC36** `docs/lab-checklist.md` gains a voice step: two speaking personas, a human cutting one off, the persona resuming, the second waiting its turn, nothing transcribed from a persona.
 
 ### Rate, pauses and the persona pill
@@ -128,10 +128,10 @@ French and English rooms both ship. A rule-based text layer reads numbers, acron
 - **Data model impact**: `tts_samples` (the voice samples the pod renders at build and hands over, AC27), `rooms.voice_quiet_ms`, `rooms.voice_resume_s`, `rooms.voice_queue_s`, `rooms.voice_words` (defaults 1000, 20, 40, 60); starter manifests and room exports gain `speaks`, `voice` and `voice_rate` per persona and the four room values. Built-in Spec grill, new version.
 - **DoD**:
   - pod tests on an injected clock: start after quiet, stop and clear on a speaker update, resume within the window, drop past it, stale drop, `no_listener` drop, FIFO across two personas;
-  - e2e with a fake mic (fake engine): a listener page measures each remote track's level; no persona audio starts while the human's level is up; on 10 interruptions the persona stops within 300 ms of the onset in the human's file (p95); the persona resumes after the human stops; a second persona waits for the first. If LiveKit's speaker updates alone miss 300 ms, the pod adds its own VAD on the subscribed human tracks and the test runs again;
+  - e2e with a fake mic (fake engine): a listener page measures each remote track's level; no persona audio starts while the human's level is up; the human interrupts until 20 interruptions have their own audio reaching the listener within 250 ms (at most 30), and the persona stops within 300 ms of the onset in the human's file (p95 over those 20; in CI, from when the listener hears the human); the persona resumes after the human stops; a second persona waits for the first. If LiveKit's speaker updates alone miss 300 ms, the pod adds its own VAD on the subscribed human tracks and the test runs again;
   - Playwright at 390 and 1440 px: the toggle, picker and rate on the Identity tab, ▶ plays a sample with the pod stopped, the credit tip on hover and tap, the pill click opens the card, the pill ▶ runs a turn, the pill mute unsubscribes and survives a reload, the pill shows both states with icon and word;
   - starter tests: a room from Spec grill has Grill speaking and Secretary not; an export and import round trip keeps voices and timeouts;
-  - the lab check (AC36) with 2 personas and a human interrupting, passed by hand;
+  - the lab check (AC36) with 2 personas and a human interrupting, passed by hand; the end-to-end AC22 run (lab checklist, real engine, p95 at most 300 ms from the onset in the human's file);
   - `make lint test` green.
 
 ### Phase 3 — Lexicon and polish
@@ -193,12 +193,13 @@ Made while drafting (overturnable):
 - Samples are rendered at build and served by the room server: they work while the pod is scaled to zero.
 - The per-listener mute unsubscribes rather than setting volume 0: it saves the bandwidth.
 - A dropped line posts nothing in the chat: the synthesis is already there.
-- The lexicon round trip passes a term on 2 of 3 renders: Pocket samples at random and one render moves a term's result (S14b, Setup).
+- The lexicon round trip passes a term on 6 of 10 renders: Pocket samples at random and one render moves a term's result (S14b, Setup). At 2 of 3, two runs on the same seed failed different sets of 7 and 9 entries (user, 2026-10-17: 6 of 10, no seeding).
 - The turn-taking e2e uses a fake engine; the real engine gets one smoke run and the lab replay. Turn-taking does not depend on the engine, and CI stays light.
 - Risk: S14 saw LiveKit report a human about 0.25 s after the speech began, which leaves about 50 ms for the 300 ms stop. Phase 2 measures it and adds a VAD in the pod if needed.
 - Measured in Phase 2's e2e: LiveKit names a talking human to a bot about 400 ms after their onset, too late for AC22. The pod also reads the humans' tracks its bots subscribe to, with an energy onset detector (20 ms above −42 dBFS, 400 ms hang): the stop then lands 30 to 110 ms after the onset at a listener. The room hears a human while any of its bots, or detectors, does; a bot that has not subscribed to someone yet names nobody and must not silence the others.
-- AC33's first round trip (estelle and alba, the room's STT) passed 137 of 227 entry-languages. Candidate respellings were rendered 3 times each; the best one at 2 of 3 or better replaced the form: cluster is now "clusteur" (the user's "cleuss-teur" was heard 0 of 3, "clusteur" 3 of 3). A language with no passing form lost its forms, and the voices read the term as written there; 35 entries with none left were removed (sidecar, webhook, deploy, commit, JSON, SQL and others). Most acronyms lost their French form: the STT does not write letter-by-letter French back as the acronym, though the voices still spell them by the acronym rule. The seed holds 137 terms.
-- AC35 runs in CI (`persona-echo`): Chrome's microphone is a remap of a PipeWire null sink's monitor (Chrome lists no monitor source). With echo cancellation on, 10 lines pass with no STT line and no interruption; with it off the persona's own echo cuts it off and resumes it in a loop, and the STT posts the echo. A listener with echo cancellation off on speakers stalls the persona: out of scope, the room keeps it on.
+- AC22's CI sample: on a shared runner the human's own audio sometimes reached the listener 0.4 to 1.5 s after its file onset, and the persona's stop came right behind it. No pod can beat a stalled media path, and with 10 samples one such stall is the p95. The test leaves out interruptions whose human audio took over 250 ms to reach the listener and interrupts until 20 stay, at most 30: one runner stall spanned three interruptions in a row (CI, 2026-10-17). Even then, interruptions next to a stall reached the listener 130 to 230 ms late and pushed the p95 to 300-313 ms while the persona stopped about 100 ms after the listener heard the human: CI measures from that moment, the lab keeps the end-to-end bound (user, 2026-10-17).
+- AC33's first round trip (estelle and alba, the room's STT) passed 137 of 227 entry-languages. Candidate respellings were rendered 3 times each; the best one at 2 of 3 or better replaced the form: cluster is now "clusteur" (the user's "cleuss-teur" was heard 0 of 3, "clusteur" 3 of 3). A language with no passing form lost its forms, and the voices read the term as written there; 35 entries with none left were removed (sidecar, webhook, deploy, commit, JSON, SQL and others). Most acronyms lost their French form: the STT does not write letter-by-letter French back as the acronym, though the voices still spell them by the acronym rule. The seed held 137 terms; flaky, OKR and WebRTC then lost their French forms, never heard back across runs, and flaky, with no English form, left the seed (user, 2026-10-17).
+- AC35 runs in CI (`persona-echo`): Chrome's microphone is a remap of a PipeWire null sink's monitor (Chrome lists no monitor source). With echo cancellation on, 10 lines pass with no STT line and no interruption; with it off the persona's own echo cuts it off and resumes it in a loop, but the STT posts nothing: each echo fragment is under its 400 ms of voice, so the cut itself proves the loop (user, 2026-10-17). A listener with echo cancellation off on speakers stalls the persona: out of scope, the room keeps it on.
 - A bot's track sends silence between lines: a stream that restarts at each line makes the listener's jitter buffer grow again.
 - The per-listener mute lives on the pill and in the card (notes, 2026-10-16), not in the audio menu.
 - One torch thread per synthesis: two under a 2-CPU limit starved LiveKit's media threads and left gaps in Phase 1's voice e2e.
@@ -295,7 +296,6 @@ How to read it: every table but "Naturalised" is English-style, its "FR" being t
 | rebase | ri-béïze | as written |
 | checkout | tchèque-aoute | as written |
 | linter | linn-teur | as written |
-| flaky | flèï-ki | as written |
 | PR | pé èr | P R |
 | repo | répo | as written |
 | monorepo | mono-répo | as written |
@@ -318,7 +318,7 @@ How to read it: every table but "Naturalised" is English-style, its "FR" being t
 | JWT | as written | J W T |
 | token | tau-keune | as written |
 | WebSocket | ouèbe-soquette | web socket |
-| WebRTC | ouèbe èr té cé | web R T C |
+| WebRTC | as written | web R T C |
 | full-stack | foule-stak | as written |
 | framework | frème-oueurk | as written |
 | React | ri-act | as written |
@@ -354,7 +354,7 @@ How to read it: every table but "Naturalised" is English-style, its "FR" being t
 | workshop | oueurk-chope | as written |
 | brainstorming | brène-stormingue | as written |
 | KPI | ka pé i | K P I |
-| OKR | o ka èr | O K R |
+| OKR | as written | O K R |
 | MVP | èm vé pé | as written |
 | POC | as written | P O C |
 | UX | as written | U X |

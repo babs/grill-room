@@ -53,7 +53,7 @@ func TestJoinCreatesThenAttachesProfile(t *testing.T) {
 	if len(prof.Rooms) != 2 || prof.Rooms[0].RoomID != "b" || prof.Rooms[0].Name != "Ali" || prof.Rooms[1].RoomID != "a" {
 		t.Fatalf("rooms: %+v", prof.Rooms)
 	}
-	if _, err := s.RevokeInvite(ctx, "b", b.InviteID); err != nil {
+	if _, err := s.RevokeInvite(ctx, "b", b.InviteID, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
 	if prof, _ = s.ProfileBySession(ctx, "sess"); len(prof.Rooms) != 1 || prof.Rooms[0].RoomID != "a" {
@@ -104,7 +104,7 @@ func TestProfileParticipant(t *testing.T) {
 	if p, err := s.ProfileParticipant(ctx, "sess", "a"); err != nil || p.ID != again.ID || p.ProfileID != a.ProfileID {
 		t.Fatalf("newest: %+v %v", p, err)
 	}
-	if _, err := s.RevokeInvite(ctx, "a", a.InviteID); err != nil {
+	if _, err := s.RevokeInvite(ctx, "a", a.InviteID, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.ProfileParticipant(ctx, "sess", "a"); !errors.Is(err, ErrNotFound) {
@@ -362,7 +362,7 @@ func TestInvitesRecordTheirCreator(t *testing.T) {
 	if invs, err := s.Invites(ctx, "a", 0); err != nil || len(invs) != 3 {
 		t.Fatalf("all: %+v %v", invs, err)
 	}
-	if _, err := s.RevokeInvite(ctx, "a", mine.ID); err != nil {
+	if _, err := s.RevokeInvite(ctx, "a", mine.ID, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.Invite(ctx, "a", mine.ID)
@@ -457,12 +457,12 @@ func TestRevokeInviteCascadesToInvitesItsJoinersMade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.RevokeInvite(ctx, "a", alice.InviteID)
+	got, err := s.RevokeInvite(ctx, "a", alice.InviteID, true, "Admin")
 	if err != nil || !slices.Equal(got.Invites, chain) {
 		t.Fatalf("revoked %v %v, want %v", got, err, chain)
 	}
 	// Idempotent: the second revoke finds nothing left to cut (011-AC20).
-	if got, err := s.RevokeInvite(ctx, "a", alice.InviteID); err != nil || len(got.Invites) != 0 || len(got.Lose) != 0 {
+	if got, err := s.RevokeInvite(ctx, "a", alice.InviteID, true, "Admin"); err != nil || len(got.Invites) != 0 || len(got.Lose) != 0 {
 		t.Fatalf("second revoke: %+v %v, want nothing cut", got, err)
 	}
 	for _, tok := range []string{"tok-a", "tok-Carol", "tok-Dave"} {

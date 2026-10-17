@@ -302,7 +302,7 @@ func TestPairAndConnect(t *testing.T) {
 	d.SetRoom(ctx, room)
 	waitFor(t, "connected with the stored token", func() bool { return d.Status().Connection == "connected" })
 
-	rs.call(t, "DELETE", "/api/rooms/"+rs.room+"/invites/"+strconv.FormatInt(aliceInvite, 10), rs.admin, nil, http.StatusOK, nil)
+	rs.call(t, "DELETE", "/api/rooms/"+rs.room+"/invites/"+strconv.FormatInt(aliceInvite, 10)+"?cut=1", rs.admin, nil, http.StatusOK, nil)
 	waitFor(t, "revoked", func() bool { s := d.Status(); return s.Pairing == "" && strings.Contains(s.Error, "revoked") })
 	if tok, _ := d.o.Tokens.Get(room); tok != "" {
 		t.Fatal("revoked token kept")

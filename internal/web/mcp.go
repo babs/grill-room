@@ -545,7 +545,7 @@ var mcpTools = []*mcpTool{
 			}
 			return c.pass(http.MethodDelete, a.room()+"/personas/"+a.id("persona"), nil)
 		}},
-	{name: "revoke_invite", desc: "Revoke an invite: whoever joined only through it loses the room. confirm must be the invite's id, as list_invites gives it.",
+	{name: "revoke_invite", desc: "Revoke an invite: no one can join through it any more; who joined through it keeps their seat. confirm must be the invite's id, as list_invites gives it.",
 		full: true, destr: true, schema: `{"required":["room","invite","confirm"],"properties":{` + roomArg + `,"invite":{"type":"integer"},"confirm":{"type":"string"}}}`,
 		routes: []string{"DELETE /api/rooms/{room}/invites/{invite}"},
 		run: func(c *mcpCall, a mcpArgs) (any, error) {

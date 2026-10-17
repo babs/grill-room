@@ -96,7 +96,7 @@ func TestRoomOverviewsMatchTheStore(t *testing.T) {
 		t.Fatalf("empty room: %+v", empty)
 	}
 	// A revoked invite takes its participant out of the count.
-	if _, err := s.RevokeInvite(ctx, "a", p.InviteID); err != nil {
+	if _, err := s.RevokeInvite(ctx, "a", p.InviteID, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
 	list, _ = s.RoomOverviews(ctx, 1<<20)

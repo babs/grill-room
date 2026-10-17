@@ -361,7 +361,15 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 		if gone {
 			// The request context is done: the cleanup must still reach the store.
 			ctx := context.WithoutCancel(r.Context())
-			s.failDaemonTurn(ctx, d, "the host's daemon disconnected")
+			// A re-pair's drain may have handed this id a turn, so fail always; an ended seat fails as
+			// its cleanup does, whichever of the two runs first (016-AC9).
+			why := "the host's daemon disconnected"
+			if _, err := s.bus.Store.RoomParticipant(ctx, d.RoomID, d.ParticipantID); errors.Is(err, store.ErrNotFound) {
+				why = whyHostLeft
+			} else if err != nil {
+				s.log.Error("participant_lookup_failed", zap.String("room", d.RoomID), zap.Error(err))
+			}
+			s.failDaemonTurn(ctx, d, why)
 			s.agentChanged(ctx, d.RoomID)
 		}
 	}()

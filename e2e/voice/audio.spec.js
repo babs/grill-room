@@ -37,7 +37,7 @@ test('two participants exchange audio', async ({ request }) => {
     await expect(aliceRow).not.toHaveClass(/muted/);
 
     // Revoking Alice's invite ends her session and takes her out of Bob's audio.
-    expect((await request.delete(`/api/rooms/${room.id}/invites/${aliceInv.id}`, { headers: admin })).status()).toBe(200);
+    expect((await request.delete(`/api/rooms/${room.id}/invites/${aliceInv.id}?cut=1`, { headers: admin })).status()).toBe(200);
     await expect(alice.locator('#banner')).toHaveText('Your access to this room has ended.');
     await expect.poll(() => bob.evaluate((id) => voice.remoteParticipants.has(id), aliceID)).toBe(false);
 

@@ -46,3 +46,39 @@ test('a room admin and the super-admin move the AI host', async ({ browser, requ
     for (const stop of stops) stop();
   }
 });
+
+// 016-AC9: a room admin removes the AI host; the first other eligible app takes the role, with its
+// line, and the removed host's page ends. 016-AC14, Q2: the super-admin removes from /admin's room
+// view, blocked, and lifts the block from its Invites tab.
+test('removing the AI host hands the role to the standby app', async ({ browser, request, baseURL }) => {
+  const { room, pages: [alice, bob, carol] } = await roomWith(browser, request, ['Alice', 'Bob', 'Carol']);
+  await appointAdmin(alice, request, room.id);
+  const stops = [];
+  try {
+    stops.push(await fakeDaemon(bob, baseURL, room.id, 'bob-laptop'));
+    await expect(hostBadge(alice, 'Bob')).toHaveAttribute('aria-label', 'host');
+    stops.push(await fakeDaemon(carol, baseURL, room.id, 'carol-laptop'));
+    await (await personMenu(alice, 'Bob')).getByRole('button', { name: 'Remove from room…' }).click();
+    await confirmSheet(alice, 'Remove');
+    await expect(bob.locator('#banner')).toHaveText('Your access to this room has ended.');
+    await expect(hostBadge(alice, 'Carol')).toHaveAttribute('aria-label', 'host');
+    await expect(alice.locator('#messages')).toContainText('Carol holds the agent(s).');
+
+    const admin = await (await browser.newContext()).newPage();
+    expect(await signIn(admin, undefined, `rooms/${room.id}/admins`)).toBe(201);
+    const list = admin.locator('#room-panel #room-admins');
+    await rowAction(list.locator('> li', { hasText: 'Carol' }), 'Remove Carol from the room');
+    await admin.locator('dialog.confirm').getByLabel('Block from rejoining').check();
+    await confirmSheet(admin, 'Remove');
+    await expect(list.locator('> li', { hasText: 'Carol' })).toHaveCount(0);
+    await expect(alice.locator('#messages')).toContainText('The admin removed Carol from the room and blocked them from rejoining');
+    await admin.goto(`/admin#rooms/${room.id}/invites`);
+    const blocked = admin.locator('#room-panel #blocked');
+    await expect(blocked).toContainText('Carol');
+    await blocked.getByRole('button', { name: 'Unblock Carol' }).click();
+    await expect(admin.locator('#room-panel #blocked')).toHaveCount(0);
+    await expect(alice.locator('#messages')).toContainText('The admin unblocked Carol');
+  } finally {
+    for (const stop of stops) stop();
+  }
+});

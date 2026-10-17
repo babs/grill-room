@@ -30,7 +30,7 @@ type RoomOverview struct {
 	Name         string    `json:"name"`
 	CreatedAt    time.Time `json:"created_at"`
 	LastActivity time.Time `json:"last_activity"`
-	// Participants counts those whose invite still works.
+	// Participants counts the valid seats.
 	Participants      int   `json:"participants"`
 	Personas          int   `json:"personas"`
 	HostParticipantID int64 `json:"host_participant_id,omitempty"`
@@ -73,7 +73,7 @@ func (s *Store) RoomOverview(ctx context.Context, roomID string, defaultQuota in
 func (s *Store) roomOverviews(ctx context.Context, defaultQuota int64, roomID string) ([]RoomOverview, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT r.id, r.name, r.created_at, COALESCE(r.host_participant_id, 0), COALESCE(r.quota_bytes, 0), COALESCE(r.quota_bytes, ?),
 		COALESCE((SELECT ts FROM messages WHERE room_id = r.id ORDER BY id DESC LIMIT 1), ''),
-		(SELECT COUNT(*) FROM participants p JOIN invites i ON i.id = p.invite_id WHERE p.room_id = r.id AND i.revoked_at IS NULL),
+		(SELECT COUNT(*) FROM participants p WHERE p.room_id = r.id AND p.removed_at IS NULL),
 		(SELECT COUNT(*) FROM room_personas WHERE room_id = r.id),
 		(SELECT COALESCE(SUM(size), 0) FROM uploads WHERE room_id = r.id),
 		(SELECT COALESCE(SUM(octet_length(v.body)), 0) FROM revisions v JOIN documents d ON d.id = v.document_id WHERE d.room_id = r.id),

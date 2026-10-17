@@ -60,7 +60,7 @@ func TestShareInvite(t *testing.T) {
 	}
 	first := res[0].id
 
-	if _, err := s.RevokeInvite(ctx, "r", first); err != nil {
+	if _, err := s.RevokeInvite(ctx, "r", first, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
 	inv, tok, created, err = s.ShareInvite(ctx, "r", bob.ID, "b-new", "bh-new")
@@ -90,7 +90,7 @@ func TestShareInvite(t *testing.T) {
 		t.Fatalf("a super-admin room got a shareable link: %+v", adm)
 	}
 	// A member cut off gets none.
-	if _, err := s.RevokeInvite(ctx, "r", bob.InviteID); err != nil {
+	if _, err := s.RevokeInvite(ctx, "r", bob.InviteID, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, err := s.ShareInvite(ctx, "r", bob.ID, "late", "late-h"); !errors.Is(err, ErrNotFound) {
@@ -170,7 +170,7 @@ func TestRevokePreviewMatchesRevoke(t *testing.T) {
 	}
 
 	eve := join("inv-b", "Eve", "tok-eve", JoinProfile{})
-	done, err := s.RevokeInvite(ctx, "r", a.ID)
+	done, err := s.RevokeInvite(ctx, "r", a.ID, true, "Admin")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestRevokePreviewEdges(t *testing.T) {
 		if _, err := s.RevokePreview(ctx, c.room, c.id); !errors.Is(err, ErrNotFound) {
 			t.Errorf("preview %s/%d: %v, want ErrNotFound", c.room, c.id, err)
 		}
-		if _, err := s.RevokeInvite(ctx, c.room, c.id); !errors.Is(err, ErrNotFound) {
+		if _, err := s.RevokeInvite(ctx, c.room, c.id, true, "Admin"); !errors.Is(err, ErrNotFound) {
 			t.Errorf("revoke %s/%d: %v, want ErrNotFound", c.room, c.id, err)
 		}
 	}

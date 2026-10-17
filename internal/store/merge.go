@@ -143,8 +143,8 @@ func mergePreview(ctx context.Context, db *sql.Tx, keep, merge int64) (*MergePre
 		p.Rooms = append(p.Rooms, r)
 		return nil
 	}, `SELECT r.id, r.name, MAX(pa.profile_id = ?), MAX(pa.profile_id = ?) FROM participants pa
-		JOIN invites i ON i.id = pa.invite_id JOIN rooms r ON r.id = pa.room_id
-		WHERE pa.profile_id IN (?, ?) AND i.revoked_at IS NULL GROUP BY r.id ORDER BY r.name, r.id`, keep, merge, keep, merge)
+		JOIN rooms r ON r.id = pa.room_id
+		WHERE pa.profile_id IN (?, ?) AND pa.removed_at IS NULL GROUP BY r.id ORDER BY r.name, r.id`, keep, merge, keep, merge)
 	if err != nil {
 		return nil, fmt.Errorf("merge preview: rooms: %w", err)
 	}
@@ -296,6 +296,10 @@ func (s *Store) MergeProfiles(ctx context.Context, keep, merge int64) (*MergePro
 			{&moved.RoomsCreated, `UPDATE rooms SET creator_profile_id = ?1 WHERE creator_profile_id = ?2`},
 			{nil, `INSERT INTO room_admins(room_id, profile_id, created_at) SELECT room_id, ?1, created_at FROM room_admins WHERE profile_id = ?2 ON CONFLICT DO NOTHING`},
 			{&moved.RoomAdmins, `DELETE FROM room_admins WHERE profile_id = ?2`},
+			// 016-AC15: B's blocks become A's, one per room.
+			{nil, `INSERT INTO room_blocks(room_id, profile_id, name, created_at, by_participant_id) SELECT room_id, ?1, name, created_at, by_participant_id
+				FROM room_blocks WHERE profile_id = ?2 ON CONFLICT DO NOTHING`},
+			{nil, `DELETE FROM room_blocks WHERE profile_id = ?2`},
 			{&moved.Sessions, `UPDATE profile_sessions SET profile_id = ?1 WHERE profile_id = ?2`},
 			{nil, `DELETE FROM magic_links WHERE profile_id = ?2`},
 			{nil, `DELETE FROM recovery_links WHERE profile_id = ?2`},
@@ -387,7 +391,7 @@ func (s *Store) PurgeEmptyProfiles(ctx context.Context, now time.Time, idle time
 				JOIN messages m2 ON m2.participant_id = pa.id WHERE pa.profile_id = p.id)), ''),
 			COALESCE((SELECT MAX(created_at) FROM profile_sessions WHERE profile_id = p.id), '')
 			FROM profiles p WHERE p.email IS NULL
-			AND NOT EXISTS (SELECT 1 FROM participants pa JOIN invites i ON i.id = pa.invite_id WHERE pa.profile_id = p.id AND i.revoked_at IS NULL)
+			AND NOT EXISTS (SELECT 1 FROM participants pa WHERE pa.profile_id = p.id AND pa.removed_at IS NULL)
 			AND NOT EXISTS (SELECT 1 FROM skills WHERE profile_id = p.id)
 			AND NOT EXISTS (SELECT 1 FROM skills WHERE publisher_id = p.id)
 			AND NOT EXISTS (SELECT 1 FROM persona_templates WHERE profile_id = p.id)

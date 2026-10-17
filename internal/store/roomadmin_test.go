@@ -227,7 +227,7 @@ func TestSetRoomAdmin(t *testing.T) {
 	invs, _ := s.Invites(ctx, "r", 0)
 	for _, inv := range invs {
 		if inv.ID != 0 && inv.CreatedBy == 0 {
-			if _, err := s.RevokeInvite(ctx, "r", inv.ID); err != nil {
+			if _, err := s.RevokeInvite(ctx, "r", inv.ID, true, "Admin"); err != nil {
 				t.Fatal(err)
 			}
 		}

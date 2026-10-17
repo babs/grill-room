@@ -257,7 +257,7 @@ func TestSkillPinning(t *testing.T) {
 		t.Fatalf("after the update: %+v", ks)
 	}
 	// Alice cut off: her personal skill stays pinned but no longer reaches the sandbox.
-	if _, err := r.s.RevokeInvite(ctx, "a", r.alice.InviteID); err != nil {
+	if _, err := r.s.RevokeInvite(ctx, "a", r.alice.InviteID, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.s.CreateInvite(ctx, "a", "inv-2", 0); err != nil {
@@ -463,7 +463,7 @@ func TestRoomSkill(t *testing.T) {
 		t.Fatalf("turn loads: %v", got)
 	}
 	// Bob leaves and removes his personal skill: the room's copy still rides.
-	if _, err := r.s.RevokeInvite(ctx, "a", r.bob.InviteID); err != nil {
+	if _, err := r.s.RevokeInvite(ctx, "a", r.bob.InviteID, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.s.RemoveSkill(ctx, r.bobOwn.ID, r.bob.ProfileID); err != nil {
