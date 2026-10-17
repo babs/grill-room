@@ -150,11 +150,16 @@ button.persona .pstate { color: var(--text-muted); font-weight: 400; font-size: 
 .persona-pill { display: inline-flex; flex: none; align-items: center; border-radius: var(--r-pill); background: var(--surface); box-shadow: inset 0 0 0 1px var(--border-strong); }
 .persona-pill button.persona { box-shadow: none; background: transparent; }
 .persona-pill :is(.persona-run, .persona-hear) { display: grid; place-items: center; flex: none; min-width: var(--control-h); min-height: var(--control-h); padding: 0;
-  border: 0; border-radius: var(--r-pill); background: transparent; color: var(--text); }
+  border: 0; background: transparent; color: var(--text); }
+/* The circle is 24 px to the eye inside the pill's ring; the button's own box stays the target. */
+.persona-pill :is(.persona-run, .persona-hear)::before { content: ""; width: var(--sp-5); height: var(--sp-5); border-radius: 50%; }
+.persona-pill :is(.persona-run, .persona-hear) > *, .persona-pill :is(.persona-run, .persona-hear)::before { grid-area: 1 / 1; }
+.persona-pill :is(.persona-run, .persona-hear):focus-visible { outline: none; box-shadow: none; }
+.persona-pill :is(.persona-run, .persona-hear):focus-visible::before { outline: 2px solid var(--accent); outline-offset: 2px; box-shadow: 0 0 0 2px var(--dot-ring); }
 .persona-pill .persona-hear[hidden] { display: none; }
 .persona-pill .persona-run[aria-disabled=true] { opacity: .5; }
 .persona-pill .persona-hear[aria-pressed=true] { color: var(--danger); }
-.persona-pill :is(.persona-run, .persona-hear):hover { background: var(--border); }
+.persona-pill :is(.persona-run, .persona-hear):hover::before { background: var(--border); }
 .persona-pill .persona-run .ico { fill: currentColor; }
 .vstate { display: inline-grid; place-items: center; flex: none; color: var(--accent); }
 .vstate[hidden] { display: none; }

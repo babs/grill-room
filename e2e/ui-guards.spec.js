@@ -120,6 +120,36 @@ test('phone: targets are 44 px on their own box', async ({ browser, request }) =
   expect(await ownSmall(alice, '#participants li'), 'people rows').toEqual([]);
 });
 
+// A persona pill's ▶ and speaker paint a circle inside the pill's ring, a full-height one crossed
+// it; their own box keeps the target (docs/design.md §5, Chip / pill).
+test('persona pill: the circles sit inside the pill, the targets stay whole', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  for (const size of [desktop, phone]) {
+    await alice.setViewportSize(size);
+    const pill = alice.locator('.persona-pill').first();
+    await expect(pill).toBeVisible();
+    // The speaker shows only while the persona speaks in the call, which needs LiveKit.
+    await pill.locator('.persona-hear').evaluate((e) => { e.hidden = false; });
+    for (const sel of ['.persona-run', '.persona-hear']) {
+      const button = pill.locator(sel);
+      await button.hover();
+      // The painted circle is the button's ::before when it has a fill, else the button itself.
+      const [circle, box, ring] = await button.evaluate((e) => {
+        const clear = 'rgba(0, 0, 0, 0)';
+        const before = getComputedStyle(e, '::before');
+        const r = e.getBoundingClientRect();
+        const circle = before.content !== 'none' && before.backgroundColor !== clear ? parseFloat(before.height)
+          : getComputedStyle(e).backgroundColor !== clear ? r.height : 0;
+        return [circle, [r.width, r.height], e.closest('.persona-pill').getBoundingClientRect().height - 2];
+      });
+      const name = `${sel} at ${size.width}`;
+      expect(circle, `${name}: a circle on hover`).toBeGreaterThan(0);
+      expect(circle, `${name}: circle inside the pill's 1 px ring`).toBeLessThanOrEqual(ring);
+      if (size === phone) expect(Math.min(...box), `${name}: own box`).toBeGreaterThanOrEqual(43.5);
+    }
+  }
+});
+
 test('sheets keep their top across tabs', async ({ browser, request }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
   await appointAdmin(alice, request, room.id);
