@@ -37,17 +37,17 @@ body.join h2 { margin-top: var(--sp-5); font-size: var(--fs-md); text-align: lef
 body.join .hint { text-align: left; }
 #skill-status { font-size: var(--fs-sm); overflow-wrap: anywhere; }
 #confirm .actions { justify-content: center; }
-/* Profile: a home page (005-AC41), in tabs under the identity strip (011b). */
+/* Profile: a home page (005-AC41), in tabs under the identity strip (011b). The page takes the full
+   width; prose and forms keep their measure (docs/design.md §6). */
 .home-main h2 { margin: var(--sp-4) 0 var(--sp-3); font-size: var(--fs-lg); }
 .home-main .page-title { margin: 0; font-size: var(--fs-xl); }
 /* Sub-headings sit under their section's h2 (006 starters: Yours, Shared, Built-in). */
 #starters h3 { margin: var(--sp-4) 0 var(--sp-2); font-size: var(--fs-md); font-weight: 600; }
-.home-main .hint, .home-main .empty { max-width: 70ch; }
+.home-main .hint, .home-main .empty, .home-main > :is(#status, #confirm) { max-width: 70ch; }
 .home-main #starters .empty { max-width: none; }
 /* An empty status line holds no room: the title starts right under the header. */
 .home-main > #status:empty { display: none; }
 /* Signed out, the sign-in card sits in the middle of the screen, as the join page's does. */
-.home-main:has(> #signed-out:not([hidden])) { max-width: none; }
 .home-main .join-card { margin: var(--sp-6) auto; }
 .home-main .join-card p { text-align: left; }
 .app-header .home-link { display: flex; align-items: center; gap: var(--sp-5); color: inherit; text-decoration: none; }

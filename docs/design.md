@@ -140,7 +140,7 @@ The palette is the one the room page and `/admin` already use, harmonized. The l
 | surface | width |
 |---|---|
 | room | full width. Sidebar 16rem, chat min 22rem, viewer flexible, annotations a 20rem toggle panel |
-| profile | `.page`: `max-width: 72rem`, left-aligned, as `/admin`. The title and the identity strip, then sticky tabs (Rooms, Starters, Skills, Account); the rooms in a card grid `repeat(auto-fill, minmax(18rem, 1fr))` |
+| profile | `.page-wide`, left-aligned, as `/admin`'s data views (user, 2026-10-18: 72rem left a wide screen half empty). The title and the identity strip, then sticky tabs (Rooms, Starters, Skills, API tokens, Account); the rooms in a card grid `repeat(auto-fill, minmax(18rem, 1fr))`, the lists full width. Prose keeps its measure: hints, the status line, the confirm card and empty states (but Starters') at 70ch, the Account facts at 48rem |
 | `/admin`, daemon page | the tabs, then the view, in one column: `.page` (`max-width: 72rem`) for forms and prose, `.page-wide` (the full width less 2 × 16 px) for data views (/admin Rooms, Profiles, Libraries, Pronunciation, Sessions, Audit and a room's tabs; the daemon's Rooms and Activity). A data list is `.cols` rows: under 40rem each row is a card, its name and ⋯ on the first line, its cells on one muted line, each after its `data-label` |
 | join, sign-in | `max-width: 28rem` card |
 | reading text (hints, docs) | `max-width: 70ch` |

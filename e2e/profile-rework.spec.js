@@ -226,7 +226,7 @@ test('profile wording and the signed-out card', async ({ browser, request }) => 
 // 011b-AC11 011b-AC12 011b-AC13 011b-AC17 011b-AC18: at 1440 and 390 px, light and dark, in each
 // Email state: the strip shows the state above the fold, nothing overflows, every phone target is
 // 44 px; each tab has its deep link; /profile#email opens Account on the field; the content is
-// 72rem, left-aligned with the tabs; the header has the home link and the user menu.
+// the full width, left-aligned with the tabs; the header has the home link and the user menu.
 test('tabs and identity strip at desktop and phone widths', async ({ browser, request }) => {
   test.setTimeout(90_000);
   const { pages: [pat] } = await roomWith(browser, request, ['Pat Review']);
@@ -278,7 +278,7 @@ test('tabs and identity strip at desktop and phone widths', async ({ browser, re
   const main = await rect(tab.locator('main'));
   const bar = await rect(tab.locator('#profile-tabs'));
   expect(main.left).toBe(0);
-  expect(main.width).toBe(72 * 16);
+  expect(main.width).toBe(desktop.width);
   expect(bar.left).toBe(main.left + 16);
 
   await expect(tab.locator('.app-header a.home-link')).toHaveAttribute('href', '/');

@@ -133,6 +133,39 @@ test('daemon page widths at 1920 px', async ({ browser, request, baseURL }) => {
   }
 });
 
+// The profile takes the wide screen as /admin's data views do; its prose and forms keep their
+// measure (docs/design.md §6, user 2026-10-18).
+test('profile widths at 1920 px', async ({ browser, request }) => {
+  const { pages: [pat] } = await roomWith(browser, request, ['Pat']);
+  await pat.setViewportSize(sizes.wide);
+  await pat.goto('/profile');
+  const grid = pat.locator('#rooms');
+  await expect(grid.locator('li.card').first()).toBeVisible();
+  const g = await grid.evaluate((e) => ({ width: e.getBoundingClientRect().width, cols: getComputedStyle(e).gridTemplateColumns.split(' ').length }));
+  expect.soft(g.width, 'rooms grid wider than 72rem').toBeGreaterThan(72 * 16);
+  expect.soft(g.cols, 'room card columns').toBeGreaterThan(3);
+  // Each block's width in ch of its own font, or in rem: the runner's fonts differ from a workstation's.
+  const measure = (loc) => loc.evaluateAll((els) => {
+    const ctx = document.createElement('canvas').getContext('2d');
+    return els.filter((e) => e.getClientRects().length).map((e) => {
+      ctx.font = getComputedStyle(e).font;
+      const w = e.getBoundingClientRect().width;
+      return { id: e.id || e.className, ch: w / ctx.measureText('0').width, rem: w / 16 };
+    });
+  });
+  for (const [tab, sel, cap] of [['rooms', '#confirm', 'ch'], ['rooms', '#status', 'ch'], ['skills', 'main .hint', 'ch'], ['tokens', 'main .hint', 'ch'],
+    ['account', 'main .hint', 'ch'], ['account', '.profile-facts', 'rem']]) {
+    await pat.goto('/profile#' + tab);
+    await expect(pat.locator('#panel-' + tab)).toBeVisible();
+    // The status line and the confirm card show only on a magic link's landing: fill them in place.
+    if (sel === '#status') await pat.locator('#status').evaluate((e) => { e.textContent = 'x '.repeat(200); });
+    if (sel === '#confirm') await pat.locator('#confirm').evaluate((e) => { e.hidden = false; e.querySelector('p').textContent = 'x '.repeat(200); });
+    const blocks = await measure(pat.locator(sel));
+    expect(blocks.length, `${tab} ${sel}`).toBeGreaterThan(0);
+    for (const b of blocks) expect.soft(b[cap], `${tab} ${b.id}`).toBeLessThanOrEqual(cap === 'ch' ? 70.5 : 48);
+  }
+});
+
 for (const [size, viewport] of Object.entries({ phone: sizes.phone, desktop: sizes.desktop })) {
   // 004b-AC10 004b-AC11 004b-AC12 004b-AC13: the room's sheets.
   test(`room sheets, ${size}`, async ({ browser, request }) => {

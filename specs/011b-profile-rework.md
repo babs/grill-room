@@ -37,7 +37,7 @@ Two steps on one branch. First, fixes that keep the layout: the wording, the hea
 
 - [x] **AC11** An identity strip under the header: the name, then the email state (the bound address with a check, "No email yet" with "Add an email", or "Link sent to <address>, N min left"). It shows on every tab.
 - [x] **AC12** Tabs Rooms, Starters, Skills and Account, with the kit's tab component: sticky, scrolling sideways on a phone, counts in the labels, the tab in the hash (`#rooms`, `#starters`, `#skills`, `#account`). `/profile#email` (011-AC7) opens Account with the field focused. A tab can be added for spec 012's API tokens. Superseded (user, 2026-10-17): on a phone a tab bar that overflows folds into one menu button listing its tabs (docs/design.md §5). Superseded (user, 2026-10-17): that button is a ☰ at the left of the app header (docs/design.md §5).
-- [x] **AC13** Content `max-width: 72rem`, left-aligned with the tabs, as `/admin`. docs/design.md §6 says so for the profile.
+- [x] **AC13** Content `max-width: 72rem`, left-aligned with the tabs, as `/admin`. docs/design.md §6 says so for the profile. Superseded 2026-10-18 (user): the profile takes the full width (`.page-wide`), its prose keeps its measure (docs/design.md §6).
 - [x] **AC14** The Starters tab lists Yours, then Shared with everyone, then Built-in.
 - [x] **AC15** Skills: "Add a skill" opens a sheet with the file and "Who can use it". The list shows the name, version, scope and a `⋯` with Remove.
 - [x] **AC16** Room cards are clickable in full (at least 44 px), show the role in the meta line, and say "as <name>" only when that name differs from the profile's.
