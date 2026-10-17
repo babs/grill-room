@@ -54,6 +54,7 @@ Needs the `tts` pod (`kubectl -n grill-room get deploy tts`) and an AI host for 
 5. No voice line in the chat carries a persona's words: only yours are written down.
 6. On the laptop, press the speaker on Facilitator's pill: you stop hearing it, the phone still does. Reload: it stays muted for you. Press it again.
 7. Delete the room as above.
+8. The 300 ms bound end to end (013-AC22; CI measures it only from when the listener hears the human). Needs no cluster: a workstation with docker, pnpm, uv and a Hugging Face read token (`HF_TOKEN_FILE`, see `.env.example`). Run `make stt-image tts-image HF_TOKEN_FILE=<token file>`, then `make e2e-persona-voice PERSONA_VOICE_TTS_IMAGE=grill-tts:local PERSONA_VOICE_ARGS=turn-taking.spec.js`. It passes with `stop latency ms ... p95` at most 300.
 
 ## Notifications on an Android phone (005-AC24)
 
