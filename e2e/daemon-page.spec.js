@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures.js';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { roomWith, startDaemon, pairDaemon, reloadDaemonPage, confirmSheet, connectedRow } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, reloadDaemonPage, confirmSheet, connectedRow, unfoldTabs } from './helpers.js';
 
 const desktop = { width: 1440, height: 900 };
 const phone = { width: 390, height: 844 };
@@ -44,6 +44,7 @@ test('daemon page layout at phone, desktop and wide width', async ({ browser, re
     for (const size of [desktop, phone, wide]) {
       await admin.setViewportSize(size);
       const at = size.width + 'px';
+      await unfoldTabs(admin.locator('#tabs'));
       await admin.locator('#tab-rooms').click();
       await expect(admin.locator('#panel-rooms .card'), at).toHaveCount(0);
       await expect(row, at).toHaveCount(1);
@@ -63,10 +64,12 @@ test('daemon page layout at phone, desktop and wide width', async ({ browser, re
 
       // One save bar per settings tab, and nothing else that saves there.
       for (const tab of ['general', 'network']) {
+        await unfoldTabs(admin.locator('#tabs'));
         await admin.locator('#tab-' + tab).click();
         await expect(admin.locator(`#panel-${tab} .save-bar`), `${tab} ${at}`).toHaveCount(1);
         await expect(admin.locator(`#panel-${tab} button`, { hasText: /^Save$/ }), `${tab} ${at}`).toHaveCount(1);
       }
+      await unfoldTabs(admin.locator('#tabs'));
       await admin.locator('#tab-general').click();
       await expect(admin.locator('#server-group'), at).toBeVisible();
       // The two groups side by side on a desktop, one above the other on a phone.
@@ -75,6 +78,7 @@ test('daemon page layout at phone, desktop and wide width', async ({ browser, re
       // The server picker heads its group.
       await expect(admin.locator('#server-group > label').first(), at).toHaveText('Server');
 
+      await unfoldTabs(admin.locator('#tabs'));
       await admin.locator('#tab-network').click();
       await expect(admin.locator('#allowlist th'), at).toHaveText(['Domain', 'Hits', 'Remove']);
       await expect(admin.locator('#add-docs'), at).toHaveCount(0);
@@ -89,6 +93,7 @@ test('daemon page layout at phone, desktop and wide width', async ({ browser, re
       expect(new Set(removes.map((x) => x.x)).size, `remove buttons in one column, ${at}`).toBe(1);
 
       // The dev-key form: Name, then Public key, then the button, each starting at the same left edge.
+      await unfoldTabs(admin.locator('#tabs'));
       await admin.locator('#tab-update').click();
       const f = await admin.locator('#key-form').evaluate((form) => ['#key-name', '#key-pem', 'button[type=submit]'].map((sel) => {
         const b = form.querySelector(sel).getBoundingClientRect();
@@ -99,12 +104,14 @@ test('daemon page layout at phone, desktop and wide width', async ({ browser, re
 
       // Wide tabs fill the window past the narrow column's 72rem (1152 px) on a wide screen.
       for (const tab of ['general', 'network', 'update']) {
+        await unfoldTabs(admin.locator('#tabs'));
         await admin.locator('#tab-' + tab).click();
         const w = await admin.locator('#main').evaluate((e) => e.getBoundingClientRect().width);
         if (size === wide) expect(w, `${tab} page width, ${at}`).toBeGreaterThan(1800);
       }
 
       for (const tab of ['rooms', 'accounts', 'general', 'network', 'monitoring', 'update']) {
+        await unfoldTabs(admin.locator('#tabs'));
         await admin.locator('#tab-' + tab).click();
         expect(await admin.evaluate(() => document.documentElement.scrollWidth), `${tab} ${at}`).toBeLessThanOrEqual(size.width);
         // 003b-AC20: what the page says, its tips and its labels included; the log lines are the app's own.

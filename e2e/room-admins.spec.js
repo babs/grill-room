@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet, playSTT, stopSTT, newRoomEditor, personaSheet, closePersonas, rowAction, personMenu, appointAdmin } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet, playSTT, stopSTT, newRoomEditor, personaSheet, closePersonas, rowAction, personMenu, appointAdmin, unfoldTabs } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const phone = { width: 390, height: 844 };
@@ -48,8 +48,9 @@ async function openManage(page) {
 
 // tab opens a tab of the Manage sheet.
 async function tab(panel, name) {
+  await unfoldTabs(panel.locator('nav.tabs'));
   await panel.getByRole('link', { name, exact: true }).click();
-  await expect(panel.getByRole('link', { name, exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(panel.getByRole('link', { name, exact: true, includeHidden: true })).toHaveAttribute('aria-current', 'page');
 }
 
 // 004-AC7 004-AC19: a profile creates rooms from its profile page, at phone width, and becomes their
@@ -144,6 +145,7 @@ for (const vp of [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone'
     // while a worker reads it (007-AC14), and the API says no.
     await playSTT(bob, id, { engines: ['whisper'], glossary: true });
     await menuItem(bob, 'Room settings');
+    await unfoldTabs(bob.locator('#manage nav.tabs'));
     await bob.locator('#manage #tab-glossary').click();
     await expect(bob.locator('#manage #stt-glossary')).toBeVisible();
     await expect(bob.locator('#manage #room-panel')).toHaveCount(0);
@@ -239,6 +241,7 @@ test('a room skill survives its author leaving', async ({ browser, request, base
   const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
   const bobProfile = await bob.context().newPage();
   await bobProfile.goto('/profile');
+  await unfoldTabs(bobProfile.locator('#profile-tabs'));
   await bobProfile.locator('#tab-skills').click();
   await bobProfile.locator('#panel-skills').getByRole('button', { name: 'Add a skill' }).click();
   await bobProfile.locator('#skill-file').setInputFiles(skillZip('bobs', 'BOB-v1'));
@@ -276,6 +279,7 @@ test('a room skill survives its author leaving', async ({ browser, request, base
     expect((await request.delete(`/api/rooms/${room.id}/invites/${invites[1].id}?cut=1`, { headers: admin })).status()).toBe(200);
     await expect(bob.locator('#banner')).toHaveText('Your access to this room has ended.');
     await bobProfile.reload();
+    await unfoldTabs(bobProfile.locator('#profile-tabs'));
     await bobProfile.locator('#tab-skills').click();
     await bobProfile.getByRole('button', { name: 'More actions for bobs' }).click();
     await bobProfile.getByRole('menuitem', { name: 'Remove' }).click();

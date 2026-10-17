@@ -1,9 +1,11 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, upload, appointAdmin, personaSheet, closePersonas, commentOnDocument, signIn, startDaemon, openDaemonPage } from './helpers.js';
+import { roomWith, upload, appointAdmin, personaSheet, closePersonas, commentOnDocument, signIn, startDaemon, openDaemonPage, unfoldTabs } from './helpers.js';
 
 // One guard per defect class of the v0.0.17 visual check (docs/design.md): each failed there.
 const desktop = { width: 1440, height: 900 };
 const phone = { width: 390, height: 844 };
+// SHOTS=<dir> keeps the folded tab bars, closed and open.
+const shots = process.env.SHOTS || 'test-results/shots';
 const longName = 'quarterly-pricing-review-with-a-deliberately-very-long-file-name-v3-final.md';
 
 // A new room comes with this persona.
@@ -14,6 +16,7 @@ const personaTabs = ['Identity', 'Model', 'Triggers', 'Capabilities'];
 async function eachPersonaTab(page, check) {
   const sheet = await personaSheet(page, persona);
   for (const tab of personaTabs) {
+    await unfoldTabs(sheet.locator('#persona-tabs'));
     await sheet.locator('#persona-tabs').getByRole('link', { name: tab, exact: true }).click();
     await expect(sheet.locator(`section[data-tab="${tab.toLowerCase()}"]`)).toBeVisible();
     await check(sheet, tab);
@@ -236,6 +239,9 @@ test('one sticky tab bar stays in view', async ({ browser, request }) => {
   await tabBars(browser, request, desktop, async (page, sel, name) => {
     const nav = page.locator(sel);
     await expect(nav).toHaveClass(/\bsticky\b/);
+    // A wide screen keeps the tabs in a row: no folded menu.
+    await expect(nav.locator('.tabs-menu')).toBeHidden();
+    for (const a of await nav.locator(':scope > a').all()) await expect(a).toBeVisible();
     // A long panel, then the bottom of its scroll box: the bar stays at the box's top, uncovered.
     const at = await nav.evaluate((n) => {
       const spacer = Object.assign(document.createElement('div'), { className: 'guard-spacer' });
@@ -261,45 +267,83 @@ test('one sticky tab bar stays in view', async ({ browser, request }) => {
   expect(new Set(Object.values(looks)).size, JSON.stringify(looks)).toBe(1);
 });
 
-test('phone: the first and the current tab are never cut', async ({ browser, request }) => {
+// On a phone a bar scrolled sideways hides that more tabs exist (2026-10-17): one that overflows
+// folds into ☰ and the current tab's name, which lists every tab; one that fits shows them whole.
+test('phone: a tab bar that overflows folds into a menu', async ({ browser, request }) => {
+  const folded = [];
   await tabBars(browser, request, phone, async (page, sel, name) => {
     const nav = page.locator(sel);
-    await expect(nav.locator('[aria-current=page]')).toBeVisible();
-    // Visible means inside the bar and clear of its fade; the first tab may also be scrolled out
-    // whole, never shown in part ("ooms" for Rooms).
-    // The fade follows the scroll a frame late: wait for the bar to settle.
-    const cut = () => nav.evaluate((n) => {
-      const b = n.getBoundingClientRect();
-      const fade = parseFloat(getComputedStyle(n).getPropertyValue('--tabs-fade-end')) || 0;
-      const [lo, hi] = [b.left + n.clientLeft, b.left + n.clientLeft + n.clientWidth - fade];
-      const state = (a) => {
-        const r = a.getBoundingClientRect();
-        if (r.right <= lo + 0.5 || r.left >= hi - 0.5) return 'out';
-        return r.left >= lo - 0.5 && r.right <= hi + 0.5 ? 'whole' : `cut ${Math.round(r.left)}..${Math.round(r.right)} in ${Math.round(lo)}..${Math.round(hi)}`;
-      };
-      // Whichever tab meets the left edge is whole too: the fade is on the right only.
-      const left = [...n.querySelectorAll('a')].filter((a) => { const r = a.getBoundingClientRect(); return r.left < lo - 0.5 && r.right > lo + 0.5; }).length;
-      return `first ${state(n.querySelector('a'))}, current ${state(n.querySelector('[aria-current=page]'))}, cut at the left ${left}`;
-    });
-    await expect.poll(cut, name).toMatch(/^first (whole|out), current whole, cut at the left 0$/);
+    const button = nav.locator('.tabs-menu');
+    const links = nav.locator(':scope > a');
+    const current = async () => (await nav.locator('[aria-current=page]').evaluate((a) => a.firstChild.textContent)).trim();
+    // A page folds its bar once drawn: wait for it to settle.
+    await expect.poll(() => nav.evaluate((n) => ('menu' in n.dataset ? 'folded' : n.scrollWidth > n.clientWidth ? 'scrolls' : 'fits')), name).toMatch(/^(folded|fits)$/);
+    if (!(await button.isVisible())) {
+      // Unfolded, every tab lies whole inside the bar.
+      const cut = await nav.evaluate((n) => {
+        const b = n.getBoundingClientRect();
+        return [...n.querySelectorAll(':scope > a')].filter((a) => { const r = a.getBoundingClientRect(); return r.left < b.left - 0.5 || r.right > b.right + 0.5; }).length;
+      });
+      expect(cut, `${name}: tabs cut`).toBe(0);
+      return;
+    }
+    folded.push(name);
+    const count = await links.count();
+    await expect(button).toHaveAttribute('aria-expanded', 'false');
+    await expect(button).toHaveText(await current());
+    expect(await links.evaluateAll((as) => as.filter((a) => a.checkVisibility()).length), `${name}: tabs shown while folded`).toBe(0);
+    await page.screenshot({ path: `${shots}/${name.replace(' ', '-')}-closed.png` });
+    // Every tab is one tap away, and picking it folds the list back, focus on the button.
+    for (let i = 0; i < count; i++) {
+      await button.click();
+      await expect(button).toHaveAttribute('aria-expanded', 'true');
+      for (const a of await links.all()) {
+        await expect(a).toBeVisible();
+        expect((await a.boundingBox()).height, `${name}: tab target`).toBeGreaterThanOrEqual(43.5);
+      }
+      if (i === 0) await page.screenshot({ path: `${shots}/${name.replace(' ', '-')}-open.png` });
+      const pick = links.nth(i);
+      const label = (await pick.evaluate((a) => a.firstChild.textContent)).trim();
+      await pick.click();
+      await expect(pick).toHaveAttribute('aria-current', 'page');
+      await expect(button).toHaveAttribute('aria-expanded', 'false');
+      await expect(button).toHaveText(label);
+      await expect(button).toBeFocused();
+      await expect(links.nth(i)).toBeHidden();
+    }
+    // Escape and a tap outside close the list.
+    await button.click();
+    await page.keyboard.press('Escape');
+    await expect(button).toHaveAttribute('aria-expanded', 'false');
+    await expect(button).toBeFocused();
+    await expect(links.first()).toBeHidden();
+    await button.click();
+    const box = await nav.boundingBox();
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height + 8);
+    await expect(button).toHaveAttribute('aria-expanded', 'false');
+    await expect(links.first()).toBeHidden();
   });
+  expect(folded).toEqual(expect.arrayContaining(['profile', 'admin', 'daemon']));
 });
 
 // 005-AC35 004b-AC3: whatever the font draws, the tab scrolled to leaves no sliver of the tab before
 // it: CI's fonts, wider than a workstation's, hit fractional tab edges. Each size changes the edges.
-test('phone: a tab bar scrolls to whole pixels at any glyph width', async ({ browser }) => {
+// A phone folds such a bar: a narrowed bar on a wide screen still scrolls.
+test('a tab bar scrolls to whole pixels at any glyph width', async ({ browser }) => {
   // The page's CSP refuses an injected style: only this test bypasses it.
-  const page = await (await browser.newContext({ viewport: phone, bypassCSP: true })).newPage();
+  const page = await (await browser.newContext({ viewport: desktop, bypassCSP: true })).newPage();
   await signIn(page, undefined, 'audit');
   await expect(page.locator('#tab-audit')).toHaveAttribute('aria-current', 'page');
   const nav = page.locator('nav.tabs[aria-label=Views]');
+  await page.addStyleTag({ content: '.tabs { max-width: 22rem }' });
   for (const px of [13, 13.13, 13.52, 14.56, 14.69, 15.08]) {
     await page.addStyleTag({ content: `.tabs a { font-size: ${px}px !important }` });
     await page.goto('/admin#libraries');
     await page.goto('/admin#audit');
     await expect.poll(() => nav.evaluate((n) => {
       const lo = n.getBoundingClientRect().left + n.clientLeft;
-      return [...n.querySelectorAll('a')].filter((a) => { const r = a.getBoundingClientRect(); return r.left < lo - 0.5 && r.right > lo + 0.5; }).length;
+      const cut = [...n.querySelectorAll('a')].filter((a) => { const r = a.getBoundingClientRect(); return r.left < lo - 0.5 && r.right > lo + 0.5; }).length;
+      return n.scrollLeft > 0 ? cut : 'not scrolled';
     }), `${px} px`).toBe(0);
   }
 });

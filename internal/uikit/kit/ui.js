@@ -331,6 +331,7 @@
     speaking: '<path d="M11 5 6 9H2v6h4l5 4z" fill="currentColor"/><path class="wave" d="M15.5 8.5a5 5 0 0 1 0 7"/><path class="wave wave-2" d="M19 5a10 10 0 0 1 0 14"/>',
     'speaking-wait': '<path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14" stroke-dasharray="2 3"/>',
     info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
+    menu: '<path d="M3 6h18M3 12h18M3 18h18"/>',
   };
 
   /**
@@ -485,27 +486,87 @@
     (navigator.clipboard?.writeText(v.dataset.value || '') ?? Promise.reject()).then(() => window.grillToast('Copied'), () => window.grillToast("Couldn't copy: select the text instead"));
   });
 
+  const phone = matchMedia('(max-width: 40rem)');
   /**
-   * grillShowTab scrolls a tab bar that overflows so its current tab shows whole, clear of the fade,
-   * with a whole tab at its left edge: a scroll that only just reveals the current tab cuts the one
-   * before ("ooms" for Rooms). When that tab start lies past the scroll end, an end padding makes it
-   * reachable.
+   * foldTabs turns a tab bar that overflows a phone into one button, the menu icon and the current
+   * tab's name, that opens the tabs as a list (tokens.css): a bar scrolled sideways hides that more
+   * tabs exist. The button lives in the bar, so a page that redraws or drops the bar takes it along.
+   * @param {HTMLElement} nav
+   * @param {Element} cur the current tab
+   */
+  const foldTabs = (nav, cur) => {
+    let b = /** @type {HTMLButtonElement | null} */ (nav.querySelector(':scope > .tabs-menu'));
+    if (!b) {
+      b = Object.assign(document.createElement('button'), { type: 'button', className: 'tabs-menu' });
+      b.setAttribute('aria-expanded', 'false');
+      b.append(window.grillIcon('menu'), document.createElement('span'));
+      nav.prepend(b);
+      // A page that redrew the bar's tabs dropped the old button, not the list's open state.
+      openTabs(nav, false);
+    }
+    // The tab's own text, without its count badge.
+    const name = (cur.firstChild?.textContent || '').trim();
+    /** @type {HTMLElement} */ (b.lastChild).textContent = name;
+    // Measured unfolded: folded, the tabs take no width.
+    delete nav.dataset.menu;
+    if (phone.matches && nav.scrollWidth > nav.clientWidth + 0.5) nav.dataset.menu = '';
+    else openTabs(nav, false);
+  };
+  /** @param {HTMLElement} nav @param {boolean} on */
+  const openTabs = (nav, on) => {
+    if (on) nav.dataset.open = '';
+    else delete nav.dataset.open;
+    nav.querySelector(':scope > .tabs-menu')?.setAttribute('aria-expanded', String(on));
+  };
+  document.addEventListener('click', (e) => {
+    const t = e.target instanceof Element ? e.target : null;
+    const nav = /** @type {HTMLElement | null | undefined} */ (t?.closest('.tabs[data-menu]'));
+    if (!nav || !t) return;
+    const b = /** @type {HTMLElement} */ (nav.querySelector(':scope > .tabs-menu'));
+    const a = t.closest('a');
+    if (t.closest('.tabs-menu')) openTabs(nav, !('open' in nav.dataset));
+    else if (a && !(e.ctrlKey || e.metaKey || e.shiftKey || e.button)) {
+      openTabs(nav, false);
+      // The picked tab folds away with the list: focus goes back to the button, once the link has
+      // followed its #fragment, which moves focus when an element has that id (/profile#rooms).
+      if (a.hash && a.hash !== location.hash) addEventListener('hashchange', () => b.focus(), { once: true });
+      else b.focus();
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    const nav = e.target instanceof Element ? /** @type {HTMLElement | null} */ (e.target.closest('.tabs[data-open]')) : null;
+    if (e.key !== 'Escape' || !nav) return;
+    // In a sheet, Escape closes the list, not the sheet.
+    e.preventDefault();
+    openTabs(nav, false);
+    /** @type {HTMLElement} */ (nav.querySelector(':scope > .tabs-menu')).focus();
+  });
+  document.addEventListener('pointerdown', (e) => {
+    for (const nav of document.querySelectorAll('.tabs[data-open]')) if (!(e.target instanceof Node && nav.contains(e.target))) openTabs(/** @type {HTMLElement} */ (nav), false);
+  });
+  // A turned phone may fit the tabs, or no longer.
+  addEventListener('resize', () => { for (const nav of document.querySelectorAll('.tabs')) window.grillShowTab(nav); });
+
+  /**
+   * grillShowTab folds a tab bar that overflows a phone into a menu (foldTabs), else scrolls a bar
+   * that overflows so its current tab shows whole, with a whole tab at its left edge: a scroll that
+   * only just reveals the current tab cuts the one before ("ooms" for Rooms). When that tab start lies past the scroll end, an end padding makes it
+   * reachable. Every page calls it when its tab changes.
    * @param {Element | null} nav
    */
   window.grillShowTab = (nav) => {
     const cur = nav?.querySelector('[aria-current=page]');
     if (!(nav instanceof HTMLElement) || !cur) return;
     nav.style.paddingInlineEnd = '';
+    foldTabs(nav, cur);
     const max = nav.scrollWidth - nav.clientWidth;
-    if (max <= 0) return;
+    if (max <= 0 || 'menu' in nav.dataset) return;
     const at = (/** @type {Element} */ a) => a.getBoundingClientRect().left - nav.getBoundingClientRect().left - nav.clientLeft + nav.scrollLeft;
-    const fade = matchMedia('(max-width: 40rem)').matches ? 24 : 0;
     const [left, right] = [at(cur), at(cur) + cur.getBoundingClientRect().width];
-    // At the scroll end the fade is gone (tokens.css).
-    const fits = (/** @type {number} */ s) => left >= s - 0.5 && right <= s + nav.clientWidth - (s < max - 0.5 ? fade : 0) + 0.5;
+    const fits = (/** @type {number} */ s) => left >= s - 0.5 && right <= s + nav.clientWidth + 0.5;
     // Scrolling snaps to whole pixels and the scroll width rounds: a fractional target or padding
     // stops short and leaves a sliver of the tab before. The nearest pixel stays within half of one.
-    const s = Math.round([...nav.children].map(at).find((x) => x >= -0.5 && fits(Math.min(x, max))) ?? left);
+    const s = Math.round([...nav.querySelectorAll(':scope > a')].map(at).find((x) => x >= -0.5 && fits(Math.min(x, max))) ?? left);
     if (s > max) nav.style.paddingInlineEnd = Math.ceil(s - max) + 'px';
     nav.scrollLeft = s;
   };

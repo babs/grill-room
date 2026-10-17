@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { signIn, noOverflow, rowAction } from './helpers.js';
+import { signIn, noOverflow, rowAction, unfoldTabs } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -84,8 +84,8 @@ test('audit view shows real admin actions, filters, and fits a phone', async ({ 
   await expect(rows.first()).toContainText('via: session');
 
   await page.setViewportSize({ width: 390, height: 844 });
-  // The tab bar scrolls sideways on a phone (005-AC35): every tab is a scroll away.
-  await page.getByRole('link', { name: 'Sessions' }).scrollIntoViewIfNeeded();
+  // The tab bar folds into a menu on a phone: every tab is in its list.
+  await unfoldTabs(page.locator('nav.tabs[aria-label=Views]'));
   await expect(page.getByRole('link', { name: 'Sessions' })).toBeInViewport();
   await expect(page.locator('#logout')).toBeInViewport();
   expect(await noOverflow(page)).toEqual([]);
