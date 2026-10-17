@@ -6,10 +6,14 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"io/fs"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -343,10 +347,13 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 	// TestRoomSkillsAPI, TestProfileCreatesRooms, TestProfileMaxRoomsAPI, TestExportImportAPI,
 	// TestRenameParticipant, TestDeleteDocument, TestStarterLibraryAPI, TestHostTransfer,
 	// TestAdminRecoveryLink, TestMergeAPI, TestPurgeProfilesLoopAndSwitch, TestAPITokenAuditAndLogs, TestMCPConfirm,
-	// TestTTSSpeechSettings).
+	// TestTTSSpeechSettings, TestRemoveLeaveBlockAPI, and store's TestAllowFlow,
+	// TestEgressDelegation, TestEgressRevoked, TestConnectorChanged).
 	covered := map[string]bool{ActionProfileMerge: true, ActionProfilePurge: true, ActionProfileRecoveryLink: true, ActionProfileRecoveryUsed: true, ActionStarterPublish: true, ActionStarterDelete: true, ActionRoomAdminAdd: true, ActionRoomAdminRemove: true, ActionRoomSkillRemove: true, ActionSettings: true,
 		ActionProfileMaxRooms: true, ActionRoomExport: true, ActionRoomImport: true, ActionRename: true, ActionDocumentDelete: true,
-		ActionDocumentRestore: true, ActionHostTransfer: true, ActionAPITokenCreate: true, ActionAPITokenRevoke: true, ActionPersonaRemove: true, ActionRoomSpeech: true}
+		ActionDocumentRestore: true, ActionHostTransfer: true, ActionAPITokenCreate: true, ActionAPITokenRevoke: true, ActionPersonaRemove: true, ActionRoomSpeech: true,
+		ActionParticipantRemove: true, ActionParticipantUnblock: true, store.ActionEgressAllow: true, store.ActionEgressRevoke: true, store.ActionEgressDelegate: true,
+		store.ActionConnectorEnable: true, store.ActionConnectorDisable: true, store.ActionConnectorActions: true}
 	for _, w := range want {
 		covered[w.action] = true
 	}
@@ -571,6 +578,52 @@ func TestAuditActionLabels(t *testing.T) {
 	for _, a := range AuditActions {
 		if !strings.Contains(string(page), "'"+a+"': '") {
 			t.Errorf("audit action %q has no label in admin.js actionLabels", a)
+		}
+	}
+}
+
+// TestAuditActionsComplete reads every Action* constant declared by the web and store code: one
+// missing from AuditActions can't be picked in the audit filter, nor gets a label checked above.
+func TestAuditActionsComplete(t *testing.T) {
+	listed := map[string]bool{}
+	for _, a := range AuditActions {
+		listed[a] = true
+	}
+	fset := token.NewFileSet()
+	for _, dir := range []string{".", "../store"} {
+		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range files {
+			if strings.HasSuffix(f, "_test.go") {
+				continue
+			}
+			file, err := parser.ParseFile(fset, f, nil, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, d := range file.Decls {
+				g, ok := d.(*ast.GenDecl)
+				if !ok || g.Tok != token.CONST {
+					continue
+				}
+				for _, spec := range g.Specs {
+					v := spec.(*ast.ValueSpec)
+					for i, n := range v.Names {
+						if !strings.HasPrefix(n.Name, "Action") || i >= len(v.Values) {
+							continue
+						}
+						b, ok := v.Values[i].(*ast.BasicLit)
+						if !ok || b.Kind != token.STRING {
+							continue
+						}
+						if a, _ := strconv.Unquote(b.Value); !listed[a] {
+							t.Errorf("%s: %s = %q is missing from AuditActions", f, n.Name, a)
+						}
+					}
+				}
+			}
 		}
 	}
 }
