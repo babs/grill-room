@@ -279,8 +279,6 @@ func pushKind(m store.Message, sub store.PushSubscription, starter int64, mentio
 	switch {
 	case m.ParticipantID == sub.ParticipantID && m.Kind != store.KindSystem, m.DeletedAt != nil:
 		return ""
-	case m.Kind == store.KindAgent:
-		return pushSynthesis
 	case m.Kind == store.KindSystem:
 		// A turn that failed or was stopped: its starter learns it ended.
 		if m.TurnID != 0 && starter == sub.ParticipantID {
@@ -289,17 +287,19 @@ func pushKind(m store.Message, sub store.PushSubscription, starter int64, mentio
 		return ""
 	case mentioned:
 		return pushMention
+	case m.Kind == store.KindAgent:
+		return pushSynthesis
 	case sub.AllMessages:
 		return pushMessage
 	}
 	return ""
 }
 
-// mentionedPeople returns the participants a text line names with their @token, by the rule the
-// chips follow (005-AC27): a persona of the same name takes the mention.
+// mentionedPeople returns the participants a text line or a synthesis names with their @token, by
+// the rule the chips follow (005-AC27): a persona of the same name takes the mention.
 func mentionedPeople(m store.Message, personas []store.RoomPersona, ps []store.Participant) map[int64]bool {
 	out := map[int64]bool{}
-	if m.Kind != store.KindText {
+	if m.Kind != store.KindText && m.Kind != store.KindAgent {
 		return out
 	}
 	for _, n := range named(m.Body, personas, ps) {

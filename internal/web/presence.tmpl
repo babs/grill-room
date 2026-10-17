@@ -20,6 +20,7 @@ Humans present: {{if .Humans}}{{join .Humans}}{{else}}none{{end}}
 Host: {{or .Host "none"}}
 Speaking now: {{or .Speaker "nobody"}}
 Chain budget: {{.Chain}}
+Address a human by the @name listed above: it notifies them. @agent is for giving a turn.
 Write @name in your synthesis to give another agent a turn; it counts against the chain budget.
 Writing @{{.Self.Name}} {{if .SelfCall}}gives you another turn{{else}}does nothing: self-call is off{{end}}.
 

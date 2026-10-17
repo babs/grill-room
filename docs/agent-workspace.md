@@ -96,7 +96,9 @@ The prompt opens with who is in the room, from one template, `internal/web/prese
   - with a profile: the first 4 hex digits of the profile's uuid (`profiles.uuid`, random v4). When two profiles among the room's participants share those 4 digits, every profile id in that preamble shows 6, or 8 if 6 still clash;
   - without a profile: `#` and the participant's id in the server, `Bob ·#12`. A profile id never starts with `#`;
   - one person who joined twice under the same profile shows the same id twice.
+  The humans present are listed by the `@name` a mention of them takes (`mentionToken`: `Ana María` is `@Ana_María`), so a persona addressing one by that name notifies them: chip, highlight and push (005-AC27). A human whose token a persona holds, or whose name has none, is listed bare, as a mention would call the persona;
 - the chain budget left, or "unlimited" while the limit is suspended;
+- to address a human by their `@name`, which notifies them, and to keep `@agent` for giving a turn;
 - how to call another persona with `@name`, and whether the persona's own `@name` gives it another turn.
 
 The server cuts each rendered line at 100 characters. The preamble is fixed when the turn starts, like the rest of the prompt.
@@ -135,7 +137,7 @@ The note is an ordinary agent document: the room sees it, and any persona may re
 | new documents | a new file in `docs/` | a new agent document by the persona |
 | thread replies | `replies.json`: `[{"annotation": <id>, "body": "...", "status": "done"}]`, `status` optional | an annotation message by the persona; `"done"` also closes the thread. Only on a thread that names no persona, or names this one |
 | new annotations | `annotations-new.json`: `[{"doc": "<path>", "exact": "...", "prefix": "...", "suffix": "...", "body": "..."}]` | an annotation by the persona on that quote, with `body` as its first message |
-| spoken line, asked only while the persona speaks in the call and someone listens (spec 013) | `spoken.md`: what the persona says out loud, first person, plain words, at most 4 KB | the line the `tts` pod says in the persona's voice, after the server strips Markdown, code, links, URLs, emoji and short ids and keeps whole sentences up to the room's word cap. Without it, a summary of the turn's actions ("I changed the payment spec."). Never a document, a chat message or part of an export, and never logged |
+| spoken line, asked only while the persona speaks in the call and someone listens (spec 013) | `spoken.md`: what the persona says out loud, first person, plain words, at most 4 KB | the line the `tts` pod says in the persona's voice, after the server strips Markdown, code, links, URLs, emoji, short ids and the `@` of mentions and keeps whole sentences up to the room's word cap. Without it, a summary of the turn's actions ("I changed the payment spec."). Never a document, a chat message or part of an export, and never logged |
 | calls | `@name` in the synthesis, outside code | a queued turn of that persona, one chain link each; its own name only with self-call on |
 | model and effort | the model and effort the daemon passed, checked against `modelUsage` in `claude -p`'s JSON | shown on the synthesis, stored on the turn |
 
