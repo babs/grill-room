@@ -20,7 +20,9 @@ import (
 	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/daemon"
 	"github.com/babs/grill-room/internal/sandbox"
+	_ "github.com/babs/grill-room/internal/sqlitetest"
 	"github.com/babs/grill-room/internal/store"
+	"github.com/babs/grill-room/internal/store/storetest"
 	"github.com/babs/grill-room/internal/web"
 )
 
@@ -43,7 +45,7 @@ type roomServer struct {
 
 func newRoomServer(t *testing.T) *roomServer {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "room.db"))
+	st, err := store.Open(storetest.Path(t, "room.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

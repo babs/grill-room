@@ -20,6 +20,7 @@ import (
 	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/sandbox"
 	"github.com/babs/grill-room/internal/store"
+	"github.com/babs/grill-room/internal/store/storetest"
 	"github.com/babs/grill-room/internal/web"
 )
 
@@ -133,7 +134,7 @@ func newRoomServerWrapped(t *testing.T, opts web.Options, wrap func(http.Handler
 // newRoomServerLog is newRoomServerWrapped with the server writing to log.
 func newRoomServerLog(t *testing.T, opts web.Options, wrap func(http.Handler) http.Handler, log *zap.Logger) *roomServer {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "room.db")
+	dbPath := storetest.Path(t, "room.db")
 	st, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatal(err)
