@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { readFileSync } from 'node:fs';
-import { roomWith, startDaemon, pairDaemon, removeSandbox, tableLayout } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, removeSandbox, tableLayout, unfoldTabs } from './helpers.js';
 
 // Each tab of the page and the sections it holds (005-AC17).
 const tabs = { rooms: ['Rooms'], accounts: ['AI accounts'], general: ['General', 'This machine', 'Server'], network: ['Network', 'Websites the AI may reach'],
@@ -21,6 +21,7 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
     const admin = await pairDaemon(alice, daemon);
     await expect(alice.locator('button.persona[data-name="Grill"] .led')).toHaveAttribute('aria-label', 'Grill ready', { timeout: 30_000 });
     for (const [id, names] of Object.entries(tabs)) {
+      await unfoldTabs(admin.locator('#tabs'));
       await admin.locator('#tab-' + id).click();
       await expect(admin).toHaveURL(new RegExp('#' + id + '$'));
       for (const name of names) await expect(admin.getByRole('heading', { name, exact: true })).toBeVisible();
@@ -116,7 +117,10 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
     // A phone: every tab reachable, nothing wider than the screen, the tab bar still on screen once
     // scrolled to the bottom.
     await admin.setViewportSize({ width: 390, height: 844 });
+    // Folded, the bar's button says a tab has alerts (005-AC17).
+    await expect.poll(() => admin.locator('#tabs .tabs-menu').evaluate((b) => getComputedStyle(b, '::after').content)).toBe('""');
     for (const [id, names] of Object.entries(tabs)) {
+      await unfoldTabs(admin.locator('#tabs'));
       await admin.locator('#tab-' + id).click();
       for (const name of names) {
         const h = admin.getByRole('heading', { name, exact: true });
@@ -133,8 +137,10 @@ test('admin page sections, monitoring, CSV export and alerts, at desktop and pho
       await admin.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
       await expect(admin.locator('#tabs')).toBeInViewport();
     }
+    await unfoldTabs(admin.locator('#tabs'));
     await admin.locator('#tab-rooms').click();
     await expect(admin.locator('#alerts-rooms')).toBeInViewport();
+    await unfoldTabs(admin.locator('#tabs'));
     await admin.locator('#tab-general').click();
 
     // Limits apply by restarting the worker, which comes back. The page's next status is held until

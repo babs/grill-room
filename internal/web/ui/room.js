@@ -2995,7 +2995,7 @@ function showPersonaTab(tab) {
     if (a.id === 'persona-tab-' + tab) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   }
-  // A bar that scrolls sideways on a phone keeps its current tab in sight (005-AC35).
+  // A bar folded on a phone names its current tab; one that scrolls keeps it in sight (005-AC35).
   window.grillShowTab($('persona-tabs'));
 }
 

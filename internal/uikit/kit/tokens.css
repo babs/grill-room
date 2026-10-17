@@ -104,10 +104,6 @@
   display: flex; gap: var(--sp-1); overflow-x: auto; scrollbar-width: none;
   border-bottom: 1px solid var(--border);
 }
-@property --tabs-fade-end { syntax: '<length>'; inherits: false; initial-value: 0px; }
-/* The fade shows only while tabs remain to the right: a bar that fits, or is scrolled to its end,
-   has none. Without scroll timelines, or under reduced motion, there is no fade. */
-@keyframes tabs-fade { from, 99% { --tabs-fade-end: 24px; } to { --tabs-fade-end: 0px; } }
 .tabs a {
   display: inline-flex; align-items: center; gap: var(--sp-1); flex: none; min-height: 44px; padding: 0 var(--sp-4);
   border-bottom: 3px solid transparent; color: var(--text); font: 600 var(--fs-sm)/1 var(--font); text-decoration: none; white-space: nowrap;
@@ -116,11 +112,17 @@
 /* Tabs stay in reach in a long page or sheet (docs/design.md §5), on what they cover. */
 .tabs.sticky { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--bg); }
 .sheet .tabs.sticky { top: calc(-1 * var(--sp-4)); background: var(--surface); }
-.tabs a:focus-visible { outline-offset: -2px; }
+.tabs :is(a, .tabs-menu):focus-visible { outline-offset: -2px; }
+/* A bar that overflows a phone folds into one button that lists the tabs (kit/ui.js foldTabs). */
+.tabs > .tabs-menu { display: none; }
 @media (max-width: 40rem) {
-  .tabs { gap: 0; mask-image: linear-gradient(to right, #000 calc(100% - var(--tabs-fade-end)), transparent);
-    animation: tabs-fade linear both; animation-timeline: scroll(self inline); }
+  .tabs { gap: 0; }
   .tabs a { padding: 0 var(--sp-3); }
+  .tabs[data-menu] { flex-wrap: wrap; overflow: visible; }
+  .tabs[data-menu] > a { display: none; }
+  .tabs[data-menu] > .tabs-menu { display: inline-flex; min-height: 44px; padding: 0 var(--sp-3); border: 0; border-bottom: 3px solid var(--brand); border-radius: 0; background: transparent; font-size: var(--fs-sm); }
+  .tabs[data-menu][data-open] > a { display: flex; flex-basis: 100%; border-bottom: 0; border-left: 3px solid transparent; }
+  .tabs[data-menu][data-open] > a[aria-current=page] { border-left-color: var(--brand); }
 }
 /* A page's content column, left-aligned under its tabs (docs/design.md §6); tables take the full
    width. */

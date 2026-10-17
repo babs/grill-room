@@ -7,6 +7,8 @@ body { overflow-wrap: anywhere; }
 .keep-hosting .hint { margin: 0; }
 .alerts { margin: var(--sp-2) 0 0; padding-left: var(--sp-7); }
 .alerts .alert-unsigned { font-weight: 600; }
+/* A bar folded on a phone hides its tabs: a dot on its button says one of them has alerts. */
+.tabs[data-menu]:not([data-open]):has(> a .tab-badge) > .tabs-menu::after { content: ""; width: .5rem; height: .5rem; border-radius: 50%; background: var(--danger); }
 .tab-badge { display: inline-block; min-width: 1.2em; padding: 0 var(--sp-1); border-radius: var(--r-pill); background: var(--danger); color: var(--on-danger); font-size: var(--fs-xs); text-align: center; }
 .panel > section:first-of-type > h2, .panel > .alerts + section > h2 { border-top: 0; }
 #relax-banner { margin: 0; padding: var(--sp-2) var(--sp-4); background: var(--danger-bg); color: var(--danger); font-weight: 600; }

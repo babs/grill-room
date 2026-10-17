@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures.js';
 import { mkdirSync } from 'node:fs';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, upload, startDaemon, smallTargets, menuItem, playSTT, newRoomEditor, personaAction } from './helpers.js';
+import { roomWith, signIn, upload, startDaemon, smallTargets, menuItem, playSTT, newRoomEditor, personaAction, unfoldTabs } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const desktop = { width: 1440, height: 900 };
@@ -133,6 +133,7 @@ test('touch targets at phone width', async ({ browser, request, baseURL }) => {
     await page.goto(await daemon.link);
     await expect(page.locator('#pairing')).toHaveText('Waiting for your approval in the room.', { timeout: 30_000 });
     for (const tab of ['rooms', 'accounts', 'general', 'network', 'monitoring', 'update']) {
+      await unfoldTabs(page.locator('#tabs'));
       await page.locator('#tab-' + tab).click();
       expect(await smallTargets(page), 'daemon ' + tab).toEqual([]);
     }
@@ -153,26 +154,38 @@ test('daemon tab bar keeps its tab styling', async ({ browser, request, baseURL 
     await page.locator('#tab-accounts').click();
     for (const viewport of [phone, desktop]) {
       await page.setViewportSize(viewport);
-      const tabs = await page.locator('nav[aria-label=Sections] a').evaluateAll((els) => els.map((e) => {
-        const r = e.getBoundingClientRect();
-        const s = getComputedStyle(e);
-        return { name: e.id, current: e.getAttribute('aria-current') === 'page', left: r.left, right: r.right, height: r.height,
-          pad: Math.min(parseFloat(s.paddingLeft), parseFloat(s.paddingRight)), underline: s.textDecorationLine.includes('underline'),
-          border: parseFloat(s.borderBottomWidth) >= 2 && s.borderBottomStyle !== 'none' ? s.borderBottomColor : 'none' };
-      }));
-      const at = `${viewport.width}px ${JSON.stringify(tabs)}`;
-      expect(tabs.length, at).toBe(6);
-      expect(tabs.filter((t) => t.height < 43.5).map((t) => t.name), at).toEqual([]);
-      expect(tabs.filter((t) => t.underline).map((t) => t.name), at).toEqual([]);
-      const cramped = tabs.slice(1).filter((t, i) => {
-        const gap = t.left - tabs[i].right;
-        return gap < 8 && !(gap >= 0 && t.pad >= 8 && tabs[i].pad >= 8);
-      });
-      expect(cramped.map((t) => t.name), at).toEqual([]);
-      const [current, ...others] = [...tabs.filter((t) => t.current), ...tabs.filter((t) => !t.current)];
-      expect(current.name, at).toBe('tab-accounts');
-      expect(current.border, at).not.toMatch(/^none$|rgba\(0, 0, 0, 0\)/);
-      expect(others.filter((t) => t.border === current.border).map((t) => t.name), at).toEqual([]);
+      const at = `${viewport.width}px`;
+      // A phone folds the bar into one button: the current tab's name over its underline.
+      const menu = page.locator('nav[aria-label=Sections] .tabs-menu');
+      if (viewport === phone) {
+        await expect(menu).toHaveText('AI accounts');
+        const m = await menu.evaluate((e) => ({ height: e.getBoundingClientRect().height, border: getComputedStyle(e).borderBottomColor, width: getComputedStyle(e).borderBottomWidth }));
+        expect(m.height, at).toBeGreaterThanOrEqual(43.5);
+        expect(m.width, at).toBe('3px');
+        expect(m.border, at).not.toMatch(/rgba\(0, 0, 0, 0\)/);
+      } else {
+        await expect(menu).toBeHidden();
+        const tabs = await page.locator('nav[aria-label=Sections] a').evaluateAll((els) => els.map((e) => {
+          const r = e.getBoundingClientRect();
+          const s = getComputedStyle(e);
+          return { name: e.id, current: e.getAttribute('aria-current') === 'page', left: r.left, right: r.right, height: r.height,
+            pad: Math.min(parseFloat(s.paddingLeft), parseFloat(s.paddingRight)), underline: s.textDecorationLine.includes('underline'),
+            border: parseFloat(s.borderBottomWidth) >= 2 && s.borderBottomStyle !== 'none' ? s.borderBottomColor : 'none' };
+        }));
+        const why = `${at} ${JSON.stringify(tabs)}`;
+        expect(tabs.length, why).toBe(6);
+        expect(tabs.filter((t) => t.height < 43.5).map((t) => t.name), why).toEqual([]);
+        expect(tabs.filter((t) => t.underline).map((t) => t.name), why).toEqual([]);
+        const cramped = tabs.slice(1).filter((t, i) => {
+          const gap = t.left - tabs[i].right;
+          return gap < 8 && !(gap >= 0 && t.pad >= 8 && tabs[i].pad >= 8);
+        });
+        expect(cramped.map((t) => t.name), why).toEqual([]);
+        const [current, ...others] = [...tabs.filter((t) => t.current), ...tabs.filter((t) => !t.current)];
+        expect(current.name, why).toBe('tab-accounts');
+        expect(current.border, why).not.toMatch(/^none$|rgba\(0, 0, 0, 0\)/);
+        expect(others.filter((t) => t.border === current.border).map((t) => t.name), why).toEqual([]);
+      }
       // Stuck at the top, the bar keeps 8 px between itself and the panel's first content.
       await page.setViewportSize({ width: viewport.width, height: 400 });
       const stuck = await page.evaluate(() => {
