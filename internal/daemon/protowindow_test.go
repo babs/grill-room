@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -36,6 +37,13 @@ func nextWorker(t *testing.T) string {
 		t.Fatal(err)
 	}
 	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// On a Windows runner the first start of a new executable stalled up to 6 s, later ones took
+	// milliseconds: pay it here, before a test's 10 s wait starts.
+	cmd := exec.CommandContext(t.Context(), dst, "worker")
+	cmd.Env = append(os.Environ(), "GRILL_ROOM_TEST_WORKER=early")
+	if err := cmd.Run(); err != nil {
 		t.Fatal(err)
 	}
 	return dst
