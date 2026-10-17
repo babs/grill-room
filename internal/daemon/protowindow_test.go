@@ -39,7 +39,7 @@ func nextWorker(t *testing.T) string {
 	if err := out.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// On a Windows runner the first start of a new executable stalled up to 6 s, later ones took
+	// On a Windows runner the first start of a new executable stalled up to 8 s, later ones took
 	// milliseconds: pay it here, before a test's 10 s wait starts.
 	cmd := exec.CommandContext(t.Context(), dst, "worker")
 	cmd.Env = append(os.Environ(), "GRILL_ROOM_TEST_WORKER=early")
