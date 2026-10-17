@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/babs/grill-room/internal/store"
 )
@@ -169,10 +170,11 @@ func TestRemovalAndAPITokens(t *testing.T) {
 
 // 016-AC8 016-AC9: removing the AI host fails its running turn with "the AI host left the room",
 // revokes its app's stream, drops the turns it queued, and elects the first other eligible app,
-// which says so; with none, the room has no host.
+// which says so; with none, the room has no host. 016-AC4: a ticked revoke of its invite does the same.
 func TestRemovedHostFailsOver(t *testing.T) {
-	for _, standby := range []bool{true, false} {
-		t.Run(fmt.Sprintf("standby=%v", standby), func(t *testing.T) {
+	for _, c := range []struct{ standby, cut bool }{{true, false}, {false, false}, {true, true}, {false, true}} {
+		standby := c.standby
+		t.Run(fmt.Sprintf("standby=%v,cut=%v", standby, c.cut), func(t *testing.T) {
 			e := newEnv(t)
 			r := newTurnRoom(t, e)
 			alice := r.alice
@@ -187,7 +189,15 @@ func TestRemovedHostFailsOver(t *testing.T) {
 			}
 			watcher := e.join(t, e.createInvite(t, r.room).Token, "Watcher")
 			chat := e.chatEvents(t, r.room, watcher.Token, "")
-			if code, b := e.do(t, "DELETE", fmt.Sprintf("/api/admin/rooms/%s/participants/%d", r.room, alice.p.Participant.ID), e.admin, nil); code != http.StatusNoContent {
+			if c.cut {
+				seat, err := e.st.RoomParticipant(t.Context(), r.room, alice.p.Participant.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if code, b := e.do(t, "DELETE", fmt.Sprintf("/api/rooms/%s/invites/%d?cut=1", r.room, seat.InviteID), e.admin, nil); code != http.StatusOK {
+					t.Fatalf("cut alice's invite: %d %s", code, b)
+				}
+			} else if code, b := e.do(t, "DELETE", fmt.Sprintf("/api/admin/rooms/%s/participants/%d", r.room, alice.p.Participant.ID), e.admin, nil); code != http.StatusNoContent {
 				t.Fatalf("remove alice: %d %s", code, b)
 			}
 			if ev := nextEvent(t, alice.events, "revoked"); ev.event != "revoked" {
@@ -214,25 +224,74 @@ func TestRemovedHostFailsOver(t *testing.T) {
 	}
 }
 
-// 016-AC9: when the removed host's app stream closes before the removal's cleanup runs, the
-// disconnect leaves the running turn to the removal, which fails it as the host leaving the room.
-func TestRemovedHostStreamClosesFirst(t *testing.T) {
+// streamEnded waits for the daemon stream ch to say "revoked" and close: its handler, with the
+// disconnect's cleanup deferred in it, has returned.
+func streamEnded(t *testing.T, ch <-chan sseEvent) {
+	t.Helper()
+	nextEvent(t, ch, "revoked")
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				return
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("stream still open after revoked")
+		}
+	}
+}
+
+// 016-AC9: whichever of the removed host's app stream closing and the removal's cleanup runs
+// first, the running turn fails as the host leaving the room, and the second leaves it so.
+func TestRemovedHostEitherOrder(t *testing.T) {
+	for _, streamFirst := range []bool{true, false} {
+		t.Run(fmt.Sprintf("streamFirst=%v", streamFirst), func(t *testing.T) {
+			e := newEnv(t)
+			r := newTurnRoom(t, e)
+			alice := r.alice
+			tn := e.press(t, r, alice, alice.p.Token, false)
+			ended, err := e.st.EndSeats(t.Context(), r.room, alice.p.Participant.ID, store.Ending{})
+			if err != nil || len(ended.Daemons) != 1 {
+				t.Fatalf("end seats: %+v %v", ended, err)
+			}
+			failed := func(step string) {
+				t.Helper()
+				if got, err := e.st.Turn(t.Context(), r.room, tn.ID); err != nil || got.Status != store.TurnFailed || got.Error != whyHostLeft {
+					t.Fatalf("turn after %s: %+v %v", step, got, err)
+				}
+			}
+			cleanup := func() { e.srv.seatsEnded(t.Context(), r.room, ended.Seats, ended.Daemons) }
+			if streamFirst {
+				// The removal's wake-up alone: the stream finds its access gone and closes.
+				e.srv.bus.Notify(r.room)
+				streamEnded(t, alice.events)
+				failed("the stream closed")
+				cleanup()
+				failed("the removal")
+				return
+			}
+			cleanup()
+			failed("the removal")
+			streamEnded(t, alice.events)
+			failed("the stream closed")
+		})
+	}
+}
+
+// 016-AC9: a re-pair ends the old token while its drain may hand the same app id a turn; the old
+// stream closing, with no new daemon connected, fails that turn as a disconnect.
+func TestRepairedStreamClosesFailsTurn(t *testing.T) {
 	e := newEnv(t)
 	r := newTurnRoom(t, e)
 	alice := r.alice
 	tn := e.press(t, r, alice, alice.p.Token, false)
-	watcher := e.join(t, e.createInvite(t, r.room).Token, "Watcher")
-	ended, err := e.st.EndSeats(t.Context(), r.room, alice.p.Participant.ID, store.Ending{})
-	if err != nil || len(ended.Daemons) != 1 {
-		t.Fatalf("end seats: %+v %v", ended, err)
+	// What a re-pair leaves when its drain launched a turn before the old stream woke; the route races the two.
+	if _, err := e.st.PairDaemon(t.Context(), r.room, alice.p.Participant.ID, HashToken(NewToken())); err != nil {
+		t.Fatal(err)
 	}
-	alice.drop()
-	e.waitAgent(t, r.room, watcher.Token, func(st agentState) bool { return len(st.Daemons) == 0 })
-	if got, err := e.st.Turn(t.Context(), r.room, tn.ID); err != nil || got.Status != store.TurnRunning {
-		t.Fatalf("turn after the stream closed: %+v %v", got, err)
-	}
-	e.srv.seatsEnded(t.Context(), r.room, ended.Seats, ended.Daemons)
-	if got, err := e.st.Turn(t.Context(), r.room, tn.ID); err != nil || got.Status != store.TurnFailed || got.Error != whyHostLeft {
-		t.Fatalf("turn after the removal: %+v %v", got, err)
+	e.srv.bus.Notify(r.room)
+	streamEnded(t, alice.events)
+	if got, err := e.st.Turn(t.Context(), r.room, tn.ID); err != nil || got.Status != store.TurnFailed || got.Error != "the host's daemon disconnected" {
+		t.Fatalf("turn after the old stream closed: %+v %v", got, err)
 	}
 }

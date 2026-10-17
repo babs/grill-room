@@ -62,7 +62,7 @@ func (s *Store) EndSeats(ctx context.Context, roomID string, target int64, e End
 			reason = EndLeft
 		}
 		at := now()
-		if out.Seats, err = endSeats(ctx, tx, `UPDATE participants SET removed_at = ?, end_reason = ?
+		if out.Seats, err = queryIDs(ctx, tx, `UPDATE participants SET removed_at = ?, end_reason = ?
 			WHERE room_id = ? AND removed_at IS NULL AND (id = ? OR profile_id = ?) RETURNING id`, at, reason, roomID, target, profile); err != nil {
 			return fmt.Errorf("end seats: %w", err)
 		}
@@ -129,7 +129,7 @@ func seatsGone(ctx context.Context, tx *sql.Tx, roomID string, seats []int64) (d
 			return nil, false, err
 		}
 	}
-	if daemons, err = endSeats(ctx, tx, `SELECT id FROM daemons WHERE participant_id IN (SELECT value FROM json_each(?)) ORDER BY id`, ids); err != nil {
+	if daemons, err = queryIDs(ctx, tx, `SELECT id FROM daemons WHERE participant_id IN (SELECT value FROM json_each(?)) ORDER BY id`, ids); err != nil {
 		return nil, false, fmt.Errorf("daemons: %w", err)
 	}
 	return daemons, host, nil

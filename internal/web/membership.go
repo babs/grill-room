@@ -66,7 +66,7 @@ func (s *Server) removeParticipant(w http.ResponseWriter, r *http.Request, sess 
 // seatsEnded applies seats' end to what is live: their apps, daemons, leave the room's daemons
 // and the turns they run fail, their audio ends, the host is elected again, and every stream wakes
 // to re-check its access, theirs closing with "revoked" (016-AC8, 016-AC9). An app's stream that
-// closed first left its turns to this.
+// closed first failed them the same way already.
 func (s *Server) seatsEnded(ctx context.Context, room string, seats, daemons []int64) {
 	s.presence.mu.Lock()
 	for _, id := range daemons {

@@ -214,6 +214,23 @@ func TestRevokeCut(t *testing.T) {
 		t.Fatalf("cy after the unticked revoke: %v", err)
 	}
 
+	// Bob hosts, with his app and a queued turn: the cut drops the turn, clears the host and
+	// returns the app (016-AC8, 016-AC9).
+	bobApp, err := s.PairDaemon(ctx, "a", bob.ID, "dmn-bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetHost(ctx, "a", bob.ID); err != nil {
+		t.Fatal(err)
+	}
+	// The seeded queued turn becomes his: a persona queues once.
+	if _, err := s.db.ExecContext(ctx, `UPDATE turn_queue SET participant_id = ? WHERE room_id = 'a'`, bob.ID); err != nil {
+		t.Fatal(err)
+	}
+	if q, err := s.Queue(ctx, "a"); err != nil || len(q) != 1 || q[0].ParticipantID != bob.ID {
+		t.Fatalf("queue before the cut: %+v %v", q, err)
+	}
+
 	bobsInvite := bob.InviteID
 	entries := func() int {
 		var n int
@@ -229,6 +246,15 @@ func TestRevokeCut(t *testing.T) {
 	}
 	if !slices.Equal(plan.Invites, []int64{bobsInvite}) || !slices.Equal(plan.Removed, []int64{bob.ID, cy.ID}) || len(plan.Lose) != 2 {
 		t.Fatalf("ticked: %+v", plan)
+	}
+	if !slices.Equal(plan.Daemons, []int64{bobApp.ID}) {
+		t.Fatalf("cut apps %v, want [%d]", plan.Daemons, bobApp.ID)
+	}
+	if r, err := s.Room(ctx, "a"); err != nil || r.HostParticipantID != 0 {
+		t.Fatalf("host after the cut: %+v %v", r, err)
+	}
+	if q, err := s.Queue(ctx, "a"); err != nil || len(q) != 0 {
+		t.Fatalf("queue after the cut: %+v %v", q, err)
 	}
 	var reason string
 	if err := s.db.QueryRowContext(ctx, `SELECT end_reason FROM participants WHERE id = ?`, cy.ID).Scan(&reason); err != nil || reason != EndRemoved {
