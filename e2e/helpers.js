@@ -127,8 +127,17 @@ export async function rowAction(row, name) {
 export async function pairDaemon(page, daemon) {
   const admin = await page.context().newPage();
   await admin.goto(await daemon.link);
+  // A module lost to a network change (ERR_NETWORK_CHANGED: Docker networks come and go) leaves
+  // only the page's "Couldn't load" line: reload, as a person would.
+  const pairing = admin.locator('#pairing');
+  const lost = admin.locator('#load-failed');
+  for (let i = 0; i < 3; i++) {
+    await expect(pairing.or(lost)).toBeVisible({ timeout: 30_000 });
+    if (!(await lost.isVisible())) break;
+    await Promise.all([admin.waitForEvent('load'), lost.getByRole('button', { name: 'Reload' }).click()]);
+  }
   // The worker asks to pair once the Docker orphan cleanup is done, seconds on a loaded runner.
-  await expect(admin.locator('#pairing')).toHaveText('Waiting for your approval in the room.', { timeout: 30_000 });
+  await expect(pairing).toHaveText('Waiting for your approval in the room.', { timeout: 30_000 });
   const [approval] = await Promise.all([page.context().waitForEvent('page'), admin.getByRole('link', { name: 'approve in the room' }).click()]);
   await approval.getByRole('button', { name: 'Approve' }).click();
   await expect(connectedRow(admin)).toBeAttached({ timeout: 30_000 });
