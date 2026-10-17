@@ -401,8 +401,12 @@ func (w *worker) once(log *zap.Logger) error {
 	werr := cmd.Wait()
 	kill.Stop()
 	close(exited)
+	var docker bool
+	w.set(func() { docker = w.status == nil || w.status.Docker.OK })
 	w.detach()
-	if werr != nil && s.o.Docker != nil {
+	// A Docker the worker last saw down would hold the restart for as long as each call hangs,
+	// up to minutes, and has nothing to clean now: Sandbox.Start removes leftovers.
+	if werr != nil && s.o.Docker != nil && docker {
 		// A clean exit removed its sandboxes; a crash or a kill left them.
 		w.s.mu.Lock()
 		in := w.inst

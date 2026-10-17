@@ -19,8 +19,18 @@ const stopped = signal(false);
 // picked is the server the per-server settings show; empty follows the page's current one.
 const picked = signal('');
 
+// sent counts the status reads and shown is the newest one on the page: a poll sent before a
+// change may land after the reload that follows it, and must not undo the change on screen.
+let sent = 0;
+let shown = 0;
+
 function reload() {
-  return api('GET', '/api/status').then((r) => { data.value = r; });
+  const n = ++sent;
+  return api('GET', '/api/status').then((r) => {
+    if (n < shown) return;
+    shown = n;
+    data.value = r;
+  });
 }
 
 // restarting is when an update restarted the app, 0 otherwise: the page waits for the new
@@ -56,7 +66,18 @@ async function poll() {
     restarting.value = 0;
     banner.value = 'Updated to ' + (data.value?.status.version || 'the new version') + '.';
   }
-  if (!stopped.value) setTimeout(poll, 2000);
+  if (!stopped.value) setTimeout(poll, data.value && settling(data.value) ? 500 : 2000);
+}
+
+/**
+ * settling is a page caught mid-change: a worker starting, a pairing waiting or a room connecting.
+ * The page then polls faster, so the host who just approved sees it at once.
+ * @param {StatusReply} r
+ */
+function settling(r) {
+  /** @param {{pairing: string, connection: string}} s */
+  const busy = (s) => s.pairing === 'requesting' || s.pairing === 'pending' || s.connection === 'connecting';
+  return busy(r.status) || (r.status.rooms || []).some(busy) || (r.instances || []).some((i) => i.state === 'starting' || i.state === 'restarting');
 }
 
 /**
