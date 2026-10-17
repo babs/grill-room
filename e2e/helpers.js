@@ -123,21 +123,37 @@ export async function rowAction(row, name) {
   await row.locator('.menu').getByRole('button', { name }).click();
 }
 
+// daemonPageLoaded waits for the daemon page's header, drawn once its modules ran. A module lost to
+// a network change (ERR_NETWORK_CHANGED: Docker networks come and go) leaves only the page's
+// "Couldn't load" line: reload, as a person would.
+async function daemonPageLoaded(page) {
+  const header = page.locator('.app-header');
+  const lost = page.locator('#load-failed');
+  for (let i = 0; i < 3; i++) {
+    await expect(header.or(lost)).toBeVisible({ timeout: 30_000 });
+    if (!(await lost.isVisible())) return;
+    await Promise.all([page.waitForEvent('load'), lost.getByRole('button', { name: 'Reload' }).click()]);
+  }
+  await expect(header).toBeVisible();
+}
+
+// openDaemonPage opens the daemon page at link; reloadDaemonPage reloads it. Both wait for it to load.
+export async function openDaemonPage(page, link) {
+  await page.goto(link);
+  await daemonPageLoaded(page);
+}
+
+export async function reloadDaemonPage(page) {
+  await page.reload();
+  await daemonPageLoaded(page);
+}
+
 // pairDaemon approves the daemon's pairing from the participant's room page, as a person would.
 export async function pairDaemon(page, daemon) {
   const admin = await page.context().newPage();
-  await admin.goto(await daemon.link);
-  // A module lost to a network change (ERR_NETWORK_CHANGED: Docker networks come and go) leaves
-  // only the page's "Couldn't load" line: reload, as a person would.
-  const pairing = admin.locator('#pairing');
-  const lost = admin.locator('#load-failed');
-  for (let i = 0; i < 3; i++) {
-    await expect(pairing.or(lost)).toBeVisible({ timeout: 30_000 });
-    if (!(await lost.isVisible())) break;
-    await Promise.all([admin.waitForEvent('load'), lost.getByRole('button', { name: 'Reload' }).click()]);
-  }
+  await openDaemonPage(admin, await daemon.link);
   // The worker asks to pair once the Docker orphan cleanup is done, seconds on a loaded runner.
-  await expect(pairing).toHaveText('Waiting for your approval in the room.', { timeout: 30_000 });
+  await expect(admin.locator('#pairing')).toHaveText('Waiting for your approval in the room.', { timeout: 30_000 });
   const [approval] = await Promise.all([page.context().waitForEvent('page'), admin.getByRole('link', { name: 'approve in the room' }).click()]);
   await approval.getByRole('button', { name: 'Approve' }).click();
   await expect(connectedRow(admin)).toBeAttached({ timeout: 30_000 });

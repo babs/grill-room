@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures.js';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { roomWith, startDaemon, pairDaemon, confirmSheet, connectedRow } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, reloadDaemonPage, confirmSheet, connectedRow } from './helpers.js';
 
 const desktop = { width: 1440, height: 900 };
 const phone = { width: 390, height: 844 };
@@ -148,7 +148,7 @@ test('pause fails over, connect pairs again, remove revokes the token', async ({
     await rowB.getByRole('button', { name: /^Pause hosting / }).click();
     await expect(alice.locator('#agent-status')).toHaveText("paused on the host's machine", { timeout: 30_000 });
     // The pause outlives a reload of the page: it is saved with the server.
-    await pb.reload();
+    await reloadDaemonPage(pb);
     await expect(rowB.locator('.status')).toHaveText('paused');
     await rowB.getByRole('button', { name: /^Resume / }).click();
     await expect(rowB.locator('.status')).toHaveText('runs the AI', { timeout: 30_000 });
@@ -255,7 +255,7 @@ test('the websites list updates at once and rolls back on error', async ({ brows
     release();
     await expect(admin.locator('.toast', { hasText: 'optimistic.example removed' })).toBeVisible();
     release = undefined;
-    await admin.reload();
+    await reloadDaemonPage(admin);
     await expect(domainRow('pypi.org')).toHaveCount(1);
     await expect(domainRow('optimistic.example')).toHaveCount(0);
 
@@ -277,7 +277,7 @@ test('the websites list updates at once and rolls back on error', async ({ brows
     await held();
     release();
     await expect(admin.locator('.toast', { hasText: 'second.example added' })).toBeVisible();
-    await admin.reload();
+    await reloadDaemonPage(admin);
     await expect(domainRow('second.example')).toHaveCount(1);
     await expect(domainRow('first.example')).toHaveCount(0);
     expect(sent.flat()).not.toContain('first.example');

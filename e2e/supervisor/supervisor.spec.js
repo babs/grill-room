@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, openSync, readFileSync, rmSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import { adminAPI, ask, latestLink, logLines, messagesRequests, connectedRow } from '../helpers.js';
+import { adminAPI, ask, latestLink, logLines, openDaemonPage, messagesRequests, connectedRow } from '../helpers.js';
 
 const local = `https://grill-room.${process.env.DEV_DOMAIN}`;
 const lab = `https://grill-room.${process.env.K8S_DOMAIN}`;
@@ -62,7 +62,7 @@ test('one supervisor, two instances, two accounts, two turns at once', async ({ 
     await api.post('/api/accounts', { name: 'token', kind: 'setup_token', token: readFileSync(process.env.GRILL_ROOM_E2E_SETUP_TOKEN_FILE, 'utf8').trim() });
 
     const adminPage = await mine.page.context().newPage();
-    await adminPage.goto(await latestLink(log));
+    await openDaemonPage(adminPage, await latestLink(log));
     await approve(adminPage, mine);
     await api.post('/api/room', { url: theirs.url });
     await approve(adminPage, theirs);

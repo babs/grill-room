@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, upload, appointAdmin, personaSheet, closePersonas, commentOnDocument, signIn, startDaemon } from './helpers.js';
+import { roomWith, upload, appointAdmin, personaSheet, closePersonas, commentOnDocument, signIn, startDaemon, openDaemonPage } from './helpers.js';
 
 // One guard per defect class of the v0.0.17 visual check (docs/design.md): each failed there.
 const desktop = { width: 1440, height: 900 };
@@ -220,7 +220,7 @@ async function tabBars(browser, request, size, check) {
   const daemon = startDaemon(alice.url().split('#')[0]);
   try {
     const host = await browser.newPage({ viewport: size });
-    await host.goto((await daemon.link) + '#update');
+    await openDaemonPage(host, (await daemon.link) + '#update');
     await expect(host.locator('#tab-update')).toHaveAttribute('aria-current', 'page');
     await check(host, 'nav.tabs[aria-label=Sections]', 'daemon');
   } finally {
@@ -322,7 +322,7 @@ test('status pills take their colour from the tokens', async ({ browser, request
   const daemon = startDaemon(alice.url().split('#')[0]);
   try {
     const host = await browser.newPage({ viewport: desktop });
-    await host.goto((await daemon.link) + '#general');
+    await openDaemonPage(host, (await daemon.link) + '#general');
     for (const scheme of ['light', 'dark']) {
       await host.emulateMedia({ colorScheme: scheme });
       const running = host.locator('.app-header .status', { hasText: 'Running' });
@@ -352,7 +352,7 @@ test('a cut value keeps a copy button and its full text in the tip', async ({ br
   try {
     const ctx = await browser.newContext({ viewport: phone, permissions: ['clipboard-read', 'clipboard-write'] });
     const host = await ctx.newPage();
-    await host.goto((await daemon.link) + '#general');
+    await openDaemonPage(host, (await daemon.link) + '#general');
     // The sandbox image on the Settings strip, once the server's app runs.
     const image = process.env.GRILL_ROOM_SANDBOX_FAKE_IMAGE || 'grill-room-sandbox:fake';
     const value = host.locator('.machine-strip .value');
@@ -377,7 +377,7 @@ test('the daemon page draws one tip', async ({ browser, request }) => {
   const daemon = startDaemon(alice.url().split('#')[0]);
   try {
     const host = await browser.newPage({ viewport: desktop });
-    await host.goto(await daemon.link);
+    await openDaemonPage(host, await daemon.link);
     await expect(host.locator('#tab-rooms')).toBeVisible();
     // Any [data-tip] gets the tip: the page's own probe, so the check needs no data.
     await host.locator('main').evaluate((m) => m.prepend(Object.assign(document.createElement('span'), { id: 'tip-probe', textContent: 'probe' })));

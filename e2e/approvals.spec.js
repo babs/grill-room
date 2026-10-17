@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, startDaemon, pairDaemon, menuItem, personaSheet, closePersonas, approveEverything } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, reloadDaemonPage, menuItem, personaSheet, closePersonas, approveEverything } from './helpers.js';
 
 const led = (page, name) => page.locator(`button.persona[data-name="${name}"] .led`);
 const lastAgent = (page) => page.locator('#messages li.msg.agent').last();
@@ -47,7 +47,7 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
     await admin.getByLabel('Max effort').selectOption('high');
     await admin.locator('#general-save').getByRole('button', { name: 'Save' }).click();
     await expect(admin.locator('.toast', { hasText: /^Saved$/ })).toBeVisible();
-    await admin.reload();
+    await reloadDaemonPage(admin);
     await expect(admin.getByLabel('Max model')).toHaveValue('sonnet');
     await expect(admin.getByLabel('Max effort')).toHaveValue('high');
     await expect(led(alice, 'Grill')).toHaveAttribute('aria-label', 'Grill ready');
@@ -76,7 +76,7 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
     await expect(lastAgent(bob).locator('.effort')).toHaveText('effort max');
     await expect(lastAgent(bob).locator('.capped')).toHaveCount(0);
     // The approval is an exception: the daemon's cap stays.
-    await admin.reload();
+    await reloadDaemonPage(admin);
     await expect(admin.getByLabel('Max model')).toHaveValue('sonnet');
 
     // Refused: the Secretary keeps running at the cap, and Bob reads why.

@@ -1,7 +1,7 @@
 import { request as pwRequest } from '@playwright/test';
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, menuItem, appointAdmin, personaSheet, startDaemon } from './helpers.js';
+import { roomWith, signIn, menuItem, appointAdmin, personaSheet, startDaemon, openDaemonPage } from './helpers.js';
 
 // Layout guards of the /admin lists, the room sheets and the data pages (004b-AC16): one primary
 // action per view, no action past an edge, a phone's list in short cards with no sideways scroll,
@@ -120,7 +120,7 @@ test('daemon page widths at 1920 px', async ({ browser, request, baseURL }) => {
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {
     const page = await (await browser.newContext({ viewport: sizes.wide })).newPage();
-    await page.goto(await daemon.link);
+    await openDaemonPage(page, await daemon.link);
     for (const [tab, wide] of [['rooms', true], ['monitoring', true], ['general', true], ['network', true], ['update', true], ['accounts', false]]) {
       await page.locator('#tab-' + tab).click();
       await expect(page.locator('#tab-' + tab)).toHaveAttribute('aria-current', 'page');
