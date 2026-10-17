@@ -63,15 +63,12 @@ let token = '';
 export async function startSession() {
   const m = location.pathname.match(/^\/s\/([^/]+)$/);
   if (m) {
-    history.replaceState(null, '', '/');
-    const res = await fetch('/api/session', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: m[1] }),
-    });
+    const res = await sessionFetch(m[1]);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
     localStorage.setItem('token', data.token);
+    // Only now: until the trade worked, a reload of the link must still carry the code.
+    history.replaceState(null, '', '/');
   }
   // A tab of a version before localStorage kept its token in sessionStorage; a self-update admits it.
   const old = sessionStorage.getItem('token');
@@ -81,6 +78,27 @@ export async function startSession() {
   }
   token = localStorage.getItem('token') || '';
   if (!token) throw new Error(signIn);
+}
+
+/**
+ * sessionFetch trades code, tried twice more on a network failure: Chrome fails requests in flight
+ * when Docker adds or removes a network (ERR_NETWORK_CHANGED). A try the app did get used the code
+ * up, and the next one says so.
+ * @param {string} code
+ */
+async function sessionFetch(code) {
+  for (let i = 0; ; i++) {
+    try {
+      return await fetch('/api/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+    } catch (err) {
+      if (i >= 2 || !(err instanceof TypeError)) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 300 * (i + 1)));
+    }
+  }
 }
 
 const signIn = 'This browser is not signed in to the AI host app: run `grill-room-daemon admin` on this computer, or open the latest link the app printed.';

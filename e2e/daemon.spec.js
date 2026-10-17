@@ -52,6 +52,29 @@ test('daemon pairs through the room approval', async ({ browser, request, baseUR
   }
 });
 
+// Chrome fails requests in flight when Docker adds or removes a network (ERR_NETWORK_CHANGED). A
+// lost code trade left the page blank for good, the code already gone from its address: the trade
+// is tried again.
+test('daemon page signs in through a lost session request', async ({ browser, request, baseURL }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const daemon = startDaemon(`${baseURL}/r/${room.id}`);
+  try {
+    const admin = await alice.context().newPage();
+    let dropped = false;
+    await admin.route('**/api/session', (route) => {
+      if (dropped) return route.continue();
+      dropped = true;
+      return route.abort('failed');
+    });
+    await admin.goto(await daemon.link);
+    await expect(admin.locator('#pairing')).toHaveText('Waiting for your approval in the room.', { timeout: 30_000 });
+    expect(dropped).toBe(true);
+    await expect(admin).toHaveURL(/^http:\/\/127\.0\.0\.1:\d+\/$/);
+  } finally {
+    daemon.cleanup();
+  }
+});
+
 // A status poll sent before the host's click and answered after the click's reload must not undo
 // it: approve-all came back unchecked in CI (mentions.spec.js) when one did.
 test('daemon page keeps a change a slower, older poll answers over', async ({ browser, request, baseURL }) => {
