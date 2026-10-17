@@ -35,7 +35,7 @@ func TestPushSubscriptions(t *testing.T) {
 	if got, _ := s.PushSubscriptions(ctx, "r"); len(got) != MaxPushSubscriptions-2 {
 		t.Fatalf("after delete and drop: %d", len(got))
 	}
-	if _, err := s.RevokeInvite(ctx, "r", alice.InviteID); err != nil {
+	if _, err := s.RevokeInvite(ctx, "r", alice.InviteID, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.PushSubscriptions(ctx, "r"); len(got) != 0 {

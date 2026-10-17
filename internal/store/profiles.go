@@ -172,14 +172,13 @@ func (s *Store) profile(ctx context.Context, where string, args ...any) (*Profil
 func (s *Store) profileRooms(ctx context.Context, profileID int64) ([]ProfileRoom, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT r.id, r.name, pa.id, pa.name, pa.joined_at,
-			(SELECT COUNT(DISTINCT COALESCE(p.profile_id, -p.id)) FROM participants p JOIN invites v ON v.id = p.invite_id
-				WHERE p.room_id = r.id AND v.revoked_at IS NULL),
+			(SELECT COUNT(DISTINCT COALESCE(p.profile_id, -p.id)) FROM participants p
+				WHERE p.room_id = r.id AND p.removed_at IS NULL),
 			COALESCE((SELECT ts FROM messages WHERE room_id = r.id ORDER BY id DESC LIMIT 1), r.created_at),
 			EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = r.id AND a.profile_id = pa.profile_id)
 		FROM participants pa
-		JOIN invites i ON i.id = pa.invite_id
 		JOIN rooms r ON r.id = pa.room_id
-		WHERE pa.profile_id = ? AND i.revoked_at IS NULL ORDER BY pa.id DESC`, profileID)
+		WHERE pa.profile_id = ? AND pa.removed_at IS NULL ORDER BY pa.id DESC`, profileID)
 	if err != nil {
 		return nil, fmt.Errorf("profile rooms: %w", err)
 	}
@@ -203,7 +202,7 @@ func (s *Store) profileRooms(ctx context.Context, profileID int64) ([]ProfileRoo
 }
 
 // ProfileParticipant returns the newest participant of room whose profile holds a valid session
-// sessionHash and whose invite is not revoked. ErrNotFound otherwise.
+// sessionHash and whose seat is valid. ErrNotFound otherwise.
 func (s *Store) ProfileParticipant(ctx context.Context, sessionHash, roomID string) (*Participant, error) {
 	var p Participant
 	var joined string
@@ -211,8 +210,7 @@ func (s *Store) ProfileParticipant(ctx context.Context, sessionHash, roomID stri
 		SELECT pa.id, pa.room_id, pa.invite_id, pa.name, pa.joined_at, pa.can_trigger, pa.profile_id
 		FROM profile_sessions ps
 		JOIN participants pa ON pa.profile_id = ps.profile_id
-		JOIN invites i ON i.id = pa.invite_id
-		WHERE ps.token_hash = ? AND ps.expires_at_s > ? AND pa.room_id = ? AND i.revoked_at IS NULL
+		WHERE ps.token_hash = ? AND ps.expires_at_s > ? AND pa.room_id = ? AND pa.removed_at IS NULL
 		ORDER BY pa.id DESC LIMIT 1`, sessionHash, time.Now().Unix(), roomID).
 		Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID)
 	if errors.Is(err, sql.ErrNoRows) {

@@ -28,7 +28,7 @@ Every row carries `ref`, its id on the exporting instance. Other rows point to i
 | File | Holds |
 |---|---|
 | `room.json` | `name`, `created_at`, `chain` (`budget`, `count`, `suspended`), `parallel_turns`, `stt_glossary`, `created_from` (the starter's `title` and `version`, absent for a room from no starter), and `personas` |
-| `participants.jsonl` | `ref`, `name`, `joined_at`, `can_trigger`, `active` (false once their invite was revoked), `profile_uuid` (or the hint an earlier import kept), `admin`, `previous_name` (the name before the latest rename, when there was one) |
+| `participants.jsonl` | `ref`, `name`, `joined_at`, `can_trigger`, `active` (false once their seat ended: revoked, removed or left), `profile_uuid` (or the hint an earlier import kept), `admin`, `previous_name` (the name before the latest rename, when there was one) |
 | `messages.jsonl` | `ref`, `ts`, `kind` (`voice`, `text`, `agent`, `system`), `participant`, `persona`, `sender`, `body`, `source` (voice lines only: `device` when the speaker's browser transcribed it, `server` when the STT worker did; any other value, or a `source` on another kind, is refused), `model`, `model_note`, `model_mismatch`, `effort`, `requested_model`, `requested_effort`, `edited_at`, `deleted_at`, `change_seq` |
 | `mentions.jsonl` | how each line's @mention of a persona ended: `message`, `persona`, `status` (`done`, `failed`, `stopped`, `cancelled`, or `queued` and `running` at export, which import as `cancelled`: the turn history stays behind), `line` (the synthesis, or the line telling the failure or stop) |
 | `note_mentions.jsonl` | the same for note messages: `message` is an annotation message's ref. Optional: an archive from before it has none, and imports with no chips on its notes |

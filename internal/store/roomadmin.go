@@ -287,8 +287,8 @@ func (s *Store) SetRoomAdmin(ctx context.Context, roomID string, target int64, o
 		}
 		var name string
 		var profile sql.NullInt64
-		err := tx.QueryRowContext(ctx, `SELECT p.name, p.profile_id FROM participants p JOIN invites i ON i.id = p.invite_id
-			WHERE p.id = ? AND p.room_id = ? AND i.revoked_at IS NULL`, target, roomID).Scan(&name, &profile)
+		err := tx.QueryRowContext(ctx, `SELECT p.name, p.profile_id FROM participants p
+			WHERE p.id = ? AND p.room_id = ? AND p.removed_at IS NULL`, target, roomID).Scan(&name, &profile)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -351,8 +351,8 @@ func (s *Store) RenameParticipant(ctx context.Context, roomID string, target int
 			}
 		}
 		var old string
-		err := tx.QueryRowContext(ctx, `SELECT p.name FROM participants p JOIN invites i ON i.id = p.invite_id
-			WHERE p.id = ? AND p.room_id = ? AND i.revoked_at IS NULL`, target, roomID).Scan(&old)
+		err := tx.QueryRowContext(ctx, `SELECT p.name FROM participants p
+			WHERE p.id = ? AND p.room_id = ? AND p.removed_at IS NULL`, target, roomID).Scan(&old)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}

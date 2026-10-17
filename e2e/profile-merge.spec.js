@@ -100,7 +100,7 @@ test('purge of an empty profile and the Instance switch', async ({ browser, requ
   const inv = await join(ghost, request, room.id, name);
   const before = await profileOf(ghost);
   const uuid = (await (await request.get('/api/admin/profiles', { headers: admin })).json()).find((p) => p.id === before.id).uuid;
-  expect((await request.delete(`/api/rooms/${room.id}/invites/${inv.id}`, { headers: admin })).status()).toBe(200);
+  expect((await request.delete(`/api/rooms/${room.id}/invites/${inv.id}?cut=1`, { headers: admin })).status()).toBe(200);
   const purge = async () => {
     const res = await request.post('/api/admin/test/purge', { headers: admin, data: { after_s: 0, profile_ids: [before.id] } });
     expect(res.status()).toBe(200);

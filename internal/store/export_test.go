@@ -96,7 +96,7 @@ func richRoom(t *testing.T, s *Store, id string) (*Participant, *RoomPersona) {
 	}
 	say(carol, "bye")
 	invs, _ := s.Invites(ctx, id, 0)
-	if _, err := s.RevokeInvite(ctx, id, invs[len(invs)-1].ID); err != nil {
+	if _, err := s.RevokeInvite(ctx, id, invs[len(invs)-1].ID, true, "Admin"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.AddUpload(ctx, &Upload{RoomID: id, ParticipantID: bob.ID, Author: "Bob", Filename: "plan.md", ContentType: "text/markdown; charset=utf-8",
@@ -701,7 +701,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"rooms": "id name created_at chain_budget chain_count chain_suspended parallel_turns stt_glossary created_from | host_participant_id quota_bytes creator_profile_id egress_admins_allow",
 		// 014: what the AI host allowed is the host's, not the room's; the lines stay as text.
 		"blocked_requests":         "| message_id room_id persona domain count decision pending_scope pending_by pending_actor pending_error dismissed_by",
-		"participants":             "id name joined_at can_trigger profile_id profile_uuid_hint room_id invite_id previous_name | token_hash last_seen_at join_ip join_ua last_ip last_ua",
+		"participants":             "id name joined_at can_trigger profile_id profile_uuid_hint room_id invite_id previous_name removed_at | token_hash last_seen_at join_ip join_ua last_ip last_ua end_reason",
 		"invites":                  "| id room_id token_hash created_at revoked_at created_by link", // 011-AC26: a shareable token never leaves
 		"messages":                 "id room_id ts kind participant_id sender body model edited_at deleted_at change_seq persona_id effort req_model req_effort model_note model_mismatch source | html turn_id",
 		"message_versions":         "id message_id seq body written_at |",

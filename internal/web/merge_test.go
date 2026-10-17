@@ -106,7 +106,7 @@ func (e *env) ghost(t *testing.T) (*device, int64) {
 	d := e.device(t)
 	d.joinVia(t, inv.Token, "Ghost")
 	id := d.profile(t).Profile.ID
-	if code, _ := e.do(t, "DELETE", fmt.Sprintf("/api/rooms/%s/invites/%d", room.ID, inv.ID), e.admin, nil); code != http.StatusOK {
+	if code, _ := e.do(t, "DELETE", fmt.Sprintf("/api/rooms/%s/invites/%d", room.ID, inv.ID)+"?cut=1", e.admin, nil); code != http.StatusOK {
 		t.Fatalf("revoke: %d", code)
 	}
 	return d, id
