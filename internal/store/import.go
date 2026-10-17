@@ -508,7 +508,7 @@ func (im *importer) relinkSet() error {
 func (im *importer) relinkable(uuid string) bool { return im.relink == nil || im.relink[uuid] }
 
 // participantsStep seats every participant under one invite nobody holds: the active ones under a
-// valid invite, those whose invite was revoked under a revoked one. Each is relinked to the profile
+// valid invite, the others under a revoked one, their seat ended as revoked (016-AC18). Each is relinked to the profile
 // of its uuid when there is one and the importer may relink it, and a relinked room admin stays
 // one. Any other keeps its uuid as a hint.
 func (im *importer) participantsStep() error {
@@ -550,8 +550,13 @@ func (im *importer) participantsStep() error {
 			}
 		}
 		var id int64
-		err := im.tx.QueryRowContext(im.ctx, `INSERT INTO participants(room_id, invite_id, name, token_hash, joined_at, can_trigger, profile_id, profile_uuid_hint, previous_name)
-			VALUES(?,?,?,?,?,?,?,?,?) RETURNING id`, im.room, inv, p.Name, newHash(), p.JoinedAt, p.CanTrigger, profile, hint, nullStr(p.PreviousName)).Scan(&id)
+		var removed, reason any
+		if !p.Active {
+			removed, reason = now(), EndRevoked
+		}
+		err := im.tx.QueryRowContext(im.ctx, `INSERT INTO participants(room_id, invite_id, name, token_hash, joined_at, can_trigger, profile_id, profile_uuid_hint, previous_name,
+			removed_at, end_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?) RETURNING id`, im.room, inv, p.Name, newHash(), p.JoinedAt, p.CanTrigger, profile, hint, nullStr(p.PreviousName),
+			removed, reason).Scan(&id)
 		if err != nil {
 			return refuseImport("participant %d: %v", p.Ref, err)
 		}
@@ -1161,8 +1166,8 @@ func (im *importer) seatStep() error {
 		return nil
 	}
 	var seated bool
-	err := im.tx.QueryRowContext(im.ctx, `SELECT EXISTS (SELECT 1 FROM participants p JOIN invites i ON i.id = p.invite_id
-		WHERE p.room_id = ? AND p.profile_id = ? AND i.revoked_at IS NULL)`, im.room, im.o.Importer).Scan(&seated)
+	err := im.tx.QueryRowContext(im.ctx, `SELECT EXISTS (SELECT 1 FROM participants p
+		WHERE p.room_id = ? AND p.profile_id = ? AND p.removed_at IS NULL)`, im.room, im.o.Importer).Scan(&seated)
 	if err != nil {
 		return fmt.Errorf("import seat: %w", err)
 	}

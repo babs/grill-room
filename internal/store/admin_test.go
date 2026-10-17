@@ -209,7 +209,10 @@ func TestAuditWriteFailureRollsBackTheChange(t *testing.T) {
 		{"rename room", func() error { _, err := s.RenameRoom(audited(TargetRoom, "a"), "a", "Z", nil); return err }, `SELECT name FROM rooms WHERE id = 'a'`, nil, "Room a"},
 		{"room quota", func() error { return s.SetRoomQuota(audited(TargetRoom, "a"), "a", 5) }, `SELECT quota_bytes FROM rooms WHERE id = 'a'`, nil, ""},
 		{"create invite", func() error { _, err := s.CreateInvite(audited(TargetRoom, "a"), "a", "ix", 0); return err }, `SELECT count(*) FROM invites WHERE token_hash = 'ix'`, nil, "0"},
-		{"revoke invite", func() error { _, err := s.RevokeInvite(audited(TargetRoom, "a"), "a", invs[0].ID); return err }, `SELECT revoked_at FROM invites WHERE id = ?`, []any{invs[0].ID}, ""},
+		{"revoke invite", func() error {
+			_, err := s.RevokeInvite(audited(TargetRoom, "a"), "a", invs[0].ID, true, "Admin")
+			return err
+		}, `SELECT revoked_at FROM invites WHERE id = ?`, []any{invs[0].ID}, ""},
 		{"delete profile", func() error { return s.DeleteProfile(audited(TargetProfile, "p"), p.ProfileID) }, `SELECT count(*) FROM profiles WHERE id = ?`, []any{p.ProfileID}, "1"},
 		{"remove template", func() error { return s.RemoveTemplate(audited(TargetTemplate, "t"), tpl.ID) }, `SELECT count(*) FROM persona_templates WHERE id = ?`, []any{tpl.ID}, "1"},
 		{"remove skill", func() error { return s.RemoveSkill(audited(TargetSkill, "k"), k.ID, 0) }, `SELECT count(*) FROM skills WHERE id = ?`, []any{k.ID}, "1"},

@@ -163,6 +163,7 @@ test('a plain member manages their own invites in Room settings', async ({ brows
 // People, and the empty-chat card comes back once nobody else is left.
 test('a revoke from Room settings updates People and the empty chat card', async ({ browser, request }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await appointAdmin(alice, request, room.id);
   const link = (await share(alice, room.id)).url;
   const bob = await (await browser.newContext()).newPage();
   await bob.goto(new URL(link).pathname + new URL(link).hash);
@@ -173,7 +174,8 @@ test('a revoke from Room settings updates People and the empty chat card', async
   await expect(alice.locator('#chat-empty')).toBeHidden();
 
   await alice.goto(`/r/${room.id}#manage/invites`);
-  await rowAction(alice.locator('#manage #invites-all .list-row:not(.head)'), /^Revoke/);
+  await rowAction(alice.locator('#manage #invites-all .list-row:not(.head)').filter({ hasText: 'Your shareable link' }), /^Revoke/);
+  await alice.locator('#revoke-sheet').getByLabel('Also remove the 1 person who joined through it').check();
   await alice.locator('#revoke-sheet').getByRole('button', { name: 'Revoke', exact: true }).click();
   await expect(alice.locator('#toasts .toast')).toHaveText('Revoked. Bob lost access.');
   await alice.locator('#manage-close').click();
@@ -182,8 +184,9 @@ test('a revoke from Room settings updates People and the empty chat card', async
 });
 
 for (const vp of widths) {
-  // 011-AC19, 011-AC20, 011-AC26: Room settings › Invites asks before a revoke: who loses access,
-  // admin and you marked, who keeps it, the chained count; the toast names who the revoke cut.
+  // 011-AC19, 011-AC20, 011-AC26, 016-AC4: Room settings › Invites asks before a revoke; the box,
+  // unticked, offers to remove who joined, with who loses access, admin and you marked, who keeps
+  // it, the chained count; ticked, the toast names who the revoke cut.
   test(`the revoke sheet in Room settings, ${vp.name}`, async ({ browser, request, baseURL }) => {
     const { room, alice, i0, sA, sB, contexts } = await chain(browser, request, baseURL);
     await alice.setViewportSize(vp);
@@ -196,11 +199,12 @@ for (const vp of widths) {
     const sheet = alice.locator('#revoke-sheet');
     await rowAction(panel.locator(`#invite-${i0}`), /^Revoke/);
     await expect(sheet.locator('#revoke-title')).toHaveText('Revoke this invite?');
-    await expect(sheet).toContainText('These people lose access:');
+    await expect(sheet.getByLabel('Also remove the 3 people who joined through it')).not.toBeChecked();
+    await expect(sheet).toContainText('Ticked, these people lose access:');
     expect(await people(sheet, 'revoke-lose')).toEqual(['Alice admin you', 'Bob', 'Carol']);
     await expect(sheet).toContainText('Keep access through another invite:');
     expect(await people(sheet, 'revoke-keep')).toEqual(['Dan']);
-    await expect(sheet.locator('#revoke-chain')).toHaveText('Also revokes 2 invites made by people who joined through it.');
+    await expect(sheet.locator('#revoke-chain')).toHaveText('Ticked, it also revokes 2 invites made by people who joined through it.');
     if (vp.width < 400) {
       expect((await sheet.boundingBox()).width).toBe(vp.width);
       expect(await noOverflow(alice)).toEqual([]);
@@ -212,8 +216,9 @@ for (const vp of widths) {
     await rowAction(panel.locator(`#invite-${sA}`), /^Revoke/);
     expect(await people(sheet, 'revoke-lose')).toEqual(['Bob', 'Carol']);
     expect(await people(sheet, 'revoke-keep')).toEqual(['Dan']);
-    await expect(sheet.locator('#revoke-chain')).toHaveText('Also revokes 1 invite made by people who joined through it.');
-    const release = await gate(alice, `**/api/rooms/${room.id}/invites/${sA}`, 'DELETE');
+    await expect(sheet.locator('#revoke-chain')).toHaveText('Ticked, it also revokes 1 invite made by people who joined through it.');
+    await sheet.getByLabel('Also remove the 2 people who joined through it').check();
+    const release = await gate(alice, new RegExp(`/api/rooms/${room.id}/invites/${sA}\\?cut=1$`), 'DELETE');
     await sheet.getByRole('button', { name: 'Revoke', exact: true }).click();
     await expect(sheet.getByRole('button', { name: 'Revoke', exact: true })).toBeDisabled();
     await expect(sheet.getByRole('button', { name: 'Cancel' })).toBeDisabled();
@@ -244,12 +249,13 @@ for (const vp of widths) {
     await rowAction(panel.locator(`#invite-${i0}`), /^Revoke/);
     expect(await people(sheet, 'revoke-lose')).toEqual(['Alice admin', 'Bob', 'Carol']);
     expect(await people(sheet, 'revoke-keep')).toEqual(['Dan']);
-    await expect(sheet.locator('#revoke-chain')).toHaveText('Also revokes 2 invites made by people who joined through it.');
+    await expect(sheet.locator('#revoke-chain')).toHaveText('Ticked, it also revokes 2 invites made by people who joined through it.');
     if (vp.width < 400) {
       expect((await sheet.boundingBox()).width).toBe(vp.width);
       expect(await noOverflow(page)).toEqual([]);
     }
-    const release = await gate(page, `**/api/admin/rooms/${room.id}/invites/${i0}`, 'DELETE');
+    await sheet.getByLabel('Also remove the 3 people who joined through it').check();
+    const release = await gate(page, new RegExp(`/api/admin/rooms/${room.id}/invites/${i0}\\?cut=1$`), 'DELETE');
     await sheet.getByRole('button', { name: 'Revoke', exact: true }).click();
     await expect(sheet.getByRole('button', { name: 'Revoke', exact: true })).toBeDisabled();
     await release();
@@ -260,5 +266,53 @@ for (const vp of widths) {
     await expect(sheet).toHaveCount(0);
     for (const id of [i0, sA, sB]) await expect(panel.locator(`#invite-${id}`)).toContainText('revoked');
     for (const c of contexts) await c.dispose();
+  });
+}
+
+for (const vp of widths) {
+  // 016-AC3 016-AC4: a revoke stops new joins only. A plain member's sheet has no box; their joiner's
+  // page stays live and a new join through the link fails. A room admin's box, ticked, ends the
+  // joiner's page.
+  test(`a revoke keeps who joined unless the box is ticked, ${vp.name}`, async ({ browser, request }) => {
+    const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
+    await appointAdmin(alice, request, room.id);
+    const joinPage = async (url, name) => {
+      const page = await (await browser.newContext()).newPage();
+      await page.goto(new URL(url).pathname + new URL(url).hash);
+      await page.getByLabel('Your name').fill(name);
+      await page.getByRole('button', { name: 'Join the room' }).click();
+      await expect(page.locator('#me')).toHaveText(name);
+      return page;
+    };
+    const carol = await joinPage((await share(bob, room.id)).url, 'Carol');
+    const bobLink = (await share(bob, room.id)).url;
+
+    await bob.setViewportSize(vp);
+    await bob.goto(`/r/${room.id}#manage/invites`);
+    await rowAction(bob.locator('#manage #invites-all .list-row:not(.head)'), /^Revoke/);
+    const sheet = bob.locator('#revoke-sheet');
+    await expect(sheet.locator('#revoke-stays')).toHaveText('No one can join through it any more. Who joined through it keeps their seat.');
+    await expect(sheet.locator('#revoke-cut')).toHaveCount(0);
+    await expect(sheet.locator('#revoke-lose')).toHaveCount(0);
+    if (vp.width < 400) expect(await noOverflow(bob)).toEqual([]);
+    await sheet.getByRole('button', { name: 'Revoke', exact: true }).click();
+    await expect(bob.locator('#toasts .toast')).toHaveText('Revoked. Nobody lost access.');
+    await carol.locator('#body').fill('still here');
+    await carol.locator('#body').press('Enter');
+    await expect(alice.locator('#messages')).toContainText('still here');
+    expect((await request.post('/api/join', { data: { invite: new URL(bobLink).hash.slice(1), name: 'Mallory' } })).status()).toBe(401);
+
+    const dan = await joinPage((await share(alice, room.id)).url, 'Dan');
+    await alice.setViewportSize(vp);
+    await alice.goto(`/r/${room.id}#manage/invites`);
+    const mine = alice.locator('#manage #invites-all .list-row:not(.head)').filter({ hasText: 'Your shareable link' });
+    await rowAction(mine, /^Revoke/);
+    const box = alice.locator('#revoke-sheet').getByLabel('Also remove the 1 person who joined through it');
+    await expect(box).not.toBeChecked();
+    await box.check();
+    await alice.locator('#revoke-sheet').getByRole('button', { name: 'Revoke', exact: true }).click();
+    await expect(alice.locator('#toasts .toast')).toHaveText('Revoked. Dan lost access.');
+    await expect(dan.locator('#banner')).toHaveText('Your access to this room has ended.');
+    await expect(carol.locator('#messages')).toContainText('Alice revoked an invite; Dan was removed');
   });
 }

@@ -193,21 +193,25 @@ for (const [label, size] of [['desktop', { width: 1440, height: 900 }], ['phone'
 }
 
 // 008-AC13: no setting sits in a row; a room admin reaches a person's actions from its ⋯ with the
-// keyboard, renames them and makes them a room admin; a plain member gets no ⋯ actions.
+// keyboard, renames them and makes them a room admin; a plain member gets no ⋯ actions on others,
+// only Leave room… on their own row (016-AC12).
 test('a person menu, not in-place settings', async ({ browser, request }) => {
   const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
   const ids = await alice.evaluate((id) => fetch(`/api/rooms/${id}`).then((r) => r.json()).then((d) => d.participants.map((p) => p.id)), room.id);
   expect((await request.put(`/api/rooms/${room.id}/admins/${ids[0]}`, { headers: admin })).status()).toBe(204);
   await alice.reload();
   await expect(alice.locator('#participants :is(input, label)')).toHaveCount(0);
-  await expect(bob.locator('#participants .person-more:not([disabled])')).toHaveCount(0);
+  await expect(bob.locator('#participants .person-more:not([disabled])')).toHaveCount(1);
+  await row(bob, 'Bob').locator('.person-more').click();
+  await expect(bob.locator('#person-menu button')).toHaveText(['Leave room…']);
+  await bob.keyboard.press('Escape');
 
   const more = row(alice, 'Bob').locator('.person-more');
   await more.focus();
   await alice.keyboard.press('Enter');
   const menu = alice.locator('#person-menu');
   await expect(menu.getByRole('button', { name: 'Rename' })).toBeFocused();
-  await expect(menu.locator('button')).toHaveText(['Rename', 'Make room admin']);
+  await expect(menu.locator('button')).toHaveText(['Rename', 'Make room admin', 'Remove from room…']);
   await alice.keyboard.press('ArrowDown');
   await expect(menu.getByRole('button', { name: 'Make room admin' })).toBeFocused();
   await alice.keyboard.press('Escape');
@@ -233,7 +237,9 @@ test('a person menu, not in-place settings', async ({ browser, request }) => {
   await expect(robert).toHaveAttribute('aria-expanded', 'false');
   await robert.click();
   await expect(robert).toHaveAttribute('aria-expanded', 'true');
-  await expect(self).toBeDisabled();
+  await self.click();
+  await expect(menu.locator('button')).toHaveText(['Leave room…']);
+  await expect(menu.getByRole('button', { name: 'Leave room…' })).toHaveAttribute('aria-disabled', 'true');
   await alice.keyboard.press('Escape');
   await alice.setViewportSize({ width: 390, height: 844 });
   await alice.locator('#tabbar').getByRole('button', { name: /People/ }).click();

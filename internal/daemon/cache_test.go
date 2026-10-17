@@ -294,7 +294,7 @@ func TestTranscriptChunksTransferOnlyChanges(t *testing.T) {
 	if got := fetched(appended); !slices.Equal(got, []string{day + "004.md"}) {
 		t.Fatalf("turn 2 fetched %v", got)
 	}
-	if _, err := sr.rs.st.EditMessage(ctx, sr.rs.room, first, ps[0].ID, "line 0, edited"); err != nil {
+	if _, _, err := sr.rs.st.EditMessage(ctx, sr.rs.room, first, ps[0].ID, "line 0, edited"); err != nil {
 		t.Fatal(err)
 	}
 	edited := sr.turn(t)
@@ -434,7 +434,7 @@ func TestWorkspaceCacheForgottenWithTheRoom(t *testing.T) {
 			}
 			sr.rs.call(t, "GET", "/api/rooms/"+sr.rs.room+"/invites", sr.rs.admin, nil, http.StatusOK, &invites)
 			for _, inv := range invites {
-				sr.rs.call(t, "DELETE", "/api/rooms/"+sr.rs.room+"/invites/"+strconv.FormatInt(inv.ID, 10), sr.rs.admin, nil, http.StatusOK, nil)
+				sr.rs.call(t, "DELETE", "/api/rooms/"+sr.rs.room+"/invites/"+strconv.FormatInt(inv.ID, 10)+"?cut=1", sr.rs.admin, nil, http.StatusOK, nil)
 			}
 		} else {
 			sr.rs.call(t, "DELETE", "/api/rooms/"+sr.rs.room, sr.rs.admin, nil, http.StatusNoContent, nil)

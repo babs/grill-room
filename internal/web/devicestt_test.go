@@ -243,7 +243,7 @@ func TestDeviceLines(t *testing.T) {
 	// A revoked participant's device lines are refused with their access.
 	inv := e.createInvite(t, r.room)
 	carol := e.join(t, inv.Token, "Carol")
-	if code, _ := e.do(t, "DELETE", "/api/rooms/"+r.room+"/invites/"+itoa(inv.ID), e.admin, nil); code != http.StatusOK {
+	if code, _ := e.do(t, "DELETE", "/api/rooms/"+r.room+"/invites/"+itoa(inv.ID)+"?cut=1", e.admin, nil); code != http.StatusOK {
 		t.Fatal("revoke")
 	}
 	if code, _ := e.do(t, "POST", path, carol.Token, map[string]any{"body": "still here?"}); code != http.StatusUnauthorized {

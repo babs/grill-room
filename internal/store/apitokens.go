@@ -175,7 +175,7 @@ func (s *Store) TouchAPIToken(ctx context.Context, id int64, ip string, now time
 }
 
 // APITokenParticipant returns the newest participant of room whose profile holds the unexpired
-// token hash and whose invite is not revoked, as ProfileParticipant does for a session (012-AC3).
+// token hash and whose seat is valid, as ProfileParticipant does for a session (012-AC3).
 func (s *Store) APITokenParticipant(ctx context.Context, hash, roomID string, now time.Time) (*Participant, error) {
 	var p Participant
 	var joined string
@@ -183,8 +183,7 @@ func (s *Store) APITokenParticipant(ctx context.Context, hash, roomID string, no
 		SELECT pa.id, pa.room_id, pa.invite_id, pa.name, pa.joined_at, pa.can_trigger, pa.profile_id
 		FROM api_tokens t
 		JOIN participants pa ON pa.profile_id = t.profile_id
-		JOIN invites i ON i.id = pa.invite_id
-		WHERE t.token_hash = ? AND (t.expires_at_ms IS NULL OR t.expires_at_ms > ?) AND pa.room_id = ? AND i.revoked_at IS NULL
+		WHERE t.token_hash = ? AND (t.expires_at_ms IS NULL OR t.expires_at_ms > ?) AND pa.room_id = ? AND pa.removed_at IS NULL
 		ORDER BY pa.id DESC LIMIT 1`, hash, now.UnixMilli(), roomID).
 		Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID)
 	if errors.Is(err, sql.ErrNoRows) {

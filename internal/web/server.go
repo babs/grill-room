@@ -272,6 +272,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/admin/rooms/{room}/admins/{participant}", adminOnly(s.setRoomAdmin))
 	mux.Handle("DELETE /api/admin/rooms/{room}/admins/{participant}", adminOnly(s.setRoomAdmin))
 	mux.Handle("PUT /api/admin/rooms/{room}/participants/{participant}/name", adminOnly(s.renameParticipant))
+	mux.Handle("DELETE /api/admin/rooms/{room}/participants/{participant}", adminOnly(s.removeParticipant))
+	mux.Handle("GET /api/admin/rooms/{room}/blocks", adminOnly(s.listBlocks))
+	mux.Handle("DELETE /api/admin/rooms/{room}/blocks/{profile}", adminOnly(s.unblock))
 	mux.Handle("PUT /api/admin/rooms/{room}/host", adminOnly(s.handOver))
 	mux.Handle("PUT /api/rooms/{room}/quota", s.memberOrAdmin(s.setQuota))
 	mux.Handle("GET /api/admin/rooms/{room}/invites", adminOnly(s.listInvites))
@@ -367,6 +370,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/rooms/{room}/host", s.memberOrAdmin(s.handOver))
 	mux.Handle("PATCH /api/rooms/{room}/participants/{participant}", s.participant(s.setCanTrigger))
 	mux.Handle("PUT /api/rooms/{room}/participants/{participant}/name", s.memberOrAdmin(s.renameParticipant))
+	mux.Handle("DELETE /api/rooms/{room}/participants/{participant}", s.memberOrAdmin(s.removeParticipant))
+	mux.Handle("GET /api/rooms/{room}/blocks", s.memberOrAdmin(s.listBlocks))
+	mux.Handle("DELETE /api/rooms/{room}/blocks/{profile}", s.memberOrAdmin(s.unblock))
 	mux.Handle("DELETE /api/rooms/{room}/queue/{queued}", s.participant(s.cancelQueued))
 	mux.Handle("PATCH /api/rooms/{room}/chain", s.participant(s.controlChain))
 	mux.Handle("GET /api/rooms/{room}/templates", s.participant(s.listTemplates))
@@ -825,35 +831,35 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, sess *sess
 
 // revocable returns the request's invite id, provided sess may revoke it: the super-admin and room
 // admins any, a plain member only the ones they created. It answers the request otherwise.
-func (s *Server) revocable(w http.ResponseWriter, r *http.Request, sess *session) (int64, bool) {
+func (s *Server) revocable(w http.ResponseWriter, r *http.Request, sess *session) (id int64, admin, ok bool) {
 	id, err := strconv.ParseInt(r.PathValue("invite"), 10, 64)
 	if err != nil {
 		httpError(w, http.StatusNotFound, "no such invite")
-		return 0, false
+		return 0, false, false
 	}
-	admin := sess == nil
+	admin = sess == nil
 	if !admin {
 		if admin, err = s.roomAdmin(r.Context(), sess); err != nil {
 			s.serverError(w, "revoke_invite_failed", err)
-			return 0, false
+			return 0, false, false
 		}
 	}
 	if !admin {
 		inv, err := s.bus.Store.Invite(r.Context(), r.PathValue("room"), id)
 		if errors.Is(err, store.ErrNotFound) {
 			httpError(w, http.StatusNotFound, "no such invite")
-			return 0, false
+			return 0, false, false
 		}
 		if err != nil {
 			s.serverError(w, "revoke_invite_failed", err)
-			return 0, false
+			return 0, false, false
 		}
 		if inv.CreatedBy != sess.p.ID {
 			httpError(w, http.StatusForbidden, "you can revoke only the invites you created")
-			return 0, false
+			return 0, false, false
 		}
 	}
-	return id, true
+	return id, admin, true
 }
 
 type previewSeat struct {
@@ -863,7 +869,7 @@ type previewSeat struct {
 
 // revokePreview answers what revoking the invite would do now, for whoever may revoke it (011-AC19).
 func (s *Server) revokePreview(w http.ResponseWriter, r *http.Request, sess *session) {
-	id, ok := s.revocable(w, r, sess)
+	id, _, ok := s.revocable(w, r, sess)
 	if !ok {
 		return
 	}
@@ -893,14 +899,26 @@ type lostSeat struct {
 }
 
 // revokeInvite revokes any invite for the super-admin and room admins, and only the ones they
-// created for a plain member. It answers the invites it cut and who lost access (011-AC20).
+// created for a plain member: no one joins through it any more (016-AC3). With ?cut=1, for a room
+// admin or the super-admin only, it also revokes the invite's chain and removes the people who
+// joined through it (011-AC20, 016-AC4, 016-AC5). It answers the invites it revoked and who lost
+// access.
 func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request, sess *session) {
 	room := r.PathValue("room")
-	id, ok := s.revocable(w, r, sess)
+	id, admin, ok := s.revocable(w, r, sess)
 	if !ok {
 		return
 	}
-	plan, err := s.bus.Store.RevokeInvite(s.roomAuditing(r, sess, ActionInviteRevoke, room, nil), room, id)
+	cut := r.URL.Query().Get("cut") == "1"
+	if cut && !admin {
+		httpError(w, http.StatusForbidden, "Only a room admin can remove people")
+		return
+	}
+	who := "The admin"
+	if sess != nil {
+		who = sess.p.Name
+	}
+	plan, err := s.bus.Store.RevokeInvite(s.roomAuditing(r, sess, ActionInviteRevoke, room, nil), room, id, cut, who)
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "no such invite")
 		return
@@ -909,19 +927,10 @@ func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request, sess *sess
 		s.serverError(w, "revoke_invite_failed", err)
 		return
 	}
-	// Wakes the room's event streams, which re-check access and close.
-	s.bus.Notify(room)
-	// The revoke stands either way: a failed lookup only leaves the browser to leave audio itself.
-	// Past the commit, a client hanging up must not skip the kick.
-	ctx := context.WithoutCancel(r.Context())
-	for _, inv := range plan.Invites {
-		if ids, err := s.bus.Store.InviteParticipantIDs(ctx, room, inv); err != nil {
-			s.log.Error("voice_kick_lookup_failed", zap.String("room", room), zap.Error(err))
-		} else {
-			s.kickFromVoice(room, ids)
-		}
-	}
-	s.log.Info("invite_revoked", zap.String("room", room), zap.Int64("invite", id), zap.Int64s("with", plan.Invites))
+	// A cut removes its people as a removal does (016-AC4); every stream wakes and re-checks access.
+	s.seatsEnded(context.WithoutCancel(r.Context()), room, plan.Removed, plan.Daemons)
+	s.log.Info("invite_revoked", zap.String("room", room), zap.Int64("invite", id), zap.Int64s("with", plan.Invites),
+		zap.Bool("cut", cut), zap.Int64s("removed", plan.Removed))
 	lost := make([]lostSeat, len(plan.Lose))
 	for i, p := range plan.Lose {
 		lost[i] = lostSeat{ParticipantID: p.ParticipantID, Name: p.Name}
@@ -1011,6 +1020,10 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusUnauthorized, "invalid or revoked invite")
 		return
 	}
+	if errors.Is(err, store.ErrBlocked) {
+		httpError(w, http.StatusForbidden, "A room admin blocked you from rejoining this room.")
+		return
+	}
 	if err != nil {
 		s.serverError(w, "join_failed", err)
 		return
@@ -1051,6 +1064,9 @@ type roomResp struct {
 	Profile bool `json:"profile"`
 	// Version is this server's, for the room page's Diagnostics (010-AC22).
 	Version string `json:"version"`
+	// Departed marks the lines of seats that ended, of people no longer in the room: "removed" or
+	// "left", by seat (016-AC11).
+	Departed map[int64]string `json:"departed"`
 }
 
 func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
@@ -1069,9 +1085,15 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
 			sess.p.Admin = p.Admin
 		}
 		ps[i].Self = p.ID == sess.p.ID || (sess.p.ProfileID != 0 && p.ProfileID == sess.p.ProfileID)
+		ps[i].NoProfile = p.ProfileID == 0
+	}
+	departed, err := s.bus.Store.Departed(r.Context(), room.ID)
+	if err != nil {
+		s.serverError(w, "get_room_failed", err)
+		return
 	}
 	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps, Daemons: s.connectedDaemons(room.ID), Voice: s.opts.Voice != nil, TTS: s.tts != nil,
-		Profile: sess.p.ProfileID != 0, Version: s.opts.Version})
+		Profile: sess.p.ProfileID != 0, Version: s.opts.Version, Departed: departed})
 }
 
 func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, sess session) {

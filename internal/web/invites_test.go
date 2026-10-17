@@ -210,7 +210,7 @@ func TestRevokePreviewAPI(t *testing.T) {
 	}
 
 	eve := e.join(t, bInv.Token, "Eve")
-	code, b := alice.do(t, "DELETE", fmt.Sprintf("%s/invites/%d", path, a.ID), nil)
+	code, b := alice.do(t, "DELETE", fmt.Sprintf("%s/invites/%d?cut=1", path, a.ID), nil)
 	if code != http.StatusOK {
 		t.Fatalf("revoke: %d %s", code, b)
 	}
@@ -237,7 +237,7 @@ func TestRevokePreviewAPI(t *testing.T) {
 		t.Errorf("alice: %d", code)
 	}
 	// Nothing left to cut: the same answer shape, empty.
-	if code, b := alice.do(t, "DELETE", fmt.Sprintf("%s/invites/%d", path, a.ID), nil); code != http.StatusOK || string(b) != "{\"lost\":[],\"revoked\":[]}\n" {
+	if code, b := alice.do(t, "DELETE", fmt.Sprintf("%s/invites/%d?cut=1", path, a.ID), nil); code != http.StatusOK || string(b) != "{\"lost\":[],\"revoked\":[]}\n" {
 		t.Fatalf("second revoke: %d %s", code, b)
 	}
 }
@@ -275,5 +275,77 @@ func TestRoomAnswerMarksOwnSeats(t *testing.T) {
 	}
 	if got := selves(e.do(t, "GET", path, bob.Token, nil)); !slices.Equal(got, []string{"Bob"}) {
 		t.Errorf("bob: self on %v, want only his", got)
+	}
+}
+
+// 016-AC3 016-AC5: who may cut, over member, room admin and super-admin, with the box off and on.
+// Off, the invite alone is revoked and its joiner stays; on, the joiner is removed, and the audit
+// entry of an audited caller carries cut and the seats removed.
+func TestRevokeCutRights(t *testing.T) {
+	e := newEnv(t)
+	alice := e.device(t)
+	room := alice.createRoom(t, "Cuts", "Alice")
+	path := "/api/rooms/" + room.ID
+	bob := e.device(t)
+	bob.join(t, room.ID, "Bob")
+	callers := map[string]func(method, path string) (int, []byte){
+		"member":      func(m, p string) (int, []byte) { return bob.do(t, m, p, nil) },
+		"room admin":  func(m, p string) (int, []byte) { return alice.do(t, m, p, nil) },
+		"super-admin": func(m, p string) (int, []byte) { return e.do(t, m, p, e.admin, nil) },
+	}
+	for _, c := range []struct {
+		who     string
+		cut     bool
+		code    int
+		stays   bool
+		audited bool
+	}{
+		{"member", false, http.StatusOK, true, false},
+		{"member", true, http.StatusForbidden, true, false},
+		{"room admin", false, http.StatusOK, true, true},
+		{"room admin", true, http.StatusOK, false, true},
+		{"super-admin", false, http.StatusOK, true, true},
+		{"super-admin", true, http.StatusOK, false, true},
+	} {
+		do := callers[c.who]
+		code, b := do("POST", path+"/invites")
+		if code != http.StatusCreated {
+			t.Fatalf("%s invites: %d %s", c.who, code, b)
+		}
+		inv := decodeJSON[inviteResp](t, b)
+		joiner := e.join(t, inv.Token, "Joiner")
+		q := ""
+		if c.cut {
+			q = "?cut=1"
+		}
+		code, b = do("DELETE", fmt.Sprintf("%s/invites/%d%s", path, inv.ID, q))
+		if code != c.code {
+			t.Fatalf("%s cut=%v: %d %s", c.who, c.cut, code, b)
+		}
+		if code == http.StatusForbidden && !strings.Contains(string(b), "Only a room admin can remove people") {
+			t.Fatalf("%s cut=%v: %s", c.who, c.cut, b)
+		}
+		want := http.StatusUnauthorized
+		if c.stays {
+			want = http.StatusOK
+		}
+		if code, _ := e.do(t, "GET", path, joiner.Token, nil); code != want {
+			t.Fatalf("%s cut=%v: joiner gets %d, want %d", c.who, c.cut, code, want)
+		}
+		if !c.audited || code != http.StatusOK {
+			continue
+		}
+		log, err := e.st.AuditLog(t.Context(), store.AuditQuery{Action: ActionInviteRevoke, Limit: 1})
+		if err != nil || len(log) != 1 {
+			t.Fatalf("audit: %+v %v", log, err)
+		}
+		removed := "[]"
+		if c.cut {
+			removed = fmt.Sprintf("[%d]", joiner.Participant.ID)
+		}
+		d := string(log[0].Details)
+		if !strings.Contains(d, fmt.Sprintf(`"cut":%v`, c.cut)) || !strings.Contains(d, `"removed":`+removed) || !strings.Contains(d, fmt.Sprintf(`"invite":%d`, inv.ID)) {
+			t.Fatalf("%s cut=%v: audit %s", c.who, c.cut, d)
+		}
 	}
 }

@@ -55,11 +55,11 @@ func (s *Store) DropPushSubscription(ctx context.Context, id int64) error {
 	return nil
 }
 
-// PushSubscriptions lists the subscriptions of room's participants whose invite still holds.
+// PushSubscriptions lists the subscriptions of room's participants whose seat is valid.
 func (s *Store) PushSubscriptions(ctx context.Context, roomID string) ([]PushSubscription, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT s.id, s.participant_id, s.endpoint, s.p256dh, s.auth, s.all_messages FROM push_subscriptions s
-		JOIN participants p ON p.id = s.participant_id JOIN invites i ON i.id = p.invite_id
-		WHERE p.room_id = ? AND i.revoked_at IS NULL ORDER BY s.id`, roomID)
+		JOIN participants p ON p.id = s.participant_id
+		WHERE p.room_id = ? AND p.removed_at IS NULL ORDER BY s.id`, roomID)
 	if err != nil {
 		return nil, fmt.Errorf("push subscriptions: %w", err)
 	}
