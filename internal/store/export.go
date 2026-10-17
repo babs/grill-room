@@ -66,6 +66,11 @@ type xPersona struct {
 	Autocompact  int    `json:"autocompact"`
 	CreatedAt    string `json:"created_at"`
 	Skills       []xPin `json:"skills"`
+	// Speaks, Voice and VoiceRate are optional: an archive from before 013 reads as on, the default
+	// voice and rate 1 (013-AC30).
+	Speaks    *bool   `json:"speaks,omitempty"`
+	Voice     string  `json:"voice,omitempty"`
+	VoiceRate float64 `json:"voice_rate,omitempty"`
 	// Plugins are the refs of the room plugins the persona has on (009-AC26, format 3).
 	Plugins []int64  `json:"plugins,omitempty"`
 	Resume  *xResume `json:"resume,omitempty"`
@@ -480,14 +485,16 @@ func exportPersonas(ctx context.Context, tx *sql.Tx, roomID string) ([]xPersona,
 		var tpl sql.NullInt64
 		var preset sql.NullString
 		if err := rows.Scan(&p.Ref, &tpl, &preset, &p.TemplateVersion, &p.Name, &p.Badge, &p.Colour, &p.Text, &p.Model, &p.Effort,
-			&p.EveryN, &p.SelfCall, &p.Autocompact, &p.CreatedAt, &p.EveryVoice, &p.EveryMinutes, &p.WatchesNotes); err != nil {
+			&p.EveryN, &p.SelfCall, &p.Autocompact, &p.CreatedAt, &p.EveryVoice, &p.EveryMinutes, &p.WatchesNotes,
+			&p.Speaks, &p.Voice, &p.VoiceRate); err != nil {
 			return fmt.Errorf("export personas: %w", err)
 		}
 		p.Template, p.TemplatePreset, p.Skills = tpl.Int64, preset.String, []xPin{}
 		out = append(out, p)
 		return nil
 	}, `SELECT p.id, p.template_id, t.preset, p.template_version, p.name, p.badge, p.colour, p.text, p.model, p.effort,
-		COALESCE(p.every_n, 0), p.self_call, p.autocompact, p.created_at, COALESCE(p.every_voice, 0), COALESCE(p.every_minutes, 0), p.watches_notes
+		COALESCE(p.every_n, 0), p.self_call, p.autocompact, p.created_at, COALESCE(p.every_voice, 0), COALESCE(p.every_minutes, 0), p.watches_notes,
+		p.speaks, p.voice, p.voice_rate
 		FROM room_personas p LEFT JOIN persona_templates t ON t.id = p.template_id WHERE p.room_id = ? AND p.pending = 0 ORDER BY p.id`, roomID)
 	if err != nil {
 		return nil, err

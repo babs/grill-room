@@ -709,7 +709,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"annotations":              "id room_id document_id revision anchor orphaned status version created_at |",
 		"annotation_messages":      "id annotation_id author_kind participant_id author body created_at persona_id |",
 		"attachments":              "id message_id content_type size data created_at |",
-		"room_personas":            "id room_id template_id template_version name badge colour text model effort every_n self_call created_at autocompact pending every_voice every_minutes watches_notes | cap_decision cap_daemon_id cap_model cap_effort mark_msg_id mark_at_ms notes_mark",
+		"room_personas":            "id room_id template_id template_version name badge colour text model effort every_n self_call created_at autocompact pending every_voice every_minutes watches_notes speaks voice voice_rate | cap_decision cap_daemon_id cap_model cap_effort mark_msg_id mark_at_ms notes_mark",
 		"room_persona_skills":      "persona_id skill_id version |",
 		"skills":                   "id name created_at room_id pending scope | profile_id publisher_id from_starter",
 		"skill_versions":           "skill_id n author description files size sha256 data created_at | id author_id",
@@ -1181,5 +1181,64 @@ func TestImportFormat1(t *testing.T) {
 	}
 	if _, err := s.ImportRoom(ctx, dir, importOpts("bad")); err == nil || !strings.Contains(err.Error(), "unknown message, persona or status") {
 		t.Fatalf("a bad mention: %v", err)
+	}
+}
+
+// 013-AC30: an export carries each persona's speaks, voice and rate, and the import keeps them; an
+// archive from before 013 reads as speaking, default voice, rate 1; an unknown voice falls back to
+// the default.
+func TestImportPersonaVoice(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	richRoom(t, s, "orig")
+	ps, err := s.RoomPersonas(ctx, "orig")
+	if err != nil || len(ps) != 1 {
+		t.Fatalf("personas %v %v", ps, err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE room_personas SET speaks = 0, voice = 'cml-2114', voice_rate = 1.2 WHERE id = ?`, ps[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	dir := export(t, s, "orig")
+	if _, err := s.ImportRoom(ctx, dir, importOpts("copy")); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.RoomPersonas(ctx, "copy")
+	if len(got) != 1 || got[0].Speaks || got[0].Voice != "cml-2114" || got[0].VoiceRate != 1.2 {
+		t.Errorf("imported %+v", got)
+	}
+
+	// Before 013: no field at all. An unknown voice: the default.
+	p := filepath.Join(dir, fileRoom)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var room map[string]any
+	if err := json.Unmarshal(b, &room); err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range room["personas"].([]any) {
+		m := x.(map[string]any)
+		delete(m, "speaks")
+		delete(m, "voice_rate")
+		m["voice"] = "marius"
+	}
+	if b, err = json.Marshal(room); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ImportRoom(ctx, dir, importOpts("old")); err != nil {
+		t.Fatal(err)
+	}
+	old, _ := s.RoomPersonas(ctx, "old")
+	if len(old) != 1 {
+		t.Fatalf("old archive: %d personas", len(old))
+	}
+	for _, q := range old {
+		if !q.Speaks || q.Voice != "" || q.VoiceRate != 1 {
+			t.Errorf("old archive persona %s: %+v", q.Name, q)
+		}
 	}
 }

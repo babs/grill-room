@@ -1,0 +1,82 @@
+# The personas' voices (spec 013): Pocket TTS 3.3.0, French and English models in one process, one
+# LiveKit bot per speaking persona. Sizing from spikes S14 and S14b: both models take 1.4 GB, one
+# synthesis runs at 0.47 of real time on one thread, so 2 CPUs speak two rooms at once; the request
+# comes from the lab measurement (docs/architecture.md). Its image holds gated weights: it is pulled
+# from the private registry only. Rendered by `make k8s-render`.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tts
+  labels:
+    app.kubernetes.io/name: tts
+    app.kubernetes.io/part-of: grill-room
+spec:
+  replicas: 1
+  # Two pods would speak each line twice: the old one goes before the new one starts.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tts
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tts
+        app.kubernetes.io/part-of: grill-room
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      securityContext:
+        runAsNonRoot: true
+        # The image's `app` user: numeric, so the kubelet can check runAsNonRoot.
+        runAsUser: 999
+        runAsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: tts
+          image: ${GRILL_TTS_IMAGE}
+          env:
+            - name: APP_ROOM_URL
+              value: http://grill-room:7680
+            - name: APP_LIVEKIT_URL
+              value: ws://livekit:7880
+            - name: APP_CPU_THREADS
+              value: "1"
+            - name: APP_ROOM_TOKEN
+              valueFrom:
+                secretKeyRef: { name: grill-room, key: tts-token }
+            - name: APP_LIVEKIT_API_KEY
+              valueFrom:
+                secretKeyRef: { name: grill-room, key: livekit-api-key }
+            - name: APP_LIVEKIT_API_SECRET
+              valueFrom:
+                secretKeyRef: { name: grill-room, key: livekit-api-secret }
+          ports:
+            - { name: metrics, containerPort: 9100 }
+          startupProbe:
+            httpGet: { path: /healthz, port: metrics }
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            periodSeconds: 20
+          resources:
+            requests: { cpu: "1", memory: 2560Mi }
+            limits: { cpu: "2", memory: 2560Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

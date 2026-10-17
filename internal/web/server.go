@@ -77,7 +77,9 @@ type Server struct {
 	presence  presences
 	people    people
 	stt       sttWorkers
-	clients   clients
+	// tts holds the lines personas say in the call; nil when the server offers no voice (013-AC13).
+	tts     *ttsHub
+	clients clients
 	// magicLimit rate-limits magic link requests per address and per client IP.
 	magicLimit limiter
 	// loginLimit rate-limits /admin logins per client IP.
@@ -173,6 +175,9 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 		pluginFetches: make(chan struct{}, maxPluginFetches), pluginRooms: map[string]bool{},
 		voiceRecent: recentLines{}, voiceLines: sourceCounters(), voiceDeduped: sourceCounters(), mcpCalls: newMCPCounters()}
 	s.device = loadDeviceSTT(opts, log)
+	if opts.TTSTokenHash != "" && opts.Voice != nil {
+		s.tts = newTTSHub(time.Now())
+	}
 	s.cleanStaging()
 	return s
 }
@@ -414,6 +419,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms/{room}/voice/dropped", s.sttAuth(s.postVoiceDropped))
 	mux.Handle("POST /api/rooms/{room}/voice/device-lines", s.participant(s.postDeviceLine))
 	mux.Handle("GET /api/stt/rooms/{room}/prompt", s.sttAuth(s.sttPromptFor))
+	if s.tts != nil {
+		mux.Handle("GET /api/tts/events", s.ttsAuth(s.ttsEvents))
+		mux.Handle("POST /api/tts/heartbeat", s.ttsAuth(s.ttsHeartbeat))
+	}
 	mux.Handle("GET /api/rooms/{room}/glossary", s.participant(s.getGlossary))
 	mux.Handle("PUT /api/rooms/{room}/glossary", s.participant(s.putGlossary))
 	mux.Handle("POST /mcp", s.mcpHandler())

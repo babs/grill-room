@@ -56,7 +56,7 @@ French and English rooms both ship. A rule-based text layer reads numbers, acron
 
 ### Text layer
 - [ ] **AC5** Each sentence gets a language, `fr` or `en`, from a function-word count. A tie takes the previous sentence's language; a tie on the first sentence takes the whole line's count; a tie there gives `en`.
-- [ ] **AC6** Numbers are said in the sentence's language: integers, decimals (French with "virgule"), percentages, versions (`2.3.1`, `v2`), a letter with digits (`p95`), and units (Appendix A, rule cases). In English, an HTTP status after an article is said digit by digit ("a five oh two"); in French as a number ("cinq cent deux"). An acronym of 2 to 5 capitals is spelled with the language's letter names unless the lexicon has it.
+- [ ] **AC6** Numbers are said in the sentence's language: integers, decimals (French with "virgule"), percentages, versions (`2.3.1`, `v2`), a letter with digits (`p95`), and units (Appendix A, rule cases). In English, an HTTP status after an article is said digit by digit ("a five oh two"); in French as a number ("cinq cent deux"). An acronym of 2 to 5 capitals is spelled with the language's letter names unless the lexicon has it. A run of 10 digits or more (an id, a phone number) is said digit by digit, and a line says at most 150 words once numbers and terms are words, whole sentences first.
 - [ ] **AC7** In a French sentence, each lexicon term takes the French form of its style: an English-style term (the default for tech terms) its English-style respelling ("ri-traï"), a French-style term (naturalised words: bug, web, email, parking, week-end) its French-style form ("beugue"); an empty form leaves the term as written. In an English sentence, a term takes its English form when it has one. Longest term first, whole words only; a term holding a capital matches its exact case, an all-lowercase term matches any case. A comma-separated clause of a French sentence with at least 2 English stopwords, and more English than French ones, goes to the same voice's English model; everything else in the sentence stays one French call. A line never uses two engines or two voices.
 - [ ] **AC8** Each rule of AC3, AC4, AC5, AC6, AC7 and AC38 has a test that fails without it, on at least two input shapes it did not come from (S14b's `normalize.py --check` is the starting set).
 
@@ -110,7 +110,7 @@ French and English rooms both ship. A rule-based text layer reads numbers, acron
 ### Phase 1 — TTS pod and pipeline
 - Work: `spoken.md` in `internal/turn` and the prompt, the sanitiser and the word cut (60 until the room setting lands), the action summary, the SSE stream, heartbeat and state routes with their token, the `tts` image (Pocket, pinned weights, build secret, catalogue, licences, samples), the text layer with the S14b lexicon compiled in, the bots, plain FIFO playback per room, default voices, the rate and silence trimming, the STT worker's agent skip, metrics, the Deployment and NetworkPolicy. The toggle has no UI yet: voice is off unless the lab sets `GRILL_ROOM_TTS_TOKEN` and turns a persona on through the API.
 - **Covers**: AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC8, AC9, AC10, AC11, AC12, AC13, AC14, AC15, AC16, AC17, AC18, AC19, AC20, AC38, and AC37's pipeline (the rate set through the API)
-- **Data model impact**: `personas.speaks` (0 or 1, default 1; the migration sets existing personas to 1), `personas.voice` (text, empty by default), `personas.voice_rate` (default 1.0), `tts_samples` (the voice samples the pod hands over, AC27). In memory: the speech queue and each persona's voice state.
+- **Data model impact**: `personas.speaks` (0 or 1, default 1; the migration sets existing personas to 1), `personas.voice` (text, empty by default), `personas.voice_rate` (default 1.0). In memory: the speech queue and each persona's voice state.
 - **DoD**:
   - Go tests on the sanitiser and the cut, each rule broken in two shapes: Markdown and a URL, an id with and without a dot, a 600-word line without punctuation, a 65-word first sentence with and without a comma, the action summary in both languages;
   - Python tests on the text layer per AC8; prompt test: with the flag conditions off, the prompt is byte-identical;
@@ -123,9 +123,9 @@ French and English rooms both ship. A rule-based text layer reads numbers, acron
   - `make lint test` green.
 
 ### Phase 2 — Call behaviour and UI
-- Work: quiet time, interruption, resume and drop, the per-room queue rules, room timeouts and word cap in settings and export, the toggle, the voice picker and the rate in the Identity tab, the pill (card, ▶, mute) and its states, the starter change, the lab checklist step.
+- Work: the samples handed to the server and the room language from the browser for AC16 when the room has no line yet, quiet time, interruption, resume and drop, the per-room queue rules, room timeouts and word cap in settings and export, the toggle, the voice picker and the rate in the Identity tab, the pill (card, ▶, mute) and its states, the starter change, the lab checklist step.
 - **Covers**: AC21, AC22, AC23, AC24, AC25, AC26, AC27, AC28, AC29, AC30, AC36, AC37 (UI), AC39
-- **Data model impact**: `rooms.voice_quiet_ms`, `rooms.voice_resume_s`, `rooms.voice_queue_s`, `rooms.voice_words` (defaults 1000, 20, 40, 60); starter manifests and room exports gain `speaks`, `voice` and `voice_rate` per persona and the four room values. Built-in Spec grill, new version.
+- **Data model impact**: `tts_samples` (the voice samples the pod renders at build and hands over, AC27), `rooms.voice_quiet_ms`, `rooms.voice_resume_s`, `rooms.voice_queue_s`, `rooms.voice_words` (defaults 1000, 20, 40, 60); starter manifests and room exports gain `speaks`, `voice` and `voice_rate` per persona and the four room values. Built-in Spec grill, new version.
 - **DoD**:
   - pod tests on an injected clock: start after quiet, stop and clear on a speaker update, resume within the window, drop past it, stale drop, `no_listener` drop, FIFO across two personas;
   - e2e with a fake mic (fake engine): a listener page measures each remote track's level; no persona audio starts while the human's level is up; on 10 interruptions the persona stops within 300 ms of the onset in the human's file (p95); the persona resumes after the human stops; a second persona waits for the first. If LiveKit's speaker updates alone miss 300 ms, the pod adds its own VAD on the subscribed human tracks and the test runs again;
@@ -148,8 +148,8 @@ French and English rooms both ship. A rule-based text layer reads numbers, acron
 
 ## Data model impact (summary)
 
-- `personas.speaks`, `personas.voice`, `personas.voice_rate`, `tts_samples` (Phase 1).
-- `rooms.voice_quiet_ms`, `rooms.voice_resume_s`, `rooms.voice_queue_s`, `rooms.voice_words` (Phase 2).
+- `personas.speaks`, `personas.voice`, `personas.voice_rate` (Phase 1).
+- `tts_samples`, `rooms.voice_quiet_ms`, `rooms.voice_resume_s`, `rooms.voice_queue_s`, `rooms.voice_words` (Phase 2).
 - `pronunciations`, seeded once (Phase 3).
 - Starter manifests and room exports gain per-persona `speaks`, `voice` and `voice_rate` and the four room values; older ones read as on and defaults.
 - In memory only: the speech queue, the pod's heartbeat and persona states. Nothing spoken is stored.

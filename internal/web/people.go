@@ -381,3 +381,24 @@ func (pp *people) anyoneHere(room string, now time.Time) bool {
 	}
 	return false
 }
+
+// listening is the rooms where a participant here hears the call at now: a tab of theirs is in the
+// audio and not deafened (013-AC1).
+func (pp *people) listening(now time.Time) map[string]bool {
+	pp.mu.Lock()
+	defer pp.mu.Unlock()
+	out := map[string]bool{}
+	for room, ps := range pp.m {
+		for _, p := range ps {
+			if !p.alive(now) {
+				continue
+			}
+			for _, t := range p.tabs {
+				if t.alive(now) && t.audio && !t.deaf {
+					out[room] = true
+				}
+			}
+		}
+	}
+	return out
+}

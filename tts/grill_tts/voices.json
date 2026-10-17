@@ -1,0 +1,196 @@
+[
+  {
+    "id": "estelle",
+    "name": "Estelle",
+    "lang": "fr",
+    "licence": "CC0-1.0",
+    "source": "kyutai/tts-voices/unmute-prod-website/developpeuse-3.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "Kyutai, CC0",
+    "pocket": "estelle"
+  },
+  {
+    "id": "cml-2114",
+    "name": "Camille",
+    "lang": "fr",
+    "licence": "CC-BY-4.0",
+    "source": "kyutai/tts-voices/cml-tts/fr/2114_1656_000053-0001_enhanced.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "CML-TTS dataset, speaker 2114, enhanced by Kyutai, CC BY 4.0"
+  },
+  {
+    "id": "cml-3267",
+    "name": "Dominique",
+    "lang": "fr",
+    "licence": "CC-BY-4.0",
+    "source": "kyutai/tts-voices/cml-tts/fr/3267_1902_000075-0001_enhanced.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "CML-TTS dataset, speaker 3267, enhanced by Kyutai, CC BY 4.0"
+  },
+  {
+    "id": "cml-4193",
+    "name": "Claude",
+    "lang": "fr",
+    "licence": "CC-BY-4.0",
+    "source": "kyutai/tts-voices/cml-tts/fr/4193_3103_000004-0001_enhanced.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "CML-TTS dataset, speaker 4193, enhanced by Kyutai, CC BY 4.0"
+  },
+  {
+    "id": "cml-12080",
+    "name": "Sacha",
+    "lang": "fr",
+    "licence": "CC-BY-4.0",
+    "source": "kyutai/tts-voices/cml-tts/fr/12080_11650_000047-0001_enhanced.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "CML-TTS dataset, speaker 12080, enhanced by Kyutai, CC BY 4.0"
+  },
+  {
+    "id": "alba",
+    "name": "Alba",
+    "lang": "en",
+    "licence": "CC-BY-4.0",
+    "source": "kyutai/tts-voices/alba-mackenna/casual.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "Alba MacKenna, CC BY 4.0",
+    "pocket": "alba"
+  },
+  {
+    "id": "charles",
+    "name": "Charles",
+    "lang": "en",
+    "licence": "CC-BY-4.0",
+    "source": "kyutai/tts-voices/vctk/p254_023_enhanced.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "VCTK corpus, CSTR, University of Edinburgh, speaker p254, CC BY 4.0",
+    "pocket": "charles"
+  },
+  {
+    "id": "anna",
+    "name": "Anna",
+    "lang": "en",
+    "licence": "CC-BY-4.0",
+    "source": "kyutai/tts-voices/vctk/p228_023_enhanced.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "VCTK corpus, CSTR, University of Edinburgh, speaker p228, CC BY 4.0",
+    "pocket": "anna"
+  },
+  {
+    "id": "vera",
+    "name": "Vera",
+    "lang": "en",
+    "licence": "CC-BY-4.0",
+    "source": "kyutai/tts-voices/vctk/p229_023_enhanced.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "VCTK corpus, CSTR, University of Edinburgh, speaker p229, CC BY 4.0",
+    "pocket": "vera"
+  },
+  {
+    "id": "fantine",
+    "name": "Fantine",
+    "lang": "en",
+    "licence": "CC-BY-4.0",
+    "source": "kyutai/tts-voices/vctk/p244_023_enhanced.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "VCTK corpus, CSTR, University of Edinburgh, speaker p244, CC BY 4.0",
+    "pocket": "fantine"
+  },
+  {
+    "id": "paul",
+    "name": "Paul",
+    "lang": "en",
+    "licence": "CC-BY-4.0",
+    "source": "kyutai/tts-voices/vctk/p259_023_enhanced.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "VCTK corpus, CSTR, University of Edinburgh, speaker p259, CC BY 4.0",
+    "pocket": "paul"
+  },
+  {
+    "id": "eponine",
+    "name": "Eponine",
+    "lang": "en",
+    "licence": "CC-BY-4.0",
+    "source": "kyutai/tts-voices/vctk/p262_023_enhanced.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "VCTK corpus, CSTR, University of Edinburgh, speaker p262, CC BY 4.0",
+    "pocket": "eponine"
+  },
+  {
+    "id": "azelma",
+    "name": "Azelma",
+    "lang": "en",
+    "licence": "CC-BY-4.0",
+    "source": "kyutai/tts-voices/vctk/p303_023_enhanced.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "VCTK corpus, CSTR, University of Edinburgh, speaker p303, CC BY 4.0",
+    "pocket": "azelma"
+  },
+  {
+    "id": "george",
+    "name": "George",
+    "lang": "en",
+    "licence": "CC-BY-4.0",
+    "source": "kyutai/tts-voices/vctk/p315_023_enhanced.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "VCTK corpus, CSTR, University of Edinburgh, speaker p315, CC BY 4.0",
+    "pocket": "george"
+  },
+  {
+    "id": "mary",
+    "name": "Mary",
+    "lang": "en",
+    "licence": "CC-BY-4.0",
+    "source": "kyutai/tts-voices/vctk/p333_023_enhanced.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "VCTK corpus, CSTR, University of Edinburgh, speaker p333, CC BY 4.0",
+    "pocket": "mary"
+  },
+  {
+    "id": "jane",
+    "name": "Jane",
+    "lang": "en",
+    "licence": "CC-BY-4.0",
+    "source": "kyutai/tts-voices/vctk/p339_023_enhanced.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "VCTK corpus, CSTR, University of Edinburgh, speaker p339, CC BY 4.0",
+    "pocket": "jane"
+  },
+  {
+    "id": "michael",
+    "name": "Michael",
+    "lang": "en",
+    "licence": "CC-BY-4.0",
+    "source": "kyutai/tts-voices/vctk/p360_023_enhanced.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "VCTK corpus, CSTR, University of Edinburgh, speaker p360, CC BY 4.0",
+    "pocket": "michael"
+  },
+  {
+    "id": "eve",
+    "name": "Eve",
+    "lang": "en",
+    "licence": "CC-BY-4.0",
+    "source": "kyutai/tts-voices/vctk/p361_023_enhanced.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "VCTK corpus, CSTR, University of Edinburgh, speaker p361, CC BY 4.0",
+    "pocket": "eve"
+  },
+  {
+    "id": "bill_boerst",
+    "name": "Bill Boerst",
+    "lang": "en",
+    "licence": "CC0-1.0",
+    "source": "kyutai/tts-voices/voice-zero/bill_boerst.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "Voice-Zero, a LibriVox selection, CC0",
+    "pocket": "bill_boerst"
+  },
+  {
+    "id": "peter_yearsley",
+    "name": "Peter Yearsley",
+    "lang": "en",
+    "licence": "CC0-1.0",
+    "source": "kyutai/tts-voices/voice-zero/peter_yearsley.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "Voice-Zero, a LibriVox selection, CC0",
+    "pocket": "peter_yearsley"
+  },
+  {
+    "id": "stuart_bell",
+    "name": "Stuart Bell",
+    "lang": "en",
+    "licence": "CC0-1.0",
+    "source": "kyutai/tts-voices/voice-zero/stuart_bell.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "Voice-Zero, a LibriVox selection, CC0",
+    "pocket": "stuart_bell"
+  },
+  {
+    "id": "caro_davy",
+    "name": "Caro Davy",
+    "lang": "en",
+    "licence": "CC0-1.0",
+    "source": "kyutai/tts-voices/voice-zero/caro_davy.wav@323332d33f997de8394f24a193e1a76df720e01a",
+    "credit": "Voice-Zero, a LibriVox selection, CC0",
+    "pocket": "caro_davy"
+  }
+]
