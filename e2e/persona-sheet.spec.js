@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, menuItem, personaRow, personaSheet, agentState } from './helpers.js';
+import { roomWith, menuItem, personaRow, personaSheet, agentState, unfoldTabs } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
 const sizes = { phone: { width: 390, height: 844 }, desktop: { width: 1440, height: 900 } };
@@ -22,6 +22,7 @@ for (const [size, viewport] of Object.entries(sizes)) {
     await addSecretary(alice);
     const sec = await personaSheet(alice, 'Secretary', 'Identity');
     await sec.getByLabel('Name').fill('Secretary_with_a_long_name_xx');
+    await unfoldTabs(sec.locator('#persona-tabs'));
     await sec.getByRole('link', { name: 'Triggers', exact: true }).click();
     await sec.getByLabel('Speaks up').selectOption('every_voice');
     await sec.getByLabel('N', { exact: true }).fill('4');
@@ -123,13 +124,22 @@ for (const [size, viewport] of Object.entries(sizes)) {
     await expect(more).toBeFocused();
     await alice.keyboard.press('Tab');
     await expect(sheet.getByRole('button', { name: 'Close' })).toBeFocused();
-    for (const tab of tabs) {
+    // A bar folded on a narrow phone: Tab reaches its button, Enter opens the list, Tab walks it,
+    // and a picked tab gives the focus back to the button.
+    const button = sheet.locator('#persona-tabs .tabs-menu');
+    const folded = await button.isVisible();
+    if (folded) {
       await alice.keyboard.press('Tab');
+      await expect(button).toBeFocused();
+    }
+    for (const [i, tab] of tabs.entries()) {
+      if (folded) await alice.keyboard.press('Enter');
+      for (let k = folded ? 0 : i; k <= i; k++) await alice.keyboard.press('Tab');
       await expect(sheet.locator('#persona-tab-' + tab)).toBeFocused();
       await alice.keyboard.press('Enter');
       await expect(alice).toHaveURL(new RegExp(`#personas/\\d+/${tab}$`));
       await expect(sheet.locator(`section[data-tab=${tab}]`)).toBeVisible();
-      await expect(sheet.locator('#persona-tab-' + tab)).toBeFocused();
+      await expect(folded ? button : sheet.locator('#persona-tab-' + tab)).toBeFocused();
     }
     // Enter on ⋯'s Remove asks first (005-AC39).
     await more.focus();
