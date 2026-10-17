@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, noOverflow, upload, annotateSelection, menuItem, docAction, playSTT, newRoomEditor, rowAction } from './helpers.js';
+import { roomWith, signIn, noOverflow, upload, annotateSelection, menuItem, docAction, playSTT, newRoomEditor, rowAction, unfoldTabs } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
@@ -85,7 +85,7 @@ for (const vp of widths) {
     await alice.goto(`/r/${room.id}#manage/admins`);
     const sheet = alice.locator('#manage');
     await expect(sheet).toBeVisible();
-    await expect(sheet.getByRole('link', { name: 'Admins', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(sheet.locator('#tab-admins')).toHaveAttribute('aria-current', 'page');
     await expect(sheet.locator('#tab-general, #tab-invites, #tab-admins, #tab-personas, #tab-skills, #tab-plugins, #tab-documents, #tab-export, #tab-glossary')).toHaveCount(9);
     const box = await sheet.boundingBox();
     if (vp.width < 400) expect(box.width).toBe(vp.width);
@@ -100,6 +100,7 @@ for (const vp of widths) {
     await expect(bob.locator('.msg.system').last()).toContainText('Alice renamed Bob to Robert');
 
     // The tabs are links: the keyboard reaches them, and each sets the deep link.
+    await unfoldTabs(sheet.locator('nav.tabs'));
     await sheet.getByRole('link', { name: 'Invites', exact: true }).focus();
     await alice.keyboard.press('Enter');
     await expect(alice).toHaveURL(/#manage\/invites$/);

@@ -275,6 +275,14 @@ export const noOverflow = (page) => page.evaluate(() => [...document.querySelect
   .filter((e) => !e.parentElement?.closest('.scroll, .tabs') && e.getBoundingClientRect().right > innerWidth + 1)
   .map((e) => `${e.tagName.toLowerCase()}#${e.id}.${e.className}`));
 
+// unfoldTabs opens the list of a tab bar folded on a phone (kit/ui.js), so that its tabs can be clicked.
+export async function unfoldTabs(nav) {
+  // A page folds its bar after drawing it, and again on a resize.
+  await expect.poll(() => nav.evaluate((n) => 'menu' in n.dataset || n.scrollWidth <= n.clientWidth || !matchMedia('(max-width: 40rem)').matches)).toBe(true);
+  const menu = nav.locator('.tabs-menu');
+  if ((await menu.isVisible()) && (await menu.getAttribute('aria-expanded')) === 'false') await menu.click();
+}
+
 // menuItem picks an item of a header menu (005-AC32): '⋯' (more), the user's initials (me) or the
 // audio options (voice).
 export async function menuItem(page, name, which = 'more') {
@@ -327,6 +335,7 @@ export async function personaSheet(page, name, tab = 'Identity') {
   await personaRow(page, name).click();
   const sheet = page.locator('#persona-sheet');
   await expect(sheet.locator('#persona-sheet-title')).toHaveText(new RegExp(` ${name}$`));
+  await unfoldTabs(sheet.locator('#persona-tabs'));
   await sheet.locator('#persona-tabs').getByRole('link', { name: tab, exact: true }).click();
   await expect(sheet.locator(`section[data-tab="${tab.toLowerCase()}"]`)).toBeVisible();
   return sheet;

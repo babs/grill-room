@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { test, expect } from './fixtures.js';
-import { roomWith, appointAdmin, smallTargets, noOverflow, skillZip, confirmSheet } from './helpers.js';
+import { roomWith, appointAdmin, smallTargets, noOverflow, skillZip, confirmSheet, unfoldTabs } from './helpers.js';
 
 // The /profile rework (specs/011b-profile-rework.md). The e2e server has no SMTP: the Email states
 // come from GET /api/profile answered with email_enabled and the state patched in.
@@ -51,6 +51,7 @@ const filled = (page) => page.evaluate(() => {
 
 // openTab goes to a tab through its link, as a person does.
 async function openTab(page, tab) {
+  await unfoldTabs(page.locator('#profile-tabs'));
   await page.locator('#tab-' + tab).click();
   await expect(page.locator('#tab-' + tab)).toHaveAttribute('aria-current', 'page');
   await expect(page.locator('#panel-' + tab)).toBeVisible();

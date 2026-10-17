@@ -1,7 +1,7 @@
 import { request as pwRequest } from '@playwright/test';
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, menuItem, appointAdmin, personaSheet, startDaemon } from './helpers.js';
+import { roomWith, signIn, menuItem, appointAdmin, personaSheet, startDaemon, unfoldTabs } from './helpers.js';
 
 // Layout guards of the /admin lists, the room sheets and the data pages (004b-AC16): one primary
 // action per view, no action past an edge, a phone's list in short cards with no sideways scroll,
@@ -145,6 +145,7 @@ for (const [size, viewport] of Object.entries({ phone: sizes.phone, desktop: siz
     const sheet = await personaSheet(alice, 'Grill', 'Identity');
     await sheet.getByLabel('Name').fill('Grill2');
     for (const tab of ['Model', 'Triggers', 'Capabilities', 'Identity']) {
+      await unfoldTabs(sheet.locator('#persona-tabs'));
       await sheet.locator('#persona-tabs').getByRole('link', { name: tab, exact: true }).click();
       await expect(sheet.getByRole('button', { name: 'Save', exact: true })).toHaveCount(1);
       await expect.soft(sheet.locator('.settings-foot .dirty')).toHaveText('1 unsaved change');

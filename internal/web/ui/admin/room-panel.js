@@ -165,8 +165,9 @@ function AdminRow({ p, base, api, show, done, me, makeHost }) {
  */
 export function TabBar({ tabs, active, href, label, cls }) {
   const nav = useRef(/** @type {HTMLElement | null} */ (null));
-  // A bar that scrolls sideways on a phone keeps its current tab in sight (005-AC35).
-  useEffect(() => { window.grillShowTab(nav.current); }, [active]);
+  // A bar folded on a phone names its current tab; one that scrolls keeps it in sight (005-AC35).
+  // A tab added later, Glossary once its engine shows, may make the bar overflow.
+  useEffect(() => { window.grillShowTab(nav.current); }, [active, tabs.length]);
   return html`<nav ref=${nav} class=${'tabs' + (cls ? ' ' + cls : '')} aria-label=${label}>${tabs.map(([id, name]) => html`<a key=${id} href=${href(id)}
     id=${'tab-' + id} aria-current=${id === active ? 'page' : undefined}>${name}</a>`)}</nav>`;
 }

@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, startDaemon, pairDaemon, ask, skillZip, personaSheet, closePersonas } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip, personaSheet, closePersonas, unfoldTabs } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
@@ -7,6 +7,7 @@ const admin = { Authorization: `Bearer ${adminToken}` };
 // uploadSkill adds a skill from the profile's Skills tab and its sheet (011b-AC15): a refused
 // file says why in the sheet, which stays open until closed.
 async function uploadSkill(page, zip, scope, status) {
+  await unfoldTabs(page.locator('#profile-tabs'));
   await page.locator('#tab-skills').click();
   await page.locator('#panel-skills').getByRole('button', { name: 'Add a skill' }).click();
   await page.locator('#skill-file').setInputFiles(zip);
@@ -117,6 +118,7 @@ test('skills: upload, disclaimer once, pinned through an update', async ({ brows
   // The profile page fits a phone too.
   await aliceProfile.setViewportSize({ width: 390, height: 844 });
   await aliceProfile.reload();
+  await unfoldTabs(aliceProfile.locator('#profile-tabs'));
   await aliceProfile.locator('#tab-skills').click();
   await expect(aliceProfile.locator('#skill-list .skill-text')).toHaveText([/^stamp\s+v2 · Only my rooms/], { useInnerText: true });
   await expect(aliceProfile.locator('#skill-add')).toBeVisible();

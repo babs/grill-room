@@ -56,8 +56,8 @@ for (const [size, viewport] of Object.entries(sizes)) {
     }
   });
 
-  // 009-AC2: each tab is a deep link, followed on a hash change and on a fresh load; the tab bar
-  // scrolls sideways on a phone.
+  // 009-AC2: each tab is a deep link, followed on a hash change and on a fresh load; on a phone the
+  // tab bar shows its current tab whole, or folds into a menu that names it.
   test(`persona sheet: a deep link per tab at ${viewport.width} px`, async ({ browser, request }) => {
     const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
     await alice.setViewportSize(viewport);
@@ -79,9 +79,11 @@ for (const [size, viewport] of Object.entries(sizes)) {
       // Full screen under 40rem, like Room settings.
       expect(await sheet.boundingBox()).toEqual({ x: 0, y: 0, ...viewport });
       const nav = sheet.locator('#persona-tabs');
-      await expect(nav).toHaveCSS('overflow-x', 'auto');
-      // The current tab, scrolled into view or not, ends clear of the 24 px fade edge.
-      await expect.poll(() => nav.evaluate((e) => e.querySelector('#persona-tab-capabilities').getBoundingClientRect().right <= e.getBoundingClientRect().right - 24 + 1)).toBe(true);
+      await expect.poll(() => nav.evaluate((e) => {
+        if ('menu' in e.dataset) return e.querySelector('.tabs-menu').textContent;
+        const r = e.querySelector('#persona-tab-capabilities').getBoundingClientRect();
+        return r.right <= e.getBoundingClientRect().right + 0.5 ? 'Capabilities' : 'cut';
+      })).toBe('Capabilities');
     }
     // An unknown tab is Identity; a persona the room does not have closes the sheet and its link.
     await alice.evaluate((h) => { location.hash = h; }, `#personas/${id}/nope`);
