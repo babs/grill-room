@@ -58,7 +58,8 @@ for (const [size, viewport] of Object.entries(sizes)) {
     test.setTimeout(90_000);
     const room = await (await request.post('/api/rooms', { headers: admin, data: { name: `Layout ${size} ${'long name '.repeat(7)}${Date.now()}` } })).json();
     const people = [];
-    for (const n of ['Ada', 'Bo']) people.push(await member(baseURL, request, room, n + ' ' + size));
+    // A name at the 40-character cap, two lines unclamped on a phone.
+    for (const n of ['Ada ' + size, 'Bo ' + size, 'Cy with a rather long name to wrap twice']) people.push(await member(baseURL, request, room, n));
     // The page's own session expires 12 h on, which shows at a two-digit hour ("10:42 AM") in
     // every run: at a one-digit one its phone row fits a value line less, and the guard passed by
     // the time of day.
@@ -103,7 +104,7 @@ for (const [size, viewport] of Object.entries(sizes)) {
     // 004b-AC4: Admins in columns, the admin button at one x on every row.
     await page.goto(`/admin#rooms/${room.id}/admins`);
     const rows = page.locator('#room-admins > li');
-    await expect(rows).toHaveCount(2);
+    await expect(rows).toHaveCount(people.length);
     if (size !== 'phone') {
       const xs = await rows.locator('.admin-toggle').evaluateAll((bs) => bs.map((b) => Math.round(b.getBoundingClientRect().left)));
       expect.soft(new Set(xs).size, `admin buttons at ${xs}`).toBe(1);
