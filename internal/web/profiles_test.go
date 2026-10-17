@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -23,6 +22,7 @@ import (
 
 	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/store"
+	"github.com/babs/grill-room/internal/store/storetest"
 )
 
 // device is a browser: a cookie jar against the test server.
@@ -672,7 +672,7 @@ func TestSendFailureLogHidesTheAddress(t *testing.T) {
 		defer close(done)
 		return errors.New("rcpt to: 550 5.1.1 <" + to + ">: unknown user")
 	}
-	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	st, err := store.Open(storetest.Path(t, "t.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

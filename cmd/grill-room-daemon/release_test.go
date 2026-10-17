@@ -20,6 +20,7 @@ import (
 	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/daemon"
 	"github.com/babs/grill-room/internal/store"
+	"github.com/babs/grill-room/internal/store/storetest"
 	"github.com/babs/grill-room/internal/trust/trusttest"
 	"github.com/babs/grill-room/internal/web"
 )
@@ -34,7 +35,7 @@ type releaseServer struct {
 
 func newReleaseServer(t *testing.T, dir string) *releaseServer {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "room.db"))
+	st, err := store.Open(storetest.Path(t, "room.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

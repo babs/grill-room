@@ -684,7 +684,9 @@ func TestExportMemoryIsBounded(t *testing.T) {
 	}
 	grew := int64(peak.Load()) - int64(base.HeapAlloc)
 	t.Logf("room %d MB, heap grew by %.1f MB at most", n*size>>20, float64(grew)/(1<<20))
-	if grew > 4*size {
+	// One blob passes through a few buffers, and when the GC frees them varies: Windows peaked at four
+	// copies plus runtime overhead. An export holding the room would reach its 40 MB.
+	if grew > n*size/2 {
 		t.Fatalf("the export held %.1f MB of a %d MB room in memory", float64(grew)/(1<<20), n*size>>20)
 	}
 }
