@@ -35,7 +35,8 @@ func TestTemplate(t *testing.T) {
 		_, err = db.ExecContext(t.Context(), "CREATE TABLE x (v TEXT)")
 		return err
 	}
-	a, b := Template(t, "a.db", create), Template(t, "b.db", create)
+	var m template
+	a, b := m.copy(t, "a.db", create), m.copy(t, "b.db", create)
 	if made != 1 || a == b {
 		t.Fatalf("made %d, paths %s %s", made, a, b)
 	}

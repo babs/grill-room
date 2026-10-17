@@ -23,34 +23,42 @@ func init() {
 	})
 }
 
-var (
-	once     sync.Once
-	template []byte
-	errTmpl  error
-)
+// template is a database made once and the copies made from it.
+type template struct {
+	once sync.Once
+	data []byte
+	err  error
+}
+
+var shared template
 
 // Template writes a database to name under t.TempDir and returns its path: a copy of the one
 // create made at a path of its own, once per test binary, so every call in a binary must create
 // the same database. Under -race, running every store migration took over a second per test.
 func Template(t testing.TB, name string, create func(path string) error) string {
 	t.Helper()
-	once.Do(func() {
+	return shared.copy(t, name, create)
+}
+
+func (m *template) copy(t testing.TB, name string, create func(path string) error) string {
+	t.Helper()
+	m.once.Do(func() {
 		dir, err := os.MkdirTemp("", "sqlitetest-")
 		if err != nil {
-			errTmpl = err
+			m.err = err
 			return
 		}
 		defer func() { _ = os.RemoveAll(dir) }()
 		p := filepath.Join(dir, "template.db")
-		if errTmpl = create(p); errTmpl == nil {
-			template, errTmpl = os.ReadFile(p) //nolint:gosec // p is the temp dir this function made
+		if m.err = create(p); m.err == nil {
+			m.data, m.err = os.ReadFile(p) //nolint:gosec // p is the temp dir this function made
 		}
 	})
-	if errTmpl != nil {
-		t.Fatalf("sqlitetest template: %v", errTmpl)
+	if m.err != nil {
+		t.Fatalf("sqlitetest template: %v", m.err)
 	}
 	p := filepath.Join(t.TempDir(), name)
-	if err := os.WriteFile(p, template, 0o600); err != nil {
+	if err := os.WriteFile(p, m.data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return p
