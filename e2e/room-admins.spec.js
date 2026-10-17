@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet, playSTT, stopSTT, newRoomEditor, personaSheet, closePersonas, rowAction } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet, playSTT, stopSTT, newRoomEditor, personaSheet, closePersonas, rowAction, personMenu, appointAdmin } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const phone = { width: 390, height: 844 };
@@ -286,3 +286,75 @@ test('a room skill survives its author leaving', async ({ browser, request, base
     daemon.cleanup();
   }
 });
+
+for (const vp of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'phone', ...phone }]) {
+  // 016-AC6 016-AC8 016-AC11 016-AC12 016-AC13 016-AC14: a room admin removes Bob with a block from
+  // People › ⋯; Bob's page ends, his line reads "(removed)", his rejoin is refused. Unblocked from
+  // Room settings › Invites, he rejoins and the mark goes. A room admin's row offers no removal,
+  // and a room admin cannot leave; Carol leaves, and the room leaves her profile.
+  test(`remove, block, unblock and leave, ${vp.name}`, async ({ browser, request }) => {
+    const { room, pages: [alice, bob, carol] } = await roomWith(browser, request, ['Alice', 'Bob', 'Carol']);
+    await appointAdmin(alice, request, room.id);
+    await alice.setViewportSize(vp);
+    await bob.locator('#body').fill('a line from bob');
+    await bob.locator('#body').press('Enter');
+    const bobLine = alice.locator('#messages li.msg', { hasText: 'a line from bob' }).locator('.sender');
+    await expect(bobLine).toHaveText('Bob');
+
+    const peopleOf = async (page) => {
+      if (page.viewportSize().width < 600) await page.locator('#tabbar').getByRole('button', { name: /People/ }).click();
+    };
+    await peopleOf(alice);
+    const menu = await personMenu(alice, 'Bob');
+    await menu.getByRole('button', { name: 'Remove from room…' }).click();
+    const sheet = alice.locator('dialog.confirm');
+    await expect(sheet.locator('#confirm-title')).toHaveText('Remove Bob from the room?');
+    await expect(sheet.locator('#confirm-text')).toHaveText('Their messages stay.');
+    await sheet.getByLabel('Block from rejoining').check();
+    await confirmSheet(alice, 'Remove');
+    await expect(bob.locator('#banner')).toHaveText('Your access to this room has ended.');
+    expect((await bob.request.get(`/api/rooms/${room.id}`)).status()).toBe(401);
+    await expect(alice.locator('#messages')).toContainText('Alice removed Bob from the room and blocked them from rejoining');
+    await expect(bobLine).toHaveText('Bob (removed)');
+    await expect(alice.locator('#participants li .name, #participants-away li .name')).toHaveText(['Alice', 'Carol']);
+
+    const link = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
+    await bob.goto(new URL(link.url).pathname + new URL(link.url).hash);
+    await bob.getByLabel('Your name').fill('Bob');
+    await bob.getByRole('button', { name: 'Join the room' }).click();
+    await expect(bob.locator('#status')).toHaveText('A room admin blocked you from rejoining this room.');
+
+    await alice.goto(`/r/${room.id}#manage/invites`);
+    const blocked = alice.locator('#manage #blocked');
+    await expect(blocked.locator('.list-row:not(.head)')).toHaveCount(1);
+    await expect(blocked).toContainText('Bob');
+    if (vp.width < 400) await fits(alice);
+    await blocked.getByRole('button', { name: 'Unblock Bob' }).click();
+    await expect(alice.locator('#manage #blocked')).toHaveCount(0);
+    await alice.keyboard.press('Escape');
+    await expect(alice.locator('#messages')).toContainText('Alice unblocked Bob');
+
+    await bob.getByRole('button', { name: 'Join the room' }).click();
+    await expect(bob.locator('#me')).toHaveText('Bob');
+    await expect(bobLine).toHaveText('Bob');
+
+    // A room admin's row: no removal while they hold the role, and no leaving for oneself.
+    await peopleOf(alice);
+    const own = await personMenu(alice, 'Alice');
+    await expect(own.getByRole('button', { name: 'Leave room…' })).toHaveAttribute('aria-disabled', 'true');
+    await expect(own.getByRole('button', { name: 'Leave room…' })).toHaveAttribute('data-tip', 'Step down as room admin first');
+    await alice.keyboard.press('Escape');
+
+    await carol.locator('#body').fill('a line from carol');
+    await carol.locator('#body').press('Enter');
+    await peopleOf(carol);
+    await (await personMenu(carol, 'Carol')).getByRole('button', { name: 'Leave room…' }).click();
+    await confirmSheet(carol, 'Leave');
+    await expect(carol.locator('#banner')).toHaveText('Your access to this room has ended.');
+    await expect(alice.locator('#messages')).toContainText('Carol left the room');
+    await expect(alice.locator('#messages li.msg', { hasText: 'a line from carol' }).locator('.sender')).toHaveText('Carol (left)');
+    await carol.goto('/profile');
+    await expect(carol.locator('main')).toBeVisible();
+    await expect(carol.getByText('Docs room')).toHaveCount(0);
+  });
+}

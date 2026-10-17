@@ -396,6 +396,14 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 		if _, _, err := s.AddPluginFetch(ctx, room, NewPluginFetch{URL: "git@example.com:o/r.git"}, p); err != nil {
 			t.Fatal(err)
 		}
+		// 016-AC15: and the profiles blocked from it.
+		gone, _, err := s.Join(ctx, "inv-"+room, "Mallory", "tok-mallory-"+room, JoinProfile{RecoveryHash: "rec-mallory-" + room, SessionHash: "sess-mallory-" + room})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.EndSeats(ctx, room, gone.ID, Ending{By: p, Block: true}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// These reach rooms through another table, so roomRows cannot see them.
 	indirect := []string{"revisions", "annotation_messages", "attachments", "message_versions", "room_persona_skills", "plugin_versions", "plugin_snapshots", "room_persona_plugins"}

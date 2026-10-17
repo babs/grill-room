@@ -88,6 +88,8 @@ type Participant struct {
 	PreviousName string `json:"previous_name,omitempty"`
 	// Self marks the caller's own seats in the room answer, so no profile id leaves (011-AC26).
 	Self bool `json:"self,omitempty"`
+	// NoProfile marks a seat without a profile, which a block cannot keep out (016-AC6).
+	NoProfile bool `json:"no_profile,omitempty"`
 }
 
 // Message is one line in a room.
@@ -885,6 +887,17 @@ ALTER TABLE participants ADD COLUMN end_reason TEXT CHECK (end_reason IN ('revok
 UPDATE participants SET removed_at = (SELECT revoked_at FROM invites i WHERE i.id = participants.invite_id), end_reason = 'revoked'
 	WHERE invite_id IN (SELECT id FROM invites WHERE revoked_at IS NOT NULL);
 CREATE INDEX participants_seated ON participants(room_id) WHERE removed_at IS NULL;
+`, `
+-- 016-AC13: a profile a room admin blocked from rejoining the room; name is theirs at removal.
+CREATE TABLE room_blocks (
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+	name TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	by_participant_id INTEGER REFERENCES participants(id) ON DELETE SET NULL,
+	PRIMARY KEY (room_id, profile_id)
+);
+CREATE INDEX room_blocks_profile ON room_blocks(profile_id);
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -1453,7 +1466,8 @@ type JoinProfile struct {
 
 // Join adds a participant through a valid invite and records a system message announcing them,
 // in one transaction, creating its profile when prof asks. ErrNotFound if the invite is unknown or
-// revoked. The caller broadcasts.
+// revoked, ErrBlocked if a room admin blocked prof's profile from the room (016-AC13). The caller
+// broadcasts.
 func (s *Store) Join(ctx context.Context, inviteHash, name, tokenHash string, prof JoinProfile) (*Participant, *Message, error) {
 	var p *Participant
 	var m *Message
@@ -1478,6 +1492,15 @@ func join(ctx context.Context, tx *sql.Tx, inviteHash, name, tokenHash string, p
 		return nil, nil, fmt.Errorf("join: %w", err)
 	}
 	p.ProfileID = prof.ID
+	if p.ProfileID != 0 {
+		var blocked bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM room_blocks WHERE room_id = ? AND profile_id = ?)`, p.RoomID, p.ProfileID).Scan(&blocked); err != nil {
+			return nil, nil, fmt.Errorf("join: %w", err)
+		}
+		if blocked {
+			return nil, nil, ErrBlocked
+		}
+	}
 	if p.ProfileID == 0 && prof.RecoveryHash != "" {
 		if p.ProfileID, err = createProfile(ctx, tx, prof.RecoveryHash, prof.SessionHash); err != nil {
 			return nil, nil, fmt.Errorf("join: %w", err)

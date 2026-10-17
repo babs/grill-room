@@ -12,6 +12,7 @@ import { html } from 'htm/preact';
  * @typedef {{id: number, created_at: string, created_by?: number, revoked_at?: string, shareable?: boolean}} Invite
  * @typedef {{participant_id: number, name: string, admin: boolean, you: boolean}} Person
  * @typedef {{id: number, invites: number[], lose: Person[], keep: Person[]}} Preview
+ * @typedef {{profile_id: number, name: string, created_at: string, by?: string}} Block
  * @typedef {(method: string, path: string, body?: unknown) => Promise<any>} Api
  */
 
@@ -102,7 +103,7 @@ export function uaName(ua) {
 
 /**
  * @typedef {{join_ip: string, join_ua: string, last_ip: string, last_ua: string, last_seen_at: string | null}} Client
- * @typedef {{id: number, name: string, admin: boolean, has_profile?: boolean, host?: boolean, can_host?: boolean, client?: Client}} Member
+ * @typedef {{id: number, name: string, admin: boolean, has_profile?: boolean, no_profile?: boolean, host?: boolean, can_host?: boolean, client?: Client}} Member
  */
 
 /**
@@ -121,6 +122,16 @@ export function AdminRows({ people, base, api, show, done, me, makeHost }) {
 /** @param {{p: Member, base: string, api: Api, show: (err: unknown) => void, done: () => void, me?: number, makeHost?: (p: Member) => void}} props */
 function AdminRow({ p, base, api, show, done, me, makeHost }) {
   const [renaming, setRenaming] = useState(false);
+  /** @param {Member} p */
+  const remove = async (p) => {
+    const box = document.createElement('label');
+    const block = document.createElement('input');
+    block.type = 'checkbox';
+    block.disabled = p.has_profile === false || !!p.no_profile;
+    box.append(block, block.disabled ? ' Block from rejoining: no profile, so no block' : ' Block from rejoining');
+    if (!(await window.grillConfirm(`Remove ${p.name} from the room?`, 'Their messages stay.', 'Remove', false, box))) return;
+    api('DELETE', `${base}/participants/${p.id}`, { block: block.checked }).then(done).catch(show);
+  };
   /** @param {boolean} on */
   const set = (on) => api(on ? 'PUT' : 'DELETE', `${base}/admins/${p.id}`).then(done).catch(show);
   const c = p.client;
@@ -129,6 +140,8 @@ function AdminRow({ p, base, api, show, done, me, makeHost }) {
   /** @type {[string, () => void, string?, string?][]} */
   const items = [['Rename…', () => setRenaming(true), '', 'Rename ' + p.name]];
   if (makeHost && !p.host && p.can_host) items.push(['Make AI host', () => makeHost(p), '', 'Make ' + p.name + ' the AI host']);
+  // 016-AC6, Q2: a room admin steps down before anyone removes them.
+  if (p.id !== me && !p.admin) items.push(['Remove from room…', () => remove(p), 'danger', 'Remove ' + p.name + ' from the room']);
   return html`<li class="list-row">
     <div class="main">${renaming ? html`<${Rename} name=${p.name} path=${`${base}/participants/${p.id}/name`} api=${api} show=${show}
         done=${() => { setRenaming(false); done(); }} cancel=${() => setRenaming(false)}/>`
@@ -278,7 +291,28 @@ export function Invites({ base, api, show, byName, me, cut = false }) {
         <div class="actions">${!i.revoked_at && html`<${RowMenu} id=${'invite-menu-' + i.id} label=${'More actions on link ' + i.id}
           items=${[['Revoke…', () => ask(i), 'danger', 'Revoke link ' + i.id]]}/>`}</div></li>`)}</ul></div>`
       : html`<p class="empty" id="invites-empty">No invite links yet. New invite link makes one to share.</p>`)}
-    ${preview && html`<${RevokeSheet} key=${preview.id} preview=${preview} base=${base} api=${api} cut=${cut} done=${() => { setPreview(null); load(); }}/>`}`;
+    ${preview && html`<${RevokeSheet} key=${preview.id} preview=${preview} base=${base} api=${api} cut=${cut} done=${() => { setPreview(null); load(); }}/>`}
+    ${cut && html`<${Blocked} base=${base} api=${api} show=${show}/>`}`;
+}
+
+/**
+ * Blocked lists the profiles a room admin blocked from rejoining, with Unblock (016-AC14).
+ * @param {{base: string, api: Api, show: (err: unknown) => void}} props
+ */
+function Blocked({ base, api, show }) {
+  const [blocks, setBlocks] = useState(/** @type {Block[] | null} */ (null));
+  const load = () => api('GET', base + '/blocks').then(setBlocks).catch(show);
+  useEffect(() => { load(); }, [base]);
+  /** @param {Block} b */
+  const unblock = (b) => api('DELETE', `${base}/blocks/${b.profile_id}`).then(() => { toast(b.name + ' unblocked'); load(); }).catch(show);
+  if (!blocks || !blocks.length) return null;
+  return html`<h3>Blocked from rejoining</h3>
+    <div class="cols" id="blocked">
+      <div class="list-row head"><span>Name</span><span>Blocked</span><span>By</span><span></span></div>
+      <ul class="list-rows">${blocks.map((b) => html`<li class="list-row" id=${'blocked-' + b.profile_id} key=${b.profile_id}>
+        <div class="main"><span class="name">${b.name}</span></div>
+        <div class="cells"><span class="cell" data-label="Blocked">${ago(b.created_at)}</span><span class="cell" data-label="By">${b.by || 'admin'}</span></div>
+        <div class="actions"><button type="button" class="btn-secondary" onClick=${() => unblock(b)} aria-label=${'Unblock ' + b.name}>Unblock</button></div></li>`)}</ul></div>`;
 }
 
 /**

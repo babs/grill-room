@@ -28,6 +28,9 @@ const (
 	ActionDocumentDelete  = "document.delete"
 	ActionDocumentRestore = "document.restore"
 	ActionHostTransfer    = "room.host_transfer"
+	// 016-AC10 016-AC14: a person removed from a room, a block lifted.
+	ActionParticipantRemove  = "participant.remove"
+	ActionParticipantUnblock = "participant.unblock"
 	// ActionPersonaRemove is audited for API token calls only (012-AC20).
 	ActionPersonaRemove = "persona.remove"
 )

@@ -267,6 +267,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/admin/rooms/{room}/admins/{participant}", adminOnly(s.setRoomAdmin))
 	mux.Handle("DELETE /api/admin/rooms/{room}/admins/{participant}", adminOnly(s.setRoomAdmin))
 	mux.Handle("PUT /api/admin/rooms/{room}/participants/{participant}/name", adminOnly(s.renameParticipant))
+	mux.Handle("DELETE /api/admin/rooms/{room}/participants/{participant}", adminOnly(s.removeParticipant))
+	mux.Handle("GET /api/admin/rooms/{room}/blocks", adminOnly(s.listBlocks))
+	mux.Handle("DELETE /api/admin/rooms/{room}/blocks/{profile}", adminOnly(s.unblock))
 	mux.Handle("PUT /api/admin/rooms/{room}/host", adminOnly(s.handOver))
 	mux.Handle("PUT /api/rooms/{room}/quota", s.memberOrAdmin(s.setQuota))
 	mux.Handle("GET /api/admin/rooms/{room}/invites", adminOnly(s.listInvites))
@@ -362,6 +365,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/rooms/{room}/host", s.memberOrAdmin(s.handOver))
 	mux.Handle("PATCH /api/rooms/{room}/participants/{participant}", s.participant(s.setCanTrigger))
 	mux.Handle("PUT /api/rooms/{room}/participants/{participant}/name", s.memberOrAdmin(s.renameParticipant))
+	mux.Handle("DELETE /api/rooms/{room}/participants/{participant}", s.memberOrAdmin(s.removeParticipant))
+	mux.Handle("GET /api/rooms/{room}/blocks", s.memberOrAdmin(s.listBlocks))
+	mux.Handle("DELETE /api/rooms/{room}/blocks/{profile}", s.memberOrAdmin(s.unblock))
 	mux.Handle("DELETE /api/rooms/{room}/queue/{queued}", s.participant(s.cancelQueued))
 	mux.Handle("PATCH /api/rooms/{room}/chain", s.participant(s.controlChain))
 	mux.Handle("GET /api/rooms/{room}/templates", s.participant(s.listTemplates))
@@ -1001,6 +1007,10 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusUnauthorized, "invalid or revoked invite")
 		return
 	}
+	if errors.Is(err, store.ErrBlocked) {
+		httpError(w, http.StatusForbidden, "A room admin blocked you from rejoining this room.")
+		return
+	}
 	if err != nil {
 		s.serverError(w, "join_failed", err)
 		return
@@ -1040,6 +1050,9 @@ type roomResp struct {
 	Profile bool `json:"profile"`
 	// Version is this server's, for the room page's Diagnostics (010-AC22).
 	Version string `json:"version"`
+	// Departed marks the lines of seats that ended, of people no longer in the room: "removed" or
+	// "left", by seat (016-AC11).
+	Departed map[int64]string `json:"departed"`
 }
 
 func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
@@ -1058,9 +1071,15 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
 			sess.p.Admin = p.Admin
 		}
 		ps[i].Self = p.ID == sess.p.ID || (sess.p.ProfileID != 0 && p.ProfileID == sess.p.ProfileID)
+		ps[i].NoProfile = p.ProfileID == 0
+	}
+	departed, err := s.bus.Store.Departed(r.Context(), room.ID)
+	if err != nil {
+		s.serverError(w, "get_room_failed", err)
+		return
 	}
 	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps, Daemons: s.connectedDaemons(room.ID), Voice: s.opts.Voice != nil,
-		Profile: sess.p.ProfileID != 0, Version: s.opts.Version})
+		Profile: sess.p.ProfileID != 0, Version: s.opts.Version, Departed: departed})
 }
 
 func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, sess session) {
