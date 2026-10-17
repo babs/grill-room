@@ -151,13 +151,15 @@ test('mentions: turn states, stop, pending and offline', async ({ browser, reque
     const notes = async () => (await (await alice.request.get(`/api/rooms/${room.id}/documents`)).json()).find((d) => d.name === 'notes.md');
     expect((await notes()).revisions).toBe(1);
 
-    // 016-AC21: an edit naming @Grill queues it as a send would, and the line shows the chip.
+    // 016-AC21: an edit naming @Grill queues it as a send would, and the line shows the chip. Its
+    // turn writes docs/notes.md, as the first did.
     await say(alice, 'Before the edit');
     await messageAction(line(alice, 'Before the edit'), 'Edit');
-    await alice.getByRole('textbox', { name: 'New text' }).fill('After the edit, @grill FAKE_RECALL');
+    await alice.getByRole('textbox', { name: 'New text' }).fill('After the edit, @grill please');
     await alice.getByRole('textbox', { name: 'New text' }).press('Enter');
     await expect(line(alice, 'After the edit').locator('.mention-turn')).toHaveText(/→ @Grill · (queued|running|done)/);
     await expect(line(alice, 'After the edit').locator('.mention-turn')).toHaveText('→ @Grill · done', { timeout: 60_000 });
+    expect((await notes()).revisions).toBe(2);
 
     // Stopped mid-run: the fake writes docs/notes.md and the session, then hangs.
     await say(alice, '@grill FAKE_SLEEP and the code word is BRAVO');
@@ -173,7 +175,7 @@ test('mentions: turn states, stop, pending and offline', async ({ browser, reque
     await expect(sleeping.locator('.mention-turn')).toHaveText('→ @Grill · stopped');
     await expect(alice.locator('#messages')).toContainText('Grill turn stopped by Alice.');
     await expect(alice.locator('#running')).toBeHidden();
-    expect((await notes()).revisions).toBe(1);
+    expect((await notes()).revisions).toBe(2);
 
     await say(alice, '@grill FAKE_RECALL');
     await expect(line(alice, 'FAKE_RECALL').locator('.mention-turn')).toHaveText('→ @Grill · done', { timeout: 60_000 });
