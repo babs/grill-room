@@ -1,5 +1,7 @@
 """The audio chain between the engine and the track: level, silence cap and tempo, all streaming."""
 
+from collections import deque
+
 import numpy as np
 from numpy.typing import NDArray
 from scipy.signal import firwin, lfilter
@@ -151,3 +153,37 @@ class Double:
 
     def flush(self) -> Samples:
         return self.feed(np.zeros(len(self._taps) // 4, np.float32))
+
+
+class Onset:
+    """Energy voice activity on a human's track, faster than LiveKit's speaker updates (013-AC22).
+
+    Speech starts once `start` of the last `window` 10 ms frames were above `floor_dbfs`: a word is
+    caught within 60 ms even when its syllables dip under the floor, while a key click or a cough
+    shorter than 40 ms is not speech. It ends after `hang_ms` below the floor, so the gaps between
+    words do not end it.
+    """
+
+    def __init__(
+        self, floor_dbfs: float = -42.0, window: int = 6, start: int = 4, hang_ms: int = 400
+    ) -> None:
+        self._floor = 10 ** (floor_dbfs / 20)
+        self._recent: deque[bool] = deque(maxlen=window)
+        self._start, self._hang_ms = start, hang_ms
+        self._quiet = 0.0
+        self.speaking = False
+
+    def feed(self, pcm: NDArray[np.int16], ms: float) -> bool | None:
+        """Takes one frame of ms; returns the new state when it changed, None otherwise."""
+        rms = float(np.sqrt(np.mean(np.square(pcm.astype(np.float32) / 32768)))) if len(pcm) else 0.0
+        loud = rms >= self._floor
+        self._recent.append(loud)
+        self._quiet = 0.0 if loud else self._quiet + ms
+        if not self.speaking and sum(self._recent) >= self._start:
+            self.speaking = True
+            return True
+        if self.speaking and self._quiet >= self._hang_ms:
+            self.speaking = False
+            self._recent.clear()
+            return False
+        return None

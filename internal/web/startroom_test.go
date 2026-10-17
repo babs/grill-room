@@ -278,3 +278,85 @@ func TestRoomFromPersonalStarter(t *testing.T) {
 		t.Fatalf("line: %+v", last)
 	}
 }
+
+// 013-AC30: the built-in Spec grill keeps Secretary out of the call and Grill in it; Retro and Doc
+// review keep every persona speaking. A starter saved from a room carries each persona's speaks,
+// voice and rate and the room's call settings; an older starter reads as speaking and defaults.
+func TestStartersCarryVoices(t *testing.T) {
+	e := newEnv(t)
+	alice := e.signedIn(t, "Alice")
+	speaking := func(room string) map[string]bool {
+		ps, _ := e.st.RoomPersonas(t.Context(), room)
+		out := map[string]bool{}
+		for _, p := range ps {
+			out[p.Name] = p.Speaks
+		}
+		return out
+	}
+	create := func(title string, fields map[string]string) store.Room {
+		t.Helper()
+		id := alice.builtin(t, title)
+		var latest int
+		for _, st := range alice.starters(t) {
+			if st.ID == id {
+				latest = st.Version
+			}
+		}
+		code, b := alice.createFrom(t, map[string]any{"name": title, "starter": map[string]any{"id": id, "version": latest}, "fields": fields})
+		if code != http.StatusCreated {
+			t.Fatalf("%s: %d %s", title, code, b)
+		}
+		return decodeJSON[store.Room](t, b)
+	}
+	grill := create("Spec grill", map[string]string{"topic": "Billing"})
+	if got := speaking(grill.ID); !got["Grill"] || got["Secretary"] {
+		t.Errorf("Spec grill: %v", got)
+	}
+	for title, fields := range map[string]map[string]string{"Retro": {"team": "Core"}, "Doc review": {"document": "RFC"}} {
+		for name, on := range speaking(create(title, fields).ID) {
+			if !on {
+				t.Errorf("%s: %s is silent", title, name)
+			}
+		}
+	}
+
+	ctx := t.Context()
+	ps, _ := e.st.RoomPersonas(ctx, grill.ID)
+	if _, err := e.st.DefaultVoice(ctx, grill.ID, ps[0].ID, "cml-3267"); err != nil {
+		t.Fatal(err)
+	}
+	sp := store.Speech{QuietMS: 3000, ResumeS: 5, QueueS: 60, Words: 50}
+	if _, err := e.st.SetSpeech(ctx, grill.ID, sp, nil); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := e.st.RoomDraft(ctx, grill.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Through "Save as starter", as the editor posts it.
+	code0, b0 := alice.do(t, "POST", "/api/rooms/"+grill.ID+"/starters", map[string]any{"title": "Grill with voices", "room_name": draft.RoomName,
+		"agenda": draft.Agenda, "fields": draft.Fields, "personas": draft.Personas, "documents": []string{}, "skills": []string{}, "plugins": []string{}})
+	if code0 != http.StatusCreated && code0 != http.StatusOK {
+		t.Fatalf("save as starter: %d %s", code0, b0)
+	}
+	st := decodeJSON[store.Starter](t, b0)
+	code, b := alice.createFrom(t, map[string]any{"name": "Copy", "starter": map[string]any{"id": st.ID, "version": st.Version}})
+	if code != http.StatusCreated {
+		t.Fatalf("from the saved starter: %d %s", code, b)
+	}
+	copied := decodeJSON[store.Room](t, b)
+	got, _ := e.st.RoomPersonas(ctx, copied.ID)
+	if got[0].Voice != "cml-3267" || !got[0].Speaks || got[1].Speaks || e.roomOf(t, copied.ID).Speech != sp {
+		t.Errorf("copied %+v / %+v, speech %+v", got[0], got[1], e.roomOf(t, copied.ID).Speech)
+	}
+
+	old := e.personalStarter(t, alice)
+	code, b = alice.createFrom(t, map[string]any{"name": "Old", "starter": map[string]any{"id": old.ID, "version": old.Version}})
+	if code != http.StatusCreated {
+		t.Fatalf("older starter: %d %s", code, b)
+	}
+	oldRoom := decodeJSON[store.Room](t, b)
+	if q, _ := e.st.RoomPersonas(ctx, oldRoom.ID); !q[0].Speaks || q[0].Voice != "" || q[0].VoiceRate != 1 || e.roomOf(t, oldRoom.ID).Speech != store.DefaultSpeech {
+		t.Errorf("older starter: %+v", q[0])
+	}
+}

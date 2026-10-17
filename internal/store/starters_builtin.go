@@ -45,6 +45,12 @@ var (
 	builtinSecretary = StarterPersona{PersonaFields: PersonaFields{Name: "Secretary", Badge: "📝", Colour: "#1971c2", Text: agendaSecretaryText,
 		Model: "sonnet", Effort: "medium"}, EveryVoice: 20}
 	builtinChain = StarterChain{Budget: DefaultChainBudget}
+	// silentSecretary keeps the minutes of a spec grill without speaking over it in the call (013-AC30).
+	silentSecretary = func() StarterPersona {
+		s, off := builtinSecretary, false
+		s.Speaks = &off
+		return s
+	}()
 )
 
 var builtinStarters = []struct {
@@ -67,7 +73,7 @@ Goal: find where the spec breaks before it is built.
 		Fields: []StarterField{{Label: "Topic", Key: "topic", Required: true, Hint: "What the spec is about"}},
 		Personas: []StarterPersona{
 			{PersonaFields: PersonaFields{Name: "Grill", Badge: "🔥", Colour: "#d9480f", Text: specGrillText, Model: "sonnet", Effort: "high"}},
-			builtinSecretary,
+			silentSecretary,
 		},
 		Skills: []StarterSkill{}, Documents: []StarterDocument{}, Chain: builtinChain,
 	}},

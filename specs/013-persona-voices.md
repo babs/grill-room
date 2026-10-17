@@ -196,6 +196,10 @@ Made while drafting (overturnable):
 - The lexicon round trip passes a term on 2 of 3 renders: Pocket samples at random and one render moves a term's result (S14b, Setup).
 - The turn-taking e2e uses a fake engine; the real engine gets one smoke run and the lab replay. Turn-taking does not depend on the engine, and CI stays light.
 - Risk: S14 saw LiveKit report a human about 0.25 s after the speech began, which leaves about 50 ms for the 300 ms stop. Phase 2 measures it and adds a VAD in the pod if needed.
+- Measured in Phase 2's e2e: LiveKit names a talking human to a bot about 400 ms after their onset, too late for AC22. The pod also reads the humans' tracks its bots subscribe to, with an energy onset detector (20 ms above −42 dBFS, 400 ms hang): the stop then lands 30 to 110 ms after the onset at a listener. The room hears a human while any of its bots, or detectors, does; a bot that has not subscribed to someone yet names nobody and must not silence the others.
+- A bot's track sends silence between lines: a stream that restarts at each line makes the listener's jitter buffer grow again.
+- The per-listener mute lives on the pill and in the card (notes, 2026-10-16), not in the audio menu.
+- One torch thread per synthesis: two under a 2-CPU limit starved LiveKit's media threads and left gaps in Phase 1's voice e2e.
 - The CPU request comes from the Phase 1 lab run: S14 and S14b measured E-cores, not the lab's nodes, and 007 found a 4-CPU node cannot always grant 2 CPUs.
 
 ## Appendix A — Pronunciation lexicon seed

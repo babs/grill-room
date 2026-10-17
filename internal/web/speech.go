@@ -14,9 +14,6 @@ import (
 	"github.com/babs/grill-room/internal/store"
 )
 
-// defaultSpokenWords caps a spoken line until the room setting exists (013-AC3, 013-AC25).
-const defaultSpokenWords = 60
-
 var (
 	mdLink   = regexp.MustCompile(`!?\[([^\]]*)\]\([^)]*\)`)
 	codeSpan = regexp.MustCompile("```[\\s\\S]*?```|`[^`]*`")

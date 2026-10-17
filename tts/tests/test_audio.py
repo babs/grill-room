@@ -105,3 +105,45 @@ def test_double(hz: float, chunk: int) -> None:
     assert freqs[np.argmax(spec)] == pytest.approx(hz, rel=0.01)
     assert spec[freqs > 13000].max() < spec.max() / 100, "an alias of the tone above 12 kHz"
     assert np.sqrt(np.mean(np.square(mid))) == pytest.approx(0.1 / np.sqrt(2), rel=0.05)
+
+
+def pcm(seconds: float, amp: float) -> np.ndarray:
+    return (tone(seconds, amp=amp) * 32767).astype(np.int16)
+
+
+# 013-AC22: an onset is caught within two 10 ms frames at speech level; the gaps between words do
+# not end it; quiet past the hang ends it; a whisper of echo under the floor never starts it.
+@pytest.mark.parametrize("amp", [0.05, 0.3])
+def test_onset(amp: float) -> None:
+    from grill_tts.audio import Onset
+
+    o = Onset()
+    frames = [(pcm(0.01, 0.002), "echo")] * 30 + [(pcm(0.01, amp), "word")] * 8
+    frames += (
+        [(pcm(0.01, 0.0), "gap")] * 20 + [(pcm(0.01, amp), "word")] * 8 + [(pcm(0.01, 0.0), "quiet")] * 50
+    )
+    changes = [(i, kind, ch) for i, (f, kind) in enumerate(frames) if (ch := o.feed(f, 10.0)) is not None]
+    assert changes[0] == (33, "word", True), "not by the 4th loud frame of the first word"
+    assert [c[2] for c in changes] == [True, False], "a 200 ms gap between words ended the speech"
+    assert changes[1] == (30 + 8 + 20 + 8 + 39, "quiet", False), "not 400 ms after the last word"
+
+
+# 013-AC22: clicks of 10 to 30 ms, shorter than the 40 ms the onset needs, never start speech.
+@pytest.mark.parametrize("burst", [1, 2, 3])
+def test_onset_ignores_clicks(burst: int) -> None:
+    from grill_tts.audio import Onset
+
+    o = Onset()
+    for _ in range(20):
+        for f in [pcm(0.01, 0.5)] * burst + [pcm(0.01, 0.0)] * 15:
+            assert o.feed(f, 10.0) is None, f"a {burst * 10} ms click started speech"
+
+
+# 013-AC22: syllables that dip under the floor for a frame still start speech within 60 ms.
+def test_onset_through_dips() -> None:
+    from grill_tts.audio import Onset
+
+    o = Onset()
+    choppy = [pcm(0.01, 0.2), pcm(0.01, 0.2), pcm(0.01, 0.0)] * 4
+    got = [o.feed(f, 10.0) for f in choppy]
+    assert True in got[:6], "two loud frames, one dip, repeated, did not start speech within 60 ms"

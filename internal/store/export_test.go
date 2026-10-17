@@ -698,7 +698,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 	const server = "server-wide, not room content"
 	// Each table's columns: those the export carries, or why the table is left out.
 	tables := map[string]string{
-		"rooms": "id name created_at chain_budget chain_count chain_suspended parallel_turns stt_glossary created_from | host_participant_id quota_bytes creator_profile_id egress_admins_allow",
+		"rooms": "id name created_at chain_budget chain_count chain_suspended parallel_turns stt_glossary created_from voice_quiet_ms voice_resume_s voice_queue_s voice_words | host_participant_id quota_bytes creator_profile_id egress_admins_allow",
 		// 014: what the AI host allowed is the host's, not the room's; the lines stay as text.
 		"blocked_requests":         "| message_id room_id persona domain count decision pending_scope pending_by pending_actor pending_error dismissed_by",
 		"participants":             "id name joined_at can_trigger profile_id profile_uuid_hint room_id invite_id previous_name | token_hash last_seen_at join_ip join_ua last_ip last_ua",
@@ -739,6 +739,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"magic_links":               server,
 		"recovery_links":            server,
 		"api_tokens":                server,
+		"tts_samples":               server,
 		"settings":                  server,
 		"admin_sessions":            server,
 		"audit_log":                 server,
@@ -1200,6 +1201,10 @@ func TestImportPersonaVoice(t *testing.T) {
 	if _, err := s.db.ExecContext(ctx, `UPDATE room_personas SET speaks = 0, voice = 'cml-2114', voice_rate = 1.2 WHERE id = ?`, ps[0].ID); err != nil {
 		t.Fatal(err)
 	}
+	sp := Speech{QuietMS: 2500, ResumeS: 0, QueueS: 300, Words: 40}
+	if _, err := s.SetSpeech(ctx, "orig", sp, nil); err != nil {
+		t.Fatal(err)
+	}
 	dir := export(t, s, "orig")
 	if _, err := s.ImportRoom(ctx, dir, importOpts("copy")); err != nil {
 		t.Fatal(err)
@@ -1207,6 +1212,9 @@ func TestImportPersonaVoice(t *testing.T) {
 	got, _ := s.RoomPersonas(ctx, "copy")
 	if len(got) != 1 || got[0].Speaks || got[0].Voice != "cml-2114" || got[0].VoiceRate != 1.2 {
 		t.Errorf("imported %+v", got)
+	}
+	if r, _ := s.Room(ctx, "copy"); r.Speech != sp {
+		t.Errorf("imported speech %+v, want %+v", r.Speech, sp)
 	}
 
 	// Before 013: no field at all. An unknown voice: the default.
@@ -1219,6 +1227,7 @@ func TestImportPersonaVoice(t *testing.T) {
 	if err := json.Unmarshal(b, &room); err != nil {
 		t.Fatal(err)
 	}
+	delete(room, "speech")
 	for _, x := range room["personas"].([]any) {
 		m := x.(map[string]any)
 		delete(m, "speaks")
@@ -1234,6 +1243,9 @@ func TestImportPersonaVoice(t *testing.T) {
 	if _, err := s.ImportRoom(ctx, dir, importOpts("old")); err != nil {
 		t.Fatal(err)
 	}
+	if r, _ := s.Room(ctx, "old"); r.Speech != DefaultSpeech {
+		t.Errorf("an archive from before 013: speech %+v", r.Speech)
+	}
 	old, _ := s.RoomPersonas(ctx, "old")
 	if len(old) != 1 {
 		t.Fatalf("old archive: %d personas", len(old))
@@ -1241,6 +1253,37 @@ func TestImportPersonaVoice(t *testing.T) {
 	for _, q := range old {
 		if !q.Speaks || q.Voice != "" || q.VoiceRate != 1 {
 			t.Errorf("old archive persona %s: %+v", q.Name, q)
+		}
+	}
+}
+
+// 013-AC25: a room's call settings out of range refuse the import; at the bounds they pass.
+func TestImportSpeechBounds(t *testing.T) {
+	s := openTest(t)
+	richRoom(t, s, "orig")
+	dir := export(t, s, "orig")
+	p := filepath.Join(dir, fileRoom)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range []struct {
+		sp Speech
+		ok bool
+	}{{SpeechMin, true}, {SpeechMax, true}, {Speech{QuietMS: 499, ResumeS: 20, QueueS: 40, Words: 60}, false},
+		{Speech{QuietMS: 1000, ResumeS: 20, QueueS: 40, Words: 61}, false}, {Speech{QuietMS: 1000, ResumeS: 61, QueueS: 9, Words: 60}, false}} {
+		var room map[string]any
+		if err := json.Unmarshal(b, &room); err != nil {
+			t.Fatal(err)
+		}
+		room["speech"] = c.sp
+		out, _ := json.Marshal(room)
+		if err := os.WriteFile(p, out, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := s.ImportRoom(t.Context(), dir, importOpts(fmt.Sprintf("r%d", i)))
+		if (err == nil) != c.ok {
+			t.Errorf("%+v: import error %v", c.sp, err)
 		}
 	}
 }

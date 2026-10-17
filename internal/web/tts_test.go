@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"regexp"
@@ -281,15 +282,15 @@ func TestTTSDefaultVoicesNeverRepeat(t *testing.T) {
 	// The first call sees only Grill speaking, the second only Secretary, from the same old read.
 	onlyGrill, onlySec := slices.Clone(ps), stale
 	onlyGrill[1].Speaks, onlySec[0].Speaks = false, false
-	e.srv.withVoices(ctx, r.room, onlyGrill)
-	e.srv.withVoices(ctx, r.room, onlySec)
+	e.srv.withVoices(ctx, r.room, onlyGrill, "en")
+	e.srv.withVoices(ctx, r.room, onlySec, "en")
 	g, _ := e.st.RoomPersona(ctx, r.room, r.grill.ID)
 	s, _ := e.st.RoomPersona(ctx, r.room, sec.ID)
 	if g.Voice == "" || s.Voice == "" || g.Voice == s.Voice {
 		t.Errorf("Grill %q, Secretary %q: two defaults must differ", g.Voice, s.Voice)
 	}
 	// A stored voice never moves (013-AC16).
-	e.srv.withVoices(ctx, r.room, stale)
+	e.srv.withVoices(ctx, r.room, stale, "en")
 	if again, _ := e.st.RoomPersona(ctx, r.room, r.grill.ID); again.Voice != g.Voice {
 		t.Errorf("Grill's voice moved from %q to %q", g.Voice, again.Voice)
 	}
@@ -304,5 +305,144 @@ func waitFor(t *testing.T, cond func() bool) {
 			t.Fatal("condition not reached within 5 s")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// 013-AC25: room admins set the call settings within their ranges; a plain member gets 403; a
+// change says so in the chat and reaches the next line.
+func TestTTSSpeechSettings(t *testing.T) {
+	e := newEnvOpts(t, ttsOptions(t))
+	alice := e.device(t)
+	room := alice.createRoom(t, "Call", "Alice")
+	path := "/api/rooms/" + room.ID + "/speech"
+	bob := e.device(t)
+	bob.join(t, room.ID, "Bob")
+	if code, _ := bob.do(t, "PATCH", path, map[string]int{"quiet_ms": 2000}); code != http.StatusForbidden {
+		t.Errorf("a member sets the call settings: %d", code)
+	}
+	for _, bad := range []map[string]int{{"quiet_ms": 499}, {"quiet_ms": 5001}, {"resume_s": -1}, {"resume_s": 61}, {"queue_s": 9}, {"queue_s": 301},
+		{"words": 39}, {"words": 61}} {
+		if code, _ := alice.do(t, "PATCH", path, bad); code != http.StatusBadRequest {
+			t.Errorf("%v: %d", bad, code)
+		}
+	}
+	code, b := alice.do(t, "PATCH", path, map[string]int{"quiet_ms": 500, "resume_s": 60, "queue_s": 300, "words": 40})
+	if got := decodeJSON[store.Room](t, b).Speech; code != http.StatusOK || got != (store.Speech{QuietMS: 500, ResumeS: 60, QueueS: 300, Words: 40}) {
+		t.Fatalf("set: %d %s", code, b)
+	}
+	if m := e.lastLine(t, room.ID); m.Kind != store.KindSystem || !strings.Contains(m.Body, "quiet before speaking 1000 ms → 500 ms") ||
+		!strings.Contains(m.Body, "spoken words 60 → 40") {
+		t.Errorf("chat line %q", m.Body)
+	}
+	// Admin token: allowed too.
+	if code, _ := e.do(t, "PATCH", path, e.admin, map[string]int{"words": 50}); code != http.StatusOK {
+		t.Errorf("the admin token: %d", code)
+	}
+	// Both changes are audited, the room admin's and the token's (004-AC6).
+	got, err := e.st.AuditLog(t.Context(), store.AuditQuery{Action: ActionRoomSpeech, Limit: 10})
+	if err != nil || len(got) != 2 || got[1].TargetID != room.ID || got[0].Actor != store.ActorSuperAdmin {
+		t.Errorf("audit %+v %v", got, err)
+	}
+}
+
+// 013-AC25, 013-AC1: the line carries the room's settings, and the prompt the room's word cap.
+func TestTTSLineCarriesRoomSettings(t *testing.T) {
+	e := newEnvOpts(t, ttsOptions(t))
+	r := newTurnRoom(t, e)
+	if _, err := e.st.SetSpeech(t.Context(), r.room, store.Speech{QuietMS: 1500, ResumeS: 10, QueueS: 100, Words: 45}, nil); err != nil {
+		t.Fatal(err)
+	}
+	e.inAudio(t, r.room, r.alice.p, false)
+	events, _ := e.openStream(t, "/api/tts/events", ttsToken, "")
+	long := strings.Repeat("word ", 50) + "end."
+	prompt := ttsTurn(t, e, r, turn.Result{Synthesis: "ok", Changes: []turn.Change{{Path: turn.SpokenFile, Content: []byte(long)}}})
+	if !strings.Contains(prompt, "45 words at most") {
+		t.Error("the prompt does not carry the room's cap")
+	}
+	l := decodeJSON[ttsLine](t, []byte(nextEvent(t, events, "line").data))
+	if l.ttsTimeouts != (ttsTimeouts{QuietMS: 1500, ResumeS: 10, QueueS: 100}) || len(strings.Fields(l.Text)) != 45 {
+		t.Errorf("line %+v, %d words", l.ttsTimeouts, len(strings.Fields(l.Text)))
+	}
+}
+
+// 013-AC27, 013-AC11, 013-AC16: the pod hands over samples for catalogue voices only; the picker
+// lists them with the room's language and who holds which voice, and a room with no line takes the
+// browser's language for its defaults.
+func TestTTSVoicesAndSamples(t *testing.T) {
+	e := newEnvOpts(t, ttsOptions(t))
+	room := e.createRoom(t, "Empty")
+	p := e.join(t, e.createInvite(t, room.ID).Token, "Alice")
+	put := func(voice, lang string, body []byte) int {
+		t.Helper()
+		req, _ := http.NewRequestWithContext(t.Context(), "PUT", e.ts.URL+"/api/tts/samples/"+voice+"/"+lang, bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+ttsToken)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, c := range []struct {
+		voice, lang string
+		body        []byte
+		code        int
+	}{{"estelle", "fr", []byte("OggS-estelle"), 204}, {"marius", "fr", []byte("x"), 400}, {"estelle", "de", []byte("x"), 400},
+		{"alba", "en", nil, 400}, {"alba", "en", make([]byte, maxSampleBytes+1), 413}} {
+		if got := put(c.voice, c.lang, c.body); got != c.code {
+			t.Errorf("PUT %s/%s: %d, want %d", c.voice, c.lang, got, c.code)
+		}
+	}
+	_, b := e.do(t, "GET", "/api/tts/samples", ttsToken, nil)
+	if h := decodeJSON[map[string]map[string]string](t, b)["samples"]; len(h) != 1 || len(h["estelle/fr"]) != 64 {
+		t.Errorf("hashes %v", h)
+	}
+	code, b := e.do(t, "GET", "/api/rooms/"+room.ID+"/voices/estelle/fr", p.Token, nil)
+	if code != http.StatusOK || string(b) != "OggS-estelle" {
+		t.Errorf("sample: %d %q", code, b)
+	}
+	if code, _ := e.do(t, "GET", "/api/rooms/"+room.ID+"/voices/alba/en", p.Token, nil); code != http.StatusNotFound {
+		t.Errorf("a sample never handed over: %d", code)
+	}
+	_, b = e.do(t, "GET", "/api/rooms/"+room.ID+"/voices?lang=fr", p.Token, nil)
+	got := decodeJSON[struct {
+		Voices []voiceChoice    `json:"voices"`
+		Lang   string           `json:"lang"`
+		Used   map[string]int64 `json:"used"`
+	}](t, b)
+	if got.Lang != "fr" || len(got.Voices) < 20 || got.Voices[0].ID != "estelle" || !slices.Equal(got.Voices[0].Samples, []string{"fr"}) || got.Voices[0].Credit == "" {
+		t.Errorf("voices %+v", got)
+	}
+	// The room has no line: Grill took the first French voice from the browser's language.
+	if len(got.Used) != 1 || got.Used["estelle"] == 0 {
+		t.Errorf("used %v", got.Used)
+	}
+	off := newEnv(t)
+	offRoom := off.createRoom(t, "R")
+	q := off.join(t, off.createInvite(t, offRoom.ID).Token, "A")
+	if code, _ := off.do(t, "GET", "/api/rooms/"+offRoom.ID+"/voices", q.Token, nil); code != http.StatusNotFound {
+		t.Errorf("voices with TTS off: %d", code)
+	}
+}
+
+// 013-AC29: the room's tts event carries each persona's state from the pod's heartbeat, and clears
+// once the pod is silent past ttsLapse.
+func TestTTSRoomEvent(t *testing.T) {
+	e := newEnvOpts(t, ttsOptions(t))
+	now := time.Now()
+	e.srv.now = func() time.Time { return now }
+	if code, _ := e.do(t, "POST", "/api/tts/heartbeat", ttsToken, map[string]any{"pod": "p", "states": []ttsState{
+		{Room: "r1", PersonaID: 3, State: "speaking"}, {Room: "r1", PersonaID: 4, State: "waiting"}, {Room: "r1", PersonaID: 5, State: "idle"},
+		{Room: "r2", PersonaID: 6, State: "speaking"}}}); code != http.StatusNoContent {
+		t.Fatal(code)
+	}
+	ev := e.srv.ttsRoomEvent("r1")
+	if !strings.Contains(ev, `"pod":true`) || !strings.Contains(ev, `"3":{`) || !strings.Contains(ev, `"state":"waiting"`) ||
+		strings.Contains(ev, `"5":`) || strings.Contains(ev, `"6":`) {
+		t.Errorf("event %s", ev)
+	}
+	now = now.Add(ttsLapse + time.Second)
+	if ev := e.srv.ttsRoomEvent("r1"); ev != "event: tts\ndata: {\"personas\":{},\"pod\":false}\n\n" {
+		t.Errorf("after the lapse: %q", ev)
 	}
 }

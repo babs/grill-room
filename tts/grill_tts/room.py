@@ -158,6 +158,8 @@ class RoomVoice:
         self.out = out
         self.listeners = False
         self.humans: set[str] = set()
+        # Each bot's latest view of who speaks, by bot.
+        self._seen: dict[str, set[str]] = {}
         self.quiet_since = self.clock.now()
         self.changed_at = 0.0
         self._changed = asyncio.Event()
@@ -172,9 +174,18 @@ class RoomVoice:
         self._set(line.persona_id, "waiting")
         self._new.set()
 
-    def speakers(self, humans: set[str]) -> None:
-        """LiveKit's active speakers, the bots left out (013-AC21, AC22)."""
+    def speakers(self, humans: set[str], bot: str = "") -> None:
+        """LiveKit's active speakers as one bot sees them, the bots left out (013-AC21, AC22). The
+        room hears a human while any of its bots does: a bot that has not subscribed to someone yet
+        names nobody, which must not silence another bot's view."""
+        if humans:
+            self._seen[bot] = humans
+        else:
+            self._seen.pop(bot, None)
+        humans = set().union(*self._seen.values())
         now = self.clock.now()
+        if humans != self.humans:
+            log.debug("speakers", room=self.room, humans=sorted(humans), source=bot)
         if humans and not self.humans:
             self.changed_at = now
         if not humans and self.humans:
@@ -185,6 +196,11 @@ class RoomVoice:
     def set_listeners(self, on: bool) -> None:
         self.listeners = on
         self._changed.set()
+
+    def forget_bot(self, bot: str) -> None:
+        """A bot left: its last view of the speakers goes with it."""
+        if bot in self._seen:
+            self.speakers(set(), bot)
 
     def wake(self) -> None:
         """A bot joined: a line waiting for it goes on."""

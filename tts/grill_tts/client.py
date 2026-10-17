@@ -1,8 +1,10 @@
 """The room server side: lines and rooms from its event stream, the pod's heartbeat back (013-AC14)."""
 
 import asyncio
+import hashlib
 import json
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -82,3 +84,29 @@ class ServerLink:
             r.raise_for_status()
         except httpx.HTTPError as e:
             log.warning("heartbeat_failed", error=str(e) or type(e).__name__)
+
+    async def samples(self, folder: Path, retry_s: float = 60.0) -> None:
+        """Hands the server the samples it lacks, <voice>-<lang>.ogg, until it took them all (013-AC27)."""
+        while True:
+            try:
+                r = await self._client.get("/api/tts/samples", timeout=httpx.Timeout(10.0))
+                r.raise_for_status()
+                held: dict[str, str] = r.json()["samples"]
+                for f in sorted(folder.glob("*.ogg")):
+                    voice, _, lang = f.stem.rpartition("-")
+                    data = f.read_bytes()
+                    if held.get(f"{voice}/{lang}") == hashlib.sha256(data).hexdigest():
+                        continue
+                    put = await self._client.put(
+                        f"/api/tts/samples/{voice}/{lang}", content=data, timeout=httpx.Timeout(10.0)
+                    )
+                    if put.is_client_error:
+                        # A voice this server's catalogue lacks: the next ones still go.
+                        log.warning("sample_refused", voice=voice, lang=lang, status=put.status_code)
+                        continue
+                    put.raise_for_status()
+                    log.info("sample_handed", voice=voice, lang=lang)
+                return
+            except httpx.HTTPError as e:
+                log.warning("samples_failed", error=str(e) or type(e).__name__)
+            await asyncio.sleep(retry_s)

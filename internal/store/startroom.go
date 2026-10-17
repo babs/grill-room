@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	pluginpkg "github.com/babs/grill-room/internal/plugin"
+	voicecat "github.com/babs/grill-room/internal/voices"
 )
 
 // MaxStarterTitle bounds a starter's title (006-AC15).
@@ -55,6 +57,8 @@ type RoomSetup struct {
 	SkillsPending bool
 	Chain         StarterChain
 	Glossary      string
+	// Speech is the room's call settings; nil keeps the defaults (013-AC30).
+	Speech *Speech
 	// UploadQuota bounds the uploads, as the room's quota bounds them later (004-AC9).
 	UploadQuota int64
 }
@@ -89,8 +93,13 @@ func setUp(ctx context.Context, tx *sql.Tx, r *Room, by *Participant, setup *Roo
 	}
 	r.Chain = Chain{Budget: max(setup.Chain.Budget, 1), Suspended: setup.Chain.Suspended}
 	r.ParallelTurns = setup.Chain.Parallel
-	if _, err := tx.ExecContext(ctx, `UPDATE rooms SET created_from = ?, chain_budget = ?, chain_suspended = ?, parallel_turns = ?, stt_glossary = ? WHERE id = ?`,
-		from, r.Chain.Budget, r.Chain.Suspended, r.ParallelTurns, setup.Glossary, r.ID); err != nil {
+	r.Speech = DefaultSpeech
+	if setup.Speech != nil {
+		r.Speech = *setup.Speech
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE rooms SET created_from = ?, chain_budget = ?, chain_suspended = ?, parallel_turns = ?, stt_glossary = ?,
+		voice_quiet_ms = ?, voice_resume_s = ?, voice_queue_s = ?, voice_words = ? WHERE id = ?`,
+		from, r.Chain.Budget, r.Chain.Suspended, r.ParallelTurns, setup.Glossary, r.Speech.QuietMS, r.Speech.ResumeS, r.Speech.QueueS, r.Speech.Words, r.ID); err != nil {
 		return 0, fmt.Errorf("set up room: %w", err)
 	}
 	skills := map[string][2]int64{}
@@ -117,10 +126,10 @@ func setUp(ctx context.Context, tx *sql.Tx, r *Room, by *Participant, setup *Roo
 	for _, p := range setup.Personas {
 		var id int64
 		err := tx.QueryRowContext(ctx, `INSERT INTO room_personas(room_id, template_version, name, badge, colour, text, model, effort, every_n, self_call,
-				autocompact, every_voice, every_minutes, watches_notes, created_at, mark_msg_id, mark_at_ms)
-			VALUES(?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, `+markNow+`) RETURNING id`,
+				autocompact, every_voice, every_minutes, watches_notes, speaks, voice, voice_rate, created_at, mark_msg_id, mark_at_ms)
+			VALUES(?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, `+markNow+`) RETURNING id`,
 			append(append([]any{r.ID}, p.args()...), nullInt(p.EveryN), p.SelfCall, p.Autocompact, nullInt(p.EveryVoice), nullInt(p.EveryMinutes),
-				p.WatchesNotes, now(), time.Now().UnixMilli())...).Scan(&id)
+				p.WatchesNotes, p.SpeaksInCall(), voicecat.Known(p.Voice), cmp.Or(p.VoiceRate, 1), now(), time.Now().UnixMilli())...).Scan(&id)
 		if err != nil {
 			return 0, fmt.Errorf("set up room: persona %s: %w", p.Name, err)
 		}
@@ -303,7 +312,8 @@ func (s *Store) RoomDraft(ctx context.Context, roomID string) (*StarterManifest,
 		title = string(rs[:MaxStarterTitle])
 	}
 	m := &StarterManifest{Title: title, RoomName: r.Name, Fields: []StarterField{}, Personas: []StarterPersona{}, Skills: []StarterSkill{},
-		Documents: []StarterDocument{}, Chain: StarterChain{Budget: r.Chain.Budget, Suspended: r.Chain.Suspended, Parallel: r.ParallelTurns}, Glossary: glossary}
+		Documents: []StarterDocument{}, Chain: StarterChain{Budget: r.Chain.Budget, Suspended: r.Chain.Suspended, Parallel: r.ParallelTurns}, Glossary: glossary,
+		Speech: &r.Speech}
 	// Skills: those the personas have on, at their pins, then the room's own; approved ones only.
 	rows, err := s.db.QueryContext(ctx, `SELECT v.id, s.name, v.n, v.author, v.description, v.files, v.size, v.sha256 FROM (
 			SELECT k.skill_id, k.version, 0 AS o, p.id AS pid FROM room_persona_skills k JOIN room_personas p ON p.id = k.persona_id WHERE p.room_id = ? AND p.pending = 0
@@ -360,7 +370,8 @@ func (s *Store) RoomDraft(ctx context.Context, roomID string) (*StarterManifest,
 			continue
 		}
 		sp := StarterPersona{PersonaFields: p.PersonaFields, EveryN: p.EveryN, EveryVoice: p.EveryVoice, EveryMinutes: p.EveryMinutes,
-			SelfCall: p.SelfCall, WatchesNotes: p.WatchesNotes, Autocompact: p.Autocompact, Plugins: on[p.ID]}
+			SelfCall: p.SelfCall, WatchesNotes: p.WatchesNotes, Autocompact: p.Autocompact, Plugins: on[p.ID],
+			Speaks: &p.Speaks, Voice: p.Voice, VoiceRate: p.VoiceRate}
 		for _, k := range p.Skills {
 			// A pending room skill is not in the draft: the persona goes without it.
 			if slices.ContainsFunc(m.Skills, func(x StarterSkill) bool { return x.Name == k.Name }) {

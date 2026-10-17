@@ -124,3 +124,39 @@ async def test_pod_states() -> None:
         {"room": "r1", "persona_id": 4, "state": "dropped", "reason": "stale"},
     ]
     await pod.close()
+
+
+# 013-AC27: the pod hands over only the samples the server lacks or holds another version of, and
+# retries while the server is away.
+async def test_samples_handed_over(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import hashlib
+
+    (tmp_path / "estelle-fr.ogg").write_bytes(b"same")
+    (tmp_path / "alba-en.ogg").write_bytes(b"new")
+    (tmp_path / "cml-2114-fr.ogg").write_bytes(b"changed")
+    put: list[str] = []
+    calls = 0
+
+    def handle(r: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(503)
+        if r.method == "GET":
+            return httpx.Response(
+                200,
+                json={"samples": {"estelle/fr": hashlib.sha256(b"same").hexdigest(), "cml-2114/fr": "old"}},
+            )
+        put.append(r.url.path)
+        # A voice the server does not know: refused, and the next one still goes.
+        return httpx.Response(400 if "alba" in r.url.path else 204)
+
+    async def no_wait(_s: float) -> None:
+        return None
+
+    monkeypatch.setattr("grill_tts.client.asyncio.sleep", no_wait)
+    link = ServerLink(
+        httpx.AsyncClient(base_url="http://room", transport=httpx.MockTransport(handle)), print, print
+    )
+    await link.samples(tmp_path)
+    assert put == ["/api/tts/samples/alba/en", "/api/tts/samples/cml-2114/fr"]

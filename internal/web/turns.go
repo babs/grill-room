@@ -362,7 +362,7 @@ func (s *Server) prepareTurn(ctx context.Context, room *store.Room, persona *sto
 	}
 	t.Prompt = buildPrompt(promptInput{Preamble: preamble, Room: room.Name, Persona: persona.Name, Self: persona.ID, NewSession: t.Resume == "",
 		Handoff: t.Handoff, Msgs: msgs, Changes: changes, Anns: anns, Named: named, AnnCursor: prev.AnnotationCursor, Paths: docPaths(docs), Renamed: renamed,
-		SpokenWords: s.speakingWords(room.ID, persona)})
+		SpokenWords: s.speakingWords(room, persona)})
 	return t, nil
 }
 
