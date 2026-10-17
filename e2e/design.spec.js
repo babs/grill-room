@@ -309,11 +309,11 @@ test('header menus, wording and empty states', async ({ browser, request }) => {
   void room;
 });
 
-// 005-AC35: a pill that cannot ask says why; the phone's People sheet; the viewer's one toolbar.
+// 005-AC35, 013-AC39: a pill's ▶ that cannot ask says why; the phone's People sheet; the viewer's one toolbar.
 test('locked pill and viewer toolbar', async ({ browser, request }) => {
   const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
   await alice.setViewportSize(phone);
-  const pill = alice.locator('button.persona').first();
+  const pill = alice.locator('.persona-pill .persona-run').first();
   await expect(pill).toBeDisabled();
   await pill.click({ force: true });
   await expect(alice.locator('#why')).toBeVisible();

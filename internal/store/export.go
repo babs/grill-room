@@ -44,6 +44,8 @@ type xRoom struct {
 	Chain         Chain  `json:"chain"`
 	ParallelTurns bool   `json:"parallel_turns"`
 	STTGlossary   string `json:"stt_glossary,omitempty"`
+	// Speech is optional: an archive from before 013 reads as the defaults (013-AC25).
+	Speech *Speech `json:"speech,omitempty"`
 	// CreatedFrom is optional: an archive from before 006 has none, and the format stays (006-AC11).
 	CreatedFrom *Provenance `json:"created_from,omitempty"`
 	Personas    []xPersona  `json:"personas"`
@@ -406,8 +408,11 @@ func exportRoom(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) (*
 	room := &Room{ID: roomID}
 	x := xRoom{Personas: []xPersona{}}
 	var from sql.NullString
-	err := tx.QueryRowContext(ctx, `SELECT name, created_at, chain_budget, chain_count, chain_suspended, parallel_turns, stt_glossary, created_from FROM rooms WHERE id = ?`, roomID).
-		Scan(&x.Name, &x.CreatedAt, &x.Chain.Budget, &x.Chain.Count, &x.Chain.Suspended, &x.ParallelTurns, &x.STTGlossary, &from)
+	x.Speech = &Speech{}
+	err := tx.QueryRowContext(ctx, `SELECT name, created_at, chain_budget, chain_count, chain_suspended, parallel_turns, stt_glossary, created_from,
+		voice_quiet_ms, voice_resume_s, voice_queue_s, voice_words FROM rooms WHERE id = ?`, roomID).
+		Scan(&x.Name, &x.CreatedAt, &x.Chain.Budget, &x.Chain.Count, &x.Chain.Suspended, &x.ParallelTurns, &x.STTGlossary, &from,
+			&x.Speech.QuietMS, &x.Speech.ResumeS, &x.Speech.QueueS, &x.Speech.Words)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

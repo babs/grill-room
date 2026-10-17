@@ -107,7 +107,7 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
     await close(bob);
     for (const p of [alice, bob]) {
       await expect(led(p, 'Grill-2')).toHaveAttribute('aria-label', 'Grill-2 waits for the AI host\'s approval');
-      await expect(p.locator('button.persona[data-name="Grill-2"]')).toBeDisabled();
+      await expect(p.locator('.persona-pill[data-name="Grill-2"] .persona-run')).toBeDisabled();
     }
     await expect(bob.locator('#approval-list li')).toHaveText([
       '🔥 Grill-2, added by Bob: new persona. The AI host decides.',

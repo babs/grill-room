@@ -425,9 +425,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms/{room}/voice/dropped", s.sttAuth(s.postVoiceDropped))
 	mux.Handle("POST /api/rooms/{room}/voice/device-lines", s.participant(s.postDeviceLine))
 	mux.Handle("GET /api/stt/rooms/{room}/prompt", s.sttAuth(s.sttPromptFor))
+	mux.Handle("PATCH /api/rooms/{room}/speech", s.memberOrAdmin(s.setSpeech))
 	if s.tts != nil {
 		mux.Handle("GET /api/tts/events", s.ttsAuth(s.ttsEvents))
 		mux.Handle("POST /api/tts/heartbeat", s.ttsAuth(s.ttsHeartbeat))
+		mux.Handle("GET /api/tts/samples", s.ttsAuth(s.ttsSampleHashes))
+		mux.Handle("PUT /api/tts/samples/{voice}/{lang}", s.ttsAuth(s.ttsPutSample))
+		mux.Handle("GET /api/rooms/{room}/voices", s.participant(s.listVoices))
+		mux.Handle("GET /api/rooms/{room}/voices/{voice}/{lang}", s.participant(s.voiceSample))
 	}
 	mux.Handle("GET /api/rooms/{room}/glossary", s.participant(s.getGlossary))
 	mux.Handle("PUT /api/rooms/{room}/glossary", s.participant(s.putGlossary))
@@ -1052,8 +1057,9 @@ type roomResp struct {
 	Participants []store.Participant `json:"participants"`
 	// Daemons are the connected ones, with whether each can host.
 	Daemons []presence `json:"daemons"`
-	// Voice tells whether the server offers LiveKit audio.
+	// Voice tells whether the server offers LiveKit audio; TTS whether personas speak in it (013-AC13).
 	Voice bool `json:"voice"`
+	TTS   bool `json:"tts"`
 	// Profile tells whether the viewer has a profile, to which a rename may apply (005-AC1).
 	Profile bool `json:"profile"`
 	// Version is this server's, for the room page's Diagnostics (010-AC22).
@@ -1086,7 +1092,7 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
 		s.serverError(w, "get_room_failed", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps, Daemons: s.connectedDaemons(room.ID), Voice: s.opts.Voice != nil,
+	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps, Daemons: s.connectedDaemons(room.ID), Voice: s.opts.Voice != nil, TTS: s.tts != nil,
 		Profile: sess.p.ProfileID != 0, Version: s.opts.Version, Departed: departed})
 }
 
@@ -1313,6 +1319,13 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 			return
 		}
 	}
+	var tts string
+	if s.tts != nil {
+		tts = s.ttsRoomEvent(room)
+		if _, err := io.WriteString(w, tts); err != nil {
+			return
+		}
+	}
 	flusher.Flush()
 	poll := time.NewTicker(pollEvery)
 	defer poll.Stop()
@@ -1336,6 +1349,16 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 			if now := s.sttState(room, s.now()); !now.equal(stt) {
 				stt = now
 				if _, err := io.WriteString(w, sttEvent(stt)); err != nil {
+					return
+				}
+				flusher.Flush()
+			}
+			if s.tts == nil {
+				continue
+			}
+			if now := s.ttsRoomEvent(room); now != tts {
+				tts = now
+				if _, err := io.WriteString(w, tts); err != nil {
 					return
 				}
 				flusher.Flush()

@@ -138,7 +138,7 @@ function Sessions() {
  * @type {Record<string, string>}
  */
 const actionLabels = {
-  'room.create': 'Room created', 'room.rename': 'Room renamed', 'room.delete': 'Room deleted', 'room.quota': 'Room quota set',
+  'room.create': 'Room created', 'room.rename': 'Room renamed', 'room.delete': 'Room deleted', 'room.quota': 'Room quota set', 'room.speech': 'Call voices changed',
   'room.export': 'Room exported', 'room.import': 'Room imported', 'room.host_transfer': 'AI host changed',
   'invite.create': 'Invite created', 'invite.revoke': 'Invite revoked', 'room_admin.add': 'Room admin added', 'room_admin.remove': 'Room admin removed',
   'room_skill.remove': 'Room skill removed', 'participant.rename': 'Participant renamed', 'document.delete': 'Document deleted',

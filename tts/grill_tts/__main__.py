@@ -144,6 +144,7 @@ async def run(s: Settings) -> None:
         async with asyncio.TaskGroup() as tg:
             tg.create_task(pod.link.events())
             tg.create_task(pod.heartbeat())
+            tg.create_task(pod.link.samples(s.models_dir / "samples"))
     finally:
         if pod is not None:
             await pod.close()

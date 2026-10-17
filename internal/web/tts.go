@@ -25,8 +25,9 @@ import (
 const (
 	// maxTTSLines bounds the lines kept for a pod that is away; each also expires (013-AC14).
 	maxTTSLines = 500
-	// ttsLapse is how long the pod's last heartbeat stands: past it, its states clear (013-AC29).
-	ttsLapse = 10 * time.Second
+	// ttsLapse is how long the pod's last heartbeat stands: past it, its states clear, which the
+	// room's 1 s poll must show within AC29's 10 s.
+	ttsLapse = 8 * time.Second
 	// ttsPing keeps proxies from closing an idle stream.
 	ttsPing = 15 * time.Second
 	// recentForLang is how many lines a room's language is guessed from (013-AC16).
@@ -50,7 +51,11 @@ type ttsTimeouts struct {
 	QueueS  int `json:"queue_s"`
 }
 
-var defaultTTSTimeouts = ttsTimeouts{QuietMS: 1000, ResumeS: 20, QueueS: 40}
+func timeoutsOf(sp store.Speech) ttsTimeouts {
+	return ttsTimeouts{QuietMS: sp.QuietMS, ResumeS: sp.ResumeS, QueueS: sp.QueueS}
+}
+
+var defaultTTSTimeouts = timeoutsOf(store.DefaultSpeech)
 
 // ttsLine is one line a persona says in a room's call (013-AC14).
 type ttsLine struct {
@@ -212,11 +217,11 @@ func (s *Server) ttsAuth(next http.HandlerFunc) http.Handler {
 // speakingWords is the word cap for persona's spoken line in room when it speaks in this turn:
 // the server offers voice, the persona speaks in the call and a human is in the room's audio; 0
 // otherwise (013-AC1).
-func (s *Server) speakingWords(room string, persona *store.RoomPersona) int {
-	if s.tts == nil || !persona.Speaks || !s.people.listening(s.now())[room] {
+func (s *Server) speakingWords(room *store.Room, persona *store.RoomPersona) int {
+	if s.tts == nil || !persona.Speaks || !s.people.listening(s.now())[room.ID] {
 		return 0
 	}
-	return defaultSpokenWords
+	return room.Speech.Words
 }
 
 // roomLang is room's language from its recent lines, fallback when they tell none (013-AC16).
@@ -230,7 +235,7 @@ func (s *Server) roomLang(ctx context.Context, room, fallback string) string {
 
 // withVoices gives each speaking persona of ps with no voice its default and stores it, so it
 // never shifts as other personas come and go (013-AC16).
-func (s *Server) withVoices(ctx context.Context, room string, ps []store.RoomPersona) {
+func (s *Server) withVoices(ctx context.Context, room string, ps []store.RoomPersona, fallback string) {
 	if !slices.ContainsFunc(ps, func(p store.RoomPersona) bool { return p.Speaks && p.Voice == "" }) {
 		return
 	}
@@ -258,7 +263,7 @@ func (s *Server) withVoices(ctx context.Context, room string, ps []store.RoomPer
 			continue
 		}
 		if lang == "" {
-			lang = s.roomLang(ctx, room, "en")
+			lang = s.roomLang(ctx, room, fallback)
 		}
 		used := map[string]bool{}
 		for _, o := range ps {
@@ -288,8 +293,12 @@ func (s *Server) withVoices(ctx context.Context, room string, ps []store.RoomPer
 // queueSpeech queues what the persona of turn t says in the call: its spoken.md, or the summary
 // of its actions when it wrote none (013-AC3, 013-AC4). The words never reach a log.
 func (s *Server) queueSpeech(ctx context.Context, t *store.Turn, spoken, synthesis string) {
+	if s.tts == nil {
+		return
+	}
 	// Nobody in the call: nothing to say, and nothing to count as dropped.
-	if s.tts == nil || !s.people.listening(s.now())[t.RoomID] {
+	if !s.people.listening(s.now())[t.RoomID] {
+		s.log.Debug("speech_skipped", zap.String("room", t.RoomID), zap.Int64("turn", t.ID), zap.String("reason", "no_listener"))
 		return
 	}
 	ps, err := s.bus.Store.RoomPersonas(ctx, t.RoomID)
@@ -299,9 +308,15 @@ func (s *Server) queueSpeech(ctx context.Context, t *store.Turn, spoken, synthes
 	}
 	i := slices.IndexFunc(ps, func(p store.RoomPersona) bool { return p.ID == t.PersonaID })
 	if i < 0 || !ps[i].Speaks {
+		s.log.Debug("speech_skipped", zap.String("room", t.RoomID), zap.Int64("turn", t.ID), zap.String("reason", "silent"))
 		return
 	}
-	words := defaultSpokenWords
+	room, err := s.bus.Store.Room(ctx, t.RoomID)
+	if err != nil {
+		s.log.Warn("speech_skipped", zap.String("room", t.RoomID), zap.Error(err))
+		return
+	}
+	words := room.Speech.Words
 	text, source := spokenText(spoken, words), "spoken"
 	if text == "" {
 		text, source = capWords(turnSummary(t.Report, synthesis), words), "summary"
@@ -309,10 +324,10 @@ func (s *Server) queueSpeech(ctx context.Context, t *store.Turn, spoken, synthes
 	if text == "" {
 		return
 	}
-	s.withVoices(ctx, t.RoomID, ps)
+	s.withVoices(ctx, t.RoomID, ps, "en")
 	p := ps[i]
 	seq := s.tts.add(ttsLine{Room: t.RoomID, PersonaID: p.ID, Persona: p.Name, Voice: p.Voice, Rate: p.VoiceRate, Text: text,
-		ttsTimeouts: defaultTTSTimeouts, QueuedAt: s.now()}, s.now())
+		ttsTimeouts: timeoutsOf(room.Speech), QueuedAt: s.now()}, s.now())
 	s.log.Info("speech_queued", zap.String("room", t.RoomID), zap.Int64("turn", t.ID), zap.Int64("seq", seq), zap.String("source", source),
 		zap.Int("words", len(wordRE.FindAllString(text, -1))))
 }
@@ -344,7 +359,7 @@ func (s *Server) ttsRoster(ctx context.Context) []ttsRoom {
 		if err != nil {
 			continue
 		}
-		s.withVoices(ctx, room, ps)
+		s.withVoices(ctx, room, ps, "en")
 		r := ttsRoom{Room: room, Personas: []ttsPersona{}}
 		for _, p := range ps {
 			if p.Speaks && !p.Pending {
@@ -458,4 +473,23 @@ func (s *Server) ttsHeartbeat(w http.ResponseWriter, r *http.Request) {
 	s.tts.beatAt, s.tts.pod, s.tts.rooms, s.tts.bots, s.tts.states = s.now(), req.Pod, req.Rooms, req.Bots, req.States
 	s.tts.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ttsRoomEvent is the room's "tts" event: whether the pod is up, and each persona's state while it
+// is; a pod silent past ttsLapse clears them all (013-AC29).
+func (s *Server) ttsRoomEvent(room string) string {
+	h := s.tts
+	h.mu.Lock()
+	up := !h.beatAt.IsZero() && s.now().Sub(h.beatAt) <= ttsLapse
+	states := map[string]ttsState{}
+	if up {
+		for _, st := range h.states {
+			if st.Room == room && st.State != "idle" {
+				states[strconv.FormatInt(st.PersonaID, 10)] = st
+			}
+		}
+	}
+	h.mu.Unlock()
+	b, _ := json.Marshal(map[string]any{"pod": up, "personas": states}) // plain values cannot fail to marshal
+	return "event: tts\ndata: " + string(b) + "\n\n"
 }

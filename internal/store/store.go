@@ -52,6 +52,31 @@ type Room struct {
 	// EgressAdmins lets the room's admins allow websites for the room; the AI host switches it
 	// (014-AC12).
 	EgressAdmins bool `json:"egress_admins_allow"`
+	// Speech is how personas take turns in the call (013-AC25).
+	Speech Speech `json:"speech"`
+}
+
+// Speech is a room's call settings for its personas' voices (013-AC25): the quiet before a persona
+// starts, the window to resume an interrupted line, the most a line waits, and its words.
+type Speech struct {
+	QuietMS int `json:"quiet_ms"`
+	ResumeS int `json:"resume_s"`
+	QueueS  int `json:"queue_s"`
+	Words   int `json:"words"`
+}
+
+// SpeechLimits are the bounds of each Speech field, inclusive; DefaultSpeech its defaults.
+var (
+	SpeechMin     = Speech{QuietMS: 500, ResumeS: 0, QueueS: 10, Words: 40}
+	SpeechMax     = Speech{QuietMS: 5000, ResumeS: 60, QueueS: 300, Words: 60}
+	DefaultSpeech = Speech{QuietMS: 1000, ResumeS: 20, QueueS: 40, Words: 60}
+)
+
+// Valid reports s within SpeechMin and SpeechMax.
+func (s Speech) Valid() bool {
+	in := func(v, lo, hi int) bool { return v >= lo && v <= hi }
+	return in(s.QuietMS, SpeechMin.QuietMS, SpeechMax.QuietMS) && in(s.ResumeS, SpeechMin.ResumeS, SpeechMax.ResumeS) &&
+		in(s.QueueS, SpeechMin.QueueS, SpeechMax.QueueS) && in(s.Words, SpeechMin.Words, SpeechMax.Words)
 }
 
 // Invite is a link token granting access to one room. Only its hash is stored.
@@ -904,6 +929,21 @@ CREATE TABLE room_blocks (
 	PRIMARY KEY (room_id, profile_id)
 );
 CREATE INDEX room_blocks_profile ON room_blocks(profile_id);
+`, `
+-- 013-AC25: how personas take turns in the room's call, and the words a spoken line may hold.
+ALTER TABLE rooms ADD COLUMN voice_quiet_ms INTEGER NOT NULL DEFAULT 1000 CHECK (voice_quiet_ms BETWEEN 500 AND 5000);
+ALTER TABLE rooms ADD COLUMN voice_resume_s INTEGER NOT NULL DEFAULT 20 CHECK (voice_resume_s BETWEEN 0 AND 60);
+ALTER TABLE rooms ADD COLUMN voice_queue_s INTEGER NOT NULL DEFAULT 40 CHECK (voice_queue_s BETWEEN 10 AND 300);
+ALTER TABLE rooms ADD COLUMN voice_words INTEGER NOT NULL DEFAULT 60 CHECK (voice_words BETWEEN 40 AND 60);
+-- 013-AC27: each catalogue voice's sample, rendered when the tts image was built and handed over
+-- by the pod, so the picker plays it while the pod is down.
+CREATE TABLE tts_samples (
+	voice TEXT NOT NULL,
+	lang TEXT NOT NULL CHECK (lang IN ('fr', 'en')),
+	sha256 TEXT NOT NULL,
+	data BLOB NOT NULL,
+	PRIMARY KEY (voice, lang)
+);
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -1070,8 +1110,9 @@ func (s *Store) Room(ctx context.Context, id string) (*Room, error) {
 	var created string
 	var from sql.NullString
 	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at, COALESCE(host_participant_id, 0), chain_budget, chain_count, chain_suspended, parallel_turns,
-		created_from, egress_admins_allow FROM rooms WHERE id = ?`, id).Scan(&r.ID, &r.Name, &created, &r.HostParticipantID, &r.Chain.Budget, &r.Chain.Count, &r.Chain.Suspended,
-		&r.ParallelTurns, &from, &r.EgressAdmins)
+		created_from, egress_admins_allow, voice_quiet_ms, voice_resume_s, voice_queue_s, voice_words FROM rooms WHERE id = ?`, id).Scan(&r.ID, &r.Name, &created,
+		&r.HostParticipantID, &r.Chain.Budget, &r.Chain.Count, &r.Chain.Suspended, &r.ParallelTurns, &from, &r.EgressAdmins,
+		&r.Speech.QuietMS, &r.Speech.ResumeS, &r.Speech.QueueS, &r.Speech.Words)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

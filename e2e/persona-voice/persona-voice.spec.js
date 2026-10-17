@@ -23,6 +23,15 @@ async function metric(url, series) {
   return Number(text.match(new RegExp(`^${escape(series)} (\\S+)$`, 'm'))?.[1] ?? 0);
 }
 
+// inFlight counts the pod's lines neither spoken nor dropped yet, every room included: an earlier
+// test's line still playing moves the pod-wide counters this test reads.
+async function inFlight() {
+  const text = await (await fetch(ttsMetrics)).text();
+  const sum = (re) => [...text.matchAll(re)].reduce((a, m) => a + Number(m[1]), 0);
+  return sum(/^grill_tts_lines_received_total (\S+)$/gm) - sum(/^grill_tts_lines_spoken_total (\S+)$/gm)
+    - sum(/^grill_tts_lines_dropped_total\{[^}]*\} (\S+)$/gm);
+}
+
 function workerLog() {
   const r = spawnSync('docker', ['logs', sttContainer], { encoding: 'utf8', timeout: 10_000 });
   return `${r.stdout}\n${r.stderr}`.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
@@ -76,6 +85,7 @@ test('a persona speaks in the call and nobody writes it down', async ({ browser,
   // The bot joins once Alice listens, before any line (013-AC15).
   const bot = page.locator('#voice-audio audio[data-pid^="persona-"]');
   await expect(bot).toHaveCount(1, { timeout: 30_000 });
+  await expect.poll(inFlight, { timeout: 60_000 }).toBe(0);
   const spoken = await metric(ttsMetrics, 'grill_tts_lines_spoken_total');
   const r = await request.post('/api/admin/test/speak', { headers: admin, data: { room: room.id, persona: 'Grill', spoken: '**I changed** the payment spec. Alice, which date do we keep?' } });
   expect(r.status()).toBe(204);

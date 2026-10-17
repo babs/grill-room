@@ -35,10 +35,12 @@ var auditPurgeEvery = 24 * time.Hour
 
 // Audit actions (004-AC6).
 const (
-	ActionRoomCreate     = "room.create"
-	ActionRoomRename     = "room.rename"
-	ActionRoomDelete     = "room.delete"
-	ActionRoomQuota      = "room.quota"
+	ActionRoomCreate = "room.create"
+	ActionRoomRename = "room.rename"
+	ActionRoomDelete = "room.delete"
+	ActionRoomQuota  = "room.quota"
+	// ActionRoomSpeech is a change to the room's call settings for its personas (013-AC25).
+	ActionRoomSpeech     = "room.speech"
 	ActionInviteCreate   = "invite.create"
 	ActionInviteRevoke   = "invite.revoke"
 	ActionProfileDelete  = "profile.delete"
@@ -56,7 +58,7 @@ const (
 )
 
 // AuditActions lists every action, for the audit view's filter.
-var AuditActions = []string{ActionRoomCreate, ActionRoomRename, ActionRoomDelete, ActionRoomQuota, ActionRoomExport, ActionRoomImport, ActionInviteCreate, ActionInviteRevoke,
+var AuditActions = []string{ActionRoomCreate, ActionRoomRename, ActionRoomDelete, ActionRoomQuota, ActionRoomSpeech, ActionRoomExport, ActionRoomImport, ActionInviteCreate, ActionInviteRevoke,
 	ActionRoomAdminAdd, ActionRoomAdminRemove, ActionRoomSkillRemove, ActionRename, ActionDocumentDelete, ActionDocumentRestore, ActionHostTransfer, ActionProfileDelete, ActionProfileRecoveryLink, ActionProfileRecoveryUsed, ActionProfileMerge, ActionProfilePurge, ActionProfileMaxRooms, ActionTemplateRemove, ActionSkillRemove, ActionStarterPublish, ActionStarterDelete, ActionSettings,
 	ActionAPITokenCreate, ActionAPITokenRevoke, ActionPersonaRemove, ActionAdminLogin, ActionAdminLogout, ActionSessionRevoke}
 

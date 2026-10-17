@@ -247,7 +247,10 @@ func (s *Server) starterSetup(ctx context.Context, profileID int64, name string,
 	if len(agenda) > maxAgenda || (agenda != "" && !store.ValidText(agenda, maxAgenda, true)) {
 		return "", nil, badRequest(fmt.Sprintf("the agenda must be at most %d KB of text", maxAgenda>>10))
 	}
-	setup.Agenda, setup.Chain, setup.Glossary, setup.Files = agenda, m.Chain, m.Glossary, files
+	setup.Agenda, setup.Chain, setup.Glossary, setup.Files, setup.Speech = agenda, m.Chain, m.Glossary, files, m.Speech
+	if setup.Speech != nil && !setup.Speech.Valid() {
+		return "", nil, badRequest("the starter's call voice settings are out of range")
+	}
 	var err error
 	if setup.Documents, err = keep(m.Documents, q.Documents, func(d store.StarterDocument) string { return d.Name }); err != nil {
 		return "", nil, err
@@ -367,7 +370,7 @@ type starterSaveReq struct {
 // manifest to store with the names of the blobs it keeps. An undeclared {{x}} in the agenda or
 // the room name is refused, naming it; a field used nowhere is only the editor's warning.
 func starterFrom(base *store.StarterManifest, q *starterSaveReq) (*store.StarterManifest, []string, error) {
-	m := &store.StarterManifest{Chain: base.Chain, Glossary: base.Glossary}
+	m := &store.StarterManifest{Chain: base.Chain, Glossary: base.Glossary, Speech: base.Speech}
 	var ok bool
 	if m.Title, ok = cleanText(q.Title, store.MaxStarterTitle, false); !ok {
 		return nil, nil, badRequest(fmt.Sprintf("the title must be 1 to %d characters", store.MaxStarterTitle))

@@ -33,6 +33,10 @@ UNDERRUNS = Counter(
     "grill_tts_underruns_total", "Gaps over 100 ms inside a sentence: synthesis fell behind (013-AC17)."
 )
 BOTS = Gauge("grill_tts_bots", "Persona bots in a call now.")
+HUMAN_TRACKS = Gauge(
+    "grill_tts_human_tracks",
+    "Humans' audio tracks the bots hear: LiveKit names a speaker to a bot only then (S14).",
+)
 BOTS_JOINED = Counter("grill_tts_bots_joined_total", "Persona bots that joined a call.")
 
 for reason in ("interrupted", "stale", "no_listener", "no_service", "error"):

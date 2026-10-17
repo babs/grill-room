@@ -48,7 +48,15 @@ type StarterPersona struct {
 	Skills       []string `json:"skills,omitempty"`
 	// Plugins are the plugins it has on, by name among the starter's plugins (009-AC28).
 	Plugins []string `json:"plugins,omitempty"`
+	// Speaks, Voice and VoiceRate are absent from a starter saved before 013: it reads as speaking,
+	// with the default voice and rate 1 (013-AC30).
+	Speaks    *bool   `json:"speaks,omitempty"`
+	Voice     string  `json:"voice,omitempty"`
+	VoiceRate float64 `json:"voice_rate,omitempty"`
 }
+
+// SpeaksInCall is p.Speaks with a starter from before 013 read as on.
+func (p StarterPersona) SpeaksInCall() bool { return p.Speaks == nil || *p.Speaks }
 
 // StarterSkill is a skill frozen at one version; File names its tar among the version's files.
 type StarterSkill struct {
@@ -114,6 +122,8 @@ type StarterManifest struct {
 	Documents []StarterDocument `json:"documents"`
 	Chain     StarterChain      `json:"chain"`
 	Glossary  string            `json:"glossary,omitempty"`
+	// Speech is absent from a starter saved before 013: the defaults (013-AC30).
+	Speech *Speech `json:"speech,omitempty"`
 }
 
 // Starter is a starter of the library as its latest version has it.

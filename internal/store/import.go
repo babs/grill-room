@@ -220,9 +220,16 @@ func (im *importer) run() error {
 	if x.Chain.Budget < 1 || x.Chain.Count < 0 || len(x.Personas) > MaxRoomPersonas {
 		return refuseImport("%s: bad chain, or more than %d personas", fileRoom, MaxRoomPersonas)
 	}
+	sp := DefaultSpeech
+	if x.Speech != nil {
+		sp = *x.Speech
+	}
+	if !sp.Valid() {
+		return refuseImport("call voice settings out of range: %+v", sp)
+	}
 	_, err = im.tx.ExecContext(im.ctx, `INSERT INTO rooms(id, name, created_at, creator_profile_id, chain_budget, chain_count, chain_suspended, parallel_turns, stt_glossary,
-		created_from) VALUES(?,?,?,?,?,?,?,?,?,?)`, im.room, x.Name, now(), nullID(im.o.Importer), x.Chain.Budget, x.Chain.Count, x.Chain.Suspended, x.ParallelTurns,
-		x.STTGlossary, from)
+		created_from, voice_quiet_ms, voice_resume_s, voice_queue_s, voice_words) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, im.room, x.Name, now(), nullID(im.o.Importer),
+		x.Chain.Budget, x.Chain.Count, x.Chain.Suspended, x.ParallelTurns, x.STTGlossary, from, sp.QuietMS, sp.ResumeS, sp.QueueS, sp.Words)
 	if err != nil {
 		return fmt.Errorf("import room: %w", err)
 	}
@@ -397,8 +404,10 @@ func (im *importer) personasStep(ps []xPersona) error {
 		if p.Effort == "" {
 			p.Effort = DefaultEffort
 		}
+		// An unknown voice falls back to the default rather than refuse the room; a rate out of
+		// range is refused with the API's words.
 		if err := im.o.CheckPersona(StarterPersona{PersonaFields: p.PersonaFields, EveryN: p.EveryN, EveryVoice: p.EveryVoice, EveryMinutes: p.EveryMinutes,
-			Autocompact: p.Autocompact}); err != nil {
+			Autocompact: p.Autocompact, VoiceRate: p.VoiceRate}); err != nil {
 			return refuseImport("persona %s: %v", p.Name, err)
 		}
 		if p.WatchesNotes && slices.ContainsFunc(ps, func(o xPersona) bool { return o.WatchesNotes && o.Ref < p.Ref }) {

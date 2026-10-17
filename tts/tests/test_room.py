@@ -312,3 +312,20 @@ async def test_threaded_engine() -> None:
     assert first_frames(r.played("grill")) == first_frames(inline.played("grill"))
     await r.close()
     await inline.close()
+
+
+# 013-AC21, AC22: the room hears a human while any of its bots does; a bot that names nobody, or
+# leaves, does not silence another bot's view.
+async def test_speakers_are_the_union_of_the_bots_views() -> None:
+    r = Rig()
+    r.rv.speakers({"7"}, "persona-1")
+    r.rv.speakers(set(), "persona-2")
+    assert r.rv.humans == {"7"}
+    r.rv.speakers({"8"}, "persona-2")
+    assert r.rv.humans == {"7", "8"}
+    r.rv.forget_bot("persona-1")
+    assert r.rv.humans == {"8"}
+    quiet = r.clock.t
+    r.rv.speakers(set(), "persona-2")
+    assert r.rv.humans == set() and r.rv.quiet_since == quiet
+    await r.close()
