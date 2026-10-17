@@ -59,26 +59,21 @@ func (s *Server) removeParticipant(w http.ResponseWriter, r *http.Request, sess 
 	}
 	s.log.Info("participant_removed", zap.String("room", room), zap.Int64s("seats", ended.Seats), zap.Bool("left", e.Leave),
 		zap.Bool("blocked", ended.Blocked), zap.Bool("host", ended.Host))
-	s.seatsEnded(context.WithoutCancel(ctx), room, ended.Seats)
+	s.seatsEnded(context.WithoutCancel(ctx), room, ended.Seats, ended.Daemons)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// seatsEnded applies seats' end to what is live: their apps leave the room's daemons, the turns
-// those apps run fail, their audio ends, the host is elected again, and every stream wakes to
-// re-check its access, theirs closing with "revoked" (016-AC8, 016-AC9).
-func (s *Server) seatsEnded(ctx context.Context, room string, seats []int64) {
-	var gone []int64
+// seatsEnded applies seats' end to what is live: their apps, daemons, leave the room's daemons
+// and the turns they run fail, their audio ends, the host is elected again, and every stream wakes
+// to re-check its access, theirs closing with "revoked" (016-AC8, 016-AC9). An app's stream that
+// closed first left its turns to this.
+func (s *Server) seatsEnded(ctx context.Context, room string, seats, daemons []int64) {
 	s.presence.mu.Lock()
-	for id, p := range s.presence.m {
-		for _, seat := range seats {
-			if p.room == room && p.ParticipantID == seat {
-				gone = append(gone, id)
-				delete(s.presence.m, id)
-			}
-		}
+	for _, id := range daemons {
+		delete(s.presence.m, id)
 	}
 	s.presence.mu.Unlock()
-	for _, id := range gone {
+	for _, id := range daemons {
 		s.failDaemonTurn(ctx, &store.Daemon{ID: id, RoomID: room}, whyHostLeft)
 	}
 	s.kickFromVoice(room, seats)

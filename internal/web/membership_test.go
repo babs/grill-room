@@ -213,3 +213,26 @@ func TestRemovedHostFailsOver(t *testing.T) {
 		})
 	}
 }
+
+// 016-AC9: when the removed host's app stream closes before the removal's cleanup runs, the
+// disconnect leaves the running turn to the removal, which fails it as the host leaving the room.
+func TestRemovedHostStreamClosesFirst(t *testing.T) {
+	e := newEnv(t)
+	r := newTurnRoom(t, e)
+	alice := r.alice
+	tn := e.press(t, r, alice, alice.p.Token, false)
+	watcher := e.join(t, e.createInvite(t, r.room).Token, "Watcher")
+	ended, err := e.st.EndSeats(t.Context(), r.room, alice.p.Participant.ID, store.Ending{})
+	if err != nil || len(ended.Daemons) != 1 {
+		t.Fatalf("end seats: %+v %v", ended, err)
+	}
+	alice.drop()
+	e.waitAgent(t, r.room, watcher.Token, func(st agentState) bool { return len(st.Daemons) == 0 })
+	if got, err := e.st.Turn(t.Context(), r.room, tn.ID); err != nil || got.Status != store.TurnRunning {
+		t.Fatalf("turn after the stream closed: %+v %v", got, err)
+	}
+	e.srv.seatsEnded(t.Context(), r.room, ended.Seats, ended.Daemons)
+	if got, err := e.st.Turn(t.Context(), r.room, tn.ID); err != nil || got.Status != store.TurnFailed || got.Error != whyHostLeft {
+		t.Fatalf("turn after the removal: %+v %v", got, err)
+	}
+}

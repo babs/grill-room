@@ -26,9 +26,10 @@ type Ending struct {
 // Ended is what ending a person's seats did.
 type Ended struct {
 	Name string
-	// Seats are the seats it ended; Host, set when one of them was the AI host's, which the room no
-	// longer has.
+	// Seats are the seats it ended; Daemons, their apps; Host, set when one of them was the AI
+	// host's, which the room no longer has.
 	Seats   []int64
+	Daemons []int64
 	Host    bool
 	Blocked bool
 }
@@ -69,18 +70,8 @@ func (s *Store) EndSeats(ctx context.Context, roomID string, target int64, e End
 		if _, err := tx.ExecContext(ctx, `UPDATE invites SET revoked_at = ? WHERE revoked_at IS NULL AND created_by IN (SELECT value FROM json_each(?))`, at, ids); err != nil {
 			return fmt.Errorf("end seats: invites: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM turn_queue WHERE participant_id IN (SELECT value FROM json_each(?))`, ids); err != nil {
-			return fmt.Errorf("end seats: queue: %w", err)
-		}
-		res, err := tx.ExecContext(ctx, `UPDATE rooms SET host_participant_id = NULL WHERE id = ? AND host_participant_id IN (SELECT value FROM json_each(?))`, roomID, ids)
-		if err != nil {
+		if out.Daemons, out.Host, err = seatsGone(ctx, tx, roomID, out.Seats); err != nil {
 			return fmt.Errorf("end seats: %w", err)
-		}
-		if n, _ := res.RowsAffected(); n > 0 {
-			out.Host = true
-			if err := hostChanged(ctx, tx, roomID); err != nil {
-				return err
-			}
 		}
 		m := &Message{RoomID: roomID, Kind: KindSystem, ParticipantID: target, Sender: out.Name, Body: out.Name + " left the room"}
 		if !e.Leave {
@@ -118,6 +109,30 @@ func (s *Store) EndSeats(ctx context.Context, roomID string, target int64, e End
 		return nil, err
 	}
 	return out, nil
+}
+
+// seatsGone applies the end of seats of room: the turns they queued that have not started go, and
+// the room loses its host when one of them hosted (016-AC8, 016-AC9). It returns the seats' apps,
+// whose running turns the caller fails, and whether the host went.
+func seatsGone(ctx context.Context, tx *sql.Tx, roomID string, seats []int64) (daemons []int64, host bool, err error) {
+	ids := jsonIDs(seats)
+	if _, err := tx.ExecContext(ctx, `DELETE FROM turn_queue WHERE participant_id IN (SELECT value FROM json_each(?))`, ids); err != nil {
+		return nil, false, fmt.Errorf("queue: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE rooms SET host_participant_id = NULL WHERE id = ? AND host_participant_id IN (SELECT value FROM json_each(?))`, roomID, ids)
+	if err != nil {
+		return nil, false, fmt.Errorf("host: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		host = true
+		if err := hostChanged(ctx, tx, roomID); err != nil {
+			return nil, false, err
+		}
+	}
+	if daemons, err = endSeats(ctx, tx, `SELECT id FROM daemons WHERE participant_id IN (SELECT value FROM json_each(?)) ORDER BY id`, ids); err != nil {
+		return nil, false, fmt.Errorf("daemons: %w", err)
+	}
+	return daemons, host, nil
 }
 
 // jsonIDs is ids as a JSON array, for json_each.

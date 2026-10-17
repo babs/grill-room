@@ -913,9 +913,8 @@ func (s *Server) revokeInvite(w http.ResponseWriter, r *http.Request, sess *sess
 		s.serverError(w, "revoke_invite_failed", err)
 		return
 	}
-	// Wakes the room's event streams, which re-check access and close.
-	s.bus.Notify(room)
-	s.kickFromVoice(room, plan.Removed)
+	// A cut removes its people as a removal does (016-AC4); every stream wakes and re-checks access.
+	s.seatsEnded(context.WithoutCancel(r.Context()), room, plan.Removed, plan.Daemons)
 	s.log.Info("invite_revoked", zap.String("room", room), zap.Int64("invite", id), zap.Int64s("with", plan.Invites),
 		zap.Bool("cut", cut), zap.Int64s("removed", plan.Removed))
 	lost := make([]lostSeat, len(plan.Lose))

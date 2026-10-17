@@ -1287,11 +1287,12 @@ type RevokeSeat struct {
 
 // RevokePlan is what revoking an invite does: Invites, sorted, are the ones it revokes; Lose the
 // people a cut removes; Keep the people with a seat in the chain who keep access through another
-// one; Removed the seats a cut ended.
+// one; Removed the seats a cut ended, and Daemons their apps, whose running turns the caller fails.
 type RevokePlan struct {
 	Invites    []int64
 	Lose, Keep []RevokeSeat
 	Removed    []int64
+	Daemons    []int64
 }
 
 // Why a seat ended (016-AC1).
@@ -1344,6 +1345,9 @@ func (s *Store) RevokeInvite(ctx context.Context, roomID string, inviteID int64,
 			revoke = inviteCut + `UPDATE invites SET revoked_at = ?3 WHERE id IN cut`
 			if plan.Removed, err = endSeats(ctx, tx, inviteCut+`UPDATE participants SET removed_at = ?3, end_reason = ?4
 				WHERE invite_id IN chain AND removed_at IS NULL RETURNING id`, inviteID, roomID, at, EndRemoved); err != nil {
+				return fmt.Errorf("revoke invite %d: %w", inviteID, err)
+			}
+			if plan.Daemons, _, err = seatsGone(ctx, tx, roomID, plan.Removed); err != nil {
 				return fmt.Errorf("revoke invite %d: %w", inviteID, err)
 			}
 		}

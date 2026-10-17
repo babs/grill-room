@@ -361,7 +361,11 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 		if gone {
 			// The request context is done: the cleanup must still reach the store.
 			ctx := context.WithoutCancel(r.Context())
-			s.failDaemonTurn(ctx, d, "the host's daemon disconnected")
+			// A daemon whose access ended was cut by a removal, a revoke or its own removal of the
+			// room: that path fails its turns, with its own reason (003b-AC9, 016-AC9).
+			if _, err := s.bus.Store.DaemonByToken(ctx, hash); !errors.Is(err, store.ErrNotFound) {
+				s.failDaemonTurn(ctx, d, "the host's daemon disconnected")
+			}
 			s.agentChanged(ctx, d.RoomID)
 		}
 	}()
