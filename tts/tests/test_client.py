@@ -160,3 +160,19 @@ async def test_samples_handed_over(tmp_path: Any, monkeypatch: pytest.MonkeyPatc
     )
     await link.samples(tmp_path)
     assert put == ["/api/tts/samples/alba/en", "/api/tts/samples/cml-2114/fr"]
+
+
+# 013-AC31: the room server's lexicon replaces the seed for the next line; a bad one keeps the old.
+async def test_lexicon_replaces_the_seed() -> None:
+    pod = Pod(settings(), Fake(), httpx.AsyncClient(base_url="http://room"))
+
+    def said() -> str:
+        return " ".join(s.text for spans in pod.layer.plan("Le webhook GitHub a planté.") for s in spans)
+
+    assert "guite-heub" in said()
+    entry = {"term": "GitHub", "style": "fr", "fr_en": "guite-heub", "fr_fr": "gitube", "en": ""}
+    pod.link.dispatch("lexicon", json.dumps({"entries": [entry]}), "")
+    assert "gitube" in said()
+    pod.link.dispatch("lexicon", json.dumps({"entries": [{"term": "x"}]}), "")
+    assert "gitube" in said()
+    await pod.close()

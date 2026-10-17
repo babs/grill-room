@@ -21,7 +21,7 @@ from .config import Settings
 from .engine import Engine, Fake
 from .logs import setup_logging
 from .room import Clock, Line, RoomVoice
-from .textlayer import TextLayer, load_seed
+from .textlayer import Entry, TextLayer, load_seed
 
 log = structlog.get_logger()
 
@@ -46,7 +46,7 @@ class Pod:
         self.voices: dict[str, RoomVoice] = {}
         self._tasks: set[asyncio.Task[None]] = set()
         self.bots = Bots(s, self.voice)
-        self.link = ServerLink(link_client, self.bots.sync, self.line)
+        self.link = ServerLink(link_client, self.bots.sync, self.line, self.lexicon)
 
     def voice(self, room: str) -> RoomVoice:
         rv = self.voices.get(room)
@@ -59,6 +59,11 @@ class Pod:
             task = asyncio.create_task(rv.run())
             self._tasks.add(task)
         return rv
+
+    def lexicon(self, entries: list[dict[str, Any]]) -> None:
+        """The room server's lexicon replaces the seed, for the next sentence (013-AC31)."""
+        self.layer = TextLayer(Entry(**e) for e in entries)
+        log.info("lexicon_loaded", terms=len(entries))
 
     def line(self, d: dict[str, Any]) -> None:
         line = Line.parse(d, self.clock.now())

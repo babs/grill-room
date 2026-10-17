@@ -60,6 +60,7 @@ const (
 // AuditActions lists every action, for the audit view's filter.
 var AuditActions = []string{ActionRoomCreate, ActionRoomRename, ActionRoomDelete, ActionRoomQuota, ActionRoomSpeech, ActionRoomExport, ActionRoomImport, ActionInviteCreate, ActionInviteRevoke,
 	ActionRoomAdminAdd, ActionRoomAdminRemove, ActionRoomSkillRemove, ActionRename, ActionDocumentDelete, ActionDocumentRestore, ActionHostTransfer, ActionParticipantRemove, ActionParticipantUnblock, ActionProfileDelete, ActionProfileRecoveryLink, ActionProfileRecoveryUsed, ActionProfileMerge, ActionProfilePurge, ActionProfileMaxRooms, ActionTemplateRemove, ActionSkillRemove, ActionStarterPublish, ActionStarterDelete, ActionSettings,
+	ActionLexiconAdd, ActionLexiconEdit, ActionLexiconDelete,
 	ActionAPITokenCreate, ActionAPITokenRevoke, ActionPersonaRemove, store.ActionEgressAllow, store.ActionEgressRevoke, store.ActionEgressDelegate,
 	store.ActionConnectorEnable, store.ActionConnectorDisable, store.ActionConnectorActions, ActionAdminLogin, ActionAdminLogout, ActionSessionRevoke}
 

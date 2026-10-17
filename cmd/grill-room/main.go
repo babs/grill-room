@@ -517,7 +517,10 @@ func newRegistry(b *bus.Bus, srv *web.Server) *prometheus.Registry {
 						return 1
 					}
 					return 0
-				}))
+				}),
+			prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_tts_demand",
+				Help: "Rooms with a speaking persona and a human in the audio: what scales the tts pod (013-AC34)."},
+				func() float64 { return float64(srv.TTSDemand()) }))
 	}
 	for _, source := range web.VoiceSources {
 		reg.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_voice_lines_total",

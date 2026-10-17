@@ -1,0 +1,905 @@
+[
+  {
+    "term": "GitHub",
+    "style": "en",
+    "fr_en": "guite-heub",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "retry",
+    "style": "en",
+    "fr_en": "ri-traï",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "cluster",
+    "style": "en",
+    "fr_en": "clusteur",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "LiveKit",
+    "style": "en",
+    "fr_en": "laïve-kit",
+    "fr_fr": "",
+    "en": "Live Kit"
+  },
+  {
+    "term": "rollout",
+    "style": "en",
+    "fr_en": "rol-aoute",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "rollback",
+    "style": "en",
+    "fr_en": "rol-bak",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "feature flag",
+    "style": "en",
+    "fr_en": "fi-tcheur flag",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "staging",
+    "style": "en",
+    "fr_en": "stéïdjinng",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "Kubernetes",
+    "style": "en",
+    "fr_en": "koubeurnétisse",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "merge request",
+    "style": "en",
+    "fr_en": "meurdje riquouest",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "pull request",
+    "style": "en",
+    "fr_en": "poule riquouest",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "ArgoCD",
+    "style": "en",
+    "fr_en": "argo cédé",
+    "fr_fr": "",
+    "en": "Argo C D"
+  },
+  {
+    "term": "backlog",
+    "style": "en",
+    "fr_en": "bak-logue",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "sprint",
+    "style": "en",
+    "fr_en": "sprinnte",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "OAuth",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "O Auth"
+  },
+  {
+    "term": "pipeline",
+    "style": "en",
+    "fr_en": "païpe-laïne",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "code freeze",
+    "style": "en",
+    "fr_en": "code frize",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "GitLab",
+    "style": "en",
+    "fr_en": "guite-lab",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "merge",
+    "style": "en",
+    "fr_en": "meurdje",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "review",
+    "style": "en",
+    "fr_en": "ri-viou",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "PostgreSQL",
+    "style": "en",
+    "fr_en": "postgrèsse",
+    "fr_fr": "",
+    "en": "Postgres"
+  },
+  {
+    "term": "Redis",
+    "style": "en",
+    "fr_en": "rédisse",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "canary",
+    "style": "en",
+    "fr_en": "canari",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "install",
+    "style": "en",
+    "fr_en": "instol",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "login",
+    "style": "en",
+    "fr_en": "loguine",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "npm",
+    "style": "en",
+    "fr_en": "ène pé èm",
+    "fr_fr": "",
+    "en": "N P M"
+  },
+  {
+    "term": "pnpm",
+    "style": "en",
+    "fr_en": "pé ène pé èm",
+    "fr_fr": "",
+    "en": "P N P M"
+  },
+  {
+    "term": "k8s",
+    "style": "en",
+    "fr_en": "koubeurnétisse",
+    "fr_fr": "",
+    "en": "Kubernetes"
+  },
+  {
+    "term": "kubectl",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "kube control"
+  },
+  {
+    "term": "pod",
+    "style": "en",
+    "fr_en": "pode",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "namespace",
+    "style": "en",
+    "fr_en": "néïme-spéïsse",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "container",
+    "style": "en",
+    "fr_en": "conn-téï-neur",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "Docker",
+    "style": "en",
+    "fr_en": "doc-keur",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "cloud",
+    "style": "en",
+    "fr_en": "claoude",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "AWS",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "A W S"
+  },
+  {
+    "term": "GCP",
+    "style": "en",
+    "fr_en": "gé cé pé",
+    "fr_fr": "",
+    "en": "G C P"
+  },
+  {
+    "term": "Azure",
+    "style": "en",
+    "fr_en": "azur",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "S3",
+    "style": "en",
+    "fr_en": "èss trois",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "serverless",
+    "style": "en",
+    "fr_en": "seur-veur-lesse",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "autoscaling",
+    "style": "en",
+    "fr_en": "auto-squéïlingue",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "ingress",
+    "style": "en",
+    "fr_en": "inn-grèsse",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "Nginx",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "engine X"
+  },
+  {
+    "term": "Prometheus",
+    "style": "en",
+    "fr_en": "prométhéusse",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "monitoring",
+    "style": "en",
+    "fr_en": "monitorinngue",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "dashboard",
+    "style": "en",
+    "fr_en": "dache-borde",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "uptime",
+    "style": "en",
+    "fr_en": "eupe-taïme",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "downtime",
+    "style": "en",
+    "fr_en": "daoune-taïme",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "timeout",
+    "style": "en",
+    "fr_en": "taïme-aoute",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "on-call",
+    "style": "en",
+    "fr_en": "onne-col",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "runbook",
+    "style": "en",
+    "fr_en": "reune-bouk",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "post-mortem",
+    "style": "en",
+    "fr_en": "poste mortème",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "vCPU",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "V C P U"
+  },
+  {
+    "term": "CPU",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "C P U"
+  },
+  {
+    "term": "GPU",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "G P U"
+  },
+  {
+    "term": "RAM",
+    "style": "en",
+    "fr_en": "rame",
+    "fr_fr": "",
+    "en": "ram"
+  },
+  {
+    "term": "CI/CD",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "C I C D"
+  },
+  {
+    "term": "CI",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "C I"
+  },
+  {
+    "term": "build",
+    "style": "en",
+    "fr_en": "bilde",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "hotfix",
+    "style": "en",
+    "fr_en": "hotte-fixe",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "push",
+    "style": "en",
+    "fr_en": "pouche",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "checkout",
+    "style": "en",
+    "fr_en": "tchèque-aoute",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "linter",
+    "style": "en",
+    "fr_en": "linn-teur",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "PR",
+    "style": "en",
+    "fr_en": "pé èr",
+    "fr_fr": "",
+    "en": "P R"
+  },
+  {
+    "term": "repo",
+    "style": "en",
+    "fr_en": "répo",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "monorepo",
+    "style": "en",
+    "fr_en": "mono-répo",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "API",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "A P I"
+  },
+  {
+    "term": "SDK",
+    "style": "en",
+    "fr_en": "èss dé ka",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "URL",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "U R L"
+  },
+  {
+    "term": "YAML",
+    "style": "en",
+    "fr_en": "ya-meul",
+    "fr_fr": "",
+    "en": "yammel"
+  },
+  {
+    "term": "HTTP",
+    "style": "en",
+    "fr_en": "ache té té pé",
+    "fr_fr": "",
+    "en": "H T T P"
+  },
+  {
+    "term": "HTTPS",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "H T T P S"
+  },
+  {
+    "term": "DNS",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "D N S"
+  },
+  {
+    "term": "TLS",
+    "style": "en",
+    "fr_en": "té èl èss",
+    "fr_fr": "",
+    "en": "T L S"
+  },
+  {
+    "term": "SSH",
+    "style": "en",
+    "fr_en": "èss èss ache",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "VPN",
+    "style": "en",
+    "fr_en": "vé pé ène",
+    "fr_fr": "",
+    "en": "V P N"
+  },
+  {
+    "term": "JWT",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "J W T"
+  },
+  {
+    "term": "token",
+    "style": "en",
+    "fr_en": "tau-keune",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "WebSocket",
+    "style": "en",
+    "fr_en": "ouèbe-soquette",
+    "fr_fr": "",
+    "en": "web socket"
+  },
+  {
+    "term": "WebRTC",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "web R T C"
+  },
+  {
+    "term": "full-stack",
+    "style": "en",
+    "fr_en": "foule-stak",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "framework",
+    "style": "en",
+    "fr_en": "frème-oueurk",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "React",
+    "style": "en",
+    "fr_en": "ri-act",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "TypeScript",
+    "style": "en",
+    "fr_en": "taïpe-scripte",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "JavaScript",
+    "style": "en",
+    "fr_en": "java-scripte",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "Python",
+    "style": "en",
+    "fr_en": "païe-sonne",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "MongoDB",
+    "style": "en",
+    "fr_en": "mongo dé bé",
+    "fr_fr": "",
+    "en": "Mongo D B"
+  },
+  {
+    "term": "debug",
+    "style": "en",
+    "fr_en": "di-beugue",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "refactor",
+    "style": "en",
+    "fr_en": "ri-facteur",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "legacy",
+    "style": "en",
+    "fr_en": "lèga-ci",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "open source",
+    "style": "en",
+    "fr_en": "o-peune source",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "Jira",
+    "style": "en",
+    "fr_en": "dji-ra",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "roadmap",
+    "style": "en",
+    "fr_en": "rode-mape",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "feature",
+    "style": "en",
+    "fr_en": "fi-tcheure",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "user story",
+    "style": "en",
+    "fr_en": "you-zeur stori",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "stakeholder",
+    "style": "en",
+    "fr_en": "stéïk-holdeur",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "onboarding",
+    "style": "en",
+    "fr_en": "onne-bordinngue",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "feedback",
+    "style": "en",
+    "fr_en": "fide-bak",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "pricing",
+    "style": "en",
+    "fr_en": "praïe-sinng",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "A/B test",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "A B test"
+  },
+  {
+    "term": "benchmark",
+    "style": "en",
+    "fr_en": "bènnche-mark",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "deadline",
+    "style": "en",
+    "fr_en": "dède-laïne",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "meeting",
+    "style": "en",
+    "fr_en": "mitinngue",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "daily",
+    "style": "en",
+    "fr_en": "déïli",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "standup",
+    "style": "en",
+    "fr_en": "stannde-eupe",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "scrum",
+    "style": "en",
+    "fr_en": "skreume",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "workshop",
+    "style": "en",
+    "fr_en": "oueurk-chope",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "brainstorming",
+    "style": "en",
+    "fr_en": "brène-stormingue",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "KPI",
+    "style": "en",
+    "fr_en": "ka pé i",
+    "fr_fr": "",
+    "en": "K P I"
+  },
+  {
+    "term": "OKR",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "O K R"
+  },
+  {
+    "term": "MVP",
+    "style": "en",
+    "fr_en": "èm vé pé",
+    "fr_fr": "",
+    "en": ""
+  },
+  {
+    "term": "POC",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "P O C"
+  },
+  {
+    "term": "UX",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "U X"
+  },
+  {
+    "term": "UI",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "U I"
+  },
+  {
+    "term": "B2B",
+    "style": "en",
+    "fr_en": "bé tou bé",
+    "fr_fr": "",
+    "en": "B to B"
+  },
+  {
+    "term": "B2C",
+    "style": "en",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "B to C"
+  },
+  {
+    "term": "bug",
+    "style": "fr",
+    "fr_en": "",
+    "fr_fr": "beugue",
+    "en": ""
+  },
+  {
+    "term": "web",
+    "style": "fr",
+    "fr_en": "",
+    "fr_fr": "ouèbe",
+    "en": ""
+  },
+  {
+    "term": "email",
+    "style": "fr",
+    "fr_en": "",
+    "fr_fr": "imèle",
+    "en": ""
+  },
+  {
+    "term": "parking",
+    "style": "fr",
+    "fr_en": "",
+    "fr_fr": "parkinng",
+    "en": ""
+  },
+  {
+    "term": "week-end",
+    "style": "fr",
+    "fr_en": "",
+    "fr_fr": "ouik-ènde",
+    "en": ""
+  },
+  {
+    "term": "startup",
+    "style": "fr",
+    "fr_en": "",
+    "fr_fr": "starte-eupe",
+    "en": ""
+  },
+  {
+    "term": "manager",
+    "style": "fr",
+    "fr_en": "",
+    "fr_fr": "manadjeur",
+    "en": ""
+  },
+  {
+    "term": "marketing",
+    "style": "fr",
+    "fr_en": "",
+    "fr_fr": "markètinng",
+    "en": ""
+  },
+  {
+    "term": "business",
+    "style": "fr",
+    "fr_en": "",
+    "fr_fr": "biznèss",
+    "en": ""
+  },
+  {
+    "term": "design",
+    "style": "fr",
+    "fr_en": "",
+    "fr_fr": "dizaïne",
+    "en": ""
+  },
+  {
+    "term": "podcast",
+    "style": "fr",
+    "fr_en": "",
+    "fr_fr": "podcaste",
+    "en": ""
+  },
+  {
+    "term": "smartphone",
+    "style": "fr",
+    "fr_en": "",
+    "fr_fr": "smarte-faune",
+    "en": ""
+  },
+  {
+    "term": "wifi",
+    "style": "fr",
+    "fr_en": "",
+    "fr_fr": "oui-fi",
+    "en": ""
+  },
+  {
+    "term": "OK",
+    "style": "fr",
+    "fr_en": "",
+    "fr_fr": "",
+    "en": "O K"
+  }
+]

@@ -347,13 +347,14 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 	// TestRoomSkillsAPI, TestProfileCreatesRooms, TestProfileMaxRoomsAPI, TestExportImportAPI,
 	// TestRenameParticipant, TestDeleteDocument, TestStarterLibraryAPI, TestHostTransfer,
 	// TestAdminRecoveryLink, TestMergeAPI, TestPurgeProfilesLoopAndSwitch, TestAPITokenAuditAndLogs, TestMCPConfirm,
-	// TestTTSSpeechSettings, TestRemoveLeaveBlockAPI, and store's TestAllowFlow,
+	// TestTTSSpeechSettings, TestLexicon, TestRemoveLeaveBlockAPI, and store's TestAllowFlow,
 	// TestEgressDelegation, TestEgressRevoked, TestConnectorChanged).
 	covered := map[string]bool{ActionProfileMerge: true, ActionProfilePurge: true, ActionProfileRecoveryLink: true, ActionProfileRecoveryUsed: true, ActionStarterPublish: true, ActionStarterDelete: true, ActionRoomAdminAdd: true, ActionRoomAdminRemove: true, ActionRoomSkillRemove: true, ActionSettings: true,
 		ActionProfileMaxRooms: true, ActionRoomExport: true, ActionRoomImport: true, ActionRename: true, ActionDocumentDelete: true,
 		ActionDocumentRestore: true, ActionHostTransfer: true, ActionAPITokenCreate: true, ActionAPITokenRevoke: true, ActionPersonaRemove: true, ActionRoomSpeech: true,
 		ActionParticipantRemove: true, ActionParticipantUnblock: true, store.ActionEgressAllow: true, store.ActionEgressRevoke: true, store.ActionEgressDelegate: true,
-		store.ActionConnectorEnable: true, store.ActionConnectorDisable: true, store.ActionConnectorActions: true}
+		store.ActionConnectorEnable: true, store.ActionConnectorDisable: true, store.ActionConnectorActions: true,
+		ActionLexiconAdd: true, ActionLexiconEdit: true, ActionLexiconDelete: true}
 	for _, w := range want {
 		covered[w.action] = true
 	}
