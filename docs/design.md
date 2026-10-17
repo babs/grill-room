@@ -140,8 +140,8 @@ The palette is the one the room page and `/admin` already use, harmonized. The l
 | surface | width |
 |---|---|
 | room | full width. Sidebar 16rem, chat min 22rem, viewer flexible, annotations a 20rem toggle panel |
-| profile | `.page-wide`, left-aligned, as `/admin`'s data views (user, 2026-10-18: 72rem left a wide screen half empty). The title and the identity strip, then sticky tabs (Rooms, Starters, Skills, API tokens, Account); the rooms in a card grid `repeat(auto-fill, minmax(18rem, 1fr))`, the lists full width. Prose keeps its measure: hints, the status line, the confirm card and empty states (but Starters') at 70ch, the Account facts at 48rem |
-| `/admin`, daemon page | the tabs, then the view, in one column: `.page` (`max-width: 72rem`) for forms and prose, `.page-wide` (the full width less 2 × 16 px) for data views (/admin Rooms, Profiles, Libraries, Pronunciation, Sessions, Audit and a room's tabs; the daemon's Rooms and Activity). A data list is `.cols` rows: under 40rem each row is a card, its name and ⋯ on the first line, its cells on one muted line, each after its `data-label` |
+| every page | `.page-wide`: the full width less 2 × 16 px, left-aligned under its tabs (user, 2026-10-18: no 72rem column; a wide screen is used). Readability comes from capping blocks, not the page: `.hint` at 70ch, a `.settings-group`, a daemon `.stack-form` and the profile's Account facts at 48rem. Join, sign-in and the `/admin` login are centred cards, not pages (below) |
+| profile, `/admin`, daemon page | the title (and, on the profile, the identity strip), then sticky tabs, then the view, in one column. Profile: Rooms, Starters, Skills, API tokens, Account; the rooms in a card grid `repeat(auto-fill, minmax(18rem, 1fr))`; its status line, confirm card and empty states (but Starters') at 70ch. A data list is `.cols` rows spanning the page: under 40rem each row is a card, its name and ⋯ on the first line, its cells on one muted line, each after its `data-label` |
 | join, sign-in | `max-width: 28rem` card |
 | reading text (hints, docs) | `max-width: 70ch` |
 
@@ -202,7 +202,7 @@ The palette is the one the room page and `/admin` already use, harmonized. The l
 
 ## 9. One shared CSS file
 
-- **Source:** `internal/uikit/kit/tokens.css` holds the custom properties, light and dark, and the component classes (`.btn`, `.btn-primary`, `.btn-secondary`, `.btn-ghost`, `.btn-danger`, `.btn-icon`, `.field`, `.chip`, `.badge`, `.tabs`, `.page`, `.page-wide`, `.sheet`, `.menu`, `.toast`, `.empty`, `.table`, `.status`, `.value`, `.list-row`, `.cols`, `.meter`, `details.disclosure`, `.settings-group`). It is the reference for every value in §2 to §4.
+- **Source:** `internal/uikit/kit/tokens.css` holds the custom properties, light and dark, and the component classes (`.btn`, `.btn-primary`, `.btn-secondary`, `.btn-ghost`, `.btn-danger`, `.btn-icon`, `.field`, `.chip`, `.badge`, `.tabs`, `.page-wide`, `.sheet`, `.menu`, `.toast`, `.empty`, `.table`, `.status`, `.value`, `.list-row`, `.cols`, `.meter`, `details.disclosure`, `.settings-group`). It is the reference for every value in §2 to §4.
 - **No build step:** the room server and the daemon both import `internal/uikit`, which embeds the file and serves it at `/static/kit/tokens.css`. `go:embed` cannot reach a parent directory, hence one Go package for both binaries.
 - **Loading:** each page links it before its own stylesheet. The vanilla room page and the Preact pages (htm, no build) use the same class names. A page stylesheet keeps layout only and holds no colour literal: `TestPageCSSHasNoColourLiterals` fails on one.
 - **Contrast:** `TestTokenContrast` computes the WCAG ratio of each pair in §2, light and dark, from the file itself.

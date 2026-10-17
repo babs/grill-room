@@ -44,6 +44,21 @@ const probe = (page, scope) => page.locator(scope).first().evaluate((root) => {
     pageOverflow: document.documentElement.scrollWidth - innerWidth };
 });
 
+// uncapped names what in scope runs past its measure (docs/design.md §6): a hint past 70ch of its
+// own font (the runner's fonts differ from a workstation's), a form or a facts list past 48rem.
+const uncapped = (page, scope = 'main') => page.locator(scope).first().evaluate((root) => {
+  const ctx = document.createElement('canvas').getContext('2d');
+  const shown = (e) => e.getClientRects().length > 0;
+  const name = (e) => `${e.tagName.toLowerCase()}${e.id ? '#' + e.id : ''}.${e.className} "${e.textContent.trim().slice(0, 30)}"`;
+  const prose = [...root.querySelectorAll('.hint, .home-main > :is(#status, #confirm)')].filter(shown).filter((e) => {
+    ctx.font = getComputedStyle(e).font;
+    return e.getBoundingClientRect().width / ctx.measureText('0').width > 70.5;
+  });
+  const forms = [...root.querySelectorAll(':is(.settings-group, .stack-form, .profile-facts)')].filter(shown)
+    .filter((e) => e.getBoundingClientRect().width > 48 * 16 + 0.5);
+  return [...prose, ...forms].map(name);
+});
+
 // member joins room through an API context, which keeps the profile its join creates.
 async function member(baseURL, request, room, name) {
   const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
@@ -82,11 +97,9 @@ for (const [size, viewport] of Object.entries(sizes)) {
         expect.soft(m.tallest, `${view}: tallest row, ${m.tallestText}`).toBeLessThanOrEqual(120);
       }
       if (size === 'wide') {
-        if (view === 'instance') expect.soft(m.width, 'a form keeps 72rem').toBeLessThanOrEqual(72 * 16);
-        else {
-          expect.soft(m.width, `${view}: page width`).toBeGreaterThanOrEqual(viewport.width - 64);
-          expect.soft(m.share, `${view}: list spans the page`).toBeGreaterThanOrEqual(0.9);
-        }
+        expect.soft(m.width, `${view}: page width`).toBeGreaterThanOrEqual(viewport.width - 64);
+        if (view !== 'instance') expect.soft(m.share, `${view}: list spans the page`).toBeGreaterThanOrEqual(0.9);
+        expect.soft(await uncapped(page), `${view}: past its measure`).toEqual([]);
       }
     }
     // 004b-AC2: a recovery link, once made, widens nothing: every action stays in reach.
@@ -113,20 +126,20 @@ for (const [size, viewport] of Object.entries(sizes)) {
   });
 }
 
-// 004b-AC9, daemon-r2: the daemon page's tabs take the wide screen, General, Network and Update
-// too; AI accounts keeps the 72rem column.
+// 004b-AC9, daemon-r2: every tab of the daemon page takes the wide screen; its prose and forms keep
+// their measure (user, 2026-10-18).
 test('daemon page widths at 1920 px', async ({ browser, request, baseURL }) => {
   const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Wide daemon' } })).json();
   const daemon = startDaemon(`${baseURL}/r/${room.id}`);
   try {
     const page = await (await browser.newContext({ viewport: sizes.wide })).newPage();
     await openDaemonPage(page, await daemon.link);
-    for (const [tab, wide] of [['rooms', true], ['monitoring', true], ['general', true], ['network', true], ['update', true], ['accounts', false]]) {
+    for (const tab of ['rooms', 'monitoring', 'general', 'network', 'update', 'accounts']) {
       await page.locator('#tab-' + tab).click();
       await expect(page.locator('#tab-' + tab)).toHaveAttribute('aria-current', 'page');
       const w = () => page.locator('#main').evaluate((e) => e.getBoundingClientRect().width);
-      if (wide) await expect.poll(w, { message: tab }).toBeGreaterThanOrEqual(sizes.wide.width - 64);
-      else await expect.poll(w, { message: tab }).toBeLessThanOrEqual(72 * 16);
+      await expect.poll(w, { message: tab }).toBeGreaterThanOrEqual(sizes.wide.width - 64);
+      expect.soft(await uncapped(page, '#main'), `${tab}: past its measure`).toEqual([]);
     }
   } finally {
     daemon.cleanup();
@@ -142,27 +155,17 @@ test('profile widths at 1920 px', async ({ browser, request }) => {
   const grid = pat.locator('#rooms');
   await expect(grid.locator('li.card').first()).toBeVisible();
   const g = await grid.evaluate((e) => ({ width: e.getBoundingClientRect().width, cols: getComputedStyle(e).gridTemplateColumns.split(' ').length }));
-  expect.soft(g.width, 'rooms grid wider than 72rem').toBeGreaterThan(72 * 16);
+  expect.soft(g.width, 'rooms grid spans the page').toBeGreaterThanOrEqual(sizes.wide.width - 64);
   expect.soft(g.cols, 'room card columns').toBeGreaterThan(3);
-  // Each block's width in ch of its own font, or in rem: the runner's fonts differ from a workstation's.
-  const measure = (loc) => loc.evaluateAll((els) => {
-    const ctx = document.createElement('canvas').getContext('2d');
-    return els.filter((e) => e.getClientRects().length).map((e) => {
-      ctx.font = getComputedStyle(e).font;
-      const w = e.getBoundingClientRect().width;
-      return { id: e.id || e.className, ch: w / ctx.measureText('0').width, rem: w / 16 };
-    });
-  });
-  for (const [tab, sel, cap] of [['rooms', '#confirm', 'ch'], ['rooms', '#status', 'ch'], ['skills', 'main .hint', 'ch'], ['tokens', 'main .hint', 'ch'],
-    ['account', 'main .hint', 'ch'], ['account', '.profile-facts', 'rem']]) {
+  for (const tab of ['rooms', 'starters', 'skills', 'tokens', 'account']) {
     await pat.goto('/profile#' + tab);
     await expect(pat.locator('#panel-' + tab)).toBeVisible();
     // The status line and the confirm card show only on a magic link's landing: fill them in place.
-    if (sel === '#status') await pat.locator('#status').evaluate((e) => { e.textContent = 'x '.repeat(200); });
-    if (sel === '#confirm') await pat.locator('#confirm').evaluate((e) => { e.hidden = false; e.querySelector('p').textContent = 'x '.repeat(200); });
-    const blocks = await measure(pat.locator(sel));
-    expect(blocks.length, `${tab} ${sel}`).toBeGreaterThan(0);
-    for (const b of blocks) expect.soft(b[cap], `${tab} ${b.id}`).toBeLessThanOrEqual(cap === 'ch' ? 70.5 : 48);
+    if (tab === 'rooms') {
+      await pat.locator('#status').evaluate((e) => { e.textContent = 'x '.repeat(200); });
+      await pat.locator('#confirm').evaluate((e) => { e.hidden = false; e.querySelector('p').textContent = 'x '.repeat(200); });
+    }
+    expect.soft(await uncapped(pat), `${tab}: past its measure`).toEqual([]);
   }
 });
 

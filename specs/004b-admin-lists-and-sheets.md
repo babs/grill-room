@@ -11,7 +11,7 @@
 
 ## Solution
 
-Every `/admin` list becomes rows in columns (kit `.cols`): the name and a muted meta line, the values in columns, and a ⋯ with the row's actions. Under 40rem a row is a short card. Data views take the full width; forms keep 72rem. Room settings and `/admin` share one Admins list. The persona sheet gets one footer that counts unsaved changes across its tabs.
+Every `/admin` list becomes rows in columns (kit `.cols`): the name and a muted meta line, the values in columns, and a ⋯ with the row's actions. Under 40rem a row is a short card. Data views take the full width; forms keep 72rem (superseded 2026-10-18: every view is full width, its forms capped). Room settings and `/admin` share one Admins list. The persona sheet gets one footer that counts unsaved changes across its tabs.
 
 ## Out of scope
 
@@ -28,13 +28,13 @@ Every `/admin` list becomes rows in columns (kit `.cols`): the name and a muted 
 - [x] **AC3** Each `/admin` view and each room tab has at most one enabled primary button. At 390, 1440 and 1920 px no control is cut by the page edge or by a scroll box, and the page never scrolls sideways.
 - [x] **AC4** A room's Admins tab is one component on `/admin` and in Room settings: the name with where it was last seen ("last active 3 min ago · Firefox 133 on Linux", the IPs and raw user agents in the tip), the role, the admin button in a column of its own (one x on every row), and a ⋯ with Rename and, where offered, Make AI host.
 - [x] **AC5** Under 40rem every list row is a card at most 120 px tall: the name and ⋯ on its first line, its values on one muted line, each after its label. Nothing scrolls sideways.
-- [x] **AC6** At 1920 px the data views (`/admin` lists and room tabs) use `.page-wide` and their list spans at least 90 % of the content width. The Server view, a form, keeps `max-width: 72rem`.
+- [x] **AC6** At 1920 px the data views (`/admin` lists and room tabs) use `.page-wide` and their list spans at least 90 % of the content width. The Server view, a form, keeps `max-width: 72rem`. Superseded 2026-10-18 (user): every view is `.page-wide`, its forms and prose capped (docs/design.md §6).
 - [x] **AC7** The audit log names each action in words ("Room renamed"), its code in the tip, and reads its details as `key: value` pairs. The filter lists the actions in words. Newer and Older sit above and below the list. A Go test fails for a server action without a label.
 - [x] **AC8** The Instance view becomes Server: "AI host apps" connected, by version. Its settings are one `.settings-group` with one Save that counts unsaved changes; "Delete empty profiles" is a switch in the group that applies at once with a toast. Sessions name the browser in words ("Chrome 155 on Linux", raw in the tip); the current session's row has no action, the header signs out.
 
 ### Data-page width
 
-- [x] **AC9** The daemon page's Rooms and Activity tabs use `.page-wide`; Accounts, Settings and Update keep 72rem.
+- [x] **AC9** The daemon page's Rooms and Activity tabs use `.page-wide`; Accounts, Settings and Update keep 72rem. Superseded 2026-10-18 (user): every tab is `.page-wide` (docs/design.md §6).
 
 ### Room sheets
 

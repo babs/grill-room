@@ -89,7 +89,7 @@
 .app-header .muted { color: var(--chrome-muted); font-size: var(--fs-sm); }
 .app-header .spacer { flex: 1; }
 .app-header .btn-ghost { color: var(--chrome-text); }
-.hint { color: var(--text-muted); font-size: var(--fs-sm); }
+.hint { max-width: 70ch; color: var(--text-muted); font-size: var(--fs-sm); }
 .said { min-height: 1.2em; font-size: var(--fs-sm); }
 .bad, .error { color: var(--danger); }
 .ok { color: var(--success); }
@@ -129,9 +129,7 @@
   body:has(.tabs[data-header][data-menu]) .app-header > .tabs-menu { display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-1); min-width: 44px; min-height: 44px; margin: 0 calc(var(--sp-2) - var(--sp-3)) 0 calc(-1 * var(--sp-3)); padding: 0; border: 0; background: transparent; color: var(--chrome-text); }
   .tabs[data-header][data-menu]:not([data-open], :has(> .tabs-menu)) { display: none; }
 }
-/* A page's content column, left-aligned under its tabs (docs/design.md §6); tables take the full
-   width. */
-.page { width: 100%; max-width: 72rem; padding: var(--sp-4); }
+/* Every page takes the full width; its prose and forms keep their measure (docs/design.md §6). */
 .page-wide { width: 100%; padding: var(--sp-4); }
 .empty { display: block; margin: var(--sp-2) 0; padding: var(--sp-3) var(--sp-4); border: 1px dashed var(--border-strong); border-radius: var(--r-md); color: var(--text-muted); font-size: var(--fs-sm); font-style: normal; text-align: center; list-style: none; }
 .empty > p { margin: 0; }
@@ -243,7 +241,7 @@ details.disclosure[open] > summary::before { transform: rotate(45deg); }
 .menu.row-menu { inset: auto; }
 /* Settings in one form: label, control and hint in columns, one footer that counts the unsaved
    changes next to the only Save. A toggle applies at once and says so in a toast. */
-.settings-group { display: grid; grid-template-columns: minmax(8rem, max-content) minmax(0, 1fr); gap: var(--sp-3) var(--sp-4); align-items: center; }
+.settings-group { max-width: 48rem; display: grid; grid-template-columns: minmax(8rem, max-content) minmax(0, 1fr); gap: var(--sp-3) var(--sp-4); align-items: center; }
 .settings-group > :is(label, .label) { font-size: var(--fs-sm); font-weight: 600; }
 .settings-group > label:has(> input[type=checkbox]) { font-size: var(--fs-control); font-weight: 400; }
 .settings-group > .control { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }

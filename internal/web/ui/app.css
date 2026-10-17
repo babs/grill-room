@@ -43,7 +43,7 @@ body.join .hint { text-align: left; }
 .home-main .page-title { margin: 0; font-size: var(--fs-xl); }
 /* Sub-headings sit under their section's h2 (006 starters: Yours, Shared, Built-in). */
 #starters h3 { margin: var(--sp-4) 0 var(--sp-2); font-size: var(--fs-md); font-weight: 600; }
-.home-main .hint, .home-main .empty, .home-main > :is(#status, #confirm) { max-width: 70ch; }
+.home-main .empty, .home-main > :is(#status, #confirm) { max-width: 70ch; }
 .home-main #starters .empty { max-width: none; }
 /* An empty status line holds no room: the title starts right under the header. */
 .home-main > #status:empty { display: none; }
