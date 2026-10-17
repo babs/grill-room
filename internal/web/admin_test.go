@@ -343,10 +343,11 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 	// TestRoomSkillsAPI, TestProfileCreatesRooms, TestProfileMaxRoomsAPI, TestExportImportAPI,
 	// TestRenameParticipant, TestDeleteDocument, TestStarterLibraryAPI, TestHostTransfer,
 	// TestAdminRecoveryLink, TestMergeAPI, TestPurgeProfilesLoopAndSwitch, TestAPITokenAuditAndLogs, TestMCPConfirm,
-	// TestTTSSpeechSettings).
+	// TestTTSSpeechSettings, TestLexicon).
 	covered := map[string]bool{ActionProfileMerge: true, ActionProfilePurge: true, ActionProfileRecoveryLink: true, ActionProfileRecoveryUsed: true, ActionStarterPublish: true, ActionStarterDelete: true, ActionRoomAdminAdd: true, ActionRoomAdminRemove: true, ActionRoomSkillRemove: true, ActionSettings: true,
 		ActionProfileMaxRooms: true, ActionRoomExport: true, ActionRoomImport: true, ActionRename: true, ActionDocumentDelete: true,
-		ActionDocumentRestore: true, ActionHostTransfer: true, ActionAPITokenCreate: true, ActionAPITokenRevoke: true, ActionPersonaRemove: true, ActionRoomSpeech: true}
+		ActionDocumentRestore: true, ActionHostTransfer: true, ActionAPITokenCreate: true, ActionAPITokenRevoke: true, ActionPersonaRemove: true, ActionRoomSpeech: true,
+		ActionLexiconAdd: true, ActionLexiconEdit: true, ActionLexiconDelete: true}
 	for _, w := range want {
 		covered[w.action] = true
 	}

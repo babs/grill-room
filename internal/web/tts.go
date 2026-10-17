@@ -86,8 +86,10 @@ type ttsHub struct {
 	// for lines below every new one instead of skipping them.
 	seq   int64
 	lines []*ttsLine
-	// wake is closed and replaced when a line is added.
-	wake    chan struct{}
+	// wake is closed and replaced when a line is added or the lexicon changes.
+	wake chan struct{}
+	// lexicon counts the lexicon's changes: a stream sends it again when it moved (013-AC31).
+	lexicon int64
 	streams int
 	beatAt  time.Time
 	pod     string
@@ -140,7 +142,24 @@ func (h *ttsHub) add(l ttsLine, now time.Time) int64 {
 	return l.Seq
 }
 
-// next returns the lines after seq, marked sent, and the channel closed by the next add.
+// lexiconChanged has every stream send the lexicon again.
+func (h *ttsHub) lexiconChanged() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.lexicon++
+	close(h.wake)
+	h.wake = make(chan struct{})
+}
+
+// lexiconCount is the number of lexicon changes so far.
+func (h *ttsHub) lexiconCount() int64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.lexicon
+}
+
+// next returns the lines after seq, marked sent, and the channel closed by the next add or lexicon
+// change.
 func (h *ttsHub) next(seq int64, now time.Time) ([]ttsLine, <-chan struct{}) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -345,6 +364,26 @@ type ttsRoom struct {
 	Personas []ttsPersona `json:"personas"`
 }
 
+// TTSDemand is the number of rooms with a persona that speaks and a human in the audio (013-AC34).
+func (s *Server) TTSDemand() int {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	n := 0
+	for room := range s.people.listening(s.now()) {
+		ps, err := s.bus.Store.RoomPersonas(ctx, room)
+		if err != nil {
+			s.log.Warn("tts_demand_failed", zap.String("room", room), zap.Error(err))
+			continue
+		}
+		if slices.ContainsFunc(ps, speaking) {
+			n++
+		}
+	}
+	return n
+}
+
+func speaking(p store.RoomPersona) bool { return p.Speaks && !p.Pending }
+
 // ttsRoster lists the rooms with a human in the audio and their speaking personas (013-AC14).
 func (s *Server) ttsRoster(ctx context.Context) []ttsRoom {
 	out := []ttsRoom{}
@@ -362,7 +401,7 @@ func (s *Server) ttsRoster(ctx context.Context) []ttsRoom {
 		s.withVoices(ctx, room, ps, "en")
 		r := ttsRoom{Room: room, Personas: []ttsPersona{}}
 		for _, p := range ps {
-			if p.Speaks && !p.Pending {
+			if speaking(p) {
 				r.Personas = append(r.Personas, ttsPersona{ID: p.ID, Name: p.Name, Voice: p.Voice, Rate: p.VoiceRate})
 			}
 		}
@@ -415,12 +454,35 @@ func (s *Server) ttsEvents(w http.ResponseWriter, r *http.Request) {
 		_, err := fmt.Fprintf(w, "event: rooms\ndata: %s\n\n", b)
 		return err == nil
 	}
+	sentLexicon := int64(-1)
+	sendLexicon := func() bool {
+		ps, err := s.bus.Store.Pronunciations(ctx)
+		if err != nil {
+			s.log.Error("tts_lexicon_failed", zap.Error(err))
+			return false
+		}
+		terms := make([]voices.Term, len(ps))
+		for i, p := range ps {
+			terms[i] = p.Term
+		}
+		b, _ := json.Marshal(map[string]any{"entries": terms}) // plain values cannot fail to marshal
+		_, err = fmt.Fprintf(w, "event: lexicon\ndata: %s\n\n", b)
+		return err == nil
+	}
 	tick := time.NewTicker(pollEvery)
 	defer tick.Stop()
 	pinged := time.Now()
 	for {
 		if !sendRooms() {
 			return
+		}
+		// At connect, then on each change: the pod speaks with the seed until it gets this. Before
+		// the lines, which next marks as sent.
+		if lexicon := s.tts.lexiconCount(); lexicon != sentLexicon {
+			if !sendLexicon() {
+				return
+			}
+			sentLexicon = lexicon
 		}
 		lines, wake := s.tts.next(last, s.now())
 		for _, l := range lines {

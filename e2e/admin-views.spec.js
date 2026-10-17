@@ -209,6 +209,50 @@ for (const vp of widths) {
     await lib.ctx.dispose();
   });
 
+  // 013-AC31: the Pronunciation view lists and searches the lexicon, adds a term, refuses a
+  // duplicate, flips a style in one click, edits and removes; each change is audited.
+  test(`pronunciation view, ${vp.name}`, async ({ browser, request }) => {
+    const term = `Grafana${vp.name}${Date.now() % 100000}`;
+    const page = await (await browser.newContext({ viewport: vp })).newPage();
+    expect(await signIn(page, adminToken, 'pronunciation')).toBe(201);
+    const gh = page.locator('#pronunciations .list-row', { hasText: 'guite-heub' });
+    await expect(gh).toContainText('GitHub');
+    await expect(gh.getByRole('button', { name: 'GitHub: English-style, switch to French-style' })).toBeVisible();
+    await page.getByLabel('Search').fill('clusteur');
+    await expect(page.locator('#pronunciations .list-row:not(.head)')).toHaveCount(1);
+    await expect(page.locator('#pronunciations .list-row:not(.head)')).toContainText('cluster');
+    await page.getByLabel('Search').fill('');
+    await fits(page, vp.width);
+    await page.screenshot({ path: `test-results/pronunciation-${vp.name}.png` });
+
+    const sheet = page.locator('#term-sheet');
+    await page.getByRole('button', { name: 'Add a term' }).click();
+    await sheet.getByLabel('Term').fill('github');
+    await sheet.getByLabel('English', { exact: true }).fill('git hub');
+    await sheet.getByRole('button', { name: 'Add' }).click();
+    await expect(sheet.getByRole('alert')).toContainText('the lexicon has that term already');
+    await sheet.getByLabel('Term').fill(term);
+    await sheet.getByLabel('French, English-style').fill('gra-fa-na');
+    await sheet.getByRole('button', { name: 'Add' }).click();
+    await expect(sheet).toBeHidden();
+    const row = page.locator('#pronunciations .list-row', { hasText: term });
+    await expect(row).toContainText('gra-fa-na');
+
+    await row.getByRole('button', { name: `${term}: English-style, switch to French-style` }).click();
+    await expect(row.getByRole('button', { name: `${term}: French-style, switch to English-style` })).toBeVisible();
+    const list = await (await request.get('/api/admin/pronunciations', { headers: admin })).json();
+    expect(list.entries.find((e) => e.term === term).style).toBe('fr');
+
+    await rowAction(row, /^Edit/);
+    await sheet.getByLabel('French, French-style').fill('grafana');
+    await sheet.getByRole('button', { name: 'Save' }).click();
+    await expect(row).toContainText('grafana');
+    await rowAction(row, /^Remove/);
+    await confirmSheet(page, 'Remove');
+    await expect(row).toHaveCount(0);
+    for (const action of ['tts.lexicon.add', 'tts.lexicon.edit', 'tts.lexicon.delete']) await audited(request, action, term);
+  });
+
   // 004-AC5: the Server view shows version, database size and free disk, STT, AI host apps and SMTP.
   test(`instance view, ${vp.name}`, async ({ browser }) => {
     const page = await (await browser.newContext({ viewport: vp })).newPage();

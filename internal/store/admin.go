@@ -128,13 +128,14 @@ const ActorSystem = "system"
 
 // Audit target kinds.
 const (
-	TargetRoom         = "room"
-	TargetProfile      = "profile"
-	TargetSkill        = "skill"
-	TargetTemplate     = "template"
-	TargetStarter      = "starter"
-	TargetAdminSession = "admin_session"
-	TargetInstance     = "instance"
+	TargetRoom          = "room"
+	TargetProfile       = "profile"
+	TargetSkill         = "skill"
+	TargetTemplate      = "template"
+	TargetStarter       = "starter"
+	TargetAdminSession  = "admin_session"
+	TargetInstance      = "instance"
+	TargetPronunciation = "pronunciation"
 )
 
 // MaxAuditDetails caps an entry's details; larger ones are stored as {"truncated":true}.
@@ -267,9 +268,10 @@ func (s *Store) PurgeAudit(ctx context.Context, before time.Time) (int64, error)
 // targetNames reads the name an audit entry keeps for each target kind; a profile's is the one it
 // chose (005-AC1), else the name it last joined a room with, else its uuid.
 var targetNames = map[string]string{
-	TargetRoom:     `SELECT name FROM rooms WHERE id = ?`,
-	TargetProfile:  `SELECT COALESCE(p.name, (SELECT name FROM participants WHERE profile_id = p.id ORDER BY id DESC LIMIT 1), p.uuid, '') FROM profiles p WHERE p.id = ?`,
-	TargetSkill:    `SELECT name FROM skills WHERE id = ?`,
-	TargetTemplate: `SELECT title FROM persona_templates WHERE id = ?`,
-	TargetStarter:  `SELECT json_extract(manifest, '$.title') FROM starter_versions WHERE starter_id = ? ORDER BY n DESC LIMIT 1`,
+	TargetRoom:          `SELECT name FROM rooms WHERE id = ?`,
+	TargetProfile:       `SELECT COALESCE(p.name, (SELECT name FROM participants WHERE profile_id = p.id ORDER BY id DESC LIMIT 1), p.uuid, '') FROM profiles p WHERE p.id = ?`,
+	TargetSkill:         `SELECT name FROM skills WHERE id = ?`,
+	TargetTemplate:      `SELECT title FROM persona_templates WHERE id = ?`,
+	TargetStarter:       `SELECT json_extract(manifest, '$.title') FROM starter_versions WHERE starter_id = ? ORDER BY n DESC LIMIT 1`,
+	TargetPronunciation: `SELECT term FROM pronunciations WHERE id = ?`,
 }

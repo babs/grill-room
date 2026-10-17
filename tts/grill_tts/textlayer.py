@@ -166,25 +166,35 @@ def _rules(text: str, lang: Lang) -> str:
     return ACRONYM_RE.sub(lambda m: " ".join(_letter(c, lang) for c in m[0]), text)
 
 
+def _form_of(e: Entry, lang: Lang) -> str:
+    return e.en if lang == "en" else e.fr_en if e.style == "en" else e.fr_fr
+
+
+def _terms(entries: list[Entry]) -> re.Pattern[str] | None:
+    """Whole words only; a term holding a capital matches its exact case, a lowercase one any case."""
+    alts = [re.escape(e.term) if e.term != e.term.lower() else f"(?i:{re.escape(e.term)})" for e in entries]
+    return re.compile(r"(?<![\w-])(?:" + "|".join(alts) + r")(?![\w-])") if alts else None
+
+
 class TextLayer:
     def __init__(self, lexicon: Iterable[Entry]) -> None:
         entries = sorted(lexicon, key=lambda e: len(e.term), reverse=True)
         self._exact = {e.term: e for e in entries if e.term != e.term.lower()}
         self._folded = {e.term: e for e in entries if e.term == e.term.lower()}
-        alts = [re.escape(e.term) if e.term in self._exact else f"(?i:{re.escape(e.term)})" for e in entries]
-        self._term = re.compile(r"(?<![\w-])(?:" + "|".join(alts) + r")(?![\w-])") if alts else None
+        # A term with no form in a language is left to that language's other rules: an acronym
+        # whose French form went keeps its letters.
+        self._term = {lang: _terms([e for e in entries if _form_of(e, lang)]) for lang in ("fr", "en")}
 
     def _form(self, word: str, lang: Lang) -> str:
-        e = self._exact.get(word) or self._folded[word.lower()]
-        form = e.en if lang == "en" else e.fr_en if e.style == "en" else e.fr_fr
-        return form or word
+        return _form_of(self._exact.get(word) or self._folded[word.lower()], lang)
 
     def _say(self, text: str, lang: Lang) -> str:
-        if self._term is None:
+        term = self._term[lang]
+        if term is None:
             return _rules(text, lang)
         out, pos = [], 0
         # Lexicon output is final: the number and acronym rules only see the text between terms.
-        for m in self._term.finditer(text):
+        for m in term.finditer(text):
             out += [_rules(text[pos : m.start()], lang), self._form(m[0], lang)]
             pos = m.end()
         out.append(_rules(text[pos:], lang))

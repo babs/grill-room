@@ -944,6 +944,20 @@ CREATE TABLE tts_samples (
 	data BLOB NOT NULL,
 	PRIMARY KEY (voice, lang)
 );
+`, `
+-- 013-AC31: how the call voices say a term. style 'en' says it English-style (fr_en in a French
+-- sentence), 'fr' French-style (fr_fr); en is for an English sentence; '' leaves it as written.
+CREATE TABLE pronunciations (
+	id INTEGER PRIMARY KEY,
+	term TEXT NOT NULL UNIQUE COLLATE NOCASE CHECK (length(term) BETWEEN 1 AND 40),
+	style TEXT NOT NULL CHECK (style IN ('en', 'fr')),
+	fr_en TEXT NOT NULL DEFAULT '',
+	fr_fr TEXT NOT NULL DEFAULT '',
+	en TEXT NOT NULL DEFAULT '',
+	by TEXT NOT NULL DEFAULT '',
+	at TEXT NOT NULL DEFAULT '',
+	CHECK (fr_en != '' OR fr_fr != '' OR en != '')
+);
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -951,7 +965,7 @@ const uuidSQL = `lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' |
 	substr('89ab', 1 + abs(random() % 4), 1) || substr(hex(randomblob(2)), 2) || '-' || hex(randomblob(6)))`
 
 // migrationData runs Go code inside the transaction of the migration to version key, after its SQL.
-var migrationData = map[int]func(context.Context, *sql.Tx) error{9: migratePersonas, 24: migrateStopped, 31: migrateNotesWatch}
+var migrationData = map[int]func(context.Context, *sql.Tx) error{9: migratePersonas, 24: migrateStopped, 31: migrateNotesWatch, 46: seedPronunciations}
 
 // Open opens (and migrates) the database at path.
 func Open(path string) (*Store, error) {
