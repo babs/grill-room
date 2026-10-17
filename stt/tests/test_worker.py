@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 import structlog.testing
 from livekit import rtc
+from livekit.protocol import models
 from prometheus_client import REGISTRY
 
 import grill_stt.worker as worker_mod
@@ -336,13 +337,29 @@ async def test_voices_follow_the_subscribed_tracks(
         await s.aclose()
 
 
+STANDARD = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+
+
+def human(identity: str, kind: int = STANDARD, **pubs: Any) -> SimpleNamespace:
+    return SimpleNamespace(identity=identity, kind=kind, track_publications=pubs)
+
+
+class FakePub:
+    def __init__(self, kind: int = rtc.TrackKind.KIND_AUDIO) -> None:
+        self.kind = kind
+        self.subscribed: bool | None = None
+
+    def set_subscribed(self, on: bool) -> None:
+        self.subscribed = on
+
+
 class FakeRoom:
     """An rtc.Room the test connects and closes; it records its disconnect."""
 
     def __init__(self) -> None:
         self.connected = False
         self.left = False
-        self.remote_participants = {"7": object()}
+        self.remote_participants: dict[str, Any] = {"7": human("7")}
 
     def on(self, _event: str, _cb: Any) -> None:
         pass
@@ -645,3 +662,68 @@ async def test_beats_are_spaced_start_to_start(
     with pytest.raises(Stop):
         await w.heartbeat()
     assert waits == [wait]
+
+
+AGENT = rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
+
+
+async def test_a_persona_bot_is_never_subscribed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """013-AC19: humans' audio is subscribed at join and when published; a bot's never, video never."""
+    made: list[FakeRoom] = []
+    monkeypatch.setattr(rtc, "Room", lambda: new_room(made))
+    w = worker(httpx.MockTransport(lambda _r: httpx.Response(204)))
+    alice_mic, alice_cam, bot_mic = FakePub(), FakePub(rtc.TrackKind.KIND_VIDEO), FakePub()
+    room = FakeRoom()
+    room.remote_participants = {
+        "7": human("7", mic=alice_mic, cam=alice_cam),
+        "persona-3": human("persona-3", AGENT, mic=bot_mic),
+    }
+    monkeypatch.setattr(rtc, "Room", lambda: room)
+    with structlog.testing.capture_logs() as logs:
+        await w.reconcile([listed("r1", "RM_a", people=2)])
+        w._subscribe("r1", late := FakePub(), human("persona-4", AGENT))  # type: ignore[arg-type]
+        w._subscribe("r1", bob := FakePub(), human("8"))  # type: ignore[arg-type]
+        w._skip_agent("r1", human("persona-4", AGENT))  # type: ignore[arg-type]
+    got = (alice_mic.subscribed, alice_cam.subscribed, bot_mic.subscribed, late.subscribed, bob.subscribed)
+    assert got == (True, None, None, None, True)
+    assert not [e for e in logs if e["event"] == "track_ignored"]
+    skipped = [e["identity"] for e in logs if e["event"] == "participant_skipped"]
+    assert skipped == ["persona-3", "persona-4"]
+    assert all(e["log_level"] == "debug" for e in logs if e["event"] == "participant_skipped")
+
+
+class FakeLK:
+    """LiveKit's room API as the worker lists participants: who is in, by kind."""
+
+    def __init__(self) -> None:
+        self.kinds: list[Any] = []
+        self.room = self
+
+    async def list_participants(self, _req: object) -> SimpleNamespace:
+        return SimpleNamespace(participants=[SimpleNamespace(kind=k) for k in self.kinds])
+
+
+async def test_a_room_with_only_bots_is_left_and_joined_again_once_a_human_is_listed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """013-AC19: once only persona bots remain the worker leaves, stays out while LiveKit lists bots
+    only, whatever their count, and comes back for a human, even one alone at the count bots had."""
+    made: list[FakeRoom] = []
+    monkeypatch.setattr(rtc, "Room", lambda: new_room(made))
+    w = worker(httpx.MockTransport(lambda _r: httpx.Response(204)))
+    lk = FakeLK()
+    w._lk = lk  # type: ignore[assignment]
+    await w.reconcile([listed("r1", "RM_a", people=2)])
+    made[0].remote_participants = {p: human(p, AGENT) for p in ("persona-3", "persona-4")}
+    w._leave_if_alone("r1")
+    await settle(lambda: made[0].left)
+    w._forget("r1", made[0], "left")  # type: ignore[arg-type]
+    agent_kind = models.ParticipantInfo.Kind.AGENT
+    for kinds in ([agent_kind, agent_kind], [agent_kind]):
+        lk.kinds = kinds
+        await w.reconcile([listed("r1", "RM_a", people=len(kinds))])
+        assert len(made) == 1, "joined a room with only bots in it again"
+    # The bot left and a human came, alone: the same count as before, a human now.
+    lk.kinds = [models.ParticipantInfo.Kind.STANDARD]
+    await w.reconcile([listed("r1", "RM_a", people=1)])
+    assert len(made) == 2 and w.rooms["r1"] is cast(object, made[1])

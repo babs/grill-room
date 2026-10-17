@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 import structlog
 from livekit import api, rtc
+from livekit.protocol import models
 from prometheus_client import Gauge
 
 from .config import Settings
@@ -27,6 +28,11 @@ DEVICE_TRACKS = Gauge(
 FRAME_CAPACITY = 1000
 
 
+def is_agent(p: object) -> bool:
+    """A persona's voice bot joins as an agent participant (spec 013)."""
+    return getattr(p, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
+
+
 def http_url(ws_url: str) -> str:
     return ws_url.replace("ws", "http", 1)
 
@@ -41,6 +47,9 @@ class Worker:
         self.rooms: dict[str, rtc.Room] = {}
         # The LiveKit room sid each room was listed with when joined.
         self._sids: dict[str, str] = {}
+        # Rooms left because only persona bots remained: joined again once LiveKit lists a human
+        # there, not on every poll (013-AC19).
+        self._agents_only: set[str] = set()
         self._tracks: dict[str, set[asyncio.Task[None]]] = {}
         # Open audio streams by track sid, with their participant's identity and room. LiveKit ends
         # none of them when a track goes: the SFU hands the freed transceiver to the next track it
@@ -106,34 +115,64 @@ class Worker:
                 continue
             self._forget(name, room, reason)
             self._spawn(room.disconnect())
+        self._agents_only &= set(by_name)
         for r in listed:
-            if r.name not in self.rooms and r.num_participants > 0:
-                await self._join(r.name, r.sid)
+            if r.name in self.rooms or r.num_participants == 0:
+                continue
+            if r.name in self._agents_only and not await self._has_human(r.name):
+                continue
+            await self._join(r.name, r.sid)
+
+    async def _has_human(self, room: str) -> bool:
+        """Whether LiveKit lists anyone but agents in room: a count cannot tell a human from a bot."""
+        resp = await self._lk.room.list_participants(api.ListParticipantsRequest(room=room))
+        return any(p.kind != models.ParticipantInfo.Kind.AGENT for p in resp.participants)
 
     async def _join(self, name: str, sid: str = "") -> None:
         room = rtc.Room()
         self.rooms[name] = room
         self._sids[name] = sid
+        self._agents_only.discard(name)
         self._tracks[name] = set()
+        room.on("participant_connected", lambda p: self._skip_agent(name, p))
+        room.on("track_published", lambda pub, p: self._subscribe(name, pub, p))
         room.on("track_subscribed", lambda track, pub, p: self._on_track(name, track, pub, p))
         room.on("track_unsubscribed", lambda _track, pub, _p: self._close(pub.sid))
         room.on("track_unpublished", lambda pub, _p: self._close(pub.sid))
         room.on("participant_disconnected", lambda p: self._on_participant_left(name, p))
         room.on("disconnected", lambda reason: self._forget(name, room, reason))
         try:
-            await room.connect(self._s.livekit_url, self._token(name), rtc.RoomOptions(auto_subscribe=True))
+            # Subscriptions are chosen per participant: a persona's bot is never subscribed (013-AC19).
+            await room.connect(self._s.livekit_url, self._token(name), rtc.RoomOptions(auto_subscribe=False))
         except Exception as e:  # one room failing must not stop the others
             log.warning("room_join_failed", room=name, error=str(e))
             self._forget(name, room, "join_failed")
             return
+        for p in room.remote_participants.values():
+            self._skip_agent(name, p)
+            for pub in p.track_publications.values():
+                self._subscribe(name, pub, p)
         log.info("room_joined", room=name, participants=len(room.remote_participants))
         self._changed.set()
         self._leave_if_alone(name)
 
     def _leave_if_alone(self, name: str) -> None:
+        """Leaves a room with nobody but persona bots in it (013-AC19)."""
         room = self.rooms.get(name)
-        if room is not None and not room.remote_participants:
-            self._spawn(room.disconnect())  # "disconnected" cleans up
+        if room is None or any(not is_agent(p) for p in room.remote_participants.values()):
+            return
+        if room.remote_participants:
+            self._agents_only.add(name)
+        self._spawn(room.disconnect())  # "disconnected" cleans up
+
+    def _skip_agent(self, room: str, p: rtc.RemoteParticipant) -> None:
+        if is_agent(p):
+            log.debug("participant_skipped", room=room, identity=p.identity, reason="agent")
+
+    def _subscribe(self, room: str, pub: rtc.RemoteTrackPublication, p: rtc.RemoteParticipant) -> None:
+        """Subscribes a human's audio track; a persona bot's never (013-AC19)."""
+        if not is_agent(p) and pub.kind == rtc.TrackKind.KIND_AUDIO:
+            pub.set_subscribed(True)
 
     def _forget(self, name: str, room: rtc.Room, reason: object) -> None:
         if self.rooms.get(name) is not room:
