@@ -453,9 +453,9 @@ test('disabled buttons stay readable in both themes', async ({ browser, request 
       await expect(disabled, `${name} ${scheme}`).toBeDisabled();
       expect(await disabledContrast(page), `${name} ${scheme}`).toEqual([]);
     }
-    // A persona pill that cannot ask is aria-disabled but keeps its own look: the kit's rule is for its buttons.
+    // A persona pill whose ▶ cannot ask is aria-disabled but keeps its own look: the kit's rule is for its buttons.
     await alice.goto(alice.url().split('#')[0]);
-    const pill = alice.locator('button.persona[aria-disabled=true]').first();
+    const pill = alice.locator('.persona-pill:has(.persona-run[aria-disabled=true])').first();
     await expect(pill).toBeVisible();
     expect(await pill.evaluate((b) => getComputedStyle(b).backgroundColor), `persona pill ${scheme}`).toBe(await token(alice, '--surface'));
   }

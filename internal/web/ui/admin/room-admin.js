@@ -12,7 +12,8 @@ import { PluginsTab, mountReview } from './plugins.js';
 
 /**
  * @typedef {{id: number, name: string, admin: boolean}} Participant
- * @typedef {{room: {id: string, name: string}, me: Participant, participants: Participant[]}} RoomData
+ * @typedef {{quiet_ms: number, resume_s: number, queue_s: number, words: number}} Speech
+ * @typedef {{room: {id: string, name: string, speech?: Speech}, me: Participant, participants: Participant[], tts?: boolean}} RoomData
  * @typedef {{id: number, name: string, version: number, author: string, pending?: boolean}} RoomSkill
  * @typedef {{id: number, name: string, badge: string, model: string, effort: string, pending?: boolean}} Persona
  * @typedef {{room_skills?: RoomSkill[], personas?: Persona[], host_participant_id?: number, you_host?: boolean, egress_admins_allow?: boolean,
@@ -31,7 +32,8 @@ addEventListener('grill:agent', (e) => { agentState.value = /** @type {CustomEve
 addEventListener('grill:stt', (e) => { sttGlossary.value = /** @type {CustomEvent<STTState>} */ (e).detail.glossary; });
 
 const allTabs = [...Object.entries(roomTabs).slice(0, 3), ['personas', 'Personas'], ['skills', 'Skills'], ['plugins', 'Plugins'],
-  ['network', 'Websites and connectors'], ['documents', 'Documents'], ['export', roomTabs.export], ['glossary', 'Words to recognise']];
+  ['network', 'Websites and connectors'], ['documents', 'Documents'], ['export', roomTabs.export], ['glossary', 'Words to recognise'],
+  ['voices', 'Call voices']];
 // The tabs a plain member gets; a room admin gets them all. Every member reads the room's plugins
 // (009-AC5), its websites (014) and manages their own invites (011-AC27).
 const memberTabs = ['invites', 'plugins', 'network', 'glossary'];
@@ -102,7 +104,45 @@ function Manage({ data, tab, tabs }) {
       ${tab === 'network' && html`<${NetworkTab} base=${base} host=${isHost(data)} show=${show}/>`}
       ${tab === 'documents' && html`<${DeletedDocuments} base=${base} show=${show}/>`}
       ${tab === 'glossary' && html`<${STTGlossary} data=${data}/>`}
+      ${tab === 'voices' && html`<${CallVoices} data=${data} base=${base} show=${show}/>`}
     <//>`}`;
+}
+
+// The bounds the server holds each call setting to (013-AC25).
+const speechFields = /** @type {[keyof Speech, string, number, number, number, string][]} */ ([
+  ['quiet_ms', 'Quiet before a persona speaks (seconds)', 0.5, 5, 0.1, 'A persona starts only once nobody has spoken for this long.'],
+  ['resume_s', 'Resume window (seconds)', 0, 60, 1, 'Cut off by someone, a persona says its sentence again if the room is quiet within it; past it, it drops the rest.'],
+  ['queue_s', 'Longest wait (seconds)', 10, 300, 1, 'A line not started by then is dropped from speech; the chat keeps it.'],
+  ['words', 'Spoken words', 40, 60, 1, 'The most a persona says after a turn.'],
+]);
+
+/**
+ * CallVoices sets how the room's personas take turns in the call, for room admins (013-AC25).
+ * @param {{data: RoomData, base: string, show: (err: unknown) => void}} props
+ */
+function CallVoices({ data, base, show }) {
+  const sp = data.room.speech || { quiet_ms: 1000, resume_s: 20, queue_s: 40, words: 60 };
+  /** @param {keyof Speech} k @param {number} v */
+  const shown = (k, v) => (k === 'quiet_ms' ? String(v / 1000) : String(v));
+  const [vals, setVals] = useState(Object.fromEntries(speechFields.map(([k]) => [k, shown(k, sp[k])])));
+  const [said, setSaid] = useState('');
+  useEffect(() => { setVals(Object.fromEntries(speechFields.map(([k]) => [k, shown(k, sp[k])]))); }, [sp.quiet_ms, sp.resume_s, sp.queue_s, sp.words]);
+  const dirty = speechFields.some(([k]) => vals[k] !== shown(k, sp[k]));
+  /** @param {Event} e */
+  const save = (e) => {
+    e.preventDefault();
+    const body = Object.fromEntries(speechFields.map(([k]) => [k, k === 'quiet_ms' ? Math.round(Number(vals[k]) * 1000) : Number(vals[k])]));
+    fetchJSON('PATCH', base + '/speech', body).then(() => setSaid('Saved: it applies to the next line.')).catch(show);
+  };
+  return html`<p class="hint">Personas say a short line in the call after their turns, one at a time, never over someone speaking.</p>
+    <form id="call-voices" class="settings-form" onSubmit=${save}>
+      ${speechFields.map(([k, label, min, max, step, hint]) => html`<label key=${k}>${label}
+        <input name=${k} type="number" min=${min} max=${max} step=${step} required value=${vals[k]}
+          onInput=${(/** @type {Event} */ e) => { setSaid(''); setVals({ ...vals, [k]: /** @type {HTMLInputElement} */ (e.currentTarget).value }); }}/>
+        <span class="hint">${hint} ${min} to ${max}.</span></label>`)}
+      <div class="settings-foot"><span class="dirty">${said || (dirty ? 'Unsaved changes' : 'No unsaved changes')}</span>
+        <button type="submit" class="btn-primary" disabled=${!dirty}>Save</button></div>
+    </form>`;
 }
 
 const starterSheet = /** @type {HTMLDialogElement} */ (document.getElementById('starter-save-sheet'));
@@ -188,7 +228,7 @@ function App() {
   const data = roomData.value;
   if (data) title.textContent = 'Room settings · ' + data.room.name;
   if (!tab.value || !data) return null;
-  const tabs = sttGlossary.value ? allTabs : allTabs.filter(([id]) => id !== 'glossary');
+  const tabs = allTabs.filter(([id]) => (id !== 'glossary' || sttGlossary.value) && (id !== 'voices' || data.tts));
   if (data.me.admin) return html`<${Manage} data=${data} tabs=${tabs} tab=${tabs.some(([id]) => id === tab.value) ? tab.value : 'general'}/>`;
   const mine = tabs.filter(([id]) => memberTabs.includes(id));
   // A link to an admin's tab, or to the glossary while no engine reads it, opens the first one.

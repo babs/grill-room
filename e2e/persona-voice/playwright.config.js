@@ -37,6 +37,7 @@ export default defineConfig({
       GRILL_ROOM_STT_TOKEN: process.env.STT_TOKEN,
       GRILL_ROOM_TTS_TOKEN: process.env.TTS_TOKEN,
       LOG_FORMAT: 'json',
+      LOG_LEVEL: process.env.PERSONA_VOICE_LOG_LEVEL || 'info',
     },
   },
 });

@@ -48,6 +48,14 @@ window.grillTab = tab;
 // the STT worker hears.
 let presence = new Map();
 let transcribed = new Set();
+// Personas speak in the call (spec 013): ttsOn when the server offers it, ttsLive the pod's states
+// by persona id, voiceList the catalogue the voice picker shows, loaded once.
+let ttsOn = false;
+let ttsLive = { pod: false, personas: {} };
+let voiceList = null;
+// The personas this listener muted, by id, per room in this browser (013-AC28).
+const personaMutedKey = 'grill-room-persona-muted:' + roomID;
+const personaMuted = new Set(JSON.parse(localStorage.getItem(personaMutedKey) || '[]').map(String));
 // cardFor is the name the open details card describes (009-AC36).
 let cardFor = null;
 // hoverTimer delays the card on hover; hideTimer is the grace before it closes.
@@ -112,6 +120,7 @@ async function loadRoom() {
   renderBlocked();
   renderApprovals();
   $('voice').hidden = !data.voice;
+  ttsOn = !!data.tts;
   showManage();
   // An appointment or a step-down changes who turns plugins on (Capabilities).
   renderPersonaSheet();
@@ -1763,6 +1772,10 @@ function connect() {
   es.addEventListener('plugins', () => loadPlugins().catch(console.error));
   es.addEventListener('revoked', () => end('Your access to this room has ended.'));
   es.addEventListener('stt', (e) => showSTT(JSON.parse(e.data)));
+  es.addEventListener('tts', (e) => {
+    ttsLive = JSON.parse(e.data);
+    renderAgent();
+  });
   es.addEventListener('presence', (e) => {
     presence = new Map(JSON.parse(e.data).people.map((p) => [String(p.id), p]));
     renderParticipants();
@@ -1881,6 +1894,197 @@ function whyNot(p, st) {
   return '';
 }
 
+// The pill's run button (013-AC39): one constant, so its icon is a one-line change.
+const RUN_ICON = 'play';
+
+// personaVoice is the persona's state in the call while the tts pod reports it, null otherwise (013-AC29).
+function personaVoice(p) {
+  const st = ttsOn && ttsLive.pod && ttsLive.personas[p.id];
+  if (!st) return null;
+  if (st.state === 'speaking') return { icon: 'speaking', word: 'speaking', label: p.name + ' is speaking in the call' };
+  if (st.state === 'waiting') return { icon: 'speaking-wait', word: 'waiting to speak', label: p.name + ' is waiting to speak in the call' };
+  return null;
+}
+
+// personaPill builds a persona's pill: a click opens its card, ▶ runs it, the speaker mutes it for
+// this listener (013-AC39, 013-AC28). A right-click, or a long press on a touch screen, opens its
+// sheet (009-AC4). iOS fires no contextmenu: a press held 500 ms does it there.
+function personaPill(id) {
+  const pill = document.createElement('span');
+  pill.className = 'persona-pill';
+  pill.dataset.id = id;
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'persona';
+  const led = document.createElement('span');
+  led.className = 'led';
+  led.setAttribute('role', 'img');
+  const vstate = span('vstate', '');
+  vstate.setAttribute('aria-hidden', 'true');
+  b.append(led, span('badge', ''), span('pname', ''), watchIcon(), vstate, span('pstate', ''));
+  let held = 0;
+  let longPressed = false;
+  const pid = () => Number(pill.dataset.id);
+  b.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    openPersonaSheet(pid());
+  });
+  b.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'touch') return;
+    longPressed = false;
+    held = setTimeout(() => {
+      longPressed = true;
+      openPersonaSheet(pid());
+    }, 500);
+  });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) b.addEventListener(ev, () => clearTimeout(held));
+  b.addEventListener('click', (e) => {
+    if (longPressed) {
+      longPressed = false;
+      e.preventDefault();
+      return;
+    }
+    openPersonaCard(pid(), pill);
+  });
+  const run = document.createElement('button');
+  run.type = 'button';
+  run.className = 'persona-run';
+  run.append(grillIcon(RUN_ICON));
+  run.addEventListener('click', () => askPersona(pid()));
+  const hear = document.createElement('button');
+  hear.type = 'button';
+  hear.className = 'persona-hear';
+  hear.hidden = true;
+  hear.addEventListener('click', () => setPersonaMuted(pid(), !personaMuted.has(String(pid()))));
+  pill.append(b, run, hear);
+  return pill;
+}
+
+// askPersona runs the persona now, or says why not (005-AC35).
+function askPersona(id) {
+  const p = personaByID(id);
+  if (!p) return;
+  const why = whyNot(p, personaState(p));
+  if (why) return explain(p.badge + ' ' + p.name, why);
+  pressPersona(id, false);
+}
+
+// setPersonaMuted mutes a persona for this listener only: its track is unsubscribed, which saves
+// the bandwidth too, and the choice is kept for the room in this browser (013-AC28).
+function setPersonaMuted(id, muted) {
+  if (muted) personaMuted.add(String(id));
+  else personaMuted.delete(String(id));
+  localStorage.setItem(personaMutedKey, JSON.stringify([...personaMuted]));
+  const bot = voice && voice.remoteParticipants.get('persona-' + id);
+  if (bot) {
+    for (const pub of bot.audioTrackPublications.values()) {
+      // The element goes at once: LiveKit reports the unsubscription only later, if at all.
+      if (muted) pub.track?.detach().forEach((el) => el.remove());
+      pub.setSubscribed(!muted && !deaf);
+    }
+  }
+  renderAgent();
+}
+
+// personaMutedIdentity reports a LiveKit participant as a persona this listener muted.
+const personaMutedIdentity = (identity) => identity.startsWith('persona-') && personaMuted.has(identity.slice(8));
+
+// The persona card (013-AC39): what the persona is set to and what this listener can do with it.
+let personaCardFor = 0;
+let personaCardSeen = '';
+function openPersonaCard(id, anchor) {
+  personaCardFor = id;
+  personaCardSeen = '';
+  renderPersonaCard();
+  const card = $('persona-card');
+  if (!card.matches(':popover-open')) card.showPopover();
+  grillPlace(card, anchor);
+  card.querySelector('button, input')?.focus();
+}
+$('persona-card').addEventListener('toggle', (e) => { if (e.newState === 'closed') personaCardFor = 0; });
+
+function renderPersonaCard() {
+  const card = $('persona-card');
+  const p = personaCardFor && personaByID(personaCardFor);
+  if (!p) {
+    if (card.matches(':popover-open')) card.hidePopover();
+    return;
+  }
+  const st = personaState(p);
+  const vs = personaVoice(p);
+  const muted = personaMuted.has(String(p.id));
+  const key = JSON.stringify([p, st, vs, muted, ttsOn, voiceList && voiceList.voices.length, whyNot(p, st)]);
+  if (key === personaCardSeen) return;
+  personaCardSeen = key;
+  // A redraw keeps the focus on the control that had it: a keyboard user toggling Mute stays on it.
+  const focused = card.contains(document.activeElement) ? document.activeElement.id : '';
+  const title = document.createElement('h3');
+  title.id = 'persona-card-title';
+  title.append(span('badge persona-badge', p.badge), ' ' + p.name);
+  const rows = document.createElement('dl');
+  const row = (k, v) => {
+    const dt = document.createElement('dt');
+    dt.textContent = k;
+    const dd = document.createElement('dd');
+    dd.textContent = v;
+    rows.append(dt, dd);
+  };
+  row('State', vs ? vs.word : st.word);
+  row('Model', p.model + ' · effort ' + p.effort);
+  row('Speaks up', triggerWords(p));
+  if (ttsOn) row('In the call', p.speaks ? voiceName(p.voice) + (p.voice_rate && p.voice_rate !== 1 ? ' · rate ' + p.voice_rate : '') : 'Silent');
+  const parts = [title, rows];
+  if (ttsOn && p.speaks) {
+    const box = Object.assign(document.createElement('input'), { type: 'checkbox', checked: muted, id: 'persona-card-mute' });
+    box.addEventListener('change', () => setPersonaMuted(p.id, box.checked));
+    const l = document.createElement('label');
+    l.className = 'check';
+    l.append(box, ' Mute for me');
+    parts.push(l, Object.assign(document.createElement('p'), { className: 'hint', textContent: 'Only you stop hearing it; the others still do.' }));
+  }
+  const foot = document.createElement('div');
+  foot.className = 'row';
+  const ask = Object.assign(document.createElement('button'), { type: 'button', className: 'btn-primary', textContent: 'Ask ' + p.name + ' now' });
+  ask.addEventListener('click', () => {
+    card.hidePopover();
+    askPersona(p.id);
+  });
+  const edit = Object.assign(document.createElement('button'), { type: 'button', className: 'btn-secondary', textContent: 'Edit' });
+  edit.setAttribute('aria-label', 'Edit ' + p.name);
+  edit.addEventListener('click', () => {
+    card.hidePopover();
+    openPersonaSheet(p.id);
+  });
+  ask.id = 'persona-card-ask';
+  edit.id = 'persona-card-edit';
+  foot.append(ask, edit);
+  parts.push(foot);
+  card.replaceChildren(...parts);
+  if (focused) $(focused)?.focus();
+}
+
+// voiceName says a catalogue voice as the picker does, "Alba (English)".
+function voiceName(id) {
+  const v = voiceList && voiceList.voices.find((x) => x.id === id);
+  if (!v) return id || 'its default voice';
+  return v.name + ' (' + langName(v.lang) + ')';
+}
+
+const langName = (l) => ({ fr: 'French', en: 'English' }[l] || l);
+
+// loadVoices reads the catalogue once, with the browser's language for a room with no line yet
+// (013-AC16), then redraws what shows voices.
+async function loadVoices() {
+  if (!ttsOn || voiceList) return;
+  const lang = (navigator.language || 'en').toLowerCase().startsWith('fr') ? 'fr' : 'en';
+  const res = await netFetch(api + '/voices?lang=' + lang);
+  if (!res.ok) return;
+  voiceList = await res.json();
+  staleSheet();
+  renderPersonaSheet();
+  renderPersonaCard();
+}
+
 function renderAgent() {
   hidePairingOnceConnected();
   // The app's page is on this computer only when one of my apps is connected (daemon-r2).
@@ -1888,70 +2092,48 @@ function renderAgent() {
   const bar = $('persona-buttons');
   const kept = new Map([...bar.children].map((b) => [b.dataset.id, b]));
   const buttons = agent.personas.map((p) => {
-    let b = kept.get(String(p.id));
-    if (!b) {
-      b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'persona';
-      b.dataset.id = p.id;
-      const led = document.createElement('span');
-      led.className = 'led';
-      led.setAttribute('role', 'img');
-      const badge = document.createElement('span');
-      badge.className = 'badge';
-      const name = document.createElement('span');
-      name.className = 'pname';
-      const word = document.createElement('span');
-      word.className = 'pstate';
-      b.append(led, badge, name, watchIcon(), word);
-      // A right-click, or a long press on a touch screen, opens that persona's sheet (009-AC4). iOS fires
-      // no contextmenu: a press held 500 ms does it there, and the click that follows is dropped.
-      let held = 0;
-      let longPressed = false;
-      b.addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-        openPersonaSheet(Number(b.dataset.id));
-      });
-      b.addEventListener('pointerdown', (e) => {
-        if (e.pointerType !== 'touch') return;
-        longPressed = false;
-        held = setTimeout(() => {
-          longPressed = true;
-          openPersonaSheet(Number(b.dataset.id));
-        }, 500);
-      });
-      for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) b.addEventListener(ev, () => clearTimeout(held));
-      b.addEventListener('click', (e) => {
-        if (longPressed) {
-          longPressed = false;
-          e.preventDefault();
-          return;
-        }
-        const p = personaByID(Number(b.dataset.id));
-        const why = p && whyNot(p, personaState(p));
-        if (why) return explain(p.badge + ' ' + p.name, why);
-        pressPersona(Number(b.dataset.id), false);
-      });
-    }
+    let pill = kept.get(String(p.id));
+    if (!pill) pill = personaPill(p.id);
+    const b = pill.querySelector('button.persona');
     const st = personaState(p);
     const why = whyNot(p, st);
-    b.style.setProperty('--persona', p.colour);
-    b.setAttribute('aria-label', 'Ask ' + p.name + (p.watches_notes ? ', watches the notes' : ''));
+    const voiceSt = personaVoice(p);
+    pill.dataset.id = p.id;
+    pill.dataset.name = p.name;
+    pill.style.setProperty('--persona', p.colour);
+    b.setAttribute('aria-label', p.name + (p.watches_notes ? ', watches the notes' : '') + ': ' + (voiceSt ? voiceSt.label : st.label) + '. Open its card');
     markWatch(b.querySelector('.watch'), p.watches_notes);
     b.dataset.name = p.name;
     b.querySelector('.badge').textContent = p.badge;
     b.querySelector('.pname').textContent = p.name;
     const locked = agent.online && !canPress();
-    b.querySelector('.pstate').textContent = locked ? 'locked' : st.word;
+    b.querySelector('.pstate').textContent = voiceSt ? voiceSt.word : locked ? 'locked' : st.word;
     const led = b.querySelector('.led');
     led.className = 'led ' + st.cls + (locked ? ' locked' : '');
     led.setAttribute('aria-label', st.label);
+    // Speaking or waiting to speak: an icon and a word, never the colour alone (013-AC29).
+    const vs = b.querySelector('.vstate');
+    vs.hidden = !voiceSt;
+    vs.className = 'vstate' + (voiceSt ? ' ' + voiceSt.icon : '');
+    vs.replaceChildren(...(voiceSt ? [grillIcon(voiceSt.icon)] : []));
+    b.dataset.tip = voiceSt ? voiceSt.label : st.label;
+    const run = pill.querySelector('.persona-run');
+    run.setAttribute('aria-label', 'Ask ' + p.name + ' now');
     // Not disabled: a press must still reach the reason.
-    b.setAttribute('aria-disabled', String(!!why));
-    b.dataset.tip = why || st.label;
-    return b;
+    run.setAttribute('aria-disabled', String(!!why));
+    run.dataset.tip = why || 'Ask ' + p.name + ' now';
+    const hear = pill.querySelector('.persona-hear');
+    const muted = personaMuted.has(String(p.id));
+    hear.hidden = !ttsOn || !p.speaks;
+    hear.setAttribute('aria-pressed', String(muted));
+    hear.setAttribute('aria-label', 'Mute ' + p.name + ' for me');
+    hear.dataset.tip = muted ? p.name + ' is muted for you: hear it again' : 'Mute ' + p.name + ' for you';
+    hear.replaceChildren(grillIcon(muted ? 'volume-off' : 'volume'));
+    return pill;
   });
   if (buttons.length !== bar.children.length || buttons.some((b, i) => bar.children[i] !== b)) bar.replaceChildren(...buttons);
+  renderPersonaCard();
+  if (ttsOn && !voiceList) loadVoices().catch(console.error);
   const running = (agent.running || []).map((t) => [personaByID(t.persona_id), t]).filter(([p]) => p);
   $('agent-status').textContent = !agent.online ? (agent.reason || 'AI offline')
     : running.length ? running.map(([p, t]) => turnText(p, t)).join(', ') + '…' : agent.personas.length === 0 ? 'No persona: add one.' : '';
@@ -2283,7 +2465,7 @@ function personaForm(p) {
     grid(field('Name', input('name', p.name, { maxLength: 30, required: true })),
       field('Badge', input('badge', p.badge, { maxLength: 8, required: true })),
       field('Colour', input('colour', p.colour, { type: 'color' }))),
-    field('Persona text', text));
+    field('Persona text', text), ...(ttsOn ? [voiceBlock(p, input)] : []));
   const use = contextUse(p);
   const model = panel('model',
     grid(field('Model', picker('model', agent.models, p.model)), field('Effort', picker('effort', agent.efforts, p.effort)),
@@ -2335,7 +2517,7 @@ function personaForm(p) {
   form.append(identity, model, triggers, capabilities, actions);
   // The capabilities' switches apply at once and carry no name: only named fields wait for Save.
   const fields = [...form.elements].filter((el) => el.name);
-  const valueOf = (el) => (el.type === 'checkbox' ? el.checked : el.value);
+  const valueOf = (el) => (el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value);
   let initial = fields.map(valueOf);
   const mark = () => {
     const n = fields.filter((el, i) => valueOf(el) !== initial[i]).length;
@@ -2616,12 +2798,80 @@ function pluginsBlock(p) {
   return box;
 }
 
+// voiceBlock is the persona in the call (013-AC26, AC27, AC37): whether it speaks, its voice, each
+// with a sample and its credit, and its rate.
+function voiceBlock(p, input) {
+  const box = document.createElement('fieldset');
+  box.className = 'persona-voice';
+  const legend = document.createElement('legend');
+  legend.textContent = 'In the call';
+  const speaks = input('speaks', '', { type: 'checkbox', checked: !!p.speaks });
+  const sl = document.createElement('label');
+  sl.className = 'check';
+  sl.append(speaks, ' Speaks in the call');
+  box.append(legend, sl, Object.assign(document.createElement('p'), { className: 'hint',
+    textContent: 'After its turns it says a short line while someone is in the call. Each listener can mute it for themselves.' }));
+  if (!voiceList) {
+    box.append(Object.assign(document.createElement('p'), { className: 'hint', textContent: 'Loading the voices…' }));
+    loadVoices().catch(console.error);
+  } else {
+    box.append(voicePicker(p));
+  }
+  box.append(field('Speaking rate', input('voice_rate', String(p.voice_rate || 1), { type: 'number', min: 0.9, max: 1.3, step: 0.05, required: true })));
+  return box;
+}
+
+// voicePicker lists the catalogue: name, native language, a sample in the room's language and the
+// credit, on hover, focus or a tap. A voice another persona has is marked, and may be picked anyway.
+function voicePicker(p) {
+  const list = document.createElement('div');
+  list.className = 'voice-list';
+  list.setAttribute('role', 'radiogroup');
+  list.setAttribute('aria-label', 'Voice of ' + p.name);
+  for (const v of voiceList.voices) {
+    const row = document.createElement('div');
+    row.className = 'voice-opt';
+    const radio = Object.assign(document.createElement('input'), { type: 'radio', name: 'voice', value: v.id, checked: p.voice === v.id, defaultChecked: p.voice === v.id });
+    const other = agent.personas.find((o) => o.id !== p.id && o.voice === v.id);
+    const l = document.createElement('label');
+    l.append(radio, ' ' + v.name, span('hint', ' ' + langName(v.lang) + (other ? ' · ' + other.name + ' has it' : '')));
+    const lang = v.samples.includes(voiceList.lang) ? voiceList.lang : v.samples[0];
+    const play = Object.assign(document.createElement('button'), { type: 'button', className: 'btn-icon voice-play', disabled: !lang });
+    play.setAttribute('aria-label', 'Play a sample of ' + v.name);
+    play.dataset.tip = lang ? 'Play a sample of ' + v.name : 'No sample yet';
+    play.append(grillIcon('play'));
+    play.addEventListener('click', () => {
+      const a = new Audio(api + '/voices/' + encodeURIComponent(v.id) + '/' + lang);
+      a.play().catch((err) => personasStatus('Could not play the sample: ' + err.message, true));
+    });
+    const credit = Object.assign(document.createElement('button'), { type: 'button', className: 'btn-icon voice-credit' });
+    credit.setAttribute('aria-label', 'Credit for ' + v.name);
+    credit.dataset.tip = v.credit + '.';
+    credit.append(grillIcon('info'));
+    // Touch has no hover: a tap shows the credit.
+    credit.addEventListener('click', () => grillTip.show(credit));
+    row.append(l, play, credit);
+    list.append(row);
+  }
+  return list;
+}
+
 // formFields reads the inputs' own values: FormData would turn the text's line breaks into CRLF.
 function formFields(form) {
   const v = (name) => form.elements.namedItem(name).value;
   return { name: v('name'), badge: v('badge'), colour: v('colour'), model: v('model'), effort: v('effort'), text: v('text'),
     ...triggerFields(v('trigger'), Number(v('every'))), self_call: form.elements.namedItem('self_call').checked,
-    autocompact: v('autocompact') ? Math.round(Number(v('autocompact')) * 1000) : 0, ...watchField(form) };
+    autocompact: v('autocompact') ? Math.round(Number(v('autocompact')) * 1000) : 0, ...watchField(form), ...voiceFields(form) };
+}
+
+// voiceFields is the persona in the call, sent only when the sheet shows it (013-AC26, AC27, AC37).
+function voiceFields(form) {
+  const speaks = form.elements.namedItem('speaks');
+  if (!speaks) return {};
+  const out = { speaks: speaks.checked, voice_rate: Number(form.elements.namedItem('voice_rate').value) };
+  const picked = form.querySelector('input[name=voice]:checked');
+  if (picked) out.voice = picked.value;
+  return out;
 }
 
 // watchField sends the notes watcher role only when the form changed it: a sheet drawn before
@@ -3554,7 +3804,9 @@ function saveDeaf() {
 
 function hearOthers(on) {
   for (const rp of voice.remoteParticipants.values()) {
-    for (const pub of rp.audioTrackPublications.values()) pub.setSubscribed(on);
+    // A persona this listener muted stays unsubscribed when the room comes back (013-AC28).
+    const want = on && !personaMutedIdentity(rp.identity);
+    for (const pub of rp.audioTrackPublications.values()) pub.setSubscribed(want);
   }
 }
 
@@ -3592,7 +3844,7 @@ async function joinVoice() {
     room = new LK.Room({ audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
     room.on(LK.RoomEvent.TrackSubscribed, (track, pub, p) => {
       if (track.kind !== 'audio') return;
-      if (deaf) return pub.setSubscribed(false);
+      if (deaf || personaMutedIdentity(p.identity)) return pub.setSubscribed(false);
       const el = track.attach();
       el.dataset.pid = p.identity;
       $('voice-audio').append(el);
@@ -3646,6 +3898,8 @@ async function joinVoice() {
 // and the audio's connection from here; nothing leaves the page.
 window.grillDiag = {
   roomName: () => roomName,
+  // Whether this page receives a participant's audio, by LiveKit identity: the e2e reads a mute (013-AC28).
+  subscribed: (identity) => !!voice && [...(voice.remoteParticipants.get(identity)?.audioTrackPublications.values() || [])].some((p) => p.isSubscribed),
   stream: () => (!events ? 'not open' : ['connecting', 'open', 'closed'][events.readyState]),
   voice: async () => {
     if (!voice) return { state: 'not in the audio', stats: null };

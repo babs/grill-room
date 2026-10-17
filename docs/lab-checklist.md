@@ -43,6 +43,18 @@ On a desktop Chrome with 4 cores or more, after a deploy. It takes about two min
 4. Turn the option off and say another sentence. Within about 5 s the next line reads "Transcribed by the server".
 5. Delete the room as above.
 
+## Personas speak in the call (013-AC36)
+
+Needs the `tts` pod (`kubectl -n grill-room get deploy tts`) and an AI host for the room. Use headphones on one side so its speakers do not feed its mic.
+
+1. Create a room from the Retro starter: Facilitator and Secretary both speak in the call. Join the audio on the phone and the laptop.
+2. Each speaking persona's pill shows a speaker button; a click on a pill opens its card, which names its voice.
+3. Ask Facilitator, then Secretary, with the ▶ on their pills. When Facilitator's turn ends its pill shows "speaking" and you hear a short line in its voice; if Secretary's turn ends meanwhile, its pill shows "waiting to speak" until Facilitator is done, then it speaks in another voice.
+4. While Facilitator speaks, say a sentence on the phone. It stops at once, its pill says "waiting to speak", and once the room has been quiet a second it says the cut sentence again from its start.
+5. No voice line in the chat carries a persona's words: only yours are written down.
+6. On the laptop, press the speaker on Facilitator's pill: you stop hearing it, the phone still does. Reload: it stays muted for you. Press it again.
+7. Delete the room as above.
+
 ## Notifications on an Android phone (005-AC24)
 
 `make e2e-push` proves a push goes through Chrome's push service to a desktop Chrome. This check covers a phone, with the browser closed. It takes about five minutes.

@@ -12,7 +12,7 @@ test('personas: add, edit, queue', async ({ browser, request, baseURL }) => {
   test.setTimeout(180_000);
   const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
   await expect(alice.locator('button.persona')).toHaveCount(1);
-  await expect(alice.getByRole('button', { name: 'Ask Grill' })).toContainText('🔥');
+  await expect(alice.locator('button.persona[data-name="Grill"]')).toContainText('🔥');
 
   const panel = alice.locator('#personas');
   await menuItem(alice, 'Personas');

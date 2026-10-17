@@ -101,10 +101,15 @@ if [[ -n $image_tts ]]; then
 		-e APP_ROOM_TOKEN="$TTS_TOKEN" -e APP_PORT="$PERSONA_VOICE_TTS_METRICS_PORT" -e APP_LEAVE_AFTER_S=5 -e APP_CPU_THREADS="${PERSONA_VOICE_TTS_THREADS:-1}" -e APP_LOG_LEVEL="${PERSONA_VOICE_TTS_LOG_LEVEL:-info}" "$image_tts" >/dev/null
 else
 	mkdir -p "$out"
-	APP_ROOM_TOKEN="$TTS_TOKEN" APP_PORT="$PERSONA_VOICE_TTS_METRICS_PORT" APP_ENGINE=fake APP_LEAVE_AFTER_S=5 \
+	APP_ROOM_TOKEN="$TTS_TOKEN" APP_PORT="$PERSONA_VOICE_TTS_METRICS_PORT" APP_ENGINE=fake APP_LEAVE_AFTER_S=5 APP_LOG_LEVEL="${PERSONA_VOICE_TTS_LOG_LEVEL:-info}" \
 		uv run --directory ../tts --frozen python -m grill_tts >"$PWD/$out/tts.log" 2>&1 &
 	tts_pid=$!
 fi
 wait_http "http://127.0.0.1:$PERSONA_VOICE_TTS_METRICS_PORT/healthz" 120 || die "the tts pod did not come up"
+
+# A real Opus sample for the voice picker's ▶, written the way the image's build writes them.
+mkdir -p "$out"
+export PERSONA_VOICE_SAMPLE="$PWD/$out/sample.ogg"
+uv run --directory ../tts --frozen python -c 'import sys, numpy as n, soundfile as f; t = n.arange(24000) / 24000; f.write(sys.argv[1], (0.1 * n.sin(2 * n.pi * 220 * t)).astype("float32"), 24000, format="OGG", subtype="OPUS")' "$PERSONA_VOICE_SAMPLE"
 
 pnpm exec playwright test -c persona-voice/playwright.config.js "$@"
