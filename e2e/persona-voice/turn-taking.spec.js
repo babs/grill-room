@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { test, expect } from '../fixtures.js';
 import { snoozePush, snoozeKey } from '../quiet-push.js';
-import { adminToken, ttsMetrics } from './playwright.config.js';
+import { adminToken, ttsMetrics, engine } from './playwright.config.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -158,6 +158,26 @@ function starts(rows, ms) {
   return out;
 }
 
+// words lists the loud runs of a series within [from, to] as [start, ms]; a run ends after 50 ms
+// under QUIET, longer than any dip inside a word and shorter than the fake engine's 100 ms gap.
+function words(rows, from, to) {
+  const out = [];
+  let run = null;
+  let quietSince = null;
+  for (const [at, db] of rows) {
+    if (at < from || at > to) continue;
+    if (db > LOUD) {
+      if (!run) out.push((run = [at, 0]));
+      run[1] = at - run[0];
+      quietSince = null;
+    } else if (run && db < QUIET) {
+      quietSince ??= at;
+      if (at - quietSince >= 50) run = null;
+    }
+  }
+  return out;
+}
+
 // loudAround reports a series loud within [t - before, t].
 const loudAround = (rows, t, before) => rows.some(([at, db]) => at >= t - before && at <= t && db > LOUD);
 
@@ -256,14 +276,30 @@ test('turn-taking in the call', async ({ browser, request }) => {
 
     // AC24: Secretary's line waits until Grill's ends.
     const queued = await now();
-    await speak('Secretary', 'Noted.');
-    await expect.poll(async () => onsetAfter((await levels())[ids.Secretary] || [], queued), { timeout: 120_000 }).toBeTruthy();
+    // Only the rows since queued: copying the whole history out stalls the meter's timers.
+    const since = (id) => alice.page.evaluate(([id, t]) => (window.levels[id] || []).filter(([at]) => at >= t), [id, queued]);
+    await speak('Secretary', 'Noted, I will add it to the minutes.');
+    await expect.poll(async () => onsetAfter(await since(ids.Secretary), queued), { timeout: 120_000 }).toBeTruthy();
     // Over the 300 ms the silence cap leaves between sentences: a 1 s quiet is the line's end.
-    await expect.poll(async () => silentFrom((await levels())[ids.Grill], queued, 1000), { timeout: 10_000 }).not.toBeNull();
-    L = await levels();
-    const secStart = onsetAfter(L[ids.Secretary], queued);
-    expect(silentFrom(L[ids.Grill], queued, 1000)).toBeLessThanOrEqual(secStart);
-    expect(L[ids.Grill].filter(([at, db]) => at > secStart && db > LOUD)).toEqual([]);
+    await expect.poll(async () => silentFrom(await since(ids.Grill), queued, 1000), { timeout: 10_000 }).not.toBeNull();
+    const sec = await since(ids.Secretary);
+    const grill = await since(ids.Grill);
+    const secStart = onsetAfter(sec, queued);
+    expect(silentFrom(grill, queued, 1000)).toBeLessThanOrEqual(secStart);
+    expect(grill.filter(([at, db]) => at > secStart && db > LOUD)).toEqual([]);
+    // The listener hears the whole line, its first word included: 8 words of 250 ms on the fake
+    // engine; real speech has no such shape.
+    if (engine === 'fake') {
+      await expect.poll(now, { timeout: 10_000 }).toBeGreaterThan(secStart + 3500);
+      const said = words(await since(ids.Secretary), secStart, secStart + 3500);
+      expect(said.length, JSON.stringify(said)).toBe(8);
+      expect(said[0][1], JSON.stringify(said)).toBeGreaterThanOrEqual(200);
+    }
+  } catch (e) {
+    // What the listener heard, for the next failure's diagnosis.
+    const L = await Promise.race([alice.page.evaluate(() => window.levels), new Promise((r) => setTimeout(r, 5000, null))]).catch(() => null);
+    await test.info().attach('levels', { body: JSON.stringify(L), contentType: 'application/json' }).catch(() => {});
+    throw e;
   } finally {
     await alice.ctx.close();
     await bob.ctx.close();
