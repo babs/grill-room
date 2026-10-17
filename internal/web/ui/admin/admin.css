@@ -45,6 +45,8 @@ form.limit input { width: 8rem; }
   #rooms .main .meta { display: none; }
   #audit .details { flex-basis: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #audit .cell[data-label]::before { content: none; }
+  /* A profile's name on one line: two of them and wrapped values pass 120 px. Its tip has it whole. */
+  #profiles .name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #sessions .signed-in { display: none; }
 }
 .merge-pick label { min-width: 0; max-width: 100%; }

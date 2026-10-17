@@ -413,7 +413,7 @@ function Profiles() {
       <ul class="list-rows">${list.map((p) => {
         const who = p.name || p.uuid;
         return html`<li class="list-row" id=${'profile-' + p.id} key=${p.id}>
-        <div class="main"><span class="name" data-tip=${'Profile ' + p.uuid}>${p.name || 'no name'}</span><div class="meta">${p.email || 'no email'}</div></div>
+        <div class="main"><span class="name" data-tip=${(p.name ? p.name + ' · ' : '') + 'Profile ' + p.uuid}>${p.name || 'no name'}</span><div class="meta">${p.email || 'no email'}</div></div>
         <div class="cells"><span class="cell rooms" data-tip=${p.rooms.map((r) => r.room_name).join(', ')}>${p.rooms.length} ${p.rooms.length === 1 ? 'room' : 'rooms'}</span>
           <span class="cell" data-label="Skills">${p.skills}</span><span class="cell" data-label="Last activity">${ago(p.last_activity)}</span>
           <span class="cell" data-label="Rooms created">${p.rooms_created} of ${limit(p)}</span></div>
