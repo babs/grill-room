@@ -2,7 +2,9 @@
 # The persona voice e2e (spec 013): LiveKit, the STT worker and the tts pod on the host network, on
 # loopback ports apart from the other e2e stacks (7701-7705, LiveKit 7891-7893). Playwright then
 # starts the e2e server against them and drives Chrome. The tts pod runs from source on its fake
-# engine, or, with PERSONA_VOICE_TTS_IMAGE set (a `make tts-image` build), on the real one.
+# engine, or on Pocket's ungated weights with PERSONA_VOICE_SOURCE_ENGINE=pocket, or, with
+# PERSONA_VOICE_TTS_IMAGE set (a `make tts-image` build), on the image. PERSONA_VOICE_ECHO_IMAGE (a
+# build of persona-voice/echo/) adds a Chrome with its own PipeWire loop on port 7705 (013-AC35).
 # Keys and tokens are generated per run and only ever passed through the environment. Everything
 # started goes with the script, a failure or an interrupt included; logs stay under test-results/.
 # Usage, from e2e/: persona-voice/run.sh [playwright args...]
@@ -11,11 +13,14 @@ set -euo pipefail
 readonly image_livekit=livekit/livekit-server:v1.13.9
 readonly image_stt=${PERSONA_VOICE_STT_IMAGE:-grill-stt:local}
 readonly image_tts=${PERSONA_VOICE_TTS_IMAGE:-}
+readonly image_echo=${PERSONA_VOICE_ECHO_IMAGE:-}
+readonly source_engine=${PERSONA_VOICE_SOURCE_ENGINE:-fake}
 run_id="$(date +%s)-$$"
 readonly run_id
 readonly livekit="grill-room-test-livekit-$run_id"
 readonly stt="grill-room-test-stt-$run_id"
 readonly tts="grill-room-test-tts-$run_id"
+readonly echo="grill-room-test-echo-$run_id"
 readonly out=test-results/persona-voice
 tts_pid=""
 
@@ -26,7 +31,7 @@ export PERSONA_VOICE_TTS_METRICS_PORT=7704
 export PERSONA_VOICE_LIVEKIT_PORT=7891
 export PERSONA_VOICE_STT_CONTAINER=$stt
 export PERSONA_VOICE_ENGINE=${image_tts:+pocket}
-export PERSONA_VOICE_ENGINE=${PERSONA_VOICE_ENGINE:-fake}
+export PERSONA_VOICE_ENGINE=${PERSONA_VOICE_ENGINE:-$source_engine}
 
 die() {
 	echo "persona-voice: $*" >&2
@@ -42,7 +47,7 @@ cleanup() {
 		kill "$tts_pid" 2>/dev/null || true
 		wait "$tts_pid" 2>/dev/null || true
 	fi
-	docker rm -f "$livekit" "$stt" "$tts" >/dev/null 2>&1 || true
+	docker rm -f "$livekit" "$stt" "$tts" "$echo" >/dev/null 2>&1 || true
 }
 
 # wait_http polls url until it answers 2xx, for at most $2 seconds.
@@ -101,11 +106,22 @@ if [[ -n $image_tts ]]; then
 		-e APP_ROOM_TOKEN="$TTS_TOKEN" -e APP_PORT="$PERSONA_VOICE_TTS_METRICS_PORT" -e APP_LEAVE_AFTER_S=5 -e APP_CPU_THREADS="${PERSONA_VOICE_TTS_THREADS:-1}" -e APP_LOG_LEVEL="${PERSONA_VOICE_TTS_LOG_LEVEL:-info}" "$image_tts" >/dev/null
 else
 	mkdir -p "$out"
-	APP_ROOM_TOKEN="$TTS_TOKEN" APP_PORT="$PERSONA_VOICE_TTS_METRICS_PORT" APP_ENGINE=fake APP_LEAVE_AFTER_S=5 APP_LOG_LEVEL="${PERSONA_VOICE_TTS_LOG_LEVEL:-info}" \
+	APP_ROOM_TOKEN="$TTS_TOKEN" APP_PORT="$PERSONA_VOICE_TTS_METRICS_PORT" APP_ENGINE="$source_engine" APP_MODELS_DIR=/nonexistent APP_CPU_THREADS=1 APP_LEAVE_AFTER_S=5 APP_LOG_LEVEL="${PERSONA_VOICE_TTS_LOG_LEVEL:-info}" \
 		uv run --directory ../tts --frozen python -m grill_tts >"$PWD/$out/tts.log" 2>&1 &
 	tts_pid=$!
 fi
-wait_http "http://127.0.0.1:$PERSONA_VOICE_TTS_METRICS_PORT/healthz" 120 || die "the tts pod did not come up"
+wait_http "http://127.0.0.1:$PERSONA_VOICE_TTS_METRICS_PORT/healthz" 600 || die "the tts pod did not come up"
+
+if [[ -n $image_echo ]]; then
+	docker image inspect "$image_echo" >/dev/null 2>&1 || die "no $image_echo image: build persona-voice/echo/ first"
+	docker run -d --name "$echo" --network host --memory 2g --shm-size 1g "$image_echo" 7705 >/dev/null
+	export ECHO_BROWSER_WS=ws://127.0.0.1:7705/
+	deadline=$((SECONDS + 60))
+	until docker logs "$echo" 2>&1 | grep -q 'Listening on'; do
+		((SECONDS < deadline)) || die "the echo browser did not come up"
+		sleep 1
+	done
+fi
 
 # A real Opus sample for the voice picker's ▶, written the way the image's build writes them.
 mkdir -p "$out"
