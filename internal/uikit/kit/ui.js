@@ -487,20 +487,31 @@
   });
 
   const phone = matchMedia('(max-width: 40rem)');
+  // A page's own bar (data-header) folds into a ☰ at the left of its app header: a button in the
+  // content repeats the section heading under it. A sheet's bar has no header: its button stays in it.
+  /** @param {HTMLElement} nav */
+  const homeOf = (nav) => ('header' in nav.dataset && document.querySelector('.app-header')) || nav;
+  /** @param {HTMLElement} nav */
+  const menuOf = (nav) => /** @type {HTMLButtonElement | null} */ (homeOf(nav).querySelector(':scope > .tabs-menu'));
+  /** @param {Element} el @returns {HTMLElement | null} the bar el or its ☰ belongs to */
+  const barOf = (el) => (el.closest('.app-header > .tabs-menu') ? document.querySelector('.tabs[data-header]') : el.closest('.tabs'));
   /**
    * foldTabs turns a tab bar that overflows a phone into one button, the menu icon and the current
    * tab's name, that opens the tabs as a list (tokens.css): a bar scrolled sideways hides that more
-   * tabs exist. The button lives in the bar, so a page that redraws or drops the bar takes it along.
+   * tabs exist. The button lives in the bar, or the page's header, so a page that redraws or drops
+   * either takes it along; the next call makes a new one.
    * @param {HTMLElement} nav
    * @param {Element} cur the current tab
    */
   const foldTabs = (nav, cur) => {
-    let b = /** @type {HTMLButtonElement | null} */ (nav.querySelector(':scope > .tabs-menu'));
+    let b = menuOf(nav);
     if (!b) {
+      const home = homeOf(nav);
       b = Object.assign(document.createElement('button'), { type: 'button', className: 'tabs-menu' });
       b.setAttribute('aria-expanded', 'false');
-      b.append(window.grillIcon('menu'), document.createElement('span'));
-      nav.prepend(b);
+      // In the header the icon alone shows: the name stays the button's.
+      b.append(window.grillIcon('menu'), Object.assign(document.createElement('span'), { className: home === nav ? '' : 'sr-only' }));
+      home.prepend(b);
       // A page that redrew the bar's tabs dropped the old button, not the list's open state.
       openTabs(nav, false);
     }
@@ -516,13 +527,16 @@
   const openTabs = (nav, on) => {
     if (on) nav.dataset.open = '';
     else delete nav.dataset.open;
-    nav.querySelector(':scope > .tabs-menu')?.setAttribute('aria-expanded', String(on));
+    const b = menuOf(nav);
+    b?.setAttribute('aria-expanded', String(on));
+    // A header's list sticks under the header, whatever its height once wrapped.
+    if (b && !nav.contains(b)) nav.style.top = on ? /** @type {HTMLElement} */ (b.parentElement).offsetHeight + 'px' : '';
   };
   document.addEventListener('click', (e) => {
     const t = e.target instanceof Element ? e.target : null;
-    const nav = /** @type {HTMLElement | null | undefined} */ (t?.closest('.tabs[data-menu]'));
-    if (!nav || !t) return;
-    const b = /** @type {HTMLElement} */ (nav.querySelector(':scope > .tabs-menu'));
+    const nav = t && barOf(t);
+    if (!nav || !t || !('menu' in nav.dataset)) return;
+    const b = /** @type {HTMLElement} */ (menuOf(nav));
     const a = t.closest('a');
     if (t.closest('.tabs-menu')) openTabs(nav, !('open' in nav.dataset));
     else if (a && !(e.ctrlKey || e.metaKey || e.shiftKey || e.button)) {
@@ -534,15 +548,18 @@
     }
   });
   document.addEventListener('keydown', (e) => {
-    const nav = e.target instanceof Element ? /** @type {HTMLElement | null} */ (e.target.closest('.tabs[data-open]')) : null;
-    if (e.key !== 'Escape' || !nav) return;
+    const nav = e.target instanceof Element ? barOf(e.target) : null;
+    if (e.key !== 'Escape' || !nav || !('open' in nav.dataset)) return;
     // In a sheet, Escape closes the list, not the sheet.
     e.preventDefault();
     openTabs(nav, false);
-    /** @type {HTMLElement} */ (nav.querySelector(':scope > .tabs-menu')).focus();
+    menuOf(nav)?.focus();
   });
   document.addEventListener('pointerdown', (e) => {
-    for (const nav of document.querySelectorAll('.tabs[data-open]')) if (!(e.target instanceof Node && nav.contains(e.target))) openTabs(/** @type {HTMLElement} */ (nav), false);
+    const t = e.target instanceof Node ? e.target : null;
+    for (const nav of document.querySelectorAll('.tabs[data-open]')) {
+      if (!(t && (nav.contains(t) || menuOf(/** @type {HTMLElement} */ (nav))?.contains(t)))) openTabs(/** @type {HTMLElement} */ (nav), false);
+    }
   });
   // A turned phone may fit the tabs, or no longer.
   addEventListener('resize', () => { for (const nav of document.querySelectorAll('.tabs')) window.grillShowTab(nav); });

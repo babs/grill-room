@@ -112,9 +112,9 @@
 /* Tabs stay in reach in a long page or sheet (docs/design.md §5), on what they cover. */
 .tabs.sticky { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--bg); }
 .sheet .tabs.sticky { top: calc(-1 * var(--sp-4)); background: var(--surface); }
-.tabs :is(a, .tabs-menu):focus-visible { outline-offset: -2px; }
+.tabs :is(a, .tabs-menu):focus-visible, .app-header > .tabs-menu:focus-visible { outline-offset: -2px; }
 /* A bar that overflows a phone folds into one button that lists the tabs (kit/ui.js foldTabs). */
-.tabs > .tabs-menu { display: none; }
+.tabs > .tabs-menu, .app-header > .tabs-menu { display: none; }
 @media (max-width: 40rem) {
   .tabs { gap: 0; }
   .tabs a { padding: 0 var(--sp-3); }
@@ -123,6 +123,11 @@
   .tabs[data-menu] > .tabs-menu { display: inline-flex; min-height: 44px; padding: 0 var(--sp-3); border: 0; border-bottom: 3px solid var(--brand); border-radius: 0; background: transparent; font-size: var(--fs-sm); }
   .tabs[data-menu][data-open] > a { display: flex; flex-basis: 100%; border-bottom: 0; border-left: 3px solid transparent; }
   .tabs[data-menu][data-open] > a[aria-current=page] { border-left-color: var(--brand); }
+  /* A page's bar folds into the header's ☰: the header sticks, the bar shows only as its open list.
+     The header keeps one row: its title is cut first. */
+  body:has(.tabs[data-header][data-menu]) .app-header { position: sticky; top: 0; z-index: var(--z-sticky); flex-wrap: nowrap; column-gap: var(--sp-3); }
+  body:has(.tabs[data-header][data-menu]) .app-header > .tabs-menu { display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-1); min-width: 44px; min-height: 44px; margin: 0 calc(var(--sp-2) - var(--sp-3)) 0 calc(-1 * var(--sp-3)); padding: 0; border: 0; background: transparent; color: var(--chrome-text); }
+  .tabs[data-header][data-menu]:not([data-open], :has(> .tabs-menu)) { display: none; }
 }
 /* A page's content column, left-aligned under its tabs (docs/design.md §6); tables take the full
    width. */

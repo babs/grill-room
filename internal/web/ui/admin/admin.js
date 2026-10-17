@@ -846,7 +846,7 @@ function Shell() {
       <button type="button" id="logout" class="btn-secondary" onClick=${logout}>Sign out</button>
     </header>
     <main class=${view === 'instance' ? 'page' : 'page-wide'}>
-      <${TabBar} tabs=${views} active=${view} href=${(/** @type {string} */ id) => '#' + id} label="Views" cls="views sticky"/>
+      <${TabBar} tabs=${views} active=${view} href=${(/** @type {string} */ id) => '#' + id} label="Views" cls="views sticky" header/>
       ${notice.value && html`<p class="said bad" role="alert">${notice.value}</p>`}
       ${{ rooms: html`<${Rooms}/>`, profiles: html`<${Profiles}/>`, libraries: html`<${Libraries}/>`,
         pronunciation: html`<${Pronunciation}/>`, instance: html`<${InstanceView}/>`,

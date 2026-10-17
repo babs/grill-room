@@ -155,14 +155,12 @@ test('daemon tab bar keeps its tab styling', async ({ browser, request, baseURL 
     for (const viewport of [phone, desktop]) {
       await page.setViewportSize(viewport);
       const at = `${viewport.width}px`;
-      // A phone folds the bar into one button: the current tab's name over its underline.
-      const menu = page.locator('nav[aria-label=Sections] .tabs-menu');
+      // A phone folds the bar into the header's ☰, named after the current tab.
+      const menu = page.locator('.app-header > .tabs-menu');
       if (viewport === phone) {
-        await expect(menu).toHaveText('AI accounts');
-        const m = await menu.evaluate((e) => ({ height: e.getBoundingClientRect().height, border: getComputedStyle(e).borderBottomColor, width: getComputedStyle(e).borderBottomWidth }));
-        expect(m.height, at).toBeGreaterThanOrEqual(43.5);
-        expect(m.width, at).toBe('3px');
-        expect(m.border, at).not.toMatch(/rgba\(0, 0, 0, 0\)/);
+        await expect(menu).toHaveAccessibleName('AI accounts');
+        expect((await menu.boundingBox()).height, at).toBeGreaterThanOrEqual(43.5);
+        await expect(page.locator('nav[aria-label=Sections]')).toBeHidden();
       } else {
         await expect(menu).toBeHidden();
         const tabs = await page.locator('nav[aria-label=Sections] a').evaluateAll((els) => els.map((e) => {
