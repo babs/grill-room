@@ -129,10 +129,10 @@ async function metric(url, series) {
 }
 
 const LOUD = -40;
-// AC22's sample: 22 interruptions; one whose own audio reached the listener later than STALL_MS
-// after its file onset met a stalled media path, which no persona can beat, and is left out. At
-// least 20 stay, so the p95 is not their maximum.
-const INTERRUPTIONS = 22;
+// AC22's sample: an interruption whose own audio reached the listener later than STALL_MS after
+// its file onset met a stalled media path, which no persona can beat, and is left out. Bob cuts in
+// until 20 are kept, so the p95 is not their maximum.
+const MAX_INTERRUPTIONS = 30;
 const KEPT = 20;
 const STALL_MS = 250;
 // Where speech starts in each clip, from its samples.
@@ -198,7 +198,7 @@ test('turn-taking in the call', async ({ browser, request }) => {
       expect(r.status()).toBe(204);
     };
     // Each interruption says the cut sentence again from its start, so the line ends only once a
-    // sentence plays through: two 30-word sentences (the room's 60-word cap) outlast the 22.
+    // sentence plays through: two 30-word sentences (the room's 60-word cap) outlast every cut.
     const sentence = Array(3).fill('one two three four five six seven eight nine ten').join(' ') + '.';
 
     // AC21: Bob talks; the line queued meanwhile starts only after he stopped and the room was quiet.
@@ -219,7 +219,7 @@ test('turn-taking in the call', async ({ browser, request }) => {
     // AC22, AC23: interruptions while Grill speaks; each stops it, each quiet resumes it.
     const stops = [];
     const paths = [];
-    for (let i = 0; i < INTERRUPTIONS; i++) {
+    for (let i = 0; i < MAX_INTERRUPTIONS && paths.filter((p) => p <= STALL_MS).length < KEPT; i++) {
       const before = await now();
       await expect.poll(async () => onsetAfter((await levels())[ids.Grill], before), { timeout: 20_000 }).toBeTruthy();
       await bob.page.evaluate((n) => window.talk(n), 1 + (i % 3));
