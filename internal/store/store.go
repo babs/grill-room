@@ -88,6 +88,8 @@ type Participant struct {
 	PreviousName string `json:"previous_name,omitempty"`
 	// Self marks the caller's own seats in the room answer, so no profile id leaves (011-AC26).
 	Self bool `json:"self,omitempty"`
+	// NoProfile marks a seat without a profile, which a block cannot keep out (016-AC6).
+	NoProfile bool `json:"no_profile,omitempty"`
 }
 
 // Message is one line in a room.
@@ -891,6 +893,17 @@ ALTER TABLE participants ADD COLUMN end_reason TEXT CHECK (end_reason IN ('revok
 UPDATE participants SET removed_at = (SELECT revoked_at FROM invites i WHERE i.id = participants.invite_id), end_reason = 'revoked'
 	WHERE invite_id IN (SELECT id FROM invites WHERE revoked_at IS NOT NULL);
 CREATE INDEX participants_seated ON participants(room_id) WHERE removed_at IS NULL;
+`, `
+-- 016-AC13: a profile a room admin blocked from rejoining the room; name is theirs at removal.
+CREATE TABLE room_blocks (
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+	name TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	by_participant_id INTEGER REFERENCES participants(id) ON DELETE SET NULL,
+	PRIMARY KEY (room_id, profile_id)
+);
+CREATE INDEX room_blocks_profile ON room_blocks(profile_id);
 `}
 
 // uuidSQL is a random version 4 UUID; SQLite has no function for it.
@@ -1280,11 +1293,12 @@ type RevokeSeat struct {
 
 // RevokePlan is what revoking an invite does: Invites, sorted, are the ones it revokes; Lose the
 // people a cut removes; Keep the people with a seat in the chain who keep access through another
-// one; Removed the seats a cut ended.
+// one; Removed the seats a cut ended, and Daemons their apps, whose running turns the caller fails.
 type RevokePlan struct {
 	Invites    []int64
 	Lose, Keep []RevokeSeat
 	Removed    []int64
+	Daemons    []int64
 }
 
 // Why a seat ended (016-AC1).
@@ -1335,8 +1349,11 @@ func (s *Store) RevokeInvite(ctx context.Context, roomID string, inviteID int64,
 			plan.Lose, plan.Keep = []RevokeSeat{}, []RevokeSeat{}
 		} else {
 			revoke = inviteCut + `UPDATE invites SET revoked_at = ?3 WHERE id IN cut`
-			if plan.Removed, err = endSeats(ctx, tx, inviteCut+`UPDATE participants SET removed_at = ?3, end_reason = ?4
+			if plan.Removed, err = queryIDs(ctx, tx, inviteCut+`UPDATE participants SET removed_at = ?3, end_reason = ?4
 				WHERE invite_id IN chain AND removed_at IS NULL RETURNING id`, inviteID, roomID, at, EndRemoved); err != nil {
+				return fmt.Errorf("revoke invite %d: %w", inviteID, err)
+			}
+			if plan.Daemons, _, err = seatsGone(ctx, tx, roomID, plan.Removed); err != nil {
 				return fmt.Errorf("revoke invite %d: %w", inviteID, err)
 			}
 		}
@@ -1362,8 +1379,8 @@ func (s *Store) RevokeInvite(ctx context.Context, roomID string, inviteID int64,
 	return plan, err
 }
 
-// endSeats runs query, an UPDATE of participants returning the ids of the seats it ended.
-func endSeats(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]int64, error) {
+// queryIDs runs query, in tx, and returns the ids its rows hold, one per row.
+func queryIDs(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]int64, error) {
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -1459,7 +1476,8 @@ type JoinProfile struct {
 
 // Join adds a participant through a valid invite and records a system message announcing them,
 // in one transaction, creating its profile when prof asks. ErrNotFound if the invite is unknown or
-// revoked. The caller broadcasts.
+// revoked, ErrBlocked if a room admin blocked prof's profile from the room (016-AC13). The caller
+// broadcasts.
 func (s *Store) Join(ctx context.Context, inviteHash, name, tokenHash string, prof JoinProfile) (*Participant, *Message, error) {
 	var p *Participant
 	var m *Message
@@ -1484,6 +1502,15 @@ func join(ctx context.Context, tx *sql.Tx, inviteHash, name, tokenHash string, p
 		return nil, nil, fmt.Errorf("join: %w", err)
 	}
 	p.ProfileID = prof.ID
+	if p.ProfileID != 0 {
+		var blocked bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM room_blocks WHERE room_id = ? AND profile_id = ?)`, p.RoomID, p.ProfileID).Scan(&blocked); err != nil {
+			return nil, nil, fmt.Errorf("join: %w", err)
+		}
+		if blocked {
+			return nil, nil, ErrBlocked
+		}
+	}
 	if p.ProfileID == 0 && prof.RecoveryHash != "" {
 		if p.ProfileID, err = createProfile(ctx, tx, prof.RecoveryHash, prof.SessionHash); err != nil {
 			return nil, nil, fmt.Errorf("join: %w", err)

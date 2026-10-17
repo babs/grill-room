@@ -36,6 +36,8 @@ let ended = false;
 let refreshTimer;
 let wasIn = false;
 let participants = [];
+// departed marks the lines of people no longer in the room, by seat: "removed" or "left" (016-AC11).
+let departed = {};
 let myID = '';
 let myName = '';
 let hasProfile = false;
@@ -107,6 +109,7 @@ async function loadRoom() {
   myID = String(data.me.id);
   hasProfile = !!data.profile;
   meAdmin = !!data.me.admin;
+  departed = data.departed || {};
   $('doc-delete').hidden = !meAdmin;
   renameSenders();
   renderBlocked();
@@ -421,7 +424,9 @@ document.addEventListener('click', (e) => {
 function nameSender(li, el) {
   const p = participants.find((x) => String(x.id) === li.dataset.pid);
   const was = li.dataset.sender;
-  el.textContent = p ? p.name : was;
+  // A line of someone no longer in the room says why (016-AC11).
+  const gone = departed[li.dataset.pid];
+  el.textContent = (p ? p.name : was) + (gone ? ' (' + gone + ')' : '');
   // The details card says it (009-AC36): no native tooltip on author names.
   if (p && p.name !== was) el.dataset.writtenAs = was;
   else delete el.dataset.writtenAs;
@@ -2954,7 +2959,28 @@ function personActions(p, id) {
     acts.push({ label: 'Make AI host', run: () => makeHost(p) });
   }
   if (other && voiceParticipant(id)) acts.push({ volume: true });
+  // 016-AC6 016-AC12: a room admin removes others; anyone leaves. A room admin steps down first.
+  if (other && meAdmin) {
+    acts.push({ label: 'Remove from room…', disabled: p.admin ? 'Remove their room admin role first' : '', run: () => removePerson(p) });
+  }
+  if (!other) acts.push({ label: 'Leave room…', disabled: meAdmin ? 'Step down as room admin first' : '', run: leaveRoom });
   return acts;
+}
+
+async function removePerson(p) {
+  const box = document.createElement('label');
+  const block = document.createElement('input');
+  block.type = 'checkbox';
+  block.id = 'remove-block';
+  block.disabled = !!p.no_profile;
+  box.append(block, p.no_profile ? ' Block from rejoining: no profile, so no block' : ' Block from rejoining');
+  if (!(await grillConfirm('Remove ' + p.name + ' from the room?', 'Their messages stay.', 'Remove', false, box))) return;
+  sendJSON('DELETE', api + '/participants/' + p.id, { block: block.checked }).catch((err) => toast(err.message));
+}
+
+async function leaveRoom() {
+  if (!(await grillConfirm('Leave this room?', 'Your messages stay. A valid invite brings you back.', 'Leave'))) return;
+  sendJSON('DELETE', api + '/participants/' + myID).catch((err) => toast(err.message));
 }
 
 async function makeHost(p) {
@@ -2998,6 +3024,12 @@ function openPersonMenu(b, p, id, fromPointer) {
     it.type = 'button';
     it.textContent = a.label;
     if ('checked' in a) it.setAttribute('aria-pressed', String(a.checked));
+    // Not disabled: a disabled button shows no tip, and the tip says why.
+    if (a.disabled) {
+      it.setAttribute('aria-disabled', 'true');
+      it.dataset.tip = a.disabled;
+      return it;
+    }
     it.addEventListener('click', () => { menu.hidePopover(); a.run(); });
     return it;
   });

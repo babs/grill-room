@@ -296,6 +296,10 @@ func (s *Store) MergeProfiles(ctx context.Context, keep, merge int64) (*MergePro
 			{&moved.RoomsCreated, `UPDATE rooms SET creator_profile_id = ?1 WHERE creator_profile_id = ?2`},
 			{nil, `INSERT INTO room_admins(room_id, profile_id, created_at) SELECT room_id, ?1, created_at FROM room_admins WHERE profile_id = ?2 ON CONFLICT DO NOTHING`},
 			{&moved.RoomAdmins, `DELETE FROM room_admins WHERE profile_id = ?2`},
+			// 016-AC15: B's blocks become A's, one per room.
+			{nil, `INSERT INTO room_blocks(room_id, profile_id, name, created_at, by_participant_id) SELECT room_id, ?1, name, created_at, by_participant_id
+				FROM room_blocks WHERE profile_id = ?2 ON CONFLICT DO NOTHING`},
+			{nil, `DELETE FROM room_blocks WHERE profile_id = ?2`},
 			{&moved.Sessions, `UPDATE profile_sessions SET profile_id = ?1 WHERE profile_id = ?2`},
 			{nil, `DELETE FROM magic_links WHERE profile_id = ?2`},
 			{nil, `DELETE FROM recovery_links WHERE profile_id = ?2`},
