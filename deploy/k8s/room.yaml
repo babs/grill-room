@@ -116,6 +116,10 @@ spec:
               value: "${GRILL_ROOM_SMTP_FROM}"
             - name: GRILL_ROOM_DEVICE_STT_MODEL_DIR
               value: /models
+            # The pod's address, for the scrape (deploy/monitoring/room.yaml); the network policy
+            # admits nobody else to the port.
+            - name: GRILL_ROOM_METRICS_ADDR
+              value: ":7681"
           ports:
             - { name: http, containerPort: 7680 }
             - { name: metrics, containerPort: 7681 }

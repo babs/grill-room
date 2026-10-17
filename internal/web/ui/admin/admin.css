@@ -24,12 +24,15 @@ dd { margin: 0; }
 .link input { width: 100%; font-family: var(--mono); }
 form.limit label { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-sm); font-weight: 600; }
 form.limit input { width: 8rem; }
+.term-form > label { display: flex; flex-direction: column; gap: var(--sp-1); margin-bottom: var(--sp-3); font-size: var(--fs-sm); font-weight: 600; }
+.term-form fieldset label { margin-right: var(--sp-4); }
 /* The column templates of the lists (kit .cols): the name takes what the others leave. */
 #rooms { --cols: minmax(12rem, 3fr) minmax(7rem, 1fr) minmax(5rem, .6fr) minmax(5rem, .6fr) minmax(7rem, 1fr) minmax(11rem, 1.5fr) var(--control-h); }
 #profiles { --cols: minmax(12rem, 3fr) minmax(6rem, 1fr) minmax(4rem, .5fr) minmax(7rem, 1fr) minmax(8rem, 1fr) var(--control-h); }
 #templates { --cols: minmax(12rem, 3fr) minmax(8rem, 1fr) minmax(4rem, .5fr) minmax(7rem, 1fr) var(--control-h); }
 :is(#skills, #starters) { --cols: minmax(12rem, 3fr) minmax(8rem, 1fr) minmax(4rem, .5fr) minmax(5rem, .6fr) minmax(7rem, 1fr) var(--control-h); }
 #sessions { --cols: minmax(12rem, 2fr) minmax(7rem, 1fr) minmax(7rem, 1fr) minmax(10rem, 1fr) var(--control-h); }
+#pronunciations { --cols: minmax(9rem, 1.2fr) minmax(6rem, .6fr) minmax(8rem, 1fr) minmax(8rem, 1fr) minmax(8rem, 1fr) var(--control-h); }
 #audit { --cols: minmax(12rem, 2fr) minmax(7rem, .7fr) minmax(9rem, 1fr) minmax(12rem, 3fr); }
 #audit .details { color: var(--text-muted); font-size: var(--fs-sm); }
 .cols .storage { display: inline-flex; align-items: center; gap: var(--sp-2); }
@@ -46,6 +49,9 @@ form.limit input { width: 8rem; }
   #audit .details { flex-basis: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #audit .cell[data-label]::before { content: none; }
   #sessions .signed-in { display: none; }
+  /* A term's card keeps its style and the French form that style uses. */
+  #pronunciations :is(.main .meta, .cell.aside) { display: none; }
+  #pronunciations .cell[data-label]::before { content: none; }
 }
 .merge-pick label { min-width: 0; max-width: 100%; }
 .merge-pick select { max-width: 100%; }

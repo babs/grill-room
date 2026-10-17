@@ -316,6 +316,55 @@ jobs:
           path: e2e/test-results/
           retention-days: 7
 
+  # 013-AC33: every seed lexicon entry said by the real engine and heard back by the STT image, when
+  # the lexicon or the speech path changed (all of it on a manual run).
+  lexicon:
+    needs: [stt-image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: changed
+        env:
+          BASE: ${{ github.event_name == 'workflow_dispatch' && 'all' || github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          paths="tts/grill_tts/lexicon_seed.json tts/grill_tts/textlayer.py tts/grill_tts/lexcheck.py tts/grill_tts/roundtrip.py tts/grill_tts/audio.py tts/grill_tts/engine.py tts/uv.lock stt/"
+          # shellcheck disable=SC2086 # paths is a word list
+          if [ "$BASE" = all ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null || ! git diff --quiet "$BASE" HEAD -- $paths; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.changed.outputs.run == 'true'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - if: steps.changed.outputs.run == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: stt
+          tags: grill-stt:local
+          load: true
+          cache-from: type=gha,scope=stt
+      - if: steps.changed.outputs.run == 'true'
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: tts/uv.lock
+      # Pocket's ungated weights and voice states, per engine pin.
+      - if: steps.changed.outputs.run == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/huggingface
+          key: pocket-ungated-${{ hashFiles('tts/uv.lock') }}
+      - if: steps.changed.outputs.run == 'true'
+        run: make tts-lexcheck LEXCHECK_THREADS=4
+      - if: always() && steps.changed.outputs.run == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lexicon-report
+          path: tts/.lexcheck/report.json
+          retention-days: 30
+
   # Browser tests against fresh servers, agent turns with the fake claude in Docker, magic links
   # against a throwaway mailpit: no Claude request.
   e2e:

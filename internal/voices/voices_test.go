@@ -71,3 +71,16 @@ func TestDefault(t *testing.T) {
 		t.Error("every voice used: the first native one")
 	}
 }
+
+func TestSeedMatchesTheImage(t *testing.T) {
+	img, err := os.ReadFile("../../tts/grill_tts/lexicon_seed.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(img, seedRaw) {
+		t.Error("tts/grill_tts/lexicon_seed.json differs from internal/voices/lexicon_seed.json: copy it")
+	}
+	if n := len(Seed()); n < 140 || n > 200 {
+		t.Errorf("seed has %d terms", n)
+	}
+}

@@ -1,0 +1,31 @@
+# The room server's scrape (spec 013, AC34: grill_room_tts_demand, which scales the tts pod), for the
+# VictoriaMetrics operator; applied with the others by `make k8s-monitoring`.
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: grill-room
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grill-room
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+---
+# vmagent scrapes the room server's metrics port from its namespace: the only way in.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: room-metrics
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grill-room
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ${K8S_MONITORING_NAMESPACE}
+      ports:
+        - { port: 7681, protocol: TCP }

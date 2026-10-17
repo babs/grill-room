@@ -91,7 +91,7 @@ French and English rooms both ship. A rule-based text layer reads numbers, acron
 - [ ] **AC30** Starters carry "Speaks in the call" and the voice per persona; Save as starter and room export and import carry them too, and an older starter or export reads them as on and empty (default voice per AC16). The built-in Spec grill gets a new version with Grill's voice on and Secretary's off; Retro and Doc review keep every persona on.
 
 ### Lexicon
-- [ ] **AC31** `/admin` has a Pronunciation page for the server admin: list, search, add, edit, delete. An entry is a term (1 to 40 characters, unique ignoring case), a style (English or French) and three spoken forms: English-style French, French-style French and English, at least one set. The list shows each term's style and flips it in one click. At most 1000 entries. Each change writes an audit entry (004-AC6) and reaches the pod for the next line, with no restart. Anyone else gets 403 on its routes.
+- [ ] **AC31** `/admin` has a Pronunciation page for the server admin: list, search, add, edit, delete. An entry is a term (1 to 40 characters, unique ignoring case), a style (English or French) and three spoken forms: English-style French, French-style French and English, at least one set. The list shows each term's style and flips it in one click. At most 1000 entries. Each change writes an audit entry (004-AC6) and reaches the pod for the next line, with no restart. Anyone else is refused, as on every `/api/admin` route: 401 without the admin's token or session, 403 with an API token.
 - [ ] **AC32** A migration inserts Appendix A (about 150 terms) once. Later edits and deletions stand; the server never re-seeds at start.
 - [ ] **AC33** A CI job renders each Appendix A entry in a carrier sentence of each language it has a form for, 3 times with the first default voice of that language, and passes the entry when the room's STT hears one of its accepted spellings in at least 2 of 3 renders. One failing entry fails the job. The job's report lists every entry's hits.
 
@@ -139,7 +139,7 @@ French and English rooms both ship. A rule-based text layer reads numbers, acron
 - **Covers**: AC31, AC32, AC33, AC34, AC35
 - **Data model impact**: `pronunciations` (term, style, fr_en, fr_fr, en, by, at), seeded once by migration; audit actions `tts.lexicon.add`, `tts.lexicon.edit`, `tts.lexicon.delete`.
 - **DoD**:
-  - Go tests: a non-admin gets 403; a duplicate term ignoring case, an entry with no form and the 1001st entry get 400; an edit reaches a connected test pod on the stream;
+  - Go tests: anyone but the admin is refused (401, 403 for an API token); a duplicate term ignoring case, an entry with no form and the 1001st entry get 400; an edit reaches a connected test pod on the stream;
   - the migration applies on a fresh DB and on a copy of the lab DB, and a second start inserts nothing;
   - the AC33 job green in CI, its report attached;
   - on the lab: with the KEDA object applied, the pod goes to 0 with no demand, and a line queued from cold is spoken within the queue maximum or dropped `stale`; the cold start is written down;

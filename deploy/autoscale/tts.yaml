@@ -1,0 +1,24 @@
+# 013-AC34: KEDA scales the tts pod between 0 and 1 on grill_room_tts_demand, the rooms with a
+# speaking persona and a human in the audio. Off by default: `make k8s-autoscale` applies it, on a
+# cluster running KEDA and the room scrape (`make k8s-monitoring`). A line queued while the pod
+# starts waits up to its room's queue maximum, then is dropped.
+# ${K8S_PROMETHEUS_URL} is the Prometheus API that holds the scrape (VictoriaMetrics serves one).
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: tts
+spec:
+  scaleTargetRef:
+    name: tts
+  minReplicaCount: 0
+  maxReplicaCount: 1
+  pollingInterval: 10
+  # A call that goes quiet for a while keeps its pod: a cold start costs the next line.
+  cooldownPeriod: 600
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: ${K8S_PROMETHEUS_URL}
+        query: max(grill_room_tts_demand{namespace="${K8S_NAMESPACE}"}) or vector(0)
+        threshold: "1"
+        activationThreshold: "0"

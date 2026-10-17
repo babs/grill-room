@@ -28,7 +28,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: ui-tools ui-vendor ui-check build e2e-build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-device-voice e2e-persona-voice e2e-agent-live e2e-mcp-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image stt-image-test stt-image-e2e tts-test tts-image cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: ui-tools ui-vendor ui-check build e2e-build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-device-voice e2e-persona-voice e2e-agent-live e2e-mcp-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image stt-image-test stt-image-e2e tts-test tts-image tts-lexcheck cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete k8s-autoscale k8s-autoscale-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -200,6 +200,20 @@ tts-image:
 	  --build-arg BUILD_TIMESTAMP=$(BUILD_TS) \
 	  --build-arg PROJECT_URL=$(PROJECT_URL) \
 	  tts/
+
+# 013-AC33: each seed lexicon entry said 3 times and heard by the STT image (grill-stt:local).
+# Without a Hugging Face token Pocket loads its ungated weights: the predefined voices it renders
+# with are the same. LEXCHECK_THREADS is the synthesis threads; the report lands in LEXCHECK_DIR.
+LEXCHECK_DIR ?= tts/.lexcheck
+LEXCHECK_THREADS ?= 2
+tts-lexcheck:
+	rm -rf $(LEXCHECK_DIR) && mkdir -p $(LEXCHECK_DIR) && chmod 777 $(LEXCHECK_DIR)
+	cd tts && APP_MODELS_DIR=/nonexistent APP_CPU_THREADS=$(LEXCHECK_THREADS) uv run python -m grill_tts.lexcheck render $(abspath $(LEXCHECK_DIR))
+	docker run --rm --network none --user $$(id -u) -v $(abspath $(LEXCHECK_DIR)):/data \
+	  -e APP_ROOM_URL=http://x -e APP_ROOM_TOKEN=x -e APP_LIVEKIT_URL=ws://x -e APP_LIVEKIT_API_KEY=x \
+	  -e APP_LIVEKIT_API_SECRET=0123456789abcdef0123456789abcdef -e APP_ENGINE_PROCESSES=1 -e APP_CPU_THREADS=$(LEXCHECK_THREADS) \
+	  --entrypoint python grill-stt:local -m grill_stt.replay /data/manifest.json /data/out.jsonl --set lex --talkers 6
+	cd tts && uv run python -m grill_tts.lexcheck score $(abspath $(LEXCHECK_DIR))/out.jsonl $(abspath $(LEXCHECK_DIR))/report.json
 
 # The scenario tool (scenarios/, 004-AC16): lint, types and unit tests. No audio, no Claude request.
 scenarios-test:
@@ -384,6 +398,18 @@ k8s-monitoring: k8s-check
 k8s-monitoring-delete: k8s-check
 	for f in deploy/monitoring/*.yaml; do K8S_MONITORING_NAMESPACE='$(K8S_MONITORING_NAMESPACE)' envsubst '$${K8S_MONITORING_NAMESPACE}' \
 	  < "$$f" | $(KUBECTL) delete --ignore-not-found -f - || exit 1; done
+
+# 013-AC34: KEDA scales the tts pod to zero with no demand. Needs KEDA, k8s-monitoring, and
+# K8S_PROMETHEUS_URL (.env). k8s-apply sets the pod back to 1: KEDA scales it down after its cooldown.
+k8s-autoscale: k8s-check
+	@test -n "$(K8S_PROMETHEUS_URL)" || { echo "K8S_PROMETHEUS_URL is not set, see .env.example" >&2; exit 1; }
+	K8S_PROMETHEUS_URL='$(K8S_PROMETHEUS_URL)' K8S_NAMESPACE='$(K8S_NAMESPACE)' envsubst '$${K8S_PROMETHEUS_URL} $${K8S_NAMESPACE}' \
+	  < deploy/autoscale/tts.yaml | $(KUBECTL) apply -f -
+
+# Back to one tts pod, always on.
+k8s-autoscale-delete: k8s-check
+	$(KUBECTL) delete --ignore-not-found scaledobject tts
+	$(KUBECTL) scale deploy tts --replicas=1
 
 # Office fixtures for the pandoc tests, written by the pandoc release the image ships.
 FIXTURES := internal/convert/testdata

@@ -40,7 +40,7 @@ import { RoomPanel, AdminRows, RowMenu, Meter, TabBar, fetchJSON, roomTabs, size
 /** @type {import('@preact/signals').Signal<boolean | null>} null until the first answer says. */
 const signedIn = signal(null);
 const notice = signal('');
-const views = [['rooms', 'Rooms'], ['profiles', 'Profiles'], ['libraries', 'Libraries'], ['instance', 'Server'],
+const views = [['rooms', 'Rooms'], ['profiles', 'Profiles'], ['libraries', 'Libraries'], ['pronunciation', 'Pronunciation'], ['instance', 'Server'],
   ['sessions', 'Sessions'], ['audit', 'Audit']];
 /**
  * routeOf reads a deep link (005-AC16): #<view>, or #rooms/<room>/<tab> for one room's tab.
@@ -146,6 +146,7 @@ const actionLabels = {
   'profile.recovery_link_used': 'Recovery link used', 'profile.merge': 'Profiles merged', 'profile.purge': 'Empty profiles deleted',
   'profile.max_rooms': 'Room limit set', 'template.remove': 'Persona template removed', 'skill.remove': 'Shared skill removed',
   'starter.publish': 'Starter shared', 'starter.delete': 'Starter removed', 'instance.settings': 'Server settings changed',
+  'tts.lexicon.add': 'Pronunciation added', 'tts.lexicon.edit': 'Pronunciation changed', 'tts.lexicon.delete': 'Pronunciation removed',
   'api_token.create': 'API token created', 'api_token.revoke': 'API token revoked', 'persona.remove': 'Persona removed',
   'admin.login': 'Admin signed in', 'admin.logout': 'Admin signed out', 'admin.session_revoke': 'Admin session revoked',
 };
@@ -676,6 +677,84 @@ function Libraries() {
       </li>`)}</ul></div>` : html`<p class="empty">No shared starter yet.</p>`)}`;
 }
 
+/** @typedef {{term: string, style: 'en' | 'fr', fr_en: string, fr_fr: string, en: string}} LexTerm */
+/** @typedef {LexTerm & {id: number, by: string, at: string}} LexEntry */
+/** @type {Record<string, string>} */
+const styleName = { en: 'English', fr: 'French' };
+/** @param {LexTerm} t */
+const termBody = (t) => ({ term: t.term, style: t.style, fr_en: t.fr_en, fr_fr: t.fr_fr, en: t.en });
+
+/** Pronunciation is the call voices' lexicon (013-AC31): how a term is said, English- or French-style. */
+function Pronunciation() {
+  const [list, setList] = useState(/** @type {{entries: LexEntry[], max: number} | null} */ (null));
+  const [q, setQ] = useState('');
+  // editing: 0 closed, -1 a new term, else the entry's id.
+  const [editing, setEditing] = useState(0);
+  const load = () => api('GET', '/api/admin/pronunciations').then(setList).catch(show);
+  useEffect(() => { load(); }, []);
+  /** @param {LexEntry} e */
+  const flip = (e) => api('PUT', '/api/admin/pronunciations/' + e.id, { ...termBody(e), style: e.style === 'en' ? 'fr' : 'en' })
+    .then(() => { load(); toast(`${e.term} is said ${e.style === 'en' ? 'French' : 'English'}-style`); }).catch(show);
+  /** @param {LexEntry} e */
+  const remove = (e) => {
+    window.grillConfirm(`Remove ${e.term} from the lexicon?`, 'The voices then read it as written.', 'Remove')
+      .then((yes) => { if (yes) api('DELETE', '/api/admin/pronunciations/' + e.id).then(load).catch(show); });
+  };
+  const needle = q.trim().toLowerCase();
+  const shown = list?.entries.filter((e) => !needle || [e.term, e.fr_en, e.fr_fr, e.en].some((v) => v.toLowerCase().includes(needle))) ?? [];
+  // A phone shows the French form the term's style says, the one a French voice uses.
+  /** @param {string} label @param {string} v @param {boolean} used */
+  const form = (label, v, used) => html`<span class=${used ? 'cell' : 'cell aside'} data-label=${label}>${v || html`<span class="meta">as written</span>`}</span>`;
+  const full = !!list && list.entries.length >= list.max;
+  return html`
+    <h2>Pronunciation</h2>
+    <p class="hint">How the call voices say a term. English-style says it the English way in a French sentence, French-style the French way. A form left empty reads the term as written.</p>
+    ${list && html`<div class="row filters">
+      <label>Search<input id="term-search" type="search" value=${q} onInput=${onInput(setQ)}/></label>
+      <span class="meta">${list.entries.length} of ${list.max} terms</span><span class="spacer"></span>
+      <button type="button" id="add-term" onClick=${() => setEditing(-1)} disabled=${full} data-tip=${full ? 'The lexicon is full: remove a term first' : null}>Add a term</button>
+    </div>`}
+    ${list && (shown.length ? html`<div class="cols" id="pronunciations">
+      <div class="list-row head"><span>Term</span><span>Style</span><span>French, English-style</span><span>French, French-style</span><span>English</span><span></span></div>
+      <ul class="list-rows">${shown.map((e) => html`<li class="list-row" id=${'term-' + e.id} key=${e.id}>
+        <div class="main"><span class="name">${e.term}</span><div class="meta">${e.by === 'seed' ? 'shipped' : ago(e.at)}</div></div>
+        <div class="cells"><span class="cell" data-label="Style"><button type="button" class="btn-secondary style-flip" onClick=${() => flip(e)}
+            aria-label=${`${e.term}: ${styleName[e.style]}-style, switch to ${styleName[e.style === 'en' ? 'fr' : 'en']}-style`}>${styleName[e.style]}</button></span>
+          ${form('French, English-style', e.fr_en, e.style === 'en')}${form('French, French-style', e.fr_fr, e.style === 'fr')}${form('English', e.en, false)}</div>
+        <div class="actions"><${RowMenu} id=${'term-menu-' + e.id} label=${'More actions on ' + e.term} items=${[
+          ['Edit…', () => setEditing(e.id), '', 'Edit ' + e.term], ['Remove…', () => remove(e), 'danger', 'Remove ' + e.term]]}/></div>
+      </li>`)}</ul></div>` : html`<p class="empty">${needle ? 'No term matches.' : 'No term yet.'}</p>`)}
+    ${editing !== 0 && html`<${TermSheet} key=${editing} entry=${list?.entries.find((e) => e.id === editing)} reload=${load} done=${() => setEditing(0)}/>`}`;
+}
+
+/** @param {{entry?: LexEntry, reload: () => void, done: () => void}} props */
+function TermSheet({ entry, reload, done }) {
+  const [t, setT] = useState(/** @type {LexTerm} */ (entry ? termBody(entry) : { term: '', style: 'en', fr_en: '', fr_fr: '', en: '' }));
+  const [err, setErr] = useState('');
+  const ref = useRef(/** @type {HTMLFormElement | null} */ (null));
+  /** @param {keyof LexTerm} k */
+  const field = (k) => onInput((/** @type {string} */ v) => setT({ ...t, [k]: v }));
+  const save = () => (entry ? api('PUT', '/api/admin/pronunciations/' + entry.id, t) : api('POST', '/api/admin/pronunciations', t)).then(() => {
+    reload();
+    toast(`${t.term} ${entry ? 'saved' : 'added'}`);
+    ref.current?.closest('dialog')?.close();
+  }).catch((/** @type {Error} */ e) => setErr(e.message));
+  return html`<${Sheet} id="term-sheet" title=${entry ? 'Edit ' + entry.term : 'Add a term'} done=${done}>
+    <form ref=${ref} class="term-form" onSubmit=${formAction(save)}>
+      <label>Term<input required maxlength="40" value=${t.term} onInput=${field('term')}/></label>
+      <fieldset><legend>Style</legend>
+        ${/** @type {const} */ (['en', 'fr']).map((s) => html`<label><input type="radio" name="style" value=${s} checked=${t.style === s}
+          onChange=${() => setT({ ...t, style: s })}/> ${styleName[s]}-style</label>`)}</fieldset>
+      <label>French, English-style<input maxlength="80" value=${t.fr_en} onInput=${field('fr_en')} placeholder="guite-heub"/></label>
+      <label>French, French-style<input maxlength="80" value=${t.fr_fr} onInput=${field('fr_fr')}/></label>
+      <label>English<input maxlength="80" value=${t.en} onInput=${field('en')} placeholder="Live Kit"/></label>
+      <p class="hint">Set at least one form. A French voice says the form of the term's style.</p>
+      ${err && html`<p class="said bad" role="alert">${err}</p>`}
+      <div class="actions"><button type="submit">${entry ? 'Save' : 'Add'}</button></div>
+    </form>
+  <//>`;
+}
+
 function InstanceView() {
   const [it, setIt] = useState(/** @type {Instance | null} */ (null));
   useEffect(() => { api('GET', '/api/admin/instance').then(setIt).catch(show); }, []);
@@ -766,7 +845,8 @@ function Shell() {
     <main class=${view === 'instance' ? 'page' : 'page-wide'}>
       <${TabBar} tabs=${views} active=${view} href=${(/** @type {string} */ id) => '#' + id} label="Views" cls="views sticky"/>
       ${notice.value && html`<p class="said bad" role="alert">${notice.value}</p>`}
-      ${{ rooms: html`<${Rooms}/>`, profiles: html`<${Profiles}/>`, libraries: html`<${Libraries}/>`, instance: html`<${InstanceView}/>`,
+      ${{ rooms: html`<${Rooms}/>`, profiles: html`<${Profiles}/>`, libraries: html`<${Libraries}/>`,
+        pronunciation: html`<${Pronunciation}/>`, instance: html`<${InstanceView}/>`,
         sessions: html`<${Sessions}/>`, audit: html`<${Audit}/>` }[view]}
     </main>`;
 }

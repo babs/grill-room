@@ -65,7 +65,7 @@ for (const [size, viewport] of Object.entries(sizes)) {
     const off = (((10 - new Date().getUTCHours()) % 12) + 12) % 12;
     const page = await (await browser.newContext({ viewport, timezoneId: `Etc/GMT${off ? '-' + off : ''}` })).newPage();
     expect(await signIn(page, adminToken, 'rooms')).toBe(201);
-    const views = ['rooms', 'profiles', 'libraries', 'instance', 'sessions', 'audit',
+    const views = ['rooms', 'profiles', 'libraries', 'pronunciation', 'instance', 'sessions', 'audit',
       ...['general', 'invites', 'admins', 'export'].map((t) => `rooms/${room.id}/${t}`)];
     for (const view of views) {
       await page.goto('/admin#' + view);

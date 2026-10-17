@@ -137,9 +137,9 @@ func TestMigrateIsIdempotent(t *testing.T) {
 // libraries, whose presets and built-ins belong to no profile while the rest cascade from theirs, the skill library,
 // whose shared skills outlive their publisher while personal ones cascade from theirs, the admin
 // sessions, the audit log, whose entries outlive the rooms and profiles they name (004-AC6), and the
-// catalogue voices' samples (013-AC27).
+// catalogue voices' samples (013-AC27) and the lexicon (013-AC31).
 var serverWide = []string{"settings", "persona_templates", "persona_template_versions", "skills", "skill_versions", "admin_sessions", "audit_log",
-	"starters", "starter_versions", "starter_files", "tts_samples"}
+	"starters", "starter_versions", "starter_files", "tts_samples", "pronunciations"}
 
 // uncascadedTables returns the tables that neither a DELETE on rooms nor one on profiles would
 // purge: those without a chain of NOT NULL, ON DELETE CASCADE foreign keys leading to an owner.

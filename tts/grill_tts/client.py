@@ -23,10 +23,12 @@ class ServerLink:
         client: httpx.AsyncClient,
         on_rooms: Callable[[list[dict[str, Any]]], None],
         on_line: Callable[[dict[str, Any]], None],
+        on_lexicon: Callable[[list[dict[str, Any]]], None] = lambda _e: None,
     ) -> None:
         self._client = client
         self._on_rooms = on_rooms
         self._on_line = on_line
+        self._on_lexicon = on_lexicon
         # The last line taken: a reconnect resumes after it (Last-Event-ID).
         self.last = 0
         self.connected = False
@@ -38,6 +40,8 @@ class ServerLink:
                 self._on_rooms(body["rooms"])
             elif event == "line":
                 self._on_line(body)
+            elif event == "lexicon":
+                self._on_lexicon(body["entries"])
         except Exception:
             # One bad event must not end the stream: a reconnect would replay the same line forever.
             log.exception("event_refused", kind=event, id=eid)
