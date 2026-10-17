@@ -18,7 +18,9 @@ tar -xf "$tmp/image.tar" -C "$tmp/raw"
 n=0
 while IFS= read -r -d '' blob; do
     if tar -tf "$blob" >/dev/null 2>&1; then
-        mkdir "$tmp/fs/$n" && tar -xf "$blob" -C "$tmp/fs/$n" 2>/dev/null || true
+        mkdir "$tmp/fs/$n"
+        # A layer may hold device files an unprivileged tar cannot create: the rest still extracts.
+        tar -xf "$blob" -C "$tmp/fs/$n" 2>/dev/null || true
         n=$((n + 1))
     fi
 done < <(find "$tmp/raw" -type f -print0)
