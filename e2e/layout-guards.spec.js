@@ -56,7 +56,11 @@ for (const [size, viewport] of Object.entries(sizes)) {
     const room = await (await request.post('/api/rooms', { headers: admin, data: { name: `Layout ${size} ${'long name '.repeat(7)}${Date.now()}` } })).json();
     const people = [];
     for (const n of ['Ada', 'Bo']) people.push(await member(baseURL, request, room, n + ' ' + size));
-    const page = await (await browser.newContext({ viewport })).newPage();
+    // The page's own session expires 12 h on, which shows at a two-digit hour ("10:42 AM") in
+    // every run: at a one-digit one its phone row fits a value line less, and the guard passed by
+    // the time of day.
+    const off = (((10 - new Date().getUTCHours()) % 12) + 12) % 12;
+    const page = await (await browser.newContext({ viewport, timezoneId: `Etc/GMT${off ? '-' + off : ''}` })).newPage();
     expect(await signIn(page, adminToken, 'rooms')).toBe(201);
     const views = ['rooms', 'profiles', 'libraries', 'instance', 'sessions', 'audit',
       ...['general', 'invites', 'admins', 'export'].map((t) => `rooms/${room.id}/${t}`)];

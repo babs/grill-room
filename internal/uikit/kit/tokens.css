@@ -219,9 +219,10 @@
   .cols .cell:empty { display: none; }
   .cols .cell[data-label]::before { content: attr(data-label) " "; }
   .cols .list-row > .actions { grid-column: 2; grid-row: 1; }
-  /* A card's height must not follow its content: the name keeps to two lines, the meta to one. */
+  /* A card's height must not follow its content: the name keeps to two lines, inline so a badge
+     after it stays on its line, the meta to one. */
   .cols .list-row .meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .cols .list-row .name { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .cols .list-row .name { display: -webkit-inline-box; max-width: 100%; vertical-align: top; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 }
 /* A share used: a bar in --primary on --border, its words beside it or in its tip. */
 .meter { display: inline-block; width: 4rem; height: .5rem; overflow: hidden; border-radius: var(--r-pill); background: var(--border); vertical-align: middle; }
