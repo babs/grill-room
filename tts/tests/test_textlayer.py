@@ -446,7 +446,7 @@ def test_empty_lexicon_still_applies_rules() -> None:
 # 013-AC32
 def test_seed_lexicon() -> None:
     seed = load_seed()
-    assert len(seed) >= 130
+    assert len(seed) >= 120
     assert len({e.term.lower() for e in seed}) == len(seed)
     assert all(e.fr_en or e.fr_fr or e.en for e in seed)
     assert all(e.style in ("en", "fr") and 1 <= len(e.term) <= 40 for e in seed)
@@ -457,6 +457,10 @@ def test_seed_lexicon() -> None:
     assert by["LiveKit"] == Entry("LiveKit", "en", "laïve-kit", "", "Live Kit")
     # 013-AC33: French forms the STT never heard back are dropped, the English ones kept.
     assert "flaky" not in by
+    for gone in ("Terraform", "SLO", "branch", "rebase", "changelog", "Stripe", "mail"):
+        assert gone not in by
+    assert by["DNS"] == Entry("DNS", "en", "", "", "D N S")
+    assert by["A/B test"] == Entry("A/B test", "en", "", "", "A B test")
     assert by["OKR"] == Entry("OKR", "en", "", "", "O K R")
     assert by["WebRTC"] == Entry("WebRTC", "en", "", "", "web R T C")
     naturalised = {e.term for e in seed if e.style == "fr"}

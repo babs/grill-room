@@ -209,7 +209,8 @@ tts-image:
 	  --build-arg PROJECT_URL=$(PROJECT_URL) \
 	  tts/
 
-# 013-AC33: each seed lexicon entry said 10 times and heard by the STT image (grill-stt:local) at least 6 times.
+# 013-AC33: each seed lexicon entry said 10 times and heard by the STT image (grill-stt:local) at least 6 times;
+# more than 5 entries missing fails it.
 # Without a Hugging Face token Pocket loads its ungated weights: the predefined voices it renders
 # with are the same. LEXCHECK_THREADS is the synthesis threads; the report lands in LEXCHECK_DIR.
 LEXCHECK_DIR ?= tts/.lexcheck

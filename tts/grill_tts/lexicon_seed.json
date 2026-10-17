@@ -231,13 +231,6 @@
     "en": ""
   },
   {
-    "term": "Terraform",
-    "style": "en",
-    "fr_en": "tèra-forme",
-    "fr_fr": "",
-    "en": ""
-  },
-  {
     "term": "cloud",
     "style": "en",
     "fr_en": "claoude",
@@ -364,13 +357,6 @@
     "en": ""
   },
   {
-    "term": "SLO",
-    "style": "en",
-    "fr_en": "èss èl o",
-    "fr_fr": "",
-    "en": ""
-  },
-  {
     "term": "vCPU",
     "style": "en",
     "fr_en": "",
@@ -434,20 +420,6 @@
     "en": ""
   },
   {
-    "term": "branch",
-    "style": "en",
-    "fr_en": "brannche",
-    "fr_fr": "",
-    "en": ""
-  },
-  {
-    "term": "rebase",
-    "style": "en",
-    "fr_en": "ri-béïze",
-    "fr_fr": "",
-    "en": ""
-  },
-  {
     "term": "checkout",
     "style": "en",
     "fr_en": "tchèque-aoute",
@@ -479,13 +451,6 @@
     "term": "monorepo",
     "style": "en",
     "fr_en": "mono-répo",
-    "fr_fr": "",
-    "en": ""
-  },
-  {
-    "term": "changelog",
-    "style": "en",
-    "fr_en": "change log",
     "fr_fr": "",
     "en": ""
   },
@@ -534,7 +499,7 @@
   {
     "term": "DNS",
     "style": "en",
-    "fr_en": "dé ène èss",
+    "fr_en": "",
     "fr_fr": "",
     "en": "D N S"
   },
@@ -672,13 +637,6 @@
     "en": ""
   },
   {
-    "term": "Stripe",
-    "style": "en",
-    "fr_en": "straïpe",
-    "fr_fr": "",
-    "en": ""
-  },
-  {
     "term": "roadmap",
     "style": "en",
     "fr_en": "rode-mape",
@@ -730,7 +688,7 @@
   {
     "term": "A/B test",
     "style": "en",
-    "fr_en": "a bé teste",
+    "fr_en": "",
     "fr_fr": "",
     "en": "A B test"
   },
@@ -865,13 +823,6 @@
     "style": "fr",
     "fr_en": "",
     "fr_fr": "imèle",
-    "en": ""
-  },
-  {
-    "term": "mail",
-    "style": "fr",
-    "fr_en": "",
-    "fr_fr": "mèïle",
     "en": ""
   },
   {

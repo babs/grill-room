@@ -33,7 +33,7 @@ def github_fr(n: int) -> str:
     return track_id(next(i for i, e in enumerate(load_seed()) if e.term == "GitHub"), "fr", n)
 
 
-# 013-AC33: an entry passes on 6 renders of 10; one failing entry fails the job and is named.
+# 013-AC33: an entry passes on 6 renders of 10; a failing entry is named.
 def test_score_missing_tracks() -> None:
     rows = all_heard()
     assert score(rows)["pass"]
@@ -41,7 +41,7 @@ def test_score_missing_tracks() -> None:
     assert score([r for r in rows if r["id"] not in lost])["pass"]
     lost.add(github_fr(4))
     res = score([r for r in rows if r["id"] not in lost])
-    assert not res["pass"] and res["failed"] == ["GitHub (fr)"]
+    assert res["pass"] and res["failed"] == ["GitHub (fr)"]
 
 
 # 013-AC33: misses heard as other words, scattered, count the same; a track heard in two rows joins.
@@ -60,4 +60,28 @@ def test_score_misheard_tracks() -> None:
         if r["id"] == github_fr(9):
             r["text"] = "je pense que guite heub pose problème"
     res = score(rows)
-    assert not res["pass"] and res["failed"] == ["GitHub (fr)"]
+    assert res["pass"] and res["failed"] == ["GitHub (fr)"]
+
+
+def entry_fr(i: int) -> list[str]:
+    return [track_id(i, "fr", n) for n in range(RENDERS)]
+
+
+# 013-AC33: the job fails only when more than 5 entries fail, whether their tracks are lost or
+# misheard; the report names every failure either way.
+def test_score_job_threshold() -> None:
+    fr = [i for i, e in enumerate(load_seed()) if "fr" in langs(e)]
+    rows = all_heard()
+    lost = {t for i in fr[:3] for t in entry_fr(i)}
+    misheard = {t for i in fr[3:5] for t in entry_fr(i)}
+    for r in rows:
+        if r["id"] in misheard:
+            r["text"] = "rien"
+    res = score([r for r in rows if r["id"] not in lost])
+    assert res["pass"] and len(res["failed"]) == 5
+    misheard |= set(entry_fr(fr[5]))
+    for r in rows:
+        if r["id"] in misheard:
+            r["text"] = "rien"
+    res = score([r for r in rows if r["id"] not in lost])
+    assert not res["pass"] and len(res["failed"]) == 6

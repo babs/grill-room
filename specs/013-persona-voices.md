@@ -30,7 +30,7 @@ French and English rooms both ship. A rule-based text layer reads numbers, acron
 - Turn-taking: never over a human, stop within 300 ms, resume or drop, one persona at a time, stale lines dropped, timeouts per room.
 - The "Speaks in the call" toggle, the voice picker with a sample, the rate, default voices, the persona pill (a click opens the persona card, ▶ runs the persona, 🔊 mutes it for this listener) and its speaking states.
 - The Spec grill starter turns on Grill's voice.
-- A pronunciation lexicon in `/admin`, each term English-style or French-style, seeded with about 140 terms (Appendix A), each seed term checked by an STT round trip in CI.
+- A pronunciation lexicon in `/admin`, each term English-style or French-style, seeded with about 130 terms (Appendix A), each seed term checked by an STT round trip in CI.
 - Scale to zero as an option, echo verification on a real audio loop.
 
 ## Out of scope
@@ -92,8 +92,8 @@ French and English rooms both ship. A rule-based text layer reads numbers, acron
 
 ### Lexicon
 - [ ] **AC31** `/admin` has a Pronunciation page for the server admin: list, search, add, edit, delete. An entry is a term (1 to 40 characters, unique ignoring case), a style (English or French) and three spoken forms: English-style French, French-style French and English, at least one set. The list shows each term's style and flips it in one click. At most 1000 entries. Each change writes an audit entry (004-AC6) and reaches the pod for the next line, with no restart. Anyone else is refused, as on every `/api/admin` route: 401 without the admin's token or session, 403 with an API token.
-- [ ] **AC32** A migration inserts Appendix A (about 140 terms) once. Later edits and deletions stand; the server never re-seeds at start.
-- [ ] **AC33** A CI job renders each Appendix A entry in a carrier sentence of each language it has a form for, 10 times with the first default voice of that language, and passes the entry when the room's STT hears one of its accepted spellings in at least 6 of 10 renders. One failing entry fails the job. The job's report lists every entry's hits.
+- [ ] **AC32** A migration inserts Appendix A (about 130 terms) once. Later edits and deletions stand; the server never re-seeds at start.
+- [ ] **AC33** A CI job renders each Appendix A entry in a carrier sentence of each language it has a form for, 10 times with the first default voice of that language, and passes the entry when the room's STT hears one of its accepted spellings in at least 6 of 10 renders. The job fails when more than 5 entries fail; its report lists every entry's hits and names every failing one.
 
 ### Scale to zero and echo
 - [ ] **AC34** The room server exports `grill_room_tts_demand`, the number of rooms with a speaking persona and at least one human in the audio. A KEDA `ScaledObject`, shipped apart from the app like the 007 alert rules and off by default, scales `tts` between 0 and 1 on it. A line queued while the pod starts waits within the queue maximum (AC24), and is dropped `stale` past it. The cold start (scale-up to first audio) is measured and written in `docs/architecture.md`.
@@ -193,7 +193,7 @@ Made while drafting (overturnable):
 - Samples are rendered at build and served by the room server: they work while the pod is scaled to zero.
 - The per-listener mute unsubscribes rather than setting volume 0: it saves the bandwidth.
 - A dropped line posts nothing in the chat: the synthesis is already there.
-- The lexicon round trip passes a term on 6 of 10 renders: Pocket samples at random and one render moves a term's result (S14b, Setup). At 2 of 3, two runs on the same seed failed different sets of 7 and 9 entries (user, 2026-10-17: 6 of 10, no seeding).
+- The lexicon round trip passes a term on 6 of 10 renders: Pocket samples at random and one render moves a term's result (S14b, Setup). At 2 of 3, two runs on the same seed failed different sets of 7 and 9 entries (user, 2026-10-17: 6 of 10, no seeding). At 6 of 10, two CI runs again failed 9 entries each, a different set each time; pooled over the 20 renders, rows other than the user's cases under 60% lost their French form (Terraform, SLO, branch, rebase, changelog, Stripe, mail, DNS, A/B test; those with no other form left the seed, which holds 129 terms), and the job fails only past 5 failing entries (user, 2026-10-17).
 - The turn-taking e2e uses a fake engine; the real engine gets one smoke run and the lab replay. Turn-taking does not depend on the engine, and CI stays light.
 - Risk: S14 saw LiveKit report a human about 0.25 s after the speech began, which leaves about 50 ms for the 300 ms stop. Phase 2 measures it and adds a VAD in the pod if needed.
 - Measured in Phase 2's e2e: LiveKit names a talking human to a bot about 400 ms after their onset, too late for AC22. The pod also reads the humans' tracks its bots subscribe to, with an energy onset detector (20 ms above −42 dBFS, 400 ms hang): the stop then lands 30 to 110 ms after the onset at a listener. The room hears a human while any of its bots, or detectors, does; a bot that has not subscribed to someone yet names nobody and must not silence the others.
@@ -207,7 +207,7 @@ Made while drafting (overturnable):
 
 ## Appendix A — Pronunciation lexicon seed
 
-How to read it: every table but "Naturalised" is English-style, its "FR" being the English-style form. "FR" is what a French voice says inside a French sentence, "EN" what an English voice says inside an English sentence; "as written" means no entry for that language. The respellings follow S14b's and the user's ("ri-traï", "guite-heub", "clusteur", "laïve-kit"). Every row other than the user's cases is a candidate until AC33 passes it; a row that fails is respelled or removed before the Phase 3 merge. Accepted spellings for the round trip are the term itself, its spaced form ("live kit"), the name it is said by where the STT writes that name (k8s: Kubernetes, kubectl: kube control, PostgreSQL: Postgres, Nginx: engine x, OK: okay, B2B and B2C: B to B, B to C) and, for numbers, the digits or the words.
+How to read it: every table but "Naturalised" is English-style, its "FR" being the English-style form. "FR" is what a French voice says inside a French sentence, "EN" what an English voice says inside an English sentence; "as written" means no entry for that language. The respellings follow S14b's and the user's ("ri-traï", "guite-heub", "clusteur", "laïve-kit"). Every row other than the user's cases is a candidate until AC33 passes it; a row other than the user's cases heard back under 60%, pooled over the CI runs, is respelled or removed before the Phase 3 merge. Accepted spellings for the round trip are the term itself, its spaced form ("live kit"), the name it is said by where the STT writes that name (k8s: Kubernetes, kubectl: kube control, PostgreSQL: Postgres, Nginx: engine x, OK: okay, B2B and B2C: B to B, B to C) and, for numbers, the digits or the words.
 
 ### User cases
 
@@ -258,7 +258,6 @@ How to read it: every table but "Naturalised" is English-style, its "FR" being t
 | namespace | néïme-spéïsse | as written |
 | container | conn-téï-neur | as written |
 | Docker | doc-keur | as written |
-| Terraform | tèra-forme | as written |
 | cloud | claoude | as written |
 | AWS | as written | A W S |
 | GCP | gé cé pé | G C P |
@@ -277,7 +276,6 @@ How to read it: every table but "Naturalised" is English-style, its "FR" being t
 | on-call | onne-col | as written |
 | runbook | reune-bouk | as written |
 | post-mortem | poste mortème | as written |
-| SLO | èss èl o | as written |
 | vCPU | as written | V C P U |
 | CPU | as written | C P U |
 | GPU | as written | G P U |
@@ -292,14 +290,11 @@ How to read it: every table but "Naturalised" is English-style, its "FR" being t
 | build | bilde | as written |
 | hotfix | hotte-fixe | as written |
 | push | pouche | as written |
-| branch | brannche | as written |
-| rebase | ri-béïze | as written |
 | checkout | tchèque-aoute | as written |
 | linter | linn-teur | as written |
 | PR | pé èr | P R |
 | repo | répo | as written |
 | monorepo | mono-répo | as written |
-| changelog | change log | as written |
 
 ### Web and code
 
@@ -311,7 +306,7 @@ How to read it: every table but "Naturalised" is English-style, its "FR" being t
 | YAML | ya-meul | yammel |
 | HTTP | ache té té pé | H T T P |
 | HTTPS | as written | H T T P S |
-| DNS | dé ène èss | D N S |
+| DNS | as written | D N S |
 | TLS | té èl èss | T L S |
 | SSH | èss èss ache | as written |
 | VPN | vé pé ène | V P N |
@@ -331,7 +326,6 @@ How to read it: every table but "Naturalised" is English-style, its "FR" being t
 | legacy | lèga-ci | as written |
 | open source | o-peune source | as written |
 | Jira | dji-ra | as written |
-| Stripe | straïpe | as written |
 
 ### Product and team
 
@@ -344,7 +338,7 @@ How to read it: every table but "Naturalised" is English-style, its "FR" being t
 | onboarding | onne-bordinngue | as written |
 | feedback | fide-bak | as written |
 | pricing | praïe-sinng | as written |
-| A/B test | a bé teste | A B test |
+| A/B test | as written | A B test |
 | benchmark | bènnche-mark | as written |
 | deadline | dède-laïne | as written |
 | meeting | mitinngue | as written |
@@ -371,7 +365,6 @@ How to read it: every table but "Naturalised" is English-style, its "FR" being t
 | bug | beugue | as written |
 | web | ouèbe | as written |
 | email | imèle | as written |
-| mail | mèïle | as written |
 | parking | parkinng | as written |
 | week-end | ouik-ènde | as written |
 | startup | starte-eupe | as written |
