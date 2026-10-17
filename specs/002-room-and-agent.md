@@ -93,8 +93,9 @@ The sandbox gets Python, uv, Office libraries and common CLI tools. It reaches t
   - the room name;
   - the persona's own name and model/effort;
   - each other persona with model/effort, state, turns, trigger and the first line of its last synthesis;
-  - the humans present, the host and the current speaker;
-  - the chain budget left.
+  - the humans present, each by the `@name` a mention of them takes, the host and the current speaker;
+  - the chain budget left;
+  - to address a human by their `@name`, which notifies them, and to keep `@agent` for giving a turn.
 
   Each line is capped at about 100 characters.
 

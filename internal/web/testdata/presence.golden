@@ -6,9 +6,10 @@ Why you are running: pressed by Alice
 Agent @Grill: model sonnet, effort medium, idle, turns done: 1, on demand
   last said: "Over to @critic, and a very long first line that goes on and on until the preamble ha…
 Agent @Critic: model haiku, effort medium, queued, turns done: 0, on demand
-Humans present: Alice ·<uuid>
+Humans present: @Alice ·<uuid>
 Host: Alice ·<uuid>
 Speaking now: Bob ·<uuid>
 Chain budget: 9 of 10 agent turns left
+Address a human by the @name listed above: it notifies them. @agent is for giving a turn.
 Write @name in your synthesis to give another agent a turn; it counts against the chain budget.
 Writing @Secretary gives you another turn.

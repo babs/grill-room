@@ -73,6 +73,45 @@ func TestRenderPresence(t *testing.T) {
 	}
 }
 
+// 002-AC28: the preamble lists humans by the @token a mention of them takes, which the server's
+// rule resolves to that very person, and tells the persona to address them that way. A human
+// whose token a persona holds stays bare: @Grill would give Grill a turn (005-AC27).
+func TestPresenceAddressesHumans(t *testing.T) {
+	personas := []store.RoomPersona{{ID: 1, PersonaFields: store.PersonaFields{Name: "Grill"}}}
+	people := []store.Participant{{ID: 3, Name: "Damien"}, {ID: 4, Name: "Ana María"}, {ID: 5, Name: "grill"}, {ID: 6, Name: "Jean-Luc O'Neil"}}
+	var humans []string
+	for _, p := range people {
+		humans = append(humans, humanAt(p.Name, "#"+strconv.FormatInt(p.ID, 10), personas))
+	}
+	got, err := renderPresence(presenceView{Room: "R", Self: presencePersona{Name: "Grill", Level: "model default, effort default", Trigger: "on demand"},
+		Chain: "unlimited", Humans: humans})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"\nHumans present: @Damien ·#3, @Ana_María ·#4, grill ·#5, @Jean-Luc_O_Neil ·#6\n",
+		"\nAddress a human by the @name listed above: it notifies them. @agent is for giving a turn.\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("lacks %q:\n%s", want, got)
+		}
+	}
+	for _, l := range strings.Split(got, "\n") {
+		if n := len([]rune(l)); n > presenceLineMax {
+			t.Errorf("line of %d runes: %q", n, l)
+		}
+	}
+	for i, p := range people {
+		at, _, _ := strings.Cut(humans[i], " ·")
+		if !strings.HasPrefix(at, "@") {
+			continue
+		}
+		if n := named("ok "+at+", go", personas, people); len(n) != 1 || n[0].ParticipantID != p.ID {
+			t.Errorf("%s names %+v, want participant %d", at, n, p.ID)
+		}
+	}
+}
+
 // 002-AC28: the chain line says what is left, never below zero, or that there is no limit; with
 // no host daemon yet a persona's level is what it asks for.
 func TestPresenceParts(t *testing.T) {

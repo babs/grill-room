@@ -362,6 +362,7 @@ func TestPushKind(t *testing.T) {
 		{"voice, opted in", store.Message{Kind: store.KindVoice, ParticipantID: 8}, allSub, 0, false, pushMessage},
 		{"voice", store.Message{Kind: store.KindVoice, ParticipantID: 8}, sub, 0, false, ""},
 		{"synthesis", store.Message{Kind: store.KindAgent}, sub, 0, false, pushSynthesis},
+		{"synthesis naming them", store.Message{Kind: store.KindAgent}, sub, 0, true, pushMention},
 	} {
 		if got := pushKind(c.m, c.sub, c.starter, c.mentioned); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
@@ -369,6 +370,32 @@ func TestPushKind(t *testing.T) {
 	}
 	if got := pushTopic("ab-c_D.e/" + strings.Repeat("x", 40)); got != "ab-c_De"+strings.Repeat("x", 25) {
 		t.Errorf("topic %q", got)
+	}
+}
+
+// 005-AC27: a synthesis naming a person counts as their mention for push, as a text line does; a
+// voice line and a persona of the same name do not.
+func TestMentionedPeopleInSynthesis(t *testing.T) {
+	personas := []store.RoomPersona{{ID: 1, PersonaFields: store.PersonaFields{Name: "Grill"}}}
+	ps := []store.Participant{{ID: 3, Name: "Damien"}, {ID: 4, Name: "Ana María"}, {ID: 5, Name: "grill"}}
+	for _, c := range []struct {
+		m    store.Message
+		want []int64
+	}{
+		{store.Message{Kind: store.KindAgent, Body: "@Damien, j'ai compris « on réessaye »."}, []int64{3}},
+		{store.Message{Kind: store.KindAgent, Body: "Over to @ana_maría and @grill."}, []int64{4}},
+		{store.Message{Kind: store.KindText, Body: "@Damien look"}, []int64{3}},
+		{store.Message{Kind: store.KindVoice, Body: "@Damien look"}, nil},
+	} {
+		got := mentionedPeople(c.m, personas, ps)
+		if len(got) != len(c.want) {
+			t.Errorf("%s %q: %v, want %v", c.m.Kind, c.m.Body, got, c.want)
+		}
+		for _, id := range c.want {
+			if !got[id] {
+				t.Errorf("%s %q: %v, want %v", c.m.Kind, c.m.Body, got, c.want)
+			}
+		}
 	}
 }
 

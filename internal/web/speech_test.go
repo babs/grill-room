@@ -23,6 +23,9 @@ func TestSpokenTextSanitises(t *testing.T) {
 		{"1. First.\n2) Second.", "First. Second."},
 		{"  lots\t of \n\n space  ", "lots of space"},
 		{"🎉 **`code`** https://x.example", ""},
+		{"@Damien, j'ai compris.", "Damien, j'ai compris."},
+		{"Over to @Ana_María ·a1b2 and (@Bob).", "Over to Ana María and (Bob)."},
+		{"Mail bob@example.com, not @grill-room.", "Mail bob@example.com, not grill-room."},
 	} {
 		if got := spokenText(c.in, 60); got != c.want {
 			t.Errorf("spokenText(%q) = %q, want %q", c.in, got, c.want)
