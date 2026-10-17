@@ -52,6 +52,52 @@ test('daemon pairs through the room approval', async ({ browser, request, baseUR
   }
 });
 
+// A status poll sent before the host's click and answered after the click's reload must not undo
+// it: approve-all came back unchecked in CI (mentions.spec.js) when one did.
+test('daemon page keeps a change a slower, older poll answers over', async ({ browser, request, baseURL }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const daemon = startDaemon(`${baseURL}/r/${room.id}`);
+  try {
+    const admin = await pairDaemon(alice, daemon);
+    await admin.locator('#tab-general').click();
+    const box = admin.getByLabel('Approve every new AI persona and change');
+    await expect(box).not.toBeChecked();
+    let release;
+    const held = new Promise((r) => { release = r; });
+    let caught;
+    const older = new Promise((r) => { caught = r; });
+    let resume;
+    const next = new Promise((r) => { resume = r; });
+    let phase = 'hold';
+    await admin.route((url) => url.pathname === '/api/status', async (route) => {
+      if (phase === 'hold') {
+        // The answer is read now, before the click: older than the click's reload.
+        phase = 'pass';
+        const response = await route.fetch();
+        caught();
+        await held;
+        phase = 'next';
+        return route.fulfill({ response });
+      }
+      if (phase === 'next') {
+        // The poll after the older answer: that answer has been handled once this one is asked.
+        phase = 'pass';
+        return resume(route);
+      }
+      return route.continue();
+    });
+    await older;
+    await box.check();
+    await expect(admin.locator('.toast', { hasText: 'approved at once' })).toBeVisible();
+    release();
+    const route = await next;
+    expect(await box.isChecked()).toBe(true);
+    await route.continue();
+  } finally {
+    daemon.cleanup();
+  }
+});
+
 // 003-AC15, 003-AC17: the room says who holds the agent, never the machine. From the page the host
 // cuts the worker off: the room sees the agent offline until the host lets it back.
 test('daemon page cuts a worker off from Claude and lets it back', async ({ browser, request, baseURL }) => {

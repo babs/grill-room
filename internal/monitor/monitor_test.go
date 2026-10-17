@@ -11,6 +11,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	_ "github.com/babs/grill-room/internal/sqlitetest"
 )
 
 type clock struct{ t time.Time }

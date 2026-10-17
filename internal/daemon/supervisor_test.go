@@ -21,6 +21,9 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/babs/grill-room/internal/sandbox"
+	_ "github.com/babs/grill-room/internal/sqlitetest"
 )
 
 // TestMain lets the supervisor tests run this test binary as a fake worker speaking the protocol
@@ -36,7 +39,7 @@ func TestMain(m *testing.M) {
 // status, answers requests and stops when told. "crash" exits right after its config, "mute"
 // never answers, "silent" never says hello, "early" talks before it, "served" reports that its
 // instance serves v9.9.9, "slots" asks for two slots and frees the first once granted, "turns"
-// reports two ended turns.
+// reports two ended turns, "nodocker" and "docker" report Docker down or up and exit.
 func fakeWorker(mode string) int {
 	proto, err := strconv.Atoi(mode)
 	if err != nil {
@@ -72,7 +75,10 @@ func fakeWorker(mode string) int {
 		served = "v9.9.9"
 	}
 	_ = conn.Send(Msg{Type: "status", Status: &Status{Host: "fake-worker", Room: m.Config.Pair, Pairing: "paired", Connection: "connected",
-		Update: Update{Available: "v9.9.9", Served: served}}})
+		Docker: sandbox.Readiness{OK: mode == "docker"}, Update: Update{Available: "v9.9.9", Served: served}}})
+	if mode == "nodocker" || mode == "docker" {
+		return 1
+	}
 	_ = conn.Send(Msg{Type: "log", Log: []byte(`{"msg":"fake_worker_ready"}`)})
 	logAccess := func(a *Access) {
 		if a != nil {
@@ -477,6 +483,32 @@ func TestSupervisorCleansUpAfterCrash(t *testing.T) {
 	}
 }
 
+// A worker that last saw Docker down is restarted without a cleanup, which would wait on that
+// Docker: a Windows runner's hung for over 30 s, the room without a host meanwhile. One that saw it
+// up gets its cleanup.
+func TestSupervisorCrashCleanupFollowsDocker(t *testing.T) {
+	for mode, cleans := range map[string]bool{"nodocker": false, "docker": true} {
+		t.Run(mode, func(t *testing.T) {
+			var mu sync.Mutex
+			var calls []string
+			docker := func(_ context.Context, _ io.Reader, args ...string) ([]byte, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				calls = append(calls, strings.Join(args, " "))
+				return nil, errors.New("docker: no answer")
+			}
+			s := testSupervisor(t, mode, nil, func(o *SupervisorOptions) { o.Docker = docker })
+			s.SetRoom(context.Background(), Room{Base: "https://rooms.example", ID: "abc"})
+			waitFor(t, "two restarts", func() bool { return instance(t, s).Restarts >= 2 })
+			mu.Lock()
+			defer mu.Unlock()
+			if slices.ContainsFunc(calls, func(c string) bool { return strings.HasPrefix(c, "container ls") }) != cleans {
+				t.Fatalf("docker calls %q, want a cleanup: %v", calls, cleans)
+			}
+		})
+	}
+}
+
 // 003-AC6: the lock admits one supervisor per state dir, the socket hands a later launch's room
 // over, and the launch only opens a link to a local page.
 func TestLockAndHandoff(t *testing.T) {
@@ -633,11 +665,22 @@ func TestSupervisorSetRoomFailures(t *testing.T) {
 
 // A worker that never says hello is killed and restarted; one that talks before hello is cut off.
 func TestSupervisorHandshakeFailures(t *testing.T) {
-	for mode, want := range map[string]string{"silent": "no hello from the worker", "early": `the worker sent "status" before hello`} {
+	for mode, c := range map[string]struct {
+		want  string
+		hello time.Duration
+	}{
+		"silent": {"no hello from the worker", 200 * time.Millisecond},
+		// The default timeout: a short one killed this worker before it spoke on a loaded runner.
+		"early": {`the worker sent "status" before hello`, 0},
+	} {
 		t.Run(mode, func(t *testing.T) {
-			s := testSupervisor(t, mode, nil, func(o *SupervisorOptions) { o.HelloTimeout = 200 * time.Millisecond })
+			s := testSupervisor(t, mode, nil, func(o *SupervisorOptions) {
+				if c.hello != 0 {
+					o.HelloTimeout = c.hello
+				}
+			})
 			s.SetRoom(context.Background(), Room{Base: "https://rooms.example", ID: "abc"})
-			waitFor(t, "a restart", func() bool { in := instance(t, s); return in.Restarts >= 1 && strings.Contains(in.Error, want) })
+			waitFor(t, "a restart", func() bool { in := instance(t, s); return in.Restarts >= 1 && strings.Contains(in.Error, c.want) })
 		})
 	}
 }
