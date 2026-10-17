@@ -218,7 +218,7 @@ for (const vp of widths) {
     const gh = page.locator('#pronunciations .list-row', { hasText: 'guite-heub' });
     await expect(gh).toContainText('GitHub');
     await expect(gh.getByRole('button', { name: 'GitHub: English-style, switch to French-style' })).toBeVisible();
-    await page.getByLabel('Search').fill('cleuss');
+    await page.getByLabel('Search').fill('clusteur');
     await expect(page.locator('#pronunciations .list-row:not(.head)')).toHaveCount(1);
     await expect(page.locator('#pronunciations .list-row:not(.head)')).toContainText('cluster');
     await page.getByLabel('Search').fill('');

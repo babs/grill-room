@@ -60,6 +60,9 @@ func (s *Store) AddPronunciation(ctx context.Context, t voicecat.Term, by string
 		if n >= MaxPronunciations {
 			return ErrLexiconFull
 		}
+		if err := termFree(ctx, tx, t.Term, 0); err != nil {
+			return err
+		}
 		err := tx.QueryRowContext(ctx, `INSERT INTO pronunciations (term, style, fr_en, fr_fr, en, by, at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
 			t.Term, t.Style, t.FrEn, t.FrFr, t.En, by, p.At).Scan(&p.ID)
 		if err != nil {
@@ -83,6 +86,9 @@ func (s *Store) UpdatePronunciation(ctx context.Context, id int64, t voicecat.Te
 		if err != nil {
 			return err
 		}
+		if err := termFree(ctx, tx, t.Term, id); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE pronunciations SET term = ?, style = ?, fr_en = ?, fr_fr = ?, en = ?, by = ?, at = ? WHERE id = ?`,
 			t.Term, t.Style, t.FrEn, t.FrFr, t.En, by, p.At, id); err != nil {
 			return termErr(err)
@@ -100,6 +106,26 @@ func (s *Store) DeletePronunciation(ctx context.Context, id int64) error {
 		}
 		return execOne(ctx, tx, `DELETE FROM pronunciations WHERE id = ?`, id)
 	})
+}
+
+// termFree is ErrTermTaken when another entry than id has term, ignoring case beyond ASCII, which
+// the column's NOCASE does not fold ("mergé", "MERGÉ").
+func termFree(ctx context.Context, tx *sql.Tx, term string, id int64) error {
+	rows, err := tx.QueryContext(ctx, `SELECT term FROM pronunciations WHERE id != ?`, id)
+	if err != nil {
+		return fmt.Errorf("pronunciation terms: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var other string
+		if err := rows.Scan(&other); err != nil {
+			return fmt.Errorf("pronunciation terms: %w", err)
+		}
+		if strings.EqualFold(other, term) {
+			return ErrTermTaken
+		}
+	}
+	return rows.Err()
 }
 
 func termErr(err error) error {

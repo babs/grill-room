@@ -27,8 +27,10 @@ func TestLexicon(t *testing.T) {
 				t.Errorf("%s with %q: %d, want %d", m, c.tok, code, c.want)
 			}
 		}
-		if code, _ := e.do(t, "DELETE", "/api/admin/pronunciations/1", c.tok, nil); code != c.want {
-			t.Errorf("DELETE with %q: %d, want %d", c.tok, code, c.want)
+		for _, m := range []string{"PUT", "DELETE"} {
+			if code, _ := e.do(t, m, "/api/admin/pronunciations/1", c.tok, gh); code != c.want {
+				t.Errorf("%s one with %q: %d, want %d", m, c.tok, code, c.want)
+			}
 		}
 	}
 

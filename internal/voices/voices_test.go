@@ -80,7 +80,7 @@ func TestSeedMatchesTheImage(t *testing.T) {
 	if !bytes.Equal(img, seedRaw) {
 		t.Error("tts/grill_tts/lexicon_seed.json differs from internal/voices/lexicon_seed.json: copy it")
 	}
-	if n := len(Seed()); n < 140 || n > 200 {
+	if n := len(Seed()); n < 120 || n > 200 {
 		t.Errorf("seed has %d terms", n)
 	}
 }

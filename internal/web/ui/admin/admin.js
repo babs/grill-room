@@ -697,18 +697,18 @@ function Pronunciation() {
     .then(() => { load(); toast(`${e.term} is said ${e.style === 'en' ? 'French' : 'English'}-style`); }).catch(show);
   /** @param {LexEntry} e */
   const remove = (e) => {
-    window.grillConfirm(`Remove ${e.term} from the lexicon?`, 'The voices then read it as written.', 'Remove')
+    window.grillConfirm(`Remove ${e.term} from the lexicon?`, 'The voices then read it the usual way: as written, an acronym letter by letter.', 'Remove')
       .then((yes) => { if (yes) api('DELETE', '/api/admin/pronunciations/' + e.id).then(load).catch(show); });
   };
   const needle = q.trim().toLowerCase();
   const shown = list?.entries.filter((e) => !needle || [e.term, e.fr_en, e.fr_fr, e.en].some((v) => v.toLowerCase().includes(needle))) ?? [];
   // A phone shows the French form the term's style says, the one a French voice uses.
   /** @param {string} label @param {string} v @param {boolean} used */
-  const form = (label, v, used) => html`<span class=${used ? 'cell' : 'cell aside'} data-label=${label}>${v || html`<span class="meta">as written</span>`}</span>`;
+  const form = (label, v, used) => html`<span class=${used ? 'cell' : 'cell aside'} data-label=${label}>${v || html`<span class="meta">usual</span>`}</span>`;
   const full = !!list && list.entries.length >= list.max;
   return html`
     <h2>Pronunciation</h2>
-    <p class="hint">How the call voices say a term. English-style says it the English way in a French sentence, French-style the French way. A form left empty reads the term as written.</p>
+    <p class="hint">How the call voices say a term. English-style says it the English way in a French sentence, French-style the French way. A form left empty reads the term the usual way: as written, an acronym letter by letter.</p>
     ${list && html`<div class="row filters">
       <label>Search<input id="term-search" type="search" value=${q} onInput=${onInput(setQ)}/></label>
       <span class="meta">${list.entries.length} of ${list.max} terms</span><span class="spacer"></span>

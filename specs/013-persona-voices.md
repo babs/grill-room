@@ -30,7 +30,7 @@ French and English rooms both ship. A rule-based text layer reads numbers, acron
 - Turn-taking: never over a human, stop within 300 ms, resume or drop, one persona at a time, stale lines dropped, timeouts per room.
 - The "Speaks in the call" toggle, the voice picker with a sample, the rate, default voices, the persona pill (a click opens the persona card, ▶ runs the persona, 🔊 mutes it for this listener) and its speaking states.
 - The Spec grill starter turns on Grill's voice.
-- A pronunciation lexicon in `/admin`, each term English-style or French-style, seeded with about 150 terms (Appendix A), each seed term checked by an STT round trip in CI.
+- A pronunciation lexicon in `/admin`, each term English-style or French-style, seeded with about 140 terms (Appendix A), each seed term checked by an STT round trip in CI.
 - Scale to zero as an option, echo verification on a real audio loop.
 
 ## Out of scope
@@ -57,7 +57,7 @@ French and English rooms both ship. A rule-based text layer reads numbers, acron
 ### Text layer
 - [ ] **AC5** Each sentence gets a language, `fr` or `en`, from a function-word count. A tie takes the previous sentence's language; a tie on the first sentence takes the whole line's count; a tie there gives `en`.
 - [ ] **AC6** Numbers are said in the sentence's language: integers, decimals (French with "virgule"), percentages, versions (`2.3.1`, `v2`), a letter with digits (`p95`), and units (Appendix A, rule cases). In English, an HTTP status after an article is said digit by digit ("a five oh two"); in French as a number ("cinq cent deux"). An acronym of 2 to 5 capitals is spelled with the language's letter names unless the lexicon has it. A run of 10 digits or more (an id, a phone number) is said digit by digit, and a line says at most 150 words once numbers and terms are words, whole sentences first.
-- [ ] **AC7** In a French sentence, each lexicon term takes the French form of its style: an English-style term (the default for tech terms) its English-style respelling ("ri-traï"), a French-style term (naturalised words: bug, web, email, parking, week-end) its French-style form ("beugue"); an empty form leaves the term as written. In an English sentence, a term takes its English form when it has one. Longest term first, whole words only; a term holding a capital matches its exact case, an all-lowercase term matches any case. A comma-separated clause of a French sentence with at least 2 English stopwords, and more English than French ones, goes to the same voice's English model; everything else in the sentence stays one French call. A line never uses two engines or two voices.
+- [ ] **AC7** In a French sentence, each lexicon term takes the French form of its style: an English-style term (the default for tech terms) its English-style respelling ("ri-traï"), a French-style term (naturalised words: bug, web, email, parking, week-end) its French-style form ("beugue"); an empty form leaves the term to the language's other rules (an acronym spelled, a word as written). In an English sentence, a term takes its English form when it has one. Longest term first, whole words only; a term holding a capital matches its exact case, an all-lowercase term matches any case. A comma-separated clause of a French sentence with at least 2 English stopwords, and more English than French ones, goes to the same voice's English model; everything else in the sentence stays one French call. A line never uses two engines or two voices.
 - [ ] **AC8** Each rule of AC3, AC4, AC5, AC6, AC7 and AC38 has a test that fails without it, on at least two input shapes it did not come from (S14b's `normalize.py --check` is the starting set).
 
 ### TTS pod, build and licences
@@ -92,7 +92,7 @@ French and English rooms both ship. A rule-based text layer reads numbers, acron
 
 ### Lexicon
 - [ ] **AC31** `/admin` has a Pronunciation page for the server admin: list, search, add, edit, delete. An entry is a term (1 to 40 characters, unique ignoring case), a style (English or French) and three spoken forms: English-style French, French-style French and English, at least one set. The list shows each term's style and flips it in one click. At most 1000 entries. Each change writes an audit entry (004-AC6) and reaches the pod for the next line, with no restart. Anyone else is refused, as on every `/api/admin` route: 401 without the admin's token or session, 403 with an API token.
-- [ ] **AC32** A migration inserts Appendix A (about 150 terms) once. Later edits and deletions stand; the server never re-seeds at start.
+- [ ] **AC32** A migration inserts Appendix A (about 140 terms) once. Later edits and deletions stand; the server never re-seeds at start.
 - [ ] **AC33** A CI job renders each Appendix A entry in a carrier sentence of each language it has a form for, 3 times with the first default voice of that language, and passes the entry when the room's STT hears one of its accepted spellings in at least 2 of 3 renders. One failing entry fails the job. The job's report lists every entry's hits.
 
 ### Scale to zero and echo
@@ -189,7 +189,7 @@ Made while drafting (overturnable):
 - Voice donations are out (Out of scope), so marius (`voice-donations/Selfie.wav`) and javert (`Butter.wav`) are out of the catalogue even though their licence is CC0; Appendix B's English defaults start with alba and charles. Voices whose source the `kyutai/tts-voices` README does not list (giovanni, lola, juergen, rafael, daan) are out too.
 - Samples (AC27) are rendered when the image builds; the pod hands them to the room server at connect, which keeps them in its database. Committing synthetic audio to the public repo is avoided.
 - A server-built summary does not override a persona that chose silence when it did nothing: a turn with no action and no `spoken.md` says nothing.
-- Lexicon forms: an empty form leaves the term as written, so flipping a term to French-style with no French-style form lets the French voice read the word itself.
+- Lexicon forms: an empty form leaves the term to the language's other rules, so flipping a term to French-style with no French-style form lets the French voice read the word itself, and an acronym with no form is spelled by the acronym rule.
 - Samples are rendered at build and served by the room server: they work while the pod is scaled to zero.
 - The per-listener mute unsubscribes rather than setting volume 0: it saves the bandwidth.
 - A dropped line posts nothing in the chat: the synthesis is already there.
@@ -197,6 +197,7 @@ Made while drafting (overturnable):
 - The turn-taking e2e uses a fake engine; the real engine gets one smoke run and the lab replay. Turn-taking does not depend on the engine, and CI stays light.
 - Risk: S14 saw LiveKit report a human about 0.25 s after the speech began, which leaves about 50 ms for the 300 ms stop. Phase 2 measures it and adds a VAD in the pod if needed.
 - Measured in Phase 2's e2e: LiveKit names a talking human to a bot about 400 ms after their onset, too late for AC22. The pod also reads the humans' tracks its bots subscribe to, with an energy onset detector (20 ms above −42 dBFS, 400 ms hang): the stop then lands 30 to 110 ms after the onset at a listener. The room hears a human while any of its bots, or detectors, does; a bot that has not subscribed to someone yet names nobody and must not silence the others.
+- AC33's first round trip (estelle and alba, the room's STT) passed 137 of 227 entry-languages. Candidate respellings were rendered 3 times each; the best one at 2 of 3 or better replaced the form: cluster is now "clusteur" (the user's "cleuss-teur" was heard 0 of 3, "clusteur" 3 of 3). A language with no passing form lost its forms, and the voices read the term as written there; 35 entries with none left were removed (sidecar, webhook, deploy, commit, JSON, SQL and others). Most acronyms lost their French form: the STT does not write letter-by-letter French back as the acronym, though the voices still spell them by the acronym rule. The seed holds 137 terms.
 - AC35 runs in CI (`persona-echo`): Chrome's microphone is a remap of a PipeWire null sink's monitor (Chrome lists no monitor source). With echo cancellation on, 10 lines pass with no STT line and no interruption; with it off the persona's own echo cuts it off and resumes it in a loop, and the STT posts the echo. A listener with echo cancellation off on speakers stalls the persona: out of scope, the room keeps it on.
 - A bot's track sends silence between lines: a stream that restarts at each line makes the listener's jitter buffer grow again.
 - The per-listener mute lives on the pill and in the card (notes, 2026-10-16), not in the audio menu.
@@ -205,7 +206,7 @@ Made while drafting (overturnable):
 
 ## Appendix A — Pronunciation lexicon seed
 
-How to read it: every table but "Naturalised" is English-style, its "FR" being the English-style form. "FR" is what a French voice says inside a French sentence, "EN" what an English voice says inside an English sentence; "as written" means no entry for that language. The respellings follow S14b's and the user's ("ri-traï", "guite-heub", "cleuss-teur", "laïve-kit"). Every row other than the user's cases is a candidate until AC33 passes it; a row that fails is respelled or removed before the Phase 3 merge. Accepted spellings for the round trip are the term itself, its spaced form ("live kit") and, for numbers, the digits or the words.
+How to read it: every table but "Naturalised" is English-style, its "FR" being the English-style form. "FR" is what a French voice says inside a French sentence, "EN" what an English voice says inside an English sentence; "as written" means no entry for that language. The respellings follow S14b's and the user's ("ri-traï", "guite-heub", "clusteur", "laïve-kit"). Every row other than the user's cases is a candidate until AC33 passes it; a row that fails is respelled or removed before the Phase 3 merge. Accepted spellings for the round trip are the term itself, its spaced form ("live kit"), the name it is said by where the STT writes that name (k8s: Kubernetes, kubectl: kube control, PostgreSQL: Postgres, Nginx: engine x, OK: okay, B2B and B2C: B to B, B to C) and, for numbers, the digits or the words.
 
 ### User cases
 
@@ -213,7 +214,7 @@ How to read it: every table but "Naturalised" is English-style, its "FR" being t
 |---|---|---|
 | GitHub | guite-heub | as written |
 | retry | ri-traï | as written |
-| cluster | cleuss-teur | as written |
+| cluster | clusteur | as written |
 | LiveKit | laïve-kit | Live Kit |
 
 502 is a rule case (below).
@@ -224,36 +225,24 @@ How to read it: every table but "Naturalised" is English-style, its "FR" being t
 |---|---|---|
 | rollout | rol-aoute | as written |
 | rollback | rol-bak | as written |
-| feature flag | fitcheur flag | as written |
+| feature flag | fi-tcheur flag | as written |
 | staging | stéïdjinng | as written |
-| sidecar | saïde-car | as written |
 | Kubernetes | koubeurnétisse | as written |
 | merge request | meurdje riquouest | as written |
 | pull request | poule riquouest | as written |
 | ArgoCD | argo cédé | Argo C D |
 | backlog | bak-logue | as written |
 | sprint | sprinnte | as written |
-| fix | fixe | as written |
-| OAuth | o-oss | O Auth |
+| OAuth | as written | O Auth |
 | pipeline | païpe-laïne | as written |
 | code freeze | code frize | as written |
-| backoff | bak-offe | as written |
-| webhook | ouèbe-houk | as written |
 | GitLab | guite-lab | as written |
-| deploy | di-ploï | as written |
 | merge | meurdje | as written |
-| mergé | meurdjé | as written |
 | review | ri-viou | as written |
-| health check | hèlse-tchèque | as written |
-| load balancer | laude balanceur | as written |
-| endpoint | ènde-pointe | as written |
-| error budget | èreur beudjette | as written |
 | PostgreSQL | postgrèsse | Postgres |
 | Redis | rédisse | as written |
 | canary | canari | as written |
-| README | ride-mi | read me |
 | install | instol | as written |
-| end-to-end | ènde tou ènde | as written |
 | login | loguine | as written |
 | npm | ène pé èm | N P M |
 | pnpm | pé ène pé èm | P N P M |
@@ -263,103 +252,84 @@ How to read it: every table but "Naturalised" is English-style, its "FR" being t
 | Term | FR | EN |
 |---|---|---|
 | k8s | koubeurnétisse | Kubernetes |
-| kubectl | koube-contrôle | kube control |
-| Helm | hèlme | as written |
+| kubectl | as written | kube control |
 | pod | pode | as written |
-| node | naude | as written |
 | namespace | néïme-spéïsse | as written |
 | container | conn-téï-neur | as written |
 | Docker | doc-keur | as written |
 | Terraform | tèra-forme | as written |
 | cloud | claoude | as written |
-| AWS | a double-vé èss | A W S |
+| AWS | as written | A W S |
 | GCP | gé cé pé | G C P |
-| Azure | a-jeur | as written |
-| S3 | èss trois | S three |
+| Azure | azur | as written |
+| S3 | èss trois | as written |
 | serverless | seur-veur-lesse | as written |
-| autoscaling | auto-scéïlinng | as written |
+| autoscaling | auto-squéïlingue | as written |
 | ingress | inn-grèsse | as written |
-| Nginx | ènjine-iks | engine X |
-| Prometheus | promé-téusse | as written |
+| Nginx | as written | engine X |
+| Prometheus | prométhéusse | as written |
 | monitoring | monitorinngue | as written |
 | dashboard | dache-borde | as written |
 | uptime | eupe-taïme | as written |
 | downtime | daoune-taïme | as written |
 | timeout | taïme-aoute | as written |
-| throughput | srou-poute | as written |
 | on-call | onne-col | as written |
 | runbook | reune-bouk | as written |
 | post-mortem | poste mortème | as written |
-| SRE | èss èr e | S R E |
-| SLA | èss èl a | S L A |
-| SLO | èss èl o | S L O |
-| SLI | èss èl i | S L I |
-| vCPU | vé cé pé u | V C P U |
-| CPU | cé pé u | C P U |
-| GPU | gé pé u | G P U |
+| SLO | èss èl o | as written |
+| vCPU | as written | V C P U |
+| CPU | as written | C P U |
+| GPU | as written | G P U |
 | RAM | rame | ram |
-| SSD | èss èss dé | S S D |
 
 ### Git and CI/CD
 
 | Term | FR | EN |
 |---|---|---|
-| CI/CD | cé i cé dé | C I C D |
-| CI | cé i | C I |
+| CI/CD | as written | C I C D |
+| CI | as written | C I |
 | build | bilde | as written |
-| release | ri-lisse | as written |
 | hotfix | hotte-fixe | as written |
-| commit | co-mite | as written |
 | push | pouche | as written |
-| pull | poule | as written |
 | branch | brannche | as written |
 | rebase | ri-béïze | as written |
 | checkout | tchèque-aoute | as written |
-| cherry-pick | tchéri-pik | as written |
 | linter | linn-teur | as written |
-| flaky | fléki | as written |
+| flaky | flèï-ki | as written |
 | PR | pé èr | P R |
-| MR | èm èr | M R |
 | repo | répo | as written |
 | monorepo | mono-répo | as written |
-| changelog | tchéïnje-logue | as written |
+| changelog | change log | as written |
 
 ### Web and code
 
 | Term | FR | EN |
 |---|---|---|
-| API | a pé i | A P I |
-| SDK | èss dé ka | S D K |
-| URL | u èr èl | U R L |
-| JSON | djé-sonne | Jason |
-| YAML | ya-mel | yammel |
-| SQL | èss ku èl | S Q L |
+| API | as written | A P I |
+| SDK | èss dé ka | as written |
+| URL | as written | U R L |
+| YAML | ya-meul | yammel |
 | HTTP | ache té té pé | H T T P |
-| HTTPS | ache té té pé èss | H T T P S |
+| HTTPS | as written | H T T P S |
 | DNS | dé ène èss | D N S |
 | TLS | té èl èss | T L S |
-| SSH | èss èss ache | S S H |
+| SSH | èss èss ache | as written |
 | VPN | vé pé ène | V P N |
-| SSO | èss èss o | S S O |
-| JWT | ji double-vé té | J W T |
+| JWT | as written | J W T |
 | token | tau-keune | as written |
 | WebSocket | ouèbe-soquette | web socket |
 | WebRTC | ouèbe èr té cé | web R T C |
-| frontend | fronnte-ènde | as written |
-| backend | bak-ènde | as written |
 | full-stack | foule-stak | as written |
 | framework | frème-oueurk | as written |
-| React | ri-akte | as written |
+| React | ri-act | as written |
 | TypeScript | taïpe-scripte | as written |
 | JavaScript | java-scripte | as written |
 | Python | païe-sonne | as written |
-| Rust | reuste | as written |
 | MongoDB | mongo dé bé | Mongo D B |
 | debug | di-beugue | as written |
 | refactor | ri-facteur | as written |
 | legacy | lèga-ci | as written |
 | open source | o-peune source | as written |
-| Slack | slak | as written |
 | Jira | dji-ra | as written |
 | Stripe | straïpe | as written |
 
@@ -368,12 +338,10 @@ How to read it: every table but "Naturalised" is English-style, its "FR" being t
 | Term | FR | EN |
 |---|---|---|
 | roadmap | rode-mape | as written |
-| feature | fitcheur | as written |
+| feature | fi-tcheure | as written |
 | user story | you-zeur stori | as written |
 | stakeholder | stéïk-holdeur | as written |
 | onboarding | onne-bordinngue | as written |
-| churn | tcheurne | as written |
-| growth | grôsse | as written |
 | feedback | fide-bak | as written |
 | pricing | praïe-sinng | as written |
 | A/B test | a bé teste | A B test |
@@ -387,14 +355,12 @@ How to read it: every table but "Naturalised" is English-style, its "FR" being t
 | brainstorming | brène-stormingue | as written |
 | KPI | ka pé i | K P I |
 | OKR | o ka èr | O K R |
-| MVP | èm vé pé | M V P |
-| POC | pé o cé | P O C |
-| ROI | èr o i | R O I |
-| UX | u iks | U X |
-| UI | u i | U I |
-| SaaS | sasse | sass |
+| MVP | èm vé pé | as written |
+| POC | as written | P O C |
+| UX | as written | U X |
+| UI | as written | U I |
 | B2B | bé tou bé | B to B |
-| B2C | bé tou cé | B to C |
+| B2C | as written | B to C |
 
 ### Naturalised anglicisms (French-style, AC7)
 
@@ -405,7 +371,7 @@ How to read it: every table but "Naturalised" is English-style, its "FR" being t
 | bug | beugue | as written |
 | web | ouèbe | as written |
 | email | imèle | as written |
-| mail | mèle | as written |
+| mail | mèïle | as written |
 | parking | parkinng | as written |
 | week-end | ouik-ènde | as written |
 | startup | starte-eupe | as written |
@@ -416,7 +382,7 @@ How to read it: every table but "Naturalised" is English-style, its "FR" being t
 | podcast | podcaste | as written |
 | smartphone | smarte-faune | as written |
 | wifi | oui-fi | as written |
-| OK | o-ké | O K |
+| OK | as written | O K |
 
 ### Rule cases (AC6, not lexicon rows, in the same round trip)
 

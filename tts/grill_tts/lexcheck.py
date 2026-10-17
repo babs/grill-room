@@ -28,6 +28,16 @@ RENDERS = 3
 NEEDED = 2
 # The first default voice of each language (013-AC16); both ship as Pocket's own states.
 VOICE: dict[Lang, str] = {"fr": "estelle", "en": "alba"}
+# The names a term is said by, which the STT writes out: they count as heard.
+SAID_AS: dict[str, list[str]] = {
+    "k8s": ["Kubernetes"],
+    "kubectl": ["kube control", "cube control"],
+    "PostgreSQL": ["Postgres"],
+    "Nginx": ["engine x"],
+    "OK": ["okay"],
+    "B2B": ["B to B"],
+    "B2C": ["B to C"],
+}
 CARRIER: dict[Lang, str] = {
     "fr": "Je pense que {} pose problème ici.",
     "en": "I think {} is the problem here.",
@@ -49,9 +59,9 @@ def tokens(s: str) -> list[str]:
 
 
 def accepted(term: str, lang: Lang) -> list[str]:
-    """The term, its spaced form (camel case, letters of an acronym) and, for numbers, the digits or
-    the words; each compared with spaces removed."""
-    forms = {term, re.sub(r"(?<=[a-z])(?=[A-Z])", " ", term)}
+    """The term, its spaced form (camel case, letters of an acronym), the names it is said by and,
+    for numbers, the digits or the words; each compared with spaces removed."""
+    forms = {term, re.sub(r"(?<=[a-z])(?=[A-Z])", " ", term), *SAID_AS.get(term, [])}
     if re.fullmatch(r"[A-Z0-9/]{2,6}", term):
         forms.add(" ".join(term))
     for f in list(forms):

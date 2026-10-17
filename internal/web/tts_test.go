@@ -183,14 +183,14 @@ func TestTTSHub(t *testing.T) {
 	l := ttsLine{Room: "r", Text: "a", ttsTimeouts: defaultTTSTimeouts, QueuedAt: now}
 	first := h.add(l, now)
 	second := h.add(l, now)
-	if got, _, _ := h.next(first, now); len(got) != 1 || got[0].Seq != second {
+	if got, _ := h.next(first, now); len(got) != 1 || got[0].Seq != second {
 		t.Fatalf("after %d: %+v", first, got)
 	}
 	// The second was sent; the first was not, so it expires as no_service.
 	if n := h.noServiceDropped(now.Add(41 * time.Second)); n != 1 {
 		t.Errorf("no_service %d, want 1", n)
 	}
-	if got, _, _ := h.next(0, now.Add(41*time.Second)); len(got) != 0 {
+	if got, _ := h.next(0, now.Add(41*time.Second)); len(got) != 0 {
 		t.Errorf("expired lines handed out: %+v", got)
 	}
 	if again := newTTSHub(now.Add(time.Second)); again.add(l, now) <= second {

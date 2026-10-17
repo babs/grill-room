@@ -3,7 +3,7 @@
 # headed Chrome, whose audio goes to the default sink.
 set -euo pipefail
 export XDG_RUNTIME_DIR=/tmp/run
-mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+mkdir -m 700 "$XDG_RUNTIME_DIR"
 eval "$(dbus-launch --sh-syntax)"
 pipewire &
 wireplumber &

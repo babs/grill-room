@@ -326,11 +326,15 @@ jobs:
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - id: build
+        run: echo "jobs=$(nproc)" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: stt
           tags: grill-stt:local
           load: true
+          build-args: |
+            BUILD_JOBS=${{ steps.build.outputs.jobs }}
           cache-from: type=gha,scope=stt
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -376,7 +380,7 @@ jobs:
         env:
           BASE: ${{ github.event_name == 'workflow_dispatch' && 'all' || github.event.pull_request.base.sha || github.event.before }}
         run: |
-          paths="tts/grill_tts/lexicon_seed.json tts/grill_tts/textlayer.py tts/grill_tts/lexcheck.py tts/grill_tts/roundtrip.py tts/grill_tts/audio.py tts/grill_tts/engine.py tts/uv.lock stt/"
+          paths="tts/grill_tts/lexicon_seed.json tts/grill_tts/textlayer.py tts/grill_tts/lexcheck.py tts/grill_tts/roundtrip.py tts/grill_tts/audio.py tts/grill_tts/engine.py tts/uv.lock stt/ Makefile .github/workflows/ci.yml"
           # shellcheck disable=SC2086 # paths is a word list
           if [ "$BASE" = all ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null || ! git diff --quiet "$BASE" HEAD -- $paths; then
             echo "run=true" >> "$GITHUB_OUTPUT"
@@ -384,11 +388,16 @@ jobs:
       - if: steps.changed.outputs.run == 'true'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - if: steps.changed.outputs.run == 'true'
+        id: build
+        run: echo "jobs=$(nproc)" >> "$GITHUB_OUTPUT"
+      - if: steps.changed.outputs.run == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: stt
           tags: grill-stt:local
           load: true
+          build-args: |
+            BUILD_JOBS=${{ steps.build.outputs.jobs }}
           cache-from: type=gha,scope=stt
       - if: steps.changed.outputs.run == 'true'
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0

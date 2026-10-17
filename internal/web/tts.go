@@ -151,9 +151,16 @@ func (h *ttsHub) lexiconChanged() {
 	h.wake = make(chan struct{})
 }
 
-// next returns the lines after seq, marked sent, the lexicon's change count, and the channel closed
-// by the next add or lexicon change.
-func (h *ttsHub) next(seq int64, now time.Time) ([]ttsLine, int64, <-chan struct{}) {
+// lexiconCount is the number of lexicon changes so far.
+func (h *ttsHub) lexiconCount() int64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.lexicon
+}
+
+// next returns the lines after seq, marked sent, and the channel closed by the next add or lexicon
+// change.
+func (h *ttsHub) next(seq int64, now time.Time) ([]ttsLine, <-chan struct{}) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.sweep(now)
@@ -164,7 +171,7 @@ func (h *ttsHub) next(seq int64, now time.Time) ([]ttsLine, int64, <-chan struct
 			out = append(out, *l)
 		}
 	}
-	return out, h.lexicon, h.wake
+	return out, h.wake
 }
 
 // resumePoint is where a pod with no Last-Event-ID starts: after the newest line any pod took. A
@@ -357,7 +364,6 @@ type ttsRoom struct {
 	Personas []ttsPersona `json:"personas"`
 }
 
-// ttsRoster lists the rooms with a human in the audio and their speaking personas (013-AC14).
 // TTSDemand is the number of rooms with a persona that speaks and a human in the audio (013-AC34).
 func (s *Server) TTSDemand() int {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -378,6 +384,7 @@ func (s *Server) TTSDemand() int {
 
 func speaking(p store.RoomPersona) bool { return p.Speaks && !p.Pending }
 
+// ttsRoster lists the rooms with a human in the audio and their speaking personas (013-AC14).
 func (s *Server) ttsRoster(ctx context.Context) []ttsRoom {
 	out := []ttsRoom{}
 	listening := s.people.listening(s.now())
@@ -469,14 +476,15 @@ func (s *Server) ttsEvents(w http.ResponseWriter, r *http.Request) {
 		if !sendRooms() {
 			return
 		}
-		lines, lexicon, wake := s.tts.next(last, s.now())
-		// At connect, then on each change: the pod speaks with the seed until it gets this.
-		if lexicon != sentLexicon {
+		// At connect, then on each change: the pod speaks with the seed until it gets this. Before
+		// the lines, which next marks as sent.
+		if lexicon := s.tts.lexiconCount(); lexicon != sentLexicon {
 			if !sendLexicon() {
 				return
 			}
 			sentLexicon = lexicon
 		}
+		lines, wake := s.tts.next(last, s.now())
 		for _, l := range lines {
 			b, _ := json.Marshal(l) // plain values cannot fail to marshal
 			if _, err := fmt.Fprintf(w, "id: %d\nevent: line\ndata: %s\n\n", l.Seq, b); err != nil {

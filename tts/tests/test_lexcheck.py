@@ -14,6 +14,8 @@ def test_heard() -> None:
     assert heard("k8s", "en", "I think K8S is the problem")
     assert heard("CI/CD", "fr", "je pense que CI CD pose problème")
     assert heard("end-to-end", "en", "I think end to end is the problem")
+    assert heard("kubectl", "en", "I think kube control is the problem here")
+    assert heard("OK", "en", "I think okay is the problem here")
     assert not heard("pod", "fr", "je pense que podcast pose problème")
     assert not heard("GitHub", "fr", "je pense que guite heub pose problème")
 

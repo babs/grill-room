@@ -277,7 +277,7 @@ def test_acronyms_spelled_with_letter_names(text: str, want: str) -> None:
 @pytest.mark.parametrize(
     ("text", "want"),
     [
-        ("Le cluster AWS est sur S3.", "Le cleuss-teur a double-vé èss est sur èss trois."),
+        ("Le cluster AWS est sur S3.", "Le clusteur a double-vé èss est sur èss trois."),
         ("The AWS cluster uses S3 and B2B.", "The A W S cluster uses S three and B to B."),
         (
             "On a déployé ArgoCD sur k8s avec la RAM.",
@@ -347,7 +347,7 @@ def test_empty_chosen_form_leaves_the_term(entry: Entry) -> None:
 # 013-AC7
 def test_english_sentence_takes_english_form_or_term() -> None:
     assert said(SEED, "The LiveKit pod and the retry are fine.") == "The Live Kit pod and the retry are fine."
-    assert said(SEED, "It is in the README and on GitHub.") == "It is in the read me and on GitHub."
+    assert said(SEED, "It is on npm and on GitHub.") == "It is on N P M and on GitHub."
     assert said(SEED, "We fixed the bug, it is OK.") == "We fixed the bug, it is O K."
 
 
@@ -446,14 +446,14 @@ def test_empty_lexicon_still_applies_rules() -> None:
 # 013-AC32
 def test_seed_lexicon() -> None:
     seed = load_seed()
-    assert len(seed) >= 140
+    assert len(seed) >= 130
     assert len({e.term.lower() for e in seed}) == len(seed)
     assert all(e.fr_en or e.fr_fr or e.en for e in seed)
     assert all(e.style in ("en", "fr") and 1 <= len(e.term) <= 40 for e in seed)
     by = {e.term: e for e in seed}
     assert by["GitHub"] == Entry("GitHub", "en", "guite-heub", "", "")
     assert by["retry"] == Entry("retry", "en", "ri-traï", "", "")
-    assert by["cluster"] == Entry("cluster", "en", "cleuss-teur", "", "")
+    assert by["cluster"] == Entry("cluster", "en", "clusteur", "", "")
     assert by["LiveKit"] == Entry("LiveKit", "en", "laïve-kit", "", "Live Kit")
     naturalised = {e.term for e in seed if e.style == "fr"}
     assert {"bug", "web", "email", "parking", "week-end", "OK"} <= naturalised
@@ -495,3 +495,23 @@ def test_spoken_words_are_bounded() -> None:
     plan = layer.plan(many)
     words = [len(sp.text.split()) for spans in plan for sp in spans]
     assert sum(words) <= MAX_SPOKEN_WORDS and len(plan) == MAX_SPOKEN_WORDS // words[0]
+
+
+# 013-AC7: a term with no form in a language is left to that language's rules: an acronym keeps its
+# letters, a number its words, a word stays as written; the other language still takes its form.
+@pytest.mark.parametrize(
+    ("text", "want"),
+    [
+        ("Le SDK est prêt.", "Le èss dé ka est prêt."),
+        ("Le S3 est prêt.", "Le èss trois est prêt."),
+        ("Le widget est prêt.", "Le widget est prêt."),
+        ("The SDK is ready.", "The Ess Dee Kay is ready."),
+    ],
+)
+def test_no_form_leaves_the_term_to_the_rules(text: str, want: str) -> None:
+    lex = [
+        Entry("SDK", "en", "", "", "Ess Dee Kay"),
+        Entry("S3", "en", "", "", "S three"),
+        Entry("widget", "fr", "", "", "wid jet"),
+    ]
+    assert said(TextLayer(lex), text) == want

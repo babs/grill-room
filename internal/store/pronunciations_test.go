@@ -48,8 +48,14 @@ func TestPronunciationSeedOnce(t *testing.T) {
 func TestPronunciationRules(t *testing.T) {
 	ctx := context.Background()
 	s := openTest(t)
-	if _, err := s.AddPronunciation(ctx, voicecat.Term{Term: "GITHUB", Style: "en", En: "git hub"}, "admin"); !errors.Is(err, ErrTermTaken) {
-		t.Fatalf("duplicate ignoring case: %v", err)
+	// NOCASE does not fold É: "ÉTÉ" passes the unique index, the store refuses it.
+	if _, err := s.AddPronunciation(ctx, voicecat.Term{Term: "été", Style: "fr", FrFr: "x"}, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	for _, dup := range []string{"GITHUB", "ÉTÉ"} {
+		if _, err := s.AddPronunciation(ctx, voicecat.Term{Term: dup, Style: "en", En: "x"}, "admin"); !errors.Is(err, ErrTermTaken) {
+			t.Fatalf("duplicate %s ignoring case: %v", dup, err)
+		}
 	}
 	ps, _ := s.Pronunciations(ctx)
 	if _, err := s.UpdatePronunciation(ctx, find(ps, "retry").ID, voicecat.Term{Term: "Cluster", Style: "en", En: "x"}, "admin"); !errors.Is(err, ErrTermTaken) {

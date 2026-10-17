@@ -73,8 +73,9 @@ async function run(request, room, name, echoCancellation) {
       await expect.poll(async () => (await heard()).length, { timeout: 90_000 }).toBeGreaterThan(0);
       return await heard();
     }
-    const cut = async () => gauge(await (await fetch(ttsMetrics)).text(), 'grill_tts_lines_interrupted_total');
-    const cutBefore = await cut();
+    const tts = async (name) => gauge(await (await fetch(ttsMetrics)).text(), name);
+    const cutBefore = await tts('grill_tts_lines_interrupted_total');
+    const spokenBefore = await tts('grill_tts_lines_spoken_total');
     for (let i = 0; i < LINES; i++) {
       const before = await metrics();
       const r = await request.post('/api/admin/test/speak', { headers: admin, data: { room, persona: 'Grill', spoken: lines[i % lines.length] } });
@@ -82,8 +83,9 @@ async function run(request, room, name, echoCancellation) {
       await expect.poll(metrics, { timeout: 90_000 }).toBeGreaterThan(before);
     }
     await sttIdle();
-    // Nor did its own echo cut the persona off.
-    expect(await cut()).toBe(cutBefore);
+    // Every line was said to its end, and its own echo never cut the persona off.
+    expect(await tts('grill_tts_lines_spoken_total') - spokenBefore).toBe(LINES);
+    expect(await tts('grill_tts_lines_interrupted_total')).toBe(cutBefore);
     return await heard();
   } finally {
     await browser.close();

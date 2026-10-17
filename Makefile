@@ -215,7 +215,7 @@ tts-image:
 LEXCHECK_DIR ?= tts/.lexcheck
 LEXCHECK_THREADS ?= 2
 tts-lexcheck:
-	rm -rf $(LEXCHECK_DIR) && mkdir -p $(LEXCHECK_DIR) && chmod 777 $(LEXCHECK_DIR)
+	rm -rf $(LEXCHECK_DIR) && mkdir -p $(LEXCHECK_DIR)
 	cd tts && APP_MODELS_DIR=/nonexistent APP_CPU_THREADS=$(LEXCHECK_THREADS) uv run python -m grill_tts.lexcheck render $(abspath $(LEXCHECK_DIR))
 	docker run --rm --network none --user $$(id -u) -v $(abspath $(LEXCHECK_DIR)):/data \
 	  -e APP_ROOM_URL=http://x -e APP_ROOM_TOKEN=x -e APP_LIVEKIT_URL=ws://x -e APP_LIVEKIT_API_KEY=x \

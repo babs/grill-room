@@ -7,7 +7,7 @@ import (
 
 // Term is one lexicon entry (013-AC31): Style "en" says it English-style, "fr" French-style. FrEn
 // is what a French voice says English-style, FrFr French-style, En what an English voice says; an
-// empty form leaves the term as written.
+// empty form leaves the term to that language's other rules: as written, an acronym spelled.
 type Term struct {
 	Term  string `json:"term"`
 	Style string `json:"style"`
