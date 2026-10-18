@@ -32,7 +32,7 @@ const (
 )
 
 // overLimit returns an ErrLimit saying what is full when query counts limit rows or more.
-func overLimit(ctx context.Context, tx *sql.Tx, limit int, what, query string, args ...any) error {
+func overLimit(ctx context.Context, tx *txn, limit int, what, query string, args ...any) error {
 	var n int
 	if err := tx.QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
 		return fmt.Errorf("count %s: %w", what, err)
@@ -257,7 +257,7 @@ func (s *Store) PublishVersion(ctx context.Context, profileID, id int64, author 
 // RemoveTemplate deletes template id with its versions. Room personas made from it keep their
 // copy. ErrPreset for a shipped template.
 func (s *Store) RemoveTemplate(ctx context.Context, id int64) error {
-	return s.withTx(ctx, "remove template", func(tx *sql.Tx) error {
+	return s.withTx(ctx, "remove template", func(tx *txn) error {
 		var preset sql.NullString
 		err := tx.QueryRowContext(ctx, `SELECT preset FROM persona_templates WHERE id = ?`, id).Scan(&preset)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -394,12 +394,12 @@ func (s *Store) RoomPersona(ctx context.Context, roomID string, id int64) (*Room
 	return withSkills(ctx, s.db, s.db.QueryRowContext(ctx, personaCols+`WHERE p.id = ? AND p.room_id = ?`, id, roomID), roomID)
 }
 
-func roomPersona(ctx context.Context, tx *sql.Tx, roomID string, id int64) (*RoomPersona, error) {
+func roomPersona(ctx context.Context, tx *txn, roomID string, id int64) (*RoomPersona, error) {
 	return withSkills(ctx, tx, tx.QueryRowContext(ctx, personaCols+`WHERE p.id = ? AND p.room_id = ?`, id, roomID), roomID)
 }
 
 // withSkills scans one persona with its active skills.
-func withSkills(ctx context.Context, db rowsQuerier, row *sql.Row, roomID string) (*RoomPersona, error) {
+func withSkills(ctx context.Context, db rowsQuerier, row *row, roomID string) (*RoomPersona, error) {
 	p, err := scanPersona(row)
 	if err != nil {
 		return nil, err
@@ -412,14 +412,14 @@ func withSkills(ctx context.Context, db rowsQuerier, row *sql.Row, roomID string
 }
 
 // freeName is name, or name-2, name-3… when the room already uses it.
-func freeName(ctx context.Context, tx *sql.Tx, roomID, name string) (string, error) {
+func freeName(ctx context.Context, tx *txn, roomID, name string) (string, error) {
 	for i := 1; ; i++ {
 		try := name
 		if i > 1 {
 			try = name + "-" + strconv.Itoa(i)
 		}
 		var taken bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM room_personas WHERE room_id = ? AND name = ? COLLATE NOCASE)`,
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM room_personas WHERE room_id = ? AND lower(name) = lower(?))`,
 			roomID, try).Scan(&taken); err != nil {
 			return "", fmt.Errorf("persona name: %w", err)
 		}
@@ -431,7 +431,7 @@ func freeName(ctx context.Context, tx *sql.Tx, roomID, name string) (string, err
 
 // addPersona copies the latest version of template templateID into room, under a free name. It
 // returns the persona and the template's title.
-func addPersona(ctx context.Context, tx *sql.Tx, roomID string, templateID int64) (*RoomPersona, string, error) {
+func addPersona(ctx context.Context, tx *txn, roomID string, templateID int64) (*RoomPersona, string, error) {
 	t, err := scanTemplate(tx.QueryRowContext(ctx, templateCols+`WHERE t.id = ?`, templateID))
 	if err != nil {
 		return nil, "", err
@@ -454,7 +454,7 @@ func addPersona(ctx context.Context, tx *sql.Tx, roomID string, templateID int64
 	return p, t.Title, err
 }
 
-func presetID(ctx context.Context, tx *sql.Tx, key string) (int64, error) {
+func presetID(ctx context.Context, tx *txn, key string) (int64, error) {
 	var id int64
 	if err := tx.QueryRowContext(ctx, `SELECT id FROM persona_templates WHERE preset = ?`, key).Scan(&id); err != nil {
 		return 0, fmt.Errorf("preset %s: %w", key, err)
@@ -466,7 +466,7 @@ func presetID(ctx context.Context, tx *sql.Tx, key string) (int64, error) {
 const markNow = `(SELECT COALESCE(MAX(id), 0) FROM messages), ?`
 
 // memberLine records a member's change (a persona, the chain) in the room, signed by them.
-func memberLine(ctx context.Context, tx *sql.Tx, roomID string, by *Participant, body string) (*Message, error) {
+func memberLine(ctx context.Context, tx *txn, roomID string, by *Participant, body string) (*Message, error) {
 	m := &Message{RoomID: roomID, Kind: KindSystem, ParticipantID: by.ID, Sender: by.Name, Body: by.Name + " " + body}
 	return m, insertMessage(ctx, tx, m)
 }
@@ -474,19 +474,13 @@ func memberLine(ctx context.Context, tx *sql.Tx, roomID string, by *Participant,
 func (p *RoomPersona) label() string { return p.Badge + " " + p.Name }
 
 // withTx runs fn in a transaction, committed when fn returns no error.
-func (s *Store) withTx(ctx context.Context, what string, fn func(tx *sql.Tx) error) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
+func (s *Store) withTx(ctx context.Context, what string, fn func(tx *txn) error) error {
+	var fnErr error
+	err := s.db.locked(ctx, func(tx *txn) error { fnErr = fn(tx); return fnErr })
+	if err != nil && fnErr == nil {
 		return fmt.Errorf("%s: %w", what, err)
 	}
-	defer tx.Rollback() //nolint:errcheck // no-op after Commit
-	if err := fn(tx); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("%s: %w", what, err)
-	}
-	return nil
+	return err
 }
 
 // AddPersona adds a copy of template templateID's latest version to room, recorded in the chat.
@@ -495,7 +489,7 @@ func (s *Store) withTx(ctx context.Context, what string, fn func(tx *sql.Tx) err
 func (s *Store) AddPersona(ctx context.Context, roomID string, templateID int64, by *Participant) (*RoomPersona, *Message, error) {
 	var p *RoomPersona
 	var m *Message
-	err := s.withTx(ctx, "add persona", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "add persona", func(tx *txn) error {
 		var title string
 		err := overLimit(ctx, tx, MaxRoomPersonas, "personas per room", `SELECT count(*) FROM room_personas WHERE room_id = ?`, roomID)
 		if err != nil {
@@ -655,11 +649,11 @@ func nullInt(n int) any {
 	return n
 }
 
-func updatePersona(ctx context.Context, tx *sql.Tx, p *RoomPersona) error {
+func updatePersona(ctx context.Context, tx *txn, p *RoomPersona) error {
 	if p.WatchesNotes {
 		// One watcher per room: taking the role takes it from the previous one, with the notes it
 		// has not read yet; a first watcher starts from now (009-AC31, 009-AC32).
-		if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET notes_mark = max(notes_mark, COALESCE((SELECT o.notes_mark FROM room_personas o
+		if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET notes_mark = GREATEST(notes_mark, COALESCE((SELECT o.notes_mark FROM room_personas o
 			WHERE o.room_id = room_personas.room_id AND o.id != room_personas.id AND o.watches_notes = 1), `+latestNote+`))
 			WHERE id = ? AND watches_notes = 0`, p.ID); err != nil {
 			return fmt.Errorf("update persona %d: %w", p.ID, err)
@@ -672,7 +666,7 @@ func updatePersona(ctx context.Context, tx *sql.Tx, p *RoomPersona) error {
 		every_n = ?, self_call = ?, pending = ?, autocompact = ?, every_voice = ?, every_minutes = ?, watches_notes = ?, speaks = ?, voice = ?, voice_rate = ? WHERE id = ?`,
 		append(append([]any{p.TemplateVersion}, p.args()...), nullInt(p.EveryN), p.SelfCall, p.Pending, p.Autocompact,
 			nullInt(p.EveryVoice), nullInt(p.EveryMinutes), p.WatchesNotes, p.Speaks, p.Voice, p.VoiceRate, p.ID)...)
-	if err != nil && strings.Contains(err.Error(), "UNIQUE") {
+	if isUnique(err) {
 		return ErrNameTaken
 	}
 	if err != nil {
@@ -692,7 +686,7 @@ func updatePersona(ctx context.Context, tx *sql.Tx, p *RoomPersona) error {
 // host approves everything, the change waits for the host instead, and held is true (002-AC21). A
 // patch changing nothing returns a nil message. ErrNameTaken, ErrNotFound.
 func (s *Store) EditPersona(ctx context.Context, roomID string, id int64, c PersonaPatch, by *Participant) (p *RoomPersona, m *Message, held bool, err error) {
-	err = s.withTx(ctx, "edit persona", func(tx *sql.Tx) error {
+	err = s.withTx(ctx, "edit persona", func(tx *txn) error {
 		var err error
 		if p, err = roomPersona(ctx, tx, roomID, id); err != nil {
 			return err
@@ -708,7 +702,7 @@ func (s *Store) EditPersona(ctx context.Context, roomID string, id int64, c Pers
 // changePersona applies c to p, or holds it for the host, and says so in the chat: applied words
 // the line of an applied change from p's label before it and the changes. p is returned as the room
 // now has it.
-func changePersona(ctx context.Context, tx *sql.Tx, p *RoomPersona, c PersonaPatch, by *Participant, applied func(before string, changes []string) string) (*RoomPersona, *Message, bool, error) {
+func changePersona(ctx context.Context, tx *txn, p *RoomPersona, c PersonaPatch, by *Participant, applied func(before string, changes []string) string) (*RoomPersona, *Message, bool, error) {
 	before := p.label()
 	held, err := heldBy(ctx, tx, p.RoomID, by)
 	if err != nil {
@@ -756,7 +750,7 @@ func changePersona(ctx context.Context, tx *sql.Tx, p *RoomPersona, c PersonaPat
 // of room; its name, badge and colour stay the room's. It is a persona change, held like an edit
 // while the host approves everything. A persona already up to date returns a nil message. ErrNotFound.
 func (s *Store) UpdatePersona(ctx context.Context, roomID string, id int64, by *Participant) (p *RoomPersona, m *Message, held bool, err error) {
-	err = s.withTx(ctx, "update persona", func(tx *sql.Tx) error {
+	err = s.withTx(ctx, "update persona", func(tx *txn) error {
 		var err error
 		if p, err = roomPersona(ctx, tx, roomID, id); err != nil {
 			return err
@@ -784,7 +778,7 @@ func (s *Store) UpdatePersona(ctx context.Context, roomID string, id int64, by *
 // ErrPersonaBusy while its turn runs, ErrNotFound.
 func (s *Store) RemovePersona(ctx context.Context, roomID string, id int64, by *Participant) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "remove persona", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "remove persona", func(tx *txn) error {
 		p, err := roomPersona(ctx, tx, roomID, id)
 		if err != nil {
 			return err
@@ -873,17 +867,26 @@ func enqueue(ctx context.Context, db querier, q *QueuedTurn) error {
 		pid = q.ParticipantID
 	}
 	err := db.QueryRowContext(ctx, `INSERT INTO turn_queue(room_id, persona_id, participant_id, source, fresh, created_at, cause, handoff)
-		SELECT room_id, id, ?, ?, ?, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? AND pending = 0 RETURNING id`,
-		pid, q.Source, q.Fresh, q.CreatedAt.Format(time.RFC3339Nano), q.Cause, q.Handoff, q.PersonaID, q.RoomID).Scan(&q.ID)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return ErrNotFound
-	case err != nil && strings.Contains(err.Error(), "UNIQUE"):
-		return ErrAlreadyQueued
-	case err != nil:
+		SELECT room_id, id, ?, ?, ?, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? AND pending = 0
+		ON CONFLICT (persona_id) DO NOTHING RETURNING id`,
+		pid, q.Source, q.Fresh, formatTS(q.CreatedAt), q.Cause, q.Handoff, q.PersonaID, q.RoomID).Scan(&q.ID)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("enqueue: %w", err)
 	}
-	return nil
+	// No row: the persona may not run here, or it is queued already. A failed INSERT would abort
+	// the caller's transaction, which goes on with the queued turn (EnqueueMention).
+	var queued bool
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM room_personas p JOIN turn_queue q ON q.persona_id = p.id
+		WHERE p.id = ? AND p.room_id = ? AND p.pending = 0)`, q.PersonaID, q.RoomID).Scan(&queued); err != nil {
+		return fmt.Errorf("enqueue: %w", err)
+	}
+	if queued {
+		return ErrAlreadyQueued
+	}
+	return ErrNotFound
 }
 
 // Queue lists the room's queued turns, first to run first.
@@ -978,50 +981,6 @@ func (s *Store) PersonaStats(ctx context.Context, roomID string) (map[int64]Pers
 		out[id] = st
 	}
 	return out, rows.Err()
-}
-
-// migratePersonas moves a pre-002 database to personas (002-AC42): every room gets the Default
-// template's persona, which takes over the room's turns, session and everything signed "Agent".
-func migratePersonas(ctx context.Context, tx *sql.Tx) error {
-	if err := ensurePresets(ctx, tx); err != nil {
-		return err
-	}
-	def, err := presetID(ctx, tx, PresetDefault)
-	if err != nil {
-		return err
-	}
-	var name string
-	if err := tx.QueryRowContext(ctx, `SELECT name FROM persona_template_versions WHERE template_id = ? AND n = 1`, def).Scan(&name); err != nil {
-		return fmt.Errorf("migrate personas: %w", err)
-	}
-	persona := `(SELECT id FROM room_personas p WHERE p.room_id = %s)`
-	steps := []struct {
-		q    string
-		args []any
-	}{
-		{`INSERT INTO room_personas(room_id, template_id, template_version, name, badge, colour, text, model, effort, created_at)
-			SELECT r.id, v.template_id, v.n, v.name, v.badge, v.colour, v.text, v.model, v.effort, ? FROM rooms r
-			JOIN persona_template_versions v ON v.template_id = ? AND v.n = 1`, []any{now(), def}},
-		{`UPDATE turns SET persona_id = ` + fmt.Sprintf(persona, "turns.room_id") + `, persona_name = ?`, []any{name}},
-		{`INSERT INTO agent_sessions_by_persona(room_id, persona_id, session_id, data, updated_at)
-			SELECT room_id, ` + fmt.Sprintf(persona, "s.room_id") + `, session_id, data, updated_at FROM agent_sessions s`, nil},
-		{`DROP TABLE agent_sessions`, nil},
-		{`ALTER TABLE agent_sessions_by_persona RENAME TO agent_sessions`, nil},
-		{`UPDATE messages SET sender = ?, persona_id = ` + fmt.Sprintf(persona, "messages.room_id") + ` WHERE kind = 'agent'`, []any{name}},
-		// Turn failures and reports: signed "Agent" by the server, with no participant.
-		{`UPDATE messages SET sender = ?, body = CASE WHEN body LIKE 'Agent turn%' THEN ? || substr(body, 6) ELSE body END
-			WHERE kind = 'system' AND participant_id IS NULL AND sender = 'Agent'`, []any{name, name}},
-		{`UPDATE annotation_messages SET author = ?, persona_id = (SELECT p.id FROM room_personas p JOIN annotations a ON a.room_id = p.room_id
-			WHERE a.id = annotation_messages.annotation_id) WHERE author_kind = 'agent'`, []any{name}},
-		{`UPDATE documents SET author = ? WHERE kind = 'agent'`, []any{name}},
-		{`UPDATE revisions SET author = ? WHERE document_id IN (SELECT id FROM documents WHERE kind = 'agent')`, []any{name}},
-	}
-	for _, st := range steps {
-		if _, err := tx.ExecContext(ctx, st.q, st.args...); err != nil {
-			return fmt.Errorf("migrate personas: %w", err)
-		}
-	}
-	return nil
 }
 
 // DefaultVoice stores voice as persona id's voice when it has none yet, without a chat line: a

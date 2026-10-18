@@ -1,7 +1,6 @@
 package web
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 
+	"github.com/babs/grill-room/internal/pgtest"
 	"github.com/babs/grill-room/internal/store"
 )
 
@@ -66,39 +66,17 @@ func TestAPITokenShownOnceStoredHashed(t *testing.T) {
 	if !tokenRe.MatchString(tok.Token) || tok.ExpiresAt == nil {
 		t.Fatalf("created: %+v", tok)
 	}
-	db, err := sql.Open("sqlite", e.dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
 	var hash string
-	if err := db.QueryRowContext(t.Context(), `SELECT token_hash FROM api_tokens WHERE id = ?`, tok.ID).Scan(&hash); err != nil || hash != HashToken(tok.Token) {
+	if err := e.sqlDB(t).QueryRowContext(t.Context(), `SELECT token_hash FROM api_tokens WHERE id = $1`, tok.ID).Scan(&hash); err != nil || hash != HashToken(tok.Token) {
 		t.Fatalf("stored hash: %q %v", hash, err)
 	}
-	rows, err := db.QueryContext(t.Context(), `SELECT m.name, p.name FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE m.type = 'table'`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var cols [][2]string
-	for rows.Next() {
-		var c [2]string
-		if err := rows.Scan(&c[0], &c[1]); err != nil {
-			t.Fatal(err)
+	for _, needle := range []string{"grt_", tok.Token[4:]} {
+		hits, scanned := pgtest.Find(t, e.dsn, needle)
+		if scanned < 50 {
+			t.Fatalf("only %d columns scanned", scanned)
 		}
-		cols = append(cols, c)
-	}
-	_ = rows.Close()
-	if len(cols) < 50 {
-		t.Fatalf("only %d columns scanned", len(cols))
-	}
-	for _, c := range cols {
-		var n int
-		q := fmt.Sprintf(`SELECT count(*) FROM %q WHERE CAST(%q AS TEXT) LIKE '%%grt_%%' OR CAST(%q AS TEXT) LIKE ?`, c[0], c[1], c[1])
-		if err := db.QueryRowContext(t.Context(), q, "%"+tok.Token[4:]+"%").Scan(&n); err != nil {
-			t.Fatalf("%s.%s: %v", c[0], c[1], err)
-		}
-		if n != 0 {
-			t.Errorf("%s.%s holds the token", c[0], c[1])
+		if len(hits) != 0 {
+			t.Errorf("%v hold the token", hits)
 		}
 	}
 	code, b := alice.do(t, "GET", "/api/profile/tokens", nil)

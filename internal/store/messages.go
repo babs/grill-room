@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -40,7 +39,7 @@ func (s *Store) Message(ctx context.Context, roomID string, id int64) (*Message,
 // message and its body before the edit (016-AC19). The caller broadcasts.
 func (s *Store) EditMessage(ctx context.Context, roomID string, id, by int64, body string) (*Message, string, error) {
 	var prev string
-	m, err := s.changeMessage(ctx, roomID, id, by, func(tx *sql.Tx, m *Message, seq int64) error {
+	m, err := s.changeMessage(ctx, roomID, id, by, func(tx *txn, m *Message, seq int64) error {
 		if m.DeletedAt != nil {
 			return ErrMessageDeleted
 		}
@@ -53,13 +52,13 @@ func (s *Store) EditMessage(ctx context.Context, roomID string, id, by int64, bo
 			written = *m.EditedAt
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO message_versions(message_id, seq, body, written_at) VALUES(?,?,?,?)`,
-			m.ID, seq, m.Body, written.Format(time.RFC3339Nano)); err != nil {
+			m.ID, seq, m.Body, formatTS(written)); err != nil {
 			return err
 		}
 		t := time.Now().UTC()
 		html := render.MessageHTML(body)
 		if _, err := tx.ExecContext(ctx, `UPDATE messages SET body = ?, html = ?, edited_at = ?, change_seq = ? WHERE id = ?`,
-			body, html, t.Format(time.RFC3339Nano), seq, m.ID); err != nil {
+			body, html, formatTS(t), seq, m.ID); err != nil {
 			return err
 		}
 		m.Body, m.HTML, m.EditedAt, m.ChangeSeq = body, html, &t, seq
@@ -71,12 +70,12 @@ func (s *Store) EditMessage(ctx context.Context, roomID string, id, by int64, bo
 // DeleteMessage soft-deletes message id: its body stays for the agent and for export. Same rules
 // as EditMessage; deleting twice changes nothing. The caller broadcasts.
 func (s *Store) DeleteMessage(ctx context.Context, roomID string, id, by int64) (*Message, error) {
-	return s.changeMessage(ctx, roomID, id, by, func(tx *sql.Tx, m *Message, seq int64) error {
+	return s.changeMessage(ctx, roomID, id, by, func(tx *txn, m *Message, seq int64) error {
 		if m.DeletedAt != nil {
 			return nil
 		}
 		t := time.Now().UTC()
-		if _, err := tx.ExecContext(ctx, `UPDATE messages SET deleted_at = ?, change_seq = ? WHERE id = ?`, t.Format(time.RFC3339Nano), seq, m.ID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE messages SET deleted_at = ?, change_seq = ? WHERE id = ?`, formatTS(t), seq, m.ID); err != nil {
 			return err
 		}
 		m.DeletedAt, m.ChangeSeq = &t, seq
@@ -85,7 +84,7 @@ func (s *Store) DeleteMessage(ctx context.Context, roomID string, id, by int64) 
 }
 
 // changeMessage runs change on message id in one transaction, with the room's next change seq.
-func (s *Store) changeMessage(ctx context.Context, roomID string, id, by int64, change func(*sql.Tx, *Message, int64) error) (*Message, error) {
+func (s *Store) changeMessage(ctx context.Context, roomID string, id, by int64, change func(*txn, *Message, int64) error) (*Message, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("change message %d: %w", id, err)

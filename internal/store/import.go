@@ -100,7 +100,7 @@ var sessionIDRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 // importer holds one import's state: the old refs mapped to new ids.
 type importer struct {
 	ctx  context.Context
-	tx   *sql.Tx
+	tx   *txn
 	root *os.Root
 	o    ImportOptions
 	rep  *ImportReport
@@ -153,8 +153,8 @@ func (m *idMap) cursor(ref int64) int64 {
 // profile of their uuid here, or keep it as a hint (004-AC13); old invites are not carried, so
 // none works. It runs in one transaction, guardrails and quotas included: a refusal creates
 // nothing (004-AC14). ErrImportRefused, ErrCreationRefused.
-// ponytail: the transaction holds the store's one connection for the whole import (seconds for a
-// full room); stage into a second database file if imports ever need to run beside live rooms.
+// ponytail: the transaction holds the cluster-wide write lock for the whole import (seconds for a
+// full room), so every other write waits; per-room locks if imports must run beside live rooms.
 func (s *Store) ImportRoom(ctx context.Context, dir string, o ImportOptions) (*ImportReport, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -165,7 +165,7 @@ func (s *Store) ImportRoom(ctx context.Context, dir string, o ImportOptions) (*I
 	if err := renderAhead(ctx, root); err != nil {
 		return nil, err
 	}
-	err = s.withTx(ctx, "import room", func(tx *sql.Tx) error {
+	err = s.withTx(ctx, "import room", func(tx *txn) error {
 		im := &importer{ctx: ctx, tx: tx, root: root, o: o, rep: rep, room: o.RoomID,
 			participants: map[int64]int64{}, personas: map[int64]int64{}, uploads: map[int64]int64{}, documents: map[int64]int64{},
 			annotations: map[int64]int64{}, skills: map[int64]int64{}, plugins: map[int64]int64{}, uploadFormat: map[int64]string{}, versions: map[int64][]int{},
@@ -195,6 +195,9 @@ func (im *importer) run() error {
 	b, err := im.read(fileRoom, maxImportText)
 	if err != nil {
 		return err
+	}
+	if jsonNUL(b) {
+		return refuseImport("%s: text holds a NUL", fileRoom)
 	}
 	if err := json.Unmarshal(b, &x); err != nil {
 		return refuseImport("%s: %v", fileRoom, err)
@@ -370,6 +373,9 @@ func eachLine[T any](im *importer, name string, fn func(*T) error) error {
 	sc.Buffer(make([]byte, 0, 64<<10), maxImportLine)
 	for n := 1; sc.Scan(); n++ {
 		var v T
+		if jsonNUL(sc.Bytes()) {
+			return refuseImport("%s line %d: text holds a NUL", name, n)
+		}
 		if err := json.Unmarshal(sc.Bytes(), &v); err != nil {
 			return refuseImport("%s line %d: %v", name, n, err)
 		}
@@ -381,6 +387,25 @@ func eachLine[T any](im *importer, name string, fn func(*T) error) error {
 		return refuseImport("%s: %v", name, err)
 	}
 	return nil
+}
+
+// jsonNUL reports a \u0000 escape in JSON text b: a PostgreSQL text column takes no NUL.
+func jsonNUL(b []byte) bool {
+	for i := 0; ; {
+		j := bytes.Index(b[i:], []byte(`u0000`))
+		if j < 0 {
+			return false
+		}
+		j += i
+		slashes := 0
+		for k := j - 1; k >= 0 && b[k] == '\\'; k-- {
+			slashes++
+		}
+		if slashes%2 == 1 {
+			return true
+		}
+		i = j + 1
+	}
 }
 
 // ref maps a reference of what to its new id; 0 stays 0 when optional.
@@ -577,7 +602,7 @@ func (im *importer) participantsStep() error {
 }
 
 // fileRendered holds each line's HTML, rendered before the import's transaction: a line takes up to
-// a tenth of a second, and the transaction holds the store's only connection. No archive path starts
+// a tenth of a second, and the transaction holds the cluster-wide write lock. No archive path starts
 // with a dot.
 const fileRendered = ".rendered.jsonl"
 
@@ -655,8 +680,15 @@ func (im *importer) messagesStep() error {
 	defer rf.Close() //nolint:errcheck // read only
 	rendered := json.NewDecoder(bufio.NewReader(rf))
 	err = eachLine(im, fileMessages, func(m *xMessage) error {
+		var raw json.RawMessage
+		if err := rendered.Decode(&raw); err != nil {
+			return fmt.Errorf("import messages: %w", err)
+		}
+		if jsonNUL(raw) {
+			return refuseImport("%s: text holds a NUL", fileRendered)
+		}
 		var html *string
-		if err := rendered.Decode(&html); err != nil {
+		if err := json.Unmarshal(raw, &html); err != nil {
 			return fmt.Errorf("import messages: %w", err)
 		}
 		pid, err := ref(im.participants, "participant", m.Participant, true)
@@ -832,6 +864,9 @@ func (im *importer) documentsStep() error {
 		body, err := im.blob(r.File, "revision", maxImportText)
 		if err != nil {
 			return err
+		}
+		if !utf8.Valid(body) || bytes.IndexByte(body, 0) >= 0 {
+			return refuseImport("revision %d of document %d: not UTF-8 text, or holds a NUL", r.N, r.Document)
 		}
 		if err := textIs(fmt.Sprintf("revision %d of document %d", r.N, r.Document), maxImportName, false, false, r.Author); err != nil {
 			return err

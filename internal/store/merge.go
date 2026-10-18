@@ -102,7 +102,7 @@ var mergeFault func() error
 // MergePreview returns what MergeProfiles(keep, merge) would do. ErrSelfMerge, ErrNotFound.
 func (s *Store) MergePreview(ctx context.Context, keep, merge int64) (*MergePreview, error) {
 	var p *MergePreview
-	err := s.withTx(ctx, "merge preview", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "merge preview", func(tx *txn) error {
 		var err error
 		p, err = mergePreview(ctx, tx, keep, merge)
 		return err
@@ -110,7 +110,7 @@ func (s *Store) MergePreview(ctx context.Context, keep, merge int64) (*MergePrev
 	return p, err
 }
 
-func mergePreview(ctx context.Context, db *sql.Tx, keep, merge int64) (*MergePreview, error) {
+func mergePreview(ctx context.Context, db *txn, keep, merge int64) (*MergePreview, error) {
 	if keep == merge {
 		return nil, ErrSelfMerge
 	}
@@ -142,7 +142,7 @@ func mergePreview(ctx context.Context, db *sql.Tx, keep, merge int64) (*MergePre
 		}
 		p.Rooms = append(p.Rooms, r)
 		return nil
-	}, `SELECT r.id, r.name, MAX(pa.profile_id = ?), MAX(pa.profile_id = ?) FROM participants pa
+	}, `SELECT r.id, r.name, bool_or(pa.profile_id = ?), bool_or(pa.profile_id = ?) FROM participants pa
 		JOIN rooms r ON r.id = pa.room_id
 		WHERE pa.profile_id IN (?, ?) AND pa.removed_at IS NULL GROUP BY r.id ORDER BY r.name, r.id`, keep, merge, keep, merge)
 	if err != nil {
@@ -246,12 +246,12 @@ func skillRenames(keep, merge []string) []MergeRename {
 }
 
 // MergeProfiles moves everything of profile merge to profile keep and deletes merge, in one
-// transaction with the audit entry ctx carries (011-AC11 to 011-AC13); then run Checkpoint. keep keeps its name, rooms
+// transaction with the audit entry ctx carries (011-AC11 to 011-AC13). keep keeps its name, rooms
 // limit, nudge snooze and email, or takes merge's when it has none. ErrSelfMerge, ErrNotFound.
 func (s *Store) MergeProfiles(ctx context.Context, keep, merge int64) (*MergeProfile, MergeMoved, error) {
 	var kept MergeProfile
 	var moved MergeMoved
-	err := s.withTx(ctx, "merge profiles", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "merge profiles", func(tx *txn) error {
 		p, err := mergePreview(ctx, tx, keep, merge)
 		if err != nil {
 			return err
@@ -283,32 +283,36 @@ func (s *Store) MergeProfiles(ctx context.Context, keep, merge int64) (*MergePro
 			}
 		}
 		moved.Skills = int64(len(p.Skills.Merge))
+		// Each statement binds keep as ?1 and merge as ?2, or merge alone: PostgreSQL must find a
+		// type for every parameter it is given.
+		both, only := []any{keep, merge}, []any{merge}
 		// B's room admin roles become A's where A has none; the rest go with B's rows.
 		steps := []struct {
 			n     *int64
 			query string
+			args  []any
 		}{
-			{&moved.Seats, `UPDATE participants SET profile_id = ?1 WHERE profile_id = ?2`},
-			{&moved.SharedSkills, `UPDATE skills SET publisher_id = ?1 WHERE publisher_id = ?2`},
-			{nil, `UPDATE skill_versions SET author_id = ?1 WHERE author_id = ?2`},
-			{&moved.Templates, `UPDATE persona_templates SET profile_id = ?1 WHERE profile_id = ?2`},
-			{&moved.Starters, `UPDATE starters SET profile_id = ?1 WHERE profile_id = ?2`},
-			{&moved.RoomsCreated, `UPDATE rooms SET creator_profile_id = ?1 WHERE creator_profile_id = ?2`},
-			{nil, `INSERT INTO room_admins(room_id, profile_id, created_at) SELECT room_id, ?1, created_at FROM room_admins WHERE profile_id = ?2 ON CONFLICT DO NOTHING`},
-			{&moved.RoomAdmins, `DELETE FROM room_admins WHERE profile_id = ?2`},
+			{&moved.Seats, `UPDATE participants SET profile_id = ?1 WHERE profile_id = ?2`, both},
+			{&moved.SharedSkills, `UPDATE skills SET publisher_id = ?1 WHERE publisher_id = ?2`, both},
+			{nil, `UPDATE skill_versions SET author_id = ?1 WHERE author_id = ?2`, both},
+			{&moved.Templates, `UPDATE persona_templates SET profile_id = ?1 WHERE profile_id = ?2`, both},
+			{&moved.Starters, `UPDATE starters SET profile_id = ?1 WHERE profile_id = ?2`, both},
+			{&moved.RoomsCreated, `UPDATE rooms SET creator_profile_id = ?1 WHERE creator_profile_id = ?2`, both},
+			{nil, `INSERT INTO room_admins(room_id, profile_id, created_at) SELECT room_id, ?1::bigint, created_at FROM room_admins WHERE profile_id = ?2 ON CONFLICT DO NOTHING`, both},
+			{&moved.RoomAdmins, `DELETE FROM room_admins WHERE profile_id = ?`, only},
 			// 016-AC15: B's blocks become A's, one per room.
-			{nil, `INSERT INTO room_blocks(room_id, profile_id, name, created_at, by_participant_id) SELECT room_id, ?1, name, created_at, by_participant_id
-				FROM room_blocks WHERE profile_id = ?2 ON CONFLICT DO NOTHING`},
-			{nil, `DELETE FROM room_blocks WHERE profile_id = ?2`},
-			{&moved.Sessions, `UPDATE profile_sessions SET profile_id = ?1 WHERE profile_id = ?2`},
-			{nil, `DELETE FROM magic_links WHERE profile_id = ?2`},
-			{nil, `DELETE FROM recovery_links WHERE profile_id = ?2`},
+			{nil, `INSERT INTO room_blocks(room_id, profile_id, name, created_at, by_participant_id) SELECT room_id, ?1::bigint, name, created_at, by_participant_id
+				FROM room_blocks WHERE profile_id = ?2 ON CONFLICT DO NOTHING`, both},
+			{nil, `DELETE FROM room_blocks WHERE profile_id = ?`, only},
+			{&moved.Sessions, `UPDATE profile_sessions SET profile_id = ?1 WHERE profile_id = ?2`, both},
+			{nil, `DELETE FROM magic_links WHERE profile_id = ?`, only},
+			{nil, `DELETE FROM recovery_links WHERE profile_id = ?`, only},
 			// A token was granted from B's browsers: moving it would hand A's rights to whoever holds it.
-			{&moved.APITokensRevoked, `DELETE FROM api_tokens WHERE profile_id = ?2`},
-			{nil, `UPDATE profiles SET skills_disclaimer_at = COALESCE(skills_disclaimer_at, (SELECT skills_disclaimer_at FROM profiles WHERE id = ?2)) WHERE id = ?1`},
+			{&moved.APITokensRevoked, `DELETE FROM api_tokens WHERE profile_id = ?`, only},
+			{nil, `UPDATE profiles SET skills_disclaimer_at = COALESCE(skills_disclaimer_at, (SELECT skills_disclaimer_at FROM profiles WHERE id = ?2)) WHERE id = ?1`, both},
 		}
 		for _, st := range steps {
-			if err := exec(st.n, st.query, keep, merge); err != nil {
+			if err := exec(st.n, st.query, st.args...); err != nil {
 				return err
 			}
 		}
@@ -339,15 +343,6 @@ func (s *Store) MergeProfiles(ctx context.Context, keep, merge int64) (*MergePro
 	return &kept, moved, nil
 }
 
-// Checkpoint rewrites the WAL into the main file, so rows a delete, merge or purge removed do not
-// linger there. Callers run it after the commit; a failure leaves the change done.
-func (s *Store) Checkpoint(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
-		return fmt.Errorf("checkpoint: %w", err)
-	}
-	return nil
-}
-
 // EmptyProfileIdle is how long an empty profile stays after its last activity (011-AC15).
 const EmptyProfileIdle = 24 * time.Hour
 
@@ -358,12 +353,11 @@ const purgeBatch = 90
 // PurgeEmptyProfiles deletes, as DeleteProfile does, the empty profiles whose last activity is
 // older than idle before now, and returns their uuids. Empty: no email, no seat with a valid invite,
 // no personal or published skill, template, starter or room admin role; activity: creation, joins,
-// messages and sign-ins (011-AC15). A run that deletes writes the audit entry ctx carries (011-AC16);
-// then run Checkpoint.
+// messages and sign-ins (011-AC15). A run that deletes writes the audit entry ctx carries (011-AC16).
 // only, when set, restricts the run to those profile ids.
 func (s *Store) PurgeEmptyProfiles(ctx context.Context, now time.Time, idle time.Duration, only ...int64) ([]string, error) {
 	uuids := []string{}
-	err := s.withTx(ctx, "purge empty profiles", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "purge empty profiles", func(tx *txn) error {
 		cutoff := now.Add(-idle)
 		var ids []int64
 		err := eachRow(ctx, tx, func(rows *sql.Rows) error {

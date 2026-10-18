@@ -777,7 +777,7 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 		out.Documents = append(out.Documents, store.AgentWrite{Name: doc.Name, Format: doc.Format, Body: doc.Body})
 	}
 	for _, rp := range o.Replies {
-		out.Replies = append(out.Replies, store.AgentReply{AnnotationID: rp.Annotation, Body: rp.Body, Done: rp.Status == store.StatusDone})
+		out.Replies = append(out.Replies, store.AgentReply{AnnotationID: rp.Annotation, Body: sanitize(rp.Body, turn.MaxReplyLen), Done: rp.Status == store.StatusDone})
 	}
 	if err := s.refuseOthersThreads(r.Context(), t, out); err != nil {
 		s.log.Error("complete_turn_failed", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.Error(err))

@@ -55,7 +55,7 @@ type NewPluginFetch struct {
 func (s *Store) AddPluginFetch(ctx context.Context, roomID string, f NewPluginFetch, by *Participant) (*PluginFetch, *Message, error) {
 	var out *PluginFetch
 	var m *Message
-	err := s.withTx(ctx, "add plugin fetch", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "add plugin fetch", func(tx *txn) error {
 		if err := overLimit(ctx, tx, MaxRoomFetches, "requests to the AI host per room, waiting or failed",
 			`SELECT count(*) FROM plugin_fetches WHERE room_id = ?`, roomID); err != nil {
 			return err
@@ -83,7 +83,7 @@ func (s *Store) AddPluginFetch(ctx context.Context, roomID string, f NewPluginFe
 		err := tx.QueryRowContext(ctx, `INSERT INTO plugin_fetches(room_id, plugin_id, source_url, ref, entries, personas, state,
 			requested_by_name, requested_by_id, created_at) VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id`,
 			roomID, nullID(f.PluginID), f.URL, f.Ref, string(entries), string(personas), FetchWaiting, by.Name, nullID(by.ID), now()).Scan(&id)
-		if err != nil && strings.Contains(err.Error(), "UNIQUE") {
+		if isUnique(err) {
 			return ErrFetchWaiting
 		}
 		if err != nil {
@@ -124,7 +124,7 @@ func scanFetch(r rowScanner) (*PluginFetch, error) {
 }
 
 func pluginFetch(ctx context.Context, q interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	QueryRowContext(ctx context.Context, query string, args ...any) *row
 }, roomID string, id int64) (*PluginFetch, error) {
 	f, err := scanFetch(q.QueryRowContext(ctx, fetchColumns+` WHERE f.id = ? AND f.room_id = ?`, id, roomID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -175,7 +175,7 @@ func (s *Store) DeletePluginFetch(ctx context.Context, roomID string, id int64) 
 // host (009-AC21). ErrNotFound, ErrPluginState unless it waits.
 func (s *Store) FailPluginFetch(ctx context.Context, roomID string, id int64, reason string) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "fail plugin fetch", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "fail plugin fetch", func(tx *txn) error {
 		f, err := waitingFetch(ctx, tx, roomID, id)
 		if err != nil {
 			return err
@@ -193,7 +193,7 @@ func (s *Store) FailPluginFetch(ctx context.Context, roomID string, id int64, re
 	return m, err
 }
 
-func waitingFetch(ctx context.Context, tx *sql.Tx, roomID string, id int64) (*PluginFetch, error) {
+func waitingFetch(ctx context.Context, tx *txn, roomID string, id int64) (*PluginFetch, error) {
 	f, err := pluginFetch(ctx, tx, roomID, id)
 	if err != nil {
 		return nil, err
@@ -210,7 +210,7 @@ func waitingFetch(ctx context.Context, tx *sql.Tx, roomID string, id int64) (*Pl
 // adds ps[0] as the plugin's new version, or with the latest version's commit, only says it is up
 // to date. The errors of AddPlugins and AddPluginVersion.
 func (s *Store) CompletePluginFetch(ctx context.Context, roomID string, id int64, ps []NewPlugin, defaultQuota int64) (msgs []*Message, upToDate bool, err error) {
-	err = s.withTx(ctx, "complete plugin fetch", func(tx *sql.Tx) error {
+	err = s.withTx(ctx, "complete plugin fetch", func(tx *txn) error {
 		f, err := waitingFetch(ctx, tx, roomID, id)
 		if err != nil {
 			return err

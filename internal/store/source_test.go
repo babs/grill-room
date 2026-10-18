@@ -1,101 +1,12 @@
 package store
 
 import (
-	"context"
-	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 )
-
-// 010-AC10: the migration marks every voice line from before 010 as the server's, and leaves the
-// other kinds without a source.
-func TestMigrationToVoiceSource(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "old.db")+"?_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.SetMaxOpenConns(1)
-	defer db.Close()
-	ctx := context.Background()
-	// The migration before 010's: later ones append after it.
-	before := slices.IndexFunc(migrations, func(m string) bool { return strings.Contains(m, "010-AC10") })
-	if err := migrateTo(ctx, db, before); err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{
-		`INSERT INTO rooms(id, name, created_at) VALUES('a', 'R', '2026-01-01T00:00:00Z')`,
-		`INSERT INTO messages(room_id, ts, kind, sender, body) VALUES('a', '2026-01-01T00:00:00Z', 'voice', 'A', 'v1')`,
-		`INSERT INTO messages(room_id, ts, kind, sender, body) VALUES('a', '2026-01-01T00:00:01Z', 'text', 'A', 't1')`,
-		`INSERT INTO messages(room_id, ts, kind, sender, body) VALUES('a', '2026-01-01T00:00:02Z', 'voice', 'A', 'v2')`,
-		`INSERT INTO messages(room_id, ts, kind, sender, body) VALUES('a', '2026-01-01T00:00:03Z', 'system', 'S', 's1')`,
-	} {
-		if _, err := db.ExecContext(ctx, q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := migrateTo(ctx, db, len(migrations)); err != nil {
-		t.Fatal(err)
-	}
-	voice, server, other, null := sourceCounts(t, db)
-	if voice != 2 || server != 2 || other != 2 || null != 2 {
-		t.Fatalf("voice %d with server %d, other kinds %d with NULL %d", voice, server, other, null)
-	}
-	if _, err := db.ExecContext(ctx, `UPDATE messages SET source = 'phone' WHERE kind = 'voice'`); err == nil {
-		t.Fatal("unknown source accepted")
-	}
-}
-
-// sourceCounts returns the voice lines, those marked server, the other lines, and those with no source.
-func sourceCounts(t *testing.T, db *sql.DB) (voice, server, other, null int) {
-	t.Helper()
-	if err := db.QueryRowContext(t.Context(), `SELECT
-		count(*) FILTER (WHERE kind = 'voice'), count(*) FILTER (WHERE kind = 'voice' AND source = 'server'),
-		count(*) FILTER (WHERE kind != 'voice'), count(*) FILTER (WHERE kind != 'voice' AND source IS NULL) FROM messages`).
-		Scan(&voice, &server, &other, &null); err != nil {
-		t.Fatal(err)
-	}
-	return voice, server, other, null
-}
-
-// 010-AC10: a one-off check of the migration on a copy of a real database, named by
-// GRILL_ROOM_SOURCE_MIGRATION_DB; skipped otherwise. It migrates the copy in place.
-func TestMigrationToVoiceSourceOnCopy(t *testing.T) {
-	path := os.Getenv("GRILL_ROOM_SOURCE_MIGRATION_DB")
-	if path == "" {
-		t.Skip("GRILL_ROOM_SOURCE_MIGRATION_DB unset")
-	}
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var from int
-	if err := db.QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&from); err != nil {
-		t.Fatal(err)
-	}
-	_ = db.Close()
-	s, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	var to int
-	var check string
-	if err := s.db.QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&to); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.db.QueryRowContext(t.Context(), `PRAGMA integrity_check`).Scan(&check); err != nil {
-		t.Fatal(err)
-	}
-	voice, server, other, null := sourceCounts(t, s.db)
-	t.Logf("user_version %d -> %d, voice %d (server %d), other %d (NULL %d), integrity %s", from, to, voice, server, other, null, check)
-	if to != len(migrations) || to <= from || voice != server || other != null || check != "ok" {
-		t.Fatal("migration on the copy did not hold")
-	}
-}
 
 // 010-AC11: an export carries each voice line's source and an import keeps it; an archive from
 // before 010 has voice lines without one, which come in as the server's; an unknown source, or one

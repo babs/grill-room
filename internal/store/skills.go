@@ -104,7 +104,7 @@ func (s *Store) Skills(ctx context.Context, profileID int64, roomID, which strin
 	var args []any
 	switch which {
 	case SkillsLibrary:
-		where, args = `WHERE s.scope = 'shared' OR s.profile_id = ? OR (s.room_id = ? AND NOT s.pending)`, []any{profileID, roomID}
+		where, args = `WHERE s.scope = 'shared' OR s.profile_id = ? OR (s.room_id = ? AND s.pending = 0)`, []any{profileID, roomID}
 	case SkillsMine:
 		where, args = `WHERE s.profile_id = ? OR s.publisher_id = ?`, []any{profileID, profileID}
 	case SkillsAll:
@@ -138,7 +138,7 @@ func (s *Store) PublishSkill(ctx context.Context, profileID int64, shared bool, 
 		return nil, ErrForbidden
 	}
 	var id int64
-	err := s.withTx(ctx, "publish skill", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "publish skill", func(tx *txn) error {
 		var publisher int64
 		q, args := `SELECT id, 0 FROM skills WHERE profile_id = ? AND name = ?`, []any{profileID, up.Name}
 		if shared {
@@ -199,7 +199,7 @@ func (s *Store) PublishSkill(ctx context.Context, profileID int64, shared bool, 
 // RemoveSkill deletes skill id with its versions; the personas that had it active lose it. The
 // admin (profileID 0) removes any skill (002-AC29); a profile only its personal ones. ErrNotFound.
 func (s *Store) RemoveSkill(ctx context.Context, id, profileID int64) error {
-	return s.withTx(ctx, "remove skill", func(tx *sql.Tx) error {
+	return s.withTx(ctx, "remove skill", func(tx *txn) error {
 		if err := auditTx(ctx, tx, "", nil); err != nil {
 			return err
 		}
@@ -336,7 +336,7 @@ func mergePins(later, earlier map[int64]SkillPin) map[int64]SkillPin {
 
 // saveSkills makes p's active skills the stored ones. A skill removed from the library since a
 // change was held is skipped.
-func saveSkills(ctx context.Context, tx *sql.Tx, p *RoomPersona) error {
+func saveSkills(ctx context.Context, tx *txn, p *RoomPersona) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM room_persona_skills WHERE persona_id = ?`, p.ID); err != nil {
 		return fmt.Errorf("save persona skills: %w", err)
 	}
@@ -356,7 +356,7 @@ func saveSkills(ctx context.Context, tx *sql.Tx, p *RoomPersona) error {
 // library and the member's own personal skills (002-AC30). A change of nothing returns a nil
 // message. ErrForbidden without a profile, ErrDisclaimer, ErrSkillName, ErrLimit, ErrNotFound.
 func (s *Store) SetPersonaSkill(ctx context.Context, roomID string, id, skillID int64, on, accept bool, by *Participant) (p *RoomPersona, m *Message, held bool, err error) {
-	err = s.withTx(ctx, "set persona skill", func(tx *sql.Tx) error {
+	err = s.withTx(ctx, "set persona skill", func(tx *txn) error {
 		var err error
 		if p, err = roomPersona(ctx, tx, roomID, id); err != nil {
 			return err
@@ -381,7 +381,7 @@ func (s *Store) SetPersonaSkill(ctx context.Context, roomID string, id, skillID 
 
 // pinLatest checks that by may turn skill skillID on for p, whose active skills hold it at i (-1
 // for none), records the disclaimer by accepted, and returns the pin of its latest version.
-func pinLatest(ctx context.Context, tx *sql.Tx, p *RoomPersona, i int, skillID int64, accept bool, by *Participant) (SkillPin, error) {
+func pinLatest(ctx context.Context, tx *txn, p *RoomPersona, i int, skillID int64, accept bool, by *Participant) (SkillPin, error) {
 	if by.ProfileID == 0 {
 		return SkillPin{}, ErrForbidden
 	}
@@ -432,14 +432,13 @@ type TurnSkill struct {
 // turn applies to the next (002-AC15). A personal skill rides only while its owner is in the room
 // (002-AC30); a room skill rides whoever copied it in (004-AC10), once the host approved it
 // (004-AC10, 006-AC13).
-func pinTurnSkills(ctx context.Context, tx *sql.Tx, roomID string, id, personaID int64) error {
-	_, err := tx.ExecContext(ctx, `UPDATE turns SET skills = (SELECT json_group_array(vid) FROM (
-			SELECT v.id AS vid FROM room_persona_skills k JOIN skills s ON s.id = k.skill_id
+func pinTurnSkills(ctx context.Context, tx *txn, roomID string, id, personaID int64) error {
+	_, err := tx.ExecContext(ctx, `UPDATE turns SET skills = (SELECT COALESCE(jsonb_agg(v.id ORDER BY s.name), '[]')::text
+			FROM room_persona_skills k JOIN skills s ON s.id = k.skill_id
 			JOIN skill_versions v ON v.skill_id = k.skill_id AND v.n = k.version
-			WHERE k.persona_id = ? AND (s.scope = 'shared' OR (s.scope = 'room' AND s.room_id = ? AND NOT s.pending)
+			WHERE k.persona_id = ? AND (s.scope = 'shared' OR (s.scope = 'room' AND s.room_id = ? AND s.pending = 0)
 				OR EXISTS (SELECT 1 FROM participants p
-				WHERE p.room_id = ? AND p.profile_id = s.profile_id AND p.removed_at IS NULL))
-			ORDER BY s.name))
+				WHERE p.room_id = ? AND p.profile_id = s.profile_id AND p.removed_at IS NULL)))
 		WHERE id = ?`, personaID, roomID, roomID, id)
 	if err != nil {
 		return fmt.Errorf("pin turn skills: %w", err)
@@ -450,8 +449,9 @@ func pinTurnSkills(ctx context.Context, tx *sql.Tx, roomID string, id, personaID
 // TurnSkills returns the skills turn id of room loads, by name, with their files when withData.
 // A skill the admin removed since the turn started is gone from it.
 func (s *Store) TurnSkills(ctx context.Context, roomID string, id int64, withData bool) ([]TurnSkill, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT s.name, v.n, CASE WHEN ? THEN v.data ELSE x'' END
-		FROM turns t JOIN json_each(t.skills) j JOIN skill_versions v ON v.id = j.value JOIN skills s ON s.id = v.skill_id
+	rows, err := s.db.QueryContext(ctx, `SELECT s.name, v.n, CASE WHEN ? = 1 THEN v.data ELSE ''::bytea END
+		FROM turns t CROSS JOIN jsonb_array_elements_text(t.skills::jsonb) j(value)
+		JOIN skill_versions v ON v.id = j.value::bigint JOIN skills s ON s.id = v.skill_id
 		WHERE t.id = ? AND t.room_id = ? ORDER BY s.name`, withData, id, roomID)
 	if err != nil {
 		return nil, fmt.Errorf("turn skills: %w", err)
@@ -503,7 +503,7 @@ func (s *Store) CopySkillToRoom(ctx context.Context, roomID string, skillID int6
 	}
 	var id int64
 	var m *Message
-	err := s.withTx(ctx, "copy skill to room", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "copy skill to room", func(tx *txn) error {
 		var name string
 		var n int
 		err := tx.QueryRowContext(ctx, `SELECT name, (SELECT MAX(n) FROM skill_versions WHERE skill_id = s.id) FROM skills s
@@ -522,7 +522,7 @@ func (s *Store) CopySkillToRoom(ctx context.Context, roomID string, skillID int6
 			return err
 		}
 		err = tx.QueryRowContext(ctx, `INSERT INTO skills(name, created_at, room_id, pending) VALUES(?,?,?,?) RETURNING id`, name, now(), roomID, held).Scan(&id)
-		if err != nil && strings.Contains(err.Error(), "UNIQUE") {
+		if isUnique(err) {
 			return ErrRoomSkillName
 		}
 		if err != nil {
@@ -552,11 +552,11 @@ func (s *Store) CopySkillToRoom(ctx context.Context, roomID string, skillID int6
 // (004-AC10). ErrForbidden unless by hosts the room, ErrNotFound unless the skill waits in it.
 func (s *Store) DecideRoomSkill(ctx context.Context, roomID string, id int64, approve bool, by *Participant) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "decide room skill", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "decide room skill", func(tx *txn) error {
 		if err := asHost(ctx, tx, roomID, by); err != nil {
 			return err
 		}
-		k, err := scanSkill(tx.QueryRowContext(ctx, skillCols+`WHERE s.id = ? AND s.room_id = ? AND s.pending`, id, roomID))
+		k, err := scanSkill(tx.QueryRowContext(ctx, skillCols+`WHERE s.id = ? AND s.room_id = ? AND s.pending = 1`, id, roomID))
 		if err != nil {
 			return err
 		}
@@ -583,7 +583,7 @@ func (s *Store) DecideRoomSkill(ctx context.Context, roomID string, id int64, ap
 // personas that had it on lose it, and the chat says so. ErrNotFound.
 func (s *Store) RemoveRoomSkill(ctx context.Context, roomID string, id int64, by *Participant) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "remove room skill", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "remove room skill", func(tx *txn) error {
 		var name string
 		err := tx.QueryRowContext(ctx, `DELETE FROM skills WHERE id = ? AND room_id = ? RETURNING name`, id, roomID).Scan(&name)
 		if errors.Is(err, sql.ErrNoRows) {

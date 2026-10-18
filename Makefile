@@ -28,7 +28,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: ui-tools ui-vendor ui-check build e2e-build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-device-voice e2e-persona-voice e2e-persona-echo e2e-agent-live e2e-mcp-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance scenarios-test stt-test stt-image stt-image-test stt-image-e2e tts-test tts-image tts-lexcheck cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete k8s-autoscale k8s-autoscale-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: ui-tools ui-vendor ui-check build e2e-build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-device-voice e2e-persona-voice e2e-persona-echo e2e-agent-live e2e-mcp-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance pg-up pg-down scenarios-test stt-test stt-image stt-image-test stt-image-e2e tts-test tts-image tts-lexcheck cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete k8s-autoscale k8s-autoscale-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -39,6 +39,7 @@ build:
 e2e-build:
 	CGO_ENABLED=0 go build -tags e2e -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME)-e2e $(PKG)
 	CGO_ENABLED=0 go build -o bin/e2egit ./tools/e2egit
+	CGO_ENABLED=0 go build -o bin/pgdb ./tools/pgdb
 
 # The daemon release the room server hands out (D28): one static binary per target, its sha256 file
 # (sha256sum format, checked by install.sh), VERSION and PROTO, its worker protocol version.
@@ -74,6 +75,24 @@ run: build
 
 test:
 	go test -race -cover -timeout 20m ./...
+
+# A throwaway PostgreSQL 16 for the tests and the e2e servers: C locale, data in memory, no fsync,
+# on a loopback port Docker picks (or PG_PORT). Export the URL pg-up prints; pg-down deletes it all.
+# The readiness probe goes over TCP: the image's init server listens on its socket only.
+PG_CONTAINER := grill-room-pg
+PG_PORT ?=
+# Same image as CI's postgres service (.github/workflows/ci.yml): bump both together.
+PG_IMAGE ?= postgres:16.15-alpine
+pg-up:
+	docker run -d --rm --name $(PG_CONTAINER) -p 127.0.0.1:$(PG_PORT):5432 --tmpfs /var/lib/postgresql/data \
+	  -e POSTGRES_PASSWORD=grill-room-test -e POSTGRES_INITDB_ARGS='--locale=C --encoding=UTF8' $(PG_IMAGE) \
+	  -c fsync=off -c synchronous_commit=off -c full_page_writes=off >/dev/null
+	@for i in $$(seq 60); do docker exec $(PG_CONTAINER) pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done; \
+	  echo "$(PG_CONTAINER) is not ready after 60 s" >&2; exit 1
+	@echo "export GRILL_ROOM_TEST_DATABASE_URL='postgres://postgres:grill-room-test@$$(docker port $(PG_CONTAINER) 5432/tcp | head -1)/postgres?sslmode=disable'"
+
+pg-down:
+	docker rm -f $(PG_CONTAINER)
 
 # Sandbox and agent turn tests against real Docker, a fake Anthropic upstream and a fake claude:
 # no subscription use. The egress test needs Internet access to PyPI, npm and GitHub. -p 1: the
@@ -137,7 +156,7 @@ e2e-agent-live: build
 # 012: a real Claude Code adds the server from the /profile token sheet and sets up a room through
 # /mcp, against a server of its own on loopback. Spends at most six real Claude requests (haiku)
 # with this machine's Claude Code login; claude runs on a throwaway config dir.
-e2e-mcp-live: build
+e2e-mcp-live: build e2e-build
 	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c mcp-live/playwright.config.js
 
 # The one-liner on a clean Debian container, pairing, self-update and tampered releases against the

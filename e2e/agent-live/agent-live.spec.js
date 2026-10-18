@@ -1,40 +1,35 @@
 import { test, expect } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { createRoom, invite, join as joinRoom } from '../voice/helpers.js';
+import { createRoom, invite, join as joinRoom, composeSQL } from '../voice/helpers.js';
 import { pairDaemon, liveDaemon as liveDaemonIn, messagesRequests, removeSandbox, ask } from '../helpers.js';
 
 const out = join('test-results', 'agent-live');
 const liveDaemon = (name, roomURL) => liveDaemonIn(join(out, name), roomURL);
 
-// sessionReport reads a copy of the compose database: each persona's turns, and for its last turn
-// whether any tool result carried a code word, which would mean it read the word from a file
-// instead of recalling it.
+// sessionReport reads the compose database: each persona's turns, and for its last turn whether any
+// tool result carried a code word, which would mean it read the word from a file instead of
+// recalling it.
 function sessionReport(roomID, marker, words) {
-  const db = join(out, 'db');
-  rmSync(db, { recursive: true, force: true });
-  mkdirSync(db, { recursive: true });
-  for (const f of ['grill-room.db', 'grill-room.db-wal', 'grill-room.db-shm']) {
-    try { execFileSync('docker', ['compose', '-f', '../compose.yaml', 'cp', `grill-room:/data/${f}`, join(db, f)], { stdio: 'ignore' }); } catch { /* -shm may be absent */ }
+  const personas = JSON.parse(composeSQL(`
+SELECT coalesce(json_object_agg(p.name, json_build_object(
+  'turns', (SELECT coalesce(json_agg(json_build_array(t.id, t.status, t.session_id, t.daemon_id) ORDER BY t.id), '[]')
+            FROM turns t WHERE t.persona_id = p.id),
+  'session', (SELECT json_build_object('bytes', octet_length(s.data), 'text', convert_from(s.data, 'UTF8'))
+              FROM agent_sessions s WHERE s.persona_id = p.id AND s.session_id = (SELECT t.session_id FROM turns t
+                WHERE t.persona_id = p.id AND t.status = 'done' ORDER BY t.id DESC LIMIT 1))) ORDER BY p.id), '{}')
+FROM room_personas p WHERE p.room_id = :'room';
+`, { room: roomID }));
+  const out = {};
+  for (const [name, { turns, session }] of Object.entries(personas)) {
+    if (!session) throw new Error(`${name}: no stored session for its last done turn`);
+    const { bytes, text } = session;
+    const lines = text.split(/\r\n|\r|\n/);
+    const at = lines.findLastIndex((l) => l.includes(marker));
+    if (at < 0) throw new Error(`${name}: no line of its session holds ${marker}`);
+    const tail = lines.slice(at + 1);
+    out[name] = { turns, bytes, tool_results_with_word: tail.filter((l) => l.includes('"tool_result"') && words.some((w) => l.includes(w))).length };
   }
-  const py = `
-import json, sqlite3, sys
-db = sqlite3.connect(sys.argv[1])
-room, marker, words = sys.argv[2], sys.argv[3], sys.argv[4].split(",")
-out = {}
-for pid, name in db.execute("SELECT id, name FROM room_personas WHERE room_id = ? ORDER BY id", (room,)):
-    turns = db.execute("SELECT id, status, session_id, daemon_id FROM turns WHERE persona_id = ? ORDER BY id", (pid,)).fetchall()
-    sid = [t[2] for t in turns if t[1] == "done"][-1]
-    data = db.execute("SELECT data FROM agent_sessions WHERE persona_id = ? AND session_id = ?", (pid, sid)).fetchone()[0]
-    lines = bytes(data).decode().splitlines()
-    at = max(i for i, l in enumerate(lines) if marker in l)
-    tail = lines[at + 1:]
-    out[name] = {"turns": turns, "bytes": len(data),
-                 "tool_results_with_word": sum('"tool_result"' in l and any(w in l for w in words) for l in tail)}
-print(json.dumps(out))
-`;
-  return JSON.parse(execFileSync('python3', ['-I', '-c', py, join(db, 'grill-room.db'), roomID, marker, words.join(',')], { encoding: 'utf8' }));
+  return out;
 }
 
 const quiet = 'Do not use any tool and do not read or write any file this turn.';

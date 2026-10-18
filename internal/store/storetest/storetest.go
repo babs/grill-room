@@ -1,18 +1,19 @@
-// Package storetest gives tests a migrated store database without running the migrations again.
+// Package storetest gives tests a store database without building the schema again.
 package storetest
 
 import (
 	"testing"
 
-	"github.com/babs/grill-room/internal/sqlitetest"
+	"github.com/babs/grill-room/internal/pgtest"
 	"github.com/babs/grill-room/internal/store"
 )
 
-// Path writes a migrated, empty store database to name under t.TempDir and returns its path.
-func Path(t testing.TB, name string) string {
+// DSN returns the DSN of an empty store database of the test's own, dropped when t ends. It skips
+// t without a test server. The package's TestMain must call pgtest.Main.
+func DSN(t testing.TB) string {
 	t.Helper()
-	return sqlitetest.Template(t, name, func(p string) error {
-		st, err := store.Open(p)
+	return pgtest.Template(t, func(dsn string) error {
+		st, err := store.Open(dsn)
 		if err != nil {
 			return err
 		}

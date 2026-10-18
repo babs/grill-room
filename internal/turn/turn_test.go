@@ -21,6 +21,8 @@ func TestClassify(t *testing.T) {
 		{Path: "docs/gone.md", Deleted: true},
 		{Path: "docs/bin.md", Content: []byte{0xff, 0xfe}},
 		{Path: "docs/big.md", Content: make([]byte, MaxDocBytes+1)},
+		{Path: "docs/nul.md", Content: []byte("# a\x00b")},
+		{Path: "docs/nul.html", Content: []byte("<p>\x00</p>")},
 		{Path: "transcript/2026-10-10.md", Content: []byte("edited")},
 		{Path: "scratch.txt"},
 		{Path: RepliesFile, Content: []byte(`[{"annotation": 4, "body": " ok "}, {"annotation": 0, "body": "x"}, {"annotation": 5, "body": ""}]`)},
@@ -34,7 +36,7 @@ func TestClassify(t *testing.T) {
 	if len(o.Replies) != 1 || o.Replies[0] != (Reply{Annotation: 4, Body: "ok"}) {
 		t.Fatalf("replies %+v", o.Replies)
 	}
-	wantIgnored := []string{"docs/sub/x.md", "docs/notes.txt", "docs/gone.md", "docs/bin.md", "docs/big.md", RepliesFile}
+	wantIgnored := []string{"docs/sub/x.md", "docs/notes.txt", "docs/gone.md", "docs/bin.md", "docs/big.md", "docs/nul.md", "docs/nul.html", RepliesFile}
 	if len(o.Ignored) != len(wantIgnored) {
 		t.Fatalf("ignored %q", o.Ignored)
 	}

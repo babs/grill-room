@@ -74,7 +74,7 @@ func roomChain(ctx context.Context, q querier, roomID string) (Chain, error) {
 	return c, nil
 }
 
-func saveChain(ctx context.Context, tx *sql.Tx, roomID string, c Chain) error {
+func saveChain(ctx context.Context, tx *txn, roomID string, c Chain) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE rooms SET chain_budget = ?, chain_count = ?, chain_suspended = ? WHERE id = ?`,
 		c.Budget, c.Count, c.Suspended, roomID); err != nil {
 		return fmt.Errorf("save chain: %w", err)
@@ -83,7 +83,7 @@ func saveChain(ctx context.Context, tx *sql.Tx, roomID string, c Chain) error {
 }
 
 // chainOn applies e to the room's chain in tx; false for a dropped link, which changes nothing.
-func chainOn(ctx context.Context, tx *sql.Tx, roomID string, e ChainEvent) (Chain, bool, error) {
+func chainOn(ctx context.Context, tx *txn, roomID string, e ChainEvent) (Chain, bool, error) {
 	c, err := roomChain(ctx, tx, roomID)
 	if err != nil {
 		return c, false, err
@@ -97,7 +97,7 @@ func chainOn(ctx context.Context, tx *sql.Tx, roomID string, e ChainEvent) (Chai
 
 // ResetChain is a human taking the lead: a persona button or a message mentioning a persona.
 func (s *Store) ResetChain(ctx context.Context, roomID string, e ChainEvent) error {
-	return s.withTx(ctx, "reset chain", func(tx *sql.Tx) error {
+	return s.withTx(ctx, "reset chain", func(tx *txn) error {
 		_, _, err := chainOn(ctx, tx, roomID, e)
 		return err
 	})
@@ -116,7 +116,7 @@ type ChainControl struct {
 func (s *Store) ControlChain(ctx context.Context, roomID string, c ChainControl, by *Participant) (Chain, *Message, error) {
 	var ch Chain
 	var m *Message
-	err := s.withTx(ctx, "control chain", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "control chain", func(tx *txn) error {
 		before, err := roomChain(ctx, tx, roomID)
 		if err != nil {
 			return err
@@ -157,7 +157,7 @@ func (s *Store) ControlChain(ctx context.Context, roomID string, c ChainControl,
 // already. Neither counts.
 func (s *Store) EnqueueLink(ctx context.Context, q *QueuedTurn, e ChainEvent) (Chain, error) {
 	var c Chain
-	err := s.withTx(ctx, "enqueue link", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "enqueue link", func(tx *txn) error {
 		q.Source = string(e)
 		if err := enqueue(ctx, tx, q); err != nil {
 			return err

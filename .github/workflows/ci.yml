@@ -25,10 +25,34 @@ concurrency:
 jobs:
   go:
     runs-on: ubuntu-latest
+    # A throwaway PostgreSQL 16 in C locale (017-AC6) for the Go tests and the e2e servers.
+    services: &pg
+      postgres:
+        image: postgres:16.15-alpine
+        env: &pg-service-env
+          POSTGRES_PASSWORD: grill-room-test
+          POSTGRES_INITDB_ARGS: --locale=C --encoding=UTF8
+        ports:
+          - 5432:5432
+        options: >-
+          --tmpfs /var/lib/postgresql/data
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
+    env: &pg-env
+      GRILL_ROOM_TEST_DATABASE_URL: postgres://postgres:grill-room-test@127.0.0.1:5432/postgres?sslmode=disable
+      # The PG tests fail instead of skipping when the URL is missing.
+      GRILL_ROOM_TEST_REQUIRE_PG: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # No durability on a throwaway database: keeps make test fast (017-AC26). All three reload live.
+      - &pg-tune
+        env:
+          PG: ${{ job.services.postgres.id }}
+        run: >-
+          docker exec "$PG" psql -q -U postgres -c "ALTER SYSTEM SET fsync = off"
+          -c "ALTER SYSTEM SET synchronous_commit = off" -c "ALTER SYSTEM SET full_page_writes = off"
+          -c "SELECT pg_reload_conf()"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -51,6 +75,30 @@ jobs:
       - run: make build
       # 003-AC30: cross-compiles the six daemon targets a release ships.
       - run: make release VERSION=v0.0.0
+
+  # The Go tests on the lab's PostgreSQL major. A job of its own, not a matrix: the go check keeps
+  # its name. The 18 image refuses a mount on .../data, so the tmpfs is its parent.
+  go-pg18:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.6-alpine
+        env: *pg-service-env
+        ports:
+          - 5432:5432
+        options: >-
+          --tmpfs /var/lib/postgresql
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
+    env: *pg-env
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - *pg-tune
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go test -race -timeout 20m ./...
 
   # 003-AC30: unit tests on Windows. Docker and the POSIX-shell tests skip themselves (docs/release.md
   # lists them).
@@ -147,13 +195,31 @@ jobs:
       - run: make scenarios-test
 
   # The flake gate (test hygiene): the tests a change adds or edits run again and again, on both
-  # OSes, against the PR's base or develop. A test that passes once by luck fails here.
+  # OSes, against the PR's base or develop. A test that passes once by luck fails here. Two jobs:
+  # service containers only run on Linux, and Windows skips the PG tests (docs/release.md).
   flake-go:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    name: flake-go (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.full && 180 || 90 }}
+    services: *pg
+    env: *pg-env
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - *pg-tune
+      - env:
+          BASE: ${{ inputs.full && 'all' || github.event.pull_request.base.sha || 'origin/develop' }}
+          CGO_ENABLED: "1"
+        run: tools/flake-gate.sh "$BASE" go
+
+  flake-go-windows:
+    name: flake-go (windows-latest)
+    runs-on: windows-latest
     timeout-minutes: ${{ inputs.full && 180 || 90 }}
     steps:
       - run: git config --global core.autocrlf false
@@ -174,8 +240,8 @@ jobs:
   flake-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.full && 120 || 60 }}
-    env:
-      GRILL_ROOM_E2E_MODEL_DIR: ${{ github.workspace }}/.device-stt-models
+    services: *pg
+    env: *pg-env
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -184,6 +250,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - *pg-tune
       # The device transcription model the device-stt specs self-test on (010-AC2), cached per pin set.
       - id: device-model
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -191,6 +258,8 @@ jobs:
           path: .device-stt-models
           key: device-stt-${{ hashFiles('internal/devicestt/manifest.go') }}
       - if: steps.device-model.outputs.cache-hit != 'true'
+        env:
+          GRILL_ROOM_E2E_MODEL_DIR: ${{ github.workspace }}/.device-stt-models
         run: go run ./cmd/grill-room models fetch --dir "$GRILL_ROOM_E2E_MODEL_DIR"
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
@@ -206,6 +275,7 @@ jobs:
       - run: cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright install --with-deps firefox
       - env:
           BASE: ${{ inputs.full && 'all' || github.event.pull_request.base.sha || 'origin/develop' }}
+          GRILL_ROOM_E2E_MODEL_DIR: ${{ github.workspace }}/.device-stt-models
         run: tools/flake-gate.sh "$BASE" e2e
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -221,10 +291,8 @@ jobs:
     needs: [stt-image]
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
-      DEVICE_STT_MODEL_DIR: ${{ github.workspace }}/.device-stt-models
-      # 4 vCPUs: two for the worker, the rest for Chrome's model, LiveKit and the server.
-      DEVICE_VOICE_STT_CPUS: "2"
+    services: *pg
+    env: *pg-env
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -244,6 +312,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - *pg-tune
       - id: device-model
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -259,7 +328,11 @@ jobs:
           cache: pnpm
           cache-dependency-path: e2e/pnpm-lock.yaml
       # The flake gate's rule for a changed spec: three runs in a row.
-      - run: make e2e-device-voice DEVICE_VOICE_ARGS=--repeat-each=3
+      - env:
+          DEVICE_STT_MODEL_DIR: ${{ github.workspace }}/.device-stt-models
+          # 4 vCPUs: two for the worker, the rest for Chrome's model, LiveKit and the server.
+          DEVICE_VOICE_STT_CPUS: "2"
+        run: make e2e-device-voice DEVICE_VOICE_ARGS=--repeat-each=3
       # The worker's log (test-results/device-voice/stt.log) and the Playwright results.
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -275,6 +348,8 @@ jobs:
     needs: [stt-image]
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    services: *pg
+    env: *pg-env
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -293,6 +368,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - *pg-tune
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
@@ -321,6 +397,8 @@ jobs:
     needs: [stt-image]
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    services: *pg
+    env: *pg-env
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -339,6 +417,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - *pg-tune
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
@@ -424,8 +503,8 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    env:
-      GRILL_ROOM_E2E_MODEL_DIR: ${{ github.workspace }}/.device-stt-models
+    services: *pg
+    env: *pg-env
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -433,6 +512,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      - *pg-tune
       # The device transcription model the device-stt specs self-test on (010-AC2), cached per pin set.
       - id: device-model
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -440,6 +520,8 @@ jobs:
           path: .device-stt-models
           key: device-stt-${{ hashFiles('internal/devicestt/manifest.go') }}
       - if: steps.device-model.outputs.cache-hit != 'true'
+        env:
+          GRILL_ROOM_E2E_MODEL_DIR: ${{ github.workspace }}/.device-stt-models
         run: go run ./cmd/grill-room models fetch --dir "$GRILL_ROOM_E2E_MODEL_DIR"
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
@@ -454,7 +536,9 @@ jobs:
       - run: sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends pandoc
       # The firefox project's browser (e2e/playwright.config.js).
       - run: cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright install --with-deps firefox
-      - run: make e2e
+      - env:
+          GRILL_ROOM_E2E_MODEL_DIR: ${{ github.workspace }}/.device-stt-models
+        run: make e2e
       # Traces and screenshots of a failed run; the invite links in them died with its server.
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

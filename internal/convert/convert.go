@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -60,7 +61,8 @@ func Detect(name string, data []byte) (Type, error) {
 		return Type{Format: FormatImage, ContentType: ct}, nil
 	case ct == "application/zip":
 		return office(data)
-	case strings.HasPrefix(ct, "text/") && utf8.Valid(data):
+	// The store's text columns take no NUL; the sniff above reads the first 512 bytes only.
+	case strings.HasPrefix(ct, "text/") && utf8.Valid(data) && bytes.IndexByte(data, 0) < 0:
 		switch strings.ToLower(filepath.Ext(name)) {
 		case ".md", ".markdown":
 			return Type{Format: FormatMD, ContentType: "text/markdown; charset=utf-8"}, nil
@@ -138,6 +140,7 @@ func (p *Pandoc) ToMarkdown(ctx context.Context, from string, data []byte) (stri
 	// local files or URLs.
 	cmd := exec.CommandContext(ctx, p.path, "+RTS", pandocHeap, "-RTS", "--sandbox", "-f", from, "-t", "gfm") //nolint:gosec // path is operator config, from is one of Detect's constants
 	cmd.Stdin = bytes.NewReader(data)
+	cmd.Env = pandocEnv()
 	var out, stderr bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
@@ -154,4 +157,17 @@ func (p *Pandoc) ToMarkdown(ctx context.Context, from string, data []byte) (stri
 		return "", fmt.Errorf("pandoc %s: %w: %s", from, err, msg)
 	}
 	return out.String(), nil
+}
+
+// pandocEnv is the little pandoc reads of the environment: the server's own holds the database URL
+// and other secrets.
+func pandocEnv() []string {
+	// Non-nil: a nil Env would hand pandoc the whole environment.
+	env := []string{}
+	for _, k := range []string{"PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR"} {
+		if v, ok := os.LookupEnv(k); ok {
+			env = append(env, k+"="+v)
+		}
+	}
+	return env
 }

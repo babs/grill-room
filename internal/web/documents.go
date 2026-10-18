@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go.uber.org/zap"
 
@@ -100,10 +101,11 @@ type Options struct {
 	// MaxImportBytes bounds an imported archive, compressed and once uncompressed; 0 means
 	// DefaultMaxImportBytes.
 	MaxImportBytes int64
-	// Version is the server's own, and DBPath its database file: the instance view shows both, and
-	// exports and imports stage beside the database.
+	// Version is the server's own, shown in the instance view.
 	Version string
-	DBPath  string
+	// StagingDir is where exports and imports stage their files, the pod's own: leftovers in it are
+	// removed at start. Empty stages under os.TempDir and cleans nothing.
+	StagingDir string
 	// DeviceSTTDir holds the device transcription files; empty, or incomplete at start, offers no
 	// device mode (010-AC5). DeviceSTTManifest is what it must hold; nil means devicestt.Pinned.
 	DeviceSTTDir      string
@@ -271,6 +273,10 @@ func (s *Server) uploadDocument(w http.ResponseWriter, r *http.Request, sess ses
 			s.log.Error("pandoc_missing", zap.Error(err))
 			httpError(w, http.StatusServiceUnavailable, "document conversion is unavailable on this server")
 			return
+		}
+		// The store's text columns take neither invalid UTF-8 nor NUL.
+		if err == nil && (!utf8.ValidString(text) || strings.IndexByte(text, 0) >= 0) {
+			err = errors.New("the Markdown is not UTF-8 text or holds a NUL")
 		}
 		if err != nil {
 			s.log.Warn("upload_conversion_failed", zap.String("room", sess.p.RoomID), zap.String("reader", typ.Reader), zap.Error(err))

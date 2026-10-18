@@ -128,6 +128,8 @@ func TestParseRefuses(t *testing.T) {
 		"path in name":           {mkzip(t, entry{name: "SKILL.md", body: "---\nname: ../x\ndescription: d\n---\n"}), "name must be"},
 		"no description":         {mkzip(t, entry{name: "SKILL.md", body: "---\nname: a\n---\n"}), "description must be"},
 		"description too long":   {mkzip(t, entry{name: "SKILL.md", body: "---\nname: a\ndescription: " + strings.Repeat("d", MaxDescription+1) + "\n---\n"}), "description must be"},
+		"description NUL escape": {mkzip(t, entry{name: "SKILL.md", body: "---\nname: a\ndescription: \"a\\0b\"\n---\n"}), "holds a NUL"},
+		"description hex NUL":    {mkzip(t, entry{name: "SKILL.md", body: "---\nname: a\ndescription: \"a\\x00b\"\n---\n"}), "holds a NUL"},
 		"SKILL.md too large":     {mkzip(t, entry{name: "SKILL.md", body: good + strings.Repeat("x", MaxSkillMD)}), "SKILL.md is over"},
 		"zip itself too large":   {make([]byte, MaxZipBytes+1), "zip is over"},
 		"path too long":          {mkzip(t, entry{name: "SKILL.md", body: good}, entry{name: strings.Repeat("a", MaxPathLen+1), body: "x"}), "over 200 characters"},

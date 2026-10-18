@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 	"errors"
-	"path/filepath"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -104,7 +104,7 @@ func TestStarterLibraries(t *testing.T) {
 // 006-AC2: built-ins ship read-only, with no owner; anyone duplicates one; a changed built-in gets
 // a new version at start, and the copies keep theirs.
 func TestBuiltinStarters(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "test.db")
+	path := testDSN(t)
 	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -206,7 +206,11 @@ func TestStarterLimits(t *testing.T) {
 			first = st
 		}
 	}
-	if _, err := s.SaveStarter(ctx, alice.ProfileID, 0, testManifest("S"), nil); !errors.Is(err, ErrLimit) || !strings.Contains(err.Error(), "50 starters") {
+	// The count limits answer before the quota, which sums the whole database.
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveStarter(ctx, alice.ProfileID, 0, testManifest("S"), big); !errors.Is(err, ErrLimit) || !strings.Contains(err.Error(), "50 starters") {
 		t.Fatalf("starter 51: %v", err)
 	}
 	for n := 2; n <= MaxStarterVersions; n++ {
@@ -215,8 +219,47 @@ func TestStarterLimits(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.SaveStarter(ctx, alice.ProfileID, first.ID, testManifest("S"), nil); !errors.Is(err, ErrLimit) || !strings.Contains(err.Error(), "100 versions") {
+	if _, err := s.SaveStarter(ctx, alice.ProfileID, first.ID, testManifest("S"), big); !errors.Is(err, ErrLimit) || !strings.Contains(err.Error(), "100 versions") {
 		t.Fatalf("version 101: %v", err)
+	}
+}
+
+// A NUL in a starter's text is refused: the list reads the manifest as jsonb, which would fail on
+// it for good.
+func TestStarterRefusesNUL(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	alice := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec-a", SessionHash: "sess-a"})
+	st, err := s.SaveStarter(ctx, alice.ProfileID, 0, testManifest("Clean"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nulDesc := testManifest("Desc")
+	nulDesc.Description = "a\x00b"
+	for name, save := range map[string]func() error{
+		"new title": func() error {
+			_, err := s.SaveStarter(ctx, alice.ProfileID, 0, testManifest("a\x00b"), nil)
+			return err
+		},
+		"new description": func() error { _, err := s.SaveStarter(ctx, alice.ProfileID, 0, nulDesc, nil); return err },
+		"next version": func() error {
+			_, err := s.SaveStarter(ctx, alice.ProfileID, st.ID, testManifest("\x00"), nil)
+			return err
+		},
+	} {
+		if err := save(); !errors.Is(err, ErrLimit) || !strings.Contains(err.Error(), "NUL") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if list, err := s.Starters(ctx, alice.ProfileID); err != nil || len(list) == 0 {
+		t.Fatalf("list: %d %v", len(list), err)
+	}
+	// Refused before the quota's database-wide scan: a full quota still answers NUL.
+	if _, err := s.UpdateInstanceSettings(ctx, func(v *InstanceSettings) error { v.StorageQuota = 1; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveStarter(ctx, alice.ProfileID, 0, nulDesc, nil); !strings.Contains(fmt.Sprint(err), "NUL") {
+		t.Errorf("over quota: %v, want the NUL refusal", err)
 	}
 }
 

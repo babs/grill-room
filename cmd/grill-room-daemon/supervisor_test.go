@@ -19,6 +19,7 @@ import (
 
 	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/daemon"
+	"github.com/babs/grill-room/internal/pgtest"
 	"github.com/babs/grill-room/internal/sandbox"
 	_ "github.com/babs/grill-room/internal/sqlitetest"
 	"github.com/babs/grill-room/internal/store"
@@ -33,7 +34,7 @@ func TestMain(m *testing.M) {
 		main()
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	pgtest.Main(m)
 }
 
 type roomServer struct {
@@ -45,7 +46,7 @@ type roomServer struct {
 
 func newRoomServer(t *testing.T) *roomServer {
 	t.Helper()
-	st, err := store.Open(storetest.Path(t, "room.db"))
+	st, err := store.Open(storetest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}

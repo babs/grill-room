@@ -1,7 +1,6 @@
 package web
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -312,12 +311,8 @@ func TestAuditedActionsFailWithTheAuditLog(t *testing.T) {
 		t.Fatalf("copy: %d %s", code, b)
 	}
 	rk := decodeJSON[store.Skill](t, b)
-	db, err := sql.Open("sqlite", "file:"+e.dbPath+"?_pragma=busy_timeout(5000)")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if _, err := db.ExecContext(t.Context(), `CREATE TRIGGER audit_down BEFORE INSERT ON audit_log BEGIN SELECT RAISE(ABORT, 'audit down'); END`); err != nil {
+	if _, err := e.sqlDB(t).ExecContext(t.Context(), `CREATE FUNCTION audit_down() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'audit down'; END $$;
+		CREATE TRIGGER audit_down BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION audit_down()`); err != nil {
 		t.Fatal(err)
 	}
 	before, err := e.st.RoomOverview(t.Context(), room.ID, 1)

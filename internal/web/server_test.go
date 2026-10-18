@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -22,10 +23,12 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/babs/grill-room/internal/bus"
-	_ "github.com/babs/grill-room/internal/sqlitetest"
+	"github.com/babs/grill-room/internal/pgtest"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/store/storetest"
 )
+
+func TestMain(m *testing.M) { pgtest.Main(m) }
 
 const baseURL = "https://rooms.example"
 
@@ -35,8 +38,8 @@ type env struct {
 	bus   *bus.Bus
 	srv   *Server
 	admin string
-	// dbPath is the store's file.
-	dbPath string
+	// dsn is the store's database.
+	dsn string
 }
 
 func newEnv(t *testing.T) *env {
@@ -52,8 +55,8 @@ func newEnvOpts(t *testing.T, opts Options) *env {
 // newEnvLog is newEnvOpts with the server writing to log.
 func newEnvLog(t *testing.T, opts Options, log *zap.Logger) *env {
 	t.Helper()
-	dbPath := storetest.Path(t, "t.db")
-	st, err := store.Open(dbPath)
+	dsn := storetest.DSN(t)
+	st, err := store.Open(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +66,18 @@ func newEnvLog(t *testing.T, opts Options, log *zap.Logger) *env {
 	srv := New(b, HashToken(admin), baseURL+"/", opts, log)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
-	return &env{ts: ts, st: st, bus: b, srv: srv, admin: admin, dbPath: dbPath}
+	return &env{ts: ts, st: st, bus: b, srv: srv, admin: admin, dsn: dsn}
+}
+
+// sqlDB is a connection of the test's own to the store's database, closed when t ends.
+func (e *env) sqlDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("pgx", e.dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
 }
 
 // do sends a JSON request with an optional bearer token and returns the status and body.
@@ -601,6 +615,39 @@ func TestHealthz(t *testing.T) {
 	_ = e.st.Close()
 	if code, _ := e.do(t, "GET", "/healthz", "", nil); code != http.StatusServiceUnavailable {
 		t.Fatalf("closed store: %d, want 503", code)
+	}
+}
+
+// 017-AC22: /healthz answers 503 once PostgreSQL refuses writes, 200 while it takes them.
+func TestHealthzReadOnlyDatabase(t *testing.T) {
+	e := newEnv(t)
+	if code, b := e.do(t, "GET", "/healthz", "", nil); code != http.StatusOK {
+		t.Fatalf("healthy: %d %s", code, b)
+	}
+	db := e.sqlDB(t)
+	var name string
+	if err := db.QueryRowContext(t.Context(), `SELECT current_database()`).Scan(&name); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), `ALTER DATABASE "`+name+`" SET default_transaction_read_only = on`); err != nil {
+		t.Fatal(err)
+	}
+	// The setting applies to new sessions: end the store's.
+	if _, err := db.ExecContext(t.Context(), `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, name); err != nil {
+		t.Fatal(err)
+	}
+	// Each attempt drops at most one terminated pooled connection, then a fresh session is read-only.
+	var err error
+	for range 20 {
+		if err = e.st.Writable(t.Context()); err != nil && strings.Contains(err.Error(), "read-only") {
+			break
+		}
+	}
+	if err == nil || !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("write on a read-only database: %v", err)
+	}
+	if code, b := e.do(t, "GET", "/healthz", "", nil); code != http.StatusServiceUnavailable {
+		t.Fatalf("read-only database: %d %s, want 503", code, b)
 	}
 }
 

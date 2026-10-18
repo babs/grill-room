@@ -78,7 +78,6 @@ func (s *Server) mergeProfiles(w http.ResponseWriter, r *http.Request) {
 	if s.mergeError(w, "merge_profiles_failed", err) {
 		return
 	}
-	s.checkpoint(context.WithoutCancel(r.Context()))
 	s.log.Info("profiles_merged", zap.Int64("keep", req.Keep), zap.Int64("merge", req.Merge), zap.Any("moved", moved))
 	writeJSON(w, http.StatusOK, mergeResp{Keep: mergeKept{ID: kept.ID, UUID: kept.UUID, Name: kept.Name}, Moved: moved})
 }
@@ -92,19 +91,7 @@ func (s *Server) purgeProfiles(ctx context.Context, idle time.Duration, only ...
 	}
 	now := s.now()
 	ctx = store.WithAudit(ctx, store.AuditEntry{At: now, Actor: store.ActorSystem, Action: ActionProfilePurge, TargetKind: store.TargetInstance}, nil)
-	uuids, err := s.bus.Store.PurgeEmptyProfiles(ctx, now, idle, only...)
-	if err == nil && len(uuids) > 0 {
-		s.checkpoint(ctx)
-	}
-	return uuids, err
-}
-
-// checkpoint clears the WAL after a committed delete, merge or purge; a failure leaves the change
-// done, so it is only logged.
-func (s *Server) checkpoint(ctx context.Context) {
-	if err := s.bus.Store.Checkpoint(ctx); err != nil && ctx.Err() == nil {
-		s.log.Error("checkpoint_failed", zap.Error(err))
-	}
+	return s.bus.Store.PurgeEmptyProfiles(ctx, now, idle, only...)
 }
 
 // PurgeProfiles purges empty profiles now, then every profilePurgeEvery, until ctx ends (011-AC16).

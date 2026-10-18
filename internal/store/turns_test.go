@@ -2,10 +2,8 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -677,44 +675,4 @@ func TestStopTurn(t *testing.T) {
 	}
 	// The room runs again: the stopped turn holds no slot.
 	r.start(t, s, "a")
-}
-
-// 005-AC5: the migration adding "stopped" keeps the turns of an older database and lets the
-// connection store the new status at once.
-func TestMigrationToStopped(t *testing.T) {
-	ctx := context.Background()
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "old.db")+"?_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	db.SetMaxOpenConns(1)
-	before := slices.IndexFunc(migrations, func(m string) bool { return strings.Contains(m, "''stopped''") })
-	if err := migrateTo(ctx, db, before); err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{`INSERT INTO rooms(id, name, created_at) VALUES('a', 'A', '2026-01-01T00:00:00Z')`,
-		`INSERT INTO turns(room_id, host, status, fresh, resume, message_cursor, annotation_cursor, prompt, started_at)
-			VALUES('a', '', 'running', 0, '', 0, 0, '', '2026-01-01T00:00:00Z')`} {
-		if _, err := db.ExecContext(ctx, q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	stop := `UPDATE turns SET status = 'stopped'`
-	if _, err := db.ExecContext(ctx, stop); err == nil {
-		t.Fatal("the old schema took a stopped turn")
-	}
-	if err := migrate(ctx, db); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, stop); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, `UPDATE turns SET status = 'bogus'`); err == nil {
-		t.Fatal("the CHECK is gone")
-	}
-	var ok string
-	if err := db.QueryRowContext(ctx, `PRAGMA integrity_check`).Scan(&ok); err != nil || ok != "ok" {
-		t.Fatalf("integrity: %q, %v", ok, err)
-	}
 }

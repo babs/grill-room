@@ -647,7 +647,7 @@ func TestImportRefusals(t *testing.T) {
 func TestExportMemoryIsBounded(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
-	const n, size = 10, 4 << 20
+	const n, size = 16, 4 << 20
 	p := joinWithProfile(t, s, "big", "Alice", JoinProfile{})
 	for i := range n {
 		data := bytes.Repeat([]byte{'a' + byte(i)}, size)
@@ -684,8 +684,9 @@ func TestExportMemoryIsBounded(t *testing.T) {
 	}
 	grew := int64(peak.Load()) - int64(base.HeapAlloc)
 	t.Logf("room %d MB, heap grew by %.1f MB at most", n*size>>20, float64(grew)/(1<<20))
-	// One blob passes through a few buffers, and when the GC frees them varies: Windows peaked at four
-	// copies plus runtime overhead. An export holding the room would reach its 40 MB.
+	// One blob passes through a few buffers, and when the GC frees them varies: pgx reads a 4 MB row
+	// into a pooled 8 MB buffer, and Windows peaked at four copies. An export holding the room would
+	// reach its 64 MB.
 	if grew > n*size/2 {
 		t.Fatalf("the export held %.1f MB of a %d MB room in memory", float64(grew)/(1<<20), n*size>>20)
 	}
@@ -749,9 +750,10 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"starters":                  server,
 		"starter_versions":          server,
 		"starter_files":             server,
+		"schema_version":            server,
 	}
-	rows, err := s.db.QueryContext(t.Context(), `SELECT m.name, group_concat(c.name, ' ') FROM sqlite_master m, pragma_table_xinfo(m.name) c
-		WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' GROUP BY m.name`)
+	rows, err := s.db.QueryContext(t.Context(), `SELECT table_name::text, string_agg(column_name::text, ' ') FROM information_schema.columns
+		WHERE table_schema = 'public' GROUP BY table_name`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -806,18 +808,14 @@ func TestImportIsAllOrNothing(t *testing.T) {
 	before := count()
 	for _, table := range []string{"rooms", "room_personas", "invites", "participants", "room_admins", "messages", "message_versions", "uploads", "documents",
 		"revisions", "annotations", "annotation_messages", "attachments", "skills", "skill_versions", "room_persona_skills", "turns", "agent_sessions", "audit_log"} {
-		if _, err := s.db.ExecContext(ctx, `CREATE TEMP TRIGGER fail BEFORE INSERT ON main.`+table+` BEGIN SELECT RAISE(ABORT, 'injected failure'); END`); err != nil {
-			t.Fatal(err)
-		}
+		restore := failInserts(t, s, table, "injected failure")
 		o := importOpts("x")
 		o.SameInstance = false
 		auditCtx := WithAudit(ctx, AuditEntry{Actor: ActorSuperAdmin, Action: "room.import", TargetKind: TargetRoom}, nil)
 		if _, err := s.ImportRoom(auditCtx, dir, o); err == nil || !strings.Contains(err.Error(), "injected failure") {
 			t.Errorf("failing %s: %v", table, err)
 		}
-		if _, err := s.db.ExecContext(ctx, `DROP TRIGGER temp.fail`); err != nil {
-			t.Fatal(err)
-		}
+		restore()
 		if after := count(); !reflect.DeepEqual(after, before) {
 			t.Fatalf("failing %s left rows: %v, before %v", table, after, before)
 		}
@@ -1289,4 +1287,72 @@ func TestImportSpeechBounds(t *testing.T) {
 			t.Errorf("%+v: import error %v", c.sp, err)
 		}
 	}
+}
+
+func TestJSONNUL(t *testing.T) {
+	for in, want := range map[string]bool{
+		`{"body":"a\u0000b"}`:   true,
+		`{"body":"\u00001"}`:    true,
+		`{"body":"a\\\u0000"}`:  true,
+		`{"body":"a\\u0000b"}`:  false,
+		`{"body":"a\\\\u0000"}`: false,
+		`{"body":"a\u0001b"}`:   false,
+		`{"u0000":1}`:           false,
+	} {
+		if got := jsonNUL([]byte(in)); got != want {
+			t.Errorf("jsonNUL(%s) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+// An archive's text goes into PostgreSQL text columns, which take neither NUL nor invalid UTF-8:
+// the import refuses it as any other bad archive, never with a database error.
+func TestImportRefusesTextPostgreSQLCannotHold(t *testing.T) {
+	s := openTest(t)
+	richRoom(t, s, "orig")
+	dir := export(t, s, "orig")
+	var rev xRevision
+	if err := json.Unmarshal([]byte(strings.SplitN(string(must(os.ReadFile(filepath.Join(dir, fileRevisions)))), "\n", 2)[0]), &rev); err != nil {
+		t.Fatal(err)
+	}
+	edit := func(file string, change func([]byte) []byte) string {
+		t.Helper()
+		d := t.TempDir()
+		if err := os.CopyFS(d, os.DirFS(dir)); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(d, file)
+		if err := os.WriteFile(p, change(must(os.ReadFile(p))), 0o600); err != nil { //nolint:gosec // under t.TempDir
+			t.Fatal(err)
+		}
+		return d
+	}
+	for name, d := range map[string]string{
+		"NUL in a revision":       edit(rev.File, func(b []byte) []byte { return append(b, 0, 'x') }),
+		"Latin-1 revision":        edit(rev.File, func(b []byte) []byte { return append(b, 0xe9) }),
+		"NUL escape in a message": edit(fileMessages, func(b []byte) []byte { return bytes.Replace(b, []byte(`"body":"`), []byte(`"body":"\u0000`), 1) }),
+		"NUL escape in the room": edit(fileRoom, func(b []byte) []byte {
+			var m map[string]any
+			if err := json.Unmarshal(b, &m); err != nil {
+				t.Fatal(err)
+			}
+			m["name"] = "x\x00"
+			return must(json.Marshal(m))
+		}),
+		// The timestamps reach the store as written: only the guard on the line stops this one.
+		"NUL escape in a timestamp": edit(fileMessages, func(b []byte) []byte { return bytes.Replace(b, []byte(`"ts":"`), []byte(`"ts":"\u0000`), 1) }),
+		"NUL escape in a document":  edit(fileDocuments, func(b []byte) []byte { return bytes.Replace(b, []byte(`"author":"`), []byte(`"author":"\u0000`), 1) }),
+	} {
+		_, err := s.ImportRoom(t.Context(), d, importOpts(strings.ReplaceAll(name, " ", "-")))
+		if !errors.Is(err, ErrImportRefused) || strings.Contains(err.Error(), "SQLSTATE") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
 }

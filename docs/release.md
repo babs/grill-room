@@ -6,7 +6,7 @@ GitHub Actions builds and signs every release. Nobody holds a signing key: cosig
 
 `.github/workflows/ci.yml` runs on pull requests to `develop` and on pushes to `develop` and `feat/**`:
 
-- `go`: `make lint`, `make test` (`go test -race -cover ./...`), `make build`, and `make release VERSION=v0.0.0`, which cross-compiles the six daemon targets.
+- `go`: `make lint`, `make test` (`go test -race -cover ./...`, on a PostgreSQL 16 service container), `make build`, and `make release VERSION=v0.0.0`, which cross-compiles the six daemon targets.
 - `windows`: `go test ./...` on `windows-latest`. See [Tests skipped on Windows](#tests-skipped-on-windows).
 - `stt`: `make stt-test`, with the whisper `small` model at the revision the STT image pins. CI sets `CI`, so the e2e test fails instead of skipping when the model is missing.
 
@@ -127,6 +127,7 @@ The `windows` job runs `go test ./...` without `-race`. These checks skip there:
 | `cmd/grill-room-daemon` `TestRunWithoutHandoffSocket` | it overflows the Unix socket path limit; Windows uses a named pipe |
 | `internal/monitor` `TestOpenOwnerOnly` | it checks mode bits; `monitor.db` sits in `%LOCALAPPDATA%`, which only the user reads |
 | `GRILL_ROOM_TEST_DOCKER` tests (`make test-docker`) | they need Docker; they already skip without that variable on every OS |
+| PostgreSQL tests (the ones using `internal/pgtest`) | GitHub runs service containers on Linux runners only; they skip without `GRILL_ROOM_TEST_DATABASE_URL` |
 
 Two assertions change on Windows:
 

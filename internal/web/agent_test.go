@@ -393,7 +393,8 @@ func TestTurnLifecycle(t *testing.T) {
 			{Path: "docs/synthesis.md", Content: []byte("# Synthesis\n\nThe slow brown fox.\n")},
 			{Path: "docs/rollback.md", Content: []byte("# Rollback\n")},
 			{Path: pdf},
-			{Path: "replies.json", Content: []byte(fmt.Sprintf(`[{"annotation": %d, "body": "the brown one"}]`, r.ann))},
+			// A NUL, which the store's text refuses, and a bell go as in any agent text.
+			{Path: "replies.json", Content: []byte(fmt.Sprintf(`[{"annotation": %d, "body": "the brown \u0000\u0007one"}]`, r.ann))},
 		},
 	})
 	if code != http.StatusOK {

@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -182,6 +183,17 @@ func TestResolve(t *testing.T) {
 	for _, bad := range []string{"nope", "a b", "x\ncommand=fetch", "a..b", "-x"} {
 		_, _, err := Resolve(ctx(t), gs.client, u, bad)
 		require.Error(t, err, bad)
+	}
+	// The remote names its default branch: one no ref the room takes may hold stays HEAD.
+	for _, branch := range []string{"café", "caf\xe9", "x+y"} {
+		r := gs.newRepo(t)
+		r.write("a.txt", "one")
+		head := r.commit("one")
+		r.git("branch", "-m", branch)
+		c, n, err := Resolve(ctx(t), gs.client, gs.publish(r, "odd"+strconv.Itoa(len(branch))+".git"), "")
+		require.NoError(t, err, branch)
+		require.Equal(t, head, c, branch)
+		require.Equal(t, "HEAD", n, branch)
 	}
 	_, _, err = Resolve(ctx(t), gs.client, gs.url("missing.git"), "")
 	require.ErrorIs(t, err, ErrNoAccess)

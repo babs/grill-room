@@ -20,6 +20,7 @@ import (
 	"go.uber.org/zap/zaptest"
 	"go.uber.org/zap/zaptest/observer"
 
+	"github.com/babs/grill-room/internal/pgtest"
 	"github.com/babs/grill-room/internal/plugin"
 	"github.com/babs/grill-room/internal/sandbox"
 	"github.com/babs/grill-room/internal/store"
@@ -569,17 +570,15 @@ func TestDockerPluginOptions(t *testing.T) {
 	if err != nil || !strings.Contains(string(export), "[redacted]") {
 		t.Fatalf("export: %v, %d bytes", err, len(export))
 	}
-	var db []byte
-	for _, f := range []string{rs.dbPath, rs.dbPath + "-wal"} {
-		b, _ := os.ReadFile(f) //nolint:gosec // the test's own database
-		db = append(db, b...)
+	if hits, _ := pgtest.Find(t, rs.dsn, secret); len(hits) != 0 {
+		t.Errorf("the database holds the option's value in %v", hits)
 	}
 	var logged strings.Builder
 	for _, e := range logs.All() {
 		b, _ := json.Marshal(e.ContextMap())
 		logged.WriteString(e.Message + string(b) + "\n")
 	}
-	for what, b := range map[string]string{"database": string(db), "export": string(export), "server log": logged.String()} {
+	for what, b := range map[string]string{"export": string(export), "server log": logged.String()} {
 		if strings.Contains(b, secret) {
 			t.Errorf("the %s holds the option's value", what)
 		}

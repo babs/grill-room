@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // Room creation modes (004-AC7).
@@ -57,7 +60,7 @@ const (
 )
 
 type rowQuerier interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	QueryRowContext(ctx context.Context, query string, args ...any) *row
 }
 
 func instanceSettings(ctx context.Context, db rowQuerier) (InstanceSettings, error) {
@@ -98,7 +101,7 @@ func (s *Store) InstanceSettings(ctx context.Context) (InstanceSettings, error) 
 // its error is returned as is. The audit entry ctx carries gets the resulting settings.
 func (s *Store) UpdateInstanceSettings(ctx context.Context, patch func(*InstanceSettings) error) (InstanceSettings, error) {
 	var v InstanceSettings
-	err := s.withTx(ctx, "update instance settings", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "update instance settings", func(tx *txn) error {
 		var err error
 		if v, err = instanceSettings(ctx, tx); err != nil {
 			return err
@@ -115,7 +118,7 @@ func (s *Store) UpdateInstanceSettings(ctx context.Context, patch func(*Instance
 	return v, err
 }
 
-func writeInstanceSettings(ctx context.Context, tx *sql.Tx, v InstanceSettings) error {
+func writeInstanceSettings(ctx context.Context, tx *txn, v InstanceSettings) error {
 	for k, val := range map[string]string{settingRoomsPerProfile: strconv.Itoa(v.RoomsPerProfile),
 		settingStorageQuota: strconv.FormatInt(v.StorageQuota, 10), settingRoomCreation: v.RoomCreation, settingPluginMaxMB: strconv.Itoa(v.PluginMaxMB),
 		settingPurgeProfiles: map[bool]string{true: "1", false: "0"}[v.PurgeEmptyProfiles]} {
@@ -134,13 +137,54 @@ func (s *Store) InstanceID(ctx context.Context) (string, error) {
 	return s.Setting(ctx, "instance_id")
 }
 
-// UsedBytes is what the database holds: its pages in use, free pages left by deletes aside.
+// UsedBytes is what the rows hold: text and bytea at their length, other values at their stored
+// size. A delete frees its bytes at once.
 func (s *Store) UsedBytes(ctx context.Context) (int64, error) { return usedBytes(ctx, s.db) }
 
-func usedBytes(ctx context.Context, db rowQuerier) (int64, error) {
-	var n int64
-	err := db.QueryRowContext(ctx, `SELECT (c.page_count - f.freelist_count) * z.page_size FROM pragma_page_count() c, pragma_freelist_count() f, pragma_page_size() z`).Scan(&n)
+// usedBytes sums every column of every table, one query built from the catalog.
+// ponytail: reads all the data on each call (room creation, import, starter apply), O(data); keep
+// a running total per table, updated by the writes, if that gets slow.
+func usedBytes(ctx context.Context, db interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *row
+}) (int64, error) {
+	rows, err := db.QueryContext(ctx, `SELECT c.relname::text, a.attname::text, a.atttypid IN ('text'::regtype, 'bytea'::regtype)
+		FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+		WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r' ORDER BY c.relname, a.attnum`)
 	if err != nil {
+		return 0, fmt.Errorf("used bytes: %w", err)
+	}
+	defer rows.Close()
+	cols := map[string][]string{}
+	var tables []string
+	for rows.Next() {
+		var table, col string
+		var length bool
+		if err := rows.Scan(&table, &col, &length); err != nil {
+			return 0, fmt.Errorf("used bytes: %w", err)
+		}
+		// octet_length: a compressed or out-of-line value still counts at its size.
+		f := "pg_column_size"
+		if length {
+			f = "octet_length"
+		}
+		if _, ok := cols[table]; !ok {
+			tables = append(tables, table)
+		}
+		cols[table] = append(cols[table], "COALESCE("+f+"("+pgx.Identifier{col}.Sanitize()+"), 0)")
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("used bytes: %w", err)
+	}
+	if len(tables) == 0 {
+		return 0, nil
+	}
+	sums := make([]string, len(tables))
+	for i, t := range tables {
+		sums[i] = "(SELECT COALESCE(SUM(" + strings.Join(cols[t], " + ") + "), 0) FROM " + pgx.Identifier{t}.Sanitize() + ")"
+	}
+	var n int64
+	if err := db.QueryRowContext(ctx, `SELECT (`+strings.Join(sums, " + ")+`)::bigint`).Scan(&n); err != nil {
 		return 0, fmt.Errorf("used bytes: %w", err)
 	}
 	return n, nil
@@ -159,7 +203,7 @@ func mb(n int64) string { return strconv.FormatFloat(float64(n)/(1<<20), 'f', 1,
 // With setup, the room holds the starter's copies instead of the Default persona (006-AC11).
 func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileID int64, displayName, inviteHash, tokenHash, link, linkHash string, setup *RoomSetup) (*Room, error) {
 	var r *Room
-	err := s.withTx(ctx, "create room", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "create room", func(tx *txn) error {
 		v, err := instanceSettings(ctx, tx)
 		if err != nil {
 			return err
@@ -219,7 +263,7 @@ func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileI
 
 // creationAllowed returns ErrCreationRefused, with why, unless profile profileID may create one more
 // room under settings v: the creation mode and its rooms limit, its own or the instance's.
-func creationAllowed(ctx context.Context, tx *sql.Tx, v InstanceSettings, profileID int64) error {
+func creationAllowed(ctx context.Context, tx *txn, v InstanceSettings, profileID int64) error {
 	if v.RoomCreation == CreationSuperAdmin {
 		return fmt.Errorf("%w: only the super-admin creates rooms on this instance", ErrCreationRefused)
 	}
@@ -241,7 +285,7 @@ func creationAllowed(ctx context.Context, tx *sql.Tx, v InstanceSettings, profil
 // SetProfileMaxRooms sets profile id's own rooms limit: n rooms, UnlimitedRooms, or with nil the
 // instance's (004-AC7). The caller validated n. ErrNotFound.
 func (s *Store) SetProfileMaxRooms(ctx context.Context, id int64, n *int) error {
-	return s.withTx(ctx, "set profile max rooms", func(tx *sql.Tx) error {
+	return s.withTx(ctx, "set profile max rooms", func(tx *txn) error {
 		var v any
 		if n != nil {
 			v = *n
@@ -279,7 +323,7 @@ func roomAdmin(ctx context.Context, db rowQuerier, roomID string, profileID int6
 // target not in the room, ErrNoProfile, ErrLastAdmin.
 func (s *Store) SetRoomAdmin(ctx context.Context, roomID string, target int64, on bool, by *Participant) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "set room admin", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "set room admin", func(tx *txn) error {
 		if by != nil {
 			if _, err := roomAdmin(ctx, tx, roomID, by.ProfileID); err != nil {
 				return err
@@ -343,7 +387,7 @@ func (s *Store) SetRoomAdmin(ctx context.Context, roomID string, target int64, o
 // Past lines keep the name they were written under. A name unchanged writes nothing: nil message.
 func (s *Store) RenameParticipant(ctx context.Context, roomID string, target int64, name string, by *Participant, toProfile bool) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "rename participant", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "rename participant", func(tx *txn) error {
 		self := by != nil && by.ID == target
 		if by != nil && !self {
 			if _, err := roomAdmin(ctx, tx, roomID, by.ProfileID); err != nil {

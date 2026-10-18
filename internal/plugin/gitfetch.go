@@ -113,7 +113,8 @@ func Resolve(ctx context.Context, c *http.Client, repoURL, ref string) (commit, 
 			return r.oid, ref, nil
 		}
 		name = "HEAD"
-		if b, ok := strings.CutPrefix(r.target, "refs/heads/"); ok {
+		// The remote names it: a name a ref may not have stays HEAD.
+		if b, ok := strings.CutPrefix(r.target, "refs/heads/"); ok && refRe.MatchString(b) {
 			name = b
 		}
 		return r.oid, name, nil

@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 )
 
@@ -23,7 +22,7 @@ type PushSubscription struct {
 // SavePushSubscription stores sub for its participant, or updates the one with its endpoint, and
 // drops the participant's oldest past MaxPushSubscriptions.
 func (s *Store) SavePushSubscription(ctx context.Context, sub PushSubscription) error {
-	return s.withTx(ctx, "save push subscription", func(tx *sql.Tx) error {
+	return s.withTx(ctx, "save push subscription", func(tx *txn) error {
 		_, err := tx.ExecContext(ctx, `INSERT INTO push_subscriptions(participant_id, endpoint, p256dh, auth, all_messages, created_at)
 			VALUES(?,?,?,?,?,?) ON CONFLICT(participant_id, endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth,
 			all_messages = excluded.all_messages`, sub.ParticipantID, sub.Endpoint, sub.P256dh, sub.Auth, sub.AllMessages, now())

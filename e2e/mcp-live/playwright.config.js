@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import { withFreshDB } from '../pgdb.js';
 
 // 012 Phase 2: a real Claude Code drives /mcp on a server of its own, here on loopback. It runs
 // this machine's Claude Code login with haiku: at most six real Claude requests.
@@ -13,13 +14,12 @@ export default defineConfig({
   retries: 0,
   use: { baseURL, channel: 'chrome' },
   webServer: {
-    command: 'mkdir -p ../test-results && rm -f ../test-results/mcp-live.db* && exec ../../bin/grill-room',
+    command: withFreshDB(`e2e_${port}`, 'exec ../../bin/grill-room'),
     url: `${baseURL}/healthz`,
     reuseExistingServer: false,
     env: {
       GRILL_ROOM_ADDR: `127.0.0.1:${port}`,
       GRILL_ROOM_METRICS_ADDR: `127.0.0.1:${Number(port) + 1}`,
-      GRILL_ROOM_DB: '../test-results/mcp-live.db',
       GRILL_ROOM_URL: baseURL,
       GRILL_ROOM_ADMIN_TOKEN: adminToken,
       LOG_FORMAT: 'json',

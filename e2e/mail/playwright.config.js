@@ -1,5 +1,6 @@
 import { defineConfig } from '@playwright/test';
 import { quietPush } from '../quiet-push.js';
+import { withFreshDB } from '../pgdb.js';
 
 // Magic links against a throwaway mailpit, with a short link lifetime so expiry fits in a test.
 // With GRILL_ROOM_E2E_LAB=1, against the lab deployment and its mailpit instead: K8S_DOMAIN,
@@ -38,13 +39,12 @@ export default defineConfig({
     {
       // From e2e/, as the main config runs it.
       cwd: '..',
-      command: 'mkdir -p test-results && rm -f test-results/e2e-mail.db* && ../bin/grill-room',
+      command: withFreshDB(`e2e_${port}`, 'mkdir -p test-results && exec ../bin/grill-room'),
       url: `${baseURL}/healthz`,
       reuseExistingServer: false,
       env: {
         GRILL_ROOM_ADDR: `127.0.0.1:${port}`,
         GRILL_ROOM_METRICS_ADDR: `127.0.0.1:${Number(port) + 1}`,
-        GRILL_ROOM_DB: 'test-results/e2e-mail.db',
         GRILL_ROOM_URL: baseURL,
         GRILL_ROOM_ADMIN_TOKEN: adminToken,
         GRILL_ROOM_SMTP_ADDR: `127.0.0.1:${mailpitSMTP}`,

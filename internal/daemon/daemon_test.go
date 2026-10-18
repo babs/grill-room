@@ -111,8 +111,8 @@ type roomServer struct {
 	srv   *web.Server
 	room  string
 	admin string
-	// dbPath is the store's file.
-	dbPath string
+	// dsn is the store's database.
+	dsn string
 }
 
 func newRoomServer(t *testing.T) *roomServer {
@@ -134,8 +134,8 @@ func newRoomServerWrapped(t *testing.T, opts web.Options, wrap func(http.Handler
 // newRoomServerLog is newRoomServerWrapped with the server writing to log.
 func newRoomServerLog(t *testing.T, opts web.Options, wrap func(http.Handler) http.Handler, log *zap.Logger) *roomServer {
 	t.Helper()
-	dbPath := storetest.Path(t, "room.db")
-	st, err := store.Open(dbPath)
+	dsn := storetest.DSN(t)
+	st, err := store.Open(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func newRoomServerLog(t *testing.T, opts web.Options, wrap func(http.Handler) ht
 		ts.Config.Handler = wrap(ts.Config.Handler)
 	}
 	t.Cleanup(ts.Close)
-	rs := &roomServer{ts: ts, st: st, srv: srv, admin: admin, dbPath: dbPath}
+	rs := &roomServer{ts: ts, st: st, srv: srv, admin: admin, dsn: dsn}
 	var room store.Room
 	rs.call(t, "POST", "/api/rooms", admin, map[string]string{"name": "R"}, http.StatusCreated, &room)
 	rs.room = room.ID

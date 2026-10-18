@@ -80,12 +80,12 @@ type MagicLink struct {
 
 type querier interface {
 	execer
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	QueryRowContext(ctx context.Context, query string, args ...any) *row
 }
 
 func createProfile(ctx context.Context, db querier, recoveryHash, sessionHash string) (int64, error) {
 	var id int64
-	err := db.QueryRowContext(ctx, `INSERT INTO profiles(recovery_hash, created_at, uuid) VALUES(?,?,`+uuidSQL+`) RETURNING id`, recoveryHash, now()).Scan(&id)
+	err := db.QueryRowContext(ctx, `INSERT INTO profiles(recovery_hash, created_at, uuid) VALUES(?,?,gen_random_uuid()::text) RETURNING id`, recoveryHash, now()).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("create profile: %w", err)
 	}
@@ -224,10 +224,9 @@ func (s *Store) ProfileParticipant(ctx context.Context, sessionHash, roomID stri
 }
 
 // DeleteProfile removes a profile with its sessions, magic links and email, and detaches its
-// participants, which keep their name and their room access. Run Checkpoint after it: the WAL holds
-// the deleted email's old pages until then.
+// participants, which keep their name and their room access.
 func (s *Store) DeleteProfile(ctx context.Context, id int64) error {
-	return s.withTx(ctx, "delete profile", func(tx *sql.Tx) error {
+	return s.withTx(ctx, "delete profile", func(tx *txn) error {
 		if err := auditTx(ctx, tx, "", nil); err != nil {
 			return err
 		}
@@ -245,11 +244,11 @@ func (s *Store) CreateMagicLink(ctx context.Context, l MagicLink, now time.Time)
 	cutoff := now.Add(-magicLinkKeep)
 	// used_at is UTC RFC 3339: it orders as text, to within a second.
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM magic_links WHERE used_at < ? OR expires_at_ms <= ?`,
-		cutoff.UTC().Format(time.RFC3339Nano), cutoff.UnixMilli()); err != nil {
+		formatTS(cutoff), cutoff.UnixMilli()); err != nil {
 		return fmt.Errorf("sweep magic links: %w", err)
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO magic_links(profile_id, email, purpose, token_hash, created_at, expires_at_ms) VALUES(?,?,?,?,?,?)`,
-		l.ProfileID, l.Email, l.Purpose, l.TokenHash, now.UTC().Format(time.RFC3339Nano), l.ExpiresAt.UnixMilli())
+		l.ProfileID, l.Email, l.Purpose, l.TokenHash, formatTS(now), l.ExpiresAt.UnixMilli())
 	if err != nil {
 		return fmt.Errorf("create magic link: %w", err)
 	}
@@ -304,7 +303,7 @@ func (s *Store) UseMagicLink(ctx context.Context, u MagicUse) (*Profile, error) 
 		return nil, fmt.Errorf("use magic link: %w", err)
 	}
 	var elsewhere *Profile
-	usedAt := u.Now.UTC().Format(time.RFC3339Nano)
+	usedAt := formatTS(u.Now)
 	switch {
 	case u.Purpose == MagicSignIn && holder != profileID:
 		return nil, ErrNotFound
@@ -384,7 +383,7 @@ func (s *Store) DeleteMagicLink(ctx context.Context, tokenHash string) error {
 
 // SnoozeEmailNudge hides profileID's add-an-email banner until until. ErrNotFound for no profile.
 func (s *Store) SnoozeEmailNudge(ctx context.Context, profileID int64, until time.Time) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE profiles SET email_nudge_until = ? WHERE id = ?`, until.UTC().Format(time.RFC3339Nano), profileID)
+	res, err := s.db.ExecContext(ctx, `UPDATE profiles SET email_nudge_until = ? WHERE id = ?`, formatTS(until), profileID)
 	if err != nil {
 		return fmt.Errorf("snooze email nudge: %w", err)
 	}
@@ -402,7 +401,7 @@ func (s *Store) SnoozeEmailNudge(ctx context.Context, profileID int64, until tim
 // the token (011-AC1, 011-AC3). ErrNotFound for no profile.
 func (s *Store) CreateRecoveryLink(ctx context.Context, profileID int64, tokenHash string, now time.Time) (time.Time, error) {
 	expires := now.Add(RecoveryLinkTTL)
-	err := s.withTx(ctx, "create recovery link", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "create recovery link", func(tx *txn) error {
 		var uuid string
 		err := tx.QueryRowContext(ctx, `SELECT COALESCE(uuid, '') FROM profiles WHERE id = ?`, profileID).Scan(&uuid)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -416,7 +415,7 @@ func (s *Store) CreateRecoveryLink(ctx context.Context, profileID int64, tokenHa
 			return fmt.Errorf("create recovery link: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO recovery_links(profile_id, token_hash, created_at, expires_at_ms) VALUES(?,?,?,?)`,
-			profileID, tokenHash, now.UTC().Format(time.RFC3339Nano), expires.UnixMilli()); err != nil {
+			profileID, tokenHash, formatTS(now), expires.UnixMilli()); err != nil {
 			return fmt.Errorf("create recovery link: %w", err)
 		}
 		return auditTx(ctx, tx, "", map[string]any{"profile_uuid": uuid})
@@ -432,9 +431,9 @@ func (s *Store) CreateRecoveryLink(ctx context.Context, profileID int64, tokenHa
 // profile. ErrNotFound for an unknown, used, voided or expired link (011-AC2).
 func (s *Store) UseRecoveryLink(ctx context.Context, tokenHash, sessionHash string, now time.Time) (*Profile, error) {
 	var id int64
-	err := s.withTx(ctx, "use recovery link", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "use recovery link", func(tx *txn) error {
 		err := tx.QueryRowContext(ctx, `UPDATE recovery_links SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at_ms > ? RETURNING profile_id`,
-			now.UTC().Format(time.RFC3339Nano), tokenHash, now.UnixMilli()).Scan(&id)
+			formatTS(now), tokenHash, now.UnixMilli()).Scan(&id)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}

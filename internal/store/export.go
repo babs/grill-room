@@ -341,8 +341,8 @@ func (l *jsonLines) flush() error {
 	return nil
 }
 
-// eachRow runs query in tx and hands each row to scan, so that the rows stream from SQLite.
-func eachRow(ctx context.Context, tx *sql.Tx, scan func(*sql.Rows) error, query string, args ...any) error {
+// eachRow runs query in tx and hands each row to scan, so that the rows stream from the database.
+func eachRow(ctx context.Context, tx *txn, scan func(*sql.Rows) error, query string, args ...any) error {
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("query: %w", err)
@@ -361,7 +361,7 @@ func eachRow(ctx context.Context, tx *sql.Tx, scan func(*sql.Rows) error, query 
 
 // dump writes the rows of query to JSON Lines file name, one line per row as row reads it. row may
 // write the row's blob first.
-func dump(ctx context.Context, tx *sql.Tx, d *exportDir, name string, row func(*sql.Rows) (any, error), query string, args ...any) error {
+func dump(ctx context.Context, tx *txn, d *exportDir, name string, row func(*sql.Rows) (any, error), query string, args ...any) error {
 	l, err := d.lines(name)
 	if err != nil {
 		return err
@@ -380,31 +380,39 @@ func dump(ctx context.Context, tx *sql.Tx, d *exportDir, name string, row func(*
 }
 
 // ExportRoom writes room roomID's export files into dir, an empty directory, from one consistent
-// read of the store, and returns the room. The audit entry ctx carries is written in the same
-// transaction, so that a room is exported only if that is recorded (004-AC6). Blobs are read one
-// at a time, never the whole room. ErrNotFound if the room does not exist.
-// ponytail: SQLite materialises one blob at a time (no incremental blob I/O in the driver), so the
-// peak is the largest single upload or session, not the room.
+// read of the store, and returns the room. The read is a REPEATABLE READ snapshot without the write
+// lock, so writes go on meanwhile; the audit entry ctx carries is written after it, under the lock
+// as its id needs, and an export that fails it fails, so a room is exported only if that is
+// recorded (004-AC6). Blobs are read one at a time, never the whole room. ErrNotFound if the room
+// does not exist.
+// ponytail: the driver materialises one blob at a time (no streaming of a bytea), so the peak is
+// the largest single upload or session, not the room.
 func (s *Store) ExportRoom(ctx context.Context, roomID, dir string) (*Room, error) {
 	d := &exportDir{dir: dir}
-	var room *Room
-	err := s.withTx(ctx, "export room", func(tx *sql.Tx) error {
-		var err error
-		if room, err = exportRoom(ctx, tx, roomID, d); err != nil {
-			return err
+	room, err := func() (*Room, error) {
+		tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+		if err != nil {
+			return nil, fmt.Errorf("export room: %w", err)
 		}
-		return auditTx(ctx, tx, "", nil)
-	})
+		defer tx.Rollback() //nolint:errcheck // read-only
+		return exportRoom(ctx, tx, roomID, d)
+	}()
 	if cerr := d.close(); err == nil && cerr != nil {
 		err = fmt.Errorf("export room: %w", cerr)
 	}
 	if err != nil {
 		return nil, err
 	}
+	if ctx.Value(auditKey{}) == nil {
+		return room, nil
+	}
+	if err := s.withTx(ctx, "export room", func(tx *txn) error { return auditTx(ctx, tx, "", nil) }); err != nil {
+		return nil, err
+	}
 	return room, nil
 }
 
-func exportRoom(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) (*Room, error) {
+func exportRoom(ctx context.Context, tx *txn, roomID string, d *exportDir) (*Room, error) {
 	room := &Room{ID: roomID}
 	x := xRoom{Personas: []xPersona{}}
 	var from sql.NullString
@@ -431,7 +439,7 @@ func exportRoom(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) (*
 	if err := d.blob(fileRoom, b); err != nil {
 		return nil, err
 	}
-	for _, step := range []func(context.Context, *sql.Tx, string, *exportDir) error{
+	for _, step := range []func(context.Context, *txn, string, *exportDir) error{
 		exportParticipants, exportMessages, exportMentions, exportDocuments, exportAnnotations, exportNoteMentions, exportSkills, exportPlugins, exportSessions,
 	} {
 		if err := step(ctx, tx, roomID, d); err != nil {
@@ -442,7 +450,7 @@ func exportRoom(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) (*
 }
 
 // exportMentions writes how each line's @mentions ended, for the personas the export carries.
-func exportMentions(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) error {
+func exportMentions(ctx context.Context, tx *txn, roomID string, d *exportDir) error {
 	ms, err := queryMentions(ctx, tx, mentionCols+` JOIN room_personas p ON p.id = mt.persona_id
 		WHERE m.room_id = ? AND p.pending = 0 ORDER BY mt.message_id, mt.persona_id`, roomID)
 	if err != nil {
@@ -462,7 +470,7 @@ func exportMentions(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir
 
 // exportNoteMentions writes how each note message's @mentions ended, as exportMentions does for
 // lines, on the documents the export carries (009-AC29).
-func exportNoteMentions(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) error {
+func exportNoteMentions(ctx context.Context, tx *txn, roomID string, d *exportDir) error {
 	ms, err := queryMentions(ctx, tx, noteMentionCols+` JOIN room_personas p ON p.id = mt.persona_id
 		WHERE a.room_id = ? AND p.pending = 0 ORDER BY mt.message_id, mt.persona_id`, roomID)
 	if err != nil {
@@ -483,7 +491,7 @@ func exportNoteMentions(ctx context.Context, tx *sql.Tx, roomID string, d *expor
 // exportPersonas lists the room's personas with their pins and resume points. A persona still
 // waiting for the host's approval is left out, with the held changes: they are requests, not room
 // content, and the importing room has another host.
-func exportPersonas(ctx context.Context, tx *sql.Tx, roomID string) ([]xPersona, error) {
+func exportPersonas(ctx context.Context, tx *txn, roomID string) ([]xPersona, error) {
 	var out []xPersona
 	err := eachRow(ctx, tx, func(rows *sql.Rows) error {
 		var p xPersona
@@ -546,7 +554,7 @@ func exportPersonas(ctx context.Context, tx *sql.Tx, roomID string) ([]xPersona,
 	return out, nil
 }
 
-func exportParticipants(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) error {
+func exportParticipants(ctx context.Context, tx *txn, roomID string, d *exportDir) error {
 	return dump(ctx, tx, d, fileParticipants, func(rows *sql.Rows) (any, error) {
 		var p xParticipant
 		return p, rows.Scan(&p.Ref, &p.Name, &p.JoinedAt, &p.CanTrigger, &p.Active, &p.ProfileUUID, &p.Admin, &p.PreviousName)
@@ -558,7 +566,7 @@ func exportParticipants(ctx context.Context, tx *sql.Tx, roomID string, d *expor
 
 // exportMessages writes the lines, their earlier versions and the readable transcript in one pass
 // over the lines joined with their versions.
-func exportMessages(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) error {
+func exportMessages(ctx context.Context, tx *txn, roomID string, d *exportDir) error {
 	msgs, err := d.lines(fileMessages)
 	if err != nil {
 		return err
@@ -656,7 +664,7 @@ func indent(s, pad string) string {
 	return pad + strings.ReplaceAll(strings.TrimRight(s, "\n"), "\n", "\n"+pad)
 }
 
-func exportDocuments(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) error {
+func exportDocuments(ctx context.Context, tx *txn, roomID string, d *exportDir) error {
 	err := dump(ctx, tx, d, fileUploads, func(rows *sql.Rows) (any, error) {
 		var u xUpload
 		var pid sql.NullInt64
@@ -695,7 +703,7 @@ func exportDocuments(ctx context.Context, tx *sql.Tx, roomID string, d *exportDi
 	return err
 }
 
-func exportAnnotations(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) error {
+func exportAnnotations(ctx context.Context, tx *txn, roomID string, d *exportDir) error {
 	err := dump(ctx, tx, d, fileAnnotations, func(rows *sql.Rows) (any, error) {
 		var a xAnnotation
 		var anchor sql.NullString
@@ -734,7 +742,7 @@ func exportAnnotations(ctx context.Context, tx *sql.Tx, roomID string, d *export
 
 // exportSkills writes the room's own skills with every version, and the shared and personal
 // skills its exported personas pin, with the pinned versions only.
-func exportSkills(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) error {
+func exportSkills(ctx context.Context, tx *txn, roomID string, d *exportDir) error {
 	const pinned = `SELECT k.skill_id, k.version FROM room_persona_skills k JOIN room_personas p ON p.id = k.persona_id
 		WHERE p.room_id = ? AND p.pending = 0`
 	err := dump(ctx, tx, d, fileSkills, func(rows *sql.Rows) (any, error) {
@@ -762,7 +770,7 @@ func exportSkills(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) 
 // exportPlugins writes the room's plugins with every version and the snapshots still held
 // (009-AC26). Requests to the AI host and option values stay behind: the first are transient,
 // the second never reach the server.
-func exportPlugins(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) error {
+func exportPlugins(ctx context.Context, tx *txn, roomID string, d *exportDir) error {
 	err := dump(ctx, tx, d, filePlugins, func(rows *sql.Rows) (any, error) {
 		var p xPlugin
 		return p, rows.Scan(&p.Ref, &p.Name, &p.URL, &p.GitRef, &p.RefName, &p.Entry, &p.Private, &p.CreatedBy, &p.CreatedAt)
@@ -802,7 +810,7 @@ func exportPlugins(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir)
 		WHERE p.room_id = ? AND p.removed_at IS NULL ORDER BY v.plugin_id, v.n`, roomID)
 }
 
-func exportSessions(ctx context.Context, tx *sql.Tx, roomID string, d *exportDir) error {
+func exportSessions(ctx context.Context, tx *txn, roomID string, d *exportDir) error {
 	n := 0
 	return dump(ctx, tx, d, fileSessions, func(rows *sql.Rows) (any, error) {
 		var x xSession

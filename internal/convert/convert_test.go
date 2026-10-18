@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -74,6 +75,9 @@ func TestDetect(t *testing.T) {
 		{"no extension", "notes", []byte("# Plan"), "", ""},
 		{"binary named md", "evil.md", []byte("\x00\x01\x02\x03binary"), "", ""},
 		{"invalid utf8 named md", "latin1.md", []byte("caf\xe9 au lait"), "", ""},
+		// The sniff reads 512 bytes: a NUL past them still makes no text.
+		{"NUL past the sniff named md", "a.md", append([]byte(strings.Repeat("# a\n", 200)), 0, 'b'), "", ""},
+		{"NUL past the sniff named html", "a.html", append([]byte("<p>"+strings.Repeat("a", 600)), 0), "", ""},
 		{"svg ext without svg", "d.svg", []byte("just text"), "", ""},
 		{"executable", "run.md", []byte("\x7fELF\x02\x01\x01\x00\x00\x00"), "", ""},
 		{"plain zip", "a.docx", zipOf(t, map[string]string{"readme.txt": "x"}), "", ""},
@@ -172,6 +176,41 @@ func TestPandocFailures(t *testing.T) {
 			t.Fatal("no error")
 		}
 	})
+}
+
+// pandoc sees none of the server's secrets, such as the database URL, only the locale and paths.
+func TestPandocEnv(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake pandoc is a shell script")
+	}
+	t.Setenv("GRILL_ROOM_DATABASE_URL", "postgres://u:secret@127.0.0.1/db")
+	t.Setenv("GRILL_ROOM_ADMIN_TOKEN", "secret")
+	t.Setenv("LANG", "C.UTF-8")
+	fake := filepath.Join(t.TempDir(), "pandoc")
+	// A shell builtin: the run without PATH must still list the environment.
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexport -p\n"), 0o700); err != nil { //nolint:gosec // a test script
+		t.Fatal(err)
+	}
+	run := func() string {
+		t.Helper()
+		out, err := NewPandoc(fake, 30*time.Second).ToMarkdown(t.Context(), "docx", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(out, "GRILL_ROOM_") || strings.Contains(out, "secret") {
+			t.Fatalf("pandoc's environment:\n%s", out)
+		}
+		return out
+	}
+	if out := run(); !strings.Contains(out, "LANG=") || !strings.Contains(out, "C.UTF-8") {
+		t.Fatalf("pandoc lost LANG:\n%s", out)
+	}
+	// None of the variables it keeps is set: it still gets none of the others.
+	for _, k := range []string{"PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR"} {
+		t.Setenv(k, "")
+		_ = os.Unsetenv(k)
+	}
+	run()
 }
 
 // 001-AC20: attachments are raster images only; SVG can carry script.

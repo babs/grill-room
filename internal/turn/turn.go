@@ -4,6 +4,7 @@
 package turn
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -299,8 +300,8 @@ func doc(p string, c Change) (Doc, error) {
 		return Doc{}, fmt.Errorf("want a .md or .html file directly in %s/, named in at most %d plain characters", DocsDir, MaxDocName)
 	case len(c.Content) > MaxDocBytes:
 		return Doc{}, fmt.Errorf("over %d bytes", MaxDocBytes)
-	case !utf8.Valid(c.Content):
-		return Doc{}, fmt.Errorf("not UTF-8 text")
+	case !utf8.Valid(c.Content) || bytes.IndexByte(c.Content, 0) >= 0:
+		return Doc{}, fmt.Errorf("not UTF-8 text, or holds a NUL")
 	}
 	return Doc{Name: name, Format: format, Body: string(c.Content)}, nil
 }

@@ -259,7 +259,7 @@ Rolling deploy, the audio risk that remains:
 ### Deploy and operations
 
 - [ ] **AC21** Manifests: 2 replicas, `RollingUpdate` with `maxUnavailable: 0`, a PodDisruptionBudget with `minAvailable: 1`, a DSN secret, a models volume a second node can mount, a staging `emptyDir`, a NetworkPolicy to PG. *Verify*: `make k8s-render`; draining one node keeps the room page live.
-- [ ] **AC22** `/healthz` answers 503 when PG refuses a write, 200 otherwise. *Verify*: Go test with PG stopped.
+- [ ] **AC22** `/healthz` answers 503 when PG refuses a write, 200 otherwise. *Verify*: Go test with the database refusing writes (read-only).
 - [ ] **AC23** A backup runs with the server up (`pg_dump -Fc`); a restore into a scratch database passes AC8's comparison against the source snapshot. *Verify*: lab run.
 - [ ] **AC24** README (config, deploy) and `docs/architecture.md` describe PG and the pods. *Verify*: grep of README and `docs/` for "SQLite" returns only daemon and history lines.
 - [ ] **AC27** README "Privacy" replaces the `secure_delete` line (README:321) with: removed rows leave the tables at once, the database files after PostgreSQL's autovacuum or a `VACUUM` reuses their space, and backups after their retention. No text promises zeroed pages, and the server runs no `VACUUM` of its own. *Verify*: grep of README for `secure_delete` and "overwrite" returns 0; grep of non-test Go files for `VACUUM` returns 0.

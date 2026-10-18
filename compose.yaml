@@ -20,11 +20,29 @@ services:
       GRILL_ROOM_TRUSTED_PROXIES: ${GRILL_ROOM_TRUSTED_PROXIES:-172.16.0.0/12,192.168.0.0/16,10.0.0.0/8}
       GRILL_ROOM_SMTP_ADDR: mailpit:1025
       GRILL_ROOM_SMTP_FROM: noreply@grill-room.invalid
+      GRILL_ROOM_DATABASE_URL: postgres://grill-room:grill-room-dev@postgres:5432/grill-room?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "${GRILL_ROOM_BIND:-127.0.0.1}:${GRILL_ROOM_PORT:-7680}:7680"
       - "127.0.0.1:${GRILL_ROOM_METRICS_PORT:-7681}:7681"
+    restart: unless-stopped
+
+  # Not published: only the room server reaches it. C locale, which the server requires.
+  postgres:
+    image: postgres:16.15-alpine
+    environment:
+      POSTGRES_USER: grill-room
+      POSTGRES_PASSWORD: grill-room-dev
+      POSTGRES_DB: grill-room
+      POSTGRES_INITDB_ARGS: --locale=C --encoding=UTF8
     volumes:
-      - grill-room-data:/data
+      - grill-room-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "grill-room", "-d", "grill-room"]
+      interval: 2s
+      retries: 30
     restart: unless-stopped
 
   # Media needs no published UDP (spike S4): browsers on this host reach the container's own IP,
@@ -83,4 +101,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  grill-room-data:
+  grill-room-pg:

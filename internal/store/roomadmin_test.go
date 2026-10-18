@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strconv"
@@ -137,8 +138,9 @@ func TestCreateProfileRoomGuardrails(t *testing.T) {
 	if err != nil || used <= 0 {
 		t.Fatalf("used %d %v", used, err)
 	}
-	set(InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: used})
-	refused("r5", "at its "+mb(used)+" storage quota")
+	// Under what the rows hold: the settings rows this writes change it by a few bytes.
+	set(InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: used / 2})
+	refused("r5", "at its "+mb(used/2)+" storage quota")
 	set(InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: used * 4})
 	if _, err := createFor(t, s, "r6", alice, "Alice"); err != nil {
 		t.Fatal(err)
@@ -418,5 +420,33 @@ func TestRenameParticipant(t *testing.T) {
 		if x.ID == bob.ProfileID && x.Name != "Rob" {
 			t.Fatalf("admin profiles name %+v", x)
 		}
+	}
+}
+
+// The storage quota counts live data: an upload adds about its size, and deleting it frees that
+// at once, as SQLite's pages in use did (004-AC7).
+func TestUsedBytesFollowsDeletes(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	p := joinWithProfile(t, s, "big", "Alice", JoinProfile{})
+	before, err := s.UsedBytes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const size = 4 << 20
+	// Repeated bytes compress to almost nothing on disk: the count is still the upload's size.
+	if _, err := s.AddUpload(ctx, &Upload{RoomID: "big", ParticipantID: p.ID, Author: "Alice", Filename: "f.pdf",
+		ContentType: "application/pdf", Format: "pdf", Data: bytes.Repeat([]byte{'a'}, size)}, 1<<30); err != nil {
+		t.Fatal(err)
+	}
+	with, _ := s.UsedBytes(ctx)
+	if grew := with - before; grew < size || grew > size+16<<10 {
+		t.Fatalf("an upload of %d bytes grew the count by %d", size, grew)
+	}
+	if err := s.DeleteRoom(ctx, "big"); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := s.UsedBytes(ctx); after > before {
+		t.Fatalf("after the delete: %d bytes, %d before the upload", after, before)
 	}
 }

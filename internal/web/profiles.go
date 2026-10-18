@@ -519,7 +519,6 @@ func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "delete_profile_failed", err)
 		return
 	}
-	s.checkpoint(context.WithoutCancel(r.Context()))
 	s.log.Info("profile_deleted", zap.Int64("profile", id))
 	w.WriteHeader(http.StatusNoContent)
 }

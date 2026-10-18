@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -41,7 +40,8 @@ var (
 
 // purgePlugins drops the removed plugins no running turn loads (009-AC12).
 const purgePlugins = `DELETE FROM room_plugins WHERE removed_at IS NOT NULL AND id NOT IN (
-	SELECT v.plugin_id FROM turns t, json_each(t.plugins) j JOIN plugin_versions v ON v.id = json_extract(j.value, '$.version_id')
+	SELECT v.plugin_id FROM turns t CROSS JOIN jsonb_array_elements(t.plugins::jsonb) j(value)
+	JOIN plugin_versions v ON v.id = (j.value->>'version_id')::bigint
 	WHERE t.status = 'running')`
 
 // dropSuperseded deletes the snapshots of versions older than their plugin's running one that no
@@ -49,7 +49,8 @@ const purgePlugins = `DELETE FROM room_plugins WHERE removed_at IS NOT NULL AND 
 // version rows stay for the history; a change summary needs the running version's file list only.
 const dropSuperseded = `DELETE FROM plugin_snapshots WHERE version_id IN (SELECT v.id FROM plugin_versions v WHERE v.state != 'inspecting'
 	AND v.n < (SELECT max(w.n) FROM plugin_versions w WHERE w.plugin_id = v.plugin_id AND w.state = 'approved'))
-	AND version_id NOT IN (SELECT json_extract(j.value, '$.version_id') FROM turns t, json_each(t.plugins) j WHERE t.status = 'running')`
+	AND version_id NOT IN (SELECT (j.value->>'version_id')::bigint FROM turns t, jsonb_array_elements(t.plugins::jsonb) j(value)
+	WHERE t.status = 'running')`
 
 // PluginVersion is one snapshot of a room plugin. Manifest is what the server read from its files;
 // Report is what the host's daemon found when it inspected it. FileList is the snapshot's
@@ -141,7 +142,7 @@ func shortCommit(c string) string {
 }
 
 // pluginsFit returns ErrRoomFull when adding bytes would take the room past its quota (009-AC9).
-func pluginsFit(ctx context.Context, tx *sql.Tx, roomID string, bytes, defaultQuota int64) error {
+func pluginsFit(ctx context.Context, tx *txn, roomID string, bytes, defaultQuota int64) error {
 	used, quota, err := roomUsage(ctx, tx, roomID, defaultQuota)
 	if err != nil {
 		return err
@@ -158,14 +159,14 @@ func pluginsFit(ctx context.Context, tx *sql.Tx, roomID string, bytes, defaultQu
 // ErrPluginName, ErrPersonaPluginName, ErrRoomFull.
 func (s *Store) AddPlugins(ctx context.Context, roomID string, ps []NewPlugin, personas []int64, by *Participant, defaultQuota int64) ([]*Message, error) {
 	var msgs []*Message
-	err := s.withTx(ctx, "add plugins", func(tx *sql.Tx) (err error) {
+	err := s.withTx(ctx, "add plugins", func(tx *txn) (err error) {
 		msgs, err = addPlugins(ctx, tx, roomID, ps, personas, by, defaultQuota)
 		return err
 	})
 	return msgs, err
 }
 
-func addPlugins(ctx context.Context, tx *sql.Tx, roomID string, ps []NewPlugin, personas []int64, by *Participant, defaultQuota int64) ([]*Message, error) {
+func addPlugins(ctx context.Context, tx *txn, roomID string, ps []NewPlugin, personas []int64, by *Participant, defaultQuota int64) ([]*Message, error) {
 	var msgs []*Message
 	err := func() error {
 		var n int
@@ -191,7 +192,7 @@ func addPlugins(ctx context.Context, tx *sql.Tx, roomID string, ps []NewPlugin, 
 			var id int64
 			err := tx.QueryRowContext(ctx, `INSERT INTO room_plugins(room_id, name, source_url, ref, ref_name, entry, private, created_by_name, created_at)
 				VALUES(?,?,?,?,?,?,?,?,?) RETURNING id`, roomID, p.Name, p.URL, p.Ref, p.RefName, p.Entry, p.Private, by.Name, now()).Scan(&id)
-			if err != nil && strings.Contains(err.Error(), "UNIQUE") {
+			if isUnique(err) {
 				return fmt.Errorf("%w: %s", ErrPluginName, p.Name)
 			}
 			if err != nil {
@@ -216,15 +217,11 @@ func addPlugins(ctx context.Context, tx *sql.Tx, roomID string, ps []NewPlugin, 
 	return msgs, err
 }
 
-func insertPluginVersion(ctx context.Context, tx *sql.Tx, pluginID int64, n int, v PluginSnapshot, by *Participant) error {
-	res, err := tx.ExecContext(ctx, `INSERT INTO plugin_versions(plugin_id, n, commit_sha, sha256, size, files, file_list, manifest, state,
-		added_by_name, added_by_id, added_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-		pluginID, n, v.Commit, v.SHA256, v.Size, v.Files, string(v.FileList), string(v.Manifest), PluginInspecting, by.Name, nullID(by.ID), now())
-	if err != nil {
-		return fmt.Errorf("insert plugin version: %w", err)
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
+func insertPluginVersion(ctx context.Context, tx *txn, pluginID int64, n int, v PluginSnapshot, by *Participant) error {
+	var id int64
+	if err := tx.QueryRowContext(ctx, `INSERT INTO plugin_versions(plugin_id, n, commit_sha, sha256, size, files, file_list, manifest, state,
+		added_by_name, added_by_id, added_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
+		pluginID, n, v.Commit, v.SHA256, v.Size, v.Files, string(v.FileList), string(v.Manifest), PluginInspecting, by.Name, nullID(by.ID), now()).Scan(&id); err != nil {
 		return fmt.Errorf("insert plugin version: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO plugin_snapshots(version_id, data) VALUES(?, ?)`, id, v.Data); err != nil {
@@ -233,7 +230,7 @@ func insertPluginVersion(ctx context.Context, tx *sql.Tx, pluginID int64, n int,
 	return nil
 }
 
-func personaInRoom(ctx context.Context, tx *sql.Tx, roomID string, id int64) error {
+func personaInRoom(ctx context.Context, tx *txn, roomID string, id int64) error {
 	var ok bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM room_personas WHERE id = ? AND room_id = ?)`, id, roomID).Scan(&ok); err != nil {
 		return fmt.Errorf("persona: %w", err)
@@ -245,7 +242,7 @@ func personaInRoom(ctx context.Context, tx *sql.Tx, roomID string, id int64) err
 }
 
 // activatePlugin turns plugin pluginID, named name, on for persona personaID within the limits.
-func activatePlugin(ctx context.Context, tx *sql.Tx, personaID, pluginID int64, name string) error {
+func activatePlugin(ctx context.Context, tx *txn, personaID, pluginID int64, name string) error {
 	var on, clash bool
 	err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM room_persona_plugins WHERE persona_id = ? AND plugin_id = ?),
 		EXISTS (SELECT 1 FROM room_persona_plugins k JOIN room_plugins p ON p.id = k.plugin_id WHERE k.persona_id = ? AND p.name = ? AND p.id != ?)`,
@@ -273,14 +270,14 @@ func activatePlugin(ctx context.Context, tx *sql.Tx, personaID, pluginID int64, 
 // from the repo replaces the archive's files (009-AC27). ErrNotFound, ErrRoomFull.
 func (s *Store) AddPluginVersion(ctx context.Context, roomID string, id int64, refName string, v PluginSnapshot, by *Participant, defaultQuota int64) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "add plugin version", func(tx *sql.Tx) (err error) {
+	err := s.withTx(ctx, "add plugin version", func(tx *txn) (err error) {
 		m, err = addPluginVersion(ctx, tx, roomID, id, refName, v, by, defaultQuota)
 		return err
 	})
 	return m, err
 }
 
-func addPluginVersion(ctx context.Context, tx *sql.Tx, roomID string, id int64, refName string, v PluginSnapshot, by *Participant, defaultQuota int64) (*Message, error) {
+func addPluginVersion(ctx context.Context, tx *txn, roomID string, id int64, refName string, v PluginSnapshot, by *Participant, defaultQuota int64) (*Message, error) {
 	var m *Message
 	err := func() error {
 		var name, commit string
@@ -316,7 +313,7 @@ func addPluginVersion(ctx context.Context, tx *sql.Tx, roomID string, id int64, 
 // once no running turn loads one (009-AC12). ErrNotFound.
 func (s *Store) RemovePlugin(ctx context.Context, roomID string, id int64, by *Participant) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "remove plugin", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "remove plugin", func(tx *txn) error {
 		var name string
 		err := tx.QueryRowContext(ctx, `UPDATE room_plugins SET removed_at = ? WHERE id = ? AND room_id = ? AND removed_at IS NULL RETURNING name`,
 			now(), id, roomID).Scan(&name)
@@ -345,7 +342,7 @@ func (s *Store) RemovePlugin(ctx context.Context, roomID string, id int64, by *P
 // SetPersonaPlugin turns plugin pluginID on or off for persona personaID of room (009-AC10).
 // ErrNotFound, ErrLimit, ErrPersonaPluginName.
 func (s *Store) SetPersonaPlugin(ctx context.Context, roomID string, personaID, pluginID int64, on bool) error {
-	return s.withTx(ctx, "set persona plugin", func(tx *sql.Tx) error {
+	return s.withTx(ctx, "set persona plugin", func(tx *txn) error {
 		if err := personaInRoom(ctx, tx, roomID, personaID); err != nil {
 			return err
 		}
@@ -372,7 +369,7 @@ func (s *Store) SetPersonaPlugin(ctx context.Context, roomID string, personaID, 
 // ErrPluginState unless the version is pending and newer than the running one.
 func (s *Store) DecidePluginVersion(ctx context.Context, roomID string, id int64, n int, approve bool, by *Participant) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "decide plugin version", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "decide plugin version", func(tx *txn) error {
 		if err := asHost(ctx, tx, roomID, by); err != nil {
 			return err
 		}
@@ -431,7 +428,7 @@ func (s *Store) InspectingVersions(ctx context.Context, roomID string) ([]int64,
 // once dropSuperseded deleted it. ErrNotFound.
 func (s *Store) PluginVersionData(ctx context.Context, roomID string, id int64) ([]byte, error) {
 	var data []byte
-	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(sn.data, x'') FROM plugin_versions v JOIN room_plugins p ON p.id = v.plugin_id
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(sn.data, ''::bytea) FROM plugin_versions v JOIN room_plugins p ON p.id = v.plugin_id
 		LEFT JOIN plugin_snapshots sn ON sn.version_id = v.id
 		WHERE v.id = ? AND p.room_id = ? AND p.removed_at IS NULL`, id, roomID).Scan(&data)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -455,7 +452,7 @@ const pluginHostSender = "AI host"
 func (s *Store) ReportPluginVersion(ctx context.Context, roomID string, id, daemonID int64, ok bool, report json.RawMessage, reason string) (*Message, string, error) {
 	var m *Message
 	var state string
-	err := s.withTx(ctx, "report plugin version", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "report plugin version", func(tx *txn) error {
 		var name string
 		var n int
 		var hold bool
@@ -507,13 +504,13 @@ func (s *Store) ReportPluginVersion(ctx context.Context, roomID string, id, daem
 
 // pinTurnPlugins copies onto turn id, as it starts, the running version of each plugin active for
 // its persona: a version approved later loads from the next turn (009-AC17, 009-AC18).
-func pinTurnPlugins(ctx context.Context, tx *sql.Tx, id, personaID int64) error {
+func pinTurnPlugins(ctx context.Context, tx *txn, id, personaID int64) error {
 	_, err := tx.ExecContext(ctx, `UPDATE turns SET plugins = (
-			SELECT json_group_array(json_object('name', name, 'version_id', vid, 'n', n, 'sha256', sha256)) FROM (
-				SELECT p.name AS name, v.id AS vid, v.n AS n, v.sha256 AS sha256 FROM room_persona_plugins k
+			SELECT COALESCE(jsonb_agg(jsonb_build_object('name', p.name, 'version_id', v.id, 'n', v.n, 'sha256', v.sha256) ORDER BY p.name), '[]')::text
+				FROM room_persona_plugins k
 				JOIN room_plugins p ON p.id = k.plugin_id AND p.removed_at IS NULL
 				JOIN plugin_versions v ON v.id = (SELECT id FROM plugin_versions WHERE plugin_id = p.id AND state = 'approved' ORDER BY n DESC LIMIT 1)
-				WHERE k.persona_id = ? ORDER BY p.name))
+				WHERE k.persona_id = ?)
 		WHERE id = ?`, personaID, id)
 	if err != nil {
 		return fmt.Errorf("pin turn plugins: %w", err)
@@ -562,7 +559,7 @@ func (s *Store) TurnPlugins(ctx context.Context, roomID string, id int64) ([]Tur
 // keep their state.
 func (s *Store) SetPluginsSetup(ctx context.Context, roomID string, pinned, skipped []string) (bool, error) {
 	changed := false
-	err := s.withTx(ctx, "set plugins setup", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "set plugins setup", func(tx *txn) error {
 		for _, name := range pinned {
 			need := slices.Contains(skipped, name)
 			res, err := tx.ExecContext(ctx, `UPDATE room_plugins SET needs_setup = ? WHERE room_id = ? AND name = ? AND removed_at IS NULL AND needs_setup != ?`,
@@ -583,10 +580,10 @@ func (s *Store) SetPluginsSetup(ctx context.Context, roomID string, pinned, skip
 // ErrNotFound.
 func (s *Store) TurnPluginData(ctx context.Context, roomID string, id int64, sha256 string) ([]byte, error) {
 	var data []byte
-	err := s.db.QueryRowContext(ctx, `SELECT sn.data FROM turns t, json_each(t.plugins) j
-		JOIN plugin_versions v ON v.id = json_extract(j.value, '$.version_id')
+	err := s.db.QueryRowContext(ctx, `SELECT sn.data FROM turns t CROSS JOIN jsonb_array_elements(t.plugins::jsonb) j(value)
+		JOIN plugin_versions v ON v.id = (j.value->>'version_id')::bigint
 		JOIN plugin_snapshots sn ON sn.version_id = v.id
-		WHERE t.id = ? AND t.room_id = ? AND v.sha256 = ? AND json_extract(j.value, '$.sha256') = ? LIMIT 1`, id, roomID, sha256, sha256).Scan(&data)
+		WHERE t.id = ? AND t.room_id = ? AND v.sha256 = ? AND j.value->>'sha256' = ? LIMIT 1`, id, roomID, sha256, sha256).Scan(&data)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -597,14 +594,13 @@ func (s *Store) TurnPluginData(ctx context.Context, roomID string, id int64, sha
 }
 
 // pluginsVersionSQL reads only indexes: plugin_versions_state covers the version ids and states.
-const pluginsVersionSQL = `SELECT COALESCE(group_concat(k, ','), '') FROM (
+const pluginsVersionSQL = `SELECT COALESCE(string_agg(k, ',' ORDER BY k), '') FROM (
 	SELECT v.id || v.state AS k FROM plugin_versions v JOIN room_plugins p ON p.id = v.plugin_id
 		WHERE p.room_id = ? AND p.removed_at IS NULL
 	UNION ALL SELECT 'a' || pp.persona_id || '.' || pp.plugin_id FROM room_persona_plugins pp JOIN room_plugins p ON p.id = pp.plugin_id
 		WHERE p.room_id = ? AND p.removed_at IS NULL
 	UNION ALL SELECT 's' || id FROM room_plugins WHERE room_id = ? AND removed_at IS NULL AND needs_setup = 1
-	UNION ALL SELECT 'f' || id || state FROM plugin_fetches WHERE room_id = ?
-	ORDER BY 1)`
+	UNION ALL SELECT 'f' || id || state FROM plugin_fetches WHERE room_id = ?) ks`
 
 // PluginsVersion changes whenever the room's plugin list does: a plugin added or removed, a
 // version added or moved to another state, a persona's activation, a plugin needing host setup or

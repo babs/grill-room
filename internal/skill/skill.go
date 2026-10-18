@@ -258,6 +258,9 @@ func frontmatter(md []byte) (name, description string, err error) {
 		return "", "", invalid("frontmatter name must be 1 to 64 lowercase letters, digits and hyphens")
 	case fm.Description == "" || utf8.RuneCountInString(fm.Description) > MaxDescription:
 		return "", "", invalid("frontmatter description must be 1 to %d characters", MaxDescription)
+	// A YAML escape can write a NUL, which the store's text columns refuse.
+	case strings.ContainsRune(fm.Description, 0):
+		return "", "", invalid("frontmatter description holds a NUL character")
 	}
 	return fm.Name, fm.Description, nil
 }

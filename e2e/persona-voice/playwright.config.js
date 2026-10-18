@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test';
+import { withFreshDB } from '../pgdb.js';
 
 // The persona voice stack (spec 013): persona-voice/run.sh starts LiveKit, the STT worker and the
 // tts pod and exports their settings, then runs this config, which starts the e2e server.
@@ -21,13 +22,12 @@ export default defineConfig({
   outputDir: '../test-results/persona-voice/results',
   webServer: {
     cwd: '..',
-    command: 'mkdir -p test-results && rm -f test-results/e2e-persona-voice.db* && exec ../bin/grill-room-e2e',
+    command: withFreshDB(`e2e_${port}`, 'mkdir -p test-results && exec ../bin/grill-room-e2e'),
     url: `${baseURL}/healthz`,
     reuseExistingServer: false,
     env: {
       GRILL_ROOM_ADDR: `127.0.0.1:${port}`,
       GRILL_ROOM_METRICS_ADDR: `127.0.0.1:${process.env.PERSONA_VOICE_METRICS_PORT}`,
-      GRILL_ROOM_DB: 'test-results/e2e-persona-voice.db',
       GRILL_ROOM_URL: baseURL,
       GRILL_ROOM_ADMIN_TOKEN: adminToken,
       GRILL_ROOM_LIVEKIT_URL: `ws://127.0.0.1:${process.env.PERSONA_VOICE_LIVEKIT_PORT}`,

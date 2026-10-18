@@ -22,6 +22,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/babs/grill-room/internal/pgtest"
 	"github.com/babs/grill-room/internal/sandbox"
 	_ "github.com/babs/grill-room/internal/sqlitetest"
 )
@@ -32,7 +33,7 @@ func TestMain(m *testing.M) {
 	if mode := os.Getenv("GRILL_ROOM_TEST_WORKER"); mode != "" {
 		os.Exit(fakeWorker(mode))
 	}
-	os.Exit(m.Run())
+	pgtest.Main(m)
 }
 
 // fakeWorker is a worker from another release: it only says hello at its version, reports a

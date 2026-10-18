@@ -10,14 +10,16 @@ import (
 
 	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/mail"
-	_ "github.com/babs/grill-room/internal/sqlitetest"
+	"github.com/babs/grill-room/internal/pgtest"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/store/storetest"
 	"github.com/babs/grill-room/internal/web"
 )
 
+func TestMain(m *testing.M) { pgtest.Main(m) }
+
 func TestConfigValidate(t *testing.T) {
-	ok := Config{Addr: "a:1", MetricsAddr: "a:2", DB: "x.db", LogLevel: "info", LogFormat: "auto",
+	ok := Config{Addr: "a:1", MetricsAddr: "a:2", DatabaseURL: "postgres://u@db/x", LogLevel: "info", LogFormat: "auto",
 		MaxUploadMB: 20, MaxRoomMB: 200, MaxAttachmentMB: 5, MaxImportMB: 1024, Pandoc: "pandoc", PandocTimeout: time.Minute, TurnTimeout: 15 * time.Minute, MagicLinkTTL: 15 * time.Minute,
 		AuditRetention: 365 * 24 * time.Hour, ClientRetention: 720 * time.Hour, NotesWatchDelay: 20 * time.Second}
 	cases := map[string]func(*Config){
@@ -32,7 +34,7 @@ func TestConfigValidate(t *testing.T) {
 		"turn timeout too short":           func(c *Config) { c.TurnTimeout = time.Second },
 		"turn timeout too long":            func(c *Config) { c.TurnTimeout = 25 * time.Hour },
 		"same addr":                        func(c *Config) { c.MetricsAddr = c.Addr },
-		"empty db":                         func(c *Config) { c.DB = "" },
+		"empty database url":               func(c *Config) { c.DatabaseURL = "" },
 		"bad level":                        func(c *Config) { c.LogLevel = "loud" },
 		"bad format":                       func(c *Config) { c.LogFormat = "xml" },
 		"sandbox image by tag":             func(c *Config) { c.SandboxImage = "registry.example/grill-room/sandbox:v1" },
@@ -75,6 +77,7 @@ func TestConfigValidate(t *testing.T) {
 }
 
 func TestLoadConfigRejectsBadNumbers(t *testing.T) {
+	t.Setenv("GRILL_ROOM_DATABASE_URL", "postgres://u@db/x")
 	for key, val := range map[string]string{"GRILL_ROOM_MAX_UPLOAD_MB": "20MB", "GRILL_ROOM_MAX_ROOM_MB": "x", "GRILL_ROOM_PANDOC_TIMEOUT": "60", "GRILL_ROOM_MAX_ATTACHMENT_MB": "5MB", "GRILL_ROOM_TURN_TIMEOUT": "15", "GRILL_ROOM_MAGIC_LINK_TTL": "15", "GRILL_ROOM_AUDIT_RETENTION": "365", "GRILL_ROOM_CLIENT_RETENTION": "30", "GRILL_ROOM_TRUSTED_PROXIES": "10.0.0.0/33", "GRILL_ROOM_NOTES_WATCH_DELAY": "20"} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv(key, val)
@@ -92,6 +95,7 @@ func TestLoadConfigRejectsBadNumbers(t *testing.T) {
 // 012-AC5: an admin token that looks like an API token is refused at start.
 func TestAdminTokenNotAPIToken(t *testing.T) {
 	t.Setenv("GRILL_ROOM_ADMIN_TOKEN", "grt_x")
+	t.Setenv("GRILL_ROOM_DATABASE_URL", "postgres://u@db/x")
 	c, err := loadConfig()
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +106,7 @@ func TestAdminTokenNotAPIToken(t *testing.T) {
 }
 
 func TestAdminTokenHash(t *testing.T) {
-	st, err := store.Open(storetest.Path(t, "t.db"))
+	st, err := store.Open(storetest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,6 +133,48 @@ func TestAdminTokenHash(t *testing.T) {
 	}
 	if stored, _ := st.Setting(ctx, adminTokenSetting); stored != hash {
 		t.Fatal("env token overwrote the stored hash")
+	}
+}
+
+// 017 Q11: pods booting together on an empty database keep one admin token hash, and only the pod
+// whose token was stored shows it.
+func TestAdminTokenHashConcurrentBoots(t *testing.T) {
+	dsn := storetest.DSN(t)
+	type result struct {
+		hash, generated string
+		err             error
+	}
+	results := make(chan result, 2)
+	var stores []*store.Store
+	for range 2 {
+		st, err := store.Open(dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = st.Close() })
+		stores = append(stores, st)
+	}
+	for _, st := range stores {
+		go func() {
+			hash, generated, err := adminTokenHash(t.Context(), st, "")
+			results <- result{hash, generated, err}
+		}()
+	}
+	var shown []string
+	hashes := map[string]bool{}
+	for range stores {
+		r := <-results
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		hashes[r.hash] = true
+		if r.generated != "" {
+			shown = append(shown, r.generated)
+		}
+	}
+	stored, err := stores[0].Setting(t.Context(), adminTokenSetting)
+	if err != nil || len(hashes) != 1 || !hashes[stored] || len(shown) != 1 || web.HashToken(shown[0]) != stored {
+		t.Fatalf("stored %q %v, hashes %v, shown %d", stored, err, hashes, len(shown))
 	}
 }
 
@@ -184,7 +230,7 @@ func TestPushHosts(t *testing.T) {
 
 // 002-AC38: workspace fallbacks are counted on /metrics, one series per reason.
 func TestRegistryCountsWorkspaceFallbacks(t *testing.T) {
-	st, err := store.Open(storetest.Path(t, "m.db"))
+	st, err := store.Open(storetest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +260,7 @@ func TestRegistryCountsWorkspaceFallbacks(t *testing.T) {
 // 010-AC20: /metrics carries the device flags held now, the voice lines stored by source and those
 // dropped as a repeat, one series per source.
 func TestRegistryCountsVoiceSources(t *testing.T) {
-	st, err := store.Open(storetest.Path(t, "m.db"))
+	st, err := store.Open(storetest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +293,7 @@ func TestRegistryCountsVoiceSources(t *testing.T) {
 
 // 012 Phase 2: /metrics carries one MCP tool-call series per tool and result.
 func TestRegistryCountsMCPToolCalls(t *testing.T) {
-	st, err := store.Open(storetest.Path(t, "m.db"))
+	st, err := store.Open(storetest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}

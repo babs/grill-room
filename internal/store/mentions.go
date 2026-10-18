@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 )
@@ -48,7 +47,7 @@ var mentionTables = []string{"message_turns", "annotation_message_turns"}
 
 func (s *Store) enqueueMention(ctx context.Context, table string, messageID int64, q *QueuedTurn) error {
 	q.Source = SourceMention
-	return s.withTx(ctx, "enqueue mention", func(tx *sql.Tx) error {
+	return s.withTx(ctx, "enqueue mention", func(tx *txn) error {
 		err := enqueue(ctx, tx, q)
 		if errors.Is(err, ErrAlreadyQueued) {
 			err = tx.QueryRowContext(ctx, `SELECT id FROM turn_queue WHERE persona_id = ? AND room_id = ?`, q.PersonaID, q.RoomID).Scan(&q.ID)
@@ -67,7 +66,7 @@ func (s *Store) enqueueMention(ctx context.Context, table string, messageID int6
 
 // requeueMentions points the mentions waiting on queue entry from, or on turn, to queue entry to,
 // which runs in their place. 0 matches nothing: ids start at 1.
-func requeueMentions(ctx context.Context, tx *sql.Tx, to, turn, from int64) error {
+func requeueMentions(ctx context.Context, tx *txn, to, turn, from int64) error {
 	for _, table := range mentionTables {
 		//nolint:gosec // table is one of mentionTables, never user input
 		if _, err := tx.ExecContext(ctx, `UPDATE `+table+` SET queue_id = ?, turn_id = NULL WHERE turn_id = ? OR queue_id = ?`, to, turn, from); err != nil {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"testing"
 
 	voicecat "github.com/babs/grill-room/internal/voices"
@@ -13,7 +12,7 @@ import (
 // 013-AC32: the migration seeds Appendix A once; edits and deletions survive a restart.
 func TestPronunciationSeedOnce(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "test.db")
+	path := testDSN(t)
 	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -48,7 +47,7 @@ func TestPronunciationSeedOnce(t *testing.T) {
 func TestPronunciationRules(t *testing.T) {
 	ctx := context.Background()
 	s := openTest(t)
-	// NOCASE does not fold É: "ÉTÉ" passes the unique index, the store refuses it.
+	// lower() under C collation does not fold É: "ÉTÉ" passes the unique index, the store refuses it.
 	if _, err := s.AddPronunciation(ctx, voicecat.Term{Term: "été", Style: "fr", FrFr: "x"}, "admin"); err != nil {
 		t.Fatal(err)
 	}

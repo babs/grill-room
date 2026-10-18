@@ -34,6 +34,10 @@ var testOptions = Options{
 			return "", fmt.Errorf("pandoc %s: %w", from, exec.ErrNotFound)
 		case bytes.Contains(data, []byte("pandoc-fails")):
 			return "", errors.New("pandoc " + from + ": exit status 63")
+		case bytes.Contains(data, []byte("pandoc-nul")):
+			return "# a\x00b\n", nil
+		case bytes.Contains(data, []byte("pandoc-latin1")):
+			return "caf\xe9\n", nil
 		}
 		return "# Converted from " + from + "\n", nil
 	},
@@ -249,6 +253,15 @@ func TestUploadRequestErrors(t *testing.T) {
 	}
 	if code, _ := e.upload(t, room.ID, alice.Token, "x.docx", append(fixture(t, "fixture.docx"), "pandoc-fails"...), nil); code != http.StatusUnprocessableEntity {
 		t.Errorf("conversion failure: %d, want 422", code)
+	}
+	// The store's text columns take neither NUL nor invalid UTF-8.
+	for _, out := range []string{"pandoc-nul", "pandoc-latin1"} {
+		if code, _ := e.upload(t, room.ID, alice.Token, "x.docx", append(fixture(t, "fixture.docx"), out...), nil); code != http.StatusUnprocessableEntity {
+			t.Errorf("%s: %d, want 422", out, code)
+		}
+	}
+	if code, _ := e.upload(t, room.ID, alice.Token, "nul.md", append([]byte(strings.Repeat("# a\n", 200)), 0), nil); code != http.StatusUnsupportedMediaType {
+		t.Errorf("NUL past the sniff: %d, want 415", code)
 	}
 	if code, _ := e.upload(t, room.ID, alice.Token, "x.docx", append(fixture(t, "fixture.docx"), "pandoc-missing"...), nil); code != http.StatusServiceUnavailable {
 		t.Errorf("pandoc missing: %d, want 503", code)

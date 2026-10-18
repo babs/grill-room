@@ -44,6 +44,7 @@ wait_http() {
 }
 
 [[ -f device-voice/playwright.config.js ]] || die "run from e2e/"
+[[ -n ${GRILL_ROOM_TEST_DATABASE_URL:-} ]] || die "GRILL_ROOM_TEST_DATABASE_URL must name a PostgreSQL 16 server (make pg-up prints one)"
 [[ -d ${GRILL_ROOM_E2E_MODEL_DIR:-} ]] || die "GRILL_ROOM_E2E_MODEL_DIR must name the device model files (grill-room models fetch --dir <dir>)"
 for cmd in docker curl openssl pnpm; do
 	command -v "$cmd" >/dev/null || die "$cmd is missing"
