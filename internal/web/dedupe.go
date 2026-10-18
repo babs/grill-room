@@ -16,49 +16,6 @@ const (
 	dedupeSimilarity = 0.8
 )
 
-// recentLine is a stored voice line as the repeat check compares it.
-type recentLine struct {
-	source, norm string
-	at           time.Time
-}
-
-// recentLines holds, by participant id, their voice lines of the last dedupeWindow. In memory: the
-// room server runs one replica, and a restart forgets at most dedupeWindow of lines.
-type recentLines map[int64][]recentLine
-
-// sweep drops the lines older than dedupeWindow, and the participants left with none.
-func (rl recentLines) sweep(now time.Time) {
-	for pid, lines := range rl {
-		kept := lines[:0]
-		for _, l := range lines {
-			if now.Sub(l.at) <= dedupeWindow {
-				kept = append(kept, l)
-			}
-		}
-		if len(kept) == 0 {
-			delete(rl, pid)
-		} else {
-			rl[pid] = kept
-		}
-	}
-}
-
-// dup reports a line of pid from source, normalised to n, that repeats one of pid's lines from the
-// other source in the window. Two lines from one source never repeat: a person may say a thing twice.
-func (rl recentLines) dup(pid int64, source, n string, now time.Time) bool {
-	rl.sweep(now)
-	for _, l := range rl[pid] {
-		if l.source != source && similar(l.norm, n) {
-			return true
-		}
-	}
-	return false
-}
-
-func (rl recentLines) add(pid int64, source, n string, now time.Time) {
-	rl[pid] = append(rl[pid], recentLine{source: source, norm: n, at: now})
-}
-
 // normLine is a line as the repeat check compares it: lowercase, accents dropped, letters and
 // digits only, one space between words.
 func normLine(s string) string {

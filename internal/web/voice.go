@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -36,10 +35,6 @@ const (
 // sttTimeout is how long a worker counts as up after its last heartbeat.
 const sttTimeout = 15 * time.Second
 
-// pollEvery is how often an event stream checks presence and transcription for a change. A var for
-// tests.
-var pollEvery = time.Second
-
 // Voice configures LiveKit audio. A nil Voice in Options turns voice off.
 type Voice struct {
 	// URL is LiveKit's signalling URL as browsers reach it (wss://...).
@@ -51,22 +46,31 @@ type Voice struct {
 	STTTokenHash string
 }
 
-// sttWorker is the last heartbeat of one STT worker: the rooms whose audio it is in, in each the
-// participants whose track it is subscribed to, its engine and whether it reads room glossaries.
-type sttWorker struct {
-	at       time.Time
-	rooms    map[string]bool
-	voices   map[string][]int64
-	engine   string
-	glossary bool
-}
-
+// sttWorkers reads the STT workers' heartbeats from the table every pod shares (017-AC14), through
+// one copy per pod.
 type sttWorkers struct {
-	mu sync.Mutex
-	m  map[string]*sttWorker
+	st  *store.Store
+	log *zap.Logger
+	c   *podCache[[]store.STTWorker]
 }
 
-func newSTTWorkers(_ *store.Store) sttWorkers { return sttWorkers{m: map[string]*sttWorker{}} }
+func newSTTWorkers(st *store.Store, log *zap.Logger) sttWorkers {
+	return sttWorkers{st: st, log: log, c: &podCache[[]store.STTWorker]{}}
+}
+
+// live returns the workers live at now.
+func (w sttWorkers) live(now time.Time) []store.STTWorker {
+	all := w.c.get("", func() ([]store.STTWorker, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), sharedTimeout)
+		defer cancel()
+		ws, err := w.st.STTWorkers(ctx, now.UnixMilli())
+		if err != nil {
+			w.log.Warn("stt_workers_read_failed", zap.Error(err))
+		}
+		return ws, err
+	})
+	return slices.DeleteFunc(slices.Clone(all), func(wk store.STTWorker) bool { return wk.ExpiresMS <= now.UnixMilli() })
+}
 
 // sttState is what a room's page shows about transcription.
 type sttState struct {
@@ -101,21 +105,15 @@ func (s *Server) sttState(room string, now time.Time) sttState {
 	return st
 }
 
-func (w *sttWorkers) state(room string, now time.Time) sttState {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+func (w sttWorkers) state(room string, now time.Time) sttState {
 	st := sttState{Transcribed: []int64{}, Engines: []string{}}
-	for id, wk := range w.m {
-		if now.Sub(wk.at) > sttTimeout {
-			delete(w.m, id)
-			continue
-		}
+	for _, wk := range w.live(now) {
 		st.Available = true
-		st.Listening = st.Listening || wk.rooms[room]
-		st.Transcribed = append(st.Transcribed, wk.voices[room]...)
-		st.Glossary = st.Glossary || wk.glossary
-		if wk.engine != "" {
-			st.Engines = append(st.Engines, wk.engine)
+		st.Listening = st.Listening || slices.Contains(wk.Rooms, room)
+		st.Transcribed = append(st.Transcribed, wk.Voices[room]...)
+		st.Glossary = st.Glossary || wk.Glossary
+		if wk.Engine != "" {
+			st.Engines = append(st.Engines, wk.Engine)
 		}
 	}
 	slices.Sort(st.Transcribed)
@@ -125,13 +123,8 @@ func (w *sttWorkers) state(room string, now time.Time) sttState {
 	return st
 }
 
-// STTWorkers returns the number of STT workers heartbeating.
-func (s *Server) STTWorkers() int {
-	s.stt.state("", s.now()) // sweeps the stale ones
-	s.stt.mu.Lock()
-	defer s.stt.mu.Unlock()
-	return len(s.stt.m)
-}
+// STTWorkers returns the number of STT workers heartbeating, as of the last refreshGauges.
+func (s *Server) STTWorkers() int { return int(s.gauges.sttWorkers.Load()) }
 
 // getVoice mints the participant's LiveKit token: one LiveKit room per grill room, identity the
 // participant id, microphone the only source it may publish.
@@ -194,20 +187,20 @@ func (s *Server) sttHeartbeat(w http.ResponseWriter, r *http.Request) {
 			maxWorkerName, maxEngineName, maxSTTRooms, maxSTTVoices))
 		return
 	}
-	rooms := make(map[string]bool, len(req.Rooms))
-	for _, id := range req.Rooms {
-		rooms[id] = true
+	now := s.lease()
+	ctx, cancel := context.WithTimeout(r.Context(), sharedTimeout)
+	defer cancel()
+	ok, err := s.stt.st.BeatSTTWorker(ctx, store.STTWorker{Name: name, Rooms: req.Rooms, Voices: req.Voices, Engine: engine, Glossary: req.Glossary,
+		ExpiresMS: now.Add(sttTimeout).UnixMilli()}, maxSTTWorkers, now.UnixMilli())
+	s.stt.c.drop("")
+	if err != nil {
+		s.serverError(w, "stt_heartbeat_failed", err)
+		return
 	}
-	now := s.now()
-	s.stt.state("", now) // sweeps the stale ones before the bound applies
-	s.stt.mu.Lock()
-	if s.stt.m[name] == nil && len(s.stt.m) >= maxSTTWorkers {
-		s.stt.mu.Unlock()
+	if !ok {
 		httpError(w, http.StatusTooManyRequests, "too many STT workers")
 		return
 	}
-	s.stt.m[name] = &sttWorker{at: now, rooms: rooms, voices: req.Voices, engine: engine, glossary: req.Glossary}
-	s.stt.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"device": s.people.deviceFlags(req.Rooms, now)})
 }
 
@@ -259,25 +252,19 @@ func (s *Server) postDeviceLine(w http.ResponseWriter, r *http.Request, sess ses
 func (s *Server) storeVoiceLine(w http.ResponseWriter, r *http.Request, p *store.Participant, body, source string) {
 	m := &store.Message{RoomID: p.RoomID, Kind: store.KindVoice, ParticipantID: p.ID, Sender: p.Name, Body: body, Source: source}
 	norm := normLine(body)
-	// ponytail: one lock over every room's check and insert; per-participant locks if voice
-	// lines ever contend.
-	s.voiceMu.Lock()
-	now := s.now()
-	if s.voiceRecent.dup(p.ID, source, norm, now) {
-		s.voiceMu.Unlock()
-		s.voiceDeduped[source].Add(1)
-		writeJSON(w, http.StatusOK, map[string]bool{"deduped": true})
-		return
-	}
-	err := s.bus.Post(r.Context(), m)
-	if err == nil {
-		s.voiceRecent.add(p.ID, source, norm, now)
-	}
-	s.voiceMu.Unlock()
+	stored, err := s.bus.Store.PostVoiceLine(r.Context(), m, s.now(), dedupeWindow, func(other []string) bool {
+		return slices.ContainsFunc(other, func(o string) bool { return similar(normLine(o), norm) })
+	})
 	if err != nil {
 		s.serverError(w, "voice_line_failed", err)
 		return
 	}
+	if !stored {
+		s.voiceDeduped[source].Add(1)
+		writeJSON(w, http.StatusOK, map[string]bool{"deduped": true})
+		return
+	}
+	s.bus.Notify(p.RoomID)
 	s.voiceLines[source].Add(1)
 	s.voiceTriggers(r.Context(), p.RoomID)
 	writeJSON(w, http.StatusCreated, m)
@@ -292,8 +279,9 @@ func (s *Server) VoiceLines(source string) int64 { return s.voiceLines[source].L
 // VoiceLinesDeduped counts the voice lines from source dropped as another source's repeat (010-AC16).
 func (s *Server) VoiceLinesDeduped(source string) int64 { return s.voiceDeduped[source].Load() }
 
-// DeviceSTTParticipants returns how many participants transcribe on their device now (010-AC20).
-func (s *Server) DeviceSTTParticipants() int { return s.people.deviceCount(s.now()) }
+// DeviceSTTParticipants returns how many participants transcribe on their device (010-AC20), as of
+// the last refreshGauges.
+func (s *Server) DeviceSTTParticipants() int { return int(s.gauges.deviceSTT.Load()) }
 
 // voiceSpeaker is the room's participant a worker names; false once it answered the error.
 func (s *Server) voiceSpeaker(w http.ResponseWriter, r *http.Request, id int64) (*store.Participant, bool) {

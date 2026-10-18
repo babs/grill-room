@@ -237,7 +237,7 @@ func TestRegistryCountsWorkspaceFallbacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	b := bus.New(st)
+	b := bus.New(st, web.NewToken())
 	mfs, err := newRegistry(b, web.New(b, "", "http://x", web.Options{}, zap.NewNop())).Gather()
 	if err != nil {
 		t.Fatal(err)
@@ -267,7 +267,7 @@ func TestRegistryCountsVoiceSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	b := bus.New(st)
+	b := bus.New(st, web.NewToken())
 	mfs, err := newRegistry(b, web.New(b, "", "http://x", web.Options{}, zap.NewNop())).Gather()
 	if err != nil {
 		t.Fatal(err)
@@ -300,7 +300,7 @@ func TestRegistryCountsMCPToolCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	b := bus.New(st)
+	b := bus.New(st, web.NewToken())
 	mfs, err := newRegistry(b, web.New(b, "", "http://x", web.Options{}, zap.NewNop())).Gather()
 	if err != nil {
 		t.Fatal(err)
@@ -344,7 +344,7 @@ func TestRegistryMetricsDocumented(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	b := bus.New(st)
+	b := bus.New(st, web.NewToken())
 	opts := web.Options{TTSTokenHash: "x", Voice: &web.Voice{URL: "wss://x"}}
 	mfs, err := newRegistry(b, web.New(b, "", "http://x", opts, zap.NewNop())).Gather()
 	if err != nil {

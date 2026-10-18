@@ -1,24 +1,24 @@
 package web
 
 import (
+	"cmp"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
 	"slices"
-	"strconv"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/babs/grill-room/internal/store"
+	"go.uber.org/zap"
 )
 
 const (
 	// maxTabs bounds the tabs one participant holds open; past it a new tab is refused.
 	maxTabs = 20
-	// peopleForget is how long a gone participant's last-seen time stays in memory; the list falls
-	// back on the stored one after.
+	// peopleForget is how long a gone participant's last-seen time stays in the presence table; the
+	// list falls back on the stored one after.
 	peopleForget = time.Hour
 )
 
@@ -33,161 +33,200 @@ const deviceLapse = 3 * time.Second
 
 var tabID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
-// tab is one open room page of a participant: its event streams, its last heartbeat, and the audio
-// state it reported.
+// sharedTimeout bounds one read or write of the shared state for callers with no context of their own.
+const sharedTimeout = 5 * time.Second
+
+// tab is one open room page of a participant, as its row in the presence table: its last sign of
+// life and the audio state it reported.
 type tab struct {
-	streams                 int
 	beat                    time.Time
 	audio, mic, muted, deaf bool
 	// focused is the page in the foreground with the focus: no push for this room then (005-AC24).
 	focused bool
 }
 
-// person is a participant's presence in their room: their tabs, their last sign of life, and
-// since when they are here (009-AC36).
+// person is a participant's presence in their room: their live tabs, their last sign of life, since
+// when they are here (009-AC36), and whether a tab transcribes on its device (010-AC13).
 type person struct {
-	tabs  map[string]*tab
-	last  time.Time
-	since time.Time
-	// device holds, by tab id, the last device beat that said the tab transcribes on its device
-	// (010-AC13). Apart from tabs: a device beat comes from the page's worker, with no stream.
-	device map[string]time.Time
+	tabs        []tab
+	last, since time.Time
+	device      bool
 }
 
-// deviceOn reports a tab of p transcribing on its device at now, and sweeps the lapsed tabs.
-func (p *person) deviceOn(now time.Time) bool {
-	on := false
-	for id, at := range p.device {
-		if now.Sub(at) < deviceLapse {
-			on = true
-		} else {
-			delete(p.device, id)
+func (t *tab) alive(now time.Time) bool { return now.Sub(t.beat) <= presenceGrace }
+
+func (p *person) alive(now time.Time) bool {
+	return now.Sub(p.last) <= presenceGrace || slices.ContainsFunc(p.tabs, func(t tab) bool { return t.alive(now) })
+}
+
+// msTime is a stored time in ms, the zero time for 0.
+func msTime(ms int64) time.Time {
+	if ms == 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms)
+}
+
+// peopleOf groups presence rows by room then participant, as they stand at now.
+func peopleOf(rows []store.PresenceRow, now time.Time) map[string]map[int64]*person {
+	out := map[string]map[int64]*person{}
+	nowMS := now.UnixMilli()
+	for _, r := range rows {
+		if r.ExpiresMS <= nowMS {
+			continue
 		}
+		room := out[r.Room]
+		if room == nil {
+			room = map[int64]*person{}
+			out[r.Room] = room
+		}
+		p := room[r.ParticipantID]
+		if p == nil {
+			p = &person{}
+			room[r.ParticipantID] = p
+		}
+		if r.Tab == "" {
+			p.last, p.since = msTime(r.BeatMS), msTime(r.SinceMS)
+			continue
+		}
+		p.device = p.device || nowMS-r.DeviceMS < deviceLapse.Milliseconds()
+		p.tabs = append(p.tabs, tab{beat: msTime(r.BeatMS), audio: r.Audio, mic: r.Mic, muted: r.Muted, deaf: r.Deaf, focused: r.Focused})
 	}
-	return on
+	return out
 }
 
-// arrive starts p's stay at now unless p is here already. The caller holds the lock.
-func (p *person) arrive(now time.Time) {
-	if !p.alive(now) {
-		p.since = now
-	}
-}
-
-// people is the presence of every participant, by room then participant id (005-AC6). In memory:
-// the room server runs one replica.
+// people is the presence of every participant, in the presence table every pod shares (005-AC6,
+// 017-AC14). A pod's streams read a room's rows through rooms, once per pollEvery.
 type people struct {
-	mu sync.Mutex
-	m  map[string]map[int64]*person
-	// anon names the streams of clients that send no tab id.
-	anon atomic.Int64
+	st    *store.Store
+	log   *zap.Logger
+	rooms podCache[[]store.PresenceRow]
 }
 
-func newPeople(_ *store.Store) *people { return &people{m: map[string]map[int64]*person{}} }
+func newPeople(st *store.Store, log *zap.Logger) *people { return &people{st: st, log: log} }
 
-func (pp *people) person(room string, pid int64) *person {
-	r := pp.m[room]
-	if r == nil {
-		r = map[int64]*person{}
-		pp.m[room] = r
+// warn logs a presence write whose caller goes on without it.
+func (pp *people) warn(room string, err error) {
+	if err != nil {
+		pp.log.Warn("presence_write_failed", zap.String("room", room), zap.Error(err))
 	}
-	p := r[pid]
-	if p == nil {
-		p = &person{tabs: map[string]*tab{}, device: map[string]time.Time{}}
-		r[pid] = p
-	}
-	return p
 }
 
-// open counts a stream of tab and returns its release. A stream with no tab id gets one of its own.
+func (pp *people) times(now time.Time) store.PresenceTimes {
+	return store.PresenceTimes{Now: now.UnixMilli(), Grace: presenceGrace.Milliseconds(), Forget: peopleForget.Milliseconds(), Lapse: deviceLapse.Milliseconds()}
+}
+
+// write runs a presence write with its own deadline, then drops the pod's copies holding room.
+func (pp *people) write(ctx context.Context, room string, fn func(ctx context.Context) error) error {
+	ctx, cancel := context.WithTimeout(ctx, sharedTimeout)
+	defer cancel()
+	err := fn(ctx)
+	pp.rooms.drop(room)
+	pp.rooms.drop("")
+	return err
+}
+
+// rows returns the presence rows of room, of every room for "", from the pod's copy, read at most
+// once per pollEvery; a failed read keeps the last copy.
+// ponytail: a room's rows are read whole once per pollEvery per pod; NOTIFY the changed rows instead
+// if rooms grow to hundreds of people.
+func (pp *people) rows(room string, now time.Time) []store.PresenceRow {
+	return pp.rooms.get(room, func() ([]store.PresenceRow, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), sharedTimeout)
+		defer cancel()
+		rows, err := pp.st.Presence(ctx, room, now.UnixMilli())
+		if err != nil {
+			pp.log.Warn("presence_read_failed", zap.String("room", room), zap.Error(err))
+		}
+		return rows, err
+	})
+}
+
+// read returns the presence of room, of every room for "", at now.
+func (pp *people) read(room string, now time.Time) map[string]map[int64]*person {
+	return peopleOf(pp.rows(room, now), now)
+}
+
+// open records a stream of tab and returns its release. The stream renews the tab every half grace
+// until then, on the open's clock moved by the time passed. A stream with no tab id gets a random
+// one: pods share the ids.
 func (pp *people) open(room string, pid int64, id string, now time.Time) (release func(time.Time)) {
 	if !tabID.MatchString(id) {
-		id = "stream-" + strconv.FormatInt(pp.anon.Add(1), 10)
+		id = "stream-" + NewToken()[:10]
 	}
-	pp.mu.Lock()
-	defer pp.mu.Unlock()
-	p := pp.person(room, pid)
-	p.arrive(now)
-	t := p.tabs[id]
-	if t == nil {
-		t = &tab{}
-		p.tabs[id] = t
+	ctx, stop := context.WithCancel(context.Background())
+	at := pp.times(now)
+	renew := func(now time.Time) {
+		at.Now = now.UnixMilli()
+		if err := pp.write(ctx, room, func(ctx context.Context) error { return pp.st.PresenceOpen(ctx, room, pid, id, at) }); ctx.Err() == nil {
+			pp.warn(room, err)
+		}
 	}
-	t.streams++
-	t.beat, p.last = now, now
+	renew(now)
+	done := make(chan struct{})
+	start := time.Now()
+	go func() {
+		defer close(done)
+		tick := time.NewTicker(time.Duration(at.Grace) * time.Millisecond / 2)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				renew(now.Add(time.Since(start)))
+			}
+		}
+	}()
 	return func(at time.Time) {
-		pp.mu.Lock()
-		defer pp.mu.Unlock()
-		t.streams--
-		t.beat, p.last = at, at
+		stop()
+		<-done
+		pp.warn(room, pp.write(context.Background(), room, func(ctx context.Context) error { return pp.st.PresenceRelease(ctx, room, pid, id, pp.times(at)) }))
 	}
 }
 
 // beat is a tab's heartbeat. gone drops the tab at once, as its page closes: its audio state goes
 // with it, while the participant stays here for the grace, in case it was a reload. False when the
 // participant holds maxTabs already.
-func (pp *people) beat(room string, pid int64, id string, st tab, gone bool, now time.Time) bool {
-	pp.mu.Lock()
-	defer pp.mu.Unlock()
-	p := pp.person(room, pid)
-	if !gone {
-		p.arrive(now)
-	}
-	p.last = now
-	t := p.tabs[id]
-	if gone {
-		delete(p.device, id)
-		if t != nil && t.streams == 0 {
-			delete(p.tabs, id)
-		} else if t != nil {
-			t.audio, t.mic, t.muted, t.deaf, t.focused = false, false, false, false, false
-		}
-		return true
-	}
-	if t == nil {
-		if len(p.tabs) >= maxTabs {
-			return false
-		}
-		t = &tab{}
-		p.tabs[id] = t
-	}
-	t.beat, t.audio, t.mic, t.muted, t.deaf, t.focused = now, st.audio, st.mic, st.muted, st.deaf, st.focused
-	return true
+func (pp *people) beat(room string, pid int64, id string, st tab, gone bool, now time.Time) (bool, error) {
+	ok := false
+	err := pp.write(context.Background(), room, func(ctx context.Context) error {
+		var err error
+		ok, err = pp.st.PresenceBeat(ctx, room, pid, id, store.TabState{Audio: st.audio, Mic: st.mic, Muted: st.muted, Deaf: st.deaf, Focused: st.focused},
+			gone, maxTabs, pp.times(now))
+		return err
+	})
+	return ok, err
 }
 
 // deviceBeat is a tab's device transcription beat: on holds the participant's flag for deviceLapse,
 // off drops the tab's at once (010-AC13). The tab's presence and audio state stay as they are.
-// False when the participant holds maxTabs flagged tabs already.
-func (pp *people) deviceBeat(room string, pid int64, id string, on bool, now time.Time) bool {
-	pp.mu.Lock()
-	defer pp.mu.Unlock()
-	p := pp.person(room, pid)
-	if !on {
-		delete(p.device, id)
-		return true
-	}
-	if _, ok := p.device[id]; !ok {
-		if p.deviceOn(now); len(p.device) >= maxTabs {
-			return false
-		}
-	}
-	p.device[id] = now
-	return true
+// False when the participant holds maxTabs tabs already.
+func (pp *people) deviceBeat(room string, pid int64, id string, on bool, now time.Time) (bool, error) {
+	ok := false
+	err := pp.write(context.Background(), room, func(ctx context.Context) error {
+		var err error
+		ok, err = pp.st.PresenceDevice(ctx, room, pid, id, on, maxTabs, pp.times(now))
+		return err
+	})
+	return ok, err
 }
 
 // deviceFlags lists, for each of rooms with any, the participants transcribing on their device at
 // now, sorted (010-AC14).
 func (pp *people) deviceFlags(rooms []string, now time.Time) map[string][]int64 {
-	pp.mu.Lock()
-	defer pp.mu.Unlock()
 	out := map[string][]int64{}
+	if len(rooms) == 0 {
+		return out
+	}
+	all := pp.read("", now)
 	for _, room := range rooms {
 		if _, done := out[room]; done {
 			continue
 		}
 		var ids []int64
-		for pid, p := range pp.m[room] {
-			if p.deviceOn(now) {
+		for pid, p := range all[room] {
+			if p.device {
 				ids = append(ids, pid)
 			}
 		}
@@ -201,12 +240,10 @@ func (pp *people) deviceFlags(rooms []string, now time.Time) map[string][]int64 
 
 // deviceCount is how many participants transcribe on their device at now, over every room.
 func (pp *people) deviceCount(now time.Time) int {
-	pp.mu.Lock()
-	defer pp.mu.Unlock()
 	n := 0
-	for _, r := range pp.m {
+	for _, r := range pp.read("", now) {
 		for _, p := range r {
-			if p.deviceOn(now) {
+			if p.device {
 				n++
 			}
 		}
@@ -216,47 +253,20 @@ func (pp *people) deviceCount(now time.Time) int {
 
 // focused reports whether one of participant pid's live tabs in room has the focus.
 func (pp *people) focused(room string, pid int64, now time.Time) bool {
-	pp.mu.Lock()
-	defer pp.mu.Unlock()
-	p := pp.m[room][pid]
-	if p == nil {
-		return false
-	}
-	for _, t := range p.tabs {
-		if t.focused && t.alive(now) {
-			return true
-		}
-	}
-	return false
+	p := pp.read(room, now)[room][pid]
+	return p != nil && slices.ContainsFunc(p.tabs, func(t tab) bool { return t.focused && t.alive(now) })
 }
 
 // here reports participant pid of room present at now.
 func (pp *people) here(room string, pid int64, now time.Time) bool {
-	pp.mu.Lock()
-	defer pp.mu.Unlock()
-	p := pp.m[room][pid]
+	p := pp.read(room, now)[room][pid]
 	return p != nil && p.alive(now)
 }
 
-func (t *tab) alive(now time.Time) bool { return t.streams > 0 || now.Sub(t.beat) <= presenceGrace }
-
-func (p *person) alive(now time.Time) bool {
-	if now.Sub(p.last) <= presenceGrace {
-		return true
-	}
-	for _, t := range p.tabs {
-		if t.streams > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-// forget drops a deleted room's presence: no stream will sweep it again.
+// forget drops the pod's copies holding a deleted room; its rows went with it.
 func (pp *people) forget(room string) {
-	pp.mu.Lock()
-	defer pp.mu.Unlock()
-	delete(pp.m, room)
+	pp.rooms.drop(room)
+	pp.rooms.drop("")
 }
 
 // presenceOf is one participant in a "presence" event.
@@ -278,30 +288,23 @@ type presenceOf struct {
 	DeviceSTT bool `json:"device_stt"`
 }
 
-// snapshot is room's presence at now, by participant id, and sweeps the dead tabs and the people
-// gone for peopleForget.
+// snapshot is room's presence at now, by participant id, from the pod's copy of the room's rows.
 func (pp *people) snapshot(room string, now time.Time) []presenceOf {
-	pp.mu.Lock()
-	defer pp.mu.Unlock()
 	out := []presenceOf{}
-	for pid, p := range pp.m[room] {
-		for id, t := range p.tabs {
-			if !t.alive(now) {
-				delete(p.tabs, id)
-			}
-		}
-		v := presenceOf{ID: pid, Here: p.alive(now), DeviceSTT: p.deviceOn(now)}
+	for pid, p := range pp.read(room, now)[room] {
+		v := presenceOf{ID: pid, Here: p.alive(now), DeviceSTT: p.device}
 		switch {
 		case v.Here:
 			if since := p.since; !since.IsZero() {
 				v.HereSince = &since
 			}
 			for _, t := range p.tabs {
-				v.Audio, v.Mic, v.Muted, v.Deaf = v.Audio || t.audio, v.Mic || t.mic, v.Muted || t.muted, v.Deaf || t.deaf
+				if t.alive(now) {
+					v.Audio, v.Mic, v.Muted, v.Deaf = v.Audio || t.audio, v.Mic || t.mic, v.Muted || t.muted, v.Deaf || t.deaf
+				}
 			}
 			v.Muted = v.Muted && !v.Mic
 		case now.Sub(p.last) > peopleForget && !v.DeviceSTT:
-			delete(pp.m[room], pid)
 			continue
 		case !p.last.IsZero():
 			last := p.last
@@ -309,10 +312,7 @@ func (pp *people) snapshot(room string, now time.Time) []presenceOf {
 		}
 		out = append(out, v)
 	}
-	if len(pp.m[room]) == 0 {
-		delete(pp.m, room)
-	}
-	slices.SortFunc(out, func(a, b presenceOf) int { return int(a.ID - b.ID) })
+	slices.SortFunc(out, func(a, b presenceOf) int { return cmp.Compare(a.ID, b.ID) })
 	return out
 }
 
@@ -359,7 +359,12 @@ func (s *Server) postPresence(w http.ResponseWriter, r *http.Request, sess sessi
 			httpError(w, http.StatusNotFound, "device transcription is not offered on this server")
 			return
 		}
-		if !s.people.deviceBeat(sess.p.RoomID, sess.p.ID, req.Tab, *req.DeviceSTT, s.now()) {
+		ok, err := s.people.deviceBeat(sess.p.RoomID, sess.p.ID, req.Tab, *req.DeviceSTT, s.lease())
+		if err != nil {
+			s.serverError(w, "presence_failed", err)
+			return
+		}
+		if !ok {
 			httpError(w, http.StatusTooManyRequests, fmt.Sprintf("at most %d open tabs", maxTabs))
 			return
 		}
@@ -367,7 +372,12 @@ func (s *Server) postPresence(w http.ResponseWriter, r *http.Request, sess sessi
 		return
 	}
 	st := tab{audio: req.Audio, mic: req.Audio && req.Mic, muted: req.Audio && req.Muted && !req.Mic, deaf: req.Audio && req.Deaf, focused: req.Focused}
-	if !s.people.beat(sess.p.RoomID, sess.p.ID, req.Tab, st, req.Gone, s.now()) {
+	ok, err := s.people.beat(sess.p.RoomID, sess.p.ID, req.Tab, st, req.Gone, s.lease())
+	if err != nil {
+		s.serverError(w, "presence_failed", err)
+		return
+	}
+	if !ok {
 		httpError(w, http.StatusTooManyRequests, fmt.Sprintf("at most %d open tabs", maxTabs))
 		return
 	}
@@ -376,9 +386,7 @@ func (s *Server) postPresence(w http.ResponseWriter, r *http.Request, sess sessi
 
 // anyoneHere reports a participant of room present at now (006-AC18).
 func (pp *people) anyoneHere(room string, now time.Time) bool {
-	pp.mu.Lock()
-	defer pp.mu.Unlock()
-	for _, p := range pp.m[room] {
+	for _, p := range pp.read(room, now)[room] {
 		if p.alive(now) {
 			return true
 		}
@@ -388,10 +396,8 @@ func (pp *people) anyoneHere(room string, now time.Time) bool {
 
 // present is the rooms with a participant here at now.
 func (pp *people) present(now time.Time) map[string]bool {
-	pp.mu.Lock()
-	defer pp.mu.Unlock()
 	out := map[string]bool{}
-	for room, ps := range pp.m {
+	for room, ps := range pp.read("", now) {
 		for _, p := range ps {
 			if p.alive(now) {
 				out[room] = true
@@ -405,18 +411,12 @@ func (pp *people) present(now time.Time) map[string]bool {
 // listening is the rooms where a participant here hears the call at now: a tab of theirs is in the
 // audio and not deafened (013-AC1).
 func (pp *people) listening(now time.Time) map[string]bool {
-	pp.mu.Lock()
-	defer pp.mu.Unlock()
 	out := map[string]bool{}
-	for room, ps := range pp.m {
+	for room, ps := range pp.read("", now) {
 		for _, p := range ps {
-			if !p.alive(now) {
-				continue
-			}
-			for _, t := range p.tabs {
-				if t.alive(now) && t.audio && !t.deaf {
-					out[room] = true
-				}
+			if p.alive(now) && slices.ContainsFunc(p.tabs, func(t tab) bool { return t.alive(now) && t.audio && !t.deaf }) {
+				out[room] = true
+				break
 			}
 		}
 	}

@@ -2,13 +2,19 @@ package web
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/mail"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -51,13 +57,44 @@ func reasonError(w http.ResponseWriter, code int, reason, msg string) {
 }
 
 // mailFailingFor returns how long sign-in still answers "mail failing": a bind send failed at the
-// relay within mailFailHold and none succeeded since. 0 when mail works.
-func (s *Server) mailFailingFor() time.Duration {
-	at := s.mailFailedAt.Load()
-	if at == 0 {
+// relay within mailFailHold and none succeeded since. 0 when mail works, or the flag cannot be
+// read: it is a hint, and sign-in must not fail on it.
+func (s *Server) mailFailingFor(ctx context.Context) time.Duration {
+	at, err := s.mailFailure(ctx)
+	if err != nil {
+		s.log.Warn("mail_failure_read_failed", zap.Error(err))
+	}
+	if err != nil || at == 0 {
 		return 0
 	}
 	return max(mailFailHold-s.now().Sub(time.UnixMilli(at)), 0)
+}
+
+// mailFailedAtKey is the settings row holding when the last bind send failed at the relay, in unix
+// ms, "0" once a later bind send went out: every pod answers alike (011-AC28).
+const mailFailedAtKey = "mail_failed_at"
+
+func (s *Server) mailFailure(ctx context.Context) (int64, error) {
+	v, err := s.bus.Store.Setting(ctx, mailFailedAtKey)
+	if err != nil || v == "" {
+		return 0, err
+	}
+	at, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("setting %s: %w", mailFailedAtKey, err)
+	}
+	return at, nil
+}
+
+// setMailFailure stores at, writing only when it changes: most bind sends find it 0 already.
+func (s *Server) setMailFailure(ctx context.Context, at int64) {
+	cur, err := s.mailFailure(ctx)
+	if err == nil && cur != at {
+		err = s.bus.Store.SetSetting(ctx, mailFailedAtKey, strconv.FormatInt(at, 10))
+	}
+	if err != nil {
+		s.log.Error("mail_state_failed", zap.Error(err))
+	}
 }
 
 // retryAfter sets the Retry-After header for d and returns d in whole seconds, rounded up, at least 1.
@@ -242,7 +279,7 @@ func cleanEmail(s string) (string, bool) {
 // limits. It answers and returns false when the request must stop.
 // gate, when set, runs once the address is valid and before the rate limit; it answers and returns
 // false to stop.
-func (s *Server) emailRequest(w http.ResponseWriter, r *http.Request, gate func() bool) (string, []string, bool) {
+func (s *Server) emailRequest(w http.ResponseWriter, r *http.Request, gate func() bool) (string, []int64, bool) {
 	if s.opts.SendMail == nil {
 		httpError(w, http.StatusNotFound, "email sign-in is not configured")
 		return "", nil, false
@@ -266,18 +303,23 @@ func (s *Server) emailRequest(w http.ResponseWriter, r *http.Request, gate func(
 		return "", nil, false
 	}
 	now, ip := s.now(), s.clientIP(r)
-	var hits []string
+	var hits []int64
 	for _, k := range []struct {
 		key string
 		max int
-	}{{"ip:" + ip, magicPerIP}, {"to:" + email + " ip:" + ip, magicPerAddressIP}, {"to:" + email, magicPerAddress}} {
-		if !s.magicLimit.allow(k.key, k.max, now) {
-			wait := retryAfter(w, s.magicLimit.retryIn(k.key, now))
+	}{{"ip:" + rateIP(ip), magicPerIP}, {"to:" + email + " ip:" + rateIP(ip), magicPerAddressIP}, {"to:" + email, magicPerAddress}} {
+		id, retry, err := s.magicLimit.allow(r.Context(), k.key, k.max, now)
+		if err != nil {
+			s.serverError(w, "magic_limit_failed", err)
+			return "", nil, false
+		}
+		if id == 0 {
+			wait := retryAfter(w, retry)
 			writeJSON(w, http.StatusTooManyRequests, map[string]any{"reason": "rate_limited", "retry_after_s": wait,
 				"error": "too many links asked for, retry in " + strconv.FormatInt((wait+59)/60, 10) + " min"})
 			return "", nil, false
 		}
-		hits = append(hits, k.key)
+		hits = append(hits, id)
 	}
 	return email, hits, true
 }
@@ -307,8 +349,10 @@ func (s *Server) bindEmail(w http.ResponseWriter, r *http.Request) {
 	err = s.mailLink(ctx, p.ID, email, store.MagicBind)
 	if errors.Is(err, errMailFailed) || errors.Is(err, errAddressRejected) {
 		// A mail that did not go out spends no allowance: retrying is the page's next step.
-		for _, k := range hits {
-			s.magicLimit.unhit(k)
+		for _, id := range hits {
+			if err := s.magicLimit.unhit(ctx, id); err != nil {
+				s.log.Warn("magic_unhit_failed", zap.Error(err))
+			}
 		}
 	}
 	switch {
@@ -330,7 +374,7 @@ func (s *Server) bindEmail(w http.ResponseWriter, r *http.Request) {
 // (011-AC28).
 func (s *Server) emailSignIn(w http.ResponseWriter, r *http.Request) {
 	email, _, ok := s.emailRequest(w, r, func() bool {
-		d := s.mailFailingFor()
+		d := s.mailFailingFor(r.Context())
 		if d == 0 {
 			return true
 		}
@@ -404,12 +448,12 @@ func (s *Server) mailLink(ctx context.Context, profileID int64, email, purpose s
 			return errAddressRejected
 		}
 		if purpose == store.MagicBind {
-			s.mailFailedAt.Store(s.now().UnixMilli())
+			s.setMailFailure(ctx, s.now().UnixMilli())
 		}
 		return errMailFailed
 	}
 	if purpose == store.MagicBind {
-		s.mailFailedAt.Store(0)
+		s.setMailFailure(ctx, 0)
 	}
 	s.log.Info("magic_link_sent", zap.Int64("profile", profileID), zap.String("purpose", purpose))
 	return nil
@@ -523,68 +567,94 @@ func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// limiter counts events per key in a sliding window. In memory: the room server runs one replica.
-type limiter struct {
-	mu     sync.Mutex
-	window time.Duration
-	hits   map[string][]time.Time
+// rateScopeCap bounds a limiter's events in its window, every key together: past it the limiter
+// refuses everyone rather than let a flood of distinct keys grow the table.
+const rateScopeCap = 100_000
+
+// rateKeySetting is the settings row holding the instance's secret for rate limit keys.
+const rateKeySetting = "rate_key_secret"
+
+// rateKeys turns limiter keys into what rate_events stores: an HMAC under the instance's secret, so
+// the table alone gives no address nor IP back; a dump holding settings too does, by guessing.
+type rateKeys struct {
+	st  *store.Store
+	mu  sync.Mutex
+	key []byte
 }
 
-func newLimiter(_ *store.Store, _ string, window time.Duration) limiter {
-	return limiter{window: window}
-}
-
-// allow records an event for key and reports whether it is within max per window.
-func (l *limiter) allow(key string, maxHits int, now time.Time) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.hits == nil {
-		l.hits = map[string][]time.Time{}
-	}
-	// Sweep idle keys once the map grows, so a flood of addresses cannot grow it without bound.
-	if len(l.hits) > 4096 {
-		for k, ts := range l.hits {
-			if now.Sub(ts[len(ts)-1]) >= l.window {
-				delete(l.hits, k)
-			}
+func (k *rateKeys) hash(ctx context.Context, key string) (string, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.key == nil {
+		secret := make([]byte, 32)
+		_, _ = rand.Read(secret) // crypto/rand never fails on supported platforms
+		v, err := k.st.SettingOrInit(ctx, rateKeySetting, hex.EncodeToString(secret))
+		if err != nil {
+			return "", fmt.Errorf("rate key secret: %w", err)
 		}
+		k.key = []byte(v)
 	}
-	ts := l.hits[key]
-	i := 0
-	for i < len(ts) && now.Sub(ts[i]) >= l.window {
-		i++
-	}
-	ts = ts[i:]
-	if len(ts) >= maxHits {
-		l.hits[key] = ts
-		return false
-	}
-	l.hits[key] = append(ts, now)
-	return true
+	m := hmac.New(sha256.New, k.key)
+	m.Write([]byte(key))
+	return hex.EncodeToString(m.Sum(nil)), nil
 }
 
-// retryIn returns how long until key's oldest event leaves the window, 0 if key has none.
-func (l *limiter) retryIn(key string, now time.Time) time.Duration {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if ts := l.hits[key]; len(ts) > 0 {
-		return max(l.window-now.Sub(ts[0]), 0)
+// rateIP is the part of a client IP a limiter counts by: an IPv6 client holds its whole /64.
+func rateIP(ip string) string {
+	a, err := netip.ParseAddr(ip)
+	if err != nil || a.Is4() {
+		return ip
 	}
-	return 0
+	p, _ := a.Prefix(64) // a valid IPv6 address takes any prefix up to 128
+	return p.String()
 }
 
-// unhit forgets key's newest event.
-func (l *limiter) unhit(key string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if ts := l.hits[key]; len(ts) > 0 {
-		l.hits[key] = ts[:len(ts)-1]
-	}
+// limiter counts events per key in a sliding window, in the database, so the limits hold for
+// every pod together.
+type limiter struct {
+	keys   *rateKeys
+	scope  string
+	window time.Duration
+	log    *zap.Logger
+	// scopeCap is rateScopeCap, but in tests; full is set while the scope is at it, so that is
+	// logged once.
+	scopeCap int
+	full     *atomic.Bool
 }
+
+func newLimiter(keys *rateKeys, scope string, window time.Duration, log *zap.Logger) limiter {
+	return limiter{keys: keys, scope: scope, window: window, log: log, scopeCap: rateScopeCap, full: new(atomic.Bool)}
+}
+
+// allow records an event for key unless maxHits are already in the window, or the scope is full.
+// It returns the event's id, or 0 and how long until the oldest event leaves the window.
+func (l limiter) allow(ctx context.Context, key string, maxHits int, now time.Time) (int64, time.Duration, error) {
+	hash, err := l.keys.hash(ctx, key)
+	if err != nil {
+		return 0, 0, err
+	}
+	id, oldest, err := l.keys.st.RateHit(ctx, l.scope, hash, maxHits, l.scopeCap, now.Add(-l.window).UnixMilli(), now.UnixMilli())
+	if errors.Is(err, store.ErrRateFull) {
+		if !l.full.Swap(true) {
+			l.log.Warn("rate_limit_full", zap.String("scope", l.scope), zap.Int("cap", l.scopeCap))
+		}
+		return 0, l.window, nil
+	}
+	if err != nil || id == 0 {
+		return id, max(time.UnixMilli(oldest).Add(l.window).Sub(now), 0), err
+	}
+	l.full.Store(false)
+	return id, 0, nil
+}
+
+// unhit forgets the event id.
+func (l limiter) unhit(ctx context.Context, id int64) error { return l.keys.st.RateUnhit(ctx, id) }
 
 // reset forgets key's events.
-func (l *limiter) reset(key string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	delete(l.hits, key)
+func (l limiter) reset(ctx context.Context, key string) error {
+	hash, err := l.keys.hash(ctx, key)
+	if err != nil {
+		return err
+	}
+	return l.keys.st.RateReset(ctx, l.scope, hash)
 }

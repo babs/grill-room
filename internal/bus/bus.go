@@ -5,7 +5,6 @@ package bus
 
 import (
 	"context"
-	"crypto/rand"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,7 +33,8 @@ type Bus struct {
 	// OnListenError, when set before Run, learns why each LISTEN connection ended.
 	OnListenError func(error)
 
-	// pod tells this bus's notifications apart from other pods', so it drops its own echoes.
+	// pod is the replica's identity: it tells this bus's notifications apart from other pods', so
+	// it drops its own echoes.
 	pod string
 
 	mu   sync.Mutex
@@ -47,10 +47,14 @@ type Bus struct {
 	sent, received, reconnects, listenErrs atomic.Uint64
 }
 
-// New wraps a store.
-func New(s *store.Store) *Bus {
-	return &Bus{Store: s, pod: rand.Text()[:12], subs: map[chan string]struct{}{}, kick: make(chan struct{}, 1)}
+// New wraps a store for the replica named pod, unique among the replicas sharing the database and
+// free of spaces.
+func New(s *store.Store, pod string) *Bus {
+	return &Bus{Store: s, pod: pod, subs: map[chan string]struct{}{}, kick: make(chan struct{}, 1)}
 }
+
+// Pod is the replica's identity New was given.
+func (b *Bus) Pod() string { return b.pod }
 
 // Post persists m then wakes subscribers. m.ID and m.TS are filled in.
 func (b *Bus) Post(ctx context.Context, m *store.Message) error {

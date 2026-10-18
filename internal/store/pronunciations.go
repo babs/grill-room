@@ -68,6 +68,9 @@ func (s *Store) AddPronunciation(ctx context.Context, t voicecat.Term, by string
 		if err != nil {
 			return termErr(err)
 		}
+		if err := bumpLexicon(ctx, tx); err != nil {
+			return err
+		}
 		return auditTx(ctx, tx, strconv.FormatInt(p.ID, 10), map[string]any{"entry": t})
 	})
 	return p, err
@@ -93,6 +96,9 @@ func (s *Store) UpdatePronunciation(ctx context.Context, id int64, t voicecat.Te
 			t.Term, t.Style, t.FrEn, t.FrFr, t.En, by, p.At, id); err != nil {
 			return termErr(err)
 		}
+		if err := bumpLexicon(ctx, tx); err != nil {
+			return err
+		}
 		return auditTx(ctx, tx, "", map[string]any{"from": old, "to": t})
 	})
 	return p, err
@@ -104,8 +110,24 @@ func (s *Store) DeletePronunciation(ctx context.Context, id int64) error {
 		if err := auditTx(ctx, tx, "", nil); err != nil {
 			return err
 		}
-		return execOne(ctx, tx, `DELETE FROM pronunciations WHERE id = ?`, id)
+		if err := execOne(ctx, tx, `DELETE FROM pronunciations WHERE id = ?`, id); err != nil {
+			return err
+		}
+		return bumpLexicon(ctx, tx)
 	})
+}
+
+// LexiconVersionKey is the settings key counting the lexicon's changes (013-AC31).
+const LexiconVersionKey = "lexicon_version"
+
+// bumpLexicon counts a lexicon change in its transaction: every pod's TTS stream compares it with
+// the version it sent (013-AC31).
+func bumpLexicon(ctx context.Context, tx *txn) error {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO settings (key, value) VALUES (?, '1')
+		ON CONFLICT (key) DO UPDATE SET value = CAST(CAST(settings.value AS BIGINT) + 1 AS TEXT)`, LexiconVersionKey); err != nil {
+		return fmt.Errorf("lexicon version: %w", err)
+	}
+	return nil
 }
 
 // termFree is ErrTermTaken when another entry than id has term, ignoring case beyond ASCII, which

@@ -2,8 +2,10 @@ package web
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -53,6 +55,13 @@ func (c *clock) add(d time.Duration) {
 func (e *env) clock() *clock {
 	c := &clock{t: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)}
 	e.srv.now = c.now
+	return c
+}
+
+// leaseClock is clock driving the lease clock too: presence, workers and the TTS pod lapse on it.
+func (e *env) leaseClock() *clock {
+	c := e.clock()
+	e.srv.lease = c.now
 	return c
 }
 
@@ -626,5 +635,69 @@ func TestAuditActionsComplete(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// An IPv6 client counts by its /64: rotating the low bits buys no more logins; the next /64 is
+// another client.
+func TestAdminLoginLimitIPv6Prefix(t *testing.T) {
+	e := newEnv(t)
+	d := e.device(t)
+	for i := range loginAttempts {
+		if code, _ := d.login(t, "guess", "2001:db8:1:2::"+strconv.Itoa(i+1)); code != http.StatusUnauthorized {
+			t.Fatalf("guess %d: %d", i, code)
+		}
+	}
+	if code, _ := d.login(t, "guess", "2001:db8:1:2:ffff::1"); code != http.StatusTooManyRequests {
+		t.Fatalf("same /64 past the limit: %d", code)
+	}
+	if code, _ := d.login(t, "guess", "2001:db8:1:3::1"); code != http.StatusUnauthorized {
+		t.Fatalf("next /64: %d", code)
+	}
+}
+
+// rate_events holds an HMAC of the key under the instance's secret, not a plain hash anyone can
+// recompute from a guessed IP.
+func TestRateKeysKeyed(t *testing.T) {
+	e := newEnv(t)
+	if code, _ := e.device(t).login(t, "guess", "203.0.113.9"); code != http.StatusUnauthorized {
+		t.Fatalf("login: %d", code)
+	}
+	db := e.sqlDB(t)
+	var stored, secret string
+	if err := db.QueryRowContext(t.Context(), `SELECT key_hash FROM rate_events`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(t.Context(), `SELECT value FROM settings WHERE key = $1`, rateKeySetting).Scan(&secret); err != nil {
+		t.Fatal(err)
+	}
+	if len(secret) != 64 {
+		t.Fatalf("secret of %d hex digits, want 64", len(secret))
+	}
+	m := hmac.New(sha256.New, []byte(secret))
+	m.Write([]byte("ip:203.0.113.9"))
+	if stored == HashToken("ip:203.0.113.9") || stored != hex.EncodeToString(m.Sum(nil)) {
+		t.Fatalf("stored key %s is not the HMAC of the key", stored)
+	}
+}
+
+// A scope holding its cap of events refuses every client, logging it once, until a hit passes.
+func TestRateScopeFull(t *testing.T) {
+	core, logs := observer.New(zap.WarnLevel)
+	e := newEnvLog(t, testOptions, zap.New(core))
+	e.srv.loginLimit.scopeCap = 2
+	d := e.device(t)
+	for _, ip := range []string{"203.0.113.1", "203.0.113.2"} {
+		if code, _ := d.login(t, "guess", ip); code != http.StatusUnauthorized {
+			t.Fatalf("%s: %d", ip, code)
+		}
+	}
+	for _, ip := range []string{"203.0.113.3", "203.0.113.4"} {
+		if code, _ := d.login(t, e.admin, ip); code != http.StatusTooManyRequests {
+			t.Fatalf("%s past the scope cap: %d", ip, code)
+		}
+	}
+	if n := logs.FilterMessage("rate_limit_full").Len(); n != 1 {
+		t.Fatalf("rate_limit_full logged %d times, want once", n)
 	}
 }

@@ -121,12 +121,13 @@ func TestTTSDemand(t *testing.T) {
 	var clock atomic.Int64
 	clock.Store(time.Now().UnixNano())
 	e.srv.now = func() time.Time { return time.Unix(0, clock.Load()) }
+	e.srv.lease = e.srv.now
 	r := newTurnRoom(t, e)
-	if n := e.srv.TTSDemand(); n != 0 {
+	if n := e.srv.ttsDemand(); n != 0 {
 		t.Fatalf("nobody here: %d", n)
 	}
 	_, closeRoom := e.openStream(t, "/api/rooms/"+r.room+"/events?tab=alice-1", r.alice.p.Token, "")
-	if n := e.srv.TTSDemand(); n != 1 {
+	if n := e.srv.ttsDemand(); n != 1 {
 		t.Fatalf("the room open, nobody in the audio: %d", n)
 	}
 	// 013-AC15: the bots still join only rooms with a listener.
@@ -134,7 +135,7 @@ func TestTTSDemand(t *testing.T) {
 		t.Fatalf("roster with nobody in the audio: %+v", rs)
 	}
 	e.inAudio(t, r.room, r.alice.p, true)
-	if n := e.srv.TTSDemand(); n != 1 {
+	if n := e.srv.ttsDemand(); n != 1 {
 		t.Fatalf("a deafened listener: %d", n)
 	}
 	closeRoom()
@@ -142,9 +143,9 @@ func TestTTSDemand(t *testing.T) {
 		t.Fatalf("gone: %d %s", code, b)
 	}
 	// Past the presence grace, once the stream is released.
-	waitFor(t, func() bool { clock.Add(int64(presenceGrace + time.Second)); return e.srv.TTSDemand() == 0 })
+	waitFor(t, func() bool { clock.Add(int64(presenceGrace + time.Second)); return e.srv.ttsDemand() == 0 })
 	e.inAudio(t, r.room, r.alice.p, false)
-	if n := e.srv.TTSDemand(); n != 1 {
+	if n := e.srv.ttsDemand(); n != 1 {
 		t.Fatalf("a listener: %d", n)
 	}
 	if rs := e.srv.ttsRoster(t.Context()); len(rs) != 1 || rs[0].Room != r.room {
@@ -153,7 +154,7 @@ func TestTTSDemand(t *testing.T) {
 	if code, b := e.do(t, "PATCH", "/api/rooms/"+r.room+"/personas/"+strconv.FormatInt(r.grill.ID, 10), r.alice.p.Token, map[string]bool{"speaks": false}); code != http.StatusOK {
 		t.Fatalf("speaks off: %d %s", code, b)
 	}
-	if n := e.srv.TTSDemand(); n != 0 {
+	if n := e.srv.ttsDemand(); n != 0 {
 		t.Fatalf("no persona speaks: %d", n)
 	}
 }

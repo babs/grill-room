@@ -47,11 +47,10 @@ type txn struct {
 // errUnlockedWrite refuses a write unlocked may not run: it would commit out of id order.
 var errUnlockedWrite = errors.New("write outside the write lock to a table not in unlockedWrites")
 
-// unlockedWrites are the tables a transaction of unlocked may write, by table then verb ("" for
-// every verb): no id cursor reads them, and rate_events only loses rows past every window.
-var unlockedWrites = map[string]string{
-	"presence": "", "daemon_connections": "", "daemon_status": "", "stt_workers": "", "tts_pod": "", "pairings": "", "settings": "",
-	"rate_events": "DELETE",
+// unlockedWrites are the tables a transaction of unlocked may write: no id cursor reads them.
+var unlockedWrites = map[string]bool{
+	"presence": true, "daemon_connections": true, "daemon_status": true, "stt_workers": true, "tts_pod": true, "pairings": true,
+	"settings": true, "rate_events": true,
 }
 
 // check refuses a statement of a shared transaction that writes outside unlockedWrites.
@@ -59,7 +58,7 @@ func (t *txn) check(c compiled) error {
 	if !t.shared || !c.write {
 		return nil
 	}
-	if verb, ok := unlockedWrites[c.table]; ok && (verb == "" || verb == c.verb) {
+	if unlockedWrites[c.table] {
 		return nil
 	}
 	return errUnlockedWrite
@@ -88,12 +87,12 @@ func (r *row) Err() error {
 	return r.r.Err()
 }
 
-// compiled is a query rebound for PostgreSQL, whether it writes, and the verb and table of a
-// plain INSERT, UPDATE or DELETE, empty for any other statement.
+// compiled is a query rebound for PostgreSQL, whether it writes, and the table of a plain INSERT,
+// UPDATE or DELETE, empty for any other statement.
 type compiled struct {
-	q           string
-	write       bool
-	verb, table string
+	q     string
+	write bool
+	table string
 }
 
 // ponytail: unbounded, but keyed by query text, and the package builds a finite set of them.
@@ -104,7 +103,7 @@ func compile(query string) compiled {
 		return v.(compiled)
 	}
 	c := compiled{q: rebind(query), write: isWrite(query)}
-	c.verb, c.table = target(query)
+	_, c.table = target(query)
 	compiledQueries.Store(query, c)
 	return c
 }
@@ -211,9 +210,31 @@ func (d *database) locked(ctx context.Context, fn func(t *txn) error) error {
 	return t.Commit()
 }
 
+// unlockedTries bounds the runs of an unlocked transaction PostgreSQL aborted to break a deadlock.
+const unlockedTries = 3
+
 // unlocked runs fn in a transaction without the write lock, for writes to the tables no id cursor
-// reads, so they need no commit order; it refuses any other write.
+// reads, so they need no commit order; it refuses any other write. Without the global lock, row
+// locks can deadlock: a transaction PostgreSQL aborted for that runs again, so fn must be safe to
+// rerun.
 func (d *database) unlocked(ctx context.Context, fn func(t *txn) error) error {
+	var err error
+	for range unlockedTries {
+		if err = d.unlockedOnce(ctx, fn); !retryable(err) {
+			return err
+		}
+	}
+	return err
+}
+
+// retryable reports a deadlock (SQLSTATE 40P01) or a serialization failure (40001): the
+// transaction did nothing and may run again.
+func retryable(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && (pg.Code == "40P01" || pg.Code == "40001")
+}
+
+func (d *database) unlockedOnce(ctx context.Context, fn func(t *txn) error) error {
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

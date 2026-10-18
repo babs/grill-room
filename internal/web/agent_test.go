@@ -535,6 +535,8 @@ func TestTurnFailures(t *testing.T) {
 	e.press(t, r, bob, bob.p.Token, false)
 	p := e.requestPairing(t, r.room, "bob-new")
 	e.do(t, "POST", "/api/rooms/"+r.room+"/pairings/"+p.ID, bob.p.Token, map[string]bool{"approve": true})
+	// The new daemon's poll pairs it: the old token stops there.
+	e.poll(t, p)
 	if last, _ := e.st.LastTurn(t.Context(), r.room); last.Status != store.TurnFailed || last.Error != "the host daemon was paired again" {
 		t.Fatalf("after re-pairing %+v", last)
 	}

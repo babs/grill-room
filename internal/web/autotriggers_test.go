@@ -203,10 +203,12 @@ func TestRunTimers(t *testing.T) {
 	r := newTurnRoom(t, e)
 	tok := r.alice.p.Token
 	sec := e.secretary(t, r, tok, map[string]any{"every_minutes": 1})
+	// Before the stream: an open stream renews its tab on the real clock, so a jump past the
+	// presence grace after it opens would drop the participant.
+	c.set(time.Now().Add(2 * time.Minute))
 	e.openEvents(t, r.room, tok, "")
 	e.waitPresent(t, r.alice.p.Participant.ID)
 	e.postBody(t, r, tok, "news")
-	c.set(time.Now().Add(2 * time.Minute))
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() { e.srv.RunTimers(ctx); close(done) }()

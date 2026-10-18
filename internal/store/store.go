@@ -57,6 +57,9 @@ type Room struct {
 	EgressAdmins bool `json:"egress_admins_allow"`
 	// Speech is how personas take turns in the call (013-AC25).
 	Speech Speech `json:"speech"`
+	// HostMovedLine is the chat line of the latest move of the AI host role by someone other than
+	// the previous host, "" since the host moved on its own (009-AC34). Only that host's page shows it.
+	HostMovedLine string `json:"-"`
 }
 
 // Speech is a room's call settings for its personas' voices (013-AC25): the quiet before a persona
@@ -237,6 +240,7 @@ CREATE UNLOGGED TABLE pairings (
 	code TEXT NOT NULL,
 	secret_hash TEXT NOT NULL,
 	status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'denied')),
+	approved_by BIGINT REFERENCES participants(id) ON DELETE CASCADE,
 	expires_at_ms BIGINT NOT NULL);
 CREATE INDEX pairings_room ON pairings(room_id);
 CREATE TABLE tts_lines (
@@ -399,6 +403,9 @@ func CreateBaseline(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
+// LockTimeout is how long a write, or a wait for a room lock, waits for its lock before it fails.
+func (s *Store) LockTimeout() time.Duration { return s.db.lockTimeout }
+
 // Close releases the database.
 func (s *Store) Close() error { return s.db.Close() }
 
@@ -511,9 +518,9 @@ func (s *Store) Room(ctx context.Context, id string) (*Room, error) {
 	var created string
 	var from sql.NullString
 	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at, COALESCE(host_participant_id, 0), chain_budget, chain_count, chain_suspended, parallel_turns,
-		created_from, egress_admins_allow, voice_quiet_ms, voice_resume_s, voice_queue_s, voice_words FROM rooms WHERE id = ?`, id).Scan(&r.ID, &r.Name, &created,
+		created_from, egress_admins_allow, voice_quiet_ms, voice_resume_s, voice_queue_s, voice_words, host_moved_line FROM rooms WHERE id = ?`, id).Scan(&r.ID, &r.Name, &created,
 		&r.HostParticipantID, &r.Chain.Budget, &r.Chain.Count, &r.Chain.Suspended, &r.ParallelTurns, &from, &r.EgressAdmins,
-		&r.Speech.QuietMS, &r.Speech.ResumeS, &r.Speech.QueueS, &r.Speech.Words)
+		&r.Speech.QuietMS, &r.Speech.ResumeS, &r.Speech.QueueS, &r.Speech.Words, &r.HostMovedLine)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

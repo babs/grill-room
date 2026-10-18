@@ -7,23 +7,64 @@ import (
 	"go.uber.org/zap"
 )
 
-// sharedSweepEvery is how often SweepShared drops the expired shared state.
-const sharedSweepEvery = time.Minute
+// gaugeEvery is how often SweepShared computes the gauges /metrics reads.
+const gaugeEvery = 15 * time.Second
 
-// SweepShared deletes the shared state whose lease ended, and the rate events past every limiter
-// window, every minute until ctx ends. Every pod runs it: the sweep is idempotent.
+// sharedSweepEvery is how often SweepShared drops the expired shared state. A var for tests.
+var sharedSweepEvery = time.Minute
+
+// SweepShared deletes the shared state whose lease ended, the rate events past every limiter
+// window and the TTS lines the TTS service never took, every minute, and refreshes the gauges,
+// until ctx ends. Every pod runs it: the sweep is idempotent.
 func (s *Server) SweepShared(ctx context.Context) {
-	tick := time.NewTicker(sharedSweepEvery)
-	defer tick.Stop()
+	sweep := time.NewTicker(sharedSweepEvery)
+	defer sweep.Stop()
+	gauges := time.NewTicker(gaugeEvery)
+	defer gauges.Stop()
+	s.refreshGauges()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-tick.C:
-		}
-		now := s.now()
-		if err := s.bus.Store.SweepExpired(ctx, now.UnixMilli(), now.Add(-max(magicWindow, loginWindow)).UnixMilli()); err != nil && ctx.Err() == nil {
-			s.log.Warn("shared_sweep_failed", zap.Error(err))
+		case <-sweep.C:
+			s.sweepShared(ctx)
+		case <-gauges.C:
+			s.refreshGauges()
 		}
 	}
+}
+
+func (s *Server) sweepShared(ctx context.Context) {
+	// ponytail: one cutoff, the longest limiter window, for every rate scope; per-scope cutoffs if
+	// rate_events grows large.
+	gone, err := s.bus.Store.SweepExpired(ctx, s.lease().UnixMilli(), s.now().Add(-max(magicWindow, loginWindow)).UnixMilli())
+	if err != nil && ctx.Err() == nil {
+		s.log.Warn("shared_sweep_failed", zap.Error(err))
+	}
+	// Their pod died with their streams: nobody else ends their turns.
+	for _, d := range gone {
+		s.log.Info("daemon_lease_lapsed", zap.String("room", d.RoomID), zap.Int64("daemon", d.ID))
+		s.daemonGone(ctx, &d)
+	}
+	if s.tts == nil {
+		return
+	}
+	n, err := s.bus.Store.SweepTTSLines(ctx, s.now().UnixMilli())
+	if err != nil && ctx.Err() == nil {
+		s.log.Warn("tts_sweep_failed", zap.Error(err))
+	}
+	s.tts.noService.Add(n)
+}
+
+// refreshGauges computes the gauges from the store.
+func (s *Server) refreshGauges() {
+	now := s.lease()
+	s.gauges.sttWorkers.Store(int64(len(s.stt.live(now))))
+	s.gauges.deviceSTT.Store(int64(s.people.deviceCount(now)))
+	if s.tts == nil {
+		return
+	}
+	s.gauges.ttsDemand.Store(int64(s.ttsDemand()))
+	p, _ := s.ttsPod()
+	s.gauges.ttsPodUp.Store(beating(p, now))
 }

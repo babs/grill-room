@@ -2,6 +2,7 @@ package bus
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ func TestPostPersistsAndNotifies(t *testing.T) {
 	if _, err := st.CreateRoom(ctx, "r", "R"); err != nil {
 		t.Fatal(err)
 	}
-	b := New(st)
+	b := New(st, rand.Text())
 	ch, cancel := b.Subscribe(1)
 	defer cancel()
 	m := &store.Message{RoomID: "r", Kind: store.KindSystem, Sender: "x", Body: "hi"}
@@ -39,7 +40,7 @@ func TestPostPersistsAndNotifies(t *testing.T) {
 }
 
 func TestFullSubscriberDropsAndCancelUnsubscribes(t *testing.T) {
-	b := New(nil)
+	b := New(nil, "p")
 	ch, cancel := b.Subscribe(1)
 	b.Notify("a")
 	b.Notify("b") // buffer full
@@ -69,7 +70,7 @@ func startPod(t *testing.T, dsn string, onErr ...func(error)) pod {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := New(st)
+	b := New(st, rand.Text())
 	if len(onErr) > 0 {
 		b.OnListenError = onErr[0]
 	}
@@ -168,7 +169,7 @@ func TestListenReconnectWakesAll(t *testing.T) {
 
 // Without Run, a bus wakes its own subscribers only and sends nothing.
 func TestNotifyWithoutRun(t *testing.T) {
-	b := New(nil)
+	b := New(nil, "p")
 	ch, cancel := b.Subscribe(1)
 	defer cancel()
 	b.Notify("r")

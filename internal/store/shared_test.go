@@ -4,8 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -238,8 +242,30 @@ func TestSweepExpired(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// gone never connected; stale's only connection expired: the sweep drops both statuses.
+	var gone, stale *Daemon
+	for _, x := range []struct {
+		d    **Daemon
+		name string
+	}{{&gone, "gone"}, {&stale, "stale"}} {
+		q, _, err := s.Join(ctx, "inv-r", x.name, "tok-"+x.name, JoinProfile{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if *x.d, err = s.PairDaemon(ctx, "r", q.ID, "dmn-"+x.name); err != nil {
+			t.Fatal(err)
+		}
+	}
 	const now, cutoff = int64(10_000), int64(5_000)
 	err = s.db.unlocked(ctx, func(tx *txn) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO daemon_connections(id, daemon_id, room_id, pod, connected_at_ms, expires_at_ms) VALUES('stale', ?, 'r', 'p', 0, ?)`, stale.ID, now); err != nil {
+			return err
+		}
+		for _, id := range []int64{d.ID, gone.ID, stale.ID} {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO daemon_status(daemon_id) VALUES(?)`, id); err != nil {
+				return err
+			}
+		}
 		for _, at := range []int64{now, now + 1} {
 			id := strconv.FormatInt(at, 10)
 			for _, q := range []struct {
@@ -266,8 +292,20 @@ func TestSweepExpired(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := s.SweepExpired(ctx, now, cutoff); err != nil {
+	left, err := s.SweepExpired(ctx, now, cutoff)
+	if err != nil {
 		t.Fatal(err)
+	}
+	// Only stale lost its last live connection: d keeps one, gone had none to lose.
+	if len(left) != 1 || left[0].ID != stale.ID || left[0].RoomID != "r" || left[0].ParticipantID != stale.ParticipantID {
+		t.Errorf("gone daemons = %+v, want only %d", left, stale.ID)
+	}
+	if again, err := s.SweepExpired(ctx, now, cutoff); err != nil || len(again) != 0 {
+		t.Errorf("second sweep: %+v %v", again, err)
+	}
+	var n, kept int64
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*), max(daemon_id) FROM daemon_status`).Scan(&n, &kept); err != nil || n != 1 || kept != d.ID {
+		t.Errorf("daemon_status: %d rows, left %d, %v; want only %d", n, kept, err, d.ID)
 	}
 	for table, want := range map[string]int64{"presence": now + 1, "daemon_connections": now + 1, "stt_workers": now + 1, "pairings": now + 1, "rate_events": cutoff} {
 		col := "expires_at_ms"
@@ -297,7 +335,6 @@ func TestUnlockedRefusesOtherWrites(t *testing.T) {
 		`INSERT INTO messages(room_id, ts, kind, sender, body) VALUES('r', '', 'text', 'x', 'y')`,
 		`insert into "messages" select * from messages`,
 		`UPDATE rooms SET name = 'x'`,
-		`INSERT INTO rate_events(scope, key_hash, at_ms) VALUES('login', 'k', 1)`,
 		`WITH x AS (DELETE FROM presence RETURNING 1) DELETE FROM messages`,
 		`/* INSERT INTO presence */ DELETE FROM messages`,
 		`UPDATE "rooms" presence SET name = 'x'`,
@@ -326,6 +363,7 @@ func TestUnlockedRefusesOtherWrites(t *testing.T) {
 	}
 	for _, q := range []string{
 		`DELETE FROM rate_events`,
+		`INSERT INTO rate_events(scope, key_hash, at_ms) VALUES('login', 'k', 1)`,
 		`UPDATE tts_pod SET pod = 'x'`,
 		`INSERT INTO settings(key, value) VALUES('mail_failed_at', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 		`SELECT count(*) FROM messages`,
@@ -393,5 +431,213 @@ func TestListenSurvivesPing(t *testing.T) {
 	<-done
 	if len(ready) != 0 {
 		t.Fatal("listen connected again")
+	}
+}
+
+// The conditional inserts behind the pairing, tab and STT worker caps admit exactly the cap when
+// requests race from two stores (pods) at once.
+func TestCapsExactUnderConcurrency(t *testing.T) {
+	dsn := testDSN(t)
+	pods := []*Store{openAt(t, dsn), openAt(t, dsn)}
+	ctx := t.Context()
+	if _, err := pods[0].CreateRoom(ctx, "r", "R"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pods[0].CreateInvite(ctx, "r", "inv-r", 0); err != nil {
+		t.Fatal(err)
+	}
+	p, _, err := pods[0].Join(ctx, "inv-r", "Alice", "tok-a", JoinProfile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, _, err := pods[0].Join(ctx, "inv-r", "Bob", "tok-b", JoinProfile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const capN, tries, now = 3, 20, int64(1_000_000)
+	at := PresenceTimes{Now: now, Grace: 20_000, Forget: 3_600_000, Lapse: 3_000}
+	for name, try := range map[string]func(st *Store, i int) (bool, error){
+		"pairings": func(st *Store, i int) (bool, error) {
+			return st.CreatePairing(ctx, &Pairing{ID: fmt.Sprint("p", i), RoomID: "r", ExpiresAt: time.UnixMilli(now + 60_000)}, capN, 100, now)
+		},
+		"tabs": func(st *Store, i int) (bool, error) {
+			return st.PresenceBeat(ctx, "r", p.ID, fmt.Sprint("t", i), TabState{}, false, capN, at)
+		},
+		"device tabs": func(st *Store, i int) (bool, error) {
+			return st.PresenceDevice(ctx, "r", q.ID, fmt.Sprint("d", i), true, capN, at)
+		},
+		"stt workers": func(st *Store, i int) (bool, error) {
+			return st.BeatSTTWorker(ctx, STTWorker{Name: fmt.Sprint("w", i), ExpiresMS: now + 60_000}, capN, now)
+		},
+	} {
+		var wg sync.WaitGroup
+		var passed atomic.Int32
+		for i := range tries {
+			wg.Go(func() {
+				ok, err := try(pods[i%2], i)
+				if err != nil {
+					t.Error(err)
+				}
+				if ok {
+					passed.Add(1)
+				}
+			})
+		}
+		wg.Wait()
+		if n := passed.Load(); n != capN {
+			t.Errorf("%s: %d of %d racing inserts passed a cap of %d", name, n, tries, capN)
+		}
+	}
+}
+
+// Two unlocked transactions taking two rows in opposite orders deadlock: PostgreSQL aborts one,
+// which runs again and commits.
+func TestUnlockedRetriesDeadlock(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	for _, k := range []string{"dl-a", "dl-b"} {
+		if err := s.SetSetting(ctx, k, "0"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var both sync.WaitGroup
+	both.Add(2)
+	var runs atomic.Int32
+	write := func(first, second string) error {
+		var once sync.Once
+		return s.db.unlocked(ctx, func(tx *txn) error {
+			runs.Add(1)
+			if _, err := tx.ExecContext(ctx, `UPDATE settings SET value = ? WHERE key = ?`, first, first); err != nil {
+				return err
+			}
+			// Each holds its first row before either asks for its second.
+			once.Do(func() { both.Done(); both.Wait() })
+			_, err := tx.ExecContext(ctx, `UPDATE settings SET value = ? WHERE key = ?`, first, second)
+			return err
+		})
+	}
+	errs := make(chan error, 2)
+	go func() { errs <- write("dl-a", "dl-b") }()
+	go func() { errs <- write("dl-b", "dl-a") }()
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("a deadlocked transaction failed: %v", err)
+		}
+	}
+	if n := runs.Load(); n != 3 {
+		t.Errorf("%d runs, want 3: one deadlock victim run again", n)
+	}
+}
+
+// unlocked runs again only a transaction PostgreSQL aborted for a deadlock or a serialization
+// failure, at most unlockedTries times.
+func TestUnlockedRetryBounds(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	for _, c := range []struct {
+		err  error
+		runs int
+	}{
+		{&pgconn.PgError{Code: "40P01"}, unlockedTries},
+		{fmt.Errorf("wrapped: %w", &pgconn.PgError{Code: "40001"}), unlockedTries},
+		{&pgconn.PgError{Code: "23505"}, 1},
+		{errors.New("plain"), 1},
+	} {
+		runs := 0
+		err := s.db.unlocked(ctx, func(*txn) error { runs++; return c.err })
+		if !errors.Is(err, c.err) || runs != c.runs {
+			t.Errorf("%v: %d runs, returned %v; want %d runs", c.err, runs, err, c.runs)
+		}
+	}
+}
+
+// The sweep deletes expired presence past one batch, and keeps the live rows.
+func TestSweepPresenceBatches(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	p := seed(t, s, "a")
+	const now = int64(10_000)
+	err := s.db.unlocked(ctx, func(tx *txn) error {
+		_, err := tx.ExecContext(ctx, `INSERT INTO presence(room_id, participant_id, tab, expires_at_ms)
+			SELECT 'a', ?, 't' || i, CASE WHEN i % 10 = 0 THEN ? + 1 ELSE ? END FROM generate_series(1, ?) i`, p.ID, now, now, 2*sweepBatch+5)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SweepExpired(ctx, now, 0); err != nil {
+		t.Fatal(err)
+	}
+	var left, live int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*), count(*) FILTER (WHERE expires_at_ms > ?) FROM presence`, now).Scan(&left, &live); err != nil {
+		t.Fatal(err)
+	}
+	if left != (2*sweepBatch+5)/10 || live != left {
+		t.Errorf("%d rows left, %d live; want the %d live ones alone", left, live, (2*sweepBatch+5)/10)
+	}
+}
+
+// Every shared-state call fails with its own context once the database is gone: the callers log
+// or answer 500 with it.
+func TestSharedStateErrors(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	_ = s.Close()
+	at := presenceTimes(1)
+	d := &Daemon{ID: 1, RoomID: "r"}
+	for want, call := range map[string]func() error{
+		"presence open":           func() error { return s.PresenceOpen(ctx, "r", 1, "t", at) },
+		"presence release":        func() error { return s.PresenceRelease(ctx, "r", 1, "t", at) },
+		"presence beat":           func() error { _, err := s.PresenceBeat(ctx, "r", 1, "t", TabState{}, false, 1, at); return err },
+		"presence device":         func() error { _, err := s.PresenceDevice(ctx, "r", 1, "t", true, 1, at); return err },
+		"presence:":               func() error { _, err := s.Presence(ctx, "r", 1); return err },
+		"stt worker:":             func() error { _, err := s.BeatSTTWorker(ctx, STTWorker{Name: "w"}, 1, 1); return err },
+		"stt workers:":            func() error { _, err := s.STTWorkers(ctx, 1); return err },
+		"daemon connected":        func() error { return s.DaemonConnected(ctx, "c", d, "p", 1, 2) },
+		"daemon disconnected":     func() error { _, err := s.DaemonDisconnected(ctx, "c", 1, 1); return err },
+		"drop daemon connections": func() error { return s.DropDaemonConnections(ctx, 1) },
+		"set daemon status":       func() error { _, err := s.SetDaemonStatus(ctx, 1, DaemonStatus{}); return err },
+		"live daemons":            func() error { _, err := s.LiveDaemons(ctx, "r", 1); return err },
+		"elect host":              func() error { _, err := s.ElectHost(ctx, "r", 1); return err },
+		"create pairing":          func() error { _, err := s.CreatePairing(ctx, &Pairing{ID: "p", RoomID: "r"}, 1, 1, 1); return err },
+		"pending pairing":         func() error { _, err := s.PendingPairing(ctx, "r", "p", 1); return err },
+		"approve pairing":         func() error { return s.ApprovePairing(ctx, "r", "p", 1, 1) },
+		"deny pairing":            func() error { return s.DenyPairing(ctx, "r", "p", 1) },
+		"poll pairing":            func() error { _, _, err := s.PollPairing(ctx, "p", "s", "t", 1); return err },
+		"rate hit":                func() error { _, _, err := s.RateHit(ctx, "login", "k", 1, 1, 0, 1); return err },
+		"rate unhit":              func() error { return s.RateUnhit(ctx, 1) },
+		"rate reset":              func() error { return s.RateReset(ctx, "login", "k") },
+		"sweep expired":           func() error { _, err := s.SweepExpired(ctx, 1, 1); return err },
+		"add tts line":            func() error { _, _, err := s.AddTTSLine(ctx, ttsLine("r", 1), 1, 1); return err },
+		"sweep tts lines":         func() error { _, err := s.SweepTTSLines(ctx, 1); return err },
+		"tts lines:":              func() error { _, err := s.TTSLinesAfter(ctx, 0, 1); return err },
+		"tts cursor":              func() error { _, _, err := s.TTSCursor(ctx); return err },
+		"tts heartbeat":           func() error { return s.BeatTTSPod(ctx, TTSPod{}, 1) },
+		"tts stream lease":        func() error { return s.RenewTTSStream(ctx, 1) },
+		"tts stream release":      func() error { return s.ReleaseTTSStream(ctx, 1) },
+		"tts pod:":                func() error { _, err := s.TTSPodState(ctx); return err },
+		"speaking rooms":          func() error { _, err := s.SpeakingRooms(ctx, []string{"r"}); return err },
+		"default voices": func() error {
+			_, err := s.DefaultVoices(ctx, "r", func(map[string]bool) string { return "" })
+			return err
+		},
+		"post voice line": func() error { _, err := s.PostVoiceLine(ctx, &Message{}, time.Now(), time.Second, nil); return err },
+	} {
+		if err := call(); err == nil || !strings.HasPrefix(err.Error(), want) {
+			t.Errorf("%s: %v", want, err)
+		}
+	}
+}
+
+// The lock kinds are a contract between pods of two versions during a rolling update: a value
+// that moved would let two pods in one critical section.
+func TestLockKindValues(t *testing.T) {
+	for name, c := range map[string]struct{ got, want int32 }{
+		"LockTurns": {LockTurns, 1}, "LockPlugin": {LockPlugin, 2}, "LockRate": {LockRate, 3}, "LockDaemon": {LockDaemon, 4},
+		"LockPairing": {LockPairing, 5}, "LockPresence": {LockPresence, 6}, "LockSTTWorkers": {LockSTTWorkers, 7}, "LockLeader": {LockLeader, 8},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %d, want %d", name, c.got, c.want)
+		}
 	}
 }

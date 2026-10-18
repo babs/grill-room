@@ -427,7 +427,12 @@ func run() error {
 		logger.Info("daemon_prev_release", zap.String("version", prev.Version), zap.Int("proto", prev.Proto))
 	}
 
-	b := bus.New(st)
+	host, err := os.Hostname()
+	if err != nil {
+		return fmt.Errorf("hostname: %w", err)
+	}
+	// The hostname names the replica for an operator; the suffix keeps two processes of one host apart.
+	b := bus.New(st, host+"-"+web.NewToken()[:6])
 	// Run retries with a backoff of 1 s to 5 s, which bounds these lines.
 	b.OnListenError = func(err error) { logger.Warn("listen_failed", zap.Error(err)) }
 	srv := web.New(b, hash, cfg.PublicURL, web.Options{

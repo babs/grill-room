@@ -1,6 +1,7 @@
 // Command pgdb makes the throwaway databases the e2e servers run on.
 //
 //	pgdb fresh <server-url> <dbname>  drop dbname if it exists, create it with C collation, print its DSN
+//	pgdb url <server-url> <dbname>    print the DSN of dbname, which must exist: a second server joins it
 package main
 
 import (
@@ -23,14 +24,14 @@ import (
 // prefix keeps the drop away from any database but the e2e ones.
 var nameRE = regexp.MustCompile(`^e2e_[a-z0-9_]{1,59}$`)
 
-const usage = "usage: pgdb fresh <server-url> <dbname>"
+const usage = "usage: pgdb fresh|url <server-url> <dbname>"
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 3 || args[0] != "fresh" {
+	if len(args) != 3 || (args[0] != "fresh" && args[0] != "url") {
 		_, _ = fmt.Fprintln(stderr, usage)
 		return 2
 	}
@@ -41,9 +42,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	out, err := fresh(ctx, server, name)
+	op := fresh
+	if args[0] == "url" {
+		op = existing
+	}
+	out, err := op(ctx, server, name)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "pgdb fresh %s: %v\n", name, err)
+		_, _ = fmt.Fprintf(stderr, "pgdb %s %s: %v\n", args[0], name, err)
 		return 1
 	}
 	_, _ = fmt.Fprintln(stdout, out)
@@ -70,6 +75,29 @@ func fresh(ctx context.Context, server, name string) (string, error) {
 	}
 	return dsn(server, name)
 }
+
+// existing returns the DSN of database name, errNoDatabase when the server has none by that name.
+func existing(ctx context.Context, server, name string) (string, error) {
+	cfg, err := pgx.ParseConfig(server)
+	if err != nil {
+		return "", fmt.Errorf("server url: %w", err)
+	}
+	conn, err := pgx.ConnectConfig(ctx, cfg)
+	if err != nil {
+		return "", fmt.Errorf("connect: %w", err)
+	}
+	defer conn.Close(context.Background()) //nolint:errcheck // nothing left to flush
+	var ok bool
+	if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)`, name).Scan(&ok); err != nil {
+		return "", fmt.Errorf("lookup: %w", err)
+	}
+	if !ok {
+		return "", errNoDatabase
+	}
+	return dsn(server, name)
+}
+
+var errNoDatabase = errors.New("no such database")
 
 // dsn is server pointed at database name, in the form server is written in.
 func dsn(server, name string) (string, error) {

@@ -49,7 +49,7 @@ func (e *env) presence(t *testing.T, room, tok string, body map[string]any) {
 // its own rooms only.
 func TestDeviceFlagHandover(t *testing.T) {
 	e := newDeviceEnv(t)
-	clk := e.clock()
+	clk := e.leaseClock()
 	room := e.createRoom(t, "R").ID
 	other := e.createRoom(t, "Other").ID
 	alice := e.join(t, e.createInvite(t, room).Token, "Alice")
@@ -94,11 +94,11 @@ func TestDeviceFlagHandover(t *testing.T) {
 	e.presence(t, room, alice.Token, map[string]any{"tab": "a2", "gone": true})
 	expect("one of two tabs gone", map[string][]int64{room: {a}}, room)
 	e.presence(t, other, eve.Token, map[string]any{"tab": "e1", "device_stt": true})
-	if n := e.srv.DeviceSTTParticipants(); n != 2 {
+	if n := e.srv.people.deviceCount(e.srv.lease()); n != 2 {
 		t.Fatalf("flagged participants %d, want Alice and Eve", n)
 	}
 	clk.add(deviceLapse)
-	if n := e.srv.DeviceSTTParticipants(); n != 0 {
+	if n := e.srv.people.deviceCount(e.srv.lease()); n != 0 {
 		t.Fatalf("flagged participants after the lapse %d", n)
 	}
 
@@ -131,7 +131,7 @@ func TestDeviceFlagHandover(t *testing.T) {
 	if got := off.sttBeat(t, offRoom); len(got) != 0 {
 		t.Fatalf("not offered: heartbeat answer %v", got)
 	}
-	if n := off.srv.DeviceSTTParticipants(); n != 0 {
+	if n := off.srv.people.deviceCount(off.srv.lease()); n != 0 {
 		t.Fatalf("not offered: %d flagged", n)
 	}
 }
@@ -263,15 +263,28 @@ func TestDeviceLines(t *testing.T) {
 // later line is kept.
 func TestVoiceLineDedupe(t *testing.T) {
 	e := newDeviceEnv(t)
-	clk := e.clock()
-	room := e.createRoom(t, "R").ID
-	alice := e.join(t, e.createInvite(t, room).Token, "Alice")
-	bob := e.join(t, e.createInvite(t, room).Token, "Bob")
+	voiceDedupe(t, e, e, e.clock())
+}
+
+// voiceDedupe runs 010-AC16's cases with the device lines posted to dev and the worker's to srv,
+// both on clk, and checks the room holds the lines kept, once each.
+func voiceDedupe(t *testing.T, dev, srv *env, clk *clock) {
+	t.Helper()
+	room := dev.createRoom(t, "R").ID
+	alice := dev.join(t, dev.createInvite(t, room).Token, "Alice")
+	bob := dev.join(t, dev.createInvite(t, room).Token, "Bob")
 	device := func(tok, body string) (int, []byte) {
-		return e.do(t, "POST", "/api/rooms/"+room+"/voice/device-lines", tok, map[string]any{"body": body})
+		return dev.do(t, "POST", "/api/rooms/"+room+"/voice/device-lines", tok, map[string]any{"body": body})
 	}
 	server := func(pid int64, body string) (int, []byte) {
-		return e.do(t, "POST", "/api/rooms/"+room+"/voice/lines", sttToken, map[string]any{"participant_id": pid, "body": body})
+		return srv.do(t, "POST", "/api/rooms/"+room+"/voice/lines", sttToken, map[string]any{"participant_id": pid, "body": body})
+	}
+	deduped := func(source string) int64 {
+		n := dev.srv.VoiceLinesDeduped(source)
+		if srv != dev {
+			n += srv.srv.VoiceLinesDeduped(source)
+		}
+		return n
 	}
 	stored := func(code int, b []byte) bool {
 		t.Helper()
@@ -304,11 +317,16 @@ func TestVoiceLineDedupe(t *testing.T) {
 		{"different sentence", func() (int, []byte) { return server(a, "We ship on Friday") }, func() (int, []byte) { return device(alice.Token, "We wait for Monday") }, time.Second, true, ""},
 		{"another speaker", func() (int, []byte) { return server(a, "Ready when you are") }, func() (int, []byte) { return device(bob.Token, "Ready when you are") }, time.Second, true, ""},
 	}
+	lines := 0
 	for _, c := range cases {
 		clk.add(time.Minute) // nothing of the previous case is in the window
 		before := map[string]int64{}
 		for _, s := range VoiceSources {
-			before[s] = e.srv.VoiceLinesDeduped(s)
+			before[s] = deduped(s)
+		}
+		lines++
+		if c.keep {
+			lines++
 		}
 		if !stored(c.first()) {
 			t.Fatalf("%s: the first line was dropped", c.name)
@@ -322,10 +340,17 @@ func TestVoiceLineDedupe(t *testing.T) {
 			if s == c.droppedLabel {
 				want++
 			}
-			if got := e.srv.VoiceLinesDeduped(s); got != want {
+			if got := deduped(s); got != want {
 				t.Errorf("%s: deduped{%s} %d, want %d", c.name, s, got, want)
 			}
 		}
+	}
+	var n int
+	if err := dev.sqlDB(t).QueryRowContext(t.Context(), `SELECT count(*) FROM messages WHERE room_id = $1 AND kind = 'voice'`, room).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != lines {
+		t.Fatalf("room holds %d voice lines, want %d", n, lines)
 	}
 }
 

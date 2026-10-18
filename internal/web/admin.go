@@ -202,9 +202,14 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now, ip := s.now(), s.clientIP(r)
-	key := "ip:" + ip
+	key := "ip:" + rateIP(ip)
 	// Counted before the check, in one step: concurrent guesses cannot slip past the limit.
-	if !s.loginLimit.allow(key, loginAttempts, now) {
+	id, _, err := s.loginLimit.allow(r.Context(), key, loginAttempts, now)
+	if err != nil {
+		s.serverError(w, "admin_login_failed", err)
+		return
+	}
+	if id == 0 {
 		httpError(w, http.StatusTooManyRequests, "too many failed logins, retry in 15 minutes")
 		return
 	}
@@ -213,7 +218,9 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusUnauthorized, "wrong admin token")
 		return
 	}
-	s.loginLimit.reset(key)
+	if err := s.loginLimit.reset(r.Context(), key); err != nil {
+		s.log.Warn("admin_login_reset_failed", zap.Error(err))
+	}
 	tok := NewToken()
 	// The session's own id is the target, and its caller: the store fills both once it exists.
 	ctx := store.WithAudit(r.Context(), store.AuditEntry{At: now, Actor: store.ActorSuperAdmin, Action: ActionAdminLogin, TargetKind: store.TargetAdminSession},

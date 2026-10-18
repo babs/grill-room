@@ -420,24 +420,6 @@ func TestMagicLinkRateLimits(t *testing.T) {
 	box.none(t) // no profile holds any of these addresses
 }
 
-func TestLimiterWindow(t *testing.T) {
-	l := limiter{window: time.Minute}
-	t0 := time.Unix(1000, 0)
-	if !l.allow("k", 2, t0) || !l.allow("k", 2, t0.Add(time.Second)) || l.allow("k", 2, t0.Add(2*time.Second)) {
-		t.Fatal("limit of 2 not held")
-	}
-	if !l.allow("k", 2, t0.Add(time.Minute)) {
-		t.Fatal("the oldest hit did not leave the window")
-	}
-	for i := range 5000 {
-		l.allow(strconv.Itoa(i), 1, t0)
-	}
-	l.allow("late", 1, t0.Add(2*time.Minute))
-	if len(l.hits) > 2 {
-		t.Fatalf("idle keys not swept: %d", len(l.hits))
-	}
-}
-
 // 002-AC5 004-AC3: a bound email reaches its owner and the admin's profiles view, never another
 // participant, nor any other admin view, even once its owner posted, published and was audited.
 func TestEmailStaysPrivate(t *testing.T) {
@@ -677,7 +659,7 @@ func TestSendFailureLogHidesTheAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	srv := New(bus.New(st), "", baseURL, opts, zap.New(core))
+	srv := New(bus.New(st, NewToken()), "", baseURL, opts, zap.New(core))
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	e := &env{ts: ts, st: st, srv: srv}
@@ -779,5 +761,16 @@ func TestRevokedMemberCannotRejoinThroughTheirOwnInvite(t *testing.T) {
 	}
 	if code, _ := e.do(t, "POST", "/api/join", "", map[string]string{"invite": spare.Token, "name": "Alice"}); code != http.StatusUnauthorized {
 		t.Fatalf("rejoin through her own invite: %d", code)
+	}
+}
+
+// An unreadable "mail failing" flag is a hint lost, not a failed sign-in: the request goes on.
+func TestMailFlagUnreadable(t *testing.T) {
+	a, _, _ := newRelayPair(t)
+	if err := a.st.SetSetting(t.Context(), mailFailedAtKey, "not-a-time"); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, m := post(t, a, "/api/profile/signin", `{"email":"nobody@example.com"}`); code != http.StatusAccepted {
+		t.Fatalf("sign-in: %d %v", code, m)
 	}
 }

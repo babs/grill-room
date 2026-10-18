@@ -180,7 +180,7 @@ func TestEgressDelegation(t *testing.T) {
 	if _, err := s.SetEgressDelegation(ctx, "a", true, bob); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.HandOver(ctx, "a", alice.ID, bob); err != nil || on() {
+	if _, err := s.HandOver(ctx, "a", alice.ID, bob, nil); err != nil || on() {
 		t.Fatalf("handed over: %v %v", err, on())
 	}
 	// An approval the previous host's app had not applied is dropped, with why.

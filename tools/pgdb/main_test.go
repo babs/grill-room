@@ -38,6 +38,9 @@ func TestUsage(t *testing.T) {
 		{"fresh", "postgres://h/postgres", "grill_room"},
 		{"fresh", "postgres://h/postgres", "x_e2e_1"},
 		{"fresh", "postgres://h/postgres", "e2e_" + strings.Repeat("a", 60)},
+		{"url", "postgres://h/postgres"},
+		{"url", "postgres://h/postgres", "postgres"},
+		{"url", "postgres://h/postgres", "e2e_x; DROP DATABASE postgres"},
 	} {
 		if code, out, _ := call(args...); code != 2 || out != "" {
 			t.Errorf("%q: code %d, stdout %q", args, code, out)
@@ -124,5 +127,19 @@ func TestFresh(t *testing.T) {
 	}
 	if n := scalar(t, db, `SELECT count(*)::text FROM pg_tables WHERE tablename = 'left_over'`); n != "0" {
 		t.Fatalf("fresh kept the old tables: %s", n)
+	}
+
+	// url names the same database and keeps what it holds; a missing one fails.
+	if _, err := held.ExecContext(ctx, `CREATE TABLE kept (v int)`); err != nil {
+		t.Fatal(err)
+	}
+	if code, again, errOut := call("url", server, name); code != 0 || again != out {
+		t.Fatalf("url: %d %q %s; want %q", code, again, errOut, out)
+	}
+	if n := scalar(t, db, `SELECT count(*)::text FROM pg_tables WHERE tablename = 'kept'`); n != "1" {
+		t.Fatalf("url dropped the database: %s", n)
+	}
+	if code, got, _ := call("url", server, name+"_missing"); code != 1 || got != "" {
+		t.Fatalf("url of a missing database: %d %q", code, got)
 	}
 }
