@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/babs/grill-room/internal/store"
 )
 
 const (
@@ -80,6 +82,8 @@ type people struct {
 	// anon names the streams of clients that send no tab id.
 	anon atomic.Int64
 }
+
+func newPeople(_ *store.Store) *people { return &people{m: map[string]map[int64]*person{}} }
 
 func (pp *people) person(room string, pid int64) *person {
 	r := pp.m[room]

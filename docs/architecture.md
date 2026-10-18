@@ -149,6 +149,21 @@ A persona with "Speaks in the call" on says a short line in the LiveKit call aft
 - Exports and imports stage files in `GRILL_ROOM_STAGING_DIR`, the pod's own disk.
 - `grill-room db copy` and `db verify` move a SQLite database of before spec 017 into an empty PostgreSQL one and compare them table by table; the copy holds the write lock (README, Copying a SQLite database).
 - Backups are `pg_dump -Fc` while the server runs (README, Backups).
+- Pods wake each other's streams through `LISTEN/NOTIFY` on one channel, payload `<pod> <room>`. A pod drops its own notifications. When its `LISTEN` connection comes back, it wakes every stream, which re-reads the database.
+
+| Metric (room server) | What it says |
+|---|---|
+| `grill_room_db_lock_wait_seconds` | how long a write waited for its writer slot and the global write lock (017-AC20) |
+| `grill_room_bus_dropped_total` | room change signals lost to a full subscriber; the stream catches up at its heartbeat |
+| `grill_room_notify_sent_total` | room change notifications sent to the other pods (017-AC20) |
+| `grill_room_notify_received_total` | room change notifications received from the other pods (017-AC20) |
+| `grill_room_listen_reconnects_total` | `LISTEN` connections started again after the first (017-AC20) |
+| `grill_room_listen_errors_total` | `LISTEN` connections that failed or ended, each logged `listen_failed` (017-AC20) |
+| `grill_room_event_streams` | open SSE event streams |
+| `grill_room_stt_workers` | STT workers with a recent heartbeat |
+| `grill_room_workspace_fallbacks_total{reason}` | full workspace fetches by daemons that keep a cache |
+| `grill_room_mcp_tool_calls_total{tool,result}` | MCP tool calls: `ok`, `error` or `server_error` |
+| `grill_room_turn_conflicts_total{outcome}` | turn results rejected on a document conflict: `rerun` or `failed` |
 
 ## A turn, end to end
 

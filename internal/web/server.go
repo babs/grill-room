@@ -75,7 +75,7 @@ type Server struct {
 	streams   atomic.Int64
 	pairings  pairings
 	presence  presences
-	people    people
+	people    *people
 	stt       sttWorkers
 	// tts holds the lines personas say in the call; nil when the server offers no voice (013-AC13).
 	tts     *ttsHub
@@ -168,15 +168,15 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	}
 	s := &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), archives: make(chan struct{}, maxConcurrentArchives),
 		adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
-		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, people: people{m: map[string]map[int64]*person{}}, stt: sttWorkers{m: map[string]*sttWorker{}}, clients: clients{m: map[int64]clientSeen{}},
-		magicLimit: limiter{window: magicWindow}, loginLimit: limiter{window: loginWindow}, now: time.Now, fallbacks: fallbackCounters(),
+		pairings: newPairings(b.Store), presence: newPresences(b.Store), people: newPeople(b.Store), stt: newSTTWorkers(b.Store), clients: clients{m: map[int64]clientSeen{}},
+		magicLimit: newLimiter(b.Store, "magic", magicWindow), loginLimit: newLimiter(b.Store, "login", loginWindow), now: time.Now, fallbacks: fallbackCounters(),
 		afterFunc: func(d time.Duration, f func()) { time.AfterFunc(d, f) },
 		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}, pushClient: opts.PushClient,
 		pluginFetches: make(chan struct{}, maxPluginFetches), pluginRooms: map[string]bool{},
 		voiceRecent: recentLines{}, voiceLines: sourceCounters(), voiceDeduped: sourceCounters(), mcpCalls: newMCPCounters()}
 	s.device = loadDeviceSTT(opts, log)
 	if opts.TTSTokenHash != "" && opts.Voice != nil {
-		s.tts = newTTSHub(time.Now())
+		s.tts = newTTSHub(b.Store, time.Now())
 	}
 	s.cleanStaging()
 	return s
@@ -1375,7 +1375,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 				return
 			}
 		case changed := <-live:
-			if changed == room && !sync() {
+			if (changed == room || changed == bus.All) && !sync() {
 				return
 			}
 		}

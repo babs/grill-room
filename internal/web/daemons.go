@@ -17,6 +17,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/turn"
 )
@@ -44,6 +45,8 @@ type pairings struct {
 	mu sync.Mutex
 	m  map[string]*pairing
 }
+
+func newPairings(_ *store.Store) pairings { return pairings{m: map[string]*pairing{}} }
 
 // sweepLocked drops expired requests.
 func (ps *pairings) sweepLocked(now time.Time) {
@@ -76,6 +79,8 @@ type presences struct {
 	mu sync.Mutex
 	m  map[int64]*presence // by daemon id
 }
+
+func newPresences(_ *store.Store) presences { return presences{m: map[int64]*presence{}} }
 
 // connectedDaemons lists the room's daemons with an open stream, by participant.
 func (s *Server) connectedDaemons(room string) []presence {
@@ -571,7 +576,7 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 			}
 			flusher.Flush()
 		case changed := <-live:
-			if changed == d.RoomID && (!alive() || !sendTurn() || !sendRoom() || !sendInspect() || !sendPlugins() || !sendEgress()) {
+			if (changed == d.RoomID || changed == bus.All) && (!alive() || !sendTurn() || !sendRoom() || !sendInspect() || !sendPlugins() || !sendEgress()) {
 				return
 			}
 		}

@@ -530,6 +530,10 @@ type limiter struct {
 	hits   map[string][]time.Time
 }
 
+func newLimiter(_ *store.Store, _ string, window time.Duration) limiter {
+	return limiter{window: window}
+}
+
 // allow records an event for key and reports whether it is within max per window.
 func (l *limiter) allow(key string, maxHits int, now time.Time) bool {
 	l.mu.Lock()

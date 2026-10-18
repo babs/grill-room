@@ -189,7 +189,7 @@ func TestTTSPersonaFields(t *testing.T) {
 // grows across a restart, and a stream resumes after Last-Event-ID.
 func TestTTSHub(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
-	h := newTTSHub(now)
+	h := newTTSHub(nil, now)
 	h.streams, h.beatAt = 1, now // a pod is up: lines keep the room's maximum (cold start: TestTTSColdStartQueue)
 	l := ttsLine{Room: "r", Text: "a", ttsTimeouts: defaultTTSTimeouts, QueuedAt: now}
 	first := h.add(l, now)
@@ -204,7 +204,7 @@ func TestTTSHub(t *testing.T) {
 	if got, _ := h.next(0, now.Add(41*time.Second)); len(got) != 0 {
 		t.Errorf("expired lines handed out: %+v", got)
 	}
-	if again := newTTSHub(now.Add(time.Second)); again.add(l, now) <= second {
+	if again := newTTSHub(nil, now.Add(time.Second)); again.add(l, now) <= second {
 		t.Error("a restarted server numbers its lines below the old ones")
 	}
 	for range maxTTSLines + 3 {
@@ -239,7 +239,7 @@ func TestTTSHub(t *testing.T) {
 	if ev := nextEvent(t, ch, "line"); ev.id != strconv.FormatInt(third, 10) {
 		t.Errorf("a pod with no Last-Event-ID got line %s, want only %d", ev.id, third)
 	}
-	if h := newTTSHub(time.Now()); h.resumePoint() != h.seq {
+	if h := newTTSHub(nil, time.Now()); h.resumePoint() != h.seq {
 		t.Error("an empty hub resumes from its own counter")
 	}
 }
@@ -248,7 +248,7 @@ func TestTTSHub(t *testing.T) {
 // zero, and the pod gets that budget in queue_s; with a pod connected, the room's maximum stands.
 func TestTTSColdStartQueue(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
-	h := newTTSHub(now)
+	h := newTTSHub(nil, now)
 	l := ttsLine{Room: "r", Text: "a", ttsTimeouts: defaultTTSTimeouts, QueuedAt: now}
 	h.add(l, now)
 	late := now.Add(time.Duration(coldQueueS-1) * time.Second)

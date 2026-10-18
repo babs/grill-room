@@ -699,7 +699,8 @@ func TestExportCoversEveryColumn(t *testing.T) {
 	const server = "server-wide, not room content"
 	// Each table's columns: those the export carries, or why the table is left out.
 	tables := map[string]string{
-		"rooms": "id name created_at chain_budget chain_count chain_suspended parallel_turns stt_glossary created_from voice_quiet_ms voice_resume_s voice_queue_s voice_words | host_participant_id quota_bytes creator_profile_id egress_admins_allow",
+		// 017: host_moved_line is the importing server's banner, shown only to a previous host.
+		"rooms": "id name created_at chain_budget chain_count chain_suspended parallel_turns stt_glossary created_from voice_quiet_ms voice_resume_s voice_queue_s voice_words | host_participant_id quota_bytes creator_profile_id egress_admins_allow host_moved_line",
 		// 014: what the AI host allowed is the host's, not the room's; the lines stay as text.
 		"blocked_requests":    "| message_id room_id persona domain count decision pending_scope pending_by pending_actor pending_error dismissed_by",
 		"participants":        "id name joined_at can_trigger profile_id profile_uuid_hint room_id invite_id previous_name removed_at | token_hash last_seen_at join_ip join_ua last_ip last_ua end_reason",
@@ -730,11 +731,20 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"push_subscriptions":       "| id participant_id endpoint p256dh auth all_messages created_at", // a device's keys: a copy gets none
 		// 009-AC26: a removed plugin and the AI host's setup state are not room content; requests
 		// to the AI host are transient; hold is the importing side's own.
-		"room_plugins":              "id name source_url ref ref_name entry private created_by_name created_at | room_id removed_at needs_setup",
-		"plugin_fetches":            "| id room_id plugin_id source_url ref entries personas state reason requested_by_name requested_by_id created_at",
-		"plugin_versions":           "plugin_id n commit_sha sha256 size files file_list manifest report state reason added_by_name added_at decided_by_name decided_at | id added_by_id hold",
-		"plugin_snapshots":          "data | version_id",
-		"room_persona_plugins":      "persona_id plugin_id |",
+		"room_plugins":         "id name source_url ref ref_name entry private created_by_name created_at | room_id removed_at needs_setup",
+		"plugin_fetches":       "| id room_id plugin_id source_url ref entries personas state reason requested_by_name requested_by_id created_at",
+		"plugin_versions":      "plugin_id n commit_sha sha256 size files file_list manifest report state reason added_by_name added_at decided_by_name decided_at | id added_by_id hold",
+		"plugin_snapshots":     "data | version_id",
+		"room_persona_plugins": "persona_id plugin_id |",
+		// 017: what the pods share for seconds to minutes; an import starts with none.
+		"daemon_connections":        "| id daemon_id room_id pod connected_at_ms expires_at_ms",
+		"daemon_status":             "| daemon_id can_host reason version egress connectors",
+		"presence":                  "| room_id participant_id tab since_at_ms beat_at_ms device_at_ms audio mic muted deaf focused expires_at_ms",
+		"pairings":                  "| id room_id code secret_hash status expires_at_ms",
+		"tts_lines":                 "| seq room_id persona_id persona voice rate text quiet_ms resume_s queue_s queued_at_ms sent",
+		"stt_workers":               server,
+		"tts_pod":                   server,
+		"rate_events":               server,
 		"persona_templates":         server,
 		"persona_template_versions": server,
 		"profiles":                  server,

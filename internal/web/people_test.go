@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-func newPeople() *people { return &people{m: map[string]map[int64]*person{}} }
-
 func hereOf(t *testing.T, pp *people, now time.Time) map[int64]presenceOf {
 	t.Helper()
 	out := map[int64]presenceOf{}
@@ -21,7 +19,7 @@ func hereOf(t *testing.T, pp *people, now time.Time) map[int64]presenceOf {
 // 005-AC6: a stream that drops and comes back within the grace, as a reload or a flaky network
 // does, never shows its participant gone.
 func TestPresenceFlappingConnection(t *testing.T) {
-	pp, t0 := newPeople(), time.Unix(1000, 0)
+	pp, t0 := newPeople(nil), time.Unix(1000, 0)
 	release := pp.open("r", 1, "tabA", t0)
 	for i := range 10 {
 		at := t0.Add(time.Duration(i) * 3 * time.Second)
@@ -45,7 +43,7 @@ func TestPresenceFlappingConnection(t *testing.T) {
 // 005-AC6: a backgrounded phone suspends its stream and its heartbeats. Within the grace it stays;
 // past it, it is gone, seen when it went quiet; its return brings it back with its audio state.
 func TestPresenceBackgroundedPhone(t *testing.T) {
-	pp, t0 := newPeople(), time.Unix(1000, 0)
+	pp, t0 := newPeople(nil), time.Unix(1000, 0)
 	release := pp.open("r", 2, "phone", t0)
 	pp.beat("r", 2, "phone", tab{audio: true, mic: true}, false, t0)
 	if p := hereOf(t, pp, t0)[2]; !p.Here || !p.Audio || !p.Mic {
@@ -75,7 +73,7 @@ func TestPresenceBackgroundedPhone(t *testing.T) {
 // 005-AC6: with two tabs, closing one keeps the participant here, and drops at once the audio that
 // tab held.
 func TestPresenceTwoTabsOneClosed(t *testing.T) {
-	pp, t0 := newPeople(), time.Unix(1000, 0)
+	pp, t0 := newPeople(nil), time.Unix(1000, 0)
 	relA := pp.open("r", 3, "tabA", t0)
 	pp.open("r", 3, "tabB", t0)
 	pp.beat("r", 3, "tabA", tab{audio: true, mic: true, deaf: true}, false, t0)
@@ -102,7 +100,7 @@ func TestPresenceTwoTabsOneClosed(t *testing.T) {
 }
 
 func TestPresenceForgetsAndBoundsTabs(t *testing.T) {
-	pp, t0 := newPeople(), time.Unix(1000, 0)
+	pp, t0 := newPeople(nil), time.Unix(1000, 0)
 	for i := range maxTabs {
 		if !pp.beat("r", 4, "t"+string(rune('a'+i)), tab{}, false, t0) {
 			t.Fatalf("tab %d refused", i)
@@ -185,7 +183,7 @@ func TestPresenceEvents(t *testing.T) {
 // 009-AC36: here since is when the current stay began: a reload within the grace keeps it, a
 // return after it starts a new one, a heartbeat alone starts one too, and none shows while away.
 func TestPresenceHereSince(t *testing.T) {
-	pp, t0 := newPeople(), time.Unix(1000, 0)
+	pp, t0 := newPeople(nil), time.Unix(1000, 0)
 	release := pp.open("r", 1, "tabA", t0)
 	if p := hereOf(t, pp, t0)[1]; p.HereSince == nil || !p.HereSince.Equal(t0) {
 		t.Fatalf("arrived: %+v", p)

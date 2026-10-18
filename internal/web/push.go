@@ -16,6 +16,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/webpush"
 )
@@ -179,6 +180,9 @@ func (s *Server) PushLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case room := <-signals:
+			if room == bus.All {
+				continue
+			}
 			after := max(cursors[room], start)
 			last, err := s.pushEvents(ctx, room, after, pending)
 			if err != nil {

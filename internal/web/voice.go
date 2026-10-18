@@ -66,6 +66,8 @@ type sttWorkers struct {
 	m  map[string]*sttWorker
 }
 
+func newSTTWorkers(_ *store.Store) sttWorkers { return sttWorkers{m: map[string]*sttWorker{}} }
+
 // sttState is what a room's page shows about transcription.
 type sttState struct {
 	// Available is true while at least one worker heartbeats.

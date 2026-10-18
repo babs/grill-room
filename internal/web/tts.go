@@ -106,7 +106,7 @@ type ttsHub struct {
 	voiceMu sync.Mutex
 }
 
-func newTTSHub(now time.Time) *ttsHub {
+func newTTSHub(_ *store.Store, now time.Time) *ttsHub {
 	return &ttsHub{seq: now.UnixMicro(), wake: make(chan struct{})}
 }
 

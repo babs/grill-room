@@ -141,9 +141,10 @@ func seedHeld(t *testing.T, s *Store, room string) *Participant {
 // libraries, whose presets and built-ins belong to no profile while the rest cascade from theirs, the skill library,
 // whose shared skills outlive their publisher while personal ones cascade from theirs, the admin
 // sessions, the audit log, whose entries outlive the rooms and profiles they name (004-AC6), and the
-// catalogue voices' samples (013-AC27), the lexicon (013-AC31) and the schema version.
+// catalogue voices' samples (013-AC27), the lexicon (013-AC31), the schema version, and the pods'
+// shared STT workers, TTS pod and rate-limit events (017 Phase 3).
 var serverWide = []string{"settings", "persona_templates", "persona_template_versions", "skills", "skill_versions", "admin_sessions", "audit_log",
-	"starters", "starter_versions", "starter_files", "tts_samples", "pronunciations", "schema_version"}
+	"starters", "starter_versions", "starter_files", "tts_samples", "pronunciations", "schema_version", "stt_workers", "tts_pod", "rate_events"}
 
 // fkSQL lists the single-column foreign keys: table, column, parent table, ON DELETE action and
 // whether the column is NOT NULL.
@@ -419,9 +420,26 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 		if _, err := s.EndSeats(ctx, room, gone.ID, Ending{By: p, Block: true}); err != nil {
 			t.Fatal(err)
 		}
+		// 017: the state pods share about the room goes with it.
+		for _, q := range []struct {
+			sql  string
+			args []any
+		}{
+			{`INSERT INTO daemon_connections(id, daemon_id, room_id, pod, connected_at_ms, expires_at_ms) VALUES(?, ?, ?, 'p', 0, 1)`, []any{room, dm.ID, room}},
+			{`INSERT INTO daemon_status(daemon_id) VALUES(?)`, []any{dm.ID}},
+			{`INSERT INTO presence(room_id, participant_id, tab, expires_at_ms) VALUES(?, ?, '', 1)`, []any{room, p.ID}},
+			{`INSERT INTO pairings(id, room_id, code, secret_hash, expires_at_ms) VALUES(?, ?, '', '', 1)`, []any{room, room}},
+			{`INSERT INTO tts_lines(room_id, persona_id, persona, voice, rate, text, quiet_ms, resume_s, queue_s, queued_at_ms)
+				VALUES(?, 0, '', '', 1, '', 0, 0, 0, 0)`, []any{room}},
+		} {
+			if _, err := s.db.ExecContext(ctx, q.sql, q.args...); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	// These reach rooms through another table, so roomRows cannot see them.
-	indirect := []string{"revisions", "annotation_messages", "attachments", "message_versions", "room_persona_skills", "plugin_versions", "plugin_snapshots", "room_persona_plugins"}
+	indirect := []string{"revisions", "annotation_messages", "attachments", "message_versions", "room_persona_skills", "plugin_versions", "plugin_snapshots", "room_persona_plugins",
+		"daemon_status"}
 	count := func(table string) int {
 		var n int
 		if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM "`+table+`"`).Scan(&n); err != nil {
