@@ -561,7 +561,11 @@ func TestLockAndHandoff(t *testing.T) {
 		t.Fatalf("foreign link: %v", err)
 	}
 	_ = ln.Close()
-	<-served
+	select {
+	case <-served:
+	case <-time.After(15 * time.Second):
+		t.Fatal("ServeHandoff did not return after its listener closed")
+	}
 	release()
 	// A released lock is free for the next supervisor, which opens the socket again.
 	release, err = LockSupervisor(dir)
