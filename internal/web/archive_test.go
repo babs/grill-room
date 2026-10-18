@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -104,7 +105,7 @@ func stored(t *testing.T, n, size int) []byte {
 // must be refused are, with their reason, and create nothing.
 func TestExportImportAPI(t *testing.T) {
 	e := newEnv(t)
-	e.srv.opts.DBPath = e.dbPath
+	e.srv.opts.StagingDir = t.TempDir()
 	alice := e.device(t)
 	room := alice.createRoom(t, "Pricing", "Alice")
 	path := "/api/rooms/" + room.ID
@@ -144,7 +145,7 @@ func TestExportImportAPI(t *testing.T) {
 		t.Fatalf("%d export entries, want 2", exports)
 	}
 	// Nothing stays staged once the answer is out.
-	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(e.dbPath), stagingPrefix+"*")); len(left) != 0 {
+	if left, _ := filepath.Glob(filepath.Join(e.srv.opts.StagingDir, stagingPrefix+"*")); len(left) != 0 {
 		t.Fatalf("staging left behind: %v", left)
 	}
 
@@ -264,15 +265,50 @@ func TestExportImportAPI(t *testing.T) {
 	}
 }
 
+// The staging directory holds whole rooms: a symlink or a file in its place is refused, and left as
+// is, and a directory of ours open to others is narrowed to 0700. Another user's directory, also
+// refused, cannot be made without root.
+func TestPrepareStaging(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("owner and mode are unchecked on Windows")
+	}
+	base := t.TempDir()
+	target := filepath.Join(base, "target")
+	kept := filepath.Join(target, stagingPrefix+"x")
+	link, file, open := filepath.Join(base, "link"), filepath.Join(base, "file"), filepath.Join(base, "open")
+	if err := errors.Join(os.MkdirAll(kept, 0o700), os.Symlink(target, link), os.WriteFile(file, nil, 0o600),
+		os.Mkdir(open, 0o700), os.Chmod(open, 0o777)); err != nil { //nolint:gosec // the mode under test
+		t.Fatal(err)
+	}
+	for _, p := range []string{link, file} {
+		if err := PrepareStaging(p); err == nil {
+			t.Errorf("%s: accepted", p)
+		}
+	}
+	(&Server{opts: Options{StagingDir: link}, log: zap.NewNop()}).cleanStaging()
+	if _, err := os.Stat(kept); err != nil {
+		t.Fatalf("the cleanup followed the symlink: %v", err)
+	}
+	for _, p := range []string{open, filepath.Join(base, "new", "dir")} {
+		if err := PrepareStaging(p); err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		if fi, err := os.Stat(p); err != nil || fi.Mode().Perm() != 0o700 {
+			t.Errorf("%s: %v %v", p, fi.Mode(), err)
+		}
+	}
+}
+
 // 004-AC11: staging left by a server stopped mid-export goes at the next start; a third export at
 // once is turned away.
 func TestArchiveStagingAndSlots(t *testing.T) {
 	e := newEnv(t)
-	left := filepath.Join(filepath.Dir(e.dbPath), stagingPrefix+"crashed")
+	staging := t.TempDir()
+	left := filepath.Join(staging, stagingPrefix+"crashed")
 	if err := os.MkdirAll(filepath.Join(left, "uploads"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	New(e.bus, HashToken(e.admin), baseURL, Options{DBPath: e.dbPath}, zap.NewNop())
+	New(e.bus, HashToken(e.admin), baseURL, Options{StagingDir: staging}, zap.NewNop())
 	if _, err := os.Stat(left); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("staging left behind: %v", err)
 	}

@@ -81,7 +81,7 @@ func (setup *RoomSetup) blobBytes() int64 {
 
 // setUp fills room r, just created by participant by, with setup's copies, and returns the bytes
 // of the plugin snapshots it kept.
-func setUp(ctx context.Context, tx *sql.Tx, r *Room, by *Participant, setup *RoomSetup) (int64, error) {
+func setUp(ctx context.Context, tx *txn, r *Room, by *Participant, setup *RoomSetup) (int64, error) {
 	var from any
 	if setup.From != nil {
 		b, err := json.Marshal(setup.From)
@@ -211,7 +211,7 @@ func setUp(ctx context.Context, tx *sql.Tx, r *Room, by *Participant, setup *Roo
 // instance's current cap, the room's plugin limit or its quota is left out, and the personas go
 // without it: a starter's plugin never fails the room's creation (006-AC13). left holds a chat
 // line for each.
-func setUpPlugins(ctx context.Context, tx *sql.Tx, roomID string, by *Participant, setup *RoomSetup) (ids map[string]int64, kept int64, left []string, err error) {
+func setUpPlugins(ctx context.Context, tx *txn, roomID string, by *Participant, setup *RoomSetup) (ids map[string]int64, kept int64, left []string, err error) {
 	ids = map[string]int64{}
 	if len(setup.Plugins) == 0 {
 		return ids, 0, nil, nil
@@ -273,22 +273,29 @@ func setUpPlugins(ctx context.Context, tx *sql.Tx, roomID string, by *Participan
 // approves without asking, and returns their names; under "approve everything" they stay for the
 // host to decide (006-AC13).
 func (s *Store) ReleaseStarterSkills(ctx context.Context, roomID string) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `UPDATE skills SET pending = 0, from_starter = 0 WHERE room_id = ? AND from_starter = 1 AND pending = 1
+	var out []string
+	err := s.withTx(ctx, "release starter skills", func(tx *txn) error {
+		rows, err := tx.QueryContext(ctx, `UPDATE skills SET pending = 0, from_starter = 0 WHERE room_id = ? AND from_starter = 1 AND pending = 1
 		AND EXISTS (SELECT 1 FROM rooms r JOIN daemons d ON d.participant_id = r.host_participant_id WHERE r.id = ? AND d.approve_all = 0)
 		RETURNING name`, roomID, roomID)
-	if err != nil {
-		return nil, fmt.Errorf("release starter skills: %w", err)
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var n string
-		if err := rows.Scan(&n); err != nil {
-			return nil, fmt.Errorf("release starter skills: %w", err)
+		if err != nil {
+			return fmt.Errorf("release starter skills: %w", err)
 		}
-		out = append(out, n)
+		defer rows.Close()
+		for rows.Next() {
+			var n string
+			if err := rows.Scan(&n); err != nil {
+				return fmt.Errorf("release starter skills: %w", err)
+			}
+			out = append(out, n)
+		}
+		slices.Sort(out) // RETURNING rows come in no set order
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // RoomDraft is room as a starter would hold it, for "Save as starter" (006-AC15): its name, its
@@ -317,8 +324,8 @@ func (s *Store) RoomDraft(ctx context.Context, roomID string) (*StarterManifest,
 	// Skills: those the personas have on, at their pins, then the room's own; approved ones only.
 	rows, err := s.db.QueryContext(ctx, `SELECT v.id, s.name, v.n, v.author, v.description, v.files, v.size, v.sha256 FROM (
 			SELECT k.skill_id, k.version, 0 AS o, p.id AS pid FROM room_persona_skills k JOIN room_personas p ON p.id = k.persona_id WHERE p.room_id = ? AND p.pending = 0
-			UNION ALL SELECT s.id, (SELECT MAX(n) FROM skill_versions WHERE skill_id = s.id), 1, 0 FROM skills s WHERE s.room_id = ? AND NOT s.pending
-		) x JOIN skills s ON s.id = x.skill_id AND NOT s.pending JOIN skill_versions v ON v.skill_id = x.skill_id AND v.n = x.version ORDER BY x.o, x.pid, s.name`,
+			UNION ALL SELECT s.id, (SELECT MAX(n) FROM skill_versions WHERE skill_id = s.id), 1, 0 FROM skills s WHERE s.room_id = ? AND s.pending = 0
+		) x JOIN skills s ON s.id = x.skill_id AND s.pending = 0 JOIN skill_versions v ON v.skill_id = x.skill_id AND v.n = x.version ORDER BY x.o, x.pid, s.name`,
 		roomID, roomID)
 	if err != nil {
 		return nil, fmt.Errorf("room draft skills: %w", err)

@@ -1,13 +1,10 @@
 package store
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"sync"
@@ -211,15 +208,10 @@ func count(t *testing.T, s *Store, query string, args ...any) int {
 	return n
 }
 
-// 002-AC5: the purge invariant for profiles. Deleting one removes its sessions, links and email,
-// down to the bytes on disk, and detaches its participants, which keep their name and access.
+// 002-AC5: the purge invariant for profiles. Deleting one removes its sessions, links and email
+// from every table, and detaches its participants, which keep their name and access.
 func TestDeleteProfilePurges(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "test.db")
-	s, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s := openTest(t)
 	ctx := context.Background()
 	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec-a", SessionHash: "sess-a"})
 	joinWithProfile(t, s, "b", "Alice B", JoinProfile{ID: a.ProfileID})
@@ -255,64 +247,12 @@ func TestDeleteProfilePurges(t *testing.T) {
 	if prof, err := s.ProfileBySession(ctx, "sess-c"); err != nil || len(prof.Rooms) != 1 {
 		t.Errorf("other profile: %+v %v", prof, err)
 	}
-	if err := s.Checkpoint(ctx); err != nil {
-		t.Fatal(err)
-	}
-	for _, f := range []string{path, path + "-wal"} {
-		b, err := os.ReadFile(f)
-		if err != nil && !os.IsNotExist(err) {
-			t.Fatal(err)
-		}
-		if bytes.Contains(b, []byte(email)) {
-			t.Errorf("%s still holds the deleted email", filepath.Base(f))
-		}
+	// The tables hold no copy of the email; on disk it lasts until autovacuum reuses the space (017 Q4).
+	if n := count(t, s, `SELECT (SELECT count(*) FROM profiles WHERE email = ?) + (SELECT count(*) FROM magic_links WHERE email = ?)`, email, email); n != 0 {
+		t.Errorf("%d rows still hold the deleted email", n)
 	}
 	if err := s.DeleteProfile(ctx, a.ProfileID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("second delete: %v", err)
-	}
-}
-
-// Databases from before 002 keep working: their participants have no profile, their invites no
-// creator.
-func TestMigrationKeepsProfilelessParticipants(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "old.db")
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	const before = 6 // the schema spec 001 shipped
-	for _, m := range migrations[:before] {
-		if _, err := db.ExecContext(ctx, m); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, q := range []string{
-		fmt.Sprintf(`PRAGMA user_version = %d`, before),
-		`INSERT INTO rooms(id, name, created_at) VALUES('r', 'Old', '2026-01-01T00:00:00Z')`,
-		`INSERT INTO invites(room_id, token_hash, created_at) VALUES('r', 'inv', '2026-01-01T00:00:00Z')`,
-		`INSERT INTO participants(room_id, invite_id, name, token_hash, joined_at) VALUES('r', 1, 'Old Alice', 'tok', '2026-01-01T00:00:00Z')`,
-	} {
-		if _, err := db.ExecContext(ctx, q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	_ = db.Close()
-	s, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	p, err := s.ParticipantByToken(ctx, "tok")
-	if err != nil || p.Name != "Old Alice" || p.ProfileID != 0 {
-		t.Fatalf("old participant: %+v %v", p, err)
-	}
-	invs, err := s.Invites(ctx, "r", 0)
-	if err != nil || len(invs) != 1 || invs[0].CreatedBy != 0 || invs[0].RevokedAt != nil {
-		t.Fatalf("old invite: %+v %v", invs, err)
-	}
-	if m, err := s.RenameRoom(ctx, "r", "New", p); err != nil || m == nil {
-		t.Fatalf("rename by an old participant: %v", err)
 	}
 }
 
@@ -797,7 +737,7 @@ func TestRecoveryLinks(t *testing.T) {
 	if err := s.db.QueryRowContext(context.Background(), `SELECT uuid FROM profiles WHERE id = ?`, a.ProfileID).Scan(&uuid); err != nil {
 		t.Fatal(err)
 	}
-	if n := count(t, s, `SELECT count(*) FROM audit_log WHERE action IN ('gen', 'use') AND target_id = ? AND target_name = 'Alice' AND json_extract(details, '$.profile_uuid') = ?`,
+	if n := count(t, s, `SELECT count(*) FROM audit_log WHERE action IN ('gen', 'use') AND target_id = ? AND target_name = 'Alice' AND details::jsonb->>'profile_uuid' = ?`,
 		strconv.FormatInt(a.ProfileID, 10), uuid); n != 3 {
 		t.Fatalf("audit entries for Alice: %d, want 2 generations and 1 use", n)
 	}

@@ -42,7 +42,7 @@ type Ended struct {
 // valid seat target in room; ErrIsRoomAdmin when the person is a room admin. The caller broadcasts.
 func (s *Store) EndSeats(ctx context.Context, roomID string, target int64, e Ending) (*Ended, error) {
 	out := &Ended{}
-	err := s.withTx(ctx, "end seats", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "end seats", func(tx *txn) error {
 		var profile sql.NullInt64
 		var admin bool
 		err := tx.QueryRowContext(ctx, `SELECT p.name, p.profile_id,
@@ -66,8 +66,7 @@ func (s *Store) EndSeats(ctx context.Context, roomID string, target int64, e End
 			WHERE room_id = ? AND removed_at IS NULL AND (id = ? OR profile_id = ?) RETURNING id`, at, reason, roomID, target, profile); err != nil {
 			return fmt.Errorf("end seats: %w", err)
 		}
-		ids := jsonIDs(out.Seats)
-		if _, err := tx.ExecContext(ctx, `UPDATE invites SET revoked_at = ? WHERE revoked_at IS NULL AND created_by IN (SELECT value FROM json_each(?))`, at, ids); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE invites SET revoked_at = ? WHERE revoked_at IS NULL AND created_by = ANY(?)`, at, out.Seats); err != nil {
 			return fmt.Errorf("end seats: invites: %w", err)
 		}
 		if out.Daemons, out.Host, err = seatsGone(ctx, tx, roomID, out.Seats); err != nil {
@@ -114,12 +113,11 @@ func (s *Store) EndSeats(ctx context.Context, roomID string, target int64, e End
 // seatsGone applies the end of seats of room: the turns they queued that have not started go, and
 // the room loses its host when one of them hosted (016-AC8, 016-AC9). It returns the seats' apps,
 // whose running turns the caller fails, and whether the host went.
-func seatsGone(ctx context.Context, tx *sql.Tx, roomID string, seats []int64) (daemons []int64, host bool, err error) {
-	ids := jsonIDs(seats)
-	if _, err := tx.ExecContext(ctx, `DELETE FROM turn_queue WHERE participant_id IN (SELECT value FROM json_each(?))`, ids); err != nil {
+func seatsGone(ctx context.Context, tx *txn, roomID string, seats []int64) (daemons []int64, host bool, err error) {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM turn_queue WHERE participant_id = ANY(?)`, seats); err != nil {
 		return nil, false, fmt.Errorf("queue: %w", err)
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE rooms SET host_participant_id = NULL WHERE id = ? AND host_participant_id IN (SELECT value FROM json_each(?))`, roomID, ids)
+	res, err := tx.ExecContext(ctx, `UPDATE rooms SET host_participant_id = NULL WHERE id = ? AND host_participant_id = ANY(?)`, roomID, seats)
 	if err != nil {
 		return nil, false, fmt.Errorf("host: %w", err)
 	}
@@ -129,22 +127,10 @@ func seatsGone(ctx context.Context, tx *sql.Tx, roomID string, seats []int64) (d
 			return nil, false, err
 		}
 	}
-	if daemons, err = queryIDs(ctx, tx, `SELECT id FROM daemons WHERE participant_id IN (SELECT value FROM json_each(?)) ORDER BY id`, ids); err != nil {
+	if daemons, err = queryIDs(ctx, tx, `SELECT id FROM daemons WHERE participant_id = ANY(?) ORDER BY id`, seats); err != nil {
 		return nil, false, fmt.Errorf("daemons: %w", err)
 	}
 	return daemons, host, nil
-}
-
-// jsonIDs is ids as a JSON array, for json_each.
-func jsonIDs(ids []int64) string {
-	b := []byte{'['}
-	for i, id := range ids {
-		if i > 0 {
-			b = append(b, ',')
-		}
-		b = fmt.Appendf(b, "%d", id)
-	}
-	return string(append(b, ']'))
 }
 
 // Block is a profile a room admin blocked from rejoining a room (016-AC14).
@@ -180,7 +166,7 @@ func (s *Store) Blocks(ctx context.Context, roomID string) ([]Block, error) {
 // Unblock lifts the block of profile on room, posting who lifted it, by (nil for the super-admin),
 // and writing the audit entry ctx carries (016-AC14). ErrNotFound when profile is not blocked.
 func (s *Store) Unblock(ctx context.Context, roomID string, profile int64, by *Participant) error {
-	return s.withTx(ctx, "unblock", func(tx *sql.Tx) error {
+	return s.withTx(ctx, "unblock", func(tx *txn) error {
 		var name string
 		err := tx.QueryRowContext(ctx, `DELETE FROM room_blocks WHERE room_id = ? AND profile_id = ? RETURNING name`, roomID, profile).Scan(&name)
 		if errors.Is(err, sql.ErrNoRows) {

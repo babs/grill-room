@@ -71,7 +71,7 @@ func (s *Store) RoomUsage(ctx context.Context, roomID string, defaultQuota int64
 }
 
 type queryer interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	QueryRowContext(ctx context.Context, query string, args ...any) *row
 }
 
 func roomUsage(ctx context.Context, db queryer, roomID string, defaultQuota int64) (used, quota int64, err error) {
@@ -98,7 +98,7 @@ func (s *Store) AddUpload(ctx context.Context, u *Upload, defaultQuota int64) (*
 		return nil, fmt.Errorf("add upload: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
-	// Checked inside the transaction: the single connection serialises it with concurrent uploads.
+	// Checked inside the transaction: the write lock serialises it with concurrent uploads.
 	used, quota, err := roomUsage(ctx, tx, u.RoomID, defaultQuota)
 	if err != nil {
 		return nil, fmt.Errorf("add upload: %w", err)
@@ -111,21 +111,16 @@ func (s *Store) AddUpload(ctx context.Context, u *Upload, defaultQuota int64) (*
 	if u.ParticipantID != 0 {
 		pid = u.ParticipantID
 	}
-	res, err := tx.ExecContext(ctx, `
+	var uploadID int64
+	err = tx.QueryRowContext(ctx, `
 		INSERT INTO uploads(room_id, participant_id, filename, content_type, size, data, created_at)
-		SELECT id, ?, ?, ?, ?, ?, ? FROM rooms WHERE id = ?`,
-		pid, u.Filename, u.ContentType, len(u.Data), u.Data, ts, u.RoomID)
-	if err != nil {
-		return nil, fmt.Errorf("add upload: %w", err)
-	}
-	if n, err := res.RowsAffected(); err != nil {
-		return nil, fmt.Errorf("add upload: %w", err)
-	} else if n == 0 {
+		SELECT id, ?, ?, ?, ?, ?, ? FROM rooms WHERE id = ? RETURNING id`,
+		pid, u.Filename, u.ContentType, len(u.Data), u.Data, ts, u.RoomID).Scan(&uploadID)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
-	uploadID, err := res.LastInsertId()
 	if err != nil {
-		return nil, fmt.Errorf("add upload id: %w", err)
+		return nil, fmt.Errorf("add upload: %w", err)
 	}
 	d := &Document{RoomID: u.RoomID, Kind: DocUpload, Name: u.Filename, Format: u.Format,
 		ContentType: u.ContentType, Size: int64(len(u.Data)), Author: u.Author}
@@ -161,7 +156,7 @@ func (s *Store) CreateAgentDocument(ctx context.Context, roomID, name, format, b
 	return d, nil
 }
 
-func createAgentDocument(ctx context.Context, tx *sql.Tx, roomID, name, format, body, author string) (*Document, error) {
+func createAgentDocument(ctx context.Context, tx *txn, roomID, name, format, body, author string) (*Document, error) {
 	if format != "md" && format != "html" {
 		return nil, fmt.Errorf("create agent document: format %q is not md or html", format)
 	}
@@ -194,7 +189,7 @@ func (s *Store) AddRevision(ctx context.Context, roomID string, docID int64, bod
 	return r, nil
 }
 
-func addRevision(ctx context.Context, tx *sql.Tx, roomID string, docID int64, body, author string) (*Revision, error) {
+func addRevision(ctx context.Context, tx *txn, roomID string, docID int64, body, author string) (*Revision, error) {
 	var kind, format string
 	var last int
 	err := tx.QueryRowContext(ctx, `
@@ -219,39 +214,30 @@ func addRevision(ctx context.Context, tx *sql.Tx, roomID string, docID int64, bo
 	return r, nil
 }
 
-func insertDocument(ctx context.Context, tx *sql.Tx, d *Document, uploadID int64, ts string) error {
+func insertDocument(ctx context.Context, tx *txn, d *Document, uploadID int64, ts string) error {
 	var up any
 	if uploadID != 0 {
 		up = uploadID
 	}
-	res, err := tx.ExecContext(ctx, `
+	err := tx.QueryRowContext(ctx, `
 		INSERT INTO documents(room_id, kind, name, format, upload_id, author, created_at)
-		SELECT id, ?, ?, ?, ?, ?, ? FROM rooms WHERE id = ?`,
-		d.Kind, d.Name, d.Format, up, d.Author, ts, d.RoomID)
-	if err != nil {
-		return fmt.Errorf("insert document: %w", err)
-	}
-	if n, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("insert document: %w", err)
-	} else if n == 0 {
+		SELECT id, ?, ?, ?, ?, ?, ? FROM rooms WHERE id = ? RETURNING id`,
+		d.Kind, d.Name, d.Format, up, d.Author, ts, d.RoomID).Scan(&d.ID)
+	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
-	if d.ID, err = res.LastInsertId(); err != nil {
-		return fmt.Errorf("insert document id: %w", err)
+	if err != nil {
+		return fmt.Errorf("insert document: %w", err)
 	}
 	d.CreatedAt = parseTS(ts)
 	return nil
 }
 
-func insertRevision(ctx context.Context, tx *sql.Tx, docID int64, n int, body, author string) (*Revision, error) {
+func insertRevision(ctx context.Context, tx *txn, docID int64, n int, body, author string) (*Revision, error) {
 	r := &Revision{DocumentID: docID, N: n, Author: author, Body: body, CreatedAt: time.Now().UTC()}
-	res, err := tx.ExecContext(ctx, `INSERT INTO revisions(document_id, n, body, author, created_at) VALUES(?,?,?,?,?)`,
-		docID, n, body, author, r.CreatedAt.Format(time.RFC3339Nano))
-	if err != nil {
+	if err := tx.QueryRowContext(ctx, `INSERT INTO revisions(document_id, n, body, author, created_at) VALUES(?,?,?,?,?) RETURNING id`,
+		docID, n, body, author, formatTS(r.CreatedAt)).Scan(&r.ID); err != nil {
 		return nil, fmt.Errorf("insert revision: %w", err)
-	}
-	if r.ID, err = res.LastInsertId(); err != nil {
-		return nil, fmt.Errorf("insert revision id: %w", err)
 	}
 	return r, nil
 }
@@ -386,7 +372,7 @@ type DocumentChange struct {
 
 // docTx loads document docID of room in tx, deleted or not as deleted says, and refuses an
 // agent document while a turn runs.
-func docTx(ctx context.Context, tx *sql.Tx, roomID string, docID int64, deleted bool) (*Document, error) {
+func docTx(ctx context.Context, tx *txn, roomID string, docID int64, deleted bool) (*Document, error) {
 	cond := ` AND d.deleted_at IS NULL`
 	if deleted {
 		cond = ` AND d.deleted_at IS NOT NULL`
@@ -411,7 +397,7 @@ func docTx(ctx context.Context, tx *sql.Tx, roomID string, docID int64, deleted 
 }
 
 // nameFree reports whether no live document of room but docID holds name.
-func nameFree(ctx context.Context, tx *sql.Tx, roomID string, docID int64, name string) error {
+func nameFree(ctx context.Context, tx *txn, roomID string, docID int64, name string) error {
 	var taken bool
 	err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM documents WHERE room_id = ? AND name = ? AND id != ? AND deleted_at IS NULL)`,
 		roomID, name, docID).Scan(&taken)
@@ -425,7 +411,7 @@ func nameFree(ctx context.Context, tx *sql.Tx, roomID string, docID int64, name 
 }
 
 // bumpDocs moves the room's documents version: pages and daemons read the list again.
-func bumpDocs(ctx context.Context, tx *sql.Tx, roomID string, docID int64) error {
+func bumpDocs(ctx context.Context, tx *txn, roomID string, docID int64) error {
 	_, err := tx.ExecContext(ctx, `UPDATE documents SET change_seq = (SELECT COALESCE(MAX(change_seq), 0) + 1 FROM documents WHERE room_id = ?)
 		WHERE id = ?`, roomID, docID)
 	if err != nil {
@@ -435,7 +421,7 @@ func bumpDocs(ctx context.Context, tx *sql.Tx, roomID string, docID int64) error
 }
 
 // docLine writes the chat line of a document change: by a member, or by the super-admin.
-func docLine(ctx context.Context, tx *sql.Tx, roomID string, by *Participant, body string) (*Message, error) {
+func docLine(ctx context.Context, tx *txn, roomID string, by *Participant, body string) (*Message, error) {
 	if by == nil {
 		m := &Message{RoomID: roomID, Kind: KindSystem, Sender: "admin", Body: "The admin " + body}
 		return m, insertMessage(ctx, tx, m)
@@ -448,7 +434,7 @@ func docLine(ctx context.Context, tx *sql.Tx, roomID string, by *Participant, bo
 // (005-AC25). A name unchanged changes nothing: nil.
 func (s *Store) RenameDocument(ctx context.Context, roomID string, docID int64, name string, by *Participant) (*DocumentChange, error) {
 	var out *DocumentChange
-	err := s.withTx(ctx, "rename document", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "rename document", func(tx *txn) error {
 		d, err := docTx(ctx, tx, roomID, docID, false)
 		if err != nil || d.Name == name {
 			return err
@@ -484,7 +470,7 @@ func (s *Store) RenameDocument(ctx context.Context, roomID string, docID int64, 
 // meanwhile is ErrDocNameTaken.
 func (s *Store) SetDocumentDeleted(ctx context.Context, roomID string, docID int64, deleted bool, by *Participant) (*DocumentChange, error) {
 	var out *DocumentChange
-	err := s.withTx(ctx, "delete document", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "delete document", func(tx *txn) error {
 		if by != nil {
 			if _, err := roomAdmin(ctx, tx, roomID, by.ProfileID); err != nil {
 				return err

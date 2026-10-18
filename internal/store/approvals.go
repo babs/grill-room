@@ -55,7 +55,7 @@ const hostSeatSQL = `(r.host_participant_id = ? OR EXISTS (SELECT 1 FROM partici
 // asHost returns ErrForbidden unless by hosts the room, checked inside the decision's transaction:
 // a hand-over between a handler's check and the write must not let the former host decide. Any
 // seat of the host's profile in the room decides as the host.
-func asHost(ctx context.Context, tx *sql.Tx, roomID string, by *Participant) error {
+func asHost(ctx context.Context, tx *txn, roomID string, by *Participant) error {
 	_, err := hostOf(ctx, tx, roomID, by)
 	return err
 }
@@ -75,7 +75,7 @@ func (s *Store) HostsAs(ctx context.Context, roomID string, by *Participant) (bo
 }
 
 // hostOf returns the room's host seat when by decides as its host, ErrForbidden otherwise.
-func hostOf(ctx context.Context, tx *sql.Tx, roomID string, by *Participant) (int64, error) {
+func hostOf(ctx context.Context, tx *txn, roomID string, by *Participant) (int64, error) {
 	var host sql.NullInt64
 	var is bool
 	err := tx.QueryRowContext(ctx, `SELECT r.host_participant_id, `+hostSeatSQL+` FROM rooms r WHERE r.id = ?`, by.ID, by.ID, roomID).Scan(&host, &is)
@@ -97,7 +97,7 @@ func hostOf(ctx context.Context, tx *sql.Tx, roomID string, by *Participant) (in
 // for something else by now.
 func (s *Store) DecideCap(ctx context.Context, roomID string, id int64, d *Daemon, asked, runs turn.Level, approve bool, by *Participant) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "decide cap", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "decide cap", func(tx *txn) error {
 		host, err := hostOf(ctx, tx, roomID, by)
 		if err != nil {
 			return err
@@ -150,7 +150,7 @@ type PersonaChange struct {
 // heldBy reports whether a persona change by participant by waits for the host: the host daemon
 // approves everything, and by is not the host, nor another seat of the host's profile. The host's
 // daemon setting holds while it is offline.
-func heldBy(ctx context.Context, tx *sql.Tx, roomID string, by *Participant) (bool, error) {
+func heldBy(ctx context.Context, tx *txn, roomID string, by *Participant) (bool, error) {
 	var held bool
 	err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM rooms r JOIN daemons d ON d.participant_id = r.host_participant_id
 		WHERE r.id = ? AND d.approve_all = 1 AND NOT `+hostSeatSQL+`)`, roomID, by.ID, by.ID).Scan(&held)
@@ -179,7 +179,7 @@ func (c PersonaPatch) over(earlier PersonaPatch) PersonaPatch {
 
 // holdChange keeps c for the host to decide on persona p: a persona has one request, which a later
 // change adds to, so the host decides on what the room wants now.
-func holdChange(ctx context.Context, tx *sql.Tx, roomID string, p *RoomPersona, kind string, c PersonaPatch, by *Participant) error {
+func holdChange(ctx context.Context, tx *txn, roomID string, p *RoomPersona, kind string, c PersonaPatch, by *Participant) error {
 	var earlier string
 	err := tx.QueryRowContext(ctx, `SELECT patch FROM persona_change_requests WHERE persona_id = ?`, p.ID).Scan(&earlier)
 	switch {
@@ -290,7 +290,7 @@ func (s *Store) PersonaChanges(ctx context.Context, roomID string) ([]PersonaCha
 // ErrNameTaken when the name it brings is used by now: the change stays held.
 func (s *Store) DecideChange(ctx context.Context, roomID string, id int64, approve bool, by *Participant) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "decide change", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "decide change", func(tx *txn) error {
 		if err := asHost(ctx, tx, roomID, by); err != nil {
 			return err
 		}

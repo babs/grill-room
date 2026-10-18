@@ -10,9 +10,9 @@ flowchart LR
     DevSTT["Device transcription<br/>(opt-in, page workers)"]
   end
 
-  subgraph Server["Room server (Go, SQLite)"]
+  subgraph Server["Room server (Go)"]
     API["HTTP API + SSE"]
-    Store[("SQLite<br/>rooms, messages, docs,<br/>revisions, annotations,<br/>turns, sessions, profiles")]
+    Store[("PostgreSQL<br/>rooms, messages, docs,<br/>revisions, annotations,<br/>turns, sessions, profiles")]
   end
 
   AdminC["Instance admin<br/>(/admin, or curl)"]
@@ -63,7 +63,7 @@ flowchart LR
 | Profile page | nothing | room server: `/api/profile/*` | profile cookie; recovery or emailed link token |
 | Script or agent of a profile | nothing | room server: the REST routes its profile reaches, never `/api/admin/*`, admin-only or credential routes; `/mcp`, whose tools call those routes with the same token | personal API token (`grt_`), read or full |
 | Document iframe | anchors and selections via postMessage | room page only | none: opaque origin, CSP sandbox, no cookie |
-| Room server | `/api/*` REST, `/api/rooms/{room}/events` SSE, `/mcp` (MCP, Streamable HTTP), `/install.sh`, `/download/*`, `/healthz`; `/metrics` on its own port | SQLite, LiveKit server API, SMTP relay when configured | admin token, participant token or cookie, profile cookie, personal API token, daemon token, STT token, pairing secret |
+| Room server | `/api/*` REST, `/api/rooms/{room}/events` SSE, `/mcp` (MCP, Streamable HTTP), `/install.sh`, `/download/*`, `/healthz`; `/metrics` on its own port; `grill_room_db_lock_wait_seconds` there is how long a write waited for its write slot and the global write lock | PostgreSQL, LiveKit server API, SMTP relay when configured | admin token, participant token or cookie, profile cookie, personal API token, daemon token, STT token, pairing secret |
 | LiveKit | WebRTC signalling (WSS), TURN/TLS on 443, ICE/TCP | browsers, STT worker | 5 min JWT minted by the room server |
 | STT worker | `/healthz`, `/metrics` | LiveKit (hidden participant), room server (`/api/stt/heartbeat`, whose answer names the tracks to skip, `/voice/lines`, `/voice/dropped`), its own engine processes over pipes | STT token; LiveKit key pair |
 | Daemon: a supervisor and one worker per room server, [protocol](daemon-protocol.md) | local admin page on 127.0.0.1: instances, rooms, Claude accounts, global and per-instance settings, and the turn history in a local `monitor.db`; a local socket (named pipe on Windows) for a second launch to hand over its room | room server (SSE `daemon/events` with turns and whether it hosts, turn job, workspace manifest and tar, session, result, status with the host cap and approval mode), Docker, `/api/daemon/version` and `/download/` for each worker's binary and its sigstore bundle, GitHub releases (or an instance) for the supervisor's own update, the sigstore TUF repository for the trusted root | daemon token from pairing; admin page one-time link + Origin check |

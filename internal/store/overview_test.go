@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -154,7 +155,7 @@ func TestRoomQuotaOverridesTheDefault(t *testing.T) {
 	if err := s.SetRoomQuota(ctx, "a", 2*def); err != nil {
 		t.Fatal(err)
 	}
-	if err := up(string(make([]byte, def))); err != nil {
+	if err := up(strings.Repeat("x", int(def))); err != nil {
 		t.Fatalf("upload past the default under a larger own quota: %v", err)
 	}
 	if err := s.SetRoomQuota(ctx, "nope", 1); !errors.Is(err, ErrNotFound) {

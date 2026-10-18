@@ -22,6 +22,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/babs/grill-room/internal/pgtest"
 	"github.com/babs/grill-room/internal/sandbox"
 	_ "github.com/babs/grill-room/internal/sqlitetest"
 )
@@ -32,7 +33,7 @@ func TestMain(m *testing.M) {
 	if mode := os.Getenv("GRILL_ROOM_TEST_WORKER"); mode != "" {
 		os.Exit(fakeWorker(mode))
 	}
-	os.Exit(m.Run())
+	pgtest.Main(m)
 }
 
 // fakeWorker is a worker from another release: it only says hello at its version, reports a
@@ -532,18 +533,22 @@ func TestLockAndHandoff(t *testing.T) {
 	var got []string
 	var mu sync.Mutex
 	link := "http://127.0.0.1:1234/s/CODE"
-	go ServeHandoff(ln, func(room string) (string, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		got = append(got, room)
-		switch room {
-		case "bad":
-			return "", errors.New("room URL must end in /r/<room>")
-		case "evil":
-			return "https://evil.example/", nil
-		}
-		return link, nil
-	}, zap.NewNop())
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		ServeHandoff(ln, func(room string) (string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			got = append(got, room)
+			switch room {
+			case "bad":
+				return "", errors.New("room URL must end in /r/<room>")
+			case "evil":
+				return "https://evil.example/", nil
+			}
+			return link, nil
+		}, zap.NewNop())
+	}()
 	for room, want := range map[string]string{"https://rooms.example/r/abc": link, "": link} {
 		if l, err := Handoff(context.Background(), dir, room); err != nil || l != want {
 			t.Fatalf("handoff %q: %q %v", room, l, err)
@@ -556,6 +561,11 @@ func TestLockAndHandoff(t *testing.T) {
 		t.Fatalf("foreign link: %v", err)
 	}
 	_ = ln.Close()
+	select {
+	case <-served:
+	case <-time.After(15 * time.Second):
+		t.Fatal("ServeHandoff did not return after its listener closed")
+	}
 	release()
 	// A released lock is free for the next supervisor, which opens the socket again.
 	release, err = LockSupervisor(dir)

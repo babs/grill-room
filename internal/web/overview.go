@@ -3,8 +3,6 @@ package web
 import (
 	"errors"
 	"net/http"
-	"os"
-	"path/filepath"
 
 	"go.uber.org/zap"
 
@@ -93,8 +91,8 @@ func (s *Server) setQuota(w http.ResponseWriter, r *http.Request, sess *session)
 
 type instanceResp struct {
 	Version string `json:"version"`
-	// DBBytes is the database with its write-ahead log; DiskFree and DiskTotal are of the
-	// filesystem holding it, -1 when the platform cannot tell.
+	// DBBytes is the PostgreSQL database's size; DiskFree and DiskTotal are of the staging dir's
+	// filesystem (the database's disk is the PG server's), -1 when the platform cannot tell.
 	DBBytes   int64 `json:"db_bytes"`
 	DiskFree  int64 `json:"disk_free"`
 	DiskTotal int64 `json:"disk_total"`
@@ -113,17 +111,16 @@ type instanceResp struct {
 }
 
 // adminInstance reports the instance's health (004-AC5).
-func (s *Server) adminInstance(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) adminInstance(w http.ResponseWriter, r *http.Request) {
 	var out instanceResp
 	out.Version, out.DiskFree, out.DiskTotal = s.opts.Version, -1, -1
-	if p := s.opts.DBPath; p != "" {
-		for _, suffix := range []string{"", "-wal", "-shm"} {
-			if fi, err := os.Stat(p + suffix); err == nil {
-				out.DBBytes += fi.Size()
-			}
-		}
-		var err error
-		if out.DiskFree, out.DiskTotal, err = diskSpace(filepath.Dir(p)); err != nil {
+	var err error
+	if out.DBBytes, err = s.bus.Store.Size(r.Context()); err != nil {
+		s.log.Warn("db_size_failed", zap.Error(err))
+	}
+	// The disk an import stages on: the database's own is the PostgreSQL server's.
+	if p := s.opts.StagingDir; p != "" {
+		if out.DiskFree, out.DiskTotal, err = diskSpace(p); err != nil {
 			s.log.Warn("disk_space_failed", zap.Error(err))
 			out.DiskFree, out.DiskTotal = -1, -1
 		}

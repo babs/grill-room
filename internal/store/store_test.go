@@ -2,31 +2,53 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/babs/grill-room/internal/anchor"
-	"github.com/babs/grill-room/internal/sqlitetest"
+	"github.com/babs/grill-room/internal/pgtest"
 )
+
+func TestMain(m *testing.M) { pgtest.Main(m) }
 
 func openTest(t *testing.T) *Store {
 	t.Helper()
-	s, err := Open(sqlitetest.Template(t, "test.db", func(p string) error {
-		s, err := Open(p)
-		if err != nil {
-			return err
-		}
-		return s.Close()
-	}))
+	s, err := Open(testDSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+// testDSN is an empty store database of the test's own.
+func testDSN(t *testing.T) string {
+	t.Helper()
+	return pgtest.Template(t, func(dsn string) error {
+		s, err := Open(dsn)
+		if err != nil {
+			return err
+		}
+		return s.Close()
+	})
+}
+
+// failInserts makes every INSERT into table fail with msg until the returned func runs.
+func failInserts(t *testing.T, s *Store, table, msg string) (restore func()) {
+	t.Helper()
+	ctx := context.Background()
+	fn := "fail_" + table
+	if _, err := s.db.ExecContext(ctx, `CREATE FUNCTION `+fn+`() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION '`+msg+`'; END $$;
+		CREATE TRIGGER fail BEFORE INSERT ON `+table+` FOR EACH ROW EXECUTE FUNCTION `+fn+`()`); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if _, err := s.db.ExecContext(ctx, `DROP TRIGGER fail ON `+table+`; DROP FUNCTION `+fn+`()`); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // seed creates a room with its Grill persona, an invite, a participant with its own profile, an
@@ -115,41 +137,30 @@ func seedHeld(t *testing.T, s *Store, room string) *Participant {
 	return bob
 }
 
-func TestMigrateIsIdempotent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "test.db")
-	for range 2 {
-		s, err := Open(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var v int
-		if err := s.db.QueryRowContext(context.Background(), `PRAGMA user_version`).Scan(&v); err != nil {
-			t.Fatal(err)
-		}
-		if v != len(migrations) {
-			t.Fatalf("user_version = %d, want %d", v, len(migrations))
-		}
-		_ = s.Close()
-	}
-}
-
 // serverWide are the tables the server itself owns: settings, the persona template and starter
 // libraries, whose presets and built-ins belong to no profile while the rest cascade from theirs, the skill library,
 // whose shared skills outlive their publisher while personal ones cascade from theirs, the admin
 // sessions, the audit log, whose entries outlive the rooms and profiles they name (004-AC6), and the
-// catalogue voices' samples (013-AC27) and the lexicon (013-AC31).
+// catalogue voices' samples (013-AC27), the lexicon (013-AC31) and the schema version.
 var serverWide = []string{"settings", "persona_templates", "persona_template_versions", "skills", "skill_versions", "admin_sessions", "audit_log",
-	"starters", "starter_versions", "starter_files", "tts_samples", "pronunciations"}
+	"starters", "starter_versions", "starter_files", "tts_samples", "pronunciations", "schema_version"}
+
+// fkSQL lists the single-column foreign keys: table, column, parent table, ON DELETE action and
+// whether the column is NOT NULL.
+const fkSQL = `SELECT c.conrelid::regclass::text AS tbl, a.attname::text AS col, c.confrelid::regclass::text AS parent,
+	CASE c.confdeltype WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'r' THEN 'RESTRICT' WHEN 'd' THEN 'SET DEFAULT' ELSE 'NO ACTION' END AS on_delete,
+	a.attnotnull AS not_null
+	FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+	WHERE c.contype = 'f' AND c.connamespace = 'public'::regnamespace`
 
 // uncascadedTables returns the tables that neither a DELETE on rooms nor one on profiles would
 // purge: those without a chain of NOT NULL, ON DELETE CASCADE foreign keys leading to an owner.
 // serverWide tables are skipped.
-func uncascadedTables(ctx context.Context, db *sql.DB) ([]string, error) {
+func uncascadedTables(ctx context.Context, db *database) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT m.name, COALESCE(f."table", ''), COALESCE(f.on_delete, ''), COALESCE(c."notnull", 0)
-		FROM sqlite_master m LEFT JOIN pragma_foreign_key_list(m.name) f
-		LEFT JOIN pragma_table_info(m.name) c ON c.name = f."from"
-		WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%' AND m.name NOT IN ('rooms', 'profiles')`)
+		SELECT t.relname::text, COALESCE(f.parent, ''), COALESCE(f.on_delete, ''), COALESCE(f.not_null, false)
+		FROM pg_class t LEFT JOIN (`+fkSQL+`) f ON f.tbl = t.relname::text
+		WHERE t.relkind = 'r' AND t.relnamespace = 'public'::regnamespace AND t.relname NOT IN ('rooms', 'profiles')`)
 	if err != nil {
 		return nil, err
 	}
@@ -208,12 +219,9 @@ func TestEveryTableCascadesFromAnOwner(t *testing.T) {
 
 // profileRefViolations returns table.column for every foreign key to profiles that a profile
 // delete would neither purge (NOT NULL, CASCADE) nor detach (SET NULL).
-func profileRefViolations(ctx context.Context, db *sql.DB) ([]string, error) {
+func profileRefViolations(ctx context.Context, db *database) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT m.name, f."from", f.on_delete, COALESCE(c."notnull", 0)
-		FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) f
-		LEFT JOIN pragma_table_info(m.name) c ON c.name = f."from"
-		WHERE m.type = 'table' AND f."table" = 'profiles'`)
+		SELECT tbl, col, on_delete, not_null FROM (`+fkSQL+`) f WHERE parent = 'profiles'`)
 	if err != nil {
 		return nil, err
 	}
@@ -309,8 +317,7 @@ func roomRows(t *testing.T, s *Store, room string) map[string]int {
 	t.Helper()
 	ctx := context.Background()
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT m.name FROM sqlite_master m JOIN pragma_table_info(m.name) c
-		WHERE m.type = 'table' AND c.name = 'room_id'`)
+		SELECT table_name::text FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'room_id'`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,9 +558,11 @@ func TestWritable(t *testing.T) {
 	if err := s.Writable(ctx); err != nil {
 		t.Fatalf("fresh store: %v", err)
 	}
-	if _, err := s.db.ExecContext(ctx, `PRAGMA query_only = 1`); err != nil {
+	// New connections start read-only; the pool keeps none idle, so the next write opens one.
+	if _, err := s.db.ExecContext(ctx, `DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET default_transaction_read_only = on', current_database()); END $$`); err != nil {
 		t.Fatal(err)
 	}
+	s.db.db.SetMaxIdleConns(0)
 	if err := s.Writable(ctx); err == nil {
 		t.Fatal("read-only store reported writable")
 	}
@@ -603,9 +612,8 @@ func TestRoomParticipant(t *testing.T) {
 
 // serverWideRoomRefs returns table.column for every reference from a server-wide table to rooms
 // that a room delete would not cascade.
-func serverWideRoomRefs(ctx context.Context, db *sql.DB, tables []string) ([]string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT m.name, f."from", f.on_delete FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) f
-		WHERE m.type = 'table' AND f."table" = 'rooms'`)
+func serverWideRoomRefs(ctx context.Context, db *database, tables []string) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `SELECT tbl, col, on_delete FROM (`+fkSQL+`) f WHERE parent = 'rooms'`)
 	if err != nil {
 		return nil, err
 	}
@@ -641,5 +649,27 @@ func TestServerWideRoomReferencesCascade(t *testing.T) {
 		if bad, _ := serverWideRoomRefs(ctx, s.db, append(slices.Clone(serverWide), "notes")); !slices.Equal(bad, []string{"notes.room_id"}) {
 			t.Errorf("%s: %v", ddl, bad)
 		}
+	}
+}
+
+// queryIDs sorts: PostgreSQL's UPDATE .. RETURNING gives rows in heap order, and an updated row
+// moves to the end of the heap.
+func TestQueryIDsSorted(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	var got []int64
+	err := s.withTx(ctx, "t", func(tx *txn) error {
+		for _, q := range []string{`CREATE TABLE ids_t (id BIGINT PRIMARY KEY, v BIGINT)`, `INSERT INTO ids_t VALUES (1, 0), (2, 0), (3, 0)`,
+			`UPDATE ids_t SET v = 1 WHERE id = 1`} {
+			if _, err := tx.ExecContext(ctx, q); err != nil {
+				return err
+			}
+		}
+		var err error
+		got, err = queryIDs(ctx, tx, `UPDATE ids_t SET v = 2 RETURNING id`)
+		return err
+	})
+	if err != nil || !slices.Equal(got, []int64{1, 2, 3}) {
+		t.Fatalf("%v %v, want [1 2 3]", got, err)
 	}
 }

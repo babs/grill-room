@@ -76,7 +76,7 @@ func scanAPIToken(sc interface{ Scan(...any) error }) (*APIToken, error) {
 // expires nil never expires. ErrLimit past MaxAPITokens unexpired ones at now.
 func (s *Store) CreateAPIToken(ctx context.Context, profileID int64, name, hash, scope string, expires *time.Time, now time.Time) (*APIToken, error) {
 	var t *APIToken
-	err := s.withTx(ctx, "create api token", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "create api token", func(tx *txn) error {
 		var n int
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM api_tokens WHERE profile_id = ? AND (expires_at_ms IS NULL OR expires_at_ms > ?)`,
 			profileID, now.UnixMilli()).Scan(&n); err != nil {
@@ -90,7 +90,7 @@ func (s *Store) CreateAPIToken(ctx context.Context, profileID int64, name, hash,
 			exp = sql.NullInt64{Int64: expires.UnixMilli(), Valid: true}
 		}
 		row := tx.QueryRowContext(ctx, `INSERT INTO api_tokens(profile_id, name, token_hash, scope, created_at, expires_at_ms) VALUES(?,?,?,?,?,?)
-			RETURNING `+apiTokenCols, profileID, name, hash, scope, now.UTC().Format(time.RFC3339Nano), exp)
+			RETURNING `+apiTokenCols, profileID, name, hash, scope, formatTS(now), exp)
 		var err error
 		if t, err = scanAPIToken(row); err != nil {
 			return err
@@ -131,7 +131,7 @@ func (s *Store) APITokens(ctx context.Context, profileID int64) ([]APIToken, err
 
 // RevokeAPIToken deletes token id of profileID, with the audit entry ctx carries. ErrNotFound.
 func (s *Store) RevokeAPIToken(ctx context.Context, profileID, id int64) error {
-	return s.withTx(ctx, "revoke api token", func(tx *sql.Tx) error {
+	return s.withTx(ctx, "revoke api token", func(tx *txn) error {
 		t, err := scanAPIToken(tx.QueryRowContext(ctx, `SELECT `+apiTokenCols+` FROM api_tokens WHERE id = ? AND profile_id = ?`, id, profileID))
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
@@ -205,7 +205,7 @@ func (s *Store) ProfileByID(ctx context.Context, id int64) (*Profile, error) {
 // the last uses before ipBefore (012-AC7, 012-AC9). It returns how many tokens it deleted.
 func (s *Store) PurgeAPITokens(ctx context.Context, now, ipBefore time.Time) (int64, error) {
 	var n int64
-	err := s.withTx(ctx, "purge api tokens", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "purge api tokens", func(tx *txn) error {
 		res, err := tx.ExecContext(ctx, `DELETE FROM api_tokens WHERE expires_at_ms <= ?`, now.Add(-APITokenKeep).UnixMilli())
 		if err != nil {
 			return err

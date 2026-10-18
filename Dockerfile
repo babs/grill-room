@@ -46,8 +46,6 @@ RUN --mount=type=bind,from=daemon-prev,target=/daemon-prev-in \
     mkdir /daemon-prev && if [ -f /daemon-prev-in/VERSION ]; then \
       cp /daemon-prev-in/VERSION /daemon-prev-in/PROTO /daemon-prev-in/grill-room-daemon-* /daemon-prev/ && chmod -R a+rX /daemon-prev; \
     fi
-# distroless has no shell to create the data dir in the runtime stage.
-RUN mkdir /data
 
 FROM gcr.io/distroless/static-debian13:nonroot
 
@@ -68,16 +66,13 @@ ENV VERSION="${VERSION}" \
 
 ENV GRILL_ROOM_ADDR="0.0.0.0:7680" \
     GRILL_ROOM_METRICS_ADDR="0.0.0.0:7681" \
-    GRILL_ROOM_DB="/data/grill-room.db" \
     GRILL_ROOM_PANDOC="/usr/local/bin/pandoc" \
     GRILL_ROOM_DAEMON_DIR="/daemon" \
     GRILL_ROOM_DAEMON_PREV_DIR="/daemon-prev"
 
-COPY --from=builder --chown=65532:65532 /data /data
 COPY --from=pandoc /usr/local/bin/pandoc /usr/local/bin/pandoc
 COPY --from=builder /daemon /daemon
 COPY --from=builder /daemon-prev /daemon-prev
 COPY --from=builder /app /app
-VOLUME /data
 EXPOSE 7680 7681
 ENTRYPOINT ["/app"]

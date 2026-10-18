@@ -2,9 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -288,7 +288,7 @@ func TestRemovePlugin(t *testing.T) {
 
 // 009-AC12: a removed plugin left by a server stopped mid-turn goes at the next start.
 func TestOpenPurgesRemovedPlugins(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "p.db")
+	path := testDSN(t)
 	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -427,12 +427,14 @@ func TestSupersededSnapshotsEmptied(t *testing.T) {
 // 009-AC12: the trigger runs the very statements the store runs at start and on removal.
 func TestPurgeTriggerMatchesTheStatements(t *testing.T) {
 	s := openTest(t)
-	var sql string
-	if err := s.db.QueryRowContext(context.Background(), `SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'turns_purge_plugins'`).Scan(&sql); err != nil {
+	var body string
+	if err := s.db.QueryRowContext(context.Background(), `SELECT prosrc FROM pg_proc WHERE proname = 'turns_purge_plugins'`).Scan(&body); err != nil {
 		t.Fatal(err)
 	}
+	words := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	sql := words(body)
 	for _, q := range []string{purgePlugins, dropSuperseded} {
-		if !strings.Contains(sql, q+";") {
+		if !strings.Contains(sql, words(q)+";") {
 			t.Fatalf("the trigger lacks:\n%s\nit reads:\n%s", q, sql)
 		}
 	}
@@ -621,22 +623,31 @@ func TestPluginsVersion(t *testing.T) {
 // through its covering index only, never the table where the rows sit.
 func TestPluginsVersionUsesTheCoveringIndex(t *testing.T) {
 	s := openTest(t)
-	rows, err := s.db.QueryContext(context.Background(), `EXPLAIN QUERY PLAN `+pluginsVersionSQL, "a", "a", "a", "a")
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback() //nolint:errcheck // read-only
+	// Empty tables make any scan cheapest: the plan shows what the index alone can serve.
+	if _, err := tx.ExecContext(ctx, `SET LOCAL enable_seqscan = off; SET LOCAL enable_bitmapscan = off`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := tx.QueryContext(ctx, `EXPLAIN `+pluginsVersionSQL, "a", "a", "a", "a")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
 	var plan []string
 	for rows.Next() {
-		var id, parent, unused int
-		var detail string
-		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+		var line string
+		if err := rows.Scan(&line); err != nil {
 			t.Fatal(err)
 		}
-		plan = append(plan, detail)
+		plan = append(plan, line)
 	}
 	all := strings.Join(plan, "\n")
-	if !strings.Contains(all, "SEARCH v USING COVERING INDEX plugin_versions_state") || strings.Contains(all, "SCAN v") {
+	if !strings.Contains(all, "Index Only Scan using plugin_versions_state on plugin_versions v") || strings.Contains(all, "Seq Scan on plugin_versions") {
 		t.Fatalf("plan:\n%s", all)
 	}
 }
@@ -645,7 +656,7 @@ func TestPluginsVersionUsesTheCoveringIndex(t *testing.T) {
 func TestPluginVersionsHoldNoSnapshot(t *testing.T) {
 	s := openTest(t)
 	var n int
-	if err := s.db.QueryRowContext(context.Background(), `SELECT count(*) FROM pragma_table_info('plugin_versions') WHERE type = 'BLOB'`).Scan(&n); err != nil || n != 0 {
+	if err := s.db.QueryRowContext(context.Background(), `SELECT count(*) FROM information_schema.columns WHERE table_name = 'plugin_versions' AND data_type = 'bytea'`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("blob columns in plugin_versions: %d %v", n, err)
 	}
 }

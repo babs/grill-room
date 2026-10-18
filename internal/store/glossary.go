@@ -27,7 +27,7 @@ func (s *Store) STTGlossary(ctx context.Context, roomID string) (string, error) 
 // An unchanged glossary changes nothing and returns a nil message. The caller broadcasts.
 func (s *Store) SetSTTGlossary(ctx context.Context, roomID, glossary string, by *Participant) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "set stt glossary", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "set stt glossary", func(tx *txn) error {
 		var old string
 		err := tx.QueryRowContext(ctx, `SELECT stt_glossary FROM rooms WHERE id = ?`, roomID).Scan(&old)
 		if errors.Is(err, sql.ErrNoRows) {

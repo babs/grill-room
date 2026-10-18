@@ -52,6 +52,10 @@ var (
 // adminTokenSetting holds the admin token hash. Delete the row to have a new token generated.
 const adminTokenSetting = "admin_token_sha256" //nolint:gosec // a settings key, not a credential
 
+// lockWaitSeconds is fed by store.WithLockWait.
+var lockWaitSeconds = prometheus.NewHistogram(prometheus.HistogramOpts{Name: "grill_room_db_lock_wait_seconds",
+	Help: "Time each database write waited for this process's writer slot and the global write lock (017-AC20).", Buckets: prometheus.ExponentialBuckets(0.0001, 4, 10)})
+
 // testPluginClient returns the client plugin fetches use, nil for the guarded default. Only the
 // e2e build (e2e.go) sets one, for the browser tests' local git server.
 var testPluginClient = func(*zap.Logger) *http.Client { return nil }
@@ -67,11 +71,14 @@ func getEnv(key, fallback string) string {
 type Config struct {
 	Addr        string
 	MetricsAddr string
-	DB          string
-	PublicURL   string
-	AdminToken  string
-	LogLevel    string
-	LogFormat   string
+	// DatabaseURL is the PostgreSQL DSN; it holds a password, so it is never logged.
+	DatabaseURL string
+	// StagingDir holds exports and imports in progress; the pod's own, cleaned at start.
+	StagingDir string
+	PublicURL  string
+	AdminToken string
+	LogLevel   string
+	LogFormat  string
 	// MaxUploadMB and MaxRoomMB bound one upload and all of a room's uploads (D31).
 	MaxUploadMB int64
 	MaxRoomMB   int64
@@ -156,7 +163,8 @@ func loadConfig() (Config, error) {
 		PandocTimeout:   timeout,
 		Addr:            addr,
 		MetricsAddr:     getEnv("GRILL_ROOM_METRICS_ADDR", "127.0.0.1:7681"),
-		DB:              getEnv("GRILL_ROOM_DB", "grill-room.db"),
+		DatabaseURL:     os.Getenv("GRILL_ROOM_DATABASE_URL"),
+		StagingDir:      getEnv("GRILL_ROOM_STAGING_DIR", filepath.Join(os.TempDir(), "grill-room-staging")),
 		PublicURL:       getEnv("GRILL_ROOM_URL", "http://"+addr),
 		AdminToken:      os.Getenv("GRILL_ROOM_ADMIN_TOKEN"),
 		LiveKitURL:      os.Getenv("GRILL_ROOM_LIVEKIT_URL"),
@@ -180,8 +188,8 @@ func (c Config) Validate() error {
 	if c.Addr == c.MetricsAddr {
 		return errors.New("GRILL_ROOM_ADDR and GRILL_ROOM_METRICS_ADDR must differ")
 	}
-	if c.DB == "" {
-		return errors.New("GRILL_ROOM_DB is empty")
+	if c.DatabaseURL == "" {
+		return errors.New("GRILL_ROOM_DATABASE_URL is empty")
 	}
 	// 012-AC5: the server tells API tokens from the admin token by this prefix.
 	if strings.HasPrefix(c.AdminToken, web.APITokenPrefix) {
@@ -281,19 +289,19 @@ func newLogger(c Config) (*zap.Logger, error) {
 }
 
 // adminTokenHash returns the admin token hash: from the environment, else from the database, else
-// a new token is generated, its hash kept, and the token returned so it can be shown once.
+// a new token is generated, its hash kept, and the token returned so it can be shown once. Pods
+// booting together keep the first hash stored (017 Q11), and only the pod that stored it shows it.
 func adminTokenHash(ctx context.Context, st *store.Store, fromEnv string) (hash, generated string, err error) {
 	if fromEnv != "" {
 		return web.HashToken(fromEnv), "", nil
 	}
-	hash, err = st.Setting(ctx, adminTokenSetting)
-	if err != nil || hash != "" {
-		return hash, "", err
-	}
 	generated = web.NewToken()
-	hash = web.HashToken(generated)
-	if err := st.SetSetting(ctx, adminTokenSetting, hash); err != nil {
+	mine := web.HashToken(generated)
+	if hash, err = st.SettingOrInit(ctx, adminTokenSetting, mine); err != nil {
 		return "", "", err
+	}
+	if hash != mine {
+		return hash, "", nil
 	}
 	return hash, generated, nil
 }
@@ -362,7 +370,10 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	st, err := store.Open(cfg.DB)
+	if err := web.PrepareStaging(cfg.StagingDir); err != nil {
+		return err
+	}
+	st, err := store.Open(cfg.DatabaseURL, store.WithLockWait(func(d time.Duration) { lockWaitSeconds.Observe(d.Seconds()) }))
 	if err != nil {
 		return err
 	}
@@ -431,7 +442,7 @@ func run() error {
 		TrustedProxies:     cfg.TrustedProxies,
 		PushHosts:          cfg.PushHosts,
 		Version:            Version,
-		DBPath:             cfg.DB,
+		StagingDir:         cfg.StagingDir,
 		PluginClient:       testPluginClient(logger),
 		DeviceSTTDir:       cfg.DeviceSTTModelDir,
 	}, logger)
@@ -494,6 +505,7 @@ func newRegistry(b *bus.Bus, srv *web.Server) *prometheus.Registry {
 	reg.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+		lockWaitSeconds,
 		prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_bus_dropped_total", Help: "Room change signals lost to full subscriber buffers."},
 			func() float64 { return float64(b.Dropped()) }),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_event_streams", Help: "Open SSE event streams."},

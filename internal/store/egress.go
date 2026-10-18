@@ -54,7 +54,7 @@ func (s *Store) BlockedRequests(ctx context.Context, roomID string) ([]BlockedRe
 // refusal of its website raises it again. ErrDecided for a line decided or waiting for the host's app.
 func (s *Store) DismissBlocked(ctx context.Context, roomID string, id int64, by *Participant) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "dismiss blocked", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "dismiss blocked", func(tx *txn) error {
 		var persona, domain string
 		var count int
 		err := tx.QueryRowContext(ctx, `SELECT persona, domain, count FROM blocked_requests
@@ -101,7 +101,7 @@ const (
 var ErrDecided = errors.New("this website was decided already")
 
 // participantActor is the audit actor of participant pid: its profile, or the participant itself.
-func participantActor(ctx context.Context, tx *sql.Tx, pid int64) (string, error) {
+func participantActor(ctx context.Context, tx *txn, pid int64) (string, error) {
 	var uuid string
 	err := tx.QueryRowContext(ctx, `SELECT COALESCE(f.uuid, '') FROM participants p LEFT JOIN profiles f ON f.id = p.profile_id WHERE p.id = ?`, pid).Scan(&uuid)
 	if err != nil {
@@ -113,7 +113,7 @@ func participantActor(ctx context.Context, tx *sql.Tx, pid int64) (string, error
 	return ActorProfile + uuid, nil
 }
 
-func egressAudit(ctx context.Context, tx *sql.Tx, roomID, actor, action string, details map[string]any) error {
+func egressAudit(ctx context.Context, tx *txn, roomID, actor, action string, details map[string]any) error {
 	b, err := json.Marshal(details)
 	if err != nil {
 		return fmt.Errorf("audit %s: %w", action, err)
@@ -122,7 +122,7 @@ func egressAudit(ctx context.Context, tx *sql.Tx, roomID, actor, action string, 
 }
 
 // touchMessage gives message id the room's next change seq, so streams send it again as changed.
-func touchMessage(ctx context.Context, tx *sql.Tx, roomID string, id int64, body string) error {
+func touchMessage(ctx context.Context, tx *txn, roomID string, id int64, body string) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE messages SET body = ?, change_seq = (SELECT COALESCE(MAX(change_seq), 0) + 1 FROM messages WHERE room_id = ?)
 		WHERE id = ?`, body, roomID, id); err != nil {
 		return fmt.Errorf("update blocked line: %w", err)
@@ -141,7 +141,7 @@ func blockedBody(persona, domain string, count int) string {
 // each, or adds to the count of the room's undecided line for it (014-AC8). It returns the lines.
 func (s *Store) RecordBlocked(ctx context.Context, roomID, persona string, domains []string) ([]Message, error) {
 	var out []Message
-	err := s.withTx(ctx, "record blocked", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "record blocked", func(tx *txn) error {
 		for _, d := range domains {
 			var id int64
 			var count int
@@ -194,7 +194,7 @@ func (s *Store) BlockedLine(ctx context.Context, roomID string, id int64) (*Mess
 // confirms it with ConfirmAllow. ErrDecided when the line is decided or waits for a confirmation.
 func (s *Store) RequestAllow(ctx context.Context, roomID string, id int64, scope string, by *Participant) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "request allow", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "request allow", func(tx *txn) error {
 		actor, err := participantActor(ctx, tx, by.ID)
 		if err != nil {
 			return err
@@ -254,7 +254,7 @@ func (s *Store) PendingAllows(ctx context.Context, roomID string) ([]PendingAllo
 // approval is dropped and the line says why. ErrNotFound when no approval waits on it.
 func (s *Store) ConfirmAllow(ctx context.Context, roomID string, id int64, failure string) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "confirm allow", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "confirm allow", func(tx *txn) error {
 		var b Blocked
 		var by, actor, body string
 		err := tx.QueryRowContext(ctx, `SELECT b.domain, b.persona, b.pending_scope, b.pending_by, b.pending_actor, m.body FROM blocked_requests b
@@ -336,7 +336,7 @@ func (s *Store) ConnectorChanged(ctx context.Context, roomID, name, kind string,
 // hostEvent is a line in room as its AI host, "<host> <body>", with its audit entry as them.
 func (s *Store) hostEvent(ctx context.Context, roomID, body, action string, details map[string]any) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, action, func(tx *sql.Tx) error {
+	err := s.withTx(ctx, action, func(tx *txn) error {
 		var host int64
 		var name string
 		err := tx.QueryRowContext(ctx, `SELECT p.id, p.name FROM rooms r JOIN participants p ON p.id = r.host_participant_id WHERE r.id = ?`, roomID).Scan(&host, &name)
@@ -364,7 +364,7 @@ func (s *Store) hostEvent(ctx context.Context, roomID, body, action string, deta
 // by; it returns nil when nothing changed (014-AC12).
 func (s *Store) SetEgressDelegation(ctx context.Context, roomID string, on bool, by *Participant) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "egress delegation", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "egress delegation", func(tx *txn) error {
 		res, err := tx.ExecContext(ctx, `UPDATE rooms SET egress_admins_allow = ? WHERE id = ? AND egress_admins_allow != ?`, on, roomID, on)
 		if err != nil {
 			return fmt.Errorf("egress delegation: %w", err)
@@ -393,7 +393,7 @@ const errHostChanged = "the AI host changed before their app applied it"
 
 // hostChanged turns the delegation off and drops the approvals waiting for the previous host's
 // app: they would land on the new host's computer, which nobody asked (014-AC12).
-func hostChanged(ctx context.Context, tx *sql.Tx, roomID string) error {
+func hostChanged(ctx context.Context, tx *txn, roomID string) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE rooms SET egress_admins_allow = 0 WHERE id = ?`, roomID); err != nil {
 		return fmt.Errorf("host changed: %w", err)
 	}

@@ -672,7 +672,7 @@ func TestSendFailureLogHidesTheAddress(t *testing.T) {
 		defer close(done)
 		return errors.New("rcpt to: 550 5.1.1 <" + to + ">: unknown user")
 	}
-	st, err := store.Open(storetest.Path(t, "t.db"))
+	st, err := store.Open(storetest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}

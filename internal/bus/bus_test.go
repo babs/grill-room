@@ -4,13 +4,15 @@ import (
 	"context"
 	"testing"
 
-	_ "github.com/babs/grill-room/internal/sqlitetest"
+	"github.com/babs/grill-room/internal/pgtest"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/store/storetest"
 )
 
+func TestMain(m *testing.M) { pgtest.Main(m) }
+
 func TestPostPersistsAndNotifies(t *testing.T) {
-	st, err := store.Open(storetest.Path(t, "t.db"))
+	st, err := store.Open(storetest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}

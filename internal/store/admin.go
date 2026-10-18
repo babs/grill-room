@@ -31,9 +31,9 @@ func (s *Store) CreateAdminSession(ctx context.Context, tokenHash, userAgent, ip
 		return nil, err
 	}
 	a := &AdminSession{CreatedAt: now.UTC(), LastUsedAt: now.UTC(), ExpiresAt: time.Unix(now.Add(AdminSessionTTL).Unix(), 0).UTC(), UserAgent: userAgent, IP: ip}
-	err := s.withTx(ctx, "create admin session", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "create admin session", func(tx *txn) error {
 		err := tx.QueryRowContext(ctx, `INSERT INTO admin_sessions(token_hash, created_at, last_used_at, expires_at_s, user_agent, ip) VALUES(?,?,?,?,?,?) RETURNING id`,
-			tokenHash, a.CreatedAt.Format(time.RFC3339Nano), a.LastUsedAt.Format(time.RFC3339Nano), a.ExpiresAt.Unix(), userAgent, ip).Scan(&a.ID)
+			tokenHash, formatTS(a.CreatedAt), formatTS(a.LastUsedAt), a.ExpiresAt.Unix(), userAgent, ip).Scan(&a.ID)
 		if err != nil {
 			return fmt.Errorf("create admin session: %w", err)
 		}
@@ -51,7 +51,7 @@ func (s *Store) CreateAdminSession(ctx context.Context, tokenHash, userAgent, ip
 func (s *Store) TouchAdminSession(ctx context.Context, tokenHash string, now time.Time) (int64, error) {
 	var id int64
 	err := s.db.QueryRowContext(ctx, `UPDATE admin_sessions SET last_used_at = ? WHERE token_hash = ? AND expires_at_s > ? RETURNING id`,
-		now.UTC().Format(time.RFC3339Nano), tokenHash, now.Unix()).Scan(&id)
+		formatTS(now), tokenHash, now.Unix()).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrNotFound
 	}
@@ -98,7 +98,7 @@ func (s *Store) PurgeAdminSessions(ctx context.Context, now time.Time) (int64, e
 
 // RevokeAdminSession ends session id. ErrNotFound if there is none.
 func (s *Store) RevokeAdminSession(ctx context.Context, id int64) error {
-	return s.withTx(ctx, "revoke admin session", func(tx *sql.Tx) error {
+	return s.withTx(ctx, "revoke admin session", func(tx *txn) error {
 		if err := execOne(ctx, tx, `DELETE FROM admin_sessions WHERE id = ?`, id); err != nil {
 			return err
 		}
@@ -107,7 +107,7 @@ func (s *Store) RevokeAdminSession(ctx context.Context, id int64) error {
 }
 
 // deleteOne runs a DELETE that must remove a row: ErrNotFound when it removed none.
-func execOne(ctx context.Context, tx *sql.Tx, query string, args ...any) error {
+func execOne(ctx context.Context, tx *txn, query string, args ...any) error {
 	res, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("exec: %w", err)
@@ -191,7 +191,7 @@ func WithAudit(ctx context.Context, e AuditEntry, details map[string]any) contex
 // auditTx writes the entry ctx carries, if any, in tx. id, when set, is the target's id, for a
 // target the mutation creates; extra adds details. An entry without a target name gets the one the
 // target has in tx: run it before a delete, after a rename.
-func auditTx(ctx context.Context, tx *sql.Tx, id string, extra map[string]any) error {
+func auditTx(ctx context.Context, tx *txn, id string, extra map[string]any) error {
 	p, _ := ctx.Value(auditKey{}).(*pendingAudit)
 	if p == nil {
 		return nil
@@ -200,7 +200,9 @@ func auditTx(ctx context.Context, tx *sql.Tx, id string, extra map[string]any) e
 	if id != "" {
 		e.TargetID = id
 	}
-	if q, ok := targetNames[e.TargetKind]; ok && e.TargetName == "" {
+	// A bigint key never matches a target id that is not a number; PostgreSQL would refuse the cast.
+	_, numErr := strconv.ParseInt(e.TargetID, 10, 64)
+	if q, ok := targetNames[e.TargetKind]; ok && e.TargetName == "" && (numErr == nil || e.TargetKind == TargetRoom) {
 		if err := tx.QueryRowContext(ctx, q, e.TargetID).Scan(&e.TargetName); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("audit %s: target name: %w", e.Action, err)
 		}
@@ -232,7 +234,7 @@ type AuditQuery struct {
 func (s *Store) AuditLog(ctx context.Context, q AuditQuery) ([]AuditEntry, error) {
 	like := "%" + strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(q.Target) + "%"
 	rows, err := s.db.QueryContext(ctx, `SELECT id, at_ms, actor, action, target_kind, target_id, target_name, details FROM audit_log
-		WHERE (? = 0 OR id < ?) AND (? = '' OR action = ?) AND (? = '' OR target_id = ? OR target_name LIKE ? ESCAPE '\')
+		WHERE (? = 0 OR id < ?) AND (? = '' OR action = ?) AND (? = '' OR target_id = ? OR target_name ILIKE ? ESCAPE '\')
 		ORDER BY id DESC LIMIT ?`, q.Before, q.Before, q.Action, q.Action, q.Target, q.Target, like, q.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("query audit log: %w", err)
@@ -272,6 +274,6 @@ var targetNames = map[string]string{
 	TargetProfile:       `SELECT COALESCE(p.name, (SELECT name FROM participants WHERE profile_id = p.id ORDER BY id DESC LIMIT 1), p.uuid, '') FROM profiles p WHERE p.id = ?`,
 	TargetSkill:         `SELECT name FROM skills WHERE id = ?`,
 	TargetTemplate:      `SELECT title FROM persona_templates WHERE id = ?`,
-	TargetStarter:       `SELECT json_extract(manifest, '$.title') FROM starter_versions WHERE starter_id = ? ORDER BY n DESC LIMIT 1`,
+	TargetStarter:       `SELECT manifest::jsonb->>'title' FROM starter_versions WHERE starter_id = ? ORDER BY n DESC LIMIT 1`,
 	TargetPronunciation: `SELECT term FROM pronunciations WHERE id = ?`,
 }

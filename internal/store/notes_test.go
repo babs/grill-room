@@ -1,10 +1,7 @@
 package store
 
 import (
-	"context"
-	"database/sql"
 	"errors"
-	"path/filepath"
 	"testing"
 )
 
@@ -216,57 +213,4 @@ func TestHeldWatcherNoop(t *testing.T) {
 	if p, _ := s.RoomPersona(ctx, "h", grill.ID); !p.WatchesNotes || p.Badge != "🧯" {
 		t.Fatalf("approval flipped the role: %+v", p)
 	}
-}
-
-// 009-AC32: the migration that adds the watcher's queue source keeps the queue, takes notes_watch
-// and still refuses an unknown source, with a sound database.
-func TestMigrationToNotesWatch(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "old.db")
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// One connection, as Open uses: the edited CHECK must be read again on it, not on a fresh one.
-	db.SetMaxOpenConns(1)
-	ctx := context.Background()
-	if err := migrateTo(ctx, db, 30); err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{
-		`INSERT INTO rooms(id, name, created_at) VALUES('a', 'R', '2026-01-01T00:00:00Z')`,
-		`INSERT INTO room_personas(room_id, template_version, name, badge, colour, text, model, effort, created_at)
-			VALUES('a', 1, 'Grill', 'x', '#000000', 't', 'sonnet', 'medium', '2026-01-01T00:00:00Z')`,
-	} {
-		if _, err := db.ExecContext(ctx, q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	const grill = 1
-	if _, err := db.ExecContext(ctx, `INSERT INTO turn_queue(room_id, persona_id, source, fresh, created_at, cause) VALUES('a', ?, 'call', 0, '2026-01-01T00:00:00Z', 'called by @x')`, grill); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO turn_queue(room_id, persona_id, source, fresh, created_at) VALUES('a', ?, 'notes_watch', 0, '2026-01-01T00:00:00Z')`, grill); err == nil {
-		t.Fatal("version 30 takes notes_watch")
-	}
-	if err := migrateTo(ctx, db, 31); err != nil {
-		t.Fatal(err)
-	}
-	var source, cause string
-	if err := db.QueryRowContext(ctx, `SELECT source, cause FROM turn_queue`).Scan(&source, &cause); err != nil || source != "call" || cause != "called by @x" {
-		t.Fatalf("kept row: %q %q %v", source, cause, err)
-	}
-	if _, err := db.ExecContext(ctx, `UPDATE turn_queue SET source = 'notes_watch'`); err != nil {
-		t.Fatalf("notes_watch refused: %v", err)
-	}
-	if _, err := db.ExecContext(ctx, `UPDATE turn_queue SET source = 'bogus'`); err == nil {
-		t.Fatal("bogus source accepted")
-	}
-	if _, err := db.ExecContext(ctx, `UPDATE turn_queue SET source = 'button'`); err == nil {
-		t.Fatal("a button press without its participant accepted")
-	}
-	var check string
-	if err := db.QueryRowContext(ctx, `PRAGMA integrity_check`).Scan(&check); err != nil || check != "ok" {
-		t.Fatalf("integrity: %q %v", check, err)
-	}
-	_ = db.Close()
 }

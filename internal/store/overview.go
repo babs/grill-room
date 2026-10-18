@@ -51,8 +51,8 @@ func (v RoomVolume) Counted() int64 { return v.Uploads + v.Attachments + v.Plugi
 
 // RoomOverviews lists every room with its counts, volume and quota, defaultQuota for those without
 // their own, newest first.
-// ponytail: sums every message row on each call (~270 ms at 200k lines, holding the one connection);
-// keep running totals per room if instances grow past that.
+// ponytail: sums every message row on each call, O(messages), without the write lock; keep
+// running totals per room if instances grow past that.
 func (s *Store) RoomOverviews(ctx context.Context, defaultQuota int64) ([]RoomOverview, error) {
 	return s.roomOverviews(ctx, defaultQuota, "")
 }
@@ -86,8 +86,8 @@ func (s *Store) roomOverviews(ctx context.Context, defaultQuota int64, roomID st
 		(SELECT COALESCE(SUM(length(sn.data)), 0) FROM plugin_snapshots sn JOIN plugin_versions v ON v.id = sn.version_id
 			JOIN room_plugins p ON p.id = v.plugin_id WHERE p.room_id = r.id),
 		r.created_from,
-		(SELECT json_group_array(name) FROM (SELECT name FROM room_plugins WHERE room_id = r.id AND private = 1 AND removed_at IS NULL ORDER BY name))
-		FROM rooms r WHERE ? = '' OR r.id = ? ORDER BY r.rowid DESC`, defaultQuota, roomID, roomID)
+		(SELECT COALESCE(jsonb_agg(name ORDER BY name), '[]')::text FROM room_plugins WHERE room_id = r.id AND private = 1 AND removed_at IS NULL)
+		FROM rooms r WHERE ? = '' OR r.id = ? ORDER BY r.created_at DESC, r.id DESC`, defaultQuota, roomID, roomID)
 	if err != nil {
 		return nil, fmt.Errorf("room overviews: %w", err)
 	}
@@ -120,7 +120,7 @@ func (s *Store) roomOverviews(ctx context.Context, defaultQuota int64, roomID st
 // SetRoomQuota sets the room's own quota in bytes, or with 0 returns it to the instance default
 // (004-AC9). ErrNotFound if the room does not exist.
 func (s *Store) SetRoomQuota(ctx context.Context, roomID string, quota int64) error {
-	return s.withTx(ctx, "set room quota", func(tx *sql.Tx) error {
+	return s.withTx(ctx, "set room quota", func(tx *txn) error {
 		if err := execOne(ctx, tx, `UPDATE rooms SET quota_bytes = ? WHERE id = ?`, nullID(quota), roomID); err != nil {
 			return err
 		}

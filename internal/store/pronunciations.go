@@ -29,11 +29,11 @@ type Pronunciation struct {
 	At string `json:"at"`
 }
 
-const pronunciationCols = `id, term, style, fr_en, fr_fr, en, by, at`
+const pronunciationCols = `id, term, style, fr_en, fr_fr, en, "by", at`
 
 // Pronunciations is the lexicon, by term.
 func (s *Store) Pronunciations(ctx context.Context) ([]Pronunciation, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+pronunciationCols+` FROM pronunciations ORDER BY term`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+pronunciationCols+` FROM pronunciations ORDER BY lower(term)`)
 	if err != nil {
 		return nil, fmt.Errorf("pronunciations: %w", err)
 	}
@@ -52,7 +52,7 @@ func (s *Store) Pronunciations(ctx context.Context) ([]Pronunciation, error) {
 // AddPronunciation adds t, changed by by. ErrTermTaken, ErrLexiconFull.
 func (s *Store) AddPronunciation(ctx context.Context, t voicecat.Term, by string) (Pronunciation, error) {
 	p := Pronunciation{Term: t, By: by, At: now()}
-	err := s.withTx(ctx, "add pronunciation", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "add pronunciation", func(tx *txn) error {
 		var n int
 		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM pronunciations`).Scan(&n); err != nil {
 			return err
@@ -63,7 +63,7 @@ func (s *Store) AddPronunciation(ctx context.Context, t voicecat.Term, by string
 		if err := termFree(ctx, tx, t.Term, 0); err != nil {
 			return err
 		}
-		err := tx.QueryRowContext(ctx, `INSERT INTO pronunciations (term, style, fr_en, fr_fr, en, by, at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+		err := tx.QueryRowContext(ctx, `INSERT INTO pronunciations (term, style, fr_en, fr_fr, en, "by", at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
 			t.Term, t.Style, t.FrEn, t.FrFr, t.En, by, p.At).Scan(&p.ID)
 		if err != nil {
 			return termErr(err)
@@ -76,7 +76,7 @@ func (s *Store) AddPronunciation(ctx context.Context, t voicecat.Term, by string
 // UpdatePronunciation replaces entry id with t. ErrNotFound, ErrTermTaken.
 func (s *Store) UpdatePronunciation(ctx context.Context, id int64, t voicecat.Term, by string) (Pronunciation, error) {
 	p := Pronunciation{ID: id, Term: t, By: by, At: now()}
-	err := s.withTx(ctx, "edit pronunciation", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "edit pronunciation", func(tx *txn) error {
 		var old voicecat.Term
 		err := tx.QueryRowContext(ctx, `SELECT term, style, fr_en, fr_fr, en FROM pronunciations WHERE id = ?`, id).
 			Scan(&old.Term, &old.Style, &old.FrEn, &old.FrFr, &old.En)
@@ -89,7 +89,7 @@ func (s *Store) UpdatePronunciation(ctx context.Context, id int64, t voicecat.Te
 		if err := termFree(ctx, tx, t.Term, id); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE pronunciations SET term = ?, style = ?, fr_en = ?, fr_fr = ?, en = ?, by = ?, at = ? WHERE id = ?`,
+		if _, err := tx.ExecContext(ctx, `UPDATE pronunciations SET term = ?, style = ?, fr_en = ?, fr_fr = ?, en = ?, "by" = ?, at = ? WHERE id = ?`,
 			t.Term, t.Style, t.FrEn, t.FrFr, t.En, by, p.At, id); err != nil {
 			return termErr(err)
 		}
@@ -100,7 +100,7 @@ func (s *Store) UpdatePronunciation(ctx context.Context, id int64, t voicecat.Te
 
 // DeletePronunciation removes entry id. ErrNotFound.
 func (s *Store) DeletePronunciation(ctx context.Context, id int64) error {
-	return s.withTx(ctx, "delete pronunciation", func(tx *sql.Tx) error {
+	return s.withTx(ctx, "delete pronunciation", func(tx *txn) error {
 		if err := auditTx(ctx, tx, "", nil); err != nil {
 			return err
 		}
@@ -109,8 +109,8 @@ func (s *Store) DeletePronunciation(ctx context.Context, id int64) error {
 }
 
 // termFree is ErrTermTaken when another entry than id has term, ignoring case beyond ASCII, which
-// the column's NOCASE does not fold ("mergé", "MERGÉ").
-func termFree(ctx context.Context, tx *sql.Tx, term string, id int64) error {
+// the lower(term) index does not fold under C collation ("mergé", "MERGÉ").
+func termFree(ctx context.Context, tx *txn, term string, id int64) error {
 	rows, err := tx.QueryContext(ctx, `SELECT term FROM pronunciations WHERE id != ?`, id)
 	if err != nil {
 		return fmt.Errorf("pronunciation terms: %w", err)
@@ -129,16 +129,16 @@ func termFree(ctx context.Context, tx *sql.Tx, term string, id int64) error {
 }
 
 func termErr(err error) error {
-	if strings.Contains(err.Error(), "UNIQUE") {
+	if isUnique(err) {
 		return ErrTermTaken
 	}
 	return fmt.Errorf("pronunciation: %w", err)
 }
 
 // seedPronunciations inserts Appendix A once, with its migration: later edits stand (013-AC32).
-func seedPronunciations(ctx context.Context, tx *sql.Tx) error {
+func seedPronunciations(ctx context.Context, tx *txn) error {
 	for _, t := range voicecat.Seed() {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO pronunciations (term, style, fr_en, fr_fr, en, by) VALUES (?, ?, ?, ?, ?, 'seed')`,
+		if _, err := tx.ExecContext(ctx, `INSERT INTO pronunciations (term, style, fr_en, fr_fr, en, "by") VALUES (?, ?, ?, ?, ?, 'seed')`,
 			t.Term, t.Style, t.FrEn, t.FrFr, t.En); err != nil {
 			return fmt.Errorf("seed %q: %w", t.Term, err)
 		}

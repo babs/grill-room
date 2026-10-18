@@ -145,7 +145,7 @@ type Starter struct {
 }
 
 const starterCols = `SELECT s.id, COALESCE(s.builtin, ''), s.library, COALESCE(s.profile_id, 0), v.n, v.author,
-	COALESCE(json_extract(v.manifest, '$.title'), ''), COALESCE(json_extract(v.manifest, '$.description'), ''), v.created_at,
+	COALESCE(v.manifest::jsonb->>'title', ''), COALESCE(v.manifest::jsonb->>'description', ''), v.created_at,
 	(SELECT count(*) FROM starter_versions WHERE starter_id = s.id), (SELECT SUM(size) FROM starter_versions WHERE starter_id = s.id)
 	FROM starters s JOIN starter_versions v ON v.starter_id = s.id AND v.n = (SELECT MAX(n) FROM starter_versions WHERE starter_id = s.id) `
 
@@ -256,6 +256,10 @@ func StarterSize(manifest []byte, files map[string][]byte) int64 {
 
 // insertStarterVersion writes version n of starter id, signed author, with its blobs.
 func insertStarterVersion(ctx context.Context, tx querier, id int64, n int, author string, raw []byte, files map[string][]byte) error {
+	// The list reads the manifest as jsonb, which refuses \u0000: one stored would fail it for good.
+	if jsonNUL(raw) {
+		return fmt.Errorf("%w: the starter's text holds a NUL character", ErrLimit)
+	}
 	var vid int64
 	if err := tx.QueryRowContext(ctx, `INSERT INTO starter_versions(starter_id, n, author, manifest, size, created_at) VALUES(?,?,?,?,?,?) RETURNING id`,
 		id, n, author, string(raw), StarterSize(raw, files), now()).Scan(&vid); err != nil {
@@ -274,7 +278,7 @@ func insertStarterVersion(ctx context.Context, tx querier, id int64, n int, auth
 // A save past the instance storage quota, or past the profile's limits, is refused with ErrLimit
 // and the reason (006-AC4). ErrForbidden, ErrBuiltin, ErrNotFound.
 func (s *Store) SaveStarter(ctx context.Context, profileID, id int64, m *StarterManifest, files map[string][]byte) (*Starter, error) {
-	err := s.withTx(ctx, "save starter", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "save starter", func(tx *txn) error {
 		var err error
 		id, err = saveStarter(ctx, tx, profileID, id, m, files)
 		return err
@@ -287,7 +291,7 @@ func (s *Store) SaveStarter(ctx context.Context, profileID, id int64, m *Starter
 }
 
 // saveStarter is SaveStarter in tx; it returns the starter's id.
-func saveStarter(ctx context.Context, tx *sql.Tx, profileID, id int64, m *StarterManifest, files map[string][]byte) (int64, error) {
+func saveStarter(ctx context.Context, tx *txn, profileID, id int64, m *StarterManifest, files map[string][]byte) (int64, error) {
 	if profileID == 0 {
 		return 0, ErrForbidden
 	}
@@ -295,17 +299,14 @@ func saveStarter(ctx context.Context, tx *sql.Tx, profileID, id int64, m *Starte
 	if err != nil {
 		return 0, fmt.Errorf("save starter: %w", err)
 	}
-	if err := withinQuota(ctx, tx, StarterSize(raw, files)); err != nil {
-		return 0, err
+	// Before the quota's database-wide scan, which runs under the write lock.
+	if jsonNUL(raw) {
+		return 0, fmt.Errorf("%w: the starter's text holds a NUL character", ErrLimit)
 	}
 	n := 1
 	if id == 0 {
 		if err := overLimit(ctx, tx, MaxProfileStarters, "starters per profile", `SELECT count(*) FROM starters WHERE profile_id = ?`, profileID); err != nil {
 			return 0, err
-		}
-		if err := tx.QueryRowContext(ctx, `INSERT INTO starters(profile_id, library, created_at) VALUES(?, 'personal', ?) RETURNING id`,
-			profileID, now()).Scan(&id); err != nil {
-			return 0, fmt.Errorf("save starter: %w", err)
 		}
 	} else {
 		var owner int64
@@ -326,6 +327,16 @@ func saveStarter(ctx context.Context, tx *sql.Tx, profileID, id int64, m *Starte
 		}
 		n++
 	}
+	// Last: it sums the whole database.
+	if err := withinQuota(ctx, tx, StarterSize(raw, files)); err != nil {
+		return 0, err
+	}
+	if id == 0 {
+		if err := tx.QueryRowContext(ctx, `INSERT INTO starters(profile_id, library, created_at) VALUES(?, 'personal', ?) RETURNING id`,
+			profileID, now()).Scan(&id); err != nil {
+			return 0, fmt.Errorf("save starter: %w", err)
+		}
+	}
 	var author string
 	if err := tx.QueryRowContext(ctx, `SELECT `+profileNameSQL, profileID, profileID).Scan(&author); err != nil {
 		return 0, fmt.Errorf("save starter: %w", err)
@@ -335,7 +346,7 @@ func saveStarter(ctx context.Context, tx *sql.Tx, profileID, id int64, m *Starte
 
 // withinQuota refuses, with ErrLimit and the reason, a write of size bytes that would take the
 // database past the instance storage quota (004-AC7, 006-AC4).
-func withinQuota(ctx context.Context, tx *sql.Tx, size int64) error {
+func withinQuota(ctx context.Context, tx *txn, size int64) error {
 	v, err := instanceSettings(ctx, tx)
 	if err != nil || v.StorageQuota == 0 {
 		return err
@@ -355,7 +366,7 @@ func withinQuota(ctx context.Context, tx *sql.Tx, size int64) error {
 func (s *Store) DuplicateStarter(ctx context.Context, profileID, id int64) (*Starter, error) {
 	var dup int64
 	// One transaction: a delete between the reads and the save cannot leave a copy without its blobs.
-	err := s.withTx(ctx, "duplicate starter", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "duplicate starter", func(tx *txn) error {
 		st, m, err := starterVersion(ctx, tx, id, 0, profileID)
 		if err != nil {
 			return err
@@ -377,7 +388,7 @@ func (s *Store) DuplicateStarter(ctx context.Context, profileID, id int64) (*Sta
 // PublishStarter moves personal starter id of profileID, with its versions, to the instance
 // library, audited (006-AC3, 006-AC5). ErrBuiltin, ErrForbidden, ErrNotFound.
 func (s *Store) PublishStarter(ctx context.Context, profileID, id int64) error {
-	return s.withTx(ctx, "publish starter", func(tx *sql.Tx) error {
+	return s.withTx(ctx, "publish starter", func(tx *txn) error {
 		library, owner, err := starterOwner(ctx, tx, id)
 		switch {
 		case err != nil:
@@ -398,7 +409,7 @@ func (s *Store) PublishStarter(ctx context.Context, profileID, id int64) error {
 // by its author or, with profileID 0, the super-admin, audited (006-AC3, 006-AC5). Rooms created
 // from it keep their copies. ErrBuiltin, ErrForbidden, ErrNotFound.
 func (s *Store) DeleteStarter(ctx context.Context, profileID, id int64) error {
-	return s.withTx(ctx, "delete starter", func(tx *sql.Tx) error {
+	return s.withTx(ctx, "delete starter", func(tx *txn) error {
 		library, owner, err := starterOwner(ctx, tx, id)
 		switch {
 		case err != nil:
@@ -417,7 +428,7 @@ func (s *Store) DeleteStarter(ctx context.Context, profileID, id int64) error {
 	})
 }
 
-func starterOwner(ctx context.Context, tx *sql.Tx, id int64) (library string, owner int64, err error) {
+func starterOwner(ctx context.Context, tx *txn, id int64) (library string, owner int64, err error) {
 	err = tx.QueryRowContext(ctx, `SELECT library, COALESCE(profile_id, 0) FROM starters WHERE id = ?`, id).Scan(&library, &owner)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", 0, ErrNotFound
@@ -428,36 +439,28 @@ func starterOwner(ctx context.Context, tx *sql.Tx, id int64) (library string, ow
 	return library, owner, nil
 }
 
-func latestStarterVersion(ctx context.Context, tx *sql.Tx, id int64) int {
+func latestStarterVersion(ctx context.Context, tx *txn, id int64) int {
 	var n int
 	_ = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(n), 0) FROM starter_versions WHERE starter_id = ?`, id).Scan(&n)
 	return n
 }
 
 // ensureStarters creates the built-in starters and adds a version to any whose shipped manifest
-// changed since its latest version (006-AC2), each in its own transaction. Built-ins carry no blobs.
-func ensureStarters(ctx context.Context, db *sql.DB) error {
+// changed since its latest version (006-AC2). Built-ins carry no blobs.
+func ensureStarters(ctx context.Context, tx *txn) error {
 	for _, b := range builtinStarters {
 		raw, err := json.Marshal(b.m)
 		if err != nil {
 			return fmt.Errorf("built-in starter %s: %w", b.key, err)
 		}
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("built-in starter %s: %w", b.key, err)
-		}
 		if err := ensureStarter(ctx, tx, b.key, raw); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("built-in starter %s: %w", b.key, err)
-		}
-		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("built-in starter %s: %w", b.key, err)
 		}
 	}
 	return nil
 }
 
-func ensureStarter(ctx context.Context, tx *sql.Tx, key string, raw []byte) error {
+func ensureStarter(ctx context.Context, tx *txn, key string, raw []byte) error {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO starters(builtin, library, created_at) VALUES(?, 'builtin', ?) ON CONFLICT(builtin) DO NOTHING`,
 		key, now()); err != nil {
 		return err

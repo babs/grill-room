@@ -726,7 +726,6 @@ func (s *Server) deleteRoom(w http.ResponseWriter, r *http.Request, sess *sessio
 	s.bus.Notify(room)
 	s.closeVoice(room)
 	s.people.forget(room)
-	s.checkpoint(context.WithoutCancel(r.Context()))
 	s.log.Info("room_deleted", zap.String("room", room), zap.Bool("by_room_admin", sess != nil))
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -118,7 +118,7 @@ type TurnReport struct {
 // agentAnnotate opens the agent's annotation a on the latest revision of its document, anchored
 // where the quote reads now. It returns why not, for the turn report, when the quote cannot be
 // placed; an error only when the store fails.
-func agentAnnotate(ctx context.Context, tx *sql.Tx, roomID string, a AgentAnnotation) (string, error) {
+func agentAnnotate(ctx context.Context, tx *txn, roomID string, a AgentAnnotation) (string, error) {
 	a.Anchor.Kind = anchor.KindText
 	if err := a.Anchor.Validate(); err != nil {
 		return err.Error(), nil
@@ -154,13 +154,9 @@ func agentAnnotate(ctx context.Context, tx *sql.Tx, roomID string, a AgentAnnota
 	if err != nil {
 		return "", fmt.Errorf("agent annotation: %w", err)
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO annotations(room_id, document_id, revision, anchor, created_at) VALUES(?,?,?,?,?)`,
-		roomID, a.DocID, n, string(js), now())
-	if err != nil {
-		return "", fmt.Errorf("agent annotation: %w", err)
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
+	var id int64
+	if err := tx.QueryRowContext(ctx, `INSERT INTO annotations(room_id, document_id, revision, anchor, created_at) VALUES(?,?,?,?,?) RETURNING id`,
+		roomID, a.DocID, n, string(js), now()).Scan(&id); err != nil {
 		return "", fmt.Errorf("agent annotation: %w", err)
 	}
 	if _, err := insertAnnotationMessage(ctx, tx, roomID, id, &NewMessage{Author: a.author, PersonaID: a.persona, Body: a.Body}, 0); err != nil {
@@ -172,7 +168,7 @@ func agentAnnotate(ctx context.Context, tx *sql.Tx, roomID string, a AgentAnnota
 // agentDocName is the name an agent write lands under. An agent document never takes an upload's
 // name, or the room would list two documents as one (spike S5): a new one gets "-agent" before
 // its extension until no upload holds the name. An existing agent document keeps its name.
-func agentDocName(ctx context.Context, tx *sql.Tx, roomID, name string) (string, error) {
+func agentDocName(ctx context.Context, tx *txn, roomID, name string) (string, error) {
 	for {
 		var agent, upload int
 		err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FILTER (WHERE kind = 'agent'), COUNT(*) FILTER (WHERE kind = 'upload')
@@ -305,22 +301,17 @@ func (s *Store) StartTurn(ctx context.Context, t *Turn, parallel bool) error {
 	if t.RerunOf != 0 {
 		rerun = t.RerunOf
 	}
-	res, err := tx.ExecContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		INSERT INTO turns(room_id, participant_id, daemon_id, host, status, fresh, resume, message_cursor, annotation_cursor, change_cursor, prompt, started_at,
 			persona_id, persona_name, persona_text, req_model, req_effort, rerun_of, cause, handoff)
-		SELECT room_id, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, id, ?, ?, ?, ?, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? AND pending = 0`,
-		pid, did, t.Status, t.Fresh, t.Resume, t.MessageCursor, t.AnnotationCursor, t.ChangeCursor, t.Prompt, t.StartedAt.Format(time.RFC3339Nano),
-		t.PersonaName, t.PersonaText, t.ReqModel, t.ReqEffort, rerun, t.Cause, t.Handoff, t.PersonaID, t.RoomID)
-	if err != nil {
-		return fmt.Errorf("start turn: %w", err)
-	}
-	if n, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("start turn: %w", err)
-	} else if n == 0 {
+		SELECT room_id, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, id, ?, ?, ?, ?, ?, ?, ? FROM room_personas WHERE id = ? AND room_id = ? AND pending = 0 RETURNING id`,
+		pid, did, t.Status, t.Fresh, t.Resume, t.MessageCursor, t.AnnotationCursor, t.ChangeCursor, t.Prompt, formatTS(t.StartedAt),
+		t.PersonaName, t.PersonaText, t.ReqModel, t.ReqEffort, rerun, t.Cause, t.Handoff, t.PersonaID, t.RoomID).Scan(&t.ID)
+	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
-	if t.ID, err = res.LastInsertId(); err != nil {
-		return fmt.Errorf("start turn id: %w", err)
+	if err != nil {
+		return fmt.Errorf("start turn: %w", err)
 	}
 	if err := pinTurnSkills(ctx, tx, t.RoomID, t.ID, t.PersonaID); err != nil {
 		return err
@@ -330,7 +321,7 @@ func (s *Store) StartTurn(ctx context.Context, t *Turn, parallel bool) error {
 	}
 	// 006-AC18: the persona's voice-line count and timer start again from what this turn reads;
 	// 009-AC32: so does the notes watcher's wait.
-	if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET mark_msg_id = ?, mark_at_ms = ?, notes_mark = max(notes_mark, ?) WHERE id = ?`,
+	if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET mark_msg_id = ?, mark_at_ms = ?, notes_mark = GREATEST(notes_mark, ?) WHERE id = ?`,
 		t.MessageCursor, t.StartedAt.UnixMilli(), t.AnnotationCursor, t.PersonaID); err != nil {
 		return fmt.Errorf("start turn: %w", err)
 	}
@@ -404,7 +395,7 @@ func (s *Store) SetHostQueued(ctx context.Context, roomID string, id, daemonID i
 // and the conflict check of its result, use the same (003-AC21).
 func (s *Store) PinBaseRevisions(ctx context.Context, roomID string, id int64) (map[int64]int, error) {
 	base := map[int64]int{}
-	err := s.withTx(ctx, "pin base revisions", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "pin base revisions", func(tx *txn) error {
 		var pinned sql.NullString
 		if err := tx.QueryRowContext(ctx, `SELECT base_revisions FROM turns WHERE id = ? AND room_id = ?`, id, roomID).Scan(&pinned); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -491,7 +482,7 @@ func (s *Store) FailTurn(ctx context.Context, roomID string, id int64, reason st
 // the turn ended already.
 func (s *Store) StopTurn(ctx context.Context, roomID string, id int64, name string) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "stop turn", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "stop turn", func(tx *txn) error {
 		var persona string
 		err := tx.QueryRowContext(ctx, `UPDATE turns SET status = 'stopped', error = ?, ended_at = ? WHERE id = ? AND room_id = ? AND status = 'running'
 			RETURNING persona_name`, "stopped by "+name, now(), id, roomID).Scan(&persona)
@@ -508,27 +499,6 @@ func (s *Store) StopTurn(ctx context.Context, roomID string, id int64, name stri
 	return m, err
 }
 
-// migrateStopped checks that the migration to 'stopped' loosened the CHECK, since a schema text
-// other than expected would leave the old one, then bumps schema_version as SQLite's procedure
-// for a schema edit asks, so that no connection keeps the old schema cached.
-func migrateStopped(ctx context.Context, tx *sql.Tx) error {
-	var n int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'turns' AND sql LIKE '%''stopped''%'`).Scan(&n); err != nil {
-		return fmt.Errorf("check turns schema: %w", err)
-	}
-	if n != 1 {
-		return errors.New("the turns table's status CHECK is not the expected one: 'stopped' was not added")
-	}
-	var v int
-	if err := tx.QueryRowContext(ctx, `PRAGMA schema_version`).Scan(&v); err != nil {
-		return fmt.Errorf("read schema version: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA schema_version = %d`, v+1)); err != nil {
-		return fmt.Errorf("bump schema version: %w", err)
-	}
-	return nil
-}
-
 // RejectTurn ends running turn id of daemonID, whose result conflicts on doc (003-AC21). A first
 // conflict queues the turn again at the head of the room's queue, to run on the new version: the
 // persona's queued turn, if any, becomes that re-run. A re-run's conflict fails it. Both say so in
@@ -537,7 +507,7 @@ func migrateStopped(ctx context.Context, tx *sql.Tx) error {
 func (s *Store) RejectTurn(ctx context.Context, roomID string, id, daemonID int64, doc string) (*Message, bool, error) {
 	var m *Message
 	var rerun bool
-	err := s.withTx(ctx, "reject turn", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "reject turn", func(tx *txn) error {
 		t, err := scanTurn(tx.QueryRowContext(ctx, turnCols+` WHERE id = ? AND room_id = ?`, id, roomID))
 		if err != nil {
 			return err
@@ -583,7 +553,7 @@ func handoffFailed(name, handoff string) string {
 // handoffNext follows handoff turn t, done with report, in its transaction: a turn that wrote the
 // note queues the persona's new session in place of its queued turn, which the new session answers
 // anyway; one that did not says that the persona stays on its session (003-AC25).
-func handoffNext(ctx context.Context, tx *sql.Tx, t *Turn, report TurnReport) error {
+func handoffNext(ctx context.Context, tx *txn, t *Turn, report TurnReport) error {
 	doc := turn.HandoffDoc(t.PersonaName)
 	if !slices.Contains(report.Created, doc) && !slices.Contains(report.Revised, doc) {
 		return insertMessage(ctx, tx, &Message{RoomID: t.RoomID, Kind: KindSystem, Sender: signer(t.PersonaName),
@@ -604,7 +574,7 @@ func handoffNext(ctx context.Context, tx *sql.Tx, t *Turn, report TurnReport) er
 
 // queueRerun puts the re-run of turn t at the head of its room's queue, in place of its persona's
 // queued turn: the re-run reads everything since the persona's last turn, so it answers that one too.
-func queueRerun(ctx context.Context, tx *sql.Tx, t *Turn, doc string) error {
+func queueRerun(ctx context.Context, tx *txn, t *Turn, doc string) error {
 	fresh := t.Fresh
 	var queued bool
 	var old int64
@@ -634,7 +604,8 @@ func queueRerun(ctx context.Context, tx *sql.Tx, t *Turn, doc string) error {
 // FailRunningTurns fails every running turn, in every room, and returns the rooms touched. At
 // start no daemon is attached yet, so no running turn can ever finish.
 func (s *Store) FailRunningTurns(ctx context.Context, reason string) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, room_id FROM turns WHERE status = 'running'`)
+	// Oldest turn first: each failure posts a line in its room, and PostgreSQL scans in no set order.
+	rows, err := s.db.QueryContext(ctx, `SELECT id, room_id FROM turns WHERE status = 'running' ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("running turns: %w", err)
 	}
@@ -775,7 +746,7 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 			}
 		}
 		res, err := tx.ExecContext(ctx, `UPDATE annotations SET version = version + 1,
-			status = CASE WHEN ? THEN 'done' ELSE status END WHERE id = ? AND room_id = ?`, r.Done, r.AnnotationID, roomID)
+			status = CASE WHEN ? = 1 THEN 'done' ELSE status END WHERE id = ? AND room_id = ?`, r.Done, r.AnnotationID, roomID)
 		if err != nil {
 			return nil, fmt.Errorf("complete turn: %w", err)
 		}
@@ -845,7 +816,7 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 	}
 	ended := time.Now().UTC()
 	if _, err := tx.ExecContext(ctx, `UPDATE turns SET status = 'done', session_id = ?, model = ?, effort = ?, report = ?, ended_at = ? WHERE id = ?`,
-		out.SessionID, out.Model, out.Effort, string(rep), ended.Format(time.RFC3339Nano), id); err != nil {
+		out.SessionID, out.Model, out.Effort, string(rep), formatTS(ended), id); err != nil {
 		return nil, fmt.Errorf("complete turn: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -856,7 +827,7 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 }
 
 // appendSession adds out's session bytes to persona's stored copy, provided they start where it ends.
-func appendSession(ctx context.Context, tx *sql.Tx, roomID string, persona int64, out *TurnOutcome) error {
+func appendSession(ctx context.Context, tx *txn, roomID string, persona int64, out *TurnOutcome) error {
 	var stored []byte
 	err := tx.QueryRowContext(ctx, `SELECT data FROM agent_sessions WHERE persona_id = ? AND session_id = ?`, persona, out.SessionID).Scan(&stored)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -865,7 +836,7 @@ func appendSession(ctx context.Context, tx *sql.Tx, roomID string, persona int64
 	if out.SessionOffset != int64(len(stored)) {
 		return fmt.Errorf("%w: upload starts at %d, stored copy holds %d bytes", ErrSessionGap, out.SessionOffset, len(stored))
 	}
-	// Appended in Go: SQLite's || would turn the blob into text. Never nil: the column is NOT NULL.
+	// Never nil: the column is NOT NULL.
 	data := append(append(make([]byte, 0, len(stored)+len(out.Session)), stored...), out.Session...)
 	ts := now()
 	_, err = tx.ExecContext(ctx, `
@@ -903,7 +874,7 @@ func (r TurnReport) Note(name string) string {
 // one's delegation of website approvals, nor the approvals its app had not applied yet (014-AC12).
 // ErrNotFound if pid is not in room.
 func (s *Store) SetHost(ctx context.Context, roomID string, pid int64) error {
-	return s.withTx(ctx, "set host", func(tx *sql.Tx) error {
+	return s.withTx(ctx, "set host", func(tx *txn) error {
 		var prev sql.NullInt64
 		if err := tx.QueryRowContext(ctx, `SELECT host_participant_id FROM rooms WHERE id = ?`, roomID).Scan(&prev); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("set host: %w", err)
@@ -933,7 +904,7 @@ func (s *Store) SetHost(ctx context.Context, roomID string, pid int64) error {
 // in room.
 func (s *Store) HandOver(ctx context.Context, roomID string, to int64, by *Participant) (string, error) {
 	var line string
-	err := s.withTx(ctx, "hand over", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "hand over", func(tx *txn) error {
 		var from sql.NullInt64
 		var fromName, toName sql.NullString
 		err := tx.QueryRowContext(ctx, `SELECT r.host_participant_id, h.name, p.name FROM rooms r
@@ -998,7 +969,7 @@ func (s *Store) SetCanTrigger(ctx context.Context, roomID string, pid int64, can
 // returns nil when nothing changed (003-AC20).
 func (s *Store) SetParallelTurns(ctx context.Context, roomID string, on bool, by *Participant) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "set parallel turns", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "set parallel turns", func(tx *txn) error {
 		res, err := tx.ExecContext(ctx, `UPDATE rooms SET parallel_turns = ? WHERE id = ? AND parallel_turns != ?`, on, roomID, on)
 		if err != nil {
 			return fmt.Errorf("set parallel turns: %w", err)

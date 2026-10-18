@@ -63,6 +63,7 @@ wait_http() {
 }
 
 [[ -f persona-voice/playwright.config.js ]] || die "run from e2e/"
+[[ -n ${GRILL_ROOM_TEST_DATABASE_URL:-} ]] || die "GRILL_ROOM_TEST_DATABASE_URL must name a PostgreSQL 16 server (make pg-up prints one)"
 for cmd in docker curl openssl pnpm uv; do
 	command -v "$cmd" >/dev/null || die "$cmd is missing"
 done

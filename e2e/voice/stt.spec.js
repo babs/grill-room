@@ -1,9 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, rmSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
-import { join as joinPath } from 'node:path';
-import { createRoom, invite, join, joinAudio, inboundAudio, launch, admin, fixture, audioItem } from './helpers.js';
+import { createRoom, invite, join, joinAudio, inboundAudio, launch, admin, fixture, audioItem, composeSQL } from './helpers.js';
 
 const repo = new URL('../../', import.meta.url).pathname;
 const compose = (...args) => execFileSync('docker', ['compose', ...args], { cwd: repo, encoding: 'utf8' });
@@ -70,25 +67,14 @@ test('speech becomes voice lines in the language spoken', async ({ request }) =>
 
     // No audio file in the worker's container, and no audio blob in the room's database.
     expect(compose('exec', '-T', '-u', '0', 'stt', 'find', '/', '-xdev', '(', '-name', '*.wav', '-o', '-name', '*.opus', '-o', '-name', '*.pcm', ')')).toBe('');
-    const dir = test.info().outputPath('db');
-    mkdirSync(dir, { recursive: true });
-    try {
-      compose('cp', 'grill-room:/data/.', dir);
-      const db = new DatabaseSync(joinPath(dir, 'grill-room.db'), { readOnly: true });
-      const blobs = [];
-      for (const { name: table } of db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()) {
-        for (const { name: col } of db.prepare(`SELECT name FROM pragma_table_info('${table}')`).all()) {
-          // RIFF (WAV), OggS (Opus), fLaC, ID3 (MP3), and WebM's EBML header.
-          const n = db.prepare(`SELECT count(*) AS n FROM "${table}" WHERE typeof("${col}") = 'blob'
-            AND (hex(substr("${col}", 1, 4)) IN ('52494646', '4F676753', '664C6143', '1A45DFA3') OR hex(substr("${col}", 1, 3)) = '494433')`).get().n;
-          if (n) blobs.push(`${table}.${col}: ${n}`);
-        }
-      }
-      db.close();
-      expect(blobs).toEqual([]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    // RIFF (WAV), OggS (Opus), fLaC, ID3 (MP3), and WebM's EBML header, in any bytea column.
+    const blobs = composeSQL(`
+SELECT format($q$SELECT %L || ': ' || count(*) FROM %I.%I
+  WHERE substr(%I, 1, 4) IN ('\\x52494646', '\\x4f676753', '\\x664c6143', '\\x1a45dfa3') OR substr(%I, 1, 3) = '\\x494433'
+  HAVING count(*) > 0$q$, table_name || '.' || column_name, table_schema, table_name, column_name, column_name)
+FROM information_schema.columns WHERE table_schema = 'public' AND data_type = 'bytea' ORDER BY 1 \\gexec
+`).split('\n').filter(Boolean);
+    expect(blobs).toEqual([]);
     await request.delete(`/api/rooms/${room.id}`, { headers: admin });
   } finally {
     await aliceBrowser.close();

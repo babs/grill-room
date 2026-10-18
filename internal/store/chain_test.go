@@ -2,9 +2,7 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"path/filepath"
 	"testing"
 )
 
@@ -204,56 +202,4 @@ func TestDuePersonas(t *testing.T) {
 	if err != nil || stats[r.grill.ID] != (PersonaStat{Turns: 4, Last: "Grill spoke\nsecond line"}) || stats[sec.ID].Turns != 1 {
 		t.Fatalf("stats: %+v %v", stats, err)
 	}
-}
-
-// 002-AC25: an existing queue survives the migration that lets agents queue turns: its rows are
-// button presses by their participant.
-func TestMigrationToChains(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "old.db")
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	// Version 10 is the schema right before the chain migration.
-	if err := migrateTo(ctx, db, 10); err != nil {
-		t.Fatal(err)
-	}
-	alice, grill := personaRoomOld(t, db)
-	if _, err := db.ExecContext(ctx, `INSERT INTO turn_queue(room_id, persona_id, participant_id, fresh, created_at) VALUES('a', ?, ?, 1, '2026-01-01T00:00:00Z')`,
-		grill, alice); err != nil {
-		t.Fatal(err)
-	}
-	_ = db.Close()
-	s, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	q, err := s.Queue(ctx, "a")
-	if err != nil || len(q) != 1 || q[0].ParticipantID != alice || q[0].Source != SourceButton || !q[0].Fresh {
-		t.Fatalf("queue: %+v %v", q, err)
-	}
-	if r, err := s.Room(ctx, "a"); err != nil || r.Chain != (Chain{Budget: DefaultChainBudget}) {
-		t.Fatalf("room chain: %+v %v", r, err)
-	}
-}
-
-// personaRoomOld makes room "a" with a participant and a persona on a schema from before chains,
-// with raw SQL, and returns their ids.
-func personaRoomOld(t *testing.T, db *sql.DB) (alice, grill int64) {
-	t.Helper()
-	ctx := context.Background()
-	for _, q := range []string{
-		`INSERT INTO rooms(id, name, created_at) VALUES('a', 'R', '2026-01-01T00:00:00Z')`,
-		`INSERT INTO invites(room_id, token_hash, created_at) VALUES('a', 'inv', '2026-01-01T00:00:00Z')`,
-		`INSERT INTO participants(room_id, invite_id, name, token_hash, joined_at) VALUES('a', 1, 'Alice', 'tok', '2026-01-01T00:00:00Z')`,
-		`INSERT INTO room_personas(room_id, template_version, name, badge, colour, text, model, effort, created_at)
-			VALUES('a', 1, 'Grill', 'x', '#000000', 't', '', '', '2026-01-01T00:00:00Z')`,
-	} {
-		if _, err := db.ExecContext(ctx, q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return 1, 1
 }

@@ -24,6 +24,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
+	"github.com/babs/grill-room/internal/pgtest"
 	"github.com/babs/grill-room/internal/plugin"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/turn"
@@ -500,10 +501,8 @@ func TestPluginCredentialsNeverLogged(t *testing.T) {
 	if !strings.Contains(all.String(), "plugin_url_refused") || strings.Contains(all.String(), "s3cr3t") || strings.Contains(all.String(), "example.com") {
 		t.Fatalf("logs:\n%s", all.String())
 	}
-	for _, f := range []string{e.dbPath, e.dbPath + "-wal"} {
-		if b, err := os.ReadFile(f); err == nil && bytes.Contains(b, []byte("s3cr3t")) {
-			t.Fatalf("%s holds the secret", f)
-		}
+	if hits, _ := pgtest.Find(t, e.dsn, "s3cr3t"); len(hits) != 0 {
+		t.Fatalf("%v hold the secret", hits)
 	}
 }
 

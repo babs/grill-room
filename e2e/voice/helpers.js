@@ -1,4 +1,5 @@
 import { expect, chromium } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { snoozePush, snoozeKey } from '../quiet-push.js';
@@ -10,6 +11,15 @@ export const fixture = {
 };
 
 export const admin = { Authorization: `Bearer ${process.env.GRILL_ROOM_ADMIN_TOKEN}` };
+
+// composeSQL runs a psql script on the compose stack's database; vars become psql variables
+// (:'name'), which psql only interpolates in a script, not in -c.
+export function composeSQL(sql, vars = {}) {
+  const v = Object.entries(vars).flatMap(([k, val]) => ['-v', `${k}=${val}`]);
+  return execFileSync('docker', ['compose', '-f', fileURLToPath(new URL('../../compose.yaml', import.meta.url)),
+    'exec', '-T', 'postgres', 'psql', '-X', '-q', '-At', '-v', 'ON_ERROR_STOP=1', '-U', 'grill-room', '-d', 'grill-room', ...v, '-f', '-'],
+  { input: sql, encoding: 'utf8', maxBuffer: 256 << 20 });
+}
 
 // launch starts the installed Chrome with a fake microphone: a beep, or the WAV at audioFile.
 export function launch(audioFile) {

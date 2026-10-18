@@ -12,7 +12,7 @@ import (
 // (013-AC25). The caller checks sp.Valid.
 func (s *Store) SetSpeech(ctx context.Context, roomID string, sp Speech, by *Participant) (*Message, error) {
 	var m *Message
-	err := s.withTx(ctx, "set speech", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "set speech", func(tx *txn) error {
 		var old Speech
 		err := tx.QueryRowContext(ctx, `SELECT voice_quiet_ms, voice_resume_s, voice_queue_s, voice_words FROM rooms WHERE id = ?`, roomID).
 			Scan(&old.QuietMS, &old.ResumeS, &old.QueueS, &old.Words)

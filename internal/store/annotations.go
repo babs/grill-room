@@ -126,13 +126,9 @@ func (s *Store) CreateAnnotation(ctx context.Context, roomID string, docID int64
 		return nil, ErrStaleRevision
 	}
 	ann := &Annotation{RoomID: roomID, DocumentID: docID, Revision: last, Anchor: a, Status: StatusOpen, CreatedAt: time.Now().UTC()}
-	res, err := tx.ExecContext(ctx, `INSERT INTO annotations(room_id, document_id, revision, anchor, created_at) VALUES(?,?,?,?,?)`,
-		roomID, docID, last, anchorJSON, ann.CreatedAt.Format(time.RFC3339Nano))
-	if err != nil {
+	if err := tx.QueryRowContext(ctx, `INSERT INTO annotations(room_id, document_id, revision, anchor, created_at) VALUES(?,?,?,?,?) RETURNING id`,
+		roomID, docID, last, anchorJSON, formatTS(ann.CreatedAt)).Scan(&ann.ID); err != nil {
 		return nil, fmt.Errorf("create annotation: %w", err)
-	}
-	if ann.ID, err = res.LastInsertId(); err != nil {
-		return nil, fmt.Errorf("create annotation id: %w", err)
 	}
 	m, err := insertAnnotationMessage(ctx, tx, roomID, ann.ID, msg, defaultQuota)
 	if err != nil {
@@ -157,7 +153,7 @@ func (s *Store) AddAnnotationMessage(ctx context.Context, roomID string, annID i
 	reopen := msg.ParticipantID != 0
 	res, err := tx.ExecContext(ctx, `
 		UPDATE annotations SET version = version + 1,
-			status = CASE WHEN ? AND status = 'done' THEN 'reopened' ELSE status END
+			status = CASE WHEN ? = 1 AND status = 'done' THEN 'reopened' ELSE status END
 		WHERE id = ? AND room_id = ?`, reopen, annID, roomID)
 	if err != nil {
 		return nil, fmt.Errorf("add annotation message: %w", err)
@@ -177,9 +173,9 @@ func (s *Store) AddAnnotationMessage(ctx context.Context, roomID string, annID i
 	return m, nil
 }
 
-func insertAnnotationMessage(ctx context.Context, tx *sql.Tx, roomID string, annID int64, msg *NewMessage, defaultQuota int64) (*AnnotationMessage, error) {
+func insertAnnotationMessage(ctx context.Context, tx *txn, roomID string, annID int64, msg *NewMessage, defaultQuota int64) (*AnnotationMessage, error) {
 	if len(msg.Attachments) > 0 {
-		// Checked inside the transaction: the single connection serialises it with uploads.
+		// Checked inside the transaction: the write lock serialises it with uploads.
 		used, quota, err := roomUsage(ctx, tx, roomID, defaultQuota)
 		if err != nil {
 			return nil, fmt.Errorf("add annotation message: %w", err)
@@ -201,24 +197,16 @@ func insertAnnotationMessage(ctx context.Context, tx *sql.Tx, roomID string, ann
 	if msg.ParticipantID != 0 {
 		m.By, pid = ByParticipant, msg.ParticipantID
 	}
-	ts := m.CreatedAt.Format(time.RFC3339Nano)
-	res, err := tx.ExecContext(ctx, `INSERT INTO annotation_messages(annotation_id, author_kind, participant_id, persona_id, author, body, created_at) VALUES(?,?,?,?,?,?,?)`,
-		annID, m.By, pid, nullID(m.PersonaID), m.Author, m.Body, ts)
-	if err != nil {
+	ts := formatTS(m.CreatedAt)
+	if err := tx.QueryRowContext(ctx, `INSERT INTO annotation_messages(annotation_id, author_kind, participant_id, persona_id, author, body, created_at)
+		VALUES(?,?,?,?,?,?,?) RETURNING id`, annID, m.By, pid, nullID(m.PersonaID), m.Author, m.Body, ts).Scan(&m.ID); err != nil {
 		return nil, fmt.Errorf("insert annotation message: %w", err)
 	}
-	if m.ID, err = res.LastInsertId(); err != nil {
-		return nil, fmt.Errorf("insert annotation message id: %w", err)
-	}
 	for _, at := range msg.Attachments {
-		res, err := tx.ExecContext(ctx, `INSERT INTO attachments(message_id, content_type, size, data, created_at) VALUES(?,?,?,?,?)`,
-			m.ID, at.ContentType, len(at.Data), at.Data, ts)
-		if err != nil {
+		var id int64
+		if err := tx.QueryRowContext(ctx, `INSERT INTO attachments(message_id, content_type, size, data, created_at) VALUES(?,?,?,?,?) RETURNING id`,
+			m.ID, at.ContentType, len(at.Data), at.Data, ts).Scan(&id); err != nil {
 			return nil, fmt.Errorf("insert attachment: %w", err)
-		}
-		id, err := res.LastInsertId()
-		if err != nil {
-			return nil, fmt.Errorf("insert attachment id: %w", err)
 		}
 		m.Attachments = append(m.Attachments, Attachment{ID: id, ContentType: at.ContentType, Size: int64(len(at.Data))})
 	}
@@ -401,7 +389,7 @@ func (s *Store) loadAnnotations(ctx context.Context, withData bool, cond string,
 // reanchor moves the anchored annotations of a document onto its revision n: each one found in
 // body follows it there; one that is gone is flagged orphaned and keeps its last anchor and
 // revision, and comes back if a later revision holds it again.
-func reanchor(ctx context.Context, tx *sql.Tx, docID int64, format string, n int, body string) error {
+func reanchor(ctx context.Context, tx *txn, docID int64, format string, n int, body string) error {
 	type row struct {
 		id int64
 		a  anchor.Anchor

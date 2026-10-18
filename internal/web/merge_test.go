@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -74,7 +73,6 @@ func TestMergeAPI(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("merge: %d %s", code, body)
 	}
-	walEmpty(t, e)
 	got := decodeJSON[mergeResp](t, body)
 	if got.Keep.ID != a.ID || got.Keep.UUID == "" || got.Moved.Seats != 2 || got.Moved.Sessions != 1 {
 		t.Fatalf("merge: %s", body)
@@ -87,14 +85,6 @@ func TestMergeAPI(t *testing.T) {
 	if len(log) != 1 || log[0].TargetID != strconv.FormatInt(a.ID, 10) || log[0].Actor != store.ActorSuperAdmin ||
 		!strings.Contains(string(log[0].Details), `"merge_name":"Ali"`) || !strings.Contains(string(log[0].Details), `"seats":2`) {
 		t.Fatalf("audit: %+v", log)
-	}
-}
-
-// walEmpty fails unless the last change was checkpointed: the WAL keeps no deleted row's pages.
-func walEmpty(t *testing.T, e *env) {
-	t.Helper()
-	if fi, err := os.Stat(e.dbPath + "-wal"); err != nil || fi.Size() != 0 {
-		t.Fatalf("WAL after the change: %v %v", fi, err)
 	}
 }
 
@@ -197,24 +187,7 @@ func TestPurgedBrowserIsSignedOut(t *testing.T) {
 	if got, err := e.srv.purgeProfiles(t.Context(), store.EmptyProfileIdle); err != nil || len(got) != 1 {
 		t.Fatalf("purge: %v %v", got, err)
 	}
-	walEmpty(t, e)
 	if got := d.profile(t); got.Profile != nil || !got.EmailEnabled {
 		t.Fatalf("after the purge: %+v", got)
 	}
-}
-
-// 002-AC5: deleting a profile or a room checkpoints the WAL, so the deleted rows leave the files.
-func TestDeletesCheckpoint(t *testing.T) {
-	e := newEnv(t)
-	room := e.createRoom(t, "R")
-	d := e.device(t)
-	d.join(t, room.ID, "Alice")
-	if code, _ := e.do(t, "DELETE", fmt.Sprintf("/api/profiles/%d", d.profile(t).Profile.ID), e.admin, nil); code != http.StatusNoContent {
-		t.Fatalf("delete profile: %d", code)
-	}
-	walEmpty(t, e)
-	if code, _ := e.do(t, "DELETE", "/api/rooms/"+room.ID, e.admin, nil); code != http.StatusNoContent {
-		t.Fatalf("delete room: %d", code)
-	}
-	walEmpty(t, e)
 }

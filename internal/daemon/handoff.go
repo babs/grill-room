@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -43,15 +44,18 @@ func ListenHandoff(ctx context.Context, stateDir string) (net.Listener, error) {
 	return listenLocal(ctx, stateDir)
 }
 
-// ServeHandoff answers launches until ln closes. open receives the room a launch hands over, ""
-// for none, and returns a fresh link to the admin page.
+// ServeHandoff answers launches until ln closes, and returns once every answer is done. open
+// receives the room a launch hands over, "" for none, and returns a fresh link to the admin page.
 func ServeHandoff(ln net.Listener, open func(room string) (string, error), log *zap.Logger) {
+	// A pipe instance still open refuses the next listen on its name (Windows: access denied).
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		go func() {
+		wg.Go(func() {
 			defer func() { _ = c.Close() }()
 			_ = c.SetDeadline(time.Now().Add(10 * time.Second))
 			var req handoff
@@ -68,7 +72,7 @@ func ServeHandoff(ln net.Listener, open func(room string) (string, error), log *
 			log.Info("launch_handed_over", zap.Bool("room", req.Room != ""), zap.String("error", resp.Error))
 			b, _ := json.Marshal(resp)
 			_, _ = c.Write(append(b, '\n'))
-		}()
+		})
 	}
 }
 

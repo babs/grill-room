@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -17,28 +16,8 @@ const LinkNotesWatch ChainEvent = "notes_watch"
 const latestNote = `(SELECT COALESCE(MAX(m.id), 0) FROM annotation_messages m JOIN annotations a ON a.id = m.annotation_id
 	WHERE a.room_id = room_personas.room_id)`
 
-// migrateNotesWatch checks that the turn queue takes notes_watch now, then makes SQLite read the
-// edited schema again, as migrateStopped does.
-func migrateNotesWatch(ctx context.Context, tx *sql.Tx) error {
-	var q string
-	if err := tx.QueryRowContext(ctx, `SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'turn_queue'`).Scan(&q); err != nil {
-		return fmt.Errorf("check turn_queue schema: %w", err)
-	}
-	if strings.Count(q, "'notes_watch'") != 2 {
-		return errors.New("the turn_queue table's source CHECKs are not the expected ones: 'notes_watch' was not added")
-	}
-	var v int
-	if err := tx.QueryRowContext(ctx, `PRAGMA schema_version`).Scan(&v); err != nil {
-		return fmt.Errorf("read schema version: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA schema_version = %d`, v+1)); err != nil {
-		return fmt.Errorf("bump schema version: %w", err)
-	}
-	return nil
-}
-
 // otherWatcher sets p.watchFrom when c makes p the notes watcher in place of another persona.
-func otherWatcher(ctx context.Context, tx *sql.Tx, p *RoomPersona, c PersonaPatch) error {
+func otherWatcher(ctx context.Context, tx *txn, p *RoomPersona, c PersonaPatch) error {
 	if c.WatchesNotes == nil || !*c.WatchesNotes || p.WatchesNotes {
 		return nil
 	}
@@ -77,7 +56,7 @@ type NoteNews struct {
 // NotesNews lists the note messages of p's room past its notes mark that p did not write, on
 // documents still there, oldest first (009-AC32).
 func (s *Store) NotesNews(ctx context.Context, p *RoomPersona) ([]NoteNews, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT m.id, m.annotation_id, m.created_at FROM room_personas p, `+notesNews+`
+	rows, err := s.db.QueryContext(ctx, `SELECT m.id, m.annotation_id, m.created_at FROM room_personas p CROSS JOIN `+notesNews+`
 		AND p.id = ? ORDER BY m.id`, p.ID)
 	if err != nil {
 		return nil, fmt.Errorf("notes news: %w", err)
@@ -99,7 +78,7 @@ func (s *Store) NotesNews(ctx context.Context, p *RoomPersona) ([]NoteNews, erro
 // SkipNotes moves persona's notes mark up to note message upTo: none of the messages up to it may
 // wake it.
 func (s *Store) SkipNotes(ctx context.Context, persona, upTo int64) error {
-	if _, err := s.db.ExecContext(ctx, `UPDATE room_personas SET notes_mark = max(notes_mark, ?) WHERE id = ?`, upTo, persona); err != nil {
+	if _, err := s.db.ExecContext(ctx, `UPDATE room_personas SET notes_mark = GREATEST(notes_mark, ?) WHERE id = ?`, upTo, persona); err != nil {
 		return fmt.Errorf("skip notes: %w", err)
 	}
 	return nil
@@ -112,13 +91,8 @@ func (s *Store) ParticipantNotes(ctx context.Context, roomID string, ids []int64
 	if len(ids) == 0 {
 		return out, nil
 	}
-	args := []any{roomID}
-	for _, id := range ids {
-		args = append(args, id)
-	}
-	//nolint:gosec // only placeholders are added to the query
 	rows, err := s.db.QueryContext(ctx, `SELECT m.annotation_id, m.body FROM annotation_messages m JOIN annotations a ON a.id = m.annotation_id
-		WHERE a.room_id = ? AND m.author_kind = 'participant' AND m.annotation_id IN (?`+strings.Repeat(",?", len(ids)-1)+`) ORDER BY m.id`, args...)
+		WHERE a.room_id = ? AND m.author_kind = 'participant' AND m.annotation_id = ANY(?) ORDER BY m.id`, roomID, ids)
 	if err != nil {
 		return nil, fmt.Errorf("participant notes: %w", err)
 	}

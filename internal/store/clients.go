@@ -20,7 +20,7 @@ type Client struct {
 
 // ParticipantJoined records the client participant id joined from; it is also its last activity.
 func (s *Store) ParticipantJoined(ctx context.Context, id int64, ip, ua string, at time.Time) error {
-	ts := at.UTC().Format(time.RFC3339Nano)
+	ts := formatTS(at)
 	if _, err := s.db.ExecContext(ctx, `UPDATE participants SET join_ip = ?, join_ua = ?, last_ip = ?, last_ua = ?, last_seen_at = ?
 		WHERE id = ?`, ip, ua, ip, ua, ts, id); err != nil {
 		return fmt.Errorf("participant %d joined: %w", id, err)
@@ -31,7 +31,7 @@ func (s *Store) ParticipantJoined(ctx context.Context, id int64, ip, ua string, 
 // ParticipantSeen records participant id's last activity and the client it came from.
 func (s *Store) ParticipantSeen(ctx context.Context, id int64, ip, ua string, at time.Time) error {
 	if _, err := s.db.ExecContext(ctx, `UPDATE participants SET last_ip = ?, last_ua = ?, last_seen_at = ? WHERE id = ?`,
-		ip, ua, at.UTC().Format(time.RFC3339Nano), id); err != nil {
+		ip, ua, formatTS(at), id); err != nil {
 		return fmt.Errorf("participant %d seen: %w", id, err)
 	}
 	return nil
@@ -64,9 +64,9 @@ func (s *Store) RoomClients(ctx context.Context, roomID string) (map[int64]Clien
 // PurgeClients clears the client fields recorded before before: the join ones by join time, the
 // last ones by last activity. It returns how many participants it cleared something of.
 func (s *Store) PurgeClients(ctx context.Context, before time.Time) (int64, error) {
-	ts := before.UTC().Format(time.RFC3339Nano)
+	ts := formatTS(before)
 	var n int64
-	err := s.withTx(ctx, "purge clients", func(tx *sql.Tx) error {
+	err := s.withTx(ctx, "purge clients", func(tx *txn) error {
 		for _, q := range []string{
 			`UPDATE participants SET join_ip = NULL, join_ua = NULL WHERE join_ip IS NOT NULL AND joined_at < ?`,
 			`UPDATE participants SET last_ip = NULL, last_ua = NULL WHERE last_ip IS NOT NULL AND last_seen_at < ?`,

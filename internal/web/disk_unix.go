@@ -4,6 +4,7 @@ package web
 
 import (
 	"fmt"
+	"os"
 	"syscall"
 )
 
@@ -17,4 +18,13 @@ func diskSpace(dir string) (free, total int64, err error) {
 	bs := int64(st.Bsize) //nolint:unconvert // not a no-op on darwin
 
 	return int64(st.Bavail) * bs, int64(st.Blocks) * bs, nil //nolint:gosec // see above
+}
+
+// fileOwner is the uid owning fi.
+func fileOwner(fi os.FileInfo) (uid int, known bool) {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return int(st.Uid), true
 }

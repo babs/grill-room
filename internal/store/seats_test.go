@@ -1,8 +1,6 @@
 package store
 
 import (
-	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -12,88 +10,6 @@ import (
 	"testing"
 	"time"
 )
-
-// 016-AC1: the migration ends the seats whose invite was revoked, as revoked at the invite's time,
-// and leaves every other seat valid: the access lists answer the same rows before and after.
-func TestSeatMigration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "old.db")
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	before := slices.IndexFunc(migrations, func(m string) bool { return strings.Contains(m, "016-AC1") })
-	if err := migrateTo(ctx, db, before); err != nil {
-		t.Fatal(err)
-	}
-	const at = "2026-01-02T00:00:00Z"
-	// Invite 1, revoked, let Pat (profile 1) in; Pat made invite 2, revoked with it, that let Gus
-	// (no profile) in. Invite 3 is valid: Pat again, on another device, and Val (profile 2).
-	for _, q := range []string{
-		`INSERT INTO rooms(id, name, created_at) VALUES('a', 'R', '2026-01-01T00:00:00Z')`,
-		`INSERT INTO profiles(id, recovery_hash, created_at) VALUES(1, 'r1', '2026-01-01T00:00:00Z'), (2, 'r2', '2026-01-01T00:00:00Z')`,
-		`INSERT INTO profile_sessions(profile_id, token_hash, created_at, expires_at_s) VALUES(1, 's1', '2026-01-01T00:00:00Z', 9999999999)`,
-		`INSERT INTO invites(id, room_id, token_hash, created_at, revoked_at) VALUES(1, 'a', 'i1', '2026-01-01T00:00:00Z', '` + at + `')`,
-		`INSERT INTO participants(id, room_id, invite_id, name, token_hash, joined_at, profile_id) VALUES(1, 'a', 1, 'Pat', 't1', '2026-01-01T00:00:00Z', 1)`,
-		`INSERT INTO invites(id, room_id, token_hash, created_at, revoked_at, created_by) VALUES(2, 'a', 'i2', '2026-01-01T00:00:00Z', '` + at + `', 1)`,
-		`INSERT INTO participants(id, room_id, invite_id, name, token_hash, joined_at) VALUES(2, 'a', 2, 'Gus', 't2', '2026-01-01T00:00:00Z')`,
-		`INSERT INTO invites(id, room_id, token_hash, created_at) VALUES(3, 'a', 'i3', '2026-01-01T00:00:00Z')`,
-		`INSERT INTO participants(id, room_id, invite_id, name, token_hash, joined_at, profile_id) VALUES(3, 'a', 3, 'Pat', 't3', '2026-01-01T00:00:00Z', 1)`,
-		`INSERT INTO participants(id, room_id, invite_id, name, token_hash, joined_at, profile_id) VALUES(4, 'a', 3, 'Val', 't4', '2026-01-01T00:00:00Z', 2)`,
-		`INSERT INTO push_subscriptions(participant_id, endpoint, p256dh, auth, created_at) VALUES(1, 'e1', 'k', 'a', '2026-01-01T00:00:00Z'), (3, 'e3', 'k', 'a', '2026-01-01T00:00:00Z')`,
-	} {
-		if _, err := db.ExecContext(ctx, q); err != nil {
-			t.Fatalf("%s: %v", q, err)
-		}
-	}
-	_ = db.Close()
-	s, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-
-	rows, err := s.db.QueryContext(ctx, `SELECT id, COALESCE(removed_at, ''), COALESCE(end_reason, '') FROM participants ORDER BY id`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var seats []string
-	for rows.Next() {
-		var id int64
-		var removed, reason string
-		if err := rows.Scan(&id, &removed, &reason); err != nil {
-			t.Fatal(err)
-		}
-		seats = append(seats, fmt.Sprintf("%d:%s:%s", id, removed, reason))
-	}
-	_ = rows.Close()
-	if want := []string{"1:" + at + ":revoked", "2:" + at + ":revoked", "3::", "4::"}; !slices.Equal(seats, want) {
-		t.Fatalf("seats %v, want %v", seats, want)
-	}
-	// The answers of before 016, read off the invites: seats 3 and 4, one room for Pat, two people.
-	ps, err := s.Participants(ctx, "a")
-	if err != nil || len(ps) != 2 || ps[0].ID != 3 || ps[1].ID != 4 {
-		t.Fatalf("participants %+v %v", ps, err)
-	}
-	rooms, err := s.profileRooms(ctx, 1)
-	if err != nil || len(rooms) != 1 || rooms[0].ParticipantID != 3 || rooms[0].People != 2 {
-		t.Fatalf("profile rooms %+v %v", rooms, err)
-	}
-	ov, err := s.RoomOverviews(ctx, 1)
-	if err != nil || len(ov) != 1 || ov[0].Participants != 2 {
-		t.Fatalf("overview %+v %v", ov, err)
-	}
-	subs, err := s.PushSubscriptions(ctx, "a")
-	if err != nil || len(subs) != 1 || subs[0].ParticipantID != 3 {
-		t.Fatalf("push subscriptions %+v %v", subs, err)
-	}
-	if p, err := s.ProfileParticipant(ctx, "s1", "a"); err != nil || p.ID != 3 {
-		t.Fatalf("profile participant %+v %v", p, err)
-	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE participants SET end_reason = 'kicked' WHERE id = 3`); err == nil {
-		t.Fatal("unknown end reason accepted")
-	}
-}
 
 // endSeat ends seat id as reason, the way 016's removal and leave do.
 func endSeat(t *testing.T, s *Store, id int64, reason string) {

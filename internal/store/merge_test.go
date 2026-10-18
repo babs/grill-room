@@ -439,14 +439,16 @@ func TestMergeOverLimits(t *testing.T) {
 // ageProfile moves every activity of profile id back by d: creation, joins, lines and sign-ins.
 func ageProfile(t *testing.T, s *Store, id int64, d time.Duration) {
 	t.Helper()
-	mod := fmt.Sprintf("-%d seconds", int64(d/time.Second))
+	back := func(col string) string {
+		return `to_char((` + col + `::timestamptz - make_interval(secs => ?1)) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`
+	}
 	for _, q := range []string{
-		`UPDATE profiles SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at, ?1) WHERE id = ?2`,
-		`UPDATE participants SET joined_at = strftime('%Y-%m-%dT%H:%M:%fZ', joined_at, ?1) WHERE profile_id = ?2`,
-		`UPDATE messages SET ts = strftime('%Y-%m-%dT%H:%M:%fZ', ts, ?1) WHERE participant_id IN (SELECT id FROM participants WHERE profile_id = ?2)`,
-		`UPDATE profile_sessions SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at, ?1) WHERE profile_id = ?2`,
+		`UPDATE profiles SET created_at = ` + back("created_at") + ` WHERE id = ?2`,
+		`UPDATE participants SET joined_at = ` + back("joined_at") + ` WHERE profile_id = ?2`,
+		`UPDATE messages SET ts = ` + back("ts") + ` WHERE participant_id IN (SELECT id FROM participants WHERE profile_id = ?2)`,
+		`UPDATE profile_sessions SET created_at = ` + back("created_at") + ` WHERE profile_id = ?2`,
 	} {
-		if _, err := s.db.ExecContext(t.Context(), q, mod, id); err != nil {
+		if _, err := s.db.ExecContext(t.Context(), q, d.Seconds(), id); err != nil {
 			t.Fatal(err)
 		}
 	}

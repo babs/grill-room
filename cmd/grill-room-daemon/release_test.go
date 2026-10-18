@@ -35,7 +35,7 @@ type releaseServer struct {
 
 func newReleaseServer(t *testing.T, dir string) *releaseServer {
 	t.Helper()
-	st, err := store.Open(storetest.Path(t, "room.db"))
+	st, err := store.Open(storetest.DSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}

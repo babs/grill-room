@@ -2,41 +2,22 @@ package store
 
 import (
 	"context"
-	"database/sql"
-	"path/filepath"
 	"regexp"
-	"slices"
-	"strings"
 	"testing"
 )
 
 var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
-// 003-AC32: every profile has a random v4 uuid, from its creation or, for one made before, from
-// the migration; participants carry their profile's, guests none.
+// 003-AC32: every profile has a random v4 uuid from its creation; participants carry their
+// profile's, guests none.
 func TestProfileUUIDs(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "old.db")
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := openTest(t)
 	ctx := context.Background()
-	// The schema just before profiles got their uuid.
-	before := slices.IndexFunc(migrations, func(m string) bool { return strings.Contains(m, "ALTER TABLE profiles ADD COLUMN uuid") })
-	if err := migrateTo(ctx, db, before); err != nil {
-		t.Fatal(err)
-	}
 	for _, h := range []string{"r1", "r2"} {
-		if _, err := db.ExecContext(ctx, `INSERT INTO profiles(recovery_hash, created_at) VALUES(?, '2026-01-01T00:00:00Z')`, h); err != nil {
+		if _, err := createProfile(ctx, s.db, h, "s"+h); err != nil {
 			t.Fatal(err)
 		}
 	}
-	_ = db.Close()
-	s, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
 	joinWithProfile(t, s, "room", "Alice", JoinProfile{RecoveryHash: "r3", SessionHash: "s3"})
 	if _, err := s.CreateInvite(ctx, "room", "inv-guest", 0); err != nil {
 		t.Fatal(err)
@@ -100,7 +81,7 @@ func TestHandoffNext(t *testing.T) {
 		t.Fatal(err)
 	}
 	tn := &Turn{RoomID: "room", PersonaID: ps[0].ID, PersonaName: ps[0].Name, ParticipantID: p.ID}
-	if err := s.withTx(ctx, "t", func(tx *sql.Tx) error { return handoffNext(ctx, tx, tn, TurnReport{Created: []string{"other.md"}}) }); err != nil {
+	if err := s.withTx(ctx, "t", func(tx *txn) error { return handoffNext(ctx, tx, tn, TurnReport{Created: []string{"other.md"}}) }); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.Queue(ctx, "room"); len(got) != 1 || got[0].Handoff != "" {
@@ -110,7 +91,7 @@ func TestHandoffNext(t *testing.T) {
 	if last := ms[len(ms)-1].Body; last != "No handoff: Grill did not write docs/_handoff-Grill.md, so it stays on its current session." {
 		t.Fatalf("message %q", last)
 	}
-	if err := s.withTx(ctx, "t", func(tx *sql.Tx) error {
+	if err := s.withTx(ctx, "t", func(tx *txn) error {
 		return handoffNext(ctx, tx, tn, TurnReport{Revised: []string{"_handoff-Grill.md"}})
 	}); err != nil {
 		t.Fatal(err)

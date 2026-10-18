@@ -288,7 +288,7 @@ func TestImportPluginRefusals(t *testing.T) {
 		"version twice":           {filePluginVersions, func(r []map[string]any) { r[2]["n"] = 2 }, "a version twice"},
 		"unknown plugin":          {filePluginVersions, func(r []map[string]any) { r[0]["plugin"] = 999 }, "version of unknown plugin"},
 		"unknown state":           {filePluginVersions, func(r []map[string]any) { r[0]["state"] = "running" }, "unknown state"},
-		"two plugins, one name":   {filePlugins, func(r []map[string]any) { r[1]["name"] = "babs" }, "UNIQUE"},
+		"two plugins, one name":   {filePlugins, func(r []map[string]any) { r[1]["name"] = "babs" }, "room_plugins_name"},
 		"byte-less bad sha256":    {filePluginVersions, func(r []map[string]any) { r[0]["sha256"] = "x" }, "bad sha256"},
 		"byte-less negative size": {filePluginVersions, func(r []map[string]any) { r[0]["size"] = -1 }, "bad sha256, size"},
 		"refused, bad files":      {filePluginVersions, func(r []map[string]any) { r[2]["files"] = -3 }, "bad sha256, size"},

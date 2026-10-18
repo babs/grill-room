@@ -31,16 +31,18 @@ const (
 	// archiveIOTimeout bounds how long an import's upload or an export's download may take: a slow
 	// client would otherwise hold one of the archive slots for good.
 	archiveIOTimeout = 30 * time.Minute
-	// stagingPrefix names the directories exports and imports stage files in, next to the store.
+	// stagingPrefix names the directories exports and imports stage files in, under StagingDir.
 	stagingPrefix = ".archive-"
 )
 
-// stagingDir creates a directory to stage an export or import in, beside the database: the volume
-// that holds the room holds its archive, where /tmp may be a small tmpfs.
+// stagingDir creates a directory to stage an export or import in, under opts.StagingDir.
 func (s *Server) stagingDir() (string, error) {
-	base := os.TempDir()
-	if s.opts.DBPath != "" {
-		base = filepath.Dir(s.opts.DBPath)
+	base := s.opts.StagingDir
+	if base == "" {
+		base = os.TempDir()
+	}
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		return "", fmt.Errorf("staging dir: %w", err)
 	}
 	dir, err := os.MkdirTemp(base, stagingPrefix+"*")
 	if err != nil {
@@ -49,12 +51,46 @@ func (s *Server) stagingDir() (string, error) {
 	return dir, nil
 }
 
-// cleanStaging removes what exports and imports left staged when the server stopped mid-way.
+// PrepareStaging creates dir, where exports and imports stage whole rooms, and makes sure only
+// this process's user reaches it: it refuses a symlink, a non-directory or another user's
+// directory, and narrows one of ours to 0700. Owner and mode go unchecked off Linux and macOS.
+func PrepareStaging(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("staging dir %s: %w", dir, err)
+	}
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("staging dir %s: %w", dir, err)
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("staging dir %s: not a directory (%s)", dir, fi.Mode().Type())
+	}
+	uid, known := fileOwner(fi)
+	if !known {
+		return nil
+	}
+	if uid != os.Getuid() {
+		return fmt.Errorf("staging dir %s: owned by uid %d, not by this process's %d", dir, uid, os.Getuid())
+	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // a directory: 0700 is owner-only
+			return fmt.Errorf("staging dir %s: %w", dir, err)
+		}
+	}
+	return nil
+}
+
+// cleanStaging checks the staging directory and removes what exports and imports left staged
+// there when the server stopped mid-way.
 func (s *Server) cleanStaging() {
-	if s.opts.DBPath == "" {
+	if s.opts.StagingDir == "" {
 		return
 	}
-	left, _ := filepath.Glob(filepath.Join(filepath.Dir(s.opts.DBPath), stagingPrefix+"*"))
+	if err := PrepareStaging(s.opts.StagingDir); err != nil {
+		s.log.Warn("staging_dir_failed", zap.String("dir", s.opts.StagingDir), zap.Error(err))
+		return
+	}
+	left, _ := filepath.Glob(filepath.Join(s.opts.StagingDir, stagingPrefix+"*"))
 	for _, d := range left {
 		if err := os.RemoveAll(d); err != nil {
 			s.log.Warn("staging_cleanup_failed", zap.String("dir", d), zap.Error(err))
@@ -63,7 +99,8 @@ func (s *Server) cleanStaging() {
 }
 
 // archiveSlot takes one of the archive slots, or answers 503: each export or import stages a whole
-// room on disk and holds the store's connection while it reads or writes it.
+// room on disk and holds a database connection while it reads or writes it, an import the write
+// lock too.
 func (s *Server) archiveSlot(w http.ResponseWriter) (func(), bool) {
 	select {
 	case s.archives <- struct{}{}:

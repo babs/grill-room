@@ -51,7 +51,7 @@ func (s *Store) PairDaemon(ctx context.Context, roomID string, participantID int
 		INSERT INTO daemons(room_id, participant_id, name, token_hash, created_at)
 		SELECT room_id, id, '', ?, ? FROM participants WHERE id = ? AND room_id = ?
 		ON CONFLICT(participant_id) DO UPDATE SET token_hash = excluded.token_hash, created_at = excluded.created_at
-		RETURNING id`, tokenHash, d.CreatedAt.Format(time.RFC3339Nano), participantID, roomID).Scan(&d.ID)
+		RETURNING id`, tokenHash, formatTS(d.CreatedAt), participantID, roomID).Scan(&d.ID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
