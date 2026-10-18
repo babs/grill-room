@@ -28,14 +28,19 @@ var (
 )
 
 // spokenText is spoken.md made safe to synthesise, whatever the agent did with the rules: no
-// Markdown mark, code, link target, URL, emoji or short id is read out, and the line keeps whole
-// sentences up to words words (013-AC3). Empty means nothing to say.
+// Markdown mark, code, link target, URL, emoji, short id or mention's @ is read out, and the line
+// keeps whole sentences up to words words (013-AC3). Empty means nothing to say.
 func spokenText(md string, words int) string {
 	t := codeSpan.ReplaceAllString(md, " ")
 	t = mdLink.ReplaceAllString(t, "$1")
 	t = bareURL.ReplaceAllString(t, " ")
 	t = shortID.ReplaceAllString(t, "")
 	t = hashNum.ReplaceAllString(t, "$1")
+	// Before inlineMk drops "_": "@Ana_María" is said "Ana María", never "at AnaMaría".
+	t = mentionRe.ReplaceAllStringFunc(t, func(m string) string {
+		i := strings.LastIndexByte(m, '@')
+		return m[:i] + strings.ReplaceAll(m[i+1:], "_", " ")
+	})
 	t = lineMark.ReplaceAllString(t, "")
 	t = inlineMk.ReplaceAllString(t, "")
 	t = strings.Map(func(r rune) rune {

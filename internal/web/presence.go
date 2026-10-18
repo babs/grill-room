@@ -184,6 +184,17 @@ func tagged(name, tag string) string {
 	return oneLine(name) + " ·" + tag
 }
 
+// humanAt is a human as the preamble lists them: the @token a mention of them takes, so a persona
+// addressing them notifies them. A name with no token, or whose token a persona holds, stays bare:
+// the mention would call the persona (005-AC27).
+func humanAt(name, tag string, personas []store.RoomPersona) string {
+	at := mentionToken(name)
+	if at == "" || slices.ContainsFunc(personas, func(p store.RoomPersona) bool { return strings.EqualFold(p.Name, at) }) {
+		return tagged(name, tag)
+	}
+	return tagged("@"+at, tag)
+}
+
 // presencePreamble describes the room to persona self as its turn starts: why it runs, the other
 // personas and what they did, the humans present, the host and who speaks, and the chain budget
 // (002-AC28, 003-AC22). Models and efforts are what each persona runs at on the host daemon, after
@@ -256,7 +267,7 @@ func (s *Server) presencePreamble(ctx context.Context, room *store.Room, self *s
 			v.Host = named(h.ID, h.Name)
 		}
 		if s.people.here(room.ID, h.ID, s.now()) {
-			v.Humans = append(v.Humans, named(h.ID, h.Name))
+			v.Humans = append(v.Humans, humanAt(h.Name, tags[h.ID], personas))
 		}
 	}
 	if m, err := st.LastVoice(ctx, room.ID); err == nil && speakingAt(m, time.Now()) {
