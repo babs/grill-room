@@ -20,6 +20,8 @@ log = structlog.get_logger()
 
 # The track's queue: what a stop can still let out is at most this, so keep it short (013-AC22).
 QUEUE_MS = 100
+# A persona's echo comes back on a listener's track within this after its frame went out (S16).
+ECHO_S = 1.5
 # Onsets are judged at this rate: enough for speech energy, cheap to decode.
 ONSET_SR = 16000
 
@@ -208,7 +210,9 @@ class Bots:
             async for ev in stream:
                 frame = ev.frame
                 changed = onset.feed(
-                    np.frombuffer(frame.data, np.int16), 1000 * frame.samples_per_channel / ONSET_SR
+                    np.frombuffer(frame.data, np.int16),
+                    1000 * frame.samples_per_channel / ONSET_SR,
+                    voice.clock.now() - voice.played_at < ECHO_S,
                 )
                 if changed is not None:
                     voice.speakers({identity} if changed else set(), key)

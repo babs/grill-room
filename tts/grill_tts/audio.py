@@ -8,6 +8,10 @@ from scipy.signal import firwin, lfilter
 
 Samples = NDArray[np.float32]
 
+# A listener's echo canceller leaks 40-80 ms bursts of a persona over its first seconds of far-end
+# audio, then converges (S16): during that warm-up an onset must last longer than a leak.
+WARM_MS = 4000
+ECHO_WINDOW, ECHO_START = 16, 9
 # About -22 dBFS RMS, what S14 levelled each sentence to (013-AC15).
 TARGET_RMS = 10 ** (-22 / 20)
 PEAK = 0.95
@@ -162,24 +166,32 @@ class Onset:
     caught within 60 ms even when its syllables dip under the floor, while a key click or a cough
     shorter than 40 ms is not speech. It ends after `hang_ms` below the floor, so the gaps between
     words do not end it.
+    While a persona plays, a track's first WARM_MS of it need ECHO_START of the last ECHO_WINDOW
+    frames instead.
     """
 
     def __init__(
         self, floor_dbfs: float = -42.0, window: int = 6, start: int = 4, hang_ms: int = 400
     ) -> None:
         self._floor = 10 ** (floor_dbfs / 20)
-        self._recent: deque[bool] = deque(maxlen=window)
-        self._start, self._hang_ms = start, hang_ms
+        self._recent: deque[bool] = deque(maxlen=max(window, ECHO_WINDOW))
+        self._window, self._start, self._hang_ms = window, start, hang_ms
         self._quiet = 0.0
+        self._heard_ms = 0.0
         self.speaking = False
 
-    def feed(self, pcm: NDArray[np.int16], ms: float) -> bool | None:
-        """Takes one frame of ms; returns the new state when it changed, None otherwise."""
+    def feed(self, pcm: NDArray[np.int16], ms: float, playing: bool = False) -> bool | None:
+        """Takes one frame of ms; returns the new state when it changed, None otherwise. playing:
+        a persona's echo may be in this frame."""
         rms = float(np.sqrt(np.mean(np.square(pcm.astype(np.float32) / 32768)))) if len(pcm) else 0.0
         loud = rms >= self._floor
         self._recent.append(loud)
         self._quiet = 0.0 if loud else self._quiet + ms
-        if not self.speaking and sum(self._recent) >= self._start:
+        window, start = self._window, self._start
+        if playing and self._heard_ms < WARM_MS:
+            self._heard_ms += ms
+            window, start = ECHO_WINDOW, ECHO_START
+        if not self.speaking and sum(list(self._recent)[-window:]) >= start:
             self.speaking = True
             return True
         if self.speaking and self._quiet >= self._hang_ms:
