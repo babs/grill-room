@@ -81,7 +81,7 @@ test('starter library: duplicate, share, delete, /admin', async ({ browser, requ
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
 // Each built-in with the field it asks, and what the room then holds.
 const builtins = [
-  { title: 'Spec grill', search: 'SPEC GRILL', field: 'Topic', value: 'Billing', room: 'Grill: Billing', personas: ['Grill', 'Secretary'] },
+  { title: 'Spec grill', search: 'SPEC GRILL', field: 'Topic', value: 'Billing', room: 'Grill: Billing', personas: ['Grill', 'Secretary', 'Rodin'] },
   { title: 'Retro', search: 'retro', field: 'Team', value: 'Ops', room: 'Retro: Ops', personas: ['Facilitator', 'Secretary'] },
   { title: 'Doc review', search: 'doc review', field: 'Document', value: 'RFC 12', room: 'Review: RFC 12', personas: ['Reviewer', 'Secretary'] },
 ];
@@ -108,7 +108,7 @@ for (const vp of widths) {
       await expect(preview.locator('h3')).toHaveText(b.title);
       await expect(preview).toContainText('v1 · by grill-room');
       await expect(preview.locator('.starter-personas li')).toHaveText([new RegExp(`${b.personas[0]} · sonnet · effort (high|medium) · only when asked`),
-        /Secretary · sonnet · effort medium · every 20 voice lines/]);
+        /Secretary · sonnet · effort medium · every 20 voice lines/, ...b.personas.slice(2).map((n) => new RegExp(`${n} · sonnet · effort high · only when asked`))]);
       await expect(preview.locator('.starter-agenda')).toContainText('- [ ]');
       await sheet.getByRole('button', { name: 'Use this starter' }).click();
       const create = sheet.getByRole('button', { name: 'Create room' });
@@ -209,14 +209,14 @@ test('save a room as a starter, share it, create a room from it', async ({ brows
   await page.getByRole('button', { name: 'New room' }).click();
   await page.getByLabel('Search starters').fill(me);
   await page.getByRole('button', { name: 'Shared with everyone: ' + title }).click();
-  await expect(page.locator('#starter-preview .starter-personas li')).toHaveText([/Grill/, /Secretary/]);
+  await expect(page.locator('#starter-preview .starter-personas li')).toHaveText([/Grill/, /Secretary/, /Rodin/]);
   await page.getByRole('button', { name: 'Use this starter' }).click();
   await expect(page.getByRole('button', { name: 'Create room' })).toBeDisabled();
   await page.getByLabel('Owner').fill('Bea');
   await page.getByRole('button', { name: 'Create room' }).click();
   await expect(page.locator('#room-name')).toHaveText('Kickoff for Bea');
   await page.locator('#invites').getByRole('button', { name: 'Close' }).click();
-  await expect(page.locator('button.persona')).toHaveText([/Grill/, /Secretary/]);
+  await expect(page.locator('button.persona')).toHaveText([/Grill/, /Secretary/, /Rodin/]);
   await expect(page.locator('#documents li')).toHaveCount(2);
   await expect(page.locator('#documents li').first()).toContainText('agenda.md');
   await expect(page.locator('#documents li').nth(1)).toContainText('plan.md');

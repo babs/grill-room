@@ -17,7 +17,7 @@ test('personas: add, edit, queue', async ({ browser, request, baseURL }) => {
   const panel = alice.locator('#personas');
   await menuItem(alice, 'Personas');
   await expect(panel.locator('.persona-row')).toHaveCount(1);
-  await expect(panel.locator('#persona-template option')).toHaveCount(2);
+  await expect(panel.locator('#persona-template option')).toHaveCount(3);
   await panel.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
   await panel.getByRole('button', { name: 'Add', exact: true }).click();
   await expect(panel.locator('.persona-row')).toHaveCount(2);

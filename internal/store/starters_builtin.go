@@ -59,7 +59,7 @@ var builtinStarters = []struct {
 }{
 	{"spec-grill", StarterManifest{
 		Title:       "Spec grill",
-		Description: "Grill a spec before it is built: Grill challenges it, Secretary keeps the minutes.",
+		Description: "Grill a spec before it is built: Grill challenges it, Secretary keeps the minutes, Rodin asks whether it should exist at all.",
 		RoomName:    "Grill: {{topic}}",
 		Agenda: `# Agenda: grill of {{topic}}
 
@@ -74,6 +74,7 @@ Goal: find where the spec breaks before it is built.
 		Personas: []StarterPersona{
 			{PersonaFields: PersonaFields{Name: "Grill", Badge: "🔥", Colour: "#d9480f", Text: specGrillText, Model: "sonnet", Effort: "high"}},
 			silentSecretary,
+			{PersonaFields: rodin},
 		},
 		Skills: []StarterSkill{}, Documents: []StarterDocument{}, Chain: builtinChain,
 	}},
