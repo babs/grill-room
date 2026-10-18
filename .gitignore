@@ -13,3 +13,5 @@ dist/
 deploy/k8s/out/
 .device-stt-models/
 tools/ui/node_modules/
+# Cutover working dir (docs/cutover.md): dumps and SQLite copies with personal data.
+/cutover/

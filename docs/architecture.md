@@ -140,6 +140,16 @@ A persona with "Speaks in the call" on says a short line in the LiveKit call aft
 | `grill_tts_underruns_total` | gaps over 100 ms inside a sentence: synthesis fell behind |
 | `grill_tts_bots`, `grill_tts_bots_joined_total` | bots in a call now, and bots that joined |
 
+## Storage, TL;DR
+
+- One PostgreSQL 16+ database with `C` collation holds everything the room server stores (`internal/store`, spec 017). The server refuses another collation. It connects straight to the primary: no pooler, as the advisory lock is per session.
+- Schema: the `schema_version` table holds the version. On an empty database the first start creates the baseline (46, the last SQLite schema) and runs the migrations past it, all under the write lock, so pods starting together make one schema.
+- Writes: each write transaction takes `pg_advisory_xact_lock` on one key, so one write commits at a time across every pod, and ids commit in id order for the `id > last` stream cursors. In a pod, one write at a time holds a pool connection, leaving the others to reads. A wait longer than `lock_timeout` (30 s) fails the write; `grill_room_db_lock_wait_seconds` measures the wait.
+- Reads run without the lock; an export reads its room from one read-only snapshot.
+- Exports and imports stage files in `GRILL_ROOM_STAGING_DIR`, the pod's own disk.
+- `grill-room db copy` and `db verify` move a SQLite database of before spec 017 into an empty PostgreSQL one and compare them table by table; the copy holds the write lock (README, Copying a SQLite database).
+- Backups are `pg_dump -Fc` while the server runs (README, Backups).
+
 ## A turn, end to end
 
 1. A participant presses a persona's button: `POST /api/rooms/{room}/turns`. While another turn runs, the press waits in the room's queue.

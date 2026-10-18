@@ -5,7 +5,9 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path"
 	"slices"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -38,7 +40,10 @@ type k8sEnv struct {
 }
 
 type k8sVolume struct {
-	Name                  string `yaml:"name"`
+	Name     string `yaml:"name"`
+	EmptyDir *struct {
+		SizeLimit string `yaml:"sizeLimit"`
+	} `yaml:"emptyDir"`
 	PersistentVolumeClaim struct {
 		ClaimName string `yaml:"claimName"`
 	} `yaml:"persistentVolumeClaim"`
@@ -72,9 +77,8 @@ func mountOf(c k8sContainer, volume string) (k8sMount, bool) {
 	return k8sMount{}, false
 }
 
-// 010-AC7: the server image fills a dedicated PVC from a non-root, read-only init container, and
-// the server mounts it read-only where GRILL_ROOM_DEVICE_STT_MODEL_DIR points.
-func TestRoomManifestModelsInit(t *testing.T) {
+func roomManifest(t *testing.T) []k8sDoc {
+	t.Helper()
 	raw, err := os.ReadFile("../../deploy/k8s/room.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -90,6 +94,44 @@ func TestRoomManifestModelsInit(t *testing.T) {
 		}
 		docs = append(docs, d)
 	}
+	return docs
+}
+
+// The staging directory must be one the server creates and owns: an emptyDir's mount point
+// belongs to root, and PrepareStaging refuses it.
+func TestRoomManifestStagingDir(t *testing.T) {
+	docs := roomManifest(t)
+	di := slices.IndexFunc(docs, func(d k8sDoc) bool { return d.Kind == "Deployment" && d.Metadata.Name == "grill-room" })
+	if di < 0 {
+		t.Fatal("no grill-room Deployment")
+	}
+	pod := docs[di].Spec.Template.Spec
+	server := pod.Containers[0]
+	ei := slices.IndexFunc(server.Env, func(e k8sEnv) bool { return e.Name == "GRILL_ROOM_STAGING_DIR" })
+	if ei < 0 {
+		t.Fatal("GRILL_ROOM_STAGING_DIR unset")
+	}
+	dir := path.Clean(server.Env[ei].Value)
+	below := false
+	for _, m := range server.VolumeMounts {
+		mp := path.Clean(m.MountPath)
+		if dir == mp {
+			t.Errorf("GRILL_ROOM_STAGING_DIR %q is the mount point of volume %q", dir, m.Name)
+		}
+		vi := slices.IndexFunc(pod.Volumes, func(v k8sVolume) bool { return v.Name == m.Name })
+		if vi >= 0 && pod.Volumes[vi].EmptyDir != nil && !m.ReadOnly && strings.HasPrefix(dir, mp+"/") {
+			below = true
+		}
+	}
+	if !below {
+		t.Errorf("GRILL_ROOM_STAGING_DIR %q is not below a writable emptyDir mount", dir)
+	}
+}
+
+// 010-AC7: the server image fills a dedicated PVC from a non-root, read-only init container, and
+// the server mounts it read-only where GRILL_ROOM_DEVICE_STT_MODEL_DIR points.
+func TestRoomManifestModelsInit(t *testing.T) {
+	docs := roomManifest(t)
 	pvc := slices.IndexFunc(docs, func(d k8sDoc) bool {
 		return d.Kind == "PersistentVolumeClaim" && d.Metadata.Name == "grill-room-models"
 	})

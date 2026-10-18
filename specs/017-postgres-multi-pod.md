@@ -199,7 +199,7 @@ Rolling deploy, the audio risk that remains:
 | Readiness / liveness | `/healthz` write check / TCP (`room.yaml:130-131`) | same, against PG |
 | Metrics | VMPodScrape per pod (`deploy/monitoring/room.yaml`) | same; I41 |
 | Backups | server at 0, copy `grill-room.db*`, sha256, `PRAGMA integrity_check` | `pg_dump -Fc` while running; restore test into a scratch database |
-| Config | `GRILL_ROOM_DB`, default `grill-room.db` (`cmd/grill-room/main.go:159`) | `GRILL_ROOM_DATABASE_URL` from a secret; `GRILL_ROOM_DB` read only by the copy command (Q1 a) |
+| Config | `GRILL_ROOM_DB`, default `grill-room.db` (`cmd/grill-room/main.go:159`) | `GRILL_ROOM_DATABASE_URL` from a secret; the copy command takes the SQLite file as `--from <file>` (Q1 a) |
 | Network policy | no PG egress (`deploy/k8s/netpol.yaml`) | egress to PG 5432 |
 
 ### Tests and CI
