@@ -4,7 +4,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/voices"
@@ -111,20 +113,42 @@ func TestLexiconRefusals(t *testing.T) {
 	}
 }
 
-// 013-AC34: demand counts the rooms with a speaking persona and a human who hears the call.
+// 013-AC34: demand counts the rooms with a speaking persona and a human who has the room open, in
+// the audio or not, so the pod starts before anyone joins the call; it goes back to 0 once they
+// are gone.
 func TestTTSDemand(t *testing.T) {
 	e := newEnvOpts(t, ttsOptions(t))
+	var clock atomic.Int64
+	clock.Store(time.Now().UnixNano())
+	e.srv.now = func() time.Time { return time.Unix(0, clock.Load()) }
 	r := newTurnRoom(t, e)
 	if n := e.srv.TTSDemand(); n != 0 {
-		t.Fatalf("nobody in the call: %d", n)
+		t.Fatalf("nobody here: %d", n)
+	}
+	_, closeRoom := e.openStream(t, "/api/rooms/"+r.room+"/events?tab=alice-1", r.alice.p.Token, "")
+	if n := e.srv.TTSDemand(); n != 1 {
+		t.Fatalf("the room open, nobody in the audio: %d", n)
+	}
+	// 013-AC15: the bots still join only rooms with a listener.
+	if rs := e.srv.ttsRoster(t.Context()); len(rs) != 0 {
+		t.Fatalf("roster with nobody in the audio: %+v", rs)
 	}
 	e.inAudio(t, r.room, r.alice.p, true)
-	if n := e.srv.TTSDemand(); n != 0 {
+	if n := e.srv.TTSDemand(); n != 1 {
 		t.Fatalf("a deafened listener: %d", n)
 	}
+	closeRoom()
+	if code, b := e.do(t, "POST", "/api/rooms/"+r.room+"/presence", r.alice.p.Token, map[string]any{"tab": "tab1", "gone": true}); code != http.StatusNoContent {
+		t.Fatalf("gone: %d %s", code, b)
+	}
+	// Past the presence grace, once the stream is released.
+	waitFor(t, func() bool { clock.Add(int64(presenceGrace + time.Second)); return e.srv.TTSDemand() == 0 })
 	e.inAudio(t, r.room, r.alice.p, false)
 	if n := e.srv.TTSDemand(); n != 1 {
 		t.Fatalf("a listener: %d", n)
+	}
+	if rs := e.srv.ttsRoster(t.Context()); len(rs) != 1 || rs[0].Room != r.room {
+		t.Fatalf("roster with a listener: %+v", rs)
 	}
 	if code, b := e.do(t, "PATCH", "/api/rooms/"+r.room+"/personas/"+strconv.FormatInt(r.grill.ID, 10), r.alice.p.Token, map[string]bool{"speaks": false}); code != http.StatusOK {
 		t.Fatalf("speaks off: %d %s", code, b)
