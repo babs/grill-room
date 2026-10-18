@@ -121,7 +121,9 @@ if [[ -n $image_echo ]]; then
 	docker run -d --name "$echo" --network host --memory 2g --shm-size 1g "$image_echo" 7705 >/dev/null
 	export ECHO_BROWSER_WS=ws://127.0.0.1:7705/
 	deadline=$((SECONDS + 60))
-	until docker logs "$echo" 2>&1 | grep -q 'Listening on'; do
+	# Not `| grep -q`: under pipefail, docker logs' SIGPIPE would read as not up.
+	until [[ $(docker logs "$echo" 2>&1) == *'Listening on'* ]]; do
+		[[ $(docker inspect -f '{{.State.Running}}' "$echo") == true ]] || die "the echo browser exited: see $out/echo.log"
 		((SECONDS < deadline)) || die "the echo browser did not come up"
 		sleep 1
 	done
