@@ -28,7 +28,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: ui-tools ui-vendor ui-check build e2e-build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-device-voice e2e-persona-voice e2e-persona-echo e2e-agent-live e2e-mcp-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance pg-up pg-down scenarios-test stt-test stt-image stt-image-test stt-image-e2e tts-test tts-image tts-lexcheck cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete k8s-autoscale k8s-autoscale-delete fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: ui-tools ui-vendor ui-check build e2e-build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-voice e2e-device-voice e2e-persona-voice e2e-persona-echo e2e-agent-live e2e-mcp-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance pg-up pg-down scenarios-test stt-test stt-image stt-image-test stt-image-e2e tts-test tts-image tts-lexcheck cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete k8s-autoscale k8s-autoscale-delete lab-check fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -371,13 +371,18 @@ sandbox-push: sandbox-image
 # existing namespace. Set KUBECONFIG explicitly: the targets refuse to fall back to the default one.
 K8S_NAMESPACE ?= grill-room
 K8S_OUT       := deploy/k8s/out
-K8S_VARS      := K8S_DOMAIN K8S_STORAGE_CLASS GRILL_ROOM_IMAGE GRILL_STT_IMAGE GRILL_TTS_IMAGE GRILL_ROOM_ADMIN_TOKEN STT_TOKEN TTS_TOKEN LIVEKIT_API_KEY LIVEKIT_API_SECRET
+K8S_VARS      := K8S_DOMAIN K8S_STORAGE_CLASS GRILL_ROOM_IMAGE GRILL_STT_IMAGE GRILL_TTS_IMAGE GRILL_ROOM_ADMIN_TOKEN STT_TOKEN TTS_TOKEN LIVEKIT_API_KEY LIVEKIT_API_SECRET \
+                 K8S_PG_HOST K8S_PG_DATABASE K8S_PG_SECRET K8S_PG_NAMESPACE
 KUBECTL        = kubectl -n '$(K8S_NAMESPACE)'
 # Optional: an empty GRILL_ROOM_SMTP_ADDR turns email sign-in off. The NetworkPolicy opens
 # K8S_SMTP_PORT to the namespace K8S_SMTP_NAMESPACE, where the relay runs.
 K8S_SMTP_NAMESPACE ?= mailpit
 K8S_SMTP_PORT      ?= 1025
-K8S_OPTIONAL  := GRILL_ROOM_SANDBOX_IMAGE GRILL_ROOM_TRUSTED_PROXIES GRILL_ROOM_SMTP_ADDR GRILL_ROOM_SMTP_FROM K8S_SMTP_NAMESPACE K8S_SMTP_PORT
+# PostgreSQL over the pod network: require encrypts; verify-full also needs the cluster's CA in the pod.
+K8S_PG_PORT        ?= 5432
+K8S_PG_SSLMODE     ?= require
+K8S_OPTIONAL  := GRILL_ROOM_SANDBOX_IMAGE GRILL_ROOM_TRUSTED_PROXIES GRILL_ROOM_SMTP_ADDR GRILL_ROOM_SMTP_FROM K8S_SMTP_NAMESPACE K8S_SMTP_PORT \
+                 K8S_PG_PORT K8S_PG_SSLMODE
 # Exported to the render recipe only: no other recipe sees the secrets in its environment.
 $(foreach v,$(K8S_VARS) $(K8S_OPTIONAL),$(eval k8s-render: export $(v) := $$($(v))))
 
@@ -395,12 +400,17 @@ k8s-render:
 	  || { echo "$$v must be pinned by digest: run make k8s-push" >&2; exit 1; }; done
 	@for v in GRILL_ROOM_ADMIN_TOKEN STT_TOKEN TTS_TOKEN LIVEKIT_API_KEY LIVEKIT_API_SECRET; do printenv "$$v" | grep -Eq '^[A-Za-z0-9._~+/=-]+$$' \
 	  || { echo "$$v holds characters the Secret template cannot quote: use [A-Za-z0-9._~+/=-]" >&2; exit 1; }; done
-	@printenv K8S_SMTP_PORT | grep -Eq '^[0-9]+$$' || { echo "K8S_SMTP_PORT must be a port number" >&2; exit 1; }
+	@for v in K8S_SMTP_PORT K8S_PG_PORT; do printenv "$$v" | grep -Eq '^[0-9]+$$' || { echo "$$v must be a port number" >&2; exit 1; }; done
+	@for v in K8S_PG_HOST K8S_PG_SECRET K8S_PG_NAMESPACE; do printenv "$$v" | grep -Eq '^[a-z0-9.-]+$$' \
+	  || { echo "$$v must match [a-z0-9.-]+" >&2; exit 1; }; done
+	@printenv K8S_PG_DATABASE | grep -Eq '^[a-z0-9_]+$$' || { echo "K8S_PG_DATABASE must match [a-z0-9_]+" >&2; exit 1; }
+	@printenv K8S_PG_SSLMODE | grep -Eq '^(disable|require|verify-ca|verify-full)$$' \
+	  || { echo "K8S_PG_SSLMODE must be disable, require, verify-ca or verify-full" >&2; exit 1; }
 	@printenv GRILL_ROOM_SMTP_FROM | grep -q '"' && { echo "GRILL_ROOM_SMTP_FROM must not hold a double quote" >&2; exit 1; } || true
 	rm -rf '$(K8S_OUT)' && (umask 077 && mkdir -p '$(K8S_OUT)')
 	@for f in deploy/k8s/*.yaml; do \
 	  (umask 077 && ROOM_HOST=grill-room.$$K8S_DOMAIN LIVEKIT_HOST=grill-room-livekit.$$K8S_DOMAIN TURN_HOST=grill-room-turn.$$K8S_DOMAIN \
-	    envsubst '$${K8S_STORAGE_CLASS} $${GRILL_ROOM_IMAGE} $${GRILL_STT_IMAGE} $${GRILL_TTS_IMAGE} $${GRILL_ROOM_SANDBOX_IMAGE} $${GRILL_ROOM_TRUSTED_PROXIES} $${GRILL_ROOM_SMTP_ADDR} $${GRILL_ROOM_SMTP_FROM} $${K8S_SMTP_NAMESPACE} $${K8S_SMTP_PORT} $${ROOM_HOST} $${LIVEKIT_HOST} $${TURN_HOST} $${GRILL_ROOM_ADMIN_TOKEN} $${STT_TOKEN} $${TTS_TOKEN} $${LIVEKIT_API_KEY} $${LIVEKIT_API_SECRET}' \
+	    envsubst '$${K8S_STORAGE_CLASS} $${GRILL_ROOM_IMAGE} $${GRILL_STT_IMAGE} $${GRILL_TTS_IMAGE} $${GRILL_ROOM_SANDBOX_IMAGE} $${GRILL_ROOM_TRUSTED_PROXIES} $${GRILL_ROOM_SMTP_ADDR} $${GRILL_ROOM_SMTP_FROM} $${K8S_SMTP_NAMESPACE} $${K8S_SMTP_PORT} $${K8S_PG_HOST} $${K8S_PG_PORT} $${K8S_PG_DATABASE} $${K8S_PG_SSLMODE} $${K8S_PG_SECRET} $${K8S_PG_NAMESPACE} $${ROOM_HOST} $${LIVEKIT_HOST} $${TURN_HOST} $${GRILL_ROOM_ADMIN_TOKEN} $${STT_TOKEN} $${TTS_TOKEN} $${LIVEKIT_API_KEY} $${LIVEKIT_API_SECRET}' \
 	    < $$f > '$(K8S_OUT)'/$${f##*/}) || exit 1; \
 	done
 	@echo "rendered $(K8S_OUT): https://grill-room.$$K8S_DOMAIN/"
@@ -413,9 +423,20 @@ k8s-apply: k8s-render k8s-check
 	$(KUBECTL) apply -f '$(K8S_OUT)'
 	$(KUBECTL) rollout status deploy --timeout=10m
 
-# Removes what k8s-apply created, the data volume included. The namespace stays.
+# Removes what k8s-apply created. The namespace stays, and so does the SQLite volume, the rollback
+# target of the cutover (docs/cutover.md), unless K8S_DELETE_SQLITE_PVC=1.
 k8s-delete: k8s-render k8s-check
-	$(KUBECTL) delete --ignore-not-found -f '$(K8S_OUT)'
+	@names=$$($(KUBECTL) get --ignore-not-found -o name -f '$(K8S_OUT)') || exit 1; \
+	if [ "$(K8S_DELETE_SQLITE_PVC)" != 1 ]; then names=$$(printf '%s\n' "$$names" | grep -vx 'persistentvolumeclaim/grill-room-data'); fi; \
+	if [ -n "$$names" ]; then echo "deleting $$names"; $(KUBECTL) delete --ignore-not-found $$names; fi
+
+# 017-AC9: a read-only summary of the lab server (GRILL_ROOM_URL, default the K8S_DOMAIN one),
+# diffed before and after the cutover (docs/cutover.md). The optional GRILL_ROOM_CHECK_* probes
+# come from the environment.
+lab-check: export GRILL_ROOM_ADMIN_TOKEN := $(GRILL_ROOM_ADMIN_TOKEN)
+lab-check: export GRILL_ROOM_URL := $(or $(GRILL_ROOM_URL),$(if $(K8S_DOMAIN),https://grill-room.$(K8S_DOMAIN)))
+lab-check:
+	@tools/lab-check.sh
 
 # 007-AC19: the STT queue alert and its scrape, for a cluster running the VictoriaMetrics operator.
 K8S_MONITORING_NAMESPACE ?= monitoring

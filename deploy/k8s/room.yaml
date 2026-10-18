@@ -1,5 +1,7 @@
-# Room server. One replica with Recreate: SQLite takes a single writer on a ReadWriteOnce volume.
-# Rendered by `make k8s-render`, which fills the placeholders from .env.
+# Room server on PostgreSQL (spec 017), one replica for now. Recreate: the models volume is
+# ReadWriteOnce. Rendered by `make k8s-render`, which fills the placeholders from .env.
+# The former SQLite volume, mounted by no pod: the rollback target until the rollback window ends
+# (README "Lab deployment"), then deleted with this object.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -88,6 +90,19 @@ spec:
               value: wss://${LIVEKIT_HOST}
             - name: GRILL_ROOM_LIVEKIT_API_URL
               value: http://livekit:7880
+            # No credentials in the URL: pgx reads PGUSER and PGPASSWORD for a URL that has none.
+            - name: GRILL_ROOM_DATABASE_URL
+              value: postgres://${K8S_PG_HOST}:${K8S_PG_PORT}/${K8S_PG_DATABASE}?sslmode=${K8S_PG_SSLMODE}
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef: { name: "${K8S_PG_SECRET}", key: username }
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef: { name: "${K8S_PG_SECRET}", key: password }
+            # Below the mount: the emptyDir's root belongs to root, and the server stages only in a
+            # directory it owns.
+            - name: GRILL_ROOM_STAGING_DIR
+              value: /staging/grill-room
             - name: GRILL_ROOM_ADMIN_TOKEN
               valueFrom:
                 secretKeyRef: { name: grill-room, key: admin-token }
@@ -140,19 +155,21 @@ spec:
             capabilities:
               drop: [ALL]
           volumeMounts:
-            - { name: data, mountPath: /data }
+            - { name: staging, mountPath: /staging }
             - { name: tmp, mountPath: /tmp }
             - { name: models, mountPath: /models, readOnly: true }
       volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: grill-room-data
         - name: models
           persistentVolumeClaim:
             claimName: grill-room-models
         - name: tmp
           emptyDir:
             sizeLimit: 256Mi
+        # Two archive slots, each an import unpacked up to GRILL_ROOM_MAX_IMPORT_MB (default 1 GiB),
+        # plus margin: past sizeLimit the kubelet evicts the pod.
+        - name: staging
+          emptyDir:
+            sizeLimit: 2560Mi
 ---
 apiVersion: v1
 kind: Service

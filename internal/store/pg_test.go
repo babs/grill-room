@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -223,7 +224,7 @@ func holdWriteLock(t *testing.T, dsn string) (raw *sql.DB, release func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, writeLockKey); err != nil {
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, WriteLockKey); err != nil {
 		t.Fatal(err)
 	}
 	done := false
@@ -247,7 +248,7 @@ func waitLockWaiters(t *testing.T, raw *sql.DB, n int) {
 	for {
 		var got int
 		if err := raw.QueryRowContext(ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND objid::bigint = $1 AND NOT granted`,
-			writeLockKey).Scan(&got); err != nil {
+			WriteLockKey).Scan(&got); err != nil {
 			t.Fatal(err)
 		}
 		if got >= n {
@@ -602,4 +603,31 @@ func TestPoolKeepsIdleConnections(t *testing.T) {
 	if st := s.db.db.Stats(); st.Idle < n || st.MaxIdleClosed != 0 {
 		t.Fatalf("after %d concurrent reads: %d idle, %d closed as over the idle limit", n, st.Idle, st.MaxIdleClosed)
 	}
+}
+
+// The lab manifest keeps credentials out of GRILL_ROOM_DATABASE_URL and passes them as PGUSER and
+// PGPASSWORD from a secret (deploy/k8s/room.yaml): pgx must read them for a URL that has none.
+func TestOpenTakesCredentialsFromEnv(t *testing.T) {
+	u, err := url.Parse(pgtest.Fresh(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, pass := u.User.Username(), ""
+	if p, ok := u.User.Password(); ok {
+		pass = p
+	}
+	if user == "" {
+		t.Skip(pgtest.Env + " names no user to move into PGUSER")
+	}
+	u.User = nil
+	t.Setenv("PGUSER", user)
+	t.Setenv("PGPASSWORD", pass)
+	cfg, err := pgconn.ParseConfig(u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.User != user || cfg.Password != pass {
+		t.Fatalf("ParseConfig(%s) took user %q and a %d-byte password, want %q from PGUSER and PGPASSWORD", u.Redacted(), cfg.User, len(cfg.Password), user)
+	}
+	openAt(t, u.String())
 }

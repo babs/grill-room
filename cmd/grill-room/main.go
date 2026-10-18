@@ -338,6 +338,12 @@ func (c Config) ttsTokenHash() string {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "db" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		code := dbCommand(ctx, os.Args[2:], os.Stdout, os.Stderr, os.Getenv)
+		stop()
+		os.Exit(code)
+	}
 	if len(os.Args) > 1 {
 		if err := command(os.Args[1:], devicestt.Pinned, devicestt.NewClient()); err != nil {
 			fmt.Fprintf(os.Stderr, "grill-room: %v\n", err)
