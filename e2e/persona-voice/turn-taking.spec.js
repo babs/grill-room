@@ -159,8 +159,10 @@ function starts(rows, ms) {
   return out;
 }
 
-// words lists the loud runs of a series within [from, to] as [start, ms]; a run ends after 50 ms
-// under QUIET, longer than any dip inside a word and shorter than the fake engine's 100 ms gap.
+// words lists the loud runs of a series within [from, to] as [start, ms]; a run ends after 20 ms
+// under QUIET. A word has no dip under QUIET, while the listener hears only 45-80 ms of a 100 ms
+// gap: the meter's window and the codec's tail take some, and a talk spurt's first gaps are
+// squeezed by the jitter buffer catching up.
 function words(rows, from, to) {
   const out = [];
   let run = null;
@@ -173,7 +175,7 @@ function words(rows, from, to) {
       quietSince = null;
     } else if (run && db < QUIET) {
       quietSince ??= at;
-      if (at - quietSince >= 50) run = null;
+      if (at - quietSince >= 20) run = null;
     }
   }
   return out;
@@ -302,7 +304,12 @@ test('turn-taking in the call', async ({ browser, request }) => {
   } catch (e) {
     // What the listener heard, for the next failure's diagnosis.
     const L = await Promise.race([alice.page.evaluate(() => window.levels), new Promise((r) => setTimeout(r, 5000, null))]).catch(() => null);
-    await test.info().attach('levels', { body: JSON.stringify(L), contentType: 'application/json' }).catch(() => {});
+    // A file in the results dir: CI uploads it, while the list reporter drops a body attachment.
+    const path = test.info().outputPath('levels.json');
+    try {
+      writeFileSync(path, JSON.stringify(L));
+    } catch {}
+    await test.info().attach('levels', { path, contentType: 'application/json' }).catch(() => {});
     throw e;
   } finally {
     await alice.ctx.close();
