@@ -147,3 +147,28 @@ def test_onset_through_dips() -> None:
     choppy = [pcm(0.01, 0.2), pcm(0.01, 0.2), pcm(0.01, 0.0)] * 4
     got = [o.feed(f, 10.0) for f in choppy]
     assert True in got[:6], "two loud frames, one dip, repeated, did not start speech within 60 ms"
+
+
+# 013-AC35: during a listener's first 4 s of hearing a persona, a 60 ms burst at -20 dBFS, the
+# echo canceller's warm-up leak (S16), is not an onset; past those 4 s, or with no persona playing,
+# it is.
+def test_onset_warm_up_ignores_echo_burst() -> None:
+    from grill_tts.audio import Onset
+
+    burst = [pcm(0.01, 0.1 * np.sqrt(2))] * 6 + [pcm(0.01, 0.0)] * 50
+    o = Onset()
+    warm = [o.feed(f, 10.0, playing=True) for f in [pcm(0.01, 0.0)] * 100 + burst]
+    assert True not in warm, "a 60 ms burst 1 s into the persona's audio started speech"
+    late = [o.feed(f, 10.0, playing=True) for f in [pcm(0.01, 0.0)] * 300 + burst]
+    assert True in late, "the same burst past 4 s of persona audio did not start speech"
+    o = Onset()
+    assert True in [o.feed(f, 10.0) for f in burst], "the burst with no persona playing was ignored"
+
+
+# 013-AC22: a human who speaks during the warm-up still cuts in, by the 9th loud frame.
+def test_onset_warm_up_catches_speech() -> None:
+    from grill_tts.audio import Onset
+
+    o = Onset()
+    got = [o.feed(f, 10.0, playing=True) for f in [pcm(0.01, 0.0)] * 100 + [pcm(0.01, 0.1)] * 30]
+    assert got.index(True) == 100 + 8, "sustained speech in the warm-up did not start by 90 ms"

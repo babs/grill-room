@@ -198,6 +198,8 @@ class RoomVoice:
         self._queue: deque[Line] = deque()
         self._new = asyncio.Event()
         self.states: dict[int, State] = {}
+        # When a persona's frame last went out: its echo can come back on a listener's track (S16).
+        self.played_at = float("-inf")
 
     # -- inputs ---------------------------------------------------------------------------------
 
@@ -371,6 +373,7 @@ class RoomVoice:
                 return False
             if j < len(s.frames) and (j or s.done or len(s.frames) * FRAME_S >= need):
                 await out.play(s.frames[j])
+                self.played_at = self.clock.now()
                 if started is not None and j == 0:
                     metrics.FIRST_AUDIO.observe(self.clock.now() - started)
                 j += 1

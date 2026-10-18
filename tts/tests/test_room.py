@@ -126,6 +126,8 @@ async def test_fifo_across_two_personas() -> None:
     names = [n for n, _, _ in r.log]
     assert names == sorted(names, key=lambda n: n != "grill"), "secretary spoke before grill finished"
     assert r.state(1) == ("idle", "")
+    # S16: the listeners' echo gate times the last frame out.
+    assert r.rv.played_at == pytest.approx(r.log[-1][1] + 0.02, abs=0.011)
     await r.close()
 
 
