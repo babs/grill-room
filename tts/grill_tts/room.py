@@ -25,6 +25,7 @@ log = structlog.get_logger()
 
 TRACK_SR = 48000
 FRAME = TRACK_SR // 50  # 20 ms
+FRAME_S = FRAME / TRACK_SR
 # A frame the player waited this long for, mid-sentence, left the track's 100 ms queue dry.
 UNDERRUN_S = 0.1
 
@@ -132,7 +133,35 @@ class Framer:
 
 
 @dataclass
+class Pace:
+    """How fast the pod makes speech, learned from the sentences it made: wall seconds per second of
+    track audio (rtf) and track seconds per character at rate 1. The lab's 4-CPU node runs Pocket at
+    RTF 0.6 to 4 as its neighbours load it (2026-10-17), so the player cannot assume real time."""
+
+    rtf: float = 0.5  # S14b measured 0.39: no pre-buffer until the pod shows it is slower
+    s_per_char: float = 0.07
+    # A slower sentence counts at once, a faster one eases the pace back.
+    ease: float = 0.3
+    # Margin on rtf: a sentence's own pace varies around the average.
+    headroom: float = 1.2
+
+    def learn(self, wall_s: float, audio_s: float, chars: int, rate: float) -> None:
+        if audio_s < 0.5 or not chars:
+            return
+        rtf = wall_s / audio_s
+        self.rtf = max(rtf, self.rtf + self.ease * (rtf - self.rtf))
+        self.s_per_char += self.ease * (audio_s * rate / chars - self.s_per_char)
+
+    def prebuffer_s(self, chars: int, rate: float) -> float:
+        """The audio to hold before a sentence of chars starts so the rest is made before the track
+        needs it: made at 1/rtf while it plays, it lacks total * (1 - 1/rtf) by the end."""
+        total = chars * self.s_per_char / rate
+        return total * max(0.0, 1 - 1 / (self.rtf * self.headroom))
+
+
+@dataclass
 class Sentence:
+    chars: int = 0
     frames: list[bytes] = field(default_factory=list)
     done: bool = False
     # failed: synthesis broke; the player drops the line as an error instead of waiting.
@@ -149,6 +178,7 @@ class RoomVoice:
         layer: Callable[[], TextLayer],
         clock: Clock | None = None,
         out: Callable[[int], Out | None] = lambda _p: None,
+        pace: Pace | None = None,
     ) -> None:
         self.room = room
         self.engine = engine
@@ -156,6 +186,8 @@ class RoomVoice:
         self.clock = clock or Clock()
         # out finds a persona's track, None while its bot is not in the call.
         self.out = out
+        # One per pod: every room's synthesis shares its CPU.
+        self.pace = pace or Pace()
         self.listeners = False
         self.humans: set[str] = set()
         # Each bot's latest view of who speaks, by bot.
@@ -282,7 +314,7 @@ class RoomVoice:
 
     async def _say(self, line: Line, out: Out) -> None:
         plan = self.layer().plan(line.text)
-        sentences = [Sentence() for _ in plan]
+        sentences = [Sentence(chars=sum(len(sp.text) for sp in spans)) for spans in plan]
         made = asyncio.Event()
         producer = asyncio.create_task(self._produce(line, plan, sentences, made))
         # From here, not from arrival: the quiet time and a line ahead in the queue are not the
@@ -325,8 +357,11 @@ class RoomVoice:
     async def _play(
         self, s: Sentence, out: Out, made: asyncio.Event, line: Line, started: float | None
     ) -> bool:
-        """Plays one sentence from its start; False when a human cut in (013-AC22)."""
+        """Plays one sentence from its start; False when a human cut in (013-AC22). It starts once
+        enough is made to play to its end without a gap: a slow pod delays the sentence, never
+        stutters in it, and a human still stops it at once."""
         j = 0
+        need = self.pace.prebuffer_s(s.chars, line.rate)
         while True:
             if s.failed:
                 raise RuntimeError("synthesis failed")
@@ -334,7 +369,7 @@ class RoomVoice:
                 out.clear()
                 metrics.STOP.observe(max(self.clock.now() - self.changed_at, 0.0))
                 return False
-            if j < len(s.frames):
+            if j < len(s.frames) and (j or s.done or len(s.frames) * FRAME_S >= need):
                 await out.play(s.frames[j])
                 if started is not None and j == 0:
                     metrics.FIRST_AUDIO.observe(self.clock.now() - started)
@@ -343,9 +378,9 @@ class RoomVoice:
             if s.done:
                 return True
             made.clear()
-            started = self.clock.now()
+            t0 = self.clock.now()
             await self._changed_within(1.0, made)
-            waited = self.clock.now() - started
+            waited = self.clock.now() - t0
             if j > 0 and not self.humans and waited > UNDERRUN_S:
                 metrics.UNDERRUNS.inc()
                 log.info(
@@ -366,6 +401,7 @@ class RoomVoice:
         cap = SilenceCap(self.engine.sample_rate)
         try:
             for sentence, spans in zip(out, plan, strict=True):
+                t0 = self.clock.now()
                 for span in spans:
                     framer = Framer(
                         self.engine.sample_rate, self.engine.gain(line.voice, span.lang), line.rate, cap
@@ -402,6 +438,9 @@ class RoomVoice:
                     await fut
                 sentence.done = True
                 made.set()
+                self.pace.learn(
+                    self.clock.now() - t0, len(sentence.frames) * FRAME_S, sentence.chars, line.rate
+                )
         except Exception:
             log.exception("synthesis_failed", room=self.room, seq=line.seq)
             for sentence in out:

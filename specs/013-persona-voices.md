@@ -205,6 +205,7 @@ Made while drafting (overturnable):
 - The per-listener mute lives on the pill and in the card (notes, 2026-10-16), not in the audio menu.
 - One torch thread per synthesis: two under a 2-CPU limit starved LiveKit's media threads and left gaps in Phase 1's voice e2e.
 - The CPU request comes from the Phase 1 lab run: S14 and S14b measured E-cores, not the lab's nodes, and 007 found a 4-CPU node cannot always grant 2 CPUs.
+- Lab, 2026-10-17: a French line stuttered every 80 ms chunk (101 underruns, about 0.25 s each) while a neighbour loaded the node: synthesis ran at about 3x real time. A one-off render on the pod measured RTF 0.6 to 0.7 with one thread on a quiet node and 1.0 to 1.15 with two, so neither more threads nor a 2-CPU request (the node had no room for it) fixes it. The player now pre-buffers each sentence from the learned RTF (docs/architecture.md, Pace): the gap moves before the sentence, where AC17's first audio pays for it on a loaded node.
 
 ## Appendix A — Pronunciation lexicon seed
 
