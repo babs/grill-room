@@ -38,6 +38,15 @@ func (e *env) inAudio(t *testing.T, room string, p joined, deaf bool) {
 	}
 }
 
+// podBeats posts one pod heartbeat: with its stream open, the pod is up and lines keep their room's
+// queue maximum (013-AC34).
+func (e *env) podBeats(t *testing.T) {
+	t.Helper()
+	if code, b := e.do(t, "POST", "/api/tts/heartbeat", ttsToken, map[string]string{"pod": "p"}); code != http.StatusNoContent {
+		t.Fatalf("heartbeat: %d %s", code, b)
+	}
+}
+
 // 013-AC13: without the token, or without LiveKit, every /api/tts route is 404; a wrong token 401.
 func TestTTSRoutes(t *testing.T) {
 	off := testOptions
@@ -86,6 +95,7 @@ func TestTTSLine(t *testing.T) {
 	r := newTurnRoom(t, e)
 	e.inAudio(t, r.room, r.alice.p, false)
 	events, _ := e.openStream(t, "/api/tts/events", ttsToken, "")
+	e.podBeats(t)
 	if ev := nextEvent(t, events, "rooms"); !strings.Contains(ev.data, `"room":"`+r.room+`"`) || !strings.Contains(ev.data, `"name":"Grill","voice":"alba"`) {
 		t.Fatalf("rooms: %s", ev.data)
 	}
@@ -180,6 +190,7 @@ func TestTTSPersonaFields(t *testing.T) {
 func TestTTSHub(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	h := newTTSHub(now)
+	h.streams, h.beatAt = 1, now // a pod is up: lines keep the room's maximum (cold start: TestTTSColdStartQueue)
 	l := ttsLine{Room: "r", Text: "a", ttsTimeouts: defaultTTSTimeouts, QueuedAt: now}
 	first := h.add(l, now)
 	second := h.add(l, now)
@@ -230,6 +241,52 @@ func TestTTSHub(t *testing.T) {
 	}
 	if h := newTTSHub(time.Now()); h.resumePoint() != h.seq {
 		t.Error("an empty hub resumes from its own counter")
+	}
+}
+
+// 013-AC34: a line queued while no pod is up (streaming and heartbeating) waits up to coldQueueS for one scaling from
+// zero, and the pod gets that budget in queue_s; with a pod connected, the room's maximum stands.
+func TestTTSColdStartQueue(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	h := newTTSHub(now)
+	l := ttsLine{Room: "r", Text: "a", ttsTimeouts: defaultTTSTimeouts, QueuedAt: now}
+	h.add(l, now)
+	late := now.Add(time.Duration(coldQueueS-1) * time.Second)
+	got, _ := h.next(0, late)
+	if len(got) != 1 || got[0].QueueS != coldQueueS || h.noService.Load() != 0 {
+		t.Fatalf("a cold line at %ds: %+v, no_service %d", coldQueueS-1, got, h.noService.Load())
+	}
+	// Never taken: no_service past the cold budget, not before.
+	h.add(l, now)
+	if n := h.noServiceDropped(late); n != 0 {
+		t.Errorf("no_service %d before the cold budget", n)
+	}
+	if n := h.noServiceDropped(now.Add(time.Duration(coldQueueS+1) * time.Second)); n != 1 {
+		t.Errorf("no_service %d past the cold budget, want 1", n)
+	}
+	long := l
+	long.QueueS = 300
+	seq := h.add(long, now)
+	if got, _ := h.next(seq-1, now); len(got) != 1 || got[0].QueueS != 300 {
+		t.Errorf("a room maximum over the cold budget: %+v", got)
+	}
+	// A stream left by a pod gone with its node, no heartbeat within ttsLapse: still cold.
+	h.streams, h.beatAt = 1, now.Add(-ttsLapse-time.Second)
+	seq = h.add(l, now)
+	if got, _ := h.next(seq-1, now); len(got) != 1 || got[0].QueueS != coldQueueS {
+		t.Errorf("a stream with no heartbeat: %+v", got)
+	}
+	// A heartbeat but no stream (the pod reconnecting): cold.
+	h.streams, h.beatAt = 0, now
+	seq = h.add(l, now)
+	if got, _ := h.next(seq-1, now); len(got) != 1 || got[0].QueueS != coldQueueS {
+		t.Errorf("a heartbeat with no stream: %+v", got)
+	}
+	// A pod up: the room's maximum, waiting behind other speech included.
+	h.streams = 1
+	seq = h.add(l, now)
+	if got, _ := h.next(seq-1, now); len(got) != 1 || got[0].QueueS != defaultTTSTimeouts.QueueS {
+		t.Errorf("a warm line: %+v", got)
 	}
 }
 
@@ -354,6 +411,7 @@ func TestTTSLineCarriesRoomSettings(t *testing.T) {
 	}
 	e.inAudio(t, r.room, r.alice.p, false)
 	events, _ := e.openStream(t, "/api/tts/events", ttsToken, "")
+	e.podBeats(t)
 	long := strings.Repeat("word ", 50) + "end."
 	prompt := ttsTurn(t, e, r, turn.Result{Synthesis: "ok", Changes: []turn.Change{{Path: turn.SpokenFile, Content: []byte(long)}}})
 	if !strings.Contains(prompt, "45 words at most") {

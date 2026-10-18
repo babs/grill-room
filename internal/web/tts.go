@@ -36,6 +36,9 @@ const (
 	maxTTSRooms    = 1000
 	maxTTSStates   = 10000
 	maxTTSReasonSz = 32
+	// coldQueueS is how long a line queued with no pod up (streaming and heartbeating) waits for
+	// one: scaling from zero took 77 s on the lab (013-AC34).
+	coldQueueS = 120
 )
 
 // TTSStates are the states the pod reports per persona; TTSDropReasons why it dropped a line.
@@ -107,7 +110,7 @@ func newTTSHub(now time.Time) *ttsHub {
 	return &ttsHub{seq: now.UnixMicro(), wake: make(chan struct{})}
 }
 
-// sweep drops the lines past their room's queue maximum; one no pod took counts as no_service.
+// sweep drops the lines past their queue budget; one no pod took counts as no_service.
 // The caller holds the lock.
 func (h *ttsHub) sweep(now time.Time) {
 	h.lines = slices.DeleteFunc(h.lines, func(l *ttsLine) bool {
@@ -127,6 +130,11 @@ func (h *ttsHub) add(l ttsLine, now time.Time) int64 {
 	h.sweep(now)
 	h.seq++
 	l.Seq = h.seq
+	if h.streams == 0 || !h.beating(now) {
+		// The pod is scaling from zero, or away: the line waits for it, longer than behind speech. A
+		// stream can outlive its pod (no write deadline), its heartbeat cannot.
+		l.QueueS = max(l.QueueS, coldQueueS)
+	}
 	h.lines = append(h.lines, &l)
 	if n := len(h.lines) - maxTTSLines; n > 0 {
 		for _, old := range h.lines[:n] {
@@ -195,6 +203,11 @@ func (h *ttsHub) resumePoint() int64 {
 func (h *ttsHub) podUp(now time.Time) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	return h.beating(now)
+}
+
+// beating is podUp for a caller holding the lock.
+func (h *ttsHub) beating(now time.Time) bool {
 	return !h.beatAt.IsZero() && now.Sub(h.beatAt) <= ttsLapse
 }
 
@@ -364,12 +377,13 @@ type ttsRoom struct {
 	Personas []ttsPersona `json:"personas"`
 }
 
-// TTSDemand is the number of rooms with a persona that speaks and a human in the audio (013-AC34).
+// TTSDemand is the number of rooms with a persona that speaks and a human who has the room open,
+// in the audio or not: the pod starts scaling from zero before anyone joins the call (013-AC34).
 func (s *Server) TTSDemand() int {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	n := 0
-	for room := range s.people.listening(s.now()) {
+	for room := range s.people.present(s.now()) {
 		ps, err := s.bus.Store.RoomPersonas(ctx, room)
 		if err != nil {
 			s.log.Warn("tts_demand_failed", zap.String("room", room), zap.Error(err))
@@ -542,7 +556,7 @@ func (s *Server) ttsHeartbeat(w http.ResponseWriter, r *http.Request) {
 func (s *Server) ttsRoomEvent(room string) string {
 	h := s.tts
 	h.mu.Lock()
-	up := !h.beatAt.IsZero() && s.now().Sub(h.beatAt) <= ttsLapse
+	up := h.beating(s.now())
 	states := map[string]ttsState{}
 	if up {
 		for _, st := range h.states {

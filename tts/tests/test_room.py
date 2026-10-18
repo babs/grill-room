@@ -8,7 +8,7 @@ import pytest
 
 from grill_tts import metrics
 from grill_tts.engine import Fake
-from grill_tts.room import FRAME, TRACK_SR, Clock, Line, RoomVoice
+from grill_tts.room import FRAME, TRACK_SR, Clock, Line, Pace, RoomVoice, Sentence
 from grill_tts.textlayer import TextLayer, load_seed
 
 LAYER = TextLayer(load_seed())
@@ -329,3 +329,77 @@ async def test_speakers_are_the_union_of_the_bots_views() -> None:
     r.rv.speakers(set(), "persona-2")
     assert r.rv.humans == set() and r.rv.quiet_since == quiet
     await r.close()
+
+
+async def slow_sentence(
+    r: Rig, pace: Pace, chunks: int = 25, every_s: float = 0.24, human_at: int | None = None
+) -> tuple[Sentence, bool, float]:
+    """Plays one sentence of 50 characters while the test makes it like a slow engine: an 80 ms chunk
+    (4 frames) every every_s of virtual time; a human starts speaking after chunk human_at."""
+    r.rv.pace = pace
+    d = {"seq": 1, "room": "r1", "persona_id": 2, "persona": "P", "voice": "alba", "text": "y" * 50}
+    line = Line.parse(d | {"quiet_ms": 0, "resume_s": 20, "queue_s": 40}, r.clock.now())
+    s, made = Sentence(chars=50), asyncio.Event()
+    t0 = r.clock.t
+    play = asyncio.create_task(r.rv._play(s, r.outs[2], made, line, t0))
+
+    def at(t: float) -> Callable[[], bool]:
+        return lambda: r.clock.t >= t - 1e-9
+
+    for k in range(chunks):
+        await r.until(at(t0 + (k + 1) * every_s))
+        s.frames.extend([bytes(2 * FRAME)] * 4)
+        made.set()
+        if k == human_at:
+            r.rv.speakers({"7"})
+            cut = r.clock.t
+            await r.until(play.done, 1.0)
+            return s, play.result(), cut
+    s.done = True
+    made.set()
+    await r.until(play.done)
+    return s, play.result(), t0
+
+
+# Synthesis at 3x real time (the lab, 2026-10-17): the sentence waits until enough is made to play
+# to its end without a gap, instead of stuttering every chunk.
+async def test_slow_synthesis_plays_the_sentence_without_gaps() -> None:
+    r = Rig()
+    before = count(metrics.UNDERRUNS)
+    _, ok, t0 = await slow_sentence(r, Pace(rtf=3.0, s_per_char=0.04))
+    times = [t for t, _ in r.played("secretary")]
+    assert ok and len(times) == 100
+    gaps = [b - a for a, b in zip(times, times[1:], strict=False)]
+    assert max(gaps) <= 0.021, f"a gap of {max(gaps):.2f} s inside the sentence"
+    assert count(metrics.UNDERRUNS) == before
+    await r.close()
+
+
+# A pod faster than real time does not hold the sentence back: first audio stays at the first chunk.
+async def test_fast_synthesis_starts_at_the_first_chunk() -> None:
+    r = Rig()
+    _, ok, t0 = await slow_sentence(r, Pace(rtf=0.5, s_per_char=0.04), every_s=0.04)
+    assert ok and r.played("secretary")[0][0] - t0 <= 0.041
+    await r.close()
+
+
+# 013-AC22: a human who starts speaking while the sentence still fills its buffer stops it at once.
+async def test_onset_during_the_prebuffer_stops_at_once() -> None:
+    r = Rig()
+    _, ok, cut = await slow_sentence(r, Pace(rtf=3.0, s_per_char=0.04), human_at=3)
+    assert not ok and not r.played("secretary")
+    assert r.outs[2].clears and r.outs[2].clears[0] - cut <= 0.011
+    await r.close()
+
+
+# The pace jumps to a slower RTF at once, eases back when the pod speeds up, and ignores scraps.
+def test_pace_learns_pessimistically() -> None:
+    p = Pace(rtf=0.5, s_per_char=0.06)
+    assert p.prebuffer_s(50, 1.0) == 0.0
+    p.learn(wall_s=6.0, audio_s=2.0, chars=50, rate=1.0)
+    assert p.rtf == 3.0 and p.s_per_char == pytest.approx(0.06 + 0.3 * (0.04 - 0.06))
+    assert p.prebuffer_s(50, 1.0) == pytest.approx(50 * p.s_per_char * (1 - 1 / (3.0 * 1.2)))
+    p.learn(wall_s=1.0, audio_s=2.0, chars=50, rate=1.0)
+    assert 0.5 < p.rtf < 3.0
+    p.learn(wall_s=9.0, audio_s=0.1, chars=2, rate=1.0)
+    assert p.rtf < 3.0, "a 100 ms scrap moved the pace"

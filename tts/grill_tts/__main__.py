@@ -20,7 +20,7 @@ from .client import ServerLink
 from .config import Settings
 from .engine import Engine, Fake
 from .logs import setup_logging
-from .room import Clock, Line, RoomVoice
+from .room import Clock, Line, Pace, RoomVoice
 from .textlayer import Entry, TextLayer, load_seed
 
 log = structlog.get_logger()
@@ -42,6 +42,7 @@ class Pod:
         self._s = s
         self.engine = engine
         self.clock = Clock()
+        self.pace = Pace()
         self.layer = TextLayer(load_seed())
         self.voices: dict[str, RoomVoice] = {}
         self._tasks: set[asyncio.Task[None]] = set()
@@ -55,7 +56,9 @@ class Pod:
             def out(persona: int) -> TrackOut | None:
                 return self.bots.out(room, persona)
 
-            rv = self.voices[room] = RoomVoice(room, self.engine, lambda: self.layer, self.clock, out)
+            rv = self.voices[room] = RoomVoice(
+                room, self.engine, lambda: self.layer, self.clock, out, self.pace
+            )
             task = asyncio.create_task(rv.run())
             self._tasks.add(task)
         return rv

@@ -102,7 +102,7 @@ test('daemon page layout at phone, desktop and wide width', async ({ browser, re
       expect(f[0].bottom <= f[1].top && f[1].bottom <= f[2].top, `stacked, ${at}`).toBe(true);
       expect(new Set(f.map((x) => x.left)).size, `left-aligned, ${at}`).toBe(1);
 
-      // Wide tabs fill the window past the narrow column's 72rem (1152 px) on a wide screen.
+      // Wide tabs fill the window on a wide screen.
       for (const tab of ['general', 'network', 'update']) {
         await unfoldTabs(admin.locator('#tabs'));
         await admin.locator('#tab-' + tab).click();
