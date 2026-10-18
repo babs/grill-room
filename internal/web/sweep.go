@@ -7,8 +7,9 @@ import (
 	"go.uber.org/zap"
 )
 
-// gaugeEvery is how often SweepShared computes the gauges /metrics reads.
-const gaugeEvery = 15 * time.Second
+// gaugeEvery is how often SweepShared computes the gauges /metrics reads: as often as the streams
+// poll, so a gauge trails the shared state by about one poll, not a scrape interval.
+const gaugeEvery = time.Second
 
 // sharedSweepEvery is how often SweepShared drops the expired shared state. A var for tests.
 var sharedSweepEvery = time.Minute

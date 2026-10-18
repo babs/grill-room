@@ -386,3 +386,11 @@ func TestSweepSharedLoop(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// /metrics reads gauges SweepShared computes: a refresh slower than the streams' poll would let the
+// device STT and TTS gauges trail the shared state by a scrape interval (e2e device-voice polls 10 s).
+func TestGaugesRefreshEveryPoll(t *testing.T) {
+	if gaugeEvery > pollEvery {
+		t.Fatalf("gaugeEvery %s, want at most pollEvery %s", gaugeEvery, pollEvery)
+	}
+}

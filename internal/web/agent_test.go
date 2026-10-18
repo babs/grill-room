@@ -127,7 +127,10 @@ func TestHostElection(t *testing.T) {
 	e.waitAgent(t, room, alice.p.Token, hostIs(alice.p.Participant.ID, true))
 	alice.drop()
 	bob.drop()
-	off := e.waitAgent(t, room, alice.p.Token, hostIs(alice.p.Participant.ID, false))
+	// Each drop ends its stream on its own: wait for both, not only for the host's.
+	off := e.waitAgent(t, room, alice.p.Token, func(st agentState) bool {
+		return hostIs(alice.p.Participant.ID, false)(st) && len(st.Daemons) == 0
+	})
 	if off.Reason != "No one runs the AI for this room right now." || len(off.Daemons) != 0 {
 		t.Fatalf("offline state %+v", off)
 	}
