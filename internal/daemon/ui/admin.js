@@ -1385,7 +1385,7 @@ function App() {
     ${banner.value && html`<p id="banner" role="alert">${sentence(banner.value)}</p>`}
     ${live && html`<${RelaxBanner} />`}
     ${live && html`<${KeepHosting} />`}
-    ${live && html`<main id="main" class=${tab.value === 'accounts' ? 'page' : 'page-wide'}>
+    ${live && html`<main id="main" class="page-wide">
       <${TabBar} />
       <${Panel} id="rooms"><${Rooms} /><//>
       <${Panel} id="accounts"><${Accounts} /><//>
