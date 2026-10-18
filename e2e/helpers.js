@@ -456,9 +456,10 @@ export function sandboxPrompts(daemon) {
 
 // fakeDaemon pairs an AI host app for page's participant through the API, as the daemon does,
 // keeps its stream open and reports it ready to host, with settings (approve_all): enough for
-// People, hand-overs and plugin inspection reports, with no Docker (009-AC33). Returns its
-// disconnect, which carries the daemon's token as .token.
-export async function fakeDaemon(page, baseURL, roomID, name, settings = {}) {
+// People, hand-overs and plugin inspection reports, with no Docker (009-AC33). Its stream goes to
+// streamURL, another server of the same database (017-AC11). Returns its disconnect, which carries
+// the daemon's token as .token and the ids of the turns its stream brought as .turns.
+export async function fakeDaemon(page, baseURL, roomID, name, settings = {}, streamURL = baseURL) {
   const base = `${baseURL}/api/rooms/${roomID}`;
   const json = { 'Content-Type': 'application/json' };
   const p = await (await fetch(`${base}/pairings`, { method: 'POST', headers: json, body: JSON.stringify({ name }) })).json();
@@ -467,11 +468,20 @@ export async function fakeDaemon(page, baseURL, roomID, name, settings = {}) {
   const { token } = await (await fetch(`${baseURL}/api/pairings/${p.id}`, { headers: { Authorization: 'Bearer ' + p.secret } })).json();
   const auth = { Authorization: 'Bearer ' + token };
   const stream = new AbortController();
-  const events = await fetch(`${base}/daemon/events`, { headers: auth, signal: stream.signal });
-  events.body.pipeTo(new WritableStream()).catch(() => {});
+  const events = await fetch(`${streamURL}/api/rooms/${roomID}/daemon/events`, { headers: auth, signal: stream.signal });
+  const turns = [];
+  let buf = '';
+  events.body.pipeThrough(new TextDecoderStream()).pipeTo(new WritableStream({ write(chunk) {
+    const frames = (buf + chunk).split('\n\n');
+    buf = frames.pop();
+    for (const f of frames) {
+      const m = f.match(/^event: turn\ndata: (.*)$/m);
+      if (m) turns.push(JSON.parse(m[1]).id);
+    }
+  } })).catch(() => {});
   const st = await fetch(`${base}/daemon/status`, { method: 'POST', headers: { ...auth, ...json }, body: JSON.stringify({ can_host: true, ...settings }) });
   expect(st.status).toBe(204);
-  return Object.assign(() => stream.abort(), { token });
+  return Object.assign(() => stream.abort(), { token, turns });
 }
 
 // appointAdmin makes page's participant a room admin, as the super-admin, and reloads the page.

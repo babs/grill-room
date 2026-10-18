@@ -55,7 +55,7 @@ func newRoomServer(t *testing.T) *roomServer {
 	rs.ts = httptest.NewUnstartedServer(nil)
 	rs.ts.Start()
 	t.Cleanup(rs.ts.Close)
-	srv := web.New(bus.New(st), web.HashToken(rs.admin), rs.ts.URL, web.Options{MaxUploadBytes: 1 << 20, MaxRoomBytes: 1 << 20, MaxAttachmentBytes: 1 << 20}, zap.NewNop())
+	srv := web.New(bus.New(st, web.NewToken()), web.HashToken(rs.admin), rs.ts.URL, web.Options{MaxUploadBytes: 1 << 20, MaxRoomBytes: 1 << 20, MaxAttachmentBytes: 1 << 20}, zap.NewNop())
 	rs.ts.Config.Handler = srv.Handler()
 	var room store.Room
 	rs.call(t, "POST", "/api/rooms", rs.admin, map[string]string{"name": "R"}, http.StatusCreated, &room)

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/webpush"
 )
@@ -226,6 +227,15 @@ func TestPushSubscribeAPI(t *testing.T) {
 	}
 	if code, _ := e.do(t, "GET", path, "", nil); code != http.StatusUnauthorized {
 		t.Fatalf("anonymous key: %d", code)
+	}
+}
+
+// A wake that carries no room (TTS, lexicon, a LISTEN reconnect) reads no lines.
+func TestPushable(t *testing.T) {
+	for id, want := range map[string]bool{ttsWake: false, lexiconWake: false, bus.All: false, "r_abc": true} {
+		if got := pushable(id); got != want {
+			t.Errorf("%q: %v", id, got)
+		}
 	}
 }
 

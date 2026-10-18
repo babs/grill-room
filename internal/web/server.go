@@ -73,9 +73,7 @@ type Server struct {
 	baseURL   string
 	log       *zap.Logger
 	streams   atomic.Int64
-	pairings  pairings
-	presence  presences
-	people    people
+	people    *people
 	stt       sttWorkers
 	// tts holds the lines personas say in the call; nil when the server offers no voice (013-AC13).
 	tts     *ttsHub
@@ -84,27 +82,26 @@ type Server struct {
 	magicLimit limiter
 	// loginLimit rate-limits /admin logins per client IP.
 	loginLimit limiter
-	// mailFailedAt is when the last bind send failed at the relay, in unix ms, 0 once a later bind
-	// send succeeded. Sign-in sends and refused addresses never move it (011-AC28).
-	mailFailedAt atomic.Int64
 	// mailWG counts the mail sends running past their answers.
 	mailWG sync.WaitGroup
 	// now is the clock admin sessions and the audit log read; tests set it.
 	now func() time.Time
+	// lease is the clock of every lease and liveness check (daemon connections, presence, pairings,
+	// STT workers, the TTS service) and of the janitor sweeping them: the wall clock, apart from now.
+	lease func() time.Time
 	// pushRead and pushTicked, set by tests, learn the last line PushLoop read for a room, and
 	// each tick: its clock and how many batches it sent.
 	pushRead func(last int64)
 	// afterFunc runs a backstop later: time.AfterFunc, or a test's own schedule.
 	afterFunc  func(d time.Duration, f func())
 	pushTicked func(now time.Time, sent int)
-	// electMu serialises host elections and hand-overs.
-	electMu sync.Mutex
-	// hostBy holds, by room, the chat line of the latest move of its AI host role by someone other
-	// than the previous host: the previous host's page shows it (009-AC34). In memory, as presence is.
-	hostBy sync.Map
 	// turnMu serialises turn starts and queue draining, so presses run in the order they came.
 	// ponytail: one lock for every room; per-room locks if many busy rooms ever contend.
 	turnMu sync.Mutex
+	// turnWaits lets one lockTurns per room wait for a room lock another pod holds; turnWait bounds
+	// a lockTurns, its wait behind the guard included: the store's lock timeout, shorter in tests.
+	turnWaits roomGuards
+	turnWait  time.Duration
 	// fallbacks counts full workspace fetches by daemons with a cache, by turn.FallbackReasons.
 	fallbacks map[string]*atomic.Int64
 	// conflicts counts results rejected on a document conflict, by ConflictOutcomes (003-AC21).
@@ -113,17 +110,10 @@ type Server struct {
 	vapid      *webpush.VAPID
 	vapidMu    sync.Mutex
 	pushClient *http.Client
-	// pluginFetches bounds the git fetches running at once; pluginRooms holds the rooms with one
-	// running, one per room (009-AC8).
+	// pluginFetches bounds the git fetches running at once (009-AC8).
 	pluginFetches chan struct{}
-	pluginMu      sync.Mutex
-	pluginRooms   map[string]bool
 	// device is the device transcription offer, nil when not offered (010-AC5).
 	device *deviceSTT
-	// voiceMu makes a voice line's repeat check and its insert one step; voiceRecent holds the
-	// lines it checks against (010-AC16).
-	voiceMu     sync.Mutex
-	voiceRecent recentLines
 	// voiceLines and voiceDeduped count the voice lines stored and dropped, by VoiceSources.
 	voiceLines, voiceDeduped map[string]*atomic.Int64
 	// routes are the patterns Handler registered; mux routes them and gate is the token gate in
@@ -132,6 +122,11 @@ type Server struct {
 	mux      *http.ServeMux
 	gate     http.Handler
 	mcpCalls mcpCounters
+	// gauges are the values /metrics reads, which SweepShared refreshes: a scrape never queries.
+	gauges struct {
+		sttWorkers, deviceSTT, ttsDemand atomic.Int64
+		ttsPodUp                         atomic.Bool
+	}
 }
 
 // New builds a server. adminHash is HashToken of the admin token; baseURL prefixes invite links.
@@ -168,15 +163,16 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	}
 	s := &Server{bus: b, opts: opts, uploads: make(chan struct{}, maxConcurrentUploads), archives: make(chan struct{}, maxConcurrentArchives),
 		adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
-		pairings: pairings{m: map[string]*pairing{}}, presence: presences{m: map[int64]*presence{}}, people: people{m: map[string]map[int64]*person{}}, stt: sttWorkers{m: map[string]*sttWorker{}}, clients: clients{m: map[int64]clientSeen{}},
-		magicLimit: limiter{window: magicWindow}, loginLimit: limiter{window: loginWindow}, now: time.Now, fallbacks: fallbackCounters(),
+		people: newPeople(b.Store, log), stt: newSTTWorkers(b.Store, log), clients: clients{m: map[int64]clientSeen{}},
+		now: time.Now, lease: time.Now, fallbacks: fallbackCounters(), turnWait: b.Store.LockTimeout(),
 		afterFunc: func(d time.Duration, f func()) { time.AfterFunc(d, f) },
 		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}, pushClient: opts.PushClient,
-		pluginFetches: make(chan struct{}, maxPluginFetches), pluginRooms: map[string]bool{},
-		voiceRecent: recentLines{}, voiceLines: sourceCounters(), voiceDeduped: sourceCounters(), mcpCalls: newMCPCounters()}
+		pluginFetches: make(chan struct{}, maxPluginFetches), voiceLines: sourceCounters(), voiceDeduped: sourceCounters(), mcpCalls: newMCPCounters()}
+	keys := &rateKeys{st: b.Store}
+	s.magicLimit, s.loginLimit = newLimiter(keys, "magic", magicWindow, log), newLimiter(keys, "login", loginWindow, log)
 	s.device = loadDeviceSTT(opts, log)
 	if opts.TTSTokenHash != "" && opts.Voice != nil {
-		s.tts = newTTSHub(time.Now())
+		s.tts = newTTSHub(b.Store)
 	}
 	s.cleanStaging()
 	return s
@@ -1059,7 +1055,7 @@ type roomResp struct {
 	Me           *store.Participant  `json:"me"`
 	Participants []store.Participant `json:"participants"`
 	// Daemons are the connected ones, with whether each can host.
-	Daemons []presence `json:"daemons"`
+	Daemons []liveDaemon `json:"daemons"`
 	// Voice tells whether the server offers LiveKit audio; TTS whether personas speak in it (013-AC13).
 	Voice bool `json:"voice"`
 	TTS   bool `json:"tts"`
@@ -1095,7 +1091,7 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
 		s.serverError(w, "get_room_failed", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps, Daemons: s.connectedDaemons(room.ID), Voice: s.opts.Voice != nil, TTS: s.tts != nil,
+	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps, Daemons: s.liveDaemons(room.ID), Voice: s.opts.Voice != nil, TTS: s.tts != nil,
 		Profile: sess.p.ProfileID != 0, Version: s.opts.Version, Departed: departed})
 }
 
@@ -1173,8 +1169,8 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	}
 	s.streams.Add(1)
 	defer s.streams.Add(-1)
-	release := s.people.open(room, sess.p.ID, r.URL.Query().Get("tab"), s.now())
-	defer func() { release(s.now()) }()
+	release := s.people.open(room, sess.p.ID, r.URL.Query().Get("tab"), s.lease())
+	defer func() { release(s.lease()) }()
 	// The live channel is only a wake-up signal: every send reads from the store after the last id,
 	// so a dropped or out-of-order signal can never leave a gap in the stream.
 	live, cancel := s.bus.Subscribe(64)
@@ -1311,13 +1307,13 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 	}
 	// A worker's absence and a participant's grace running out show as nothing happening, which
 	// no bus signal announces: poll for them.
-	ps := s.people.snapshot(room, s.now())
+	ps := s.people.snapshot(room, s.lease())
 	if _, err := io.WriteString(w, presenceEvent(ps)); err != nil {
 		return
 	}
 	var stt sttState
 	if s.opts.Voice != nil {
-		stt = s.sttState(room, s.now())
+		stt = s.sttState(room, s.lease())
 		if _, err := io.WriteString(w, sttEvent(stt)); err != nil {
 			return
 		}
@@ -1339,7 +1335,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 		case <-r.Context().Done():
 			return
 		case <-poll.C:
-			if now := s.people.snapshot(room, s.now()); !slices.EqualFunc(now, ps, samePresence) {
+			if now := s.people.snapshot(room, s.lease()); !slices.EqualFunc(now, ps, samePresence) {
 				ps = now
 				if _, err := io.WriteString(w, presenceEvent(ps)); err != nil {
 					return
@@ -1349,7 +1345,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 			if s.opts.Voice == nil {
 				continue
 			}
-			if now := s.sttState(room, s.now()); !now.equal(stt) {
+			if now := s.sttState(room, s.lease()); !now.equal(stt) {
 				stt = now
 				if _, err := io.WriteString(w, sttEvent(stt)); err != nil {
 					return
@@ -1375,7 +1371,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 				return
 			}
 		case changed := <-live:
-			if changed == room && !sync() {
+			if (changed == room || changed == bus.All) && !sync() {
 				return
 			}
 		}

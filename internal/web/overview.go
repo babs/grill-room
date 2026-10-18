@@ -44,16 +44,12 @@ func (s *Server) adminRooms(w http.ResponseWriter, r *http.Request) {
 
 // onlineHosts maps each room to the participants whose daemon has an open stream.
 func (s *Server) onlineHosts() map[string]map[int64]bool {
-	s.presence.mu.Lock()
-	defer s.presence.mu.Unlock()
 	out := map[string]map[int64]bool{}
-	for _, p := range s.presence.m {
-		if p.conns > 0 {
-			if out[p.room] == nil {
-				out[p.room] = map[int64]bool{}
-			}
-			out[p.room][p.ParticipantID] = true
+	for _, p := range s.liveDaemons("") {
+		if out[p.room] == nil {
+			out[p.room] = map[int64]bool{}
 		}
+		out[p.room][p.ParticipantID] = true
 	}
 	return out
 }
@@ -128,16 +124,12 @@ func (s *Server) adminInstance(w http.ResponseWriter, r *http.Request) {
 	if v := s.opts.Voice; v != nil {
 		out.STT.Voice, out.STT.Configured = true, v.STTTokenHash != ""
 	}
-	out.STT.Workers = s.STTWorkers()
+	out.STT.Workers = len(s.stt.live(s.lease()))
 	out.Daemons.Versions = map[string]int{}
-	s.presence.mu.Lock()
-	for _, p := range s.presence.m {
-		if p.conns > 0 {
-			out.Daemons.Connected++
-			out.Daemons.Versions[p.Version]++
-		}
+	for _, p := range s.liveDaemons("") {
+		out.Daemons.Connected++
+		out.Daemons.Versions[p.Version]++
 	}
-	s.presence.mu.Unlock()
 	out.SMTP = s.opts.SendMail != nil
 	writeJSON(w, http.StatusOK, out)
 }

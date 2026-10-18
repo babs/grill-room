@@ -183,31 +183,28 @@ func hostFetch(w http.ResponseWriter, reason string) {
 	writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": reason, "host_fetch": true, "reason": reason})
 }
 
-// fetchSlot takes the room's one fetch and one of the server's; release gives both back.
-func (s *Server) fetchSlot(w http.ResponseWriter, room string) (release func(), ok bool) {
-	s.pluginMu.Lock()
-	busy := s.pluginRooms[room]
-	if !busy {
-		s.pluginRooms[room] = true
-	}
-	s.pluginMu.Unlock()
-	if busy {
-		httpError(w, http.StatusConflict, "a plugin fetch already runs in this room")
-		return nil, false
-	}
-	free := func() {
-		s.pluginMu.Lock()
-		delete(s.pluginRooms, room)
-		s.pluginMu.Unlock()
-	}
+// fetchSlot takes one of the server's fetches, then the room's one, across pods; release gives
+// both back. The server's first: it bounds the connections the room locks pin. It answers the
+// request itself when it fails.
+func (s *Server) fetchSlot(ctx context.Context, w http.ResponseWriter, room string) (release func(), ok bool) {
 	select {
 	case s.pluginFetches <- struct{}{}:
 	default:
-		free()
 		httpError(w, http.StatusServiceUnavailable, "too many plugin fetches in progress, retry in a moment")
 		return nil, false
 	}
-	return func() { <-s.pluginFetches; free() }, true
+	free, ok, err := s.bus.Store.LockRoom(ctx, store.LockPlugin, room, true)
+	switch {
+	case err != nil:
+		<-s.pluginFetches
+		s.serverError(w, "plugin_fetch_failed", err)
+		return nil, false
+	case !ok:
+		<-s.pluginFetches
+		httpError(w, http.StatusConflict, "a plugin fetch already runs in this room")
+		return nil, false
+	}
+	return func() { free(); <-s.pluginFetches }, true
 }
 
 // fetchRepo resolves ref in repo and fetches its tree, unless it resolves to known: then upToDate.
@@ -227,7 +224,7 @@ func (s *Server) fetchRepo(w http.ResponseWriter, r *http.Request, room, repo, r
 		}
 		return nil, nil, false, false
 	}
-	slot, ok := s.fetchSlot(w, room)
+	slot, ok := s.fetchSlot(r.Context(), w, room)
 	if !ok {
 		return nil, nil, false, false
 	}

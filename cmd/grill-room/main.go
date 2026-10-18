@@ -427,7 +427,14 @@ func run() error {
 		logger.Info("daemon_prev_release", zap.String("version", prev.Version), zap.Int("proto", prev.Proto))
 	}
 
-	b := bus.New(st)
+	host, err := os.Hostname()
+	if err != nil {
+		return fmt.Errorf("hostname: %w", err)
+	}
+	// The hostname names the replica for an operator; the suffix keeps two processes of one host apart.
+	b := bus.New(st, host+"-"+web.NewToken()[:6])
+	// Run retries with a backoff of 1 s to 5 s, which bounds these lines.
+	b.OnListenError = func(err error) { logger.Warn("listen_failed", zap.Error(err)) }
 	srv := web.New(b, hash, cfg.PublicURL, web.Options{
 		TurnTimeout:        cfg.TurnTimeout,
 		NotesWatchDelay:    cfg.NotesWatchDelay,
@@ -487,6 +494,8 @@ func run() error {
 	g.Go(func() error { srv.PurgeProfiles(gctx); return nil })
 	g.Go(func() error { srv.RunTimers(gctx); return nil })
 	g.Go(func() error { srv.PushLoop(gctx); return nil })
+	g.Go(func() error { srv.SweepShared(gctx); return nil })
+	g.Go(func() error { return b.Run(gctx) })
 	logger.Info("ready", zap.String("url", cfg.PublicURL))
 	err = g.Wait()
 	srv.WaitMail()
@@ -514,6 +523,14 @@ func newRegistry(b *bus.Bus, srv *web.Server) *prometheus.Registry {
 		lockWaitSeconds,
 		prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_bus_dropped_total", Help: "Room change signals lost to full subscriber buffers."},
 			func() float64 { return float64(b.Dropped()) }),
+		prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_notify_sent_total", Help: "Room change notifications sent to the other pods (017-AC20)."},
+			func() float64 { return float64(b.NotifySent()) }),
+		prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_notify_received_total", Help: "Room change notifications received from the other pods (017-AC20)."},
+			func() float64 { return float64(b.NotifyReceived()) }),
+		prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_listen_reconnects_total", Help: "LISTEN connections started again after the first (017-AC20)."},
+			func() float64 { return float64(b.ListenReconnects()) }),
+		prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_listen_errors_total", Help: "LISTEN connections that failed or ended; the bus connects again (017-AC20)."},
+			func() float64 { return float64(b.ListenErrors()) }),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_event_streams", Help: "Open SSE event streams."},
 			func() float64 { return float64(srv.Streams()) }),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_stt_workers", Help: "STT workers with a recent heartbeat."},

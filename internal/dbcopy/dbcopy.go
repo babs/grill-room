@@ -33,6 +33,17 @@ import (
 // sourceVersion is the SQLite schema version store's PostgreSQL baseline reproduces.
 const sourceVersion = 46
 
+// sinceSource is what the store's migrations added past sourceVersion, which no source holds:
+// verify skips it on a target the server has since migrated. A table maps to nil, else to its
+// added columns; addedRows filters out the rows a migration wrote.
+var (
+	sinceSource = map[string][]string{
+		"daemon_connections": nil, "daemon_status": nil, "presence": nil, "stt_workers": nil, "tts_pod": nil, "pairings": nil,
+		"tts_lines": nil, "rate_events": nil, "rooms": {"host_moved_line"},
+	}
+	addedRows = map[string]string{"settings": `key <> 'lexicon_version'`}
+)
+
 // beforeVerify lets a test change the target between the inserts and the check.
 var beforeVerify func(ctx context.Context, tx *sql.Tx) error
 
@@ -315,6 +326,9 @@ func loadSchema(ctx context.Context, tx *sql.Tx) ([]*table, error) {
 		if err := rows.Scan(&name, &c.name, &c.typ, &c.notNull, &c.generated, &c.identity); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("target schema: %w", err)
+		}
+		if added, ok := sinceSource[name]; ok && (added == nil || slices.Contains(added, c.name)) {
+			continue
 		}
 		switch c.typ {
 		case "bigint", "smallint", "double precision", "text", "bytea":
@@ -654,8 +668,12 @@ func readSource(ctx context.Context, src *sql.DB, t *table, r *result, row func(
 }
 
 func targetSum(ctx context.Context, tx *sql.Tx, t *table, r *result) error {
-	//nolint:gosec // names from the target's catalog, quoted
-	rows, err := tx.QueryContext(ctx, "SELECT "+selectCols(t)+" FROM "+ident(t.name)+" ORDER BY "+orderBy(t, true))
+	where := ""
+	if w, ok := addedRows[t.name]; ok {
+		where = " WHERE " + w
+	}
+	//nolint:gosec // names from the target's catalog, quoted; where from addedRows
+	rows, err := tx.QueryContext(ctx, "SELECT "+selectCols(t)+" FROM "+ident(t.name)+where+" ORDER BY "+orderBy(t, true))
 	if err != nil {
 		return fmt.Errorf("target %s: %w", t.name, err)
 	}

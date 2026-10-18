@@ -127,7 +127,10 @@ func TestHostElection(t *testing.T) {
 	e.waitAgent(t, room, alice.p.Token, hostIs(alice.p.Participant.ID, true))
 	alice.drop()
 	bob.drop()
-	off := e.waitAgent(t, room, alice.p.Token, hostIs(alice.p.Participant.ID, false))
+	// Each drop ends its stream on its own: wait for both, not only for the host's.
+	off := e.waitAgent(t, room, alice.p.Token, func(st agentState) bool {
+		return hostIs(alice.p.Participant.ID, false)(st) && len(st.Daemons) == 0
+	})
 	if off.Reason != "No one runs the AI for this room right now." || len(off.Daemons) != 0 {
 		t.Fatalf("offline state %+v", off)
 	}
@@ -535,6 +538,8 @@ func TestTurnFailures(t *testing.T) {
 	e.press(t, r, bob, bob.p.Token, false)
 	p := e.requestPairing(t, r.room, "bob-new")
 	e.do(t, "POST", "/api/rooms/"+r.room+"/pairings/"+p.ID, bob.p.Token, map[string]bool{"approve": true})
+	// The new daemon's poll pairs it: the old token stops there.
+	e.poll(t, p)
 	if last, _ := e.st.LastTurn(t.Context(), r.room); last.Status != store.TurnFailed || last.Error != "the host daemon was paired again" {
 		t.Fatalf("after re-pairing %+v", last)
 	}

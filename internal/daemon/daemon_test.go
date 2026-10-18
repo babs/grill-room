@@ -143,7 +143,7 @@ func newRoomServerLog(t *testing.T, opts web.Options, wrap func(http.Handler) ht
 	admin := web.NewToken()
 	ts := httptest.NewUnstartedServer(nil)
 	ts.Start()
-	srv := web.New(bus.New(st), web.HashToken(admin), ts.URL, opts, log)
+	srv := web.New(bus.New(st, web.NewToken()), web.HashToken(admin), ts.URL, opts, log)
 	ts.Config.Handler = srv.Handler()
 	if wrap != nil {
 		ts.Config.Handler = wrap(ts.Config.Handler)

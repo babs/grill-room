@@ -103,7 +103,7 @@ A participant on a capable desktop may tick "Transcribe on this device" (spec 01
   4. The worker stays subscribed to a flagged track and discards its audio.
   5. `device_stt: false` (toggle off, fallback) or a `gone` beat (tab closed) drops the flag at once, so the worker resumes within one heartbeat. A crashed or frozen page or a dead mic tap stops the beats: the flag lapses after 3 s and the worker resumes within about 5 s.
 - Dedupe: around a handover both sides may transcribe one utterance. A line is dropped, answered `200 {"deduped": true}`, when the same participant has a line from the other source stored in the last 5 s at 0.8 similarity or more (Levenshtein over lowercase letters and digits, accents dropped). Lines from one source are never dropped.
-- The flag and the recent lines live in the room server's memory: one replica.
+- The flag lives in the `presence` table every pod reads. The repeat check and the insert run in one transaction (`PostVoiceLine`), so one utterance posted to two pods at once is stored once.
 
 | Metric (room server) | What it says |
 |---|---|
@@ -116,7 +116,7 @@ A participant on a capable desktop may tick "Transcribe on this device" (spec 01
 A persona with "Speaks in the call" on says a short line in the LiveKit call after its turn (spec 013).
 
 - What: its `spoken.md`, sanitised and cut at a sentence end by the room server, or a summary of its actions (`internal/web/speech.go`). Never the chat text or a document. No log carries the words.
-- Flow: the room server queues the line in memory; the `tts` pod reads `GET /api/tts/events` with its own token (`GRILL_ROOM_TTS_TOKEN`), resumes after `Last-Event-ID`, and heartbeats states back every 2 s. A line no pod took within its budget is dropped as `no_service`: the room's queue maximum (40 s by default), or 120 s when it was queued with no pod up (Scale to zero).
+- Flow: the room server queues the line in the `tts_lines` table; the `tts` pod reads `GET /api/tts/events` with its own token (`GRILL_ROOM_TTS_TOKEN`), resumes after `Last-Event-ID`, and heartbeats states back every 2 s. A line no pod took within its budget is dropped as `no_service`: the room's queue maximum (40 s by default), or 120 s when it was queued with no pod up (Scale to zero).
 - Bots: one LiveKit participant per speaking persona, identity `persona-<id>`, kind `agent`, while a human is in the call and not deafened; it leaves 60 s after. It subscribes to the humans' audio, without which LiveKit never names them as speakers (S14). Its own onset detector on each human track stops the persona; during a track's first 4 s of persona audio it wants 9 loud 10 ms frames in 160 ms instead of 4 in 60 ms, so the echo canceller's warm-up leak does not cut the persona (S16). The STT worker never subscribes to an agent and leaves a room where only agents remain.
 - Engine: Pocket TTS 3.3.0, French and English models in one process; a rule-based text layer reads numbers, acronyms and English tech words in each sentence's language (S14b). The audio chain levels each voice, shortens pauses to 300 ms, applies the persona's rate without changing its pitch, and doubles 24 kHz to 48 kHz.
 - Lexicon: how the voices say a term, English- or French-style, in the `pronunciations` table. A migration inserts the seed once (`internal/voices/lexicon_seed.json`, byte-equal to the pod's copy by a test); the admin edits it in `/admin` Pronunciation. The stream sends the whole lexicon as a `lexicon` event at connect and on each change; the pod speaks with its seed copy until then. `make tts-lexcheck` (CI job `lexicon`, 013-AC33) has each seed entry said 10 times and heard back by the STT image at least 6 times; the job fails when more than 5 entries miss.
@@ -144,11 +144,38 @@ A persona with "Speaks in the call" on says a short line in the LiveKit call aft
 
 - One PostgreSQL 16+ database with `C` collation holds everything the room server stores (`internal/store`, spec 017). The server refuses another collation. It connects straight to the primary: no pooler, as the advisory lock is per session.
 - Schema: the `schema_version` table holds the version. On an empty database the first start creates the baseline (46, the last SQLite schema) and runs the migrations past it, all under the write lock, so pods starting together make one schema.
-- Writes: each write transaction takes `pg_advisory_xact_lock` on one key, so one write commits at a time across every pod, and ids commit in id order for the `id > last` stream cursors. In a pod, one write at a time holds a pool connection, leaving the others to reads. A wait longer than `lock_timeout` (30 s) fails the write; `grill_room_db_lock_wait_seconds` measures the wait.
+- Writes: each write transaction takes `pg_advisory_xact_lock` on one key, so one write commits at a time across every pod, and ids commit in id order for the `id > last` stream cursors. In a pod, one write at a time holds a pool connection, leaving the others to reads. A wait longer than `lock_timeout` (30 s) fails the write; `grill_room_db_lock_wait_seconds` measures the wait. Writes to the shared-state tables (below) skip this lock and its metric, since no id cursor reads them; a `rate_events` insert takes an advisory lock on its own key instead. PostgreSQL may abort one of two such writes as a deadlock: it runs again, up to 3 times.
 - Reads run without the lock; an export reads its room from one read-only snapshot.
 - Exports and imports stage files in `GRILL_ROOM_STAGING_DIR`, the pod's own disk.
 - `grill-room db copy` and `db verify` move a SQLite database of before spec 017 into an empty PostgreSQL one and compare them table by table; the copy holds the write lock (README, Copying a SQLite database).
-- Backups are `pg_dump -Fc` while the server runs (README, Backups).
+- Backups are `pg_dump -Fc --no-unlogged-table-data` while the server runs (README, Backups).
+
+| Metric (room server) | What it says |
+|---|---|
+| `grill_room_db_lock_wait_seconds` | how long a write waited for its writer slot and the global write lock (017-AC20) |
+| `grill_room_bus_dropped_total` | room change signals lost to a full subscriber; the stream catches up at its heartbeat |
+| `grill_room_notify_sent_total` | room change notifications sent to the other pods (017-AC20) |
+| `grill_room_notify_received_total` | room change notifications received from the other pods (017-AC20) |
+| `grill_room_listen_reconnects_total` | `LISTEN` connections started again after the first (017-AC20) |
+| `grill_room_listen_errors_total` | `LISTEN` connections that failed or ended, each logged `listen_failed` (017-AC20) |
+| `grill_room_event_streams` | open SSE event streams |
+| `grill_room_stt_workers` | STT workers with a recent heartbeat |
+| `grill_room_workspace_fallbacks_total{reason}` | full workspace fetches by daemons that keep a cache |
+| `grill_room_mcp_tool_calls_total{tool,result}` | MCP tool calls: `ok`, `error` or `server_error` |
+| `grill_room_turn_conflicts_total{outcome}` | turn results rejected on a document conflict: `rerun` or `failed` |
+
+## Shared state, TL;DR
+
+Since spec 017 Phase 3 nothing a request needs lives in one pod's memory: any pod answers any request.
+
+- Wake-ups: the bus wakes the pod's own streams and sends `NOTIFY` on one channel, payload `<pod> <room>`. Every pod `LISTEN`s, drops its own notifications and wakes that room's streams, which re-read the database. When its `LISTEN` connection comes back, a pod wakes every stream with `*` (`bus.All`), which the Web Push loop skips. Ids starting with `:` name no room: `:tts` (a line queued) and `:lexicon` wake the TTS streams, and the Web Push loop skips them.
+- `UNLOGGED` tables with an expiry hold what lives seconds to minutes: `daemon_connections` (one row per open app stream, renewed, 1 minute lease), `daemon_status` (what the app last reported), `presence` (tabs, their audio state, device transcription), `stt_workers` (heartbeats), `tts_pod` (the TTS pod's one row) and `pairings`. They skip the WAL, so a PostgreSQL crash empties them; apps, tabs and workers write them again on their next beat. Every pod sweeps them each minute: expired rows (`presence` in batches of 1000, in key order), and `daemon_status` rows left with no connection. A daemon whose last connection lapsed there takes the disconnect path: a turn it hosted fails and the room elects a host.
+- Logged tables: `tts_lines`, on one sequence, so the TTS pod's `Last-Event-ID` resumes on any pod; `rate_events` for the magic link and login limits; `rooms.host_moved_line`, the banner a previous host sees (009-AC34).
+- Per-room locks: a session advisory lock `(kind, room)` on a pinned connection, held across several transactions. Presses, queue drains and automatic triggers try the room's turn lock under the pod's `turnMu`. When another pod holds it, they wait outside `turnMu`, behind a per-room guard on the pod: at most one connection per room waits pinned, however many presses queue behind it. A plugin fetch tries the room's plugin lock and answers 409 when another pod holds it (009-AC8). A host hand-over checks in its own transaction that the host did not move meanwhile and that the new host has a live app.
+- Pairing: the participant's approval marks the request approved; the app's poll then mints the daemon token, stores its hash and returns it once. The pairing secret only authenticates the poll.
+- Per-pod cache: streams poll presence, STT workers and the TTS pod's row. A pod reads each at most once a second and serves all its streams from that copy; its own presence write drops the room's copy. Another pod's change shows within that second.
+- Still per pod: open streams, the upload, archive and plugin fetch slots, the staging directory, the counters behind the metrics, the Web Push loop and the backstop timers. With two pods each would send the same push and fire the same timers, so production stays at one replica until Phase 4.
+- `make e2e-twopod` runs two servers on one database, a browser on each (017-AC10, 017-AC11).
 
 ## A turn, end to end
 

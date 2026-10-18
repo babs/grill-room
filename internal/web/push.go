@@ -16,6 +16,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/webpush"
 )
@@ -179,6 +180,9 @@ func (s *Server) PushLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case room := <-signals:
+			if !pushable(room) {
+				continue
+			}
 			after := max(cursors[room], start)
 			last, err := s.pushEvents(ctx, room, after, pending)
 			if err != nil {
@@ -201,7 +205,7 @@ func (s *Server) PushLoop(ctx context.Context) {
 				}
 				delete(pending, id)
 				// Back in the room meanwhile: they have seen it.
-				if s.people.focused(b.room, b.sub.ParticipantID, now) {
+				if s.people.focused(b.room, b.sub.ParticipantID, s.lease()) {
 					continue
 				}
 				select {
@@ -223,6 +227,10 @@ func (s *Server) PushLoop(ctx context.Context) {
 		}
 	}
 }
+
+// pushable tells a room's signal from the wakes that carry no lines: bus.All after a LISTEN
+// reconnect, and the ':'-prefixed ids such as the TTS wakes.
+func pushable(id string) bool { return id != bus.All && !strings.HasPrefix(id, ":") }
 
 // pushEvents classifies room's lines past after for each subscription, into pending, and returns
 // the last line id read.
@@ -256,7 +264,7 @@ func (s *Server) pushEvents(ctx context.Context, room string, after int64, pendi
 		mentioned := mentionedPeople(m, personas, ps)
 		for _, sub := range subs {
 			kind := pushKind(m, sub, starter, mentioned[sub.ParticipantID])
-			if kind == "" || s.people.focused(room, sub.ParticipantID, now) {
+			if kind == "" || s.people.focused(room, sub.ParticipantID, s.lease()) {
 				continue
 			}
 			b := pending[sub.ID]

@@ -68,11 +68,7 @@ func (s *Server) removeParticipant(w http.ResponseWriter, r *http.Request, sess 
 // to re-check its access, theirs closing with "revoked" (016-AC8, 016-AC9). An app's stream that
 // closed first failed them the same way already.
 func (s *Server) seatsEnded(ctx context.Context, room string, seats, daemons []int64) {
-	s.presence.mu.Lock()
-	for _, id := range daemons {
-		delete(s.presence.m, id)
-	}
-	s.presence.mu.Unlock()
+	// Their daemons left the room's already: live daemons are those of standing seats.
 	for _, id := range daemons {
 		s.failDaemonTurn(ctx, &store.Daemon{ID: id, RoomID: room}, whyHostLeft)
 	}

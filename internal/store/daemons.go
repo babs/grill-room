@@ -44,10 +44,15 @@ func scanDaemon(sc scanner) (*Daemon, error) {
 
 // PairDaemon records participant's daemon with tokenHash. A participant has one daemon: pairing
 // again replaces the previous one and its token. ErrNotFound if the participant is not in room.
-// The daemon's machine name is not kept: the room never shows it (003-AC17).
+// The daemon's machine name is not kept: the room never shows it (003-AC17). A test fixture: the
+// server pairs through PollPairing.
 func (s *Store) PairDaemon(ctx context.Context, roomID string, participantID int64, tokenHash string) (*Daemon, error) {
+	return pairDaemon(ctx, s.db, roomID, participantID, tokenHash)
+}
+
+func pairDaemon(ctx context.Context, q querier, roomID string, participantID int64, tokenHash string) (*Daemon, error) {
 	d := &Daemon{RoomID: roomID, ParticipantID: participantID, CreatedAt: time.Now().UTC()}
-	err := s.db.QueryRowContext(ctx, `
+	err := q.QueryRowContext(ctx, `
 		INSERT INTO daemons(room_id, participant_id, name, token_hash, created_at)
 		SELECT room_id, id, '', ?, ? FROM participants WHERE id = ? AND room_id = ?
 		ON CONFLICT(participant_id) DO UPDATE SET token_hash = excluded.token_hash, created_at = excluded.created_at

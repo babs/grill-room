@@ -16,16 +16,22 @@ import (
 var timerTick = 15 * time.Second
 
 // queueAuto queues each persona due, as due reads them, as an automatic chain link, cause naming
-// its trigger, then runs the queue. due runs under turnMu, as turns start: a persona whose turn
-// just started is no longer due, so two triggers at once queue it once. A link past the auto-turn
-// limit is dropped quietly: the status strip already says the auto turns are paused, and a line
-// per voice line or tick would flood the chat.
+// its trigger, then runs the queue. due runs under turnMu and the room's turn lock, as turns start:
+// a persona whose turn just started is no longer due, so two triggers at once queue it once. A link
+// past the auto-turn limit is dropped quietly: the status strip already says the auto turns are
+// paused, and a line per voice line or tick would flood the chat.
 func (s *Server) queueAuto(ctx context.Context, room string, e store.ChainEvent, due func() ([]store.RoomPersona, error), cause func(store.RoomPersona) string) {
 	queued := 0
-	s.turnMu.Lock()
+	unlock, err := s.lockTurns(ctx, room)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.log.Error("auto_triggers_failed", zap.String("room", room), zap.Error(err))
+		}
+		return
+	}
 	ps, err := due()
 	if err != nil {
-		s.turnMu.Unlock()
+		unlock()
 		if ctx.Err() == nil {
 			s.log.Error("auto_triggers_failed", zap.String("room", room), zap.Error(err))
 		}
@@ -41,7 +47,7 @@ func (s *Server) queueAuto(ctx context.Context, room string, e store.ChainEvent,
 			s.log.Error("queue_link_failed", zap.String("room", room), zap.Int64("persona", p.ID), zap.Error(err))
 		}
 	}
-	s.turnMu.Unlock()
+	unlock()
 	if queued == 0 {
 		return
 	}
@@ -71,7 +77,7 @@ func (s *Server) timerTriggers(ctx context.Context) {
 	}
 	rooms := map[string]bool{}
 	for _, p := range due {
-		if !rooms[p.RoomID] && s.people.anyoneHere(p.RoomID, now) {
+		if !rooms[p.RoomID] && s.people.anyoneHere(p.RoomID, s.lease()) {
 			rooms[p.RoomID] = true
 			room := p.RoomID
 			s.queueAuto(ctx, room, store.LinkEveryN, func() ([]store.RoomPersona, error) { return s.bus.Store.DueTimerPersonas(ctx, now, room) },

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -36,7 +35,7 @@ type agentState struct {
 	// CanTrigger lists the participants the host granted the button to (D18).
 	CanTrigger []int64 `json:"can_trigger"`
 	// Daemons are the connected daemons: the host can hand over to one that can host.
-	Daemons []presence `json:"daemons"`
+	Daemons []liveDaemon `json:"daemons"`
 	// Personas are the room's agents, each with its button; Queue the presses waiting their turn.
 	Personas []store.RoomPersona `json:"personas"`
 	Queue    []store.QueuedTurn  `json:"queue"`
@@ -110,27 +109,21 @@ func capRequests(d *store.Daemon, ps []store.RoomPersona) []capRequest {
 }
 
 // hostDaemon returns the connected daemon of participant pid in room, nil if there is none.
-func (s *Server) hostDaemon(room string, pid int64) *presence {
-	s.presence.mu.Lock()
-	defer s.presence.mu.Unlock()
-	for _, p := range s.presence.m {
-		if p.room == room && p.conns > 0 && p.ParticipantID == pid {
-			c := *p
-			return &c
-		}
-	}
-	return nil
+func (s *Server) hostDaemon(room string, pid int64) *liveDaemon {
+	return daemonOf(s.liveDaemons(room), pid, false)
 }
 
 // canHostDaemon returns the first connected daemon of participant pid in room able to host, nil if
 // none (009-AC33).
-func (s *Server) canHostDaemon(room string, pid int64) *presence {
-	s.presence.mu.Lock()
-	defer s.presence.mu.Unlock()
-	for _, p := range s.presence.m {
-		if p.room == room && p.conns > 0 && p.ParticipantID == pid && p.CanHost {
-			c := *p
-			return &c
+func (s *Server) canHostDaemon(room string, pid int64) *liveDaemon {
+	return daemonOf(s.liveDaemons(room), pid, true)
+}
+
+// daemonOf returns the first of ds that is participant pid's, and able to host with canHost.
+func daemonOf(ds []liveDaemon, pid int64, canHost bool) *liveDaemon {
+	for i := range ds {
+		if ds[i].ParticipantID == pid && (ds[i].CanHost || !canHost) {
+			return &ds[i]
 		}
 	}
 	return nil
@@ -145,22 +138,21 @@ func (s *Server) agentState(ctx context.Context, room string) (*agentState, erro
 	if err != nil {
 		return nil, err
 	}
-	st := &agentState{HostID: r.HostParticipantID, CanTrigger: []int64{}, Daemons: s.connectedDaemons(room), Models: turn.Models, Efforts: turn.Efforts,
+	st := &agentState{HostID: r.HostParticipantID, CanTrigger: []int64{}, Daemons: s.liveDaemons(room), Models: turn.Models, Efforts: turn.Efforts,
 		Chain: r.Chain, ParallelTurns: r.ParallelTurns, NotesWatchDelay: int(s.opts.NotesWatchDelay / time.Second),
-		EgressAdmins: r.EgressAdmins, EgressHost: s.hostEgress(room, r.HostParticipantID)}
-	if v, ok := s.hostBy.Load(room); ok {
-		st.HostBy, _ = v.(string)
-	}
+		EgressAdmins: r.EgressAdmins, HostBy: r.HostMovedLine}
+	h := daemonOf(st.Daemons, r.HostParticipantID, false)
+	st.EgressHost = egressWhy(h)
 	for _, p := range ps {
 		if p.CanTrigger {
 			st.CanTrigger = append(st.CanTrigger, p.ID)
 		}
 	}
 	st.Connectors = []roomConnector{}
-	if h := s.hostDaemon(room, r.HostParticipantID); h != nil && h.Connectors != nil {
+	if h != nil && h.Connectors != nil {
 		st.Connectors = h.Connectors
 	}
-	switch h := s.hostDaemon(room, r.HostParticipantID); {
+	switch {
 	case h == nil:
 		st.Reason = "No one runs the AI for this room right now."
 	case !h.CanHost:
@@ -225,31 +217,13 @@ func (s *Server) agentChanged(ctx context.Context, room string) {
 
 // elect keeps the host while its daemon is connected and can host; otherwise the participant
 // whose eligible daemon connected first becomes host (D7). With none eligible the host stays, offline.
+// The caller wakes the room.
 func (s *Server) elect(ctx context.Context, room string) error {
-	s.electMu.Lock()
-	defer s.electMu.Unlock()
-	r, err := s.bus.Store.Room(ctx, room)
-	if err != nil {
-		return err
+	m, err := s.bus.Store.ElectHost(ctx, room, s.lease().UnixMilli())
+	if m != nil {
+		s.log.Info("host_elected", zap.String("room", room), zap.Int64("participant", m.ParticipantID))
 	}
-	s.presence.mu.Lock()
-	var eligible []presence
-	for _, p := range s.presence.m {
-		if p.room == room && p.conns > 0 && p.CanHost {
-			eligible = append(eligible, *p)
-		}
-	}
-	s.presence.mu.Unlock()
-	sort.Slice(eligible, func(i, j int) bool { return eligible[i].since.Before(eligible[j].since) })
-	for _, p := range eligible {
-		if p.ParticipantID == r.HostParticipantID {
-			return nil
-		}
-	}
-	if len(eligible) == 0 {
-		return nil
-	}
-	return s.setHost(ctx, room, eligible[0])
+	return err
 }
 
 // releaseStarterSkills turns on the skills the room's starter brought once a host who approves
@@ -279,21 +253,6 @@ func (s *Server) releaseStarterSkills(ctx context.Context, room string) {
 		Body: "The starter's skills are on, as " + p.Name + "'s AI host approves without asking: " + strings.Join(names, ", ") + "."}); err != nil {
 		s.log.Error("post_failed", zap.String("room", room), zap.Error(err))
 	}
-}
-
-// setHost records the new host and says so in the room.
-func (s *Server) setHost(ctx context.Context, room string, d presence) error {
-	p, err := s.bus.Store.RoomParticipant(ctx, room, d.ParticipantID)
-	if err != nil {
-		return err
-	}
-	if err := s.bus.Store.SetHost(ctx, room, p.ID); err != nil {
-		return err
-	}
-	s.hostBy.Delete(room)
-	s.log.Info("host_elected", zap.String("room", room), zap.Int64("participant", p.ID))
-	return s.bus.Post(ctx, &store.Message{RoomID: room, Kind: store.KindSystem, ParticipantID: p.ID, Sender: p.Name,
-		Body: p.Name + " holds the agent(s)."})
 }
 
 func (s *Server) getAgent(w http.ResponseWriter, r *http.Request, sess session) {
@@ -391,9 +350,6 @@ func (s *Server) handOver(w http.ResponseWriter, r *http.Request, sess *session)
 
 // transferHost checks the right and moves the role, answering the request; true when it moved.
 func (s *Server) transferHost(w http.ResponseWriter, r *http.Request, sess *session, room string, to int64) bool {
-	// Held across the checks and the write: an election in between would undo the hand-over.
-	s.electMu.Lock()
-	defer s.electMu.Unlock()
 	rm, err := s.bus.Store.Room(r.Context(), room)
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "no such room")
@@ -428,19 +384,22 @@ func (s *Server) transferHost(w http.ResponseWriter, r *http.Request, sess *sess
 	if sess != nil {
 		by = sess.p
 	}
-	line, err := s.bus.Store.HandOver(s.roomAuditing(r, sess, ActionHostTransfer, room, nil), room, to, by)
-	if errors.Is(err, store.ErrNotFound) {
+	// The transaction re-checks both: an election or another move in between would undo this one.
+	_, err = s.bus.Store.HandOver(s.roomAuditing(r, sess, ActionHostTransfer, room, nil), room, to, by,
+		&store.HostGuard{From: rm.HostParticipantID, NowMS: s.lease().UnixMilli()})
+	switch {
+	case errors.Is(err, store.ErrNotFound):
 		httpError(w, http.StatusNotFound, "no such participant in this room")
 		return false
-	}
-	if err != nil {
+	case errors.Is(err, store.ErrNoLiveHost):
+		httpError(w, http.StatusConflict, "that participant has no connected daemon able to host")
+		return false
+	case errors.Is(err, store.ErrHostMoved):
+		httpError(w, http.StatusConflict, "the AI host changed meanwhile, try again")
+		return false
+	case err != nil:
 		s.serverError(w, "hand_over_failed", err)
 		return false
-	}
-	if byHost {
-		s.hostBy.Delete(room)
-	} else {
-		s.hostBy.Store(room, line)
 	}
 	s.log.Info("host_handed_over", zap.String("room", room), zap.Int64("from", rm.HostParticipantID), zap.Int64("to", to), zap.Bool("by_host", byHost),
 		zap.Bool("super_admin", sess == nil))

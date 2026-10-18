@@ -266,7 +266,7 @@ func (s *Server) presencePreamble(ctx context.Context, room *store.Room, self *s
 		if h.ID == room.HostParticipantID {
 			v.Host = named(h.ID, h.Name)
 		}
-		if s.people.here(room.ID, h.ID, s.now()) {
+		if s.people.here(room.ID, h.ID, s.lease()) {
 			v.Humans = append(v.Humans, humanAt(h.Name, tags[h.ID], personas))
 		}
 	}

@@ -870,9 +870,9 @@ func (r TurnReport) Note(name string) string {
 	return name + " turn: " + strings.Join(parts, ". ") + "."
 }
 
-// SetHost makes participant pid of room the agent host. A new host never inherits the previous
-// one's delegation of website approvals, nor the approvals its app had not applied yet (014-AC12).
-// ErrNotFound if pid is not in room.
+// SetHost makes participant pid of room the agent host, and clears the line of a move by someone
+// else. A new host never inherits the previous one's delegation of website approvals, nor the
+// approvals its app had not applied yet (014-AC12). ErrNotFound if pid is not in room.
 func (s *Store) SetHost(ctx context.Context, roomID string, pid int64) error {
 	return s.withTx(ctx, "set host", func(tx *txn) error {
 		var prev sql.NullInt64
@@ -880,7 +880,7 @@ func (s *Store) SetHost(ctx context.Context, roomID string, pid int64) error {
 			return fmt.Errorf("set host: %w", err)
 		}
 		res, err := tx.ExecContext(ctx, `
-			UPDATE rooms SET host_participant_id = ? WHERE id = ? AND EXISTS (SELECT 1 FROM participants WHERE id = ? AND room_id = ?)`,
+			UPDATE rooms SET host_participant_id = ?, host_moved_line = '' WHERE id = ? AND EXISTS (SELECT 1 FROM participants WHERE id = ? AND room_id = ?)`,
 			pid, roomID, pid, roomID)
 		if err != nil {
 			return fmt.Errorf("set host: %w", err)
@@ -897,12 +897,24 @@ func (s *Store) SetHost(ctx context.Context, roomID string, pid int64) error {
 	})
 }
 
+// ErrHostMoved and ErrNoLiveHost are a HostGuard's refusals.
+var (
+	ErrHostMoved  = errors.New("the AI host changed meanwhile")
+	ErrNoLiveHost = errors.New("no live daemon able to host")
+)
+
+// HostGuard is what HandOver checks in its transaction: the host is still From, the caller checked
+// its right against that one, and the new host has a daemon live at NowMS able to host.
+type HostGuard struct{ From, NowMS int64 }
+
 // HandOver makes participant to the AI host of room on by's request, nil for the super-admin, and
 // says so in the chat: the host handing over keeps the 003 line, a room admin taking the role says
-// so, anyone else's line names who did it (009-AC34). It writes the audit entry ctx carries, with the previous and the new host. The
-// caller checked by's right. It returns the line, "" when to hosts already; ErrNotFound if to is not
-// in room.
-func (s *Store) HandOver(ctx context.Context, roomID string, to int64, by *Participant) (string, error) {
+// so, anyone else's line names who did it (009-AC34); that line is kept as the room's
+// host_moved_line unless the host handed over. It writes the audit entry ctx carries, with the
+// previous and the new host. The caller checked by's right; a non-nil guard's ErrHostMoved or
+// ErrNoLiveHost refuse the move. It returns the line, "" when to hosts already; ErrNotFound if to
+// is not in room.
+func (s *Store) HandOver(ctx context.Context, roomID string, to int64, by *Participant, guard *HostGuard) (string, error) {
 	var line string
 	err := s.withTx(ctx, "hand over", func(tx *txn) error {
 		var from sql.NullInt64
@@ -918,6 +930,16 @@ func (s *Store) HandOver(ctx context.Context, roomID string, to int64, by *Parti
 		}
 		if from.Int64 == to {
 			return nil
+		}
+		if guard != nil {
+			if from.Int64 != guard.From {
+				return ErrHostMoved
+			}
+			if ok, err := liveHost(ctx, tx, roomID, to, guard.NowMS); err != nil {
+				return fmt.Errorf("hand over: %w", err)
+			} else if !ok {
+				return ErrNoLiveHost
+			}
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE rooms SET host_participant_id = ? WHERE id = ?`, to, roomID); err != nil {
 			return fmt.Errorf("hand over: %w", err)
@@ -942,6 +964,13 @@ func (s *Store) HandOver(ctx context.Context, roomID string, to int64, by *Parti
 			return err
 		}
 		line = m.Body
+		moved := line
+		if by != nil && by.ID == from.Int64 {
+			moved = ""
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE rooms SET host_moved_line = ? WHERE id = ?`, moved, roomID); err != nil {
+			return fmt.Errorf("hand over: %w", err)
+		}
 		details := map[string]any{"to": to, "to_name": toName.String}
 		if from.Valid {
 			details["from"], details["from_name"] = from.Int64, fromName.String

@@ -56,7 +56,7 @@ func (rs *releaseServer) swap(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := web.New(bus.New(rs.st), web.HashToken(rs.admin), rs.ts.URL,
+	h := web.New(bus.New(rs.st, web.NewToken()), web.HashToken(rs.admin), rs.ts.URL,
 		web.Options{MaxUploadBytes: 1 << 20, MaxRoomBytes: 1 << 20, MaxAttachmentBytes: 1 << 20, Release: rel}, zap.NewNop()).Handler()
 	rs.h.Store(&h)
 }

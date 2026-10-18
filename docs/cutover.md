@@ -84,7 +84,7 @@ pgc() { docker run --rm --network host -u "$(id -u):$(id -g)" -v "$PWD:/w" -w /w
 6. Test a backup before the server's first start (017-AC23): dump the copy, restore it into a scratch database, and compare it with the checkpointed copy.
    ```sh
    pgc dropdb --if-exists -h 127.0.0.1 -p "$PGPORT_LOCAL" grill_room_restore
-   pgc pg_dump -h 127.0.0.1 -p "$PGPORT_LOCAL" -Fc -f copy.dump "$K8S_PG_DATABASE"
+   pgc pg_dump -h 127.0.0.1 -p "$PGPORT_LOCAL" -Fc --no-unlogged-table-data -f copy.dump "$K8S_PG_DATABASE"
    pgc createdb -h 127.0.0.1 -p "$PGPORT_LOCAL" -T template0 -E UTF8 --locale-provider=libc --lc-collate=C --lc-ctype=C grill_room_restore
    pgc pg_restore -h 127.0.0.1 -p "$PGPORT_LOCAL" --no-owner -d grill_room_restore copy.dump
    ../bin/grill-room db verify --from work/grill-room.db --to "postgres://127.0.0.1:$PGPORT_LOCAL/grill_room_restore?sslmode=require"
@@ -101,7 +101,7 @@ pgc() { docker run --rm --network host -u "$(id -u):$(id -g)" -v "$PWD:/w" -w /w
 9. Before the downtime ends, test a dump taken with the server up (017-AC23):
    ```sh
    pgc dropdb --if-exists -h 127.0.0.1 -p "$PGPORT_LOCAL" grill_room_running
-   pgc pg_dump -h 127.0.0.1 -p "$PGPORT_LOCAL" -Fc -f running.dump "$K8S_PG_DATABASE"
+   pgc pg_dump -h 127.0.0.1 -p "$PGPORT_LOCAL" -Fc --no-unlogged-table-data -f running.dump "$K8S_PG_DATABASE"
    pgc createdb -h 127.0.0.1 -p "$PGPORT_LOCAL" -T template0 -E UTF8 --locale-provider=libc --lc-collate=C --lc-ctype=C grill_room_running
    pgc pg_restore -h 127.0.0.1 -p "$PGPORT_LOCAL" --no-owner -d grill_room_running running.dump
    ../bin/grill-room db verify --from work/grill-room.db --to "postgres://127.0.0.1:$PGPORT_LOCAL/grill_room_running?sslmode=require"

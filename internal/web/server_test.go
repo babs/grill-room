@@ -55,14 +55,18 @@ func newEnvOpts(t *testing.T, opts Options) *env {
 // newEnvLog is newEnvOpts with the server writing to log.
 func newEnvLog(t *testing.T, opts Options, log *zap.Logger) *env {
 	t.Helper()
-	dsn := storetest.DSN(t)
+	return newEnvAt(t, storetest.DSN(t), NewToken(), opts, log)
+}
+
+// newEnvAt is newEnvLog on the store database at dsn, with the admin token given.
+func newEnvAt(t *testing.T, dsn, admin string, opts Options, log *zap.Logger) *env {
+	t.Helper()
 	st, err := store.Open(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	admin := NewToken()
-	b := bus.New(st)
+	b := bus.New(st, NewToken())
 	srv := New(b, HashToken(admin), baseURL+"/", opts, log)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)

@@ -105,7 +105,7 @@ func TestConcurrentOpensMakeOneSchema(t *testing.T) {
 	}
 	_ = s.Close()
 	want := snapshot(t, ref)
-	if !slices.Contains(want, "schema_version |  | 46") || !slices.Contains(want, "rows pronunciations 129") || !slices.Contains(want, "rows starters 3") {
+	if !slices.Contains(want, "schema_version |  | 47") || !slices.Contains(want, "rows pronunciations 129") || !slices.Contains(want, "rows starters 3") {
 		t.Fatalf("a single open made:\n%s", strings.Join(want, "\n"))
 	}
 
@@ -368,7 +368,7 @@ func TestMigrate(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = s.Close()
-	if s, err := Open(newer); err == nil || !strings.Contains(err.Error(), "schema version 99 is newer than this server's 46") {
+	if s, err := Open(newer); err == nil || !strings.Contains(err.Error(), "schema version 99 is newer than this server's 47") {
 		if err == nil {
 			_ = s.Close()
 		}
@@ -376,11 +376,11 @@ func TestMigrate(t *testing.T) {
 	}
 
 	defer func(m []string) { migrations = m }(migrations)
-	migrations = []string{`CREATE TABLE migrated (id BIGINT)`, `INSERT INTO migrated VALUES (1)`}
+	migrations = append(slices.Clip(migrations), `CREATE TABLE migrated (id BIGINT)`, `INSERT INTO migrated VALUES (1)`)
 	dsn := testDSN(t)
 	for range 2 {
 		_ = openAt(t, dsn).Close()
-		if v := version(dsn); v != baselineVersion+2 {
+		if v := version(dsn); v != baselineVersion+len(migrations) {
 			t.Fatalf("version %d after the migrations", v)
 		}
 	}

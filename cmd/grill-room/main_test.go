@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -235,7 +237,7 @@ func TestRegistryCountsWorkspaceFallbacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	b := bus.New(st)
+	b := bus.New(st, web.NewToken())
 	mfs, err := newRegistry(b, web.New(b, "", "http://x", web.Options{}, zap.NewNop())).Gather()
 	if err != nil {
 		t.Fatal(err)
@@ -265,7 +267,7 @@ func TestRegistryCountsVoiceSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	b := bus.New(st)
+	b := bus.New(st, web.NewToken())
 	mfs, err := newRegistry(b, web.New(b, "", "http://x", web.Options{}, zap.NewNop())).Gather()
 	if err != nil {
 		t.Fatal(err)
@@ -298,7 +300,7 @@ func TestRegistryCountsMCPToolCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	b := bus.New(st)
+	b := bus.New(st, web.NewToken())
 	mfs, err := newRegistry(b, web.New(b, "", "http://x", web.Options{}, zap.NewNop())).Gather()
 	if err != nil {
 		t.Fatal(err)
@@ -311,5 +313,55 @@ func TestRegistryCountsMCPToolCalls(t *testing.T) {
 	}
 	if n != len(web.MCPTools())*len(web.MCPResults) || n != 27*3 {
 		t.Fatalf("%d series", n)
+	}
+}
+
+// 017-AC20: the metrics tables of docs/architecture.md list exactly the room server's metrics: a
+// registered one without a row, or a row naming none, fails.
+func TestRegistryMetricsDocumented(t *testing.T) {
+	doc, err := os.ReadFile("../../docs/architecture.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	documented := map[string]bool{}
+	name := regexp.MustCompile("`(grill_room_[a-z_]+)")
+	inTable := false
+	for _, line := range strings.Split(string(doc), "\n") {
+		switch {
+		case strings.HasPrefix(line, "| Metric"):
+			inTable = true
+		case !strings.HasPrefix(line, "|"):
+			inTable = false
+		case inTable:
+			cell, _, _ := strings.Cut(strings.TrimPrefix(line, "|"), "|")
+			for _, m := range name.FindAllStringSubmatch(cell, -1) {
+				documented[m[1]] = true
+			}
+		}
+	}
+	st, err := store.Open(storetest.DSN(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	b := bus.New(st, web.NewToken())
+	opts := web.Options{TTSTokenHash: "x", Voice: &web.Voice{URL: "wss://x"}}
+	mfs, err := newRegistry(b, web.New(b, "", "http://x", opts, zap.NewNop())).Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var missing []string
+	for _, mf := range mfs {
+		n := mf.GetName()
+		if !strings.HasPrefix(n, "grill_room_") {
+			continue
+		}
+		if !documented[n] {
+			missing = append(missing, n)
+		}
+		delete(documented, n)
+	}
+	if len(missing) > 0 || len(documented) > 0 {
+		t.Fatalf("metrics without a row in docs/architecture.md: %v; rows naming no registered metric: %v", missing, documented)
 	}
 }

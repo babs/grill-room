@@ -455,3 +455,32 @@ func TestCopyRefusesNonCCollation(t *testing.T) {
 		}
 	}
 }
+
+// 017-AC8: verify still compares a v46 source with its copy once the server migrated the copy:
+// the tables, columns and settings rows later versions added are no source's. The fixture lacks
+// the shipped presets and starters, which the server's boot writes: those four differ, as they did
+// before v47.
+func TestVerifyAfterServerMigrates(t *testing.T) {
+	ctx := t.Context()
+	src := fixture(t, 46)
+	dsn := pgtest.Fresh(t)
+	if err := Copy(ctx, src, dsn, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close()
+	var out bytes.Buffer
+	const boot = "4 of 47 tables differ: persona_templates, persona_template_versions, starters, starter_versions"
+	if err := Verify(ctx, src, dsn, &out); err == nil || err.Error() != boot || !strings.Contains(lineOf(out.String(), "settings"), " ok") {
+		t.Fatalf("verify: %v\n%s", err, &out)
+	}
+	if _, err := openPG(t, dsn).ExecContext(ctx, `UPDATE settings SET value = 'x' WHERE key <> 'lexicon_version'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify(ctx, src, dsn, io.Discard); err == nil || !strings.Contains(err.Error(), "settings") {
+		t.Fatalf("verify after a settings change: %v", err)
+	}
+}

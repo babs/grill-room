@@ -81,3 +81,40 @@ func find(ps []Pronunciation, term string) *Pronunciation {
 	}
 	return nil
 }
+
+// 013-AC31, 017 I20: each lexicon change counts in the version every pod's TTS stream compares; a
+// refused change does not.
+func TestLexiconVersion(t *testing.T) {
+	ctx := context.Background()
+	s := openTest(t)
+	version := func() string {
+		t.Helper()
+		v, err := s.Setting(ctx, LexiconVersionKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	if v := version(); v != "0" {
+		t.Fatalf("fresh version %q", v)
+	}
+	p, err := s.AddPronunciation(ctx, voicecat.Term{Term: "Grafana", Style: "en", En: "x"}, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddPronunciation(ctx, voicecat.Term{Term: "grafana", Style: "en", En: "x"}, "admin"); !errors.Is(err, ErrTermTaken) {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdatePronunciation(ctx, p.ID, voicecat.Term{Term: "Grafana", Style: "fr", FrFr: "x"}, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeletePronunciation(ctx, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeletePronunciation(ctx, p.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatal(err)
+	}
+	if v := version(); v != "3" {
+		t.Errorf("version %q after three changes and two refusals, want 3", v)
+	}
+}

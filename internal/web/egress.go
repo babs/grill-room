@@ -20,7 +20,12 @@ const (
 
 // hostEgress says why the room's AI host app cannot take a website approval now, "" when it can.
 func (s *Server) hostEgress(room string, host int64) string {
-	switch h := s.hostDaemon(room, host); {
+	return egressWhy(s.hostDaemon(room, host))
+}
+
+// egressWhy is hostEgress for the host's app h, nil when offline.
+func egressWhy(h *liveDaemon) string {
+	switch {
 	case h == nil:
 		return msgHostAppOffline
 	case !h.Egress:
@@ -310,8 +315,10 @@ const holdMax = 60
 // someoneCanAllow reports whether a person who may allow a website for room is in it now: the AI
 // host, or a room admin while the host lets them.
 func (s *Server) someoneCanAllow(ctx context.Context, room *store.Room) (bool, error) {
-	now := s.now()
-	if room.HostParticipantID != 0 && s.people.here(room.ID, room.HostParticipantID, now) {
+	now := s.lease()
+	here := s.people.read(room.ID, now)[room.ID]
+	alive := func(pid int64) bool { p := here[pid]; return p != nil && p.alive(now) }
+	if room.HostParticipantID != 0 && alive(room.HostParticipantID) {
 		return true, nil
 	}
 	if !room.EgressAdmins {
@@ -322,7 +329,7 @@ func (s *Server) someoneCanAllow(ctx context.Context, room *store.Room) (bool, e
 		return false, err
 	}
 	for _, p := range ps {
-		if p.Admin && s.people.here(room.ID, p.ID, now) {
+		if p.Admin && alive(p.ID) {
 			return true, nil
 		}
 	}

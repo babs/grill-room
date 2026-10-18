@@ -153,7 +153,11 @@ func (s *Server) callMentioned(ctx context.Context, p *store.Participant, body, 
 	}
 	prefix := fmt.Sprintf("@mention%s by %s: ", where, oneLine(p.Name))
 	cause := prefix + `"` + fitQuote(oneLine(body), causeMax-len([]rune(prefix))-2) + `"`
-	s.turnMu.Lock()
+	unlock, err := s.lockTurns(ctx, room.ID)
+	if err != nil {
+		s.log.Error("mention_failed", zap.String("room", room.ID), zap.Error(err))
+		return notices
+	}
 	for _, persona := range runnable {
 		q := &store.QueuedTurn{RoomID: room.ID, PersonaID: persona.ID, ParticipantID: p.ID, Cause: cause}
 		err := enqueue(ctx, q)
@@ -162,7 +166,7 @@ func (s *Server) callMentioned(ctx context.Context, p *store.Participant, body, 
 			s.log.Error("queue_turn_failed", zap.String("room", room.ID), zap.Int64("persona", persona.ID), zap.Error(err))
 		}
 	}
-	s.turnMu.Unlock()
+	unlock()
 	s.log.Info("mention_queued", zap.String("room", room.ID), zap.Int64("participant", p.ID), zap.Int("personas", len(runnable)))
 	s.bus.Notify(room.ID)
 	s.drain(ctx, room.ID)
@@ -232,7 +236,11 @@ func (s *Server) chainLinks(ctx context.Context, done *store.Turn, synthesis str
 	}
 	var dropped []string
 	var c store.Chain
-	s.turnMu.Lock()
+	unlock, err := s.lockTurns(ctx, room)
+	if err != nil {
+		s.log.Error("chain_failed", zap.String("room", room), zap.Error(err))
+		return
+	}
 	for _, l := range links {
 		var err error
 		c, err = s.bus.Store.EnqueueLink(ctx, &store.QueuedTurn{RoomID: room, PersonaID: l.p.ID, Cause: l.cause}, l.e)
@@ -246,7 +254,7 @@ func (s *Server) chainLinks(ctx context.Context, done *store.Turn, synthesis str
 			s.log.Error("queue_link_failed", zap.String("room", room), zap.Int64("persona", l.p.ID), zap.Error(err))
 		}
 	}
-	s.turnMu.Unlock()
+	unlock()
 	if len(dropped) == 0 {
 		return
 	}

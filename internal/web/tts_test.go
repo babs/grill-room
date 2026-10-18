@@ -185,108 +185,115 @@ func TestTTSPersonaFields(t *testing.T) {
 	}
 }
 
-// 013-AC14: a line no pod took expires after its room's queue maximum as no_service; numbering
-// grows across a restart, and a stream resumes after Last-Event-ID.
-func TestTTSHub(t *testing.T) {
-	now := time.Unix(1_800_000_000, 0)
-	h := newTTSHub(now)
-	h.streams, h.beatAt = 1, now // a pod is up: lines keep the room's maximum (cold start: TestTTSColdStartQueue)
-	l := ttsLine{Room: "r", Text: "a", ttsTimeouts: defaultTTSTimeouts, QueuedAt: now}
-	first := h.add(l, now)
-	second := h.add(l, now)
-	if got, _ := h.next(first, now); len(got) != 1 || got[0].Seq != second {
-		t.Fatalf("after %d: %+v", first, got)
+// queueLine queues one line of room at e's clock, as a turn would.
+func (e *env) queueLine(t *testing.T, room string, queueS int) int64 {
+	t.Helper()
+	l := ttsLine{Room: room, Text: "a", ttsTimeouts: defaultTTSTimeouts, QueuedAt: e.srv.now()}
+	l.QueueS = queueS
+	seq, err := e.srv.addTTSLine(t.Context(), l)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// The second was sent; the first was not, so it expires as no_service.
-	if n := h.noServiceDropped(now.Add(41 * time.Second)); n != 1 {
-		t.Errorf("no_service %d, want 1", n)
-	}
-	if got, _ := h.next(0, now.Add(41*time.Second)); len(got) != 0 {
-		t.Errorf("expired lines handed out: %+v", got)
-	}
-	if again := newTTSHub(now.Add(time.Second)); again.add(l, now) <= second {
-		t.Error("a restarted server numbers its lines below the old ones")
-	}
-	for range maxTTSLines + 3 {
-		h.add(l, now)
-	}
-	if len(h.lines) != maxTTSLines || h.noService.Load() != 1+3 {
-		t.Errorf("kept %d lines, no_service %d", len(h.lines), h.noService.Load())
-	}
+	return seq
+}
 
-	e := newEnvOpts(t, ttsOptions(t))
-	e.srv.tts.add(l, time.Now())
-	seq := e.srv.tts.add(ttsLine{Room: "r", Text: "b", ttsTimeouts: defaultTTSTimeouts, QueuedAt: time.Now()}, time.Now())
-	ch, stop1 := e.openStream(t, "/api/tts/events", ttsToken, strconv.FormatInt(seq-1, 10))
+// takeLine is what the pod's stream reads after seq at e's clock.
+func (e *env) takeLine(t *testing.T, after int64) []store.TTSLine {
+	t.Helper()
+	ls, err := e.st.TTSLinesAfter(t.Context(), after, e.srv.now().UnixMilli())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ls
+}
+
+// 013-AC14, 017-AC10: a stream resumes after Last-Event-ID; one from the future starts over; a pod
+// with none gets the lines no pod took, never one already said.
+func TestTTSStreamResume(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	e := newEnvLog(t, ttsOptions(t), zap.New(core))
+	room := e.createRoom(t, "R").ID
+	first := e.queueLine(t, room, defaultTTSTimeouts.QueueS)
+	seq := e.queueLine(t, room, defaultTTSTimeouts.QueueS)
+	ch, stop1 := e.openStream(t, "/api/tts/events", ttsToken, strconv.FormatInt(first, 10))
 	if ev := nextEvent(t, ch, "line"); ev.id != strconv.FormatInt(seq, 10) {
 		t.Errorf("resumed at %s, want %d", ev.id, seq)
 	}
-	ch, stop2 := e.openStream(t, "/api/tts/events", ttsToken, strconv.FormatInt(seq+1_000_000, 10))
-	if ev := nextEvent(t, ch, "line"); ev.id != strconv.FormatInt(seq-1, 10) {
+	ch, stop2 := e.openStream(t, "/api/tts/events", ttsToken, strconv.FormatInt(seq+1_000_000_000_000, 10))
+	if ev := nextEvent(t, ch, "line"); ev.id != strconv.FormatInt(first, 10) {
 		t.Errorf("an id from the future starts over: %s", ev.id)
 	}
 	stop1()
 	stop2()
-	waitFor(t, func() bool { e.srv.tts.mu.Lock(); defer e.srv.tts.mu.Unlock(); return e.srv.tts.streams == 0 })
-	// A restarted pod sends no Last-Event-ID: it gets the lines no pod took, never one already said.
-	third := e.srv.tts.add(ttsLine{Room: "r", Text: "c", ttsTimeouts: defaultTTSTimeouts, QueuedAt: time.Now()}, time.Now())
-	e.srv.tts.mu.Lock()
-	for _, l := range e.srv.tts.lines {
-		l.sent = l.Seq < third
-	}
-	e.srv.tts.mu.Unlock()
+	// A stream still running would take the next line.
+	waitFor(t, func() bool { return logs.FilterMessage("tts_disconnected").Len() == 2 })
+
+	// Both lines were said; the third was not.
+	third := e.queueLine(t, room, defaultTTSTimeouts.QueueS)
 	ch, _ = e.openStream(t, "/api/tts/events", ttsToken, "")
 	if ev := nextEvent(t, ch, "line"); ev.id != strconv.FormatInt(third, 10) {
 		t.Errorf("a pod with no Last-Event-ID got line %s, want only %d", ev.id, third)
 	}
-	if h := newTTSHub(time.Now()); h.resumePoint() != h.seq {
-		t.Error("an empty hub resumes from its own counter")
-	}
 }
 
-// 013-AC34: a line queued while no pod is up (streaming and heartbeating) waits up to coldQueueS for one scaling from
-// zero, and the pod gets that budget in queue_s; with a pod connected, the room's maximum stands.
+// 013-AC34: a line queued while no pod is up (streaming and heartbeating) waits up to coldQueueS
+// for one scaling from zero, and the pod gets that budget in queue_s; with a pod connected, the
+// room's maximum stands. A line never taken counts as no_service once past its budget.
 func TestTTSColdStartQueue(t *testing.T) {
+	e := newEnvOpts(t, ttsOptions(t))
+	room := e.createRoom(t, "R").ID
 	now := time.Unix(1_800_000_000, 0)
-	h := newTTSHub(now)
-	l := ttsLine{Room: "r", Text: "a", ttsTimeouts: defaultTTSTimeouts, QueuedAt: now}
-	h.add(l, now)
+	e.srv.now = func() time.Time { return now }
+	e.srv.lease = e.srv.now
+	queueS := func(seq int64) int {
+		t.Helper()
+		ls := e.takeLine(t, seq-1)
+		if len(ls) == 0 || ls[0].Seq != seq {
+			t.Fatalf("line %d not handed out: %+v", seq, ls)
+		}
+		return ls[0].QueueS
+	}
+	// Queued first, so no read after a later seq takes it.
+	unsent := e.queueLine(t, room, defaultTTSTimeouts.QueueS)
+	seq := e.queueLine(t, room, defaultTTSTimeouts.QueueS)
 	late := now.Add(time.Duration(coldQueueS-1) * time.Second)
-	got, _ := h.next(0, late)
-	if len(got) != 1 || got[0].QueueS != coldQueueS || h.noService.Load() != 0 {
-		t.Fatalf("a cold line at %ds: %+v, no_service %d", coldQueueS-1, got, h.noService.Load())
+	now = late
+	if got := queueS(seq); got != coldQueueS {
+		t.Errorf("a cold line at %ds: queue_s %d", coldQueueS-1, got)
 	}
-	// Never taken: no_service past the cold budget, not before.
-	h.add(l, now)
-	if n := h.noServiceDropped(late); n != 0 {
-		t.Errorf("no_service %d before the cold budget", n)
+	e.srv.sweepShared(t.Context())
+	if st, _ := e.srv.TTSStats(); st.NoService != 0 {
+		t.Errorf("no_service %d before the cold budget", st.NoService)
 	}
-	if n := h.noServiceDropped(now.Add(time.Duration(coldQueueS+1) * time.Second)); n != 1 {
-		t.Errorf("no_service %d past the cold budget, want 1", n)
+	now = now.Add(2 * time.Second)
+	e.srv.sweepShared(t.Context())
+	if st, _ := e.srv.TTSStats(); st.NoService != 1 {
+		t.Errorf("no_service %d past the cold budget, want 1 (line %d)", st.NoService, unsent)
 	}
-	long := l
-	long.QueueS = 300
-	seq := h.add(long, now)
-	if got, _ := h.next(seq-1, now); len(got) != 1 || got[0].QueueS != 300 {
-		t.Errorf("a room maximum over the cold budget: %+v", got)
-	}
-	// A stream left by a pod gone with its node, no heartbeat within ttsLapse: still cold.
-	h.streams, h.beatAt = 1, now.Add(-ttsLapse-time.Second)
-	seq = h.add(l, now)
-	if got, _ := h.next(seq-1, now); len(got) != 1 || got[0].QueueS != coldQueueS {
-		t.Errorf("a stream with no heartbeat: %+v", got)
+	if got := queueS(e.queueLine(t, room, 300)); got != 300 {
+		t.Errorf("a room maximum over the cold budget: %d", got)
 	}
 	// A heartbeat but no stream (the pod reconnecting): cold.
-	h.streams, h.beatAt = 0, now
-	seq = h.add(l, now)
-	if got, _ := h.next(seq-1, now); len(got) != 1 || got[0].QueueS != coldQueueS {
-		t.Errorf("a heartbeat with no stream: %+v", got)
+	e.podBeats(t)
+	if got := queueS(e.queueLine(t, room, defaultTTSTimeouts.QueueS)); got != coldQueueS {
+		t.Errorf("a heartbeat with no stream: %d", got)
 	}
 	// A pod up: the room's maximum, waiting behind other speech included.
-	h.streams = 1
-	seq = h.add(l, now)
-	if got, _ := h.next(seq-1, now); len(got) != 1 || got[0].QueueS != defaultTTSTimeouts.QueueS {
-		t.Errorf("a warm line: %+v", got)
+	if err := e.st.RenewTTSStream(t.Context(), now.Add(ttsLease).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	e.srv.tts.forget()
+	if got := queueS(e.queueLine(t, room, defaultTTSTimeouts.QueueS)); got != defaultTTSTimeouts.QueueS {
+		t.Errorf("a warm line: %d", got)
+	}
+	// A stream left by a pod gone with its node, no heartbeat within ttsLapse: still cold.
+	now = now.Add(ttsLapse + time.Second)
+	if err := e.st.RenewTTSStream(t.Context(), now.Add(ttsLease).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	e.srv.tts.forget()
+	if got := queueS(e.queueLine(t, room, defaultTTSTimeouts.QueueS)); got != coldQueueS {
+		t.Errorf("a stream with no heartbeat: %d", got)
 	}
 }
 
@@ -295,6 +302,12 @@ func TestTTSHeartbeat(t *testing.T) {
 	e := newEnvOpts(t, ttsOptions(t))
 	now := time.Now()
 	e.srv.now = func() time.Time { return now }
+	e.srv.lease = e.srv.now
+	stats := func() TTSStats {
+		e.srv.refreshGauges()
+		st, _ := e.srv.TTSStats()
+		return st
+	}
 	for _, body := range []map[string]any{
 		{},
 		{"pod": strings.Repeat("p", maxTTSPodName+1)},
@@ -307,7 +320,7 @@ func TestTTSHeartbeat(t *testing.T) {
 			t.Errorf("%v: %d", body, code)
 		}
 	}
-	if st, _ := e.srv.TTSStats(); st.PodUp {
+	if stats().PodUp {
 		t.Error("up before any heartbeat")
 	}
 	ok := map[string]any{"pod": "tts-1", "rooms": []string{"r"}, "bots": []string{"persona-1"},
@@ -315,11 +328,11 @@ func TestTTSHeartbeat(t *testing.T) {
 	if code, b := e.do(t, "POST", "/api/tts/heartbeat", ttsToken, ok); code != http.StatusNoContent {
 		t.Fatalf("heartbeat: %d %s", code, b)
 	}
-	if st, _ := e.srv.TTSStats(); !st.PodUp {
+	if !stats().PodUp {
 		t.Error("down after a heartbeat")
 	}
 	now = now.Add(ttsLapse + time.Second)
-	if st, _ := e.srv.TTSStats(); st.PodUp {
+	if stats().PodUp {
 		t.Error("still up past the lapse")
 	}
 }
@@ -356,12 +369,15 @@ func TestTTSDefaultVoicesNeverRepeat(t *testing.T) {
 // waitFor waits until cond holds, for at most 5 s: an observable state, never a fixed sleep.
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	deadline := time.After(10 * time.Second)
 	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatal("condition not reached within 5 s")
+		select {
+		case <-tick.C:
+		case <-deadline:
+			t.Fatal("condition not reached within 10 s")
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -489,6 +505,7 @@ func TestTTSRoomEvent(t *testing.T) {
 	e := newEnvOpts(t, ttsOptions(t))
 	now := time.Now()
 	e.srv.now = func() time.Time { return now }
+	e.srv.lease = e.srv.now
 	if code, _ := e.do(t, "POST", "/api/tts/heartbeat", ttsToken, map[string]any{"pod": "p", "states": []ttsState{
 		{Room: "r1", PersonaID: 3, State: "speaking"}, {Room: "r1", PersonaID: 4, State: "waiting"}, {Room: "r1", PersonaID: 5, State: "idle"},
 		{Room: "r2", PersonaID: 6, State: "speaking"}}}); code != http.StatusNoContent {
@@ -526,5 +543,63 @@ func TestSpecGrillVoicesDiffer(t *testing.T) {
 	}
 	if voice["Grill"] == "" || voice["Rodin"] == "" || voice["Grill"] == voice["Rodin"] || voice["Secretary"] != "" {
 		t.Errorf("voices %v: Grill and Rodin need two different ones, Secretary none", voice)
+	}
+}
+
+// A /metrics scrape reads memory only: with the database gone the gauges answer what the last
+// refresh computed, at once.
+func TestGaugesReadMemory(t *testing.T) {
+	e := newEnvOpts(t, ttsOptions(t))
+	r := newTurnRoom(t, e)
+	_, closeRoom := e.openStream(t, "/api/rooms/"+r.room+"/events?tab=alice-1", r.alice.p.Token, "")
+	defer closeRoom()
+	e.podBeats(t)
+	e.srv.refreshGauges()
+	if err := e.st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := e.srv.TTSStats()
+	if n := e.srv.TTSDemand(); n != 1 || !st.PodUp {
+		t.Fatalf("demand %d, pod up %v; want the last refresh's 1, true", n, st.PodUp)
+	}
+}
+
+// 013-AC34: a stream that ends releases its lease, so the next line gets the cold budget at once;
+// a lease another stream renewed since stays.
+func TestTTSStreamReleasesLease(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	e := newEnvLog(t, ttsOptions(t), zap.New(core))
+	room := e.createRoom(t, "R").ID
+	e.podBeats(t)
+	queued := func() int {
+		t.Helper()
+		seq := e.queueLine(t, room, defaultTTSTimeouts.QueueS)
+		ls := e.takeLine(t, seq-1)
+		if len(ls) == 0 || ls[0].Seq != seq {
+			t.Fatalf("line %d not handed out: %+v", seq, ls)
+		}
+		return ls[0].QueueS
+	}
+	ch, stop := e.openStream(t, "/api/tts/events", ttsToken, "")
+	nextEvent(t, ch, "rooms")
+	if got := queued(); got != defaultTTSTimeouts.QueueS {
+		t.Fatalf("with a stream: queue_s %d", got)
+	}
+	stop()
+	// The release runs as the stream returns, before it logs.
+	waitFor(t, func() bool { return logs.FilterMessage("tts_disconnected").Len() == 1 })
+	e.srv.tts.forget()
+	if got := queued(); got != coldQueueS {
+		t.Fatalf("after the stream ended: queue_s %d, want %d", got, coldQueueS)
+	}
+	// Another stream's later renewal is not this one's to release.
+	if err := e.st.RenewTTSStream(t.Context(), time.Now().Add(time.Hour).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.ReleaseTTSStream(t.Context(), time.Now().Add(ttsLease).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := e.st.TTSPodState(t.Context()); err != nil || p.StreamUntilMS == 0 {
+		t.Fatalf("a later lease released: %+v %v", p, err)
 	}
 }

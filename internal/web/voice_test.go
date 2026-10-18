@@ -319,6 +319,7 @@ func TestSTTHeartbeatState(t *testing.T) {
 	var clock atomic.Int64
 	clock.Store(time.Now().UnixNano())
 	e.srv.now = func() time.Time { return time.Unix(0, clock.Load()) }
+	e.srv.lease = e.srv.now
 	room := e.createRoom(t, "R")
 	p := e.join(t, e.createInvite(t, room.ID).Token, "A")
 	ev := e.openEvents(t, room.ID, p.Token, "")
@@ -351,6 +352,7 @@ func TestSTTHeartbeatState(t *testing.T) {
 	expect("worker up, not in the room", sttState{Available: true})
 	beat(room.ID)
 	expect("worker in the room", sttState{Available: true, Listening: true})
+	e.srv.refreshGauges()
 	if n := e.srv.STTWorkers(); n != 1 {
 		t.Fatalf("workers %d", n)
 	}
@@ -362,6 +364,7 @@ func TestSTTHeartbeatState(t *testing.T) {
 	// No heartbeat: the workers are gone once sttTimeout passes.
 	clock.Add(int64(sttTimeout + time.Second))
 	expect("workers gone", sttState{})
+	e.srv.refreshGauges()
 	if n := e.srv.STTWorkers(); n != 0 {
 		t.Fatalf("workers after timeout %d", n)
 	}

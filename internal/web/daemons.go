@@ -3,20 +3,17 @@ package web
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math/big"
 	"net/http"
-	"slices"
-	"sort"
-	"sync"
 	"time"
 
 	"go.uber.org/zap"
 
+	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/turn"
 )
@@ -29,33 +26,8 @@ const (
 	maxReason          = 200
 )
 
-// pairing is a daemon's request to pair, waiting for a participant's answer. Kept in memory: a
-// restart only makes the daemon ask again.
-type pairing struct {
-	id, room, code string
-	secretHash     string
-	expires        time.Time
-	// token is set on approval and handed to the daemon once.
-	token  string
-	denied bool
-}
-
-type pairings struct {
-	mu sync.Mutex
-	m  map[string]*pairing
-}
-
-// sweepLocked drops expired requests.
-func (ps *pairings) sweepLocked(now time.Time) {
-	for id, p := range ps.m {
-		if now.After(p.expires) {
-			delete(ps.m, id)
-		}
-	}
-}
-
-// presence is a connected daemon as the room sees it.
-type presence struct {
+// liveDaemon is a daemon with a stream open on any pod, as the room sees it.
+type liveDaemon struct {
 	ParticipantID int64 `json:"participant_id"`
 	CanHost       bool  `json:"can_host"`
 	// Reason says why the daemon cannot host (Docker missing, credentials unreadable).
@@ -66,28 +38,34 @@ type presence struct {
 	// Connectors are the claude.ai connectors its host turned on for the room (014-AC19).
 	Connectors []roomConnector `json:"connectors,omitempty"`
 	room       string
-	conns      int
 	id         int64
 	// since is when the current run of connections started: the earliest eligible one hosts.
 	since time.Time
 }
 
-type presences struct {
-	mu sync.Mutex
-	m  map[int64]*presence // by daemon id
-}
+// daemonLease is how long a daemon connection counts without a renewal: a pod gone without
+// closing its streams leaves rows that lapse. Each heartbeat renews it.
+var daemonLease = time.Minute
 
-// connectedDaemons lists the room's daemons with an open stream, by participant.
-func (s *Server) connectedDaemons(room string) []presence {
-	s.presence.mu.Lock()
-	defer s.presence.mu.Unlock()
-	out := []presence{}
-	for _, p := range s.presence.m {
-		if p.room == room && p.conns > 0 {
-			out = append(out, *p)
-		}
+// liveDaemons lists the daemons of room, every room for "", with a connection open on any pod.
+func (s *Server) liveDaemons(room string) []liveDaemon {
+	ctx, cancel := context.WithTimeout(context.Background(), sharedTimeout)
+	defer cancel()
+	ds, err := s.bus.Store.LiveDaemons(ctx, room, s.lease().UnixMilli())
+	if err != nil {
+		s.log.Warn("live_daemons_read_failed", zap.String("room", room), zap.Error(err))
+		return []liveDaemon{}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ParticipantID < out[j].ParticipantID })
+	out := make([]liveDaemon, len(ds))
+	for i, d := range ds {
+		var conns []roomConnector
+		_ = json.Unmarshal([]byte(d.Connectors), &conns) // written by daemonStatus from a clean slice
+		if len(conns) == 0 {
+			conns = nil
+		}
+		out[i] = liveDaemon{ParticipantID: d.ParticipantID, CanHost: d.CanHost, Reason: d.Reason, Version: d.Version, Egress: d.Egress,
+			Connectors: conns, room: d.RoomID, id: d.ID, since: d.Since}
+	}
 	return out
 }
 
@@ -115,73 +93,60 @@ func (s *Server) createPairing(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "create_pairing_failed", err)
 		return
 	}
+	// The secret only answers the poll, which mints the daemon's token: a leaked secret is no token.
 	secret := NewToken()
-	p := &pairing{id: NewToken(), room: room, code: pairCode(), secretHash: HashToken(secret), expires: time.Now().Add(pairingTTL)}
-	s.pairings.mu.Lock()
-	s.pairings.sweepLocked(time.Now())
-	inRoom := 0
-	for _, q := range s.pairings.m {
-		if q.room == room {
-			inRoom++
-		}
+	now := s.lease()
+	p := &store.Pairing{ID: NewToken(), RoomID: room, Code: pairCode(), SecretHash: HashToken(secret), ExpiresAt: now.Add(pairingTTL)}
+	ok, err := s.bus.Store.CreatePairing(r.Context(), p, maxPairingsPerRoom, maxPairings, now.UnixMilli())
+	if err != nil {
+		s.serverError(w, "create_pairing_failed", err)
+		return
 	}
-	if inRoom >= maxPairingsPerRoom || len(s.pairings.m) >= maxPairings {
-		s.pairings.mu.Unlock()
+	if !ok {
 		httpError(w, http.StatusTooManyRequests, "too many pending pairing requests, retry in a few minutes")
 		return
 	}
-	s.pairings.m[p.id] = p
-	s.pairings.mu.Unlock()
 	s.log.Info("pairing_requested", zap.String("room", room))
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"id": p.id, "secret": secret, "code": p.code, "expires_at": p.expires.UTC(),
-		"approve_url": s.baseURL + "/r/" + room + "?pair=" + p.id,
+		"id": p.ID, "secret": secret, "code": p.Code, "expires_at": p.ExpiresAt.UTC(),
+		"approve_url": s.baseURL + "/r/" + room + "?pair=" + p.ID,
 	})
 }
 
 // pollPairing tells the daemon holding the request's secret whether it was answered. On approval
-// it hands over the daemon token, once.
+// it pairs the daemon and hands it its token, once.
 func (s *Server) pollPairing(w http.ResponseWriter, r *http.Request) {
 	tok := bearer(r)
-	s.pairings.mu.Lock()
-	defer s.pairings.mu.Unlock()
-	s.pairings.sweepLocked(time.Now())
-	p := s.pairings.m[r.PathValue("id")]
-	if p == nil || subtle.ConstantTimeCompare([]byte(HashToken(tok)), []byte(p.secretHash)) != 1 {
-		httpError(w, http.StatusNotFound, "no such pairing request, or it expired")
-		return
-	}
+	token := NewToken()
+	status, d, err := s.bus.Store.PollPairing(r.Context(), r.PathValue("id"), HashToken(tok), HashToken(token), s.lease().UnixMilli())
 	switch {
-	case p.token != "":
-		delete(s.pairings.m, p.id)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "approved", "token": p.token})
-	case p.denied:
-		delete(s.pairings.m, p.id)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "denied"})
+	case errors.Is(err, store.ErrNotFound):
+		httpError(w, http.StatusNotFound, "no such pairing request, or it expired")
+	case err != nil:
+		s.serverError(w, "poll_pairing_failed", err)
+	case status == "approved":
+		// The replaced daemon can no longer post its result.
+		s.failDaemonTurn(r.Context(), d, "the host daemon was paired again")
+		// Re-pairing replaced the previous daemon's token: close its stream.
+		s.bus.Notify(d.RoomID)
+		s.log.Info("daemon_paired", zap.String("room", d.RoomID), zap.Int64("participant", d.ParticipantID), zap.Int64("daemon", d.ID))
+		writeJSON(w, http.StatusOK, map[string]string{"status": "approved", "token": token})
 	default:
-		writeJSON(w, http.StatusOK, map[string]string{"status": "pending"})
+		writeJSON(w, http.StatusOK, map[string]string{"status": status})
 	}
-}
-
-// pendingPairing returns the room's unanswered request id; nil if there is none.
-func (s *Server) pendingPairing(room, id string) *pairing {
-	s.pairings.sweepLocked(time.Now())
-	p := s.pairings.m[id]
-	if p == nil || p.room != room || p.token != "" || p.denied {
-		return nil
-	}
-	return p
 }
 
 func (s *Server) getPairing(w http.ResponseWriter, r *http.Request, sess session) {
-	s.pairings.mu.Lock()
-	defer s.pairings.mu.Unlock()
-	p := s.pendingPairing(sess.p.RoomID, r.PathValue("id"))
-	if p == nil {
+	p, err := s.bus.Store.PendingPairing(r.Context(), sess.p.RoomID, r.PathValue("id"), s.lease().UnixMilli())
+	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "this pairing request expired or was already answered")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": p.id, "code": p.code, "expires_at": p.expires.UTC()})
+	if err != nil {
+		s.serverError(w, "get_pairing_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": p.ID, "code": p.Code, "expires_at": p.ExpiresAt.UTC()})
 }
 
 // answerPairing pairs the daemon to the participant answering, or denies it.
@@ -192,32 +157,30 @@ func (s *Server) answerPairing(w http.ResponseWriter, r *http.Request, sess sess
 	if !decode(w, r, &req) {
 		return
 	}
-	s.pairings.mu.Lock()
-	defer s.pairings.mu.Unlock()
-	p := s.pendingPairing(sess.p.RoomID, r.PathValue("id"))
-	if p == nil {
-		httpError(w, http.StatusNotFound, "this pairing request expired or was already answered")
-		return
-	}
+	room, id, now := sess.p.RoomID, r.PathValue("id"), s.lease().UnixMilli()
 	if !req.Approve {
-		p.denied = true
-		s.log.Info("pairing_denied", zap.String("room", p.room), zap.Int64("participant", sess.p.ID))
+		if err := s.bus.Store.DenyPairing(r.Context(), room, id, now); errors.Is(err, store.ErrNotFound) {
+			httpError(w, http.StatusNotFound, "this pairing request expired or was already answered")
+			return
+		} else if err != nil {
+			s.serverError(w, "deny_pairing_failed", err)
+			return
+		}
+		s.log.Info("pairing_denied", zap.String("room", room), zap.Int64("participant", sess.p.ID))
 		writeJSON(w, http.StatusOK, map[string]string{"status": "denied"})
 		return
 	}
-	tok := NewToken()
-	d, err := s.bus.Store.PairDaemon(r.Context(), sess.p.RoomID, sess.p.ID, HashToken(tok))
+	err := s.bus.Store.ApprovePairing(r.Context(), room, id, sess.p.ID, now)
+	if errors.Is(err, store.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "this pairing request expired or was already answered")
+		return
+	}
 	if err != nil {
 		s.serverError(w, "pair_daemon_failed", err)
 		return
 	}
-	p.token = tok
-	// The replaced daemon can no longer post its result.
-	s.failDaemonTurn(r.Context(), d, "the host daemon was paired again")
-	// Re-pairing replaced the previous daemon's token: close its stream.
-	s.bus.Notify(p.room)
-	s.log.Info("daemon_paired", zap.String("room", p.room), zap.Int64("participant", sess.p.ID), zap.Int64("daemon", d.ID))
-	writeJSON(w, http.StatusOK, map[string]any{"status": "approved", "daemon": d})
+	s.log.Info("pairing_approved", zap.String("room", room), zap.Int64("participant", sess.p.ID))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "approved"})
 }
 
 // daemonAuth authenticates a paired daemon by its bearer token, for its own room only.
@@ -277,17 +240,16 @@ func (s *Server) daemonStatus(w http.ResponseWriter, r *http.Request, d *store.D
 	}
 	reason, _ := cleanText(truncate(req.Reason, maxReason), maxReason, false)
 	version, _ := cleanText(truncate(req.Version, 40), 40, false)
-	s.presence.mu.Lock()
-	p := s.presence.m[d.ID]
-	if p == nil {
-		p = &presence{}
-		s.presence.m[d.ID] = p
+	conns := "[]"
+	if c := cleanConnectors(req.Connectors); len(c) > 0 {
+		b, _ := json.Marshal(c)
+		conns = string(b)
 	}
-	conns := cleanConnectors(req.Connectors)
-	changed := p.CanHost != req.CanHost || p.Reason != reason || p.Egress != req.Egress || !slices.Equal(p.Connectors, conns)
-	p.room, p.ParticipantID, p.id = d.RoomID, d.ParticipantID, d.ID
-	p.CanHost, p.Reason, p.Version, p.Egress, p.Connectors = req.CanHost, reason, version, req.Egress, conns
-	s.presence.mu.Unlock()
+	changed, err := s.bus.Store.SetDaemonStatus(r.Context(), d.ID, store.DaemonStatus{CanHost: req.CanHost, Reason: reason, Version: version, Egress: req.Egress, Connectors: conns})
+	if err != nil {
+		s.serverError(w, "daemon_status_failed", err)
+		return
+	}
 	switch {
 	case changed:
 		s.agentChanged(r.Context(), d.RoomID)
@@ -306,9 +268,10 @@ func (s *Server) removeDaemon(w http.ResponseWriter, r *http.Request, d *store.D
 	ctx := r.Context()
 	// Out of the room's daemons before anything else: the drain that failing the turn runs must not
 	// hand the next queued turn to this daemon, whose row goes next.
-	s.presence.mu.Lock()
-	delete(s.presence.m, d.ID)
-	s.presence.mu.Unlock()
+	if err := s.bus.Store.DropDaemonConnections(ctx, d.ID); err != nil {
+		s.serverError(w, "remove_daemon_failed", err)
+		return
+	}
 	// Then the turns: the delete sets their daemon_id to NULL, and failDaemonTurn finds them by it.
 	s.failDaemonTurn(ctx, d, "the AI host removed this room from their computer")
 	if err := s.bus.Store.RemoveDaemon(ctx, d.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -319,6 +282,21 @@ func (s *Server) removeDaemon(w http.ResponseWriter, r *http.Request, d *store.D
 	// Wakes the daemon's stream, which then finds its token gone, and the room's.
 	s.agentChanged(ctx, d.RoomID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// daemonGone runs once daemon d holds no live connection on any pod: its running turn fails and
+// the room elects its host again.
+func (s *Server) daemonGone(ctx context.Context, d *store.Daemon) {
+	// A re-pair's drain may have handed this id a turn, so fail always; an ended seat fails as its
+	// cleanup does, whichever of the two runs first (016-AC9).
+	why := "the host's daemon disconnected"
+	if _, err := s.bus.Store.RoomParticipant(ctx, d.RoomID, d.ParticipantID); errors.Is(err, store.ErrNotFound) {
+		why = whyHostLeft
+	} else if err != nil {
+		s.log.Error("participant_lookup_failed", zap.String("room", d.RoomID), zap.Error(err))
+	}
+	s.failDaemonTurn(ctx, d, why)
+	s.agentChanged(ctx, d.RoomID)
 }
 
 func truncate(s string, n int) string {
@@ -336,41 +314,27 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 		httpError(w, http.StatusInternalServerError, "streaming unsupported")
 		return
 	}
-	s.presence.mu.Lock()
-	p := s.presence.m[d.ID]
-	if p == nil {
-		p = &presence{}
-		s.presence.m[d.ID] = p
+	// One row per stream: the daemon is gone only once no pod holds a live one (017-AC12).
+	conn, opened := NewToken(), s.lease()
+	renew := func() error {
+		return s.bus.Store.DaemonConnected(r.Context(), conn, d, s.bus.Pod(), opened.UnixMilli(), s.lease().Add(daemonLease).UnixMilli())
 	}
-	p.room, p.ParticipantID, p.id = d.RoomID, d.ParticipantID, d.ID
-	if p.conns++; p.conns == 1 {
-		p.since = time.Now()
+	if err := renew(); err != nil {
+		s.serverError(w, "daemon_connect_failed", err)
+		return
 	}
-	s.presence.mu.Unlock()
 	s.log.Info("daemon_connected", zap.String("room", d.RoomID), zap.Int64("daemon", d.ID))
 	s.agentChanged(r.Context(), d.RoomID)
 	defer func() {
-		s.presence.mu.Lock()
-		gone := false
-		if p.conns--; p.conns == 0 {
-			delete(s.presence.m, d.ID)
-			gone = true
+		// The request context is done: the cleanup must still reach the store.
+		ctx := context.WithoutCancel(r.Context())
+		gone, err := s.bus.Store.DaemonDisconnected(ctx, conn, d.ID, s.lease().UnixMilli())
+		if err != nil {
+			s.log.Error("daemon_disconnect_failed", zap.String("room", d.RoomID), zap.Int64("daemon", d.ID), zap.Error(err))
 		}
-		s.presence.mu.Unlock()
 		s.log.Info("daemon_disconnected", zap.String("room", d.RoomID), zap.Int64("daemon", d.ID))
 		if gone {
-			// The request context is done: the cleanup must still reach the store.
-			ctx := context.WithoutCancel(r.Context())
-			// A re-pair's drain may have handed this id a turn, so fail always; an ended seat fails as
-			// its cleanup does, whichever of the two runs first (016-AC9).
-			why := "the host's daemon disconnected"
-			if _, err := s.bus.Store.RoomParticipant(ctx, d.RoomID, d.ParticipantID); errors.Is(err, store.ErrNotFound) {
-				why = whyHostLeft
-			} else if err != nil {
-				s.log.Error("participant_lookup_failed", zap.String("room", d.RoomID), zap.Error(err))
-			}
-			s.failDaemonTurn(ctx, d, why)
-			s.agentChanged(ctx, d.RoomID)
+			s.daemonGone(ctx, d)
 		}
 	}()
 
@@ -563,7 +527,8 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 		case <-tick.C:
 			// The bus drops a signal when this stream's buffer is full of other rooms' ones: the
 			// heartbeat re-reads the room, so a turn, a stop or an inspection is at most that late.
-			if !alive() || !sendTurn() || !sendRoom() || !sendInspect() || !sendPlugins() || !sendEgress() {
+			// A failed renewal is a removed daemon, its row gone: the stream ends.
+			if !alive() || renew() != nil || !sendTurn() || !sendRoom() || !sendInspect() || !sendPlugins() || !sendEgress() {
 				return
 			}
 			if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
@@ -571,7 +536,7 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 			}
 			flusher.Flush()
 		case changed := <-live:
-			if changed == d.RoomID && (!alive() || !sendTurn() || !sendRoom() || !sendInspect() || !sendPlugins() || !sendEgress()) {
+			if (changed == d.RoomID || changed == bus.All) && (!alive() || !sendTurn() || !sendRoom() || !sendInspect() || !sendPlugins() || !sendEgress()) {
 				return
 			}
 		}

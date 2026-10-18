@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -95,8 +96,12 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, sess session)
 		s.serverError(w, "start_turn_failed", err)
 		return
 	}
-	s.turnMu.Lock()
-	defer s.turnMu.Unlock()
+	unlock, err := s.lockTurns(ctx, room.ID)
+	if err != nil {
+		s.serverError(w, "start_turn_failed", err)
+		return
+	}
+	defer unlock()
 	busy, err := s.roomBusy(ctx, room, persona.ID)
 	if err != nil {
 		s.serverError(w, "start_turn_failed", err)
@@ -182,9 +187,43 @@ func (s *Server) roomBusy(ctx context.Context, room *store.Room, persona int64) 
 		slices.ContainsFunc(q, func(t store.QueuedTurn) bool { return t.PersonaID == persona }), nil
 }
 
+// lockTurns takes turnMu and the room's turn lock, its counterpart across pods; unlock frees both.
+// The caller holds no write transaction. turnMu is never held waiting for the room lock, which
+// would stall every room of this pod behind one another pod holds: under turnMu the lock is only
+// tried, and a busy one is waited for outside it, behind the room's guard in turnWaits, so the pod
+// pins one connection per room waiting, not one per press. turnWait bounds the whole wait, the
+// guard's included, so a queue of waiters never adds up their timeouts.
+func (s *Server) lockTurns(ctx context.Context, room string) (unlock func(), err error) {
+	ctx, cancel := context.WithTimeout(ctx, s.turnWait)
+	defer cancel()
+	s.turnMu.Lock()
+	release, ok, err := s.bus.Store.LockRoom(ctx, store.LockTurns, room, true)
+	if err != nil || !ok {
+		s.turnMu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		guard, err := s.turnWaits.lock(ctx, room)
+		if err != nil {
+			return nil, err
+		}
+		locked, _, err := s.bus.Store.LockRoom(ctx, store.LockTurns, room, false)
+		if err != nil {
+			guard()
+			return nil, err
+		}
+		release = func() { locked(); guard() }
+		s.turnMu.Lock()
+	}
+	return func() {
+		release()
+		s.turnMu.Unlock()
+	}, nil
+}
+
 // launch starts a turn of persona on host's daemon, as q asks: pressed by its participant, fresh,
-// the re-run of a rejected turn, or a step of a handoff. The caller holds turnMu.
-func (s *Server) launch(ctx context.Context, room *store.Room, persona *store.RoomPersona, q *store.QueuedTurn, host *presence) (*store.Turn, error) {
+// the re-run of a rejected turn, or a step of a handoff. The caller holds turnMu and the turn lock.
+func (s *Server) launch(ctx context.Context, room *store.Room, persona *store.RoomPersona, q *store.QueuedTurn, host *liveDaemon) (*store.Turn, error) {
 	t, err := s.prepareTurn(ctx, room, persona, q)
 	if err != nil {
 		return nil, err
@@ -228,8 +267,12 @@ func (s *Server) backstop(room string, id int64, after time.Duration) {
 func (s *Server) drain(ctx context.Context, roomID string) {
 	// A caller's request may end right after it: the queue must still move.
 	ctx = context.WithoutCancel(ctx)
-	s.turnMu.Lock()
-	defer s.turnMu.Unlock()
+	unlock, err := s.lockTurns(ctx, roomID)
+	if err != nil {
+		s.log.Error("dequeue_failed", zap.String("room", roomID), zap.Error(err))
+		return
+	}
+	defer unlock()
 	room, err := s.bus.Store.Room(ctx, roomID)
 	if err != nil {
 		return
@@ -921,4 +964,46 @@ func knownOr(v string, known []string) string {
 		return v
 	}
 	return ""
+}
+
+// roomGuards is a one-slot semaphore per room, kept while someone holds or waits for it.
+type roomGuards struct {
+	mu sync.Mutex
+	m  map[string]*roomGuard
+}
+
+type roomGuard struct {
+	slot chan struct{}
+	// n counts the holder and the waiters; guarded by roomGuards.mu.
+	n int
+}
+
+// lock takes room's guard, or fails once ctx ends; unlock frees it. The room is forgotten once
+// nobody holds or waits for it.
+func (g *roomGuards) lock(ctx context.Context, room string) (unlock func(), err error) {
+	g.mu.Lock()
+	if g.m == nil {
+		g.m = map[string]*roomGuard{}
+	}
+	e := g.m[room]
+	if e == nil {
+		e = &roomGuard{slot: make(chan struct{}, 1)}
+		g.m[room] = e
+	}
+	e.n++
+	g.mu.Unlock()
+	leave := func() {
+		g.mu.Lock()
+		if e.n--; e.n == 0 {
+			delete(g.m, room)
+		}
+		g.mu.Unlock()
+	}
+	select {
+	case e.slot <- struct{}{}:
+		return func() { <-e.slot; leave() }, nil
+	case <-ctx.Done():
+		leave()
+		return nil, fmt.Errorf("room lock: %w", ctx.Err())
+	}
 }

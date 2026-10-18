@@ -1,23 +1,24 @@
 package web
 
 // Personas speak in the call (spec 013): the lines the tts pod says, handed over on an event
-// stream, the rooms its bots join, and the states it reports back. In memory: a spoken line may be
-// lost on a restart, the chat keeps its text.
+// stream, the rooms its bots join, and the states it reports back. Shared by every server through
+// the store (017 I18 to I21).
 
 import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
 
+	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/voices"
 )
@@ -39,6 +40,14 @@ const (
 	// coldQueueS is how long a line queued with no pod up (streaming and heartbeating) waits for
 	// one: scaling from zero took 77 s on the lab (013-AC34).
 	coldQueueS = 120
+	// ttsLease is how long an open stream counts as the TTS service's after its last renewal, every
+	// ttsRenew.
+	ttsLease = 15 * time.Second
+	ttsRenew = 5 * time.Second
+	// ttsWake and lexiconWake are the bus ids that wake TTS streams: a line queued, the lexicon
+	// changed, on any server.
+	ttsWake     = ":tts"
+	lexiconWake = ":lexicon"
 )
 
 // TTSStates are the states the pod reports per persona; TTSDropReasons why it dropped a line.
@@ -71,7 +80,6 @@ type ttsLine struct {
 	Text      string  `json:"text"`
 	ttsTimeouts
 	QueuedAt time.Time `json:"queued_at"`
-	sent     bool
 }
 
 // ttsState is what the pod reports for one persona of a room (013-AC14).
@@ -82,141 +90,58 @@ type ttsState struct {
 	Reason    string `json:"reason,omitempty"`
 }
 
-// ttsHub holds the lines waiting for the pod and the pod's last heartbeat.
+// ttsHub caches the TTS service's row for the room streams and counts this server's voice lines.
+// The lines, the heartbeat and the lexicon version live in the store, shared by every pod.
 type ttsHub struct {
-	mu sync.Mutex
-	// seq starts from the clock, so a pod resuming with Last-Event-ID after a server restart asks
-	// for lines below every new one instead of skipping them.
-	seq   int64
-	lines []*ttsLine
-	// wake is closed and replaced when a line is added or the lexicon changes.
-	wake chan struct{}
-	// lexicon counts the lexicon's changes: a stream sends it again when it moved (013-AC31).
-	lexicon int64
-	streams int
-	beatAt  time.Time
-	pod     string
-	rooms   []string
-	bots    []string
-	states  []ttsState
-	// queued and noService count lines queued, and lines that expired before any pod took them.
+	st *store.Store
+	// queued and noService count lines queued here, and lines this server dropped before any TTS
+	// service took them.
 	queued, noService atomic.Int64
-	// voiceMu makes picking and storing default voices one step: two personas picked at once from
-	// two snapshots would get the same voice (013-AC16).
-	voiceMu sync.Mutex
+	row               podCache[ttsRow]
 }
 
-func newTTSHub(now time.Time) *ttsHub {
-	return &ttsHub{seq: now.UnixMicro(), wake: make(chan struct{})}
+// ttsRow is the TTS service's row with its states decoded.
+type ttsRow struct {
+	pod    store.TTSPod
+	states []ttsState
 }
 
-// sweep drops the lines past their queue budget; one no pod took counts as no_service.
-// The caller holds the lock.
-func (h *ttsHub) sweep(now time.Time) {
-	h.lines = slices.DeleteFunc(h.lines, func(l *ttsLine) bool {
-		if now.Sub(l.QueuedAt) <= time.Duration(l.QueueS)*time.Second {
-			return false
+func newTTSHub(st *store.Store) *ttsHub { return &ttsHub{st: st} }
+
+// forget drops the cached row after a write here, so this pod reads its own write.
+func (h *ttsHub) forget() { h.row.drop("") }
+
+// beating reports a TTS service heartbeat within ttsLapse of now.
+func beating(p store.TTSPod, now time.Time) bool {
+	return p.BeatAtMS > 0 && now.UnixMilli()-p.BeatAtMS <= ttsLapse.Milliseconds()
+}
+
+// ttsPod is the TTS service's row, the cached one when the store fails.
+func (s *Server) ttsPod() (store.TTSPod, []ttsState) {
+	r := s.tts.row.get("", func() (ttsRow, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), sharedTimeout)
+		defer cancel()
+		r, err := s.ttsRow(ctx)
+		if err != nil {
+			s.log.Warn("tts_pod_read_failed", zap.Error(err))
 		}
-		if !l.sent {
-			h.noService.Add(1)
-		}
-		return true
+		return r, err
 	})
+	return r.pod, r.states
 }
 
-func (h *ttsHub) add(l ttsLine, now time.Time) int64 {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.sweep(now)
-	h.seq++
-	l.Seq = h.seq
-	if h.streams == 0 || !h.beating(now) {
-		// The pod is scaling from zero, or away: the line waits for it, longer than behind speech. A
-		// stream can outlive its pod (no write deadline), its heartbeat cannot.
-		l.QueueS = max(l.QueueS, coldQueueS)
+func (s *Server) ttsRow(ctx context.Context) (ttsRow, error) {
+	p, err := s.tts.st.TTSPodState(ctx)
+	if err != nil {
+		return ttsRow{}, err
 	}
-	h.lines = append(h.lines, &l)
-	if n := len(h.lines) - maxTTSLines; n > 0 {
-		for _, old := range h.lines[:n] {
-			if !old.sent {
-				h.noService.Add(1)
-			}
-		}
-		h.lines = slices.Delete(h.lines, 0, n)
-	}
-	h.queued.Add(1)
-	close(h.wake)
-	h.wake = make(chan struct{})
-	return l.Seq
-}
-
-// lexiconChanged has every stream send the lexicon again.
-func (h *ttsHub) lexiconChanged() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.lexicon++
-	close(h.wake)
-	h.wake = make(chan struct{})
-}
-
-// lexiconCount is the number of lexicon changes so far.
-func (h *ttsHub) lexiconCount() int64 {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.lexicon
-}
-
-// next returns the lines after seq, marked sent, and the channel closed by the next add or lexicon
-// change.
-func (h *ttsHub) next(seq int64, now time.Time) ([]ttsLine, <-chan struct{}) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.sweep(now)
-	var out []ttsLine
-	for _, l := range h.lines {
-		if l.Seq > seq {
-			l.sent = true
-			out = append(out, *l)
+	r := ttsRow{pod: p}
+	if len(p.States) > 0 {
+		if err := json.Unmarshal(p.States, &r.states); err != nil {
+			return ttsRow{}, fmt.Errorf("tts pod states: %w", err)
 		}
 	}
-	return out, h.wake
-}
-
-// resumePoint is where a pod with no Last-Event-ID starts: after the newest line any pod took. A
-// restarted pod would otherwise say again what its previous run said.
-func (h *ttsHub) resumePoint() int64 {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	last := h.seq
-	if len(h.lines) > 0 {
-		last = h.lines[0].Seq - 1
-	}
-	for _, l := range h.lines {
-		if l.sent {
-			last = l.Seq
-		}
-	}
-	return last
-}
-
-// podUp reports a pod heartbeat within ttsLapse.
-func (h *ttsHub) podUp(now time.Time) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.beating(now)
-}
-
-// beating is podUp for a caller holding the lock.
-func (h *ttsHub) beating(now time.Time) bool {
-	return !h.beatAt.IsZero() && now.Sub(h.beatAt) <= ttsLapse
-}
-
-// noServiceDropped counts the lines that expired before any pod took them.
-func (h *ttsHub) noServiceDropped(now time.Time) int64 {
-	h.mu.Lock()
-	h.sweep(now)
-	h.mu.Unlock()
-	return h.noService.Load()
+	return r, nil
 }
 
 // TTSStats are the room server's own voice counters (013-AC20): lines queued, lines dropped
@@ -226,13 +151,36 @@ type TTSStats struct {
 	PodUp             bool
 }
 
-// TTSStats reports them; false when the server offers no voice.
+// TTSStats reports them, from memory; false when the server offers no voice.
 func (s *Server) TTSStats() (TTSStats, bool) {
 	if s.tts == nil {
 		return TTSStats{}, false
 	}
-	now := s.now()
-	return TTSStats{Queued: s.tts.queued.Load(), NoService: s.tts.noServiceDropped(now), PodUp: s.tts.podUp(now)}, true
+	return TTSStats{Queued: s.tts.queued.Load(), NoService: s.tts.noService.Load(), PodUp: s.gauges.ttsPodUp.Load()}, true
+}
+
+// addTTSLine queues l for the TTS service streaming from any server and wakes its stream.
+func (s *Server) addTTSLine(ctx context.Context, l ttsLine) (int64, error) {
+	now, lease := s.now(), s.lease()
+	if p, _ := s.ttsPod(); !beating(p, lease) || p.StreamUntilMS <= lease.UnixMilli() {
+		// The TTS service is scaling from zero, or away: the line waits for it, longer than behind
+		// speech. A stream can outlive its TTS pod (no write deadline), its heartbeat cannot.
+		l.QueueS = max(l.QueueS, coldQueueS)
+	}
+	seq, dropped, err := s.bus.Store.AddTTSLine(ctx, store.TTSLine{Room: l.Room, PersonaID: l.PersonaID, Persona: l.Persona, Voice: l.Voice,
+		Rate: l.Rate, Text: l.Text, QuietMS: l.QuietMS, ResumeS: l.ResumeS, QueueS: l.QueueS, QueuedAtMS: l.QueuedAt.UnixMilli()}, maxTTSLines, now.UnixMilli())
+	if err != nil {
+		return 0, err
+	}
+	s.tts.noService.Add(dropped)
+	s.tts.queued.Add(1)
+	s.bus.Notify(ttsWake)
+	return seq, nil
+}
+
+func lineOf(l store.TTSLine) ttsLine {
+	return ttsLine{Seq: l.Seq, Room: l.Room, PersonaID: l.PersonaID, Persona: l.Persona, Voice: l.Voice, Rate: l.Rate, Text: l.Text,
+		ttsTimeouts: ttsTimeouts{QuietMS: l.QuietMS, ResumeS: l.ResumeS, QueueS: l.QueueS}, QueuedAt: time.UnixMilli(l.QueuedAtMS)}
 }
 
 func (s *Server) ttsAuth(next http.HandlerFunc) http.Handler {
@@ -250,7 +198,7 @@ func (s *Server) ttsAuth(next http.HandlerFunc) http.Handler {
 // the server offers voice, the persona speaks in the call and a human is in the room's audio; 0
 // otherwise (013-AC1).
 func (s *Server) speakingWords(room *store.Room, persona *store.RoomPersona) int {
-	if s.tts == nil || !persona.Speaks || !s.people.listening(s.now())[room.ID] {
+	if s.tts == nil || !persona.Speaks || !s.people.listening(s.lease())[room.ID] {
 		return 0
 	}
 	return room.Speech.Words
@@ -271,54 +219,29 @@ func (s *Server) withVoices(ctx context.Context, room string, ps []store.RoomPer
 	if !slices.ContainsFunc(ps, func(p store.RoomPersona) bool { return p.Speaks && p.Voice == "" }) {
 		return
 	}
-	s.tts.voiceMu.Lock()
-	defer s.tts.voiceMu.Unlock()
-	// Under the lock, from the store: another call may have stored voices since ps was read.
-	fresh, err := s.bus.Store.RoomPersonas(ctx, room)
+	lang := s.roomLang(ctx, room, fallback)
+	// Picked and stored in one transaction, from the store: another call may have stored voices
+	// since ps was read, on this pod or another.
+	voiceOf, err := s.bus.Store.DefaultVoices(ctx, room, func(used map[string]bool) string {
+		v := voices.Default(lang, used)
+		if used[v] {
+			s.log.Warn("voice_shared", zap.String("room", room), zap.String("voice", v))
+		}
+		return v
+	})
 	if err != nil {
 		s.log.Warn("default_voice_failed", zap.String("room", room), zap.Error(err))
 		return
 	}
-	voiceOf := map[int64]string{}
-	for _, p := range fresh {
-		voiceOf[p.ID] = p.Voice
-	}
 	for i := range ps {
-		if v, ok := voiceOf[ps[i].ID]; ok {
-			ps[i].Voice = v
-		}
-	}
-	lang := ""
-	for i := range ps {
-		p := &ps[i]
-		if !p.Speaks || p.Voice != "" {
+		v, ok := voiceOf[ps[i].ID]
+		if !ok {
 			continue
 		}
-		if lang == "" {
-			lang = s.roomLang(ctx, room, fallback)
+		if ps[i].Voice == "" && v != "" {
+			s.log.Info("voice_defaulted", zap.String("room", room), zap.Int64("persona", ps[i].ID), zap.String("voice", v), zap.String("lang", lang))
 		}
-		used := map[string]bool{}
-		for _, o := range ps {
-			used[o.Voice] = o.Voice != ""
-		}
-		v := voices.Default(lang, used)
-		if used[v] {
-			s.log.Warn("voice_shared", zap.String("room", room), zap.Int64("persona", p.ID), zap.String("voice", v))
-		}
-		stored, err := s.bus.Store.DefaultVoice(ctx, room, p.ID, v)
-		if err != nil {
-			s.log.Warn("default_voice_failed", zap.String("room", room), zap.Int64("persona", p.ID), zap.Error(err))
-			continue
-		}
-		if stored {
-			s.log.Info("voice_defaulted", zap.String("room", room), zap.Int64("persona", p.ID), zap.String("voice", v), zap.String("lang", lang))
-			p.Voice = v
-			continue
-		}
-		// Someone set it meanwhile: theirs stands.
-		if q, err := s.bus.Store.RoomPersona(ctx, room, p.ID); err == nil {
-			p.Voice = q.Voice
-		}
+		ps[i].Voice = v
 	}
 }
 
@@ -329,7 +252,7 @@ func (s *Server) queueSpeech(ctx context.Context, t *store.Turn, spoken, synthes
 		return
 	}
 	// Nobody in the call: nothing to say, and nothing to count as dropped.
-	if !s.people.listening(s.now())[t.RoomID] {
+	if !s.people.listening(s.lease())[t.RoomID] {
 		s.log.Debug("speech_skipped", zap.String("room", t.RoomID), zap.Int64("turn", t.ID), zap.String("reason", "no_listener"))
 		return
 	}
@@ -358,8 +281,12 @@ func (s *Server) queueSpeech(ctx context.Context, t *store.Turn, spoken, synthes
 	}
 	s.withVoices(ctx, t.RoomID, ps, "en")
 	p := ps[i]
-	seq := s.tts.add(ttsLine{Room: t.RoomID, PersonaID: p.ID, Persona: p.Name, Voice: p.Voice, Rate: p.VoiceRate, Text: text,
-		ttsTimeouts: timeoutsOf(room.Speech), QueuedAt: s.now()}, s.now())
+	seq, err := s.addTTSLine(ctx, ttsLine{Room: t.RoomID, PersonaID: p.ID, Persona: p.Name, Voice: p.Voice, Rate: p.VoiceRate, Text: text,
+		ttsTimeouts: timeoutsOf(room.Speech), QueuedAt: s.now()})
+	if err != nil {
+		s.log.Warn("speech_skipped", zap.String("room", t.RoomID), zap.Int64("turn", t.ID), zap.Error(err))
+		return
+	}
 	s.log.Info("speech_queued", zap.String("room", t.RoomID), zap.Int64("turn", t.ID), zap.Int64("seq", seq), zap.String("source", source),
 		zap.Int("words", len(wordRE.FindAllString(text, -1))))
 }
@@ -379,19 +306,15 @@ type ttsRoom struct {
 
 // TTSDemand is the number of rooms with a persona that speaks and a human who has the room open,
 // in the audio or not: the pod starts scaling from zero before anyone joins the call (013-AC34).
-func (s *Server) TTSDemand() int {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// It reads the last refreshGauges.
+func (s *Server) TTSDemand() int { return int(s.gauges.ttsDemand.Load()) }
+
+func (s *Server) ttsDemand() int {
+	ctx, cancel := context.WithTimeout(context.Background(), sharedTimeout)
 	defer cancel()
-	n := 0
-	for room := range s.people.present(s.now()) {
-		ps, err := s.bus.Store.RoomPersonas(ctx, room)
-		if err != nil {
-			s.log.Warn("tts_demand_failed", zap.String("room", room), zap.Error(err))
-			continue
-		}
-		if slices.ContainsFunc(ps, speaking) {
-			n++
-		}
+	n, err := s.bus.Store.SpeakingRooms(ctx, slices.Collect(maps.Keys(s.people.present(s.lease()))))
+	if err != nil {
+		s.log.Warn("tts_demand_read_failed", zap.Error(err))
 	}
 	return n
 }
@@ -401,7 +324,7 @@ func speaking(p store.RoomPersona) bool { return p.Speaks && !p.Pending }
 // ttsRoster lists the rooms with a human in the audio and their speaking personas (013-AC14).
 func (s *Server) ttsRoster(ctx context.Context) []ttsRoom {
 	out := []ttsRoom{}
-	listening := s.people.listening(s.now())
+	listening := s.people.listening(s.lease())
 	rooms := make([]string, 0, len(listening))
 	for r := range listening {
 		rooms = append(rooms, r)
@@ -427,28 +350,45 @@ func (s *Server) ttsRoster(ctx context.Context) []ttsRoom {
 }
 
 // ttsEvents streams to the pod the rooms its bots join and the lines to say, resuming after
-// Last-Event-ID (013-AC14).
+// Last-Event-ID (013-AC14). Lines and the lexicon version come from the store, so any server
+// streams them; the bus wakes the stream when one moves on any server.
 func (s *Server) ttsEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		httpError(w, http.StatusInternalServerError, "streaming unsupported")
 		return
 	}
-	last, err := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64)
+	ctx := r.Context()
+	live, cancel := s.bus.Subscribe(16)
+	defer cancel()
+	resume, top, err := s.bus.Store.TTSCursor(ctx)
 	if err != nil {
-		last = s.tts.resumePoint()
+		s.serverError(w, "tts_cursor_failed", err)
+		return
 	}
-	s.tts.mu.Lock()
-	s.tts.streams++
-	if last > s.tts.seq {
+	last, err := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64)
+	switch {
+	case err != nil:
+		last = resume
+	case last > top:
 		// From a server whose clock ran ahead: every line kept here is new to it.
 		last = 0
 	}
-	s.tts.mu.Unlock()
+	var until int64
+	renew := func() {
+		until = s.lease().Add(ttsLease).UnixMilli()
+		if err := s.bus.Store.RenewTTSStream(ctx, until); err != nil {
+			s.log.Warn("tts_stream_lease_failed", zap.Error(err))
+		}
+		s.tts.forget()
+	}
+	renew()
+	// Lines queued from now on get the cold budget at once, not after the lease runs out.
 	defer func() {
-		s.tts.mu.Lock()
-		s.tts.streams--
-		s.tts.mu.Unlock()
+		if err := s.bus.Store.ReleaseTTSStream(context.WithoutCancel(ctx), until); err != nil {
+			s.log.Warn("tts_stream_lease_failed", zap.Error(err))
+		}
+		s.tts.forget()
 		s.log.Info("tts_disconnected")
 	}()
 	s.log.Info("tts_connected", zap.Int64("after", last))
@@ -457,7 +397,6 @@ func (s *Server) ttsEvents(w http.ResponseWriter, r *http.Request) {
 	h.Set("Cache-Control", "no-cache")
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	ctx := r.Context()
 	sentRooms := ""
 	sendRooms := func() bool {
 		b, _ := json.Marshal(map[string]any{"rooms": s.ttsRoster(ctx)}) // plain values cannot fail to marshal
@@ -468,8 +407,16 @@ func (s *Server) ttsEvents(w http.ResponseWriter, r *http.Request) {
 		_, err := fmt.Fprintf(w, "event: rooms\ndata: %s\n\n", b)
 		return err == nil
 	}
-	sentLexicon := int64(-1)
+	sentLexicon := ""
 	sendLexicon := func() bool {
+		version, err := s.bus.Store.Setting(ctx, store.LexiconVersionKey)
+		if err != nil {
+			s.log.Error("tts_lexicon_failed", zap.Error(err))
+			return false
+		}
+		if version == sentLexicon {
+			return true
+		}
 		ps, err := s.bus.Store.Pronunciations(ctx)
 		if err != nil {
 			s.log.Error("tts_lexicon_failed", zap.Error(err))
@@ -480,26 +427,30 @@ func (s *Server) ttsEvents(w http.ResponseWriter, r *http.Request) {
 			terms[i] = p.Term
 		}
 		b, _ := json.Marshal(map[string]any{"entries": terms}) // plain values cannot fail to marshal
-		_, err = fmt.Fprintf(w, "event: lexicon\ndata: %s\n\n", b)
-		return err == nil
+		if _, err = fmt.Fprintf(w, "event: lexicon\ndata: %s\n\n", b); err != nil {
+			return false
+		}
+		sentLexicon = version
+		return true
 	}
 	tick := time.NewTicker(pollEvery)
 	defer tick.Stop()
+	lease := time.NewTicker(ttsRenew)
+	defer lease.Stop()
 	pinged := time.Now()
 	for {
-		if !sendRooms() {
+		// At connect, then on each change: the TTS service speaks with the seed until it gets the lexicon.
+		// Before the lines, which are marked sent as read.
+		if !sendRooms() || !sendLexicon() {
 			return
 		}
-		// At connect, then on each change: the pod speaks with the seed until it gets this. Before
-		// the lines, which next marks as sent.
-		if lexicon := s.tts.lexiconCount(); lexicon != sentLexicon {
-			if !sendLexicon() {
-				return
-			}
-			sentLexicon = lexicon
+		ls, err := s.bus.Store.TTSLinesAfter(ctx, last, s.now().UnixMilli())
+		if err != nil {
+			s.log.Error("tts_lines_failed", zap.Error(err))
+			return
 		}
-		lines, wake := s.tts.next(last, s.now())
-		for _, l := range lines {
+		for _, sl := range ls {
+			l := lineOf(sl)
 			b, _ := json.Marshal(l) // plain values cannot fail to marshal
 			if _, err := fmt.Fprintf(w, "id: %d\nevent: line\ndata: %s\n\n", l.Seq, b); err != nil {
 				return
@@ -513,11 +464,20 @@ func (s *Server) ttsEvents(w http.ResponseWriter, r *http.Request) {
 			pinged = time.Now()
 		}
 		flusher.Flush()
-		select {
-		case <-ctx.Done():
-			return
-		case <-wake:
-		case <-tick.C:
+	wait:
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case changed := <-live:
+				if changed == ttsWake || changed == lexiconWake || changed == bus.All {
+					break wait
+				}
+			case <-lease.C:
+				renew()
+			case <-tick.C:
+				break wait
+			}
 		}
 	}
 }
@@ -545,27 +505,28 @@ func (s *Server) ttsHeartbeat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.tts.mu.Lock()
-	s.tts.beatAt, s.tts.pod, s.tts.rooms, s.tts.bots, s.tts.states = s.now(), req.Pod, req.Rooms, req.Bots, req.States
-	s.tts.mu.Unlock()
+	states, _ := json.Marshal(req.States) // plain values cannot fail to marshal
+	if err := s.bus.Store.BeatTTSPod(r.Context(), store.TTSPod{Pod: req.Pod, Rooms: req.Rooms, Bots: req.Bots, States: states}, s.lease().UnixMilli()); err != nil {
+		s.serverError(w, "tts_heartbeat_failed", err)
+		return
+	}
+	s.tts.forget()
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // ttsRoomEvent is the room's "tts" event: whether the pod is up, and each persona's state while it
 // is; a pod silent past ttsLapse clears them all (013-AC29).
 func (s *Server) ttsRoomEvent(room string) string {
-	h := s.tts
-	h.mu.Lock()
-	up := h.beating(s.now())
+	p, sts := s.ttsPod()
+	up := beating(p, s.lease())
 	states := map[string]ttsState{}
 	if up {
-		for _, st := range h.states {
+		for _, st := range sts {
 			if st.Room == room && st.State != "idle" {
 				states[strconv.FormatInt(st.PersonaID, 10)] = st
 			}
 		}
 	}
-	h.mu.Unlock()
 	b, _ := json.Marshal(map[string]any{"pod": up, "personas": states}) // plain values cannot fail to marshal
 	return "event: tts\ndata: " + string(b) + "\n\n"
 }

@@ -122,10 +122,11 @@ func (s *Server) lexiconError(w http.ResponseWriter, err error) bool {
 	return true
 }
 
-// lexiconChanged hands the lexicon to the pod for its next line (013-AC31).
+// lexiconChanged wakes the TTS service's stream, on whichever server it is, to send the lexicon
+// before its next line (013-AC31): the store counted the change.
 func (s *Server) lexiconChanged(event string, t voices.Term) {
 	if s.tts != nil {
-		s.tts.lexiconChanged()
+		s.bus.Notify(lexiconWake)
 	}
 	s.log.Info(event, zap.String("term", t.Term), zap.String("style", t.Style))
 }

@@ -551,7 +551,7 @@ func TestPluginFetchSlots(t *testing.T) {
 	take := func(room string, want int) func() {
 		t.Helper()
 		w := httptest.NewRecorder()
-		release, ok := e.srv.fetchSlot(w, room)
+		release, ok := e.srv.fetchSlot(t.Context(), w, room)
 		if ok != (want == 0) || (want != 0 && w.Code != want) {
 			t.Fatalf("%s: ok %v code %d, want %d", room, ok, w.Code, want)
 		}
@@ -565,6 +565,32 @@ func TestPluginFetchSlots(t *testing.T) {
 	take("c", 0)()
 	rb()
 	take("a", 0)()
+}
+
+// A server with every fetch slot taken answers 503 before it touches the room's lock, which another
+// pod holds here: a full server pins no connection per waiting request.
+func TestPluginFetchSlotsServerFirst(t *testing.T) {
+	e := newEnv(t)
+	hold, ok, err := e.st.LockRoom(t.Context(), store.LockPlugin, "c", true)
+	if err != nil || !ok {
+		t.Fatalf("other pod's lock: %v %v", ok, err)
+	}
+	defer hold()
+	for range cap(e.srv.pluginFetches) {
+		e.srv.pluginFetches <- struct{}{}
+	}
+	w := httptest.NewRecorder()
+	if _, ok := e.srv.fetchSlot(t.Context(), w, "c"); ok || w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("full server: ok %v code %d, want 503", ok, w.Code)
+	}
+	<-e.srv.pluginFetches
+	w = httptest.NewRecorder()
+	if _, ok := e.srv.fetchSlot(t.Context(), w, "c"); ok || w.Code != http.StatusConflict {
+		t.Fatalf("room busy: ok %v code %d, want 409", ok, w.Code)
+	}
+	if n := len(e.srv.pluginFetches); n != cap(e.srv.pluginFetches)-1 {
+		t.Fatalf("a refused fetch kept its server slot: %d taken", n)
+	}
 }
 
 // 009-AC7: an error net/http built with the link loses it before a log or an answer.
