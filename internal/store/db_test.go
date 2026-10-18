@@ -107,7 +107,7 @@ func TestWritesTakeTheLock(t *testing.T) {
 		defer tx.Rollback() //nolint:errcheck // nothing written
 		var n int
 		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid()
-			AND objid::bigint = ?`, writeLockKey).Scan(&n); err != nil {
+			AND objid::bigint = ?`, WriteLockKey).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		return n

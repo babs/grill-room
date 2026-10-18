@@ -233,8 +233,9 @@ func Open(dsn string, opts ...Option) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-func boot(ctx context.Context, db *database) error {
-	// Lists sort by name as SQLite did, byte by byte, only under libc's C collation (017-AC6).
+// CheckCollation refuses a database that does not sort as C: lists sort by name as SQLite did,
+// byte by byte, only under libc's C collation (017-AC6). Boot and db copy both call it.
+func CheckCollation(ctx context.Context, db *sql.DB) error {
 	var name, provider, collate, ctype string
 	if err := db.QueryRowContext(ctx, `SELECT datname, datlocprovider::text, datcollate, datctype FROM pg_database WHERE datname = current_database()`).
 		Scan(&name, &provider, &collate, &ctype); err != nil {
@@ -244,6 +245,13 @@ func boot(ctx context.Context, db *database) error {
 	if provider != "c" || !c(collate) || !c(ctype) {
 		return fmt.Errorf("database %q sorts with collation %q, ctype %q of provider %q, the server needs C: CREATE DATABASE %s %s",
 			name, collate, ctype, provider, pgx.Identifier{name}.Sanitize(), CreateDatabaseOptions)
+	}
+	return nil
+}
+
+func boot(ctx context.Context, db *database) error {
+	if err := CheckCollation(ctx, db.db); err != nil {
+		return err
 	}
 	return db.locked(ctx, func(tx *txn) error {
 		if err := migrate(ctx, tx); err != nil {
@@ -274,14 +282,11 @@ func migrate(ctx context.Context, tx *txn) error {
 		return fmt.Errorf("read schema version: %w", err)
 	}
 	if !exists {
-		if _, err := tx.ExecContext(ctx, baseline); err != nil {
-			return fmt.Errorf("create schema: %w", err)
+		if err := CreateBaseline(ctx, tx.tx); err != nil {
+			return err
 		}
 		if err := seedPronunciations(ctx, tx); err != nil {
 			return err
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_version(version) VALUES(?)`, baselineVersion); err != nil {
-			return fmt.Errorf("create schema: %w", err)
 		}
 	}
 	var version int
@@ -299,6 +304,17 @@ func migrate(ctx context.Context, tx *txn) error {
 		if _, err := tx.ExecContext(ctx, `UPDATE schema_version SET version = ?`, v+1); err != nil {
 			return fmt.Errorf("migrate to %d: %w", v+1, err)
 		}
+	}
+	return nil
+}
+
+// CreateBaseline creates the schema at baselineVersion in tx, without boot data: db copy fills it.
+func CreateBaseline(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, baseline); err != nil {
+		return fmt.Errorf("create schema: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO schema_version(version) VALUES($1)`, baselineVersion); err != nil {
+		return fmt.Errorf("create schema: %w", err)
 	}
 	return nil
 }
@@ -1047,6 +1063,16 @@ const tsLayout = "2006-01-02T15:04:05.000000000Z07:00"
 func formatTS(t time.Time) string { return t.UTC().Format(tsLayout) }
 
 func now() string { return formatTS(time.Now()) }
+
+// NormalizeTS rewrites an RFC 3339 timestamp in the stored fixed-width layout; ok is false, and s
+// comes back as is, when s does not parse.
+func NormalizeTS(s string) (string, bool) {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return s, false
+	}
+	return formatTS(t), true
+}
 
 func parseTS(s string) time.Time {
 	t, _ := time.Parse(time.RFC3339Nano, s)

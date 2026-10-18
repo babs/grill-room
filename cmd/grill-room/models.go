@@ -20,7 +20,7 @@ import (
 // optional, and the server's start check then leaves it off.
 func command(args []string, m devicestt.Manifest, client *http.Client) error {
 	if len(args) < 2 || args[0] != "models" || args[1] != "fetch" {
-		return fmt.Errorf("unknown command %q: want no argument to serve, or models fetch [--best-effort] --dir <dir>", args)
+		return fmt.Errorf("unknown command %q: want no argument to serve, models fetch [--best-effort] --dir <dir>, or db copy|verify --from <file> [--to <dsn>]", args)
 	}
 	fs := flag.NewFlagSet("models fetch", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)

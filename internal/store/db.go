@@ -15,8 +15,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// writeLockKey is the pg_advisory_xact_lock every write takes ("grlm").
-const writeLockKey int64 = 0x67726c6d
+// WriteLockKey is the pg_advisory_xact_lock every write takes ("grlm"); db copy takes it too.
+const WriteLockKey int64 = 0x67726c6d
 
 // errWriteOutsideLock refuses a write that would commit without the write lock.
 var errWriteOutsideLock = errors.New("write outside the write lock: run it in withTx")
@@ -99,11 +99,11 @@ func pgArgs(args []any) []any {
 			set(i, n)
 		case string:
 			if !cleanText(v) {
-				set(i, sanitize(v))
+				set(i, Sanitize(v))
 			}
 		case *string:
 			if v != nil && !cleanText(*v) {
-				c := sanitize(*v)
+				c := Sanitize(*v)
 				set(i, &c)
 			}
 		}
@@ -118,9 +118,9 @@ func pgArgs(args []any) []any {
 // JSON-decoded text (\u0000) or an import can carry.
 func cleanText(s string) bool { return strings.IndexByte(s, 0) < 0 && utf8.ValidString(s) }
 
-// sanitize replaces invalid UTF-8 and NUL with U+FFFD, so such a write stores, not fails, and a
+// Sanitize replaces invalid UTF-8 and NUL with U+FFFD, so such a write stores, not fails, and a
 // lookup of "r1\x00" does not find "r1".
-func sanitize(s string) string {
+func Sanitize(s string) string {
 	return strings.ReplaceAll(strings.ToValidUTF8(s, "\uFFFD"), "\x00", "\uFFFD")
 }
 
@@ -154,7 +154,7 @@ func (d *database) BeginTx(ctx context.Context, opts *sql.TxOptions) (*txn, erro
 		return nil, err
 	}
 	t := &txn{tx: tx, writer: d.writer}
-	_, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, writeLockKey)
+	_, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, WriteLockKey)
 	d.waited(start)
 	if err != nil {
 		_ = t.Rollback()
