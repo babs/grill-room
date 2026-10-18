@@ -111,3 +111,30 @@ func TestStarterLibraryAPI(t *testing.T) {
 		t.Fatalf("audit: %+v", log)
 	}
 }
+
+// 002-AC13 006-AC7: every shipped persona, from the template library or a built-in starter, passes
+// the room API's checks unchanged, so the editor can post it back as is.
+func TestShippedPersonasPassRoomChecks(t *testing.T) {
+	e := newEnv(t)
+	r := newTurnRoom(t, e)
+	var ps []store.StarterPersona
+	for _, tp := range e.templates(t, r, r.alice.p.Token) {
+		ps = append(ps, store.StarterPersona{PersonaFields: tp.PersonaFields})
+	}
+	alice := e.signedIn(t, "Alice")
+	for _, st := range alice.starters(t) {
+		if st.Library != store.LibraryBuiltin {
+			continue
+		}
+		code, b := alice.do(t, "GET", "/api/profile/starters/"+strconv.FormatInt(st.ID, 10), nil)
+		if code != http.StatusOK {
+			t.Fatalf("%s: %d %s", st.Title, code, b)
+		}
+		ps = append(ps, decodeJSON[starterResp](t, b).Manifest.Personas...)
+	}
+	for _, p := range ps {
+		if got, err := cleanPersona(p); err != nil || got.PersonaFields != p.PersonaFields {
+			t.Errorf("%s: %v, or the room API changes it", p.Name, err)
+		}
+	}
+}

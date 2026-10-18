@@ -43,7 +43,7 @@ Every new room starts the same way: one Default persona, no agenda, no documents
 ### Content and built-ins
 - [x] **AC6** A starter holds full copies, never references: title, description, default room name, `agenda.md`, fields, personas (name, badge, colour, text, model, effort, triggers, self-call, autocompact, active skills), room skills at a frozen version, documents at one revision (uploads with their original), chain settings (budget, suspended, parallel turns) and the room's words to recognise (STT glossary), carried as data only.
 - [x] **AC7** The built-ins are:
-  - Spec grill: Grill (sonnet / high, on demand) + Secretary (sonnet / medium, every 20 voice lines);
+  - Spec grill: Grill (sonnet / high, on demand) + Secretary (sonnet / medium, every 20 voice lines) + Rodin (sonnet / high, on demand);
   - Retro: Facilitator (sonnet / medium, on demand) + Secretary;
   - Doc review: Reviewer (sonnet / high, on demand, annotates the documents) + Secretary.
 
@@ -156,3 +156,4 @@ Decisions taken in the loop (2026-10-13):
 - Triggers: on demand always, plus one automatic mode among N rounds, N voice lines, T minutes; the timer needs presence and new activity (user, 2026-10-13). One automatic mode per persona and the Secretary's 20 voice lines are routine calls, overturnable.
 - Non-built-in starter skills land pending; the first host approves them under "approve everything", otherwise they activate when it connects (user, 2026-10-13).
 - Starter personas are the room's initial setup, not held for approval; the host's model cap still clamps them (user, 2026-10-13).
+- Spec grill gains Rodin, who asks whether the idea should exist before Grill tests the spec branch by branch. Rodin is also a template in the persona library. Only rooms created from the new version get it (user, 2026-10-18).

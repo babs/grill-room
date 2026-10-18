@@ -504,3 +504,27 @@ func TestTTSRoomEvent(t *testing.T) {
 		t.Errorf("after the lapse: %q", ev)
 	}
 }
+
+// 013-AC16: a room from Spec grill gives its two speaking personas, Grill and Rodin, two different
+// default voices, and none to the silent Secretary.
+func TestSpecGrillVoicesDiffer(t *testing.T) {
+	e := newEnvOpts(t, ttsOptions(t))
+	alice := e.signedIn(t, "Alice")
+	code, b := alice.createFrom(t, map[string]any{"name": "G", "starter": map[string]any{"id": alice.builtin(t, "Spec grill"), "version": 1},
+		"fields": map[string]string{"topic": "Billing"}})
+	if code != http.StatusCreated {
+		t.Fatalf("create: %d %s", code, b)
+	}
+	room := decodeJSON[store.Room](t, b).ID
+	ctx := t.Context()
+	ps, _ := e.st.RoomPersonas(ctx, room)
+	e.srv.withVoices(ctx, room, ps, "en")
+	ps, _ = e.st.RoomPersonas(ctx, room)
+	voice := map[string]string{}
+	for _, p := range ps {
+		voice[p.Name] = p.Voice
+	}
+	if voice["Grill"] == "" || voice["Rodin"] == "" || voice["Grill"] == voice["Rodin"] || voice["Secretary"] != "" {
+		t.Errorf("voices %v: Grill and Rodin need two different ones, Secretary none", voice)
+	}
+}

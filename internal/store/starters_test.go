@@ -151,18 +151,26 @@ func TestBuiltinStarters(t *testing.T) {
 // 006-AC7: the built-ins as decided: their personas, models and triggers, no opus, no skills.
 func TestBuiltinStarterContent(t *testing.T) {
 	want := map[string]string{
-		"spec-grill": "Grill sonnet/high on demand, Secretary sonnet/medium every 20 voice lines",
+		"spec-grill": "Grill sonnet/high on demand, Secretary sonnet/medium every 20 voice lines, Rodin sonnet/high on demand",
 		"retro":      "Facilitator sonnet/medium on demand, Secretary sonnet/medium every 20 voice lines",
 		"doc-review": "Reviewer sonnet/high on demand, Secretary sonnet/medium every 20 voice lines",
 	}
 	for _, b := range builtinStarters {
 		var got []string
+		colours := map[string]bool{}
 		for _, p := range b.m.Personas {
 			trig := "on demand"
-			if p.EveryVoice > 0 {
-				trig = "every 20 voice lines"
+			switch {
+			case p.EveryVoice > 0:
+				trig = fmt.Sprintf("every %d voice lines", p.EveryVoice)
+			case p.EveryN > 0 || p.EveryMinutes > 0:
+				trig = "automatic"
 			}
 			got = append(got, p.Name+" "+p.Model+"/"+p.Effort+" "+trig)
+			if colours[p.Colour] {
+				t.Errorf("%s %s: colour %s taken", b.key, p.Name, p.Colour)
+			}
+			colours[p.Colour] = true
 			if strings.Contains(p.Model, "opus") || len(p.Skills) > 0 || !strings.Contains(p.Text, "language the room speaks") {
 				t.Errorf("%s %s: opus, skills or no room language", b.key, p.Name)
 			}

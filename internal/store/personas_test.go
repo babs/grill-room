@@ -62,22 +62,31 @@ func lastBody(t *testing.T, s *Store, room string) string {
 	return msgs[len(msgs)-1].Body
 }
 
-// 002-AC13 002-AC42: the library ships Default (Grill) and Secretary; a new room starts with Grill,
-// copied from Default's latest version.
+// 002-AC13 002-AC42: the library ships Default (Grill), Secretary and Rodin; a new room starts
+// with Grill, copied from Default's latest version.
 func TestPresetsAndNewRoom(t *testing.T) {
 	s := openTest(t)
 	def := templateByPreset(t, s, PresetDefault)
 	sec := templateByPreset(t, s, "secretary")
+	rod := templateByPreset(t, s, "rodin")
 	if def.Title != "Default" || def.Name != "Grill" || def.Version != 1 || def.Author != presetAuthor || def.Mine {
 		t.Fatalf("default: %+v", def)
 	}
 	if sec.Title != "Secretary" || sec.Name != "Secretary" || strings.Contains(sec.Text, "challenge the") {
 		t.Fatalf("secretary: %+v", sec)
 	}
-	for _, tp := range []Template{def, sec} {
+	if rod.Title != "Rodin" || rod.Name != "Rodin" || rod.Badge != "🗿" || rod.Model != "sonnet" || rod.Effort != "high" || !strings.Contains(rod.Text, "Leave the details to Grill") {
+		t.Fatalf("rodin: %+v", rod)
+	}
+	colours := map[string]string{}
+	for _, tp := range []Template{def, sec, rod} {
 		if !strings.Contains(tp.Text, "language the room speaks") || tp.Badge == "" || len(tp.Colour) != 7 {
 			t.Fatalf("%s: a preset must have a badge, a colour and the room's language rule: %+v", tp.Title, tp)
 		}
+		if o, ok := colours[tp.Colour]; ok {
+			t.Fatalf("%s and %s share the colour %s", o, tp.Title, tp.Colour)
+		}
+		colours[tp.Colour] = tp.Title
 	}
 	_, _, grill := personaRoom(t, s, "a")
 	if grill.TemplateID != def.ID || grill.TemplateVersion != 1 || grill.PersonaFields != def.PersonaFields || grill.UpdateVersion != 0 {
@@ -145,10 +154,11 @@ func TestTemplateLibrary(t *testing.T) {
 		t.Fatalf("version 1 changed: %q %v", v1, err)
 	}
 	ts, err := s.Templates(ctx, alice.ProfileID)
-	if err != nil || len(ts) != 3 || ts[0].Preset != PresetDefault || ts[2].ID != tp.ID || !ts[2].Mine || ts[0].Mine {
+	mine := len(presets)
+	if err != nil || len(ts) != mine+1 || ts[0].Preset != PresetDefault || ts[mine].ID != tp.ID || !ts[mine].Mine || ts[0].Mine {
 		t.Fatalf("library for Alice: %+v %v", ts, err)
 	}
-	if ts, _ := s.Templates(ctx, bob.ProfileID); ts[2].Mine {
+	if ts, _ := s.Templates(ctx, bob.ProfileID); ts[mine].Mine {
 		t.Fatal("Bob sees Alice's template as his")
 	}
 
@@ -189,7 +199,7 @@ func TestTemplateLibrary(t *testing.T) {
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM persona_template_versions WHERE template_id = ?`, again.ID).Scan(&versions); err != nil || versions != 0 {
 		t.Fatalf("versions left: %d %v", versions, err)
 	}
-	if ts, _ := s.Templates(ctx, 0); len(ts) != 2 {
+	if ts, _ := s.Templates(ctx, 0); len(ts) != len(presets) {
 		t.Fatalf("library after the profile went: %+v", ts)
 	}
 	if got, err := s.RoomPersona(ctx, "a", q.ID); err != nil || got.Name != "Critic-2" || got.TemplateID != 0 {

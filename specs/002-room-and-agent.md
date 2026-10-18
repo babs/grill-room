@@ -22,7 +22,7 @@ The sandbox gets Python, uv, Office libraries and common CLI tools. It reaches t
 - Profiles: an anonymous profile created at first join, with a long-lived cookie and a secret recovery link. An optional email magic link binds a profile to an address. A profile holds a display name, a rooms list, personal skills and personal persona templates.
 - Rooms: any member renames, any member creates invites and revokes their own; the admin can do both on every room.
 - Chat: server-rendered, sanitised Markdown. Edit with kept versions, soft delete, correction of your own voice lines, and edits flagged to the agent.
-- Persona template library: shipped presets (Default grill, Secretary) and templates published by profiles, with immutable versions, author, and removal by the admin.
+- Persona template library: shipped presets (Default grill, Secretary, Rodin) and templates published by profiles, with immutable versions, author, and removal by the admin.
 - Room personas: instances of templates with per-room overrides, editable between turns: text, model, effort, triggers, skills, self-call.
 - One Claude session per room persona, all run by the room's host daemon, one turn at a time per room with a queue.
 - Triggers: a button per persona, every N rounds per persona, and `@persona` calls from humans and personas. Self-call is off by default.
@@ -67,7 +67,7 @@ The sandbox gets Python, uv, Office libraries and common CLI tools. It reaches t
 - [x] **AC12** A message edited or deleted after an agent turn has seen it appears in that persona's next prompt as edited (before → after) or deleted.
 
 ### Personas
-- [x] **AC13** The template library ships "Default" (grill) and "Secretary". A profile can publish a template, and each version is immutable with its author. The admin can remove a template.
+- [x] **AC13** The template library ships "Default" (grill), "Secretary" and "Rodin" (user, 2026-10-18). A profile can publish a template, and each version is immutable with its author. The admin can remove a template.
 - [x] **AC14** Any member can add a persona to a room from a template. The room copy keeps its own overrides, and a later template version does not change it. The room is offered the update instead.
 - [x] **AC15** Any member can edit a room persona's text, model, effort, triggers, skills and self-call. A change made during a turn applies to the next turn, and every change is recorded in the chat.
 - [x] **AC16** Each room persona has its own Claude session. Persona A's turn never resumes persona B's session, and a takeover by another host resumes each persona's own session.

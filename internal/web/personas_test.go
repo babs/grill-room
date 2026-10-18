@@ -51,7 +51,7 @@ func TestPersonaAPI(t *testing.T) {
 	alice := r.alice.p.Token
 	bob := e.join(t, e.createInvite(t, r.room).Token, "Bob").Token
 	ts := e.templates(t, r, bob)
-	if len(ts) != 2 || ts[0].Preset != store.PresetDefault || ts[1].Name != "Secretary" {
+	if len(ts) != 3 || ts[0].Preset != store.PresetDefault || ts[1].Name != "Secretary" || ts[2].Name != "Rodin" {
 		t.Fatalf("library: %+v", ts)
 	}
 	// Bob has no button right: adding and editing personas need none.
@@ -137,7 +137,7 @@ func TestPersonaAPI(t *testing.T) {
 	if code, _ := e.do(t, "GET", "/api/templates", bob, nil); code != http.StatusUnauthorized {
 		t.Fatalf("library without the admin token: %d", code)
 	}
-	if code, b := e.do(t, "GET", "/api/templates", e.admin, nil); code != http.StatusOK || len(decodeJSON[[]store.Template](t, b)) != 3 {
+	if code, b := e.do(t, "GET", "/api/templates", e.admin, nil); code != http.StatusOK || len(decodeJSON[[]store.Template](t, b)) != 4 {
 		t.Fatalf("admin library: %d %s", code, b)
 	}
 	for path, want := range map[string]int{

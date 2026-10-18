@@ -68,8 +68,9 @@ func TestCreateRoomFromBuiltin(t *testing.T) {
 	}
 	ctx := t.Context()
 	ps, _ := e.st.RoomPersonas(ctx, room.ID)
-	if len(ps) != 2 || ps[0].Name != "Grill" || ps[0].Effort != "high" || ps[0].EveryVoice != 0 || ps[1].Name != "Secretary" || ps[1].EveryVoice != 20 ||
-		ps[1].NextVoice != 20 || ps[0].TemplateID != 0 || ps[0].Pending {
+	if len(ps) != 3 || ps[0].Name != "Grill" || ps[0].Effort != "high" || ps[0].EveryVoice != 0 || ps[1].Name != "Secretary" || ps[1].EveryVoice != 20 ||
+		ps[1].NextVoice != 20 || ps[0].TemplateID != 0 || ps[0].Pending ||
+		ps[2].Name != "Rodin" || ps[2].Effort != "high" || ps[2].EveryN != 0 || ps[2].EveryVoice != 0 || ps[2].EveryMinutes != 0 {
 		t.Fatalf("personas: %+v", ps)
 	}
 	docs, _ := e.st.Documents(ctx, room.ID)
@@ -159,7 +160,7 @@ func TestCreateRoomFromEditor(t *testing.T) {
 	if len(ps) != 1 || ps[0].Name != "Critic" || ps[0].EveryMinutes != 5 || ps[0].NextAt == nil || len(docs) != 0 {
 		t.Fatalf("edited room: %+v %+v", ps, docs)
 	}
-	if _, m, _ := e.st.StarterVersion(t.Context(), grill, 1, 0); len(m.Personas) != 2 {
+	if _, m, _ := e.st.StarterVersion(t.Context(), grill, 1, 0); len(m.Personas) != 3 {
 		t.Fatal("the editor changed the starter")
 	}
 	many := make([]store.StarterPersona, store.MaxRoomPersonas+1)
@@ -279,7 +280,7 @@ func TestRoomFromPersonalStarter(t *testing.T) {
 	}
 }
 
-// 013-AC30: the built-in Spec grill keeps Secretary out of the call and Grill in it; Retro and Doc
+// 013-AC30: the built-in Spec grill keeps Secretary out of the call and Grill and Rodin in it; Retro and Doc
 // review keep every persona speaking. A starter saved from a room carries each persona's speaks,
 // voice and rate and the room's call settings; an older starter reads as speaking and defaults.
 func TestStartersCarryVoices(t *testing.T) {
@@ -309,7 +310,7 @@ func TestStartersCarryVoices(t *testing.T) {
 		return decodeJSON[store.Room](t, b)
 	}
 	grill := create("Spec grill", map[string]string{"topic": "Billing"})
-	if got := speaking(grill.ID); !got["Grill"] || got["Secretary"] {
+	if got := speaking(grill.ID); !got["Grill"] || got["Secretary"] || !got["Rodin"] {
 		t.Errorf("Spec grill: %v", got)
 	}
 	for title, fields := range map[string]map[string]string{"Retro": {"team": "Core"}, "Doc review": {"document": "RFC"}} {
