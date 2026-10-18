@@ -3,6 +3,13 @@ import { roomWith, fakeDaemon, appointAdmin, personMenu, confirmSheet, signIn, r
 
 const hostBadge = (page, name) => page.locator('#participants li', { hasText: name }).locator('.host-badge');
 
+// standby waits until page's agent state lists name's app as able to host: the ⋯ menu is built as it
+// opens, so opened before that "agent" event it lacks "Make AI host" for good.
+async function standby(page, name) {
+  const id = await page.locator('#participants li', { hasText: name }).getAttribute('data-pid');
+  await page.waitForFunction((pid) => window.grillAgent?.daemons.some((d) => String(d.participant_id) === pid && d.can_host), id);
+}
+
 // 009-AC33 009-AC34: a room admin who does not host makes another participant the AI host from
 // People › ⋯; the chat names who did it, and only the previous host gets the standby notice. The
 // super-admin does the same from /admin's room view.
@@ -14,6 +21,7 @@ test('a room admin and the super-admin move the AI host', async ({ browser, requ
     stops.push(await fakeDaemon(bob, baseURL, room.id, 'bob-laptop'));
     await expect(hostBadge(alice, 'Bob')).toHaveAttribute('aria-label', 'host');
     stops.push(await fakeDaemon(carol, baseURL, room.id, 'carol-laptop'));
+    await standby(alice, 'Carol');
 
     await (await personMenu(alice, 'Carol')).getByRole('button', { name: 'Make AI host' }).click();
     await confirmSheet(alice, 'Make AI host');
@@ -37,6 +45,7 @@ test('a room admin and the super-admin move the AI host', async ({ browser, requ
 
     // The room admin takes the role for her own app.
     stops.push(await fakeDaemon(alice, baseURL, room.id, 'alice-laptop'));
+    await standby(alice, 'Alice');
     await (await personMenu(alice, 'Alice')).getByRole('button', { name: 'Make AI host' }).click();
     await confirmSheet(alice, 'Make AI host');
     await expect(hostBadge(bob, 'Alice')).toHaveAttribute('aria-label', 'host');

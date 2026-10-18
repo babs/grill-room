@@ -604,7 +604,8 @@ func queueRerun(ctx context.Context, tx *txn, t *Turn, doc string) error {
 // FailRunningTurns fails every running turn, in every room, and returns the rooms touched. At
 // start no daemon is attached yet, so no running turn can ever finish.
 func (s *Store) FailRunningTurns(ctx context.Context, reason string) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, room_id FROM turns WHERE status = 'running'`)
+	// Oldest turn first: each failure posts a line in its room, and PostgreSQL scans in no set order.
+	rows, err := s.db.QueryContext(ctx, `SELECT id, room_id FROM turns WHERE status = 'running' ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("running turns: %w", err)
 	}

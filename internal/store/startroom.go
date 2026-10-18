@@ -289,6 +289,7 @@ func (s *Store) ReleaseStarterSkills(ctx context.Context, roomID string) ([]stri
 			}
 			out = append(out, n)
 		}
+		slices.Sort(out) // RETURNING rows come in no set order
 		return rows.Err()
 	})
 	if err != nil {

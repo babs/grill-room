@@ -651,3 +651,25 @@ func TestServerWideRoomReferencesCascade(t *testing.T) {
 		}
 	}
 }
+
+// queryIDs sorts: PostgreSQL's UPDATE .. RETURNING gives rows in heap order, and an updated row
+// moves to the end of the heap.
+func TestQueryIDsSorted(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	var got []int64
+	err := s.withTx(ctx, "t", func(tx *txn) error {
+		for _, q := range []string{`CREATE TABLE ids_t (id BIGINT PRIMARY KEY, v BIGINT)`, `INSERT INTO ids_t VALUES (1, 0), (2, 0), (3, 0)`,
+			`UPDATE ids_t SET v = 1 WHERE id = 1`} {
+			if _, err := tx.ExecContext(ctx, q); err != nil {
+				return err
+			}
+		}
+		var err error
+		got, err = queryIDs(ctx, tx, `UPDATE ids_t SET v = 2 RETURNING id`)
+		return err
+	})
+	if err != nil || !slices.Equal(got, []int64{1, 2, 3}) {
+		t.Fatalf("%v %v, want [1 2 3]", got, err)
+	}
+}

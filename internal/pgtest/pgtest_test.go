@@ -28,11 +28,13 @@ func query(t *testing.T, dsn, q string, args ...any) string {
 	return v
 }
 
+// templateMade counts template builds across -count runs: the template is made once per binary.
+var templateMade int
+
 // The template is made once, and each test gets a copy of its own.
 func TestTemplate(t *testing.T) {
-	made := 0
 	create := func(dsn string) error {
-		made++
+		templateMade++
 		db, err := sql.Open("pgx", dsn)
 		if err != nil {
 			return err
@@ -42,8 +44,8 @@ func TestTemplate(t *testing.T) {
 		return err
 	}
 	a, b := Template(t, create), Template(t, create)
-	if made != 1 || a == b {
-		t.Fatalf("made %d, copies %q %q", made, a, b)
+	if templateMade != 1 || a == b {
+		t.Fatalf("made %d, copies %q %q", templateMade, a, b)
 	}
 	query(t, a, `INSERT INTO x VALUES ('b') RETURNING v`)
 	if n := query(t, b, `SELECT count(*)::text FROM x`); n != "1" {

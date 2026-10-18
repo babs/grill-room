@@ -201,6 +201,9 @@ func WithLockWait(f func(time.Duration)) Option { return func(o *options) { o.lo
 
 func withLockTimeout(d time.Duration) Option { return func(o *options) { o.lockTimeout = d } }
 
+// maxConns caps the pool, idle connections included.
+const maxConns = 16
+
 // Open connects to the PostgreSQL database at dsn, creates or migrates its schema and writes the
 // boot data, all under the write lock, so pods starting together give one result (017-AC1).
 func Open(dsn string, opts ...Option) (*Store, error) {
@@ -218,7 +221,9 @@ func Open(dsn string, opts ...Option) (*Store, error) {
 	cfg.RuntimeParams["idle_in_transaction_session_timeout"] = "60000"
 	sqlDB := stdlib.OpenDB(*cfg)
 	// Streams hold no connection between reads, so a few connections serve many open pages.
-	sqlDB.SetMaxOpenConns(16)
+	sqlDB.SetMaxOpenConns(maxConns)
+	// database/sql keeps 2 idle by default: every burst past that reconnects and authenticates again.
+	sqlDB.SetMaxIdleConns(maxConns)
 	sqlDB.SetConnMaxIdleTime(5 * time.Minute)
 	db := &database{db: sqlDB, writer: make(chan struct{}, 1), lockWait: o.lockWait, lockTimeout: o.lockTimeout}
 	if err := boot(context.Background(), db); err != nil {
@@ -724,7 +729,8 @@ func (s *Store) RevokeInvite(ctx context.Context, roomID string, inviteID int64,
 	return plan, err
 }
 
-// queryIDs runs query, in tx, and returns the ids its rows hold, one per row.
+// queryIDs runs query, in tx, and returns the ids its rows hold, one per row, ascending:
+// PostgreSQL gives UPDATE .. RETURNING rows in no set order.
 func queryIDs(ctx context.Context, tx *txn, query string, args ...any) ([]int64, error) {
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -739,6 +745,7 @@ func queryIDs(ctx context.Context, tx *txn, query string, args ...any) ([]int64,
 		}
 		out = append(out, id)
 	}
+	slices.Sort(out)
 	return out, rows.Err()
 }
 

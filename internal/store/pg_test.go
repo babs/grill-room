@@ -575,3 +575,31 @@ func TestPersonaLevelTriggers(t *testing.T) {
 		t.Fatalf("an update of another column: %v", err)
 	}
 }
+
+// A burst of reads, as an "agent" event waking every page of a room, keeps its connections
+// for the next one instead of closing all but two and authenticating again.
+func TestPoolKeepsIdleConnections(t *testing.T) {
+	s := openTest(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	const n = 8
+	var conns []*sql.Conn
+	for range n {
+		c, err := s.db.db.Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.PingContext(ctx); err != nil {
+			t.Fatal(err)
+		}
+		conns = append(conns, c)
+	}
+	for _, c := range conns {
+		if err := c.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if st := s.db.db.Stats(); st.Idle < n || st.MaxIdleClosed != 0 {
+		t.Fatalf("after %d concurrent reads: %d idle, %d closed as over the idle limit", n, st.Idle, st.MaxIdleClosed)
+	}
+}
