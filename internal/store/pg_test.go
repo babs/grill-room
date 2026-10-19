@@ -105,7 +105,7 @@ func TestConcurrentOpensMakeOneSchema(t *testing.T) {
 	}
 	_ = s.Close()
 	want := snapshot(t, ref)
-	if !slices.Contains(want, "schema_version |  | 47") || !slices.Contains(want, "rows pronunciations 129") || !slices.Contains(want, "rows starters 3") {
+	if !slices.Contains(want, "schema_version |  | 48") || !slices.Contains(want, "rows pronunciations 129") || !slices.Contains(want, "rows starters 3") {
 		t.Fatalf("a single open made:\n%s", strings.Join(want, "\n"))
 	}
 
@@ -368,7 +368,7 @@ func TestMigrate(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = s.Close()
-	if s, err := Open(newer); err == nil || !strings.Contains(err.Error(), "schema version 99 is newer than this server's 47") {
+	if s, err := Open(newer); err == nil || !strings.Contains(err.Error(), "schema version 99 is newer than this server's 48") {
 		if err == nil {
 			_ = s.Close()
 		}

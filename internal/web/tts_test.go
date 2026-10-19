@@ -303,6 +303,7 @@ func TestTTSHeartbeat(t *testing.T) {
 	now := time.Now()
 	e.srv.now = func() time.Time { return now }
 	e.srv.lease = e.srv.now
+	e.srv.leader.Store(true)
 	stats := func() TTSStats {
 		e.srv.refreshGauges()
 		st, _ := e.srv.TTSStats()
@@ -554,6 +555,7 @@ func TestGaugesReadMemory(t *testing.T) {
 	_, closeRoom := e.openStream(t, "/api/rooms/"+r.room+"/events?tab=alice-1", r.alice.p.Token, "")
 	defer closeRoom()
 	e.podBeats(t)
+	e.srv.leader.Store(true)
 	e.srv.refreshGauges()
 	if err := e.st.Close(); err != nil {
 		t.Fatal(err)

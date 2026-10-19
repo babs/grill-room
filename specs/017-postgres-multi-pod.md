@@ -260,7 +260,7 @@ Rolling deploy, the audio risk that remains:
 
 - [ ] **AC21** Manifests: 2 replicas, `RollingUpdate` with `maxUnavailable: 0`, a PodDisruptionBudget with `minAvailable: 1`, a DSN secret, a models volume a second node can mount, a staging `emptyDir`, a NetworkPolicy to PG. *Verify*: `make k8s-render`; draining one node keeps the room page live.
 - [ ] **AC22** `/healthz` answers 503 when PG refuses a write, 200 otherwise. *Verify*: Go test with the database refusing writes (read-only).
-- [ ] **AC23** A backup runs with the server up (`pg_dump -Fc`); a restore into a scratch database passes AC8's comparison against the source snapshot. *Verify*: lab run.
+- ~~**AC23** A backup runs with the server up (`pg_dump -Fc`); a restore into a scratch database passes AC8's comparison against the source snapshot. *Verify*: lab run.~~ Dropped (user, 2026-10-19): pg_dump/restore is proven tech; backups are the PostgreSQL cluster's job, not something grill-room tests.
 - [ ] **AC24** README (config, deploy) and `docs/architecture.md` describe PG and the pods. *Verify*: grep of README and `docs/` for "SQLite" returns only daemon and history lines.
 - [ ] **AC27** README "Privacy" replaces the `secure_delete` line (README:321) with: removed rows leave the tables at once, the database files after PostgreSQL's autovacuum or a `VACUUM` reuses their space, and backups after their retention. No text promises zeroed pages, and the server runs no `VACUUM` of its own. *Verify*: grep of README for `secure_delete` and "overwrite" returns 0; grep of non-test Go files for `VACUUM` returns 0.
 
@@ -279,7 +279,7 @@ Rolling deploy, the audio risk that remains:
 
 ### Phase 2: Lab copy and cutover (S)
 - Work: database and login role created on the shared cluster (external, Q12); `grill-room db copy` with verification; runbook; cutover at `replicas: 1`; `pg_dump` backup; README and architecture docs.
-- **Covers**: AC7, AC8, AC9, AC23, AC24, AC27
+- **Covers**: AC7, AC8, AC9, AC24, AC27
 - **Data model impact**: none.
 - **DoD**: AC7 and AC8 tests green; lab cutover done, check script identical before and after; rollback rehearsed once in a scratch namespace.
 
@@ -292,14 +292,14 @@ Rolling deploy, the audio risk that remains:
 ### Phase 4: Singletons and rollout (M)
 - Work: leader lock; loops I36 to I39 under it; push cursor in PG; turn sweeper replacing I8, I9, I10; leader-only gauges (I22, I41); manifests; rolling deploy on the lab.
 - **Covers**: AC17, AC18, AC19, AC20, AC21
-- **Data model impact**: push cursor in `settings`.
+- **Data model impact**: push cursor in `settings`; `turns.delivered` (schema 48), so a reconnecting app's new stream fails only the turns its dropped stream had received.
 - **DoD**: AC17 and AC18 tests green; lab rollout of AC19 with its log in the PR; node drain of AC21 done.
 
 ## Data model impact (summary)
 
 - PG schema equal to SQLite v46: `BIGINT` integers, `bytea` blobs, `lower(..)` unique indexes for the `NOCASE` columns, identity columns for the 34 `AUTOINCREMENT` keys; `schema_version` replaces `PRAGMA user_version`.
-- Phase 3: `UNLOGGED` tables `daemon_connections`, `presence`, `stt_workers`, `tts_pod`, `pairings` (each with `expires_at`); logged tables `tts_lines`, `rate_events`; `rooms.host_moved_line`.
-- Phase 4: push cursor and lexicon version as `settings` rows.
+- Phase 3: `UNLOGGED` tables `daemon_connections`, `presence`, `stt_workers`, `tts_pod`, `pairings` (each with `expires_at`); logged tables `tts_lines`, `rate_events`; `rooms.host_moved_line`; the lexicon version as a `settings` row.
+- Phase 4: push cursor as a `settings` row; `turns.delivered` (schema 48).
 
 ## Rollback plan, lab data migration
 

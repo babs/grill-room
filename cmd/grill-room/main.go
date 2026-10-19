@@ -204,8 +204,8 @@ func (c Config) Validate() error {
 	if c.MaxAttachmentMB < 1 || c.MaxAttachmentMB > c.MaxRoomMB {
 		return fmt.Errorf("GRILL_ROOM_MAX_ATTACHMENT_MB %d: want 1 <= attachment <= room (%d)", c.MaxAttachmentMB, c.MaxRoomMB)
 	}
-	if c.TurnTimeout < time.Minute || c.TurnTimeout > 24*time.Hour {
-		return fmt.Errorf("GRILL_ROOM_TURN_TIMEOUT %s: want 1m to 24h", c.TurnTimeout)
+	if c.TurnTimeout < web.MinTurnTimeout || c.TurnTimeout > 24*time.Hour {
+		return fmt.Errorf("GRILL_ROOM_TURN_TIMEOUT %s: want %s to 24h", c.TurnTimeout, web.MinTurnTimeout)
 	}
 	if c.NotesWatchDelay < time.Second || c.NotesWatchDelay > time.Hour {
 		return fmt.Errorf("GRILL_ROOM_NOTES_WATCH_DELAY %s: want 1s to 1h", c.NotesWatchDelay)
@@ -403,13 +403,6 @@ func run() error {
 		logger.Warn("pandoc_missing", zap.String("pandoc", cfg.Pandoc), zap.Error(err))
 	}
 
-	// No daemon is attached yet: a turn left running by the previous process can never finish.
-	if rooms, err := st.FailRunningTurns(ctx, "the room server restarted"); err != nil {
-		return fmt.Errorf("fail running turns: %w", err)
-	} else if len(rooms) > 0 {
-		logger.Warn("running_turns_failed", zap.Strings("rooms", rooms))
-	}
-
 	var release *web.Release
 	if cfg.DaemonDir != "" {
 		if release, err = web.LoadRelease(cfg.DaemonDir); err != nil {
@@ -490,10 +483,7 @@ func run() error {
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return web.Serve(gctx, appSrv, logger) })
 	g.Go(func() error { return web.Serve(gctx, metricsSrv, logger) })
-	g.Go(func() error { srv.PurgeAudit(gctx); return nil })
-	g.Go(func() error { srv.PurgeProfiles(gctx); return nil })
-	g.Go(func() error { srv.RunTimers(gctx); return nil })
-	g.Go(func() error { srv.PushLoop(gctx); return nil })
+	g.Go(func() error { srv.Lead(gctx); return nil })
 	g.Go(func() error { srv.SweepShared(gctx); return nil })
 	g.Go(func() error { return b.Run(gctx) })
 	logger.Info("ready", zap.String("url", cfg.PublicURL))
@@ -531,6 +521,13 @@ func newRegistry(b *bus.Bus, srv *web.Server) *prometheus.Registry {
 			func() float64 { return float64(b.ListenReconnects()) }),
 		prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_listen_errors_total", Help: "LISTEN connections that failed or ended; the bus connects again (017-AC20)."},
 			func() float64 { return float64(b.ListenErrors()) }),
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_leader", Help: "1 on the pod that holds the leader lock and runs the singleton loops (017-AC17)."},
+			func() float64 {
+				if srv.Leader() {
+					return 1
+				}
+				return 0
+			}),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_event_streams", Help: "Open SSE event streams."},
 			func() float64 { return float64(srv.Streams()) }),
 		prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "grill_room_stt_workers", Help: "STT workers with a recent heartbeat."},

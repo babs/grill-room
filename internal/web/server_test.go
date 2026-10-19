@@ -40,6 +40,8 @@ type env struct {
 	admin string
 	// dsn is the store's database.
 	dsn string
+	// shutdown stops the pod as Serve does on SIGTERM: its streams learn it, its requests go on.
+	shutdown func()
 }
 
 func newEnv(t *testing.T) *env {
@@ -68,9 +70,14 @@ func newEnvAt(t *testing.T, dsn, admin string, opts Options, log *zap.Logger) *e
 	t.Cleanup(func() { _ = st.Close() })
 	b := bus.New(st, NewToken())
 	srv := New(b, HashToken(admin), baseURL+"/", opts, log)
-	ts := httptest.NewServer(srv.Handler())
+	// The pod's own context, as Serve hands it to requests: shutdown cancels it.
+	podCtx, shutdown := context.WithCancel(context.Background())
+	t.Cleanup(shutdown)
+	ts := httptest.NewUnstartedServer(srv.Handler())
+	ts.Config.BaseContext = stopContext(podCtx)
+	ts.Start()
 	t.Cleanup(ts.Close)
-	return &env{ts: ts, st: st, bus: b, srv: srv, admin: admin, dsn: dsn}
+	return &env{ts: ts, st: st, bus: b, srv: srv, admin: admin, dsn: dsn, shutdown: shutdown}
 }
 
 // sqlDB is a connection of the test's own to the store's database, closed when t ends.

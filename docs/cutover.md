@@ -81,7 +81,7 @@ pgc() { docker run --rm --network host -u "$(id -u):$(id -g)" -v "$PWD:/w" -w /w
    ../bin/grill-room db verify --from work/grill-room.db --to "$DSN"
    ```
    Both exit 0 and list every table as equal.
-6. Test a backup before the server's first start (017-AC23): dump the copy, restore it into a scratch database, and compare it with the checkpointed copy.
+6. Check a dump taken before the server's first start: dump the copy, restore it into a scratch database, and compare it with the checkpointed copy.
    ```sh
    pgc dropdb --if-exists -h 127.0.0.1 -p "$PGPORT_LOCAL" grill_room_restore
    pgc pg_dump -h 127.0.0.1 -p "$PGPORT_LOCAL" -Fc --no-unlogged-table-data -f copy.dump "$K8S_PG_DATABASE"
@@ -91,14 +91,14 @@ pgc() { docker run --rm --network host -u "$(id -u):$(id -g)" -v "$PWD:/w" -w /w
    pgc dropdb -h 127.0.0.1 -p "$PGPORT_LOCAL" grill_room_restore
    ```
    `db verify` exits 0 and lists every table as equal. Anything else is a failed copy or dump: do not deploy, roll back.
-7. Deploy the PostgreSQL image at one replica: `make -C .. k8s-apply`.
+7. Deploy the PostgreSQL image: `make -C .. k8s-apply`. The release of the cutover (Phase 2) ran one replica; releases from Phase 4 on run two, rolled out as [rollout.md](rollout.md) says.
 8. Check, and compare with step 2 (017-AC9):
    ```sh
    make -s -C .. lab-check > after.check
    diff before.check after.check
    ```
    The diff is empty, except for two kinds of lines. A room's `host_online` is `false` until its paired app reconnects, which it does without pairing again: wait and run it again. The counts line changes when this release ships new presets, starters or pronunciations. Then open rooms, messages, documents and uploads in a browser. `make e2e-lab` runs a whole session.
-9. Before the downtime ends, test a dump taken with the server up (017-AC23):
+9. Before the downtime ends, check a dump taken with the server up:
    ```sh
    pgc dropdb --if-exists -h 127.0.0.1 -p "$PGPORT_LOCAL" grill_room_running
    pgc pg_dump -h 127.0.0.1 -p "$PGPORT_LOCAL" -Fc --no-unlogged-table-data -f running.dump "$K8S_PG_DATABASE"
@@ -121,11 +121,13 @@ Inside the window, when a check differs or a bug blocks:
    cp ../.env ../../grill-room-rollback/
    make -C ../../grill-room-rollback k8s-apply GRILL_ROOM_IMAGE="$(cat before.grill-room.image)" \
      GRILL_STT_IMAGE="$(cat before.stt.image)" GRILL_TTS_IMAGE="$(cat before.tts.image)"
+   kubectl -n "$NS" delete pdb grill-room --ignore-not-found
    ```
+   A release from Phase 4 on left a PodDisruptionBudget that `k8s-apply` does not prune; on one pod it blocks every node drain.
 3. `make -s -C .. lab-check > rollback.check && diff before.check rollback.check`, read as in step 8.
 
 Writes made on PostgreSQL since the cutover are lost. To try again, drop and recreate the database empty: `db copy` refuses one that is not.
 
 ## After the window
 
-Delete the old volume (`kubectl -n "$NS" delete pvc grill-room-data`) and its object in `deploy/k8s/room.yaml`. Until then `make k8s-delete` leaves it, unless `K8S_DELETE_SQLITE_PVC=1`. Keep `cutover/backup/` 30 days and delete the rest of `cutover/`: its dumps and `work/` hold personal data. After a rollback, also remove its worktree, which holds a copy of `.env`: `git worktree remove --force ../../grill-room-rollback`.
+Delete the old volume, `kubectl -n "$NS" delete pvc grill-room-data`: later releases no longer carry its object in `deploy/k8s/room.yaml`. Keep `cutover/backup/` 30 days and delete the rest of `cutover/`: its dumps and `work/` hold personal data. After a rollback, also remove its worktree, which holds a copy of `.env`: `git worktree remove --force ../../grill-room-rollback`.

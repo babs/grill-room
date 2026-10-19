@@ -718,7 +718,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"skills":              "id name created_at room_id pending scope | profile_id publisher_id from_starter",
 		"skill_versions":      "skill_id n author description files size sha256 data created_at | id author_id",
 		"agent_sessions":      "room_id persona_id session_id data updated_at context_tokens context_window context_updated_at |",
-		"turns":               "session_id message_cursor annotation_cursor change_cursor model effort ended_at persona_id status | id room_id participant_id daemon_id host fresh resume prompt error report started_at persona_name persona_text req_model req_effort skills plugins host_queued_at base_revisions rerun_of cause handoff",
+		"turns":               "session_id message_cursor annotation_cursor change_cursor model effort ended_at persona_id status | id room_id participant_id daemon_id host fresh resume prompt error report started_at persona_name persona_text req_model req_effort skills plugins host_queued_at base_revisions rerun_of cause handoff delivered",
 		"room_admins":         "room_id profile_id | created_at",
 		// 016: a block names a profile of this server; an imported room starts with none.
 		"room_blocks":              "| room_id profile_id name created_at by_participant_id",

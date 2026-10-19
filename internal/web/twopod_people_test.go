@@ -91,6 +91,7 @@ func TestTwoPodsPeopleAndSTT(t *testing.T) {
 		}
 		return st.Available && st.Listening && slices.Equal(st.Transcribed, []int64{al}) && slices.Equal(st.Engines, []string{"parakeet"})
 	})
+	b.srv.leader.Store(true)
 	b.srv.refreshGauges()
 	if n := b.srv.STTWorkers(); n != 1 {
 		t.Fatalf("B counts %d workers", n)

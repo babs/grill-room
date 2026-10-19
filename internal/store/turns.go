@@ -84,6 +84,8 @@ type Turn struct {
 	// HostQueued is set while the host's daemon holds the turn in its local queue, waiting under
 	// the host's cap: the room shows "queued (host busy)" (003-AC18).
 	HostQueued bool `json:"host_queued,omitempty"`
+	// Delivered is set just before a daemon stream writes the turn to its daemon (017-AC18).
+	Delivered bool `json:"-"`
 	// RerunOf is the turn whose result a conflict rejected, which this one runs again; Cause says
 	// why the turn runs (003-AC21).
 	RerunOf int64  `json:"rerun_of,omitempty"`
@@ -241,7 +243,7 @@ type TurnOutcome struct {
 const turnCols = `SELECT id, room_id, COALESCE(participant_id, 0), COALESCE(daemon_id, 0), status, fresh, resume,
 	session_id, model, message_cursor, annotation_cursor, change_cursor, prompt, error, report, started_at, ended_at,
 	COALESCE(persona_id, 0), persona_name, persona_text, req_model, req_effort, effort,
-	host_queued_at IS NOT NULL, COALESCE(rerun_of, 0), cause, base_revisions, handoff FROM turns`
+	host_queued_at IS NOT NULL, COALESCE(rerun_of, 0), cause, base_revisions, handoff, delivered = 1 FROM turns`
 
 func scanTurn(sc scanner) (*Turn, error) {
 	var t Turn
@@ -250,7 +252,7 @@ func scanTurn(sc scanner) (*Turn, error) {
 	err := sc.Scan(&t.ID, &t.RoomID, &t.ParticipantID, &t.DaemonID, &t.Status, &t.Fresh, &t.Resume,
 		&t.SessionID, &t.Model, &t.MessageCursor, &t.AnnotationCursor, &t.ChangeCursor, &t.Prompt, &t.Error, &report, &started, &ended,
 		&t.PersonaID, &t.PersonaName, &t.PersonaText, &t.ReqModel, &t.ReqEffort, &t.Effort,
-		&t.HostQueued, &t.RerunOf, &t.Cause, &base, &t.Handoff)
+		&t.HostQueued, &t.RerunOf, &t.Cause, &base, &t.Handoff, &t.Delivered)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -347,7 +349,16 @@ func (s *Store) Turn(ctx context.Context, roomID string, id int64) (*Turn, error
 // RunningTurns lists the room's running turns, the ones its host's daemon queued included, oldest
 // first. Only a room in parallel mode runs more than one (003-AC20).
 func (s *Store) RunningTurns(ctx context.Context, roomID string) ([]Turn, error) {
-	rows, err := s.db.QueryContext(ctx, turnCols+` WHERE room_id = ? AND status = 'running' ORDER BY id`, roomID)
+	return s.runningTurns(ctx, ` AND room_id = ?`, roomID)
+}
+
+// AllRunningTurns lists the running turns of every room, oldest first.
+func (s *Store) AllRunningTurns(ctx context.Context) ([]Turn, error) {
+	return s.runningTurns(ctx, "")
+}
+
+func (s *Store) runningTurns(ctx context.Context, where string, args ...any) ([]Turn, error) {
+	rows, err := s.db.QueryContext(ctx, turnCols+` WHERE status = 'running'`+where+` ORDER BY id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("running turns: %w", err)
 	}
@@ -361,6 +372,15 @@ func (s *Store) RunningTurns(ctx context.Context, roomID string) ([]Turn, error)
 		out = append(out, *t)
 	}
 	return out, rows.Err()
+}
+
+// TurnDelivered records that a stream of daemonID is about to write running turn id to it.
+func (s *Store) TurnDelivered(ctx context.Context, roomID string, id, daemonID int64) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE turns SET delivered = 1 WHERE id = ? AND room_id = ? AND daemon_id = ? AND status = 'running' AND delivered = 0`,
+		id, roomID, daemonID); err != nil {
+		return fmt.Errorf("turn delivered: %w", err)
+	}
+	return nil
 }
 
 // SetHostQueued records that daemonID holds running turn id in its local queue, or that the turn
@@ -599,41 +619,6 @@ func queueRerun(ctx context.Context, tx *txn, t *Turn, doc string) error {
 	}
 	// The re-run answers the mentions of the rejected turn and of the entry it replaces.
 	return requeueMentions(ctx, tx, id, t.ID, old)
-}
-
-// FailRunningTurns fails every running turn, in every room, and returns the rooms touched. At
-// start no daemon is attached yet, so no running turn can ever finish.
-func (s *Store) FailRunningTurns(ctx context.Context, reason string) ([]string, error) {
-	// Oldest turn first: each failure posts a line in its room, and PostgreSQL scans in no set order.
-	rows, err := s.db.QueryContext(ctx, `SELECT id, room_id FROM turns WHERE status = 'running' ORDER BY id`)
-	if err != nil {
-		return nil, fmt.Errorf("running turns: %w", err)
-	}
-	type ref struct {
-		id   int64
-		room string
-	}
-	var refs []ref
-	for rows.Next() {
-		var r ref
-		if err := rows.Scan(&r.id, &r.room); err != nil {
-			_ = rows.Close()
-			return nil, fmt.Errorf("running turns: %w", err)
-		}
-		refs = append(refs, r)
-	}
-	_ = rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("running turns: %w", err)
-	}
-	var rooms []string
-	for _, r := range refs {
-		if _, err := s.FailTurn(ctx, r.room, r.id, reason); err != nil {
-			return rooms, err
-		}
-		rooms = append(rooms, r.room)
-	}
-	return rooms, nil
 }
 
 // MessageCursor returns the room's last message id, 0 for none.

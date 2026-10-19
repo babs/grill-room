@@ -268,7 +268,7 @@ func TestCompleteTurnAtomic(t *testing.T) {
 	}
 }
 
-func TestFailRunningTurnsAndLookups(t *testing.T) {
+func TestAllRunningTurnsAndLookups(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	ra := newTurnRoom(t, s, "a")
@@ -282,10 +282,15 @@ func TestFailRunningTurnsAndLookups(t *testing.T) {
 		t.Fatal(err)
 	}
 	ta2 := ra.start(t, s, "a")
-	rb.start(t, s, "b")
-	rooms, err := s.FailRunningTurns(ctx, "server restarted")
-	if err != nil || !slices.Equal(rooms, []string{"a", "b"}) {
-		t.Fatalf("rooms %v, %v", rooms, err)
+	tb := rb.start(t, s, "b")
+	all, err := s.AllRunningTurns(ctx)
+	if err != nil || len(all) != 2 || all[0].ID != ta2.ID || all[1].ID != tb.ID || all[1].RoomID != "b" {
+		t.Fatalf("all running %+v, %v", all, err)
+	}
+	for _, tn := range all {
+		if _, err := s.FailTurn(ctx, tn.RoomID, tn.ID, "server restarted"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if got, err := s.RunningTurns(ctx, "a"); err != nil || len(got) != 0 {
 		t.Fatalf("still running: %v %v", got, err)

@@ -42,7 +42,8 @@ func (s *Server) sweepShared(ctx context.Context) {
 	if err != nil && ctx.Err() == nil {
 		s.log.Warn("shared_sweep_failed", zap.Error(err))
 	}
-	// Their pod died with their streams: nobody else ends their turns.
+	// Their pod died with their streams: the room elects another host. Their turns fail here or in
+	// the leader's turn sweeper, whichever comes first.
 	for _, d := range gone {
 		s.log.Info("daemon_lease_lapsed", zap.String("room", d.RoomID), zap.Int64("daemon", d.ID))
 		s.daemonGone(ctx, &d)
@@ -57,8 +58,16 @@ func (s *Server) sweepShared(ctx context.Context) {
 	s.tts.noService.Add(n)
 }
 
-// refreshGauges computes the gauges from the store.
+// refreshGauges computes the gauges from the store on the leader and zeroes them elsewhere: they
+// count shared state, so max and sum over the pods both read right (017-AC20).
 func (s *Server) refreshGauges() {
+	if !s.leader.Load() {
+		s.gauges.sttWorkers.Store(0)
+		s.gauges.deviceSTT.Store(0)
+		s.gauges.ttsDemand.Store(0)
+		s.gauges.ttsPodUp.Store(false)
+		return
+	}
 	now := s.lease()
 	s.gauges.sttWorkers.Store(int64(len(s.stt.live(now))))
 	s.gauges.deviceSTT.Store(int64(s.people.deviceCount(now)))
