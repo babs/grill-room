@@ -184,6 +184,18 @@ function words(rows, from, to) {
 // loudAround reports a series loud within [t - before, t].
 const loudAround = (rows, t, before) => rows.some(([at, db]) => at >= t - before && at <= t && db > LOUD);
 
+// talkingAround reports 40 ms in a row over LOUD within [t - before, t]; the pod's onset also needs
+// 40 ms over its floor. Clip 1's background noise has lone 10 ms windows over LOUD: not talking.
+function talkingAround(rows, t, before) {
+  let run = 0;
+  for (const [at, db] of rows) {
+    if (at < t - before || at > t) continue;
+    run = db > LOUD ? run + 1 : 0;
+    if (run >= 4) return true;
+  }
+  return false;
+}
+
 // silentFrom is the start of the first run after t that stays under QUIET for at least ms.
 function silentFrom(rows, t, ms) {
   let start = null;
@@ -285,7 +297,7 @@ test('turn-taking in the call', async ({ browser, request }) => {
     L = await levels();
     for (const id of [ids.Grill]) {
       // Bob was quiet for the room's quiet time before each start (500 ms here).
-      for (const t of starts(L[id], 300)) expect(loudAround(L[bobKey], t, 500), `${id} started at ${Math.round(t)} within 500 ms of Bob`).toBe(false);
+      for (const t of starts(L[id], 300)) expect(talkingAround(L[bobKey], t, 500), `${id} started at ${Math.round(t)} within 500 ms of Bob`).toBe(false);
     }
 
     // AC24: Secretary's line waits until Grill's ends.
