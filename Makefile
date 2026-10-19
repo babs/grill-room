@@ -441,7 +441,7 @@ lab-check: export GRILL_ROOM_URL := $(or $(GRILL_ROOM_URL),$(if $(K8S_DOMAIN),ht
 lab-check:
 	@tools/lab-check.sh
 
-# 017-AC19: lines posted against lines streamed during a rollout or a node drain (docs/rollout.md).
+# 017-AC19: lines posted against lines streamed during a rollout or the loss of one pod (docs/rollout.md).
 rollout-watch: export GRILL_ROOM_ADMIN_TOKEN := $(GRILL_ROOM_ADMIN_TOKEN)
 rollout-watch: export GRILL_ROOM_URL := $(or $(GRILL_ROOM_URL),$(if $(K8S_DOMAIN),https://grill-room.$(K8S_DOMAIN)))
 rollout-watch:

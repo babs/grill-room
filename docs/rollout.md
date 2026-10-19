@@ -1,6 +1,6 @@
 # Rolling out the room server
 
-Two pods, replaced one at a time (spec 017, 017-AC19, 017-AC21). A rollout or a node drain should lose no message: `tools/rollout-watch.sh` checks it from outside, through the ingress.
+Two pods, replaced one at a time (spec 017, 017-AC19, 017-AC21). A rollout or the loss of one pod should lose no message: `tools/rollout-watch.sh` checks it from outside, through the ingress.
 
 ## TL;DR
 
@@ -11,7 +11,7 @@ Two pods, replaced one at a time (spec 017, 017-AC19, 017-AC21). A rollout or a 
 | 3. Apply | `make k8s-apply` | `deployment "grill-room" successfully rolled out` |
 | 4. Check the pods | below | 2 pods ready, `grill_room_leader` 1 on exactly one |
 | 5. Read the watch | `rollout.log` | `result: PASS`; paste it in the PR |
-| 6. Drain a node | below | `result: PASS`, one pod up all along |
+| 6. Delete one server pod | below | `result: PASS`, the replacement Ready |
 
 Every command runs from the checkout, with `KUBECONFIG` set to the cluster's file and `NS=${K8S_NAMESPACE:-grill-room}`. The watch needs `curl` and `jq`, and reads `GRILL_ROOM_ADMIN_TOKEN` and `K8S_DOMAIN` from `.env` (or `GRILL_ROOM_URL` to target another server).
 
@@ -79,20 +79,19 @@ done
 
 Two pods `Running` and `1/1`, on two nodes when the cluster has them. One prints `grill_room_leader 1`, the other `0`. With `make k8s-monitoring`, `sum(grill_room_leader{namespace="<ns>"})` is 1.
 
-## Node drain (017-AC21)
+## One pod lost (017-AC21)
 
-With the watch running (step 2), drain a node that runs one of the server pods, then put it back:
+Start a new watch (step 2), then delete one server pod and wait for its replacement:
 
 ```sh
-kubectl -n "$NS" get pods -l app.kubernetes.io/name=grill-room -o wide   # the NODE column
-kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
-kubectl -n "$NS" get pdb grill-room                                      # ALLOWED DISRUPTIONS 0 until the replacement is ready
-kubectl uncordon <node>
+kubectl -n "$NS" get pods -l app.kubernetes.io/name=grill-room -o wide   # pick the leader: grill_room_leader 1 (step 4)
+kubectl -n "$NS" delete pod <pod>
+kubectl -n "$NS" rollout status deploy/grill-room                        # successfully rolled out: 2 ready again
 ```
 
-- `--delete-emptydir-data`: the server pods keep staging, `/tmp` and the model files on `emptyDir`. The replacement downloads the model files again, about 440 MB.
-- The PodDisruptionBudget (`minAvailable: 1`) holds the eviction of the second pod until the first one's replacement is ready. With both pods on the drained node, the drain waits for that; on a one-node cluster the replacement cannot schedule and the drain blocks: it needs a second schedulable node.
-- The room page in a browser stays live through it, as the watch shows.
+- The replacement downloads the model files again, about 440 MB, before it is ready.
+- The other pod serves every request meanwhile: the room page in a browser stays live, as the watch shows.
+- A pod delete does not go through the PodDisruptionBudget (`minAvailable: 1`); a node drain would, holding the second eviction until the first replacement is ready.
 
 ## Rollback
 

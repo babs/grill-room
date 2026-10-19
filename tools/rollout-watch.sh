@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 017-AC19: posts one line per second into a fresh room while a stream stays open on it, as a
 # browser's would, then reports lines posted against lines received. Run it through the ingress
-# during a rollout or a node drain (docs/rollout.md). Exit 1 on any loss, reorder or duplicate.
+# during a rollout or the loss of one pod (docs/rollout.md). Exit 1 on any loss, reorder or duplicate.
 set -euo pipefail
 
 readonly usage="usage: GRILL_ROOM_URL=<base url> GRILL_ROOM_ADMIN_TOKEN=<token> tools/rollout-watch.sh
