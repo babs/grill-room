@@ -262,6 +262,38 @@ func TestEmailSignInOffWithoutSMTP(t *testing.T) {
 	}
 }
 
+// 005-AC48: the profile sets its own name, checked as at join; its seats keep theirs.
+func TestSetProfileName(t *testing.T) {
+	e := newEnv(t)
+	d := e.device(t)
+	d.join(t, e.createRoom(t, "A").ID, "Alice")
+	if code, _ := e.device(t).do(t, "PUT", "/api/profile/name", map[string]string{"name": "Bob"}); code != http.StatusUnauthorized {
+		t.Fatalf("without a profile: %d", code)
+	}
+	if code, _ := d.do(t, "PUT", "/api/profile/name", map[string]string{"name": "Bob"}, "Sec-Fetch-Site", "cross-site"); code != http.StatusForbidden {
+		t.Fatalf("cross-site: %d", code)
+	}
+	for _, bad := range []string{"", "   ", strings.Repeat("x", maxNameLen+1), "a\nb", "a\u202eb"} {
+		if code, _ := d.do(t, "PUT", "/api/profile/name", map[string]string{"name": bad}); code != http.StatusBadRequest {
+			t.Errorf("name %q: %d, want 400", bad, code)
+		}
+	}
+	if p := d.profile(t).Profile; p.Name != "" {
+		t.Fatalf("a refused name was stored: %q", p.Name)
+	}
+	code, b := d.do(t, "PUT", "/api/profile/name", map[string]string{"name": "  " + strings.Repeat("é", maxNameLen) + " "})
+	if want := strings.Repeat("é", maxNameLen); code != http.StatusOK || decodeJSON[map[string]string](t, b)["name"] != want {
+		t.Fatalf("set: %d %s", code, b)
+	}
+	if code, _ := d.do(t, "PUT", "/api/profile/name", map[string]string{"name": "Bob"}); code != http.StatusOK {
+		t.Fatalf("set: %d", code)
+	}
+	p := d.profile(t).Profile
+	if p.Name != "Bob" || p.Rooms[0].Name != "Alice" {
+		t.Fatalf("profile %q, seat %q: want Bob, Alice", p.Name, p.Rooms[0].Name)
+	}
+}
+
 // 002-AC4: bind an email, sign in elsewhere with it, each link once, and the expiry.
 func TestMagicLinks(t *testing.T) {
 	e, box := newMailEnv(t, time.Minute)

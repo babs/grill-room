@@ -198,6 +198,30 @@ func (s *Server) snoozeNudge(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// setProfileName sets the profile's chosen name, validated as at join; room seats keep theirs (005-AC48).
+func (s *Server) setProfileName(w http.ResponseWriter, r *http.Request) {
+	p := s.profileFor(w, r)
+	if p == nil {
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	name, ok := cleanText(req.Name, maxNameLen, false)
+	if !ok {
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("display name must be 1 to %d characters", maxNameLen))
+		return
+	}
+	if err := s.bus.Store.SetProfileName(r.Context(), p.ID, name); err != nil {
+		s.serverError(w, "set_profile_name_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"name": name})
+}
+
 // signedIn sets a fresh profile session cookie for p's device and answers with the profile.
 func (s *Server) signedIn(w http.ResponseWriter, r *http.Request, p *store.Profile, tok, how string) {
 	setProfileCookie(w, r, tok)

@@ -68,7 +68,11 @@ async function who() {
   const { email_enabled: emailEnabled, profile, magic_link_ttl_s: linkTTL } = await res.json();
   ttl = linkTTL || 0;
   yourProfile.hidden = !profile;
-  document.getElementById('your-profile-name').textContent = profile ? profile.name || (profile.rooms[0] || {}).name || '' : '';
+  // The name the profile chose (005-AC1, 005-AC48), else the one it last joined with.
+  const name = profile ? profile.name || (profile.rooms[0] || {}).name || '' : '';
+  document.getElementById('your-profile-name').textContent = name;
+  // Never over what the person typed: this runs again each time the tab comes back.
+  if (!nameInput.value) nameInput.value = name;
   recover.hidden = !!profile || !emailEnabled;
 }
 who().catch(console.error);

@@ -141,7 +141,7 @@ test('email section states', async ({ browser, request }) => {
   await expect(page.locator('#email-state')).toHaveText(other);
   await expect(page.locator('#profile-anon')).toBeHidden();
 
-  await page.getByRole('button', { name: 'Change' }).click();
+  await page.locator('#email-change').click();
   await page.getByLabel('New address').fill(changed);
   await page.getByRole('button', { name: 'Send me a link' }).click();
   await expect(page.locator('#email .link-sent h3')).toHaveText('Link sent to ' + changed);
@@ -276,5 +276,5 @@ test('no-email marker and nudge', async ({ browser, request }) => {
   expect(await tablet.evaluate(async () => { await nudgeRecovery(); return document.getElementById('email-nudge').hidden; })).toBe(true);
   await tablet.goto('/profile#account');
   await expect(tablet.locator('#email-state')).toHaveText(/^marked-\d+@example\.com$/);
-  await expect(tablet.getByRole('button', { name: 'Change' })).toBeVisible();
+  await expect(tablet.locator('#email-change')).toBeVisible();
 });
