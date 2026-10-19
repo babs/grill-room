@@ -95,7 +95,16 @@
     <section id="panel-account" class="tab-panel" aria-labelledby="tab-account" hidden>
       <h2>Account</h2>
       <dl class="profile-facts">
-        <div><dt>Name</dt><dd><span id="account-name"></span><p class="hint">Set in each room when you join.</p></dd></div>
+        <div><dt>Name</dt><dd><div class="email-row"><span id="account-name"></span>
+          <button type="button" id="name-change" class="btn-secondary">Change</button></div>
+          <p class="hint">Filled in when you join or create a room. Each room keeps the name you joined it with.</p>
+          <form id="name-form" class="row" novalidate hidden>
+            <label for="name-input">Your name
+              <input id="name-input" maxlength="40" autocomplete="name" required aria-describedby="name-error"></label>
+            <button type="submit">Save</button>
+            <button type="button" id="name-cancel" class="btn-secondary">Cancel</button>
+            <p id="name-error" class="field-error" role="alert"></p>
+          </form></dd></div>
         <div id="email" hidden><dt>Email</dt><dd><div class="email-row"><span id="email-state"></span>
           <button type="button" id="email-change" class="btn-secondary" hidden>Change</button></div>
           <p id="email-note" class="hint" hidden>You can sign in with it on any device.</p>
@@ -103,6 +112,7 @@
             <label for="bind-email"><span id="bind-label">Add an email</span>
               <input id="bind-email" type="email" maxlength="254" autocomplete="email" required></label>
             <button type="submit">Send me a link</button>
+            <button type="button" id="email-cancel" class="btn-secondary" hidden>Cancel</button>
           </form></dd></div>
         <div><dt>Other devices</dt><dd id="device"></dd></div>
       </dl>

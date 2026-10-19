@@ -49,6 +49,7 @@ People rename themselves in the room. `@` autocompletes personas and people. A m
 
 ### Identity
 - [x] **AC1** A participant can change their own display name from the room page, with the same validation as at join. A system line says "<old> is now <new>". Past messages show the new name with the old one on hover. An option also applies it to their profile. The presence preamble keeps the same short uuid across the rename.
+- [x] **AC48** `/profile` › Account sets the profile's name with Change (Set when it has none), Save and Cancel, checked as at join (`PUT /api/profile/name`). The join page and "+ New room" start from it; the names already used in rooms stay. Changing the email has Cancel too, and Escape in either field does the same. (user, 2026-10-19)
 
 ### Mentions and turns
 - [x] **AC2** Typing `@` in the message box suggests the room's personas first, then participants, filtered as you type. It works with keyboard and touch.
@@ -152,7 +153,7 @@ Each AC names the audit findings it covers. `docs/design.md` holds the rules the
 
 ### Phase 4 — Self-rename, docs window, unread, modals
 - Work: self-rename, the document manager in its own window, the unread title count, modal dismissal, document rename and soft delete, the stored mention chips.
-- **Covers**: AC1, AC3 (text), AC4 (stored link), AC11, AC12, AC13, AC15, AC16, AC17, AC21, AC24, AC25, AC26, AC27
+- **Covers**: AC1, AC3 (text), AC4 (stored link), AC11, AC12, AC13, AC15, AC16, AC17, AC21, AC24, AC25, AC26, AC27, AC48
 - **Data model impact**: the message author snapshot gives the name history; `profiles.name`; `push_subscriptions`; VAPID keys in instance settings; `documents.deleted_at` and a change counter; `document_renames`; `message_turns` keeps the final state of an imported mention; export format 2
 - **DoD**: e2e for each, at phone and desktop width; push encryption (RFC 8291) and VAPID JWT tested against a local test push endpoint; a real notification received on an Android phone from the lab.
 
@@ -200,6 +201,7 @@ Each AC names the audit findings it covers. `docs/design.md` holds the rules the
 - Documents: any member renames, room admins soft-delete and restore; only the room's deletion purges (user, 2026-10-13).
 - Plain members see only the Glossary tab in Room settings (user decision C, 2026-10-13).
 - `profiles.name`, set by "Also use it for my profile", is accepted as routine (user, 2026-10-13).
+- The profile sets its own name from `/profile` too; it never renames its seats, which the room list already shows "as <name>" (user, 2026-10-19).
 - The web manifest is `standalone`, which iOS needs for push (user, 2026-10-13).
 - Three daemon reports from live use join Phase 6 as AC45 to AC47: the page lost on a self-update, `grill-room-daemon admin`, `~` in account dirs (user, 2026-10-13).
 - The UX audit's findings become AC28 to AC44, grouped by theme, in two phases: polish (Phase 5), then the redesigns (Phase 6) (user, 2026-10-13).

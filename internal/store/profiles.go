@@ -395,6 +395,15 @@ func (s *Store) SnoozeEmailNudge(ctx context.Context, profileID int64, until tim
 	return nil
 }
 
+// SetProfileName makes name the one the profile chose (005-AC48): joins and new rooms start from
+// it, and its seats keep the names they have.
+func (s *Store) SetProfileName(ctx context.Context, profileID int64, name string) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE profiles SET name = ? WHERE id = ?`, name, profileID); err != nil {
+		return fmt.Errorf("set profile name: %w", err)
+	}
+	return nil
+}
+
 // CreateRecoveryLink stores a one-time recovery link tokenHash for profileID, valid
 // RecoveryLinkTTL from now, and returns its expiry. It voids the profile's earlier unused links
 // and sweeps every used or expired one. The audit entry ctx carries gets the profile's uuid, never

@@ -1,6 +1,9 @@
 import { mkdirSync } from 'node:fs';
 import { test, expect } from './fixtures.js';
 import { roomWith, appointAdmin, smallTargets, noOverflow, skillZip, confirmSheet, unfoldTabs } from './helpers.js';
+import { adminToken } from './playwright.config.js';
+
+const admin = { Authorization: `Bearer ${adminToken}` };
 
 // The /profile rework (specs/011b-profile-rework.md). The e2e server has no SMTP: the Email states
 // come from GET /api/profile answered with email_enabled and the state patched in.
@@ -290,4 +293,70 @@ test('tabs and identity strip at desktop and phone widths', async ({ browser, re
   await expect(tab.locator('#me-menu')).toBeHidden();
   await expect(tab.locator('#panel-rooms')).toBeVisible();
   await expect(tab.locator('#count-rooms')).toHaveText('1');
+});
+
+// 005-AC48: Cancel and Escape close the address field back to Change.
+test('changing the email can be cancelled', async ({ browser, request }) => {
+  const { pages: [pat] } = await roomWith(browser, request, ['Pat']);
+  const tab = await profilePage(pat, (p) => Object.assign(p, states.bound));
+  await tab.goto('/profile#account');
+  const change = tab.locator('#email-change');
+  const cancel = tab.locator('#email-cancel');
+  for (const close of [() => cancel.click(), () => tab.locator('#bind-email').press('Escape')]) {
+    await change.click();
+    await expect(tab.locator('#bind-email')).toBeFocused();
+    await expect(cancel).toBeVisible();
+    await tab.locator('#bind-email').fill('new@example.com');
+    await close();
+    await expect(tab.locator('#bind')).toBeHidden();
+    await expect(change).toBeVisible();
+    await expect(change).toBeFocused();
+    await expect(tab.locator('#email-state')).toHaveText(address);
+    await expect(tab.locator('#bind-email')).toHaveValue('');
+  }
+  // With no address there is nothing to go back to: the field stays, without Cancel.
+  const none = await profilePage(pat);
+  await none.goto('/profile#account');
+  await expect(none.locator('#bind')).toBeVisible();
+  await expect(none.locator('#email-cancel')).toBeHidden();
+});
+
+// 005-AC48: the profile's own name, checked as at join, kept over a reload, and where the join page
+// starts; the room keeps the name it was joined with.
+test('the profile sets its name', async ({ browser, request }) => {
+  const { pages: [pat] } = await roomWith(browser, request, ['Pat']);
+  const tab = await pat.context().newPage();
+  await tab.goto('/profile#account');
+  const change = tab.locator('#name-change');
+  const input = tab.locator('#name-input');
+  await expect(tab.locator('#account-name')).toHaveText('Pat');
+  await change.click();
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue('Pat');
+  await tab.locator('#name-cancel').click();
+  await expect(tab.locator('#name-form')).toBeHidden();
+  await expect(change).toBeVisible();
+  await change.click();
+  await input.press('Escape');
+  await expect(tab.locator('#name-form')).toBeHidden();
+
+  await change.click();
+  await input.fill('   ');
+  await tab.getByRole('button', { name: 'Save' }).click();
+  await expect(tab.locator('#name-error')).toHaveText('Type the name the others will see, up to 40 characters.');
+  await expect(input).toHaveAttribute('aria-invalid', 'true');
+  await input.fill('Patricia');
+  await tab.getByRole('button', { name: 'Save' }).click();
+  await expect(tab.locator('#name-form')).toBeHidden();
+  await expect(tab.locator('#account-name')).toHaveText('Patricia');
+  await tab.reload();
+  await expect(tab.locator('#account-name')).toHaveText('Patricia');
+  await expect(tab.locator('#me')).toHaveText('Patricia');
+  await openTab(tab, 'rooms');
+  await expect(tab.locator('#rooms li .room-line')).toHaveText(['Docs room as Pat']);
+
+  const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Next room' } })).json();
+  const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
+  await tab.goto(new URL(inv.url).pathname + new URL(inv.url).hash);
+  await expect(tab.getByLabel('Your name')).toHaveValue('Patricia');
 });

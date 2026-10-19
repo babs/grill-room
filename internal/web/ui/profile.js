@@ -63,6 +63,9 @@ function render({ email_enabled: enabled, profile, magic_link_ttl_s: linkTTL }) 
   showMe(name);
   $('profile-name').textContent = name;
   $('account-name').textContent = name || 'Set when you join a room.';
+  $('account-name').dataset.name = name;
+  $('name-change').textContent = name ? 'Change' : 'Set';
+  showName(false);
   $('email').hidden = !emailEnabled;
   shown = profile;
   pending = profile.pending_email || '';
@@ -133,7 +136,18 @@ function showEmail(editing) {
     $('bind').hidden = !!email && !editing;
   }
   $('email-change').hidden = !email || editing || !!pending;
+  // Cancel goes back to the address the profile has; without one there is nothing to go back to.
+  $('email-cancel').hidden = !email || !editing;
   $('bind-label').textContent = email ? 'New address' : 'Add an email';
+}
+
+// showName opens the profile's name field (005-AC48) or closes it, empty, back to Change.
+function showName(editing) {
+  $('name-form').hidden = !editing;
+  $('name-change').hidden = editing;
+  $('name-error').textContent = '';
+  $('name-input').removeAttribute('aria-invalid');
+  $('name-input').value = editing ? $('account-name').dataset.name || '' : '';
 }
 
 // openEmailField is the next step of a link that failed, and where /profile#email lands: a field
@@ -545,6 +559,52 @@ const signinLink = window.grillLinkForm({ form: $('signin'), url: '/api/profile/
 $('email-change').addEventListener('click', () => {
   showEmail(true);
   $('bind-email').focus();
+});
+const cancelEmail = () => {
+  $('bind-email').value = '';
+  showEmail(false);
+  $('email-change').focus();
+};
+$('email-cancel').addEventListener('click', cancelEmail);
+$('bind-email').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('email-cancel').hidden) cancelEmail();
+});
+
+$('name-change').addEventListener('click', () => {
+  showName(true);
+  $('name-input').focus();
+});
+const cancelName = () => {
+  showName(false);
+  $('name-change').focus();
+};
+$('name-cancel').addEventListener('click', cancelName);
+$('name-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') cancelName();
+});
+$('name-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const button = $('name-form').querySelector('button[type=submit]');
+  button.disabled = true;
+  $('name-error').textContent = '';
+  try {
+    const res = await fetch('/api/profile/name', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: $('name-input').value }) });
+    if (res.ok) {
+      const r = await fetch('/api/profile');
+      if (r.ok) render(await r.json());
+      $('name-change').focus();
+    } else {
+      // The join page's words for the same rule (005-AC44).
+      $('name-error').textContent = res.status === 400 ? 'Type the name the others will see, up to 40 characters.'
+        : (await res.json().catch(() => ({}))).error || 'HTTP ' + res.status;
+      $('name-input').setAttribute('aria-invalid', 'true');
+      $('name-input').focus();
+    }
+  } catch {
+    $('name-error').textContent = 'Network error, try again.';
+  }
+  button.disabled = false;
 });
 
 // The tabs (011b-AC12): the hash names the tab, #email the Account tab's address field (011-AC7).
