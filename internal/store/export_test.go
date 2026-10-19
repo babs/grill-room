@@ -647,7 +647,7 @@ func TestImportRefusals(t *testing.T) {
 func TestExportMemoryIsBounded(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
-	const n, size = 16, 4 << 20
+	const n, size = 32, 4 << 20
 	p := joinWithProfile(t, s, "big", "Alice", JoinProfile{})
 	for i := range n {
 		data := bytes.Repeat([]byte{'a' + byte(i)}, size)
@@ -685,8 +685,9 @@ func TestExportMemoryIsBounded(t *testing.T) {
 	grew := int64(peak.Load()) - int64(base.HeapAlloc)
 	t.Logf("room %d MB, heap grew by %.1f MB at most", n*size>>20, float64(grew)/(1<<20))
 	// One blob passes through a few buffers, and when the GC frees them varies: pgx reads a 4 MB row
-	// into a pooled 8 MB buffer, and Windows peaked at four copies. An export holding the room would
-	// reach its 64 MB.
+	// into a pooled 8 MB buffer, and Windows peaked at four copies. Under -race on PostgreSQL 18 the
+	// unfreed buffers reached 32 MB, whatever the room's size. An export holding the room would reach
+	// its 128 MB.
 	if grew > n*size/2 {
 		t.Fatalf("the export held %.1f MB of a %d MB room in memory", float64(grew)/(1<<20), n*size>>20)
 	}
