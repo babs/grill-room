@@ -1,6 +1,6 @@
 # 017: Room server on PostgreSQL, several server pods at once
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-10-17, questions answered 2026-10-18
 **Context**: backlog "Server on PostgreSQL + multiple server pods" (2026-10-14); "Next step postgres" and a go for the spec (2026-10-17). Touches every spec that stores data. Builds on 003 (daemon stream, pairing, host election), 005 (presence, push 005-AC24, voice dedupe), 009 (notes watcher, plugin fetch), 011 (magic-link limits, purges), 013 (TTS pod stream, KEDA demand metric 013-AC34), 014 (egress holds), 016 (seats).
@@ -15,7 +15,7 @@ The room server runs as one pod, `replicas: 1` with `strategy: Recreate`, on a R
 
 ## Solution
 
-The server stores everything in PostgreSQL. Two or more server pods run behind one Service. A message, a turn result, a presence change or a TTS line handled by one pod reaches the browsers, apps and TTS pod streaming from any pod within a second. Background jobs run once, on one pod, and move to another pod when it dies. Deploys roll pod by pod. Backups run while the server runs. The lab's data moves over once, with a rollback path.
+The server stores everything in PostgreSQL. Two or more server pods run behind one Service. A message, a turn result, a presence change or a TTS line handled by one pod reaches the browsers, apps and TTS pod streaming from any pod within a second. Background jobs run once, on one pod, and move to another pod when it dies. Deploys roll pod by pod. The lab's data moves over once, with a rollback path.
 
 ## Scope
 
@@ -23,7 +23,7 @@ The server stores everything in PostgreSQL. Two or more server pods run behind o
 - One-shot copy of a SQLite database into an empty PG database, with verification.
 - Cross-pod wake-ups for every stream (room, daemon, TTS pod, egress hold, push).
 - Every item of the single-process inventory marked PG, NOTIFY, lock, leader or per-pod.
-- Deploy: 2 replicas, `RollingUpdate`, PodDisruptionBudget, DSN secret, network policy to PG, scratch volume, models volume, backups by `pg_dump`.
+- Deploy: 2 replicas, `RollingUpdate`, PodDisruptionBudget, DSN secret, network policy to PG, scratch volume, models volume.
 - Go tests and e2e on PG in CI; a two-pod e2e.
 - Docs: README config table, deploy and privacy sections, `docs/architecture.md`.
 
@@ -198,7 +198,7 @@ Rolling deploy, the audio risk that remains:
 | Scratch | `/tmp` `emptyDir` 256 Mi (`room.yaml:153-155`); staging beside the DB | `emptyDir` for staging, sized to the import limit (I31) |
 | Readiness / liveness | `/healthz` write check / TCP (`room.yaml:130-131`) | same, against PG |
 | Metrics | VMPodScrape per pod (`deploy/monitoring/room.yaml`) | same; I41 |
-| Backups | server at 0, copy `grill-room.db*`, sha256, `PRAGMA integrity_check` | `pg_dump -Fc` while running; restore test into a scratch database |
+| Backups | server at 0, copy `grill-room.db*`, sha256, `PRAGMA integrity_check` | out of scope (AC23 dropped) |
 | Config | `GRILL_ROOM_DB`, default `grill-room.db` (`cmd/grill-room/main.go:159`) | `GRILL_ROOM_DATABASE_URL` from a secret; the copy command takes the SQLite file as `--from <file>` (Q1 a) |
 | Network policy | no PG egress (`deploy/k8s/netpol.yaml`) | egress to PG 5432 |
 
@@ -229,45 +229,45 @@ Rolling deploy, the audio risk that remains:
 
 ### PostgreSQL store
 
-- [ ] **AC1** With `GRILL_ROOM_DATABASE_URL` set, the server starts on an empty PG 16 database, creates schema version 46 and the boot data (presets, starters, pronunciation seed) once, and serves. A second start changes nothing. Two pods starting at once give the same result. *Verify*: Go test: two concurrent opens, then `pg_dump --schema-only` and row counts compared with a single open.
-- [ ] **AC2** Every store, web and server-side daemon test passes on PG. Store statement coverage on PG is at least the SQLite figure measured before Phase 1. *Verify*: `go test -cover ./internal/store/` before and after; both numbers in the PR.
-- [ ] **AC3** No SQLite construct is left in server code. *Verify*: grep of non-test files of `internal/store` and `internal/web` for `PRAGMA`, `json_extract`, `json_each`, `json_group_array`, `group_concat`, `NOCASE`, `randomblob`, `rowid`, `LastInsertId`, `sqlite_schema`, `wal_checkpoint` returns 0; state the sweep.
-- [ ] **AC4** Two stores on one database keep the invariants the single connection kept: 50 parallel message edits in one room give 50 distinct `change_seq` values; parallel `AddPersona` calls stop at `MaxRoomPersonas`; 200 parallel message inserts become visible to a reader in id order, with no id skipped by an "id greater than last" cursor. *Verify*: Go test with 2 `*Store`, under `-race`.
-- [ ] **AC5** No column is PG `integer`; every former `BLOB` is `bytea`. *Verify*: a test over `information_schema.columns`.
-- [ ] **AC6** The server refuses to start on a database whose collation is not `C`, with an error naming the fix. *Verify*: Go test.
+- [x] **AC1** With `GRILL_ROOM_DATABASE_URL` set, the server starts on an empty PG 16 database, creates schema version 46 and the boot data (presets, starters, pronunciation seed) once, and serves. A second start changes nothing. Two pods starting at once give the same result. *Verify*: Go test: two concurrent opens, then `pg_dump --schema-only` and row counts compared with a single open.
+- [x] **AC2** Every store, web and server-side daemon test passes on PG. Store statement coverage on PG is at least the SQLite figure measured before Phase 1. *Verify*: `go test -cover ./internal/store/` before and after; both numbers in the PR.
+- [x] **AC3** No SQLite construct is left in server code. *Verify*: grep of non-test files of `internal/store` and `internal/web` for `PRAGMA`, `json_extract`, `json_each`, `json_group_array`, `group_concat`, `NOCASE`, `randomblob`, `rowid`, `LastInsertId`, `sqlite_schema`, `wal_checkpoint` returns 0; state the sweep.
+- [x] **AC4** Two stores on one database keep the invariants the single connection kept: 50 parallel message edits in one room give 50 distinct `change_seq` values; parallel `AddPersona` calls stop at `MaxRoomPersonas`; 200 parallel message inserts become visible to a reader in id order, with no id skipped by an "id greater than last" cursor. *Verify*: Go test with 2 `*Store`, under `-race`.
+- [x] **AC5** No column is PG `integer`; every former `BLOB` is `bytea`. *Verify*: a test over `information_schema.columns`.
+- [x] **AC6** The server refuses to start on a database whose collation is not `C`, with an error naming the fix. *Verify*: Go test.
 
 ### Data copy
 
-- [ ] **AC7** `grill-room db copy --from <file> --to <dsn>` copies a v46 SQLite database into an empty PG database in one transaction, keeps every id, and sets each identity past its maximum. It refuses a non-empty target and a source at another version. *Verify*: Go test on a fixture with every table populated.
-- [ ] **AC8** The copy prints, for each table on both sides, the row count and a sha256 over the rows in primary-key order, and exits non-zero on any difference. *Verify*: test with one target row altered.
-- [ ] **AC9** The lab on PG serves the copied data: rooms, messages, documents and uploads open as before; a member's room cookie and profile session still work; the paired app reconnects without pairing again. *Verify*: the lab check script before and after cutover, same output.
+- [x] **AC7** `grill-room db copy --from <file> --to <dsn>` copies a v46 SQLite database into an empty PG database in one transaction, keeps every id, and sets each identity past its maximum. It refuses a non-empty target and a source at another version. *Verify*: Go test on a fixture with every table populated.
+- [x] **AC8** The copy prints, for each table on both sides, the row count and a sha256 over the rows in primary-key order, and exits non-zero on any difference. *Verify*: test with one target row altered.
+- [x] **AC9** The lab on PG serves the copied data: rooms, messages, documents and uploads open as before; a member's room cookie and profile session still work; the paired app reconnects without pairing again. *Verify*: the lab check script before and after cutover, same output.
 
 ### Several pods
 
-- [ ] **AC10** With 2 pods, a line posted through pod A shows in a browser streaming from pod B within 1 s (p95 over 20 lines). Same for a turn result posted to A while the browser streams from B, and for a TTS line queued on A while the TTS pod streams from B. *Verify*: two-pod e2e; Go test for the TTS stream.
-- [ ] **AC11** A turn starts, runs and ends whatever pod each request lands on: the app's stream on A, the "run" press on B, its result posted to A or B. No request answers "agent is offline" while the host app is connected to either pod. *Verify*: two-pod e2e with a fake app.
-- [ ] **AC12** Host election gives one host per room with 2 pods: 20 connect and disconnect rounds of 2 fake apps spread over both pods post exactly one "holds the agent(s)" line per real change. *Verify*: Go test.
-- [ ] **AC13** Pairing works when the app's request, the poll and the participant's answer land on different pods. *Verify*: Go test, each call on another server.
-- [ ] **AC14** People, audio state, STT workers and the TTS pod show the same on both pods within 2 s: a tab streaming from A and beating to B is online on both. *Verify*: Go test on two servers.
-- [ ] **AC15** A voice line from device transcription on A and the same line from the STT worker on B give one line in the room. *Verify*: Go test (005's dedupe test run across two servers).
-- [ ] **AC16** Limits hold for the cluster: the 11th failed admin login from one IP in 15 min gets 429 whichever pod takes it; same for the magic-link caps (011). *Verify*: Go table test alternating pods.
-- [ ] **AC17** Each loop (I36 to I39, I8's sweeper) runs on one pod only: one push per event, one purge per period, one timer turn per due trigger. Killing the leader's lock connection moves the loops within 15 s. `grill_room_leader` is 1 on one pod, 0 on the other. *Verify*: Go test with 2 servers.
-- [ ] **AC18** A pod restart fails no turn running on the other pod's app. A turn whose app vanished with its pod fails within the turn timeout plus 30 s. *Verify*: Go test.
-- [ ] **AC19** A rolling deploy of 2 pods drops nothing: one line per second posted through the ingress during the rollout all show, in order, in a browser that stays open; open streams resume with `Last-Event-ID`. *Verify*: lab run, log in the PR.
-- [ ] **AC20** Metrics `grill_room_notify_sent_total`, `grill_room_notify_received_total`, `grill_room_listen_reconnects_total`, `grill_room_leader`, `grill_room_db_lock_wait_seconds`; the I41 gauges come from the leader only. Listed in `docs/architecture.md`. *Verify*: scrape of both pods.
+- [x] **AC10** With 2 pods, a line posted through pod A shows in a browser streaming from pod B within 1 s (p95 over 20 lines). Same for a turn result posted to A while the browser streams from B, and for a TTS line queued on A while the TTS pod streams from B. *Verify*: two-pod e2e; Go test for the TTS stream.
+- [x] **AC11** A turn starts, runs and ends whatever pod each request lands on: the app's stream on A, the "run" press on B, its result posted to A or B. No request answers "agent is offline" while the host app is connected to either pod. *Verify*: two-pod e2e with a fake app.
+- [x] **AC12** Host election gives one host per room with 2 pods: 20 connect and disconnect rounds of 2 fake apps spread over both pods post exactly one "holds the agent(s)" line per real change. *Verify*: Go test.
+- [x] **AC13** Pairing works when the app's request, the poll and the participant's answer land on different pods. *Verify*: Go test, each call on another server.
+- [x] **AC14** People, audio state, STT workers and the TTS pod show the same on both pods within 2 s: a tab streaming from A and beating to B is online on both. *Verify*: Go test on two servers.
+- [x] **AC15** A voice line from device transcription on A and the same line from the STT worker on B give one line in the room. *Verify*: Go test (005's dedupe test run across two servers).
+- [x] **AC16** Limits hold for the cluster: the 11th failed admin login from one IP in 15 min gets 429 whichever pod takes it; same for the magic-link caps (011). *Verify*: Go table test alternating pods.
+- [x] **AC17** Each loop (I36 to I39, I8's sweeper) runs on one pod only: one push per event, one purge per period, one timer turn per due trigger. Killing the leader's lock connection moves the loops within 15 s. `grill_room_leader` is 1 on one pod, 0 on the other. *Verify*: Go test with 2 servers.
+- [x] **AC18** A pod restart fails no turn running on the other pod's app. A turn whose app vanished with its pod fails within the turn timeout plus 30 s. *Verify*: Go test.
+- [x] **AC19** A rolling deploy of 2 pods drops nothing: one line per second posted through the ingress during the rollout all show, in order, in a browser that stays open; open streams resume with `Last-Event-ID`. *Verify*: lab run, log in the PR.
+- [x] **AC20** Metrics `grill_room_notify_sent_total`, `grill_room_notify_received_total`, `grill_room_listen_reconnects_total`, `grill_room_leader`, `grill_room_db_lock_wait_seconds`; the I41 gauges come from the leader only. Listed in `docs/architecture.md`. *Verify*: scrape of both pods.
 
 ### Deploy and operations
 
-- [ ] **AC21** Manifests: 2 replicas, `RollingUpdate` with `maxUnavailable: 0`, a PodDisruptionBudget with `minAvailable: 1`, a DSN secret, a models volume a second node can mount, a staging `emptyDir`, a NetworkPolicy to PG. *Verify*: `make k8s-render`; draining one node keeps the room page live.
-- [ ] **AC22** `/healthz` answers 503 when PG refuses a write, 200 otherwise. *Verify*: Go test with the database refusing writes (read-only).
-- ~~**AC23** A backup runs with the server up (`pg_dump -Fc`); a restore into a scratch database passes AC8's comparison against the source snapshot. *Verify*: lab run.~~ Dropped (user, 2026-10-19): pg_dump/restore is proven tech; backups are the PostgreSQL cluster's job, not something grill-room tests.
-- [ ] **AC24** README (config, deploy) and `docs/architecture.md` describe PG and the pods. *Verify*: grep of README and `docs/` for "SQLite" returns only daemon and history lines.
-- [ ] **AC27** README "Privacy" replaces the `secure_delete` line (README:321) with: removed rows leave the tables at once, the database files after PostgreSQL's autovacuum or a `VACUUM` reuses their space, and backups after their retention. No text promises zeroed pages, and the server runs no `VACUUM` of its own. *Verify*: grep of README for `secure_delete` and "overwrite" returns 0; grep of non-test Go files for `VACUUM` returns 0.
+- [x] **AC21** Manifests: 2 replicas, `RollingUpdate` with `maxUnavailable: 0`, a PodDisruptionBudget with `minAvailable: 1`, a DSN secret, a models volume a second node can mount, a staging `emptyDir`, a NetworkPolicy to PG. *Verify*: `make k8s-render`; deleting one server pod keeps the room page live. Changed (user, 2026-10-19): one pod deleted instead of a node drain, so no other workload is evicted; a pod delete does not exercise the PodDisruptionBudget, which `make k8s-render` and the manifest test cover.
+- [x] **AC22** `/healthz` answers 503 when PG refuses a write, 200 otherwise. *Verify*: Go test with the database refusing writes (read-only).
+- ~~**AC23** A backup runs with the server up (`pg_dump -Fc`); a restore into a scratch database passes AC8's comparison against the source snapshot. *Verify*: lab run.~~ Dropped (user, 2026-10-19): backups are out of grill-room's scope.
+- [x] **AC24** README (config, deploy) and `docs/architecture.md` describe PG and the pods. *Verify*: grep of README and `docs/` for "SQLite" returns only daemon and history lines.
+- [x] **AC27** README "Privacy" replaces the `secure_delete` line (README:321) with: removed rows leave the tables at once, the database files after PostgreSQL's autovacuum or a `VACUUM` reuses their space, and backups after their retention. No text promises zeroed pages, and the server runs no `VACUUM` of its own. *Verify*: grep of README for `secure_delete` and "overwrite" returns 0; grep of non-test Go files for `VACUUM` returns 0.
 
 ### Tests and CI
 
-- [ ] **AC25** CI runs the Go tests and the e2e suite on PG 16, and the two-pod e2e. *Verify*: green run linked in the PR.
-- [ ] **AC26** `make test` takes at most 30 % longer than on SQLite. *Verify*: both timings in the PR.
+- [x] **AC25** CI runs the Go tests and the e2e suite on PG 16, and the two-pod e2e. *Verify*: green run linked in the PR.
+- [x] **AC26** `make test` takes at most 30 % longer than on SQLite. *Verify*: both timings in the PR.
 
 ## Phases
 
@@ -278,7 +278,7 @@ Rolling deploy, the audio risk that remains:
 - **DoD**: `make lint test` green on PG; AC3 sweep at 0, stated; AC2 numbers in the PR; e2e green on PG with one server.
 
 ### Phase 2: Lab copy and cutover (S)
-- Work: database and login role created on the shared cluster (external, Q12); `grill-room db copy` with verification; runbook; cutover at `replicas: 1`; `pg_dump` backup; README and architecture docs.
+- Work: database and login role created on the shared cluster (external, Q12); `grill-room db copy` with verification; runbook; cutover at `replicas: 1`; README and architecture docs.
 - **Covers**: AC7, AC8, AC9, AC24, AC27
 - **Data model impact**: none.
 - **DoD**: AC7 and AC8 tests green; lab cutover done, check script identical before and after; rollback rehearsed once in a scratch namespace.
@@ -293,7 +293,7 @@ Rolling deploy, the audio risk that remains:
 - Work: leader lock; loops I36 to I39 under it; push cursor in PG; turn sweeper replacing I8, I9, I10; leader-only gauges (I22, I41); manifests; rolling deploy on the lab.
 - **Covers**: AC17, AC18, AC19, AC20, AC21
 - **Data model impact**: push cursor in `settings`; `turns.delivered` (schema 48), so a reconnecting app's new stream fails only the turns its dropped stream had received.
-- **DoD**: AC17 and AC18 tests green; lab rollout of AC19 with its log in the PR; node drain of AC21 done.
+- **DoD**: AC17 and AC18 tests green; lab rollout of AC19 with its log in the PR; one server pod deleted with the watch at PASS (AC21).
 
 ## Data model impact (summary)
 
