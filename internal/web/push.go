@@ -16,7 +16,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/webpush"
 )
@@ -31,6 +30,8 @@ const (
 	pushMessage   = "message"
 	// vapidSetting holds the VAPID private key, generated on first use.
 	vapidSetting = "vapid_private_key"
+	// pushCursorSetting holds the last line id the push loop handled (017-AC17).
+	pushCursorSetting = "push_cursor"
 	// pushSends bounds the pushes in flight at once.
 	pushSends = 4
 )
@@ -145,6 +146,8 @@ type pushBatch struct {
 	first time.Time
 	// message is the latest line of the batch's kind: the notification opens the chat there.
 	message int64
+	// from is the batch's first line: the push cursor stays before it until the batch is sent.
+	from int64
 }
 
 // pushPayload is all a notification says: it passes through the browser vendor's push service, so
@@ -157,22 +160,37 @@ type pushPayload struct {
 }
 
 // PushLoop sends the room's events as Web Push notifications until ctx ends (005-AC24). It reads
-// the lines each room signal brings, as an event stream does, from the newest line at its start.
+// every room's lines past the push cursor on each room signal, as an event stream does; the cursor
+// in settings lets the next leader go on where this one stopped (017-AC17).
 func (s *Server) PushLoop(ctx context.Context) {
-	// ponytail: a signal the bus drops delays that room's pushes to its next signal; sweep the
-	// rooms with a cursor on the tick if that ever shows.
 	signals, cancel := s.bus.Subscribe(256)
 	defer cancel()
-	start, err := s.bus.Store.LastMessageID(ctx)
+	cursor, err := s.pushCursor(ctx)
 	if err != nil {
 		s.log.Error("push_start_failed", zap.Error(err))
 		return
 	}
-	cursors := map[string]int64{}
+	// The first tick writes the cursor: the next leader must find it even when it never moved.
+	saved := int64(-1)
 	pending := map[int64]*pushBatch{}
+	// sending holds the batches in flight, whose lines the cursor must not pass yet.
+	var mu sync.Mutex
+	sending := map[*pushBatch]bool{}
 	sends := make(chan struct{}, pushSends)
 	var wg sync.WaitGroup
 	defer wg.Wait()
+	read := func() {
+		last, err := s.pushLines(ctx, cursor, pending)
+		if err != nil && ctx.Err() == nil {
+			s.log.Warn("push_read_failed", zap.Error(err))
+		}
+		cursor = last
+		if s.pushRead != nil {
+			s.pushRead(last)
+		}
+	}
+	// The lines said while no leader read them.
+	read()
 	tick := time.NewTicker(pushTick)
 	defer tick.Stop()
 	for {
@@ -180,20 +198,8 @@ func (s *Server) PushLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case room := <-signals:
-			if !pushable(room) {
-				continue
-			}
-			after := max(cursors[room], start)
-			last, err := s.pushEvents(ctx, room, after, pending)
-			if err != nil {
-				if ctx.Err() == nil {
-					s.log.Warn("push_read_failed", zap.String("room", room), zap.Error(err))
-				}
-				continue
-			}
-			cursors[room] = last
-			if s.pushRead != nil {
-				s.pushRead(last)
+			if pushable(room) {
+				read()
 			}
 		case <-tick.C:
 			// The server's clock, as each batch's first event used: the tick only polls.
@@ -213,13 +219,39 @@ func (s *Server) PushLoop(ctx context.Context) {
 				case <-ctx.Done():
 					return
 				}
+				mu.Lock()
+				sending[b] = true
+				mu.Unlock()
 				wg.Add(1)
 				sent++
 				go func() {
 					defer wg.Done()
 					defer func() { <-sends }()
 					s.sendPush(ctx, b)
+					mu.Lock()
+					delete(sending, b)
+					mu.Unlock()
 				}()
+			}
+			// ponytail: a leader that dies mid-send leaves its cursor before the batch, so the next
+			// one sends it again: at least once.
+			handled := cursor
+			for _, b := range pending {
+				handled = min(handled, b.from-1)
+			}
+			mu.Lock()
+			for b := range sending {
+				handled = min(handled, b.from-1)
+			}
+			mu.Unlock()
+			if handled != saved {
+				if err := s.bus.Store.SetSetting(ctx, pushCursorSetting, strconv.FormatInt(handled, 10)); err != nil {
+					if ctx.Err() == nil {
+						s.log.Warn("push_cursor_failed", zap.Error(err))
+					}
+				} else {
+					saved = handled
+				}
 			}
 			if s.pushTicked != nil {
 				s.pushTicked(now, sent)
@@ -228,57 +260,98 @@ func (s *Server) PushLoop(ctx context.Context) {
 	}
 }
 
-// pushable tells a room's signal from the wakes that carry no lines: bus.All after a LISTEN
-// reconnect, and the ':'-prefixed ids such as the TTS wakes.
-func pushable(id string) bool { return id != bus.All && !strings.HasPrefix(id, ":") }
+// pushCursor is the last line id a push loop handled, from settings; the newest line when none
+// did, as nothing said before the first start is pushed.
+func (s *Server) pushCursor(ctx context.Context) (int64, error) {
+	v, err := s.bus.Store.Setting(ctx, pushCursorSetting)
+	if err != nil {
+		return 0, err
+	}
+	if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+		return id, nil
+	} else if v != "" {
+		s.log.Warn("push_cursor_invalid", zap.String("value", v), zap.Error(err))
+	}
+	return s.bus.Store.LastMessageID(ctx)
+}
 
-// pushEvents classifies room's lines past after for each subscription, into pending, and returns
-// the last line id read.
-func (s *Server) pushEvents(ctx context.Context, room string, after int64, pending map[int64]*pushBatch) (int64, error) {
+// pushable tells the signals that may bring lines: a room's, and bus.All after a LISTEN
+// reconnect, not the ':'-prefixed ids such as the TTS wakes.
+func pushable(id string) bool { return !strings.HasPrefix(id, ":") }
+
+// pushRoom is what classifying a room's lines reads once per room.
+type pushRoom struct {
+	subs     []store.PushSubscription
+	ps       []store.Participant
+	personas []store.RoomPersona
+}
+
+// pushLines classifies every room's lines past after for each subscription, into pending, and
+// returns the last line id read. A read batch goes into pending whole or not at all, so a failed
+// read leaves no line counted twice.
+func (s *Server) pushLines(ctx context.Context, after int64, pending map[int64]*pushBatch) (int64, error) {
 	st := s.bus.Store
-	msgs, err := st.Messages(ctx, room, after, replayBatch)
-	if err != nil || len(msgs) == 0 {
-		return after, err
-	}
-	last := msgs[len(msgs)-1].ID
-	subs, err := st.PushSubscriptions(ctx, room)
-	if err != nil || len(subs) == 0 {
-		return last, err
-	}
-	ps, err := st.Participants(ctx, room)
-	if err != nil {
-		return after, err
-	}
-	personas, err := st.RoomPersonas(ctx, room)
-	if err != nil {
-		return after, err
-	}
-	now := s.now()
-	for _, m := range msgs {
-		starter := int64(0)
-		if m.TurnID != 0 && m.Kind != store.KindText {
-			if t, err := st.Turn(ctx, room, m.TurnID); err == nil {
-				starter = t.ParticipantID
-			}
+	for {
+		msgs, err := st.MessagesAfter(ctx, after, replayBatch)
+		if err != nil || len(msgs) == 0 {
+			return after, err
 		}
-		mentioned := mentionedPeople(m, personas, ps)
-		for _, sub := range subs {
-			kind := pushKind(m, sub, starter, mentioned[sub.ParticipantID])
-			if kind == "" || s.people.focused(room, sub.ParticipantID, s.lease()) {
+		rooms := map[string]*pushRoom{}
+		for _, m := range msgs {
+			if rooms[m.RoomID] != nil {
 				continue
 			}
-			b := pending[sub.ID]
-			if b == nil {
-				b = &pushBatch{sub: sub, room: room, first: now}
-				pending[sub.ID] = b
+			r := &pushRoom{}
+			if r.subs, err = st.PushSubscriptions(ctx, m.RoomID); err != nil {
+				return after, err
 			}
-			b.count++
-			if b.kind == "" || pushRank[kind] >= pushRank[b.kind] {
-				b.kind, b.message = kind, m.ID
+			if len(r.subs) > 0 {
+				if r.ps, err = st.Participants(ctx, m.RoomID); err != nil {
+					return after, err
+				}
+				if r.personas, err = st.RoomPersonas(ctx, m.RoomID); err != nil {
+					return after, err
+				}
+			}
+			rooms[m.RoomID] = r
+		}
+		now := s.now()
+		for _, m := range msgs {
+			if r := rooms[m.RoomID]; len(r.subs) > 0 {
+				s.pushLine(ctx, r, m, now, pending)
 			}
 		}
+		after = msgs[len(msgs)-1].ID
+		if len(msgs) < replayBatch {
+			return after, nil
+		}
 	}
-	return last, nil
+}
+
+// pushLine adds line m to the pending batch of each subscription of its room it concerns.
+func (s *Server) pushLine(ctx context.Context, r *pushRoom, m store.Message, now time.Time, pending map[int64]*pushBatch) {
+	starter := int64(0)
+	if m.TurnID != 0 && m.Kind != store.KindText {
+		if t, err := s.bus.Store.Turn(ctx, m.RoomID, m.TurnID); err == nil {
+			starter = t.ParticipantID
+		}
+	}
+	mentioned := mentionedPeople(m, r.personas, r.ps)
+	for _, sub := range r.subs {
+		kind := pushKind(m, sub, starter, mentioned[sub.ParticipantID])
+		if kind == "" || s.people.focused(m.RoomID, sub.ParticipantID, s.lease()) {
+			continue
+		}
+		b := pending[sub.ID]
+		if b == nil {
+			b = &pushBatch{sub: sub, room: m.RoomID, first: now, from: m.ID}
+			pending[sub.ID] = b
+		}
+		b.count++
+		if b.kind == "" || pushRank[kind] >= pushRank[b.kind] {
+			b.kind, b.message = kind, m.ID
+		}
+	}
 }
 
 // pushKind is what line m is to sub's participant, "" for nothing to notify. starter started the

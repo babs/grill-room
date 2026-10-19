@@ -38,6 +38,8 @@ type pushBrowser struct {
 	// sent counts the batches the push loop sent; seen is the clock of its last tick.
 	sent int
 	seen time.Time
+	// hold, while open, keeps each push from arriving until the sender gives up.
+	hold chan struct{}
 }
 
 func (b *pushBrowser) ticked(now time.Time, sent int) {
@@ -78,13 +80,28 @@ func (b *pushBrowser) readUpTo() int64 {
 	return b.read
 }
 
+func closedChan() chan struct{} {
+	c := make(chan struct{})
+	close(c)
+	return c
+}
+
 func newPushBrowser(t *testing.T) *pushBrowser {
 	t.Helper()
 	priv, _ := ecdh.P256().GenerateKey(rand.Reader)
-	b := &pushBrowser{priv: priv, auth: make([]byte, 16), status: http.StatusCreated}
+	b := &pushBrowser{priv: priv, auth: make([]byte, 16), status: http.StatusCreated, hold: closedChan()}
 	_, _ = rand.Read(b.auth)
 	b.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Read first: the server notices a client gone, and cancels r's context, only past the body.
 		body, _ := io.ReadAll(r.Body)
+		b.mu.Lock()
+		hold := b.hold
+		b.mu.Unlock()
+		select {
+		case <-hold:
+		case <-r.Context().Done():
+			return
+		}
 		plain, err := webpush.Decrypt(b.priv, b.auth, body)
 		if err != nil {
 			t.Errorf("push body: %v", err)
@@ -232,7 +249,7 @@ func TestPushSubscribeAPI(t *testing.T) {
 
 // A wake that carries no room (TTS, lexicon, a LISTEN reconnect) reads no lines.
 func TestPushable(t *testing.T) {
-	for id, want := range map[string]bool{ttsWake: false, lexiconWake: false, bus.All: false, "r_abc": true} {
+	for id, want := range map[string]bool{ttsWake: false, lexiconWake: false, bus.All: true, "r_abc": true} {
 		if got := pushable(id); got != want {
 			t.Errorf("%q: %v", id, got)
 		}

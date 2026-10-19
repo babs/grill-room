@@ -21,8 +21,8 @@ import (
 // sharedTables are the UNLOGGED tables of v47; tts_lines and rate_events stay logged.
 var sharedTables = []string{"daemon_connections", "daemon_status", "pairings", "presence", "stt_workers", "tts_pod"}
 
-// A database at v46, as Phase 2's cutover left the lab, migrates to v47 once, with the shared
-// tables UNLOGGED and the lexicon version seeded.
+// A database at v46, as Phase 2's cutover left the lab, migrates to the latest version once, with
+// v47's shared tables UNLOGGED and the lexicon version seeded.
 func TestMigrateFrom46(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
@@ -39,6 +39,12 @@ func TestMigrateFrom46(t *testing.T) {
 	if err := CreateBaseline(ctx, tx); err != nil {
 		t.Fatal(err)
 	}
+	// A turn running at the upgrade and one ended: v48 counts only the first as delivered.
+	if _, err := tx.ExecContext(ctx, `INSERT INTO rooms(id, name, created_at) VALUES ('r', 'R', '2026-01-01T00:00:00Z');
+		INSERT INTO turns(id, room_id, host, status, fresh, resume, message_cursor, annotation_cursor, prompt, started_at)
+		VALUES (1, 'r', 'h', 'running', 0, '', 0, 0, 'p', '2026-01-01T00:00:00Z'), (2, 'r', 'h', 'done', 0, '', 0, 0, 'p', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +54,7 @@ func TestMigrateFrom46(t *testing.T) {
 		if err := db.QueryRowContext(ctx, `SELECT version, (SELECT count(*) FROM settings WHERE key = 'lexicon_version' AND value = '0') FROM schema_version`).Scan(&v, &lex); err != nil {
 			t.Fatal(err)
 		}
-		if v != 47 || lex != 1 {
+		if v != baselineVersion+len(migrations) || lex != 1 {
 			t.Fatalf("version %d, %d lexicon versions", v, lex)
 		}
 	}
@@ -69,8 +75,12 @@ func TestMigrateFrom46(t *testing.T) {
 	if !slices.Equal(unlogged, sharedTables) {
 		t.Fatalf("unlogged tables %v, want %v", unlogged, sharedTables)
 	}
+	var delivered string
+	if err := db.QueryRowContext(ctx, `SELECT string_agg(id || ':' || delivered, ',' ORDER BY id) FROM turns`).Scan(&delivered); err != nil || delivered != "1:1,2:0" {
+		t.Fatalf("delivered after the upgrade: %q %v", delivered, err)
+	}
 	var moved string
-	if err := db.QueryRowContext(ctx, `SELECT to_regclass('tts_lines')::text || to_regclass('rate_events')::text || count(host_moved_line) FROM rooms`).Scan(&moved); err != nil || moved != "tts_linesrate_events0" {
+	if err := db.QueryRowContext(ctx, `SELECT to_regclass('tts_lines')::text || to_regclass('rate_events')::text || count(host_moved_line) FROM rooms`).Scan(&moved); err != nil || moved != "tts_linesrate_events1" {
 		t.Fatalf("logged tables and rooms.host_moved_line: %q %v", moved, err)
 	}
 }
@@ -639,5 +649,87 @@ func TestLockKindValues(t *testing.T) {
 		if c.got != c.want {
 			t.Errorf("%s = %d, want %d", name, c.got, c.want)
 		}
+	}
+}
+
+// 017-AC17: of two stores campaigning on one database, one leads. Once its lock session is
+// terminated it learns it lost and campaigns again on a new session; one of the two takes the lock
+// and leaves it when its context ends, to the other.
+func TestLeader(t *testing.T) {
+	dsn := testDSN(t)
+	type campaign struct {
+		app     string
+		changes chan bool
+		errs    chan error
+		cancel  func()
+	}
+	run := func(pod string) *campaign {
+		s := openAt(t, dsn)
+		ctx, cancel := context.WithCancel(t.Context())
+		c := &campaign{app: LeaderApplication + " " + pod, changes: make(chan bool, 8), errs: make(chan error, 8), cancel: cancel}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			s.Leader(ctx, pod, 20*time.Millisecond, func(b bool) { c.changes <- b }, func(err error) { c.errs <- err })
+		}()
+		t.Cleanup(func() { cancel(); <-done })
+		return c
+	}
+	next := func(c *campaign, want bool) {
+		t.Helper()
+		select {
+		case got := <-c.changes:
+			if got != want {
+				t.Fatalf("%s: leader %v, want %v", c.app, got, want)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s: no change to %v within 10 s", c.app, want)
+		}
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	holder := func() string {
+		t.Helper()
+		var app string
+		if err := db.QueryRowContext(t.Context(), `SELECT a.application_name FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+			WHERE l.locktype = 'advisory' AND l.classid = $1 AND l.objid = 0 AND l.objsubid = 2 AND l.granted
+			AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())`, LockLeader).Scan(&app); err != nil {
+			t.Fatal(err)
+		}
+		return app
+	}
+	a := run("pod-a")
+	next(a, true)
+	b := run("pod-b")
+	if h := holder(); h != a.app {
+		t.Fatalf("lock held by %q", h)
+	}
+	if _, err := db.ExecContext(t.Context(), `SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+		WHERE application_name = $1 AND datname = current_database()`, a.app); err != nil {
+		t.Fatal(err)
+	}
+	next(a, false)
+	if err := <-a.errs; err == nil {
+		t.Fatal("no error for the lost session")
+	}
+	lead, other := a, b
+	select {
+	case <-a.changes:
+	case <-b.changes:
+		lead, other = b, a
+	case <-time.After(10 * time.Second):
+		t.Fatal("no leader within 10 s of the terminate")
+	}
+	if h := holder(); h != lead.app {
+		t.Fatalf("%s leads, the lock is %q's", lead.app, h)
+	}
+	lead.cancel()
+	next(lead, false)
+	next(other, true)
+	if h := holder(); h != other.app {
+		t.Fatalf("%s leads, the lock is %q's", other.app, h)
 	}
 }

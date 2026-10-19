@@ -545,14 +545,24 @@ func TestTurnFailures(t *testing.T) {
 	}
 }
 
-// The server's backstop fails a turn whose daemon neither answers nor drops.
-func TestTurnTimeoutBackstop(t *testing.T) {
-	old := turnGrace
-	turnGrace = 0
-	t.Cleanup(func() { turnGrace = old })
+// 017-AC18: the leader's turn sweeper fails a turn whose daemon neither answers nor drops, once
+// the timeout and the grace have run.
+func TestTurnTimeoutSweep(t *testing.T) {
 	e := newEnvOpts(t, Options{TurnTimeout: 50 * time.Millisecond})
+	clk := &clock{t: time.Now()}
+	e.srv.now = clk.now
 	r := newTurnRoom(t, e)
-	e.press(t, r, r.alice, r.alice.p.Token, false)
+	tn, err := e.st.Turn(t.Context(), r.room, e.press(t, r, r.alice, r.alice.p.Token, false).ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk.set(tn.StartedAt.Add(50*time.Millisecond + turnGrace - time.Millisecond))
+	e.srv.sweepTurns(t.Context())
+	if got, _ := e.st.Turn(t.Context(), r.room, tn.ID); got.Status != store.TurnRunning {
+		t.Fatalf("failed within the grace: %+v", got)
+	}
+	clk.set(tn.StartedAt.Add(50*time.Millisecond + turnGrace))
+	e.srv.sweepTurns(t.Context())
 	st := e.waitAgent(t, r.room, r.alice.p.Token, func(st agentState) bool { return st.Turn.Status == store.TurnFailed })
 	if st.Turn.Error != "timed out after 50ms" {
 		t.Fatalf("error %q", st.Turn.Error)

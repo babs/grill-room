@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -37,7 +38,7 @@ const (
 	LockPairing    int32 = 5
 	LockPresence   int32 = 6
 	LockSTTWorkers int32 = 7
-	// LockLeader is reserved for the leader lock of spec 017 Phase 4.
+	// LockLeader is the one leader lock, key 0 (Leader).
 	LockLeader int32 = 8
 )
 
@@ -101,6 +102,74 @@ func (s *Store) Listen(ctx context.Context, channel string, ready func(), got fu
 			return fmt.Errorf("listen: %w", err)
 		}
 	}
+}
+
+// LeaderApplication names the leader lock's session in pg_stat_activity, followed by the pod.
+const LeaderApplication = "grill-room-leader"
+
+// LeaderIdle is the idle_session_timeout of a leader session pinged every every: a leader gone
+// without a FIN holds the lock until PostgreSQL drops its session, that long after its last ping.
+func LeaderIdle(every time.Duration) time.Duration { return 3 * every }
+
+// Leader campaigns for the cluster's one leader lock on a session of its own, until ctx ends: it
+// tries the lock at once, then every interval, and holding it, pings the session as often. onChange learns
+// each change: true once it holds the lock, false as soon as a ping or the session fails, or ctx
+// ends. onErr learns why a session failed; the next try connects again.
+func (s *Store) Leader(ctx context.Context, pod string, every time.Duration, onChange func(leader bool), onErr func(error)) {
+	var conn *pgx.Conn
+	leading := false
+	drop := func() {
+		if leading {
+			leading = false
+			onChange(false)
+		}
+		if conn != nil {
+			// Closing the session frees the lock.
+			c, cancel := context.WithTimeout(context.WithoutCancel(ctx), sessionTimeout)
+			_ = conn.Close(c)
+			cancel()
+			conn = nil
+		}
+	}
+	defer drop()
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	for {
+		c, cancel := context.WithTimeout(ctx, sessionTimeout)
+		took, err := s.leaderTry(c, &conn, leading, pod, every)
+		cancel()
+		switch {
+		case err != nil && ctx.Err() == nil:
+			drop()
+			onErr(fmt.Errorf("leader: %w", err))
+		case took:
+			leading = true
+			onChange(true)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
+}
+
+// leaderTry connects *conn when it has none, then pings it while leading, or tries the leader lock
+// on it and reports whether it took it.
+func (s *Store) leaderTry(ctx context.Context, conn **pgx.Conn, leading bool, pod string, every time.Duration) (took bool, err error) {
+	if *conn == nil {
+		cfg := s.db.cfg.Copy()
+		cfg.RuntimeParams["application_name"] = LeaderApplication + " " + pod
+		cfg.RuntimeParams["idle_session_timeout"] = strconv.FormatInt(LeaderIdle(every).Milliseconds(), 10)
+		if *conn, err = pgx.ConnectConfig(ctx, cfg); err != nil {
+			return false, err
+		}
+	}
+	if leading {
+		return false, (*conn).Ping(ctx)
+	}
+	err = (*conn).QueryRow(ctx, `SELECT pg_try_advisory_lock($1, 0)`, LockLeader).Scan(&took)
+	return took, err
 }
 
 // LockRoom takes the session advisory lock (kind, room) on a connection it pins: a critical section

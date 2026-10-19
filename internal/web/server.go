@@ -15,6 +15,7 @@ import (
 	"io"
 	"io/fs"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -89,12 +90,14 @@ type Server struct {
 	// lease is the clock of every lease and liveness check (daemon connections, presence, pairings,
 	// STT workers, the TTS service) and of the janitor sweeping them: the wall clock, apart from now.
 	lease func() time.Time
-	// pushRead and pushTicked, set by tests, learn the last line PushLoop read for a room, and
-	// each tick: its clock and how many batches it sent.
-	pushRead func(last int64)
-	// afterFunc runs a backstop later: time.AfterFunc, or a test's own schedule.
-	afterFunc  func(d time.Duration, f func())
+	// pushRead and pushTicked, set by tests, learn the last line PushLoop read, and each tick: its
+	// clock and how many batches it sent.
+	pushRead   func(last int64)
 	pushTicked func(now time.Time, sent int)
+	// leader is true while this pod holds the leader lock and runs the singletons, the loops one
+	// pod of the cluster runs (017-AC17): New sets them, tests swap them.
+	leader     atomic.Bool
+	singletons []func(context.Context)
 	// turnMu serialises turn starts and queue draining, so presses run in the order they came.
 	// ponytail: one lock for every room; per-room locks if many busy rooms ever contend.
 	turnMu sync.Mutex
@@ -165,7 +168,6 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 		adminHash: []byte(adminHash), baseURL: strings.TrimRight(baseURL, "/"), log: log,
 		people: newPeople(b.Store, log), stt: newSTTWorkers(b.Store, log), clients: clients{m: map[int64]clientSeen{}},
 		now: time.Now, lease: time.Now, fallbacks: fallbackCounters(), turnWait: b.Store.LockTimeout(),
-		afterFunc: func(d time.Duration, f func()) { time.AfterFunc(d, f) },
 		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}, pushClient: opts.PushClient,
 		pluginFetches: make(chan struct{}, maxPluginFetches), voiceLines: sourceCounters(), voiceDeduped: sourceCounters(), mcpCalls: newMCPCounters()}
 	keys := &rateKeys{st: b.Store}
@@ -174,6 +176,7 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	if opts.TTSTokenHash != "" && opts.Voice != nil {
 		s.tts = newTTSHub(b.Store)
 	}
+	s.singletons = []func(context.Context){s.PurgeAudit, s.PurgeProfiles, s.RunTimers, s.PushLoop, s.SweepTurns}
 	s.cleanStaging()
 	return s
 }
@@ -1395,6 +1398,9 @@ func httpError(w http.ResponseWriter, code int, msg string) {
 
 // Serve runs srv until ctx ends, then drains it.
 func Serve(ctx context.Context, srv *http.Server, log *zap.Logger) error {
+	if srv.BaseContext == nil {
+		srv.BaseContext = stopContext(ctx)
+	}
 	errc := make(chan error, 1)
 	go func() {
 		log.Info("listening", zap.String("addr", srv.Addr))
@@ -1408,12 +1414,28 @@ func Serve(ctx context.Context, srv *http.Server, log *zap.Logger) error {
 		return err
 	case <-ctx.Done():
 	}
-	// SSE streams never finish on their own and browsers reconnect by themselves, so the drain
-	// is short: it only has to let in-flight POSTs complete.
+	// Browser streams never finish on their own and reconnect by themselves, so the drain is short:
+	// it lets in-flight POSTs and the app streams' cleanup complete.
 	sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(sctx); err != nil {
 		return srv.Close()
+	}
+	return nil
+}
+
+type stopKey struct{}
+
+// stopContext hands each request stop, the pod's own context, as a value: canceling it would cut
+// the in-flight POSTs Serve drains, so only the app streams, which ask for it, end at once.
+func stopContext(stop context.Context) func(net.Listener) context.Context {
+	return func(net.Listener) context.Context { return context.WithValue(context.Background(), stopKey{}, stop) }
+}
+
+// podStopping is closed once the request's pod shuts down; nil when served outside Serve.
+func podStopping(r *http.Request) <-chan struct{} {
+	if stop, ok := r.Context().Value(stopKey{}).(context.Context); ok {
+		return stop.Done()
 	}
 	return nil
 }

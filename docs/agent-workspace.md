@@ -221,5 +221,7 @@ A room admin asks the host's daemon to fetch a repo the server cannot read anony
 | daemon reports an error (credentials expired, Claude failed) | turn failed, the error in the room |
 | result over 32 MB or malformed | 413 or 400, turn failed |
 | session bytes do not continue the stored copy | 409, turn failed |
-| no answer within `GRILL_ROOM_TURN_TIMEOUT` plus one minute, counted from when the turn left the host's queue | turn failed |
-| room server restarts | every running turn failed at start |
+| no answer within `GRILL_ROOM_TURN_TIMEOUT` plus one minute, counted from when the turn left the host's queue | turn failed by the leader's sweep, within 10 s more |
+| a room server pod stops | the turns of the apps streaming from it failed, as when the app drops; a pod's start fails nothing |
+| a room server pod dies with no cleanup | the app drops the turns its stream sent it. When it reconnects, to any pod, those fail at once and the room's queue moves on; a turn no stream sent, pressed meanwhile, is announced on the new stream and runs. If the app does not come back, the leader's sweep (10 s) fails its turns once its 1-minute lease lapses |
+| a turn sent on a stream the app no longer reads (half-open) | failed when the app reconnects; press again |

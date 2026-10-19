@@ -1,36 +1,5 @@
-# Room server on PostgreSQL (spec 017), one replica for now. Recreate: the models volume is
-# ReadWriteOnce. Rendered by `make k8s-render`, which fills the placeholders from .env.
-# The former SQLite volume, mounted by no pod: the rollback target until the rollback window ends
-# (README "Lab deployment"), then deleted with this object.
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: grill-room-data
-  labels:
-    app.kubernetes.io/name: grill-room
-    app.kubernetes.io/part-of: grill-room
-spec:
-  accessModes: [ReadWriteOnce]
-  storageClassName: ${K8S_STORAGE_CLASS}
-  resources:
-    requests:
-      storage: 2Gi
----
-# The on-device transcription files the browser downloads (spec 010), filled by the init container.
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: grill-room-models
-  labels:
-    app.kubernetes.io/name: grill-room
-    app.kubernetes.io/part-of: grill-room
-spec:
-  accessModes: [ReadWriteOnce]
-  storageClassName: ${K8S_STORAGE_CLASS}
-  resources:
-    requests:
-      storage: 1Gi
----
+# Room server on PostgreSQL (spec 017): two replicas, rolled one at a time. Rendered by
+# `make k8s-render`, which fills the placeholders from .env.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -39,9 +8,13 @@ metadata:
     app.kubernetes.io/name: grill-room
     app.kubernetes.io/part-of: grill-room
 spec:
-  replicas: 1
+  replicas: 2
+  # A new pod is ready before an old one stops, so the room always has a server.
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: grill-room
@@ -52,6 +25,18 @@ spec:
         app.kubernetes.io/part-of: grill-room
     spec:
       automountServiceAccountToken: false
+      # Serve drains POSTs for 2 s, then waits for mail sends, each bounded by 30 s (sendMailTimeout).
+      # No preStop sleep: the pod stops listening at SIGTERM, so a request the ingress sends it before
+      # it leaves the endpoints fails (docs/rollout.md).
+      terminationGracePeriodSeconds: 45
+      # Preferred, not required: a one-node cluster still runs both pods.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: grill-room
       # Service links would inject GRILL_ROOM_* and LIVEKIT_* variables the binaries read as config.
       enableServiceLinks: false
       nodeSelector:
@@ -63,8 +48,8 @@ spec:
         fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
-      # Pinned model files for on-device transcription (010-AC7). A file already there with the
-      # right sha256 is skipped, so a deploy with a full volume downloads nothing. Egress: room-push.
+      # Pinned model files for on-device transcription (010-AC7), fetched into each pod's own volume:
+      # about 440 MB downloaded at each pod start. Egress: room-push.
       # --best-effort: a failed download must not block the server; it then offers no device mode.
       initContainers:
         - name: models
@@ -159,9 +144,10 @@ spec:
             - { name: tmp, mountPath: /tmp }
             - { name: models, mountPath: /models, readOnly: true }
       volumes:
+        # Per pod, not a ReadWriteOnce claim: that would pin both pods to one node.
         - name: models
-          persistentVolumeClaim:
-            claimName: grill-room-models
+          emptyDir:
+            sizeLimit: 1Gi
         - name: tmp
           emptyDir:
             sizeLimit: 256Mi
@@ -171,6 +157,21 @@ spec:
           emptyDir:
             sizeLimit: 2560Mi
 ---
+# A node drain or other voluntary eviction keeps one server up (017-AC21).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: grill-room
+  labels:
+    app.kubernetes.io/name: grill-room
+    app.kubernetes.io/part-of: grill-room
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grill-room
+---
+# No session affinity (spec 017, Q8): any pod answers any request.
 apiVersion: v1
 kind: Service
 metadata:

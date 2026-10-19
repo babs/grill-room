@@ -319,12 +319,34 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 	renew := func() error {
 		return s.bus.Store.DaemonConnected(r.Context(), conn, d, s.bus.Pod(), opened.UnixMilli(), s.lease().Add(daemonLease).UnixMilli())
 	}
-	if err := renew(); err != nil {
+	// The app holds one stream per room and drops its running turns with it, before it opens the
+	// next: a turn of its still running that a stream marked delivered came over one whose pod may
+	// have died without the cleanup. One no stream wrote, pressed while a dead pod's row still
+	// counted, is announced on this one. Read before this stream counts: a turn started on it is
+	// not among them.
+	earlier, err := s.bus.Store.RunningTurns(r.Context(), d.RoomID)
+	if err == nil {
+		err = renew()
+	}
+	if err != nil {
 		s.serverError(w, "daemon_connect_failed", err)
 		return
 	}
 	s.log.Info("daemon_connected", zap.String("room", d.RoomID), zap.Int64("daemon", d.ID))
 	s.agentChanged(r.Context(), d.RoomID)
+	dropped := false
+	for _, t := range earlier {
+		if t.DaemonID == d.ID && t.Delivered {
+			s.endTurn(r.Context(), d.RoomID, t.ID, "the host's daemon disconnected")
+			dropped = true
+		}
+	}
+	if dropped {
+		s.drain(r.Context(), d.RoomID)
+	}
+	// A stopping pod ends the stream at once, so its cleanup runs within Serve's drain, before the
+	// process exits: the app drops its running turn with the stream, and the turn fails now.
+	stopped := podStopping(r)
 	defer func() {
 		// The request context is done: the cleanup must still reach the store.
 		ctx := context.WithoutCancel(r.Context())
@@ -376,6 +398,14 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 				continue
 			}
 			sent, held[t.ID] = t.ID, true
+			// Marked before it is written: the app takes an id once, so a turn it may hold must fail
+			// with its stream, never wait to be announced again. Unmarked, it must not be written.
+			if !t.Delivered {
+				if err := s.bus.Store.TurnDelivered(r.Context(), d.RoomID, t.ID, d.ID); err != nil {
+					s.log.Error("turn_delivered_failed", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.Error(err))
+					return false
+				}
+			}
 			if _, err := fmt.Fprintf(w, "event: turn\ndata: {\"id\":%d}\n\n", t.ID); err != nil { //nolint:gosec // an integer id on an event stream, never HTML
 				return false
 			}
@@ -523,6 +553,8 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-stopped:
 			return
 		case <-tick.C:
 			// The bus drops a signal when this stream's buffer is full of other rooms' ones: the

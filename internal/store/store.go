@@ -266,6 +266,11 @@ CREATE TABLE rate_events (
 CREATE INDEX rate_events_key ON rate_events(scope, key_hash, at_ms);
 ALTER TABLE rooms ADD COLUMN host_moved_line TEXT NOT NULL DEFAULT '';
 INSERT INTO settings(key, value) VALUES ('lexicon_version', '0') ON CONFLICT DO NOTHING;`,
+	// 48 (017 Phase 4): a turn a stream wrote to its daemon. A daemon drops its running turns with
+	// its stream, so its next stream fails the delivered ones and announces the others. A turn
+	// running at the upgrade counts as delivered: its daemon's next stream fails it, as before.
+	`ALTER TABLE turns ADD COLUMN delivered SMALLINT NOT NULL DEFAULT 0 CHECK (delivered IN (0, 1));
+UPDATE turns SET delivered = 1 WHERE status = 'running';`,
 }
 
 // CreateDatabaseOptions makes a database that sorts as the server needs (017-AC6).
@@ -1074,6 +1079,11 @@ func insertMessage(ctx context.Context, db querier, m *Message) error {
 // Messages returns up to limit messages of room with id > afterID, oldest first.
 func (s *Store) Messages(ctx context.Context, roomID string, afterID int64, limit int) ([]Message, error) {
 	return s.queryMessages(ctx, `WHERE room_id = ? AND id > ? ORDER BY id ASC LIMIT ?`, roomID, afterID, limit)
+}
+
+// MessagesAfter returns up to limit lines of every room with an id above afterID, in id order.
+func (s *Store) MessagesAfter(ctx context.Context, afterID int64, limit int) ([]Message, error) {
+	return s.queryMessages(ctx, `WHERE id > ? ORDER BY id ASC LIMIT ?`, afterID, limit)
 }
 
 // LastVoice returns the room's latest voice line still shown; ErrNotFound if there is none.

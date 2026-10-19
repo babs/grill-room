@@ -22,14 +22,18 @@ import (
 	"github.com/babs/grill-room/internal/turn"
 )
 
+// MinTurnTimeout is the shortest turn timeout a server takes: 017-AC18's bound on a vanished
+// app's turn, the turn timeout plus 30 s, needs the daemon lease and the sweep to fit in it.
+const MinTurnTimeout = time.Minute
+
 const (
 	defaultTurnTimeout = 15 * time.Minute
 	defaultMaxResult   = 32 << 20
 	maxError           = 500
 )
 
-// turnGrace lets the daemon report its own timeout before the server's backstop fails the turn. A
-// var for tests.
+// turnGrace lets the daemon report its own timeout before the turn sweeper fails the turn. A var
+// for tests.
 var turnGrace = time.Minute
 
 var sessionIDRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -236,30 +240,11 @@ func (s *Server) launch(ctx context.Context, room *store.Room, persona *store.Ro
 	if h := s.hostDaemon(room.ID, room.HostParticipantID); h == nil || h.id != host.id {
 		s.endTurn(ctx, room.ID, t.ID, "the host's daemon disconnected")
 	}
-	s.backstop(room.ID, t.ID, s.opts.TurnTimeout+turnGrace)
 	s.bus.Notify(room.ID)
 	s.log.Info("turn_started", zap.String("room", room.ID), zap.Int64("turn", t.ID), zap.Int64("persona", persona.ID),
 		zap.Int64("participant", q.ParticipantID), zap.Bool("fresh", q.Fresh), zap.Bool("resume", t.Resume != ""), zap.Int64("rerun_of", t.RerunOf),
 		zap.String("source", q.Source), zap.String("handoff", t.Handoff))
 	return t, nil
-}
-
-// backstop fails turn id once it has run for the turn timeout plus the grace, for a daemon that
-// neither answers nor drops its stream. A turn its host's daemon queued is not running yet: its
-// clock starts when it leaves that queue, which arms a new backstop (003-AC18).
-func (s *Server) backstop(room string, id int64, after time.Duration) {
-	s.afterFunc(after, func() {
-		ctx := context.Background()
-		t, err := s.bus.Store.Turn(ctx, room, id)
-		if err != nil || t.Status != store.TurnRunning || t.HostQueued {
-			return
-		}
-		if left := t.StartedAt.Add(s.opts.TurnTimeout + turnGrace).Sub(s.now()); left > 0 {
-			s.backstop(room, id, left)
-			return
-		}
-		s.failTurn(ctx, room, id, "timed out after "+s.opts.TurnTimeout.String())
-	})
 }
 
 // drain starts the room's queued turns while the host's daemon is there: the next one once no
@@ -482,14 +467,11 @@ func (s *Server) pinBase(w http.ResponseWriter, r *http.Request, t *store.Turn) 
 }
 
 // hostQueued records that the turn waits in its host's queue, or runs: the room is told, and a
-// running turn's backstop starts (003-AC18).
+// running turn's timeout counts from now (003-AC18).
 func (s *Server) hostQueued(ctx context.Context, room string, id, daemon int64, queued bool) error {
 	changed, err := s.bus.Store.SetHostQueued(ctx, room, id, daemon, queued)
 	if err != nil || !changed {
 		return err
-	}
-	if !queued {
-		s.backstop(room, id, s.opts.TurnTimeout+turnGrace)
 	}
 	s.bus.Notify(room)
 	s.log.Info("turn_host_queued", zap.String("room", room), zap.Int64("turn", id), zap.Bool("queued", queued))

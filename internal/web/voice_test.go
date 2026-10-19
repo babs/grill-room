@@ -314,6 +314,8 @@ func TestSTTHeartbeatState(t *testing.T) {
 	pollEvery = 20 * time.Millisecond
 	t.Cleanup(func() { pollEvery = oldPoll })
 	e, _ := newVoiceEnv(t)
+	// The leader exports the gauges (017-AC20).
+	e.srv.leader.Store(true)
 	// Workers expire on a clock the test moves: on wall time, a slow runner let the first of the 99
 	// workers below expire before the last one beat, and the bound never applied.
 	var clock atomic.Int64
