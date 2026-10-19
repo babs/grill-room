@@ -710,6 +710,8 @@ func TestFetchDeadline(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
+			// A 200 written once the client gives up can race its cancel and reach it as ErrNoV2.
+			panic(http.ErrAbortHandler)
 		case <-time.After(10 * time.Second):
 		}
 	}))
