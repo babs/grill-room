@@ -215,6 +215,9 @@ test('turn-taking in the call', async ({ browser, request }) => {
     await expect(alice.page.locator('#voice-audio audio[data-pid^="persona-"]')).toHaveCount(2, { timeout: 30_000 });
     const ids = Object.fromEntries(await alice.page.locator('.persona-pill').evaluateAll((els) => els.map((e) => [e.dataset.name, 'persona-' + e.dataset.id])));
     const levels = () => alice.page.evaluate(() => window.levels);
+    // Only the rows since t: copying the whole history out stalls the meter's timers and slows each
+    // poll as the call goes on, until a cut comes after Grill's line has ended.
+    const since = (id, t) => alice.page.evaluate(([id, t]) => (window.levels[id] || []).filter(([at]) => at >= t), [id, t]);
     const now = () => alice.page.evaluate(() => performance.now());
     const origin = await alice.page.evaluate(() => performance.timeOrigin);
     const speak = async (persona, spoken) => {
@@ -245,14 +248,19 @@ test('turn-taking in the call', async ({ browser, request }) => {
     const paths = [];
     for (let i = 0; i < MAX_INTERRUPTIONS && paths.filter((p) => p <= STALL_MS).length < KEPT; i++) {
       const before = await now();
-      await expect.poll(async () => onsetAfter((await levels())[ids.Grill], before), { timeout: 20_000 }).toBeTruthy();
+      await expect.poll(async () => onsetAfter(await since(ids.Grill, before), before), { timeout: 20_000 }).toBeTruthy();
       await bob.page.evaluate((n) => window.talk(n), 1 + (i % 3));
       const fileOnset = (await bob.page.evaluate(() => window.talkedAt)) - origin + onsetIn[1 + (i % 3)];
-      L = await levels();
+      // A second before: starts() needs Bob quiet for 300 ms ahead of his onset.
+      const bobRows = await since(bobKey, before - 1000);
+      const grillRows = await since(ids.Grill, before);
       // Bob's onset as Alice hears it: loud after quiet, not the tail of his previous sentence.
-      const heard = starts(L[bobKey], 300).find((t) => t >= before);
-      const silent = silentFrom(L[ids.Grill], heard - 20, 350);
+      const heard = starts(bobRows, 300).find((t) => t >= before);
+      const silent = silentFrom(grillRows, heard - 20, 350);
       expect(heard, `interruption ${i}: Bob heard`).toBeTruthy();
+      // A cut after the line ended leaves nothing to resume: the loop fell behind Grill's sentence.
+      // From the file onset: a stalled path to Alice can let the pod stop Grill before she hears Bob.
+      expect(loudAround(grillRows, fileOnset, 500), `interruption ${i}: Grill speaking when Bob cut in`).toBe(true);
       expect(silent, `interruption ${i}: Grill went quiet`).toBeTruthy();
       // 013-AC22 from the onset in Bob's file, his own path to the pod included; in CI from when
       // Alice hears him, as a shared runner's media path is no persona's latency.
@@ -261,7 +269,7 @@ test('turn-taking in the call', async ({ browser, request }) => {
       paths.push(Math.round(heard - fileOnset));
       // It picks the sentence up again once the room is quiet (AC23).
       const after = await now();
-      await expect.poll(async () => onsetAfter((await levels())[ids.Grill], after), { timeout: 10_000 }).toBeTruthy();
+      await expect.poll(async () => onsetAfter(await since(ids.Grill, after), after), { timeout: 10_000 }).toBeTruthy();
     }
     const from = FROM_HEARD ? 'heard' : 'file';
     console.log('stops from', from, 'in order', JSON.stringify(stops.map((x) => Math.round(x))), 'bob path', JSON.stringify(paths));
@@ -282,14 +290,12 @@ test('turn-taking in the call', async ({ browser, request }) => {
 
     // AC24: Secretary's line waits until Grill's ends.
     const queued = await now();
-    // Only the rows since queued: copying the whole history out stalls the meter's timers.
-    const since = (id) => alice.page.evaluate(([id, t]) => (window.levels[id] || []).filter(([at]) => at >= t), [id, queued]);
     await speak('Secretary', 'Noted, I will add it to the minutes.');
-    await expect.poll(async () => onsetAfter(await since(ids.Secretary), queued), { timeout: 120_000 }).toBeTruthy();
+    await expect.poll(async () => onsetAfter(await since(ids.Secretary, queued), queued), { timeout: 120_000 }).toBeTruthy();
     // Over the 300 ms the silence cap leaves between sentences: a 1 s quiet is the line's end.
-    await expect.poll(async () => silentFrom(await since(ids.Grill), queued, 1000), { timeout: 10_000 }).not.toBeNull();
-    const sec = await since(ids.Secretary);
-    const grill = await since(ids.Grill);
+    await expect.poll(async () => silentFrom(await since(ids.Grill, queued), queued, 1000), { timeout: 10_000 }).not.toBeNull();
+    const sec = await since(ids.Secretary, queued);
+    const grill = await since(ids.Grill, queued);
     const secStart = onsetAfter(sec, queued);
     expect(silentFrom(grill, queued, 1000)).toBeLessThanOrEqual(secStart);
     expect(grill.filter(([at, db]) => at > secStart && db > LOUD)).toEqual([]);
@@ -297,7 +303,7 @@ test('turn-taking in the call', async ({ browser, request }) => {
     // engine; real speech has no such shape.
     if (engine === 'fake') {
       await expect.poll(now, { timeout: 10_000 }).toBeGreaterThan(secStart + 3500);
-      const said = words(await since(ids.Secretary), secStart, secStart + 3500);
+      const said = words(await since(ids.Secretary, queued), secStart, secStart + 3500);
       expect(said.length, JSON.stringify(said)).toBe(8);
       expect(said[0][1], JSON.stringify(said)).toBeGreaterThanOrEqual(200);
     }
