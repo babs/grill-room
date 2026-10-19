@@ -3,7 +3,7 @@
 import asyncio
 import contextlib
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
@@ -78,6 +78,8 @@ class Bot:
     room: rtc.Room
     out: TrackOut
     leave: asyncio.Task[None] | None = None
+    # Each human's onset task, by identity.
+    listens: dict[str, asyncio.Task[None]] = field(default_factory=dict)
 
 
 class Bots:
@@ -158,6 +160,7 @@ class Bots:
         room_name, persona = key
         voice = self._voice(room_name)
         room = rtc.Room()
+        listens: dict[str, asyncio.Task[None]] = {}
 
         def speakers(ps: list[rtc.Participant]) -> None:
             voice.speakers({p.identity for p in ps if not is_agent(p)}, f"persona-{persona}")
@@ -169,11 +172,19 @@ class Bots:
 
         def heard(track: rtc.Track, _pub: rtc.RemoteTrackPublication, p: rtc.RemoteParticipant) -> None:
             if not is_agent(p) and track.kind == rtc.TrackKind.KIND_AUDIO:
-                self._spawn(self._listen(voice, f"vad:persona-{persona}:{p.identity}", p.identity, track))
+                vad = f"vad:persona-{persona}:{p.identity}"
+                listens[p.identity] = self._spawn(self._listen(voice, vad, p.identity, track))
+
+        def unheard(p: rtc.RemoteParticipant) -> None:
+            # The SDK never ends a gone track's stream: its onset would hold the room "speaking".
+            if (task := listens.pop(p.identity, None)) is not None:
+                task.cancel()
 
         room.on("active_speakers_changed", speakers)
         room.on("track_published", subscribe)
         room.on("track_subscribed", heard)
+        room.on("track_unsubscribed", lambda _track, _pub, p: unheard(p))
+        room.on("participant_disconnected", unheard)
         room.on("disconnected", lambda reason: self._gone(key, room, reason))
         try:
             await room.connect(
@@ -191,12 +202,14 @@ class Bots:
             )
         except Exception as e:  # one bot failing must not stop the others; the next roster retries
             log.warning("bot_join_failed", room=room_name, persona_id=persona, error=str(e))
+            for task in listens.values():
+                task.cancel()
             with contextlib.suppress(Exception):
                 await room.disconnect()
             return
         finally:
             self._joining.pop(key, None)
-        self.bots[key] = Bot(room, TrackOut(source))
+        self.bots[key] = Bot(room, TrackOut(source), listens=listens)
         metrics.BOTS.set(len(self.bots))
         metrics.BOTS_JOINED.inc()
         log.info("bot_joined", room=room_name, persona_id=persona)
@@ -226,6 +239,8 @@ class Bots:
             return
         del self.bots[key]
         bot.out.stop()
+        for task in bot.listens.values():
+            task.cancel()
         if bot.leave is not None and bot.leave is not asyncio.current_task():
             bot.leave.cancel()
         metrics.BOTS.set(len(self.bots))

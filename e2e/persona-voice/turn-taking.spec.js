@@ -322,3 +322,41 @@ test('turn-taking in the call', async ({ browser, request }) => {
     await bob.ctx.close();
   }
 });
+
+// A human who leaves mid-speech does not hold the room: the persona they cut off resumes once the
+// room is quiet, not at the end of its resume window.
+test('a speaker who leaves mid-speech does not hold the persona', async ({ browser, request }) => {
+  test.setTimeout(180_000);
+  const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Leaver' } })).json();
+  const quietMs = 500;
+  expect((await request.patch(`/api/rooms/${room.id}/speech`, { headers: admin, data: { quiet_ms: quietMs, resume_s: 20, queue_s: 300 } })).status()).toBe(200);
+  const inv = async () => (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
+  const alice = await join(browser, await inv(), 'Alice', [meter, silentMic]);
+  const bob = await join(browser, await inv(), 'Bob', speechMic);
+  try {
+    await expect(alice.page.locator('#voice-audio audio[data-pid^="persona-"]')).toHaveCount(1, { timeout: 30_000 });
+    const grill = await alice.page.locator('.persona-pill').evaluate((e) => 'persona-' + e.dataset.id);
+    const since = (id, t) => alice.page.evaluate(([id, t]) => (window.levels[id] || []).filter(([at]) => at >= t), [id, t]);
+    const now = () => alice.page.evaluate(() => performance.now());
+    const sentence = Array(3).fill('one two three four five six seven eight nine ten').join(' ') + '.';
+    const t0 = await now();
+    expect((await request.post('/api/admin/test/speak', { headers: admin, data: { room: room.id, persona: 'Grill', spoken: `${sentence} ${sentence}` } })).status()).toBe(204);
+    await expect.poll(async () => onsetAfter(await since(grill, t0), t0), { timeout: 20_000 }).toBeTruthy();
+    // Bob cuts in with his 6 s sentence; Grill stops while he still talks.
+    const cut = await now();
+    bob.page.evaluate(() => window.talk(1)).catch(() => {});
+    await expect.poll(async () => silentFrom(await since(grill, cut), cut, 350), { timeout: 10_000 }).not.toBeNull();
+    const bobKey = Object.keys(await alice.page.evaluate(() => window.levels)).find((k) => !k.startsWith('persona-'));
+    const left = await now();
+    expect(loudAround(await since(bobKey, cut), left, 300), 'Bob still speaking when his page closes').toBe(true);
+    await bob.ctx.close();
+    await expect.poll(async () => onsetAfter(await since(grill, left), left), { timeout: 25_000 }).toBeTruthy();
+    const resumed = onsetAfter(await since(grill, left), left) - left;
+    console.log('resumed after the leaver ms', Math.round(resumed));
+    // The quiet time, plus Bob's leave reaching the pod and Grill's audio reaching Alice.
+    expect(resumed).toBeLessThanOrEqual(quietMs + 2500);
+  } finally {
+    await alice.ctx.close();
+    await bob.ctx.close().catch(() => {});
+  }
+});
