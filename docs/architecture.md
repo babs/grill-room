@@ -190,7 +190,7 @@ Since spec 017 Phase 3 nothing a request needs lives in one pod's memory: any po
 | Placement | spread over nodes, preferred, not required |
 | Affinity | none: the Service and the ingress pick any pod (Q8) |
 | Disks | per pod, `emptyDir`: staging 2.5 GiB, `/tmp` 256 MiB, model files 1 GiB |
-| Shutdown | SIGTERM closes the listener, POSTs get 2 s, then mail sends up to 30 s; grace 45 s; no `preStop` sleep ([rollout.md](rollout.md)) |
+| Shutdown | `preStop` sleeps 5 s, then SIGTERM closes the listener, POSTs get 2 s, then mail sends up to 30 s; grace 45 s ([rollout.md](rollout.md)) |
 | Check | `make rollout-watch` during a rollout or a pod loss (017-AC19, 017-AC21) |
 
 ## A turn, end to end
