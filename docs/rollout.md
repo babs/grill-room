@@ -55,15 +55,9 @@ That run is one local server stopped for 3 s mid-run, so every line in the gap f
 
 ### Failed POSTs during a rollout
 
-A pod stops listening as soon as it gets SIGTERM, and the ingress may still route to it until its endpoint goes, usually under a second. A POST in that window fails with a 502. The usual fix is a `preStop` sleep of a few seconds, but the image is distroless (no `sleep` binary) and the `lifecycle.preStop.sleep` handler needs Kubernetes 1.30 or newer. Neither is assumed here. On a 1.30+ cluster, add to the server container in `deploy/k8s/room.yaml`:
+The ingress may still route to a terminating pod until its endpoint removal reaches it, usually under a second, plus traefik's provider throttle (2 s by default). The server container's `preStop` sleeps 5 s (`lifecycle.preStop.sleep`, Kubernetes 1.30 or newer; the distroless image has no `sleep` binary), so the pod keeps serving through that window and gets SIGTERM only after. Without it, a POST in the window fails with a 502 (one failed in a 017-AC19 lab run).
 
-```yaml
-lifecycle:
-  preStop:
-    sleep: { seconds: 5 }
-```
-
-`terminationGracePeriodSeconds` (45) covers the sleep, the 2 s drain and a mail send in flight (30 s).
+`terminationGracePeriodSeconds` (45) covers the sleep (5 s), the 2 s drain and a mail send in flight (30 s).
 
 ## Pods and leader
 

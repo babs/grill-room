@@ -33,7 +33,14 @@ type k8sContainer struct {
 			Drop []string `yaml:"drop"`
 		} `yaml:"capabilities"`
 	} `yaml:"securityContext"`
-	Env []k8sEnv `yaml:"env"`
+	Env       []k8sEnv `yaml:"env"`
+	Lifecycle struct {
+		PreStop *struct {
+			Sleep *struct {
+				Seconds int `yaml:"seconds"`
+			} `yaml:"sleep"`
+		} `yaml:"preStop"`
+	} `yaml:"lifecycle"`
 }
 
 type k8sEnv struct {
@@ -95,7 +102,8 @@ type k8sDoc struct {
 				Labels map[string]string `yaml:"labels"`
 			} `yaml:"metadata"`
 			Spec struct {
-				SecurityContext struct {
+				TerminationGracePeriodSeconds *int `yaml:"terminationGracePeriodSeconds"`
+				SecurityContext               struct {
 					RunAsNonRoot bool `yaml:"runAsNonRoot"`
 				} `yaml:"securityContext"`
 				InitContainers []k8sContainer `yaml:"initContainers"`
@@ -292,6 +300,12 @@ func TestRoomManifestRollout(t *testing.T) {
 	}
 
 	server := pod.Containers[0]
+	// The 2 s HTTP drain (web.Serve) and a 30 s mail send (sendMailTimeout) run after the sleep.
+	if ps := server.Lifecycle.PreStop; ps == nil || ps.Sleep == nil || ps.Sleep.Seconds < 1 {
+		t.Error("server container has no preStop sleep: the ingress still routes to a terminating pod (docs/rollout.md)")
+	} else if g := pod.TerminationGracePeriodSeconds; g == nil || *g < ps.Sleep.Seconds+2+30 {
+		t.Errorf("terminationGracePeriodSeconds unset or below preStop %d s + 2 s drain + 30 s mail", ps.Sleep.Seconds)
+	}
 	env := func(name string) (k8sEnv, bool) {
 		i := slices.IndexFunc(server.Env, func(e k8sEnv) bool { return e.Name == name })
 		if i < 0 {

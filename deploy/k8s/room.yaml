@@ -25,9 +25,8 @@ spec:
         app.kubernetes.io/part-of: grill-room
     spec:
       automountServiceAccountToken: false
-      # Serve drains POSTs for 2 s, then waits for mail sends, each bounded by 30 s (sendMailTimeout).
-      # No preStop sleep: the pod stops listening at SIGTERM, so a request the ingress sends it before
-      # it leaves the endpoints fails (docs/rollout.md).
+      # preStop 5 s, then Serve drains POSTs for 2 s and waits for mail sends, each bounded by 30 s
+      # (sendMailTimeout).
       terminationGracePeriodSeconds: 45
       # Preferred, not required: a one-node cluster still runs both pods.
       topologySpreadConstraints:
@@ -120,6 +119,11 @@ spec:
             # admits nobody else to the port.
             - name: GRILL_ROOM_METRICS_ADDR
               value: ":7681"
+          # The ingress routes to the pod until its endpoint removal reaches it: keep serving meanwhile
+          # (docs/rollout.md). Native handler: the distroless image has no sleep binary.
+          lifecycle:
+            preStop:
+              sleep: { seconds: 5 }
           ports:
             - { name: http, containerPort: 7680 }
             - { name: metrics, containerPort: 7681 }
