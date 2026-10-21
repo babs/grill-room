@@ -41,7 +41,7 @@ func TestStarterLibraryAPI(t *testing.T) {
 	}
 	alice, bob := e.signedIn(t, "Alice"), e.signedIn(t, "Bob")
 	ls := alice.starters(t)
-	if len(ls) != 3 || ls[0].Title != "Spec grill" || ls[0].Library != store.LibraryBuiltin || ls[0].Mine {
+	if len(ls) != 4 || ls[0].Title != "Spec grill" || ls[0].Library != store.LibraryBuiltin || ls[0].Mine {
 		t.Fatalf("built-ins: %+v", ls)
 	}
 	code, b := alice.do(t, "GET", "/api/profile/starters/"+strconv.FormatInt(ls[1].ID, 10), nil)
@@ -63,7 +63,7 @@ func TestStarterLibraryAPI(t *testing.T) {
 		t.Fatalf("duplicate: %d %s", code, b)
 	}
 	path := "/api/profile/starters/" + strconv.FormatInt(mine.ID, 10)
-	if len(bob.starters(t)) != 3 {
+	if len(bob.starters(t)) != 4 {
 		t.Fatal("bob sees alice's personal starter")
 	}
 	if code, _ := bob.do(t, "GET", path, nil); code != http.StatusNotFound {
@@ -78,7 +78,7 @@ func TestStarterLibraryAPI(t *testing.T) {
 	if code, b := alice.do(t, "POST", path+"/publish", nil); code != http.StatusNoContent {
 		t.Fatalf("publish: %d %s", code, b)
 	}
-	if ls := bob.starters(t); len(ls) != 4 || ls[3].Library != store.LibraryInstance || ls[3].Author != "Alice" {
+	if ls := bob.starters(t); len(ls) != 5 || ls[4].Library != store.LibraryInstance || ls[4].Author != "Alice" {
 		t.Fatalf("bob sees the shared one: %+v", ls)
 	}
 	if code, _ := bob.do(t, "DELETE", path, nil); code != http.StatusForbidden {

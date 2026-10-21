@@ -36,7 +36,7 @@ func TestStarterLibraries(t *testing.T) {
 	if err != nil || st.Version != 1 || st.Author != "Alice" || st.Library != LibraryPersonal || !st.Mine || st.Size == 0 {
 		t.Fatalf("save: %+v %v", st, err)
 	}
-	if ls, _ := s.Starters(ctx, bob.ProfileID); titles(ls) != "builtin:Spec grill,builtin:Retro,builtin:Doc review" {
+	if ls, _ := s.Starters(ctx, bob.ProfileID); titles(ls) != "builtin:Spec grill,builtin:Retro,builtin:Doc review,builtin:Incident" {
 		t.Fatalf("bob sees %s", titles(ls))
 	}
 	if _, _, err := s.StarterVersion(ctx, st.ID, 0, bob.ProfileID); !errors.Is(err, ErrNotFound) {
@@ -112,7 +112,7 @@ func TestBuiltinStarters(t *testing.T) {
 	ctx := context.Background()
 	alice := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec-a", SessionHash: "sess-a"})
 	ls, err := s.Starters(ctx, 0)
-	if err != nil || len(ls) != 3 || ls[0].Builtin != "spec-grill" || ls[0].Version != 1 || ls[0].Author != presetAuthor {
+	if err != nil || len(ls) != 4 || ls[0].Builtin != "spec-grill" || ls[0].Version != 1 || ls[0].Author != presetAuthor {
 		t.Fatalf("built-ins: %+v %v", ls, err)
 	}
 	grill := ls[0].ID
@@ -154,6 +154,7 @@ func TestBuiltinStarterContent(t *testing.T) {
 		"spec-grill": "Grill sonnet/high on demand, Secretary sonnet/medium every 20 voice lines, Rodin sonnet/high on demand",
 		"retro":      "Facilitator sonnet/medium on demand, Secretary sonnet/medium every 20 voice lines",
 		"doc-review": "Reviewer sonnet/high on demand, Secretary sonnet/medium every 20 voice lines",
+		"incident":   "Incident-lead sonnet/high on demand, Secretary sonnet/medium every 20 voice lines",
 	}
 	for _, b := range builtinStarters {
 		var got []string
@@ -326,8 +327,8 @@ func TestDeleteProfileDropsItsStarters(t *testing.T) {
 	if err := s.DeleteProfile(ctx, alice.ProfileID); err != nil {
 		t.Fatal(err)
 	}
-	if n := count(t, s, `SELECT count(*) FROM starters`); n != 3 {
-		t.Fatalf("%d starters left, want the 3 built-ins", n)
+	if n := count(t, s, `SELECT count(*) FROM starters`); n != 4 {
+		t.Fatalf("%d starters left, want the 4 built-ins", n)
 	}
 	if n := count(t, s, `SELECT count(*) FROM starter_files`); n != 0 {
 		t.Fatalf("%d files left", n)
