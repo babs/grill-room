@@ -40,6 +40,18 @@ const reviewerText = `You are Reviewer. The room reviews the documents in upload
 
 Answer in the language the room speaks. If it mixes languages, use the one of the latest messages.`
 
+const incidentLeadText = `You are Incident-lead, the lead of this incident response. You run the room through docs/agenda.md, one item at a time, until the incident is closed.
+
+- Stop the bleeding before you look for the root cause: mitigation or containment comes first.
+- Work one hypothesis at a time: the evidence for, the evidence against, and the next check that settles it.
+- Keep docs/timeline.md: each line a UTC timestamp, a fact, and who did what. Facts only, no guesses.
+- Code: ask for the last deploy or change, offer a rollback or a feature flag off, then bisect.
+- Security: contain first, preserve evidence before anyone changes anything, rotate exposed credentials, keep it need-to-know.
+- Infra: map the blast radius, check dependencies and capacity, consider a rollback.
+- No blame: ask what happened, not who failed.
+
+Answer in the language the room speaks. If it mixes languages, use the one of the latest messages.`
+
 // The personas the built-ins share. The Secretary speaks every 20 voice lines (spec 006 Decisions).
 var (
 	builtinSecretary = StarterPersona{PersonaFields: PersonaFields{Name: "Secretary", Badge: "📝", Colour: "#1971c2", Text: agendaSecretaryText,
@@ -114,6 +126,29 @@ Goal: leave the document clear, complete and agreed.
 		Fields: []StarterField{{Label: "Document", Key: "document", Required: true, Hint: "The title of what you review"}},
 		Personas: []StarterPersona{
 			{PersonaFields: PersonaFields{Name: "Reviewer", Badge: "🔍", Colour: "#7048e8", Text: reviewerText, Model: "sonnet", Effort: "high"}},
+			builtinSecretary,
+		},
+		Skills: []StarterSkill{}, Documents: []StarterDocument{}, Chain: builtinChain,
+	}},
+	{"incident", StarterManifest{
+		Title:       "Incident",
+		Description: "Handle a code, security or infra incident: Incident-lead runs the response and the timeline, Secretary keeps the minutes and the follow-ups.",
+		RoomName:    "Incident: {{incident}}",
+		Agenda: `# Agenda: {{scope}} incident {{incident}}
+
+Goal: stop the impact, find the cause, and leave with owned follow-ups.
+
+- [ ] Impact and severity
+- [ ] What we know: timeline so far
+- [ ] Mitigation or containment first
+- [ ] Hypotheses and the evidence for each
+- [ ] Root cause, if known
+- [ ] Follow-ups, each with an owner
+- [ ] Who to tell, and when`,
+		Fields: []StarterField{{Label: "Incident", Key: "incident", Required: true, Hint: "What is broken, in one line"},
+			{Label: "Scope", Key: "scope", Hint: "Code, security, infra, or a mix"}},
+		Personas: []StarterPersona{
+			{PersonaFields: PersonaFields{Name: "Incident-lead", Badge: "🚨", Colour: "#e03131", Text: incidentLeadText, Model: "sonnet", Effort: "high"}},
 			builtinSecretary,
 		},
 		Skills: []StarterSkill{}, Documents: []StarterDocument{}, Chain: builtinChain,

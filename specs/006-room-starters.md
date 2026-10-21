@@ -11,13 +11,13 @@ Every new room starts the same way: one Default persona, no agenda, no documents
 
 ## Solution
 
-"New room" opens a picker of room starters: blank, three built-ins (Spec grill, Retro, Doc review), the user's own starters and the instance's shared ones. Picking one opens an editor prefilled with its agenda, personas, documents and skills; the user adjusts, fills the starter's fields, and creates the room. The room gets a copy, with no link back. A room admin can save a room as a starter, review what goes in, keep it private or publish it to the instance.
+"New room" opens a picker of room starters: blank, four built-ins (Spec grill, Retro, Doc review, Incident), the user's own starters and the instance's shared ones. Picking one opens an editor prefilled with its agenda, personas, documents and skills; the user adjusts, fills the starter's fields, and creates the room. The room gets a copy, with no link back. A room admin can save a room as a starter, review what goes in, keep it private or publish it to the instance.
 
 ## Scope
 
 - Starter content: title, description, default room name, `agenda.md`, fields, personas, room skills, documents, chain settings, STT glossary.
 - Three libraries: built-in (ships with the binary), personal (private to a profile), instance (shared, versioned).
-- Built-ins: Spec grill, Retro, Doc review.
+- Built-ins: Spec grill, Retro, Doc review, Incident.
 - New room flow: picker, preview, prefilled editor, fields, "Create room".
 - Pinned `agenda.md` that every persona aligns on.
 - "Save room as starter", with an editable review step.
@@ -45,7 +45,8 @@ Every new room starts the same way: one Default persona, no agenda, no documents
 - [x] **AC7** The built-ins are:
   - Spec grill: Grill (sonnet / high, on demand) + Secretary (sonnet / medium, every 20 voice lines) + Rodin (sonnet / high, on demand);
   - Retro: Facilitator (sonnet / medium, on demand) + Secretary;
-  - Doc review: Reviewer (sonnet / high, on demand, annotates the documents) + Secretary.
+  - Doc review: Reviewer (sonnet / high, on demand, annotates the documents) + Secretary;
+  - Incident: Incident-lead (sonnet / high, on demand, keeps `docs/timeline.md`) + Secretary.
 
   Prompts and agendas are in English; personas reply in the room's language. No built-in defaults to opus, and none carries skills.
 
@@ -157,3 +158,4 @@ Decisions taken in the loop (2026-10-13):
 - Non-built-in starter skills land pending; the first host approves them under "approve everything", otherwise they activate when it connects (user, 2026-10-13).
 - Starter personas are the room's initial setup, not held for approval; the host's model cap still clamps them (user, 2026-10-13).
 - Spec grill gains Rodin, who asks whether the idea should exist before Grill tests the spec branch by branch. Rodin is also a template in the persona library. Only rooms created from the new version get it (user, 2026-10-18).
+- A fourth built-in, Incident, for code, security and infra incidents: Incident-lead puts mitigation before root cause and keeps a UTC timeline, the Secretary keeps the minutes (user, 2026-10-21). The persona is "Incident-lead": names take no spaces. Its optional Scope field leads the agenda title, so an empty one leaves no stray brackets: routine call, overturnable.

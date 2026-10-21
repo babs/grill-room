@@ -24,7 +24,7 @@ test('starter library: duplicate, share, delete, /admin', async ({ browser, requ
   const me = 'Alice' + Date.now().toString(36);
   const { pages: [alice, bob] } = await roomWith(browser, request, [me, 'Bob']);
   await alice.goto('/profile#starters');
-  await expect(alice.locator('#starters-builtin li')).toHaveCount(3);
+  await expect(alice.locator('#starters-builtin li')).toHaveCount(4);
   await expect(alice.locator('#starters-builtin li').first()).toContainText('Spec grill');
   await expect(alice.locator('#starters-builtin li').first()).toContainText('by grill-room');
 
@@ -41,7 +41,7 @@ test('starter library: duplicate, share, delete, /admin', async ({ browser, requ
   await expect(more).toBeFocused();
 
   await bob.goto('/profile#starters');
-  await expect(bob.locator('#starters-builtin li')).toHaveCount(3);
+  await expect(bob.locator('#starters-builtin li')).toHaveCount(4);
   await expect(bob.locator('#starters-personal')).toHaveCount(0);
   await expect(bob.locator('#starters-instance li', { hasText: me })).toHaveCount(0);
 
@@ -84,6 +84,7 @@ const builtins = [
   { title: 'Spec grill', search: 'SPEC GRILL', field: 'Topic', value: 'Billing', room: 'Grill: Billing', personas: ['Grill', 'Secretary', 'Rodin'] },
   { title: 'Retro', search: 'retro', field: 'Team', value: 'Ops', room: 'Retro: Ops', personas: ['Facilitator', 'Secretary'] },
   { title: 'Doc review', search: 'doc review', field: 'Document', value: 'RFC 12', room: 'Review: RFC 12', personas: ['Reviewer', 'Secretary'] },
+  { title: 'Incident', search: 'incident', field: 'Incident', value: 'API down', room: 'Incident: API down', personas: ['Incident-lead', 'Secretary'] },
 ];
 
 for (const vp of widths) {
@@ -119,7 +120,7 @@ for (const vp of widths) {
         expect(await smallTargets(page), b.title).toEqual([]);
         expect(await noOverflow(page)).toEqual([]);
       }
-      await sheet.getByLabel(b.field).fill(b.value);
+      await sheet.getByLabel(b.field, { exact: true }).fill(b.value);
       await expect(create).toBeEnabled();
       await create.click();
       await expect(page.locator('#room-name')).toHaveText(b.room);

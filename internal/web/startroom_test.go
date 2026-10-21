@@ -280,8 +280,8 @@ func TestRoomFromPersonalStarter(t *testing.T) {
 	}
 }
 
-// 013-AC30: the built-in Spec grill keeps Secretary out of the call and Grill and Rodin in it; Retro and Doc
-// review keep every persona speaking. A starter saved from a room carries each persona's speaks,
+// 013-AC30: the built-in Spec grill keeps Secretary out of the call and Grill and Rodin in it; Retro, Doc
+// review and Incident keep every persona speaking. A starter saved from a room carries each persona's speaks,
 // voice and rate and the room's call settings; an older starter reads as speaking and defaults.
 func TestStartersCarryVoices(t *testing.T) {
 	e := newEnv(t)
@@ -313,7 +313,7 @@ func TestStartersCarryVoices(t *testing.T) {
 	if got := speaking(grill.ID); !got["Grill"] || got["Secretary"] || !got["Rodin"] {
 		t.Errorf("Spec grill: %v", got)
 	}
-	for title, fields := range map[string]map[string]string{"Retro": {"team": "Core"}, "Doc review": {"document": "RFC"}} {
+	for title, fields := range map[string]map[string]string{"Retro": {"team": "Core"}, "Doc review": {"document": "RFC"}, "Incident": {"incident": "API down"}} {
 		for name, on := range speaking(create(title, fields).ID) {
 			if !on {
 				t.Errorf("%s: %s is silent", title, name)
