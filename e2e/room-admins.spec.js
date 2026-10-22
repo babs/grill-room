@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet, playSTT, stopSTT, newRoomEditor, personaSheet, closePersonas, rowAction, personMenu, appointAdmin, unfoldTabs } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip, signIn, noOverflow, menuItem, confirmSheet, playSTT, stopSTT, newRoomEditor, personaSheet, closePersonas, rowAction, personMenu, appointAdmin, unfoldTabs, uniq } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const phone = { width: 390, height: 844 };
@@ -102,7 +102,7 @@ test('room creation from the profile page, within the limits', async ({ browser,
   // Quinn gets a limit of 12 from the profiles view: his 11th room goes through, where Pia's was
   // refused at the instance's 10.
   // Unique: the profiles view lists every run's profiles, as --repeat-each reuses the server.
-  const qn = 'Quinn ' + Date.now().toString(36);
+  const qn = 'Quinn ' + uniq();
   const quinn = await join(browser, request, lobby.id, qn, phone);
   for (let i = 1; i <= 10; i++) {
     expect((await quinn.request.post('/api/profile/rooms', { data: { name: `Quinn room ${i}`, display_name: qn } })).status()).toBe(201);

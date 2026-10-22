@@ -513,3 +513,6 @@ export async function approveEverything(admin) {
   await admin.getByLabel('Approve every new AI persona and change').check();
   await expect(admin.locator('.toast', { hasText: 'approved at once' })).toBeVisible();
 }
+
+// A name unique across parallel workers: Date.now() alone repeats when two start in the same ms.
+export const uniq = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8).padEnd(6, '0');

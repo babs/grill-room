@@ -1,6 +1,7 @@
 import { test, expect } from '../fixtures.js';
 import { admin, nextMail, joinRoom, linkPath, ownProfile, newContext, durationText } from './helpers.js';
 import { magicLinkTTL } from './playwright.config.js';
+import { uniq } from '../helpers.js';
 
 // 011-AC22 011-AC24: the page names the lifetime the server's mail names.
 const lifetime = durationText(magicLinkTTL);
@@ -15,7 +16,7 @@ test.afterAll(async ({ request }) => {
 });
 
 async function newRoom(request, name) {
-  const room = await (await request.post('/api/rooms', { headers: admin, data: { name: `${name} ${Date.now()}` } })).json();
+  const room = await (await request.post('/api/rooms', { headers: admin, data: { name: `${name} ${uniq()}` } })).json();
   made.rooms.push(room.id);
   return room;
 }
@@ -40,7 +41,7 @@ const invitePath = async (request, roomID) => linkPath((await (await request.pos
 // 011-AC4 011-AC5 011-AC22 011-AC25: a signed-out join page offers the email recovery; the mailed link
 // signs the browser in, and a join tab left open shows the profile once focused, then joins as it.
 test('recover a profile by email from the join page', async ({ browser, request }) => {
-  const email = `recover-${Date.now()}@example.com`;
+  const email = `recover-${uniq()}@example.com`;
   const room = await newRoom(request, 'Recover');
   const alice = await member(browser, request, room, 'Alice');
   await bindEmail(alice, request, email);
@@ -60,7 +61,7 @@ test('recover a profile by email from the join page', async ({ browser, request 
   await join.getByRole('button', { name: 'Recover my profile by email' }).click();
   await expect(join.locator('#recover-email')).toBeFocused();
   // The same answer for an address nobody holds.
-  await join.locator('#recover-email').fill(`nobody-${Date.now()}@example.com`);
+  await join.locator('#recover-email').fill(`nobody-${uniq()}@example.com`);
   await join.getByRole('button', { name: 'Email me a sign-in link' }).click();
   await expect(join.locator('#recover .link-sent h3')).toHaveText(neutral);
   await expect(join.locator('#recover .link-sent')).toContainText(`The link works once, within ${lifetime}.`);
@@ -101,7 +102,7 @@ async function room2Path(request) {
 // 011-AC21 011-AC9: the Email section's states, none, pending (through a reload), another
 // address, bound with Change, and a changed address once its link is used.
 test('email section states', async ({ browser, request }) => {
-  const stamp = Date.now();
+  const stamp = uniq();
   const [first, other, changed] = ['first', 'other', 'changed'].map((k) => `${k}-${stamp}@example.com`);
   const room = await newRoom(request, 'States');
   const page = await member(browser, request, room, 'Sam');
@@ -154,7 +155,7 @@ test('email section states', async ({ browser, request }) => {
 // leaving that browser as it was; a used sign-in link offers the email sign-in; an address another
 // profile took meanwhile says so, and that the admin can merge the two.
 test('link outcomes: bind elsewhere, used, taken', async ({ browser, request }) => {
-  const stamp = Date.now();
+  const stamp = uniq();
   const room = await newRoom(request, 'Outcomes');
   const bob = await member(browser, request, room, 'Bob');
   const elsewhere = `elsewhere-${stamp}@example.com`;
@@ -266,7 +267,7 @@ test('no-email marker and nudge', async ({ browser, request }) => {
   await expect(alice).toHaveURL(/\/profile#account$/);
   await expect(alice.locator('#bind-email')).toBeFocused();
 
-  await bindEmail(alice, request, `marked-${Date.now()}@example.com`);
+  await bindEmail(alice, request, `marked-${uniq()}@example.com`);
   await tablet.reload();
   await expect(aliceRow(tablet)).toBeVisible();
   // The page has read the profile once own holds the address: the marker's absence then means something.

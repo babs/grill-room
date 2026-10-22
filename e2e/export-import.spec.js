@@ -2,7 +2,7 @@ import { test, expect } from './fixtures.js';
 import { readFileSync } from 'node:fs';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { adminToken } from './playwright.config.js';
-import { roomWith, startDaemon, pairDaemon, removeSandbox, ask, signIn, noOverflow, menuItem } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, removeSandbox, ask, signIn, noOverflow, menuItem, uniq } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
@@ -20,7 +20,7 @@ for (const vp of widths) {
   // tampered archive with its reason.
   test(`export, preview and import from /admin, ${vp.name}`, async ({ browser, request }) => {
     const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
-    const name = `Export ${vp.name} ${Date.now()}`;
+    const name = `Export ${vp.name} ${uniq()}`;
     expect((await request.patch(`/api/rooms/${room.id}`, { headers: admin, data: { name } })).status()).toBe(200);
     // Other tests create rooms meanwhile: count the ones of this name.
     const named = async () => (await (await request.get('/api/rooms', { headers: admin })).json()).filter((r) => r.name === name).length;

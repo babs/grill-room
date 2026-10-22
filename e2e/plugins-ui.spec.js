@@ -2,7 +2,7 @@ import { test, expect } from './fixtures.js';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
-import { roomWith, appointAdmin, fakeDaemon, agentState, openStrip, personaSheet, closePersonas, confirmSheet, noOverflow, smallTargets } from './helpers.js';
+import { roomWith, appointAdmin, fakeDaemon, agentState, openStrip, personaSheet, closePersonas, confirmSheet, noOverflow, smallTargets, uniq } from './helpers.js';
 import { gitPort } from './playwright.config.js';
 
 const phone = { width: 390, height: 844 };
@@ -76,7 +76,7 @@ for (const vp of [phone, desktop]) {
   // state and cost and their total; a member reads all of it and gets a 403 on every write.
   test(`plugins: add, approve, update, remove at ${vp.width} px`, async ({ browser, request, baseURL }) => {
     test.setTimeout(120_000);
-    const tag = vp.width + '-' + Date.now().toString(36);
+    const tag = vp.width + '-' + uniq();
     const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
     await appointAdmin(alice, request, room.id);
     const host = await fakeDaemon(alice, baseURL, room.id, 'Alice laptop', { approve_all: true });
@@ -265,7 +265,7 @@ test('plugins: hostile plugin content renders as text', async ({ browser, reques
   await appointAdmin(alice, request, room.id);
   const host = await fakeDaemon(alice, baseURL, room.id, 'Alice laptop', { approve_all: true });
   try {
-    const repo = newRepo('evil-' + Date.now().toString(36), {
+    const repo = newRepo('evil-' + uniq(), {
       '.claude-plugin/plugin.json': JSON.stringify({ name: 'evil', description: evil }),
       [`skills/${evil}/SKILL.md`]: '---\nname: x\ndescription: x\n---\nx\n',
       'hooks/hooks.json': JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: evil }] }] } }),
@@ -357,7 +357,7 @@ test('plugins: ask the AI host, and the allowlist marks', async ({ browser, requ
     await expect(req).toHaveCount(0);
 
     // 009-AC25: the inspection lists the domain off the host's allowlist; the sheet marks it.
-    const repo = newRepo('allow-' + Date.now().toString(36), {
+    const repo = newRepo('allow-' + uniq(), {
       '.claude-plugin/plugin.json': '{"name":"docs"}\n',
       '.mcp.json': JSON.stringify({ mcpServers: { docs: { type: 'http', url: 'https://docs.example.com/mcp' }, wiki: { type: 'http', url: 'https://wiki.example.org/mcp' } } }),
     });
@@ -383,7 +383,7 @@ test('plugins: ask the AI host, and the allowlist marks', async ({ browser, requ
 // approves everything, it waits for that host's approval (006-AC13).
 test('plugins: saved in a starter, pending in a room made from it', async ({ browser, request, baseURL }) => {
   test.setTimeout(120_000);
-  const tag = Date.now().toString(36);
+  const tag = uniq();
   const { room, pages: [alice] } = await roomWith(browser, request, ['Sam' + tag]);
   await appointAdmin(alice, request, room.id);
   /** report posts the fake host's inspection of plugin name's first version in roomID. */

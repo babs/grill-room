@@ -1,6 +1,7 @@
 import { test, expect } from '../fixtures.js';
 import { admin, joinRoom, newContext, durationText, ownProfile } from './helpers.js';
 import { magicLinkTTL } from './playwright.config.js';
+import { uniq } from '../helpers.js';
 
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
 const mailFailed = 'The mail could not be sent. Try again in a few minutes; if it keeps failing, tell the admin.';
@@ -109,20 +110,20 @@ for (const vp of widths) {
     await page.getByRole('button', { name: 'Recover my profile by email' }).click();
     await feedback(page, {
       box: page.locator('#recover'), form: page.locator('#recover-form'), input: page.locator('#recover-email'),
-      path: '/api/profile/signin', address: `ac28-signin-${vp.name}-${Date.now()}@example.com`,
+      path: '/api/profile/signin', address: `ac28-signin-${vp.name}-${uniq()}@example.com`,
       heading: 'If a profile uses this address, a link is on its way', vp,
     });
   });
 
   // 011-AC28: /profile's Email section answers in place, and a reload shows the sent panel again.
   test(`bind link feedback, ${vp.name}`, async ({ browser, request }) => {
-    const room = await (await request.post('/api/rooms', { headers: admin, data: { name: `AC28 ${vp.name} ${Date.now()}` } })).json();
+    const room = await (await request.post('/api/rooms', { headers: admin, data: { name: `AC28 ${vp.name} ${uniq()}` } })).json();
     made.rooms.push(room.id);
     const page = await joinRoom(browser, request, room.id, 'Fay');
     made.profiles.push((await ownProfile(page)).id);
     await page.setViewportSize(vp);
     await page.goto('/profile#account');
-    const address = `ac28-bind-${vp.name}-${Date.now()}@example.com`;
+    const address = `ac28-bind-${vp.name}-${uniq()}@example.com`;
     await feedback(page, {
       box: page.locator('#email'), form: page.locator('#bind'), input: page.locator('#bind-email'),
       path: '/api/profile/email', address, heading: 'Link sent to ' + address, vp,

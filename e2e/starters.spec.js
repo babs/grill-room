@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, confirmSheet, smallTargets, noOverflow, rowAction } from './helpers.js';
+import { roomWith, signIn, confirmSheet, smallTargets, noOverflow, rowAction, uniq } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -94,7 +94,7 @@ for (const vp of widths) {
   // in the documents, and Room settings names the starter.
   test(`new room from each built-in and Blank, ${vp.name}`, async ({ browser, request }) => {
     test.setTimeout(90_000);
-    const me = 'Ann' + Date.now().toString(36);
+    const me = 'Ann' + uniq();
     const { pages: [page] } = await roomWith(browser, request, [me]);
     await page.setViewportSize(vp);
     for (const b of builtins) {

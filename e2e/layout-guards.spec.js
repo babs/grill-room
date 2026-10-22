@@ -1,7 +1,7 @@
 import { request as pwRequest } from '@playwright/test';
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, menuItem, appointAdmin, personaSheet, startDaemon, openDaemonPage, unfoldTabs } from './helpers.js';
+import { roomWith, signIn, menuItem, appointAdmin, personaSheet, startDaemon, openDaemonPage, unfoldTabs, uniq } from './helpers.js';
 
 // Layout guards of the /admin lists, the room sheets and the data pages (004b-AC16): one primary
 // action per view, no action past an edge, a phone's list in short cards with no sideways scroll,
@@ -71,7 +71,7 @@ for (const [size, viewport] of Object.entries(sizes)) {
   // 004b-AC1 004b-AC3 004b-AC5 004b-AC6: every /admin view and room tab, at 390, 1440 and 1920 px.
   test(`/admin views, ${size}`, async ({ browser, request, baseURL }) => {
     test.setTimeout(90_000);
-    const room = await (await request.post('/api/rooms', { headers: admin, data: { name: `Layout ${size} ${'long name '.repeat(7)}${Date.now()}` } })).json();
+    const room = await (await request.post('/api/rooms', { headers: admin, data: { name: `Layout ${size} ${'long name '.repeat(7)}${uniq()}` } })).json();
     const people = [];
     // A name at the 40-character cap, two lines unclamped on a phone.
     for (const n of ['Ada ' + size, 'Bo ' + size, 'Cy with a rather long name to wrap twice']) people.push(await member(baseURL, request, room, n));

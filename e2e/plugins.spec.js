@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { join, resolve } from 'node:path';
-import { roomWith, startDaemon, pairDaemon, ask, skillZip, appointAdmin, agentState, personaSheet, closePersonas, approveEverything } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip, appointAdmin, agentState, personaSheet, closePersonas, approveEverything, uniq } from './helpers.js';
 import { gitPort, adminToken } from './playwright.config.js';
 
 // The plugin the Phase 2 DoD names: its plugin.json and its spec-feature skill.
@@ -61,7 +61,7 @@ test('plugins: inspected, approved, loaded after the skills', async ({ browser, 
   await appointAdmin(alice, request, room.id);
   const grill = (await agentState(alice, room.id)).personas[0].id;
   // A skill on Grill gives the turn grill-room's --plugin-dir, the one the plugins come after.
-  const zip = [...readFileSync(skillZip('stamp-' + Date.now().toString(36), 'STAMP'))];
+  const zip = [...readFileSync(skillZip('stamp-' + uniq(), 'STAMP'))];
   const skill = await alice.evaluate(async (bytes) => {
     const r = await fetch('/api/profile/skills', { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: new Uint8Array(bytes) });
     return r.json();
@@ -75,7 +75,7 @@ test('plugins: inspected, approved, loaded after the skills', async ({ browser, 
 
     expect(await dirs(alice, room.id, 'before')).toEqual([expect.stringMatching(new RegExp(`^${skillsDir} \\[`))]);
 
-    const added = await call(alice, 'POST', `/api/rooms/${room.id}/plugins`, { url: publishRepo('skills-' + Date.now().toString(36)), ref: 'main', personas: [grill] });
+    const added = await call(alice, 'POST', `/api/rooms/${room.id}/plugins`, { url: publishRepo('skills-' + uniq()), ref: 'main', personas: [grill] });
     expect(added.status, JSON.stringify(added.body)).toBe(201);
     const babs = async () => (await call(alice, 'GET', `/api/rooms/${room.id}/plugins`)).body.plugins.find((p) => p.name === 'babs');
     await expect.poll(async () => (await babs()).versions[0].state, { timeout: 90_000 }).toBe('pending');
