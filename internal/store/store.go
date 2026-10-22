@@ -480,7 +480,7 @@ func (s *Store) SettingOrInit(ctx context.Context, key, init string) (string, er
 	return s.Setting(ctx, key)
 }
 
-// CreateRoom inserts a room with the given id, and the Default template's persona (002-AC42).
+// CreateRoom inserts a room with the given id, and the Grill template's persona (002-AC42).
 func (s *Store) CreateRoom(ctx context.Context, id, name string) (*Room, error) {
 	var r *Room
 	err := s.withTx(ctx, "create room", func(tx *txn) error {

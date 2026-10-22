@@ -161,7 +161,7 @@ Bounds the schemas leave out (name lengths and patterns, trigger ranges, one aut
   - confirm tests, per destructive tool: `confirm` missing, in another case, with a trailing space, or set to the id where a name is due each give `isError` and leave the target and the audit log unchanged; the exact name deletes and writes one audit entry with the token id;
   - host approval: under "approve everything" `add_persona` by a member returns `held` and the persona is pending; the same call by the AI host applies;
   - `get_invite_link` called twice returns the same link and the room holds one more invite, not two;
-  - `make e2e-mcp-live` on a server of its own on loopback, run locally with this machine's Claude Code login on a throwaway config dir: Playwright creates a profile and a full token and reads the command from the sheet; the test runs it with `-s project` in a temporary directory, and `claude mcp list` there reports `grill-room` connected (no model request); then one `claude -p --model haiku --strict-mcp-config --mcp-config .mcp.json --allowedTools "mcp__grill-room__*"` run asks for a room from the built-in Retro starter with one more persona from the shipped Default template (persona Grill). The REST API then shows the room "created from Retro", its personas Facilitator, Secretary and Grill, and the audit log the room's creation. Budget: that one run, at most 6 model requests;
+  - `make e2e-mcp-live` on a server of its own on loopback, run locally with this machine's Claude Code login on a throwaway config dir: Playwright creates a profile and a full token and reads the command from the sheet; the test runs it with `-s project` in a temporary directory, and `claude mcp list` there reports `grill-room` connected (no model request); then one `claude -p --model haiku --strict-mcp-config --mcp-config .mcp.json --allowedTools "mcp__grill-room__*"` run asks for a room from the built-in Retro starter with one more persona from the shipped Grill template. The REST API then shows the room "created from Retro", its personas Facilitator, Secretary and Grill, and the audit log the room's creation. Budget: that one run, at most 6 model requests;
   - Playwright: the sheet shows the command with the public URL and the token, and Copy puts it on the clipboard;
   - `make lint test` green, the changed e2e specs green.
 
@@ -191,7 +191,7 @@ Reconciled with what shipped after the draft (2026-10-16):
 - `/admin` gets no token list (out of scope as drafted); its audit view gains the labels of the new actions, and its merge sheet the token count.
 - 011 replaced per-click invites with one shareable link per member and room: `get_invite_link` maps to `POST .../invites/share`, idempotent by construction, instead of the draft's "GET then POST". AC6's invite exception is that link.
 - 009's persona model has no single `trigger` field: `edit_persona` takes the REST route's `every_n`, `every_voice` and `every_minutes` (0 is off, one at most), and the name pattern stays the route's check. Plugin tools need a room admin, as the plugin routes do.
-- The built-in persona template that yields the persona Grill is titled "Default"; the live e2e adds it under that title.
+- The built-in persona template that yields the persona Grill is titled "Grill" (was "Default" until 2026-10-22); the live e2e adds it under that title.
 - The destructive tools read the target's current name through a read route first (`GET` room, documents, agent): the `confirm` check is the tool's, not the route's.
 
 Made while drafting (overturnable):

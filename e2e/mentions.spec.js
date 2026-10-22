@@ -198,7 +198,7 @@ test('mentions: turn states, stop, pending and offline', async ({ browser, reque
     // With "approve everything", Bob's new persona waits for the host.
     await approveEverything(admin);
     await menuItem(bob, 'Personas');
-    await bob.locator('#persona-template').selectOption({ label: '🔥 Default v1' });
+    await bob.locator('#persona-template').selectOption({ label: '🔥 Grill v1' });
     await bob.locator('#personas').getByRole('button', { name: 'Add', exact: true }).click();
     await expect(bob.locator('#personas-status')).toHaveText('Grill-2 added. It waits for the AI host\'s approval.');
     await say(alice, '@Grill-2 are you there?');

@@ -16,7 +16,7 @@ function accessToken() {
 }
 
 // 012-AC22 012-AC18 012-AC19: the command from the token sheet adds a server Claude Code reports
-// connected; a haiku run then creates a room from the Retro starter and adds the Default
+// connected; a haiku run then creates a room from the Retro starter and adds the Grill
 // template's persona, through MCP only.
 test('Claude Code sets up a room through /mcp', async ({ browser, request }) => {
   const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Lobby' } })).json();
@@ -55,7 +55,7 @@ test('Claude Code sets up a room through /mcp', async ({ browser, request }) => 
 
     const prompt = 'Use only the grill-room tools. 1) list_starters, find the starter titled "Retro". '
       + '2) create_room from it with display_name "Agent" and fields {"team": "Platform"}. '
-      + '3) list_templates for that room and add_persona from the template titled "Default". Then answer DONE.';
+      + '3) list_templates for that room and add_persona from the template titled "Grill". Then answer DONE.';
     // The prompt on stdin: --allowedTools takes every argument after it.
     const out = JSON.parse(run(['-p', '--model', 'haiku', '--max-turns', '6', '--output-format', 'json', '--strict-mcp-config', '--mcp-config', '.mcp.json',
       '--allowedTools', 'mcp__grill-room__*'], prompt));

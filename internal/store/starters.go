@@ -478,7 +478,7 @@ func ensureStarter(ctx context.Context, tx *txn, key string, raw []byte) error {
 	return insertStarterVersion(ctx, tx, id, n+1, presetAuthor, raw, nil)
 }
 
-// BlankManifest is the blank starter: the Default template's persona alone, as every room had
+// BlankManifest is the blank starter: the Grill template's persona alone, as every room had
 // before 006. It is not stored (spec 006 Decisions).
 func (s *Store) BlankManifest(ctx context.Context) (*StarterManifest, error) {
 	t, err := scanTemplate(s.db.QueryRowContext(ctx, templateCols+`WHERE t.preset = ?`, PresetDefault))

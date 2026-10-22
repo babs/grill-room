@@ -62,14 +62,36 @@ func lastBody(t *testing.T, s *Store, room string) string {
 	return msgs[len(msgs)-1].Body
 }
 
-// 002-AC13 002-AC42: the library ships Default (Grill), Secretary and Rodin; a new room starts
-// with Grill, copied from Default's latest version.
+// A preset whose shipped title changed is renamed at the next start, keeping its id and versions.
+func TestPresetRenamedOnOpen(t *testing.T) {
+	dsn := testDSN(t)
+	s, err := Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := templateByPreset(t, s, PresetDefault)
+	if _, err := s.db.ExecContext(context.Background(), `UPDATE persona_templates SET title = 'Default' WHERE preset = ?`, PresetDefault); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	if s, err = Open(dsn); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	after := templateByPreset(t, s, PresetDefault)
+	if after.Title != "Grill" || after.ID != before.ID || after.Version != before.Version {
+		t.Fatalf("before %+v, after %+v", before, after)
+	}
+}
+
+// 002-AC13 002-AC42: the library ships Grill, Secretary and Rodin; a new room starts with Grill,
+// copied from its template's latest version.
 func TestPresetsAndNewRoom(t *testing.T) {
 	s := openTest(t)
 	def := templateByPreset(t, s, PresetDefault)
 	sec := templateByPreset(t, s, "secretary")
 	rod := templateByPreset(t, s, "rodin")
-	if def.Title != "Default" || def.Name != "Grill" || def.Version != 1 || def.Author != presetAuthor || def.Mine {
+	if def.Title != "Grill" || def.Name != "Grill" || def.Version != 1 || def.Author != presetAuthor || def.Mine {
 		t.Fatalf("default: %+v", def)
 	}
 	if sec.Title != "Secretary" || sec.Name != "Secretary" || strings.Contains(sec.Text, "challenge the") {

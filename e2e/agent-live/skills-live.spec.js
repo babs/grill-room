@@ -41,7 +41,7 @@ test('a skill script runs in a real turn and its output lands in a doc', async (
   const skill = await up.json();
   const st = await (await alice.request.get(`${api}/agent`)).json();
   const grill = st.personas[0];
-  // A bare persona: the Default text asks for a synthesis document, which costs requests.
+  // A bare persona: the Grill text asks for a synthesis document, which costs requests.
   const edit = await alice.request.patch(`${api}/personas/${grill.id}`,
     { data: { text: 'You are Grill. Do exactly what the room asks, with as few tool calls as possible, and nothing else.' } });
   expect(edit.status()).toBe(200);

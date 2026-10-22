@@ -359,7 +359,7 @@ func TestStarterCallsFailOnAClosedStore(t *testing.T) {
 	}
 }
 
-// The blank starter is the Default template's persona alone.
+// The blank starter is the Grill template's persona alone.
 func TestBlankManifest(t *testing.T) {
 	s := openTest(t)
 	m, err := s.BlankManifest(t.Context())

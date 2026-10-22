@@ -23,7 +23,7 @@ A transcript chunk holds 200 messages, so about 200 lines. Chunks are counted in
 
 ## Personas
 
-A room holds several personas, Grill (from the Default template) and Secretary for example. Each one is a separate agent: its own Claude session, its own cursors, its own text, model and effort. "Your last turn" below means the last successful turn of that persona, never another one's.
+A room holds several personas, Grill (from the Grill template) and Secretary for example. Each one is a separate agent: its own Claude session, its own cursors, its own text, model and effort. "Your last turn" below means the last successful turn of that persona, never another one's.
 
 The persona's text is its role. It does not go in the prompt: the daemon writes it to `/home/agent/.grill-room/persona.md` in the sandbox home, out of `/workspace`, and runs `claude -p --append-system-prompt-file` on it with `--system-prompt-snapshot off`. With the snapshot on, a resumed session would keep the text of its first turn. The text, the model and the effort are copied onto the turn when it starts, so an edit made during a turn applies to the next one.
 

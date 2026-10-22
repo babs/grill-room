@@ -116,16 +116,16 @@ var presets = []struct {
 	key, title string
 	f          PersonaFields
 }{
-	{PresetDefault, "Default", PersonaFields{Name: "Grill", Badge: "🔥", Colour: "#d9480f", Text: grillText, Model: DefaultModel, Effort: DefaultEffort}},
+	{PresetDefault, "Grill", PersonaFields{Name: "Grill", Badge: "🔥", Colour: "#d9480f", Text: grillText, Model: DefaultModel, Effort: DefaultEffort}},
 	{"secretary", "Secretary", PersonaFields{Name: "Secretary", Badge: "📝", Colour: "#1971c2", Text: secretaryText, Model: DefaultModel, Effort: DefaultEffort}},
 	{"rodin", "Rodin", rodin},
 }
 
-// ensurePresets creates the shipped templates and adds a version to any whose shipped fields
-// changed since its latest version.
+// ensurePresets creates the shipped templates, renames any whose shipped title changed, and adds a
+// version to any whose shipped fields changed since its latest version.
 func ensurePresets(ctx context.Context, db querier) error {
 	for _, p := range presets {
-		if _, err := db.ExecContext(ctx, `INSERT INTO persona_templates(preset, title, created_at) VALUES(?,?,?) ON CONFLICT(preset) DO NOTHING`,
+		if _, err := db.ExecContext(ctx, `INSERT INTO persona_templates(preset, title, created_at) VALUES(?,?,?) ON CONFLICT(preset) DO UPDATE SET title = excluded.title`,
 			p.key, p.title, now()); err != nil {
 			return fmt.Errorf("preset %s: %w", p.key, err)
 		}
