@@ -202,7 +202,7 @@ test('the websites list updates at once and rolls back on error', async ({ brows
   const daemon = startDaemon(`${baseURL}/r/${room.id}`, { GRILL_ROOM_GITHUB_URL: 'http://127.0.0.1:9' });
   try {
     const admin = await pairDaemon(alice, daemon);
-    // The room links its host to the app's page, from ⋯ and from Diagnostics, once the app is connected.
+    // The room links its host to the app's page, from the room menu and from Diagnostics, once the app is connected.
     await expect(alice.locator('#host-app-open')).not.toHaveAttribute('hidden', '');
     await expect(alice.locator('#host-app-open')).toHaveAttribute('href', 'http://127.0.0.1:47680/');
     await expect(alice.locator('#diag-host-app')).toHaveAttribute('href', 'http://127.0.0.1:47680/');

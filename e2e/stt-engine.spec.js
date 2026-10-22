@@ -29,7 +29,7 @@ test('glossary tab and model credit follow the workers', async ({ browser, reque
   // stale glossary link lands on the first.
   for (const st of [{ engines: ['parakeet'] }, { engines: [], available: false }]) {
     await playSTT(bob, room.id, st);
-    await expect(bob.locator('#more-menu #manage-open')).not.toHaveAttribute('hidden');
+    await expect(bob.locator('#room-menu #manage-open')).not.toHaveAttribute('hidden');
     await bob.goto(`/r/${room.id}#manage/glossary`);
     await expect(bob.locator('#manage #tab-invites')).toHaveAttribute('aria-current', 'page');
     await expect(tabs(bob)).toHaveCount(3);

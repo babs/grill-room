@@ -92,7 +92,7 @@ test('no emoji icon and no native title in the room chrome', async ({ browser, r
   for (const size of [desktop, phone]) {
     await alice.setViewportSize(size);
     const states = [['room', null]];
-    for (const [menu, open] of [['more menu', '#more-open'], ['user menu', '#me'], ['document menu', '#doc-more']]) states.push([menu, open]);
+    for (const [menu, open] of [['room menu', '#room-open'], ['user menu', '#me'], ['document menu', '#doc-more']]) states.push([menu, open]);
     for (const [name, open] of states) {
       if (size === phone && name === 'document menu') await alice.locator('#tabbar [data-tab=docs]').click();
       if (open) await alice.locator(open).click();

@@ -309,11 +309,11 @@ export async function unfoldTabs(nav) {
   if ((await menu.isVisible()) && (await menu.getAttribute('aria-expanded')) === 'false') await menu.click();
 }
 
-// menuItem picks an item of a header menu (005-AC32): '⋯' (more), the user's initials (me) or the
-// audio options (voice).
-export async function menuItem(page, name, which = 'more') {
-  await page.locator({ more: '#more-open', me: '#me', voice: '#voice-more' }[which]).click();
-  const menu = page.locator({ more: '#more-menu', me: '#me-menu', voice: '#voice-menu' }[which]);
+// menuItem picks an item of a header menu (005-AC32): the room's name (room), the user's initials (me)
+// or the audio options (voice).
+export async function menuItem(page, name, which = 'room') {
+  await page.locator({ room: '#room-open', me: '#me', voice: '#voice-more' }[which]).click();
+  const menu = page.locator({ room: '#room-menu', me: '#me-menu', voice: '#voice-menu' }[which]);
   await menu.getByRole(name === 'My rooms and profile' || name === 'Open documents in a new window' ? 'link' : 'button', { name, exact: true }).click();
 }
 

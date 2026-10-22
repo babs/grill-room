@@ -33,7 +33,7 @@
 <header class="app-header room-header">
   <div class="zone zone-room">
     <img src="/static/logo.svg" alt="" class="logo" width="32" height="32">
-    <h1 id="room-name">grill-room</h1>
+    <h1 id="room-name"><button type="button" id="room-open" popovertarget="room-menu" data-tip="This room: invite people, settings, personas"><span class="name">grill-room</span><span class="chev" data-icon="down"></span></button></h1>
   </div>
   <div class="zone zone-agents" id="agent">
     <div id="persona-buttons" role="group" aria-label="AI personas"></div>
@@ -49,7 +49,6 @@
     </div>
     <button type="button" id="me" class="avatar" popovertarget="me-menu" data-tip="You: your name, notifications, your profile"></button>
     <a id="me-anon" class="anon-mark" href="/profile#email" hidden></a>
-    <button type="button" id="more-open" class="btn-icon" popovertarget="more-menu" aria-label="More" data-tip="More" data-icon="more"></button>
   </div>
 </header>
 <div id="voice-menu" class="menu" popover>
@@ -71,7 +70,7 @@
   <button type="button" id="diag-open" data-icon="pulse">Diagnostics</button>
   <a href="/profile" data-icon="profile">My rooms and profile</a>
 </div>
-<div id="more-menu" class="menu" popover>
+<div id="room-menu" class="menu" popover>
   <button type="button" id="invite-open" data-icon="invite">Invite people</button>
   <button type="button" id="manage-open" data-icon="settings" hidden>Room settings</button>
   <button type="button" id="personas-open" data-icon="personas">Personas</button>
