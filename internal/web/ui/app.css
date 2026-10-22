@@ -320,6 +320,8 @@ code.risk { display: block; padding: var(--sp-1) var(--sp-2); border-left: 3px s
 .tag.blank { visibility: hidden; }
 .tag svg { display: block; width: 14px; height: 14px; }
 .tag.role-host { background: var(--accent); color: var(--on-accent); }
+/* The host's app is not connected: the role stays, the badge goes muted like the offline pills. */
+.tag.role-host.offline { background: transparent; box-shadow: inset 0 0 0 1px var(--border-strong); color: var(--text-muted); }
 .tag.transcribed { box-shadow: inset 0 0 0 1px var(--primary-text); color: var(--primary-text); }
 .person-more { min-width: var(--control-h-sm); min-height: var(--control-h-sm); padding: 0; border-color: transparent; background: transparent; color: var(--text-muted); }
 .person-more.blank { visibility: hidden; }
