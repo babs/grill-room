@@ -2,7 +2,7 @@ import { request as pwRequest } from '@playwright/test';
 import { test, expect } from './fixtures.js';
 import { readFileSync } from 'node:fs';
 import { adminToken } from './playwright.config.js';
-import { signIn, noOverflow, skillZip, confirmSheet, rowAction } from './helpers.js';
+import { signIn, noOverflow, skillZip, confirmSheet, rowAction, uniq } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
@@ -34,7 +34,7 @@ for (const vp of widths) {
   // and renames, sets the quota, manages invites and deletes once the name is typed; uploads then
   // honour the quota. Every action is audited (004-AC6).
   test(`rooms view and actions, ${vp.name}`, async ({ browser, request, baseURL }) => {
-    const name = `Rooms ${vp.name} ${Date.now()}`;
+    const name = `Rooms ${vp.name} ${uniq()}`;
     const room = await (await request.post('/api/rooms', { headers: admin, data: { name } })).json();
     const alice = await member(baseURL, request, room, 'Alice');
     const plan = '# Plan\n\nCrème brûlée.\n';
@@ -132,7 +132,7 @@ for (const vp of widths) {
   // 004-AC8 004-AC6: a room the super-admin created has no room admin; the super-admin appoints a
   // participant with a profile, who may then rename it, and removes them again. Both are audited.
   test(`room admins appointed from /admin, ${vp.name}`, async ({ browser, request, baseURL }) => {
-    const name = `Admins ${vp.name} ${Date.now()}`;
+    const name = `Admins ${vp.name} ${uniq()}`;
     const room = await (await request.post('/api/rooms', { headers: admin, data: { name } })).json();
     const alice = await member(baseURL, request, room, 'Alice');
     expect((await alice.ctx.patch(`/api/rooms/${room.id}`, { data: { name: 'by Alice' } })).status()).toBe(403);
@@ -157,10 +157,10 @@ for (const vp of widths) {
   // 004-AC3: the profiles view lists name, email, rooms, skill count and last activity, and deletes
   // a profile: its participant stays in the room, detached.
   test(`profiles view and delete, ${vp.name}`, async ({ browser, request, baseURL }) => {
-    const name = `Pat ${vp.name} ${Date.now()}`;
+    const name = `Pat ${vp.name} ${uniq()}`;
     const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Profiles ' + name } })).json();
     const pat = await member(baseURL, request, room, name);
-    expect((await pat.ctx.post('/api/profile/skills', { headers: { 'Content-Type': 'application/zip' }, data: readFileSync(skillZip('mine' + Date.now(), 'X')) })).status()).toBe(201);
+    expect((await pat.ctx.post('/api/profile/skills', { headers: { 'Content-Type': 'application/zip' }, data: readFileSync(skillZip('mine' + uniq(), 'X')) })).status()).toBe(201);
     const page = await (await browser.newContext({ viewport: vp })).newPage();
     expect(await signIn(page, adminToken, 'profiles')).toBe(201);
     const row = page.locator('#profiles .list-row', { hasText: name });
@@ -183,7 +183,7 @@ for (const vp of widths) {
   // 004-AC4: the libraries view lists persona templates and shared skills with author and version,
   // and removes them; shipped templates stay.
   test(`libraries view and removal, ${vp.name}`, async ({ browser, request, baseURL }) => {
-    const stamp = `${vp.name}${Date.now()}`;
+    const stamp = `${vp.name}${uniq()}`;
     const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Library ' + stamp } })).json();
     const lib = await member(baseURL, request, room, 'Lib');
     const tpl = { name: 'Critic', badge: '🧐', colour: '#112233', text: 'Find the flaw.', model: 'sonnet', effort: 'medium', title: 'Critic ' + stamp };
@@ -212,7 +212,7 @@ for (const vp of widths) {
   // 013-AC31: the Pronunciation view lists and searches the lexicon, adds a term, refuses a
   // duplicate, flips a style in one click, edits and removes; each change is audited.
   test(`pronunciation view, ${vp.name}`, async ({ browser, request }) => {
-    const term = `Grafana${vp.name}${Date.now() % 100000}`;
+    const term = `Grafana${vp.name}${uniq()}`;
     const page = await (await browser.newContext({ viewport: vp })).newPage();
     expect(await signIn(page, adminToken, 'pronunciation')).toBe(201);
     const gh = page.locator('#pronunciations .list-row', { hasText: 'guite-heub' });

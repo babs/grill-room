@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { signIn, rowAction } from './helpers.js';
+import { signIn, rowAction, uniq } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
@@ -18,7 +18,7 @@ async function join(browser, request, roomID, name) {
 // 011-AC1 011-AC2: /admin › Profiles makes a one-time recovery link, shown once with Copy and its
 // expiry; another one replaces it and voids the first; the link signs a fresh browser in once.
 test('admin recovery link', async ({ browser, request }) => {
-  const name = `Rita ${Date.now()}`;
+  const name = `Rita ${uniq()}`;
   const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Recovery ' + name } })).json();
   const rita = await join(browser, request, room.id, name);
   const ctx = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });

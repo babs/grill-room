@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, startDaemon, pairDaemon, ask, skillZip, personaSheet, closePersonas, unfoldTabs } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, ask, skillZip, personaSheet, closePersonas, unfoldTabs, uniq } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
@@ -31,7 +31,7 @@ const openPanel = (page) => personaSheet(page, 'Grill', 'Capabilities');
 test('skills: upload, disclaimer once, pinned through an update', async ({ browser, request, baseURL }) => {
   test.setTimeout(180_000);
   // A shared skill's name is the instance's: one per run, as --repeat-each reuses the server.
-  const pdf = 'pdf-' + Date.now().toString(36);
+  const pdf = 'pdf-' + uniq();
   const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
   const aliceProfile = await alice.context().newPage();
   await aliceProfile.goto('/profile');

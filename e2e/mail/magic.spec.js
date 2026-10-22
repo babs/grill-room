@@ -1,11 +1,12 @@
 import { test, expect } from '../fixtures.js';
 import { magicLinkTTL, lab } from './playwright.config.js';
 import { admin, nextMail, joinRoom, newContext, durationText } from './helpers.js';
+import { uniq } from '../helpers.js';
 
 // 002-AC4: bind an email, sign in from other devices with emailed links, each link once. The room
 // and the profile, which holds the email, are deleted at the end: on the lab they would pile up.
 test('magic links: bind, sign in elsewhere, single use', async ({ browser, request }) => {
-  const email = `alice-${Date.now()}@example.com`;
+  const email = `alice-${uniq()}@example.com`;
   const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Mail room' } })).json();
   let profile = 0;
   try {
@@ -63,7 +64,7 @@ test('magic links: bind, sign in elsewhere, single use', async ({ browser, reque
 // 002-AC4 011-AC23: a link opened after its lifetime is refused, binds nothing, and offers a new one.
 test('an expired magic link is refused', async ({ browser, request }) => {
   test.skip(magicLinkTTL > 30, 'links live 15 minutes here; the local run covers expiry');
-  const email = `late-${Date.now()}@example.com`;
+  const email = `late-${uniq()}@example.com`;
   const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Late room' } })).json();
   const page = await joinRoom(browser, request, room.id, 'Late');
   await page.goto('/profile#account');
@@ -87,11 +88,11 @@ test('an expired magic link is refused', async ({ browser, request }) => {
 test('magic link requests are rate-limited per address and per IP', async ({ request }) => {
   test.skip(lab, 'behind the lab proxy every request counts against this machine, whatever X-Forwarded-For says');
   const ask = (email, ip) => request.post('/api/profile/signin', { data: { email }, headers: { 'X-Forwarded-For': ip } }).then((r) => r.status());
-  const addr = `limited-${Date.now()}@example.com`;
+  const addr = `limited-${uniq()}@example.com`;
   for (let i = 0; i < 3; i++) expect(await ask(addr, '198.51.100.1')).toBe(202);
   expect(await ask(addr, '198.51.100.1')).toBe(429);
   // Another client can still ask for that address: one person cannot lock its owner out.
   expect(await ask(addr, '198.51.100.2')).toBe(202);
-  for (let i = 0; i < 10; i++) expect(await ask(`ip-${i}-${Date.now()}@example.com`, '203.0.113.50')).toBe(202);
-  expect(await ask(`ip-x-${Date.now()}@example.com`, '203.0.113.50')).toBe(429);
+  for (let i = 0; i < 10; i++) expect(await ask(`ip-${i}-${uniq()}@example.com`, '203.0.113.50')).toBe(202);
+  expect(await ask(`ip-x-${uniq()}@example.com`, '203.0.113.50')).toBe(429);
 });

@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { signIn, noOverflow, rowAction } from './helpers.js';
+import { signIn, noOverflow, rowAction, uniq } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
@@ -21,7 +21,7 @@ const profileOf = async (page) => (await (await page.request.get('/api/profile')
 // in and names the final email; swap exchanges them and back. B's browser then is A, with the union
 // of both room lists and no duplicate. The sheet is full screen on a phone.
 test('merge two profiles from /admin', async ({ browser, request }) => {
-  const stamp = Date.now();
+  const stamp = uniq();
   const anna = `Anna ${stamp}`, bea = `Bea ${stamp}`;
   const shared = await (await request.post('/api/rooms', { headers: admin, data: { name: `Shared ${stamp}` } })).json();
   const own = await (await request.post('/api/rooms', { headers: admin, data: { name: `Bea only ${stamp}` } })).json();
@@ -94,7 +94,7 @@ test('merge two profiles from /admin', async ({ browser, request }) => {
 // Instance switch off a purge pass deletes nothing; on (the default) it deletes it, audited as
 // system. Its browser is then signed out and its next join makes a new profile.
 test('purge of an empty profile and the Instance switch', async ({ browser, request }) => {
-  const name = `Ghost ${Date.now()}`;
+  const name = `Ghost ${uniq()}`;
   const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Purge ' + name } })).json();
   const ghost = await (await browser.newContext()).newPage();
   const inv = await join(ghost, request, room.id, name);

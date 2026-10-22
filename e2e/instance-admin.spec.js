@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { signIn, noOverflow, rowAction, unfoldTabs } from './helpers.js';
+import { signIn, noOverflow, rowAction, unfoldTabs, uniq } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -51,7 +51,7 @@ test('admin sessions list and revoke', async ({ browser }) => {
 // 004-AC6 004-AC19: real admin actions show in the audit view, the room's name kept after its
 // delete; the view filters by target and action, and the page fits a phone.
 test('audit view shows real admin actions, filters, and fits a phone', async ({ browser, request }) => {
-  const name = `Audit ${Date.now()}`;
+  const name = `Audit ${uniq()}`;
   const room = await (await request.post('/api/rooms', { headers: admin, data: { name } })).json();
   expect((await request.patch(`/api/rooms/${room.id}`, { headers: admin, data: { name: name + ' renamed' } })).status()).toBe(200);
   const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
