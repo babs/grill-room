@@ -3174,7 +3174,7 @@ const tagColumns = ['anon', 'host', 'transcribed', 'audio'];
 // personTags are a participant's badges by column: [icon, accessible name, tooltip].
 function personTags(p, id, isHere) {
   const t = {};
-  if (agent.host_participant_id === p.id) t.host = ['host', 'host', 'AI host: the personas run on their computer'];
+  if (agent.host_participant_id === p.id) t.host = ['host', 'host', agent.online ? 'AI host: the personas run on their computer' : 'AI host: their AI host app is not connected'];
   // Only your own row: nobody else learns whether a profile has an email (011-AC6).
   if (id === myID && noEmail()) t.anon = ['anon', anonText, anonText];
   // Their own browser writes their voice down instead of the server (010-AC12).
