@@ -22,7 +22,7 @@ import (
 const (
 	// voiceTokenTTL is short because LiveKit cannot revoke a token: a kicked participant could
 	// rejoin with it until it expires. LiveKit refreshes the token of a connected client itself.
-	voiceTokenTTL = 5 * time.Minute
+	voiceTokenTTL = time.Minute
 	maxSTTWorkers = 100
 	maxSTTRooms   = 1000
 	maxSTTVoices  = 10000

@@ -88,7 +88,7 @@ func TestVoiceToken(t *testing.T) {
 		t.Fatalf("claims %v", c)
 	}
 	// LiveKit cannot revoke a token: a short life bounds how long a kicked participant can rejoin.
-	if exp := time.Unix(int64(c["exp"].(float64)), 0); time.Until(exp) > voiceTokenTTL || voiceTokenTTL > 5*time.Minute {
+	if exp := time.Unix(int64(c["exp"].(float64)), 0); time.Until(exp) > voiceTokenTTL || voiceTokenTTL > time.Minute {
 		t.Fatalf("token lives until %v", exp)
 	}
 	if v["canPublishData"] != false || v["roomAdmin"] != nil || len(v["canPublishSources"].([]any)) != 1 {
