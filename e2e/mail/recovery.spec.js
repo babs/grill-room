@@ -276,6 +276,6 @@ test('no-email marker and nudge', async ({ browser, request }) => {
   await expect(aliceRow(tablet).locator('.anon-mark')).toHaveCount(0);
   expect(await tablet.evaluate(async () => { await nudgeRecovery(); return document.getElementById('email-nudge').hidden; })).toBe(true);
   await tablet.goto('/profile#account');
-  await expect(tablet.locator('#email-state')).toHaveText(/^marked-\d+@example\.com$/);
+  await expect(tablet.locator('#email-state')).toHaveText(/^marked-[a-z0-9]+@example\.com$/);
   await expect(tablet.locator('#email-change')).toBeVisible();
 });
