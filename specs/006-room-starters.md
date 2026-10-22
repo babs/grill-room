@@ -118,7 +118,7 @@ Reconciliations with specs 005 and 008, which shipped after this draft (2026-10-
 - The words to recognise (STT glossary) are off by default (005 Decisions) and spec 007 hides them. A starter still copies the room's text into the new room, and nothing in 006 reads or tests its use.
 - Room settings, formerly Manage, keeps its tabs (General, Invites, Admins, Personas, Skills, Documents, Export, Words to recognise). "Save as starter" and "created from" go in General; no new tab.
 - UI words follow `docs/design.md` §8: the picker's groups read Built-in, Yours and Shared, not Personal and Instance; "Speaks up" names the triggers. Lists use the 008 `⋯` row menu, the editor and the picker are sheets, and confirmations use the confirm sheet.
-- Blank is not stored: it is the Default template's persona, as a room was before 006.
+- Blank is not stored: it is the Grill template's persona, as a room was before 006.
 - Publishing moves a personal starter, with its versions, to the instance library; its owner stays its author. A profile duplicates any starter it sees into its personal library. Its owner edits a personal or published starter from the profile page, which saves the next version.
 - The editor at room creation removes documents and skills but does not add them: uploads need a room. Documents are added in the room afterwards.
 - `agenda.md` is pinned and named in the preamble when it is an agent document: an upload named so stays read-only and unpinned.

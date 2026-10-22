@@ -98,7 +98,7 @@ test('host cap and approvals', async ({ browser, request, baseURL }) => {
     // Approve everything: Bob's new persona and his change wait for Alice.
     await approveEverything(admin);
     await openPanel(bob);
-    await bob.locator('#persona-template').selectOption({ label: '🔥 Default v1' });
+    await bob.locator('#persona-template').selectOption({ label: '🔥 Grill v1' });
     await bob.locator('#personas').getByRole('button', { name: 'Add', exact: true }).click();
     await expect(bob.locator('#personas-status')).toHaveText('Grill-2 added. It waits for the AI host\'s approval.');
     await close(bob);
