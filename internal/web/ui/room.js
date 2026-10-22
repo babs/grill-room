@@ -3520,7 +3520,7 @@ function tagSpan(col, t, el = document.createElement('span')) {
   // The classes that name a state go on a filled square only.
   const on = !!(t && t[0]);
   const role = on && col === 'host';
-  el.className = 'tag tag-' + col + (role ? ' role-' + col : '') + (on && col === 'host' ? ' host-badge' : '') + (on && col === 'transcribed' ? ' transcribed' : '') + (col === 'audio' ? ' audio' : '');
+  el.className = 'tag tag-' + col + (role ? ' role-' + col : '') + (on && col === 'host' ? ' host-badge' + (agent.online ? '' : ' offline') : '') + (on && col === 'transcribed' ? ' transcribed' : '') + (col === 'audio' ? ' audio' : '');
   const icon = t ? t[0] : '';
   if (el.dataset.icon !== icon) {
     el.replaceChildren(...(icon ? [badgeIcon(icon)] : []));
