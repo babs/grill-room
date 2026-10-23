@@ -264,8 +264,8 @@ curl -H "Authorization: Bearer $ADMIN" -X DELETE localhost:7680/api/rooms/$ROOM
 | `GET /api/tts/samples` | TTS token | `{"samples": {"<voice>/<lang>": "<sha256>"}}`: the samples the server holds |
 | `PUT /api/tts/samples/{voice}/{lang}` | TTS token | the pod hands over a sample, Ogg Opus, at most 256 KB, for a catalogue voice and `fr` or `en` |
 | `POST /api/stt/heartbeat` | STT token | `worker` name, the `rooms` whose audio it is in, `voices`, by room, the participant ids whose track it is subscribed to, its `engine` and whether it reads the `glossary`; a worker silent for 15 s counts as gone. Answers `{"device": {"<room>": [ids]}}`: the participants of its rooms transcribed on their device or with their transcription off, whose tracks it skips |
-| `POST /api/rooms/{room}/voice/lines` | STT token | one transcribed utterance: `participant_id`, `body`; stored as a `voice` message from that participant, `source` `server`. `200 {"deduped": true}` when it repeats that participant's device line of the last 5 s |
-| `POST /api/rooms/{room}/voice/device-lines` | participant | one utterance their own device transcribed: `body`; stored as a `voice` message from the session's participant, `source` `device`, or `200 {"deduped": true}` when it repeats their server line of the last 5 s. 404 when the server offers no device transcription |
+| `POST /api/rooms/{room}/voice/lines` | STT token | one transcribed utterance: `participant_id`, `body`, optional `gap_s` (seconds of pause before it on that track, `0` when a forced cut split speech that went straight on, capped at 3600); stored as a `voice` message from that participant, `source` `server`. `200 {"deduped": true}` when it repeats that participant's device line of the last 5 s |
+| `POST /api/rooms/{room}/voice/device-lines` | participant | one utterance their own device transcribed: `body`, optional `gap_s` as on `/voice/lines`; stored as a `voice` message from the session's participant, `source` `device`, or `200 {"deduped": true}` when it repeats their server line of the last 5 s. 404 when the server offers no device transcription |
 | `PUT /api/rooms/{room}/voice/transcribe` | participant | `on`: turns the transcription of the caller's own voice on or off, kept with their seat. While off, `voice/lines`, `voice/device-lines` and a `device_stt: true` presence beat for them answer 409 |
 | `POST /api/rooms/{room}/voice/dropped` | STT token | `participant_id`: the worker's full queue lost one of their utterances; posts the system line "Transcription overloaded: one line lost for <name>." |
 
@@ -453,6 +453,7 @@ The image bakes both models in and runs with `HF_HUB_OFFLINE=1`, because a pod b
 | `APP_QUEUE_SIZE` | `64` | utterances waiting for an engine |
 | `APP_GLOSSARY_PROMPT` | `off` | pass the room's glossary prompt to Whisper as `initial_prompt` (spike S10b: worse on real speech); parakeet ignores it |
 | `APP_VAD_MIN_SILENCE_MS`, `APP_VAD_MAX_SPEECH_S` | `800`, `15` | silence that ends an utterance, longest utterance before a cut |
+| `APP_VAD_CUT_SEARCH_S` | `3` | how far back from that limit a forced cut looks for the quietest moment, so it does not land mid-word; `0` cuts at the limit. Must be 0 or more and below `APP_VAD_MAX_SPEECH_S`, or the worker does not start |
 | `APP_POLL_SECONDS`, `APP_HEARTBEAT_SECONDS` | `2`, `2` | room discovery and heartbeat periods |
 | `APP_PORT` | `9100` | `/healthz` (503 while the models load, and once no engine process has been up for 60 s) and `/metrics` |
 | `APP_WORKER_NAME` | hostname | name in heartbeats; LiveKit identity `stt-<name>` |

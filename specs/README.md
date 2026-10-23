@@ -21,3 +21,4 @@
 | [014](014-network-access.md) | Agents' network access: allow every website, blocked requests in the chat, claude.ai connectors | in progress |
 | [016](016-membership.md) | Membership: remove a person, invites apart from seats, mentions on edit | shipped |
 | [017](017-postgres-multi-pod.md) | Room server on PostgreSQL, several server pods | shipped |
+| [018](018-voice-paragraphs.md) | Voice paragraphs: one message per paragraph, quiet forced cut | in progress |

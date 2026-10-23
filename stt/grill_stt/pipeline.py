@@ -195,6 +195,9 @@ class Utterance:
     ended: float
     # When the VAD cut it, on the pipeline's clock: the start of its queue wait.
     queued: float = field(default=0.0, compare=False)
+    # The pause before it on its track, and whether the VAD forced its cut (vad.Cut).
+    gap_s: float | None = None
+    forced: bool = False
 
     @property
     def speaker(self) -> tuple[str, int]:
@@ -208,10 +211,13 @@ class RoomAPI:
         self._client = client
         self._bad_device_logged = False
 
-    async def post_line(self, room: str, participant_id: int, text: str) -> bool:
+    async def post_line(self, room: str, participant_id: int, text: str, gap_s: float | None = None) -> bool:
         """Stores one line; False when the room refused it or could not be reached."""
         path = f"/api/rooms/{room}/voice/lines"
-        body = {"participant_id": participant_id, "body": text}
+        body: dict[str, Any] = {"participant_id": participant_id, "body": text}
+        # 018-AC8: no gap, no field, so the room stores the line as it did before 018.
+        if gap_s is not None:
+            body["gap_s"] = gap_s
         for attempt in range(3):
             try:
                 r = await self._client.post(path, json=body)
@@ -493,7 +499,7 @@ class Pipeline:
                 chars=len(line.text),
             )
             return
-        ok = await self._api.post_line(u.room, u.participant_id, line.text)
+        ok = await self._api.post_line(u.room, u.participant_id, line.text, u.gap_s)
         LINES.labels("posted" if ok else "failed").inc()
         language = guess_language(line.text)
         if ok:
@@ -512,4 +518,6 @@ class Pipeline:
             detected=line.language,
             chars=len(line.text),
             latency_s=round(time.monotonic() - u.ended, 2),
+            gap_s=u.gap_s,
+            forced=u.forced,
         )

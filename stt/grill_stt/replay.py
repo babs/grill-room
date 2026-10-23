@@ -41,7 +41,7 @@ class Sink(RoomAPI):
         self._out = out
         self.dropped: list[str] = []
 
-    async def post_line(self, room: str, participant_id: int, text: str) -> bool:
+    async def post_line(self, room: str, participant_id: int, text: str, gap_s: float | None = None) -> bool:
         meta = CURRENT.get()
         self._out.append(meta | {"text": text, "latency": time.monotonic() - meta["ended"]})
         return True
@@ -79,7 +79,12 @@ def read(path: Path) -> np.ndarray:
 
 async def play(p: ReplayPipeline, track: dict[str, Any], audio: np.ndarray, pid: int, s: Settings) -> None:
     """One speaker live: 10 ms frames on the wall clock, cut by the worker's Segmenter."""
-    seg = Segmenter(Silero(), min_silence_ms=s.vad_min_silence_ms, max_speech_s=s.vad_max_speech_s)
+    seg = Segmenter(
+        Silero(),
+        min_silence_ms=s.vad_min_silence_ms,
+        max_speech_s=s.vad_max_speech_s,
+        cut_search_s=s.vad_cut_search_s,
+    )
     loop = asyncio.get_running_loop()
     start = loop.time()
 
@@ -94,14 +99,14 @@ async def play(p: ReplayPipeline, track: dict[str, Any], audio: np.ndarray, pid:
             p.meta.pop(id(utt))
 
     for i in range(0, len(audio), FRAME):
-        for u, silent_s in seg.feed_timed(audio[i : i + FRAME]):
-            submit(u, (i + FRAME) / SR, time.monotonic() - silent_s)
+        for c in seg.feed_timed(audio[i : i + FRAME]):
+            submit(c.audio, (i + FRAME) / SR, time.monotonic() - c.silent_s)
         # Absolute schedule: a late frame does not push the rest of the track back.
         delay = start + (i + FRAME) / SR - loop.time()
         if delay > 0:
             await asyncio.sleep(delay)
-    for u, silent_s in seg.flush_timed():
-        submit(u, len(audio) / SR, time.monotonic() - silent_s)
+    for c in seg.flush_timed():
+        submit(c.audio, len(audio) / SR, time.monotonic() - c.silent_s)
 
 
 def working_set() -> int | None:

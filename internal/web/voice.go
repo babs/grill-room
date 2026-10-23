@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"slices"
 	"strconv"
@@ -28,6 +29,8 @@ const (
 	maxSTTVoices  = 10000
 	maxWorkerName = 64
 	maxEngineName = 32
+	// maxVoiceGap caps a line's gap_s (spec 018): any longer pause ends a paragraph just the same.
+	maxVoiceGap = 3600.0
 	// livekitCallTimeout bounds a kick on revoke or delete, so a LiveKit outage cannot hang the admin.
 	livekitCallTimeout = 5 * time.Second
 )
@@ -220,8 +223,9 @@ func (s *Server) sttHeartbeat(w http.ResponseWriter, r *http.Request) {
 // participant who spoke.
 func (s *Server) postVoiceLine(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ParticipantID int64  `json:"participant_id"`
-		Body          string `json:"body"`
+		ParticipantID int64    `json:"participant_id"`
+		Body          string   `json:"body"`
+		GapS          *float64 `json:"gap_s"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -229,6 +233,9 @@ func (s *Server) postVoiceLine(w http.ResponseWriter, r *http.Request) {
 	body, ok := cleanText(req.Body, maxBodyLen, true)
 	if !ok {
 		httpError(w, http.StatusBadRequest, fmt.Sprintf("body must be 1 to %d characters", maxBodyLen))
+		return
+	}
+	if !validGap(w, req.GapS) {
 		return
 	}
 	p, ok := s.voiceSpeaker(w, r, req.ParticipantID)
@@ -249,7 +256,8 @@ func (s *Server) postDeviceLine(w http.ResponseWriter, r *http.Request, sess ses
 		return
 	}
 	var req struct {
-		Body string `json:"body"`
+		Body string   `json:"body"`
+		GapS *float64 `json:"gap_s"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -257,6 +265,9 @@ func (s *Server) postDeviceLine(w http.ResponseWriter, r *http.Request, sess ses
 	body, ok := cleanText(req.Body, maxBodyLen, true)
 	if !ok {
 		httpError(w, http.StatusBadRequest, fmt.Sprintf("body must be 1 to %d characters", maxBodyLen))
+		return
+	}
+	if !validGap(w, req.GapS) {
 		return
 	}
 	s.storeVoiceLine(w, r, sess.p, body, store.VoiceSourceDevice)
@@ -289,6 +300,20 @@ func (s *Server) putVoiceTranscribe(w http.ResponseWriter, r *http.Request, sess
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// validGap accepts a line's optional gap_s, the pause before it (018-AC1, 018-AC2), capped at
+// maxVoiceGap: a long pause must not lose the line. Absent, the line is stored as before 018 (018-AC8).
+func validGap(w http.ResponseWriter, gap *float64) bool {
+	if gap == nil {
+		return true
+	}
+	if !(*gap >= 0) || math.IsInf(*gap, 1) {
+		httpError(w, http.StatusBadRequest, "gap_s must be a number of seconds, 0 or more")
+		return false
+	}
+	*gap = min(*gap, maxVoiceGap)
+	return true
 }
 
 // storeVoiceLine stores p's line from source and runs the voice triggers, unless it repeats a line
