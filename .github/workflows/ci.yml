@@ -270,9 +270,29 @@ jobs:
           node-version: 24
           cache: pnpm
           cache-dependency-path: e2e/pnpm-lock.yaml
+      # The Azure apt mirror at times serves tens of kB/s: the .debs and Firefox are kept across runs,
+      # per runner image and week so a stale set does not linger.
+      - &sys-key
+        id: sys-key
+        run: echo "key=e2e-sys-$ImageOS-$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - &sys-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/apt-archives
+            ~/.cache/ms-playwright
+          key: ${{ steps.sys-key.outputs.key }}-${{ hashFiles('e2e/pnpm-lock.yaml') }}
+          restore-keys: ${{ steps.sys-key.outputs.key }}-
+      - &apt-keep
+        run: |
+          mkdir -p ~/apt-archives/partial
+          printf 'Dir::Cache::Archives "%s/apt-archives";\nAPT::Keep-Downloaded-Packages "true";\n' "$HOME" | sudo tee /etc/apt/apt.conf.d/99keep-archives
       - run: sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends pandoc
       # The firefox project's browser (e2e/playwright.config.js); Chrome is the runner's.
       - run: cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright install --with-deps firefox
+      # apt wrote them as root: the cache saves as the runner user.
+      - &apt-own
+        run: sudo chown -R "$USER" ~/apt-archives
       - env:
           BASE: ${{ inputs.full && 'all' || github.event.pull_request.base.sha || 'origin/develop' }}
           GRILL_ROOM_E2E_MODEL_DIR: ${{ github.workspace }}/.device-stt-models
@@ -532,10 +552,14 @@ jobs:
           node-version: 24
           cache: pnpm
           cache-dependency-path: e2e/pnpm-lock.yaml
+      - *sys-key
+      - *sys-cache
+      - *apt-keep
       # Office uploads convert through pandoc; the runner's Chrome is the one the specs drive.
       - run: sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends pandoc
       # The firefox project's browser (e2e/playwright.config.js).
       - run: cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright install --with-deps firefox
+      - *apt-own
       - env:
           GRILL_ROOM_E2E_MODEL_DIR: ${{ github.workspace }}/.device-stt-models
         run: make e2e
