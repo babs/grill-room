@@ -334,6 +334,9 @@ for (const vp of widths) {
     await expect(chips.first()).toHaveAttribute('data-tip', 'Grill, persona');
     await expect(chips.nth(1)).toHaveClass(/\bme\b/);
     await expect(line).toHaveClass(/mentions-me/);
+    // Its text sits clear of the bar, in line with the other messages.
+    const pad = await line.evaluate((el) => parseFloat(getComputedStyle(el).paddingLeft));
+    expect(pad).toBeGreaterThan(3);
     await expect(line.locator('code')).toHaveText('@Grill');
     await expect(line.locator('.body')).toContainText('@grill ask @Ana_María, not @nobody or @Grill');
     await expect(line.locator('img')).toHaveCount(0);

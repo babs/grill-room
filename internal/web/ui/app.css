@@ -480,7 +480,8 @@ mark.mention-chip { padding: 0 .3em; border-radius: .6em; background: var(--prim
 mark.mention-chip.persona { box-shadow: inset 3px 0 0 var(--persona, var(--brand)); }
 mark.mention-chip.persona[data-badge]::before { content: attr(data-badge) " "; }
 mark.mention-chip.me { background: var(--accent); color: var(--on-accent); }
-.msg.mentions-me { background: var(--highlight); box-shadow: inset 3px 0 0 var(--accent); }
+/* The bar and the tint bleed into the list's padding: the text stays in line with the other messages. */
+.msg.mentions-me { margin-left: calc(-1 * var(--sp-2)); padding-left: var(--sp-2); background: var(--highlight); box-shadow: inset 3px 0 0 var(--accent); }
 #send { position: relative; display: flex; flex-wrap: wrap; align-items: end; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--border); }
 #send textarea { flex: 1; resize: vertical; }
 #send-hint { flex-basis: 100%; margin: 0; }
