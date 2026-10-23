@@ -158,8 +158,8 @@ func TestSpokenInChat(t *testing.T) {
 	}
 }
 
-// 013-AC1: the prompt is byte-identical to the prompt of a server without voice when nobody hears
-// the call (absent or deafened) or the persona does not speak. Both servers run the same steps.
+// 013-AC1: every turn asks for spoken.md, and the prompt is byte-identical to a server without voice
+// when nobody hears the call (absent or deafened) or the persona does not speak; nothing is queued.
 func TestTTSPromptConditions(t *testing.T) {
 	type step struct {
 		name string
@@ -190,6 +190,9 @@ func TestTTSPromptConditions(t *testing.T) {
 	// Short ids and clock times differ between two servers; nothing else may.
 	norm := regexp.MustCompile(`·[0-9a-f]{4}|\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d`)
 	for i, st := range steps {
+		if !strings.Contains(want[i], "Write spoken.md") || !strings.Contains(want[i], "60 words at most") {
+			t.Errorf("%s: no voice, the prompt does not ask for spoken.md", st.name)
+		}
 		if norm.ReplaceAllString(strings.ReplaceAll(want[i], br.room, r.room), "") != norm.ReplaceAllString(got[i], "") {
 			t.Errorf("%s: the prompt changed\n%s\n---\n%s", st.name, strings.ReplaceAll(want[i], br.room, r.room), got[i])
 		}

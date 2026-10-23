@@ -49,11 +49,11 @@ French and English rooms both ship. A rule-based text layer reads numbers, acron
 ## Acceptance criteria
 
 ### Spoken output
-- [ ] **AC1** The prompt asks for `spoken.md`, with the rules of Appendix C and the room's word cap (AC3), only when the server offers voice (AC13), the persona has "Speaks in the call" on, and at least one human is in the room's audio when the turn starts. A human is in the audio when one of their tabs is in the call and not deafened. Otherwise the prompt is byte-identical to today's.
+- [ ] **AC1** Every persona turn's prompt asks for `spoken.md`, with the rules of Appendix C and the room's word cap (AC3), whether or not the server offers voice (AC13), the persona has "Speaks in the call" on or anyone is in the room's audio: AC40 shows it in the chat. It is queued for the call only when the server offers voice, the persona has "Speaks in the call" on, and at least one human is in the room's audio when the turn ends. A human is in the audio when one of their tabs is in the call and not deafened.
 - [ ] **AC2** The daemon sends `spoken.md` content (`NeedsContent`). The server keeps it when it is valid UTF-8 of at most 4 KB, else it ignores it and lists why in the turn's system message, as for the other refused outputs. `spoken.md` is never a document or a chat message of its own, and no log carries its words; its AC3 text reaches the chat and the export only as AC40's spoken summary. `docs/agent-workspace.md` lists it in "What the agent produces".
 - [ ] **AC3** The server sanitises `spoken.md` before queueing it: it removes Markdown marks, code spans, link targets, bare URLs, emoji, short ids (`Alice ·a1b2` becomes `Alice`, `#14` becomes `14`) and a mention's `@` (`@Ana_María` becomes `Ana María`), and folds whitespace. Then it keeps whole sentences while the total stays at or under the room's word cap (40 to 60, default 60, AC25). When the first sentence alone is longer, it cuts at the last comma at or before the cap, else at the cap, and ends with a full stop. Text empty after this is not spoken.
 - [ ] **AC4** A turn without `spoken.md`, or with nothing left after AC3, speaks a summary the server builds from the turn's actions, in the first person and in the synthesis's language (AC5's count): the documents it changed and wrote, by name said as words, the notes it opened and the threads it answered ("I changed the payment spec. I opened 2 notes."). A turn that did none of these speaks nothing. The synthesis, the chat text and documents are never spoken.
-- [ ] **AC40** When a turn's `spoken.md` leaves text after AC3 (the room's word cap included), the persona's chat line keeps that text, stored with it, and the room shows it under the line's body: muted, after the `volume` icon, named "Spoken summary" for screen readers. For every persona, whether or not anyone is in the call and whether or not it was spoken. A turn without `spoken.md`, or with nothing left, shows nothing extra: never AC4's summary. A deleted line hides it; exports carry it as the agent line's `spoken`, and an import refuses it on another kind. AC1 still decides when `spoken.md` is asked for.
+- [ ] **AC40** When a turn's `spoken.md` leaves text after AC3 (the room's word cap included), the persona's chat line keeps that text, stored with it, and the room shows it under the line's body: muted, after the `volume` icon, named "Spoken summary" for screen readers. For every persona, whether or not anyone is in the call and whether or not it was spoken. A turn without `spoken.md`, or with nothing left, shows nothing extra: never AC4's summary. A deleted line hides it; exports carry it as the agent line's `spoken`, and an import refuses it on another kind. `spoken.md` is asked for on every turn (AC1).
 
 ### Text layer
 - [ ] **AC5** Each sentence gets a language, `fr` or `en`, from a function-word count. A tie takes the previous sentence's language; a tie on the first sentence takes the whole line's count; a tie there gives `en`.
@@ -175,6 +175,7 @@ From the notes (user):
 - "Speaks in the call" on by default for every persona, existing ones included (user, 2026-10-17, overturns 2026-10-16 "off by default"); speaks only with at least one human in the audio; the Spec grill starter keeps Secretary off.
 - Mute both ways: per listener (local) and per persona (the setting).
 - The chat shows each persona line's `spoken.md` text under it, for whoever was not in the call: all personas, always, never AC4's summary (user, 2026-10-23: all personas, always).
+- `spoken.md` asked on every turn, for the chat summary, call or not; a few more output tokens per turn (user, 2026-10-23).
 - Voice picker in the Identity tab, ▶ sample in the room's language, distinct defaults by order, catalogue voices only, licence credit on hover; no user-uploaded voices.
 - Turn-taking: never start over a human, stop within 300 ms, resume within 20 s or drop, one persona at a time, queued line dropped past the room's queue maximum (40 s default), 120 s when queued with no pod up (user, 2026-10-18), pill "speaking" and "waiting to speak", timeouts per room.
 - TTS demand counts the rooms a human has open, in the audio or not, so the pod wakes before the call; the bots still join only rooms with a listener (user, 2026-10-18).
@@ -418,7 +419,7 @@ Pinned in Phase 1 from the `kyutai/tts-voices` README at a revision, with each v
 S14's v3 with the room's word cap (`<cap>`, default 60). To re-test in Phase 1 (v3 itself was never run on a model).
 
 ```
-- The room is on an audio call. Write spoken.md: what you say out loud in the call after this turn. A speech synthesizer reads it in your voice, word for word, so write it the way you would say it.
+- Write spoken.md: what you would say out loud after this turn. The chat shows it under your synthesis as a spoken summary; when the room is on an audio call and you speak in it, a speech synthesizer also reads it in your voice, word for word. Write it the way you would say it.
   - Say what you did, in the first person: "J'ai commenté la section budget." "I changed the spec. Retries now stop after three tries." When you answered someone, say whose point it was and what you answered: "About Alice's note on the budget, I replied that the figure is monthly."
   - Say only what your files and your synthesis say. Give a number only when you wrote it.
   - One question at most, at the end, addressed by name to the person who can answer it.
@@ -426,5 +427,5 @@ S14's v3 with the room's word cap (`<cap>`, default 60). To re-test in Phase 1 (
   - Plain words only. No Markdown, list, link, file name, path, number sign, id, code, quotation marks or emoji. Write symbols and units as words: "300 euros a month", not "300 €/month". Say "the payment spec", not "docs/spec-paiement.md", and "Alice", not "Alice ·a1b2".
   - Never read a document or your synthesis out. Say what changed and why it matters.
   - No greeting, thanks, recap phrase or filler.
-  - Nothing worth saying aloud: leave spoken.md out.
+  - Nothing worth saying: leave spoken.md out.
 ```
