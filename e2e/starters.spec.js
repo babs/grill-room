@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
 import { roomWith, signIn, confirmSheet, smallTargets, noOverflow, rowAction, uniq } from './helpers.js';
@@ -221,4 +222,10 @@ test('save a room as a starter, share it, create a room from it', async ({ brows
   await expect(page.locator('#documents li')).toHaveCount(2);
   await expect(page.locator('#documents li').first()).toContainText('agenda.md');
   await expect(page.locator('#documents li').nth(1)).toContainText('plan.md');
+  // An agent document downloads too (008-AC8): the revision on screen, as its text.
+  await page.locator('#documents li').first().click();
+  await page.locator('#doc-more').click();
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('#doc-menu').getByRole('link', { name: 'Download' }).click()]);
+  expect(dl.suggestedFilename()).toBe('agenda.md');
+  expect(readFileSync(await dl.path(), 'utf8')).toContain('Owner: Bea');
 });
