@@ -114,6 +114,12 @@ People can tell who transcribed a line: its tooltip says "Transcribed on <name>'
 
   Nothing in it is sent to the server, and nothing polls while the sheet is closed.
 
+### Opt-out
+- [x] **AC23** A participant can turn the transcription of their own voice off with "Transcribe my voice" in the audio bar (005-AC49), on by default; the others' voices are untouched.
+  - `PUT /api/rooms/{room}/voice/transcribe` `{"on": bool}` stores it on the seat (`participants.stt_off`): it holds across reloads and audio rejoins. The participant's other tabs in that browser follow at once; elsewhere at their next room load.
+  - The AC14 heartbeat answer lists them with the device-flagged participants: the worker skips their track and leaves them out of `voices`, so their "transcribed" badge goes for everyone.
+  - While off, `voice/lines`, `voice/device-lines` and a `device_stt: true` beat for them answer 409, so a worker or a tab that has not caught up neither writes their voice down nor shows it as their device's. Device mode stops in the tabs that know, and Diagnostics says "Nowhere".
+
 ## Phases
 
 ### Phase 1 — Model volume, page isolation, offer and self-test
@@ -152,6 +158,7 @@ People can tell who transcribed a line: its tooltip says "Transcribed on <name>'
 
 - `messages.source`, a new nullable column, backfilled to `server` on voice lines; exported and imported.
 - In memory: a per-participant device flag on the server, and a `device` map in the STT heartbeat answer.
+- `participants.stt_off` (AC23, migration 50), not exported: an import makes new seats.
 - Outside SQLite: a PVC holding the pinned model files.
 
 ## Open questions
@@ -174,3 +181,4 @@ People can tell who transcribed a line: its tooltip says "Transcribed on <name>'
 - The People details card carries the device or server line (user, 2026-10-14), next to the 009 "transcribed" line.
 - After a page reload the engine waits 12 s before it starts, and the server keeps the voice meanwhile (user, 2026-10-15): a reload otherwise peaked at 2.2-4.0 GB (S13). Not a server metric.
 - Memory and the transcription state are shown in a Diagnostics sheet, on the device only, never sent (user, 2026-10-15).
+- A participant may turn the transcription of their voice off (user, 2026-10-23: my voice only; the transcribed badge shows it). It reuses the AC14 skip list rather than a new worker message, so the worker needs no change.

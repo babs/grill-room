@@ -121,6 +121,9 @@ type Participant struct {
 	Self bool `json:"self,omitempty"`
 	// NoProfile marks a seat without a profile, which a block cannot keep out (016-AC6).
 	NoProfile bool `json:"no_profile,omitempty"`
+	// STTOff is set when they turned off the transcription of their voice (010-AC23). Set by
+	// ParticipantByToken and RoomParticipant only.
+	STTOff bool `json:"stt_off,omitempty"`
 }
 
 // Message is one line in a room.
@@ -276,6 +279,9 @@ INSERT INTO settings(key, value) VALUES ('lexicon_version', '0') ON CONFLICT DO 
 UPDATE turns SET delivered = 1 WHERE status = 'running';`,
 	// 49 (013-AC40): the spoken text of an agent synthesis, shown under it in the chat.
 	`ALTER TABLE messages ADD COLUMN spoken TEXT NOT NULL DEFAULT '';`,
+	// 50 (010-AC23): a participant who turned off the transcription of their own voice.
+	`ALTER TABLE participants ADD COLUMN stt_off SMALLINT NOT NULL DEFAULT 0 CHECK (stt_off IN (0, 1));
+CREATE INDEX participants_stt_off ON participants(room_id) WHERE stt_off = 1;`,
 }
 
 // CreateDatabaseOptions makes a database that sorts as the server needs (017-AC6).
@@ -992,8 +998,8 @@ func (s *Store) ParticipantByToken(ctx context.Context, tokenHash string) (*Part
 	var p Participant
 	var joined string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger, COALESCE(p.profile_id, 0) FROM participants p
-		WHERE p.token_hash = ? AND p.removed_at IS NULL`, tokenHash).Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID)
+		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger, COALESCE(p.profile_id, 0), p.stt_off FROM participants p
+		WHERE p.token_hash = ? AND p.removed_at IS NULL`, tokenHash).Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID, &p.STTOff)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -1176,13 +1182,51 @@ func parseTS(s string) time.Time {
 	return t
 }
 
+// SetSTTOff turns the transcription of participant pid's voice off, or back on (010-AC23).
+func (s *Store) SetSTTOff(ctx context.Context, roomID string, pid int64, off bool) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE participants SET stt_off = ? WHERE id = ? AND room_id = ? AND removed_at IS NULL`, off, pid, roomID)
+	if err != nil {
+		return fmt.Errorf("set stt_off: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("set stt_off: %w", err)
+	} else if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// STTOff lists, for each of rooms with any, the participants who turned off the transcription of
+// their voice, sorted (010-AC23).
+func (s *Store) STTOff(ctx context.Context, rooms []string) (map[string][]int64, error) {
+	out := map[string][]int64{}
+	if len(rooms) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT room_id, id FROM participants WHERE stt_off = 1 AND removed_at IS NULL AND room_id = ANY(?)
+		ORDER BY room_id, id`, rooms)
+	if err != nil {
+		return nil, fmt.Errorf("stt off: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var room string
+		var id int64
+		if err := rows.Scan(&room, &id); err != nil {
+			return nil, fmt.Errorf("stt off: %w", err)
+		}
+		out[room] = append(out[room], id)
+	}
+	return out, rows.Err()
+}
+
 // RoomParticipant returns participant id of room, provided its seat is valid.
 func (s *Store) RoomParticipant(ctx context.Context, roomID string, id int64) (*Participant, error) {
 	var p Participant
 	var joined string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger FROM participants p
-		WHERE p.id = ? AND p.room_id = ? AND p.removed_at IS NULL`, id, roomID).Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger)
+		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger, p.stt_off FROM participants p
+		WHERE p.id = ? AND p.room_id = ? AND p.removed_at IS NULL`, id, roomID).Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.STTOff)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

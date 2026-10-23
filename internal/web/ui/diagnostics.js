@@ -60,6 +60,7 @@ const mb = (n) => Math.round(n / 1e6) + ' MB';
  * @param {string | undefined} mode the pipeline's
  */
 export function where(i, mode) {
+  if (i.sttOff) return 'Nowhere: you turned the transcription of your voice off';
   if (i.live && mode === 'device') return 'On this device';
   const why = !i.offer ? 'this server offers no device transcription'
     : i.refused ? "this device can't use it"

@@ -134,6 +134,39 @@ test('leaving and rejoining the audio keeps every line under its speaker', async
   }
 });
 
+// 010-AC23: Alice turns the transcription of her voice off: Bob sees her "transcribed" badge go, and
+// none of her speech after it becomes a line; turned back on, the badge returns.
+test('a participant turns the transcription of their voice off', async ({ request }) => {
+  const bobBrowser = await launch();
+  const aliceBrowser = await launch(fixture.wav);
+  try {
+    const room = await createRoom(request, 'STT opt-out');
+    const bob = await listener(bobBrowser, request, room);
+    const alice = await join(aliceBrowser, await invite(request, room.id), 'Alice');
+    const start = Date.now();
+    await joinAudio(alice);
+    const aliceID = await alice.evaluate(() => myID);
+    const badge = bob.locator(`#participants li[data-pid="${aliceID}"] .tag-transcribed`);
+    await expect(badge).toHaveClass(/(^| )transcribed( |$)/, { timeout: 30_000 });
+
+    await audioItem(alice, 'Transcribe my voice');
+    await expect(alice.locator('#voice-stt')).toHaveAttribute('aria-pressed', 'false');
+    const off = Date.now();
+    await expect(badge).not.toHaveClass(/(^| )transcribed( |$)/, { timeout: 15_000 });
+    // Every sentence of the fixture is spoken meanwhile: none lands after the switch.
+    await bob.waitForTimeout(Math.max(0, start + (fixture.utterances.at(-1).end + 10) * 1000 - Date.now()));
+    const late = (await voiceLines(bob)).filter((l) => l.ts > off + 1000);
+    expect(late).toEqual([]);
+
+    await audioItem(alice, 'Transcribe my voice');
+    await expect(badge).toHaveClass(/(^| )transcribed( |$)/, { timeout: 15_000 });
+    await request.delete(`/api/rooms/${room.id}`, { headers: admin });
+  } finally {
+    await aliceBrowser.close();
+    await bobBrowser.close();
+  }
+});
+
 // 001-AC10: with the worker down the room shows it and keeps audio and text; lines resume after.
 test('transcription down shows a banner, and lines resume when it is back', async ({ request }) => {
   const bobBrowser = await launch();

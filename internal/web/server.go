@@ -428,6 +428,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms/{room}/voice/lines", s.sttAuth(s.postVoiceLine))
 	mux.Handle("POST /api/rooms/{room}/voice/dropped", s.sttAuth(s.postVoiceDropped))
 	mux.Handle("POST /api/rooms/{room}/voice/device-lines", s.participant(s.postDeviceLine))
+	mux.Handle("PUT /api/rooms/{room}/voice/transcribe", s.participant(s.putVoiceTranscribe))
 	mux.Handle("GET /api/stt/rooms/{room}/prompt", s.sttAuth(s.sttPromptFor))
 	mux.Handle("PATCH /api/rooms/{room}/speech", s.memberOrAdmin(s.setSpeech))
 	if s.tts != nil {

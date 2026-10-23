@@ -163,7 +163,8 @@ func (s *Server) sttAuth(next http.HandlerFunc) http.Handler {
 // sttHeartbeat records that a worker is up, which rooms' audio it is in, and whose tracks it is
 // subscribed to there. A worker from before 005-AC8 sends no voices, one from before 007 no engine:
 // it counts as not reading glossaries. It answers, for the worker's rooms, the participants who
-// transcribe on their device: the worker skips their tracks (010-AC14).
+// transcribe on their device (010-AC14) or turned their transcription off (010-AC23): the worker
+// skips their tracks.
 func (s *Server) sttHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Worker   string             `json:"worker"`
@@ -201,7 +202,18 @@ func (s *Server) sttHeartbeat(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusTooManyRequests, "too many STT workers")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"device": s.people.deviceFlags(req.Rooms, now)})
+	skip := s.people.deviceFlags(req.Rooms, now)
+	off, err := s.stt.st.STTOff(ctx, req.Rooms)
+	if err != nil {
+		s.serverError(w, "stt_heartbeat_failed", err)
+		return
+	}
+	for room, ids := range off {
+		ids = append(skip[room], ids...)
+		slices.Sort(ids)
+		skip[room] = slices.Compact(ids)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"device": skip})
 }
 
 // postVoiceLine stores one utterance the STT worker transcribed as a voice message from the
@@ -220,7 +232,7 @@ func (s *Server) postVoiceLine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, ok := s.voiceSpeaker(w, r, req.ParticipantID)
-	if !ok {
+	if !ok || sttOff(w, p) {
 		return
 	}
 	s.storeVoiceLine(w, r, p, body, store.VoiceSourceServer)
@@ -231,6 +243,9 @@ func (s *Server) postVoiceLine(w http.ResponseWriter, r *http.Request) {
 func (s *Server) postDeviceLine(w http.ResponseWriter, r *http.Request, sess session) {
 	if s.device == nil {
 		httpError(w, http.StatusNotFound, "device transcription is not offered on this server")
+		return
+	}
+	if sttOff(w, sess.p) {
 		return
 	}
 	var req struct {
@@ -245,6 +260,35 @@ func (s *Server) postDeviceLine(w http.ResponseWriter, r *http.Request, sess ses
 		return
 	}
 	s.storeVoiceLine(w, r, sess.p, body, store.VoiceSourceDevice)
+}
+
+// sttOff refuses a line of p while p has their transcription off, true once it answered: a worker
+// or a tab that has not caught up yet must not write it down (010-AC23).
+func sttOff(w http.ResponseWriter, p *store.Participant) bool {
+	if p.STTOff {
+		httpError(w, http.StatusConflict, "this participant turned the transcription of their voice off")
+	}
+	return p.STTOff
+}
+
+// putVoiceTranscribe turns the transcription of the caller's own voice on or off, kept with their
+// seat: the worker skips their track from its next heartbeat and their lines are refused (010-AC23).
+func (s *Server) putVoiceTranscribe(w http.ResponseWriter, r *http.Request, sess session) {
+	var req struct {
+		On *bool `json:"on"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.On == nil {
+		httpError(w, http.StatusBadRequest, "on is required")
+		return
+	}
+	if err := s.bus.Store.SetSTTOff(r.Context(), sess.p.RoomID, sess.p.ID, !*req.On); err != nil {
+		s.serverError(w, "voice_transcribe_failed", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // storeVoiceLine stores p's line from source and runs the voice triggers, unless it repeats a line

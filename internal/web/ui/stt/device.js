@@ -581,7 +581,7 @@ window.grillDeviceSTT = {
   get info() {
     return {
       offer, offered: !!offer && !label.hidden, refused: !!offer && !!localStorage.getItem(failKey(offer.revision)),
-      on: !!localStorage.getItem(ON_KEY), inAudio, delayed, failed, untapped: micRefused,
+      on: !!localStorage.getItem(ON_KEY), inAudio, delayed, failed, untapped: micRefused, sttOff: !!window.grillSTTOff,
       live: !!live, handovers, backend: window.grillDeviceSTT.load,
     };
   },

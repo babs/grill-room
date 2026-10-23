@@ -50,6 +50,12 @@ window.grillTab = tab;
 // the STT worker hears.
 let presence = new Map();
 let transcribed = new Set();
+// sttMine: a worker transcribes my voice now; sttOff: I turned the transcription of my voice off
+// (010-AC23). sttSet counts this tab's switches; sttKey tells this browser's other tabs of one.
+let sttMine = false;
+let sttOff = false;
+let sttSet = 0;
+const sttKey = 'grill-room-stt-off:' + roomID;
 // Personas speak in the call (spec 013): ttsOn when the server offers it, ttsLive the pod's states
 // by persona id, voiceList the catalogue the voice picker shows, loaded once.
 let ttsOn = false;
@@ -88,6 +94,7 @@ function end(text) {
 
 // loadRoom fetches the room header and participant list; false when access is gone.
 async function loadRoom() {
+  const sttAt = sttSet;
   const res = await netFetch(api);
   if (res.status === 401) {
     // A refresh can race the stream's "revoked" event: once in, both must tell the same thing.
@@ -125,6 +132,12 @@ async function loadRoom() {
   renderBlocked();
   renderApprovals();
   $('voice').hidden = !data.voice;
+  // Another tab of theirs may have turned it: this one follows, its device transcription too
+  // (010-AC23). An answer read before this tab's own switch landed is stale.
+  if (sttAt === sttSet && sttOff !== !!data.me.stt_off) {
+    sttOff = !sttOff;
+    voiceButtons();
+  }
   ttsOn = !!data.tts;
   showManage();
   // An appointment or a step-down changes who turns plugins on (Capabilities).
@@ -3603,15 +3616,15 @@ function showSTT(st) {
   transcribed = new Set(voices.map(String));
   renderParticipants();
   const mine = voices.some((id) => String(id) === myID);
+  sttMine = mine;
   sttDown = !st.available;
   // It lives in the audio menu: only people in the audio read it (005-AC32).
   el.classList.toggle('down', sttDown);
   el.textContent = sttDown ? 'Voice-to-text is off'
     : !st.listening || !voices.length ? ''
     : (voices.length === 1 ? '1 voice is' : voices.length + ' voices are') + ' being written down' + (mine ? ' · yours is one of them' : '');
-  $('voice-mute').classList.toggle('captured', mine);
-  $('voice-mute').dataset.tip = mine ? 'Your voice is being written down' : '';
   $('voice-more').classList.toggle('down', sttDown);
+  sttButton();
   sttEngines = st.engines || [];
   showCredit();
   if (sttGlossary !== !!st.glossary) {
@@ -3655,19 +3668,45 @@ function micError(err) {
     : 'Microphone unavailable: ' + String(err?.message).replace(/\.?$/, '.');
 }
 
+// iconToggle draws an audio bar toggle (005-AC49): its icon, its pressed state and its tip, which
+// says what it does and how it stands.
+function iconToggle(id, pressed, icon, tip) {
+  const b = $(id);
+  b.setAttribute('aria-pressed', String(pressed));
+  if (b.dataset.drawn !== icon) {
+    b.dataset.drawn = icon;
+    b.replaceChildren(grillIcon(icon));
+  }
+  b.dataset.tip = tip;
+}
+
+// sttButton draws the transcription toggle alone: an "stt" event must not touch the mic state the
+// rest of voiceButtons hands to stt/device.js.
+function sttButton() {
+  iconToggle('voice-stt', !sttOff, sttOff ? 'transcribe-off' : 'transcribe', sttOff
+    ? 'Your voice is not written down, and the others see it. Press to transcribe it again.'
+    : (sttMine ? 'Your voice is being written down. ' : 'Your voice is transcribed while voice-to-text runs. ') + 'Press to stop transcribing it.');
+  $('voice-stt').classList.toggle('captured', !!voice && sttMine && !sttOff);
+  grillTip.refresh();
+}
+
 function voiceButtons() {
   const on = !!voice;
-  // stt/device.js runs its engine only while this tab is in the audio (010).
-  if (window.grillVoiceOn !== on) {
-    window.grillVoiceOn = on;
-    window.dispatchEvent(new CustomEvent('grill:voice', { detail: { on } }));
+  // stt/device.js runs its engine only while this tab is in the audio and my voice is to be
+  // transcribed (010, 010-AC23).
+  const deviceOn = on && !sttOff;
+  window.grillSTTOff = sttOff;
+  if (window.grillVoiceOn !== deviceOn) {
+    window.grillVoiceOn = deviceOn;
+    window.dispatchEvent(new CustomEvent('grill:voice', { detail: { on: deviceOn } }));
   }
   $('voice-join').hidden = on;
-  $('voice-mute').hidden = !on;
-  $('voice-more').hidden = !on;
+  for (const id of ['voice-mute', 'voice-deaf', 'voice-stt', 'voice-more', 'voice-leave']) $(id).hidden = !on;
   if (!on && $('voice-menu').matches(':popover-open')) $('voice-menu').hidePopover();
-  $('voice-deaf').setAttribute('aria-pressed', String(on && deaf));
-  $('voice-deaf').textContent = on && deaf ? 'Hear the room again' : 'Mute the room';
+  iconToggle('voice-deaf', on && deaf, on && deaf ? 'volume-off' : 'volume', on && deaf
+    ? "Room muted: you don't hear the others. Press to hear them again."
+    : 'Mute the room: stop hearing the others.');
+  sttButton();
   const muted = on && !voice.localParticipant.isMicrophoneEnabled;
   // stt/device.js taps the live mic only: muted, or deafened without keeping it, it hears nothing (010-AC9).
   const track = muted || !on ? null : voice.localParticipant.getTrackPublication(LivekitClient.Track.Source.Microphone)?.track?.mediaStreamTrack || null;
@@ -3675,9 +3714,11 @@ function voiceButtons() {
     window.grillMic = track;
     window.dispatchEvent(new CustomEvent('grill:mic', { detail: { track } }));
   }
-  $('voice-mute').setAttribute('aria-pressed', String(muted));
-  $('voice-mute').replaceChildren(grillIcon(muted ? 'mic-off' : 'mic'), muted ? 'Unmute' : 'Mute');
+  iconToggle('voice-mute', muted, muted ? 'mic-off' : 'mic', muted
+    ? 'Your mic is muted. Press to speak again.'
+    : 'Your mic is on. Press to mute it.');
   $('voice-unlock').hidden = !on || voice.canPlaybackAudio;
+  grillTip.refresh();
 }
 
 function voiceChanged() {
@@ -3994,8 +4035,50 @@ function leaveVoice() {
 
 $('voice-join').addEventListener('click', () => joinVoice());
 $('voice-leave').addEventListener('click', leaveVoice);
+$('voice-leave-menu').addEventListener('click', leaveVoice);
 $('voice-deaf').addEventListener('click', () => setDeaf(!deaf));
 $('voice-keepmic').querySelector('input').addEventListener('change', saveDeaf);
+// Kept with the seat, not the tab (010-AC23): this browser's other tabs reload the room at once,
+// others at their next load, the server refusing my voice meanwhile.
+$('voice-stt').addEventListener('click', () => {
+  const off = !sttOff;
+  sttSet++;
+  sendJSON('PUT', api + '/voice/transcribe', { on: !off }).then((done) => {
+    if (done === null) return;
+    sttOff = off;
+    voiceButtons();
+    localStorage.setItem(sttKey, String(Date.now()));
+  }).catch((err) => voiceError('Could not change the transcription of your voice: ' + err.message));
+});
+addEventListener('storage', (e) => { if (e.key === sttKey) loadRoom().catch(console.error); });
+// The open menu says more than ⋯'s tip, which would show through under it.
+$('voice-menu').addEventListener('toggle', (e) => { if (e.newState === 'open') grillTip.hide(); });
+// Touch has no hover: a long press on an audio control shows its tip instead of pressing it.
+// iOS fires no contextmenu, so a press held 500 ms does it there.
+let voiceHeld = 0;
+let voiceTipped = false;
+$('voice').addEventListener('contextmenu', (e) => {
+  const b = e.target instanceof Element && e.target.closest('#voice [data-tip]');
+  if (!b) return;
+  e.preventDefault();
+  grillTip.show(b);
+});
+$('voice').addEventListener('pointerdown', (e) => {
+  voiceTipped = false;
+  const b = e.target instanceof Element && e.target.closest('#voice [data-tip]');
+  if (!b || e.pointerType !== 'touch') return;
+  voiceHeld = setTimeout(() => {
+    voiceTipped = true;
+    grillTip.show(b);
+  }, 500);
+});
+for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) $('voice').addEventListener(ev, () => clearTimeout(voiceHeld));
+$('voice').addEventListener('click', (e) => {
+  if (!voiceTipped) return;
+  voiceTipped = false;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+}, true);
 $('voice-mute').addEventListener('click', () => {
   if (!voice) return;
   voice.localParticipant.setMicrophoneEnabled(!voice.localParticipant.isMicrophoneEnabled)
