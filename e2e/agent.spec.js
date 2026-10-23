@@ -78,7 +78,10 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
     }
     await expect(led(bob)).toHaveAttribute('aria-label', 'Grill ready');
 
-    await (await personMenu(alice, 'Bob')).getByRole('button', { name: 'Can ask the AI', pressed: true }).click();
+    const granted = (await personMenu(alice, 'Bob')).getByRole('button', { name: 'Can ask the AI', pressed: true });
+    // The on state shows, not only to assistive tech: a tick before the label.
+    expect(await granted.evaluate((el) => getComputedStyle(el, '::before').content)).toContain('✓');
+    await granted.click();
     await expect(press(bob)).toBeDisabled();
 
     // Hand-over: Bob's daemon connects, Alice makes him host.

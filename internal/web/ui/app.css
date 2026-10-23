@@ -333,6 +333,9 @@ code.risk { display: block; padding: var(--sp-1) var(--sp-2); border-left: 3px s
 .person-more.blank { visibility: hidden; }
 #person-menu input[type=range] { width: 8rem; }
 #person-menu button[aria-disabled=true] { color: var(--text-muted); cursor: default; }
+/* A toggle shows its state with a tick, kept out of the accessible name; every item keeps its room so labels line up. */
+#person-menu > button::before { content: "" / ""; display: inline-block; width: 1.25em; }
+#person-menu button[aria-pressed=true]::before { content: "✓" / ""; color: var(--primary-text); }
 /* The details card and the badge tip (009-AC36): styled popovers, no native title tooltip. */
 .person-card { position: fixed; inset: auto; margin: 0; max-width: 20rem; padding: var(--sp-2) var(--sp-3);
   border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); color: var(--text); box-shadow: var(--sh-2); font-size: var(--fs-sm); line-height: 1.45; }
