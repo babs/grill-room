@@ -134,8 +134,10 @@ async function loadRoom() {
   $('voice').hidden = !data.voice;
   // Another tab of theirs may have turned it: this one follows, its device transcription too
   // (010-AC23). An answer read before this tab's own switch landed is stale.
-  if (sttAt === sttSet) sttOff = !!data.me.stt_off;
-  voiceButtons();
+  if (sttAt === sttSet && sttOff !== !!data.me.stt_off) {
+    sttOff = !sttOff;
+    voiceButtons();
+  }
   ttsOn = !!data.tts;
   showManage();
   // An appointment or a step-down changes who turns plugins on (Capabilities).
@@ -3610,7 +3612,7 @@ function showSTT(st) {
     : !st.listening || !voices.length ? ''
     : (voices.length === 1 ? '1 voice is' : voices.length + ' voices are') + ' being written down' + (mine ? ' · yours is one of them' : '');
   $('voice-more').classList.toggle('down', sttDown);
-  voiceButtons();
+  sttButton();
   sttEngines = st.engines || [];
   showCredit();
   if (sttGlossary !== !!st.glossary) {
@@ -3666,6 +3668,16 @@ function iconToggle(id, pressed, icon, tip) {
   b.dataset.tip = tip;
 }
 
+// sttButton draws the transcription toggle alone: an "stt" event must not touch the mic state the
+// rest of voiceButtons hands to stt/device.js.
+function sttButton() {
+  iconToggle('voice-stt', !sttOff, sttOff ? 'transcribe-off' : 'transcribe', sttOff
+    ? 'Your voice is not written down, and the others see it. Press to transcribe it again.'
+    : (sttMine ? 'Your voice is being written down. ' : 'Your voice is transcribed while voice-to-text runs. ') + 'Press to stop transcribing it.');
+  $('voice-stt').classList.toggle('captured', !!voice && sttMine && !sttOff);
+  grillTip.refresh();
+}
+
 function voiceButtons() {
   const on = !!voice;
   // stt/device.js runs its engine only while this tab is in the audio and my voice is to be
@@ -3682,10 +3694,7 @@ function voiceButtons() {
   iconToggle('voice-deaf', on && deaf, on && deaf ? 'volume-off' : 'volume', on && deaf
     ? "Room muted: you don't hear the others. Press to hear them again."
     : 'Mute the room: stop hearing the others.');
-  iconToggle('voice-stt', !sttOff, sttOff ? 'transcribe-off' : 'transcribe', sttOff
-    ? 'Your voice is not written down, and the others see it. Press to transcribe it again.'
-    : (sttMine ? 'Your voice is being written down. ' : 'Your voice is transcribed while voice-to-text runs. ') + 'Press to stop transcribing it.');
-  $('voice-stt').classList.toggle('captured', on && sttMine && !sttOff);
+  sttButton();
   const muted = on && !voice.localParticipant.isMicrophoneEnabled;
   // stt/device.js taps the live mic only: muted, or deafened without keeping it, it hears nothing (010-AC9).
   const track = muted || !on ? null : voice.localParticipant.getTrackPublication(LivekitClient.Track.Source.Microphone)?.track?.mediaStreamTrack || null;
