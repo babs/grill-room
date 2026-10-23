@@ -160,7 +160,7 @@ test('diagnostics reopened during a measure runs one round', async ({ browser, r
 test('diagnostics says why the server has the voice', async ({ browser, request }) => {
   const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
   const base = { offer: { revision: 'r', bytes: 1, files: [] }, offered: true, refused: false, on: true, inAudio: true, delayed: false,
-    failed: false, untapped: false, live: true, handovers: [] };
+    failed: false, untapped: false, sttOff: false, live: true, handovers: [] };
   const cases = [
     [{}, 'device', 'On this device'],
     [{ offer: null, offered: false }, undefined, 'By the server: this server offers no device transcription'],
@@ -175,6 +175,9 @@ test('diagnostics says why the server has the voice', async ({ browser, request 
     [{}, 'loading', 'By the server: starting on this device'],
     [{ live: false }, 'slow', 'By the server: starting on this device'],
     [{ untapped: true, on: false, live: false }, undefined, 'By the server: transcription on this device is off'],
+    // 010-AC23: turned off, the voice goes nowhere, whatever the device's state.
+    [{ sttOff: true, live: false }, undefined, 'Nowhere: you turned the transcription of your voice off'],
+    [{ sttOff: true }, 'device', 'Nowhere: you turned the transcription of your voice off'],
   ];
   for (const [over, mode, want] of cases) {
     expect(await alice.evaluate(([i, mode]) => import('/static/diagnostics.js').then((m) => m.where(i, mode)), [{ ...base, ...over }, mode]), want).toBe(want);

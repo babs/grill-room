@@ -44,8 +44,11 @@
     <div id="voice" class="audio" role="group" aria-label="Audio" hidden>
       <button type="button" id="voice-join" class="btn-primary">Join audio</button>
       <button type="button" id="voice-unlock" class="btn-primary" hidden>Play audio</button>
-      <button type="button" id="voice-mute" aria-pressed="false" hidden>Mute</button>
-      <button type="button" id="voice-more" class="btn-icon" popovertarget="voice-menu" aria-label="Audio options" data-icon="down" hidden></button>
+      <button type="button" id="voice-mute" class="btn-icon" aria-label="Mute my mic" aria-pressed="false" hidden></button>
+      <button type="button" id="voice-deaf" class="btn-icon" aria-label="Mute the room" aria-pressed="false" hidden></button>
+      <button type="button" id="voice-stt" class="btn-icon" aria-label="Transcribe my voice" aria-pressed="true" hidden></button>
+      <button type="button" id="voice-more" class="btn-icon" popovertarget="voice-menu" aria-label="Audio options" data-tip="More audio options, and what is being written down" data-icon="more" hidden></button>
+      <button type="button" id="voice-leave" class="btn-icon" aria-label="Leave audio" data-tip="Leave the audio: stop hearing and being heard" data-icon="leave" hidden></button>
     </div>
     <button type="button" id="me" class="avatar" popovertarget="me-menu" data-tip="You: your name, notifications, your profile"></button>
     <a id="me-anon" class="anon-mark" href="/profile#email" hidden></a>
@@ -53,11 +56,10 @@
 </header>
 <div id="voice-menu" class="menu" popover>
   <p id="stt-status" class="menu-head" role="status"></p>
-  <button type="button" id="voice-deaf" aria-pressed="false" data-tip="Stop hearing the others">Mute the room</button>
-  <label id="voice-keepmic" data-tip="Keep your voice going out, and written down, while the room is muted: useful when you share a physical room"><input type="checkbox"> Keep my mic on while the room is muted</label>
-  <label id="voice-device" data-tip="Your browser writes your voice down instead of the server. It downloads the voice-to-text model once, then tests this device." hidden><input type="checkbox"> Transcribe on this device</label>
+  <label id="voice-keepmic" data-tip="Keep your voice going out, and written down, while the room is muted: useful when you share a physical room"><input type="checkbox"><span>Keep my mic on while the room is muted</span></label>
+  <label id="voice-device" data-tip="Your browser writes your voice down instead of the server. It downloads the voice-to-text model once, then tests this device." hidden><input type="checkbox"><span>Transcribe on this device</span></label>
   <p id="device-stt-status" class="hint" role="status" tabindex="-1"></p>
-  <button type="button" id="voice-leave">Leave audio</button>
+  <button type="button" id="voice-leave-menu">Leave audio</button>
   <p id="stt-credit" class="hint" hidden>Voice-to-text by <a href="https://huggingface.co/moondream/parakeet-ultra" target="_blank" rel="noopener">parakeet-ultra</a>
     (Moondream, from NVIDIA Parakeet TDT 0.6B v3),
     <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC-BY-4.0</a>.</p>

@@ -258,6 +258,99 @@ func TestDeviceLines(t *testing.T) {
 	}
 }
 
+// 010-AC23: a participant who turns their transcription off is kept with their seat, joins the
+// heartbeat's skip list next to device flags, and has their lines refused from both sources until
+// they turn it back on. The others' voices are not touched.
+func TestTranscriptionOff(t *testing.T) {
+	e := newDeviceEnv(t)
+	room := e.createRoom(t, "R").ID
+	other := e.createRoom(t, "Other").ID
+	alice := e.join(t, e.createInvite(t, room).Token, "Alice")
+	bob := e.join(t, e.createInvite(t, room).Token, "Bob")
+	eve := e.join(t, e.createInvite(t, other).Token, "Eve")
+	a, b := alice.Participant.ID, bob.Participant.ID
+	path := "/api/rooms/" + room + "/voice/transcribe"
+	set := func(tok, room string, on bool) {
+		t.Helper()
+		if code, body := e.do(t, "PUT", "/api/rooms/"+room+"/voice/transcribe", tok, map[string]any{"on": on}); code != http.StatusNoContent {
+			t.Fatalf("transcribe %v: %d %s", on, code, body)
+		}
+	}
+	meOff := func(tok string) bool {
+		t.Helper()
+		code, body := e.do(t, "GET", "/api/rooms/"+room, tok, nil)
+		if code != http.StatusOK {
+			t.Fatalf("room: %d %s", code, body)
+		}
+		return decodeJSON[roomResp](t, body).Me.STTOff
+	}
+	lines := func(what string, want int) {
+		t.Helper()
+		// Two different sentences, so the second is not dropped as the first's repeat (010-AC16).
+		if code, body := e.do(t, "POST", "/api/rooms/"+room+"/voice/lines", sttToken, map[string]any{"participant_id": b, "body": "Worker line, " + what + "."}); code != want {
+			t.Errorf("%s: Bob's worker line %d %s, want %d", what, code, body, want)
+		}
+		if code, body := e.do(t, "POST", "/api/rooms/"+room+"/voice/device-lines", bob.Token, map[string]any{"body": "A device sentence while " + what + "."}); code != want {
+			t.Errorf("%s: Bob's device line %d %s, want %d", what, code, body, want)
+		}
+	}
+	expect := func(what string, want map[string][]int64) {
+		t.Helper()
+		if got := e.sttBeat(t, room, other); !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: %v, want %v", what, got, want)
+		}
+	}
+
+	expect("on by default", map[string][]int64{})
+	if meOff(bob.Token) {
+		t.Fatal("Bob starts with his transcription off")
+	}
+	lines("on", http.StatusCreated)
+
+	set(bob.Token, room, false)
+	expect("Bob off", map[string][]int64{room: {b}})
+	if !meOff(bob.Token) || meOff(alice.Token) {
+		t.Fatal("me.stt_off: Bob's should be set, Alice's not")
+	}
+	lines("off", http.StatusConflict)
+	if code, body := e.do(t, "POST", "/api/rooms/"+room+"/voice/lines", sttToken, map[string]any{"participant_id": a, "body": "Alice still speaks."}); code != http.StatusCreated {
+		t.Fatalf("Alice's line while Bob is off: %d %s", code, body)
+	}
+
+	// Merged with the device flags, each id once, and only for the worker's rooms.
+	e.presence(t, room, alice.Token, map[string]any{"tab": "a1", "device_stt": true})
+	e.presence(t, room, bob.Token, map[string]any{"tab": "b1", "device_stt": true})
+	set(eve.Token, other, false)
+	expect("device and off together", map[string][]int64{room: {a, b}, other: {eve.Participant.ID}})
+	if got := e.sttBeat(t, room); !reflect.DeepEqual(got, map[string][]int64{room: {a, b}}) {
+		t.Fatalf("worker in room only: %v", got)
+	}
+
+	set(bob.Token, room, true)
+	e.presence(t, room, bob.Token, map[string]any{"tab": "b1", "device_stt": false})
+	expect("Bob back on", map[string][]int64{room: {a}, other: {eve.Participant.ID}})
+	lines("back", http.StatusCreated)
+
+	for name, c := range map[string]struct {
+		token string
+		body  any
+		code  int
+	}{
+		"no session":                  {"", map[string]any{"on": false}, http.StatusUnauthorized},
+		"STT token":                   {sttToken, map[string]any{"on": false}, http.StatusUnauthorized},
+		"participant of another room": {eve.Token, map[string]any{"on": false}, http.StatusUnauthorized},
+		"no on":                       {bob.Token, map[string]any{}, http.StatusBadRequest},
+		"on not a bool":               {bob.Token, map[string]any{"on": "no"}, http.StatusBadRequest},
+	} {
+		if code, body := e.do(t, "PUT", path, c.token, c.body); code != c.code {
+			t.Errorf("%s: %d %s, want %d", name, code, body, c.code)
+		}
+	}
+	if meOff(bob.Token) {
+		t.Fatal("a refused request changed Bob's choice")
+	}
+}
+
 // 010-AC16: a voice line repeating, within 5 s, a line of the same participant from the other
 // source is dropped and counted; the same source twice, another sentence, another speaker or a
 // later line is kept.

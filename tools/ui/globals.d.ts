@@ -21,8 +21,10 @@ interface DeviceOfferFile { name: string; size: number; integrity: string }
 interface DeviceOffer { revision: string; bytes: number; files: DeviceOfferFile[] }
 interface Window {
   grillSTT?: { glossary: boolean; device: DeviceOffer | null };
-  // room.js: whether this tab is in the audio; "grill:voice" follows each change.
+  // room.js: whether this tab is in the audio with my voice to transcribe; "grill:voice" follows each
+  // change. grillSTTOff: I turned the transcription of my voice off (010-AC23).
   grillVoiceOn?: boolean;
+  grillSTTOff?: boolean;
   // room.js: the live mic's track, null while muted; "grill:mic" follows each change. grillTab names
   // the page in its presence beats.
   grillMic?: MediaStreamTrack | null;
@@ -38,7 +40,7 @@ interface Window {
     // What the Diagnostics sheet reads (010-AC22).
     readonly info: {
       offer: DeviceOffer | null; offered: boolean; refused: boolean; on: boolean; inAudio: boolean; delayed: boolean;
-      failed: boolean; untapped: boolean;
+      failed: boolean; untapped: boolean; sttOff: boolean;
       live: boolean; handovers: { at: number; mode: string }[]; backend?: object;
     };
     load?: object;

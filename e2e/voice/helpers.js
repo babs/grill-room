@@ -87,8 +87,8 @@ export async function dropProfiles(request, pages) {
   expect(left, 'profiles left behind').toEqual([]);
 }
 
-// audioItem picks an item of the audio menu (005-AC32): Mute the room, Hear the room again, Leave audio.
+// audioItem presses a button of the audio bar (005-AC49): Mute my mic, Mute the room, Transcribe my
+// voice, Leave audio.
 export async function audioItem(page, name) {
-  await page.getByRole('button', { name: 'Audio options' }).click();
-  await page.locator('#voice-menu').getByRole('button', { name, exact: true }).click();
+  await page.locator('#voice').getByRole('button', { name, exact: true }).click();
 }

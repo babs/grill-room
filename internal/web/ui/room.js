@@ -125,6 +125,9 @@ async function loadRoom() {
   renderBlocked();
   renderApprovals();
   $('voice').hidden = !data.voice;
+  // Another tab of theirs may have turned it: this one follows, its device transcription too (010-AC23).
+  sttOff = !!data.me.stt_off;
+  voiceButtons();
   ttsOn = !!data.tts;
   showManage();
   // An appointment or a step-down changes who turns plugins on (Capabilities).
@@ -3591,15 +3594,15 @@ function showSTT(st) {
   transcribed = new Set(voices.map(String));
   renderParticipants();
   const mine = voices.some((id) => String(id) === myID);
+  sttMine = mine;
   sttDown = !st.available;
   // It lives in the audio menu: only people in the audio read it (005-AC32).
   el.classList.toggle('down', sttDown);
   el.textContent = sttDown ? 'Voice-to-text is off'
     : !st.listening || !voices.length ? ''
     : (voices.length === 1 ? '1 voice is' : voices.length + ' voices are') + ' being written down' + (mine ? ' · yours is one of them' : '');
-  $('voice-mute').classList.toggle('captured', mine);
-  $('voice-mute').dataset.tip = mine ? 'Your voice is being written down' : '';
   $('voice-more').classList.toggle('down', sttDown);
+  voiceButtons();
   sttEngines = st.engines || [];
   showCredit();
   if (sttGlossary !== !!st.glossary) {
@@ -3612,6 +3615,9 @@ function showSTT(st) {
   window.dispatchEvent(new CustomEvent('grill:stt', { detail: window.grillSTT }));
 }
 let sttDown = false;
+// sttMine: a worker transcribes my voice now; sttOff: I turned the transcription of my voice off (010-AC23).
+let sttMine = false;
+let sttOff = false;
 let sttEngines = [];
 // The model's license asks for credit wherever it runs: on the server (007-AC13) or on this
 // device (010-AC8).
@@ -3643,19 +3649,38 @@ function micError(err) {
     : 'Microphone unavailable: ' + String(err?.message).replace(/\.?$/, '.');
 }
 
+// iconToggle draws an audio bar toggle (005-AC49): its icon, its pressed state and its tip, which
+// says what it does and how it stands.
+function iconToggle(id, pressed, icon, tip) {
+  const b = $(id);
+  b.setAttribute('aria-pressed', String(pressed));
+  if (b.dataset.drawn !== icon) {
+    b.dataset.drawn = icon;
+    b.replaceChildren(grillIcon(icon));
+  }
+  b.dataset.tip = tip;
+}
+
 function voiceButtons() {
   const on = !!voice;
-  // stt/device.js runs its engine only while this tab is in the audio (010).
-  if (window.grillVoiceOn !== on) {
-    window.grillVoiceOn = on;
-    window.dispatchEvent(new CustomEvent('grill:voice', { detail: { on } }));
+  // stt/device.js runs its engine only while this tab is in the audio and my voice is to be
+  // transcribed (010, 010-AC23).
+  const deviceOn = on && !sttOff;
+  window.grillSTTOff = sttOff;
+  if (window.grillVoiceOn !== deviceOn) {
+    window.grillVoiceOn = deviceOn;
+    window.dispatchEvent(new CustomEvent('grill:voice', { detail: { on: deviceOn } }));
   }
   $('voice-join').hidden = on;
-  $('voice-mute').hidden = !on;
-  $('voice-more').hidden = !on;
+  for (const id of ['voice-mute', 'voice-deaf', 'voice-stt', 'voice-more', 'voice-leave']) $(id).hidden = !on;
   if (!on && $('voice-menu').matches(':popover-open')) $('voice-menu').hidePopover();
-  $('voice-deaf').setAttribute('aria-pressed', String(on && deaf));
-  $('voice-deaf').textContent = on && deaf ? 'Hear the room again' : 'Mute the room';
+  iconToggle('voice-deaf', on && deaf, on && deaf ? 'volume-off' : 'volume', on && deaf
+    ? "Room muted: you don't hear the others. Press to hear them again."
+    : 'Mute the room: stop hearing the others.');
+  iconToggle('voice-stt', !sttOff, sttOff ? 'transcribe-off' : 'transcribe', sttOff
+    ? 'Your voice is not written down, and the others see it. Press to transcribe it again.'
+    : (sttMine ? 'Your voice is being written down. ' : 'Your voice is transcribed while voice-to-text runs. ') + 'Press to stop transcribing it.');
+  $('voice-stt').classList.toggle('captured', on && sttMine && !sttOff);
   const muted = on && !voice.localParticipant.isMicrophoneEnabled;
   // stt/device.js taps the live mic only: muted, or deafened without keeping it, it hears nothing (010-AC9).
   const track = muted || !on ? null : voice.localParticipant.getTrackPublication(LivekitClient.Track.Source.Microphone)?.track?.mediaStreamTrack || null;
@@ -3663,9 +3688,11 @@ function voiceButtons() {
     window.grillMic = track;
     window.dispatchEvent(new CustomEvent('grill:mic', { detail: { track } }));
   }
-  $('voice-mute').setAttribute('aria-pressed', String(muted));
-  $('voice-mute').replaceChildren(grillIcon(muted ? 'mic-off' : 'mic'), muted ? 'Unmute' : 'Mute');
+  iconToggle('voice-mute', muted, muted ? 'mic-off' : 'mic', muted
+    ? 'Your mic is muted. Press to speak again.'
+    : 'Your mic is on. Press to mute it.');
   $('voice-unlock').hidden = !on || voice.canPlaybackAudio;
+  grillTip.refresh();
 }
 
 function voiceChanged() {
@@ -3982,8 +4009,45 @@ function leaveVoice() {
 
 $('voice-join').addEventListener('click', () => joinVoice());
 $('voice-leave').addEventListener('click', leaveVoice);
+$('voice-leave-menu').addEventListener('click', leaveVoice);
 $('voice-deaf').addEventListener('click', () => setDeaf(!deaf));
 $('voice-keepmic').querySelector('input').addEventListener('change', saveDeaf);
+// Kept with the seat, not the tab: the room event it sends brings every tab of mine along (010-AC23).
+$('voice-stt').addEventListener('click', () => {
+  sendJSON('PUT', api + '/voice/transcribe', { on: sttOff }).then((done) => {
+    if (done === null) return;
+    sttOff = !sttOff;
+    voiceButtons();
+  }).catch((err) => voiceError('Could not change the transcription of your voice: ' + err.message));
+});
+// The open menu says more than ⋯'s tip, which would show through under it.
+$('voice-menu').addEventListener('toggle', (e) => { if (e.newState === 'open') grillTip.hide(); });
+// Touch has no hover: a long press on an audio control shows its tip instead of pressing it.
+// iOS fires no contextmenu, so a press held 500 ms does it there.
+let voiceHeld = 0;
+let voiceTipped = false;
+$('voice').addEventListener('contextmenu', (e) => {
+  const b = e.target instanceof Element && e.target.closest('#voice [data-tip]');
+  if (!b) return;
+  e.preventDefault();
+  grillTip.show(b);
+});
+$('voice').addEventListener('pointerdown', (e) => {
+  voiceTipped = false;
+  const b = e.target instanceof Element && e.target.closest('#voice [data-tip]');
+  if (!b || e.pointerType !== 'touch') return;
+  voiceHeld = setTimeout(() => {
+    voiceTipped = true;
+    grillTip.show(b);
+  }, 500);
+});
+for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) $('voice').addEventListener(ev, () => clearTimeout(voiceHeld));
+$('voice').addEventListener('click', (e) => {
+  if (!voiceTipped) return;
+  voiceTipped = false;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+}, true);
 $('voice-mute').addEventListener('click', () => {
   if (!voice) return;
   voice.localParticipant.setMicrophoneEnabled(!voice.localParticipant.isMicrophoneEnabled)

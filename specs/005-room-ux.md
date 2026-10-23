@@ -103,9 +103,14 @@ Each AC names the audit findings it covers. `docs/design.md` holds the rules the
 - [x] **AC32** The room header has three zones: the room's name, cut with an ellipsis; the personas, with the auto-turn counter shown only above 0 ("auto 3/25"); then the audio control and the user menu, all at the control height, 8 px apart inside a group and 24 px between groups.
   - The user menu (initials) holds: Change my name, Notifications, Use on another device, My rooms and profile.
   - The room's name opens the room menu, under it on the left: Invite people, Room settings, Personas, Open documents in a new window, Run the AI on my computer.
-  - The audio control is "Join audio"; once joined, a mic toggle and a menu with Mute the room (deafen), Keep my mic on, the transcribed voices and Leave audio. "Voice-to-text is off" shows only there, so only to people in the audio.
+  - The audio control is "Join audio"; once joined, the audio bar of AC49. "Voice-to-text is off" shows only in its ⋯ menu, so only to people in the audio.
   - A persona pill shows its state as a glyph with a ring (● ready, ◐ working, ○ offline, ⧗ queued, 🔒 not allowed) and, on a desktop, as a word.
   - The recovery link no longer opens as a panel on the first join. It stays in the user menu while this tab holds it, and one notice offers it after the first message. Once the tab no longer holds it, the menu says how to sign in elsewhere: an email bound from the profile page. (F04, F08, F10, F28)
+- [x] **AC49** The audio bar: once in the audio, the header shows icon buttons in this order: my mic (Mute my mic), Mute the room (deafen, AC22), Transcribe my voice (010-AC23), ⋯ (Audio options) and Leave audio.
+  - Each has an accessible name and the styled tip of `docs/design.md` §5, under the icon, on hover and keyboard focus, and on a long press on touch. The tip says what the button does and how it stands now ("Your mic is muted. Press to speak again.").
+  - The three toggles carry `aria-pressed`. What is off (mic muted, room muted, transcription off) shows a slashed icon in the danger colour. While a worker transcribes my voice, the transcription button carries a dot (AC8).
+  - ⋯ holds only Keep my mic on while the room is muted, Transcribe on this device (010-AC1), the transcription status and the credit (007-AC13). Its head text, checkboxes and credit start at one x; a checkbox's words, wrapped or not, and the status under it start at one x beside the box.
+  - Under 40rem, Leave audio moves into ⋯ and the logo makes way while in the audio, so the room's name keeps its first word on one 56 px row (AC36). Every target stays 44 px (AC30).
 - [x] **AC33** The room's header, menus, sheets and side panel, Room settings and the docs window use the plain words of the wording table in `docs/design.md`: no "Chain", "host" alone, "holds the agent", "Manage", "Transcribing", "Deafen", "Upload a document", "Download original", "Volume". AC8's label reads "2 voices are being written down · yours is one of them". The event lines the server writes in the chat keep their words: past lines would otherwise read differently from new ones. The composer placeholder is "Message the room · @ to mention", and the Enter and Shift+Enter hint shows on the first focus. Room settings › General hides the room id behind "Copy room id", sums the volume as one line, "Storage: 37 B of 200 MB", and shows "Delete the room" as a danger outline before the name is typed. (F09, F15, F26)
 - [x] **AC34** No screen starts blank. An empty chat says "Invite people to start" with a "Copy invite link" button for anyone who may create one. An empty Documents list says "No documents yet. Drop files here or press +." and names the accepted types. A room just created from the profile opens with its invite card. (F07)
 - [x] **AC35** The small fixes:
@@ -165,7 +170,7 @@ Each AC names the audit findings it covers. `docs/design.md` holds the rules the
 
 ### Phase 6 — Redesigns
 - Work: the phone tab bar; the viewer's annotation panel and chat rail; the status strip and toasts; confirm sheets and Undo; the Personas sheet; the profile home page; the daemon page; the `/admin` layout; the join page.
-- **Covers**: AC36, AC37, AC38, AC39, AC40, AC41, AC42, AC43, AC44, AC45, AC46, AC47
+- **Covers**: AC36, AC37, AC38, AC39, AC40, AC41, AC42, AC43, AC44, AC45, AC46, AC47, AC49
 - **Data model impact**: none; the profile's room list gains each room's people count, last activity and the viewer's admin flag; the daemon stream's hello gains the room's name
 - **DoD**: e2e at 390 px for the tab bar (switching keeps each tab's scroll), at 1440 px for the annotation toggle and the chat rail; a test that no UI script calls `confirm(` or `alert(`; a test that the page's port and sessions survive a restart, one for `grill-room-daemon admin` with and without a supervisor, and one for `~` in account dirs; e2e for message Undo and document Undo; the AC30 bounding-box spec extended to the new screens; before and after screenshots in the tracking file; daemon release `v0.0.10` and lab redeploy (DB backup first).
 
@@ -206,3 +211,4 @@ Each AC names the audit findings it covers. `docs/design.md` holds the rules the
 - Three daemon reports from live use join Phase 6 as AC45 to AC47: the page lost on a self-update, `grill-room-daemon admin`, `~` in account dirs (user, 2026-10-13).
 - The UX audit's findings become AC28 to AC44, grouped by theme, in two phases: polish (Phase 5), then the redesigns (Phase 6) (user, 2026-10-13).
 - Test campaigns run throttled on the workstation (`nice`, `ionice`, CPU cap, no stress); repetition goes to CI.
+- The audio controls become an icon bar with a tip under each icon; ⋯ keeps only the rare options (user, 2026-10-23, AC49).

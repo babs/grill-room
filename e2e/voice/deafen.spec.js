@@ -18,27 +18,30 @@ test('deafen', async ({ request }) => {
     await expect(state).toHaveAttribute('data-state', 'live');
     await expect.poll(() => inboundAudio(bob), { timeout: 30_000 }).toBeGreaterThan(0);
 
+    // One toggle (005-AC49): pressed while deafened, pressed again to hear the room.
     const deafen = { click: () => audioItem(bob, 'Mute the room') };
+    const deaf = bob.locator('#voice-deaf');
     await deafen.click();
-    await expect(bob.locator('#voice-deaf')).toHaveText('Hear the room again');
-    await expect(bob.locator('#voice-deaf')).toHaveAttribute('aria-pressed', 'true');
+    await expect(deaf).toHaveAttribute('aria-pressed', 'true');
+    await expect(deaf).toHaveAttribute('data-tip', /Press to hear them again/);
     await expect(bobRow).toHaveClass(/deaf/);
     await expect(state).toHaveAttribute('data-state', 'muted');
     await expect.poll(() => bob.evaluate(() => [...voice.remoteParticipants.values()]
       .flatMap((p) => [...p.audioTrackPublications.values()]).some((pub) => pub.isSubscribed))).toBe(false);
 
-    await audioItem(bob, 'Hear the room again');
+    await deafen.click();
+    await expect(deaf).toHaveAttribute('aria-pressed', 'false');
     await expect(bobRow).not.toHaveClass(/deaf/);
     await expect(state).toHaveAttribute('data-state', 'live');
     const before = await inboundAudio(bob);
     await expect.poll(() => inboundAudio(bob), { timeout: 30_000 }).toBeGreaterThan(before);
 
     // Undeafen restores the mic as it was: muted before, muted after.
-    await bob.getByRole('button', { name: 'Mute' }).click();
+    await audioItem(bob, 'Mute my mic');
     await deafen.click();
-    await audioItem(bob, 'Hear the room again');
+    await deafen.click();
     await expect(state).toHaveAttribute('data-state', 'muted');
-    await bob.getByRole('button', { name: 'Unmute' }).click();
+    await audioItem(bob, 'Mute my mic');
 
     // Keep my mic on: deafened, still live, so still transcribed.
     await bob.getByRole('button', { name: 'Audio options' }).click();
@@ -51,7 +54,7 @@ test('deafen', async ({ request }) => {
     // A reload comes back deafened once the audio is joined again.
     await bob.reload();
     await joinAudio(bob);
-    await expect(bob.locator('#voice-deaf')).toHaveText('Hear the room again');
+    await expect(deaf).toHaveAttribute('aria-pressed', 'true');
     await expect(bobRow).toHaveClass(/deaf/);
     await request.delete(`/api/rooms/${room.id}`, { headers: admin });
   } finally {

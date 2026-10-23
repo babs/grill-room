@@ -30,10 +30,10 @@ test('two participants exchange audio', async ({ request }) => {
     // Alice's recorded speech starts a few seconds in: Bob sees her speaking indicator light up.
     await expect(aliceRow).toHaveClass(/speaking/, { timeout: 20_000 });
 
-    await alice.getByRole('button', { name: 'Mute' }).click();
+    await audioItem(alice, 'Mute my mic');
     await expect(aliceRow).toHaveClass(/muted/);
     await expect(aliceRow).not.toHaveClass(/speaking/);
-    await alice.getByRole('button', { name: 'Unmute' }).click();
+    await audioItem(alice, 'Mute my mic');
     await expect(aliceRow).not.toHaveClass(/muted/);
 
     // Revoking Alice's invite ends her session and takes her out of Bob's audio.
