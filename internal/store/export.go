@@ -123,6 +123,7 @@ type xMessage struct {
 	Effort      string  `json:"effort,omitempty"`
 	ReqModel    string  `json:"requested_model,omitempty"`
 	ReqEffort   string  `json:"requested_effort,omitempty"`
+	Spoken      string  `json:"spoken,omitempty"`
 	EditedAt    *string `json:"edited_at,omitempty"`
 	DeletedAt   *string `json:"deleted_at,omitempty"`
 	ChangeSeq   int64   `json:"change_seq,omitempty"`
@@ -611,7 +612,7 @@ func exportMessages(ctx context.Context, tx *txn, roomID string, d *exportDir) e
 		var pid, persona, seq sql.NullInt64
 		var vbody, vwritten sql.NullString
 		if err := rows.Scan(&m.Ref, &m.TS, &m.Kind, &pid, &persona, &m.Sender, &m.Body, &m.Model, &m.Effort, &m.ReqModel, &m.ReqEffort,
-			&m.ModelNote, &m.Mismatch, &m.EditedAt, &m.DeletedAt, &m.ChangeSeq, &m.Source, &seq, &vbody, &vwritten); err != nil {
+			&m.ModelNote, &m.Mismatch, &m.EditedAt, &m.DeletedAt, &m.ChangeSeq, &m.Source, &m.Spoken, &seq, &vbody, &vwritten); err != nil {
 			return fmt.Errorf("export messages: %w", err)
 		}
 		if cur == nil || cur.Ref != m.Ref {
@@ -626,7 +627,7 @@ func exportMessages(ctx context.Context, tx *txn, roomID string, d *exportDir) e
 		}
 		return nil
 	}, `SELECT m.id, m.ts, m.kind, m.participant_id, m.persona_id, m.sender, m.body, m.model, m.effort, m.req_model, m.req_effort,
-		m.model_note, m.model_mismatch, m.edited_at, m.deleted_at, m.change_seq, COALESCE(m.source, ''), v.seq, v.body, v.written_at
+		m.model_note, m.model_mismatch, m.edited_at, m.deleted_at, m.change_seq, COALESCE(m.source, ''), m.spoken, v.seq, v.body, v.written_at
 		FROM messages m LEFT JOIN message_versions v ON v.message_id = m.id WHERE m.room_id = ? ORDER BY m.id, v.seq`, roomID)
 	if err != nil {
 		return err

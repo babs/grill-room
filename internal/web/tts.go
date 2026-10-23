@@ -204,6 +204,16 @@ func (s *Server) speakingWords(room *store.Room, persona *store.RoomPersona) int
 	return room.Speech.Words
 }
 
+// spokenWords is room's word cap, or the widest one: the chat's spoken text never fails a turn (013-AC40).
+func (s *Server) spokenWords(ctx context.Context, room string) int {
+	rm, err := s.bus.Store.Room(ctx, room)
+	if err != nil {
+		s.log.Warn("spoken_words_failed", zap.String("room", room), zap.Error(err))
+		return store.SpeechMax.Words
+	}
+	return rm.Speech.Words
+}
+
 // roomLang is room's language from its recent lines, fallback when they tell none (013-AC16).
 func (s *Server) roomLang(ctx context.Context, room, fallback string) string {
 	texts, err := s.bus.Store.RecentText(ctx, room, recentForLang)

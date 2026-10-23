@@ -153,8 +153,11 @@ type Message struct {
 	Effort        string `json:"effort,omitempty"`
 	// ReqModel and ReqEffort are what the persona asked for, set only when the host cap lowered
 	// them (002-AC19).
-	ReqModel  string     `json:"requested_model,omitempty"`
-	ReqEffort string     `json:"requested_effort,omitempty"`
+	ReqModel  string `json:"requested_model,omitempty"`
+	ReqEffort string `json:"requested_effort,omitempty"`
+	// Spoken is what an agent synthesis's turn wrote to say in the call, sanitised: the chat shows it
+	// to those not in the call (013-AC40).
+	Spoken    string     `json:"spoken,omitempty"`
 	EditedAt  *time.Time `json:"edited_at,omitempty"`
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 	// ChangeSeq orders the room's edits and deletes: each one sets it past every other in the room.
@@ -271,6 +274,8 @@ INSERT INTO settings(key, value) VALUES ('lexicon_version', '0') ON CONFLICT DO 
 	// running at the upgrade counts as delivered: its daemon's next stream fails it, as before.
 	`ALTER TABLE turns ADD COLUMN delivered SMALLINT NOT NULL DEFAULT 0 CHECK (delivered IN (0, 1));
 UPDATE turns SET delivered = 1 WHERE status = 'running';`,
+	// 49 (013-AC40): the spoken text of an agent synthesis, shown under it in the chat.
+	`ALTER TABLE messages ADD COLUMN spoken TEXT NOT NULL DEFAULT '';`,
 }
 
 // CreateDatabaseOptions makes a database that sorts as the server needs (017-AC6).
@@ -1066,10 +1071,10 @@ func insertMessage(ctx context.Context, db querier, m *Message) error {
 		m.HTML = render.MessageHTML(m.Body)
 	}
 	err := db.QueryRowContext(ctx,
-		`INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, html, model, effort, persona_id, req_model, req_effort, model_note, model_mismatch, turn_id, source)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
+		`INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, html, model, effort, persona_id, req_model, req_effort, model_note, model_mismatch, turn_id, source, spoken)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
 		m.RoomID, formatTS(m.TS), m.Kind, pid, m.Sender, m.Body, nullStr(m.HTML), m.Model, m.Effort, nullID(m.PersonaID), m.ReqModel, m.ReqEffort,
-		m.ModelNote, m.ModelMismatch, nullID(m.TurnID), nullStr(m.Source)).Scan(&m.ID)
+		m.ModelNote, m.ModelMismatch, nullID(m.TurnID), nullStr(m.Source), m.Spoken).Scan(&m.ID)
 	if err != nil {
 		return fmt.Errorf("insert message: %w", err)
 	}
@@ -1094,7 +1099,7 @@ func (s *Store) LastVoice(ctx context.Context, roomID string) (*Message, error) 
 const (
 	messageFields = `id, ts, room_id, kind, COALESCE(participant_id, 0), sender, body, COALESCE(html, ''), model, edited_at, deleted_at, change_seq,
 		COALESCE(persona_id, 0), effort, COALESCE((SELECT badge FROM room_personas WHERE id = messages.persona_id), ''),
-		COALESCE((SELECT colour FROM room_personas WHERE id = messages.persona_id), ''), req_model, req_effort, model_note, model_mismatch, COALESCE(turn_id, 0), COALESCE(source, ''),
+		COALESCE((SELECT colour FROM room_personas WHERE id = messages.persona_id), ''), req_model, req_effort, model_note, model_mismatch, COALESCE(turn_id, 0), COALESCE(source, ''), spoken,
 		(SELECT jsonb_build_object('domain', domain, 'persona', persona, 'count', count, 'decision', decision, 'pending', pending_scope, 'error', pending_error,
 			'dismissed_by', dismissed_by)::text
 			FROM blocked_requests WHERE message_id = messages.id)`
@@ -1123,7 +1128,7 @@ func scanMessage(sc scanner, extra ...any) (*Message, error) {
 	var ts string
 	var edited, deleted, blocked sql.NullString
 	err := sc.Scan(append([]any{&m.ID, &ts, &m.RoomID, &m.Kind, &m.ParticipantID, &m.Sender, &m.Body, &m.HTML, &m.Model, &edited, &deleted, &m.ChangeSeq,
-		&m.PersonaID, &m.Effort, &m.Badge, &m.Colour, &m.ReqModel, &m.ReqEffort, &m.ModelNote, &m.ModelMismatch, &m.TurnID, &m.Source, &blocked}, extra...)...)
+		&m.PersonaID, &m.Effort, &m.Badge, &m.Colour, &m.ReqModel, &m.ReqEffort, &m.ModelNote, &m.ModelMismatch, &m.TurnID, &m.Source, &m.Spoken, &blocked}, extra...)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

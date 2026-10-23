@@ -110,6 +110,10 @@ func TestTTSLine(t *testing.T) {
 		l.Rate != 1 || l.Text != "I read the plan. Alice, which date?" || l.ttsTimeouts != defaultTTSTimeouts {
 		t.Fatalf("line %+v", l)
 	}
+	// 013-AC40: the chat shows the line the call says.
+	if m := e.lastLine(t, r.room); m.Spoken != l.Text {
+		t.Errorf("spoken text %q, the call said %q", m.Spoken, l.Text)
+	}
 	if p, _ := e.st.RoomPersona(t.Context(), r.room, r.grill.ID); p.Voice != "alba" {
 		t.Errorf("default voice not stored: %q", p.Voice)
 	}
@@ -125,6 +129,32 @@ func TestTTSLine(t *testing.T) {
 		{Path: "docs/synthesis.md", Content: []byte("# Synthesis\n\nThe slow brown fox.\n")}}})
 	if l := decodeJSON[ttsLine](t, []byte(nextEvent(t, events, "line").data)); l.Text != "I changed synthesis." {
 		t.Errorf("summary line %q", l.Text)
+	}
+}
+
+// 013-AC40: whoever listens, and with no voice on the server, the synthesis carries its turn's
+// spoken.md sanitised and capped as the call would say it; never the summary of a turn without one.
+func TestSpokenInChat(t *testing.T) {
+	for name, e := range map[string]*env{"no voice": newEnv(t), "nobody in the call": newEnvOpts(t, ttsOptions(t))} {
+		t.Run(name, func(t *testing.T) {
+			r := newTurnRoom(t, e)
+			ttsTurn(t, e, r, turn.Result{Synthesis: "I read the plan.", Changes: []turn.Change{
+				{Path: turn.SpokenFile, Content: []byte("**I read** the [plan](docs/plan.md). Alice ·a1b2, which date?")}}})
+			code, b := e.do(t, "GET", "/api/rooms/"+r.room+"/messages", r.alice.p.Token, nil)
+			if code != http.StatusOK || !strings.Contains(string(b), `"spoken":"I read the plan. Alice, which date?"`) {
+				t.Fatalf("messages: %d %s", code, b)
+			}
+			ttsTurn(t, e, r, turn.Result{Synthesis: "Long.", Changes: []turn.Change{
+				{Path: turn.SpokenFile, Content: []byte(strings.Repeat("One more word here. ", 20))}}})
+			if m := e.lastLine(t, r.room); len(strings.Fields(m.Spoken)) != store.DefaultSpeech.Words {
+				t.Errorf("not capped at the room's %d words: %q", store.DefaultSpeech.Words, m.Spoken)
+			}
+			ttsTurn(t, e, r, turn.Result{Synthesis: "I rewrote the synthesis.", Changes: []turn.Change{
+				{Path: "docs/synthesis.md", Content: []byte("# Synthesis\n\nThe slow brown fox.\n")}}})
+			if m := e.lastLine(t, r.room); m.Body != "I rewrote the synthesis." || m.Spoken != "" {
+				t.Errorf("a turn without spoken.md: %+v", m)
+			}
+		})
 	}
 }
 

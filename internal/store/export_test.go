@@ -160,7 +160,7 @@ func richRoom(t *testing.T, s *Store, id string) (*Participant, *RoomPersona) {
 		t.Fatal(err)
 	}
 	if _, err := s.CompleteTurn(ctx, id, turn.ID, dm.ID, &TurnOutcome{SessionID: roomSID, Session: []byte("{\"type\":\"user\"}\n"),
-		Synthesis: "Synthesis: _ship it_", Model: "claude-haiku", ContextTokens: 1000, ContextWindow: 200000}); err != nil {
+		Synthesis: "Synthesis: _ship it_", Spoken: "Ship it.", Model: "claude-haiku", ContextTokens: 1000, ContextWindow: 200000}); err != nil {
 		t.Fatal(err)
 	}
 	// 005-AC4: the line whose @mention asked for that turn, and its chip.
@@ -412,6 +412,10 @@ func TestExportImportRoundTrip(t *testing.T) {
 			asked = m.ID
 		case m.Kind == KindAgent:
 			synthesis = m.ID
+			// 013-AC40: the synthesis keeps its spoken text.
+			if m.Spoken != "Ship it." {
+				t.Errorf("spoken text in the copy: %q", m.Spoken)
+			}
 		}
 	}
 	if err != nil || len(chips) != 1 || len(chips[asked]) != 1 || chips[asked][0].Status != "done" || chips[asked][0].LineID != synthesis || synthesis == 0 {
@@ -637,6 +641,15 @@ func TestImportRefusals(t *testing.T) {
 	refused("bad anchor", importOpts("x"), anc, "anchor")
 	ref := tamper(fileMessages, func(b []byte) []byte { return bytes.Replace(b, []byte(`"participant":`), []byte(`"participant":9`), 1) })
 	refused("unknown participant", importOpts("x"), ref, "unknown participant")
+	// 013-AC40: spoken text only on an agent line, and only as plain text.
+	onText := tamper(fileMessages, func(b []byte) []byte {
+		return bytes.Replace(b, []byte(`"kind":"text",`), []byte(`"kind":"text","spoken":"x",`), 1)
+	})
+	refused("spoken text on a text line", importOpts("x"), onText, `spoken text on a "text" line`)
+	ctl := tamper(fileMessages, func(b []byte) []byte {
+		return bytes.Replace(b, []byte(`"spoken":"Ship it."`), []byte(`"spoken":"Ship\u0007it."`), 1)
+	})
+	refused("spoken text with a control character", importOpts("x"), ctl, "control characters")
 	o = importOpts("x")
 	o.CheckPersona = func(StarterPersona) error { return errors.New("colour must be like #1a2b3c") }
 	refused("bad persona", o, dir, "colour")
@@ -706,7 +719,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"blocked_requests":    "| message_id room_id persona domain count decision pending_scope pending_by pending_actor pending_error dismissed_by",
 		"participants":        "id name joined_at can_trigger profile_id profile_uuid_hint room_id invite_id previous_name removed_at | token_hash last_seen_at join_ip join_ua last_ip last_ua end_reason",
 		"invites":             "| id room_id token_hash created_at revoked_at created_by link", // 011-AC26: a shareable token never leaves
-		"messages":            "id room_id ts kind participant_id sender body model edited_at deleted_at change_seq persona_id effort req_model req_effort model_note model_mismatch source | html turn_id",
+		"messages":            "id room_id ts kind participant_id sender body model edited_at deleted_at change_seq persona_id effort req_model req_effort model_note model_mismatch source spoken | html turn_id",
 		"message_versions":    "id message_id seq body written_at |",
 		"uploads":             "id room_id participant_id filename content_type size data created_at |",
 		"documents":           "id room_id kind name format upload_id author created_at deleted_at | change_seq",
