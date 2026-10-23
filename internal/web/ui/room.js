@@ -50,6 +50,12 @@ window.grillTab = tab;
 // the STT worker hears.
 let presence = new Map();
 let transcribed = new Set();
+// sttMine: a worker transcribes my voice now; sttOff: I turned the transcription of my voice off
+// (010-AC23). sttSet counts this tab's switches; sttKey tells this browser's other tabs of one.
+let sttMine = false;
+let sttOff = false;
+let sttSet = 0;
+const sttKey = 'grill-room-stt-off:' + roomID;
 // Personas speak in the call (spec 013): ttsOn when the server offers it, ttsLive the pod's states
 // by persona id, voiceList the catalogue the voice picker shows, loaded once.
 let ttsOn = false;
@@ -88,6 +94,7 @@ function end(text) {
 
 // loadRoom fetches the room header and participant list; false when access is gone.
 async function loadRoom() {
+  const sttAt = sttSet;
   const res = await netFetch(api);
   if (res.status === 401) {
     // A refresh can race the stream's "revoked" event: once in, both must tell the same thing.
@@ -125,8 +132,9 @@ async function loadRoom() {
   renderBlocked();
   renderApprovals();
   $('voice').hidden = !data.voice;
-  // Another tab of theirs may have turned it: this one follows, its device transcription too (010-AC23).
-  sttOff = !!data.me.stt_off;
+  // Another tab of theirs may have turned it: this one follows, its device transcription too
+  // (010-AC23). An answer read before this tab's own switch landed is stale.
+  if (sttAt === sttSet) sttOff = !!data.me.stt_off;
   voiceButtons();
   ttsOn = !!data.tts;
   showManage();
@@ -3615,9 +3623,6 @@ function showSTT(st) {
   window.dispatchEvent(new CustomEvent('grill:stt', { detail: window.grillSTT }));
 }
 let sttDown = false;
-// sttMine: a worker transcribes my voice now; sttOff: I turned the transcription of my voice off (010-AC23).
-let sttMine = false;
-let sttOff = false;
 let sttEngines = [];
 // The model's license asks for credit wherever it runs: on the server (007-AC13) or on this
 // device (010-AC8).
@@ -4012,14 +4017,19 @@ $('voice-leave').addEventListener('click', leaveVoice);
 $('voice-leave-menu').addEventListener('click', leaveVoice);
 $('voice-deaf').addEventListener('click', () => setDeaf(!deaf));
 $('voice-keepmic').querySelector('input').addEventListener('change', saveDeaf);
-// Kept with the seat, not the tab: the room event it sends brings every tab of mine along (010-AC23).
+// Kept with the seat, not the tab (010-AC23): this browser's other tabs reload the room at once,
+// others at their next load, the server refusing my voice meanwhile.
 $('voice-stt').addEventListener('click', () => {
-  sendJSON('PUT', api + '/voice/transcribe', { on: sttOff }).then((done) => {
+  const off = !sttOff;
+  sttSet++;
+  sendJSON('PUT', api + '/voice/transcribe', { on: !off }).then((done) => {
     if (done === null) return;
-    sttOff = !sttOff;
+    sttOff = off;
     voiceButtons();
+    localStorage.setItem(sttKey, String(Date.now()));
   }).catch((err) => voiceError('Could not change the transcription of your voice: ' + err.message));
 });
+addEventListener('storage', (e) => { if (e.key === sttKey) loadRoom().catch(console.error); });
 // The open menu says more than ⋯'s tip, which would show through under it.
 $('voice-menu').addEventListener('toggle', (e) => { if (e.newState === 'open') grillTip.hide(); });
 // Touch has no hover: a long press on an audio control shows its tip instead of pressing it.

@@ -116,9 +116,9 @@ People can tell who transcribed a line: its tooltip says "Transcribed on <name>'
 
 ### Opt-out
 - [x] **AC23** A participant can turn the transcription of their own voice off with "Transcribe my voice" in the audio bar (005-AC49), on by default; the others' voices are untouched.
-  - `PUT /api/rooms/{room}/voice/transcribe` `{"on": bool}` stores it on the seat (`participants.stt_off`): it holds across reloads, rejoins and the participant's other tabs, which follow at the next room event.
+  - `PUT /api/rooms/{room}/voice/transcribe` `{"on": bool}` stores it on the seat (`participants.stt_off`): it holds across reloads and audio rejoins. The participant's other tabs in that browser follow at once; elsewhere at their next room load.
   - The AC14 heartbeat answer lists them with the device-flagged participants: the worker skips their track and leaves them out of `voices`, so their "transcribed" badge goes for everyone.
-  - While off, `voice/lines` and `voice/device-lines` for them answer 409, so a worker or a tab that has not caught up writes nothing down; device mode stops in every tab of theirs, and Diagnostics says "Nowhere".
+  - While off, `voice/lines`, `voice/device-lines` and a `device_stt: true` beat for them answer 409, so a worker or a tab that has not caught up neither writes their voice down nor shows it as their device's. Device mode stops in the tabs that know, and Diagnostics says "Nowhere".
 
 ## Phases
 

@@ -319,7 +319,12 @@ func TestTranscriptionOff(t *testing.T) {
 
 	// Merged with the device flags, each id once, and only for the worker's rooms.
 	e.presence(t, room, alice.Token, map[string]any{"tab": "a1", "device_stt": true})
-	e.presence(t, room, bob.Token, map[string]any{"tab": "b1", "device_stt": true})
+	// A tab of Bob's that has not caught up may not flag his voice as his device's; its stop may.
+	if code, body := e.do(t, "POST", "/api/rooms/"+room+"/presence", bob.Token, map[string]any{"tab": "b1", "device_stt": true}); code != http.StatusConflict {
+		t.Fatalf("Bob's device beat while off: %d %s", code, body)
+	}
+	e.presence(t, room, bob.Token, map[string]any{"tab": "b1", "device_stt": false})
+	set(alice.Token, room, false)
 	set(eve.Token, other, false)
 	expect("device and off together", map[string][]int64{room: {a, b}, other: {eve.Participant.ID}})
 	if got := e.sttBeat(t, room); !reflect.DeepEqual(got, map[string][]int64{room: {a, b}}) {
@@ -327,8 +332,9 @@ func TestTranscriptionOff(t *testing.T) {
 	}
 
 	set(bob.Token, room, true)
-	e.presence(t, room, bob.Token, map[string]any{"tab": "b1", "device_stt": false})
 	expect("Bob back on", map[string][]int64{room: {a}, other: {eve.Participant.ID}})
+	e.presence(t, room, bob.Token, map[string]any{"tab": "b1", "device_stt": true})
+	expect("Bob back on his device", map[string][]int64{room: {a, b}, other: {eve.Participant.ID}})
 	lines("back", http.StatusCreated)
 
 	for name, c := range map[string]struct {

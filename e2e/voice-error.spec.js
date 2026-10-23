@@ -201,20 +201,27 @@ test('the audio bar: icon toggles with their tips below', async ({ browser, requ
   await expect(page.locator('#voice-join')).toBeVisible();
 });
 
-// 010-AC23: turning the transcription of my voice off holds across a reload and stops this
-// device's transcription engine.
+// 010-AC23: turning the transcription of my voice off holds across a reload, stops this device's
+// transcription engine, and another tab of mine in this browser follows at once.
 test('the transcription of my voice turns off and stays off', async ({ browser, request }) => {
   const page = await voicePage(browser, request);
   const room = await page.evaluate(() => roomID);
   const stt = page.locator('#voice-stt');
   const meOff = async () => (await (await page.request.get(`/api/rooms/${room}`)).json()).me.stt_off;
+  const other = await page.context().newPage();
+  await other.goto(page.url());
+  await other.locator('#voice-join').click();
+  await expect(other.locator('#voice-stt')).toHaveAttribute('aria-pressed', 'true');
   await page.locator('#voice-join').click();
   await expect.poll(() => page.evaluate(() => window.grillVoiceOn)).toBe(true);
   await stt.click();
   await expect(stt).toHaveAttribute('aria-pressed', 'false');
   await expect(stt).toHaveAttribute('data-tip', /not written down, and the others see it/);
-  // The device engine follows: it runs only while my voice is to be transcribed.
+  // The device engine follows: it runs only while my voice is to be transcribed, in each tab.
   await expect.poll(() => page.evaluate(() => window.grillVoiceOn)).toBe(false);
+  await expect(other.locator('#voice-stt')).toHaveAttribute('aria-pressed', 'false');
+  await expect.poll(() => other.evaluate(() => window.grillVoiceOn)).toBe(false);
+  await other.close();
   expect(await meOff()).toBe(true);
 
   await page.reload();

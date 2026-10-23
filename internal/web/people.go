@@ -359,6 +359,10 @@ func (s *Server) postPresence(w http.ResponseWriter, r *http.Request, sess sessi
 			httpError(w, http.StatusNotFound, "device transcription is not offered on this server")
 			return
 		}
+		// A tab that has not caught up would show their voice as transcribed on their device (010-AC23).
+		if *req.DeviceSTT && sttOff(w, sess.p) {
+			return
+		}
 		ok, err := s.people.deviceBeat(sess.p.RoomID, sess.p.ID, req.Tab, *req.DeviceSTT, s.lease())
 		if err != nil {
 			s.serverError(w, "presence_failed", err)

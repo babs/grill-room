@@ -288,8 +288,6 @@ func (s *Server) putVoiceTranscribe(w http.ResponseWriter, r *http.Request, sess
 		s.serverError(w, "voice_transcribe_failed", err)
 		return
 	}
-	// Each of their tabs reloads the room and learns it: a device transcribing in another one stops.
-	s.bus.Notify(sess.p.RoomID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
