@@ -295,14 +295,14 @@ let refocus = null;
 /**
  * landFocus moves the focus once the decided version shows as decided, so after the redraw that
  * removed the Review button that opened the sheet: to the strip or the plugin list it was in, else
- * the composer or ⋯. Until then it waits; the redraws call it again.
+ * the composer or the room's name. Until then it waits; the redraws call it again.
  */
 function landFocus() {
   const r = refocus;
   const v = r && plugins.value.find((p) => p.id === r.id)?.versions.find((x) => x.n === r.n);
   if (!r || v?.state === 'pending') return;
   refocus = null;
-  const to = [document.getElementById(r.home), document.getElementById('body'), document.getElementById('more-open')]
+  const to = [document.getElementById(r.home), document.getElementById('body'), document.getElementById('room-open')]
     .find((el) => el instanceof HTMLElement && el.isConnected && el.offsetParent !== null);
   if (to instanceof HTMLElement) to.focus();
 }
@@ -316,7 +316,7 @@ reviewSheet.addEventListener('close', () => {
     return;
   }
   requestAnimationFrame(() => {
-    const to = [opener, document.getElementById(home), document.getElementById('body'), document.getElementById('more-open')]
+    const to = [opener, document.getElementById(home), document.getElementById('body'), document.getElementById('room-open')]
       .find((el) => el instanceof HTMLElement && el.isConnected && el.offsetParent !== null);
     if (to instanceof HTMLElement && !to.contains(document.activeElement)) to.focus();
     opener = null;

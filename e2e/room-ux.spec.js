@@ -130,8 +130,8 @@ for (const vp of widths) {
     // A plain member gets Room settings while a worker reads the glossary (007-AC14).
     await playSTT(alice, room.id, { engines: ['whisper'], glossary: true });
     // Each opens from a header menu: focus goes back to that menu's button.
-    for (const [item, which, id] of [['Personas', 'more', '#personas'], ['Room settings', 'more', '#manage'], ['Change my name', 'me', '#rename']]) {
-      const opener = alice.locator(which === 'me' ? '#me' : '#more-open');
+    for (const [item, which, id] of [['Personas', 'room', '#personas'], ['Room settings', 'room', '#manage'], ['Change my name', 'me', '#rename']]) {
+      const opener = alice.locator(which === 'me' ? '#me' : '#room-open');
       const dialog = alice.locator(id);
       await menuItem(alice, item, which);
       await expect(dialog).toBeVisible();

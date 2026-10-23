@@ -77,7 +77,9 @@ function end(text) {
   $('chat-empty').hidden = true;
   $('upload-open').hidden = true;
   $('docs-pane').classList.remove('dropping');
-  for (const id of ['manage-open', 'invite-open', 'personas-open', 'more-open']) $(id).hidden = true;
+  for (const id of ['manage-open', 'invite-open', 'personas-open']) $(id).hidden = true;
+  $('room-open').disabled = true;
+  delete $('room-open').dataset.tip;
   for (const d of document.querySelectorAll('dialog[open]')) d.close();
   for (const m of document.querySelectorAll('.menu:popover-open')) m.hidePopover();
   $('agent').hidden = true;
@@ -106,7 +108,7 @@ async function loadRoom() {
     link.dataset.tip = 'Back to the room';
     heading.replaceChildren(link);
   }
-  (link || heading).textContent = data.room.name;
+  (link || heading.querySelector('.name')).textContent = data.room.name;
   roomName = data.room.name;
   showTitle();
   // Someone else renamed this participant (005-AC21): a rename of their own sets myName first.
@@ -1899,7 +1901,7 @@ function personaState(p) {
 // never shows on touch, so a press opens the reason instead.
 function whyNot(p, st) {
   const host = participants.find((x) => x.id === agent.host_participant_id);
-  if (!agent.online) return host ? host.name + '\'s AI host app is not connected: ' + p.name + ' answers once it is.' : 'No one runs the AI for this room yet. Anyone can, from ⋯ › Run the AI on my computer.';
+  if (!agent.online) return host ? host.name + '\'s AI host app is not connected: ' + p.name + ' answers once it is.' : 'No one runs the AI for this room yet. Anyone can: click the room\'s name › Run the AI on my computer.';
   if (!canPress()) return 'Only ' + (host ? host.name : 'the AI host') + ' can let you ask ' + p.name + '. Ask them to tick "Can ask the AI" next to your name. You can still mention @' + p.name + ' in a message.';
   if (st.cls === 'pending') return p.name + ' waits for the AI host\'s approval.';
   if (st.cls === 'queued') return p.name + ' already waits for its turn.';

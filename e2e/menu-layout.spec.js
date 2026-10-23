@@ -97,8 +97,8 @@ for (const [size, viewport] of Object.entries(widths)) {
     await alice.setViewportSize(viewport);
     await appointAdmin(alice, request, room.id);
 
-    await alice.locator('#more-open').click();
-    await expectOneStyle(alice, alice.locator('#more-menu'), `${size}-more-menu`);
+    await alice.locator('#room-open').click();
+    await expectOneStyle(alice, alice.locator('#room-menu'), `${size}-room-menu`);
     await alice.locator('#me').click();
     await expectOneStyle(alice, alice.locator('#me-menu'), `${size}-me-menu`);
 

@@ -54,9 +54,9 @@ test('touch targets at phone width', async ({ browser, request, baseURL }) => {
   await alice.locator('#me').click();
   expect(await smallTargets(alice), 'user menu').toEqual([]);
   await alice.keyboard.press('Escape');
-  await alice.locator('#more-open').click();
-  expect(await smallTargets(alice), 'more menu').toEqual([]);
-  await shot(alice, 'after-phone-more-menu');
+  await alice.locator('#room-open').click();
+  expect(await smallTargets(alice), 'room menu').toEqual([]);
+  await shot(alice, 'after-phone-room-menu');
   await alice.keyboard.press('Escape');
 
   await alice.locator('#tabbar').getByRole('button', { name: /People/ }).click();
@@ -280,10 +280,12 @@ test('header menus, wording and empty states', async ({ browser, request }) => {
   await expect(alice.locator('#me-menu').getByRole('link')).toHaveText('My rooms and profile');
   await shot(alice, 'after-desktop-user-menu');
   await alice.keyboard.press('Escape');
-  await alice.locator('#more-open').click();
-  await expect(alice.locator('#more-menu').getByRole('button', { name: 'Invite people' })).toBeVisible();
-  await expect(alice.locator('#more-menu').getByRole('button', { name: 'Personas' })).toBeVisible();
-  await expect(alice.locator('#more-menu').getByRole('link', { name: 'Open documents in a new window' })).toBeVisible();
+  await alice.locator('#room-open').click();
+  await expect(alice.locator('#room-menu').getByRole('button', { name: 'Invite people' })).toBeVisible();
+  await expect(alice.locator('#room-menu').getByRole('button', { name: 'Personas' })).toBeVisible();
+  await expect(alice.locator('#room-menu').getByRole('link', { name: 'Open documents in a new window' })).toBeVisible();
+  // The room menu hangs under the room's name, on the left (005-AC32).
+  expect((await alice.locator('#room-menu').boundingBox()).x).toBeLessThan(16);
   await alice.keyboard.press('Escape');
 
   // No jargon in the room's own words: the header, its menus, the side panel and the composer.
@@ -307,8 +309,8 @@ test('header menus, wording and empty states', async ({ browser, request }) => {
   await alice.locator('#invites').getByRole('button', { name: 'Close' }).click();
 
   // Room settings: no raw id, one storage line, the delete button a danger outline from the start.
-  await alice.locator('#more-open').click();
-  await alice.locator('#more-menu').getByRole('button', { name: 'Room settings' }).click();
+  await alice.locator('#room-open').click();
+  await alice.locator('#room-menu').getByRole('button', { name: 'Room settings' }).click();
   const panel = alice.locator('#manage #room-panel');
   // One heading names the room (004b-AC11); the storage is said once (AD5).
   await expect(alice.locator('#manage-title')).toHaveText('Room settings · Launch plan');
