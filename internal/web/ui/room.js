@@ -412,7 +412,7 @@ function renderMessage(m) {
   if (m.spoken) {
     const spoken = document.createElement('p');
     spoken.className = 'spoken';
-    spoken.dataset.tip = 'Spoken summary for the audio call';
+    spoken.dataset.tip = 'Spoken summary: what the persona says, or would say, aloud in the call';
     const label = document.createElement('span');
     label.className = 'sr-only';
     label.textContent = 'Spoken summary: ';
