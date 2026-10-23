@@ -333,6 +333,8 @@ code.risk { display: block; padding: var(--sp-1) var(--sp-2); border-left: 3px s
 .person-more.blank { visibility: hidden; }
 #person-menu input[type=range] { width: 8rem; }
 #person-menu button[aria-disabled=true] { color: var(--text-muted); cursor: default; }
+/* A toggle shows its state with a tick after the label, kept out of the accessible name. */
+#person-menu button[aria-pressed=true]::after { content: " ✓" / ""; color: var(--primary-text); }
 /* The details card and the badge tip (009-AC36): styled popovers, no native title tooltip. */
 .person-card { position: fixed; inset: auto; margin: 0; max-width: 20rem; padding: var(--sp-2) var(--sp-3);
   border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); color: var(--text); box-shadow: var(--sh-2); font-size: var(--fs-sm); line-height: 1.45; }
@@ -344,6 +346,10 @@ h3.people { font-size: var(--fs-xs); color: var(--text-muted); font-weight: 400;
 .voice-dot { width: .6rem; height: .6rem; border-radius: 50%; background: var(--border); flex: none; }
 li.in-voice .voice-dot { background: var(--brand); opacity: .45; }
 li.in-voice.speaking .voice-dot { opacity: 1; box-shadow: 0 0 0 3px var(--primary-bg); }
+/* And a halo on the name. It clips its overflow: padding, cancelled by a margin, gives the glow room. */
+#participants .name, #participants-away .name { padding-inline: .4em; margin-inline: -.4em; transition: text-shadow .15s; }
+#participants li.in-voice.speaking .name { text-shadow: 0 0 .1em var(--brand), 0 0 .4em var(--brand); }
+@media (prefers-reduced-motion: reduce) { #participants .name { transition: none; } }
 li.muted .voice-dot { background: var(--danger); opacity: .7; }
 /* Out of the audio, no dot: a dim one under "In the room" read as offline. The column stays. */
 li:not(.in-voice) .voice-dot { visibility: hidden; }
@@ -480,7 +486,8 @@ mark.mention-chip { padding: 0 .3em; border-radius: .6em; background: var(--prim
 mark.mention-chip.persona { box-shadow: inset 3px 0 0 var(--persona, var(--brand)); }
 mark.mention-chip.persona[data-badge]::before { content: attr(data-badge) " "; }
 mark.mention-chip.me { background: var(--accent); color: var(--on-accent); }
-.msg.mentions-me { background: var(--highlight); box-shadow: inset 3px 0 0 var(--accent); }
+/* The bar and the tint bleed into the list's padding: the text stays in line with the other messages. */
+.msg.mentions-me { margin-left: calc(-1 * var(--sp-2)); padding-left: var(--sp-2); background: var(--highlight); box-shadow: inset 3px 0 0 var(--accent); }
 #send { position: relative; display: flex; flex-wrap: wrap; align-items: end; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--border); }
 #send textarea { flex: 1; resize: vertical; }
 #send-hint { flex-basis: 100%; margin: 0; }
