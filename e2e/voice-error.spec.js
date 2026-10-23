@@ -100,12 +100,14 @@ test('a mic denied at join is dismissible and clears on unmute', async ({ browse
 
 const bar = ['#voice-mute', '#voice-deaf', '#voice-stt', '#voice-more', '#voice-leave'];
 
-// tipUnder is the styled tip's text once shown, and whether it sits below el.
-async function tipUnder(page, el) {
+// tipUnder waits for the styled tip to say text, then checks it sits below el. The pointer left
+// where Join audio was may have opened another icon's tip first.
+async function tipUnder(page, el, text) {
   const tip = page.locator('#person-tip');
   await expect(tip).toBeVisible();
+  await expect(tip).toHaveText(text);
   const [t, b] = [await tip.boundingBox(), await el.boundingBox()];
-  return { text: await tip.textContent(), below: t.y >= b.y + b.height };
+  expect(t.y, 'tip below its icon').toBeGreaterThanOrEqual(b.y + b.height);
 }
 
 // 005-AC49: once in the audio, the header is a row of icon buttons, each named, each with its styled
@@ -138,21 +140,21 @@ test('the audio bar: icon toggles with their tips below', async ({ browser, requ
 
   // Hover shows the tip under the icon, with the words of its state.
   await mute.hover();
-  expect(await tipUnder(page, mute)).toEqual({ text: 'Your mic is on. Press to mute it.', below: true });
+  await tipUnder(page, mute, 'Your mic is on. Press to mute it.');
   await mute.click();
   await expect(mute).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#person-tip')).toHaveText('Your mic is muted. Press to speak again.');
   // Keyboard focus shows it at once.
   await page.keyboard.press('Tab');
   await expect(deaf).toBeFocused();
-  expect(await tipUnder(page, deaf)).toEqual({ text: 'Mute the room: stop hearing the others.', below: true });
+  await tipUnder(page, deaf, 'Mute the room: stop hearing the others.');
   await page.keyboard.press('Enter');
   await expect(deaf).toHaveAttribute('aria-pressed', 'true');
   await expect(deaf).toHaveAttribute('data-tip', /Press to hear them again/);
   await page.keyboard.press('Enter');
   await expect(deaf).toHaveAttribute('aria-pressed', 'false');
   await page.keyboard.press('Tab');
-  expect((await tipUnder(page, stt)).text).toMatch(/^Your voice is being written down\. Press to stop/);
+  await tipUnder(page, stt, /^Your voice is being written down\. Press to stop/);
 
   // ⋯ holds no button: the checkbox rows start at the head's text, their words in one column.
   await page.locator('#voice-more').click();
