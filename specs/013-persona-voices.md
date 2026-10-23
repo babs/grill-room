@@ -318,6 +318,7 @@ How to read it: every table but "Naturalised" is English-style, its "FR" being t
 | TLS | té èl èss | T L S |
 | SSH | èss èss ache | as written |
 | VPN | vé pé ène | V P N |
+| NAT | natte | nat |
 | JWT | as written | J W T |
 | token | tau-keune | as written |
 | WebSocket | ouèbe-soquette | web socket |
