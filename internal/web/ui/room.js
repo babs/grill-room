@@ -1066,9 +1066,21 @@ async function showDocument(id, refresh, deepLink) {
     ? describe(d) + ', shown as its Markdown copy'
     : describe(d);
   const original = $('doc-original');
-  original.hidden = d.kind !== 'upload';
-  original.href = docURL(d.id, '/original');
+  original.href = docURL(d.id, d.kind === 'upload' ? '/original' : '/text');
   original.download = d.name;
+  // Only an upload has a file behind it: any other document saves the revision on screen from its text.
+  original.onclick = d.kind === 'upload' ? null : (e) => {
+    e.preventDefault();
+    const rev = $('rev').value;
+    netFetch(docURL(d.id, '/text' + (rev ? '?rev=' + encodeURIComponent(rev) : '')))
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Download failed: HTTP ' + res.status))))
+      .then(({ text }) => {
+        const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([text], { type: 'text/markdown' })), download: d.name });
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 0);
+      })
+      .catch((err) => showNotice(err.message));
+  };
 
   const agent = d.kind === 'agent';
   $('revisions').hidden = !agent;
