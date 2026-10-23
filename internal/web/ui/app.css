@@ -347,6 +347,10 @@ h3.people { font-size: var(--fs-xs); color: var(--text-muted); font-weight: 400;
 .voice-dot { width: .6rem; height: .6rem; border-radius: 50%; background: var(--border); flex: none; }
 li.in-voice .voice-dot { background: var(--brand); opacity: .45; }
 li.in-voice.speaking .voice-dot { opacity: 1; box-shadow: 0 0 0 3px var(--primary-bg); }
+/* And a halo on the name. It clips its overflow: padding, cancelled by a margin, gives the glow room. */
+#participants .name { padding: .2em .4em; margin: -.2em -.4em; transition: text-shadow .15s; }
+#participants li.in-voice.speaking .name { text-shadow: 0 0 .1em var(--brand), 0 0 .4em var(--brand); }
+@media (prefers-reduced-motion: reduce) { #participants .name { transition: none; } }
 li.muted .voice-dot { background: var(--danger); opacity: .7; }
 /* Out of the audio, no dot: a dim one under "In the room" read as offline. The column stays. */
 li:not(.in-voice) .voice-dot { visibility: hidden; }
