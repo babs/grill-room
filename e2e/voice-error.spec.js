@@ -100,8 +100,7 @@ test('a mic denied at join is dismissible and clears on unmute', async ({ browse
 
 const bar = ['#voice-mute', '#voice-deaf', '#voice-stt', '#voice-more', '#voice-leave'];
 
-// tipUnder waits for the styled tip to say text, then checks it sits below el. The pointer left
-// where Join audio was may have opened another icon's tip first.
+// tipUnder waits for the styled tip to say text, then checks it sits below el.
 async function tipUnder(page, el, text) {
   const tip = page.locator('#person-tip');
   await expect(tip).toBeVisible();
@@ -120,7 +119,9 @@ test('the audio bar: icon toggles with their tips below', async ({ browser, requ
   const me = Number(await page.evaluate(() => myID));
   // A worker transcribes Alice: the transcription toggle carries its dot.
   await playSTT(page, room, { listening: true, transcribed: [me], engines: ['parakeet'] });
-  await page.locator('#voice-join').click();
+  // By keyboard: a click would leave the pointer over whichever icon takes Join audio's place.
+  await page.locator('#voice-join').focus();
+  await page.keyboard.press('Enter');
   for (const sel of bar) {
     const b = page.locator(sel);
     await expect(b).toBeVisible();
@@ -139,6 +140,7 @@ test('the audio bar: icon toggles with their tips below', async ({ browser, requ
   await expect(stt).toHaveClass(/captured/);
 
   // Hover shows the tip under the icon, with the words of its state.
+  await expect(page.locator('#person-tip')).toBeHidden();
   await mute.hover();
   await tipUnder(page, mute, 'Your mic is on. Press to mute it.');
   await mute.click();
