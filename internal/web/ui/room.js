@@ -408,6 +408,19 @@ function renderMessage(m) {
     meta.append(' ', button('(edited)', 'Show earlier versions', () => toggleVersions(li, m).catch(console.error)));
   }
   li.append(meta, body);
+  // What the persona said, or would have said, in the call: for whoever was not in it (013-AC40).
+  if (m.spoken) {
+    const spoken = document.createElement('p');
+    spoken.className = 'spoken';
+    spoken.dataset.tip = 'Spoken summary for the audio call';
+    const label = document.createElement('span');
+    label.className = 'sr-only';
+    label.textContent = 'Spoken summary: ';
+    const text = document.createElement('span');
+    text.textContent = m.spoken;
+    spoken.append(grillIcon('volume'), label, text);
+    li.append(spoken);
+  }
   if (String(m.participant_id) === myID && (m.kind === 'text' || m.kind === 'voice')) li.append(messageMenu(li, m));
   if (m.mentions) stored.set(m.id, m.mentions);
   if (m.kind === 'text' || m.kind === 'voice') fillMentions(li);

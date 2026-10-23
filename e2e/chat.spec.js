@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, messageAction } from './helpers.js';
+import { randomUUID } from 'node:crypto';
+import { roomWith, messageAction, fakeDaemon } from './helpers.js';
 
 // 002-AC8 002-AC9 002-AC11: Markdown renders inert; an author edits and deletes a line and the
 // other browser sees each change live, with the earlier version one click away.
@@ -121,4 +122,29 @@ test('the next line typed during a send is kept', async ({ browser, request }) =
   await alice.locator('#body').press('Enter');
   await expect(alice.locator('.msg.text', { hasText: 'line two' })).toHaveCount(1);
   await expect(alice.locator('#body')).toHaveValue('');
+});
+
+// 013-AC40: a turn that wrote spoken.md shows it, sanitised, under the persona's line, with nobody
+// in the call and no voice on the server.
+test('the spoken summary shows under the persona\'s line', async ({ browser, request, baseURL }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const d = await fakeDaemon(alice, baseURL, room.id, 'alice-laptop');
+  try {
+    await alice.getByRole('button', { name: 'Ask Grill' }).click();
+    await expect.poll(() => d.turns.length).toBe(1);
+    const spoken = Buffer.from('**I read** the [plan](docs/plan.md). Alice ·a1b2, which date?').toString('base64');
+    const status = await alice.evaluate(([room, token, id, body]) => fetch(`/api/rooms/${room}/daemon/turns/${id}`, { method: 'POST',
+      headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.status),
+    [room.id, d.token, d.turns[0], { session_id: randomUUID(), session_offset: 0, synthesis: 'I read the plan.', changes: [{ path: 'spoken.md', content: spoken }] }]);
+    expect(status).toBe(200);
+    const line = alice.locator('#messages li.msg.agent').last();
+    await expect(line.locator('.body')).toHaveText('I read the plan.');
+    await expect(line.locator('.spoken')).toHaveText('Spoken summary: I read the plan. Alice, which date?');
+    await expect(line.locator('.spoken svg.ico')).toBeVisible();
+    // A reload draws it from the stored line.
+    await alice.reload();
+    await expect(alice.locator('#messages li.msg.agent').last().locator('.spoken')).toContainText('Alice, which date?');
+  } finally {
+    d();
+  }
 });

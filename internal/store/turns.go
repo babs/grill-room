@@ -217,7 +217,9 @@ type AgentAnnotation struct {
 // TurnOutcome is a finished turn's result, applied all at once or not at all.
 type TurnOutcome struct {
 	Synthesis string
-	Model     string
+	// Spoken is spoken.md as the call would say it, shown with the synthesis (013-AC40).
+	Spoken string
+	Model  string
 	// ModelNote and ModelMismatch qualify Model as turn.Result does (005-AC10).
 	ModelNote     string
 	ModelMismatch bool
@@ -777,7 +779,7 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 	}
 	if strings.TrimSpace(out.Synthesis) != "" {
 		m := &Message{RoomID: roomID, Kind: KindAgent, Sender: author, PersonaID: t.PersonaID, Body: out.Synthesis, Model: out.Model, Effort: out.Effort,
-			ModelNote: out.ModelNote, ModelMismatch: out.ModelMismatch, TurnID: id}
+			ModelNote: out.ModelNote, ModelMismatch: out.ModelMismatch, TurnID: id, Spoken: out.Spoken}
 		if out.Capped {
 			m.ReqModel, m.ReqEffort = t.ReqModel, t.ReqEffort
 		}

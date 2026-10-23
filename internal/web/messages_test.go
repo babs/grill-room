@@ -216,8 +216,10 @@ func TestViewMessage(t *testing.T) {
 		{store.Message{Kind: store.KindText, Body: "*x*", HTML: "stored"}, "stored"},
 		{store.Message{Kind: store.KindSystem, Body: "*joined*"}, ""},
 		{store.Message{Kind: store.KindVoice, Body: "*x*", DeletedAt: &ts}, ""},
+		// 013-AC40: a deleted line hides its spoken text too.
+		{store.Message{Kind: store.KindAgent, Body: "x", HTML: "x", Spoken: "Said.", DeletedAt: &ts}, ""},
 	} {
-		if got := viewMessage(tc.in); got.HTML != tc.want || (tc.in.DeletedAt != nil && got.Body != "") {
+		if got := viewMessage(tc.in); got.HTML != tc.want || (tc.in.DeletedAt != nil && (got.Body != "" || got.Spoken != "")) {
 			t.Errorf("viewMessage(%+v) = %+v, want html %q", tc.in, got, tc.want)
 		}
 	}

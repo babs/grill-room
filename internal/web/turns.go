@@ -792,6 +792,9 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 		SessionOffset: res.SessionOffset, Session: res.Session,
 		Report: store.TurnReport{Rejected: o.Rejected, Ignored: o.Ignored},
 	}
+	if o.Spoken != "" {
+		out.Spoken = spokenText(o.Spoken, s.spokenWords(r.Context(), d.RoomID))
+	}
 	// A window under the tokens it holds is a daemon's mistake: the room shows no percentage then.
 	if res.ContextTokens > 0 && res.ContextWindow >= res.ContextTokens {
 		out.ContextTokens, out.ContextWindow = res.ContextTokens, res.ContextWindow

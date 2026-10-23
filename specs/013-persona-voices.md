@@ -50,9 +50,10 @@ French and English rooms both ship. A rule-based text layer reads numbers, acron
 
 ### Spoken output
 - [ ] **AC1** The prompt asks for `spoken.md`, with the rules of Appendix C and the room's word cap (AC3), only when the server offers voice (AC13), the persona has "Speaks in the call" on, and at least one human is in the room's audio when the turn starts. A human is in the audio when one of their tabs is in the call and not deafened. Otherwise the prompt is byte-identical to today's.
-- [ ] **AC2** The daemon sends `spoken.md` content (`NeedsContent`). The server keeps it when it is valid UTF-8 of at most 4 KB, else it ignores it and lists why in the turn's system message, as for the other refused outputs. `spoken.md` is never a document, a chat message or part of an export, and no log carries its words. `docs/agent-workspace.md` lists it in "What the agent produces".
+- [ ] **AC2** The daemon sends `spoken.md` content (`NeedsContent`). The server keeps it when it is valid UTF-8 of at most 4 KB, else it ignores it and lists why in the turn's system message, as for the other refused outputs. `spoken.md` is never a document or a chat message of its own, and no log carries its words; its AC3 text reaches the chat and the export only as AC40's spoken summary. `docs/agent-workspace.md` lists it in "What the agent produces".
 - [ ] **AC3** The server sanitises `spoken.md` before queueing it: it removes Markdown marks, code spans, link targets, bare URLs, emoji, short ids (`Alice ·a1b2` becomes `Alice`, `#14` becomes `14`) and a mention's `@` (`@Ana_María` becomes `Ana María`), and folds whitespace. Then it keeps whole sentences while the total stays at or under the room's word cap (40 to 60, default 60, AC25). When the first sentence alone is longer, it cuts at the last comma at or before the cap, else at the cap, and ends with a full stop. Text empty after this is not spoken.
 - [ ] **AC4** A turn without `spoken.md`, or with nothing left after AC3, speaks a summary the server builds from the turn's actions, in the first person and in the synthesis's language (AC5's count): the documents it changed and wrote, by name said as words, the notes it opened and the threads it answered ("I changed the payment spec. I opened 2 notes."). A turn that did none of these speaks nothing. The synthesis, the chat text and documents are never spoken.
+- [ ] **AC40** When a turn's `spoken.md` leaves text after AC3 (the room's word cap included), the persona's chat line keeps that text, stored with it, and the room shows it under the line's body: muted, after the `volume` icon, named "Spoken summary" for screen readers. For every persona, whether or not anyone is in the call and whether or not it was spoken. A turn without `spoken.md`, or with nothing left, shows nothing extra: never AC4's summary. A deleted line hides it; exports carry it as the agent line's `spoken`, and an import refuses it on another kind. AC1 still decides when `spoken.md` is asked for.
 
 ### Text layer
 - [ ] **AC5** Each sentence gets a language, `fr` or `en`, from a function-word count. A tie takes the previous sentence's language; a tie on the first sentence takes the whole line's count; a tie there gives `en`.
@@ -152,7 +153,8 @@ French and English rooms both ship. A rule-based text layer reads numbers, acron
 - `tts_samples`, `rooms.voice_quiet_ms`, `rooms.voice_resume_s`, `rooms.voice_queue_s`, `rooms.voice_words` (Phase 2).
 - `pronunciations`, seeded once (Phase 3).
 - Starter manifests and room exports gain per-persona `speaks`, `voice` and `voice_rate` and the four room values; older ones read as on and defaults.
-- In memory only: the speech queue, the pod's heartbeat and persona states. Nothing spoken is stored.
+- `messages.spoken`: an agent line's spoken summary (AC40).
+- In memory only: the speech queue, the pod's heartbeat and persona states. Nothing else spoken is stored.
 
 ## Open questions
 
@@ -172,6 +174,7 @@ From the notes (user):
 - Persona pill: a click opens the persona card; ▶ "Ask <persona> now" runs it; 🔊 mutes it for this listener. Tentative, the icon sits behind one constant (2026-10-16).
 - "Speaks in the call" on by default for every persona, existing ones included (user, 2026-10-17, overturns 2026-10-16 "off by default"); speaks only with at least one human in the audio; the Spec grill starter keeps Secretary off.
 - Mute both ways: per listener (local) and per persona (the setting).
+- The chat shows each persona line's `spoken.md` text under it, for whoever was not in the call: all personas, always, never AC4's summary (user, 2026-10-23: all personas, always).
 - Voice picker in the Identity tab, ▶ sample in the room's language, distinct defaults by order, catalogue voices only, licence credit on hover; no user-uploaded voices.
 - Turn-taking: never start over a human, stop within 300 ms, resume within 20 s or drop, one persona at a time, queued line dropped past the room's queue maximum (40 s default), 120 s when queued with no pod up (user, 2026-10-18), pill "speaking" and "waiting to speak", timeouts per room.
 - TTS demand counts the rooms a human has open, in the audio or not, so the pod wakes before the call; the bots still join only rooms with a listener (user, 2026-10-18).

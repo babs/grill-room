@@ -18,7 +18,7 @@ import (
 func viewMessage(m store.Message) store.Message {
 	switch {
 	case m.DeletedAt != nil:
-		m.Body, m.HTML = "", ""
+		m.Body, m.HTML, m.Spoken = "", "", ""
 	case m.HTML == "" && m.Kind != store.KindSystem:
 		// Written before messages were rendered on write.
 		m.HTML = render.MessageHTML(m.Body)
