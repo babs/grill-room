@@ -194,16 +194,6 @@ func (s *Server) ttsAuth(next http.HandlerFunc) http.Handler {
 	})
 }
 
-// speakingWords is the word cap for persona's spoken line in room when it speaks in this turn:
-// the server offers voice, the persona speaks in the call and a human is in the room's audio; 0
-// otherwise (013-AC1).
-func (s *Server) speakingWords(room *store.Room, persona *store.RoomPersona) int {
-	if s.tts == nil || !persona.Speaks || !s.people.listening(s.lease())[room.ID] {
-		return 0
-	}
-	return room.Speech.Words
-}
-
 // spokenWords is room's word cap, or the widest one: the chat's spoken text never fails a turn (013-AC40).
 func (s *Server) spokenWords(ctx context.Context, room string) int {
 	rm, err := s.bus.Store.Room(ctx, room)
