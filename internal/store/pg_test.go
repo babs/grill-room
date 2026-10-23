@@ -105,7 +105,7 @@ func TestConcurrentOpensMakeOneSchema(t *testing.T) {
 	}
 	_ = s.Close()
 	want := snapshot(t, ref)
-	if !slices.Contains(want, "schema_version |  | 49") || !slices.Contains(want, "rows pronunciations 129") || !slices.Contains(want, "rows starters 4") {
+	if !slices.Contains(want, "schema_version |  | 49") || !slices.Contains(want, "rows pronunciations 130") || !slices.Contains(want, "rows starters 4") {
 		t.Fatalf("a single open made:\n%s", strings.Join(want, "\n"))
 	}
 

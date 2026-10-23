@@ -525,6 +525,13 @@
     "en": "V P N"
   },
   {
+    "term": "NAT",
+    "style": "en",
+    "fr_en": "natte",
+    "fr_fr": "",
+    "en": "nat"
+  },
+  {
     "term": "JWT",
     "style": "en",
     "fr_en": "",
