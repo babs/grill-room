@@ -55,6 +55,9 @@ test('add a room from the AI host app page', async ({ browser, request, baseURL 
     await expect(page.locator('#room-url')).toHaveValue('');
     await expect(page.locator('#pairing')).toHaveText('Waiting for your approval in the room.', { timeout: 30_000 });
     await expect(page.locator('#code')).toHaveText(/^\d{3}-\d{3}$/);
+    // The row carries the approval too: after a restart the status line above is gone.
+    const code2 = await page.locator('#code').textContent();
+    await expect(page.locator(`.room-row[data-room$="/r/${second.id}"] .approve-link`)).toHaveText(`Approve in the room, code ${code2}`);
     const approval2 = await approve(page, alice.context());
     await expect(approval2).toHaveURL(new RegExp(`/r/${second.id}$`));
     await expect(connectedRow(page, second.id)).toBeAttached({ timeout: 30_000 });

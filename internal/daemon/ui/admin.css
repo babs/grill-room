@@ -2,6 +2,7 @@
    (docs/design.md). */
 body { overflow-wrap: anywhere; }
 #banner, #update, .alerts, .keep-hosting { margin: 0; padding: var(--sp-2) var(--sp-4); background: var(--warning-bg); }
+#banner { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
 #update { margin-top: var(--sp-2); }
 .keep-hosting { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); }
 .keep-hosting .hint { margin: 0; }

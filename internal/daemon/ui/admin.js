@@ -472,7 +472,7 @@ function RoomRow({ i, room }) {
   const extra = st && (st.fetches?.length || st.plugins);
   return html`<li class="list-row room-row" data-room=${room} data-pairing=${st?.pairing ?? ''} data-connection=${st?.connection ?? ''}>
       <div class="main"><a class="name room-name" href=${room} target="_blank" rel="noopener noreferrer" data-tip=${room}>${name}</a>
-        <${Pill} ...${pill} />${st?.running ? html` <span class="meta">${st.running} answering</span>` : ''}${st?.queued ? html` <span class="meta">${st.queued} waiting</span>` : ''}</div>
+        <${Pill} ...${pill} />${st?.pairing === 'pending' && /^https?:\/\//.test(st.approve_url || '') ? html` <a class="approve-link" href=${st.approve_url} target="_blank" rel="noopener noreferrer">Approve in the room, code ${st.code}</a>` : ''}${st?.running ? html` <span class="meta">${st.running} answering</span>` : ''}${st?.queued ? html` <span class="meta">${st.queued} waiting</span>` : ''}</div>
       <div class="controls">
         ${d.accounts && html`<${AccountSelect} label=${'AI account of ' + room} value=${(i.room_accounts || {})[room] || ''} roomDefault=${i.account}
           onPick=${(/** @type {string} */ a) => setAccount(i.id, room, a)} />`}
@@ -1382,7 +1382,8 @@ function App() {
   const live = d && !stopped.value;
   return html`
     <${Header} />
-    ${banner.value && html`<p id="banner" role="alert">${sentence(banner.value)}</p>`}
+    ${banner.value && html`<p id="banner" role="alert"><span>${sentence(banner.value)}</span>
+      <button type="button" class="btn-icon btn-ghost" aria-label="Dismiss" onClick=${() => { banner.value = ''; }} dangerouslySetInnerHTML=${icon('close')}></button></p>`}
     ${live && html`<${RelaxBanner} />`}
     ${live && html`<${KeepHosting} />`}
     ${live && html`<main id="main" class="page-wide">
