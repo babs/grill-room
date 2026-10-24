@@ -1,6 +1,6 @@
 # 018: Voice paragraphs
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-10-23
 **Context**: live session review, 2026-10-23: transcripts are accurate but "super choppy". Builds on 007 (STT worker, VAD), 010 (device STT, dedupe 010-AC16), 006 (voice triggers 006-AC18), 016 (message edits).
@@ -39,7 +39,7 @@ A speaker's consecutive utterances grow one voice message, live, until a real pa
 - [x] **AC7** A paragraph is closed once another message follows it or `GRILL_ROOM_VOICE_PARAGRAPH_CLOSE` (default 20 s) has passed since its last append. "Every N voice lines" counts closed paragraphs only, and is checked on each voice line and on the existing trigger tick while someone is in the room and paragraphs are on.
 - [x] **AC8** A line posted without `gap_s` (older worker or app) is stored as today.
 - [x] **AC9** `grill_room_voice_lines_appended_total{source}` counts appends; the worker's `line_done` log carries `gap_s` and whether the cut was forced.
-- [ ] **AC10** In a lab session, a one-minute monologue with breathing pauses shows as at most 3 messages, and no line of 2 characters or fewer follows a forced cut.
+- [x] **AC10** In a lab session, a one-minute monologue with breathing pauses shows as at most 3 messages, and no line of 2 characters or fewer follows a forced cut.
 
 ## Phases
 
@@ -88,3 +88,4 @@ None blocking.
 - A paragraph closes by time only after `GRILL_ROOM_VOICE_PARAGRAPH_CLOSE` (20 s), not after the paragraph gap: the next line of a monologue lands up to one utterance (15 s cap) plus the VAD silence and STT latency after the previous one, so closing after 2.5 s would fire personas mid-monologue and split the paragraph (phase 3 review).
 - The trigger tick checks voice personas only while paragraphs are on (gap above 0); with paragraphs off, a re-armed persona waits for the next voice line, as before 018.
 - The trigger tick checks only rooms where someone is present, every tick: a time window on recent rooms kept losing fires after absences, leader changes or slow ticks (phase 3 review).
+- AC10 checked on the lab with a synthetic French voice, not a live mic (73 s, breathing pauses 0.4-1.2 s, one run-on past the 15 s cap): one voice message; the worker's per-line `gap_s`/`forced` log is quoted in the PR that ships this line (2026-10-24).
