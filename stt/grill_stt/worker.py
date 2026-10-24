@@ -119,9 +119,10 @@ class Worker:
             self._spawn(room.disconnect())
         self._agents_only &= set(by_name)
         for r in listed:
-            if r.name in self.rooms or r.num_participants == 0:
+            if r.name in self.rooms:
                 continue
-            if r.name in self._agents_only and not await self._has_human(r.name):
+            # LiveKit refreshes a listed count every 5 s: a 0 can hide the first speaker's opening words.
+            if (r.num_participants == 0 or r.name in self._agents_only) and not await self._has_human(r.name):
                 continue
             await self._join(r.name, r.sid)
 
