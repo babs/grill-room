@@ -37,6 +37,28 @@ test('edit and delete a message, live in a second browser', async ({ browser, re
   await expect(alice.locator('.msg.text.deleted .body')).toHaveText('message deleted');
 });
 
+// 018-AC5: a line that grows in place, as a voice paragraph does, keeps a page pinned to the end
+// of the chat showing its last words.
+test('a line that grows keeps the pinned chat at its end', async ({ browser, request }) => {
+  const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  const last = await alice.evaluate(async (id) => {
+    let m;
+    for (let i = 0; i < 30; i++) {
+      m = await (await fetch(`/api/rooms/${id}/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body: 'line ' + i }) })).json();
+    }
+    return m.id;
+  }, room.id);
+  await expect(bob.locator('.msg.text', { hasText: 'line 29' })).toBeVisible();
+  const atEnd = () => bob.locator('#messages').evaluate((m) => m.scrollHeight - m.scrollTop - m.clientHeight < 2);
+  await expect.poll(atEnd).toBe(true);
+  await alice.evaluate(async ([id, msg]) => {
+    const body = Array.from({ length: 40 }, (_, i) => 'word ' + i).join('\n\n');
+    await fetch(`/api/rooms/${id}/messages/${msg}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }) });
+  }, [room.id, last]);
+  await expect(bob.locator('.msg.text', { hasText: 'word 39' })).toHaveCount(1);
+  await expect.poll(atEnd).toBe(true);
+});
+
 // 002-AC9 002-AC40: an edit made while a page was away reaches it when it comes back.
 test('an edit made while the page was away shows on return', async ({ browser, request }) => {
   const { pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);

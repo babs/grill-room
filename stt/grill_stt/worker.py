@@ -3,7 +3,7 @@
 import asyncio
 import contextlib
 import time
-from collections.abc import Coroutine, Sequence
+from collections.abc import Callable, Coroutine, Sequence
 from datetime import timedelta
 from typing import Any
 
@@ -15,7 +15,7 @@ from prometheus_client import Gauge
 
 from .config import Settings
 from .pipeline import HEARTBEAT_TIMEOUT_S, Flags, Pipeline, RoomAPI, Utterance
-from .vad import SR, Audio, Segmenter, Silero
+from .vad import SR, Cut, Segmenter, Silero
 
 log = structlog.get_logger()
 
@@ -55,6 +55,8 @@ class Worker:
         # none of them when a track goes: the SFU hands the freed transceiver to the next track it
         # sends, and a stream left open hears that newcomer under the old speaker's name (spike S5).
         self._streams: dict[str, tuple[str, rtc.AudioStream, str]] = {}
+        # Each listened track's mute handler, by track sid.
+        self._mutes: dict[str, Callable[[], None]] = {}
         # Read on every frame: a flagged participant's audio is dropped before the VAD (010-AC14).
         self._device: Flags = frozenset()
         self._changed = asyncio.Event()
@@ -139,6 +141,7 @@ class Worker:
         room.on("track_subscribed", lambda track, pub, p: self._on_track(name, track, pub, p))
         room.on("track_unsubscribed", lambda _track, pub, _p: self._close(pub.sid))
         room.on("track_unpublished", lambda pub, _p: self._close(pub.sid))
+        room.on("track_muted", lambda _p, pub: self._on_muted(pub.sid))
         room.on("participant_disconnected", lambda p: self._on_participant_left(name, p))
         room.on("disconnected", lambda reason: self._forget(name, room, reason))
         try:
@@ -197,6 +200,11 @@ class Worker:
             self._changed.set()
             self._spawn(entry[1].aclose())
 
+    def _on_muted(self, sid: str) -> None:
+        mute = self._mutes.get(sid)
+        if mute is not None:
+            mute()
+
     def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
         # The event loop keeps only weak references to tasks: hold the fire-and-forget ones.
         task = asyncio.create_task(coro)
@@ -226,22 +234,40 @@ class Worker:
         """VAD over one participant's track; every utterance it cuts goes to the queue, in memory."""
         TRACKS.inc()
         log.info("track_listening", room=room, participant=participant_id, track=sid)
+
+        def mute() -> None:
+            # 018-AC1: a muted track may send no frames, so the pause cannot be measured: send no gap.
+            seg.forget_gap()
+
         try:
             vad = Silero()
 
             def segmenter() -> Segmenter:
                 return Segmenter(
-                    vad, min_silence_ms=self._s.vad_min_silence_ms, max_speech_s=self._s.vad_max_speech_s
+                    vad,
+                    min_silence_ms=self._s.vad_min_silence_ms,
+                    max_speech_s=self._s.vad_max_speech_s,
+                    cut_search_s=self._s.vad_cut_search_s,
                 )
 
-            def submit(cuts: list[tuple[Audio, float]]) -> None:
-                # The speech ended the silence the cut waited for ago; a forced cut waited none.
-                for audio, silent_s in cuts:
-                    self._pipeline.submit(Utterance(room, participant_id, audio, self._clock() - silent_s))
+            def submit(cuts: list[Cut]) -> None:
+                # The cut audio ended silent_s ago: the pause it waited for, or the audio after a forced cut.
+                for c in cuts:
+                    self._pipeline.submit(
+                        Utterance(
+                            room,
+                            participant_id,
+                            c.audio,
+                            self._clock() - c.silent_s,
+                            gap_s=c.gap_s,
+                            forced=c.forced,
+                        )
+                    )
 
             # Speech in progress when the flag comes is dropped: the device's capture predates its flag.
             seg = segmenter()
             skipped = False
+            self._mutes[sid] = mute
             async for ev in stream:
                 if (room, participant_id) in self._device:
                     skipped = True
@@ -261,6 +287,8 @@ class Worker:
             log.exception("track_failed", room=room, participant=participant_id)
         finally:
             TRACKS.dec()
+            if self._mutes.get(sid) is mute:
+                del self._mutes[sid]
             entry = self._streams.get(sid)
             if entry is not None and entry[1] is stream:
                 del self._streams[sid]

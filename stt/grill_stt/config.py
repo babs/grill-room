@@ -1,8 +1,8 @@
 import socket
 from dataclasses import fields
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .pipeline import Plausibility
@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     # Silence that ends an utterance, and the longest one before a forced cut.
     vad_min_silence_ms: int = Segmenter.min_silence_ms
     vad_max_speech_s: float = Segmenter.max_speech_s
+    # How far back from that cap the forced cut looks for the quietest window; 0 cuts at the cap.
+    vad_cut_search_s: float = Field(default=Segmenter.cut_search_s, ge=0)
     # Plausibility checks a transcript passes before it is posted (pipeline.Plausibility).
     min_avg_logprob: float = Plausibility.min_avg_logprob
     max_compression_ratio: float = Plausibility.max_compression_ratio
@@ -54,6 +56,13 @@ class Settings(BaseSettings):
     port: int = 9100
     log_level: str = "info"
     worker_name: str = socket.gethostname()
+
+    @model_validator(mode="after")
+    def _cut_search_within_cap(self) -> Self:
+        # A search as long as the cap could cut at the utterance's first window and emit a stub.
+        if self.vad_cut_search_s >= self.vad_max_speech_s:
+            raise ValueError("vad_cut_search_s must be below vad_max_speech_s")
+        return self
 
     @property
     def uses_glossary(self) -> bool:

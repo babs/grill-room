@@ -83,8 +83,15 @@ func renderPresence(v presenceView) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
-// speakingAt reports the voice line m's author as still speaking at now.
-func speakingAt(m *store.Message, now time.Time) bool { return now.Sub(m.TS) <= speakerWindow }
+// speakingAt reports the voice line m's author as still speaking at now: a paragraph keeps its
+// first line's ts, its last append is when they last spoke (018-AC5).
+func speakingAt(m *store.Message, now time.Time) bool {
+	at := m.TS
+	if m.AppendedAt != nil {
+		at = *m.AppendedAt
+	}
+	return now.Sub(at) <= speakerWindow
+}
 
 func levelText(l turn.Level) string {
 	return "model " + orDefault(l.Model) + ", effort " + orDefault(l.Effort)

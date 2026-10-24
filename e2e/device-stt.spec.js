@@ -330,16 +330,30 @@ test('the self-test verdict', async ({ browser, request }) => {
 const S = 0.9;
 const N = 0.1;
 const fill = (...runs) => runs.flatMap(([p, n]) => Array(n).fill(p));
+const pause = (start, windows, gap = null) => ({ start, windows, silent: 0.8, gap, forced: false });
 const segmenterCases = [
-  ['pause cut', fill([N, 20], [S, 30], [N, 40]), [{ start: 15, windows: 41, silent: 0.8 }], []],
+  ['pause cut', fill([N, 20], [S, 30], [N, 40]), [pause(15, 41)], []],
   // 400 ms is 12.5 windows: Python rounds half to even, 12, where Math.round gives 13.
-  ['12 voiced windows, the minimum', fill([N, 10], [S, 12], [N, 30]), [{ start: 5, windows: 23, silent: 0.8 }], []],
+  ['12 voiced windows, the minimum', fill([N, 10], [S, 12], [N, 30]), [pause(5, 23)], []],
   ['11 voiced windows, a cough', fill([N, 10], [S, 11], [N, 30]), [], []],
-  ['between thresholds holds the cut', fill([N, 5], [S, 20], [0.4, 30], [N, 30]), [{ start: 0, windows: 61, silent: 0.8 }], []],
-  ['a 24-window pause does not cut', fill([N, 3], [S, 15], [N, 24], [S, 15], [N, 26]), [{ start: 0, windows: 63, silent: 0.8 }], []],
-  ['15 s forced cut', fill([N, 2], [S, 500], [N, 30]), [{ start: 0, windows: 469, silent: 0 }, { start: 469, windows: 39, silent: 0.8 }], []],
-  ['speech at the end flushes', fill([N, 8], [S, 40]), [], [{ start: 3, windows: 45, silent: 0 }]],
-  ['threshold edges', fill([N, 4], [0.5, 14], [0.35, 30], [0.3499, 25]), [{ start: 0, windows: 54, silent: 0.8 }], []],
+  ['between thresholds holds the cut', fill([N, 5], [S, 20], [0.4, 30], [N, 30]), [pause(0, 61)], []],
+  ['a 24-window pause does not cut', fill([N, 3], [S, 15], [N, 24], [S, 15], [N, 26]), [pause(0, 63)], []],
+  // 018-AC2: the utterance after a forced cut follows it with no gap.
+  ['15 s forced cut', fill([N, 2], [S, 500], [N, 30]), [{ start: 0, windows: 469, silent: 0, gap: null, forced: true }, pause(469, 39, 0)], []],
+  ['speech at the end flushes', fill([N, 8], [S, 40]), [], [{ start: 3, windows: 45, silent: 0, gap: null, forced: false }]],
+  ['threshold edges', fill([N, 4], [0.5, 14], [0.35, 30], [0.3499, 25]), [pause(0, 54)], []],
+  // 018-AC2: 30 windows from the last voiced window of one utterance to the first of the next.
+  ['gap after a pause', fill([N, 3], [S, 20], [N, 30], [S, 20], [N, 30]), [pause(0, 29), pause(48, 31, 0.96)], []],
+  // 018-AC2: a cap reached in a pause, then a long pause: the gap is real, not 0; also when the quiet
+  // cut leaves a tail too short to post.
+  ['a long pause after a forced cut', fill([S, 460], [N, 200], [S, 20], [N, 30]),
+    [{ start: 0, windows: 469, silent: 0, gap: null, forced: true }, pause(655, 31, 6.4)], []],
+  ['a dropped tail after a forced cut', fill([S, 440], [0, 1], [S, 5], [N, 123], [S, 20], [N, 30]),
+    [{ start: 0, windows: 441, silent: 0.896, gap: null, forced: true }, pause(564, 31, 4.128)], []],
+  // 018-AC3: the cap cuts on the 0.2 dip of its last 3 s, not on the deeper one before them, and the
+  // rest of the search opens the next utterance.
+  ['quiet cut', fill([S, 300], [N, 1], [S, 100], [0.2, 1], [S, 20], [0.3, 1], [S, 100], [N, 30]),
+    [{ start: 0, windows: 402, silent: 2.144, gap: null, forced: true }, pause(402, 127, 0)], []],
 ];
 
 // 010-AC9: the device cuts utterances where the server's worker does.
@@ -349,7 +363,7 @@ test('the segmenter cuts as the worker does', async ({ browser, request }) => {
     const got = await page.evaluate(async (probs) => {
       const { Segmenter, WINDOW } = await import('/static/stt/segmenter.js');
       const seg = new Segmenter();
-      const cut = (u) => ({ start: u.pcm[0], windows: u.pcm.length / WINDOW, silent: u.silentS });
+      const cut = (u) => ({ start: u.pcm[0], windows: u.pcm.length / WINDOW, silent: u.silentS, gap: u.gapS, forced: u.forced });
       const out = [];
       probs.forEach((p, i) => {
         const u = seg.push(new Float32Array(WINDOW).fill(i), p, i);
@@ -370,6 +384,25 @@ test('the segmenter cuts as the worker does', async ({ browser, request }) => {
     return [u.firstVoiced, u.lastVoiced];
   });
   expect(voiced).toEqual([1005, 1024]);
+  // 018-AC2: a flush ends the audio, as a track's end on the server: the next utterance has no gap.
+  const gaps = await page.evaluate(async () => {
+    const { Segmenter, WINDOW } = await import('/static/stt/segmenter.js');
+    const seg = new Segmenter();
+    const run = (probs) => probs.map((p) => seg.push(new Float32Array(WINDOW), p)).filter(Boolean).map((u) => u.gapS);
+    const talk = [...Array(20).fill(0.9), ...Array(30).fill(0.1)];
+    return [run(talk), run(talk), run(Array(20).fill(0.9)), seg.flush()?.gapS, run(talk)];
+  });
+  expect(gaps).toEqual([[null], [0.96], [], 0.96, [null]]);
+  // 018-AC2: nor does the pre-roll from before the flush lead the next utterance.
+  const first = await page.evaluate(async () => {
+    const { Segmenter, WINDOW } = await import('/static/stt/segmenter.js');
+    const seg = new Segmenter();
+    const push = (from, probs) => probs.map((p, i) => seg.push(new Float32Array(WINDOW).fill(from + i), p)).filter(Boolean);
+    push(0, Array(10).fill(0.1));
+    seg.flush();
+    return push(10, [...Array(20).fill(0.9), ...Array(30).fill(0.1)]).map((u) => u.pcm[0]);
+  });
+  expect(first).toEqual([10]);
 });
 
 // 010-AC9: the worker's plausibility filter on device lines. The ratios are Python's

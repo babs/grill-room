@@ -40,7 +40,8 @@ func TestExportImportVoiceSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := string(raw)
-	if strings.Count(lines, `"source":`) != 2 || !strings.Contains(lines, `"body":"said on device","source":"device"`) ||
+	// richRoom holds a server voice paragraph of its own (018-AC5).
+	if strings.Count(lines, `"source":`) != 3 || !strings.Contains(lines, `"body":"said on device","source":"device"`) ||
 		!strings.Contains(lines, `"body":"said on server","source":"server"`) {
 		t.Fatalf("export lines:\n%s", lines)
 	}

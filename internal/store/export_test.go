@@ -176,6 +176,15 @@ func richRoom(t *testing.T, s *Store, id string) (*Participant, *RoomPersona) {
 		t.Fatal(err)
 	}
 	say(alice, "after the turn")
+	// 018-AC5: a voice paragraph, grown by one append.
+	gap := 0.5
+	for _, b := range []string{"first words", "and more"} {
+		m := &Message{RoomID: id, Kind: KindVoice, ParticipantID: alice.ID, Sender: alice.Name, Body: b, Source: VoiceSourceServer}
+		if _, err := s.PostVoiceLine(ctx, m, time.Now(), time.Second, VoiceJoin{GapS: &gap, MaxGap: time.Second, MaxChars: 100},
+			func([]string) bool { return false }); err != nil {
+			t.Fatal(err)
+		}
+	}
 	// 005-AC26: a deleted document travels, flagged.
 	gone, err := s.AddUpload(ctx, &Upload{RoomID: id, ParticipantID: bob.ID, Author: "Bob", Filename: "old.md", ContentType: "text/markdown; charset=utf-8",
 		Format: "md", Data: []byte("# Old\n"), Text: "# Old\n"}, 1<<20)
@@ -415,6 +424,11 @@ func TestExportImportRoundTrip(t *testing.T) {
 			// 013-AC40: the synthesis keeps its spoken text.
 			if m.Spoken != "Ship it." {
 				t.Errorf("spoken text in the copy: %q", m.Spoken)
+			}
+		case m.Kind == KindVoice:
+			// 018-AC5: the paragraph keeps when it last grew.
+			if m.Body != "first words and more" || m.AppendedAt == nil {
+				t.Errorf("voice paragraph in the copy: %q, appended %v", m.Body, m.AppendedAt)
 			}
 		}
 	}
@@ -719,7 +733,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"blocked_requests":    "| message_id room_id persona domain count decision pending_scope pending_by pending_actor pending_error dismissed_by",
 		"participants":        "id name joined_at can_trigger profile_id profile_uuid_hint room_id invite_id previous_name removed_at | token_hash last_seen_at join_ip join_ua last_ip last_ua end_reason stt_off",
 		"invites":             "| id room_id token_hash created_at revoked_at created_by link", // 011-AC26: a shareable token never leaves
-		"messages":            "id room_id ts kind participant_id sender body model edited_at deleted_at change_seq persona_id effort req_model req_effort model_note model_mismatch source spoken | html turn_id",
+		"messages":            "id room_id ts kind participant_id sender body model edited_at deleted_at change_seq persona_id effort req_model req_effort model_note model_mismatch source spoken appended_at | html turn_id",
 		"message_versions":    "id message_id seq body written_at |",
 		"uploads":             "id room_id participant_id filename content_type size data created_at |",
 		"documents":           "id room_id kind name format upload_id author created_at deleted_at | change_seq",

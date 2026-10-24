@@ -2,7 +2,9 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -354,6 +356,73 @@ func TestTranscriptionOff(t *testing.T) {
 	}
 	if meOff(bob.Token) {
 		t.Fatal("a refused request changed Bob's choice")
+	}
+}
+
+// 018-AC1, 018-AC2, 018-AC8: both voice routes take an optional gap_s, refuse a negative one, cap a
+// long one rather than lose the line, and store the line as before whether it comes or not.
+func TestVoiceLineGap(t *testing.T) {
+	e := newDeviceEnv(t)
+	room := e.createRoom(t, "R").ID
+	alice := e.join(t, e.createInvite(t, room).Token, "Alice")
+	// Two speakers: one's lines on both routes would be dropped as repeats (010-AC16).
+	bob := e.join(t, e.createInvite(t, room).Token, "Bob")
+	routes := []struct {
+		name    string
+		path    string
+		token   string
+		fields  map[string]any
+		source  string
+		speaker int64
+	}{
+		{"worker", "/api/rooms/" + room + "/voice/lines", sttToken, map[string]any{"participant_id": alice.Participant.ID}, store.VoiceSourceServer, alice.Participant.ID},
+		{"device", "/api/rooms/" + room + "/voice/device-lines", bob.Token, map[string]any{}, store.VoiceSourceDevice, bob.Participant.ID},
+	}
+	cases := []struct {
+		name string
+		gap  any // nil: no gap_s field
+		code int
+	}{
+		{"no gap", nil, http.StatusCreated},
+		{"null gap", "null", http.StatusCreated},
+		{"zero gap", 0, http.StatusCreated},
+		{"pause", 1.28, http.StatusCreated},
+		{"an hour", maxVoiceGap, http.StatusCreated},
+		{"negative", -0.032, http.StatusBadRequest},
+		{"over an hour, capped", maxVoiceGap + 1, http.StatusCreated},
+		{"huge, capped", 1e300, http.StatusCreated},
+		{"not a number", "1.5", http.StatusBadRequest},
+	}
+	long := maxVoiceGap * 2
+	if !validGap(httptest.NewRecorder(), &long) || long != maxVoiceGap {
+		t.Fatalf("a long gap is kept as %v, want it capped at %v", long, maxVoiceGap)
+	}
+	for _, rt := range routes {
+		for i, c := range cases {
+			body := map[string]any{"body": fmt.Sprintf("%s line %d about %s.", rt.name, i, c.name)}
+			for k, v := range rt.fields {
+				body[k] = v
+			}
+			switch c.gap {
+			case nil:
+			case "null":
+				body["gap_s"] = nil
+			default:
+				body["gap_s"] = c.gap
+			}
+			code, b := e.do(t, "POST", rt.path, rt.token, body)
+			if code != c.code {
+				t.Errorf("%s, %s: %d %s, want %d", rt.name, c.name, code, b, c.code)
+				continue
+			}
+			if code != http.StatusCreated {
+				continue
+			}
+			m := decodeJSON[store.Message](t, b)
+			if m.Kind != store.KindVoice || m.Source != rt.source || m.Body != body["body"] || m.ParticipantID != rt.speaker || m.EditedAt != nil {
+				t.Errorf("%s, %s: message %+v", rt.name, c.name, m)
+			}
+		}
 	}
 }
 

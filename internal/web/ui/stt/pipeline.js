@@ -130,14 +130,15 @@ function transcribe(pcm) {
 }
 
 /**
- * post sends a line, after the ones before it.
+ * post sends a line, after the ones before it, with the pause before it when known (018-AC2).
  * @param {string} body
+ * @param {number | null} gapS
  */
-function post(body) {
+function post(body, gapS) {
   posts = posts.then(async () => {
     // A hung post counts as lost: the lines after it, and the latency it ends, must not wait forever.
     const r = await fetch(cfg.lines, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body }), signal: AbortSignal.timeout(POST_TIMEOUT_MS),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body, gap_s: gapS ?? undefined }), signal: AbortSignal.timeout(POST_TIMEOUT_MS),
     }).catch(() => null);
     if (r?.ok) stats.posted++;
     else stats.lost++;
@@ -181,7 +182,7 @@ async function run() {
     const why = await implausible(text);
     if (why) stats.dropped++;
     // A posted line is ready when the server has it.
-    if (!why && u.post) post(text).then(() => measured(u));
+    if (!why && u.post) post(text, u.gapS).then(() => measured(u));
     else measured(u);
   }
   if (stats.mode === 'failed') queue.length = 0;

@@ -11,12 +11,13 @@ import structlog.testing
 from livekit import rtc
 from livekit.protocol import models
 from prometheus_client import REGISTRY
+from pydantic import ValidationError
 
 import grill_stt.worker as worker_mod
 from grill_stt.config import Settings
-from grill_stt.pipeline import Pipeline, RoomAPI
+from grill_stt.pipeline import Pipeline, RoomAPI, Utterance
 from grill_stt.transcribe import Line
-from grill_stt.vad import Segmenter
+from grill_stt.vad import WINDOW, Segmenter
 from grill_stt.worker import Worker, http_url
 
 
@@ -44,6 +45,22 @@ def test_plausibility_thresholds_come_from_the_environment(monkeypatch: pytest.M
     monkeypatch.setenv("APP_SHORT_UTTERANCE_S", "1.5")
     p = settings().plausibility()
     assert (p.min_language_probability, p.short_utterance_s, p.min_avg_logprob) == (0.7, 1.5, -1.0)
+
+
+def test_cut_search_comes_from_the_environment_and_stays_below_the_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """018-AC3: APP_VAD_CUT_SEARCH_S, default 3 s; a search as long as the cap is refused."""
+    assert settings().vad_cut_search_s == 3.0
+    monkeypatch.setenv("APP_VAD_CUT_SEARCH_S", "0")
+    assert settings().vad_cut_search_s == 0.0
+    for bad in (
+        {"vad_cut_search_s": -0.1},
+        {"vad_cut_search_s": 15},
+        {"vad_cut_search_s": 3, "vad_max_speech_s": 2},
+    ):
+        with pytest.raises(ValidationError):
+            settings(**bad)
 
 
 def test_http_url() -> None:
@@ -197,9 +214,10 @@ def tracks() -> float:
     return REGISTRY.get_sample_value("grill_stt_tracks") or 0.0
 
 
-@pytest.fixture
-def listening(monkeypatch: pytest.MonkeyPatch) -> tuple[Worker, list[FakeStream], list[tuple[int, int]]]:
-    """A worker on FakeStreams; utterances land in a list as (participant, samples)."""
+def listen(
+    monkeypatch: pytest.MonkeyPatch, vad: LoudVAD | None = None, **kw: Any
+) -> tuple[Worker, list[FakeStream], list[tuple[int, int]], list[Utterance]]:
+    """A worker on FakeStreams; utterances land in a list as (participant, samples), and whole."""
     streams: list[FakeStream] = []
 
     def stream(track: object, **kw: object) -> FakeStream:
@@ -207,11 +225,22 @@ def listening(monkeypatch: pytest.MonkeyPatch) -> tuple[Worker, list[FakeStream]
         return streams[-1]
 
     monkeypatch.setattr(rtc, "AudioStream", stream)
-    monkeypatch.setattr(worker_mod, "Silero", LoudVAD)
-    w = worker(httpx.MockTransport(lambda _r: httpx.Response(204)))
+    monkeypatch.setattr(worker_mod, "Silero", LoudVAD if vad is None else lambda: vad)
+    w = worker(httpx.MockTransport(lambda _r: httpx.Response(204)), **kw)
     submitted: list[tuple[int, int]] = []
-    monkeypatch.setattr(w._pipeline, "submit", lambda u: submitted.append((u.participant_id, len(u.audio))))
-    return w, streams, submitted
+    heard: list[Utterance] = []
+
+    def submit(u: Utterance) -> None:
+        submitted.append((u.participant_id, len(u.audio)))
+        heard.append(u)
+
+    monkeypatch.setattr(w._pipeline, "submit", submit)
+    return w, streams, submitted, heard
+
+
+@pytest.fixture
+def listening(monkeypatch: pytest.MonkeyPatch) -> tuple[Worker, list[FakeStream], list[tuple[int, int]]]:
+    return listen(monkeypatch)[:3]
 
 
 def subscribe(w: Worker, sid: str, identity: str, kind: int = rtc.TrackKind.KIND_AUDIO) -> None:
@@ -360,9 +389,10 @@ class FakeRoom:
         self.connected = False
         self.left = False
         self.remote_participants: dict[str, Any] = {"7": human("7")}
+        self.handlers: dict[str, Any] = {}
 
-    def on(self, _event: str, _cb: Any) -> None:
-        pass
+    def on(self, event: str, cb: Any) -> None:
+        self.handlers[event] = cb
 
     async def connect(self, *_a: object) -> None:
         self.connected = True
@@ -727,3 +757,128 @@ async def test_a_room_with_only_bots_is_left_and_joined_again_once_a_human_is_li
     lk.kinds = [models.ParticipantInfo.Kind.STANDARD]
     await w.reconcile([listed("r1", "RM_a", people=1)])
     assert len(made) == 2 and w.rooms["r1"] is cast(object, made[1])
+
+
+def silence(seconds: float) -> bytes:
+    return bytes(int(seconds * 16000) * 2)
+
+
+async def test_each_utterance_carries_the_gap_before_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """018-AC1: the worker hands each utterance the pause before it on its track, and none to the first
+    one after a resume."""
+    w, streams, _, heard = listen(monkeypatch)
+    subscribe(w, "TR_a", "7")
+    await settle(lambda: streams)
+    a = streams[0]
+    a.frames.put_nowait(speech(1) + silence(1.5) + speech(1) + pause())
+    await settle(lambda: len(heard) == 2)
+    gap = heard[1].gap_s
+    assert heard[0].gap_s is None and gap is not None and abs(gap - 1.5) <= 2 * WINDOW / 16000
+    w.flag(frozenset({("r1", 7)}))
+    a.frames.put_nowait(pause())
+    await drained(a)
+    w.flag(frozenset())
+    a.frames.put_nowait(speech(1) + pause())
+    await settle(lambda: len(heard) == 3)
+    assert heard[2].gap_s is None and not any(u.forced for u in heard)
+    await a.aclose()
+
+
+async def test_the_cut_search_setting_reaches_the_segmenter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """018-AC3: with APP_VAD_CUT_SEARCH_S at 1, a dip 2 s before the 15 s cap is out of reach: the
+    forced cut stays at the cap, where the 3 s default would move it to the dip."""
+    w, streams, _, heard = listen(monkeypatch, vad_cut_search_s=1)
+    subscribe(w, "TR_a", "7")
+    await settle(lambda: streams)
+    streams[0].frames.put_nowait(speech(13) + silence(0.1) + speech(3) + pause())
+    await settle(lambda: len(heard) == 2)
+    assert heard[0].forced and len(heard[0].audio) == 469 * WINDOW
+    assert heard[1].gap_s == 0.0
+    await streams[0].aclose()
+
+
+async def muted_room(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Worker, FakeStream, list[Utterance], Callable[[str], None], list[int]]:
+    """A listened track TR_a of participant 7, its track_muted handler, and the forget_gap calls."""
+    made: list[FakeRoom] = []
+    monkeypatch.setattr(rtc, "Room", lambda: new_room(made))
+    forgot: list[int] = []
+    forget = Segmenter.forget_gap
+
+    def forget_gap(seg: Segmenter) -> None:
+        forgot.append(1)
+        forget(seg)
+
+    monkeypatch.setattr(Segmenter, "forget_gap", forget_gap)
+    w, streams, _, heard = listen(monkeypatch)
+    await w.reconcile([listed("r1", "RM_a")])
+    subscribe(w, "TR_a", "7")
+    await settle(lambda: streams)
+    handler = made[0].handlers["track_muted"]
+    return w, streams[0], heard, lambda sid: handler(human("7"), SimpleNamespace(sid=sid)), forgot
+
+
+async def test_a_mute_forgets_the_gap_and_keeps_the_audio(monkeypatch: pytest.MonkeyPatch) -> None:
+    """018-AC1: a muted track may send no frames, so the line after a mute has no gap, even when the
+    mute comes mid-utterance; nothing is flushed, cut or lost."""
+    w, a, heard, mute, _ = await muted_room(monkeypatch)
+    audio = (speech(1) + pause()) * 3 + speech(1) + speech(1) + pause()
+    a.frames.put_nowait(speech(1) + pause())
+    await settle(lambda: len(heard) == 1)
+    mute("TR_a")
+    a.frames.put_nowait(speech(1) + pause() + speech(1) + pause() + speech(1))
+    await drained(a)
+    mute("TR_a")
+    a.frames.put_nowait(speech(1) + pause())
+    await settle(lambda: len(heard) == 4)
+    assert [u.gap_s for u in heard] == [None, None, 0.896, None]
+    assert [len(u.audio) for u in heard] == [len(u) for u in Segmenter(loud).feed(pcm(audio))]
+    await a.aclose()
+
+
+async def test_a_mute_of_another_track_changes_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """018-AC1: only the muted track forgets its gap; forgetting it while the device transcribes the
+    speaker is harmless, and the line after the flag clears has no gap."""
+    w, a, heard, mute, forgot = await muted_room(monkeypatch)
+    a.frames.put_nowait(speech(1) + pause())
+    await settle(lambda: len(heard) == 1)
+    mute("TR_b")
+    a.frames.put_nowait(speech(1) + pause())
+    await settle(lambda: len(heard) == 2)
+    assert heard[1].gap_s is not None and forgot == []
+    w.flag(frozenset({("r1", 7)}))
+    mute("TR_a")
+    assert forgot == [1]
+    w.flag(frozenset())
+    a.frames.put_nowait(speech(1) + pause())
+    await settle(lambda: len(heard) == 3)
+    assert heard[2].gap_s is None
+    await a.aclose()
+
+
+async def test_a_mute_reaches_the_listener_of_a_resubscribed_track(monkeypatch: pytest.MonkeyPatch) -> None:
+    """018-AC1: once a resubscription under the same sid closed the old stream, the old listener's
+    cleanup leaves the new listener's mute handler in place."""
+    w, old, heard, mute, forgot = await muted_room(monkeypatch)
+    old.frames.put_nowait(speech(1) + pause())
+    await settle(lambda: len(heard) == 1)
+    base = tracks()
+    subscribe(w, "TR_a", "7")
+    await settle(lambda: old.closed)
+    new = cast(FakeStream, w._streams["TR_a"][1])
+    assert new is not old
+    new.frames.put_nowait(speech(1) + pause())
+    await settle(lambda: len(heard) == 2)
+    await settle(lambda: tracks() == base)
+    new.frames.put_nowait(speech(1) + pause())
+    await settle(lambda: len(heard) == 3)
+    assert heard[2].gap_s is not None
+    mute("TR_a")
+    assert forgot == [1]
+    new.frames.put_nowait(speech(1) + pause())
+    await settle(lambda: len(heard) == 4)
+    assert heard[3].gap_s is None
+    await new.aclose()

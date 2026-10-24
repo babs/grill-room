@@ -56,12 +56,55 @@ func (s *Server) queueAuto(ctx context.Context, room string, e store.ChainEvent,
 	s.drain(ctx, room)
 }
 
-// voiceTriggers queues the room's personas whose "every N voice lines" a new voice line made due
-// (006-AC18).
+// voiceTriggers queues the room's personas whose "every N voice lines" is due (006-AC18), counting
+// closed paragraphs only (018-AC7).
 func (s *Server) voiceTriggers(ctx context.Context, room string) {
 	ctx = context.WithoutCancel(ctx)
-	s.queueAuto(ctx, room, store.LinkEveryN, func() ([]store.RoomPersona, error) { return s.bus.Store.DueVoicePersonas(ctx, room) },
-		func(p store.RoomPersona) string { return everyVoice(p.EveryVoice) })
+	s.queueAuto(ctx, room, store.LinkEveryN, func() ([]store.RoomPersona, error) {
+		return s.bus.Store.DueVoicePersonas(ctx, s.now(), s.voiceCount(), []string{room})
+	}, voiceCause)
+}
+
+func (s *Server) voiceCount() store.VoiceCount {
+	return store.VoiceCount{Gap: s.opts.VoiceParagraphGap, Close: s.opts.VoiceParagraphClose}
+}
+
+func voiceCause(p store.RoomPersona) string { return everyVoice(p.EveryVoice) }
+
+// voiceTick queues, in rooms where someone is here, the personas whose "every N voice lines" a
+// paragraph closed since the last voice line made due: by the close delay passing, or by a message
+// other than a voice line (018-AC7). It runs only while paragraphs are on: off, every line is
+// closed when stored. Each tick reads every room with someone here, so none is missed after an
+// absence or a leader change.
+func (s *Server) voiceTick(ctx context.Context) {
+	if s.opts.VoiceParagraphGap <= 0 {
+		return
+	}
+	var rooms []string
+	for room := range s.people.present(s.lease()) {
+		rooms = append(rooms, room)
+	}
+	if len(rooms) == 0 {
+		return
+	}
+	now := s.now()
+	due, err := s.bus.Store.DueVoicePersonas(ctx, now, s.voiceCount(), rooms)
+	if err != nil {
+		if ctx.Err() == nil {
+			s.log.Error("voice_triggers_failed", zap.Error(err))
+		}
+		return
+	}
+	queued := map[string]bool{}
+	for _, p := range due {
+		if !queued[p.RoomID] {
+			queued[p.RoomID] = true
+			room := p.RoomID
+			s.queueAuto(ctx, room, store.LinkEveryN, func() ([]store.RoomPersona, error) {
+				return s.bus.Store.DueVoicePersonas(ctx, now, s.voiceCount(), []string{room})
+			}, voiceCause)
+		}
+	}
 }
 
 // timerTriggers queues the personas whose "every T minutes" is due at s.now(), in rooms where
@@ -189,7 +232,7 @@ func notesCause(ids []int64) string {
 	return cause
 }
 
-// RunTimers checks the timer triggers every timerTick, and the notes watchers every
+// RunTimers checks the timer and voice triggers every timerTick, and the notes watchers every
 // notesWatchTick, until ctx ends.
 func (s *Server) RunTimers(ctx context.Context) {
 	t := time.NewTicker(timerTick)
@@ -202,6 +245,7 @@ func (s *Server) RunTimers(ctx context.Context) {
 			return
 		case <-t.C:
 			s.timerTriggers(ctx)
+			s.voiceTick(ctx)
 		case <-w.C:
 			s.notesWatch(ctx)
 		}

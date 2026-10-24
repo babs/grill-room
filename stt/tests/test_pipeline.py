@@ -43,6 +43,43 @@ async def test_posts_a_line_as_json_with_the_service_token() -> None:
     assert json.loads(r.content) == {"participant_id": 7, "body": "Bonjour"}
 
 
+async def test_a_line_carries_the_gap_before_it_only_when_known() -> None:
+    """018-AC1: gap_s goes with the line; 018-AC8: without one the body is the pre-018 shape."""
+    seen: list[dict[str, object]] = []
+
+    def handle(r: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(r.content))
+        return httpx.Response(201)
+
+    room_api = api(httpx.MockTransport(handle))
+    assert await room_api.post_line("r1", 7, "a", 0.64)
+    assert await room_api.post_line("r1", 7, "b", 0.0)
+    assert await room_api.post_line("r1", 7, "c", None)
+    assert seen == [
+        {"participant_id": 7, "body": "a", "gap_s": 0.64},
+        {"participant_id": 7, "body": "b", "gap_s": 0.0},
+        {"participant_id": 7, "body": "c"},
+    ]
+
+
+async def test_line_done_logs_the_gap_and_the_forced_cut() -> None:
+    """018-AC9: the worker's line_done says the pause before the line and whether its cut was forced."""
+    sent: list[dict[str, object]] = []
+
+    def handle(r: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(r.content))
+        return httpx.Response(201)
+
+    p = Pipeline([lambda _a, _p: Line("ok", "en")], api(httpx.MockTransport(handle)), size=1)
+    u = Utterance("r1", 7, np.ones(16000, np.float32), time.monotonic(), gap_s=0.0, forced=True)
+    with structlog.testing.capture_logs() as logs:
+        await p.process(u)
+        await p.process(utterance())
+    done = [(e["gap_s"], e["forced"]) for e in logs if e["event"] == "line_done"]
+    assert done == [(0.0, True), (None, False)]
+    assert [m.get("gap_s") for m in sent] == [0.0, None]
+
+
 async def test_retries_only_what_was_never_sent(monkeypatch: pytest.MonkeyPatch) -> None:
     real_sleep = asyncio.sleep
     monkeypatch.setattr(asyncio, "sleep", lambda _s: real_sleep(0))

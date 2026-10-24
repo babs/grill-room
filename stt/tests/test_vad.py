@@ -4,7 +4,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from grill_stt.vad import SR, WINDOW, Audio, Segmenter, Silero
+from grill_stt.vad import SR, WINDOW, Audio, Cut, Probs, Segmenter, Silero
 
 
 def loudness(windows: Audio) -> npt.NDArray[np.float32]:
@@ -19,6 +19,24 @@ def tone(seconds: float, level: float = 0.5) -> Audio:
 
 def silence(seconds: float) -> Audio:
     return np.zeros(int(seconds * SR), np.float32)
+
+
+def scripted(probs: list[float]) -> tuple[Probs, Audio]:
+    """A model that gives each window its scripted probability: window i holds the value i."""
+    table = np.asarray(probs, np.float32)
+    audio = np.repeat(np.arange(len(probs), dtype=np.float32), WINDOW)
+    return lambda w: table[w[:, 0].astype(int)], audio
+
+
+def cuts(seg: Segmenter, audio: Audio, frame: int = 160) -> list[Cut]:
+    out: list[Cut] = []
+    for i in range(0, len(audio), frame):
+        out += seg.feed_timed(audio[i : i + frame])
+    return out + seg.flush_timed()
+
+
+def window_ids(c: Cut) -> list[int]:
+    return [int(v) for v in c.audio[::WINDOW]]
 
 
 def feed(seg: Segmenter, audio: Audio, frame: int = 160) -> list[Audio]:
@@ -94,17 +112,132 @@ def test_silero_cuts_the_fixture_after_each_sentence(speech: tuple[Audio, list[d
 def test_each_cut_says_how_long_ago_its_speech_ended() -> None:
     """A pause cut waited min_silence_ms after the speech; a forced cut at max_speech_s waited none,
     and a flush says how long the track was silent: the line's latency counts from there."""
-    seg = Segmenter(loudness)
-    cuts: list[tuple[Audio, float]] = []
-    audio = np.concatenate([tone(1), silence(0.9), tone(16)])
-    for i in range(0, len(audio), 160):
-        cuts += seg.feed_timed(audio[i : i + 160])
-    cuts += seg.flush_timed()
-    assert [round(s, 2) for _, s in cuts] == [0.8, 0.0, 0.0]
+    out = cuts(Segmenter(loudness), np.concatenate([tone(1), silence(0.9), tone(16)]))
+    assert [round(c.silent_s, 2) for c in out] == [0.8, 0.0, 0.0]
     seg = Segmenter(loudness)
     seg.feed_timed(np.concatenate([tone(1), silence(0.3)]))
-    ((_, tail),) = seg.flush_timed()
-    assert abs(tail - 0.3) < 0.07  # two 32 ms windows
+    (tail,) = seg.flush_timed()
+    assert abs(tail.silent_s - 0.3) < 0.07  # two 32 ms windows
+
+
+S, N = 0.9, 0.1
+
+
+def test_gap_is_the_pause_between_two_utterances() -> None:
+    """018-AC1: from the end of one utterance's speech to the start of the next's, to the window;
+    none before the first."""
+    probs, audio = scripted([S] * 20 + [N] * 30 + [S] * 20 + [N] * 30)
+    out = cuts(Segmenter(probs), audio)
+    assert [(c.gap_s, c.forced) for c in out] == [(None, False), (30 * WINDOW / SR, False)]
+    out = cuts(Segmenter(loudness), np.concatenate([tone(1), silence(1.5), tone(1), silence(0.9)]))
+    gap = out[1].gap_s
+    assert gap is not None and abs(gap - 1.5) <= WINDOW / SR
+
+
+def test_gap_is_zero_after_a_forced_cut() -> None:
+    """018-AC1: a forced cut leaves the speaker mid-sentence: the next utterance follows with no gap."""
+    for search in (0.0, 1.0):
+        out = cuts(
+            Segmenter(loudness, max_speech_s=2, cut_search_s=search), np.concatenate([tone(5), silence(0.9)])
+        )
+        assert [(c.gap_s, c.forced) for c in out] == [(None, True), (0.0, True), (0.0, False)], search
+
+
+@pytest.mark.parametrize("search", [0.0, 3.0])
+def test_a_long_pause_after_a_forced_cut_is_a_real_gap(search: float) -> None:
+    """018-AC1: a cap reached in the speaker's pause is no continuation: the gap after it counts from
+    the forced utterance's last voiced window, for the hard cut and for the quiet one."""
+    out = cuts(Segmenter(loudness, cut_search_s=search), np.concatenate([tone(14.7), silence(10), tone(1)]))
+    assert [c.forced for c in out] == [True, False]
+    gap = out[1].gap_s
+    assert gap is not None and abs(gap - 10) <= 2 * WINDOW / SR
+
+
+def test_a_dropped_tail_after_a_forced_cut_leaves_the_real_gap() -> None:
+    """018-AC1: the quiet cut leaves 5 voiced windows behind, too few to post; the next line's gap
+    counts from the forced utterance's last voiced window, not 0."""
+    probs, audio = scripted([S] * 45 + [0.0] + [S] * 5 + [N] * 111 + [S] * 20 + [N] * 30)
+    out = cuts(Segmenter(probs, max_speech_s=2, cut_search_s=1), audio)
+    assert [(window_ids(c)[0], c.forced, c.gap_s) for c in out] == [
+        (0, True, None),
+        (162 - 5, False, (162 - 45) * WINDOW / SR),
+    ]
+
+
+def test_the_rest_of_a_quiet_cut_keeps_its_trailing_silence() -> None:
+    """018-AC3: the rest after the cut window already holds 10 silent windows: the pause cut that
+    follows comes 15 windows later, not 25, as it would have without the forced cut."""
+    probs, audio = scripted([S] * 36 + [0.0] + [S] * 15 + [N] * 50)
+    seg = Segmenter(probs, max_speech_s=2, cut_search_s=1)
+    at: list[tuple[int, Cut]] = []
+    for i in range(0, len(audio), WINDOW):
+        at += [(i // WINDOW, c) for c in seg.feed_timed(audio[i : i + WINDOW])]
+    assert [(i, window_ids(c)[0], len(window_ids(c)), c.silent_s) for i, c in at] == [
+        (61, 0, 37, 25 * WINDOW / SR),
+        (76, 37, 15 + 6, 0.8),
+    ]
+
+
+def test_a_flush_forgets_the_audio_before_it() -> None:
+    """018-AC1: after a flush (track end, mute) the next utterance holds only audio fed after it: no
+    pre-roll and no partial window from before."""
+    probs, audio = scripted([N] * 10 + [S] * 20 + [N] * 30)
+    seg = Segmenter(probs)
+    assert seg.feed_timed(audio[: 9 * WINDOW + 100]) == [] and seg.flush_timed() == []
+    assert [window_ids(c) for c in cuts(seg, audio[10 * WINDOW :])] == [list(range(10, 36))]
+
+
+def test_forget_gap_leaves_the_next_utterance_without_one() -> None:
+    """018-AC1: after a mute the pause is unknown: no gap, even for the utterance in progress, whose
+    audio stays whole."""
+    probs, audio = scripted([S] * 20 + [N] * 30 + [S] * 20 + [N] * 30)
+    seg = Segmenter(probs)
+    first = seg.feed_timed(audio[: 60 * WINDOW])
+    seg.forget_gap()
+    second = seg.feed_timed(audio[60 * WINDOW :])
+    assert [(window_ids(c), c.gap_s) for c in first + second] == [
+        (list(range(26)), None),
+        (list(range(45, 76)), None),
+    ]
+
+
+def test_no_gap_after_the_track_ends() -> None:
+    """018-AC1: the first utterance after a resume has no gap; the worker flushes, or starts afresh."""
+    seg = Segmenter(loudness)
+    assert len(cuts(seg, np.concatenate([tone(1), silence(0.2)]))) == 1
+    (c,) = cuts(seg, np.concatenate([silence(0.5), tone(1), silence(0.9)]))
+    assert c.gap_s is None
+
+
+# A 2 s cap (62 windows) and a 1 s search (31): the cut at the cap looks at windows 31 to 61.
+DIPS = [S] * 20 + [N] + [S] * 24 + [0.2] + [S] * 4 + [0.3] + [S] * 30 + [N] * 40
+
+
+def test_the_forced_cut_lands_on_the_quietest_window_of_the_search() -> None:
+    """018-AC3: the cut at the cap lands on the lowest probability of the last cut_search_s, not on
+    the deeper dip before it; the windows after it open the next utterance, none lost or repeated."""
+    probs, audio = scripted(DIPS)
+    out = cuts(Segmenter(probs, max_speech_s=2, cut_search_s=1), audio)
+    assert [(c.gap_s, c.forced) for c in out] == [(None, True), (0.0, False)]
+    first, second = (window_ids(c) for c in out)
+    assert first == list(range(46))
+    assert out[0].silent_s == (61 - 45) * WINDOW / SR
+    # The second keeps pad_ms of its trailing silence, as any pause cut.
+    assert first + second == list(range(81 + 6))
+
+
+def test_a_float32_probability_at_a_threshold_is_on_it() -> None:
+    """The model's 0.35 is not below neg_threshold 0.35: the device port compares the same way."""
+    probs, audio = scripted([N] * 4 + [0.5] * 14 + [0.35] * 30 + [0.3499] * 25)
+    assert [window_ids(c) for c in cuts(Segmenter(probs), audio)] == [list(range(54))]
+
+
+def test_no_cut_search_is_the_hard_cut() -> None:
+    """018-AC3: cut_search_s 0 cuts at the cap, as before 018."""
+    probs, audio = scripted(DIPS)
+    out = cuts(Segmenter(probs, max_speech_s=2, cut_search_s=0), audio)
+    assert [window_ids(c) for c in out] == [list(range(62)), list(range(62, 81 + 6))]
+    assert [c.silent_s for c in out] == [0.0, 0.8]
 
 
 def test_a_reset_silero_judges_as_a_new_one(speech: tuple[Audio, list[dict[str, Any]]]) -> None:

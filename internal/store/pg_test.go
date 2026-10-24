@@ -105,7 +105,7 @@ func TestConcurrentOpensMakeOneSchema(t *testing.T) {
 	}
 	_ = s.Close()
 	want := snapshot(t, ref)
-	if !slices.Contains(want, "schema_version |  | 50") || !slices.Contains(want, "rows pronunciations 130") || !slices.Contains(want, "rows starters 4") {
+	if !slices.Contains(want, "schema_version |  | 51") || !slices.Contains(want, "rows pronunciations 130") || !slices.Contains(want, "rows starters 4") {
 		t.Fatalf("a single open made:\n%s", strings.Join(want, "\n"))
 	}
 
@@ -368,7 +368,7 @@ func TestMigrate(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = s.Close()
-	if s, err := Open(newer); err == nil || !strings.Contains(err.Error(), "schema version 99 is newer than this server's 50") {
+	if s, err := Open(newer); err == nil || !strings.Contains(err.Error(), "schema version 99 is newer than this server's 51") {
 		if err == nil {
 			_ = s.Close()
 		}
@@ -630,4 +630,29 @@ func TestOpenTakesCredentialsFromEnv(t *testing.T) {
 		t.Fatalf("ParseConfig(%s) took user %q and a %d-byte password, want %q from PGUSER and PGPASSWORD", u.Redacted(), cfg.User, len(cfg.Password), user)
 	}
 	openAt(t, u.String())
+}
+
+// 018-AC5: migration 51 adds messages.appended_at to a database at version 50, its lines kept.
+func TestMigrateAppendedAt(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	dsn := testDSN(t)
+	s := openAt(t, dsn)
+	p := seed(t, s, "a")
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE messages DROP COLUMN appended_at`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE schema_version SET version = 50`); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	s = openAt(t, dsn)
+	var v int
+	if err := s.db.QueryRowContext(ctx, `SELECT version FROM schema_version`).Scan(&v); err != nil || v != 51 {
+		t.Fatalf("version %d: %v", v, err)
+	}
+	msgs, err := s.Messages(ctx, "a", 0, 10)
+	if err != nil || len(msgs) == 0 || msgs[0].ParticipantID != p.ID || msgs[0].AppendedAt != nil {
+		t.Fatalf("messages after the migration: %+v %v", msgs, err)
+	}
 }

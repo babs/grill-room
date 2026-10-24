@@ -631,7 +631,10 @@ func TestSharedStateErrors(t *testing.T) {
 			_, err := s.DefaultVoices(ctx, "r", func(map[string]bool) string { return "" })
 			return err
 		},
-		"post voice line": func() error { _, err := s.PostVoiceLine(ctx, &Message{}, time.Now(), time.Second, nil); return err },
+		"post voice line": func() error {
+			_, err := s.PostVoiceLine(ctx, &Message{}, time.Now(), time.Second, VoiceJoin{}, nil)
+			return err
+		},
 	} {
 		if err := call(); err == nil || !strings.HasPrefix(err.Error(), want) {
 			t.Errorf("%s: %v", want, err)

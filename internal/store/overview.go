@@ -72,7 +72,7 @@ func (s *Store) RoomOverview(ctx context.Context, roomID string, defaultQuota in
 // roomOverviews lists the rooms, or only room roomID when set.
 func (s *Store) roomOverviews(ctx context.Context, defaultQuota int64, roomID string) ([]RoomOverview, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT r.id, r.name, r.created_at, COALESCE(r.host_participant_id, 0), COALESCE(r.quota_bytes, 0), COALESCE(r.quota_bytes, ?),
-		COALESCE((SELECT ts FROM messages WHERE room_id = r.id ORDER BY id DESC LIMIT 1), ''),
+		COALESCE((SELECT COALESCE(appended_at, ts) FROM messages WHERE room_id = r.id ORDER BY id DESC LIMIT 1), ''),
 		(SELECT COUNT(*) FROM participants p WHERE p.room_id = r.id AND p.removed_at IS NULL),
 		(SELECT COUNT(*) FROM room_personas WHERE room_id = r.id),
 		(SELECT COALESCE(SUM(size), 0) FROM uploads WHERE room_id = r.id),
@@ -152,7 +152,7 @@ func (s *Store) Profiles(ctx context.Context) ([]AdminProfile, error) {
 		COALESCE((SELECT joined_at FROM participants WHERE profile_id = p.id ORDER BY id DESC LIMIT 1), ''),
 		(SELECT COUNT(*) FROM skills WHERE profile_id = p.id OR publisher_id = p.id), p.max_rooms,
 		(SELECT COUNT(*) FROM rooms WHERE creator_profile_id = p.id),
-		COALESCE((SELECT m.ts FROM messages m WHERE m.id = (SELECT MAX(m2.id) FROM participants pa
+		COALESCE((SELECT COALESCE(m.appended_at, m.ts) FROM messages m WHERE m.id = (SELECT MAX(m2.id) FROM participants pa
 			JOIN messages m2 ON m2.participant_id = pa.id WHERE pa.profile_id = p.id)), '')
 		FROM profiles p ORDER BY p.id`)
 	if err != nil {

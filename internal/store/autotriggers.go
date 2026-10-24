@@ -6,12 +6,24 @@ import (
 	"time"
 )
 
-// DueVoicePersonas lists the room's personas whose "every N voice lines" is due: N voice lines
-// since their latest turn started (006-AC18).
-func (s *Store) DueVoicePersonas(ctx context.Context, roomID string) ([]RoomPersona, error) {
-	return s.duePersonas(ctx, `WHERE p.room_id = ? AND p.every_voice IS NOT NULL AND p.pending = 0
-		AND (SELECT COUNT(*) FROM messages m WHERE m.room_id = p.room_id AND m.kind = 'voice' AND m.deleted_at IS NULL
-			AND m.id > p.mark_msg_id) >= p.every_voice ORDER BY p.id`, roomID)
+// VoiceCount is how DueVoicePersonas counts voice paragraphs (018-AC7).
+type VoiceCount struct {
+	// Gap is the paragraph gap; 0 counts every voice message, as before 018.
+	Gap time.Duration
+	// Close is how long after its last line a paragraph is closed.
+	Close time.Duration
+}
+
+// DueVoicePersonas lists the personas of rooms whose "every N voice lines" is due at now: N closed
+// voice paragraphs since their latest turn started (006-AC18). A paragraph is closed once another
+// message follows it or c.Close has passed since its last line (018-AC7). The count stops at N.
+func (s *Store) DueVoicePersonas(ctx context.Context, now time.Time, c VoiceCount, rooms []string) ([]RoomPersona, error) {
+	return s.duePersonas(ctx, `WHERE p.room_id = ANY(?) AND p.every_voice IS NOT NULL AND p.pending = 0
+		AND (SELECT COUNT(*) FROM (SELECT 1 FROM messages m WHERE m.room_id = p.room_id AND m.kind = 'voice' AND m.deleted_at IS NULL
+			AND m.id > p.mark_msg_id AND (CAST(? AS BIGINT) <= 0 OR COALESCE(m.appended_at, m.ts) <= ?
+				OR m.id < (SELECT MAX(id) FROM messages l WHERE l.room_id = p.room_id))
+			ORDER BY m.id LIMIT p.every_voice) c) >= p.every_voice ORDER BY p.room_id, p.id`,
+		rooms, int64(c.Gap), formatTS(now.Add(-c.Close)))
 }
 
 // DueTimerPersonas lists the personas of room, of every room for "", whose "every T minutes" is

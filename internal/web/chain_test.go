@@ -154,6 +154,15 @@ func TestSpeakingAt(t *testing.T) {
 			t.Errorf("line %v old: %v, want %v", age, got, want)
 		}
 	}
+	// 018-AC5: a paragraph begun long ago that grew just now is still being spoken.
+	appended := now.Add(-time.Second)
+	if !speakingAt(&store.Message{TS: now.Add(-time.Hour), AppendedAt: &appended}, now) {
+		t.Error("a paragraph appended 1 s ago: not speaking")
+	}
+	stale := now.Add(-time.Minute)
+	if speakingAt(&store.Message{TS: now.Add(-time.Hour), AppendedAt: &stale}, now) {
+		t.Error("a paragraph last appended 1 min ago: speaking")
+	}
 }
 
 // postBody posts body in the room as tok.

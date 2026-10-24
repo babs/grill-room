@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -192,4 +193,40 @@ func TestProfilesForAdmin(t *testing.T) {
 	if !ps[0].LastActivity.Equal(m.TS) || ps[0].Skills != 2 || ps[1].Skills != 0 {
 		t.Fatalf("after a line and two skills: %+v", ps[0])
 	}
+}
+
+// 018-AC5: a voice paragraph dates a room's and a profile's activity by its last append, not by
+// its first line.
+func TestLastActivityCountsAppends(t *testing.T) {
+	ctx := t.Context()
+	s := openTest(t)
+	p := seed(t, s, "a")
+	t0 := time.Now().UTC().Add(time.Hour)
+	t1 := t0.Add(30 * time.Second)
+	gap := 1.0
+	for i, at := range []time.Time{t0, t1} {
+		m := &Message{RoomID: "a", Kind: KindVoice, ParticipantID: p.ID, Sender: p.Name, Body: "line " + strconv.Itoa(i), Source: VoiceSourceServer}
+		res, err := s.PostVoiceLine(ctx, m, at, time.Second, VoiceJoin{GapS: &gap, MaxGap: 2 * time.Second, MaxChars: 100}, nil)
+		if err != nil || res != []VoiceStored{VoiceInserted, VoiceAppended}[i] {
+			t.Fatalf("line %d: %v %v", i, res, err)
+		}
+	}
+	o, err := s.RoomOverview(ctx, "a", 0)
+	if err != nil || !o.LastActivity.Equal(t1) {
+		t.Fatalf("room: %v %v, want %v", o.LastActivity, err, t1)
+	}
+	ps, err := s.Profiles(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pr := range ps {
+		if pr.ID != p.ProfileID {
+			continue
+		}
+		if !pr.LastActivity.Equal(t1) || len(pr.Rooms) != 1 || !pr.Rooms[0].LastActivity.Equal(t1) {
+			t.Fatalf("profile %v, rooms %+v, want %v", pr.LastActivity, pr.Rooms, t1)
+		}
+		return
+	}
+	t.Fatal("no profile for the participant")
 }

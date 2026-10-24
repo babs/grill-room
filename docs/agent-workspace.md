@@ -84,7 +84,7 @@ The prompt opens with who is in the room, from one template, `internal/web/prese
   | a human's note message naming `@persona` | `@mention in note #<id> by <name>: "<the start of the message>"`, cut with `…` so the line fits |
   | another persona's synthesis naming it | `called by @<persona>` |
   | its "every N rounds" trigger | `every <N> rounds` |
-  | its "every N voice lines" trigger, N voice lines after its latest turn started | `every <N> voice lines` |
+  | its "every N voice lines" trigger, N closed voice paragraphs after its latest turn started (a paragraph closes when another message follows it, or 20 s after its last line, `GRILL_ROOM_VOICE_PARAGRAPH_CLOSE`), checked on each voice line and, with someone here and paragraphs on, on the trigger tick | `every <N> voice lines` |
   | its "every T minutes" trigger, T minutes after its latest turn started, with a voice or text line since and someone here | `every <T> minutes` |
   | "Watches the notes": note messages by others since its latest turn started, in threads naming no persona, the last one 20 s old (`GRILL_ROOM_NOTES_WATCH_DELAY`) | `new notes: #<id>, #<id>`, ending `, …` past what fits the line |
   | a re-run after a conflict | `re-run after a conflict on <doc>` |

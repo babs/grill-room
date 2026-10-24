@@ -163,6 +163,8 @@ type Message struct {
 	Spoken    string     `json:"spoken,omitempty"`
 	EditedAt  *time.Time `json:"edited_at,omitempty"`
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+	// AppendedAt is when a voice paragraph last grew by a line of its speaker (018-AC5).
+	AppendedAt *time.Time `json:"appended_at,omitempty"`
 	// ChangeSeq orders the room's edits and deletes: each one sets it past every other in the room.
 	ChangeSeq int64 `json:"change_seq,omitempty"`
 	// TurnID is the turn whose synthesis, failure or stop the message tells (005-AC4).
@@ -282,6 +284,8 @@ UPDATE turns SET delivered = 1 WHERE status = 'running';`,
 	// 50 (010-AC23): a participant who turned off the transcription of their own voice.
 	`ALTER TABLE participants ADD COLUMN stt_off SMALLINT NOT NULL DEFAULT 0 CHECK (stt_off IN (0, 1));
 CREATE INDEX participants_stt_off ON participants(room_id) WHERE stt_off = 1;`,
+	// 51 (018-AC5): the last time a voice paragraph grew by a line.
+	`ALTER TABLE messages ADD COLUMN appended_at TEXT;`,
 }
 
 // CreateDatabaseOptions makes a database that sorts as the server needs (017-AC6).
@@ -1105,7 +1109,7 @@ func (s *Store) LastVoice(ctx context.Context, roomID string) (*Message, error) 
 const (
 	messageFields = `id, ts, room_id, kind, COALESCE(participant_id, 0), sender, body, COALESCE(html, ''), model, edited_at, deleted_at, change_seq,
 		COALESCE(persona_id, 0), effort, COALESCE((SELECT badge FROM room_personas WHERE id = messages.persona_id), ''),
-		COALESCE((SELECT colour FROM room_personas WHERE id = messages.persona_id), ''), req_model, req_effort, model_note, model_mismatch, COALESCE(turn_id, 0), COALESCE(source, ''), spoken,
+		COALESCE((SELECT colour FROM room_personas WHERE id = messages.persona_id), ''), req_model, req_effort, model_note, model_mismatch, COALESCE(turn_id, 0), COALESCE(source, ''), spoken, appended_at,
 		(SELECT jsonb_build_object('domain', domain, 'persona', persona, 'count', count, 'decision', decision, 'pending', pending_scope, 'error', pending_error,
 			'dismissed_by', dismissed_by)::text
 			FROM blocked_requests WHERE message_id = messages.id)`
@@ -1132,9 +1136,9 @@ func (s *Store) queryMessages(ctx context.Context, where string, args ...any) ([
 func scanMessage(sc scanner, extra ...any) (*Message, error) {
 	var m Message
 	var ts string
-	var edited, deleted, blocked sql.NullString
+	var edited, deleted, appended, blocked sql.NullString
 	err := sc.Scan(append([]any{&m.ID, &ts, &m.RoomID, &m.Kind, &m.ParticipantID, &m.Sender, &m.Body, &m.HTML, &m.Model, &edited, &deleted, &m.ChangeSeq,
-		&m.PersonaID, &m.Effort, &m.Badge, &m.Colour, &m.ReqModel, &m.ReqEffort, &m.ModelNote, &m.ModelMismatch, &m.TurnID, &m.Source, &m.Spoken, &blocked}, extra...)...)
+		&m.PersonaID, &m.Effort, &m.Badge, &m.Colour, &m.ReqModel, &m.ReqEffort, &m.ModelNote, &m.ModelMismatch, &m.TurnID, &m.Source, &m.Spoken, &appended, &blocked}, extra...)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -1142,7 +1146,7 @@ func scanMessage(sc scanner, extra ...any) (*Message, error) {
 		return nil, fmt.Errorf("scan message: %w", err)
 	}
 	m.TS = parseTS(ts)
-	m.EditedAt, m.DeletedAt = parseNullTS(edited), parseNullTS(deleted)
+	m.EditedAt, m.DeletedAt, m.AppendedAt = parseNullTS(edited), parseNullTS(deleted), parseNullTS(appended)
 	if blocked.Valid {
 		m.Blocked = &Blocked{}
 		if err := json.Unmarshal([]byte(blocked.String), m.Blocked); err != nil {

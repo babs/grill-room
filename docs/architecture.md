@@ -95,20 +95,21 @@ flowchart LR
 
 A participant on a capable desktop may tick "Transcribe on this device" (spec 010). Their browser then transcribes their own microphone and the worker skips their track.
 
-- Lines: the page posts each utterance to `POST /api/rooms/{room}/voice/device-lines` with its session. The server stores it as a voice line from the session's participant with `source=device`; worker lines get `source=server`. Both count for voice triggers.
+- Lines: the page posts each utterance to `POST /api/rooms/{room}/voice/device-lines` with its session. The server stores it as a voice line from the session's participant with `source=device`; worker lines get `source=server`. Both count for voice triggers, once their paragraph is closed (018-AC7).
 - Handover:
   1. The page's transcription worker sends `{"tab", "device_stt": true}` to `/presence` every 1 s while device mode is on and the mic is tapped or muted, one beat at a time. It touches no presence or audio state.
   2. The server holds a per-participant device flag while any of their tabs beat in the last 3 s.
   3. The worker heartbeats every 2 s. The answer lists the flagged participants of the rooms it named, and those who turned the transcription of their voice off (`participants.stt_off`, 010-AC23): `{"device": {"<room>": [ids]}}`.
   4. The worker stays subscribed to a flagged track and discards its audio.
   5. `device_stt: false` (toggle off, fallback) or a `gone` beat (tab closed) drops the flag at once, so the worker resumes within one heartbeat. A crashed or frozen page or a dead mic tap stops the beats: the flag lapses after 3 s and the worker resumes within about 5 s.
-- Dedupe: around a handover both sides may transcribe one utterance. A line is dropped, answered `200 {"deduped": true}`, when the same participant has a line from the other source stored in the last 5 s at 0.8 similarity or more (Levenshtein over lowercase letters and digits, accents dropped). Lines from one source are never dropped.
+- Dedupe: around a handover both sides may transcribe one utterance. A line is dropped, answered `200 {"deduped": true}`, when the same participant has a line from the other source stored in the last 5 s at 0.8 similarity or more (Levenshtein over lowercase letters and digits, accents dropped). A new line of 2 words or more is also compared with every run of the other message's words as long as itself, give or take one word, and a paragraph's 5 s run from its last append: a paragraph that grew still catches the copy of any of its lines (018-AC6). A trigram count rules out most runs before the Levenshtein, which runs under the write lock. Lines from one source are never dropped.
 - The flag lives in the `presence` table every pod reads. The repeat check and the insert run in one transaction (`PostVoiceLine`), so one utterance posted to two pods at once is stored once.
 
 | Metric (room server) | What it says |
 |---|---|
 | `grill_room_device_stt_participants` | participants whose device transcribes them now; the leader's value, 0 on the other pods |
 | `grill_room_voice_lines_total{source}` | voice lines stored, `device` or `server` |
+| `grill_room_voice_lines_appended_total{source}` | voice lines joined to their speaker's open paragraph; also counted in `grill_room_voice_lines_total` |
 | `grill_room_voice_lines_deduped_total{source}` | lines dropped as a repeat of the other source's, by the dropped line's source |
 
 ## Persona voices, TL;DR
