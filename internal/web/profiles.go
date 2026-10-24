@@ -113,7 +113,7 @@ func secure(r *http.Request) bool {
 // setProfileCookie scopes the profile session to the whole site, unlike a room's participant
 // cookie: the profile follows its person from room to room.
 func setProfileCookie(w http.ResponseWriter, r *http.Request, tok string) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure follows the request scheme: plain-HTTP dev and tests would lose the cookie
 		Name:     profileCookie,
 		Value:    tok,
 		Path:     "/",

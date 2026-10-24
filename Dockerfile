@@ -8,7 +8,7 @@ FROM scratch AS daemon-dist
 # supervisors too old for this one's workers (docs/daemon-protocol.md).
 FROM scratch AS daemon-prev
 
-FROM golang:1.26-bookworm AS builder
+FROM golang:1.27-bookworm AS builder
 WORKDIR /src
 # go.sum* — glob, not a typo: a stdlib-only module has no go.sum and the build would fail hard.
 COPY go.mod go.sum* ./

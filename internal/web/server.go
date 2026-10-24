@@ -1044,7 +1044,7 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	}
 	s.bus.Notify(m.RoomID)
 	s.log.Info("participant_joined", zap.String("room", p.RoomID), zap.Int64("participant", p.ID), zap.Int64("invite", p.InviteID))
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure follows the request scheme: plain-HTTP dev and tests would lose the cookie
 		Name:     cookieName,
 		Value:    tok,
 		Path:     "/api/rooms/" + p.RoomID,

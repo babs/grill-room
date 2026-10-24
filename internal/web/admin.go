@@ -165,7 +165,7 @@ func (s *Server) adminPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func setAdminCookie(w http.ResponseWriter, r *http.Request, tok string, maxAge int) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure follows the request scheme: plain-HTTP dev and tests would lose the cookie
 		Name:     adminCookie,
 		Value:    tok,
 		Path:     adminCookiePath,
