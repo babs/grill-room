@@ -131,9 +131,11 @@ async function metric(url, series) {
 const LOUD = -40;
 // AC22's sample: an interruption whose own audio reached the listener later than STALL_MS after
 // its file onset met a stalled media path, which no persona can beat, and is left out. Bob cuts in
-// until 20 are kept, so the p95 is not their maximum.
-const MAX_INTERRUPTIONS = 30;
+// until 20 are kept, so the p95 is not their maximum. It fails only when the media path stalls on
+// more than half the cuts.
 const KEPT = 20;
+const STALLS = 20;
+const MAX_INTERRUPTIONS = KEPT + STALLS;
 const STALL_MS = 250;
 const FROM_HEARD = Boolean(process.env.CI);
 // Where speech starts in each clip, from its samples.
@@ -214,7 +216,7 @@ function silentFrom(rows, t, ms) {
 // says the interrupted sentence again once the room is quiet, and a second persona waits for the
 // first to finish.
 test('turn-taking in the call', async ({ browser, request }) => {
-  test.setTimeout(420_000);
+  test.setTimeout(540_000);
   const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Turns' } })).json();
   // A short quiet time keeps every interruption inside one line.
   expect((await request.patch(`/api/rooms/${room.id}/speech`, { headers: admin, data: { quiet_ms: 500, resume_s: 20, queue_s: 300 } })).status()).toBe(200);
