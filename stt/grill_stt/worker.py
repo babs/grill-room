@@ -237,10 +237,8 @@ class Worker:
 
         def mute() -> None:
             # 018-AC1: a muted track may send no frames, so the pause cannot be measured: send no gap.
-            if not skipped and (room, participant_id) not in self._device:
-                seg.forget_gap()
+            seg.forget_gap()
 
-        self._mutes[sid] = mute
         try:
             vad = Silero()
 
@@ -269,6 +267,7 @@ class Worker:
             # Speech in progress when the flag comes is dropped: the device's capture predates its flag.
             seg = segmenter()
             skipped = False
+            self._mutes[sid] = mute
             async for ev in stream:
                 if (room, participant_id) in self._device:
                     skipped = True

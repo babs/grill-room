@@ -70,6 +70,10 @@ type Options struct {
 	// NotesWatchDelay is how long the notes watcher waits after the last new note message; 0 means
 	// DefaultNotesWatchDelay (009-AC32).
 	NotesWatchDelay time.Duration
+	// VoiceParagraphGap is the pause that ends a voice paragraph; 0 stores every line as a message
+	// (018-AC4). VoiceParagraphMaxChars bounds a paragraph; 0 means DefaultVoiceParagraphMaxChars.
+	VoiceParagraphGap      time.Duration
+	VoiceParagraphMaxChars int
 	// MaxResultBytes bounds a turn result a daemon posts; 0 means 32 MB.
 	MaxResultBytes int64
 	// Release is the daemon release handed out to hosts; nil offers no download.

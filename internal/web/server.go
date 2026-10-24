@@ -117,8 +117,9 @@ type Server struct {
 	pluginFetches chan struct{}
 	// device is the device transcription offer, nil when not offered (010-AC5).
 	device *deviceSTT
-	// voiceLines and voiceDeduped count the voice lines stored and dropped, by VoiceSources.
-	voiceLines, voiceDeduped map[string]*atomic.Int64
+	// voiceLines, voiceDeduped and voiceAppended count the voice lines stored, dropped and joined to
+	// a paragraph, by VoiceSources.
+	voiceLines, voiceDeduped, voiceAppended map[string]*atomic.Int64
 	// routes are the patterns Handler registered; mux routes them and gate is the token gate in
 	// front of it, which MCP tools send their sub-requests through.
 	routes   []string
@@ -142,6 +143,9 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	}
 	if opts.NotesWatchDelay <= 0 {
 		opts.NotesWatchDelay = DefaultNotesWatchDelay
+	}
+	if opts.VoiceParagraphMaxChars <= 0 {
+		opts.VoiceParagraphMaxChars = DefaultVoiceParagraphMaxChars
 	}
 	if opts.MagicLinkTTL <= 0 {
 		opts.MagicLinkTTL = DefaultMagicLinkTTL
@@ -169,7 +173,7 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 		people: newPeople(b.Store, log), stt: newSTTWorkers(b.Store, log), clients: clients{m: map[int64]clientSeen{}},
 		now: time.Now, lease: time.Now, fallbacks: fallbackCounters(), turnWait: b.Store.LockTimeout(),
 		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}, pushClient: opts.PushClient,
-		pluginFetches: make(chan struct{}, maxPluginFetches), voiceLines: sourceCounters(), voiceDeduped: sourceCounters(), mcpCalls: newMCPCounters()}
+		pluginFetches: make(chan struct{}, maxPluginFetches), voiceLines: sourceCounters(), voiceDeduped: sourceCounters(), voiceAppended: sourceCounters(), mcpCalls: newMCPCounters()}
 	keys := &rateKeys{st: b.Store}
 	s.magicLimit, s.loginLimit = newLimiter(keys, "magic", magicWindow, log), newLimiter(keys, "login", loginWindow, log)
 	s.device = loadDeviceSTT(opts, log)

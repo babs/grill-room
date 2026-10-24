@@ -837,10 +837,11 @@ async def test_a_mute_forgets_the_gap_and_keeps_the_audio(monkeypatch: pytest.Mo
     await a.aclose()
 
 
-async def test_a_mute_of_another_track_or_a_device_speaker_changes_nothing(
+async def test_a_mute_of_another_track_changes_nothing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """018-AC1: only the muted track forgets its gap, and not while the device transcribes the speaker."""
+    """018-AC1: only the muted track forgets its gap; forgetting it while the device transcribes the
+    speaker is harmless, and the line after the flag clears has no gap."""
     w, a, heard, mute, forgot = await muted_room(monkeypatch)
     a.frames.put_nowait(speech(1) + pause())
     await settle(lambda: len(heard) == 1)
@@ -850,5 +851,34 @@ async def test_a_mute_of_another_track_or_a_device_speaker_changes_nothing(
     assert heard[1].gap_s is not None and forgot == []
     w.flag(frozenset({("r1", 7)}))
     mute("TR_a")
-    assert forgot == []
+    assert forgot == [1]
+    w.flag(frozenset())
+    a.frames.put_nowait(speech(1) + pause())
+    await settle(lambda: len(heard) == 3)
+    assert heard[2].gap_s is None
     await a.aclose()
+
+
+async def test_a_mute_reaches_the_listener_of_a_resubscribed_track(monkeypatch: pytest.MonkeyPatch) -> None:
+    """018-AC1: once a resubscription under the same sid closed the old stream, the old listener's
+    cleanup leaves the new listener's mute handler in place."""
+    w, old, heard, mute, forgot = await muted_room(monkeypatch)
+    old.frames.put_nowait(speech(1) + pause())
+    await settle(lambda: len(heard) == 1)
+    base = tracks()
+    subscribe(w, "TR_a", "7")
+    await settle(lambda: old.closed)
+    new = cast(FakeStream, w._streams["TR_a"][1])
+    assert new is not old
+    new.frames.put_nowait(speech(1) + pause())
+    await settle(lambda: len(heard) == 2)
+    await settle(lambda: tracks() == base)
+    new.frames.put_nowait(speech(1) + pause())
+    await settle(lambda: len(heard) == 3)
+    assert heard[2].gap_s is not None
+    mute("TR_a")
+    assert forgot == [1]
+    new.frames.put_nowait(speech(1) + pause())
+    await settle(lambda: len(heard) == 4)
+    assert heard[3].gap_s is None
+    await new.aclose()

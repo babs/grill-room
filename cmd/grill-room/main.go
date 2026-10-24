@@ -102,6 +102,10 @@ type Config struct {
 	TurnTimeout time.Duration
 	// NotesWatchDelay is how long the notes watcher waits after the last new note message.
 	NotesWatchDelay time.Duration
+	// VoiceParagraphGap is the pause that ends a voice paragraph, 0 for one message per line;
+	// VoiceParagraphMaxChars bounds a paragraph (018-AC4).
+	VoiceParagraphGap      time.Duration
+	VoiceParagraphMaxChars int
 	// DaemonDir holds the daemon release `make release` writes; empty offers no download.
 	DaemonDir string
 	// DaemonPrevDir holds the previous release, for supervisors too old for this one's workers;
@@ -141,8 +145,12 @@ func loadConfig() (Config, error) {
 	}
 	maxImport, err8 := strconv.ParseInt(getEnv("GRILL_ROOM_MAX_IMPORT_MB", strconv.Itoa(web.DefaultMaxImportBytes>>20)), 10, 64)
 	notesDelay, err11 := time.ParseDuration(getEnv("GRILL_ROOM_NOTES_WATCH_DELAY", web.DefaultNotesWatchDelay.String()))
+	paraGap, err12 := time.ParseDuration(getEnv("GRILL_ROOM_VOICE_PARAGRAPH_GAP", web.DefaultVoiceParagraphGap.String()))
+	paraChars, err13 := strconv.Atoi(getEnv("GRILL_ROOM_VOICE_PARAGRAPH_MAX_CHARS", strconv.Itoa(web.DefaultVoiceParagraphMaxChars)))
 	return Config{
-		NotesWatchDelay: notesDelay,
+		NotesWatchDelay:        notesDelay,
+		VoiceParagraphGap:      paraGap,
+		VoiceParagraphMaxChars: paraChars,
 		SMTP: mail.SMTP{
 			Addr:     os.Getenv("GRILL_ROOM_SMTP_ADDR"),
 			From:     os.Getenv("GRILL_ROOM_SMTP_FROM"),
@@ -180,7 +188,7 @@ func loadConfig() (Config, error) {
 		DaemonPrevDir:     os.Getenv("GRILL_ROOM_DAEMON_PREV_DIR"),
 		SandboxImage:      os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
 		DeviceSTTModelDir: os.Getenv("GRILL_ROOM_DEVICE_STT_MODEL_DIR"),
-	}, errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9, err10, err11)
+	}, errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9, err10, err11, err12, err13)
 }
 
 // Validate rejects a configuration the server cannot run with.
@@ -209,6 +217,12 @@ func (c Config) Validate() error {
 	}
 	if c.NotesWatchDelay < time.Second || c.NotesWatchDelay > time.Hour {
 		return fmt.Errorf("GRILL_ROOM_NOTES_WATCH_DELAY %s: want 1s to 1h", c.NotesWatchDelay)
+	}
+	if c.VoiceParagraphGap < 0 {
+		return fmt.Errorf("GRILL_ROOM_VOICE_PARAGRAPH_GAP %s: want 0 or more", c.VoiceParagraphGap)
+	}
+	if c.VoiceParagraphMaxChars < 1 || c.VoiceParagraphMaxChars > web.MaxBodyLen {
+		return fmt.Errorf("GRILL_ROOM_VOICE_PARAGRAPH_MAX_CHARS %d: want 1 to %d", c.VoiceParagraphMaxChars, web.MaxBodyLen)
 	}
 	if c.PandocTimeout <= 0 {
 		return fmt.Errorf("GRILL_ROOM_PANDOC_TIMEOUT %s: want a positive duration", c.PandocTimeout)
@@ -429,28 +443,30 @@ func run() error {
 	// Run retries with a backoff of 1 s to 5 s, which bounds these lines.
 	b.OnListenError = func(err error) { logger.Warn("listen_failed", zap.Error(err)) }
 	srv := web.New(b, hash, cfg.PublicURL, web.Options{
-		TurnTimeout:        cfg.TurnTimeout,
-		NotesWatchDelay:    cfg.NotesWatchDelay,
-		MaxUploadBytes:     cfg.MaxUploadMB << 20,
-		MaxRoomBytes:       cfg.MaxRoomMB << 20,
-		MaxAttachmentBytes: cfg.MaxAttachmentMB << 20,
-		MaxImportBytes:     cfg.MaxImportMB << 20,
-		ToMarkdown:         convert.NewPandoc(cfg.Pandoc, cfg.PandocTimeout).ToMarkdown,
-		Voice:              cfg.voice(),
-		TTSTokenHash:       cfg.ttsTokenHash(),
-		Release:            release,
-		PrevRelease:        prev,
-		SandboxImage:       cfg.SandboxImage,
-		SendMail:           cfg.sendMail(),
-		MagicLinkTTL:       cfg.MagicLinkTTL,
-		AuditRetention:     cfg.AuditRetention,
-		ClientRetention:    cfg.ClientRetention,
-		TrustedProxies:     cfg.TrustedProxies,
-		PushHosts:          cfg.PushHosts,
-		Version:            Version,
-		StagingDir:         cfg.StagingDir,
-		PluginClient:       testPluginClient(logger),
-		DeviceSTTDir:       cfg.DeviceSTTModelDir,
+		TurnTimeout:            cfg.TurnTimeout,
+		NotesWatchDelay:        cfg.NotesWatchDelay,
+		VoiceParagraphGap:      cfg.VoiceParagraphGap,
+		VoiceParagraphMaxChars: cfg.VoiceParagraphMaxChars,
+		MaxUploadBytes:         cfg.MaxUploadMB << 20,
+		MaxRoomBytes:           cfg.MaxRoomMB << 20,
+		MaxAttachmentBytes:     cfg.MaxAttachmentMB << 20,
+		MaxImportBytes:         cfg.MaxImportMB << 20,
+		ToMarkdown:             convert.NewPandoc(cfg.Pandoc, cfg.PandocTimeout).ToMarkdown,
+		Voice:                  cfg.voice(),
+		TTSTokenHash:           cfg.ttsTokenHash(),
+		Release:                release,
+		PrevRelease:            prev,
+		SandboxImage:           cfg.SandboxImage,
+		SendMail:               cfg.sendMail(),
+		MagicLinkTTL:           cfg.MagicLinkTTL,
+		AuditRetention:         cfg.AuditRetention,
+		ClientRetention:        cfg.ClientRetention,
+		TrustedProxies:         cfg.TrustedProxies,
+		PushHosts:              cfg.PushHosts,
+		Version:                Version,
+		StagingDir:             cfg.StagingDir,
+		PluginClient:           testPluginClient(logger),
+		DeviceSTTDir:           cfg.DeviceSTTModelDir,
 	}, logger)
 	if cfg.SMTP.Addr == "" {
 		logger.Info("email_signin_disabled", zap.String("hint", "set GRILL_ROOM_SMTP_ADDR and GRILL_ROOM_SMTP_FROM to send magic links"))
@@ -560,7 +576,10 @@ func newRegistry(b *bus.Bus, srv *web.Server) *prometheus.Registry {
 			func() float64 { return float64(srv.VoiceLines(source)) }),
 			prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_voice_lines_deduped_total",
 				Help: "Voice lines dropped as a repeat of the other source's line, by the dropped line's source.", ConstLabels: prometheus.Labels{"source": source}},
-				func() float64 { return float64(srv.VoiceLinesDeduped(source)) }))
+				func() float64 { return float64(srv.VoiceLinesDeduped(source)) }),
+			prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_voice_lines_appended_total",
+				Help: "Voice lines joined to their speaker's open paragraph, by source (018-AC9).", ConstLabels: prometheus.Labels{"source": source}},
+				func() float64 { return float64(srv.VoiceLinesAppended(source)) }))
 	}
 	for _, reason := range turn.FallbackReasons {
 		reg.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_workspace_fallbacks_total",

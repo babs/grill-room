@@ -381,7 +381,7 @@ func (s *Store) PurgeEmptyProfiles(ctx context.Context, now time.Time, idle time
 			return nil
 		}, `SELECT p.id, COALESCE(p.uuid, ''), p.created_at,
 			COALESCE((SELECT MAX(joined_at) FROM participants WHERE profile_id = p.id), ''),
-			COALESCE((SELECT m.ts FROM messages m WHERE m.id = (SELECT MAX(m2.id) FROM participants pa
+			COALESCE((SELECT COALESCE(m.appended_at, m.ts) FROM messages m WHERE m.id = (SELECT MAX(m2.id) FROM participants pa
 				JOIN messages m2 ON m2.participant_id = pa.id WHERE pa.profile_id = p.id)), ''),
 			COALESCE((SELECT MAX(created_at) FROM profile_sessions WHERE profile_id = p.id), '')
 			FROM profiles p WHERE p.email IS NULL

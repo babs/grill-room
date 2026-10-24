@@ -252,7 +252,10 @@ function addMessage(m) {
 // replay of a change already shown leaves the line alone, with any edit box open on it.
 function replaceMessage(m) {
   const li = messages.querySelector('li[data-id="' + m.id + '"]');
-  if (li && m.change_seq > Number(li.dataset.seq)) li.replaceWith(renderMessage(m));
+  if (!li || m.change_seq <= Number(li.dataset.seq)) return;
+  li.replaceWith(renderMessage(m));
+  // A voice paragraph grows in place (018-AC5): its new words must not land below the fold.
+  if (pinned) messages.scrollTop = messages.scrollHeight;
 }
 
 // blockedLines are the shown lines of websites a turn was refused, by id: their buttons follow the

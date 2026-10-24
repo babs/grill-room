@@ -39,7 +39,7 @@ const sourceVersion = 46
 var (
 	sinceSource = map[string][]string{
 		"daemon_connections": nil, "daemon_status": nil, "presence": nil, "stt_workers": nil, "tts_pod": nil, "pairings": nil,
-		"tts_lines": nil, "rate_events": nil, "rooms": {"host_moved_line"}, "turns": {"delivered"}, "messages": {"spoken"},
+		"tts_lines": nil, "rate_events": nil, "rooms": {"host_moved_line"}, "turns": {"delivered"}, "messages": {"spoken", "appended_at"},
 		"participants": {"stt_off"},
 	}
 	addedRows = map[string]string{"settings": `key <> 'lexicon_version'`}

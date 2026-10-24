@@ -35,7 +35,7 @@ A speaker's consecutive utterances grow one voice message, live, until a real pa
 - [ ] **AC3** At the speech cap, the cut lands on the window with the lowest speech probability in the last `vad_cut_search_s` seconds (worker `APP_VAD_CUT_SEARCH_S`, default 3). The audio after that window opens the next utterance, with `gap_s` as in AC1. `vad_cut_search_s` 0 keeps today's hard cut. The device segmenter does the same with the default value.
 - [ ] **AC4** A line is appended to its speaker's latest voice message when all hold: `gap_s` is present and below the paragraph gap (`GRILL_ROOM_VOICE_PARAGRAPH_GAP`, default 2.5 s); that message is the room's latest message of any kind; it has the same source; it is neither deleted nor edited by its author; the joined body stays within `GRILL_ROOM_VOICE_PARAGRAPH_MAX_CHARS` (default 1200); no agent turn has read it yet. Otherwise the line is a new message, as today.
 - [ ] **AC5** An append joins the bodies with one space, keeps the message's id and timestamp, sets no `edited_at` and writes no version, bumps `change_seq`, and reaches every browser through the existing `message_edited` stream on every pod within a second.
-- [ ] **AC6** A server line and a device line of the same utterance still store once (010-AC16): the repeat check compares the new line with the tail of the other source's voice messages, not their whole body.
+- [ ] **AC6** A server line and a device line of the same utterance still store once (010-AC16): the repeat check compares the new line with word-aligned stretches of the other source's voice messages, not only their whole body, so a line already inside a paragraph is caught.
 - [ ] **AC7** A paragraph is closed once another message follows it or `GRILL_ROOM_VOICE_PARAGRAPH_GAP` has passed since its last append. "Every N voice lines" counts closed paragraphs only, and is checked on each voice line and on the existing trigger tick.
 - [ ] **AC8** A line posted without `gap_s` (older worker or app) is stored as today.
 - [ ] **AC9** `grill_room_voice_lines_appended_total{source}` counts appends; the worker's `line_done` log carries `gap_s` and whether the cut was forced.
@@ -50,10 +50,10 @@ A speaker's consecutive utterances grow one voice message, live, until a real pa
 - **DoD**: `make stt-test` green with tests for: gap after a pause, gap 0 after a forced cut, quiet cut position, `vad_cut_search_s` 0 = hard cut; `e2e/device-stt.spec.js` extended with the gap and quiet-cut cases and green; `go test ./internal/web/...` green.
 
 ### Phase 2 — Server: append to the open paragraph
-- Work: `PostVoiceLine` decides append vs insert inside its write transaction; env settings; `appended_at` set on append; tail-based repeat check; metric.
+- Work: `PostVoiceLine` decides append vs insert inside its write transaction; env settings; `appended_at` set on append; repeat check over word-aligned stretches (AC6); metric.
 - **Covers**: AC4, AC5, AC6, AC9
-- **Data model impact**: `messages.appended_at` (nullable timestamp), migration on SQLite and PostgreSQL.
-- **DoD**: table-driven store tests for each AC4 condition, red when any one fails; web test: two lines with `gap_s` 1 give one message and one `message_edited` event; dedupe test with a two-line paragraph; `go test ./...` green on both databases.
+- **Data model impact**: `messages.appended_at` (nullable timestamp), PostgreSQL migration 51; dbcopy carries it as a column added since the SQLite source.
+- **DoD**: table-driven store tests for each AC4 condition, red when any one fails; web test: two lines with `gap_s` 1 give one message and one `message_edited` event; dedupe test with a two-line paragraph; touched packages green on PostgreSQL and in the no-PG run.
 
 ### Phase 3 — Triggers count closed paragraphs
 - Work: `DueVoicePersonas` excludes open paragraphs; tick re-checks.
@@ -69,7 +69,7 @@ A speaker's consecutive utterances grow one voice message, live, until a real pa
 
 ## Data model impact (summary)
 
-- `messages.appended_at`: nullable timestamp, last append to a voice paragraph. No backfill.
+- `messages.appended_at`: nullable timestamp, last append to a voice paragraph. PostgreSQL migration 51, no backfill.
 
 ## Open questions
 

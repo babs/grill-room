@@ -29,6 +29,12 @@ const (
 	maxSTTVoices  = 10000
 	maxWorkerName = 64
 	maxEngineName = 32
+	// DefaultVoiceParagraphGap is the pause that ends a voice paragraph (018-AC4).
+	DefaultVoiceParagraphGap = 2500 * time.Millisecond
+	// DefaultVoiceParagraphMaxChars is the length a voice paragraph grows to (018-AC4).
+	DefaultVoiceParagraphMaxChars = 1200
+	// MaxBodyLen bounds a chat line, and so a voice paragraph.
+	MaxBodyLen = maxBodyLen
 	// maxVoiceGap caps a line's gap_s (spec 018): any longer pause ends a paragraph just the same.
 	maxVoiceGap = 3600.0
 	// livekitCallTimeout bounds a kick on revoke or delete, so a LiveKit outage cannot hang the admin.
@@ -242,7 +248,7 @@ func (s *Server) postVoiceLine(w http.ResponseWriter, r *http.Request) {
 	if !ok || sttOff(w, p) {
 		return
 	}
-	s.storeVoiceLine(w, r, p, body, store.VoiceSourceServer)
+	s.storeVoiceLine(w, r, p, body, req.GapS, store.VoiceSourceServer)
 }
 
 // postDeviceLine stores one utterance the participant's own device transcribed, under their name
@@ -270,7 +276,7 @@ func (s *Server) postDeviceLine(w http.ResponseWriter, r *http.Request, sess ses
 	if !validGap(w, req.GapS) {
 		return
 	}
-	s.storeVoiceLine(w, r, sess.p, body, store.VoiceSourceDevice)
+	s.storeVoiceLine(w, r, sess.p, body, req.GapS, store.VoiceSourceDevice)
 }
 
 // sttOff refuses a line of p while p has their transcription off, true once it answered: a worker
@@ -316,25 +322,30 @@ func validGap(w http.ResponseWriter, gap *float64) bool {
 	return true
 }
 
-// storeVoiceLine stores p's line from source and runs the voice triggers, unless it repeats a line
-// of p from the other source (010-AC16).
-func (s *Server) storeVoiceLine(w http.ResponseWriter, r *http.Request, p *store.Participant, body, source string) {
+// storeVoiceLine stores p's line from source, gap seconds after their previous one, and runs the
+// voice triggers, unless it repeats a line of p from the other source (010-AC16). A line that
+// continues p's open paragraph joins it (018-AC4), and reaches the pages as an edit (018-AC5).
+func (s *Server) storeVoiceLine(w http.ResponseWriter, r *http.Request, p *store.Participant, body string, gap *float64, source string) {
 	m := &store.Message{RoomID: p.RoomID, Kind: store.KindVoice, ParticipantID: p.ID, Sender: p.Name, Body: body, Source: source}
 	norm := normLine(body)
-	stored, err := s.bus.Store.PostVoiceLine(r.Context(), m, s.now(), dedupeWindow, func(other []string) bool {
-		return slices.ContainsFunc(other, func(o string) bool { return similar(normLine(o), norm) })
+	join := store.VoiceJoin{GapS: gap, MaxGap: s.opts.VoiceParagraphGap, MaxChars: s.opts.VoiceParagraphMaxChars}
+	res, err := s.bus.Store.PostVoiceLine(r.Context(), m, s.now(), dedupeWindow, join, func(other []string) bool {
+		return slices.ContainsFunc(other, func(o string) bool { return repeats(normLine(o), norm) })
 	})
 	if err != nil {
 		s.serverError(w, "voice_line_failed", err)
 		return
 	}
-	if !stored {
+	if res == store.VoiceDeduped {
 		s.voiceDeduped[source].Add(1)
 		writeJSON(w, http.StatusOK, map[string]bool{"deduped": true})
 		return
 	}
 	s.bus.Notify(p.RoomID)
 	s.voiceLines[source].Add(1)
+	if res == store.VoiceAppended {
+		s.voiceAppended[source].Add(1)
+	}
 	s.voiceTriggers(r.Context(), p.RoomID)
 	writeJSON(w, http.StatusCreated, m)
 }
@@ -344,6 +355,10 @@ var VoiceSources = []string{store.VoiceSourceDevice, store.VoiceSourceServer}
 
 // VoiceLines counts the voice lines stored from source (010-AC20).
 func (s *Server) VoiceLines(source string) int64 { return s.voiceLines[source].Load() }
+
+// VoiceLinesAppended counts the voice lines from source joined to their speaker's open paragraph
+// (018-AC9); VoiceLines counts them too.
+func (s *Server) VoiceLinesAppended(source string) int64 { return s.voiceAppended[source].Load() }
 
 // VoiceLinesDeduped counts the voice lines from source dropped as another source's repeat (010-AC16).
 func (s *Server) VoiceLinesDeduped(source string) int64 { return s.voiceDeduped[source].Load() }

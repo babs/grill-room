@@ -706,9 +706,9 @@ func (im *importer) messagesStep() error {
 		}
 		var id int64
 		err = im.tx.QueryRowContext(im.ctx, `INSERT INTO messages(room_id, ts, kind, participant_id, sender, body, html, model, effort, persona_id,
-			req_model, req_effort, model_note, model_mismatch, edited_at, deleted_at, change_seq, source, spoken) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
+			req_model, req_effort, model_note, model_mismatch, edited_at, deleted_at, change_seq, source, spoken, appended_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
 			im.room, m.TS, m.Kind, pid, m.Sender, m.Body, html, m.Model, m.Effort, persona, m.ReqModel, m.ReqEffort, m.ModelNote, m.Mismatch,
-			m.EditedAt, m.DeletedAt, m.ChangeSeq, importSource(m), m.Spoken).Scan(&id)
+			m.EditedAt, m.DeletedAt, m.ChangeSeq, importSource(m), m.Spoken, m.AppendedAt).Scan(&id)
 		if err != nil {
 			return refuseImport("message %d: %v", m.Ref, err)
 		}
@@ -1138,8 +1138,11 @@ func (im *importer) skillVersion(id int64, v xSkillVersion) error {
 }
 
 // pinsAndResume turns each persona's skills back on, at the same versions, and records where its
-// next turn picks up: a done turn holding its session and cursors, mapped to the new ids.
+// next turn picks up: a done turn holding its session and cursors, mapped to the new ids. The
+// turns go in by message cursor, as live turns start: the room's latest turn holds its highest
+// cursor, which the voice paragraphs read (018-AC4).
 func (im *importer) pinsAndResume(ps []xPersona) error {
+	var resumes []xPersona
 	for _, p := range ps {
 		persona := im.personas[p.Ref]
 		if len(p.Skills) > MaxPersonaSkills {
@@ -1154,13 +1157,17 @@ func (im *importer) pinsAndResume(ps []xPersona) error {
 				return refuseImport("persona %s skill pin: %v", p.Name, err)
 			}
 		}
-		r := p.Resume
-		if r == nil {
+		if p.Resume == nil {
 			continue
 		}
-		if !sessionIDRe.MatchString(r.SessionID) {
-			return refuseImport("persona %s resumes %q, which is not a session id", p.Name, r.SessionID)
+		if !sessionIDRe.MatchString(p.Resume.SessionID) {
+			return refuseImport("persona %s resumes %q, which is not a session id", p.Name, p.Resume.SessionID)
 		}
+		resumes = append(resumes, p)
+	}
+	slices.SortStableFunc(resumes, func(a, b xPersona) int { return cmp.Compare(a.Resume.MessageCursor, b.Resume.MessageCursor) })
+	for _, p := range resumes {
+		r := p.Resume
 		ended := r.EndedAt
 		if ended == "" {
 			ended = now()
@@ -1169,7 +1176,7 @@ func (im *importer) pinsAndResume(ps []xPersona) error {
 			change_cursor, prompt, started_at, ended_at, persona_id, persona_name, model, effort, cause)
 			VALUES(?, '', 'done', 0, '', ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, 'imported')`,
 			im.room, r.SessionID, im.messages.cursor(r.MessageCursor), im.annMessages.cursor(r.AnnotationCursor), r.ChangeCursor,
-			ended, ended, persona, p.Name, r.Model, r.Effort); err != nil {
+			ended, ended, im.personas[p.Ref], p.Name, r.Model, r.Effort); err != nil {
 			return fmt.Errorf("import resume point: %w", err)
 		}
 	}
