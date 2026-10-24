@@ -245,6 +245,10 @@ class Bots:
             bot.leave.cancel()
         metrics.BOTS.set(len(self.bots))
         log.info("bot_left", room=key[0], persona_id=key[1], reason=str(reason))
+        if reason == rtc.DisconnectReason.ROOM_DELETED:
+            # LiveKit says so before the server's next roster: a heartbeat on the old one would
+            # rejoin, and the join would recreate the room.
+            self.roster = [r for r in self.roster if r["room"] != key[0]]
         # Its view of the speakers goes: a human it named last must not block the room's next line.
         self._voice(key[0]).forget_bot(f"persona-{key[1]}")
 
