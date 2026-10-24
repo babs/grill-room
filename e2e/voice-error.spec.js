@@ -233,3 +233,38 @@ test('the transcription of my voice turns off and stays off', async ({ browser, 
   await expect.poll(() => page.evaluate(() => window.grillVoiceOn)).toBe(true);
   expect(await meOff()).toBeUndefined();
 });
+
+// 010-AC23: a room read sent while the switch is in flight answers with the state before it; landing
+// after the switch, it must not turn it back.
+test('a room read from before the switch does not undo it', async ({ browser, request }) => {
+  const page = await voicePage(browser, request);
+  const room = await page.evaluate(() => roomID);
+  const stt = page.locator('#voice-stt');
+  await page.locator('#voice-join').click();
+  await expect(stt).toHaveAttribute('aria-pressed', 'true');
+  let releasePut;
+  const putHeld = new Promise((r) => { releasePut = r; });
+  await page.route(`**/api/rooms/${room}/voice/transcribe`, async (r) => { await putHeld; await r.continue(); });
+  let releaseRead;
+  const readHeld = new Promise((r) => { releaseRead = r; });
+  let read;
+  const readDone = new Promise((r) => { read = r; });
+  let armed = false;
+  await page.route(`**/api/rooms/${room}`, async (r) => {
+    const mine = armed;
+    const res = await r.fetch();
+    const json = { ...(await res.json()), voice: true };
+    if (mine) read();
+    await readHeld;
+    await r.fulfill({ response: res, json });
+  });
+  await stt.click();
+  armed = true;
+  await page.evaluate(() => { loadRoom().catch(() => {}); });
+  await readDone; // served before the switch reached the server: stt_off still unset
+  releasePut();
+  await expect(stt).toHaveAttribute('aria-pressed', 'false');
+  releaseRead();
+  await page.waitForTimeout(500);
+  await expect(stt).toHaveAttribute('aria-pressed', 'false');
+});

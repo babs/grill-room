@@ -4051,7 +4051,9 @@ $('voice-stt').addEventListener('click', () => {
     sttOff = off;
     voiceButtons();
     localStorage.setItem(sttKey, String(Date.now()));
-  }).catch((err) => voiceError('Could not change the transcription of your voice: ' + err.message));
+  }).catch((err) => voiceError('Could not change the transcription of your voice: ' + err.message))
+    // A room read sent while the switch was in flight may predate it: its answer must not undo it.
+    .finally(() => sttSet++);
 });
 addEventListener('storage', (e) => { if (e.key === sttKey) loadRoom().catch(console.error); });
 // The open menu says more than ⋯'s tip, which would show through under it.
