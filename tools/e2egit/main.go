@@ -23,9 +23,8 @@ func main() {
 	root := flag.String("root", "test-results/git", "folder of the bare repos to serve")
 	ca := flag.String("ca", "test-results/git-ca.pem", "where to write the server's certificate")
 	flag.Parse()
-	if err := run(*addr, *root, *ca); err != nil {
-		log.Fatal(err)
-	}
+	// run serves forever: it only ever returns an error.
+	log.Fatal(run(*addr, *root, *ca))
 }
 
 func run(addr, root, ca string) error {

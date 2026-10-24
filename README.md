@@ -6,7 +6,7 @@ This is an early PoC. `INTENT.md` has the design and `specs/001-grill-room-poc.m
 
 ## Run
 
-Go 1.26 or newer, and a PostgreSQL 16 or newer database with `C` collation. Create it as its own role, which owns it; the server needs no superuser:
+Go 1.27 or newer, and a PostgreSQL 16 or newer database with `C` collation. Create it as its own role, which owns it; the server needs no superuser:
 
 ```sql
 CREATE ROLE grill_room LOGIN PASSWORD '...';

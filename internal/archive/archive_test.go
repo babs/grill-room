@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -213,7 +214,10 @@ func TestPackFailures(t *testing.T) {
 		t.Errorf("bad name: %v", err)
 	}
 	big := t.TempDir()
-	if err := os.WriteFile(filepath.Join(big, "data"), bytes.Repeat([]byte{1, 2, 3, 4, 5, 6, 7}, 300_000), 0o600); err != nil {
+	// Random, so the gzip stream outgrows every limit below whatever the compressor's ratio.
+	data := make([]byte, 64<<10)
+	_, _ = rand.Read(data)
+	if err := os.WriteFile(filepath.Join(big, "data"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, n := range []int{0, 100, 4096} {
