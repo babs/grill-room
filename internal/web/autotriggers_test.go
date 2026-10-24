@@ -193,12 +193,13 @@ func TestPresenceAgenda(t *testing.T) {
 	golden(t, "testdata/presence-agenda.golden", regexp.MustCompile(`·[0-9a-f]{4}\b|·#\d+`).ReplaceAllString(with, "·<id>"))
 }
 
-// 006-AC18: the server checks the timers on its own, every timerTick, until stopped.
+// 006-AC18, 018-AC7: the server checks the timers, and the voice paragraphs closed by the close
+// delay, on its own, every timerTick, until stopped.
 func TestRunTimers(t *testing.T) {
 	old := timerTick
 	timerTick = time.Millisecond
 	t.Cleanup(func() { timerTick = old })
-	e := newEnv(t)
+	e := newEnvOpts(t, paragraphOptions(t))
 	c := e.clock()
 	r := newTurnRoom(t, e)
 	tok := r.alice.p.Token
@@ -212,8 +213,20 @@ func TestRunTimers(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() { e.srv.RunTimers(ctx); close(done) }()
-	if tn := e.nextTurn(t, r, r.alice); tn.PersonaID != sec.ID {
+	tn := e.nextTurn(t, r, r.alice)
+	if tn.PersonaID != sec.ID {
 		t.Fatalf("turn %+v", tn)
+	}
+	e.finish(t, r, r.alice, tn, "Noted.")
+	if code, b := e.do(t, "PATCH", r.path(fmt.Sprintf("/personas/%d", sec.ID)), tok, map[string]any{"every_voice": 1}); code != http.StatusOK {
+		t.Fatalf("patch: %d %s", code, b)
+	}
+	if code, b := e.do(t, "POST", "/api/rooms/"+r.room+"/voice/lines", sttToken, map[string]any{"participant_id": r.alice.p.Participant.ID, "body": "one", "gap_s": 1}); code != http.StatusCreated {
+		t.Fatalf("voice line: %d %s", code, b)
+	}
+	c.add(DefaultVoiceParagraphClose)
+	if tn := e.nextTurn(t, r, r.alice); tn.PersonaID != sec.ID || tn.Cause != "every voice line" {
+		t.Fatalf("voice turn %+v", tn)
 	}
 	cancel()
 	<-done

@@ -33,6 +33,9 @@ const (
 	DefaultVoiceParagraphGap = 2500 * time.Millisecond
 	// DefaultVoiceParagraphMaxChars is the length a voice paragraph grows to (018-AC4).
 	DefaultVoiceParagraphMaxChars = 1200
+	// DefaultVoiceParagraphClose is how long after its last line a paragraph counts as closed: a
+	// monologue's next line lands up to one 15 s utterance plus VAD silence and STT later (018-AC7).
+	DefaultVoiceParagraphClose = 20 * time.Second
 	// MaxBodyLen bounds a chat line, and so a voice paragraph.
 	MaxBodyLen = maxBodyLen
 	// maxVoiceGap caps a line's gap_s (spec 018): any longer pause ends a paragraph just the same.

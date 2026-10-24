@@ -24,7 +24,7 @@ func TestConfigValidate(t *testing.T) {
 	ok := Config{Addr: "a:1", MetricsAddr: "a:2", DatabaseURL: "postgres://u@db/x", LogLevel: "info", LogFormat: "auto",
 		MaxUploadMB: 20, MaxRoomMB: 200, MaxAttachmentMB: 5, MaxImportMB: 1024, Pandoc: "pandoc", PandocTimeout: time.Minute, TurnTimeout: 15 * time.Minute, MagicLinkTTL: 15 * time.Minute,
 		AuditRetention: 365 * 24 * time.Hour, ClientRetention: 720 * time.Hour, NotesWatchDelay: 20 * time.Second,
-		VoiceParagraphMaxChars: 1200}
+		VoiceParagraphMaxChars: 1200, VoiceParagraphClose: 20 * time.Second}
 	cases := map[string]func(*Config){
 		"zero upload limit":                func(c *Config) { c.MaxUploadMB = 0 },
 		"room below upload limit":          func(c *Config) { c.MaxRoomMB = 10 },
@@ -57,6 +57,10 @@ func TestConfigValidate(t *testing.T) {
 		"paragraph gap negative":    func(c *Config) { c.VoiceParagraphGap = -time.Second },
 		"paragraph max chars zero":  func(c *Config) { c.VoiceParagraphMaxChars = 0 },
 		"paragraph max chars above": func(c *Config) { c.VoiceParagraphMaxChars = 4001 },
+		// 018-AC7: a paragraph never counts as closed before a line could still join it.
+		"paragraph close zero":          func(c *Config) { c.VoiceParagraphClose = 0 },
+		"paragraph close negative":      func(c *Config) { c.VoiceParagraphClose = -time.Second },
+		"paragraph close below the gap": func(c *Config) { c.VoiceParagraphGap, c.VoiceParagraphClose = 3*time.Second, 2*time.Second },
 		"sandbox digest too short": func(c *Config) {
 			c.SandboxImage = "registry.example/grill-room/sandbox@sha256:" + strings.Repeat("a", 63)
 		},
@@ -69,6 +73,15 @@ func TestConfigValidate(t *testing.T) {
 	edges.VoiceParagraphGap, edges.VoiceParagraphMaxChars = 0, 4000
 	if err := edges.Validate(); err != nil {
 		t.Fatalf("paragraph gap 0, max chars 4000: %v", err)
+	}
+	// 018-AC7: the close delay may equal the gap; with paragraphs off it only needs to be above 0.
+	edges.VoiceParagraphGap, edges.VoiceParagraphClose = 3*time.Second, 3*time.Second
+	if err := edges.Validate(); err != nil {
+		t.Fatalf("paragraph close equal to the gap: %v", err)
+	}
+	edges.VoiceParagraphGap, edges.VoiceParagraphClose = 0, time.Millisecond
+	if err := edges.Validate(); err != nil {
+		t.Fatalf("paragraph gap 0, close 1ms: %v", err)
 	}
 	pinned := ok
 	pinned.SandboxImage = "registry.example:5000/grill-room/sandbox:v1@sha256:" + strings.Repeat("a", 64)
@@ -91,7 +104,7 @@ func TestConfigValidate(t *testing.T) {
 
 func TestLoadConfigRejectsBadNumbers(t *testing.T) {
 	t.Setenv("GRILL_ROOM_DATABASE_URL", "postgres://u@db/x")
-	for key, val := range map[string]string{"GRILL_ROOM_MAX_UPLOAD_MB": "20MB", "GRILL_ROOM_MAX_ROOM_MB": "x", "GRILL_ROOM_PANDOC_TIMEOUT": "60", "GRILL_ROOM_MAX_ATTACHMENT_MB": "5MB", "GRILL_ROOM_TURN_TIMEOUT": "15", "GRILL_ROOM_MAGIC_LINK_TTL": "15", "GRILL_ROOM_AUDIT_RETENTION": "365", "GRILL_ROOM_CLIENT_RETENTION": "30", "GRILL_ROOM_TRUSTED_PROXIES": "10.0.0.0/33", "GRILL_ROOM_NOTES_WATCH_DELAY": "20", "GRILL_ROOM_VOICE_PARAGRAPH_GAP": "2.5", "GRILL_ROOM_VOICE_PARAGRAPH_MAX_CHARS": "1.2k"} {
+	for key, val := range map[string]string{"GRILL_ROOM_MAX_UPLOAD_MB": "20MB", "GRILL_ROOM_MAX_ROOM_MB": "x", "GRILL_ROOM_PANDOC_TIMEOUT": "60", "GRILL_ROOM_MAX_ATTACHMENT_MB": "5MB", "GRILL_ROOM_TURN_TIMEOUT": "15", "GRILL_ROOM_MAGIC_LINK_TTL": "15", "GRILL_ROOM_AUDIT_RETENTION": "365", "GRILL_ROOM_CLIENT_RETENTION": "30", "GRILL_ROOM_TRUSTED_PROXIES": "10.0.0.0/33", "GRILL_ROOM_NOTES_WATCH_DELAY": "20", "GRILL_ROOM_VOICE_PARAGRAPH_GAP": "2.5", "GRILL_ROOM_VOICE_PARAGRAPH_MAX_CHARS": "1.2k", "GRILL_ROOM_VOICE_PARAGRAPH_CLOSE": "20"} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv(key, val)
 			if _, err := loadConfig(); err == nil {
@@ -100,7 +113,7 @@ func TestLoadConfigRejectsBadNumbers(t *testing.T) {
 		})
 	}
 	c, err := loadConfig()
-	if err != nil || c.MaxUploadMB != 20 || c.MaxRoomMB != 200 || c.MaxAttachmentMB != 5 || c.TurnTimeout != 15*time.Minute || c.MagicLinkTTL != 15*time.Minute || c.AuditRetention != 8760*time.Hour || c.ClientRetention != 720*time.Hour || c.TrustedProxies != nil || c.NotesWatchDelay != 20*time.Second || c.VoiceParagraphGap != 2500*time.Millisecond || c.VoiceParagraphMaxChars != 1200 || c.Validate() != nil {
+	if err != nil || c.MaxUploadMB != 20 || c.MaxRoomMB != 200 || c.MaxAttachmentMB != 5 || c.TurnTimeout != 15*time.Minute || c.MagicLinkTTL != 15*time.Minute || c.AuditRetention != 8760*time.Hour || c.ClientRetention != 720*time.Hour || c.TrustedProxies != nil || c.NotesWatchDelay != 20*time.Second || c.VoiceParagraphGap != 2500*time.Millisecond || c.VoiceParagraphMaxChars != 1200 || c.VoiceParagraphClose != 20*time.Second || c.Validate() != nil {
 		t.Fatalf("defaults: %+v, %v", c, err)
 	}
 }

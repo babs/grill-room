@@ -147,6 +147,9 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	if opts.VoiceParagraphMaxChars <= 0 {
 		opts.VoiceParagraphMaxChars = DefaultVoiceParagraphMaxChars
 	}
+	if opts.VoiceParagraphClose <= 0 {
+		opts.VoiceParagraphClose = DefaultVoiceParagraphClose
+	}
 	if opts.MagicLinkTTL <= 0 {
 		opts.MagicLinkTTL = DefaultMagicLinkTTL
 	}

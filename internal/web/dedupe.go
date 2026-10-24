@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
 )
@@ -37,11 +38,29 @@ func normLine(s string) string {
 	return b.String()
 }
 
+// normCap bounds the runes repeats compares: NFD can triple a body (Hangul syllables), and the
+// check runs under the write lock.
+const normCap = maxBodyLen
+
+// capRunes keeps the first n runes of s, or its last n when tail is set.
+func capRunes(s string, n int, tail bool) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	r := []rune(s)
+	if tail {
+		return string(r[len(r)-n:])
+	}
+	return string(r[:n])
+}
+
 // repeats reports whether norm, a normalised line, repeats other, a normalised voice message of the
 // other source: the whole of it, or for a line of 2 words or more, a stretch of it as many words
 // long, give or take one, as a paragraph grown by appends holds its lines (018-AC6).
-// ponytail: ~90 ms under the write lock at worst (4000-char paragraph, 400-word line of its words); cap the line length passed here to go lower.
+// ponytail: peak measured ~94 ms, 26.4M block steps, under the write lock (4000-rune paragraph, 500-word line of its words; sweep 120-1000 words, French and Hangul); lower normCap to go lower.
 func repeats(other, norm string) bool {
+	// A paragraph grows at its end, where the other source's copy lands: keep other's tail.
+	other, norm = capRunes(other, normCap, true), capRunes(norm, normCap, false)
 	if similar(other, norm) {
 		return true
 	}

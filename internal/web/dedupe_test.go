@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // 018-AC6: a line repeats another source's message when it matches the whole message or a
@@ -28,6 +29,7 @@ func TestRepeats(t *testing.T) {
 		{"different sentence", "We ship on Friday", "We wait for Monday", false},
 		{"no stretch matches", long, "the release goes out on friday morning", false},
 		{"stretch at the end of a long message", long + "the release goes out on friday morning", "the release goes out on friday morning", true},
+		{"stretch at the end of a message past normCap", long + long + "the release goes out on friday morning", "the release goes out on friday morning", true},
 	} {
 		if got := repeats(normLine(c.other), normLine(c.line)); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
@@ -181,16 +183,16 @@ func TestStretchesCountTrigrams(t *testing.T) {
 }
 
 // shuffledVocabulary is a repeat check near the costliest a participant can ask for: a paragraph
-// of size characters and a line of n of its own words, shuffled, which shares enough trigrams with
-// every stretch to reach the distance.
-func shuffledVocabulary(size, n int) (other, line string) {
+// of size characters from vocab and a line of n of its own words, shuffled, which shares enough
+// trigrams with every stretch to reach the distance.
+func shuffledVocabulary(vocab string, size, n int) (other, line string) {
 	rng := rand.New(rand.NewPCG(7, 8))
-	vocab := strings.Fields("nous allons regarder le budget de la semaine prochaine avec toute l'équipe puis on termine")
+	words := strings.Fields(vocab)
 	var p []string
-	for len(strings.Join(p, " ")) < size {
-		p = append(p, vocab[rng.IntN(len(vocab))])
+	for utf8.RuneCountInString(strings.Join(p, " ")) < size {
+		p = append(p, words[rng.IntN(len(words))])
 	}
-	other = normLine(strings.Join(p, " ")[:size])
+	other = normLine(string([]rune(strings.Join(p, " "))[:size]))
 	w := strings.Fields(other)
 	l := make([]string, n)
 	for i := range l {
@@ -199,9 +201,15 @@ func shuffledVocabulary(size, n int) (other, line string) {
 	return other, strings.Join(l, " ")
 }
 
+const (
+	frenchVocab = "nous allons regarder le budget de la semaine prochaine avec toute l'équipe puis on termine"
+	// Each syllable is 2 or 3 runes after NFD: a 4000-character paragraph normalises to ~11000.
+	hangulVocab = "우리는 다음 주 예산을 팀 전체와 함께 검토하고 회의를 마칩니다"
+)
+
 func BenchmarkRepeatsShuffledVocabulary(b *testing.B) {
-	for _, c := range []struct{ size, words int }{{1200, 120}, {4000, 120}, {4000, 400}} {
-		other, line := shuffledVocabulary(c.size, c.words)
+	for _, c := range []struct{ size, words int }{{1200, 120}, {4000, 120}, {4000, 400}, {4000, 500}} {
+		other, line := shuffledVocabulary(frenchVocab, c.size, c.words)
 		b.Run(strconv.Itoa(c.size)+"/"+strconv.Itoa(c.words), func(b *testing.B) {
 			for b.Loop() {
 				repeats(other, line)
@@ -211,25 +219,28 @@ func BenchmarkRepeatsShuffledVocabulary(b *testing.B) {
 }
 
 // 018-AC6: against a 4000-character paragraph, the repeat check of a line of any width stays under
-// 30 million block steps, about 90 ms: the plain DP took close to a billion cells.
+// 30 million block steps, about 90 ms: the plain DP took close to a billion cells. Hangul covers
+// the bodies NFD expands past maxBodyLen runes.
 func TestRepeatsShuffledVocabularyCost(t *testing.T) {
 	ops := 0
 	distanceOps = func(n int) { ops += n }
 	defer func() { distanceOps = nil }()
-	for _, words := range []int{120, 200, 400, 600} {
-		ops = 0
-		other, line := shuffledVocabulary(4000, words)
-		repeats(other, line)
-		t.Logf("%d words: %d block steps", words, ops)
-		if ops == 0 || ops > 30_000_000 {
-			t.Errorf("%d words: %d block steps, want 1 to 30M", words, ops)
+	for _, v := range []struct{ name, vocab string }{{"french", frenchVocab}, {"hangul", hangulVocab}} {
+		for _, words := range []int{120, 200, 300, 350, 400, 450, 500, 550, 600, 1000} {
+			ops = 0
+			other, line := shuffledVocabulary(v.vocab, 4000, words)
+			repeats(other, line)
+			t.Logf("%s, %d words: %d block steps", v.name, words, ops)
+			if ops == 0 || ops > 30_000_000 {
+				t.Errorf("%s, %d words: %d block steps, want 1 to 30M", v.name, words, ops)
+			}
 		}
 	}
 }
 
 // similar's formula accepts maxDistance(n) and refuses one more, for every length a line can have.
 func TestMaxDistanceIsSimilarsThreshold(t *testing.T) {
-	for n := 1; n <= maxBodyLen; n++ {
+	for n := 1; n <= normCap; n++ {
 		ok := func(d int) bool { return 1-float64(d)/float64(n) >= dedupeSimilarity }
 		if k := maxDistance(n); !ok(k) || ok(k+1) {
 			t.Fatalf("n %d: maxDistance %d, the formula accepts %d: %v, %d: %v", n, k, k, ok(k), k+1, ok(k+1))

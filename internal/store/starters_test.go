@@ -349,7 +349,7 @@ func TestStarterCallsFailOnAClosedStore(t *testing.T) {
 		"publish":   func() error { return s.PublishStarter(ctx, 1, 1) },
 		"delete":    func() error { return s.DeleteStarter(ctx, 1, 1) },
 		"blank":     func() error { _, err := s.BlankManifest(ctx); return err },
-		"voice":     func() error { _, err := s.DueVoicePersonas(ctx, "r"); return err },
+		"voice":     func() error { _, err := s.DueVoicePersonas(ctx, time.Now(), VoiceCount{}, []string{"r"}); return err },
 		"timer":     func() error { _, err := s.DueTimerPersonas(ctx, time.Now(), ""); return err },
 		"release":   func() error { _, err := s.ReleaseStarterSkills(ctx, "r"); return err },
 	} {

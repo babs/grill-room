@@ -72,8 +72,11 @@ type Options struct {
 	NotesWatchDelay time.Duration
 	// VoiceParagraphGap is the pause that ends a voice paragraph; 0 stores every line as a message
 	// (018-AC4). VoiceParagraphMaxChars bounds a paragraph; 0 means DefaultVoiceParagraphMaxChars.
+	// VoiceParagraphClose is how long after its last line a paragraph counts for "every N voice
+	// lines"; 0 means DefaultVoiceParagraphClose (018-AC7).
 	VoiceParagraphGap      time.Duration
 	VoiceParagraphMaxChars int
+	VoiceParagraphClose    time.Duration
 	// MaxResultBytes bounds a turn result a daemon posts; 0 means 32 MB.
 	MaxResultBytes int64
 	// Release is the daemon release handed out to hosts; nil offers no download.

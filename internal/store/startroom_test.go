@@ -63,14 +63,14 @@ func TestSetUpRoom(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if due, _ := s.DueVoicePersonas(ctx, "r"); len(due) != 1 || due[0].NextVoice != 0 {
+	if due, _ := s.DueVoicePersonas(ctx, time.Now(), VoiceCount{}, []string{"r"}); len(due) != 1 || due[0].NextVoice != 0 {
 		t.Fatalf("due: %+v", due)
 	}
 	last, _ := s.LastMessageID(ctx)
 	if _, err := s.db.ExecContext(ctx, `UPDATE room_personas SET mark_msg_id = ? WHERE room_id = 'r'`, last); err != nil {
 		t.Fatal(err)
 	}
-	if due, _ := s.DueVoicePersonas(ctx, "r"); len(due) != 0 {
+	if due, _ := s.DueVoicePersonas(ctx, time.Now(), VoiceCount{}, []string{"r"}); len(due) != 0 {
 		t.Fatalf("due after the mark: %+v", due)
 	}
 }
@@ -191,14 +191,14 @@ func TestImportKeepsTriggersQuiet(t *testing.T) {
 	}
 	ps, _ := s.Participants(ctx, "orig")
 	voices(t, s, "orig", ps[0].ID, 3)
-	if due, _ := s.DueVoicePersonas(ctx, "orig"); len(due) != 1 {
+	if due, _ := s.DueVoicePersonas(ctx, time.Now(), VoiceCount{}, []string{"orig"}); len(due) != 1 {
 		t.Fatalf("source not due: %+v", due)
 	}
 	if _, err := s.ImportRoom(ctx, export(t, s, "orig"), importOpts("copy")); err != nil {
 		t.Fatal(err)
 	}
 	cp, _ := s.RoomPersonas(ctx, "copy")
-	if due, _ := s.DueVoicePersonas(ctx, "copy"); len(due) != 0 || len(cp) != 1 || cp[0].EveryVoice != 2 || cp[0].NextVoice != 2 {
+	if due, _ := s.DueVoicePersonas(ctx, time.Now(), VoiceCount{}, []string{"copy"}); len(due) != 0 || len(cp) != 1 || cp[0].EveryVoice != 2 || cp[0].NextVoice != 2 {
 		t.Fatalf("copy: due %+v, personas %+v", due, cp)
 	}
 	if r, _ := s.Room(ctx, "copy"); r.CreatedFrom == nil || *r.CreatedFrom != (Provenance{"Weekly", 2}) {
@@ -244,7 +244,7 @@ func TestTriggerOnCountsFromNow(t *testing.T) {
 	if _, _, _, err := s.EditPersona(ctx, "r", grill[0].ID, PersonaPatch{EveryVoice: &two}, &ps[0]); err != nil {
 		t.Fatal(err)
 	}
-	if due, _ := s.DueVoicePersonas(ctx, "r"); len(due) != 0 {
+	if due, _ := s.DueVoicePersonas(ctx, time.Now(), VoiceCount{}, []string{"r"}); len(due) != 0 {
 		t.Fatalf("due from old lines: %+v", due)
 	}
 	voices(t, s, "r", ps[0].ID, 2)

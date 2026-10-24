@@ -2944,7 +2944,7 @@ function triggerFields(kind, n) {
 
 // nextTrigger says when the persona speaks up next on its own (006-AC18).
 function nextTrigger(p) {
-  if (p.every_voice) return p.next_voice ? ' Speaks up next in ' + p.next_voice + ' voice lines.' : ' Speaks up at the next voice line.';
+  if (p.every_voice) return p.next_voice ? ' Speaks up next in ' + p.next_voice + ' voice lines.' : ' Speaks up at the next voice line or shortly after.';
   if (!p.every_minutes || !p.next_at) return '';
   const min = Math.ceil((new Date(p.next_at).getTime() - Date.now()) / 60000);
   return min > 0 ? ' Speaks up next in ' + min + ' min.' : ' Speaks up at the next activity, while someone is here.';

@@ -103,9 +103,11 @@ type Config struct {
 	// NotesWatchDelay is how long the notes watcher waits after the last new note message.
 	NotesWatchDelay time.Duration
 	// VoiceParagraphGap is the pause that ends a voice paragraph, 0 for one message per line;
-	// VoiceParagraphMaxChars bounds a paragraph (018-AC4).
+	// VoiceParagraphMaxChars bounds a paragraph (018-AC4). VoiceParagraphClose is how long after its
+	// last line a paragraph counts for "every N voice lines" (018-AC7).
 	VoiceParagraphGap      time.Duration
 	VoiceParagraphMaxChars int
+	VoiceParagraphClose    time.Duration
 	// DaemonDir holds the daemon release `make release` writes; empty offers no download.
 	DaemonDir string
 	// DaemonPrevDir holds the previous release, for supervisors too old for this one's workers;
@@ -147,10 +149,12 @@ func loadConfig() (Config, error) {
 	notesDelay, err11 := time.ParseDuration(getEnv("GRILL_ROOM_NOTES_WATCH_DELAY", web.DefaultNotesWatchDelay.String()))
 	paraGap, err12 := time.ParseDuration(getEnv("GRILL_ROOM_VOICE_PARAGRAPH_GAP", web.DefaultVoiceParagraphGap.String()))
 	paraChars, err13 := strconv.Atoi(getEnv("GRILL_ROOM_VOICE_PARAGRAPH_MAX_CHARS", strconv.Itoa(web.DefaultVoiceParagraphMaxChars)))
+	paraClose, err14 := time.ParseDuration(getEnv("GRILL_ROOM_VOICE_PARAGRAPH_CLOSE", web.DefaultVoiceParagraphClose.String()))
 	return Config{
 		NotesWatchDelay:        notesDelay,
 		VoiceParagraphGap:      paraGap,
 		VoiceParagraphMaxChars: paraChars,
+		VoiceParagraphClose:    paraClose,
 		SMTP: mail.SMTP{
 			Addr:     os.Getenv("GRILL_ROOM_SMTP_ADDR"),
 			From:     os.Getenv("GRILL_ROOM_SMTP_FROM"),
@@ -188,7 +192,7 @@ func loadConfig() (Config, error) {
 		DaemonPrevDir:     os.Getenv("GRILL_ROOM_DAEMON_PREV_DIR"),
 		SandboxImage:      os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
 		DeviceSTTModelDir: os.Getenv("GRILL_ROOM_DEVICE_STT_MODEL_DIR"),
-	}, errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9, err10, err11, err12, err13)
+	}, errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9, err10, err11, err12, err13, err14)
 }
 
 // Validate rejects a configuration the server cannot run with.
@@ -223,6 +227,9 @@ func (c Config) Validate() error {
 	}
 	if c.VoiceParagraphMaxChars < 1 || c.VoiceParagraphMaxChars > web.MaxBodyLen {
 		return fmt.Errorf("GRILL_ROOM_VOICE_PARAGRAPH_MAX_CHARS %d: want 1 to %d", c.VoiceParagraphMaxChars, web.MaxBodyLen)
+	}
+	if c.VoiceParagraphClose <= 0 || c.VoiceParagraphClose < c.VoiceParagraphGap {
+		return fmt.Errorf("GRILL_ROOM_VOICE_PARAGRAPH_CLOSE %s: want above 0 and at least GRILL_ROOM_VOICE_PARAGRAPH_GAP %s", c.VoiceParagraphClose, c.VoiceParagraphGap)
 	}
 	if c.PandocTimeout <= 0 {
 		return fmt.Errorf("GRILL_ROOM_PANDOC_TIMEOUT %s: want a positive duration", c.PandocTimeout)
@@ -447,6 +454,7 @@ func run() error {
 		NotesWatchDelay:        cfg.NotesWatchDelay,
 		VoiceParagraphGap:      cfg.VoiceParagraphGap,
 		VoiceParagraphMaxChars: cfg.VoiceParagraphMaxChars,
+		VoiceParagraphClose:    cfg.VoiceParagraphClose,
 		MaxUploadBytes:         cfg.MaxUploadMB << 20,
 		MaxRoomBytes:           cfg.MaxRoomMB << 20,
 		MaxAttachmentBytes:     cfg.MaxAttachmentMB << 20,
