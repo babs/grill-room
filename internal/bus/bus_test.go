@@ -123,12 +123,12 @@ func TestNotifyCrossesPods(t *testing.T) {
 		t.Fatalf("extra signal %q", got)
 	default:
 	}
-	// The sender counts once pg_notify returns, which may be after the listener woke.
-	for deadline := time.After(10 * time.Second); a.bus.NotifySent() == 0; {
+	// A sender counts once pg_notify returns, which may be after the other pod woke: wait for both.
+	for deadline := time.After(10 * time.Second); a.bus.NotifySent() == 0 || b.bus.NotifySent() == 0; {
 		select {
 		case <-time.After(5 * time.Millisecond):
 		case <-deadline:
-			t.Fatal("a never counted its notify")
+			t.Fatalf("a sent %d, b sent %d: a pod never counted its notify", a.bus.NotifySent(), b.bus.NotifySent())
 		}
 	}
 	for name, n := range map[string]uint64{
