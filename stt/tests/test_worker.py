@@ -446,14 +446,6 @@ async def test_a_room_livekit_closed_is_dropped_and_joined_again(
     assert w.rooms["r1"] is cast(object, made[1])
 
 
-async def test_an_empty_listed_room_is_not_joined(monkeypatch: pytest.MonkeyPatch) -> None:
-    made: list[FakeRoom] = []
-    monkeypatch.setattr(rtc, "Room", lambda: new_room(made))
-    w = worker(httpx.MockTransport(lambda _r: httpx.Response(204)))
-    await w.reconcile([listed("r1", "RM_a", people=0)])
-    assert not made and not w.rooms
-
-
 def test_glossary_prompt_is_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     """005-AC23 (spike S10b): off unless APP_GLOSSARY_PROMPT says on."""
     assert settings().glossary_prompt is False
@@ -757,6 +749,21 @@ async def test_a_room_with_only_bots_is_left_and_joined_again_once_a_human_is_li
     lk.kinds = [models.ParticipantInfo.Kind.STANDARD]
     await w.reconcile([listed("r1", "RM_a", people=1)])
     assert len(made) == 2 and w.rooms["r1"] is cast(object, made[1])
+
+
+async def test_a_room_listed_empty_is_joined_only_with_someone_in_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LiveKit refreshes a listed room's count every 5 s: a room listed empty is joined at once when
+    its participants show a human, so the first words are heard."""
+    made: list[FakeRoom] = []
+    monkeypatch.setattr(rtc, "Room", lambda: new_room(made))
+    w = worker(httpx.MockTransport(lambda _r: httpx.Response(204)))
+    lk = FakeLK()
+    w._lk = lk  # type: ignore[assignment]
+    await w.reconcile([listed("r1", "RM_a", people=0)])
+    assert not made and not w.rooms
+    lk.kinds = [models.ParticipantInfo.Kind.STANDARD]
+    await w.reconcile([listed("r1", "RM_a", people=0)])
+    assert len(made) == 1 and w.rooms["r1"] is cast(object, made[0])
 
 
 def silence(seconds: float) -> bytes:

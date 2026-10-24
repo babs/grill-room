@@ -176,3 +176,68 @@ async def test_leaver_mid_onset_frees_the_quiet(monkeypatch: pytest.MonkeyPatch,
         assert await asyncio.wait_for(voice._quiet(quiet_s, voice.clock.now() + 20), quiet_s + 1.0)
     finally:
         await bots.close()
+
+
+# A deleted room's bot must not rejoin on the next heartbeat, whose roster still lists the room: the
+# join would recreate the LiveKit room. A later roster that lists it again does rejoin.
+async def test_deleted_room_is_not_rejoined(monkeypatch: pytest.MonkeyPatch) -> None:
+    from livekit import rtc
+
+    from grill_tts.bots import Bots
+    from grill_tts.room import RoomVoice
+
+    from .test_client import settings
+
+    joins = 0
+
+    class Room:
+        def __init__(self) -> None:
+            self.on_: dict[str, object] = {}
+            self.remote_participants: dict[str, object] = {}
+            self.local_participant = self
+
+        def on(self, ev: str, fn: object) -> None:
+            self.on_[ev] = fn
+
+        async def connect(self, *_a: object, **_k: object) -> None:
+            nonlocal joins
+            joins += 1
+
+        async def publish_track(self, *_a: object, **_k: object) -> None:
+            pass
+
+        async def disconnect(self) -> None:
+            pass
+
+        def isconnected(self) -> bool:
+            return True
+
+    rooms: list[Room] = []
+
+    def new_room() -> Room:
+        rooms.append(Room())
+        return rooms[-1]
+
+    monkeypatch.setattr(rtc, "Room", new_room)
+    monkeypatch.setattr(rtc, "AudioSource", lambda *_a, **_k: Source())
+    monkeypatch.setattr(rtc.LocalAudioTrack, "create_audio_track", staticmethod(lambda *_a: None))
+    voice = RoomVoice("r1", None, lambda: None)  # type: ignore[arg-type, return-value]
+    bots = Bots(settings(), lambda _r: voice)
+    roster = [{"room": "r1", "personas": [{"id": 1, "name": "Grill"}]}]
+
+    async def joined(n: int) -> None:
+        while joins < n or not bots.bots:
+            await asyncio.sleep(0.001)
+
+    try:
+        bots.sync(roster)
+        await asyncio.wait_for(joined(1), 1)
+        rooms[-1].on_["disconnected"](rtc.DisconnectReason.ROOM_DELETED)  # type: ignore[operator]
+        assert not bots.bots
+        bots.sync(bots.roster)  # the heartbeat
+        await asyncio.sleep(0.01)
+        assert joins == 1 and not bots.bots, "the bot rejoined its deleted room"
+        bots.sync(roster)
+        await asyncio.wait_for(joined(2), 1)
+    finally:
+        await bots.close()
