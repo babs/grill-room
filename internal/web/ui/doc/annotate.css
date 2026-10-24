@@ -12,9 +12,11 @@ html[data-gr-picking], html[data-gr-picking] * { cursor: crosshair !important; }
   padding: 4px 10px;
   border: 0;
   border-radius: 6px;
-  background: #1e2238;
-  color: #fff;
-  font: 13px system-ui, sans-serif;
+  /* --accent / --on-accent: the frame cannot read the room's tokens. */
+  background: #ffc23d;
+  color: #1e2238;
+  box-shadow: 0 0 0 1px #1e2238, 0 2px 6px rgb(0 0 0 / .35);
+  font: 600 13px system-ui, sans-serif;
   cursor: pointer;
 }
 .gr-annot-bubble[hidden] { display: none; }
