@@ -6,7 +6,7 @@ Two pods, replaced one at a time (spec 017, 017-AC19, 017-AC21). A rollout or th
 
 | Step | Command | Expect |
 |---|---|---|
-| 1. Build and push | `make k8s-push VERSION=<tag>` | `.env` lines to paste |
+| 1. Build and push | [Building a release](#building-a-release) | `.env` updated, `kubectl diff` shows only images |
 | 2. Start the watch, in a second terminal | `ROLLOUT_WATCH_LINES=600 make -s rollout-watch > rollout.log` | `stream open, posting 600 lines` |
 | 3. Apply | `make k8s-apply` | `deployment "grill-room" successfully rolled out` |
 | 4. Check the pods | below | 2 pods ready, `grill_room_leader` 1 on exactly one |
@@ -14,6 +14,31 @@ Two pods, replaced one at a time (spec 017, 017-AC19, 017-AC21). A rollout or th
 | 6. Delete one server pod | below | `result: PASS`, the replacement Ready |
 
 Every command runs from the checkout, with `KUBECONFIG` set to the cluster's file and `NS=${K8S_NAMESPACE:-grill-room}`. The watch needs `curl` and `jq`, and reads `GRILL_ROOM_ADMIN_TOKEN` and `K8S_DOMAIN` from `.env` (or `GRILL_ROOM_URL` to target another server).
+
+## Building a release
+
+The room server, STT and tts images are built on a workstation and pushed to a private registry (`REGISTRY`): the tts image holds gated weights (spec 013). The daemon binaries and the sandbox image come from the tag's GitHub release ([release.md](release.md)).
+
+1. If the release adds a migration, dump the database first: an older server refuses a newer schema, so the dump is the rollback.
+   ```sh
+   kubectl -n "$K8S_PG_NAMESPACE" exec <primary pod> -- pg_dump -Fc "$K8S_PG_DATABASE" > pre-<tag>.dump
+   ```
+2. Tag and wait for the release: `git tag -s -m <tag> <tag> && git push origin <tag>`, then `gh run watch` on `release.yml`.
+3. Build from a clean checkout at the tag, with the signed daemons:
+   ```sh
+   git worktree add ../grill-room-<tag> <tag>
+   cp .env ../grill-room-<tag>/
+   gh release download <tag> -R babs/grill-room -D ../dist-<tag>
+   make -C ../grill-room-<tag> k8s-push VERSION=<tag> DAEMON_DIST=../dist-<tag>
+   ```
+   - `k8s-push` refuses another commit than the tag's, a dirty tree, or a `DAEMON_DIST` of another version: an image without the signed release ships workers every daemon refuses. A `-dev` version skips these checks.
+   - It pulls the base images first (`--pull`): a cached floating tag such as `golang:1.27-bookworm` would ship an old toolchain.
+   - `make` reads `REGISTRY` and `HF_TOKEN_FILE`, the tts image's token (`.env.example`), from `.env`: give the token file an absolute path, the build runs in the worktree.
+4. Back in the checkout, save `.env`, then paste the three printed lines into it, and `GRILL_ROOM_SANDBOX_IMAGE` from the release's `sandbox-image.txt`.
+5. `make k8s-render k8s-check`, then `kubectl -n "$NS" diff -f deploy/k8s/out`: only the expected images and settings change.
+6. Steps 2 to 5 of the TL;DR. Then `curl https://grill-room.<domain>/api/daemon/version` names the tag and lists six `bundles`.
+
+Rollback: put the saved `.env` back and `make k8s-apply`; after a migration, restore the dump first.
 
 ## First rollout from a release before Phase 3
 

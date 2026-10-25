@@ -28,7 +28,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: ui-tools ui-vendor ui-check build e2e-build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-twopod e2e-voice e2e-device-voice e2e-persona-voice e2e-persona-echo e2e-agent-live e2e-mcp-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance pg-up pg-down scenarios-test stt-test stt-image stt-image-test stt-image-e2e tts-test tts-image tts-lexcheck cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete k8s-autoscale k8s-autoscale-delete lab-check rollout-watch fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: k8s-push-check ui-tools ui-vendor ui-check build e2e-build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-twopod e2e-voice e2e-device-voice e2e-persona-voice e2e-persona-echo e2e-agent-live e2e-mcp-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance pg-up pg-down scenarios-test stt-test stt-image stt-image-test stt-image-e2e tts-test tts-image tts-lexcheck cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete k8s-autoscale k8s-autoscale-delete lab-check rollout-watch fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -225,7 +225,7 @@ tts-test:
 TTS_BUILD_THREADS ?= 2
 tts-image:
 	@test -n "$(HF_TOKEN_FILE)" && test -r "$(HF_TOKEN_FILE)" || { echo "HF_TOKEN_FILE must name a readable token file, see .env.example" >&2; exit 1; }
-	DOCKER_BUILDKIT=1 docker build -t grill-tts:local \
+	DOCKER_BUILDKIT=1 docker build $(PULL) -t grill-tts:local \
 	  --secret id=hf,src='$(HF_TOKEN_FILE)' \
 	  --build-arg BUILD_THREADS=$(TTS_BUILD_THREADS) \
 	  --build-arg VERSION=$(VERSION) \
@@ -256,7 +256,7 @@ scenarios-test:
 # transcribe.cpp compile jobs: CI passes its core count, the default spares a shared workstation.
 STT_BUILD_JOBS ?= 2
 stt-image:
-	docker build -t grill-stt:local \
+	docker build $(PULL) -t grill-stt:local \
 	  --build-arg BUILD_JOBS=$(STT_BUILD_JOBS) \
 	  --build-arg VERSION=$(VERSION) \
 	  --build-arg COMMIT_HASH=$(COMMIT_HASH) \
@@ -334,7 +334,7 @@ lint: ui-check
 # included) instead of building an unsigned one in the image. DAEMON_PREV_DIST=<dir> adds the
 # previous release, for supervisors too old for this one's workers.
 docker-build:
-	docker build -t $(APP_NAME):local $(if $(DAEMON_DIST),--build-context daemon-dist='$(DAEMON_DIST)') $(if $(DAEMON_PREV_DIST),--build-context daemon-prev='$(DAEMON_PREV_DIST)') \
+	docker build $(PULL) -t $(APP_NAME):local $(if $(DAEMON_DIST),--build-context daemon-dist='$(DAEMON_DIST)') $(if $(DAEMON_PREV_DIST),--build-context daemon-prev='$(DAEMON_PREV_DIST)') \
 	  --build-arg VERSION=$(VERSION) \
 	  --build-arg COMMIT_HASH=$(COMMIT_HASH) \
 	  --build-arg BUILD_TIMESTAMP=$(BUILD_TS) \
@@ -393,11 +393,21 @@ K8S_OPTIONAL  := GRILL_ROOM_SANDBOX_IMAGE GRILL_ROOM_TRUSTED_PROXIES GRILL_ROOM_
 $(foreach v,$(K8S_VARS) $(K8S_OPTIONAL),$(eval k8s-render: export $(v) := $$($(v))))
 
 # The room server, STT and tts images, pushed for the lab; prints the .env lines to paste. REGISTRY
-# must be private: the tts image holds gated weights (spec 013).
-k8s-push: docker-build stt-image tts-image
+# must be private: the tts image holds gated weights (spec 013). docs/rollout.md has the whole release.
+# --pull: a cached floating base tag (golang:1.27-bookworm) would ship an outdated toolchain.
+k8s-push: PULL := --pull
+k8s-push: k8s-push-check docker-build stt-image tts-image
 	$(call push,$(APP_NAME):local,server,GRILL_ROOM_IMAGE)
 	$(call push,grill-stt:local,stt,GRILL_STT_IMAGE)
 	$(call push,grill-tts:local,tts,GRILL_TTS_IMAGE)
+
+# A -dev VERSION skips both checks: a lab image from a work tree, never a release.
+k8s-push-check:
+	@case '$(VERSION)' in *-dev*) exit 0;; esac; \
+	test "$$(git describe --exact-match --tags 2>/dev/null)" = '$(VERSION)' && test -z "$$(git status --porcelain --untracked-files=no)" \
+	  || { echo "k8s-push builds a release from a clean checkout at tag $(VERSION) (docs/rollout.md)" >&2; exit 1; }; \
+	test -n '$(DAEMON_DIST)' && test "$$(cat '$(DAEMON_DIST)/VERSION' 2>/dev/null)" = '$(VERSION)' \
+	  || { echo "DAEMON_DIST must hold the $(VERSION) GitHub release: daemons refuse an unsigned worker (docs/rollout.md)" >&2; exit 1; }
 
 # Secrets land in $(K8S_OUT) (untracked, owner-only): the templates hold none.
 k8s-render:
