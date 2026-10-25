@@ -674,7 +674,7 @@ The cluster needs:
 - a namespace you create beforehand, with pull access to your registry for its default service account.
 
 ```sh
-make k8s-push VERSION=v0.8.0     # builds and pushes server and stt, prints GRILL_ROOM_IMAGE= and GRILL_STT_IMAGE= for .env
+make k8s-push VERSION=v0.8.0 DAEMON_DIST=<release dir>  # from the tag: server, stt and tts; prints their .env lines (docs/rollout.md)
 export KUBECONFIG=<lab kubeconfig>
 make k8s-apply                   # renders, applies to K8S_NAMESPACE (default grill-room), waits for the rollouts
 make k8s-delete                  # removes everything k8s-apply created; the database stays
