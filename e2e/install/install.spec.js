@@ -125,10 +125,15 @@ test('one-liner install, pairing, dev key, self-update, tampered release refused
     await admin.locator('#channel-form').getByRole('button', { name: 'Save' }).click();
     await expect(admin.locator('#update-version')).toHaveText(versions[1], { timeout: 60_000 });
     await expect(admin.locator('#update-from')).toHaveText(baseURL);
+    await admin.evaluate(() => { window.oldUI = true; });
     await admin.getByRole('button', { name: 'Update and restart' }).click();
-    // 005-AC45: the same tab waits for the new version on its address and reconnects.
+    // 005-AC45: the same tab waits for the new version on its address and reconnects, then reloads
+    // so the new version's UI runs; its banner closes.
     await expect(admin.locator('#banner')).toContainText('Updating');
     await expect(admin.locator('#banner')).toHaveText(`Updated to ${versions[1]}.`, { timeout: 120_000 });
+    expect(await admin.evaluate(() => window.oldUI)).toBeUndefined();
+    await admin.locator('#banner').getByRole('button', { name: 'Dismiss' }).click();
+    await expect(admin.locator('#banner')).toBeHidden();
     const next = admin;
     await expect(next.locator('#host')).toContainText(versions[1]);
     await expect(next.locator('#self-sig')).toHaveText('signed with a dev key');
