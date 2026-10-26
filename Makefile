@@ -381,13 +381,14 @@ K8S_VARS      := K8S_DOMAIN GRILL_ROOM_IMAGE GRILL_STT_IMAGE GRILL_TTS_IMAGE GRI
                  K8S_PG_HOST K8S_PG_DATABASE K8S_PG_SECRET K8S_PG_NAMESPACE
 KUBECTL        = kubectl -n '$(K8S_NAMESPACE)'
 # Optional: an empty GRILL_ROOM_SMTP_ADDR turns email sign-in off. The NetworkPolicy opens
-# K8S_SMTP_PORT to the namespace K8S_SMTP_NAMESPACE, where the relay runs.
+# K8S_SMTP_PORT to the namespace K8S_SMTP_NAMESPACE, where an in-cluster relay runs, and to any address.
 K8S_SMTP_NAMESPACE ?= mailpit
 K8S_SMTP_PORT      ?= 1025
 # PostgreSQL over the pod network: require encrypts; verify-full also needs the cluster's CA in the pod.
 K8S_PG_PORT        ?= 5432
 K8S_PG_SSLMODE     ?= require
-K8S_OPTIONAL  := GRILL_ROOM_SANDBOX_IMAGE GRILL_ROOM_TRUSTED_PROXIES GRILL_ROOM_SMTP_ADDR GRILL_ROOM_SMTP_FROM K8S_SMTP_NAMESPACE K8S_SMTP_PORT \
+K8S_OPTIONAL  := GRILL_ROOM_SANDBOX_IMAGE GRILL_ROOM_TRUSTED_PROXIES GRILL_ROOM_SMTP_ADDR GRILL_ROOM_SMTP_FROM GRILL_ROOM_SMTP_USERNAME GRILL_ROOM_SMTP_PASSWORD \
+                 K8S_SMTP_NAMESPACE K8S_SMTP_PORT \
                  K8S_PG_PORT K8S_PG_SSLMODE
 # Exported to the render recipe only: no other recipe sees the secrets in its environment.
 $(foreach v,$(K8S_VARS) $(K8S_OPTIONAL),$(eval k8s-render: export $(v) := $$($(v))))
@@ -423,10 +424,12 @@ k8s-render:
 	@printenv K8S_PG_SSLMODE | grep -Eq '^(disable|require|verify-ca|verify-full)$$' \
 	  || { echo "K8S_PG_SSLMODE must be disable, require, verify-ca or verify-full" >&2; exit 1; }
 	@printenv GRILL_ROOM_SMTP_FROM | grep -q '"' && { echo "GRILL_ROOM_SMTP_FROM must not hold a double quote" >&2; exit 1; } || true
+	@for v in GRILL_ROOM_SMTP_USERNAME GRILL_ROOM_SMTP_PASSWORD; do printenv "$$v" | grep -Eq '^[A-Za-z0-9._~+/=@-]*$$' \
+	  || { echo "$$v holds characters the Secret template cannot quote: use [A-Za-z0-9._~+/=@-]" >&2; exit 1; }; done
 	rm -rf '$(K8S_OUT)' && (umask 077 && mkdir -p '$(K8S_OUT)')
 	@for f in deploy/k8s/*.yaml; do \
 	  (umask 077 && ROOM_HOST=grill-room.$$K8S_DOMAIN LIVEKIT_HOST=grill-room-livekit.$$K8S_DOMAIN TURN_HOST=grill-room-turn.$$K8S_DOMAIN \
-	    envsubst '$${GRILL_ROOM_IMAGE} $${GRILL_STT_IMAGE} $${GRILL_TTS_IMAGE} $${GRILL_ROOM_SANDBOX_IMAGE} $${GRILL_ROOM_TRUSTED_PROXIES} $${GRILL_ROOM_SMTP_ADDR} $${GRILL_ROOM_SMTP_FROM} $${K8S_SMTP_NAMESPACE} $${K8S_SMTP_PORT} $${K8S_PG_HOST} $${K8S_PG_PORT} $${K8S_PG_DATABASE} $${K8S_PG_SSLMODE} $${K8S_PG_SECRET} $${K8S_PG_NAMESPACE} $${ROOM_HOST} $${LIVEKIT_HOST} $${TURN_HOST} $${GRILL_ROOM_ADMIN_TOKEN} $${STT_TOKEN} $${TTS_TOKEN} $${LIVEKIT_API_KEY} $${LIVEKIT_API_SECRET}' \
+	    envsubst '$${GRILL_ROOM_IMAGE} $${GRILL_STT_IMAGE} $${GRILL_TTS_IMAGE} $${GRILL_ROOM_SANDBOX_IMAGE} $${GRILL_ROOM_TRUSTED_PROXIES} $${GRILL_ROOM_SMTP_ADDR} $${GRILL_ROOM_SMTP_FROM} $${GRILL_ROOM_SMTP_USERNAME} $${GRILL_ROOM_SMTP_PASSWORD} $${K8S_SMTP_NAMESPACE} $${K8S_SMTP_PORT} $${K8S_PG_HOST} $${K8S_PG_PORT} $${K8S_PG_DATABASE} $${K8S_PG_SSLMODE} $${K8S_PG_SECRET} $${K8S_PG_NAMESPACE} $${ROOM_HOST} $${LIVEKIT_HOST} $${TURN_HOST} $${GRILL_ROOM_ADMIN_TOKEN} $${STT_TOKEN} $${TTS_TOKEN} $${LIVEKIT_API_KEY} $${LIVEKIT_API_SECRET}' \
 	    < $$f > '$(K8S_OUT)'/$${f##*/}) || exit 1; \
 	done
 	@echo "rendered $(K8S_OUT): https://grill-room.$$K8S_DOMAIN/"

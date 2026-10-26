@@ -113,6 +113,13 @@ spec:
               value: "${GRILL_ROOM_SMTP_ADDR}"
             - name: GRILL_ROOM_SMTP_FROM
               value: "${GRILL_ROOM_SMTP_FROM}"
+            # Empty for a relay without auth.
+            - name: GRILL_ROOM_SMTP_USERNAME
+              valueFrom:
+                secretKeyRef: { name: grill-room, key: smtp-username }
+            - name: GRILL_ROOM_SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: grill-room, key: smtp-password }
             - name: GRILL_ROOM_DEVICE_STT_MODEL_DIR
               value: /models
             # The pod's address, for the scrape (deploy/monitoring/room.yaml); the network policy
