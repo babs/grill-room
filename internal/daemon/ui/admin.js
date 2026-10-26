@@ -36,8 +36,10 @@ function reload() {
 // restarting is when an update restarted the app, 0 otherwise: the page waits for the new
 // version on the same address instead of giving up (005-AC45).
 const restarting = signal(0);
-// updatingFrom is the version before the update: the old process may still answer once.
-let updatingFrom = '';
+// seenVersion is the version this page was loaded from: a new one, whoever updated the app, reloads
+// the page so the new version's UI runs.
+let seenVersion = '';
+const updatedKey = 'updated-to';
 
 // pollErr is the banner a failed poll set: the next poll that works takes it down.
 let pollErr = '';
@@ -62,10 +64,13 @@ async function poll() {
   }
   if (pollErr && banner.value === pollErr) banner.value = '';
   pollErr = '';
-  if (restarting.value && data.value?.status.version !== updatingFrom) {
-    restarting.value = 0;
-    banner.value = 'Updated to ' + (data.value?.status.version || 'the new version') + '.';
+  const version = data.value?.status.version || '';
+  if (seenVersion && version && version !== seenVersion) {
+    sessionStorage.setItem(updatedKey, version);
+    location.reload();
+    return;
   }
+  seenVersion ||= version;
   if (!stopped.value) setTimeout(poll, data.value && settling(data.value) ? 500 : 2000);
 }
 
@@ -249,7 +254,6 @@ function RelaxBanner() {
  * @returns {Promise<void>}
  */
 function startUpdate() {
-  updatingFrom = data.value?.status.version || '';
   return api('POST', '/api/update').then(() => {
     restarting.value = Date.now();
     banner.value = 'Updating… the AI host app restarts, and this page reconnects by itself.';
@@ -1399,4 +1403,9 @@ function App() {
 
 render(html`<${App} />`, /** @type {HTMLElement} */ (document.getElementById('app')));
 
+const updated = sessionStorage.getItem(updatedKey);
+if (updated) {
+  sessionStorage.removeItem(updatedKey);
+  banner.value = 'Updated to ' + updated + '.';
+}
 startSession().then(poll).catch((err) => { banner.value = err.message; });
