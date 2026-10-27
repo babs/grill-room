@@ -1,6 +1,6 @@
 from typing import Any
 
-from grill_tts.lexcheck import RENDERS, heard, langs, score, track_id
+from grill_tts.lexcheck import RENDERS, heard, langs, max_failed, score, track_id
 from grill_tts.textlayer import load_seed
 
 
@@ -67,21 +67,26 @@ def entry_fr(i: int) -> list[str]:
     return [track_id(i, "fr", n) for n in range(RENDERS)]
 
 
-# 013-AC33: the job fails only when more than 5 entries fail, whether their tracks are lost or
-# misheard; the report names every failure either way.
+# 013-AC33: the job fails only when more than 4 % of the entry-languages fail (rounded up), whether
+# their tracks are lost or misheard; the report names every failure either way.
 def test_score_job_threshold() -> None:
     fr = [i for i, e in enumerate(load_seed()) if "fr" in langs(e)]
     rows = all_heard()
+    allowed = max_failed(len(score(rows)["entries"]))
     lost = {t for i in fr[:3] for t in entry_fr(i)}
-    misheard = {t for i in fr[3:5] for t in entry_fr(i)}
+    misheard = {t for i in fr[3:allowed] for t in entry_fr(i)}
     for r in rows:
         if r["id"] in misheard:
             r["text"] = "rien"
     res = score([r for r in rows if r["id"] not in lost])
-    assert res["pass"] and len(res["failed"]) == 5
-    misheard |= set(entry_fr(fr[5]))
+    assert res["pass"] and len(res["failed"]) == allowed
+    misheard |= set(entry_fr(fr[allowed]))
     for r in rows:
         if r["id"] in misheard:
             r["text"] = "rien"
     res = score([r for r in rows if r["id"] not in lost])
-    assert not res["pass"] and len(res["failed"]) == 6
+    assert not res["pass"] and len(res["failed"]) == allowed + 1
+
+
+def test_max_failed_grows_with_the_lexicon() -> None:
+    assert [max_failed(n) for n in (1, 25, 26, 125, 148, 250)] == [1, 1, 2, 5, 6, 10]
