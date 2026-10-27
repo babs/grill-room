@@ -59,6 +59,9 @@ func TestCreateAnonymousRoom(t *testing.T) {
 		actx := WithAudit(ctx, AuditEntry{At: time.Now(), Action: "room.create", TargetKind: TargetRoom, TargetID: id}, map[string]any{"anonymous": true})
 		return s.CreateAnonymousRoom(actx, id, "Room "+id, "Ann", "rec-"+id, "sess-"+id, "inv-"+id, "tok-"+id, "lnk-"+id, "lnkh-"+id)
 	}
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 5, RoomCreation: CreationAnyone, StorageQuota: 1 << 40}); err != nil {
+		t.Fatal(err)
+	}
 	r, pid, err := anon("open")
 	if err != nil || r.ID != "open" || pid == 0 {
 		t.Fatalf("create: %+v %d %v", r, pid, err)
@@ -103,14 +106,18 @@ func TestCreateAnonymousRoom(t *testing.T) {
 		reason string
 		// pre says the settings-only check refuses too: the quota is the transaction's alone.
 		pre bool
+		// atQuota says the refusal is the one the web layer remembers (026-AC2).
+		atQuota bool
 	}{
-		{"super-admin", InstanceSettings{RoomsPerProfile: 5, RoomCreation: CreationSuperAdmin}, "only the super-admin creates rooms", true},
-		{"quota", InstanceSettings{RoomsPerProfile: 5, RoomCreation: CreationAnyone, StorageQuota: 1}, "storage quota", false},
+		{"super-admin", InstanceSettings{RoomsPerProfile: 5, RoomCreation: CreationSuperAdmin, StorageQuota: 1 << 40}, "only the super-admin creates rooms", true, false},
+		// 026-AC1: refused in the transaction too, for settings changed since the settings-only check.
+		{"no quota", InstanceSettings{RoomsPerProfile: 5, RoomCreation: CreationAnyone}, string(errNoQuota), true, false},
+		{"quota", InstanceSettings{RoomsPerProfile: 5, RoomCreation: CreationAnyone, StorageQuota: 1}, "storage quota", false, true},
 	} {
 		if err := putSettings(ctx, s, c.v); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := anon(c.name); !errors.Is(err, ErrCreationRefused) || !strings.Contains(err.Error(), c.reason) {
+		if _, _, err := anon(c.name); !errors.Is(err, ErrCreationRefused) || !strings.Contains(err.Error(), c.reason) || errors.Is(err, ErrAtQuota) != c.atQuota {
 			t.Fatalf("%s: %v", c.name, err)
 		}
 		if err := s.AnonymousCreationAllowed(ctx); c.pre != errors.Is(err, ErrCreationRefused) || (c.pre && !strings.Contains(err.Error(), c.reason)) || (!c.pre && err != nil) {

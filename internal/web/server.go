@@ -85,6 +85,15 @@ type Server struct {
 	loginLimit limiter
 	// anonLimit rate-limits anonymous room creations per client IP (019-AC4).
 	anonLimit limiter
+	// atQuota is this pod's memory of the instance at its storage quota: until when, the refusal
+	// to answer meanwhile, and gen, moved by each clear so a store call begun before it cannot
+	// set it again (026-AC2).
+	atQuota struct {
+		sync.Mutex
+		until time.Time
+		err   string
+		gen   uint64
+	}
 	// keys holds the instance's secret, which also seals the OIDC sign-in cookie (021-AC2).
 	keys *instanceKeys
 	// oidcLogins counts provider sign-ins by OIDCResults (021-AC13).

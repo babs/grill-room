@@ -327,14 +327,13 @@ func (im *importer) guardrails() error {
 			return err
 		}
 	}
-	if v.StorageQuota > 0 {
-		used, err := usedBytes(im.ctx, im.tx)
-		if err != nil {
-			return err
-		}
-		if used+im.o.ArchiveBytes > v.StorageQuota {
-			return refuseImport("the instance holds %s and the archive %s, over its %s storage quota", mb(used), mb(im.o.ArchiveBytes), mb(v.StorageQuota))
-		}
+	// At the quota itself, the refusal every creation gives (026-AC2).
+	used, err := quotaUsed(im.ctx, im.tx, v)
+	if err != nil {
+		return err
+	}
+	if v.StorageQuota > 0 && used+im.o.ArchiveBytes > v.StorageQuota {
+		return refuseImport("the instance holds %s and the archive %s, over its %s storage quota", mb(used), mb(im.o.ArchiveBytes), mb(v.StorageQuota))
 	}
 	return nil
 }

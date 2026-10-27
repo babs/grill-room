@@ -25,6 +25,10 @@ const (
 	anonRoomWindow               = time.Hour
 )
 
+// atQuotaFor is how long a pod refuses room creations, without a scan, once it saw the instance at
+// its storage quota (026-AC2).
+const atQuotaFor = 30 * time.Second
+
 // Audit actions of room admins and instance settings (004-AC6 to 004-AC8).
 const (
 	ActionRoomAdminAdd    = "room_admin.add"
@@ -205,11 +209,50 @@ func (s *Server) roomOverview(w http.ResponseWriter, r *http.Request, sess sessi
 	writeJSON(w, http.StatusOK, v)
 }
 
+// refuseAtQuota answers 403 with the remembered refusal while this pod saw the instance at its
+// storage quota less than atQuotaFor ago, so a refused creation scans no table (026-AC2).
+// Otherwise it returns the memory's generation, for creationRefused.
+func (s *Server) refuseAtQuota(w http.ResponseWriter) (uint64, bool) {
+	s.atQuota.Lock()
+	defer s.atQuota.Unlock()
+	if !s.now().Before(s.atQuota.until) {
+		return s.atQuota.gen, false
+	}
+	httpError(w, http.StatusForbidden, s.atQuota.err)
+	return 0, true
+}
+
+// creationRefused answers a store's ErrCreationRefused with 403 and its reason, remembering one at
+// the storage quota unless the memory was cleared since generation gen (026-AC2).
+func (s *Server) creationRefused(w http.ResponseWriter, err error, gen uint64) {
+	if errors.Is(err, store.ErrAtQuota) {
+		s.atQuota.Lock()
+		if s.atQuota.gen == gen {
+			s.atQuota.until, s.atQuota.err = s.now().Add(atQuotaFor), err.Error()
+		}
+		s.atQuota.Unlock()
+	}
+	httpError(w, http.StatusForbidden, err.Error())
+}
+
+// forgetAtQuota clears the memory: the new settings may lift the quota, so this pod measures
+// again (026-AC2).
+func (s *Server) forgetAtQuota() {
+	s.atQuota.Lock()
+	s.atQuota.until = time.Time{}
+	s.atQuota.gen++
+	s.atQuota.Unlock()
+}
+
 // createProfileRoom creates a room for the profile of the browser, which joins it and becomes its
 // room admin, within the instance's guardrails (004-AC7).
 func (s *Server) createProfileRoom(w http.ResponseWriter, r *http.Request) {
 	p := s.profileFor(w, r)
 	if p == nil || s.refuseExternal(w, p) {
+		return
+	}
+	gen, refused := s.refuseAtQuota(w)
+	if refused {
 		return
 	}
 	var req struct {
@@ -260,7 +303,7 @@ func (s *Server) createProfileRoom(w http.ResponseWriter, r *http.Request) {
 	room, err := s.bus.Store.CreateProfileRoom(ctx, id, name, p.ID, display, HashToken(NewToken()), HashToken(NewToken()), link, HashToken(link), setup)
 	switch {
 	case errors.Is(err, store.ErrCreationRefused):
-		httpError(w, http.StatusForbidden, err.Error())
+		s.creationRefused(w, err, gen)
 	case err != nil:
 		s.serverError(w, "create_room_failed", err)
 	default:
@@ -304,10 +347,14 @@ func (s *Server) createAnonymousRoom(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, fmt.Sprintf("display name must be 1 to %d characters", maxNameLen))
 		return
 	}
-	// The creation mode, a settings read, is checked before the limiter: a refusal costs no write; the
-	// quota scan comes after it, so an IP over its limit cannot run it; a quota refusal gives its slot
-	// back (019-AC4, 019-AC5). ponytail: at the quota an IP under its limit repeats the scan; cache
-	// "at quota" for a few seconds if that ever shows up.
+	// The creation mode and the quota being set, a settings read, and this pod's "at quota" memory are
+	// checked before the limiter: a refusal costs no write; the quota scan comes after it, so an IP
+	// over its limit cannot run it; a quota refusal gives its slot back (019-AC4, 019-AC5, 026-AC1,
+	// 026-AC2).
+	gen, refused := s.refuseAtQuota(w)
+	if refused {
+		return
+	}
 	if err := s.bus.Store.AnonymousCreationAllowed(r.Context()); errors.Is(err, store.ErrCreationRefused) {
 		httpError(w, http.StatusForbidden, err.Error())
 		return
@@ -338,7 +385,7 @@ func (s *Server) createAnonymousRoom(w http.ResponseWriter, r *http.Request) {
 			s.log.Warn("anon_room_unhit_failed", zap.Error(err))
 		}
 		if errors.Is(err, store.ErrCreationRefused) {
-			httpError(w, http.StatusForbidden, err.Error())
+			s.creationRefused(w, err, gen)
 		} else {
 			s.serverError(w, "create_room_failed", err)
 		}
@@ -427,6 +474,7 @@ func (s *Server) setInstanceSettings(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "set_instance_settings_failed", err)
 		return
 	}
+	s.forgetAtQuota()
 	s.log.Info("instance_settings_set", zap.Int("rooms_per_profile", v.RoomsPerProfile), zap.Int64("storage_quota_bytes", v.StorageQuota),
 		zap.String("room_creation", v.RoomCreation), zap.Int("plugin_max_mb", v.PluginMaxMB),
 		zap.Bool("purge_empty_profiles", v.PurgeEmptyProfiles))

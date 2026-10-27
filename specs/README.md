@@ -25,3 +25,4 @@
 | [019](019-anonymous-rooms.md) | Anonymous room creation behind an env flag; no import for emailless profiles while it is on | shipped |
 | [020](020-chat-voice-split.md) | Written chat and voice transcription apart: filter, transcription pane | shipped |
 | [021](021-restricted-instance.md) | Restricted instance: OIDC sign-in for members, invites for guests | shipped |
+| [026](026-guardrail-followups.md) | Guardrail follow-ups: quota for anonymous rooms, at-quota memory, attach a guest profile at sign-in | in progress |
