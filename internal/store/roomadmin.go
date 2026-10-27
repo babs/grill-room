@@ -27,6 +27,8 @@ const UnlimitedRooms = -1
 var (
 	// ErrCreationRefused is returned when a profile may not create a room; the error says why.
 	ErrCreationRefused = errors.New("room creation refused")
+	// ErrAtQuota is the ErrCreationRefused of an instance at its storage quota (026-AC2).
+	ErrAtQuota = fmt.Errorf("%w", ErrCreationRefused)
 	// ErrNoProfile is returned when appointing a participant who has no profile.
 	ErrNoProfile = errors.New("this participant has no profile")
 	// ErrLastAdmin is returned when the last room admin steps down.
@@ -227,7 +229,11 @@ func (s *Store) CreateAnonymousRoom(ctx context.Context, id, name, displayName, 
 		if err != nil {
 			return err
 		}
-		used, err := instanceRefusal(ctx, tx, v)
+		// Again under the lock: the settings may have changed since AnonymousCreationAllowed (026-AC1).
+		if err := anonymousRefusal(v); err != nil {
+			return err
+		}
+		used, err := quotaUsed(ctx, tx, v)
 		if err != nil {
 			return err
 		}
@@ -249,35 +255,44 @@ func (s *Store) CreateAnonymousRoom(ctx context.Context, id, name, displayName, 
 	return r, profileID, nil
 }
 
-// AnonymousCreationAllowed returns ErrCreationRefused while only the super-admin creates rooms. It
-// reads the settings alone, without the write lock; the storage quota, which scans every table, is
-// CreateAnonymousRoom's to check (019-AC5).
+// AnonymousCreationAllowed returns ErrCreationRefused while only the super-admin creates rooms, or
+// while no storage quota is set (026-AC1). It reads the settings alone, without the write lock; the
+// storage quota, which scans every table, is CreateAnonymousRoom's to check (019-AC5).
 func (s *Store) AnonymousCreationAllowed(ctx context.Context) error {
 	v, err := instanceSettings(ctx, s.db)
 	if err != nil {
 		return err
 	}
-	if v.RoomCreation == CreationSuperAdmin {
-		return errSuperAdminOnly
-	}
-	return nil
+	return anonymousRefusal(v)
 }
 
 // errSuperAdminOnly refuses a room while only the super-admin creates them.
 var errSuperAdminOnly = fmt.Errorf("%w: only the super-admin creates rooms on this instance", ErrCreationRefused)
 
-// instanceRefusal returns ErrCreationRefused, with why, when settings v let no profile create a
-// room: creation is the super-admin's, or the instance is at its storage quota. It returns the
-// bytes the database holds, 0 without a quota.
-func instanceRefusal(ctx context.Context, db catalogQuerier, v InstanceSettings) (int64, error) {
-	if v.RoomCreation == CreationSuperAdmin {
-		return 0, errSuperAdminOnly
+// refusal is an ErrCreationRefused whose text is the whole reason.
+type refusal string
+
+func (r refusal) Error() string { return string(r) }
+func (refusal) Unwrap() error   { return ErrCreationRefused }
+
+// errNoQuota refuses an anonymous room without a storage quota: the per-IP limit alone does not
+// bound storage (026-AC1).
+const errNoQuota = refusal("Room creation without an invite needs a storage quota: set one in /admin › Server")
+
+// anonymousRefusal returns ErrCreationRefused, with why, when settings v let no anonymous room be
+// created before the quota is even measured.
+func anonymousRefusal(v InstanceSettings) error {
+	switch {
+	case v.RoomCreation == CreationSuperAdmin:
+		return errSuperAdminOnly
+	case v.StorageQuota <= 0:
+		return errNoQuota
 	}
-	return quotaUsed(ctx, db, v)
+	return nil
 }
 
 // quotaUsed returns the bytes the database holds under settings v's storage quota, 0 without one,
-// or ErrCreationRefused when it is reached.
+// or ErrAtQuota when it is reached.
 func quotaUsed(ctx context.Context, db catalogQuerier, v InstanceSettings) (int64, error) {
 	if v.StorageQuota <= 0 {
 		return 0, nil
@@ -287,7 +302,7 @@ func quotaUsed(ctx context.Context, db catalogQuerier, v InstanceSettings) (int6
 		return 0, err
 	}
 	if used >= v.StorageQuota {
-		return 0, fmt.Errorf("%w: the instance holds %s, at its %s storage quota", ErrCreationRefused, mb(used), mb(v.StorageQuota))
+		return 0, fmt.Errorf("%w: the instance holds %s, at its %s storage quota", ErrAtQuota, mb(used), mb(v.StorageQuota))
 	}
 	return used, nil
 }

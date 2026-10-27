@@ -9,8 +9,8 @@ import (
 )
 
 // Every GRILL_ROOM_* variable the server reads has a row in the README's variable table (## Run): a
-// missing one is a setting operators cannot find (019-AC11, 021-AC14). The test harness's own
-// GRILL_ROOM_TEST_* are not settings.
+// missing one is a setting operators cannot find (019-AC11, 021-AC14, 026-AC6). The test harness's
+// own GRILL_ROOM_TEST_* are not settings.
 func TestEveryEnvVarIsInTheReadme(t *testing.T) {
 	doc, err := os.ReadFile("../../README.md")
 	if err != nil {

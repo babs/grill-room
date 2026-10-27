@@ -610,12 +610,28 @@ func TestImportRefusals(t *testing.T) {
 	o = importOpts("x")
 	o.MaxUpload = 5
 	refused("upload size", o, dir, "too large for this instance")
-	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: 1}); err != nil {
+	used, err := s.UsedBytes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Room left, but not for the archive: the settings rows add a few bytes.
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: used + 1<<20}); err != nil {
 		t.Fatal(err)
 	}
 	o = importOpts("x")
-	o.ArchiveBytes = 1
+	o.ArchiveBytes = 2 << 20
 	refused("storage quota", o, dir, "storage quota")
+	// 026-AC2: at the quota itself, the refusal every room creation gives.
+	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone, StorageQuota: 1}); err != nil {
+		t.Fatal(err)
+	}
+	o.ArchiveBytes = 1
+	if _, err := s.ImportRoom(ctx, dir, o); !errors.Is(err, ErrAtQuota) || !strings.Contains(err.Error(), "at its 0.0 MB storage quota") {
+		t.Errorf("at the quota: %v", err)
+	}
+	if n := rooms(); n != before {
+		t.Error("an import at the quota created a room")
+	}
 	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 10, RoomCreation: CreationAnyone}); err != nil {
 		t.Fatal(err)
 	}

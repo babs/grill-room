@@ -28,7 +28,7 @@ import { RoomPanel, AdminRows, RowMenu, Meter, TabBar, fetchJSON, roomTabs, size
  * @typedef {{keep: MergeSide, merge: MergeSide, rooms: {room_id: string, room_name: string, keep: boolean, merge: boolean}[],
  *   skills: {keep: string[], merge: string[], renamed: {from: string, to: string}[]}, seats: MergeCount, shared_skills: MergeCount, templates: MergeCount,
  *   starters: MergeCount, rooms_created: MergeCount, room_admin: {keep: string[], merge: string[]},
- *   over_limits: {kind: string, after: number, limit: number}[], email_after: string, api_tokens: number}} MergePreview
+ *   over_limits: {kind: string, after: number, limit: number}[], email_after: string, api_tokens: number, result_bound?: boolean}} MergePreview
  * @typedef {import('./room-panel.js').Member} Participant
  * @typedef {{name: string, counts: Record<string, number>, bytes: Record<string, number>, warnings: string[], format: number,
  *   instance_version: string, same_instance: boolean, exported_at: string, archive_bytes: number,
@@ -578,11 +578,15 @@ function MergeSheet({ profiles, from, done }) {
     </select></label>`;
   const p = preview;
   const same = keep > 0 && keep === merge;
+  // A bound result ends the other side's sign-ins: B when A is internal, A when it takes B's binding (026-AC4).
+  const unbound = p?.result_bound ? (profiles.find((x) => x.id === keep)?.internal ? p.merge : p.keep) : null;
   return html`<dialog ref=${ref} id="merge-sheet" class="sheet wide full" aria-labelledby="merge-title" onClose=${closed} onClick=${outside}
     onCancel=${(/** @type {Event} */ e) => { if (busy) e.preventDefault(); }}>
     <div class="sheet-head"><h2 id="merge-title">Merge two profiles?</h2>
       <button type="button" class="btn-icon btn-ghost" aria-label="Close" disabled=${busy} onClick=${close} dangerouslySetInnerHTML=${icon('close')}></button></div>
-    <p class="hint">Everything of the merged profile moves to the kept one, then the merged profile is deleted. This cannot be undone.</p>
+    <p class="hint">${unbound
+      ? 'The merged profile\'s rooms, skills, templates and starters move to the kept one, then the merged profile is deleted. This cannot be undone.'
+      : 'Everything of the merged profile moves to the kept one, then the merged profile is deleted. This cannot be undone.'}</p>
     <div class="row merge-pick">
       ${pick('merge-keep', 'Keep', keep, setKeep)}
       <button type="button" id="merge-swap" class="btn-secondary" disabled=${busy} onClick=${() => { setKeep(merge); setMerge(keep); }}>Swap</button>
@@ -612,6 +616,7 @@ function MergeSheet({ profiles, from, done }) {
         <div><dt>Room admin, moved</dt><dd>${listed(p.room_admin.merge)}</dd></div>
         <div><dt>API tokens, revoked</dt><dd id="merge-tokens">${p.api_tokens}</dd></div>
       </dl>
+      ${unbound && html`<p id="merge-bound" class="warn">The result is an organisation account: devices signed into ${unbound.name || 'the other profile'} are signed out, its paired daemons removed and their running turn failed.</p>`}
       ${p.over_limits.length > 0 && html`<ul id="merge-limits" class="warn">${p.over_limits.map((o) => html`<li>
         ${limitKinds[o.kind] || o.kind}: ${o.after} after the merge, over the limit of ${o.limit}. The profile keeps them all and adds no more until under it.</li>`)}</ul>`}
     </section>`}

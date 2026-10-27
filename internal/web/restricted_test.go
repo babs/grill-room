@@ -243,6 +243,7 @@ func TestOIDCReplacedSessionFails(t *testing.T) {
 	e := newOIDCEnv(t, idp, zap.New(core), nil)
 	d := e.device(t)
 	d.join(t, e.createRoom(t, "R").ID, "Guest")
+	setEmail(t, e, profileID(t, d.profileJSON(t)), "guest@example.com")
 	var old string
 	for _, c := range d.c.Jar.Cookies(&url.URL{Scheme: "http", Host: strings.TrimPrefix(e.ts.URL, "http://"), Path: "/"}) {
 		if c.Name == profileCookie {

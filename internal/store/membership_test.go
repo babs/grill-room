@@ -231,7 +231,7 @@ func TestBlocksFollowRoomProfileAndMerge(t *testing.T) {
 		}
 		return n
 	}
-	if _, _, err := s.MergeProfiles(ctx, bobs[0].ProfileID, bobs[1].ProfileID); err != nil {
+	if _, _, _, err := s.MergeProfiles(ctx, bobs[0].ProfileID, bobs[1].ProfileID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if n := count(`SELECT count(*) FROM room_blocks WHERE profile_id = ?`, bobs[0].ProfileID); n != 1 {

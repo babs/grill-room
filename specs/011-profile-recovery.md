@@ -59,7 +59,7 @@ A signed-out browser sees "Recover my profile by email" on the join page. A prof
   - B's participants point to A. In a room where both have a seat, both seats stay, history stays intact (messages keep their author seat), and both seats belong to A.
   - B's personal skills, published shared skills, persona templates, starters and created rooms move to A. A personal skill whose name A already has gets the suffix `-2` (then `-3`, ...).
   - B's room-admin roles move to A; a room where both were admins keeps one row.
-  - B's browser sessions move to A, so B's devices are signed into A. B's pending magic and recovery links are deleted.
+  - B's browser sessions move to A, so B's devices are signed into A (amended by 026-AC4: not when B's credentials end, that is when the result is bound to the provider and B is not the side holding the binding). B's pending magic and recovery links are deleted.
 - [x] **AC12** A keeps its email. If A has none, it takes B's. B's email, if not taken, is deleted with B. A keeps its own name, limit override and email-nudge snooze. The skills disclaimer counts as accepted if either had accepted it.
 - [x] **AC13** The merge writes one audit entry: admin, A and B uuids and names, and the counts moved per kind. B's earlier audit entries stay under B's uuid. A failure rolls everything back and leaves both profiles as they were.
 - [x] **AC14** After a merge, A's room list shows the union of both lists with no duplicate room, and a merged profile may sit above a per-profile limit (skills, templates, starters, rooms created): it keeps everything and adds nothing more of that kind until under the limit.
@@ -164,7 +164,7 @@ Routine calls while writing, overturnable:
 - The nudge banner replaces the 005 recovery-link notice when SMTP is set, so the first message brings one notice, not two.
 - A merge ignores per-profile limits rather than refusing: refusing would block the very cleanup it exists for.
 - A colliding personal skill takes a `-2` suffix: skill names must stay valid skill names, and nothing is lost.
-- B's sessions move to A: the person's other device keeps working without signing in again.
+- B's sessions move to A: the person's other device keeps working without signing in again. Amended by 026: not when B's credentials end (the result is bound to the provider and B is not the side holding the binding).
 - B's uuid is not kept as an alias. Exports made before the merge relink B's seats to nobody on import. Add an alias table if that hurts.
 - Empty means "nothing a person would miss", as AC15 lists. A seat with a revoked invite does not count: its room is already closed to it.
 - Last sign-in counts as activity, read from the newest `profile_sessions.created_at`; no new column.

@@ -109,8 +109,31 @@ func (s *Store) SetDaemonSettings(ctx context.Context, id int64, set DaemonSetti
 // ProfileDaemons returns the daemons paired from profileID's seats while it is bound to a
 // provider: those an unbind removes, none for a profile it would refuse (021-AC10).
 func (s *Store) ProfileDaemons(ctx context.Context, profileID int64) ([]Daemon, error) {
+	return s.daemonsWhere(ctx, `p.profile_id = ? AND f.oidc_issuer IS NOT NULL`, profileID)
+}
+
+// MergeDaemons returns the daemons MergeProfiles(keep, merge, orgIssuer) removes: those paired
+// from the seats of the side whose credentials end, none when the result is not bound (026-AC4).
+func (s *Store) MergeDaemons(ctx context.Context, keep, merge int64, orgIssuer string) ([]Daemon, error) {
+	var keepIss, mergeIss string
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(k.oidc_issuer, ''), COALESCE(m.oidc_issuer, '') FROM profiles k JOIN profiles m ON m.id = ?2 WHERE k.id = ?1`,
+		keep, merge).Scan(&keepIss, &mergeIss)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("merge daemons: %w", err)
+	}
+	side := endingSide(keep, merge, keepIss, mergeIss, orgIssuer)
+	if side == 0 {
+		return nil, nil
+	}
+	return s.daemonsWhere(ctx, `p.profile_id = ?`, side)
+}
+
+func (s *Store) daemonsWhere(ctx context.Context, where string, args ...any) ([]Daemon, error) {
 	rows, err := s.db.QueryContext(ctx, daemonCols+`JOIN participants p ON p.id = d.participant_id JOIN profiles f ON f.id = p.profile_id
-		WHERE p.profile_id = ? AND f.oidc_issuer IS NOT NULL ORDER BY d.id`, profileID)
+		WHERE `+where+` ORDER BY d.id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("profile daemons: %w", err)
 	}

@@ -239,3 +239,71 @@ test('admin through the provider group, and Unbind', async ({ browser, request }
   await ops.getByRole('button', { name: signInButton }).click();
   await expect(ops.locator('#logout')).toBeVisible();
 });
+
+// guestThenSignIn joins the room of an invite as a guest named name, then signs in from the home
+// page as sub; it returns the page on the attach offer.
+async function guestThenSignIn(browser, request, sub, name) {
+  const { room, path } = await invite(request, `${name}'s room`);
+  const page = await (await browser.newContext()).newPage();
+  await page.goto(path);
+  await page.getByLabel('Your name').fill(name);
+  await page.getByRole('button', { name: 'Join the room' }).click();
+  await expect(page.locator('#me')).toHaveText(name);
+  await provider(request, user(sub, `${name} Org`), false);
+  await page.goto('/');
+  await page.getByRole('button', { name: signInButton }).click();
+  await expect(page.getByRole('heading', { name: 'Attach your guest profile' })).toBeVisible();
+  await expect(page.locator('main')).toContainText(`Attach your guest profile ${name} (1 room) to your organisation account, signed in as ${name} Org?`);
+  await expect(page.locator('main li')).toHaveText([`Rooms: ${name}'s room`]);
+  return { page, room };
+}
+
+const profileRooms = async (page) => {
+  await page.goto('/profile');
+  return page.locator('#rooms li .room-line a').allTextContents();
+};
+
+// 026-AC3, 026-AC4: a guest who signs in is offered to attach the guest profile; Attach brings its
+// room to the bound profile, audited as an oidc_attach merge.
+test('a guest signing in attaches the guest profile', async ({ browser, request }) => {
+  const { page, room } = await guestThenSignIn(browser, request, 'hana', 'Hana');
+  await page.getByRole('button', { name: 'Attach' }).click();
+  await expect(page).toHaveURL(/\/$/);
+  expect(await internal(page)).toBe(true);
+  await expect.poll(() => profileRooms(page)).toEqual([room.name]);
+  const audit = await (await request.get('/api/admin/audit?action=profile.merge', { headers: admin })).json();
+  expect(audit.entries.some((e) => e.details.via === 'oidc_attach' && e.details.merge_name === 'Hana')).toBe(true);
+});
+
+// 026-AC4: Not now keeps the guest profile apart: the bound profile has no room.
+test('Not now keeps the guest profile apart', async ({ browser, request }) => {
+  const { page } = await guestThenSignIn(browser, request, 'ivan', 'Ivan');
+  await page.getByRole('button', { name: 'Not now' }).click();
+  await expect(page).toHaveURL(/\/$/);
+  expect(await internal(page)).toBe(true);
+  expect(await page.evaluate(() => fetch('/api/profile').then((r) => r.json()).then((p) => p.profile.rooms.length))).toBe(0);
+});
+
+// 026-AC4: the admin merge sheet warns when the result is an organisation account, naming the
+// guest side whose devices are signed out, in both directions.
+test('the merge sheet warns about a bound result', async ({ browser, request }) => {
+  const { path } = await invite(request, 'Merge warning room');
+  const member = await joined(browser, request, 'kira', 'Kira', path);
+  const guest = await (await browser.newContext()).newPage();
+  await guest.goto(path);
+  await guest.getByLabel('Your name').fill('Lena');
+  await guest.getByRole('button', { name: 'Join the room' }).click();
+  await expect(guest.locator('#me')).toHaveText('Lena');
+  const idOf = async (page) => (await (await page.request.get('/api/profile')).json()).profile.id;
+  const [kira, lena] = [await idOf(member), await idOf(guest)];
+  const page = await (await browser.newContext()).newPage();
+  expect(await signIn(page, adminToken, 'profiles')).toBe(201);
+  await rowAction(page.locator('#profile-' + lena), /^Merge Lena into another profile/);
+  const sheet = page.locator('#merge-sheet');
+  const warning = 'The result is an organisation account: devices signed into Lena are signed out, its paired daemons removed and their running turn failed.';
+  await sheet.locator('#merge-keep').selectOption(String(kira));
+  await expect(sheet.locator('#merge-bound')).toHaveText(warning);
+  await sheet.locator('#merge-swap').click();
+  await expect(sheet.locator('#merge-keep')).toHaveValue(String(lena));
+  await expect(sheet.locator('#merge-bound')).toHaveText(warning);
+});

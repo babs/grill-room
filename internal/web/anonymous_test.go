@@ -22,12 +22,29 @@ type anonRoomResp struct {
 	RecoveryURL string `json:"recovery_url"`
 }
 
-// newAnonEnv is an instance with anonymous rooms on, perHour of them per client IP.
+// anonSettings let anonymous rooms be created: anyone creates rooms, under a storage quota far off
+// (026-AC1).
+var anonSettings = store.InstanceSettings{RoomsPerProfile: 5, RoomCreation: store.CreationAnyone, StorageQuota: 1 << 40}
+
+// newAnonEnv is an instance with anonymous rooms on, perHour of them per client IP, under
+// anonSettings.
 func newAnonEnv(t *testing.T, perHour int) *env {
 	t.Helper()
 	opts := testOptions
 	opts.AnonymousRooms, opts.AnonymousRoomsPerHour = true, perHour
-	return newEnvOpts(t, opts)
+	e := newEnvOpts(t, opts)
+	e.setSettings(t, anonSettings)
+	return e
+}
+
+// anonEvents counts the anonymous route's limiter slots spent.
+func (e *env) anonEvents(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := e.sqlDB(t).QueryRowContext(t.Context(), `SELECT count(*) FROM rate_events WHERE scope = 'anon-room'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 // anonRoom posts body as JSON to the anonymous route as the device, from the client ip behind the
@@ -101,6 +118,7 @@ func TestAnonymousRoomCreates(t *testing.T) {
 	opts := testOptions
 	opts.AnonymousRooms = true
 	e := newEnvLog(t, opts, zap.New(core))
+	e.setSettings(t, anonSettings)
 	d := e.device(t)
 	code, _, b := d.anonRoom(t, "203.0.113.2", anonBody)
 	if code != http.StatusCreated {
@@ -220,7 +238,7 @@ func TestAnonymousRoomRateLimit(t *testing.T) {
 			t.Fatalf("super-admin only: %d", code)
 		}
 	}
-	e.setSettings(t, store.InstanceSettings{RoomsPerProfile: 5, RoomCreation: store.CreationAnyone})
+	e.setSettings(t, anonSettings)
 	for i := range 2 {
 		if code, _, b := e.device(t).anonRoom(t, ip, anonBody); code != http.StatusCreated {
 			t.Fatalf("room %d after refusals: %d %s", i, code, b)
@@ -327,7 +345,7 @@ func TestAnonymousRoomRefusedBeforeTheWrite(t *testing.T) {
 			t.Fatalf("refusal %d: %d %s", i, code, b)
 		}
 	}
-	e.setSettings(t, store.InstanceSettings{RoomsPerProfile: 5, RoomCreation: store.CreationAnyone})
+	e.setSettings(t, anonSettings)
 	d = e.device(t)
 	if code, _, b := d.anonRoom(t, ip, anonBody); code != http.StatusCreated {
 		t.Fatalf("after the refusals: %d %s", code, b)
@@ -401,15 +419,7 @@ func TestAnonymousRoomErrors(t *testing.T) {
 // quota refusal gives its slot back.
 func TestAnonymousRoomGuardrailsAndTheLimiter(t *testing.T) {
 	e := newAnonEnv(t, 1)
-	db := e.sqlDB(t)
-	events := func() int {
-		t.Helper()
-		var n int
-		if err := db.QueryRowContext(t.Context(), `SELECT count(*) FROM rate_events WHERE scope = 'anon-room'`).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		return n
-	}
+	events := func() int { return e.anonEvents(t) }
 	const over, fresh = "203.0.113.40", "203.0.113.41"
 	if code, _, b := e.device(t).anonRoom(t, over, anonBody); code != http.StatusCreated {
 		t.Fatalf("first: %d %s", code, b)
@@ -433,8 +443,35 @@ func TestAnonymousRoomGuardrailsAndTheLimiter(t *testing.T) {
 	if n := events(); n != 1 {
 		t.Fatalf("%d limiter events after the quota refusal, want 1", n)
 	}
-	e.setSettings(t, store.InstanceSettings{RoomsPerProfile: 5, RoomCreation: store.CreationAnyone})
+	e.setSettings(t, anonSettings)
 	if code, _, b := e.device(t).anonRoom(t, fresh, anonBody); code != http.StatusCreated {
 		t.Fatalf("after the quota refusal: %d %s", code, b)
+	}
+}
+
+// 026-AC1: with anonymous rooms on and no storage quota, the route refuses before the limiter, an
+// IP over its limit included, and creates nothing; with a quota it creates.
+func TestAnonymousRoomNeedsAQuota(t *testing.T) {
+	e := newAnonEnv(t, 1)
+	const over, fresh = "203.0.113.50", "203.0.113.51"
+	if code, _, b := e.device(t).anonRoom(t, over, anonBody); code != http.StatusCreated {
+		t.Fatalf("with a quota: %d %s", code, b)
+	}
+	noQuota := anonSettings
+	noQuota.StorageQuota = 0
+	e.setSettings(t, noQuota)
+	profiles, events := e.profileCount(t), e.anonEvents(t)
+	for _, ip := range []string{over, fresh, fresh} {
+		code, _, b := e.device(t).anonRoom(t, ip, anonBody)
+		if code != http.StatusForbidden || errorOf(t, b) != "Room creation without an invite needs a storage quota: set one in /admin › Server" {
+			t.Fatalf("%s, no quota: %d %s", ip, code, b)
+		}
+	}
+	if e.profileCount(t) != profiles || e.anonEvents(t) != events {
+		t.Fatal("a refusal without a quota made a profile or spent a slot")
+	}
+	e.setSettings(t, anonSettings)
+	if code, _, b := e.device(t).anonRoom(t, fresh, anonBody); code != http.StatusCreated {
+		t.Fatalf("quota set again: %d %s", code, b)
 	}
 }

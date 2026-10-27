@@ -45,7 +45,7 @@ func TestMergeOIDCBinding(t *testing.T) {
 			bindTo(t, s, a, c.a)
 			bindTo(t, s, b, c.b)
 			ctx := WithAudit(t.Context(), AuditEntry{At: time.Now(), Actor: ActorSuperAdmin, Action: "profile.merge", TargetKind: TargetProfile}, nil)
-			if _, _, err := s.MergeProfiles(ctx, a, b); err != nil {
+			if _, _, _, err := s.MergeProfiles(ctx, a, b, ""); err != nil {
 				t.Fatal(err)
 			}
 			// Both bound: B's binding goes, said without its subject.
@@ -84,7 +84,7 @@ func TestSignInOIDC(t *testing.T) {
 	in := func(sub, email, sess string) OIDCSignIn {
 		return OIDCSignIn{Issuer: "https://idp.example", Subject: sub, Email: email, Name: "N", RecoveryHash: "rec-" + sess, SessionHash: sess, Now: time.Unix(5000, 0)}
 	}
-	p, how, err := s.SignInOIDC(ctx, in("s1", "a@example.com", "h1"))
+	p, how, _, err := s.SignInOIDC(ctx, in("s1", "a@example.com", "h1"))
 	if err != nil || how != OIDCNew || p.Email != "a@example.com" || p.Name != "N" || p.OIDCIssuer != "https://idp.example" || !p.OIDCSignedInAt.Equal(time.Unix(5000, 0)) {
 		t.Fatalf("new: %+v %s %v", p, how, err)
 	}
@@ -94,24 +94,24 @@ func TestSignInOIDC(t *testing.T) {
 	// A returning sign-in refreshes its time (021-AC4; phase 3 revalidates from it).
 	later := in("s1", "", "h2")
 	later.Now = time.Unix(9000, 0)
-	if q, how, err := s.SignInOIDC(ctx, later); err != nil || how != OIDCExisting || q.ID != p.ID || !q.OIDCSignedInAt.Equal(later.Now) {
+	if q, how, _, err := s.SignInOIDC(ctx, later); err != nil || how != OIDCExisting || q.ID != p.ID || !q.OIDCSignedInAt.Equal(later.Now) {
 		t.Fatalf("existing: %+v %s %v", q, how, err)
 	}
 	other := newProfile(t, s, "o")
 	if _, err := s.db.ExecContext(ctx, `UPDATE profiles SET email = 'o@example.com' WHERE id = ?`, other); err != nil {
 		t.Fatal(err)
 	}
-	if q, how, err := s.SignInOIDC(ctx, in("s2", "o@example.com", "h3")); err != nil || how != OIDCEmail || q.ID != other || subjectOf(t, s, other) != "s2" {
+	if q, how, _, err := s.SignInOIDC(ctx, in("s2", "o@example.com", "h3")); err != nil || how != OIDCEmail || q.ID != other || subjectOf(t, s, other) != "s2" {
 		t.Fatalf("email: %+v %s %v", q, how, err)
 	}
 	// The address of a bound profile: a new one, without it.
-	if q, how, err := s.SignInOIDC(ctx, in("s3", "o@example.com", "h4")); err != nil || how != OIDCNew || q.ID == other || q.Email != "" {
+	if q, how, _, err := s.SignInOIDC(ctx, in("s3", "o@example.com", "h4")); err != nil || how != OIDCNew || q.ID == other || q.Email != "" {
 		t.Fatalf("taken email: %+v %s %v", q, how, err)
 	}
 	n := count(t, s, `SELECT count(*) FROM profiles`)
 	cctx, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, _, err := s.SignInOIDC(cctx, in("s4", "", "h5")); err == nil {
+	if _, _, _, err := s.SignInOIDC(cctx, in("s4", "", "h5")); err == nil {
 		t.Fatal("a cancelled sign-in succeeded")
 	}
 	if count(t, s, `SELECT count(*) FROM profiles`) != n {
@@ -273,7 +273,7 @@ func TestOIDCAdminGroupAndUnbind(t *testing.T) {
 	ctx := t.Context()
 	sign := func(sub, sess, group string) *Profile {
 		t.Helper()
-		p, _, err := s.SignInOIDC(ctx, OIDCSignIn{Issuer: "https://idp.example", Subject: sub, RecoveryHash: "rec-" + sess, SessionHash: sess, Now: time.Unix(5000, 0), AdminGroup: group})
+		p, _, _, err := s.SignInOIDC(ctx, OIDCSignIn{Issuer: "https://idp.example", Subject: sub, RecoveryHash: "rec-" + sess, SessionHash: sess, Now: time.Unix(5000, 0), AdminGroup: group})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -288,7 +288,7 @@ func TestOIDCAdminGroupAndUnbind(t *testing.T) {
 	b := sign("s2", "h3", "ops")
 	a := newProfile(t, s, "a")
 	mctx := WithAudit(ctx, AuditEntry{At: time.Now(), Actor: ActorSuperAdmin, Action: "profile.merge", TargetKind: TargetProfile}, nil)
-	if _, _, err := s.MergeProfiles(mctx, a, b.ID); err != nil {
+	if _, _, _, err := s.MergeProfiles(mctx, a, b.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if p, err := s.profile(ctx, `id = ?`, a); err != nil || p.OIDCAdminGroup != "" || subjectOf(t, s, a) != "s2" {
@@ -335,7 +335,7 @@ func TestProviderAdminSessions(t *testing.T) {
 	at := time.Unix(5000, 0)
 	sign := func(sub, sess, group string) *Profile {
 		t.Helper()
-		p, _, err := s.SignInOIDC(ctx, OIDCSignIn{Issuer: "https://idp.example", Subject: sub, Name: "Olga", RecoveryHash: "rec-" + sess, SessionHash: sess, Now: at, AdminGroup: group})
+		p, _, _, err := s.SignInOIDC(ctx, OIDCSignIn{Issuer: "https://idp.example", Subject: sub, Name: "Olga", RecoveryHash: "rec-" + sess, SessionHash: sess, Now: at, AdminGroup: group})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -435,7 +435,7 @@ func TestOIDCAuditFailureRollsBack(t *testing.T) {
 	}
 	n := count(t, s, `SELECT count(*) FROM profiles`)
 	in := OIDCSignIn{Issuer: "https://idp.example", Subject: "s9", RecoveryHash: "rec-x", SessionHash: "hx", Now: time.Unix(5000, 0)}
-	if _, _, err := s.SignInOIDC(bad("profile.oidc_bind"), in); err == nil {
+	if _, _, _, err := s.SignInOIDC(bad("profile.oidc_bind"), in); err == nil {
 		t.Fatal("sign-in with a failing audit succeeded")
 	}
 	if count(t, s, `SELECT count(*) FROM profiles`) != n {
@@ -449,7 +449,7 @@ func TestPurgeKeepsProviderAdmin(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	at := time.Now().Add(-25 * time.Hour)
-	p, _, err := s.SignInOIDC(ctx, OIDCSignIn{Issuer: "https://idp.example", Subject: "ops", RecoveryHash: "rec-o", SessionHash: "ho", Now: at, AdminGroup: "ops"})
+	p, _, _, err := s.SignInOIDC(ctx, OIDCSignIn{Issuer: "https://idp.example", Subject: "ops", RecoveryHash: "rec-o", SessionHash: "ho", Now: at, AdminGroup: "ops"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,6 +481,7 @@ func TestUnbindEndsSeatsAndDaemons(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	addPush(t, s, seat.ID)
 	// Unbound, the profile's daemons are none an unbind would remove.
 	if ds, err := s.ProfileDaemons(ctx, seat.ProfileID); err != nil || len(ds) != 0 {
 		t.Fatalf("unbound profile's daemons: %+v %v", ds, err)
@@ -513,6 +514,9 @@ func TestUnbindEndsSeatsAndDaemons(t *testing.T) {
 	if _, _, err := s.PollPairing(ctx, "pr1", "sec", "daemon-late", nowMS); !errors.Is(err, ErrNotFound) {
 		t.Errorf("approved pairing polled after unbind: %v", err)
 	}
+	if n := count(t, s, `SELECT count(*) FROM push_subscriptions WHERE participant_id = ?`, seat.ID); n != 0 {
+		t.Errorf("push subscription after unbind: %d", n)
+	}
 	if n := count(t, s, `SELECT count(*) FROM participants WHERE id = ? AND removed_at IS NULL`, seat.ID); n != 1 {
 		t.Fatal("unbind removed the seat")
 	}
@@ -521,5 +525,66 @@ func TestUnbindEndsSeatsAndDaemons(t *testing.T) {
 	}
 	if p, err := s.ProfileParticipant(ctx, "sess-back", "r1"); err != nil || p.ID != seat.ID {
 		t.Fatalf("seat after the profile's sign-in: %+v %v", p, err)
+	}
+}
+
+// 021-AC4 as amended by 026: binding an unbound profile by its email signs it out everywhere first: browser sessions,
+// seat tokens and their push subscriptions, API tokens, daemons and the pairings its seats
+// approved; OIDCEmailDaemons lists those daemons beforehand. A returning sign-in ends nothing.
+func TestSignInOIDCByEmailEndsCredentials(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	seat := joinWithProfile(t, s, "r1", "Olga", JoinProfile{RecoveryHash: "rec-o", SessionHash: "sess-o"})
+	if _, err := s.db.ExecContext(ctx, `UPDATE profiles SET email = 'o@example.com' WHERE id = ?`, seat.ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.PairDaemon(ctx, "r1", seat.ID, "daemon-o")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nowMS := time.Now().UnixMilli()
+	if ok, err := s.CreatePairing(ctx, &Pairing{ID: "po", RoomID: "r1", Code: "123456", SecretHash: "sec", ExpiresAt: time.Now().Add(10 * time.Minute)}, 5, 50, nowMS); err != nil || !ok {
+		t.Fatalf("pairing: %v %v", ok, err)
+	}
+	if err := s.ApprovePairing(ctx, "r1", "po", seat.ID, nowMS); err != nil {
+		t.Fatal(err)
+	}
+	addPush(t, s, seat.ID)
+	newToken(t, s, ctx, seat.ProfileID, "api-o", ScopeFull, nil, time.Now())
+	in := OIDCSignIn{Issuer: "https://idp.example", Subject: "olga", Email: "o@example.com", RecoveryHash: "rec-n", SessionHash: "sess-n", Now: time.Now()}
+	for _, x := range []OIDCSignIn{{Issuer: in.Issuer, Subject: in.Subject}, {Issuer: in.Issuer, Subject: in.Subject, Email: "nobody@example.com"}} {
+		if ds, err := s.OIDCEmailDaemons(ctx, x); err != nil || len(ds) != 0 {
+			t.Fatalf("daemons for %+v: %+v %v", x, ds, err)
+		}
+	}
+	if ds, err := s.OIDCEmailDaemons(ctx, in); err != nil || len(ds) != 1 || ds[0].ID != d.ID {
+		t.Fatalf("daemons: %+v %v", ds, err)
+	}
+	p, how, ended, err := s.SignInOIDC(ctx, in)
+	if err != nil || how != OIDCEmail || p.ID != seat.ProfileID {
+		t.Fatalf("sign-in: %+v %s %v", p, how, err)
+	}
+	if len(ended.Seats) != 1 || ended.Seats[0].ID != seat.ID || !slices.Equal(ended.DaemonRooms, []string{"r1"}) || ended.APITokens != 1 {
+		t.Errorf("ended %+v", ended)
+	}
+	for q, want := range map[string]int{
+		`SELECT count(*) FROM profile_sessions WHERE token_hash = 'sess-o'`: 0, `SELECT count(*) FROM profile_sessions WHERE token_hash = 'sess-n'`: 1,
+		`SELECT count(*) FROM push_subscriptions`: 0, `SELECT count(*) FROM api_tokens`: 0, `SELECT count(*) FROM daemons`: 0,
+		`SELECT count(*) FROM participants WHERE token_hash LIKE 'merged-%'`: 1,
+	} {
+		if n := count(t, s, q); n != want {
+			t.Errorf("%s: %d, want %d", q, n, want)
+		}
+	}
+	if _, _, err := s.PollPairing(ctx, "po", "sec", "daemon-late", nowMS); !errors.Is(err, ErrNotFound) {
+		t.Errorf("approved pairing polled: %v", err)
+	}
+	if ds, err := s.OIDCEmailDaemons(ctx, in); err != nil || len(ds) != 0 {
+		t.Errorf("daemons once bound: %+v %v", ds, err)
+	}
+	in.SessionHash = "sess-again"
+	if _, how, ended, err := s.SignInOIDC(ctx, in); err != nil || how != OIDCExisting || len(ended.Seats) != 0 ||
+		count(t, s, `SELECT count(*) FROM profile_sessions WHERE token_hash = 'sess-n'`) != 1 {
+		t.Errorf("returning sign-in: %s %+v %v", how, ended, err)
 	}
 }

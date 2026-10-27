@@ -131,25 +131,51 @@ type oidcState struct {
 	Replaced string `json:"r,omitempty"`
 	// Silent is a flow started with prompt=none: the callback falls back to a normal one (021-AC8).
 	Silent bool `json:"q,omitempty"`
+	// Guest is the profile of Replaced when it was unbound and emailless at login: the callback
+	// offers to attach it (026-AC3).
+	Guest int64 `json:"g,omitempty"`
 }
 
-const oidcStateKeyUse = "oidc-state"
+// Each sealed value has its own key: a state never passes as an attach offer.
+const (
+	oidcStateKeyUse  = "oidc-state"
+	oidcAttachKeyUse = "oidc-attach"
+)
 
 func (s *Server) sealState(ctx context.Context, st oidcState) (string, error) {
+	return s.seal(ctx, oidcStateKeyUse, st)
+}
+
+// seal encodes v under an HMAC of the key derived for use.
+func (s *Server) seal(ctx context.Context, use string, v any) (string, error) {
 	// HTML escaping would grow a "<" in next sixfold.
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	if err := enc.Encode(st); err != nil {
-		return "", fmt.Errorf("seal oidc state: %w", err)
+	if err := enc.Encode(v); err != nil {
+		return "", fmt.Errorf("seal %s: %w", use, err)
 	}
 	b := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
-	key, err := s.keys.subKey(ctx, oidcStateKeyUse)
+	key, err := s.keys.subKey(ctx, use)
 	if err != nil {
 		return "", err
 	}
 	sealed := base64.RawURLEncoding.EncodeToString(b)
 	return sealed + "." + hmacHex(key, sealed), nil
+}
+
+// unseal decodes into v what seal sealed for use; false when it is forged or malformed.
+func (s *Server) unseal(ctx context.Context, use, sealed string, v any) (bool, error) {
+	enc, mac, _ := strings.Cut(sealed, ".")
+	key, err := s.keys.subKey(ctx, use)
+	if err != nil {
+		return false, err
+	}
+	if !hmac.Equal([]byte(mac), []byte(hmacHex(key, enc))) {
+		return false, nil
+	}
+	b, err := base64.RawURLEncoding.DecodeString(enc)
+	return err == nil && json.Unmarshal(b, v) == nil, nil
 }
 
 // openState returns the state v seals, false when it is forged, malformed or expired.
@@ -161,18 +187,10 @@ func (s *Server) openState(ctx context.Context, v string) (oidcState, bool, erro
 // readState returns the state v seals, expired or not; false and the zero state when it is forged
 // or malformed, which expireOldFlows sorts as the oldest.
 func (s *Server) readState(ctx context.Context, v string) (oidcState, bool, error) {
-	enc, mac, _ := strings.Cut(v, ".")
-	key, err := s.keys.subKey(ctx, oidcStateKeyUse)
-	if err != nil {
-		return oidcState{}, false, err
-	}
-	if !hmac.Equal([]byte(mac), []byte(hmacHex(key, enc))) {
-		return oidcState{}, false, nil
-	}
 	var st oidcState
-	b, err := base64.RawURLEncoding.DecodeString(enc)
-	if err != nil || json.Unmarshal(b, &st) != nil {
-		return oidcState{}, false, nil
+	ok, err := s.unseal(ctx, oidcStateKeyUse, v, &st)
+	if !ok {
+		return oidcState{}, false, err
 	}
 	return st, true, nil
 }
@@ -218,9 +236,22 @@ func (s *Server) oidcLogin(w http.ResponseWriter, r *http.Request) {
 	st := oidcState{Next: safeNext(q.Get("next")), Silent: q.Get("prompt") == "none"}
 	if c, err := r.Cookie(profileCookie); err == nil && c.Value != "" {
 		st.Replaced = HashToken(c.Value)
+		// Only here does the Strict cookie show which guest this browser holds (026-AC3).
+		p, err := s.bus.Store.ProfileBySession(r.Context(), st.Replaced)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			s.serverError(w, "oidc_login_failed", err)
+			return
+		}
+		if err == nil && attachable(p) {
+			st.Guest = p.ID
+		}
 	}
 	s.startFlow(w, r, st)
 }
+
+// attachable is a guest profile the attach offer covers: an emailed one is bound by its email
+// instead (026-AC3).
+func attachable(p *store.Profile) bool { return p.OIDCIssuer == "" && p.Email == "" }
 
 // startFlow gives st a fresh state, nonce and verifier, seals it in its own cookie and sends the
 // browser to the provider.
@@ -274,7 +305,7 @@ func (s *Server) expireOldFlows(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-var oidcFailTmpl = template.Must(template.ParseFS(templates, "templates/oidc.html"))
+var oidcTmpl = template.Must(template.ParseFS(templates, "templates/oidc.html"))
 
 // oidcFailure is a refused callback: its status, logged reason, page words and metric result.
 type oidcFailure struct {
@@ -303,10 +334,15 @@ func unavailable(err error, fields ...zap.Field) *oidcFailure {
 func (s *Server) oidcFailed(w http.ResponseWriter, f *oidcFailure) {
 	s.oidcLogins[f.result].Add(1)
 	s.log.Warn("oidc_callback_failed", append([]zap.Field{zap.String("reason", f.reason), zap.String("iss", s.opts.OIDC.cfg.Issuer)}, f.fields...)...)
+	oidcPage(w, f.code, map[string]any{"Title": "Sign-in failed", "Text": f.text, "Retry": f.retry})
+}
+
+// oidcPage answers the sign-in page: a failure, or the attach offer (026-AC3).
+func oidcPage(w http.ResponseWriter, code int, data map[string]any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(f.code)
-	_ = oidcFailTmpl.Execute(w, map[string]any{"Text": f.text, "Retry": f.retry})
+	w.WriteHeader(code)
+	_ = oidcTmpl.Execute(w, data)
 }
 
 // idpErrorCode keeps what an error code may hold, cut short: the URL is anyone's to write.
@@ -329,7 +365,7 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	// not silent, so a second refusal shows the failure page (021-AC8).
 	if f == nil && st.Silent && interactionNeeded[r.URL.Query().Get("error")] {
 		s.log.Info("oidc_silent_refused", zap.String("idp_error", idpErrorCode(r.URL.Query().Get("error"))))
-		s.startFlow(w, r, oidcState{Next: st.Next, Replaced: st.Replaced})
+		s.startFlow(w, r, oidcState{Next: st.Next, Replaced: st.Replaced, Guest: st.Guest})
 		return
 	}
 	var idt *oidc.IDToken
@@ -353,21 +389,203 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	session := NewToken()
 	in.RecoveryHash, in.SessionHash = HashToken(NewToken()), HashToken(session)
 	actx := store.WithAudit(r.Context(), store.AuditEntry{At: in.Now, Action: ActionProfileOIDCBind, TargetKind: store.TargetProfile}, nil)
-	p, how, err := s.bus.Store.SignInOIDC(actx, in)
+	// A profile bound by its email leaves its other devices: its daemons go first (021-AC4 as amended by 026).
+	daemons, err := s.bus.Store.OIDCEmailDaemons(r.Context(), in)
+	if err == nil {
+		err = s.unhostAll(r.Context(), daemons, "the AI host's profile now signs in with the organisation account")
+	}
+	var p *store.Profile
+	var how string
+	var ended store.EndedCredentials
+	if err == nil {
+		p, how, ended, err = s.bus.Store.SignInOIDC(actx, in)
+	}
 	if err != nil {
 		s.oidcFailed(w, failure(http.StatusInternalServerError, "server", oidcServerText, zap.Error(err)))
 		return
 	}
-	// The browser leaves the profile it held at login: that session ends, the profile stays (021-AC4).
-	if st.Replaced != "" {
-		if err := s.bus.Store.DeleteProfileSession(r.Context(), st.Replaced); err != nil {
-			s.log.Warn("oidc_replaced_session_failed", zap.Error(err))
-		}
-	}
+	s.credentialsEnded(r.Context(), daemons, ended)
 	setProfileCookie(w, r, session)
 	s.oidcLogins["ok_"+how].Add(1)
 	s.log.Info("oidc_signed_in", zap.String("iss", idt.Issuer), zap.String("how", how), zap.Int64("profile", p.ID))
+	// A guest the sign-in just bound is no longer attachable: offerAttach reads it again.
+	if st.Guest != 0 && s.offerAttach(w, r, st, p.ID) {
+		return
+	}
+	// The browser leaves the profile it held at login: that session ends, the profile stays (021-AC4).
+	s.endReplaced(r.Context(), st.Replaced)
 	http.Redirect(w, r, st.Next, http.StatusSeeOther)
+}
+
+func (s *Server) endReplaced(ctx context.Context, hash string) {
+	if hash == "" {
+		return
+	}
+	if err := s.bus.Store.DeleteProfileSession(ctx, hash); err != nil {
+		s.log.Warn("oidc_replaced_session_failed", zap.Error(err))
+	}
+}
+
+// attachOffer is what the attach page posts back, bound to both profiles and to the guest's
+// session, which Not now and Attach end: a replay finds it gone (026-AC3, 026-AC5).
+type attachOffer struct {
+	Profile  int64  `json:"p"`
+	Guest    int64  `json:"g"`
+	Replaced string `json:"r"`
+	Next     string `json:"next"`
+	Exp      int64  `json:"exp"`
+}
+
+// guestOf is the profile of the guest session hash when it is still guest id and attachable, nil
+// otherwise.
+func (s *Server) guestOf(ctx context.Context, hash string, id int64) (*store.Profile, error) {
+	g, err := s.bus.Store.ProfileBySession(ctx, hash)
+	if errors.Is(err, store.ErrNotFound) || err == nil && (g.ID != id || !attachable(g)) {
+		return nil, nil
+	}
+	return g, err
+}
+
+// offerAttach shows the attach page for the guest st holds, and reports whether it did; the
+// browser is signed in as profile either way. A guest with nothing to move gets none (026-AC3).
+func (s *Server) offerAttach(w http.ResponseWriter, r *http.Request, st oidcState, profile int64) bool {
+	ctx := r.Context()
+	g, err := s.guestOf(ctx, st.Replaced, st.Guest)
+	var pv *store.MergePreview
+	if err == nil && g != nil {
+		pv, err = s.bus.Store.MergePreview(ctx, profile, g.ID, s.orgIssuer())
+	}
+	var offer string
+	rooms, moves := attachMoves(pv)
+	if err == nil && len(moves) > 0 {
+		// An abandoned offer leaves no lasting session nobody holds (026-AC3).
+		if err = s.bus.Store.CapProfileSession(ctx, st.Replaced, time.Unix(st.Exp, 0)); err == nil {
+			offer, err = s.seal(ctx, oidcAttachKeyUse, attachOffer{Profile: profile, Guest: g.ID, Replaced: st.Replaced, Next: st.Next, Exp: st.Exp})
+		}
+	}
+	if err != nil {
+		s.log.Warn("oidc_attach_offer_failed", zap.Error(err))
+	}
+	if offer == "" {
+		return false
+	}
+	as := ""
+	if who := cmp.Or(pv.Keep.Name, pv.Keep.Email); who != "" {
+		as = ", signed in as " + who
+	}
+	oidcPage(w, http.StatusOK, map[string]any{"Title": "Attach your guest profile", "Offer": offer, "Moves": moves,
+		"Text": fmt.Sprintf("Attach your guest profile %s (%s) to %s%s?", cmp.Or(pv.Merge.Name, "Guest"), countOf(rooms, "room", "rooms"), s.opts.OIDC.cfg.Name, as)})
+	return true
+}
+
+// attachMoves counts the guest's rooms and lists what the merge would bring, so a guest planted on
+// the browser shows as someone else's (026-AC3).
+func attachMoves(pv *store.MergePreview) (int, []string) {
+	if pv == nil {
+		return 0, nil
+	}
+	var names []string
+	for _, r := range pv.Rooms {
+		if r.Merge {
+			names = append(names, r.RoomName)
+		}
+	}
+	var moves []string
+	if len(names) > 0 {
+		line := "Rooms: " + strings.Join(names[:min(len(names), attachRoomNames)], ", ")
+		if len(names) > attachRoomNames {
+			line += " and " + strconv.Itoa(len(names)-attachRoomNames) + " more"
+		}
+		moves = append(moves, line)
+	}
+	for _, c := range []struct {
+		n         int
+		one, many string
+	}{
+		{len(pv.Skills.Merge), "personal skill", "personal skills"}, {pv.SharedSkills.Merge, "published skill", "published skills"},
+		{pv.Templates.Merge, "persona template", "persona templates"}, {pv.Starters.Merge, "starter", "starters"},
+	} {
+		if c.n > 0 {
+			moves = append(moves, countOf(c.n, c.one, c.many))
+		}
+	}
+	return len(names), moves
+}
+
+// attachRoomNames keeps the offer short: the rest are counted.
+const attachRoomNames = 5
+
+func countOf(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return strconv.Itoa(n) + " " + many
+}
+
+// oidcAttachText is every refused attach: what changed is the log's.
+const oidcAttachText = "This offer expired. Your guest profile stays as it is; the admin can merge it into yours."
+
+// oidcAttach answers the attach page: Attach merges the guest into the signed-in profile as the
+// admin's merge does, Not now leaves it; both end the guest's session (026-AC4, 026-AC5).
+func (s *Server) oidcAttach(w http.ResponseWriter, r *http.Request) {
+	refuse := func(code int, reason string) {
+		s.log.Warn("oidc_attach_refused", zap.String("reason", reason))
+		oidcPage(w, code, map[string]any{"Title": "Offer expired", "Text": oidcAttachText, "Retry": true})
+	}
+	if crossSite(r) {
+		refuse(http.StatusForbidden, "cross_site")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
+	var o attachOffer
+	ok, err := s.unseal(r.Context(), oidcAttachKeyUse, r.PostFormValue("offer"), &o)
+	if err != nil {
+		s.serverError(w, "oidc_attach_failed", err)
+		return
+	}
+	if !ok || o.Exp <= s.now().Unix() {
+		refuse(http.StatusBadRequest, "offer")
+		return
+	}
+	me, err := s.profileFromCookie(r)
+	if err != nil && !errors.Is(err, errReauth) {
+		s.serverError(w, "oidc_attach_failed", err)
+		return
+	}
+	if me == nil || me.ID != o.Profile {
+		refuse(http.StatusForbidden, "profile")
+		return
+	}
+	g, err := s.guestOf(r.Context(), o.Replaced, o.Guest)
+	if err != nil {
+		s.serverError(w, "oidc_attach_failed", err)
+		return
+	}
+	attach := r.PostFormValue("choice") == "attach"
+	switch {
+	case g == nil:
+		// Gone, changed, or this offer was already answered.
+		refuse(http.StatusBadRequest, "guest")
+		return
+	case attach:
+		// ponytail: the guest is checked outside the merge's transaction; an email bound in between
+		// moves with it, as the admin's merge does.
+		ctx := store.WithAudit(r.Context(), store.AuditEntry{At: s.now(), Actor: store.ActorProfile + me.UUID, Action: ActionProfileMerge,
+			TargetKind: store.TargetProfile, TargetID: strconv.FormatInt(me.ID, 10)}, map[string]any{"via": "oidc_attach"})
+		_, moved, err := s.mergeProfilesOf(r.Context(), ctx, me.ID, g.ID)
+		if errors.Is(err, store.ErrNotFound) {
+			refuse(http.StatusBadRequest, "guest")
+			return
+		}
+		if err != nil {
+			s.serverError(w, "oidc_attach_failed", err)
+			return
+		}
+		s.log.Info("oidc_guest_attached", zap.Int64("profile", me.ID), zap.Int64("guest", g.ID), zap.Any("moved", moved))
+	}
+	// Not now ends the guest's session here; Attach already ended every one of them (026-AC4).
+	s.endReplaced(r.Context(), o.Replaced)
+	http.Redirect(w, r, o.Next, http.StatusSeeOther)
 }
 
 // callbackState opens the cookie of the sign-in the callback's state names, and clears it.
@@ -641,15 +859,12 @@ func (s *Server) unbindProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	// The daemons go as a removal from the host's computer does; the unbind deletes their rows.
 	// ProfileDaemons lists none for a profile the unbind would refuse.
-	// ponytail: one paired between this and the unbind loses its row without a failed turn; the
-	// turn sweep ends it.
-	for i := 0; err == nil && i < len(daemons); i++ {
-		err = s.unhostDaemon(r.Context(), &daemons[i], "the AI host's profile was unbound from the organisation")
-	}
-	var seats []store.Participant
-	var daemonRooms []string
 	if err == nil {
-		seats, daemonRooms, err = s.bus.Store.UnbindOIDC(s.auditing(r, ActionProfileOIDCUnbind, store.TargetProfile, strconv.FormatInt(id, 10), "", nil), id)
+		err = s.unhostAll(r.Context(), daemons, "the AI host's profile was unbound from the organisation")
+	}
+	var ended store.EndedCredentials
+	if err == nil {
+		ended.Seats, ended.DaemonRooms, err = s.bus.Store.UnbindOIDC(s.auditing(r, ActionProfileOIDCUnbind, store.TargetProfile, strconv.FormatInt(id, 10), "", nil), id)
 	}
 	if errors.Is(err, store.ErrNotFound) || errors.Is(err, strconv.ErrSyntax) || errors.Is(err, strconv.ErrRange) {
 		httpError(w, http.StatusNotFound, "no such bound profile")
@@ -659,28 +874,8 @@ func (s *Server) unbindProfile(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "unbind_profile_failed", err)
 		return
 	}
-	// Wakes each daemon's stream, which finds its token gone and says "revoked", and its room; a
-	// daemon paired since ProfileDaemons is among those the statement returned.
-	woken := map[string]bool{}
-	for _, d := range daemons {
-		daemonRooms = append(daemonRooms, d.RoomID)
-	}
-	for _, room := range daemonRooms {
-		if !woken[room] {
-			woken[room] = true
-			s.agentChanged(r.Context(), room)
-		}
-	}
-	// The seats leave the audio, off the request as LiveKit may be slow, and their open pages get
-	// "revoked" at once rather than at the next heartbeat.
-	byRoom := map[string][]int64{}
-	for _, p := range seats {
-		byRoom[p.RoomID] = append(byRoom[p.RoomID], p.ID)
-	}
-	for room, ids := range byRoom {
-		s.bus.Notify(room)
-		go s.kickFromVoice(room, ids) //nolint:gosec // outlives the request on purpose: the 204 does not wait for LiveKit
-	}
+	// A daemon paired since ProfileDaemons is among those the statement returned.
+	s.credentialsEnded(r.Context(), daemons, ended)
 	s.log.Info("profile_oidc_unbound", zap.Int64("profile", id), zap.Int("daemons", len(daemons)))
 	w.WriteHeader(http.StatusNoContent)
 }

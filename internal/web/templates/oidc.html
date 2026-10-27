@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign-in failed · grill-room</title>
+<title>{{.Title}} · grill-room</title>
 <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
 <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
 <link rel="icon" href="/static/icons/icon-32.png" type="image/png" sizes="32x32">
@@ -20,9 +20,15 @@
   <span class="brand">grill-room</span>
 </header>
 <main class="card join-card">
-  <h1>Sign-in failed</h1>
+  <h1>{{.Title}}</h1>
   <p>{{.Text}}</p>
-  <p>{{if .Retry}}<a href="/auth/login">Sign in again</a> · {{end}}<a href="/">Home</a></p>
+  {{if .Offer}}<ul>{{range .Moves}}<li>{{.}}</li>{{end}}</ul>
+  <p>Your guest profile's other devices are signed out and its paired AI hosts removed.</p>
+  <form method="post" action="/auth/attach">
+    <input type="hidden" name="offer" value="{{.Offer}}">
+    <p><button type="submit" name="choice" value="attach">Attach</button> <button type="submit" name="choice" value="later" class="btn-secondary">Not now</button></p>
+  </form>
+  {{else}}<p>{{if .Retry}}<a href="/auth/login">Sign in again</a> · {{end}}<a href="/">Home</a></p>{{end}}
 </main>
 </body>
 </html>

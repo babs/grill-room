@@ -165,11 +165,11 @@ func TestAPITokensMergeAndDelete(t *testing.T) {
 	newToken(t, s, ctx, f.b.ProfileID, "hb1", ScopeFull, nil, now)
 	newToken(t, s, ctx, f.b.ProfileID, "hb2", ScopeRead, nil, now)
 	newToken(t, s, ctx, f.a.ProfileID, "ha", ScopeRead, nil, now)
-	pv, err := s.MergePreview(ctx, f.a.ProfileID, f.b.ProfileID)
+	pv, err := s.MergePreview(ctx, f.a.ProfileID, f.b.ProfileID, "")
 	if err != nil || pv.APITokens != 2 {
 		t.Fatalf("preview: %+v %v", pv, err)
 	}
-	_, moved, err := s.MergeProfiles(ctx, f.a.ProfileID, f.b.ProfileID)
+	_, moved, _, err := s.MergeProfiles(ctx, f.a.ProfileID, f.b.ProfileID, "")
 	if err != nil || moved.APITokensRevoked != 2 {
 		t.Fatalf("merge: %+v %v", moved, err)
 	}

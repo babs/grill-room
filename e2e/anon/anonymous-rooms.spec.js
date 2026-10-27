@@ -1,5 +1,13 @@
 import { test, expect } from '../fixtures.js';
 import { menuItem } from '../helpers.js';
+import { adminToken } from '../playwright.config.js';
+
+const admin = { Authorization: `Bearer ${adminToken}` };
+const setQuota = async (request, bytes) =>
+  expect((await request.put('/api/admin/settings', { headers: admin, data: { storage_quota_bytes: bytes } })).status()).toBe(200);
+
+// 026-AC1: anonymous creation needs a storage quota.
+test.beforeEach(async ({ request }) => setQuota(request, 2 ** 40));
 
 // 019-AC8: no invite and no profile shows the form; it lands in the room as its admin; past the
 // per-IP limit the reason shows under the form.
@@ -59,4 +67,16 @@ test('a failed profile check shows the invite line', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#status')).toContainText('You need an invite link');
   await expect(page.locator('#create')).toBeHidden();
+});
+
+// 026-AC1: without a storage quota the server's reason shows under the form, and the page stays.
+test('without a storage quota the form shows why', async ({ browser, request }) => {
+  await setQuota(request, 0);
+  const page = await (await browser.newContext({ extraHTTPHeaders: { 'X-Forwarded-For': '198.51.100.60' } })).newPage();
+  await page.goto('/');
+  await page.getByLabel('Room name').fill('No quota');
+  await page.getByLabel('Display name').fill('Dee');
+  await page.getByRole('button', { name: 'Create a room' }).click();
+  await expect(page.locator('#create-error')).toHaveText('Room creation without an invite needs a storage quota: set one in /admin › Server');
+  await expect(page).toHaveURL(/\/$/);
 });

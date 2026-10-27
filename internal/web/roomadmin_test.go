@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -490,5 +491,124 @@ func TestSuperAdminAppointsRoomAdmins(t *testing.T) {
 	}
 	if want := []string{ActionRoomAdminRemove, ActionRoomAdminAdd}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("audit %v, want %v", got, want)
+	}
+}
+
+// 026-AC2: once a creation path finds the instance at its storage quota, this pod refuses every
+// path with that reason for 30 s without asking the store, which a quota raised behind its back
+// would let through; the anonymous route spends no slot, an IP over its limit included; past 30 s,
+// or after a settings change on this pod, the store decides again.
+func TestAtQuotaMemory(t *testing.T) {
+	e := newAnonEnv(t, 1)
+	clk := e.clock()
+	alice := e.signedIn(t, "Alice")
+	room := alice.createRoom(t, "Mine", "Alice")
+	_, archive := alice.do(t, "GET", "/api/rooms/"+room.ID+"/export", nil)
+	grill := alice.builtin(t, "Spec grill")
+	const over = "203.0.113.60"
+	if code, _, b := e.device(t).anonRoom(t, over, anonBody); code != http.StatusCreated {
+		t.Fatalf("anonymous room: %d %s", code, b)
+	}
+	ip := 0
+	paths := []struct {
+		name   string
+		create func() (int, []byte)
+	}{
+		{"anonymous", func() (int, []byte) {
+			ip++
+			code, _, b := e.device(t).anonRoom(t, "198.51.100."+strconv.Itoa(ip), anonBody)
+			return code, b
+		}},
+		{"profile", func() (int, []byte) {
+			return alice.do(t, "POST", "/api/profile/rooms", map[string]string{"name": "R", "display_name": "Alice"})
+		}},
+		{"starter", func() (int, []byte) {
+			return alice.createFrom(t, map[string]any{"name": "Grill", "starter": map[string]any{"id": grill, "version": 1}, "fields": map[string]string{"topic": "x"}})
+		}},
+		{"import", func() (int, []byte) { return e.send(t, nil, "/api/rooms/import", e.admin, archive, "application/gzip") }},
+	}
+	atQuota, raised, adminOnly := anonSettings, anonSettings, anonSettings
+	atQuota.StorageQuota, adminOnly.RoomCreation = 1, store.CreationSuperAdmin
+	// put changes the settings in the store alone: this pod does not learn it.
+	put := func(v store.InstanceSettings) {
+		t.Helper()
+		if err := putSettings(t.Context(), e.st, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raise := func() { put(raised) }
+	// Only the quota's refusal is remembered.
+	put(adminOnly)
+	if code, b := paths[1].create(); code != http.StatusForbidden {
+		t.Fatalf("admin only: %d %s", code, b)
+	}
+	raise()
+	if code, b := paths[1].create(); code != http.StatusCreated {
+		t.Fatalf("after another refusal: %d %s", code, b)
+	}
+	for _, first := range paths {
+		e.setSettings(t, atQuota)
+		code, b := first.create()
+		reason := errorOf(t, b)
+		if code != http.StatusForbidden || !strings.Contains(reason, "at its 0.0 MB storage quota") {
+			t.Fatalf("%s at the quota: %d %s", first.name, code, b)
+		}
+		raise()
+		clk.add(29 * time.Second)
+		profiles, events := e.profileCount(t), e.anonEvents(t)
+		for _, p := range paths {
+			if code, b := p.create(); code != http.StatusForbidden || errorOf(t, b) != reason {
+				t.Errorf("after %s, %s within 30 s: %d %s, want 403 %q", first.name, p.name, code, b, reason)
+			}
+		}
+		if code, _, b := e.device(t).anonRoom(t, over, anonBody); code != http.StatusForbidden || errorOf(t, b) != reason {
+			t.Errorf("after %s, over the limit: %d %s", first.name, code, b)
+		}
+		if e.profileCount(t) != profiles || e.anonEvents(t) != events {
+			t.Errorf("after %s: a remembered refusal made a profile or spent a slot", first.name)
+		}
+	}
+	clk.add(time.Second)
+	for _, p := range paths {
+		if code, b := p.create(); code != http.StatusCreated {
+			t.Fatalf("%s at 30 s: %d %s", p.name, code, b)
+		}
+	}
+	e.setSettings(t, atQuota)
+	if code, b := paths[1].create(); code != http.StatusForbidden {
+		t.Fatalf("at the quota again: %d %s", code, b)
+	}
+	e.setSettings(t, raised)
+	if code, b := paths[0].create(); code != http.StatusCreated {
+		t.Fatalf("right after a settings change: %d %s", code, b)
+	}
+}
+
+// 026-AC2: a refusal at the quota is remembered, unless the memory was cleared while its store call
+// ran: the settings saved meanwhile may have lifted the quota.
+func TestAtQuotaMemoryGeneration(t *testing.T) {
+	at := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	refusal := fmt.Errorf("%w: the instance holds 1.0 MB, at its 1.0 MB storage quota", store.ErrAtQuota)
+	for _, c := range []struct {
+		name    string
+		cleared bool
+		want    bool
+	}{
+		{"recorded", false, true},
+		{"cleared during the store call", true, false},
+	} {
+		s := &Server{now: func() time.Time { return at }}
+		gen, refused := s.refuseAtQuota(httptest.NewRecorder())
+		if refused {
+			t.Fatalf("%s: refused before any refusal", c.name)
+		}
+		if c.cleared {
+			s.forgetAtQuota()
+		}
+		s.creationRefused(httptest.NewRecorder(), refusal, gen)
+		w := httptest.NewRecorder()
+		if _, refused := s.refuseAtQuota(w); refused != c.want || (c.want && (w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "at its 1.0 MB storage quota"))) {
+			t.Errorf("%s: remembered %v, want %v: %d %s", c.name, refused, c.want, w.Code, w.Body)
+		}
 	}
 }

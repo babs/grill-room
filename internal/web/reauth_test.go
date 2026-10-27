@@ -176,32 +176,6 @@ func TestReauthOtherAccount(t *testing.T) {
 	}
 }
 
-// 021-AC8: a profile bound by email keeps the sessions and seats it held before: they lapse with its
-// sign-in, as the window is the profile's, not the credential's.
-func TestReauthCoversCredentialsOlderThanTheBinding(t *testing.T) {
-	idp := newTestIdP(t)
-	e := newOIDCEnv(t, idp, zap.NewNop(), nil)
-	clk := e.clock()
-	room := e.createRoom(t, "R").ID
-	old := e.device(t)
-	seat := old.join(t, room, "Olga")
-	id := old.profile(t).Profile.ID
-	if _, err := e.sqlDB(t).ExecContext(t.Context(), `UPDATE profiles SET email = 'olga@example.com' WHERE id = $1`, id); err != nil {
-		t.Fatal(err)
-	}
-	if resp, _ := e.device(t).signIn(t, idp, map[string]any{"sub": "olga", "email": "olga@example.com", "email_verified": true}); resp.code != http.StatusSeeOther {
-		t.Fatalf("sign-in %d", resp.code)
-	}
-	if bound(t, e, id).Subject != "olga" {
-		t.Fatal("not bound by email")
-	}
-	clk.add(DefaultOIDCRevalidate + time.Second)
-	checkAll(t, "past the window", []reauthCase{
-		{"session from before", func(t *testing.T) (int, []byte) { return old.do(t, "GET", "/api/profile", nil) }, 0},
-		{"seat from before", func(t *testing.T) (int, []byte) { return e.do(t, "GET", "/api/rooms/"+room, seat.Token, nil) }, 0},
-	}, true)
-}
-
 // 021-AC8: prompt=none goes to the provider; its login_required starts a normal flow from the
 // callback, to the same next, and a second refusal shows the failure page instead of looping.
 func TestReauthSilentFlow(t *testing.T) {
@@ -325,8 +299,8 @@ func TestOrgProfileRefusesLinks(t *testing.T) {
 		t.Errorf("%d links left unused, %v", unused, err)
 	}
 	var sessions int
-	if err := db.QueryRowContext(t.Context(), `SELECT count(*) FROM profile_sessions WHERE profile_id = $1`, internal).Scan(&sessions); err != nil || sessions != 2 {
-		t.Errorf("internal has %d sessions, want its join's and its sign-in's: %v", sessions, err)
+	if err := db.QueryRowContext(t.Context(), `SELECT count(*) FROM profile_sessions WHERE profile_id = $1`, internal).Scan(&sessions); err != nil || sessions != 1 {
+		t.Errorf("internal has %d sessions, want its sign-in's only, the join's ended by the binding (021-AC4 as amended by 026): %v", sessions, err)
 	}
 	// Asking for a sign-in link answers as for any address, and mails nothing.
 	ask := func(email string) {

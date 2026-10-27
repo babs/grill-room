@@ -78,8 +78,39 @@ type MergePreview struct {
 	RoomAdmin    MergeAdmin   `json:"room_admin"`
 	OverLimits   []MergeLimit `json:"over_limits"`
 	EmailAfter   string       `json:"email_after"`
-	// APITokens counts the merged profile's API tokens, which the merge deletes (012-AC12).
+	// APITokens counts the merged profile's API tokens, which the merge deletes (012-AC12), and the
+	// kept one's when its credentials end (026-AC4).
 	APITokens int `json:"api_tokens"`
+	// ResultBound is a result bound to the configured provider: the other side ends its credentials
+	// rather than moving them; B when A is bound to it, A when it takes B's binding, B also when both
+	// are (026-AC4).
+	ResultBound bool `json:"result_bound,omitempty"`
+	// ends is that side's profile id, 0 for none.
+	ends int64
+}
+
+// EndedCredentials is what endCredentials, or an unbind, ended of a profile: its seats (RoomID and
+// ID only), whose tokens changed, the rooms of its daemons and how many API tokens it lost
+// (021-AC10, 026-AC4, 026 Decisions).
+type EndedCredentials struct {
+	Seats       []Participant
+	DaemonRooms []string
+	APITokens   int64
+}
+
+// endingSide is the side of a merge of merge into keep whose credentials end, 0 for none, when the
+// result is bound to orgIssuer: the other side, merge when keep is bound to it, keep when it takes
+// merge's binding, merge also when both are (026-AC4).
+func endingSide(keep, merge int64, keepIss, mergeIss, orgIssuer string) int64 {
+	switch {
+	case orgIssuer == "":
+		return 0
+	case keepIss == orgIssuer:
+		return merge
+	case keepIss == "" && mergeIss == orgIssuer:
+		return keep
+	}
+	return 0
 }
 
 // MergeMoved counts what a merge moved, per kind.
@@ -99,31 +130,34 @@ type MergeMoved struct {
 // mergeFault, set by tests, fails a merge after its moves and before it deletes the merged profile.
 var mergeFault func() error
 
-// MergePreview returns what MergeProfiles(keep, merge) would do. ErrSelfMerge, ErrNotFound.
-func (s *Store) MergePreview(ctx context.Context, keep, merge int64) (*MergePreview, error) {
+// MergePreview returns what MergeProfiles(keep, merge, orgIssuer) would do. ErrSelfMerge,
+// ErrNotFound.
+func (s *Store) MergePreview(ctx context.Context, keep, merge int64, orgIssuer string) (*MergePreview, error) {
 	var p *MergePreview
 	err := s.withTx(ctx, "merge preview", func(tx *txn) error {
 		var err error
-		p, err = mergePreview(ctx, tx, keep, merge)
+		p, err = mergePreview(ctx, tx, keep, merge, orgIssuer)
 		return err
 	})
 	return p, err
 }
 
-func mergePreview(ctx context.Context, db *txn, keep, merge int64) (*MergePreview, error) {
+func mergePreview(ctx context.Context, db *txn, keep, merge int64, orgIssuer string) (*MergePreview, error) {
 	if keep == merge {
 		return nil, ErrSelfMerge
 	}
 	p := &MergePreview{Rooms: []MergeRoom{}, OverLimits: []MergeLimit{}, Skills: MergeSkills{Renamed: []MergeRename{}}}
 	var maxRooms sql.NullInt64
+	var keepIss, mergeIss string
 	for _, side := range []struct {
 		id   int64
 		into *MergeProfile
 		max  *sql.NullInt64
-	}{{keep, &p.Keep, &maxRooms}, {merge, &p.Merge, new(sql.NullInt64)}} {
+		iss  *string
+	}{{keep, &p.Keep, &maxRooms, &keepIss}, {merge, &p.Merge, new(sql.NullInt64), &mergeIss}} {
 		side.into.ID = side.id
-		err := db.QueryRowContext(ctx, `SELECT COALESCE(p.uuid, ''), `+displayNameSQL+`, COALESCE(p.email, ''), p.max_rooms FROM profiles p WHERE p.id = ?`,
-			side.id).Scan(&side.into.UUID, &side.into.Name, &side.into.Email, side.max)
+		err := db.QueryRowContext(ctx, `SELECT COALESCE(p.uuid, ''), `+displayNameSQL+`, COALESCE(p.email, ''), p.max_rooms, COALESCE(p.oidc_issuer, '') FROM profiles p WHERE p.id = ?`,
+			side.id).Scan(&side.into.UUID, &side.into.Name, &side.into.Email, side.max, side.iss)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -131,6 +165,8 @@ func mergePreview(ctx context.Context, db *txn, keep, merge int64) (*MergePrevie
 			return nil, fmt.Errorf("merge preview: %w", err)
 		}
 	}
+	p.ends = endingSide(keep, merge, keepIss, mergeIss, orgIssuer)
+	p.ResultBound = p.ends != 0
 	p.EmailAfter = p.Keep.Email
 	if p.EmailAfter == "" {
 		p.EmailAfter = p.Merge.Email
@@ -187,7 +223,12 @@ func mergePreview(ctx context.Context, db *txn, keep, merge int64) (*MergePrevie
 			return nil, fmt.Errorf("merge preview: counts: %w", err)
 		}
 	}
-	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM api_tokens WHERE profile_id = ?`, merge).Scan(&p.APITokens); err != nil {
+	// A's tokens go too when its credentials end (026-AC4).
+	tokensOf := []any{merge, merge}
+	if p.ends == keep {
+		tokensOf[1] = keep
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM api_tokens WHERE profile_id IN (?, ?)`, tokensOf...).Scan(&p.APITokens); err != nil {
 		return nil, fmt.Errorf("merge preview: api tokens: %w", err)
 	}
 	v, err := instanceSettings(ctx, db)
@@ -247,12 +288,17 @@ func skillRenames(keep, merge []string) []MergeRename {
 
 // MergeProfiles moves everything of profile merge to profile keep and deletes merge, in one
 // transaction with the audit entry ctx carries (011-AC11 to 011-AC13). keep keeps its name, rooms
-// limit, nudge snooze and email, or takes merge's when it has none. ErrSelfMerge, ErrNotFound.
-func (s *Store) MergeProfiles(ctx context.Context, keep, merge int64) (*MergeProfile, MergeMoved, error) {
+// limit, nudge snooze and email, or takes merge's when it has none. When the result is bound to
+// orgIssuer, the other side ends its credentials instead of keeping or moving them: merge when keep
+// is bound to it, keep when it takes merge's binding, merge also when both are. It returns what
+// ended, for the caller to wake its rooms and take its seats out of the audio (026-AC4).
+// ErrSelfMerge, ErrNotFound.
+func (s *Store) MergeProfiles(ctx context.Context, keep, merge int64, orgIssuer string) (*MergeProfile, MergeMoved, EndedCredentials, error) {
 	var kept MergeProfile
 	var moved MergeMoved
+	var ended EndedCredentials
 	err := s.withTx(ctx, "merge profiles", func(tx *txn) error {
-		p, err := mergePreview(ctx, tx, keep, merge)
+		p, err := mergePreview(ctx, tx, keep, merge, orgIssuer)
 		if err != nil {
 			return err
 		}
@@ -286,12 +332,18 @@ func (s *Store) MergeProfiles(ctx context.Context, keep, merge int64) (*MergePro
 		// Each statement binds keep as ?1 and merge as ?2, or merge alone: PostgreSQL must find a
 		// type for every parameter it is given.
 		both, only := []any{keep, merge}, []any{merge}
-		// B's room admin roles become A's where A has none; the rest go with B's rows.
-		steps := []struct {
+		if p.ends != 0 {
+			if ended, err = endCredentials(ctx, tx, p.ends); err != nil {
+				return err
+			}
+		}
+		type step struct {
 			n     *int64
 			query string
 			args  []any
-		}{
+		}
+		// B's room admin roles become A's where A has none; the rest go with B's rows.
+		steps := []step{
 			{&moved.Seats, `UPDATE participants SET profile_id = ?1 WHERE profile_id = ?2`, both},
 			{&moved.SharedSkills, `UPDATE skills SET publisher_id = ?1 WHERE publisher_id = ?2`, both},
 			{nil, `UPDATE skill_versions SET author_id = ?1 WHERE author_id = ?2`, both},
@@ -316,6 +368,7 @@ func (s *Store) MergeProfiles(ctx context.Context, keep, merge int64) (*MergePro
 				return err
 			}
 		}
+		moved.APITokensRevoked += ended.APITokens
 		if p.Keep.Email == "" && p.Merge.Email != "" {
 			// The address is UNIQUE: B lets go of it before A takes it.
 			if err := exec(nil, `UPDATE profiles SET email = NULL WHERE id = ?`, merge); err != nil {
@@ -361,9 +414,48 @@ func (s *Store) MergeProfiles(ctx context.Context, keep, merge int64) (*MergePro
 		return execOne(ctx, tx, `DELETE FROM profiles WHERE id = ?`, merge)
 	})
 	if err != nil {
-		return nil, MergeMoved{}, err
+		return nil, MergeMoved{}, EndedCredentials{}, err
 	}
-	return &kept, moved, nil
+	return &kept, moved, ended, nil
+}
+
+// endCredentials signs profile id out everywhere, as an unbind does: browser sessions, seat tokens,
+// their push subscriptions, paired daemons, the pairings its seats approved and its API tokens; a
+// profile bound to the provider is reached through it only (026-AC4, 026 Decisions). A seat's new hash is
+// no SHA-256 hex.
+func endCredentials(ctx context.Context, tx *txn, id int64) (EndedCredentials, error) {
+	var e EndedCredentials
+	err := eachRow(ctx, tx, func(rows *sql.Rows) error {
+		var p Participant
+		if err := rows.Scan(&p.ID, &p.RoomID); err != nil {
+			return err
+		}
+		e.Seats = append(e.Seats, p)
+		return nil
+	}, `UPDATE participants SET token_hash = 'merged-' || gen_random_uuid()::text WHERE profile_id = ? RETURNING id, room_id`, id)
+	if err == nil {
+		err = eachRow(ctx, tx, func(rows *sql.Rows) error {
+			var room string
+			if err := rows.Scan(&room); err != nil {
+				return err
+			}
+			e.DaemonRooms = append(e.DaemonRooms, room)
+			return nil
+		}, `WITH q AS (DELETE FROM pairings WHERE approved_by IN (SELECT id FROM participants WHERE profile_id = ?1)),
+			w AS (DELETE FROM push_subscriptions WHERE participant_id IN (SELECT id FROM participants WHERE profile_id = ?1)),
+			s AS (DELETE FROM profile_sessions WHERE profile_id = ?1)
+			DELETE FROM daemons WHERE participant_id IN (SELECT id FROM participants WHERE profile_id = ?1) RETURNING room_id`, id)
+	}
+	if err == nil {
+		var res sql.Result
+		if res, err = tx.ExecContext(ctx, `DELETE FROM api_tokens WHERE profile_id = ?`, id); err == nil {
+			e.APITokens, err = res.RowsAffected()
+		}
+	}
+	if err != nil {
+		return EndedCredentials{}, fmt.Errorf("end credentials: %w", err)
+	}
+	return e, nil
 }
 
 // EmptyProfileIdle is how long an empty profile stays after its last activity (011-AC15).

@@ -197,6 +197,10 @@ func (s *Server) importRoom(w http.ResponseWriter, r *http.Request) {
 	} else {
 		r = ar
 	}
+	gen, refused := s.refuseAtQuota(w)
+	if refused {
+		return
+	}
 	// A cross-site form cannot send this type without a preflight.
 	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/gzip" {
 		httpError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/gzip")
@@ -262,7 +266,7 @@ func (s *Server) importRoom(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	case errors.Is(err, store.ErrCreationRefused):
-		httpError(w, http.StatusForbidden, err.Error())
+		s.creationRefused(w, err, gen)
 		return
 	case err != nil:
 		s.serverError(w, "import_failed", err)
