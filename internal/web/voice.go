@@ -30,7 +30,7 @@ const (
 	maxWorkerName = 64
 	maxEngineName = 32
 	// DefaultVoiceParagraphGap is the pause that ends a voice paragraph (018-AC4).
-	DefaultVoiceParagraphGap = 2500 * time.Millisecond
+	DefaultVoiceParagraphGap = 5 * time.Second
 	// DefaultVoiceParagraphMaxChars is the length a voice paragraph grows to (018-AC4).
 	DefaultVoiceParagraphMaxChars = 1200
 	// DefaultVoiceParagraphClose is how long after its last line a paragraph counts as closed: a

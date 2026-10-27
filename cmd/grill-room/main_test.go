@@ -130,7 +130,7 @@ func TestLoadConfigRejectsBadNumbers(t *testing.T) {
 		})
 	}
 	c, err := loadConfig()
-	if err != nil || c.MaxUploadMB != 20 || c.MaxRoomMB != 200 || c.MaxAttachmentMB != 5 || c.TurnTimeout != 15*time.Minute || c.MagicLinkTTL != 15*time.Minute || c.AuditRetention != 8760*time.Hour || c.ClientRetention != 720*time.Hour || c.TrustedProxies != nil || c.NotesWatchDelay != 20*time.Second || c.VoiceParagraphGap != 2500*time.Millisecond || c.VoiceParagraphMaxChars != 1200 || c.VoiceParagraphClose != 20*time.Second || c.Validate() != nil {
+	if err != nil || c.MaxUploadMB != 20 || c.MaxRoomMB != 200 || c.MaxAttachmentMB != 5 || c.TurnTimeout != 15*time.Minute || c.MagicLinkTTL != 15*time.Minute || c.AuditRetention != 8760*time.Hour || c.ClientRetention != 720*time.Hour || c.TrustedProxies != nil || c.NotesWatchDelay != 20*time.Second || c.VoiceParagraphGap != 5*time.Second || c.VoiceParagraphMaxChars != 1200 || c.VoiceParagraphClose != 20*time.Second || c.Validate() != nil {
 		t.Fatalf("defaults: %+v, %v", c, err)
 	}
 	// 019-AC1, 019-AC4: off by default, 3 an hour; the bounds are checked at start.
