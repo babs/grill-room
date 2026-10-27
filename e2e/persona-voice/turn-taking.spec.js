@@ -104,7 +104,7 @@ function meter() {
       for (const r of (await pc.getStats()).values()) {
         if (r.type === 'inbound-rtp' && r.kind === 'audio' && r.trackIdentifier === id) {
           return { delay: r.jitterBufferDelay, target: r.jitterBufferTargetDelay, emitted: r.jitterBufferEmittedCount,
-            packets: r.packetsReceived, lost: r.packetsLost, concealed: r.concealedSamples, at: r.lastPacketReceivedTimestamp };
+            lost: r.packetsLost, concealed: r.concealedSamples };
         }
       }
     }
