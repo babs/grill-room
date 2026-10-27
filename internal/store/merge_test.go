@@ -94,7 +94,7 @@ func mergeAudit(at time.Time, keep int64) context.Context {
 func TestMergePreview(t *testing.T) {
 	f := newMergeFixture(t)
 	ctx := t.Context()
-	p, err := f.s.MergePreview(ctx, f.a.ProfileID, f.b.ProfileID)
+	p, err := f.s.MergePreview(ctx, f.a.ProfileID, f.b.ProfileID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,10 +124,10 @@ func TestMergePreview(t *testing.T) {
 	if len(p.OverLimits) != 0 || p.EmailAfter != "" {
 		t.Fatalf("limits, email: %+v %q", p.OverLimits, p.EmailAfter)
 	}
-	if _, err := f.s.MergePreview(ctx, f.a.ProfileID, f.a.ProfileID); !errors.Is(err, ErrSelfMerge) {
+	if _, err := f.s.MergePreview(ctx, f.a.ProfileID, f.a.ProfileID, ""); !errors.Is(err, ErrSelfMerge) {
 		t.Fatalf("self: %v", err)
 	}
-	if _, err := f.s.MergePreview(ctx, f.a.ProfileID, 999); !errors.Is(err, ErrNotFound) {
+	if _, err := f.s.MergePreview(ctx, f.a.ProfileID, 999, ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown: %v", err)
 	}
 }
@@ -156,12 +156,12 @@ func TestMergeProfiles(t *testing.T) {
 	if err := s.SnoozeEmailNudge(ctx, A, snooze); err != nil {
 		t.Fatal(err)
 	}
-	pre, err := s.MergePreview(ctx, A, B)
+	pre, err := s.MergePreview(ctx, A, B, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t0 := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
-	kept, moved, err := s.MergeProfiles(mergeAudit(t0, A), A, B)
+	kept, moved, _, err := s.MergeProfiles(mergeAudit(t0, A), A, B, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,10 +265,10 @@ func TestMergeProfiles(t *testing.T) {
 		log[0].TargetID != strconv.FormatInt(A, 10) || log[0].TargetName != "Alice" || strings.Contains(string(log[0].Details), "@") {
 		t.Fatalf("audit entry: %+v %s", log[0], log[0].Details)
 	}
-	if _, _, err := s.MergeProfiles(ctx, A, A); !errors.Is(err, ErrSelfMerge) {
+	if _, _, _, err := s.MergeProfiles(ctx, A, A, ""); !errors.Is(err, ErrSelfMerge) {
 		t.Fatalf("self merge: %v", err)
 	}
-	if _, _, err := s.MergeProfiles(ctx, A, B); !errors.Is(err, ErrNotFound) {
+	if _, _, _, err := s.MergeProfiles(ctx, A, B, ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("merge of a gone profile: %v", err)
 	}
 }
@@ -291,11 +291,11 @@ func TestMergeEmailPrecedence(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			p, err := s.MergePreview(ctx, a.ProfileID, b.ProfileID)
+			p, err := s.MergePreview(ctx, a.ProfileID, b.ProfileID, "")
 			if err != nil || p.EmailAfter != c.want {
 				t.Fatalf("preview: %q %v, want %q", p.EmailAfter, err, c.want)
 			}
-			if _, _, err := s.MergeProfiles(ctx, a.ProfileID, b.ProfileID); err != nil {
+			if _, _, _, err := s.MergeProfiles(ctx, a.ProfileID, b.ProfileID, ""); err != nil {
 				t.Fatal(err)
 			}
 			var got string
@@ -359,7 +359,7 @@ func TestMergeFailureRollsBack(t *testing.T) {
 	boom := errors.New("boom")
 	mergeFault = func() error { return boom }
 	t.Cleanup(func() { mergeFault = nil })
-	if _, _, err := f.s.MergeProfiles(mergeAudit(time.Now(), f.a.ProfileID), f.a.ProfileID, f.b.ProfileID); !errors.Is(err, boom) {
+	if _, _, _, err := f.s.MergeProfiles(mergeAudit(time.Now(), f.a.ProfileID), f.a.ProfileID, f.b.ProfileID, ""); !errors.Is(err, boom) {
 		t.Fatalf("merge: %v", err)
 	}
 	if after := mergeState(t, f.s); after != before {
@@ -400,7 +400,7 @@ func TestMergeOverLimits(t *testing.T) {
 	if err := putSettings(ctx, s, InstanceSettings{RoomsPerProfile: 1, RoomCreation: CreationAnyone, PluginMaxMB: DefaultPluginMaxMB, PurgeEmptyProfiles: true}); err != nil {
 		t.Fatal(err)
 	}
-	pre, err := s.MergePreview(ctx, a.ProfileID, b.ProfileID)
+	pre, err := s.MergePreview(ctx, a.ProfileID, b.ProfileID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +409,7 @@ func TestMergeOverLimits(t *testing.T) {
 	if !slices.Equal(pre.OverLimits, want) {
 		t.Fatalf("over limits: %+v, want %+v", pre.OverLimits, want)
 	}
-	if _, _, err := s.MergeProfiles(ctx, a.ProfileID, b.ProfileID); err != nil {
+	if _, _, _, err := s.MergeProfiles(ctx, a.ProfileID, b.ProfileID, ""); err != nil {
 		t.Fatal(err)
 	}
 	for q, want := range map[string]int{
@@ -604,5 +604,156 @@ func TestPurgeEmptyProfilesBatch(t *testing.T) {
 	}
 	if rest, err := s.PurgeEmptyProfiles(purgeAudit(now), now, EmptyProfileIdle); err != nil || len(rest) != 1 {
 		t.Fatalf("second run: %v %v", rest, err)
+	}
+}
+
+// 026-AC4: when the merge's result is bound to the configured provider, the other side (B when A
+// is bound, A when it takes B's binding, B also when both are) ends its browser sessions, seat
+// tokens and their push subscriptions, paired daemons, the pairings its seats approved and its API
+// tokens: another device holding them would act as the result without the provider. A former
+// issuer, or the mode off, merges as 011 does.
+func TestMergeIntoBoundEndsCredentials(t *testing.T) {
+	const org = "https://idp.example"
+	for _, tc := range []struct {
+		name       string
+		aIss, bIss string
+		orgIssuer  string
+		ends       string // "a", "b" or "" for none
+	}{
+		{"A bound", org, "", org, "b"},
+		{"B bound, A takes its binding", "", org, org, "a"},
+		{"both bound", org, org, org, "b"},
+		{"A bound to a former issuer", "https://former.example", "", org, ""},
+		{"B bound to a former issuer", "", "https://former.example", org, ""},
+		{"former A keeps its binding over B's", "https://former.example", org, org, ""},
+		{"mode off", org, "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newMergeFixture(t)
+			s, ctx := f.s, t.Context()
+			A, B := f.a.ProfileID, f.b.ProfileID
+			nowMS := time.Now().UnixMilli()
+			type side struct {
+				id                 int64
+				seat, both         *Participant
+				sess, daemon, pair string
+			}
+			sides := map[string]side{"a": {A, f.a, f.aBoth, "sess-a", "daemon-a", "pa"}, "b": {B, f.b, f.bBoth, "sess-b", "daemon-b", "pb"}}
+			for k, sd := range sides {
+				if _, err := s.PairDaemon(ctx, sd.seat.RoomID, sd.seat.ID, sd.daemon); err != nil {
+					t.Fatal(err)
+				}
+				if ok, err := s.CreatePairing(ctx, &Pairing{ID: sd.pair, RoomID: "both", Code: "12345" + k, SecretHash: "sec-" + k, ExpiresAt: time.Now().Add(10 * time.Minute)}, 5, 50, nowMS); err != nil || !ok {
+					t.Fatalf("pairing: %v %v", ok, err)
+				}
+				if err := s.ApprovePairing(ctx, "both", sd.pair, sd.both.ID, nowMS); err != nil {
+					t.Fatal(err)
+				}
+				newToken(t, s, ctx, sd.id, "tok-api-"+k, ScopeFull, nil, time.Now())
+				addPush(t, s, sd.seat.ID)
+			}
+			for id, iss := range map[int64]string{A: tc.aIss, B: tc.bIss} {
+				if _, err := s.db.ExecContext(ctx, `UPDATE profiles SET oidc_issuer = NULLIF(?, ''), oidc_subject = NULLIF(?, '') WHERE id = ?`, iss, iss+strconv.FormatInt(id, 10), id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want := map[string]bool{"a": tc.ends == "a", "b": tc.ends == "b"}
+			// B's API token goes with any merge, A's too when A's credentials end.
+			revoked := map[bool]int{true: 2, false: 1}[want["a"]]
+			pre, err := s.MergePreview(ctx, A, B, tc.orgIssuer)
+			if err != nil || pre.ResultBound != (tc.ends != "") || pre.APITokens != revoked {
+				t.Fatalf("preview result_bound %v api_tokens %d %v, want %v %d", pre.ResultBound, pre.APITokens, err, tc.ends != "", revoked)
+			}
+			if ds, err := s.MergeDaemons(ctx, A, B, tc.orgIssuer); err != nil || len(ds) != map[bool]int{true: 1}[tc.ends != ""] ||
+				tc.ends != "" && ds[0].ParticipantID != sides[tc.ends].seat.ID {
+				t.Fatalf("merge daemons %+v %v", ds, err)
+			}
+			seatsOf := map[string][]int64{}
+			for k, sd := range sides {
+				rows, err := s.db.QueryContext(ctx, `SELECT id FROM participants WHERE profile_id = ? ORDER BY id`, sd.id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for rows.Next() {
+					var id int64
+					_ = rows.Scan(&id)
+					seatsOf[k] = append(seatsOf[k], id)
+				}
+				_ = rows.Close()
+			}
+			_, moved, ended, err := s.MergeProfiles(mergeAudit(time.Now(), A), A, B, tc.orgIssuer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.ends != "" {
+				sd := sides[tc.ends]
+				var ids []int64
+				for _, p := range ended.Seats {
+					ids = append(ids, p.ID)
+				}
+				slices.Sort(ids)
+				wantIDs := seatsOf[tc.ends]
+				if !slices.Equal(ids, wantIDs) || !slices.Equal(ended.DaemonRooms, []string{sd.seat.RoomID}) {
+					t.Errorf("ended %+v, want seats %v", ended, wantIDs)
+				}
+			} else if len(ended.Seats) != 0 || len(ended.DaemonRooms) != 0 {
+				t.Errorf("ended %+v", ended)
+			}
+			// B's sessions move only when nothing ends them.
+			if moved.Sessions != map[bool]int64{true: 1}[!want["b"]] || moved.APITokensRevoked != int64(revoked) {
+				t.Errorf("moved sessions %d, api tokens revoked %d", moved.Sessions, moved.APITokensRevoked)
+			}
+			for k, sd := range sides {
+				gone := want[k]
+				if n := count(t, s, `SELECT count(*) FROM profile_sessions WHERE token_hash = ?`, sd.sess); (n == 0) != gone {
+					t.Errorf("%s: session left %d, ended %v", k, n, gone)
+				}
+				if n := count(t, s, `SELECT count(*) FROM push_subscriptions WHERE participant_id = ?`, sd.seat.ID); (n == 0) != gone {
+					t.Errorf("%s: push subscription left %d, ended %v", k, n, gone)
+				}
+				if _, err := s.DaemonByToken(ctx, sd.daemon); errors.Is(err, ErrNotFound) != gone {
+					t.Errorf("%s: daemon %v, ended %v", k, err, gone)
+				}
+				if _, _, err := s.PollPairing(ctx, sd.pair, "sec-"+k, "late-"+k, nowMS); errors.Is(err, ErrNotFound) != gone {
+					t.Errorf("%s: approved pairing polled %v, ended %v", k, err, gone)
+				}
+				for _, seat := range []int64{sd.seat.ID, sd.both.ID} {
+					if n := count(t, s, `SELECT count(*) FROM participants WHERE id = ? AND token_hash LIKE 'merged-%'`, seat); (n == 1) != gone {
+						t.Errorf("%s: seat %d token rotated %v, ended %v", k, seat, n == 1, gone)
+					}
+				}
+			}
+			// B's API tokens go with any merge; A's only when A's credentials end.
+			if n := count(t, s, `SELECT count(*) FROM api_tokens`); n != map[bool]int{true: 0, false: 1}[want["a"]] {
+				t.Errorf("api tokens left %d", n)
+			}
+		})
+	}
+}
+
+// addPush subscribes seat to every message.
+func addPush(t *testing.T, s *Store, seat int64) {
+	t.Helper()
+	if _, err := s.db.ExecContext(t.Context(), `INSERT INTO push_subscriptions(participant_id, endpoint, p256dh, auth, all_messages, created_at)
+		VALUES(?, ?, 'k', 'a', 1, '2026-01-01T00:00:00Z')`, seat, "https://push.example/"+strconv.FormatInt(seat, 10)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 026-AC3: a session's expiry only comes earlier; an unknown session is no error.
+func TestCapProfileSession(t *testing.T) {
+	f := newMergeFixture(t)
+	s, ctx := f.s, t.Context()
+	soon := time.Now().Add(time.Minute)
+	for _, until := range []time.Time{soon, soon.Add(time.Hour)} {
+		if err := s.CapProfileSession(ctx, "sess-b", until); err != nil {
+			t.Fatal(err)
+		}
+		if n := count(t, s, `SELECT count(*) FROM profile_sessions WHERE token_hash = 'sess-b' AND expires_at_s = ?`, soon.Unix()); n != 1 {
+			t.Errorf("cap at %v: expiry not %v", until, soon)
+		}
+	}
+	if err := s.CapProfileSession(ctx, "nope", soon); err != nil {
+		t.Error(err)
 	}
 }

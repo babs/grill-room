@@ -266,6 +266,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /auth/login", s.oidcLogin)
 		mux.HandleFunc("GET /auth/callback", s.oidcCallback)
 		mux.HandleFunc("POST /auth/logout", s.oidcLogout)
+		mux.HandleFunc("POST /auth/attach", s.oidcAttach)
 		mux.HandleFunc("POST /api/admin/login/oidc", s.oidcAdminLogin)
 		mux.Handle("DELETE /api/admin/profiles/{id}/oidc", s.admin(s.unbindProfile))
 	}

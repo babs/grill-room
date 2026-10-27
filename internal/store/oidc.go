@@ -31,13 +31,15 @@ type OIDCSignIn struct {
 }
 
 // SignInOIDC finds the profile bound to in's issuer and subject, else binds the unbound profile
-// holding in.Email, else creates one bound to them, with in.Email when no profile holds it; it
-// stamps the sign-in, opens a session with in.SessionHash and writes the audit entry ctx carries
-// with the profile as actor, in one transaction (021-AC4). It returns the profile and how it
-// was found.
-func (s *Store) SignInOIDC(ctx context.Context, in OIDCSignIn) (*Profile, string, error) {
+// holding in.Email, signing it out everywhere first, else creates one bound to them, with in.Email
+// when no profile holds it; it stamps the sign-in, opens a session with in.SessionHash and writes
+// the audit entry ctx carries with the profile as actor, in one transaction (021-AC4 as amended by 026). It returns
+// the profile, how it was found and what the binding by email ended, for the caller to wake its
+// rooms and take its seats out of the audio.
+func (s *Store) SignInOIDC(ctx context.Context, in OIDCSignIn) (*Profile, string, EndedCredentials, error) {
 	var profileID int64
 	var found string
+	var ended EndedCredentials
 	err := s.withTx(ctx, "oidc sign-in", func(tx *txn) error {
 		var id int64
 		how := OIDCExisting
@@ -68,8 +70,16 @@ func (s *Store) SignInOIDC(ctx context.Context, in OIDCSignIn) (*Profile, string
 			if _, err := tx.ExecContext(ctx, `UPDATE profiles SET email = NULLIF(?, ''), name = NULLIF(?, '') WHERE id = ?`, email, in.Name, id); err != nil {
 				return fmt.Errorf("oidc sign-in: %w", err)
 			}
-		} else if err := createSession(ctx, tx, id, in.SessionHash); err != nil {
-			return err
+		} else {
+			// Its other devices got in without the provider: they sign in through it now (021-AC4 as amended by 026).
+			if how == OIDCEmail {
+				if ended, err = endCredentials(ctx, tx, id); err != nil {
+					return err
+				}
+			}
+			if err := createSession(ctx, tx, id, in.SessionHash); err != nil {
+				return err
+			}
 		}
 		var uuid string
 		// The group gone at the provider ends the admin sessions it opened (021-AC11).
@@ -88,10 +98,20 @@ func (s *Store) SignInOIDC(ctx context.Context, in OIDCSignIn) (*Profile, string
 		return nil
 	})
 	if err != nil {
-		return nil, "", err
+		return nil, "", EndedCredentials{}, err
 	}
 	p, err := s.profile(ctx, `id = ?`, profileID)
-	return p, found, err
+	return p, found, ended, err
+}
+
+// OIDCEmailDaemons returns the daemons SignInOIDC(in) removes by binding the unbound profile
+// holding in.Email: none when in's account is bound already or no unbound profile holds it (021-AC4 as amended by 026).
+func (s *Store) OIDCEmailDaemons(ctx context.Context, in OIDCSignIn) ([]Daemon, error) {
+	if in.Email == "" {
+		return nil, nil
+	}
+	return s.daemonsWhere(ctx, `f.email = ? AND f.oidc_issuer IS NULL AND NOT EXISTS (SELECT 1 FROM profiles b WHERE b.oidc_issuer = ? AND b.oidc_subject = ?)`,
+		in.Email, in.Issuer, in.Subject)
 }
 
 // UnbindOIDC clears profile id's provider binding, making it external, signs it out everywhere
@@ -116,6 +136,7 @@ func (s *Store) UnbindOIDC(ctx context.Context, id int64) (seats []Participant, 
 			t AS (DELETE FROM api_tokens WHERE profile_id IN (SELECT id FROM b)),
 			d AS (DELETE FROM daemons WHERE participant_id IN (SELECT id FROM participants WHERE profile_id IN (SELECT id FROM b)) RETURNING room_id),
 			q AS (DELETE FROM pairings WHERE approved_by IN (SELECT id FROM participants WHERE profile_id IN (SELECT id FROM b))),
+			w AS (DELETE FROM push_subscriptions WHERE participant_id IN (SELECT id FROM participants WHERE profile_id IN (SELECT id FROM b))),
 			p AS (UPDATE participants SET token_hash = 'unbound-' || gen_random_uuid()::text WHERE profile_id IN (SELECT id FROM b) RETURNING room_id, id)
 			SELECT false, p.room_id, p.id FROM b LEFT JOIN p ON true UNION ALL SELECT true, d.room_id, NULL FROM d`, id)
 		if err != nil {

@@ -46,7 +46,7 @@ func (s *Server) mergePreview(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusNotFound, "no such profile")
 		return
 	}
-	p, err := s.bus.Store.MergePreview(r.Context(), keep, merge)
+	p, err := s.bus.Store.MergePreview(r.Context(), keep, merge, s.orgIssuer())
 	if s.mergeError(w, "merge_preview_failed", err) {
 		return
 	}
@@ -74,12 +74,75 @@ func (s *Server) mergeProfiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := s.auditing(r, ActionProfileMerge, store.TargetProfile, strconv.FormatInt(req.Keep, 10), "", nil)
-	kept, moved, err := s.bus.Store.MergeProfiles(ctx, req.Keep, req.Merge)
+	kept, moved, err := s.mergeProfilesOf(r.Context(), ctx, req.Keep, req.Merge)
 	if s.mergeError(w, "merge_profiles_failed", err) {
 		return
 	}
 	s.log.Info("profiles_merged", zap.Int64("keep", req.Keep), zap.Int64("merge", req.Merge), zap.Any("moved", moved))
 	writeJSON(w, http.StatusOK, mergeResp{Keep: mergeKept{ID: kept.ID, UUID: kept.UUID, Name: kept.Name}, Moved: moved})
+}
+
+// mergeProfilesOf merges as MergeProfiles does, under the audit entry actx carries. When the
+// result is bound, the other side's credentials end: its daemons fail their running turn first,
+// then its rooms are told (026-AC4).
+func (s *Server) mergeProfilesOf(ctx, actx context.Context, keep, merge int64) (*store.MergeProfile, store.MergeMoved, error) {
+	// A refused merge must not unhost anything.
+	if keep == merge {
+		return nil, store.MergeMoved{}, store.ErrSelfMerge
+	}
+	daemons, err := s.bus.Store.MergeDaemons(ctx, keep, merge, s.orgIssuer())
+	if err == nil {
+		err = s.unhostAll(ctx, daemons, "the AI host's profile was merged into an organisation account")
+	}
+	var kept *store.MergeProfile
+	var moved store.MergeMoved
+	var ended store.EndedCredentials
+	if err == nil {
+		kept, moved, ended, err = s.bus.Store.MergeProfiles(actx, keep, merge, s.orgIssuer())
+	}
+	if err != nil {
+		return nil, store.MergeMoved{}, err
+	}
+	s.credentialsEnded(ctx, daemons, ended)
+	return kept, moved, nil
+}
+
+// unhostAll fails the running turn of each daemon about to be removed, as the host removing the
+// room does (021-AC10, 026-AC4, 026 Decisions).
+// ponytail: one paired between the listing and the removal loses its row without a failed turn;
+// the turn sweep ends it, as for an unbind.
+func (s *Server) unhostAll(ctx context.Context, daemons []store.Daemon, why string) error {
+	for i := range daemons {
+		if err := s.unhostDaemon(ctx, &daemons[i], why); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// credentialsEnded tells the rooms of what an unbind or endCredentials ended: the removed daemons'
+// streams find their token gone and their rooms elect a host again; the seats leave the audio, off
+// the request as LiveKit may be slow, their open pages told at once (021-AC10, 026-AC4, 026 Decisions).
+func (s *Server) credentialsEnded(ctx context.Context, daemons []store.Daemon, ended store.EndedCredentials) {
+	rooms := ended.DaemonRooms
+	for _, d := range daemons {
+		rooms = append(rooms, d.RoomID)
+	}
+	woken := map[string]bool{}
+	for _, room := range rooms {
+		if !woken[room] {
+			woken[room] = true
+			s.agentChanged(ctx, room)
+		}
+	}
+	byRoom := map[string][]int64{}
+	for _, p := range ended.Seats {
+		byRoom[p.RoomID] = append(byRoom[p.RoomID], p.ID)
+	}
+	for room, ids := range byRoom {
+		s.bus.Notify(room)
+		go s.kickFromVoice(room, ids) //nolint:gosec // outlives the request on purpose: the answer does not wait for LiveKit
+	}
 }
 
 // purgeProfiles runs one purge pass of the profiles empty and idle for idle, unless the instance

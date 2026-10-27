@@ -566,6 +566,7 @@ func TestOIDCBinding(t *testing.T) {
 	d := e.device(t)
 	d.join(t, room.ID, "Dave")
 	old := profileID(t, d.profileJSON(t))
+	setEmail(t, e, old, "dave.guest@example.com")
 	dave := signIn(d, map[string]any{"sub": "dave", "email": "dave@example.com", "email_verified": true})
 	if dave == old || bound(t, e, old).Issuer != "" || bound(t, e, dave).Email != "dave@example.com" {
 		t.Errorf("browser profile %d bound, new %d", old, dave)
@@ -624,6 +625,7 @@ func TestOIDCProfileAndLogout(t *testing.T) {
 	check(false)
 	d.join(t, e.createRoom(t, "R").ID, "Erin")
 	check(false)
+	setEmail(t, e, profileID(t, d.profileJSON(t)), "erin.guest@example.com")
 	if resp, _ := d.signIn(t, idp, map[string]any{"sub": "erin"}); resp.code != http.StatusSeeOther {
 		t.Fatalf("sign-in %d", resp.code)
 	}
@@ -1017,14 +1019,23 @@ func TestOIDCOldFlowsExpire(t *testing.T) {
 	}
 }
 
-// 021-AC4: a guest profile this browser holds is not bound: the browser moves to a new bound
-// profile, the old session ends and the old profile stays as it was.
+// setEmail gives profile id an address, which keeps the attach offer away (026-AC3).
+func setEmail(t *testing.T, e *env, id int64, email string) {
+	t.Helper()
+	if _, err := e.sqlDB(t).ExecContext(t.Context(), `UPDATE profiles SET email = $1 WHERE id = $2`, email, id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 021-AC4: a guest profile with an email this browser holds is not bound: the browser moves to a
+// new bound profile, the old session ends and the old profile stays as it was.
 func TestOIDCReplacedSessionEnds(t *testing.T) {
 	idp := newTestIdP(t)
 	e := newOIDCEnv(t, idp, zap.NewNop(), nil)
 	d := e.device(t)
 	d.join(t, e.createRoom(t, "R").ID, "Guest")
 	guest := profileID(t, d.profileJSON(t))
+	setEmail(t, e, guest, "guest@example.com")
 	var old string
 	for _, c := range d.c.Jar.Cookies(&url.URL{Scheme: "http", Host: strings.TrimPrefix(e.ts.URL, "http://"), Path: "/"}) {
 		if c.Name == profileCookie {
@@ -1044,7 +1055,7 @@ func TestOIDCReplacedSessionEnds(t *testing.T) {
 	if err := e.sqlDB(t).QueryRowContext(t.Context(), `SELECT count(*) FROM profile_sessions WHERE token_hash = $1`, HashToken(old)).Scan(&n); err != nil || n != 0 {
 		t.Errorf("replaced session kept: %d %v", n, err)
 	}
-	if r := bound(t, e, guest); r.Issuer != "" || r.Email != "" {
+	if r := bound(t, e, guest); r.Issuer != "" || r.Email != "guest@example.com" {
 		t.Errorf("guest changed: %+v", r)
 	}
 }

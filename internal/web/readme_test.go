@@ -7,8 +7,9 @@ import (
 	"testing"
 )
 
-// Every API route the server registers has a row in the README's API table (021-AC14): a route missing there
-// is an undocumented endpoint. Path parameters compare by position, as the table names them freely.
+// Every API route the server registers has a row in the README's API table (021-AC14, 026-AC6): a
+// route missing there is an undocumented endpoint. Path parameters compare by position, as the table
+// names them freely.
 func TestEveryRouteIsInTheReadme(t *testing.T) {
 	src, err := os.ReadFile("server.go")
 	if err != nil {

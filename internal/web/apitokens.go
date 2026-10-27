@@ -50,6 +50,7 @@ var cookieOnly = map[string]bool{
 	"GET /auth/login":                      true,
 	"GET /auth/callback":                   true,
 	"POST /auth/logout":                    true,
+	"POST /auth/attach":                    true,
 	"POST /api/rooms/{room}/pairings":      true,
 	"GET /api/pairings/{id}":               true,
 	"GET /api/rooms/{room}/pairings/{id}":  true,

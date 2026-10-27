@@ -144,6 +144,15 @@ func (s *Store) DeleteProfileSession(ctx context.Context, sessionHash string) er
 	return nil
 }
 
+// CapProfileSession ends the profile session sessionHash at until at the latest; none is not an
+// error (026-AC3).
+func (s *Store) CapProfileSession(ctx context.Context, sessionHash string, until time.Time) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE profile_sessions SET expires_at_s = LEAST(expires_at_s, ?) WHERE token_hash = ?`, until.Unix(), sessionHash); err != nil {
+		return fmt.Errorf("cap profile session: %w", err)
+	}
+	return nil
+}
+
 // SignInByRecovery opens a session with sessionHash on the profile holding recoveryHash.
 // ErrNotFound if none does, ErrOrgSignIn if it is bound to orgIssuer.
 func (s *Store) SignInByRecovery(ctx context.Context, recoveryHash, sessionHash, orgIssuer string) (*Profile, error) {
