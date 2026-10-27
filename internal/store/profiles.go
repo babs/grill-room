@@ -31,7 +31,14 @@ var (
 	ErrLinkExpired = errors.New("link expired")
 	// ErrLinkUsed is a stored magic link already spent, until a sweep drops it (011-AC23).
 	ErrLinkUsed = errors.New("link already used")
+	// ErrOrgSignIn is a sign-in or recovery link of a profile bound to the configured provider,
+	// refused and left unused: it signs in there only (021-AC9).
+	ErrOrgSignIn = errors.New("profile signs in with its organisation account")
 )
+
+// orgBound reports a profile bound to iss as one of orgIssuer, the configured provider, "" for
+// none (021-AC9).
+func orgBound(iss, orgIssuer string) bool { return orgIssuer != "" && iss == orgIssuer }
 
 // Profile is a person across rooms. Only hashes of its recovery and session tokens are stored.
 type Profile struct {
@@ -53,11 +60,20 @@ type Profile struct {
 	PendingAgeS *int64 `json:"pending_age_s,omitempty"`
 	// EmailNudgeUntil hides the add-an-email banner until then (011-AC8).
 	EmailNudgeUntil *time.Time `json:"email_nudge_until,omitempty"`
-	// OIDCIssuer is the provider the profile is bound to, empty for none; OIDCSignedInAt its last
-	// sign-in there (021-AC4, 021-AC5).
+	OIDCBinding
+}
+
+// OIDCBinding is the provider a profile is bound to, empty for none, and its last sign-in there
+// (021-AC4, 021-AC5, 021-AC8); Participant and APIToken carry their profile's.
+type OIDCBinding struct {
 	OIDCIssuer     string    `json:"-"`
 	OIDCSignedInAt time.Time `json:"-"`
 }
+
+// bindingCols reads the binding of the profiles row aliased f, in the order OIDCBinding.scan takes.
+const bindingCols = `COALESCE(f.oidc_issuer, ''), COALESCE(f.oidc_signed_in_at, '')`
+
+func (b *OIDCBinding) scan(iss, at string) { b.OIDCIssuer, b.OIDCSignedInAt = iss, parseTS(at) }
 
 // ProfileRoom is a room a profile is in, under the name it joined with.
 type ProfileRoom struct {
@@ -127,15 +143,19 @@ func (s *Store) DeleteProfileSession(ctx context.Context, sessionHash string) er
 }
 
 // SignInByRecovery opens a session with sessionHash on the profile holding recoveryHash.
-// ErrNotFound if none does.
-func (s *Store) SignInByRecovery(ctx context.Context, recoveryHash, sessionHash string) (*Profile, error) {
+// ErrNotFound if none does, ErrOrgSignIn if it is bound to orgIssuer.
+func (s *Store) SignInByRecovery(ctx context.Context, recoveryHash, sessionHash, orgIssuer string) (*Profile, error) {
 	var id int64
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM profiles WHERE recovery_hash = ?`, recoveryHash).Scan(&id)
+	var iss string
+	err := s.db.QueryRowContext(ctx, `SELECT id, COALESCE(oidc_issuer, '') FROM profiles WHERE recovery_hash = ?`, recoveryHash).Scan(&id, &iss)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("profile by recovery: %w", err)
+	}
+	if orgBound(iss, orgIssuer) {
+		return nil, ErrOrgSignIn
 	}
 	if err := createSession(ctx, s.db, id, sessionHash); err != nil {
 		return nil, err
@@ -143,15 +163,20 @@ func (s *Store) SignInByRecovery(ctx context.Context, recoveryHash, sessionHash 
 	return s.profile(ctx, `id = ?`, id)
 }
 
-// ProfileIDByEmail returns the id of the profile email is bound to; ErrNotFound if none.
-func (s *Store) ProfileIDByEmail(ctx context.Context, email string) (int64, error) {
+// ProfileIDByEmail returns the id of the profile email is bound to; ErrNotFound if none,
+// ErrOrgSignIn if it is bound to orgIssuer.
+func (s *Store) ProfileIDByEmail(ctx context.Context, email, orgIssuer string) (int64, error) {
 	var id int64
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM profiles WHERE email = ?`, email).Scan(&id)
+	var iss string
+	err := s.db.QueryRowContext(ctx, `SELECT id, COALESCE(oidc_issuer, '') FROM profiles WHERE email = ?`, email).Scan(&id, &iss)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrNotFound
 	}
 	if err != nil {
 		return 0, fmt.Errorf("profile by email: %w", err)
+	}
+	if orgBound(iss, orgIssuer) {
+		return 0, ErrOrgSignIn
 	}
 	return id, nil
 }
@@ -221,14 +246,15 @@ func (s *Store) profileRooms(ctx context.Context, profileID int64) ([]ProfileRoo
 // sessionHash and whose seat is valid. ErrNotFound otherwise.
 func (s *Store) ProfileParticipant(ctx context.Context, sessionHash, roomID string) (*Participant, error) {
 	var p Participant
-	var joined string
+	var joined, iss, at string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT pa.id, pa.room_id, pa.invite_id, pa.name, pa.joined_at, pa.can_trigger, pa.profile_id
+		SELECT pa.id, pa.room_id, pa.invite_id, pa.name, pa.joined_at, pa.can_trigger, pa.profile_id, `+bindingCols+`
 		FROM profile_sessions ps
 		JOIN participants pa ON pa.profile_id = ps.profile_id
+		JOIN profiles f ON f.id = ps.profile_id
 		WHERE ps.token_hash = ? AND ps.expires_at_s > ? AND pa.room_id = ? AND pa.removed_at IS NULL
 		ORDER BY pa.id DESC LIMIT 1`, sessionHash, time.Now().Unix(), roomID).
-		Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID)
+		Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID, &iss, &at)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -236,6 +262,7 @@ func (s *Store) ProfileParticipant(ctx context.Context, sessionHash, roomID stri
 		return nil, fmt.Errorf("profile participant: %w", err)
 	}
 	p.JoinedAt = parseTS(joined)
+	p.scan(iss, at)
 	return &p, nil
 }
 
@@ -283,6 +310,8 @@ type MagicUse struct {
 	// Confirm binds a bind link opened outside its profile (011-AC23).
 	Confirm bool
 	Now     time.Time
+	// OrgIssuer refuses a sign-in link of a profile bound to it, "" for none (021-AC9).
+	OrgIssuer string
 }
 
 // UseMagicLink spends the link u names, in one transaction. A sign-in link opens a session with
@@ -291,7 +320,8 @@ type MagicUse struct {
 // answers ErrWrongProfile and stays unused; for both outside cases the profile returned holds only
 // the display name and the address, as the browser is not its owner. ErrNotFound for an unknown or
 // stale link, ErrLinkUsed and ErrLinkExpired for a stored one, ErrEmailTaken when another profile
-// bound the email meanwhile, leaving the link unused.
+// bound the email meanwhile, and ErrOrgSignIn for a sign-in link of a profile bound to u.OrgIssuer,
+// leaving the link unused.
 func (s *Store) UseMagicLink(ctx context.Context, u MagicUse) (*Profile, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -314,7 +344,8 @@ func (s *Store) UseMagicLink(ctx context.Context, u MagicUse) (*Profile, error) 
 		return nil, ErrLinkExpired
 	}
 	var holder int64
-	err = tx.QueryRowContext(ctx, `SELECT id FROM profiles WHERE email = ?`, email).Scan(&holder)
+	var holderIss string
+	err = tx.QueryRowContext(ctx, `SELECT id, COALESCE(oidc_issuer, '') FROM profiles WHERE email = ?`, email).Scan(&holder, &holderIss)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("use magic link: %w", err)
 	}
@@ -323,6 +354,8 @@ func (s *Store) UseMagicLink(ctx context.Context, u MagicUse) (*Profile, error) 
 	switch {
 	case u.Purpose == MagicSignIn && holder != profileID:
 		return nil, ErrNotFound
+	case u.Purpose == MagicSignIn && orgBound(holderIss, u.OrgIssuer):
+		return nil, ErrOrgSignIn
 	case u.Purpose == MagicSignIn:
 		if err := createSession(ctx, tx, profileID, u.SessionHash); err != nil {
 			return nil, err
@@ -453,17 +486,23 @@ func (s *Store) CreateRecoveryLink(ctx context.Context, profileID int64, tokenHa
 
 // UseRecoveryLink spends the unused, unexpired recovery link tokenHash and opens a session with
 // sessionHash on its profile, in one transaction, writing the audit entry ctx carries for the
-// profile. ErrNotFound for an unknown, used, voided or expired link (011-AC2).
-func (s *Store) UseRecoveryLink(ctx context.Context, tokenHash, sessionHash string, now time.Time) (*Profile, error) {
+// profile. ErrNotFound for an unknown, used, voided or expired link (011-AC2); ErrOrgSignIn,
+// leaving it unused, for a profile bound to orgIssuer (021-AC9).
+func (s *Store) UseRecoveryLink(ctx context.Context, tokenHash, sessionHash string, now time.Time, orgIssuer string) (*Profile, error) {
 	var id int64
 	err := s.withTx(ctx, "use recovery link", func(tx *txn) error {
-		err := tx.QueryRowContext(ctx, `UPDATE recovery_links SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at_ms > ? RETURNING profile_id`,
-			formatTS(now), tokenHash, now.UnixMilli()).Scan(&id)
+		var iss string
+		err := tx.QueryRowContext(ctx, `UPDATE recovery_links SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at_ms > ?
+			RETURNING profile_id, (SELECT COALESCE(oidc_issuer, '') FROM profiles WHERE id = profile_id)`,
+			formatTS(now), tokenHash, now.UnixMilli()).Scan(&id, &iss)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
 		if err != nil {
 			return fmt.Errorf("use recovery link: %w", err)
+		}
+		if orgBound(iss, orgIssuer) {
+			return ErrOrgSignIn
 		}
 		if err := createSession(ctx, tx, id, sessionHash); err != nil {
 			return err

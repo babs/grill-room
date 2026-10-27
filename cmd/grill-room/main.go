@@ -135,6 +135,8 @@ type Config struct {
 	AnonymousRoomsPerHour int
 	// OIDC turns restricted mode on when its issuer is set (021-AC1).
 	OIDC web.OIDCConfig
+	// OIDCRevalidateSet tells GRILL_ROOM_OIDC_REVALIDATE set, whatever its value (021-AC8).
+	OIDCRevalidateSet bool
 }
 
 func loadConfig() (Config, error) {
@@ -158,6 +160,13 @@ func loadConfig() (Config, error) {
 	paraClose, err14 := time.ParseDuration(getEnv("GRILL_ROOM_VOICE_PARAGRAPH_CLOSE", web.DefaultVoiceParagraphClose.String()))
 	anonRooms, err15 := strconv.ParseBool(getEnv("GRILL_ROOM_ANONYMOUS_ROOMS", "false"))
 	anonPerHour, err16 := strconv.Atoi(getEnv("GRILL_ROOM_ANONYMOUS_ROOMS_PER_HOUR", strconv.Itoa(web.DefaultAnonymousRoomsPerHour)))
+	// Unset leaves NewOIDC's default; set, validateOIDC checks it, 0 included.
+	var revalidate time.Duration
+	var err17 error
+	revalidateSet := os.Getenv("GRILL_ROOM_OIDC_REVALIDATE") != ""
+	if revalidateSet {
+		revalidate, err17 = time.ParseDuration(os.Getenv("GRILL_ROOM_OIDC_REVALIDATE"))
+	}
 	return Config{
 		OIDC: web.OIDCConfig{
 			Issuer:       os.Getenv("GRILL_ROOM_OIDC_ISSUER"),
@@ -166,7 +175,9 @@ func loadConfig() (Config, error) {
 			Scopes:       strings.Fields(os.Getenv("GRILL_ROOM_OIDC_SCOPES")),
 			MemberGroup:  os.Getenv("GRILL_ROOM_OIDC_MEMBER_GROUP"),
 			GroupsClaim:  getEnv("GRILL_ROOM_OIDC_GROUPS_CLAIM", web.DefaultGroupsClaim),
+			Revalidate:   revalidate,
 		},
+		OIDCRevalidateSet:      revalidateSet,
 		AnonymousRooms:         anonRooms,
 		AnonymousRoomsPerHour:  anonPerHour,
 		NotesWatchDelay:        notesDelay,
@@ -210,7 +221,7 @@ func loadConfig() (Config, error) {
 		DaemonPrevDir:     os.Getenv("GRILL_ROOM_DAEMON_PREV_DIR"),
 		SandboxImage:      os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
 		DeviceSTTModelDir: os.Getenv("GRILL_ROOM_DEVICE_STT_MODEL_DIR"),
-	}, errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9, err10, err11, err12, err13, err14, err15, err16)
+	}, errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9, err10, err11, err12, err13, err14, err15, err16, err17)
 }
 
 // Validate rejects a configuration the server cannot run with.
@@ -327,14 +338,16 @@ func (c Config) validateOIDC() error {
 	}
 	switch {
 	case set == 0:
-		if o.MemberGroup != "" || len(o.Scopes) > 0 {
-			return errors.New("GRILL_ROOM_OIDC_MEMBER_GROUP and GRILL_ROOM_OIDC_SCOPES need GRILL_ROOM_OIDC_ISSUER")
+		if o.MemberGroup != "" || len(o.Scopes) > 0 || c.OIDCRevalidateSet {
+			return errors.New("GRILL_ROOM_OIDC_MEMBER_GROUP, GRILL_ROOM_OIDC_SCOPES and GRILL_ROOM_OIDC_REVALIDATE need GRILL_ROOM_OIDC_ISSUER")
 		}
 		return nil
 	case set < 3:
 		return errors.New("GRILL_ROOM_OIDC_ISSUER, GRILL_ROOM_OIDC_CLIENT_ID and GRILL_ROOM_OIDC_CLIENT_SECRET: set all three or none")
 	case c.AnonymousRooms:
 		return errors.New("GRILL_ROOM_ANONYMOUS_ROOMS cannot be on with GRILL_ROOM_OIDC_ISSUER")
+	case c.OIDCRevalidateSet && (o.Revalidate < time.Hour || o.Revalidate > 720*time.Hour):
+		return fmt.Errorf("GRILL_ROOM_OIDC_REVALIDATE %s: want 1h to 720h", o.Revalidate)
 	}
 	// The issuer serves the signing keys and receives the client secret: https as the public URL.
 	for _, v := range []struct{ name, url string }{{"GRILL_ROOM_URL", c.PublicURL}, {"GRILL_ROOM_OIDC_ISSUER", o.Issuer}} {

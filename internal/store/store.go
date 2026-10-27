@@ -124,6 +124,9 @@ type Participant struct {
 	// STTOff is set when they turned off the transcription of their voice (010-AC23). Set by
 	// ParticipantByToken and RoomParticipant only.
 	STTOff bool `json:"stt_off,omitempty"`
+	// OIDCBinding is its profile's, set by ParticipantByToken, ProfileParticipant and
+	// APITokenParticipant only (021-AC8).
+	OIDCBinding
 }
 
 // Message is one line in a room.
@@ -1030,10 +1033,11 @@ func join(ctx context.Context, tx *txn, inviteHash, name, tokenHash string, prof
 // ParticipantByToken returns the participant holding tokenHash, provided its seat is valid.
 func (s *Store) ParticipantByToken(ctx context.Context, tokenHash string) (*Participant, error) {
 	var p Participant
-	var joined string
+	var joined, iss, at string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger, COALESCE(p.profile_id, 0), p.stt_off FROM participants p
-		WHERE p.token_hash = ? AND p.removed_at IS NULL`, tokenHash).Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID, &p.STTOff)
+		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger, COALESCE(p.profile_id, 0), p.stt_off, `+bindingCols+` FROM participants p
+		LEFT JOIN profiles f ON f.id = p.profile_id
+		WHERE p.token_hash = ? AND p.removed_at IS NULL`, tokenHash).Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID, &p.STTOff, &iss, &at)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -1041,6 +1045,7 @@ func (s *Store) ParticipantByToken(ctx context.Context, tokenHash string) (*Part
 		return nil, fmt.Errorf("participant by token: %w", err)
 	}
 	p.JoinedAt = parseTS(joined)
+	p.scan(iss, at)
 	return &p, nil
 }
 

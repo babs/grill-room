@@ -303,7 +303,7 @@ func TestOIDCLogin(t *testing.T) {
 // 021-AC2: next is kept only as a path of this site.
 func TestSafeNext(t *testing.T) {
 	for in, want := range map[string]string{
-		"/r/abc?x=1#y": "/r/abc?x=1#y", "/": "/", "": "/", "//evil.example": "/", "/\\evil.example": "/", "https://evil.example": "/",
+		"/r/abc?x=1": "/r/abc?x=1", "/r/abc?x=1#y": "/", "/join#ABCDEFGHIJKLMNOPQRSTUVWXYZ": "/", "/": "/", "": "/", "//evil.example": "/", "/\\evil.example": "/", "https://evil.example": "/",
 		"evil.example": "/", "/\t/evil.example": "/", "/a\\b": "/", "/\n": "/", "/" + strings.Repeat("a", 512): "/", "/" + strings.Repeat("a", 511): "/" + strings.Repeat("a", 511), "/\xff": "/", "javascript:alert(1)": "/",
 	} {
 		if got := safeNext(in); got != want {

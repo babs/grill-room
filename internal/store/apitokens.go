@@ -36,6 +36,8 @@ type APIToken struct {
 	// LastUsedAt and LastUsedIP are the owner's to see (012-AC9); the purge clears the IP.
 	LastUsedAt *time.Time `json:"last_used_at"`
 	LastUsedIP string     `json:"last_used_ip,omitempty"`
+	// OIDCBinding is its profile's, set by APITokenByHash only (021-AC8).
+	OIDCBinding
 }
 
 // Expired reports whether t is past its expiry at now.
@@ -61,11 +63,12 @@ func msTime(ms sql.NullInt64) *time.Time {
 
 const apiTokenCols = `id, profile_id, (SELECT COALESCE(uuid, '') FROM profiles WHERE id = profile_id), name, scope, created_at, expires_at_ms, last_used_at_ms, COALESCE(last_used_ip, '')` //nolint:gosec // G101: column names, no credential
 
-func scanAPIToken(sc interface{ Scan(...any) error }) (*APIToken, error) {
+// scanAPIToken reads apiTokenCols, then extra.
+func scanAPIToken(sc interface{ Scan(...any) error }, extra ...any) (*APIToken, error) {
 	var t APIToken
 	var created string
 	var expires, used sql.NullInt64
-	if err := sc.Scan(&t.ID, &t.ProfileID, &t.ProfileUUID, &t.Name, &t.Scope, &created, &expires, &used, &t.LastUsedIP); err != nil {
+	if err := sc.Scan(append([]any{&t.ID, &t.ProfileID, &t.ProfileUUID, &t.Name, &t.Scope, &created, &expires, &used, &t.LastUsedIP}, extra...)...); err != nil {
 		return nil, err
 	}
 	t.CreatedAt, t.ExpiresAt, t.LastUsedAt = parseTS(created), msTime(expires), msTime(used)
@@ -146,16 +149,19 @@ func (s *Store) RevokeAPIToken(ctx context.Context, profileID, id int64) error {
 	})
 }
 
-// APITokenByHash returns the token with hash: ErrNotFound for none, ErrTokenExpired, with the
-// token, once past its expiry at now.
+// APITokenByHash returns the token with hash and its profile's binding: ErrNotFound for none,
+// ErrTokenExpired, with the token, once past its expiry at now.
 func (s *Store) APITokenByHash(ctx context.Context, hash string, now time.Time) (*APIToken, error) {
-	t, err := scanAPIToken(s.db.QueryRowContext(ctx, `SELECT `+apiTokenCols+` FROM api_tokens WHERE token_hash = ?`, hash))
+	var iss, at string
+	t, err := scanAPIToken(s.db.QueryRowContext(ctx, `SELECT `+apiTokenCols+`, `+bindingCols+` FROM api_tokens
+		JOIN (SELECT id AS fid, oidc_issuer, oidc_signed_in_at FROM profiles) f ON f.fid = profile_id WHERE token_hash = ?`, hash), &iss, &at)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("api token: %w", err)
 	}
+	t.scan(iss, at)
 	if t.Expired(now) {
 		return t, ErrTokenExpired
 	}
@@ -178,14 +184,15 @@ func (s *Store) TouchAPIToken(ctx context.Context, id int64, ip string, now time
 // token hash and whose seat is valid, as ProfileParticipant does for a session (012-AC3).
 func (s *Store) APITokenParticipant(ctx context.Context, hash, roomID string, now time.Time) (*Participant, error) {
 	var p Participant
-	var joined string
+	var joined, iss, at string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT pa.id, pa.room_id, pa.invite_id, pa.name, pa.joined_at, pa.can_trigger, pa.profile_id
+		SELECT pa.id, pa.room_id, pa.invite_id, pa.name, pa.joined_at, pa.can_trigger, pa.profile_id, `+bindingCols+`
 		FROM api_tokens t
 		JOIN participants pa ON pa.profile_id = t.profile_id
+		JOIN profiles f ON f.id = t.profile_id
 		WHERE t.token_hash = ? AND (t.expires_at_ms IS NULL OR t.expires_at_ms > ?) AND pa.room_id = ? AND pa.removed_at IS NULL
 		ORDER BY pa.id DESC LIMIT 1`, hash, now.UnixMilli(), roomID).
-		Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID)
+		Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID, &iss, &at)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -193,6 +200,7 @@ func (s *Store) APITokenParticipant(ctx context.Context, hash, roomID string, no
 		return nil, fmt.Errorf("api token participant: %w", err)
 	}
 	p.JoinedAt = parseTS(joined)
+	p.scan(iss, at)
 	return &p, nil
 }
 

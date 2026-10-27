@@ -134,15 +134,18 @@ func setProfileCookieAge(w http.ResponseWriter, r *http.Request, tok string, max
 }
 
 // profileFromCookie returns the profile of the request's profile cookie, nil when it has none or
-// a stale one.
+// a stale one; errReauth for an internal past its revalidation (021-AC8).
 func (s *Server) profileFromCookie(r *http.Request) (*store.Profile, error) {
 	c, err := r.Cookie(profileCookie)
 	if err != nil || c.Value == "" {
 		return nil, nil
 	}
 	p, err := s.bus.Store.ProfileBySession(r.Context(), HashToken(c.Value))
-	if errors.Is(err, store.ErrNotFound) {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
 		return nil, nil
+	case err == nil && s.reauthDue(p.OIDCBinding):
+		return nil, errReauth
 	}
 	return p, err
 }
@@ -262,15 +265,19 @@ func (s *Server) recoverProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	tok, hash := NewToken(), HashToken(req.Token)
 	how := "recovery"
-	p, err := s.bus.Store.SignInByRecovery(r.Context(), hash, HashToken(tok))
+	p, err := s.bus.Store.SignInByRecovery(r.Context(), hash, HashToken(tok), s.orgIssuer())
 	if errors.Is(err, store.ErrNotFound) {
 		how = "recovery_link"
 		ctx := store.WithAudit(r.Context(), store.AuditEntry{At: s.now(), Actor: store.ActorSystem, Action: ActionProfileRecoveryUsed,
 			TargetKind: store.TargetProfile}, nil)
-		p, err = s.bus.Store.UseRecoveryLink(ctx, hash, HashToken(tok), s.now())
+		p, err = s.bus.Store.UseRecoveryLink(ctx, hash, HashToken(tok), s.now(), s.orgIssuer())
 	}
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusUnauthorized, "this recovery link is invalid")
+		return
+	}
+	if errors.Is(err, store.ErrOrgSignIn) {
+		writeJSON(w, http.StatusForbidden, orgSignInError)
 		return
 	}
 	if err != nil {
@@ -429,8 +436,9 @@ func (s *Server) emailSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.afterAnswer(r, func(ctx context.Context) {
-		id, err := s.bus.Store.ProfileIDByEmail(ctx, email)
-		if errors.Is(err, store.ErrNotFound) {
+		id, err := s.bus.Store.ProfileIDByEmail(ctx, email, s.orgIssuer())
+		// An internal's link would be refused: it gets none, and the answer does not tell (021-AC9).
+		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrOrgSignIn) {
 			return
 		}
 		if err != nil {
@@ -558,8 +566,10 @@ func (s *Server) useMagicLink(w http.ResponseWriter, r *http.Request) {
 	}
 	tok := NewToken()
 	p, err := s.bus.Store.UseMagicLink(r.Context(), store.MagicUse{TokenHash: HashToken(req.Token), Purpose: req.Purpose,
-		SessionHash: HashToken(tok), Current: currentID, Confirm: req.Confirm, Now: s.now()})
+		SessionHash: HashToken(tok), Current: currentID, Confirm: req.Confirm, Now: s.now(), OrgIssuer: s.orgIssuer()})
 	switch {
+	case errors.Is(err, store.ErrOrgSignIn):
+		writeJSON(w, http.StatusForbidden, orgSignInError)
 	case errors.Is(err, store.ErrNotFound):
 		writeJSON(w, http.StatusUnauthorized, magicError{Reason: "invalid", Error: "this link is invalid"})
 	case errors.Is(err, store.ErrLinkExpired):

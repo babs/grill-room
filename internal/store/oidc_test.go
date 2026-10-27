@@ -191,3 +191,76 @@ func TestJoinRestricted(t *testing.T) {
 		t.Fatalf("room admin creator: %v", err)
 	}
 }
+
+// 021-AC9: a profile bound to the configured issuer refuses its sign-in and recovery links, which
+// stay unused, and is not found by email for a sign-in link; another issuer, or none set, does not.
+func TestOrgSignInRefused(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	const iss = "https://idp.example"
+	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec-a", SessionHash: "sess-a"})
+	if _, err := s.db.ExecContext(ctx, `UPDATE profiles SET email = 'a@example.com', oidc_issuer = ?, oidc_subject = 'a' WHERE id = ?`, iss, a.ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	link(s, t, a.ProfileID, "a@example.com", MagicSignIn, "magic-a", time.Hour)
+	if _, err := s.CreateRecoveryLink(ctx, a.ProfileID, "link-a", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	calls := map[string]func(org string) error{
+		"recovery token": func(org string) error { _, err := s.SignInByRecovery(ctx, "rec-a", "x", org); return err },
+		"recovery link":  func(org string) error { _, err := s.UseRecoveryLink(ctx, "link-a", "y", time.Now(), org); return err },
+		"sign-in link": func(org string) error {
+			_, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "magic-a", Purpose: MagicSignIn, SessionHash: "z", Now: time.Now(), OrgIssuer: org})
+			return err
+		},
+		"by email": func(org string) error { _, err := s.ProfileIDByEmail(ctx, "a@example.com", org); return err },
+	}
+	for name, call := range calls {
+		if err := call(iss); !errors.Is(err, ErrOrgSignIn) {
+			t.Errorf("%s: %v, want ErrOrgSignIn", name, err)
+		}
+	}
+	if n := count(t, s, `SELECT (SELECT count(*) FROM magic_links WHERE used_at IS NULL) + (SELECT count(*) FROM recovery_links WHERE used_at IS NULL)`); n != 2 {
+		t.Errorf("%d links unused, want 2", n)
+	}
+	if n := count(t, s, `SELECT count(*) FROM profile_sessions`); n != 1 {
+		t.Errorf("%d sessions, want the join's", n)
+	}
+	for _, org := range []string{"https://former.example", ""} {
+		if err := calls["by email"](org); err != nil {
+			t.Errorf("by email, org %q: %v", org, err)
+		}
+	}
+	for _, name := range []string{"recovery token", "recovery link", "sign-in link"} {
+		if err := calls[name]("https://former.example"); err != nil {
+			t.Errorf("%s, another issuer: %v", name, err)
+		}
+	}
+}
+
+// 021-AC8: the seat, session and token lookups carry their profile's binding.
+func TestLookupsCarryBinding(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	at := time.Unix(5000, 0).UTC()
+	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec-a", SessionHash: "sess-a"})
+	if _, err := s.db.ExecContext(ctx, `UPDATE profiles SET oidc_issuer = 'https://idp.example', oidc_subject = 'a', oidc_signed_in_at = ? WHERE id = ?`,
+		formatTS(at), a.ProfileID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateAPIToken(ctx, a.ProfileID, "ci", "api-a", ScopeFull, nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	seat, err1 := s.ParticipantByToken(ctx, "tok-a")
+	viaSession, err2 := s.ProfileParticipant(ctx, "sess-a", "a")
+	viaToken, err3 := s.APITokenParticipant(ctx, "api-a", "a", time.Now())
+	tok, err4 := s.APITokenByHash(ctx, "api-a", time.Now())
+	if err := errors.Join(err1, err2, err3, err4); err != nil {
+		t.Fatal(err)
+	}
+	for name, got := range map[string]OIDCBinding{"seat": seat.OIDCBinding, "session": viaSession.OIDCBinding, "token seat": viaToken.OIDCBinding, "token": tok.OIDCBinding} {
+		if got.OIDCIssuer != "https://idp.example" || !got.OIDCSignedInAt.Equal(at) {
+			t.Errorf("%s: %+v", name, got)
+		}
+	}
+}

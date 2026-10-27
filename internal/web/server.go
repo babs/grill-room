@@ -638,6 +638,19 @@ func (s *Server) participant(next func(http.ResponseWriter, *http.Request, sessi
 			httpError(w, http.StatusUnauthorized, "invalid or revoked token")
 			return
 		}
+		if errors.Is(err, errReauth) && bearer(r) == "" {
+			// The expired seat is another profile's room cookie: the browser signed in as someone
+			// else, whom a new sign-in would not help; drop that cookie, as a bad seat's (021-AC8).
+			if p, perr := s.profileFromCookie(r); perr == nil && p != nil {
+				setRoomCookieAge(w, r, r.PathValue("room"), "", -1)
+				httpError(w, http.StatusUnauthorized, "invalid or revoked token")
+				return
+			}
+		}
+		if errors.Is(err, errReauth) {
+			reasonError(w, http.StatusUnauthorized, "reauth", msgReauth)
+			return
+		}
 		if err != nil {
 			s.log.Error("auth_lookup_failed", zap.Error(err))
 			httpError(w, http.StatusInternalServerError, "auth failed")
@@ -648,9 +661,10 @@ func (s *Server) participant(next func(http.ResponseWriter, *http.Request, sessi
 	})
 }
 
-// authorize returns the participant the first valid credential proves in room; ErrNotFound when
-// none does.
+// authorize returns the participant the first valid credential proves in room; errReauth when
+// only seats of internals past their revalidation do (021-AC8), ErrNotFound when none does.
 func (s *Server) authorize(ctx context.Context, creds []cred, room string) (*store.Participant, error) {
+	reauth := false
 	for _, c := range creds {
 		var p *store.Participant
 		var err error
@@ -662,9 +676,16 @@ func (s *Server) authorize(ctx context.Context, creds []cred, room string) (*sto
 		} else if p, err = s.bus.Store.ParticipantByToken(ctx, c.hash); err == nil && p.RoomID != room {
 			err = store.ErrNotFound
 		}
+		if err == nil && s.reauthDue(p.OIDCBinding) {
+			reauth = true
+			continue
+		}
 		if !errors.Is(err, store.ErrNotFound) {
 			return p, err
 		}
+	}
+	if reauth {
+		return nil, errReauth
 	}
 	return nil, store.ErrNotFound
 }
@@ -1038,15 +1059,11 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var prof store.JoinProfile
-	if c, err := r.Cookie(profileCookie); err == nil && c.Value != "" {
-		got, err := s.bus.Store.ProfileBySession(r.Context(), HashToken(c.Value))
-		switch {
-		case err == nil:
-			prof.ID = got.ID
-		case !errors.Is(err, store.ErrNotFound):
-			s.serverError(w, "join_failed", err)
-			return
-		}
+	if got, err := s.profileFromCookie(r); err != nil {
+		s.serverError(w, "join_failed", err)
+		return
+	} else if got != nil {
+		prof.ID = got.ID
 	}
 	if s.opts.OIDC != nil {
 		prof.Issuer = s.opts.OIDC.cfg.Issuer
@@ -1089,11 +1106,16 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 }
 
 func setRoomCookie(w http.ResponseWriter, r *http.Request, room, tok string) {
+	setRoomCookieAge(w, r, room, tok, cookieMaxAge)
+}
+
+// setRoomCookieAge is setRoomCookie with its lifetime; -1 clears it.
+func setRoomCookieAge(w http.ResponseWriter, r *http.Request, room, tok string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure follows the request scheme: plain-HTTP dev and tests would lose the cookie
 		Name:     cookieName,
 		Value:    tok,
 		Path:     "/api/rooms/" + room,
-		MaxAge:   cookieMaxAge,
+		MaxAge:   maxAge,
 		HttpOnly: true,
 		Secure:   secure(r),
 		SameSite: http.SameSiteStrictMode,
@@ -1236,14 +1258,23 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 
 	var agentSent string
 	// gone sends "revoked" once the participant's access is gone, as a room deleted or an invite
-	// revoked mid-read fails the read that follows the access check.
+	// revoked mid-read fails the read that follows the access check; with reason reauth once the
+	// sign-in expired, which the heartbeat's re-check catches (021-AC8).
 	revoked := false
 	gone := func() {
-		if _, err := s.authorize(r.Context(), sess.creds, room); errors.Is(err, store.ErrNotFound) && !revoked {
-			revoked = true
-			_, _ = io.WriteString(w, "event: revoked\ndata: {}\n\n")
-			flusher.Flush()
+		_, err := s.authorize(r.Context(), sess.creds, room)
+		if revoked || !errors.Is(err, store.ErrNotFound) && !errors.Is(err, errReauth) {
+			return
 		}
+		revoked = true
+		data := "{}"
+		if errors.Is(err, errReauth) {
+			data = `{"reason":"reauth"}`
+			// A removal kicks its seats from the audio in seatsEnded; an expiry ends here (021-AC8).
+			s.kickFromVoice(room, []int64{sess.p.ID})
+		}
+		_, _ = io.WriteString(w, "event: revoked\ndata: "+data+"\n\n")
+		flusher.Flush()
 	}
 	// send re-checks access, then sends what the store holds past last. False ends the stream.
 	var send func() bool
@@ -1432,6 +1463,11 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 }
 
 func (s *Server) serverError(w http.ResponseWriter, event string, err error) {
+	// The profile lookups fail with errReauth: every route answers it here alike (021-AC8).
+	if errors.Is(err, errReauth) {
+		reasonError(w, http.StatusUnauthorized, "reauth", msgReauth)
+		return
+	}
 	s.log.Error(event, zap.Error(err))
 	httpError(w, http.StatusInternalServerError, "internal error")
 }

@@ -480,6 +480,16 @@ func TestValidateOIDC(t *testing.T) {
 		{"secret only", Config{PublicURL: "https://rooms.example", OIDC: web.OIDCConfig{ClientSecret: "s"}}, false},
 		{"group without issuer", Config{PublicURL: "https://rooms.example", OIDC: web.OIDCConfig{MemberGroup: "staff"}}, false},
 		{"scopes without issuer", Config{PublicURL: "https://rooms.example", OIDC: web.OIDCConfig{Scopes: []string{"x"}}}, false},
+		// 021-AC8: the revalidation window, 1h to 720h, with an issuer only.
+		{"revalidate without issuer", Config{PublicURL: "https://rooms.example", OIDC: web.OIDCConfig{Revalidate: time.Hour}, OIDCRevalidateSet: true}, false},
+		{"revalidate 0 without issuer", Config{PublicURL: "https://rooms.example", OIDCRevalidateSet: true}, false},
+		{"revalidate unset", Config{PublicURL: "https://rooms.example", OIDC: full}, true},
+		{"revalidate 1h", revalidating(full, time.Hour), true},
+		{"revalidate 720h", revalidating(full, 720*time.Hour), true},
+		{"revalidate 0", revalidating(full, 0), false},
+		{"revalidate under 1h", revalidating(full, time.Hour-time.Second), false},
+		{"revalidate over 720h", revalidating(full, 720*time.Hour+time.Second), false},
+		{"revalidate negative", revalidating(full, -time.Hour), false},
 	} {
 		if err := c.cfg.validateOIDC(); (err == nil) != c.ok {
 			t.Errorf("%s: %v, want ok %v", c.name, err, c.ok)
@@ -489,6 +499,12 @@ func TestValidateOIDC(t *testing.T) {
 
 func withIssuer(c web.OIDCConfig, iss string) web.OIDCConfig { c.Issuer = iss; return c }
 
+// revalidating is an https instance on c with GRILL_ROOM_OIDC_REVALIDATE set to d.
+func revalidating(c web.OIDCConfig, d time.Duration) Config {
+	c.Revalidate = d
+	return Config{PublicURL: "https://rooms.example", OIDC: c, OIDCRevalidateSet: true}
+}
+
 // 021-AC1: the provider settings come from the environment, with their defaults.
 func TestLoadConfigOIDC(t *testing.T) {
 	t.Setenv("GRILL_ROOM_DATABASE_URL", "postgres://u@db/x")
@@ -497,13 +513,26 @@ func TestLoadConfigOIDC(t *testing.T) {
 		t.Fatalf("defaults: %+v %v", c.OIDC, err)
 	}
 	for k, v := range map[string]string{"GRILL_ROOM_OIDC_ISSUER": "https://idp.example", "GRILL_ROOM_OIDC_CLIENT_ID": "c", "GRILL_ROOM_OIDC_CLIENT_SECRET": "s",
-		"GRILL_ROOM_OIDC_SCOPES": " groups  offline_access ", "GRILL_ROOM_OIDC_MEMBER_GROUP": "staff", "GRILL_ROOM_OIDC_GROUPS_CLAIM": "roles"} {
+		"GRILL_ROOM_OIDC_SCOPES": " groups  offline_access ", "GRILL_ROOM_OIDC_MEMBER_GROUP": "staff", "GRILL_ROOM_OIDC_GROUPS_CLAIM": "roles",
+		"GRILL_ROOM_OIDC_REVALIDATE": "24h"} {
 		t.Setenv(k, v)
 	}
 	c, err = loadConfig()
-	want := web.OIDCConfig{Issuer: "https://idp.example", ClientID: "c", ClientSecret: "s", Scopes: []string{"groups", "offline_access"}, MemberGroup: "staff", GroupsClaim: "roles"}
+	want := web.OIDCConfig{Issuer: "https://idp.example", ClientID: "c", ClientSecret: "s", Scopes: []string{"groups", "offline_access"}, MemberGroup: "staff", GroupsClaim: "roles",
+		Revalidate: 24 * time.Hour}
 	if err != nil || !reflect.DeepEqual(c.OIDC, want) {
 		t.Fatalf("set: %+v %v", c.OIDC, err)
+	}
+	if !c.OIDCRevalidateSet {
+		t.Error("GRILL_ROOM_OIDC_REVALIDATE not marked set")
+	}
+	t.Setenv("GRILL_ROOM_OIDC_REVALIDATE", "0")
+	if c, err := loadConfig(); err != nil || !c.OIDCRevalidateSet || c.validateOIDC() == nil {
+		t.Errorf("GRILL_ROOM_OIDC_REVALIDATE=0 taken: %v", err)
+	}
+	t.Setenv("GRILL_ROOM_OIDC_REVALIDATE", "a week")
+	if _, err := loadConfig(); err == nil {
+		t.Error("an unparsable GRILL_ROOM_OIDC_REVALIDATE was taken")
 	}
 }
 

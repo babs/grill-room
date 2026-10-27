@@ -98,6 +98,9 @@ func (s *Server) tokenGate(mux *http.ServeMux) http.Handler {
 		case errors.Is(err, store.ErrTokenExpired):
 			httpError(w, http.StatusUnauthorized, msgTokenExpired)
 			return
+		case err == nil && s.reauthDue(t.OIDCBinding):
+			reasonError(w, http.StatusUnauthorized, "reauth", msgReauth)
+			return
 		case err != nil:
 			s.serverError(w, "api_token_lookup_failed", err)
 			return

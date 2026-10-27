@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -50,7 +51,8 @@ func restrictedRoom(t *testing.T) (e *env, o *OIDC, room string, actors []restri
 		return d, d.profile(t).Profile.ID
 	}
 	internal, ip := member("Ines")
-	if _, err := db.ExecContext(t.Context(), `UPDATE profiles SET oidc_issuer = $1, oidc_subject = 'ines' WHERE id = $2`, o.cfg.Issuer, ip); err != nil {
+	if _, err := db.ExecContext(t.Context(), `UPDATE profiles SET oidc_issuer = $1, oidc_subject = 'ines', oidc_signed_in_at = $3 WHERE id = $2`, o.cfg.Issuer, ip,
+		time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	extAdmin, ap := member("Ezra")

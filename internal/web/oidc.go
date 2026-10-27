@@ -42,6 +42,8 @@ const (
 	oidcTimeout = 10 * time.Second
 	// DefaultGroupsClaim is the ID token claim read for groups when none is set (021-AC3).
 	DefaultGroupsClaim = "groups"
+	// DefaultOIDCRevalidate is how long an internal's sign-in lasts when none is set (021-AC8).
+	DefaultOIDCRevalidate = 168 * time.Hour
 	// ActionProfileOIDCBind is a provider sign-in, with how it found its profile (021-AC4).
 	ActionProfileOIDCBind = "profile.oidc_bind"
 )
@@ -74,6 +76,8 @@ type OIDCConfig struct {
 	// MemberGroup, when set, is the group GroupsClaim must hold (021-AC3); GroupsClaim defaults
 	// to DefaultGroupsClaim.
 	MemberGroup, GroupsClaim string
+	// Revalidate is how long an internal's sign-in lasts, DefaultOIDCRevalidate when 0 (021-AC8).
+	Revalidate time.Duration
 }
 
 // OIDC is a provider whose discovery document NewOIDC fetched.
@@ -94,6 +98,9 @@ func NewOIDC(ctx context.Context, c OIDCConfig) (*OIDC, error) {
 	if c.GroupsClaim == "" {
 		c.GroupsClaim = DefaultGroupsClaim
 	}
+	if c.Revalidate == 0 {
+		c.Revalidate = DefaultOIDCRevalidate
+	}
 	return &OIDC{cfg: c, client: client, verifier: p.Verifier(&oidc.Config{ClientID: c.ClientID}), oauth: oauth2.Config{
 		ClientID: c.ClientID, ClientSecret: c.ClientSecret, RedirectURL: c.RedirectURL, Endpoint: p.Endpoint(),
 		Scopes: append([]string{oidc.ScopeOpenID, "email", "profile"}, c.Scopes...),
@@ -110,6 +117,8 @@ type oidcState struct {
 	// Replaced is the hash of the profile session the browser held at login: the callback, reached
 	// cross-site, never sees the Strict profile cookie, and ends that session (021-AC4).
 	Replaced string `json:"r,omitempty"`
+	// Silent is a flow started with prompt=none: the callback falls back to a normal one (021-AC8).
+	Silent bool `json:"q,omitempty"`
 }
 
 const oidcStateKeyUse = "oidc-state"
@@ -175,27 +184,36 @@ func setOIDCCookie(w http.ResponseWriter, r *http.Request, name, v string, maxAg
 
 // safeNext keeps next when it is a path of this site, "/" otherwise: no open redirect. Browsers
 // drop tabs and newlines and read \ as /, so "/\t/x" and "/\x" would leave the site; invalid UTF-8
-// would grow sixfold in the sealed cookie.
+// would grow sixfold in the sealed cookie. A fragment holds secrets the URL must not carry: the page
+// keeps it itself (021-AC8).
 func safeNext(next string) string {
 	if len(next) > oidcMaxNext || !utf8.ValidString(next) || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") ||
-		strings.ContainsFunc(next, func(c rune) bool { return c < 0x20 || c == 0x7f || c == '\\' }) {
+		strings.ContainsFunc(next, func(c rune) bool { return c < 0x20 || c == 0x7f || c == '\\' || c == '#' }) {
 		return "/"
 	}
 	return next
 }
 
-// oidcLogin starts an authorization code flow with PKCE (021-AC2). Only this site or the address
-// bar starts one: another site must not push a browser through the provider.
+// oidcLogin starts an authorization code flow with PKCE (021-AC2), with prompt=none when asked:
+// a page whose sign-in expired tries the provider silently first (021-AC8). Only this site or the
+// address bar starts one: another site must not push a browser through the provider.
 func (s *Server) oidcLogin(w http.ResponseWriter, r *http.Request) {
 	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
 		httpError(w, http.StatusForbidden, "cross-site request refused")
 		return
 	}
-	st := oidcState{State: NewToken(), Nonce: NewToken(), Verifier: oauth2.GenerateVerifier(),
-		Next: safeNext(r.URL.Query().Get("next")), Exp: s.now().Add(oidcStateTTL).Unix()}
+	q := r.URL.Query()
+	st := oidcState{Next: safeNext(q.Get("next")), Silent: q.Get("prompt") == "none"}
 	if c, err := r.Cookie(profileCookie); err == nil && c.Value != "" {
 		st.Replaced = HashToken(c.Value)
 	}
+	s.startFlow(w, r, st)
+}
+
+// startFlow gives st a fresh state, nonce and verifier, seals it in its own cookie and sends the
+// browser to the provider.
+func (s *Server) startFlow(w http.ResponseWriter, r *http.Request, st oidcState) {
+	st.State, st.Nonce, st.Verifier, st.Exp = NewToken(), NewToken(), oauth2.GenerateVerifier(), s.now().Add(oidcStateTTL).Unix()
 	v, err := s.sealState(r.Context(), st)
 	if err == nil {
 		err = s.expireOldFlows(w, r)
@@ -205,8 +223,16 @@ func (s *Server) oidcLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setOIDCCookie(w, r, oidcCookieName(st.State), v, int(oidcStateTTL/time.Second))
-	http.Redirect(w, r, s.opts.OIDC.oauth.AuthCodeURL(st.State, oidc.Nonce(st.Nonce), oauth2.S256ChallengeOption(st.Verifier)), http.StatusFound)
+	opts := []oauth2.AuthCodeOption{oidc.Nonce(st.Nonce), oauth2.S256ChallengeOption(st.Verifier)}
+	if st.Silent {
+		opts = append(opts, oauth2.SetAuthURLParam("prompt", "none"))
+	}
+	http.Redirect(w, r, s.opts.OIDC.oauth.AuthCodeURL(st.State, opts...), http.StatusFound)
 }
+
+// interactionNeeded are the errors a provider answers prompt=none with when it must show a page
+// (OIDC Core 3.1.2.6).
+var interactionNeeded = map[string]bool{"login_required": true, "interaction_required": true, "consent_required": true, "account_selection_required": true}
 
 // expireOldFlows clears the request's sign-in cookies but the oidcKeepFlows newest, by their sealed
 // expiry; a cookie failing its MAC counts as the oldest, so forged ones cannot evict real flows.
@@ -287,6 +313,13 @@ func idpErrorCode(e string) string {
 func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	o := s.opts.OIDC
 	st, f := s.callbackState(w, r)
+	// The new flow starts here, as /auth/login refuses the cross-site chain the provider sent; it is
+	// not silent, so a second refusal shows the failure page (021-AC8).
+	if f == nil && st.Silent && interactionNeeded[r.URL.Query().Get("error")] {
+		s.log.Info("oidc_silent_refused", zap.String("idp_error", idpErrorCode(r.URL.Query().Get("error"))))
+		s.startFlow(w, r, oidcState{Next: st.Next, Replaced: st.Replaced})
+		return
+	}
 	var idt *oidc.IDToken
 	var claims map[string]any
 	if f == nil {
@@ -502,6 +535,33 @@ func (s *Server) mayInvite(ctx context.Context, sess *session) (bool, error) {
 	}
 	return s.isInternal(p), nil
 }
+
+// errReauth is a profile, or a seat or API token of one, whose sign-in with the provider is past
+// its revalidation: serverError and the seat checks answer it 401 reauth (021-AC8).
+var errReauth = errors.New("organisation sign-in expired")
+
+const msgReauth = "Your organisation sign-in expired: sign in again"
+
+// msgDaemonReauth is what a daemon shows while its seat's owner has to sign in again (021-AC8).
+const msgDaemonReauth = "The room needs its owner to sign in again with the organisation account"
+
+// reauthDue reports an internal whose last sign-in is Revalidate old. The binding is the profile's,
+// so sessions and tokens older than the binding lapse with it (021-AC8).
+func (s *Server) reauthDue(b store.OIDCBinding) bool {
+	o := s.opts.OIDC
+	return o != nil && b.OIDCIssuer == o.cfg.Issuer && !s.now().Before(b.OIDCSignedInAt.Add(o.cfg.Revalidate))
+}
+
+// orgIssuer is the configured issuer, "" with restricted mode off.
+func (s *Server) orgIssuer() string {
+	if s.opts.OIDC == nil {
+		return ""
+	}
+	return s.opts.OIDC.cfg.Issuer
+}
+
+// orgSignInError answers a sign-in or recovery link of an internal (021-AC9).
+var orgSignInError = magicError{Reason: "org_account", Error: "This profile signs in with your organisation account"}
 
 // Restricted reports restricted mode: an OIDC provider is set (021-AC1).
 func (s *Server) Restricted() bool { return s.opts.OIDC != nil }

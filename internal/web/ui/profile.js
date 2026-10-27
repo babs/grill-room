@@ -495,6 +495,9 @@ function failed(data, signedIn) {
     case 'taken':
       statusLine.textContent = 'This address is already on another profile. Sign in with it to open that profile, or ask the admin to merge the two profiles.';
       return next('');
+    case 'org_account':
+      statusLine.textContent = 'This profile signs in with your organisation account.';
+      return next('Sign in with your organisation account', () => location.assign('/auth/login?next=/profile'));
   }
   statusLine.textContent = data.error || 'This link did not work.';
   next('');
@@ -507,10 +510,11 @@ async function signInFromLink() {
   const hash = new URLSearchParams(location.hash.slice(1));
   const [kind, token] = ['bind', 'magic', 'recover'].map((k) => [k, hash.get(k)]).find(([, v]) => v) || [];
   if (!token) return;
+  // Read before the fragment goes: an expired sign-in's redirect brings the link back (021-AC8).
+  const res = await fetch('/api/profile');
   // A bind lands on Account, where the address shows; a sign-in on the rooms.
   history.replaceState(null, '', location.pathname + (kind === 'bind' ? '#account' : ''));
   next('');
-  const res = await fetch('/api/profile');
   const current = res.ok ? (await res.json()).profile : null;
   if (kind === 'bind') {
     let { res: bound, data } = await post('/api/profile/magic', { token, purpose: 'bind' });
