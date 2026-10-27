@@ -1,6 +1,6 @@
 # 020: Written chat and voice transcription apart
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-10-26
 **Context**: builds on 018 (voice paragraphs), 005 (room UX, unread count AC12), 010 (device STT).
@@ -32,35 +32,35 @@ On a wide screen, the chat shows the written exchange: typed messages, persona r
 
 ### Voice paragraphs
 
-- [ ] **AC1** A voice line joins its speaker's open paragraph (018-AC4) when that paragraph is the room's latest message other than a typed (`text`) one. All other 018-AC4 conditions are unchanged. A persona reply, a room event or another speaker's voice line still ends it.
-- [ ] **AC2** A typed message no longer closes a paragraph for "every N voice lines" (018-AC7): the paragraph closes when a non-typed message follows it or when the close delay passes.
-- [ ] **AC17** A room's and a profile's last activity date a paragraph by its last append even when it grew past typed messages (018-AC5); a typed message later than that append wins.
-- [ ] **AC3** A typed message that starts a turn which reads the paragraph still ends it (018-AC4, "no agent turn has read it yet"): the next line opens a new paragraph.
+- [x] **AC1** A voice line joins its speaker's open paragraph (018-AC4) when that paragraph is the room's latest message other than a typed (`text`) one. All other 018-AC4 conditions are unchanged. A persona reply, a room event or another speaker's voice line still ends it.
+- [x] **AC2** A typed message no longer closes a paragraph for "every N voice lines" (018-AC7): the paragraph closes when a non-typed message follows it or when the close delay passes.
+- [x] **AC17** A room's and a profile's last activity date a paragraph by its last append even when it grew past typed messages (018-AC5); a typed message later than that append wins.
+- [x] **AC3** A typed message that starts a turn which reads the paragraph still ends it (018-AC4, "no agent turn has read it yet"): the next line opens a new paragraph.
 
 ### Filter
 
-- [ ] **AC4** When the transcription pane is not shown (narrow screen or pane folded), a segmented control above the chat's messages shows: All, Written, Voice. Written shows `text`, `agent` and `system` messages; Voice shows `voice` messages; All shows everything, as today.
-- [ ] **AC5** The filter defaults to Written and the choice is kept in the browser across reloads and rooms.
-- [ ] **AC6** While the filter hides a kind, a new message of that kind adds to a count on its segment ("Voice · 3"). The count clears when that segment, or All, is shown.
-- [ ] **AC7** A deep link to a message (`#m<id>`) that the current filter hides switches the filter to All before scrolling to it.
+- [x] **AC4** When the transcription pane is not shown (narrow screen or pane folded), a segmented control above the chat's messages shows: All, Written, Voice. Written shows `text`, `agent` and `system` messages; Voice shows `voice` messages; All shows everything, as today.
+- [x] **AC5** The filter defaults to Written and the choice is kept in the browser across reloads and rooms.
+- [x] **AC6** While the filter hides a kind, a new message of that kind adds to a count on its segment ("Voice · 3"). The count clears when that segment, or All, is shown.
+- [x] **AC7** A deep link to a message (`#m<id>`) that the current filter hides switches the filter to All before scrolling to it.
 
 ### Transcription pane
 
-- [ ] **AC8** At a viewport of 64rem or wider with no document open, while the chat keeps 22rem beside it, the room shows a "Transcription" pane, 20rem wide, to the right of the chat. It lists the room's voice messages; the chat shows Written messages and no filter.
-- [ ] **AC9** With a document open at that width, the pane sits above the chat's messages, in the chat column, at most 40% of its height. The composer stays at the bottom of the column.
-- [ ] **AC10** The pane is live: a new voice line and a paragraph append (018-AC5) show at once. It sticks to the bottom as the chat does: pinned while the reader is within 40 px of the end, left alone once they scroll up.
-- [ ] **AC11** A voice message in the pane keeps what it has in the chat today: speaker, time, source (device/server), the mention state of a voice trigger (006-AC18), and the edit/delete menu for its author.
-- [ ] **AC12** A fold button in the pane header folds it to a strip with an unfold button and a count of the voice lines the chat has not shown since it was folded; folding brings the filter back (AC4). The folded state is kept in the browser.
-- [ ] **AC13** With no voice message yet, the pane says "Nobody has been transcribed yet." While the STT worker is down (001-AC10), the pane header shows "Voice-to-text is off", the words of the audio menu.
-- [ ] **AC14** The pane is an `aside` labelled "Transcription", its list `aria-live="polite"`; the fold button carries `aria-expanded`. Keyboard and screen reader reach it in order after the chat's messages.
+- [x] **AC8** At a viewport of 64rem or wider with no document open, while the chat keeps 22rem beside it, the room shows a "Transcription" pane, 20rem wide, to the right of the chat. It lists the room's voice messages; the chat shows Written messages and no filter.
+- [x] **AC9** With a document open at that width, the pane sits above the chat's messages, in the chat column, at most 40% of its height. The composer stays at the bottom of the column.
+- [x] **AC10** The pane is live: a new voice line and a paragraph append (018-AC5) show at once. It sticks to the bottom as the chat does: pinned while the reader is within 40 px of the end, left alone once they scroll up.
+- [x] **AC11** A voice message in the pane keeps what it has in the chat today: speaker, time, source (device/server), the mention state of a voice trigger (006-AC18), and the edit/delete menu for its author.
+- [x] **AC12** A fold button in the pane header folds it to a strip with an unfold button and a count of the voice lines the chat has not shown since it was folded; folding brings the filter back (AC4). The folded state is kept in the browser.
+- [x] **AC13** With no voice message yet, the pane says "Nobody has been transcribed yet." While the STT worker is down (001-AC10), the pane header shows "Voice-to-text is off", the words of the audio menu.
+- [x] **AC14** The pane is an `aside` labelled "Transcription", its list `aria-live="polite"`; the fold button carries `aria-expanded`. Keyboard and screen reader reach it in order after the chat's messages.
 
 ### Type size
 
-- [ ] **AC15** On the room page, wider than 40rem, message text (system lines excepted), the composer and the pane use 0.9375rem; `--fs-xs` and `--fs-sm` are unchanged. At 40rem and under nothing changes. `docs/design.md` records the room-page exception.
+- [x] **AC15** On the room page, wider than 40rem, message text (system lines excepted), the composer and the pane use 0.9375rem; `--fs-xs` and `--fs-sm` are unchanged. At 40rem and under nothing changes. `docs/design.md` records the room-page exception.
 
 ### Unchanged
 
-- [ ] **AC16** The unread title count (005-AC12), push notifications and the agent's transcript chunks behave as today, except that a paragraph grown past a typed message sits before it, at its first line's place (Decisions).
+- [x] **AC16** The unread title count (005-AC12), push notifications and the agent's transcript chunks behave as today, except that a paragraph grown past a typed message sits before it, at its first line's place (Decisions).
 
 ## Phases
 
