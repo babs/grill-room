@@ -520,6 +520,21 @@ func (r *roomRun) ended() bool {
 
 var errRevoked = errors.New("the room revoked this daemon's access: pair again")
 
+// errNeedsSignIn is a seat whose owner's organisation sign-in expired: the pairing stays, and the
+// stream retries until they sign in again (021-AC8).
+var errNeedsSignIn = errors.New("the room needs its owner to sign in again")
+
+// reasonReauth is the reason a room server gives an expired sign-in, in a body or a revoked event.
+const reasonReauth = "reauth"
+
+// isReauth reports a JSON body or event data whose reason is reasonReauth.
+func isReauth(b []byte) bool {
+	var v struct {
+		Reason string `json:"reason"`
+	}
+	return json.Unmarshal(b, &v) == nil && v.Reason == reasonReauth
+}
+
 func (r *roomRun) loop(ctx context.Context) {
 	d, room := r.d, r.room
 	defer r.closeAgent(ctx)
@@ -734,8 +749,17 @@ func (r *roomRun) connect(ctx context.Context, tok string) error {
 			continue
 		case <-time.After(wait):
 		}
-		backoff = min(backoff*2, d.o.MaxBackoff)
+		backoff = min(backoff*2, retryCap(err, d.o.MaxBackoff))
 	}
+}
+
+// retryCap is the longest wait between two connections after err: an owner who must sign in again
+// may take days, so those retries slow down to the inspections' pace (021-AC8).
+func retryCap(err error, maxBackoff time.Duration) time.Duration {
+	if errors.Is(err, errNeedsSignIn) {
+		return max(maxInspectBackoff, maxBackoff)
+	}
+	return maxBackoff
 }
 
 // stream holds one connection: it reads the room's events and posts the heartbeat beside them.
@@ -749,8 +773,16 @@ func (r *roomRun) stream(ctx context.Context, tok string) error {
 	}
 	defer resp.Body.Close()
 	switch {
-	case resp.StatusCode == http.StatusUnauthorized:
-		return errRevoked
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if isReauth(b) {
+			return errNeedsSignIn
+		}
+		if resp.StatusCode == http.StatusUnauthorized {
+			return errRevoked
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(b))
+		return apiError(resp)
 	case resp.StatusCode != http.StatusOK:
 		return apiError(resp)
 	}
@@ -832,6 +864,9 @@ func (r *roomRun) stream(ctx context.Context, tok string) error {
 				}
 			}
 		case strings.HasPrefix(line, "data: ") && event == "revoked":
+			if isReauth([]byte(line[len("data: "):])) {
+				return errNeedsSignIn
+			}
 			return errRevoked
 		case line == "":
 			event = ""

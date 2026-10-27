@@ -5,13 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -368,4 +371,77 @@ func TestRoomsServedSideBySide(t *testing.T) {
 	}
 	cancel()
 	d.Wait()
+}
+
+// 021-AC8: a room answering an expired sign-in, by its status or by a "revoked" event with reason
+// reauth, keeps the daemon's pairing and workspace: it retries, says why, and reconnects as is.
+func TestReauthKeepsPairing(t *testing.T) {
+	for _, how := range []string{"status", "event"} {
+		t.Run(how, func(t *testing.T) {
+			var reauth atomic.Bool
+			rs := newRoomServerWrapped(t, web.Options{}, func(h http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if !reauth.Load() || !strings.HasSuffix(r.URL.Path, "/daemon/events") {
+						h.ServeHTTP(w, r)
+						return
+					}
+					if how == "status" {
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusForbidden)
+						_, _ = io.WriteString(w, `{"reason":"reauth","error":"sign in again"}`)
+						return
+					}
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = io.WriteString(w, "event: revoked\ndata: {\"reason\":\"reauth\"}\n\n")
+				})
+			})
+			alice, _ := rs.join(t, "Alice")
+			room, _ := ParseRoomURL(rs.ts.URL + "/r/" + rs.room)
+			d := newTestDaemon(t, nil)
+			d.cache = &wsCache{dir: t.TempDir(), max: 1 << 20}
+			ws := d.cache.roomDir(room)
+			if err := os.MkdirAll(ws, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			grant(d, room.String())
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			d.SetRoom(ctx, room)
+			waitFor(t, "pending", func() bool { return d.Status().Pairing == "pending" })
+			id := d.Status().ApproveURL[strings.Index(d.Status().ApproveURL, "=")+1:]
+			rs.call(t, "POST", "/api/rooms/"+rs.room+"/pairings/"+id, alice, map[string]bool{"approve": true}, http.StatusOK, nil)
+			waitFor(t, "connected", func() bool { return d.Status().Connection == "connected" })
+
+			reauth.Store(true)
+			rs.ts.CloseClientConnections()
+			waitFor(t, "told to sign in", func() bool { return strings.Contains(d.Status().Error, errNeedsSignIn.Error()) })
+			if tok, _ := d.o.Tokens.Get(room); tok == "" || d.Status().Pairing != "paired" {
+				t.Fatalf("pairing dropped: %+v", d.Status())
+			}
+			if _, err := os.Stat(ws); err != nil {
+				t.Fatalf("workspace dropped: %v", err)
+			}
+			reauth.Store(false)
+			waitFor(t, "reconnected", func() bool { return d.Status().Connection == "connected" })
+		})
+	}
+}
+
+// 021-AC8: retries for an owner who must sign in again slow down to the inspections' cap; any
+// other error keeps the daemon's own.
+func TestRetryCap(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		err  error
+		max  time.Duration
+		want time.Duration
+	}{
+		{"sign in again", fmt.Errorf("stream: %w", errNeedsSignIn), time.Minute, maxInspectBackoff},
+		{"sign in again, larger own cap", errNeedsSignIn, time.Hour, time.Hour},
+		{"other error", errors.New("room server: 502"), time.Minute, time.Minute},
+	} {
+		if got := retryCap(c.err, c.max); got != c.want {
+			t.Errorf("%s: %s, want %s", c.name, got, c.want)
+		}
+	}
 }

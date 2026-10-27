@@ -296,7 +296,7 @@ export async function signIn(page, token = adminToken, view = 'sessions') {
   await page.getByLabel('Admin token').fill(token);
   const [res] = await Promise.all([
     page.waitForResponse((r) => r.url().endsWith('/api/admin/login')),
-    page.getByRole('button', { name: 'Sign in' }).click(),
+    page.getByRole('button', { name: 'Sign in', exact: true }).click(),
   ]);
   return res.status();
 }

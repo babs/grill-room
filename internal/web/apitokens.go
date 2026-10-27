@@ -37,15 +37,19 @@ var tokenExpiries = []int{30, 90, 365, 0}
 // cookieOnly are the routes a token never reaches, as they make another lasting credential or
 // sign a browser in (012-AC6).
 var cookieOnly = map[string]bool{
-	"GET /api/profile/tokens":              true,
-	"POST /api/profile/tokens":             true,
-	"DELETE /api/profile/tokens/{id}":      true,
-	"POST /api/join":                       true,
-	"POST /api/profile/email":              true,
-	"POST /api/profile/signin":             true,
-	"POST /api/profile/magic":              true,
-	"POST /api/profile/recover":            true,
-	"POST /api/rooms/anonymous":            true,
+	"GET /api/profile/tokens":         true,
+	"POST /api/profile/tokens":        true,
+	"DELETE /api/profile/tokens/{id}": true,
+	"POST /api/join":                  true,
+	"POST /api/profile/email":         true,
+	"POST /api/profile/signin":        true,
+	"POST /api/profile/magic":         true,
+	"POST /api/profile/recover":       true,
+	"POST /api/rooms/anonymous":       true,
+	// 021-AC2: a provider sign-in is the browser's.
+	"GET /auth/login":                      true,
+	"GET /auth/callback":                   true,
+	"POST /auth/logout":                    true,
 	"POST /api/rooms/{room}/pairings":      true,
 	"GET /api/pairings/{id}":               true,
 	"GET /api/rooms/{room}/pairings/{id}":  true,
@@ -93,6 +97,9 @@ func (s *Server) tokenGate(mux *http.ServeMux) http.Handler {
 			return
 		case errors.Is(err, store.ErrTokenExpired):
 			httpError(w, http.StatusUnauthorized, msgTokenExpired)
+			return
+		case err == nil && s.reauthDue(t.OIDCBinding):
+			reasonError(w, http.StatusUnauthorized, "reauth", msgReauth)
 			return
 		case err != nil:
 			s.serverError(w, "api_token_lookup_failed", err)

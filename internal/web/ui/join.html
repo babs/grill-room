@@ -12,6 +12,7 @@
 <meta name="theme-color" content="#159F8C">
 <link rel="stylesheet" href="/static/kit/tokens.css">
 <script src="/static/kit/ui.js" defer></script>
+<script src="/static/reauth.js" defer></script>
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/join.js" defer></script>
 </head>
@@ -22,6 +23,7 @@
 </header>
 <main class="card join-card">
   <h1>Join the room</h1>
+  <button type="button" id="sign-in" hidden></button>
   <form id="join" novalidate hidden>
     <label for="name">Your name, as the others will see it</label>
     <input id="name" maxlength="40" autocomplete="name" required autofocus aria-describedby="name-error">

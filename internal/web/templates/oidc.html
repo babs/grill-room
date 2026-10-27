@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign-in failed · grill-room</title>
+<link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+<link rel="icon" href="/static/icons/icon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<meta name="theme-color" content="#159F8C">
+<link rel="stylesheet" href="/static/kit/tokens.css">
+<script src="/static/kit/ui.js" defer></script>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="join">
+<header class="app-header">
+  <img src="/static/logo.svg" alt="" class="logo" width="32" height="32">
+  <span class="brand">grill-room</span>
+</header>
+<main class="card join-card">
+  <h1>Sign-in failed</h1>
+  <p>{{.Text}}</p>
+  <p>{{if .Retry}}<a href="/auth/login">Sign in again</a> · {{end}}<a href="/">Home</a></p>
+</main>
+</body>
+</html>

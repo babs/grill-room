@@ -5,13 +5,17 @@ const nameInput = document.getElementById('name');
 const statusLine = document.getElementById('status');
 const invite = location.hash.slice(1);
 const noInvite = 'You need an invite link to join a room. Ask the room host for one.';
+const signIn = document.getElementById('sign-in');
 
 if (invite) form.hidden = false;
+// Back from the provider with the invite, through reauth.js, and joins as internal (021-AC12).
+signIn.addEventListener('click', () => window.grillSignIn());
 
 // Set once /api/profile tells whether the create form shows instead, so it does not flash (019-AC8).
 // Rewriting the same text on every focus would make screen readers announce it again.
+// The sign-in button stands alone without an invite (021-AC12).
 function noInviteLine(on) {
-  const line = on ? noInvite : '';
+  const line = on && signIn.hidden ? noInvite : '';
   if (!invite && statusLine.textContent !== line) statusLine.textContent = line;
 }
 
@@ -122,15 +126,22 @@ async function who() {
     noInviteLine(createForm.hidden);
     return;
   }
-  const { email_enabled: emailEnabled, profile, magic_link_ttl_s: linkTTL, anonymous_rooms: anonymousRooms } = await res.json();
+  const { email_enabled: emailEnabled, profile, magic_link_ttl_s: linkTTL, anonymous_rooms: anonymousRooms,
+    restricted, internal, provider_name: providerName } = await res.json();
   ttl = linkTTL || 0;
-  yourProfile.hidden = !profile;
+  // Restricted mode: anyone not yet internal may sign in with the provider (021-AC12).
+  signIn.hidden = !restricted || internal;
+  if (restricted) signIn.textContent = 'Sign in with ' + providerName;
+
   // The name the profile chose (005-AC1, 005-AC48), else the one it last joined with.
   const name = profile ? profile.name || (profile.rooms[0] || {}).name || '' : '';
   document.getElementById('your-profile-name').textContent = name;
   // Never over what the person typed: this runs again each time the tab comes back.
   if (!nameInput.value) nameInput.value = name;
-  recover.hidden = !!profile || !emailEnabled;
+  // Without an invite, a visitor not yet internal sees the sign-in button alone (021-AC12).
+  const signInOnly = !invite && !signIn.hidden;
+  yourProfile.hidden = !profile || signInOnly;
+  recover.hidden = !!profile || !emailEnabled || signInOnly;
   // A profile made in another tab hides the form: its rooms are created from /profile (019-AC3).
   if (!invite) createForm.hidden = !anonymousRooms || !!profile;
   noInviteLine(createForm.hidden);

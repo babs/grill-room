@@ -17,6 +17,8 @@ type Daemon struct {
 	// Settings are the cap and approval mode the daemon last reported; the room applies the
 	// current host's, even while its daemon is offline.
 	Settings DaemonSettings `json:"-"`
+	// OIDCBinding is its seat's profile's, set by DaemonByToken only (021-AC8).
+	OIDCBinding
 }
 
 // DaemonSettings are a host daemon's cap and approval mode (002-AC19, 002-AC21).
@@ -28,10 +30,11 @@ type DaemonSettings struct {
 
 const daemonCols = `SELECT d.id, d.room_id, d.participant_id, d.created_at, d.max_model, d.max_effort, d.approve_all FROM daemons d `
 
-func scanDaemon(sc scanner) (*Daemon, error) {
+// scanDaemon reads daemonCols, then extra.
+func scanDaemon(sc scanner, extra ...any) (*Daemon, error) {
 	var d Daemon
 	var created string
-	err := sc.Scan(&d.ID, &d.RoomID, &d.ParticipantID, &created, &d.Settings.MaxModel, &d.Settings.MaxEffort, &d.Settings.ApproveAll)
+	err := sc.Scan(append([]any{&d.ID, &d.RoomID, &d.ParticipantID, &created, &d.Settings.MaxModel, &d.Settings.MaxEffort, &d.Settings.ApproveAll}, extra...)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -66,11 +69,20 @@ func pairDaemon(ctx context.Context, q querier, roomID string, participantID int
 	return d, nil
 }
 
-// DaemonByToken returns the daemon holding tokenHash, provided its participant's seat is valid.
+// DaemonByToken returns the daemon holding tokenHash, provided its participant's seat is valid,
+// with its seat's profile's binding.
 func (s *Store) DaemonByToken(ctx context.Context, tokenHash string) (*Daemon, error) {
-	return scanDaemon(s.db.QueryRowContext(ctx, daemonCols+`
+	var iss, at string
+	d, err := scanDaemon(s.db.QueryRowContext(ctx, `SELECT d.id, d.room_id, d.participant_id, d.created_at, d.max_model, d.max_effort, d.approve_all, `+bindingCols+`
+		FROM daemons d
 		JOIN participants p ON p.id = d.participant_id
-		WHERE d.token_hash = ? AND p.removed_at IS NULL`, tokenHash))
+		LEFT JOIN profiles f ON f.id = p.profile_id
+		WHERE d.token_hash = ? AND p.removed_at IS NULL`, tokenHash), &iss, &at)
+	if err != nil {
+		return nil, err
+	}
+	d.scan(iss, at)
+	return d, nil
 }
 
 // HostDaemon returns the paired daemon of the room's host, connected or not; ErrNotFound when the
@@ -92,6 +104,29 @@ func (s *Store) SetDaemonSettings(ctx context.Context, id int64, set DaemonSetti
 		return false, fmt.Errorf("set daemon settings: %w", err)
 	}
 	return n > 0, nil
+}
+
+// ProfileDaemons returns the daemons paired from profileID's seats while it is bound to a
+// provider: those an unbind removes, none for a profile it would refuse (021-AC10).
+func (s *Store) ProfileDaemons(ctx context.Context, profileID int64) ([]Daemon, error) {
+	rows, err := s.db.QueryContext(ctx, daemonCols+`JOIN participants p ON p.id = d.participant_id JOIN profiles f ON f.id = p.profile_id
+		WHERE p.profile_id = ? AND f.oidc_issuer IS NOT NULL ORDER BY d.id`, profileID)
+	if err != nil {
+		return nil, fmt.Errorf("profile daemons: %w", err)
+	}
+	defer rows.Close()
+	var out []Daemon
+	for rows.Next() {
+		d, err := scanDaemon(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("profile daemons: %w", err)
+	}
+	return out, nil
 }
 
 // RemoveDaemon deletes daemon id, and with it its token: the host removed the room from their

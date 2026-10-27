@@ -85,6 +85,10 @@ type Server struct {
 	loginLimit limiter
 	// anonLimit rate-limits anonymous room creations per client IP (019-AC4).
 	anonLimit limiter
+	// keys holds the instance's secret, which also seals the OIDC sign-in cookie (021-AC2).
+	keys *instanceKeys
+	// oidcLogins counts provider sign-ins by OIDCResults (021-AC13).
+	oidcLogins map[string]*atomic.Int64
 	// mailWG counts the mail sends running past their answers.
 	mailWG sync.WaitGroup
 	// now is the clock admin sessions and the audit log read; tests set it.
@@ -122,6 +126,11 @@ type Server struct {
 	// voiceLines, voiceDeduped and voiceAppended count the voice lines stored, dropped and joined to
 	// a paragraph, by VoiceSources.
 	voiceLines, voiceDeduped, voiceAppended map[string]*atomic.Int64
+	// kicks are when each expired seat was last taken out of the audio, by "room/participant".
+	kicks struct {
+		mu sync.Mutex
+		at map[string]time.Time
+	}
 	// routes are the patterns Handler registered; mux routes them and gate is the token gate in
 	// front of it, which MCP tools send their sub-requests through.
 	routes   []string
@@ -181,8 +190,10 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 		people: newPeople(b.Store, log), stt: newSTTWorkers(b.Store, log), clients: clients{m: map[int64]clientSeen{}},
 		now: time.Now, lease: time.Now, fallbacks: fallbackCounters(), turnWait: b.Store.LockTimeout(),
 		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}, pushClient: opts.PushClient,
-		pluginFetches: make(chan struct{}, maxPluginFetches), voiceLines: sourceCounters(), voiceDeduped: sourceCounters(), voiceAppended: sourceCounters(), mcpCalls: newMCPCounters()}
-	keys := &rateKeys{st: b.Store}
+		pluginFetches: make(chan struct{}, maxPluginFetches), voiceLines: sourceCounters(), voiceDeduped: sourceCounters(), voiceAppended: sourceCounters(), mcpCalls: newMCPCounters(),
+		oidcLogins: oidcCounters()}
+	keys := &instanceKeys{st: b.Store}
+	s.keys = keys
 	s.magicLimit, s.loginLimit = newLimiter(keys, "magic", magicWindow, log), newLimiter(keys, "login", loginWindow, log)
 	s.anonLimit = newLimiter(keys, "anon-room", anonRoomWindow, log)
 	s.device = loadDeviceSTT(opts, log)
@@ -242,6 +253,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /r/{room}/docs/{doc}", s.roomPage)
 	mux.HandleFunc("GET /profile", s.profilePage)
 	mux.HandleFunc("GET /admin", s.adminPage)
+	if s.opts.OIDC != nil {
+		mux.HandleFunc("GET /auth/login", s.oidcLogin)
+		mux.HandleFunc("GET /auth/callback", s.oidcCallback)
+		mux.HandleFunc("POST /auth/logout", s.oidcLogout)
+		mux.HandleFunc("POST /api/admin/login/oidc", s.oidcAdminLogin)
+		mux.Handle("DELETE /api/admin/profiles/{id}/oidc", s.admin(s.unbindProfile))
+	}
 	static, _ := fs.Sub(ui, "ui") // cannot fail: "ui" is a valid embedded path
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
 	mux.Handle("GET "+uivendor.Prefix, uivendor.Handler())
@@ -627,6 +645,23 @@ func (s *Server) participant(next func(http.ResponseWriter, *http.Request, sessi
 			httpError(w, http.StatusUnauthorized, "invalid or revoked token")
 			return
 		}
+		// An expired seat leaves the audio on any request, not only on an open stream's (021-AC8).
+		if errors.Is(err, errReauth) && sess.p != nil {
+			s.kickExpired(r.PathValue("room"), sess.p.ID)
+		}
+		if errors.Is(err, errReauth) && bearer(r) == "" {
+			// The expired seat is another profile's room cookie: the browser signed in as someone
+			// else, whom a new sign-in would not help; drop that cookie, as a bad seat's (021-AC8).
+			if p, perr := s.profileFromCookie(r); perr == nil && p != nil {
+				setRoomCookieAge(w, r, r.PathValue("room"), "", -1)
+				httpError(w, http.StatusUnauthorized, "invalid or revoked token")
+				return
+			}
+		}
+		if errors.Is(err, errReauth) {
+			reasonError(w, http.StatusUnauthorized, "reauth", msgReauth)
+			return
+		}
 		if err != nil {
 			s.log.Error("auth_lookup_failed", zap.Error(err))
 			httpError(w, http.StatusInternalServerError, "auth failed")
@@ -637,9 +672,11 @@ func (s *Server) participant(next func(http.ResponseWriter, *http.Request, sessi
 	})
 }
 
-// authorize returns the participant the first valid credential proves in room; ErrNotFound when
-// none does.
+// authorize returns the participant the first valid credential proves in room; the first expired
+// one with errReauth when only seats of internals past their revalidation do (021-AC8),
+// ErrNotFound when none does.
 func (s *Server) authorize(ctx context.Context, creds []cred, room string) (*store.Participant, error) {
+	var expired *store.Participant
 	for _, c := range creds {
 		var p *store.Participant
 		var err error
@@ -651,9 +688,18 @@ func (s *Server) authorize(ctx context.Context, creds []cred, room string) (*sto
 		} else if p, err = s.bus.Store.ParticipantByToken(ctx, c.hash); err == nil && p.RoomID != room {
 			err = store.ErrNotFound
 		}
+		if err == nil && s.reauthDue(p.OIDCBinding) {
+			if expired == nil {
+				expired = p
+			}
+			continue
+		}
 		if !errors.Is(err, store.ErrNotFound) {
 			return p, err
 		}
+	}
+	if expired != nil {
+		return expired, errReauth
 	}
 	return nil, store.ErrNotFound
 }
@@ -823,8 +869,13 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, sess *sess
 	if sess != nil {
 		by = sess.p.ID
 		// A room admin's invites are audited; a plain member's are not admin actions.
-		if _, err := s.roomAdmin(r.Context(), sess); err != nil {
+		may, err := s.mayInvite(r.Context(), sess)
+		if err != nil {
 			s.serverError(w, "create_invite_failed", err)
+			return
+		}
+		if !may {
+			httpError(w, http.StatusForbidden, msgOrgInvites)
 			return
 		}
 	}
@@ -967,8 +1018,13 @@ type shareResp struct {
 func (s *Server) shareInvite(w http.ResponseWriter, r *http.Request, sess session) {
 	room := r.PathValue("room")
 	// A room admin's invites are audited, as createInvite does.
-	if _, err := s.roomAdmin(r.Context(), &sess); err != nil {
+	may, err := s.mayInvite(r.Context(), &sess)
+	if err != nil {
 		s.serverError(w, "share_invite_failed", err)
+		return
+	}
+	if !may {
+		httpError(w, http.StatusForbidden, msgOrgInvites)
 		return
 	}
 	link := NewToken()
@@ -1017,15 +1073,14 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var prof store.JoinProfile
-	if c, err := r.Cookie(profileCookie); err == nil && c.Value != "" {
-		got, err := s.bus.Store.ProfileBySession(r.Context(), HashToken(c.Value))
-		switch {
-		case err == nil:
-			prof.ID = got.ID
-		case !errors.Is(err, store.ErrNotFound):
-			s.serverError(w, "join_failed", err)
-			return
-		}
+	if got, err := s.profileFromCookie(r); err != nil {
+		s.serverError(w, "join_failed", err)
+		return
+	} else if got != nil {
+		prof.ID = got.ID
+	}
+	if o := s.opts.OIDC; o != nil {
+		prof.Issuer, prof.SignedInAfter = o.cfg.Issuer, s.now().Add(-o.cfg.Revalidate)
 	}
 	var recovery, profileTok string
 	if prof.ID == 0 {
@@ -1036,6 +1091,10 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	p, m, err := s.bus.Store.Join(r.Context(), HashToken(req.Invite), name, HashToken(tok), prof)
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusUnauthorized, "invalid or revoked invite")
+		return
+	}
+	if errors.Is(err, store.ErrInviteLapsed) {
+		httpError(w, http.StatusUnauthorized, "This invite no longer works")
 		return
 	}
 	if errors.Is(err, store.ErrBlocked) {
@@ -1061,11 +1120,16 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 }
 
 func setRoomCookie(w http.ResponseWriter, r *http.Request, room, tok string) {
+	setRoomCookieAge(w, r, room, tok, cookieMaxAge)
+}
+
+// setRoomCookieAge is setRoomCookie with its lifetime; -1 clears it.
+func setRoomCookieAge(w http.ResponseWriter, r *http.Request, room, tok string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure follows the request scheme: plain-HTTP dev and tests would lose the cookie
 		Name:     cookieName,
 		Value:    tok,
 		Path:     "/api/rooms/" + room,
-		MaxAge:   cookieMaxAge,
+		MaxAge:   maxAge,
 		HttpOnly: true,
 		Secure:   secure(r),
 		SameSite: http.SameSiteStrictMode,
@@ -1208,14 +1272,23 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 
 	var agentSent string
 	// gone sends "revoked" once the participant's access is gone, as a room deleted or an invite
-	// revoked mid-read fails the read that follows the access check.
+	// revoked mid-read fails the read that follows the access check; with reason reauth once the
+	// sign-in expired, which the heartbeat's re-check catches (021-AC8).
 	revoked := false
 	gone := func() {
-		if _, err := s.authorize(r.Context(), sess.creds, room); errors.Is(err, store.ErrNotFound) && !revoked {
-			revoked = true
-			_, _ = io.WriteString(w, "event: revoked\ndata: {}\n\n")
-			flusher.Flush()
+		_, err := s.authorize(r.Context(), sess.creds, room)
+		if revoked || !errors.Is(err, store.ErrNotFound) && !errors.Is(err, errReauth) {
+			return
 		}
+		revoked = true
+		data := "{}"
+		if errors.Is(err, errReauth) {
+			data = `{"reason":"reauth"}`
+			// A removal kicks its seats from the audio in seatsEnded; an expiry ends here (021-AC8).
+			s.kickFromVoice(room, []int64{sess.p.ID})
+		}
+		_, _ = io.WriteString(w, "event: revoked\ndata: "+data+"\n\n")
+		flusher.Flush()
 	}
 	// send re-checks access, then sends what the store holds past last. False ends the stream.
 	var send func() bool
@@ -1404,6 +1477,11 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request, sess session) {
 }
 
 func (s *Server) serverError(w http.ResponseWriter, event string, err error) {
+	// The profile lookups fail with errReauth: every route answers it here alike (021-AC8).
+	if errors.Is(err, errReauth) {
+		reasonError(w, http.StatusUnauthorized, "reauth", msgReauth)
+		return
+	}
 	s.log.Error(event, zap.Error(err))
 	httpError(w, http.StatusInternalServerError, "internal error")
 }

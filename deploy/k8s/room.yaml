@@ -125,6 +125,26 @@ spec:
             - name: GRILL_ROOM_SMTP_PASSWORD
               valueFrom:
                 secretKeyRef: { name: grill-room, key: smtp-password }
+            # Restricted mode (spec 021): an empty issuer turns it off, the others empty keep their defaults.
+            - name: GRILL_ROOM_OIDC_ISSUER
+              value: "${GRILL_ROOM_OIDC_ISSUER}"
+            - name: GRILL_ROOM_OIDC_CLIENT_ID
+              value: "${GRILL_ROOM_OIDC_CLIENT_ID}"
+            - name: GRILL_ROOM_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: { name: grill-room, key: oidc-client-secret }
+            - name: GRILL_ROOM_OIDC_SCOPES
+              value: "${GRILL_ROOM_OIDC_SCOPES}"
+            - name: GRILL_ROOM_OIDC_MEMBER_GROUP
+              value: "${GRILL_ROOM_OIDC_MEMBER_GROUP}"
+            - name: GRILL_ROOM_OIDC_GROUPS_CLAIM
+              value: "${GRILL_ROOM_OIDC_GROUPS_CLAIM}"
+            - name: GRILL_ROOM_OIDC_ADMIN_GROUP
+              value: "${GRILL_ROOM_OIDC_ADMIN_GROUP}"
+            - name: GRILL_ROOM_OIDC_REVALIDATE
+              value: "${GRILL_ROOM_OIDC_REVALIDATE}"
+            - name: GRILL_ROOM_OIDC_NAME
+              value: "${GRILL_ROOM_OIDC_NAME}"
             - name: GRILL_ROOM_DEVICE_STT_MODEL_DIR
               value: /models
             # The pod's address, for the scrape (deploy/monitoring/room.yaml); the network policy

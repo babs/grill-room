@@ -197,6 +197,16 @@ func (s *Server) daemonAuth(next func(http.ResponseWriter, *http.Request, *store
 			httpError(w, http.StatusUnauthorized, "invalid or revoked daemon token")
 			return
 		}
+		// Removing itself only lowers access: an expired seat's daemon may still (021-AC8).
+		if errors.Is(err, errReauth) && r.Pattern == "DELETE /api/rooms/{room}/daemon" {
+			next(w, r, d, hash)
+			return
+		}
+		// 403, not 401: daemons wipe their pairing on a 401, and the pairing must outlive the expiry (021-AC8).
+		if errors.Is(err, errReauth) {
+			reasonError(w, http.StatusForbidden, "reauth", msgDaemonReauth)
+			return
+		}
 		if err != nil {
 			s.log.Error("daemon_auth_failed", zap.Error(err))
 			httpError(w, http.StatusInternalServerError, "auth failed")
@@ -213,6 +223,11 @@ func (s *Server) daemonFor(ctx context.Context, hash, room string) (*store.Daemo
 	}
 	if d.RoomID != room {
 		return nil, store.ErrNotFound
+	}
+	// A daemon acts through its seat: it lapses with its profile's sign-in (021-AC8). The daemon
+	// comes with errReauth, for the one route it keeps.
+	if s.reauthDue(d.OIDCBinding) {
+		return d, errReauth
 	}
 	return d, nil
 }
@@ -266,14 +281,10 @@ func (s *Server) daemonStatus(w http.ResponseWriter, r *http.Request, d *store.D
 // (003b-AC9).
 func (s *Server) removeDaemon(w http.ResponseWriter, r *http.Request, d *store.Daemon, _ string) {
 	ctx := r.Context()
-	// Out of the room's daemons before anything else: the drain that failing the turn runs must not
-	// hand the next queued turn to this daemon, whose row goes next.
-	if err := s.bus.Store.DropDaemonConnections(ctx, d.ID); err != nil {
+	if err := s.unhostDaemon(ctx, d, "the AI host removed this room from their computer"); err != nil {
 		s.serverError(w, "remove_daemon_failed", err)
 		return
 	}
-	// Then the turns: the delete sets their daemon_id to NULL, and failDaemonTurn finds them by it.
-	s.failDaemonTurn(ctx, d, "the AI host removed this room from their computer")
 	if err := s.bus.Store.RemoveDaemon(ctx, d.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
 		s.serverError(w, "remove_daemon_failed", err)
 		return
@@ -282,6 +293,17 @@ func (s *Server) removeDaemon(w http.ResponseWriter, r *http.Request, d *store.D
 	// Wakes the daemon's stream, which then finds its token gone, and the room's.
 	s.agentChanged(ctx, d.RoomID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// unhostDaemon readies daemon d's row for deletion: out of the room's daemons first, so the drain
+// that failing the turn runs hands the next queued turn elsewhere, then its running turn fails,
+// found by the daemon_id the delete clears.
+func (s *Server) unhostDaemon(ctx context.Context, d *store.Daemon, why string) error {
+	if err := s.bus.Store.DropDaemonConnections(ctx, d.ID); err != nil {
+		return err
+	}
+	s.failDaemonTurn(ctx, d, why)
+	return nil
 }
 
 // daemonGone runs once daemon d holds no live connection on any pod: its running turn fails and
@@ -540,6 +562,7 @@ func (s *Server) daemonEvents(w http.ResponseWriter, r *http.Request, d *store.D
 	// alive re-checks the token: a revoked invite, a deleted room or a re-pairing ends the stream.
 	alive := func() bool {
 		if _, err := s.daemonFor(r.Context(), hash, d.RoomID); err != nil {
+			// An expiry just closes the stream: daemons wipe their pairing on "revoked" (021-AC8).
 			if errors.Is(err, store.ErrNotFound) {
 				_, _ = io.WriteString(w, "event: revoked\ndata: {}\n\n")
 				flusher.Flush()

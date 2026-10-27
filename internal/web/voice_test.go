@@ -25,9 +25,12 @@ const (
 type fakeLiveKit struct {
 	mu    sync.Mutex
 	calls []string
+	// delay holds each answer back, for a LiveKit that is slow.
+	delay time.Duration
 }
 
 func (f *fakeLiveKit) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	time.Sleep(f.delay)
 	b, _ := io.ReadAll(r.Body)
 	f.mu.Lock()
 	f.calls = append(f.calls, strings.TrimPrefix(r.URL.Path, "/twirp/livekit.RoomService/")+" "+string(b))

@@ -117,11 +117,16 @@ func (s *Server) recoveryURL(tok string) string { return s.baseURL + "/profile#r
 // setProfileCookie scopes the profile session to the whole site, unlike a room's participant
 // cookie: the profile follows its person from room to room.
 func setProfileCookie(w http.ResponseWriter, r *http.Request, tok string) {
+	setProfileCookieAge(w, r, tok, int(store.ProfileSessionMaxAge/time.Second))
+}
+
+// setProfileCookieAge is setProfileCookie with its lifetime; -1 clears it.
+func setProfileCookieAge(w http.ResponseWriter, r *http.Request, tok string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure follows the request scheme: plain-HTTP dev and tests would lose the cookie
 		Name:     profileCookie,
 		Value:    tok,
 		Path:     "/",
-		MaxAge:   int(store.ProfileSessionMaxAge / time.Second),
+		MaxAge:   maxAge,
 		HttpOnly: true,
 		Secure:   secure(r),
 		SameSite: http.SameSiteStrictMode,
@@ -129,15 +134,18 @@ func setProfileCookie(w http.ResponseWriter, r *http.Request, tok string) {
 }
 
 // profileFromCookie returns the profile of the request's profile cookie, nil when it has none or
-// a stale one.
+// a stale one; errReauth for an internal past its revalidation (021-AC8).
 func (s *Server) profileFromCookie(r *http.Request) (*store.Profile, error) {
 	c, err := r.Cookie(profileCookie)
 	if err != nil || c.Value == "" {
 		return nil, nil
 	}
 	p, err := s.bus.Store.ProfileBySession(r.Context(), HashToken(c.Value))
-	if errors.Is(err, store.ErrNotFound) {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
 		return nil, nil
+	case err == nil && s.reauthDue(p.OIDCBinding):
+		return nil, errReauth
 	}
 	return p, err
 }
@@ -148,12 +156,26 @@ type profileResp struct {
 	// MagicLinkTTLS is how long an emailed link works, in seconds, for the page to say so (011-AC22).
 	MagicLinkTTLS int64 `json:"magic_link_ttl_s,omitempty"`
 	// AnonymousRooms lets the home page offer room creation without an invite (019-AC8).
-	AnonymousRooms bool           `json:"anonymous_rooms,omitempty"`
-	Profile        *store.Profile `json:"profile"`
+	AnonymousRooms bool `json:"anonymous_rooms,omitempty"`
+	// Restricted and SignInURL are set in restricted mode, with Internal: whether this browser's
+	// profile is bound to the provider (021-AC5).
+	Restricted bool   `json:"restricted,omitempty"`
+	SignInURL  string `json:"sign_in_url,omitempty"`
+	Internal   *bool  `json:"internal,omitempty"`
+	// ProviderName names the provider on the "Sign in with" button of the join page (021-AC12),
+	// and of /admin when AdminSignIn tells an admin group is set (021-AC11).
+	ProviderName string         `json:"provider_name,omitempty"`
+	AdminSignIn  bool           `json:"admin_sign_in,omitempty"`
+	Profile      *store.Profile `json:"profile"`
 }
 
 func (s *Server) profileResp(p *store.Profile) profileResp {
 	r := profileResp{EmailEnabled: s.opts.SendMail != nil, AnonymousRooms: s.opts.AnonymousRooms, Profile: p}
+	if s.opts.OIDC != nil {
+		internal := s.isInternal(p)
+		r.Restricted, r.SignInURL, r.Internal, r.ProviderName = true, "/auth/login", &internal, s.opts.OIDC.cfg.Name
+		r.AdminSignIn = s.opts.OIDC.cfg.AdminGroup != ""
+	}
 	if r.EmailEnabled {
 		r.MagicLinkTTLS = int64(s.opts.MagicLinkTTL / time.Second)
 	}
@@ -248,15 +270,19 @@ func (s *Server) recoverProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	tok, hash := NewToken(), HashToken(req.Token)
 	how := "recovery"
-	p, err := s.bus.Store.SignInByRecovery(r.Context(), hash, HashToken(tok))
+	p, err := s.bus.Store.SignInByRecovery(r.Context(), hash, HashToken(tok), s.orgIssuer())
 	if errors.Is(err, store.ErrNotFound) {
 		how = "recovery_link"
 		ctx := store.WithAudit(r.Context(), store.AuditEntry{At: s.now(), Actor: store.ActorSystem, Action: ActionProfileRecoveryUsed,
 			TargetKind: store.TargetProfile}, nil)
-		p, err = s.bus.Store.UseRecoveryLink(ctx, hash, HashToken(tok), s.now())
+		p, err = s.bus.Store.UseRecoveryLink(ctx, hash, HashToken(tok), s.now(), s.orgIssuer())
 	}
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusUnauthorized, "this recovery link is invalid")
+		return
+	}
+	if errors.Is(err, store.ErrOrgSignIn) {
+		writeJSON(w, http.StatusForbidden, orgSignInError)
 		return
 	}
 	if err != nil {
@@ -415,8 +441,9 @@ func (s *Server) emailSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.afterAnswer(r, func(ctx context.Context) {
-		id, err := s.bus.Store.ProfileIDByEmail(ctx, email)
-		if errors.Is(err, store.ErrNotFound) {
+		id, err := s.bus.Store.ProfileIDByEmail(ctx, email, s.orgIssuer())
+		// An internal's link would be refused: it gets none, and the answer does not tell (021-AC9).
+		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrOrgSignIn) {
 			return
 		}
 		if err != nil {
@@ -544,8 +571,10 @@ func (s *Server) useMagicLink(w http.ResponseWriter, r *http.Request) {
 	}
 	tok := NewToken()
 	p, err := s.bus.Store.UseMagicLink(r.Context(), store.MagicUse{TokenHash: HashToken(req.Token), Purpose: req.Purpose,
-		SessionHash: HashToken(tok), Current: currentID, Confirm: req.Confirm, Now: s.now()})
+		SessionHash: HashToken(tok), Current: currentID, Confirm: req.Confirm, Now: s.now(), OrgIssuer: s.orgIssuer()})
 	switch {
+	case errors.Is(err, store.ErrOrgSignIn):
+		writeJSON(w, http.StatusForbidden, orgSignInError)
 	case errors.Is(err, store.ErrNotFound):
 		writeJSON(w, http.StatusUnauthorized, magicError{Reason: "invalid", Error: "this link is invalid"})
 	case errors.Is(err, store.ErrLinkExpired):
@@ -571,13 +600,33 @@ func (s *Server) useMagicLink(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// adminProfileView adds, in restricted mode, whether the profile is internal and its last sign-in
+// with a provider, the configured one or a former one (021-AC10).
+type adminProfileView struct {
+	store.AdminProfile
+	Internal      bool       `json:"internal"`
+	SignedInAt    *time.Time `json:"signed_in_at,omitempty"`
+	SignInExpired bool       `json:"sign_in_expired,omitempty"`
+}
+
 func (s *Server) listProfiles(w http.ResponseWriter, r *http.Request) {
 	ps, err := s.bus.Store.Profiles(r.Context())
 	if err != nil {
 		s.serverError(w, "list_profiles_failed", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ps)
+	if s.opts.OIDC == nil {
+		writeJSON(w, http.StatusOK, ps)
+		return
+	}
+	out := make([]adminProfileView, len(ps))
+	for i, p := range ps {
+		out[i] = adminProfileView{AdminProfile: p, Internal: s.isInternal(&p.Profile), SignInExpired: s.reauthDue(p.OIDCBinding)}
+		if !p.OIDCSignedInAt.IsZero() {
+			out[i].SignedInAt = &ps[i].OIDCSignedInAt
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request) {
@@ -601,18 +650,20 @@ func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request) {
 // refuses everyone rather than let a flood of distinct keys grow the table.
 const rateScopeCap = 100_000
 
-// rateKeySetting is the settings row holding the instance's secret for rate limit keys.
+// rateKeySetting is the settings row holding the instance's secret (instanceKeys).
 const rateKeySetting = "rate_key_secret"
 
-// rateKeys turns limiter keys into what rate_events stores: an HMAC under the instance's secret, so
-// the table alone gives no address nor IP back; a dump holding settings too does, by guessing.
-type rateKeys struct {
+// instanceKeys holds the instance's secret (the settings row keeps its first name). It turns
+// limiter keys into what rate_events stores, an HMAC under it, so the table alone gives no address
+// nor IP back (a dump holding settings too does, by guessing); and it derives the key sealing the
+// OIDC sign-in cookie (021-AC2).
+type instanceKeys struct {
 	st  *store.Store
 	mu  sync.Mutex
 	key []byte
 }
 
-func (k *rateKeys) hash(ctx context.Context, key string) (string, error) {
+func (k *instanceKeys) secret(ctx context.Context) ([]byte, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.key == nil {
@@ -620,13 +671,36 @@ func (k *rateKeys) hash(ctx context.Context, key string) (string, error) {
 		_, _ = rand.Read(secret) // crypto/rand never fails on supported platforms
 		v, err := k.st.SettingOrInit(ctx, rateKeySetting, hex.EncodeToString(secret))
 		if err != nil {
-			return "", fmt.Errorf("rate key secret: %w", err)
+			return nil, fmt.Errorf("rate key secret: %w", err)
 		}
 		k.key = []byte(v)
 	}
-	m := hmac.New(sha256.New, k.key)
-	m.Write([]byte(key))
-	return hex.EncodeToString(m.Sum(nil)), nil
+	return k.key, nil
+}
+
+func (k *instanceKeys) hash(ctx context.Context, key string) (string, error) {
+	secret, err := k.secret(ctx)
+	if err != nil {
+		return "", err
+	}
+	return hmacHex(secret, key), nil
+}
+
+// subKey derives a key for one use, apart from the limiter keys' hashes.
+func (k *instanceKeys) subKey(ctx context.Context, use string) ([]byte, error) {
+	secret, err := k.secret(ctx)
+	if err != nil {
+		return nil, err
+	}
+	m := hmac.New(sha256.New, secret)
+	m.Write([]byte(use))
+	return m.Sum(nil), nil
+}
+
+func hmacHex(key []byte, msg string) string {
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte(msg))
+	return hex.EncodeToString(m.Sum(nil))
 }
 
 // rateIP is the part of a client IP a limiter counts by: an IPv6 client holds its whole /64.
@@ -642,7 +716,7 @@ func rateIP(ip string) string {
 // limiter counts events per key in a sliding window, in the database, so the limits hold for
 // every pod together.
 type limiter struct {
-	keys   *rateKeys
+	keys   *instanceKeys
 	scope  string
 	window time.Duration
 	log    *zap.Logger
@@ -652,7 +726,7 @@ type limiter struct {
 	full     *atomic.Bool
 }
 
-func newLimiter(keys *rateKeys, scope string, window time.Duration, log *zap.Logger) limiter {
+func newLimiter(keys *instanceKeys, scope string, window time.Duration, log *zap.Logger) limiter {
 	return limiter{keys: keys, scope: scope, window: window, log: log, scopeCap: rateScopeCap, full: new(atomic.Bool)}
 }
 

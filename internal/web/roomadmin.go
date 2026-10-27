@@ -209,7 +209,7 @@ func (s *Server) roomOverview(w http.ResponseWriter, r *http.Request, sess sessi
 // room admin, within the instance's guardrails (004-AC7).
 func (s *Server) createProfileRoom(w http.ResponseWriter, r *http.Request) {
 	p := s.profileFor(w, r)
-	if p == nil {
+	if p == nil || s.refuseExternal(w, p) {
 		return
 	}
 	var req struct {

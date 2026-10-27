@@ -114,10 +114,10 @@ func TestAdminLoginAndSessionExpiry(t *testing.T) {
 	if !c.HttpOnly || c.SameSite != http.SameSiteStrictMode || c.Path != "/api/admin" || c.MaxAge != 12*3600 || c.Secure {
 		t.Fatalf("cookie: %+v", c)
 	}
-	if _, err := e.st.TouchAdminSession(t.Context(), c.Value, clk.now()); !errors.Is(err, store.ErrNotFound) {
+	if _, err := e.st.TouchAdminSession(t.Context(), c.Value, clk.now(), store.AdminGrant{}); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("the raw cookie is stored: %v", err)
 	}
-	if _, err := e.st.TouchAdminSession(t.Context(), HashToken(c.Value), clk.now()); err != nil {
+	if _, err := e.st.TouchAdminSession(t.Context(), HashToken(c.Value), clk.now(), store.AdminGrant{}); err != nil {
 		t.Fatalf("the cookie's hash is not stored: %v", err)
 	}
 	clk.add(time.Hour)
@@ -356,9 +356,9 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 	// TestRoomSkillsAPI, TestProfileCreatesRooms, TestProfileMaxRoomsAPI, TestExportImportAPI,
 	// TestRenameParticipant, TestDeleteDocument, TestStarterLibraryAPI, TestHostTransfer,
 	// TestAdminRecoveryLink, TestMergeAPI, TestPurgeProfilesLoopAndSwitch, TestAPITokenAuditAndLogs, TestMCPConfirm,
-	// TestTTSSpeechSettings, TestLexicon, TestRemoveLeaveBlockAPI, and store's TestAllowFlow,
+	// TestTTSSpeechSettings, TestLexicon, TestRemoveLeaveBlockAPI, TestOIDCBinding, TestOIDCUnbind, and store's TestAllowFlow,
 	// TestEgressDelegation, TestEgressRevoked, TestConnectorChanged).
-	covered := map[string]bool{ActionProfileMerge: true, ActionProfilePurge: true, ActionProfileRecoveryLink: true, ActionProfileRecoveryUsed: true, ActionStarterPublish: true, ActionStarterDelete: true, ActionRoomAdminAdd: true, ActionRoomAdminRemove: true, ActionRoomSkillRemove: true, ActionSettings: true,
+	covered := map[string]bool{ActionProfileOIDCBind: true, ActionProfileOIDCUnbind: true, ActionProfileMerge: true, ActionProfilePurge: true, ActionProfileRecoveryLink: true, ActionProfileRecoveryUsed: true, ActionStarterPublish: true, ActionStarterDelete: true, ActionRoomAdminAdd: true, ActionRoomAdminRemove: true, ActionRoomSkillRemove: true, ActionSettings: true,
 		ActionProfileMaxRooms: true, ActionRoomExport: true, ActionRoomImport: true, ActionRename: true, ActionDocumentDelete: true,
 		ActionDocumentRestore: true, ActionHostTransfer: true, ActionAPITokenCreate: true, ActionAPITokenRevoke: true, ActionPersonaRemove: true, ActionRoomSpeech: true,
 		ActionParticipantRemove: true, ActionParticipantUnblock: true, store.ActionEgressAllow: true, store.ActionEgressRevoke: true, store.ActionEgressDelegate: true,
@@ -467,7 +467,7 @@ func TestAuditPurgeLoop(t *testing.T) {
 	}
 	waitEntries(1)
 	created := clk.now()
-	if _, err := e.st.CreateAdminSession(ctx, "h", "ua", "203.0.113.1", created); err != nil {
+	if _, err := e.st.CreateAdminSession(ctx, "h", "ua", "203.0.113.1", created, created.Add(store.AdminSessionTTL), 0); err != nil {
 		t.Fatal(err)
 	}
 	clk.add(2 * 24 * time.Hour)

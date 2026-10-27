@@ -9,7 +9,7 @@ import { RoomPanel, AdminRows, RowMenu, Meter, TabBar, fetchJSON, roomTabs, size
 
 /**
  * @typedef {{id: number, created_at: string, last_used_at: string, expires_at: string, user_agent: string, ip: string,
- *   current: boolean}} Session
+ *   current: boolean, profile_uuid?: string, profile_name?: string}} Session
  * @typedef {{id: number, at: string, actor: string, action: string, target_kind: string, target_id: string,
  *   target_name: string, details: Record<string, unknown>}} Entry
  * @typedef {{entries: Entry[], next: number, actions: string[]}} AuditPage
@@ -17,7 +17,8 @@ import { RoomPanel, AdminRows, RowMenu, Meter, TabBar, fetchJSON, roomTabs, size
  * @typedef {{rooms: Room[], default_quota: number}} RoomsPage
  * @typedef {{room_id: string, room_name: string}} ProfileRoom
  * @typedef {{id: number, uuid: string, name: string, email?: string, created_at: string, last_activity: string,
- *   skills: number, rooms: ProfileRoom[], max_rooms: number | null, rooms_created: number}} Profile
+ *   skills: number, rooms: ProfileRoom[], max_rooms: number | null, rooms_created: number,
+ *   internal?: boolean, signed_in_at?: string, sign_in_expired?: boolean}} Profile
  * @typedef {{id: number, preset?: string, title: string, version: number, author: string, created_at: string}} Template
  * @typedef {{id: number, name: string, shared: boolean, version: number, author: string, size: number,
  *   updated_at: string}} Skill
@@ -71,6 +72,19 @@ async function api(method, path, body) {
   }
 }
 
+// Set by Sign out, kept in this browser so a shared one stays signed out (021-AC11); cleared by
+// any explicit sign-in.
+const SIGNED_OUT = 'grill_room_admin_signed_out';
+/** @type {import('@preact/signals').Signal<string>} the provider's name when it signs admins in, else ''. */
+const providerName = signal('');
+
+/**
+ * tryOIDC opens a session for a signed-in member of the admin group, at page load only (021-AC11);
+ * false for anyone else, and without asking after a sign-out.
+ */
+const tryOIDC = () => (localStorage.getItem(SIGNED_OUT) ? Promise.resolve(false)
+  : fetchJSON('POST', '/api/admin/login/oidc').then(() => true, () => false));
+
 /** @param {unknown} err */
 const show = (err) => { if (signedIn.value) notice.value = /** @type {Error} */ (err).message; };
 
@@ -89,6 +103,7 @@ function Login() {
     setSaid('');
     try {
       await api('POST', '/api/admin/login', { token });
+      localStorage.removeItem(SIGNED_OUT);
       notice.value = '';
       setToken('');
       signedIn.value = true;
@@ -96,10 +111,29 @@ function Login() {
       setSaid(/** @type {Error} */ (err).message);
     }
   };
+  const [outside, setOutside] = useState(false);
+  // The provider sign-in, as after a sign-out or an expired sign-in. A signed-in internal outside
+  // the group is told so, with a link to sign in again: groups are read at sign-in, so a fresh one
+  // picks up a group granted since. Never automatic: without the group it would loop.
+  const provider = async () => {
+    localStorage.removeItem(SIGNED_OUT);
+    setOutside(false);
+    if (await tryOIDC()) {
+      notice.value = '';
+      signedIn.value = true;
+      return;
+    }
+    const me = await fetch('/api/profile').then((r) => r.json()).catch(() => ({}));
+    if (me.internal === true) setOutside(true);
+    else location.assign('/auth/login?next=/admin');
+  };
   return html`
     <main class="login">
       <h1>grill-room admin</h1>
       ${notice.value && html`<p class="said" role="alert">${notice.value}</p>`}
+      ${outside && html`<p class="said" id="not-admin" role="alert">Your organisation account is not in the admin group. <a href="/auth/login?next=/admin">Sign in again</a></p>`}
+      ${providerName.value && html`<button type="button" id="provider-sign-in" class="btn-secondary"
+        onClick=${provider}>Sign in with ${providerName.value}</button>`}
       <form onSubmit=${submit}>
         <label>Admin token
           <input type="password" id="token" autocomplete="current-password" required value=${token}
@@ -124,7 +158,7 @@ function Sessions() {
       <div class="list-row head"><span>Browser</span><span>Signed in</span><span>Last used</span><span>Expires</span><span></span></div>
       <ul class="list-rows">${list.map((s) => html`<li class="list-row" id=${'session-' + s.id} key=${s.id}>
         <div class="main"><span class="name" data-tip=${s.user_agent}>${uaName(s.user_agent)}</span>${s.current && html` <span class="badge">this browser</span>`}
-          <div class="meta">${s.ip}</div></div>
+          <div class="meta">${s.ip}${s.profile_uuid && html` · <span class="owner" data-tip=${'Profile ' + s.profile_uuid}>${s.profile_name || s.profile_uuid.slice(0, 8)}</span>`}</div></div>
         <div class="cells"><span class="cell signed-in" data-label="Signed in">${ago(s.created_at)}</span><span class="cell" data-label="Last used">${ago(s.last_used_at)}</span>
           <span class="cell" data-label="Expires">${when(s.expires_at)}</span></div>
         <div class="actions">${!s.current && html`<${RowMenu} id=${'session-menu-' + s.id} label=${'More actions on the session ' + s.id}
@@ -145,6 +179,7 @@ const actionLabels = {
   'participant.remove': 'Participant removed', 'participant.unblock': 'Participant unblocked',
   'document.restore': 'Document restored', 'profile.delete': 'Profile deleted', 'profile.recovery_link': 'Recovery link made',
   'profile.recovery_link_used': 'Recovery link used', 'profile.merge': 'Profiles merged', 'profile.purge': 'Empty profiles deleted',
+  'profile.oidc_bind': 'Signed in with the provider', 'profile.oidc_unbind': 'Provider sign-in unbound',
   'profile.max_rooms': 'Room limit set', 'template.remove': 'Persona template removed', 'skill.remove': 'Shared skill removed',
   'starter.publish': 'Starter shared', 'starter.delete': 'Starter removed', 'instance.settings': 'Server settings changed',
   'tts.lexicon.add': 'Pronunciation added', 'tts.lexicon.edit': 'Pronunciation changed', 'tts.lexicon.delete': 'Pronunciation removed',
@@ -407,24 +442,35 @@ function Profiles() {
       .then((yes) => { if (yes) api('DELETE', '/api/admin/profiles/' + p.id).then(load).catch(show); });
   };
   /** @param {Profile} p */
+  const unbind = (p) => {
+    window.grillConfirm(`Unbind ${p.name || p.uuid} from the provider?`, 'This signs the person out everywhere: browsers, API tokens, room seats, paired daemons. They come back as a guest through their recovery link or an invite. Delete the profile to keep them out.', 'Unbind')
+      .then((yes) => { if (yes) api('DELETE', `/api/admin/profiles/${p.id}/oidc`).then(() => { toast('Profile unbound'); load(); }).catch(show); });
+  };
+  // Restricted mode adds the sign-in column, and Unbind on a bound profile (021-AC10).
+  const restricted = !!list?.some((p) => 'internal' in p);
+  /** @param {Profile} p */
+  const signIn = (p) => html`${p.internal ? 'Internal' : 'External'}${p.signed_in_at && html` · ${p.sign_in_expired ? 'sign-in expired' : ago(p.signed_in_at)}`}`;
+  /** @param {Profile} p */
   const limit = (p) => (p.max_rooms === null ? `${perProfile}, the server's` : p.max_rooms === -1 ? 'unlimited' : String(p.max_rooms));
   const byID = (/** @type {number} */ id) => list?.find((p) => p.id === id);
   return html`
     <h2>Profiles</h2>
     <p class="hint">Emails show here and nowhere else. A profile's name is the one it chose in a room, else the one it last joined a room with.</p>
-    ${list && (list.length ? html`<div class="cols" id="profiles">
-      <div class="list-row head"><span>Name</span><span>Rooms</span><span>Skills</span><span>Last activity</span><span>Rooms created</span><span></span></div>
+    ${list && (list.length ? html`<div class=${'cols' + (restricted ? ' restricted' : '')} id="profiles">
+      <div class="list-row head"><span>Name</span><span>Rooms</span><span>Skills</span><span>Last activity</span><span>Rooms created</span>${restricted && html`<span>Sign-in</span>`}<span></span></div>
       <ul class="list-rows">${list.map((p) => {
         const who = p.name || p.uuid;
         return html`<li class="list-row" id=${'profile-' + p.id} key=${p.id}>
         <div class="main"><span class="name" data-tip=${(p.name ? p.name + ' · ' : '') + 'Profile ' + p.uuid}>${p.name || 'no name'}</span><div class="meta">${p.email || 'no email'}</div></div>
         <div class="cells"><span class="cell rooms" data-tip=${p.rooms.map((r) => r.room_name).join(', ')}>${p.rooms.length} ${p.rooms.length === 1 ? 'room' : 'rooms'}</span>
           <span class="cell" data-label="Skills">${p.skills}</span><span class="cell" data-label="Last activity">${ago(p.last_activity)}</span>
-          <span class="cell" data-label="Rooms created">${p.rooms_created} of ${limit(p)}</span></div>
+          <span class="cell" data-label="Rooms created">${p.rooms_created} of ${limit(p)}</span>
+          ${restricted && html`<span class="cell sign-in" data-label="Sign-in">${signIn(p)}</span>`}</div>
         <div class="actions"><${RowMenu} id=${'profile-menu-' + p.id} label=${'More actions on ' + who} items=${[
           ['Set the room limit…', () => setLimiting(p.id), '', 'Set the room limit of ' + who],
           ['Generate a recovery link…', () => setRecovering(p.id), '', 'Generate a recovery link for ' + who],
           ['Merge into another profile…', () => setMerging(p.id), '', 'Merge ' + who + ' into another profile'],
+          ...(p.signed_in_at ? [['Unbind…', () => unbind(p), '', 'Unbind ' + who + ' from the provider']] : []),
           ['Delete…', () => remove(p), 'danger', 'Delete the profile of ' + who]]}/></div>
       </li>`;
       })}</ul></div>` : html`<p class="empty">No profile yet.</p>`)}
@@ -837,7 +883,10 @@ function ServerSettings() {
 }
 
 function Shell() {
-  const logout = () => api('POST', '/api/admin/logout').then(() => { signedIn.value = false; }).catch(show);
+  const logout = () => api('POST', '/api/admin/logout').then(() => {
+    localStorage.setItem(SIGNED_OUT, '1');
+    signedIn.value = false;
+  }).catch(show);
   const view = route.value.view;
   return html`
     <header class="app-header">
@@ -859,10 +908,19 @@ function App() {
   return signedIn.value ? html`<${Shell}/>` : html`<${Login}/>`;
 }
 
-api('GET', '/api/admin/sessions').then(() => { signedIn.value = true; }).catch((err) => {
-  if (signedIn.value === null) {
-    signedIn.value = false;
-    notice.value = err.message;
+// Without cookies: an expired profile's own answer is a 401, and the name is the instance's.
+const adminSignIn = fetch('/api/profile', { credentials: 'omit' }).then((r) => r.json()).then((/** @type {{provider_name?: string, admin_sign_in?: boolean}} */ r) => {
+  providerName.value = r.admin_sign_in ? r.provider_name || '' : '';
+  return !!r.admin_sign_in;
+}, () => false);
+fetchJSON('GET', '/api/admin/sessions').then(() => { signedIn.value = true; }, async (/** @type {Error & {status?: number}} */ err) => {
+  if (err.status === 401) {
+    // A signed-in member of the admin group gets a session without the token (021-AC11); an
+    // instance that offers none is not asked.
+    signedIn.value = (await adminSignIn) && await tryOIDC();
+    return;
   }
+  signedIn.value = false;
+  notice.value = err.message;
 });
 render(html`<${App}/>`, /** @type {HTMLElement} */ (document.getElementById('app')));

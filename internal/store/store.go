@@ -124,6 +124,9 @@ type Participant struct {
 	// STTOff is set when they turned off the transcription of their voice (010-AC23). Set by
 	// ParticipantByToken and RoomParticipant only.
 	STTOff bool `json:"stt_off,omitempty"`
+	// OIDCBinding is its profile's, set by ParticipantByToken, ProfileParticipant and
+	// APITokenParticipant only (021-AC8).
+	OIDCBinding
 }
 
 // Message is one line in a room.
@@ -293,6 +296,14 @@ CREATE INDEX messages_participant_nontext ON messages(participant_id, id) WHERE 
 	// 53 (019-AC4): the anonymous room creations, counted per client IP.
 	`ALTER TABLE rate_events DROP CONSTRAINT rate_events_scope_check;
 ALTER TABLE rate_events ADD CONSTRAINT rate_events_scope_check CHECK (scope IN ('magic', 'login', 'anon-room'));`,
+	// 54 (021 Phase 1): a profile's provider binding; rerunnable, as older migrations' tests replay it.
+	`ALTER TABLE profiles ADD COLUMN IF NOT EXISTS oidc_issuer TEXT, ADD COLUMN IF NOT EXISTS oidc_subject TEXT, ADD COLUMN IF NOT EXISTS oidc_signed_in_at TEXT;
+ALTER TABLE profiles DROP CONSTRAINT IF EXISTS profiles_oidc_unique;
+ALTER TABLE profiles ADD CONSTRAINT profiles_oidc_unique UNIQUE (oidc_issuer, oidc_subject);`,
+	// 55 (021-AC11): the admin group a profile's last sign-in held, and the admin sessions it opened
+	// with it, which go with the profile.
+	`ALTER TABLE profiles ADD COLUMN IF NOT EXISTS oidc_admin_group TEXT;
+ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS profile_id BIGINT REFERENCES profiles(id) ON DELETE CASCADE;`,
 }
 
 // nonText is the predicate of the non-typed message indexes, written into every query that uses
@@ -953,12 +964,17 @@ func cutInvites(ctx context.Context, tx *txn, roomID string, inviteID int64, pla
 type JoinProfile struct {
 	ID                        int64
 	RecoveryHash, SessionHash string
+	// Issuer, set in restricted mode, refuses an invite whose creator is now an external, not bound
+	// to it, who is not a room admin (021-AC7), or an internal whose last sign-in is not after
+	// SignedInAfter, room admin or not (021-AC8).
+	Issuer        string
+	SignedInAfter time.Time
 }
 
 // Join adds a participant through a valid invite and records a system message announcing them,
 // in one transaction, creating its profile when prof asks. ErrNotFound if the invite is unknown or
-// revoked, ErrBlocked if a room admin blocked prof's profile from the room (016-AC13). The caller
-// broadcasts.
+// revoked, ErrInviteLapsed if prof.Issuer and prof.SignedInAfter refuse it, ErrBlocked if a room admin blocked prof's
+// profile from the room (016-AC13). The caller broadcasts.
 func (s *Store) Join(ctx context.Context, inviteHash, name, tokenHash string, prof JoinProfile) (*Participant, *Message, error) {
 	var p *Participant
 	var m *Message
@@ -981,6 +997,20 @@ func join(ctx context.Context, tx *txn, inviteHash, name, tokenHash string, prof
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("join: %w", err)
+	}
+	if prof.Issuer != "" {
+		// A NULL creator is the super-admin: its invites always work.
+		var lapsed bool
+		// oidc_signed_in_at is fixed-width UTC: it orders as text.
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM invites i JOIN participants c ON c.id = i.created_by
+			LEFT JOIN profiles f ON f.id = c.profile_id WHERE i.id = ? AND (f.oidc_issuer IS DISTINCT FROM ?
+			AND NOT EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = i.room_id AND a.profile_id = c.profile_id)
+			OR f.oidc_issuer = ? AND f.oidc_signed_in_at <= ?))`, p.InviteID, prof.Issuer, prof.Issuer, formatTS(prof.SignedInAfter)).Scan(&lapsed); err != nil {
+			return nil, nil, fmt.Errorf("join: %w", err)
+		}
+		if lapsed {
+			return nil, nil, ErrInviteLapsed
+		}
 	}
 	p.ProfileID = prof.ID
 	if p.ProfileID != 0 {
@@ -1011,10 +1041,11 @@ func join(ctx context.Context, tx *txn, inviteHash, name, tokenHash string, prof
 // ParticipantByToken returns the participant holding tokenHash, provided its seat is valid.
 func (s *Store) ParticipantByToken(ctx context.Context, tokenHash string) (*Participant, error) {
 	var p Participant
-	var joined string
+	var joined, iss, at string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger, COALESCE(p.profile_id, 0), p.stt_off FROM participants p
-		WHERE p.token_hash = ? AND p.removed_at IS NULL`, tokenHash).Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID, &p.STTOff)
+		SELECT p.id, p.room_id, p.invite_id, p.name, p.joined_at, p.can_trigger, COALESCE(p.profile_id, 0), p.stt_off, `+bindingCols+` FROM participants p
+		LEFT JOIN profiles f ON f.id = p.profile_id
+		WHERE p.token_hash = ? AND p.removed_at IS NULL`, tokenHash).Scan(&p.ID, &p.RoomID, &p.InviteID, &p.Name, &joined, &p.CanTrigger, &p.ProfileID, &p.STTOff, &iss, &at)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -1022,6 +1053,7 @@ func (s *Store) ParticipantByToken(ctx context.Context, tokenHash string) (*Part
 		return nil, fmt.Errorf("participant by token: %w", err)
 	}
 	p.JoinedAt = parseTS(joined)
+	p.scan(iss, at)
 	return &p, nil
 }
 

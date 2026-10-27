@@ -100,11 +100,18 @@ function end(text) {
   $('annotations').hidden = true;
 }
 
+const reauthEnded = 'Your organisation sign-in expired. Sign in again from your profile page.';
+
 // loadRoom fetches the room header and participant list; false when access is gone.
 async function loadRoom() {
   const sttAt = sttSet;
   const res = await netFetch(api);
   if (res.status === 401) {
+    if ((await res.json().catch(() => ({}))).reason === 'reauth') {
+      // The fetch wrapper went to sign in, unless its guard held it back (021-AC8).
+      if (!window.grillReauth()) end(reauthEnded);
+      return false;
+    }
     // A refresh can race the stream's "revoked" event: once in, both must tell the same thing.
     end(wasIn ? 'Your access to this room has ended.'
       : 'You are not in this room, or your access was revoked. Open your invite link again.');
@@ -1956,7 +1963,11 @@ function connect() {
   es.addEventListener('documents', () => loadDocuments().catch(console.error));
   es.addEventListener('annotations', () => loadAnnotations().catch(console.error));
   es.addEventListener('plugins', () => loadPlugins().catch(console.error));
-  es.addEventListener('revoked', () => end('Your access to this room has ended.'));
+  es.addEventListener('revoked', (e) => {
+    // An expired organisation sign-in is not a removal: sign in again and come back (021-AC8).
+    if (JSON.parse(e.data || '{}').reason !== 'reauth') end('Your access to this room has ended.');
+    else if (!window.grillReauth()) end(reauthEnded);
+  });
   es.addEventListener('stt', (e) => showSTT(JSON.parse(e.data)));
   es.addEventListener('tts', (e) => {
     ttsLive = JSON.parse(e.data);

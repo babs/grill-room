@@ -423,6 +423,35 @@ func (s *Server) kickFromVoice(room string, ids []int64) {
 	}
 }
 
+// kickEvery bounds the LiveKit calls an expired seat's requests make: one a minute per seat.
+const kickEvery = time.Minute
+
+// kickExpired takes an expired seat out of the audio off the request path, at most once per
+// kickEvery for each room and seat (021-AC8).
+func (s *Server) kickExpired(room string, id int64) {
+	now := s.now()
+	key := room + "/" + strconv.FormatInt(id, 10)
+	s.kicks.mu.Lock()
+	if s.kicks.at == nil {
+		s.kicks.at = map[string]time.Time{}
+	}
+	if at, ok := s.kicks.at[key]; ok && now.Sub(at) < kickEvery {
+		s.kicks.mu.Unlock()
+		return
+	}
+	// ponytail: pruned only when large; a few thousand expired seats a minute would need a ring.
+	if len(s.kicks.at) > 1024 {
+		for k, at := range s.kicks.at {
+			if now.Sub(at) >= kickEvery {
+				delete(s.kicks.at, k)
+			}
+		}
+	}
+	s.kicks.at[key] = now
+	s.kicks.mu.Unlock()
+	go s.kickFromVoice(room, []int64{id})
+}
+
 // closeVoice ends a deleted room's LiveKit room. Best effort, as kickFromVoice.
 func (s *Server) closeVoice(room string) {
 	v := s.opts.Voice

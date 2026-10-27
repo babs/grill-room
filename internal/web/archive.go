@@ -191,6 +191,9 @@ func (s *Server) importRoom(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusForbidden, "Add an email to your profile to import a room")
 			return
 		}
+		if s.refuseExternal(w, prof) {
+			return
+		}
 	} else {
 		r = ar
 	}

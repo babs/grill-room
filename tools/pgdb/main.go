@@ -2,6 +2,7 @@
 //
 //	pgdb fresh <server-url> <dbname>  drop dbname if it exists, create it with C collation, print its DSN
 //	pgdb url <server-url> <dbname>    print the DSN of dbname, which must exist: a second server joins it
+//	pgdb exec <server-url> <dbname> <sql>  run sql on dbname, which must exist, and print the rows it changed
 package main
 
 import (
@@ -24,14 +25,14 @@ import (
 // prefix keeps the drop away from any database but the e2e ones.
 var nameRE = regexp.MustCompile(`^e2e_[a-z0-9_]{1,59}$`)
 
-const usage = "usage: pgdb fresh|url <server-url> <dbname>"
+const usage = "usage: pgdb fresh|url <server-url> <dbname> | pgdb exec <server-url> <dbname> <sql>"
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 3 || (args[0] != "fresh" && args[0] != "url") {
+	if len(args) < 3 || len(args) != map[string]int{"fresh": 3, "url": 3, "exec": 4}[args[0]] {
 		_, _ = fmt.Fprintln(stderr, usage)
 		return 2
 	}
@@ -43,8 +44,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	op := fresh
-	if args[0] == "url" {
+	switch args[0] {
+	case "url":
 		op = existing
+	case "exec":
+		// The e2e specs age a row the server reads, as no test clock reaches the e2e server.
+		op = func(ctx context.Context, server, name string) (string, error) {
+			return execSQL(ctx, server, name, args[3])
+		}
 	}
 	out, err := op(ctx, server, name)
 	if err != nil {
@@ -110,5 +117,28 @@ func dsn(server, name string) (string, error) {
 		return "", errors.New("server url is not a valid URL")
 	}
 	u.Path = "/" + name
+	// pgx reads these over the path: a server URL holding one would point every DSN at it.
+	q := u.Query()
+	q.Del("dbname")
+	q.Del("database")
+	u.RawQuery = q.Encode()
 	return u.String(), nil
+}
+
+// execSQL runs query on database name, which must exist, and returns how many rows it changed.
+func execSQL(ctx context.Context, server, name, query string) (string, error) {
+	d, err := existing(ctx, server, name)
+	if err != nil {
+		return "", err
+	}
+	conn, err := pgx.Connect(ctx, d)
+	if err != nil {
+		return "", fmt.Errorf("connect: %w", err)
+	}
+	defer conn.Close(context.Background()) //nolint:errcheck // nothing left to flush
+	tag, err := conn.Exec(ctx, query)
+	if err != nil {
+		return "", fmt.Errorf("exec: %w", err)
+	}
+	return fmt.Sprint(tag.RowsAffected()), nil
 }

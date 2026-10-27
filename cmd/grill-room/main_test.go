@@ -1,14 +1,20 @@
 package main
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc/oidctest"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
@@ -64,6 +70,10 @@ func TestConfigValidate(t *testing.T) {
 		"paragraph close zero":          func(c *Config) { c.VoiceParagraphClose = 0 },
 		"paragraph close negative":      func(c *Config) { c.VoiceParagraphClose = -time.Second },
 		"paragraph close below the gap": func(c *Config) { c.VoiceParagraphGap, c.VoiceParagraphClose = 3*time.Second, 2*time.Second },
+		// 021-AC1: Validate checks the provider settings.
+		"oidc over plain http": func(c *Config) {
+			c.PublicURL, c.OIDC = "http://rooms.example", web.OIDCConfig{Issuer: "https://idp.example", ClientID: "c", ClientSecret: "s"}
+		},
 		// 019-AC4: the per-IP hourly limit.
 		"anonymous rooms per hour zero":  func(c *Config) { c.AnonymousRoomsPerHour = 0 },
 		"anonymous rooms per hour above": func(c *Config) { c.AnonymousRoomsPerHour = 1001 },
@@ -421,7 +431,7 @@ func TestRegistryMetricsDocumented(t *testing.T) {
 	}
 	defer st.Close()
 	b := bus.New(st, web.NewToken())
-	opts := web.Options{TTSTokenHash: "x", Voice: &web.Voice{URL: "wss://x"}}
+	opts := web.Options{TTSTokenHash: "x", Voice: &web.Voice{URL: "wss://x"}, OIDC: &web.OIDC{}}
 	mfs, err := newRegistry(b, web.New(b, "", "http://x", opts, zap.NewNop())).Gather()
 	if err != nil {
 		t.Fatal(err)
@@ -439,5 +449,173 @@ func TestRegistryMetricsDocumented(t *testing.T) {
 	}
 	if len(missing) > 0 || len(documented) > 0 {
 		t.Fatalf("metrics without a row in docs/architecture.md: %v; rows naming no registered metric: %v", missing, documented)
+	}
+}
+
+// 021-AC1: the three provider settings go together, need an https public URL (localhost aside),
+// and exclude anonymous rooms; unset, nothing else is asked for.
+func TestValidateOIDC(t *testing.T) {
+	full := web.OIDCConfig{Issuer: "https://idp.example", ClientID: "c", ClientSecret: "s", GroupsClaim: "groups"}
+	for _, c := range []struct {
+		name string
+		cfg  Config
+		ok   bool
+	}{
+		{"unset", Config{PublicURL: "http://rooms.example"}, true},
+		{"all three, https", Config{PublicURL: "https://rooms.example", OIDC: full}, true},
+		{"localhost over http", Config{PublicURL: "http://localhost:7680", OIDC: full}, true},
+		{"127.0.0.1 over http", Config{PublicURL: "http://127.0.0.1:7680/", OIDC: full}, true},
+		{"::1 over http", Config{PublicURL: "http://[::1]:7680", OIDC: full}, true},
+		// The issuer serves the keys and receives the secret.
+		{"issuer over http", Config{PublicURL: "https://rooms.example", OIDC: withIssuer(full, "http://idp.example")}, false},
+		{"issuer over ftp", Config{PublicURL: "https://rooms.example", OIDC: withIssuer(full, "ftp://idp")}, false},
+		{"issuer without scheme", Config{PublicURL: "https://rooms.example", OIDC: withIssuer(full, "idp.example")}, false},
+		{"issuer on localhost over http", Config{PublicURL: "https://rooms.example", OIDC: withIssuer(full, "http://localhost:5556")}, true},
+		{"plain http", Config{PublicURL: "http://rooms.example", OIDC: full}, false},
+		{"localhost-like host", Config{PublicURL: "http://localhost.evil.example", OIDC: full}, false},
+		{"not a URL", Config{PublicURL: "rooms.example", OIDC: full}, false},
+		{"anonymous rooms", Config{PublicURL: "https://rooms.example", OIDC: full, AnonymousRooms: true}, false},
+		{"issuer only", Config{PublicURL: "https://rooms.example", OIDC: web.OIDCConfig{Issuer: "https://idp.example"}}, false},
+		{"no secret", Config{PublicURL: "https://rooms.example", OIDC: web.OIDCConfig{Issuer: "https://idp.example", ClientID: "c"}}, false},
+		{"secret only", Config{PublicURL: "https://rooms.example", OIDC: web.OIDCConfig{ClientSecret: "s"}}, false},
+		{"group without issuer", Config{PublicURL: "https://rooms.example", OIDC: web.OIDCConfig{MemberGroup: "staff"}}, false},
+		{"scopes without issuer", Config{PublicURL: "https://rooms.example", OIDC: web.OIDCConfig{Scopes: []string{"x"}}}, false},
+		// 021-AC11: the admin group needs an issuer too; the provider name never refuses a start.
+		{"admin group without issuer", Config{PublicURL: "https://rooms.example", OIDC: web.OIDCConfig{AdminGroup: "ops"}}, false},
+		{"name without issuer", Config{PublicURL: "https://rooms.example", OIDC: web.OIDCConfig{Name: "Acme SSO"}}, true},
+		// 021-AC8: the revalidation window, 1h to 720h, with an issuer only.
+		{"revalidate without issuer", Config{PublicURL: "https://rooms.example", OIDC: web.OIDCConfig{Revalidate: time.Hour}, OIDCRevalidateSet: true}, false},
+		{"revalidate 0 without issuer", Config{PublicURL: "https://rooms.example", OIDCRevalidateSet: true}, false},
+		{"revalidate unset", Config{PublicURL: "https://rooms.example", OIDC: full}, true},
+		{"revalidate 1h", revalidating(full, time.Hour), true},
+		{"revalidate 720h", revalidating(full, 720*time.Hour), true},
+		{"revalidate 0", revalidating(full, 0), false},
+		{"revalidate under 1h", revalidating(full, time.Hour-time.Second), false},
+		{"revalidate over 720h", revalidating(full, 720*time.Hour+time.Second), false},
+		{"revalidate negative", revalidating(full, -time.Hour), false},
+	} {
+		if err := c.cfg.validateOIDC(); (err == nil) != c.ok {
+			t.Errorf("%s: %v, want ok %v", c.name, err, c.ok)
+		}
+	}
+}
+
+func withIssuer(c web.OIDCConfig, iss string) web.OIDCConfig { c.Issuer = iss; return c }
+
+// revalidating is an https instance on c with GRILL_ROOM_OIDC_REVALIDATE set to d.
+func revalidating(c web.OIDCConfig, d time.Duration) Config {
+	c.Revalidate = d
+	return Config{PublicURL: "https://rooms.example", OIDC: c, OIDCRevalidateSet: true}
+}
+
+// 021-AC1: the provider settings come from the environment, with their defaults.
+func TestLoadConfigOIDC(t *testing.T) {
+	t.Setenv("GRILL_ROOM_DATABASE_URL", "postgres://u@db/x")
+	c, err := loadConfig()
+	if want := (web.OIDCConfig{Scopes: []string{}, GroupsClaim: web.DefaultGroupsClaim, Name: web.DefaultOIDCName}); err != nil || !reflect.DeepEqual(c.OIDC, want) {
+		t.Fatalf("defaults: %+v %v", c.OIDC, err)
+	}
+	for k, v := range map[string]string{"GRILL_ROOM_OIDC_ISSUER": "https://idp.example", "GRILL_ROOM_OIDC_CLIENT_ID": "c", "GRILL_ROOM_OIDC_CLIENT_SECRET": "s",
+		"GRILL_ROOM_OIDC_SCOPES": " groups  offline_access ", "GRILL_ROOM_OIDC_MEMBER_GROUP": "staff", "GRILL_ROOM_OIDC_GROUPS_CLAIM": "roles",
+		"GRILL_ROOM_OIDC_REVALIDATE": "24h", "GRILL_ROOM_OIDC_ADMIN_GROUP": "ops", "GRILL_ROOM_OIDC_NAME": "Acme SSO"} {
+		t.Setenv(k, v)
+	}
+	c, err = loadConfig()
+	want := web.OIDCConfig{Issuer: "https://idp.example", ClientID: "c", ClientSecret: "s", Scopes: []string{"groups", "offline_access"}, MemberGroup: "staff", GroupsClaim: "roles",
+		Revalidate: 24 * time.Hour, AdminGroup: "ops", Name: "Acme SSO"}
+	if err != nil || !reflect.DeepEqual(c.OIDC, want) {
+		t.Fatalf("set: %+v %v", c.OIDC, err)
+	}
+	if !c.OIDCRevalidateSet {
+		t.Error("GRILL_ROOM_OIDC_REVALIDATE not marked set")
+	}
+	t.Setenv("GRILL_ROOM_OIDC_REVALIDATE", "0")
+	if c, err := loadConfig(); err != nil || !c.OIDCRevalidateSet || c.validateOIDC() == nil {
+		t.Errorf("GRILL_ROOM_OIDC_REVALIDATE=0 taken: %v", err)
+	}
+	t.Setenv("GRILL_ROOM_OIDC_REVALIDATE", "a week")
+	if _, err := loadConfig(); err == nil {
+		t.Error("an unparsable GRILL_ROOM_OIDC_REVALIDATE was taken")
+	}
+}
+
+// 021-AC1: the start fetches the discovery document, retrying within the budget, and stops when
+// it keeps failing or the start is cancelled; no issuer, no fetch. Without a member group it warns.
+func TestConfigOIDCDiscovery(t *testing.T) {
+	budget, backoff := discoveryBudget, discoveryBackoff
+	t.Cleanup(func() { discoveryBudget, discoveryBackoff = budget, backoff })
+	discoveryBudget, discoveryBackoff = 2*time.Second, 10*time.Millisecond
+	core, logs := observer.New(zapcore.InfoLevel)
+	log := zap.New(core)
+	if o, err := (Config{}).oidc(t.Context(), log); o != nil || err != nil || logs.Len() != 0 {
+		t.Fatalf("unset: %v %v %d logs", o, err, logs.Len())
+	}
+	var calls atomic.Int32
+	failFirst := 0
+	idp := &oidctest.Server{}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if int(calls.Add(1)) <= failFirst {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		idp.ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close)
+	idp.SetIssuer(ts.URL)
+	c := Config{PublicURL: "https://rooms.example/", OIDC: web.OIDCConfig{Issuer: ts.URL, ClientID: "c", ClientSecret: "s"}}
+
+	failFirst = 2
+	if o, err := c.oidc(t.Context(), log); o == nil || err != nil || calls.Load() != 3 {
+		t.Fatalf("two failures then up: %v %v after %d calls", o, err, calls.Load())
+	}
+	if logs.FilterMessage("oidc_discovery_failed").Len() != 2 || logs.FilterMessage("oidc_no_member_group").Len() != 1 {
+		t.Errorf("logs %+v", logs.All())
+	}
+
+	calls.Store(0)
+	failFirst = 1 << 30
+	start := time.Now()
+	if _, err := c.oidc(t.Context(), log); err == nil || calls.Load() < 3 || time.Since(start) > 4*time.Second {
+		t.Fatalf("always down: %v after %d calls, %s", err, calls.Load(), time.Since(start))
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	start = time.Now()
+	if _, err := c.oidc(ctx, log); err == nil || time.Since(start) > time.Second {
+		t.Fatalf("cancelled start: %v, %s", err, time.Since(start))
+	}
+
+	logs.TakeAll()
+	failFirst, c.OIDC.MemberGroup = 0, "staff"
+	if _, err := c.oidc(t.Context(), log); err != nil || logs.FilterMessage("oidc_no_member_group").Len() != 0 {
+		t.Fatalf("with a group: %v %+v", err, logs.All())
+	}
+}
+
+// 021-AC13: restricted mode counts sign-ins by result; an open instance has no such series.
+func TestRegistryCountsOIDCLogins(t *testing.T) {
+	st, err := store.Open(storetest.DSN(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	b := bus.New(st, web.NewToken())
+	for _, c := range []struct {
+		oidc *web.OIDC
+		want int
+	}{{nil, 0}, {&web.OIDC{}, len(web.OIDCResults)}} {
+		mfs, err := newRegistry(b, web.New(b, "", "http://x", web.Options{OIDC: c.oidc}, zap.NewNop())).Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, mf := range mfs {
+			if mf.GetName() == "grill_room_oidc_logins_total" {
+				n = len(mf.GetMetric())
+			}
+		}
+		if n != c.want {
+			t.Errorf("oidc %v: %d series, want %d", c.oidc != nil, n, c.want)
+		}
 	}
 }

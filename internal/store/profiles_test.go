@@ -73,14 +73,14 @@ func TestSignInByRecovery(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
-	prof, err := s.SignInByRecovery(ctx, "rec", "other-device")
+	prof, err := s.SignInByRecovery(ctx, "rec", "other-device", "")
 	if err != nil || prof.ID != a.ProfileID || len(prof.Rooms) != 1 {
 		t.Fatalf("recover: %+v %v", prof, err)
 	}
 	if p, err := s.ProfileParticipant(ctx, "other-device", "a"); err != nil || p.ID != a.ID {
 		t.Fatalf("participant through the new session: %+v %v", p, err)
 	}
-	if _, err := s.SignInByRecovery(ctx, "sess", "x"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.SignInByRecovery(ctx, "sess", "x", ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a session hash is no recovery: %v", err)
 	}
 }
@@ -150,10 +150,10 @@ func TestMagicLinks(t *testing.T) {
 	if _, err := s.UseMagicLink(ctx, MagicUse{TokenHash: "bind-a", Purpose: MagicBind, SessionHash: "dev3", Current: a.ProfileID, Now: time.Now()}); !errors.Is(err, ErrLinkUsed) {
 		t.Fatalf("second use: %v", err)
 	}
-	if id, err := s.ProfileIDByEmail(ctx, "alice@example.com"); err != nil || id != a.ProfileID {
+	if id, err := s.ProfileIDByEmail(ctx, "alice@example.com", ""); err != nil || id != a.ProfileID {
 		t.Fatalf("by email: %d %v", id, err)
 	}
-	if _, err := s.ProfileIDByEmail(ctx, "nobody@example.com"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.ProfileIDByEmail(ctx, "nobody@example.com", ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown email: %v", err)
 	}
 
@@ -334,8 +334,8 @@ func TestProfileCallsFailOnAClosedStore(t *testing.T) {
 	_ = s.Close()
 	calls := map[string]func() error{
 		"ProfileBySession":   func() error { _, err := s.ProfileBySession(ctx, "sess-a"); return err },
-		"SignInByRecovery":   func() error { _, err := s.SignInByRecovery(ctx, "rec-a", "x"); return err },
-		"ProfileIDByEmail":   func() error { _, err := s.ProfileIDByEmail(ctx, "a@example.com"); return err },
+		"SignInByRecovery":   func() error { _, err := s.SignInByRecovery(ctx, "rec-a", "x", ""); return err },
+		"ProfileIDByEmail":   func() error { _, err := s.ProfileIDByEmail(ctx, "a@example.com", ""); return err },
 		"ProfileParticipant": func() error { _, err := s.ProfileParticipant(ctx, "sess-a", "a"); return err },
 		"Profiles":           func() error { _, err := s.Profiles(ctx); return err },
 		"DeleteProfile":      func() error { return s.DeleteProfile(ctx, p.ProfileID) },
@@ -350,7 +350,7 @@ func TestProfileCallsFailOnAClosedStore(t *testing.T) {
 		"DeleteMagicLink":    func() error { return s.DeleteMagicLink(ctx, "t") },
 		"SnoozeEmailNudge":   func() error { return s.SnoozeEmailNudge(ctx, 1, time.Now()) },
 		"CreateRecoveryLink": func() error { _, err := s.CreateRecoveryLink(ctx, 1, "t", time.Now()); return err },
-		"UseRecoveryLink":    func() error { _, err := s.UseRecoveryLink(ctx, "t", "x", time.Now()); return err },
+		"UseRecoveryLink":    func() error { _, err := s.UseRecoveryLink(ctx, "t", "x", time.Now(), ""); return err },
 		"RenameRoom":         func() error { _, err := s.RenameRoom(ctx, "a", "x", p); return err },
 		"CreateInvite":       func() error { _, err := s.CreateInvite(ctx, "a", "h", p.ID); return err },
 		"Invite":             func() error { _, err := s.Invite(ctx, "a", 1); return err },
@@ -642,7 +642,7 @@ func TestRecoveryLinkConcurrentUse(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range n {
 		wg.Go(func() {
-			_, err := s.UseRecoveryLink(context.Background(), "tok", fmt.Sprint("sess-", i), t0)
+			_, err := s.UseRecoveryLink(context.Background(), "tok", fmt.Sprint("sess-", i), t0, "")
 			errs <- err
 		})
 	}
@@ -674,7 +674,7 @@ func TestSnoozeEmailNudge(t *testing.T) {
 	if err := s.SnoozeEmailNudge(ctx, a.ProfileID, until); err != nil {
 		t.Fatal(err)
 	}
-	if p, _ := s.SignInByRecovery(ctx, "rec-a", "other"); p.EmailNudgeUntil == nil || !p.EmailNudgeUntil.Equal(until) {
+	if p, _ := s.SignInByRecovery(ctx, "rec-a", "other", ""); p.EmailNudgeUntil == nil || !p.EmailNudgeUntil.Equal(until) {
 		t.Fatalf("another device: %+v", p.EmailNudgeUntil)
 	}
 	if err := s.SnoozeEmailNudge(ctx, 999, until); !errors.Is(err, ErrNotFound) {
@@ -702,7 +702,7 @@ func TestRecoveryLinks(t *testing.T) {
 		return exp
 	}
 	use := func(tok, sess string, at time.Time) error {
-		_, err := s.UseRecoveryLink(audited("use", 0), tok, sess, at)
+		_, err := s.UseRecoveryLink(audited("use", 0), tok, sess, at, "")
 		return err
 	}
 	if exp := create(a.ProfileID, "old-token"); !exp.Equal(t0.Add(24 * time.Hour)) {
