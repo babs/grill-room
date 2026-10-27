@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -149,5 +150,44 @@ UPDATE schema_version SET version = 53`); err != nil {
 	bindTo(t, s, id, "x")
 	if _, err := s.db.ExecContext(ctx, `UPDATE profiles SET oidc_issuer = 'https://idp.example', oidc_subject = 'x' WHERE id = ?`, b); !isUnique(err) {
 		t.Fatalf("pair not unique after the migration: %v", err)
+	}
+}
+
+// 021-AC7: a restricted join refuses an invite whose creator is an external (bound to no issuer,
+// or another one) who is not a room admin, in the join's transaction; the admin's (NULL creator), an internal's and a room admin's
+// work, and so does every invite with the rule off.
+func TestJoinRestricted(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	alice := seed(t, s, "a")
+	if _, err := s.CreateInvite(ctx, "a", "by-alice", alice.ID); err != nil {
+		t.Fatal(err)
+	}
+	join := func(name, issuer string) error {
+		_, _, err := s.Join(ctx, "by-alice", name, "tok-"+name, JoinProfile{Issuer: issuer})
+		return err
+	}
+	if err := join("off", ""); err != nil {
+		t.Fatalf("rule off: %v", err)
+	}
+	if err := join("ext", "https://idp.example"); !errors.Is(err, ErrInviteLapsed) {
+		t.Fatalf("external creator: %v", err)
+	}
+	if _, _, err := s.Join(ctx, "inv-a", "Admin's", "tok-adm", JoinProfile{Issuer: "https://idp.example"}); err != nil {
+		t.Fatalf("admin's invite: %v", err)
+	}
+	bindTo(t, s, alice.ProfileID, "alice")
+	if err := join("int", "https://idp.example"); err != nil {
+		t.Fatalf("internal creator: %v", err)
+	}
+	if err := join("former", "https://other.example"); !errors.Is(err, ErrInviteLapsed) {
+		t.Fatalf("creator bound to a former issuer: %v", err)
+	}
+	bindTo(t, s, alice.ProfileID, "")
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO room_admins(room_id, profile_id, created_at) VALUES('a', ?, ?)`, alice.ProfileID, now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := join("radm", "https://idp.example"); err != nil {
+		t.Fatalf("room admin creator: %v", err)
 	}
 }

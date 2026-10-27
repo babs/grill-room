@@ -13,6 +13,8 @@ var (
 	ErrIsRoomAdmin = errors.New("a room admin must step down first")
 	// ErrBlocked is returned when a profile a room admin blocked joins the room again (016-AC13).
 	ErrBlocked = errors.New("blocked from rejoining the room")
+	// ErrInviteLapsed is a join through an invite whose creator may no longer invite (021-AC7).
+	ErrInviteLapsed = errors.New("invite lapsed")
 )
 
 // Ending is how a person's seats in a room end: by a room admin (By, nil for the super-admin),

@@ -137,20 +137,21 @@ func (s *Server) openState(ctx context.Context, v string) (oidcState, bool, erro
 	return st, ok && st.Exp > s.now().Unix(), err
 }
 
-// readState returns the state v seals, expired or not; false when it is forged or malformed.
+// readState returns the state v seals, expired or not; false and the zero state when it is forged
+// or malformed, which expireOldFlows sorts as the oldest.
 func (s *Server) readState(ctx context.Context, v string) (oidcState, bool, error) {
-	var st oidcState
 	enc, mac, _ := strings.Cut(v, ".")
 	key, err := s.keys.subKey(ctx, oidcStateKeyUse)
 	if err != nil {
-		return st, false, err
+		return oidcState{}, false, err
 	}
 	if !hmac.Equal([]byte(mac), []byte(hmacHex(key, enc))) {
-		return st, false, nil
+		return oidcState{}, false, nil
 	}
+	var st oidcState
 	b, err := base64.RawURLEncoding.DecodeString(enc)
 	if err != nil || json.Unmarshal(b, &st) != nil {
-		return st, false, nil
+		return oidcState{}, false, nil
 	}
 	return st, true, nil
 }
@@ -219,12 +220,9 @@ func (s *Server) expireOldFlows(w http.ResponseWriter, r *http.Request) error {
 		if !strings.HasPrefix(c.Name, oidcCookiePrefix) {
 			continue
 		}
-		st, ok, err := s.readState(r.Context(), c.Value)
+		st, _, err := s.readState(r.Context(), c.Value)
 		if err != nil {
 			return err
-		}
-		if !ok {
-			st.Exp = 0
 		}
 		flows = append(flows, flow{c.Name, st.Exp})
 	}
@@ -463,6 +461,47 @@ func oidcCounters() map[string]*atomic.Int64 {
 
 // OIDCLogins counts the provider sign-ins that ended with result (021-AC13).
 func (s *Server) OIDCLogins(result string) int64 { return s.oidcLogins[result].Load() }
+
+// The refusals of externals in restricted mode (021-AC6, 021-AC7).
+const (
+	msgSignInToCreate = "Sign in with your organisation account to create rooms"
+	msgOrgInvites     = "Only members of the organisation and room admins can invite"
+)
+
+// isInternal reports a profile bound to the configured provider; every other one, bound to a former
+// provider or to none, and no profile, is external (021-AC5).
+func (s *Server) isInternal(p *store.Profile) bool {
+	return p != nil && s.opts.OIDC != nil && p.OIDCIssuer == s.opts.OIDC.cfg.Issuer
+}
+
+// refuseExternal answers a 403 when restricted mode keeps p from creating rooms (021-AC6).
+func (s *Server) refuseExternal(w http.ResponseWriter, p *store.Profile) bool {
+	if s.opts.OIDC == nil || s.isInternal(p) {
+		return false
+	}
+	httpError(w, http.StatusForbidden, msgSignInToCreate)
+	return true
+}
+
+// mayInvite reports whether sess may invite: anyone, but only internals and room admins in
+// restricted mode (021-AC7). It marks a room admin on sess, whose invites are audited.
+func (s *Server) mayInvite(ctx context.Context, sess *session) (bool, error) {
+	admin, err := s.roomAdmin(ctx, sess)
+	if err != nil || admin || s.opts.OIDC == nil {
+		return err == nil, err
+	}
+	if sess.p.ProfileID == 0 {
+		return false, nil
+	}
+	p, err := s.bus.Store.ProfileByID(ctx, sess.p.ProfileID)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("may invite: %w", err)
+	}
+	return s.isInternal(p), nil
+}
 
 // Restricted reports restricted mode: an OIDC provider is set (021-AC1).
 func (s *Server) Restricted() bool { return s.opts.OIDC != nil }

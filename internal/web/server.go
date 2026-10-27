@@ -834,8 +834,13 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, sess *sess
 	if sess != nil {
 		by = sess.p.ID
 		// A room admin's invites are audited; a plain member's are not admin actions.
-		if _, err := s.roomAdmin(r.Context(), sess); err != nil {
+		may, err := s.mayInvite(r.Context(), sess)
+		if err != nil {
 			s.serverError(w, "create_invite_failed", err)
+			return
+		}
+		if !may {
+			httpError(w, http.StatusForbidden, msgOrgInvites)
 			return
 		}
 	}
@@ -978,8 +983,13 @@ type shareResp struct {
 func (s *Server) shareInvite(w http.ResponseWriter, r *http.Request, sess session) {
 	room := r.PathValue("room")
 	// A room admin's invites are audited, as createInvite does.
-	if _, err := s.roomAdmin(r.Context(), &sess); err != nil {
+	may, err := s.mayInvite(r.Context(), &sess)
+	if err != nil {
 		s.serverError(w, "share_invite_failed", err)
+		return
+	}
+	if !may {
+		httpError(w, http.StatusForbidden, msgOrgInvites)
 		return
 	}
 	link := NewToken()
@@ -1038,6 +1048,9 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if s.opts.OIDC != nil {
+		prof.Issuer = s.opts.OIDC.cfg.Issuer
+	}
 	var recovery, profileTok string
 	if prof.ID == 0 {
 		recovery, profileTok = NewToken(), NewToken()
@@ -1047,6 +1060,10 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	p, m, err := s.bus.Store.Join(r.Context(), HashToken(req.Invite), name, HashToken(tok), prof)
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusUnauthorized, "invalid or revoked invite")
+		return
+	}
+	if errors.Is(err, store.ErrInviteLapsed) {
+		httpError(w, http.StatusUnauthorized, "This invite no longer works")
 		return
 	}
 	if errors.Is(err, store.ErrBlocked) {

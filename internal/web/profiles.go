@@ -165,7 +165,7 @@ type profileResp struct {
 func (s *Server) profileResp(p *store.Profile) profileResp {
 	r := profileResp{EmailEnabled: s.opts.SendMail != nil, AnonymousRooms: s.opts.AnonymousRooms, Profile: p}
 	if s.opts.OIDC != nil {
-		internal := p != nil && p.OIDCIssuer != ""
+		internal := s.isInternal(p)
 		r.Restricted, r.SignInURL, r.Internal = true, "/auth/login", &internal
 	}
 	if r.EmailEnabled {

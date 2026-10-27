@@ -942,7 +942,7 @@ func TestOIDCAuditActorAndHiddenBinding(t *testing.T) {
 func TestOIDCRoutesCookieOnly(t *testing.T) {
 	e := newOIDCEnv(t, newTestIdP(t), zap.NewNop(), nil)
 	alice := e.device(t)
-	alice.createRoom(t, "Mine", "Alice")
+	alice.join(t, e.createRoom(t, "R").ID, "Alice")
 	tok := alice.newToken(t, "full", 0).Token
 	for _, r := range []string{"GET /auth/login", "GET /auth/callback", "POST /auth/logout"} {
 		method, path, _ := strings.Cut(r, " ")

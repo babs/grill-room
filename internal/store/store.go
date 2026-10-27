@@ -957,12 +957,15 @@ func cutInvites(ctx context.Context, tx *txn, roomID string, inviteID int64, pla
 type JoinProfile struct {
 	ID                        int64
 	RecoveryHash, SessionHash string
+	// Issuer, set in restricted mode, refuses an invite whose creator is now an external, not bound
+	// to it, who is not a room admin (021-AC7).
+	Issuer string
 }
 
 // Join adds a participant through a valid invite and records a system message announcing them,
 // in one transaction, creating its profile when prof asks. ErrNotFound if the invite is unknown or
-// revoked, ErrBlocked if a room admin blocked prof's profile from the room (016-AC13). The caller
-// broadcasts.
+// revoked, ErrInviteLapsed if prof.Issuer refuses it, ErrBlocked if a room admin blocked prof's
+// profile from the room (016-AC13). The caller broadcasts.
 func (s *Store) Join(ctx context.Context, inviteHash, name, tokenHash string, prof JoinProfile) (*Participant, *Message, error) {
 	var p *Participant
 	var m *Message
@@ -985,6 +988,18 @@ func join(ctx context.Context, tx *txn, inviteHash, name, tokenHash string, prof
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("join: %w", err)
+	}
+	if prof.Issuer != "" {
+		// A NULL creator is the super-admin: its invites always work.
+		var lapsed bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM invites i JOIN participants c ON c.id = i.created_by
+			LEFT JOIN profiles f ON f.id = c.profile_id WHERE i.id = ? AND f.oidc_issuer IS DISTINCT FROM ?
+			AND NOT EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = i.room_id AND a.profile_id = c.profile_id))`, p.InviteID, prof.Issuer).Scan(&lapsed); err != nil {
+			return nil, nil, fmt.Errorf("join: %w", err)
+		}
+		if lapsed {
+			return nil, nil, ErrInviteLapsed
+		}
 	}
 	p.ProfileID = prof.ID
 	if p.ProfileID != 0 {
