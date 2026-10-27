@@ -22,3 +22,4 @@
 | [016](016-membership.md) | Membership: remove a person, invites apart from seats, mentions on edit | shipped |
 | [017](017-postgres-multi-pod.md) | Room server on PostgreSQL, several server pods | shipped |
 | [018](018-voice-paragraphs.md) | Voice paragraphs: one message per paragraph, quiet forced cut | shipped |
+| [020](020-chat-voice-split.md) | Written chat and voice transcription apart: filter, transcription pane | in progress |
