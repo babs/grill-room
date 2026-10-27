@@ -46,7 +46,7 @@ On first start the server logs an `admin_token_generated` line holding the admin
 | `GRILL_ROOM_DEVICE_STT_MODEL_DIR` | none | on-device transcription files, filled by `grill-room models fetch --dir <dir>`; unset, or a file missing or failing its sha256 at start, offers no device mode |
 | `GRILL_ROOM_TURN_TIMEOUT` | `15m` | one agent turn's time budget (1m to 24h) |
 | `GRILL_ROOM_NOTES_WATCH_DELAY` | `20s` | how long the persona that watches the notes waits after the last new note message (1s to 1h) |
-| `GRILL_ROOM_VOICE_PARAGRAPH_GAP` | `2.5s` | a voice line whose `gap_s` is under this joins its speaker's open paragraph instead of starting a message; `0` stores every line as its own message |
+| `GRILL_ROOM_VOICE_PARAGRAPH_GAP` | `5s` | a voice line whose `gap_s` is under this joins its speaker's open paragraph instead of starting a message; `0` stores every line as its own message |
 | `GRILL_ROOM_VOICE_PARAGRAPH_CLOSE` | `20s` | how long after its last line a voice paragraph counts for "every N voice lines", unless a message other than a typed one closes it first; above 0, and at least `GRILL_ROOM_VOICE_PARAGRAPH_GAP` |
 | `GRILL_ROOM_VOICE_PARAGRAPH_MAX_CHARS` | `1200` | the longest a voice paragraph grows to; a line that would pass it starts a new message (1 to 4000) |
 | `GRILL_ROOM_DAEMON_DIR` | none (`/daemon` in the image) | daemon release written by `make release` or `make dev-release`, or downloaded from a GitHub release; unset offers no download |
