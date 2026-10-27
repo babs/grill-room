@@ -53,6 +53,12 @@ function speechMic() {
     gain = ctx.createGain();
     const dst = ctx.createMediaStreamDestination();
     gain.connect(dst);
+    // A graph with no live source sends no frames once a sentence's source is collected: Bob's RTP
+    // clock then stalls and Alice's jitter buffer grows to seconds. A real mic never stops.
+    const floor = ctx.createConstantSource();
+    floor.offset.value = 0;
+    floor.connect(gain);
+    floor.start();
     return dst.stream;
   };
   window.talk = async (i) => {
