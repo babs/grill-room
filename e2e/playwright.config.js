@@ -8,7 +8,7 @@ export const gitPort = String(Number(port) + 2);
 
 export const adminToken = 'e2e-admin-token';
 
-const otherStacks = ['voice/**', 'agent-live/**', 'mcp-live/**', 'install/**', 'lab/**', 'mail/**', 'supervisor/**', 'crossinstance/**', 'scenario/**', 'push/**', 'device-voice/**', 'persona-voice/**', 'twopod/**', 'anon/**', 'oidc/**'];
+const otherStacks = ['voice/**', 'agent-live/**', 'mcp-live/**', 'install/**', 'lab/**', 'mail/**', 'supervisor/**', 'crossinstance/**', 'scenario/**', 'push/**', 'device-voice/**', 'persona-voice/**', 'twopod/**', 'anon/**', 'oidc/**', 'keycloak/**'];
 
 const deviceSpec = 'device-stt.spec.js';
 
