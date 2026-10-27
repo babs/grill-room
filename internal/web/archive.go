@@ -186,6 +186,11 @@ func (s *Server) importRoom(w http.ResponseWriter, r *http.Request) {
 		if prof = s.profileFor(w, r); prof == nil {
 			return
 		}
+		// An emailless profile is one anyone can make while anonymous rooms are on (019-AC9).
+		if s.opts.AnonymousRooms && prof.Email == "" {
+			httpError(w, http.StatusForbidden, "Add an email to your profile to import a room")
+			return
+		}
 	} else {
 		r = ar
 	}

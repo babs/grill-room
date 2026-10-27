@@ -59,10 +59,12 @@ test('join by invite, chat, revoke, delete', async ({ browser, request }) => {
   await expect(alice.locator('#banner')).toContainText('Open your invite link again');
 });
 
+// 019-AC8: with anonymous rooms off, no create form either.
 test('join page without an invite explains what is missing', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#status')).toContainText('You need an invite link');
   await expect(page.locator('#join')).toBeHidden();
+  await expect(page.locator('#create')).toBeHidden();
 });
 
 test('revoked invite link is refused on the join page', async ({ page, request }) => {

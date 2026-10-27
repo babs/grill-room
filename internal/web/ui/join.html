@@ -28,6 +28,16 @@
     <p id="name-error" class="field-error" role="alert"></p>
     <button type="submit">Join the room</button>
   </form>
+  <form id="create" novalidate hidden>
+    <label for="room-name">Room name</label>
+    <input id="room-name" maxlength="100" required aria-describedby="room-name-error">
+    <p id="room-name-error" class="field-error" role="alert"></p>
+    <label for="display-name">Display name, as the others will see it</label>
+    <input id="display-name" maxlength="40" autocomplete="name" required aria-describedby="display-name-error">
+    <p id="display-name-error" class="field-error" role="alert"></p>
+    <button type="submit">Create a room</button>
+    <p id="create-error" class="field-error" role="alert"></p>
+  </form>
   <p id="status" role="status"></p>
   <p id="your-profile" hidden><a href="/profile">Your profile <strong id="your-profile-name"></strong></a></p>
   <section id="recover" hidden>

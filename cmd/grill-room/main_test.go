@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/netip"
 	"os"
 	"regexp"
 	"slices"
@@ -9,6 +10,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/babs/grill-room/internal/bus"
 	"github.com/babs/grill-room/internal/mail"
@@ -24,7 +27,7 @@ func TestConfigValidate(t *testing.T) {
 	ok := Config{Addr: "a:1", MetricsAddr: "a:2", DatabaseURL: "postgres://u@db/x", LogLevel: "info", LogFormat: "auto",
 		MaxUploadMB: 20, MaxRoomMB: 200, MaxAttachmentMB: 5, MaxImportMB: 1024, Pandoc: "pandoc", PandocTimeout: time.Minute, TurnTimeout: 15 * time.Minute, MagicLinkTTL: 15 * time.Minute,
 		AuditRetention: 365 * 24 * time.Hour, ClientRetention: 720 * time.Hour, NotesWatchDelay: 20 * time.Second,
-		VoiceParagraphMaxChars: 1200, VoiceParagraphClose: 20 * time.Second}
+		VoiceParagraphMaxChars: 1200, VoiceParagraphClose: 20 * time.Second, AnonymousRoomsPerHour: 3}
 	cases := map[string]func(*Config){
 		"zero upload limit":                func(c *Config) { c.MaxUploadMB = 0 },
 		"room below upload limit":          func(c *Config) { c.MaxRoomMB = 10 },
@@ -61,6 +64,9 @@ func TestConfigValidate(t *testing.T) {
 		"paragraph close zero":          func(c *Config) { c.VoiceParagraphClose = 0 },
 		"paragraph close negative":      func(c *Config) { c.VoiceParagraphClose = -time.Second },
 		"paragraph close below the gap": func(c *Config) { c.VoiceParagraphGap, c.VoiceParagraphClose = 3*time.Second, 2*time.Second },
+		// 019-AC4: the per-IP hourly limit.
+		"anonymous rooms per hour zero":  func(c *Config) { c.AnonymousRoomsPerHour = 0 },
+		"anonymous rooms per hour above": func(c *Config) { c.AnonymousRoomsPerHour = 1001 },
 		"sandbox digest too short": func(c *Config) {
 			c.SandboxImage = "registry.example/grill-room/sandbox@sha256:" + strings.Repeat("a", 63)
 		},
@@ -83,6 +89,15 @@ func TestConfigValidate(t *testing.T) {
 	if err := edges.Validate(); err != nil {
 		t.Fatalf("paragraph gap 0, close 1ms: %v", err)
 	}
+	// 019-AC4: 1 and 1000 are the bounds.
+	edges.AnonymousRoomsPerHour = 1
+	if err := edges.Validate(); err != nil {
+		t.Fatalf("anonymous rooms per hour 1: %v", err)
+	}
+	edges.AnonymousRoomsPerHour = 1000
+	if err := edges.Validate(); err != nil {
+		t.Fatalf("anonymous rooms per hour 1000: %v", err)
+	}
 	pinned := ok
 	pinned.SandboxImage = "registry.example:5000/grill-room/sandbox:v1@sha256:" + strings.Repeat("a", 64)
 	if err := pinned.Validate(); err != nil {
@@ -104,7 +119,9 @@ func TestConfigValidate(t *testing.T) {
 
 func TestLoadConfigRejectsBadNumbers(t *testing.T) {
 	t.Setenv("GRILL_ROOM_DATABASE_URL", "postgres://u@db/x")
-	for key, val := range map[string]string{"GRILL_ROOM_MAX_UPLOAD_MB": "20MB", "GRILL_ROOM_MAX_ROOM_MB": "x", "GRILL_ROOM_PANDOC_TIMEOUT": "60", "GRILL_ROOM_MAX_ATTACHMENT_MB": "5MB", "GRILL_ROOM_TURN_TIMEOUT": "15", "GRILL_ROOM_MAGIC_LINK_TTL": "15", "GRILL_ROOM_AUDIT_RETENTION": "365", "GRILL_ROOM_CLIENT_RETENTION": "30", "GRILL_ROOM_TRUSTED_PROXIES": "10.0.0.0/33", "GRILL_ROOM_NOTES_WATCH_DELAY": "20", "GRILL_ROOM_VOICE_PARAGRAPH_GAP": "2.5", "GRILL_ROOM_VOICE_PARAGRAPH_MAX_CHARS": "1.2k", "GRILL_ROOM_VOICE_PARAGRAPH_CLOSE": "20"} {
+	for key, val := range map[string]string{"GRILL_ROOM_MAX_UPLOAD_MB": "20MB", "GRILL_ROOM_MAX_ROOM_MB": "x", "GRILL_ROOM_PANDOC_TIMEOUT": "60", "GRILL_ROOM_MAX_ATTACHMENT_MB": "5MB", "GRILL_ROOM_TURN_TIMEOUT": "15", "GRILL_ROOM_MAGIC_LINK_TTL": "15", "GRILL_ROOM_AUDIT_RETENTION": "365", "GRILL_ROOM_CLIENT_RETENTION": "30", "GRILL_ROOM_TRUSTED_PROXIES": "10.0.0.0/33", "GRILL_ROOM_NOTES_WATCH_DELAY": "20", "GRILL_ROOM_VOICE_PARAGRAPH_GAP": "2.5", "GRILL_ROOM_VOICE_PARAGRAPH_MAX_CHARS": "1.2k", "GRILL_ROOM_VOICE_PARAGRAPH_CLOSE": "20",
+		// 019-AC1, 019-AC4: a bad flag or limit refuses the start.
+		"GRILL_ROOM_ANONYMOUS_ROOMS": "yes", "GRILL_ROOM_ANONYMOUS_ROOMS_PER_HOUR": "3.5"} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv(key, val)
 			if _, err := loadConfig(); err == nil {
@@ -115,6 +132,39 @@ func TestLoadConfigRejectsBadNumbers(t *testing.T) {
 	c, err := loadConfig()
 	if err != nil || c.MaxUploadMB != 20 || c.MaxRoomMB != 200 || c.MaxAttachmentMB != 5 || c.TurnTimeout != 15*time.Minute || c.MagicLinkTTL != 15*time.Minute || c.AuditRetention != 8760*time.Hour || c.ClientRetention != 720*time.Hour || c.TrustedProxies != nil || c.NotesWatchDelay != 20*time.Second || c.VoiceParagraphGap != 2500*time.Millisecond || c.VoiceParagraphMaxChars != 1200 || c.VoiceParagraphClose != 20*time.Second || c.Validate() != nil {
 		t.Fatalf("defaults: %+v, %v", c, err)
+	}
+	// 019-AC1, 019-AC4: off by default, 3 an hour; the bounds are checked at start.
+	if c.AnonymousRooms || c.AnonymousRoomsPerHour != 3 {
+		t.Fatalf("anonymous defaults: %v %d", c.AnonymousRooms, c.AnonymousRoomsPerHour)
+	}
+	for val, ok := range map[string]bool{"0": false, "1001": false, "1": true, "1000": true} {
+		t.Setenv("GRILL_ROOM_ANONYMOUS_ROOMS_PER_HOUR", val)
+		if c, err := loadConfig(); err != nil || (c.Validate() == nil) != ok {
+			t.Errorf("GRILL_ROOM_ANONYMOUS_ROOMS_PER_HOUR=%s: load %v, valid %v", val, err, c.Validate())
+		}
+	}
+	t.Setenv("GRILL_ROOM_ANONYMOUS_ROOMS", "true")
+	if c, err := loadConfig(); err != nil || !c.AnonymousRooms {
+		t.Fatalf("GRILL_ROOM_ANONYMOUS_ROOMS=true: %v %v", c.AnonymousRooms, err)
+	}
+}
+
+// 019-AC4: anonymous rooms without a trusted proxy warn that clients behind one share the limit.
+func TestWarnAnonRooms(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		cfg  Config
+		want int
+	}{
+		{"on, no proxy", Config{AnonymousRooms: true}, 1},
+		{"on, trusted proxy", Config{AnonymousRooms: true, TrustedProxies: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}}, 0},
+		{"off", Config{}, 0},
+	} {
+		core, logs := observer.New(zapcore.WarnLevel)
+		warnAnonRooms(c.cfg, zap.New(core))
+		if n := logs.FilterMessage("anon_rooms_untrusted_peer").Len(); n != c.want {
+			t.Errorf("%s: %d warnings, want %d", c.name, n, c.want)
+		}
 	}
 }
 

@@ -129,6 +129,10 @@ type Config struct {
 	PushHosts []string
 	// DeviceSTTModelDir holds the files `models fetch` writes; empty offers no device transcription.
 	DeviceSTTModelDir string
+	// AnonymousRooms lets a browser without an invite create a room, AnonymousRoomsPerHour times per
+	// client IP an hour (019-AC1, 019-AC4).
+	AnonymousRooms        bool
+	AnonymousRoomsPerHour int
 }
 
 func loadConfig() (Config, error) {
@@ -150,7 +154,11 @@ func loadConfig() (Config, error) {
 	paraGap, err12 := time.ParseDuration(getEnv("GRILL_ROOM_VOICE_PARAGRAPH_GAP", web.DefaultVoiceParagraphGap.String()))
 	paraChars, err13 := strconv.Atoi(getEnv("GRILL_ROOM_VOICE_PARAGRAPH_MAX_CHARS", strconv.Itoa(web.DefaultVoiceParagraphMaxChars)))
 	paraClose, err14 := time.ParseDuration(getEnv("GRILL_ROOM_VOICE_PARAGRAPH_CLOSE", web.DefaultVoiceParagraphClose.String()))
+	anonRooms, err15 := strconv.ParseBool(getEnv("GRILL_ROOM_ANONYMOUS_ROOMS", "false"))
+	anonPerHour, err16 := strconv.Atoi(getEnv("GRILL_ROOM_ANONYMOUS_ROOMS_PER_HOUR", strconv.Itoa(web.DefaultAnonymousRoomsPerHour)))
 	return Config{
+		AnonymousRooms:         anonRooms,
+		AnonymousRoomsPerHour:  anonPerHour,
 		NotesWatchDelay:        notesDelay,
 		VoiceParagraphGap:      paraGap,
 		VoiceParagraphMaxChars: paraChars,
@@ -192,7 +200,7 @@ func loadConfig() (Config, error) {
 		DaemonPrevDir:     os.Getenv("GRILL_ROOM_DAEMON_PREV_DIR"),
 		SandboxImage:      os.Getenv("GRILL_ROOM_SANDBOX_IMAGE"),
 		DeviceSTTModelDir: os.Getenv("GRILL_ROOM_DEVICE_STT_MODEL_DIR"),
-	}, errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9, err10, err11, err12, err13, err14)
+	}, errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9, err10, err11, err12, err13, err14, err15, err16)
 }
 
 // Validate rejects a configuration the server cannot run with.
@@ -230,6 +238,9 @@ func (c Config) Validate() error {
 	}
 	if c.VoiceParagraphClose <= 0 || c.VoiceParagraphClose < c.VoiceParagraphGap {
 		return fmt.Errorf("GRILL_ROOM_VOICE_PARAGRAPH_CLOSE %s: want above 0 and at least GRILL_ROOM_VOICE_PARAGRAPH_GAP %s", c.VoiceParagraphClose, c.VoiceParagraphGap)
+	}
+	if c.AnonymousRoomsPerHour < 1 || c.AnonymousRoomsPerHour > 1000 {
+		return fmt.Errorf("GRILL_ROOM_ANONYMOUS_ROOMS_PER_HOUR %d: want 1 to 1000", c.AnonymousRoomsPerHour)
 	}
 	if c.PandocTimeout <= 0 {
 		return fmt.Errorf("GRILL_ROOM_PANDOC_TIMEOUT %s: want a positive duration", c.PandocTimeout)
@@ -289,6 +300,14 @@ func (c Config) validateVoice() error {
 		return fmt.Errorf("GRILL_ROOM_LIVEKIT_API_KEY must be set and GRILL_ROOM_LIVEKIT_API_SECRET hold %d+ characters", livekit.MinSecretLen)
 	}
 	return nil
+}
+
+// warnAnonRooms warns that, behind a proxy the server does not trust, every client counts as the
+// proxy's IP: they share one anonymous rooms limit (019-AC4).
+func warnAnonRooms(c Config, log *zap.Logger) {
+	if c.AnonymousRooms && len(c.TrustedProxies) == 0 {
+		log.Warn("anon_rooms_untrusted_peer", zap.String("hint", "without GRILL_ROOM_TRUSTED_PROXIES every client behind a proxy shares one GRILL_ROOM_ANONYMOUS_ROOMS_PER_HOUR limit"))
+	}
 }
 
 func newLogger(c Config) (*zap.Logger, error) {
@@ -475,6 +494,8 @@ func run() error {
 		StagingDir:             cfg.StagingDir,
 		PluginClient:           testPluginClient(logger),
 		DeviceSTTDir:           cfg.DeviceSTTModelDir,
+		AnonymousRooms:         cfg.AnonymousRooms,
+		AnonymousRoomsPerHour:  cfg.AnonymousRoomsPerHour,
 	}, logger)
 	if cfg.SMTP.Addr == "" {
 		logger.Info("email_signin_disabled", zap.String("hint", "set GRILL_ROOM_SMTP_ADDR and GRILL_ROOM_SMTP_FROM to send magic links"))
@@ -485,6 +506,7 @@ func run() error {
 	if cfg.DeviceSTTModelDir == "" {
 		logger.Info("device_stt_disabled", zap.String("hint", "set GRILL_ROOM_DEVICE_STT_MODEL_DIR to offer on-device transcription"))
 	}
+	warnAnonRooms(cfg, logger)
 	reg := newRegistry(b, srv)
 
 	appSrv := &http.Server{

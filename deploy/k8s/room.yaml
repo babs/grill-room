@@ -113,6 +113,11 @@ spec:
               value: "${GRILL_ROOM_SMTP_ADDR}"
             - name: GRILL_ROOM_SMTP_FROM
               value: "${GRILL_ROOM_SMTP_FROM}"
+            # Empty keeps the server defaults: off, 3 per hour.
+            - name: GRILL_ROOM_ANONYMOUS_ROOMS
+              value: "${GRILL_ROOM_ANONYMOUS_ROOMS}"
+            - name: GRILL_ROOM_ANONYMOUS_ROOMS_PER_HOUR
+              value: "${GRILL_ROOM_ANONYMOUS_ROOMS_PER_HOUR}"
             # Empty for a relay without auth.
             - name: GRILL_ROOM_SMTP_USERNAME
               valueFrom:

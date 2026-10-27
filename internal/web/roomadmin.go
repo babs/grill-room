@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -16,6 +17,13 @@ import (
 
 // ActorProfile prefixes the profile uuid of a room admin as an audit actor (004-AC6).
 const ActorProfile = store.ActorProfile
+
+const (
+	// DefaultAnonymousRoomsPerHour is how many rooms one client IP creates without a profile in
+	// anonRoomWindow (019-AC4).
+	DefaultAnonymousRoomsPerHour = 3
+	anonRoomWindow               = time.Hour
+)
 
 // Audit actions of room admins and instance settings (004-AC6 to 004-AC8).
 const (
@@ -259,6 +267,90 @@ func (s *Server) createProfileRoom(w http.ResponseWriter, r *http.Request) {
 		s.log.Info("room_created", zap.String("room", room.ID), zap.Int64("profile", p.ID))
 		writeJSON(w, http.StatusCreated, room)
 	}
+}
+
+// createAnonymousRoom creates, for a browser without a profile, a profile and a blank room it joins
+// as room admin, when the operator allows it, a few times per client IP an hour (019-AC1 to 019-AC7).
+func (s *Server) createAnonymousRoom(w http.ResponseWriter, r *http.Request) {
+	if !s.opts.AnonymousRooms {
+		http.NotFound(w, r)
+		return
+	}
+	if crossSite(r) {
+		httpError(w, http.StatusForbidden, "cross-site request refused")
+		return
+	}
+	if p, err := s.profileFromCookie(r); err != nil {
+		s.serverError(w, "create_room_failed", err)
+		return
+	} else if p != nil {
+		httpError(w, http.StatusConflict, "You already have a profile: create the room from your profile page")
+		return
+	}
+	var req struct {
+		Name        string `json:"name"`
+		DisplayName string `json:"display_name"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	name, ok := cleanText(req.Name, maxRoomName, false)
+	if !ok {
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("name must be 1 to %d characters", maxRoomName))
+		return
+	}
+	display, ok := cleanText(req.DisplayName, maxNameLen, false)
+	if !ok {
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("display name must be 1 to %d characters", maxNameLen))
+		return
+	}
+	// The creation mode, a settings read, is checked before the limiter: a refusal costs no write; the
+	// quota scan comes after it, so an IP over its limit cannot run it; a quota refusal gives its slot
+	// back (019-AC4, 019-AC5). ponytail: at the quota an IP under its limit repeats the scan; cache
+	// "at quota" for a few seconds if that ever shows up.
+	if err := s.bus.Store.AnonymousCreationAllowed(r.Context()); errors.Is(err, store.ErrCreationRefused) {
+		httpError(w, http.StatusForbidden, err.Error())
+		return
+	} else if err != nil {
+		s.serverError(w, "create_room_failed", err)
+		return
+	}
+	hit, retry, err := s.anonLimit.allow(r.Context(), "ip:"+rateIP(s.clientIP(r)), s.opts.AnonymousRoomsPerHour, s.now())
+	if err != nil {
+		s.serverError(w, "anon_room_limit_failed", err)
+		return
+	}
+	if hit == 0 {
+		wait := retryAfter(w, retry)
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"reason": "rate_limited", "retry_after_s": wait,
+			"error": "too many rooms created from your network, retry in " + strconv.FormatInt((wait+59)/60, 10) + " min"})
+		return
+	}
+	id := strings.ToLower(NewToken())
+	e := store.AuditEntry{At: s.now(), Action: ActionRoomCreate, TargetKind: store.TargetRoom, TargetID: id, TargetName: name}
+	ctx := store.WithAudit(r.Context(), e, map[string]any{"as": display, "anonymous": true})
+	recovery, profileTok, tok, link := NewToken(), NewToken(), NewToken(), NewToken()
+	room, profileID, err := s.bus.Store.CreateAnonymousRoom(ctx, id, name, display, HashToken(recovery), HashToken(profileTok),
+		HashToken(NewToken()), HashToken(tok), link, HashToken(link))
+	if err != nil {
+		// A refused or failed creation spends no allowance (019-AC4).
+		if err := s.anonLimit.unhit(context.WithoutCancel(r.Context()), hit); err != nil {
+			s.log.Warn("anon_room_unhit_failed", zap.Error(err))
+		}
+		if errors.Is(err, store.ErrCreationRefused) {
+			httpError(w, http.StatusForbidden, err.Error())
+		} else {
+			s.serverError(w, "create_room_failed", err)
+		}
+		return
+	}
+	s.log.Info("room_created", zap.String("room", room.ID), zap.Int64("profile", profileID), zap.Bool("anonymous", true))
+	setRoomCookie(w, r, room.ID, tok)
+	setProfileCookie(w, r, profileTok)
+	writeJSON(w, http.StatusCreated, struct {
+		*store.Room
+		RecoveryURL string `json:"recovery_url"`
+	}{room, s.recoveryURL(recovery)})
 }
 
 // setProfileMaxRooms sets a profile's own limit on the rooms it creates: `max_rooms` 1 to 1000,
