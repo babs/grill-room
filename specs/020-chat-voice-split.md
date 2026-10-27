@@ -22,7 +22,6 @@ On a wide screen, the chat shows the written exchange: typed messages, persona r
 
 ## Out of scope
 
-- Resizing the transcription pane with a handle: fixed size until someone needs it.
 - Changing what agents read: their transcript stays interleaved (003-AC23).
 - A smaller type scale on other pages, or any size under 0.9375rem.
 - Phones: font size unchanged (inputs stay at 16 px), no pane, only the filter.
@@ -46,7 +45,7 @@ On a wide screen, the chat shows the written exchange: typed messages, persona r
 
 ### Transcription pane
 
-- [x] **AC8** At a viewport of 64rem or wider with no document open, while the chat keeps 22rem beside it, the room shows a "Transcription" pane, 20rem wide, to the right of the chat. It lists the room's voice messages; the chat shows Written messages and no filter.
+- [x] **AC8** At a viewport of 64rem or wider with no document open, while the chat keeps 22rem beside it, the room shows a "Transcription" pane, 20rem wide by default (AC19), to the right of the chat. It lists the room's voice messages; the chat shows Written messages and no filter.
 - [x] **AC9** With a document open at that width, the pane sits above the chat's messages, in the chat column, at most 40% of its height. The composer stays at the bottom of the column.
 - [x] **AC10** The pane is live: a new voice line and a paragraph append (018-AC5) show at once. It sticks to the bottom as the chat does: pinned while the reader is within 40 px of the end, left alone once they scroll up.
 - [x] **AC11** A voice message in the pane keeps what it has in the chat today: speaker, time, source (device/server), the mention state of a voice trigger (006-AC18), and the edit/delete menu for its author.
@@ -56,7 +55,10 @@ On a wide screen, the chat shows the written exchange: typed messages, persona r
 
 ### Type size
 
-- [x] **AC15** On the room page, wider than 40rem, message text (system lines excepted), the composer and the pane use 0.9375rem; `--fs-xs` and `--fs-sm` are unchanged. At 40rem and under nothing changes. `docs/design.md` records the room-page exception.
+- [x] **AC15** On the room page, wider than 40rem, message text (system lines excepted) and the composer use 0.9375rem, the pane `--fs-sm` (AC18); `--fs-xs` and `--fs-sm` are unchanged. At 40rem and under nothing changes. `docs/design.md` records the room-page exception.
+
+- [x] **AC18** (user, 2026-10-27) Voice messages in the Transcription pane use `--fs-sm` (0.875rem) for their text; their name and time keep the chat's sizes.
+- [x] **AC19** (user, 2026-10-27) Beside the chat, the pane's left edge is a drag handle, as for the side panel and Notes (008-AC2): a focusable `role="separator"` with `aria-valuenow`, `aria-valuemin` and `aria-valuemax`, ← / → by 16 px, a hit area at least 12 px wide over the pane's full height. The width runs from 192 px (12rem) to 480 px (30rem), 320 px (20rem) by default, and is kept per browser. A drag never leaves the chat under 22rem: past that it stops. The pane shows (AC8) while the chat keeps 22rem beside its 192 px minimum; where its stored width does not fit, it is drawn narrower and the stored width is kept for wider screens. Folded, or above the chat with a document open, the pane has no handle.
 
 ### Unchanged
 
@@ -82,6 +84,12 @@ On a wide screen, the chat shows the written exchange: typed messages, persona r
 - **Data model impact**: none
 - **DoD**: `make e2e` green with cases: at 1280 px a voice line lands in the pane, not the chat, and a paragraph append updates it in place; with a document open the pane is above the messages and the composer is the column's last element; fold shows the filter and the count, reload keeps it folded; at 900 px no pane and the filter shows; the author's menu edits a line in the pane; the AC14 test checks the pane's name, `aria-live`, `aria-expanded`, DOM order, focus ring and target size.
 
+### Phase 4 — Pane text and width (user, 2026-10-27)
+- Work: pane text at `--fs-sm`; a `transcript` entry in the room's pane widths (`--transcript-w`, `grill-room-transcript-w`), its handle on the pane's left edge, the fit test and the drag cap on the chat's 22rem.
+- **Covers**: AC18, AC19
+- **Data model impact**: none
+- **DoD**: `make e2e` green with `e2e/transcription-pane.spec.js` cases: pane text 14 px while the chat's is 15 px; drag and keyboard resize within 192 to 480 px, kept after a reload; at 1024 px a drag stops with the chat at 22rem and the pane still shown; no handle folded or with a document open.
+
 ## Data model impact (summary)
 
 Two partial indexes on `messages` (Phase 1), `WHERE kind <> 'text'`, by room and by participant. No table or column change.
@@ -93,7 +101,7 @@ Two partial indexes on `messages` (Phase 1), `WHERE kind <> 'text'`, by room and
 ## Decisions
 
 - Wide screen means 64rem and up: `#side` (16rem) + chat + pane (20rem) leave the chat about 28rem at 64rem. Overturnable.
-- Pane width fixed at 20rem, no resize handle (Out of scope).
+- Pane width fixed at 20rem, no resize handle. Superseded 2026-10-27 (user): AC19 makes it resizable.
 - Filter and fold state are per browser (`localStorage`), not per room or per profile, like the voice unread opt-in (005-AC12).
 - "Written" includes persona replies and room events: they answer the written exchange as much as the spoken one.
 - A typed message stays a paragraph boundary only through the existing "a turn has read it" rule (AC3).

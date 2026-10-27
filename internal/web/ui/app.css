@@ -106,9 +106,13 @@ body.room { position: fixed; top: var(--vv-top, 0); left: 0; right: 0; height: 1
 .room-header { flex-wrap: nowrap; gap: var(--sp-5); }
 .room-header .zone { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
 .zone-room { flex: 0 1 auto; }
-.zone-agents { flex: 1 1 auto; overflow-x: auto; scrollbar-width: thin; }
+.zone-agents { flex: 1 1 auto; }
 .zone-me { flex: none; margin-left: auto; }
-#persona-buttons { display: flex; gap: var(--sp-2); min-width: 0; }
+/* The pills never shrink and never spill: the bar scrolls them; the status takes only what is left. */
+#persona-buttons { display: flex; flex: 0 1 auto; gap: var(--sp-2); min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+#agent-status { flex: 1 1 0; min-width: 0; }
+/* --warning is under 3:1 on the chrome. */
+.app-header #agent-warn { flex: none; color: var(--accent); }
 .auto-turns, #agent-status { color: var(--chrome-muted); font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .audio { display: flex; align-items: center; gap: var(--sp-2); }
 /* The audio bar (005-AC49): what is off reads in the danger colour, the icon slashed besides. */
@@ -481,7 +485,10 @@ body.transcript-room:has(#viewer[hidden]) .chat { display: grid; grid-template: 
 .chat > #chat-empty { grid-area: cempty; }
 .chat > #send { grid-area: send; }
 .chat > #transcript { grid-area: pane; }
-body.transcript-room:has(#viewer[hidden]) #transcript { width: 20rem; border-left: 1px solid var(--border); }
+body.transcript-room:has(#viewer[hidden]) #transcript { position: relative; width: var(--transcript-w); border-left: 1px solid var(--border); }
+/* On the pane's left edge, over its full height; folded, it goes with the rest (020-AC19). */
+#transcript-handle { position: absolute; inset: 0 auto 0 -6px; margin: 0; }
+body:has(#viewer:not([hidden])) #transcript-handle { display: none; }
 body.fold-transcript:has(#viewer[hidden]) #transcript { width: 56px; }
 body.fold-transcript:has(#viewer[hidden]) #transcript .pane-head { flex-direction: column; padding: var(--sp-3) 0; }
 body.fold-transcript:has(#viewer[hidden]) #transcript :is(.sec-label, #transcript-off) { display: none; }
@@ -494,6 +501,8 @@ body.transcript-room:has(#viewer:not([hidden])) #transcript { order: -1; flex: 0
 .msg .body { overflow-wrap: anywhere; }
 /* Room page only, from 40rem: more of the chat fits beside a document (020-AC15). */
 @media (width > 40rem) { body.room :is(.msg:not(.system) .body, #send textarea) { font-size: 0.9375rem; } }
+/* The pane's text a step under the chat's: more of what is said fits beside it (020-AC18). */
+#voice-lines .msg .body { font-size: var(--fs-sm); }
 .msg .body :is(p, ul, ol, pre, table, blockquote) { margin: var(--sp-1) 0; }
 .msg .body :is(ul, ol) { padding-left: var(--sp-5); }
 .msg .body pre { overflow-x: auto; padding: var(--sp-2); background: var(--border); border-radius: var(--r-sm); }
@@ -550,7 +559,7 @@ mark.mention-chip.me { background: var(--accent); color: var(--on-accent); }
 }
 @media (max-width: 64rem) {
   button.persona .pstate { display: none; }
-  #agent-status { display: none; }
+  :is(#agent-status, #agent-warn) { display: none; }
 }
 /* The phone's tab bar (005-AC36), hidden on wider screens. */
 .tabbar { display: none; }
@@ -558,7 +567,8 @@ mark.mention-chip.me { background: var(--accent); color: var(--on-accent); }
   /* Phones: one header row, the personas on a 44 px strip that scrolls sideways, then one tab. */
   .room-header { flex-wrap: wrap; row-gap: 0; padding: var(--sp-1) var(--sp-2); }
   .zone-room { flex: 1 1 0; }
-  .zone-agents { order: 1; flex: 1 0 100%; overflow-x: auto; scrollbar-width: none; }
+  .zone-agents { order: 1; flex: 1 0 100%; }
+  #persona-buttons { scrollbar-width: none; }
   .zone-me { gap: 0; }
   #voice-join { padding: 0 var(--sp-3); }
   /* The audio bar's 44 px icons leave the room's name little width: Leave moves into ⋯, the logo
@@ -603,7 +613,7 @@ input[aria-invalid=true] { border-color: var(--danger); }
 
 /* Panes (008): the side panel and Notes keep the width the reader drags, from 64rem up; the
    document keeps 24rem, Notes gives way first, then the side panel. */
-:root { --list-w: 256px; --notes-w: 320px; }
+:root { --list-w: 256px; --notes-w: 320px; --transcript-w: 320px; }
 .pane-handle, .fold, #notes-back, #viewer-empty { display: none; }
 @media (min-width: 64rem) {
   #side { flex: 0 1 var(--list-w); width: auto; min-width: 12rem; }

@@ -280,15 +280,20 @@ function setFilter(f, keep) {
 for (const b of $('chat-filter').querySelectorAll('button')) b.addEventListener('click', () => setFilter(b.dataset.filter, true));
 
 // Transcription pane (020-AC8 to AC12): this moves the voice lines in or out; CSS places it.
-// It needs 64rem and, beside the chat, room for the chat's 22rem next to its 20rem (docs/design.md).
+// It needs 64rem and, beside the chat, room for the chat's 22rem next to its 192 px minimum
+// (docs/design.md, 020-AC19).
 const wide = matchMedia('(min-width: 64rem)');
+const paneMin = 192;
+const rootStyle = getComputedStyle(document.documentElement);
+// chatRoom is how wide the pane may be with the chat keeping its 22rem beside it.
+const chatRoom = () => chatColumn.clientWidth - 22 * parseFloat(rootStyle.fontSize);
 let paneFits = false;
 let paneCount = 0;
 const paneFolded = () => document.body.classList.contains('fold-transcript');
 const paneShows = () => paneFits && !paneFolded();
 
 function placeVoice() {
-  paneFits = !docsMode && wide.matches && (!$('viewer').hidden || chatColumn.clientWidth >= 42 * parseFloat(getComputedStyle(document.documentElement).fontSize));
+  paneFits = !docsMode && wide.matches && (!$('viewer').hidden || chatRoom() >= paneMin);
   document.body.classList.toggle('transcript-room', paneFits);
   const show = paneShows();
   const moving = show ? messages.querySelectorAll(':scope > li.voice') : voiceLines.children;
@@ -616,11 +621,27 @@ function renameSenders() {
   }
 }
 
-// agentError says why an action on the AI failed: in the header's status where it shows, in the
+// agentStatus writes the header's status. A warning is the alert icon, its words in its tip and
+// description, and read out by the status, visually hidden, so the personas keep the bar.
+function agentStatus(text, warn) {
+  const st = $('agent-status');
+  const icon = $('agent-warn');
+  st.textContent = text;
+  st.classList.toggle('sr-only', warn);
+  icon.hidden = !warn;
+  icon.dataset.tip = warn ? text : '';
+  if (grillTip.shownFor() === icon) grillTip.refresh();
+}
+// A tap shows the tip a touch screen has no hover for.
+$('agent-warn').addEventListener('click', () => grillTip.show($('agent-warn')));
+
+// agentError says why an action on the AI failed: in the header's warning where it shows, in the
 // notice where a narrow screen hides it.
 function agentError(text) {
-  $('agent-status').textContent = text;
-  if (!$('agent-status').offsetParent) showNotice(text);
+  agentStatus(text, true);
+  const r = $('agent-warn').getBoundingClientRect();
+  const z = $('agent').getBoundingClientRect();
+  if (!r.width || r.left < z.left - 0.5 || r.right > z.right + 0.5) showNotice(text);
 }
 
 function explain(title, text) {
@@ -1610,17 +1631,28 @@ matchMedia('(max-width: 40rem)').addEventListener('change', () => {
 const panes = {
   side: { key: 'grill-room-list-w', prop: '--list-w', min: 192, max: 480, def: 256, pane: $('side'), handle: $('side-handle'), edge: 'right' },
   notes: { key: 'grill-room-notes-w', prop: '--notes-w', min: 256, max: 640, def: 320, pane: $('annotations'), handle: $('notes-handle'), edge: 'left' },
+  // A drag stops where the chat would go under its 22rem (020-AC19).
+  transcript: { key: 'grill-room-transcript-w', prop: '--transcript-w', min: paneMin, max: 480, def: 320, pane: $('transcript'), handle: $('transcript-handle'), edge: 'left', cap: chatRoom },
 };
 const clampWidth = (p, w) => Math.round(Math.min(p.max, Math.max(p.min, w)));
+const capWidth = (p, w) => (p.cap ? Math.min(w, p.cap()) : w);
 function setWidth(p, w, store) {
-  w = clampWidth(p, w);
-  document.documentElement.style.setProperty(p.prop, w + 'px');
-  p.handle.setAttribute('aria-valuenow', String(w));
-  if (store) localStorage.setItem(p.key, String(w));
+  p.width = clampWidth(p, w);
+  drawWidth(p);
+  if (store) localStorage.setItem(p.key, String(p.width));
 }
+// drawWidth draws the width kept, or less where the chat leaves less; the kept one comes back on a
+// wider screen (020-AC19).
+function drawWidth(p) {
+  const max = p.cap ? Math.max(p.min, Math.min(p.max, Math.floor(p.cap()))) : p.max;
+  const w = Math.min(p.width, max);
+  document.documentElement.style.setProperty(p.prop, w + 'px');
+  p.handle.setAttribute('aria-valuemax', String(max));
+  p.handle.setAttribute('aria-valuenow', String(w));
+}
+new ResizeObserver(() => drawWidth(panes.transcript)).observe(chatColumn);
 for (const p of Object.values(panes)) {
   p.handle.setAttribute('aria-valuemin', String(p.min));
-  p.handle.setAttribute('aria-valuemax', String(p.max));
   setWidth(p, Number(localStorage.getItem(p.key)) || p.def, false);
   // Dragging the right edge of the side panel widens it; the left edge of Notes, the other way.
   const sign = p.edge === 'right' ? 1 : -1;
@@ -1631,11 +1663,17 @@ for (const p of Object.values(panes)) {
     p.handle.classList.add('dragging');
     const r = p.pane.getBoundingClientRect();
     const origin = p.edge === 'right' ? r.left : r.right;
-    const move = (ev) => setWidth(p, sign * (ev.clientX - origin), false);
+    let moved = false;
+    const move = (ev) => {
+      moved = true;
+      setWidth(p, capWidth(p, sign * (ev.clientX - origin)), false);
+    };
     const done = () => {
       p.handle.classList.remove('dragging');
       p.handle.removeEventListener('pointermove', move);
-      localStorage.setItem(p.key, p.handle.getAttribute('aria-valuenow'));
+      // A bare click keeps the width kept for a wider screen (020-AC19); a window resized during the
+      // drag may have taken the room it reached.
+      if (moved) setWidth(p, capWidth(p, p.width), true);
     };
     p.handle.addEventListener('pointermove', move);
     p.handle.addEventListener('lostpointercapture', done, { once: true });
@@ -1644,7 +1682,10 @@ for (const p of Object.values(panes)) {
     const step = { ArrowRight: 16, ArrowLeft: -16 }[e.key];
     if (!step) return;
     e.preventDefault();
-    setWidth(p, Number(p.handle.getAttribute('aria-valuenow')) + sign * step, true);
+    const now = Number(p.handle.getAttribute('aria-valuenow'));
+    const w = clampWidth(p, capWidth(p, now + sign * step));
+    // A key at a limit changes nothing, the width kept for a wider screen included (020-AC19).
+    if (w !== now) setWidth(p, w, true);
   });
 }
 // A drawer's disclosure triangle names the drawer and says its state in aria-expanded; the whole
@@ -2332,8 +2373,9 @@ function renderAgent() {
   renderPersonaCard();
   if (ttsOn && !voiceList) loadVoices().catch(console.error);
   const running = (agent.running || []).map((t) => [personaByID(t.persona_id), t]).filter(([p]) => p);
-  $('agent-status').textContent = !agent.online ? (agent.reason || 'AI offline')
-    : running.length ? running.map(([p, t]) => turnText(p, t)).join(', ') + '…' : agent.personas.length === 0 ? 'No persona: add one.' : '';
+  if (!agent.online) agentStatus(agent.reason || 'AI offline', true);
+  else if (running.length) agentStatus(running.map(([p, t]) => turnText(p, t)).join(', ') + '…', false);
+  else agentStatus(agent.personas.length === 0 ? 'No persona: add one.' : '', agent.personas.length === 0);
   renderRunning();
   renderQueue();
   renderApprovals();
