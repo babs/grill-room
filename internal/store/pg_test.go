@@ -105,7 +105,7 @@ func TestConcurrentOpensMakeOneSchema(t *testing.T) {
 	}
 	_ = s.Close()
 	want := snapshot(t, ref)
-	if !slices.Contains(want, "schema_version |  | 51") || !slices.Contains(want, "rows pronunciations 130") || !slices.Contains(want, "rows starters 4") {
+	if !slices.Contains(want, "schema_version |  | 52") || !slices.Contains(want, "rows pronunciations 130") || !slices.Contains(want, "rows starters 4") {
 		t.Fatalf("a single open made:\n%s", strings.Join(want, "\n"))
 	}
 
@@ -368,7 +368,7 @@ func TestMigrate(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = s.Close()
-	if s, err := Open(newer); err == nil || !strings.Contains(err.Error(), "schema version 99 is newer than this server's 51") {
+	if s, err := Open(newer); err == nil || !strings.Contains(err.Error(), "schema version 99 is newer than this server's 52") {
 		if err == nil {
 			_ = s.Close()
 		}
@@ -632,6 +632,28 @@ func TestOpenTakesCredentialsFromEnv(t *testing.T) {
 	openAt(t, u.String())
 }
 
+// 020-AC1, 020-AC17: migration 52 adds the partial non-typed message indexes to a database at
+// version 51.
+func TestMigrateNonTextIndexes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	dsn := testDSN(t)
+	s := openAt(t, dsn)
+	if _, err := s.db.ExecContext(ctx, `DROP INDEX messages_room_nontext, messages_participant_nontext`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE schema_version SET version = 51`); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	s = openAt(t, dsn)
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM pg_indexes WHERE tablename = 'messages'
+		AND indexname IN ('messages_room_nontext', 'messages_participant_nontext') AND indexdef LIKE '%WHERE (kind <> ''text''::text)'`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("%d partial indexes after the migration: %v", n, err)
+	}
+}
+
 // 018-AC5: migration 51 adds messages.appended_at to a database at version 50, its lines kept.
 func TestMigrateAppendedAt(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
@@ -639,7 +661,8 @@ func TestMigrateAppendedAt(t *testing.T) {
 	dsn := testDSN(t)
 	s := openAt(t, dsn)
 	p := seed(t, s, "a")
-	if _, err := s.db.ExecContext(ctx, `ALTER TABLE messages DROP COLUMN appended_at`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE messages DROP COLUMN appended_at;
+		DROP INDEX messages_room_nontext, messages_participant_nontext`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.db.ExecContext(ctx, `UPDATE schema_version SET version = 50`); err != nil {
@@ -648,7 +671,7 @@ func TestMigrateAppendedAt(t *testing.T) {
 	_ = s.Close()
 	s = openAt(t, dsn)
 	var v int
-	if err := s.db.QueryRowContext(ctx, `SELECT version FROM schema_version`).Scan(&v); err != nil || v != 51 {
+	if err := s.db.QueryRowContext(ctx, `SELECT version FROM schema_version`).Scan(&v); err != nil || v != baselineVersion+len(migrations) {
 		t.Fatalf("version %d: %v", v, err)
 	}
 	msgs, err := s.Messages(ctx, "a", 0, 10)

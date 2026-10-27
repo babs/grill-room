@@ -174,7 +174,7 @@ func (s *Store) profileRooms(ctx context.Context, profileID int64) ([]ProfileRoo
 		SELECT r.id, r.name, pa.id, pa.name, pa.joined_at,
 			(SELECT COUNT(DISTINCT COALESCE(p.profile_id, -p.id)) FROM participants p
 				WHERE p.room_id = r.id AND p.removed_at IS NULL),
-			COALESCE((SELECT COALESCE(appended_at, ts) FROM messages WHERE room_id = r.id ORDER BY id DESC LIMIT 1), r.created_at),
+			COALESCE(`+roomActivitySQL+`, r.created_at),
 			EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = r.id AND a.profile_id = pa.profile_id)
 		FROM participants pa
 		JOIN rooms r ON r.id = pa.room_id

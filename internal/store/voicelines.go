@@ -41,7 +41,8 @@ func (j VoiceJoin) wanted() bool { return j.GapS != nil && *j.GapS < j.MaxGap.Se
 
 // PostVoiceLine stores m, a voice line at now, unless dup reports it repeats one of the bodies of
 // its participant's voice lines from the other source since now-window (010-AC16). When j allows
-// it, the line joins the room's latest message instead, its speaker's open paragraph (018-AC4).
+// it, the line joins the room's latest non-typed message instead, its speaker's open paragraph
+// (018-AC4, 020-AC1).
 // The check and the write are one write transaction: two pods posting the same utterance store it
 // once. m comes back as stored: the whole paragraph after an append.
 // ponytail: the check and the insert hold the cluster-wide write lock; take a per-participant
@@ -98,16 +99,17 @@ func (s *Store) PostVoiceLine(ctx context.Context, m *Message, now time.Time, wi
 	return res, nil
 }
 
-// appendVoiceLine joins m to the room's latest message when that is m's speaker's open paragraph
-// (018-AC4), and reports whether it did; m then holds the paragraph. Like an edit it bumps
-// change_seq, so every page redraws it, but it writes no version and no edited_at (018-AC5).
+// appendVoiceLine joins m to the room's latest message other than a typed one when that is m's
+// speaker's open paragraph (018-AC4, 020-AC1), and reports whether it did; m then holds the
+// paragraph. Like an edit it bumps change_seq, so every page redraws it, but it writes no version
+// and no edited_at (018-AC5).
 func appendVoiceLine(ctx context.Context, t *txn, m *Message, now time.Time, maxChars int) (bool, error) {
 	var id int64
 	var pid sql.NullInt64
 	var kind, body string
 	var source, edited, deleted sql.NullString
 	err := t.QueryRowContext(ctx, `SELECT id, participant_id, kind, source, body, edited_at, deleted_at FROM messages
-		WHERE room_id = ? ORDER BY id DESC LIMIT 1`, m.RoomID).Scan(&id, &pid, &kind, &source, &body, &edited, &deleted)
+		WHERE room_id = ? AND kind <> 'text' ORDER BY id DESC LIMIT 1`, m.RoomID).Scan(&id, &pid, &kind, &source, &body, &edited, &deleted)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -121,7 +123,8 @@ func appendVoiceLine(ctx context.Context, t *txn, m *Message, now time.Time, max
 	}
 	// A turn that read the paragraph would never see its tail: MessageChanges reports changes
 	// through versions, and an append writes none. Turns start under the room's turn lock, so the
-	// latest one has the highest cursor; one being prepared holds that lock and has no row yet.
+	// latest one has the highest cursor; one being prepared holds that lock and has no row yet. A
+	// typed message after the paragraph that started a turn puts the cursor past it (020-AC3).
 	var read, free bool
 	if err := t.QueryRowContext(ctx, `SELECT COALESCE((SELECT message_cursor FROM turns WHERE room_id = ? ORDER BY id DESC LIMIT 1), 0) >= ?,
 		pg_try_advisory_xact_lock_shared(?, hashtext(?))`, m.RoomID, id, LockTurns, Sanitize(m.RoomID)).Scan(&read, &free); err != nil {

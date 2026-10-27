@@ -54,8 +54,8 @@ func TestPostVoiceLine(t *testing.T) {
 	}
 }
 
-// 018-AC4, 018-AC5: a line joins its speaker's latest voice message only while every condition
-// holds; each case breaks exactly one and gets a new message.
+// 018-AC4, 018-AC5, 020-AC1: a line joins its speaker's latest voice message only while every
+// condition holds; each case breaks exactly one and gets a new message.
 func TestPostVoiceLineAppends(t *testing.T) {
 	ctx := context.Background()
 	s := openTest(t)
@@ -91,13 +91,34 @@ func TestPostVoiceLineAppends(t *testing.T) {
 			l.body = "été à l'été"
 			l.chars = utf8.RuneCountInString(first + " " + l.body)
 		}, append: true},
-		{name: "not the latest message", before: func(t *testing.T, room string, ps []*Participant, _ *Message) func() {
+		// 020-AC1: typed messages, deleted or not, one or several, are not what a paragraph ends on.
+		{name: "a typed message after it", append: true, before: func(t *testing.T, room string, ps []*Participant, _ *Message) func() {
 			chat(t, s, room, ps[1], "ok")
 			return nil
 		}},
-		{name: "latest message deleted", before: func(t *testing.T, room string, ps []*Participant, _ *Message) func() {
+		{name: "two typed messages after it", append: true, before: func(t *testing.T, room string, ps []*Participant, _ *Message) func() {
+			chat(t, s, room, ps[0], "ok")
+			chat(t, s, room, ps[1], "sure")
+			return nil
+		}},
+		{name: "a deleted typed message after it", append: true, before: func(t *testing.T, room string, ps []*Participant, _ *Message) func() {
 			m := chat(t, s, room, ps[1], "ok")
 			if _, err := s.DeleteMessage(ctx, room, m.ID, ps[1].ID); err != nil {
+				t.Fatal(err)
+			}
+			return nil
+		}},
+		{name: "a room event after it", before: func(t *testing.T, room string, _ []*Participant, _ *Message) func() {
+			if err := s.InsertMessage(ctx, &Message{RoomID: room, Kind: KindSystem, Sender: "admin", Body: "renamed"}); err != nil {
+				t.Fatal(err)
+			}
+			return nil
+		}},
+		// 020-AC3: a typed message whose turn read the paragraph still ends it.
+		{name: "a typed message after it, read by a turn", before: func(t *testing.T, room string, ps []*Participant, _ *Message) func() {
+			m := chat(t, s, room, ps[1], "@grill thoughts?")
+			if _, err := s.db.ExecContext(ctx, `INSERT INTO turns(room_id, host, status, fresh, resume, message_cursor, annotation_cursor, prompt, started_at)
+				VALUES(?, '', 'done', 0, '', ?, 0, '', ?)`, room, m.ID, now()); err != nil {
 				t.Fatal(err)
 			}
 			return nil
