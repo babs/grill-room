@@ -362,3 +362,65 @@ func TestOrgProfileRefusesLinks(t *testing.T) {
 		}
 	}
 }
+
+// 021-AC8: any request on an expired seat takes it out of the audio, with no stream open, off the
+// request path and at most once a minute per seat.
+func TestReauthKicksOnAnyRequest(t *testing.T) {
+	idp := newTestIdP(t)
+	e := newOIDCEnv(t, idp, zap.NewNop(), nil)
+	lk := &fakeLiveKit{delay: 2 * time.Second}
+	lts := httptest.NewServer(lk)
+	t.Cleanup(lts.Close)
+	e.srv.opts.Voice = &Voice{URL: "wss://livekit.example", Key: "APIkey", Secret: lkSecret,
+		API: &livekit.Client{URL: lts.URL, Key: "APIkey", Secret: lkSecret, HTTP: lts.Client()}}
+	clk := e.clock()
+	room := e.createRoom(t, "R").ID
+	ines := e.device(t)
+	if resp, _ := ines.signIn(t, idp, map[string]any{"sub": "ines"}); resp.code != http.StatusSeeOther {
+		t.Fatalf("sign-in %d", resp.code)
+	}
+	seat := ines.join(t, room, "Ines")
+	kick := `RemoveParticipant {"identity":"` + itoa(seat.Participant.ID) + `","room":"` + room + `"}`
+	kicks := func() int {
+		n := 0
+		for _, c := range lk.got() {
+			if c == kick {
+				n++
+			}
+		}
+		return n
+	}
+	if code, _ := e.do(t, "GET", "/api/rooms/"+room, seat.Token, nil); code != http.StatusOK || kicks() != 0 {
+		t.Fatalf("within the window: %d %v", code, lk.got())
+	}
+	clk.add(DefaultOIDCRevalidate)
+	start := time.Now()
+	if code, b := e.do(t, "GET", "/api/rooms/"+room, seat.Token, nil); code != http.StatusUnauthorized || !strings.Contains(string(b), "reauth") {
+		t.Fatalf("past the window: %d %s", code, b)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("the 401 waited %s for LiveKit", d)
+	}
+	for deadline := time.Now().Add(5 * time.Second); kicks() == 0 && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if kicks() != 1 {
+		t.Fatalf("voice kept: %v", lk.got())
+	}
+	clk.add(kickEvery - time.Second)
+	if code, _ := e.do(t, "GET", "/api/rooms/"+room, seat.Token, nil); code != http.StatusUnauthorized {
+		t.Fatalf("again: %d", code)
+	}
+	time.Sleep(2500 * time.Millisecond)
+	if n := kicks(); n != 1 {
+		t.Errorf("%d kicks within a minute", n)
+	}
+	clk.add(time.Second)
+	_, _ = e.do(t, "GET", "/api/rooms/"+room, seat.Token, nil)
+	for deadline := time.Now().Add(5 * time.Second); kicks() < 2 && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if n := kicks(); n != 2 {
+		t.Errorf("a minute later: %d kicks", n)
+	}
+}

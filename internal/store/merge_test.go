@@ -511,6 +511,9 @@ func TestPurgeEmptyProfiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	keepers["admin"] = adm.ProfileID
+	// 021-AC11: an organisation account, emailless and roomless, is no empty profile.
+	keepers["bound"] = newProfile(t, s, "bound")
+	bindTo(t, s, keepers["bound"], "org-sub")
 	// Recent activity keeps an otherwise empty profile: a line by its revoked seat, a sign-in.
 	talker := joinWithProfile(t, s, "tk", "Talker", JoinProfile{RecoveryHash: "rec-tk", SessionHash: "sess-tk"})
 	if _, err := s.RevokeInvite(ctx, "tk", talker.InviteID, true, "Admin"); err != nil {

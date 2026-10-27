@@ -64,8 +64,17 @@ func restrictedRoom(t *testing.T) (e *env, o *OIDC, room string, actors []restri
 	if _, err := db.ExecContext(t.Context(), `UPDATE participants SET profile_id = NULL WHERE id = $1`, bare.Participant.ID); err != nil {
 		t.Fatal(err)
 	}
+	// 021-AC8: an internal room admin whose sign-in expired, last so the indexes above stay.
+	expired, xp := member("Exa")
+	if _, err := db.ExecContext(t.Context(), `UPDATE profiles SET oidc_issuer = $1, oidc_subject = 'exa', oidc_signed_in_at = $3 WHERE id = $2`, o.cfg.Issuer, xp,
+		time.Now().Add(-o.cfg.Revalidate-time.Hour).UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), `INSERT INTO room_admins(room_id, profile_id, created_at) VALUES($1, $2, '2026-01-01T00:00:00Z')`, room, xp); err != nil {
+		t.Fatal(err)
+	}
 	actors = []restrictedActor{{name: "admin"}, {name: "internal", d: internal}, {name: "external room admin", d: extAdmin},
-		{name: "external member", d: extMember}, {name: "no profile", bearer: bare.Token}}
+		{name: "external member", d: extMember}, {name: "no profile", bearer: bare.Token}, {name: "expired internal room admin", d: expired}}
 	for i, a := range actors {
 		code, b := a.do(t, e, "POST", "/api/rooms/"+room+"/invites", nil)
 		if code != http.StatusCreated {
@@ -92,9 +101,10 @@ const (
 	cellInvite  = "403 Only members of the organisation and room admins can invite"
 	cellLapsed  = "401 This invite no longer works"
 	cellNoReach = ""
+	cellReauth  = "401 " + msgReauth
 )
 
-// 021-AC6 021-AC7: every actor × create room, import, invite, shareable link, join through the
+// 021-AC6 021-AC7 021-AC8: every actor × create room, import, invite, shareable link, join through the
 // invite it made while open; restricted mode off, every cell is allowed as before. A cell left
 // empty is one the actor never reaches: no profile to create with, no shareable link for the admin.
 func TestRestrictedRules(t *testing.T) {
@@ -105,6 +115,8 @@ func TestRestrictedRules(t *testing.T) {
 		"external room admin": {cellCreate, cellCreate, cellOK, cellOK, cellOK},
 		"external member":     {cellCreate, cellCreate, cellInvite, cellInvite, cellLapsed},
 		"no profile":          {cellNoReach, cellNoReach, cellInvite, cellInvite, cellLapsed},
+		// 021-AC8: room admin or not, its invites lapse until it signs in again.
+		"expired internal room admin": {cellReauth, cellReauth, cellReauth, cellReauth, cellLapsed},
 	}
 	for _, on := range []bool{true, false} {
 		t.Run(fmt.Sprintf("restricted=%v", on), func(t *testing.T) {
@@ -285,5 +297,37 @@ func TestRestrictedFormerIssuer(t *testing.T) {
 		if code, b := c.do(); outcome(t, code, b) != c.want {
 			t.Errorf("%s: %s, want %s", c.op, outcome(t, code, b), c.want)
 		}
+	}
+}
+
+// 021-AC7, 021-AC8: an internal's invite lapses once its sign-in is past the revalidation, and works
+// again after the next one.
+func TestRestrictedInviteOfExpiredInternal(t *testing.T) {
+	idp := newTestIdP(t)
+	e := newOIDCEnv(t, idp, zap.NewNop(), nil)
+	clk := e.clock()
+	ines := e.device(t)
+	if resp, _ := ines.signIn(t, idp, map[string]any{"sub": "ines"}); resp.code != http.StatusSeeOther {
+		t.Fatalf("sign-in %d", resp.code)
+	}
+	room := e.createRoom(t, "R").ID
+	ines.join(t, room, "Ines")
+	code, b := ines.do(t, "POST", "/api/rooms/"+room+"/invites", nil)
+	if code != http.StatusCreated {
+		t.Fatalf("invite: %d %s", code, b)
+	}
+	tok := decodeJSON[invite](t, b).Token
+	join := func() (int, []byte) {
+		return e.do(t, "POST", "/api/join", "", map[string]string{"invite": tok, "name": "Guest"})
+	}
+	clk.add(DefaultOIDCRevalidate + time.Hour)
+	if code, b := join(); code != http.StatusUnauthorized || errorOf(t, b) != "This invite no longer works" {
+		t.Fatalf("expired creator's invite: %d %s", code, b)
+	}
+	if resp, _ := ines.signIn(t, idp, map[string]any{"sub": "ines"}); resp.code != http.StatusSeeOther {
+		t.Fatalf("sign-in %d", resp.code)
+	}
+	if code, b := join(); code != http.StatusCreated && code != http.StatusOK {
+		t.Fatalf("after a new sign-in: %d %s", code, b)
 	}
 }

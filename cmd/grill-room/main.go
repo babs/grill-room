@@ -176,6 +176,8 @@ func loadConfig() (Config, error) {
 			MemberGroup:  os.Getenv("GRILL_ROOM_OIDC_MEMBER_GROUP"),
 			GroupsClaim:  getEnv("GRILL_ROOM_OIDC_GROUPS_CLAIM", web.DefaultGroupsClaim),
 			Revalidate:   revalidate,
+			AdminGroup:   os.Getenv("GRILL_ROOM_OIDC_ADMIN_GROUP"),
+			Name:         getEnv("GRILL_ROOM_OIDC_NAME", web.DefaultOIDCName),
 		},
 		OIDCRevalidateSet:      revalidateSet,
 		AnonymousRooms:         anonRooms,
@@ -338,8 +340,8 @@ func (c Config) validateOIDC() error {
 	}
 	switch {
 	case set == 0:
-		if o.MemberGroup != "" || len(o.Scopes) > 0 || c.OIDCRevalidateSet {
-			return errors.New("GRILL_ROOM_OIDC_MEMBER_GROUP, GRILL_ROOM_OIDC_SCOPES and GRILL_ROOM_OIDC_REVALIDATE need GRILL_ROOM_OIDC_ISSUER")
+		if o.MemberGroup != "" || o.AdminGroup != "" || len(o.Scopes) > 0 || c.OIDCRevalidateSet {
+			return errors.New("GRILL_ROOM_OIDC_MEMBER_GROUP, GRILL_ROOM_OIDC_ADMIN_GROUP, GRILL_ROOM_OIDC_SCOPES and GRILL_ROOM_OIDC_REVALIDATE need GRILL_ROOM_OIDC_ISSUER")
 		}
 		return nil
 	case set < 3:

@@ -480,6 +480,9 @@ func TestValidateOIDC(t *testing.T) {
 		{"secret only", Config{PublicURL: "https://rooms.example", OIDC: web.OIDCConfig{ClientSecret: "s"}}, false},
 		{"group without issuer", Config{PublicURL: "https://rooms.example", OIDC: web.OIDCConfig{MemberGroup: "staff"}}, false},
 		{"scopes without issuer", Config{PublicURL: "https://rooms.example", OIDC: web.OIDCConfig{Scopes: []string{"x"}}}, false},
+		// 021-AC11: the admin group needs an issuer too; the provider name never refuses a start.
+		{"admin group without issuer", Config{PublicURL: "https://rooms.example", OIDC: web.OIDCConfig{AdminGroup: "ops"}}, false},
+		{"name without issuer", Config{PublicURL: "https://rooms.example", OIDC: web.OIDCConfig{Name: "Acme SSO"}}, true},
 		// 021-AC8: the revalidation window, 1h to 720h, with an issuer only.
 		{"revalidate without issuer", Config{PublicURL: "https://rooms.example", OIDC: web.OIDCConfig{Revalidate: time.Hour}, OIDCRevalidateSet: true}, false},
 		{"revalidate 0 without issuer", Config{PublicURL: "https://rooms.example", OIDCRevalidateSet: true}, false},
@@ -509,17 +512,17 @@ func revalidating(c web.OIDCConfig, d time.Duration) Config {
 func TestLoadConfigOIDC(t *testing.T) {
 	t.Setenv("GRILL_ROOM_DATABASE_URL", "postgres://u@db/x")
 	c, err := loadConfig()
-	if want := (web.OIDCConfig{Scopes: []string{}, GroupsClaim: web.DefaultGroupsClaim}); err != nil || !reflect.DeepEqual(c.OIDC, want) {
+	if want := (web.OIDCConfig{Scopes: []string{}, GroupsClaim: web.DefaultGroupsClaim, Name: web.DefaultOIDCName}); err != nil || !reflect.DeepEqual(c.OIDC, want) {
 		t.Fatalf("defaults: %+v %v", c.OIDC, err)
 	}
 	for k, v := range map[string]string{"GRILL_ROOM_OIDC_ISSUER": "https://idp.example", "GRILL_ROOM_OIDC_CLIENT_ID": "c", "GRILL_ROOM_OIDC_CLIENT_SECRET": "s",
 		"GRILL_ROOM_OIDC_SCOPES": " groups  offline_access ", "GRILL_ROOM_OIDC_MEMBER_GROUP": "staff", "GRILL_ROOM_OIDC_GROUPS_CLAIM": "roles",
-		"GRILL_ROOM_OIDC_REVALIDATE": "24h"} {
+		"GRILL_ROOM_OIDC_REVALIDATE": "24h", "GRILL_ROOM_OIDC_ADMIN_GROUP": "ops", "GRILL_ROOM_OIDC_NAME": "Acme SSO"} {
 		t.Setenv(k, v)
 	}
 	c, err = loadConfig()
 	want := web.OIDCConfig{Issuer: "https://idp.example", ClientID: "c", ClientSecret: "s", Scopes: []string{"groups", "offline_access"}, MemberGroup: "staff", GroupsClaim: "roles",
-		Revalidate: 24 * time.Hour}
+		Revalidate: 24 * time.Hour, AdminGroup: "ops", Name: "Acme SSO"}
 	if err != nil || !reflect.DeepEqual(c.OIDC, want) {
 		t.Fatalf("set: %+v %v", c.OIDC, err)
 	}

@@ -18,15 +18,20 @@
   // grillReauth goes, or returns false when the guard holds it back; true again once going, as
   // every failing call of the page asks.
   let going = false;
+  const signIn = (/** @type {string} */ prompt) => {
+    if (location.hash) sessionStorage.setItem(HASH_KEY, JSON.stringify({ at: here(), hash: location.hash, exp: Date.now() + HASH_TTL_MS }));
+    location.assign('/auth/login?' + prompt + 'next=' + encodeURIComponent(here()));
+  };
   window.grillReauth = () => {
     if (going) return true;
     if (Date.now() - Number(sessionStorage.getItem(KEY) || 0) < GUARD_MS) return false;
     going = true;
     sessionStorage.setItem(KEY, String(Date.now()));
-    if (location.hash) sessionStorage.setItem(HASH_KEY, JSON.stringify({ at: here(), hash: location.hash, exp: Date.now() + HASH_TTL_MS }));
-    location.assign('/auth/login?prompt=none&next=' + encodeURIComponent(here()));
+    signIn('prompt=none&');
     return true;
   };
+  // A sign-in asked for on the page, as the join page's button, comes back to it the same way (021-AC12).
+  window.grillSignIn = () => signIn('');
   const plain = window.fetch.bind(window);
   window.fetch = async (input, init) => {
     const res = await plain(input, init);

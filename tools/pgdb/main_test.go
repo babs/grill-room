@@ -41,6 +41,9 @@ func TestUsage(t *testing.T) {
 		{"url", "postgres://h/postgres"},
 		{"url", "postgres://h/postgres", "postgres"},
 		{"url", "postgres://h/postgres", "e2e_x; DROP DATABASE postgres"},
+		{"exec", "postgres://h/postgres", "e2e_x"},
+		{"exec", "postgres://h/postgres", "postgres", "SELECT 1"},
+		{"url", "postgres://h/postgres", "e2e_x", "SELECT 1"},
 	} {
 		if code, out, _ := call(args...); code != 2 || out != "" {
 			t.Errorf("%q: code %d, stdout %q", args, code, out)
@@ -52,6 +55,9 @@ func TestDSN(t *testing.T) {
 	for _, tc := range []struct{ server, want string }{
 		{"postgres://u:p@127.0.0.1:5432/postgres?sslmode=disable", "postgres://u:p@127.0.0.1:5432/e2e_1?sslmode=disable"},
 		{"postgresql://u@127.0.0.1", "postgresql://u@127.0.0.1/e2e_1"},
+		// A database in the query would win over the path: it goes.
+		{"postgres://u@127.0.0.1/postgres?dbname=other&sslmode=disable", "postgres://u@127.0.0.1/e2e_1?sslmode=disable"},
+		{"postgres://u@127.0.0.1/postgres?database=other", "postgres://u@127.0.0.1/e2e_1"},
 		{"host=127.0.0.1 user=u dbname=postgres", "host=127.0.0.1 user=u dbname=postgres dbname=e2e_1"},
 	} {
 		if got, err := dsn(tc.server, "e2e_1"); err != nil || got != tc.want {
@@ -141,5 +147,19 @@ func TestFresh(t *testing.T) {
 	}
 	if code, got, _ := call("url", server, name+"_missing"); code != 1 || got != "" {
 		t.Fatalf("url of a missing database: %d %q", code, got)
+	}
+
+	// exec runs on the database named, prints the rows changed; a missing one or bad SQL fails.
+	if code, got, errOut := call("exec", server, name, `INSERT INTO kept VALUES (1), (2)`); code != 0 || got != "2\n" {
+		t.Fatalf("exec: %d %q %s", code, got, errOut)
+	}
+	if n := scalar(t, db, `SELECT count(*)::text FROM kept`); n != "2" {
+		t.Fatalf("exec wrote %s rows", n)
+	}
+	if code, _, _ := call("exec", server, name+"_missing", `SELECT 1`); code != 1 {
+		t.Fatalf("exec on a missing database: %d", code)
+	}
+	if code, _, _ := call("exec", server, name, `NOT SQL`); code != 1 {
+		t.Fatalf("exec of bad SQL: %d", code)
 	}
 }

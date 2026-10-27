@@ -126,6 +126,11 @@ type Server struct {
 	// voiceLines, voiceDeduped and voiceAppended count the voice lines stored, dropped and joined to
 	// a paragraph, by VoiceSources.
 	voiceLines, voiceDeduped, voiceAppended map[string]*atomic.Int64
+	// kicks are when each expired seat was last taken out of the audio, by "room/participant".
+	kicks struct {
+		mu sync.Mutex
+		at map[string]time.Time
+	}
 	// routes are the patterns Handler registered; mux routes them and gate is the token gate in
 	// front of it, which MCP tools send their sub-requests through.
 	routes   []string
@@ -252,6 +257,8 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /auth/login", s.oidcLogin)
 		mux.HandleFunc("GET /auth/callback", s.oidcCallback)
 		mux.HandleFunc("POST /auth/logout", s.oidcLogout)
+		mux.HandleFunc("POST /api/admin/login/oidc", s.oidcAdminLogin)
+		mux.Handle("DELETE /api/admin/profiles/{id}/oidc", s.admin(s.unbindProfile))
 	}
 	static, _ := fs.Sub(ui, "ui") // cannot fail: "ui" is a valid embedded path
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
@@ -638,6 +645,10 @@ func (s *Server) participant(next func(http.ResponseWriter, *http.Request, sessi
 			httpError(w, http.StatusUnauthorized, "invalid or revoked token")
 			return
 		}
+		// An expired seat leaves the audio on any request, not only on an open stream's (021-AC8).
+		if errors.Is(err, errReauth) && sess.p != nil {
+			s.kickExpired(r.PathValue("room"), sess.p.ID)
+		}
 		if errors.Is(err, errReauth) && bearer(r) == "" {
 			// The expired seat is another profile's room cookie: the browser signed in as someone
 			// else, whom a new sign-in would not help; drop that cookie, as a bad seat's (021-AC8).
@@ -661,10 +672,11 @@ func (s *Server) participant(next func(http.ResponseWriter, *http.Request, sessi
 	})
 }
 
-// authorize returns the participant the first valid credential proves in room; errReauth when
-// only seats of internals past their revalidation do (021-AC8), ErrNotFound when none does.
+// authorize returns the participant the first valid credential proves in room; the first expired
+// one with errReauth when only seats of internals past their revalidation do (021-AC8),
+// ErrNotFound when none does.
 func (s *Server) authorize(ctx context.Context, creds []cred, room string) (*store.Participant, error) {
-	reauth := false
+	var expired *store.Participant
 	for _, c := range creds {
 		var p *store.Participant
 		var err error
@@ -677,15 +689,17 @@ func (s *Server) authorize(ctx context.Context, creds []cred, room string) (*sto
 			err = store.ErrNotFound
 		}
 		if err == nil && s.reauthDue(p.OIDCBinding) {
-			reauth = true
+			if expired == nil {
+				expired = p
+			}
 			continue
 		}
 		if !errors.Is(err, store.ErrNotFound) {
 			return p, err
 		}
 	}
-	if reauth {
-		return nil, errReauth
+	if expired != nil {
+		return expired, errReauth
 	}
 	return nil, store.ErrNotFound
 }
@@ -1065,8 +1079,8 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	} else if got != nil {
 		prof.ID = got.ID
 	}
-	if s.opts.OIDC != nil {
-		prof.Issuer = s.opts.OIDC.cfg.Issuer
+	if o := s.opts.OIDC; o != nil {
+		prof.Issuer, prof.SignedInAfter = o.cfg.Issuer, s.now().Add(-o.cfg.Revalidate)
 	}
 	var recovery, profileTok string
 	if prof.ID == 0 {

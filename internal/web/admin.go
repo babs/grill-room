@@ -59,7 +59,7 @@ const (
 
 // AuditActions lists every action, for the audit view's filter.
 var AuditActions = []string{ActionRoomCreate, ActionRoomRename, ActionRoomDelete, ActionRoomQuota, ActionRoomSpeech, ActionRoomExport, ActionRoomImport, ActionInviteCreate, ActionInviteRevoke,
-	ActionRoomAdminAdd, ActionRoomAdminRemove, ActionRoomSkillRemove, ActionRename, ActionDocumentDelete, ActionDocumentRestore, ActionHostTransfer, ActionParticipantRemove, ActionParticipantUnblock, ActionProfileDelete, ActionProfileRecoveryLink, ActionProfileRecoveryUsed, ActionProfileMerge, ActionProfilePurge, ActionProfileOIDCBind, ActionProfileMaxRooms, ActionTemplateRemove, ActionSkillRemove, ActionStarterPublish, ActionStarterDelete, ActionSettings,
+	ActionRoomAdminAdd, ActionRoomAdminRemove, ActionRoomSkillRemove, ActionRename, ActionDocumentDelete, ActionDocumentRestore, ActionHostTransfer, ActionParticipantRemove, ActionParticipantUnblock, ActionProfileDelete, ActionProfileRecoveryLink, ActionProfileRecoveryUsed, ActionProfileMerge, ActionProfilePurge, ActionProfileOIDCBind, ActionProfileOIDCUnbind, ActionProfileMaxRooms, ActionTemplateRemove, ActionSkillRemove, ActionStarterPublish, ActionStarterDelete, ActionSettings,
 	ActionLexiconAdd, ActionLexiconEdit, ActionLexiconDelete,
 	ActionAPITokenCreate, ActionAPITokenRevoke, ActionPersonaRemove, store.ActionEgressAllow, store.ActionEgressRevoke, store.ActionEgressDelegate,
 	store.ActionConnectorEnable, store.ActionConnectorDisable, store.ActionConnectorActions, ActionAdminLogin, ActionAdminLogout, ActionSessionRevoke}
@@ -98,7 +98,7 @@ func (s *Server) asAdmin(w http.ResponseWriter, r *http.Request) (admin *http.Re
 		httpError(w, http.StatusForbidden, "cross-site request refused")
 		return nil, true
 	}
-	id, err := s.bus.Store.TouchAdminSession(r.Context(), HashToken(c.Value), s.now())
+	id, err := s.bus.Store.TouchAdminSession(r.Context(), HashToken(c.Value), s.now(), s.adminGrant())
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, false
 	}
@@ -225,7 +225,7 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 	// The session's own id is the target, and its caller: the store fills both once it exists.
 	ctx := store.WithAudit(r.Context(), store.AuditEntry{At: now, Actor: store.ActorSuperAdmin, Action: ActionAdminLogin, TargetKind: store.TargetAdminSession},
 		map[string]any{"ip": ip, "via": "session"})
-	sess, err := s.bus.Store.CreateAdminSession(ctx, HashToken(tok), clip(r.UserAgent(), maxUserAgent), ip, now)
+	sess, err := s.bus.Store.CreateAdminSession(ctx, HashToken(tok), clip(r.UserAgent(), maxUserAgent), ip, now, now.Add(store.AdminSessionTTL), 0)
 	if err != nil {
 		s.serverError(w, "admin_login_failed", err)
 		return

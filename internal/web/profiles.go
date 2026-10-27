@@ -159,17 +159,22 @@ type profileResp struct {
 	AnonymousRooms bool `json:"anonymous_rooms,omitempty"`
 	// Restricted and SignInURL are set in restricted mode, with Internal: whether this browser's
 	// profile is bound to the provider (021-AC5).
-	Restricted bool           `json:"restricted,omitempty"`
-	SignInURL  string         `json:"sign_in_url,omitempty"`
-	Internal   *bool          `json:"internal,omitempty"`
-	Profile    *store.Profile `json:"profile"`
+	Restricted bool   `json:"restricted,omitempty"`
+	SignInURL  string `json:"sign_in_url,omitempty"`
+	Internal   *bool  `json:"internal,omitempty"`
+	// ProviderName names the provider on the "Sign in with" button of the join page (021-AC12),
+	// and of /admin when AdminSignIn tells an admin group is set (021-AC11).
+	ProviderName string         `json:"provider_name,omitempty"`
+	AdminSignIn  bool           `json:"admin_sign_in,omitempty"`
+	Profile      *store.Profile `json:"profile"`
 }
 
 func (s *Server) profileResp(p *store.Profile) profileResp {
 	r := profileResp{EmailEnabled: s.opts.SendMail != nil, AnonymousRooms: s.opts.AnonymousRooms, Profile: p}
 	if s.opts.OIDC != nil {
 		internal := s.isInternal(p)
-		r.Restricted, r.SignInURL, r.Internal = true, "/auth/login", &internal
+		r.Restricted, r.SignInURL, r.Internal, r.ProviderName = true, "/auth/login", &internal, s.opts.OIDC.cfg.Name
+		r.AdminSignIn = s.opts.OIDC.cfg.AdminGroup != ""
 	}
 	if r.EmailEnabled {
 		r.MagicLinkTTLS = int64(s.opts.MagicLinkTTL / time.Second)
@@ -595,13 +600,33 @@ func (s *Server) useMagicLink(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// adminProfileView adds, in restricted mode, whether the profile is internal and its last sign-in
+// with a provider, the configured one or a former one (021-AC10).
+type adminProfileView struct {
+	store.AdminProfile
+	Internal      bool       `json:"internal"`
+	SignedInAt    *time.Time `json:"signed_in_at,omitempty"`
+	SignInExpired bool       `json:"sign_in_expired,omitempty"`
+}
+
 func (s *Server) listProfiles(w http.ResponseWriter, r *http.Request) {
 	ps, err := s.bus.Store.Profiles(r.Context())
 	if err != nil {
 		s.serverError(w, "list_profiles_failed", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ps)
+	if s.opts.OIDC == nil {
+		writeJSON(w, http.StatusOK, ps)
+		return
+	}
+	out := make([]adminProfileView, len(ps))
+	for i, p := range ps {
+		out[i] = adminProfileView{AdminProfile: p, Internal: s.isInternal(&p.Profile), SignInExpired: s.reauthDue(p.OIDCBinding)}
+		if !p.OIDCSignedInAt.IsZero() {
+			out[i].SignedInAt = &ps[i].OIDCSignedInAt
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request) {

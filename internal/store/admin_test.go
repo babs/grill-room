@@ -18,21 +18,21 @@ var t0 = time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 func TestAdminSessionLifecycle(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
-	a, err := s.CreateAdminSession(ctx, "hash-a", "ua", "203.0.113.1", t0)
+	a, err := s.CreateAdminSession(ctx, "hash-a", "ua", "203.0.113.1", t0, t0.Add(AdminSessionTTL), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := s.CreateAdminSession(ctx, "hash-b", "ua", "203.0.113.2", t0.Add(time.Hour))
+	b, err := s.CreateAdminSession(ctx, "hash-b", "ua", "203.0.113.2", t0.Add(time.Hour), t0.Add(time.Hour).Add(AdminSessionTTL), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateAdminSession(ctx, "hash-b", "ua", "ip", t0); err == nil {
+	if _, err := s.CreateAdminSession(ctx, "hash-b", "ua", "ip", t0, t0.Add(AdminSessionTTL), 0); err == nil {
 		t.Fatal("a token hash used twice")
 	}
-	if id, err := s.TouchAdminSession(ctx, "hash-a", t0.Add(12*time.Hour-time.Second)); err != nil || id != a.ID {
+	if id, err := s.TouchAdminSession(ctx, "hash-a", t0.Add(12*time.Hour-time.Second), AdminGrant{}); err != nil || id != a.ID {
 		t.Fatalf("touch before expiry: %d %v", id, err)
 	}
-	if _, err := s.TouchAdminSession(ctx, "hash-a", t0.Add(12*time.Hour)); !errors.Is(err, ErrNotFound) {
+	if _, err := s.TouchAdminSession(ctx, "hash-a", t0.Add(12*time.Hour), AdminGrant{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("touch at expiry: %v", err)
 	}
 	list, err := s.AdminSessions(ctx, t0.Add(12*time.Hour))
@@ -46,13 +46,13 @@ func TestAdminSessionLifecycle(t *testing.T) {
 	if err := s.RevokeAdminSession(ctx, b.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.TouchAdminSession(ctx, "hash-b", t0.Add(time.Hour)); !errors.Is(err, ErrNotFound) {
+	if _, err := s.TouchAdminSession(ctx, "hash-b", t0.Add(time.Hour), AdminGrant{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("revoked: %v", err)
 	}
 	if err := s.RevokeAdminSession(ctx, b.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("revoke twice: %v", err)
 	}
-	if _, err := s.CreateAdminSession(ctx, "hash-c", "ua", "ip", t0.Add(13*time.Hour)); err != nil {
+	if _, err := s.CreateAdminSession(ctx, "hash-c", "ua", "ip", t0.Add(13*time.Hour), t0.Add(13*time.Hour).Add(AdminSessionTTL), 0); err != nil {
 		t.Fatal(err)
 	}
 	if n := count(t, s, `SELECT count(*) FROM admin_sessions WHERE token_hash = 'hash-a'`); n != 0 {
@@ -148,8 +148,11 @@ func TestAdminCallsFailWithTheStore(t *testing.T) {
 	ctx := t.Context()
 	_ = s.Close()
 	calls := map[string]func() error{
-		"create":      func() error { _, err := s.CreateAdminSession(ctx, "h", "ua", "ip", t0); return err },
-		"touch":       func() error { _, err := s.TouchAdminSession(ctx, "h", t0); return err },
+		"create": func() error {
+			_, err := s.CreateAdminSession(ctx, "h", "ua", "ip", t0, t0.Add(AdminSessionTTL), 0)
+			return err
+		},
+		"touch":       func() error { _, err := s.TouchAdminSession(ctx, "h", t0, AdminGrant{}); return err },
 		"list":        func() error { _, err := s.AdminSessions(ctx, t0); return err },
 		"purge":       func() error { _, err := s.PurgeAdminSessions(ctx, t0); return err },
 		"revoke":      func() error { return s.RevokeAdminSession(ctx, 1) },
@@ -176,7 +179,7 @@ func TestAuditWriteFailureRollsBackTheChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	k := publish(t, s, p.ProfileID, true, "stamp", "v1")
-	sess, err := s.CreateAdminSession(ctx, "h1", "ua", "ip", t0)
+	sess, err := s.CreateAdminSession(ctx, "h1", "ua", "ip", t0, t0.Add(AdminSessionTTL), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +218,7 @@ func TestAuditWriteFailureRollsBackTheChange(t *testing.T) {
 		{"remove template", func() error { return s.RemoveTemplate(audited(TargetTemplate, "t"), tpl.ID) }, `SELECT count(*) FROM persona_templates WHERE id = ?`, []any{tpl.ID}, "1"},
 		{"remove skill", func() error { return s.RemoveSkill(audited(TargetSkill, "k"), k.ID, 0) }, `SELECT count(*) FROM skills WHERE id = ?`, []any{k.ID}, "1"},
 		{"admin login", func() error {
-			_, err := s.CreateAdminSession(audited(TargetAdminSession, ""), "h2", "ua", "ip", t0)
+			_, err := s.CreateAdminSession(audited(TargetAdminSession, ""), "h2", "ua", "ip", t0, t0.Add(AdminSessionTTL), 0)
 			return err
 		}, `SELECT count(*) FROM admin_sessions`, nil, "1"},
 		{"admin revoke", func() error { return s.RevokeAdminSession(audited(TargetAdminSession, "s"), sess.ID) }, `SELECT count(*) FROM admin_sessions`, nil, "1"},

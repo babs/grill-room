@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -44,6 +45,10 @@ const (
 	DefaultGroupsClaim = "groups"
 	// DefaultOIDCRevalidate is how long an internal's sign-in lasts when none is set (021-AC8).
 	DefaultOIDCRevalidate = 168 * time.Hour
+	// DefaultOIDCName names the provider on the join page when none is set (021-AC12).
+	DefaultOIDCName = "your organisation account"
+	// ActionProfileOIDCUnbind is the admin making a bound profile external again (021-AC10).
+	ActionProfileOIDCUnbind = "profile.oidc_unbind"
 	// ActionProfileOIDCBind is a provider sign-in, with how it found its profile (021-AC4).
 	ActionProfileOIDCBind = "profile.oidc_bind"
 )
@@ -78,6 +83,10 @@ type OIDCConfig struct {
 	MemberGroup, GroupsClaim string
 	// Revalidate is how long an internal's sign-in lasts, DefaultOIDCRevalidate when 0 (021-AC8).
 	Revalidate time.Duration
+	// AdminGroup, when set, is the group GroupsClaim holds for an admin session (021-AC11).
+	AdminGroup string
+	// Name is what the join page signs in with, DefaultOIDCName when empty (021-AC12).
+	Name string
 }
 
 // OIDC is a provider whose discovery document NewOIDC fetched.
@@ -100,6 +109,9 @@ func NewOIDC(ctx context.Context, c OIDCConfig) (*OIDC, error) {
 	}
 	if c.Revalidate == 0 {
 		c.Revalidate = DefaultOIDCRevalidate
+	}
+	if c.Name == "" {
+		c.Name = DefaultOIDCName
 	}
 	return &OIDC{cfg: c, client: client, verifier: p.Verifier(&oidc.Config{ClientID: c.ClientID}), oauth: oauth2.Config{
 		ClientID: c.ClientID, ClientSecret: c.ClientSecret, RedirectURL: c.RedirectURL, Endpoint: p.Endpoint(),
@@ -333,6 +345,11 @@ func (s *Server) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in := signInFromClaims(idt.Issuer, idt.Subject, claims, s.now())
+	// Groups are only known here: the grant, under the group it was made with, stands until the
+	// next sign-in (021-AC11).
+	if o.cfg.AdminGroup != "" && hasGroup(claims[o.cfg.GroupsClaim], o.cfg.AdminGroup) {
+		in.AdminGroup = o.cfg.AdminGroup
+	}
 	session := NewToken()
 	in.RecoveryHash, in.SessionHash = HashToken(NewToken()), HashToken(session)
 	actx := store.WithAudit(r.Context(), store.AuditEntry{At: in.Now, Action: ActionProfileOIDCBind, TargetKind: store.TargetProfile}, nil)
@@ -565,3 +582,105 @@ var orgSignInError = magicError{Reason: "org_account", Error: "This profile sign
 
 // Restricted reports restricted mode: an OIDC provider is set (021-AC1).
 func (s *Server) Restricted() bool { return s.opts.OIDC != nil }
+
+// oidcAdminLogin opens an admin session, as the token login does, for an internal whose last
+// sign-in held the admin group, until the earlier of the usual expiry and its revalidation; 401
+// otherwise, and the page shows the token form (021-AC11).
+func (s *Server) oidcAdminLogin(w http.ResponseWriter, r *http.Request) {
+	if crossSite(r) {
+		httpError(w, http.StatusForbidden, "cross-site request refused")
+		return
+	}
+	o := s.opts.OIDC
+	p, err := s.profileFromCookie(r)
+	if err != nil && !errors.Is(err, errReauth) {
+		s.serverError(w, "admin_login_failed", err)
+		return
+	}
+	// A grant made under another group, or with none set now, does not count.
+	if p == nil || !s.isInternal(p) || o.cfg.AdminGroup == "" || p.OIDCAdminGroup != o.cfg.AdminGroup {
+		httpError(w, http.StatusUnauthorized, "no organisation admin sign-in on this browser")
+		return
+	}
+	now, ip := s.now(), s.clientIP(r)
+	expires := now.Add(store.AdminSessionTTL)
+	if until := p.OIDCSignedInAt.Add(o.cfg.Revalidate); until.Before(expires) {
+		expires = until
+	}
+	tok := NewToken()
+	ctx := store.WithAudit(r.Context(), store.AuditEntry{At: now, Actor: store.ActorSuperAdmin, Action: ActionAdminLogin, TargetKind: store.TargetAdminSession},
+		map[string]any{"ip": ip, "via": "oidc", "profile": p.UUID})
+	sess, err := s.bus.Store.CreateAdminSession(ctx, HashToken(tok), clip(r.UserAgent(), maxUserAgent), ip, now, expires, p.ID)
+	if err != nil {
+		s.serverError(w, "admin_login_failed", err)
+		return
+	}
+	setAdminCookie(w, r, tok, int(expires.Sub(now)/time.Second))
+	s.log.Info("admin_signed_in", zap.Int64("session", sess.ID), zap.String("via", "oidc"), zap.Int64("profile", p.ID))
+	writeJSON(w, http.StatusCreated, sess)
+}
+
+// adminGrant is what a provider admin session's profile must still hold: a binding to the
+// configured issuer, the configured admin group and a sign-in within its revalidation (021-AC11).
+func (s *Server) adminGrant() store.AdminGrant {
+	o := s.opts.OIDC
+	if o == nil {
+		return store.AdminGrant{}
+	}
+	return store.AdminGrant{Issuer: o.cfg.Issuer, Group: o.cfg.AdminGroup, SignedInAfter: s.now().Add(-o.cfg.Revalidate)}
+}
+
+// unbindProfile makes a bound profile external again and signs the person out everywhere:
+// browsers, API tokens, room seats, paired daemons and provider admin sessions. They come back as
+// a guest through their recovery link or an invite (021-AC10, 021-AC11).
+func (s *Server) unbindProfile(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	var daemons []store.Daemon
+	if err == nil {
+		daemons, err = s.bus.Store.ProfileDaemons(r.Context(), id)
+	}
+	// The daemons go as a removal from the host's computer does; the unbind deletes their rows.
+	// ProfileDaemons lists none for a profile the unbind would refuse.
+	// ponytail: one paired between this and the unbind loses its row without a failed turn; the
+	// turn sweep ends it.
+	for i := 0; err == nil && i < len(daemons); i++ {
+		err = s.unhostDaemon(r.Context(), &daemons[i], "the AI host's profile was unbound from the organisation")
+	}
+	var seats []store.Participant
+	var daemonRooms []string
+	if err == nil {
+		seats, daemonRooms, err = s.bus.Store.UnbindOIDC(s.auditing(r, ActionProfileOIDCUnbind, store.TargetProfile, strconv.FormatInt(id, 10), "", nil), id)
+	}
+	if errors.Is(err, store.ErrNotFound) || errors.Is(err, strconv.ErrSyntax) || errors.Is(err, strconv.ErrRange) {
+		httpError(w, http.StatusNotFound, "no such bound profile")
+		return
+	}
+	if err != nil {
+		s.serverError(w, "unbind_profile_failed", err)
+		return
+	}
+	// Wakes each daemon's stream, which finds its token gone and says "revoked", and its room; a
+	// daemon paired since ProfileDaemons is among those the statement returned.
+	woken := map[string]bool{}
+	for _, d := range daemons {
+		daemonRooms = append(daemonRooms, d.RoomID)
+	}
+	for _, room := range daemonRooms {
+		if !woken[room] {
+			woken[room] = true
+			s.agentChanged(r.Context(), room)
+		}
+	}
+	// The seats leave the audio, off the request as LiveKit may be slow, and their open pages get
+	// "revoked" at once rather than at the next heartbeat.
+	byRoom := map[string][]int64{}
+	for _, p := range seats {
+		byRoom[p.RoomID] = append(byRoom[p.RoomID], p.ID)
+	}
+	for room, ids := range byRoom {
+		s.bus.Notify(room)
+		go s.kickFromVoice(room, ids) //nolint:gosec // outlives the request on purpose: the 204 does not wait for LiveKit
+	}
+	s.log.Info("profile_oidc_unbound", zap.Int64("profile", id), zap.Int("daemons", len(daemons)))
+	w.WriteHeader(http.StatusNoContent)
+}

@@ -300,6 +300,10 @@ ALTER TABLE rate_events ADD CONSTRAINT rate_events_scope_check CHECK (scope IN (
 	`ALTER TABLE profiles ADD COLUMN IF NOT EXISTS oidc_issuer TEXT, ADD COLUMN IF NOT EXISTS oidc_subject TEXT, ADD COLUMN IF NOT EXISTS oidc_signed_in_at TEXT;
 ALTER TABLE profiles DROP CONSTRAINT IF EXISTS profiles_oidc_unique;
 ALTER TABLE profiles ADD CONSTRAINT profiles_oidc_unique UNIQUE (oidc_issuer, oidc_subject);`,
+	// 55 (021-AC11): the admin group a profile's last sign-in held, and the admin sessions it opened
+	// with it, which go with the profile.
+	`ALTER TABLE profiles ADD COLUMN IF NOT EXISTS oidc_admin_group TEXT;
+ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS profile_id BIGINT REFERENCES profiles(id) ON DELETE CASCADE;`,
 }
 
 // nonText is the predicate of the non-typed message indexes, written into every query that uses
@@ -961,13 +965,15 @@ type JoinProfile struct {
 	ID                        int64
 	RecoveryHash, SessionHash string
 	// Issuer, set in restricted mode, refuses an invite whose creator is now an external, not bound
-	// to it, who is not a room admin (021-AC7).
-	Issuer string
+	// to it, who is not a room admin (021-AC7), or an internal whose last sign-in is not after
+	// SignedInAfter, room admin or not (021-AC8).
+	Issuer        string
+	SignedInAfter time.Time
 }
 
 // Join adds a participant through a valid invite and records a system message announcing them,
 // in one transaction, creating its profile when prof asks. ErrNotFound if the invite is unknown or
-// revoked, ErrInviteLapsed if prof.Issuer refuses it, ErrBlocked if a room admin blocked prof's
+// revoked, ErrInviteLapsed if prof.Issuer and prof.SignedInAfter refuse it, ErrBlocked if a room admin blocked prof's
 // profile from the room (016-AC13). The caller broadcasts.
 func (s *Store) Join(ctx context.Context, inviteHash, name, tokenHash string, prof JoinProfile) (*Participant, *Message, error) {
 	var p *Participant
@@ -995,9 +1001,11 @@ func join(ctx context.Context, tx *txn, inviteHash, name, tokenHash string, prof
 	if prof.Issuer != "" {
 		// A NULL creator is the super-admin: its invites always work.
 		var lapsed bool
+		// oidc_signed_in_at is fixed-width UTC: it orders as text.
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM invites i JOIN participants c ON c.id = i.created_by
-			LEFT JOIN profiles f ON f.id = c.profile_id WHERE i.id = ? AND f.oidc_issuer IS DISTINCT FROM ?
-			AND NOT EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = i.room_id AND a.profile_id = c.profile_id))`, p.InviteID, prof.Issuer).Scan(&lapsed); err != nil {
+			LEFT JOIN profiles f ON f.id = c.profile_id WHERE i.id = ? AND (f.oidc_issuer IS DISTINCT FROM ?
+			AND NOT EXISTS (SELECT 1 FROM room_admins a WHERE a.room_id = i.room_id AND a.profile_id = c.profile_id)
+			OR f.oidc_issuer = ? AND f.oidc_signed_in_at <= ?))`, p.InviteID, prof.Issuer, prof.Issuer, formatTS(prof.SignedInAfter)).Scan(&lapsed); err != nil {
 			return nil, nil, fmt.Errorf("join: %w", err)
 		}
 		if lapsed {

@@ -267,3 +267,14 @@ for (const vp of widths) {
     await fits(page, vp.width);
   });
 }
+
+// 021-AC11: an open instance offers no provider sign-in on /admin, and never asks for one.
+test('the admin login of an open instance asks no provider', async ({ page }) => {
+  const asked = [];
+  page.on('request', (r) => { if (r.url().includes('/api/admin/login/oidc')) asked.push(r.url()); });
+  await page.goto('/admin');
+  await expect(page.locator('#token')).toBeVisible();
+  await expect(page.locator('#provider-sign-in')).toHaveCount(0);
+  await page.waitForTimeout(500);
+  expect(asked).toEqual([]);
+});

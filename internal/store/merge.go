@@ -325,7 +325,8 @@ func (s *Store) MergeProfiles(ctx context.Context, keep, merge int64) (*MergePro
 				return err
 			}
 		}
-		// A keeps its provider binding, or takes B's, which is UNIQUE too (021-AC4).
+		// A keeps its provider binding, or takes B's, which is UNIQUE too (021-AC4). Not B's admin
+		// grant: groups are read at sign-in, A's next one sets it (021-AC11).
 		var aBound bool
 		var iss, sub, at sql.NullString
 		err = tx.QueryRowContext(ctx, `SELECT k.oidc_issuer IS NOT NULL, m.oidc_issuer, m.oidc_subject, m.oidc_signed_in_at FROM profiles m JOIN profiles k ON k.id = ?1
@@ -338,7 +339,8 @@ func (s *Store) MergeProfiles(ctx context.Context, keep, merge int64) (*MergePro
 			if err := exec(nil, `UPDATE profiles SET oidc_issuer = NULL, oidc_subject = NULL WHERE id = ?`, merge); err != nil {
 				return err
 			}
-			if err := exec(nil, `UPDATE profiles SET oidc_issuer = ?, oidc_subject = ?, oidc_signed_in_at = ? WHERE id = ?`, iss, sub, at, keep); err != nil {
+			if err := exec(nil, `UPDATE profiles SET oidc_issuer = ?, oidc_subject = ?, oidc_signed_in_at = ?, oidc_admin_group = NULL
+				WHERE id = ?`, iss, sub, at, keep); err != nil {
 				return err
 			}
 		}
@@ -405,6 +407,8 @@ func (s *Store) PurgeEmptyProfiles(ctx context.Context, now time.Time, idle time
 			COALESCE(`+profileActivitySQL+`, ''),
 			COALESCE((SELECT MAX(created_at) FROM profile_sessions WHERE profile_id = p.id), '')
 			FROM profiles p WHERE p.email IS NULL
+			-- An organisation account is never empty: its binding, and the admin sessions it holds, stay (021-AC11).
+			AND p.oidc_issuer IS NULL
 			AND NOT EXISTS (SELECT 1 FROM participants pa WHERE pa.profile_id = p.id AND pa.removed_at IS NULL)
 			AND NOT EXISTS (SELECT 1 FROM skills WHERE profile_id = p.id)
 			AND NOT EXISTS (SELECT 1 FROM skills WHERE publisher_id = p.id)

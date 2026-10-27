@@ -61,6 +61,8 @@ type Profile struct {
 	// EmailNudgeUntil hides the add-an-email banner until then (011-AC8).
 	EmailNudgeUntil *time.Time `json:"email_nudge_until,omitempty"`
 	OIDCBinding
+	// OIDCAdminGroup is the admin group its last sign-in held, "" for none (021-AC11).
+	OIDCAdminGroup string `json:"-"`
 }
 
 // OIDCBinding is the provider a profile is bound to, empty for none, and its last sign-in there
@@ -186,9 +188,9 @@ func (s *Store) profile(ctx context.Context, where string, args ...any) (*Profil
 	var email sql.NullString
 	var created string
 	var nudge, oidcAt sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT id, email, created_at, COALESCE(uuid, ''), COALESCE(name, ''), email_nudge_until, COALESCE(oidc_issuer, ''), oidc_signed_in_at
-		FROM profiles WHERE `+where, args...).
-		Scan(&p.ID, &email, &created, &p.UUID, &p.Name, &nudge, &p.OIDCIssuer, &oidcAt)
+	err := s.db.QueryRowContext(ctx, `SELECT id, email, created_at, COALESCE(uuid, ''), COALESCE(name, ''), email_nudge_until, COALESCE(oidc_issuer, ''), oidc_signed_in_at,
+		COALESCE(oidc_admin_group, '') FROM profiles WHERE `+where, args...).
+		Scan(&p.ID, &email, &created, &p.UUID, &p.Name, &nudge, &p.OIDCIssuer, &oidcAt, &p.OIDCAdminGroup)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

@@ -17,23 +17,28 @@ const AdminSessionTTL = 12 * time.Hour
 
 // AdminSession is a browser signed in with the admin token. Only its token's hash is stored.
 type AdminSession struct {
-	ID         int64     `json:"id"`
-	CreatedAt  time.Time `json:"created_at"`
-	LastUsedAt time.Time `json:"last_used_at"`
-	ExpiresAt  time.Time `json:"expires_at"`
-	UserAgent  string    `json:"user_agent"`
-	IP         string    `json:"ip"`
+	ID int64 `json:"id"`
+	// ProfileUUID and ProfileName name the profile a provider session belongs to (021-AC11).
+	ProfileUUID string    `json:"profile_uuid,omitempty"`
+	ProfileName string    `json:"profile_name,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	LastUsedAt  time.Time `json:"last_used_at"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	UserAgent   string    `json:"user_agent"`
+	IP          string    `json:"ip"`
 }
 
-// CreateAdminSession opens a session for tokenHash at now, and drops the expired ones.
-func (s *Store) CreateAdminSession(ctx context.Context, tokenHash, userAgent, ip string, now time.Time) (*AdminSession, error) {
+// CreateAdminSession opens a session for tokenHash at now, until expires, and drops the expired ones.
+// profileID, when not 0, is the profile a provider sign-in opened it for (021-AC11).
+func (s *Store) CreateAdminSession(ctx context.Context, tokenHash, userAgent, ip string, now, expires time.Time, profileID int64) (*AdminSession, error) {
 	if _, err := s.PurgeAdminSessions(ctx, now); err != nil {
 		return nil, err
 	}
-	a := &AdminSession{CreatedAt: now.UTC(), LastUsedAt: now.UTC(), ExpiresAt: time.Unix(now.Add(AdminSessionTTL).Unix(), 0).UTC(), UserAgent: userAgent, IP: ip}
+	a := &AdminSession{CreatedAt: now.UTC(), LastUsedAt: now.UTC(), ExpiresAt: time.Unix(expires.Unix(), 0).UTC(), UserAgent: userAgent, IP: ip}
 	err := s.withTx(ctx, "create admin session", func(tx *txn) error {
-		err := tx.QueryRowContext(ctx, `INSERT INTO admin_sessions(token_hash, created_at, last_used_at, expires_at_s, user_agent, ip) VALUES(?,?,?,?,?,?) RETURNING id`,
-			tokenHash, formatTS(a.CreatedAt), formatTS(a.LastUsedAt), a.ExpiresAt.Unix(), userAgent, ip).Scan(&a.ID)
+		err := tx.QueryRowContext(ctx, `INSERT INTO admin_sessions(token_hash, created_at, last_used_at, expires_at_s, user_agent, ip, profile_id)
+			VALUES(?,?,?,?,?,?,NULLIF(?, 0)) RETURNING id`,
+			tokenHash, formatTS(a.CreatedAt), formatTS(a.LastUsedAt), a.ExpiresAt.Unix(), userAgent, ip, profileID).Scan(&a.ID)
 		if err != nil {
 			return fmt.Errorf("create admin session: %w", err)
 		}
@@ -46,13 +51,31 @@ func (s *Store) CreateAdminSession(ctx context.Context, tokenHash, userAgent, ip
 	return a, nil
 }
 
+// AdminGrant is what a provider admin session's profile must still hold (021-AC11): a binding to
+// Issuer, the admin group Group, and a sign-in after SignedInAfter. Empty Issuer or Group grants none.
+type AdminGrant struct {
+	Issuer, Group string
+	SignedInAfter time.Time
+}
+
 // TouchAdminSession marks the session holding tokenHash used at now and returns its id. ErrNotFound
-// when no unexpired session holds it: revoked, expired or never issued.
-func (s *Store) TouchAdminSession(ctx context.Context, tokenHash string, now time.Time) (int64, error) {
+// when no unexpired session holds it: revoked, expired or never issued, or opened through the
+// provider for a profile g no longer grants, which it ends.
+func (s *Store) TouchAdminSession(ctx context.Context, tokenHash string, now time.Time, g AdminGrant) (int64, error) {
 	var id int64
-	err := s.db.QueryRowContext(ctx, `UPDATE admin_sessions SET last_used_at = ? WHERE token_hash = ? AND expires_at_s > ? RETURNING id`,
-		formatTS(now), tokenHash, now.Unix()).Scan(&id)
+	// oidc_signed_in_at is fixed-width UTC: it orders as text.
+	err := s.db.QueryRowContext(ctx, `UPDATE admin_sessions a SET last_used_at = ? WHERE token_hash = ? AND expires_at_s > ?
+		AND (profile_id IS NULL OR EXISTS (SELECT 1 FROM profiles p WHERE p.id = a.profile_id AND p.oidc_issuer = NULLIF(?, '')
+			AND p.oidc_admin_group = NULLIF(?, '') AND p.oidc_signed_in_at > ?)) RETURNING id`,
+		formatTS(now), tokenHash, now.Unix(), g.Issuer, g.Group, formatTS(g.SignedInAfter)).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
+		// Only with restricted mode on: a server started without it refuses those sessions, and keeps
+		// them for when the mode comes back.
+		if g.Issuer != "" {
+			if _, err := s.db.ExecContext(ctx, `DELETE FROM admin_sessions WHERE profile_id IS NOT NULL AND token_hash = ?`, tokenHash); err != nil {
+				return 0, fmt.Errorf("touch admin session: %w", err)
+			}
+		}
 		return 0, ErrNotFound
 	}
 	if err != nil {
@@ -63,8 +86,8 @@ func (s *Store) TouchAdminSession(ctx context.Context, tokenHash string, now tim
 
 // AdminSessions lists the sessions still valid at now, newest first.
 func (s *Store) AdminSessions(ctx context.Context, now time.Time) ([]AdminSession, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, created_at, last_used_at, expires_at_s, user_agent, ip FROM admin_sessions
-		WHERE expires_at_s > ? ORDER BY id DESC`, now.Unix())
+	rows, err := s.db.QueryContext(ctx, `SELECT a.id, a.created_at, a.last_used_at, a.expires_at_s, a.user_agent, a.ip, COALESCE(p.uuid, ''), `+displayNameSQL+`
+		FROM admin_sessions a LEFT JOIN profiles p ON p.id = a.profile_id WHERE a.expires_at_s > ? ORDER BY a.id DESC`, now.Unix())
 	if err != nil {
 		return nil, fmt.Errorf("query admin sessions: %w", err)
 	}
@@ -74,7 +97,7 @@ func (s *Store) AdminSessions(ctx context.Context, now time.Time) ([]AdminSessio
 		var a AdminSession
 		var created, used string
 		var expires int64
-		if err := rows.Scan(&a.ID, &created, &used, &expires, &a.UserAgent, &a.IP); err != nil {
+		if err := rows.Scan(&a.ID, &created, &used, &expires, &a.UserAgent, &a.IP, &a.ProfileUUID, &a.ProfileName); err != nil {
 			return nil, fmt.Errorf("scan admin session: %w", err)
 		}
 		a.CreatedAt, a.LastUsedAt, a.ExpiresAt = parseTS(created), parseTS(used), time.Unix(expires, 0).UTC()

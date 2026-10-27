@@ -29,6 +29,7 @@ form.limit input { width: 8rem; }
 /* The column templates of the lists (kit .cols): the name takes what the others leave. */
 #rooms { --cols: minmax(12rem, 3fr) minmax(7rem, 1fr) minmax(5rem, .6fr) minmax(5rem, .6fr) minmax(7rem, 1fr) minmax(11rem, 1.5fr) var(--control-h); }
 #profiles { --cols: minmax(12rem, 3fr) minmax(6rem, 1fr) minmax(4rem, .5fr) minmax(7rem, 1fr) minmax(8rem, 1fr) var(--control-h); }
+#profiles.restricted { --cols: minmax(12rem, 3fr) minmax(6rem, 1fr) minmax(4rem, .5fr) minmax(7rem, 1fr) minmax(8rem, 1fr) minmax(9rem, 1fr) var(--control-h); }
 #templates { --cols: minmax(12rem, 3fr) minmax(8rem, 1fr) minmax(4rem, .5fr) minmax(7rem, 1fr) var(--control-h); }
 :is(#skills, #starters) { --cols: minmax(12rem, 3fr) minmax(8rem, 1fr) minmax(4rem, .5fr) minmax(5rem, .6fr) minmax(7rem, 1fr) var(--control-h); }
 #sessions { --cols: minmax(12rem, 2fr) minmax(7rem, 1fr) minmax(7rem, 1fr) minmax(10rem, 1fr) var(--control-h); }

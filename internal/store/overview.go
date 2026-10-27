@@ -163,7 +163,7 @@ func (s *Store) Profiles(ctx context.Context) ([]AdminProfile, error) {
 		COALESCE((SELECT joined_at FROM participants WHERE profile_id = p.id ORDER BY id DESC LIMIT 1), ''),
 		(SELECT COUNT(*) FROM skills WHERE profile_id = p.id OR publisher_id = p.id), p.max_rooms,
 		(SELECT COUNT(*) FROM rooms WHERE creator_profile_id = p.id),
-		COALESCE(`+profileActivitySQL+`, '')
+		COALESCE(`+profileActivitySQL+`, ''), COALESCE(p.oidc_issuer, ''), COALESCE(p.oidc_signed_in_at, '')
 		FROM profiles p ORDER BY p.id`)
 	if err != nil {
 		return nil, fmt.Errorf("query profiles: %w", err)
@@ -172,13 +172,14 @@ func (s *Store) Profiles(ctx context.Context) ([]AdminProfile, error) {
 	for rows.Next() {
 		var p AdminProfile
 		var email sql.NullString
-		var created, joined, line string
+		var created, joined, line, iss, at string
 		var maxRooms sql.NullInt64
-		if err := rows.Scan(&p.ID, &email, &created, &p.UUID, &p.Name, &joined, &p.Skills, &maxRooms, &p.RoomsCreated, &line); err != nil {
+		if err := rows.Scan(&p.ID, &email, &created, &p.UUID, &p.Name, &joined, &p.Skills, &maxRooms, &p.RoomsCreated, &line, &iss, &at); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("scan profile: %w", err)
 		}
 		p.Email, p.CreatedAt, p.LastActivity = email.String, parseTS(created), parseTS(created)
+		p.scan(iss, at)
 		if maxRooms.Valid {
 			n := int(maxRooms.Int64)
 			p.MaxRooms = &n

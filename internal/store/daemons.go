@@ -106,6 +106,29 @@ func (s *Store) SetDaemonSettings(ctx context.Context, id int64, set DaemonSetti
 	return n > 0, nil
 }
 
+// ProfileDaemons returns the daemons paired from profileID's seats while it is bound to a
+// provider: those an unbind removes, none for a profile it would refuse (021-AC10).
+func (s *Store) ProfileDaemons(ctx context.Context, profileID int64) ([]Daemon, error) {
+	rows, err := s.db.QueryContext(ctx, daemonCols+`JOIN participants p ON p.id = d.participant_id JOIN profiles f ON f.id = p.profile_id
+		WHERE p.profile_id = ? AND f.oidc_issuer IS NOT NULL ORDER BY d.id`, profileID)
+	if err != nil {
+		return nil, fmt.Errorf("profile daemons: %w", err)
+	}
+	defer rows.Close()
+	var out []Daemon
+	for rows.Next() {
+		d, err := scanDaemon(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("profile daemons: %w", err)
+	}
+	return out, nil
+}
+
 // RemoveDaemon deletes daemon id, and with it its token: the host removed the room from their
 // computer (003b-AC9). ErrNotFound if it is gone already.
 func (s *Store) RemoveDaemon(ctx context.Context, id int64) error {
