@@ -105,6 +105,8 @@ async function loadRoom() {
   if (!res.ok) throw new Error('room: HTTP ' + res.status);
   wasIn = true;
   const data = await res.json();
+  // On the server's clock, the one message times come from: a client clock off would count history.
+  if (!loadedAt) loadedAt = Date.parse(data.now || '') || Date.now();
   // The docs window's room name leads back to the room (008-AC6). Each room event reloads this:
   // the link is made once, so its focus and anything holding it survive.
   const heading = $('room-name');
@@ -188,7 +190,9 @@ new ResizeObserver(() => { if (pinned) messages.scrollTop = messages.scrollHeigh
 // Unread count (005-AC12): lines from others and syntheses that arrive while the tab is not
 // focused show as "(N) " in its title; voice lines only when opted in. The stream replays history
 // on load, so only lines written since the page loaded count.
-const loadedAt = Date.now();
+let loadedAt = 0;
+// isLive: written since the page loaded, not replayed history (005-AC12, 020-AC6).
+const isLive = (m) => new Date(m.ts).getTime() >= loadedAt;
 const voiceKey = 'grill-room-count-voice';
 let unread = 0;
 // unreadMe: one of the unread lines mentions the viewer (005-AC27).
@@ -199,7 +203,7 @@ function showTitle() {
 }
 
 function countUnread(m) {
-  if (docsMode || document.hasFocus() || new Date(m.ts).getTime() < loadedAt || String(m.participant_id) === myID) return;
+  if (docsMode || document.hasFocus() || !isLive(m) || String(m.participant_id) === myID) return;
   if (m.kind === 'text' || m.kind === 'agent' || (m.kind === 'voice' && localStorage.getItem(voiceKey) === '1') || namesMe(m)) {
     unread++;
     unreadMe = unreadMe || namesMe(m);
@@ -214,6 +218,43 @@ window.addEventListener('focus', () => {
 $('count-voice').checked = localStorage.getItem(voiceKey) === '1';
 $('count-voice').addEventListener('change', () => localStorage.setItem(voiceKey, $('count-voice').checked ? '1' : '0'));
 
+// Chat filter (020-AC4, 020-AC5): Written by default, one stored choice per browser. Applied by CSS
+// on the list, so it leaves the unread count alone (020-AC16). A jump or a send shows another
+// filter for this visit only (viewFilter), the stored choice kept.
+const filterKey = 'grill-room-chat-filter';
+const filterCounts = { written: 0, voice: 0 };
+let chatFilter = ['all', 'written', 'voice'].includes(localStorage.getItem(filterKey)) ? localStorage.getItem(filterKey) : 'written';
+let viewFilter = '';
+const shownFilter = () => viewFilter || chatFilter;
+const filterKind = (kind) => (kind === 'voice' ? 'voice' : 'written');
+const filterHides = (kind) => shownFilter() !== 'all' && filterKind(kind) !== shownFilter();
+
+function showFilter() {
+  const f = shownFilter();
+  messages.dataset.filter = f;
+  $('filter-empty').textContent = f === 'voice' ? 'No voice messages yet.' : 'No written messages yet.';
+  for (const b of $('chat-filter').querySelectorAll('button')) {
+    b.setAttribute('aria-pressed', String(b.dataset.filter === f));
+    const n = filterCounts[b.dataset.filter];
+    if (n !== undefined) b.querySelector('.count').textContent = n ? ' · ' + n : '';
+  }
+}
+
+// setFilter shows f; keep, for a segment click only, makes it the stored choice.
+function setFilter(f, keep) {
+  if (keep) {
+    chatFilter = f;
+    viewFilter = '';
+    localStorage.setItem(filterKey, f);
+  } else viewFilter = f;
+  // Showing a kind, or All, clears its count (020-AC6).
+  for (const k in filterCounts) if (f === 'all' || f === k) filterCounts[k] = 0;
+  showFilter();
+  if (pinned) messages.scrollTop = messages.scrollHeight;
+}
+for (const b of $('chat-filter').querySelectorAll('button')) b.addEventListener('click', () => setFilter(b.dataset.filter, true));
+showFilter();
+
 // jumpTo is the line a deep link names, /r/<room>#m<id>, as a notification opens it (005-AC24):
 // the chat scrolls there once the stream has delivered it.
 let jumpTo = Number((location.hash.match(/^#m(\d+)$/) || [])[1] || 0);
@@ -226,6 +267,8 @@ function jump(id) {
   }
   jumpTo = 0;
   pinned = false;
+  // A line the filter hides is shown with everything else (020-AC7).
+  if (filterHides(li.classList.contains('voice') ? 'voice' : '')) setFilter('all');
   li.scrollIntoView({ block: 'center' });
   li.classList.add('flash');
   setTimeout(() => li.classList.remove('flash'), 1500);
@@ -238,6 +281,11 @@ if ('serviceWorker' in navigator) {
 
 function addMessage(m) {
   countUnread(m);
+  // A live line of a hidden kind counts on its segment; history and your own lines do not (020-AC6).
+  if (filterHides(m.kind) && isLive(m) && String(m.participant_id) !== myID) {
+    filterCounts[filterKind(m.kind)]++;
+    showFilter();
+  }
   if (m.kind === 'system') {
     // A join changes the participant list; history replay sends many, so refresh once.
     clearTimeout(refreshTimer);
@@ -629,11 +677,7 @@ function mentionChip(s) {
     el.dataset.tip = s.status === 'done' ? 'Show the synthesis' : 'Show how the turn ended';
     el.addEventListener('click', (e) => {
       e.preventDefault();
-      const line = messages.querySelector('li[data-id="' + s.line_id + '"]');
-      if (!line) return;
-      line.scrollIntoView({ block: 'center' });
-      line.classList.add('flash');
-      setTimeout(() => line.classList.remove('flash'), 1500);
+      if (messages.querySelector('li[data-id="' + s.line_id + '"]')) jump(s.line_id);
     });
   }
   return el;
@@ -992,6 +1036,8 @@ $('chat-invite').addEventListener('click', () => {
 // profile's other seats.
 function showEmpty() {
   $('chat-empty').hidden = ended || docsMode || participants.some((p) => String(p.id) !== myID && !p.self);
+  // The invite card says it first: no "No voice messages yet." under it (020-AC4).
+  $('filter-empty').hidden = !$('chat-empty').hidden;
 }
 
 // Documents. Text documents render in an iframe sandboxed without allow-same-origin: their
@@ -4107,6 +4153,8 @@ async function send() {
     return;
   }
   if (!res.ok) throw new Error('send: HTTP ' + res.status);
+  // What you type shows beside what is said, for this visit (020-AC6).
+  if (shownFilter() === 'voice') setFilter('all');
   // Only the line sent leaves the box: the next one may already be typed in it.
   if (bodyInput.value === typed) bodyInput.value = '';
   nudgeRecovery().catch(console.error);

@@ -503,6 +503,8 @@ test('device and server marks', async ({ browser, request }) => {
   const [a, b, c] = [ids[0], ids[1], 999999];
   const ts = new Date().toISOString();
   const line = (id, pid, sender, source) => ['', { id, kind: 'voice', participant_id: pid, sender, body: 'Line ' + id, html: '<p>Line ' + id + '</p>', ts, ...(source && { source }) }];
+  // The chat shows Written by default (020-AC5): these lines are read in All.
+  await alice.evaluate(() => localStorage.setItem('grill-room-chat-filter', 'all'));
   await playEvents(alice, room.id, [
     ['stt', { available: true, listening: true, transcribed: [b], engines: [] }],
     ['presence', { people: [

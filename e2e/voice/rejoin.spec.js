@@ -11,6 +11,8 @@ test('transcription resumes after LiveKit closes the empty room', async ({ reque
     const alice = await join(browser, await invite(request, room.id), 'Alice');
     const label = alice.locator('#stt-status');
     const lines = alice.locator('.msg.voice');
+    // The chat shows Written by default (020-AC5).
+    await alice.locator('#chat-filter [data-filter=all]').click();
     await joinAudio(alice);
     await expect(label).toHaveText(/^1 voice is being written down/, { timeout: 60_000 });
     await expect(lines.first()).toBeVisible({ timeout: 60_000 });

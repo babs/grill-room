@@ -56,7 +56,7 @@ On a wide screen, the chat shows the written exchange: typed messages, persona r
 
 ### Type size
 
-- [ ] **AC15** On the room page, at 40rem and wider, message text, the composer and the pane use 0.9375rem; `--fs-xs` and `--fs-sm` are unchanged. Under 40rem nothing changes. `docs/design.md` records the room-page exception.
+- [ ] **AC15** On the room page, wider than 40rem, message text, the composer and the pane use 0.9375rem; `--fs-xs` and `--fs-sm` are unchanged. At 40rem and under nothing changes. `docs/design.md` records the room-page exception.
 
 ### Unchanged
 
@@ -74,7 +74,7 @@ On a wide screen, the chat shows the written exchange: typed messages, persona r
 - Work: segmented control in the chat header, per-kind counts, deep-link switch, room-page font token at ≥40rem, `docs/design.md` note.
 - **Covers**: AC4, AC5, AC6, AC7, AC15, AC16
 - **Data model impact**: none
-- **DoD**: `make e2e` green with `e2e/chat.spec.js` cases: default Written hides a voice line; Voice and All; count on a hidden kind; reload keeps the choice; `#m<id>` of a voice line switches to All; computed font size 15 px at 1280 px wide and 16 px at 375 px.
+- **DoD**: `make e2e` green with `e2e/chat-filter.spec.js` cases: default Written hides a voice line; Voice and All; count on a hidden kind; reload keeps the choice; `#m<id>` of a voice line switches to All; computed font size 15 px at 1280 px wide and 16 px at 375 px.
 
 ### Phase 3 — Transcription pane
 - Work: pane markup and CSS (right of the chat, above it with a document open), fold strip and count, live updates, empty and unavailable states, filter hidden while the pane shows.
@@ -99,3 +99,5 @@ Two partial indexes on `messages` (Phase 1), `WHERE kind <> 'text'`, by room and
 - A typed message stays a paragraph boundary only through the existing "a turn has read it" rule (AC3).
 - A paragraph keeps its first line's id and place, so words said after a typed message read before it, in the chat's All view and in the agent's transcript. Accepted: the reorder is bounded by one paragraph (the 2.5 s gap, 1200 chars, the 20 s close), and splitting on typing is what made the transcription choppy.
 - The non-text lookups (paragraph append, paragraph close, last activity) get partial indexes: without them a room with no voice line walks its whole history on every profile read (measured 424 ms at 1M typed messages, 0.3 ms with the index).
+- Your own lines never add to a segment count (AC6), and sending a typed message while Voice is shown switches the view to All for that visit: you see what you sent next to what is being said.
+- A jump that switches the filter (deep link, push click, mention chip, AC7) does not change the stored choice: the next visit opens on it again.
