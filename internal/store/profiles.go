@@ -53,6 +53,10 @@ type Profile struct {
 	PendingAgeS *int64 `json:"pending_age_s,omitempty"`
 	// EmailNudgeUntil hides the add-an-email banner until then (011-AC8).
 	EmailNudgeUntil *time.Time `json:"email_nudge_until,omitempty"`
+	// OIDCIssuer is the provider the profile is bound to, empty for none; OIDCSignedInAt its last
+	// sign-in there (021-AC4, 021-AC5).
+	OIDCIssuer     string    `json:"-"`
+	OIDCSignedInAt time.Time `json:"-"`
 }
 
 // ProfileRoom is a room a profile is in, under the name it joined with.
@@ -114,6 +118,14 @@ func (s *Store) ProfileBySession(ctx context.Context, sessionHash string) (*Prof
 	return s.profile(ctx, `id = (SELECT profile_id FROM profile_sessions WHERE token_hash = ? AND expires_at_s > ?)`, sessionHash, time.Now().Unix())
 }
 
+// DeleteProfileSession ends the profile session sessionHash; none is not an error.
+func (s *Store) DeleteProfileSession(ctx context.Context, sessionHash string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM profile_sessions WHERE token_hash = ?`, sessionHash); err != nil {
+		return fmt.Errorf("delete profile session: %w", err)
+	}
+	return nil
+}
+
 // SignInByRecovery opens a session with sessionHash on the profile holding recoveryHash.
 // ErrNotFound if none does.
 func (s *Store) SignInByRecovery(ctx context.Context, recoveryHash, sessionHash string) (*Profile, error) {
@@ -148,9 +160,10 @@ func (s *Store) profile(ctx context.Context, where string, args ...any) (*Profil
 	var p Profile
 	var email sql.NullString
 	var created string
-	var nudge sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT id, email, created_at, COALESCE(uuid, ''), COALESCE(name, ''), email_nudge_until FROM profiles WHERE `+where, args...).
-		Scan(&p.ID, &email, &created, &p.UUID, &p.Name, &nudge)
+	var nudge, oidcAt sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT id, email, created_at, COALESCE(uuid, ''), COALESCE(name, ''), email_nudge_until, COALESCE(oidc_issuer, ''), oidc_signed_in_at
+		FROM profiles WHERE `+where, args...).
+		Scan(&p.ID, &email, &created, &p.UUID, &p.Name, &nudge, &p.OIDCIssuer, &oidcAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -161,6 +174,9 @@ func (s *Store) profile(ctx context.Context, where string, args ...any) (*Profil
 	if nudge.Valid {
 		t := parseTS(nudge.String)
 		p.EmailNudgeUntil = &t
+	}
+	if oidcAt.Valid {
+		p.OIDCSignedInAt = parseTS(oidcAt.String)
 	}
 	if p.Rooms, err = s.profileRooms(ctx, p.ID); err != nil {
 		return nil, err

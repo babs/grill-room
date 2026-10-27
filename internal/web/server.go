@@ -85,6 +85,10 @@ type Server struct {
 	loginLimit limiter
 	// anonLimit rate-limits anonymous room creations per client IP (019-AC4).
 	anonLimit limiter
+	// keys holds the instance's secret, which also seals the OIDC sign-in cookie (021-AC2).
+	keys *instanceKeys
+	// oidcLogins counts provider sign-ins by OIDCResults (021-AC13).
+	oidcLogins map[string]*atomic.Int64
 	// mailWG counts the mail sends running past their answers.
 	mailWG sync.WaitGroup
 	// now is the clock admin sessions and the audit log read; tests set it.
@@ -181,8 +185,10 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 		people: newPeople(b.Store, log), stt: newSTTWorkers(b.Store, log), clients: clients{m: map[int64]clientSeen{}},
 		now: time.Now, lease: time.Now, fallbacks: fallbackCounters(), turnWait: b.Store.LockTimeout(),
 		conflicts: map[string]*atomic.Int64{"rerun": {}, "failed": {}}, pushClient: opts.PushClient,
-		pluginFetches: make(chan struct{}, maxPluginFetches), voiceLines: sourceCounters(), voiceDeduped: sourceCounters(), voiceAppended: sourceCounters(), mcpCalls: newMCPCounters()}
-	keys := &rateKeys{st: b.Store}
+		pluginFetches: make(chan struct{}, maxPluginFetches), voiceLines: sourceCounters(), voiceDeduped: sourceCounters(), voiceAppended: sourceCounters(), mcpCalls: newMCPCounters(),
+		oidcLogins: oidcCounters()}
+	keys := &instanceKeys{st: b.Store}
+	s.keys = keys
 	s.magicLimit, s.loginLimit = newLimiter(keys, "magic", magicWindow, log), newLimiter(keys, "login", loginWindow, log)
 	s.anonLimit = newLimiter(keys, "anon-room", anonRoomWindow, log)
 	s.device = loadDeviceSTT(opts, log)
@@ -242,6 +248,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /r/{room}/docs/{doc}", s.roomPage)
 	mux.HandleFunc("GET /profile", s.profilePage)
 	mux.HandleFunc("GET /admin", s.adminPage)
+	if s.opts.OIDC != nil {
+		mux.HandleFunc("GET /auth/login", s.oidcLogin)
+		mux.HandleFunc("GET /auth/callback", s.oidcCallback)
+		mux.HandleFunc("POST /auth/logout", s.oidcLogout)
+	}
 	static, _ := fs.Sub(ui, "ui") // cannot fail: "ui" is a valid embedded path
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(static)))
 	mux.Handle("GET "+uivendor.Prefix, uivendor.Handler())

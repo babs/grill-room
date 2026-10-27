@@ -293,6 +293,10 @@ CREATE INDEX messages_participant_nontext ON messages(participant_id, id) WHERE 
 	// 53 (019-AC4): the anonymous room creations, counted per client IP.
 	`ALTER TABLE rate_events DROP CONSTRAINT rate_events_scope_check;
 ALTER TABLE rate_events ADD CONSTRAINT rate_events_scope_check CHECK (scope IN ('magic', 'login', 'anon-room'));`,
+	// 54 (021 Phase 1): a profile's provider binding; rerunnable, as older migrations' tests replay it.
+	`ALTER TABLE profiles ADD COLUMN IF NOT EXISTS oidc_issuer TEXT, ADD COLUMN IF NOT EXISTS oidc_subject TEXT, ADD COLUMN IF NOT EXISTS oidc_signed_in_at TEXT;
+ALTER TABLE profiles DROP CONSTRAINT IF EXISTS profiles_oidc_unique;
+ALTER TABLE profiles ADD CONSTRAINT profiles_oidc_unique UNIQUE (oidc_issuer, oidc_subject);`,
 }
 
 // nonText is the predicate of the non-typed message indexes, written into every query that uses

@@ -121,6 +121,9 @@ type Options struct {
 	// per client IP in a sliding hour; 0 means DefaultAnonymousRoomsPerHour (019-AC1, 019-AC4).
 	AnonymousRooms        bool
 	AnonymousRoomsPerHour int
+	// OIDC turns restricted mode on: profiles sign in with this provider (021-AC1); nil keeps the
+	// instance open as before.
+	OIDC *OIDC
 }
 
 //go:embed templates

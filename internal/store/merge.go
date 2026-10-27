@@ -325,14 +325,35 @@ func (s *Store) MergeProfiles(ctx context.Context, keep, merge int64) (*MergePro
 				return err
 			}
 		}
+		// A keeps its provider binding, or takes B's, which is UNIQUE too (021-AC4).
+		var aBound bool
+		var iss, sub, at sql.NullString
+		err = tx.QueryRowContext(ctx, `SELECT k.oidc_issuer IS NOT NULL, m.oidc_issuer, m.oidc_subject, m.oidc_signed_in_at FROM profiles m JOIN profiles k ON k.id = ?1
+			WHERE m.id = ?2`, keep, merge).Scan(&aBound, &iss, &sub, &at)
+		if err != nil {
+			return fmt.Errorf("merge profiles: %w", err)
+		}
+		droppedOIDC := aBound && iss.Valid
+		if !aBound && iss.Valid {
+			if err := exec(nil, `UPDATE profiles SET oidc_issuer = NULL, oidc_subject = NULL WHERE id = ?`, merge); err != nil {
+				return err
+			}
+			if err := exec(nil, `UPDATE profiles SET oidc_issuer = ?, oidc_subject = ?, oidc_signed_in_at = ? WHERE id = ?`, iss, sub, at, keep); err != nil {
+				return err
+			}
+		}
 		if mergeFault != nil {
 			if err := mergeFault(); err != nil {
 				return err
 			}
 		}
 		// Never an email: the entry outlives both profiles' addresses (011-AC13).
-		if err := auditTx(ctx, tx, "", map[string]any{"keep_uuid": p.Keep.UUID, "keep_name": p.Keep.Name,
-			"merge_uuid": p.Merge.UUID, "merge_name": p.Merge.Name, "moved": moved}); err != nil {
+		details := map[string]any{"keep_uuid": p.Keep.UUID, "keep_name": p.Keep.Name, "merge_uuid": p.Merge.UUID, "merge_name": p.Merge.Name, "moved": moved}
+		if droppedOIDC {
+			// B's provider binding goes with B; its subject is an identifier, so only the fact is kept.
+			details["dropped_oidc_subject"] = true
+		}
+		if err := auditTx(ctx, tx, "", details); err != nil {
 			return err
 		}
 		return execOne(ctx, tx, `DELETE FROM profiles WHERE id = ?`, merge)

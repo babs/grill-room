@@ -133,6 +133,8 @@ type Config struct {
 	// client IP an hour (019-AC1, 019-AC4).
 	AnonymousRooms        bool
 	AnonymousRoomsPerHour int
+	// OIDC turns restricted mode on when its issuer is set (021-AC1).
+	OIDC web.OIDCConfig
 }
 
 func loadConfig() (Config, error) {
@@ -157,6 +159,14 @@ func loadConfig() (Config, error) {
 	anonRooms, err15 := strconv.ParseBool(getEnv("GRILL_ROOM_ANONYMOUS_ROOMS", "false"))
 	anonPerHour, err16 := strconv.Atoi(getEnv("GRILL_ROOM_ANONYMOUS_ROOMS_PER_HOUR", strconv.Itoa(web.DefaultAnonymousRoomsPerHour)))
 	return Config{
+		OIDC: web.OIDCConfig{
+			Issuer:       os.Getenv("GRILL_ROOM_OIDC_ISSUER"),
+			ClientID:     os.Getenv("GRILL_ROOM_OIDC_CLIENT_ID"),
+			ClientSecret: os.Getenv("GRILL_ROOM_OIDC_CLIENT_SECRET"),
+			Scopes:       strings.Fields(os.Getenv("GRILL_ROOM_OIDC_SCOPES")),
+			MemberGroup:  os.Getenv("GRILL_ROOM_OIDC_MEMBER_GROUP"),
+			GroupsClaim:  getEnv("GRILL_ROOM_OIDC_GROUPS_CLAIM", web.DefaultGroupsClaim),
+		},
 		AnonymousRooms:         anonRooms,
 		AnonymousRoomsPerHour:  anonPerHour,
 		NotesWatchDelay:        notesDelay,
@@ -242,6 +252,9 @@ func (c Config) Validate() error {
 	if c.AnonymousRoomsPerHour < 1 || c.AnonymousRoomsPerHour > 1000 {
 		return fmt.Errorf("GRILL_ROOM_ANONYMOUS_ROOMS_PER_HOUR %d: want 1 to 1000", c.AnonymousRoomsPerHour)
 	}
+	if err := c.validateOIDC(); err != nil {
+		return err
+	}
 	if c.PandocTimeout <= 0 {
 		return fmt.Errorf("GRILL_ROOM_PANDOC_TIMEOUT %s: want a positive duration", c.PandocTimeout)
 	}
@@ -300,6 +313,84 @@ func (c Config) validateVoice() error {
 		return fmt.Errorf("GRILL_ROOM_LIVEKIT_API_KEY must be set and GRILL_ROOM_LIVEKIT_API_SECRET hold %d+ characters", livekit.MinSecretLen)
 	}
 	return nil
+}
+
+// validateOIDC refuses a partial provider setting, a plain-HTTP public URL beyond localhost, and
+// anonymous rooms, which an instance restricted to an organisation contradicts (021-AC1).
+func (c Config) validateOIDC() error {
+	o := c.OIDC
+	set := 0
+	for _, v := range []string{o.Issuer, o.ClientID, o.ClientSecret} {
+		if v != "" {
+			set++
+		}
+	}
+	switch {
+	case set == 0:
+		if o.MemberGroup != "" || len(o.Scopes) > 0 {
+			return errors.New("GRILL_ROOM_OIDC_MEMBER_GROUP and GRILL_ROOM_OIDC_SCOPES need GRILL_ROOM_OIDC_ISSUER")
+		}
+		return nil
+	case set < 3:
+		return errors.New("GRILL_ROOM_OIDC_ISSUER, GRILL_ROOM_OIDC_CLIENT_ID and GRILL_ROOM_OIDC_CLIENT_SECRET: set all three or none")
+	case c.AnonymousRooms:
+		return errors.New("GRILL_ROOM_ANONYMOUS_ROOMS cannot be on with GRILL_ROOM_OIDC_ISSUER")
+	}
+	// The issuer serves the signing keys and receives the client secret: https as the public URL.
+	for _, v := range []struct{ name, url string }{{"GRILL_ROOM_URL", c.PublicURL}, {"GRILL_ROOM_OIDC_ISSUER", o.Issuer}} {
+		if !httpsOrLoopback(v.url) {
+			return fmt.Errorf("%s %q: want https:// with GRILL_ROOM_OIDC_ISSUER, http:// on localhost only", v.name, v.url)
+		}
+	}
+	return nil
+}
+
+func httpsOrLoopback(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Host != "" && (u.Scheme == "https" || u.Scheme == "http" && loopbackHost(u.Hostname()))
+}
+
+func loopbackHost(h string) bool {
+	if h == "localhost" {
+		return true
+	}
+	a, err := netip.ParseAddr(h)
+	return err == nil && a.IsLoopback()
+}
+
+// Discovery at start retries within discoveryBudget, from discoveryBackoff doubling up to 10 s, so
+// one transient provider error does not stop a pod (021-AC1). Vars for tests.
+var (
+	discoveryBudget  = time.Minute
+	discoveryBackoff = time.Second
+)
+
+// oidc fetches the provider's discovery document, nil without an issuer; a failure past
+// discoveryBudget, or ctx ending, stops the start (021-AC1). It warns when every account of the
+// issuer is let in.
+func (c Config) oidc(ctx context.Context, log *zap.Logger) (*web.OIDC, error) {
+	if c.OIDC.Issuer == "" {
+		return nil, nil
+	}
+	if c.OIDC.MemberGroup == "" {
+		log.Warn("oidc_no_member_group", zap.String("hint", "every account of the issuer signs in as internal; set GRILL_ROOM_OIDC_MEMBER_GROUP to restrict"))
+	}
+	o := c.OIDC
+	o.RedirectURL = strings.TrimRight(c.PublicURL, "/") + "/auth/callback"
+	ctx, cancel := context.WithTimeout(ctx, discoveryBudget)
+	defer cancel()
+	for wait := discoveryBackoff; ; wait = min(wait*2, 10*time.Second) {
+		p, err := web.NewOIDC(ctx, o)
+		if err == nil {
+			return p, nil
+		}
+		log.Warn("oidc_discovery_failed", zap.String("iss", o.Issuer), zap.Error(err))
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(wait):
+		}
+	}
 }
 
 // warnAnonRooms warns that, behind a proxy the server does not trust, every client counts as the
@@ -443,6 +534,14 @@ func run() error {
 		logger.Warn("pandoc_missing", zap.String("pandoc", cfg.Pandoc), zap.Error(err))
 	}
 
+	oidcProvider, err := cfg.oidc(ctx, logger)
+	if err != nil {
+		return err
+	}
+	if oidcProvider != nil {
+		logger.Info("oidc_ready", zap.String("iss", cfg.OIDC.Issuer))
+	}
+
 	var release *web.Release
 	if cfg.DaemonDir != "" {
 		if release, err = web.LoadRelease(cfg.DaemonDir); err != nil {
@@ -496,6 +595,7 @@ func run() error {
 		DeviceSTTDir:           cfg.DeviceSTTModelDir,
 		AnonymousRooms:         cfg.AnonymousRooms,
 		AnonymousRoomsPerHour:  cfg.AnonymousRoomsPerHour,
+		OIDC:                   oidcProvider,
 	}, logger)
 	if cfg.SMTP.Addr == "" {
 		logger.Info("email_signin_disabled", zap.String("hint", "set GRILL_ROOM_SMTP_ADDR and GRILL_ROOM_SMTP_FROM to send magic links"))
@@ -621,6 +721,13 @@ func newRegistry(b *bus.Bus, srv *web.Server) *prometheus.Registry {
 			reg.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_mcp_tool_calls_total",
 				Help: "MCP tool calls, by tool and result: ok, error (a refusal the agent reads) or server_error.", ConstLabels: prometheus.Labels{"tool": tool, "result": result}},
 				func() float64 { return float64(srv.MCPToolCalls(tool, result)) }))
+		}
+	}
+	if srv.Restricted() {
+		for _, result := range web.OIDCResults {
+			reg.MustRegister(prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "grill_room_oidc_logins_total",
+				Help: "Provider sign-ins, by result (021-AC13).", ConstLabels: prometheus.Labels{"result": result}},
+				func() float64 { return float64(srv.OIDCLogins(result)) }))
 		}
 	}
 	for _, outcome := range web.ConflictOutcomes {

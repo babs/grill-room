@@ -24,3 +24,4 @@
 | [018](018-voice-paragraphs.md) | Voice paragraphs: one message per paragraph, quiet forced cut | shipped |
 | [019](019-anonymous-rooms.md) | Anonymous room creation behind an env flag; no import for emailless profiles while it is on | shipped |
 | [020](020-chat-voice-split.md) | Written chat and voice transcription apart: filter, transcription pane | shipped |
+| [021](021-restricted-instance.md) | Restricted instance: OIDC sign-in for members, invites for guests | in progress |

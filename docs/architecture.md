@@ -164,6 +164,7 @@ A persona with "Speaks in the call" on says a short line in the LiveKit call aft
 | `grill_room_workspace_fallbacks_total{reason}` | full workspace fetches by daemons that keep a cache |
 | `grill_room_mcp_tool_calls_total{tool,result}` | MCP tool calls: `ok`, `error` or `server_error` |
 | `grill_room_turn_conflicts_total{outcome}` | turn results rejected on a document conflict: `rerun` or `failed` |
+| `grill_room_oidc_logins_total{result}` | provider sign-ins in restricted mode: `ok_existing`, `ok_email`, `ok_new`, `refused_group` or `failed` (021-AC13) |
 
 ## Shared state, TL;DR
 

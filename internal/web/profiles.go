@@ -117,11 +117,16 @@ func (s *Server) recoveryURL(tok string) string { return s.baseURL + "/profile#r
 // setProfileCookie scopes the profile session to the whole site, unlike a room's participant
 // cookie: the profile follows its person from room to room.
 func setProfileCookie(w http.ResponseWriter, r *http.Request, tok string) {
+	setProfileCookieAge(w, r, tok, int(store.ProfileSessionMaxAge/time.Second))
+}
+
+// setProfileCookieAge is setProfileCookie with its lifetime; -1 clears it.
+func setProfileCookieAge(w http.ResponseWriter, r *http.Request, tok string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure follows the request scheme: plain-HTTP dev and tests would lose the cookie
 		Name:     profileCookie,
 		Value:    tok,
 		Path:     "/",
-		MaxAge:   int(store.ProfileSessionMaxAge / time.Second),
+		MaxAge:   maxAge,
 		HttpOnly: true,
 		Secure:   secure(r),
 		SameSite: http.SameSiteStrictMode,
@@ -148,12 +153,21 @@ type profileResp struct {
 	// MagicLinkTTLS is how long an emailed link works, in seconds, for the page to say so (011-AC22).
 	MagicLinkTTLS int64 `json:"magic_link_ttl_s,omitempty"`
 	// AnonymousRooms lets the home page offer room creation without an invite (019-AC8).
-	AnonymousRooms bool           `json:"anonymous_rooms,omitempty"`
-	Profile        *store.Profile `json:"profile"`
+	AnonymousRooms bool `json:"anonymous_rooms,omitempty"`
+	// Restricted and SignInURL are set in restricted mode, with Internal: whether this browser's
+	// profile is bound to the provider (021-AC5).
+	Restricted bool           `json:"restricted,omitempty"`
+	SignInURL  string         `json:"sign_in_url,omitempty"`
+	Internal   *bool          `json:"internal,omitempty"`
+	Profile    *store.Profile `json:"profile"`
 }
 
 func (s *Server) profileResp(p *store.Profile) profileResp {
 	r := profileResp{EmailEnabled: s.opts.SendMail != nil, AnonymousRooms: s.opts.AnonymousRooms, Profile: p}
+	if s.opts.OIDC != nil {
+		internal := p != nil && p.OIDCIssuer != ""
+		r.Restricted, r.SignInURL, r.Internal = true, "/auth/login", &internal
+	}
 	if r.EmailEnabled {
 		r.MagicLinkTTLS = int64(s.opts.MagicLinkTTL / time.Second)
 	}
@@ -601,18 +615,20 @@ func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request) {
 // refuses everyone rather than let a flood of distinct keys grow the table.
 const rateScopeCap = 100_000
 
-// rateKeySetting is the settings row holding the instance's secret for rate limit keys.
+// rateKeySetting is the settings row holding the instance's secret (instanceKeys).
 const rateKeySetting = "rate_key_secret"
 
-// rateKeys turns limiter keys into what rate_events stores: an HMAC under the instance's secret, so
-// the table alone gives no address nor IP back; a dump holding settings too does, by guessing.
-type rateKeys struct {
+// instanceKeys holds the instance's secret (the settings row keeps its first name). It turns
+// limiter keys into what rate_events stores, an HMAC under it, so the table alone gives no address
+// nor IP back (a dump holding settings too does, by guessing); and it derives the key sealing the
+// OIDC sign-in cookie (021-AC2).
+type instanceKeys struct {
 	st  *store.Store
 	mu  sync.Mutex
 	key []byte
 }
 
-func (k *rateKeys) hash(ctx context.Context, key string) (string, error) {
+func (k *instanceKeys) secret(ctx context.Context) ([]byte, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.key == nil {
@@ -620,13 +636,36 @@ func (k *rateKeys) hash(ctx context.Context, key string) (string, error) {
 		_, _ = rand.Read(secret) // crypto/rand never fails on supported platforms
 		v, err := k.st.SettingOrInit(ctx, rateKeySetting, hex.EncodeToString(secret))
 		if err != nil {
-			return "", fmt.Errorf("rate key secret: %w", err)
+			return nil, fmt.Errorf("rate key secret: %w", err)
 		}
 		k.key = []byte(v)
 	}
-	m := hmac.New(sha256.New, k.key)
-	m.Write([]byte(key))
-	return hex.EncodeToString(m.Sum(nil)), nil
+	return k.key, nil
+}
+
+func (k *instanceKeys) hash(ctx context.Context, key string) (string, error) {
+	secret, err := k.secret(ctx)
+	if err != nil {
+		return "", err
+	}
+	return hmacHex(secret, key), nil
+}
+
+// subKey derives a key for one use, apart from the limiter keys' hashes.
+func (k *instanceKeys) subKey(ctx context.Context, use string) ([]byte, error) {
+	secret, err := k.secret(ctx)
+	if err != nil {
+		return nil, err
+	}
+	m := hmac.New(sha256.New, secret)
+	m.Write([]byte(use))
+	return m.Sum(nil), nil
+}
+
+func hmacHex(key []byte, msg string) string {
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte(msg))
+	return hex.EncodeToString(m.Sum(nil))
 }
 
 // rateIP is the part of a client IP a limiter counts by: an IPv6 client holds its whole /64.
@@ -642,7 +681,7 @@ func rateIP(ip string) string {
 // limiter counts events per key in a sliding window, in the database, so the limits hold for
 // every pod together.
 type limiter struct {
-	keys   *rateKeys
+	keys   *instanceKeys
 	scope  string
 	window time.Duration
 	log    *zap.Logger
@@ -652,7 +691,7 @@ type limiter struct {
 	full     *atomic.Bool
 }
 
-func newLimiter(keys *rateKeys, scope string, window time.Duration, log *zap.Logger) limiter {
+func newLimiter(keys *instanceKeys, scope string, window time.Duration, log *zap.Logger) limiter {
 	return limiter{keys: keys, scope: scope, window: window, log: log, scopeCap: rateScopeCap, full: new(atomic.Bool)}
 }
 
