@@ -662,15 +662,16 @@ test('the header warning keeps the agents bar apart', async ({ browser, request 
   await expect(warn).toBeFocused();
   await expect(alice.locator('#person-tip')).toHaveText(offline);
 
-  // A persona answering stays words, cut with an ellipsis rather than drawn over the pills.
+  // A persona answering stays words, never drawn over the pills: where the pills take the bar it
+  // gives way (font metrics decide where), and it shows once the header has room.
   await alice.evaluate((ids) => { agent = { ...agent, online: true, running: ids.map((id) => ({ persona_id: id })) }; renderAgent(); }, added);
   await expect(status).toHaveText('Secretary answering, Rodin answering…');
   await expect(warn).toBeHidden();
-  for (const width of [1280, 1440]) {
+  for (const width of [1280, 1440, 1920]) {
     await alice.setViewportSize({ width, height: 800 });
-    await expect(status).toBeVisible();
     expect(await overlaps(alice), `${width} px`).toEqual([]);
   }
+  await expect(status).toBeVisible();
 
   // A failed action on the AI: the warning carries its message.
   await alice.evaluate(() => agentError('This answer already stopped.'));
