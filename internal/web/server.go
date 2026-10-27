@@ -1078,6 +1078,9 @@ type roomResp struct {
 	// Departed marks the lines of seats that ended, of people no longer in the room: "removed" or
 	// "left", by seat (016-AC11).
 	Departed map[int64]string `json:"departed"`
+	// Now is the server's clock as it answers: the page tells history from live lines by it, on
+	// the clock their ts come from (005-AC12, 020-AC6).
+	Now time.Time `json:"now"`
 }
 
 func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
@@ -1104,7 +1107,7 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
 		return
 	}
 	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps, Daemons: s.liveDaemons(room.ID), Voice: s.opts.Voice != nil, TTS: s.tts != nil,
-		Profile: sess.p.ProfileID != 0, Version: s.opts.Version, Departed: departed})
+		Profile: sess.p.ProfileID != 0, Version: s.opts.Version, Departed: departed, Now: s.now()})
 }
 
 func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, sess session) {

@@ -8,10 +8,10 @@ import (
 	"time"
 )
 
-// 018-AC7: "every 2 voice lines" counts a closed line and a paragraph of two appended lines as 2
-// only once the paragraph is closed: by any message after it, deleted or not, or by the close
-// delay passing since its last line, not the paragraph gap. With gap 0 every voice message counts,
-// as before 018 (006-AC18).
+// 018-AC7, 020-AC2: "every 2 voice lines" counts a closed line and a paragraph of two appended
+// lines as 2 only once the paragraph is closed: by a message other than a typed one after it,
+// deleted or not, or by the close delay passing since its last line, not the paragraph gap. With
+// gap 0 every voice message counts, as before 018 (006-AC18).
 func TestDueVoicePersonasCountsClosedParagraphs(t *testing.T) {
 	ctx := context.Background()
 	s := openTest(t)
@@ -33,11 +33,32 @@ func TestDueVoicePersonasCountsClosedParagraphs(t *testing.T) {
 			after: func(t *testing.T, room string, _, bob *Participant) {
 				voiceLine(t, s, room, bob, "fine by me", nil, last.Add(time.Second))
 			}},
-		{name: "a text message", now: last.Add(time.Second), gap: gap, due: true,
+		// 020-AC2: typed messages, deleted or not, close nothing; the close delay still does.
+		{name: "a text message", now: last.Add(time.Second), gap: gap,
 			after: func(t *testing.T, room string, alice, _ *Participant) { chat(t, s, room, alice, "ok") }},
-		{name: "a deleted message", now: last.Add(time.Second), gap: gap, due: true,
+		{name: "two text messages", now: last.Add(time.Second), gap: gap,
+			after: func(t *testing.T, room string, alice, bob *Participant) {
+				chat(t, s, room, alice, "ok")
+				chat(t, s, room, bob, "sure")
+			}},
+		{name: "a deleted text message", now: last.Add(time.Second), gap: gap,
 			after: func(t *testing.T, room string, _, bob *Participant) {
 				m := chat(t, s, room, bob, "oops")
+				if _, err := s.DeleteMessage(ctx, room, m.ID, bob.ID); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		{name: "a text message, then the close delay", now: last.Add(closeAfter + time.Second), gap: gap, due: true,
+			after: func(t *testing.T, room string, alice, _ *Participant) { chat(t, s, room, alice, "ok") }},
+		{name: "a room event", now: last.Add(time.Second), gap: gap, due: true,
+			after: func(t *testing.T, room string, _, _ *Participant) {
+				if err := s.InsertMessage(ctx, &Message{RoomID: room, Kind: KindSystem, Sender: "admin", Body: "renamed"}); err != nil {
+					t.Fatal(err)
+				}
+			}},
+		{name: "a deleted voice line", now: last.Add(time.Second), gap: gap, due: true,
+			after: func(t *testing.T, room string, _, bob *Participant) {
+				m := voiceLine(t, s, room, bob, "oops", nil, last.Add(time.Second))
 				if _, err := s.DeleteMessage(ctx, room, m.ID, bob.ID); err != nil {
 					t.Fatal(err)
 				}

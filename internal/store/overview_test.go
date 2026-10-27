@@ -195,8 +195,9 @@ func TestProfilesForAdmin(t *testing.T) {
 	}
 }
 
-// 018-AC5: a voice paragraph dates a room's and a profile's activity by its last append, not by
-// its first line.
+// 018-AC5, 020-AC17: a voice paragraph dates a room's and a profile's activity by its last append,
+// not by its first line, nor by a typed message of its speaker it grew past; a typed message
+// later than the last append dates them by its own ts.
 func TestLastActivityCountsAppends(t *testing.T) {
 	ctx := t.Context()
 	s := openTest(t)
@@ -204,29 +205,48 @@ func TestLastActivityCountsAppends(t *testing.T) {
 	t0 := time.Now().UTC().Add(time.Hour)
 	t1 := t0.Add(30 * time.Second)
 	gap := 1.0
+	typed := func(at time.Time) {
+		t.Helper()
+		m := &Message{RoomID: "a", Kind: KindText, ParticipantID: p.ID, Sender: p.Name, Body: "typed"}
+		if err := s.InsertMessage(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.ExecContext(ctx, `UPDATE messages SET ts = ? WHERE id = ?`, formatTS(at), m.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for i, at := range []time.Time{t0, t1} {
+		if i == 1 {
+			typed(t0.Add(10 * time.Second))
+		}
 		m := &Message{RoomID: "a", Kind: KindVoice, ParticipantID: p.ID, Sender: p.Name, Body: "line " + strconv.Itoa(i), Source: VoiceSourceServer}
 		res, err := s.PostVoiceLine(ctx, m, at, time.Second, VoiceJoin{GapS: &gap, MaxGap: 2 * time.Second, MaxChars: 100}, nil)
 		if err != nil || res != []VoiceStored{VoiceInserted, VoiceAppended}[i] {
 			t.Fatalf("line %d: %v %v", i, res, err)
 		}
 	}
-	o, err := s.RoomOverview(ctx, "a", 0)
-	if err != nil || !o.LastActivity.Equal(t1) {
-		t.Fatalf("room: %v %v, want %v", o.LastActivity, err, t1)
-	}
-	ps, err := s.Profiles(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, pr := range ps {
-		if pr.ID != p.ProfileID {
-			continue
+	activity := func(what string, want time.Time) {
+		t.Helper()
+		o, err := s.RoomOverview(ctx, "a", 0)
+		if err != nil || !o.LastActivity.Equal(want) {
+			t.Fatalf("%s: room %v %v, want %v", what, o.LastActivity, err, want)
 		}
-		if !pr.LastActivity.Equal(t1) || len(pr.Rooms) != 1 || !pr.Rooms[0].LastActivity.Equal(t1) {
-			t.Fatalf("profile %v, rooms %+v, want %v", pr.LastActivity, pr.Rooms, t1)
+		ps, err := s.Profiles(ctx)
+		if err != nil {
+			t.Fatal(err)
 		}
-		return
+		for _, pr := range ps {
+			if pr.ID != p.ProfileID {
+				continue
+			}
+			if !pr.LastActivity.Equal(want) || len(pr.Rooms) != 1 || !pr.Rooms[0].LastActivity.Equal(want) {
+				t.Fatalf("%s: profile %v, rooms %+v, want %v", what, pr.LastActivity, pr.Rooms, want)
+			}
+			return
+		}
+		t.Fatal("no profile for the participant")
 	}
-	t.Fatal("no profile for the participant")
+	activity("appended past a typed message", t1)
+	typed(t1.Add(10 * time.Second))
+	activity("a typed message after the last append", t1.Add(10*time.Second))
 }

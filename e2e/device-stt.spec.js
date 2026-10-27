@@ -503,6 +503,7 @@ test('device and server marks', async ({ browser, request }) => {
   const [a, b, c] = [ids[0], ids[1], 999999];
   const ts = new Date().toISOString();
   const line = (id, pid, sender, source) => ['', { id, kind: 'voice', participant_id: pid, sender, body: 'Line ' + id, html: '<p>Line ' + id + '</p>', ts, ...(source && { source }) }];
+  // At the default 1280 px these lines sit in the Transcription pane (020-AC8).
   await playEvents(alice, room.id, [
     ['stt', { available: true, listening: true, transcribed: [b], engines: [] }],
     ['presence', { people: [
@@ -529,7 +530,9 @@ test('device and server marks', async ({ browser, request }) => {
   await expect(alice.locator('#person-tip')).toHaveText('Transcribed by the server');
   expect(await msg(1000001).getAttribute('class')).toBe(await msg(1000002).getAttribute('class'));
   await expect(msg(1000001).locator('.meta')).toHaveText(/^Alice \(voice\) /);
-  await expect(alice.locator('#messages [title]')).toHaveCount(0);
+  // No native tooltip on any drawn line, wherever it sits.
+  await expect(alice.locator(':is(#messages, #voice-lines) > li.msg.voice')).toHaveCount(3);
+  await expect(alice.locator(':is(#messages, #voice-lines) [title]')).toHaveCount(0);
 
   const badge = (name) => alice.locator('#participants li').filter({ has: alice.locator('.name', { hasText: name }) }).locator('.tag-transcribed');
   await expect(badge('Alice')).toHaveAttribute('data-icon', 'transcribed-device');

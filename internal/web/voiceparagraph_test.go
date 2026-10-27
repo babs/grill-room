@@ -150,8 +150,9 @@ func paragraphDedupe(t *testing.T, dev, srv *env, clk *clock) {
 
 // 018-AC7: "every 2 voice lines" counts closed paragraphs: not one still open, even past the gap;
 // one closed by the close delay fires on the tick, once, even with a voice line checking at the same time;
-// one closed by another speaker's line fires on that line; one closed by a text message fires on
-// the next tick. A turn starts the count again.
+// one closed by another speaker's line fires on that line. A text message closes none (020-AC2):
+// one followed by a room event fires on the next tick, one followed only by text messages once the
+// close delay passes. A turn starts the count again.
 func TestVoiceParagraphTrigger(t *testing.T) {
 	e := newEnvOpts(t, paragraphOptions(t))
 	c := e.clock()
@@ -233,13 +234,86 @@ func TestVoiceParagraphTrigger(t *testing.T) {
 
 	line(a, "eight", nil)
 	c.add(time.Second)
-	line(a, "nine", nil)
+	nine := line(a, "nine", nil)
 	c.add(time.Second)
 	line(a, "ten", 1)
 	e.postBody(t, r, tok, "a text line")
-	quiet("text message, before the tick")
 	e.srv.voiceTick(t.Context())
-	fires("text message, on the tick")
+	quiet("text message, on the tick")
+	if q := line(a, "eleven", 1); q.ID != nine.ID {
+		t.Fatalf("not appended past a text message: %+v", q)
+	}
+	quiet("a line joined past a text message")
+	e.join(t, e.createInvite(t, r.room).Token, "Carol")
+	quiet("room event, before the tick")
+	e.srv.voiceTick(t.Context())
+	fires("room event, on the tick")
+
+	line(a, "twelve", nil)
+	c.add(time.Second)
+	line(a, "thirteen", nil)
+	e.postBody(t, r, tok, "a text line")
+	e.postBody(t, r, tok, "another text line")
+	e.srv.voiceTick(t.Context())
+	quiet("two text messages, on the tick")
+	c.add(DefaultVoiceParagraphClose + time.Second)
+	e.srv.voiceTick(t.Context())
+	fires("text messages, then the close delay")
+}
+
+// 020-AC1, 020-AC3: typed messages, one or several in a row, leave a speaker's paragraph open; a
+// room event, a persona reply, or a typed @mention whose turn reads the paragraph ends it.
+func TestVoiceParagraphIgnoresText(t *testing.T) {
+	e := newEnvOpts(t, paragraphOptions(t))
+	r := newTurnRoom(t, e)
+	alice := r.alice
+	tok := alice.p.Token
+	a := alice.p.Participant.ID
+	line := func(body string, gap any) store.Message {
+		t.Helper()
+		code, b := e.do(t, "POST", "/api/rooms/"+r.room+"/voice/lines", sttToken, map[string]any{"participant_id": a, "body": body, "gap_s": gap})
+		if code != http.StatusCreated {
+			t.Fatalf("%q: %d %s", body, code, b)
+		}
+		return decodeJSON[store.Message](t, b)
+	}
+	joins := func(what string, p store.Message, body string) {
+		t.Helper()
+		if q := line(body, 1); q.ID != p.ID {
+			t.Fatalf("%s: %+v not joined to %d", what, q, p.ID)
+		}
+	}
+	opens := func(what string, p store.Message, body string) store.Message {
+		t.Helper()
+		q := line(body, 1)
+		if q.ID == p.ID || q.Body != body {
+			t.Fatalf("%s: %+v joined %d", what, q, p.ID)
+		}
+		return q
+	}
+
+	p := line("one", nil)
+	e.postBody(t, r, tok, "a typed line")
+	joins("a text message", p, "two")
+	e.postBody(t, r, tok, "a typed line")
+	e.postBody(t, r, tok, "another typed line")
+	joins("two text messages in a row", p, "three")
+	if p, _ := e.st.Message(t.Context(), r.room, p.ID); p == nil || p.Body != "one two three" {
+		t.Fatalf("paragraph %+v", p)
+	}
+
+	e.join(t, e.createInvite(t, r.room).Token, "Bob")
+	p = opens("a room event", p, "four")
+
+	e.postBody(t, r, tok, "@Grill what do you make of it?")
+	tn := e.nextTurn(t, r, alice)
+	if tn.MessageCursor <= p.ID {
+		t.Fatalf("turn cursor %d not past the paragraph %d", tn.MessageCursor, p.ID)
+	}
+	p = opens("a text @mention whose turn read it", p, "five")
+
+	e.finish(t, r, alice, tn, "Noted.")
+	opens("a persona reply", p, "six")
 }
 
 // 018-AC7, 006-AC18: with paragraphs off every voice line is its own message and counts as soon as

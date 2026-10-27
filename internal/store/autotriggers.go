@@ -15,13 +15,14 @@ type VoiceCount struct {
 }
 
 // DueVoicePersonas lists the personas of rooms whose "every N voice lines" is due at now: N closed
-// voice paragraphs since their latest turn started (006-AC18). A paragraph is closed once another
-// message follows it or c.Close has passed since its last line (018-AC7). The count stops at N.
+// voice paragraphs since their latest turn started (006-AC18). A paragraph is closed once a
+// message other than a typed one follows it or c.Close has passed since its last line (018-AC7,
+// 020-AC2). The count stops at N.
 func (s *Store) DueVoicePersonas(ctx context.Context, now time.Time, c VoiceCount, rooms []string) ([]RoomPersona, error) {
 	return s.duePersonas(ctx, `WHERE p.room_id = ANY(?) AND p.every_voice IS NOT NULL AND p.pending = 0
 		AND (SELECT COUNT(*) FROM (SELECT 1 FROM messages m WHERE m.room_id = p.room_id AND m.kind = 'voice' AND m.deleted_at IS NULL
 			AND m.id > p.mark_msg_id AND (CAST(? AS BIGINT) <= 0 OR COALESCE(m.appended_at, m.ts) <= ?
-				OR m.id < (SELECT MAX(id) FROM messages l WHERE l.room_id = p.room_id))
+				OR m.id < (SELECT MAX(id) FROM messages l WHERE l.room_id = p.room_id AND l.`+nonText+`))
 			ORDER BY m.id LIMIT p.every_voice) c) >= p.every_voice ORDER BY p.room_id, p.id`,
 		rooms, int64(c.Gap), formatTS(now.Add(-c.Close)))
 }

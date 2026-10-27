@@ -58,6 +58,13 @@ async function settled(page, load) {
   throw new Error('three loads in a row lost requests to network changes');
 }
 
+// line is a message as the stream sends it, from Carol (participant 999999) unless pid says; the
+// e2e server has no STT worker, so voice lines reach the page this way.
+export const line = (id, kind, body, ts = '2026-01-01T10:00:00Z', pid = 999999) => ({ id, kind, participant_id: kind === 'system' ? 0 : pid, sender: 'Carol', body, html: '<p>' + body + '</p>', ts, change_seq: 0 });
+
+// live adds m to the page as a line said just now: past the page's load, it counts as new.
+export const live = (page, m) => page.evaluate((m) => addMessage({ ...m, ts: new Date().toISOString() }), m);
+
 // stopSTT gives the page its real event stream back, on the room without a sheet open.
 export async function stopSTT(page) {
   await page.unrouteAll();

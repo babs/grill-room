@@ -286,7 +286,15 @@ UPDATE turns SET delivered = 1 WHERE status = 'running';`,
 CREATE INDEX participants_stt_off ON participants(room_id) WHERE stt_off = 1;`,
 	// 51 (018-AC5): the last time a voice paragraph grew by a line.
 	`ALTER TABLE messages ADD COLUMN appended_at TEXT;`,
+	// 52 (020-AC1, 020-AC17): the latest non-typed message of a room or a seat, without walking past
+	// typed ones.
+	`CREATE INDEX messages_room_nontext ON messages(room_id, id) WHERE ` + nonText + `;
+CREATE INDEX messages_participant_nontext ON messages(participant_id, id) WHERE ` + nonText + `;`,
 }
+
+// nonText is the predicate of the non-typed message indexes, written into every query that uses
+// them (020-AC1): it must stay literal SQL, as a bind parameter keeps the planner off a partial index.
+const nonText = "kind <> 'text'"
 
 // CreateDatabaseOptions makes a database that sorts as the server needs (017-AC6).
 const CreateDatabaseOptions = "TEMPLATE template0 LC_COLLATE 'C' LC_CTYPE 'C' ENCODING 'UTF8' LOCALE_PROVIDER libc"

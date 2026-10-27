@@ -72,10 +72,10 @@ func (s *Server) voiceCount() store.VoiceCount {
 func voiceCause(p store.RoomPersona) string { return everyVoice(p.EveryVoice) }
 
 // voiceTick queues, in rooms where someone is here, the personas whose "every N voice lines" a
-// paragraph closed since the last voice line made due: by the close delay passing, or by a message
-// other than a voice line (018-AC7). It runs only while paragraphs are on: off, every line is
-// closed when stored. Each tick reads every room with someone here, so none is missed after an
-// absence or a leader change.
+// paragraph closed since the last voice line made due: by the close delay passing, or by a persona
+// reply or room event; a typed message closes none (018-AC7, 020-AC2). It runs only while
+// paragraphs are on: off, every line is closed when stored. Each tick reads every room with someone
+// here, so none is missed after an absence or a leader change.
 func (s *Server) voiceTick(ctx context.Context) {
 	if s.opts.VoiceParagraphGap <= 0 {
 		return

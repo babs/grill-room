@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/babs/grill-room/internal/store"
 )
@@ -15,6 +16,19 @@ func (e *env) setSettings(t *testing.T, v store.InstanceSettings) {
 	t.Helper()
 	if code, b := e.do(t, "PUT", "/api/admin/settings", e.admin, v); code != http.StatusOK {
 		t.Fatalf("settings: %d %s", code, b)
+	}
+}
+
+// 020-AC6: the room answers the server's clock, which the page compares message times with.
+func TestRoomAnswersServerClock(t *testing.T) {
+	e := newEnv(t)
+	at := time.Date(2026, 10, 27, 8, 12, 3, 456_000_000, time.UTC)
+	e.srv.now = func() time.Time { return at }
+	alice := e.device(t)
+	room := alice.createRoom(t, "Clock", "Ali")
+	code, b := alice.do(t, "GET", "/api/rooms/"+room.ID, nil)
+	if got := decodeJSON[roomResp](t, b); code != http.StatusOK || !got.Now.Equal(at) || !strings.Contains(string(b), `"now":"2026-10-27T08:12:03.456Z"`) {
+		t.Fatalf("now: %d %s", code, b)
 	}
 }
 

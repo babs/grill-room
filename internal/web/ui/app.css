@@ -453,12 +453,47 @@ body.docs-window #chat-fold, body.docs-window #chat-unfold { display: none; }
 /* Chat */
 .chat { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 #messages { flex: 1; overflow-y: auto; list-style: none; margin: 0; padding: var(--sp-4); }
-#chat-empty { margin: 0 var(--sp-4) var(--sp-3); }
+/* The chat filter (020-AC4) reads as the kit's tabs; buttons, as it filters a list, not a page. */
+.chat-filter { display: flex; flex: none; padding: 0 var(--sp-4); border-bottom: 1px solid var(--border); }
+.chat-filter button { min-width: 44px; min-height: 44px; padding: 0 var(--sp-3); border: 0; border-bottom: 3px solid transparent; border-radius: 0; background: transparent; color: var(--text); font-size: var(--fs-sm); }
+.chat-filter button[aria-pressed=true] { border-bottom-color: var(--brand); }
+.chat-filter button:focus-visible { outline-offset: -2px; }
+/* Hidden by CSS, not redrawn: live lines and paragraph appends land as they do unfiltered. */
+#messages[data-filter=written] > .msg.voice, #messages[data-filter=voice] > .msg:not(.voice) { display: none; }
+#filter-empty { display: none; }
+#messages[data-filter=written]:not(:has(> .msg:not(.voice))) ~ #filter-empty, #messages[data-filter=voice]:not(:has(> .msg.voice)) ~ #filter-empty { display: block; }
+:is(#chat-empty, #filter-empty) { margin: 0 var(--sp-4) var(--sp-3); }
+/* Transcription pane (020-AC8): room.js sets .transcript-room while it fits, .fold-transcript folded. */
+#transcript { display: none; }
+#transcript .pane-head { min-height: 44px; padding: var(--sp-1) var(--sp-4); }
+#transcript-off { color: var(--text-muted); font-size: var(--fs-xs); }
+#transcript-count:empty { display: none; }
+#voice-lines { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: var(--sp-3) var(--sp-4); }
+#transcript-empty { margin: var(--sp-3) var(--sp-4); }
+#voice-lines:has(> li) + #transcript-empty, body.fold-transcript #transcript > :not(.pane-head) { display: none; }
+body.transcript-room #transcript { display: flex; flex-direction: column; min-height: 0; }
+body.transcript-room:not(.fold-transcript) #chat-filter { display: none; }
+/* Beside the chat: areas, not auto-placement, as the chat's hidden children would shift the rows. */
+body.transcript-room:has(#viewer[hidden]) .chat { display: grid; grid-template: "filter pane" auto "msgs pane" minmax(0, 1fr) "fempty pane" auto "cempty pane" auto "send pane" auto / minmax(0, 1fr) auto; }
+.chat > #chat-filter { grid-area: filter; }
+.chat > #messages { grid-area: msgs; }
+.chat > #filter-empty { grid-area: fempty; }
+.chat > #chat-empty { grid-area: cempty; }
+.chat > #send { grid-area: send; }
+.chat > #transcript { grid-area: pane; }
+body.transcript-room:has(#viewer[hidden]) #transcript { width: 20rem; border-left: 1px solid var(--border); }
+body.fold-transcript:has(#viewer[hidden]) #transcript { width: 56px; }
+body.fold-transcript:has(#viewer[hidden]) #transcript .pane-head { flex-direction: column; padding: var(--sp-3) 0; }
+body.fold-transcript:has(#viewer[hidden]) #transcript :is(.sec-label, #transcript-off) { display: none; }
+/* Above the messages with a document open (020-AC9), its DOM place kept for the reading order (020-AC14). */
+body.transcript-room:has(#viewer:not([hidden])) #transcript { order: -1; flex: 0 1 auto; max-height: 40%; border-bottom: 1px solid var(--border); }
 #chat-empty p { margin: 0; }
 .msg { position: relative; margin-bottom: var(--sp-3); padding-right: var(--control-h); }
 .msg .meta { font-size: var(--fs-sm); }
 .msg .meta time { color: var(--text-muted); margin-left: var(--sp-1); }
 .msg .body { overflow-wrap: anywhere; }
+/* Room page only, from 40rem: more of the chat fits beside a document (020-AC15). */
+@media (width > 40rem) { body.room :is(.msg:not(.system) .body, #send textarea) { font-size: 0.9375rem; } }
 .msg .body :is(p, ul, ol, pre, table, blockquote) { margin: var(--sp-1) 0; }
 .msg .body :is(ul, ol) { padding-left: var(--sp-5); }
 .msg .body pre { overflow-x: auto; padding: var(--sp-2); background: var(--border); border-radius: var(--r-sm); }
