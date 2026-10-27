@@ -22,7 +22,7 @@ func (s *Store) DueVoicePersonas(ctx context.Context, now time.Time, c VoiceCoun
 	return s.duePersonas(ctx, `WHERE p.room_id = ANY(?) AND p.every_voice IS NOT NULL AND p.pending = 0
 		AND (SELECT COUNT(*) FROM (SELECT 1 FROM messages m WHERE m.room_id = p.room_id AND m.kind = 'voice' AND m.deleted_at IS NULL
 			AND m.id > p.mark_msg_id AND (CAST(? AS BIGINT) <= 0 OR COALESCE(m.appended_at, m.ts) <= ?
-				OR m.id < (SELECT MAX(id) FROM messages l WHERE l.room_id = p.room_id AND l.kind <> 'text'))
+				OR m.id < (SELECT MAX(id) FROM messages l WHERE l.room_id = p.room_id AND l.`+nonText+`))
 			ORDER BY m.id LIMIT p.every_voice) c) >= p.every_voice ORDER BY p.room_id, p.id`,
 		rooms, int64(c.Gap), formatTS(now.Add(-c.Close)))
 }

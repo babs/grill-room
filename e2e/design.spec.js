@@ -362,7 +362,7 @@ test('phone tab bar', async ({ browser, request }) => {
   await expect.poll(() => alice.evaluate(async () => {
     messages.scrollTop = 200;
     await new Promise((r) => requestAnimationFrame(() => setTimeout(r))); // one frame, then the scroll event's task
-    return pinned;
+    return isPinned(messages);
   })).toBe(false);
   await bar.getByRole('button', { name: /Docs/ }).click();
   await expect(alice.locator('#docs-pane')).toBeVisible();
@@ -561,9 +561,9 @@ test('docs panes follow the design rules', async ({ browser, request }) => {
   const heights = await alice.locator('.viewer-head button:visible').evaluateAll((els) => els.map((e) => [e.id, Math.round(e.getBoundingClientRect().height)]));
   expect(heights.map(([id]) => id)).toEqual(expect.arrayContaining(['doc-more', 'doc-width']));
   expect(new Set(heights.map(([, h]) => h)), JSON.stringify(heights)).toEqual(new Set([36]));
-  // The drawer headers' small actions: one 24 px size (008-AC14).
+  // The drawer headers' small actions: one 24 px size (008-AC14), the Transcription pane's fold too (020-AC12).
   const heads = await alice.locator('.pane-head :is(button, a):visible').evaluateAll((els) => els.map((e) => [e.id, Math.round(e.getBoundingClientRect().height)]));
-  expect(heads.map(([id]) => id)).toEqual(['people-fold', 'docs-fold', 'docs-window', 'upload-open']);
+  expect(heads.map(([id]) => id)).toEqual(['people-fold', 'docs-fold', 'docs-window', 'upload-open', 'transcript-fold']);
   expect(new Set(heads.map(([, h]) => h)), JSON.stringify(heads)).toEqual(new Set([24]));
   await alice.emulateMedia({ reducedMotion: 'reduce' });
   for (const id of ['side-handle', 'notes-handle']) {

@@ -72,13 +72,13 @@ func (s *Store) RoomOverview(ctx context.Context, roomID string, defaultQuota in
 // roomActivitySQL is room r's last message time. A voice paragraph dates it by its last append,
 // and grows past typed messages, so its latest non-typed message counts too (018-AC5, 020-AC17).
 const roomActivitySQL = `GREATEST((SELECT COALESCE(appended_at, ts) FROM messages WHERE room_id = r.id ORDER BY id DESC LIMIT 1),
-	(SELECT COALESCE(appended_at, ts) FROM messages WHERE room_id = r.id AND kind <> 'text' ORDER BY id DESC LIMIT 1))`
+	(SELECT COALESCE(appended_at, ts) FROM messages WHERE room_id = r.id AND ` + nonText + ` ORDER BY id DESC LIMIT 1))`
 
 // profileActivitySQL is profile p's last line time, as roomActivitySQL across its seats.
 const profileActivitySQL = `GREATEST((SELECT COALESCE(m.appended_at, m.ts) FROM messages m WHERE m.id = (SELECT MAX(m2.id) FROM participants pa
 	JOIN messages m2 ON m2.participant_id = pa.id WHERE pa.profile_id = p.id)),
 	(SELECT COALESCE(m.appended_at, m.ts) FROM messages m WHERE m.id = (SELECT MAX(m2.id) FROM participants pa
-	JOIN messages m2 ON m2.participant_id = pa.id WHERE pa.profile_id = p.id AND m2.kind <> 'text')))`
+	JOIN messages m2 ON m2.participant_id = pa.id WHERE pa.profile_id = p.id AND m2.` + nonText + `)))`
 
 // roomOverviews lists the rooms, or only room roomID when set.
 func (s *Store) roomOverviews(ctx context.Context, defaultQuota int64, roomID string) ([]RoomOverview, error) {

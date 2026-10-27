@@ -10,6 +10,14 @@ const docsMode = location.pathname.split('/')[3] === 'docs';
 if (docsMode) document.body.classList.add('docs-window');
 const phone = () => matchMedia('(max-width: 40rem)').matches;
 const messages = $('messages');
+// Voice lines move here while the Transcription pane shows (020-AC8): a line is in one list or
+// the other, so lookups go through lineSel.
+const voiceLines = $('voice-lines');
+const chatColumn = document.querySelector('.chat');
+const lineSel = ':is(#messages, #voice-lines) > li.msg';
+const lineOf = (id) => document.querySelector(lineSel + '[data-id="' + id + '"]');
+// lineKind is a drawn line's message kind: renderMessage names it right after .msg.
+const lineKind = (li) => li.classList[1];
 const sendForm = $('send');
 const bodyInput = $('body');
 let events;
@@ -165,27 +173,34 @@ function showMe() {
 // initials takes the first letter of the first two words, "Ana María" → "AM".
 const initials = (name) => name.trim().split(/\s+/).slice(0, 2).map((w) => [...w][0] || '').join('').toUpperCase();
 
-// The list shrinks under a keyboard, a toolbar or a wrapping header: keep the newest message in
+// A list shrinks under a keyboard, a toolbar or a wrapping header: keep the newest message in
 // view when it was. A scroll up unpins, as scroll events land after the layout changed, except
 // right after a viewport resize: a list that grew clamps its scroll down, and when it shrinks back
-// within the frame no resize of the list is observed to pin it again.
-let pinned = true;
-let lastTop = 0;
+// within the frame no resize of the list is observed to pin it again. The chat and the pane each
+// keep their own state (020-AC10).
+const pins = new Map();
 let resizedAt = -Infinity;
 // A pinch zoom is no layout change, and a reader's own wheel, touch or key ends the window.
 for (const target of [window, window.visualViewport]) {
   target?.addEventListener('resize', () => { if (!window.visualViewport || Math.abs(visualViewport.scale - 1) <= 0.01) resizedAt = performance.now(); });
 }
-for (const ev of ['wheel', 'touchstart', 'keydown']) messages.addEventListener(ev, () => { resizedAt = -Infinity; }, { passive: true });
-messages.addEventListener('scroll', () => {
-  if (messages.scrollTop + messages.clientHeight >= messages.scrollHeight - 40) pinned = true;
-  else if (messages.scrollTop < lastTop) {
-    if (pinned && performance.now() - resizedAt < 1000) messages.scrollTop = messages.scrollHeight;
-    else pinned = false;
-  }
-  lastTop = messages.scrollTop;
-});
-new ResizeObserver(() => { if (pinned) messages.scrollTop = messages.scrollHeight; }).observe(messages);
+const isPinned = (list) => pins.get(list).pinned;
+const setPinned = (list, on) => { pins.get(list).pinned = on; };
+const stick = (list) => { if (isPinned(list)) list.scrollTop = list.scrollHeight; };
+for (const list of [messages, voiceLines]) {
+  const pin = { pinned: true, lastTop: 0 };
+  pins.set(list, pin);
+  for (const ev of ['wheel', 'touchstart', 'keydown']) list.addEventListener(ev, () => { resizedAt = -Infinity; }, { passive: true });
+  list.addEventListener('scroll', () => {
+    if (list.scrollTop + list.clientHeight >= list.scrollHeight - 40) pin.pinned = true;
+    else if (list.scrollTop < pin.lastTop) {
+      if (pin.pinned && performance.now() - resizedAt < 1000) list.scrollTop = list.scrollHeight;
+      else pin.pinned = false;
+    }
+    pin.lastTop = list.scrollTop;
+  });
+  new ResizeObserver(() => stick(list)).observe(list);
+}
 
 // Unread count (005-AC12): lines from others and syntheses that arrive while the tab is not
 // focused show as "(N) " in its title; voice lines only when opted in. The stream replays history
@@ -225,7 +240,8 @@ const filterKey = 'grill-room-chat-filter';
 const filterCounts = { written: 0, voice: 0 };
 let chatFilter = ['all', 'written', 'voice'].includes(localStorage.getItem(filterKey)) ? localStorage.getItem(filterKey) : 'written';
 let viewFilter = '';
-const shownFilter = () => viewFilter || chatFilter;
+// While the pane shows, the chat holds no voice line: nothing to filter (020-AC8).
+const shownFilter = () => (paneShows() ? 'all' : viewFilter || chatFilter);
 const filterKind = (kind) => (kind === 'voice' ? 'voice' : 'written');
 const filterHides = (kind) => shownFilter() !== 'all' && filterKind(kind) !== shownFilter();
 
@@ -247,28 +263,82 @@ function setFilter(f, keep) {
     viewFilter = '';
     localStorage.setItem(filterKey, f);
   } else viewFilter = f;
-  // Showing a kind, or All, clears its count (020-AC6).
+  // Showing a kind, or All, clears its count (020-AC6), the folded pane's too (020-AC12).
   for (const k in filterCounts) if (f === 'all' || f === k) filterCounts[k] = 0;
+  if (!filterHides('voice')) paneCount = 0;
   showFilter();
-  if (pinned) messages.scrollTop = messages.scrollHeight;
+  showPane();
+  stick(messages);
 }
 for (const b of $('chat-filter').querySelectorAll('button')) b.addEventListener('click', () => setFilter(b.dataset.filter, true));
-showFilter();
+
+// Transcription pane (020-AC8 to AC12): this moves the voice lines in or out; CSS places it.
+// It needs 64rem and, beside the chat, room for the chat's 22rem next to its 20rem (docs/design.md).
+const wide = matchMedia('(min-width: 64rem)');
+let paneFits = false;
+let paneCount = 0;
+const paneFolded = () => document.body.classList.contains('fold-transcript');
+const paneShows = () => paneFits && !paneFolded();
+
+function placeVoice() {
+  paneFits = !docsMode && wide.matches && (!$('viewer').hidden || chatColumn.clientWidth >= 42 * parseFloat(getComputedStyle(document.documentElement).fontSize));
+  document.body.classList.toggle('transcript-room', paneFits);
+  const show = paneShows();
+  const moving = show ? messages.querySelectorAll(':scope > li.voice') : voiceLines.children;
+  if (!moving.length) return showFilter();
+  // A line holding focus, moved or not, stays in sight and in focus: its list does not stick to its
+  // end, the line is scrolled into view instead. An edit box left open without focus holds nothing.
+  const focused = document.activeElement;
+  const held = focused?.closest?.(lineSel);
+  if ($('msg-menu').matches(':popover-open')) $('msg-menu').hidePopover();
+  // One change for screen readers, not one announcement per line moved.
+  for (const l of [messages, voiceLines]) l.setAttribute('aria-busy', 'true');
+  if (show) {
+    const frag = document.createDocumentFragment();
+    for (const li of [...moving]) frag.append(li);
+    voiceLines.append(frag);
+    // The pane comes back live, at its end; the chat shows no voice, so its count goes (020-AC10).
+    setPinned(voiceLines, true);
+    filterCounts.voice = 0;
+  } else {
+    // Back among the chat's lines, by id: the order the stream gave them.
+    let at = messages.firstElementChild;
+    for (const li of [...moving]) {
+      while (at && Number(at.dataset.id) < Number(li.dataset.id)) at = at.nextElementSibling;
+      messages.insertBefore(li, at);
+    }
+  }
+  requestAnimationFrame(() => { for (const l of [messages, voiceLines]) l.removeAttribute('aria-busy'); });
+  if (held) setPinned(held.parentElement, false);
+  if (held && filterHides(lineKind(held))) setFilter('all');
+  if (focused instanceof HTMLElement && focused !== document.activeElement && focused.isConnected) focused.focus({ preventScroll: true });
+  showFilter();
+  held?.scrollIntoView({ block: 'nearest' });
+  for (const l of [messages, voiceLines]) if (l !== held?.parentElement) stick(l);
+}
+
+function showPane() {
+  $('transcript-count').textContent = paneCount ? paneCount + ' new' : '';
+}
+new ResizeObserver(placeVoice).observe(chatColumn);
+wide.addEventListener('change', placeVoice);
+placeVoice();
 
 // jumpTo is the line a deep link names, /r/<room>#m<id>, as a notification opens it (005-AC24):
 // the chat scrolls there once the stream has delivered it.
 let jumpTo = Number((location.hash.match(/^#m(\d+)$/) || [])[1] || 0);
 
 function jump(id) {
-  const li = messages.querySelector('li[data-id="' + id + '"]');
+  const li = lineOf(id);
   if (!li) {
     jumpTo = id;
     return;
   }
   jumpTo = 0;
-  pinned = false;
+  // A line in the pane scrolls the pane; the chat stays where it was (020-AC8).
+  setPinned(li.parentElement, false);
   // A line the filter hides is shown with everything else (020-AC7).
-  if (filterHides(li.classList.contains('voice') ? 'voice' : '')) setFilter('all');
+  if (filterHides(lineKind(li))) setFilter('all');
   li.scrollIntoView({ block: 'center' });
   li.classList.add('flash');
   setTimeout(() => li.classList.remove('flash'), 1500);
@@ -286,24 +356,36 @@ function addMessage(m) {
     filterCounts[filterKind(m.kind)]++;
     showFilter();
   }
+  // The folded strip counts every new voice line the chat hides, yours too (020-AC12).
+  if (m.kind === 'voice' && paneFits && paneFolded() && filterHides('voice') && isLive(m)) {
+    paneCount++;
+    showPane();
+  }
   if (m.kind === 'system') {
     // A join changes the participant list; history replay sends many, so refresh once.
     clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => loadRoom().catch(console.error), 200);
   }
-  messages.append(renderMessage(m));
-  if (pinned) messages.scrollTop = messages.scrollHeight;
+  const list = m.kind === 'voice' && paneShows() ? voiceLines : messages;
+  list.append(renderMessage(m));
+  stick(list);
   if (m.id === jumpTo) jump(m.id);
 }
 
 // An edit or delete replaces the line in place; one not shown yet arrives later as it stands. A
 // replay of a change already shown leaves the line alone, with any edit box open on it.
 function replaceMessage(m) {
-  const li = messages.querySelector('li[data-id="' + m.id + '"]');
+  const li = lineOf(m.id);
   if (!li || m.change_seq <= Number(li.dataset.seq)) return;
+  const list = li.parentElement;
+  // A line above the view that grows would push down what is read where the browser does not
+  // anchor scrolling (Safari): keep the next line in place, a no-op where it does (Chrome).
+  const below = !isPinned(list) && li.getBoundingClientRect().bottom <= list.getBoundingClientRect().top ? li.nextElementSibling : null;
+  const was = below ? below.getBoundingClientRect().top : 0;
   li.replaceWith(renderMessage(m));
+  if (below) list.scrollTop += below.getBoundingClientRect().top - was;
   // A voice paragraph grows in place (018-AC5): its new words must not land below the fold.
-  if (pinned) messages.scrollTop = messages.scrollHeight;
+  stick(list);
 }
 
 // blockedLines are the shown lines of websites a turn was refused, by id: their buttons follow the
@@ -361,7 +443,7 @@ function whoAllows() {
 // renderBlocked redraws the blocked lines' buttons after the agent state changed.
 function renderBlocked() {
   for (const m of blockedLines.values()) {
-    const li = messages.querySelector('li[data-id="' + m.id + '"]');
+    const li = lineOf(m.id);
     if (li) li.replaceWith(renderMessage(m));
   }
 }
@@ -521,7 +603,7 @@ function nameSender(li, el) {
 }
 
 function renameSenders() {
-  for (const li of messages.querySelectorAll('li[data-pid]')) {
+  for (const li of document.querySelectorAll(lineSel + '[data-pid]')) {
     const el = li.querySelector(':scope > .meta > .sender');
     if (el) nameSender(li, el);
   }
@@ -677,7 +759,7 @@ function mentionChip(s) {
     el.dataset.tip = s.status === 'done' ? 'Show the synthesis' : 'Show how the turn ended';
     el.addEventListener('click', (e) => {
       e.preventDefault();
-      if (messages.querySelector('li[data-id="' + s.line_id + '"]')) jump(s.line_id);
+      if (lineOf(s.line_id)) jump(s.line_id);
     });
   }
   return el;
@@ -685,7 +767,7 @@ function mentionChip(s) {
 
 function renderMentions() {
   for (const id of new Set((agent.mentions || []).map((s) => s.message_id))) {
-    const li = messages.querySelector('li[data-id="' + id + '"]');
+    const li = lineOf(id);
     if (li) fillMentions(li);
   }
 }
@@ -745,7 +827,7 @@ function editMessage(li, m) {
       // (016-AC21); the stream may have redrawn the line before this answer came.
       if (saved && saved.mention_notices) {
         notices.set(saved.id, saved.mention_notices);
-        const live = messages.querySelector('li[data-id="' + saved.id + '"]');
+        const live = lineOf(saved.id);
         if (live) fillMentions(live);
       }
     }).catch((err) => { box.setCustomValidity(err.message); box.reportValidity(); });
@@ -791,7 +873,7 @@ $('msg-menu').addEventListener('toggle', (e) => {
 });
 // The line may have been redrawn since the menu opened (an edit from elsewhere): act on it as shown.
 $('msg-edit').addEventListener('click', () => {
-  const li = menuFor && messages.querySelector('li[data-id="' + menuFor.m.id + '"]');
+  const li = menuFor && lineOf(menuFor.m.id);
   if (li && li.querySelector(':scope > .body')) editMessage(li, menuFor.m);
 });
 $('msg-delete').addEventListener('click', () => { if (menuFor) deleteMessage(menuFor.m); });
@@ -835,7 +917,7 @@ function toast(text, action, onEnd) {
 // sends the deletes it holds at once.
 const pendingDeletes = new Map();
 function deleteMessage(m) {
-  const li = messages.querySelector('li[data-id="' + m.id + '"]');
+  const li = lineOf(m.id);
   if (li) li.classList.add('deleting');
   const send = () => {
     pendingDeletes.delete(m.id);
@@ -848,7 +930,7 @@ function deleteMessage(m) {
     if (!pendingDeletes.has(m.id)) return;
     if (!undone) return send();
     pendingDeletes.delete(m.id);
-    messages.querySelector('li[data-id="' + m.id + '"]')?.classList.remove('deleting');
+    lineOf(m.id)?.classList.remove('deleting');
   });
 }
 window.addEventListener('pagehide', () => { for (const send of [...pendingDeletes.values()]) send(); });
@@ -1560,11 +1642,14 @@ for (const p of Object.values(panes)) {
 }
 // A drawer's disclosure triangle names the drawer and says its state in aria-expanded; the whole
 // header toggles it, its own actions aside (008-AC5).
-const drawers = [{ name: 'people', button: $('people-fold') }, { name: 'docs', button: $('docs-fold') }];
+// Folding the Transcription pane brings the chat filter back; unfolding clears its count (020-AC12).
+const drawers = [{ name: 'people', button: $('people-fold') }, { name: 'docs', button: $('docs-fold') },
+  { name: 'transcript', button: $('transcript-fold'), onFold: (on) => { if (!on) paneCount = 0; showPane(); placeVoice(); } }];
 function foldDrawer(d, on, store) {
   document.body.classList.toggle('fold-' + d.name, on);
   d.button.setAttribute('aria-expanded', String(!on));
   if (store) localStorage.setItem('grill-room-fold-' + d.name, on ? '1' : '0');
+  d.onFold?.(on);
 }
 for (const d of drawers) {
   foldDrawer(d, localStorage.getItem('grill-room-fold-' + d.name) === '1', false);
@@ -1900,7 +1985,7 @@ function connect() {
     renderAgent();
     renderMentions();
     renderBlocked();
-    messages.querySelectorAll('mark.mention-chip.persona').forEach(paintChip);
+    document.querySelectorAll(lineSel + ' mark.mention-chip.persona').forEach(paintChip);
     renderParticipants();
     window.grillAgent = agent;
     window.dispatchEvent(new CustomEvent('grill:agent', { detail: agent }));
@@ -3477,7 +3562,7 @@ function hideSoon(from) {
   }, hideGrace);
 }
 
-const cardTarget = (t) => (t instanceof Element ? t.closest('#participants .name, #participants-away .name, #messages li[data-pid] > .meta > .sender') : null);
+const cardTarget = (t) => (t instanceof Element ? t.closest('#participants .name, #participants-away .name, ' + lineSel + '[data-pid] > .meta > .sender') : null);
 document.addEventListener('pointerover', (e) => {
   if (e.pointerType !== 'mouse' || !(e.target instanceof Element)) return;
   const el = cardTarget(e.target);
@@ -3673,6 +3758,7 @@ function showSTT(st) {
     : !st.listening || !voices.length ? ''
     : (voices.length === 1 ? '1 voice is' : voices.length + ' voices are') + ' being written down' + (mine ? ' · yours is one of them' : '');
   $('voice-more').classList.toggle('down', sttDown);
+  $('transcript-off').hidden = !sttDown;
   sttButton();
   sttEngines = st.engines || [];
   showCredit();
@@ -4162,7 +4248,7 @@ async function send() {
   const m = await res.json();
   if (m.mention_notices) {
     notices.set(m.id, m.mention_notices);
-    const li = messages.querySelector('li[data-id="' + m.id + '"]');
+    const li = lineOf(m.id);
     if (li) fillMentions(li);
   }
 }

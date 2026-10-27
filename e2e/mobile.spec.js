@@ -166,7 +166,7 @@ test('a resize does not unpin the chat', async ({ browser, request }) => {
   await expect(page.locator('#messages')).toContainText('Alice joined');
   const gap = () => page.evaluate(() => messages.lastElementChild.getBoundingClientRect().bottom - messages.getBoundingClientRect().bottom);
   await expect.poll(gap).toBeLessThanOrEqual(1);
-  const pinned = () => page.evaluate(() => pinned);
+  const pinned = () => page.evaluate(() => isPinned(messages));
   const scrollUp = async (target, between) => {
     await page.evaluate(({ target, between }) => {
       if (target) globalThis[target].dispatchEvent(new Event('resize'));

@@ -51,7 +51,7 @@ Needs the `tts` pod (`kubectl -n grill-room get deploy tts`) and an AI host for 
 2. Each speaking persona's pill shows a speaker button; a click on a pill opens its card, which names its voice.
 3. Ask Facilitator, then Secretary, with the ▶ on their pills. When Facilitator's turn ends its pill shows "speaking" and you hear a short line in its voice; if Secretary's turn ends meanwhile, its pill shows "waiting to speak" until Facilitator is done, then it speaks in another voice.
 4. While Facilitator speaks, say a sentence on the phone. It stops at once, its pill says "waiting to speak", and once the room has been quiet a second it says the cut sentence again from its start.
-5. No voice line in the chat carries a persona's words: only yours are written down.
+5. No voice line, in the chat or the Transcription pane, carries a persona's words: only yours are written down.
 6. On the laptop, press the speaker on Facilitator's pill: you stop hearing it, the phone still does. Reload: it stays muted for you. Press it again.
 7. Delete the room as above.
 8. The 300 ms bound end to end (013-AC22; CI measures it only from when the listener hears the human). Needs no cluster: a workstation with docker, pnpm, uv and a Hugging Face read token (`HF_TOKEN_FILE`, see `.env.example`). Run `make stt-image tts-image HF_TOKEN_FILE=<token file>`, then `make e2e-persona-voice PERSONA_VOICE_TTS_IMAGE=grill-tts:local PERSONA_VOICE_ARGS=turn-taking.spec.js`. It passes with `stop latency ms ... p95` at most 300.

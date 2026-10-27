@@ -80,8 +80,7 @@ test('grill session on the lab, audio over TURN/TLS', async ({ request, baseURL 
     await joinAudio(alice);
     await assertAudio({ alice, bob }, true);
     const first = fixture.utterances[0];
-    // The chat shows Written by default (020-AC5).
-    await bob.locator('#chat-filter [data-filter=all]').click();
+    // At the default 1280 px, voice lines show in the Transcription pane (020-AC8).
     const line = bob.locator('.msg.voice', { has: bob.locator('strong', { hasText: 'Alice' }) }).first();
     await expect(line).toBeVisible({ timeout: (first.end + 15) * 1000 });
     console.log('voice line:', await line.locator('.body').textContent());

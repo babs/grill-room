@@ -109,7 +109,7 @@ func appendVoiceLine(ctx context.Context, t *txn, m *Message, now time.Time, max
 	var kind, body string
 	var source, edited, deleted sql.NullString
 	err := t.QueryRowContext(ctx, `SELECT id, participant_id, kind, source, body, edited_at, deleted_at FROM messages
-		WHERE room_id = ? AND kind <> 'text' ORDER BY id DESC LIMIT 1`, m.RoomID).Scan(&id, &pid, &kind, &source, &body, &edited, &deleted)
+		WHERE room_id = ? AND `+nonText+` ORDER BY id DESC LIMIT 1`, m.RoomID).Scan(&id, &pid, &kind, &source, &body, &edited, &deleted)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}

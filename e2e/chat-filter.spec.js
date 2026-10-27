@@ -1,11 +1,10 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, playEvents } from './helpers.js';
+import { roomWith, playEvents, line, live } from './helpers.js';
 
-// The e2e server has no STT worker: voice lines reach the page as the stream would send them.
-const old = '2026-01-01T10:00:00Z';
-const line = (id, kind, body, ts = old) => ({ id, kind, participant_id: kind === 'system' ? 0 : 999999, sender: 'Carol', body, html: '<p>' + body + '</p>', ts, change_seq: 0 });
 const seg = (page, f) => page.locator(`#chat-filter [data-filter=${f}]`);
 const msg = (page, id) => page.locator(`#messages li[data-id="${id}"]`);
+// Under 64rem: the filter shows, the Transcription pane does not (020-AC8).
+test.use({ viewport: { width: 900, height: 720 } });
 
 // 020-AC4 020-AC5: Written by default shows typed lines, persona replies and room events; Voice
 // only voice lines; All everything. The choice survives a reload; history adds no count (020-AC6).
@@ -61,13 +60,12 @@ test('a filter with nothing to show says so', async ({ browser, request }) => {
 // the segment, or All, clears it.
 test('a hidden kind counts its new lines', async ({ browser, request }) => {
   const { pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
-  const live = (m) => alice.evaluate((m) => addMessage({ ...m, ts: new Date().toISOString() }), m);
-  await live(line(1e9, 'voice', 'first words'));
+  await live(alice, line(1e9, 'voice', 'first words'));
   await expect(seg(alice, 'voice')).toHaveText('Voice · 1');
   await alice.evaluate((m) => replaceMessage(m), { ...line(1e9, 'voice', 'first words and more'), change_seq: 1 });
   await expect(msg(alice, 1e9)).toContainText('and more');
   await expect(seg(alice, 'voice')).toHaveText('Voice · 1');
-  await live(line(1e9 + 1, 'voice', 'second line'));
+  await live(alice, line(1e9 + 1, 'voice', 'second line'));
   await expect(seg(alice, 'voice')).toHaveText('Voice · 2');
   await expect(seg(alice, 'written')).toHaveText('Written');
   await seg(alice, 'voice').click();
@@ -80,7 +78,7 @@ test('a hidden kind counts its new lines', async ({ browser, request }) => {
   await expect(seg(alice, 'written')).toHaveText('Written · 1');
   await seg(alice, 'all').click();
   await expect(seg(alice, 'written')).toHaveText('Written');
-  await live(line(1e9 + 2, 'voice', 'shown at once'));
+  await live(alice, line(1e9 + 2, 'voice', 'shown at once'));
   await expect(seg(alice, 'voice')).toHaveText('Voice');
 });
 
@@ -221,7 +219,7 @@ test('the unread count ignores the filter', async ({ browser, request }) => {
   await bob.locator('#body').press('Enter');
   await expect(alice).toHaveTitle('(1) Docs room · grill-room');
   await seg(alice, 'written').click();
-  await alice.evaluate((m) => addMessage({ ...m, ts: new Date().toISOString() }), line(1e9, 'voice', 'not counted'));
+  await live(alice, line(1e9, 'voice', 'not counted'));
   await expect(seg(alice, 'voice')).toHaveText('Voice · 1');
   await expect(alice).toHaveTitle('(1) Docs room · grill-room');
 });

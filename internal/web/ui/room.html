@@ -417,6 +417,17 @@
       <button type="button" id="chat-invite" class="btn-primary">Copy invite link</button>
       <p id="chat-invite-status" class="said" role="status"></p>
     </div>
+    <!-- After the chat's messages in the DOM, wherever CSS draws it (020-AC14). -->
+    <aside id="transcript" aria-labelledby="transcript-title">
+      <div class="pane-head">
+        <button type="button" id="transcript-fold" class="fold" aria-controls="voice-lines" aria-expanded="true" aria-label="Transcription"></button>
+        <h2 id="transcript-title"><svg class="ico sec-icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/></svg> <span class="sec-label">Transcription</span></h2>
+        <span id="transcript-off" hidden>Voice-to-text is off</span>
+        <span id="transcript-count" class="badge"></span>
+      </div>
+      <ol id="voice-lines" aria-live="polite"></ol>
+      <p id="transcript-empty" class="empty">Nobody has been transcribed yet.</p>
+    </aside>
     <form id="send">
       <ul id="mention-list" class="mention-list" role="listbox" aria-label="Mention" hidden></ul>
       <textarea id="body" rows="2" maxlength="4000" placeholder="Message the room · @ to mention" aria-label="Message" aria-describedby="send-hint"></textarea>

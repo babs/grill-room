@@ -55,7 +55,8 @@ function probe() {
   });
 }
 
-const messages = (page) => page.locator('#messages li.msg').evaluateAll((els) => els.map((li) => {
+// Voice lines may sit in the Transcription pane (020-AC8): both lists, in id order.
+const messages = (page) => page.locator(':is(#messages, #voice-lines) > li.msg').evaluateAll((els) => els.sort((a, b) => a.dataset.id - b.dataset.id).map((li) => {
   const kind = [...li.classList].find((c) => c !== 'msg');
   const sender = li.querySelector('strong')?.textContent;
   return {
@@ -202,7 +203,7 @@ test(plan.name, async ({ request }) => {
           // The recorded speech plays in real time: wait for its end. Not an assertion.
           await first.waitForTimeout(Math.max(0, Math.max(...Object.values(micAt)) + lastEnd * 1000 - Date.now()));
           // The worker lags behind speech: wait until no line has landed for 15 s, 2 minutes at most.
-          const count = () => first.locator('#messages li.msg.voice').count();
+          const count = () => first.locator('.msg.voice').count();
           let n = await count();
           for (let quiet = Date.now(), cap = Date.now() + 120_000; Date.now() - quiet < 15_000 && Date.now() < cap;) {
             await first.waitForTimeout(2000); // polls the voice lines, bounded by the cap
