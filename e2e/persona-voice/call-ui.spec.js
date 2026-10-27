@@ -34,11 +34,13 @@ async function alice(browser, request, viewport) {
 }
 
 // joinAudio joins the call and returns once the server knows: the beat that says so got its answer.
+// The beat follows the LiveKit connect, so it waits first, on the action timeout: the bar's buttons,
+// shown with it, are there by then.
 async function joinAudio(page) {
   const inAudio = page.waitForResponse((r) => r.url().endsWith('/presence') && r.request().postDataJSON().audio === true);
   await page.getByRole('button', { name: 'Join audio' }).click();
-  await expect(page.getByRole('button', { name: 'Audio options' })).toBeVisible();
   expect((await inAudio).status()).toBe(204);
+  await expect(page.getByRole('button', { name: 'Audio options' })).toBeVisible();
 }
 
 const pill = (page, name) => page.locator(`.persona-pill[data-name="${name}"]`);

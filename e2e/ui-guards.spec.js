@@ -233,6 +233,27 @@ test("a control's tip never takes the next row's click", async ({ browser, reque
   await expect(alice.locator('#doc-name')).toHaveText(await rows.nth(1).textContent());
 });
 
+// The pointer going straight from a shown tip to another tipped control shows the new one: the
+// first tip's close used to cancel the second's pending show (persona-voice's credit after ▶).
+test('a tip follows the pointer from one control to the next', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.setViewportSize(desktop);
+  await upload(alice, 'a.md', 'text/markdown', '# A\n');
+  await upload(alice, 'b.md', 'text/markdown', '# B\n');
+  const docs = alice.locator('#documents button.doc');
+  await expect(docs).toHaveCount(2);
+  const tip = alice.locator('#person-tip');
+  for (const [from, to] of [[docs.first(), docs.nth(1)], [alice.locator('#upload-open'), alice.locator('#docs-window')],
+    [alice.locator('#room-open'), alice.locator('#me')]]) {
+    await from.hover();
+    await expect(tip).toBeVisible();
+    await expect(tip).toHaveText(await from.getAttribute('data-tip'));
+    await to.hover();
+    await expect(tip).toHaveText(await to.getAttribute('data-tip'));
+    await expect(tip).toBeVisible();
+  }
+});
+
 // The shared components (docs/design.md §5, the panels review's kit branch): each guard failed on
 // the pages as they were.
 

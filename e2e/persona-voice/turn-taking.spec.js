@@ -82,6 +82,28 @@ function silentMic() {
 // into window.levels[identity] = [[t, dBFS], ...].
 function meter() {
   window.levels = {};
+  // The page's peer connections, for each remote track's jitter buffer (rx below).
+  const pcs = [];
+  const PC = window.RTCPeerConnection;
+  window.RTCPeerConnection = class extends PC {
+    constructor(...a) {
+      super(...a);
+      pcs.push(this);
+    }
+  };
+  // rx is a remote audio track's receive counters, by LiveKit identity.
+  window.rx = async (identity) => {
+    const id = document.querySelector(`#voice-audio audio[data-pid="${identity}"]`)?.srcObject?.getAudioTracks()[0]?.id;
+    for (const pc of pcs) {
+      for (const r of (await pc.getStats()).values()) {
+        if (r.type === 'inbound-rtp' && r.kind === 'audio' && r.trackIdentifier === id) {
+          return { delay: r.jitterBufferDelay, target: r.jitterBufferTargetDelay, emitted: r.jitterBufferEmittedCount,
+            packets: r.packetsReceived, lost: r.packetsLost, concealed: r.concealedSamples, at: r.lastPacketReceivedTimestamp };
+        }
+      }
+    }
+    return null;
+  };
   const ctx = new AudioContext();
   const seen = new Set();
   setInterval(() => {
@@ -260,6 +282,9 @@ test('turn-taking in the call', async ({ browser, request }) => {
     // AC22, AC23: interruptions while Grill speaks; each stops it, each quiet resumes it.
     const stops = [];
     const paths = [];
+    // Alice's jitter buffer for Bob over each interruption, mean ms: [delay, target, packets lost, ms concealed].
+    const jb = [];
+    let rx0 = await alice.page.evaluate((id) => window.rx(id), bobKey);
     for (let i = 0; i < MAX_INTERRUPTIONS && paths.filter((p) => p <= STALL_MS).length < KEPT; i++) {
       const before = await now();
       await expect.poll(async () => onsetAfter(await since(ids.Grill, before), before), { timeout: 20_000 }).toBeTruthy();
@@ -281,16 +306,22 @@ test('turn-taking in the call', async ({ browser, request }) => {
       stops.push(Math.max(0, silent - (FROM_HEARD ? heard : fileOnset)));
       // Bob's own path, file to Alice's ears: what no persona can do better than.
       paths.push(Math.round(heard - fileOnset));
+      const rx1 = await alice.page.evaluate((id) => window.rx(id), bobKey);
+      const n = rx1 && rx0 ? rx1.emitted - rx0.emitted : 0;
+      jb.push(n ? [Math.round(1000 * (rx1.delay - rx0.delay) / n), Math.round(1000 * (rx1.target - rx0.target) / n),
+        rx1.lost - rx0.lost, Math.round((1000 * (rx1.concealed - rx0.concealed)) / 48000)] : null);
+      rx0 = rx1;
       // It picks the sentence up again once the room is quiet (AC23).
       const after = await now();
       await expect.poll(async () => onsetAfter(await since(ids.Grill, after), after), { timeout: 10_000 }).toBeTruthy();
     }
     const from = FROM_HEARD ? 'heard' : 'file';
     console.log('stops from', from, 'in order', JSON.stringify(stops.map((x) => Math.round(x))), 'bob path', JSON.stringify(paths));
+    console.log('alice jitter buffer for bob', JSON.stringify(jb));
     const kept = stops.filter((_, i) => paths[i] <= STALL_MS).sort((a, b) => a - b);
     const p95 = kept[Math.ceil(kept.length * 0.95) - 1];
     mkdirSync('test-results/persona-voice', { recursive: true });
-    writeFileSync('test-results/persona-voice/stops.json', JSON.stringify({ from, stops, paths, kept, p95 }) + '\n');
+    writeFileSync('test-results/persona-voice/stops.json', JSON.stringify({ from, stops, paths, jb, kept, p95 }) + '\n');
     console.log(FROM_HEARD ? 'stop latency from heard ms' : 'stop latency ms', JSON.stringify(kept), 'p95', p95, 'stalled', stops.length - kept.length);
     expect(kept.length, 'interruptions with a media path under STALL_MS').toBeGreaterThanOrEqual(KEPT);
     expect(p95).toBeLessThanOrEqual(300);

@@ -20,7 +20,7 @@ export default defineConfig({
   timeout: 300_000,
   // ponytail: real TTS, STT and Chrome audio flake on shared CI runners; one retry until the causes are fixed.
   retries: process.env.CI ? 1 : 0,
-  use: { baseURL, channel: 'chrome' },
+  use: { baseURL, channel: 'chrome', trace: 'retain-on-failure' },
   outputDir: '../test-results/persona-voice/results',
   webServer: {
     cwd: '..',
