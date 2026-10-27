@@ -80,6 +80,20 @@ func TestAnonymousRoomsOff(t *testing.T) {
 	}
 }
 
+// 019-AC8: the home page learns the flag from GET /api/profile; off, the key is absent.
+func TestAnonymousRoomsProfileFlag(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		opts := testOptions
+		opts.AnonymousRooms = on
+		d := newEnvOpts(t, opts).device(t)
+		code, b := d.do(t, "GET", "/api/profile", nil)
+		if code != http.StatusOK || strings.Contains(string(b), `"anonymous_rooms"`) != on ||
+			decodeJSON[profileResp](t, b).AnonymousRooms != on {
+			t.Fatalf("flag %v: %d %s", on, code, b)
+		}
+	}
+}
+
 // 019-AC2 019-AC7: a browser without a profile gets one and the room, as its admin, with both
 // cookies, the recovery link and its shareable invite; audited and logged as anonymous.
 func TestAnonymousRoomCreates(t *testing.T) {

@@ -1,6 +1,6 @@
 # 019: Anonymous room creation
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-10-24
 **Context**: builds on 004 (room creation limits, import), 011 (profiles without email, rate limiter).
@@ -31,17 +31,17 @@ An operator can turn on room creation without an invite. Then the home page, ope
 
 ## Acceptance criteria
 
-- [ ] **AC1** `GRILL_ROOM_ANONYMOUS_ROOMS` (default `false`, parsed with `strconv.ParseBool`; any other value refuses the start) turns anonymous creation on. Off, `POST /api/rooms/anonymous` answers 404 and the home page shows today's "You need an invite link" line.
-- [ ] **AC2** On, `POST /api/rooms/anonymous` with `name` and `display_name` and no valid profile cookie creates, in one transaction, a profile, the room, the profile's seat as room admin, and the creator's shareable invite, as 004-AC7 does for a profile. It answers 201 with the room, sets the profile cookie and the room cookie, and returns `recovery_url` once, as `POST /api/join` does.
-- [ ] **AC3** A request carrying a valid profile cookie gets 409 "You already have a profile: create the room from your profile page" and creates nothing.
-- [ ] **AC4** Each client IP (its /64 for IPv6, as 011's limiter counts) creates at most `GRILL_ROOM_ANONYMOUS_ROOMS_PER_HOUR` (default `3`, 1 to 1000, else the server refuses to start) anonymous rooms per sliding hour, across pods. Past it: 429 with `Retry-After` and `{"reason":"rate_limited","retry_after_s":N}`, nothing created. A refused or failed request does not count.
-- [ ] **AC5** The instance guardrails hold: with `room_creation` set to `super-admin`, or the instance at its storage quota, the route answers 403 with the same reason as `POST /api/profile/rooms` and creates no profile.
-- [ ] **AC6** A bad `name` or `display_name` gets 400 with the same messages as `POST /api/profile/rooms`, and creates no profile.
-- [ ] **AC7** The creation is audited as `room.create` with actor `profile:<uuid>` and details `{"as": <display>, "anonymous": true}`, and logs `room_created` with `anonymous=true`.
-- [ ] **AC8** With the flag on, the home page opened with no invite and no profile shows "Create a room" (room name, display name, submit). Success opens `/r/<room>` and handles `recovery_url` as a join does. A 429 or 403 shows its reason under the form. With a profile, the page shows its "Your profile" link and no form.
-- [ ] **AC9** With the flag on, `POST /api/rooms/import` by a profile without an email answers 403 "Add an email to your profile to import a room", preview included, before reading the body. The same profile with an email imports as today. The admin is never refused by this rule.
-- [ ] **AC10** With the flag off, a profile without an email imports as today.
-- [ ] **AC11** README documents both variables and the route; `specs/README.md` lists 019.
+- [x] **AC1** `GRILL_ROOM_ANONYMOUS_ROOMS` (default `false`, parsed with `strconv.ParseBool`; any other value refuses the start) turns anonymous creation on. Off, `POST /api/rooms/anonymous` answers 404 and the home page shows today's "You need an invite link" line.
+- [x] **AC2** On, `POST /api/rooms/anonymous` with `name` and `display_name` and no valid profile cookie creates, in one transaction, a profile, the room, the profile's seat as room admin, and the creator's shareable invite, as 004-AC7 does for a profile. It answers 201 with the room, sets the profile cookie and the room cookie, and returns `recovery_url` once, as `POST /api/join` does.
+- [x] **AC3** A request carrying a valid profile cookie gets 409 "You already have a profile: create the room from your profile page" and creates nothing.
+- [x] **AC4** Each client IP (its /64 for IPv6, as 011's limiter counts) creates at most `GRILL_ROOM_ANONYMOUS_ROOMS_PER_HOUR` (default `3`, 1 to 1000, else the server refuses to start) anonymous rooms per sliding hour, across pods. Past it: 429 with `Retry-After` and `{"reason":"rate_limited","retry_after_s":N}`, nothing created. A refused or failed request does not count.
+- [x] **AC5** The instance guardrails hold: with `room_creation` set to `super-admin`, or the instance at its storage quota, the route answers 403 with the same reason as `POST /api/profile/rooms` and creates no profile.
+- [x] **AC6** A bad `name` or `display_name` gets 400 with the same messages as `POST /api/profile/rooms`, and creates no profile.
+- [x] **AC7** The creation is audited as `room.create` with actor `profile:<uuid>` and details `{"as": <display>, "anonymous": true}`, and logs `room_created` with `anonymous=true`.
+- [x] **AC8** With the flag on, the home page opened with no invite and no profile shows "Create a room" (room name, display name, submit). Success opens `/r/<room>` and handles `recovery_url` as a join does. A 429 or 403 shows its reason under the form. With a profile, the page shows its "Your profile" link and no form.
+- [x] **AC9** With the flag on, `POST /api/rooms/import` by a profile without an email answers 403 "Add an email to your profile to import a room", preview included, before reading the body. The same profile with an email imports as today. The admin is never refused by this rule.
+- [x] **AC10** With the flag off, a profile without an email imports as today.
+- [x] **AC11** README documents both variables and the route; `specs/README.md` lists 019.
 
 ## Phases
 
@@ -55,7 +55,7 @@ An operator can turn on room creation without an invite. Then the home page, ope
 - Work: `join.html` / `join.js` form when no invite and no profile, shown when `GET /api/profile` reports the flag (`anonymous_rooms: true`); README, spec index.
 - **Covers**: AC8, AC11
 - **Data model impact**: none
-- **DoD**: an e2e spec under `e2e/` green for: form visible with the flag on and hidden with it off; submit lands in the room as room admin; a 429 shows its reason. `pre-commit run --all-files` green.
+- **DoD**: an e2e spec under `e2e/` green for: form visible with the flag on and hidden with it off; submit lands in the room as room admin; a 429 shows its reason. `make lint` and `go test -race ./internal/web/` green.
 
 ## Data model impact (summary)
 

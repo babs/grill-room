@@ -1055,8 +1055,7 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	resp := joinResp{Participant: p, Token: tok}
 	if profileTok != "" {
 		setProfileCookie(w, r, profileTok)
-		// The token rides in the fragment, which browsers never send: it stays out of proxy logs.
-		resp.RecoveryURL = s.baseURL + "/profile#recover=" + recovery
+		resp.RecoveryURL = s.recoveryURL(recovery)
 	}
 	writeJSON(w, http.StatusCreated, resp)
 }

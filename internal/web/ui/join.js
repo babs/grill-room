@@ -4,11 +4,15 @@ const form = document.getElementById('join');
 const nameInput = document.getElementById('name');
 const statusLine = document.getElementById('status');
 const invite = location.hash.slice(1);
+const noInvite = 'You need an invite link to join a room. Ask the room host for one.';
 
-if (invite) {
-  form.hidden = false;
-} else {
-  statusLine.textContent = 'You need an invite link to join a room. Ask the room host for one.';
+if (invite) form.hidden = false;
+
+// Set once /api/profile tells whether the create form shows instead, so it does not flash (019-AC8).
+// Rewriting the same text on every focus would make screen readers announce it again.
+function noInviteLine(on) {
+  const line = on ? noInvite : '';
+  if (!invite && statusLine.textContent !== line) statusLine.textContent = line;
 }
 
 // The browser's own tooltip does not show on every phone and reads as an error page: the reason
@@ -51,6 +55,56 @@ form.addEventListener('submit', async (e) => {
   }
 });
 
+// With no invite and no profile, an instance that allows it offers a room of one's own (019-AC8).
+const createForm = document.getElementById('create');
+const createError = document.getElementById('create-error');
+const createFields = [
+  [document.getElementById('room-name'), document.getElementById('room-name-error'), 'Type a name for the room, up to 100 characters.'],
+  [document.getElementById('display-name'), document.getElementById('display-name-error'), 'Type the name the others will see, up to 40 characters.'],
+];
+for (const [input, error] of createFields) {
+  input.addEventListener('input', () => {
+    error.textContent = '';
+    input.removeAttribute('aria-invalid');
+  });
+}
+
+createForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  createError.textContent = '';
+  const empty = createFields.filter(([input]) => !input.value.trim());
+  for (const [input, error, msg] of empty) {
+    error.textContent = msg;
+    input.setAttribute('aria-invalid', 'true');
+  }
+  if (empty.length) {
+    empty[0][0].focus();
+    return;
+  }
+  const button = createForm.querySelector('button');
+  button.disabled = true;
+  try {
+    const res = await fetch('/api/rooms/anonymous', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: createFields[0][0].value, display_name: createFields[1][0].value }),
+    });
+    // A plain-text 404 (the flag turned off meanwhile) or a proxy's HTML page is no network error.
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      createError.textContent = data.error || 'Room creation is unavailable right now.';
+      button.disabled = false;
+      return;
+    }
+    // Shown once by the room page, as after a join.
+    if (data.recovery_url) sessionStorage.setItem('grill_room_recovery', data.recovery_url);
+    location.assign('/r/' + encodeURIComponent(data.id));
+  } catch {
+    createError.textContent = 'Network error, try again.';
+    button.disabled = false;
+  }
+});
+
 // Who this browser is (011-AC25): signed in, a link to its profile; signed out with email set up,
 // the email recovery (011-AC4). A sign-in from a mailed link in another tab shows here once this
 // tab is back in front (011-AC5), and the join above then joins as that profile: it rides on the
@@ -64,8 +118,11 @@ const recoverForm = document.getElementById('recover-form');
 let ttl = 0;
 async function who() {
   const res = await fetch('/api/profile');
-  if (!res.ok) return;
-  const { email_enabled: emailEnabled, profile, magic_link_ttl_s: linkTTL } = await res.json();
+  if (!res.ok) {
+    noInviteLine(createForm.hidden);
+    return;
+  }
+  const { email_enabled: emailEnabled, profile, magic_link_ttl_s: linkTTL, anonymous_rooms: anonymousRooms } = await res.json();
   ttl = linkTTL || 0;
   yourProfile.hidden = !profile;
   // The name the profile chose (005-AC1, 005-AC48), else the one it last joined with.
@@ -74,10 +131,20 @@ async function who() {
   // Never over what the person typed: this runs again each time the tab comes back.
   if (!nameInput.value) nameInput.value = name;
   recover.hidden = !!profile || !emailEnabled;
+  // A profile made in another tab hides the form: its rooms are created from /profile (019-AC3).
+  if (!invite) createForm.hidden = !anonymousRooms || !!profile;
+  noInviteLine(createForm.hidden);
 }
-who().catch(console.error);
-addEventListener('focus', () => who().catch(console.error));
-document.addEventListener('visibilitychange', () => { if (!document.hidden) who().catch(console.error); });
+// A failed check keeps what shows; with no form up, the invite line still explains the page.
+function whoOrLine() {
+  who().catch((err) => {
+    noInviteLine(createForm.hidden);
+    console.error(err);
+  });
+}
+whoOrLine();
+addEventListener('focus', whoOrLine);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) whoOrLine(); });
 
 recoverOpen.addEventListener('click', () => {
   recoverForm.hidden = false;

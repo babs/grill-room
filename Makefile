@@ -28,7 +28,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: k8s-push-check ui-tools ui-vendor ui-check build e2e-build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-twopod e2e-voice e2e-device-voice e2e-persona-voice e2e-persona-echo e2e-agent-live e2e-mcp-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance pg-up pg-down scenarios-test stt-test stt-image stt-image-test stt-image-e2e tts-test tts-image tts-lexcheck cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete k8s-autoscale k8s-autoscale-delete lab-check rollout-watch fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: k8s-push-check ui-tools ui-vendor ui-check build e2e-build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-twopod e2e-anon e2e-voice e2e-device-voice e2e-persona-voice e2e-persona-echo e2e-agent-live e2e-mcp-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance pg-up pg-down scenarios-test stt-test stt-image stt-image-test stt-image-e2e tts-test tts-image tts-lexcheck cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete k8s-autoscale k8s-autoscale-delete lab-check rollout-watch fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -103,9 +103,9 @@ test-docker: sandbox-image sandbox-fake-image
 
 # Browser tests against a fresh server, in the installed Chrome (firefoxSpecs in Playwright's
 # Firefox too: `pnpm exec playwright install firefox`); agent turns run in Docker with the
-# fake claude. Magic links run against a second server and a throwaway mailpit container. The
-# server hands out the daemon's own version, so its workers run the daemon's binary: an unsigned
-# release at another version would be refused (003-AC2).
+# fake claude. Magic links run against a second server and a throwaway mailpit container, anonymous
+# room creation against a third. The server hands out the daemon's own version, so its workers run
+# the daemon's binary: an unsigned release at another version would be refused (003-AC2).
 # The device and sandbox specs run after the others, each set alone (e2e/playwright.config.js says
 # why). All three run even when one fails; the recipe fails if any did.
 E2E_SPLIT = { pnpm exec playwright test --project=parallel --project=firefox --pass-with-no-tests $(1); p=$$?; \
@@ -114,7 +114,8 @@ E2E_SPLIT = { pnpm exec playwright test --project=parallel --project=firefox --p
 
 e2e: build e2e-build sandbox-fake-image
 	$(MAKE) release DIST=bin/e2e-release VERSION=$(VERSION)
-	cd e2e && pnpm install --frozen-lockfile && $(E2E_SPLIT) && pnpm exec playwright test -c mail/playwright.config.js
+	cd e2e && pnpm install --frozen-lockfile && $(E2E_SPLIT) && pnpm exec playwright test -c mail/playwright.config.js \
+	  && pnpm exec playwright test -c anon/playwright.config.js
 
 # CI's flake gate (tools/flake-gate.sh): the specs in SPECS, three times each, as `make e2e` runs them.
 e2e-repeat: build e2e-build sandbox-fake-image
@@ -126,6 +127,11 @@ e2e-repeat: build e2e-build sandbox-fake-image
 e2e-twopod: e2e-build
 	$(MAKE) release DIST=bin/e2e-release VERSION=$(VERSION)
 	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c twopod/playwright.config.js $(TWOPOD_ARGS)
+
+# 019-AC8: the home page's room creation, on its own server with anonymous rooms on.
+e2e-anon: e2e-build
+	$(MAKE) release DIST=bin/e2e-release VERSION=$(VERSION)
+	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c anon/playwright.config.js
 
 # Voice tests against the compose stack behind the local traefik: run `make dev-up` first.
 e2e-voice:

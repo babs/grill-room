@@ -305,7 +305,9 @@ func (s *Server) createAnonymousRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The creation mode, a settings read, is checked before the limiter: a refusal costs no write; the
-	// quota scan comes after it, so an IP over its limit cannot run it (019-AC4, 019-AC5).
+	// quota scan comes after it, so an IP over its limit cannot run it; a quota refusal gives its slot
+	// back (019-AC4, 019-AC5). ponytail: at the quota an IP under its limit repeats the scan; cache
+	// "at quota" for a few seconds if that ever shows up.
 	if err := s.bus.Store.AnonymousCreationAllowed(r.Context()); errors.Is(err, store.ErrCreationRefused) {
 		httpError(w, http.StatusForbidden, err.Error())
 		return
@@ -347,9 +349,8 @@ func (s *Server) createAnonymousRoom(w http.ResponseWriter, r *http.Request) {
 	setProfileCookie(w, r, profileTok)
 	writeJSON(w, http.StatusCreated, struct {
 		*store.Room
-		// The token rides in the fragment, which browsers never send: it stays out of proxy logs.
 		RecoveryURL string `json:"recovery_url"`
-	}{room, s.baseURL + "/profile#recover=" + recovery})
+	}{room, s.recoveryURL(recovery)})
 }
 
 // setProfileMaxRooms sets a profile's own limit on the rooms it creates: `max_rooms` 1 to 1000,

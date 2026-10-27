@@ -110,6 +110,10 @@ func secure(r *http.Request) bool {
 	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 }
 
+// recoveryURL is the link that signs another device into a profile. The token rides in the
+// fragment, which browsers never send: it stays out of proxy logs.
+func (s *Server) recoveryURL(tok string) string { return s.baseURL + "/profile#recover=" + tok }
+
 // setProfileCookie scopes the profile session to the whole site, unlike a room's participant
 // cookie: the profile follows its person from room to room.
 func setProfileCookie(w http.ResponseWriter, r *http.Request, tok string) {
@@ -142,12 +146,14 @@ type profileResp struct {
 	// EmailEnabled tells whether the server can send magic links: SMTP is configured.
 	EmailEnabled bool `json:"email_enabled"`
 	// MagicLinkTTLS is how long an emailed link works, in seconds, for the page to say so (011-AC22).
-	MagicLinkTTLS int64          `json:"magic_link_ttl_s,omitempty"`
-	Profile       *store.Profile `json:"profile"`
+	MagicLinkTTLS int64 `json:"magic_link_ttl_s,omitempty"`
+	// AnonymousRooms lets the home page offer room creation without an invite (019-AC8).
+	AnonymousRooms bool           `json:"anonymous_rooms,omitempty"`
+	Profile        *store.Profile `json:"profile"`
 }
 
 func (s *Server) profileResp(p *store.Profile) profileResp {
-	r := profileResp{EmailEnabled: s.opts.SendMail != nil, Profile: p}
+	r := profileResp{EmailEnabled: s.opts.SendMail != nil, AnonymousRooms: s.opts.AnonymousRooms, Profile: p}
 	if r.EmailEnabled {
 		r.MagicLinkTTLS = int64(s.opts.MagicLinkTTL / time.Second)
 	}
@@ -286,7 +292,7 @@ func (s *Server) createRecoveryLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("recovery_link_created", zap.Int64("profile", id))
-	writeJSON(w, http.StatusCreated, recoveryLinkResp{URL: s.baseURL + "/profile#recover=" + tok, ExpiresAt: expires.UTC()})
+	writeJSON(w, http.StatusCreated, recoveryLinkResp{URL: s.recoveryURL(tok), ExpiresAt: expires.UTC()})
 }
 
 // cleanEmail lowercases a bare address and accepts it if mail parses it back unchanged.

@@ -8,7 +8,7 @@ export const gitPort = String(Number(port) + 2);
 
 export const adminToken = 'e2e-admin-token';
 
-const otherStacks = ['voice/**', 'agent-live/**', 'mcp-live/**', 'install/**', 'lab/**', 'mail/**', 'supervisor/**', 'crossinstance/**', 'scenario/**', 'push/**', 'device-voice/**', 'persona-voice/**', 'twopod/**'];
+const otherStacks = ['voice/**', 'agent-live/**', 'mcp-live/**', 'install/**', 'lab/**', 'mail/**', 'supervisor/**', 'crossinstance/**', 'scenario/**', 'push/**', 'device-voice/**', 'persona-voice/**', 'twopod/**', 'anon/**'];
 
 const deviceSpec = 'device-stt.spec.js';
 
@@ -25,8 +25,8 @@ export default defineConfig({
   // voice/, agent-live/ and install/ run against the compose stack, lab/ against the lab
   // deployment, supervisor/ and crossinstance/ against both, mail/ against its own server and
   // mailpit, scenario/ wherever grill-scenario points it, push/ against the lab, device-voice/ against
-  // LiveKit and the STT worker in Docker, twopod/ against two servers on one database, each with
-  // its own config.
+  // LiveKit and the STT worker in Docker, twopod/ against two servers on one database, anon/ against
+  // its own server with anonymous rooms on, each with its own config.
   testIgnore: otherStacks,
   timeout: 30_000,
   // Chrome fails the requests it is opening when the host's interfaces change, as Docker adds or
