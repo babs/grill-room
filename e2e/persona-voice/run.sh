@@ -23,6 +23,7 @@ readonly tts="grill-room-test-tts-$run_id"
 readonly echo="grill-room-test-echo-$run_id"
 readonly out=test-results/persona-voice
 tts_pid=""
+vmstat_pid=""
 
 export PERSONA_VOICE_PORT=7701
 export PERSONA_VOICE_METRICS_PORT=7702
@@ -40,6 +41,7 @@ die() {
 
 cleanup() {
 	mkdir -p "$out"
+	[[ -z $vmstat_pid ]] || kill "$vmstat_pid" 2>/dev/null || true
 	docker logs "$stt" >"$out/stt.log" 2>&1 || true
 	if [[ -n $image_tts ]]; then
 		docker logs "$tts" >"$PWD/$out/tts.log" 2>&1 || true
@@ -93,6 +95,11 @@ export APP_LIVEKIT_API_SECRET=$LIVEKIT_API_SECRET
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+# The host's CPU, memory and I/O through the run.
+mkdir -p "$out"
+vmstat -t 2 >"$out/vmstat.log" 2>&1 &
+vmstat_pid=$!
 
 docker run -d --name "$livekit" --network host --memory 1g -e LIVEKIT_KEYS -e LIVEKIT_CONFIG "$image_livekit" >/dev/null
 wait_http "http://127.0.0.1:$PERSONA_VOICE_LIVEKIT_PORT/" 60 || die "LiveKit did not come up"

@@ -402,15 +402,19 @@
     if (!tip.matches(':popover-open')) tip.showPopover();
     window.grillPlace(tip, el);
   };
-  const hideTip = () => {
-    clearTimeout(tipHover);
+  const closeTip = () => {
     clearTimeout(tipHide);
     tipFor = null;
     if (tip.matches(':popover-open')) tip.hidePopover();
   };
+  const hideTip = () => {
+    clearTimeout(tipHover);
+    closeTip();
+  };
+  // Not hideTip: the pointer left for another tipped control, whose pending show must survive.
   const hideSoon = () => {
     clearTimeout(tipHide);
-    tipHide = setTimeout(hideTip, 150);
+    tipHide = setTimeout(closeTip, 150);
   };
   window.grillTip = {
     hide: hideTip,
