@@ -388,6 +388,7 @@ K8S_SMTP_PORT      ?= 1025
 K8S_PG_PORT        ?= 5432
 K8S_PG_SSLMODE     ?= require
 K8S_OPTIONAL  := GRILL_ROOM_SANDBOX_IMAGE GRILL_ROOM_TRUSTED_PROXIES GRILL_ROOM_SMTP_ADDR GRILL_ROOM_SMTP_FROM GRILL_ROOM_SMTP_USERNAME GRILL_ROOM_SMTP_PASSWORD \
+                 GRILL_ROOM_ANONYMOUS_ROOMS GRILL_ROOM_ANONYMOUS_ROOMS_PER_HOUR \
                  K8S_SMTP_NAMESPACE K8S_SMTP_PORT \
                  K8S_PG_PORT K8S_PG_SSLMODE
 # Exported to the render recipe only: no other recipe sees the secrets in its environment.
@@ -426,10 +427,14 @@ k8s-render:
 	@printenv GRILL_ROOM_SMTP_FROM | grep -q '"' && { echo "GRILL_ROOM_SMTP_FROM must not hold a double quote" >&2; exit 1; } || true
 	@for v in GRILL_ROOM_SMTP_USERNAME GRILL_ROOM_SMTP_PASSWORD; do printenv "$$v" | grep -Eq '^[A-Za-z0-9._~+/=@-]*$$' \
 	  || { echo "$$v holds characters the Secret template cannot quote: use [A-Za-z0-9._~+/=@-]" >&2; exit 1; }; done
+	@printenv GRILL_ROOM_ANONYMOUS_ROOMS | grep -Eqx '(true|false)?' \
+	  || { echo "GRILL_ROOM_ANONYMOUS_ROOMS must be true, false or empty" >&2; exit 1; }
+	@printenv GRILL_ROOM_ANONYMOUS_ROOMS_PER_HOUR | grep -Eqx '([1-9][0-9]{0,2}|1000)?' \
+	  || { echo "GRILL_ROOM_ANONYMOUS_ROOMS_PER_HOUR must be 1 to 1000 or empty" >&2; exit 1; }
 	rm -rf '$(K8S_OUT)' && (umask 077 && mkdir -p '$(K8S_OUT)')
 	@for f in deploy/k8s/*.yaml; do \
 	  (umask 077 && ROOM_HOST=grill-room.$$K8S_DOMAIN LIVEKIT_HOST=grill-room-livekit.$$K8S_DOMAIN TURN_HOST=grill-room-turn.$$K8S_DOMAIN \
-	    envsubst '$${GRILL_ROOM_IMAGE} $${GRILL_STT_IMAGE} $${GRILL_TTS_IMAGE} $${GRILL_ROOM_SANDBOX_IMAGE} $${GRILL_ROOM_TRUSTED_PROXIES} $${GRILL_ROOM_SMTP_ADDR} $${GRILL_ROOM_SMTP_FROM} $${GRILL_ROOM_SMTP_USERNAME} $${GRILL_ROOM_SMTP_PASSWORD} $${K8S_SMTP_NAMESPACE} $${K8S_SMTP_PORT} $${K8S_PG_HOST} $${K8S_PG_PORT} $${K8S_PG_DATABASE} $${K8S_PG_SSLMODE} $${K8S_PG_SECRET} $${K8S_PG_NAMESPACE} $${ROOM_HOST} $${LIVEKIT_HOST} $${TURN_HOST} $${GRILL_ROOM_ADMIN_TOKEN} $${STT_TOKEN} $${TTS_TOKEN} $${LIVEKIT_API_KEY} $${LIVEKIT_API_SECRET}' \
+	    envsubst '$${GRILL_ROOM_IMAGE} $${GRILL_STT_IMAGE} $${GRILL_TTS_IMAGE} $${GRILL_ROOM_SANDBOX_IMAGE} $${GRILL_ROOM_TRUSTED_PROXIES} $${GRILL_ROOM_SMTP_ADDR} $${GRILL_ROOM_SMTP_FROM} $${GRILL_ROOM_SMTP_USERNAME} $${GRILL_ROOM_SMTP_PASSWORD} $${GRILL_ROOM_ANONYMOUS_ROOMS} $${GRILL_ROOM_ANONYMOUS_ROOMS_PER_HOUR} $${K8S_SMTP_NAMESPACE} $${K8S_SMTP_PORT} $${K8S_PG_HOST} $${K8S_PG_PORT} $${K8S_PG_DATABASE} $${K8S_PG_SSLMODE} $${K8S_PG_SECRET} $${K8S_PG_NAMESPACE} $${ROOM_HOST} $${LIVEKIT_HOST} $${TURN_HOST} $${GRILL_ROOM_ADMIN_TOKEN} $${STT_TOKEN} $${TTS_TOKEN} $${LIVEKIT_API_KEY} $${LIVEKIT_API_SECRET}' \
 	    < $$f > '$(K8S_OUT)'/$${f##*/}) || exit 1; \
 	done
 	@echo "rendered $(K8S_OUT): https://grill-room.$$K8S_DOMAIN/"

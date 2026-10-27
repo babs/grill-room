@@ -83,6 +83,8 @@ type Server struct {
 	magicLimit limiter
 	// loginLimit rate-limits /admin logins per client IP.
 	loginLimit limiter
+	// anonLimit rate-limits anonymous room creations per client IP (019-AC4).
+	anonLimit limiter
 	// mailWG counts the mail sends running past their answers.
 	mailWG sync.WaitGroup
 	// now is the clock admin sessions and the audit log read; tests set it.
@@ -162,6 +164,9 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 	if opts.MaxImportBytes <= 0 {
 		opts.MaxImportBytes = DefaultMaxImportBytes
 	}
+	if opts.AnonymousRoomsPerHour <= 0 {
+		opts.AnonymousRoomsPerHour = DefaultAnonymousRoomsPerHour
+	}
 	if opts.PushHosts == nil {
 		opts.PushHosts = DefaultPushHosts
 	}
@@ -179,6 +184,7 @@ func New(b *bus.Bus, adminHash, baseURL string, opts Options, log *zap.Logger) *
 		pluginFetches: make(chan struct{}, maxPluginFetches), voiceLines: sourceCounters(), voiceDeduped: sourceCounters(), voiceAppended: sourceCounters(), mcpCalls: newMCPCounters()}
 	keys := &rateKeys{st: b.Store}
 	s.magicLimit, s.loginLimit = newLimiter(keys, "magic", magicWindow, log), newLimiter(keys, "login", loginWindow, log)
+	s.anonLimit = newLimiter(keys, "anon-room", anonRoomWindow, log)
 	s.device = loadDeviceSTT(opts, log)
 	if opts.TTSTokenHash != "" && opts.Voice != nil {
 		s.tts = newTTSHub(b.Store)
@@ -249,6 +255,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms", s.admin(s.createRoom))
 	mux.Handle("DELETE /api/rooms/{room}", s.memberOrAdmin(s.deleteRoom))
 	mux.HandleFunc("POST /api/rooms/import", s.importRoom)
+	mux.HandleFunc("POST /api/rooms/anonymous", s.createAnonymousRoom)
 	mux.Handle("GET /api/rooms/{room}/export", s.memberOrAdmin(s.exportRoom))
 	mux.Handle("PATCH /api/rooms/{room}", s.memberOrAdmin(s.renameRoom))
 	mux.Handle("GET /api/rooms/{room}/invites", s.memberOrAdmin(s.listInvites))
@@ -1044,15 +1051,7 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 	}
 	s.bus.Notify(m.RoomID)
 	s.log.Info("participant_joined", zap.String("room", p.RoomID), zap.Int64("participant", p.ID), zap.Int64("invite", p.InviteID))
-	http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure follows the request scheme: plain-HTTP dev and tests would lose the cookie
-		Name:     cookieName,
-		Value:    tok,
-		Path:     "/api/rooms/" + p.RoomID,
-		MaxAge:   cookieMaxAge,
-		HttpOnly: true,
-		Secure:   secure(r),
-		SameSite: http.SameSiteStrictMode,
-	})
+	setRoomCookie(w, r, p.RoomID, tok)
 	resp := joinResp{Participant: p, Token: tok}
 	if profileTok != "" {
 		setProfileCookie(w, r, profileTok)
@@ -1060,6 +1059,18 @@ func (s *Server) join(w http.ResponseWriter, r *http.Request) {
 		resp.RecoveryURL = s.baseURL + "/profile#recover=" + recovery
 	}
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+func setRoomCookie(w http.ResponseWriter, r *http.Request, room, tok string) {
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure follows the request scheme: plain-HTTP dev and tests would lose the cookie
+		Name:     cookieName,
+		Value:    tok,
+		Path:     "/api/rooms/" + room,
+		MaxAge:   cookieMaxAge,
+		HttpOnly: true,
+		Secure:   secure(r),
+		SameSite: http.SameSiteStrictMode,
+	})
 }
 
 type roomResp struct {

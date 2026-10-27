@@ -105,7 +105,7 @@ func TestConcurrentOpensMakeOneSchema(t *testing.T) {
 	}
 	_ = s.Close()
 	want := snapshot(t, ref)
-	if !slices.Contains(want, "schema_version |  | 52") || !slices.Contains(want, "rows pronunciations 130") || !slices.Contains(want, "rows starters 4") {
+	if !slices.Contains(want, fmt.Sprintf("schema_version |  | %d", baselineVersion+len(migrations))) || !slices.Contains(want, "rows pronunciations 130") || !slices.Contains(want, "rows starters 4") {
 		t.Fatalf("a single open made:\n%s", strings.Join(want, "\n"))
 	}
 
@@ -368,7 +368,7 @@ func TestMigrate(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = s.Close()
-	if s, err := Open(newer); err == nil || !strings.Contains(err.Error(), "schema version 99 is newer than this server's 52") {
+	if s, err := Open(newer); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("schema version 99 is newer than this server's %d", baselineVersion+len(migrations))) {
 		if err == nil {
 			_ = s.Close()
 		}
@@ -677,5 +677,35 @@ func TestMigrateAppendedAt(t *testing.T) {
 	msgs, err := s.Messages(ctx, "a", 0, 10)
 	if err != nil || len(msgs) == 0 || msgs[0].ParticipantID != p.ID || msgs[0].AppendedAt != nil {
 		t.Fatalf("messages after the migration: %+v %v", msgs, err)
+	}
+}
+
+// 019-AC4: migration 53 lets a database at version 52 count anonymous room creations, its
+// limiter events kept.
+func TestMigrateAnonRoomScope(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	dsn := testDSN(t)
+	s := openAt(t, dsn)
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE rate_events DROP CONSTRAINT rate_events_scope_check;
+ALTER TABLE rate_events ADD CONSTRAINT rate_events_scope_check CHECK (scope IN ('magic', 'login'))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.RateHit(ctx, "anon-room", "k", 1, 100, 0, 1000); err == nil {
+		t.Fatal("version 52 took an anon-room event")
+	}
+	if id, _, err := s.RateHit(ctx, "login", "k", 5, 100, 0, 1000); err != nil || id == 0 {
+		t.Fatalf("login event: %d %v", id, err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE schema_version SET version = 52`); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	s = openAt(t, dsn)
+	if id, _, err := s.RateHit(ctx, "anon-room", "k", 1, 100, 0, 1000); err != nil || id == 0 {
+		t.Fatalf("anon-room after the migration: %d %v", id, err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM rate_events WHERE scope = 'login'`); n != 1 {
+		t.Fatalf("%d login events after the migration, want 1", n)
 	}
 }

@@ -117,6 +117,10 @@ type Options struct {
 	// device mode (010-AC5). DeviceSTTManifest is what it must hold; nil means devicestt.Pinned.
 	DeviceSTTDir      string
 	DeviceSTTManifest *devicestt.Manifest
+	// AnonymousRooms lets a browser without a profile create a room, AnonymousRoomsPerHour times
+	// per client IP in a sliding hour; 0 means DefaultAnonymousRoomsPerHour (019-AC1, 019-AC4).
+	AnonymousRooms        bool
+	AnonymousRoomsPerHour int
 }
 
 //go:embed templates

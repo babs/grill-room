@@ -137,6 +137,11 @@ func (s *Store) InstanceID(ctx context.Context) (string, error) {
 	return s.Setting(ctx, "instance_id")
 }
 
+type catalogQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *row
+}
+
 // UsedBytes is what the rows hold: text and bytea at their length, other values at their stored
 // size. A delete frees its bytes at once.
 func (s *Store) UsedBytes(ctx context.Context) (int64, error) { return usedBytes(ctx, s.db) }
@@ -144,10 +149,7 @@ func (s *Store) UsedBytes(ctx context.Context) (int64, error) { return usedBytes
 // usedBytes sums every column of every table, one query built from the catalog.
 // ponytail: reads all the data on each call (room creation, import, starter apply), O(data); keep
 // a running total per table, updated by the writes, if that gets slow.
-func usedBytes(ctx context.Context, db interface {
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-	QueryRowContext(ctx context.Context, query string, args ...any) *row
-}) (int64, error) {
+func usedBytes(ctx context.Context, db catalogQuerier) (int64, error) {
 	rows, err := db.QueryContext(ctx, `SELECT c.relname::text, a.attname::text, a.atttypid IN ('text'::regtype, 'bytea'::regtype)
 		FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
 		WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r' ORDER BY c.relname, a.attnum`)
@@ -196,64 +198,15 @@ func mb(n int64) string { return strconv.FormatFloat(float64(n)/(1<<20), 'f', 1,
 // CreateProfileRoom creates room id named name for profile profileID, which joins it as
 // displayName and becomes its first room admin (004-AC7, 004-AC8). The profile joins through an
 // invite of its own, inviteHash, whose token nobody holds, and gets its shareable invite, link with
-// its hash linkHash (011-AC26). The guardrails are checked in the same
-// transaction as the insert, so two requests cannot both take the last room of a limit.
-// ErrCreationRefused, wrapped with the reason.
+// its hash linkHash (011-AC26). ErrCreationRefused, wrapped with the reason.
 //
 // With setup, the room holds the starter's copies instead of the Default persona (006-AC11).
 func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileID int64, displayName, inviteHash, tokenHash, link, linkHash string, setup *RoomSetup) (*Room, error) {
 	var r *Room
 	err := s.withTx(ctx, "create room", func(tx *txn) error {
-		v, err := instanceSettings(ctx, tx)
-		if err != nil {
-			return err
-		}
-		if err := creationAllowed(ctx, tx, v, profileID); err != nil {
-			return err
-		}
-		var used int64
-		if v.StorageQuota > 0 {
-			if used, err = usedBytes(ctx, tx); err != nil {
-				return err
-			}
-			if used >= v.StorageQuota {
-				return fmt.Errorf("%w: the instance holds %s, at its %s storage quota", ErrCreationRefused, mb(used), mb(v.StorageQuota))
-			}
-		}
-		if r, err = insertRoom(ctx, tx, id, name, profileID, setup == nil); err != nil {
-			return err
-		}
-		var inv int64
-		if err := tx.QueryRowContext(ctx, `INSERT INTO invites(room_id, token_hash, created_at) VALUES(?,?,?) RETURNING id`, id, inviteHash, now()).Scan(&inv); err != nil {
-			return fmt.Errorf("create room: %w", err)
-		}
-		p, _, err := join(ctx, tx, inviteHash, displayName, tokenHash, JoinProfile{ID: profileID})
-		if err != nil {
-			return err
-		}
-		// The creator's own seat: listed as their invite, revoking it lets them go like any other.
-		if _, err := tx.ExecContext(ctx, `UPDATE invites SET created_by = ? WHERE id = ?`, p.ID, inv); err != nil {
-			return fmt.Errorf("create room: %w", err)
-		}
-		if _, err := insertInvite(ctx, tx, id, linkHash, p.ID, link); err != nil {
-			return fmt.Errorf("create room: shareable invite: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO room_admins(room_id, profile_id, created_at) VALUES(?,?,?)`, id, profileID, now()); err != nil {
-			return fmt.Errorf("create room: %w", err)
-		}
-		if setup != nil {
-			plugins, err := setUp(ctx, tx, r, p, setup)
-			if err != nil {
-				return err
-			}
-			// A starter's documents, skills and the plugins the room kept are copied in: they count
-			// too (006-AC12, 009-AC28).
-			if size := setup.blobBytes() + plugins; v.StorageQuota > 0 && used+size > v.StorageQuota {
-				return fmt.Errorf("%w: the instance holds %s, and the starter's %s would pass its %s storage quota", ErrCreationRefused,
-					mb(used), mb(size), mb(v.StorageQuota))
-			}
-		}
-		return auditTx(ctx, tx, "", nil)
+		var err error
+		r, err = createProfileRoom(ctx, tx, id, name, profileID, displayName, inviteHash, tokenHash, link, linkHash, setup)
+		return err
 	})
 	if err != nil {
 		return nil, err
@@ -261,11 +214,146 @@ func (s *Store) CreateProfileRoom(ctx context.Context, id, name string, profileI
 	return r, nil
 }
 
+// CreateAnonymousRoom creates a profile with recoveryHash and sessionHash and, as CreateProfileRoom
+// does, a blank room for it, in one transaction: a refusal leaves no profile behind (019-AC2,
+// 019-AC5). The audit entry ctx carries gets the new profile as its actor. It returns the room and
+// the profile's id.
+func (s *Store) CreateAnonymousRoom(ctx context.Context, id, name, displayName, recoveryHash, sessionHash, inviteHash, tokenHash, link, linkHash string) (*Room, int64, error) {
+	var r *Room
+	var profileID int64
+	err := s.withTx(ctx, "create anonymous room", func(tx *txn) error {
+		// A new profile has created no room: its own limit cannot refuse, the instance's may.
+		v, err := instanceSettings(ctx, tx)
+		if err != nil {
+			return err
+		}
+		used, err := instanceRefusal(ctx, tx, v)
+		if err != nil {
+			return err
+		}
+		if profileID, err = createProfile(ctx, tx, recoveryHash, sessionHash); err != nil {
+			return err
+		}
+		if p, _ := ctx.Value(auditKey{}).(*pendingAudit); p != nil {
+			if err := tx.QueryRowContext(ctx, `SELECT uuid FROM profiles WHERE id = ?`, profileID).Scan(&p.e.Actor); err != nil {
+				return fmt.Errorf("create anonymous room: %w", err)
+			}
+			p.e.Actor = ActorProfile + p.e.Actor
+		}
+		r, err = insertProfileRoom(ctx, tx, v, used, id, name, profileID, displayName, inviteHash, tokenHash, link, linkHash, nil)
+		return err
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	return r, profileID, nil
+}
+
+// AnonymousCreationAllowed returns ErrCreationRefused while only the super-admin creates rooms. It
+// reads the settings alone, without the write lock; the storage quota, which scans every table, is
+// CreateAnonymousRoom's to check (019-AC5).
+func (s *Store) AnonymousCreationAllowed(ctx context.Context) error {
+	v, err := instanceSettings(ctx, s.db)
+	if err != nil {
+		return err
+	}
+	if v.RoomCreation == CreationSuperAdmin {
+		return errSuperAdminOnly
+	}
+	return nil
+}
+
+// errSuperAdminOnly refuses a room while only the super-admin creates them.
+var errSuperAdminOnly = fmt.Errorf("%w: only the super-admin creates rooms on this instance", ErrCreationRefused)
+
+// instanceRefusal returns ErrCreationRefused, with why, when settings v let no profile create a
+// room: creation is the super-admin's, or the instance is at its storage quota. It returns the
+// bytes the database holds, 0 without a quota.
+func instanceRefusal(ctx context.Context, db catalogQuerier, v InstanceSettings) (int64, error) {
+	if v.RoomCreation == CreationSuperAdmin {
+		return 0, errSuperAdminOnly
+	}
+	return quotaUsed(ctx, db, v)
+}
+
+// quotaUsed returns the bytes the database holds under settings v's storage quota, 0 without one,
+// or ErrCreationRefused when it is reached.
+func quotaUsed(ctx context.Context, db catalogQuerier, v InstanceSettings) (int64, error) {
+	if v.StorageQuota <= 0 {
+		return 0, nil
+	}
+	used, err := usedBytes(ctx, db)
+	if err != nil {
+		return 0, err
+	}
+	if used >= v.StorageQuota {
+		return 0, fmt.Errorf("%w: the instance holds %s, at its %s storage quota", ErrCreationRefused, mb(used), mb(v.StorageQuota))
+	}
+	return used, nil
+}
+
+// createProfileRoom is CreateProfileRoom's work in tx. The guardrails are checked in the same
+// transaction as the insert, so two requests cannot both take the last room of a limit.
+func createProfileRoom(ctx context.Context, tx *txn, id, name string, profileID int64, displayName, inviteHash, tokenHash, link, linkHash string, setup *RoomSetup) (*Room, error) {
+	v, err := instanceSettings(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	if err := creationAllowed(ctx, tx, v, profileID); err != nil {
+		return nil, err
+	}
+	used, err := quotaUsed(ctx, tx, v)
+	if err != nil {
+		return nil, err
+	}
+	return insertProfileRoom(ctx, tx, v, used, id, name, profileID, displayName, inviteHash, tokenHash, link, linkHash, setup)
+}
+
+// insertProfileRoom creates the room once the guardrails under settings v passed, used being the
+// bytes the database held then.
+func insertProfileRoom(ctx context.Context, tx *txn, v InstanceSettings, used int64, id, name string, profileID int64, displayName, inviteHash, tokenHash, link, linkHash string, setup *RoomSetup) (*Room, error) {
+	r, err := insertRoom(ctx, tx, id, name, profileID, setup == nil)
+	if err != nil {
+		return nil, err
+	}
+	var inv int64
+	if err := tx.QueryRowContext(ctx, `INSERT INTO invites(room_id, token_hash, created_at) VALUES(?,?,?) RETURNING id`, id, inviteHash, now()).Scan(&inv); err != nil {
+		return nil, fmt.Errorf("create room: %w", err)
+	}
+	p, _, err := join(ctx, tx, inviteHash, displayName, tokenHash, JoinProfile{ID: profileID})
+	if err != nil {
+		return nil, err
+	}
+	// The creator's own seat: listed as their invite, revoking it lets them go like any other.
+	if _, err := tx.ExecContext(ctx, `UPDATE invites SET created_by = ? WHERE id = ?`, p.ID, inv); err != nil {
+		return nil, fmt.Errorf("create room: %w", err)
+	}
+	if _, err := insertInvite(ctx, tx, id, linkHash, p.ID, link); err != nil {
+		return nil, fmt.Errorf("create room: shareable invite: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO room_admins(room_id, profile_id, created_at) VALUES(?,?,?)`, id, profileID, now()); err != nil {
+		return nil, fmt.Errorf("create room: %w", err)
+	}
+	if setup != nil {
+		plugins, err := setUp(ctx, tx, r, p, setup)
+		if err != nil {
+			return nil, err
+		}
+		// A starter's documents, skills and the plugins the room kept are copied in: they count
+		// too (006-AC12, 009-AC28).
+		if size := setup.blobBytes() + plugins; v.StorageQuota > 0 && used+size > v.StorageQuota {
+			return nil, fmt.Errorf("%w: the instance holds %s, and the starter's %s would pass its %s storage quota", ErrCreationRefused,
+				mb(used), mb(size), mb(v.StorageQuota))
+		}
+	}
+	return r, auditTx(ctx, tx, "", nil)
+}
+
 // creationAllowed returns ErrCreationRefused, with why, unless profile profileID may create one more
 // room under settings v: the creation mode and its rooms limit, its own or the instance's.
 func creationAllowed(ctx context.Context, tx *txn, v InstanceSettings, profileID int64) error {
 	if v.RoomCreation == CreationSuperAdmin {
-		return fmt.Errorf("%w: only the super-admin creates rooms on this instance", ErrCreationRefused)
+		return errSuperAdminOnly
 	}
 	var n int
 	var own sql.NullInt64

@@ -45,6 +45,7 @@ var cookieOnly = map[string]bool{
 	"POST /api/profile/signin":             true,
 	"POST /api/profile/magic":              true,
 	"POST /api/profile/recover":            true,
+	"POST /api/rooms/anonymous":            true,
 	"POST /api/rooms/{room}/pairings":      true,
 	"GET /api/pairings/{id}":               true,
 	"GET /api/rooms/{room}/pairings/{id}":  true,

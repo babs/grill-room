@@ -33,6 +33,10 @@ func TestRateEvents(t *testing.T) {
 	if id, _ := hit("magic", "k", 3000); id == 0 {
 		t.Fatal("another scope shares the count")
 	}
+	// 019-AC4: migration 53 admits the anonymous rooms' scope.
+	if id, _ := hit("anon-room", "k", 3000); id == 0 {
+		t.Fatal("anon-room shares the count")
+	}
 	if id, _ := hit("login", "other", 3000); id == 0 {
 		t.Fatal("another key shares the count")
 	}

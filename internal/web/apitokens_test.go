@@ -213,7 +213,7 @@ func TestAPITokenCookieOnlyRoutes(t *testing.T) {
 	for _, pattern := range []string{
 		"GET /api/profile/tokens", "POST /api/profile/tokens", "DELETE /api/profile/tokens/{id}", "POST /api/join",
 		"POST /api/profile/email", "POST /api/profile/signin", "POST /api/profile/magic", "POST /api/profile/recover",
-		"POST /api/rooms/{room}/pairings", "GET /api/pairings/{id}", "GET /api/rooms/{room}/pairings/{id}", "POST /api/rooms/{room}/pairings/{id}",
+		"POST /api/rooms/anonymous", "POST /api/rooms/{room}/pairings", "GET /api/pairings/{id}", "GET /api/rooms/{room}/pairings/{id}", "POST /api/rooms/{room}/pairings/{id}",
 		"GET /api/rooms/{room}/push", "PUT /api/rooms/{room}/push", "DELETE /api/rooms/{room}/push",
 	} {
 		if !registered[pattern] {

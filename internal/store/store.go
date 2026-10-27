@@ -290,6 +290,9 @@ CREATE INDEX participants_stt_off ON participants(room_id) WHERE stt_off = 1;`,
 	// typed ones.
 	`CREATE INDEX messages_room_nontext ON messages(room_id, id) WHERE ` + nonText + `;
 CREATE INDEX messages_participant_nontext ON messages(participant_id, id) WHERE ` + nonText + `;`,
+	// 53 (019-AC4): the anonymous room creations, counted per client IP.
+	`ALTER TABLE rate_events DROP CONSTRAINT rate_events_scope_check;
+ALTER TABLE rate_events ADD CONSTRAINT rate_events_scope_check CHECK (scope IN ('magic', 'login', 'anon-room'));`,
 }
 
 // nonText is the predicate of the non-typed message indexes, written into every query that uses

@@ -38,7 +38,7 @@ func (s *Server) SweepShared(ctx context.Context) {
 func (s *Server) sweepShared(ctx context.Context) {
 	// ponytail: one cutoff, the longest limiter window, for every rate scope; per-scope cutoffs if
 	// rate_events grows large.
-	gone, err := s.bus.Store.SweepExpired(ctx, s.lease().UnixMilli(), s.now().Add(-max(magicWindow, loginWindow)).UnixMilli())
+	gone, err := s.bus.Store.SweepExpired(ctx, s.lease().UnixMilli(), s.now().Add(-max(magicWindow, loginWindow, anonRoomWindow)).UnixMilli())
 	if err != nil && ctx.Err() == nil {
 		s.log.Warn("shared_sweep_failed", zap.Error(err))
 	}

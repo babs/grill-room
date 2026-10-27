@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // createFor creates room id for the profile of p, joining as name.
@@ -45,6 +46,82 @@ func TestCreateProfileRoom(t *testing.T) {
 	}
 	if ps, _ := s.Participants(ctx, "lobby"); ps[0].Admin {
 		t.Fatal("admin of a room the profile only joined")
+	}
+}
+
+// 019-AC2 019-AC5 019-AC7: one transaction makes the profile, its session, the room with the
+// profile as its admin and its invites, audited under the new profile; a refusal leaves no profile.
+func TestCreateAnonymousRoom(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	anon := func(id string) (*Room, int64, error) {
+		t.Helper()
+		actx := WithAudit(ctx, AuditEntry{At: time.Now(), Action: "room.create", TargetKind: TargetRoom, TargetID: id}, map[string]any{"anonymous": true})
+		return s.CreateAnonymousRoom(actx, id, "Room "+id, "Ann", "rec-"+id, "sess-"+id, "inv-"+id, "tok-"+id, "lnk-"+id, "lnkh-"+id)
+	}
+	r, pid, err := anon("open")
+	if err != nil || r.ID != "open" || pid == 0 {
+		t.Fatalf("create: %+v %d %v", r, pid, err)
+	}
+	ps, err := s.Participants(ctx, "open")
+	if err != nil || len(ps) != 1 || ps[0].Name != "Ann" || ps[0].ProfileID != pid || !ps[0].Admin {
+		t.Fatalf("participants %+v %v", ps, err)
+	}
+	if invs, _ := s.Invites(ctx, "open", ps[0].ID); len(invs) != 2 || !invs[1].Shareable {
+		t.Fatalf("own invites %+v", invs)
+	}
+	if _, err := s.ProfileParticipant(ctx, "sess-open", "open"); err != nil {
+		t.Fatalf("the new session opens the room: %v", err)
+	}
+	uuid, err := s.RoomAdmin(ctx, "open", pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM audit_log WHERE actor = ? AND target_id = 'open'`, ActorProfile+uuid); n != 1 {
+		t.Fatalf("%d audit entries under the new profile, want 1", n)
+	}
+	if err := s.AnonymousCreationAllowed(ctx); err != nil {
+		t.Fatalf("open instance: %v", err)
+	}
+	// A rolled back insert still moves the sequence: unmoved, no refusal inserted a profile.
+	seq := func() int64 {
+		t.Helper()
+		var name string
+		var v int64
+		if err := s.db.QueryRowContext(ctx, `SELECT pg_get_serial_sequence('profiles', 'id')`).Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.db.QueryRowContext(ctx, `SELECT last_value FROM `+name).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	profiles, last := count(t, s, `SELECT count(*) FROM profiles`), seq()
+	for _, c := range []struct {
+		name   string
+		v      InstanceSettings
+		reason string
+		// pre says the settings-only check refuses too: the quota is the transaction's alone.
+		pre bool
+	}{
+		{"super-admin", InstanceSettings{RoomsPerProfile: 5, RoomCreation: CreationSuperAdmin}, "only the super-admin creates rooms", true},
+		{"quota", InstanceSettings{RoomsPerProfile: 5, RoomCreation: CreationAnyone, StorageQuota: 1}, "storage quota", false},
+	} {
+		if err := putSettings(ctx, s, c.v); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := anon(c.name); !errors.Is(err, ErrCreationRefused) || !strings.Contains(err.Error(), c.reason) {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if err := s.AnonymousCreationAllowed(ctx); c.pre != errors.Is(err, ErrCreationRefused) || (c.pre && !strings.Contains(err.Error(), c.reason)) || (!c.pre && err != nil) {
+			t.Fatalf("%s, read without the lock: %v", c.name, err)
+		}
+		if n := count(t, s, `SELECT count(*) FROM profiles`); n != profiles {
+			t.Fatalf("%s: %d profiles, want %d", c.name, n, profiles)
+		}
+		if v := seq(); v != last {
+			t.Fatalf("%s: profiles sequence at %d, was %d: a refusal inserted a profile", c.name, v, last)
+		}
 	}
 }
 
