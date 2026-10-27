@@ -336,14 +336,20 @@ test('crossing 64rem moves the voice lines and keeps their order', async ({ brow
   }
 });
 
-// 020-AC8 (Decisions): the pane shows only while the chat keeps 22rem beside it: at 1024 px a side
-// panel dragged to 480 px leaves no room, and it comes back as the panel narrows or folds.
+// 020-AC8 020-AC19: the pane shows while the chat keeps 22rem beside its 192 px: at 1024 px a side
+// panel dragged to 480 px leaves just that, so it shows at 192; a larger root font leaves less, and
+// it hides until the panel narrows or folds.
 test('the pane needs room for the chat beside it', async ({ browser, request }) => {
   const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
   await live(alice, line(1e9, 'voice', 'spoken'));
   await alice.evaluate(() => localStorage.setItem('grill-room-list-w', '480'));
   await alice.setViewportSize({ width: 1024, height: 720 });
   await alice.reload();
+  await expect(pane(alice)).toBeVisible();
+  expect(Math.round((await pane(alice).boundingBox()).width)).toBe(192);
+  expect(Math.round((await alice.locator('#messages').boundingBox()).width)).toBe(352);
+  await alice.evaluate(() => { document.documentElement.style.fontSize = '20px'; });
+  await alice.setViewportSize({ width: 1030, height: 720 });
   await expect(pane(alice)).toBeHidden();
   await expect(alice.locator('#chat-filter')).toBeVisible();
   await live(alice, line(1e9 + 1, 'voice', 'no room'));
@@ -354,7 +360,7 @@ test('the pane needs room for the chat beside it', async ({ browser, request }) 
   await expect(pane(alice)).toBeVisible();
   await expect(alice.locator('#chat-filter')).toBeHidden();
   await expect.poll(() => ids(alice, '#voice-lines')).toEqual([1e9 + 1]);
-  expect(Math.round((await alice.locator('#messages').boundingBox()).width)).toBeGreaterThanOrEqual(352);
+  expect(Math.round((await alice.locator('#messages').boundingBox()).width)).toBeGreaterThanOrEqual(440);
   // Wide again, then folded into its rail: the side panel frees the room.
   for (let i = 0; i < 14; i++) await alice.keyboard.press('ArrowRight');
   await expect(pane(alice)).toBeHidden();
@@ -402,4 +408,133 @@ test('the chat stays at its end as voice lines move', async ({ browser, request 
     await expect.poll(() => ids(alice, '#voice-lines').then((l) => l.length)).toBe(v === wide ? 30 : 0);
     await expect.poll(() => atEnd(alice, '#messages')).toBe(true);
   }
+});
+
+// 020-AC18: at 1280 px the pane's text is --fs-sm, 14 px, while the chat's is 15 px; the name and
+// the time keep the chat's sizes.
+test('the pane text is a step under the chat', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await playEvents(alice, room.id, [['', line(1000001, 'text', 'typed line')], ['', line(1000002, 'voice', 'spoken line')]]);
+  const size = (loc) => loc.evaluate((e) => getComputedStyle(e).fontSize);
+  expect(await size(inChat(alice, 1000001).locator('.body'))).toBe('15px');
+  expect(await size(inPane(alice, 1000002).locator('.body'))).toBe('14px');
+  for (const part of ['.meta', '.meta time']) {
+    expect(await size(inPane(alice, 1000002).locator(part).first())).toBe(await size(inChat(alice, 1000001).locator(part).first()));
+  }
+});
+
+const handle = (page) => page.locator('#transcript-handle');
+const paneWidth = async (page) => Math.round((await pane(page).boundingBox()).width);
+// drag moves the handle's middle by dx.
+async function drag(page, dx) {
+  const b = await handle(page).boundingBox();
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width / 2 + dx, b.y + b.height / 2, { steps: 5 });
+  await page.mouse.up();
+}
+
+// 020-AC19: the pane's left edge is a separator, 192 to 480 px, 320 by default, 12 px wide over
+// the pane's full height; a drag and ← / → resize it, and the width outlives a reload.
+test('the pane resizes from its left edge', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const h = handle(alice);
+  await expect(alice.getByRole('separator', { name: 'Resize the transcription pane' })).toBeVisible();
+  await expect(h).toHaveAttribute('aria-valuenow', '320');
+  await expect(h).toHaveAttribute('aria-valuemin', '192');
+  await expect(h).toHaveAttribute('aria-valuemax', '480');
+  const [hb, pb] = [await h.boundingBox(), await pane(alice).boundingBox()];
+  expect(hb.width).toBeGreaterThanOrEqual(12);
+  expect(hb.height).toBe(pb.height);
+  expect(Math.abs(hb.x + hb.width / 2 - pb.x)).toBeLessThanOrEqual(1);
+  await drag(alice, -100);
+  const now = Number(await h.getAttribute('aria-valuenow'));
+  expect(Math.abs(now - 420)).toBeLessThanOrEqual(1);
+  expect(await paneWidth(alice)).toBe(now);
+  await drag(alice, -1000);
+  expect(await paneWidth(alice)).toBe(480);
+  await drag(alice, 1000);
+  expect(await paneWidth(alice)).toBe(192);
+  await h.focus();
+  await alice.keyboard.press('ArrowLeft');
+  await alice.keyboard.press('ArrowLeft');
+  await alice.keyboard.press('ArrowRight');
+  await expect(h).toHaveAttribute('aria-valuenow', '208');
+  expect(await paneWidth(alice)).toBe(208);
+  await alice.reload();
+  await expect(h).toHaveAttribute('aria-valuenow', '208');
+  expect(await paneWidth(alice)).toBe(208);
+  // The messages keep the rest of the column.
+  const [msgs, p] = [await alice.locator('#messages').boundingBox(), await pane(alice).boundingBox()];
+  expect(Math.round(msgs.x + msgs.width)).toBe(Math.round(p.x));
+});
+
+// 020-AC19: at 1024 px a drag, or ←, toward the chat stops with the chat at 22rem, the pane still
+// shown, and aria-valuemax says where. A width kept from a wider screen is drawn narrower here and
+// comes back on the wider screen; at the exact fit the pane shows and stays.
+test('a drag never leaves the chat under 22rem', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await expect(handle(alice)).toHaveAttribute('aria-valuemax', '480');
+  await alice.setViewportSize({ width: 1024, height: 720 });
+  await expect(pane(alice)).toBeVisible();
+  // 1024 less the side panel's 256 less the chat's 352.
+  const fit = 416;
+  await expect(handle(alice)).toHaveAttribute('aria-valuemax', String(fit));
+  await drag(alice, -1000);
+  await expect(handle(alice)).toHaveAttribute('aria-valuenow', String(fit));
+  expect(Math.round((await alice.locator('#messages').boundingBox()).width)).toBe(352);
+  expect(await paneWidth(alice)).toBe(fit);
+  await expect(pane(alice)).toBeVisible();
+  await expect(alice.locator('#chat-filter')).toBeHidden();
+  expect(await alice.evaluate(() => localStorage.getItem('grill-room-transcript-w'))).toBe(String(fit));
+  await handle(alice).focus();
+  await alice.keyboard.press('ArrowLeft');
+  await expect(handle(alice)).toHaveAttribute('aria-valuenow', String(fit));
+  expect(Math.round((await alice.locator('#messages').boundingBox()).width)).toBe(352);
+
+  await alice.evaluate(() => localStorage.setItem('grill-room-transcript-w', '480'));
+  await alice.reload();
+  await expect(pane(alice)).toBeVisible();
+  await expect(alice.locator('#chat-filter')).toBeHidden();
+  expect(await paneWidth(alice)).toBe(fit);
+  await expect(handle(alice)).toHaveAttribute('aria-valuenow', String(fit));
+  expect(Math.round((await alice.locator('#messages').boundingBox()).width)).toBe(352);
+  expect(await alice.evaluate(() => localStorage.getItem('grill-room-transcript-w'))).toBe('480');
+  // A bare click on the handle, or ← at the cap, keeps the width kept for a wider screen.
+  await handle(alice).click();
+  await handle(alice).focus();
+  await alice.keyboard.press('ArrowLeft');
+  await expect(handle(alice)).toHaveAttribute('aria-valuenow', String(fit));
+  expect(await alice.evaluate(() => localStorage.getItem('grill-room-transcript-w'))).toBe('480');
+  await alice.setViewportSize({ width: 1280, height: 720 });
+  await expect.poll(() => paneWidth(alice)).toBe(480);
+  await expect(handle(alice)).toHaveAttribute('aria-valuemax', '480');
+  // At the fit, the pane shows and does not flip as the chat's width is observed again.
+  await alice.setViewportSize({ width: 1024, height: 720 });
+  await alice.evaluate((w) => localStorage.setItem('grill-room-transcript-w', String(w)), fit);
+  await alice.reload();
+  await expect(pane(alice)).toBeVisible();
+  const flips = await alice.evaluate(() => new Promise((done) => {
+    let n = 0;
+    const was = () => document.body.classList.contains('transcript-room');
+    let last = was();
+    const mo = new MutationObserver(() => { if (was() !== last) { last = was(); n++; } });
+    mo.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    setTimeout(() => { mo.disconnect(); done(n); }, 1000);
+  }));
+  expect(flips).toBe(0);
+});
+
+// 020-AC19: folded, or above the chat with a document open, the pane has no handle.
+test('no pane handle folded or with a document open', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await expect(handle(alice)).toBeVisible();
+  await fold(alice).click();
+  await expect(handle(alice)).toBeHidden();
+  await fold(alice).click();
+  await expect(handle(alice)).toBeVisible();
+  await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
+  await expect(alice.locator('#viewer')).toBeVisible();
+  await expect(pane(alice)).toBeVisible();
+  await expect(handle(alice)).toBeHidden();
 });

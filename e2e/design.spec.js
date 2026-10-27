@@ -48,6 +48,8 @@ test('touch targets at phone width', async ({ browser, request, baseURL }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
   await alice.setViewportSize(phone);
   await expect(alice.locator('button.persona').first()).toBeVisible();
+  // The pane's voice lines move back once the resize is observed: measure after it.
+  await expect(alice.locator('body:not(.transcript-room)')).toBeAttached();
   expect(await smallTargets(alice), 'room').toEqual([]);
   await shot(alice, 'after-phone-room');
 
@@ -580,4 +582,138 @@ test('docs panes follow the design rules', async ({ browser, request }) => {
   await expect(alice.locator('#push-explain')).toBeVisible();
   const sheet = await alice.locator('#push-explain button:visible').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)));
   expect(new Set(sheet)).toEqual(new Set([36]));
+});
+
+// overlaps names what crosses in the agents bar: two pills, as far as their scrolling bar shows
+// them; the header warning and the status words; whatever else is drawn at the warning's or the
+// status's centre; and a pill drawn past its bar's edges, which the bar no longer clips.
+const overlaps = (page) => page.evaluate(() => {
+  const bar = document.getElementById('persona-buttons').getBoundingClientRect();
+  const pills = [...document.querySelectorAll('.zone-agents .persona-pill')].map((e) => {
+    const r = e.getBoundingClientRect();
+    const [left, right] = [Math.max(r.left, bar.left), Math.min(r.right, bar.right)];
+    return [e.textContent.trim().slice(0, 12), { left, right, width: right - left }];
+  });
+  const own = [...document.querySelectorAll('#agent-warn, #agent-status:not(.sr-only)')].filter((e) => e.getBoundingClientRect().width > 1);
+  const out = [];
+  for (const group of [pills, own.map((e) => [e.id, e.getBoundingClientRect()])]) {
+    const shown = group.filter(([, r]) => r.width > 0);
+    for (const [i, [a, r]] of shown.entries()) for (const [b, s] of shown.slice(i + 1)) {
+      if (r.left < s.right - 0.5 && s.left < r.right - 0.5) out.push(`${a} [${Math.round(r.left)}, ${Math.round(r.right)}] × ${b} [${Math.round(s.left)}, ${Math.round(s.right)}]`);
+    }
+  }
+  for (const e of own) {
+    const r = e.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    if (!e.contains(hit)) out.push(`${e.id} drawn over by ${hit?.closest('.persona-pill')?.textContent.trim().slice(0, 12) || hit?.tagName}`);
+  }
+  for (const e of document.querySelectorAll('.zone-agents .persona-pill')) {
+    const r = e.getBoundingClientRect();
+    for (const [from, to] of [[r.left, Math.min(r.right, bar.left)], [Math.max(r.left, bar.right), r.right]]) {
+      for (let x = from + 1; x < to - 1; x += 4) {
+        if (e.contains(document.elementFromPoint(x, r.top + r.height / 2))) {
+          out.push(`${e.textContent.trim().slice(0, 12)} drawn past its bar at ${Math.round(x)}`);
+          break;
+        }
+      }
+    }
+  }
+  return out;
+});
+
+// The header warning: with nobody running the AI, the agents bar shows an alert icon, its message
+// in the styled tip and its name, never the words over the pills. A long room name squeezes the
+// bar as the audio controls do: the pills keep their width, nothing crosses at 1024, 1280, 1440 px,
+// a persona answering included. A failed action shows its message there, in the notice on a phone.
+test('the header warning keeps the agents bar apart', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  expect((await request.patch(`/api/rooms/${room.id}`, { headers: admin, data: { name: 'A room name long enough to take the header from the personas' } })).status()).toBe(200);
+  const added = await alice.evaluate(async (id) => {
+    const tpls = await (await fetch(`/api/rooms/${id}/templates`)).json();
+    const out = [];
+    for (const n of ['Secretary', 'Rodin']) {
+      const r = await fetch(`/api/rooms/${id}/personas`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ template_id: tpls.find((t) => t.name === n).id }) });
+      out.push((await r.json()).id);
+    }
+    return out;
+  }, room.id);
+  await alice.reload();
+  await expect(alice.locator('.persona-pill')).toHaveCount(3);
+  const warn = alice.locator('#agent-warn');
+  const status = alice.locator('#agent-status');
+  const offline = 'No one runs the AI for this room right now.';
+  for (const width of [1024, 1280, 1440]) {
+    await alice.setViewportSize({ width, height: 800 });
+    // 64rem and under the bar has no status: the pills alone.
+    await expect(warn).toBeVisible({ visible: width > 1024 });
+    await expect(status).toHaveText(offline);
+    if (width > 1024) expect((await status.boundingBox()).width).toBeLessThanOrEqual(1);
+    expect(await overlaps(alice), `${width} px`).toEqual([]);
+  }
+  await expect(warn).toHaveAccessibleName('AI warning');
+  await expect(warn).toHaveAccessibleDescription(offline);
+  await warn.hover();
+  await expect(alice.locator('#person-tip')).toHaveText(offline);
+  await alice.mouse.move(0, 400);
+  await expect(alice.locator('#person-tip')).toBeHidden();
+  // The keyboard reaches it after the personas and gets the tip at once.
+  await alice.locator('.persona-pill').last().locator('.persona-run').focus();
+  await alice.keyboard.press('Tab');
+  await expect(warn).toBeFocused();
+  await expect(alice.locator('#person-tip')).toHaveText(offline);
+
+  // A persona answering stays words, cut with an ellipsis rather than drawn over the pills.
+  await alice.evaluate((ids) => { agent = { ...agent, online: true, running: ids.map((id) => ({ persona_id: id })) }; renderAgent(); }, added);
+  await expect(status).toHaveText('Secretary answering, Rodin answering…');
+  await expect(warn).toBeHidden();
+  for (const width of [1280, 1440]) {
+    await alice.setViewportSize({ width, height: 800 });
+    await expect(status).toBeVisible();
+    expect(await overlaps(alice), `${width} px`).toEqual([]);
+  }
+
+  // A failed action on the AI: the warning carries its message.
+  await alice.evaluate(() => agentError('This answer already stopped.'));
+  await expect(warn).toBeVisible();
+  await expect(warn).toHaveAccessibleDescription('This answer already stopped.');
+  await expect(alice.locator('#notice')).toBeHidden();
+  await alice.setViewportSize(phone);
+  await alice.evaluate(() => agentError('This answer already stopped.'));
+  await expect(alice.locator('#notice-text')).toHaveText('This answer already stopped.');
+});
+
+// The header warning stays in the agents bar's box while the pills scroll under it, so a failed
+// action always reaches it; where the bar has no room for it, the notice says it instead.
+test('the header warning stays in sight past many personas', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.evaluate(async (id) => {
+    const tpls = await (await fetch(`/api/rooms/${id}/templates`)).json();
+    for (const n of ['Secretary', 'Rodin', 'Secretary', 'Rodin']) {
+      await fetch(`/api/rooms/${id}/personas`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ template_id: tpls.find((t) => t.name === n).id }) });
+    }
+  }, room.id);
+  await alice.reload();
+  await expect(alice.locator('.persona-pill')).toHaveCount(5);
+  const warn = alice.locator('#agent-warn');
+  const inZone = () => alice.evaluate(() => {
+    const r = document.getElementById('agent-warn').getBoundingClientRect();
+    const z = document.getElementById('agent').getBoundingClientRect();
+    return r.width > 0 && r.left >= z.left - 0.5 && r.right <= z.right + 0.5;
+  });
+  for (const width of [1025, 1200]) {
+    await alice.setViewportSize({ width, height: 800 });
+    await expect(warn).toBeVisible();
+    // The pills overflow their bar: it scrolls, the warning stays beside it.
+    expect(await alice.locator('#persona-buttons').evaluate((z) => z.scrollWidth > z.clientWidth), `${width} px`).toBe(true);
+    expect(await overlaps(alice), `${width} px`).toEqual([]);
+    expect(await inZone(), `${width} px`).toBe(true);
+    await alice.locator('#persona-buttons').evaluate((z) => { z.scrollLeft = z.scrollWidth; });
+    expect(await inZone(), `${width} px, scrolled to the end`).toBe(true);
+    await alice.evaluate((w) => agentError('Could not stop it at ' + w), width);
+    await expect(warn).toHaveAccessibleDescription('Could not stop it at ' + width);
+    await expect(alice.locator('#notice')).toBeHidden();
+  }
+  await alice.setViewportSize({ width: 1024, height: 800 });
+  await alice.evaluate(() => agentError('Could not stop it here'));
+  await expect(alice.locator('#notice-text')).toHaveText('Could not stop it here');
 });

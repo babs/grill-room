@@ -39,6 +39,7 @@
   <div class="zone zone-agents" id="agent">
     <div id="persona-buttons" role="group" aria-label="AI personas"></div>
     <span id="chain-count" class="auto-turns" data-tip="Answers the personas started on their own, one calling another. They pause at the limit; any message from a person starts the count over." hidden></span>
+    <button type="button" id="agent-warn" class="btn-icon btn-ghost" data-icon="alert" aria-label="AI warning" aria-describedby="agent-status" hidden></button>
     <span id="agent-status" class="muted" role="status"></span>
   </div>
   <div class="zone zone-me">
@@ -420,6 +421,7 @@
     </div>
     <!-- After the chat's messages in the DOM, wherever CSS draws it (020-AC14). -->
     <aside id="transcript" aria-labelledby="transcript-title">
+      <div id="transcript-handle" class="pane-handle" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="transcript" aria-label="Resize the transcription pane"></div>
       <div class="pane-head">
         <button type="button" id="transcript-fold" class="fold" aria-controls="voice-lines" aria-expanded="true" aria-label="Transcription"></button>
         <h2 id="transcript-title"><svg class="ico sec-icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/></svg> <span class="sec-label">Transcription</span></h2>
