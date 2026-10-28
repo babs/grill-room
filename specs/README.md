@@ -27,3 +27,4 @@
 | [021](021-restricted-instance.md) | Restricted instance: OIDC sign-in for members, invites for guests | shipped |
 | [026](026-guardrail-followups.md) | Guardrail follow-ups: quota for anonymous rooms, at-quota memory, attach a guest profile at sign-in | shipped |
 | [027](027-e2e-keycloak.md) | Restricted instance e2e against a real Keycloak | shipped |
+| [028](028-text-size.md) | Text size per area (chat, Transcription), stored in the profile | shipped |
