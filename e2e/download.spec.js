@@ -18,11 +18,14 @@ test('host the agent: download and one-liner', async ({ browser, request }) => {
   await expect(alice.locator('#host-arch')).toHaveValue('amd64');
   const link = alice.locator('#host-download');
   await expect(link).toHaveAttribute('href', '/download/grill-room-daemon-linux-amd64');
+  await expect(alice.locator('#host-mac')).toBeHidden();
 
   await alice.locator('#host-os').selectOption('darwin');
   await alice.locator('#host-arch').selectOption('arm64');
   await expect(link).toHaveAttribute('href', '/download/grill-room-daemon-darwin-arm64');
   await expect(alice.locator('#host-wsl')).toBeHidden();
+  await expect(alice.locator('#host-mac')).toBeVisible();
+  await expect(alice.locator('#host-mac-cmd')).toHaveText('xattr -d com.apple.quarantine ~/Downloads/grill-room-daemon-darwin-arm64 && chmod +x ~/Downloads/grill-room-daemon-darwin-arm64');
   const shown = (await alice.locator('#host-sha').textContent()).replace('sha256 ', '');
   const bin = await (await request.get('/download/grill-room-daemon-darwin-arm64')).body();
   expect(createHash('sha256').update(bin).digest('hex')).toBe(shown);
@@ -30,4 +33,5 @@ test('host the agent: download and one-liner', async ({ browser, request }) => {
   await alice.locator('#host-os').selectOption('wsl');
   await expect(link).toHaveAttribute('href', '/download/grill-room-daemon-linux-arm64');
   await expect(alice.locator('#host-wsl')).toBeVisible();
+  await expect(alice.locator('#host-mac')).toBeHidden();
 });
