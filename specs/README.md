@@ -25,6 +25,9 @@
 | [019](019-anonymous-rooms.md) | Anonymous room creation behind an env flag; no import for emailless profiles while it is on | shipped |
 | [020](020-chat-voice-split.md) | Written chat and voice transcription apart: filter, transcription pane | shipped |
 | [021](021-restricted-instance.md) | Restricted instance: OIDC sign-in for members, invites for guests | shipped |
+| [023](023-room-links.md) | Room links: personas read linked rooms, related rooms proposed by a persona | approved |
+| [024](024-room-projects-and-tags.md) | Room projects and personal tags on `/profile` | approved |
+| [025](025-profile-search.md) | Search my rooms: messages and documents, accent-insensitive | approved |
 | [026](026-guardrail-followups.md) | Guardrail follow-ups: quota for anonymous rooms, at-quota memory, attach a guest profile at sign-in | shipped |
 | [027](027-e2e-keycloak.md) | Restricted instance e2e against a real Keycloak | shipped |
 | [028](028-text-size.md) | Text size per area (chat, Transcription), stored in the profile | shipped |
