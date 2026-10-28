@@ -692,10 +692,10 @@ curl -fsSL https://<host>/install.sh | sh -s -- https://<host>/r/<room>
 
 `install.sh` is POSIX sh. It picks the build from `uname` (WSL gets the Linux one, a Rosetta shell the arm64 one), downloads it from the host in the room URL, and checks it against the published sha256. With `cosign` on the PATH, it also checks the binary's sigstore bundle against the project's release workflow identity (docs/release.md), and refuses a build whose bundle is missing or does not verify; without cosign it says the signature was not checked. Then it moves it into `~/.local/bin` and starts it with the room URL, which opens the pairing page. On a mismatch it installs nothing. It accepts plain `http` for `localhost` and `127.0.0.1` only.
 
-On macOS, a binary downloaded through the browser carries the quarantine flag, and Gatekeeper refuses it because it is not notarized. Clear the flag and make it executable (on Intel, the file ends in `-darwin-amd64`); with macOS picked, the panel shows this command for the chosen CPU:
+On macOS, a binary downloaded through the browser carries the quarantine flag, and Gatekeeper refuses it because it is not notarized. Make it executable and clear the flag (on Intel, the file ends in `-darwin-amd64`); with macOS picked, the panel shows this command for the chosen CPU:
 
 ```sh
-xattr -d com.apple.quarantine ~/Downloads/grill-room-daemon-darwin-arm64 && chmod +x ~/Downloads/grill-room-daemon-darwin-arm64
+chmod +x ~/Downloads/grill-room-daemon-darwin-arm64 && xattr -d com.apple.quarantine ~/Downloads/grill-room-daemon-darwin-arm64
 ```
 
 The one-liner needs neither: `curl` sets no quarantine flag.
