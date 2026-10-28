@@ -4578,7 +4578,7 @@ async function showHostAgent() {
     $('host-sha').textContent = 'sha256 ' + (rel.sha256[target] || '');
     $('host-wsl').hidden = $('host-os').value !== 'wsl';
     const file = '~/Downloads/grill-room-daemon-' + target;
-    $('host-mac-cmd').textContent = 'xattr -d com.apple.quarantine ' + file + ' && chmod +x ' + file;
+    $('host-mac-cmd').textContent = 'chmod +x ' + file + ' && xattr -d com.apple.quarantine ' + file;
     $('host-mac').hidden = $('host-os').value !== 'darwin';
   };
   $('host-os').addEventListener('change', render);
