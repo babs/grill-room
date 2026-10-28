@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -63,6 +64,8 @@ type Profile struct {
 	OIDCBinding
 	// OIDCAdminGroup is the admin group its last sign-in held, "" for none (021-AC11).
 	OIDCAdminGroup string `json:"-"`
+	// TextSizes is the step it picked per room area (028-AC3); an area it never picked is absent.
+	TextSizes map[string]string `json:"text_sizes,omitempty"`
 }
 
 // OIDCBinding is the provider a profile is bound to, empty for none, and its last sign-in there
@@ -196,10 +199,10 @@ func (s *Store) profile(ctx context.Context, where string, args ...any) (*Profil
 	var p Profile
 	var email sql.NullString
 	var created string
-	var nudge, oidcAt sql.NullString
+	var nudge, oidcAt, sizes sql.NullString
 	err := s.db.QueryRowContext(ctx, `SELECT id, email, created_at, COALESCE(uuid, ''), COALESCE(name, ''), email_nudge_until, COALESCE(oidc_issuer, ''), oidc_signed_in_at,
-		COALESCE(oidc_admin_group, '') FROM profiles WHERE `+where, args...).
-		Scan(&p.ID, &email, &created, &p.UUID, &p.Name, &nudge, &p.OIDCIssuer, &oidcAt, &p.OIDCAdminGroup)
+		COALESCE(oidc_admin_group, ''), text_sizes FROM profiles WHERE `+where, args...).
+		Scan(&p.ID, &email, &created, &p.UUID, &p.Name, &nudge, &p.OIDCIssuer, &oidcAt, &p.OIDCAdminGroup, &sizes)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -213,6 +216,10 @@ func (s *Store) profile(ctx context.Context, where string, args ...any) (*Profil
 	}
 	if oidcAt.Valid {
 		p.OIDCSignedInAt = parseTS(oidcAt.String)
+	}
+	// A display setting that does not parse must not lock its owner out: it reads as none.
+	if sizes.Valid && json.Unmarshal([]byte(sizes.String), &p.TextSizes) != nil {
+		p.TextSizes = nil
 	}
 	if p.Rooms, err = s.profileRooms(ctx, p.ID); err != nil {
 		return nil, err
@@ -460,6 +467,18 @@ func (s *Store) SnoozeEmailNudge(ctx context.Context, profileID int64, until tim
 func (s *Store) SetProfileName(ctx context.Context, profileID int64, name string) error {
 	if _, err := s.db.ExecContext(ctx, `UPDATE profiles SET name = ? WHERE id = ?`, name, profileID); err != nil {
 		return fmt.Errorf("set profile name: %w", err)
+	}
+	return nil
+}
+
+// SetTextSizes stores the step the profile picked per room area (028-AC3); the caller validates them.
+func (s *Store) SetTextSizes(ctx context.Context, profileID int64, sizes map[string]string) error {
+	b, err := json.Marshal(sizes)
+	if err != nil {
+		return fmt.Errorf("set text sizes: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE profiles SET text_sizes = ? WHERE id = ?`, string(b), profileID); err != nil {
+		return fmt.Errorf("set text sizes: %w", err)
 	}
 	return nil
 }

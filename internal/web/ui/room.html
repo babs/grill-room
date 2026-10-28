@@ -70,6 +70,7 @@
   <p class="menu-head" id="me-head"></p>
   <button type="button" id="rename-open" data-icon="rename">Change my name</button>
   <button type="button" id="notify-open" data-icon="bell">Notifications</button>
+  <button type="button" id="text-size-open" data-icon="textsize">Text size</button>
   <button type="button" id="recovery-open" data-icon="device">Use on another device</button>
   <button type="button" id="diag-open" data-icon="pulse">Diagnostics</button>
   <a href="/profile" data-icon="profile">My rooms and profile</a>
@@ -239,6 +240,22 @@
   <h3>This tab</h3>
   <label><input type="checkbox" id="count-voice"> Count voice lines in the tab title</label>
   <div class="actions"><button type="button" id="push-toggle" class="btn-primary" hidden>Turn on notifications</button></div>
+</dialog>
+<!-- Text size per area (028): saved on the profile, or in this browser for a seat without one. -->
+<dialog id="text-size" class="sheet" aria-labelledby="text-size-title">
+  <div class="sheet-head">
+    <h2 id="text-size-title">Text size</h2>
+    <button type="button" class="btn-icon btn-ghost close" aria-label="Close" data-icon="close"></button>
+  </div>
+  <fieldset>
+    <legend>Chat</legend>
+    <div class="text-steps"><label><input type="radio" name="chat" value="s"> S</label><label><input type="radio" name="chat" value="m"> M</label><label><input type="radio" name="chat" value="l"> L</label><label><input type="radio" name="chat" value="xl"> XL</label></div>
+  </fieldset>
+  <fieldset>
+    <legend>Transcription</legend>
+    <div class="text-steps"><label><input type="radio" name="transcript" value="s"> S</label><label><input type="radio" name="transcript" value="m"> M</label><label><input type="radio" name="transcript" value="l"> L</label><label><input type="radio" name="transcript" value="xl"> XL</label></div>
+  </fieldset>
+  <p id="text-size-hint" class="hint">Follows your profile to your other devices.</p>
 </dialog>
 <!-- The push explainer (008-AC10): the only way to the browser's permission prompt. -->
 <dialog id="push-explain" class="sheet" aria-labelledby="push-explain-title" aria-describedby="push-explain-text">

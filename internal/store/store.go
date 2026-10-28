@@ -304,6 +304,8 @@ ALTER TABLE profiles ADD CONSTRAINT profiles_oidc_unique UNIQUE (oidc_issuer, oi
 	// with it, which go with the profile.
 	`ALTER TABLE profiles ADD COLUMN IF NOT EXISTS oidc_admin_group TEXT;
 ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS profile_id BIGINT REFERENCES profiles(id) ON DELETE CASCADE;`,
+	// 56 (028-AC3): the text size a profile picked per room area, a JSON map; NULL for none.
+	`ALTER TABLE profiles ADD COLUMN IF NOT EXISTS text_sizes TEXT;`,
 }
 
 // nonText is the predicate of the non-typed message indexes, written into every query that uses

@@ -1028,6 +1028,7 @@ for (const menu of document.querySelectorAll('.menu:not(#doc-menu, #person-menu,
 }
 for (const b of document.querySelectorAll('dialog .close')) b.addEventListener('click', () => b.closest('dialog').close());
 $('notify-open').addEventListener('click', () => $('notify').showModal());
+$('text-size-open').addEventListener('click', () => $('text-size').showModal());
 $('invite-open').addEventListener('click', () => { openInvites(); });
 $('host-open').addEventListener('click', () => $('host-agent').showModal());
 $('docs-window-menu').addEventListener('click', (e) => {
@@ -1094,9 +1095,40 @@ async function loadOwn() {
   }
   $('me-anon').hidden = !noEmail();
   if (!noEmail()) $('email-nudge').hidden = true;
+  if (own.profile) keepTextSizes(own.profile.text_sizes || {});
   if (participants.length) renderParticipants();
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) reloadOwn(); });
+
+// Text size per area (028): a multiplier on the area's base size, which app.css reads. The
+// profile's pick wins; this browser keeps a copy for the first paint, and the only one for a seat
+// without a profile (028-AC7). Its storage event carries a pick to the other tabs (028-AC6).
+const textScales = { s: 0.875, m: 1, l: 1.125, xl: 1.25 };
+const textSizeKey = 'grill-room-text-size';
+let textSizes = {};
+function applyTextSizes(sizes) {
+  textSizes = sizes && typeof sizes === 'object' ? sizes : {};
+  for (const area of ['chat', 'transcript']) document.body.style.setProperty(`--${area}-scale`, String(textScales[textSizes[area]] || 1));
+  for (const r of $('text-size').querySelectorAll('input')) r.checked = (textSizes[r.name] || 'm') === r.value;
+}
+function keepTextSizes(sizes) {
+  applyTextSizes(sizes);
+  localStorage.setItem(textSizeKey, JSON.stringify(textSizes));
+}
+const storedTextSizes = () => { try { return JSON.parse(localStorage.getItem(textSizeKey)); } catch { return null; } };
+applyTextSizes(storedTextSizes());
+addEventListener('storage', (e) => { if (e.key === textSizeKey) applyTextSizes(storedTextSizes()); });
+// One save at a time: each sends the whole map, so the last pick must be the last write.
+let textSaving = Promise.resolve();
+$('text-size').addEventListener('change', (e) => {
+  keepTextSizes({ ...textSizes, [e.target.name]: e.target.value });
+  const sizes = textSizes;
+  textSaving = textSaving.then(() => ownLoaded).then(() => {
+    if (!own.profile) return;
+    return netFetch('/api/profile/text-size', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sizes) })
+      .then((res) => { if (!res.ok) throw new Error('HTTP ' + res.status); });
+  }).catch((err) => toast("Couldn't save the text size: " + err.message));
+});
 
 // nudgeEmail shows the banner once per page, unless "Later" snoozed it on this profile (011-AC8).
 let nudged = false;

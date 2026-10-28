@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -804,5 +805,33 @@ func TestMailFlagUnreadable(t *testing.T) {
 	}
 	if code, _, m := post(t, a, "/api/profile/signin", `{"email":"nobody@example.com"}`); code != http.StatusAccepted {
 		t.Fatalf("sign-in: %d %v", code, m)
+	}
+}
+
+// 028-AC3, 028-AC4, 028-AC8: the profile stores a text size per room area, none until it picks.
+func TestSetTextSize(t *testing.T) {
+	e := newEnv(t)
+	d := e.device(t)
+	d.join(t, e.createRoom(t, "A").ID, "Alice")
+	if p := d.profile(t).Profile; p.TextSizes != nil {
+		t.Fatalf("no pick yet: %v", p.TextSizes)
+	}
+	if code, _ := e.device(t).do(t, "PUT", "/api/profile/text-size", map[string]string{"chat": "l"}); code != http.StatusUnauthorized {
+		t.Fatalf("without a profile: %d", code)
+	}
+	if code, _ := d.do(t, "PUT", "/api/profile/text-size", map[string]string{"chat": "l"}, "Sec-Fetch-Site", "cross-site"); code != http.StatusForbidden {
+		t.Fatalf("cross-site: %d", code)
+	}
+	for _, bad := range []any{map[string]string{"doc": "l"}, map[string]string{"chat": "xxl"}, map[string]string{"chat": "L"}, map[string]int{"chat": 2}, []string{"l"}} {
+		if code, _ := d.do(t, "PUT", "/api/profile/text-size", bad); code != http.StatusBadRequest {
+			t.Errorf("%v: %d, want 400", bad, code)
+		}
+	}
+	want := map[string]string{"chat": "l", "transcript": "xl"}
+	if code, b := d.do(t, "PUT", "/api/profile/text-size", want); code != http.StatusOK {
+		t.Fatalf("set: %d %s", code, b)
+	}
+	if got := d.profile(t).Profile.TextSizes; !maps.Equal(got, want) {
+		t.Fatalf("stored %v, want %v", got, want)
 	}
 }

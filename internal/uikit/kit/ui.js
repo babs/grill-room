@@ -323,6 +323,7 @@
     host: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
     rename: '<path d="M12 20h9"/><path d="M16.4 3.6a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z"/>',
     bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0"/>',
+    textsize: '<path d="m3 16 4.5-9 4.5 9M4.5 13h6M16 16v-3.5a2.5 2.5 0 0 1 5 0V16M21 14h-5"/>',
     device: '<rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/>',
     pulse: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
     profile: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
