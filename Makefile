@@ -28,7 +28,7 @@ SANDBOX_IMAGE ?= grill-room-sandbox:local
 # The sandbox with a fake claude: agent turns end to end with no subscription use.
 SANDBOX_FAKE_IMAGE ?= grill-room-sandbox:fake
 
-.PHONY: k8s-push-check ui-tools ui-vendor ui-check build e2e-build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-twopod e2e-anon e2e-oidc e2e-voice e2e-device-voice e2e-persona-voice e2e-persona-echo e2e-agent-live e2e-mcp-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance pg-up pg-down scenarios-test stt-test stt-image stt-image-test stt-image-e2e tts-test tts-image tts-lexcheck cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete k8s-autoscale k8s-autoscale-delete lab-check rollout-watch fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
+.PHONY: k8s-push-check ui-tools ui-vendor ui-check build e2e-build release dev-release run test test-docker test-offline test-release test-live-accounts e2e e2e-repeat e2e-twopod e2e-anon e2e-oidc e2e-keycloak e2e-voice e2e-device-voice e2e-persona-voice e2e-persona-echo e2e-agent-live e2e-mcp-live e2e-install e2e-lab e2e-lab-mail e2e-push e2e-supervisor e2e-crossinstance pg-up pg-down scenarios-test stt-test stt-image stt-image-test stt-image-e2e tts-test tts-image tts-lexcheck cover lint docker-build sandbox-image sandbox-fake-image sandbox-push k8s-push k8s-render k8s-check k8s-apply k8s-delete k8s-monitoring k8s-monitoring-delete k8s-autoscale k8s-autoscale-delete lab-check rollout-watch fixtures icons dev-up dev-down traefik-install traefik-uninstall clean
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/$(APP_NAME) $(PKG)
@@ -137,6 +137,11 @@ e2e-anon: e2e-build
 # 021: restricted mode on its own server, signing in with the fake provider (tools/e2eoidc).
 e2e-oidc: e2e-build
 	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c oidc/playwright.config.js
+
+# 027: the same restricted-mode scenarios against a Keycloak container (Docker, about 1 GB of
+# memory). Not part of `make e2e`.
+e2e-keycloak: e2e-build
+	cd e2e && pnpm install --frozen-lockfile && pnpm exec playwright test -c keycloak/playwright.config.js
 
 # Voice tests against the compose stack behind the local traefik: run `make dev-up` first.
 e2e-voice:

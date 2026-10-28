@@ -33,6 +33,8 @@ type user struct {
 	Email  string   `json:"email"`
 	Name   string   `json:"name"`
 	Groups []string `json:"groups"`
+	// EmailVerified, when set, overrides the default: verified when Email is set.
+	EmailVerified *bool `json:"email_verified,omitempty"`
 }
 
 type grant struct {
@@ -144,8 +146,12 @@ func (p *provider) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
+	verified := g.user.Email != ""
+	if g.user.EmailVerified != nil {
+		verified = *g.user.EmailVerified
+	}
 	claims, err := json.Marshal(map[string]any{"iss": p.issuer, "aud": p.clientID, "sub": g.user.Sub, "iat": now.Unix(), "exp": now.Add(time.Hour).Unix(),
-		"nonce": g.nonce, "email": g.user.Email, "email_verified": g.user.Email != "", "name": g.user.Name, "groups": g.user.Groups})
+		"nonce": g.nonce, "email": g.user.Email, "email_verified": verified, "name": g.user.Name, "groups": g.user.Groups})
 	if err != nil {
 		tokenError(w, http.StatusInternalServerError, "server_error")
 		return

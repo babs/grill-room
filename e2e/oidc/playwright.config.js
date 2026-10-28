@@ -10,7 +10,6 @@ const baseURL = `http://127.0.0.1:${port}`;
 const idpPort = port + 2;
 export const idpURL = `http://127.0.0.1:${idpPort}`;
 export const db = `e2e_oidc_${port}`;
-export const adminGroup = 'grill-admins';
 const client = { id: 'grill-room-e2e', secret: 'e2e-secret' };
 
 export default defineConfig({
@@ -38,7 +37,8 @@ export default defineConfig({
       GRILL_ROOM_OIDC_ISSUER: `http://localhost:${idpPort}`,
       GRILL_ROOM_OIDC_CLIENT_ID: client.id,
       GRILL_ROOM_OIDC_CLIENT_SECRET: client.secret,
-      GRILL_ROOM_OIDC_ADMIN_GROUP: adminGroup,
+      GRILL_ROOM_OIDC_MEMBER_GROUP: 'grill-members',
+      GRILL_ROOM_OIDC_ADMIN_GROUP: 'grill-admins',
       LOG_FORMAT: 'json',
     },
   }],
