@@ -287,13 +287,19 @@ const paneMin = 192;
 const rootStyle = getComputedStyle(document.documentElement);
 // chatRoom is how wide the pane may be with the chat keeping its 22rem beside it.
 const chatRoom = () => chatColumn.clientWidth - 22 * parseFloat(rootStyle.fontSize);
+// roomFits: the chat keeps its 22rem beside the pane. Unset at load, so the exact fit shows it.
+let roomFits;
 let paneFits = false;
 let paneCount = 0;
 const paneFolded = () => document.body.classList.contains('fold-transcript');
 const paneShows = () => paneFits && !paneFolded();
 
 function placeVoice() {
-  paneFits = !docsMode && wide.matches && (!$('viewer').hidden || chatRoom() >= paneMin);
+  const beside = !docsMode && wide.matches && $('viewer').hidden;
+  // Hidden beside the chat, the pane needs 1rem more to come back: a drag hovering at the fit does
+  // not flip it. Elsewhere it was never hidden for room: the next fit starts afresh.
+  roomFits = beside ? chatRoom() >= paneMin + (roomFits === false ? parseFloat(rootStyle.fontSize) : 0) : undefined;
+  paneFits = beside ? roomFits : !docsMode && wide.matches;
   document.body.classList.toggle('transcript-room', paneFits);
   const show = paneShows();
   const moving = show ? messages.querySelectorAll(':scope > li.voice') : voiceLines.children;
@@ -1628,14 +1634,44 @@ matchMedia('(max-width: 40rem)').addEventListener('change', () => {
 });
 
 // Pane widths and folds, per browser and shared by every room and both pages (008-AC2 to AC5).
+// stop is where the document stops a pane: Notes takes only what the frame has past its min-width;
+// the side panel that too, and what Notes gives way down to its CSS min-width (008-AC3).
 const panes = {
-  side: { key: 'grill-room-list-w', prop: '--list-w', min: 192, max: 480, def: 256, pane: $('side'), handle: $('side-handle'), edge: 'right' },
-  notes: { key: 'grill-room-notes-w', prop: '--notes-w', min: 256, max: 640, def: 320, pane: $('annotations'), handle: $('notes-handle'), edge: 'left' },
+  side: { key: 'grill-room-list-w', prop: '--list-w', min: 192, max: 480, def: 256, pane: $('side'), handle: $('side-handle'), edge: 'right',
+    stop: () => drawn(panes.side) + docSlack() + Math.max(0, drawn(panes.notes) - (parseFloat(getComputedStyle(panes.notes.pane).minWidth) || 0)) },
+  notes: { key: 'grill-room-notes-w', prop: '--notes-w', min: 256, max: 640, def: 320, pane: $('annotations'), handle: $('notes-handle'), edge: 'left',
+    stop: () => drawn(panes.notes) + docSlack() },
   // A drag stops where the chat would go under its 22rem (020-AC19).
   transcript: { key: 'grill-room-transcript-w', prop: '--transcript-w', min: paneMin, max: 480, def: 320, pane: $('transcript'), handle: $('transcript-handle'), edge: 'left', cap: chatRoom },
 };
+// docSlack is how much the document frame has past its min-width: none set (the room page beside
+// the chat) or no document shown, nothing stops the panes.
+function docSlack() {
+  const f = $('doc-frame');
+  const min = parseFloat(getComputedStyle(f).minWidth);
+  return $('viewer').hidden || !(min > 0) ? Infinity : Math.max(0, f.getBoundingClientRect().width - min);
+}
 const clampWidth = (p, w) => Math.round(Math.min(p.max, Math.max(p.min, w)));
-const capWidth = (p, w) => (p.cap ? Math.min(w, p.cap()) : w);
+const room = (p) => Math.min(p.cap ? p.cap() : Infinity, p.stop ? p.stop() : Infinity);
+const capWidth = (p, w) => Math.min(w, room(p));
+// drawn is the width on screen: under the kept one where the document or the chat needs the room.
+const drawn = (p) => Math.round(p.pane.getBoundingClientRect().width);
+// maxWidth is the widest the pane may go: the chat's 22rem caps the transcript (020-AC19), the
+// document stops the side panel and Notes.
+const maxWidth = (p) => Math.max(p.min, Math.min(p.max, Math.floor(room(p))));
+// The handle says the width drawn, what a reader sees, and as its most the drawn width where the
+// layout stops the pane under the width kept; a hidden pane keeps its last.
+function showNow(p) {
+  const [w, max] = [drawn(p), maxWidth(p)];
+  p.handle.setAttribute('aria-valuemax', String(w && w < Math.min(p.width, max) ? clampWidth(p, w) : max));
+  if (w) p.handle.setAttribute('aria-valuenow', String(clampWidth(p, w)));
+}
+// commit ends a drag or a key from start, the width drawn then: only a move that moved the edge
+// is stored; a bare click, or a window resized under it, keeps the width kept (020-AC19).
+function commit(p, kept, start, moved) {
+  if (!moved || drawn(p) === start) setWidth(p, kept, false);
+  else setWidth(p, capWidth(p, p.width), true);
+}
 function setWidth(p, w, store) {
   p.width = clampWidth(p, w);
   drawWidth(p);
@@ -1644,16 +1680,19 @@ function setWidth(p, w, store) {
 // drawWidth draws the width kept, or less where the chat leaves less; the kept one comes back on a
 // wider screen (020-AC19).
 function drawWidth(p) {
-  const max = p.cap ? Math.max(p.min, Math.min(p.max, Math.floor(p.cap()))) : p.max;
-  const w = Math.min(p.width, max);
-  document.documentElement.style.setProperty(p.prop, w + 'px');
-  p.handle.setAttribute('aria-valuemax', String(max));
-  p.handle.setAttribute('aria-valuenow', String(w));
+  // The flex draws the side panel and Notes under their stop and gives the width kept back on a wider
+  // window; the transcript's grid column does neither.
+  document.documentElement.style.setProperty(p.prop, (p.cap ? Math.min(p.width, maxWidth(p)) : p.width) + 'px');
+  showNow(p);
 }
 new ResizeObserver(() => drawWidth(panes.transcript)).observe(chatColumn);
+// The frame's room moves their stop without the panes resizing: a wider window, the other pane.
+new ResizeObserver(() => { showNow(panes.side); showNow(panes.notes); }).observe($('doc-frame'));
 for (const p of Object.values(panes)) {
   p.handle.setAttribute('aria-valuemin', String(p.min));
   setWidth(p, Number(localStorage.getItem(p.key)) || p.def, false);
+  // The drawn width also changes without input: a window resized, a document opened or closed.
+  new ResizeObserver(() => showNow(p)).observe(p.pane);
   // Dragging the right edge of the side panel widens it; the left edge of Notes, the other way.
   const sign = p.edge === 'right' ? 1 : -1;
   p.handle.addEventListener('pointerdown', (e) => {
@@ -1661,19 +1700,18 @@ for (const p of Object.values(panes)) {
     e.preventDefault();
     p.handle.setPointerCapture(e.pointerId);
     p.handle.classList.add('dragging');
-    const r = p.pane.getBoundingClientRect();
-    const origin = p.edge === 'right' ? r.left : r.right;
+    // From the width drawn, less than the one kept where the document or the chat needs the room, and
+    // from where the handle was grabbed: the pointer is rarely on the edge itself.
+    const [kept, start, startX] = [p.width, drawn(p), e.clientX];
     let moved = false;
     const move = (ev) => {
       moved = true;
-      setWidth(p, capWidth(p, sign * (ev.clientX - origin)), false);
+      setWidth(p, capWidth(p, start + sign * (ev.clientX - startX)), false);
     };
     const done = () => {
       p.handle.classList.remove('dragging');
       p.handle.removeEventListener('pointermove', move);
-      // A bare click keeps the width kept for a wider screen (020-AC19); a window resized during the
-      // drag may have taken the room it reached.
-      if (moved) setWidth(p, capWidth(p, p.width), true);
+      commit(p, kept, start, moved);
     };
     p.handle.addEventListener('pointermove', move);
     p.handle.addEventListener('lostpointercapture', done, { once: true });
@@ -1682,10 +1720,10 @@ for (const p of Object.values(panes)) {
     const step = { ArrowRight: 16, ArrowLeft: -16 }[e.key];
     if (!step) return;
     e.preventDefault();
-    const now = Number(p.handle.getAttribute('aria-valuenow'));
-    const w = clampWidth(p, capWidth(p, now + sign * step));
-    // A key at a limit changes nothing, the width kept for a wider screen included (020-AC19).
-    if (w !== now) setWidth(p, w, true);
+    // From the edge on screen, as a drag; a key at a limit, the layout's included, changes nothing.
+    const [kept, now] = [p.width, drawn(p)];
+    setWidth(p, capWidth(p, now + sign * step), false);
+    commit(p, kept, now, true);
   });
 }
 // A drawer's disclosure triangle names the drawer and says its state in aria-expanded; the whole

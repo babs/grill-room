@@ -525,6 +525,133 @@ test('a drag never leaves the chat under 22rem', async ({ browser, request }) =>
   expect(flips).toBe(0);
 });
 
+// press holds the handle at dx from its middle, moves the pointer by each [dx, dy] of moves from
+// there, and lets go.
+async function press(page, sel, dx, moves) {
+  const b = await page.locator(sel).boundingBox();
+  const [x, y] = [b.x + b.width / 2 + dx, b.y + b.height / 2];
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  for (const [mx, my] of moves) await page.mouse.move(x + mx, y + my);
+  await page.mouse.up();
+}
+
+// 008-AC2 020-AC19: a handle grabbed off its middle moves the edge by what the pointer moves, not
+// to the pointer; a click that wiggles 2 px at 1024 px keeps the width kept for a wider screen.
+test('a handle follows the pointer from where it was grabbed', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  for (const [sel, sign] of [['#side-handle', 1], ['#transcript-handle', -1]]) {
+    const was = Number(await alice.locator(sel).getAttribute('aria-valuenow'));
+    await press(alice, sel, -4, [[1, 0]]);
+    await expect(alice.locator(sel), sel).toHaveAttribute('aria-valuenow', String(was + sign));
+  }
+  await alice.setViewportSize({ width: 1024, height: 720 });
+  await alice.evaluate(() => { localStorage.setItem('grill-room-list-w', '256'); localStorage.setItem('grill-room-transcript-w', '480'); });
+  await alice.reload();
+  await expect(handle(alice)).toHaveAttribute('aria-valuenow', '416');
+  await press(alice, '#transcript-handle', 2, [[0, 2], [0, 0]]);
+  await expect(handle(alice)).toHaveAttribute('aria-valuenow', '416');
+  expect(await alice.evaluate(() => localStorage.getItem('grill-room-transcript-w'))).toBe('480');
+  await alice.setViewportSize({ width: 1280, height: 720 });
+  await expect.poll(() => paneWidth(alice)).toBe(480);
+
+  // 008-AC3: in the docs window the list and Notes give way to the document, drawn under the width
+  // kept; a drag moves their edge from the width drawn, at once.
+  await alice.evaluate(() => { localStorage.setItem('grill-room-list-w', '480'); localStorage.setItem('grill-room-notes-w', '640'); });
+  await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
+  const docs = await alice.context().newPage();
+  await docs.goto(new URL(alice.url()).pathname + '/docs');
+  await docs.locator('#documents').getByRole('button', { name: 'plan.md' }).click();
+  await expect(docs.locator('#annotations')).toBeVisible();
+  // Notes gives way first, then the list once Notes is at its minimum.
+  for (const [width, sel, of, kept, dx] of [[1400, '#notes-handle', '#annotations', 640, 20], [1040, '#side-handle', '#side', 480, -20]]) {
+    await docs.setViewportSize({ width, height: 800 });
+    const drawn = () => docs.locator(of).evaluate((e) => e.getBoundingClientRect().width);
+    const was = await drawn();
+    expect(was, sel).toBeLessThan(kept - 20);
+    await press(docs, sel, 0, [[dx / 2, 0], [dx, 0]]);
+    expect(Math.abs((await drawn()) - (was - 20)), sel).toBeLessThanOrEqual(1);
+  }
+});
+
+// 020-AC19: a drag of the side panel hovering at the pane's fit does not flip the pane at each
+// crossing: hidden, it comes back once 1rem more is free.
+test('the pane does not flip as a drag hovers at its fit', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await live(alice, line(1e9, 'voice', 'spoken'));
+  await alice.evaluate(() => localStorage.setItem('grill-room-list-w', '398'));
+  await alice.setViewportSize({ width: 1030, height: 720 });
+  await alice.reload();
+  // At 20 px a rem, 1030 less the side panel's 398 less the chat's 440 leaves the pane its 192. The
+  // window first: at 1024 px the pane would be hidden for room and need 1rem more.
+  await alice.evaluate(() => { document.documentElement.style.fontSize = '20px'; });
+  await expect(pane(alice)).toBeVisible();
+  const flips = alice.evaluate(() => new Promise((done) => {
+    let n = 0;
+    const mo = new MutationObserver((rs) => { for (const r of rs) if (r.oldValue.includes('transcript-room') !== document.body.classList.contains('transcript-room')) n++; });
+    mo.observe(document.body, { attributes: true, attributeFilter: ['class'], attributeOldValue: true });
+    window.stopFlips = () => { mo.disconnect(); done(n); };
+  }));
+  const b = await alice.locator('#side-handle').boundingBox();
+  const [x, y] = [b.x + b.width / 2, b.y + b.height / 2];
+  await alice.mouse.move(x, y);
+  await alice.mouse.down();
+  for (const dx of [4, 0, 4, 0, 4, 0]) {
+    await alice.mouse.move(x + dx, y);
+    await alice.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  }
+  await alice.evaluate(() => window.stopFlips());
+  expect(await flips).toBe(1);
+  await expect(pane(alice)).toBeHidden();
+  await alice.mouse.move(x - 20, y);
+  await alice.mouse.up();
+  await expect(pane(alice)).toBeVisible();
+});
+
+// 020-AC19: the pane hidden beside the chat for room goes above it with a document open; the side
+// panel narrowed to the exact fit meanwhile, it comes back beside the chat as the document closes:
+// the 1rem it needs to come back is for a drag hovering beside the chat, not for a layout change.
+test('the pane at its fit comes back as a document closes', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.evaluate(() => localStorage.setItem('grill-room-list-w', '400'));
+  await alice.setViewportSize({ width: 1024, height: 720 });
+  await alice.reload();
+  // At 20 px a rem, 1030 less the side panel's 400 less the chat's 440 leaves the pane 190.
+  await alice.evaluate(() => { document.documentElement.style.fontSize = '20px'; });
+  await alice.setViewportSize({ width: 1030, height: 720 });
+  await expect(pane(alice)).toBeHidden();
+  await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
+  await expect(alice.locator('#viewer')).toBeVisible();
+  await expect(pane(alice)).toBeVisible();
+  await alice.evaluate(() => setWidth(panes.side, 398, true));
+  await alice.locator('#doc-close').click();
+  await expect(alice.locator('#viewer')).toBeHidden();
+  // The chat's new width is observed a frame later: check after it.
+  await alice.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  await expect(pane(alice)).toBeVisible();
+  await expect(handle(alice)).toBeVisible();
+  await expect(alice.locator('#chat-filter')).toBeHidden();
+  expect(await paneWidth(alice)).toBe(192);
+});
+
+// 020-AC19: a bare click on the handle while the window narrows under it keeps the width kept for
+// a wider screen: only a drag that moved the edge is stored.
+test('a click held through a narrower window keeps the width kept', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.evaluate(() => localStorage.setItem('grill-room-transcript-w', '480'));
+  await alice.reload();
+  expect(await paneWidth(alice)).toBe(480);
+  const b = await handle(alice).boundingBox();
+  await alice.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await alice.mouse.down();
+  await alice.setViewportSize({ width: 1024, height: 720 });
+  await expect.poll(() => paneWidth(alice)).toBe(416);
+  await alice.mouse.up();
+  expect(await alice.evaluate(() => localStorage.getItem('grill-room-transcript-w'))).toBe('480');
+  await alice.setViewportSize({ width: 1280, height: 720 });
+  await expect.poll(() => paneWidth(alice)).toBe(480);
+});
+
 // 020-AC19: folded, or above the chat with a document open, the pane has no handle.
 test('no pane handle folded or with a document open', async ({ browser, request }) => {
   const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
