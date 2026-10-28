@@ -3,7 +3,7 @@ import { quietPush } from '../quiet-push.js';
 import { withFreshDB } from '../pgdb.js';
 import { adminToken } from '../playwright.config.js';
 
-// Restricted mode (specs 021, 026) against Keycloak (spec 027), realm in realm/. As in the oidc
+// Restricted mode (specs 021, 026) against Keycloak, realm in realm/ (027-AC1). As in the oidc
 // stack, the provider answers on localhost and the server on 127.0.0.1: two sites.
 const port = Number(process.env.GRILL_ROOM_E2E_KEYCLOAK_PORT || '7740');
 const baseURL = `http://127.0.0.1:${port}`;
