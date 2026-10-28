@@ -1,6 +1,6 @@
 # 027: Restricted instance e2e against a real Keycloak
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-10-28
 **Context**: 021 (restricted instance) and 026 (attach, bound merge) are tested against the in-repo fake provider `tools/e2eoidc` only.
@@ -28,14 +28,14 @@ A second e2e stack runs the restricted-instance specs against a Keycloak contain
 
 ## Acceptance criteria
 
-- [ ] **AC1** `make e2e-keycloak` starts Keycloak (image pinned by digest) with the versioned realm, waits for its discovery document, starts a restricted-mode server against it, runs `e2e/keycloak/` with one worker, and stops both. It needs Docker and fails with a clear message without it.
-- [ ] **AC2** The `e2e/oidc/` scenarios that do not depend on the fake's control switches pass against Keycloak through a shared adapter: sign in from an invite lands in the room as internal with the invite kept; the member-group refusal; `/admin` through the admin group and Unbind; attach a guest profile (026) and Not now; a second account does not loop.
-- [ ] **AC3** Revalidation with a real SSO session: past `GRILL_ROOM_OIDC_REVALIDATE` (aged in the test database, as the oidc stack does), a page goes through `prompt=none` and comes back without a login form while the Keycloak session lives; after the Keycloak session is ended (admin API logout), the same page lands on the Keycloak login form, and signing in brings it back to the page it was on.
-- [ ] **AC4** Account disabled in Keycloak: once past revalidation, the member's page cannot sign in again (Keycloak refuses), their API token and seat answer 401 `reauth`, and an invite they made stops admitting.
-- [ ] **AC5** Group removed in Keycloak: after the member's next sign-in, `/admin` no longer opens for them and their provider admin session has ended; removing them from `grill-members` refuses the next sign-in with the member-group text.
-- [ ] **AC6** Signing keys rotated in Keycloak (new active key, old one disabled): a new sign-in succeeds with the server running.
-- [ ] **AC7** A CI job runs `make e2e-keycloak` on pull requests that touch the OIDC code, the reauth page script, the e2e oidc/keycloak stacks or the realm, on pushes to develop, and on demand; it uploads the test results on failure.
-- [ ] **AC8** README documents the target, its needs and what it covers.
+- [x] **AC1** `make e2e-keycloak` starts Keycloak (image pinned by digest) with the versioned realm, waits for its discovery document, starts a restricted-mode server against it, runs `e2e/keycloak/` with one worker, and stops both. It needs Docker and fails with a clear message without it.
+- [x] **AC2** The `e2e/oidc/` scenarios that do not depend on the fake's control switches pass against Keycloak through a shared adapter: sign in from an invite lands in the room as internal with the invite kept; the member-group refusal; `/admin` through the admin group and Unbind; attach a guest profile (026) and Not now; a second account does not loop.
+- [x] **AC3** Revalidation with a real SSO session: past `GRILL_ROOM_OIDC_REVALIDATE` (aged in the test database, as the oidc stack does), a page goes through `prompt=none` and comes back without a login form while the Keycloak session lives; after the Keycloak session is ended (admin API logout), the same page lands on the Keycloak login form, and signing in brings it back to the page it was on.
+- [x] **AC4** Account disabled in Keycloak: once past revalidation, the member's page cannot sign in again (Keycloak refuses), their API token and seat answer 401 `reauth`, and an invite they made stops admitting.
+- [x] **AC5** Group removed in Keycloak: after the member's next sign-in, `/admin` no longer opens for them and their provider admin session has ended; removing them from `grill-members` refuses the next sign-in with the member-group text.
+- [x] **AC6** Signing keys rotated in Keycloak (new active key, old one disabled): a new sign-in succeeds with the server running.
+- [x] **AC7** A CI job runs `make e2e-keycloak` on pull requests that touch the OIDC code, the reauth page script, the e2e oidc/keycloak stacks or the realm, on pushes to develop, and on demand; it uploads the test results on failure.
+- [x] **AC8** README documents the target, its needs and what it covers.
 
 ## Phases
 

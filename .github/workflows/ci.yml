@@ -489,6 +489,10 @@ jobs:
         env:
           BASE: ${{ github.event_name == 'workflow_dispatch' && 'all' || github.event.pull_request.base.sha || github.event.before }}
         run: |
+          # A branch's first push has no before: its fork point from develop instead.
+          if [ "$BASE" = 0000000000000000000000000000000000000000 ]; then
+            BASE="$(git merge-base origin/develop HEAD)"
+          fi
           paths="tts/grill_tts/lexicon_seed.json tts/grill_tts/textlayer.py tts/grill_tts/lexcheck.py tts/grill_tts/roundtrip.py tts/grill_tts/audio.py tts/grill_tts/engine.py tts/uv.lock stt/ Makefile .github/workflows/ci.yml"
           # shellcheck disable=SC2086 # paths is a word list
           if [ "$BASE" = all ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null || ! git diff --quiet "$BASE" HEAD -- $paths; then
@@ -612,5 +616,78 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-twopod-results
+          path: e2e/test-results/
+          retention-days: 7
+
+  # 027-AC7: whether e2e-keycloak runs: on pull requests and feat/** pushes whose changes touch the
+  # paths below, on every push to develop and on a manual run.
+  keycloak-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.changed.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: changed
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # The globs are git pathspecs, not the shell's.
+          set -f
+          paths="internal/web/oidc*.go internal/store/oidc*.go internal/web/ui/reauth.js internal/web/ui/admin/ e2e/oidc/ e2e/keycloak/ :(glob)e2e/*.js e2e/package.json e2e/pnpm-lock.yaml tools/e2eoidc/ Makefile .github/workflows/ci.yml"
+          case "$EVENT" in
+            pull_request) base="$PR_BASE" ;;
+            push)
+              if [ "$REF" = refs/heads/develop ]; then
+                base=all
+              elif [ "$BEFORE" = 0000000000000000000000000000000000000000 ]; then
+                # A branch's first push has no before: its fork point from develop instead.
+                base="$(git merge-base origin/develop HEAD)"
+              else
+                base="$BEFORE"
+              fi ;;
+            *) base=all ;;
+          esac
+          # shellcheck disable=SC2086 # paths is a word list
+          if [ "$base" = all ] || ! git cat-file -e "$base^{commit}" 2>/dev/null || ! git diff --quiet "$base" HEAD -- $paths; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # 027-AC7: the restricted-mode scenarios against Keycloak (make e2e-keycloak).
+  e2e-keycloak:
+    needs: [keycloak-changes]
+    if: needs.keycloak-changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services: *pg
+    env: *pg-env
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - *pg-tune
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 11.20.0
+          package_json_file: e2e/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: e2e/pnpm-lock.yaml
+      - run: make e2e-keycloak
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-keycloak-results
           path: e2e/test-results/
           retention-days: 7

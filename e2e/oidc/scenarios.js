@@ -4,15 +4,13 @@ import { test, expect } from '../fixtures.js';
 import { rowAction, confirmSheet, signIn } from '../helpers.js';
 import { adminToken } from '../playwright.config.js';
 
-const admin = { Authorization: `Bearer ${adminToken}` };
+export const admin = { Authorization: `Bearer ${adminToken}` };
 const pgdb = fileURLToPath(new URL('../../bin/pgdb', import.meta.url));
-const signInButton = 'Sign in with your organisation account';
+export const signInButton = 'Sign in with your organisation account';
 
-// restricted declares the restricted-mode tests (021, 026) against provider, an adapter as
-// e2e/oidc/provider.js, the stack's server running on database db with the member group set.
-export function restricted(provider, db) {
-  const { users, signInAtProvider } = provider;
-
+// helpers are the steps the restricted-mode tests share, against provider, an adapter as
+// e2e/oidc/provider.js, and the stack's server on database db.
+export function helpers(provider, db) {
   // expire ages sub's last sign-in past the revalidation: no test clock reaches the e2e server.
   const expire = (sub) => {
     const at = new Date(Date.now() - 200 * 3600_000).toISOString();
@@ -31,7 +29,7 @@ export function restricted(provider, db) {
   async function joined(browser, u, path) {
     const page = await (await browser.newContext()).newPage();
     await page.goto(path);
-    await signInAtProvider(page, u, clickSignIn(page));
+    await provider.signInAtProvider(page, u, clickSignIn(page));
     await expect(page.getByRole('button', { name: signInButton })).toBeHidden();
     await page.getByRole('button', { name: 'Join the room' }).click();
     await expect(page.locator('#me')).toHaveText(u.name);
@@ -39,6 +37,15 @@ export function restricted(provider, db) {
   }
 
   const internal = (page) => page.evaluate(() => fetch('/api/profile').then((r) => r.json()).then((p) => p.internal));
+
+  return { expire, invite, clickSignIn, joined, internal };
+}
+
+// restricted declares the restricted-mode tests (021, 026) against provider and the stack's server
+// on database db, with the member group set.
+export function restricted(provider, db) {
+  const { users, signInAtProvider } = provider;
+  const { expire, invite, clickSignIn, joined, internal } = helpers(provider, db);
 
   // 021-AC12, 027-AC2: the join page offers the provider above the name form; signing in comes back
   // to the invite, its fragment kept, and joins as internal. Without an invite only the button shows.
@@ -95,7 +102,8 @@ export function restricted(provider, db) {
   // 021-AC8: an expired sign-in goes through the provider silently and comes back to the same page,
   // its fragment kept; without a provider session, login_required falls back to a normal sign-in.
   test('an expired sign-in comes back through the provider to the same page', async ({ browser, request }) => {
-    // Sets the fake's session flag and reads its prompt log; 027-AC3 plays it with a real session.
+    // Sets the fake's session flag and reads its prompt log; e2e/keycloak/lifecycle.spec.js plays
+    // it with a real session (027-AC3).
     test.skip(!provider.fake, 'needs the fake provider session switch and prompt log');
     const { room, path } = await invite(request, 'Reauth room');
     const page = await joined(browser, users.member, path);

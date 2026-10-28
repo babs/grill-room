@@ -18,6 +18,11 @@ export const users = {
   unverified: user('una'),
   second: user('kai'),
   later: user('noa'),
+  // lifecycle.spec.js's, one per test: each changes its account at Keycloak.
+  revalidate: user('rey'),
+  disabled: user('dora'),
+  groups: user('gaby'),
+  keys: user('kit'),
 };
 
 // signInAtProvider signs page in as u at the provider; start is the step that sends it there.

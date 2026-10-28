@@ -102,6 +102,50 @@
       "enabled": true,
       "credentials": [{ "type": "password", "value": "noa-e2e-password", "temporary": false }],
       "groups": ["/grill-members"]
+    },
+    {
+      "id": "6f1c0a52-0007-4000-8000-000000000007",
+      "username": "rey",
+      "firstName": "Rey",
+      "lastName": "Revalidate",
+      "email": "rey@example.com",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "rey-e2e-password", "temporary": false }],
+      "groups": ["/grill-members"]
+    },
+    {
+      "id": "6f1c0a52-0008-4000-8000-000000000008",
+      "username": "dora",
+      "firstName": "Dora",
+      "lastName": "Disabled",
+      "email": "dora@example.com",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "dora-e2e-password", "temporary": false }],
+      "groups": ["/grill-members"]
+    },
+    {
+      "id": "6f1c0a52-0009-4000-8000-000000000009",
+      "username": "gaby",
+      "firstName": "Gaby",
+      "lastName": "Groups",
+      "email": "gaby@example.com",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "gaby-e2e-password", "temporary": false }],
+      "groups": ["/grill-members", "/grill-admins"]
+    },
+    {
+      "id": "6f1c0a52-0010-4000-8000-000000000010",
+      "username": "kit",
+      "firstName": "Kit",
+      "lastName": "Keys",
+      "email": "kit@example.com",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "kit-e2e-password", "temporary": false }],
+      "groups": ["/grill-members"]
     }
   ]
 }

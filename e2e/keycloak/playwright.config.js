@@ -10,6 +10,8 @@ const baseURL = `http://127.0.0.1:${port}`;
 const kcPort = port + 2;
 export const kcURL = `http://localhost:${kcPort}`;
 export const db = `e2e_keycloak_${port}`;
+// The master realm's admin, for the admin API (admin.js). Test-only.
+export const kcAdmin = { username: 'e2e-admin', password: 'e2e-admin-password' };
 
 export default defineConfig({
   testDir: '.',
@@ -25,6 +27,7 @@ export default defineConfig({
     reuseExistingServer: false,
     // SIGTERM lets keycloak.sh remove its container; the default SIGKILL would leave it running.
     gracefulShutdown: { signal: 'SIGTERM', timeout: 30_000 },
+    env: { KC_BOOTSTRAP_ADMIN_USERNAME: kcAdmin.username, KC_BOOTSTRAP_ADMIN_PASSWORD: kcAdmin.password },
   }, {
     // From e2e/, as the main config runs it.
     cwd: '..',

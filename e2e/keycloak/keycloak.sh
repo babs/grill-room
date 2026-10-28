@@ -4,6 +4,7 @@
 #   keycloak.sh start <port> <server-url>   starts it and waits for the realm's discovery document
 #   keycloak.sh run <port> <server-url>     start, then hold until a signal or the container ends; removes it on exit
 #   keycloak.sh stop <port>                 removes it
+# KC_BOOTSTRAP_ADMIN_USERNAME and KC_BOOTSTRAP_ADMIN_PASSWORD, when set, make the master realm's admin.
 set -euo pipefail
 
 readonly IMAGE='quay.io/keycloak/keycloak:26.8.1@sha256:a78d6b79572168cb25886b80a8b5b8d4ed4390743e3eecb810538683e209dd6b'
@@ -30,7 +31,7 @@ start() {
   docker pull -q "$IMAGE" >/dev/null
   # --hostname pins the issuer to localhost: the server and the browser both reach it there.
   docker run -d --name "$name" -p "127.0.0.1:$port:8080" --memory 1g \
-    -e GRILL_ROOM_E2E_URL="$url" -v "$realm_dir:/opt/keycloak/data/import:ro" \
+    -e GRILL_ROOM_E2E_URL="$url" -e KC_BOOTSTRAP_ADMIN_USERNAME -e KC_BOOTSTRAP_ADMIN_PASSWORD -v "$realm_dir:/opt/keycloak/data/import:ro" \
     "$IMAGE" start-dev --import-realm --hostname "http://localhost:$port" >/dev/null
   deadline=$((SECONDS + START_TIMEOUT))
   until curl -sf --max-time 5 -o /dev/null "$discovery"; do
