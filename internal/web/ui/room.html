@@ -293,6 +293,10 @@
     <option value="arm64">ARM64 (Apple silicon)</option>
   </select></label>
   <p id="host-wsl" hidden>Run it in a WSL terminal: the app needs Linux and Docker there.</p>
+  <div id="host-mac" hidden>
+    <p>macOS blocks the downloaded file because the app is not notarized. Before you run it, clear the flag in Terminal:</p>
+    <pre id="host-mac-cmd"></pre>
+  </div>
   <p><a id="host-download" class="btn btn-primary" download></a></p>
   <details>
     <summary>Advanced: check the download, or install from a terminal</summary>
