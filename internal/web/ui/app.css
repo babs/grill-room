@@ -474,6 +474,7 @@ body.docs-window #chat-fold, body.docs-window #chat-unfold { display: none; }
 /* Transcription pane (020-AC8): room.js sets .transcript-room while it fits, .fold-transcript folded. */
 #transcript { display: none; }
 #transcript .pane-head { min-height: 44px; padding: var(--sp-1) var(--sp-4); }
+#text-size .text-steps { display: flex; gap: var(--sp-4); }
 #transcript-off { color: var(--text-muted); font-size: var(--fs-xs); }
 #transcript-count:empty { display: none; }
 #voice-lines { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: var(--sp-3) var(--sp-4); }
@@ -503,10 +504,14 @@ body.transcript-room:has(#viewer:not([hidden])) #transcript { order: -1; flex: 0
 .msg .meta { font-size: var(--fs-sm); }
 .msg .meta time { color: var(--text-muted); margin-left: var(--sp-1); }
 .msg .body { overflow-wrap: anywhere; }
-/* Room page only, from 40rem: more of the chat fits beside a document (020-AC15). */
-@media (width > 40rem) { body.room :is(.msg:not(.system) .body, #send textarea) { font-size: 0.9375rem; } }
+/* Room page only, from 40rem: more of the chat fits beside a document (020-AC15). Each area scales
+   by the person's text size (028); room.js sets the --*-scale variables. */
+body.room :is(.msg:not(.system) .body, #send textarea) { font-size: calc(var(--fs-md) * var(--chat-scale, 1)); }
+@media (width > 40rem) { body.room :is(.msg:not(.system) .body, #send textarea) { font-size: calc(0.9375rem * var(--chat-scale, 1)); } }
+/* iOS zooms into an input under 16 px (028-AC5). */
+@media (width <= 40rem) { body.room #send textarea { font-size: max(var(--fs-md), calc(var(--fs-md) * var(--chat-scale, 1))); } }
 /* The pane's text a step under the chat's: more of what is said fits beside it (020-AC18). */
-#voice-lines .msg .body { font-size: var(--fs-sm); }
+#voice-lines .msg .body { font-size: calc(var(--fs-sm) * var(--transcript-scale, 1)); }
 .msg .body :is(p, ul, ol, pre, table, blockquote) { margin: var(--sp-1) 0; }
 .msg .body :is(ul, ol) { padding-left: var(--sp-5); }
 .msg .body pre { overflow-x: auto; padding: var(--sp-2); background: var(--border); border-radius: var(--r-sm); }

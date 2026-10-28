@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"sync"
@@ -752,5 +753,27 @@ func TestRecoveryLinks(t *testing.T) {
 	}
 	if n := count(t, s, `SELECT count(*) FROM recovery_links WHERE profile_id = ?`, a.ProfileID); n != 0 {
 		t.Fatalf("links left after the profile delete: %d", n)
+	}
+}
+
+// 028-AC3: text sizes round-trip; a stored value that does not parse reads as none, not as an error.
+func TestTextSizes(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	a := joinWithProfile(t, s, "a", "Alice", JoinProfile{RecoveryHash: "rec", SessionHash: "sess"})
+	want := map[string]string{"chat": "l"}
+	if err := s.SetTextSizes(ctx, a.ProfileID, want); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.ProfileBySession(ctx, "sess"); err != nil || !maps.Equal(p.TextSizes, want) {
+		t.Fatalf("got %v, %v; want %v", p, err, want)
+	}
+	for _, bad := range []string{"{", `["l"]`, `{"chat": 2}`} {
+		if _, err := s.db.ExecContext(ctx, `UPDATE profiles SET text_sizes = ? WHERE id = ?`, bad, a.ProfileID); err != nil {
+			t.Fatal(err)
+		}
+		if p, err := s.ProfileBySession(ctx, "sess"); err != nil || p.TextSizes != nil {
+			t.Errorf("%s: got %v, %v; want no sizes, no error", bad, p, err)
+		}
 	}
 }

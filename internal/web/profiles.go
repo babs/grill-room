@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/mail"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -248,6 +249,35 @@ func (s *Server) setProfileName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"name": name})
+}
+
+// textAreas and textSteps are the room areas and the steps a profile may pick for them (028).
+var (
+	textAreas = []string{"chat", "transcript"}
+	textSteps = []string{"s", "m", "l", "xl"}
+)
+
+// setTextSize stores the profile's text size per room area; the body is the whole map (028-AC4).
+func (s *Server) setTextSize(w http.ResponseWriter, r *http.Request) {
+	p := s.profileFor(w, r)
+	if p == nil {
+		return
+	}
+	var req map[string]string
+	if !decode(w, r, &req) {
+		return
+	}
+	for area, step := range req {
+		if !slices.Contains(textAreas, area) || !slices.Contains(textSteps, step) {
+			httpError(w, http.StatusBadRequest, "text size: areas are "+strings.Join(textAreas, ", ")+"; steps "+strings.Join(textSteps, ", "))
+			return
+		}
+	}
+	if err := s.bus.Store.SetTextSizes(r.Context(), p.ID, req); err != nil {
+		s.serverError(w, "set_text_size_failed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, req)
 }
 
 // signedIn sets a fresh profile session cookie for p's device and answers with the profile.

@@ -343,6 +343,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/profile/magic", s.useMagicLink)
 	mux.HandleFunc("POST /api/profile/nudge", s.snoozeNudge)
 	mux.HandleFunc("PUT /api/profile/name", s.setProfileName)
+	mux.HandleFunc("PUT /api/profile/text-size", s.setTextSize)
 	mux.HandleFunc("GET /api/profile/tokens", s.listTokens)
 	mux.HandleFunc("POST /api/profile/tokens", s.createToken)
 	mux.HandleFunc("DELETE /api/profile/tokens/{id}", s.revokeToken)

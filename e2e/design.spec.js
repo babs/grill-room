@@ -278,7 +278,7 @@ test('header menus, wording and empty states', async ({ browser, request }) => {
   expect(await alice.evaluate(() => navigator.clipboard.readText())).toMatch(/#[A-Za-z0-9_-]+$/);
 
   await alice.locator('#me').click();
-  await expect(alice.locator('#me-menu').getByRole('button')).toHaveText(['Change my name', 'Notifications', 'Use on another device', 'Diagnostics']);
+  await expect(alice.locator('#me-menu').getByRole('button')).toHaveText(['Change my name', 'Notifications', 'Text size', 'Use on another device', 'Diagnostics']);
   await expect(alice.locator('#me-menu').getByRole('link')).toHaveText('My rooms and profile');
   await shot(alice, 'after-desktop-user-menu');
   await alice.keyboard.press('Escape');
