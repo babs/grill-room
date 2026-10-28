@@ -585,8 +585,9 @@ test('docs panes follow the design rules', async ({ browser, request }) => {
 });
 
 // overlaps names what crosses in the agents bar: two pills, as far as their scrolling bar shows
-// them; the header warning and the status words; whatever else is drawn at the warning's or the
-// status's centre; and a pill drawn past its bar's edges, which the bar no longer clips.
+// them; the auto-turn count, the header warning and the status words; whatever else is drawn at
+// their centre; the count or the warning cut; and a pill drawn past its bar's edges, which the bar
+// no longer clips.
 const overlaps = (page) => page.evaluate(() => {
   const bar = document.getElementById('persona-buttons').getBoundingClientRect();
   const pills = [...document.querySelectorAll('.zone-agents .persona-pill')].map((e) => {
@@ -594,8 +595,12 @@ const overlaps = (page) => page.evaluate(() => {
     const [left, right] = [Math.max(r.left, bar.left), Math.min(r.right, bar.right)];
     return [e.textContent.trim().slice(0, 12), { left, right, width: right - left }];
   });
-  const own = [...document.querySelectorAll('#agent-warn, #agent-status:not(.sr-only)')].filter((e) => e.getBoundingClientRect().width > 1);
   const out = [];
+  // Only the status may end in an ellipsis; a count shrunk to nothing is cut too.
+  for (const e of document.querySelectorAll('#chain-count:not([hidden]), #agent-warn:not([hidden])')) {
+    if (e.scrollWidth > e.clientWidth) out.push(`${e.id} cut to ${e.clientWidth} of ${e.scrollWidth} px`);
+  }
+  const own = [...document.querySelectorAll('#chain-count:not([hidden]), #agent-warn, #agent-status:not(.sr-only)')].filter((e) => e.getBoundingClientRect().width > 1);
   for (const group of [pills, own.map((e) => [e.id, e.getBoundingClientRect()])]) {
     const shown = group.filter(([, r]) => r.width > 0);
     for (const [i, [a, r]] of shown.entries()) for (const [b, s] of shown.slice(i + 1)) {
@@ -662,16 +667,23 @@ test('the header warning keeps the agents bar apart', async ({ browser, request 
   await expect(warn).toBeFocused();
   await expect(alice.locator('#person-tip')).toHaveText(offline);
 
-  // A persona answering stays words, never drawn over the pills: where the pills take the bar it
-  // gives way (font metrics decide where), and it shows once the header has room.
+  // A persona answering stays words, never drawn over the pills: whole, or cut with an ellipsis
+  // at no less than 6rem, the pills scrolling for it, whatever the font's metrics.
   await alice.evaluate((ids) => { agent = { ...agent, online: true, running: ids.map((id) => ({ persona_id: id })) }; renderAgent(); }, added);
   await expect(status).toHaveText('Secretary answering, Rodin answering…');
   await expect(warn).toBeHidden();
-  for (const width of [1280, 1440, 1920]) {
+  for (const width of [1025, 1200, 1280, 1440, 1920]) {
     await alice.setViewportSize({ width, height: 800 });
+    await expect(status, `${width} px`).toBeVisible();
+    // The floor takes from the pills, never from the page: the header keeps the window's width.
+    expect(await alice.evaluate(() => [document.documentElement.scrollWidth, innerWidth]), `${width} px`).toEqual([width, width]);
+    expect(await alice.locator('.room-header').evaluate((h) => h.scrollWidth - h.clientWidth), `${width} px`).toBe(0);
+    const s = await status.evaluate((e) => ({ shown: e.clientWidth, whole: e.scrollWidth, cut: getComputedStyle(e).textOverflow,
+      floor: 6 * parseFloat(getComputedStyle(document.documentElement).fontSize) }));
+    expect(s.shown, `${width} px`).toBeGreaterThanOrEqual(Math.min(s.floor, s.whole));
+    if (s.whole > s.shown) expect(s.cut, `${width} px`).toBe('ellipsis');
     expect(await overlaps(alice), `${width} px`).toEqual([]);
   }
-  await expect(status).toBeVisible();
 
   // A failed action on the AI: the warning carries its message.
   await alice.evaluate(() => agentError('This answer already stopped.'));
@@ -714,6 +726,11 @@ test('the header warning stays in sight past many personas', async ({ browser, r
     await expect(warn).toHaveAccessibleDescription('Could not stop it at ' + width);
     await expect(alice.locator('#notice')).toBeHidden();
   }
+  // The auto-turn count beside the overflowing pills keeps its words whole.
+  await alice.setViewportSize({ width: 1200, height: 800 });
+  await alice.evaluate(() => { agent = { ...agent, chain: { ...agent.chain, count: 3, budget: 25 } }; renderChain(); });
+  await expect(alice.locator('#chain-count')).toHaveText('auto 3/25');
+  expect(await overlaps(alice)).toEqual([]);
   await alice.setViewportSize({ width: 1024, height: 800 });
   await alice.evaluate(() => agentError('Could not stop it here'));
   await expect(alice.locator('#notice-text')).toHaveText('Could not stop it here');

@@ -458,6 +458,10 @@
     if (el && el === e.target && el.matches(':focus-visible') && !cardOpen()) showTip(el);
   });
   document.addEventListener('focusout', (e) => { if (e.target === tipFor) hideTip(); });
+  // A tip a tap showed has no hover to end, and iOS Safari focuses no button on a tap: no blur either.
+  document.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'mouse' && tipFor && !(e.target instanceof Node && (tipFor.contains(e.target) || tip.contains(e.target)))) hideTip();
+  });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideTip(); });
   // The pointer gone into a document frame sends no pointerout here.
   addEventListener('blur', hideTip);

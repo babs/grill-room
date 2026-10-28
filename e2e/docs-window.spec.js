@@ -31,6 +31,17 @@ async function drag(page, handle, x) {
   await page.mouse.up();
 }
 
+// handleDrag holds sel's middle and moves the pointer dx in two moves.
+async function handleDrag(page, sel, dx) {
+  const b = await box(page, sel);
+  const [x, y] = [b.x + b.width / 2, b.y + b.height / 2];
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + dx / 2, y);
+  await page.mouse.move(x + dx, y);
+  await page.mouse.up();
+}
+
 // 008-AC1 008-AC2: a steady list beside an empty state, a handle that drags within 192..480 px and
 // moves by 16 px with the arrows.
 test('the docs window list keeps its width and resizes', async ({ browser, request }) => {
@@ -142,6 +153,135 @@ test('notes resize, give way first, and widths persist', async ({ browser, reque
   await alice.getByRole('button', { name: 'Join the room' }).click();
   await expect(alice.locator('#room-name')).toHaveText('Other room');
   expect(await width(alice, '#side')).toBeCloseTo(288, 0);
+});
+
+// 008-AC2 008-AC3: Notes giving way to the document reads its drawn width in aria-valuenow and, the
+// most it can take there, in aria-valuemax, also after a window resize; ← / → move its edge on
+// screen by 16 px; a key the layout stops changes nothing, the width kept included.
+test('notes giving way move by the keys from the edge drawn', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.evaluate(() => { localStorage.setItem('grill-room-list-w', '480'); localStorage.setItem('grill-room-notes-w', '640'); });
+  await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
+  await expect(alice.locator('#documents')).toContainText('plan.md');
+  const docs = await docsWindow(alice, room, { width: 1400, height: 900 });
+  await docs.locator('#documents').getByRole('button', { name: 'plan.md' }).click();
+  await expect(docs.locator('#annotations')).toBeVisible();
+  const notes = docs.getByRole('separator', { name: 'Resize the notes' });
+  const edge = async () => Math.round((await box(docs, '#annotations')).x);
+  const drawn = async () => Math.round(await width(docs, '#annotations'));
+  for (const size of [{ width: 1400, height: 900 }, { width: 1300, height: 900 }]) {
+    await docs.setViewportSize(size);
+    const now = await drawn();
+    expect(now, `${size.width} px`).toBeLessThan(640);
+    await expect(notes, `${size.width} px`).toHaveAttribute('aria-valuenow', String(now));
+    // The document stops it there: no more room, whatever the 640 px kept.
+    await expect(notes, `${size.width} px`).toHaveAttribute('aria-valuemax', String(now));
+  }
+  await notes.focus();
+  const [x, w] = [await edge(), await drawn()];
+  await docs.keyboard.press('ArrowRight');
+  await expect.poll(edge).toBe(x + 16);
+  await expect(notes).toHaveAttribute('aria-valuenow', String(w - 16));
+  expect(await stored(docs, 'grill-room-notes-w')).toBe(String(w - 16));
+  await docs.keyboard.press('ArrowLeft');
+  await expect.poll(edge).toBe(x);
+  await expect(notes).toHaveAttribute('aria-valuenow', String(w));
+  // The document keeps its 384 px: Notes cannot grow, and the width kept stays.
+  await docs.keyboard.press('ArrowLeft');
+  expect(await edge()).toBe(x);
+  await expect(notes).toHaveAttribute('aria-valuenow', String(w));
+  expect(await stored(docs, 'grill-room-notes-w')).toBe(String(w));
+});
+
+// 008-AC3: at the document's stop Notes takes no more, whatever the width kept: aria-valuemax says
+// the drawn width once Notes is drawn at the width kept too, a widening key does nothing and stores
+// nothing, and a drag past the stop stores what is drawn, not where the pointer went.
+test('notes stop at the document and store what is drawn', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.evaluate(() => { localStorage.setItem('grill-room-list-w', '480'); localStorage.setItem('grill-room-notes-w', '640'); });
+  await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
+  await expect(alice.locator('#documents')).toContainText('plan.md');
+  const docs = await docsWindow(alice, room, { width: 1300, height: 900 });
+  await docs.locator('#documents').getByRole('button', { name: 'plan.md' }).click();
+  await expect(docs.locator('#annotations')).toBeVisible();
+  const notes = docs.getByRole('separator', { name: 'Resize the notes' });
+  const drawn = async () => Math.round(await width(docs, '#annotations'));
+  const w = await drawn();
+  expect(w).toBeLessThan(640);
+  await notes.focus();
+  // One → narrows it: the width kept is the one drawn, the document still stops it there.
+  await docs.keyboard.press('ArrowRight');
+  await expect(notes).toHaveAttribute('aria-valuenow', String(w - 16));
+  await docs.keyboard.press('ArrowLeft');
+  await expect(notes).toHaveAttribute('aria-valuenow', String(w));
+  expect(await stored(docs, 'grill-room-notes-w')).toBe(String(w));
+  await expect(notes).toHaveAttribute('aria-valuemax', String(w));
+  await docs.keyboard.press('ArrowLeft');
+  await expect(notes).toHaveAttribute('aria-valuenow', String(w));
+  expect(await stored(docs, 'grill-room-notes-w')).toBe(String(w));
+  // 16 px from the stop, a drag 60 px wider stops there and stores it.
+  await docs.keyboard.press('ArrowRight');
+  await expect(notes).toHaveAttribute('aria-valuenow', String(w - 16));
+  await handleDrag(docs, '#notes-handle', -60);
+  expect(await drawn()).toBe(w);
+  expect(await stored(docs, 'grill-room-notes-w')).toBe(String(w));
+  await expect(notes).toHaveAttribute('aria-valuemax', String(w));
+});
+
+// 008-AC2 008-AC3: on the room page, the chat beside a document, the document sets no floor: both
+// handles say whole widths within their range and a drag stores one.
+test('room page: the panes beside a document keep whole widths', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.setViewportSize(desktop);
+  await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
+  await expect(alice.locator('#viewer')).toBeVisible();
+  await expect(alice.locator('.chat')).toBeVisible();
+  await expect(alice.locator('#annotations')).toBeVisible();
+  for (const [sel, key, dx] of [['#side-handle', 'grill-room-list-w', 20], ['#notes-handle', 'grill-room-notes-w', 20]]) {
+    const [lo, hi] = await alice.locator(sel).evaluate((h) => [h.getAttribute('aria-valuemin'), h.getAttribute('aria-valuemax')]);
+    expect(hi, sel).toMatch(/^\d+$/);
+    expect(Number(hi), sel).toBeGreaterThanOrEqual(Number(lo));
+    await handleDrag(alice, sel, dx);
+    expect(await stored(alice, key), sel).toMatch(/^\d+$/);
+  }
+});
+
+// 008-AC2: a pane's most follows the document's room as the other pane changes it: Notes drawn at
+// the width kept, the side panel 200 px narrower gives the frame 200 px, and Notes as much.
+test('notes may take the room the side panel gives up', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.evaluate(() => { localStorage.setItem('grill-room-list-w', '480'); localStorage.setItem('grill-room-notes-w', '320'); });
+  await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
+  await expect(alice.locator('#documents')).toContainText('plan.md');
+  const docs = await docsWindow(alice, room, { width: 1300, height: 900 });
+  await docs.locator('#documents').getByRole('button', { name: 'plan.md' }).click();
+  await expect(docs.locator('#annotations')).toBeVisible();
+  const notes = docs.getByRole('separator', { name: 'Resize the notes' });
+  await expect(notes).toHaveAttribute('aria-valuenow', '320');
+  const most = Number(await notes.getAttribute('aria-valuemax'));
+  expect(most).toBeLessThan(640);
+  await handleDrag(docs, '#side-handle', -200);
+  await expect(docs.locator('#side-handle')).toHaveAttribute('aria-valuenow', '280');
+  await expect(notes).toHaveAttribute('aria-valuemax', String(Math.min(640, most + 200)));
+});
+
+// 008-AC3: at a 20 px rem Notes keeps its 16rem, 320 px: the side panel widened past the room Notes
+// gives stops there and stores what is drawn.
+test('the side panel stops at the floor Notes keeps at a larger rem', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.evaluate(() => { localStorage.setItem('grill-room-list-w', '256'); localStorage.setItem('grill-room-notes-w', '640'); });
+  await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
+  await expect(alice.locator('#documents')).toContainText('plan.md');
+  const docs = await docsWindow(alice, room, { width: 1100, height: 900 });
+  await docs.locator('#documents').getByRole('button', { name: 'plan.md' }).click();
+  await expect(docs.locator('#annotations')).toBeVisible();
+  await docs.evaluate(() => { document.documentElement.style.fontSize = '20px'; });
+  await expect.poll(async () => Math.round(await width(docs, '#annotations'))).toBeGreaterThan(320);
+  await handleDrag(docs, '#side-handle', 200);
+  await expect.poll(async () => Math.round(await width(docs, '#annotations'))).toBe(320);
+  const drawn = Math.round(await width(docs, '#side'));
+  expect(drawn).toBeLessThan(256 + 200);
+  expect(await stored(docs, 'grill-room-list-w')).toBe(String(drawn));
 });
 
 // 008-AC5: the docs window folds its list to a rail and the document takes the width; the room

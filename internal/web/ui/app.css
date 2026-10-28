@@ -108,9 +108,12 @@ body.room { position: fixed; top: var(--vv-top, 0); left: 0; right: 0; height: 1
 .zone-room { flex: 0 1 auto; }
 .zone-agents { flex: 1 1 auto; }
 .zone-me { flex: none; margin-left: auto; }
-/* The pills never shrink and never spill: the bar scrolls them; the status takes only what is left. */
+/* The pills never shrink and never spill: the bar scrolls them; the status takes what is left, at
+   least 6rem of words, cut with an ellipsis, and the count stays whole. */
 #persona-buttons { display: flex; flex: 0 1 auto; gap: var(--sp-2); min-width: 0; overflow-x: auto; scrollbar-width: thin; }
 #agent-status { flex: 1 1 0; min-width: 0; }
+#agent-status:not(:empty, .sr-only) { min-width: 6rem; }
+#chain-count { flex: none; }
 /* --warning is under 3:1 on the chrome. */
 .app-header #agent-warn { flex: none; color: var(--accent); }
 .auto-turns, #agent-status { color: var(--chrome-muted); font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -406,7 +409,8 @@ button.doc:hover { background: var(--border); }
 #doc-rename-form input { min-width: 12rem; }
 #doc-frame { flex: 1; display: flex; min-height: 0; background: var(--surface); }
 #doc-frame iframe { flex: 1; border: 0; }
-body.drag-files #doc-frame iframe { pointer-events: none; }
+/* The frame is another document: over it, a dragged file or a pane handle's drag would go to it. */
+body:is(.drag-files, :has(.pane-handle.dragging)) #doc-frame iframe { pointer-events: none; }
 #doc-frame img { max-width: 100%; max-height: 100%; margin: auto; object-fit: contain; }
 .viewer-body { flex: 1; display: flex; min-height: 0; }
 body.annot-closed #annotations { display: none; }

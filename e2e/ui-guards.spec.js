@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, upload, appointAdmin, personaSheet, closePersonas, commentOnDocument, signIn, startDaemon, openDaemonPage, unfoldTabs } from './helpers.js';
+import { roomWith, live, line, upload, appointAdmin, personaSheet, closePersonas, commentOnDocument, signIn, startDaemon, openDaemonPage, unfoldTabs } from './helpers.js';
 
 // One guard per defect class of the v0.0.17 visual check (docs/design.md): each failed there.
 const desktop = { width: 1440, height: 900 };
@@ -251,6 +251,27 @@ test('a tip follows the pointer from one control to the next', async ({ browser,
     await to.hover();
     await expect(tip).toHaveText(await to.getAttribute('data-tip'));
     await expect(tip).toBeVisible();
+  }
+});
+
+// A tip a tap showed goes at a tap elsewhere, also where a tap focuses nothing, as on iOS Safari:
+// no blur ends it there. Two tap tips the room shows in two ways: the header warning, a button, and
+// a voice line's source, a span.
+test('a tap elsewhere closes a tip a tap showed', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, hasTouch: true, storageState: await alice.context().storageState() });
+  // A tap that focuses nothing: the focus a mouse down would give is cancelled.
+  await ctx.addInitScript(() => document.addEventListener('mousedown', (e) => e.preventDefault(), true));
+  const page = await ctx.newPage();
+  await page.goto(alice.url());
+  await live(page, line(1e9, 'voice', 'spoken'));
+  const tip = page.locator('#person-tip');
+  for (const sel of ['#agent-warn', '#voice-lines .voice-src']) {
+    await page.locator(sel).tap();
+    await expect(tip, sel).toHaveText(await page.locator(sel).getAttribute('data-tip'));
+    await expect(page.locator(sel), sel).not.toBeFocused();
+    await page.locator('#messages').tap({ position: { x: 20, y: 20 } });
+    await expect(tip, sel).toBeHidden();
   }
 });
 
