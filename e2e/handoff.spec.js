@@ -33,6 +33,9 @@ test('handoff: autocompact, context banner, new session from the note', async ({
 
     await banner.getByRole('button', { name: 'Start fresh with a summary for Grill' }).click();
     await confirmSheet(alice, 'Start fresh');
+    // While the handoff runs, the banner says so in place of the button.
+    await expect(banner).toContainText(/It (writes its handoff note, then starts fresh|starts fresh from its handoff note)\./);
+    await expect(banner.getByRole('button', { name: 'Start fresh with a summary for Grill' })).toHaveCount(0);
     const read = alice.locator('#messages li.msg.agent', { hasText: 'Read docs/_handoff-Grill.md' });
     await expect(read.locator('.body')).toHaveText('Read docs/_handoff-Grill.md: The code word was OSPREY.', { timeout: 120_000 });
     await expect(alice.locator('#messages li.msg.agent', { hasText: 'Handoff note written.' })).toHaveCount(1);
