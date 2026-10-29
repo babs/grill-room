@@ -2163,6 +2163,8 @@ const personaByID = (id) => agent.personas.find((p) => p.id === id);
 const contextUse = (p) => (p.context_window ? Math.round((100 * (p.context_tokens || 0)) / p.context_window) : null);
 // Above this use the room offers the host a new session with a handoff note (003-AC25).
 const contextFull = 80;
+// handoffStep is the handoff turn a persona runs or waits for, "write" or "read"; "" for none.
+const handoffStep = (p) => (runningTurn(p) || agent.queue.find((q) => q.persona_id === p.id) || {}).handoff || '';
 
 async function handOff(p) {
   if (!(await grillConfirm('Start ' + p.name + ' fresh, keeping a summary?', 'Its last answer on this session writes docs/_handoff-' + p.name
@@ -2549,7 +2551,10 @@ function renderApprovals() {
     if (use === null || use < contextFull) continue;
     const li = document.createElement('li');
     li.textContent = p.badge + ' ' + p.name + '\'s session holds ' + use + '% of its context window.';
-    if (isHost()) {
+    const step = handoffStep(p);
+    if (step) {
+      li.append(step === 'write' ? ' It writes its handoff note, then starts fresh.' : ' It starts fresh from its handoff note.');
+    } else if (isHost()) {
       const b = document.createElement('button');
       b.type = 'button';
             b.textContent = 'Start fresh, keep a summary';
@@ -2894,7 +2899,9 @@ function fillPersonaMenu() {
       act('Start fresh', 'Start fresh for ' + p.name, async () => {
         if (await grillConfirm('Start ' + p.name + ' fresh?', 'It forgets its earlier answers and rereads the room history.', 'Start fresh')) await pressPersona(p.id, true);
       });
-      act('Start fresh, keep a summary', 'Start fresh with a summary for ' + p.name, () => handOff(p));
+      act('Start fresh, keep a summary', 'Start fresh with a summary for ' + p.name, async () => {
+        if (await handOff(p)) personasStatus(p.name + ' writes its handoff note, then starts fresh.');
+      });
     }
     act('Remove', 'Remove ' + p.name, async () => {
       if (!(await grillConfirm('Remove ' + p.name + '?', 'Its session goes; what it wrote stays.', 'Remove'))) return;

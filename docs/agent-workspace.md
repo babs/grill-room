@@ -120,7 +120,7 @@ The daemon posts both with the result (`context_tokens`, `context_window`). The 
 
 ## Handoff
 
-"New session with handoff" (003-AC25) is the host's, per persona, in the persona sheet's `⋯` menu as "Start fresh, keep a summary". Above 80% context use the room also offers it in the "waiting for the host" banner. It needs a session to hand over: a persona with no successful turn answers 409.
+"New session with handoff" (003-AC25) is the host's, per persona, in the persona sheet's `⋯` menu as "Start fresh, keep a summary". Above 80% context use the room also offers it in the "waiting for the host" banner; while the handoff runs or waits, the banner says which step it is on in place of the button. It needs a session to hand over: a persona with no successful turn answers 409.
 
 1. It runs a last turn on the current session, cause `the host <name> asked for a handoff note before a new session`, queued like a press. The prompt asks the agent to write `docs/_handoff-<persona>.md`: decisions made, the current state, open questions, what to do next.
 2. When that turn is done and created or revised the note, the server queues a fresh turn of the persona in place of its queued one, cause `handoff from your previous session`. Its prompt says it is a new session and to read the note first, then `transcript/`.
