@@ -878,7 +878,8 @@ func TestIdPErrorCode(t *testing.T) {
 	}
 }
 
-// 021-AC4: the sign-in a verified token asks for: email only when verified, the name cleaned and
+// 021-AC4: the sign-in a verified token asks for: email only when verified (email_verified, or
+// Entra's xms_edov), the name cleaned and
 // cut to 40 characters rather than dropped.
 func TestSignInFromClaims(t *testing.T) {
 	now := time.Unix(1, 0)
@@ -889,6 +890,9 @@ func TestSignInFromClaims(t *testing.T) {
 	}{
 		{map[string]any{"email": "A@Example.com", "email_verified": true, "name": " Ann "}, "a@example.com", "Ann"},
 		{map[string]any{"email": "a@example.com", "email_verified": "true"}, "", ""},
+		{map[string]any{"email": "a@example.com", "xms_edov": true}, "a@example.com", ""},
+		{map[string]any{"email": "a@example.com", "xms_edov": "1"}, "", ""},
+		{map[string]any{"email": "a@example.com", "xms_edov": false, "email_verified": false}, "", ""},
 		{map[string]any{"email": "a@example.com"}, "", ""},
 		{map[string]any{"email": "not an address", "email_verified": true}, "", ""},
 		{map[string]any{"name": long}, "", strings.Repeat("é", 30) + strings.Repeat("b", 10)},

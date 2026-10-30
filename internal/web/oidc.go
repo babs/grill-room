@@ -670,10 +670,11 @@ func authorizedParty(aud []string, claims map[string]any, clientID string) bool 
 }
 
 // signInFromClaims is the sign-in a verified token asks for. An unverified address would let anyone
-// take over the profile holding it (021-AC4); a name too long is cut, not dropped.
+// take over the profile holding it (021-AC4); a name too long is cut, not dropped. Entra never sends
+// email_verified: its xms_edov says the address's domain is verified by the tenant.
 func signInFromClaims(iss, sub string, claims map[string]any, now time.Time) store.OIDCSignIn {
 	in := store.OIDCSignIn{Issuer: iss, Subject: sub, Now: now}
-	if claims["email_verified"] == true {
+	if claims["email_verified"] == true || claims["xms_edov"] == true {
 		v, _ := claims["email"].(string)
 		in.Email, _ = cleanEmail(v)
 	}

@@ -97,6 +97,23 @@ func TestSignInOIDC(t *testing.T) {
 	if q, how, _, err := s.SignInOIDC(ctx, later); err != nil || how != OIDCExisting || q.ID != p.ID || !q.OIDCSignedInAt.Equal(later.Now) {
 		t.Fatalf("existing: %+v %s %v", q, how, err)
 	}
+	// A bound profile made without an address gets the verified one, not another over it, nor one
+	// another profile holds.
+	if _, _, _, err := s.SignInOIDC(ctx, in("s5", "", "h6")); err != nil {
+		t.Fatal(err)
+	}
+	if q, how, _, err := s.SignInOIDC(ctx, in("s5", "e@example.com", "h7")); err != nil || how != OIDCExisting || q.Email != "e@example.com" {
+		t.Fatalf("filled email: %+v %s %v", q, how, err)
+	}
+	if q, _, _, err := s.SignInOIDC(ctx, in("s5", "f@example.com", "h8")); err != nil || q.Email != "e@example.com" {
+		t.Fatalf("replaced email: %+v %v", q, err)
+	}
+	if _, _, _, err := s.SignInOIDC(ctx, in("s6", "", "h9")); err != nil {
+		t.Fatal(err)
+	}
+	if q, _, _, err := s.SignInOIDC(ctx, in("s6", "e@example.com", "h10")); err != nil || q.Email != "" {
+		t.Fatalf("taken email: %+v %v", q, err)
+	}
 	other := newProfile(t, s, "o")
 	if _, err := s.db.ExecContext(ctx, `UPDATE profiles SET email = 'o@example.com' WHERE id = ?`, other); err != nil {
 		t.Fatal(err)

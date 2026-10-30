@@ -30,7 +30,8 @@ type OIDCSignIn struct {
 	Now                       time.Time
 }
 
-// SignInOIDC finds the profile bound to in's issuer and subject, else binds the unbound profile
+// SignInOIDC finds the profile bound to in's issuer and subject, giving it in.Email when it has
+// none and no profile holds it, else binds the unbound profile
 // holding in.Email, signing it out everywhere first, else creates one bound to them, with in.Email
 // when no profile holds it; it stamps the sign-in, opens a session with in.SessionHash and writes
 // the audit entry ctx carries with the profile as actor, in one transaction (021-AC4 as amended by 026). It returns
@@ -79,6 +80,14 @@ func (s *Store) SignInOIDC(ctx context.Context, in OIDCSignIn) (*Profile, string
 			}
 			if err := createSession(ctx, tx, id, in.SessionHash); err != nil {
 				return err
+			}
+			// A bound profile made without an address gets the verified one, when no profile holds it;
+			// never another address over its own.
+			if how == OIDCExisting && email != "" {
+				if _, err := tx.ExecContext(ctx, `UPDATE profiles SET email = ? WHERE id = ? AND email IS NULL
+					AND NOT EXISTS (SELECT 1 FROM profiles WHERE email = ?)`, email, id, email); err != nil {
+					return fmt.Errorf("oidc sign-in: %w", err)
+				}
 			}
 		}
 		var uuid string
