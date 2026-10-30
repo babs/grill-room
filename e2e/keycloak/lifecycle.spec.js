@@ -104,7 +104,7 @@ test('groups removed at Keycloak take effect at the next sign-in', async ({ brow
   await leaveGroup(request, u, 'grill-admins');
   // The next sign-in, through the live Keycloak session.
   await ops.goto('/auth/login?next=/admin');
-  await expect(ops.locator('#token')).toBeVisible();
+  await expect(ops.getByRole('button', { name: signInButton })).toBeVisible();
   expect((await asAdmin()).status()).toBe(401);
   expect(await sessionsOf()).toEqual([]);
   await ops.getByRole('button', { name: signInButton }).click();

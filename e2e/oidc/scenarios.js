@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '../fixtures.js';
-import { rowAction, confirmSheet, signIn } from '../helpers.js';
+import { rowAction, confirmSheet } from '../helpers.js';
 import { adminToken } from '../playwright.config.js';
 
 export const admin = { Authorization: `Bearer ${adminToken}` };
@@ -86,6 +86,22 @@ export function restricted(provider, db) {
     await expect(guest.locator('#your-profile')).toBeHidden();
     await expect(guest.locator('#join')).toBeHidden();
     await expect(guest.locator('#status')).toHaveText('');
+  });
+
+  // Sign out from the profile menu ends the session on the server, and the browser leaves its rooms.
+  test('sign out ends the profile session', async ({ browser, request }) => {
+    const { room, path } = await invite(request, 'Sign out room');
+    const page = await joined(browser, users.member, path);
+    const cookie = (await page.context().cookies()).find((c) => c.name === 'grill_room_profile');
+    await page.goto('/profile');
+    await page.locator('#me').click();
+    await page.getByRole('button', { name: 'Sign out' }).click();
+    await expect(page).toHaveURL(/\/$/);
+    expect((await page.context().cookies()).some((c) => c.name === 'grill_room_profile')).toBe(false);
+    const replayed = await request.get('/api/profile', { headers: { Cookie: `${cookie.name}=${cookie.value}` } });
+    expect((await replayed.json()).profile).toBeNull();
+    expect((await page.context().cookies()).some((c) => c.name === 'grill_room_session')).toBe(false);
+    expect((await page.request.get(`/api/rooms/${room.id}`)).status()).toBe(401);
   });
 
   // 021-AC3, 027-AC2: an account outside the member group is refused, and no profile is made for it.
@@ -190,9 +206,10 @@ export function restricted(provider, db) {
     await guest.getByLabel('Your name').fill('Gil');
     await guest.getByRole('button', { name: 'Join the room' }).click();
     await expect(guest.locator('#me')).toHaveText('Gil');
-    // An internal outside the admin group gets the token form.
+    // An internal outside the admin group gets the provider's button only, no token form.
     await member.goto('/admin');
-    await expect(member.locator('#token')).toBeVisible();
+    await expect(member.getByRole('button', { name: signInButton })).toBeVisible();
+    await expect(member.locator('#token')).toHaveCount(0);
     // Its provider button says why rather than going round through the provider.
     let rounds = 0;
     member.on('request', (r) => { if (r.url().includes('/auth/login')) rounds++; });
@@ -212,9 +229,9 @@ export function restricted(provider, db) {
     // Sign out sticks: no new session by itself, the provider's button instead, which signs in
     // again through the provider session.
     await ops.locator('#logout').click();
-    await expect(ops.locator('#token')).toBeVisible();
+    await expect(ops.getByRole('button', { name: signInButton })).toBeVisible();
     await ops.reload();
-    await expect(ops.locator('#token')).toBeVisible();
+    await expect(ops.getByRole('button', { name: signInButton })).toBeVisible();
     await ops.getByRole('button', { name: signInButton }).click();
     await expect(ops.locator('#logout')).toBeVisible();
     expect(await ops.evaluate(() => localStorage.getItem('grill_room_admin_signed_out'))).toBeNull();
@@ -240,20 +257,20 @@ export function restricted(provider, db) {
     const mine = sessions.find((x) => x.profile_name === users.admin.name);
     expect((await request.delete(`/api/admin/sessions/${mine.id}`, { headers: admin })).status()).toBe(204);
     await ops.locator('#tab-sessions').click();
-    await expect(ops.locator('#token')).toBeVisible();
+    await expect(ops.getByRole('button', { name: signInButton })).toBeVisible();
     await expect(ops.locator('.login p[role=alert]')).toHaveText('Your session ended: sign in again.');
     await ops.getByRole('button', { name: signInButton }).click();
     await expect(ops.locator('#logout')).toBeVisible();
     // Unbound, the member's browser is an external, still signed in.
     await member.goto('/');
     expect(await internal(member)).toBe(false);
-    // The admin token keeps working.
-    expect(await signIn(member)).toBe(201);
+    // The admin token keeps working on the API.
+    expect((await request.post('/api/admin/login', { data: { token: adminToken } })).status()).toBe(201);
 
     // An expired sign-in ends the provider session; the button, not a sign-out, brings it back.
     expire(users.admin.sub);
     await ops.goto('/admin');
-    await expect(ops.locator('#token')).toBeVisible();
+    await expect(ops.getByRole('button', { name: signInButton })).toBeVisible();
     await ops.getByRole('button', { name: signInButton }).click();
     await expect(ops.locator('#logout')).toBeVisible();
   });
@@ -317,7 +334,10 @@ export function restricted(provider, db) {
     const idOf = async (page) => (await (await page.request.get('/api/profile')).json()).profile.id;
     const [kira, lena] = [await idOf(member), await idOf(guest)];
     const page = await (await browser.newContext()).newPage();
-    expect(await signIn(page, adminToken, 'profiles')).toBe(201);
+    // The admin page offers the provider only: the token signs in through the API, which shares
+    // the page's cookies.
+    expect((await page.request.post('/api/admin/login', { data: { token: adminToken } })).status()).toBe(201);
+    await page.goto('/admin#profiles');
     await rowAction(page.locator('#profile-' + lena), /^Merge Lena into another profile/);
     const sheet = page.locator('#merge-sheet');
     const warning = 'The result is an organisation account: devices signed into Lena are signed out, its paired daemons removed and their running turn failed.';

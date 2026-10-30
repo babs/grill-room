@@ -35,7 +35,10 @@
   <p class="menu-head" id="me-head"></p>
   <a href="#rooms" data-icon="chat">Your rooms</a>
   <a href="#account" data-icon="profile">Account and email</a>
+  <button type="submit" form="sign-out" id="sign-out-item" data-icon="leave" hidden>Sign out</button>
 </div>
+<!-- Ends this browser's session on the server and clears its cookie; the provider's stays (021). -->
+<form id="sign-out" method="post" action="/auth/logout" hidden></form>
 <main class="page-wide home-main">
   <p id="status" role="status"></p>
   <p id="next" hidden><button type="button" id="next-step" class="btn-secondary"></button></p>

@@ -3,9 +3,16 @@ body { overflow-wrap: anywhere; }
 #logout { margin-left: auto; }
 h2 { font-size: var(--fs-lg); margin: var(--sp-5) 0 var(--sp-2); }
 h3 { font-size: var(--fs-md); margin: var(--sp-4) 0 var(--sp-1); }
-.login { max-width: 28rem; margin: var(--sp-7) auto; padding: var(--sp-4); }
+/* The join page's card, centred with its one action under the title. */
+.login { width: min(28rem, calc(100% - 2 * var(--sp-4))); margin: var(--sp-7) auto; padding: var(--sp-6); border-radius: var(--r-lg); text-align: center; }
 .login h1 { font-size: var(--fs-xl); }
-.login label { display: flex; flex-direction: column; gap: var(--sp-1); margin-bottom: var(--sp-3); font-size: var(--fs-sm); font-weight: 600; }
+.login :is(form, #provider-sign-in) { margin-top: var(--sp-5); }
+.login form { display: grid; gap: var(--sp-2); text-align: left; }
+.login #provider-sign-in { width: 100%; }
+.login form p { margin: 0; }
+/* Kept rendered, so screen readers still announce what it says next. */
+.login form p:empty { min-height: 0; }
+.login label { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-sm); font-weight: 600; }
 .hint { margin: 0 0 var(--sp-3); }
 .row { display: flex; flex-wrap: wrap; align-items: end; gap: var(--sp-2) var(--sp-4); margin: var(--sp-1) 0 var(--sp-3); }
 .row label { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-sm); font-weight: 600; }
