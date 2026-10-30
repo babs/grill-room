@@ -140,6 +140,8 @@ async function who() {
   if (!nameInput.value) nameInput.value = name;
   // Without an invite, a visitor not yet internal sees the sign-in button alone (021-AC12).
   const signInOnly = !invite && !signIn.hidden;
+  // One primary action per page: above the join form the sign-in steps back.
+  signIn.className = signInOnly ? 'btn-primary' : 'btn-secondary';
   yourProfile.hidden = !profile || signInOnly;
   recover.hidden = !!profile || !emailEnabled || signInOnly;
   // A profile made in another tab hides the form: its rooms are created from /profile (019-AC3).

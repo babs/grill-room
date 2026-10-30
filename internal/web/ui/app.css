@@ -17,6 +17,10 @@ body.join { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction
 .join-card form { display: grid; gap: var(--sp-2); margin-top: var(--sp-5); text-align: left; }
 .join-card label { font-size: var(--fs-sm); font-weight: 600; }
 #status { color: var(--text-muted); min-height: 1.2em; }
+/* Spaced as the join form is, below the title (021-AC12). */
+#sign-in { width: 100%; margin-top: var(--sp-5); }
+/* Kept rendered, so screen readers still announce what it says next. */
+.join-card > #status:empty { min-height: 0; margin: 0; }
 .field-error { margin: 0; color: var(--danger); font-size: var(--fs-sm); }
 .field-error:empty { display: none; }
 /* An error says so with an icon too, not by colour alone (docs/design.md, Input). */

@@ -12,8 +12,10 @@ async function post(url, body) {
 // ttl is the emailed link's lifetime in seconds, as the server's mail words it.
 let ttl = 0;
 let emailEnabled = false;
-function render({ email_enabled: enabled, profile, magic_link_ttl_s: linkTTL }) {
+function render({ email_enabled: enabled, profile, magic_link_ttl_s: linkTTL, internal }) {
   ttl = linkTTL || 0;
+  // A guest signed out has no way back to its profile without an email: only internals get it.
+  $('sign-out-item').hidden = !internal;
   emailEnabled = !!enabled;
   $('signed-in').hidden = !profile;
   $('signed-out').hidden = !!profile;

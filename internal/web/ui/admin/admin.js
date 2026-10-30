@@ -127,21 +127,21 @@ function Login() {
     if (me.internal === true) setOutside(true);
     else location.assign('/auth/login?next=/admin');
   };
+  // With an admin group set, admins sign in by that group only; the token stays for the API.
   return html`
-    <main class="login">
+    <main class="login card">
       <h1>grill-room admin</h1>
       ${notice.value && html`<p class="said" role="alert">${notice.value}</p>`}
       ${outside && html`<p class="said" id="not-admin" role="alert">Your organisation account is not in the admin group. <a href="/auth/login?next=/admin">Sign in again</a></p>`}
-      ${providerName.value && html`<button type="button" id="provider-sign-in" class="btn-secondary"
-        onClick=${provider}>Sign in with ${providerName.value}</button>`}
-      <form onSubmit=${submit}>
+      ${providerName.value ? html`<button type="button" id="provider-sign-in" class="btn-primary"
+        onClick=${provider}>Sign in with ${providerName.value}</button>` : html`<form onSubmit=${submit}>
         <label>Admin token
           <input type="password" id="token" autocomplete="current-password" required value=${token}
             onInput=${(/** @type {Event} */ e) => setToken(/** @type {HTMLInputElement} */ (e.currentTarget).value)}/>
         </label>
         <button type="submit">Sign in</button>
         <p id="login-status" class="said bad" role="status">${said}</p>
-      </form>
+      </form>`}
     </main>`;
 }
 

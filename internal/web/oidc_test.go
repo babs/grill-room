@@ -630,6 +630,8 @@ func TestOIDCProfileAndLogout(t *testing.T) {
 		t.Fatalf("sign-in %d", resp.code)
 	}
 	check(true)
+	room := e.createRoom(t, "S").ID
+	d.join(t, room, "Erin")
 
 	if code, _ := d.do(t, "POST", "/auth/logout", nil, "Sec-Fetch-Site", "cross-site"); code != http.StatusForbidden {
 		t.Errorf("cross-site sign-out %d", code)
@@ -638,6 +640,15 @@ func TestOIDCProfileAndLogout(t *testing.T) {
 	_ = resp.Body.Close()
 	if c := cookieOf(resp, profileCookie); resp.StatusCode != http.StatusSeeOther || c == nil || c.MaxAge >= 0 {
 		t.Errorf("sign-out %d %+v", resp.StatusCode, c)
+	}
+	// The room and admin cookies never reach /auth/logout: it must expire them by path.
+	var roomGone, adminGone bool
+	for _, c := range resp.Cookies() {
+		roomGone = roomGone || c.Name == cookieName && c.Path == "/api/rooms/"+room && c.MaxAge < 0
+		adminGone = adminGone || c.Name == adminCookie && c.Path == adminCookiePath && c.MaxAge < 0
+	}
+	if !roomGone || !adminGone {
+		t.Errorf("sign-out leaves room cookie %v, admin cookie %v: %v", !roomGone, !adminGone, resp.Header["Set-Cookie"])
 	}
 	if p := d.profileJSON(t); p["profile"] != nil || p["internal"] != false {
 		t.Errorf("after sign-out %v", p)

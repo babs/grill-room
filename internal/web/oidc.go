@@ -704,18 +704,32 @@ func hasGroup(claim any, group string) bool {
 }
 
 // oidcLogout signs this browser out of its profile; the provider's session is left as it is.
+// The room and admin cookies are path-scoped, so this request never carries them: it expires the
+// ones of the profile's rooms and the admin one, or the browser would stay in its rooms.
 func (s *Server) oidcLogout(w http.ResponseWriter, r *http.Request) {
 	if crossSite(r) {
 		httpError(w, http.StatusForbidden, "cross-site request refused")
 		return
 	}
 	if c, err := r.Cookie(profileCookie); err == nil && c.Value != "" {
-		if err := s.bus.Store.DeleteProfileSession(r.Context(), HashToken(c.Value)); err != nil {
+		hash := HashToken(c.Value)
+		p, err := s.bus.Store.ProfileBySession(r.Context(), hash)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			s.serverError(w, "oidc_logout_failed", err)
 			return
 		}
+		if err := s.bus.Store.DeleteProfileSession(r.Context(), hash); err != nil {
+			s.serverError(w, "oidc_logout_failed", err)
+			return
+		}
+		if p != nil {
+			for _, room := range p.Rooms {
+				setRoomCookieAge(w, r, room.RoomID, "", -1)
+			}
+		}
 	}
 	setProfileCookieAge(w, r, "", -1)
+	setAdminCookie(w, r, "", -1)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
