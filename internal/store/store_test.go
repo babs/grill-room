@@ -420,6 +420,11 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 		if _, err := s.EndSeats(ctx, room, gone.ID, Ending{By: p, Block: true}); err != nil {
 			t.Fatal(err)
 		}
+		// 029-AC14: the documents a chat message was sent with, and the links.
+		if err := s.InsertMessageUploads(ctx, &Message{RoomID: room, Kind: KindText, ParticipantID: p.ID, Sender: p.Name},
+			[]Upload{{RoomID: room, Author: p.Name, Filename: "chat.png", ContentType: "image/png", Format: "image", Data: []byte("png")}}, 1<<20); err != nil {
+			t.Fatal(err)
+		}
 		// 017: the state pods share about the room goes with it.
 		for _, q := range []struct {
 			sql  string
@@ -439,7 +444,7 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 	}
 	// These reach rooms through another table, so roomRows cannot see them.
 	indirect := []string{"revisions", "annotation_messages", "attachments", "message_versions", "room_persona_skills", "plugin_versions", "plugin_snapshots", "room_persona_plugins",
-		"daemon_status"}
+		"daemon_status", "message_documents"}
 	count := func(table string) int {
 		var n int
 		if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM "`+table+`"`).Scan(&n); err != nil {

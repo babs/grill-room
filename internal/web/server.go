@@ -541,9 +541,10 @@ func (s *Server) connectSrc() string {
 
 // roomCSP admits the room page's import map by its hash: its room admin panel is Preact (004-AC19).
 // Device transcription compiles WebAssembly and runs it in workers from this server (010-AC4).
+// The composer previews a pending image from its blob: URL before it is sent (029-AC3).
 var roomCSP = func() string {
 	page, _ := ui.ReadFile("ui/room.html") // embedded
-	return uivendor.CSP(page, "'self'", "'wasm-unsafe-eval'") + "; worker-src 'self'"
+	return uivendor.CSP(page, "'self'", "'wasm-unsafe-eval'") + "; worker-src 'self'; img-src 'self' blob:"
 }()
 
 // profileCSP admits the profile page's import map: its starters are Preact (006).
@@ -1166,6 +1167,9 @@ type roomResp struct {
 	// Now is the server's clock as it answers: the page tells history from live lines by it, on
 	// the clock their ts come from (005-AC12, 020-AC6).
 	Now time.Time `json:"now"`
+	// Upload is the document upload's limit and refusal texts: the chat composer refuses a file on
+	// the spot as the server would (029-AC3).
+	Upload uploadRules `json:"upload"`
 }
 
 func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
@@ -1192,25 +1196,33 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
 		return
 	}
 	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps, Daemons: s.liveDaemons(room.ID), Voice: s.opts.Voice != nil, TTS: s.tts != nil,
-		Profile: sess.p.ProfileID != 0, Version: s.opts.Version, Departed: departed, Now: s.now()})
+		Profile: sess.p.ProfileID != 0, Version: s.opts.Version, Departed: departed, Now: s.now(), Upload: s.uploadRules()})
 }
 
+// postMessage takes a JSON body, or a multipart/form-data one carrying files (029-AC4).
 func (s *Server) postMessage(w http.ResponseWriter, r *http.Request, sess session) {
-	var req struct {
-		Body string `json:"body"`
-	}
-	if !decode(w, r, &req) {
-		return
-	}
-	body, ok := cleanText(req.Body, maxBodyLen, true)
-	if !ok {
-		httpError(w, http.StatusBadRequest, fmt.Sprintf("message must be 1 to %d characters", maxBodyLen))
-		return
-	}
-	m := &store.Message{RoomID: sess.p.RoomID, Kind: store.KindText, ParticipantID: sess.p.ID, Sender: sess.p.Name, Body: body}
-	if err := s.bus.Post(r.Context(), m); err != nil {
-		s.serverError(w, "post_message_failed", err)
-		return
+	m := &store.Message{RoomID: sess.p.RoomID, Kind: store.KindText, ParticipantID: sess.p.ID, Sender: sess.p.Name}
+	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt == "multipart/form-data" {
+		if !s.postWithFiles(w, r, sess, m) {
+			return
+		}
+	} else {
+		var req struct {
+			Body string `json:"body"`
+		}
+		if !decode(w, r, &req) {
+			return
+		}
+		body, ok := cleanText(req.Body, maxBodyLen, true)
+		if !ok {
+			httpError(w, http.StatusBadRequest, bodyLenText)
+			return
+		}
+		m.Body = body
+		if err := s.bus.Post(r.Context(), m); err != nil {
+			s.serverError(w, "post_message_failed", err)
+			return
+		}
 	}
 	notices := s.mentionTurns(r.Context(), sess.p, m)
 	writeJSON(w, http.StatusCreated, struct {

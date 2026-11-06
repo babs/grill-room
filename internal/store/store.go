@@ -180,6 +180,8 @@ type Message struct {
 	Mentions []MentionState `json:"mentions,omitempty"`
 	// Blocked is set on the system line of a website a turn was refused (014-AC8).
 	Blocked *Blocked `json:"blocked,omitempty"`
+	// Documents are the files the message was sent with, in the order sent (029-AC7).
+	Documents []MessageDocument `json:"documents,omitempty"`
 }
 
 // Store wraps the PostgreSQL pool.
@@ -306,6 +308,15 @@ ALTER TABLE profiles ADD CONSTRAINT profiles_oidc_unique UNIQUE (oidc_issuer, oi
 ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS profile_id BIGINT REFERENCES profiles(id) ON DELETE CASCADE;`,
 	// 56 (028-AC3): the text size a profile picked per room area, a JSON map; NULL for none.
 	`ALTER TABLE profiles ADD COLUMN IF NOT EXISTS text_sizes TEXT;`,
+	// 57 (029-AC5, 029-AC7): the chat folder of documents, and the documents a chat message was sent with.
+	`ALTER TABLE documents ADD COLUMN IF NOT EXISTS folder TEXT NOT NULL DEFAULT '' CHECK (folder IN ('', 'chat'));
+CREATE TABLE IF NOT EXISTS message_documents (
+	message_id BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+	document_id BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+	position BIGINT NOT NULL,
+	PRIMARY KEY (message_id, document_id)
+);
+CREATE INDEX IF NOT EXISTS message_documents_document ON message_documents(document_id);`,
 }
 
 // nonText is the predicate of the non-typed message indexes, written into every query that uses
@@ -1157,7 +1168,11 @@ const (
 		COALESCE((SELECT colour FROM room_personas WHERE id = messages.persona_id), ''), req_model, req_effort, model_note, model_mismatch, COALESCE(turn_id, 0), COALESCE(source, ''), spoken, appended_at,
 		(SELECT jsonb_build_object('domain', domain, 'persona', persona, 'count', count, 'decision', decision, 'pending', pending_scope, 'error', pending_error,
 			'dismissed_by', dismissed_by)::text
-			FROM blocked_requests WHERE message_id = messages.id)`
+			FROM blocked_requests WHERE message_id = messages.id),
+		(SELECT jsonb_agg(jsonb_build_object('id', d.id, 'name', d.name, 'format', d.format, 'size', COALESCE(u.size, 0),
+			'deleted', d.deleted_at IS NOT NULL) ORDER BY md.position)::text
+			FROM message_documents md JOIN documents d ON d.id = md.document_id LEFT JOIN uploads u ON u.id = d.upload_id
+			WHERE md.message_id = messages.id)`
 	messageCols = `SELECT ` + messageFields + ` FROM messages `
 )
 
@@ -1181,9 +1196,9 @@ func (s *Store) queryMessages(ctx context.Context, where string, args ...any) ([
 func scanMessage(sc scanner, extra ...any) (*Message, error) {
 	var m Message
 	var ts string
-	var edited, deleted, appended, blocked sql.NullString
+	var edited, deleted, appended, blocked, docs sql.NullString
 	err := sc.Scan(append([]any{&m.ID, &ts, &m.RoomID, &m.Kind, &m.ParticipantID, &m.Sender, &m.Body, &m.HTML, &m.Model, &edited, &deleted, &m.ChangeSeq,
-		&m.PersonaID, &m.Effort, &m.Badge, &m.Colour, &m.ReqModel, &m.ReqEffort, &m.ModelNote, &m.ModelMismatch, &m.TurnID, &m.Source, &m.Spoken, &appended, &blocked}, extra...)...)
+		&m.PersonaID, &m.Effort, &m.Badge, &m.Colour, &m.ReqModel, &m.ReqEffort, &m.ModelNote, &m.ModelMismatch, &m.TurnID, &m.Source, &m.Spoken, &appended, &blocked, &docs}, extra...)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -1196,6 +1211,11 @@ func scanMessage(sc scanner, extra ...any) (*Message, error) {
 		m.Blocked = &Blocked{}
 		if err := json.Unmarshal([]byte(blocked.String), m.Blocked); err != nil {
 			return nil, fmt.Errorf("scan message %d: blocked: %w", m.ID, err)
+		}
+	}
+	if docs.Valid {
+		if err := json.Unmarshal([]byte(docs.String), &m.Documents); err != nil {
+			return nil, fmt.Errorf("scan message %d: documents: %w", m.ID, err)
 		}
 	}
 	return &m, nil

@@ -100,7 +100,7 @@ func (s *Server) annotationError(w http.ResponseWriter, r *http.Request, room, e
 	case errors.Is(err, store.ErrNotAnchorable):
 		httpError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, store.ErrRoomFull):
-		s.roomFull(w, r, room)
+		s.roomFull(w, r, room, "")
 	default:
 		s.serverError(w, event, err)
 	}

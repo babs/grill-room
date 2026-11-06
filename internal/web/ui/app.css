@@ -463,7 +463,7 @@ body.docs-window #chat-fold, body.docs-window #chat-unfold { display: none; }
 }
 
 /* Chat */
-.chat { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.chat { position: relative; flex: 1; display: flex; flex-direction: column; min-width: 0; }
 #messages { flex: 1; overflow-y: auto; list-style: none; margin: 0; padding: var(--sp-4); }
 /* The chat filter (020-AC4) reads as the kit's tabs; buttons, as it filters a list, not a page. */
 .chat-filter { display: flex; flex: none; padding: 0 var(--sp-4); border-bottom: 1px solid var(--border); }
@@ -559,6 +559,20 @@ mark.mention-chip.me { background: var(--accent); color: var(--on-accent); }
 #send { position: relative; display: flex; flex-wrap: wrap; align-items: end; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--border); }
 #send textarea { flex: 1; resize: vertical; }
 #send-hint { flex-basis: 100%; margin: 0; }
+/* Files to send (029-AC3): one chip each under the box, an image with its preview. */
+#pending { display: flex; flex-wrap: wrap; flex-basis: 100%; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; }
+#pending img { width: 24px; height: 24px; border-radius: var(--r-sm); object-fit: cover; }
+:is(#pending, .msg-docs) .file-size { color: var(--text-muted); white-space: nowrap; }
+#send-progress { flex-basis: 100%; height: 6px; accent-color: var(--primary); }
+#send-error { flex-basis: 100%; margin: 0; }
+#send-error:empty { display: none; }
+/* A message's files (029-AC7): images as thumbnails, any other file as a chip opening it. */
+.msg-docs { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--sp-2); margin-top: var(--sp-1); }
+.msg-thumb { min-width: var(--control-h); min-height: var(--control-h); padding: 0; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); overflow: hidden; }
+.msg-thumb img { display: block; max-width: 240px; max-height: 180px; }
+.msg-doc { max-width: 100%; min-height: var(--control-h); border: 0; font-size: var(--fs-sm); font-weight: 400; }
+.msg-doc .file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-doc.deleted { background: var(--border); color: var(--text-muted); }
 .mention-list { position: absolute; bottom: 100%; left: var(--sp-4); z-index: var(--z-dropdown); max-height: 14rem; min-width: 12rem; overflow-y: auto; margin: 0; padding: var(--sp-1) 0;
   list-style: none; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--sh-2); }
 .mention-list li { display: flex; align-items: center; min-height: 44px; padding: 0 var(--sp-3); cursor: pointer; }
@@ -681,8 +695,12 @@ input[aria-invalid=true] { border-color: var(--danger); }
 .pane-head .fold { order: var(--fold-order); }
 /* A clipped square, not the ▾ glyph: a glyph's ink sits where its font puts it, off the text's
    centre line (009-AC39). */
-.fold::before { content: ""; width: 10px; height: 10px; background: currentColor; forced-color-adjust: none; clip-path: polygon(0 22%, 100% 22%, 50% 78%); transition: transform 150ms ease-out; }
-.fold[aria-expanded=false]::before { transform: rotate(-90deg); }
+.fold::before, button.folder::before { content: ""; width: 10px; height: 10px; background: currentColor; forced-color-adjust: none; clip-path: polygon(0 22%, 100% 22%, 50% 78%); transition: transform 150ms ease-out; }
+.fold[aria-expanded=false]::before, button.folder[aria-expanded=false]::before { transform: rotate(-90deg); }
+/* The Chat folder of the Documents list (029-AC9): its triangle, icon and name, its files indented. */
+button.doc.folder { display: flex; align-items: center; gap: var(--sp-2); }
+button.folder::before { flex: none; }
+#chat-docs { list-style: none; margin: 0; padding-left: var(--sp-5); }
 /* Icons are block SVGs that flex rows centre on the text's line (009-AC39). */
 .ico { display: block; flex: none; }
 /* A document's name stays on one line (008-AC14): the full name is its tooltip. */

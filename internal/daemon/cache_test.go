@@ -236,13 +236,26 @@ func fullFetch(calls []wsCall) string {
 // 002-AC37: the first turn fetches the whole workspace; the second, with no document changed,
 // fetches only the transcript day the first synthesis extended, no upload byte; the third, after
 // the second turn wrote a document, fetches only that document and the transcript. Each turn's
-// sandbox still gets the whole workspace.
+// sandbox still gets the whole workspace. 029-AC13: the same holds for a chat document.
 func TestWorkspaceSyncTransfersOnlyChanges(t *testing.T) {
 	sr := newSyncRoom(t, 64<<20)
 	day := "transcript/" + time.Now().UTC().Format(time.DateOnly) + "/001.md"
+	ps, err := sr.rs.st.Participants(t.Context(), sr.rs.room)
+	if err != nil || len(ps) == 0 {
+		t.Fatalf("participants %+v %v", ps, err)
+	}
+	shot := make([]byte, 64<<10)
+	copy(shot, "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+	m := &store.Message{RoomID: sr.rs.room, Kind: store.KindText, ParticipantID: ps[0].ID, Sender: ps[0].Name}
+	if err := sr.rs.st.InsertMessageUploads(t.Context(), m, []store.Upload{{RoomID: sr.rs.room, ParticipantID: ps[0].ID, Author: ps[0].Name,
+		Filename: "shot.png", ContentType: "image/png", Format: "image", Data: shot}}, 4<<20); err != nil {
+		t.Fatal(err)
+	}
+	chat := fmt.Sprintf("uploads/chat/%d-shot.png", m.Documents[0].ID)
 
 	first := sr.turn(t)
-	if fullFetch(first) != "full?fallback=missing" || total(first) < len(sr.data) || !slices.Contains(fetched(first), sr.upload) {
+	if fullFetch(first) != "full?fallback=missing" || total(first) < len(sr.data)+len(shot) || !slices.Contains(fetched(first), sr.upload) ||
+		!slices.Contains(fetched(first), chat) {
 		t.Fatalf("turn 1: %+v", first)
 	}
 	sr.write = map[string]string{"docs/a.md": "# A\n"}
@@ -256,6 +269,11 @@ func TestWorkspaceSyncTransfersOnlyChanges(t *testing.T) {
 	}
 	if sr.workdir[2]["docs/a.md"] != "# A\n" {
 		t.Fatalf("turn 3 workspace: %q", sr.workdir[2]["docs/a.md"])
+	}
+	for i, files := range sr.workdir {
+		if files[chat] != string(shot) {
+			t.Fatalf("turn %d: the chat document differs in the workspace", i+1)
+		}
 	}
 	t.Logf("workspace bytes: turn 1 %d, turn 2 %d, turn 3 %d (upload %d)", total(first), total(second), total(third), len(sr.data))
 	if n := sr.rs.srv.WorkspaceFallbacks("missing"); n != 1 {

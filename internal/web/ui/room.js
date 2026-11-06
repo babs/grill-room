@@ -90,7 +90,8 @@ function end(text) {
   sendForm.hidden = true;
   $('chat-empty').hidden = true;
   $('upload-open').hidden = true;
-  $('docs-pane').classList.remove('dropping');
+  for (const el of document.querySelectorAll('.dropping')) el.classList.remove('dropping');
+  document.body.classList.remove('drag-files');
   for (const id of ['manage-open', 'invite-open', 'personas-open']) $(id).hidden = true;
   $('room-open').disabled = true;
   delete $('room-open').dataset.tip;
@@ -144,6 +145,7 @@ async function loadRoom() {
   hasProfile = !!data.profile;
   meAdmin = !!data.me.admin;
   departed = data.departed || {};
+  uploadRules = data.upload;
   $('doc-delete').hidden = !meAdmin;
   renameSenders();
   renderBlocked();
@@ -484,6 +486,38 @@ function timeOf(ts) {
   return time;
 }
 
+const fileSize = (n) => (n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
+
+// docItem is a file sent with a message (029-AC7): an image as a thumbnail, any other as a chip,
+// opening the document; a deleted one is a greyed chip that loads nothing (029-AC8).
+function docItem(d) {
+  const name = liveDocs.get(d.id)?.name ?? d.name;
+  if (d.deleted) {
+    const el = span('chip msg-doc deleted', '');
+    el.append(grillIcon('docs'), span('file-name', 'Deleted document'));
+    el.dataset.doc = d.id;
+    return el;
+  }
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.dataset.doc = d.id;
+  b.dataset.name = name;
+  b.dataset.tip = name;
+  if (d.format === 'image') {
+    b.className = 'msg-thumb';
+    const img = document.createElement('img');
+    img.src = docURL(d.id, '/original');
+    img.alt = name;
+    img.loading = 'lazy';
+    b.append(img);
+  } else {
+    b.className = 'chip msg-doc';
+    b.append(grillIcon('docs'), span('file-name', name), span('file-size', fileSize(d.size)));
+  }
+  b.addEventListener('click', () => showDocument(d.id).catch(console.error));
+  return b;
+}
+
 function renderMessage(m) {
   const li = document.createElement('li');
   li.className = 'msg ' + m.kind;
@@ -572,6 +606,12 @@ function renderMessage(m) {
     meta.append(' ', button('(edited)', 'Show earlier versions', () => toggleVersions(li, m).catch(console.error)));
   }
   li.append(meta, body);
+  if (m.documents?.length) {
+    const docs = document.createElement('div');
+    docs.className = 'msg-docs';
+    docs.append(...m.documents.map(docItem));
+    li.append(docs);
+  }
   // What the persona said, or would have said, in the call: for whoever was not in it (013-AC40).
   if (m.spoken) {
     const spoken = document.createElement('p');
@@ -823,7 +863,8 @@ async function toggleVersions(li, m) {
     when.dateTime = v.written_at;
     when.textContent = grillDate(v.written_at);
     const text = document.createElement('span');
-    text.textContent = v.body;
+    // A line sent with files may have had no text (029-AC4).
+    text.textContent = v.body || (m.documents?.length ? '(files only)' : '');
     item.append(when, ' ', text);
     return item;
   }));
@@ -1209,25 +1250,68 @@ function describe(d) {
   return 'added by ' + d.author;
 }
 
+function docRow(d) {
+  const li = document.createElement('li');
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'doc';
+  b.textContent = d.name;
+  // One line with an ellipsis: the full name in the tip (008-AC14).
+  b.dataset.tip = d.name + ', ' + describe(d);
+  b.addEventListener('click', () => {
+    showDocument(d.id).catch(console.error);
+  });
+  li.append(b);
+  return li;
+}
+
+// The Chat folder holds the files sent in the chat, folded unless unfolded in this browser (029-AC9).
+const chatFolderKey = 'grill-room-fold-chat-docs';
+function chatFolder(docs) {
+  const li = document.createElement('li');
+  li.className = 'folder';
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'doc folder';
+  b.setAttribute('aria-controls', 'chat-docs');
+  b.append(grillIcon('chat'), span('', 'Chat'));
+  const list = document.createElement('ul');
+  list.id = 'chat-docs';
+  list.append(...docs.map(docRow));
+  const fold = (on) => {
+    list.hidden = on;
+    b.setAttribute('aria-expanded', String(!on));
+  };
+  fold(localStorage.getItem(chatFolderKey) !== '0');
+  b.addEventListener('click', () => {
+    fold(!list.hidden);
+    localStorage.setItem(chatFolderKey, list.hidden ? '1' : '0');
+  });
+  li.append(b, list);
+  return li;
+}
+
+// docsGen counts the list's loads: only the latest answer is drawn.
+let docsGen = 0;
+const liveDocs = new Map();
+
 async function loadDocuments() {
+  const gen = ++docsGen;
   const res = await netFetch(api + '/documents');
   if (res.status === 401) return;
   if (!res.ok) throw new Error('documents: HTTP ' + res.status);
   const docs = await res.json();
-  $('documents').replaceChildren(...docs.map((d) => {
-    const li = document.createElement('li');
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'doc';
-    b.textContent = d.name;
-    // One line with an ellipsis: the full name in the tip (008-AC14).
-    b.dataset.tip = d.name + ', ' + describe(d);
-    b.addEventListener('click', () => {
-      showDocument(d.id).catch(console.error);
-    });
-    li.append(b);
-    return li;
-  }));
+  // A later load is on its way: this answer may predate files it already knows of (029-AC8).
+  if (gen !== docsGen) return;
+  const chat = docs.filter((d) => d.folder === 'chat');
+  $('documents').replaceChildren(...(chat.length ? [chatFolder(chat)] : []), ...docs.filter((d) => d.folder !== 'chat').map(docRow));
+  // A file in the chat follows its document: renamed, deleted or restored (029-AC8).
+  liveDocs.clear();
+  for (const d of docs) liveDocs.set(d.id, d);
+  for (const el of document.querySelectorAll('.msg-docs [data-doc]')) {
+    const d = liveDocs.get(Number(el.dataset.doc));
+    if (d ? el.dataset.name !== d.name : !el.classList.contains('deleted')) el.replaceWith(docItem(d || { id: Number(el.dataset.doc), deleted: true }));
+  }
   $('docs-empty').hidden = docs.length > 0;
   $('tab-docs-count').textContent = docs.length ? String(docs.length) : '';
   if (openDoc) {
@@ -1940,6 +2024,13 @@ function fillItem(li, a) {
 const accepted = $('upload-input').accept.split(',');
 const typeHint = "This file type isn't supported. Use PDF, Word, slides, images, Markdown or HTML.";
 
+// unauthorized answers an upload's 401 as reauth.js answers a fetch's: an expired organisation
+// sign-in goes through the provider (021-AC8); any other ends the room. An XHR skips that wrapper.
+function unauthorized(data) {
+  if (data?.reason !== 'reauth') return end('Your access to this room has ended.');
+  if (!window.grillReauth()) end(reauthEnded);
+}
+
 function addFiles(files) {
   const list = [...files];
   for (const f of list) uploadRow(f, list.length === 1);
@@ -1986,8 +2077,8 @@ function uploadRow(file, open) {
   xhr.upload.addEventListener('progress', (e) => { if (e.lengthComputable) bar.value = e.loaded / e.total; });
   xhr.addEventListener('load', () => {
     if (xhr.status === 401) {
-      fail('Your access to this room has ended.');
-      return end('Your access to this room has ended.');
+      fail(xhr.response?.reason === 'reauth' ? reauthEnded : 'Your access to this room has ended.');
+      return unauthorized(xhr.response);
     }
     const data = xhr.response || {};
     if (xhr.status < 200 || xhr.status >= 300 || !data.id) return fail(data.error || 'Not added: HTTP ' + xhr.status);
@@ -2012,38 +2103,42 @@ $('upload-input').addEventListener('change', (e) => {
   e.target.value = '';
 });
 
-// A drop lands on the documents pane, or anywhere in the docs window. dragenter and dragleave fire
-// for every child crossed: a depth count tells when the drag really left.
-const zone = docsMode ? document.body : $('docs-pane');
-let dragDepth = 0;
+// A drop lands on the documents pane, or anywhere in the docs window, and on the chat as files to
+// send (029-AC2). dragenter and dragleave fire for every child crossed: a depth count tells when the
+// drag really left.
 const carriesFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
-const dropping = (on) => {
-  $('docs-pane').classList.toggle('dropping', on);
-  // The document frame would swallow the drag: it lets it through while files hover.
-  document.body.classList.toggle('drag-files', on);
-};
 // A file dropped anywhere else must not make the browser open it in place of the room.
 for (const type of ['dragover', 'drop']) document.addEventListener(type, (e) => { if (carriesFiles(e)) e.preventDefault(); });
-zone.addEventListener('dragenter', (e) => {
-  if (ended || !carriesFiles(e)) return;
-  e.preventDefault();
-  if (dragDepth++ === 0) dropping(true);
-});
-zone.addEventListener('dragleave', (e) => {
-  if (!carriesFiles(e)) return;
-  if (--dragDepth <= 0) {
+function dropZone(zone, pane, take) {
+  let dragDepth = 0;
+  const dropping = (on) => {
+    pane.classList.toggle('dropping', on);
+    // The document frame would swallow the drag: it lets it through while files hover.
+    document.body.classList.toggle('drag-files', !!document.querySelector('.dropping'));
+  };
+  zone.addEventListener('dragenter', (e) => {
+    if (ended || !carriesFiles(e)) return;
+    e.preventDefault();
+    if (dragDepth++ === 0) dropping(true);
+  });
+  zone.addEventListener('dragleave', (e) => {
+    if (!carriesFiles(e)) return;
+    if (--dragDepth <= 0) {
+      dragDepth = 0;
+      dropping(false);
+    }
+  });
+  zone.addEventListener('dragover', (e) => { if (!ended && carriesFiles(e)) e.preventDefault(); });
+  zone.addEventListener('drop', (e) => {
+    if (!carriesFiles(e)) return;
+    e.preventDefault();
     dragDepth = 0;
     dropping(false);
-  }
-});
-zone.addEventListener('dragover', (e) => { if (!ended && carriesFiles(e)) e.preventDefault(); });
-zone.addEventListener('drop', (e) => {
-  if (!carriesFiles(e)) return;
-  e.preventDefault();
-  dragDepth = 0;
-  dropping(false);
-  if (!ended) addFiles(e.dataTransfer.files);
-});
+    if (!ended) take(e.dataTransfer.files);
+  });
+}
+dropZone(docsMode ? document.body : $('docs-pane'), $('docs-pane'), addFiles);
+if (!docsMode) dropZone(chatColumn, chatColumn, addPending);
 
 // connect opens the event stream, replacing any previous one. A new EventSource cannot send
 // Last-Event-ID, so it resumes with ?since=.
@@ -4355,27 +4450,214 @@ $('voice-mute').addEventListener('click', () => {
 // Browsers block playback without a gesture; LiveKit flags it and this button lifts it.
 $('voice-unlock').addEventListener('click', () => voice && voice.startAudio().then(voiceChanged).catch(console.error));
 
+// Files to send with the next message (029-AC3): picked, pasted or dropped on the chat, each
+// checked on the spot against the server's own limits.
+let uploadRules = null;
+const pending = [];
+const sendError = (text) => { $('send-error').textContent = text; };
+const stillLoading = 'The room is still loading, try again in a moment';
+const tooMany = () => uploadRules.too_many[0].toUpperCase() + uploadRules.too_many.slice(1);
+
+function addPending(files) {
+  if (ended) return;
+  // The rules come with the room: until it has loaded, nothing can be checked.
+  if (!uploadRules) {
+    sendError(stillLoading);
+    return;
+  }
+  const refused = [];
+  for (const file of files) {
+    if (pending.length === uploadRules.max_files) {
+      refused.push(tooMany());
+      break;
+    }
+    if (!accepted.some((ext) => file.name.toLowerCase().endsWith(ext))) refused.push(file.name + ': ' + uploadRules.unsupported);
+    else if (file.size > uploadRules.max_bytes) refused.push(file.name + ': ' + uploadRules.too_large);
+    else pending.push({ file, url: file.type.startsWith('image/') ? URL.createObjectURL(file) : '' });
+  }
+  sendError(refused.join(' '));
+  renderPending();
+}
+
+function dropPending(p) {
+  const i = pending.indexOf(p);
+  if (i < 0) return;
+  if (p.url) URL.revokeObjectURL(p.url);
+  pending.splice(i, 1);
+}
+
+function renderPending() {
+  $('pending').hidden = !pending.length;
+  $('pending').replaceChildren(...pending.map((p) => {
+    const li = document.createElement('li');
+    li.className = 'chip file-chip';
+    if (p.url) li.append(Object.assign(document.createElement('img'), { src: p.url, alt: '' }));
+    li.append(span('file-name', p.file.name, p.file.name), span('file-size', fileSize(p.file.size)));
+    const drop = document.createElement('button');
+    drop.type = 'button';
+    drop.className = 'btn-icon btn-ghost';
+    drop.setAttribute('aria-label', 'Remove ' + p.file.name);
+    // The files on their way stay until the server answers.
+    drop.disabled = inFlight.has(p);
+    drop.append(grillIcon('close'));
+    drop.addEventListener('click', () => {
+      dropPending(p);
+      renderPending();
+      bodyInput.focus();
+    });
+    li.append(drop);
+    return li;
+  }));
+}
+
+$('attach-input').accept = $('upload-input').accept;
+$('attach-open').addEventListener('click', () => $('attach-input').click());
+$('attach-input').addEventListener('change', (e) => {
+  addPending(e.target.files);
+  e.target.value = '';
+});
+// A pasted image is a capture, named by the clock its sender reads (029-AC2). A clipboard that also
+// holds text (spreadsheet cells come with their picture) pastes the text alone.
+const captureExt = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp', 'image/svg+xml': '.svg' };
+function captureStem() {
+  const t = new Date();
+  const p2 = (n) => String(n).padStart(2, '0');
+  return 'capture-' + t.getFullYear() + p2(t.getMonth() + 1) + p2(t.getDate()) + '-' + p2(t.getHours()) + p2(t.getMinutes()) + p2(t.getSeconds());
+}
+bodyInput.addEventListener('paste', (e) => {
+  if (!e.clipboardData || e.clipboardData.types.includes('text/plain')) return;
+  const images = [...e.clipboardData.files].filter((f) => f.type.startsWith('image/'));
+  if (!images.length) return;
+  const stem = captureStem();
+  // A type the room refuses gets no extension: the check refuses it in the server's words.
+  addPending(images.map((f) => new File([f], stem + (captureExt[f.type] || ''), { type: f.type })));
+});
+
+// One frame of a shared screen becomes a pending PNG; the share stops as soon as it is drawn
+// (029-AC15). Phones and browsers without getDisplayMedia get no button (029-AC16): Android may
+// define it only to refuse, so a touch-only device counts as a phone.
+const finePointer = matchMedia('(any-pointer: fine)');
+const showCapture = () => { $('capture-open').hidden = !navigator.mediaDevices?.getDisplayMedia || !finePointer.matches; };
+showCapture();
+// A 2-in-1 gains a fine pointer when its keyboard and trackpad are attached.
+finePointer.addEventListener('change', showCapture);
+let capturing = false;
+$('capture-open').addEventListener('click', async () => {
+  if (capturing || ended) return;
+  // Refused before the picker: sharing a screen only to be told no is worse.
+  if (!uploadRules) return sendError(stillLoading);
+  if (pending.length >= uploadRules.max_files) return sendError(tooMany());
+  // A cancelled retry must not leave the last failure shown.
+  sendError('');
+  capturing = true;
+  /** @type {MediaStream | undefined} */
+  let stream;
+  const stop = () => { for (const t of stream?.getTracks() || []) t.stop(); };
+  try {
+    const Controller = /** @type {any} */ (window).CaptureController;
+    const controller = Controller ? new Controller() : undefined;
+    stream = await navigator.mediaDevices.getDisplayMedia(/** @type {DisplayMediaStreamOptions} */ (controller ? { video: true, controller } : { video: true }));
+    // A shared tab would take the focus; the person stays here to send the frame.
+    try { controller?.setFocusBehavior('no-focus-change'); } catch { /* too late, or not a tab */ }
+    const video = Object.assign(document.createElement('video'), { muted: true, playsInline: true });
+    const live = /** @type {MediaStream} */ (stream);
+    // A share that sends no frame settles neither play() nor loadeddata: the clock bounds the wait.
+    let timer;
+    const loaded = new Promise((resolve, reject) => {
+      video.addEventListener('loadeddata', resolve, { once: true });
+      for (const t of live.getVideoTracks()) t.addEventListener('ended', () => reject(new Error('The share ended before its first frame.')), { once: true });
+      timer = setTimeout(() => reject(new Error('The screen sent no picture.')), 5000);
+    });
+    video.srcObject = live;
+    video.play().catch(() => {});
+    await loaded.finally(() => clearTimeout(timer));
+    const canvas = Object.assign(document.createElement('canvas'), { width: video.videoWidth, height: video.videoHeight });
+    /** @type {CanvasRenderingContext2D} */ (canvas.getContext('2d')).drawImage(video, 0, 0);
+    stop();
+    video.srcObject = null;
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('The frame could not be encoded.');
+    addPending([new File([blob], captureStem() + '.png', { type: 'image/png' })]);
+  } catch (err) {
+    // A refused or cancelled picker is an answer, not a failure (029-AC16).
+    if (err?.name !== 'NotAllowedError' && err?.name !== 'AbortError') sendError('Screen capture failed: ' + String(err?.message || err?.name || 'unknown error').replace(/\.?$/, '.'));
+  } finally {
+    stop();
+    capturing = false;
+  }
+});
+
+// postFiles sends the message as multipart, its upload's progress on the bar (029-AC6).
+function postFiles(body, files) {
+  const form = new FormData();
+  form.append('body', body);
+  for (const p of files) form.append('file', p.file);
+  const bar = $('send-progress');
+  bar.value = 0;
+  bar.hidden = false;
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', api + '/messages');
+    xhr.responseType = 'json';
+    // The server's own bound for reading and converting every file.
+    xhr.timeout = uploadRules.timeout_ms;
+    xhr.upload.addEventListener('progress', (e) => { if (e.lengthComputable) bar.value = e.loaded / e.total; });
+    xhr.addEventListener('load', () => resolve({ status: xhr.status, data: xhr.response || {} }));
+    for (const ev of ['error', 'abort', 'timeout']) xhr.addEventListener(ev, () => resolve({ status: 0, data: { error: 'Not sent, retry' } }));
+    xhr.send(form);
+  }).finally(() => { bar.hidden = true; });
+}
+
+let sending = false;
+const inFlight = new Set();
 async function send() {
   const typed = bodyInput.value;
   const body = typed.trim();
-  if (!body) return;
-  const res = await netFetch(api + '/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ body }),
-  });
-  if (res.status === 401) {
-    end('Your access to this room has ended.');
-    return;
+  if (sending || (!body && !pending.length)) return;
+  let m;
+  if (pending.length) {
+    // One send at a time: a second would post the same files again.
+    sending = true;
+    sendForm.querySelector('[type=submit]').disabled = true;
+    sendError('');
+    const files = pending.slice();
+    for (const p of files) inFlight.add(p);
+    renderPending();
+    const { status, data } = await postFiles(body, files).finally(() => {
+      sending = false;
+      inFlight.clear();
+      sendForm.querySelector('[type=submit]').disabled = false;
+      renderPending();
+    });
+    if (status === 401) {
+      unauthorized(data);
+      return;
+    }
+    // The text and the files stay for a retry.
+    if (status < 200 || status >= 300) {
+      sendError(data.error || 'Not sent: HTTP ' + status);
+      return;
+    }
+    for (const p of files) dropPending(p);
+    renderPending();
+    m = data;
+  } else {
+    const res = await netFetch(api + '/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body }),
+    });
+    if (res.status === 401) return unauthorized(await res.json().catch(() => null));
+    if (!res.ok) throw new Error('send: HTTP ' + res.status);
+    m = await res.json();
   }
-  if (!res.ok) throw new Error('send: HTTP ' + res.status);
+  sendError('');
   // What you type shows beside what is said, for this visit (020-AC6).
   if (shownFilter() === 'voice') setFilter('all');
   // Only the line sent leaves the box: the next one may already be typed in it.
   if (bodyInput.value === typed) bodyInput.value = '';
   nudgeRecovery().catch(console.error);
   offerPush();
-  const m = await res.json();
   if (m.mention_notices) {
     notices.set(m.id, m.mention_notices);
     const li = lineOf(m.id);

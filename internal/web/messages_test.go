@@ -259,6 +259,16 @@ func TestPromptFlagsChangedMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 	ship -= 3 // the turn room's own "We ship on Friday." line
+	// 029-AC12: a line of files only reads "(files only)" once edited or deleted.
+	filesOnly := func() int64 {
+		t.Helper()
+		code, b := e.postFiles(t, r.room, alice.p.Token, "", formFile{"shot.md", []byte("# Shot")})
+		if code != http.StatusCreated {
+			t.Fatalf("post files: %d %s", code, b)
+		}
+		return decodeJSON[store.Message](t, b).ID
+	}
+	captioned, dropped := filesOnly(), filesOnly()
 
 	tn := e.press(t, r, alice, alice.p.Token, false)
 	if code, b := e.result(t, r, alice, tn.ID, turn.Result{SessionID: sid1, Session: []byte("one\n")}); code != http.StatusOK {
@@ -270,6 +280,8 @@ func TestPromptFlagsChangedMessages(t *testing.T) {
 	change("PATCH", voice.ID, map[string]string{"body": "we need a rollback"})
 	change("PATCH", same, map[string]string{"body": "Changed for a while."})
 	change("PATCH", same, map[string]string{"body": "Unchanged in the end."})
+	change("PATCH", captioned, map[string]string{"body": "Now with a caption."})
+	change("DELETE", dropped, nil)
 	unseen := post("Draft.")
 	change("PATCH", unseen, map[string]string{"body": "Final."})
 	gone := post("Oops, wrong room.")

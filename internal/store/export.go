@@ -128,6 +128,8 @@ type xMessage struct {
 	DeletedAt   *string `json:"deleted_at,omitempty"`
 	ChangeSeq   int64   `json:"change_seq,omitempty"`
 	AppendedAt  *string `json:"appended_at,omitempty"`
+	// Documents are the refs of the documents a chat line was sent with, in order (029-AC14).
+	Documents []int64 `json:"documents,omitempty"`
 }
 
 type xMessageVersion struct {
@@ -157,6 +159,8 @@ type xDocument struct {
 	CreatedAt string `json:"created_at"`
 	// DeletedAt flags a document a room admin deleted (005-AC26).
 	DeletedAt string `json:"deleted_at,omitempty"`
+	// Folder is FolderChat for a document sent in the chat, empty at the root (029-AC14).
+	Folder string `json:"folder,omitempty"`
 }
 
 // xMention is how a line's @mention of a persona ended (005-AC4).
@@ -611,14 +615,19 @@ func exportMessages(ctx context.Context, tx *txn, roomID string, d *exportDir) e
 	err = eachRow(ctx, tx, func(rows *sql.Rows) error {
 		var m xMessage
 		var pid, persona, seq sql.NullInt64
-		var vbody, vwritten sql.NullString
+		var vbody, vwritten, docs sql.NullString
 		if err := rows.Scan(&m.Ref, &m.TS, &m.Kind, &pid, &persona, &m.Sender, &m.Body, &m.Model, &m.Effort, &m.ReqModel, &m.ReqEffort,
-			&m.ModelNote, &m.Mismatch, &m.EditedAt, &m.DeletedAt, &m.ChangeSeq, &m.Source, &m.Spoken, &m.AppendedAt, &seq, &vbody, &vwritten); err != nil {
+			&m.ModelNote, &m.Mismatch, &m.EditedAt, &m.DeletedAt, &m.ChangeSeq, &m.Source, &m.Spoken, &m.AppendedAt, &docs, &seq, &vbody, &vwritten); err != nil {
 			return fmt.Errorf("export messages: %w", err)
 		}
 		if cur == nil || cur.Ref != m.Ref {
 			if err := flush(); err != nil {
 				return err
+			}
+			if docs.Valid {
+				if err := json.Unmarshal([]byte(docs.String), &m.Documents); err != nil {
+					return fmt.Errorf("export messages: documents: %w", err)
+				}
 			}
 			m.Participant, m.Persona = pid.Int64, persona.Int64
 			cur, earlier = &m, earlier[:0]
@@ -628,7 +637,8 @@ func exportMessages(ctx context.Context, tx *txn, roomID string, d *exportDir) e
 		}
 		return nil
 	}, `SELECT m.id, m.ts, m.kind, m.participant_id, m.persona_id, m.sender, m.body, m.model, m.effort, m.req_model, m.req_effort,
-		m.model_note, m.model_mismatch, m.edited_at, m.deleted_at, m.change_seq, COALESCE(m.source, ''), m.spoken, m.appended_at, v.seq, v.body, v.written_at
+		m.model_note, m.model_mismatch, m.edited_at, m.deleted_at, m.change_seq, COALESCE(m.source, ''), m.spoken, m.appended_at,
+		(SELECT jsonb_agg(md.document_id ORDER BY md.position)::text FROM message_documents md WHERE md.message_id = m.id), v.seq, v.body, v.written_at
 		FROM messages m LEFT JOIN message_versions v ON v.message_id = m.id WHERE m.room_id = ? ORDER BY m.id, v.seq`, roomID)
 	if err != nil {
 		return err
@@ -683,10 +693,10 @@ func exportDocuments(ctx context.Context, tx *txn, roomID string, d *exportDir) 
 			var x xDocument
 			var up sql.NullInt64
 			var deleted sql.NullString
-			err := rows.Scan(&x.Ref, &x.Kind, &x.Name, &x.Format, &up, &x.Author, &x.CreatedAt, &deleted)
+			err := rows.Scan(&x.Ref, &x.Kind, &x.Name, &x.Format, &up, &x.Author, &x.CreatedAt, &deleted, &x.Folder)
 			x.Upload, x.DeletedAt = up.Int64, deleted.String
 			return x, err
-		}, `SELECT id, kind, name, format, upload_id, author, created_at, deleted_at FROM documents WHERE room_id = ? ORDER BY id`, roomID)
+		}, `SELECT id, kind, name, format, upload_id, author, created_at, deleted_at, folder FROM documents WHERE room_id = ? ORDER BY id`, roomID)
 	}
 	if err == nil {
 		err = dump(ctx, tx, d, fileRevisions, func(rows *sql.Rows) (any, error) {

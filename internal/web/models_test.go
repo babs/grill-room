@@ -231,7 +231,8 @@ func TestModelsNotOffered(t *testing.T) {
 }
 
 // 010-AC4: the room page and its docs window are isolated and may compile WebAssembly in workers;
-// what they frame embeds under COEP; the transcription workers get their own policy.
+// what they frame embeds under COEP; the transcription workers get their own policy. Pending chat
+// images preview from blob: URLs (029-AC3).
 func TestIsolationHeaders(t *testing.T) {
 	e := newEnv(t)
 	for _, path := range []string{"/r/some-room", "/r/some-room/docs", "/r/some-room/docs/1"} {
@@ -239,7 +240,7 @@ func TestIsolationHeaders(t *testing.T) {
 		csp := hdr.Get("Content-Security-Policy")
 		if code != http.StatusOK || hdr.Get("Cross-Origin-Opener-Policy") != "same-origin" ||
 			hdr.Get("Cross-Origin-Embedder-Policy") != "credentialless" ||
-			!strings.Contains(csp, "' 'wasm-unsafe-eval'; ") || !strings.HasSuffix(csp, "; worker-src 'self'") {
+			!strings.Contains(csp, "' 'wasm-unsafe-eval'; ") || !strings.HasSuffix(csp, "; worker-src 'self'; img-src 'self' blob:") {
 			t.Errorf("%s: %d %v", path, code, hdr)
 		}
 	}

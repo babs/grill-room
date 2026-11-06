@@ -112,12 +112,24 @@ type importer struct {
 	messages, annMessages idMap
 	// uploadFormat is the format each upload's content reads as.
 	uploadFormat map[int64]string
+	// messageDocs are the lines' document refs, linked once the documents exist, to the chat
+	// uploads only: chatDocs holds their refs.
+	messageDocs []messageDocs
+	chatDocs    map[int64]bool
+	// withDocs are the refs of the text lines sent with documents: their versions may be empty.
+	withDocs map[int64]bool
 	// relink holds the profile uuids a profile importer may relink; nil for the super-admin, who
 	// relinks any.
 	relink map[string]bool
 	// versions are the skill versions imported, by new skill id.
 	versions       map[int64][]int
 	roomSkillNames map[string]bool
+}
+
+// messageDocs are a line's ref, its new id and the refs of its documents.
+type messageDocs struct {
+	ref, message int64
+	refs         []int64
 }
 
 // idMap maps ascending refs to new ids.
@@ -168,7 +180,7 @@ func (s *Store) ImportRoom(ctx context.Context, dir string, o ImportOptions) (*I
 	err = s.withTx(ctx, "import room", func(tx *txn) error {
 		im := &importer{ctx: ctx, tx: tx, root: root, o: o, rep: rep, room: o.RoomID,
 			participants: map[int64]int64{}, personas: map[int64]int64{}, uploads: map[int64]int64{}, documents: map[int64]int64{},
-			annotations: map[int64]int64{}, skills: map[int64]int64{}, plugins: map[int64]int64{}, uploadFormat: map[int64]string{}, versions: map[int64][]int{},
+			annotations: map[int64]int64{}, skills: map[int64]int64{}, plugins: map[int64]int64{}, uploadFormat: map[int64]string{}, chatDocs: map[int64]bool{}, withDocs: map[int64]bool{}, versions: map[int64][]int{},
 			roomSkillNames: map[string]bool{}}
 		if err := im.run(); err != nil {
 			return err
@@ -238,7 +250,7 @@ func (im *importer) run() error {
 	}
 	for _, step := range []func() error{
 		func() error { return im.personasStep(x.Personas) },
-		im.participantsStep, im.messagesStep, im.mentionsStep, im.documentsStep, im.annotationsStep, im.noteMentionsStep, im.skillsStep,
+		im.participantsStep, im.messagesStep, im.mentionsStep, im.documentsStep, im.messageDocumentsStep, im.annotationsStep, im.noteMentionsStep, im.skillsStep,
 		func() error { return im.pinsAndResume(x.Personas) },
 		func() error { return im.pluginsStep(x.Personas) },
 		im.sessionsStep, im.seatStep,
@@ -612,7 +624,8 @@ func checkMessage(m *xMessage) error {
 		limit = maxImportAgent
 	}
 	what := fmt.Sprintf("message %d", m.Ref)
-	if err := textIs(what, limit, true, false, m.Body); err != nil {
+	// A chat line sent with files may have no text (029-AC4).
+	if err := textIs(what, limit, true, m.Kind == KindText && len(m.Documents) > 0, m.Body); err != nil {
 		return err
 	}
 	if err := textIs(what, maxImportName, false, false, m.Sender); err != nil {
@@ -627,6 +640,8 @@ func checkMessage(m *xMessage) error {
 	switch {
 	case m.Kind != KindAgent && m.Spoken != "":
 		return refuseImport("%s: spoken text on a %q line", what, m.Kind)
+	case m.Kind != KindText && len(m.Documents) > 0:
+		return refuseImport("%s: documents on a %q line", what, m.Kind)
 	case m.Kind != KindVoice && m.Source != "":
 		return refuseImport("%s: source on a %q line", what, m.Kind)
 	case m.Kind == KindVoice && m.Source != "" && m.Source != VoiceSourceDevice && m.Source != VoiceSourceServer:
@@ -712,6 +727,10 @@ func (im *importer) messagesStep() error {
 			return refuseImport("message %d: %v", m.Ref, err)
 		}
 		im.rep.Counts["messages"]++
+		if len(m.Documents) > 0 {
+			im.messageDocs = append(im.messageDocs, messageDocs{m.Ref, id, m.Documents})
+			im.withDocs[m.Ref] = true
+		}
 		return im.messages.add(m.Ref, id)
 	})
 	if err != nil {
@@ -722,7 +741,8 @@ func (im *importer) messagesStep() error {
 		if !ok {
 			return refuseImport("message version of unknown message %d", v.Message)
 		}
-		if err := textIs(fmt.Sprintf("version of message %d", v.Message), maxImportAgent, true, false, v.Body); err != nil {
+		// A line of files only, edited, keeps its empty first body (029-AC14).
+		if err := textIs(fmt.Sprintf("version of message %d", v.Message), maxImportAgent, true, im.withDocs[v.Message], v.Body); err != nil {
 			return err
 		}
 		if _, err := im.tx.ExecContext(im.ctx, `INSERT INTO message_versions(message_id, seq, body, written_at) VALUES(?,?,?,?)`,
@@ -844,9 +864,15 @@ func (im *importer) documentsStep() error {
 			}
 			deleted = &d.DeletedAt
 		}
+		switch {
+		case d.Folder != "" && d.Folder != FolderChat:
+			return refuseImport("document %d: unknown folder %q", d.Ref, d.Folder)
+		case d.Folder == FolderChat && d.Kind != DocUpload:
+			return refuseImport("document %d: only an upload may be in the chat folder", d.Ref)
+		}
 		var id int64
-		err = im.tx.QueryRowContext(im.ctx, `INSERT INTO documents(room_id, kind, name, format, upload_id, author, created_at, deleted_at)
-			VALUES(?,?,?,?,?,?,?,?) RETURNING id`, im.room, d.Kind, d.Name, d.Format, up, d.Author, d.CreatedAt, deleted).Scan(&id)
+		err = im.tx.QueryRowContext(im.ctx, `INSERT INTO documents(room_id, kind, name, format, upload_id, author, created_at, deleted_at, folder)
+			VALUES(?,?,?,?,?,?,?,?,?) RETURNING id`, im.room, d.Kind, d.Name, d.Format, up, d.Author, d.CreatedAt, deleted, d.Folder).Scan(&id)
 		if err != nil {
 			return refuseImport("document %d: %v", d.Ref, err)
 		}
@@ -854,6 +880,7 @@ func (im *importer) documentsStep() error {
 			return refuseImport("document %d twice", d.Ref)
 		}
 		im.documents[d.Ref] = id
+		im.chatDocs[d.Ref] = d.Folder == FolderChat
 		im.rep.Counts["documents"]++
 		return nil
 	})
@@ -883,6 +910,31 @@ func (im *importer) documentsStep() error {
 		im.rep.Bytes["revisions"] += int64(len(body))
 		return nil
 	})
+}
+
+// messageDocumentsStep links each chat line to the documents it was sent with, in order: chat
+// uploads, each sent with one line only, as the room makes them (029-AC14).
+func (im *importer) messageDocumentsStep() error {
+	linked := map[int64]bool{}
+	for _, md := range im.messageDocs {
+		for i, r := range md.refs {
+			doc, err := ref(im.documents, "document", r, false)
+			if err != nil {
+				return err
+			}
+			switch {
+			case !im.chatDocs[r]:
+				return refuseImport("message %d: document %d is not a chat upload", md.ref, r)
+			case linked[r]:
+				return refuseImport("message %d: document %d is already linked to another line", md.ref, r)
+			}
+			linked[r] = true
+			if _, err := im.tx.ExecContext(im.ctx, `INSERT INTO message_documents(message_id, document_id, position) VALUES(?,?,?)`, md.message, doc, i); err != nil {
+				return refuseImport("documents of a line: %v", err)
+			}
+		}
+	}
+	return nil
 }
 
 func (im *importer) annotationsStep() error {

@@ -65,6 +65,15 @@ func (b *Bus) Post(ctx context.Context, m *store.Message) error {
 	return nil
 }
 
+// PostUploads is Post for a chat message sent with files, stored as documents with it (029-AC5).
+func (b *Bus) PostUploads(ctx context.Context, m *store.Message, ups []store.Upload, defaultQuota int64) error {
+	if err := b.Store.InsertMessageUploads(ctx, m, ups, defaultQuota); err != nil {
+		return err
+	}
+	b.Notify(m.RoomID)
+	return nil
+}
+
 // Notify wakes subscribers about a change in room, here at once and on the other pods through Run.
 // It never blocks: Run's sender coalesces the ids and sends them in its own goroutine.
 func (b *Bus) Notify(room string) {

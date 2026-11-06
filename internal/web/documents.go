@@ -60,6 +60,8 @@ type Options struct {
 	MaxAttachmentBytes int64
 	// ToMarkdown converts an office file read as the pandoc format from.
 	ToMarkdown func(ctx context.Context, from string, data []byte) (string, error)
+	// PandocTimeout bounds one ToMarkdown call; the chat composer waits that long per file (029-AC6).
+	PandocTimeout time.Duration
 	// Voice turns on LiveKit audio and transcription; nil leaves the room text only.
 	Voice *Voice
 	// TTSTokenHash is HashToken of the tts pod's token: set with Voice, personas speak in the call
@@ -190,94 +192,160 @@ func (s *Server) getDocument(w http.ResponseWriter, r *http.Request, sess sessio
 
 // readUpload returns the name and bytes of the "file" part, or answers the error itself.
 func (s *Server) readUpload(w http.ResponseWriter, r *http.Request) (string, []byte, bool) {
-	mt, params, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if mt != "multipart/form-data" || params["boundary"] == "" {
-		httpError(w, http.StatusUnsupportedMediaType, "Content-Type must be multipart/form-data")
+	mr, ok := s.multipartReader(w, r, s.opts.MaxUploadBytes+multipartSlack)
+	if !ok {
 		return "", nil, false
 	}
-	tooLarge := fmt.Sprintf("file is over the %s limit", sizeText(s.opts.MaxUploadBytes))
-	mr := multipart.NewReader(http.MaxBytesReader(w, r.Body, s.opts.MaxUploadBytes+multipartSlack), params["boundary"])
 	for {
-		part, err := mr.NextPart()
-		var mbe *http.MaxBytesError
-		switch {
-		case errors.As(err, &mbe):
-			httpError(w, http.StatusRequestEntityTooLarge, tooLarge)
+		part, ok := nextPart(w, mr, s.fileTooLarge())
+		if !ok {
 			return "", nil, false
-		case errors.Is(err, io.EOF):
+		}
+		if part == nil {
 			httpError(w, http.StatusBadRequest, "missing file field")
 			return "", nil, false
-		case err != nil:
-			httpError(w, http.StatusBadRequest, "bad multipart body")
-			return "", nil, false
 		}
-		if part.FormName() != "file" {
-			continue
+		if part.FormName() == "file" {
+			return s.readFile(w, part, false)
 		}
-		// FileName keeps only the base name, so no path reaches the store.
-		name, ok := cleanText(part.FileName(), maxFileName, false)
-		if !ok {
-			httpError(w, http.StatusBadRequest, fmt.Sprintf("file name must be 1 to %d characters", maxFileName))
-			return "", nil, false
-		}
-		data, err := io.ReadAll(io.LimitReader(part, s.opts.MaxUploadBytes+1))
-		if errors.As(err, &mbe) || int64(len(data)) > s.opts.MaxUploadBytes {
-			httpError(w, http.StatusRequestEntityTooLarge, tooLarge)
-			return "", nil, false
-		}
-		if err != nil {
-			httpError(w, http.StatusBadRequest, "bad multipart body")
-			return "", nil, false
-		}
-		if len(data) == 0 {
-			httpError(w, http.StatusBadRequest, "empty file")
-			return "", nil, false
-		}
-		return name, data, true
 	}
 }
 
-// roomFull answers an upload or attachment refused by the room's quota (004-AC9).
-func (s *Server) roomFull(w http.ResponseWriter, r *http.Request, room string) {
+// multipartReader reads a multipart/form-data body of at most limit bytes; false once answered.
+func (s *Server) multipartReader(w http.ResponseWriter, r *http.Request, limit int64) (*multipart.Reader, bool) {
+	mt, params, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if mt != "multipart/form-data" || params["boundary"] == "" {
+		httpError(w, http.StatusUnsupportedMediaType, "Content-Type must be multipart/form-data")
+		return nil, false
+	}
+	return multipart.NewReader(http.MaxBytesReader(w, r.Body, limit), params["boundary"]), true
+}
+
+// nextPart returns the next part, nil past the last one; false once answered, with tooLarge when
+// the body is over its limit.
+func nextPart(w http.ResponseWriter, mr *multipart.Reader, tooLarge string) (*multipart.Part, bool) {
+	part, err := mr.NextPart()
+	var mbe *http.MaxBytesError
+	switch {
+	case errors.As(err, &mbe):
+		httpError(w, http.StatusRequestEntityTooLarge, tooLarge)
+		return nil, false
+	case errors.Is(err, io.EOF):
+		return nil, true
+	case err != nil:
+		httpError(w, http.StatusBadRequest, "bad multipart body")
+		return nil, false
+	}
+	return part, true
+}
+
+// readFile returns the cleaned name and the bytes of file part, or answers the error itself, named
+// after the file when named: a chat message carries several (029-AC5).
+func (s *Server) readFile(w http.ResponseWriter, part *multipart.Part, named bool) (string, []byte, bool) {
+	// FileName keeps only the base name, so no path reaches the store.
+	name, ok := cleanText(part.FileName(), maxFileName, false)
+	if !ok {
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("file name must be 1 to %d characters", maxFileName))
+		return "", nil, false
+	}
+	pre := filePrefix(name, named)
+	data, err := io.ReadAll(io.LimitReader(part, s.opts.MaxUploadBytes+1))
+	var mbe *http.MaxBytesError
+	if errors.As(err, &mbe) || int64(len(data)) > s.opts.MaxUploadBytes {
+		httpError(w, http.StatusRequestEntityTooLarge, pre+s.fileTooLarge())
+		return "", nil, false
+	}
+	if err != nil {
+		httpError(w, http.StatusBadRequest, "bad multipart body")
+		return "", nil, false
+	}
+	if len(data) == 0 {
+		httpError(w, http.StatusBadRequest, pre+"empty file")
+		return "", nil, false
+	}
+	return name, data, true
+}
+
+func (s *Server) fileTooLarge() string {
+	return fmt.Sprintf("file is over the %s limit", sizeText(s.opts.MaxUploadBytes))
+}
+
+type uploadRules struct {
+	MaxBytes    int64  `json:"max_bytes"`
+	TooLarge    string `json:"too_large"`
+	Unsupported string `json:"unsupported"`
+	MaxFiles    int    `json:"max_files"`
+	TooMany     string `json:"too_many"`
+	// TimeoutMS is how long a message with files may take: each file is read and converted in turn.
+	TimeoutMS int64 `json:"timeout_ms"`
+}
+
+// sendSlack covers a message's transaction and the network beside its files' reads and conversions.
+const sendSlack = 30 * time.Second
+
+func (s *Server) uploadRules() uploadRules {
+	return uploadRules{MaxBytes: s.opts.MaxUploadBytes, TooLarge: s.fileTooLarge(), Unsupported: convert.ErrUnsupported.Error(),
+		MaxFiles: maxMessageFiles, TooMany: tooManyFilesText,
+		TimeoutMS: (maxMessageFiles*(uploadReadTimeout+s.opts.PandocTimeout) + sendSlack).Milliseconds()}
+}
+
+func filePrefix(name string, named bool) string {
+	if named {
+		return name + ": "
+	}
+	return ""
+}
+
+// roomFull answers an upload or attachment refused by the room's quota (004-AC9), after prefix.
+func (s *Server) roomFull(w http.ResponseWriter, r *http.Request, room, prefix string) {
 	_, quota, err := s.bus.Store.RoomUsage(r.Context(), room, s.opts.MaxRoomBytes)
 	if err != nil {
 		s.serverError(w, "room_usage_failed", err)
 		return
 	}
-	httpError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("this upload would take the room over its %s limit", sizeText(quota)))
+	httpError(w, http.StatusRequestEntityTooLarge, prefix+fmt.Sprintf("this upload would take the room over its %s limit", sizeText(quota)))
 }
 
-func (s *Server) uploadDocument(w http.ResponseWriter, r *http.Request, sess session) {
+// uploadSlot takes one of the upload slots; false once answered.
+func (s *Server) uploadSlot(w http.ResponseWriter) bool {
 	// Each upload holds its body, a text copy and pandoc's output in memory.
 	select {
 	case s.uploads <- struct{}{}:
-		defer func() { <-s.uploads }()
+		return true
 	default:
 		httpError(w, http.StatusServiceUnavailable, "too many uploads in progress, retry in a moment")
-		return
+		return false
 	}
-	if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(uploadReadTimeout)); err != nil {
+}
+
+// uploadDeadline bounds reading the upload body to d; false once answered.
+func (s *Server) uploadDeadline(w http.ResponseWriter, d time.Duration) bool {
+	if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(d)); err != nil {
 		s.serverError(w, "upload_deadline_failed", err)
-		return
+		return false
 	}
-	name, data, ok := s.readUpload(w, r)
-	if !ok {
-		return
-	}
+	return true
+}
+
+// prepareUpload checks file name of the session's room by type and by room quota, pending bytes of
+// the same request counted, and converts it; it answers a refusal itself, named after the file when
+// named.
+func (s *Server) prepareUpload(w http.ResponseWriter, r *http.Request, sess session, name string, data []byte, pending int64, named bool) (*store.Upload, bool) {
+	pre := filePrefix(name, named)
 	typ, err := convert.Detect(name, data)
 	if err != nil {
-		httpError(w, http.StatusUnsupportedMediaType, err.Error())
-		return
+		httpError(w, http.StatusUnsupportedMediaType, pre+err.Error())
+		return nil, false
 	}
-	// Early answer for a full room, before pandoc spends its time; AddUpload re-checks atomically.
+	// Early answer for a full room, before pandoc spends its time; the store re-checks atomically.
 	used, quota, err := s.bus.Store.RoomUsage(r.Context(), sess.p.RoomID, s.opts.MaxRoomBytes)
 	if err != nil {
 		s.serverError(w, "upload_failed", err)
-		return
+		return nil, false
 	}
-	if used+int64(len(data)) > quota {
-		s.roomFull(w, r, sess.p.RoomID)
-		return
+	if used+pending+int64(len(data)) > quota {
+		s.roomFull(w, r, sess.p.RoomID, pre)
+		return nil, false
 	}
 	text := ""
 	switch {
@@ -285,8 +353,8 @@ func (s *Server) uploadDocument(w http.ResponseWriter, r *http.Request, sess ses
 		text, err = s.opts.ToMarkdown(r.Context(), typ.Reader, data)
 		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist) {
 			s.log.Error("pandoc_missing", zap.Error(err))
-			httpError(w, http.StatusServiceUnavailable, "document conversion is unavailable on this server")
-			return
+			httpError(w, http.StatusServiceUnavailable, pre+"document conversion is unavailable on this server")
+			return nil, false
 		}
 		// The store's text columns take neither invalid UTF-8 nor NUL.
 		if err == nil && (!utf8.ValidString(text) || strings.IndexByte(text, 0) >= 0) {
@@ -295,17 +363,34 @@ func (s *Server) uploadDocument(w http.ResponseWriter, r *http.Request, sess ses
 		if err != nil {
 			s.log.Warn("upload_conversion_failed", zap.String("room", sess.p.RoomID), zap.String("reader", typ.Reader), zap.Error(err))
 			httpError(w, http.StatusUnprocessableEntity, "could not convert "+name+" to Markdown")
-			return
+			return nil, false
 		}
 	case typ.Format == convert.FormatMD || typ.Format == convert.FormatHTML:
 		text = string(data)
 	}
-	d, err := s.bus.Store.AddUpload(r.Context(), &store.Upload{
-		RoomID: sess.p.RoomID, ParticipantID: sess.p.ID, Author: sess.p.Name, Filename: name,
-		ContentType: typ.ContentType, Format: typ.Format, Data: data, Text: text,
-	}, s.opts.MaxRoomBytes)
+	return &store.Upload{RoomID: sess.p.RoomID, ParticipantID: sess.p.ID, Author: sess.p.Name, Filename: name,
+		ContentType: typ.ContentType, Format: typ.Format, Data: data, Text: text}, true
+}
+
+func (s *Server) uploadDocument(w http.ResponseWriter, r *http.Request, sess session) {
+	if !s.uploadSlot(w) {
+		return
+	}
+	defer func() { <-s.uploads }()
+	if !s.uploadDeadline(w, uploadReadTimeout) {
+		return
+	}
+	name, data, ok := s.readUpload(w, r)
+	if !ok {
+		return
+	}
+	u, ok := s.prepareUpload(w, r, sess, name, data, 0, false)
+	if !ok {
+		return
+	}
+	d, err := s.bus.Store.AddUpload(r.Context(), u, s.opts.MaxRoomBytes)
 	if errors.Is(err, store.ErrRoomFull) {
-		s.roomFull(w, r, sess.p.RoomID)
+		s.roomFull(w, r, sess.p.RoomID, "")
 		return
 	}
 	if err != nil {

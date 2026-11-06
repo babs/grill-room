@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures.js';
 import { mkdirSync } from 'node:fs';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, upload, startDaemon, openDaemonPage, smallTargets, menuItem, playSTT, newRoomEditor, personaAction, unfoldTabs } from './helpers.js';
+import { roomWith, signIn, upload, startDaemon, openDaemonPage, smallTargets, menuItem, playSTT, newRoomEditor, personaAction, unfoldTabs, dropFiles } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 const desktop = { width: 1440, height: 900 };
@@ -10,16 +10,6 @@ const phone = { width: 390, height: 844 };
 const shots = process.env.SHOTS;
 if (shots) mkdirSync(shots, { recursive: true });
 const shot = (page, name) => (shots ? page.screenshot({ path: `${shots}/${name}.png` }) : null);
-
-// dropFiles drops files on target, as a file manager does: a DataTransfer built in the page.
-async function dropFiles(page, target, files) {
-  const dt = await page.evaluateHandle((files) => {
-    const dt = new DataTransfer();
-    for (const f of files) dt.items.add(new File([f.body], f.name, { type: f.type }));
-    return dt;
-  }, files);
-  for (const type of ['dragenter', 'dragover', 'drop']) await page.locator(target).dispatchEvent(type, { dataTransfer: dt });
-}
 
 // 005-AC30: at 1440 px the room header's controls share one height.
 test('header controls share one height', async ({ browser, request }) => {

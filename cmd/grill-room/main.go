@@ -593,6 +593,7 @@ func run() error {
 		MaxAttachmentBytes:     cfg.MaxAttachmentMB << 20,
 		MaxImportBytes:         cfg.MaxImportMB << 20,
 		ToMarkdown:             convert.NewPandoc(cfg.Pandoc, cfg.PandocTimeout).ToMarkdown,
+		PandocTimeout:          cfg.PandocTimeout,
 		Voice:                  cfg.voice(),
 		TTSTokenHash:           cfg.ttsTokenHash(),
 		Release:                release,
