@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -18,7 +20,8 @@ import (
 func viewMessage(m store.Message) store.Message {
 	switch {
 	case m.DeletedAt != nil:
-		m.Body, m.HTML, m.Spoken = "", "", ""
+		// Its documents stay in the room (029-AC10), not under the deleted line.
+		m.Body, m.HTML, m.Spoken, m.Documents = "", "", "", nil
 	case m.HTML == "" && m.Kind != store.KindSystem:
 		// Written before messages were rendered on write.
 		m.HTML = render.MessageHTML(m.Body)
@@ -191,4 +194,116 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request, sess sessi
 		next = ms[len(ms)-1].ID
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"messages": out, "next": next})
+}
+
+// maxMessageFiles bounds the files sent with one chat message (029-AC3).
+const maxMessageFiles = 4
+
+var bodyLenText = fmt.Sprintf("message must be 1 to %d characters", maxBodyLen)
+
+// postWithFiles stores m from a multipart body: its "body" field and up to maxMessageFiles "file"
+// parts, each under the document upload's rules, stored with the message or not at all (029-AC4,
+// 029-AC5). False once answered.
+func (s *Server) postWithFiles(w http.ResponseWriter, r *http.Request, sess session, m *store.Message) bool {
+	if !s.uploadDeadline(w, uploadReadTimeout) {
+		return false
+	}
+	// A body field holds at most maxBodyLen runes of up to 4 bytes.
+	limit := maxMessageFiles*(s.opts.MaxUploadBytes+multipartSlack) + 4*maxBodyLen + multipartSlack
+	tooLarge := fmt.Sprintf("message is over the %s limit", sizeText(limit))
+	mr, ok := s.multipartReader(w, r, limit)
+	if !ok {
+		return false
+	}
+	// One upload slot per file, as on the documents route: the slots bound what uploads hold in memory.
+	slots := 0
+	defer func() {
+		for range slots {
+			<-s.uploads
+		}
+	}()
+	var raw *string
+	var ups []store.Upload
+	var pending int64
+	for {
+		part, ok := nextPart(w, mr, tooLarge)
+		if !ok {
+			return false
+		}
+		if part == nil {
+			break
+		}
+		switch part.FormName() {
+		case "body":
+			if raw != nil {
+				httpError(w, http.StatusBadRequest, "one body field per message")
+				return false
+			}
+			b, err := io.ReadAll(io.LimitReader(part, 4*maxBodyLen+1))
+			var mbe *http.MaxBytesError
+			if errors.As(err, &mbe) {
+				httpError(w, http.StatusRequestEntityTooLarge, tooLarge)
+				return false
+			}
+			if err != nil {
+				httpError(w, http.StatusBadRequest, "bad multipart body")
+				return false
+			}
+			// The LimitReader cut would otherwise store a truncated text that cleanText accepts.
+			if len(b) > 4*maxBodyLen {
+				httpError(w, http.StatusBadRequest, bodyLenText)
+				return false
+			}
+			text := string(b)
+			raw = &text
+		case "file":
+			if len(ups) == maxMessageFiles {
+				httpError(w, http.StatusBadRequest, fmt.Sprintf("at most %d files per message", maxMessageFiles))
+				return false
+			}
+			if !s.uploadSlot(w) {
+				return false
+			}
+			slots++
+			// Each file gets the read time a document upload gets.
+			if !s.uploadDeadline(w, uploadReadTimeout) {
+				return false
+			}
+			name, data, ok := s.readFile(w, part, true)
+			if !ok {
+				return false
+			}
+			u, ok := s.prepareUpload(w, r, sess, name, data, pending, true)
+			if !ok {
+				return false
+			}
+			pending += int64(len(data))
+			ups = append(ups, *u)
+		}
+	}
+	text := ""
+	if raw != nil {
+		text = *raw
+	}
+	body, ok := cleanText(text, maxBodyLen, true)
+	if !ok && (len(ups) == 0 || strings.TrimSpace(text) != "") {
+		httpError(w, http.StatusBadRequest, bodyLenText)
+		return false
+	}
+	m.Body = body
+	err := s.bus.PostUploads(r.Context(), m, ups, s.opts.MaxRoomBytes)
+	var ue *store.UploadError
+	if errors.As(err, &ue) && errors.Is(ue.Err, store.ErrRoomFull) {
+		s.roomFull(w, r, sess.p.RoomID, filePrefix(ups[ue.Index].Filename, true))
+		return false
+	}
+	if err != nil {
+		s.serverError(w, "post_message_failed", err)
+		return false
+	}
+	for _, d := range m.Documents {
+		s.log.Info("document_uploaded", zap.String("room", m.RoomID), zap.Int64("document", d.ID), zap.Int64("size", d.Size),
+			zap.String("folder", store.FolderChat), zap.Int64("message", m.ID))
+	}
+	return true
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 )
@@ -170,5 +171,116 @@ func TestAddRevision(t *testing.T) {
 	}
 	if _, err := s.Original(ctx, "a", d.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("agent document has no original: %v", err)
+	}
+}
+
+func countRows(t *testing.T, s *Store, table string) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRowContext(context.Background(), `SELECT count(*) FROM `+table).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+var errAny = errors.New("any error")
+
+// 029-AC5: a message and its uploads are stored together, in the chat folder, or not at all: a
+// failure on the second of two files leaves no message, upload, document or link.
+func TestInsertMessageUploads(t *testing.T) {
+	two := func(second *Upload) []Upload {
+		first := upload("a", 10)
+		first.Filename = "first.png"
+		return []Upload{*first, *second}
+	}
+	bad := upload("a", 10)
+	bad.Format = "exe"
+	cases := []struct {
+		name    string
+		second  *Upload
+		wantErr error
+	}{
+		{"both stored", upload("a", 10), nil},
+		{"second over the room quota", upload("a", 91), ErrRoomFull},
+		{"second fails in the database", bad, errAny},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := openTest(t)
+			ctx := context.Background()
+			newRoom(t, s, "a")
+			m := &Message{RoomID: "a", Kind: KindText, Sender: "Alice", Body: "see"}
+			err := s.InsertMessageUploads(ctx, m, two(tc.second), 100)
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, err := s.Message(ctx, "a", m.ID)
+				if err != nil || len(got.Documents) != 2 || got.Documents[0].Name != "first.png" || got.Documents[1].Name != "a.png" ||
+					got.Documents[0].Size != 10 || got.Documents[0].Format != "image" || got.Documents[0].Deleted {
+					t.Fatalf("message documents: %+v, %v", got, err)
+				}
+				docs, err := s.Documents(ctx, "a")
+				if err != nil || len(docs) != 2 || docs[0].Folder != FolderChat || docs[1].Folder != FolderChat {
+					t.Fatalf("documents: %+v, %v", docs, err)
+				}
+				return
+			}
+			var ue *UploadError
+			if !errors.As(err, &ue) || ue.Index != 1 || (tc.wantErr != errAny && !errors.Is(err, tc.wantErr)) {
+				t.Fatalf("got %v, want an UploadError on index 1 wrapping %v", err, tc.wantErr)
+			}
+			for _, tb := range []string{"messages", "uploads", "documents", "revisions", "message_documents"} {
+				if n := countRows(t, s, tb); n != 0 {
+					t.Errorf("%d rows in %s after the rollback", n, tb)
+				}
+			}
+		})
+	}
+}
+
+// 029-AC8 029-AC10: a message shows its documents' current names, marks a deleted one, and keeps
+// them through its own edit and delete; the room's deletion takes the links.
+func TestMessageDocumentsFollowChanges(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	p := seed(t, s, "a")
+	m := &Message{RoomID: "a", Kind: KindText, ParticipantID: p.ID, Sender: p.Name, Body: "two files"}
+	first, second := upload("a", 5), upload("a", 5)
+	second.Filename = "b.png"
+	if err := s.InsertMessageUploads(ctx, m, []Upload{*first, *second}, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RenameDocument(ctx, "a", m.Documents[0].ID, "renamed.png", p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetDocumentDeleted(ctx, "a", m.Documents[1].ID, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.EditMessage(ctx, "a", m.ID, p.ID, "edited"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteMessage(ctx, "a", m.ID, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := s.Messages(ctx, "a", m.ID-1, 1)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("messages: %v, %v", msgs, err)
+	}
+	want := []MessageDocument{
+		{ID: m.Documents[0].ID, Name: "renamed.png", Format: "image", Size: 5},
+		{ID: m.Documents[1].ID, Name: "b.png", Format: "image", Size: 5, Deleted: true},
+	}
+	if got := msgs[0].Documents; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("documents %+v, want %+v", got, want)
+	}
+	if docs, err := s.Documents(ctx, "a"); err != nil || !slices.ContainsFunc(docs, func(d Document) bool { return d.ID == want[0].ID }) {
+		t.Fatalf("the renamed document left the room: %+v, %v", docs, err)
+	}
+	if err := s.DeleteRoom(ctx, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if n := countRows(t, s, "message_documents"); n != 0 {
+		t.Fatalf("%d links after the room's deletion", n)
 	}
 }

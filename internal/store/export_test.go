@@ -752,7 +752,8 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"messages":            "id room_id ts kind participant_id sender body model edited_at deleted_at change_seq persona_id effort req_model req_effort model_note model_mismatch source spoken appended_at | html turn_id",
 		"message_versions":    "id message_id seq body written_at |",
 		"uploads":             "id room_id participant_id filename content_type size data created_at |",
-		"documents":           "id room_id kind name format upload_id author created_at deleted_at | change_seq",
+		"documents":           "id room_id kind name format upload_id author created_at deleted_at | change_seq folder", // 029 Phase 2 exports folder
+		"message_documents":   "| message_id document_id position",                                                      // and these
 		"revisions":           "id document_id n body author created_at |",
 		"annotations":         "id room_id document_id revision anchor orphaned status version created_at |",
 		"annotation_messages": "id annotation_id author_kind participant_id author body created_at persona_id |",

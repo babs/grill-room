@@ -14,6 +14,9 @@ const (
 	DocAgent  = "agent"
 )
 
+// FolderChat holds the documents sent with chat messages (029-AC9); the others are at the root, "".
+const FolderChat = "chat"
+
 var (
 	// ErrReadOnly is returned when a revision targets an uploaded document.
 	ErrReadOnly = errors.New("uploaded documents are read-only")
@@ -37,7 +40,28 @@ type Document struct {
 	CreatedAt   time.Time `json:"created_at"`
 	// Revisions counts the text revisions: 0 for a PDF or an image, 1 for other uploads.
 	Revisions int `json:"revisions"`
+	// Folder is FolderChat or "" for the root.
+	Folder string `json:"folder"`
 }
+
+// MessageDocument is a document a chat message was sent with, under its current name (029-AC8).
+type MessageDocument struct {
+	ID      int64  `json:"id"`
+	Name    string `json:"name"`
+	Format  string `json:"format"`
+	Size    int64  `json:"size"`
+	Deleted bool   `json:"deleted"`
+}
+
+// UploadError is the upload of a message's batch that failed, by its index in the batch.
+type UploadError struct {
+	Index int
+	Err   error
+}
+
+func (e *UploadError) Error() string { return fmt.Sprintf("upload %d: %v", e.Index, e.Err) }
+
+func (e *UploadError) Unwrap() error { return e.Err }
 
 // Revision is one version of a document's text.
 type Revision struct {
@@ -61,6 +85,8 @@ type Upload struct {
 	// Text becomes revision 1 when the format is shown as text (md, html): the file itself, or
 	// the Markdown copy of an office file.
 	Text string
+	// Folder is the document's: FolderChat or "" for the root.
+	Folder string
 }
 
 // RoomUsage returns what a room's blobs weigh, upload originals, annotation attachments and plugin
@@ -98,6 +124,42 @@ func (s *Store) AddUpload(ctx context.Context, u *Upload, defaultQuota int64) (*
 		return nil, fmt.Errorf("add upload: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	d, err := addUpload(ctx, tx, u, defaultQuota)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("add upload: %w", err)
+	}
+	return d, nil
+}
+
+// InsertMessageUploads stores chat message m and each upload as a document of the chat folder
+// listed under it, in one transaction: all or nothing (029-AC5). The quota is checked as AddUpload
+// does, upload after upload; a failed upload is an *UploadError. It fills m's ID, TS and Documents.
+func (s *Store) InsertMessageUploads(ctx context.Context, m *Message, ups []Upload, defaultQuota int64) error {
+	return s.withTx(ctx, "insert message uploads", func(tx *txn) error {
+		if err := insertMessage(ctx, tx, m); err != nil {
+			return err
+		}
+		docs := make([]MessageDocument, 0, len(ups))
+		for i, u := range ups {
+			u.Folder = FolderChat
+			d, err := addUpload(ctx, tx, &u, defaultQuota)
+			if err != nil {
+				return &UploadError{Index: i, Err: err}
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO message_documents(message_id, document_id, position) VALUES(?,?,?)`, m.ID, d.ID, i); err != nil {
+				return fmt.Errorf("insert message uploads: %w", err)
+			}
+			docs = append(docs, MessageDocument{ID: d.ID, Name: d.Name, Format: d.Format, Size: d.Size})
+		}
+		m.Documents = docs
+		return nil
+	})
+}
+
+func addUpload(ctx context.Context, tx *txn, u *Upload, defaultQuota int64) (*Document, error) {
 	// Checked inside the transaction: the write lock serialises it with concurrent uploads.
 	used, quota, err := roomUsage(ctx, tx, u.RoomID, defaultQuota)
 	if err != nil {
@@ -123,7 +185,7 @@ func (s *Store) AddUpload(ctx context.Context, u *Upload, defaultQuota int64) (*
 		return nil, fmt.Errorf("add upload: %w", err)
 	}
 	d := &Document{RoomID: u.RoomID, Kind: DocUpload, Name: u.Filename, Format: u.Format,
-		ContentType: u.ContentType, Size: int64(len(u.Data)), Author: u.Author}
+		ContentType: u.ContentType, Size: int64(len(u.Data)), Author: u.Author, Folder: u.Folder}
 	if err := insertDocument(ctx, tx, d, uploadID, ts); err != nil {
 		return nil, err
 	}
@@ -132,9 +194,6 @@ func (s *Store) AddUpload(ctx context.Context, u *Upload, defaultQuota int64) (*
 			return nil, err
 		}
 		d.Revisions = 1
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("add upload: %w", err)
 	}
 	return d, nil
 }
@@ -220,9 +279,9 @@ func insertDocument(ctx context.Context, tx *txn, d *Document, uploadID int64, t
 		up = uploadID
 	}
 	err := tx.QueryRowContext(ctx, `
-		INSERT INTO documents(room_id, kind, name, format, upload_id, author, created_at)
-		SELECT id, ?, ?, ?, ?, ?, ? FROM rooms WHERE id = ? RETURNING id`,
-		d.Kind, d.Name, d.Format, up, d.Author, ts, d.RoomID).Scan(&d.ID)
+		INSERT INTO documents(room_id, kind, name, format, upload_id, author, created_at, folder)
+		SELECT id, ?, ?, ?, ?, ?, ?, ? FROM rooms WHERE id = ? RETURNING id`,
+		d.Kind, d.Name, d.Format, up, d.Author, ts, d.Folder, d.RoomID).Scan(&d.ID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -244,7 +303,7 @@ func insertRevision(ctx context.Context, tx *txn, docID int64, n int, body, auth
 
 const documentCols = `
 	SELECT d.id, d.room_id, d.kind, d.name, d.format, COALESCE(u.content_type, ''), COALESCE(u.size, 0),
-		d.author, d.created_at, (SELECT COUNT(*) FROM revisions r WHERE r.document_id = d.id)
+		d.author, d.created_at, (SELECT COUNT(*) FROM revisions r WHERE r.document_id = d.id), d.folder
 	FROM documents d LEFT JOIN uploads u ON u.id = d.upload_id`
 
 type scanner interface{ Scan(dest ...any) error }
@@ -252,7 +311,7 @@ type scanner interface{ Scan(dest ...any) error }
 func scanDocument(sc scanner) (*Document, error) {
 	var d Document
 	var created string
-	if err := sc.Scan(&d.ID, &d.RoomID, &d.Kind, &d.Name, &d.Format, &d.ContentType, &d.Size, &d.Author, &created, &d.Revisions); err != nil {
+	if err := sc.Scan(&d.ID, &d.RoomID, &d.Kind, &d.Name, &d.Format, &d.ContentType, &d.Size, &d.Author, &created, &d.Revisions, &d.Folder); err != nil {
 		return nil, err
 	}
 	d.CreatedAt = parseTS(created)
