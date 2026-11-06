@@ -1,8 +1,111 @@
+diff --git a/src/auth/oauth.rs b/src/auth/oauth.rs
+index 03817eb..9944fd8 100644
+--- a/src/auth/oauth.rs
++++ b/src/auth/oauth.rs
+@@ -192,6 +192,56 @@ pub async fn refresh() -> Result<bool> {
+     Ok(true)
+ }
+ 
++/// Names of the tokens a command needs that are missing or expire within `margin_secs`:
++/// Skype and IC3 always (Trouter, epconv, mid-call acks), Graph only when asked for.
++fn stale_tokens(config: &Config, now: u64, margin_secs: u64, with_graph: bool) -> Vec<&'static str> {
++    let mut wanted = vec![("Skype", config.get_skype_token()), ("IC3", config.get_ic3_token())];
++    if with_graph {
++        wanted.push(("Graph", config.get_graph_token()));
++    }
++    wanted
++        .into_iter()
++        .filter(|(_, t)| match t {
++            None => true,
++            Some(t) => t.expires_at.is_some_and(|exp| now + margin_secs >= exp),
++        })
++        .map(|(name, _)| name)
++        .collect()
++}
++
++fn unix_now() -> Result<u64> {
++    Ok(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs())
++}
++
++/// Renews the tokens from the stored refresh token when some are stale, so one sign-in lasts as
++/// long as the refresh token does. `margin_secs` should cover the whole call.
++pub async fn ensure_fresh_tokens(margin_secs: u64, with_graph: bool) -> Result<()> {
++    let config = Config::load()?;
++    if stale_tokens(&config, unix_now()?, margin_secs, with_graph).is_empty() {
++        return Ok(());
++    }
++    anyhow::ensure!(config.get_refresh_token().is_some(), "Not signed in: run login");
++    let renewed = refresh().await.context("Token refresh failed: run login --force")?;
++    anyhow::ensure!(renewed, "Token refresh failed: run login --force");
++    // refresh() only warns when one exchange fails: check what it actually got.
++    let config = Config::load()?;
++    let expired = stale_tokens(&config, unix_now()?, 0, with_graph);
++    anyhow::ensure!(
++        expired.is_empty(),
++        "Could not renew the {} token(s): run login --force",
++        expired.join(", ")
++    );
++    let short = stale_tokens(&config, unix_now()?, margin_secs, with_graph);
++    if !short.is_empty() {
++        tracing::warn!(
++            "{} token(s) expire before the call ends; signed requests late in the call may fail",
++            short.join(", ")
++        );
++    }
++    tracing::info!("Tokens refreshed from the stored refresh token");
++    Ok(())
++}
++
+ /// Perform OAuth2 login flow
+ pub async fn login(force: bool) -> Result<()> {
+     {
+@@ -481,3 +531,41 @@ pub async fn status() -> Result<()> {
+ 
+     Ok(())
+ }
++
++#[cfg(test)]
++mod refresh_tests {
++    use super::*;
++
++    fn token(expires_at: Option<u64>) -> Option<crate::auth::StoredToken> {
++        Some(crate::auth::StoredToken { token: "t".into(), expires_at })
++    }
++
++    fn config(skype: Option<u64>, ic3: Option<u64>, graph: Option<u64>) -> Config {
++        let mut c = Config::default();
++        c.skype_token = token(skype);
++        c.ic3_token = token(ic3);
++        c.graph_token = token(graph);
++        c
++    }
++
++    #[test]
++    fn fresh_tokens_are_kept() {
++        let c = config(Some(10_000), Some(10_000), None);
++        assert!(stale_tokens(&c, 1_000, 2_400, true).is_empty());
++    }
++
++    #[test]
++    fn a_token_expiring_within_the_margin_is_named() {
++        let c = config(Some(10_000), Some(3_000), Some(10_000));
++        assert_eq!(stale_tokens(&c, 1_000, 2_400, true), vec!["IC3"]);
++        assert!(stale_tokens(&c, 1_000, 0, true).is_empty());
++    }
++
++    #[test]
++    fn a_missing_graph_token_only_matters_when_asked_for() {
++        let mut c = config(Some(10_000), Some(10_000), Some(10_000));
++        c.graph_token = None;
++        assert_eq!(stale_tokens(&c, 1_000, 2_400, true), vec!["Graph"]);
++        assert!(stale_tokens(&c, 1_000, 2_400, false).is_empty());
++    }
++}
 diff --git a/src/calling/call_test.rs b/src/calling/call_test.rs
-index 9375b55..e1d1e24 100644
+index 9375b55..02d7df8 100644
 --- a/src/calling/call_test.rs
 +++ b/src/calling/call_test.rs
-@@ -69,7 +69,14 @@ pub async fn run_call_test(
+@@ -69,7 +69,16 @@ pub async fn run_call_test(
      use_camera: bool,
      use_display: bool,
      tone_mode: bool,
@@ -14,10 +117,12 @@ index 9375b55..e1d1e24 100644
 +        tracing::info!("Capturing call media and signaling to {}", dir);
 +    }
 +    let meeting_target = meeting.as_deref().map(parse_meeting_url).transpose()?;
++    // Valid for the whole call plus 10 min, so a sign-in is only needed when the refresh token dies.
++    crate::auth::oauth::ensure_fresh_tokens(duration_secs + 600, false).await?;
      let config = Config::load().context("Failed to load config")?;
      let skype_token = config
          .get_skype_token()
-@@ -122,7 +129,9 @@ pub async fn run_call_test(
+@@ -122,7 +131,9 @@ pub async fn run_call_test(
      // 1. --echo: call the Echo bot
      // 2. --thread <id>: call a specific 1:1 thread
      // 3. otherwise: channel call via TEAMS_AV_TEST_THREAD_ID env var
@@ -28,7 +133,7 @@ index 9375b55..e1d1e24 100644
          (signaling::echo_thread_id(caller_oid), None)
      } else if let Some(ref tid) = thread_override {
          // Extract callee OID from 1:1 thread format: 19:{oid1}_{oid2}@unq.gbl.spaces
-@@ -294,8 +303,16 @@ pub async fn run_call_test(
+@@ -294,8 +305,16 @@ pub async fn run_call_test(
          chain_id: &chain_id,
          message_id: &message_id,
          caller_oid,
@@ -46,7 +151,7 @@ index 9375b55..e1d1e24 100644
  
      // Place the call: 1:1 calls (echo or thread) use single-shot epconv, channel uses two-phase
      let (phase1, _phase2) = if is_1to1_call {
-@@ -326,6 +343,10 @@ pub async fn run_call_test(
+@@ -326,6 +345,10 @@ pub async fn run_call_test(
              "Phase 2 complete. CC active URL: {:?}",
              joined.cc_active_url
          );
@@ -57,7 +162,7 @@ index 9375b55..e1d1e24 100644
          (created, joined)
      };
      println!("call_placed=true");
-@@ -348,7 +369,9 @@ pub async fn run_call_test(
+@@ -348,7 +371,9 @@ pub async fn run_call_test(
  
      // 7. Wait for mediaAnswer on Trouter
      tracing::info!("Waiting for media answer on Trouter...");
@@ -68,7 +173,7 @@ index 9375b55..e1d1e24 100644
          Ok(acc) => {
              if let Some(ref reason) = acc.rejection_reason {
                  tracing::warn!("Call rejected: {}", reason);
-@@ -399,6 +422,7 @@ pub async fn run_call_test(
+@@ -399,6 +424,7 @@ pub async fn run_call_test(
          "outgoing",
          true,
          video_ssrc,
@@ -76,7 +181,7 @@ index 9375b55..e1d1e24 100644
      )
      .await
      .context("Failed to set up outgoing media leg")?;
-@@ -492,13 +516,16 @@ pub async fn run_call_test(
+@@ -492,13 +518,16 @@ pub async fn run_call_test(
          false,
          speaker_tx,
          mic_rx,
@@ -93,7 +198,7 @@ index 9375b55..e1d1e24 100644
              let http = http.clone();
              let conversation_controller = phase1.conversation_controller.clone();
              let add_participant_url_override = phase1.add_participant_url.clone();
-@@ -550,7 +577,13 @@ pub async fn run_call_test(
+@@ -550,7 +579,13 @@ pub async fn run_call_test(
  
      // 10. Wait for test duration
      tracing::info!("Call active, running for {}s...", duration_secs);
@@ -108,7 +213,7 @@ index 9375b55..e1d1e24 100644
  
      // 11. Stop media
      outgoing_handles.abort_all();
-@@ -589,8 +622,8 @@ pub async fn run_call_test(
+@@ -589,8 +624,8 @@ pub async fn run_call_test(
      let rec = recorder.lock().await;
      let echo_result = test_tone::detect_echo(rec.samples(), 1000.0, 8000.0);
  
@@ -119,7 +224,7 @@ index 9375b55..e1d1e24 100644
          let pcm_path = "/tmp/received_audio.pcm";
          let samples = rec.samples();
          let mut f = std::fs::File::create(pcm_path).ok();
-@@ -684,6 +717,8 @@ struct MediaLeg {
+@@ -684,6 +719,8 @@ struct MediaLeg {
      video_local_pwd: String,
      /// Video SSRC matching the SDP x-ssrc-range.
      video_ssrc: u32,
@@ -128,7 +233,7 @@ index 9375b55..e1d1e24 100644
      /// Camera frame receiver (when --camera is active).
      #[cfg(feature = "video-capture")]
      camera_rx: Option<std::sync::mpsc::Receiver<camera::YuvFrame>>,
-@@ -727,6 +762,7 @@ async fn setup_media_leg(
+@@ -727,6 +764,7 @@ async fn setup_media_leg(
      label: &str,
      controlling: bool,
      video_ssrc: u32,
@@ -136,7 +241,7 @@ index 9375b55..e1d1e24 100644
  ) -> Result<MediaLeg> {
      // Decompress and log the full SDP for debugging
      let decompressed = crate::calling::sdp_compress::decompress_sdp(remote_sdp)
-@@ -737,6 +773,9 @@ async fn setup_media_leg(
+@@ -737,6 +775,9 @@ async fn setup_media_leg(
          decompressed.len(),
          decompressed
      );
@@ -146,7 +251,7 @@ index 9375b55..e1d1e24 100644
  
      let remote_offer = sdp::parse_sdp_offer(remote_sdp)
          .with_context(|| format!("Failed to parse {} remote SDP", label))?;
-@@ -854,6 +893,7 @@ async fn setup_media_leg(
+@@ -854,6 +895,7 @@ async fn setup_media_leg(
          video_remote_addr,
          video_local_pwd: local_video_pwd.to_string(),
          video_ssrc,
@@ -154,7 +259,7 @@ index 9375b55..e1d1e24 100644
          #[cfg(feature = "video-capture")]
          camera_rx: None,
          #[cfg(feature = "video-capture")]
-@@ -874,15 +914,12 @@ fn spawn_media_leg(
+@@ -874,15 +916,12 @@ fn spawn_media_leg(
      loopback: bool,
      speaker_tx: Option<std::sync::mpsc::SyncSender<Vec<i16>>>,
      mic_rx: Option<std::sync::mpsc::Receiver<Vec<i16>>>,
@@ -172,7 +277,7 @@ index 9375b55..e1d1e24 100644
  
      let send_stats = Arc::new(Mutex::new(rtcp::RtpSendStats {
          ssrc,
-@@ -940,6 +977,9 @@ fn spawn_media_leg(
+@@ -940,6 +979,9 @@ fn spawn_media_leg(
                          Ok(s) => s,
                          Err(_) => vec![0i16; rtp::SAMPLES_PER_PACKET],
                      }
@@ -182,7 +287,7 @@ index 9375b55..e1d1e24 100644
                  } else {
                      tone.next_frame()
                  };
-@@ -1024,6 +1064,9 @@ fn spawn_media_leg(
+@@ -1024,6 +1066,9 @@ fn spawn_media_leg(
                                  label,
                                  rtcp_data.len()
                              );
@@ -192,7 +297,7 @@ index 9375b55..e1d1e24 100644
                              let blocks = rtcp::parse_rtcp(&rtcp_data);
                              let mut rs = recv_stats.lock().await;
                              for block in &blocks {
-@@ -1048,6 +1091,9 @@ fn spawn_media_leg(
+@@ -1048,6 +1093,9 @@ fn spawn_media_leg(
                          };
                          match srtp_result {
                              Ok(rtp_data) => {
@@ -202,7 +307,7 @@ index 9375b55..e1d1e24 100644
                                  if let Ok(pkt) = rtp::decode(&rtp_data) {
                                      let mut rs = recv_stats.lock().await;
                                      rs.packets_received += 1;
-@@ -1067,8 +1113,9 @@ fn spawn_media_leg(
+@@ -1067,8 +1115,9 @@ fn spawn_media_leg(
                                      }
                                      drop(rssrc);
  
@@ -214,7 +319,7 @@ index 9375b55..e1d1e24 100644
                                          .create(true).append(true)
                                          .open("/tmp/received_audio.ulaw")
                                      {
-@@ -1753,7 +1800,10 @@ fn extract_json_from_frame(frame: &str) -> Option<&str> {
+@@ -1753,7 +1802,10 @@ fn extract_json_from_frame(frame: &str) -> Option<&str> {
              return Some(rest);
          }
      }
@@ -226,7 +331,7 @@ index 9375b55..e1d1e24 100644
  }
  
  /// End a call by posting to a specific end URL.
-@@ -1899,3 +1949,319 @@ fn write_wav(path: &str, samples: &[i16], sample_rate: u32) -> anyhow::Result<()
+@@ -1899,3 +1951,320 @@ fn write_wav(path: &str, samples: &[i16], sample_rate: u32) -> anyhow::Result<()
      }
      Ok(())
  }
@@ -308,11 +413,12 @@ index 9375b55..e1d1e24 100644
 +/// Prints calendar events with a Teams join link, from 2 h ago to 24 h ahead (Graph calendarView):
 +/// invites often show the short /meet/<id> form, while `onlineMeeting.joinUrl` may hold the long one.
 +pub async fn list_meetings() -> Result<()> {
++    crate::auth::oauth::ensure_fresh_tokens(300, true).await?;
 +    let config = Config::load().context("Failed to load config")?;
 +    let token = config
 +        .get_graph_token()
 +        .filter(|t| !t.is_expired())
-+        .context("No valid Graph token: run login again")?;
++        .context("No Graph token after refresh: this tenant may not grant one to the Teams client")?;
 +    let now = chrono::Utc::now();
 +    let url = format!(
 +        "https://graph.microsoft.com/v1.0/me/calendar/calendarView?startDateTime={}&endDateTime={}\

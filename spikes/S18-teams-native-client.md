@@ -79,10 +79,11 @@ The likely outcome is one mixed stream, with the speaker carried by the first CS
 
 ## 5. Checked offline [M]
 
-- The patched client builds from a clean clone in `rust:1.99.1-bookworm`. All 100 tests pass, 9 of them new:
+- The patched client builds from a clean clone in `rust:1.99.1-bookworm`. All 103 tests pass, 12 of them new:
   - 6 for the link forms, including the long link built from Graph parsing back;
   - 2 for SRTP with interleaved SSRCs;
-  - 1 for the RTP row (CSRCs, extension, padding).
+  - 1 for the RTP row (CSRCs, extension, padding);
+  - 3 for when the tokens get renewed.
 - `test_analyze.py` covers:
   - a sequence and timestamp wrap mid-stream;
   - a late packet across the wrap;
@@ -106,7 +107,7 @@ From the repository root, on a Linux host with Docker:
 
 ```sh
 spikes/s18-teams-native/run.sh build      # once: clone, patch, build and test (about 5 min, 4 CPUs)
-spikes/s18-teams-native/run.sh login      # device code: open the printed URL, enter the code, sign in
+spikes/s18-teams-native/run.sh login      # once: open the printed URL, enter the code, sign in
 spikes/s18-teams-native/run.sh meetings   # find the meeting's long join link
 spikes/s18-teams-native/run.sh check '<meetup-join link>'     # offline: thread, organizer, tenant
 spikes/s18-teams-native/run.sh join '<meetup-join link>'      # 30 min max, Ctrl-C hangs up
@@ -114,7 +115,7 @@ spikes/s18-teams-native/run.sh transcribe .scratchpad/s18/runs/<timestamp>   # n
 spikes/s18-teams-native/run.sh logout     # deletes the tokens
 ```
 
-- **Tokens.** `login` always signs in afresh: the Teams, IC3 and Graph tokens expire on their own clocks, about an hour for some. Sign in right before the meeting.
+- **Tokens.** Sign in once. `join` renews the Skype and IC3 tokens from the stored refresh token when one is missing or would expire before the call ends plus 10 min. `meetings` does the same for Graph. A token that still expires before the end, when the tenant's lifetime is shorter than the call, only gets a warning. `login --force` starts over if the refresh token itself is refused.
 - **Lobby.** The client waits 300 s to be admitted, then gives up.
 - **The link.** The client takes the long `.../l/meetup-join/19%3ameeting_...` form only. Recent invites often show a short `teams.microsoft.com/meet/<id>?p=...` link, which redirects to a launcher page and is resolved by the web client [M]. Try `meetings` first. Otherwise copy the link from an older invite of the same recurring meeting. Run `check` on it before the meeting starts.
 
@@ -127,7 +128,8 @@ spikes/s18-teams-native/run.sh logout     # deletes the tokens
   | `Phase 1 epconv failed (4xx)` | `S18_PHASE1_MEETING_INFO=1 run.sh join ...` |
   | Region or routing error | `TEAMS_REGION=emea TEAMS_PARTITION=<value> run.sh join ...` (values [U]: read `region`/`partition` in the authz response) |
   | `call_accepted=false` after 300 s | Nobody admitted it from the lobby: admit the second endpoint from Teams, or join with an account the lobby lets in |
-  | `IC3 token expired` / `No valid Graph token` | `run.sh login` again |
+  | `Not signed in` | `run.sh login` |
+  | `Token refresh failed` / `Could not renew` | `run.sh login --force` |
   | `Remote audio SSRC` never logged | Media did not flow: ICE failed. This client gathers host and STUN candidates only, no TURN |
   | Login refused | The tenant's Conditional Access blocks the client id. The spike stops there for that tenant |
 

@@ -20,7 +20,7 @@ usage() {
     cat >&2 <<EOF
 usage: $0 <command>
   build                      clone ost @$OST_REV, apply the S18 patch, build in Docker (4 CPUs)
-  login                      device-code sign-in with your work account (code to enter in a browser)
+  login [--force]            device-code sign-in, once: join and meetings renew the tokens themselves
   meetings                   calendar meetings, 2 h ago to 24 h ahead, with their join links (Graph)
   check <meetup-join-url>    parse a link offline: what the join would use, no network
   join <meetup-join-url> [minutes]
@@ -66,8 +66,7 @@ need_bin() {
 
 cmd_login() {
     need_bin
-    # --force: the Teams, IC3 and Graph tokens expire on their own clocks; a fresh sign-in renews all.
-    "$BIN" login --force
+    "$BIN" login "$@"
     "$BIN" whoami
 }
 
@@ -158,7 +157,7 @@ main() {
     shift
     case "$cmd" in
         build) cmd_build ;;
-        login) cmd_login ;;
+        login) cmd_login "$@" ;;
         meetings) cmd_meetings ;;
         check) cmd_check "$@" ;;
         join) cmd_join "$@" ;;
