@@ -60,6 +60,8 @@ type Options struct {
 	MaxAttachmentBytes int64
 	// ToMarkdown converts an office file read as the pandoc format from.
 	ToMarkdown func(ctx context.Context, from string, data []byte) (string, error)
+	// PandocTimeout bounds one ToMarkdown call; the chat composer waits that long per file (029-AC6).
+	PandocTimeout time.Duration
 	// Voice turns on LiveKit audio and transcription; nil leaves the room text only.
 	Voice *Voice
 	// TTSTokenHash is HashToken of the tts pod's token: set with Voice, personas speak in the call
@@ -266,6 +268,25 @@ func (s *Server) readFile(w http.ResponseWriter, part *multipart.Part, named boo
 
 func (s *Server) fileTooLarge() string {
 	return fmt.Sprintf("file is over the %s limit", sizeText(s.opts.MaxUploadBytes))
+}
+
+type uploadRules struct {
+	MaxBytes    int64  `json:"max_bytes"`
+	TooLarge    string `json:"too_large"`
+	Unsupported string `json:"unsupported"`
+	MaxFiles    int    `json:"max_files"`
+	TooMany     string `json:"too_many"`
+	// TimeoutMS is how long a message with files may take: each file is read and converted in turn.
+	TimeoutMS int64 `json:"timeout_ms"`
+}
+
+// sendSlack covers a message's transaction and the network beside its files' reads and conversions.
+const sendSlack = 30 * time.Second
+
+func (s *Server) uploadRules() uploadRules {
+	return uploadRules{MaxBytes: s.opts.MaxUploadBytes, TooLarge: s.fileTooLarge(), Unsupported: convert.ErrUnsupported.Error(),
+		MaxFiles: maxMessageFiles, TooMany: tooManyFilesText,
+		TimeoutMS: (maxMessageFiles*(uploadReadTimeout+s.opts.PandocTimeout) + sendSlack).Milliseconds()}
 }
 
 func filePrefix(name string, named bool) string {

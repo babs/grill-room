@@ -199,6 +199,8 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request, sess sessi
 // maxMessageFiles bounds the files sent with one chat message (029-AC3).
 const maxMessageFiles = 4
 
+var tooManyFilesText = fmt.Sprintf("at most %d files per message", maxMessageFiles)
+
 var bodyLenText = fmt.Sprintf("message must be 1 to %d characters", maxBodyLen)
 
 // postWithFiles stores m from a multipart body: its "body" field and up to maxMessageFiles "file"
@@ -258,7 +260,7 @@ func (s *Server) postWithFiles(w http.ResponseWriter, r *http.Request, sess sess
 			raw = &text
 		case "file":
 			if len(ups) == maxMessageFiles {
-				httpError(w, http.StatusBadRequest, fmt.Sprintf("at most %d files per message", maxMessageFiles))
+				httpError(w, http.StatusBadRequest, tooManyFilesText)
 				return false
 			}
 			if !s.uploadSlot(w) {

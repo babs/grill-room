@@ -454,10 +454,16 @@
     </aside>
     <form id="send">
       <ul id="mention-list" class="mention-list" role="listbox" aria-label="Mention" hidden></ul>
+      <button type="button" id="attach-open" class="btn-icon btn-ghost" aria-label="Attach files" data-tip="Attach files" data-icon="clip"></button>
+      <input type="file" id="attach-input" multiple hidden>
       <textarea id="body" rows="2" maxlength="4000" placeholder="Message the room · @ to mention" aria-label="Message" aria-describedby="send-hint"></textarea>
       <button type="submit" class="btn-icon" aria-label="Send" data-tip="Send" data-icon="send"></button>
+      <ul id="pending" aria-label="Files to send" hidden></ul>
+      <progress id="send-progress" max="1" value="0" aria-label="Sending" hidden></progress>
+      <p id="send-error" class="said error" role="status"></p>
       <p id="send-hint" class="hint" hidden>Enter sends, Shift+Enter adds a line.</p>
     </form>
+    <div class="drop-overlay" aria-hidden="true">Drop to send with your message</div>
   </section>
 </div>
 <nav id="tabbar" class="tabbar" aria-label="Room sections">

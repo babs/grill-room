@@ -72,6 +72,16 @@ export async function stopSTT(page) {
   await settled(page, () => page.goto(url));
 }
 
+// dropFiles drops files on target, as a file manager does: a DataTransfer built in the page.
+export async function dropFiles(page, target, files) {
+  const dt = await page.evaluateHandle((files) => {
+    const dt = new DataTransfer();
+    for (const f of files) dt.items.add(new File([f.body], f.name, { type: f.type }));
+    return dt;
+  }, files);
+  for (const type of ['dragenter', 'dragover', 'drop']) await page.locator(target).dispatchEvent(type, { dataTransfer: dt });
+}
+
 export function upload(page, name, mimeType, content) {
   return page.locator('#upload-input').setInputFiles({ name, mimeType, buffer: Buffer.from(content) });
 }

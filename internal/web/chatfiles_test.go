@@ -186,6 +186,42 @@ func TestPostMessageFileRefusals(t *testing.T) {
 	}
 }
 
+// 029-AC3: the room answer gives the page the upload limit and the texts the server refuses a
+// file with, so the composer refuses it on the spot in the same words.
+func TestRoomUploadRules(t *testing.T) {
+	opts := testOptions
+	opts.PandocTimeout = 7 * time.Second
+	e := newEnvOpts(t, opts)
+	room, alice := e.member(t)
+	code, b := e.do(t, "GET", "/api/rooms/"+room.ID, alice.Token, nil)
+	if code != http.StatusOK {
+		t.Fatalf("room: %d %s", code, b)
+	}
+	got := decodeJSON[roomResp](t, b).Upload
+	if got.MaxBytes != testOptions.MaxUploadBytes || got.MaxFiles != 4 {
+		t.Fatalf("max_bytes %d, max_files %d, want %d and 4", got.MaxBytes, got.MaxFiles, testOptions.MaxUploadBytes)
+	}
+	// The page waits as long as the server may take: 4 files read and converted in turn.
+	if want := (4*(uploadReadTimeout+7*time.Second) + sendSlack).Milliseconds(); got.TimeoutMS != want {
+		t.Fatalf("timeout_ms %d, want %d", got.TimeoutMS, want)
+	}
+	ok := formFile{"ok.md", []byte("# ok")}
+	_, b = e.postFiles(t, room.ID, alice.Token, "", ok, ok, ok, ok, ok)
+	if !strings.Contains(string(b), `"error":"`+got.TooMany+`"`) {
+		t.Fatalf("server said %s, the page would say %q", b, got.TooMany)
+	}
+	for _, f := range []struct {
+		file formFile
+		text string
+	}{{formFile{"big.md", md(20001)}, got.TooLarge}, {formFile{"notes.txt", []byte("hello")}, got.Unsupported}} {
+		_, b := e.postFiles(t, room.ID, alice.Token, "", f.file)
+		var answer struct{ Error string }
+		if err := json.Unmarshal(b, &answer); err != nil || answer.Error != f.file.name+": "+f.text {
+			t.Fatalf("server said %s, the page would say %q", b, f.file.name+": "+f.text)
+		}
+	}
+}
+
 // 029-AC5: a failure inside the transaction on the second of two files leaves no message, no
 // upload and no document; the room quota is re-checked there, naming the file.
 func TestPostMessageFilesRollback(t *testing.T) {
