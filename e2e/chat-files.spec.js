@@ -176,7 +176,7 @@ test('files refused on the spot', async ({ browser, request }) => {
   // Before the room has loaded, a file is not dropped silently: the composer says to add it again.
   await alice.evaluate(() => { uploadRules = null; });
   await dropFiles(alice, '.chat', [{ name: 'early.md', type: 'text/markdown', body: '# Early' }]);
-  await expect(alice.locator('#send-error')).toHaveText('The room is still loading, add the files again in a moment');
+  await expect(alice.locator('#send-error')).toHaveText('The room is still loading, try again in a moment');
   await expect(pending(alice)).toHaveCount(3);
 
   // Access ending mid-drag leaves no drop state behind.

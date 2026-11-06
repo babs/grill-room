@@ -4455,18 +4455,20 @@ $('voice-unlock').addEventListener('click', () => voice && voice.startAudio().th
 let uploadRules = null;
 const pending = [];
 const sendError = (text) => { $('send-error').textContent = text; };
+const stillLoading = 'The room is still loading, try again in a moment';
+const tooMany = () => uploadRules.too_many[0].toUpperCase() + uploadRules.too_many.slice(1);
 
 function addPending(files) {
   if (ended) return;
   // The rules come with the room: until it has loaded, nothing can be checked.
   if (!uploadRules) {
-    sendError('The room is still loading, add the files again in a moment');
+    sendError(stillLoading);
     return;
   }
   const refused = [];
   for (const file of files) {
     if (pending.length === uploadRules.max_files) {
-      refused.push(uploadRules.too_many[0].toUpperCase() + uploadRules.too_many.slice(1));
+      refused.push(tooMany());
       break;
     }
     if (!accepted.some((ext) => file.name.toLowerCase().endsWith(ext))) refused.push(file.name + ': ' + uploadRules.unsupported);
@@ -4517,15 +4519,72 @@ $('attach-input').addEventListener('change', (e) => {
 // A pasted image is a capture, named by the clock its sender reads (029-AC2). A clipboard that also
 // holds text (spreadsheet cells come with their picture) pastes the text alone.
 const captureExt = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp', 'image/svg+xml': '.svg' };
+function captureStem() {
+  const t = new Date();
+  const p2 = (n) => String(n).padStart(2, '0');
+  return 'capture-' + t.getFullYear() + p2(t.getMonth() + 1) + p2(t.getDate()) + '-' + p2(t.getHours()) + p2(t.getMinutes()) + p2(t.getSeconds());
+}
 bodyInput.addEventListener('paste', (e) => {
   if (!e.clipboardData || e.clipboardData.types.includes('text/plain')) return;
   const images = [...e.clipboardData.files].filter((f) => f.type.startsWith('image/'));
   if (!images.length) return;
-  const t = new Date();
-  const p2 = (n) => String(n).padStart(2, '0');
-  const stamp = t.getFullYear() + p2(t.getMonth() + 1) + p2(t.getDate()) + '-' + p2(t.getHours()) + p2(t.getMinutes()) + p2(t.getSeconds());
+  const stem = captureStem();
   // A type the room refuses gets no extension: the check refuses it in the server's words.
-  addPending(images.map((f) => new File([f], 'capture-' + stamp + (captureExt[f.type] || ''), { type: f.type })));
+  addPending(images.map((f) => new File([f], stem + (captureExt[f.type] || ''), { type: f.type })));
+});
+
+// One frame of a shared screen becomes a pending PNG; the share stops as soon as it is drawn
+// (029-AC15). Phones and browsers without getDisplayMedia get no button (029-AC16): Android may
+// define it only to refuse, so a touch-only device counts as a phone.
+const finePointer = matchMedia('(any-pointer: fine)');
+const showCapture = () => { $('capture-open').hidden = !navigator.mediaDevices?.getDisplayMedia || !finePointer.matches; };
+showCapture();
+// A 2-in-1 gains a fine pointer when its keyboard and trackpad are attached.
+finePointer.addEventListener('change', showCapture);
+let capturing = false;
+$('capture-open').addEventListener('click', async () => {
+  if (capturing || ended) return;
+  // Refused before the picker: sharing a screen only to be told no is worse.
+  if (!uploadRules) return sendError(stillLoading);
+  if (pending.length >= uploadRules.max_files) return sendError(tooMany());
+  // A cancelled retry must not leave the last failure shown.
+  sendError('');
+  capturing = true;
+  /** @type {MediaStream | undefined} */
+  let stream;
+  const stop = () => { for (const t of stream?.getTracks() || []) t.stop(); };
+  try {
+    const Controller = /** @type {any} */ (window).CaptureController;
+    const controller = Controller ? new Controller() : undefined;
+    stream = await navigator.mediaDevices.getDisplayMedia(/** @type {DisplayMediaStreamOptions} */ (controller ? { video: true, controller } : { video: true }));
+    // A shared tab would take the focus; the person stays here to send the frame.
+    try { controller?.setFocusBehavior('no-focus-change'); } catch { /* too late, or not a tab */ }
+    const video = Object.assign(document.createElement('video'), { muted: true, playsInline: true });
+    const live = /** @type {MediaStream} */ (stream);
+    // A share that sends no frame settles neither play() nor loadeddata: the clock bounds the wait.
+    let timer;
+    const loaded = new Promise((resolve, reject) => {
+      video.addEventListener('loadeddata', resolve, { once: true });
+      for (const t of live.getVideoTracks()) t.addEventListener('ended', () => reject(new Error('The share ended before its first frame.')), { once: true });
+      timer = setTimeout(() => reject(new Error('The screen sent no picture.')), 5000);
+    });
+    video.srcObject = live;
+    video.play().catch(() => {});
+    await loaded.finally(() => clearTimeout(timer));
+    const canvas = Object.assign(document.createElement('canvas'), { width: video.videoWidth, height: video.videoHeight });
+    /** @type {CanvasRenderingContext2D} */ (canvas.getContext('2d')).drawImage(video, 0, 0);
+    stop();
+    video.srcObject = null;
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('The frame could not be encoded.');
+    addPending([new File([blob], captureStem() + '.png', { type: 'image/png' })]);
+  } catch (err) {
+    // A refused or cancelled picker is an answer, not a failure (029-AC16).
+    if (err?.name !== 'NotAllowedError' && err?.name !== 'AbortError') sendError('Screen capture failed: ' + String(err?.message || err?.name || 'unknown error').replace(/\.?$/, '.'));
+  } finally {
+    stop();
+    capturing = false;
+  }
 });
 
 // postFiles sends the message as multipart, its upload's progress on the bar (029-AC6).

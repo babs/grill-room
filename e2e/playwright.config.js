@@ -14,7 +14,7 @@ const deviceSpec = 'device-stt.spec.js';
 
 // The specs that also run in Firefox.
 // mentions.spec.js: its daemon tests skip there, the firefox project runs beside the parallel one.
-const firefoxSpecs = ['doc-frames.spec.js', 'documents.spec.js', 'ui-guards.spec.js', 'isolation.spec.js', 'mentions.spec.js'];
+const firefoxSpecs = ['doc-frames.spec.js', 'documents.spec.js', 'ui-guards.spec.js', 'isolation.spec.js', 'mentions.spec.js', 'screen-capture.spec.js'];
 
 // The specs whose daemons run agent turns, each in a Docker sandbox.
 const sandboxSpecs = ['admin', 'agent', 'approvals', 'concurrency', 'egress', 'export-import', 'handoff', 'mentions', 'personas',

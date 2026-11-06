@@ -58,8 +58,8 @@ The chat composer takes files: paste a capture, drop files on the chat, or pick 
 - [ ] **AC14** Room export carries each document's folder and each message's document ids; importing it gives the same Chat folder and the same thumbnails and chips. `docs/export-format.md` documents both. Deleting the room removes the links (001-AC4).
 
 ### Screen capture (user, 2026-11-06)
-- [ ] **AC15** The composer has a "Capture screen" button (icon from the icon set, 44 × 44 px target), next to the paperclip. It calls `navigator.mediaDevices.getDisplayMedia({ video: true })` once, draws the first frame into a canvas, stops every track of the stream at once, and adds the PNG to the pending files as `capture-YYYYMMDD-HHMMSS.png` (browser local time, the naming of AC2). It follows the rules of the other pending files (AC3: the limit of 4, the size).
-- [ ] **AC16** The button is absent when `getDisplayMedia` does not exist: on phones and in browsers without support. A refusal or a cancelled picker leaves nothing pending and shows no error. Any other failure shows its error in the composer.
+- [ ] **AC15** The composer has a "Capture screen" button (icon from the icon set, 44 × 44 px target at 390 px, as the paperclip), next to the paperclip. It calls `navigator.mediaDevices.getDisplayMedia({ video: true })` once (with a `CaptureController` asking the browser not to move focus to the shared tab, where supported), draws the first frame into a canvas, stops every track of the stream at once, and adds the PNG to the pending files as `capture-YYYYMMDD-HHMMSS.png` (browser local time, the naming of AC2). It follows the rules of the other pending files (AC3: the limit of 4, the size).
+- [ ] **AC16** The button is absent when `getDisplayMedia` does not exist or the device has no fine pointer (touch-only: phones, tablets without mouse or pen, since Android browsers may define `getDisplayMedia` only to refuse it); it comes back when a fine pointer is attached. A refusal or a cancelled picker leaves nothing pending and shows no error. Any other failure shows its error in the composer.
 
 ## Phases
 
@@ -82,10 +82,10 @@ The chat composer takes files: paste a capture, drop files on the chat, or pick 
 - **DoD**: e2e (Playwright) at 1440 and 390 px: paste a PNG through a synthetic `ClipboardEvent`, drop two files, send; another participant sees the thumbnail and the chip live, opens both; the Chat folder lists them; a fifth file and an oversize file are refused on the spot; a failed send keeps the pending files. The existing e2e suite stays green.
 
 ### Phase 4 — Screen capture
-- Work: the "Capture screen" button, one-shot frame grab, tracks stopped, PNG added to the pending files; hidden without `getDisplayMedia`.
+- Work: the "Capture screen" button, one-shot frame grab, tracks stopped, PNG added to the pending files; hidden without `getDisplayMedia` or a fine pointer, shown again when one is attached.
 - **Covers**: AC15, AC16
 - **Data model impact**: none
-- **DoD**: e2e (Playwright) in Chrome with `--auto-select-desktop-capture-source` / `--use-fake-ui-for-media-stream`, or a stub of `getDisplayMedia` if headless cannot capture (the one used is recorded here): a PNG is pending, every track reads `readyState === 'ended'`, the message sends. At 390 px with no `getDisplayMedia`, the button is absent. A rejected picker (`NotAllowedError`) leaves nothing pending and no error.
+- **DoD**: e2e (Playwright) in Chrome with `--auto-select-desktop-capture-source` / `--use-fake-ui-for-media-stream`, or a stub of `getDisplayMedia` if headless cannot capture (the one used is recorded here: a stub, a canvas stream; headless Chrome answers `NotReadableError` even with both flags): a PNG is pending, every track reads `readyState === 'ended'`, the message sends. At 390 px with no `getDisplayMedia`, and on a touch phone that defines it, the button is absent. A rejected picker (`NotAllowedError`) leaves nothing pending and no error.
 
 ## Data model impact (summary)
 

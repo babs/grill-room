@@ -321,6 +321,7 @@
     settings: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
     personas: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
     host: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
+    screen: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4M6 9V7h2M18 9V7h-2M6 11v2h2M18 11v2h-2"/>',
     rename: '<path d="M12 20h9"/><path d="M16.4 3.6a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z"/>',
     bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0"/>',
     textsize: '<path d="m3 16 4.5-9 4.5 9M4.5 13h6M16 16v-3.5a2.5 2.5 0 0 1 5 0V16M21 14h-5"/>',
@@ -399,7 +400,8 @@
     tipFor = el;
     tip.textContent = /** @type {HTMLElement} */ (el).dataset.tip || '';
     // A control's tip lets the pointer through: shown under a row, it would take the next row's click.
-    tip.classList.toggle('pass', el.matches('button, a, [role=button]'));
+    // In the room's composer too: a pending file's tip lands over the composer's buttons.
+    tip.classList.toggle('pass', el.matches('button, a, [role=button]') || !!el.closest('#send'));
     if (!tip.matches(':popover-open')) tip.showPopover();
     window.grillPlace(tip, el);
   };
