@@ -133,7 +133,7 @@ spikes/s18-teams-native/run.sh logout     # deletes the tokens
 
 ## 7. Risks
 
-- **Terms of use.** The Microsoft Services Agreement (§8.b.ii) and the commercial Product Terms forbid reverse engineering and "unauthorized third-party applications". This is fine for a spike. Shipping it needs a decision, and a tenant admin may reasonably object.
+- **Tenant policy.** A tenant admin can block this client: Conditional Access on its client id, or guest and lobby rules.
 - **Protocol churn.** Every endpoint, header and capability bitmask here was copied from web client traffic. Any change on Microsoft's side breaks the join with no notice.
 - **Audio quality.** PCMU at 8 kHz is telephone band. Parakeet handled it on the fixture. A real meeting adds the mixer's processing and overlapping speech.
 
@@ -145,4 +145,4 @@ The bridge is small next to the rest of grill-room:
 3. Cut the mix by first CSRC.
 4. Publish each speaker as a LiveKit participant.
 
-The STT worker then transcribes each one unchanged (spec 007). That would be a Go port of the parts used here: signaling, ICE, SDES SRTP and the RTP demux. `pion/srtp` takes SDES keys and the LiveKit Go SDK publishes tracks. The decision on terms of use comes before any of that.
+The STT worker then transcribes each one unchanged (spec 007). That would be a Go port of the parts used here: signaling, ICE, SDES SRTP and the RTP demux. `pion/srtp` takes SDES keys and the LiveKit Go SDK publishes tracks.
