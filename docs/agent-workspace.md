@@ -11,6 +11,7 @@ The Go side of this contract is `internal/turn`. Change both together.
 | `docs/<name>.md`, `docs/<name>.html` | writable | the agent's documents, latest revision |
 | `uploads/<id>-<name>` | read-only | a participant's upload, byte for byte (PDF and images go to Claude as they are) |
 | `uploads/<id>-<name>.md` | read-only | pandoc's Markdown copy of a DOCX, ODT or PPTX upload |
+| `uploads/chat/<id>-<name>`, `uploads/chat/<id>-<name>.md` | read-only | a file a participant sent with a chat message (spec 029), and the Markdown copy of an office one |
 | `transcript/<YYYY-MM-DD>/<NNN>.md` | read-only | every room message up to the turn's start: a folder per UTC day, chunks of 200 messages from `001.md` |
 | `annotations.md` | read-only | every annotation thread, with its id, document path, anchor and status |
 | `attachments/<id>.<ext>` | read-only | images attached to annotation messages, referenced from `annotations.md` |
@@ -19,7 +20,7 @@ The Go side of this contract is `internal/turn`. Change both together.
 
 The id prefix on uploads keeps two uploads with the same name apart.
 
-A transcript chunk holds 200 messages, so about 200 lines. Chunks are counted in messages, not lines: an edit that makes a message longer must not push later messages into another chunk. Messages only append, so a full chunk keeps its bytes from turn to turn and stays in the daemon's cache. It changes only when one of its messages is edited or deleted, which the prompt flags anyway (item 5 below). New messages land in the day's last chunk. The chunk header names the day and the part, not the room, so a room rename rewrites nothing. Before spec 003 the layout was one `transcript/<YYYY-MM-DD>.md` per day; a resumed session that remembers those paths reads the prompt's layout line, which names the new ones. The daemon wipes `/workspace` before unpacking, so nothing carries over from a previous turn, even when most files came from its cache (wire protocol, step 3). The read-only modes only stop honest edits; the server is what enforces D30.
+A transcript chunk holds 200 messages, so about 200 lines. Chunks are counted in messages, not lines: an edit that makes a message longer must not push later messages into another chunk. Messages only append, so a full chunk keeps its bytes from turn to turn and stays in the daemon's cache. It changes only when one of its messages is edited or deleted, which the prompt flags anyway (item 5 below), or when a file one of its messages lists is renamed or deleted, which the room's system line says. New messages land in the day's last chunk. The chunk header names the day and the part, not the room, so a room rename rewrites nothing. Before spec 003 the layout was one `transcript/<YYYY-MM-DD>.md` per day; a resumed session that remembers those paths reads the prompt's layout line, which names the new ones. The daemon wipes `/workspace` before unpacking, so nothing carries over from a previous turn, even when most files came from its cache (wire protocol, step 3). The read-only modes only stop honest edits; the server is what enforces D30.
 
 ## Personas
 
@@ -33,9 +34,9 @@ The server writes the prompt when the turn starts and stores it on the turn. The
 
 1. The presence preamble, below.
 2. The persona's name and the room's, and that other agents' lines are tagged `(agent)`.
-3. The layout above, in plain words, the rule that uploads are read-only, the naming rule for new documents, and both annotation outputs.
+3. The layout above, in plain words, with `uploads/chat/` as the files participants sent in the chat, listed under their message in the transcript, the rule that uploads are read-only, the naming rule for new documents, and both annotation outputs.
 4. "This is a new session" when the turn does not resume: the persona's first turn, a fresh session (D15), or a lost session copy. The agent is told to read `transcript/`, oldest first. The first turn of a session started by a handoff is told to read `docs/_handoff-<persona>.md` first (see Handoff).
-5. "Changed since your last turn": lines the persona's last successful turn saw that their author edited or deleted since, as `edited: <the text it saw> → <the text now>` or `deleted: <the text it saw>`. A line edited back to the text the agent saw is left out.
+5. "Changed since your last turn": lines the persona's last successful turn saw that their author edited or deleted since, as `edited: <the text it saw> → <the text now>` or `deleted: <the text it saw>`. A line sent with files and no text reads `(files only)`. A line edited back to the text the agent saw is left out.
 6. The messages since the persona's last successful turn, with day and time, sender, `(voice)` for speech and `(agent)` for another persona's synthesis. The persona's own syntheses are left out, since its session already holds them. Only the latest 100 KB are quoted; the prompt says how many earlier lines are in `transcript/`.
 7. The annotation threads with a message by anyone but this persona since its last successful turn, in full, with those messages flagged `(new)` and image paths listed. A thread whose participants named other personas, and not this one, is theirs and left out (009-AC30); `annotations.md` still has it. A thread whose `@name` queued this turn comes first, under "You were mentioned in note #<id>" (009-AC29).
 8. On a handoff's last turn, a "Handoff" section asking for `docs/_handoff-<persona>.md`.
@@ -107,6 +108,8 @@ A failed turn does not move the cursors: the next turn of that persona quotes it
 
 Lines show their current text. An edited line is tagged `(edited)`, and a deleted one `(deleted)` with the text it had: a delete hides a line from participants, not from the agent. That holds in the prompt and in `transcript/`.
 
+A chat message sent with files is followed by one indented line per file, in the order sent: `  - file: uploads/chat/<id>-<name>`, the `.md` copy for an office file, under the document's current name. A document deleted since shows as `  - file: (deleted) <name>`. A message of files only has no text after the sender.
+
 ## Context use and autocompact
 
 Each persona has an `autocompact` setting (003-AC24), set on the persona sheet's Model tab next to its model: `auto` (the default, stored as 0) or a token count from 100,000 to 1,000,000, the range `claude --autocompact` accepts in Claude Code 2.1.296. The job carries it as `autocompact`, and the daemon passes `--autocompact <tokens>`, or no flag for auto. A value out of that range never reaches `claude`.
@@ -145,7 +148,7 @@ Documents are the room's, not a persona's: any persona may revise any agent docu
 
 An agent document never takes an upload's name, or the room would list two documents as one. The prompt asks the agent to name its version of `plan.md` something like `plan-revised.md`. A new document named like an upload anyway is stored as `plan-agent.md` (with `-agent` again until no upload has the name), and a system message says so. Later writes to `docs/plan.md` revise that document. An agent document that had its name before a participant uploaded a file of the same name keeps it, so the list shows two documents with that name. Their tooltips tell them apart.
 
-`doc` in `annotations-new.json` is a workspace path: `docs/<name>`, `uploads/<id>-<name>`, or an office upload's `.md` copy. Annotating an upload is not editing it, so D30 holds. The quote is a text anchor placed on the document's latest revision, after this turn's document writes, so it may quote what the turn just wrote. Whitespace is folded and the quote must appear word for word in the rendered text; prefix and suffix only pick among several hits. A turn opens at most 50.
+`doc` in `annotations-new.json` is a workspace path: `docs/<name>`, `uploads/<id>-<name>`, `uploads/chat/<id>-<name>`, or an office upload's `.md` copy. Annotating an upload is not editing it, so D30 holds. The quote is a text anchor placed on the document's latest revision, after this turn's document writes, so it may quote what the turn just wrote. Whitespace is folded and the quote must appear word for word in the rendered text; prefix and suffix only pick among several hits. A turn opens at most 50.
 
 A participant reply on a thread the agent closed reopens it, as for any thread. A close is not applied when a participant wrote in the thread after the turn read it: the agent's reply lands, the thread stays open, and the report says why. The next prompt quotes that thread, with the reply flagged `(new)`. A thread holding only the agent's own messages is not quoted back to it.
 

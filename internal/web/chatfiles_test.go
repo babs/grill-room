@@ -2,16 +2,19 @@ package web
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/babs/grill-room/internal/store"
+	"github.com/babs/grill-room/internal/turn"
 )
 
 type formFile struct {
@@ -403,5 +406,75 @@ func TestPostMessageFilesDeadline(t *testing.T) {
 	defer resp.Body.Close()
 	if b, _ := io.ReadAll(resp.Body); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("slow message: %d %s, want 201", resp.StatusCode, b)
+	}
+}
+
+// 029-AC11 029-AC12: chat documents sit read-only in uploads/chat/<id>-<name>, an office file with
+// its Markdown copy beside it; the transcript and the prompt list them under their message, a
+// deleted one by name; a change under uploads/chat/ is refused, and an annotation on a chat path
+// lands on the document.
+func TestChatDocumentsInWorkspace(t *testing.T) {
+	e := newEnv(t)
+	r := newTurnRoom(t, e)
+	alice := r.alice
+	ctx := t.Context()
+	p := alice.p.Participant
+	up := func(name, typ, format, data, text string) store.Upload {
+		return store.Upload{RoomID: r.room, ParticipantID: p.ID, Author: p.Name, Filename: name, ContentType: typ, Format: format, Data: []byte(data), Text: text}
+	}
+	m := &store.Message{RoomID: r.room, Kind: store.KindText, ParticipantID: p.ID, Sender: p.Name}
+	err := e.st.InsertMessageUploads(ctx, m, []store.Upload{
+		up("notes.md", "text/markdown; charset=utf-8", "md", "# Notes\n\nShip on Friday.\n", "# Notes\n\nShip on Friday.\n"),
+		up("deck.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "md", "PK...", "# Deck\n"),
+		up("gone.md", "text/markdown; charset=utf-8", "md", "# Gone\n", "# Gone\n"),
+	}, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.SetDocumentDeleted(ctx, r.room, m.Documents[2].ID, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	notes := fmt.Sprintf("uploads/chat/%d-notes.md", m.Documents[0].ID)
+	deck := fmt.Sprintf("uploads/chat/%d-deck.docx", m.Documents[1].ID)
+	files := fmt.Sprintf("**%s**:\n  - file: %s\n  - file: %s.md\n  - file: (deleted) gone.md\n", p.Name, notes, deck)
+
+	tn := e.press(t, r, alice, alice.p.Token, false)
+	job := e.job(t, r, alice, tn.ID)
+	for _, want := range []string{files, "uploads/chat/: files participants sent in the chat"} {
+		if !strings.Contains(job.Prompt, want) {
+			t.Errorf("prompt lacks %q:\n%s", want, job.Prompt)
+		}
+	}
+	ws := e.workspace(t, r, alice, tn.ID)
+	for path, want := range map[string]tarFile{
+		notes:        {0o444, "# Notes\n\nShip on Friday.\n"},
+		deck:         {0o444, "PK..."},
+		deck + ".md": {0o444, "# Deck\n"},
+	} {
+		if got := ws[path]; got != want {
+			t.Errorf("%s = %+v, want %+v", path, got, want)
+		}
+	}
+	for path := range ws {
+		if strings.Contains(path, "gone") {
+			t.Errorf("deleted document in the workspace: %s", path)
+		}
+	}
+	day := time.Now().UTC().Format(time.DateOnly)
+	if tr := ws["transcript/"+day+"/001.md"].data; !strings.Contains(tr, files) {
+		t.Errorf("transcript lacks the files:\n%s", tr)
+	}
+
+	anns, _ := json.Marshal([]turn.NewAnnotation{{Doc: notes, Exact: "Friday", Body: "Which Friday?"}})
+	code, b := e.result(t, r, alice, tn.ID, turn.Result{Synthesis: "Asked.", SessionID: sid1, Session: []byte("one\n"),
+		Changes: []turn.Change{{Path: deck}, {Path: turn.NewAnnotationsFile, Content: anns}}})
+	if code != http.StatusOK {
+		t.Fatalf("result: %d %s", code, b)
+	}
+	if done := decodeJSON[store.Turn](t, b); !slices.Equal(done.Report.Rejected, []string{deck}) || done.Report.Annotated != 1 || len(done.Report.Ignored) != 0 {
+		t.Fatalf("turn report %+v", done.Report)
+	}
+	if got, err := e.st.Annotations(ctx, r.room, m.Documents[0].ID); err != nil || len(got) != 1 || got[0].Anchor == nil || got[0].Anchor.Exact != "Friday" {
+		t.Fatalf("annotation on the chat document: %+v, %v", got, err)
 	}
 }

@@ -210,3 +210,25 @@ func TestFakeFetch(t *testing.T) {
 		t.Fatalf("no domain: %d %+v", code, o)
 	}
 }
+
+// 029-AC11: uploads/chat is a directory, never the upload FAKE_EDIT_UPLOAD or FAKE_ANNOTATE picks.
+func TestFakeSkipsChatDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake claude runs in the Linux sandbox only")
+	}
+	cwd, home := t.TempDir(), t.TempDir()
+	chat := filepath.Join(cwd, "uploads", "chat")
+	if err := os.MkdirAll(chat, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(chat, "3-shot.md"), []byte("# Shot\n\nLook here.\n"), 0o444)
+	if o, _ := call(t, cwd, home, "FAKE_EDIT_UPLOAD"); !o.IsError || o.Result != "no upload to edit" {
+		t.Fatalf("edit with chat files only: %+v", o)
+	}
+	if fi, err := os.Stat(chat); err != nil || fi.Mode().Perm() != 0o755 {
+		t.Fatalf("chat dir %v, %v", fi.Mode(), err)
+	}
+	if o, _ := call(t, cwd, home, "FAKE_ANNOTATE"); !o.IsError || o.Result != "no Markdown upload to annotate" {
+		t.Fatalf("annotate with chat files only: %+v", o)
+	}
+}

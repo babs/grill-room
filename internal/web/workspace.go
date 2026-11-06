@@ -38,9 +38,9 @@ func agentPath(d store.Document) string {
 	return fmt.Sprintf("%s/doc-%d.%s", turn.DocsDir, d.ID, d.Format)
 }
 
-// uploadPath prefixes the id: two uploads may share a name.
+// uploadPath prefixes the id: two uploads may share a name. A chat document sits in uploads/chat/.
 func uploadPath(d store.Document) string {
-	return fmt.Sprintf("%s/%d-%s", turn.UploadsDir, d.ID, strings.ReplaceAll(d.Name, "/", "_"))
+	return path.Join(turn.UploadsDir, d.Folder, fmt.Sprintf("%d-%s", d.ID, strings.ReplaceAll(d.Name, "/", "_")))
 }
 
 func isOffice(d store.Document) bool {
@@ -132,7 +132,8 @@ func buildPrompt(in promptInput) string {
 	b.WriteString(`Your workspace is the current directory:
 - docs/: the documents the room's agents write, Markdown (.md) or HTML (.html). Edit them or add new ones; every change becomes a revision the room sees. Give a new document a name no upload has: your version of uploads/<id>-plan.md goes in docs/plan-revised.md, for example. A new document named like an upload is stored as <name>-agent.md.
 - uploads/: documents participants uploaded. They are read-only: never edit, move or delete them; write your own documents from them. Office files have a Markdown copy beside them, ending in .md.
-- transcript/: everything said in the room, a folder per UTC day (transcript/<YYYY-MM-DD>/) of Markdown files of 200 messages each, 001.md first. Only the last file of a day grows; an earlier one changes only when one of its lines was edited or deleted. Earlier turns may name transcript/<YYYY-MM-DD>.md: that layout is gone.
+- uploads/chat/: files participants sent in the chat, read-only like the other uploads. The transcript lists each under its message, as "- file: uploads/chat/<id>-<name>".
+- transcript/: everything said in the room, a folder per UTC day (transcript/<YYYY-MM-DD>/) of Markdown files of 200 messages each, 001.md first. Only the last file of a day grows; an earlier one changes only when one of its lines was edited or deleted, or a file it lists was renamed or deleted. Earlier turns may name transcript/<YYYY-MM-DD>.md: that layout is gone.
 - annotations.md: every annotation thread on the documents, with its id. Images attached to threads are in attachments/.
 - To answer annotation threads, write replies.json: [{"annotation": <id>, "body": "<your reply>"}]. Add "status": "done" to a reply that settles its thread; a participant who replies later reopens it.
 - To point the participants at a passage, any document included, uploads too, write annotations-new.json: [{"doc": "<its path here, like uploads/3-plan.md>", "exact": "<the passage, word for word as it reads, without Markdown marks>", "prefix": "<the few words before it>", "suffix": "<the few words after it>", "body": "<your question or remark>"}]. Use it for what needs an answer from someone, not to repeat your synthesis.
@@ -165,7 +166,7 @@ func buildPrompt(in promptInput) string {
 		size := 0
 		first := len(msgs)
 		for i := len(msgs) - 1; i >= 0; i-- {
-			lines[i] = transcriptLine(msgs[i], true)
+			lines[i] = transcriptLine(msgs[i], true, in.Paths)
 			if size += len(lines[i]); size > maxPromptTranscript {
 				break
 			}
@@ -206,8 +207,9 @@ func buildPrompt(in promptInput) string {
 	return b.String()
 }
 
-// transcriptLine renders one message; dated lines carry the day for the prompt, which spans days.
-func transcriptLine(m store.Message, dated bool) string {
+// transcriptLine renders one message and the files it was sent with, at their paths; dated lines
+// carry the day for the prompt, which spans days.
+func transcriptLine(m store.Message, dated bool, paths map[int64]string) string {
 	layout := "15:04:05"
 	if dated {
 		layout = "2006-01-02 15:04:05"
@@ -234,7 +236,20 @@ func transcriptLine(m store.Message, dated bool) string {
 	if len(tags) > 0 {
 		who += " (" + strings.Join(tags, ", ") + ")"
 	}
-	return fmt.Sprintf("- %s %s: %s\n", ts, who, body)
+	line := fmt.Sprintf("- %s %s:", ts, who)
+	if body != "" {
+		line += " " + body
+	}
+	line += "\n"
+	for _, d := range m.Documents {
+		// paths holds live documents only.
+		if p, ok := paths[d.ID]; ok {
+			line += "  - file: " + p + "\n"
+		} else {
+			line += "  - file: (deleted) " + d.Name + "\n"
+		}
+	}
+	return line
 }
 
 func indent(body string) string { return strings.ReplaceAll(strings.TrimSpace(body), "\n", "\n  ") }
@@ -246,10 +261,14 @@ func changeLine(c store.MessageChange) string {
 		who += " (voice)"
 	}
 	ts := c.TS.UTC().Format("2006-01-02 15:04:05")
-	if c.DeletedAt != nil {
-		return fmt.Sprintf("- %s %s deleted: %s\n", ts, who, indent(c.Before))
+	before := indent(c.Before)
+	if before == "" {
+		before = "(files only)"
 	}
-	return fmt.Sprintf("- %s %s edited: %s → %s\n", ts, who, indent(c.Before), indent(c.Body))
+	if c.DeletedAt != nil {
+		return fmt.Sprintf("- %s %s deleted: %s\n", ts, who, before)
+	}
+	return fmt.Sprintf("- %s %s edited: %s → %s\n", ts, who, before, indent(c.Body))
 }
 
 func describeAnchor(a *anchor.Anchor) string {
@@ -348,7 +367,8 @@ func (s *Server) walkWorkspace(ctx context.Context, t *store.Turn, visit wsFile)
 			}
 		}
 	}
-	if err := s.writeTranscript(ctx, t, file); err != nil {
+	paths := docPaths(docs)
+	if err := s.writeTranscript(ctx, t, paths, file); err != nil {
 		return err
 	}
 	anns, _, err := st.AnnotationsSince(ctx, t.RoomID, 0)
@@ -360,7 +380,6 @@ func (s *Server) walkWorkspace(ctx context.Context, t *store.Turn, visit wsFile)
 	if len(anns) == 0 {
 		b.WriteString("None yet.\n")
 	}
-	paths := docPaths(docs)
 	for _, a := range anns {
 		writeThread(&b, a, paths, 0, 0)
 		for _, m := range a.Messages {
@@ -426,9 +445,10 @@ func (s *Server) manifest(ctx context.Context, t *store.Turn) (*turn.Manifest, e
 
 // writeTranscript writes the room's messages up to the turn's cursor: a folder per UTC day, of
 // chunks of turn.TranscriptChunk messages (003-AC23). Messages only ever append, so a full chunk
-// changes only when one of its messages is edited or deleted, and a daemon's cache keeps the rest.
-// The header names no room: a rename would rewrite every chunk.
-func (s *Server) writeTranscript(ctx context.Context, t *store.Turn, file wsFile) error {
+// changes only when one of its messages is edited or deleted, or a file one lists is renamed or
+// deleted, and a daemon's cache keeps the rest. The header names no room: a rename would rewrite
+// every chunk.
+func (s *Server) writeTranscript(ctx context.Context, t *store.Turn, paths map[int64]string, file wsFile) error {
 	var day string
 	var n int // messages of the day so far
 	var buf bytes.Buffer
@@ -463,7 +483,7 @@ func (s *Server) writeTranscript(ctx context.Context, t *store.Turn, file wsFile
 				fmt.Fprintf(&buf, "# %s (UTC), part %d\n\n", day, n/turn.TranscriptChunk+1)
 			}
 			n++
-			buf.WriteString(transcriptLine(m, false))
+			buf.WriteString(transcriptLine(m, false, paths))
 		}
 		after = batch[len(batch)-1].ID
 	}

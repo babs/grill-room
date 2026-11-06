@@ -212,7 +212,8 @@ func act(prompt, history, cwd, system, effort, autocompact, session string) (str
 		}
 		return fetch(ms[len(ms)-1][1]), nil
 	case strings.Contains(prompt, "FAKE_EDIT_UPLOAD"):
-		ups, _ := filepath.Glob(ws("uploads/*"))
+		// [0-9]: uploads/chat is a directory, not an upload.
+		ups, _ := filepath.Glob(ws("uploads/[0-9]*"))
 		if len(ups) == 0 {
 			return "", fmt.Errorf("no upload to edit")
 		}
@@ -240,7 +241,7 @@ func act(prompt, history, cwd, system, effort, autocompact, session string) (str
 		}
 		return "Closed.", os.WriteFile(ws("replies.json"), fmt.Appendf(nil, `[{"annotation": %s, "body": "settled", "status": "done"}]`, ms[len(ms)-1][1]), 0o600) //nolint:gosec // see above
 	case strings.Contains(prompt, "FAKE_ANNOTATE"):
-		ups, _ := filepath.Glob(ws("uploads/*.md"))
+		ups, _ := filepath.Glob(ws("uploads/[0-9]*.md"))
 		if len(ups) == 0 {
 			return "", fmt.Errorf("no Markdown upload to annotate")
 		}

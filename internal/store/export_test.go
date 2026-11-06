@@ -298,6 +298,12 @@ func canon(t *testing.T, dir string) map[string]any {
 					row[field] = norm(kind, v)
 				}
 			}
+			// A line's documents (029-AC14).
+			if ds, ok := row["documents"].([]any); ok {
+				for i := range ds {
+					ds[i] = norm("document", ds[i])
+				}
+			}
 			if file, ok := row["file"].(string); ok {
 				row["file"] = hash(file)
 			}
@@ -752,8 +758,8 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"messages":            "id room_id ts kind participant_id sender body model edited_at deleted_at change_seq persona_id effort req_model req_effort model_note model_mismatch source spoken appended_at | html turn_id",
 		"message_versions":    "id message_id seq body written_at |",
 		"uploads":             "id room_id participant_id filename content_type size data created_at |",
-		"documents":           "id room_id kind name format upload_id author created_at deleted_at | change_seq folder", // 029 Phase 2 exports folder
-		"message_documents":   "| message_id document_id position",                                                      // and these
+		"documents":           "id room_id kind name format upload_id author created_at deleted_at folder | change_seq",
+		"message_documents":   "message_id document_id position |",
 		"revisions":           "id document_id n body author created_at |",
 		"annotations":         "id room_id document_id revision anchor orphaned status version created_at |",
 		"annotation_messages": "id annotation_id author_kind participant_id author body created_at persona_id |",
@@ -838,6 +844,114 @@ func TestExportCoversEveryColumn(t *testing.T) {
 	for table := range tables {
 		if !seen[table] {
 			t.Errorf("table %s is gone from the schema", table)
+		}
+	}
+}
+
+// 029-AC14: an export carries each document's folder and each chat line's documents in order; the
+// import keeps both, a line with files and no text included, edited since. A link to a document the archive does
+// not hold, to a document out of the chat folder or already linked to another line, documents on a
+// line other than text, a text line with neither text nor documents, an empty version of a line
+// without documents, an unknown folder and an agent document in the chat folder are refused.
+func TestImportChatDocuments(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	alice, _ := richRoom(t, s, "orig")
+	md := func(name string) Upload {
+		return Upload{RoomID: "orig", ParticipantID: alice.ID, Author: "Alice", Filename: name, ContentType: "text/markdown; charset=utf-8",
+			Format: "md", Data: []byte("# " + name + "\n"), Text: "# " + name + "\n"}
+	}
+	earlier := &Message{RoomID: "orig", Kind: KindText, ParticipantID: alice.ID, Sender: alice.Name, Body: "see c"}
+	if err := s.InsertMessageUploads(ctx, earlier, []Upload{md("c.md")}, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	m := &Message{RoomID: "orig", Kind: KindText, ParticipantID: alice.ID, Sender: alice.Name}
+	if err := s.InsertMessageUploads(ctx, m, []Upload{md("b.md"), md("a.md")}, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	var plan int64
+	if err := s.db.QueryRowContext(ctx, `SELECT id FROM documents WHERE room_id = 'orig' AND name = 'plan.md'`).Scan(&plan); err != nil {
+		t.Fatal(err)
+	}
+	// An edited line of files only keeps its empty body as a version.
+	if _, _, err := s.EditMessage(ctx, "orig", m.ID, alice.ID, "now with text"); err != nil {
+		t.Fatal(err)
+	}
+	// Positions against id order: the export must follow positions.
+	if _, err := s.db.ExecContext(ctx, `UPDATE message_documents SET position = 1 - position WHERE message_id = ?`, m.ID); err != nil {
+		t.Fatal(err)
+	}
+	dir := export(t, s, "orig")
+	if _, err := s.ImportRoom(ctx, dir, importOpts("copy")); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := s.Messages(ctx, "copy", 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := msgs[len(msgs)-1]
+	if vs, err := s.MessageVersions(ctx, "copy", got.ID); err != nil || len(vs) != 1 || vs[0].Body != "" {
+		t.Fatalf("imported versions %+v, %v", vs, err)
+	}
+	if got.Body != "now with text" || len(got.Documents) != 2 || got.Documents[0].Name != "a.md" || got.Documents[1].Name != "b.md" {
+		t.Fatalf("imported line %+v", got)
+	}
+	docs, err := s.Documents(ctx, "copy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	folders := map[string]string{}
+	for _, d := range docs {
+		folders[d.Name] = d.Folder
+	}
+	if folders["b.md"] != FolderChat || folders["a.md"] != FolderChat || folders["c.md"] != FolderChat || folders["plan.md"] != "" {
+		t.Fatalf("imported folders %v", folders)
+	}
+	diffCanon(t, canon(t, dir), canon(t, export(t, s, "copy")))
+
+	tamper := func(name string, edit func([]byte) []byte) string {
+		t.Helper()
+		d := t.TempDir()
+		if err := os.CopyFS(d, os.DirFS(dir)); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(d, name)
+		if err := os.WriteFile(p, edit(mustRead(t, p)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	// The file-only line is the last of messages.jsonl; each case edits that line, or the chat folder.
+	links := fmt.Sprintf(`"documents":[%d,%d]`, m.Documents[1].ID, m.Documents[0].ID)
+	for i, c := range []struct {
+		name, file string
+		edits      [][2]string
+		want       string
+	}{
+		{"unknown document", fileMessages, [][2]string{{links, `"documents":[99999]`}}, "unknown document 99999"},
+		{"no text, no documents", fileMessages, [][2]string{{links, `"documents":[]`}, {`"body":"now with text"`, `"body":""`}}, fmt.Sprintf("message %d", m.ID)},
+		{"empty version, no documents", fileMessages, [][2]string{{links, `"documents":[]`}}, fmt.Sprintf("version of message %d", m.ID)},
+		{"documents on a voice line", fileMessages, [][2]string{{`"kind":"text"`, `"kind":"voice"`}}, `documents on a "voice" line`},
+		{"root document", fileMessages, [][2]string{{links, fmt.Sprintf(`"documents":[%d]`, plan)}}, fmt.Sprintf("document %d is not a chat upload", plan)},
+		{"document of another line", fileMessages, [][2]string{{links, fmt.Sprintf(`"documents":[%d]`, earlier.Documents[0].ID)}},
+			fmt.Sprintf("document %d is already linked to another line", earlier.Documents[0].ID)},
+		{"unknown folder", fileDocuments, [][2]string{{`"folder":"chat"`, `"folder":"secret"`}}, `unknown folder "secret"`},
+		{"agent document in the chat folder", fileDocuments, [][2]string{{`"kind":"upload"`, `"kind":"agent"`}}, "only an upload may be in the chat folder"},
+	} {
+		d := tamper(c.file, func(b []byte) []byte {
+			lines := bytes.Split(bytes.TrimSuffix(b, []byte("\n")), []byte("\n"))
+			last := lines[len(lines)-1]
+			for _, e := range c.edits {
+				if !bytes.Contains(last, []byte(e[0])) {
+					t.Fatalf("%s: the last line of %s lacks %s: %s", c.name, c.file, e[0], last)
+				}
+				last = bytes.Replace(last, []byte(e[0]), []byte(e[1]), 1)
+			}
+			lines[len(lines)-1] = last
+			return append(bytes.Join(lines, []byte("\n")), '\n')
+		})
+		if _, err := s.ImportRoom(ctx, d, importOpts(fmt.Sprintf("x%d", i))); !errors.Is(err, ErrImportRefused) || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", c.name, err, c.want)
 		}
 	}
 }
