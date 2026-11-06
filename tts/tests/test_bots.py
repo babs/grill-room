@@ -123,7 +123,7 @@ async def test_leaver_mid_onset_frees_the_quiet(monkeypatch: pytest.MonkeyPatch,
 
         async def connect(self, *_a: object, **_k: object) -> None:
             if leave == "join_failed":
-                self.emit("track_subscribed", track, None, bob)
+                self.emit("track_subscribed", track, mic, bob)
 
         async def publish_track(self, *_a: object, **_k: object) -> None:
             if leave == "join_failed":
@@ -158,17 +158,18 @@ async def test_leaver_mid_onset_frees_the_quiet(monkeypatch: pytest.MonkeyPatch,
     bots = Bots(settings(), lambda _r: voice)
     bob = type("P", (), {"identity": "bob", "kind": None})()
     track = type("T", (), {"kind": rtc.TrackKind.KIND_AUDIO})()
+    mic = type("Pub", (), {"kind": rtc.TrackKind.KIND_AUDIO, "source": rtc.TrackSource.SOURCE_MICROPHONE})()
     bots.sync([{"room": "r1", "personas": [{"id": 1, "name": "Grill"}]}])
     if leave != "join_failed":
         while not bots.bots:
             await asyncio.sleep(0.001)
-        room.emit("track_subscribed", track, None, bob)
+        room.emit("track_subscribed", track, mic, bob)
     while not voice.humans:
         await asyncio.sleep(0.001)
     if leave == "participant_disconnected":
         room.emit(leave, bob)
     elif leave == "track_unsubscribed":
-        room.emit(leave, track, None, bob)
+        room.emit(leave, track, mic, bob)
     elif leave == "bot_disconnected":
         room.emit("disconnected", "network")
     quiet_s = 0.2
@@ -239,5 +240,81 @@ async def test_deleted_room_is_not_rejoined(monkeypatch: pytest.MonkeyPatch) -> 
         assert joins == 1 and not bots.bots, "the bot rejoined its deleted room"
         bots.sync(roster)
         await asyncio.wait_for(joined(2), 1)
+    finally:
+        await bots.close()
+
+
+# 030-AC15: a human's camera, screen share and its audio are never subscribed nor listened to, at
+# join or when published later; the microphone is.
+async def test_bot_subscribes_to_the_microphone_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    from livekit import rtc
+
+    from grill_tts.bots import Bots
+    from grill_tts.room import RoomVoice
+
+    from .test_client import settings
+
+    class Pub:
+        def __init__(self, kind: int, source: int) -> None:
+            self.kind = kind
+            self.source = source
+            self.subscribed = False
+
+        def set_subscribed(self, on: bool) -> None:
+            self.subscribed = on
+
+    audio, video, src = rtc.TrackKind.KIND_AUDIO, rtc.TrackKind.KIND_VIDEO, rtc.TrackSource
+    shared = [
+        (video, src.SOURCE_CAMERA),
+        (video, src.SOURCE_SCREENSHARE),
+        (audio, src.SOURCE_SCREENSHARE_AUDIO),
+    ]
+    mic = Pub(audio, src.SOURCE_MICROPHONE)
+    at_join = [Pub(k, s) for k, s in shared]
+    later = [Pub(k, s) for k, s in shared]
+    pubs = {"m": mic, **{f"p{i}": p for i, p in enumerate(at_join)}}
+    alice = type("P", (), {"identity": "7", "kind": None, "track_publications": pubs})()
+
+    class Room:
+        def __init__(self) -> None:
+            self.on_: dict[str, object] = {}
+            self.remote_participants: dict[str, object] = {"7": alice}
+            self.local_participant = self
+
+        def on(self, ev: str, fn: object) -> None:
+            self.on_[ev] = fn
+
+        async def connect(self, *_a: object, **_k: object) -> None:
+            pass
+
+        async def publish_track(self, *_a: object, **_k: object) -> None:
+            pass
+
+        async def disconnect(self) -> None:
+            pass
+
+        def isconnected(self) -> bool:
+            return True
+
+    room = Room()
+    monkeypatch.setattr(rtc, "Room", lambda: room)
+    monkeypatch.setattr(rtc, "AudioSource", lambda *_a, **_k: Source())
+    monkeypatch.setattr(rtc.LocalAudioTrack, "create_audio_track", staticmethod(lambda *_a: None))
+    voice = RoomVoice("r1", None, lambda: None)  # type: ignore[arg-type, return-value]
+    bots = Bots(settings(), lambda _r: voice)
+    try:
+        bots.sync([{"room": "r1", "personas": [{"id": 1, "name": "Grill"}]}])
+        while not bots.bots:
+            await asyncio.sleep(0.001)
+        for pub in later:
+            room.on_["track_published"](pub, alice)  # type: ignore[operator]
+        assert mic.subscribed and not any(p.subscribed for p in at_join + later)
+        # A subscription that lands anyway is not listened to as Alice speaking.
+        for pub in at_join:
+            pub.subscribed = True
+            room.on_["track_subscribed"](type("T", (), {"kind": pub.kind})(), pub, alice)  # type: ignore[operator]
+        assert not next(iter(bots.bots.values())).listens
+        # The heartbeat's count of human tracks counts the microphone only.
+        assert bots.human_tracks() == 1
     finally:
         await bots.close()

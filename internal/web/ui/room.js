@@ -1340,6 +1340,8 @@ async function showDocument(id, refresh, deepLink) {
   const followLatest = !refresh || $('rev').value === String(openDoc.revisions);
   const keepFrom = refresh ? $('rev-from').value : '';
   const opening = !refresh && !openDoc;
+  // Picking a document closes the Video stage (030-AC7).
+  if (!refresh) closeStage();
   openDoc = d;
   $('viewer').hidden = false;
   // A document opened from the chat (a single upload, a link) shows in the phone's Docs tab.
@@ -1469,7 +1471,7 @@ function closeDocument() {
   if (docsMode) history.replaceState(null, '', roomPath + '/docs');
   notesPane(false);
   openDoc = null;
-  $('viewer').hidden = true;
+  $('viewer').hidden = !stageOpen();
   $('doc-frame').replaceChildren();
   closeNew();
   annotations = [];
@@ -2088,7 +2090,8 @@ function uploadRow(file, open) {
     state.setAttribute('role', 'img');
     state.setAttribute('aria-label', 'Added');
     setTimeout(() => li.remove(), 5000);
-    if (open) showDocument(data.id).catch(console.error);
+    // Someone watching the Video stage keeps it: only ✕ or a pick from the list closes it (030-AC7).
+    if (open && !stageOpen()) showDocument(data.id).catch(console.error);
   });
   xhr.addEventListener('error', () => fail('The connection dropped. Check it, then retry.'));
   const form = new FormData();
@@ -3514,7 +3517,15 @@ $('persona-add').addEventListener('submit', (e) => {
 // so each audio track, speaking flag and transcript line maps back to a name in the list.
 let voice = null;
 let speaking = new Set();
+// myVideo holds the video tracks this page published since it joined, for the e2e (030-AC5).
+let myVideo = new Set();
 const volumes = new Map();
+
+// setVolume sets a person's volume for their voice and for the sound of their shared screen.
+function setVolume(p, v) {
+  p.setVolume(v);
+  p.setVolume(v, LivekitClient.Track.Source.ScreenShareAudio);
+}
 
 function voiceParticipant(id) {
   if (!voice) return null;
@@ -3664,7 +3675,8 @@ function openPersonMenu(b, p, id, fromPointer) {
       vol.value = String(volumes.get(id) ?? 1);
       vol.addEventListener('input', () => {
         volumes.set(id, Number(vol.value));
-        voiceParticipant(id)?.setVolume(Number(vol.value));
+        const vp = voiceParticipant(id);
+        if (vp) setVolume(vp, Number(vol.value));
       });
       label.append('Volume ', vol);
       return label;
@@ -3909,6 +3921,8 @@ function renderParticipants() {
   $('away').hidden = !rows.away.length;
   $('away-count').textContent = String(rows.away.length);
   $('tab-people-count').textContent = String(rows.here.length);
+  // The tiles' names and speaking rings follow the list.
+  renderStage();
 }
 
 // tagSpan is one badge square, or an empty one keeping its column. The audio one is always there
@@ -4014,9 +4028,12 @@ function showManage() {
   $('manage-open').hidden = false;
 }
 
-function voiceError(text) {
+// keep names the source of a camera ('cam') or screen ('screen') failure: a live mic does not settle
+// it, only that source working does.
+function voiceError(text, keep = '') {
   $('voice-error-text').textContent = text;
   $('voice-error').hidden = !text;
+  $('voice-error').dataset.keep = text ? keep : '';
 }
 $('voice-error-close').addEventListener('click', () => voiceError(''));
 
@@ -4026,6 +4043,18 @@ function micError(err) {
   return err?.name === 'NotAllowedError'
     ? 'Your browser blocks the microphone here. Allow it in the site settings (the icon left of the address), then try again.'
     : 'Microphone unavailable: ' + String(err?.message).replace(/\.?$/, '.');
+}
+
+// videoError is what a camera or screen failure says, '' for a cancel (030-AC4). A NotAllowedError
+// is one unless the camera is blocked in the site settings (a query that fails counts as a cancel);
+// an AbortError only from the screen picker: from getUserMedia it is a camera that did not start.
+async function videoError(cam, err) {
+  if (err?.name === 'NotAllowedError') {
+    const state = cam ? await Promise.resolve().then(() => navigator.permissions.query({ name: 'camera' })).then((p) => p.state, () => '') : '';
+    return state === 'denied' ? 'Your browser blocks the camera here. Allow it in the site settings (the icon left of the address), then try again.' : '';
+  }
+  if (!cam && err?.name === 'AbortError') return '';
+  return (cam ? 'Camera' : 'Screen sharing') + ' unavailable: ' + String(err?.message || err?.name || 'unknown error').replace(/\.?$/, '.');
 }
 
 // iconToggle draws an audio bar toggle (005-AC49): its icon, its pressed state and its tip, which
@@ -4061,7 +4090,15 @@ function voiceButtons() {
     window.dispatchEvent(new CustomEvent('grill:voice', { detail: { on: deviceOn } }));
   }
   $('voice-join').hidden = on;
-  for (const id of ['voice-mute', 'voice-deaf', 'voice-stt', 'voice-more', 'voice-leave']) $(id).hidden = !on;
+  for (const id of ['voice-mute', 'voice-cam', 'voice-deaf', 'voice-stt', 'voice-more', 'voice-leave']) $(id).hidden = !on;
+  // A phone browser has no getDisplayMedia: no screen button there (030-AC2).
+  $('voice-screen').hidden = !on || !navigator.mediaDevices?.getDisplayMedia;
+  const cam = on && voice.localParticipant.isCameraEnabled;
+  iconToggle('voice-cam', cam, cam ? 'camera' : 'camera-off', cam ? 'Your camera is on. Press to turn it off.' : 'Turn your camera on: the others see you in Video.');
+  $('voice-cam').setAttribute('aria-label', cam ? 'Turn my camera off' : 'Turn my camera on');
+  const screen = on && voice.localParticipant.isScreenShareEnabled;
+  iconToggle('voice-screen', screen, 'screen-share', screen ? 'You are sharing your screen. Press to stop.' : 'Share your screen, a window or a tab with the others.');
+  $('voice-screen').setAttribute('aria-label', screen ? 'Stop sharing my screen' : 'Share my screen');
   if (!on && $('voice-menu').matches(':popover-open')) $('voice-menu').hidePopover();
   iconToggle('voice-deaf', on && deaf, on && deaf ? 'volume-off' : 'volume', on && deaf
     ? "Room muted: you don't hear the others. Press to hear them again."
@@ -4083,7 +4120,7 @@ function voiceButtons() {
 
 function voiceChanged() {
   // A live mic settles any earlier mic error: the browser let it through after all.
-  if (voice?.localParticipant.isMicrophoneEnabled) voiceError('');
+  if (voice?.localParticipant.isMicrophoneEnabled && !$('voice-error').dataset.keep) voiceError('');
   voiceButtons();
   renderParticipants();
   clearTimeout(beatTimer);
@@ -4308,16 +4345,24 @@ async function joinVoice() {
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'HTTP ' + res.status);
     const { url, token } = await res.json();
     const LK = LivekitClient;
-    room = new LK.Room({ audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    // A small tile asks for a small simulcast layer, and nobody's unwatched layer is sent (030-AC6).
+    room = new LK.Room({ adaptiveStream: true, dynacast: true, audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    myVideo = new Set();
     room.on(LK.RoomEvent.TrackSubscribed, (track, pub, p) => {
-      if (track.kind !== 'audio') return;
+      // A video subscribed while this viewer's stage is closed goes at once (030-AC13).
+      if (track.kind !== 'audio') return stageOpen() ? renderStage() : pub.setSubscribed(false);
       if (deaf || personaMutedIdentity(p.identity)) return pub.setSubscribed(false);
       const el = track.attach();
       el.dataset.pid = p.identity;
       $('voice-audio').append(el);
-      if (volumes.has(p.identity)) p.setVolume(volumes.get(p.identity));
+      if (volumes.has(p.identity)) setVolume(p, volumes.get(p.identity));
     });
-    room.on(LK.RoomEvent.TrackUnsubscribed, (track) => track.detach().forEach((el) => el.remove()));
+    room.on(LK.RoomEvent.TrackUnsubscribed, (track) => (track.kind === 'audio' ? track.detach().forEach((el) => el.remove()) : renderStage()));
+    room.on(LK.RoomEvent.TrackPublished, (pub) => {
+      if (pub.kind === 'video') pub.setSubscribed(stageOpen());
+      renderStage();
+    });
+    room.on(LK.RoomEvent.TrackUnpublished, renderStage);
     room.on(LK.RoomEvent.ActiveSpeakersChanged, (list) => {
       speaking = new Set(list.map((p) => p.identity));
       renderParticipants();
@@ -4327,16 +4372,20 @@ async function joinVoice() {
       'LocalTrackPublished', 'LocalTrackUnpublished', 'AudioPlaybackStatusChanged', 'ActiveDeviceChanged']) {
       room.on(LK.RoomEvent[ev], voiceChanged);
     }
-    room.on(LK.RoomEvent.LocalTrackPublished, (pub) => pub.track?.on(LK.TrackEvent.Restarted, voiceChanged));
+    room.on(LK.RoomEvent.LocalTrackPublished, (pub) => {
+      pub.track?.on(LK.TrackEvent.Restarted, voiceChanged);
+      if (pub.kind === 'video') myVideo.add(pub.track);
+    });
     room.on(LK.RoomEvent.Disconnected, (reason) => {
       if (voice !== room) return;
-      cleanupVoice();
+      cleanupVoice(room);
       // Leaving on purpose is CLIENT_INITIATED; anything else, a kick included, is worth saying.
       if (reason !== LK.DisconnectReason.CLIENT_INITIATED) voiceError('You were disconnected from the audio.');
     });
     voice = room;
     await room.connect(url, token);
     if (voice !== room) return;
+    watchVideo();
     try {
       await room.localParticipant.setMicrophoneEnabled(true);
     } catch (err) {
@@ -4361,6 +4410,161 @@ async function joinVoice() {
   }
 }
 
+// videoCapturing holds the video tracks captured and not yet published: leaving stops them (030-AC5).
+const videoCapturing = new Set();
+
+// toggleVideo turns my camera or my screen share on or off, saying why when it fails (030-AC4).
+async function toggleVideo(cam) {
+  const room = voice;
+  if (!room) return;
+  const lp = room.localParticipant;
+  const LK = LivekitClient;
+  const { Camera, ScreenShare, ScreenShareAudio } = LK.Track.Source;
+  const b = $(cam ? 'voice-cam' : 'voice-screen');
+  let failed = '';
+  let caught = false;
+  let tracks = [];
+  const published = [];
+  b.disabled = true;
+  try {
+    // A camera once published mutes and unmutes, keeping its publish options.
+    if (cam && lp.getTrackPublication(Camera)) await lp.setCameraEnabled(!lp.isCameraEnabled);
+    else if (!cam && lp.isScreenShareEnabled) await lp.setScreenShareEnabled(false);
+    else {
+      // S19's settings (030-AC3): a simulcast 720p camera, a 1080p screen at 15 fps with its audio.
+      // Captured here, not by setCameraEnabled, so a leave meanwhile can reach and stop them.
+      const p = cam ? LK.VideoPresets.h720 : LK.ScreenSharePresets.h1080fps15;
+      tracks = cam ? [await LK.createLocalVideoTrack({ resolution: p.resolution })] : await LK.createLocalScreenTracks({ audio: true, resolution: p.resolution });
+      for (const t of tracks) videoCapturing.add(t);
+      const opts = cam ? { simulcast: true, videoEncoding: p.encoding } : { screenShareEncoding: p.encoding };
+      for (const t of tracks) {
+        if (voice !== room) break;
+        await lp.publishTrack(t, opts);
+        published.push(t);
+      }
+    }
+  } catch (err) {
+    // A screen whose audio failed must not stay published: stop() alone fires no ended, and the
+    // others would keep a frozen tile. Unpublishing stops the track too.
+    await Promise.all(published.map((t) => lp.unpublishTrack(t).catch(() => t.stop())));
+    for (const t of tracks) t.stop();
+    caught = true;
+    failed = await videoError(cam, err);
+  } finally {
+    b.disabled = false;
+    for (const t of tracks) videoCapturing.delete(t);
+  }
+  // Left while the device or the picker answered: nothing stays captured (030-AC5).
+  if (voice !== room) {
+    for (const t of tracks) t.stop();
+    for (const src of cam ? [Camera] : [ScreenShare, ScreenShareAudio]) lp.getTrackPublication(src)?.track?.stop();
+    return;
+  }
+  voiceChanged();
+  // A toggle that worked settles an earlier failure of the same source; a silent cancel does not.
+  const src = cam ? 'cam' : 'screen';
+  if (failed) voiceError(failed, src);
+  else if (!caught && $('voice-error').dataset.keep === src) voiceError('');
+}
+
+// The Video stage (030-AC7): each viewer opens it in the viewer's place, and the document open
+// before comes back on close. Closed, it holds no tile and subscribes to no video (030-AC13).
+const stageOpen = () => !$('stage').hidden;
+function openStage() {
+  if (stageOpen()) return;
+  $('stage').hidden = false;
+  $('viewer').hidden = false;
+  $('video-open').setAttribute('aria-expanded', 'true');
+  watchVideo();
+  renderStage();
+}
+function closeStage() {
+  if (!stageOpen()) return;
+  $('stage').hidden = true;
+  $('viewer').hidden = !openDoc;
+  $('video-open').setAttribute('aria-expanded', 'false');
+  watchVideo();
+  renderStage();
+}
+function watchVideo() {
+  if (!voice) return;
+  for (const p of voice.remoteParticipants.values()) {
+    for (const pub of p.videoTrackPublications.values()) pub.setSubscribed(stageOpen());
+  }
+}
+
+// liveVideos are the cameras on and the screens shared, mine included, from the publications:
+// they count whether or not this page receives them (030-AC7).
+function liveVideos() {
+  if (!voice) return [];
+  const lp = voice.localParticipant;
+  return [lp, ...voice.remoteParticipants.values()].flatMap((p) => [...p.videoTrackPublications.values()]
+    .filter((pub) => !pub.isMuted).map((pub) => ({ p, pub, mine: p === lp })));
+}
+
+// tiles holds one tile per video track sid; shareOrder, when each screen share was first seen.
+const tiles = new Map();
+const shareOrder = new Map();
+let shareSeq = 0;
+
+// renderStage draws the stage (030-AC8): the latest screen share large, the other videos in a row
+// under it, or the cameras alone in a grid.
+function renderStage() {
+  const live = liveVideos();
+  // Nothing live and nothing drawn: the People list's render must not depend on the LiveKit bundle.
+  if (!live.length && !tiles.size && !stageOpen() && $('video-open').hidden) return;
+  $('video-open').hidden = !live.length;
+  $('video-count').textContent = live.length ? String(live.length) : '';
+  if (!live.length) closeStage();
+  const { Camera, ScreenShare } = LivekitClient.Track.Source;
+  for (const { pub } of live) if (pub.source === ScreenShare && !shareOrder.has(pub.trackSid)) shareOrder.set(pub.trackSid, ++shareSeq);
+  for (const sid of shareOrder.keys()) if (!live.some((v) => v.pub.trackSid === sid)) shareOrder.delete(sid);
+  const shown = stageOpen() ? live : [];
+  // Phase 3 promotes another screen with a click (030-AC9); until then the latest is large.
+  const big = shown.filter((v) => v.pub.source === ScreenShare).sort((a, b) => shareOrder.get(a.pub.trackSid) - shareOrder.get(b.pub.trackSid)).at(-1);
+  const draw = ({ p, pub, mine }) => {
+    let t = tiles.get(pub.trackSid);
+    if (!t) {
+      t = { el: document.createElement('figure'), video: document.createElement('video'), track: null };
+      Object.assign(t.video, { muted: true, playsInline: true, autoplay: true });
+      t.el.className = 'tile';
+      t.el.append(t.video, document.createElement('figcaption'));
+      tiles.set(pub.trackSid, t);
+    }
+    // A remote video has a track only while subscribed; attach() lets adaptiveStream see the tile's size.
+    if (t.track !== (pub.track || null)) {
+      t.track?.detach(t.video);
+      t.track = pub.track || null;
+      t.track?.attach(t.video);
+    }
+    const name = participants.find((x) => String(x.id) === p.identity)?.name || p.name || '';
+    t.el.dataset.pid = p.identity;
+    t.el.dataset.source = pub.source;
+    t.el.lastChild.textContent = pub.source === ScreenShare ? name + "'s screen" : name;
+    t.el.classList.toggle('mirror', mine && pub.source === Camera);
+    t.el.classList.toggle('speaking', speaking.has(p.identity));
+    return t;
+  };
+  const main = big ? [draw(big)] : [];
+  const row = shown.filter((v) => v !== big).map(draw);
+  const kept = new Set([...main, ...row]);
+  for (const [sid, t] of tiles) {
+    if (kept.has(t)) continue;
+    t.track?.detach(t.video);
+    t.el.remove();
+    tiles.delete(sid);
+  }
+  placeTiles($('stage-main'), main);
+  placeTiles($('stage-tiles'), row);
+}
+
+// placeTiles moves the tiles only when their order changed: a video taken out of the page pauses.
+function placeTiles(box, list) {
+  const els = list.map((t) => t.el);
+  if (els.length !== box.children.length || els.some((el, i) => box.children[i] !== el)) box.replaceChildren(...els);
+  for (const t of list) if (t.video.paused && t.video.srcObject) t.video.play().catch(() => {});
+}
+
 // The Diagnostics sheet (diagnostics.js, 010-AC22) reads the event stream's state, the room's name
 // and the audio's connection from here; nothing leaves the page.
 window.grillDiag = {
@@ -4368,6 +4572,23 @@ window.grillDiag = {
   // Whether this page receives a participant's audio, by LiveKit identity: the e2e reads a mute (013-AC28).
   subscribed: (identity) => !!voice && [...(voice.remoteParticipants.get(identity)?.audioTrackPublications.values() || [])].some((p) => p.isSubscribed),
   stream: () => (!events ? 'not open' : ['connecting', 'open', 'closed'][events.readyState]),
+  // The e2e reads the states of the video tracks this page published (030-AC5), and each remote
+  // video's subscription and received width (030-AC6, 030-AC13).
+  localVideo: () => [...myVideo].map((t) => t.mediaStreamTrack.readyState),
+  // What each video was published with (030-AC3): its capture, its encodings and its layers.
+  published: () => (!voice ? [] : [...voice.localParticipant.videoTrackPublications.values()].map((pub) => {
+    const { width, height, frameRate } = pub.track.mediaStreamTrack.getSettings();
+    return {
+      source: pub.source, simulcasted: !!pub.simulcasted, layers: pub.trackInfo?.layers?.length || 0,
+      settings: { width, height, frameRate }, constraints: pub.track.mediaStreamTrack.getConstraints(),
+      encodings: (pub.track.sender?.getParameters().encodings || []).map(({ maxBitrate, maxFramerate }) => ({ maxBitrate, maxFramerate })),
+    };
+  })),
+  remoteVideo: () => Promise.all(!voice ? [] : [...voice.remoteParticipants.values()].flatMap((p) => [...p.videoTrackPublications.values()].map(async (pub) => {
+    const stats = await pub.track?.getRTCStatsReport?.().catch(() => null);
+    const width = [...(stats?.values() || [])].find((st) => st.type === 'inbound-rtp')?.frameWidth || 0;
+    return { identity: p.identity, source: pub.source, subscribed: pub.isSubscribed, width };
+  }))),
   voice: async () => {
     if (!voice) return { state: 'not in the audio', stats: null };
     const lp = voice.localParticipant;
@@ -4379,7 +4600,11 @@ window.grillDiag = {
   },
 };
 
-function cleanupVoice() {
+// The local tracks stop here, not in disconnect(): a dropped connection or a removal releases the
+// camera and the screen too (030-AC5).
+function cleanupVoice(room) {
+  for (const pub of room.localParticipant.trackPublications.values()) pub.track?.stop();
+  for (const t of videoCapturing) t.stop();
   voice = null;
   speaking = new Set();
   $('voice-audio').replaceChildren();
@@ -4389,7 +4614,7 @@ function cleanupVoice() {
 function leaveVoice() {
   const room = voice;
   if (!room) return;
-  cleanupVoice();
+  cleanupVoice(room);
   room.disconnect().catch(console.error);
 }
 
@@ -4397,6 +4622,10 @@ $('voice-join').addEventListener('click', () => joinVoice());
 $('voice-leave').addEventListener('click', leaveVoice);
 $('voice-leave-menu').addEventListener('click', leaveVoice);
 $('voice-deaf').addEventListener('click', () => setDeaf(!deaf));
+$('voice-cam').addEventListener('click', () => toggleVideo(true));
+$('voice-screen').addEventListener('click', () => toggleVideo(false));
+$('video-open').addEventListener('click', () => (stageOpen() ? closeStage() : openStage()));
+$('stage-close').addEventListener('click', closeStage);
 $('voice-keepmic').querySelector('input').addEventListener('change', saveDeaf);
 // Kept with the seat, not the tab (010-AC23): this browser's other tabs reload the room at once,
 // others at their next load, the server refusing my voice meanwhile.

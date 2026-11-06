@@ -139,7 +139,7 @@ func (w sttWorkers) state(room string, now time.Time) sttState {
 func (s *Server) STTWorkers() int { return int(s.gauges.sttWorkers.Load()) }
 
 // getVoice mints the participant's LiveKit token: one LiveKit room per grill room, identity the
-// participant id, microphone the only source it may publish.
+// participant id, its microphone, camera and screen the only sources it may publish (030-AC1).
 func (s *Server) getVoice(w http.ResponseWriter, _ *http.Request, sess session) {
 	v := s.opts.Voice
 	if v == nil {
@@ -149,7 +149,7 @@ func (s *Server) getVoice(w http.ResponseWriter, _ *http.Request, sess session) 
 	yes := true
 	tok, err := livekit.Token(v.Key, v.Secret, strconv.FormatInt(sess.p.ID, 10), sess.p.Name, livekit.Grant{
 		Room: sess.p.RoomID, RoomJoin: true, CanPublish: &yes, CanSubscribe: &yes,
-		CanPublishData: new(bool), CanPublishSources: []string{"microphone"},
+		CanPublishData: new(bool), CanPublishSources: []string{"microphone", "camera", "screen_share", "screen_share_audio"},
 	}, voiceTokenTTL, time.Now())
 	if err != nil {
 		s.serverError(w, "voice_token_failed", err)

@@ -20,6 +20,8 @@ from grill_stt.transcribe import Line
 from grill_stt.vad import WINDOW, Segmenter
 from grill_stt.worker import Worker, http_url
 
+MIC = rtc.TrackSource.SOURCE_MICROPHONE
+
 
 def settings(**kw: Any) -> Settings:
     base: dict[str, Any] = {
@@ -139,11 +141,17 @@ async def test_forget_drops_the_room_and_its_tracks_once() -> None:
 
 
 @pytest.mark.parametrize(
-    ("kind", "identity"), [(rtc.TrackKind.KIND_VIDEO, "7"), (rtc.TrackKind.KIND_AUDIO, "stt-other")]
+    ("kind", "source", "identity"),
+    [
+        (rtc.TrackKind.KIND_VIDEO, rtc.TrackSource.SOURCE_CAMERA, "7"),
+        (rtc.TrackKind.KIND_AUDIO, MIC, "stt-other"),
+        # 030-AC15: a shared tab's sound is not its sharer speaking.
+        (rtc.TrackKind.KIND_AUDIO, rtc.TrackSource.SOURCE_SCREENSHARE_AUDIO, "7"),
+    ],
 )
-async def test_only_participant_audio_is_transcribed(kind: int, identity: str) -> None:
+async def test_only_participant_audio_is_transcribed(kind: int, source: int, identity: str) -> None:
     w = worker(httpx.MockTransport(lambda _r: httpx.Response(204)))
-    subscribe(w, "TR_a", identity, kind)
+    subscribe(w, "TR_a", identity, kind, source)
     assert not w._tracks.get("r1")
 
 
@@ -243,9 +251,12 @@ def listening(monkeypatch: pytest.MonkeyPatch) -> tuple[Worker, list[FakeStream]
     return listen(monkeypatch)[:3]
 
 
-def subscribe(w: Worker, sid: str, identity: str, kind: int = rtc.TrackKind.KIND_AUDIO) -> None:
+def subscribe(
+    w: Worker, sid: str, identity: str, kind: int = rtc.TrackKind.KIND_AUDIO, source: int = MIC
+) -> None:
     """Fires the worker's track_subscribed handler for one track of room r1."""
-    track, pub, p = SimpleNamespace(kind=kind), SimpleNamespace(sid=sid), SimpleNamespace(identity=identity)
+    track, p = SimpleNamespace(kind=kind), SimpleNamespace(identity=identity)
+    pub = SimpleNamespace(sid=sid, kind=kind, source=source)
     w._on_track("r1", track, pub, p)  # type: ignore[arg-type]
 
 
@@ -374,8 +385,9 @@ def human(identity: str, kind: int = STANDARD, **pubs: Any) -> SimpleNamespace:
 
 
 class FakePub:
-    def __init__(self, kind: int = rtc.TrackKind.KIND_AUDIO) -> None:
+    def __init__(self, kind: int = rtc.TrackKind.KIND_AUDIO, source: int = MIC) -> None:
         self.kind = kind
+        self.source = source
         self.subscribed: bool | None = None
 
     def set_subscribed(self, on: bool) -> None:
@@ -712,6 +724,29 @@ async def test_a_persona_bot_is_never_subscribed(monkeypatch: pytest.MonkeyPatch
     skipped = [e["identity"] for e in logs if e["event"] == "participant_skipped"]
     assert skipped == ["persona-3", "persona-4"]
     assert all(e["log_level"] == "debug" for e in logs if e["event"] == "participant_skipped")
+
+
+async def test_only_the_microphone_is_subscribed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """030-AC15: a camera, a screen share and its audio, at join or published later, stay unsubscribed."""
+    video, audio, src = rtc.TrackKind.KIND_VIDEO, rtc.TrackKind.KIND_AUDIO, rtc.TrackSource
+    shared = [
+        (video, src.SOURCE_CAMERA),
+        (video, src.SOURCE_SCREENSHARE),
+        (audio, src.SOURCE_SCREENSHARE_AUDIO),
+    ]
+    mic = FakePub()
+    at_join = [FakePub(k, s) for k, s in shared]
+    room = FakeRoom()
+    pubs: dict[str, Any] = {f"p{i}": p for i, p in enumerate(at_join)}
+    room.remote_participants = {"7": human("7", STANDARD, mic=mic, **pubs)}
+    monkeypatch.setattr(rtc, "Room", lambda: room)
+    w = worker(httpx.MockTransport(lambda _r: httpx.Response(204)))
+    await w.reconcile([listed("r1", "RM_a")])
+    later = [FakePub(k, s) for k, s in shared]
+    for pub in later:
+        w._subscribe("r1", pub, human("7"))  # type: ignore[arg-type]
+    assert mic.subscribed is True
+    assert [p.subscribed for p in at_join + later] == [None] * 6
 
 
 class FakeLK:

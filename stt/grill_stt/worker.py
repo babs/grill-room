@@ -33,6 +33,11 @@ def is_agent(p: object) -> bool:
     return getattr(p, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
 
 
+def is_voice(pub: rtc.TrackPublication) -> bool:
+    """A microphone: never a camera, a screen, nor a shared tab's sound under the sharer's name (030-AC15)."""
+    return pub.kind == rtc.TrackKind.KIND_AUDIO and pub.source == rtc.TrackSource.SOURCE_MICROPHONE
+
+
 def http_url(ws_url: str) -> str:
     return ws_url.replace("ws", "http", 1)
 
@@ -174,8 +179,8 @@ class Worker:
             log.debug("participant_skipped", room=room, identity=p.identity, reason="agent")
 
     def _subscribe(self, room: str, pub: rtc.RemoteTrackPublication, p: rtc.RemoteParticipant) -> None:
-        """Subscribes a human's audio track; a persona bot's never (013-AC19)."""
-        if not is_agent(p) and pub.kind == rtc.TrackKind.KIND_AUDIO:
+        """Subscribes a human's microphone; a persona bot's never (013-AC19)."""
+        if not is_agent(p) and is_voice(pub):
             pub.set_subscribed(True)
 
     def _forget(self, name: str, room: rtc.Room, reason: object) -> None:
@@ -215,7 +220,7 @@ class Worker:
     def _on_track(
         self, room: str, track: rtc.Track, pub: rtc.RemoteTrackPublication, p: rtc.RemoteParticipant
     ) -> None:
-        if track.kind != rtc.TrackKind.KIND_AUDIO:
+        if not is_voice(pub):
             return
         try:
             participant_id = int(p.identity)

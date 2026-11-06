@@ -43,10 +43,13 @@
     <span id="agent-status" class="muted" role="status"></span>
   </div>
   <div class="zone zone-me">
+    <button type="button" id="video-open" class="btn-ghost" aria-controls="stage" aria-expanded="false" data-tip="Watch the cameras and screens shared in the call" data-icon="camera" hidden>Video <span id="video-count" class="count"></span></button>
     <div id="voice" class="audio" role="group" aria-label="Audio" hidden>
       <button type="button" id="voice-join" class="btn-primary">Join audio</button>
       <button type="button" id="voice-unlock" class="btn-primary" hidden>Play audio</button>
       <button type="button" id="voice-mute" class="btn-icon" aria-label="Mute my mic" aria-pressed="false" hidden></button>
+      <button type="button" id="voice-cam" class="btn-icon" aria-label="Turn my camera on" aria-pressed="false" hidden></button>
+      <button type="button" id="voice-screen" class="btn-icon" aria-label="Share my screen" aria-pressed="false" hidden></button>
       <button type="button" id="voice-deaf" class="btn-icon" aria-label="Mute the room" aria-pressed="false" hidden></button>
       <button type="button" id="voice-stt" class="btn-icon" aria-label="Transcribe my voice" aria-pressed="true" hidden></button>
       <button type="button" id="voice-more" class="btn-icon" popovertarget="voice-menu" aria-label="Audio options" data-tip="More audio options, and what is being written down" data-icon="more" hidden></button>
@@ -398,6 +401,14 @@
       <label>Revision <select id="rev"></select></label>
       <label>Compare with <select id="rev-from"></select></label>
     </form>
+    <!-- The Video stage takes the document's place while open (030-AC7, 030-AC8). -->
+    <div id="stage" aria-label="Video" role="region" hidden>
+      <div class="viewer-head">
+        <button type="button" id="stage-close" class="btn-icon btn-ghost" aria-label="Close the video" data-tip="Close" data-icon="close"></button>
+        <h2>Video</h2>
+      </div>
+      <div class="stage-body"><div id="stage-main"></div><div id="stage-tiles"></div></div>
+    </div>
     <div class="viewer-body">
       <div id="doc-frame"></div>
       <div id="notes-handle" class="pane-handle" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="annotations" aria-label="Resize the notes"></div>

@@ -124,6 +124,7 @@ body.room { position: fixed; top: var(--vv-top, 0); left: 0; right: 0; height: 1
 .audio { display: flex; align-items: center; gap: var(--sp-2); }
 /* The audio bar (005-AC49): what is off reads in the danger colour, the icon slashed besides. */
 :is(#voice-mute, #voice-deaf)[aria-pressed=true], #voice-stt[aria-pressed=false] { border-color: var(--danger); color: var(--danger); }
+:is(#voice-cam, #voice-screen)[aria-pressed=true] { border-color: var(--primary); background: var(--primary); color: var(--on-primary); }
 /* Marks sit on the corner, so no icon moves when they come and go. */
 :is(#voice-stt, #voice-more) { position: relative; }
 #voice-stt.captured::after { content: ""; position: absolute; top: 3px; right: 3px; width: .5rem; height: .5rem; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 1px var(--dot-ring); }
@@ -417,6 +418,27 @@ button.doc:hover { background: var(--border); }
 body:is(.drag-files, :has(.pane-handle.dragging)) #doc-frame iframe { pointer-events: none; }
 #doc-frame img { max-width: 100%; max-height: 100%; margin: auto; object-fit: contain; }
 .viewer-body { flex: 1; display: flex; min-height: 0; }
+/* The Video stage (030-AC8): open, it takes the document's place; the document stays loaded under it. */
+#viewer:has(> #stage:not([hidden])) > :not(#stage) { display: none; }
+#stage { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+#stage h2 { flex: 1; margin: 0; font-size: var(--fs-md); }
+.stage-body { flex: 1; display: flex; flex-direction: column; gap: var(--sp-2); min-height: 0; padding: var(--sp-2); background: var(--chrome); }
+#stage-main { flex: 1; display: flex; min-height: 0; }
+#stage-main:empty { display: none; }
+#stage-main .tile { flex: 1; aspect-ratio: auto; }
+#stage-tiles { flex: 1; display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); align-content: center; gap: var(--sp-2); min-height: 0; overflow-y: auto; }
+/* Under a screen, the cameras are a row of 160 x 90 tiles. */
+#stage-main:not(:empty) + #stage-tiles { flex: none; display: flex; overflow-x: auto; }
+#stage-main:not(:empty) + #stage-tiles .tile { flex: none; width: 160px; height: 90px; }
+#stage-tiles:empty { display: none; }
+.tile { position: relative; margin: 0; aspect-ratio: 16 / 9; min-width: 0; overflow: hidden; border-radius: var(--r-md); background: var(--chrome); }
+.tile video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.tile.mirror video { transform: scaleX(-1); }
+.tile figcaption { position: absolute; left: var(--sp-1); bottom: var(--sp-1); max-width: calc(100% - var(--sp-2)); padding: 0 var(--sp-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: var(--r-sm); background: var(--chrome); color: var(--chrome-text); font-size: var(--fs-xs); }
+/* Speaking: the People list's brand halo, as a ring (005). */
+.tile.speaking { box-shadow: inset 0 0 0 3px var(--brand); }
+.tile.speaking figcaption { text-shadow: 0 0 .1em var(--brand), 0 0 .4em var(--brand); }
 body.annot-closed #annotations { display: none; }
 #annot-toggle[aria-pressed=true] { background: var(--primary-bg); }
 /* The chat folded into a rail beside a document (005-AC37); without one, nothing to fold for. */
@@ -604,6 +626,8 @@ mark.mention-chip.me { background: var(--accent); color: var(--on-accent); }
   .audio { gap: 2px; }
   #voice-leave { display: none; }
   #voice-leave-menu { display: flex; }
+  /* The phone's Video is a tab (030-AC14). */
+  #video-open { display: none; }
   .room-header:has(#voice-more:not([hidden])) .logo { display: none; }
   .tabbar { display: flex; flex: none; height: calc(56px + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
     border-top: 1px solid var(--border); background: var(--surface); }
