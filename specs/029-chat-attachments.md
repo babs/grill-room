@@ -1,6 +1,6 @@
 # 029 — Files in the chat, kept as documents in a Chat folder
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-06
 
@@ -36,30 +36,30 @@ The chat composer takes files: paste a capture, drop files on the chat, or pick 
 ## Acceptance criteria
 
 ### Sending
-- [ ] **AC1** The composer has an attach button (paperclip icon from the icon set, accessible name "Attach files", 44 × 44 px target at 390 px). It opens a file picker that takes several files.
-- [ ] **AC2** Pasting into the composer when the clipboard holds an image adds it as a pending file named `capture-YYYYMMDD-HHMMSS.png` (browser local time; the image's own extension when the clipboard holds another accepted type, such as `.jpg`); pasted text still goes into the text as today, and a clipboard that also holds text (cells copied from a spreadsheet) pastes the text only. Dropping files anywhere on the chat pane adds them as pending files; the chat pane shows a drop state while files hover, and the Documents pane's drop (`room.js` zone) keeps working unchanged.
-- [ ] **AC3** Pending files show as chips under the composer: name (ellipsis, full name in tooltip), size, and a ✕ that removes it. An image chip shows a small preview. At most 4 files per message: a fifth is refused on the spot with "At most 4 files per message". A file over the upload limit or with a format the Documents pane refuses is refused on the spot with the same text the server would give.
-- [ ] **AC4** Send posts the text and the files in one `multipart/form-data` request to `POST /api/rooms/{room}/messages` (field `body`, fields `file`). A JSON body still works as today. A message with files and no text is accepted; a message with neither is a 400 as today.
-- [ ] **AC5** The server stores the message, each upload and its document (folder `chat`) in one transaction. If any file fails (format 415, size 413, room quota 413 naming the room limit, conversion 422), nothing is stored and the answer names the file. A test injects a failure on the second of two files and finds no message, no upload and no document afterwards.
-- [ ] **AC6** While the request runs, the composer shows the progress and blocks a second send; on failure the text and the pending files stay in the composer with the error, so a retry needs no re-pick.
+- [x] **AC1** The composer has an attach button (paperclip icon from the icon set, accessible name "Attach files", 44 × 44 px target at 390 px). It opens a file picker that takes several files.
+- [x] **AC2** Pasting into the composer when the clipboard holds an image adds it as a pending file named `capture-YYYYMMDD-HHMMSS.png` (browser local time; the image's own extension when the clipboard holds another accepted type, such as `.jpg`); pasted text still goes into the text as today, and a clipboard that also holds text (cells copied from a spreadsheet) pastes the text only. Dropping files anywhere on the chat pane adds them as pending files; the chat pane shows a drop state while files hover, and the Documents pane's drop (`room.js` zone) keeps working unchanged.
+- [x] **AC3** Pending files show as chips under the composer: name (ellipsis, full name in tooltip), size, and a ✕ that removes it. An image chip shows a small preview. At most 4 files per message: a fifth is refused on the spot with "At most 4 files per message". A file over the upload limit or with a format the Documents pane refuses is refused on the spot with the same text the server would give.
+- [x] **AC4** Send posts the text and the files in one `multipart/form-data` request to `POST /api/rooms/{room}/messages` (field `body`, fields `file`). A JSON body still works as today. A message with files and no text is accepted; a message with neither is a 400 as today.
+- [x] **AC5** The server stores the message, each upload and its document (folder `chat`) in one transaction. If any file fails (format 415, size 413, room quota 413 naming the room limit, conversion 422), nothing is stored and the answer names the file. A test injects a failure on the second of two files and finds no message, no upload and no document afterwards.
+- [x] **AC6** While the request runs, the composer shows the progress and blocks a second send; on failure the text and the pending files stay in the composer with the error, so a retry needs no re-pick.
 
 ### Showing
-- [ ] **AC7** A message's JSON (list, live event, post answer) carries `documents: [{id, name, format, size, deleted}]` in the order sent. Under the text, an image document shows as a thumbnail no larger than 240 × 180 px (aspect kept, served from the existing original route); any other shows as a chip with the document icon, its name and size. A click on either opens the document in the viewer on the room page, and in the docs window from `/r/<room>/docs`.
-- [ ] **AC8** A document renamed later shows its new name in the message. A deleted document shows as a greyed chip "Deleted document", not clickable, and no thumbnail request is made.
-- [ ] **AC9** The Documents list shows a **Chat** folder row, with the disclosure triangle of 008-AC5, listing the chat documents in the list's order, folded by default, its state kept in this browser like the drawers. With no chat document, no Chat row shows. Documents added from the Documents pane stay at the root.
-- [ ] **AC10** Deleting a chat message keeps its documents (they are room documents; room admins delete them as any other, 005-AC26). Editing a message keeps its documents.
+- [x] **AC7** A message's JSON (list, live event, post answer) carries `documents: [{id, name, format, size, deleted}]` in the order sent. Under the text, an image document shows as a thumbnail no larger than 240 × 180 px (aspect kept, served from the existing original route); any other shows as a chip with the document icon, its name and size. A click on either opens the document in the viewer on the room page, and in the docs window from `/r/<room>/docs`.
+- [x] **AC8** A document renamed later shows its new name in the message. A deleted document shows as a greyed chip "Deleted document", not clickable, and no thumbnail request is made.
+- [x] **AC9** The Documents list shows a **Chat** folder row, with the disclosure triangle of 008-AC5, listing the chat documents in the list's order, folded by default, its state kept in this browser like the drawers. With no chat document, no Chat row shows. Documents added from the Documents pane stay at the root.
+- [x] **AC10** Deleting a chat message keeps its documents (they are room documents; room admins delete them as any other, 005-AC26). Editing a message keeps its documents.
 
 ### Agent
-- [ ] **AC11** In the agent workspace a chat document's original is at `uploads/chat/<id>-<name>`, read-only like any upload, with the Markdown copy beside it for office files. Annotations created by the agent on `uploads/chat/<id>-<name>` paths resolve to the document (`annotations-new.json`).
-- [ ] **AC12** The message's transcript line is followed by one indented line per document, `  - file: uploads/chat/<id>-<name>` (the `.md` copy for office files), and `  - file: (deleted) <name>` for a deleted one. The prompt's workspace contract names `uploads/chat/` as files participants sent in the chat, listed under their message in the transcript.
-- [ ] **AC13** A second turn with no room change transfers no upload bytes (002-AC37 holds with chat documents).
+- [x] **AC11** In the agent workspace a chat document's original is at `uploads/chat/<id>-<name>`, read-only like any upload, with the Markdown copy beside it for office files. Annotations created by the agent on `uploads/chat/<id>-<name>` paths resolve to the document (`annotations-new.json`).
+- [x] **AC12** The message's transcript line is followed by one indented line per document, `  - file: uploads/chat/<id>-<name>` (the `.md` copy for office files), and `  - file: (deleted) <name>` for a deleted one. The prompt's workspace contract names `uploads/chat/` as files participants sent in the chat, listed under their message in the transcript.
+- [x] **AC13** A second turn with no room change transfers no upload bytes (002-AC37 holds with chat documents).
 
 ### Data
-- [ ] **AC14** Room export carries each document's folder and each message's document ids; importing it gives the same Chat folder and the same thumbnails and chips. `docs/export-format.md` documents both. Deleting the room removes the links (001-AC4).
+- [x] **AC14** Room export carries each document's folder and each message's document ids; importing it gives the same Chat folder and the same thumbnails and chips. `docs/export-format.md` documents both. Deleting the room removes the links (001-AC4).
 
 ### Screen capture (user, 2026-11-06)
-- [ ] **AC15** The composer has a "Capture screen" button (icon from the icon set, 44 × 44 px target at 390 px, as the paperclip), next to the paperclip. It calls `navigator.mediaDevices.getDisplayMedia({ video: true })` once (with a `CaptureController` asking the browser not to move focus to the shared tab, where supported), draws the first frame into a canvas, stops every track of the stream at once, and adds the PNG to the pending files as `capture-YYYYMMDD-HHMMSS.png` (browser local time, the naming of AC2). It follows the rules of the other pending files (AC3: the limit of 4, the size).
-- [ ] **AC16** The button is absent when `getDisplayMedia` does not exist or the device has no fine pointer (touch-only: phones, tablets without mouse or pen, since Android browsers may define `getDisplayMedia` only to refuse it); it comes back when a fine pointer is attached. A refusal or a cancelled picker leaves nothing pending and shows no error. Any other failure shows its error in the composer.
+- [x] **AC15** The composer has a "Capture screen" button (icon from the icon set, 44 × 44 px target at 390 px, as the paperclip), next to the paperclip. It calls `navigator.mediaDevices.getDisplayMedia({ video: true })` once (with a `CaptureController` asking the browser not to move focus to the shared tab, where supported), draws the first frame into a canvas, stops every track of the stream at once, and adds the PNG to the pending files as `capture-YYYYMMDD-HHMMSS.png` (browser local time, the naming of AC2). It follows the rules of the other pending files (AC3: the limit of 4, the size).
+- [x] **AC16** The button is absent when `getDisplayMedia` does not exist or the device has no fine pointer (touch-only: phones, tablets without mouse or pen, since Android browsers may define `getDisplayMedia` only to refuse it); it comes back when a fine pointer is attached. A refusal or a cancelled picker leaves nothing pending and shows no error. Any other failure shows its error in the composer.
 
 ## Phases
 
