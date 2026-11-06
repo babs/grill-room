@@ -1,0 +1,1146 @@
+diff --git a/src/calling/call_test.rs b/src/calling/call_test.rs
+index 9375b55..e1d1e24 100644
+--- a/src/calling/call_test.rs
++++ b/src/calling/call_test.rs
+@@ -69,7 +69,14 @@ pub async fn run_call_test(
+     use_camera: bool,
+     use_display: bool,
+     tone_mode: bool,
++    meeting: Option<String>,
++    capture_dir: Option<String>,
+ ) -> Result<CallTestResult> {
++    if let Some(ref dir) = capture_dir {
++        super::capture::init(dir).context("Cannot create the capture directory")?;
++        tracing::info!("Capturing call media and signaling to {}", dir);
++    }
++    let meeting_target = meeting.as_deref().map(parse_meeting_url).transpose()?;
+     let config = Config::load().context("Failed to load config")?;
+     let skype_token = config
+         .get_skype_token()
+@@ -122,7 +129,9 @@ pub async fn run_call_test(
+     // 1. --echo: call the Echo bot
+     // 2. --thread <id>: call a specific 1:1 thread
+     // 3. otherwise: channel call via TEAMS_AV_TEST_THREAD_ID env var
+-    let (thread_id, callee_mri) = if echo {
++    let (thread_id, callee_mri) = if let Some(ref m) = meeting_target {
++        (m.thread_id.clone(), None)
++    } else if echo {
+         (signaling::echo_thread_id(caller_oid), None)
+     } else if let Some(ref tid) = thread_override {
+         // Extract callee OID from 1:1 thread format: 19:{oid1}_{oid2}@unq.gbl.spaces
+@@ -294,8 +303,16 @@ pub async fn run_call_test(
+         chain_id: &chain_id,
+         message_id: &message_id,
+         caller_oid,
+-        tenant_id,
++        tenant_id: meeting_target.as_ref().map(|m| m.tenant_id.as_str()).unwrap_or(tenant_id),
++        organizer_oid: meeting_target
++            .as_ref()
++            .map(|m| m.organizer_oid.as_str())
++            .unwrap_or(caller_oid),
++        group_message_id: meeting_target.as_ref().map(|m| m.message_id.as_str()),
+     };
++    if let Some(cap) = super::capture::get() {
++        cap.file("offer.sdp", &offer_result.sdp);
++    }
+ 
+     // Place the call: 1:1 calls (echo or thread) use single-shot epconv, channel uses two-phase
+     let (phase1, _phase2) = if is_1to1_call {
+@@ -326,6 +343,10 @@ pub async fn run_call_test(
+             "Phase 2 complete. CC active URL: {:?}",
+             joined.cc_active_url
+         );
++        if let Some(cap) = super::capture::get() {
++            cap.file("phase1.json", &created.response_body);
++            cap.file("phase2.json", &joined.response_body);
++        }
+         (created, joined)
+     };
+     println!("call_placed=true");
+@@ -348,7 +369,9 @@ pub async fn run_call_test(
+ 
+     // 7. Wait for mediaAnswer on Trouter
+     tracing::info!("Waiting for media answer on Trouter...");
+-    let acceptance = match wait_for_call_acceptance(&mut ws, Duration::from_secs(30)).await {
++    // A meeting lobby waits for someone to admit us; a call answers within seconds.
++    let accept_wait = Duration::from_secs(if meeting_target.is_some() { 300 } else { 30 });
++    let acceptance = match wait_for_call_acceptance(&mut ws, accept_wait).await {
+         Ok(acc) => {
+             if let Some(ref reason) = acc.rejection_reason {
+                 tracing::warn!("Call rejected: {}", reason);
+@@ -399,6 +422,7 @@ pub async fn run_call_test(
+         "outgoing",
+         true,
+         video_ssrc,
++        audio_ssrc,
+     )
+     .await
+     .context("Failed to set up outgoing media leg")?;
+@@ -492,13 +516,16 @@ pub async fn run_call_test(
+         false,
+         speaker_tx,
+         mic_rx,
++        meeting_target.is_some(),
+     );
+ 
+     // 8b. Start recording in background after a short delay to let audio establish.
+     // Recording is non-blocking: if it fails, the call continues normally.
+     let mut recording_handle = None;
++    let mut ws_opt = Some(ws);
+     if record {
+         if let Some(rec_token) = recorder_token_str {
++            let mut ws = ws_opt.take().expect("Trouter socket not taken yet");
+             let http = http.clone();
+             let conversation_controller = phase1.conversation_controller.clone();
+             let add_participant_url_override = phase1.add_participant_url.clone();
+@@ -550,7 +577,13 @@ pub async fn run_call_test(
+ 
+     // 10. Wait for test duration
+     tracing::info!("Call active, running for {}s...", duration_secs);
+-    tokio::time::sleep(Duration::from_secs(duration_secs)).await;
++    stay_in_call(&http, &conv_params, ws_opt.as_mut(), Duration::from_secs(duration_secs)).await;
++    if let Some(cap) = super::capture::get() {
++        cap.flush();
++        if let Some(ref dir) = capture_dir {
++            println!("capture_dir={}", dir);
++        }
++    }
+ 
+     // 11. Stop media
+     outgoing_handles.abort_all();
+@@ -589,8 +622,8 @@ pub async fn run_call_test(
+     let rec = recorder.lock().await;
+     let echo_result = test_tone::detect_echo(rec.samples(), 1000.0, 8000.0);
+ 
+-    // Dump received audio to raw files for offline analysis
+-    {
++    // Dump received audio to raw files for offline analysis; a capture keeps meeting audio out of /tmp.
++    if super::capture::get().is_none() {
+         let pcm_path = "/tmp/received_audio.pcm";
+         let samples = rec.samples();
+         let mut f = std::fs::File::create(pcm_path).ok();
+@@ -684,6 +717,8 @@ struct MediaLeg {
+     video_local_pwd: String,
+     /// Video SSRC matching the SDP x-ssrc-range.
+     video_ssrc: u32,
++    /// Audio SSRC matching the SDP x-ssrc-range: with a random one the MCU drops our audio.
++    audio_ssrc: u32,
+     /// Camera frame receiver (when --camera is active).
+     #[cfg(feature = "video-capture")]
+     camera_rx: Option<std::sync::mpsc::Receiver<camera::YuvFrame>>,
+@@ -727,6 +762,7 @@ async fn setup_media_leg(
+     label: &str,
+     controlling: bool,
+     video_ssrc: u32,
++    audio_ssrc: u32,
+ ) -> Result<MediaLeg> {
+     // Decompress and log the full SDP for debugging
+     let decompressed = crate::calling::sdp_compress::decompress_sdp(remote_sdp)
+@@ -737,6 +773,9 @@ async fn setup_media_leg(
+         decompressed.len(),
+         decompressed
+     );
++    if let Some(cap) = super::capture::get() {
++        cap.file(&format!("answer-{}.sdp", label), &decompressed);
++    }
+ 
+     let remote_offer = sdp::parse_sdp_offer(remote_sdp)
+         .with_context(|| format!("Failed to parse {} remote SDP", label))?;
+@@ -854,6 +893,7 @@ async fn setup_media_leg(
+         video_remote_addr,
+         video_local_pwd: local_video_pwd.to_string(),
+         video_ssrc,
++        audio_ssrc,
+         #[cfg(feature = "video-capture")]
+         camera_rx: None,
+         #[cfg(feature = "video-capture")]
+@@ -874,15 +914,12 @@ fn spawn_media_leg(
+     loopback: bool,
+     speaker_tx: Option<std::sync::mpsc::SyncSender<Vec<i16>>>,
+     mic_rx: Option<std::sync::mpsc::Receiver<Vec<i16>>>,
++    silent: bool,
+ ) -> MediaLegHandles {
+     let label = leg.label.clone();
+     let mut handles = Vec::new();
+ 
+-    let ssrc = {
+-        let id = uuid::Uuid::new_v4();
+-        let b = id.as_bytes();
+-        u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+-    };
++    let ssrc = leg.audio_ssrc;
+ 
+     let send_stats = Arc::new(Mutex::new(rtcp::RtpSendStats {
+         ssrc,
+@@ -940,6 +977,9 @@ fn spawn_media_leg(
+                         Ok(s) => s,
+                         Err(_) => vec![0i16; rtp::SAMPLES_PER_PACKET],
+                     }
++                } else if silent {
++                    // A meeting hears whatever we send: silence, never the 1 kHz test tone.
++                    vec![0i16; rtp::SAMPLES_PER_PACKET]
+                 } else {
+                     tone.next_frame()
+                 };
+@@ -1024,6 +1064,9 @@ fn spawn_media_leg(
+                                 label,
+                                 rtcp_data.len()
+                             );
++                            if let Some(cap) = super::capture::get() {
++                                cap.rtcp(&label, &rtcp_data);
++                            }
+                             let blocks = rtcp::parse_rtcp(&rtcp_data);
+                             let mut rs = recv_stats.lock().await;
+                             for block in &blocks {
+@@ -1048,6 +1091,9 @@ fn spawn_media_leg(
+                         };
+                         match srtp_result {
+                             Ok(rtp_data) => {
++                                if let Some(cap) = super::capture::get() {
++                                    cap.rtp(&rtp_data);
++                                }
+                                 if let Ok(pkt) = rtp::decode(&rtp_data) {
+                                     let mut rs = recv_stats.lock().await;
+                                     rs.packets_received += 1;
+@@ -1067,8 +1113,9 @@ fn spawn_media_leg(
+                                     }
+                                     drop(rssrc);
+ 
+-                                    // Dump raw PCMU payload to file (before decode)
+-                                    if let Ok(mut f) = std::fs::OpenOptions::new()
++                                    // Dump raw PCMU payload to file (before decode); a capture keeps it in its own dir.
++                                    if super::capture::get().is_some() {
++                                    } else if let Ok(mut f) = std::fs::OpenOptions::new()
+                                         .create(true).append(true)
+                                         .open("/tmp/received_audio.ulaw")
+                                     {
+@@ -1753,7 +1800,10 @@ fn extract_json_from_frame(frame: &str) -> Option<&str> {
+             return Some(rest);
+         }
+     }
+-    None
++    // Acknowledged events carry an id: `5:ID::JSON` (fix from the microslop fork, seen live).
++    let rest = frame.strip_prefix("5:")?;
++    let (id, json) = rest.split_once("::")?;
++    id.chars().all(|c| c.is_ascii_digit()).then_some(json)
+ }
+ 
+ /// End a call by posting to a specific end URL.
+@@ -1899,3 +1949,319 @@ fn write_wav(path: &str, samples: &[i16], sample_rate: u32) -> anyhow::Result<()
+     }
+     Ok(())
+ }
++
++/// A Teams meeting as the join URL names it.
++#[derive(Debug, PartialEq)]
++pub(crate) struct MeetingTarget {
++    pub(crate) thread_id: String,
++    pub(crate) message_id: String,
++    pub(crate) organizer_oid: String,
++    pub(crate) tenant_id: String,
++}
++
++fn percent_decode(s: &str) -> String {
++    let b = s.as_bytes();
++    let mut out = Vec::with_capacity(b.len());
++    let mut i = 0;
++    while i < b.len() {
++        if b[i] == b'%' && i + 2 < b.len() {
++            let hex = std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or("");
++            if let Ok(v) = u8::from_str_radix(hex, 16) {
++                out.push(v);
++                i += 3;
++                continue;
++            }
++        }
++        out.push(b[i]);
++        i += 1;
++    }
++    String::from_utf8_lossy(&out).into_owned()
++}
++
++/// Parses a `.../l/meetup-join/<thread>/<messageId>?context={"Tid":..,"Oid":..}` link, wherever it
++/// is embedded (plain, `/v2/?meetingjoin=true#/l/meetup-join/...`, or a Safe Links wrapper).
++pub(crate) fn parse_meeting_url(url: &str) -> Result<MeetingTarget> {
++    // Safe Links and the v2 client wrap the real link: decode until the marker shows up.
++    let mut text = url.to_string();
++    for _ in 0..3 {
++        if text.contains("meetup-join/") {
++            break;
++        }
++        text = percent_decode(&text);
++    }
++    let start = text.find("meetup-join/").with_context(|| {
++        "Not a meetup-join link. Short /meet/<id> links are not handled: in Teams use \
++         'Copy join info' or open the invite and copy the long link"
++    })?;
++    let rest = &text[start + "meetup-join/".len()..];
++    let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
++    let mut parts = path.splitn(3, '/');
++    let thread_id = percent_decode(parts.next().unwrap_or_default());
++    let message_id = parts.next().filter(|m| !m.is_empty()).unwrap_or("0").to_string();
++    anyhow::ensure!(
++        thread_id.starts_with("19:") && thread_id.contains('@'),
++        "Unexpected meeting thread id: {}",
++        thread_id
++    );
++    let context = query
++        .split('&')
++        .find_map(|kv| kv.strip_prefix("context="))
++        .map(percent_decode)
++        .context("Join link has no context= parameter (organizer and tenant)")?;
++    let v: serde_json::Value =
++        serde_json::from_str(&context).context("Join link context is not JSON")?;
++    let field = |k: &str| {
++        v.get(k)
++            .and_then(|x| x.as_str())
++            .map(String::from)
++            .with_context(|| format!("Join link context has no {}", k))
++    };
++    Ok(MeetingTarget {
++        thread_id,
++        message_id,
++        organizer_oid: field("Oid")?,
++        tenant_id: field("Tid")?,
++    })
++}
++
++/// Prints calendar events with a Teams join link, from 2 h ago to 24 h ahead (Graph calendarView):
++/// invites often show the short /meet/<id> form, while `onlineMeeting.joinUrl` may hold the long one.
++pub async fn list_meetings() -> Result<()> {
++    let config = Config::load().context("Failed to load config")?;
++    let token = config
++        .get_graph_token()
++        .filter(|t| !t.is_expired())
++        .context("No valid Graph token: run login again")?;
++    let now = chrono::Utc::now();
++    let url = format!(
++        "https://graph.microsoft.com/v1.0/me/calendar/calendarView?startDateTime={}&endDateTime={}\
++         &$top=50&$orderby=start/dateTime&$select=subject,start,onlineMeeting",
++        (now - chrono::Duration::hours(2)).format("%Y-%m-%dT%H:%M:%SZ"),
++        (now + chrono::Duration::hours(24)).format("%Y-%m-%dT%H:%M:%SZ"),
++    );
++    let resp = reqwest::Client::new()
++        .get(&url)
++        .bearer_auth(&token.token)
++        .header("Prefer", "outlook.timezone=\"UTC\"")
++        .send()
++        .await
++        .context("Graph calendarView request failed")?;
++    let status = resp.status();
++    let body: serde_json::Value = resp.json().await.unwrap_or_default();
++    anyhow::ensure!(status.is_success(), "Graph calendarView returned {}: {}", status, body);
++    let http = reqwest::Client::new();
++    for ev in body["value"].as_array().into_iter().flatten() {
++        let Some(join) = ev.pointer("/onlineMeeting/joinUrl").and_then(|u| u.as_str()) else {
++            continue;
++        };
++        let start = ev.pointer("/start/dateTime").and_then(|v| v.as_str()).unwrap_or("?");
++        let subject = ev["subject"].as_str().unwrap_or("(no subject)");
++        println!("{} UTC  {}\n  {}", &start[..start.len().min(16)], subject, join);
++        if !join.contains("meetup-join") {
++            match long_join_url(&http, &token.token, join).await {
++                Ok(long) => println!("  long form: {}", long),
++                Err(e) => println!("  no long form: {:#}", e),
++            }
++        }
++    }
++    Ok(())
++}
++
++/// Builds the meetup-join form of a short /meet/<id> link from Graph's onlineMeeting record.
++async fn long_join_url(http: &reqwest::Client, graph_token: &str, short: &str) -> Result<String> {
++    let filter = format!("JoinWebUrl eq '{}'", short.replace('\'', "''"));
++    let resp = http
++        .get("https://graph.microsoft.com/v1.0/me/onlineMeetings")
++        .query(&[("$filter", filter.as_str())])
++        .bearer_auth(graph_token)
++        .send()
++        .await
++        .context("Graph onlineMeetings request failed")?;
++    let status = resp.status();
++    let body: serde_json::Value = resp.json().await.unwrap_or_default();
++    anyhow::ensure!(status.is_success(), "Graph onlineMeetings returned {}", status);
++    let m = body.pointer("/value/0").context("Graph knows no meeting for this link")?;
++    let field = |ptr: &str| {
++        m.pointer(ptr)
++            .and_then(|v| v.as_str())
++            .map(String::from)
++            .with_context(|| format!("onlineMeeting has no {}", ptr))
++    };
++    let thread = field("/chatInfo/threadId")?;
++    let message = field("/chatInfo/messageId").unwrap_or_else(|_| "0".into());
++    let oid = field("/participants/organizer/identity/user/id")?;
++    let tid = field("/participants/organizer/identity/user/tenantId")?;
++    Ok(meetup_join_url(&MeetingTarget {
++        thread_id: thread,
++        message_id: message,
++        organizer_oid: oid,
++        tenant_id: tid,
++    }))
++}
++
++/// The meetup-join link the Teams clients build for a meeting, the form `parse_meeting_url` reads.
++fn meetup_join_url(m: &MeetingTarget) -> String {
++    let enc = |s: &str| -> String {
++        s.bytes()
++            .map(|b| match b {
++                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
++                _ => format!("%{:02x}", b),
++            })
++            .collect()
++    };
++    let context = format!(r#"{{"Tid":"{}","Oid":"{}"}}"#, m.tenant_id, m.organizer_oid);
++    format!(
++        "https://teams.microsoft.com/l/meetup-join/{}/{}?context={}",
++        enc(&m.thread_id),
++        enc(&m.message_id),
++        enc(&context)
++    )
++}
++
++/// Keeps the call up for `duration` or until Ctrl-C / the server ends it, while serving Trouter:
++/// heartbeats, delivery acks (in `recv_frame`), late `callAcceptance` acknowledgements, and the
++/// capture of every frame (roster, csrcInfo, dominantSpeakerInfo).
++async fn stay_in_call(
++    http: &reqwest::Client,
++    conv_params: &signaling::ConversationCallParams<'_>,
++    mut ws: Option<&mut websocket::TrouterSocket>,
++    duration: Duration,
++) {
++    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
++    {
++        let stop = stop.clone();
++        tokio::spawn(async move {
++            if tokio::signal::ctrl_c().await.is_ok() {
++                stop.store(true, std::sync::atomic::Ordering::SeqCst);
++                eprintln!("Hanging up; Ctrl-C again to quit at once");
++            }
++            if tokio::signal::ctrl_c().await.is_ok() {
++                if let Some(cap) = super::capture::get() {
++                    cap.flush();
++                }
++                std::process::exit(130);
++            }
++        });
++    }
++    let deadline = tokio::time::Instant::now() + duration;
++    let mut last_heartbeat = tokio::time::Instant::now();
++    let mut last_flush = tokio::time::Instant::now();
++    while tokio::time::Instant::now() < deadline {
++        if stop.load(std::sync::atomic::Ordering::SeqCst) {
++            println!("stopped_by=ctrl-c");
++            break;
++        }
++        if last_flush.elapsed() >= Duration::from_secs(2) {
++            if let Some(cap) = super::capture::get() {
++                cap.flush();
++            }
++            last_flush = tokio::time::Instant::now();
++        }
++        let Some(sock) = ws.as_deref_mut() else {
++            tokio::time::sleep(Duration::from_millis(500)).await;
++            continue;
++        };
++        if last_heartbeat.elapsed() >= Duration::from_secs(30) {
++            sock.send_text("2::").await.ok();
++            last_heartbeat = tokio::time::Instant::now();
++        }
++        // ponytail: a timeout around recv_frame can cancel it while it sends a delivery ack, a rare
++        // lost ack; a task owning the socket fixes it if the live run shows 430/10065 drops.
++        let frame = match tokio::time::timeout(Duration::from_secs(2), sock.recv_frame()).await {
++            Err(_) => continue,
++            Ok(Ok(Some(f))) => f,
++            Ok(Ok(None)) | Ok(Err(_)) => {
++                tracing::warn!("Trouter closed during the call: no more roster or speaker events");
++                ws = None;
++                continue;
++            }
++        };
++        if frame.starts_with("2::") {
++            sock.send_text("2::").await.ok();
++            continue;
++        }
++        let Some(v) = extract_call_payload(&frame) else { continue };
++        if let Some(reason) = check_call_end(&v) {
++            println!("call_ended={}", reason);
++            break;
++        }
++        // The controller resends callAcceptance until acknowledged, then drops the call (408/10056).
++        if let Some(url) = v.pointer("/callAcceptance/links/acknowledgement").and_then(|u| u.as_str()) {
++            if let Err(e) = signaling::acknowledge_call_acceptance(http, url, conv_params).await {
++                tracing::warn!("Late acceptance acknowledgement failed: {:#}", e);
++            }
++        }
++    }
++}
++
++#[cfg(test)]
++mod meeting_url_tests {
++    use super::*;
++
++    const TID: &str = "11111111-2222-3333-4444-555555555555";
++    const OID: &str = "66666666-7777-8888-9999-000000000000";
++
++    fn expected() -> MeetingTarget {
++        MeetingTarget {
++            thread_id: "19:meeting_AbCd@thread.v2".into(),
++            message_id: "0".into(),
++            organizer_oid: OID.into(),
++            tenant_id: TID.into(),
++        }
++    }
++
++    #[test]
++    fn plain_link() {
++        let url = format!(
++            "https://teams.microsoft.com/l/meetup-join/19%3ameeting_AbCd%40thread.v2/0?context=%7b%22Tid%22%3a%22{TID}%22%2c%22Oid%22%3a%22{OID}%22%7d"
++        );
++        assert_eq!(parse_meeting_url(&url).unwrap(), expected());
++    }
++
++    #[test]
++    fn v2_client_link_with_upper_hex() {
++        let url = format!(
++            "https://teams.microsoft.com/v2/?meetingjoin=true#/l/meetup-join/19%3Ameeting_AbCd%40thread.v2/0?context=%7B%22Tid%22%3A%22{TID}%22%2C%22Oid%22%3A%22{OID}%22%7D&anon=true"
++        );
++        assert_eq!(parse_meeting_url(&url).unwrap(), expected());
++    }
++
++    #[test]
++    fn safe_links_wrapper() {
++        let inner = format!(
++            "https://teams.microsoft.com/l/meetup-join/19%3ameeting_AbCd%40thread.v2/0?context=%7b%22Tid%22%3a%22{TID}%22%2c%22Oid%22%3a%22{OID}%22%7d"
++        );
++        let wrapped: String = inner
++            .chars()
++            .map(|c| match c {
++                ':' => "%3A".to_string(),
++                '/' => "%2F".to_string(),
++                '?' => "%3F".to_string(),
++                '=' => "%3D".to_string(),
++                '%' => "%25".to_string(),
++                c => c.to_string(),
++            })
++            .collect();
++        let url = format!("https://eur01.safelinks.protection.outlook.com/?url={wrapped}&data=x");
++        assert_eq!(parse_meeting_url(&url).unwrap(), expected());
++    }
++
++    #[test]
++    fn short_link_is_refused_with_a_hint() {
++        let err = parse_meeting_url("https://teams.microsoft.com/meet/1234567?p=abc").unwrap_err();
++        assert!(err.to_string().contains("Copy join info"));
++    }
++
++    #[test]
++    fn built_link_parses_back() {
++        let m = expected();
++        assert_eq!(parse_meeting_url(&meetup_join_url(&m)).unwrap(), m);
++        let other = MeetingTarget { message_id: "1730000000000".into(), ..expected() };
++        assert_eq!(parse_meeting_url(&meetup_join_url(&other)).unwrap(), other);
++    }
++
++    #[test]
++    fn missing_context_is_refused() {
++        assert!(parse_meeting_url("https://teams.microsoft.com/l/meetup-join/19%3ameeting_X%40thread.v2/0").is_err());
++    }
++}
+diff --git a/src/calling/capture.rs b/src/calling/capture.rs
+new file mode 100644
+index 0000000..060e67f
+--- /dev/null
++++ b/src/calling/capture.rs
+@@ -0,0 +1,209 @@
++//! S18 capture: writes everything a meeting call receives, for offline analysis.
++//!
++//! Files in the capture directory:
++//! - `rtp.jsonl`: one row per decrypted RTP packet (ssrc, seq, ts, pt, marker, CSRC list,
++//!   header extension), `plen` bytes of payload appended to `ssrc-<ssrc>.pay` in arrival order;
++//! - `rtcp.jsonl`: every decrypted RTCP compound packet in hex (DSH lives there, MS-RTP 2.2.12.3);
++//! - `trouter.jsonl`: every Trouter frame with its callback URL and decoded body (roster, csrcInfo,
++//!   dominantSpeakerInfo);
++//! - `<name>.sdp` / `<name>.json`: the offer, the answer and the call setup responses.
++
++use std::collections::HashMap;
++use std::fs::File;
++use std::io::{BufWriter, Write};
++use std::path::PathBuf;
++use std::sync::{Mutex, OnceLock};
++use std::time::Instant;
++
++pub struct Capture {
++    dir: PathBuf,
++    start: Instant,
++    rtp: Mutex<BufWriter<File>>,
++    rtcp: Mutex<BufWriter<File>>,
++    trouter: Mutex<BufWriter<File>>,
++    /// None marks an SSRC whose payload file could not be created: warned once, then skipped.
++    payloads: Mutex<HashMap<u32, Option<BufWriter<File>>>>,
++}
++
++static CAPTURE: OnceLock<Capture> = OnceLock::new();
++
++/// Turns capture on for the whole process; later calls are ignored.
++pub fn init(dir: &str) -> anyhow::Result<()> {
++    let dir = PathBuf::from(dir);
++    std::fs::create_dir_all(&dir)?;
++    let open = |name: &str| -> anyhow::Result<Mutex<BufWriter<File>>> {
++        Ok(Mutex::new(BufWriter::new(File::create(dir.join(name))?)))
++    };
++    let cap = Capture {
++        rtp: open("rtp.jsonl")?,
++        rtcp: open("rtcp.jsonl")?,
++        trouter: open("trouter.jsonl")?,
++        payloads: Mutex::new(HashMap::new()),
++        start: Instant::now(),
++        dir,
++    };
++    let _ = CAPTURE.set(cap);
++    Ok(())
++}
++
++pub fn get() -> Option<&'static Capture> {
++    CAPTURE.get()
++}
++
++fn hex(b: &[u8]) -> String {
++    b.iter().map(|x| format!("{:02x}", x)).collect()
++}
++
++impl Capture {
++    fn t_ms(&self) -> u128 {
++        self.start.elapsed().as_millis()
++    }
++
++    /// Writes a whole file in the capture directory (SDP, setup responses).
++    pub fn file(&self, name: &str, content: &str) {
++        if let Err(e) = std::fs::write(self.dir.join(name), content) {
++            tracing::warn!("capture: cannot write {}: {:#}", name, e);
++        }
++    }
++
++    /// Records one decrypted RTP packet. Parses the header itself: `rtp::decode` drops the CSRC values.
++    pub fn rtp(&self, pkt: &[u8]) {
++        if pkt.len() < 12 {
++            return;
++        }
++        let cc = (pkt[0] & 0x0F) as usize;
++        let has_ext = pkt[0] & 0x10 != 0;
++        let mut off = 12 + cc * 4;
++        if pkt.len() < off {
++            return;
++        }
++        let csrc: Vec<u32> = (0..cc)
++            .map(|i| u32::from_be_bytes(pkt[12 + i * 4..16 + i * 4].try_into().unwrap()))
++            .collect();
++        let (mut ext_profile, mut ext_hex) = (None, String::new());
++        if has_ext && pkt.len() >= off + 4 {
++            let words = u16::from_be_bytes([pkt[off + 2], pkt[off + 3]]) as usize;
++            ext_profile = Some(u16::from_be_bytes([pkt[off], pkt[off + 1]]));
++            let end = (off + 4 + words * 4).min(pkt.len());
++            ext_hex = hex(&pkt[off + 4..end]);
++            off = end;
++        }
++        // Padding (RFC 3550 5.1): the last byte counts the padding bytes.
++        let mut end = pkt.len();
++        if pkt[0] & 0x20 != 0 {
++            end = end.saturating_sub(pkt[end - 1] as usize).max(off);
++        }
++        let payload = &pkt[off..end];
++        let ssrc = u32::from_be_bytes([pkt[8], pkt[9], pkt[10], pkt[11]]);
++        let row = serde_json::json!({
++            "t": self.t_ms(),
++            "ssrc": ssrc,
++            "seq": u16::from_be_bytes([pkt[2], pkt[3]]),
++            "ts": u32::from_be_bytes([pkt[4], pkt[5], pkt[6], pkt[7]]),
++            "pt": pkt[1] & 0x7F,
++            "m": pkt[1] & 0x80 != 0,
++            "csrc": csrc,
++            "ext_profile": ext_profile,
++            "ext": ext_hex,
++            "plen": payload.len(),
++        });
++        if let Ok(mut w) = self.rtp.lock() {
++            let _ = writeln!(w, "{}", row);
++        }
++        if let Ok(mut map) = self.payloads.lock() {
++            let w = map.entry(ssrc).or_insert_with(|| {
++                File::create(self.dir.join(format!("ssrc-{}.pay", ssrc)))
++                    .map(BufWriter::new)
++                    .map_err(|e| tracing::warn!("capture: cannot store SSRC {} payloads: {:#}", ssrc, e))
++                    .ok()
++            });
++            if let Some(w) = w {
++                let _ = w.write_all(payload);
++            }
++        }
++    }
++
++    pub fn rtcp(&self, leg: &str, data: &[u8]) {
++        let row = serde_json::json!({
++            "t": self.t_ms(),
++            "leg": leg,
++            "pt": data.get(1).copied().unwrap_or(0),
++            "fmt": data.first().map(|b| b & 0x1F).unwrap_or(0),
++            "hex": hex(data),
++        });
++        if let Ok(mut w) = self.rtcp.lock() {
++            let _ = writeln!(w, "{}", row);
++        }
++    }
++
++    /// Records one Trouter frame, flushed at once: low volume, and the call setup is what we debug.
++    pub fn trouter(&self, frame: &str) {
++        if frame.starts_with("2::") || frame.starts_with("1::") {
++            return;
++        }
++        let url = frame
++            .find(":::")
++            .and_then(|i| serde_json::from_str::<serde_json::Value>(&frame[i + 3..]).ok())
++            .and_then(|v| v.get("url").and_then(|u| u.as_str()).map(String::from));
++        let body = crate::calling::call_test::extract_call_payload(frame);
++        let row = serde_json::json!({
++            "t": self.t_ms(),
++            "path": url,
++            "body": body,
++            "raw": if body.is_none() { frame.chars().take(4000).collect::<String>() } else { String::new() },
++        });
++        if let Ok(mut w) = self.trouter.lock() {
++            let _ = writeln!(w, "{}", row);
++            let _ = w.flush();
++        }
++    }
++
++    pub fn flush(&self) {
++        for w in [&self.rtp, &self.rtcp, &self.trouter] {
++            if let Ok(mut w) = w.lock() {
++                let _ = w.flush();
++            }
++        }
++        if let Ok(mut map) = self.payloads.lock() {
++            for w in map.values_mut().flatten() {
++                let _ = w.flush();
++            }
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn rtp_row_keeps_csrcs_extension_and_strips_padding() {
++        let dir = std::env::temp_dir().join(format!("s18-capture-{}", std::process::id()));
++        init(dir.to_str().unwrap()).unwrap();
++        let cap = get().unwrap();
++        // V=2, P=1, X=1, CC=2 | M=1, PT=0 | seq 7 | ts 320 | ssrc 0x0a0b0c0d
++        let mut pkt = vec![0xB2, 0x80, 0x00, 0x07, 0, 0, 0x01, 0x40, 0x0a, 0x0b, 0x0c, 0x0d];
++        pkt.extend_from_slice(&2886u32.to_be_bytes());
++        pkt.extend_from_slice(&2890u32.to_be_bytes());
++        pkt.extend_from_slice(&[0xBE, 0xDE, 0x00, 0x01, 0x10, 0x7f, 0x00, 0x00]);
++        pkt.extend_from_slice(&[0x11, 0x22, 0x33]);
++        pkt.extend_from_slice(&[0x00, 0x02]); // 2 padding bytes
++        cap.rtp(&pkt);
++        cap.flush();
++        let row: serde_json::Value = serde_json::from_str(
++            std::fs::read_to_string(dir.join("rtp.jsonl")).unwrap().lines().next().unwrap(),
++        )
++        .unwrap();
++        assert_eq!(row["ssrc"], 0x0a0b0c0d);
++        assert_eq!(row["seq"], 7);
++        assert_eq!(row["ts"], 320);
++        assert_eq!(row["m"], true);
++        assert_eq!(row["csrc"], serde_json::json!([2886, 2890]));
++        assert_eq!(row["ext_profile"], 0xBEDE);
++        assert_eq!(row["ext"], "107f0000");
++        assert_eq!(row["plen"], 3);
++        let pay = std::fs::read(dir.join(format!("ssrc-{}.pay", 0x0a0b0c0d))).unwrap();
++        assert_eq!(pay, vec![0x11, 0x22, 0x33]);
++        std::fs::remove_dir_all(dir).ok();
++    }
++}
+diff --git a/src/calling/mod.rs b/src/calling/mod.rs
+index 32005a8..4487d38 100644
+--- a/src/calling/mod.rs
++++ b/src/calling/mod.rs
+@@ -5,6 +5,7 @@
+ #[cfg(feature = "audio")]
+ pub mod audio;
+ pub mod call_test;
++pub mod capture;
+ #[cfg(feature = "video-capture")]
+ pub mod camera;
+ #[cfg(feature = "video-capture")]
+diff --git a/src/calling/recording.rs b/src/calling/recording.rs
+index eb0d70b..0696cd2 100644
+--- a/src/calling/recording.rs
++++ b/src/calling/recording.rs
+@@ -387,6 +387,8 @@ pub async fn start_call_recording(
+                 message_id,
+                 caller_oid: "", // not needed for acknowledgement
+                 tenant_id: "",  // not needed for acknowledgement
++                organizer_oid: "",
++                group_message_id: None,
+             };
+             wait_for_recorder_info(ws, Duration::from_secs(30), http, &conv_params).await
+         }
+diff --git a/src/calling/sdp_compress.rs b/src/calling/sdp_compress.rs
+index af5c9d8..5f87745 100644
+--- a/src/calling/sdp_compress.rs
++++ b/src/calling/sdp_compress.rs
+@@ -16,7 +16,7 @@ use flate2::{Compress, Decompress, FlushCompress, FlushDecompress, Status};
+ /// SDP compression dictionary extracted from libSkyLib.so at offset 0x1ff6d4.
+ /// This 20623-byte string contains representative SDP/HTTP content that the
+ /// deflate algorithm uses as a preset dictionary for better compression.
+-const SDP_DICTIONARY: &[u8; 20623] = include_bytes!("sdp_dictionary.bin");
++const SDP_DICTIONARY: &[u8] = include_bytes!("sdp_dictionary.bin");
+ 
+ /// Minimum SDP size for compression (from binary analysis at 0x009adaf0).
+ const COMPRESSION_THRESHOLD: usize = 1201;
+@@ -49,7 +49,7 @@ pub fn decompress_sdp(blob: &str) -> Result<String> {
+     }
+ 
+     // Try with the preset dictionary
+-    match raw_inflate(&raw, Some(SDP_DICTIONARY.as_slice())) {
++    match raw_inflate(&raw, Some(SDP_DICTIONARY)) {
+         Ok(sdp) if sdp.starts_with("v=") => return Ok(sdp),
+         Ok(sdp) => anyhow::bail!(
+             "Decompressed data does not look like SDP (starts with {:?})",
+@@ -68,7 +68,7 @@ pub fn compress_sdp(sdp: &str) -> Result<Option<String>> {
+         return Ok(None);
+     }
+ 
+-    let compressed = raw_deflate(sdp.as_bytes(), Some(SDP_DICTIONARY.as_slice()))?;
++    let compressed = raw_deflate(sdp.as_bytes(), Some(SDP_DICTIONARY))?;
+     let encoded = base64::engine::general_purpose::STANDARD.encode(&compressed);
+     Ok(Some(encoded))
+ }
+diff --git a/src/calling/signaling.rs b/src/calling/signaling.rs
+index 53a24bf..1cf8f9a 100644
+--- a/src/calling/signaling.rs
++++ b/src/calling/signaling.rs
+@@ -15,6 +15,12 @@ pub(crate) const TEAMS_PARTITION: &str = "amer03";
+ pub(crate) const TEAMS_REGION: &str = "amer";
+ pub(crate) const TEAMS_RING: &str = "general";
+ 
++/// The region headers default to AMER; a tenant elsewhere sets TEAMS_PARTITION/REGION/RING
++/// (the same knob as the teams-core fork) until we read them from the authz response.
++pub(crate) fn region_header(var: &str, default: &str) -> String {
++    std::env::var(var).unwrap_or_else(|_| default.to_string())
++}
++
+ /// Response from phase 1 (create conversation).
+ #[derive(Debug)]
+ pub struct ConversationCreated {
+@@ -49,6 +55,10 @@ pub struct ConversationCallParams<'a> {
+     /// OID (object ID) extracted from caller MRI, e.g. the GUID part of "8:orgid:{guid}".
+     pub caller_oid: &'a str,
+     pub tenant_id: &'a str,
++    /// Meeting organizer OID (join URL `context.Oid`); the caller for a channel meet-now.
++    pub organizer_oid: &'a str,
++    /// Meeting reply-chain message id (join URL path, "0" for scheduled meetings).
++    pub group_message_id: Option<&'a str>,
+ }
+ 
+ /// Build a Trouter callback URL for a specific path.
+@@ -109,7 +119,7 @@ pub async fn create_conversation(
+         "groupContext": null,
+         "groupChat": {
+             "threadId": params.thread_id,
+-            "messageId": null
++            "messageId": params.group_message_id
+         },
+         "participants": {
+             "from": {
+@@ -125,7 +135,12 @@ pub async fn create_conversation(
+         "endpointCapabilities": 73463,
+         "clientEndpointCapabilities": 9336554,
+         "endpointMetadata": { "holographicCapabilities": 3 },
+-        "meetingInfo": null,
++        // S18: unknown whether the web client sends meetingInfo in phase 1 for a meeting.
++        "meetingInfo": if std::env::var_os("S18_PHASE1_MEETING_INFO").is_some() {
++            serde_json::json!({ "organizerId": params.organizer_oid, "tenantId": params.tenant_id })
++        } else {
++            serde_json::Value::Null
++        },
+         "endpointState": {
+             "endpointStateSequenceNumber": 0,
+             "endpointProperties": {
+@@ -154,9 +169,9 @@ pub async fn create_conversation(
+         .header("x-microsoft-skype-message-id", params.message_id)
+         .header("x-microsoft-skype-client", SKYPE_CLIENT_HEADER)
+         .header("Referer", "https://teams.microsoft.com/")
+-        .header("ms-teams-partition", TEAMS_PARTITION)
+-        .header("ms-teams-region", TEAMS_REGION)
+-        .header("ms-teams-ring", TEAMS_RING)
++        .header("ms-teams-partition", region_header("TEAMS_PARTITION", TEAMS_PARTITION))
++        .header("ms-teams-region", region_header("TEAMS_REGION", TEAMS_REGION))
++        .header("ms-teams-ring", region_header("TEAMS_RING", TEAMS_RING))
+         .header("x-ms-migration", "True")
+         .json(&payload)
+         .send()
+@@ -265,7 +280,7 @@ pub async fn join_conversation_with_sdp(
+         "groupContext": null,
+         "groupChat": {
+             "threadId": params.thread_id,
+-            "messageId": null
++            "messageId": params.group_message_id
+         },
+         "participants": {
+             "from": {
+@@ -283,7 +298,7 @@ pub async fn join_conversation_with_sdp(
+         "clientEndpointCapabilities": 9336554,
+         "endpointMetadata": { "holographicCapabilities": 3 },
+         "meetingInfo": {
+-            "organizerId": params.caller_oid,
++            "organizerId": params.organizer_oid,
+             "tenantId": params.tenant_id
+         },
+         "endpointState": {
+@@ -341,9 +356,9 @@ pub async fn join_conversation_with_sdp(
+         .header("x-microsoft-skype-message-id", params.message_id)
+         .header("x-microsoft-skype-client", SKYPE_CLIENT_HEADER)
+         .header("Referer", "https://teams.microsoft.com/")
+-        .header("ms-teams-partition", TEAMS_PARTITION)
+-        .header("ms-teams-region", TEAMS_REGION)
+-        .header("ms-teams-ring", TEAMS_RING)
++        .header("ms-teams-partition", region_header("TEAMS_PARTITION", TEAMS_PARTITION))
++        .header("ms-teams-region", region_header("TEAMS_REGION", TEAMS_REGION))
++        .header("ms-teams-ring", region_header("TEAMS_RING", TEAMS_RING))
+         .header("x-ms-migration", "True")
+         .json(&payload)
+         .send()
+@@ -534,9 +549,9 @@ pub async fn acknowledge_call_acceptance(
+         .header("x-microsoft-skype-message-id", params.message_id)
+         .header("x-microsoft-skype-client", SKYPE_CLIENT_HEADER)
+         .header("Referer", "https://teams.microsoft.com/")
+-        .header("ms-teams-partition", TEAMS_PARTITION)
+-        .header("ms-teams-region", TEAMS_REGION)
+-        .header("ms-teams-ring", TEAMS_RING)
++        .header("ms-teams-partition", region_header("TEAMS_PARTITION", TEAMS_PARTITION))
++        .header("ms-teams-region", region_header("TEAMS_REGION", TEAMS_REGION))
++        .header("ms-teams-ring", region_header("TEAMS_RING", TEAMS_RING))
+         .json(&serde_json::json!({
+             "callAcceptanceAcknowledgement": cc_call_links(&tc)
+         }))
+@@ -593,9 +608,9 @@ pub async fn register_cc_callbacks(
+         .header("x-microsoft-skype-message-id", params.message_id)
+         .header("x-microsoft-skype-client", SKYPE_CLIENT_HEADER)
+         .header("Referer", "https://teams.microsoft.com/")
+-        .header("ms-teams-partition", TEAMS_PARTITION)
+-        .header("ms-teams-region", TEAMS_REGION)
+-        .header("ms-teams-ring", TEAMS_RING)
++        .header("ms-teams-partition", region_header("TEAMS_PARTITION", TEAMS_PARTITION))
++        .header("ms-teams-region", region_header("TEAMS_REGION", TEAMS_REGION))
++        .header("ms-teams-ring", region_header("TEAMS_RING", TEAMS_RING))
+         .json(&payload)
+         .send()
+         .await
+@@ -737,9 +752,9 @@ pub async fn create_echo_call(
+         .header("x-microsoft-skype-message-id", params.message_id)
+         .header("x-microsoft-skype-client", SKYPE_CLIENT_HEADER)
+         .header("Referer", "https://teams.microsoft.com/")
+-        .header("ms-teams-partition", TEAMS_PARTITION)
+-        .header("ms-teams-region", TEAMS_REGION)
+-        .header("ms-teams-ring", TEAMS_RING)
++        .header("ms-teams-partition", region_header("TEAMS_PARTITION", TEAMS_PARTITION))
++        .header("ms-teams-region", region_header("TEAMS_REGION", TEAMS_REGION))
++        .header("ms-teams-ring", region_header("TEAMS_RING", TEAMS_RING))
+         .header("x-ms-migration", "True")
+         .json(&payload)
+         .send()
+@@ -881,9 +896,9 @@ pub async fn invite_echo_bot(
+         .header("x-microsoft-skype-message-id", &echo_bot_msg_id)
+         .header("x-microsoft-skype-client", SKYPE_CLIENT_HEADER)
+         .header("Referer", "https://teams.microsoft.com/")
+-        .header("ms-teams-partition", TEAMS_PARTITION)
+-        .header("ms-teams-region", TEAMS_REGION)
+-        .header("ms-teams-ring", TEAMS_RING)
++        .header("ms-teams-partition", region_header("TEAMS_PARTITION", TEAMS_PARTITION))
++        .header("ms-teams-region", region_header("TEAMS_REGION", TEAMS_REGION))
++        .header("ms-teams-ring", region_header("TEAMS_RING", TEAMS_RING))
+         .header("x-ms-migration", "True")
+         .json(&payload)
+         .send()
+@@ -1020,9 +1035,9 @@ pub async fn create_1to1_call(
+         .header("x-microsoft-skype-message-id", params.message_id)
+         .header("x-microsoft-skype-client", SKYPE_CLIENT_HEADER)
+         .header("Referer", "https://teams.microsoft.com/")
+-        .header("ms-teams-partition", TEAMS_PARTITION)
+-        .header("ms-teams-region", TEAMS_REGION)
+-        .header("ms-teams-ring", TEAMS_RING)
++        .header("ms-teams-partition", region_header("TEAMS_PARTITION", TEAMS_PARTITION))
++        .header("ms-teams-region", region_header("TEAMS_REGION", TEAMS_REGION))
++        .header("ms-teams-ring", region_header("TEAMS_RING", TEAMS_RING))
+         .header("x-ms-migration", "True")
+         .json(&payload)
+         .send()
+@@ -1175,9 +1190,9 @@ pub async fn invite_user(
+         .header("x-microsoft-skype-message-id", &invite_msg_id)
+         .header("x-microsoft-skype-client", SKYPE_CLIENT_HEADER)
+         .header("Referer", "https://teams.microsoft.com/")
+-        .header("ms-teams-partition", TEAMS_PARTITION)
+-        .header("ms-teams-region", TEAMS_REGION)
+-        .header("ms-teams-ring", TEAMS_RING)
++        .header("ms-teams-partition", region_header("TEAMS_PARTITION", TEAMS_PARTITION))
++        .header("ms-teams-region", region_header("TEAMS_REGION", TEAMS_REGION))
++        .header("ms-teams-ring", region_header("TEAMS_RING", TEAMS_RING))
+         .header("x-ms-migration", "True")
+         .json(&payload)
+         .send()
+diff --git a/src/calling/srtp.rs b/src/calling/srtp.rs
+index 67a0bb9..dfd3470 100644
+--- a/src/calling/srtp.rs
++++ b/src/calling/srtp.rs
+@@ -63,6 +63,9 @@ pub struct SrtpContext {
+     pub remote_roc: u32,
+     /// Highest sequence number seen inbound.
+     pub remote_highest_seq: u16,
++    /// Inbound (ROC, highest seq) per SSRC: a mixer or several speakers send interleaved
++    /// sequence spaces, and one shared counter mis-estimates the ROC and fails the auth tag.
++    pub remote_streams: std::collections::HashMap<u32, (u32, u16)>,
+     /// SRTCP session keys for local (outbound) RTCP.
+     pub local_srtcp_keys: SrtpSessionKeys,
+     /// SRTCP session keys for remote (inbound) RTCP.
+@@ -243,6 +246,7 @@ pub fn create_context(
+         local_roc: 0,
+         remote_roc: 0,
+         remote_highest_seq: 0,
++        remote_streams: std::collections::HashMap::new(),
+         local_srtcp_keys,
+         remote_srtcp_keys,
+         local_srtcp_index: 0,
+@@ -312,7 +316,8 @@ pub fn unprotect(ctx: &mut SrtpContext, srtp_packet: &[u8]) -> Result<Vec<u8>> {
+     ]);
+ 
+     // Estimate ROC (simple: if seq < highest and diff is large, ROC may have incremented)
+-    let estimated_roc = estimate_roc(ctx.remote_roc, ctx.remote_highest_seq, seq);
++    let (stream_roc, stream_highest) = ctx.remote_streams.get(&ssrc).copied().unwrap_or((0, 0));
++    let estimated_roc = estimate_roc(stream_roc, stream_highest, seq);
+ 
+     // Verify auth tag
+     let expected_tag = compute_auth_tag(
+@@ -338,7 +343,8 @@ pub fn unprotect(ctx: &mut SrtpContext, srtp_packet: &[u8]) -> Result<Vec<u8>> {
+     cipher.apply_keystream(&mut decrypted);
+ 
+     // Update ROC tracking
+-    if seq > ctx.remote_highest_seq || estimated_roc > ctx.remote_roc {
++    if seq > stream_highest || estimated_roc > stream_roc {
++        ctx.remote_streams.insert(ssrc, (estimated_roc, seq));
+         ctx.remote_highest_seq = seq;
+         ctx.remote_roc = estimated_roc;
+     }
+@@ -629,6 +635,34 @@ mod tests {
+         assert_eq!(decrypted, rtp);
+     }
+ 
++    /// Decrypts every packet of several senders through one receive context.
++    fn assert_interleaved(streams: &[(u32, u16)], count: u16) {
++        let mat = make_test_material();
++        let mut senders: Vec<SrtpContext> =
++            streams.iter().map(|_| create_context(&mat, &mat).unwrap()).collect();
++        let mut rx = create_context(&mat, &mat).unwrap();
++        for i in 0..count {
++            for (k, &(ssrc, base)) in streams.iter().enumerate() {
++                let seq = base.wrapping_add(i);
++                let rtp = rtp::encode(rtp::PT_PCMU, seq, 160 * i as u32, ssrc, &[0x55; 160]);
++                let srtp = protect(&mut senders[k], &rtp).unwrap();
++                let got = unprotect(&mut rx, &srtp)
++                    .unwrap_or_else(|e| panic!("ssrc {:#x} seq {}: {}", ssrc, seq, e));
++                assert_eq!(got, rtp);
++            }
++        }
++    }
++
++    #[test]
++    fn test_unprotect_interleaved_ssrcs_far_apart() {
++        assert_interleaved(&[(0xA, 100), (0xB, 40000)], 50);
++    }
++
++    #[test]
++    fn test_unprotect_one_ssrc_wraps_while_another_does_not() {
++        assert_interleaved(&[(0xA, 65520), (0xB, 10), (0xC, 30000)], 40);
++    }
++
+     #[test]
+     fn test_auth_tag_mismatch() {
+         let mat = make_test_material();
+diff --git a/src/main.rs b/src/main.rs
+index 24679b6..12593eb 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -113,6 +113,23 @@ enum Commands {
+         /// Use 1kHz test tone instead of real microphone (debug mode)
+         #[arg(long)]
+         tone: bool,
++
++        /// Join a scheduled Teams meeting by its meetup-join link instead of placing a call
++        #[arg(long)]
++        meeting: Option<String>,
++
++        /// Write received RTP/RTCP, Trouter frames and SDPs to this directory (S18 spike)
++        #[arg(long)]
++        capture: Option<String>,
++    },
++
++    /// List Teams meetings from 2 h ago to 24 h ahead with their join links (long form when Graph has it)
++    Meetings,
++
++    /// Check a meeting link offline: print what the join would use, connect to nothing
++    MeetingCheck {
++        /// The meetup-join link
++        url: String,
+     },
+ 
+     /// Test microphone capture: record 3 seconds then play back
+@@ -204,12 +221,24 @@ async fn main() -> Result<()> {
+             camera,
+             display,
+             tone,
++            meeting,
++            capture,
+         } => {
+             calling::call_test::run_call_test(
+-                duration, record, echo, thread, camera, display, tone,
++                duration, record, echo, thread, camera, display, tone, meeting, capture,
+             )
+             .await?;
+         }
++        Commands::Meetings => {
++            calling::call_test::list_meetings().await?;
++        }
++        Commands::MeetingCheck { url } => {
++            let m = calling::call_test::parse_meeting_url(&url)?;
++            println!("thread:    {}", m.thread_id);
++            println!("message:   {}", m.message_id);
++            println!("organizer: {}", m.organizer_oid);
++            println!("tenant:    {}", m.tenant_id);
++        }
+         #[cfg(feature = "audio")]
+         Commands::MicTest => {
+             calling::audio::mic_test()?;
+diff --git a/src/trouter/websocket.rs b/src/trouter/websocket.rs
+index 3badee6..464c179 100644
+--- a/src/trouter/websocket.rs
++++ b/src/trouter/websocket.rs
+@@ -56,6 +56,9 @@ impl TrouterSocket {
+             match self.stream.next().await {
+                 Some(Ok(Message::Text(text))) => {
+                     tracing::debug!("WS recv: {}", text);
++                    if let Some(cap) = crate::calling::capture::get() {
++                        cap.trouter(&text);
++                    }
+ 
+                     // Auto-respond to Trouter data frame deliveries (3::: HTTP-over-WS)
+                     if let Some(req_id) = extract_trouter_request_id(&text) {
+@@ -69,7 +72,7 @@ impl TrouterSocket {
+                     // Auto-ack Socket.IO event frames (5:ID::)
+                     // Without acks, the server retries indefinitely and blocks new events.
+                     if let Some(ack_id) = extract_socketio_ack_id(&text) {
+-                        let ack = format!("6:{}::", ack_id);
++                        let ack = format!("6:::{}+[]", ack_id);
+                         tracing::debug!("Socket.IO ack: {}", ack);
+                         if let Err(e) = self.stream.send(Message::Text(ack)).await {
+                             tracing::warn!("Failed to send Socket.IO ack: {:#}", e);
