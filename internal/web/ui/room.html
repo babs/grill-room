@@ -427,6 +427,8 @@
   </section>
   <div id="viewer-empty"><p class="empty">Pick a document to read it here.</p></div>
   <section class="chat">
+    <!-- Keep #send last: e2e/transcription-pane.spec.js asserts it. -->
+    <div class="drop-overlay" aria-hidden="true">Drop to send with your message</div>
     <button type="button" id="chat-unfold" class="btn-icon btn-ghost" aria-label="Show the chat" data-tip="Show the chat" data-icon="chat"></button>
     <div id="chat-filter" class="chat-filter" role="group" aria-label="Chat filter">
       <button type="button" data-filter="all" aria-pressed="false">All</button>
@@ -464,7 +466,6 @@
       <p id="send-error" class="said error" role="status"></p>
       <p id="send-hint" class="hint" hidden>Enter sends, Shift+Enter adds a line.</p>
     </form>
-    <div class="drop-overlay" aria-hidden="true">Drop to send with your message</div>
   </section>
 </div>
 <nav id="tabbar" class="tabbar" aria-label="Room sections">
