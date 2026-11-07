@@ -331,7 +331,8 @@ test('locked pill and viewer toolbar', async ({ browser, request }) => {
   await expect(alice.locator('#viewer')).toBeVisible();
   const tools = await alice.locator('.viewer-head :is(button, a):visible').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().height)));
   expect(new Set(tools)).toEqual(new Set([36]));
-  await expect(alice.locator('.viewer-head > :first-child')).toHaveId('doc-close');
+  // The document's head, not the Video stage's (030), which has its own.
+  await expect(alice.locator('#viewer > .viewer-head > :first-child')).toHaveId('doc-close');
 });
 
 // 005-AC36: a phone shows one tab at a time under a bar; each keeps its scroll position, and a
@@ -426,6 +427,8 @@ test('status strip and toasts', async ({ browser, request }) => {
   await expect(alice.locator('#toasts .toast')).toHaveText('Copied');
   await expect(alice.locator('#toast-live')).toHaveText('Copied');
   await expect(alice.locator('#toast-live')).toHaveAttribute('role', 'status');
+  // Each message is a node of its own: atomic, a status region would read them all again each time.
+  await expect(alice.locator('#toast-live')).toHaveAttribute('aria-atomic', 'false');
   await expect(alice.locator('#toasts .toast')).toHaveCount(0, { timeout: 8000 });
 });
 

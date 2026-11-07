@@ -26,6 +26,11 @@ ECHO_S = 1.5
 ONSET_SR = 16000
 
 
+def is_voice(pub: rtc.TrackPublication) -> bool:
+    """A microphone: a shared tab's sound is not its sharer speaking (030-AC15)."""
+    return pub.kind == rtc.TrackKind.KIND_AUDIO and pub.source == rtc.TrackSource.SOURCE_MICROPHONE
+
+
 def is_agent(p: Any) -> bool:
     return getattr(p, "kind", None) == rtc.ParticipantKind.PARTICIPANT_KIND_AGENT or str(
         getattr(p, "identity", "")
@@ -105,7 +110,7 @@ class Bots:
             for p in bot.room.remote_participants.values()
             if not is_agent(p)
             for pub in p.track_publications.values()
-            if pub.kind == rtc.TrackKind.KIND_AUDIO and pub.subscribed
+            if is_voice(pub) and pub.subscribed
         )
 
     def out(self, room: str, persona: int) -> TrackOut | None:
@@ -167,11 +172,11 @@ class Bots:
 
         def subscribe(pub: rtc.RemoteTrackPublication, p: rtc.RemoteParticipant) -> None:
             # LiveKit names a human as speaker to a bot only once it hears their track (S14).
-            if not is_agent(p) and pub.kind == rtc.TrackKind.KIND_AUDIO:
+            if not is_agent(p) and is_voice(pub):
                 pub.set_subscribed(True)
 
-        def heard(track: rtc.Track, _pub: rtc.RemoteTrackPublication, p: rtc.RemoteParticipant) -> None:
-            if not is_agent(p) and track.kind == rtc.TrackKind.KIND_AUDIO:
+        def heard(track: rtc.Track, pub: rtc.RemoteTrackPublication, p: rtc.RemoteParticipant) -> None:
+            if not is_agent(p) and is_voice(pub):
                 vad = f"vad:persona-{persona}:{p.identity}"
                 listens[p.identity] = self._spawn(self._listen(voice, vad, p.identity, track))
 

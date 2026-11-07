@@ -94,8 +94,8 @@ func TestVoiceToken(t *testing.T) {
 	if exp := time.Unix(int64(c["exp"].(float64)), 0); time.Until(exp) > voiceTokenTTL || voiceTokenTTL > time.Minute {
 		t.Fatalf("token lives until %v", exp)
 	}
-	if v["canPublishData"] != false || v["roomAdmin"] != nil || len(v["canPublishSources"].([]any)) != 1 {
-		t.Fatalf("grant wider than microphone audio: %v", v)
+	if v["canPublishData"] != false || v["roomAdmin"] != nil || !slices.Equal(v["canPublishSources"].([]any), []any{"microphone", "camera", "screen_share", "screen_share_audio"}) {
+		t.Fatalf("grant not exactly mic, camera and screen (030-AC1): %v", v)
 	}
 
 	other := e.createRoom(t, "Other")
