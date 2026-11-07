@@ -275,6 +275,10 @@ export function removeSandbox(name) {
 
 export const agentState = (page, roomID) => page.evaluate((id) => fetch(`/api/rooms/${id}/agent`).then((r) => r.json()), roomID);
 
+// patchPersona changes persona id of the room as page's participant and returns the status.
+export const patchPersona = (page, roomID, id, body) => page.evaluate(([r, p, b]) => fetch(`/api/rooms/${r}/personas/${p}`,
+  { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) }).then((res) => res.status), [roomID, id, body]);
+
 // ask says text in the room, presses the persona's button and returns its synthesis.
 export async function ask(page, roomID, text, persona = 'Grill') {
   const before = await page.locator('#messages li.msg.agent').count();

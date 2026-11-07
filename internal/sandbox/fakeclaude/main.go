@@ -18,6 +18,7 @@
 //	FAKE_HOOKS        answer with what the plugins' SessionStart hooks printed
 //	FAKE_PINGPONG A B as persona A call @B, as any other call @A, and repeat the marker so the
 //	                  called persona's prompt holds it too (an agent chain)
+//	FAKE_SILENT       answer nothing and write nothing, as a time keeper with nothing to say
 //	FAKE_SLOW         take a few seconds (a turn others queue behind)
 //	FAKE_SLEEP        write docs/notes.md and the prompt to the session, as a turn under way
 //	                  does, then hang until killed
@@ -275,6 +276,8 @@ func act(prompt, history, cwd, system, effort, autocompact, session string) (str
 		return pingPongCall(prompt)
 	case strings.Contains(prompt, "FAKE_WHOAMI"):
 		return whoami(system, effort)
+	case strings.Contains(prompt, "FAKE_SILENT"):
+		return "", nil
 	case strings.Contains(prompt, "FAKE_SLOW"):
 		time.Sleep(slow)
 		return "Slow turn done.", nil

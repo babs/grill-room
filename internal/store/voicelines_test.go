@@ -269,7 +269,7 @@ func TestImportedTurnsKeepTheParagraphRead(t *testing.T) {
 	ctx := t.Context()
 	s := openTest(t)
 	alice, grill := richRoom(t, s, "orig")
-	second, _, err := s.AddPersona(ctx, "orig", templateByPreset(t, s, "secretary").ID, alice)
+	second, _, err := s.AddPersona(ctx, "orig", templateByPreset(t, s, "secretary").ID, alice, true)
 	if err != nil {
 		t.Fatal(err)
 	}

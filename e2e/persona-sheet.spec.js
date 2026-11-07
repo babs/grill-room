@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, menuItem, personaRow, personaSheet, agentState, unfoldTabs } from './helpers.js';
+import { roomWith, menuItem, personaRow, personaSheet, agentState, unfoldTabs, appointAdmin, patchPersona } from './helpers.js';
 import { adminToken } from './playwright.config.js';
 
 const sizes = { phone: { width: 390, height: 844 }, desktop: { width: 1440, height: 900 } };
@@ -252,4 +252,53 @@ test('persona sheet: history and the way back to Room settings', async ({ browse
   await expect(alice.locator('#manage')).toBeVisible();
   await expect(alice).toHaveURL(/#manage\/personas$/);
   await expect(alice.locator('#manage-personas')).toBeVisible();
+});
+
+// 032-AC1 032-AC6: the Timekeeper from the library comes every 5 minutes, as the time keeper,
+// speaking over after 20 s; "Speak over after" shows only with the role on and "Speaks in the
+// call" on. Turning the role on for Grill takes it from the Timekeeper, with a line in the chat.
+// A member who is no room admin sees the two controls, unable to change them.
+test('persona sheet: the time keeper', async ({ browser, request }) => {
+  const { room, pages: [alice, bob] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  await appointAdmin(alice, request, room.id);
+  await menuItem(alice, 'Personas');
+  await alice.locator('#persona-template').selectOption({ label: '⏱️ Timekeeper v1' });
+  await alice.locator('#personas').getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(personaRow(alice, 'Timekeeper').locator('.pr-meta')).toHaveText('sonnet · effort low · every 5 minutes');
+  let sheet = await personaSheet(alice, 'Timekeeper', 'Triggers');
+  await expect(sheet.getByLabel('Speaks up')).toHaveValue('every_minutes');
+  await expect(sheet.getByLabel('N', { exact: true })).toHaveValue('5');
+  await expect(sheet.getByLabel('Time keeper')).toBeChecked();
+  const cut = sheet.getByLabel('Speak over after');
+  await expect(cut).toHaveValue('20');
+  await expect(cut.locator('option')).toHaveText(['Off', '10 s', '20 s', '30 s', '60 s']);
+  await sheet.getByLabel('Time keeper').uncheck();
+  await expect(cut).toBeHidden();
+  await sheet.getByLabel('Time keeper').check();
+  await expect(cut).toBeVisible();
+  // Out of the call: no wait to set.
+  const tk = (await agentState(alice, room.id)).personas.find((p) => p.name === 'Timekeeper');
+  expect(await patchPersona(alice, room.id, tk.id, { speaks: false })).toBe(200);
+  await expect(cut).toBeHidden();
+  expect(await patchPersona(alice, room.id, tk.id, { speaks: true })).toBe(200);
+  await expect(cut).toBeVisible();
+  await sheet.getByRole('button', { name: 'Close' }).click();
+
+  sheet = await personaSheet(alice, 'Grill', 'Triggers');
+  await expect(sheet.getByLabel('Time keeper')).not.toBeChecked();
+  await expect(sheet.getByLabel('Speak over after')).toBeHidden();
+  await sheet.getByLabel('Time keeper').check();
+  await sheet.getByLabel('Speak over after').selectOption('30');
+  await sheet.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(sheet.locator('#persona-status')).toHaveText('Grill saved. It applies from its next turn.');
+  await expect(bob.locator('#messages')).toContainText('Alice changed 🔥 Grill: now keeps time (was ⏱️ Timekeeper), speak over after off → 30 s.');
+  await sheet.getByRole('button', { name: 'Close' }).click();
+  sheet = await personaSheet(alice, 'Timekeeper', 'Triggers');
+  await expect(sheet.getByLabel('Time keeper')).not.toBeChecked();
+
+  const bobSheet = await personaSheet(bob, 'Grill', 'Triggers');
+  await expect(bobSheet.getByLabel('Time keeper')).toBeChecked();
+  await expect(bobSheet.getByLabel('Time keeper')).toBeDisabled();
+  await expect(bobSheet.getByLabel('Speak over after')).toBeDisabled();
+  await expect(bobSheet.getByText('Only room admins change these.')).toBeVisible();
 });

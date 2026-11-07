@@ -512,7 +512,7 @@ func TestRejectTurnRunsAgainFirst(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	r := newTurnRoom(t, s, "a")
-	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, r.p)
+	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, r.p, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -566,7 +566,7 @@ func TestParallelStartAndPop(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	r := newTurnRoom(t, s, "a")
-	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, r.p)
+	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, r.p, true)
 	if err != nil {
 		t.Fatal(err)
 	}

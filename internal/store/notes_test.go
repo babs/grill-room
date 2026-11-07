@@ -15,7 +15,7 @@ func TestOneNotesWatcher(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	alice, bob, grill, _ := approvingRoom(t, s, "w")
-	sec, _, err := s.AddPersona(ctx, "w", templateByPreset(t, s, "secretary").ID, alice)
+	sec, _, err := s.AddPersona(ctx, "w", templateByPreset(t, s, "secretary").ID, alice, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestNotesWatcherNews(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	alice, _, grill := personaRoom(t, s, "n")
-	sec, _, err := s.AddPersona(ctx, "n", templateByPreset(t, s, "secretary").ID, alice)
+	sec, _, err := s.AddPersona(ctx, "n", templateByPreset(t, s, "secretary").ID, alice, true)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, startDaemon, pairDaemon, menuItem, openStrip, personaSheet, closePersonas } from './helpers.js';
+import { roomWith, startDaemon, pairDaemon, menuItem, openStrip, personaSheet, closePersonas, appointAdmin, agentState, patchPersona } from './helpers.js';
 
 const led = (page, name) => page.locator(`button.persona[data-name="${name}"] .led`);
 
@@ -17,7 +17,7 @@ test('personas: add, edit, queue', async ({ browser, request, baseURL }) => {
   const panel = alice.locator('#personas');
   await menuItem(alice, 'Personas');
   await expect(panel.locator('.persona-row')).toHaveCount(1);
-  await expect(panel.locator('#persona-template option')).toHaveCount(3);
+  await expect(panel.locator('#persona-template option')).toHaveCount(4);
   await panel.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
   await panel.getByRole('button', { name: 'Add', exact: true }).click();
   await expect(panel.locator('.persona-row')).toHaveCount(2);
@@ -72,6 +72,52 @@ test('personas: add, edit, queue', async ({ browser, request, baseURL }) => {
     await expect(scribe.locator('.effort')).toHaveText('effort low');
     await expect(alice.locator('#queue')).toBeHidden();
     await expect(led(alice, 'Secretary')).toHaveAttribute('aria-label', 'Secretary ready');
+  } finally {
+    daemon.cleanup();
+  }
+});
+
+// 032-AC5 032-AC6: the library's Timekeeper, added to a room whose Grill keeps time, takes the role
+// with its room settings, all said in the chat; the Secretary added next brings none.
+test('personas: the Timekeeper from the library', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await appointAdmin(alice, request, room.id);
+  const grill = (await agentState(alice, room.id)).personas[0];
+  expect(await patchPersona(alice, room.id, grill.id, { time_keeper: true })).toBe(200);
+  const panel = alice.locator('#personas');
+  await menuItem(alice, 'Personas');
+  await panel.locator('#persona-template').selectOption({ label: '⏱️ Timekeeper v1' });
+  await panel.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(alice.locator('#messages')).toContainText('Alice added the persona ⏱️ Timekeeper, from the template "Timekeeper" v1, every N minutes off → 5, '
+    + 'now keeps time (was 🔥 Grill), speak over after off → 20 s.');
+  await expect(alice.locator('button.persona')).toHaveText([/^🔥Grill/, /^⏱️Timekeeper/]);
+  await panel.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
+  await panel.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(alice.locator('#messages')).toContainText('Alice added the persona 📝 Secretary, from the template "Secretary" v1.');
+  const ps = (await agentState(alice, room.id)).personas;
+  expect(ps.map((p) => [p.name, !!p.time_keeper, p.cut_in_s || 0, p.every_minutes || 0, p.speaks]))
+    .toEqual([['Grill', false, 0, 0, true], ['Timekeeper', true, 20, 5, true], ['Secretary', false, 0, 0, true]]);
+});
+
+// 032-AC3: the time keeper's turn with an empty answer posts nothing, and its pill says "nothing to
+// say" until its next turn. Real daemon and Docker sandbox, fake claude.
+test('personas: a silent time keeper turn', async ({ browser, request, baseURL }) => {
+  test.setTimeout(120_000);
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await appointAdmin(alice, request, room.id);
+  const grill = (await agentState(alice, room.id)).personas[0];
+  expect(await patchPersona(alice, room.id, grill.id, { time_keeper: true })).toBe(200);
+  const daemon = startDaemon(`${baseURL}/r/${room.id}`);
+  try {
+    await pairDaemon(alice, daemon);
+    await expect(led(alice, 'Grill')).toHaveAttribute('aria-label', 'Grill ready', { timeout: 30_000 });
+    await alice.locator('#body').fill('FAKE_SILENT');
+    await alice.locator('#body').press('Enter');
+    await alice.getByRole('button', { name: 'Ask Grill' }).click();
+    const pill = alice.locator('button.persona[data-name="Grill"]');
+    await expect(pill.locator('.pstate')).toHaveText('nothing to say', { timeout: 60_000 });
+    await expect(led(alice, 'Grill')).toHaveAttribute('aria-label', 'Grill ready, nothing to say last time');
+    await expect(alice.locator('#messages li.msg.agent')).toHaveCount(0);
   } finally {
     daemon.cleanup();
   }

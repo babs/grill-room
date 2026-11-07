@@ -62,7 +62,7 @@ func TestChainStore(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	alice, bob, grill := personaRoom(t, s, "a")
-	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, alice)
+	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, alice, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestDuePersonas(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	r := newTurnRoom(t, s, "a")
-	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, r.p)
+	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, r.p, true)
 	if err != nil {
 		t.Fatal(err)
 	}

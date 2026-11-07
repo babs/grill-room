@@ -184,7 +184,7 @@ func TestTemplateLibrary(t *testing.T) {
 		t.Fatal("Bob sees Alice's template as his")
 	}
 
-	p, _, err := s.AddPersona(ctx, "a", tp.ID, bob)
+	p, _, err := s.AddPersona(ctx, "a", tp.ID, bob, true)
 	if err != nil || p.TemplateVersion != 2 || p.Text != "v2 text" {
 		t.Fatalf("persona from it: %+v %v", p, err)
 	}
@@ -210,7 +210,7 @@ func TestTemplateLibrary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	q, _, err := s.AddPersona(ctx, "a", again.ID, alice)
+	q, _, err := s.AddPersona(ctx, "a", again.ID, alice, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,15 +236,15 @@ func TestRoomPersonaOverridesAndUpdate(t *testing.T) {
 	ctx := context.Background()
 	alice, bob, grill := personaRoom(t, s, "a")
 	sec := templateByPreset(t, s, "secretary")
-	p, m, err := s.AddPersona(ctx, "a", sec.ID, bob)
+	p, m, err := s.AddPersona(ctx, "a", sec.ID, bob, true)
 	if err != nil || p.Name != "Secretary" || m.ParticipantID != bob.ID || m.Kind != KindSystem ||
 		m.Body != `Bob added the persona 📝 Secretary, from the template "Secretary" v1.` {
 		t.Fatalf("add: %+v %+v %v", p, m, err)
 	}
-	if _, _, err := s.AddPersona(ctx, "a", 999, bob); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.AddPersona(ctx, "a", 999, bob, true); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown template: %v", err)
 	}
-	if _, _, err := s.AddPersona(ctx, "gone", sec.ID, bob); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.AddPersona(ctx, "gone", sec.ID, bob, true); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown room: %v", err)
 	}
 	model, effort, text, name, colour := "haiku", "low", "Only decisions.", "Scribe", "#000000"
@@ -273,7 +273,7 @@ func TestRoomPersonaOverridesAndUpdate(t *testing.T) {
 	}
 	// A second Grill gets a number.
 	def := templateByPreset(t, s, PresetDefault)
-	if g2, _, err := s.AddPersona(ctx, "a", def.ID, bob); err != nil || g2.Name != "Grill-2" {
+	if g2, _, err := s.AddPersona(ctx, "a", def.ID, bob, true); err != nil || g2.Name != "Grill-2" {
 		t.Fatalf("second grill: %+v %v", g2, err)
 	}
 
@@ -282,7 +282,7 @@ func TestRoomPersonaOverridesAndUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, _, err := s.AddPersona(ctx, "a", tp.ID, alice)
+	c, _, err := s.AddPersona(ctx, "a", tp.ID, alice, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +357,7 @@ func TestQueue(t *testing.T) {
 	ctx := context.Background()
 	alice, bob, grill := personaRoom(t, s, "a")
 	_, _, other := personaRoom(t, s, "b")
-	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, alice)
+	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, alice, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +404,7 @@ func TestSessionsPerPersona(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	r := newTurnRoom(t, s, "a")
-	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, r.p)
+	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, r.p, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,11 +452,11 @@ func TestPersonaLimits(t *testing.T) {
 	alice, _, _ := personaRoom(t, s, "a")
 	sec := templateByPreset(t, s, "secretary")
 	for i := 1; i < MaxRoomPersonas; i++ {
-		if _, _, err := s.AddPersona(ctx, "a", sec.ID, alice); err != nil {
+		if _, _, err := s.AddPersona(ctx, "a", sec.ID, alice, true); err != nil {
 			t.Fatalf("persona %d: %v", i+1, err)
 		}
 	}
-	if _, _, err := s.AddPersona(ctx, "a", sec.ID, alice); !errors.Is(err, ErrLimit) || !strings.Contains(err.Error(), "12 personas per room") {
+	if _, _, err := s.AddPersona(ctx, "a", sec.ID, alice, true); !errors.Is(err, ErrLimit) || !strings.Contains(err.Error(), "12 personas per room") {
 		t.Fatalf("persona past the limit: %v", err)
 	}
 	f := PersonaFields{Name: "T", Badge: "x", Colour: "#000000", Text: "t", Model: "sonnet", Effort: "medium"}

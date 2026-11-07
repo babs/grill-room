@@ -17,8 +17,17 @@ Agent @{{.Name}}: {{.Level}}, {{.State}}, turns done: {{.Turns}}, {{.Trigger}}
 No other agent is in the room.
 {{- end}}
 Humans present: {{if .Humans}}{{join .Humans}}{{else}}none{{end}}
+{{- if .Keeper}}
+Hands raised:{{if not .Hands}} none{{end}}
+{{- range .Hands}}
+{{.}}
+{{- end}}
+{{- if .HandsMore}}
+and {{.HandsMore}} more
+{{- end}}
+{{- end}}
 Host: {{or .Host "none"}}
-Speaking now: {{or .Speaker "nobody"}}
+{{if .SpeakerFor}}{{.Speaker}} speaks now, for {{.SpeakerFor}}{{else}}Speaking now: {{or .Speaker "nobody"}}{{end}}
 Chain budget: {{.Chain}}
 Address a human by the @name listed above: it notifies them. @agent is for giving a turn.
 Write @name in your synthesis to give another agent a turn; it counts against the chain budget.

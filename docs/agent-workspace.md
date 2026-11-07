@@ -98,6 +98,7 @@ The prompt opens with who is in the room, from one template, `internal/web/prese
   - without a profile: `#` and the participant's id in the server, `Bob ·#12`. A profile id never starts with `#`;
   - one person who joined twice under the same profile shows the same id twice.
   The humans present are listed by the `@name` a mention of them takes (`mentionToken`: `Ana María` is `@Ana_María`), so a persona addressing one by that name notifies them: chip, highlight and push (005-AC27). A human whose token a persona holds, or whose name has none, is listed bare, as a mention would call the persona;
+- for the room's time keeper only (spec 032), after the humans present: `Hands raised:` then one line per raised hand in queue order, `1. Alice ·a1b2, for 3 min`, at most 5 then `and N more`, or `Hands raised: none`; and the speaker line becomes `Alice ·a1b2 speaks now, for 4 min 10 s`, counted from the first line of their current run: their own voice lines with nobody else's in between and no gap over 30 s. Durations read `40 s`, `3 min`, `4 min 10 s`. Every other persona's preamble mentions no hands;
 - the chain budget left, or "unlimited" while the limit is suspended;
 - to address a human by their `@name`, which notifies them, and to keep `@agent` for giving a turn;
 - how to call another persona with `@name`, and whether the persona's own `@name` gives it another turn.
@@ -165,6 +166,8 @@ Refused or ignored, and listed in a system message after the synthesis:
 - a `spoken.md` over 4 KB or not UTF-8.
 
 Anything else the agent writes, in `transcript/` or at the root, is scratch and is dropped silently.
+
+A turn with an empty synthesis posts no message, and the call hears its spoken line, or else the summary of its actions. The room's time keeper may end a turn silent (spec 032): with an empty synthesis it posts nothing and says nothing, neither its `spoken.md` nor the summary; its pill and card say "nothing to say" until its next turn. The turn still counts as done: its timer restarts from the turn's start, and it counts for every N answers.
 
 ## Wire protocol
 

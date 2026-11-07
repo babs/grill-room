@@ -859,13 +859,32 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 		s.log.Warn("turn_model_mismatch", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.String("asked", out.Model), zap.String("reported", out.ModelNote))
 	}
 	s.chainLinks(r.Context(), done, out.Synthesis)
-	s.queueSpeech(r.Context(), done, o.Spoken, out.Synthesis)
+	if s.silentKeeper(r.Context(), done, out.Synthesis) {
+		s.log.Debug("speech_skipped", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.String("reason", "nothing_to_say"))
+	} else {
+		s.queueSpeech(r.Context(), done, o.Spoken, out.Synthesis)
+	}
 	s.bus.Notify(d.RoomID)
 	s.drain(r.Context(), d.RoomID)
 	s.log.Info("turn_done", zap.String("room", d.RoomID), zap.Int64("turn", t.ID), zap.Strings("revised", done.Report.Revised),
 		zap.Strings("created", done.Report.Created), zap.Strings("rejected", done.Report.Rejected), zap.Int("annotated", done.Report.Annotated),
 		zap.Int("closed", done.Report.Closed), zap.String("model", done.Model), zap.String("effort", done.Effort), zap.Int("session_bytes", len(res.Session)))
 	writeJSON(w, http.StatusOK, done)
+}
+
+// silentKeeper reports turn t of the room's time keeper ending with no answer: it says nothing, its
+// spoken.md and its summary included (032-AC3).
+func (s *Server) silentKeeper(ctx context.Context, t *store.Turn, synthesis string) bool {
+	if strings.TrimSpace(synthesis) != "" {
+		return false
+	}
+	p, err := s.bus.Store.RoomPersona(ctx, t.RoomID, t.PersonaID)
+	if err != nil {
+		// Unknown role: staying silent beats talking over the room by mistake.
+		s.log.Warn("speech_skipped", zap.String("room", t.RoomID), zap.Int64("turn", t.ID), zap.Error(err))
+		return true
+	}
+	return p.TimeKeeper
 }
 
 // recordSetup marks the turn's plugins the daemon left out for an option the host has not set,

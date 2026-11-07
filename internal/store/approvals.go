@@ -173,8 +173,8 @@ func (c PersonaPatch) over(earlier PersonaPatch) PersonaPatch {
 		Text: pick(c.Text, earlier.Text), Model: pick(c.Model, earlier.Model), Effort: pick(c.Effort, earlier.Effort),
 		EveryN: pick(c.EveryN, earlier.EveryN), EveryVoice: pick(c.EveryVoice, earlier.EveryVoice),
 		EveryMinutes: pick(c.EveryMinutes, earlier.EveryMinutes), SelfCall: pick(c.SelfCall, earlier.SelfCall), TemplateVersion: pick(c.TemplateVersion, earlier.TemplateVersion),
-		WatchesNotes: pick(c.WatchesNotes, earlier.WatchesNotes),
-		Skills:       mergePins(c.Skills, earlier.Skills)}
+		WatchesNotes: pick(c.WatchesNotes, earlier.WatchesNotes), TimeKeeper: pick(c.TimeKeeper, earlier.TimeKeeper), CutInS: pick(c.CutInS, earlier.CutInS),
+		Skills: mergePins(c.Skills, earlier.Skills)}
 }
 
 // holdChange keeps c for the host to decide on persona p: a persona has one request, which a later

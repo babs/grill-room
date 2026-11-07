@@ -116,7 +116,7 @@ func TestDefaultVoicesOnce(t *testing.T) {
 	dsn := testDSN(t)
 	pods := []*Store{openAt(t, dsn), openAt(t, dsn)}
 	p := seed(t, pods[0], "a")
-	if _, _, err := pods[0].AddPersona(ctx, "a", templateByPreset(t, pods[0], PresetDefault).ID, p); err != nil {
+	if _, _, err := pods[0].AddPersona(ctx, "a", templateByPreset(t, pods[0], PresetDefault).ID, p, true); err != nil {
 		t.Fatal(err)
 	}
 	catalogue := []string{"v1", "v2", "v3"}
@@ -173,7 +173,7 @@ func TestSpeakingRooms(t *testing.T) {
 	s := openTest(t)
 	for _, r := range []string{"a", "b", "c"} {
 		p := seed(t, s, r)
-		if _, _, err := s.AddPersona(ctx, r, templateByPreset(t, s, PresetDefault).ID, p); err != nil {
+		if _, _, err := s.AddPersona(ctx, r, templateByPreset(t, s, PresetDefault).ID, p, true); err != nil {
 			t.Fatal(err)
 		}
 	}

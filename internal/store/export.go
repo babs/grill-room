@@ -64,10 +64,13 @@ type xPersona struct {
 	EveryMinutes    int    `json:"every_minutes,omitempty"`
 	SelfCall        bool   `json:"self_call"`
 	// WatchesNotes is optional: an archive from before 009 has none, and the format stays (009-AC31).
-	WatchesNotes bool   `json:"watches_notes,omitempty"`
-	Autocompact  int    `json:"autocompact"`
-	CreatedAt    string `json:"created_at"`
-	Skills       []xPin `json:"skills"`
+	WatchesNotes bool `json:"watches_notes,omitempty"`
+	// TimeKeeper and CutInS are optional: an archive from before 032 reads as false and 0 (032-AC4).
+	TimeKeeper  bool   `json:"time_keeper,omitempty"`
+	CutInS      int    `json:"cut_in_s,omitempty"`
+	Autocompact int    `json:"autocompact"`
+	CreatedAt   string `json:"created_at"`
+	Skills      []xPin `json:"skills"`
 	// Speaks, Voice and VoiceRate are optional: an archive from before 013 reads as on, the default
 	// voice and rate 1 (013-AC30).
 	Speaks    *bool   `json:"speaks,omitempty"`
@@ -505,7 +508,7 @@ func exportPersonas(ctx context.Context, tx *txn, roomID string) ([]xPersona, er
 		var preset sql.NullString
 		if err := rows.Scan(&p.Ref, &tpl, &preset, &p.TemplateVersion, &p.Name, &p.Badge, &p.Colour, &p.Text, &p.Model, &p.Effort,
 			&p.EveryN, &p.SelfCall, &p.Autocompact, &p.CreatedAt, &p.EveryVoice, &p.EveryMinutes, &p.WatchesNotes,
-			&p.Speaks, &p.Voice, &p.VoiceRate); err != nil {
+			&p.Speaks, &p.Voice, &p.VoiceRate, &p.TimeKeeper, &p.CutInS); err != nil {
 			return fmt.Errorf("export personas: %w", err)
 		}
 		p.Template, p.TemplatePreset, p.Skills = tpl.Int64, preset.String, []xPin{}
@@ -513,7 +516,7 @@ func exportPersonas(ctx context.Context, tx *txn, roomID string) ([]xPersona, er
 		return nil
 	}, `SELECT p.id, p.template_id, t.preset, p.template_version, p.name, p.badge, p.colour, p.text, p.model, p.effort,
 		COALESCE(p.every_n, 0), p.self_call, p.autocompact, p.created_at, COALESCE(p.every_voice, 0), COALESCE(p.every_minutes, 0), p.watches_notes,
-		p.speaks, p.voice, p.voice_rate
+		p.speaks, p.voice, p.voice_rate, p.time_keeper, p.cut_in_s
 		FROM room_personas p LEFT JOIN persona_templates t ON t.id = p.template_id WHERE p.room_id = ? AND p.pending = 0 ORDER BY p.id`, roomID)
 	if err != nil {
 		return nil, err

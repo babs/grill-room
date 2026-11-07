@@ -107,6 +107,16 @@ const rodinText = `You are Rodin. Before the room spends time on how to build so
 
 Answer in the language the room speaks. If it mixes languages, use the one of the latest messages.`
 
+const timekeeperText = `You are Timekeeper. You keep the room on track; you never take part in the discussion itself.
+
+- Watch three things: the agenda in docs/agenda.md if there is one, the hands raised, and who speaks and for how long. The "Who is here" section gives you the hands and the current speaker.
+- Speak only when the room is off track: someone has held the floor for long, a hand has waited for minutes, or the talk has left the agenda. Then say it in one or two short sentences that name the people, like "Alice, Bob has had his hand up for four minutes."
+- When the room is on track, say nothing: end your turn with an empty final answer and write no spoken.md.
+- On every turn, write drift.json at the root, how far the room has drifted and why: {"level": "low" | "medium" | "high", "reason": "<one line>"}.
+- Never judge what people say, only how the time is spent.
+
+Answer in the language the room speaks. If it mixes languages, use the one of the latest messages.`
+
 // rodin is both a template and a Spec grill persona: one value keeps the two copies equal.
 var rodin = PersonaFields{Name: "Rodin", Badge: "🗿", Colour: "#495057", Text: rodinText, Model: "sonnet", Effort: "high"}
 
@@ -115,10 +125,30 @@ var rodin = PersonaFields{Name: "Rodin", Badge: "🗿", Colour: "#495057", Text:
 var presets = []struct {
 	key, title string
 	f          PersonaFields
+	// room is what a room copy gets on top of the fields, at copy only: a new version never
+	// overrides a room admin's choice (032-AC6).
+	room *PersonaPatch
 }{
-	{PresetDefault, "Grill", PersonaFields{Name: "Grill", Badge: "🔥", Colour: "#d9480f", Text: grillText, Model: DefaultModel, Effort: DefaultEffort}},
-	{"secretary", "Secretary", PersonaFields{Name: "Secretary", Badge: "📝", Colour: "#1971c2", Text: secretaryText, Model: DefaultModel, Effort: DefaultEffort}},
-	{"rodin", "Rodin", rodin},
+	{PresetDefault, "Grill", PersonaFields{Name: "Grill", Badge: "🔥", Colour: "#d9480f", Text: grillText, Model: DefaultModel, Effort: DefaultEffort}, nil},
+	{"secretary", "Secretary", PersonaFields{Name: "Secretary", Badge: "📝", Colour: "#1971c2", Text: secretaryText, Model: DefaultModel, Effort: DefaultEffort}, nil},
+	{"rodin", "Rodin", rodin, nil},
+	{"timekeeper", "Timekeeper", PersonaFields{Name: "Timekeeper", Badge: "⏱️", Colour: "#0c8599", Text: timekeeperText, Model: "sonnet", Effort: "low"},
+		&PersonaPatch{EveryMinutes: ptr(5), Speaks: ptr(true), TimeKeeper: ptr(true), CutInS: ptr(20)}},
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// CutInChoices are the waits, in seconds, a time keeper may take before speaking over; 0 never (032-AC1).
+var CutInChoices = []int{0, 10, 20, 30, 60}
+
+// presetRoom is the room settings preset key brings to a copy; nil for none.
+func presetRoom(key string) *PersonaPatch {
+	for _, p := range presets {
+		if key != "" && p.key == key {
+			return p.room
+		}
+	}
+	return nil
 }
 
 // ensurePresets creates the shipped templates, renames any whose shipped title changed, and adds a
@@ -325,6 +355,16 @@ type RoomPersona struct {
 	NotesMark    int64 `json:"-"`
 	// watchFrom is the label of the persona that watched the notes before this one took over.
 	watchFrom string
+	// TimeKeeper gives its turns the hand queue and talk time, one at most per room; CutInS is
+	// how long it waits before speaking over a human, 0 for never (032-AC1).
+	TimeKeeper bool `json:"time_keeper,omitempty"`
+	CutInS     int  `json:"cut_in_s,omitempty"`
+	// keeperFrom is the label of the persona that kept time before this one took over.
+	keeperFrom string
+	// presetChanges describe the preset's room settings a new copy took (032-AC6).
+	presetChanges []string
+	// Silent is a time keeper whose latest turn ended with nothing to say (032-AC3).
+	Silent bool `json:"silent,omitempty"`
 	// Autocompact is the context size, in tokens, at which Claude Code compacts the persona's
 	// session; 0 leaves it to Claude Code (auto). Passed to claude -p --autocompact (003-AC24).
 	Autocompact int `json:"autocompact"`
@@ -353,7 +393,9 @@ const personaCols = `SELECT p.id, p.room_id, COALESCE(p.template_id, 0), p.templ
 	p.pending, p.cap_decision, COALESCE(p.cap_daemon_id, 0), p.cap_model, p.cap_effort, p.autocompact,
 	COALESCE(s.context_tokens, 0), COALESCE(s.context_window, 0), COALESCE(p.every_voice, 0), COALESCE(p.every_minutes, 0), p.mark_at_ms,
 	CASE WHEN p.every_voice IS NULL THEN 0 ELSE (SELECT COUNT(*) FROM messages m WHERE m.room_id = p.room_id AND m.kind = 'voice'
-		AND m.deleted_at IS NULL AND m.id > p.mark_msg_id) END, p.watches_notes, p.notes_mark, p.speaks, p.voice, p.voice_rate FROM room_personas p
+		AND m.deleted_at IS NULL AND m.id > p.mark_msg_id) END, p.watches_notes, p.notes_mark, p.speaks, p.voice, p.voice_rate,
+	p.time_keeper, p.cut_in_s, p.time_keeper = 1 AND COALESCE((SELECT t.status = 'done' AND NOT EXISTS (SELECT 1 FROM messages m
+		WHERE m.turn_id = t.id AND m.kind = 'agent') FROM turns t WHERE t.persona_id = p.id ORDER BY t.id DESC LIMIT 1), false) FROM room_personas p
 	LEFT JOIN agent_sessions s ON s.persona_id = p.id
 		AND s.session_id = (SELECT session_id FROM turns WHERE persona_id = p.id AND status = 'done' ORDER BY id DESC LIMIT 1) `
 
@@ -365,7 +407,8 @@ func scanPersona(sc scanner) (*RoomPersona, error) {
 	err := sc.Scan(&p.ID, &p.RoomID, &p.TemplateID, &p.TemplateVersion, &p.UpdateVersion,
 		&p.Name, &p.Badge, &p.Colour, &p.Text, &p.Model, &p.Effort, &p.EveryN, &p.SelfCall, &created,
 		&p.Pending, &p.Cap.Status, &p.Cap.DaemonID, &p.Cap.Level.Model, &p.Cap.Level.Effort, &p.Autocompact,
-		&p.ContextTokens, &p.ContextWindow, &p.EveryVoice, &p.EveryMinutes, &markMS, &voices, &p.WatchesNotes, &p.NotesMark, &p.Speaks, &p.Voice, &p.VoiceRate)
+		&p.ContextTokens, &p.ContextWindow, &p.EveryVoice, &p.EveryMinutes, &markMS, &voices, &p.WatchesNotes, &p.NotesMark, &p.Speaks, &p.Voice, &p.VoiceRate,
+		&p.TimeKeeper, &p.CutInS, &p.Silent)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -449,14 +492,14 @@ func freeName(ctx context.Context, tx *txn, roomID, name string) (string, error)
 }
 
 // addPersona copies the latest version of template templateID into room, under a free name. It
-// returns the persona and the template's title.
-func addPersona(ctx context.Context, tx *txn, roomID string, templateID int64) (*RoomPersona, string, error) {
+// returns the persona and the template.
+func addPersona(ctx context.Context, tx *txn, roomID string, templateID int64) (*RoomPersona, *Template, error) {
 	t, err := scanTemplate(tx.QueryRowContext(ctx, templateCols+`WHERE t.id = ?`, templateID))
 	if err != nil {
-		return nil, "", err
+		return nil, nil, err
 	}
 	if t.Name, err = freeName(ctx, tx, roomID, t.Name); err != nil {
-		return nil, "", err
+		return nil, nil, err
 	}
 	var id int64
 	err = tx.QueryRowContext(ctx, `INSERT INTO room_personas(room_id, template_id, template_version, name, badge, colour, text, model, effort, created_at,
@@ -464,13 +507,13 @@ func addPersona(ctx context.Context, tx *txn, roomID string, templateID int64) (
 		SELECT id, ?, ?, ?, ?, ?, ?, ?, ?, ?, `+markNow+` FROM rooms WHERE id = ? RETURNING id`,
 		append(append([]any{t.ID, t.Version}, t.PersonaFields.args()...), now(), time.Now().UnixMilli(), roomID)...).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, "", ErrNotFound
+		return nil, nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, "", fmt.Errorf("add persona: %w", err)
+		return nil, nil, fmt.Errorf("add persona: %w", err)
 	}
 	p, err := roomPersona(ctx, tx, roomID, id)
-	return p, t.Title, err
+	return p, t, err
 }
 
 func presetID(ctx context.Context, tx *txn, key string) (int64, error) {
@@ -504,23 +547,30 @@ func (s *Store) withTx(ctx context.Context, what string, fn func(tx *txn) error)
 
 // AddPersona adds a copy of template templateID's latest version to room, recorded in the chat.
 // A name the room uses already gets a number. While the host approves everything, the persona waits
-// for the host, Pending (002-AC21). ErrNotFound for an unknown room or template.
-func (s *Store) AddPersona(ctx context.Context, roomID string, templateID int64, by *Participant) (*RoomPersona, *Message, error) {
+// for the host, Pending (002-AC21). admin tells that by is a room admin: only their copy of a preset
+// takes its admin-only settings (032-AC6). ErrNotFound for an unknown room or template.
+func (s *Store) AddPersona(ctx context.Context, roomID string, templateID int64, by *Participant, admin bool) (*RoomPersona, *Message, error) {
 	var p *RoomPersona
 	var m *Message
 	err := s.withTx(ctx, "add persona", func(tx *txn) error {
-		var title string
+		var t *Template
 		err := overLimit(ctx, tx, MaxRoomPersonas, "personas per room", `SELECT count(*) FROM room_personas WHERE room_id = ?`, roomID)
 		if err != nil {
 			return err
 		}
-		if p, title, err = addPersona(ctx, tx, roomID, templateID); err != nil {
+		if p, t, err = addPersona(ctx, tx, roomID, templateID); err != nil {
 			return err
 		}
-		body := fmt.Sprintf("added the persona %s, from the template %q v%d.", p.label(), title, p.TemplateVersion)
+		body := fmt.Sprintf("added the persona %s, from the template %q v%d.", p.label(), t.Title, p.TemplateVersion)
 		held, err := heldBy(ctx, tx, roomID, by)
 		if err != nil {
 			return err
+		}
+		if c := presetRoom(t.Preset); c != nil {
+			if p, err = presetSettings(ctx, tx, p, *c, held, admin); err != nil {
+				return err
+			}
+			body = strings.TrimSuffix(body, ".") + ", " + strings.Join(p.presetChanges, ", ") + "."
 		}
 		if held {
 			if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET pending = 1 WHERE id = ?`, p.ID); err != nil {
@@ -537,6 +587,31 @@ func (s *Store) AddPersona(ctx context.Context, roomID string, templateID int64,
 	return p, m, err
 }
 
+// presetSettings gives the new copy p its preset's room settings c (032-AC6). The time keeper role
+// and its wait are room admins' settings: a member's copy goes without. A copy held for the host
+// never gets the role: a room admin gives it once the persona is approved.
+func presetSettings(ctx context.Context, tx *txn, p *RoomPersona, c PersonaPatch, held, admin bool) (*RoomPersona, error) {
+	if !admin {
+		c.TimeKeeper, c.CutInS = nil, nil
+	}
+	if held {
+		c.TimeKeeper = nil
+	}
+	if err := otherWatcher(ctx, tx, p, c); err != nil {
+		return nil, err
+	}
+	changes := c.apply(p)
+	if err := updatePersona(ctx, tx, p); err != nil {
+		return nil, err
+	}
+	updated, err := roomPersona(ctx, tx, p.RoomID, p.ID)
+	if err != nil {
+		return nil, err
+	}
+	updated.presetChanges = changes
+	return updated, nil
+}
+
 // PersonaPatch is a change to a room persona; nil fields stay as they are.
 type PersonaPatch struct {
 	Name, Badge, Colour, Text, Model, Effort *string
@@ -547,6 +622,9 @@ type PersonaPatch struct {
 	EveryMinutes *int `json:",omitempty"`
 	SelfCall     *bool
 	WatchesNotes *bool `json:",omitempty"`
+	// TimeKeeper and CutInS: the time keeper role and its wait before speaking over (032-AC1).
+	TimeKeeper *bool `json:",omitempty"`
+	CutInS     *int  `json:",omitempty"`
 	// Autocompact 0 leaves compaction to Claude Code.
 	Autocompact *int `json:",omitempty"`
 	// TemplateVersion is set by a held template update.
@@ -609,6 +687,14 @@ func (c PersonaPatch) apply(p *RoomPersona) []string {
 		out = append(out, watchText(*c.WatchesNotes, p.watchFrom))
 		p.WatchesNotes = *c.WatchesNotes
 	}
+	if c.TimeKeeper != nil && *c.TimeKeeper != p.TimeKeeper {
+		out = append(out, keeperText(*c.TimeKeeper, p.keeperFrom))
+		p.TimeKeeper = *c.TimeKeeper
+	}
+	if c.CutInS != nil && *c.CutInS != p.CutInS {
+		out = append(out, fmt.Sprintf("speak over after %s → %s", cutIn(p.CutInS), cutIn(*c.CutInS)))
+		p.CutInS = *c.CutInS
+	}
 	if c.Autocompact != nil && *c.Autocompact != p.Autocompact {
 		out = append(out, fmt.Sprintf("autocompact %s → %s", autocompact(p.Autocompact), autocompact(*c.Autocompact)))
 		p.Autocompact = *c.Autocompact
@@ -654,6 +740,24 @@ func watchText(on bool, from string) string {
 	return "now watches the notes"
 }
 
+// keeperText says the time keeper role moved to a persona, from persona from if one had it, or left it.
+func keeperText(on bool, from string) string {
+	switch {
+	case !on:
+		return "no longer keeps time"
+	case from != "":
+		return "now keeps time (was " + from + ")"
+	}
+	return "now keeps time"
+}
+
+func cutIn(s int) string {
+	if s == 0 {
+		return "off"
+	}
+	return strconv.Itoa(s) + " s"
+}
+
 func onOff(b bool) string {
 	if b {
 		return "on"
@@ -681,10 +785,16 @@ func updatePersona(ctx context.Context, tx *txn, p *RoomPersona) error {
 			return fmt.Errorf("update persona %d: %w", p.ID, err)
 		}
 	}
+	if p.TimeKeeper {
+		if err := takeKeeper(ctx, tx, p); err != nil {
+			return err
+		}
+	}
 	_, err := tx.ExecContext(ctx, `UPDATE room_personas SET template_version = ?, name = ?, badge = ?, colour = ?, text = ?, model = ?, effort = ?,
-		every_n = ?, self_call = ?, pending = ?, autocompact = ?, every_voice = ?, every_minutes = ?, watches_notes = ?, speaks = ?, voice = ?, voice_rate = ? WHERE id = ?`,
+		every_n = ?, self_call = ?, pending = ?, autocompact = ?, every_voice = ?, every_minutes = ?, watches_notes = ?, speaks = ?, voice = ?, voice_rate = ?,
+		time_keeper = ?, cut_in_s = ? WHERE id = ?`,
 		append(append([]any{p.TemplateVersion}, p.args()...), nullInt(p.EveryN), p.SelfCall, p.Pending, p.Autocompact,
-			nullInt(p.EveryVoice), nullInt(p.EveryMinutes), p.WatchesNotes, p.Speaks, p.Voice, p.VoiceRate, p.ID)...)
+			nullInt(p.EveryVoice), nullInt(p.EveryMinutes), p.WatchesNotes, p.Speaks, p.Voice, p.VoiceRate, p.TimeKeeper, p.CutInS, p.ID)...)
 	if isUnique(err) {
 		return ErrNameTaken
 	}
@@ -731,6 +841,9 @@ func changePersona(ctx context.Context, tx *txn, p *RoomPersona, c PersonaPatch,
 	// back at approval after someone moved it (009-AC31).
 	if c.WatchesNotes != nil && *c.WatchesNotes == p.WatchesNotes {
 		c.WatchesNotes = nil
+	}
+	if c.TimeKeeper != nil && *c.TimeKeeper == p.TimeKeeper {
+		c.TimeKeeper = nil
 	}
 	if err := otherWatcher(ctx, tx, p, c); err != nil {
 		return nil, nil, false, err
