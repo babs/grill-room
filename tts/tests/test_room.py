@@ -1,4 +1,6 @@
 import asyncio
+import threading
+import time
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -8,7 +10,18 @@ import pytest
 
 from grill_tts import metrics
 from grill_tts.engine import Fake
-from grill_tts.room import FRAME, TRACK_SR, Clock, Line, Pace, RoomVoice, Sentence
+from grill_tts.room import (
+    FRAME,
+    INTERJECTIONS,
+    TRACK_SR,
+    Clock,
+    Interjections,
+    Line,
+    Pace,
+    RoomVoice,
+    Sentence,
+    Stopped,
+)
 from grill_tts.textlayer import TextLayer, load_seed
 
 LAYER = TextLayer(load_seed())
@@ -405,3 +418,450 @@ def test_pace_learns_pessimistically() -> None:
     assert 0.5 < p.rtf < 3.0
     p.learn(wall_s=9.0, audio_s=0.1, chars=2, rate=1.0)
     assert p.rtf < 3.0, "a 100 ms scrap moved the pace"
+
+
+def runs(played: list[tuple[float, bytes]], gap: float = 0.05) -> list[tuple[float, float]]:
+    """The track's playing runs as (start, seconds): frames back to back, split at a gap."""
+    out: list[list[float]] = []
+    for t, _ in played:
+        if out and t - out[-1][1] <= gap:
+            out[-1][1] = t
+        else:
+            out.append([t, t])
+    return [(a, b - a + 0.02) for a, b in out]
+
+
+def said(r: Rig) -> list[tuple[str, str]]:
+    """Records the interjections the room asks for, as (lang, text)."""
+    picked: list[tuple[str, str]] = []
+    clip = r.rv.interjections.clip
+
+    async def spy(voice: str, rate: float, lang: Any, text: str) -> list[bytes]:
+        picked.append((lang, text))
+        return await clip(voice, rate, lang, text)
+
+    r.rv.interjections.clip = spy  # type: ignore[method-assign]
+    return picked
+
+
+# 032-AC8, 032-AC10, 032-AC11: a human speaks without pause: three interjections at 0, T/3 and
+# 2T/3, each under a second, all different and in the line's language, then the line at T, said to
+# its end over them.
+async def test_cut_in_speaks_over_at_t() -> None:
+    r = Rig()
+    picked = said(r)
+    over, said_n = count(metrics.CUT_INS, "spoke_over"), count(metrics.INTERJECTIONS)
+    r.rv.speakers({"7"})
+    ready = r.clock.t
+    r.line(1, "Bob has waited four minutes. Alice, let him in.", cut_in_s=9)
+    await r.until(r.idle(1), virtual_s=30)
+    assert r.rv.humans == {"7"} and not r.outs[1].clears
+    got = runs(r.played("grill"))
+    assert [round(a - ready, 1) for a, _ in got] == [0.0, 3.0, 6.0, 9.0], got
+    assert all(s <= 1.0 + 1e-6 for _, s in got[:3]), got
+    assert len({t for _, t in picked}) == 3 and {lg for lg, _ in picked} == {"en"}, picked
+    assert count(metrics.CUT_INS, "spoke_over") == over + 1
+    assert count(metrics.INTERJECTIONS) == said_n + 3
+    await r.close()
+
+
+# 032-AC8: a breath shorter than the room's quiet time is no quiet: the speaker pauses 0.5 s after
+# the first interjection, and the cut-in keeps its 0, T/3, 2T/3, T timeline, then speaks over.
+async def test_cut_in_holds_through_a_breath() -> None:
+    r = Rig()
+    picked = said(r)
+    r.rv.speakers({"7"})
+    ready = r.clock.t
+    r.line(1, "Bob has waited four minutes.", cut_in_s=9)
+    await r.until(lambda: r.clock.t >= ready + 1.5)
+    r.rv.speakers(set())
+    await r.until(lambda: r.clock.t >= ready + 2.0)
+    r.rv.speakers({"7"})
+    await r.until(r.idle(1), virtual_s=30)
+    got = runs(r.played("grill"))
+    assert [round(a - ready, 1) for a, _ in got] == [0.0, 3.0, 6.0, 9.0], got
+    assert len({t for _, t in picked}) == 3
+    await r.close()
+
+
+# 032-AC8: a line ready 0.3 s into a pause, the speaker going on before the room's quiet time: it cuts
+# in from the moment the speaker holds the line again.
+async def test_cut_in_starts_when_the_speaker_goes_on() -> None:
+    r = Rig()
+    picked = said(r)
+    r.rv.speakers({"7"})
+    await r.until(lambda: r.clock.t >= 1002)
+    r.rv.speakers(set())
+    await r.until(lambda: r.clock.t >= 1002.3)
+    r.line(1, "Bob has waited four minutes.", cut_in_s=9)
+    await r.until(lambda: r.clock.t >= 1002.5)
+    r.rv.speakers({"7"})
+    held = r.clock.t
+    await r.until(r.idle(1), virtual_s=30)
+    got = runs(r.played("grill"))
+    assert [round(a - held, 1) for a, _ in got] == [0.0, 3.0, 6.0, 9.0], got
+    assert len({t for _, t in picked}) == 3
+    await r.close()
+
+
+# 032-AC8, 032-AC11: the room goes quiet after the first interjection: no more of them, the line comes after
+# the room's quiet time, and from then on a human stops it as 013 says.
+async def test_cut_in_yields_when_the_room_goes_quiet() -> None:
+    r = Rig()
+    picked = said(r)
+    yielded = count(metrics.CUT_INS, "yielded")
+    r.rv.speakers({"7"})
+    ready = r.clock.t
+    r.line(1, "Bob a levé la main il y a quatre minutes. Alice, laisse-le parler.", cut_in_s=9)
+    await r.until(lambda: r.clock.t >= ready + 1.5)
+    r.rv.speakers(set())
+    quiet = r.clock.t
+    await r.until(lambda: len(runs(r.played("grill"))) == 2, virtual_s=10)
+    assert [lg for lg, _ in picked] == ["fr"]
+    assert runs(r.played("grill"))[1][0] - quiet == pytest.approx(1.0, abs=0.03)
+    assert count(metrics.CUT_INS, "yielded") == yielded + 1
+    r.rv.speakers({"7"})
+    await r.until(lambda: bool(r.outs[1].clears))
+    await r.close()
+
+
+# 032-AC7, 032-AC8: T = 0 with a human speaking waits as 013 says; a cut-in line meeting nobody
+# speaking is said at once, and a human who then speaks stops it as any line.
+async def test_no_cut_in_without_t_or_a_speaker() -> None:
+    r = Rig()
+    picked = said(r)
+    r.rv.speakers({"7"})
+    r.line(1, "Plain line.", cut_in_s=0)
+    await r.until(lambda: r.clock.t >= 1012)
+    assert not r.log and r.state(1) == ("waiting", "")
+    r.rv.speakers(set())
+    await r.until(r.idle(1))
+    start = r.clock.t
+    r.line(2, "One two three four five six seven eight.", cut_in_s=9, resume_s=2)
+    await r.until(lambda: len(r.played("secretary")) >= 5)
+    assert r.played("secretary")[0][0] - start <= 0.03
+    r.rv.speakers({"7"})
+    await r.until(lambda: r.state(2)[0] == "dropped", virtual_s=10)
+    assert r.state(2) == ("dropped", "interrupted") and not picked
+    await r.close()
+
+
+# 032-AC9: a cut-in line waits its turn behind another persona's, past the room's queue maximum but
+# within it plus T; its age at the server counts against both.
+async def test_cut_in_keeps_queue_order_within_its_longer_maximum() -> None:
+    r = Rig()
+    r.line(2, " ".join(["word"] * 20) + ".")
+    r.line(1, "Time is up.", queue_s=5, cut_in_s=10)
+    await r.until(r.idle(1), virtual_s=40)
+    sec, grill = r.played("secretary"), r.played("grill")
+    assert grill and sec[-1][0] < grill[0][0], "the cut-in line went ahead of the queue"
+    assert grill[0][0] - 1000 > 5, "the plain queue maximum was enough"
+    d = {"seq": 1, "room": "r", "persona_id": 1, "persona": "P", "voice": "alba", "text": "x"}
+    d |= {"quiet_ms": 0, "resume_s": 20, "queue_s": 40, "queued_at": "2027-01-15T07:59:00Z"}
+    now = datetime.fromisoformat("2027-01-15T08:00:00+00:00").timestamp()
+    assert Line.parse(d | {"cut_in_s": 10}, 500.0, wall=now).received == pytest.approx(450.0)
+    assert Line.parse(d, 500.0, wall=now).received == pytest.approx(460.0)
+    await r.close()
+
+
+class Counting(Fake):
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+
+    def stream(self, voice: str, lang: Any, text: str, stop: Any) -> Any:
+        self.calls.append((voice, lang, text))
+        return super().stream(voice, lang, text, stop)
+
+
+# 032-AC10: a bot joining makes its voice and rate's 12 interjections per language once, after the
+# line being made; each is kept, under a second, per voice, rate and language.
+async def test_interjections_made_once_per_voice_rate_language() -> None:
+    eng = Counting()
+    ij = Interjections(eng)
+    ij.hold()
+    ij.warm("alba", 1.0)
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert not eng.calls, "made while a line was being made"
+    ij.release()
+    ij.warm("alba", 1.0)
+    await ij._jobs.join()
+    ij.close()
+    assert all(len(v) >= 12 for v in INTERJECTIONS.values())
+    assert sorted(eng.calls) == sorted(("alba", lg, t) for lg, ts in INTERJECTIONS.items() for t in ts)
+    n = len(eng.calls)
+    for lang, texts in INTERJECTIONS.items():
+        for text in texts:
+            frames = await ij.clip("alba", 1.0, lang, text)
+            assert 0 < len(frames) * FRAME / TRACK_SR <= 1.0
+    assert len(eng.calls) == n
+    await ij.clip("alba", 1.3, "en", "Hmm.")
+    await ij.clip("marius", 1.0, "en", "Hmm.")
+    assert len(eng.calls) == n + 2
+
+
+class Gated(Fake):
+    """A threaded engine that, after its first chunk of the first clip, waits for the gate or its stop."""
+
+    inline = False
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.started = threading.Event()
+        self.gate = threading.Event()
+
+    def stream(self, voice: str, lang: Any, text: str, stop: threading.Event) -> Any:
+        self.calls.append(text)
+        for i, chunk in enumerate(super().stream(voice, lang, text, stop)):
+            yield chunk
+            if i == 0 and len(self.calls) == 1:
+                self.started.set()
+                # Bounded: a broken stop must fail the test, not hang the run.
+                end = time.monotonic() + 3
+                while not self.gate.is_set() and not stop.is_set() and time.monotonic() < end:
+                    time.sleep(0.001)
+
+
+# 032-AC10: a line starting stops the background clip in progress; it is made again, whole, once no
+# line is being made, and never kept cut short.
+async def test_a_line_stops_the_clip_in_progress() -> None:
+    eng = Gated()
+    ij = Interjections(eng)
+    ij.warm("alba", 1.0)
+    while not eng.started.is_set():
+        await asyncio.sleep(0.001)
+    ij.hold()
+    first = ij._clips[("alba", 1.0, "en", "Hmm.")]
+    await asyncio.wait_for(asyncio.wait({first}), 2.0)
+    assert isinstance(first.exception(), Stopped), "the clip went on beside the line"
+    for _ in range(50):
+        await asyncio.sleep(0.001)
+    assert eng.calls == ["Hmm."], "made another clip while a line was being made"
+    eng.gate.set()
+    ij.release()
+    await ij._jobs.join()
+    ij.close()
+    assert eng.calls[:2] == ["Hmm.", "Hmm."]
+    whole = Interjections(Fake())
+    assert await ij.clip("alba", 1.0, "en", "Hmm.") == await whole.clip("alba", 1.0, "en", "Hmm.")
+
+
+# 032-AC10: two cut-ins asking for the same clip at once share one synthesis.
+async def test_callers_share_one_synthesis() -> None:
+    eng = Counting()
+    eng.inline = False
+    ij = Interjections(eng)
+    a, b = await asyncio.gather(ij.clip("alba", 1.0, "en", "Um."), ij.clip("alba", 1.0, "en", "Um."))
+    assert a == b and len(eng.calls) == 1
+
+
+# 032-AC8: the speaker pauses past the quiet time after two interjections; the line starts, the
+# speaker goes on and stops it as 013 does, and at T, from the first interjection, it says the rest
+# over them, with no new interjection.
+async def test_yielded_line_resumes_over_the_speaker_at_t() -> None:
+    r = Rig()
+    picked = said(r)
+    r.rv.speakers({"7"})
+    ready = r.clock.t
+    r.line(1, " ".join(["word"] * 30) + ".", cut_in_s=9)
+    await r.until(lambda: r.clock.t >= ready + 4.5)
+    r.rv.speakers(set())
+    await r.until(lambda: r.clock.t >= ready + 6.5)
+    assert r.state(1) == ("speaking", "")
+    r.rv.speakers({"7"})
+    cut = r.clock.t
+    await r.until(lambda: bool(r.outs[1].clears))
+    assert r.outs[1].clears[0] - cut <= 0.021
+    await r.until(r.idle(1), virtual_s=40)
+    assert r.rv.humans == {"7"} and len(picked) == 2
+    later = [t for t, _ in r.played("grill") if t > cut + 0.05]
+    assert later[0] - ready == pytest.approx(9.0, abs=0.05), later[0] - ready
+    await r.close()
+
+
+# 032-AC8: a keeper line that would reach T past its queue maximum, queued behind another keeper
+# line, does not cut in: it waits as 013 says and goes stale, without a sound.
+async def test_late_cut_in_follows_013() -> None:
+    r = Rig()
+    r.rv.speakers({"7"})
+    r.line(1, "Time is up.", cut_in_s=9, queue_s=10)
+    r.line(2, "Me too.", cut_in_s=9, queue_s=10)
+    await r.until(lambda: r.state(2)[0] == "dropped", virtual_s=30)
+    assert r.state(1) == ("idle", "")
+    assert r.state(2) == ("dropped", "stale") and not r.played("secretary")
+    await r.close()
+
+
+class Overlap(Fake):
+    """A threaded engine that counts the syntheses running at once."""
+
+    inline = False
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.active = self.peak = self.calls = 0
+
+    def stream(self, voice: str, lang: Any, text: str, stop: threading.Event) -> Any:
+        with self.lock:
+            self.active += 1
+            self.calls += 1
+            self.peak = max(self.peak, self.active)
+        try:
+            for chunk in super().stream(voice, lang, text, stop):
+                time.sleep(0.0005)
+                yield chunk
+        finally:
+            with self.lock:
+                self.active -= 1
+
+
+# 032-AC10: two warms at once (a rate edit while the first runs) make one clip at a time, and a
+# line starting stops the one running, whichever warm it is from.
+async def test_overlapping_warms_make_one_clip_at_a_time() -> None:
+    eng = Overlap()
+    ij = Interjections(eng)
+    ij.warm("alba", 1.0)
+    ij.warm("alba", 1.2)
+    while eng.calls < 14:
+        await asyncio.sleep(0.001)
+    ij.hold()
+    for _ in range(1000):
+        if not eng.active:
+            break
+        await asyncio.sleep(0.001)
+    held = eng.calls
+    for _ in range(50):
+        await asyncio.sleep(0.001)
+    assert not eng.active and eng.calls == held, "made a clip while a line was being made"
+    ij.release()
+    while len([k for k, f in ij._clips.items() if f.done() and not f.exception()]) < 48:
+        await asyncio.sleep(0.005)
+    ij.close()
+    assert eng.peak == 1
+
+
+# 032-AC10: an English voice's interjections are made in English first, a French one's in French.
+async def test_warm_starts_with_the_voices_language() -> None:
+    for voice, lang in (("alba", "en"), ("estelle", "fr")):
+        eng = Counting()
+        ij = Interjections(eng)
+        ij.warm(voice, 1.0)
+        while len(eng.calls) < 24:
+            await asyncio.sleep(0.001)
+        ij.close()
+        assert {lg for _, lg, _ in eng.calls[:12]} == {lang}, eng.calls[:12]
+
+
+# 032-AC8, 032-AC9: a keeper line whose bot joins too late to reach T within the queue maximum
+# follows 013: it waits for the quiet that never comes and goes stale, nothing played.
+async def test_late_bot_does_not_cut_in_past_the_maximum() -> None:
+    r = Rig()
+    r.rv.out = lambda p: r.outs.get(p) if r.clock.t >= 1012 else None
+    r.rv.speakers({"7"})
+    r.line(1, "Time is up.", cut_in_s=9, queue_s=10)
+    await r.until(lambda: r.state(1)[0] == "dropped", virtual_s=30)
+    assert r.state(1) == ("dropped", "stale") and not r.played("grill")
+    await r.close()
+
+
+# 032-AC8: the only listener leaves during the cut-in: at T the line is dropped as no_listener,
+# not said to nobody.
+async def test_cut_in_with_nobody_left_listening_drops() -> None:
+    r = Rig()
+    r.rv.speakers({"7"})
+    ready = r.clock.t
+    r.line(1, "Time is up.", cut_in_s=9)
+    await r.until(lambda: r.clock.t >= ready + 8)
+    r.rv.set_listeners(False)
+    await r.until(lambda: r.state(1)[0] == "dropped", virtual_s=5)
+    assert r.state(1) == ("dropped", "no_listener")
+    assert not [t for t, _ in r.played("grill") if t >= ready + 8.9]
+    await r.close()
+
+
+# 032-AC10: a line released and another held in the same loop step: the warm starts no clip.
+async def test_warm_waits_for_a_hold_right_after_a_release() -> None:
+    eng = Counting()
+    ij = Interjections(eng)
+    ij.hold()
+    ij.warm("alba", 1.0)
+    for _ in range(10):
+        await asyncio.sleep(0)
+    ij.release()
+    ij.hold()
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert not eng.calls, "a clip started while a line held the engine"
+    ij.release()
+    await ij._jobs.join()
+    ij.close()
+    assert len(eng.calls) == 24
+
+
+# 032-AC8: the bot leaves while the cut-in yields: the line looks for its track again and goes
+# stale, instead of playing into a track that left the call.
+async def test_yielded_line_looks_for_its_bot_again() -> None:
+    r = Rig()
+    r.rv.speakers({"7"})
+    ready = r.clock.t
+    r.line(1, "Time is up.", cut_in_s=9)
+    await r.until(lambda: r.clock.t >= ready + 1.5)
+    r.rv.speakers(set())
+    left = r.outs.pop(1)
+    await r.until(lambda: r.state(1)[0] == "dropped", virtual_s=60)
+    assert r.state(1) == ("dropped", "stale")
+    assert not [t for n, t, _ in left.log if n == "grill" and t >= ready + 1.5]
+    await r.close()
+
+
+# 032-AC8: T past the resume window (T 30, resume_s 20): a yielded line talked over is not dropped as
+# interrupted; it waits until T, then goes on over the speaker.
+async def test_yielded_line_waits_past_the_resume_window_until_t() -> None:
+    r = Rig()
+    r.rv.speakers({"7"})
+    ready = r.clock.t
+    r.line(1, " ".join(["word"] * 20) + ".", cut_in_s=30, resume_s=20)
+    await r.until(lambda: r.clock.t >= ready + 1.5)
+    r.rv.speakers(set())
+    await r.until(lambda: r.clock.t >= ready + 3.5)
+    r.rv.speakers({"7"})
+    cut = r.clock.t
+    await r.until(r.idle(1), virtual_s=60)
+    later = [t for t, _ in r.played("grill") if t > cut + 0.05]
+    assert later[0] - ready == pytest.approx(30.0, abs=0.05) and r.rv.humans == {"7"}
+    await r.close()
+
+
+# 032-AC8: the speaker went quiet while the bot was joining: no interjection into a quiet room, the
+# line is said as soon as the bot is in.
+async def test_no_interjection_into_a_room_gone_quiet() -> None:
+    r = Rig()
+    picked = said(r)
+    r.rv.out = lambda p: r.outs.get(p) if r.clock.t >= 1003 else None
+    r.rv.speakers({"7"})
+    r.line(1, "Time is up.", cut_in_s=9)
+    await r.until(lambda: r.clock.t >= 1001)
+    r.rv.speakers(set())
+    await r.until(r.idle(1), virtual_s=20)
+    assert not picked
+    assert r.played("grill")[0][0] - 1000 == pytest.approx(3.0, abs=0.15)
+    await r.close()
+
+
+# 032-AC8: the bot reconnects during the cut-in: the line is said over the speaker on the new track.
+async def test_spoke_over_line_finds_a_reconnected_bot() -> None:
+    r = Rig()
+    r.rv.speakers({"7"})
+    ready = r.clock.t
+    r.line(1, "Time is up.", cut_in_s=9)
+    await r.until(lambda: r.clock.t >= ready + 7)
+    old = r.outs[1]
+
+    async def gone(_frame: bytes) -> None:
+        raise ConnectionError("the persona's bot left the call")
+
+    old.play = gone  # type: ignore[method-assign, assignment]
+    r.outs[1] = FakeOut(r.clock, "grill-again", r.log)
+    await r.until(lambda: r.state(1)[0] in ("idle", "dropped"), virtual_s=20)
+    assert r.state(1) == ("idle", "") and r.played("grill-again")
+    await r.close()

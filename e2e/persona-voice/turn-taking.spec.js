@@ -72,6 +72,24 @@ function speechMic() {
     window.talkedAt = performance.timeOrigin + performance.now();
     await ended;
   };
+  // window.drone() speaks without a pause until window.hush(): a tone whose level swings at a
+  // syllable's rate, never under the onset floor.
+  window.drone = async () => {
+    await ctx.resume();
+    const osc = ctx.createOscillator();
+    osc.frequency.value = 180;
+    const amp = ctx.createGain();
+    amp.gain.value = 0.2;
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 4;
+    const depth = ctx.createGain();
+    depth.gain.value = 0.1;
+    lfo.connect(depth).connect(amp.gain);
+    osc.connect(amp).connect(gain);
+    osc.start();
+    lfo.start();
+    window.hush = () => { osc.stop(); lfo.stop(); };
+  };
 }
 
 // silentMic: the listener says nothing, though the bots hear her track too.
@@ -407,5 +425,64 @@ test('a speaker who leaves mid-speech does not hold the persona', async ({ brows
   } finally {
     await alice.ctx.close();
     await bob.ctx.close().catch(() => {});
+  }
+});
+
+// 032-AC8: Bob speaks without a pause; the time keeper's timer line, T = 10 s, says interjections at
+// about 0, 3.3 and 6.7 s, each under a second, and the line from 10 s on, while Bob still speaks.
+test('a time keeper cuts in on a speaker who does not stop', async ({ browser, request }) => {
+  // Heavy: three browsers' worth of media for a minute; CI runs it, a workstation does not.
+  test.skip(!process.env.CI, 'CI only');
+  test.setTimeout(180_000);
+  const T = 10_000;
+  const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Keeper' } })).json();
+  expect((await request.patch(`/api/rooms/${room.id}/speech`, { headers: admin, data: { quiet_ms: 500, resume_s: 20, queue_s: 300 } })).status()).toBe(200);
+  const inv = async () => (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
+  const alice = await join(browser, await inv(), 'Alice', [meter, silentMic]);
+  const bob = await join(browser, await inv(), 'Bob', speechMic);
+  try {
+    // The time keeper's settings are a room admin's (032-AC1).
+    const me = await alice.page.evaluate((id) => fetch(`/api/rooms/${id}`).then((r) => r.json()).then((d) => d.me.id), room.id);
+    expect((await request.put(`/api/admin/rooms/${room.id}/admins/${me}`, { headers: admin })).status()).toBe(204);
+    await expect(alice.page.locator('#voice-audio audio[data-pid^="persona-"]')).toHaveCount(1, { timeout: 30_000 });
+    const pid = await alice.page.locator('.persona-pill').evaluate((e) => e.dataset.id);
+    const patched = await alice.page.evaluate(([r, p]) => fetch(`/api/rooms/${r}/personas/${p}`, { method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ time_keeper: true, cut_in_s: 10 }) }).then((res) => res.status), [room.id, pid]);
+    expect(patched).toBe(200);
+    await expect.poll(() => metric(ttsMetrics, 'grill_tts_human_tracks'), { timeout: 30_000 }).toBe(2);
+    const since = (id, t) => alice.page.evaluate(([id, t]) => (window.levels[id] || []).filter(([at]) => at >= t), [id, t]);
+    const now = () => alice.page.evaluate(() => performance.now());
+    const grill = 'persona-' + pid;
+    const t0 = await now();
+    await bob.page.evaluate(() => window.drone());
+    const bobKey = async () => Object.keys(await alice.page.evaluate(() => window.levels)).find((k) => !k.startsWith('persona-'));
+    await expect.poll(async () => { const k = await bobKey(); return k && onsetAfter(await since(k, t0), t0); }, { timeout: 15_000 }).toBeTruthy();
+    const queued = await now();
+    const r = await request.post('/api/admin/test/speak', { headers: admin,
+      data: { room: room.id, persona: 'Grill', spoken: 'Bob, Alice has been waiting a while. Alice, go ahead.', cause: 'every 5 minutes' } });
+    expect(r.status()).toBe(204);
+    await expect.poll(async () => onsetAfter(await since(grill, queued), queued), { timeout: 15_000 }).toBeTruthy();
+    const first = onsetAfter(await since(grill, queued), queued);
+    await expect.poll(now, { timeout: 30_000 }).toBeGreaterThan(first + T + 2000);
+    const rows = await since(grill, queued);
+    const bobRows = await since(await bobKey(), queued);
+    const at = starts(rows, 300).map((t) => Math.round(t - first));
+    console.log('cut-in starts ms from the first', JSON.stringify(at), 'first after queued ms', Math.round(first - queued));
+    for (const [k, want] of [[1, T / 3], [2, (2 * T) / 3]]) {
+      expect(at.some((t) => Math.abs(t - want) <= 700), `interjection ${k} at about ${Math.round(want)} ms: ${at}`).toBe(true);
+    }
+    // Each interjection under a second: quiet from 1.2 s after its start until the next.
+    for (const [from, to] of [[1200, T / 3 - 200], [T / 3 + 1200, (2 * T) / 3 - 200], [(2 * T) / 3 + 1200, T - 700]]) {
+      expect(rows.filter(([t, db]) => t >= first + from && t <= first + to && db > LOUD), `loud within ${from}-${to} ms`).toEqual([]);
+    }
+    const line = onsetAfter(rows, first + T - 700);
+    expect(line - first, 'the line from T on').toBeLessThanOrEqual(T + 1000);
+    // Said over Bob: he is loud through the line's first two seconds.
+    for (const t of [line + 500, line + 2000]) expect(talkingAround(bobRows, t, 300), `Bob speaking at ${Math.round(t - first)} ms`).toBe(true);
+    expect(loudAround(rows, line + 2000, 500), 'the line goes on over Bob').toBe(true);
+  } finally {
+    await bob.page.evaluate(() => window.hush?.()).catch(() => {});
+    await alice.ctx.close();
+    await bob.ctx.close();
   }
 });

@@ -20,7 +20,7 @@ from .client import ServerLink
 from .config import Settings
 from .engine import Engine, Fake
 from .logs import setup_logging
-from .room import Clock, Line, Pace, RoomVoice
+from .room import Clock, Interjections, Line, Pace, RoomVoice
 from .textlayer import Entry, TextLayer, load_seed
 
 log = structlog.get_logger()
@@ -44,9 +44,11 @@ class Pod:
         self.clock = Clock()
         self.pace = Pace()
         self.layer = TextLayer(load_seed())
+        # One per pod: a voice's interjections serve it in every room.
+        self.interjections = Interjections(engine)
         self.voices: dict[str, RoomVoice] = {}
         self._tasks: set[asyncio.Task[None]] = set()
-        self.bots = Bots(s, self.voice)
+        self.bots = Bots(s, self.voice, self.interjections.warm)
         self.link = ServerLink(link_client, self.bots.sync, self.line, self.lexicon)
 
     def voice(self, room: str) -> RoomVoice:
@@ -57,7 +59,7 @@ class Pod:
                 return self.bots.out(room, persona)
 
             rv = self.voices[room] = RoomVoice(
-                room, self.engine, lambda: self.layer, self.clock, out, self.pace
+                room, self.engine, lambda: self.layer, self.clock, out, self.pace, self.interjections
             )
             task = asyncio.create_task(rv.run())
             self._tasks.add(task)
@@ -113,6 +115,7 @@ class Pod:
     async def close(self) -> None:
         for t in self._tasks:
             t.cancel()
+        self.interjections.close()
         await self.bots.close()
 
 

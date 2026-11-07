@@ -791,7 +791,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"presence":                  "| room_id participant_id tab since_at_ms beat_at_ms device_at_ms audio mic muted deaf focused expires_at_ms",
 		"hands":                     "| room_id participant_id raised_at_ms", // 031-AC7: no hand in the export
 		"pairings":                  "| id room_id code secret_hash status approved_by expires_at_ms",
-		"tts_lines":                 "| seq room_id persona_id persona voice rate text quiet_ms resume_s queue_s queued_at_ms sent",
+		"tts_lines":                 "| seq room_id persona_id persona voice rate text quiet_ms resume_s queue_s queued_at_ms sent cut_in_s",
 		"stt_workers":               server,
 		"tts_pod":                   server,
 		"rate_events":               server,

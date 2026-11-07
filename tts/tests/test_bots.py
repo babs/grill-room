@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any
 
 import numpy as np
 import pytest
@@ -318,3 +319,39 @@ async def test_bot_subscribes_to_the_microphone_only(monkeypatch: pytest.MonkeyP
         assert bots.human_tracks() == 1
     finally:
         await bots.close()
+
+
+# 032-AC10: the roster's time keeper has its voice and rate's interjections made, on each sync so a
+# voice or rate edit is made too; a persona that does not cut in has none.
+async def test_only_the_time_keeper_is_warmed() -> None:
+    from grill_tts.bots import Bots
+    from grill_tts.room import RoomVoice
+
+    from .test_client import settings
+
+    voice = RoomVoice("r1", None, lambda: None)  # type: ignore[arg-type, return-value]
+    warmed: list[tuple[str, float]] = []
+    bots = Bots(settings(), lambda _r: voice, lambda v, r: warmed.append((v, r)))
+
+    async def no_join(*_a: object) -> None:
+        pass
+
+    bots._join = no_join  # type: ignore[method-assign, assignment]
+
+    def roster(keeper_voice: str, rate: float) -> list[dict[str, Any]]:
+        return [
+            {
+                "room": "r1",
+                "personas": [
+                    {"id": 1, "name": "Grill", "voice": "marius", "rate": 1.0, "cut_in_s": 0},
+                    {"id": 2, "name": "Timekeeper", "voice": keeper_voice, "rate": rate, "cut_in_s": 20},
+                ],
+            }
+        ]
+
+    bots.sync(roster("alba", 1.0))
+    bots.sync(roster("alba", 1.2))
+    bots.sync(roster("estelle", 1.2))
+    assert [w for w in warmed if w[0] == "marius"] == []
+    assert ("alba", 1.0) in warmed and ("alba", 1.2) in warmed and ("estelle", 1.2) in warmed
+    await bots.close()

@@ -299,3 +299,48 @@ func TestTimekeeperAddByRole(t *testing.T) {
 }
 
 func ptrTo[T any](v T) *T { return &v }
+
+// 032-AC7: only a time keeper's timer line carries its cut_in_s to the pod; its @mention, button and
+// voice-count lines carry 0, and so does a timer line once the persona lost the role.
+func TestCutInLineByCause(t *testing.T) {
+	e := newEnvOpts(t, ttsOptions(t))
+	r := newTurnRoom(t, e)
+	e.inAudio(t, r.room, r.alice.p, false)
+	events, _ := e.openStream(t, "/api/tts/events", ttsToken, "")
+	e.podBeats(t)
+	nextEvent(t, events, "rooms")
+	alice := r.alice.p.Participant
+	if _, _, _, err := e.st.EditPersona(t.Context(), r.room, r.grill.ID, store.PersonaPatch{TimeKeeper: ptrTo(true), CutInS: ptrTo(20)}, &alice); err != nil {
+		t.Fatal(err)
+	}
+	// 032-AC10: the roster tells the pod whose interjections to make.
+	if ev := nextEvent(t, events, "rooms"); !strings.Contains(ev.data, `"name":"Grill","voice":"alba","rate":1,"cut_in_s":20`) {
+		t.Fatalf("rooms: %s", ev.data)
+	}
+	line := func(cause string) ttsLine {
+		t.Helper()
+		e.srv.queueSpeech(t.Context(), &store.Turn{RoomID: r.room, PersonaID: r.grill.ID, Cause: cause}, "Bob has waited four minutes.", "")
+		return decodeJSON[ttsLine](t, []byte(nextEvent(t, events, "line").data))
+	}
+	for cause, want := range map[string]int{
+		everyMinutes(5):                     20,
+		everyMinutes(1):                     20,
+		`@mention by Alice: "every minute"`: 0,
+		"pressed by Alice":                  0,
+		"every 5 voice lines":               0,
+		"":                                  0,
+	} {
+		if l := line(cause); l.CutInS != want || l.ttsTimeouts != defaultTTSTimeouts {
+			t.Errorf("cause %q: cut_in_s %d, timeouts %+v; want %d and the room's", cause, l.CutInS, l.ttsTimeouts, want)
+		}
+	}
+	if _, _, _, err := e.st.EditPersona(t.Context(), r.room, r.grill.ID, store.PersonaPatch{TimeKeeper: ptrTo(false)}, &alice); err != nil {
+		t.Fatal(err)
+	}
+	if ev := nextEvent(t, events, "rooms"); !strings.Contains(ev.data, `"cut_in_s":0`) {
+		t.Fatalf("rooms without the role: %s", ev.data)
+	}
+	if l := line(everyMinutes(5)); l.CutInS != 0 {
+		t.Errorf("a timer line without the role carries cut_in_s %d", l.CutInS)
+	}
+}

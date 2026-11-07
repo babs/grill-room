@@ -5,6 +5,7 @@ tests without a call (013-AC21 to AC24).
 """
 
 import asyncio
+import random
 import threading
 import time
 from collections import deque
@@ -18,8 +19,8 @@ import structlog
 
 from . import metrics
 from .audio import Double, Samples, SilenceCap, Tempo, level
-from .engine import Engine
-from .textlayer import Span, TextLayer
+from .engine import Engine, catalogue
+from .textlayer import Lang, Span, TextLayer
 
 log = structlog.get_logger()
 
@@ -28,6 +29,42 @@ FRAME = TRACK_SR // 50  # 20 ms
 FRAME_S = FRAME / TRACK_SR
 # A frame the player waited this long for, mid-sentence, left the track's 100 ms queue dry.
 UNDERRUN_S = 0.1
+# A cut-in says this many interjections over its wait, then the line (032-AC8).
+CUT_IN_STEPS = 3
+# An interjection is cut at 1 s: past it, it reads as the line itself (032-AC8).
+INTERJECTION_FRAMES = 50
+
+# 032-AC10: short, so each says in under a second, and many, so a room does not hear a tic.
+INTERJECTIONS: dict[Lang, tuple[str, ...]] = {
+    "fr": (
+        "Hmm.",
+        "Euh…",
+        "Pardon…",
+        "Attendez…",
+        "Si je peux…",
+        "Excusez-moi…",
+        "Juste une seconde…",
+        "Une petite chose…",
+        "Hum hum.",
+        "Alors…",
+        "Oui, mais…",
+        "Je me permets…",
+    ),
+    "en": (
+        "Hmm.",
+        "Uh…",
+        "Sorry…",
+        "Wait…",
+        "If I may…",
+        "Excuse me…",
+        "Just a second…",
+        "One thing…",
+        "Um.",
+        "So…",
+        "Right, but…",
+        "Quick point…",
+    ),
+}
 
 
 class Out(Protocol):
@@ -64,17 +101,20 @@ class Line:
     quiet_ms: int
     resume_s: int
     queue_s: int
+    # The time keeper's wait before speaking over a human, on its timer lines only (032-AC7).
+    cut_in_s: int = 0
     received: float = 0.0
 
     @classmethod
     def parse(cls, d: dict[str, Any], received: float, wall: float | None = None) -> Line:
         """received is the pod's clock at arrival. The line's age at the server (queued_at against
         wall, the wall clock now) moves it back: a line delivered late keeps its room's queue
-        maximum from when it was queued (013-AC24)."""
+        maximum from when it was queued (013-AC24), a cut-in line's wait added (032-AC9)."""
+        cut_in = int(d.get("cut_in_s") or 0)
         if "queued_at" in d:
             queued = datetime.fromisoformat(str(d["queued_at"]).replace("Z", "+00:00")).timestamp()
             age = (time.time() if wall is None else wall) - queued
-            received -= min(max(age, 0.0), float(d["queue_s"]))
+            received -= min(max(age, 0.0), float(d["queue_s"]) + cut_in)
         return cls(
             seq=int(d["seq"]),
             room=str(d["room"]),
@@ -86,6 +126,7 @@ class Line:
             quiet_ms=int(d["quiet_ms"]),
             resume_s=int(d["resume_s"]),
             queue_s=int(d["queue_s"]),
+            cut_in_s=cut_in,
             received=received,
         )
 
@@ -168,6 +209,126 @@ class Sentence:
     failed: bool = False
 
 
+class Stopped(Exception):
+    """An interjection's synthesis stopped for a line: it is made again later."""
+
+
+Key = tuple[str, float, Lang, str]
+
+
+class Interjections:
+    """Each voice and rate's interjections, made ahead so a cut-in starts on time (032-AC10). They are
+    made one at a time while no line is being made; a line starting stops the one in progress, so it
+    delays the line by at most one engine chunk."""
+
+    def __init__(self, engine: Engine) -> None:
+        self.engine = engine
+        # One future per clip, so callers at once share one synthesis.
+        # ponytail: never evicted; a few MB per voice and rate, an LRU if rates become free values.
+        self._clips: dict[Key, asyncio.Future[list[bytes]]] = {}
+        self._warming: set[tuple[str, float]] = set()
+        # One worker for every warm: one background synthesis at a time, so one stop to set.
+        self._jobs: asyncio.Queue[tuple[str, float]] = asyncio.Queue()
+        self._worker: asyncio.Task[None] | None = None
+        self._lang = {v["id"]: v["lang"] for v in catalogue()}
+        self._busy = 0
+        self._idle = asyncio.Event()
+        self._idle.set()
+        # Stops the background clip in progress.
+        self._stop = threading.Event()
+
+    def hold(self) -> None:
+        """A line is being made: the background clip stops, the next waits for release."""
+        self._busy += 1
+        self._idle.clear()
+        self._stop.set()
+
+    def release(self) -> None:
+        self._busy -= 1
+        if not self._busy:
+            self._idle.set()
+
+    def warm(self, voice: str, rate: float) -> None:
+        """Makes every interjection of voice at rate in the background, once."""
+        if (voice, rate) in self._warming:
+            return
+        self._warming.add((voice, rate))
+        self._jobs.put_nowait((voice, rate))
+        if self._worker is None or self._worker.done():
+            self._worker = asyncio.create_task(self._work())
+
+    def close(self) -> None:
+        if self._worker is not None:
+            self._worker.cancel()
+
+    async def _work(self) -> None:
+        while True:
+            voice, rate = await self._jobs.get()
+            try:
+                await self._warm(voice, rate)
+            finally:
+                self._jobs.task_done()
+
+    async def _warm(self, voice: str, rate: float) -> None:
+        t0 = time.monotonic()
+        first = self._lang.get(voice)
+        try:
+            # The voice's own language first: its lines most likely need it.
+            for lang in sorted(INTERJECTIONS, key=lambda lg: lg != first):
+                for text in INTERJECTIONS[lang]:
+                    while True:
+                        # A hold right after a release must still keep the clip out.
+                        while self._busy:
+                            await self._idle.wait()
+                        self._stop = threading.Event()
+                        try:
+                            await self._get((voice, rate, lang, text), self._stop)
+                            break
+                        except Stopped:
+                            continue
+        except Exception:
+            # A later sync retries; a cut-in meanwhile makes what it needs.
+            self._warming.discard((voice, rate))
+            log.exception("interjections_failed", voice=voice, rate=rate)
+            return
+        log.info("interjections_ready", voice=voice, rate=rate, made_s=round(time.monotonic() - t0, 1))
+
+    async def clip(self, voice: str, rate: float, lang: Lang, text: str) -> list[bytes]:
+        """The clip, made now if it is not: a cut-in waiting on it is never stopped."""
+        while True:
+            try:
+                return await self._get((voice, rate, lang, text), threading.Event())
+            except Stopped:
+                continue
+
+    async def _get(self, key: Key, stop: threading.Event) -> list[bytes]:
+        fut = self._clips.get(key)
+        if fut is None or fut.done() and (fut.cancelled() or fut.exception() is not None):
+            if getattr(self.engine, "inline", False):
+                fut = asyncio.get_running_loop().create_future()
+                try:
+                    fut.set_result(self._make(*key, stop))
+                except Exception as e:
+                    fut.set_exception(e)
+            else:
+                fut = asyncio.ensure_future(asyncio.to_thread(self._make, *key, stop))
+            self._clips[key] = fut
+        return await asyncio.shield(fut)
+
+    def _make(self, voice: str, rate: float, lang: Lang, text: str, stop: threading.Event) -> list[bytes]:
+        sr = self.engine.sample_rate
+        framer = Framer(sr, self.engine.gain(voice, lang), rate, SilenceCap(sr))
+        frames: list[bytes] = []
+        for chunk in self.engine.stream(voice, lang, text, stop):
+            frames += framer.feed(chunk)
+        if stop.is_set():
+            raise Stopped
+        frames += framer.flush()
+        if len(frames) > INTERJECTION_FRAMES:
+            log.warning("interjection_long", voice=voice, lang=lang, text=text, s=len(frames) * FRAME_S)
+        return frames[:INTERJECTION_FRAMES]
+
+
 class RoomVoice:
     """The lines of one room, said one at a time in queue order (013-AC24)."""
 
@@ -179,6 +340,7 @@ class RoomVoice:
         clock: Clock | None = None,
         out: Callable[[int], Out | None] = lambda _p: None,
         pace: Pace | None = None,
+        interjections: Interjections | None = None,
     ) -> None:
         self.room = room
         self.engine = engine
@@ -188,6 +350,7 @@ class RoomVoice:
         self.out = out
         # One per pod: every room's synthesis shares its CPU.
         self.pace = pace or Pace()
+        self.interjections = interjections or Interjections(engine)
         self.listeners = False
         self.humans: set[str] = set()
         # Each bot's latest view of who speaks, by bot.
@@ -263,10 +426,13 @@ class RoomVoice:
             for w in waits:
                 w.cancel()
 
-    async def _quiet(self, quiet_s: float, deadline: float) -> bool:
-        """Waits for quiet_s with no human speaking; False once deadline passes first (013-AC21)."""
+    async def _quiet(self, quiet_s: float, deadline: float, held: bool = False) -> bool | None:
+        """Waits for quiet_s with no human speaking; False once deadline passes first (013-AC21).
+        held: None as soon as a human speaks."""
         while True:
             now = self.clock.now()
+            if held and self.humans:
+                return None
             if not self.humans and now - self.quiet_since >= quiet_s:
                 return True
             if now >= deadline:
@@ -293,28 +459,100 @@ class RoomVoice:
                 self._drop(line, "error")
 
     async def _take(self, line: Line) -> None:
-        deadline = line.received + line.queue_s
+        deadline = line.received + line.queue_s + line.cut_in_s
         if self.clock.now() > deadline:
             self._drop(line, "stale")
             return
         if not self.listeners:
             self._drop(line, "no_listener")
             return
-        if not await self._quiet(line.quiet_ms / 1000, deadline):
+        quiet_s = line.quiet_ms / 1000
+        # From then on the line goes on over the humans speaking (032-AC8).
+        over_at: float | None = None
+        out: Out | None = None
+        # A human speaking before the room's quiet time starts the cut-in (032-AC8).
+        quiet = await self._quiet(quiet_s, deadline, held=bool(line.cut_in_s))
+        if quiet is None:
+            if (out := await self._bot(line, deadline)) is None:
+                return
+            if self.clock.now() + line.cut_in_s > deadline:
+                # Too late to reach T within the line's maximum: 013 unchanged.
+                quiet = await self._quiet(quiet_s, deadline)
+            else:
+                over_at = await self._cut_in(line, out, quiet_s)
+                if self._over(over_at) and not self.listeners:
+                    self._drop(line, "no_listener")
+                    return
+        if quiet is False:
             self._drop(line, "stale")
             return
+        # Again after a cut-in: its bot may have left or reconnected meanwhile. A yielded cut-in
+        # already waited the quiet time; _say keeps its interruptions capped at T.
+        if (out := await self._bot(line, deadline)) is None:
+            return
+        metrics.QUEUE_WAIT.observe(self.clock.now() - line.received)
+        await self._say(line, out, over_at)
+
+    def _over(self, at: float | None) -> bool:
+        return at is not None and self.clock.now() >= at
+
+    async def _bot(self, line: Line, deadline: float) -> Out | None:
+        """The persona's track; None, the line dropped, when its bot is not there in time."""
         out = self.out(line.persona_id)
         while out is None:
             # The bot joins when a listener comes (013-AC15): wait for it within the line's time.
             if self.clock.now() >= deadline or not self.listeners:
                 self._drop(line, "stale" if self.listeners else "no_listener")
-                return
+                return None
             await self._changed_within(0.1)
             out = self.out(line.persona_id)
-        metrics.QUEUE_WAIT.observe(self.clock.now() - line.received)
-        await self._say(line, out)
+        return out
 
-    async def _say(self, line: Line, out: Out) -> None:
+    async def _held(self, until: float, quiet_s: float) -> bool:
+        """Waits until then; False once the room was quiet for quiet_s first, as _quiet counts it: a
+        breath between words does not let the line in."""
+        while (now := self.clock.now()) < until:
+            left = until - now
+            if not self.humans:
+                if now - self.quiet_since >= quiet_s:
+                    return False
+                left = min(left, quiet_s - (now - self.quiet_since))
+            await self._changed_within(min(left, 0.25))
+        return True
+
+    async def _cut_in(self, line: Line, out: Out, quiet_s: float) -> float:
+        """Interjections at 0, T/3 and 2T/3 while a human speaks; returns T on the clock, past when
+        the line goes on over them, ahead when the room went quiet first (032-AC8)."""
+        plan = self.layer().plan(line.text)
+        lang: Lang = plan[0][0].lang if plan and plan[0] else "en"
+        picks = random.sample(INTERJECTIONS[lang], CUT_IN_STEPS)
+        start, step = self.clock.now(), line.cut_in_s / CUT_IN_STEPS
+        ids = {"room": self.room, "persona_id": line.persona_id, "seq": line.seq}
+        log.info("cut_in_started", **ids, cut_in_s=line.cut_in_s, lang=lang)
+        if not self.humans and start - self.quiet_since >= quiet_s:
+            # The room went quiet while the bot was joining: no interjection into silence.
+            metrics.CUT_INS.labels("yielded").inc()
+            log.info("cut_in_yielded", **ids, interjections=0)
+            return start + line.cut_in_s
+        for k, text in enumerate(picks):
+            if not await self._held(start + k * step, quiet_s):
+                metrics.CUT_INS.labels("yielded").inc()
+                log.info("cut_in_yielded", **ids, interjections=k)
+                return start + line.cut_in_s
+            for frame in await self.interjections.clip(line.voice, line.rate, lang, text):
+                await out.play(frame)
+                self.played_at = self.clock.now()
+            metrics.INTERJECTIONS.inc()
+        if not await self._held(start + line.cut_in_s, quiet_s):
+            metrics.CUT_INS.labels("yielded").inc()
+            log.info("cut_in_yielded", **ids, interjections=CUT_IN_STEPS)
+            return start + line.cut_in_s
+        metrics.CUT_INS.labels("spoke_over").inc()
+        log.info("cut_in_spoke_over", **ids)
+        return start + line.cut_in_s
+
+    async def _say(self, line: Line, out: Out, over_at: float | None = None) -> None:
+        """over_at: from then on it says the line over the humans speaking (032-AC8)."""
         plan = self.layer().plan(line.text)
         sentences = [Sentence(chars=sum(len(sp.text) for sp in spans)) for spans in plan]
         made = asyncio.Event()
@@ -332,11 +570,12 @@ class RoomVoice:
                 voice=line.voice,
                 sentences=len(plan),
                 lag_s=round(self.clock.now() - line.received, 3),
+                over=self._over(over_at),
             )
             first = True
             i = 0
             while i < len(sentences):
-                ok = await self._play(sentences[i], out, made, line, started if first else None)
+                ok = await self._play(sentences[i], out, made, line, started if first else None, over_at)
                 first = False
                 if ok:
                     i += 1
@@ -344,7 +583,10 @@ class RoomVoice:
                 metrics.INTERRUPTED.inc()
                 self._set(line.persona_id, "waiting")
                 log.info("interrupted", room=self.room, persona_id=line.persona_id, seq=line.seq, sentence=i)
-                if not await self._quiet(line.quiet_ms / 1000, self.clock.now() + line.resume_s):
+                # A cut-in line waits until T, past its resume window, then goes on over the speaker
+                # (032-AC8).
+                resume_by = self.clock.now() + line.resume_s if over_at is None else over_at
+                if not await self._quiet(line.quiet_ms / 1000, resume_by) and not self._over(over_at):
                     self._drop(line, "interrupted")
                     return
                 metrics.RESUMED.inc()
@@ -357,17 +599,23 @@ class RoomVoice:
             producer.cancel()
 
     async def _play(
-        self, s: Sentence, out: Out, made: asyncio.Event, line: Line, started: float | None
+        self,
+        s: Sentence,
+        out: Out,
+        made: asyncio.Event,
+        line: Line,
+        started: float | None,
+        over_at: float | None = None,
     ) -> bool:
-        """Plays one sentence from its start; False when a human cut in (013-AC22). It starts once
-        enough is made to play to its end without a gap: a slow pod delays the sentence, never
-        stutters in it, and a human still stops it at once."""
+        """Plays one sentence from its start; False when a human cut in (013-AC22), never past over_at
+        (032-AC8). It starts once enough is made to play to its end without a gap: a slow pod delays
+        the sentence, never stutters in it, and a human still stops it at once."""
         j = 0
         need = self.pace.prebuffer_s(s.chars, line.rate)
         while True:
             if s.failed:
                 raise RuntimeError("synthesis failed")
-            if self.humans:
+            if self.humans and not self._over(over_at):
                 out.clear()
                 metrics.STOP.observe(max(self.clock.now() - self.changed_at, 0.0))
                 return False
@@ -384,7 +632,7 @@ class RoomVoice:
             t0 = self.clock.now()
             await self._changed_within(1.0, made)
             waited = self.clock.now() - t0
-            if j > 0 and not self.humans and waited > UNDERRUN_S:
+            if j > 0 and (self._over(over_at) or not self.humans) and waited > UNDERRUN_S:
                 metrics.UNDERRUNS.inc()
                 log.info(
                     "underrun",
@@ -402,6 +650,7 @@ class RoomVoice:
         loop = asyncio.get_running_loop()
         stop = threading.Event()
         cap = SilenceCap(self.engine.sample_rate)
+        self.interjections.hold()
         try:
             for sentence, spans in zip(out, plan, strict=True):
                 t0 = self.clock.now()
@@ -451,3 +700,4 @@ class RoomVoice:
             made.set()
         finally:
             stop.set()
+            self.interjections.release()

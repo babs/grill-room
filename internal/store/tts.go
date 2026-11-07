@@ -18,12 +18,15 @@ type TTSLine struct {
 	Text                     string
 	QuietMS, ResumeS, QueueS int
 	QueuedAtMS               int64
+	// CutInS is how long a time keeper's timer line waits for a gap before speaking over (032-AC7).
+	CutInS int
 }
 
-const ttsLineCols = `seq, room_id, persona_id, persona, voice, rate, text, quiet_ms, resume_s, queue_s, queued_at_ms`
+const ttsLineCols = `seq, room_id, persona_id, persona, voice, rate, text, quiet_ms, resume_s, queue_s, queued_at_ms, cut_in_s`
 
-// ttsLive is the clause of the lines still within their queue budget at ?1.
-const ttsLive = `queued_at_ms + queue_s * 1000 >= ?1`
+// ttsLive is the clause of the lines still within their queue budget at ?1, a cut-in line's wait
+// included (032-AC9).
+const ttsLive = `queued_at_ms + (queue_s + cut_in_s) * 1000 >= ?1`
 
 // ttsExpired deletes the lines past their queue budget at ?1, returning whether each was sent.
 const ttsExpired = `DELETE FROM tts_lines WHERE NOT (` + ttsLive + `) RETURNING sent`
@@ -38,9 +41,9 @@ func (s *Store) AddTTSLine(ctx context.Context, l TTSLine, keep int, nowMS int64
 			return fmt.Errorf("add tts line: %w", err)
 		}
 		noService += n
-		if err := tx.QueryRowContext(ctx, `INSERT INTO tts_lines (room_id, persona_id, persona, voice, rate, text, quiet_ms, resume_s, queue_s, queued_at_ms)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
-			l.Room, l.PersonaID, l.Persona, l.Voice, l.Rate, l.Text, l.QuietMS, l.ResumeS, l.QueueS, l.QueuedAtMS).Scan(&seq); err != nil {
+		if err := tx.QueryRowContext(ctx, `INSERT INTO tts_lines (room_id, persona_id, persona, voice, rate, text, quiet_ms, resume_s, queue_s, queued_at_ms, cut_in_s)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
+			l.Room, l.PersonaID, l.Persona, l.Voice, l.Rate, l.Text, l.QuietMS, l.ResumeS, l.QueueS, l.QueuedAtMS, l.CutInS).Scan(&seq); err != nil {
 			return fmt.Errorf("add tts line: %w", err)
 		}
 		n, err = dropTTSLines(ctx, tx, `DELETE FROM tts_lines WHERE seq <= (SELECT seq FROM tts_lines ORDER BY seq DESC OFFSET ? LIMIT 1) RETURNING sent`, keep)
@@ -109,7 +112,7 @@ func (s *Store) TTSLinesAfter(ctx context.Context, after, nowMS int64) ([]TTSLin
 	var out []TTSLine
 	for rows.Next() {
 		var l TTSLine
-		if err := rows.Scan(&l.Seq, &l.Room, &l.PersonaID, &l.Persona, &l.Voice, &l.Rate, &l.Text, &l.QuietMS, &l.ResumeS, &l.QueueS, &l.QueuedAtMS); err != nil {
+		if err := rows.Scan(&l.Seq, &l.Room, &l.PersonaID, &l.Persona, &l.Voice, &l.Rate, &l.Text, &l.QuietMS, &l.ResumeS, &l.QueueS, &l.QueuedAtMS, &l.CutInS); err != nil {
 			return nil, fmt.Errorf("tts lines: %w", err)
 		}
 		out = append(out, l)

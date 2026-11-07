@@ -52,7 +52,7 @@ What it sees comes from a **time-keeper** capability, a persona option like "Wat
 
 ### Cutting in
 - [ ] **AC7** A line from a time-keeper persona's timer turn reaches the pod with its `cut_in_s`. Any other line, that persona's included, carries 0 and follows 013 unchanged.
-- [ ] **AC8** With `cut_in_s` T > 0 and a human speaking when the line is ready, the pod says three interjections, at 0, T/3 and 2T/3 seconds, each under a second, then at T says the line over the speaker. While it speaks over, a human speaking does not stop it (this amends 013-AC21, 013-AC22 and 013-AC23 for these lines only). If the room goes quiet before T, it waits the room's quiet time and says the line normally, with no more interjections.
+- [ ] **AC8** With `cut_in_s` T > 0 and a human speaking when the line is ready, the pod says three interjections, at 0, T/3 and 2T/3 seconds, each under a second, then at T says the line over the speaker. While it speaks over, a human speaking does not stop it (this amends 013-AC21, 013-AC22 and 013-AC23 for these lines only). If the room goes quiet before T, it waits the room's quiet time and says the line normally, with no more interjections; if a human then speaks over it before T, it pauses as 013 does and, at T counted from the first interjection, says the rest over them. A line that would reach T past its queue maximum follows 013 unchanged.
 - [ ] **AC9** A cut-in line keeps one-persona-at-a-time and queue order (013-AC24); its queue maximum is T plus the room's queue maximum. A per-listener persona mute and the room mute (005-AC22) silence it as any persona line.
 - [ ] **AC10** Interjections come from a set of at least 12 per language (French and English), picked at random with none repeated within one line, synthesised in the persona's voice and rate when its bot joins the call and kept in memory, so an interjection starts within 300 ms of its due time. The language is the line's first sentence's (013's text layer).
 - [ ] **AC11** The pod's metrics count lines cut in and interjections said (`docs/architecture.md`), and its log has `cut_in_started`, `cut_in_spoke_over` and `cut_in_yielded` (room quiet before T), with the room and persona.
@@ -73,8 +73,8 @@ What it sees comes from a **time-keeper** capability, a persona option like "Wat
 ### Phase 2 — Cutting in, in the pod
 - Work: `cut_in_s` on the line; the escalation in `tts/grill_tts/room.py`; the interjection sets and their cache per bot; metrics and logs.
 - **Covers**: AC7, AC8, AC9, AC10, AC11
-- **Data model impact**: none
-- **DoD**: `uv run pytest` in `tts/` green, with fake-clock tests in `tests/test_room.py`: three interjections at 0, T/3, 2T/3 then the line spoken through a human speaking; quiet before T yields with no further interjection; T = 0 and a non-timer line behave as 013; queue order and the extended queue maximum; no repeated interjection within a line. A Go test for `cut_in_s` on the queued line by cause. `e2e/persona-voice/turn-taking.spec.js` gains, in CI only (real engine): a synthetic human speaking without pause, a time-keeper line with T = 10, the persona's track carries audio at about 0, 3.3 and 6.7 s and from 10 s on, while the human still speaks.
+- **Data model impact**: `tts_lines` (the transient speech queue) gains `cut_in_s` (int, default 0), by a positional in-app migration; not exported.
+- **DoD**: `uv run pytest` in `tts/` green, with fake-clock tests in `tests/test_room.py`: three interjections at 0, T/3, 2T/3 then the line spoken through a human speaking; quiet before T yields with no further interjection; T = 0 and a non-timer line behave as 013; queue order and the extended queue maximum; no repeated interjection within a line. A Go test for `cut_in_s` on the queued line by cause. `e2e/persona-voice/turn-taking.spec.js` gains, in CI only (fake engine; the real engine by hand on the lab): a synthetic human speaking without pause, a time-keeper line with T = 10, the persona's track carries audio at about 0, 3.3 and 6.7 s and from 10 s on, while the human still speaks.
 
 ### Phase 3 — Pill indicators
 - Work: the speech bubble icon for the waiting state; `drift.json` read at the end of a time-keeper turn, stored on the persona, sent with the persona to the page; the red ⓘ.
@@ -84,7 +84,7 @@ What it sees comes from a **time-keeper** capability, a persona option like "Wat
 
 ## Data model impact (summary)
 
-`room_personas`: `time_keeper` (bool, default false), `cut_in_s` (int, default 0), `drift_level` and `drift_reason` (text, default empty, not exported). The hand queue is 031's `hands`. Preset room defaults live in code with the preset, not in the template tables. Interjection audio is never stored.
+`room_personas`: `time_keeper` (bool, default false), `cut_in_s` (int, default 0), `drift_level` and `drift_reason` (text, default empty, not exported). `tts_lines`: `cut_in_s` (int, default 0, not exported). The hand queue is 031's `hands`. Preset room defaults live in code with the preset, not in the template tables. Interjection audio is never stored.
 
 ## Open questions
 
@@ -103,9 +103,11 @@ From the user:
 
 Made while drafting (overturnable):
 - Only timer turns cut in (AC7): a persona answering an `@mention` should not talk over the room, and the turn needs no new output to say "cut in".
+- A pause longer than the quiet time does not cancel the cut-in (AC8): a speaker who breathes, lets the line start, then goes on would otherwise never be cut off, the feature's whole point. Found in phase 2 review.
 - Three interjections spread over the threshold: fewer reads as a glitch, more as nagging. Fixed, since the user asked for one setting.
 - One time keeper per room, like the notes watcher: two would cut in on each other.
 - The escalation runs in the pod against its live speaker state, not in the turn: a turn takes seconds, the pod reacts in 300 ms (013-AC22).
+- A timer turn re-run after a document conflict takes the cause `re-run after a conflict` and so no longer cuts in: rare, and the line is still spoken by 013's rules. Found in phase 2 review.
 - The silent turn (AC3) is for the time keeper only, so no other persona's empty answer starts vanishing.
 - The speaker's run ends at another speaker's line or a 30 s gap, longer than a voice paragraph's 20 s close (018), so a pause for breath does not reset the count.
 - The preset runs `sonnet` at effort `low`: one turn every 5 minutes reads a short preamble and needs judgment, not depth.

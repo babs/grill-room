@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"sync/atomic"
@@ -80,6 +81,8 @@ type ttsLine struct {
 	Text      string  `json:"text"`
 	ttsTimeouts
 	QueuedAt time.Time `json:"queued_at"`
+	// CutInS is the time keeper's wait before speaking over, on its timer lines only (032-AC7).
+	CutInS int `json:"cut_in_s"`
 }
 
 // ttsState is what the pod reports for one persona of a room (013-AC14).
@@ -168,7 +171,7 @@ func (s *Server) addTTSLine(ctx context.Context, l ttsLine) (int64, error) {
 		l.QueueS = max(l.QueueS, coldQueueS)
 	}
 	seq, dropped, err := s.bus.Store.AddTTSLine(ctx, store.TTSLine{Room: l.Room, PersonaID: l.PersonaID, Persona: l.Persona, Voice: l.Voice,
-		Rate: l.Rate, Text: l.Text, QuietMS: l.QuietMS, ResumeS: l.ResumeS, QueueS: l.QueueS, QueuedAtMS: l.QueuedAt.UnixMilli()}, maxTTSLines, now.UnixMilli())
+		Rate: l.Rate, Text: l.Text, QuietMS: l.QuietMS, ResumeS: l.ResumeS, QueueS: l.QueueS, QueuedAtMS: l.QueuedAt.UnixMilli(), CutInS: l.CutInS}, maxTTSLines, now.UnixMilli())
 	if err != nil {
 		return 0, err
 	}
@@ -180,7 +183,7 @@ func (s *Server) addTTSLine(ctx context.Context, l ttsLine) (int64, error) {
 
 func lineOf(l store.TTSLine) ttsLine {
 	return ttsLine{Seq: l.Seq, Room: l.Room, PersonaID: l.PersonaID, Persona: l.Persona, Voice: l.Voice, Rate: l.Rate, Text: l.Text,
-		ttsTimeouts: ttsTimeouts{QuietMS: l.QuietMS, ResumeS: l.ResumeS, QueueS: l.QueueS}, QueuedAt: time.UnixMilli(l.QueuedAtMS)}
+		ttsTimeouts: ttsTimeouts{QuietMS: l.QuietMS, ResumeS: l.ResumeS, QueueS: l.QueueS}, QueuedAt: time.UnixMilli(l.QueuedAtMS), CutInS: l.CutInS}
 }
 
 func (s *Server) ttsAuth(next http.HandlerFunc) http.Handler {
@@ -281,8 +284,12 @@ func (s *Server) queueSpeech(ctx context.Context, t *store.Turn, spoken, synthes
 	}
 	s.withVoices(ctx, t.RoomID, ps, "en")
 	p := ps[i]
+	cutIn := 0
+	if p.TimeKeeper && timerCause(t.Cause) {
+		cutIn = p.CutInS
+	}
 	seq, err := s.addTTSLine(ctx, ttsLine{Room: t.RoomID, PersonaID: p.ID, Persona: p.Name, Voice: p.Voice, Rate: p.VoiceRate, Text: text,
-		ttsTimeouts: timeoutsOf(room.Speech), QueuedAt: s.now()})
+		ttsTimeouts: timeoutsOf(room.Speech), QueuedAt: s.now(), CutInS: cutIn})
 	if err != nil {
 		s.log.Warn("speech_skipped", zap.String("room", t.RoomID), zap.Int64("turn", t.ID), zap.Error(err))
 		return
@@ -291,12 +298,21 @@ func (s *Server) queueSpeech(ctx context.Context, t *store.Turn, spoken, synthes
 		zap.Int("words", len(wordRE.FindAllString(text, -1))))
 }
 
+// timerCauseRE matches the causes everyMinutes writes.
+var timerCauseRE = regexp.MustCompile(`^every (minute|[0-9]+ minutes)$`)
+
+// timerCause reports a turn cause from the "every T minutes" trigger.
+func timerCause(c string) bool { return timerCauseRE.MatchString(c) }
+
 // ttsPersona is a speaking persona of a room the pod's bots join (013-AC15).
 type ttsPersona struct {
 	ID    int64   `json:"id"`
 	Name  string  `json:"name"`
 	Voice string  `json:"voice"`
 	Rate  float64 `json:"rate"`
+	// CutInS is the time keeper's wait before speaking over, 0 for any other: the pod makes its
+	// interjections ahead (032-AC10).
+	CutInS int `json:"cut_in_s"`
 }
 
 type ttsRoom struct {
@@ -339,7 +355,11 @@ func (s *Server) ttsRoster(ctx context.Context) []ttsRoom {
 		r := ttsRoom{Room: room, Personas: []ttsPersona{}}
 		for _, p := range ps {
 			if speaking(p) {
-				r.Personas = append(r.Personas, ttsPersona{ID: p.ID, Name: p.Name, Voice: p.Voice, Rate: p.VoiceRate})
+				tp := ttsPersona{ID: p.ID, Name: p.Name, Voice: p.Voice, Rate: p.VoiceRate}
+				if p.TimeKeeper {
+					tp.CutInS = p.CutInS
+				}
+				r.Personas = append(r.Personas, tp)
 			}
 		}
 		if len(r.Personas) > 0 {

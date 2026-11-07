@@ -32,6 +32,12 @@ RTF = Histogram(
 UNDERRUNS = Counter(
     "grill_tts_underruns_total", "Gaps over 100 ms inside a sentence: synthesis fell behind (013-AC17)."
 )
+CUT_INS = Counter(
+    "grill_tts_cut_ins_total",
+    "Time keeper lines that met a human speaking, by outcome: spoke_over or yielded (032-AC11).",
+    ["outcome"],
+)
+INTERJECTIONS = Counter("grill_tts_interjections_total", "Interjections said before a cut-in (032-AC11).")
 BOTS = Gauge("grill_tts_bots", "Persona bots in a call now.")
 HUMAN_TRACKS = Gauge(
     "grill_tts_human_tracks",
@@ -41,3 +47,5 @@ BOTS_JOINED = Counter("grill_tts_bots_joined_total", "Persona bots that joined a
 
 for reason in ("interrupted", "stale", "no_listener", "no_service", "error"):
     DROPPED.labels(reason)
+for outcome in ("spoke_over", "yielded"):
+    CUT_INS.labels(outcome)
