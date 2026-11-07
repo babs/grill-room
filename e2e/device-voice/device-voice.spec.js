@@ -45,6 +45,11 @@ function fakeMic() {
     if (!graph) {
       const ctx = new AudioContext();
       graph = { ctx, gain: ctx.createGain() };
+      // Chrome: a graph with no live source stops sending frames once a clip's source is collected.
+      const keep = ctx.createConstantSource();
+      keep.offset.value = 0;
+      keep.connect(graph.gain);
+      keep.start();
     }
     return graph;
   };
@@ -134,6 +139,8 @@ test('the voice hands over between the device and the server', async ({ request,
   try {
     await ctx.addInitScript(snoozePush, snoozeKey);
     await ctx.addInitScript(fakeMic);
+    // The device pipeline's last counters, for the failure report of the microphone switch below.
+    await ctx.addInitScript(() => addEventListener('grill:device-pipeline', (e) => { window.lastPipeline = e.detail; }));
     await ctx.addInitScript((nav) => {
       for (const [k, v] of Object.entries(nav)) Object.defineProperty(Navigator.prototype, k, { get: () => v, configurable: true });
       // A runner's CPU must not decide the test: the bar is covered by device-stt.spec.js.
@@ -200,7 +207,12 @@ test('the voice hands over between the device and the server', async ({ request,
     const [tapped, published] = await micTrack();
     expect(tapped).toBe(published);
     await say(3);
-    await expect.poll(() => lineFor(3, deviceTip), { timeout: 60_000 }).toMatchObject({ sender: 'Alice' });
+    await expect.poll(() => lineFor(3, deviceTip), { timeout: 60_000 }).toMatchObject({ sender: 'Alice' }).catch(async (err) => {
+      // The poll's own failure is what matters: a closed page must not replace it.
+      const stats = await page.evaluate(() => window.lastPipeline ?? 'no stats event').catch((e) => `unreadable: ${e.message}`);
+      console.log('030-AC17 device pipeline after the switch:', JSON.stringify(stats));
+      throw err;
+    });
     expect(await skipped()).toBe(1);
 
     // b. Announced stop: the toggle goes off, the worker takes the voice back.
