@@ -456,6 +456,24 @@ body:is(.drag-files, :has(.pane-handle.dragging)) #doc-frame iframe { pointer-ev
 .tile[role=button] { cursor: pointer; }
 .tile[role=button]:focus-visible { outline: 3px solid var(--brand); outline-offset: -3px; }
 #stage-main:fullscreen { background: var(--chrome); }
+/* The pop-out window (031-AC12): the stage over the call's controls; the page keeps a note in its place (031-AC13). */
+body.pip { display: flex; flex-direction: column; height: 100vh; background: var(--chrome); }
+.pip-bar { flex: none; justify-content: center; padding: var(--sp-2); }
+/* The phone's rules are for the page: a narrow pop-out keeps Leave, its screen share follows the page's (room.js). */
+body.pip :is(#voice-screen, #voice-leave) { display: inline-flex; }
+/* The page's tip cannot reach this window: its controls carry their tip in CSS, styled as .tip (kit). */
+body.pip .pip-bar > button { position: relative; }
+body.pip .pip-bar > [data-tip]::after { content: attr(data-tip); position: absolute; bottom: calc(100% + var(--sp-1)); left: 50%; z-index: var(--z-toast); visibility: hidden;
+  width: max-content; max-width: 20rem; padding: var(--sp-1) var(--sp-2); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); color: var(--text);
+  box-shadow: var(--sh-2); font: 400 var(--fs-xs)/1.45 var(--font); white-space: normal; text-align: left; pointer-events: none; transform: translateX(-50%); }
+/* As the kit's tip: after 300 ms of hover, at once on keyboard focus. */
+body.pip .pip-bar > [data-tip]:hover::after { visibility: visible; transition: visibility 0s 300ms; }
+body.pip .pip-bar > [data-tip]:focus-visible::after { visibility: visible; transition: none; }
+body.pip .pip-bar > [data-tip]:first-child::after { left: 0; transform: none; }
+body.pip .pip-bar > [data-tip]:last-child::after { left: auto; right: 0; transform: none; }
+body.pip .pip-error { flex: none; margin: 0 var(--sp-2); border-radius: var(--r-md); background: var(--surface); color: var(--danger); }
+#stage-away { align-items: center; justify-content: center; }
+#stage-away .empty { margin: 0; border-color: var(--chrome-muted); color: var(--chrome-muted); }
 .tile.speaking figcaption { text-shadow: 0 0 .1em var(--brand), 0 0 .4em var(--brand); }
 body.annot-closed #annotations { display: none; }
 #annot-toggle[aria-pressed=true] { background: var(--primary-bg); }

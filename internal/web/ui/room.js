@@ -1,6 +1,8 @@
 'use strict';
 
-const $ = (id) => document.getElementById(id);
+// pip is the pop-out window while the stage body is in it (031-AC12): its nodes are looked up there.
+let pip = null;
+const $ = (id) => document.getElementById(id) || pip?.document.getElementById(id);
 const roomID = decodeURIComponent(location.pathname.split('/')[2] || '');
 const api = '/api/rooms/' + encodeURIComponent(roomID);
 // /r/<room>/docs[/<doc>] is the document manager in a window of its own (005-AC11): this page,
@@ -4067,6 +4069,7 @@ function showTab(t) {
 matchMedia('(max-width: 40rem)').addEventListener('change', () => {
   if (phone() && stageOpen()) showTab('video');
   sttButton();
+  pipSync?.();
 });
 if (!docsMode) document.body.dataset.tab = roomTab;
 for (const b of $('tabbar').querySelectorAll('button')) b.addEventListener('click', () => showTab(b.dataset.tab));
@@ -4598,7 +4601,7 @@ async function joinVoice() {
     myVideo = new Set();
     room.on(LK.RoomEvent.TrackSubscribed, (track, pub, p) => {
       // A video subscribed while this viewer's stage is closed goes at once (030-AC13).
-      if (track.kind !== 'audio') return stageOpen() ? renderStage() : pub.setSubscribed(false);
+      if (track.kind !== 'audio') return watching() ? renderStage() : pub.setSubscribed(false);
       if (deaf || personaMutedIdentity(p.identity)) return pub.setSubscribed(false);
       const el = track.attach();
       el.dataset.pid = p.identity;
@@ -4608,7 +4611,7 @@ async function joinVoice() {
     });
     room.on(LK.RoomEvent.TrackUnsubscribed, (track, pub) => (track.kind === 'audio' ? dropAudio(pub) : renderStage()));
     room.on(LK.RoomEvent.TrackPublished, (pub) => {
-      if (pub.kind === 'video') pub.setSubscribed(stageOpen());
+      if (pub.kind === 'video') pub.setSubscribed(watching());
       renderStage();
     });
     room.on(LK.RoomEvent.TrackUnpublished, renderStage);
@@ -4751,6 +4754,8 @@ async function toggleVideo(cam) {
 // The Video stage (030-AC7): each viewer opens it in the viewer's place, and the document open
 // before comes back on close. Closed, it holds no tile and subscribes to no video (030-AC13).
 const stageOpen = () => !$('stage').hidden;
+// Popped out, the videos show whatever the page's stage does (031-AC13).
+const watching = () => stageOpen() || !!pip || !!document.pictureInPictureElement;
 function openStage() {
   // On a phone the stage opens as the Video tab (030-AC14).
   if (phone() && roomTab !== 'video') return showTab('video');
@@ -4773,7 +4778,7 @@ function closeStage() {
 function watchVideo() {
   if (!voice) return;
   for (const p of voice.remoteParticipants.values()) {
-    for (const pub of p.videoTrackPublications.values()) pub.setSubscribed(stageOpen());
+    for (const pub of p.videoTrackPublications.values()) pub.setSubscribed(watching());
   }
 }
 
@@ -4803,7 +4808,7 @@ function renderStage() {
   const live = liveVideos();
   const focused = $('stage').contains(document.activeElement);
   // Nothing live and nothing drawn: the People list's render must not depend on the LiveKit bundle.
-  if (!live.length && !tiles.size && !stageOpen() && $('video-open').hidden && $('tab-video').hidden) return;
+  if (!live.length && !tiles.size && !watching() && $('video-open').hidden && $('tab-video').hidden) return;
   // The Video button goes with the last video: its focus moves to the open stage's ✕, else to the
   // audio options, or Join audio once the audio is left, not to the page.
   if (!live.length && document.activeElement === $('video-open')) $(stageOpen() ? 'stage-close' : voice ? 'voice-more' : 'voice-join').focus();
@@ -4816,7 +4821,7 @@ function renderStage() {
   $('tab-video-count').textContent = live.length ? String(live.length) : '';
   // An open stage outlives a video that drops for a moment: it waits, and says so (030-AC7).
   // Text set into a status region that is always there: one revealed by unhiding is often not read out.
-  $('stage-empty').textContent = stageOpen() && !live.length ? 'Nobody is sharing video right now.' : '';
+  $('stage-empty').textContent = watching() && !live.length ? 'Nobody is sharing video right now.' : '';
   const { Camera, ScreenShare } = LivekitClient.Track.Source;
   for (const { pub, mine } of live) {
     if (pub.source !== ScreenShare || shareOrder.has(pub.trackSid)) continue;
@@ -4828,7 +4833,7 @@ function renderStage() {
   }
   for (const sid of shareOrder.keys()) if (!live.some((v) => v.pub.trackSid === sid)) shareOrder.delete(sid);
   // Gone once the stage opens; a share that stops is found live no more.
-  if (stageOpen()) stripShare = '';
+  if (watching()) stripShare = '';
   const offered = live.find((v) => v.pub.trackSid === stripShare);
   // Shown and said once the sharer's name is known: a share can come before the People list has them.
   const who = offered ? nameOf(offered.p) : '';
@@ -4841,13 +4846,13 @@ function renderStage() {
     grillAnnounce($('share-strip-text').textContent);
     stripSaid = stripShare;
   }
-  const shown = stageOpen() ? live : [];
+  const shown = watching() ? live : [];
   // The screen picked large, else the latest started (030-AC9); a pick that stopped falls back.
   const shares = shown.filter((v) => v.pub.source === ScreenShare).sort((a, b) => shareOrder.get(a.pub.trackSid) - shareOrder.get(b.pub.trackSid));
   const big = shares.find((v) => v.pub.trackSid === pinnedShare) || shares.at(-1);
   bigShare = big?.pub.trackSid || '';
   // iPhone Safari has no element full screen.
-  $('stage-full').hidden = !big || !document.fullscreenEnabled;
+  $('stage-full').hidden = !big || !document.fullscreenEnabled || !!pip;
   // Nothing large left to show full screen: back to the page.
   if (!big && document.fullscreenElement === $('stage-main')) document.exitFullscreen().catch(console.error);
   const draw = ({ p, pub, mine }) => {
@@ -4859,12 +4864,7 @@ function renderStage() {
       t.el.append(t.video, document.createElement('figcaption'));
       tiles.set(pub.trackSid, t);
     }
-    // A remote video has a track only while subscribed; attach() lets adaptiveStream see the tile's size.
-    if (t.track !== (pub.track || null)) {
-      t.track?.detach(t.video);
-      t.track = pub.track || null;
-      t.track?.attach(t.video);
-    }
+    t.pub = pub;
     const name = nameOf(p);
     t.el.dataset.pid = p.identity;
     t.el.dataset.sid = pub.trackSid;
@@ -4895,6 +4895,18 @@ function renderStage() {
   }
   placeTiles($('stage-main'), main);
   placeTiles($('stage-tiles'), row);
+  // A remote video has a track only while subscribed; attach() lets adaptiveStream see the tile's size.
+  // Attached once placed: LiveKit tells a video in the pop-out from where it sits then, and a hidden
+  // page may not run its later visibility checks.
+  for (const t of kept) {
+    if (t.track === (t.pub.track || null)) continue;
+    t.track?.detach(t.video);
+    t.track = t.pub.track || null;
+    t.track?.attach(t.video);
+    if (t.video.paused && t.video.srcObject) t.video.play().catch(() => {});
+  }
+  // Document PiP, else the large video's own PiP, which needs a video (031-AC15).
+  $('stage-pop').hidden = !!pip || !(window.documentPictureInPicture || (document.pictureInPictureEnabled && shown.length));
   // A focused control gone, hidden or moved (a tile made large) drops the focus to the page, out of
   // reach of the stage's Escape (030-AC11).
   if (focused && stageOpen() && document.activeElement === document.body) $('stage-close').focus();
@@ -4945,6 +4957,7 @@ window.grillDiag = {
 // The local tracks stop here, not in disconnect(): a dropped connection or a removal releases the
 // camera and the screen too (030-AC5).
 function cleanupVoice(room) {
+  clearTimeout(reattachTimer);
   for (const pub of room.localParticipant.trackPublications.values()) pub.track?.stop();
   for (const t of videoCapturing) t.stop();
   voice = null;
@@ -4952,7 +4965,8 @@ function cleanupVoice(room) {
   $('voice-audio').replaceChildren();
   // Focus on the stage, the Video button or an audio control would fall to the page once they go.
   const focused = ['stage', 'voice', 'voice-menu'].some((id) => $(id).contains(document.activeElement)) || document.activeElement === $('video-open');
-  // Out of the audio, no video can come (030-AC7).
+  // Out of the audio, no video can come (030-AC7), nor a pop-out (031-AC14).
+  popIn();
   closeStage();
   voiceChanged();
   if (focused) $('voice-join').focus();
@@ -4992,6 +5006,109 @@ $('stage').addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !document.fullscreenElement && performance.now() - fullscreenLeft > 150) leaveStage();
 });
 $('stage-full').addEventListener('click', () => { if (document.fullscreenEnabled) $('stage-main').requestFullscreen().catch(console.error); });
+
+// The pop-out (031-AC12): the stage body moves into a Document PiP window, its videos playing on,
+// over copies of the call's controls that press the page's own, so the call stays this page's.
+const pipControls = ['voice-mute', 'voice-cam', 'voice-screen', 'hand-raise', 'voice-leave'];
+let pipSync = null;
+let pipWatch = null;
+let pipOpening = false;
+async function popOut() {
+  if (!window.documentPictureInPicture) {
+    // Without Document PiP, the large screen, else the first camera (031-AC15). Watched there, it
+    // stays received whatever the stage does, until the browser's window closes.
+    const v = $('stage-main').querySelector('video') || $('stage-tiles').querySelector('video');
+    v?.addEventListener('leavepictureinpicture', () => { watchVideo(); renderStage(); }, { once: true });
+    return v?.requestPictureInPicture().catch(console.error);
+  }
+  if (pip || pipOpening) return;
+  clearTimeout(reattachTimer);
+  pipOpening = true;
+  const w = await documentPictureInPicture.requestWindow({ width: 480, height: 360 }).finally(() => { pipOpening = false; });
+  // The audio left while the window opened: no call to show.
+  if (!voice) return w.close();
+  w.document.documentElement.lang = document.documentElement.lang;
+  // The page's stylesheets, absolute: the window's document is about:blank. The theme follows the
+  // same prefers-color-scheme there.
+  for (const s of document.querySelectorAll('link[rel=stylesheet], style')) {
+    const c = s.cloneNode(true);
+    if (s.href) c.href = s.href;
+    w.document.head.append(c);
+  }
+  w.document.title = document.title;
+  w.document.body.className = 'pip';
+  const bar = w.document.createElement('div');
+  bar.className = 'audio pip-bar';
+  bar.setAttribute('role', 'group');
+  bar.setAttribute('aria-label', 'Audio');
+  // Same ids: the page's lookups find the page's buttons first, and the stylesheets style both.
+  const copies = pipControls.map((id) => {
+    const c = w.document.createElement('button');
+    c.type = 'button';
+    c.addEventListener('click', () => document.getElementById(id).click());
+    return c;
+  });
+  // A failure from these controls shows in the window too.
+  const err = w.document.createElement('p');
+  err.className = 'strip pip-error';
+  err.setAttribute('role', 'status');
+  const sync = () => {
+    pipControls.forEach((id, i) => {
+      const o = document.getElementById(id);
+      const c = copies[i];
+      for (const a of c.getAttributeNames()) if (!o.hasAttribute(a)) c.removeAttribute(a);
+      for (const a of o.getAttributeNames()) c.setAttribute(a, o.getAttribute(a));
+      c.innerHTML = o.innerHTML;
+    });
+    // The screen share where the page's bar shows it (030-AC14): a narrow page hides it by CSS.
+    copies[pipControls.indexOf('voice-screen')].hidden = !document.getElementById('voice-screen').checkVisibility();
+    err.hidden = document.getElementById('voice-error').hidden;
+    err.textContent = document.getElementById('voice-error-text').textContent;
+  };
+  pipWatch = new MutationObserver(sync);
+  for (const id of [...pipControls, 'voice-error']) pipWatch.observe(document.getElementById(id), { attributes: true, childList: true, subtree: true, characterData: true });
+  pipSync = sync;
+  sync();
+  bar.append(...copies);
+  w.document.body.append(document.getElementById('stage-body'), err, bar);
+  pip = w;
+  w.addEventListener('pagehide', () => { if (pip === w) popIn(); });
+  $('stage-away').hidden = false;
+  if (document.activeElement === document.body || document.activeElement === $('stage-pop')) $('stage-back').focus();
+  watchVideo();
+  renderStage();
+}
+// popIn puts the stage body back in the page's stage, open or closed as it is (031-AC14).
+function popIn() {
+  const w = pip;
+  if (!w) return;
+  const back = document.activeElement === $('stage-back');
+  pip = null;
+  pipWatch.disconnect();
+  pipSync = null;
+  $('stage-away').before(w.document.getElementById('stage-body'));
+  $('stage-away').hidden = true;
+  w.close();
+  watchVideo();
+  renderStage();
+  if (back && stageOpen()) $('stage-close').focus();
+  reattach(0);
+}
+// reattach has LiveKit measure the videos again once the window is gone: it measured them in it,
+// or against its size while it closed, and would keep counting them as seen. Its own leave handler
+// re-measures, without restarting the streams; the native fallback's never runs with Document PiP.
+let reattachTimer = 0;
+function reattach(tries) {
+  clearTimeout(reattachTimer);
+  if (pip) return;
+  if (window.documentPictureInPicture?.window && tries < 40) {
+    reattachTimer = setTimeout(reattach, 50, tries + 1);
+    return;
+  }
+  for (const t of tiles.values()) t.video.dispatchEvent(new Event('leavepictureinpicture'));
+}
+$('stage-pop').addEventListener('click', () => popOut().catch(console.error));
+$('stage-back').addEventListener('click', popIn);
 function promote(e) {
   const t = e.target.closest('.tile[role=button]');
   if (!t || (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ')) return;

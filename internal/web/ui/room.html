@@ -418,9 +418,12 @@
       <div class="viewer-head">
         <button type="button" id="stage-close" class="btn-icon btn-ghost" aria-label="Close the video" data-tip="Close" data-icon="close"></button>
         <h2>Video</h2>
+        <button type="button" id="stage-pop" class="btn-icon btn-ghost" aria-label="Pop out" data-tip="Pop out: keep the video on top of your other windows" data-icon="external" hidden></button>
         <button type="button" id="stage-full" class="btn-icon btn-ghost" aria-label="Full screen" data-tip="Full screen: Escape leaves it" data-icon="fullscreen" hidden></button>
       </div>
-      <div class="stage-body"><p id="stage-empty" class="empty" role="status"></p><div id="stage-main"></div><div id="stage-tiles"></div></div>
+      <div id="stage-body" class="stage-body"><p id="stage-empty" class="empty" role="status"></p><div id="stage-main"></div><div id="stage-tiles"></div></div>
+      <!-- In its place while the videos are in the pop-out window (031-AC13). -->
+      <div id="stage-away" class="stage-body" hidden><p class="empty">Video is in the pop-out window</p><button type="button" id="stage-back" class="btn-secondary">Bring it back</button></div>
     </div>
     <div class="viewer-body">
       <div id="doc-frame"></div>

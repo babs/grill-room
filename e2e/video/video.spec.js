@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { test, expect } from '../fixtures.js';
 import { snoozePush, snoozeKey } from '../quiet-push.js';
 import { adminToken } from './playwright.config.js';
@@ -1221,4 +1222,265 @@ test('Video tab on a phone', async ({ browser, request }) => {
   await b.locator('#voice-leave-menu').click();
   await expect(tab).toBeHidden();
   await expect(b.locator('#tabbar [data-tab=chat]')).toHaveAttribute('aria-pressed', 'true');
+});
+
+// lkParticipants counts the LiveKit room's participants from the server's own API (RoomService), on
+// a token signed here with the run's keys.
+async function lkParticipants(request, room) {
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const now = Math.floor(Date.now() / 1000);
+  const body = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ iss: process.env.LIVEKIT_API_KEY, nbf: now - 5, exp: now + 60, video: { roomAdmin: true, room } })}`;
+  const jwt = `${body}.${createHmac('sha256', process.env.LIVEKIT_API_SECRET).update(body).digest('base64url')}`;
+  const r = await request.post(`http://127.0.0.1:${process.env.VIDEO_LIVEKIT_PORT}/twirp/livekit.RoomService/ListParticipants`, {
+    headers: { Authorization: `Bearer ${jwt}` }, data: { room },
+  });
+  expect(r.ok()).toBe(true);
+  return ((await r.json()).participants || []).length;
+}
+
+// popOut presses Pop out, a real click, and returns the Document PiP window.
+async function popOut(page) {
+  const [w] = await Promise.all([page.context().waitForEvent('page'), page.locator('#stage-pop').click()]);
+  await expect(w.locator('#stage-body')).toBeVisible();
+  return w;
+}
+const unwatchedAll = (page, n) => holds(page, () => subscribed(page), Array(n).fill(false));
+const videoPlays = (w, box) => w.locator(`${box} .tile video`).first().evaluate((v) => !v.paused && v.videoWidth > 0);
+
+// 031-AC12, 031-AC13, 031-AC14: the stage pops out into a Document PiP window, B's screen large over
+// B's camera, the room's stylesheets with it; its controls act on the call; the page says where the
+// video went, keeps its count and its one LiveKit connection; closing the window or Bring it back
+// returns the stage, open or closed as it was; Leave audio there ends every local track.
+test('pop-out window', async ({ browser, request }) => {
+  const room = await newRoom(request);
+  const a = await person(browser, request, room, 'Alice');
+  const b = await person(browser, request, room, 'Bob');
+  await joinAudio(a);
+  await joinAudio(b);
+  await press(b, 'Turn my camera on', 'Turn my camera off');
+  await press(b, 'Share my screen', 'Stop sharing my screen');
+  await expect(videoButton(a)).toHaveText('Video 2');
+  await videoButton(a).click();
+  await expect(a.locator('#stage-pop')).toBeVisible();
+
+  let w = await popOut(a);
+  await expect(tile(w, '#stage-main', "Bob's screen")).toBeVisible();
+  await expect(tile(w, '#stage-tiles', 'Bob')).toBeVisible();
+  await expect.poll(() => videoPlays(w, '#stage-main')).toBe(true);
+  await expect.poll(() => videoPlays(w, '#stage-tiles')).toBe(true);
+  // The room's stylesheets came along: the tiles keep the camera row's size.
+  expect(await tile(w, '#stage-tiles', 'Bob').evaluate((t) => t.getBoundingClientRect().width)).toBe(160);
+  expect(await w.evaluate(() => getComputedStyle(document.body).backgroundColor))
+    .toBe(await a.locator('.stage-body').first().evaluate((el) => getComputedStyle(el).backgroundColor));
+  await expect(a.locator('#stage-away')).toHaveText(/Video is in the pop-out window/);
+  await expect(a.getByRole('button', { name: 'Bring it back' })).toBeVisible();
+  await expect(a.locator('#stage-pop')).toBeHidden();
+  await expect(videoButton(a)).toHaveText('Video 2');
+  expect(await lkParticipants(request, room.id)).toBe(2);
+  // The page's stage closed, the window keeps its videos (031-AC13).
+  await a.locator('#stage-close').click();
+  await holds(a, () => subscribed(a), [true, true]);
+  await expect.poll(() => videoPlays(w, '#stage-main')).toBe(true);
+
+  // Its controls are the call's: B hears A muted, sees A's camera, the server has A's hand.
+  const aID = await a.evaluate(() => myID);
+  const aMuted = () => b.evaluate((id) => voice.remoteParticipants.get(id)?.getTrackPublication('microphone')?.isMuted, aID);
+  await w.locator('#voice-mute').click();
+  await expect(w.locator('#voice-mute')).toHaveAttribute('aria-pressed', 'true');
+  await expect(a.locator('#voice-mute')).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(aMuted).toBe(true);
+  await w.locator('#voice-cam').click();
+  await expect(w.locator('#voice-cam')).toHaveAttribute('aria-label', 'Turn my camera off');
+  await expect(videoButton(b)).toHaveText('Video 3');
+  await expect(tile(w, '#stage-tiles', 'Alice')).toHaveClass(/mirror/);
+  await expect(w.locator('#voice-screen')).toBeVisible();
+  await w.locator('#hand-raise').click();
+  await expect(w.locator('#hand-raise')).toHaveAttribute('aria-label', 'Lower my hand');
+  await expect(b.locator('#people-hands')).toHaveText('1');
+  await w.screenshot({ path: `${shots}/pop-out.png` });
+  // The page's tip cannot reach the window: its controls show theirs in CSS, on hover and on focus.
+  const tipOf = (id) => w.locator(id).evaluate((el) => {
+    const st = getComputedStyle(el, '::after');
+    return st.visibility === 'visible' ? st.content : '';
+  });
+  const tipText = async (id) => JSON.stringify(await a.locator(id).getAttribute('data-tip'));
+  expect(await tipOf('#voice-leave')).toBe('');
+  await w.locator('#voice-leave').hover();
+  await expect.poll(() => tipOf('#voice-leave')).toBe(await tipText('#voice-leave'));
+  await w.mouse.move(0, 0);
+  await expect.poll(() => tipOf('#voice-leave')).toBe('');
+  // Keyboard focus shows it at once.
+  await w.locator('#voice-cam').focus();
+  await w.keyboard.press('Tab');
+  await expect(w.locator('#voice-screen')).toBeFocused();
+  expect(await tipOf('#voice-screen')).toBe(await tipText('#voice-screen'));
+  await w.locator('#voice-screen').blur();
+
+  // A narrow page hides its idle screen share button (030-AC14): the window's follows, Leave stays.
+  await a.setViewportSize({ width: 390, height: 844 });
+  await expect(a.locator('#voice-screen')).toBeHidden();
+  await expect(w.locator('#voice-screen')).toBeHidden();
+  await expect(w.locator('#voice-leave')).toBeVisible();
+  await a.setViewportSize({ width: 1440, height: 900 });
+  await expect(w.locator('#voice-screen')).toBeVisible();
+
+  // A failure from the window's controls shows there too, and goes when the next try works.
+  await w.locator('#voice-cam').click();
+  await expect(w.locator('#voice-cam')).toHaveAttribute('aria-label', 'Turn my camera on');
+  await a.evaluate(() => { window.cameraRefusal = 'NotReadableError'; window.refusalMessage = 'busy'; });
+  await w.locator('#voice-cam').click();
+  await expect(a.locator('#voice-error')).toBeVisible();
+  await expect(w.locator('.pip-error')).toBeVisible();
+  await expect(w.locator('.pip-error')).toHaveText(await a.locator('#voice-error-text').textContent());
+  await expect(w.locator('.pip-error')).toHaveAttribute('role', 'status');
+  await a.evaluate(() => { window.cameraRefusal = ''; });
+  await w.locator('#voice-cam').click();
+  await expect(w.locator('#voice-cam')).toHaveAttribute('aria-label', 'Turn my camera off');
+  await expect(w.locator('.pip-error')).toBeHidden();
+
+  // The page in the background, behind another tab: a share started then still plays in the window.
+  // Headless Chrome keeps every page visible, bringToFront included: the page is told it is hidden,
+  // and LiveKit, which reads visibilityState, pauses a video it does not see after 5 s. A hidden page
+  // may run no IntersectionObserver callback either: none is observed, so LiveKit decides from where
+  // the video sits when attached.
+  await press(b, 'Stop sharing my screen', 'Share my screen');
+  await expect(w.locator('#stage-main .tile')).toHaveCount(0);
+  const other = await a.context().newPage();
+  await other.bringToFront();
+  await a.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.ioObserve = IntersectionObserver.prototype.observe;
+    IntersectionObserver.prototype.observe = () => {};
+  });
+  await a.waitForTimeout(6000);
+  await press(b, 'Share my screen', 'Stop sharing my screen');
+  await expect(tile(w, '#stage-main', "Bob's screen")).toBeVisible();
+  await expect.poll(() => videoPlays(w, '#stage-main')).toBe(true);
+  await expect.poll(async () => (await remoteVideo(a)).find((v) => v.source === 'screen_share')?.width || 0).toBeGreaterThan(0);
+  // Still received seconds later: a paused video's width would stay at its last value, its frames not.
+  const frames = () => w.locator('#stage-main video').evaluate((v) => v.getVideoPlaybackQuality().totalVideoFrames);
+  const before = await frames();
+  await a.waitForTimeout(6000);
+  expect(await frames()).toBeGreaterThan(before + 30);
+  // A camera turned off and on again comes back with its track already there: drawn and attached at once.
+  const bID = await b.evaluate(() => myID);
+  const inPiP = (source) => a.evaluate(([id, src]) => voice.remoteParticipants.get(id).getTrackPublication(src)?.track?.elementInfos.map((i) => i.isPiP), [bID, source]);
+  // Both of B's videos, the camera and the live screen share.
+  const bothInPiP = async () => [await inPiP('camera'), await inPiP('screen_share')];
+  expect(await inPiP('screen_share')).toEqual([true]);
+  await press(b, 'Turn my camera off', 'Turn my camera on');
+  await expect(tile(w, '#stage-tiles', 'Bob')).toHaveCount(0);
+  await press(b, 'Turn my camera on', 'Turn my camera off');
+  await expect(tile(w, '#stage-tiles', 'Bob')).toBeVisible();
+  await expect.poll(() => inPiP('camera')).toEqual([true]);
+  await expect.poll(() => tile(w, '#stage-tiles', 'Bob').locator('video').evaluate((v) => !v.paused && v.videoWidth > 0)).toBe(true);
+  await a.evaluate(() => {
+    IntersectionObserver.prototype.observe = window.ioObserve;
+    delete document.visibilityState;
+    delete document.hidden;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await other.close();
+
+  // Closed from its own ✕ (pagehide), the stage goes back to the page closed, as it was, and stops receiving.
+  await w.close();
+  await expect(a.locator('#stage-away')).toBeHidden();
+  await expect(a.locator('#stage')).toBeHidden();
+  await expect(a.locator('#stage #stage-body')).toHaveCount(1);
+  await unwatchedAll(a, 2);
+
+  // Bring it back, the page's stage open: the stage is back there, open, its videos playing.
+  await videoButton(a).click();
+  w = await popOut(a);
+  await expect(a.getByRole('button', { name: 'Bring it back' })).toBeFocused();
+  await a.getByRole('button', { name: 'Bring it back' }).click();
+  await expect.poll(() => w.isClosed()).toBe(true);
+  await expect(a.locator('#stage')).toBeVisible();
+  await expect(tile(a, '#stage-main', "Bob's screen")).toBeVisible();
+  await expect.poll(() => videoPlays(a, '#stage-main')).toBe(true);
+  await expect(a.locator('#stage-close')).toBeFocused();
+  // Back in the page, LiveKit measures the videos against the page again, not the window.
+  await expect.poll(bothInPiP).toEqual([[false], [false]]);
+  // Closed from its ✕ with the stage open: LiveKit measures on the window's pagehide, the video still
+  // in it. A hidden page runs no visibility callback after: none is delivered here.
+  w = await popOut(a);
+  await expect.poll(bothInPiP).toEqual([[true], [true]]);
+  await a.evaluate(() => {
+    for (const v of pip.document.querySelectorAll('video')) {
+      v.handleVisibilityChanged = () => {};
+      v.srcObject.kept = true;
+    }
+  });
+  await w.close();
+  await expect(a.locator('#stage #stage-body')).toHaveCount(1);
+  await expect(a.locator('#stage')).toBeVisible();
+  await expect.poll(bothInPiP).toEqual([[false], [false]]);
+  // Measured again without restarting a stream.
+  expect(await a.locator('#stage .tile video').evaluateAll((vs) => vs.map((v) => !!v.srcObject?.kept))).toEqual([true, true, true]);
+
+  // Leave audio from the window ends the call as the page's button does (030-AC5).
+  w = await popOut(a);
+  await w.locator('#voice-leave').click();
+  await expect.poll(() => w.isClosed()).toBe(true);
+  await expect.poll(async () => [...new Set(await a.evaluate(() => window.grillDiag.localVideo()))]).toEqual(['ended']);
+  expect([...new Set(await gotVideo(a))]).toEqual(['ended']);
+  await expect(a.locator('#voice-join')).toBeVisible();
+  await expect(a.locator('#stage')).toBeHidden();
+  await expect(a.locator('#stage #stage-body')).toHaveCount(1);
+  await expect.poll(() => lkParticipants(request, room.id)).toBe(1);
+});
+
+// 031-AC15: without Document PiP, Pop out puts the large video in the browser's own PiP: the screen
+// share, or with cameras only, the first camera; with neither API, no button.
+test('pop-out fallbacks', async ({ browser, request }) => {
+  const room = await newRoom(request);
+  const a = await person(browser, request, room, 'Alice');
+  const b = await person(browser, request, room, 'Bob');
+  await a.context().addInitScript(() => {
+    delete window.documentPictureInPicture;
+    window.pipAsked = [];
+    window.pipEl = null;
+    Object.defineProperty(Document.prototype, 'pictureInPictureElement', { get: () => window.pipEl });
+    HTMLVideoElement.prototype.requestPictureInPicture = async function () {
+      window.pipAsked.push(this.closest('.tile').querySelector('figcaption').textContent);
+      window.pipEl = this;
+      return {};
+    };
+  });
+  await a.reload();
+  await joinAudio(a);
+  await joinAudio(b);
+  await press(b, 'Turn my camera on', 'Turn my camera off');
+  await expect(videoButton(a)).toHaveText('Video 1');
+  await videoButton(a).click();
+  await expect(tile(a, '#stage-tiles', 'Bob')).toBeVisible();
+  await a.locator('#stage-pop').click();
+  await expect.poll(() => a.evaluate(() => window.pipAsked)).toEqual(['Bob']);
+  // In the browser's PiP, the camera stays received and its video in the page with the stage closed,
+  // until that window closes.
+  await a.locator('#stage-close').click();
+  await holds(a, () => subscribed(a), [true]);
+  expect(await a.evaluate(() => window.pipEl.isConnected)).toBe(true);
+  await a.evaluate(() => { const v = window.pipEl; window.pipEl = null; v.dispatchEvent(new Event('leavepictureinpicture')); });
+  await unwatched(a);
+  await videoButton(a).click();
+  await expect(tile(a, '#stage-tiles', 'Bob')).toBeVisible();
+  await press(b, 'Share my screen', 'Stop sharing my screen');
+  await expect(tile(a, '#stage-main', "Bob's screen")).toBeVisible();
+  await a.locator('#stage-pop').click();
+  await expect.poll(() => a.evaluate(() => window.pipAsked)).toEqual(['Bob', "Bob's screen"]);
+  await expect(a.locator('#stage-away')).toBeHidden();
+
+  const c = await person(browser, request, room, 'Carol');
+  await c.context().addInitScript(() => {
+    delete window.documentPictureInPicture;
+    Object.defineProperty(Document.prototype, 'pictureInPictureEnabled', { get: () => false });
+  });
+  await c.reload();
+  await joinAudio(c);
+  await videoButton(c).click();
+  await expect(tile(c, '#stage-main', "Bob's screen")).toBeVisible();
+  await holds(c, () => c.locator('#stage-pop').isHidden(), true);
 });
