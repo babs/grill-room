@@ -344,3 +344,49 @@ func TestCutInLineByCause(t *testing.T) {
 		t.Errorf("a timer line without the role carries cut_in_s %d", l.CutInS)
 	}
 }
+
+// 032-AC13, 032-AC14: a time keeper's drift.json, as the daemon posts it, reaches the page with the
+// persona; a malformed one is listed in the turn's system line. The rating stays out of another
+// persona's prompt, and turning the role off clears it.
+func TestKeeperDriftResult(t *testing.T) {
+	e := newEnv(t)
+	r := newTurnRoom(t, e)
+	alice := r.alice.p.Participant
+	if _, _, _, err := e.st.EditPersona(t.Context(), r.room, r.grill.ID, store.PersonaPatch{TimeKeeper: ptrTo(true)}, &alice); err != nil {
+		t.Fatal(err)
+	}
+	const reason = "Bob has had his hand up for four minutes."
+	ttsTurn(t, e, r, turn.Result{Synthesis: "Bob, go ahead.", Changes: []turn.Change{{Path: turn.DriftFile, Content: []byte(`{"level": "high", "reason": "` + reason + `"}`)}}})
+	if st := e.agent(t, r.room, r.alice.p.Token); st.Personas[0].DriftLevel != "high" || st.Personas[0].DriftReason != reason {
+		t.Fatalf("persona %+v", st.Personas[0])
+	}
+	ttsTurn(t, e, r, turn.Result{Synthesis: "Still waiting.", Changes: []turn.Change{{Path: turn.DriftFile, Content: []byte(`{"level": "medium", "reason": "a\nb"}`)}}})
+	if m := e.lastLine(t, r.room); m.Kind != store.KindSystem || !strings.Contains(m.Body, "ignored: drift.json: want a reason of one plain line") {
+		t.Fatalf("system line %+v", m)
+	}
+	if st := e.agent(t, r.room, r.alice.p.Token); st.Personas[0].DriftLevel != "high" {
+		t.Fatalf("malformed drift.json changed the rating: %+v", st.Personas[0])
+	}
+	tpl := int64(0)
+	for _, x := range e.templates(t, r, r.alice.p.Token) {
+		if x.Preset == "secretary" {
+			tpl = x.ID
+		}
+	}
+	sec := e.addPersona(t, r, r.alice.p.Token, tpl)
+	code, b := e.do(t, "POST", r.path("/turns"), r.alice.p.Token, map[string]int64{"persona_id": sec.ID})
+	if code != http.StatusCreated {
+		t.Fatalf("press: %d %s", code, b)
+	}
+	tn := decodeJSON[store.Turn](t, b)
+	nextEvent(t, r.alice.events, "turn")
+	if job := e.job(t, r, r.alice, tn.ID); strings.Contains(job.Prompt, "four minutes") || strings.Contains(job.System, "four minutes") {
+		t.Fatalf("another persona's prompt carries the drift:\n%s", job.Prompt)
+	}
+	if _, _, _, err := e.st.EditPersona(t.Context(), r.room, r.grill.ID, store.PersonaPatch{TimeKeeper: ptrTo(false)}, &alice); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := e.st.RoomPersona(t.Context(), r.room, r.grill.ID); p.DriftLevel != "" || p.DriftReason != "" {
+		t.Fatalf("role off: %+v", p)
+	}
+}

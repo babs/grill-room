@@ -122,3 +122,38 @@ test('personas: a silent time keeper turn', async ({ browser, request, baseURL }
     daemon.cleanup();
   }
 });
+
+// 032-AC13, 032-AC14: a time keeper's turn rating the drift high shows a red ⓘ on its pill, its
+// reason as the tip and in aria-label; a later turn rating it medium hides it. Real daemon and
+// Docker sandbox, fake claude.
+test('personas: the time keeper rates the drift', async ({ browser, request, baseURL }) => {
+  test.setTimeout(150_000);
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await appointAdmin(alice, request, room.id);
+  const grill = (await agentState(alice, room.id)).personas[0];
+  expect(await patchPersona(alice, room.id, grill.id, { time_keeper: true })).toBe(200);
+  const daemon = startDaemon(`${baseURL}/r/${room.id}`);
+  try {
+    await pairDaemon(alice, daemon);
+    await expect(led(alice, 'Grill')).toHaveAttribute('aria-label', 'Grill ready', { timeout: 30_000 });
+    const pill = alice.locator('button.persona[data-name="Grill"]');
+    const drift = pill.locator('.drift');
+    await expect(drift).toBeHidden();
+    const ask = async (level, n) => {
+      await alice.locator('#body').fill('FAKE_DRIFT ' + level);
+      await alice.locator('#body').press('Enter');
+      await alice.getByRole('button', { name: 'Ask Grill' }).click();
+      await expect(alice.locator('#messages li.msg.agent')).toHaveCount(n, { timeout: 60_000 });
+    };
+    await ask('high', 1);
+    await expect(drift.locator('svg')).toBeVisible();
+    await expect(drift).toHaveAttribute('aria-label', 'Off track: Fake drift high.');
+    await expect(drift).toHaveAttribute('data-tip', 'Fake drift high.');
+    await expect(pill).toHaveAttribute('aria-label', /^Grill, off track: Fake drift high: Grill /);
+    await ask('medium', 2);
+    await expect(drift).toBeHidden();
+    await expect(drift).not.toHaveAttribute('aria-label');
+  } finally {
+    daemon.cleanup();
+  }
+});

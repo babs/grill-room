@@ -790,7 +790,7 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 		Effort:        knownOr(res.Effort, turn.Efforts),
 		Capped:        res.Capped,
 		SessionOffset: res.SessionOffset, Session: res.Session,
-		Report: store.TurnReport{Rejected: o.Rejected, Ignored: o.Ignored},
+		Report: store.TurnReport{Rejected: o.Rejected, Ignored: o.Ignored}, Drift: o.Drift,
 	}
 	if o.Spoken != "" {
 		out.Spoken = spokenText(o.Spoken, s.spokenWords(r.Context(), d.RoomID))

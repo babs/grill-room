@@ -41,7 +41,7 @@ var (
 		"daemon_connections": nil, "daemon_status": nil, "presence": nil, "stt_workers": nil, "tts_pod": nil, "pairings": nil,
 		"tts_lines": nil, "rate_events": nil, "rooms": {"host_moved_line"}, "turns": {"delivered"}, "messages": {"spoken", "appended_at"},
 		"participants": {"stt_off"}, "profiles": {"oidc_issuer", "oidc_subject", "oidc_signed_in_at", "oidc_admin_group", "text_sizes"}, "admin_sessions": {"profile_id"},
-		"documents": {"folder"}, "message_documents": nil, "hands": nil, "room_personas": {"time_keeper", "cut_in_s"},
+		"documents": {"folder"}, "message_documents": nil, "hands": nil, "room_personas": {"time_keeper", "cut_in_s", "drift_level", "drift_reason"},
 	}
 	addedRows = map[string]string{"settings": `key <> 'lexicon_version'`}
 )

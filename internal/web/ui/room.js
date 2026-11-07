@@ -2330,7 +2330,7 @@ function personaVoice(p) {
   const st = ttsOn && ttsLive.pod && ttsLive.personas[p.id];
   if (!st) return null;
   if (st.state === 'speaking') return { icon: 'speaking', word: 'speaking', label: p.name + ' is speaking in the call' };
-  if (st.state === 'waiting') return { icon: 'speaking-wait', word: 'waiting to speak', label: p.name + ' is waiting to speak in the call' };
+  if (st.state === 'waiting') return { icon: 'bubble', word: 'waiting to speak', label: p.name + ' is waiting to speak in the call' };
   return null;
 }
 
@@ -2349,7 +2349,10 @@ function personaPill(id) {
   led.setAttribute('role', 'img');
   const vstate = span('vstate', '');
   vstate.setAttribute('aria-hidden', 'true');
-  b.append(led, span('badge', ''), span('pname', ''), watchIcon(), vstate, span('pstate', ''));
+  const drift = span('drift', '');
+  drift.setAttribute('role', 'img');
+  drift.hidden = true;
+  b.append(led, span('badge', ''), span('pname', ''), watchIcon(), drift, vstate, span('pstate', ''));
   let held = 0;
   let longPressed = false;
   const pid = () => Number(pill.dataset.id);
@@ -2536,7 +2539,15 @@ function renderAgent() {
     pill.dataset.id = p.id;
     pill.dataset.name = p.name;
     pill.style.setProperty('--persona', p.colour);
-    b.setAttribute('aria-label', p.name + (p.watches_notes ? ', watches the notes' : '') + ': ' + (voiceSt ? voiceSt.label : st.label) + '. Open its card');
+    // 032-AC14: only a high rating shows, and only while the role holds.
+    const offTrack = p.time_keeper && p.drift_level === 'high' ? 'Off track: ' + p.drift_reason : '';
+    b.setAttribute('aria-label', p.name + (p.watches_notes ? ', watches the notes' : '') + (offTrack ? ', off track: ' + p.drift_reason.replace(/[.!?…]+$/u, '') : '') + ': ' + (voiceSt ? voiceSt.label : st.label) + '. Open its card');
+    const di = b.querySelector('.drift');
+    di.hidden = !offTrack;
+    di.dataset.tip = offTrack ? p.drift_reason : '';
+    if (offTrack) di.setAttribute('aria-label', offTrack);
+    else di.removeAttribute('aria-label');
+    di.replaceChildren(...(offTrack ? [grillIcon('info')] : []));
     markWatch(b.querySelector('.watch'), p.watches_notes);
     b.dataset.name = p.name;
     b.querySelector('.badge').textContent = p.badge;

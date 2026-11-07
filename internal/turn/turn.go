@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -36,6 +37,11 @@ const (
 	SpokenFile = "spoken.md"
 	// MaxSpokenBytes caps it: 60 words fit many times over.
 	MaxSpokenBytes = 4096
+	// DriftFile is the time keeper's rating of how far the room drifted, read from its turns only (032-AC13).
+	DriftFile = "drift.json"
+	// MaxDriftBytes and MaxDriftReason cap it: one line of reason fits many times over.
+	MaxDriftBytes  = 4096
+	MaxDriftReason = 200
 	// PluginName names the plugin that carries a persona's active skills: claude -p shows them as
 	// "grill-room:<skill>".
 	PluginName = "grill-room"
@@ -211,7 +217,7 @@ func ValidPath(p string) bool { return p != "." && fs.ValidPath(p) }
 // NeedsContent reports whether the server needs a changed file's bytes; for any other change the
 // path is enough, which keeps an edited 20 MB upload out of the result.
 func NeedsContent(p string) bool {
-	return p == RepliesFile || p == NewAnnotationsFile || p == SpokenFile || strings.HasPrefix(p, DocsDir+"/")
+	return p == RepliesFile || p == NewAnnotationsFile || p == SpokenFile || p == DriftFile || strings.HasPrefix(p, DocsDir+"/")
 }
 
 // Doc is an agent document as a turn wrote it.
@@ -245,6 +251,8 @@ type Outcome struct {
 	Annotations []NewAnnotation
 	// Spoken is spoken.md as the agent wrote it, unsanitised; empty when it wrote none.
 	Spoken string
+	// Drift is drift.json's bytes, unparsed: only a time keeper's turn reads them. Nil when none.
+	Drift []byte
 	// Rejected lists changed upload paths; Ignored, changes outside the contract with why.
 	Rejected []string
 	Ignored  []string
@@ -277,6 +285,9 @@ func Classify(changes []Change) Outcome {
 				continue
 			}
 			o.Spoken = string(c.Content)
+		// A daemon older than 032 sends drift.json without its bytes: read as none written.
+		case p == DriftFile && !c.Deleted && len(c.Content) > 0:
+			o.Drift = c.Content
 		case strings.HasPrefix(p, DocsDir+"/"):
 			d, err := doc(p, c)
 			if err != nil {
@@ -287,6 +298,37 @@ func Classify(changes []Change) Outcome {
 		}
 	}
 	return o
+}
+
+// DriftLevels are the ratings drift.json may give (032-AC13).
+var DriftLevels = []string{"low", "medium", "high"}
+
+// Drift is a time keeper's rating of the room, as drift.json gives it.
+type Drift struct {
+	Level  string `json:"level"`
+	Reason string `json:"reason"`
+}
+
+// ParseDrift reads drift.json: a known level and a reason of one plain line, at most MaxDriftReason
+// characters.
+func ParseDrift(b []byte) (Drift, error) {
+	var d Drift
+	if len(b) > MaxDriftBytes || !utf8.Valid(b) {
+		return d, fmt.Errorf("over %d bytes or not UTF-8", MaxDriftBytes)
+	}
+	if err := json.Unmarshal(b, &d); err != nil {
+		return Drift{}, fmt.Errorf(`want {"level": "low" | "medium" | "high", "reason": "<one line>"}: %w`, err)
+	}
+	d.Reason = strings.TrimSpace(d.Reason)
+	switch {
+	case !slices.Contains(DriftLevels, d.Level):
+		return Drift{}, fmt.Errorf("level %q is not low, medium or high", cut(d.Level, 20))
+	case d.Reason == "" || utf8.RuneCountInString(d.Reason) > MaxDriftReason || strings.IndexFunc(d.Reason, func(r rune) bool {
+		return unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) || unicode.In(r, unicode.Zl, unicode.Zp)
+	}) >= 0:
+		return Drift{}, fmt.Errorf("want a reason of one plain line, at most %d characters", MaxDriftReason)
+	}
+	return d, nil
 }
 
 func doc(p string, c Change) (Doc, error) {

@@ -78,7 +78,7 @@ func TestValidDocName(t *testing.T) {
 }
 
 func TestNeedsContent(t *testing.T) {
-	for p, want := range map[string]bool{"docs/a.md": true, RepliesFile: true, "uploads/1-a.pdf": false, "transcript/x.md": false, "docsx/a.md": false} {
+	for p, want := range map[string]bool{"docs/a.md": true, RepliesFile: true, DriftFile: true, "uploads/1-a.pdf": false, "transcript/x.md": false, "docsx/a.md": false} {
 		if NeedsContent(p) != want {
 			t.Errorf("NeedsContent(%q) != %v", p, want)
 		}
@@ -170,5 +170,43 @@ func TestSpokenFile(t *testing.T) {
 	}
 	if o := Classify([]Change{{Path: SpokenFile, Deleted: true}}); o.Spoken != "" || len(o.Ignored) != 0 {
 		t.Errorf("deleted spoken.md: %+v", o)
+	}
+}
+
+// 032-AC13: drift.json reaches the server raw, never listed by Classify; ParseDrift takes a known
+// level with a reason of one plain line and refuses every other shape.
+func TestDrift(t *testing.T) {
+	if o := Classify([]Change{{Path: DriftFile, Content: []byte(`{"level": "high"}`)}}); string(o.Drift) != `{"level": "high"}` || len(o.Ignored) != 0 {
+		t.Fatalf("classify: %+v", o)
+	}
+	// An old daemon's change, and a deleted file, carry none.
+	if o := Classify([]Change{{Path: DriftFile}, {Path: "./" + DriftFile, Deleted: true}}); o.Drift != nil || len(o.Ignored) != 0 {
+		t.Fatalf("no bytes: %+v", o)
+	}
+	if d, err := ParseDrift([]byte(`{"level": "high", "reason": " Bob has waited four minutes. "}`)); err != nil || d != (Drift{Level: "high", Reason: "Bob has waited four minutes."}) {
+		t.Fatalf("valid: %+v %v", d, err)
+	}
+	if _, err := ParseDrift([]byte(`{"level": "low", "reason": "` + strings.Repeat("é", MaxDriftReason) + `"}`)); err != nil {
+		t.Fatalf("200 characters: %v", err)
+	}
+	for name, b := range map[string]string{
+		"bad JSON":       `{"level": "high",`,
+		"an array":       `[{"level": "high", "reason": "x"}]`,
+		"unknown level":  `{"level": "critical", "reason": "x"}`,
+		"upper case":     `{"level": "High", "reason": "x"}`,
+		"no reason":      `{"level": "high"}`,
+		"blank reason":   `{"level": "high", "reason": "  "}`,
+		"long reason":    `{"level": "high", "reason": "` + strings.Repeat("a", MaxDriftReason+1) + `"}`,
+		"two lines":      `{"level": "high", "reason": "Bob waits.\nAlice talks."}`,
+		"carriage":       `{"level": "high", "reason": "Bob waits.\rAlice talks."}`,
+		"bidi":           `{"level": "high", "reason": "Bob \u202ewaits"}`,
+		"line separator": `{"level": "high", "reason": "Bob waits.\u2028Alice talks."}`,
+		"para separator": `{"level": "high", "reason": "Bob waits.\u2029Alice talks."}`,
+		"not UTF-8":      "{\"level\": \"high\", \"reason\": \"\xff\"}",
+		"over the limit": `{"level": "high", "reason": "x", "pad": "` + strings.Repeat(" ", MaxDriftBytes) + `"}`,
+	} {
+		if d, err := ParseDrift([]byte(b)); err == nil {
+			t.Errorf("%s: accepted %+v", name, d)
+		}
 	}
 }

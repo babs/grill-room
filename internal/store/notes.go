@@ -46,7 +46,7 @@ func roleHolder(ctx context.Context, tx *txn, p *RoomPersona, column string, lab
 
 // takeKeeper turns the time keeper role off for every persona of p's room but p: one per room (032-AC1).
 func takeKeeper(ctx context.Context, tx *txn, p *RoomPersona) error {
-	if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET time_keeper = 0 WHERE room_id = ? AND id != ? AND time_keeper = 1`, p.RoomID, p.ID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET time_keeper = 0, drift_level = '', drift_reason = '' WHERE room_id = ? AND id != ? AND time_keeper = 1`, p.RoomID, p.ID); err != nil {
 		return fmt.Errorf("time keeper %d: %w", p.ID, err)
 	}
 	return nil

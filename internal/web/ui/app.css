@@ -195,9 +195,10 @@ button.persona .pstate { color: var(--text-muted); font-weight: 400; font-size: 
 .persona-pill .persona-hear[aria-pressed=true] { color: var(--danger); }
 .persona-pill :is(.persona-run, .persona-hear):hover::before { background: var(--border); }
 .persona-pill .persona-run .ico { fill: currentColor; }
-.vstate { display: inline-grid; place-items: center; flex: none; color: var(--accent); }
-.vstate[hidden] { display: none; }
-.vstate .ico { width: 16px; height: 16px; }
+.vstate, .drift { display: inline-grid; place-items: center; flex: none; color: var(--accent); }
+.drift { color: var(--danger); }
+:is(.vstate, .drift)[hidden] { display: none; }
+:is(.vstate, .drift) .ico { width: 16px; height: 16px; }
 .vstate.speaking .wave { animation: speak-wave 1.2s ease-in-out infinite; }
 .vstate.speaking .wave-2 { animation-delay: .3s; }
 @keyframes speak-wave { 50% { opacity: .2; } }

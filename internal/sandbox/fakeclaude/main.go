@@ -18,6 +18,7 @@
 //	FAKE_HOOKS        answer with what the plugins' SessionStart hooks printed
 //	FAKE_PINGPONG A B as persona A call @B, as any other call @A, and repeat the marker so the
 //	                  called persona's prompt holds it too (an agent chain)
+//	FAKE_DRIFT L      write drift.json at level L (low, medium, high), the prompt's last L
 //	FAKE_SILENT       answer nothing and write nothing, as a time keeper with nothing to say
 //	FAKE_SLOW         take a few seconds (a turn others queue behind)
 //	FAKE_SLEEP        write docs/notes.md and the prompt to the session, as a turn under way
@@ -68,6 +69,7 @@ var (
 	persona    = regexp.MustCompile(`(?m)^You are (\S+), an agent`)
 	annotation = regexp.MustCompile(`### Annotation (\d+)`)
 	writeNote  = regexp.MustCompile(`Write (docs/_handoff-[\p{L}\p{N}_-]+\.md) for it`)
+	driftMark  = regexp.MustCompile(`FAKE_DRIFT (low|medium|high)`)
 	readNote   = regexp.MustCompile(`Your previous session wrote (docs/_handoff-[\p{L}\p{N}_-]+\.md) for you`)
 )
 
@@ -276,6 +278,13 @@ func act(prompt, history, cwd, system, effort, autocompact, session string) (str
 		return pingPongCall(prompt)
 	case strings.Contains(prompt, "FAKE_WHOAMI"):
 		return whoami(system, effort)
+	case strings.Contains(prompt, "FAKE_DRIFT"):
+		ms := driftMark.FindAllStringSubmatch(prompt, -1)
+		if ms == nil {
+			return "", fmt.Errorf("FAKE_DRIFT wants low, medium or high")
+		}
+		l := ms[len(ms)-1][1]
+		return "Rated the drift " + l + ".", os.WriteFile(ws("drift.json"), fmt.Appendf(nil, `{"level": %q, "reason": "Fake drift %s."}`, l, l), 0o600) //nolint:gosec // see above
 	case strings.Contains(prompt, "FAKE_SILENT"):
 		return "", nil
 	case strings.Contains(prompt, "FAKE_SLOW"):

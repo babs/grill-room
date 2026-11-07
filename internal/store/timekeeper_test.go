@@ -274,3 +274,106 @@ func TestExportTimeKeeper(t *testing.T) {
 		}
 	}
 }
+
+// 032-AC13, 032-AC14: the time keeper keeps its latest valid drift.json; a turn without one keeps
+// it, a malformed one is listed in the turn's system line and keeps it too. Another persona's
+// drift.json is scratch. Losing the role, by turning it off or to another persona, clears it, and
+// neither the transcript nor the export carries it.
+func TestKeeperDrift(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	alice, _, grill := personaRoom(t, s, "d")
+	sec, _, err := s.AddPersona(ctx, "d", templateByPreset(t, s, "secretary").ID, alice, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := s.EditPersona(ctx, "d", grill.ID, PersonaPatch{TimeKeeper: yes()}, alice); err != nil {
+		t.Fatal(err)
+	}
+	dm, err := s.PairDaemon(ctx, "d", alice.ID, "dmn-d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(p int64, drift string) *Turn {
+		t.Helper()
+		tn := &Turn{RoomID: "d", DaemonID: dm.ID, Prompt: "go", PersonaID: p, PersonaName: "Grill"}
+		if err := s.StartTurn(ctx, tn, false); err != nil {
+			t.Fatal(err)
+		}
+		out := &TurnOutcome{SessionID: fmt.Sprintf("00000000-0000-4000-8000-%012d", tn.ID), Session: []byte("x\n"), Synthesis: "On track."}
+		if drift != "" {
+			out.Drift = []byte(drift)
+		}
+		done, err := s.CompleteTurn(ctx, "d", tn.ID, dm.ID, out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return done
+	}
+	drift := func(id int64) string {
+		t.Helper()
+		p, err := s.RoomPersona(ctx, "d", id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.DriftLevel + "|" + p.DriftReason
+	}
+	const reason = "Bob has had his hand up for four minutes."
+	if tn := run(grill.ID, `{"level": "high", "reason": "`+reason+`"}`); len(tn.Report.Ignored) != 0 || drift(grill.ID) != "high|"+reason {
+		t.Fatalf("valid: %+v, drift %s", tn.Report, drift(grill.ID))
+	}
+	run(grill.ID, "")
+	if drift(grill.ID) != "high|"+reason {
+		t.Fatalf("none written: %s", drift(grill.ID))
+	}
+	for name, b := range map[string]string{
+		"bad JSON":      `{"level": "high"`,
+		"unknown level": `{"level": "severe", "reason": "x"}`,
+		"long reason":   `{"level": "low", "reason": "` + strings.Repeat("a", 201) + `"}`,
+		"two lines":     `{"level": "low", "reason": "a\nb"}`,
+	} {
+		tn := run(grill.ID, b)
+		if len(tn.Report.Ignored) != 1 || !strings.HasPrefix(tn.Report.Ignored[0], "drift.json: ") || drift(grill.ID) != "high|"+reason {
+			t.Errorf("%s: report %+v, drift %s", name, tn.Report, drift(grill.ID))
+		}
+		var line string
+		if err := s.db.QueryRowContext(ctx, `SELECT body FROM messages WHERE room_id = 'd' AND kind = 'system' ORDER BY id DESC LIMIT 1`).Scan(&line); err != nil ||
+			!strings.Contains(line, "ignored: drift.json: ") {
+			t.Errorf("%s: system line %q %v", name, line, err)
+		}
+	}
+	if tn := run(sec.ID, `not json`); len(tn.Report.Ignored) != 0 || drift(sec.ID) != "|" {
+		t.Fatalf("another persona's drift.json: %+v, drift %s", tn.Report, drift(sec.ID))
+	}
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM messages WHERE room_id = 'd' AND body LIKE '%four minutes%'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("the reason is in %d messages: %v", n, err)
+	}
+	dir := export(t, s, "d")
+	err = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if b := mustRead(t, p); strings.Contains(string(b), "four minutes") {
+			t.Errorf("%s carries the drift", p)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The role moved to another persona: the one that lost it loses its rating.
+	if _, _, _, err := s.EditPersona(ctx, "d", sec.ID, PersonaPatch{TimeKeeper: yes()}, alice); err != nil {
+		t.Fatal(err)
+	}
+	if drift(grill.ID) != "|" {
+		t.Fatalf("role taken: %s", drift(grill.ID))
+	}
+	run(sec.ID, `{"level": "medium", "reason": "The agenda slips."}`)
+	if _, _, _, err := s.EditPersona(ctx, "d", sec.ID, PersonaPatch{TimeKeeper: no()}, alice); err != nil {
+		t.Fatal(err)
+	}
+	if drift(sec.ID) != "|" {
+		t.Fatalf("role off: %s", drift(sec.ID))
+	}
+}

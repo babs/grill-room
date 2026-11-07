@@ -330,6 +330,9 @@ CREATE INDEX IF NOT EXISTS message_documents_document ON message_documents(docum
 CREATE UNIQUE INDEX IF NOT EXISTS room_personas_keeper ON room_personas(room_id) WHERE time_keeper = 1;`,
 	// 60 (032-AC7): a time keeper's timer line carries its wait before speaking over to the TTS service.
 	`ALTER TABLE tts_lines ADD COLUMN IF NOT EXISTS cut_in_s BIGINT NOT NULL DEFAULT 0;`,
+	// 61 (032-AC13): the time keeper's latest drift rating and its reason, never exported.
+	`ALTER TABLE room_personas ADD COLUMN IF NOT EXISTS drift_level TEXT NOT NULL DEFAULT '' CHECK (drift_level IN ('', 'low', 'medium', 'high')),
+	ADD COLUMN IF NOT EXISTS drift_reason TEXT NOT NULL DEFAULT '';`,
 }
 
 // nonText is the predicate of the non-typed message indexes, written into every query that uses

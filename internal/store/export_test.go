@@ -762,7 +762,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"annotations":         "id room_id document_id revision anchor orphaned status version created_at |",
 		"annotation_messages": "id annotation_id author_kind participant_id author body created_at persona_id |",
 		"attachments":         "id message_id content_type size data created_at |",
-		"room_personas":       "id room_id template_id template_version name badge colour text model effort every_n self_call created_at autocompact pending every_voice every_minutes watches_notes speaks voice voice_rate time_keeper cut_in_s | cap_decision cap_daemon_id cap_model cap_effort mark_msg_id mark_at_ms notes_mark",
+		"room_personas":       "id room_id template_id template_version name badge colour text model effort every_n self_call created_at autocompact pending every_voice every_minutes watches_notes speaks voice voice_rate time_keeper cut_in_s | cap_decision cap_daemon_id cap_model cap_effort mark_msg_id mark_at_ms notes_mark drift_level drift_reason",
 		"room_persona_skills": "persona_id skill_id version |",
 		"skills":              "id name created_at room_id pending scope | profile_id publisher_id from_starter",
 		"skill_versions":      "skill_id n author description files size sha256 data created_at | id author_id",

@@ -112,7 +112,7 @@ const timekeeperText = `You are Timekeeper. You keep the room on track; you neve
 - Watch three things: the agenda in docs/agenda.md if there is one, the hands raised, and who speaks and for how long. The "Who is here" section gives you the hands and the current speaker.
 - Speak only when the room is off track: someone has held the floor for long, a hand has waited for minutes, or the talk has left the agenda. Then say it in one or two short sentences that name the people, like "Alice, Bob has had his hand up for four minutes."
 - When the room is on track, say nothing: end your turn with an empty final answer and write no spoken.md.
-- On every turn, write drift.json at the root, how far the room has drifted and why: {"level": "low" | "medium" | "high", "reason": "<one line>"}.
+- On every turn, write drift.json at the root, how far the room has drifted and why: {"level": "low" | "medium" | "high", "reason": "<one line, at most 200 characters>"}.
 - Never judge what people say, only how the time is spent.
 
 Answer in the language the room speaks. If it mixes languages, use the one of the latest messages.`
@@ -365,6 +365,9 @@ type RoomPersona struct {
 	presetChanges []string
 	// Silent is a time keeper whose latest turn ended with nothing to say (032-AC3).
 	Silent bool `json:"silent,omitempty"`
+	// DriftLevel and DriftReason are the time keeper's latest drift.json, empty for any other (032-AC13).
+	DriftLevel  string `json:"drift_level,omitempty"`
+	DriftReason string `json:"drift_reason,omitempty"`
 	// Autocompact is the context size, in tokens, at which Claude Code compacts the persona's
 	// session; 0 leaves it to Claude Code (auto). Passed to claude -p --autocompact (003-AC24).
 	Autocompact int `json:"autocompact"`
@@ -395,7 +398,8 @@ const personaCols = `SELECT p.id, p.room_id, COALESCE(p.template_id, 0), p.templ
 	CASE WHEN p.every_voice IS NULL THEN 0 ELSE (SELECT COUNT(*) FROM messages m WHERE m.room_id = p.room_id AND m.kind = 'voice'
 		AND m.deleted_at IS NULL AND m.id > p.mark_msg_id) END, p.watches_notes, p.notes_mark, p.speaks, p.voice, p.voice_rate,
 	p.time_keeper, p.cut_in_s, p.time_keeper = 1 AND COALESCE((SELECT t.status = 'done' AND NOT EXISTS (SELECT 1 FROM messages m
-		WHERE m.turn_id = t.id AND m.kind = 'agent') FROM turns t WHERE t.persona_id = p.id ORDER BY t.id DESC LIMIT 1), false) FROM room_personas p
+		WHERE m.turn_id = t.id AND m.kind = 'agent') FROM turns t WHERE t.persona_id = p.id ORDER BY t.id DESC LIMIT 1), false),
+	p.drift_level, p.drift_reason FROM room_personas p
 	LEFT JOIN agent_sessions s ON s.persona_id = p.id
 		AND s.session_id = (SELECT session_id FROM turns WHERE persona_id = p.id AND status = 'done' ORDER BY id DESC LIMIT 1) `
 
@@ -408,7 +412,7 @@ func scanPersona(sc scanner) (*RoomPersona, error) {
 		&p.Name, &p.Badge, &p.Colour, &p.Text, &p.Model, &p.Effort, &p.EveryN, &p.SelfCall, &created,
 		&p.Pending, &p.Cap.Status, &p.Cap.DaemonID, &p.Cap.Level.Model, &p.Cap.Level.Effort, &p.Autocompact,
 		&p.ContextTokens, &p.ContextWindow, &p.EveryVoice, &p.EveryMinutes, &markMS, &voices, &p.WatchesNotes, &p.NotesMark, &p.Speaks, &p.Voice, &p.VoiceRate,
-		&p.TimeKeeper, &p.CutInS, &p.Silent)
+		&p.TimeKeeper, &p.CutInS, &p.Silent, &p.DriftLevel, &p.DriftReason)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -800,6 +804,12 @@ func updatePersona(ctx context.Context, tx *txn, p *RoomPersona) error {
 	}
 	if err != nil {
 		return fmt.Errorf("update persona %d: %w", p.ID, err)
+	}
+	if !p.TimeKeeper {
+		// The rating was the role's: losing it clears the pill's ⓘ (032-AC14).
+		if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET drift_level = '', drift_reason = '' WHERE id = ? AND drift_level <> ''`, p.ID); err != nil {
+			return fmt.Errorf("update persona %d: %w", p.ID, err)
+		}
 	}
 	if p.resetMark {
 		// A trigger just turned on counts from now, not from a turn long past (006-AC18).
