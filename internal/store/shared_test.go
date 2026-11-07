@@ -302,7 +302,7 @@ func TestSweepExpired(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	left, err := s.SweepExpired(ctx, now, cutoff)
+	left, err := s.SweepExpired(ctx, now, 20_000, cutoff)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +310,7 @@ func TestSweepExpired(t *testing.T) {
 	if len(left) != 1 || left[0].ID != stale.ID || left[0].RoomID != "r" || left[0].ParticipantID != stale.ParticipantID {
 		t.Errorf("gone daemons = %+v, want only %d", left, stale.ID)
 	}
-	if again, err := s.SweepExpired(ctx, now, cutoff); err != nil || len(again) != 0 {
+	if again, err := s.SweepExpired(ctx, now, 20_000, cutoff); err != nil || len(again) != 0 {
 		t.Errorf("second sweep: %+v %v", again, err)
 	}
 	var n, kept int64
@@ -575,7 +575,7 @@ func TestSweepPresenceBatches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.SweepExpired(ctx, now, 0); err != nil {
+	if _, err := s.SweepExpired(ctx, now, 20_000, 0); err != nil {
 		t.Fatal(err)
 	}
 	var left, live int
@@ -617,7 +617,7 @@ func TestSharedStateErrors(t *testing.T) {
 		"rate hit":                func() error { _, _, err := s.RateHit(ctx, "login", "k", 1, 1, 0, 1); return err },
 		"rate unhit":              func() error { return s.RateUnhit(ctx, 1) },
 		"rate reset":              func() error { return s.RateReset(ctx, "login", "k") },
-		"sweep expired":           func() error { _, err := s.SweepExpired(ctx, 1, 1); return err },
+		"sweep expired":           func() error { _, err := s.SweepExpired(ctx, 1, 20_000, 1); return err },
 		"add tts line":            func() error { _, _, err := s.AddTTSLine(ctx, ttsLine("r", 1), 1, 1); return err },
 		"sweep tts lines":         func() error { _, err := s.SweepTTSLines(ctx, 1); return err },
 		"tts lines:":              func() error { _, err := s.TTSLinesAfter(ctx, 0, 1); return err },

@@ -72,6 +72,7 @@ func (s *Server) seatsEnded(ctx context.Context, room string, seats, daemons []i
 	for _, id := range daemons {
 		s.failDaemonTurn(ctx, &store.Daemon{ID: id, RoomID: room}, whyHostLeft)
 	}
+	s.people.hands.drop(room)
 	s.kickFromVoice(room, seats)
 	s.agentChanged(ctx, room)
 }

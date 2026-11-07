@@ -2184,6 +2184,9 @@ function connect() {
   });
   es.addEventListener('presence', (e) => {
     presence = new Map(JSON.parse(e.data).people.map((p) => [String(p.id), p]));
+    // Until the stream opens the stay, a raise has no stay to count from and is lost.
+    $('hand-raise').disabled = false;
+    if (!handBusy) handWant = null;
     renderParticipants();
   });
   es.addEventListener('agent', (e) => {
@@ -3550,6 +3553,7 @@ const badgeIcons = {
   muted: '<path d="M11 5 6 9H2v6h4l5 4z"/><path d="m22 9-6 6M16 9l6 6"/>',
   listening: '<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/>',
   deafened: '<path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5M17 17H3s3-2 3-9a4.7 4.7 0 0 1 .3-1.7M10.3 21a1.9 1.9 0 0 0 3.4 0M2 2l20 20"/>',
+  hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v6M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-6-2.3l-3.6-3.6a2 2 0 0 1 2.8-2.8L7 15"/>',
 };
 
 function badgeIcon(name) {
@@ -3586,11 +3590,20 @@ function span(cls, text, tip) {
 // tagColumns are the badges a person row may carry, in their fixed order (008-AC13): a column shows
 // in every row of a list once any row has it, so a badge sits at the same place on every row. You
 // and room admins are marked on the name, can ask the AI in the card (008-AC18).
-const tagColumns = ['anon', 'host', 'transcribed', 'audio'];
+const tagColumns = ['hand', 'anon', 'host', 'transcribed', 'audio'];
+
+// ordinal is 1st, 2nd, 3rd, 4th… 11th, 12th, 13th, 21st.
+function ordinal(n) {
+  const s = n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th';
+  return n + s;
+}
 
 // personTags are a participant's badges by column: [icon, accessible name, tooltip].
 function personTags(p, id, isHere) {
   const t = {};
+  // The rank rides on the badge: the list keeps its order as hands go up and down (031-AC4).
+  const hand = isHere && presence.get(id)?.hand;
+  if (hand) t.hand = ['hand', 'Hand raised, ' + ordinal(hand), 'Hand raised, ' + ordinal(hand) + ' in the queue', String(hand)];
   if (agent.host_participant_id === p.id) t.host = ['host', 'host', agent.online ? 'AI host: the personas run on their computer' : 'AI host: their AI host app is not connected'];
   // Only your own row: nobody else learns whether a profile has an email (011-AC6).
   if (id === myID && noEmail()) t.anon = ['anon', anonText, anonText];
@@ -3624,6 +3637,10 @@ function personActions(p, id) {
   // The host hands over; a room admin moves the role from someone else, asked first (009-AC33).
   if (!host && (isHost() || meAdmin) && agent.daemons.some((d) => d.participant_id === p.id && d.can_host)) {
     acts.push({ label: 'Make AI host', run: () => makeHost(p) });
+  }
+  // 031-AC5: your own hand, or anyone's for a room admin.
+  if (presence.get(id)?.hand && (!other || meAdmin)) {
+    acts.push({ label: 'Lower hand', run: () => (other ? sendJSON('DELETE', api + '/hands/' + id).catch((err) => toast(err.message)) : askHand(false)) });
   }
   if (other && voiceParticipant(id)) acts.push({ volume: true });
   // 016-AC6 016-AC12: a room admin removes others; anyone leaves. A room admin steps down first.
@@ -3928,9 +3945,51 @@ function renderParticipants() {
   $('away').hidden = !rows.away.length;
   $('away-count').textContent = String(rows.away.length);
   $('tab-people-count').textContent = String(rows.here.length);
+  renderHands();
   // The tiles' names and speaking rings follow the list.
   renderStage();
 }
+
+// handWant is the own hand asked for, until the first presence event after its last request.
+let handWant = null;
+// handChain keeps the own hand's requests in click order; handBusy counts those not settled.
+let handChain = Promise.resolve();
+let handBusy = 0;
+
+// renderHands shows the count of raised hands on the People head and tab, and the own hand's
+// button (031-AC3, 031-AC4).
+function renderHands() {
+  const n = [...presence.values()].filter((p) => p.here && p.hand).length;
+  for (const el of [$('people-hands'), $('tab-people-hands')]) {
+    el.hidden = !n;
+    el.setAttribute('aria-label', n === 1 ? '1 hand raised' : n + ' hands raised');
+    if (el.textContent !== String(n)) el.replaceChildren(badgeIcon('hand'), String(n));
+  }
+  const up = handWant ?? !!presence.get(myID)?.hand;
+  const b = $('hand-raise');
+  b.setAttribute('aria-pressed', String(up));
+  const label = up ? 'Lower my hand' : 'Raise my hand';
+  b.setAttribute('aria-label', label);
+  b.dataset.tip = label;
+}
+// askHand raises or lowers the own hand (031-AC3).
+function askHand(up) {
+  handWant = up;
+  handBusy++;
+  renderHands();
+  handChain = handChain
+    .then(() => sendJSON(up ? 'PUT' : 'DELETE', api + '/hand'))
+    .catch((err) => {
+      if (handBusy === 1) handWant = null;
+      toast(err.message);
+    })
+    .finally(() => {
+      // A wish the presence already shows needs no event; one it does not waits for the next.
+      if (!--handBusy && handWant === !!presence.get(myID)?.hand) handWant = null;
+      renderHands();
+    });
+}
+$('hand-raise').addEventListener('click', () => askHand($('hand-raise').getAttribute('aria-pressed') !== 'true'));
 
 // tagSpan is one badge square, or an empty one keeping its column. The audio one is always there
 // with its state, for the people that are not in the audio too.
@@ -3942,9 +4001,11 @@ function tagSpan(col, t, el = document.createElement('span')) {
   const role = on && col === 'host';
   el.className = 'tag tag-' + col + (role ? ' role-' + col : '') + (on && col === 'host' ? ' host-badge' + (agent.online ? '' : ' offline') : '') + (on && col === 'transcribed' ? ' transcribed' : '') + (col === 'audio' ? ' audio' : '');
   const icon = t ? t[0] : '';
-  if (el.dataset.icon !== icon) {
-    el.replaceChildren(...(icon ? [badgeIcon(icon)] : []));
+  const rank = col === 'hand' && t ? t[3] : '';
+  if (el.dataset.icon !== icon || (el.dataset.rank || '') !== rank) {
+    el.replaceChildren(...(icon ? [badgeIcon(icon)] : []), ...(rank ? [span('rank', rank)] : []));
     el.dataset.icon = icon;
+    el.dataset.rank = rank;
   }
   el.dataset.col = col;
   delete el.dataset.state;

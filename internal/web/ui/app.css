@@ -353,6 +353,11 @@ code.risk { display: block; padding: var(--sp-1) var(--sp-2); border-left: 3px s
 .tag { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: var(--r-sm); font-size: var(--fs-xs); line-height: 1; }
 .tag.blank { visibility: hidden; }
 .tag svg { display: block; width: 14px; height: 14px; }
+/* Wide enough for the hand and a two-digit rank, blank or not, so later columns line up (031-AC4). */
+.tag.tag-hand { grid-auto-flow: column; gap: 1px; width: 32px; color: var(--primary-text); }
+.hands-count:not([hidden]) { display: inline-flex; align-items: center; gap: 2px; }
+.hands-count svg { display: block; width: 14px; height: 14px; }
+#hand-raise[aria-pressed=true] { background: var(--primary-bg); color: var(--primary-text); }
 .tag.role-host { background: var(--accent); color: var(--on-accent); }
 /* The host's app is not connected: the role stays, the badge goes muted like the offline pills. */
 .tag.role-host.offline { background: transparent; box-shadow: inset 0 0 0 1px var(--border-strong); color: var(--text-muted); }
@@ -659,6 +664,7 @@ mark.mention-chip.me { background: var(--accent); color: var(--on-accent); }
   .tabbar .ico { width: 20px; height: 20px; }
   .tabbar button > span { white-space: nowrap; }
   .tabbar .count { margin-left: 2px; }
+  .tabbar .hands-count { margin-left: var(--sp-1); vertical-align: top; }
   .tabbar button[aria-pressed=true] { color: var(--primary-text); box-shadow: inset 0 3px 0 var(--brand); }
   .tabbar .count:empty { display: none; }
   #side { display: none; width: 100%; border-right: 0; }

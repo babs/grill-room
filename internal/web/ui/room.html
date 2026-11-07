@@ -367,6 +367,7 @@
       <div class="pane-head">
         <button type="button" id="people-fold" class="fold" aria-controls="participants" aria-expanded="true" aria-label="People"></button>
         <h2 id="people-title"><svg class="ico sec-icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> <span class="sec-label">People</span></h2>
+        <span id="people-hands" class="badge hands-count" role="img" hidden></span>
       </div>
       <h3 class="people">In the room</h3>
       <ul id="participants"></ul>
@@ -481,6 +482,7 @@
       <button type="button" id="attach-open" class="btn-icon btn-ghost" aria-label="Attach files" data-tip="Attach files" data-icon="clip"></button>
       <input type="file" id="attach-input" multiple hidden>
       <button type="button" id="capture-open" class="btn-icon btn-ghost" aria-label="Capture screen" data-tip="Capture screen" data-icon="screen" hidden></button>
+      <button type="button" id="hand-raise" class="btn-icon btn-ghost" aria-pressed="false" disabled aria-label="Raise my hand" data-tip="Raise my hand" data-icon="hand"></button>
       <textarea id="body" rows="2" maxlength="4000" placeholder="Message the room · @ to mention" aria-label="Message" aria-describedby="send-hint"></textarea>
       <button type="submit" class="btn-icon" aria-label="Send" data-tip="Send" data-icon="send"></button>
       <ul id="pending" aria-label="Files to send" hidden></ul>
@@ -493,7 +495,7 @@
 <nav id="tabbar" class="tabbar" aria-label="Room sections">
   <button type="button" data-tab="chat" aria-pressed="true" data-icon="chat"><span>Chat</span></button>
   <button type="button" data-tab="docs" aria-pressed="false" data-icon="docs"><span>Docs <span id="tab-docs-count" class="count"></span></span></button>
-  <button type="button" data-tab="people" aria-pressed="false" data-icon="people"><span>People <span id="tab-people-count" class="count"></span></span></button>
+  <button type="button" data-tab="people" aria-pressed="false" data-icon="people"><span>People <span id="tab-people-count" class="count"></span><span id="tab-people-hands" class="hands-count" role="img" hidden></span></span></button>
   <button type="button" id="tab-video" data-tab="video" aria-pressed="false" data-icon="camera" hidden><span>Video <span id="tab-video-count" class="count"></span></span></button>
 </nav>
 <div id="toasts" class="toasts" popover="manual"></div>

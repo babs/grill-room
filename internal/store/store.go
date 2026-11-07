@@ -317,6 +317,13 @@ CREATE TABLE IF NOT EXISTS message_documents (
 	PRIMARY KEY (message_id, document_id)
 );
 CREATE INDEX IF NOT EXISTS message_documents_document ON message_documents(document_id);`,
+	// 58 (031-AC1): the raised hands; a crash lowers them all anyway, as presence restarts the stays.
+	`CREATE TABLE IF NOT EXISTS hands (
+	room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+	participant_id BIGINT NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+	raised_at_ms BIGINT NOT NULL,
+	PRIMARY KEY (room_id, participant_id)
+);`,
 }
 
 // nonText is the predicate of the non-typed message indexes, written into every query that uses

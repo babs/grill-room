@@ -112,12 +112,15 @@ func (s *Store) EndSeats(ctx context.Context, roomID string, target int64, e End
 	return out, nil
 }
 
-// seatsGone applies the end of seats of room: the turns they queued that have not started go, and
-// the room loses its host when one of them hosted (016-AC8, 016-AC9). It returns the seats' apps,
-// whose running turns the caller fails, and whether the host went.
+// seatsGone applies the end of seats of room: the turns they queued that have not started go, their
+// hands go (031-AC1), and the room loses its host when one of them hosted (016-AC8, 016-AC9). It
+// returns the seats' apps, whose running turns the caller fails, and whether the host went.
 func seatsGone(ctx context.Context, tx *txn, roomID string, seats []int64) (daemons []int64, host bool, err error) {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM turn_queue WHERE participant_id = ANY(?)`, seats); err != nil {
 		return nil, false, fmt.Errorf("queue: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM hands WHERE participant_id = ANY(?)`, seats); err != nil {
+		return nil, false, fmt.Errorf("hands: %w", err)
 	}
 	res, err := tx.ExecContext(ctx, `UPDATE rooms SET host_participant_id = NULL WHERE id = ? AND host_participant_id = ANY(?)`, roomID, seats)
 	if err != nil {
