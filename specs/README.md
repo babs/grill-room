@@ -34,4 +34,4 @@
 | [029](029-chat-attachments.md) | Files in the chat, kept as documents in a Chat folder | shipped |
 | [030](030-video-call.md) | Camera and screen share in the call: a Video stage, device choice, no recording | in progress |
 | [031](031-popouts-raise-hand.md) | Raise hand, a chat window, a pop-out video | in progress |
-| [032](032-timekeeper.md) | Timekeeper persona: hand queue and talk time, cutting in, pill indicators | approved |
+| [032](032-timekeeper.md) | Timekeeper persona: hand queue and talk time, cutting in, pill indicators | in progress |

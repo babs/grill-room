@@ -69,6 +69,26 @@ func TestTTSLines(t *testing.T) {
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM tts_lines`).Scan(&kept); err != nil || kept != 5 || dropped != 3 {
 		t.Errorf("kept %d, dropped unsent %d: want 5 and 3 (%v)", kept, dropped, err)
 	}
+
+	// 032-AC9: a cut-in line lives for its queue maximum plus its wait, and carries the wait.
+	cut := ttsLine("r", later)
+	cut.CutInS = 20
+	seq, _, err := s.AddTTSLine(ctx, cut, 500, later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.TTSLinesAfter(ctx, seq-1, later+59_000); len(got) != 1 || got[0].CutInS != 20 {
+		t.Errorf("cut-in line at 59 s: %+v", got)
+	}
+	if n, err := s.SweepTTSLines(ctx, later+59_000); err != nil || n != 5 {
+		t.Errorf("sweep at 59 s: no_service %d, want the 5 plain lines only: %v", n, err)
+	}
+	if n, err := s.SweepTTSLines(ctx, later+61_000); err != nil || n != 0 {
+		t.Errorf("sweep at 61 s: no_service %d, want 0, the cut-in line was sent: %v", n, err)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM tts_lines`).Scan(&kept); err != nil || kept != 0 {
+		t.Errorf("kept %d after its budget: %v", kept, err)
+	}
 }
 
 // 013-AC14, 017-AC14: the heartbeat and the stream's lease share one row; a heartbeat keeps the
@@ -116,7 +136,7 @@ func TestDefaultVoicesOnce(t *testing.T) {
 	dsn := testDSN(t)
 	pods := []*Store{openAt(t, dsn), openAt(t, dsn)}
 	p := seed(t, pods[0], "a")
-	if _, _, err := pods[0].AddPersona(ctx, "a", templateByPreset(t, pods[0], PresetDefault).ID, p); err != nil {
+	if _, _, err := pods[0].AddPersona(ctx, "a", templateByPreset(t, pods[0], PresetDefault).ID, p, true); err != nil {
 		t.Fatal(err)
 	}
 	catalogue := []string{"v1", "v2", "v3"}
@@ -173,7 +193,7 @@ func TestSpeakingRooms(t *testing.T) {
 	s := openTest(t)
 	for _, r := range []string{"a", "b", "c"} {
 		p := seed(t, s, r)
-		if _, _, err := s.AddPersona(ctx, r, templateByPreset(t, s, PresetDefault).ID, p); err != nil {
+		if _, _, err := s.AddPersona(ctx, r, templateByPreset(t, s, PresetDefault).ID, p, true); err != nil {
 			t.Fatal(err)
 		}
 	}

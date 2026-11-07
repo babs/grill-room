@@ -90,9 +90,16 @@ class Bot:
 class Bots:
     """Joins and leaves the bots as the room server's roster says, and feeds each room's speakers."""
 
-    def __init__(self, s: Settings, voice: Callable[[str], RoomVoice]) -> None:
+    def __init__(
+        self,
+        s: Settings,
+        voice: Callable[[str], RoomVoice],
+        warm: Callable[[str, float], None] = lambda _v, _r: None,
+    ) -> None:
         self._s = s
         self._voice = voice
+        # warm makes a time keeper's voice and rate's interjections ahead (032-AC10).
+        self._warm = warm
         self.bots: dict[tuple[str, int], Bot] = {}
         self._joining: dict[tuple[str, int], asyncio.Task[None]] = {}
         self._tasks: set[asyncio.Task[None]] = set()
@@ -120,18 +127,21 @@ class Bots:
     def sync(self, roster: list[dict[str, Any]]) -> None:
         """Brings the bots in line with the roster: joins the missing, leaves the absent later."""
         self.roster = roster
-        wanted = {(r["room"], int(p["id"])): str(p["name"]) for r in roster for p in r["personas"]}
+        wanted = {(r["room"], int(p["id"])): p for r in roster for p in r["personas"]}
         rooms = {r["room"] for r in roster}
         for room in self.rooms | rooms:
             self._voice(room).set_listeners(room in rooms)
         self.rooms = rooms
-        for key, name in wanted.items():
+        for key, p in wanted.items():
+            # Each sync, not only at join: a time keeper's voice or rate edit is made ahead too.
+            if int(p.get("cut_in_s") or 0) > 0 and p.get("voice"):
+                self._warm(str(p["voice"]), float(p.get("rate") or 1.0))
             bot = self.bots.get(key)
             if bot is not None and bot.leave is not None:
                 bot.leave.cancel()
                 bot.leave = None
             if bot is None and key not in self._joining:
-                self._joining[key] = self._spawn(self._join(key, name))
+                self._joining[key] = self._spawn(self._join(key, str(p["name"])))
         for key, bot in self.bots.items():
             if key not in wanted and bot.leave is None:
                 bot.leave = self._spawn(self._leave_later(key, bot))

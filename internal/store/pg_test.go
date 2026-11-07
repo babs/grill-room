@@ -487,7 +487,7 @@ func TestTwoStoresKeepTheInvariants(t *testing.T) {
 		var wg sync.WaitGroup
 		errs := make([]error, 2*MaxRoomPersonas)
 		for i := range errs {
-			wg.Go(func() { _, _, errs[i] = stores[i%2].AddPersona(ctx, "r", tpl, p) })
+			wg.Go(func() { _, _, errs[i] = stores[i%2].AddPersona(ctx, "r", tpl, p, true) })
 		}
 		wg.Wait()
 		for _, err := range errs {

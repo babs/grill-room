@@ -240,6 +240,8 @@ type TurnOutcome struct {
 	ContextWindow int64
 	// Report carries the refusals found before the store; CompleteTurn adds what it applied.
 	Report TurnReport
+	// Drift is drift.json's bytes, nil when the turn wrote none: kept for the time keeper only (032-AC13).
+	Drift []byte
 }
 
 const turnCols = `SELECT id, room_id, COALESCE(participant_id, 0), COALESCE(daemon_id, 0), status, fresh, resume,
@@ -777,6 +779,11 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 		}
 		report.Annotated++
 	}
+	if out.Drift != nil {
+		if err := keepDrift(ctx, tx, t.PersonaID, out.Drift, &report); err != nil {
+			return nil, err
+		}
+	}
 	if strings.TrimSpace(out.Synthesis) != "" {
 		m := &Message{RoomID: roomID, Kind: KindAgent, Sender: author, PersonaID: t.PersonaID, Body: out.Synthesis, Model: out.Model, Effort: out.Effort,
 			ModelNote: out.ModelNote, ModelMismatch: out.ModelMismatch, TurnID: id, Spoken: out.Spoken}
@@ -811,6 +818,28 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 	}
 	t.Status, t.SessionID, t.Model, t.Effort, t.Report, t.EndedAt = TurnDone, out.SessionID, out.Model, out.Effort, report, &ended
 	return t, nil
+}
+
+// keepDrift stores drift.json b on persona when it keeps time, and lists a malformed one in the
+// report, the previous rating kept. Any other persona's drift.json is scratch (032-AC13).
+func keepDrift(ctx context.Context, tx *txn, persona int64, b []byte, report *TurnReport) error {
+	var keeper bool
+	err := tx.QueryRowContext(ctx, `SELECT time_keeper = 1 FROM room_personas WHERE id = ?`, persona).Scan(&keeper)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !keeper) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("complete turn: %w", err)
+	}
+	d, err := turn.ParseDrift(b)
+	if err != nil {
+		report.Ignored = append(report.Ignored, fmt.Sprintf("%s: %v", turn.DriftFile, err))
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET drift_level = ?, drift_reason = ? WHERE id = ?`, d.Level, d.Reason, persona); err != nil {
+		return fmt.Errorf("complete turn: %w", err)
+	}
+	return nil
 }
 
 // appendSession adds out's session bytes to persona's stored copy, provided they start where it ends.

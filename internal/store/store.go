@@ -324,6 +324,15 @@ CREATE INDEX IF NOT EXISTS message_documents_document ON message_documents(docum
 	raised_at_ms BIGINT NOT NULL,
 	PRIMARY KEY (room_id, participant_id)
 );`,
+	// 59 (032-AC1): the time keeper, one per room, and how long it waits before speaking over.
+	`ALTER TABLE room_personas ADD COLUMN IF NOT EXISTS time_keeper SMALLINT NOT NULL DEFAULT 0 CHECK (time_keeper IN (0, 1)),
+	ADD COLUMN IF NOT EXISTS cut_in_s BIGINT NOT NULL DEFAULT 0 CHECK (cut_in_s IN (0, 10, 20, 30, 60));
+CREATE UNIQUE INDEX IF NOT EXISTS room_personas_keeper ON room_personas(room_id) WHERE time_keeper = 1;`,
+	// 60 (032-AC7): a time keeper's timer line carries its wait before speaking over to the TTS service.
+	`ALTER TABLE tts_lines ADD COLUMN IF NOT EXISTS cut_in_s BIGINT NOT NULL DEFAULT 0;`,
+	// 61 (032-AC13): the time keeper's latest drift rating and its reason, never exported.
+	`ALTER TABLE room_personas ADD COLUMN IF NOT EXISTS drift_level TEXT NOT NULL DEFAULT '' CHECK (drift_level IN ('', 'low', 'medium', 'high')),
+	ADD COLUMN IF NOT EXISTS drift_reason TEXT NOT NULL DEFAULT '';`,
 }
 
 // nonText is the predicate of the non-typed message indexes, written into every query that uses
@@ -1167,6 +1176,11 @@ func (s *Store) MessagesAfter(ctx context.Context, afterID int64, limit int) ([]
 // LastVoice returns the room's latest voice line still shown; ErrNotFound if there is none.
 func (s *Store) LastVoice(ctx context.Context, roomID string) (*Message, error) {
 	return scanMessage(s.db.QueryRowContext(ctx, messageCols+`WHERE room_id = ? AND kind = 'voice' AND deleted_at IS NULL ORDER BY id DESC LIMIT 1`, roomID))
+}
+
+// LastVoices returns the room's latest n voice lines, newest first.
+func (s *Store) LastVoices(ctx context.Context, roomID string, n int) ([]Message, error) {
+	return s.queryMessages(ctx, `WHERE room_id = ? AND kind = 'voice' AND deleted_at IS NULL ORDER BY id DESC LIMIT ?`, roomID, n)
 }
 
 const (

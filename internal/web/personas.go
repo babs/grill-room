@@ -52,6 +52,10 @@ type personaReq struct {
 	Autocompact *int `json:"autocompact"`
 	// WatchesNotes makes it the room's notes watcher, in place of any other (009-AC31).
 	WatchesNotes *bool `json:"watches_notes"`
+	// TimeKeeper makes it the room's time keeper, in place of any other; CutInS is its wait before
+	// speaking over, one of store.CutInChoices. Room admins only (032-AC1).
+	TimeKeeper *bool `json:"time_keeper"`
+	CutInS     *int  `json:"cut_in_s"`
 	// Speaks, Voice and VoiceRate: the persona in the audio call (013-AC26, 013-AC11, 013-AC37).
 	Speaks    *bool    `json:"speaks"`
 	Voice     *string  `json:"voice"`
@@ -125,6 +129,9 @@ func (q *personaReq) check() string {
 		zero(&q.EveryN)
 		zero(&q.EveryVoice)
 		zero(&q.EveryMinutes)
+	}
+	if q.CutInS != nil && !slices.Contains(store.CutInChoices, *q.CutInS) {
+		return fmt.Sprintf("cut_in_s must be one of %v", store.CutInChoices)
 	}
 	if a := q.Autocompact; a != nil && *a != 0 && (*a < turn.MinAutocompact || *a > turn.MaxAutocompact) {
 		return fmt.Sprintf("autocompact must be 0 (auto) or %d to %d tokens", turn.MinAutocompact, turn.MaxAutocompact)
@@ -278,7 +285,8 @@ func personaID(r *http.Request) int64 {
 	return id
 }
 
-// addPersona copies a template into the room; any member may (002-AC14).
+// addPersona copies a template into the room; any member may (002-AC14), and a room admin's copy
+// of a preset takes its admin-only settings (032-AC6).
 func (s *Server) addPersona(w http.ResponseWriter, r *http.Request, sess session) {
 	var req struct {
 		TemplateID int64 `json:"template_id"`
@@ -286,7 +294,12 @@ func (s *Server) addPersona(w http.ResponseWriter, r *http.Request, sess session
 	if !decode(w, r, &req) {
 		return
 	}
-	p, m, err := s.bus.Store.AddPersona(r.Context(), sess.p.RoomID, req.TemplateID, sess.p)
+	admin, err := s.roomAdmin(r.Context(), &sess)
+	if err != nil {
+		s.serverError(w, "room_admin_lookup_failed", err)
+		return
+	}
+	p, m, err := s.bus.Store.AddPersona(r.Context(), sess.p.RoomID, req.TemplateID, sess.p, admin)
 	s.personaDone(w, sess, p, m, err, http.StatusCreated)
 }
 
@@ -301,9 +314,12 @@ func (s *Server) editPersona(w http.ResponseWriter, r *http.Request, sess sessio
 		httpError(w, http.StatusBadRequest, msg)
 		return
 	}
+	if (req.TimeKeeper != nil || req.CutInS != nil) && !s.asRoomAdmin(w, r, &sess) {
+		return
+	}
 	patch := store.PersonaPatch{Name: req.Name, Badge: req.Badge, Colour: req.Colour, Text: req.Text, Model: req.Model, Effort: req.Effort,
 		EveryN: req.EveryN, EveryVoice: req.EveryVoice, EveryMinutes: req.EveryMinutes, SelfCall: req.SelfCall, Autocompact: req.Autocompact,
-		WatchesNotes: req.WatchesNotes, Speaks: req.Speaks, Voice: req.Voice, VoiceRate: req.VoiceRate}
+		WatchesNotes: req.WatchesNotes, TimeKeeper: req.TimeKeeper, CutInS: req.CutInS, Speaks: req.Speaks, Voice: req.Voice, VoiceRate: req.VoiceRate}
 	p, m, held, err := s.bus.Store.EditPersona(r.Context(), sess.p.RoomID, personaID(r), patch, sess.p)
 	s.personaDone(w, sess, p, m, err, heldStatus(held))
 }

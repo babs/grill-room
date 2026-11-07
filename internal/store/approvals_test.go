@@ -52,7 +52,7 @@ func TestHeldChanges(t *testing.T) {
 	ctx := context.Background()
 	alice, bob, grill, _ := approvingRoom(t, s, "a")
 
-	sec, m, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, bob)
+	sec, m, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, bob, true)
 	if err != nil || !sec.Pending || m.Body != `Bob added the persona 📝 Secretary, from the template "Secretary" v1. It waits for the host's approval.` {
 		t.Fatalf("held add: %+v %+v %v", sec, m, err)
 	}
@@ -129,7 +129,7 @@ func TestHeldChanges(t *testing.T) {
 	s.onlyChange(t, "a")
 
 	// A refused new persona is removed; its request goes with it.
-	extra, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, PresetDefault).ID, bob)
+	extra, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, PresetDefault).ID, bob, true)
 	if err != nil || !extra.Pending {
 		t.Fatalf("second held add: %+v %v", extra, err)
 	}
@@ -156,7 +156,7 @@ func TestHeldChanges(t *testing.T) {
 	if _, err := s.DecideChange(ctx, "a", s.onlyChange(t, "a").ID, false, alice); err != nil {
 		t.Fatal(err)
 	}
-	crit, _, err := s.AddPersona(ctx, "a", tpl.ID, alice)
+	crit, _, err := s.AddPersona(ctx, "a", tpl.ID, alice, true)
 	if err != nil || crit.Pending {
 		t.Fatalf("host's add: %+v %v", crit, err)
 	}

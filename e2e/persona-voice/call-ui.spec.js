@@ -101,11 +101,13 @@ for (const [label, viewport] of [['desktop', { width: 1440, height: 900 }], ['ph
       await expect(page.locator('#persona-card-mute')).toBeFocused();
       await page.keyboard.press('Escape');
 
-      // Speaking, then waiting to speak: an icon and, on a desktop, the word.
+      // Speaking, then waiting to speak: an icon and, on a desktop, the word. 032-AC12: the wait is
+      // a comic speech bubble, its meaning in the pill's aria-label.
       await speak(request, room.id, 'Grill', Array(40).fill('word').join(' ') + '.');
       await speak(request, room.id, 'Secretary', 'Noted.');
       await expect(pill(page, 'Grill').locator('.vstate.speaking svg')).toBeVisible({ timeout: 30_000 });
-      await expect(pill(page, 'Secretary').locator('.vstate.speaking-wait svg')).toBeVisible();
+      await expect(pill(page, 'Secretary').locator('.vstate.bubble svg')).toBeVisible();
+      await expect(pill(page, 'Secretary').locator('button.persona')).toHaveAttribute('aria-label', /Secretary is waiting to speak in the call/);
       await expect(pill(page, 'Grill').locator('button.persona')).toHaveAttribute('aria-label', /Grill is speaking in the call/);
       await expect(pill(page, 'Secretary').locator('button.persona')).toHaveAttribute('data-tip', 'Secretary is waiting to speak in the call');
       if (label === 'desktop') {
@@ -113,6 +115,8 @@ for (const [label, viewport] of [['desktop', { width: 1440, height: 900 }], ['ph
         await expect(pill(page, 'Secretary').locator('.pstate')).toHaveText('waiting to speak');
       }
       await page.screenshot({ path: `${shots}/pills-${label}.png` });
+      // 032-AC12: the bubble goes once Secretary's line starts.
+      await expect(pill(page, 'Secretary').locator('.vstate.bubble')).toHaveCount(0, { timeout: 60_000 });
 
       // The sheet's Identity tab: speaks, voice with its sample and credit, rate.
       await pill(page, 'Grill').locator('button.persona').click();

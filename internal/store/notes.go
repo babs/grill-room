@@ -16,15 +16,38 @@ const LinkNotesWatch ChainEvent = "notes_watch"
 const latestNote = `(SELECT COALESCE(MAX(m.id), 0) FROM annotation_messages m JOIN annotations a ON a.id = m.annotation_id
 	WHERE a.room_id = room_personas.room_id)`
 
-// otherWatcher sets p.watchFrom when c makes p the notes watcher in place of another persona.
+// otherWatcher sets p.watchFrom when c makes p the notes watcher in place of another persona, and
+// p.keeperFrom when it makes p the time keeper in place of another (032-AC1).
 func otherWatcher(ctx context.Context, tx *txn, p *RoomPersona, c PersonaPatch) error {
-	if c.WatchesNotes == nil || !*c.WatchesNotes || p.WatchesNotes {
-		return nil
+	if c.WatchesNotes != nil && *c.WatchesNotes && !p.WatchesNotes {
+		if err := roleHolder(ctx, tx, p, "watches_notes", &p.watchFrom); err != nil {
+			return fmt.Errorf("notes watcher: %w", err)
+		}
 	}
-	err := tx.QueryRowContext(ctx, `SELECT badge || ' ' || name FROM room_personas WHERE room_id = ? AND id != ? AND watches_notes = 1`,
-		p.RoomID, p.ID).Scan(&p.watchFrom)
+	if c.TimeKeeper != nil && *c.TimeKeeper && !p.TimeKeeper {
+		if err := roleHolder(ctx, tx, p, "time_keeper", &p.keeperFrom); err != nil {
+			return fmt.Errorf("time keeper: %w", err)
+		}
+	}
+	return nil
+}
+
+// roleHolder reads into label the badge and name of the other persona of p's room with the role
+// column on, if any.
+func roleHolder(ctx context.Context, tx *txn, p *RoomPersona, column string, label *string) error {
+	//nolint:gosec // column is one of two literals, never user input
+	err := tx.QueryRowContext(ctx, `SELECT badge || ' ' || name FROM room_personas WHERE room_id = ? AND id != ? AND `+column+` = 1`,
+		p.RoomID, p.ID).Scan(label)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("notes watcher: %w", err)
+		return err
+	}
+	return nil
+}
+
+// takeKeeper turns the time keeper role off for every persona of p's room but p: one per room (032-AC1).
+func takeKeeper(ctx context.Context, tx *txn, p *RoomPersona) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET time_keeper = 0, drift_level = '', drift_reason = '' WHERE room_id = ? AND id != ? AND time_keeper = 1`, p.RoomID, p.ID); err != nil {
+		return fmt.Errorf("time keeper %d: %w", p.ID, err)
 	}
 	return nil
 }

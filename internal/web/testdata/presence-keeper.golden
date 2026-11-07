@@ -1,0 +1,58 @@
+## Who is here
+
+Room: R
+You: @Timekeeper, model sonnet, effort low, on demand and every 5 minutes
+Why you are running: asked for a turn
+No other agent is in the room.
+Humans present: @Alice ·a1b2, @Bob ·c3d4
+Host: Alice ·a1b2
+Speaking now: Alice ·a1b2
+Chain budget: 25 of 25 agent turns left
+Address a human by the @name listed above: it notifies them. @agent is for giving a turn.
+Write @name in your synthesis to give another agent a turn; it counts against the chain budget.
+Writing @Timekeeper does nothing: self-call is off.
+
+
+
+----
+
+## Who is here
+
+Room: R
+You: @Timekeeper, model sonnet, effort low, on demand and every 5 minutes
+Why you are running: asked for a turn
+No other agent is in the room.
+Humans present: @Alice ·a1b2, @Bob ·c3d4
+Hands raised:
+1. Bob ·c3d4, for 3 min
+2. Carol ·e5f6, for 40 s
+3. Dan ·0a0b, for 30 s
+4. Eve ·1c1d, for 20 s
+5. Fay ·2e2f, for 10 s
+and 1 more
+Host: Alice ·a1b2
+Alice ·a1b2 speaks now, for 4 min 10 s
+Chain budget: 25 of 25 agent turns left
+Address a human by the @name listed above: it notifies them. @agent is for giving a turn.
+Write @name in your synthesis to give another agent a turn; it counts against the chain budget.
+Writing @Timekeeper does nothing: self-call is off.
+
+
+
+----
+
+## Who is here
+
+Room: R
+You: @Timekeeper, model sonnet, effort low, on demand and every 5 minutes
+Why you are running: asked for a turn
+No other agent is in the room.
+Humans present: @Alice ·a1b2, @Bob ·c3d4
+Hands raised: none
+Host: Alice ·a1b2
+Speaking now: nobody
+Chain budget: 25 of 25 agent turns left
+Address a human by the @name listed above: it notifies them. @agent is for giving a turn.
+Write @name in your synthesis to give another agent a turn; it counts against the chain budget.
+Writing @Timekeeper does nothing: self-call is off.
+

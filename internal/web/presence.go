@@ -33,6 +33,13 @@ const (
 	causeMax = presenceLineMax - len("Why you are running: ")
 	// speakerWindow is how recent a voice line must be for its speaker to be speaking now.
 	speakerWindow = 10 * time.Second
+	// runGap ends a speaker's run: longer than a voice paragraph's close, so a breath keeps the count (032-AC2).
+	runGap = 30 * time.Second
+	// maxHandLines is how many hands a time keeper's preamble lists before "and N more".
+	maxHandLines = 5
+	// runLookback bounds the voice lines read back to find where a speaker's run began.
+	// ponytail: a run longer than this many lines is counted from the oldest one read.
+	runLookback = 200
 )
 
 // presencePersona is one persona as the preamble shows it.
@@ -55,6 +62,12 @@ type presenceView struct {
 	Host     string
 	Speaker  string
 	Chain    string
+	// Keeper is set for the time keeper, the one persona told the hands and talk time (032-AC2):
+	// Hands are its lines in queue order, HandsMore those past them, SpeakerFor the speaker's run.
+	Keeper     bool
+	Hands      []string
+	HandsMore  int
+	SpeakerFor string
 }
 
 // oneLine folds s on one line: names and syntheses must not break the preamble's layout.
@@ -91,6 +104,39 @@ func speakingAt(m *store.Message, now time.Time) bool {
 		at = *m.AppendedAt
 	}
 	return now.Sub(at) <= speakerWindow
+}
+
+// lineEnd is when a voice line was last spoken: a paragraph's last append, else its ts.
+func lineEnd(m *store.Message) time.Time {
+	if m.AppendedAt != nil {
+		return *m.AppendedAt
+	}
+	return m.TS
+}
+
+// runStart is when the speaker of lines[0] began their current run, lines newest first: their own
+// lines back to another speaker's or a gap over runGap (032-AC2).
+func runStart(lines []store.Message) time.Time {
+	start := lines[0].TS
+	for i := 1; i < len(lines); i++ {
+		if lines[i].ParticipantID != lines[0].ParticipantID || lines[i-1].TS.Sub(lineEnd(&lines[i])) > runGap {
+			break
+		}
+		start = lines[i].TS
+	}
+	return start
+}
+
+// span is a duration as the preamble says it: "40 s", "3 min", "4 min 10 s".
+func span(d time.Duration) string {
+	s := max(int(d/time.Second), 0)
+	switch {
+	case s < 60:
+		return strconv.Itoa(s) + " s"
+	case s%60 == 0:
+		return strconv.Itoa(s/60) + " min"
+	}
+	return fmt.Sprintf("%d min %d s", s/60, s%60)
 }
 
 func levelText(l turn.Level) string {
@@ -277,12 +323,47 @@ func (s *Server) presencePreamble(ctx context.Context, room *store.Room, self *s
 			v.Humans = append(v.Humans, humanAt(h.Name, tags[h.ID], personas))
 		}
 	}
-	if m, err := st.LastVoice(ctx, room.ID); err == nil && speakingAt(m, time.Now()) {
+	now := time.Now()
+	if self.TimeKeeper {
+		if err := s.keeperView(ctx, room.ID, &v, humans, named, now); err != nil {
+			return "", err
+		}
+	} else if m, err := st.LastVoice(ctx, room.ID); err == nil && speakingAt(m, now) {
 		v.Speaker = named(m.ParticipantID, m.Sender)
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return "", err
 	}
 	return renderPresence(v)
+}
+
+// keeperView adds the hand queue, and the speaker with their talk time from one read of the voice
+// lines, to a time keeper's view (032-AC2).
+func (s *Server) keeperView(ctx context.Context, room string, v *presenceView, humans []store.Participant, named func(int64, string) string, now time.Time) error {
+	st := s.bus.Store
+	v.Keeper = true
+	hands, err := st.Hands(ctx, room, s.lease().UnixMilli(), presenceGrace.Milliseconds())
+	if err != nil {
+		return err
+	}
+	for i, h := range hands {
+		if i == maxHandLines {
+			v.HandsMore = len(hands) - i
+			break
+		}
+		name := ""
+		if j := slices.IndexFunc(humans, func(p store.Participant) bool { return p.ID == h.ParticipantID }); j >= 0 {
+			name = humans[j].Name
+		}
+		v.Hands = append(v.Hands, fmt.Sprintf("%d. %s, for %s", i+1, named(h.ParticipantID, name), span(now.Sub(time.UnixMilli(h.RaisedMS)))))
+	}
+	lines, err := st.LastVoices(ctx, room, runLookback)
+	if err != nil {
+		return err
+	}
+	if len(lines) > 0 && speakingAt(&lines[0], now) {
+		v.Speaker, v.SpeakerFor = named(lines[0].ParticipantID, lines[0].Sender), span(now.Sub(runStart(lines)))
+	}
+	return nil
 }
 
 // isAgenda tells the room's agenda: the agent document named agenda.md (006-AC14).

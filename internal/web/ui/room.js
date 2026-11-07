@@ -2306,6 +2306,8 @@ function personaState(p) {
   if (!agent.online) return { cls: '', word: 'offline', label: p.name + ' offline' };
   if (running) return { cls: running.host_queued ? 'queued' : 'busy', word: running.host_queued ? 'waiting' : 'answering', label: turnText(p, running) };
   if (pos >= 0) return { cls: 'queued', word: 'waiting', label: p.name + ' waiting, position ' + (pos + 1) };
+  // 032-AC3: a time keeper's silent turn, until its next one.
+  if (p.silent) return { cls: 'on', word: 'nothing to say', label: p.name + ' ready, nothing to say last time' };
   return { cls: 'on', word: 'ready', label: p.name + ' ready' };
 }
 
@@ -2328,7 +2330,7 @@ function personaVoice(p) {
   const st = ttsOn && ttsLive.pod && ttsLive.personas[p.id];
   if (!st) return null;
   if (st.state === 'speaking') return { icon: 'speaking', word: 'speaking', label: p.name + ' is speaking in the call' };
-  if (st.state === 'waiting') return { icon: 'speaking-wait', word: 'waiting to speak', label: p.name + ' is waiting to speak in the call' };
+  if (st.state === 'waiting') return { icon: 'bubble', word: 'waiting to speak', label: p.name + ' is waiting to speak in the call' };
   return null;
 }
 
@@ -2347,7 +2349,10 @@ function personaPill(id) {
   led.setAttribute('role', 'img');
   const vstate = span('vstate', '');
   vstate.setAttribute('aria-hidden', 'true');
-  b.append(led, span('badge', ''), span('pname', ''), watchIcon(), vstate, span('pstate', ''));
+  const drift = span('drift', '');
+  drift.setAttribute('role', 'img');
+  drift.hidden = true;
+  b.append(led, span('badge', ''), span('pname', ''), watchIcon(), drift, vstate, span('pstate', ''));
   let held = 0;
   let longPressed = false;
   const pid = () => Number(pill.dataset.id);
@@ -2534,7 +2539,15 @@ function renderAgent() {
     pill.dataset.id = p.id;
     pill.dataset.name = p.name;
     pill.style.setProperty('--persona', p.colour);
-    b.setAttribute('aria-label', p.name + (p.watches_notes ? ', watches the notes' : '') + ': ' + (voiceSt ? voiceSt.label : st.label) + '. Open its card');
+    // 032-AC14: only a high rating shows, and only while the role holds.
+    const offTrack = p.time_keeper && p.drift_level === 'high' ? 'Off track: ' + p.drift_reason : '';
+    b.setAttribute('aria-label', p.name + (p.watches_notes ? ', watches the notes' : '') + (offTrack ? ', off track: ' + p.drift_reason.replace(/[.!?…]+$/u, '') : '') + ': ' + (voiceSt ? voiceSt.label : st.label) + '. Open its card');
+    const di = b.querySelector('.drift');
+    di.hidden = !offTrack;
+    di.dataset.tip = offTrack ? p.drift_reason : '';
+    if (offTrack) di.setAttribute('aria-label', offTrack);
+    else di.removeAttribute('aria-label');
+    di.replaceChildren(...(offTrack ? [grillIcon('info')] : []));
     markWatch(b.querySelector('.watch'), p.watches_notes);
     b.dataset.name = p.name;
     b.querySelector('.badge').textContent = p.badge;
@@ -2936,9 +2949,26 @@ function personaForm(p) {
   const watch = field('', watches);
   watch.className = 'check';
   watch.append('Watches the notes');
+  // The time keeper and its wait before speaking over, room admins' to change (032-AC1).
+  const keeps = input('time_keeper', '', { type: 'checkbox', checked: !!p.time_keeper, defaultChecked: !!p.time_keeper, disabled: !meAdmin });
+  const keeper = field('', keeps);
+  keeper.className = 'check';
+  keeper.append('Time keeper');
+  const cut = picker('cut_in_s', [], '');
+  cut.replaceChildren(...[['0', 'Off'], ['10', '10 s'], ['20', '20 s'], ['30', '30 s'], ['60', '60 s']].map(([v, label]) => option(v, label)));
+  cut.value = cut.dataset.initial = String(p.cut_in_s || 0);
+  cut.disabled = !meAdmin;
+  const cutField = field('Speak over after', cut);
+  const showCut = () => {
+    const sp = form.elements.namedItem('speaks');
+    cutField.hidden = !(keeps.checked && (sp ? sp.checked : p.speaks));
+  };
+  form.addEventListener('change', showCut);
   const next = nextTrigger(p).trim();
   const triggers = panel('triggers', grid(field('Speaks up', speaks), everyField), ...(next ? [hint(next)] : []), selfCall,
     watch, hint('Answers note threads that name no persona, ' + agent.notes_watch_delay + ' s after the last new message.'),
+    keeper, cutField, hint('Sees the raised hands and who speaks for how long; one per room. When the room is on track it may say nothing.'
+      + (meAdmin ? '' : ' Only room admins change these.')),
     hint('An answer that names another persona makes it answer next. These auto turns pause at the room\'s limit of '
       + agent.chain.budget + ', set in Personas.'));
   const capabilities = panel('capabilities', skillsBlock(p), pluginsBlock(p));
@@ -2952,6 +2982,7 @@ function personaForm(p) {
   save.textContent = 'Save';
   actions.append(dirty, save);
   form.append(identity, model, triggers, capabilities, actions);
+  showCut();
   // The capabilities' switches apply at once and carry no name: only named fields wait for Save.
   const fields = [...form.elements].filter((el) => el.name);
   const valueOf = (el) => (el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value);
@@ -3300,7 +3331,15 @@ function formFields(form) {
   const v = (name) => form.elements.namedItem(name).value;
   return { name: v('name'), badge: v('badge'), colour: v('colour'), model: v('model'), effort: v('effort'), text: v('text'),
     ...triggerFields(v('trigger'), Number(v('every'))), self_call: form.elements.namedItem('self_call').checked,
-    autocompact: v('autocompact') ? Math.round(Number(v('autocompact')) * 1000) : 0, ...watchField(form), ...voiceFields(form) };
+    autocompact: v('autocompact') ? Math.round(Number(v('autocompact')) * 1000) : 0, ...watchField(form), ...keeperFields(form), ...voiceFields(form) };
+}
+
+// keeperFields sends the time keeper role and its wait only when the form changed them: they are
+// room admins' to change, and a stale sheet must not take the role back (032-AC1).
+function keeperFields(form) {
+  const k = /** @type {HTMLInputElement} */ (form.elements.namedItem('time_keeper'));
+  const c = /** @type {HTMLSelectElement} */ (form.elements.namedItem('cut_in_s'));
+  return { ...(k.checked === k.defaultChecked ? {} : { time_keeper: k.checked }), ...(c.value === c.dataset.initial ? {} : { cut_in_s: Number(c.value) }) };
 }
 
 // voiceFields is the persona in the call, sent only when the sheet shows it (013-AC26, AC27, AC37).

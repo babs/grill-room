@@ -200,8 +200,6 @@ func richRoom(t *testing.T, s *Store, id string) (*Participant, *RoomPersona) {
 	return alice, persona
 }
 
-func ptr[T any](v T) *T { return &v }
-
 // roomSID is the session richRoom's turn writes.
 const roomSID = "00000000-0000-4000-8000-000000000001"
 
@@ -764,7 +762,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"annotations":         "id room_id document_id revision anchor orphaned status version created_at |",
 		"annotation_messages": "id annotation_id author_kind participant_id author body created_at persona_id |",
 		"attachments":         "id message_id content_type size data created_at |",
-		"room_personas":       "id room_id template_id template_version name badge colour text model effort every_n self_call created_at autocompact pending every_voice every_minutes watches_notes speaks voice voice_rate | cap_decision cap_daemon_id cap_model cap_effort mark_msg_id mark_at_ms notes_mark",
+		"room_personas":       "id room_id template_id template_version name badge colour text model effort every_n self_call created_at autocompact pending every_voice every_minutes watches_notes speaks voice voice_rate time_keeper cut_in_s | cap_decision cap_daemon_id cap_model cap_effort mark_msg_id mark_at_ms notes_mark drift_level drift_reason",
 		"room_persona_skills": "persona_id skill_id version |",
 		"skills":              "id name created_at room_id pending scope | profile_id publisher_id from_starter",
 		"skill_versions":      "skill_id n author description files size sha256 data created_at | id author_id",
@@ -793,7 +791,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"presence":                  "| room_id participant_id tab since_at_ms beat_at_ms device_at_ms audio mic muted deaf focused expires_at_ms",
 		"hands":                     "| room_id participant_id raised_at_ms", // 031-AC7: no hand in the export
 		"pairings":                  "| id room_id code secret_hash status approved_by expires_at_ms",
-		"tts_lines":                 "| seq room_id persona_id persona voice rate text quiet_ms resume_s queue_s queued_at_ms sent",
+		"tts_lines":                 "| seq room_id persona_id persona voice rate text quiet_ms resume_s queue_s queued_at_ms sent cut_in_s",
 		"stt_workers":               server,
 		"tts_pod":                   server,
 		"rate_events":               server,
@@ -1202,7 +1200,7 @@ func TestImportPersonaTemplates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := src.AddPersona(ctx, "orig", tpl.ID, alice); err != nil {
+	if _, _, err := src.AddPersona(ctx, "orig", tpl.ID, alice, true); err != nil {
 		t.Fatal(err)
 	}
 	dir := export(t, src, "orig")

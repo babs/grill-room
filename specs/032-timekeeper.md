@@ -1,6 +1,6 @@
 # 032 — Timekeeper persona
 
-**Status**: approved
+**Status**: in progress
 **Requested by**: babs
 **Date**: 2026-11-07
 **Context**: builds on 002 (presets), 006 (timer trigger, agenda), 013 (persona voices, turn-taking), 031 (hand queue).
@@ -36,30 +36,31 @@ What it sees comes from a **time-keeper** capability, a persona option like "Wat
 - Recorded interjection clips; a per-room interjection list.
 - Speaking over a human for any persona without the time-keeper option.
 - Talk-time statistics, a speaking-time chart, a meeting timer in the UI.
+- The time-keeper settings in room starters and in the MCP `edit_persona` tool: a starter made from a room recreates its Timekeeper without the role.
 
 ## Acceptance criteria
 
 ### The capability
-- [ ] **AC1** A room persona has "Time keeper" (`time_keeper`) beside "Watches the notes", edited by room admins: at most one per room, and turning it on for one turns it off for the one that had it, with a system line as for the notes watcher (009-AC31). With it on and "Speaks in the call" on, a "Speak over after" select offers Off, 10 s, 20 s, 30 s, 60 s (`cut_in_s`: 0, 10, 20, 30, 60; any other value is a 400).
-- [ ] **AC2** A time-keeper persona's preamble adds, after the humans present: `Hands raised:` then one line per hand in queue order, `1. Alice ·a1b2, for 3 min`, at most 5 then `and N more`, or `Hands raised: none`; and the speaker line becomes `Alice ·a1b2 speaks now, for 4 min 10 s`, counted from the first voice line of their current run (their own voice lines with nobody else's in between and no gap over 30 s). Every other persona's preamble is unchanged and mentions no hands (031-AC7).
-- [ ] **AC3** A time-keeper turn whose final answer is empty and that writes no `spoken.md` posts no message and says nothing; the persona's state shows "nothing to say" until its next turn, its timer restarts, and it counts as a completed turn for the chain. Any other persona's empty turn keeps today's behaviour.
-- [ ] **AC4** The export carries `time_keeper` and `cut_in_s` on the persona, optional, and an import without them reads false and 0 (`docs/export-format.md`).
+- [x] **AC1** A room persona has "Time keeper" (`time_keeper`) beside "Watches the notes", edited by room admins: at most one per room, and turning it on for one turns it off for the one that had it, with a system line as for the notes watcher (009-AC31). With it on and "Speaks in the call" on, a "Speak over after" select offers Off, 10 s, 20 s, 30 s, 60 s (`cut_in_s`: 0, 10, 20, 30, 60; any other value is a 400).
+- [x] **AC2** A time-keeper persona's preamble adds, after the humans present: `Hands raised:` then one line per hand in queue order, `1. Alice ·a1b2, for 3 min`, at most 5 then `and N more`, or `Hands raised: none`; and the speaker line becomes `Alice ·a1b2 speaks now, for 4 min 10 s`, counted from the first voice line of their current run (their own voice lines with nobody else's in between and no gap over 30 s). Every other persona's preamble is unchanged and mentions no hands (031-AC7).
+- [x] **AC3** A time-keeper turn whose final answer is empty posts no message and says nothing, a `spoken.md` included; the persona's state shows "nothing to say" until its next turn, its timer restarts, and it counts as a completed turn for the chain. Any other persona's empty turn keeps today's behaviour.
+- [x] **AC4** The export carries `time_keeper` and `cut_in_s` on the persona, optional, and an import without them reads false and 0 (`docs/export-format.md`).
 
 ### The preset
-- [ ] **AC5** The library has a shipped "Timekeeper" template (⏱️). Its text tells it to watch the agenda, the hand queue and talk time, to speak only when the room is off track, in one or two short sentences naming the people, and to stay silent otherwise (AC3). It asks for a drift rating in `drift.json` on every turn (AC13).
-- [ ] **AC6** Adding the Timekeeper template to a room gives the copy `every_minutes` 5, "Speaks in the call" on, time keeper on (taken from another persona as in AC1), and `cut_in_s` 20. Adding any other template sets none of them. A room admin can change each afterwards. A new version of the preset's text is offered to rooms as for any preset (002-AC14) and never resets these settings.
+- [x] **AC5** The library has a shipped "Timekeeper" template (⏱️). Its text tells it to watch the agenda, the hand queue and talk time, to speak only when the room is off track, in one or two short sentences naming the people, and to stay silent otherwise (AC3). It asks for a drift rating in `drift.json` on every turn (AC13).
+- [x] **AC6** Adding the Timekeeper template to a room gives the copy `every_minutes` 5, "Speaks in the call" on, time keeper on (taken from another persona as in AC1), and `cut_in_s` 20. Only a room admin's add brings the time-keeper role and `cut_in_s`; a member's add brings the timer and the voice only. An add waiting for the host's approval never brings the role: a room admin gives it once the persona is approved. Adding any other template sets none of them. A room admin can change each afterwards. A new version of the preset's text is offered to rooms as for any preset (002-AC14) and never resets these settings.
 
 ### Cutting in
-- [ ] **AC7** A line from a time-keeper persona's timer turn reaches the pod with its `cut_in_s`. Any other line, that persona's included, carries 0 and follows 013 unchanged.
-- [ ] **AC8** With `cut_in_s` T > 0 and a human speaking when the line is ready, the pod says three interjections, at 0, T/3 and 2T/3 seconds, each under a second, then at T says the line over the speaker. While it speaks over, a human speaking does not stop it (this amends 013-AC21, 013-AC22 and 013-AC23 for these lines only). If the room goes quiet before T, it waits the room's quiet time and says the line normally, with no more interjections.
-- [ ] **AC9** A cut-in line keeps one-persona-at-a-time and queue order (013-AC24); its queue maximum is T plus the room's queue maximum. A per-listener persona mute and the room mute (005-AC22) silence it as any persona line.
-- [ ] **AC10** Interjections come from a set of at least 12 per language (French and English), picked at random with none repeated within one line, synthesised in the persona's voice and rate when its bot joins the call and kept in memory, so an interjection starts within 300 ms of its due time. The language is the line's first sentence's (013's text layer).
-- [ ] **AC11** The pod's metrics count lines cut in and interjections said (`docs/architecture.md`), and its log has `cut_in_started`, `cut_in_spoke_over` and `cut_in_yielded` (room quiet before T), with the room and persona.
+- [x] **AC7** A line from a time-keeper persona's timer turn reaches the pod with its `cut_in_s`. Any other line, that persona's included, carries 0 and follows 013 unchanged.
+- [x] **AC8** With `cut_in_s` T > 0 and a human speaking when the line is ready, the pod says three interjections, at 0, T/3 and 2T/3 seconds, each under a second, then at T says the line over the speaker. While it speaks over, a human speaking does not stop it (this amends 013-AC21, 013-AC22 and 013-AC23 for these lines only). If the room goes quiet before T, it waits the room's quiet time and says the line normally, with no more interjections; if a human then speaks over it before T, it pauses as 013 does and, at T counted from the first interjection, says the rest over them. A line that would reach T past its queue maximum follows 013 unchanged.
+- [x] **AC9** A cut-in line keeps one-persona-at-a-time and queue order (013-AC24); its queue maximum is T plus the room's queue maximum. A per-listener persona mute and the room mute (005-AC22) silence it as any persona line.
+- [x] **AC10** Interjections come from a set of at least 12 per language (French and English), picked at random with none repeated within one line, synthesised in the persona's voice and rate when its bot joins the call and kept in memory, so an interjection starts within 300 ms of its due time. The language is the line's first sentence's (013's text layer).
+- [x] **AC11** The pod's metrics count lines cut in and interjections said (`docs/architecture.md`), and its log has `cut_in_started`, `cut_in_spoke_over` and `cut_in_yielded` (room quiet before T), with the room and persona.
 
 ### Pill indicators
-- [ ] **AC12** A persona whose spoken line is waiting in the pod (013's "waiting to speak": queued behind another line or held by a human speaking) shows a comic-style speech bubble icon on its pill, an SVG from `kit/ui.js`, static, with the word "waiting to speak" on a desktop and the meaning in `aria-label`. It replaces 013-AC29's outlined waiting icon, for every persona. The bubble goes when the line starts or is dropped.
-- [ ] **AC13** A time-keeper turn may write `drift.json`, `{"level": "low" | "medium" | "high", "reason": "<one line, at most 200 characters>"}`. The persona keeps the latest level and reason. A time-keeper turn that writes none keeps the previous ones; a malformed file is listed in the turn's system message and keeps them too.
-- [ ] **AC14** While the time keeper's latest level is `high`, its pill shows a red ⓘ (an SVG from `kit/ui.js`, the danger colour token), with the reason as its tooltip and in `aria-label` ("Off track: <reason>"). `low` and `medium` show nothing. Turning the option off clears the level and the icon. The level and the reason stay out of the transcript, the export and every other persona's prompt.
+- [x] **AC12** A persona whose spoken line is waiting in the pod (013's "waiting to speak": queued behind another line or held by a human speaking) shows a comic-style speech bubble icon on its pill, an SVG from `kit/ui.js`, static, with the word "waiting to speak" on a desktop and the meaning in `aria-label`. It replaces 013-AC29's outlined waiting icon, for every persona. The bubble goes when the line starts or is dropped.
+- [x] **AC13** A time-keeper turn may write `drift.json`, `{"level": "low" | "medium" | "high", "reason": "<one line, at most 200 characters>"}`. The persona keeps the latest level and reason. A time-keeper turn that writes none keeps the previous ones; a malformed file is listed in the turn's system message and keeps them too.
+- [x] **AC14** While the time keeper's latest level is `high`, its pill shows a red ⓘ (an SVG from `kit/ui.js`, the danger colour token), with the reason as its tooltip and in `aria-label` ("Off track: <reason>"). `low` and `medium` show nothing. Turning the option off clears the level and the icon. The level and the reason stay out of the transcript, the export and every other persona's prompt.
 
 ## Phases
 
@@ -72,8 +73,8 @@ What it sees comes from a **time-keeper** capability, a persona option like "Wat
 ### Phase 2 — Cutting in, in the pod
 - Work: `cut_in_s` on the line; the escalation in `tts/grill_tts/room.py`; the interjection sets and their cache per bot; metrics and logs.
 - **Covers**: AC7, AC8, AC9, AC10, AC11
-- **Data model impact**: none
-- **DoD**: `uv run pytest` in `tts/` green, with fake-clock tests in `tests/test_room.py`: three interjections at 0, T/3, 2T/3 then the line spoken through a human speaking; quiet before T yields with no further interjection; T = 0 and a non-timer line behave as 013; queue order and the extended queue maximum; no repeated interjection within a line. A Go test for `cut_in_s` on the queued line by cause. `e2e/persona-voice/turn-taking.spec.js` gains, in CI only (real engine): a synthetic human speaking without pause, a time-keeper line with T = 10, the persona's track carries audio at about 0, 3.3 and 6.7 s and from 10 s on, while the human still speaks.
+- **Data model impact**: `tts_lines` (the transient speech queue) gains `cut_in_s` (int, default 0), by a positional in-app migration; not exported.
+- **DoD**: `uv run pytest` in `tts/` green, with fake-clock tests in `tests/test_room.py`: three interjections at 0, T/3, 2T/3 then the line spoken through a human speaking; quiet before T yields with no further interjection; T = 0 and a non-timer line behave as 013; queue order and the extended queue maximum; no repeated interjection within a line. A Go test for `cut_in_s` on the queued line by cause. `e2e/persona-voice/turn-taking.spec.js` gains, in CI only (fake engine; the real engine by hand on the lab): a synthetic human speaking without pause, a time-keeper line with T = 10, the persona's track carries audio at about 0, 3.3 and 6.7 s and from 10 s on, while the human still speaks.
 
 ### Phase 3 — Pill indicators
 - Work: the speech bubble icon for the waiting state; `drift.json` read at the end of a time-keeper turn, stored on the persona, sent with the persona to the page; the red ⓘ.
@@ -83,7 +84,7 @@ What it sees comes from a **time-keeper** capability, a persona option like "Wat
 
 ## Data model impact (summary)
 
-`room_personas`: `time_keeper` (bool, default false), `cut_in_s` (int, default 0), `drift_level` and `drift_reason` (text, default empty, not exported). The hand queue is 031's `hands`. Preset room defaults live in code with the preset, not in the template tables. Interjection audio is never stored.
+`room_personas`: `time_keeper` (bool, default false), `cut_in_s` (int, default 0), `drift_level` and `drift_reason` (text, default empty, not exported). `tts_lines`: `cut_in_s` (int, default 0, not exported). The hand queue is 031's `hands`. Preset room defaults live in code with the preset, not in the template tables. Interjection audio is never stored.
 
 ## Open questions
 
@@ -102,10 +103,15 @@ From the user:
 
 Made while drafting (overturnable):
 - Only timer turns cut in (AC7): a persona answering an `@mention` should not talk over the room, and the turn needs no new output to say "cut in".
+- A pause longer than the quiet time does not cancel the cut-in (AC8): a speaker who breathes, lets the line start, then goes on would otherwise never be cut off, the feature's whole point. Found in phase 2 review.
 - Three interjections spread over the threshold: fewer reads as a glitch, more as nagging. Fixed, since the user asked for one setting.
 - One time keeper per room, like the notes watcher: two would cut in on each other.
 - The escalation runs in the pod against its live speaker state, not in the turn: a turn takes seconds, the pod reacts in 300 ms (013-AC22).
+- A timer turn re-run after a document conflict takes the cause `re-run after a conflict` and so no longer cuts in: rare, and the line is still spoken by 013's rules. Found in phase 2 review.
 - The silent turn (AC3) is for the time keeper only, so no other persona's empty answer starts vanishing.
 - The speaker's run ends at another speaker's line or a 30 s gap, longer than a voice paragraph's 20 s close (018), so a pause for breath does not reset the count.
 - The preset runs `sonnet` at effort `low`: one turn every 5 minutes reads a short preamble and needs judgment, not depth.
 - Preset room defaults live in code next to the preset and apply only at copy, so a new preset version never overrides a room admin's choice.
+- A time-keeper turn with an empty answer is silent even with a `spoken.md` (AC3): one rule, and no column to record that a turn spoke. Found in phase 1 review.
+- The role and `cut_in_s` are room-admin settings, so a member adding the Timekeeper gets it without them (AC6): speaking over people is the room admin's call. Found in phase 1 review.
+- "Nothing to say" reads the persona's latest turn, whether or not it held the role then: turning the role on for a persona whose last turn posted nothing shows it until its next turn. Found in phase 1 review.

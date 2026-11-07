@@ -449,17 +449,23 @@ func (im *importer) personasStep(ps []xPersona) error {
 		if p.WatchesNotes && slices.ContainsFunc(ps, func(o xPersona) bool { return o.WatchesNotes && o.Ref < p.Ref }) {
 			return refuseImport("persona %s: another persona watches the notes already", p.Name)
 		}
+		if p.TimeKeeper && slices.ContainsFunc(ps, func(o xPersona) bool { return o.TimeKeeper && o.Ref < p.Ref }) {
+			return refuseImport("persona %s: another persona keeps time already", p.Name)
+		}
+		if !slices.Contains(CutInChoices, p.CutInS) {
+			return refuseImport("persona %s: cut_in_s must be one of %v", p.Name, CutInChoices)
+		}
 		tpl, err := im.template(p)
 		if err != nil {
 			return err
 		}
 		var id int64
 		err = im.tx.QueryRowContext(im.ctx, `INSERT INTO room_personas(room_id, template_id, template_version, name, badge, colour, text, model, effort,
-			every_n, self_call, autocompact, created_at, every_voice, every_minutes, watches_notes, speaks, voice, voice_rate, mark_msg_id, mark_at_ms)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,`+markNow+`) RETURNING id`,
+			every_n, self_call, autocompact, created_at, every_voice, every_minutes, watches_notes, speaks, voice, voice_rate, time_keeper, cut_in_s, mark_msg_id, mark_at_ms)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,`+markNow+`) RETURNING id`,
 			append(append([]any{im.room, tpl, p.TemplateVersion}, p.PersonaFields.args()...), nullID(int64(p.EveryN)), p.SelfCall, p.Autocompact, p.CreatedAt,
 				nullInt(p.EveryVoice), nullInt(p.EveryMinutes), p.WatchesNotes, p.Speaks == nil || *p.Speaks, voicecat.Known(p.Voice),
-				cmp.Or(p.VoiceRate, 1), time.Now().UnixMilli())...).Scan(&id)
+				cmp.Or(p.VoiceRate, 1), p.TimeKeeper, p.CutInS, time.Now().UnixMilli())...).Scan(&id)
 		if err != nil {
 			return refuseImport("persona %s: %v", p.Name, err)
 		}

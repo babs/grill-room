@@ -18,8 +18,9 @@ import (
 // inactivity threshold of n seconds, so a browser test sees a purged profile without waiting 24 h.
 // "profile_ids", when set, limits it to those profiles: parallel specs keep their own.
 //
-// POST /api/admin/test/speak {"room", "persona", "spoken"} queues what the room's persona of that
-// name says, as if its turn had written spoken.md: the voice e2e needs no daemon (spec 013).
+// POST /api/admin/test/speak {"room", "persona", "spoken", "cause"} queues what the room's persona of
+// that name says, as if its turn, of that cause, had written spoken.md: the voice e2e needs no daemon
+// (spec 013), and "every 5 minutes" makes a time keeper's line cut in (032-AC7).
 func init() {
 	e2eRoutes = func(s *Server, mux *http.ServeMux) {
 		mux.Handle("GET /api/admin/test/device-stt", s.admin(func(w http.ResponseWriter, r *http.Request) {
@@ -30,7 +31,7 @@ func init() {
 			writeJSON(w, http.StatusOK, s.device.offer)
 		}))
 		mux.Handle("POST /api/admin/test/speak", s.admin(func(w http.ResponseWriter, r *http.Request) {
-			var req struct{ Room, Persona, Spoken string }
+			var req struct{ Room, Persona, Spoken, Cause string }
 			if !decode(w, r, &req) {
 				return
 			}
@@ -41,7 +42,7 @@ func init() {
 			}
 			for _, p := range ps {
 				if p.Name == req.Persona {
-					s.queueSpeech(r.Context(), &store.Turn{RoomID: req.Room, PersonaID: p.ID}, req.Spoken, "")
+					s.queueSpeech(r.Context(), &store.Turn{RoomID: req.Room, PersonaID: p.ID, Cause: req.Cause}, req.Spoken, "")
 					w.WriteHeader(http.StatusNoContent)
 					return
 				}
