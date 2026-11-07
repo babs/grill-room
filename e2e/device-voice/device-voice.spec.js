@@ -45,11 +45,6 @@ function fakeMic() {
     if (!graph) {
       const ctx = new AudioContext();
       graph = { ctx, gain: ctx.createGain() };
-      // Chrome: a graph with no live source stops sending frames once a clip's source is collected.
-      const keep = ctx.createConstantSource();
-      keep.offset.value = 0;
-      keep.connect(graph.gain);
-      keep.start();
     }
     return graph;
   };
@@ -211,6 +206,7 @@ test('the voice hands over between the device and the server', async ({ request,
       // The poll's own failure is what matters: a closed page must not replace it.
       const stats = await page.evaluate(() => window.lastPipeline ?? 'no stats event').catch((e) => `unreadable: ${e.message}`);
       console.log('030-AC17 device pipeline after the switch:', JSON.stringify(stats));
+      console.log('030-AC17 voice lines:', JSON.stringify(await voiceLines(page).catch((e) => `unreadable: ${e.message}`)));
       throw err;
     });
     expect(await skipped()).toBe(1);

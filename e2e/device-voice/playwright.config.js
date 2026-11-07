@@ -37,6 +37,9 @@ export default defineConfig({
       GRILL_ROOM_LIVEKIT_API_SECRET: process.env.LIVEKIT_API_SECRET,
       GRILL_ROOM_STT_TOKEN: process.env.STT_TOKEN,
       GRILL_ROOM_DEVICE_STT_MODEL_DIR: process.env.GRILL_ROOM_E2E_MODEL_DIR,
+      // Every line its own message: two sentences said within 5 s would otherwise share one
+      // paragraph (018-AC4), and the test reads each sentence's line apart.
+      GRILL_ROOM_VOICE_PARAGRAPH_GAP: '0',
       LOG_FORMAT: 'json',
     },
   },
