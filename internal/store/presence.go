@@ -34,6 +34,11 @@ func upsertPerson(ctx context.Context, t *txn, room string, pid int64, at Presen
 	if err := dropExpiredPerson(ctx, t, room, pid, at.Now); err != nil {
 		return err
 	}
+	// A late goodbye renews a lapsed beat: drop a hand that lapsed first, or it would come back (031-AC6).
+	if _, err := t.ExecContext(ctx, `DELETE FROM hands h WHERE h.room_id = ?3 AND h.participant_id = ?4 AND NOT `+liveHand,
+		at.Now, at.Grace, room, pid); err != nil {
+		return err
+	}
 	since := int64(0)
 	if arrive {
 		since = at.Now

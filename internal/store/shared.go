@@ -213,15 +213,18 @@ func (s *Store) LockRoom(ctx context.Context, kind int32, room string, try bool)
 	}, true, nil
 }
 
-// SweepExpired deletes the shared state whose lease ended before nowMS, the status of the daemons
-// left with no connection, and the rate events older than rateBeforeMS, the start of the longest
+// SweepExpired deletes the shared state whose lease ended before nowMS, the hands no longer live
+// with graceMS, the status of the daemons left with no connection, and the rate events older than rateBeforeMS, the start of the longest
 // limiter window. It returns the daemons whose last live connection it dropped: a pod that died
 // left them, and nobody else learns they are gone. Every pod runs it: it is idempotent.
-func (s *Store) SweepExpired(ctx context.Context, nowMS, rateBeforeMS int64) (gone []Daemon, err error) {
+func (s *Store) SweepExpired(ctx context.Context, nowMS, graceMS, rateBeforeMS int64) (gone []Daemon, err error) {
 	if err := s.sweepPresence(ctx, nowMS); err != nil {
 		return nil, fmt.Errorf("sweep expired: %w", err)
 	}
 	err = s.db.unlocked(ctx, func(t *txn) error {
+		if _, err := t.ExecContext(ctx, `DELETE FROM hands h WHERE NOT `+liveHand, nowMS, graceMS); err != nil {
+			return err
+		}
 		for _, table := range []string{"stt_workers", "pairings"} {
 			//nolint:gosec // table names from the list above
 			if _, err := t.ExecContext(ctx, `DELETE FROM `+table+` WHERE expires_at_ms <= ?`, nowMS); err != nil {

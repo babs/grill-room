@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/babs/grill-room/internal/store"
@@ -101,6 +102,8 @@ type people struct {
 	st    *store.Store
 	log   *zap.Logger
 	rooms podCache[[]store.PresenceRow]
+	// hands is the hands of a room, read as its rows are (031-AC2).
+	hands podCache[[]store.Hand]
 }
 
 func newPeople(st *store.Store, log *zap.Logger) *people { return &people{st: st, log: log} }
@@ -121,8 +124,8 @@ func (pp *people) write(ctx context.Context, room string, fn func(ctx context.Co
 	ctx, cancel := context.WithTimeout(ctx, sharedTimeout)
 	defer cancel()
 	err := fn(ctx)
-	pp.rooms.drop(room)
-	pp.rooms.drop("")
+	// A presence write may drop a lapsed hand (031-AC6): its copy goes with the rows'.
+	pp.forget(room)
 	return err
 }
 
@@ -267,6 +270,43 @@ func (pp *people) here(room string, pid int64, now time.Time) bool {
 func (pp *people) forget(room string) {
 	pp.rooms.drop(room)
 	pp.rooms.drop("")
+	pp.hands.drop(room)
+}
+
+// hand raises or lowers pid's hand in room at now, then drops the pod's copy of the room's hands.
+func (pp *people) hand(room string, pid int64, up bool, now time.Time) error {
+	ctx, cancel := context.WithTimeout(context.Background(), sharedTimeout)
+	defer cancel()
+	var err error
+	if up {
+		err = pp.st.RaiseHand(ctx, room, pid, now.UnixMilli())
+	} else {
+		err = pp.st.LowerHand(ctx, room, pid)
+	}
+	pp.hands.drop(room)
+	return err
+}
+
+// queueOf is room's raised hands at now, earliest first (031-AC2), from room's people ps: a hand
+// raised before its participant's current stay, or whose participant is gone past the grace,
+// lapsed (031-AC6).
+func (pp *people) queueOf(room string, ps map[int64]*person, now time.Time) []int64 {
+	hs := pp.hands.get(room, func() ([]store.Hand, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), sharedTimeout)
+		defer cancel()
+		hs, err := pp.st.Hands(ctx, room, now.UnixMilli(), presenceGrace.Milliseconds())
+		if err != nil {
+			pp.log.Warn("hands_read_failed", zap.String("room", room), zap.Error(err))
+		}
+		return hs, err
+	})
+	var out []int64
+	for _, h := range hs {
+		if p := ps[h.ParticipantID]; p != nil && p.alive(now) && h.RaisedMS >= p.since.UnixMilli() {
+			out = append(out, h.ParticipantID)
+		}
+	}
+	return out
 }
 
 // presenceOf is one participant in a "presence" event.
@@ -286,12 +326,15 @@ type presenceOf struct {
 	HereSince *time.Time `json:"here_since,omitempty"`
 	// DeviceSTT is true while their voice is transcribed on their own device (010-AC13).
 	DeviceSTT bool `json:"device_stt"`
+	// Hand is their rank in the room's hand queue from 1, 0 with no hand raised (031-AC4).
+	Hand int `json:"hand,omitempty"`
 }
 
 // snapshot is room's presence at now, by participant id, from the pod's copy of the room's rows.
 func (pp *people) snapshot(room string, now time.Time) []presenceOf {
 	out := []presenceOf{}
-	for pid, p := range pp.read(room, now)[room] {
+	ps := pp.read(room, now)[room]
+	for pid, p := range ps {
 		v := presenceOf{ID: pid, Here: p.alive(now), DeviceSTT: p.device}
 		switch {
 		case v.Here:
@@ -313,12 +356,17 @@ func (pp *people) snapshot(room string, now time.Time) []presenceOf {
 		out = append(out, v)
 	}
 	slices.SortFunc(out, func(a, b presenceOf) int { return cmp.Compare(a.ID, b.ID) })
+	for rank, pid := range pp.queueOf(room, ps, now) {
+		if i := slices.IndexFunc(out, func(v presenceOf) bool { return v.ID == pid }); i >= 0 {
+			out[i].Hand = rank + 1
+		}
+	}
 	return out
 }
 
 func samePresence(a, b presenceOf) bool {
 	return a.ID == b.ID && a.Here == b.Here && a.Audio == b.Audio && a.Mic == b.Mic && a.Muted == b.Muted && a.Deaf == b.Deaf &&
-		a.DeviceSTT == b.DeviceSTT && sameTime(a.SeenAt, b.SeenAt) && sameTime(a.HereSince, b.HereSince)
+		a.DeviceSTT == b.DeviceSTT && a.Hand == b.Hand && sameTime(a.SeenAt, b.SeenAt) && sameTime(a.HereSince, b.HereSince)
 }
 
 func sameTime(a, b *time.Time) bool {
@@ -425,4 +473,31 @@ func (pp *people) listening(now time.Time) map[string]bool {
 		}
 	}
 	return out
+}
+
+// putHand raises (PUT) or lowers (DELETE) the caller's hand; both are idempotent (031-AC1). No
+// message, audit entry or export carries it (031-AC7).
+func (s *Server) putHand(w http.ResponseWriter, r *http.Request, sess session) {
+	if err := s.people.hand(sess.p.RoomID, sess.p.ID, r.Method == http.MethodPut, s.lease()); err != nil {
+		s.serverError(w, "hand_failed", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// lowerHand lowers a participant's hand: a room admin lowers anyone's, others their own only (031-AC1).
+func (s *Server) lowerHand(w http.ResponseWriter, r *http.Request, sess session) {
+	target, err := strconv.ParseInt(r.PathValue("participant"), 10, 64)
+	if err != nil {
+		httpError(w, http.StatusNotFound, "no such participant in this room")
+		return
+	}
+	if target != sess.p.ID && !s.asRoomAdmin(w, r, &sess) {
+		return
+	}
+	if err := s.people.hand(sess.p.RoomID, target, false, s.lease()); err != nil {
+		s.serverError(w, "hand_failed", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

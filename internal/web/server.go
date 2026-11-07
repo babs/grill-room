@@ -260,6 +260,8 @@ func (s *Server) Handler() http.Handler {
 	// The document manager in a window of its own (005-AC11): the room page in its docs mode.
 	mux.HandleFunc("GET /r/{room}/docs", s.roomPage)
 	mux.HandleFunc("GET /r/{room}/docs/{doc}", s.roomPage)
+	// The chat in a window of its own (031-AC8): the room page in its chat mode.
+	mux.HandleFunc("GET /r/{room}/chat", s.roomPage)
 	mux.HandleFunc("GET /profile", s.profilePage)
 	mux.HandleFunc("GET /admin", s.adminPage)
 	if s.opts.OIDC != nil {
@@ -380,6 +382,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rooms/{room}/messages", s.participant(s.listMessages))
 	mux.Handle("GET /api/rooms/{room}/events", s.participant(s.events))
 	mux.Handle("POST /api/rooms/{room}/presence", s.participant(s.postPresence))
+	mux.Handle("PUT /api/rooms/{room}/hand", s.participant(s.putHand))
+	mux.Handle("DELETE /api/rooms/{room}/hand", s.participant(s.putHand))
+	mux.Handle("DELETE /api/rooms/{room}/hands/{participant}", s.participant(s.lowerHand))
 	mux.Handle("GET /api/rooms/{room}/push", s.participant(s.getPush))
 	mux.Handle("PUT /api/rooms/{room}/push", s.participant(s.putPush))
 	mux.Handle("DELETE /api/rooms/{room}/push", s.participant(s.putPush))

@@ -353,6 +353,11 @@ code.risk { display: block; padding: var(--sp-1) var(--sp-2); border-left: 3px s
 .tag { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: var(--r-sm); font-size: var(--fs-xs); line-height: 1; }
 .tag.blank { visibility: hidden; }
 .tag svg { display: block; width: 14px; height: 14px; }
+/* Wide enough for the hand and a two-digit rank, blank or not, so later columns line up (031-AC4). */
+.tag.tag-hand { grid-auto-flow: column; gap: 1px; width: 32px; color: var(--primary-text); }
+.hands-count:not([hidden]) { display: inline-flex; align-items: center; gap: 2px; }
+.hands-count svg { display: block; width: 14px; height: 14px; }
+#hand-raise[aria-pressed=true] { background: var(--primary-bg); color: var(--primary-text); }
 .tag.role-host { background: var(--accent); color: var(--on-accent); }
 /* The host's app is not connected: the role stays, the badge goes muted like the offline pills. */
 .tag.role-host.offline { background: transparent; box-shadow: inset 0 0 0 1px var(--border-strong); color: var(--text-muted); }
@@ -451,6 +456,24 @@ body:is(.drag-files, :has(.pane-handle.dragging)) #doc-frame iframe { pointer-ev
 .tile[role=button] { cursor: pointer; }
 .tile[role=button]:focus-visible { outline: 3px solid var(--brand); outline-offset: -3px; }
 #stage-main:fullscreen { background: var(--chrome); }
+/* The pop-out window (031-AC12): the stage over the call's controls; the page keeps a note in its place (031-AC13). */
+body.pip { display: flex; flex-direction: column; height: 100vh; background: var(--chrome); }
+.pip-bar { flex: none; justify-content: center; padding: var(--sp-2); }
+/* The phone's rules are for the page: a narrow pop-out keeps Leave, its screen share follows the page's (room.js). */
+body.pip :is(#voice-screen, #voice-leave) { display: inline-flex; }
+/* The page's tip cannot reach this window: its controls carry their tip in CSS, styled as .tip (kit). */
+body.pip .pip-bar > button { position: relative; }
+body.pip .pip-bar > [data-tip]::after { content: attr(data-tip); position: absolute; bottom: calc(100% + var(--sp-1)); left: 50%; z-index: var(--z-toast); visibility: hidden;
+  width: max-content; max-width: 20rem; padding: var(--sp-1) var(--sp-2); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); color: var(--text);
+  box-shadow: var(--sh-2); font: 400 var(--fs-xs)/1.45 var(--font); white-space: normal; text-align: left; pointer-events: none; transform: translateX(-50%); }
+/* As the kit's tip: after 300 ms of hover, at once on keyboard focus. */
+body.pip .pip-bar > [data-tip]:hover::after { visibility: visible; transition: visibility 0s 300ms; }
+body.pip .pip-bar > [data-tip]:focus-visible::after { visibility: visible; transition: none; }
+body.pip .pip-bar > [data-tip]:first-child::after { left: 0; transform: none; }
+body.pip .pip-bar > [data-tip]:last-child::after { left: auto; right: 0; transform: none; }
+body.pip .pip-error { flex: none; margin: 0 var(--sp-2); border-radius: var(--r-md); background: var(--surface); color: var(--danger); }
+#stage-away { align-items: center; justify-content: center; }
+#stage-away .empty { margin: 0; border-color: var(--chrome-muted); color: var(--chrome-muted); }
 .tile.speaking figcaption { text-shadow: 0 0 .1em var(--brand), 0 0 .4em var(--brand); }
 body.annot-closed #annotations { display: none; }
 #annot-toggle[aria-pressed=true] { background: var(--primary-bg); }
@@ -659,6 +682,7 @@ mark.mention-chip.me { background: var(--accent); color: var(--on-accent); }
   .tabbar .ico { width: 20px; height: 20px; }
   .tabbar button > span { white-space: nowrap; }
   .tabbar .count { margin-left: 2px; }
+  .tabbar .hands-count { margin-left: var(--sp-1); vertical-align: top; }
   .tabbar button[aria-pressed=true] { color: var(--primary-text); box-shadow: inset 0 3px 0 var(--brand); }
   .tabbar .count:empty { display: none; }
   #side { display: none; width: 100%; border-right: 0; }
@@ -683,6 +707,9 @@ body.docs-window #viewer { flex: 1; border-right: 0; }
   body.docs-window #side { width: 100%; border-right: 0; }
   body.docs-window:has(#viewer:not([hidden])) #side { display: none; }
 }
+/* The chat in a window of its own (031-AC9): the chat only, without the call or the panes. */
+body.chat-window :is(#voice, #agent, #tabbar, #pairing, #side, #side-handle, #viewer, #viewer-empty) { display: none !important; }
+@media (max-width: 40rem) { #chat-window-menu { display: none; } }
 input[aria-invalid=true] { border-color: var(--danger); }
 
 /* Panes (008): the side panel and Notes keep the width the reader drags, from 64rem up; the

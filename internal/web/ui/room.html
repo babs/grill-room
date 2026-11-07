@@ -91,6 +91,7 @@
   <button type="button" id="manage-open" data-icon="settings" hidden>Room settings</button>
   <button type="button" id="personas-open" data-icon="personas">Personas</button>
   <a id="docs-window-menu" data-icon="external">Open documents in a new window</a>
+  <a id="chat-window-menu" data-icon="external">Open chat in a new window</a>
   <button type="button" id="host-open" data-icon="host" hidden>Run the AI on my computer</button>
   <a id="host-app-open" data-icon="external" href="http://127.0.0.1:47680/" target="_blank" rel="noopener noreferrer" hidden>Open my AI host app</a>
 </div>
@@ -367,6 +368,7 @@
       <div class="pane-head">
         <button type="button" id="people-fold" class="fold" aria-controls="participants" aria-expanded="true" aria-label="People"></button>
         <h2 id="people-title"><svg class="ico sec-icon" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> <span class="sec-label">People</span></h2>
+        <span id="people-hands" class="badge hands-count" role="img" hidden></span>
       </div>
       <h3 class="people">In the room</h3>
       <ul id="participants"></ul>
@@ -416,9 +418,12 @@
       <div class="viewer-head">
         <button type="button" id="stage-close" class="btn-icon btn-ghost" aria-label="Close the video" data-tip="Close" data-icon="close"></button>
         <h2>Video</h2>
+        <button type="button" id="stage-pop" class="btn-icon btn-ghost" aria-label="Pop out" data-tip="Pop out: keep the video on top of your other windows" data-icon="external" hidden></button>
         <button type="button" id="stage-full" class="btn-icon btn-ghost" aria-label="Full screen" data-tip="Full screen: Escape leaves it" data-icon="fullscreen" hidden></button>
       </div>
-      <div class="stage-body"><p id="stage-empty" class="empty" role="status"></p><div id="stage-main"></div><div id="stage-tiles"></div></div>
+      <div id="stage-body" class="stage-body"><p id="stage-empty" class="empty" role="status"></p><div id="stage-main"></div><div id="stage-tiles"></div></div>
+      <!-- In its place while the videos are in the pop-out window (031-AC13). -->
+      <div id="stage-away" class="stage-body" hidden><p class="empty">Video is in the pop-out window</p><button type="button" id="stage-back" class="btn-secondary">Bring it back</button></div>
     </div>
     <div class="viewer-body">
       <div id="doc-frame"></div>
@@ -481,6 +486,7 @@
       <button type="button" id="attach-open" class="btn-icon btn-ghost" aria-label="Attach files" data-tip="Attach files" data-icon="clip"></button>
       <input type="file" id="attach-input" multiple hidden>
       <button type="button" id="capture-open" class="btn-icon btn-ghost" aria-label="Capture screen" data-tip="Capture screen" data-icon="screen" hidden></button>
+      <button type="button" id="hand-raise" class="btn-icon btn-ghost" aria-pressed="false" disabled aria-label="Raise my hand" data-tip="Raise my hand" data-icon="hand"></button>
       <textarea id="body" rows="2" maxlength="4000" placeholder="Message the room · @ to mention" aria-label="Message" aria-describedby="send-hint"></textarea>
       <button type="submit" class="btn-icon" aria-label="Send" data-tip="Send" data-icon="send"></button>
       <ul id="pending" aria-label="Files to send" hidden></ul>
@@ -493,7 +499,7 @@
 <nav id="tabbar" class="tabbar" aria-label="Room sections">
   <button type="button" data-tab="chat" aria-pressed="true" data-icon="chat"><span>Chat</span></button>
   <button type="button" data-tab="docs" aria-pressed="false" data-icon="docs"><span>Docs <span id="tab-docs-count" class="count"></span></span></button>
-  <button type="button" data-tab="people" aria-pressed="false" data-icon="people"><span>People <span id="tab-people-count" class="count"></span></span></button>
+  <button type="button" data-tab="people" aria-pressed="false" data-icon="people"><span>People <span id="tab-people-count" class="count"></span><span id="tab-people-hands" class="hands-count" role="img" hidden></span></span></button>
   <button type="button" id="tab-video" data-tab="video" aria-pressed="false" data-icon="camera" hidden><span>Video <span id="tab-video-count" class="count"></span></span></button>
 </nav>
 <div id="toasts" class="toasts" popover="manual"></div>

@@ -114,3 +114,13 @@ test('a turn runs whatever pod each request lands on', async ({ browser, request
     d();
   }
 });
+
+// 031-AC2: a hand raised in a browser on pod A shows, ranked, in a browser on pod B within 2 s.
+test('a hand raised on pod A shows on pod B', async ({ browser, request }) => {
+  const { alice, bob } = await roomOnBothPods(browser, request);
+  const badge = bob.locator('#participants li', { has: bob.locator('.name', { hasText: 'Alice' }) }).locator('.tag-hand:not(.blank)');
+  await expect(bob.locator('#participants li .name')).toHaveText(['Alice', 'Bob']);
+  await alice.getByRole('button', { name: 'Raise my hand' }).click();
+  await expect(badge).toHaveAttribute('aria-label', 'Hand raised, 1st', { timeout: 2_000 });
+  await expect(bob.locator('#people-hands')).toHaveText('1');
+});

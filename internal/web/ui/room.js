@@ -1,6 +1,8 @@
 'use strict';
 
-const $ = (id) => document.getElementById(id);
+// pip is the pop-out window while the stage body is in it (031-AC12): its nodes are looked up there.
+let pip = null;
+const $ = (id) => document.getElementById(id) || pip?.document.getElementById(id);
 const roomID = decodeURIComponent(location.pathname.split('/')[2] || '');
 const api = '/api/rooms/' + encodeURIComponent(roomID);
 // /r/<room>/docs[/<doc>] is the document manager in a window of its own (005-AC11): this page,
@@ -8,6 +10,10 @@ const api = '/api/rooms/' + encodeURIComponent(roomID);
 const roomPath = '/r/' + encodeURIComponent(roomID);
 const docsMode = location.pathname.split('/')[3] === 'docs';
 if (docsMode) document.body.classList.add('docs-window');
+// /r/<room>/chat is the chat in a window of its own (031-AC9): no audio, video or panes, so it
+// never takes the call from the room page, LiveKit allowing one connection per participant.
+const chatMode = location.pathname.split('/')[3] === 'chat';
+if (chatMode) document.body.classList.add('chat-window');
 const phone = () => matchMedia('(max-width: 40rem)').matches;
 const messages = $('messages');
 // Voice lines move here while the Transcription pane shows (020-AC8): a line is in one list or
@@ -127,7 +133,7 @@ async function loadRoom() {
   // the link is made once, so its focus and anything holding it survive.
   const heading = $('room-name');
   let link = heading.querySelector('a');
-  if (docsMode && !link) {
+  if ((docsMode || chatMode) && !link) {
     link = document.createElement('a');
     link.href = roomPath;
     link.dataset.tip = 'Back to the room';
@@ -223,7 +229,7 @@ let unread = 0;
 let unreadMe = false;
 
 function showTitle() {
-  document.title = (unread ? '(' + unread + (unreadMe ? ' @' : '') + ') ' : '') + (docsMode ? 'Documents · ' : '') + roomName + ' · grill-room';
+  document.title = (unread ? '(' + unread + (unreadMe ? ' @' : '') + ') ' : '') + (docsMode ? 'Documents · ' : chatMode ? 'Chat · ' : '') + roomName + ' · grill-room';
 }
 
 function countUnread(m) {
@@ -514,7 +520,8 @@ function docItem(d) {
     b.className = 'chip msg-doc';
     b.append(grillIcon('docs'), span('file-name', name), span('file-size', fileSize(d.size)));
   }
-  b.addEventListener('click', () => showDocument(d.id).catch(console.error));
+  // The chat window has no viewer: the docs window shows the document (031-AC9).
+  b.addEventListener('click', () => (chatMode ? window.open(roomPath + '/docs/' + encodeURIComponent(d.id), docsTarget) : showDocument(d.id).catch(console.error)));
   return b;
 }
 
@@ -1076,6 +1083,14 @@ $('docs-window-menu').addEventListener('click', (e) => {
   e.preventDefault();
   window.open(roomPath + '/docs', docsTarget);
 });
+// One chat window per room: a second click focuses it (031-AC8).
+const chatTarget = 'grill-chat-' + roomID;
+$('chat-window-menu').href = roomPath + '/chat';
+$('chat-window-menu').target = chatTarget;
+$('chat-window-menu').addEventListener('click', (e) => {
+  e.preventDefault();
+  window.open(roomPath + '/chat', chatTarget);
+});
 
 // copyField copies a read-only field, and selects it for a manual copy when the clipboard refuses.
 function copyField(input) {
@@ -1086,8 +1101,8 @@ function copyField(input) {
 // user menu's "Use on another device" until its holder says they saved it (005-AC32); the server
 // keeps only its hash, so once gone it is gone.
 const recoveryKey = 'grill_room_recovery';
-// A window this page opens gets a copy of its session storage: the docs window has no use for the link.
-if (docsMode) sessionStorage.removeItem(recoveryKey);
+// A window this page opens gets a copy of its session storage: the docs and chat windows have no use for the link.
+if (docsMode || chatMode) sessionStorage.removeItem(recoveryKey);
 $('recovery-open').addEventListener('click', () => {
   const link = sessionStorage.getItem(recoveryKey);
   $('recovery-link').value = link || '';
@@ -2184,6 +2199,9 @@ function connect() {
   });
   es.addEventListener('presence', (e) => {
     presence = new Map(JSON.parse(e.data).people.map((p) => [String(p.id), p]));
+    // Until the stream opens the stay, a raise has no stay to count from and is lost.
+    $('hand-raise').disabled = false;
+    if (!handBusy) handWant = null;
     renderParticipants();
   });
   es.addEventListener('agent', (e) => {
@@ -3550,6 +3568,7 @@ const badgeIcons = {
   muted: '<path d="M11 5 6 9H2v6h4l5 4z"/><path d="m22 9-6 6M16 9l6 6"/>',
   listening: '<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/>',
   deafened: '<path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5M17 17H3s3-2 3-9a4.7 4.7 0 0 1 .3-1.7M10.3 21a1.9 1.9 0 0 0 3.4 0M2 2l20 20"/>',
+  hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v6M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-6-2.3l-3.6-3.6a2 2 0 0 1 2.8-2.8L7 15"/>',
 };
 
 function badgeIcon(name) {
@@ -3586,11 +3605,20 @@ function span(cls, text, tip) {
 // tagColumns are the badges a person row may carry, in their fixed order (008-AC13): a column shows
 // in every row of a list once any row has it, so a badge sits at the same place on every row. You
 // and room admins are marked on the name, can ask the AI in the card (008-AC18).
-const tagColumns = ['anon', 'host', 'transcribed', 'audio'];
+const tagColumns = ['hand', 'anon', 'host', 'transcribed', 'audio'];
+
+// ordinal is 1st, 2nd, 3rd, 4th… 11th, 12th, 13th, 21st.
+function ordinal(n) {
+  const s = n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th';
+  return n + s;
+}
 
 // personTags are a participant's badges by column: [icon, accessible name, tooltip].
 function personTags(p, id, isHere) {
   const t = {};
+  // The rank rides on the badge: the list keeps its order as hands go up and down (031-AC4).
+  const hand = isHere && presence.get(id)?.hand;
+  if (hand) t.hand = ['hand', 'Hand raised, ' + ordinal(hand), 'Hand raised, ' + ordinal(hand) + ' in the queue', String(hand)];
   if (agent.host_participant_id === p.id) t.host = ['host', 'host', agent.online ? 'AI host: the personas run on their computer' : 'AI host: their AI host app is not connected'];
   // Only your own row: nobody else learns whether a profile has an email (011-AC6).
   if (id === myID && noEmail()) t.anon = ['anon', anonText, anonText];
@@ -3624,6 +3652,10 @@ function personActions(p, id) {
   // The host hands over; a room admin moves the role from someone else, asked first (009-AC33).
   if (!host && (isHost() || meAdmin) && agent.daemons.some((d) => d.participant_id === p.id && d.can_host)) {
     acts.push({ label: 'Make AI host', run: () => makeHost(p) });
+  }
+  // 031-AC5: your own hand, or anyone's for a room admin.
+  if (presence.get(id)?.hand && (!other || meAdmin)) {
+    acts.push({ label: 'Lower hand', run: () => (other ? sendJSON('DELETE', api + '/hands/' + id).catch((err) => toast(err.message)) : askHand(false)) });
   }
   if (other && voiceParticipant(id)) acts.push({ volume: true });
   // 016-AC6 016-AC12: a room admin removes others; anyone leaves. A room admin steps down first.
@@ -3928,9 +3960,51 @@ function renderParticipants() {
   $('away').hidden = !rows.away.length;
   $('away-count').textContent = String(rows.away.length);
   $('tab-people-count').textContent = String(rows.here.length);
+  renderHands();
   // The tiles' names and speaking rings follow the list.
   renderStage();
 }
+
+// handWant is the own hand asked for, until the first presence event after its last request.
+let handWant = null;
+// handChain keeps the own hand's requests in click order; handBusy counts those not settled.
+let handChain = Promise.resolve();
+let handBusy = 0;
+
+// renderHands shows the count of raised hands on the People head and tab, and the own hand's
+// button (031-AC3, 031-AC4).
+function renderHands() {
+  const n = [...presence.values()].filter((p) => p.here && p.hand).length;
+  for (const el of [$('people-hands'), $('tab-people-hands')]) {
+    el.hidden = !n;
+    el.setAttribute('aria-label', n === 1 ? '1 hand raised' : n + ' hands raised');
+    if (el.textContent !== String(n)) el.replaceChildren(badgeIcon('hand'), String(n));
+  }
+  const up = handWant ?? !!presence.get(myID)?.hand;
+  const b = $('hand-raise');
+  b.setAttribute('aria-pressed', String(up));
+  const label = up ? 'Lower my hand' : 'Raise my hand';
+  b.setAttribute('aria-label', label);
+  b.dataset.tip = label;
+}
+// askHand raises or lowers the own hand (031-AC3).
+function askHand(up) {
+  handWant = up;
+  handBusy++;
+  renderHands();
+  handChain = handChain
+    .then(() => sendJSON(up ? 'PUT' : 'DELETE', api + '/hand'))
+    .catch((err) => {
+      if (handBusy === 1) handWant = null;
+      toast(err.message);
+    })
+    .finally(() => {
+      // A wish the presence already shows needs no event; one it does not waits for the next.
+      if (!--handBusy && handWant === !!presence.get(myID)?.hand) handWant = null;
+      renderHands();
+    });
+}
+$('hand-raise').addEventListener('click', () => askHand($('hand-raise').getAttribute('aria-pressed') !== 'true'));
 
 // tagSpan is one badge square, or an empty one keeping its column. The audio one is always there
 // with its state, for the people that are not in the audio too.
@@ -3942,9 +4016,11 @@ function tagSpan(col, t, el = document.createElement('span')) {
   const role = on && col === 'host';
   el.className = 'tag tag-' + col + (role ? ' role-' + col : '') + (on && col === 'host' ? ' host-badge' + (agent.online ? '' : ' offline') : '') + (on && col === 'transcribed' ? ' transcribed' : '') + (col === 'audio' ? ' audio' : '');
   const icon = t ? t[0] : '';
-  if (el.dataset.icon !== icon) {
-    el.replaceChildren(...(icon ? [badgeIcon(icon)] : []));
+  const rank = col === 'hand' && t ? t[3] : '';
+  if (el.dataset.icon !== icon || (el.dataset.rank || '') !== rank) {
+    el.replaceChildren(...(icon ? [badgeIcon(icon)] : []), ...(rank ? [span('rank', rank)] : []));
     el.dataset.icon = icon;
+    el.dataset.rank = rank;
   }
   el.dataset.col = col;
   delete el.dataset.state;
@@ -3993,6 +4069,7 @@ function showTab(t) {
 matchMedia('(max-width: 40rem)').addEventListener('change', () => {
   if (phone() && stageOpen()) showTab('video');
   sttButton();
+  pipSync?.();
 });
 if (!docsMode) document.body.dataset.tab = roomTab;
 for (const b of $('tabbar').querySelectorAll('button')) b.addEventListener('click', () => showTab(b.dataset.tab));
@@ -4303,7 +4380,7 @@ $('push-explain').addEventListener('close', () => {
 function offerPush() {
   if (pushOffered) return;
   pushOffered = true;
-  if (!pushable || docsMode || (ios && !homeScreen) || Notification.permission !== 'default') return;
+  if (!pushable || docsMode || chatMode || (ios && !homeScreen) || Notification.permission !== 'default') return;
   if (localStorage.getItem(pushKey) === '1' || Date.now() < Number(localStorage.getItem(pushSnoozeKey) || 0)) return;
   if (!document.querySelector('dialog[open]')) $('push-explain').showModal();
 }
@@ -4313,7 +4390,7 @@ $('push-all').addEventListener('change', () => {
 });
 renderPush();
 // The browser may have renewed its subscription since: hand the server the current one.
-if (pushOn() && !docsMode) {
+if (pushOn() && !docsMode && !chatMode) {
   savePush().catch((err) => pushStatus('Notifications: ' + err.message));
 }
 
@@ -4496,7 +4573,7 @@ async function switchNow(kind, id) {
 for (const kind of Object.keys(devKinds)) $('dev-' + kind).addEventListener('change', (e) => switchDevice(kind, e.target.value));
 
 async function joinVoice() {
-  if (voice) return;
+  if (voice || chatMode) return;
   voiceError('');
   $('voice-join').disabled = true;
   let room;
@@ -4524,7 +4601,7 @@ async function joinVoice() {
     myVideo = new Set();
     room.on(LK.RoomEvent.TrackSubscribed, (track, pub, p) => {
       // A video subscribed while this viewer's stage is closed goes at once (030-AC13).
-      if (track.kind !== 'audio') return stageOpen() ? renderStage() : pub.setSubscribed(false);
+      if (track.kind !== 'audio') return watching() ? renderStage() : pub.setSubscribed(false);
       if (deaf || personaMutedIdentity(p.identity)) return pub.setSubscribed(false);
       const el = track.attach();
       el.dataset.pid = p.identity;
@@ -4534,7 +4611,7 @@ async function joinVoice() {
     });
     room.on(LK.RoomEvent.TrackUnsubscribed, (track, pub) => (track.kind === 'audio' ? dropAudio(pub) : renderStage()));
     room.on(LK.RoomEvent.TrackPublished, (pub) => {
-      if (pub.kind === 'video') pub.setSubscribed(stageOpen());
+      if (pub.kind === 'video') pub.setSubscribed(watching());
       renderStage();
     });
     room.on(LK.RoomEvent.TrackUnpublished, renderStage);
@@ -4677,6 +4754,8 @@ async function toggleVideo(cam) {
 // The Video stage (030-AC7): each viewer opens it in the viewer's place, and the document open
 // before comes back on close. Closed, it holds no tile and subscribes to no video (030-AC13).
 const stageOpen = () => !$('stage').hidden;
+// Popped out, the videos show whatever the page's stage does (031-AC13).
+const watching = () => stageOpen() || !!pip || !!document.pictureInPictureElement;
 function openStage() {
   // On a phone the stage opens as the Video tab (030-AC14).
   if (phone() && roomTab !== 'video') return showTab('video');
@@ -4699,7 +4778,7 @@ function closeStage() {
 function watchVideo() {
   if (!voice) return;
   for (const p of voice.remoteParticipants.values()) {
-    for (const pub of p.videoTrackPublications.values()) pub.setSubscribed(stageOpen());
+    for (const pub of p.videoTrackPublications.values()) pub.setSubscribed(watching());
   }
 }
 
@@ -4729,7 +4808,7 @@ function renderStage() {
   const live = liveVideos();
   const focused = $('stage').contains(document.activeElement);
   // Nothing live and nothing drawn: the People list's render must not depend on the LiveKit bundle.
-  if (!live.length && !tiles.size && !stageOpen() && $('video-open').hidden && $('tab-video').hidden) return;
+  if (!live.length && !tiles.size && !watching() && $('video-open').hidden && $('tab-video').hidden) return;
   // The Video button goes with the last video: its focus moves to the open stage's ✕, else to the
   // audio options, or Join audio once the audio is left, not to the page.
   if (!live.length && document.activeElement === $('video-open')) $(stageOpen() ? 'stage-close' : voice ? 'voice-more' : 'voice-join').focus();
@@ -4742,7 +4821,7 @@ function renderStage() {
   $('tab-video-count').textContent = live.length ? String(live.length) : '';
   // An open stage outlives a video that drops for a moment: it waits, and says so (030-AC7).
   // Text set into a status region that is always there: one revealed by unhiding is often not read out.
-  $('stage-empty').textContent = stageOpen() && !live.length ? 'Nobody is sharing video right now.' : '';
+  $('stage-empty').textContent = watching() && !live.length ? 'Nobody is sharing video right now.' : '';
   const { Camera, ScreenShare } = LivekitClient.Track.Source;
   for (const { pub, mine } of live) {
     if (pub.source !== ScreenShare || shareOrder.has(pub.trackSid)) continue;
@@ -4754,7 +4833,7 @@ function renderStage() {
   }
   for (const sid of shareOrder.keys()) if (!live.some((v) => v.pub.trackSid === sid)) shareOrder.delete(sid);
   // Gone once the stage opens; a share that stops is found live no more.
-  if (stageOpen()) stripShare = '';
+  if (watching()) stripShare = '';
   const offered = live.find((v) => v.pub.trackSid === stripShare);
   // Shown and said once the sharer's name is known: a share can come before the People list has them.
   const who = offered ? nameOf(offered.p) : '';
@@ -4767,13 +4846,13 @@ function renderStage() {
     grillAnnounce($('share-strip-text').textContent);
     stripSaid = stripShare;
   }
-  const shown = stageOpen() ? live : [];
+  const shown = watching() ? live : [];
   // The screen picked large, else the latest started (030-AC9); a pick that stopped falls back.
   const shares = shown.filter((v) => v.pub.source === ScreenShare).sort((a, b) => shareOrder.get(a.pub.trackSid) - shareOrder.get(b.pub.trackSid));
   const big = shares.find((v) => v.pub.trackSid === pinnedShare) || shares.at(-1);
   bigShare = big?.pub.trackSid || '';
   // iPhone Safari has no element full screen.
-  $('stage-full').hidden = !big || !document.fullscreenEnabled;
+  $('stage-full').hidden = !big || !document.fullscreenEnabled || !!pip;
   // Nothing large left to show full screen: back to the page.
   if (!big && document.fullscreenElement === $('stage-main')) document.exitFullscreen().catch(console.error);
   const draw = ({ p, pub, mine }) => {
@@ -4785,12 +4864,7 @@ function renderStage() {
       t.el.append(t.video, document.createElement('figcaption'));
       tiles.set(pub.trackSid, t);
     }
-    // A remote video has a track only while subscribed; attach() lets adaptiveStream see the tile's size.
-    if (t.track !== (pub.track || null)) {
-      t.track?.detach(t.video);
-      t.track = pub.track || null;
-      t.track?.attach(t.video);
-    }
+    t.pub = pub;
     const name = nameOf(p);
     t.el.dataset.pid = p.identity;
     t.el.dataset.sid = pub.trackSid;
@@ -4821,6 +4895,18 @@ function renderStage() {
   }
   placeTiles($('stage-main'), main);
   placeTiles($('stage-tiles'), row);
+  // A remote video has a track only while subscribed; attach() lets adaptiveStream see the tile's size.
+  // Attached once placed: LiveKit tells a video in the pop-out from where it sits then, and a hidden
+  // page may not run its later visibility checks.
+  for (const t of kept) {
+    if (t.track === (t.pub.track || null)) continue;
+    t.track?.detach(t.video);
+    t.track = t.pub.track || null;
+    t.track?.attach(t.video);
+    if (t.video.paused && t.video.srcObject) t.video.play().catch(() => {});
+  }
+  // Document PiP, else the large video's own PiP, which needs a video (031-AC15).
+  $('stage-pop').hidden = !!pip || !(window.documentPictureInPicture || (document.pictureInPictureEnabled && shown.length));
   // A focused control gone, hidden or moved (a tile made large) drops the focus to the page, out of
   // reach of the stage's Escape (030-AC11).
   if (focused && stageOpen() && document.activeElement === document.body) $('stage-close').focus();
@@ -4871,6 +4957,7 @@ window.grillDiag = {
 // The local tracks stop here, not in disconnect(): a dropped connection or a removal releases the
 // camera and the screen too (030-AC5).
 function cleanupVoice(room) {
+  clearTimeout(reattachTimer);
   for (const pub of room.localParticipant.trackPublications.values()) pub.track?.stop();
   for (const t of videoCapturing) t.stop();
   voice = null;
@@ -4878,7 +4965,8 @@ function cleanupVoice(room) {
   $('voice-audio').replaceChildren();
   // Focus on the stage, the Video button or an audio control would fall to the page once they go.
   const focused = ['stage', 'voice', 'voice-menu'].some((id) => $(id).contains(document.activeElement)) || document.activeElement === $('video-open');
-  // Out of the audio, no video can come (030-AC7).
+  // Out of the audio, no video can come (030-AC7), nor a pop-out (031-AC14).
+  popIn();
   closeStage();
   voiceChanged();
   if (focused) $('voice-join').focus();
@@ -4918,6 +5006,109 @@ $('stage').addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !document.fullscreenElement && performance.now() - fullscreenLeft > 150) leaveStage();
 });
 $('stage-full').addEventListener('click', () => { if (document.fullscreenEnabled) $('stage-main').requestFullscreen().catch(console.error); });
+
+// The pop-out (031-AC12): the stage body moves into a Document PiP window, its videos playing on,
+// over copies of the call's controls that press the page's own, so the call stays this page's.
+const pipControls = ['voice-mute', 'voice-cam', 'voice-screen', 'hand-raise', 'voice-leave'];
+let pipSync = null;
+let pipWatch = null;
+let pipOpening = false;
+async function popOut() {
+  if (!window.documentPictureInPicture) {
+    // Without Document PiP, the large screen, else the first camera (031-AC15). Watched there, it
+    // stays received whatever the stage does, until the browser's window closes.
+    const v = $('stage-main').querySelector('video') || $('stage-tiles').querySelector('video');
+    v?.addEventListener('leavepictureinpicture', () => { watchVideo(); renderStage(); }, { once: true });
+    return v?.requestPictureInPicture().catch(console.error);
+  }
+  if (pip || pipOpening) return;
+  clearTimeout(reattachTimer);
+  pipOpening = true;
+  const w = await documentPictureInPicture.requestWindow({ width: 480, height: 360 }).finally(() => { pipOpening = false; });
+  // The audio left while the window opened: no call to show.
+  if (!voice) return w.close();
+  w.document.documentElement.lang = document.documentElement.lang;
+  // The page's stylesheets, absolute: the window's document is about:blank. The theme follows the
+  // same prefers-color-scheme there.
+  for (const s of document.querySelectorAll('link[rel=stylesheet], style')) {
+    const c = s.cloneNode(true);
+    if (s.href) c.href = s.href;
+    w.document.head.append(c);
+  }
+  w.document.title = document.title;
+  w.document.body.className = 'pip';
+  const bar = w.document.createElement('div');
+  bar.className = 'audio pip-bar';
+  bar.setAttribute('role', 'group');
+  bar.setAttribute('aria-label', 'Audio');
+  // Same ids: the page's lookups find the page's buttons first, and the stylesheets style both.
+  const copies = pipControls.map((id) => {
+    const c = w.document.createElement('button');
+    c.type = 'button';
+    c.addEventListener('click', () => document.getElementById(id).click());
+    return c;
+  });
+  // A failure from these controls shows in the window too.
+  const err = w.document.createElement('p');
+  err.className = 'strip pip-error';
+  err.setAttribute('role', 'status');
+  const sync = () => {
+    pipControls.forEach((id, i) => {
+      const o = document.getElementById(id);
+      const c = copies[i];
+      for (const a of c.getAttributeNames()) if (!o.hasAttribute(a)) c.removeAttribute(a);
+      for (const a of o.getAttributeNames()) c.setAttribute(a, o.getAttribute(a));
+      c.innerHTML = o.innerHTML;
+    });
+    // The screen share where the page's bar shows it (030-AC14): a narrow page hides it by CSS.
+    copies[pipControls.indexOf('voice-screen')].hidden = !document.getElementById('voice-screen').checkVisibility();
+    err.hidden = document.getElementById('voice-error').hidden;
+    err.textContent = document.getElementById('voice-error-text').textContent;
+  };
+  pipWatch = new MutationObserver(sync);
+  for (const id of [...pipControls, 'voice-error']) pipWatch.observe(document.getElementById(id), { attributes: true, childList: true, subtree: true, characterData: true });
+  pipSync = sync;
+  sync();
+  bar.append(...copies);
+  w.document.body.append(document.getElementById('stage-body'), err, bar);
+  pip = w;
+  w.addEventListener('pagehide', () => { if (pip === w) popIn(); });
+  $('stage-away').hidden = false;
+  if (document.activeElement === document.body || document.activeElement === $('stage-pop')) $('stage-back').focus();
+  watchVideo();
+  renderStage();
+}
+// popIn puts the stage body back in the page's stage, open or closed as it is (031-AC14).
+function popIn() {
+  const w = pip;
+  if (!w) return;
+  const back = document.activeElement === $('stage-back');
+  pip = null;
+  pipWatch.disconnect();
+  pipSync = null;
+  $('stage-away').before(w.document.getElementById('stage-body'));
+  $('stage-away').hidden = true;
+  w.close();
+  watchVideo();
+  renderStage();
+  if (back && stageOpen()) $('stage-close').focus();
+  reattach(0);
+}
+// reattach has LiveKit measure the videos again once the window is gone: it measured them in it,
+// or against its size while it closed, and would keep counting them as seen. Its own leave handler
+// re-measures, without restarting the streams; the native fallback's never runs with Document PiP.
+let reattachTimer = 0;
+function reattach(tries) {
+  clearTimeout(reattachTimer);
+  if (pip) return;
+  if (window.documentPictureInPicture?.window && tries < 40) {
+    reattachTimer = setTimeout(reattach, 50, tries + 1);
+    return;
+  }
+  for (const t of tiles.values()) t.video.dispatchEvent(new Event('leavepictureinpicture'));
+}
+$('stage-pop').addEventListener('click', () => popOut().catch(console.error));
+$('stage-back').addEventListener('click', popIn);
 function promote(e) {
   const t = e.target.closest('.tile[role=button]');
   if (!t || (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ')) return;
@@ -5467,6 +5658,7 @@ firstLoad().then((ok) => {
     if (doc) showDocument(doc, false, true).catch(() => history.replaceState(null, '', roomPath + '/docs'));
     return;
   }
+  if (chatMode) return;
   // A room just created from the profile opens on its invite card (005-AC34).
   const query = new URLSearchParams(location.search);
   if (query.has('invite')) {

@@ -50,7 +50,7 @@ var errUnlockedWrite = errors.New("write outside the write lock to a table not i
 // unlockedWrites are the tables a transaction of unlocked may write: no id cursor reads them.
 var unlockedWrites = map[string]bool{
 	"presence": true, "daemon_connections": true, "daemon_status": true, "stt_workers": true, "tts_pod": true, "pairings": true,
-	"settings": true, "rate_events": true,
+	"settings": true, "rate_events": true, "hands": true,
 }
 
 // check refuses a statement of a shared transaction that writes outside unlockedWrites.

@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, playSTT, noOverflow } from './helpers.js';
+import { roomWith, playSTT, noOverflow, menuItem } from './helpers.js';
 
 // The e2e server has no LiveKit: this LiveKit stand-in keeps the room page's own mic handling and
 // takes the mic from navigator.mediaDevices.getUserMedia on each enable, as LiveKit's restart does.
@@ -28,7 +28,8 @@ const fakeLiveKit = `window.LivekitClient = (() => {
     on() { return this; }
     getActiveDevice() { return 'default'; }
     async switchActiveDevice() {}
-    async connect() {}
+    // Counted per page: the chat window must open none (031-AC10).
+    async connect() { window.lkConnects = (window.lkConnects || 0) + 1; }
     async disconnect() {}
     async startAudio() {}
   }
@@ -281,4 +282,35 @@ test('a room read from before the switch does not undo it', async ({ browser, re
   releaseRead();
   await page.waitForTimeout(500);
   await expect(stt).toHaveAttribute('aria-pressed', 'false');
+});
+
+// 031-AC10: the chat window asks for no voice token and connects no LiveKit room: with it open and
+// used, the room page stays in the call, its one connection the only one.
+test('the chat window leaves the call to the room page', async ({ browser, request }) => {
+  const page = await voicePage(browser, request);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const room = await page.evaluate(() => roomID);
+  let tokens = 0;
+  page.context().on('request', (r) => { if (r.method() === 'GET' && new URL(r.url()).pathname === `/api/rooms/${room}/voice`) tokens++; });
+  await page.locator('#voice-join').click();
+  await expect(page.locator('#voice-leave')).toBeVisible();
+  expect(tokens).toBe(1);
+
+  const [chat] = await Promise.all([page.context().waitForEvent('page'), menuItem(page, 'Open chat in a new window')]);
+  await expect(chat.locator('#me')).toHaveText('Alice');
+  await expect(chat.locator('#voice')).toBeHidden();
+  await chat.locator('#body').fill('from the chat window');
+  await chat.locator('#body').press('Enter');
+  await expect(page.locator('#messages')).toContainText('from the chat window');
+  await chat.getByRole('button', { name: 'Raise my hand' }).click();
+  await expect(page.getByRole('button', { name: 'Lower my hand' })).toBeVisible();
+  // A reload of the chat window runs its start-up again: still no token.
+  await chat.reload();
+  await expect(chat.locator('#me')).toHaveText('Alice');
+
+  expect(tokens).toBe(1);
+  expect(await chat.evaluate(() => window.lkConnects ?? 0)).toBe(0);
+  expect(await chat.evaluate(() => !!voice)).toBe(false);
+  expect(await page.evaluate(() => [window.lkConnects, voice?.state])).toEqual([1, 'connected']);
+  await expect(page.locator('#voice-leave')).toBeVisible();
 });

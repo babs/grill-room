@@ -331,7 +331,7 @@ export async function unfoldTabs(nav) {
 export async function menuItem(page, name, which = 'room') {
   await page.locator({ room: '#room-open', me: '#me', voice: '#voice-more' }[which]).click();
   const menu = page.locator({ room: '#room-menu', me: '#me-menu', voice: '#voice-menu' }[which]);
-  await menu.getByRole(name === 'My rooms and profile' || name === 'Open documents in a new window' ? 'link' : 'button', { name, exact: true }).click();
+  await menu.getByRole(['My rooms and profile', 'Open documents in a new window', 'Open chat in a new window'].includes(name) ? 'link' : 'button', { name, exact: true }).click();
 }
 
 // messageAction runs Edit or Delete on a line through its actions button (005-AC35).

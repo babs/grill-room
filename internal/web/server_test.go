@@ -813,3 +813,22 @@ func TestGetRoomVersion(t *testing.T) {
 		}
 	}
 }
+
+// 031-AC8: /r/{room}/chat is the room page itself, behind the same access: the same page and
+// headers, the API checking the participant either way.
+func TestChatWindowRoute(t *testing.T) {
+	e := newEnv(t)
+	code, hdr, page := rawGet(t, e, "GET", "/r/some-room", nil)
+	chatCode, chatHdr, chatPage := rawGet(t, e, "GET", "/r/some-room/chat", nil)
+	if code != http.StatusOK || chatCode != code || string(chatPage) != string(page) {
+		t.Fatalf("chat window: %d, room page: %d", chatCode, code)
+	}
+	for _, h := range []string{"Content-Security-Policy", "Cross-Origin-Opener-Policy", "Cross-Origin-Embedder-Policy", "Content-Type"} {
+		if chatHdr.Get(h) != hdr.Get(h) || hdr.Get(h) == "" {
+			t.Errorf("%s: %q, room page %q", h, chatHdr.Get(h), hdr.Get(h))
+		}
+	}
+	if code, _, _ := rawGet(t, e, "GET", "/r/some-room/chat/x", nil); code != http.StatusNotFound {
+		t.Errorf("/r/some-room/chat/x: %d", code)
+	}
+}

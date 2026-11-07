@@ -433,6 +433,7 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 			{`INSERT INTO daemon_connections(id, daemon_id, room_id, pod, connected_at_ms, expires_at_ms) VALUES(?, ?, ?, 'p', 0, 1)`, []any{room, dm.ID, room}},
 			{`INSERT INTO daemon_status(daemon_id) VALUES(?)`, []any{dm.ID}},
 			{`INSERT INTO presence(room_id, participant_id, tab, expires_at_ms) VALUES(?, ?, '', 1)`, []any{room, p.ID}},
+			{`INSERT INTO hands(room_id, participant_id, raised_at_ms) VALUES(?, ?, 1)`, []any{room, p.ID}}, // 031-AC1
 			{`INSERT INTO pairings(id, room_id, code, secret_hash, expires_at_ms) VALUES(?, ?, '', '', 1)`, []any{room, room}},
 			{`INSERT INTO tts_lines(room_id, persona_id, persona, voice, rate, text, quiet_ms, resume_s, queue_s, queued_at_ms)
 				VALUES(?, 0, '', '', 1, '', 0, 0, 0, 0)`, []any{room}},
