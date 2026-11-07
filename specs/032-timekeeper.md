@@ -1,6 +1,6 @@
 # 032 — Timekeeper persona
 
-**Status**: approved
+**Status**: in progress
 **Requested by**: babs
 **Date**: 2026-11-07
 **Context**: builds on 002 (presets), 006 (timer trigger, agenda), 013 (persona voices, turn-taking), 031 (hand queue).
@@ -36,18 +36,19 @@ What it sees comes from a **time-keeper** capability, a persona option like "Wat
 - Recorded interjection clips; a per-room interjection list.
 - Speaking over a human for any persona without the time-keeper option.
 - Talk-time statistics, a speaking-time chart, a meeting timer in the UI.
+- The time-keeper settings in room starters and in the MCP `edit_persona` tool: a starter made from a room recreates its Timekeeper without the role.
 
 ## Acceptance criteria
 
 ### The capability
 - [ ] **AC1** A room persona has "Time keeper" (`time_keeper`) beside "Watches the notes", edited by room admins: at most one per room, and turning it on for one turns it off for the one that had it, with a system line as for the notes watcher (009-AC31). With it on and "Speaks in the call" on, a "Speak over after" select offers Off, 10 s, 20 s, 30 s, 60 s (`cut_in_s`: 0, 10, 20, 30, 60; any other value is a 400).
 - [ ] **AC2** A time-keeper persona's preamble adds, after the humans present: `Hands raised:` then one line per hand in queue order, `1. Alice ·a1b2, for 3 min`, at most 5 then `and N more`, or `Hands raised: none`; and the speaker line becomes `Alice ·a1b2 speaks now, for 4 min 10 s`, counted from the first voice line of their current run (their own voice lines with nobody else's in between and no gap over 30 s). Every other persona's preamble is unchanged and mentions no hands (031-AC7).
-- [ ] **AC3** A time-keeper turn whose final answer is empty and that writes no `spoken.md` posts no message and says nothing; the persona's state shows "nothing to say" until its next turn, its timer restarts, and it counts as a completed turn for the chain. Any other persona's empty turn keeps today's behaviour.
+- [ ] **AC3** A time-keeper turn whose final answer is empty posts no message and says nothing, a `spoken.md` included; the persona's state shows "nothing to say" until its next turn, its timer restarts, and it counts as a completed turn for the chain. Any other persona's empty turn keeps today's behaviour.
 - [ ] **AC4** The export carries `time_keeper` and `cut_in_s` on the persona, optional, and an import without them reads false and 0 (`docs/export-format.md`).
 
 ### The preset
 - [ ] **AC5** The library has a shipped "Timekeeper" template (⏱️). Its text tells it to watch the agenda, the hand queue and talk time, to speak only when the room is off track, in one or two short sentences naming the people, and to stay silent otherwise (AC3). It asks for a drift rating in `drift.json` on every turn (AC13).
-- [ ] **AC6** Adding the Timekeeper template to a room gives the copy `every_minutes` 5, "Speaks in the call" on, time keeper on (taken from another persona as in AC1), and `cut_in_s` 20. Adding any other template sets none of them. A room admin can change each afterwards. A new version of the preset's text is offered to rooms as for any preset (002-AC14) and never resets these settings.
+- [ ] **AC6** Adding the Timekeeper template to a room gives the copy `every_minutes` 5, "Speaks in the call" on, time keeper on (taken from another persona as in AC1), and `cut_in_s` 20. Only a room admin's add brings the time-keeper role and `cut_in_s`; a member's add brings the timer and the voice only. An add waiting for the host's approval never brings the role: a room admin gives it once the persona is approved. Adding any other template sets none of them. A room admin can change each afterwards. A new version of the preset's text is offered to rooms as for any preset (002-AC14) and never resets these settings.
 
 ### Cutting in
 - [ ] **AC7** A line from a time-keeper persona's timer turn reaches the pod with its `cut_in_s`. Any other line, that persona's included, carries 0 and follows 013 unchanged.
@@ -109,3 +110,6 @@ Made while drafting (overturnable):
 - The speaker's run ends at another speaker's line or a 30 s gap, longer than a voice paragraph's 20 s close (018), so a pause for breath does not reset the count.
 - The preset runs `sonnet` at effort `low`: one turn every 5 minutes reads a short preamble and needs judgment, not depth.
 - Preset room defaults live in code next to the preset and apply only at copy, so a new preset version never overrides a room admin's choice.
+- A time-keeper turn with an empty answer is silent even with a `spoken.md` (AC3): one rule, and no column to record that a turn spoke. Found in phase 1 review.
+- The role and `cut_in_s` are room-admin settings, so a member adding the Timekeeper gets it without them (AC6): speaking over people is the room admin's call. Found in phase 1 review.
+- "Nothing to say" reads the persona's latest turn, whether or not it held the role then: turning the role on for a persona whose last turn posted nothing shows it until its next turn. Found in phase 1 review.
