@@ -74,14 +74,27 @@ Built for product people and PMs, not only engineers. Joining a room needs a bro
 - **S2, cross-machine `--resume`.** Sessions live in `~/.claude/projects/<slug of absolute cwd>/<id>.jsonl`, and the slug depends on each user's `$HOME`. Check whether a jsonl copied to another machine resumes, with a fixed room path inside the container.
 - **S3, bearer swap.** Give the container a `.credentials.json` with a dummy access token and a far expiry, and set `ANTHROPIC_BASE_URL` to the proxy. Claude Code stays in OAuth mode and sends its own headers; the proxy, running outside Docker, reads the real `~/.claude/.credentials.json` and swaps the dummy bearer for the real one. Check that Claude Code honours the base URL in OAuth mode, and list every endpoint it calls. Find the minimal `.claude.json` keys Claude Code needs to start in OAuth mode. The host's Claude Code owns the refresh and the proxy only reads, re-reading the file when it changes or on a 401. Check what happens when the access token expires while the host's Claude Code is not running. Later, if that breaks rooms: the proxy reads a dedicated `claude setup-token` token (subscription OAuth, `sk-ant-oat01`, about one year per community reports, several 401 issues reported), with no refresh.
 
-| Spike | Status | Report |
+| Spike | Status | Recorded in |
 |---|---|---|
-| S1 | done, no-go: API present, `available()` true, zero results in Chromium and Chrome | `spikes/S1-chrome-stt.md` |
-| S1-bis | done: `small` int8 only, ~2 s latency on 4 P-cores; medium/turbo too slow | `spikes/S1bis-whisper-cpu.md` |
-| S2 | done, pass | `spikes/S2-resume.md` |
-| S3 | done, pass with conditions D21-D22 | `spikes/S3-proxy-swap.md` |
-| S4 | done, pass: TURN/TLS 443 via traefik and ICE/TCP, 0 loss | `spikes/S4-livekit-sni.md` |
-| S5 | done: the loop works end to end; STT lag, wrong speaker after a rejoin, over-splitting and garbage lines fixed after it | `spikes/S5-simulated-session.md` |
+| S1 | done, no-go: API present, `available()` true, zero results in Chromium and Chrome | D3 |
+| S1-bis | done: `small` int8 only, ~2 s latency on 4 P-cores; medium/turbo too slow | D3, `specs/001-grill-room-poc.md` |
+| S2 | done, pass | D23, `docs/agent-workspace.md` |
+| S3 | done, pass with conditions D21-D22 | D21, D22, `README.md` |
+| S4 | done, pass: TURN/TLS 443 via traefik and ICE/TCP, 0 loss | D34, `README.md` |
+| S5 | done: the loop works end to end; STT lag, wrong speaker after a rejoin, over-splitting and garbage lines fixed after it | D3, `specs/001-grill-room-poc.md` |
+| S6 | done, pass: two personas, a chain link, a queued press and a skill on the lab | 002-AC41, `scenarios/two-persona-chain.yaml` |
+| S7 | done, go: cosign keyless | `docs/release.md`, `specs/003-daemon.md` |
+| S8 | done, go; the day-long recheck has no recorded result: a setup token works through the proxy, its expiry cannot be read | `README.md` (accounts), 003-AC12 |
+| S9 | done, pass: one supervisor, two instances, two accounts | 003-AC31, `make e2e-supervisor` |
+| S10 | done: `small` with a sentence prompt, later replaced by parakeet | 005-AC23, `specs/007-stt-parakeet.md` |
+| S10d | done, go: parakeet-ultra, two processes of 2 threads | `specs/007-stt-parakeet.md`, `docs/architecture.md` |
+| S10b, S10c | done: workstation bench; browser WASM left to a later spec (words froze about 8.4 s after speech), shipped by 010 | `specs/007-stt-parakeet.md`, `specs/005-room-ux.md` |
+| S11 | done: a desktop browser runs the same model at the server's level | `specs/010-device-stt.md` |
+| S12 | done: plugin options reach Claude Code through two sandbox files | `docs/agent-workspace.md` |
+| S13 | done, pass: device STT in a hidden tab and over 30 minutes, 12 s reload delay | 010-AC21, `docs/architecture.md` |
+| S14, S14b | done: a CPU-only engine gives each persona a voice; French with English terms | `specs/013-persona-voices.md` |
+| S16 | two spikes share this id. done, go: echo warm-up gate, narrow fix; Anthropic egress, no MitM needed | `specs/013-persona-voices.md`; `specs/014-network-access.md` |
+| S007 | done, pass: parakeet meets every AC16 bound | `docs/architecture.md` |
 
 ## Credentials
 

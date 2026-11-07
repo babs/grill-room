@@ -342,6 +342,7 @@ ui-check: ui-tools
 	cd tools/ui && pnpm exec tsc -p tsconfig.json
 
 lint: ui-check
+	@out=$$(git ls-files spikes); if [ -n "$$out" ]; then echo "spikes/ stays out of git: $$out" >&2; exit 1; fi
 	golangci-lint run ./...
 	@out=$$(git ls-files -co --exclude-standard '*.go' | xargs gofmt -l); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 	git ls-files -co --exclude-standard '*.sh' | xargs shellcheck

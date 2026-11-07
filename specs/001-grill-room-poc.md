@@ -3,7 +3,7 @@
 **Status**: in progress
 **Requested by**: babs
 **Date**: 2026-10-10
-**Context**: `INTENT.md` (decisions D1-D33), spike reports in `spikes/`
+**Context**: `INTENT.md` (decisions D1-D33, spike results)
 
 ## Problem
 

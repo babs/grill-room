@@ -1,2 +1,0 @@
-# Own workspace root: stops pnpm walking up to a parent workspace.
-packages: []

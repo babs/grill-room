@@ -151,7 +151,7 @@ Releases are built and signed keyless by GitHub Actions, and the sandbox image i
   - S8: a `claude setup-token` token through the bearer-swap proxy: a turn works, and it holds over a day.
 - **Covers**: none
 - **Data model impact**: none
-- **DoD**: `spikes/S7-sigstore.md` and `spikes/S8-setup-token.md` with a verdict. If S7 is a no-go, switch to minisign: the spec's signing ACs keep their meaning with a minisign key.
+- **DoD**: S7 and S8 with a verdict. If S7 is a no-go, switch to minisign: the spec's signing ACs keep their meaning with a minisign key.
 
 ### Phase 1 — Release pipeline
 - Work: GitHub Actions workflows for PRs and tags, keyless signing, release assets, the public ghcr sandbox image, the instance serving bundles, and `make dev-release` with a cosign key pair.

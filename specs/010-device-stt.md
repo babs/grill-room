@@ -95,7 +95,7 @@ People can tell who transcribed a line: its tooltip says "Transcribed on <name>'
   - the engine fails, or the model fails to load.
 
   After a latency or queue fallback the device keeps decoding without posting, except the utterances whose speech started before the hand-back or less than 5 s after it, while the worker takes the track back. The server drops a duplicate when both lines land within 5 s and match (AC16); otherwise both stay: a duplicate beats a loss. It takes the track back when, over the last 60 s and at least 3 utterances, p95 is at most 3 s and the queue is empty, and at most once every 2 minutes. After an engine or model failure it stays on the server until the page reloads. The audio menu says where the voice goes: "Transcribed on this device" or "Transcribed by the server: this device is too slow right now".
-- [x] **AC18** On real Chrome, headed, with the room tab hidden for 10 minutes and the room audio muted, either p95 stays ≤ 4 s, or the fallback fires and the worker transcribes every utterance after the hand-back. If the hidden-tab slowdown shows, a mitigation ships (STT in a SharedWorker, or an audible-silent output) and the check runs again. The report says which.
+- [x] **AC18** On real Chrome, headed, with the room tab hidden for 10 minutes and the room audio muted, either p95 stays ≤ 4 s, or the fallback fires and the worker transcribes every utterance after the hand-back. If the hidden-tab slowdown shows, a mitigation ships (STT in a SharedWorker, or an audible-silent output) and the check runs again. `docs/architecture.md` says which.
 
 ### Measures and observability
 - [x] **AC19** A bench reruns the S11 harness on the shipped code, WASM on 4 threads, in a visible tab, live for 30 minutes on the S11 corpus:
@@ -104,9 +104,9 @@ People can tell who transcribed a line: its tooltip says "Transcribed on <name>'
   - peak tab memory ≤ 2.5 GB, live, on a load in a fresh tab and on a reload once the AC21 delay has run;
   - warm load to ready ≤ 10 s (S11: 5.6 s), not counting the AC21 delay after a reload.
 
-  The report lands in `spikes/`.
+  The result is in `docs/architecture.md`, On-device transcription.
 - [x] **AC20** The server exports `grill_room_device_stt_participants` (flags held now), `grill_room_voice_lines_total{source}` and the AC16 counter. `docs/architecture.md` shows the device path, the handover and these metrics.
-- [x] **AC21** On a page reload (`performance.getEntriesByType('navigation')[0].type === 'reload'`) with device mode on, the engine starts 12 s after the page loads, not at once: Chrome keeps the reloaded page's renderer and gives the old page's memory back about 9 s after the unload (S13 §4.1). Until then the voice stays with the server worker through the normal handover, so no line is lost. A fresh tab or a navigation starts the engine at once, as before.
+- [x] **AC21** On a page reload (`performance.getEntriesByType('navigation')[0].type === 'reload'`) with device mode on, the engine starts 12 s after the page loads, not at once: Chrome keeps the reloaded page's renderer and gives the old page's memory back about 9 s after the unload (S13). Until then the voice stays with the server worker through the normal handover, so no line is lost. A fresh tab or a navigation starts the engine at once, as before.
 - [x] **AC22** "Diagnostics" in the avatar user menu opens a read-only sheet that follows `docs/design.md`:
   - **Transcription:** the mode (on this device, or by the server and why: not offered, fallback, reload delay); the backend (WASM or WebGPU) and threads; the model id, revision, size and whether it is cached; the `deviceMemory` class, noted "Chrome and Edge only, rounded and capped by the browser"; this tab's memory from `performance.measureUserAgentSpecificMemory()`, refreshed every few seconds while the sheet is open and measured only then, or "not available in this browser"; p50 and p95 end of speech to line over the last 20 lines; the fallback and return events with their times.
   - **Connection:** the app version; the event stream state; the LiveKit connection state and the ICE path (direct, TCP, TURN/TLS) from `getStats`.
@@ -145,11 +145,11 @@ People can tell who transcribed a line: its tooltip says "Transcribed on <name>'
   - the migration applies on a fresh DB and on a copy of the lab DB; an export and import round trip keeps `source`; `/metrics` shows every AC20 series.
 
 ### Phase 3 — Real Chrome, bench, rollout
-- Work: the background-tab run on real Chrome, the mitigation if needed, the bench, the report, the reload delay, the Diagnostics sheet, the docs, the lab deploy and checklist step.
+- Work: the background-tab run on real Chrome, the mitigation if needed, the bench, the result in `docs/architecture.md`, the reload delay, the Diagnostics sheet, the docs, the lab deploy and checklist step.
 - **Covers**: AC18, AC19, AC21, AC22
 - **Data model impact**: none
 - **DoD**:
-  - the AC18 run and the AC19 thresholds met, the report committed under `spikes/`;
+  - the AC18 run and the AC19 thresholds met, the result in `docs/architecture.md`;
   - the reload peak re-measured with the S13 harness under 2.5 GB after the AC21 delay; an e2e check that the server keeps the voice during the delay and the device takes it after;
   - an e2e check that opens Diagnostics on a desktop and a phone and finds each section, with `measureUserAgentSpecificMemory` stubbed where the browser lacks it;
   - a lab deploy with a DB backup; the lab checklist step passes on a desktop: toggle on, a sentence posts with the device tooltip, toggle off, the next sentence posts with the server tooltip.
