@@ -112,9 +112,9 @@ function resumedAt(room, since) {
   return workerLog().filter((l) => l.event === 'track_resumed' && l.room === room).map((l) => Date.parse(l.timestamp)).find((t) => t >= since);
 }
 
-// 010-AC9, 010-AC10, 010-AC12, 010-AC13, 010-AC14, 010-AC15, 010-AC21: Alice's voice goes to her
-// device and back to the server worker, announced, silent and across a reload, through LiveKit,
-// the real worker and the real device model.
+// 010-AC9, 010-AC10, 010-AC12, 010-AC13, 010-AC14, 010-AC15, 010-AC21, 030-AC17: Alice's voice goes
+// to her device and back to the server worker, announced, silent and across a reload, through
+// LiveKit, the real worker and the real device model, and a microphone switch keeps it on the device.
 test('the voice hands over between the device and the server', async ({ request, baseURL }) => {
   const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Device voice' } })).json();
   // The counters live as long as the server, which serves every repeat of this test.
@@ -125,7 +125,8 @@ test('the voice hands over between the device and the server', async ({ request,
   const dir = mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), 'grill-room-device-voice-'));
   const ctx = await chromium.launchPersistentContext(dir, {
     channel: 'chrome', baseURL,
-    args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'],
+    // Two fake mics, to switch between (030-AC17).
+    args: ['--use-fake-device-for-media-stream=device-count=2', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'],
   });
   // An action that cannot act fails within its step, not at the test's timeout.
   ctx.setDefaultTimeout(15_000);
@@ -186,6 +187,20 @@ test('the voice hands over between the device and the server', async ({ request,
     await deviceOn(300_000);
     await say(0);
     await expect.poll(() => lineFor(0, deviceTip), { timeout: 60_000 }).toMatchObject({ sender: 'Alice' });
+    expect(await skipped()).toBe(1);
+
+    // 030-AC17: a microphone picked in the menu mid-call; the device transcribes the new track.
+    // fakeMic hands every capture the same graph, so the track, not its deviceId, tells them apart.
+    const micTrack = () => page.evaluate(() => [window.grillMic?.id, voice.localParticipant.getTrackPublication(LivekitClient.Track.Source.Microphone)?.track.mediaStreamTrack.id]);
+    const [before] = await micTrack();
+    const mics = await page.evaluate(async () => (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput' && d.deviceId !== 'default').map((d) => d.deviceId));
+    await menu();
+    await page.getByRole('combobox', { name: 'Microphone', exact: true }).selectOption(mics[1]);
+    await expect.poll(async () => (await micTrack())[0]).not.toBe(before);
+    const [tapped, published] = await micTrack();
+    expect(tapped).toBe(published);
+    await say(3);
+    await expect.poll(() => lineFor(3, deviceTip), { timeout: 60_000 }).toMatchObject({ sender: 'Alice' });
     expect(await skipped()).toBe(1);
 
     // b. Announced stop: the toggle goes off, the worker takes the voice back.

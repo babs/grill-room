@@ -64,6 +64,12 @@
   <label id="voice-keepmic" data-tip="Keep your voice going out, and written down, while the room is muted: useful when you share a physical room"><input type="checkbox"><span>Keep my mic on while the room is muted</span></label>
   <label id="voice-device" data-tip="Your browser writes your voice down instead of the server. It downloads the voice-to-text model once, then tests this device." hidden><input type="checkbox"><span>Transcribe on this device</span></label>
   <p id="device-stt-status" class="hint" role="status" tabindex="-1"></p>
+  <div id="voice-devices" role="group" aria-labelledby="voice-devices-head">
+    <p id="voice-devices-head">Devices</p>
+    <label>Microphone<select id="dev-audioinput"></select></label>
+    <label>Camera<select id="dev-videoinput"></select></label>
+    <label id="dev-speaker" hidden>Speaker<select id="dev-audiooutput"></select></label>
+  </div>
   <button type="button" id="voice-leave-menu">Leave audio</button>
   <p id="stt-credit" class="hint" hidden>Voice-to-text by <a href="https://huggingface.co/moondream/parakeet-ultra" target="_blank" rel="noopener">parakeet-ultra</a>
     (Moondream, from NVIDIA Parakeet TDT 0.6B v3),
@@ -407,7 +413,7 @@
         <button type="button" id="stage-close" class="btn-icon btn-ghost" aria-label="Close the video" data-tip="Close" data-icon="close"></button>
         <h2>Video</h2>
       </div>
-      <div class="stage-body"><div id="stage-main"></div><div id="stage-tiles"></div></div>
+      <div class="stage-body"><p id="stage-empty" class="empty" role="status"></p><div id="stage-main"></div><div id="stage-tiles"></div></div>
     </div>
     <div class="viewer-body">
       <div id="doc-frame"></div>

@@ -9,30 +9,63 @@ const shots = 'test-results/video';
 // screen-capture.spec.js): getDisplayMedia shares an animated 1280 × 720 canvas instead, and keeps
 // the constraints it was asked for in window.displayConstraints. The camera is Chrome's fake one.
 // window.cameraRefusal and window.screenRefusal make either reject with that DOMException name and
-// the message window.refusalMessage ('refused' by default),
+// the message window.refusalMessage ('refused' by default), once only with window.refuseOnce,
 // window.mediaDelay (ms) holds either answer back, window.screenAudio adds the tab's sound to the
-// screen. Every video track handed out is in window.gotVideo.
+// screen. Every video track handed out is in window.gotVideo. A device whose id is in
+// window.unplugged fails when asked for exactly; window.micFail (ms) fails the next microphone
+// capture that long after it is asked.
+// Chrome's second fake camera (fake_device_1) never feeds the WebRTC encoder: its framesEncoded
+// stays put. Asked for exactly, it hands out an animated canvas that reports its deviceId instead.
 function stubMedia() {
   window.gotVideo = [];
-  const wait = () => new Promise((r) => setTimeout(r, window.mediaDelay || 0));
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms || 0));
+  const canvasStream = (fps) => {
+    const canvas = Object.assign(document.createElement('canvas'), { width: 1280, height: 720 });
+    const g = canvas.getContext('2d');
+    let n = 0;
+    const timer = setInterval(() => { g.fillStyle = `hsl(${(n++ * 7) % 360} 60% 50%)`; g.fillRect(0, 0, 1280, 720); }, 1000 / fps);
+    const stream = canvas.captureStream(fps);
+    const t = stream.getVideoTracks()[0];
+    const stop = t.stop.bind(t);
+    t.stop = () => { clearInterval(timer); stop(); };
+    return stream;
+  };
   const gum = MediaDevices.prototype.getUserMedia;
+  const devices = MediaDevices.prototype.enumerateDevices;
   MediaDevices.prototype.getUserMedia = async function (c) {
-    if (!c?.video) return gum.call(this, c);
-    await wait();
-    if (window.cameraRefusal) throw new DOMException(window.refusalMessage ?? 'refused', window.cameraRefusal);
-    const stream = await gum.call(this, c);
+    const asked = [c?.audio?.deviceId?.exact, c?.video?.deviceId?.exact];
+    if (asked.some((id) => id && window.unplugged?.includes(id))) throw new DOMException('Requested device not found', 'NotFoundError');
+    if (!c?.video) {
+      const ms = window.micFail;
+      if (!ms) return gum.call(this, c);
+      window.micFail = 0;
+      await wait(ms);
+      throw new DOMException('busy', 'NotReadableError');
+    }
+    await wait(window.mediaDelay);
+    if (window.cameraRefusal) {
+      const name = window.cameraRefusal;
+      if (window.refuseOnce) window.cameraRefusal = '';
+      throw new DOMException(window.refusalMessage ?? 'refused', name);
+    }
+    const second = (await devices.call(this)).filter((d) => d.kind === 'videoinput')[1]?.deviceId;
+    let stream;
+    if (second && c.video.deviceId?.exact === second && !c.audio) {
+      stream = canvasStream(20);
+      const t = stream.getVideoTracks()[0];
+      const settings = t.getSettings.bind(t);
+      t.getSettings = () => ({ ...settings(), deviceId: second });
+    } else {
+      stream = await gum.call(this, c);
+    }
     window.gotVideo.push(...stream.getVideoTracks());
     return stream;
   };
   MediaDevices.prototype.getDisplayMedia = async function (c) {
     window.displayConstraints = c;
-    await wait();
+    await wait(window.mediaDelay);
     if (window.screenRefusal) throw new DOMException(window.refusalMessage ?? 'refused', window.screenRefusal);
-    const canvas = Object.assign(document.createElement('canvas'), { width: 1280, height: 720 });
-    const g = canvas.getContext('2d');
-    let n = 0;
-    setInterval(() => { g.fillStyle = `hsl(${(n++ * 7) % 360} 60% 50%)`; g.fillRect(0, 0, 1280, 720); }, 66);
-    const stream = canvas.captureStream(15);
+    const stream = canvasStream(15);
     window.gotVideo.push(...stream.getVideoTracks());
     if (window.screenAudio) stream.addTrack(new AudioContext().createMediaStreamDestination().stream.getAudioTracks()[0]);
     return stream;
@@ -179,20 +212,54 @@ test('camera tile and the stage', async ({ browser, request }) => {
   await expect(b.locator('#stage')).toBeHidden();
   await expect(b.locator('#doc-frame')).toBeVisible();
 
-  // Off releases the camera; on again, it is back for B (030-AC5, 030-AC7, 030-AC8).
-  await press(a, 'Turn my camera off', 'Turn my camera on');
+  // Off releases the camera. The last video gone, A's open stage stays open and says so, the focus
+  // on the Video button moving to its ✕, and the camera on again shows in it; B's, closed, gets it
+  // back too (030-AC5, 030-AC7, 030-AC8).
+  await videoButton(a).focus();
+  await videoButton(b).focus();
+  await a.evaluate(() => toggleVideo(true));
+  await expect(a.getByRole('button', { name: 'Turn my camera on', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await expect(a.locator('#stage-close')).toBeFocused();
   await expect(videoButton(b)).toBeHidden();
+  // B's stage is closed: its focus goes to the audio options, not the page.
+  await expect(b.locator('#voice-more')).toBeFocused();
   await expect(videoButton(a)).toBeHidden();
-  await expect(a.locator('#stage')).toBeHidden();
+  await expect(a.locator('#stage')).toBeVisible();
+  await expect(a.locator('#stage-empty')).toBeVisible();
+  await expect(a.locator('#stage-empty')).toHaveText('Nobody is sharing video right now.');
+  await expect(a.locator('#stage .tile')).toHaveCount(0);
   await expect.poll(() => a.evaluate(() => window.grillDiag.localVideo())).toEqual(['ended']);
   await press(a, 'Turn my camera on', 'Turn my camera off');
   expect(await a.evaluate(() => window.grillDiag.localVideo())).toEqual(['live']);
+  await expect(tile(a, '#stage-tiles', 'Alice')).toBeVisible();
+  await expect(a.locator('#stage-empty')).toBeHidden();
   await expect(videoButton(b)).toHaveText('Video 1');
   await videoButton(b).click();
   await expect(tile(b, '#stage-tiles', 'Alice')).toBeVisible();
   await expect.poll(async () => (await remoteVideo(b))[0].width).toBeGreaterThan(0);
+  // Leaving the audio closes the stage (030-AC7).
   await a.getByRole('button', { name: 'Leave audio' }).click();
   await expect.poll(() => a.evaluate(() => window.grillDiag.localVideo())).toEqual(['ended']);
+  await expect(a.locator('#stage')).toBeHidden();
+  // The Leave button goes with the audio: its focus moves to Join audio.
+  await expect(a.locator('#voice-join')).toBeFocused();
+  // Leaving without the Leave button (a removal does) while on the Video button: the focus lands on
+  // Join audio, the audio options being gone too (030-AC7).
+  await b.locator('#stage-close').click();
+  await joinAudio(a);
+  await press(a, 'Turn my camera on', 'Turn my camera off');
+  await expect(videoButton(b)).toHaveText('Video 1');
+  await videoButton(b).focus();
+  await b.evaluate(() => leaveVoice());
+  await expect(b.locator('#voice-join')).toBeFocused();
+  // The same with the stage open and its ✕ focused.
+  await joinAudio(b);
+  await expect(videoButton(b)).toHaveText('Video 1');
+  await videoButton(b).click();
+  await b.locator('#stage-close').focus();
+  await b.evaluate(() => leaveVoice());
+  await expect(b.locator('#stage')).toBeHidden();
+  await expect(b.locator('#voice-join')).toBeFocused();
 });
 
 // 030-AC3, 030-AC4, 030-AC6, 030-AC8: a shared screen shows large with the camera in a 160 × 90 row, on the low
@@ -412,4 +479,403 @@ test('removal releases the camera and the screen', async ({ browser, request }) 
   await expect.poll(() => a.evaluate(() => window.grillDiag.localVideo())).toEqual(['ended', 'ended']);
   await expect(b.locator('#stage .tile')).toHaveCount(0);
   await expect(videoButton(b)).toBeHidden();
+  // 030-AC7: B's open stage stays, empty.
+  await expect(b.locator('#stage-empty')).toBeVisible();
+});
+
+// Devices (030-AC16): Chrome's fake devices, two of each kind, the mic and the speaker also with a
+// "default" entry.
+const deviceIds = (page, kind) => page.evaluate(async (k) => (await navigator.mediaDevices.enumerateDevices())
+  .filter((d) => d.kind === k && d.deviceId !== 'default').map((d) => d.deviceId), kind);
+const devSelect = (page, name) => page.getByRole('combobox', { name, exact: true });
+// devices opens the audio options menu, the pointer off it so no tip covers a select.
+async function devices(page) {
+  await page.mouse.move(0, 0);
+  if (!await page.locator('#voice-menu').evaluate((m) => m.matches(':popover-open'))) await page.getByRole('button', { name: 'Audio options' }).click();
+  await expect(page.getByRole('group', { name: 'Devices' })).toBeVisible();
+}
+const micDevice = (page) => page.evaluate(() => voice.localParticipant.getTrackPublication(LivekitClient.Track.Source.Microphone).track.mediaStreamTrack.getSettings().deviceId);
+// The device of the track on-device transcription (010) taps, 'stale' unless it is the one published.
+const sttMic = (page) => page.evaluate(() => {
+  const t = window.grillMic;
+  if (!t) return undefined;
+  return t === voice.localParticipant.getTrackPublication(LivekitClient.Track.Source.Microphone)?.track.mediaStreamTrack ? t.getSettings().deviceId : 'stale';
+});
+const camDevice = async (page) => (await page.evaluate(() => window.grillDiag.published())).find((v) => v.source === 'camera')?.settings.deviceId;
+const sinks = (page) => page.locator('#voice-audio audio').evaluateAll((els) => els.map((e) => e.sinkId));
+// flowing checks that page keeps receiving its first remote track of kind.
+const inbound = (page, kind) => page.evaluate(async (k) => {
+  const pub = [...voice.remoteParticipants.values()].flatMap((p) => [...p.trackPublications.values()]).find((p) => p.kind === k && p.track);
+  const stats = await pub?.track.getRTCStatsReport();
+  return [...(stats?.values() || [])].find((s) => s.type === 'inbound-rtp')?.bytesReceived || 0;
+}, kind);
+async function flowing(page, kind) {
+  const before = await inbound(page, kind);
+  await expect.poll(() => inbound(page, kind)).toBeGreaterThan(before);
+}
+
+// 030-AC16, 030-AC17, 030-AC18: A switches mic, camera and speaker mid-call, B still hears and sees
+// A; the mic keeps its mute and the camera its off state; the choice outlives a reload, and a
+// remembered device that is gone gives the default without an error.
+test('device choice', async ({ browser, request }) => {
+  const room = await newRoom(request);
+  const a = await person(browser, request, room, 'Alice');
+  const b = await person(browser, request, room, 'Bob');
+  await joinAudio(a);
+  await joinAudio(b);
+  const mics = await deviceIds(a, 'audioinput');
+  const cams = await deviceIds(a, 'videoinput');
+  const outs = await deviceIds(a, 'audiooutput');
+  expect([mics.length, cams.length, outs.length]).toEqual([2, 2, 2]);
+
+  // 030-AC16: each kind listed by label, the one in use selected.
+  await devices(a);
+  await expect(devSelect(a, 'Microphone').locator('option')).toHaveText(['Fake Default Audio Input', 'Fake Audio Input 1', 'Fake Audio Input 2']);
+  await expect(devSelect(a, 'Camera').locator('option')).toHaveText(['fake_device_0', 'fake_device_1']);
+  await expect(devSelect(a, 'Speaker').locator('option')).toHaveCount(3);
+  await expect(devSelect(a, 'Microphone')).toHaveValue('default');
+  await expect(devSelect(a, 'Speaker')).toHaveValue('default');
+  expect(await micDevice(a)).toBe('default');
+
+  // 030-AC17: a muted mic stays muted across a switch, and comes back on the new one; on-device
+  // transcription (010) taps that one.
+  await a.getByRole('button', { name: 'Mute my mic' }).click();
+  await expect(a.locator('#voice-mute')).toHaveAttribute('aria-pressed', 'true');
+  await devices(a);
+  await devSelect(a, 'Microphone').selectOption(mics[1]);
+  await expect(devSelect(a, 'Microphone')).toHaveValue(mics[1]);
+  await holds(a, () => a.locator('#voice-mute').getAttribute('aria-pressed'), 'true');
+  expect(await sttMic(a)).toBeUndefined();
+  await a.locator('#voice-mute').click();
+  await expect(a.locator('#voice-mute')).toHaveAttribute('aria-pressed', 'false');
+  await expect.poll(() => micDevice(a)).toBe(mics[1]);
+  await expect.poll(() => sttMic(a)).toBe(mics[1]);
+  await flowing(b, 'audio');
+
+  // 030-AC17: a camera that is off stays off when switched, and turns on with the new one.
+  await press(a, 'Turn my camera on', 'Turn my camera off');
+  expect(await camDevice(a)).toBe(cams[0]);
+  await press(a, 'Turn my camera off', 'Turn my camera on');
+  await devices(a);
+  await devSelect(a, 'Camera').selectOption(cams[1]);
+  await expect(devSelect(a, 'Camera')).toHaveValue(cams[1]);
+  await holds(a, () => a.evaluate(() => window.grillDiag.localVideo()), ['ended']);
+  await press(a, 'Turn my camera on', 'Turn my camera off');
+  expect(await camDevice(a)).toBe(cams[1]);
+  await videoButton(b).click();
+  await expect(tile(b, '#stage-tiles', 'Alice')).toBeVisible();
+  await expect.poll(async () => (await remoteVideo(b))[0].width).toBeGreaterThan(0);
+  await flowing(b, 'video');
+
+  // 030-AC17: switched while on, the camera stays on, and B keeps seeing it.
+  await devices(a);
+  await devSelect(a, 'Camera').selectOption(cams[0]);
+  await expect.poll(() => camDevice(a)).toBe(cams[0]);
+  await expect(a.locator('#voice-cam')).toHaveAttribute('aria-pressed', 'true');
+  await flowing(b, 'video');
+  await devSelect(a, 'Camera').selectOption(cams[1]);
+  await expect.poll(() => camDevice(a)).toBe(cams[1]);
+  await flowing(b, 'video');
+
+  // 030-AC17: the speaker routes every voice A hears.
+  await devSelect(a, 'Speaker').selectOption(outs[1]);
+  await expect.poll(() => sinks(a)).toEqual([outs[1]]);
+  await expect(a.locator('#voice-error')).toBeHidden();
+
+  // 030-AC18: kept in this browser; the next join, here after a reload, uses them.
+  await a.reload();
+  await joinAudio(a);
+  await expect.poll(() => micDevice(a)).toBe(mics[1]);
+  await expect.poll(() => sinks(a)).toEqual([outs[1]]);
+  await press(a, 'Turn my camera on', 'Turn my camera off');
+  expect(await camDevice(a)).toBe(cams[1]);
+  await devices(a);
+  await expect(devSelect(a, 'Microphone')).toHaveValue(mics[1]);
+  await expect(devSelect(a, 'Camera')).toHaveValue(cams[1]);
+  await expect(devSelect(a, 'Speaker')).toHaveValue(outs[1]);
+
+  // 030-AC18: a remembered device no longer there: the default, and no error.
+  await a.evaluate(() => {
+    for (const kind of ['audioinput', 'videoinput', 'audiooutput']) localStorage.setItem('grill-room-device:' + kind, 'unplugged-' + kind);
+  });
+  await a.reload();
+  await joinAudio(a);
+  await press(a, 'Turn my camera on', 'Turn my camera off');
+  expect(await micDevice(a)).toBe('default');
+  expect(await camDevice(a)).toBe(cams[0]);
+  await devices(a);
+  await expect(devSelect(a, 'Microphone')).toHaveValue('default');
+  await expect(devSelect(a, 'Camera')).toHaveValue(cams[0]);
+  await expect(devSelect(a, 'Speaker')).toHaveValue('default');
+  await expect.poll(() => sinks(a)).toEqual(['']);
+  await holds(a, () => a.locator('#voice-error').isVisible(), false);
+});
+
+// 030-AC16, 030-AC17: at 390 px the selects are 44 px high in 16 px type, inside the screen, and
+// work; a switch that fails keeps the device in use, puts the select back and says why, and a
+// later switch of that kind that works clears it.
+test('device switch on a phone, and its failure', async ({ browser, request }) => {
+  const room = await newRoom(request);
+  const a = await person(browser, request, room, 'Alice');
+  await a.setViewportSize({ width: 390, height: 844 });
+  await joinAudio(a);
+  const mics = await deviceIds(a, 'audioinput');
+  const cams = await deviceIds(a, 'videoinput');
+  await press(a, 'Turn my camera on', 'Turn my camera off');
+  await devices(a);
+  for (const name of ['Microphone', 'Camera', 'Speaker']) {
+    const s = devSelect(a, name);
+    await expect(s).toBeInViewport({ ratio: 1 });
+    const box = await s.boundingBox();
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    expect(box.x + box.width).toBeLessThanOrEqual(390);
+    expect(await s.evaluate((el) => getComputedStyle(el).fontSize)).toBe('16px');
+  }
+  await a.screenshot({ path: `${shots}/devices-phone.png` });
+  await devSelect(a, 'Microphone').selectOption(mics[0]);
+  await expect.poll(() => micDevice(a)).toBe(mics[0]);
+
+  await a.evaluate(() => { window.cameraRefusal = 'NotReadableError'; window.refuseOnce = true; });
+  await devSelect(a, 'Camera').selectOption(cams[1]);
+  await expect(a.locator('#voice-error')).toContainText('Camera unavailable: refused.');
+  await expect(devSelect(a, 'Camera')).toHaveValue(cams[0]);
+  await expect.poll(() => camDevice(a)).toBe(cams[0]);
+  await expect.poll(() => a.evaluate(() => window.grillDiag.localVideo())).toEqual(['live']);
+  await expect(a.locator('#voice-cam')).toHaveAttribute('aria-pressed', 'true');
+  expect(await a.evaluate(() => localStorage.getItem('grill-room-device:videoinput'))).toBeNull();
+  // A mic switch that works says nothing about the camera: its failure stays.
+  await devSelect(a, 'Microphone').selectOption(mics[1]);
+  await expect.poll(() => micDevice(a)).toBe(mics[1]);
+  await expect(a.locator('#voice-error')).toContainText('Camera unavailable: refused.');
+
+  await devSelect(a, 'Camera').selectOption(cams[1]);
+  await expect.poll(() => camDevice(a)).toBe(cams[1]);
+  await expect(a.locator('#voice-error')).toBeHidden();
+
+  // 030-AC17: two quick picks: the first fails late, and the second is the one that stays.
+  await a.evaluate(() => { window.micFail = 1500; });
+  await devSelect(a, 'Microphone').selectOption(mics[0]);
+  await devSelect(a, 'Microphone').selectOption('default');
+  await expect.poll(() => a.evaluate(() => window.micFail)).toBe(0);
+  await expect.poll(() => micDevice(a), { timeout: 10_000 }).toBe('default');
+  await holds(a, () => micDevice(a), 'default');
+  await expect(devSelect(a, 'Microphone')).toHaveValue('default');
+  expect(await a.evaluate(() => localStorage.getItem('grill-room-device:audioinput'))).toBe('default');
+  await expect(a.locator('#voice-error')).toBeHidden();
+
+  // 030-AC17: a camera that is off is tried when picked: a busy one is refused at once, the
+  // select goes back, and nothing is remembered.
+  await press(a, 'Turn my camera off', 'Turn my camera on');
+  await a.evaluate(() => { window.cameraRefusal = 'NotReadableError'; window.refuseOnce = true; });
+  await devices(a);
+  await devSelect(a, 'Camera').selectOption(cams[0]);
+  await expect(a.locator('#voice-error')).toContainText('Camera unavailable: refused.');
+  await expect(devSelect(a, 'Camera')).toHaveValue(cams[1]);
+  expect(await a.evaluate(() => localStorage.getItem('grill-room-device:videoinput'))).toBe(cams[1]);
+  await expect(a.locator('#voice-cam')).toHaveAttribute('aria-pressed', 'false');
+  await press(a, 'Turn my camera on', 'Turn my camera off');
+  expect(await camDevice(a)).toBe(cams[1]);
+
+  // 030-AC17: a camera that answers the try only after 10 s is given up, its late capture stopped,
+  // and the next pick works.
+  await press(a, 'Turn my camera off', 'Turn my camera on');
+  await a.evaluate(() => { window.gotVideo = []; window.mediaDelay = 11_000; });
+  await devices(a);
+  await devSelect(a, 'Camera').selectOption(cams[0]);
+  await expect(a.locator('#voice-error')).toContainText('Camera unavailable: it did not answer.', { timeout: 15_000 });
+  await expect(devSelect(a, 'Camera')).toHaveValue(cams[1]);
+  expect(await a.evaluate(() => localStorage.getItem('grill-room-device:videoinput'))).toBe(cams[1]);
+  await expect.poll(() => a.evaluate(() => window.gotVideo.map((t) => t.readyState)), { timeout: 5_000 }).toEqual(['ended']);
+  await a.evaluate(() => { window.mediaDelay = 0; });
+  await devices(a);
+  await devSelect(a, 'Camera').selectOption(cams[0]);
+  await expect(a.locator('#voice-error')).toBeHidden();
+  await expect(devSelect(a, 'Camera')).toHaveValue(cams[0]);
+  expect(await a.evaluate(() => localStorage.getItem('grill-room-device:videoinput'))).toBe(cams[0]);
+  // Left from the audio options menu, the phone's Leave: its focus moves to Join audio, not the page.
+  await devices(a);
+  await a.locator('#voice-leave-menu').click();
+  await expect(a.locator('#voice-join')).toBeFocused();
+});
+
+// 030-AC19: the devices behind Chrome's default mic and speaker, then the mic and the camera
+// picked, then every camera, go away mid-call: enumerateDevices stops listing them (Chrome relabels
+// its default entries instead), their tracks end, and devicechange fires. The default takes over,
+// the camera stays on, B's stage stays open through it (030-AC7), the select follows, and the strip
+// names the device lost. A device made the default by a plug-in is no loss, a camera listed first
+// does not take a pick's place (030-AC17), and a camera back after all were gone stays off.
+test('device unplugged', async ({ browser, request }) => {
+  const room = await newRoom(request);
+  const a = await person(browser, request, room, 'Alice');
+  const b = await person(browser, request, room, 'Bob');
+  await a.addInitScript(() => {
+    window.unplugged = [];
+    // Chrome names its default entries after the device behind them.
+    window.defaults = { audioinput: 'Default - Fake Audio Input 2', audiooutput: 'Default - Fake Audio Output 2' };
+    window.camsReversed = false;
+    const list = MediaDevices.prototype.enumerateDevices;
+    MediaDevices.prototype.enumerateDevices = async function () {
+      const all = (await list.call(this)).filter((d) => !window.unplugged.includes(d.deviceId)).map((d) => ({
+        deviceId: d.deviceId, groupId: d.groupId, kind: d.kind,
+        label: d.deviceId === 'default' ? window.defaults[d.kind] : d.label,
+      }));
+      const cams = all.filter((d) => d.kind === 'videoinput');
+      return [...all.filter((d) => d.kind !== 'videoinput'), ...(window.camsReversed ? cams.reverse() : cams)];
+    };
+  });
+  // The first camera remembered from an earlier call (030-AC18).
+  const firstCam = (await deviceIds(a, 'videoinput'))[0];
+  await a.evaluate((id) => localStorage.setItem('grill-room-device:videoinput', id), firstCam);
+  await a.reload();
+  await joinAudio(a);
+  await joinAudio(b);
+  const mics = await deviceIds(a, 'audioinput');
+  const cams = await deviceIds(a, 'videoinput');
+  const outs = await deviceIds(a, 'audiooutput');
+  // change unplugs gone, replugs back, relabels defaults, reverses the cameras' order, and ends
+  // the local tracks capturing from ends.
+  const change = ({ gone = [], back = [], labels = {}, reversed, ends = [] }) => a.evaluate(([g, k, l, r, e]) => {
+    window.unplugged = window.unplugged.filter((id) => !k.includes(id)).concat(g);
+    Object.assign(window.defaults, l);
+    if (r !== undefined) window.camsReversed = r;
+    for (const pub of voice.localParticipant.trackPublications.values()) {
+      const t = pub.track?.mediaStreamTrack;
+      if (t && e.includes(t.getSettings().deviceId)) {
+        t.stop();
+        t.dispatchEvent(new Event('ended'));
+      }
+    }
+    navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
+  }, [gone, back, labels, reversed, ends]);
+  const strip = a.locator('#voice-error');
+  const dismiss = async () => {
+    await a.keyboard.press('Escape');
+    await a.locator('#voice-error-close').click();
+  };
+  await devices(a);
+  await expect(devSelect(a, 'Microphone')).toHaveValue('default');
+
+  await change({ labels: { audioinput: 'Default - Fake Audio Input 1' } });
+  await holds(a, () => strip.isVisible(), false);
+  await change({ gone: [mics[0]], labels: { audioinput: 'Default - Fake Audio Input 2' }, ends: ['default'] });
+  await expect(strip).toContainText('Fake Audio Input 1 was unplugged: using the default microphone.');
+  await expect(devSelect(a, 'Microphone')).toHaveValue('default');
+  await expect.poll(() => sttMic(a)).toBe('default');
+  await flowing(b, 'audio');
+  await dismiss();
+
+  // The speaker, never picked.
+  await change({ gone: [outs[1]], labels: { audiooutput: 'Default - Fake Audio Output 1' } });
+  await expect(strip).toContainText('Fake Audio Output 2 was unplugged: using the default speaker.');
+  await dismiss();
+
+  await press(a, 'Turn my camera on', 'Turn my camera off');
+  await videoButton(b).click();
+  // LiveKit's own selection moves to a camera newly listed first: back to the remembered one (030-AC17).
+  expect(await camDevice(a)).toBe(cams[0]);
+  await change({});
+  await change({ reversed: true });
+  await holds(a, () => camDevice(a), cams[0]);
+  await change({ reversed: false });
+  await devices(a);
+  // The same with a camera picked in this call.
+  await devSelect(a, 'Camera').selectOption(cams[1]);
+  await expect.poll(() => camDevice(a)).toBe(cams[1]);
+  await devSelect(a, 'Camera').selectOption(cams[0]);
+  await expect.poll(() => camDevice(a)).toBe(cams[0]);
+  await change({});
+  await change({ reversed: true });
+  await expect(devSelect(a, 'Camera')).toHaveValue(cams[0]);
+  await holds(a, () => camDevice(a), cams[0]);
+  await change({ reversed: false });
+
+  await devSelect(a, 'Microphone').selectOption(mics[1]);
+  await devSelect(a, 'Camera').selectOption(cams[1]);
+  await expect.poll(() => micDevice(a)).toBe(mics[1]);
+  await expect.poll(() => camDevice(a)).toBe(cams[1]);
+
+  await change({ gone: [mics[1]], ends: [mics[1]] });
+  await expect(strip).toContainText('Fake Audio Input 2 was unplugged: using the default microphone.');
+  await expect(devSelect(a, 'Microphone')).toHaveValue('default');
+  await expect(devSelect(a, 'Microphone').locator('option')).toHaveCount(1);
+  await expect.poll(() => micDevice(a)).toBe('default');
+  await expect.poll(() => sttMic(a)).toBe('default');
+  await flowing(b, 'audio');
+
+  // LiveKit's own restart asks for the camera gone, fails and turns it off: it comes back on the
+  // default, and B's stage, open throughout, shows it again.
+  await change({ gone: [cams[1]], ends: [cams[1]] });
+  await expect(strip).toContainText('fake_device_1 was unplugged: using the default camera.');
+  await expect(devSelect(a, 'Camera')).toHaveValue(cams[0]);
+  await expect.poll(() => camDevice(a)).toBe(cams[0]);
+  await expect.poll(() => a.evaluate(() => window.grillDiag.localVideo())).toEqual(['live']);
+  await expect(a.locator('#voice-cam')).toHaveAttribute('aria-pressed', 'true');
+  await expect(b.locator('#stage')).toBeVisible();
+  await expect(tile(b, '#stage-tiles', 'Alice')).toBeVisible();
+  await expect.poll(async () => (await remoteVideo(b))[0]?.width || 0).toBeGreaterThan(0);
+  await flowing(b, 'video');
+
+  // The last camera goes: the camera is off, with no default to name; plugged back, it stays off.
+  await change({ gone: [cams[0]], ends: [cams[0]] });
+  await expect(strip).toContainText('fake_device_0 was unplugged.');
+  await expect(strip).not.toContainText('using the default');
+  await expect(a.locator('#voice-cam')).toHaveAttribute('aria-pressed', 'false');
+  await change({ back: [cams[0]] });
+  await devices(a);
+  await expect(devSelect(a, 'Camera')).toHaveValue(cams[0]);
+  await holds(a, () => a.locator('#voice-cam').getAttribute('aria-pressed'), 'false');
+});
+
+// 030-AC17, 030-AC18: a camera picked before it is published, beside a screen share or while it
+// starts, is the one it turns on with.
+test('camera picked before it is on', async ({ browser, request }) => {
+  const room = await newRoom(request);
+  const a = await person(browser, request, room, 'Alice');
+  await joinAudio(a);
+  const cams = await deviceIds(a, 'videoinput');
+  await press(a, 'Share my screen', 'Stop sharing my screen');
+  await devices(a);
+  await devSelect(a, 'Camera').selectOption(cams[1]);
+  await expect(devSelect(a, 'Camera')).toHaveValue(cams[1]);
+  const tried = (await gotVideo(a)).length;
+  await press(a, 'Turn my camera on', 'Turn my camera off');
+  expect(await camDevice(a)).toBe(cams[1]);
+  // Captured once, on that camera: not on the default first, then switched.
+  await holds(a, async () => (await gotVideo(a)).slice(tried), ['live']);
+
+  // Picked while the camera is starting on the device before.
+  await a.getByRole('button', { name: 'Leave audio' }).click();
+  await joinAudio(a);
+  await a.evaluate(() => { window.mediaDelay = 1500; });
+  await a.getByRole('button', { name: 'Turn my camera on', exact: true }).click();
+  await devices(a);
+  await devSelect(a, 'Camera').selectOption(cams[0]);
+  await expect(a.getByRole('button', { name: 'Turn my camera off', exact: true })).toBeEnabled();
+  await expect.poll(() => camDevice(a), { timeout: 10_000 }).toBe(cams[0]);
+  await devices(a);
+  await expect(devSelect(a, 'Camera')).toHaveValue(cams[0]);
+  expect(await a.evaluate(() => localStorage.getItem('grill-room-device:videoinput'))).toBe(cams[0]);
+});
+
+// 030-AC16: what the browser holds back: cameras without ids (no camera permission yet) give a
+// disabled select saying what to do, and a single output (Firefox before selectAudioOutput) no
+// Speaker select.
+test('device lists the browser holds back', async ({ browser, request }) => {
+  const room = await newRoom(request);
+  const a = await person(browser, request, room, 'Alice');
+  await a.addInitScript(() => {
+    const list = MediaDevices.prototype.enumerateDevices;
+    MediaDevices.prototype.enumerateDevices = async function () {
+      return (await list.call(this)).filter((d) => d.kind !== 'audiooutput' || d.deviceId === 'default')
+        .map((d) => (d.kind === 'videoinput' ? { deviceId: '', groupId: '', kind: d.kind, label: '' } : d));
+    };
+  });
+  await a.reload();
+  await joinAudio(a);
+  await devices(a);
+  await expect(devSelect(a, 'Microphone')).toBeEnabled();
+  await expect(devSelect(a, 'Camera')).toBeDisabled();
+  await expect(devSelect(a, 'Camera').locator('option')).toHaveText(['Turn your camera on to choose']);
+  await expect(a.locator('#dev-speaker')).toBeHidden();
+  await expect(devSelect(a, 'Speaker')).toHaveCount(0);
 });

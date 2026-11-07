@@ -52,7 +52,7 @@ Opening the stage is up to each viewer, so a document being read stays open. Whe
 
 ### Watching
 - [ ] **AC6** The room connects with `adaptiveStream` and `dynacast` on. A camera tile no bigger than 320 × 180 px receives the low simulcast layer: in the e2e, the received `frameWidth` is at most 640.
-- [ ] **AC7** From 40rem up, a "Video" button in the room header shows the number of live videos and opens the stage in the viewer area. A document that was open comes back when the stage closes (✕ or a document picked from the list). The button is absent while no video is live.
+- [ ] **AC7** From 40rem up, a "Video" button in the room header shows the number of live videos and opens the stage in the viewer area. A document that was open comes back when the stage closes (✕ or a document picked from the list). The button is absent while no video is live. An open stage stays open when the last video stops, saying "Nobody is sharing video right now.", until ✕, a document picked from the list, or leaving the audio.
 - [ ] **AC8** With a screen share live, the stage shows it large (aspect kept, letterboxed) and the cameras in a row of 160 × 90 px tiles under it. With no screen share, the cameras fill the stage in a grid of equal tiles, aspect kept. Each tile carries the person's name, and the speaking indicator of the People list (005) while they speak. The participant's own camera is mirrored, and only for them.
 - [ ] **AC9** With two screen shares live, the latest started is large and the other is a tile labelled "<name>'s screen". A click on it makes it large.
 - [ ] **AC10** When someone else starts a screen share, every participant whose stage is closed sees a strip "<name> is sharing their screen" with a Watch button that opens the stage. It goes away when that share stops or the stage opens. The stage never opens by itself.
@@ -64,7 +64,7 @@ Opening the stage is up to each viewer, so a document being read stays open. Whe
 - [ ] **AC14** Under 40rem, the tab bar gains a Video tab, with the count of live videos, while any video is live, and loses it when the last one stops (switching to Chat if it was open). The tab shows the same stage. The screen share button is absent, the camera button works, and all controls keep the 44 px rule.
 
 ### Devices
-- [ ] **AC16** In the audio, the audio options menu (`⋯`) has a "Devices" group with one select per kind: Microphone, Camera, and Speaker. Speaker shows only where `HTMLMediaElement.prototype.setSinkId` exists. Each select lists the browser's devices by label (`Room.getLocalDevices`) and marks the one in use. It refreshes when a device is plugged in or out (`MediaDevicesChanged`), and stays reachable and usable at 390 px.
+- [ ] **AC16** In the audio, the audio options menu (`⋯`) has a "Devices" group with one select per kind: Microphone, Camera, and Speaker. Speaker shows only where `HTMLMediaElement.prototype.setSinkId` exists. Each select lists the browser's devices by label (`navigator.mediaDevices.enumerateDevices()`) and marks the one in use. It refreshes when a device is plugged in or out (`MediaDevicesChanged`), and stays reachable and usable at 390 px.
 - [ ] **AC17** Picking a device switches it during the call (`room.switchActiveDevice`) without leaving the audio. The microphone keeps its mute state, the camera keeps its on/off state, and the others hear and see the new device. On-device transcription (010) follows the new microphone. A failure (device gone, busy) keeps the previous device and shows its reason in the voice error strip.
 - [ ] **AC18** The choice is kept in this browser per kind (its `deviceId`) and used the next time the participant joins the audio or turns the camera on, in any room. A remembered device that is no longer present falls back to the browser's default, and the select shows the default without an error.
 - [ ] **AC19** When the device in use is unplugged during the call, the browser's default takes over, the select follows, and the voice error strip names the device that was lost.
@@ -91,7 +91,7 @@ Opening the stage is up to each viewer, so a document being read stays open. Whe
 - Work: the Devices group in the audio options menu; switching during the call; the remembered choice with its fallback; unplug handling; on-device transcription following the microphone.
 - **Covers**: AC16, AC17, AC18, AC19
 - **Data model impact**: none
-- **DoD**: Playwright with Chrome's fake devices, two of each (`--use-fake-device-for-media-stream=device-count=2`). The test:
+- **DoD**: Playwright with Chrome's fake devices, two of each (`--use-fake-device-for-media-stream=device-count=2`): real for the microphones and speakers; the second fake camera feeds no frame to the WebRTC encoder, so the init script hands out an animated canvas reporting its `deviceId` when it is asked for exactly. The test:
   - picks the second microphone and camera, and the other participant still hears and sees A, with the new camera's `deviceId` on A's published track;
   - reloads, rejoins, and the second devices are in use;
   - makes a remembered `deviceId` unknown, and A joins on the default with no error;
@@ -130,8 +130,11 @@ None. Video is never stored.
 - A closed stage unsubscribes from video (AC13). With 8 people, S19 measured 0.5 to 1.4 Mbps per viewer for video alone. Someone who is not watching should not pay for it.
 - `screen_share_audio` is granted so a shared video or demo can be heard. It follows the room mute like any voice.
 - Devices are chosen in the audio options menu, not a separate settings sheet: that is where the call's other options already live. The choice is per browser, not per profile, because a `deviceId` only means something on the machine that produced it.
-- Speaker choice only where `setSinkId` exists: Safari has none, and a select that does nothing would mislead.
+- Speaker choice only where `setSinkId` exists: Safari has none, and a select that does nothing would mislead. Also only with two outputs listed: Firefox lists the others only after `selectAudioOutput()`. Found in phase 2 review.
 - Screen-share audio stays out of the transcription and the personas' hearing (AC15): it is not the sharer speaking. Found by the phase 1 worker: the workers subscribed to any audio by kind.
 - A camera permission blocked for good (`NotAllowedError` with the permission `denied`) shows the site-settings hint (AC4): otherwise every press does nothing with no clue why. Found in phase 1 review round 3.
+- The stage does not close by itself when the last video stops (AC7): a camera that drops for a second, an unplug or a network blip, would otherwise close the viewer's stage and leave it closed when the video comes back. Found in phase 2.
+- Devices are listed with `navigator.mediaDevices.enumerateDevices()`, not LiveKit's `Room.getLocalDevices`: the latter waits for any capture under way, so an unanswered permission prompt stalled every switch, and it resets the list LiveKit's own default selection compares with.
+- A device picked while the camera is off or the mic muted is opened once to test it (AC17), so its light or the OS mic indicator flickers: the price of refusing a busy device at pick time instead of at the next unmute, with the bad choice already remembered.
 - The video e2e runs on its own loopback LiveKit stack, as persona-voice does, not against the compose stack: CI has no compose stack, and the e2e must gate merges.
 - WAN quality is checked by hand on the lab at the end of phase 3. S19 ran on a LAN only, and over a TCP-only path loss hurts more. If the check falls short, the follow-up is exposing ICE/TCP (S4) or UDP, not a code change here.

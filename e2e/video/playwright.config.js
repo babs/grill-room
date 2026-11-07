@@ -20,7 +20,8 @@ export default defineConfig({
     trace: 'retain-on-failure',
     viewport: { width: 1440, height: 900 },
     launchOptions: {
-      args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--auto-select-desktop-capture-source=Entire screen'],
+      // Two fake devices of each kind, to switch between (030-AC16).
+      args: ['--use-fake-device-for-media-stream=device-count=2', '--use-fake-ui-for-media-stream', '--auto-select-desktop-capture-source=Entire screen'],
     },
   },
   outputDir: '../test-results/video/results',

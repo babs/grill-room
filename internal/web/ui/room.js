@@ -4334,6 +4334,145 @@ async function setDeaf(on, before) {
   voiceChanged();
 }
 
+// Devices (030-AC16): a select per kind in the audio options menu, with each kind's name, its
+// voiceError keep tag, so a later success of that kind clears its failure, and what to do while the
+// browser hides the devices' ids.
+const devKinds = {
+  audioinput: ['Microphone', 'mic', 'Allow the microphone to choose'],
+  videoinput: ['Camera', 'cam', 'Turn your camera on to choose'],
+  audiooutput: ['Speaker', 'speaker', 'Allow the microphone to choose'],
+};
+// Safari routes no output: a Speaker select there would do nothing (030-AC16).
+const sinkable = 'setSinkId' in HTMLMediaElement.prototype;
+// Per browser, not per room: a deviceId only means something on this machine (030-AC18).
+const devKey = (kind) => 'grill-room-device:' + kind;
+function devStored(kind) {
+  try { return localStorage.getItem(devKey(kind)) || ''; } catch { return ''; }
+}
+const devFail = (kind, err) => `${devKinds[kind][0]} unavailable: ` + String(err?.message || err?.name || 'unknown error').replace(/\.?$/, '.');
+// devSeen holds, per kind, the devices listed and the one in use at the last listing: an unplug
+// names it from there (030-AC19). Listings and switches run one at a time on devQueue, so one
+// unplug is reported once and a slow switch cannot land after a later one (030-AC17).
+let devSeen = {};
+let devQueue = Promise.resolve();
+const refreshDevices = () => (devQueue = devQueue.then(listDevices).catch(console.error));
+// devPick is this call's pick per kind: LiveKit moves its active device only while no track of that
+// kind is published, so a pick made beside a screen share would be dropped (030-AC17, 030-AC18).
+let devPick = {};
+// camRevive is set when the camera's device ends while it is on: LiveKit's own restart asks for
+// that device again and mutes the camera, which must come back on the default (030-AC19).
+let camRevive = false;
+const devSource = () => ({ audioinput: LivekitClient.Track.Source.Microphone, videoinput: LivekitClient.Track.Source.Camera });
+// The browser's own list: LiveKit's getLocalDevices waits for any capture under way, a permission
+// prompt included, and resets the list its own device selection compares with.
+const devList = async (kind) => (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === kind);
+
+async function listDevices() {
+  const room = voice;
+  if (!room) return;
+  const lp = room.localParticipant;
+  for (const [kind, [name, keep, hint]] of Object.entries(devKinds)) {
+    if (kind === 'audiooutput' && !sinkable) continue;
+    const all = await devList(kind);
+    if (voice !== room) return;
+    // Without permission yet a device has no id: nothing to pick.
+    const list = all.filter((d) => d.deviceId);
+    const seen = devSeen[kind];
+    const before = seen?.list.find((d) => d.deviceId === seen.used);
+    const now = list.find((d) => d.deviceId === before?.deviceId);
+    // Chrome keeps its "default" entry when the device behind it goes, and relabels it; a new
+    // device made the default leaves the old one listed under its own name.
+    const oldName = before?.label.replace(/^Default - /, '');
+    const lost = before && (!now || (now.deviceId === 'default' && now.label !== before.label && !list.some((d) => d.label === oldName))) ? before : null;
+    if (lost) {
+      // LiveKit restarts an ended mic on the default, but leaves a camera that is off, a speaker, or a
+      // device gone while still delivering, on the lost id (030-AC19).
+      const def = list.find((d) => d.deviceId === 'default') || list[0];
+      if (devPick[kind] === lost.deviceId) delete devPick[kind];
+      if (def && lost.deviceId !== 'default' && room.getActiveDevice(kind) === lost.deviceId) await room.switchActiveDevice(kind, def.deviceId).catch(console.error);
+      if (voice !== room) return;
+      voiceError(`${oldName || name} was unplugged` + (def ? `: using the default ${name.toLowerCase()}.` : '.'), keep);
+    }
+    // One try only: a revival left for later would turn the camera on with no press, at a replug.
+    if (kind === 'videoinput' && camRevive && lp.getTrackPublication(LivekitClient.Track.Source.Camera)?.isMuted) {
+      camRevive = false;
+      if (list.some((d) => d.deviceId === room.getActiveDevice(kind))) {
+        try {
+          await lp.setCameraEnabled(true);
+        } catch (err) {
+          if (voice === room) voiceError(devFail(kind, err), keep);
+        }
+        if (voice !== room) return;
+      }
+    }
+    const src = devSource()[kind];
+    const pub = src && lp.getTrackPublication(src);
+    const used = (src && !pub && devPick[kind]) || room.getActiveDevice(kind);
+    // LiveKit's own selection moved off the pick, a new camera listed first for one (030-AC17): back
+    // to it, once, as the pick is dropped if that fails.
+    const pick = devPick[kind];
+    if (!lost && pick && (!src || pub) && seen?.used === pick && used !== pick && list.some((d) => d.deviceId === pick)) switchDevice(kind, pick);
+    devSeen[kind] = { list, used };
+    // Firefox lists other outputs only once a page asks with selectAudioOutput(): one choice is none.
+    if (kind === 'audiooutput') $('dev-speaker').hidden = list.length < 2;
+    const sel = $('dev-' + kind);
+    const none = !list.length && (all.length ? hint : `No ${name.toLowerCase()} found`);
+    sel.replaceChildren(...(none ? [new Option(none, '')] : list.map((d, i) => new Option(d.label || `${name} ${i + 1}`, d.deviceId))));
+    // A camera never turned on, or a remembered device gone, matches none: the browser's default
+    // is the first (030-AC18).
+    sel.value = used;
+    if (sel.selectedIndex < 0) sel.selectedIndex = 0;
+    sel.disabled = !!none;
+  }
+}
+
+// switchDevice moves the call to device id of kind, after any switch or listing under way, mute and
+// camera state kept (030-AC17).
+const switchDevice = (kind, id) => (devQueue = devQueue.then(() => switchNow(kind, id)).catch(console.error));
+
+async function switchNow(kind, id) {
+  const room = voice;
+  if (!room) return;
+  const keep = devKinds[kind][1];
+  const prev = room.getActiveDevice(kind);
+  let switched = false;
+  try {
+    if (!(await devList(kind)).some((d) => d.deviceId === id)) throw new Error('it is no longer connected');
+    if (voice !== room) return;
+    // A muted mic or a camera that is off only notes the switch in LiveKit: the device is tried
+    // here, so a busy one is refused now rather than remembered (030-AC17).
+    const src = devSource()[kind];
+    const pub = src && room.localParticipant.getTrackPublication(src);
+    if (src && (!pub || pub.isMuted)) {
+      const asked = navigator.mediaDevices.getUserMedia({ [kind === 'audioinput' ? 'audio' : 'video']: { deviceId: { exact: id } } });
+      // An unanswered prompt or a hung device would hold every later switch and listing: given up
+      // after 10 s, its capture stopped if it comes after all.
+      let timer;
+      const late = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('it did not answer')), 10_000); });
+      await Promise.race([asked, late]).finally(() => {
+        clearTimeout(timer);
+        asked.then((p) => { for (const t of p.getTracks()) t.stop(); }, () => {});
+      });
+      if (voice !== room) return;
+    }
+    switched = true;
+    // Exact, as Chrome ignores an ideal deviceId: a device that fails throws rather than another one starting.
+    await room.switchActiveDevice(kind, id);
+    if (voice !== room) return;
+    devPick[kind] = id;
+    try { localStorage.setItem(devKey(kind), id); } catch { /* kept for this call only */ }
+    if ($('voice-error').dataset.keep === keep) voiceError('');
+  } catch (err) {
+    // A failed restart has already stopped the old capture: take the previous device back.
+    if (switched && voice === room) await room.switchActiveDevice(kind, prev).catch(console.error);
+    if (voice !== room) return;
+    if (devPick[kind] === id) delete devPick[kind];
+    voiceError(devFail(kind, err), keep);
+  }
+  refreshDevices();
+}
+for (const kind of Object.keys(devKinds)) $('dev-' + kind).addEventListener('change', (e) => switchDevice(kind, e.target.value));
+
 async function joinVoice() {
   if (voice) return;
   voiceError('');
@@ -4345,8 +4484,21 @@ async function joinVoice() {
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'HTTP ' + res.status);
     const { url, token } = await res.json();
     const LK = LivekitClient;
-    // A small tile asks for a small simulcast layer, and nobody's unwatched layer is sent (030-AC6).
-    room = new LK.Room({ adaptiveStream: true, dynacast: true, audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    // The remembered mic and camera (030-AC18): LiveKit asks for the id exactly, then falls back to
+    // the default when it is gone, without an error.
+    const mic = devStored('audioinput');
+    const cam = devStored('videoinput');
+    room = new LK.Room({
+      // A small tile asks for a small simulcast layer, and nobody's unwatched layer is sent (030-AC6).
+      adaptiveStream: true, dynacast: true,
+      audioCaptureDefaults: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, ...(mic && { deviceId: mic }) },
+      ...(cam && { videoCaptureDefaults: { deviceId: cam } }),
+    });
+    devSeen = {};
+    // A switch hung in the last call must not hold this one.
+    devQueue = Promise.resolve();
+    devPick = {};
+    camRevive = false;
     myVideo = new Set();
     room.on(LK.RoomEvent.TrackSubscribed, (track, pub, p) => {
       // A video subscribed while this viewer's stage is closed goes at once (030-AC13).
@@ -4372,9 +4524,16 @@ async function joinVoice() {
       'LocalTrackPublished', 'LocalTrackUnpublished', 'AudioPlaybackStatusChanged', 'ActiveDeviceChanged']) {
       room.on(LK.RoomEvent[ev], voiceChanged);
     }
+    // Plugged, unplugged or switched: the selects follow (030-AC16, 030-AC19).
+    for (const ev of ['MediaDevicesChanged', 'ActiveDeviceChanged']) room.on(LK.RoomEvent[ev], refreshDevices);
     room.on(LK.RoomEvent.LocalTrackPublished, (pub) => {
       pub.track?.on(LK.TrackEvent.Restarted, voiceChanged);
       if (pub.kind === 'video') myVideo.add(pub.track);
+      if (pub.source !== LK.Track.Source.Camera) return;
+      // Its device gone while on: listDevices turns it back on, on the default, once LiveKit has
+      // muted it (030-AC19). LiveKit's own handler waits on a promise, so it is not muted yet here.
+      pub.track.on(LK.TrackEvent.Ended, () => { if (!pub.track.isMuted) camRevive = true; });
+      pub.track.on(LK.TrackEvent.Muted, () => { if (camRevive) refreshDevices(); });
     });
     room.on(LK.RoomEvent.Disconnected, (reason) => {
       if (voice !== room) return;
@@ -4392,6 +4551,8 @@ async function joinVoice() {
       // Without a microphone the participant still hears the others.
       voiceError(micError(err) + ' You can still listen.');
     }
+    // A leave or a drop meanwhile: setDeaf would act on whatever session holds voice now.
+    if (voice !== room) return;
     // A reconnect in the same session comes back deafened, with the mic it had before.
     const saved = JSON.parse(sessionStorage.getItem(deafKey) || '{}');
     if (saved.deaf) {
@@ -4399,6 +4560,22 @@ async function joinVoice() {
       deaf = false;
       await setDeaf(true, before);
     }
+    // An output has no fallback of its own: the remembered one only while it is there (030-AC18),
+    // checked once the mic permission shows the ids.
+    const out = sinkable && devStored('audiooutput');
+    if (out && (await devList('audiooutput')).some((d) => d.deviceId === out)) {
+      await room.switchActiveDevice('audiooutput', out).catch(console.error);
+    }
+    if (voice !== room) return;
+    refreshDevices();
+    // Remembered devices are picks too: LiveKit's own selection must not take their place (030-AC17, 030-AC18).
+    devQueue = devQueue.then(() => {
+      if (voice !== room) return;
+      for (const kind of Object.keys(devKinds)) {
+        const id = devStored(kind);
+        if (id && !devPick[kind] && devSeen[kind]?.list.some((d) => d.deviceId === id)) devPick[kind] = id;
+      }
+    }).catch(console.error);
     voiceChanged();
   } catch (err) {
     // A Leave pressed while connecting rejects connect(): nothing to report then.
@@ -4421,6 +4598,8 @@ async function toggleVideo(cam) {
   const LK = LivekitClient;
   const { Camera, ScreenShare, ScreenShareAudio } = LK.Track.Source;
   const b = $(cam ? 'voice-cam' : 'voice-screen');
+  // The camera's state is the participant's again: no revival after an unplug (030-AC19).
+  if (cam) camRevive = false;
   let failed = '';
   let caught = false;
   let tracks = [];
@@ -4434,7 +4613,10 @@ async function toggleVideo(cam) {
       // S19's settings (030-AC3): a simulcast 720p camera, a 1080p screen at 15 fps with its audio.
       // Captured here, not by setCameraEnabled, so a leave meanwhile can reach and stop them.
       const p = cam ? LK.VideoPresets.h720 : LK.ScreenSharePresets.h1080fps15;
-      tracks = cam ? [await LK.createLocalVideoTrack({ resolution: p.resolution })] : await LK.createLocalScreenTracks({ audio: true, resolution: p.resolution });
+      // The camera picked in Devices, or remembered (030-AC18); a gone one falls back to the default.
+      const dev = devPick.videoinput || room.getActiveDevice('videoinput');
+      const camOpts = { resolution: p.resolution, ...(dev && dev !== 'default' && { deviceId: dev }) };
+      tracks = cam ? [await LK.createLocalVideoTrack(camOpts)] : await LK.createLocalScreenTracks({ audio: true, resolution: p.resolution });
       for (const t of tracks) videoCapturing.add(t);
       const opts = cam ? { simulcast: true, videoEncoding: p.encoding } : { screenShareEncoding: p.encoding };
       for (const t of tracks) {
@@ -4442,6 +4624,8 @@ async function toggleVideo(cam) {
         await lp.publishTrack(t, opts);
         published.push(t);
       }
+      // Picked while the camera was starting: the capture used the device before (030-AC17).
+      if (cam && voice === room && devPick.videoinput && devPick.videoinput !== dev) switchDevice('videoinput', devPick.videoinput);
     }
   } catch (err) {
     // A screen whose audio failed must not stay published: stop() alone fires no ended, and the
@@ -4513,9 +4697,14 @@ function renderStage() {
   const live = liveVideos();
   // Nothing live and nothing drawn: the People list's render must not depend on the LiveKit bundle.
   if (!live.length && !tiles.size && !stageOpen() && $('video-open').hidden) return;
+  // The Video button goes with the last video: its focus moves to the open stage's ✕, else to the
+  // audio options, or Join audio once the audio is left, not to the page.
+  if (!live.length && document.activeElement === $('video-open')) $(stageOpen() ? 'stage-close' : voice ? 'voice-more' : 'voice-join').focus();
   $('video-open').hidden = !live.length;
   $('video-count').textContent = live.length ? String(live.length) : '';
-  if (!live.length) closeStage();
+  // An open stage outlives a video that drops for a moment: it waits, and says so (030-AC7).
+  // Text set into a status region that is always there: one revealed by unhiding is often not read out.
+  $('stage-empty').textContent = stageOpen() && !live.length ? 'Nobody is sharing video right now.' : '';
   const { Camera, ScreenShare } = LivekitClient.Track.Source;
   for (const { pub } of live) if (pub.source === ScreenShare && !shareOrder.has(pub.trackSid)) shareOrder.set(pub.trackSid, ++shareSeq);
   for (const sid of shareOrder.keys()) if (!live.some((v) => v.pub.trackSid === sid)) shareOrder.delete(sid);
@@ -4575,12 +4764,12 @@ window.grillDiag = {
   // The e2e reads the states of the video tracks this page published (030-AC5), and each remote
   // video's subscription and received width (030-AC6, 030-AC13).
   localVideo: () => [...myVideo].map((t) => t.mediaStreamTrack.readyState),
-  // What each video was published with (030-AC3): its capture, its encodings and its layers.
+  // What each video was published with (030-AC3): its capture and device (030-AC17), its encodings and its layers.
   published: () => (!voice ? [] : [...voice.localParticipant.videoTrackPublications.values()].map((pub) => {
-    const { width, height, frameRate } = pub.track.mediaStreamTrack.getSettings();
+    const { width, height, frameRate, deviceId } = pub.track.mediaStreamTrack.getSettings();
     return {
       source: pub.source, simulcasted: !!pub.simulcasted, layers: pub.trackInfo?.layers?.length || 0,
-      settings: { width, height, frameRate }, constraints: pub.track.mediaStreamTrack.getConstraints(),
+      settings: { width, height, frameRate, deviceId }, constraints: pub.track.mediaStreamTrack.getConstraints(),
       encodings: (pub.track.sender?.getParameters().encodings || []).map(({ maxBitrate, maxFramerate }) => ({ maxBitrate, maxFramerate })),
     };
   })),
@@ -4608,7 +4797,12 @@ function cleanupVoice(room) {
   voice = null;
   speaking = new Set();
   $('voice-audio').replaceChildren();
+  // Focus on the stage, the Video button or an audio control would fall to the page once they go.
+  const focused = ['stage', 'voice', 'voice-menu'].some((id) => $(id).contains(document.activeElement)) || document.activeElement === $('video-open');
+  // Out of the audio, no video can come (030-AC7).
+  closeStage();
   voiceChanged();
+  if (focused) $('voice-join').focus();
 }
 
 function leaveVoice() {
@@ -4643,7 +4837,11 @@ $('voice-stt').addEventListener('click', () => {
 });
 addEventListener('storage', (e) => { if (e.key === sttKey) loadRoom().catch(console.error); });
 // The open menu says more than ⋯'s tip, which would show through under it.
-$('voice-menu').addEventListener('toggle', (e) => { if (e.newState === 'open') grillTip.hide(); });
+$('voice-menu').addEventListener('toggle', (e) => {
+  if (e.newState !== 'open') return;
+  grillTip.hide();
+  refreshDevices();
+});
 // Touch has no hover: a long press on an audio control shows its tip instead of pressing it.
 // iOS fires no contextmenu, so a press held 500 ms does it there.
 let voiceHeld = 0;
