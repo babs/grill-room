@@ -425,7 +425,7 @@ func TestInstallScriptReadsRoomLinksAsTheDaemon(t *testing.T) {
 	u := e.ts.URL
 	host := strings.TrimPrefix(u, "http://")
 	links := []string{
-		u + "/r/abc123", u + "/r/abc123/", u + "/r/abc123/docs", u + "/r/abc123/docs/7", u + "/r/abc123?pair=x#m3",
+		u + "/r/abc123", u + "/r/abc123/", u + "/r/abc123/docs", u + "/r/abc123/docs/7", u + "/r/abc123/chat", u + "/r/abc123?pair=x#m3",
 		u + "/r/abc123/docs?a=/r/zz#/r/yy",
 		u + "/admin", u + "/r/", u + "/r", u + "/r/AB", u + "/rooms/abc", u + "/r/" + strings.Repeat("a", 65),
 		"http://localhost:@" + host + "/r/abc123", "http://rooms.example/r/abc123",

@@ -1,6 +1,6 @@
 # Design rules
 
-These rules apply to the room page, the docs window, the profile, the join page, `/admin` and the daemon's local page. They share one tokens file and one set of component classes. Anything not covered here follows the closest existing component.
+These rules apply to the room page, the docs and chat windows, the profile, the join page, `/admin` and the daemon's local page. They share one tokens file and one set of component classes. Anything not covered here follows the closest existing component.
 
 ## 1. Principles
 
@@ -137,7 +137,7 @@ The palette is the one the room page and `/admin` already use, harmonized. The l
 | **List** | Rows at least 44 px, primary text then meta in `--text-muted`, one trailing `⋯`. The side panel's People and Documents rows are both `--control-h` high. A list with actions per row lines them up in columns: Room settings › Admins puts the name, the role, the admin button and Rename at the same x on every row. |
 | **Fieldset** | No native frame: the legend reads as a `--fs-sm` 600 heading over its fields. |
 | **Header warning** | In the room header's agents bar, a problem with the AI (nobody runs it, no persona, an action on it that failed) is the `alert` icon, an icon button "AI warning" in `--accent` (`--warning` is under 3:1 on the chrome) after the personas, its message in its styled tip and its description, and read out by the status. The pills never shrink: past the bar's width they scroll inside it, the auto-turn count and the warning whole beside it. A persona answering stays words in the room left, never under 6rem: the pills scroll further for it, and the words end in an ellipsis. Where the bar hides the status (64rem and under), a failed action shows the notice instead. |
-| **Header (all UIs)** | `--chrome` background, 56 px high, logo + title on the left, actions on the right, all at `--control-h`. Same on the room page, the docs window (whose room name is a link back, underlined on hover only), `/admin`, the profile and the daemon page. |
+| **Header (all UIs)** | `--chrome` background, 56 px high, logo + title on the left, actions on the right, all at `--control-h`. Same on the room page, the docs and chat windows (whose room name is a link back, underlined on hover only), `/admin`, the profile and the daemon page. |
 
 ## 6. Layout
 

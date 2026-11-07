@@ -8,6 +8,10 @@ const api = '/api/rooms/' + encodeURIComponent(roomID);
 const roomPath = '/r/' + encodeURIComponent(roomID);
 const docsMode = location.pathname.split('/')[3] === 'docs';
 if (docsMode) document.body.classList.add('docs-window');
+// /r/<room>/chat is the chat in a window of its own (031-AC9): no audio, video or panes, so it
+// never takes the call from the room page, LiveKit allowing one connection per participant.
+const chatMode = location.pathname.split('/')[3] === 'chat';
+if (chatMode) document.body.classList.add('chat-window');
 const phone = () => matchMedia('(max-width: 40rem)').matches;
 const messages = $('messages');
 // Voice lines move here while the Transcription pane shows (020-AC8): a line is in one list or
@@ -127,7 +131,7 @@ async function loadRoom() {
   // the link is made once, so its focus and anything holding it survive.
   const heading = $('room-name');
   let link = heading.querySelector('a');
-  if (docsMode && !link) {
+  if ((docsMode || chatMode) && !link) {
     link = document.createElement('a');
     link.href = roomPath;
     link.dataset.tip = 'Back to the room';
@@ -223,7 +227,7 @@ let unread = 0;
 let unreadMe = false;
 
 function showTitle() {
-  document.title = (unread ? '(' + unread + (unreadMe ? ' @' : '') + ') ' : '') + (docsMode ? 'Documents · ' : '') + roomName + ' · grill-room';
+  document.title = (unread ? '(' + unread + (unreadMe ? ' @' : '') + ') ' : '') + (docsMode ? 'Documents · ' : chatMode ? 'Chat · ' : '') + roomName + ' · grill-room';
 }
 
 function countUnread(m) {
@@ -514,7 +518,8 @@ function docItem(d) {
     b.className = 'chip msg-doc';
     b.append(grillIcon('docs'), span('file-name', name), span('file-size', fileSize(d.size)));
   }
-  b.addEventListener('click', () => showDocument(d.id).catch(console.error));
+  // The chat window has no viewer: the docs window shows the document (031-AC9).
+  b.addEventListener('click', () => (chatMode ? window.open(roomPath + '/docs/' + encodeURIComponent(d.id), docsTarget) : showDocument(d.id).catch(console.error)));
   return b;
 }
 
@@ -1076,6 +1081,14 @@ $('docs-window-menu').addEventListener('click', (e) => {
   e.preventDefault();
   window.open(roomPath + '/docs', docsTarget);
 });
+// One chat window per room: a second click focuses it (031-AC8).
+const chatTarget = 'grill-chat-' + roomID;
+$('chat-window-menu').href = roomPath + '/chat';
+$('chat-window-menu').target = chatTarget;
+$('chat-window-menu').addEventListener('click', (e) => {
+  e.preventDefault();
+  window.open(roomPath + '/chat', chatTarget);
+});
 
 // copyField copies a read-only field, and selects it for a manual copy when the clipboard refuses.
 function copyField(input) {
@@ -1086,8 +1099,8 @@ function copyField(input) {
 // user menu's "Use on another device" until its holder says they saved it (005-AC32); the server
 // keeps only its hash, so once gone it is gone.
 const recoveryKey = 'grill_room_recovery';
-// A window this page opens gets a copy of its session storage: the docs window has no use for the link.
-if (docsMode) sessionStorage.removeItem(recoveryKey);
+// A window this page opens gets a copy of its session storage: the docs and chat windows have no use for the link.
+if (docsMode || chatMode) sessionStorage.removeItem(recoveryKey);
 $('recovery-open').addEventListener('click', () => {
   const link = sessionStorage.getItem(recoveryKey);
   $('recovery-link').value = link || '';
@@ -4364,7 +4377,7 @@ $('push-explain').addEventListener('close', () => {
 function offerPush() {
   if (pushOffered) return;
   pushOffered = true;
-  if (!pushable || docsMode || (ios && !homeScreen) || Notification.permission !== 'default') return;
+  if (!pushable || docsMode || chatMode || (ios && !homeScreen) || Notification.permission !== 'default') return;
   if (localStorage.getItem(pushKey) === '1' || Date.now() < Number(localStorage.getItem(pushSnoozeKey) || 0)) return;
   if (!document.querySelector('dialog[open]')) $('push-explain').showModal();
 }
@@ -4374,7 +4387,7 @@ $('push-all').addEventListener('change', () => {
 });
 renderPush();
 // The browser may have renewed its subscription since: hand the server the current one.
-if (pushOn() && !docsMode) {
+if (pushOn() && !docsMode && !chatMode) {
   savePush().catch((err) => pushStatus('Notifications: ' + err.message));
 }
 
@@ -4557,7 +4570,7 @@ async function switchNow(kind, id) {
 for (const kind of Object.keys(devKinds)) $('dev-' + kind).addEventListener('change', (e) => switchDevice(kind, e.target.value));
 
 async function joinVoice() {
-  if (voice) return;
+  if (voice || chatMode) return;
   voiceError('');
   $('voice-join').disabled = true;
   let room;
@@ -5528,6 +5541,7 @@ firstLoad().then((ok) => {
     if (doc) showDocument(doc, false, true).catch(() => history.replaceState(null, '', roomPath + '/docs'));
     return;
   }
+  if (chatMode) return;
   // A room just created from the profile opens on its invite card (005-AC34).
   const query = new URLSearchParams(location.search);
   if (query.has('invite')) {

@@ -689,6 +689,9 @@ body.docs-window #viewer { flex: 1; border-right: 0; }
   body.docs-window #side { width: 100%; border-right: 0; }
   body.docs-window:has(#viewer:not([hidden])) #side { display: none; }
 }
+/* The chat in a window of its own (031-AC9): the chat only, without the call or the panes. */
+body.chat-window :is(#voice, #agent, #tabbar, #pairing, #side, #side-handle, #viewer, #viewer-empty) { display: none !important; }
+@media (max-width: 40rem) { #chat-window-menu { display: none; } }
 input[aria-invalid=true] { border-color: var(--danger); }
 
 /* Panes (008): the side panel and Notes keep the width the reader drags, from 64rem up; the
