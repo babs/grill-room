@@ -36,25 +36,25 @@ The Video stage can **pop out** into a small always-on-top window, with the mic,
 ## Acceptance criteria
 
 ### Raise hand
-- [ ] **AC1** `PUT /api/rooms/{room}/hand` raises the caller's hand and `DELETE /api/rooms/{room}/hand` lowers it; both are idempotent, and raising a raised hand keeps its first raise time. `DELETE /api/rooms/{room}/hands/{participant}` lowers someone else's hand: a room admin gets 204, anyone else 403. Each route answers a non-participant as the room's other participant routes do. A removed participant (016) loses their hand.
-- [ ] **AC2** The queue is ordered by raise time, earliest first, and is the same on every pod: a hand raised through pod A shows in a page served by pod B within 2 s (017).
-- [ ] **AC3** By the chat composer, a button "Raise my hand" / "Lower my hand" (`aria-pressed`) works in or out of the audio, 44 × 44 px at 390 px.
-- [ ] **AC4** In People, each raised hand shows a hand icon and its rank (`2`, `aria-label` "Hand raised, 2nd"), and the People pane head and the phone's People tab show the count of raised hands while it is above zero. The list keeps its order.
-- [ ] **AC5** A room admin has "Lower hand" on each raised hand's person row; the participant has it on their own row. Nobody else has it.
-- [ ] **AC6** A hand stays raised through speaking, posting, joining and leaving the audio, and a reload within the presence grace. When the participant has had no live tab for longer than the grace (20 s, 005), their hand is lowered.
-- [ ] **AC7** Raising or lowering a hand writes no message, no audit entry and nothing to the export. No persona prompt, preamble or workspace file mentions hands (032 adds the exception).
+- [x] **AC1** `PUT /api/rooms/{room}/hand` raises the caller's hand and `DELETE /api/rooms/{room}/hand` lowers it; both are idempotent, and raising a raised hand keeps its first raise time. `DELETE /api/rooms/{room}/hands/{participant}` lowers someone else's hand: a room admin gets 204, anyone else 403. Each route answers a non-participant as the room's other participant routes do. A removed participant (016) loses their hand.
+- [x] **AC2** The queue is ordered by raise time, earliest first, and is the same on every pod: a hand raised through pod A shows in a page served by pod B within 2 s (017).
+- [x] **AC3** By the chat composer, a button "Raise my hand" / "Lower my hand" (`aria-pressed`) works in or out of the audio, 44 × 44 px at 390 px.
+- [x] **AC4** In People, each raised hand shows a hand icon and its rank (`2`, `aria-label` "Hand raised, 2nd"), and the People pane head and the phone's People tab show the count of raised hands while it is above zero. The list keeps its order.
+- [x] **AC5** A room admin has "Lower hand" on each raised hand's person row; the participant has it on their own row. Nobody else has it.
+- [x] **AC6** A hand stays raised through speaking, posting, joining and leaving the audio, and a reload within the presence grace. When the participant has had no live tab for longer than the grace (20 s, 005), their hand is lowered.
+- [x] **AC7** Raising or lowering a hand writes no message, no audit entry and nothing to the export. No persona prompt, preamble or workspace file mentions hands (032 adds the exception).
 
 ### Chat window
-- [ ] **AC8** `GET /r/{room}/chat` serves the room page in chat mode, behind the same access as `/r/{room}`. From 40rem up, the room menu has "Open chat in a new window"; a second click focuses the window already open for that room.
-- [ ] **AC9** The chat window shows the chat only: messages, the Written/Voice filter (020), the composer with mentions, attach and paste (029), and the hand button (AC3). It has no audio bar, no Video stage or button, no documents pane, no People pane, no persona strip. A document link in a message opens it in the docs window (008).
-- [ ] **AC10** The chat window never asks for a voice token (`GET /api/rooms/{room}/voice`): with the room page in the audio, opening and using the chat window leaves the call connected and the LiveKit room's participant count unchanged.
-- [ ] **AC11** The chat window counts as one of the participant's tabs for presence (005), and its title reads `Chat · <room> · grill-room` with the unread count before it, as the room page's does.
+- [x] **AC8** `GET /r/{room}/chat` serves the room page in chat mode, behind the same access as `/r/{room}`. From 40rem up, the room menu has "Open chat in a new window"; a second click focuses the window already open for that room.
+- [x] **AC9** The chat window shows the chat only: messages, the Written/Voice filter (020), the composer with mentions, attach and paste (029), and the hand button (AC3). It has no audio bar, no Video stage or button, no documents pane, no People pane, no persona strip. A document link in a message opens it in the docs window (008).
+- [x] **AC10** The chat window never asks for a voice token (`GET /api/rooms/{room}/voice`): with the room page in the audio, opening and using the chat window leaves the call connected and the LiveKit room's participant count unchanged.
+- [x] **AC11** The chat window counts as one of the participant's tabs for presence (005), and its title reads `Chat · <room> · grill-room` with the unread count before it, as the room page's does.
 
 ### Pop-out video
-- [ ] **AC12** Where `window.documentPictureInPicture` exists, the open Video stage has a "Pop out" button. It opens an always-on-top window showing the stage with 030's layout rules (screen share large and camera row, or camera grid, names, speaking ring, mirrored self-view), and the controls: mute, camera, screen share where 030 shows it, raise hand, leave the audio. The window follows the room's light or dark theme.
-- [ ] **AC13** While the pop-out is open, the room page's stage says "Video is in the pop-out window" with a "Bring it back" button, videos stay subscribed whatever the page's stage does (030-AC13), and the Video header button and the phone tab keep their count. The page holds one LiveKit connection: the room's participant count is unchanged by the pop-out.
-- [ ] **AC14** Closing the pop-out, "Bring it back", or leaving the audio closes the window and puts the stage back in the page as it was, open or closed. Leaving the audio from the pop-out's own button ends the call as the page's button does (030-AC5).
-- [ ] **AC15** Without Document PiP but with `document.pictureInPictureEnabled`, "Pop out" puts the large video in the browser's own Picture-in-Picture: the large screen share, or with cameras only, the first camera tile. With neither API the button is absent.
+- [x] **AC12** Where `window.documentPictureInPicture` exists, the open Video stage has a "Pop out" button. It opens an always-on-top window showing the stage with 030's layout rules (screen share large and camera row, or camera grid, names, speaking ring, mirrored self-view), and the controls: mute, camera, screen share where 030 shows it, raise hand, leave the audio. The window follows the room's light or dark theme.
+- [x] **AC13** While the pop-out is open, the room page's stage says "Video is in the pop-out window" with a "Bring it back" button, videos stay subscribed whatever the page's stage does (030-AC13), and the Video header button and the phone tab keep their count. The page holds one LiveKit connection: the room's participant count is unchanged by the pop-out.
+- [x] **AC14** Closing the pop-out, "Bring it back", or leaving the audio closes the window and puts the stage back in the page as it was, open or closed. Leaving the audio from the pop-out's own button ends the call as the page's button does (030-AC5).
+- [x] **AC15** Without Document PiP but with `document.pictureInPictureEnabled`, "Pop out" puts the large video in the browser's own Picture-in-Picture: the large screen share, or with cameras only, the first camera tile. With neither API the button is absent.
 
 ## Phases
 
