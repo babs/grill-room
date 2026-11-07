@@ -72,8 +72,8 @@ function stubMedia() {
   };
 }
 
-async function newRoom(request) {
-  return (await request.post('/api/rooms', { headers: admin, data: { name: 'Video' } })).json();
+async function newRoom(request, name = 'Video') {
+  return (await request.post('/api/rooms', { headers: admin, data: { name } })).json();
 }
 
 // person joins the room under name, Chrome's fake camera and microphone allowed.
@@ -125,8 +125,8 @@ const unwatched = (page) => holds(page, () => subscribed(page), [false]);
 const sources = async (page) => (await remoteVideo(page)).map((v) => v.source).sort();
 const tile = (page, box, caption) => page.locator(`${box} .tile`).filter({ has: page.locator('figcaption', { hasText: new RegExp(`^${caption}$`) }) });
 
-// 030-AC2: the buttons come with the audio, the camera off; no screen button without getDisplayMedia;
-// 44 × 44 px on a phone.
+// 030-AC2, 030-AC14: the buttons come with the audio, the camera off; no screen button without
+// getDisplayMedia, nor on a phone, where the camera's is 44 × 44 px.
 test('camera and screen buttons', async ({ browser, request }) => {
   const room = await newRoom(request);
   const a = await person(browser, request, room, 'Alice');
@@ -136,12 +136,18 @@ test('camera and screen buttons', async ({ browser, request }) => {
   await expect(a.getByRole('button', { name: 'Turn my camera on', exact: true })).toHaveAttribute('aria-pressed', 'false');
   await expect(a.getByRole('button', { name: 'Share my screen', exact: true })).toHaveAttribute('aria-pressed', 'false');
   expect(await a.evaluate(() => window.grillDiag.localVideo())).toEqual([]);
+  // Focus left on purpose, the button still there, is not taken to the audio options.
+  await a.locator('#voice-screen').focus();
+  await a.evaluate(() => document.activeElement.blur());
+  await holds(a, () => a.evaluate(() => document.activeElement === document.body), true);
+  // Under 40rem the screen button is absent (030-AC14): its focus moves to the audio options.
+  await a.locator('#voice-screen').focus();
   await a.setViewportSize({ width: 390, height: 844 });
-  for (const id of ['#voice-cam', '#voice-screen']) {
-    const box = await a.locator(id).boundingBox();
-    expect(box.width).toBeGreaterThanOrEqual(44);
-    expect(box.height).toBeGreaterThanOrEqual(44);
-  }
+  await expect(a.locator('#voice-more')).toBeFocused();
+  const box = await a.locator('#voice-cam').boundingBox();
+  expect(box.width).toBeGreaterThanOrEqual(44);
+  expect(box.height).toBeGreaterThanOrEqual(44);
+  await expect(a.locator('#voice-screen')).toBeHidden();
   await a.screenshot({ path: `${shots}/bar-phone.png` });
 
   const c = await person(browser, request, room, 'Carol', { noScreen: true });
@@ -878,4 +884,341 @@ test('device lists the browser holds back', async ({ browser, request }) => {
   await expect(devSelect(a, 'Camera').locator('option')).toHaveText(['Turn your camera on to choose']);
   await expect(a.locator('#dev-speaker')).toBeHidden();
   await expect(devSelect(a, 'Speaker')).toHaveCount(0);
+});
+
+// tabTo presses Tab until the focus is on target, at most 80 times: the keyboard path is real.
+async function tabTo(page, target) {
+  for (let i = 0; i < 80 && !(await target.evaluate((el) => el === document.activeElement)); i++) await page.keyboard.press('Tab');
+  await expect(target).toBeFocused();
+}
+const bigScreen = (page) => page.locator('#stage-main .tile figcaption');
+
+// 030-AC9, 030-AC11: three screens, the latest large and the others tiles that a click makes large;
+// the pick outlives a re-render, and gone, gives way to the latest; full screen on the large one,
+// where Escape does not close the stage.
+test('several screen shares', async ({ browser, request }) => {
+  const room = await newRoom(request);
+  const [a, b, c] = [await person(browser, request, room, 'Alice'), await person(browser, request, room, 'Bob'), await person(browser, request, room, 'Carol')];
+  for (const p of [a, b, c]) await joinAudio(p);
+  for (const p of [a, b, c]) await press(p, 'Share my screen', 'Stop sharing my screen');
+  await expect(videoButton(a)).toHaveText('Video 3');
+  await videoButton(a).click();
+  await expect(bigScreen(a)).toHaveText("Carol's screen");
+  await expect(a.locator('#stage-tiles .tile')).toHaveCount(2);
+  const aliceTile = tile(a, '#stage-tiles', "Alice's screen");
+  await expect(aliceTile).toHaveAttribute('role', 'button');
+  await expect(aliceTile).toHaveAccessibleName("Show Alice's screen large");
+  await aliceTile.click();
+  await expect(bigScreen(a)).toHaveText("Alice's screen");
+  await expect(tile(a, '#stage-tiles', "Carol's screen")).toHaveAttribute('role', 'button');
+  // The large one is no button.
+  await expect(a.locator('#stage-main .tile')).not.toHaveAttribute('role', 'button');
+  // A camera coming redraws the stage: the pick stays.
+  await press(b, 'Turn my camera on', 'Turn my camera off');
+  await expect(tile(a, '#stage-tiles', 'Bob')).toBeVisible();
+  await expect(tile(a, '#stage-tiles', 'Bob')).not.toHaveAttribute('role', 'button');
+  await holds(a, () => bigScreen(a).textContent(), "Alice's screen");
+
+  // Full screen holds the large screen's box; Escape there leaves the stage open.
+  await a.getByRole('button', { name: 'Full screen', exact: true }).click();
+  await expect.poll(() => a.evaluate(() => document.fullscreenElement?.id)).toBe('stage-main');
+  await a.keyboard.press('Escape');
+  await expect(a.locator('#stage')).toBeVisible();
+  await a.evaluate(() => document.exitFullscreen().catch(() => {}));
+  await expect.poll(() => a.evaluate(() => document.fullscreenElement)).toBeNull();
+  // An Escape a browser delivers right after leaving full screen is that exit's, not the stage's.
+  await a.getByRole('button', { name: 'Full screen', exact: true }).click();
+  await expect.poll(() => a.evaluate(() => document.fullscreenElement?.id)).toBe('stage-main');
+  await a.evaluate(async () => {
+    await document.exitFullscreen();
+    $('stage-full').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  });
+  await expect(a.locator('#stage')).toBeVisible();
+  // A browser without element full screen (iPhone Safari) shows no button.
+  await a.evaluate(() => { Object.defineProperty(document, 'fullscreenEnabled', { value: false, configurable: true }); renderStage(); });
+  await expect(a.locator('#stage-full')).toBeHidden();
+  await a.evaluate(() => { delete document.fullscreenEnabled; renderStage(); });
+  await expect(a.locator('#stage-full')).toBeVisible();
+
+  // The pick stops: the latest left is large, not the oldest.
+  await press(a, 'Stop sharing my screen', 'Share my screen');
+  await expect(bigScreen(a)).toHaveText("Carol's screen");
+  await expect(tile(a, '#stage-tiles', "Bob's screen")).toBeVisible();
+  // A screen started later is the latest: it goes large over a pick.
+  await tile(a, '#stage-tiles', "Bob's screen").click();
+  await expect(bigScreen(a)).toHaveText("Bob's screen");
+  await press(a, 'Share my screen', 'Stop sharing my screen');
+  await expect(bigScreen(a)).toHaveText("Alice's screen");
+  // No screen left large: full screen ends, and its button goes.
+  await a.getByRole('button', { name: 'Full screen', exact: true }).click();
+  await expect.poll(() => a.evaluate(() => document.fullscreenElement?.id)).toBe('stage-main');
+  for (const p of [b, c]) await press(p, 'Stop sharing my screen', 'Share my screen');
+  // A's own bar is under the full screen: stopped as its button would.
+  await a.evaluate(() => toggleVideo(false));
+  await expect(tile(a, '#stage-tiles', 'Bob')).toBeVisible();
+  await expect(a.locator('#stage-full')).toBeHidden();
+  await expect.poll(() => a.evaluate(() => document.fullscreenElement)).toBeNull();
+});
+
+// 030-AC9, 030-AC11: by keyboard alone, the Video button opens the stage, Tab reaches a screen
+// tile, Enter makes it large and keeps the focus in the row, Escape closes the stage and gives the
+// focus back to the Video button.
+test('stage by keyboard', async ({ browser, request }) => {
+  const room = await newRoom(request);
+  const a = await person(browser, request, room, 'Alice');
+  const b = await person(browser, request, room, 'Bob');
+  await joinAudio(a);
+  await joinAudio(b);
+  await press(a, 'Share my screen', 'Stop sharing my screen');
+  await press(b, 'Share my screen', 'Stop sharing my screen');
+  await tabTo(a, videoButton(a));
+  await a.keyboard.press('Enter');
+  await expect(a.locator('#stage')).toBeVisible();
+  await expect(bigScreen(a)).toHaveText("Bob's screen");
+  await tabTo(a, tile(a, '#stage-tiles', "Alice's screen"));
+  await a.keyboard.press('Enter');
+  await expect(bigScreen(a)).toHaveText("Alice's screen");
+  await expect(tile(a, '#stage-tiles', "Bob's screen")).toBeFocused();
+  await a.keyboard.press(' ');
+  await expect(bigScreen(a)).toHaveText("Bob's screen");
+  await a.keyboard.press('Escape');
+  await expect(a.locator('#stage')).toBeHidden();
+  await expect(videoButton(a)).toBeFocused();
+  // The ✕ gives it back too.
+  await a.keyboard.press('Enter');
+  await a.locator('#stage-close').click();
+  await expect(a.locator('#stage')).toBeHidden();
+  await expect(videoButton(a)).toBeFocused();
+  // A focused control the stage drops leaves the focus in the stage, where Escape works: a row
+  // screen whose share stops, then Full screen once the last screen stops.
+  await a.keyboard.press('Enter');
+  await tile(a, '#stage-tiles', "Alice's screen").focus();
+  await a.evaluate(() => toggleVideo(false));
+  await expect(a.locator('#stage-close')).toBeFocused();
+  await a.locator('#stage-full').focus();
+  await press(b, 'Stop sharing my screen', 'Share my screen');
+  await expect(a.locator('#stage-full')).toBeHidden();
+  await expect(a.locator('#stage-close')).toBeFocused();
+  await a.keyboard.press('Escape');
+  await expect(a.locator('#stage')).toBeHidden();
+});
+
+// 030-AC10: someone else's screen starting is offered by a strip to a closed stage, which never
+// opens by itself; Watch opens it, and the strip goes then, or when that screen stops.
+test('sharing strip', async ({ browser, request }) => {
+  const room = await newRoom(request);
+  const a = await person(browser, request, room, 'Alice');
+  const b = await person(browser, request, room, 'Bob');
+  await joinAudio(a);
+  await joinAudio(b);
+  const strip = b.locator('#share-strip');
+  // A toast in the same tick as the share's announcement: both are read, neither replaces the other.
+  await b.evaluate(() => voice.once(LivekitClient.RoomEvent.TrackPublished, () => toast('Copied')));
+  await press(a, 'Share my screen', 'Stop sharing my screen');
+  await expect(strip).toBeVisible();
+  await expect(b.locator('#share-strip-text')).toHaveText('Alice is sharing their screen');
+  // Read out from the page's always-present live region.
+  await expect(b.locator('#toast-live p')).toHaveText(['Alice is sharing their screen', 'Copied']);
+  await holds(b, () => b.locator('#stage').isVisible(), false);
+  await unwatched(b);
+  // The sharer is not told about their own screen.
+  await expect(a.locator('#share-strip')).toBeHidden();
+  await b.getByRole('button', { name: 'Watch', exact: true }).click();
+  await expect(b.locator('#stage')).toBeVisible();
+  // The Watch button goes with the strip: the focus moves into the stage.
+  await expect(b.locator('#stage-close')).toBeFocused();
+  await expect(tile(b, '#stage-main', "Alice's screen")).toBeVisible();
+  await expect(strip).toBeHidden();
+  // Gone once the stage opened: closing it does not bring it back.
+  await b.locator('#stage-close').click();
+  await holds(b, () => strip.isVisible(), false);
+  // The share stopping takes it away, and the focus on Watch moves to the audio options.
+  await press(a, 'Stop sharing my screen', 'Share my screen');
+  await press(a, 'Share my screen', 'Stop sharing my screen');
+  await expect(strip).toBeVisible();
+  await b.locator('#share-watch').focus();
+  await press(a, 'Stop sharing my screen', 'Share my screen');
+  await expect(strip).toBeHidden();
+  await expect(b.locator('#voice-more')).toBeFocused();
+  // A stage open when the screen starts needs no strip.
+  await press(a, 'Turn my camera on', 'Turn my camera off');
+  await videoButton(b).click();
+  await press(a, 'Share my screen', 'Stop sharing my screen');
+  await expect(tile(b, '#stage-main', "Alice's screen")).toBeVisible();
+  await holds(b, () => strip.isVisible(), false);
+  // Out of the audio with the focus on Watch: it goes to Join audio, not the message box.
+  await b.locator('#stage-close').click();
+  await press(a, 'Stop sharing my screen', 'Share my screen');
+  await press(a, 'Share my screen', 'Stop sharing my screen');
+  await b.locator('#share-watch').focus();
+  await b.evaluate(() => leaveVoice());
+  await expect(strip).toBeHidden();
+  await expect(b.locator('#voice-join')).toBeFocused();
+});
+
+// playing counts the audio elements page plays something in: a voice or a screen's sound.
+const playing = (page) => page.locator('#voice-audio audio').evaluateAll((els) => els.filter((e) => e.srcObject?.getAudioTracks().length).length);
+// screenAudio lists, for each remote screen's sound page knows of, whether it receives it.
+const screenAudio = (page) => page.evaluate(() => [...voice.remoteParticipants.values()]
+  .flatMap((p) => [...p.audioTrackPublications.values()]).filter((p) => p.source === 'screen_share_audio').map((p) => p.isSubscribed));
+
+// 030-AC12: muting the room stops the screen's sound with the voices; its video keeps coming.
+test('muting the room mutes a screen', async ({ browser, request }) => {
+  const room = await newRoom(request);
+  const a = await person(browser, request, room, 'Alice');
+  const b = await person(browser, request, room, 'Bob');
+  await joinAudio(a);
+  await joinAudio(b);
+  await a.evaluate(() => { window.screenAudio = true; });
+  await press(a, 'Share my screen', 'Stop sharing my screen');
+  await videoButton(b).click();
+  await expect(tile(b, '#stage-main', "Alice's screen")).toBeVisible();
+  await expect.poll(() => screenAudio(b)).toEqual([true]);
+  // A's mic and A's screen each play in an element of their own.
+  await expect.poll(() => playing(b)).toBe(2);
+  await b.getByRole('button', { name: 'Mute the room' }).click();
+  await expect(b.locator('#voice-deaf')).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => screenAudio(b)).toEqual([false]);
+  await expect.poll(() => playing(b)).toBe(0);
+  await flowing(b, 'video');
+  await b.getByRole('button', { name: 'Mute the room' }).click();
+  await expect(b.locator('#voice-deaf')).toHaveAttribute('aria-pressed', 'false');
+  await expect.poll(() => screenAudio(b)).toEqual([true]);
+  await expect.poll(() => playing(b)).toBe(2);
+  // A second round leaves one element per track received, no empty one from the first.
+  await b.getByRole('button', { name: 'Mute the room' }).click();
+  await expect.poll(() => playing(b)).toBe(0);
+  await b.getByRole('button', { name: 'Mute the room' }).click();
+  await expect.poll(() => playing(b)).toBe(2);
+  const received = await b.evaluate(() => [...voice.remoteParticipants.values()].flatMap((p) => [...p.audioTrackPublications.values()]).filter((p) => p.isSubscribed).length);
+  expect(received).toBe(2);
+  await expect(b.locator('#voice-audio audio')).toHaveCount(received);
+});
+
+// 030-AC14: at 390 px, a Video tab while a video is live, with its count; no screen button; the
+// stage is the tab, closed when another is picked; the open tab outlives the last video, a closed
+// one goes with it; the room name keeps 6rem in the audio and every control 44 px. 030-AC10: the
+// strip's Watch opens the tab.
+test('Video tab on a phone', async ({ browser, request }) => {
+  const room = await newRoom(request, 'Quarterly planning with the whole team');
+  const a = await person(browser, request, room, 'Alice');
+  const b = await person(browser, request, room, 'Bob');
+  await b.setViewportSize({ width: 390, height: 844 });
+  await joinAudio(a);
+  await joinAudio(b);
+  await expect(b.locator('#voice-screen')).toBeHidden();
+  expect((await b.locator('#room-name').boundingBox()).width).toBeGreaterThanOrEqual(96);
+  for (const el of await b.locator('.room-header button:visible, #tabbar button:visible').all()) {
+    const box = await el.boundingBox();
+    expect(box.width, await el.evaluate((e) => e.id || e.outerHTML)).toBeGreaterThanOrEqual(44);
+    expect(box.height, await el.evaluate((e) => e.id || e.outerHTML)).toBeGreaterThanOrEqual(44);
+  }
+  // Transcription made way for the name: its toggle is in ⋯, and works there.
+  await expect(b.locator('#voice-stt')).toBeHidden();
+  await b.locator('#voice-more').click();
+  const stt = b.locator('#voice-menu').getByRole('checkbox', { name: 'Transcribe my voice', exact: true });
+  // ⋯ carries the toggle's state, by shape and in words: a dot while the voice is written down;
+  // off, a stroke across it besides the danger colour.
+  const more = b.locator('#voice-more');
+  const mark = () => more.evaluate((el) => {
+    const probe = document.body.appendChild(Object.assign(document.createElement('span'), { style: 'color: var(--danger)' }));
+    const danger = getComputedStyle(probe).color;
+    probe.remove();
+    const before = getComputedStyle(el, '::before');
+    const shape = before.content === 'none' ? 'none' : before.transform !== 'none' ? 'stroke' : before.borderRadius === '50%' ? 'dot' : 'other';
+    return { shape, off: getComputedStyle(el).borderTopColor === danger };
+  });
+  expect(await mark()).toEqual({ shape: 'none', off: false });
+  await b.evaluate(() => showSTT({ available: true, listening: true, transcribed: [Number(myID)] }));
+  await expect.poll(mark).toEqual({ shape: 'dot', off: false });
+  await expect(more).toHaveAccessibleDescription('Your voice is being written down');
+  await stt.click();
+  await expect(b.locator('#voice-stt')).toHaveAttribute('aria-pressed', 'false');
+  await expect(stt).not.toBeChecked();
+  await expect.poll(mark).toEqual({ shape: 'stroke', off: true });
+  await expect(more).toHaveAccessibleDescription('Your voice is not written down');
+  await stt.click();
+  await expect(b.locator('#voice-stt')).toHaveAttribute('aria-pressed', 'true');
+  await expect(stt).toBeChecked();
+  await expect.poll(mark).toEqual({ shape: 'dot', off: false });
+  await expect(more).toHaveAccessibleDescription('Your voice is being written down');
+  // A change the server refused leaves the box as it was.
+  await b.route('**/voice/transcribe', (r) => r.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"down"}' }));
+  await stt.click();
+  await expect(b.locator('#voice-error')).toContainText('Could not change the transcription of your voice');
+  await expect(stt).toBeChecked();
+  await b.unroute('**/voice/transcribe');
+  await b.keyboard.press('Escape');
+  await b.locator('#voice-error-close').click();
+  const tab = b.locator('#tab-video');
+  await expect(tab).toBeHidden();
+
+  // The camera works from the phone.
+  await press(b, 'Turn my camera on', 'Turn my camera off');
+  await expect(videoButton(a)).toHaveText('Video 1');
+  await expect(tab).toHaveText('Video 1');
+  await press(b, 'Turn my camera off', 'Turn my camera on');
+  await expect(tab).toBeHidden();
+
+  await press(a, 'Turn my camera on', 'Turn my camera off');
+  await expect(tab).toHaveText('Video 1');
+  await expect(tab).toHaveAttribute('aria-pressed', 'false');
+  await unwatched(b);
+  // The strip's Watch opens the tab.
+  await press(a, 'Share my screen', 'Stop sharing my screen');
+  await expect(tab).toHaveText('Video 2');
+  await b.getByRole('button', { name: 'Watch', exact: true }).click();
+  await expect(tab).toHaveAttribute('aria-pressed', 'true');
+  await expect(b.locator('#stage')).toBeVisible();
+  await expect(b.locator('.chat')).toBeHidden();
+  await expect(tile(b, '#stage-main', "Alice's screen")).toBeVisible();
+  await expect.poll(() => subscribed(b)).toEqual([true, true]);
+  await b.screenshot({ path: `${shots}/tab-phone.png` });
+  // Another tab closes the stage: no video comes.
+  await b.locator('#tabbar [data-tab=chat]').click();
+  await expect(b.locator('#stage')).toBeHidden();
+  await holds(b, () => subscribed(b), [false, false]);
+  // The last video stops with the tab closed: the tab goes, its focus to the open tab's.
+  await press(a, 'Stop sharing my screen', 'Share my screen');
+  await tab.focus();
+  await press(a, 'Turn my camera off', 'Turn my camera on');
+  await expect(tab).toBeHidden();
+  await expect(b.locator('#tabbar [data-tab=chat]')).toBeFocused();
+
+  // The tab open, it stays, with the empty stage, until another is picked.
+  await press(a, 'Turn my camera on', 'Turn my camera off');
+  await tab.click();
+  await expect(tile(b, '#stage-tiles', 'Alice')).toBeVisible();
+  await press(a, 'Turn my camera off', 'Turn my camera on');
+  await expect(b.locator('#stage-empty')).toHaveText('Nobody is sharing video right now.');
+  await holds(b, () => tab.isVisible(), true);
+  await expect(tab).toHaveText('Video');
+  await b.locator('#tabbar [data-tab=docs]').click();
+  await expect(tab).toBeHidden();
+  await expect(b.locator('#stage')).toBeHidden();
+
+  // A wide window sharing its screen, then made narrow: the stage becomes the tab, and the button
+  // stays to stop the share, then goes.
+  await b.setViewportSize({ width: 1440, height: 900 });
+  // Wider, the bar's own toggle tells the transcription: ⋯ says nothing of it, until narrow again.
+  await expect(more).toHaveAccessibleDescription('');
+  await b.setViewportSize({ width: 390, height: 844 });
+  await expect(more).toHaveAccessibleDescription('Your voice is being written down');
+  await b.setViewportSize({ width: 1440, height: 900 });
+  await press(b, 'Share my screen', 'Stop sharing my screen');
+  await videoButton(b).click();
+  await b.setViewportSize({ width: 390, height: 844 });
+  await expect(tab).toHaveAttribute('aria-pressed', 'true');
+  await expect(b.getByRole('button', { name: 'Stop sharing my screen', exact: true })).toBeVisible();
+  await b.getByRole('button', { name: 'Stop sharing my screen', exact: true }).focus();
+  await b.keyboard.press('Enter');
+  await expect(b.locator('#voice-screen')).toHaveAttribute('aria-pressed', 'false');
+  await expect(b.locator('#voice-screen')).toBeHidden();
+  // Its focus moves to the audio options, not the page.
+  await expect(b.locator('#voice-more')).toBeFocused();
+  // Leaving the audio closes the open tab.
+  await b.locator('#voice-more').click();
+  await b.locator('#voice-leave-menu').click();
+  await expect(tab).toBeHidden();
+  await expect(b.locator('#tabbar [data-tab=chat]')).toHaveAttribute('aria-pressed', 'true');
 });

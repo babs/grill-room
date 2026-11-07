@@ -25,7 +25,7 @@ Opening the stage is up to each viewer, so a document being read stays open. Whe
 - The Video stage in the viewer area: a screen share large with a camera row, or a camera grid. A participant's own camera shows mirrored.
 - Several screen shares at once: the latest is large, the others are tiles that can be promoted with a click.
 - A "… is sharing their screen · Watch" strip, and a fullscreen button on a large screen share.
-- Phone: a Video tab in the tab bar while any video is live, cameras only.
+- Phone: a Video tab in the tab bar while any video is live or while it is open, cameras only.
 - Bandwidth: `adaptiveStream` and `dynacast` on the room's LiveKit connection, simulcast on cameras (S19).
 - Device choice: microphone, camera and, where the browser can route it, speaker. It switches during the call and is remembered per browser.
 
@@ -45,7 +45,7 @@ Opening the stage is up to each viewer, so a document being read stays open. Whe
 - [ ] **AC1** `GET /api/rooms/{room}/voice` returns a token whose grant allows exactly the sources `microphone`, `camera`, `screen_share` and `screen_share_audio`. `canPublishData` stays false, `roomAdmin` stays absent, and the token's life stays at most one minute.
 
 ### Publishing
-- [ ] **AC2** In the audio, the audio bar has a camera button ("Turn my camera on" / "Turn my camera off", `aria-pressed`) and, where `navigator.mediaDevices.getDisplayMedia` exists, a screen share button ("Share my screen" / "Stop sharing my screen", `aria-pressed`). Both are 44 × 44 px at 390 px, and both are hidden until the participant joins the audio. Joining the audio leaves the camera off.
+- [ ] **AC2** In the audio, the audio bar has a camera button ("Turn my camera on" / "Turn my camera off", `aria-pressed`) and, where `navigator.mediaDevices.getDisplayMedia` exists, a screen share button ("Share my screen" / "Stop sharing my screen", `aria-pressed`). The camera button is 44 × 44 px at 390 px, where the screen share button is absent (AC14). Both are hidden until the participant joins the audio. Joining the audio leaves the camera off.
 - [ ] **AC3** The camera publishes with simulcast at the 720p preset. The screen share publishes at the 1080p, 15 fps screen-share preset, with the tab's or the system's audio when the browser offers it.
 - [ ] **AC4** Stopping a share from the browser's own "Stop sharing" control unpublishes the track and sets the button back to "Share my screen", as the button does. Refusing the camera or the screen picker leaves the button off and shows nothing for a cancel, and leaves an earlier failure of the same source on screen. A camera blocked in the site settings is not a cancel: the strip says to allow it there, as for the microphone. A real failure (no camera, device busy) shows its reason in the voice error strip, as a mic failure does.
 - [ ] **AC5** Leaving the audio, losing the connection, or being removed from the room (016) stops the camera and the screen share and releases the devices: every local video track ends with `readyState === 'ended'`.
@@ -61,7 +61,7 @@ Opening the stage is up to each viewer, so a document being read stays open. Whe
 - [ ] **AC13** A participant whose stage is closed (or Video tab not shown) receives no video: every remote video publication is unsubscribed, and it is subscribed again when the stage opens.
 
 ### Phone
-- [ ] **AC14** Under 40rem, the tab bar gains a Video tab, with the count of live videos, while any video is live, and loses it when the last one stops (switching to Chat if it was open). The tab shows the same stage. The screen share button is absent, the camera button works, and all controls keep the 44 px rule.
+- [ ] **AC14** Under 40rem, the tab bar gains a Video tab, with the count of live videos, while any video is live. When the last one stops, the tab goes, unless it is the open tab: then it stays, showing AC7's empty stage, until the participant leaves the stage (another tab, ✕, Escape, a document opened) or leaves the audio. The tab shows the same stage. The screen share button is absent, except to stop a share started in a wider window; the camera button works, and all controls keep the 44 px rule. In the audio at 390 px, the room name in the header keeps at least 6rem of width.
 
 ### Devices
 - [ ] **AC16** In the audio, the audio options menu (`⋯`) has a "Devices" group with one select per kind: Microphone, Camera, and Speaker. Speaker shows only where `HTMLMediaElement.prototype.setSinkId` exists. Each select lists the browser's devices by label (`navigator.mediaDevices.enumerateDevices()`) and marks the one in use. It refreshes when a device is plugged in or out (`MediaDevicesChanged`), and stays reachable and usable at 390 px.
@@ -109,7 +109,7 @@ Opening the stage is up to each viewer, so a document being read stays open. Whe
   - the strip appears for B with the stage closed, and Watch opens it;
   - keyboard only: Tab to a tile, Enter, Escape back to the Video button;
   - with the room muted, the screen-share audio element is muted;
-  - at 390 px, the Video tab appears with a count, no screen share button is present, and the tab disappears when the last video stops.
+  - at 390 px, the Video tab appears with a count, no screen share button is present, and the tab disappears when the last video stops, unless it is the open tab, which stays with the empty stage.
 
   Then on the lab (TURN/TLS only), two browsers on different networks, one a phone on mobile data, see each other's camera and a screen share for 5 minutes. The report goes in the tracking file, with freezes and received resolution from the diagnostics sheet.
 
@@ -136,5 +136,7 @@ None. Video is never stored.
 - The stage does not close by itself when the last video stops (AC7): a camera that drops for a second, an unplug or a network blip, would otherwise close the viewer's stage and leave it closed when the video comes back. Found in phase 2.
 - Devices are listed with `navigator.mediaDevices.enumerateDevices()`, not LiveKit's `Room.getLocalDevices`: the latter waits for any capture under way, so an unanswered permission prompt stalled every switch, and it resets the list LiveKit's own default selection compares with.
 - A device picked while the camera is off or the mic muted is opened once to test it (AC17), so its light or the OS mic indicator flickers: the price of refusing a busy device at pick time instead of at the next unmute, with the bad choice already remembered.
+- On a phone the open Video tab stays when the last video stops (AC14), as the open stage does (AC7). The header's room name keeps 6rem at 390 px: phase 1 found it squeezed to nothing by the added buttons.
+- On a phone the transcription toggle lives in the audio options menu (`⋯`), and `⋯` carries its state: the dot while the voice is written down, the danger colour while it is off. This amends 005-AC49 and 010-AC23 for phones: with the camera button added, the room name kept 78 px of the 96 px AC14 asks for. Found in phase 3.
 - The video e2e runs on its own loopback LiveKit stack, as persona-voice does, not against the compose stack: CI has no compose stack, and the e2e must gate merges.
 - WAN quality is checked by hand on the lab at the end of phase 3. S19 ran on a LAN only, and over a TCP-only path loss hurts more. If the check falls short, the follow-up is exposing ICE/TCP (S4) or UDP, not a code change here.

@@ -324,6 +324,7 @@
     screen: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4M6 9V7h2M18 9V7h-2M6 11v2h2M18 11v2h-2"/>',
     camera: '<rect x="2" y="6" width="14" height="12" rx="2"/><path d="m16 10 6-3v10l-6-3"/>',
     'camera-off': '<rect x="2" y="6" width="14" height="12" rx="2"/><path d="m16 10 6-3v10l-6-3M2 2l20 20"/>',
+    fullscreen: '<path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5"/>',
     'screen-share': '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4M12 13V7M9 10l3-3 3 3"/>',
     rename: '<path d="M12 20h9"/><path d="M16.4 3.6a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z"/>',
     bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0"/>',
@@ -473,6 +474,19 @@
   addEventListener('blur', hideTip);
 
   /**
+   * grillAnnounce has screen readers say text, through the page's always-present #toast-live
+   * region. Each message is a node of its own: two in one tick are both read, a repeat is read again.
+   * The region is not atomic, so only the new node is read. It stays 5 s, as long as the longest toast.
+   * @param {string} text
+   */
+  window.grillAnnounce = (text) => {
+    const live = document.getElementById('toast-live');
+    if (!live) return;
+    const p = live.appendChild(Object.assign(document.createElement('p'), { textContent: text }));
+    setTimeout(() => p.remove(), 5000);
+  };
+
+  /**
    * grillToast says what an action did, 4 s, bottom right (docs/design.md §5). It shares the page's
    * #toasts region when there is one (the room page's), and #toast-live for screen readers.
    * @param {string} text
@@ -487,8 +501,7 @@
     }
     const t = Object.assign(document.createElement('p'), { className: 'toast', textContent: text });
     region.append(t);
-    const live = document.getElementById('toast-live');
-    if (live) live.textContent = text;
+    window.grillAnnounce(text);
     if (!region.matches(':popover-open')) region.showPopover();
     setTimeout(() => {
       t.remove();

@@ -11,8 +11,13 @@ const fakeLiveKit = `window.LivekitClient = (() => {
       this.canPlaybackAudio = true;
       this.remoteParticipants = new Map();
       let track = null;
+      // No camera, no screen and no device choice (spec 030): what the page reads of them is empty.
       this.localParticipant = {
         isMicrophoneEnabled: false,
+        isCameraEnabled: false,
+        isScreenShareEnabled: false,
+        videoTrackPublications: new Map(),
+        trackPublications: new Map(),
         getTrackPublication: () => (track ? { track: { mediaStreamTrack: track } } : undefined),
         setMicrophoneEnabled: async (on) => {
           if (on) track = (await navigator.mediaDevices.getUserMedia({ audio: true })).getAudioTracks()[0];
@@ -21,6 +26,8 @@ const fakeLiveKit = `window.LivekitClient = (() => {
       };
     }
     on() { return this; }
+    getActiveDevice() { return 'default'; }
+    async switchActiveDevice() {}
     async connect() {}
     async disconnect() {}
     async startAudio() {}
@@ -146,7 +153,12 @@ test('the audio bar: icon toggles with their tips below', async ({ browser, requ
   await mute.click();
   await expect(mute).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#person-tip')).toHaveText('Your mic is muted. Press to speak again.');
-  // Keyboard focus shows it at once.
+  // Keyboard focus shows it at once. The camera and the screen come between (030-AC2).
+  await page.keyboard.press('Tab');
+  await expect(page.locator('#voice-cam')).toBeFocused();
+  await tipUnder(page, page.locator('#voice-cam'), 'Turn your camera on: the others see you in Video.');
+  await page.keyboard.press('Tab');
+  await expect(page.locator('#voice-screen')).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(deaf).toBeFocused();
   await tipUnder(page, deaf, 'Mute the room: stop hearing the others.');
@@ -176,13 +188,14 @@ test('the audio bar: icon toggles with their tips below', async ({ browser, requ
   await expect(page.locator('#voice-join')).toBeVisible();
   for (const sel of bar) await expect(page.locator(sel)).toBeHidden();
 
-  // On a phone the bar fits the header row, every target 44 px; Leave audio moves into ⋯ so the
-  // room's name keeps its first word.
+  // On a phone the bar fits the header row, every target 44 px; Leave audio and the transcription
+  // toggle move into ⋯ so the room's name keeps its first word (030-AC14).
   await page.setViewportSize({ width: 390, height: 844 });
   await page.locator('#voice-join').click();
-  const phoneBar = bar.filter((sel) => sel !== '#voice-leave');
+  const phoneBar = bar.filter((sel) => sel !== '#voice-leave' && sel !== '#voice-stt');
   await expect(page.locator('#voice-more')).toBeVisible();
   await expect(page.locator('#voice-leave')).toBeHidden();
+  await expect(page.locator('#voice-stt')).toBeHidden();
   for (const sel of phoneBar) {
     const b = await page.locator(sel).boundingBox();
     expect(b.width, sel).toBeGreaterThanOrEqual(44);
@@ -197,6 +210,7 @@ test('the audio bar: icon toggles with their tips below', async ({ browser, requ
     expect(Math.abs(b.y + b.height / 2 - (name.y + name.height / 2)), sel + ' on the name row').toBeLessThanOrEqual(2);
   }
   await page.locator('#voice-more').click();
+  await expect(menu.getByRole('checkbox', { name: 'Transcribe my voice', exact: true })).toBeChecked();
   await menu.getByRole('button', { name: 'Leave audio', exact: true }).click();
   await expect(page.locator('#voice-join')).toBeVisible();
 });

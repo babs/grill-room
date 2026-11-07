@@ -983,7 +983,7 @@ function toast(text, action, onEnd) {
   $('toasts').append(el);
   if (!$('toasts').matches(':popover-open')) $('toasts').showPopover();
   // A region that only just appeared is often skipped by screen readers: this one always is there.
-  $('toast-live').textContent = text;
+  grillAnnounce(text);
   timer = setTimeout(() => close(false), action ? 5000 : 4000);
   return () => close(false);
 }
@@ -2377,6 +2377,13 @@ function askPersona(id) {
   pressPersona(id, false);
 }
 
+// dropAudio removes a remote audio track's element, found by its publication: LiveKit detaches the
+// track before it reports the unsubscription, so detach() then returns nothing to remove.
+function dropAudio(pub) {
+  pub.track?.detach();
+  for (const el of $('voice-audio').querySelectorAll(`[data-sid="${CSS.escape(pub.trackSid)}"]`)) el.remove();
+}
+
 // setPersonaMuted mutes a persona for this listener only: its track is unsubscribed, which saves
 // the bandwidth too, and the choice is kept for the room in this browser (013-AC28).
 function setPersonaMuted(id, muted) {
@@ -2387,7 +2394,7 @@ function setPersonaMuted(id, muted) {
   if (bot) {
     for (const pub of bot.audioTrackPublications.values()) {
       // The element goes at once: LiveKit reports the unsubscription only later, if at all.
-      if (muted) pub.track?.detach().forEach((el) => el.remove());
+      if (muted) dropAudio(pub);
       pub.setSubscribed(!muted && !deaf);
     }
   }
@@ -3972,12 +3979,21 @@ const tabScroll = new Map();
 const tabScroller = (t) => (t === 'chat' ? messages : $('side'));
 function showTab(t) {
   if (t === roomTab) return;
+  const was = roomTab;
   tabScroll.set(roomTab, tabScroller(roomTab).scrollTop);
   roomTab = t;
   document.body.dataset.tab = t;
   for (const b of $('tabbar').querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.tab === t));
   tabScroller(t).scrollTop = tabScroll.get(t) ?? (t === 'chat' ? messages.scrollHeight : 0);
+  // The Video tab is the stage: left, it stops receiving video (030-AC13, 030-AC14).
+  if (t === 'video') openStage();
+  else if (was === 'video') closeStage();
 }
+// A stage open in a window made narrow is the Video tab, or it would receive video unseen (030-AC13).
+matchMedia('(max-width: 40rem)').addEventListener('change', () => {
+  if (phone() && stageOpen()) showTab('video');
+  sttButton();
+});
 if (!docsMode) document.body.dataset.tab = roomTab;
 for (const b of $('tabbar').querySelectorAll('button')) b.addEventListener('click', () => showTab(b.dataset.tab));
 
@@ -4076,6 +4092,12 @@ function sttButton() {
     ? 'Your voice is not written down, and the others see it. Press to transcribe it again.'
     : (sttMine ? 'Your voice is being written down. ' : 'Your voice is transcribed while voice-to-text runs. ') + 'Press to stop transcribing it.');
   $('voice-stt').classList.toggle('captured', !!voice && sttMine && !sttOff);
+  $('voice-stt-menu').querySelector('input').checked = !sttOff;
+  // On a phone the toggle lives in ⋯, which carries its dot and its off mark (030-AC14).
+  $('voice-more').classList.toggle('captured', !!voice && sttMine && !sttOff);
+  $('voice-more').classList.toggle('stt-off', sttOff);
+  // Only where ⋯ carries it: wider, the toggle in the bar says it.
+  $('voice-more-state').textContent = !phone() ? '' : sttOff ? 'Your voice is not written down' : sttMine && voice ? 'Your voice is being written down' : '';
   grillTip.refresh();
 }
 
@@ -4506,10 +4528,11 @@ async function joinVoice() {
       if (deaf || personaMutedIdentity(p.identity)) return pub.setSubscribed(false);
       const el = track.attach();
       el.dataset.pid = p.identity;
+      el.dataset.sid = pub.trackSid;
       $('voice-audio').append(el);
       if (volumes.has(p.identity)) setVolume(p, volumes.get(p.identity));
     });
-    room.on(LK.RoomEvent.TrackUnsubscribed, (track) => (track.kind === 'audio' ? track.detach().forEach((el) => el.remove()) : renderStage()));
+    room.on(LK.RoomEvent.TrackUnsubscribed, (track, pub) => (track.kind === 'audio' ? dropAudio(pub) : renderStage()));
     room.on(LK.RoomEvent.TrackPublished, (pub) => {
       if (pub.kind === 'video') pub.setSubscribed(stageOpen());
       renderStage();
@@ -4655,6 +4678,8 @@ async function toggleVideo(cam) {
 // before comes back on close. Closed, it holds no tile and subscribes to no video (030-AC13).
 const stageOpen = () => !$('stage').hidden;
 function openStage() {
+  // On a phone the stage opens as the Video tab (030-AC14).
+  if (phone() && roomTab !== 'video') return showTab('video');
   if (stageOpen()) return;
   $('stage').hidden = false;
   $('viewer').hidden = false;
@@ -4667,6 +4692,7 @@ function closeStage() {
   $('stage').hidden = true;
   $('viewer').hidden = !openDoc;
   $('video-open').setAttribute('aria-expanded', 'false');
+  if (roomTab === 'video') showTab('chat');
   watchVideo();
   renderStage();
 }
@@ -4686,31 +4712,70 @@ function liveVideos() {
     .filter((pub) => !pub.isMuted).map((pub) => ({ p, pub, mine: p === lp })));
 }
 
-// tiles holds one tile per video track sid; shareOrder, when each screen share was first seen.
+// tiles holds one tile per video track sid; shareOrder, when each screen share was first seen;
+// pinnedShare, the screen picked large (030-AC9); stripShare, the screen the strip offers (030-AC10).
 const tiles = new Map();
 const shareOrder = new Map();
 let shareSeq = 0;
+let pinnedShare = '';
+let stripShare = '';
+let bigShare = '';
+let stripSaid = '';
+const nameOf = (p) => participants.find((x) => String(x.id) === p.identity)?.name || p.name || '';
 
 // renderStage draws the stage (030-AC8): the latest screen share large, the other videos in a row
 // under it, or the cameras alone in a grid.
 function renderStage() {
   const live = liveVideos();
+  const focused = $('stage').contains(document.activeElement);
   // Nothing live and nothing drawn: the People list's render must not depend on the LiveKit bundle.
-  if (!live.length && !tiles.size && !stageOpen() && $('video-open').hidden) return;
+  if (!live.length && !tiles.size && !stageOpen() && $('video-open').hidden && $('tab-video').hidden) return;
   // The Video button goes with the last video: its focus moves to the open stage's ✕, else to the
   // audio options, or Join audio once the audio is left, not to the page.
   if (!live.length && document.activeElement === $('video-open')) $(stageOpen() ? 'stage-close' : voice ? 'voice-more' : 'voice-join').focus();
   $('video-open').hidden = !live.length;
   $('video-count').textContent = live.length ? String(live.length) : '';
+  // The phone's Video tab, open, stays to show the empty stage (030-AC14).
+  const tabGone = !live.length && roomTab !== 'video';
+  if (tabGone && document.activeElement === $('tab-video')) $('tabbar').querySelector('[aria-pressed=true]').focus();
+  $('tab-video').hidden = tabGone;
+  $('tab-video-count').textContent = live.length ? String(live.length) : '';
   // An open stage outlives a video that drops for a moment: it waits, and says so (030-AC7).
   // Text set into a status region that is always there: one revealed by unhiding is often not read out.
   $('stage-empty').textContent = stageOpen() && !live.length ? 'Nobody is sharing video right now.' : '';
   const { Camera, ScreenShare } = LivekitClient.Track.Source;
-  for (const { pub } of live) if (pub.source === ScreenShare && !shareOrder.has(pub.trackSid)) shareOrder.set(pub.trackSid, ++shareSeq);
+  for (const { pub, mine } of live) {
+    if (pub.source !== ScreenShare || shareOrder.has(pub.trackSid)) continue;
+    shareOrder.set(pub.trackSid, ++shareSeq);
+    // A new screen is the latest started: it goes large (030-AC9). Someone else's is offered while
+    // the stage is closed, which never opens by itself (030-AC10).
+    pinnedShare = '';
+    if (!mine) stripShare = pub.trackSid;
+  }
   for (const sid of shareOrder.keys()) if (!live.some((v) => v.pub.trackSid === sid)) shareOrder.delete(sid);
+  // Gone once the stage opens; a share that stops is found live no more.
+  if (stageOpen()) stripShare = '';
+  const offered = live.find((v) => v.pub.trackSid === stripShare);
+  // Shown and said once the sharer's name is known: a share can come before the People list has them.
+  const who = offered ? nameOf(offered.p) : '';
+  // Watch goes with its strip: its focus moves on rather than to the page.
+  if (!who && $('share-strip').contains(document.activeElement)) $(voice ? 'voice-more' : 'voice-join').focus();
+  $('share-strip').hidden = !who;
+  $('share-strip-text').textContent = who ? who + ' is sharing their screen' : '';
+  // Said in the page's always-present live region: one revealed by unhiding is often not read out.
+  if (who && stripSaid !== stripShare) {
+    grillAnnounce($('share-strip-text').textContent);
+    stripSaid = stripShare;
+  }
   const shown = stageOpen() ? live : [];
-  // Phase 3 promotes another screen with a click (030-AC9); until then the latest is large.
-  const big = shown.filter((v) => v.pub.source === ScreenShare).sort((a, b) => shareOrder.get(a.pub.trackSid) - shareOrder.get(b.pub.trackSid)).at(-1);
+  // The screen picked large, else the latest started (030-AC9); a pick that stopped falls back.
+  const shares = shown.filter((v) => v.pub.source === ScreenShare).sort((a, b) => shareOrder.get(a.pub.trackSid) - shareOrder.get(b.pub.trackSid));
+  const big = shares.find((v) => v.pub.trackSid === pinnedShare) || shares.at(-1);
+  bigShare = big?.pub.trackSid || '';
+  // iPhone Safari has no element full screen.
+  $('stage-full').hidden = !big || !document.fullscreenEnabled;
+  // Nothing large left to show full screen: back to the page.
+  if (!big && document.fullscreenElement === $('stage-main')) document.exitFullscreen().catch(console.error);
   const draw = ({ p, pub, mine }) => {
     let t = tiles.get(pub.trackSid);
     if (!t) {
@@ -4726,8 +4791,9 @@ function renderStage() {
       t.track = pub.track || null;
       t.track?.attach(t.video);
     }
-    const name = participants.find((x) => String(x.id) === p.identity)?.name || p.name || '';
+    const name = nameOf(p);
     t.el.dataset.pid = p.identity;
+    t.el.dataset.sid = pub.trackSid;
     t.el.dataset.source = pub.source;
     t.el.lastChild.textContent = pub.source === ScreenShare ? name + "'s screen" : name;
     t.el.classList.toggle('mirror', mine && pub.source === Camera);
@@ -4736,6 +4802,16 @@ function renderStage() {
   };
   const main = big ? [draw(big)] : [];
   const row = shown.filter((v) => v !== big).map(draw);
+  // A screen in the row is a button that makes it large, by mouse or keyboard (030-AC9, 030-AC11).
+  for (const t of [...main, ...row]) {
+    if (row.includes(t) && t.el.dataset.source === ScreenShare) {
+      t.el.setAttribute('role', 'button');
+      t.el.tabIndex = 0;
+      t.el.setAttribute('aria-label', 'Show ' + t.el.lastChild.textContent + ' large');
+    } else {
+      for (const a of ['role', 'tabindex', 'aria-label']) t.el.removeAttribute(a);
+    }
+  }
   const kept = new Set([...main, ...row]);
   for (const [sid, t] of tiles) {
     if (kept.has(t)) continue;
@@ -4745,6 +4821,9 @@ function renderStage() {
   }
   placeTiles($('stage-main'), main);
   placeTiles($('stage-tiles'), row);
+  // A focused control gone, hidden or moved (a tile made large) drops the focus to the page, out of
+  // reach of the stage's Escape (030-AC11).
+  if (focused && stageOpen() && document.activeElement === document.body) $('stage-close').focus();
 }
 
 // placeTiles moves the tiles only when their order changed: a video taken out of the page pauses.
@@ -4818,8 +4897,43 @@ $('voice-leave-menu').addEventListener('click', leaveVoice);
 $('voice-deaf').addEventListener('click', () => setDeaf(!deaf));
 $('voice-cam').addEventListener('click', () => toggleVideo(true));
 $('voice-screen').addEventListener('click', () => toggleVideo(false));
+// A narrow window hides the screen button while off (030-AC14), when a share stops or the window
+// narrows: the browser blurs it to the page, and the focus goes to the audio options instead.
+$('voice-screen').addEventListener('blur', () => requestAnimationFrame(() => {
+  if (voice && document.activeElement === document.body && !$('voice-screen').checkVisibility()) $('voice-more').focus();
+}));
 $('video-open').addEventListener('click', () => (stageOpen() ? closeStage() : openStage()));
-$('stage-close').addEventListener('click', closeStage);
+// Closed from inside the stage, the focus goes back to what opened it (030-AC11).
+function leaveStage() {
+  closeStage();
+  const back = $(phone() ? 'tab-video' : 'video-open');
+  (back.hidden ? $(voice ? 'voice-more' : 'voice-join') : back).focus();
+}
+$('stage-close').addEventListener('click', leaveStage);
+// Escape in full screen only leaves full screen: the browser takes that one (030-AC11).
+// A browser may deliver the Escape that left full screen just after: that one is not for the stage.
+let fullscreenLeft = 0;
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) fullscreenLeft = performance.now(); });
+$('stage').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !document.fullscreenElement && performance.now() - fullscreenLeft > 150) leaveStage();
+});
+$('stage-full').addEventListener('click', () => { if (document.fullscreenEnabled) $('stage-main').requestFullscreen().catch(console.error); });
+function promote(e) {
+  const t = e.target.closest('.tile[role=button]');
+  if (!t || (e.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ')) return;
+  e.preventDefault();
+  const before = bigShare;
+  pinnedShare = t.dataset.sid;
+  renderStage();
+  // The keyboard stays in the row, on the screen that made way.
+  tiles.get(before)?.el.focus();
+}
+$('stage-tiles').addEventListener('click', promote);
+$('stage-tiles').addEventListener('keydown', promote);
+$('share-watch').addEventListener('click', () => {
+  openStage();
+  $('stage-close').focus();
+});
 $('voice-keepmic').querySelector('input').addEventListener('change', saveDeaf);
 // Kept with the seat, not the tab (010-AC23): this browser's other tabs reload the room at once,
 // others at their next load, the server refusing my voice meanwhile.
@@ -4836,6 +4950,11 @@ $('voice-stt').addEventListener('click', () => {
     .finally(() => sttSet++);
 });
 addEventListener('storage', (e) => { if (e.key === sttKey) loadRoom().catch(console.error); });
+// The phone's copy in ⋯ (030-AC14) shows the state the server took, not the click.
+$('voice-stt-menu').querySelector('input').addEventListener('change', (e) => {
+  e.target.checked = !sttOff;
+  $('voice-stt').click();
+});
 // The open menu says more than ⋯'s tip, which would show through under it.
 $('voice-menu').addEventListener('toggle', (e) => {
   if (e.newState !== 'open') return;

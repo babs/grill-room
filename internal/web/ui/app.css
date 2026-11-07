@@ -143,7 +143,7 @@ body.room { position: fixed; top: var(--vv-top, 0); left: 0; right: 0; height: 1
 #voice-devices > label:not([hidden]) { display: grid; gap: var(--sp-1); font-size: var(--fs-sm); font-weight: 600; }
 #voice-devices select { width: 100%; min-width: 0; }
 /* A phone's Leave audio, out of the bar (005-AC49). */
-#voice-leave-menu { display: none; }
+#voice-leave-menu, #voice-menu > #voice-stt-menu { display: none; }
 #device-stt-status { margin: 0; padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + 1.1rem + var(--sp-2)); }
 #device-stt-status:empty { display: none; }
 #device-stt-status.error { display: flex; gap: var(--sp-2); align-items: flex-start; color: var(--danger); }
@@ -447,6 +447,10 @@ body:is(.drag-files, :has(.pane-handle.dragging)) #doc-frame iframe { pointer-ev
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: var(--r-sm); background: var(--chrome); color: var(--chrome-text); font-size: var(--fs-xs); }
 /* Speaking: the People list's brand halo, as a ring (005). */
 .tile.speaking { box-shadow: inset 0 0 0 3px var(--brand); }
+/* A screen in the row is a button that makes it large (030-AC9, 030-AC11). */
+.tile[role=button] { cursor: pointer; }
+.tile[role=button]:focus-visible { outline: 3px solid var(--brand); outline-offset: -3px; }
+#stage-main:fullscreen { background: var(--chrome); }
 .tile.speaking figcaption { text-shadow: 0 0 .1em var(--brand), 0 0 .4em var(--brand); }
 body.annot-closed #annotations { display: none; }
 #annot-toggle[aria-pressed=true] { background: var(--primary-bg); }
@@ -635,8 +639,18 @@ mark.mention-chip.me { background: var(--accent); color: var(--on-accent); }
   .audio { gap: 2px; }
   #voice-leave { display: none; }
   #voice-leave-menu { display: flex; }
-  /* The phone's Video is a tab (030-AC14). */
-  #video-open { display: none; }
+  /* The room's name keeps 6rem at 390 px beside the camera: transcription moves into ⋯ too (030-AC14). */
+  #voice-stt { display: none; }
+  #voice-menu > #voice-stt-menu { display: flex; }
+  /* ⋯ then carries the toggle's state: its dot, on the left as .down's mark takes the right, and its
+     off colour (005-AC49, 010-AC23). */
+  #voice-more.captured::before { content: ""; position: absolute; top: 3px; left: 3px; width: .5rem; height: .5rem; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 1px var(--dot-ring); }
+  #voice-more.stt-off { border-color: var(--danger); color: var(--danger); }
+  /* Off is told by a shape too, a stroke across the dots, not by colour alone. */
+  #voice-more.stt-off::before { content: ""; position: absolute; top: 8px; bottom: 8px; left: calc(50% - 1px); width: 2px; border-radius: 1px; background: var(--danger); transform: rotate(45deg); }
+  /* The phone's Video is a tab (030-AC14), and it shares no screen: a narrow window keeps only a
+     share under way, to stop it. */
+  #video-open, #voice-screen[aria-pressed=false] { display: none; }
   .room-header:has(#voice-more:not([hidden])) .logo { display: none; }
   .tabbar { display: flex; flex: none; height: calc(56px + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
     border-top: 1px solid var(--border); background: var(--surface); }

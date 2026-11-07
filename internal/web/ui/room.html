@@ -52,7 +52,8 @@
       <button type="button" id="voice-screen" class="btn-icon" aria-label="Share my screen" aria-pressed="false" hidden></button>
       <button type="button" id="voice-deaf" class="btn-icon" aria-label="Mute the room" aria-pressed="false" hidden></button>
       <button type="button" id="voice-stt" class="btn-icon" aria-label="Transcribe my voice" aria-pressed="true" hidden></button>
-      <button type="button" id="voice-more" class="btn-icon" popovertarget="voice-menu" aria-label="Audio options" data-tip="More audio options, and what is being written down" data-icon="more" hidden></button>
+      <button type="button" id="voice-more" class="btn-icon" popovertarget="voice-menu" aria-label="Audio options" data-tip="More audio options, and what is being written down" data-icon="more" aria-describedby="voice-more-state" hidden></button>
+      <span id="voice-more-state" class="sr-only" aria-hidden="true"></span>
       <button type="button" id="voice-leave" class="btn-icon" aria-label="Leave audio" data-tip="Leave the audio: stop hearing and being heard" data-icon="leave" hidden></button>
     </div>
     <button type="button" id="me" class="avatar" popovertarget="me-menu" data-tip="You: your name, notifications, your profile"></button>
@@ -61,6 +62,7 @@
 </header>
 <div id="voice-menu" class="menu" popover>
   <p id="stt-status" class="menu-head" role="status"></p>
+  <label id="voice-stt-menu"><input type="checkbox" checked><span>Transcribe my voice</span></label>
   <label id="voice-keepmic" data-tip="Keep your voice going out, and written down, while the room is muted: useful when you share a physical room"><input type="checkbox"><span>Keep my mic on while the room is muted</span></label>
   <label id="voice-device" data-tip="Your browser writes your voice down instead of the server. It downloads the voice-to-text model once, then tests this device." hidden><input type="checkbox"><span>Transcribe on this device</span></label>
   <p id="device-stt-status" class="hint" role="status" tabindex="-1"></p>
@@ -114,6 +116,8 @@
 <p id="reconnecting" class="strip" role="status" hidden>Reconnecting…</p>
 <p id="voice-error" class="strip" role="alert" hidden><span data-icon="alert"></span><span id="voice-error-text"></span>
   <button type="button" id="voice-error-close" class="btn-icon" aria-label="Dismiss" data-icon="close"></button></p>
+<p id="share-strip" class="strip" hidden><span id="share-strip-text"></span>
+  <button type="button" id="share-watch">Watch</button></p>
 <section id="approvals" class="strip" aria-label="Waiting for the AI host" tabindex="-1" hidden>
   <ul id="approval-list"></ul>
 </section>
@@ -412,6 +416,7 @@
       <div class="viewer-head">
         <button type="button" id="stage-close" class="btn-icon btn-ghost" aria-label="Close the video" data-tip="Close" data-icon="close"></button>
         <h2>Video</h2>
+        <button type="button" id="stage-full" class="btn-icon btn-ghost" aria-label="Full screen" data-tip="Full screen: Escape leaves it" data-icon="fullscreen" hidden></button>
       </div>
       <div class="stage-body"><p id="stage-empty" class="empty" role="status"></p><div id="stage-main"></div><div id="stage-tiles"></div></div>
     </div>
@@ -489,8 +494,9 @@
   <button type="button" data-tab="chat" aria-pressed="true" data-icon="chat"><span>Chat</span></button>
   <button type="button" data-tab="docs" aria-pressed="false" data-icon="docs"><span>Docs <span id="tab-docs-count" class="count"></span></span></button>
   <button type="button" data-tab="people" aria-pressed="false" data-icon="people"><span>People <span id="tab-people-count" class="count"></span></span></button>
+  <button type="button" id="tab-video" data-tab="video" aria-pressed="false" data-icon="camera" hidden><span>Video <span id="tab-video-count" class="count"></span></span></button>
 </nav>
 <div id="toasts" class="toasts" popover="manual"></div>
-<p id="toast-live" class="sr-only" role="status" aria-live="polite"></p>
+<div id="toast-live" class="sr-only" role="status" aria-live="polite" aria-atomic="false"></div>
 </body>
 </html>
