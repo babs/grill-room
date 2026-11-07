@@ -42,6 +42,10 @@ Every signature, on a binary or on the image, carries this identity:
 
 A signature made by another workflow, on a branch, or in a fork has another SAN and fails the check.
 
+Why keyless: sigstore-go verifies a bundle offline against the embedded root, for about 12 MB per binary (8.2 to 20.2 MB on linux/amd64, +4.2 MB gzipped). minisign would add 70 KB, but it needs a long-lived secret in CI and loses the workflow identity and the transparency log.
+
+`trusted_root.json` has no expiry of its own, and a stale root fails only on a key it lacks. Once cosign signs into a new Rekor shard or Rekor v2, or under a new Fulcio CA, a supervisor stuck on an old root refuses new releases until TUF refreshes it. The public-good root changed 7 times from 2023-02 to 2025-09.
+
 ## Verifying a release
 
 ```sh

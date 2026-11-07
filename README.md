@@ -507,7 +507,7 @@ The image bakes both models in and runs with `HF_HUB_OFFLINE=1`, because a pod b
 
 Metrics: those in [docs/architecture.md](docs/architecture.md), plus `grill_stt_rooms`, `grill_stt_tracks` and `grill_stt_device_tracks` (tracks skipped because a device transcribes them, or their participant turned their transcription off).
 
-`python -m grill_stt.replay` plays WAV tracks in real time, one or several speakers at once, through the worker's own segmenter, engine processes and filter, and writes each line with its latency: the lab A/B run of spec 007 (`spikes/s007-ab/`) uses it in the image.
+`python -m grill_stt.replay` plays WAV tracks in real time, one or several speakers at once, through the worker's own segmenter, engine processes and filter, and writes each line with its latency: the lab A/B run of spec 007 uses it in the image.
 
 `make stt-image-test` runs the worker's e2e tests inside the built image with no network, for both engines: each must load its baked-in model offline.
 
@@ -744,6 +744,7 @@ What gets deployed, with `<domain>` standing for `K8S_DOMAIN`:
 - Releases before two replicas kept the model files on a `grill-room-models` volume. `make k8s-apply` leaves it in the cluster: delete it after the first rollout, `kubectl -n <namespace> delete pvc grill-room-models`.
 - The `grill-room-data` volume held the SQLite database of before the cutover. Its object is gone from `deploy/k8s/room.yaml`: once the cutover's rollback window ends, delete it, `kubectl -n <namespace> delete pvc grill-room-data`.
 - LiveKit exposes no UDP. Browsers relay through TURN/TLS on 443. `allow_restricted_peer_cidrs` lists only the pod's own IP, where the relay hands media to the SFU.
+- With `turn.external_tls`, LiveKit v1.13.9 advertises `turns:<domain>:443` whatever `tls_port` says (443 is hardcoded upstream), so the TURN route must stay on 443. `node_ip` on loopback with `enable_loopback_candidate` breaks ICE over TCP. Firefox is untested: it may reject a loopback or wildcard TURN XOR-MAPPED-ADDRESS; the fix to try is `turn.proxy_protocol` with PROXY v2 from traefik's TCP serversTransport.
 - The STT worker requests 2 CPUs and may burst to 4, with 3 GiB as request and limit: two parakeet engine processes of 2 threads (spike S10d). One pod serves every room, about four people talking at once. It updates with `Recreate`: no lab node has 2 CPUs free for a second worker beside the old one, so transcription stops for the minute a new pod takes to load the models.
 - Switching the STT engine back to faster-whisper is one command, in [docs/lab-checklist.md](docs/lab-checklist.md) (STT engine rollback).
 - `make k8s-monitoring` applies the STT queue alert and the scrapes of the STT worker, the `tts` pod and the room server (`deploy/monitoring/`) for a cluster running the VictoriaMetrics operator; `make k8s-monitoring-delete` removes them. `K8S_MONITORING_NAMESPACE` (default `monitoring`) is where vmagent runs.

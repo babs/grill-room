@@ -114,7 +114,7 @@ Private repos are fetched by the host's daemon with the host's own git access, a
 ### Options, secrets and network (Q7)
 
 - [x] **AC22** The daemon page's Rooms tab lists, per room, the plugins with `userConfig` and a form per plugin: each option with its title, description and type; sensitive ones masked and never shown again. Values are kept per room and plugin in the instance's state dir, file mode 0600, and never sent to the server, a room or an export.
-- [x] **AC23** At turn time the daemon gives the values to Claude Code in the sandbox, so `${user_config.KEY}` resolves in MCP and hook configs and `CLAUDE_PLUGIN_OPTION_<KEY>` reaches hooks. The form warns: "The AI can read these values during a turn. Anyone in the room can ask it to show them."
+- [x] **AC23** At turn time the daemon gives the values to Claude Code in the sandbox, so `${user_config.KEY}` resolves in MCP configs (a shell-form hook command using it is refused, exec form untested, S12) and `CLAUDE_PLUGIN_OPTION_<KEY>` reaches hooks. The form warns: "The AI can read these values during a turn. Anyone in the room can ask it to show them."
 - [x] **AC24** A plugin with a `required` option unset and no default is "needs host setup": it does not load, the turn runs, and the persona's Capabilities tab and the host's daemon page say so.
 - [x] **AC25** The approval sheet lists the domains of MCP server URLs and marks those off the host's allowlist. The daemon page shows the same list with one "Add to allowlist" button per domain, under the allowlist's existing rules (no IP, no wildcard, no Anthropic host). Nothing is added without that click.
 
@@ -173,7 +173,7 @@ Private repos are fetched by the host's daemon with the host's own git access, a
 
 ## Open questions
 
-- [x] How do plugin option values reach Claude Code in the sandbox? Answered by spike S12 (`spikes/S12-plugin-options.md`). `claude plugin configure --values-stdin` may not apply to `--plugin-dir` plugins, and on Linux sensitive values go to a credential store the daemon overwrites each turn (it writes a dummy `.credentials.json`). Phase 3 starts with a spike on Claude Code 2.1.296.
+- [x] How do plugin option values reach Claude Code in the sandbox? Answered by spike S12 (`docs/agent-workspace.md`, Plugins). `claude plugin configure --values-stdin` may not apply to `--plugin-dir` plugins, and on Linux sensitive values go to a credential store the daemon overwrites each turn (it writes a dummy `.credentials.json`). Phase 3 starts with a spike on Claude Code 2.1.296.
 
 ## Decisions
 

@@ -41,7 +41,7 @@ export function verdict(backend, rtfx, w) {
 // engine. Progress resets the stall clock, so a slow link is not a hang. Tests shorten them.
 export const timing = { stallMs: 120_000, testMs: 60_000 };
 // After a reload Chrome gives the old page's memory back about 9 s after the unload, in the same
-// renderer (S13 §4.1): an engine started at once would hold two models' worth until then (010-AC21).
+// renderer: an engine started at once would hold two models' worth until then (010-AC21).
 export const RELOAD_DELAY_MS = 12_000;
 // Only a test sets grillReloadDelayMs, so it need not wait 12 s.
 const reloadDelay = /** @type {any} */ (globalThis).grillReloadDelayMs ?? RELOAD_DELAY_MS;

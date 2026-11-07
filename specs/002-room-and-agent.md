@@ -120,7 +120,7 @@ The sandbox gets Python, uv, Office libraries and common CLI tools. It reaches t
 - [x] **AC40** A dropped live stream reconnects and resumes after the last message without duplicates. Returning to the page from the background reloads the room state. Tested by `e2e/mobile.spec.js`.
 
 ### End to end
-- [x] **AC41** On the lab, a simulated session with two personas (Grill on demand, Secretary every 2 rounds) runs: Grill calls `@secretary` once, the chain count is shown, and both syntheses name the model and effort. The presence preamble is captured and reviewed in the report.
+- [x] **AC41** On the lab, a simulated session with two personas (Grill on demand, Secretary every 2 rounds) runs: Grill calls `@secretary` once, the chain count is shown, and both syntheses name the model and effort. S6 captured and reviewed the presence preamble: every field right, the missing trigger became 003-AC22. Its contract is in `docs/agent-workspace.md`, Presence preamble.
 
 ## Phases
 
@@ -173,10 +173,10 @@ The sandbox gets Python, uv, Office libraries and common CLI tools. It reaches t
 - **DoD**: transferred bytes measured on two consecutive turns (second turn: no upload bytes); corrupted cache test; existing turn e2e green.
 
 ### Phase 9 — Lab rollout and simulated session
-- Work: deploy to the lab; extend the S5 scenario with two personas, a chain and the presence preamble; report.
+- Work: deploy to the lab; extend the S5 scenario with two personas, a chain and the presence preamble; the result in `INTENT.md`.
 - **Covers**: AC41
 - **Data model impact**: none
-- **DoD**: report `spikes/S6-personas.md`; at most 15 real Claude requests.
+- **DoD**: S6 with a verdict; at most 15 real Claude requests.
 
 ## Data model impact (summary)
 

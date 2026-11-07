@@ -80,7 +80,7 @@ The worker transcribes with parakeet-ultra. Lines arrive in about half the time,
   - p95 latency ≤ 4 s for one talker, ≤ 5 s for two, and for four a target of 8 s with 10 s as the failure bound, with no drop;
   - peak pod memory ≤ 2.7 GiB.
 
-  The report lands in `spikes/`.
+  The result is in `docs/architecture.md`, STT capacity.
 - [x] **AC17** Rollback is one step in the release notes and `docs/lab-checklist.md`: set `APP_ENGINE=whisper` and restart the Deployment. No data changes either way. Redeploying the previous image tag is the second way out.
 - [ ] **AC18** The lab checklist's voice step passes with `parakeet`. A sentence on the phone shows as a line within 5 s, and two people speaking at once both get their lines.
 
@@ -108,11 +108,11 @@ The worker transcribes with parakeet-ultra. Lines arrive in about half the time,
   - the alert rule loads in the lab's vmalert and the stt pod is a scrape target.
 
 ### Phase 3 — Lab A/B and rollout
-- Work: a replay mode that feeds WAV tracks in real time to the worker's segmenter and pipeline, the A/B Job, the report, the docs and the release notes, and the lab rollout.
+- Work: a replay mode that feeds WAV tracks in real time to the worker's segmenter and pipeline, the A/B Job, the result in `docs/architecture.md`, the docs and the release notes, and the lab rollout.
 - **Covers**: AC16, AC17, AC18
 - **Data model impact**: none
 - **DoD**:
-  - the AC16 thresholds met on a lab node, the report committed under `spikes/`;
+  - the AC16 thresholds met on a lab node, the result in `docs/architecture.md`;
   - a lab redeploy, the lab checklist's voice step passed with `parakeet`;
   - a rollback drill: `whisper` set, a line posts, `parakeet` set back, a line posts.
 
@@ -122,7 +122,7 @@ None. The STT heartbeat gains in-memory `engine` and `glossary` fields; the drop
 
 ## Decisions
 
-- Engine: parakeet-ultra through transcribe.cpp, Q8_0, greedy (S10d go). Qwen3-ASR-0.6B was as accurate but missed latency (p95 9.7 s).
+- Engine: parakeet-ultra through transcribe.cpp, Q8_0, greedy (S10d go). Qwen3-ASR-0.6B was as accurate but missed latency (p95 9.7 s). Also rejected (S10, 38 Piper lines unless noted, lab node at the 4-CPU limit): Kyutai stt-1b-en_fr RTF 7.6 on 19 lines, Granite Speech 4.0 1B RTF 12 to 16 on 10, Canary 1B v2 WER 14.4 % against 13.1 % on the real talk at RTFx 5.2 against 17.8 (transcribe.cpp, workstation), and no language detection on the 38 Piper lines, Whisper `medium` and `large-v3-turbo` RTF 2.5 and 3.2 for 0.02 WER or less over `small` with the glossary prompt. Voxtral: too big for the lab run (about 9 GB in bf16); Mini 3B on the workstation bench reached RTFx 0.4 and 6.9 GB (Q8_0).
 - Two processes with 2 threads each, not one with 4: 8.4x real time in total against 6.2x (S10d).
 - The `script` check counts Latin letters: French and English both use them, and a non-Latin transcript means the engine went astray.
 - The language guess only feeds metrics and logs, never the room server, which never received the language before either.
@@ -141,7 +141,7 @@ None. The STT heartbeat gains in-memory `engine` and `glossary` fields; the drop
 ## Decisions (A/B review, user, 2026-10-13)
 
 - The worker dated every cut 800 ms early, as if a pause had ended it. A 15 s forced cut has no pause, so its latency was overstated, in `grill_stt_line_latency_seconds` too. Fix that, then measure again with the one-talker bound unchanged (≤ 4 s).
-- Piper English lines need only WER ≤ 0.08, no longer "at or below whisper": the set is synthetic, and parakeet wins on real speech (spikes/S007-ab.md).
+- Piper English lines need only WER ≤ 0.08, no longer "at or below whisper": parakeet 0.047, whisper 0.031, but the set is synthetic and parakeet wins on real speech (AC16 run, `docs/architecture.md`).
 
 ## Follow-ups (not built in 007)
 
