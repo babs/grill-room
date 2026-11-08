@@ -5664,10 +5664,16 @@ $('host-room-copy').addEventListener('click', () => copyField($('host-room-link'
 $('host-open').hidden = docsMode;
 
 function fitViewport() {
-  // A pinch zoom also shrinks the visual viewport: only the keyboard and toolbars should resize.
-  if (Math.abs(visualViewport.scale - 1) > 0.01) return;
-  document.body.style.setProperty('--vv-height', visualViewport.height + 'px');
-  document.body.style.setProperty('--vv-top', visualViewport.offsetTop + 'px');
+  const s = document.body.style;
+  // A pinch zoom also shrinks the visual viewport, so zoomed the page fits the window instead:
+  // values kept from before the zoom outlive the keyboard and cut the page (002-AC39).
+  if (Math.abs(visualViewport.scale - 1) > 0.01) {
+    s.removeProperty('--vv-height');
+    s.removeProperty('--vv-top');
+    return;
+  }
+  s.setProperty('--vv-height', visualViewport.height + 'px');
+  s.setProperty('--vv-top', visualViewport.offsetTop + 'px');
 }
 if (window.visualViewport) {
   visualViewport.addEventListener('resize', fitViewport);
