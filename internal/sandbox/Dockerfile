@@ -14,7 +14,7 @@ USER builder
 WORKDIR /build
 # Pinned: the stub keys and the proxy's endpoint list were measured on this release (spikes S2, S3).
 ARG CLAUDE_VERSION="2.1.296"
-RUN curl -fsSL https://claude.ai/install.sh | bash -s "${CLAUDE_VERSION}" \
+RUN curl -fsSL --retry 5 https://claude.ai/install.sh | bash -s "${CLAUDE_VERSION}" \
     && cp -L /build/.local/bin/claude /build/claude-bin
 
 # The checksums belong to these versions: bumping one without its sums fails the build.
@@ -31,7 +31,7 @@ RUN case "$(dpkg --print-architecture)" in \
              yq_sha=189088da0c6429ec5178dfaab1a114805f6cab0b61b165ab236efedf1d57a71b ;; \
       *) echo "unsupported architecture $(dpkg --print-architecture)" >&2; exit 1 ;; \
     esac \
-    && curl -fsSLo node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
+    && curl -fsSL --retry 5 -o node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
     && echo "${node_sha}  node.tar.xz" | sha256sum -c - \
     && mkdir node \
     && tar -xJf node.tar.xz -C node --strip-components=1 \
@@ -39,7 +39,7 @@ RUN case "$(dpkg --print-architecture)" in \
          --exclude="node-v${NODE_VERSION}-linux-${node_arch}/share" \
          --exclude="node-v${NODE_VERSION}-linux-${node_arch}/*.md" \
          --exclude="node-v${NODE_VERSION}-linux-${node_arch}/LICENSE" \
-    && curl -fsSLo yq "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_${yq_arch}" \
+    && curl -fsSL --retry 5 -o yq "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_${yq_arch}" \
     && echo "${yq_sha}  yq" | sha256sum -c - \
     && chmod 755 yq
 

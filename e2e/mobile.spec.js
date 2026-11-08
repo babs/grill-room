@@ -152,6 +152,53 @@ for (const name of ['iPhone 15', 'Pixel 7']) {
   });
 }
 
+// 002-AC39: a keyboard opened or closed while the page is pinch-zoomed must not leave the page cut
+// to the window it had before, with bands of nothing above or below it.
+test('a pinch zoom leaves the page fitting the window', async ({ browser, request }) => {
+  const { defaultBrowserType, ...device } = devices['Pixel 7'];
+  const room = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Phone zoom' } })).json();
+  const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
+  const ctx = await browser.newContext(device);
+  const page = await ctx.newPage();
+  await page.goto(new URL(inv.url).pathname + new URL(inv.url).hash);
+  await page.getByLabel('Your name').fill('Alice');
+  await page.getByRole('button', { name: 'Join the room' }).click();
+  await expect(page.locator('#messages')).toContainText('Alice joined');
+  const cdp = await ctx.newCDPSession(page);
+  const { width, height } = page.viewportSize();
+  const fits = (step) => expect.poll(() => page.evaluate(() => {
+    const b = document.body.getBoundingClientRect();
+    return [Math.round(b.top), Math.round(b.bottom - innerHeight)];
+  }), step).toEqual([0, 0]);
+  const zoom = (pageScaleFactor) => cdp.send('Emulation.setPageScaleFactor', { pageScaleFactor });
+  // Android resizes the window for its keyboard (interactive-widget=resizes-content).
+  const keyboard = (up) => page.setViewportSize({ width, height: up ? height - 300 : height });
+
+  await keyboard(true);
+  await fits('keyboard opened');
+  await zoom(1.3);
+  await fits('zoomed with the keyboard up');
+  await keyboard(false);
+  await fits('keyboard closed while zoomed');
+  await keyboard(true);
+  await fits('keyboard opened while zoomed');
+  await zoom(1);
+  await fits('zoom back with the keyboard up');
+  await keyboard(false);
+  await fits('keyboard closed');
+
+  // iOS shifts the visual viewport down to the box: zoomed, that shift must go too.
+  const fake = (props) => page.evaluate((props) => {
+    for (const [k, v] of Object.entries(props)) Object.defineProperty(visualViewport, k, { get: () => v, configurable: true });
+    visualViewport.dispatchEvent(new Event('resize'));
+  }, props);
+  const top = () => page.evaluate(() => Math.round(document.body.getBoundingClientRect().top));
+  await fake({ offsetTop: 200 });
+  await expect.poll(top, 'shifted at scale 1').toBe(200);
+  await fake({ scale: 1.3 });
+  await expect.poll(top, 'shift dropped while zoomed').toBe(0);
+});
+
 // 002-AC39: a scroll up right after a viewport resize keeps a pinned chat at the newest line; any
 // other scroll up unpins it.
 test('a resize does not unpin the chat', async ({ browser, request }) => {
