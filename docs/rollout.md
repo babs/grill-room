@@ -28,8 +28,10 @@ The room server, STT and tts images are built on a workstation and pushed to a p
    ```sh
    git worktree add ../grill-room-<tag> <tag>
    cp .env ../grill-room-<tag>/
-   gh release download <tag> -R babs/grill-room -D ../dist-<tag>
-   make -C ../grill-room-<tag> k8s-push VERSION=<tag> DAEMON_DIST=../dist-<tag>
+   dist=$(mktemp -d -t grill-room-dist.XXXXXX)
+   gh release download <tag> -R babs/grill-room -D "$dist"
+   make -C ../grill-room-<tag> k8s-push VERSION=<tag> DAEMON_DIST="$dist"
+   rm -r "${dist:?}"
    ```
    - `k8s-push` refuses another commit than the tag's, a dirty tree, or a `DAEMON_DIST` of another version: an image without the signed release ships workers every daemon refuses. A `-dev` version skips these checks.
    - It pulls the base images first (`--pull`): a cached floating tag such as `golang:1.27-bookworm` would ship an old toolchain.
