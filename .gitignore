@@ -18,3 +18,4 @@ tools/ui/node_modules/
 
 # Spikes never enter git, only their conclusions do.
 /spikes/
+/dist-prev/
