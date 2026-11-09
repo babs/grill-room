@@ -791,6 +791,10 @@ CI also runs a flake gate, `tools/flake-gate.sh`: on Linux and Windows, the Go t
 - Repeat runs happen in CI, never on a workstation.
 - A spec whose daemon runs agent turns goes in `sandboxSpecs` in `e2e/playwright.config.js`. Chrome fails the requests it is opening whenever the host's interfaces change, and each sandbox adds and removes Docker networks, so those specs run one at a time, after the others.
 
+## License
+
+Apache-2.0, see [LICENSE](LICENSE). Copyright 2026 Damien Degois.
+
 ## Third-party notices
 
 The STT worker image ships these under `/licenses`:
