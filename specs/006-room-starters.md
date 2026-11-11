@@ -44,9 +44,9 @@ Every new room starts the same way: one Default persona, no agenda, no documents
 - [x] **AC6** A starter holds full copies, never references: title, description, default room name, `agenda.md`, fields, personas (name, badge, colour, text, model, effort, triggers, self-call, autocompact, active skills), room skills at a frozen version, documents at one revision (uploads with their original), chain settings (budget, suspended, parallel turns) and the room's words to recognise (STT glossary), carried as data only.
 - [x] **AC7** The built-ins are:
   - Spec grill: Grill (sonnet / high, on demand) + Secretary (sonnet / medium, every 20 voice lines) + Rodin (sonnet / high, on demand);
-  - Retro: Facilitator (sonnet / medium, on demand) + Secretary;
+  - Retro: Facilitator (sonnet / medium, on demand) + Secretary + Timekeeper (sonnet / low, every 5 minutes, time keeper, speaks over after 20 s; 033);
   - Doc review: Reviewer (sonnet / high, on demand, annotates the documents) + Secretary;
-  - Incident: Incident-lead (sonnet / high, on demand, keeps `docs/timeline.md`) + Secretary.
+  - Incident: Incident-lead (sonnet / high, on demand, keeps `docs/timeline.md`) + Secretary + Timekeeper (as in Retro; 033).
 
   Prompts and agendas are in English; personas reply in the room's language. No built-in defaults to opus, and none carries skills.
 

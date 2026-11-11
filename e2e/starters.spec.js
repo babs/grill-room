@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, confirmSheet, smallTargets, noOverflow, rowAction, uniq } from './helpers.js';
+import { roomWith, signIn, confirmSheet, smallTargets, noOverflow, rowAction, uniq, personaSheet } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -80,12 +80,16 @@ test('starter library: duplicate, share, delete, /admin', async ({ browser, requ
 });
 
 const widths = [{ name: 'desktop', width: 1280, height: 800 }, { name: 'phone', width: 390, height: 844 }];
-// Each built-in with the field it asks, and what the room then holds.
+// Each built-in with the field it asks, what the room then holds, and the preview of the personas
+// after the first two.
+const rodin = /Rodin · sonnet · effort high · only when asked/;
+const timekeeper = /Timekeeper · sonnet · effort low · every 5 minutes · keeps time, speaks over after 20 s/;
 const builtins = [
-  { title: 'Spec grill', search: 'SPEC GRILL', field: 'Topic', value: 'Billing', room: 'Grill: Billing', personas: ['Grill', 'Secretary', 'Rodin'] },
-  { title: 'Retro', search: 'retro', field: 'Team', value: 'Ops', room: 'Retro: Ops', personas: ['Facilitator', 'Secretary'] },
-  { title: 'Doc review', search: 'doc review', field: 'Document', value: 'RFC 12', room: 'Review: RFC 12', personas: ['Reviewer', 'Secretary'] },
-  { title: 'Incident', search: 'incident', field: 'Incident', value: 'API down', room: 'Incident: API down', personas: ['Incident-lead', 'Secretary'] },
+  { title: 'Spec grill', search: 'SPEC GRILL', field: 'Topic', value: 'Billing', room: 'Grill: Billing', personas: ['Grill', 'Secretary', 'Rodin'], more: [rodin] },
+  { title: 'Retro', search: 'retro', field: 'Team', value: 'Ops', room: 'Retro: Ops', personas: ['Facilitator', 'Secretary', 'Timekeeper'], more: [timekeeper] },
+  { title: 'Doc review', search: 'doc review', field: 'Document', value: 'RFC 12', room: 'Review: RFC 12', personas: ['Reviewer', 'Secretary'], more: [] },
+  { title: 'Incident', search: 'incident', field: 'Incident', value: 'API down', room: 'Incident: API down', personas: ['Incident-lead', 'Secretary', 'Timekeeper'],
+    more: [timekeeper] },
 ];
 
 for (const vp of widths) {
@@ -110,7 +114,7 @@ for (const vp of widths) {
       await expect(preview.locator('h3')).toHaveText(b.title);
       await expect(preview).toContainText('v1 · by grill-room');
       await expect(preview.locator('.starter-personas li')).toHaveText([new RegExp(`${b.personas[0]} · sonnet · effort (high|medium) · only when asked`),
-        /Secretary · sonnet · effort medium · every 20 voice lines/, ...b.personas.slice(2).map((n) => new RegExp(`${n} · sonnet · effort high · only when asked`))]);
+        /Secretary · sonnet · effort medium · every 20 voice lines/, ...b.more]);
       await expect(preview.locator('.starter-agenda')).toContainText('- [ ]');
       await sheet.getByRole('button', { name: 'Use this starter' }).click();
       const create = sheet.getByRole('button', { name: 'Create room' });
@@ -145,6 +149,24 @@ for (const vp of widths) {
     await expect(page.locator('#created-from')).toHaveCount(0);
   });
 }
+
+// 033-AC2 033-AC4: a room from Retro has the Timekeeper as its time keeper, speaking over after 20 s.
+test('a room from Retro keeps time', async ({ browser, request }) => {
+  const { pages: [page] } = await roomWith(browser, request, ['Tia' + uniq()]);
+  await page.goto('/profile');
+  await page.getByRole('button', { name: 'New room' }).click();
+  await page.getByRole('button', { name: 'Built-in: Retro' }).click();
+  await page.getByRole('button', { name: 'Use this starter' }).click();
+  await page.locator('#starter-fields').getByLabel('Team').fill('Core');
+  await page.getByRole('button', { name: 'Create room' }).click();
+  await expect(page.locator('#room-name')).toHaveText('Retro: Core');
+  await page.locator('#invites').getByRole('button', { name: 'Close' }).click();
+  const sheet = await personaSheet(page, 'Timekeeper', 'Triggers');
+  await expect(sheet.getByLabel('Speaks up')).toHaveValue('every_minutes');
+  await expect(sheet.getByLabel('N', { exact: true })).toHaveValue('5');
+  await expect(sheet.getByLabel('Time keeper')).toBeChecked();
+  await expect(sheet.getByLabel('Speak over after')).toHaveValue('20');
+});
 
 // 006-AC15 006-AC16 006-AC17 006-AC3: a room admin saves a room as a starter from Room settings,
 // picking a document; an undeclared {{x}} in the agenda or the room name blocks the save, naming it,

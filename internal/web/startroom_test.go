@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -359,5 +360,96 @@ func TestStartersCarryVoices(t *testing.T) {
 	oldRoom := decodeJSON[store.Room](t, b)
 	if q, _ := e.st.RoomPersonas(ctx, oldRoom.ID); !q[0].Speaks || q[0].Voice != "" || q[0].VoiceRate != 1 || e.roomOf(t, oldRoom.ID).Speech != store.DefaultSpeech {
 		t.Errorf("older starter: %+v", q[0])
+	}
+}
+
+// 033-AC1 033-AC2 033-AC3: a room from Retro gets its time keeper and wait; saving it as a starter
+// and starting a room from that keeps both. Two time keepers or a cut_in_s off the choices answer
+// 400 with the reason, on every save and start; a starter without the fields reads false and 0.
+func TestStartersCarryTimeKeeper(t *testing.T) {
+	e := newEnv(t)
+	alice := e.signedIn(t, "Alice")
+	ctx := t.Context()
+	keeper := func(room string) (n int, p store.RoomPersona) {
+		ps, _ := e.st.RoomPersonas(ctx, room)
+		for _, q := range ps {
+			if q.TimeKeeper {
+				n, p = n+1, q
+			}
+		}
+		return n, p
+	}
+	code, b := alice.createFrom(t, map[string]any{"name": "Retro: {{team}}", "starter": map[string]any{"id": alice.builtin(t, "Retro"), "version": 1},
+		"fields": map[string]string{"team": "Core"}})
+	if code != http.StatusCreated {
+		t.Fatalf("from Retro: %d %s", code, b)
+	}
+	retro := decodeJSON[store.Room](t, b)
+	if n, p := keeper(retro.ID); n != 1 || p.Name != "Timekeeper" || p.CutInS != 20 {
+		t.Fatalf("Retro's time keeper: %d %+v", n, p)
+	}
+	draft, err := e.st.RoomDraft(ctx, retro.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	save := func(personas []store.StarterPersona) (int, []byte) {
+		return alice.do(t, "POST", "/api/rooms/"+retro.ID+"/starters", map[string]any{"title": "Retro kept", "room_name": draft.RoomName,
+			"agenda": draft.Agenda, "fields": draft.Fields, "personas": personas, "documents": []string{}, "skills": []string{}, "plugins": []string{}})
+	}
+	// with returns the draft's personas with persona i changed by f.
+	with := func(i int, f func(*store.StarterPersona)) []store.StarterPersona {
+		ps := slices.Clone(draft.Personas)
+		f(&ps[i])
+		return ps
+	}
+	twoKeepers := with(0, func(p *store.StarterPersona) { p.TimeKeeper = true })
+	badWait := with(len(draft.Personas)-1, func(p *store.StarterPersona) { p.CutInS = 15 })
+	for name, c := range map[string]struct {
+		ps  []store.StarterPersona
+		why string
+	}{"two time keepers": {twoKeepers, "only one persona may keep the time"}, "cut_in_s 15": {badWait, "cut_in_s must be one of [0 10 20 30 60]"}} {
+		if code, b := save(c.ps); code != http.StatusBadRequest || !strings.Contains(string(b), c.why) {
+			t.Errorf("save as starter, %s: %d %s", name, code, b)
+		}
+	}
+	code, b = save(draft.Personas)
+	if code != http.StatusCreated {
+		t.Fatalf("save as starter: %d %s", code, b)
+	}
+	st := decodeJSON[store.Starter](t, b)
+	_, m, err := e.st.StarterVersion(ctx, st.ID, st.Version, alice.profile(t).Profile.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i := slices.IndexFunc(m.Personas, func(p store.StarterPersona) bool { return p.TimeKeeper }); i < 0 || m.Personas[i].Name != "Timekeeper" || m.Personas[i].CutInS != 20 {
+		t.Fatalf("saved starter: %+v", m.Personas)
+	}
+	version := "/api/profile/starters/" + strconv.FormatInt(st.ID, 10) + "/versions"
+	if code, b := alice.do(t, "POST", version, map[string]any{"version": st.Version, "title": "Retro kept", "room_name": m.RoomName, "agenda": m.Agenda,
+		"fields": m.Fields, "personas": twoKeepers, "documents": []string{}, "skills": []string{}, "plugins": []string{}}); code != http.StatusBadRequest ||
+		!strings.Contains(string(b), "only one persona may keep the time") {
+		t.Errorf("new version, two time keepers: %d %s", code, b)
+	}
+	from := map[string]any{"id": st.ID, "version": st.Version}
+	if code, b := alice.createFrom(t, map[string]any{"name": "Copy", "starter": from, "personas": badWait}); code != http.StatusBadRequest ||
+		!strings.Contains(string(b), "cut_in_s must be one of") {
+		t.Errorf("start, cut_in_s 15: %d %s", code, b)
+	}
+	code, b = alice.createFrom(t, map[string]any{"name": "Copy", "starter": from})
+	if code != http.StatusCreated {
+		t.Fatalf("from the saved starter: %d %s", code, b)
+	}
+	if n, p := keeper(decodeJSON[store.Room](t, b).ID); n != 1 || p.Name != "Timekeeper" || p.CutInS != 20 || p.EveryMinutes != 5 || !p.Speaks {
+		t.Fatalf("copy's time keeper: %d %+v", n, p)
+	}
+
+	var absent store.StarterPersona
+	if err := json.Unmarshal([]byte(`{"name":"Grill"}`), &absent); err != nil || absent.TimeKeeper || absent.CutInS != 0 {
+		t.Fatalf("absent fields: %+v %v", absent, err)
+	}
+	old := e.personalStarter(t, alice)
+	code, b = alice.createFrom(t, map[string]any{"name": "Old", "starter": map[string]any{"id": old.ID, "version": old.Version}})
+	if n, _ := keeper(decodeJSON[store.Room](t, b).ID); code != http.StatusCreated || n != 0 {
+		t.Fatalf("older starter: %d %d %s", code, n, b)
 	}
 }

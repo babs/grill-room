@@ -297,7 +297,7 @@ func checkPersona(p store.StarterPersona) error {
 // cleanPersona returns p as the room API would store it, or why it may not.
 func cleanPersona(p store.StarterPersona) (store.StarterPersona, error) {
 	q := personaReq{Name: &p.Name, Badge: &p.Badge, Colour: &p.Colour, Text: &p.Text, Model: &p.Model, Effort: &p.Effort, EveryN: &p.EveryN,
-		EveryVoice: &p.EveryVoice, EveryMinutes: &p.EveryMinutes, Autocompact: &p.Autocompact, Voice: &p.Voice}
+		EveryVoice: &p.EveryVoice, EveryMinutes: &p.EveryMinutes, Autocompact: &p.Autocompact, Voice: &p.Voice, CutInS: &p.CutInS}
 	if p.VoiceRate != 0 {
 		q.VoiceRate = &p.VoiceRate
 	}

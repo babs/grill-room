@@ -72,7 +72,7 @@ test('Claude Code sets up a room through /mcp', async ({ browser, request }) => 
   const got = await (await request.get(`/api/rooms/${made.room_id}`, { headers: auth })).json();
   expect(got.room.created_from.title).toBe('Retro');
   const agent = await (await request.get(`/api/rooms/${made.room_id}/agent`, { headers: auth })).json();
-  expect(agent.personas.map((p) => p.name).sort()).toEqual(['Facilitator', 'Grill', 'Secretary']);
+  expect(agent.personas.map((p) => p.name).sort()).toEqual(['Facilitator', 'Grill', 'Secretary', 'Timekeeper']);
   const audit = await (await request.get(`/api/admin/audit?action=room.create&target=${made.room_id}`, { headers: admin })).json();
   expect(audit.entries).toHaveLength(1);
   expect(audit.entries[0].details).toMatchObject({ api_token: expect.any(Number) });

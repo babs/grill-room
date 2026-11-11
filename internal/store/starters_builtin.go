@@ -63,6 +63,8 @@ var (
 		s.Speaks = &off
 		return s
 	}()
+	builtinTimekeeper = StarterPersona{PersonaFields: timekeeper, EveryMinutes: *timekeeperRoom.EveryMinutes, Speaks: ptr(*timekeeperRoom.Speaks),
+		TimeKeeper: *timekeeperRoom.TimeKeeper, CutInS: *timekeeperRoom.CutInS}
 )
 
 var builtinStarters = []struct {
@@ -92,7 +94,7 @@ Goal: find where the spec breaks before it is built.
 	}},
 	{"retro", StarterManifest{
 		Title:       "Retro",
-		Description: "A team retrospective: Facilitator runs the agenda, Secretary keeps the minutes and the actions.",
+		Description: "A team retrospective: Facilitator runs the agenda, Secretary keeps the minutes and the actions, Timekeeper keeps the room on time.",
 		RoomName:    "Retro: {{team}}",
 		Agenda: `# Agenda: retrospective of {{team}} {{period}}
 
@@ -107,6 +109,7 @@ Goal: agree on what to keep, what to change, and who does what next.
 		Personas: []StarterPersona{
 			{PersonaFields: PersonaFields{Name: "Facilitator", Badge: "🧭", Colour: "#2f9e44", Text: facilitatorText, Model: "sonnet", Effort: "medium"}},
 			builtinSecretary,
+			builtinTimekeeper,
 		},
 		Skills: []StarterSkill{}, Documents: []StarterDocument{}, Chain: builtinChain,
 	}},
@@ -132,7 +135,7 @@ Goal: leave the document clear, complete and agreed.
 	}},
 	{"incident", StarterManifest{
 		Title:       "Incident",
-		Description: "Handle a code, security or infra incident: Incident-lead runs the response and the timeline, Secretary keeps the minutes and the follow-ups.",
+		Description: "Handle a code, security or infra incident: Incident-lead runs the response and the timeline, Secretary keeps the minutes and the follow-ups, Timekeeper keeps the room on time.",
 		RoomName:    "Incident: {{incident}}",
 		Agenda: `# Agenda: {{scope}} incident {{incident}}
 
@@ -150,6 +153,7 @@ Goal: stop the impact, find the cause, and leave with owned follow-ups.
 		Personas: []StarterPersona{
 			{PersonaFields: PersonaFields{Name: "Incident-lead", Badge: "🚨", Colour: "#e03131", Text: incidentLeadText, Model: "sonnet", Effort: "high"}},
 			builtinSecretary,
+			builtinTimekeeper,
 		},
 		Skills: []StarterSkill{}, Documents: []StarterDocument{}, Chain: builtinChain,
 	}},

@@ -152,9 +152,9 @@ func TestBuiltinStarters(t *testing.T) {
 func TestBuiltinStarterContent(t *testing.T) {
 	want := map[string]string{
 		"spec-grill": "Grill sonnet/high on demand, Secretary sonnet/medium every 20 voice lines, Rodin sonnet/high on demand",
-		"retro":      "Facilitator sonnet/medium on demand, Secretary sonnet/medium every 20 voice lines",
+		"retro":      "Facilitator sonnet/medium on demand, Secretary sonnet/medium every 20 voice lines, Timekeeper sonnet/low automatic",
 		"doc-review": "Reviewer sonnet/high on demand, Secretary sonnet/medium every 20 voice lines",
-		"incident":   "Incident-lead sonnet/high on demand, Secretary sonnet/medium every 20 voice lines",
+		"incident":   "Incident-lead sonnet/high on demand, Secretary sonnet/medium every 20 voice lines, Timekeeper sonnet/low automatic",
 	}
 	for _, b := range builtinStarters {
 		var got []string
@@ -181,6 +181,42 @@ func TestBuiltinStarterContent(t *testing.T) {
 		}
 		if len(b.m.Skills) > 0 || !strings.Contains(b.m.Agenda, "- [ ]") {
 			t.Errorf("%s: skills or no agenda items", b.key)
+		}
+	}
+}
+
+// 033-AC4: Retro and Incident carry the Timekeeper preset with its room settings; Spec grill and
+// Doc review have no time keeper.
+func TestBuiltinTimekeeper(t *testing.T) {
+	var preset PersonaFields
+	for _, p := range presets {
+		if p.key == "timekeeper" {
+			preset = p.f
+		}
+	}
+	if preset.Name == "" {
+		t.Fatal("no timekeeper preset")
+	}
+	for _, b := range builtinStarters {
+		var keepers []StarterPersona
+		for _, p := range b.m.Personas {
+			if p.TimeKeeper || p.Name == preset.Name {
+				keepers = append(keepers, p)
+			}
+		}
+		switch b.key {
+		case "retro", "incident":
+			if len(keepers) != 1 {
+				t.Fatalf("%s: %d time keepers", b.key, len(keepers))
+			}
+			k := keepers[0]
+			if k.PersonaFields != preset || k.EveryMinutes != 5 || k.EveryN != 0 || k.EveryVoice != 0 || !k.SpeaksInCall() || !k.TimeKeeper || k.CutInS != 20 {
+				t.Errorf("%s: %+v", b.key, k)
+			}
+		default:
+			if len(keepers) != 0 {
+				t.Errorf("%s: %+v", b.key, keepers)
+			}
 		}
 	}
 }
