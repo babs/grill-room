@@ -115,6 +115,34 @@ body.room { position: fixed; top: var(--vv-top, 0); left: 0; right: 0; height: 1
 /* The pills never shrink and never spill: the bar scrolls them; the status takes what is left, at
    least 6rem of words, cut with an ellipsis, and the count stays whole. */
 #persona-buttons { display: flex; flex: 0 1 auto; gap: var(--sp-2); min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+/* The edge band: under a "+N" and its fade, a pill counts hidden and takes no click (034-AC4). */
+.persona-bar { --edge-band: 44px; position: relative; display: flex; flex: 0 1 auto; min-width: 0; }
+/* 034-AC6: the room's name keeps 6rem, plus the logo, the gap, the button's padding and chevron. */
+.room-header .zone-room { min-width: calc(32px + var(--sp-2) + 6rem + 3 * var(--sp-1) + 16px + 2px); }
+/* 034-AC1: too narrow for every full pill, all turn compact; the tip and aria-label keep the words. */
+#persona-buttons.compact { scroll-padding-inline: var(--edge-band); }
+#persona-buttons.compact :is(.pname, .pstate) { display: none; }
+#persona-buttons.compact button.persona { gap: var(--sp-1); padding-right: var(--sp-3); }
+/* The bar clips: the ring goes inside (034-AC3). */
+#persona-buttons.compact button.persona:focus-visible { outline-offset: -2px; }
+/* 034-AC4: a mask, not an overlay colour, so the fade follows the chrome in both themes. */
+#persona-buttons { --fl: 0px; --fr: 0px; }
+#persona-buttons.fade-left { --fl: var(--edge-band); }
+#persona-buttons.fade-right { --fr: var(--edge-band); }
+/* A mask takes only the alpha: the opaque stops use a token to stay free of colour literals. */
+#persona-buttons:is(.fade-left, .fade-right) { mask-image: linear-gradient(to right, transparent calc(var(--fl) / 2), var(--chrome) var(--fl),
+  var(--chrome) calc(100% - var(--fr)), transparent calc(100% - var(--fr) / 2)); }
+.persona-more { position: absolute; top: 50%; z-index: 1; min-width: var(--control-h); padding: 0 var(--sp-1); border-radius: var(--r-pill); translate: 0 -50%; font-size: var(--fs-sm); font-weight: 600; }
+.persona-pill.edge-hidden { pointer-events: none; }
+.persona-more.left { left: 0; }
+.persona-more.right { right: 0; }
+/* The 44 px target on a desktop's 36 px circle. */
+.persona-more::after { content: ""; position: absolute; inset: calc((var(--control-h) - 44px) / 2); }
+.persona-more .sig { position: absolute; top: -4px; right: -4px; display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); box-shadow: 0 0 0 1px var(--dot-ring); }
+.persona-more .sig .ico { width: 12px; height: 12px; }
+.persona-more .sig.off-track { color: var(--danger); }
+.persona-more .sig.waiting { color: var(--accent); }
+.persona-more .sig.active { width: 10px; height: 10px; top: -2px; right: -2px; background: var(--accent); }
 #agent-status { flex: 1 1 0; min-width: 0; }
 #agent-status:not(:empty, .sr-only) { min-width: 6rem; }
 #chain-count { flex: none; }
@@ -653,6 +681,8 @@ mark.mention-chip.me { background: var(--accent); color: var(--on-accent); }
   /* Phones: one header row, the personas on a 44 px strip that scrolls sideways, then one tab. */
   .room-header { flex-wrap: wrap; row-gap: 0; padding: var(--sp-1) var(--sp-2); }
   .zone-room { flex: 1 1 0; }
+  /* The phone's floor comes from the audio bar's controls moving into ⋯ (030-AC14), not a width. */
+  .room-header .zone-room { min-width: 0; }
   .zone-agents { order: 1; flex: 1 0 100%; }
   #persona-buttons { scrollbar-width: none; }
   .zone-me { gap: 0; }

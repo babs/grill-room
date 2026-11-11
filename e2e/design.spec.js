@@ -694,12 +694,13 @@ test('the header warning stays in sight past many personas', async ({ browser, r
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
   await alice.evaluate(async (id) => {
     const tpls = await (await fetch(`/api/rooms/${id}/templates`)).json();
-    for (const n of ['Secretary', 'Rodin', 'Secretary', 'Rodin']) {
+    // Compact pills take half the width (034-AC1): eight more make the bar overflow.
+    for (const n of ['Secretary', 'Rodin', 'Secretary', 'Rodin', 'Secretary', 'Rodin', 'Secretary', 'Rodin']) {
       await fetch(`/api/rooms/${id}/personas`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ template_id: tpls.find((t) => t.name === n).id }) });
     }
   }, room.id);
   await alice.reload();
-  await expect(alice.locator('.persona-pill')).toHaveCount(5);
+  await expect(alice.locator('.persona-pill')).toHaveCount(9);
   const warn = alice.locator('#agent-warn');
   const inZone = () => alice.evaluate(() => {
     const r = document.getElementById('agent-warn').getBoundingClientRect();
@@ -727,4 +728,256 @@ test('the header warning stays in sight past many personas', async ({ browser, r
   await alice.setViewportSize({ width: 1024, height: 800 });
   await alice.evaluate(() => agentError('Could not stop it here'));
   await expect(alice.locator('#notice-text')).toHaveText('Could not stop it here');
+});
+
+// addPersonas adds n personas to the room from its templates, in turn; a name taken gets "-2".
+const addPersonas = (page, id, n) => page.evaluate(async ([id, n]) => {
+  const tpls = await (await fetch(`/api/rooms/${id}/templates`)).json();
+  for (let i = 0; i < n; i++) {
+    await fetch(`/api/rooms/${id}/personas`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ template_id: tpls[i % tpls.length].id }) });
+  }
+}, [id, n]);
+
+// barState reads the persona bar: its mode on each pill, its scroll, and each "+N" with the pills
+// the fades leave out of the clear part of the bar (034-AC4).
+const barState = (page) => page.evaluate(() => {
+  const bar = document.getElementById('persona-buttons');
+  const r = bar.getBoundingClientRect();
+  const edge = (side) => document.querySelector('.persona-more.' + side);
+  const shown = (side) => !edge(side).hidden && edge(side).getBoundingClientRect().width > 0;
+  const [left, right] = [shown('left') ? r.left + 44 : r.left, shown('right') ? r.right - 44 : r.right];
+  const pills = [...bar.children].map((e) => e.getBoundingClientRect());
+  return {
+    modes: [...bar.children].map((e) => getComputedStyle(e.querySelector('.pname')).display === 'none'),
+    scroll: bar.scrollLeft, max: bar.scrollWidth - bar.clientWidth,
+    hiddenLeft: pills.filter((p) => p.left < left - 0.5).length,
+    hiddenRight: pills.filter((p) => p.right > right + 0.5).length,
+    width: bar.clientWidth,
+    left: shown('left') ? edge('left').getAttribute('aria-label') : null,
+    right: shown('right') ? edge('right').getAttribute('aria-label') : null,
+  };
+});
+// bandHits names the pills that take a pointer where an edge fades, as far as its mask's ramp
+// reaches, read from the drawn mask: "transparent <a>, opaque <b>, opaque calc(100% - <c>)" (034-AC4).
+const bandHits = (page) => page.evaluate(() => {
+  const el = document.getElementById('persona-buttons');
+  const bar = el.getBoundingClientRect();
+  const stops = [...getComputedStyle(el).maskImage.matchAll(/\)\s+(?:calc\(100% - )?([\d.]+)px/g)].map((m) => parseFloat(m[1]));
+  const ramp = { left: stops[1] || 0, right: stops[2] || 0 };
+  const y = bar.top + bar.height / 2;
+  const out = [];
+  for (const side of ['left', 'right']) {
+    if (document.querySelector('.persona-more.' + side).hidden) continue;
+    if (!ramp[side]) out.push(`${side}: no fade`);
+    for (let d = 1; d < ramp[side]; d += 2) {
+      const pill = document.elementFromPoint(side === 'left' ? bar.left + d : bar.right - d, y)?.closest('.persona-pill');
+      if (pill) out.push(`${side} +${d}: ${pill.dataset.name}`);
+    }
+  }
+  return out;
+});
+const settle = (page) => page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok))));
+const more = (n, side) => `${n} more persona${n > 1 ? 's' : ''}, scroll ${side}`;
+
+// 034-AC1 to 034-AC7: nine personas. Every pill turns compact together where the full ones do not
+// fit; the bar scrolls with a "+N" on each edge that hides pills, carrying the strongest signal it
+// hides; the room's name keeps 6rem and nothing crosses in the agents bar.
+test('the persona bar turns compact and shows what it hides', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  // A press scrolls at once: its distance reads without waiting out a smooth scroll.
+  await alice.emulateMedia({ reducedMotion: 'reduce' });
+  await addPersonas(alice, room.id, 8);
+  await alice.reload();
+  await expect(alice.locator('.persona-pill')).toHaveCount(9);
+  const bar = alice.locator('#persona-buttons');
+  const rem = await alice.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize));
+  // 034-AC6: the room's name shows at least 6rem, or whole when shorter, past what its heading
+  // clips: what is shown over that floor.
+  const nameShown = () => alice.locator('#room-open .name').evaluate((e) => {
+    const [n, h] = [e.getBoundingClientRect(), e.closest('h1').getBoundingClientRect()];
+    const floor = Math.min(6 * parseFloat(getComputedStyle(document.documentElement).fontSize), e.scrollWidth);
+    return Math.min(n.right, h.right) - Math.max(n.left, h.left) - floor;
+  });
+  for (const width of [390, 768, 1024, 1280, 1600]) {
+    await alice.setViewportSize({ width, height: 900 });
+    expect(await nameShown(), `${width} px, short name`).toBeGreaterThanOrEqual(-0.5);
+  }
+  expect((await request.patch(`/api/rooms/${room.id}`, { headers: admin, data: { name: 'A room name long enough to take the header from the personas' } })).status()).toBe(200);
+  await expect(alice.locator('#room-open .name')).toHaveText(/long enough/);
+  for (const width of [390, 768, 1024, 1280, 1600]) {
+    await alice.setViewportSize({ width, height: 900 });
+    await bar.evaluate((b) => { b.scrollLeft = 0; });
+    await settle(alice);
+    let s = await barState(alice);
+    // 034-AC1: nine full pills fit no width here: all compact, never a mix.
+    expect(s.modes, `${width} px`).toEqual(Array(9).fill(true));
+    await expect(bar).toHaveClass(/compact/);
+    // 034-AC3: no signal 112 px at most, 156 px with the mute button; ▶ keeps its target.
+    const widths = await alice.locator('.persona-pill').evaluateAll((els) => els.map((e) => ({
+      plain: !e.querySelector(':is(.watch, .drift, .vstate):not([hidden])'), width: e.getBoundingClientRect().width,
+      run: Math.min(e.querySelector('.persona-run').getBoundingClientRect().width, e.querySelector('.persona-run').getBoundingClientRect().height),
+      h: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--control-h')) })));
+    for (const w of widths) {
+      if (w.plain) expect(w.width, `${width} px`).toBeLessThanOrEqual(112);
+      expect(w.run, `${width} px`).toBeGreaterThanOrEqual(w.h - 0.5);
+    }
+    const heard = await alice.locator('.persona-pill').first().evaluate((e) => {
+      e.querySelector('.persona-hear').hidden = false;
+      const w = e.getBoundingClientRect().width;
+      e.querySelector('.persona-hear').hidden = true;
+      return w;
+    });
+    expect(heard, `${width} px`).toBeLessThanOrEqual(156);
+    // Every "+N" is a 44 px target, the phone's every control too.
+    expect((await smallTargets(alice)).filter((t) => t.includes('more persona')), `${width} px`).toEqual([]);
+    if (width === 390) expect(await smallTargets(alice), '390 px').toEqual([]);
+    expect(await nameShown(), `${width} px`).toBeGreaterThanOrEqual(-0.5);
+    // 034-AC4: at the start, only the right edge hides pills; in the middle both; at the end the left.
+    expect(s.max, `${width} px`).toBeGreaterThan(0);
+    expect([s.left, s.right], `${width} px, start`).toEqual([null, more(s.hiddenRight, 'right')]);
+    expect(s.hiddenLeft).toBe(0);
+    expect(await overlaps(alice), `${width} px, start`).toEqual([]);
+    await bar.evaluate((b) => { b.scrollLeft = (b.scrollWidth - b.clientWidth) / 2; });
+    await settle(alice);
+    s = await barState(alice);
+    expect([s.left, s.right], `${width} px, middle`).toEqual([more(s.hiddenLeft, 'left'), more(s.hiddenRight, 'right')]);
+    expect(s.hiddenLeft + s.hiddenRight, `${width} px, middle`).toBeLessThan(9);
+    expect(await overlaps(alice), `${width} px, middle`).toEqual([]);
+    await shot(alice, `compact-${width}-middle`);
+    // A faded pill takes no click, its ▶ beside the "+N" included; brought in whole, it takes one again.
+    expect(await bandHits(alice), `${width} px, middle`).toEqual([]);
+    const back = alice.locator(`.persona-pill[data-id="${await alice.locator('.persona-pill.edge-hidden').last().getAttribute('data-id')}"]`);
+    await back.evaluate((e) => e.scrollIntoView({ inline: 'center' }));
+    await settle(alice);
+    await expect(back).not.toHaveClass(/edge-hidden/);
+    expect(await back.locator('.persona-run').evaluate((e) => {
+      const r = e.getBoundingClientRect();
+      return e.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2));
+    }), `${width} px, brought in`).toBe(true);
+    await bar.evaluate((b) => { b.scrollLeft = (b.scrollWidth - b.clientWidth) / 2; });
+    await settle(alice);
+    s = await barState(alice);
+    // A press scrolls toward its side by the visible width less the two 44 px edge bands, or as
+    // far as that side goes.
+    const step = s.width - 2 * 44;
+    const lands = (to) => expect.poll(async () => Math.abs((await barState(alice)).scroll - to)).toBeLessThanOrEqual(1);
+    await alice.locator('.persona-more.right').click();
+    await lands(s.scroll + Math.min(step, s.max - s.scroll));
+    const pressed = (await barState(alice)).scroll;
+    await alice.locator('.persona-more.left').click();
+    await lands(pressed - Math.min(step, pressed));
+    await bar.evaluate((b) => { b.scrollLeft = b.scrollWidth; });
+    await settle(alice);
+    s = await barState(alice);
+    expect([s.left, s.right], `${width} px, end`).toEqual([more(s.hiddenLeft, 'left'), null]);
+    expect(s.hiddenRight).toBe(0);
+    expect(await overlaps(alice), `${width} px, end`).toEqual([]);
+  }
+
+  // 034-AC3: the focus ring of a compact pill draws inside the bar.
+  await alice.setViewportSize({ width: 1280, height: 900 });
+  await alice.locator('.persona-pill').first().locator('button.persona').focus();
+  await alice.keyboard.press('Tab');
+  await alice.keyboard.press('Tab');
+  const ring = await alice.evaluate(() => {
+    const e = document.activeElement;
+    const [r, b] = [e.getBoundingClientRect(), document.getElementById('persona-buttons').getBoundingClientRect()];
+    return { pill: e.matches('button.persona'), offset: getComputedStyle(e).outlineOffset, inside: r.top >= b.top - 0.5 && r.bottom <= b.bottom + 0.5 };
+  });
+  expect(ring).toEqual({ pill: true, offset: '-2px', inside: true });
+
+  // 034-AC5: at the start, the right "+N" carries the drift of a hidden time keeper over the
+  // speech bubble of another, then the bubble, then an answer; the pills keep their order.
+  await bar.evaluate((b) => { b.scrollLeft = 0; });
+  await settle(alice);
+  const order = await alice.locator('.persona-pill').evaluateAll((els) => els.map((e) => e.dataset.id));
+  const [last, before, third] = await alice.evaluate(() => agent.personas.slice(-3).reverse().map((p) => ({ id: p.id, name: p.name })));
+  const right = alice.locator('.persona-more.right');
+  await alice.evaluate(([off, waits]) => {
+    ttsOn = true;
+    ttsLive = { pod: true, personas: { [waits]: { state: 'waiting' } } };
+    agent = { ...agent, personas: agent.personas.map((p) => (p.id === off ? { ...p, time_keeper: true, drift_level: 'high', drift_reason: 'Ten minutes on one point.' } : p)) };
+    renderAgent();
+  }, [last.id, before.id]);
+  const n = (await barState(alice)).hiddenRight;
+  await expect(right).toHaveAccessibleName(`${more(n, 'right')}. ${last.name} is off track`);
+  await expect(right.locator('.sig.off-track svg')).toBeVisible();
+  await alice.evaluate((off) => { agent = { ...agent, personas: agent.personas.map((p) => (p.id === off ? { ...p, drift_level: 'low' } : p)) }; renderAgent(); }, last.id);
+  await expect(right).toHaveAccessibleName(`${more(n, 'right')}. ${before.name} is waiting to speak`);
+  await expect(right.locator('.sig.waiting svg')).toBeVisible();
+  await alice.evaluate((id) => { ttsLive = { pod: true, personas: {} }; agent = { ...agent, online: true, running: [{ persona_id: id }] }; renderAgent(); }, third.id);
+  await expect(right).toHaveAccessibleName(`${more(n, 'right')}. ${third.name} is answering`);
+  await expect(right.locator('.sig.active')).toBeVisible();
+  // Nothing hidden to the left: no fade, no button, a signal or not.
+  await expect(alice.locator('.persona-more.left')).toBeHidden();
+  await expect(bar).not.toHaveClass(/fade-left/);
+  expect(await alice.locator('.persona-pill').evaluateAll((els) => els.map((e) => e.dataset.id))).toEqual(order);
+});
+
+// 034-AC1, 034-AC2: four personas keep their full pills on a wide window; a window narrowed past
+// the fit and widened back switches the mode once each way, never back and forth between frames.
+test('the persona bar switches mode once per crossing', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await addPersonas(alice, room.id, 3);
+  await alice.reload();
+  await expect(alice.locator('.persona-pill')).toHaveCount(4);
+  await alice.setViewportSize({ width: 1600, height: 900 });
+  await settle(alice);
+  const bar = alice.locator('#persona-buttons');
+  await expect(bar).not.toHaveClass(/compact/);
+  expect((await barState(alice)).modes).toEqual([false, false, false, false]);
+  await expect(alice.locator('.persona-more')).toHaveCount(2);
+  for (const e of await alice.locator('.persona-more').all()) await expect(e).toBeHidden();
+  // Each frame's mode, as painted.
+  await alice.evaluate(() => {
+    window.modes = [];
+    const bar = document.getElementById('persona-buttons');
+    const tick = () => {
+      const c = bar.classList.contains('compact');
+      if (window.modes.at(-1) !== c) window.modes.push(c);
+      requestAnimationFrame(tick);
+    };
+    tick();
+  });
+  // Coarse steps find the threshold, then single pixels cross it each way, past it and back.
+  const sweep = async (from, to, step) => {
+    let crossed = null;
+    for (let w = from; step < 0 ? w >= to : w <= to; w += step) {
+      await alice.setViewportSize({ width: w, height: 900 });
+      await settle(alice);
+      if (crossed === null && await bar.evaluate((b, c) => b.classList.contains('compact') === c, step < 0)) crossed = w;
+    }
+    return crossed;
+  };
+  // Above 64rem only: the warning's icon leaves the bar there, a second threshold.
+  const at = await sweep(1600, 1040, -40);
+  expect(at, 'the status shows past 64rem').toBeGreaterThan(1024 + 40);
+  let up = null;
+  for (const [from, to, step] of [[at, at + 40, 1], [at + 40, at - 40, -1], [at - 40, at + 40, 1]]) {
+    up = await sweep(from, to, step);
+    expect(up).not.toBeNull();
+  }
+  expect(await alice.evaluate(() => window.modes)).toEqual([false, true, false, true, false]);
+
+  // 034-AC2: a pixel over the threshold, the mode follows a persona added, removed and renamed.
+  await alice.setViewportSize({ width: up, height: 900 });
+  await settle(alice);
+  await expect(bar).not.toHaveClass(/compact/);
+  await alice.evaluate(() => { agent = { ...agent, personas: [...agent.personas, { ...agent.personas[0], id: 1e6, name: 'Extra' }] }; renderAgent(); });
+  await expect.soft(bar, 'persona added').toHaveClass(/compact/);
+  await alice.evaluate(() => { agent = { ...agent, personas: agent.personas.filter((p) => p.id !== 1e6) }; renderAgent(); });
+  await expect.soft(bar, 'persona removed').not.toHaveClass(/compact/);
+  const first = await alice.evaluate(() => agent.personas[0].name);
+  await alice.evaluate(() => { agent = { ...agent, personas: agent.personas.map((p, i) => (i ? p : { ...p, name: 'A persona with a long name' })) }; renderAgent(); });
+  await expect.soft(bar, 'persona renamed').toHaveClass(/compact/);
+  await alice.evaluate((name) => { agent = { ...agent, personas: agent.personas.map((p, i) => (i ? p : { ...p, name })) }; renderAgent(); }, first);
+  await expect.soft(bar, 'name back').not.toHaveClass(/compact/);
+  // The status in words keeps 6rem beside the bar where the warning took one icon: the pills turn
+  // compact for it, and back to full when a warning takes its place again.
+  await alice.evaluate(() => { agent = { ...agent, online: true, running: [{ persona_id: agent.personas[1].id }] }; renderAgent(); });
+  await expect(alice.locator('#agent-status')).toBeVisible();
+  await expect.soft(bar, 'status shown').toHaveClass(/compact/);
+  await alice.evaluate(() => agentError('This answer already stopped.'));
+  await expect(alice.locator('#agent-warn')).toBeVisible();
+  await expect.soft(bar, 'warning instead').not.toHaveClass(/compact/);
 });

@@ -141,6 +141,7 @@ async function loadRoom() {
   }
   (link || heading.querySelector('.name')).textContent = data.room.name;
   roomName = data.room.name;
+  fitPersonas();
   showTitle();
   // Someone else renamed this participant (005-AC21): a rename of their own sets myName first.
   if (myName && data.me.name !== myName) showNotice('Your name in this room is now ' + data.me.name + '.');
@@ -688,10 +689,97 @@ function agentStatus(text, warn) {
 // A tap shows the tip a touch screen has no hover for.
 $('agent-warn').addEventListener('click', () => grillTip.show($('agent-warn')));
 
+// fitPersonas turns every pill compact when the full ones would not all fit (034-AC1, AC2). It
+// measures the full pills whatever the mode, before any paint, so a width gives one mode: no flip-flop.
+function fitPersonas() {
+  const bar = $('persona-buttons');
+  bar.classList.remove('compact');
+  bar.classList.toggle('compact', bar.scrollWidth > bar.clientWidth);
+  showEdges();
+}
+
+// offTrack: only a high drift rating shows, and only while the time keeper role holds (032-AC14).
+function offTrack(p) {
+  return p.time_keeper && p.drift_level === 'high';
+}
+
+// edgeSignal is the strongest signal among hidden pills (034-AC5): drift, then waiting to speak,
+// then answering or speaking.
+function edgeSignal(pills) {
+  const ps = pills.map((el) => personaByID(Number(el.dataset.id))).filter(Boolean);
+  const off = ps.find(offTrack);
+  if (off) return { cls: 'off-track', icon: 'info', text: off.name + ' is off track' };
+  const waits = ps.find((p) => personaVoice(p)?.icon === 'bubble');
+  if (waits) return { cls: 'waiting', icon: 'bubble', text: waits.name + ' is waiting to speak' };
+  for (const p of ps) {
+    if (personaState(p).cls === 'busy') return { cls: 'active', text: p.name + ' is answering' };
+    if (personaVoice(p)?.icon === 'speaking') return { cls: 'active', text: p.name + ' is speaking' };
+  }
+  return null;
+}
+
+// edgeBand is the CSS --edge-band: a pill reaching into it sits under a "+N" and counts as hidden.
+const edgeBand = (bar) => parseFloat(getComputedStyle(bar).getPropertyValue('--edge-band'));
+
+// showEdges puts a fade and a "+N" on each edge that hides pills (034-AC4).
+function showEdges() {
+  const bar = $('persona-buttons');
+  const r = bar.getBoundingClientRect();
+  const edge = edgeBand(bar);
+  const pills = [...bar.children];
+  const more = { left: bar.scrollLeft > 1, right: bar.scrollLeft + bar.clientWidth < bar.scrollWidth - 1 };
+  const out = new Set();
+  for (const side of /** @type {const} */ (['left', 'right'])) {
+    const hidden = !more[side] ? [] : pills.filter((el) => {
+      const b = el.getBoundingClientRect();
+      return side === 'left' ? b.left < r.left + edge : b.right > r.right - edge;
+    });
+    for (const el of hidden) out.add(el);
+    const btn = bar.parentElement.querySelector('.persona-more.' + side);
+    bar.classList.toggle('fade-' + side, hidden.length > 0);
+    if (!hidden.length) {
+      // Its last press scrolled it away: focus goes to the pill it brought in.
+      if (document.activeElement === btn) pills.at(side === 'left' ? 0 : -1)?.querySelector('button.persona')?.focus({ preventScroll: true });
+      btn.hidden = true;
+      continue;
+    }
+    const sig = edgeSignal(hidden);
+    const label = hidden.length + ' more persona' + (hidden.length > 1 ? 's' : '') + ', scroll ' + side + (sig ? '. ' + sig.text : '');
+    btn.hidden = false;
+    if (btn.getAttribute('aria-label') === label) continue;
+    btn.setAttribute('aria-label', label);
+    btn.dataset.tip = label;
+    const dot = sig && span('sig ' + sig.cls, '');
+    if (sig?.icon) dot.append(grillIcon(sig.icon));
+    btn.replaceChildren('+' + hidden.length, ...(dot ? [dot] : []));
+  }
+  // A faded pill takes no click: its ▶ beside the "+N" would run a persona no one sees. Tab still
+  // reaches it and scrolls it in.
+  for (const el of pills) el.classList.toggle('edge-hidden', out.has(el));
+}
+
+let edgeFrame = 0;
+$('persona-buttons').addEventListener('scroll', () => {
+  edgeFrame ||= requestAnimationFrame(() => { edgeFrame = 0; showEdges(); });
+}, { passive: true });
+for (const btn of document.querySelectorAll('.persona-more')) {
+  btn.addEventListener('click', () => {
+    const bar = $('persona-buttons');
+    bar.scrollBy({ left: (btn.classList.contains('left') ? -1 : 1) * (bar.clientWidth - 2 * edgeBand(bar)),
+      behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  });
+}
+// The header follows the window and the audio bar follows the call; neither changes with the mode,
+// so the observer never feeds itself. Names, statuses and personas refit where they are drawn.
+const fitObserver = new ResizeObserver(() => fitPersonas());
+for (const el of document.querySelectorAll('.room-header, .zone-me')) fitObserver.observe(el);
+document.fonts.ready.then(fitPersonas);
+
 // agentError says why an action on the AI failed: in the header's warning where it shows, in the
 // notice where a narrow screen hides it.
 function agentError(text) {
   agentStatus(text, true);
+  fitPersonas();
   const r = $('agent-warn').getBoundingClientRect();
   const z = $('agent').getBoundingClientRect();
   if (!r.width || r.left < z.left - 0.5 || r.right > z.right + 0.5) showNotice(text);
@@ -2539,15 +2627,14 @@ function renderAgent() {
     pill.dataset.id = p.id;
     pill.dataset.name = p.name;
     pill.style.setProperty('--persona', p.colour);
-    // 032-AC14: only a high rating shows, and only while the role holds.
-    const offTrack = p.time_keeper && p.drift_level === 'high' ? 'Off track: ' + p.drift_reason : '';
-    b.setAttribute('aria-label', p.name + (p.watches_notes ? ', watches the notes' : '') + (offTrack ? ', off track: ' + p.drift_reason.replace(/[.!?…]+$/u, '') : '') + ': ' + (voiceSt ? voiceSt.label : st.label) + '. Open its card');
+    const offTrackTip = offTrack(p) ? 'Off track: ' + p.drift_reason : '';
+    b.setAttribute('aria-label', p.name + (p.watches_notes ? ', watches the notes' : '') + (offTrackTip ? ', off track: ' + p.drift_reason.replace(/[.!?…]+$/u, '') : '') + ': ' + (voiceSt ? voiceSt.label : st.label) + '. Open its card');
     const di = b.querySelector('.drift');
-    di.hidden = !offTrack;
-    di.dataset.tip = offTrack ? p.drift_reason : '';
-    if (offTrack) di.setAttribute('aria-label', offTrack);
+    di.hidden = !offTrackTip;
+    di.dataset.tip = offTrackTip ? p.drift_reason : '';
+    if (offTrackTip) di.setAttribute('aria-label', offTrackTip);
     else di.removeAttribute('aria-label');
-    di.replaceChildren(...(offTrack ? [grillIcon('info')] : []));
+    di.replaceChildren(...(offTrackTip ? [grillIcon('info')] : []));
     markWatch(b.querySelector('.watch'), p.watches_notes);
     b.dataset.name = p.name;
     b.querySelector('.badge').textContent = p.badge;
@@ -2591,6 +2678,7 @@ function renderAgent() {
   renderParallel();
   renderPersonas();
   renderWatcher();
+  fitPersonas();
 }
 
 // renderWatcher names the notes watcher above Notes, and redraws the notes' chips when a turn they

@@ -37,7 +37,11 @@
     <h1 id="room-name"><button type="button" id="room-open" popovertarget="room-menu" data-tip="This room: invite people, settings, personas"><span class="name">grill-room</span><span class="chev" data-icon="down"></span></button></h1>
   </div>
   <div class="zone zone-agents" id="agent">
-    <div id="persona-buttons" role="group" aria-label="AI personas"></div>
+    <div class="persona-bar">
+      <button type="button" class="persona-more left" hidden></button>
+      <div id="persona-buttons" role="group" aria-label="AI personas"></div>
+      <button type="button" class="persona-more right" hidden></button>
+    </div>
     <span id="chain-count" class="auto-turns" data-tip="Answers the personas started on their own, one calling another. They pause at the limit; any message from a person starts the count over." hidden></span>
     <button type="button" id="agent-warn" class="btn-icon btn-ghost" data-icon="alert" aria-label="AI warning" aria-describedby="agent-status" hidden></button>
     <span id="agent-status" class="muted" role="status"></span>
