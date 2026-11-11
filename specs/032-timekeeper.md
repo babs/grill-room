@@ -36,7 +36,7 @@ What it sees comes from a **time-keeper** capability, a persona option like "Wat
 - Recorded interjection clips; a per-room interjection list.
 - Speaking over a human for any persona without the time-keeper option.
 - Talk-time statistics, a speaking-time chart, a meeting timer in the UI.
-- The time-keeper settings in room starters and in the MCP `edit_persona` tool: a starter made from a room recreates its Timekeeper without the role.
+- The time-keeper settings in the MCP `edit_persona` tool. (Room starters carry them since 033.)
 
 ## Acceptance criteria
 

@@ -10,7 +10,7 @@ import { size, ago, icon } from './room-panel.js';
  * @typedef {{label: string, key: string, required?: boolean, hint?: string}} Field
  * @typedef {{name: string, badge: string, colour: string, text: string, model: string, effort: string,
  *   every_n?: number, every_voice?: number, every_minutes?: number, self_call?: boolean, watches_notes?: boolean, autocompact?: number,
- *   skills?: string[], plugins?: string[]}} StarterPersona
+ *   speaks?: boolean, time_keeper?: boolean, cut_in_s?: number, skills?: string[], plugins?: string[]}} StarterPersona
  * @typedef {{name: string, version: number, author: string, description: string, size: number, file: string}} StarterSkill
  * @typedef {{name: string, url: string, ref: string, ref_name: string, entry?: string, private?: boolean, commit: string, sha256: string,
  *   size: number, files: number, file: string}} StarterPlugin
@@ -160,7 +160,7 @@ function Preview({ view }) {
     ${m.description && html`<p>${m.description}</p>`}
     <h4>Agenda</h4>${m.agenda ? html`<pre class="starter-agenda">${m.agenda}</pre>` : html`<p class="empty">None.</p>`}
     <h4>AI personas</h4>
-    <ul class="starter-personas">${m.personas.map((p) => html`<li key=${p.name}>${p.badge} ${p.name} · ${p.model} · effort ${p.effort} · ${triggerText(p)}</li>`)}</ul>
+    <ul class="starter-personas">${m.personas.map((p) => html`<li key=${p.name}>${p.badge} ${p.name} · ${p.model} · effort ${p.effort} · ${triggerText(p)}${p.time_keeper ? ` · keeps time${p.cut_in_s && p.speaks !== false ? `, speaks over after ${p.cut_in_s} s` : ''}` : ''}</li>`)}</ul>
     <h4>Documents</h4>${m.documents.length ? html`<ul>${m.documents.map((d) => html`<li key=${d.name}>${d.name}</li>`)}</ul>` : html`<p class="empty">None.</p>`}
     <h4>Skills</h4>${m.skills.length ? html`<ul>${m.skills.map((k) => html`<li key=${k.name}>${k.name} v${k.version}</li>`)}</ul>` : html`<p class="empty">None.</p>`}
     <h4>Plugins</h4>${m.plugins?.length ? html`<ul id="preview-plugins">${m.plugins.map((p) => html`<li key=${p.name}>${pluginLabel(p)}</li>`)}</ul>`

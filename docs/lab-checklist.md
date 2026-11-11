@@ -47,7 +47,7 @@ On a desktop Chrome with 4 cores or more, after a deploy. It takes about two min
 
 Needs the `tts` pod (`kubectl -n grill-room get deploy tts`) and an AI host for the room. Use headphones on one side so its speakers do not feed its mic.
 
-1. Create a room from the Retro starter: Facilitator and Secretary both speak in the call. Join the audio on the phone and the laptop.
+1. Create a room from the Retro starter: Facilitator, Secretary and Timekeeper speak in the call. Join the audio on the phone and the laptop.
 2. Each speaking persona's pill shows a speaker button; a click on a pill opens its card, which names its voice.
 3. Ask Facilitator, then Secretary, with the ▶ on their pills. When Facilitator's turn ends its pill shows "speaking" and you hear a short line in its voice; if Secretary's turn ends meanwhile, its pill shows "waiting to speak" until Facilitator is done, then it speaks in another voice.
 4. While Facilitator speaks, say a sentence on the phone. It stops at once, its pill says "waiting to speak", and once the room has been quiet a second it says the cut sentence again from its start.

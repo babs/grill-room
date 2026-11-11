@@ -53,6 +53,9 @@ type StarterPersona struct {
 	Speaks    *bool   `json:"speaks,omitempty"`
 	Voice     string  `json:"voice,omitempty"`
 	VoiceRate float64 `json:"voice_rate,omitempty"`
+	// TimeKeeper and CutInS are absent from a starter saved before 033: no time keeper, a wait of 0 (033-AC1).
+	TimeKeeper bool `json:"time_keeper,omitempty"`
+	CutInS     int  `json:"cut_in_s,omitempty"`
 }
 
 // SpeaksInCall is p.Speaks with a starter from before 013 read as on.

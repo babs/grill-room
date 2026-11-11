@@ -313,10 +313,14 @@ func keptPlugins(p store.StarterPersona, kept []store.StarterPlugin) ([]string, 
 	return out, nil
 }
 
-// oneWatcher refuses personas of which more than one watches the notes (009-AC31).
+// oneWatcher refuses personas of which more than one watches the notes (009-AC31), or more than
+// one keeps the time (033-AC1).
 func oneWatcher(ps []store.StarterPersona) error {
 	if len(slices.DeleteFunc(slices.Clone(ps), func(p store.StarterPersona) bool { return !p.WatchesNotes })) > 1 {
 		return badRequest("only one persona may watch the notes")
+	}
+	if len(slices.DeleteFunc(slices.Clone(ps), func(p store.StarterPersona) bool { return !p.TimeKeeper })) > 1 {
+		return badRequest("only one persona may keep the time")
 	}
 	return nil
 }

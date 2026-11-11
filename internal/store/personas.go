@@ -120,6 +120,12 @@ Answer in the language the room speaks. If it mixes languages, use the one of th
 // rodin is both a template and a Spec grill persona: one value keeps the two copies equal.
 var rodin = PersonaFields{Name: "Rodin", Badge: "🗿", Colour: "#495057", Text: rodinText, Model: "sonnet", Effort: "high"}
 
+// timekeeper and timekeeperRoom are both the preset and the Retro and Incident persona (033-AC4).
+var (
+	timekeeper     = PersonaFields{Name: "Timekeeper", Badge: "⏱️", Colour: "#0c8599", Text: timekeeperText, Model: "sonnet", Effort: "low"}
+	timekeeperRoom = &PersonaPatch{EveryMinutes: ptr(5), Speaks: ptr(true), TimeKeeper: ptr(true), CutInS: ptr(20)}
+)
+
 // presets are the shipped templates. Changing one here publishes a new version at the next start.
 // Their texts carry no trailing newline: the room trims persona texts, so one would read as an edit.
 var presets = []struct {
@@ -132,8 +138,7 @@ var presets = []struct {
 	{PresetDefault, "Grill", PersonaFields{Name: "Grill", Badge: "🔥", Colour: "#d9480f", Text: grillText, Model: DefaultModel, Effort: DefaultEffort}, nil},
 	{"secretary", "Secretary", PersonaFields{Name: "Secretary", Badge: "📝", Colour: "#1971c2", Text: secretaryText, Model: DefaultModel, Effort: DefaultEffort}, nil},
 	{"rodin", "Rodin", rodin, nil},
-	{"timekeeper", "Timekeeper", PersonaFields{Name: "Timekeeper", Badge: "⏱️", Colour: "#0c8599", Text: timekeeperText, Model: "sonnet", Effort: "low"},
-		&PersonaPatch{EveryMinutes: ptr(5), Speaks: ptr(true), TimeKeeper: ptr(true), CutInS: ptr(20)}},
+	{"timekeeper", "Timekeeper", timekeeper, timekeeperRoom},
 }
 
 func ptr[T any](v T) *T { return &v }
