@@ -47,6 +47,7 @@ func DiffHTML(oldHTML, newHTML []byte) []byte {
 	// No semantic cleanup: it is tuned for characters and here one rune is a whole word,
 	// so it would swallow the untouched words sitting between two edits of the same line.
 	diffs := dmp.DiffMainRunes(v.encode(oldTokens), v.encode(newTokens), false)
+	diffs = foldStrayEqualities(dmp, diffs, v.kinds(append(oldTokens, newTokens...)))
 
 	var out strings.Builder
 	out.Grow(len(newHTML))
@@ -70,6 +71,58 @@ func DiffHTML(oldHTML, newHTML []byte) []byte {
 		}
 	}
 	return []byte(out.String())
+}
+
+// strayWords is the most text an equality may hold and still be a coincidence when it
+// sits between edits that cross a block boundary.
+const strayWords = 2
+
+// foldStrayEqualities turns a short equality into a change when the edits on either side of
+// it carry text across a block boundary: a word such as "a" left over from a rewritten
+// paragraph would otherwise anchor in another section and split the rewrite in two. Equalities
+// between edits of the same line are kept, so an untouched word inside a rewritten sentence
+// stays unmarked, and so are those next to a tag that only changed its attributes.
+func foldStrayEqualities(dmp *diffmatchpatch.DiffMatchPatch, diffs []diffmatchpatch.Diff, kinds map[rune]runeKind) []diffmatchpatch.Diff {
+	crosses := func(ds []diffmatchpatch.Diff) bool {
+		var block, text bool
+		for _, d := range ds {
+			for _, r := range d.Text {
+				block = block || kinds[r] == runeBlock
+				text = text || kinds[r] == runeText
+			}
+		}
+		return block && text
+	}
+	// edits returns the run of changes that ends before i (step -1) or starts after it (step 1).
+	edits := func(i, step int) []diffmatchpatch.Diff {
+		j := i + step
+		for j >= 0 && j < len(diffs) && diffs[j].Type != diffmatchpatch.DiffEqual {
+			j += step
+		}
+		if step < 0 {
+			return diffs[j+1 : i]
+		}
+		return diffs[i+1 : j]
+	}
+	for changed := true; changed; {
+		changed = false
+		for i, d := range diffs {
+			if d.Type != diffmatchpatch.DiffEqual || utf8.RuneCountInString(d.Text) > strayWords || hasTag(d.Text, kinds) {
+				continue
+			}
+			before, after := edits(i, -1), edits(i, 1)
+			if len(before) == 0 || len(after) == 0 || !crosses(before) && !crosses(after) {
+				continue
+			}
+			folded := append(append([]diffmatchpatch.Diff{}, diffs[:i]...),
+				diffmatchpatch.Diff{Type: diffmatchpatch.DiffDelete, Text: d.Text},
+				diffmatchpatch.Diff{Type: diffmatchpatch.DiffInsert, Text: d.Text})
+			diffs = dmp.DiffCleanupMerge(append(folded, diffs[i+1:]...))
+			changed = true
+			break
+		}
+	}
+	return diffs
 }
 
 func writeInserted(out *strings.Builder, tokens []token) {
@@ -307,6 +360,58 @@ func (v *vocab) encode(tokens []token) []rune {
 		out = append(out, r)
 	}
 	return out
+}
+
+type runeKind uint8
+
+const (
+	runeBlank runeKind = iota
+	runeText
+	runeTag
+	runeBlock // a tag that opens or closes a block: a change holding one spans more than a line
+)
+
+// kinds classifies the runes the tokens were encoded to.
+func (v *vocab) kinds(tokens []token) map[rune]runeKind {
+	out := make(map[rune]runeKind, len(v.ids))
+	for _, t := range tokens {
+		k := runeText
+		switch {
+		case t.kind == kindTag && isBlockTag(t.s):
+			k = runeBlock
+		case t.kind == kindTag:
+			k = runeTag
+		case isBlank(t.s):
+			k = runeBlank
+		}
+		out[v.ids[key(t)]] = k
+	}
+	return out
+}
+
+func hasTag(s string, kinds map[rune]runeKind) bool {
+	for _, r := range s {
+		if kinds[r] >= runeTag {
+			return true
+		}
+	}
+	return false
+}
+
+var blockTags = map[string]bool{
+	"p": true, "li": true, "ul": true, "ol": true, "dl": true, "dt": true, "dd": true,
+	"h1": true, "h2": true, "h3": true, "h4": true, "h5": true, "h6": true,
+	"pre": true, "blockquote": true, "table": true, "tr": true, "td": true, "th": true,
+	"div": true, "section": true, "hr": true,
+}
+
+// isBlockTag reports whether tag opens or closes a block-level element.
+func isBlockTag(tag string) bool {
+	name := strings.TrimLeft(tag, "</")
+	if end := strings.IndexAny(name, " \t\n/>"); end >= 0 {
+		name = name[:end]
+	}
+	return blockTags[strings.ToLower(name)]
 }
 
 // key identifies a token for the comparison. Prose words drop the shape of the trailing
