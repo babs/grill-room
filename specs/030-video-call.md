@@ -1,6 +1,6 @@
 # 030 — Camera and screen share in the call
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-06
 **Context**: builds on 005 (room audio, deafen), 020 (room layout), 029 (screen capture into the chat). Spike S19 measured the media path.
@@ -112,6 +112,8 @@ Opening the stage is up to each viewer, so a document being read stays open. Whe
   - at 390 px, the Video tab appears with a count, no screen share button is present, and the tab disappears when the last video stops, unless it is the open tab, which stays with the empty stage.
 
   Then on the lab (TURN/TLS only), two browsers on different networks, one a phone on mobile data, see each other's camera and a screen share for 5 minutes. The report goes in the tracking file, with freezes and received resolution from the diagnostics sheet.
+
+  Lab result (2026-11-10): a real meeting of more than 15 minutes, Chrome on macOS and Firefox on Linux on two networks, both through TURN; camera 720p and screen share 1080p published and seen. Freezes and received resolution were not recorded, and the phone on mobile data was not tested; shipped on this evidence.
 
 ## Data model impact (summary)
 
