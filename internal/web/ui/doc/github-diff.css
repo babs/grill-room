@@ -17,6 +17,11 @@ del.gg-del,
   border-radius: 3px;
 }
 
+/* A deletion that ends without a space would touch the insertion after it ("soon.in v4.2"). */
+del.gg-del + ins.gg-ins {
+  margin-left: 0.25em;
+}
+
 /* A removed image is still rendered, dimmed, since a strikethrough does not show on it. */
 del.gg-del img {
   opacity: 0.5;

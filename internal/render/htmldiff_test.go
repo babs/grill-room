@@ -32,6 +32,25 @@ func TestDiffHTML(t *testing.T) {
 				`<del class="gg-del">jumps </del><ins class="gg-ins">leaps</ins> over the lazy dog</p>` + "\n",
 		},
 		{
+			name:        "a word kept by chance in another section does not split a rewrite",
+			old:         "<h2>Risks</h2>\n<ul>\n<li>Storage might be a problem.</li>\n</ul>\n",
+			new:         "<h2>Risks</h2>\n<ul>\n<li>Cache capped.</li>\n</ul>\n<h2>Metric</h2>\n<ul>\n<li>Survive a short outage.</li>\n</ul>\n",
+			wantContain: []string{`<del class="gg-del">Storage might be a problem.</del>`, `Survive a short outage.`},
+			wantAbsent:  []string{`<del class="gg-del">problem.</del>`},
+		},
+		{
+			name:       "the same across paragraphs",
+			old:        "<p>we ship it in a week</p>\n",
+			new:        "<p>we drop it</p>\n<p>later in a month</p>\n",
+			wantAbsent: []string{"</ins> in a <del", "</ins> a <del"},
+		},
+		{
+			name:        "an untouched word between two edits of one line stays unmarked",
+			old:         "<li>We will make the app work offline soon.</li>\n",
+			new:         "<li>Ship read-only offline in v4.2.</li>\n",
+			wantContain: []string{`</ins> offline <del`},
+		},
+		{
 			name: "re-wrapping a paragraph is not a change",
 			old:  "<p>bonjour monsieur x, aze\nqsd aze</p>\n",
 			new:  "<p>bonjour monsieur x, aze qsd aze</p>\n",
