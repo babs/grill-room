@@ -61,6 +61,42 @@ test('with a document open the pane is above the messages', async ({ browser, re
   await expect(inPane(alice, 1e9 + 39)).toBeInViewport();
 });
 
+// The composer in a narrow chat (beside a document, on a phone) gives the box the whole width, the
+// tools and Send on a row under it; in a wide chat the tools and Send are centred on the box. The pane
+// head never draws "Voice-to-text is off" over its title.
+test('the composer and the pane head fit a narrow chat', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  const boxes = () => Promise.all(['#send', '#body', '#attach-open', '#send > [type=submit]'].map((s) => alice.locator(s).boundingBox()));
+  const mid = (b) => b.y + b.height / 2;
+  let [send, body, attach, submit] = await boxes();
+  expect(Math.abs(mid(attach) - mid(body))).toBeLessThanOrEqual(1);
+  expect(Math.abs(mid(submit) - mid(body))).toBeLessThanOrEqual(1);
+
+  // After a resize the layout settles over a frame or two: wait for the box to take the width.
+  const narrowChat = async () => {
+    await expect.poll(async () => { [send, body, attach, submit] = await boxes(); return body.width >= send.width - 2 * 16 - 1; }).toBe(true);
+    expect(attach.y).toBeGreaterThanOrEqual(body.y + body.height);
+    expect(Math.abs(mid(submit) - mid(attach))).toBeLessThanOrEqual(1);
+    expect(submit.x + submit.width).toBeGreaterThanOrEqual(body.x + body.width - 1);
+  };
+  await alice.setViewportSize({ width: 390, height: 800 });
+  await narrowChat();
+
+  await alice.setViewportSize(wide);
+  await upload(alice, 'plan.md', 'text/markdown', '# Plan\n');
+  await expect(alice.locator('#viewer')).toBeVisible();
+  await narrowChat();
+
+  await alice.setViewportSize({ width: 1024, height: 720 });
+  await playEvents(alice, room.id, [['stt', { available: false, listening: false, transcribed: [], engines: [] }]]);
+  await expect(alice.locator('#transcript-off')).toBeVisible();
+  // As narrow as the chat column beside the Video stage at 1024 px.
+  await alice.locator('#transcript').evaluate((p) => { p.style.width = '256px'; });
+  const [title, off] = await Promise.all(['#transcript-title', '#transcript-off'].map((s) => alice.locator(s).boundingBox()));
+  expect(off.y >= title.y + title.height || off.x >= title.x + title.width).toBe(true);
+  expect(await alice.locator('#transcript-title').evaluate((h) => h.scrollWidth <= h.clientWidth)).toBe(true);
+});
+
 // 020-AC10: pinned within 40 px of the end, a new line scrolls the pane down; once the reader
 // scrolled up, it is left alone. A pane that comes back, unfolded or past 64rem, is at its end.
 test('the pane sticks to its end until scrolled up', async ({ browser, request }) => {
