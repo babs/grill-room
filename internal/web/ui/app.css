@@ -564,9 +564,11 @@ body.docs-window #chat-fold, body.docs-window #chat-unfold { display: none; }
 :is(#chat-empty, #filter-empty) { margin: 0 var(--sp-4) var(--sp-3); }
 /* Transcription pane (020-AC8): room.js sets .transcript-room while it fits, .fold-transcript folded. */
 #transcript { display: none; }
-#transcript .pane-head { min-height: 44px; padding: var(--sp-1) var(--sp-4); }
+#transcript .pane-head { flex-wrap: wrap; min-height: 44px; padding: var(--sp-1) var(--sp-4); }
+/* The title keeps its whole width: "Voice-to-text is off" wraps under it rather than over it. */
+#transcript-title { flex: 1 0 auto; }
 #text-size .text-steps { display: flex; gap: var(--sp-4); }
-#transcript-off { color: var(--text-muted); font-size: var(--fs-xs); }
+#transcript-off { margin-left: auto; color: var(--text-muted); font-size: var(--fs-xs); }
 #transcript-count:empty { display: none; }
 #voice-lines { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: var(--sp-3) var(--sp-4); }
 #transcript-empty { margin: var(--sp-3) var(--sp-4); }
@@ -643,8 +645,10 @@ mark.mention-chip.persona[data-badge]::before { content: attr(data-badge) " "; }
 mark.mention-chip.me { background: var(--accent); color: var(--on-accent); }
 /* The bar and the tint bleed into the list's padding: the text stays in line with the other messages. */
 .msg.mentions-me { margin-left: calc(-1 * var(--sp-2)); padding-left: var(--sp-2); background: var(--highlight); box-shadow: inset 3px 0 0 var(--accent); }
-#send { position: relative; display: flex; flex-wrap: wrap; align-items: end; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--border); }
+#send { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); padding: var(--sp-3) var(--sp-4); border-top: 1px solid var(--border); container-type: inline-size; }
 #send textarea { flex: 1; resize: vertical; }
+/* A narrow chat (beside a document or the Video stage, on a phone): the box takes the whole width, the tools and Send go under it. */
+@container (width < 30rem) { #send textarea { order: -1; flex-basis: 100%; } #send > [type=submit] { margin-left: auto; } }
 #send-hint { flex-basis: 100%; margin: 0; }
 /* Files to send (029-AC3): one chip each under the box, an image with its preview. */
 #pending { display: flex; flex-wrap: wrap; flex-basis: 100%; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; }
