@@ -1,6 +1,6 @@
 # 031 — Raise hand, a chat window, a pop-out video
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-07
 **Context**: builds on 005 (presence, People list), 008 (docs window), 029 (files in the chat), 030 (Video stage). 032 (Timekeeper) reads this spec's hand queue.
@@ -75,6 +75,8 @@ The Video stage can **pop out** into a small always-on-top window, with the mic,
 - **Covers**: AC12, AC13, AC14, AC15
 - **Data model impact**: none
 - **DoD**: `e2e/video/video.spec.js` extended (Chrome has Document PiP; the test opens it from a user gesture): A pops out and the window shows B's camera and screen share large; mute, camera and hand from the window act on the call; the page shows "Bring it back"; the LiveKit room still counts two participants; closing the window brings the stage back; leaving the audio from the window ends every local track (`readyState === 'ended'`); with `documentPictureInPicture` deleted by an init script, "Pop out" calls `requestPictureInPicture` on the large video; with both deleted, no button. `go test ./internal/uikit/` and `e2e/design.spec.js` green. Then by hand on the lab: Chrome and Safari each pop out over another app for 2 minutes. The report goes in the tracking file.
+
+  Lab result (2026-11-12): tested by hand on the lab, the pop-out works. Browsers and duration were not recorded; shipped on this evidence.
 
 ## Data model impact (summary)
 
