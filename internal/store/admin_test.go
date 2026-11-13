@@ -82,7 +82,7 @@ func TestAuditOutlivesTargetsUntilPurged(t *testing.T) {
 	if err := s.DeleteProfile(entry("profile.delete", TargetProfile, pid), p.ProfileID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteRoom(entry("room.delete", TargetRoom, "a"), "a"); err != nil {
+	if _, err := s.DeleteRoom(entry("room.delete", TargetRoom, "a"), "a"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.AuditLog(ctx, AuditQuery{Limit: 10})
@@ -90,7 +90,7 @@ func TestAuditOutlivesTargetsUntilPurged(t *testing.T) {
 		t.Fatalf("after deletes: %+v %v", got, err)
 	}
 	// A target gone already: the delete fails, and no entry is written.
-	if err := s.DeleteRoom(entry("room.delete", TargetRoom, "a"), "a"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.DeleteRoom(entry("room.delete", TargetRoom, "a"), "a"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("second delete: %v", err)
 	}
 	if again, _ := s.AuditLog(ctx, AuditQuery{Limit: 10}); len(again) != 3 {
@@ -206,7 +206,7 @@ func TestAuditWriteFailureRollsBackTheChange(t *testing.T) {
 		want   string
 	}{
 		{"create room", func() error { _, err := s.CreateRoom(audited(TargetRoom, "n"), "n", "N"); return err }, `SELECT count(*) FROM rooms WHERE id = 'n'`, nil, "0"},
-		{"delete room", func() error { return s.DeleteRoom(audited(TargetRoom, "a"), "a") }, `SELECT count(*) FROM rooms WHERE id = 'a'`, nil, "1"},
+		{"delete room", func() error { _, err := s.DeleteRoom(audited(TargetRoom, "a"), "a"); return err }, `SELECT count(*) FROM rooms WHERE id = 'a'`, nil, "1"},
 		{"rename room", func() error { _, err := s.RenameRoom(audited(TargetRoom, "a"), "a", "Z", nil); return err }, `SELECT name FROM rooms WHERE id = 'a'`, nil, "Room a"},
 		{"room quota", func() error { return s.SetRoomQuota(audited(TargetRoom, "a"), "a", 5) }, `SELECT quota_bytes FROM rooms WHERE id = 'a'`, nil, ""},
 		{"create invite", func() error { _, err := s.CreateInvite(audited(TargetRoom, "a"), "a", "ix", 0); return err }, `SELECT count(*) FROM invites WHERE token_hash = 'ix'`, nil, "0"},

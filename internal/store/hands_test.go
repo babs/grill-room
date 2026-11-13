@@ -78,7 +78,7 @@ func TestHandsRaiseLowerRemove(t *testing.T) {
 	if got := handIDs(t, s, "a", now); !slices.Equal(got, []int64{bob.ID}) {
 		t.Fatalf("after Carol's removal: %v", got)
 	}
-	if err := s.DeleteRoom(ctx, "a"); err != nil {
+	if _, err := s.DeleteRoom(ctx, "a"); err != nil {
 		t.Fatal(err)
 	}
 	if n := handRows(t, s); n != 0 {

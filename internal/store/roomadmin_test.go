@@ -209,7 +209,7 @@ func TestCreateProfileRoomGuardrails(t *testing.T) {
 	if _, err := createFor(t, s, "b1", bob, "Bob"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteRoom(ctx, "r1"); err != nil {
+	if _, err := s.DeleteRoom(ctx, "r1"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := createFor(t, s, "r3", alice, "Alice"); err != nil {
@@ -527,7 +527,7 @@ func TestUsedBytesFollowsDeletes(t *testing.T) {
 	if grew := with - before; grew < size || grew > size+16<<10 {
 		t.Fatalf("an upload of %d bytes grew the count by %d", size, grew)
 	}
-	if err := s.DeleteRoom(ctx, "big"); err != nil {
+	if _, err := s.DeleteRoom(ctx, "big"); err != nil {
 		t.Fatal(err)
 	}
 	if after, _ := s.UsedBytes(ctx); after > before {

@@ -98,7 +98,7 @@ function end(text) {
   $('upload-open').hidden = true;
   for (const el of document.querySelectorAll('.dropping')) el.classList.remove('dropping');
   document.body.classList.remove('drag-files');
-  for (const id of ['manage-open', 'invite-open', 'personas-open']) $(id).hidden = true;
+  for (const id of ['manage-open', 'invite-open', 'personas-open', 'links-open']) $(id).hidden = true;
   $('room-open').disabled = true;
   delete $('room-open').dataset.tip;
   for (const d of document.querySelectorAll('dialog[open]')) d.close();
@@ -173,8 +173,32 @@ async function loadRoom() {
   // The room admin panel (admin/room-admin.js) renders from the same answer.
   window.grillRoom = data;
   window.dispatchEvent(new CustomEvent('grill:room', { detail: data }));
+  showLinks().catch(console.error);
   return true;
 }
+
+// showLinks names the rooms linked to this one in the room menu, once there is one (023-AC8), and
+// hands the list to Room settings › Links (admin/room-admin.js), which reloads through it.
+async function showLinks() {
+  let links;
+  try {
+    const res = await netFetch(api + '/links');
+    if (!res.ok) throw new Error(res.statusText);
+    links = await res.json();
+  } catch {
+    // null tells the Links tab the load failed, apart from undefined, not loaded yet.
+    window.grillLinks = null;
+    window.dispatchEvent(new CustomEvent('grill:links', { detail: null }));
+    return;
+  }
+  // One room linked both ways is one linked room.
+  const n = new Set(links.map((l) => (l.reader_room === roomID ? l.read_room : l.reader_room))).size;
+  $('links-count').textContent = String(n);
+  $('links-open').hidden = n === 0;
+  window.grillLinks = links;
+  window.dispatchEvent(new CustomEvent('grill:links', { detail: links }));
+}
+window.grillShowLinks = () => showLinks().catch(console.error);
 
 // showMe draws the user menu's button: initials in a ring, and the name beside them when wide.
 function showMe() {

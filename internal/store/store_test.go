@@ -459,7 +459,7 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 			t.Fatalf("seed wrote no %s", tb)
 		}
 	}
-	if err := s.DeleteRoom(ctx, "a"); err != nil {
+	if _, err := s.DeleteRoom(ctx, "a"); err != nil {
 		t.Fatal(err)
 	}
 	for _, tb := range indirect {
@@ -477,7 +477,7 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 			t.Errorf("%s lost the other room's rows", table)
 		}
 	}
-	if err := s.DeleteRoom(ctx, "a"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.DeleteRoom(ctx, "a"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("second delete: got %v, want ErrNotFound", err)
 	}
 	for room, want := range map[string]int{"a": 0, "b": 1} {

@@ -40,7 +40,7 @@ func TestDaemons(t *testing.T) {
 	if _, err := s.DaemonByToken(ctx, "h2"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("revoked participant's daemon still valid: %v", err)
 	}
-	if err := s.DeleteRoom(ctx, "r1"); err != nil {
+	if _, err := s.DeleteRoom(ctx, "r1"); err != nil {
 		t.Fatal(err)
 	}
 	var n int

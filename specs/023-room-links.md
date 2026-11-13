@@ -1,6 +1,6 @@
 # 023: Room links and related rooms
 
-**Status**: approved
+**Status**: in progress
 **Requested by**: babs
 **Date**: 2026-10-27
 **Context**: builds on 021 (restricted instance: externals create no room), 003 (turns, workspace), 004 (room admins, audit log), 011 (shareable invite link 011-AC26), 012 (REST and MCP with API tokens), 016 (remove, leave, seats). Siblings: 024 (projects and tags), 025 (search).
@@ -40,7 +40,7 @@ A persona may propose a related room. Its proposal appears in the chat as a card
 
 ### Links
 
-- [ ] **AC1** Room settings has a "Links" tab, deep link `#links`, visible to every member. It lists "Reads" (rooms this room reads) and "Read by" (rooms that read this one) as kit list rows: room name, who linked it, date. A member who is not a room admin sees the list with no menu.
+- [ ] **AC1** Room settings has a "Links" tab, deep link `#links`, visible to every member. It lists "Reads" (rooms this room reads) and "Read by" (rooms that read this one) as kit list rows: room name, who linked it, date. A member who is not a room admin of either room sees the list with no menu (AC5).
 - [ ] **AC2** "Link a room" shows only for a room admin. It lists the other rooms where the caller's profile is a room admin, by name, and two checkboxes, both ticked: "<this room> reads <other>" and "<other> reads <this room>". Saving with at least one ticked creates the ticked links in one transaction. A room the caller is not admin of never appears; the route answers 403 "You must be a room admin of both rooms" when called for one.
 - [ ] **AC3** A link that already exists is not created twice: the sheet shows it ticked and disabled, and the route answers 200 with the existing link.
 - [ ] **AC4** A room reads at most 10 rooms. The 11th link answers 409 "This room already reads 10 rooms. Remove one first."
@@ -119,3 +119,4 @@ A persona may propose a related room. Its proposal appears in the chat as a card
 - Members seated in a related room go through the creator's shareable invite. A new seat type would bypass 016's chain revocation.
 - Cap of 10 read rooms per room. It bounds the workspace size and the prompt; there is no env setting until someone asks for one.
 - No new env key and no manifest change.
+- Implementation (phase 1): POST answers 201 when it creates a link, 200 when every ticked direction existed; a self-link answers 400. A room delete's audit entry lists the removed links by id (at most 100) with `links_count`, so a room read by many others stays under the details limit. "Linked rooms (N)" counts other rooms, not directions. A plain member who is room admin of the other room gets the row's ⋯ (AC5 wins over AC1's "no menu").

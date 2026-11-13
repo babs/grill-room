@@ -177,6 +177,7 @@ const actionLabels = {
   'invite.create': 'Invite created', 'invite.revoke': 'Invite revoked', 'room_admin.add': 'Room admin added', 'room_admin.remove': 'Room admin removed',
   'room_skill.remove': 'Room skill removed', 'participant.rename': 'Participant renamed', 'document.delete': 'Document deleted',
   'participant.remove': 'Participant removed', 'participant.unblock': 'Participant unblocked',
+  'room_link.create': 'Rooms linked', 'room_link.delete': 'Room link removed',
   'document.restore': 'Document restored', 'profile.delete': 'Profile deleted', 'profile.recovery_link': 'Recovery link made',
   'profile.recovery_link_used': 'Recovery link used', 'profile.merge': 'Profiles merged', 'profile.purge': 'Empty profiles deleted',
   'profile.oidc_bind': 'Signed in with the provider', 'profile.oidc_unbind': 'Provider sign-in unbound',

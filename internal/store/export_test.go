@@ -789,7 +789,8 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"daemon_connections":        "| id daemon_id room_id pod connected_at_ms expires_at_ms",
 		"daemon_status":             "| daemon_id can_host reason version egress connectors",
 		"presence":                  "| room_id participant_id tab since_at_ms beat_at_ms device_at_ms audio mic muted deaf focused expires_at_ms",
-		"hands":                     "| room_id participant_id raised_at_ms", // 031-AC7: no hand in the export
+		"hands":                     "| room_id participant_id raised_at_ms",                             // 031-AC7: no hand in the export
+		"room_links":                "| id reader_room_id read_room_id created_by_profile_id created_at", // 023: an export names no other room
 		"pairings":                  "| id room_id code secret_hash status approved_by expires_at_ms",
 		"tts_lines":                 "| seq room_id persona_id persona voice rate text quiet_ms resume_s queue_s queued_at_ms sent cut_in_s",
 		"stt_workers":               server,

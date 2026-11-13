@@ -373,6 +373,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/join", s.join)
 	mux.Handle("GET /api/rooms/{room}", s.participant(s.getRoom))
 	mux.Handle("GET /api/rooms/{room}/overview", s.participant(s.roomOverview))
+	mux.Handle("GET /api/rooms/{room}/links", s.participant(s.listRoomLinks))
+	mux.Handle("POST /api/rooms/{room}/links", s.participant(s.createRoomLinks))
+	mux.Handle("DELETE /api/rooms/{room}/links/{link}", s.participant(s.deleteRoomLink))
 	mux.Handle("PUT /api/rooms/{room}/admins/{participant}", s.memberOrAdmin(s.setRoomAdmin))
 	mux.Handle("DELETE /api/rooms/{room}/admins/{participant}", s.memberOrAdmin(s.setRoomAdmin))
 	mux.Handle("POST /api/rooms/{room}/messages", s.participant(s.postMessage))
@@ -792,7 +795,7 @@ func (s *Server) deleteRoom(w http.ResponseWriter, r *http.Request, sess *sessio
 		return
 	}
 	room := r.PathValue("room")
-	err := s.bus.Store.DeleteRoom(s.roomAuditing(r, sess, ActionRoomDelete, room, nil), room)
+	linked, err := s.bus.Store.DeleteRoom(s.roomAuditing(r, sess, ActionRoomDelete, room, nil), room)
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "no such room")
 		return
@@ -801,7 +804,9 @@ func (s *Server) deleteRoom(w http.ResponseWriter, r *http.Request, sess *sessio
 		s.serverError(w, "delete_room_failed", err)
 		return
 	}
-	s.bus.Notify(room)
+	for _, id := range append(linked, room) {
+		s.bus.Notify(id)
+	}
 	s.closeVoice(room)
 	s.people.forget(room)
 	s.log.Info("room_deleted", zap.String("room", room), zap.Bool("by_room_admin", sess != nil))
