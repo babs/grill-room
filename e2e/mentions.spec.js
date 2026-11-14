@@ -26,11 +26,16 @@ test('mentions: autocomplete and notices without a host', async ({ browser, requ
   await expect(alice.locator('#participants')).toContainText('Bob Smith');
   await body.pressSequentially('Hi @');
   await expect(list.getByRole('option')).toHaveText(['🔥 Grillagent', 'Bob Smithperson']);
-  await expect(body).toHaveAttribute('aria-expanded', 'true');
+  // A textarea takes no aria-expanded: the count and the pick are said through #toast-live (A6).
+  const said = alice.locator('#toast-live');
+  await expect(body).not.toHaveAttribute('aria-expanded');
+  await expect(said).toContainText('2 suggestions');
   await body.pressSequentially('b');
   await expect(list.getByRole('option')).toHaveText(['Bob Smithperson']);
+  await expect(said).toContainText('1 suggestion');
   await body.press('Enter');
   await expect(body).toHaveValue('Hi @Bob_Smith ');
+  await expect(said.locator('p').last()).toHaveText('Bob Smith');
   await expect(list).toBeHidden();
   await body.pressSequentially('and @');
   await body.press('ArrowDown');
@@ -91,7 +96,8 @@ test('mentions: autocomplete in the edit box', async ({ browser, request, browse
   await box.press('End');
   await box.pressSequentially(' @');
   await expect(list.getByRole('option')).toHaveText(['🔥 Grillagent', 'Bob Smithperson']);
-  await expect(box).toHaveAttribute('aria-expanded', 'true');
+  await expect(box).not.toHaveAttribute('aria-expanded');
+  await expect(box).toHaveAttribute('aria-activedescendant', /-0$/);
   // Inside the #messages live region, the list is not read out on each keystroke.
   await expect(list).toHaveAttribute('aria-live', 'off');
   await box.press('ArrowDown');

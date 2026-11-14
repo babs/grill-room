@@ -315,6 +315,24 @@ export async function signIn(page, token = adminToken, view = 'sessions') {
   return res.status();
 }
 
+// contrastOf is the contrast of loc's text as painted on what is behind it: its own and its
+// ancestors' backgrounds blended in, faded by their opacity.
+export const contrastOf = (loc) => loc.evaluate((el) => {
+  const rgba = (c) => { const m = c.match(/[\d.]+/g).map(Number); return [m[0], m[1], m[2], m.length > 3 ? m[3] : 1]; };
+  const over = (top, under) => top.slice(0, 3).map((v, i) => v * top[3] + under[i] * (1 - top[3])).concat(1);
+  let under = [255, 255, 255, 1];
+  const chain = [];
+  for (let p = el.parentElement; p; p = p.parentElement) chain.unshift(p);
+  for (const p of chain) under = over(rgba(getComputedStyle(p).backgroundColor), under);
+  let opacity = 1;
+  for (let p = el; p; p = p.parentElement) opacity *= Number(getComputedStyle(p).opacity);
+  const face = over(rgba(getComputedStyle(el).backgroundColor), under);
+  const text = over(rgba(getComputedStyle(el).color), face);
+  const lum = (c) => { const [r, g, b] = c.slice(0, 3).map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const [x, y] = [lum(over([...text.slice(0, 3), opacity], under)), lum(over([...face.slice(0, 3), opacity], under))].sort((m, n) => n - m);
+  return (x + 0.05) / (y + 0.05);
+});
+
 // noOverflow lists what sticks out past the viewport, tables and tab bars scrolling in their own
 // box aside (005-AC35).
 export const noOverflow = (page) => page.evaluate(() => [...document.querySelectorAll('body *')]

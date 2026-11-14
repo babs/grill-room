@@ -92,7 +92,7 @@ const offCentre = (page, rows, label, icons) => page.locator(rows).evaluateAll((
 for (const [size, viewport] of Object.entries(widths)) {
   // 009-AC38: every ⋯ menu, the user menu and the row menus give links and buttons one style, and
   // a menu with an icon starts every item's text at the same x.
-  test(`one menu-item style at ${size}`, async ({ browser, request }) => {
+  test(`one menu-item style at ${size}`, async ({ browser, request, baseURL }) => {
     const { room, pages: [alice] } = await roomWith(browser, request, ['Alice', 'Bob']);
     await alice.setViewportSize(viewport);
     await appointAdmin(alice, request, room.id);
@@ -104,6 +104,18 @@ for (const [size, viewport] of Object.entries(widths)) {
 
     if (size === 'phone') await alice.locator('#tabbar').getByRole('button', { name: /People/ }).click();
     await expectOneStyle(alice, await personMenu(alice, 'Bob'), `${size}-person-menu`);
+    await alice.keyboard.press('Escape');
+    // As the AI host: the "Can ask the AI" toggle draws its box in the icon column (A22).
+    const stop = await fakeDaemon(alice, baseURL, room.id, 'alice-laptop');
+    try {
+      await expect.poll(() => alice.evaluate(() => String(agent.host_participant_id) === myID)).toBe(true);
+      const menu = await personMenu(alice, 'Bob');
+      await expect(menu.getByRole('button', { name: 'Can ask the AI' }).locator('.ico')).toBeVisible();
+      await expectOneStyle(alice, menu, `${size}-person-menu-host`);
+      await alice.keyboard.press('Escape');
+    } finally {
+      stop();
+    }
     if (size === 'phone') await alice.locator('#tabbar').getByRole('button', { name: /Chat/ }).click();
 
     await alice.locator('#body').fill('a line');

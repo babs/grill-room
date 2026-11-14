@@ -43,12 +43,20 @@ form.limit input { width: 8rem; }
 #pronunciations { --cols: minmax(9rem, 1.2fr) minmax(6rem, .6fr) minmax(8rem, 1fr) minmax(8rem, 1fr) minmax(8rem, 1fr) var(--control-h); }
 #audit { --cols: minmax(12rem, 2fr) minmax(7rem, .7fr) minmax(9rem, 1fr) minmax(12rem, 3fr); }
 #audit .details { color: var(--text-muted); font-size: var(--fs-sm); }
+/* Between a phone's cards and 64rem the columns keep to their content's width, so Rooms keeps its
+   header and sort down to 641 px: its storage figures go under the meter, a step smaller. */
+@media (40rem < width <= 64rem) {
+  #rooms { --cols: minmax(5.5rem, 3fr) minmax(5rem, 1fr) minmax(3.5rem, .6fr) minmax(4rem, .6fr) minmax(6rem, 1fr) minmax(6rem, .6fr) var(--control-h); }
+  #rooms .storage { flex-wrap: wrap; gap: 0 var(--sp-2); }
+  #rooms .storage .used { font-size: var(--fs-xs); }
+  #profiles.restricted { --cols: minmax(8rem, 3fr) minmax(4rem, 1fr) minmax(4rem, .5fr) minmax(6rem, 1fr) minmax(5rem, 1fr) minmax(7rem, 1fr) var(--control-h); }
+}
 .cols .storage { display: inline-flex; align-items: center; gap: var(--sp-2); }
 .list-row.head button.sort { min-height: var(--control-h); padding: 0; border: 0; background: none; color: inherit; font: inherit; }
-.list-row.head [aria-sort=ascending] button.sort::after, .list-row.head [aria-sort=descending] button.sort::after {
+.list-row.head button.sort[data-sort]::after {
   content: ""; display: inline-block; width: .4rem; height: .4rem; margin-left: var(--sp-2); border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; }
-.list-row.head [aria-sort=ascending] button.sort::after { transform: translateY(2px) rotate(-135deg); }
-.list-row.head [aria-sort=descending] button.sort::after { transform: translateY(-2px) rotate(45deg); }
+.list-row.head button.sort[data-sort=ascending]::after { transform: translateY(2px) rotate(-135deg); }
+.list-row.head button.sort[data-sort=descending]::after { transform: translateY(-2px) rotate(45deg); }
 @media (max-width: 40rem) {
   /* A card keeps to its name and a line or two of values (004b-AC5): the creation and sign-in
      dates, the value labels of the audit and long details give way. */

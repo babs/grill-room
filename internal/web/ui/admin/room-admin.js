@@ -3,7 +3,7 @@
 // window.grillRoom, window.grillAgent and window.grillSTT, each followed by an event. Each tab is a
 // deep link, #manage/<tab>.
 import { render } from 'preact';
-import { useState, useEffect, useRef } from 'preact/hooks';
+import { useState, useEffect, useRef, useMemo } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { html } from 'htm/preact';
 import { RoomPanel, AdminRows, TabBar, Invites, RowMenu, fetchJSON, roomTabs, icon, ago } from './room-panel.js';
@@ -397,6 +397,24 @@ function Proposals() {
 }
 
 /**
+ * headingsUnder moves rendered Markdown's headings below level: a brief's "# Why" must not outrank
+ * the sheet's own headings.
+ * @param {string} markup sanitised by the server
+ * @param {number} level
+ */
+function headingsUnder(markup, level) {
+  const t = document.createElement('template');
+  t.innerHTML = markup;
+  for (const h of t.content.querySelectorAll('h1, h2, h3, h4, h5, h6')) {
+    const to = document.createElement('h' + Math.min(6, Number(h.tagName[1]) + level));
+    for (const a of h.attributes) to.setAttribute(a.name, a.value);
+    to.append(...h.childNodes);
+    h.replaceWith(to);
+  }
+  return t.innerHTML;
+}
+
+/**
  * ProposalSheet creates the room a persona proposed (023-AC17): its name, the brief, this room's
  * members with a profile, the caller ticked for good, and for a room admin here both links ticked.
  * @param {{data: RoomData, m: ProposalLine, done: () => void}} props
@@ -431,13 +449,14 @@ function ProposalSheet({ data, m, done }) {
       .then(close).catch((/** @type {Error} */ err) => { setSaid(err.message); setBusy(false); });
   };
   const shown = name.trim() || m.proposal.name;
+  const brief = useMemo(() => headingsUnder(m.html || '', 3), [m.html]);
   return html`<dialog ref=${ref} id="proposal-sheet" class="sheet" aria-labelledby="proposal-title" onClose=${done}>
     <div class="sheet-head"><h2 id="proposal-title">Create a room</h2>
       <button type="button" class="btn-icon btn-ghost" aria-label="Close" onClick=${close} dangerouslySetInnerHTML=${icon('close')}></button></div>
     <form id="proposal-form" class="stack" onSubmit=${save}>
       <label>Name<input id="proposal-name" required maxlength="100" value=${name} onInput=${(/** @type {Event} */ e) => setName(/** @type {HTMLInputElement} */ (e.currentTarget).value)}/></label>
       <h3>Brief</h3>
-      <div class="msg"><div class="body" id="proposal-brief" dangerouslySetInnerHTML=${{ __html: m.html || '' }}></div></div>
+      <div class="msg"><div class="body" id="proposal-brief" dangerouslySetInnerHTML=${{ __html: brief }}></div></div>
       <p class="hint">It becomes the room's first document, brief.md.</p>
       <fieldset id="proposal-members"><legend>Members of ${here} to bring along</legend>
         ${members.map((p) => html`<label key=${p.id}><input type="checkbox" value=${p.id} checked=${p.self || picked.includes(p.id)} disabled=${p.self || busy}

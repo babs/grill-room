@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
-import { roomWith, signIn, confirmSheet, smallTargets, noOverflow, rowAction, uniq, personaSheet } from './helpers.js';
+import { roomWith, signIn, confirmSheet, smallTargets, noOverflow, rowAction, uniq, personaSheet, contrastOf } from './helpers.js';
 
 const admin = { Authorization: `Bearer ${adminToken}` };
 
@@ -250,4 +250,17 @@ test('save a room as a starter, share it, create a room from it', async ({ brows
   const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('#doc-menu').getByRole('link', { name: 'Download' }).click()]);
   expect(dl.suggestedFilename()).toBe('agenda.md');
   expect(readFileSync(await dl.path(), 'utf8')).toContain('Owner: Bea');
+});
+
+// A20: the selected starter's hint reads at 4.5:1 or more in both themes.
+test('the selected starter hint keeps its contrast', async ({ browser, request }) => {
+  const { pages: [page] } = await roomWith(browser, request, ['Ann' + uniq()]);
+  for (const scheme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.goto('/profile');
+    await page.getByRole('button', { name: 'New room' }).click();
+    const hint = page.locator('#room-create-sheet .starter-pick[aria-pressed=true] .hint');
+    await expect(hint).toBeVisible();
+    expect(await contrastOf(hint), scheme).toBeGreaterThanOrEqual(4.5);
+  }
 });

@@ -191,6 +191,9 @@ test('a persona proposes a room; a member creates it from the card', async ({ br
     await card(bob).getByRole('button', { name: 'Create…' }).click();
     let sheet = bob.locator('#proposal-sheet');
     await expect(sheet.locator('#proposal-brief strong')).toHaveText('its own');
+    // A15: the brief's "# Why" sits under the sheet's h2 and its "Brief" h3.
+    await expect(sheet.locator('#proposal-brief :is(h1, h2, h3)')).toHaveCount(0);
+    await expect(sheet.locator('#proposal-brief h4')).toHaveText('Why');
     await expect(sheet.locator('#proposal-no-links')).toHaveText(`A room admin of ${pricingName} can link the rooms later.`);
     await expect(sheet.getByLabel('Bob (you)')).toBeDisabled();
     await sheet.getByRole('button', { name: 'Cancel' }).click();

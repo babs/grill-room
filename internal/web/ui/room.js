@@ -94,6 +94,9 @@ function end(text) {
   $('banner').textContent = text;
   $('banner').hidden = false;
   sendForm.hidden = true;
+  $('skip-link').hidden = true;
+  // No stream will send the history: no "Loading…" under the banner.
+  if (!replayed) $('filter-empty').hidden = true;
   $('chat-empty').hidden = true;
   $('upload-open').hidden = true;
   for (const el of document.querySelectorAll('.dropping')) el.classList.remove('dropping');
@@ -105,6 +108,15 @@ function end(text) {
   for (const m of document.querySelectorAll('.menu:popover-open')) m.hidePopover();
   $('agent').hidden = true;
   $('annotations').hidden = true;
+}
+
+// noSeat replaces the room by a card when the page never got in: it has nothing of the room to show.
+function noSeat() {
+  end('');
+  $('banner').hidden = true;
+  document.querySelector('main.layout').hidden = true;
+  $('tabbar').hidden = true;
+  $('no-access').hidden = false;
 }
 
 const reauthEnded = 'Your organisation sign-in expired. Sign in again from your profile page.';
@@ -120,8 +132,8 @@ async function loadRoom() {
       return false;
     }
     // A refresh can race the stream's "revoked" event: once in, both must tell the same thing.
-    end(wasIn ? 'Your access to this room has ended.'
-      : 'You are not in this room, or your access was revoked. Open your invite link again.');
+    if (wasIn) end('Your access to this room has ended.');
+    else noSeat();
     return false;
   }
   if (!res.ok) throw new Error('room: HTTP ' + res.status);
@@ -223,6 +235,7 @@ function showMe() {
   who.textContent = myName;
   $('me').replaceChildren(who);
   $('me').dataset.initials = initials(myName);
+  $('me').hidden = false;
   $('me-head').textContent = myName;
 }
 
@@ -293,6 +306,13 @@ $('count-voice').addEventListener('change', () => localStorage.setItem(voiceKey,
 // on the list, so it leaves the unread count alone (020-AC16). A jump or a send shows another
 // filter for this visit only (viewFilter), the stored choice kept.
 const filterKey = 'grill-room-chat-filter';
+// replayed: the stream sent a line of the history or its first agent state; until then the chat is loading.
+let replayed = false;
+function loaded() {
+  if (replayed) return;
+  replayed = true;
+  showFilter();
+}
 const filterCounts = { written: 0, voice: 0 };
 let chatFilter = ['all', 'written', 'voice'].includes(localStorage.getItem(filterKey)) ? localStorage.getItem(filterKey) : 'written';
 let viewFilter = '';
@@ -304,7 +324,7 @@ const filterHides = (kind) => shownFilter() !== 'all' && filterKind(kind) !== sh
 function showFilter() {
   const f = shownFilter();
   messages.dataset.filter = f;
-  $('filter-empty').textContent = f === 'voice' ? 'No voice messages yet.' : 'No written messages yet.';
+  $('filter-empty').textContent = !replayed ? 'Loading…' : f === 'voice' ? 'No voice messages yet.' : 'No written messages yet.';
   for (const b of $('chat-filter').querySelectorAll('button')) {
     b.setAttribute('aria-pressed', String(b.dataset.filter === f));
     const n = filterCounts[b.dataset.filter];
@@ -650,7 +670,10 @@ function renderMessage(m) {
   sender.className = 'sender';
   // An agent shows its persona's badge and colour (002-AC42).
   sender.textContent = m.badge ? m.badge + ' ' + m.sender : m.sender;
-  if (m.colour) sender.style.color = m.colour;
+  if (m.colour) {
+    sender.classList.add('persona');
+    sender.style.setProperty('--persona', m.colour);
+  }
   if (m.participant_id) {
     li.dataset.pid = m.participant_id;
     li.dataset.sender = m.sender;
@@ -1115,6 +1138,12 @@ function editMessage(li, m) {
   box.focus();
 }
 
+// excerpt is a drawn line's first words for its actions button, as read, or its first file's name.
+function excerpt(li, m) {
+  const text = (li.querySelector(':scope > .body').textContent.replace(/\s+/g, ' ').trim() || m.documents?.[0]?.name || '');
+  return text.length > 40 ? text.slice(0, 40).trimEnd() + '…' : text;
+}
+
 // messageMenu is a message's one actions button (005-AC35): its Edit and Delete sit in a menu shared
 // by every message, laid next to the button pressed.
 let menuFor = null;
@@ -1123,7 +1152,8 @@ function messageMenu(li, m) {
   b.type = 'button';
   b.className = 'msg-more btn-icon';
   b.append(grillIcon('more'));
-  b.setAttribute('aria-label', 'Line actions');
+  // Only the viewer's own lines have one: no sender in the name.
+  b.setAttribute('aria-label', 'Line actions: ' + excerpt(li, m));
   b.setAttribute('aria-expanded', 'false');
   b.addEventListener('click', () => {
     const menu = $('msg-menu');
@@ -1534,6 +1564,8 @@ function option(value, text) {
 // showDocument opens a document; refresh keeps the revisions picked unless the latest was shown.
 // A deep link pushes no history entry: Chrome lets Back skip an entry pushed before any tap.
 async function showDocument(id, refresh, deepLink) {
+  // The row's tip would sit over the document it opens.
+  if (!refresh) grillTip.hide();
   const res = await netFetch(docURL(id, ''));
   if (!res.ok) throw new Error('document: HTTP ' + res.status);
   const { document: d, revisions } = await res.json();
@@ -1919,6 +1951,14 @@ function foldChat(on) {
 foldChat(localStorage.getItem(chatKey) === '1');
 $('chat-fold').addEventListener('click', () => foldChat(!document.body.classList.contains('chat-folded')));
 $('chat-unfold').addEventListener('click', () => foldChat(false));
+// The skip link focuses the composer wherever the layout put it, with no #body in the address.
+$('skip-link').hidden = docsMode;
+$('skip-link').addEventListener('click', (e) => {
+  e.preventDefault();
+  if (phone()) showTab('chat');
+  if (document.body.classList.contains('chat-folded')) foldChat(false);
+  bodyInput.focus();
+});
 
 // A phone shows one pane at a time: the list, the document, then Notes (008-AC9). docPushed and
 // notesPushed say which of them this page pushed a history entry for; a reload keeps the browser's
@@ -2358,6 +2398,7 @@ function connect() {
     if (m.id <= lastID) return;
     lastID = m.id;
     addMessage(m);
+    loaded();
   };
   // Listing on open, not before: the stream announces only changes made after it opened.
   es.onopen = () => {
@@ -2407,6 +2448,7 @@ function connect() {
       agentSeen = true;
       followPersona();
     }
+    loaded();
     renderAgent();
     renderMentions();
     renderBlocked();
@@ -2618,13 +2660,15 @@ const personaMutedIdentity = (identity) => identity.startsWith('persona-') && pe
 let personaCardFor = 0;
 let personaCardSeen = '';
 function openPersonaCard(id, anchor) {
+  grillTip.hide();
   personaCardFor = id;
   personaCardSeen = '';
   renderPersonaCard();
   const card = $('persona-card');
   if (!card.matches(':popover-open')) card.showPopover();
   grillPlace(card, anchor);
-  card.querySelector('button, input')?.focus();
+  // The title, not Ask: Enter twice on a pill must not start an answer.
+  $('persona-card-title')?.focus();
 }
 $('persona-card').addEventListener('toggle', (e) => { if (e.newState === 'closed') personaCardFor = 0; });
 
@@ -2643,8 +2687,9 @@ function renderPersonaCard() {
   personaCardSeen = key;
   // A redraw keeps the focus on the control that had it: a keyboard user toggling Mute stays on it.
   const focused = card.contains(document.activeElement) ? document.activeElement.id : '';
-  const title = document.createElement('h3');
+  const title = document.createElement('h2');
   title.id = 'persona-card-title';
+  title.tabIndex = -1;
   title.append(span('badge persona-badge', p.badge), ' ' + p.name);
   const rows = document.createElement('dl');
   const row = (k, v) => {
@@ -3949,7 +3994,11 @@ function openPersonMenu(b, p, id, fromPointer) {
     const it = document.createElement('button');
     it.type = 'button';
     it.textContent = a.label;
-    if ('checked' in a) it.setAttribute('aria-pressed', String(a.checked));
+    if ('checked' in a) {
+      it.setAttribute('aria-pressed', String(a.checked));
+      // An icon column of its own: the kit's menu rule then starts every text at one x (009-AC38).
+      it.prepend(Object.assign(document.createElement('span'), { className: 'ico toggle' }));
+    }
     // Not disabled: a disabled button shows no tip, and the tip says why.
     if (a.disabled) {
       it.setAttribute('aria-disabled', 'true');
@@ -4134,8 +4183,8 @@ function renderParticipants() {
       more.className = 'person-more';
       more.append(grillIcon('more'));
       more.setAttribute('aria-expanded', 'false');
-      const name = span('name', '');
-      name.tabIndex = 0;
+      // A button: one Tab stop whose focus or press shows the details card (009-AC36).
+      const name = Object.assign(document.createElement('button'), { type: 'button', className: 'name' });
       const sigil = span('sigil', '');
       sigil.setAttribute('aria-hidden', 'true');
       li.append(span('voice-dot', ''), sigil, name, span('tags', ''), more);
@@ -5635,6 +5684,8 @@ function mentionAutocomplete(input, list) {
   let hits = [];
   let at = -1;
   let pick = 0;
+  // said is the count last announced: a screen reader hears the count as it changes, once.
+  let said = 0;
 
   function suggest() {
     const before = input.value.slice(0, input.selectionStart);
@@ -5643,8 +5694,8 @@ function mentionAutocomplete(input, list) {
     if (found) {
       const q = found[1].toLowerCase();
       at = before.length - found[1].length - 1;
-      const all = [...agent.personas.map((p) => ({ token: p.name, label: p.badge + ' ' + p.name, kind: 'agent' })),
-        ...participants.filter((p) => String(p.id) !== myID).map((p) => ({ token: mentionToken(p.name), label: p.name, kind: 'person' }))];
+      const all = [...agent.personas.map((p) => ({ token: p.name, name: p.name, label: p.badge + ' ' + p.name, kind: 'agent' })),
+        ...participants.filter((p) => String(p.id) !== myID).map((p) => ({ token: mentionToken(p.name), name: p.name, label: p.name, kind: 'person' }))];
       const seen = new Set();
       for (const h of all) {
         const key = h.token.toLowerCase();
@@ -5662,7 +5713,10 @@ function mentionAutocomplete(input, list) {
   function render() {
     const open = hits.length > 0;
     list.hidden = !open;
-    input.setAttribute('aria-expanded', String(open));
+    if (hits.length !== said) {
+      said = hits.length;
+      if (open) grillAnnounce(said === 1 ? '1 suggestion' : said + ' suggestions');
+    }
     list.replaceChildren(...hits.map((h, i) => {
       const li = document.createElement('li');
       li.id = list.id + '-' + i;
@@ -5684,6 +5738,7 @@ function mentionAutocomplete(input, list) {
   }
 
   function choose(i) {
+    grillAnnounce(hits[i].name);
     const text = '@' + hits[i].token + ' ';
     const v = input.value;
     input.value = v.slice(0, at) + text + v.slice(input.selectionStart);
@@ -5695,7 +5750,6 @@ function mentionAutocomplete(input, list) {
 
   input.setAttribute('aria-autocomplete', 'list');
   input.setAttribute('aria-controls', list.id);
-  input.setAttribute('aria-expanded', 'false');
   input.addEventListener('input', suggest);
   input.addEventListener('click', suggest);
   input.addEventListener('blur', () => {
