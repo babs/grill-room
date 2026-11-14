@@ -1668,7 +1668,9 @@ async function showDocument(id, refresh, deepLink) {
   const opening = !refresh && !openDoc;
   // Picking a document closes the Video stage (030-AC7).
   if (!refresh) closeStage();
+  if (!refresh && openDoc?.id !== d.id) docOwn.clear();
   openDoc = d;
+  fitDocument();
   $('viewer').hidden = false;
   // A document opened from the chat (a single upload, a link) shows in the phone's Docs tab.
   if (!refresh && !docsMode && phone()) showTab('docs');
@@ -1797,6 +1799,7 @@ function closeDocument() {
   if (docsMode) history.replaceState(null, '', roomPath + '/docs');
   notesPane(false);
   openDoc = null;
+  fitDocument();
   $('viewer').hidden = !stageOpen();
   $('doc-frame').replaceChildren();
   closeNew();
@@ -2181,12 +2184,21 @@ for (const p of Object.values(panes)) {
 // A drawer's disclosure triangle names the drawer and says its state in aria-expanded; the whole
 // header toggles it, its own actions aside (008-AC5).
 // Folding the Transcription pane brings the chat filter back; unfolding clears its count (020-AC12).
-const drawers = [{ name: 'people', button: $('people-fold') }, { name: 'docs', button: $('docs-fold') },
-  { name: 'transcript', button: $('transcript-fold'), onFold: (on) => { if (!on) paneCount = 0; showPane(); placeVoice(); } }];
+const sideDrawers = [{ name: 'people', button: $('people-fold') }, { name: 'docs', button: $('docs-fold') }];
+const drawers = [...sideDrawers, { name: 'transcript', button: $('transcript-fold'), onFold: (on) => { if (!on) paneCount = 0; showPane(); placeVoice(); } }];
+// docFolded holds the side drawers a document folded, to unfold once it closes; docOwn, those the
+// person set in the band since this document opened, which no fold of the band touches again (037-AC1).
+const docFolded = new Set();
+const docOwn = new Set();
 function foldDrawer(d, on, store) {
   document.body.classList.toggle('fold-' + d.name, on);
   d.button.setAttribute('aria-expanded', String(!on));
-  if (store) localStorage.setItem('grill-room-fold-' + d.name, on ? '1' : '0');
+  if (store) {
+    localStorage.setItem('grill-room-fold-' + d.name, on ? '1' : '0');
+    if (document.body.classList.contains('doc-fit')) docOwn.add(d.name);
+    // A close never undoes it, even once a change of document cleared docOwn.
+    docFolded.delete(d.name);
+  }
   d.onFold?.(on);
 }
 for (const d of drawers) {
@@ -2196,6 +2208,23 @@ for (const d of drawers) {
     if (!phone() && !e.target.closest('a, button, input')) d.button.click();
   });
 }
+// From 40 to 64rem a document in the room page folds the side panel to its rail, unstored, so the
+// chat keeps 22rem; it unfolds as it was once the document closes or the window leaves the band. Each
+// document shown folds again what the person unfolded for the one before (037-AC1).
+const tablet = matchMedia('(width > 40rem) and (width < 64rem)');
+function fitDocument() {
+  const on = !docsMode && !chatMode && !!openDoc && tablet.matches;
+  document.body.classList.toggle('doc-fit', on);
+  for (const d of sideDrawers) {
+    if (!on) {
+      if (docFolded.delete(d.name)) foldDrawer(d, false, false);
+    } else if (!docOwn.has(d.name) && !document.body.classList.contains('fold-' + d.name)) {
+      docFolded.add(d.name);
+      foldDrawer(d, true, false);
+    }
+  }
+}
+tablet.addEventListener('change', fitDocument);
 
 // Markdown reads at one of three widths, as in gld (008-AC7).
 const mdWidths = { narrow: 'Narrow', large: 'Large', full: 'Full' };

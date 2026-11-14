@@ -154,7 +154,7 @@ The palette is the one the room page and `/admin` already use, harmonized. The l
 | range | layout |
 |---|---|
 | < 40rem | phone: one column, a bottom tab bar in the room (Chat, Docs, People, and Video while a video is live or while it is the open tab, spec 030), 44 px controls, sheets full screen |
-| 40–64rem | tablet: sidebar collapsible, annotations as a sheet |
+| 40–64rem | tablet: sidebar collapsible, annotations as a sheet. A document open in the room folds People and Documents to the 56 px rail, unstored, so the chat keeps 22rem with Send on the box's row; its close gives back the folds from before, except one the person changed meanwhile (spec 037). There an open document's name gets its own row, as on a phone |
 | ≥ 64rem | desktop: the Transcription pane shows from 64rem while the chat keeps 22rem beside it (spec 020) |
 | ≥ 100rem | annotations may stay open next to the chat |
 
