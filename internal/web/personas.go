@@ -300,7 +300,7 @@ func (s *Server) addPersona(w http.ResponseWriter, r *http.Request, sess session
 		s.serverError(w, "room_admin_lookup_failed", err)
 		return
 	}
-	p, m, err := s.bus.Store.AddPersona(r.Context(), sess.p.RoomID, req.TemplateID, sess.p, admin)
+	p, m, err := s.bus.Store.AddPersona(r.Context(), sess.p.RoomID, req.TemplateID, sess.p, admin, s.opts.MaxRoomBytes)
 	s.personaDone(w, sess, p, m, err, http.StatusCreated)
 }
 
@@ -530,6 +530,6 @@ func (s *Server) addLibraryPersonaToRoom(w http.ResponseWriter, r *http.Request)
 		s.serverError(w, "room_admin_lookup_failed", err)
 		return
 	}
-	p, m, err := s.bus.Store.AddPersona(r.Context(), sess.p.RoomID, templateID(r), sess.p, admin)
+	p, m, err := s.bus.Store.AddPersona(r.Context(), sess.p.RoomID, templateID(r), sess.p, admin, s.opts.MaxRoomBytes)
 	s.personaDone(w, sess, p, m, err, http.StatusCreated)
 }

@@ -121,3 +121,6 @@ Personas get a library like starters. `/profile` gains a Personas tab with three
 - The library editor shows a persona's frozen skills and plugins read-only. Because they are copies of a room's, and saving from a room is where they change.
 - A library persona's title follows its name whenever a version renames it; a duplicate takes the persona's name as its title, or "<name> (copy)", then "<name> (copy) 2"…, while Yours has one of that title. Because the list must tell copies apart and still read like the persona.
 - Library edits carry the version they started from, and a stale one is refused. Because two tabs must not silently overwrite each other.
+- Adding a library persona brings its plugins only when a room admin adds it; a member's copy arrives without them, and the chat says so. Because 009 keeps adding plugins a room admin's call.
+- A same-name room plugin is reused only while it is waiting, inspected or approved. Because a refused one would never pass the host.
+- The host's approval line no longer says the skill came with a starter. Because a library persona brings skills the same way, and telling them apart needs a column.

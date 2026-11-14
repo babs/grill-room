@@ -365,7 +365,7 @@ func TestPersonaTextNewlinesAndLimits(t *testing.T) {
 	for range store.MaxRoomPersonas - 1 {
 		e.addPersona(t, r, tok, sec)
 	}
-	if code, b := e.do(t, "POST", r.path("/personas"), tok, map[string]int64{"template_id": sec}); code != http.StatusConflict || !strings.Contains(string(b), "at most 12 personas per room") {
+	if code, b := e.do(t, "POST", r.path("/personas"), tok, map[string]int64{"template_id": sec}); code != http.StatusConflict || !strings.Contains(string(b), "A room holds 12 personas at most.") {
 		t.Fatalf("persona past the limit: %d %s", code, b)
 	}
 }

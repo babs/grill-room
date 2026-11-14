@@ -22,7 +22,7 @@ test('personas: add, edit, queue', async ({ browser, request, baseURL }) => {
   await panel.getByRole('button', { name: 'Add', exact: true }).click();
   await expect(panel.locator('.persona-row')).toHaveCount(2);
   for (const p of [alice, bob]) {
-    await expect(p.locator('#messages')).toContainText('Alice added the persona 📝 Secretary, from the template "Secretary" v1.');
+    await expect(p.locator('#messages')).toContainText('Alice added the persona 📝 Secretary, from the library persona "Secretary" v1.');
     await expect(p.locator('button.persona')).toHaveText([/^🔥Grill/, /^📝Secretary/]);
   }
   // One Save sends every tab (009-AC3): an effort on Model and a text on Identity.
@@ -88,12 +88,12 @@ test('personas: the Timekeeper from the library', async ({ browser, request }) =
   await menuItem(alice, 'Personas');
   await panel.locator('#persona-template').selectOption({ label: '⏱️ Timekeeper v1' });
   await panel.getByRole('button', { name: 'Add', exact: true }).click();
-  await expect(alice.locator('#messages')).toContainText('Alice added the persona ⏱️ Timekeeper, from the template "Timekeeper" v1, every N minutes off → 5, '
+  await expect(alice.locator('#messages')).toContainText('Alice added the persona ⏱️ Timekeeper, from the library persona "Timekeeper" v1, every N minutes off → 5, '
     + 'speak over after off → 20 s, not the time keeper (🔥 Grill keeps time).');
   await expect(alice.locator('button.persona')).toHaveText([/^🔥Grill/, /^⏱️Timekeeper/]);
   await panel.locator('#persona-template').selectOption({ label: '📝 Secretary v1' });
   await panel.getByRole('button', { name: 'Add', exact: true }).click();
-  await expect(alice.locator('#messages')).toContainText('Alice added the persona 📝 Secretary, from the template "Secretary" v1.');
+  await expect(alice.locator('#messages')).toContainText('Alice added the persona 📝 Secretary, from the library persona "Secretary" v1.');
   const ps = (await agentState(alice, room.id)).personas;
   expect(ps.map((p) => [p.name, !!p.time_keeper, p.cut_in_s || 0, p.every_minutes || 0, p.speaks]))
     .toEqual([['Grill', true, 0, 0, true], ['Timekeeper', false, 20, 5, true], ['Secretary', false, 0, 0, true]]);

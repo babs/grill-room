@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -34,7 +35,15 @@ var (
 	ErrAlreadyShared = errors.New("is already shared")
 	// ErrNotShared is returned when the author unshares a personal library persona (035-AC5).
 	ErrNotShared = errors.New("is not shared")
+	// ErrRoomPersonas is the ErrLimit of a room at MaxRoomPersonas, in the words the room shows (035-AC15).
+	ErrRoomPersonas error = limitError(fmt.Sprintf("A room holds %d personas at most.", MaxRoomPersonas))
 )
+
+// limitError is an ErrLimit whose text is the whole sentence a person reads.
+type limitError string
+
+func (e limitError) Error() string        { return string(e) }
+func (e limitError) Is(target error) bool { return target == ErrLimit }
 
 // Every member may add personas and every profile may publish: these bound what one of them can
 // make the room stream to everyone, or the library hold.
@@ -774,8 +783,11 @@ type RoomPersona struct {
 	// Cap is the host's last decision on this persona asking above the cap (002-AC20).
 	Cap CapDecision `json:"-"`
 	// Skills are its active skills, by name, each pinned at a version (002-AC31).
-	Skills    []PersonaSkill `json:"skills"`
-	CreatedAt time.Time      `json:"created_at"`
+	Skills []PersonaSkill `json:"skills"`
+	// Waiting names, in an add's answer only, the skills and plugins it came with that wait for the
+	// AI host (035-AC10).
+	Waiting   *KitWaiting `json:"waiting,omitempty"`
+	CreatedAt time.Time   `json:"created_at"`
 	// Speaks puts the persona's spoken line in the audio call (013-AC26). Voice is its catalogue
 	// voice, empty until it first speaks (013-AC16); VoiceRate its speaking rate (013-AC37).
 	Speaks    bool    `json:"speaks"`
@@ -945,34 +957,68 @@ func (s *Store) withTx(ctx context.Context, what string, fn func(tx *txn) error)
 	return err
 }
 
+// KitWaiting names the skills and plugins a persona came with that wait for the AI host: a room
+// skill held for the host, a plugin with no approved version yet (035-AC10).
+type KitWaiting struct {
+	Skills  []string `json:"skills"`
+	Plugins []string `json:"plugins"`
+}
+
 // AddPersona adds a copy of template templateID's latest version to room, with every setting it
 // holds (035-AC8), recorded in the chat. A name the room uses already gets a number. While the host
-// approves everything, the persona waits for the host, Pending (002-AC21). admin tells that by is a
-// room admin: only their copy takes the admin-only settings (032-AC6). ErrNotFound for an unknown
-// room or a template by's profile does not see (035-AC18).
-func (s *Store) AddPersona(ctx context.Context, roomID string, templateID int64, by *Participant, admin bool) (*RoomPersona, *Message, error) {
+// approves everything, the persona waits for the host, Pending (002-AC21). It brings the version's
+// frozen skills and plugins in (bringKit); its Waiting and the chat name those that wait for the AI
+// host, and a plugin left out gets its own line (035-AC10). admin tells that by is a room admin:
+// only their copy takes the admin-only settings (032-AC6). defaultQuota is the room's quota when it
+// has none of its own. ErrRoomPersonas, ErrNotFound for an unknown room or a template by's profile
+// does not see (035-AC18).
+func (s *Store) AddPersona(ctx context.Context, roomID string, templateID int64, by *Participant, admin bool, defaultQuota int64) (*RoomPersona, *Message, error) {
 	var p *RoomPersona
 	var m *Message
 	err := s.withTx(ctx, "add persona", func(tx *txn) error {
 		var t *Template
-		err := overLimit(ctx, tx, MaxRoomPersonas, "personas per room", `SELECT count(*) FROM room_personas WHERE room_id = ?`, roomID)
-		if err != nil {
-			return err
+		var n int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM room_personas WHERE room_id = ?`, roomID).Scan(&n); err != nil {
+			return fmt.Errorf("count personas: %w", err)
 		}
+		if n >= MaxRoomPersonas {
+			return ErrRoomPersonas
+		}
+		var err error
 		if p, t, err = addPersona(ctx, tx, roomID, templateID, by.ProfileID); err != nil {
 			return err
 		}
-		body := fmt.Sprintf("added the persona %s, from the template %q v%d.", p.label(), t.Title, p.TemplateVersion)
+		body := fmt.Sprintf("added the persona %s, from the library persona %q v%d.", p.label(), t.Title, p.TemplateVersion)
 		held, err := heldBy(ctx, tx, roomID, by)
 		if err != nil {
 			return err
 		}
-		// Skills and plugins the version froze stay in the library until 035 phase 3 brings them in.
 		if p, err = templateSettings(ctx, tx, p, t.settings(), held, admin); err != nil {
 			return err
 		}
 		if len(p.settingChanges) > 0 {
 			body = strings.TrimSuffix(body, ".") + ", " + strings.Join(p.settingChanges, ", ") + "."
+		}
+		// After the settings: saving them rewrites the persona's skill pins.
+		left, err := bringKit(ctx, tx, p, t, by, admin, defaultQuota)
+		if err != nil {
+			return err
+		}
+		if p, err = roomPersona(ctx, tx, roomID, p.ID); err != nil {
+			return err
+		}
+		if p.Waiting, err = kitWaiting(ctx, tx, p.ID); err != nil {
+			return err
+		}
+		var parts []string
+		if len(p.Waiting.Skills) > 0 {
+			parts = append(parts, "skills "+strings.Join(p.Waiting.Skills, ", "))
+		}
+		if len(p.Waiting.Plugins) > 0 {
+			parts = append(parts, "plugins "+strings.Join(p.Waiting.Plugins, ", "))
+		}
+		if len(parts) > 0 {
+			body = strings.TrimSuffix(body, ".") + "; waiting for the AI host: " + strings.Join(parts, "; ") + "."
 		}
 		if held {
 			if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET pending = 1 WHERE id = ?`, p.ID); err != nil {
@@ -983,10 +1029,159 @@ func (s *Store) AddPersona(ctx context.Context, roomID string, templateID int64,
 			}
 			p.Pending, body = true, body+waitsNote
 		}
-		m, err = memberLine(ctx, tx, roomID, by, body)
-		return err
+		if m, err = memberLine(ctx, tx, roomID, by, body); err != nil {
+			return err
+		}
+		for _, why := range left {
+			if err := insertMessage(ctx, tx, &Message{RoomID: roomID, Kind: KindSystem, ParticipantID: by.ID, Sender: by.Name, Body: why}); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	return p, m, err
+}
+
+// bringKit brings template t's frozen skills and plugins into p's room and pins or turns on, for
+// p, those its manifest names (035-AC10). A room skill or plugin of the same name is reused, not
+// copied: a skill at the room's latest version, the copy the room's personas run; a plugin unless
+// the room refused it, with no approved version left. A new skill is held for the room's host and
+// released at once when that host approves without asking, as a starter's skills are (006-AC13),
+// or is by; a new plugin lands at version 1 waiting for the AI host's inspection, or is left out
+// past the room's limits, as a starter's (006-AC13). Skills need by's profile and plugins a room
+// admin, as when copied in or added by hand (004-AC10, 009-AC5). It returns a chat line for each
+// skill or plugin left out.
+func bringKit(ctx context.Context, tx *txn, p *RoomPersona, t *Template, by *Participant, admin bool, defaultQuota int64) ([]string, error) {
+	var left []string
+	leave := func(what, name, why string) {
+		left = append(left, fmt.Sprintf("%s comes without its %s %s: %s.", p.label(), what, name, why))
+	}
+	// Only the blobs that will be inserted are read: a version may freeze megabytes of plugins.
+	file := func(name string) ([]byte, error) {
+		var data []byte
+		err := tx.QueryRowContext(ctx, `SELECT f.data FROM persona_template_files f JOIN persona_template_versions v ON v.id = f.version_id
+			WHERE v.template_id = ? AND v.n = ? AND f.name = ?`, t.ID, t.Version, name).Scan(&data)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("persona kit: no file %q", name)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("persona kit: file %s: %w", name, err)
+		}
+		return data, nil
+	}
+	skills := map[string][2]int64{}
+	for _, k := range t.FrozenSkills {
+		if by.ProfileID == 0 {
+			leave("skill", k.Name, "adding skills needs a profile")
+			continue
+		}
+		var id, n int64
+		err := tx.QueryRowContext(ctx, `SELECT id, (SELECT MAX(n) FROM skill_versions WHERE skill_id = s.id) FROM skills s WHERE room_id = ? AND name = ?`,
+			p.RoomID, k.Name).Scan(&id, &n)
+		switch {
+		case err == nil:
+			skills[k.Name] = [2]int64{id, n}
+			continue
+		case !errors.Is(err, sql.ErrNoRows):
+			return nil, fmt.Errorf("persona kit: skill %s: %w", k.Name, err)
+		}
+		var have int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM skills WHERE room_id = ?`, p.RoomID).Scan(&have); err != nil {
+			return nil, fmt.Errorf("persona kit: %w", err)
+		}
+		if have >= MaxRoomSkills {
+			leave("skill", k.Name, fmt.Sprintf("a room holds at most %d skills", MaxRoomSkills))
+			continue
+		}
+		data, err := file(k.File)
+		if err != nil {
+			return nil, err
+		}
+		if id, err = insertKitSkill(ctx, tx, p.RoomID, k, data, true); err != nil {
+			return nil, fmt.Errorf("persona kit: %w", err)
+		}
+		// Held for the host unless the host approves without asking or is the one adding it.
+		if _, err := tx.ExecContext(ctx, `UPDATE skills SET pending = 0, from_starter = 0 WHERE id = ? AND EXISTS (SELECT 1 FROM rooms r
+			JOIN daemons d ON d.participant_id = r.host_participant_id WHERE r.id = ? AND (d.approve_all = 0 OR `+hostSeatSQL+`))`,
+			id, p.RoomID, by.ID, by.ID); err != nil {
+			return nil, fmt.Errorf("persona kit: skill %s: %w", k.Name, err)
+		}
+		skills[k.Name] = [2]int64{id, int64(k.Version)}
+	}
+	plugins := map[string]int64{}
+	var fresh []StarterPlugin
+	files := map[string][]byte{}
+	for _, pl := range t.FrozenPlugins {
+		if !admin {
+			leave("plugin", pl.Name, "a room admin adds plugins")
+			continue
+		}
+		var id int64
+		var refused bool
+		err := tx.QueryRowContext(ctx, `SELECT id, NOT EXISTS (SELECT 1 FROM plugin_versions WHERE plugin_id = p.id AND state = '`+PluginApproved+`')
+			AND (SELECT state FROM plugin_versions WHERE plugin_id = p.id ORDER BY n DESC LIMIT 1) IN ('`+PluginRefused+`', '`+PluginInvalid+`')
+			FROM room_plugins p WHERE room_id = ? AND name = ? AND removed_at IS NULL`, p.RoomID, pl.Name).Scan(&id, &refused)
+		switch {
+		case err == nil && refused:
+			leave("plugin", pl.Name, "it was refused in this room")
+		case err == nil:
+			plugins[pl.Name] = id
+		case errors.Is(err, sql.ErrNoRows):
+			if files[pl.File], err = file(pl.File); err != nil {
+				return nil, err
+			}
+			fresh = append(fresh, pl)
+		default:
+			return nil, fmt.Errorf("persona kit: plugin %s: %w", pl.Name, err)
+		}
+	}
+	if len(fresh) > 0 {
+		var have int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM room_plugins WHERE room_id = ? AND removed_at IS NULL`, p.RoomID).Scan(&have); err != nil {
+			return nil, fmt.Errorf("persona kit: %w", err)
+		}
+		used, quota, err := roomUsage(ctx, tx, p.RoomID, defaultQuota)
+		if err != nil {
+			return nil, err
+		}
+		added, _, err := insertKitPlugins(ctx, tx, p.RoomID, by, fresh, files, have, quota-used, func(name, why string) { leave("plugin", name, why) })
+		if err != nil {
+			return nil, fmt.Errorf("persona kit: %w", err)
+		}
+		maps.Copy(plugins, added)
+	}
+	for _, name := range t.Skills {
+		if k, ok := skills[name]; ok {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO room_persona_skills(persona_id, skill_id, version) VALUES(?,?,?)`, p.ID, k[0], k[1]); err != nil {
+				return nil, fmt.Errorf("persona kit: skill %s: %w", name, err)
+			}
+		}
+	}
+	for _, name := range t.Plugins {
+		if id, ok := plugins[name]; ok {
+			if err := activatePlugin(ctx, tx, p.ID, id, name); err != nil {
+				return nil, fmt.Errorf("persona kit: plugin %s: %w", name, err)
+			}
+		}
+	}
+	return left, nil
+}
+
+// kitWaiting names persona id's skills held for the host and plugins with no approved version.
+func kitWaiting(ctx context.Context, tx *txn, id int64) (*KitWaiting, error) {
+	var skills, plugins string
+	err := tx.QueryRowContext(ctx, `SELECT
+		COALESCE((SELECT jsonb_agg(s.name ORDER BY s.name) FROM room_persona_skills k JOIN skills s ON s.id = k.skill_id WHERE k.persona_id = ? AND s.pending = 1), '[]')::text,
+		COALESCE((SELECT jsonb_agg(p.name ORDER BY p.name) FROM room_persona_plugins k JOIN room_plugins p ON p.id = k.plugin_id WHERE k.persona_id = ?
+			AND NOT EXISTS (SELECT 1 FROM plugin_versions v WHERE v.plugin_id = p.id AND v.state = '`+PluginApproved+`')), '[]')::text`, id, id).Scan(&skills, &plugins)
+	if err != nil {
+		return nil, fmt.Errorf("persona kit waiting: %w", err)
+	}
+	var w KitWaiting
+	// Both are JSON arrays of strings Postgres just built.
+	_ = json.Unmarshal([]byte(skills), &w.Skills)
+	_ = json.Unmarshal([]byte(plugins), &w.Plugins)
+	return &w, nil
 }
 
 // templateSettings gives the new copy p its template's settings c (032-AC6, 035-AC8). The time
@@ -1326,7 +1521,7 @@ func (s *Store) UpdatePersona(ctx context.Context, roomID string, id int64, by *
 		}
 		c := PersonaPatch{Text: &t.Text, Model: &t.Model, Effort: &t.Effort, TemplateVersion: &t.Version}
 		p, m, held, err = changePersona(ctx, tx, p, c, by, func(before string, _ []string) string {
-			return fmt.Sprintf("updated %s to version %d of the template %q.", before, t.Version, t.Title)
+			return fmt.Sprintf("updated %s to version %d of the library persona %q.", before, t.Version, t.Title)
 		})
 		if err == nil && !held {
 			p.UpdateVersion = 0

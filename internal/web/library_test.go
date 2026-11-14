@@ -1,6 +1,8 @@
 package web
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"slices"
@@ -227,7 +229,7 @@ func TestProfilePersonaLibraryAPI(t *testing.T) {
 			t.Fatalf("add #%d: %d %s", i+1, code, b)
 		}
 	}
-	if code, b := add(bob, builtin, broom); code != http.StatusConflict || !strings.Contains(string(b), "at most 12 personas per room") {
+	if code, b := add(bob, builtin, broom); code != http.StatusConflict || !strings.Contains(string(b), "A room holds 12 personas at most.") {
 		t.Fatalf("13th persona: %d %s", code, b)
 	}
 
@@ -287,5 +289,90 @@ func TestProfilePersonaSpeech(t *testing.T) {
 	code, b := alice.do(t, "GET", fmt.Sprintf("/api/profile/personas/%d", id), nil)
 	if got := decodeJSON[libraryPersonaResp](t, b); code != http.StatusOK || !got.TTS || len(got.Voices) == 0 {
 		t.Fatalf("read with speech: %d %s", code, b)
+	}
+}
+
+// kitPersona saves Grill of a new room of d, with d's personal skill stamp and the plugin babs,
+// approved by the room's AI host, on, to d's library personas, and shares it.
+func (e *env) kitPersona(t *testing.T, d *device) int64 {
+	t.Helper()
+	ctx := t.Context()
+	room := d.createRoom(t, "Kit source", "Kit").ID
+	sk := d.uploadSkill(t, "personal", skillZip(t, "stamp", "STAMP"), http.StatusCreated)
+	ps, err := e.st.RoomPersonas(ctx, room)
+	if err != nil || len(ps) != 1 {
+		t.Fatalf("room personas: %+v %v", ps, err)
+	}
+	if code, b := d.do(t, "PUT", fmt.Sprintf("/api/rooms/%s/personas/%d/skills/%d", room, ps[0].ID, sk.ID), map[string]bool{"accept_disclaimer": true}); code != http.StatusOK {
+		t.Fatalf("skill on: %d %s", code, b)
+	}
+	seats, _ := e.st.Participants(ctx, room)
+	tar := snapshotTar(t, "babs", "")
+	sum := sha256.Sum256(tar)
+	snap := store.PluginSnapshot{Commit: strings.Repeat("1", 40), SHA256: hex.EncodeToString(sum[:]), Size: 1, Files: 2, FileList: []byte(`[]`), Manifest: []byte(`{}`), Data: tar}
+	if _, err := e.st.AddPlugins(ctx, room, []store.NewPlugin{{Name: "babs", URL: "https://example.com/babs.git", RefName: "main", PluginSnapshot: snap}},
+		[]int64{ps[0].ID}, &seats[0], 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	r := &turnRoom{room: room, alice: e.daemonFor(t, room, "Hana")}
+	e.connect(t, room, r.alice, true)
+	t.Cleanup(r.alice.drop)
+	nextEvent(t, r.alice.events, "inspect")
+	pl, _ := e.st.RoomPlugins(ctx, room)
+	if code, b := e.do(t, "POST", r.daemonPath(fmt.Sprintf("plugins/%d/report", pl[0].Versions[0].ID)), r.alice.tok, pluginReport{OK: true}); code != http.StatusOK {
+		t.Fatalf("report: %d %s", code, b)
+	}
+	code, b := d.do(t, "POST", fmt.Sprintf("/api/rooms/%s/personas/%d/library", room, ps[0].ID), nil)
+	tp := decodeJSON[store.Template](t, b)
+	if code != http.StatusCreated || len(tp.FrozenSkills) != 1 || len(tp.FrozenPlugins) != 1 {
+		t.Fatalf("save: %d %s", code, b)
+	}
+	if code, b := d.do(t, "POST", fmt.Sprintf("/api/profile/personas/%d/share", tp.ID), nil); code != http.StatusNoContent {
+		t.Fatalf("share: %d %s", code, b)
+	}
+	return tp.ID
+}
+
+// 035-AC10: from the room and from the profile's "Add to a room", a library persona brings its
+// skill in as a room skill held for the AI host, once; its plugin comes with a room admin's add
+// only (009-AC5), and the answer's `waiting` names what waits.
+func TestAddLibraryPersonaKit(t *testing.T) {
+	e := newEnv(t)
+	alice, bob := e.device(t), e.device(t)
+	tp := e.kitPersona(t, alice)
+	own := alice.createRoom(t, "Second", "Alice").ID
+	theirs := alice.createRoom(t, "Third", "Alice").ID
+	bob.join(t, theirs, "Bob")
+	for i, c := range []struct {
+		d             *device
+		room, path    string
+		body          any
+		plugins, line string
+	}{
+		{alice, own, "/api/rooms/" + own + "/personas", map[string]int64{"template_id": tp}, "babs",
+			`Alice added the persona 🔥 Grill-2, from the library persona "Grill" v1; waiting for the AI host: skills stamp; plugins babs.`},
+		{alice, own, fmt.Sprintf("/api/profile/personas/%d/rooms", tp), map[string]string{"room": own}, "babs",
+			`Alice added the persona 🔥 Grill-3, from the library persona "Grill" v1; waiting for the AI host: skills stamp; plugins babs.`},
+		{bob, theirs, "/api/rooms/" + theirs + "/personas", map[string]int64{"template_id": tp}, "",
+			"🔥 Grill-2 comes without its plugin babs: a room admin adds plugins."},
+		{bob, theirs, fmt.Sprintf("/api/profile/personas/%d/rooms", tp), map[string]string{"room": theirs}, "",
+			"🔥 Grill-3 comes without its plugin babs: a room admin adds plugins."},
+	} {
+		code, b := c.d.do(t, "POST", c.path, c.body)
+		got := decodeJSON[store.RoomPersona](t, b)
+		if code != http.StatusCreated || got.Waiting == nil || strings.Join(got.Waiting.Skills, ",") != "stamp" || strings.Join(got.Waiting.Plugins, ",") != c.plugins ||
+			len(got.Skills) != 1 || got.Skills[0].Name != "stamp" || got.Skills[0].Scope != store.ScopeRoom {
+			t.Fatalf("#%d %s: %d %s", i, c.path, code, b)
+		}
+		if e.lastLine(t, c.room).Body != c.line {
+			t.Fatalf("#%d line %q, want %q", i, e.lastLine(t, c.room).Body, c.line)
+		}
+	}
+	for room, plugins := range map[string]int{own: 1, theirs: 0} {
+		ks, err := e.st.RoomSkills(t.Context(), room)
+		ps, _ := e.st.RoomPlugins(t.Context(), room)
+		if err != nil || len(ks) != 1 || !ks[0].Pending || len(ps) != plugins {
+			t.Fatalf("%s: skills %+v plugins %+v %v", room, ks, ps, err)
+		}
 	}
 }

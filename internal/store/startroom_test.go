@@ -256,7 +256,7 @@ func TestTriggerOnCountsFromNow(t *testing.T) {
 	}
 }
 
-// 006-AC13: under "approve everything", the host's answer names the starter's skill as such.
+// 006-AC13: under "approve everything", the host's answer names the skill as held for the host.
 func TestDecideStarterSkill(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
@@ -270,7 +270,7 @@ func TestDecideStarterSkill(t *testing.T) {
 	}
 	ks, _ := s.RoomSkills(ctx, "r")
 	m, err := s.DecideRoomSkill(ctx, "r", ks[0].ID, true, &ps[0])
-	if err != nil || m.Body != "Ali approved the starter's skill stamp v3." {
+	if err != nil || m.Body != "Ali approved the skill stamp v3 held for the host." {
 		t.Fatalf("decide: %+v %v", m, err)
 	}
 	if ks, _ := s.RoomSkills(ctx, "r"); ks[0].Pending || ks[0].FromStarter {

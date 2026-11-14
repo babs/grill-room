@@ -134,7 +134,7 @@ func seedHeld(t *testing.T, s *Store, room string) *Participant {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, _, err := s.AddPersona(ctx, room, templateByPreset(t, s, "secretary").ID, bob, true)
+	p, _, err := s.AddPersona(ctx, room, templateByPreset(t, s, "secretary").ID, bob, true, 1<<20)
 	if err != nil || !p.Pending {
 		t.Fatalf("held persona: %+v %v", p, err)
 	}
@@ -364,7 +364,7 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 			t.Fatal(err)
 		}
 		// A turn an agent queued: no participant holds it, only the room (002-AC24).
-		sec, _, err := s.AddPersona(ctx, room, templateByPreset(t, s, "secretary").ID, p, true)
+		sec, _, err := s.AddPersona(ctx, room, templateByPreset(t, s, "secretary").ID, p, true, 1<<20)
 		if err != nil {
 			t.Fatal(err)
 		}

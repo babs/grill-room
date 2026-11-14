@@ -296,7 +296,7 @@ var mcpTools = []*mcpTool{
 			}
 			return c.get(p)
 		}},
-	{name: "list_templates", desc: "List the persona templates a room can add personas from.",
+	{name: "list_templates", desc: "List the library personas a room can add personas from, with each one's section (personal, instance, builtin) and description.",
 		ro: true, idem: true, schema: `{"required":["room"],"properties":{` + roomArg + `}}`, routes: []string{"GET /api/rooms/{room}/templates"},
 		run: func(c *mcpCall, a mcpArgs) (any, error) { return c.get(a.room() + "/templates") }},
 	{name: "list_skills", desc: "List the skills you can give a room's personas, or without a room, the skills you uploaded.",
@@ -353,7 +353,7 @@ var mcpTools = []*mcpTool{
 			}
 			return c.pass(http.MethodPost, "/api/profile/rooms", body)
 		}},
-	{name: "add_persona", desc: "Add a persona to a room from a template (list_templates). Under host approval it waits for the AI host.",
+	{name: "add_persona", desc: "Add a persona to a room from a library persona (list_templates), with its skills, and its plugins when you are a room admin. Under host approval it waits for the AI host; new skills and plugins wait for the AI host too.",
 		full: true, schema: `{"required":["room","template"],"properties":{` + roomArg + `,"template":{"type":"integer"}}}`,
 		routes: []string{"POST /api/rooms/{room}/personas"},
 		run: func(c *mcpCall, a mcpArgs) (any, error) {

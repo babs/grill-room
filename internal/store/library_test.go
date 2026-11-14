@@ -33,7 +33,7 @@ func TestMigrateLibrary(t *testing.T) {
 	if _, err := s.PublishVersion(ctx, alice.ProfileID, tp.ID, "Alice", f); err != nil {
 		t.Fatal(err)
 	}
-	cp, _, err := s.AddPersona(ctx, "a", tp.ID, alice, true)
+	cp, _, err := s.AddPersona(ctx, "a", tp.ID, alice, true, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestSavePersonaRoundTrip(t *testing.T) {
 				t.Fatal(err)
 			}
 			ali := joinWithProfile(t, s, dst, "Ali", JoinProfile{ID: alice.ProfileID})
-			got, _, err := s.AddPersona(ctx, dst, tp.ID, ali, true)
+			got, _, err := s.AddPersona(ctx, dst, tp.ID, ali, true, 1<<20)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -346,7 +346,7 @@ func TestSavePersonaLimits(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, alice, true)
+	sec, _, err := s.AddPersona(ctx, "a", templateByPreset(t, s, "secretary").ID, alice, true, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +418,7 @@ func TestSavePersonaAwaitingHost(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	_, bob, grill, _ := approvingRoom(t, s, "h")
-	sec, _, err := s.AddPersona(ctx, "h", templateByPreset(t, s, "secretary").ID, bob, false)
+	sec, _, err := s.AddPersona(ctx, "h", templateByPreset(t, s, "secretary").ID, bob, false, 1<<20)
 	if err != nil || !sec.Pending {
 		t.Fatalf("held add: %+v %v", sec, err)
 	}
@@ -466,14 +466,14 @@ func TestAddWatcherTemplate(t *testing.T) {
 		return strings.Join(out, ",")
 	}
 	ali := joinWithProfile(t, s, "w1", "Ali", JoinProfile{ID: alice.ProfileID})
-	if p, _, err := s.AddPersona(ctx, "w1", tp.ID, ali, false); err != nil || !p.WatchesNotes || watchers("w1") != "Watcher" {
+	if p, _, err := s.AddPersona(ctx, "w1", tp.ID, ali, false, 1<<20); err != nil || !p.WatchesNotes || watchers("w1") != "Watcher" {
 		t.Fatalf("into a room without a watcher: %+v %v", p, err)
 	}
 	wa, _, wg := personaRoom(t, s, "w2")
 	if _, _, _, err := s.EditPersona(ctx, "w2", wg.ID, PersonaPatch{WatchesNotes: yes()}, wa); err != nil {
 		t.Fatal(err)
 	}
-	p, m, err := s.AddPersona(ctx, "w2", tp.ID, wa, true)
+	p, m, err := s.AddPersona(ctx, "w2", tp.ID, wa, true, 1<<20)
 	if err != nil || p.WatchesNotes || watchers("w2") != "Grill" || !strings.HasSuffix(m.Body, ", not the notes watcher (🔥 Grill watches the notes).") {
 		t.Fatalf("into a watched room: %+v %+v %v", p, m, err)
 	}
@@ -481,12 +481,12 @@ func TestAddWatcherTemplate(t *testing.T) {
 	if _, _, held, err := s.EditPersona(ctx, "w3", hg.ID, PersonaPatch{WatchesNotes: yes()}, host); err != nil || held {
 		t.Fatalf("host's watcher: %v %v", held, err)
 	}
-	if p, _, err := s.AddPersona(ctx, "w3", tp.ID, bob, false); err != nil || !p.Pending || p.WatchesNotes || watchers("w3") != "Grill" {
+	if p, _, err := s.AddPersona(ctx, "w3", tp.ID, bob, false, 1<<20); err != nil || !p.Pending || p.WatchesNotes || watchers("w3") != "Grill" {
 		t.Fatalf("held add: %+v %v", p, err)
 	}
 	// Held into a room without a watcher: no role, before the host's approval or after it.
 	host, bob, _, _ = approvingRoom(t, s, "w4")
-	p, m, err = s.AddPersona(ctx, "w4", tp.ID, bob, false)
+	p, m, err = s.AddPersona(ctx, "w4", tp.ID, bob, false, 1<<20)
 	if err != nil || !p.Pending || p.WatchesNotes || watchers("w4") != "" ||
 		!strings.Contains(m.Body, ", not the notes watcher: a room member gives it the role once the host approves it.") {
 		t.Fatalf("held add into an unwatched room: %+v %+v %v", p, m, err)
@@ -541,7 +541,7 @@ func TestLibraryMergeAndDelete(t *testing.T) {
 			t.Fatalf("template %d after the merge", id)
 		}
 	}
-	cp, _, err := s.AddPersona(ctx, "m1", bp, a, true)
+	cp, _, err := s.AddPersona(ctx, "m1", bp, a, true, 1<<20)
 	if err != nil || cp.EveryMinutes != 5 || cp.Speaks || cp.TemplateVersion != 2 {
 		t.Fatalf("copy: %+v %v", cp, err)
 	}
@@ -567,7 +567,7 @@ func TestImportLinksVisibleTemplatesOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.AddPersona(ctx, "orig", tp.ID, alice, true); err != nil {
+	if _, _, err := s.AddPersona(ctx, "orig", tp.ID, alice, true, 1<<20); err != nil {
 		t.Fatal(err)
 	}
 	dir := export(t, s, "orig")
@@ -600,7 +600,7 @@ func TestImportLinksVisibleTemplatesOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.AddPersona(ctx, "orig", gone.ID, alice, true); err != nil {
+	if _, _, err := s.AddPersona(ctx, "orig", gone.ID, alice, true, 1<<20); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.RemoveTemplate(ctx, alice.ProfileID, gone.ID); err != nil {
@@ -870,5 +870,416 @@ func TestShareAndRemoveTemplate(t *testing.T) {
 	}
 	if err := s.RemoveTemplate(ctx, 0, t2.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// kitTemplate is a shared library persona saved from Grill of pluginRoom's room "a", with the skill
+// stamp v1 and the plugin babs at its running version, v2.
+func kitTemplate(t *testing.T, s *Store) *Template {
+	t.Helper()
+	ctx := t.Context()
+	r, _ := pluginRoom(t, s)
+	librarySkill(t, s, r.grill.ID)
+	saver := newProfile(t, s, "saver")
+	tp, err := s.SavePersonaToLibrary(ctx, "a", r.grill.ID, saver)
+	if err != nil || len(tp.FrozenSkills) != 1 || len(tp.FrozenPlugins) != 1 {
+		t.Fatalf("kit template: %+v %v", tp, err)
+	}
+	if err := s.ShareTemplate(ctx, saver, tp.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	return tp
+}
+
+// turnKit starts and ends a turn of persona p in room, run by participant by on daemon d, and
+// returns the skills and plugins it loaded, as "name:vN" lists.
+func turnKit(t *testing.T, s *Store, room string, by *Participant, d int64, p *RoomPersona) (skills, plugins string) {
+	t.Helper()
+	ctx := t.Context()
+	tn := &Turn{RoomID: room, ParticipantID: by.ID, DaemonID: d, Prompt: "go", PersonaID: p.ID, PersonaName: p.Name}
+	if err := s.StartTurn(ctx, tn, false); err != nil {
+		t.Fatal(err)
+	}
+	ks, err := s.TurnSkills(ctx, room, tn.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps, err := s.TurnPlugins(ctx, room, tn.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.FailTurn(ctx, room, tn.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	var a, b []string
+	for _, k := range ks {
+		a = append(a, fmt.Sprintf("%s:v%d", k.Name, k.Version))
+	}
+	for _, p := range ps {
+		b = append(b, fmt.Sprintf("%s:v%d", p.Name, p.N))
+	}
+	return strings.Join(a, ","), strings.Join(b, ",")
+}
+
+// kitOf is persona p's skills and plugins as the room has them, "name:vN" and names.
+func kitOf(t *testing.T, s *Store, room string, p *RoomPersona) (skills, plugins string) {
+	t.Helper()
+	got, err := s.RoomPersona(t.Context(), room, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a, b []string
+	for _, k := range got.Skills {
+		a = append(a, fmt.Sprintf("%s:v%d", k.Name, k.Version))
+	}
+	rps, err := s.RoomPlugins(t.Context(), room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rp := range rps {
+		if slices.Contains(rp.Personas, p.ID) {
+			b = append(b, rp.Name)
+		}
+	}
+	return strings.Join(a, ","), strings.Join(b, ",")
+}
+
+// 035-AC10: under "approve everything", a room admin's copy of a library persona, held for the
+// host, brings its skill in held for the host and its plugin at v1 waiting for the AI host's
+// inspection, both on the new persona, and the add names them; once the host approves the persona,
+// the skill and the plugin, the persona runs with them.
+func TestAddPersonaKitHeld(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	tp := kitTemplate(t, s)
+	alice, bob, _, d := approvingRoom(t, s, "h")
+	p, m, err := s.AddPersona(ctx, "h", tp.ID, bob, true, 1<<20)
+	if err != nil || !p.Pending || p.Waiting == nil || strings.Join(p.Waiting.Skills, ",") != "stamp" || strings.Join(p.Waiting.Plugins, ",") != "babs" {
+		t.Fatalf("held add: %+v %v", p, err)
+	}
+	if want := `Bob added the persona 🔥 Grill-2, from the library persona "Grill" v1; waiting for the AI host: skills stamp; plugins babs. It waits for the host's approval.`; m.Body != want {
+		t.Fatalf("line %q, want %q", m.Body, want)
+	}
+	if k, pl := kitOf(t, s, "h", p); k != "stamp:v1" || pl != "babs" {
+		t.Fatalf("kit %q %q", k, pl)
+	}
+	if n := count(t, s, `SELECT count(*) FROM skills WHERE room_id = 'h' AND name = 'stamp' AND pending = 1 AND from_starter = 1`); n != 1 {
+		t.Fatal("the skill is not held for the host as a starter's")
+	}
+	rps, _ := s.RoomPlugins(ctx, "h")
+	if len(rps) != 1 || versionStates(&rps[0]) != "v1:inspecting" {
+		t.Fatalf("plugins %+v", rps)
+	}
+	// A held skill never turns on by itself, however often the room looks.
+	if names, err := s.ReleaseStarterSkills(ctx, "h"); err != nil || len(names) != 0 {
+		t.Fatalf("released under approve everything: %v %v", names, err)
+	}
+
+	if _, err := s.DecideChange(ctx, "h", s.onlyChange(t, "h").ID, true, alice); err != nil {
+		t.Fatal(err)
+	}
+	var sid int64
+	if err := s.db.QueryRowContext(ctx, `SELECT id FROM skills WHERE room_id = 'h' AND name = 'stamp'`).Scan(&sid); err != nil {
+		t.Fatal(err)
+	}
+	if k, pl := turnKit(t, s, "h", alice, d.ID, p); k != "" || pl != "" {
+		t.Fatalf("ran with %q %q before the host approved them", k, pl)
+	}
+	if m, err := s.DecideRoomSkill(ctx, "h", sid, true, alice); err != nil || m.Body != "Alice approved the skill stamp v1 held for the host." {
+		t.Fatalf("approve skill: %+v %v", m, err)
+	}
+	if _, state, err := s.ReportPluginVersion(ctx, "h", rps[0].Versions[0].ID, d.ID, true, nil, ""); err != nil || state != PluginPending {
+		t.Fatalf("inspected: %s %v", state, err)
+	}
+	if _, err := s.DecidePluginVersion(ctx, "h", rps[0].ID, 1, true, alice); err != nil {
+		t.Fatal(err)
+	}
+	if k, pl := turnKit(t, s, "h", alice, d.ID, p); k != "stamp:v1" || pl != "babs:v1" {
+		t.Fatalf("ran with %q %q", k, pl)
+	}
+
+	// The host's own add is not held, nor is the skill it brings: only the plugin's inspection waits.
+	host, _, _, _ := approvingRoom(t, s, "h2")
+	p, m, err = s.AddPersona(ctx, "h2", tp.ID, host, true, 1<<20)
+	if err != nil || p.Pending || len(p.Waiting.Skills) != 0 || strings.Join(p.Waiting.Plugins, ",") != "babs" ||
+		m.Body != `Alice added the persona 🔥 Grill-2, from the library persona "Grill" v1; waiting for the AI host: plugins babs.` {
+		t.Fatalf("host add: %+v %+v %v", p, m, err)
+	}
+}
+
+// 035-AC10: with a host who approves without asking, the skill is on at once, as a starter's, and
+// the plugin waits for the inspection only; a second copy reuses the room's skill, at its latest
+// version, and its plugin, with no second row.
+func TestAddPersonaKitFree(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	tp := kitTemplate(t, s)
+	alice, _, _ := personaRoom(t, s, "f")
+	d, err := s.PairDaemon(ctx, "f", alice.ID, "dmn-f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetHost(ctx, "f", alice.ID); err != nil {
+		t.Fatal(err)
+	}
+	p, m, err := s.AddPersona(ctx, "f", tp.ID, alice, true, 1<<20)
+	if err != nil || p.Pending || len(p.Waiting.Skills) != 0 || strings.Join(p.Waiting.Plugins, ",") != "babs" {
+		t.Fatalf("add: %+v %v", p, err)
+	}
+	if want := `Alice added the persona 🔥 Grill-2, from the library persona "Grill" v1; waiting for the AI host: plugins babs.`; m.Body != want {
+		t.Fatalf("line %q, want %q", m.Body, want)
+	}
+	if k, pl := turnKit(t, s, "f", alice, d.ID, p); k != "stamp:v1" || pl != "" {
+		t.Fatalf("ran with %q %q", k, pl)
+	}
+	rps, _ := s.RoomPlugins(ctx, "f")
+	if _, state, err := s.ReportPluginVersion(ctx, "f", rps[0].Versions[0].ID, d.ID, true, nil, ""); err != nil || state != PluginApproved {
+		t.Fatalf("inspected: %s %v", state, err)
+	}
+	if k, pl := turnKit(t, s, "f", alice, d.ID, p); k != "stamp:v1" || pl != "babs:v1" {
+		t.Fatalf("ran with %q %q", k, pl)
+	}
+
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO skill_versions(skill_id, n, author, description, files, size, sha256, data, created_at)
+		SELECT id, 2, 'Ali', 'd', 1, 6, 'y', 'tar v2', ? FROM skills WHERE room_id = 'f' AND name = 'stamp'`, now()); err != nil {
+		t.Fatal(err)
+	}
+	// A refused update leaves the approved v1 running: the plugin is reused.
+	if _, err := s.AddPluginVersion(ctx, "f", rps[0].ID, "main", snap("c2", "tar2"), alice, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE plugin_versions SET state = ? WHERE plugin_id = ? AND n = 2`, PluginRefused, rps[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	again, m, err := s.AddPersona(ctx, "f", tp.ID, alice, true, 1<<20)
+	if err != nil || len(again.Waiting.Skills)+len(again.Waiting.Plugins) != 0 || m.Body != `Alice added the persona 🔥 Grill-3, from the library persona "Grill" v1.` {
+		t.Fatalf("second add: %+v %+v %v", again, m, err)
+	}
+	if k, pl := kitOf(t, s, "f", again); k != "stamp:v2" || pl != "babs" {
+		t.Fatalf("reused kit %q %q", k, pl)
+	}
+	if k, pl := turnKit(t, s, "f", alice, d.ID, again); k != "stamp:v2" || pl != "babs:v1" {
+		t.Fatalf("reused kit ran with %q %q", k, pl)
+	}
+	if n := count(t, s, `SELECT (SELECT count(*) FROM skills WHERE room_id = 'f') + (SELECT count(*) FROM room_plugins WHERE room_id = 'f')`); n != 2 {
+		t.Fatalf("%d skills and plugins, want 2", n)
+	}
+}
+
+// 035-AC10: a plugin or a skill the room cannot take is left out, as a starter's plugin, with a
+// line, and the persona goes without it; the rest of its kit still comes in. A plain member's copy
+// comes without plugins, which only room admins add (009-AC5), a participant without a profile's
+// without skills (004-AC10), and a room plugin of that name the room refused is not turned on.
+func TestAddPersonaKitLeftOut(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	tp := kitTemplate(t, s)
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := s.db.ExecContext(ctx, q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		room          string
+		admin, anon   bool
+		quota         int64
+		prep          func(room string, by *Participant)
+		line, kit, on string
+	}{
+		{"full", true, false, 1 << 20, func(room string, by *Participant) {
+			for i := range MaxRoomPlugins {
+				addPlugin(t, s, room, by, fmt.Sprintf("p%d", i), "c1")
+			}
+		}, "its plugin babs: a room holds at most 10 plugins", "stamp:v1", ""},
+		{"small", true, false, 16, nil, "its plugin babs: it would take the room past its quota", "stamp:v1", ""},
+		{"skills", true, false, 1 << 20, func(room string, _ *Participant) {
+			for i := range MaxRoomSkills {
+				exec(`INSERT INTO skills(name, created_at, room_id) VALUES(?, ?, ?)`, fmt.Sprintf("k%d", i), now(), room)
+			}
+		}, "its skill stamp: a room holds at most 20 skills", "", "babs"},
+		{"member", false, false, 1 << 20, nil, "its plugin babs: a room admin adds plugins", "stamp:v1", ""},
+		{"anonymous", true, true, 1 << 20, nil, "its skill stamp: adding skills needs a profile", "", "babs"},
+		{"refused", true, false, 1 << 20, func(room string, by *Participant) {
+			addPlugin(t, s, room, by, "babs", "c1")
+			exec(`UPDATE plugin_versions SET state = ? WHERE plugin_id IN (SELECT id FROM room_plugins WHERE room_id = ?)`, PluginRefused, room)
+		}, "its plugin babs: it was refused in this room", "stamp:v1", ""},
+	} {
+		alice, _, _ := personaRoom(t, s, c.room)
+		if c.prep != nil {
+			c.prep(c.room, alice)
+		}
+		plugins := count(t, s, `SELECT count(*) FROM room_plugins WHERE room_id = ?`, c.room)
+		by := alice
+		if c.anon {
+			cp := *alice
+			by, cp.ProfileID = &cp, 0
+		}
+		p, _, err := s.AddPersona(ctx, c.room, tp.ID, by, c.admin, c.quota)
+		// A brought plugin waits for its inspection; one left out is not waiting.
+		if err != nil || strings.Join(p.Waiting.Plugins, ",") != c.on {
+			t.Fatalf("%s: %+v %v", c.room, p, err)
+		}
+		if want := "🔥 Grill-2 comes without " + c.line + "."; lastBody(t, s, c.room) != want {
+			t.Fatalf("%s: last line %q, want %q", c.room, lastBody(t, s, c.room), want)
+		}
+		if k, pl := kitOf(t, s, c.room, p); k != c.kit || pl != c.on {
+			t.Fatalf("%s: kit %q %q", c.room, k, pl)
+		}
+		if c.on == "" && (count(t, s, `SELECT count(*) FROM room_plugins WHERE room_id = ?`, c.room) != plugins ||
+			count(t, s, `SELECT count(*) FROM room_persona_plugins WHERE persona_id = ?`, p.ID) != 0) {
+			t.Fatalf("%s: a plugin came in", c.room)
+		}
+	}
+}
+
+// 035-AC2: a library persona's history, newest first, for the profiles that see it only.
+func TestTemplateHistory(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	alice, bob, grill := personaRoom(t, s, "a")
+	for range 2 {
+		if _, err := s.SavePersonaToLibrary(ctx, "a", grill.ID, alice.ProfileID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tp, vs, err := s.TemplateHistory(ctx, templateOf(t, s, "a", grill.ID), alice.ProfileID)
+	if err != nil || !tp.Mine || tp.Version != 2 || len(vs) != 2 || vs[0].N != 2 || vs[1].N != 1 || vs[0].Author != "Alice" {
+		t.Fatalf("history: %+v %+v %v", tp, vs, err)
+	}
+	for _, id := range []int64{tp.ID, 0} {
+		if _, _, err := s.TemplateHistory(ctx, id, bob.ProfileID); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("history of %d for bob: %v", id, err)
+		}
+	}
+	if err := s.ShareTemplate(ctx, alice.ProfileID, tp.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, vs, err := s.TemplateHistory(ctx, tp.ID, bob.ProfileID); err != nil || got.Mine || got.SourcePersonaID != 0 || len(vs) != 2 {
+		t.Fatalf("shared history for bob: %+v %v", got, err)
+	}
+}
+
+// templateOf is the library persona room persona id of room is linked to.
+func templateOf(t *testing.T, s *Store, room string, id int64) int64 {
+	t.Helper()
+	p, err := s.RoomPersona(t.Context(), room, id)
+	if err != nil || p.TemplateID == 0 {
+		t.Fatalf("persona %d: %+v %v", id, p, err)
+	}
+	return p.TemplateID
+}
+
+// 035-AC4 035-AC5: share, unshare and duplicate refuse what their caller may not do, saying why.
+func TestLibraryRefusals(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	alice, _, grill := personaRoom(t, s, "a")
+	tp, err := s.SavePersonaToLibrary(ctx, "a", grill.ID, alice.ProfileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	builtin := templateByPreset(t, s, PresetDefault).ID
+	for _, c := range []struct {
+		name  string
+		id    int64
+		share bool
+		want  error
+		text  string
+	}{
+		{"share a built-in", builtin, true, ErrPreset, ""},
+		{"share an unknown one", 0, true, ErrNotFound, ""},
+		{"unshare a personal one", tp.ID, false, ErrNotShared, "Grill is not shared"},
+	} {
+		if err := s.ShareTemplate(ctx, alice.ProfileID, c.id, c.share); !errors.Is(err, c.want) || c.text != "" && err.Error() != c.text {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+	if _, err := s.DuplicateTemplate(ctx, 0, builtin); !errors.Is(err, ErrForbidden) {
+		t.Errorf("duplicate without a profile: %v", err)
+	}
+	if _, err := s.EditTemplate(ctx, alice.ProfileID, 0, TemplateEdit{}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("edit an unknown one: %v", err)
+	}
+	if _, err := s.SavePersonaToLibrary(ctx, "a", 0, alice.ProfileID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("save an unknown persona: %v", err)
+	}
+}
+
+// 013-AC16: a persona's default voice is stored once, when it has none.
+func TestDefaultVoice(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	_, _, grill := personaRoom(t, s, "a")
+	for i, want := range []bool{true, false} {
+		if ok, err := s.DefaultVoice(ctx, "a", grill.ID, fmt.Sprintf("v%d", i)); err != nil || ok != want {
+			t.Fatalf("default voice #%d: %v %v", i, ok, err)
+		}
+	}
+	if p, _ := s.RoomPersona(ctx, "a", grill.ID); p.Voice != "v0" {
+		t.Fatalf("voice %q", p.Voice)
+	}
+}
+
+// 035: every library call answers a lost database with an error, never a false "not found".
+func TestLibraryCallsFailWithTheDatabase(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	alice, _, grill := personaRoom(t, s, "a")
+	tp, err := s.SavePersonaToLibrary(ctx, "a", grill.ID, alice.ProfileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	for name, err := range map[string]error{
+		"list":    func() error { _, err := s.Templates(ctx, alice.ProfileID); return err }(),
+		"one":     func() error { _, err := s.Template(ctx, tp.ID); return err }(),
+		"history": func() error { _, _, err := s.TemplateHistory(ctx, tp.ID, alice.ProfileID); return err }(),
+		"publish": func() error {
+			_, err := s.PublishTemplate(ctx, alice.ProfileID, "Alice", "X", grill.PersonaFields)
+			return err
+		}(),
+		"edit": func() error {
+			_, err := s.EditTemplate(ctx, alice.ProfileID, tp.ID, TemplateEdit{Version: 1})
+			return err
+		}(),
+		"duplicate": func() error { _, err := s.DuplicateTemplate(ctx, alice.ProfileID, tp.ID); return err }(),
+		"share":     s.ShareTemplate(ctx, alice.ProfileID, tp.ID, true),
+		"remove":    s.RemoveTemplate(ctx, alice.ProfileID, tp.ID),
+		"save":      func() error { _, err := s.SavePersonaToLibrary(ctx, "a", grill.ID, alice.ProfileID); return err }(),
+		"add":       func() error { _, _, err := s.AddPersona(ctx, "a", tp.ID, alice, true, 1<<20); return err }(),
+		"personas":  func() error { _, err := s.RoomPersonas(ctx, "a"); return err }(),
+		"voice":     func() error { _, err := s.DefaultVoice(ctx, "a", grill.ID, "v"); return err }(),
+	} {
+		if err == nil || errors.Is(err, ErrNotFound) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// 035-AC10 035-AC4: a library persona whose frozen files cannot be read is neither added, nor
+// duplicated, nor edited: the call fails whole and the room keeps its personas.
+func TestLibraryFilesLost(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	tp := kitTemplate(t, s)
+	alice, _, _ := personaRoom(t, s, "b")
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE persona_template_files RENAME TO lost_files`); err != nil {
+		t.Fatal(err)
+	}
+	for name, err := range map[string]error{
+		"add":       func() error { _, _, err := s.AddPersona(ctx, "b", tp.ID, alice, true, 1<<20); return err }(),
+		"duplicate": func() error { _, err := s.DuplicateTemplate(ctx, alice.ProfileID, tp.ID); return err }(),
+		"edit": func() error {
+			_, err := s.EditTemplate(ctx, tp.ProfileID, tp.ID, TemplateEdit{StarterPersona: StarterPersona{PersonaFields: tp.PersonaFields}, Version: tp.Version})
+			return err
+		}(),
+	} {
+		if err == nil || errors.Is(err, ErrNotFound) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if n := count(t, s, `SELECT count(*) FROM room_personas WHERE room_id = 'b'`); n != 1 {
+		t.Fatalf("%d personas after a failed add", n)
 	}
 }

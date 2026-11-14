@@ -646,3 +646,44 @@ func TestMCPRoomLinks(t *testing.T) {
 		t.Fatalf("after unlink: %+v", r)
 	}
 }
+
+// 035-AC20: list_templates gives each library persona its section and description, and
+// add_persona with a library persona's id brings its skill in, and its plugin for a room admin
+// only, waiting for the AI host (035-AC10).
+func TestMCPLibraryPersona(t *testing.T) {
+	m := newMCPEnv(t)
+	tp := m.kitPersona(t, m.alice)
+	var ts struct {
+		Items []store.Template `json:"items"`
+	}
+	if err := json.Unmarshal(m.call(t, m.aliceRead, "list_templates", map[string]any{"room": m.room.ID}).StructuredContent, &ts); err != nil {
+		t.Fatal(err)
+	}
+	sections := map[string]int{}
+	for _, x := range ts.Items {
+		sections[x.Section]++
+		if x.Section == store.SectionBuiltin && x.Description == "" {
+			t.Errorf("built-in %s without a description", x.Title)
+		}
+	}
+	if i := slices.IndexFunc(ts.Items, func(x store.Template) bool { return x.ID == tp }); i < 0 || ts.Items[i].Section != store.SectionInstance ||
+		sections[store.SectionBuiltin] != 4 {
+		t.Fatalf("list_templates: %+v", ts.Items)
+	}
+	for _, c := range []struct {
+		tok, plugins, line string
+	}{
+		{m.aliceFull, "babs", `Alice added the persona 🔥 Grill-2, from the library persona "Grill" v1; waiting for the AI host: skills stamp; plugins babs.`},
+		{m.bobF, "", "🔥 Grill-3 comes without its plugin babs: a room admin adds plugins."},
+	} {
+		r := m.call(t, c.tok, "add_persona", map[string]any{"room": m.room.ID, "template": tp})
+		var p store.RoomPersona
+		if err := json.Unmarshal(r.StructuredContent, &p); r.IsError || err != nil || p.Waiting == nil || strings.Join(p.Waiting.Skills, ",") != "stamp" ||
+			strings.Join(p.Waiting.Plugins, ",") != c.plugins || len(p.Skills) != 1 || p.Skills[0].Scope != store.ScopeRoom {
+			t.Fatalf("add_persona: %+v %s", r, r.StructuredContent)
+		}
+		if got := m.lastLine(t, m.room.ID).Body; got != c.line {
+			t.Fatalf("line %q, want %q", got, c.line)
+		}
+	}
+}

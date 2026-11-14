@@ -276,7 +276,7 @@ func TestRoomFromPersonalStarter(t *testing.T) {
 		t.Fatalf("not released: %+v", ks)
 	}
 	ms, _ := e.st.Messages(ctx, room.ID, 0, 50)
-	if last := ms[len(ms)-1]; !strings.Contains(last.Body, "The starter's skills are on") || !strings.HasSuffix(last.Body, ": stamp.") {
+	if last := ms[len(ms)-1]; !strings.Contains(last.Body, "The skills held for the host are on") || !strings.HasSuffix(last.Body, ": stamp.") {
 		t.Fatalf("line: %+v", last)
 	}
 }

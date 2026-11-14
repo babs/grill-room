@@ -33,7 +33,7 @@ func TestOneTimeKeeper(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	alice, _, grill := personaRoom(t, s, "k")
-	sec, _, err := s.AddPersona(ctx, "k", templateByPreset(t, s, "secretary").ID, alice, true)
+	sec, _, err := s.AddPersona(ctx, "k", templateByPreset(t, s, "secretary").ID, alice, true, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,14 +79,14 @@ func TestTimekeeperPreset(t *testing.T) {
 	}
 	ctx := t.Context()
 	alice, _, _ := personaRoom(t, s, "p")
-	tk, m, err := s.AddPersona(ctx, "p", templateByPreset(t, s, "timekeeper").ID, alice, true)
+	tk, m, err := s.AddPersona(ctx, "p", templateByPreset(t, s, "timekeeper").ID, alice, true, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if tk.Badge != "⏱️" || tk.Model != "sonnet" || tk.Effort != "low" || tk.EveryMinutes != 5 || !tk.Speaks || !tk.TimeKeeper || tk.CutInS != 20 || tk.NextAt == nil {
 		t.Fatalf("copy %+v", tk)
 	}
-	if want := `Alice added the persona ⏱️ Timekeeper, from the template "Timekeeper" v1, every N minutes off → 5, now keeps time, speak over after off → 20 s.`; m.Body != want {
+	if want := `Alice added the persona ⏱️ Timekeeper, from the library persona "Timekeeper" v1, every N minutes off → 5, now keeps time, speak over after off → 20 s.`; m.Body != want {
 		t.Fatalf("line %q, want %q", m.Body, want)
 	}
 	if got := keepers(t, s, "p"); len(got) != 1 || got[0] != "Timekeeper" {
@@ -97,18 +97,18 @@ func TestTimekeeperPreset(t *testing.T) {
 	if _, _, _, err := s.EditPersona(ctx, "q", qg.ID, PersonaPatch{TimeKeeper: yes()}, qa); err != nil {
 		t.Fatal(err)
 	}
-	qk, m, err := s.AddPersona(ctx, "q", templateByPreset(t, s, "timekeeper").ID, qa, true)
+	qk, m, err := s.AddPersona(ctx, "q", templateByPreset(t, s, "timekeeper").ID, qa, true, 1<<20)
 	if err != nil || qk.TimeKeeper || qk.CutInS != 20 || qk.EveryMinutes != 5 {
 		t.Fatalf("copy into a kept room: %+v %v", qk, err)
 	}
-	if want := `Alice added the persona ⏱️ Timekeeper, from the template "Timekeeper" v1, every N minutes off → 5, speak over after off → 20 s, not the time keeper (🔥 Grill keeps time).`; m.Body != want {
+	if want := `Alice added the persona ⏱️ Timekeeper, from the library persona "Timekeeper" v1, every N minutes off → 5, speak over after off → 20 s, not the time keeper (🔥 Grill keeps time).`; m.Body != want {
 		t.Fatalf("line %q, want %q", m.Body, want)
 	}
 	if got := keepers(t, s, "q"); len(got) != 1 || got[0] != "Grill" {
 		t.Fatalf("keepers %v", got)
 	}
-	sec, m, err := s.AddPersona(ctx, "p", templateByPreset(t, s, "secretary").ID, alice, true)
-	if err != nil || sec.EveryMinutes != 0 || sec.TimeKeeper || sec.CutInS != 0 || m.Body != `Alice added the persona 📝 Secretary, from the template "Secretary" v1.` {
+	sec, m, err := s.AddPersona(ctx, "p", templateByPreset(t, s, "secretary").ID, alice, true, 1<<20)
+	if err != nil || sec.EveryMinutes != 0 || sec.TimeKeeper || sec.CutInS != 0 || m.Body != `Alice added the persona 📝 Secretary, from the library persona "Secretary" v1.` {
 		t.Fatalf("secretary %+v %+v %v", sec, m, err)
 	}
 	// 032-AC6: an add held for the host never brings the role, whether another persona keeps time
@@ -121,7 +121,7 @@ func TestTimekeeperPreset(t *testing.T) {
 				t.Fatalf("host's role: %v %v", held, err)
 			}
 		}
-		cp, m, err := s.AddPersona(ctx, room, templateByPreset(t, s, "timekeeper").ID, bob, true)
+		cp, m, err := s.AddPersona(ctx, room, templateByPreset(t, s, "timekeeper").ID, bob, true, 1<<20)
 		note := map[bool]string{true: ", not the time keeper (🔥 Grill keeps time).", false: ", not the time keeper: a room admin gives it the role once the host approves it."}[keeper]
 		if err != nil || !cp.Pending || cp.TimeKeeper || cp.CutInS != 20 || !strings.Contains(m.Body, note) || strings.Contains(m.Body, "now keeps time") {
 			t.Fatalf("held add (keeper %v): %+v %+v %v", keeper, cp, m, err)
@@ -163,7 +163,7 @@ func TestSilentKeeperTurn(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	alice, _, grill := personaRoom(t, s, "s")
-	sec, _, err := s.AddPersona(ctx, "s", templateByPreset(t, s, "secretary").ID, alice, true)
+	sec, _, err := s.AddPersona(ctx, "s", templateByPreset(t, s, "secretary").ID, alice, true, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +296,7 @@ func TestKeeperDrift(t *testing.T) {
 	s := openTest(t)
 	ctx := t.Context()
 	alice, _, grill := personaRoom(t, s, "d")
-	sec, _, err := s.AddPersona(ctx, "d", templateByPreset(t, s, "secretary").ID, alice, true)
+	sec, _, err := s.AddPersona(ctx, "d", templateByPreset(t, s, "secretary").ID, alice, true, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}

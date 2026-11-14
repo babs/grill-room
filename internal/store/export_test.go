@@ -554,7 +554,7 @@ func TestImportOnAnotherInstance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := src.AddPersona(ctx, "orig", tp.ID, alice, true); err != nil {
+	if _, _, err := src.AddPersona(ctx, "orig", tp.ID, alice, true, 1<<20); err != nil {
 		t.Fatal(err)
 	}
 	dir := export(t, src, "orig")
@@ -1214,7 +1214,7 @@ func TestImportPersonaTemplates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := src.AddPersona(ctx, "orig", tpl.ID, alice, true); err != nil {
+	if _, _, err := src.AddPersona(ctx, "orig", tpl.ID, alice, true, 1<<20); err != nil {
 		t.Fatal(err)
 	}
 	dir := export(t, src, "orig")
