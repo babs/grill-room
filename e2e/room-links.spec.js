@@ -83,6 +83,8 @@ test('room links from Room settings', async ({ browser, request }) => {
   await expect(bob.locator('#manage')).toBeVisible();
   // The tab says so when the links cannot be fetched, rather than loading for ever.
   await bob.route('**/api/rooms/*/links', (r) => r.abort());
+  // A hash-only goto keeps the page and its loaded links: leave it so the room loads afresh.
+  await bob.goto('about:blank');
   panel = await linksTab(bob, legal);
   await expect(panel.locator('#links-error')).toBeVisible();
   await bob.unroute('**/api/rooms/*/links');
