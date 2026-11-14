@@ -696,3 +696,48 @@ func TestDaemonLoadsPersonaSkills(t *testing.T) {
 		t.Fatalf("with a skill: %+v %q", v.Turn, rs.lastMessage(t))
 	}
 }
+
+// 023-AC16: the daemon posts room-new.json as room_new, never as a change, and the room shows its
+// card under the synthesis; a turn that wrote none posts no proposal.
+func TestDaemonPostsRoomNew(t *testing.T) {
+	rs := newRoomServer(t)
+	var write bool
+	ag := &fakeAgent{run: func(_ context.Context, in sandbox.TurnInput, _ map[string]string) (*sandbox.TurnOutput, error) {
+		if _, err := io.Copy(io.Discard, in.Workspace); err != nil {
+			return nil, err
+		}
+		out := &sandbox.TurnOutput{Result: &sandbox.Result{Result: "Proposed.", SessionID: sid}, SessionOffset: in.SessionSize, Session: []byte("x\n")}
+		if write {
+			out.Changes = []turn.Change{{Path: turn.RoomNewFile, Content: []byte(`{"name": "Legal", "brief": "# Legal\n"}`)}}
+		}
+		return out, nil
+	}}
+	alice, _ := pairedHost(t, rs, "Alice", ag)
+	proposals := func() []store.Message {
+		msgs, err := rs.st.Messages(t.Context(), rs.room, 0, 1000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []store.Message
+		for _, m := range msgs {
+			if m.Proposal != nil {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	for i, w := range []bool{false, true} {
+		write = w
+		rs.call(t, "POST", "/api/rooms/"+rs.room+"/turns", alice, map[string]bool{}, http.StatusCreated, nil)
+		waitFor(t, "turn done", func() bool {
+			ag.mu.Lock()
+			n := len(ag.inputs)
+			ag.mu.Unlock()
+			v := rs.agent(t, alice)
+			return n == i+1 && v.Turn != nil && v.Turn.Status == "done"
+		})
+	}
+	if ps := proposals(); len(ps) != 1 || ps[0].Body != "Grill proposes a room: Legal" || rs.lastMessage(t) != "Grill proposes a room: Legal" {
+		t.Fatalf("proposals %+v", ps)
+	}
+}

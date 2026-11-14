@@ -156,6 +156,7 @@ async function loadRoom() {
   $('doc-delete').hidden = !meAdmin;
   renameSenders();
   renderBlocked();
+  renderProposals();
   renderApprovals();
   $('voice').hidden = !data.voice;
   // Another tab of theirs may have turned it: this one follows, its device transcription too
@@ -498,6 +499,64 @@ function blockedActions(m) {
   return box;
 }
 
+// proposalLines are the shown cards of related rooms a persona proposed, by id: their buttons
+// follow who the viewer is (023-AC17, 023-AC19).
+const proposalLines = new Map();
+// myRooms is the rooms the viewer's profile sits in, fetched once per room reload: a created
+// card's room links only for its members (023-AC18).
+let myRooms = null;
+
+// proposalCard dresses line li, whose text is body, as the card of proposal m.proposal: "Create…"
+// for a member with a profile, "Dismiss" for who started the turn and room admins while open.
+// retry is for a card rendered from a live update: a room just created may postdate the cached list.
+function proposalCard(li, body, m, retry = true) {
+  const p = m.proposal;
+  proposalLines.set(m.id, m);
+  li.classList.add('proposal', p.status);
+  if (p.status === 'created' && p.room && hasProfile) linkCreated(body, m, retry);
+  if (p.status !== 'open') return;
+  const box = document.createElement('span');
+  box.className = 'proposal-actions';
+  if (hasProfile) box.append(button('Create…', '', () => window.grillCreateProposal?.(m)), ' ');
+  if (meAdmin || participants.some((x) => x.self && x.id === p.trigger)) {
+    box.append(button('Dismiss', '', () => {
+      sendJSON('POST', api + '/proposals/' + p.id + '/dismiss').catch((err) => showNotice(err.message));
+    }));
+  }
+  if (box.childNodes.length) li.append(' ', box);
+}
+
+// linkCreated links a created card's line to its room once the viewer's rooms hold it. A room made
+// since the list was fetched sends for it again, once: the cards that miss share that one fetch.
+function linkCreated(body, m, retry) {
+  const tried = (myRooms ||= netFetch('/api/profile').then((r) => (r.ok ? r.json() : {}))
+    .then((d) => new Set((d.profile?.rooms || []).map((x) => x.room_id)), () => new Set()));
+  tried.then((rooms) => {
+    if (rooms.has(m.proposal.room)) {
+      body.replaceChildren(Object.assign(document.createElement('a'), { href: '/r/' + encodeURIComponent(m.proposal.room), textContent: m.body }));
+    } else if (retry) {
+      if (myRooms === tried) myRooms = null;
+      linkCreated(body, m, false);
+    }
+  });
+}
+
+// renderProposals redraws the open cards after the room reloaded: an appointment changes who dismisses.
+// The fresh list it fetches holds every room by then: no retry for a card the viewer is not in.
+let reloading = false;
+function renderProposals() {
+  myRooms = null;
+  reloading = true;
+  try {
+    for (const m of proposalLines.values()) {
+      const li = lineOf(m.id);
+      if (li) li.replaceWith(renderMessage(m));
+    }
+  } finally {
+    reloading = false;
+  }
+}
+
 // whoAllows names who may allow a blocked website, for a viewer who may not (014-AC9).
 function whoAllows() {
   const host = participants.find((p) => p.id === agent.host_participant_id);
@@ -582,6 +641,7 @@ function renderMessage(m) {
       const acts = blockedActions(m);
       if (acts) li.append(' ', acts);
     }
+    if (m.proposal) proposalCard(li, body, m, !reloading);
     return li;
   }
   const meta = document.createElement('div');

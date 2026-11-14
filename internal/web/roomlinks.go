@@ -12,7 +12,7 @@ import (
 
 // Audit actions of room links (023-AC6).
 const (
-	ActionRoomLinkCreate = "room_link.create"
+	ActionRoomLinkCreate = store.ActionRoomLinkCreate
 	ActionRoomLinkDelete = "room_link.delete"
 )
 

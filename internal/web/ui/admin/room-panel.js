@@ -8,7 +8,7 @@ import { html } from 'htm/preact';
  *   room_skills: number, plugins: number, total: number}} Volume
  * @typedef {{id: string, name: string, created_at: string, last_activity: string, participants: number, personas: number,
  *   host_participant_id?: number, quota_bytes: number, quota: number, used: number, host_online: boolean, volume: Volume,
- *   created_from?: {title: string, version: number}, private_plugins?: string[]}} Room
+ *   created_from?: {title: string, version: number}, proposed_in?: {room?: string, name: string, member?: boolean}, private_plugins?: string[]}} Room
  * @typedef {{id: number, created_at: string, created_by?: number, revoked_at?: string, shareable?: boolean}} Invite
  * @typedef {{participant_id: number, name: string, admin: boolean, you: boolean}} Person
  * @typedef {{id: number, invites: number[], lose: Person[], keep: Person[]}} Preview
@@ -226,6 +226,8 @@ function General({ room, base, api, show, reload, close, setQuota, extra }) {
       <span class="said" role="status">${copied}</span>
     </form>
     ${room.created_from && html`<p id="created-from">Created from the starter ${room.created_from.title} v${room.created_from.version}.</p>`}
+    ${room.proposed_in && html`<p id="proposed-in">Proposed in ${room.proposed_in.member && room.proposed_in.room
+      ? html`<a href=${'/r/' + encodeURIComponent(room.proposed_in.room)}>${room.proposed_in.name}</a>` : room.proposed_in.name}.</p>`}
     <h3>Storage</h3>
     <p id="storage"><${Meter} used=${room.used} max=${room.quota} label=${size(room.used) + ' of ' + size(room.quota)}/> ${size(room.used)} of ${size(room.quota)}${room.quota_bytes ? '' : ', the server default'}.${setQuota ? '' : ' Only the server admin changes the limit.'}</p>
     <details class="disclosure"><summary>What takes the space</summary>

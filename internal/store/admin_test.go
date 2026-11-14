@@ -187,7 +187,7 @@ func TestAuditWriteFailureRollsBackTheChange(t *testing.T) {
 	if err != nil || len(invs) != 1 {
 		t.Fatalf("invites %+v %v", invs, err)
 	}
-	failInserts(t, s, "audit_log", "audit down")
+	failOn(t, s, "INSERT", "audit_log", "", "audit down")
 	audited := func(kind, id string) context.Context {
 		return WithAudit(ctx, AuditEntry{At: t0, Actor: ActorSuperAdmin, Action: "x", TargetKind: kind, TargetID: id}, nil)
 	}

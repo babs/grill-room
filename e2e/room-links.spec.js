@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { test, expect } from './fixtures.js';
 import { adminToken } from './playwright.config.js';
 import { fakeDaemon, personMenu, rowAction, unfoldTabs, uniq } from './helpers.js';
@@ -152,4 +153,101 @@ test('a turn reads a linked room; the remove sheet says links stay', async ({ br
   await ana.goto(`/r/${pricing}`);
   await (await personMenu(ana, 'Bob')).getByRole('button', { name: 'Remove from room…' }).click();
   await expect(sheet.locator('#confirm-text')).toHaveText('Their messages stay.');
+});
+
+// 023-AC16 to 023-AC20: a stub AI host's turn result carries room-new.json, as the daemon posts
+// it; the card offers Create… to Bob, a plain member (no link boxes), and to Ana, a room admin,
+// who creates the room with Bob and both links; the card then links to the room.
+test('a persona proposes a room; a member creates it from the card', async ({ browser, request, baseURL }) => {
+  const lobby = await (await request.post('/api/rooms', { headers: admin, data: { name: 'Lobby' } })).json();
+  const ana = await join(browser, request, lobby.id, 'Ana');
+  const pricingName = 'Pricing ' + uniq();
+  const pricing = (await (await ana.request.post('/api/profile/rooms', { data: { name: pricingName, display_name: 'Ana' } })).json()).id;
+  const bob = await join(browser, request, pricing, 'Bob');
+  await ana.goto(`/r/${pricing}`);
+  const d = await fakeDaemon(ana, baseURL, pricing, 'ana-laptop');
+  // propose runs one turn whose result carries room_new, as the daemon posts it.
+  const propose = async (name) => {
+    const n = d.turns.length;
+    expect((await ana.request.post(`/api/rooms/${pricing}/turns`, { data: {} })).status()).toBe(201);
+    await expect.poll(() => d.turns.length).toBe(n + 1);
+    const roomNew = JSON.stringify({ name, brief: '# Why\n\nThe contract needs **its own** review.' });
+    const res = await fetch(`${baseURL}/api/rooms/${pricing}/daemon/turns/${d.turns[n]}`, { method: 'POST',
+      headers: { Authorization: 'Bearer ' + d.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: randomUUID(), session_offset: 0, synthesis: 'A side question.', room_new: roomNew }) });
+    expect(res.status).toBe(200);
+  };
+  const legalName = 'Legal ' + uniq();
+  try {
+    await propose(legalName);
+    const card = (page) => page.locator('#messages li.msg.system.proposal').first();
+    await expect(card(ana).locator('.body')).toHaveText(`Grill proposes a room: ${legalName}`);
+
+    // 023-AC17: Bob, a plain member, gets Create… with no link boxes and no Dismiss.
+    await bob.goto(`/r/${pricing}`);
+    await expect(card(bob).getByRole('button', { name: 'Dismiss' })).toHaveCount(0);
+    await card(bob).getByRole('button', { name: 'Create…' }).click();
+    let sheet = bob.locator('#proposal-sheet');
+    await expect(sheet.locator('#proposal-brief strong')).toHaveText('its own');
+    await expect(sheet.locator('#proposal-no-links')).toHaveText(`A room admin of ${pricingName} can link the rooms later.`);
+    await expect(sheet.getByLabel('Bob (you)')).toBeDisabled();
+    await sheet.getByRole('button', { name: 'Cancel' }).click();
+
+    // 023-AC17 023-AC18: Ana ticks Bob, keeps both links ticked, and creates.
+    await card(ana).getByRole('button', { name: 'Create…' }).click();
+    sheet = ana.locator('#proposal-sheet');
+    await expect(sheet.getByLabel('Name')).toHaveValue(legalName);
+    await expect(sheet.getByLabel('Ana (you)')).toBeChecked();
+    await expect(sheet.getByLabel('Bob', { exact: true })).not.toBeChecked();
+    await sheet.getByLabel('Bob', { exact: true }).check();
+    await expect(sheet.getByLabel(`${legalName} reads ${pricingName}`)).toBeChecked();
+    await expect(sheet.getByLabel(`${pricingName} reads ${legalName}`)).toBeChecked();
+    await sheet.getByRole('button', { name: 'Create', exact: true }).click();
+    await expect(sheet).toBeHidden();
+    // 023-AC18: the card says who created it and links there for its members.
+    const link = card(ana).getByRole('link', { name: `Created by Ana: ${legalName}` });
+    await expect(link).toBeVisible();
+    await expect(card(ana).getByRole('button')).toHaveCount(0);
+    // A second room created in the same page load links too, though the page fetched its rooms
+    // before. No link: no line in this room makes the page reload its state meanwhile.
+    const opsName = 'Ops ' + uniq();
+    // The card's line reloads the page's state, which fetches the rooms again, before Ops exists.
+    const fetched = ana.waitForResponse((r) => new URL(r.url()).pathname === '/api/profile');
+    await propose(opsName);
+    await fetched;
+    const second = ana.locator('#messages li.msg.system.proposal').nth(1);
+    await second.getByRole('button', { name: 'Create…' }).click();
+    await sheet.getByLabel(`${opsName} reads ${pricingName}`).uncheck();
+    await sheet.getByLabel(`${pricingName} reads ${opsName}`).uncheck();
+    await sheet.getByRole('button', { name: 'Create', exact: true }).click();
+    await expect(second.getByRole('link', { name: `Created by Ana: ${opsName}` })).toBeVisible();
+    await expect(link).toBeVisible();
+    // A reload of the room's state fetches the rooms once: Bob, not in Ops, sends for them no twice.
+    await expect(bob.locator('#messages li.msg.system.proposal.created')).toHaveCount(2);
+    let fetches = 0;
+    bob.on('request', (r) => { if (new URL(r.url()).pathname === '/api/profile') fetches++; });
+    const fetched2 = bob.waitForResponse((r) => new URL(r.url()).pathname === '/api/profile');
+    expect((await ana.request.patch(`/api/rooms/${pricing}`, { data: { name: pricingName + ' (old)' } })).status()).toBe(200);
+    await fetched2;
+    await bob.waitForTimeout(500); // a second fetch would follow the first at once
+    expect(fetches).toBe(1);
+    expect((await ana.request.patch(`/api/rooms/${pricing}`, { data: { name: pricingName } })).status()).toBe(200);
+    await link.click();
+    await expect(ana.locator('#me')).toHaveText('Ana');
+    const legal = new URL(ana.url()).pathname.split('/').pop();
+    const room = await (await ana.request.get(`/api/rooms/${legal}`)).json();
+    expect(room.room.proposed_in).toEqual({ room: pricing, name: pricingName, member: true });
+    expect(room.participants.map((p) => p.name).sort()).toEqual(['Ana', 'Bob']);
+    const links = await (await ana.request.get(`/api/rooms/${legal}/links`)).json();
+    expect(links.length).toBe(2);
+    // 023-AC20: Room settings › General says where it was proposed.
+    await ana.goto(`/r/${legal}#manage`);
+    await expect(ana.locator('#proposed-in')).toHaveText(`Proposed in ${pricingName}.`);
+    await expect(ana.locator('#proposed-in a')).toHaveAttribute('href', `/r/${pricing}`);
+    // Bob sits in it, through Ana's shareable invite.
+    await bob.goto(`/r/${legal}`);
+    await expect(bob.locator('#me')).toHaveText('Bob');
+  } finally {
+    d();
+  }
 });

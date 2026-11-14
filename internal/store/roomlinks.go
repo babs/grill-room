@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+// ActionRoomLinkCreate audits a new link (023-AC6); a room created from a proposal links under it too.
+const ActionRoomLinkCreate = "room_link.create"
+
 // MaxRoomReads is how many rooms one room reads at most (023-AC4).
 const MaxRoomReads = 10
 

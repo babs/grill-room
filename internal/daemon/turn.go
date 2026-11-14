@@ -373,9 +373,10 @@ func (r *roomRun) execute(ctx context.Context, tok string, id int64, job turn.Jo
 	ev.Model, ev.ModelNote, ev.ModelMismatch, ev.CostUSD = model, note, mismatch, out.Result.TotalCostUSD
 	ev.TokensIn, ev.TokensOut, ev.TokensCacheRead, ev.TokensCacheWrite = out.Result.Tokens()
 	tokens, window := out.Result.Context()
+	changes, roomNew := turn.TakeRoomNew(out.Changes)
 	return turn.Result{Synthesis: out.Result.Result, Model: model, ModelNote: note, ModelMismatch: mismatch, Effort: run.Effort, Capped: capped,
 		SessionID: out.Result.SessionID, SessionOffset: out.SessionOffset,
-		Session: out.Session, Changes: out.Changes, ContextTokens: tokens, ContextWindow: window, SkippedPlugins: skipped, Blocked: blocked}
+		Session: out.Session, Changes: changes, ContextTokens: tokens, ContextWindow: window, SkippedPlugins: skipped, Blocked: blocked, RoomNew: roomNew}
 }
 
 // maxManifest bounds the manifest a room sends: tens of thousands of files.

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"path"
 	"slices"
@@ -44,6 +45,12 @@ const (
 	// MaxDriftBytes and MaxDriftReason cap it: one line of reason fits many times over.
 	MaxDriftBytes  = 4096
 	MaxDriftReason = 200
+	// RoomNewFile is a related room the persona proposes, which a member may create (023-AC16).
+	RoomNewFile = "room-new.json"
+	// MaxRoomNewName and MaxRoomNewBrief cap it; MaxRoomNewBytes the file, room left for JSON escapes.
+	MaxRoomNewName  = 80
+	MaxRoomNewBrief = 64 << 10
+	MaxRoomNewBytes = 4 * MaxRoomNewBrief
 	// PluginName names the plugin that carries a persona's active skills: claude -p shows them as
 	// "grill-room:<skill>".
 	PluginName = "grill-room"
@@ -185,6 +192,9 @@ type Result struct {
 	// Blocked are the domains the turn's sandbox was refused a CONNECT to port 443 of, once each
 	// (014-AC8).
 	Blocked []string `json:"blocked,omitempty"`
+	// RoomNew is room-new.json as the turn wrote it, unparsed: the server validates it (023-AC16).
+	// A string, not raw JSON, so a malformed file still reaches the server to be refused.
+	RoomNew string `json:"room_new,omitempty"`
 }
 
 // Manifest lists a turn's workspace (002-AC37): the daemon fetches only the files its cache lacks.
@@ -219,7 +229,7 @@ func ValidPath(p string) bool { return p != "." && fs.ValidPath(p) }
 // NeedsContent reports whether the server needs a changed file's bytes; for any other change the
 // path is enough, which keeps an edited 20 MB upload out of the result.
 func NeedsContent(p string) bool {
-	return p == RepliesFile || p == NewAnnotationsFile || p == SpokenFile || p == DriftFile || strings.HasPrefix(p, DocsDir+"/")
+	return p == RepliesFile || p == NewAnnotationsFile || p == SpokenFile || p == DriftFile || p == RoomNewFile || strings.HasPrefix(p, DocsDir+"/")
 }
 
 // Doc is an agent document as a turn wrote it.
@@ -333,6 +343,62 @@ func ParseDrift(b []byte) (Drift, error) {
 		return Drift{}, fmt.Errorf("want a reason of one plain line, at most %d characters", MaxDriftReason)
 	}
 	return d, nil
+}
+
+// RoomNew is a related room a persona proposes, as room-new.json gives it (023-AC16).
+type RoomNew struct {
+	Name  string `json:"name"`
+	Brief string `json:"brief"`
+}
+
+// TakeRoomNew removes room-new.json from changes and returns its text, "" when the turn wrote none.
+func TakeRoomNew(changes []Change) ([]Change, string) {
+	var text string
+	out := changes[:0]
+	for _, c := range changes {
+		if path.Clean(c.Path) == RoomNewFile {
+			if !c.Deleted {
+				text = string(c.Content)
+			}
+			continue
+		}
+		out = append(out, c)
+	}
+	return out, text
+}
+
+// ParseRoomNew reads room-new.json: one object, a name of one plain line of 1 to MaxRoomNewName
+// characters, a Markdown brief of at most MaxRoomNewBrief bytes.
+func ParseRoomNew(s string) (RoomNew, error) {
+	var r RoomNew
+	if len(s) > MaxRoomNewBytes || !utf8.ValidString(s) {
+		return r, fmt.Errorf("over %d KB or not UTF-8", MaxRoomNewBytes>>10)
+	}
+	errMany := errors.New("one proposal per turn: write a single object")
+	if t := strings.TrimSpace(s); strings.HasPrefix(t, "[") {
+		return r, errMany
+	}
+	dec := json.NewDecoder(strings.NewReader(s))
+	if err := dec.Decode(&r); err != nil {
+		return RoomNew{}, fmt.Errorf(`want {"name": "<one line>", "brief": "<Markdown>"}: %w`, err)
+	}
+	// Anything past the first value, a second object or garbage, is more than one proposal.
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return RoomNew{}, errMany
+	}
+	r.Name = strings.TrimSpace(r.Name)
+	switch {
+	case r.Name == "" || utf8.RuneCountInString(r.Name) > MaxRoomNewName || strings.IndexFunc(r.Name, func(c rune) bool {
+		return unicode.IsControl(c) || unicode.Is(unicode.Bidi_Control, c) || unicode.In(c, unicode.Zl, unicode.Zp)
+	}) >= 0:
+		return RoomNew{}, fmt.Errorf("want a name of one plain line, 1 to %d characters", MaxRoomNewName)
+	case len(r.Brief) > MaxRoomNewBrief:
+		return RoomNew{}, fmt.Errorf("the brief is over %d KB", MaxRoomNewBrief>>10)
+	case strings.ContainsRune(r.Brief, 0):
+		// PostgreSQL text holds no NUL: the whole result would fail.
+		return RoomNew{}, errors.New("the brief holds a NUL")
+	}
+	return r, nil
 }
 
 func doc(p string, c Change) (Doc, error) {

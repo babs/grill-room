@@ -23,6 +23,8 @@ interface DeviceOffer { revision: string; bytes: number; files: DeviceOfferFile[
 interface Window {
   // room.js: the line the remove sheet adds when other rooms read this one (023-AC15).
   grillReadersNote?: (p: { id: number; name: string }) => Promise<string>;
+  // admin/room-admin.js: opens the creation sheet of a proposal's card (023-AC17).
+  grillCreateProposal?: (m: { id: number; body: string; html?: string; proposal: { id: number; name: string; status: string; trigger?: number } }) => void;
 }
 interface Window {
   grillSTT?: { glossary: boolean; device: DeviceOffer | null };

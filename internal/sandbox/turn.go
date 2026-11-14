@@ -335,10 +335,14 @@ func (s *Sandbox) readChanged(ctx context.Context, changes []turn.Change) error 
 		if !ok || h.Typeflag != tar.TypeReg {
 			continue
 		}
-		if total += h.Size; total > MaxChangedBytes {
+		r := io.Reader(tr)
+		if h.Name == turn.RoomNewFile {
+			// Bounded on its own: the room refuses an oversized proposal; it does not fail the turn.
+			r = io.LimitReader(tr, turn.MaxRoomNewBytes+1)
+		} else if total += h.Size; total > MaxChangedBytes {
 			return fmt.Errorf("the turn changed over %d MB of documents", MaxChangedBytes>>20)
 		}
-		if changes[i].Content, err = io.ReadAll(tr); err != nil {
+		if changes[i].Content, err = io.ReadAll(r); err != nil {
 			return fmt.Errorf("read changed files: %w", err)
 		}
 	}

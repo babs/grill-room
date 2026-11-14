@@ -391,20 +391,33 @@ func mentionedPeople(m store.Message, personas []store.RoomPersona, ps []store.P
 	return out
 }
 
-// sendPush delivers one batch, and drops a subscription the push service says is gone or refuses
-// for good.
+// sendPush delivers one batch.
 func (s *Server) sendPush(ctx context.Context, b *pushBatch) {
+	v, name, ok := s.pushFor(ctx, b.room)
+	if ok {
+		s.deliver(ctx, v, name, b)
+	}
+}
+
+// pushFor is what every push about room needs: the VAPID key and the room's name.
+func (s *Server) pushFor(ctx context.Context, room string) (*webpush.VAPID, string, bool) {
 	v, err := s.vapidKey(ctx)
 	if err != nil {
 		s.log.Error("vapid_key_failed", zap.Error(err))
-		return
+		return nil, "", false
 	}
-	r, err := s.bus.Store.Room(ctx, b.room)
+	r, err := s.bus.Store.Room(ctx, room)
 	if err != nil {
-		return
+		return nil, "", false
 	}
+	return v, r.Name, true
+}
+
+// deliver sends batch b, about the room named name, with key v, and drops a subscription the push
+// service says is gone or refuses for good.
+func (s *Server) deliver(ctx context.Context, v *webpush.VAPID, name string, b *pushBatch) {
 	link := "/r/" + url.PathEscape(b.room) + "#m" + strconv.FormatInt(b.message, 10)
-	payload, err := json.Marshal(pushPayload{Room: r.Name, Kind: b.kind, Count: b.count, URL: link})
+	payload, err := json.Marshal(pushPayload{Room: name, Kind: b.kind, Count: b.count, URL: link})
 	if err != nil {
 		return
 	}

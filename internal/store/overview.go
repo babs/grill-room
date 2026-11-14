@@ -41,6 +41,8 @@ type RoomOverview struct {
 	Volume     RoomVolume `json:"volume"`
 	// CreatedFrom is the starter version the room was created from (006-AC11).
 	CreatedFrom *Provenance `json:"created_from,omitempty"`
+	// ProposedIn is the room a persona proposed it in (023-AC20).
+	ProposedIn *ProposedIn `json:"proposed_in,omitempty"`
 	// PrivatePlugins names the plugins from private repos: the export dialog warns of them (009-AC26).
 	PrivatePlugins []string `json:"private_plugins,omitempty"`
 }
@@ -96,7 +98,7 @@ func (s *Store) roomOverviews(ctx context.Context, defaultQuota int64, roomID st
 		(SELECT COALESCE(SUM(length(v.data)), 0) FROM skill_versions v JOIN skills k ON k.id = v.skill_id WHERE k.room_id = r.id),
 		(SELECT COALESCE(SUM(length(sn.data)), 0) FROM plugin_snapshots sn JOIN plugin_versions v ON v.id = sn.version_id
 			JOIN room_plugins p ON p.id = v.plugin_id WHERE p.room_id = r.id),
-		r.created_from,
+		r.created_from, r.proposed_in_room_id, COALESCE((SELECT name FROM rooms a WHERE a.id = r.proposed_in_room_id), r.proposed_in_name),
 		(SELECT COALESCE(jsonb_agg(name ORDER BY name), '[]')::text FROM room_plugins WHERE room_id = r.id AND private = 1 AND removed_at IS NULL)
 		FROM rooms r WHERE ? = '' OR r.id = ? ORDER BY r.created_at DESC, r.id DESC`, defaultQuota, roomID, roomID)
 	if err != nil {
@@ -107,18 +109,18 @@ func (s *Store) roomOverviews(ctx context.Context, defaultQuota int64, roomID st
 	for rows.Next() {
 		var o RoomOverview
 		var created, last string
-		var from sql.NullString
+		var from, inRoom, inName sql.NullString
 		var private string
 		v := &o.Volume
 		if err := rows.Scan(&o.ID, &o.Name, &created, &o.HostParticipantID, &o.QuotaBytes, &o.Quota, &last, &o.Participants, &o.Personas,
-			&v.Uploads, &v.Revisions, &v.Attachments, &v.AgentSessions, &v.Transcripts, &v.RoomSkills, &v.Plugins, &from, &private); err != nil {
+			&v.Uploads, &v.Revisions, &v.Attachments, &v.AgentSessions, &v.Transcripts, &v.RoomSkills, &v.Plugins, &from, &inRoom, &inName, &private); err != nil {
 			return nil, fmt.Errorf("scan room overview: %w", err)
 		}
 		if err := json.Unmarshal([]byte(private), &o.PrivatePlugins); err != nil {
 			return nil, fmt.Errorf("scan room overview: %w", err)
 		}
 		v.Total = v.Uploads + v.Revisions + v.Attachments + v.AgentSessions + v.Transcripts + v.RoomSkills + v.Plugins
-		o.CreatedAt, o.CreatedFrom = parseTS(created), parseProvenance(from)
+		o.CreatedAt, o.CreatedFrom, o.ProposedIn = parseTS(created), parseProvenance(from), proposedIn(inRoom, inName)
 		o.LastActivity = o.CreatedAt
 		if last != "" {
 			o.LastActivity = parseTS(last)

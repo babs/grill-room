@@ -2,7 +2,7 @@
 // The Web Push service worker (005-AC24). A push names a room, the kind of event and how many
 // gathered; one notification per room stands, its count adding up until it is closed or clicked.
 
-const what = { mention: 'You were mentioned', turn: 'Your agent turn ended', synthesis: 'A persona answered', message: 'New lines' };
+const what = { mention: 'You were mentioned', turn: 'Your agent turn ended', synthesis: 'A persona answered', message: 'New lines', added: 'You were added to this room' };
 
 // sameOrigin is url resolved on this origin, or the home page when it names another origin or
 // does not parse.

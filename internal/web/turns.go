@@ -18,6 +18,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/babs/grill-room/internal/anchor"
+	"github.com/babs/grill-room/internal/render"
 	"github.com/babs/grill-room/internal/store"
 	"github.com/babs/grill-room/internal/turn"
 )
@@ -808,6 +809,14 @@ func (s *Server) postResult(w http.ResponseWriter, r *http.Request, d *store.Dae
 	}
 	if o.Spoken != "" {
 		out.Spoken = spokenText(o.Spoken, s.spokenWords(r.Context(), d.RoomID))
+	}
+	if res.RoomNew != "" {
+		if rn, err := turn.ParseRoomNew(res.RoomNew); err != nil {
+			out.Report.Ignored = append(out.Report.Ignored, turn.RoomNewFile+": "+err.Error())
+		} else {
+			// Rendered here, not under the store's write lock: a crafted 64 KB brief takes a second.
+			out.Proposal = &store.NewProposal{Name: rn.Name, Brief: rn.Brief, HTML: render.MessageHTML(rn.Brief)}
+		}
 	}
 	// A window under the tokens it holds is a daemon's mistake: the room shows no percentage then.
 	if res.ContextTokens > 0 && res.ContextWindow >= res.ContextTokens {

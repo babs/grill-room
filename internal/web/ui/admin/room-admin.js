@@ -381,10 +381,83 @@ function LinkSheet({ data, base, links, done }) {
   </dialog>`;
 }
 
+/**
+ * @typedef {{id: number, body: string, html?: string, proposal: {id: number, name: string, status: string, trigger?: number}}} ProposalLine
+ * @typedef {{id: number, name: string, self?: boolean, no_profile?: boolean}} Member
+ */
+// room.js opens the creation sheet from a proposal's card (023-AC17).
+const proposal = signal(/** @type {ProposalLine | null} */ (null));
+/** @type {Window & {grillCreateProposal?: (m: ProposalLine) => void}} */ (window).grillCreateProposal = (m) => { proposal.value = m; };
+
+function Proposals() {
+  const data = roomData.value;
+  const m = proposal.value;
+  if (!data || !m) return null;
+  return html`<${ProposalSheet} key=${m.id} data=${data} m=${m} done=${() => { proposal.value = null; }}/>`;
+}
+
+/**
+ * ProposalSheet creates the room a persona proposed (023-AC17): its name, the brief, this room's
+ * members with a profile, the caller ticked for good, and for a room admin here both links ticked.
+ * @param {{data: RoomData, m: ProposalLine, done: () => void}} props
+ */
+function ProposalSheet({ data, m, done }) {
+  const ref = useRef(/** @type {HTMLDialogElement | null} */ (null));
+  const [name, setName] = useState(m.proposal.name);
+  const [picked, setPicked] = useState(/** @type {number[]} */ ([]));
+  const [reads, setReads] = useState(true);
+  const [readBy, setReadBy] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState('');
+  useEffect(() => { ref.current?.showModal(); }, []);
+  const here = data.room.name;
+  const admin = data.me.admin;
+  const members = /** @type {Member[]} */ (data.participants).filter((p) => !p.no_profile);
+  const close = () => ref.current?.close();
+  /** @param {number} id @param {Event} e */
+  const pick = (id, e) => {
+    const on = /** @type {HTMLInputElement} */ (e.currentTarget).checked;
+    setPicked((ids) => (on ? [...ids, id] : ids.filter((x) => x !== id)));
+  };
+  /** @param {(v: boolean) => void} set */
+  const tick = (set) => (/** @type {Event} */ e) => set(/** @type {HTMLInputElement} */ (e.currentTarget).checked);
+  /** @param {Event} e */
+  const save = (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setSaid('');
+    const base = '/api/rooms/' + encodeURIComponent(data.room.id);
+    fetchJSON('POST', `${base}/proposals/${m.proposal.id}/create`, { name, members: picked, reads: admin && reads, read_by: admin && readBy })
+      .then(close).catch((/** @type {Error} */ err) => { setSaid(err.message); setBusy(false); });
+  };
+  const shown = name.trim() || m.proposal.name;
+  return html`<dialog ref=${ref} id="proposal-sheet" class="sheet" aria-labelledby="proposal-title" onClose=${done}>
+    <div class="sheet-head"><h2 id="proposal-title">Create a room</h2>
+      <button type="button" class="btn-icon btn-ghost" aria-label="Close" onClick=${close} dangerouslySetInnerHTML=${icon('close')}></button></div>
+    <form id="proposal-form" class="stack" onSubmit=${save}>
+      <label>Name<input id="proposal-name" required maxlength="100" value=${name} onInput=${(/** @type {Event} */ e) => setName(/** @type {HTMLInputElement} */ (e.currentTarget).value)}/></label>
+      <h3>Brief</h3>
+      <div class="msg"><div class="body" id="proposal-brief" dangerouslySetInnerHTML=${{ __html: m.html || '' }}></div></div>
+      <p class="hint">It becomes the room's first document, brief.md.</p>
+      <fieldset id="proposal-members"><legend>Members of ${here} to bring along</legend>
+        ${members.map((p) => html`<label key=${p.id}><input type="checkbox" value=${p.id} checked=${p.self || picked.includes(p.id)} disabled=${p.self || busy}
+          onChange=${(/** @type {Event} */ e) => pick(p.id, e)}/> ${p.name}${p.self ? ' (you)' : ''}</label>`)}</fieldset>
+      ${admin ? html`<label><input type="checkbox" id="proposal-reads" checked=${reads} disabled=${busy} onChange=${tick(setReads)}/> ${shown} reads ${here}</label>
+        <label><input type="checkbox" id="proposal-read-by" checked=${readBy} disabled=${busy} onChange=${tick(setReadBy)}/> ${here} reads ${shown}</label>`
+      : html`<p class="hint" id="proposal-no-links">A room admin of ${here} can link the rooms later.</p>`}
+      <p class="said error" role="alert">${said}</p>
+      <div class="actions">
+        <button type="button" class="btn-secondary" onClick=${close}>Cancel</button>
+        <button type="submit" class="btn-primary" disabled=${busy || !name.trim()}>Create</button>
+      </div></form>
+  </dialog>`;
+}
+
 /** @param {RoomData} data */
 const isHost = (data) => agentState.value?.host_participant_id === data.me.id;
 /** Approvals follow the host's profile: any of its seats here reviews a plugin (daemon-r2). @param {RoomData} data */
 const approves = (data) => isHost(data) || !!agentState.value?.you_host;
 
 render(html`<${App}/>`, /** @type {HTMLElement} */ (document.getElementById('room-admin')));
+render(html`<${Proposals}/>`, document.body.appendChild(document.createElement('div')));
 mountReview(roomData, agentState);

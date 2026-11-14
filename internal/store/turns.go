@@ -244,6 +244,8 @@ type TurnOutcome struct {
 	Report TurnReport
 	// Drift is drift.json's bytes, nil when the turn wrote none: kept for the time keeper only (032-AC13).
 	Drift []byte
+	// Proposal is the turn's valid room-new.json, nil for none: a card under the synthesis (023-AC16).
+	Proposal *NewProposal
 }
 
 const turnCols = `SELECT id, room_id, COALESCE(participant_id, 0), COALESCE(daemon_id, 0), status, fresh, resume,
@@ -821,6 +823,11 @@ func (s *Store) CompleteTurn(ctx context.Context, roomID string, id, daemonID in
 			m.ReqModel, m.ReqEffort = t.ReqModel, t.ReqEffort
 		}
 		if err := insertMessage(ctx, tx, m); err != nil {
+			return nil, err
+		}
+	}
+	if out.Proposal != nil {
+		if err := proposeRoom(ctx, tx, t, author, out.Proposal); err != nil {
 			return nil, err
 		}
 	}

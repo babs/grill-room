@@ -572,3 +572,27 @@ func TestRunTurnConnectors(t *testing.T) {
 		t.Fatalf("a turn without connectors: %v %v", args[1], envs[1])
 	}
 }
+
+// 023-AC16: a room-new.json past turn.MaxRoomNewBytes, even past MaxChangedBytes, does not fail the
+// turn: its content stops one byte past the limit, for the room to refuse as over it.
+func TestRunTurnBoundsRoomNew(t *testing.T) {
+	e := newEmulator()
+	e.claude = func(e *emulator, _ string, _ []string) (string, error) {
+		e.ws[turn.RoomNewFile] = bytes.Repeat([]byte("x"), MaxChangedBytes+1)
+		e.ws["docs/plan.md"] = []byte("# Plan")
+		e.home[".claude/projects/-workspace/"+sid+".jsonl"] = []byte("l1\n")
+		return `{"result":"done","session_id":"` + sid + `"}`, nil
+	}
+	s := newTurnSandbox(t, e)
+	out, err := s.RunTurn(context.Background(), TurnInput{Bearer: testBearer, Workspace: workspaceTar(t, map[string]string{}), Prompt: "p", Model: "haiku"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, text := turn.TakeRoomNew(out.Changes)
+	if len(text) != turn.MaxRoomNewBytes+1 {
+		t.Fatalf("room-new.json: %d bytes", len(text))
+	}
+	if _, err := turn.ParseRoomNew(text); err == nil || !strings.HasPrefix(err.Error(), "over ") {
+		t.Fatalf("parse: %v", err)
+	}
+}
