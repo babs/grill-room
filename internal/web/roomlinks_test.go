@@ -527,6 +527,16 @@ func TestLinkedPromptSection(t *testing.T) {
 	}
 }
 
+// 023-AC16: every prompt tells the persona how to propose a related room, and that a member decides.
+func TestPromptOffersRoomNew(t *testing.T) {
+	p := buildPrompt(promptInput{Persona: "Grill", Room: "A"})
+	for _, want := range []string{`writing room-new.json: {"name": `, `"brief": `, "at most 80 characters", "at most 64 KB", "One proposal per turn", "a member decides", "creates nothing"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt lacks %q:\n%s", want, p)
+		}
+	}
+}
+
 // 023-AC15: ?participant= marks the reading rooms where that person sits, among the caller's.
 func TestRoomLinksPersonMember(t *testing.T) {
 	e := newEnv(t)

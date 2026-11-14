@@ -174,6 +174,7 @@ func buildPrompt(in promptInput) string {
 - annotations.md: every annotation thread on the documents, with its id. Images attached to threads are in attachments/.
 - To answer annotation threads, write replies.json: [{"annotation": <id>, "body": "<your reply>"}]. Add "status": "done" to a reply that settles its thread; a participant who replies later reopens it.
 - To point the participants at a passage, any document included, uploads too, write annotations-new.json: [{"doc": "<its path here, like uploads/3-plan.md>", "exact": "<the passage, word for word as it reads, without Markdown marks>", "prefix": "<the few words before it>", "suffix": "<the few words after it>", "body": "<your question or remark>"}]. Use it for what needs an answer from someone, not to repeat your synthesis.
+- When a side topic deserves a room of its own, propose one by writing room-new.json: {"name": "<one line, at most 80 characters>", "brief": "<Markdown, at most 64 KB, briefing the new room's personas>"}. One proposal per turn. It shows as a card; a member decides whether to create the room, and the file alone creates nothing.
 `)
 	if in.SpokenWords > 0 {
 		fmt.Fprintf(&b, spokenRules, in.SpokenWords)

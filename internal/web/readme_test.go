@@ -3,6 +3,8 @@ package web
 import (
 	"os"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -36,5 +38,56 @@ func TestEveryRouteIsInTheReadme(t *testing.T) {
 		if !documented(p) && (!isAlias || !documented("/api/"+alias)) {
 			t.Errorf("%s has no row in the README", r[1])
 		}
+	}
+}
+
+// The README's MCP paragraph counts and names the catalogue: its tool count, the read tools and the
+// full-token ones in their own groups, and its destructive tool count (023-AC22).
+func TestReadmeListsTheMCPTools(t *testing.T) {
+	b, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, after, _ := strings.Cut(string(b), "### Agent access (MCP)")
+	sec, _, _ := strings.Cut(after, "\n## ")
+	// Names count only in their group of the list sentence: other sentences mention some again.
+	_, rest, _ := strings.Cut(sec, "read your rooms (")
+	read, rest, _ := strings.Cut(rest, ") and set them up (")
+	full, _, _ := strings.Cut(rest, ").")
+	name := regexp.MustCompile("`([a-z_]+)`")
+	names := func(s string) []string {
+		var out []string
+		for _, m := range name.FindAllStringSubmatch(s, -1) {
+			out = append(out, m[1])
+		}
+		slices.Sort(out)
+		return out
+	}
+	var wantRead, wantFull []string
+	destr := 0
+	for _, tool := range mcpTools {
+		if tool.destr {
+			destr++
+		}
+		if tool.full {
+			wantFull = append(wantFull, tool.name)
+		} else {
+			wantRead = append(wantRead, tool.name)
+		}
+	}
+	slices.Sort(wantRead)
+	slices.Sort(wantFull)
+	if got := names(read); !slices.Equal(got, wantRead) {
+		t.Errorf("README read tools %v, catalogue %v", got, wantRead)
+	}
+	if got := names(full); !slices.Equal(got, wantFull) {
+		t.Errorf("README full-token tools %v, catalogue %v", got, wantFull)
+	}
+	if m := regexp.MustCompile(`Its (\d+) tools`).FindStringSubmatch(sec); m == nil || m[1] != strconv.Itoa(len(mcpTools)) {
+		t.Errorf("README tool count %v, catalogue %d", m, len(mcpTools))
+	}
+	words := map[string]int{"four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8}
+	if m := regexp.MustCompile(`The (\w+) destructive tools`).FindStringSubmatch(sec); m == nil || words[m[1]] != destr {
+		t.Errorf("README destructive count %v, catalogue %d", m, destr)
 	}
 }

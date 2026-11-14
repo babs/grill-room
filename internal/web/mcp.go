@@ -220,6 +220,7 @@ const (
 	pProfile     = "GET /api/profile"
 	pPersonaSkl  = "/api/rooms/{room}/personas/{persona}/skills/{skill}"
 	pPersonaPlug = "/api/rooms/{room}/personas/{persona}/plugins/{plugin}"
+	pLinks       = "GET /api/rooms/{room}/links"
 )
 
 const roomArg = `"room":{"type":"string","description":"The room id, as list_rooms gives it."}`
@@ -309,6 +310,9 @@ var mcpTools = []*mcpTool{
 	{name: "list_plugins", desc: "List a room's plugins with their versions and which personas have them on.",
 		ro: true, idem: true, schema: `{"required":["room"],"properties":{` + roomArg + `}}`, routes: []string{"GET /api/rooms/{room}/plugins"},
 		run: func(c *mcpCall, a mcpArgs) (any, error) { return c.get(a.room() + "/plugins") }},
+	{name: "list_room_links", desc: "List a room's links both ways: the rooms it reads and those that read it, with their names. A link lets the reader room's personas read the other room; it gives you no access to it.",
+		ro: true, idem: true, schema: `{"required":["room"],"properties":{` + roomArg + `}}`, routes: []string{pLinks},
+		run: func(c *mcpCall, a mcpArgs) (any, error) { return c.get(a.room() + "/links") }},
 
 	{name: "create_room", desc: "Create a room you are the room admin of, blank or from a starter (fill its required fields). display_name is your name in it. Without a name, a starter's own room name is used.",
 		full: true, schema: `{"required":["display_name"],"properties":{"name":{"type":"string"},"display_name":{"type":"string","minLength":1},"starter":{"type":"integer","minimum":1},"starter_version":{"type":"integer","minimum":1},"fields":{"type":"object","additionalProperties":{"type":"string"}}}}`,
@@ -483,6 +487,12 @@ var mcpTools = []*mcpTool{
 		run: func(c *mcpCall, a mcpArgs) (any, error) {
 			return c.pass(http.MethodPost, a.room()+"/invites/share", nil)
 		}},
+	{name: "link_rooms", desc: "Link a room with another you are also a room admin of: reads (this room's personas read the other room) and read_by (the other room's personas read this one), both true by default. A link that exists is answered as is. A room reads at most 10 rooms.",
+		full: true, idem: true, schema: `{"required":["room","other"],"properties":{` + roomArg + `,"other":{"type":"string","description":"The other room's id."},"reads":{"type":"boolean","default":true},"read_by":{"type":"boolean","default":true}}}`,
+		routes: []string{"POST /api/rooms/{room}/links"},
+		run: func(c *mcpCall, a mcpArgs) (any, error) {
+			return c.pass(http.MethodPost, a.room()+"/links", map[string]any{"room": a.str("other"), "reads": a["reads"], "read_by": a["read_by"]})
+		}},
 
 	{name: "delete_room", desc: "Delete a room with everything in it, for good. confirm must be the room's exact name. A room admin's to do.",
 		full: true, destr: true, schema: `{"required":["room","confirm"],"properties":{` + roomArg + `,"confirm":{"type":"string"}}}`,
@@ -554,6 +564,31 @@ var mcpTools = []*mcpTool{
 			}
 			return c.pass(http.MethodDelete, a.room()+"/invites/"+a.id("invite"), nil)
 		}},
+	{name: "unlink_rooms", desc: "Remove one link (one direction) of a room, as list_room_links gives it. confirm must be the other room's exact name. A room admin of either room's to do.",
+		full: true, destr: true, schema: `{"required":["room","link","confirm"],"properties":{` + roomArg + `,"link":{"type":"integer"},"confirm":{"type":"string"}}}`,
+		routes: []string{pLinks, "DELETE /api/rooms/{room}/links/{link}"},
+		run: func(c *mcpCall, a mcpArgs) (any, error) {
+			b, err := c.get(a.room() + "/links")
+			if err != nil {
+				return nil, err
+			}
+			var ls []store.RoomLink
+			if err := json.Unmarshal(b, &ls); err != nil {
+				return nil, fmt.Errorf("mcp: %w", err)
+			}
+			i := slices.IndexFunc(ls, func(l store.RoomLink) bool { return strconv.FormatInt(l.ID, 10) == a.id("link") })
+			if i < 0 {
+				return nil, toolError("no such link")
+			}
+			other := ls[i].ReadName
+			if ls[i].ReadRoom == a.str("room") {
+				other = ls[i].ReaderName
+			}
+			if err := confirmed(a, other, "other room", "list_room_links"); err != nil {
+				return nil, err
+			}
+			return c.pass(http.MethodDelete, a.room()+"/links/"+a.id("link"), nil)
+		}},
 }
 
 // toolSchema is a tool's full input schema (012-AC15).
@@ -600,7 +635,7 @@ func (s *Server) MCPToolCalls(tool, result string) int64 { return s.mcpCalls[too
 // (012-AC15).
 func (s *Server) newMCPServer(full bool) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "grill-room", Title: "grill-room", Version: s.opts.Version}, &mcp.ServerOptions{
-		Instructions: "grill-room rooms, as your profile: read them and set them up (personas, documents, skills, plugins). Read a target's name before a destructive call: confirm must match it.",
+		Instructions: "grill-room rooms, as your profile: read them and set them up (personas, documents, skills, plugins, links). Read a target's name before a destructive call: confirm must match it.",
 	})
 	for _, t := range mcpTools {
 		if t.full && !full {
