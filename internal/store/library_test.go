@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -601,7 +603,7 @@ func TestImportLinksVisibleTemplatesOnly(t *testing.T) {
 	if _, _, err := s.AddPersona(ctx, "orig", gone.ID, alice, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RemoveTemplate(ctx, gone.ID); err != nil {
+	if err := s.RemoveTemplate(ctx, alice.ProfileID, gone.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.ImportRoom(ctx, export(t, s, "orig"), importOpts("after-delete")); err != nil {
@@ -610,5 +612,264 @@ func TestImportLinksVisibleTemplatesOnly(t *testing.T) {
 	ps, _ := s.RoomPersonas(ctx, "after-delete")
 	if i := slices.IndexFunc(ps, func(p RoomPersona) bool { return p.Name == "Gone" }); i < 0 || ps[i].TemplateID != 0 || ps[i].TemplateVersion != 1 {
 		t.Fatalf("copy of a deleted library persona: %+v", ps)
+	}
+}
+
+// librarySkill gives room persona grill of room "a" an approved skill, stamp v1, holding "tar v1".
+func librarySkill(t *testing.T, s *Store, grill int64) {
+	t.Helper()
+	ctx := t.Context()
+	var sid int64
+	if err := s.db.QueryRowContext(ctx, `INSERT INTO skills(name, created_at, room_id, pending) VALUES('stamp', ?, 'a', 0) RETURNING id`, now()).Scan(&sid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO skill_versions(skill_id, n, author, description, files, size, sha256, data, created_at) VALUES(?,1,'Bob','d',1,6,'x','tar v1',?)`,
+		sid, now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO room_persona_skills(persona_id, skill_id, version) VALUES(?, ?, 1)`, grill, sid); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// frozenData is the bytes of file name in version n of template id, "" when it has none.
+func frozenData(t *testing.T, s *Store, id int64, n int, name string) string {
+	t.Helper()
+	var data string
+	err := s.db.QueryRowContext(t.Context(), `SELECT f.data FROM persona_template_files f JOIN persona_template_versions v ON v.id = f.version_id
+		WHERE v.template_id = ? AND v.n = ? AND f.name = ?`, id, n, name).Scan(&data)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal(err)
+	}
+	return data
+}
+
+// 035-AC3 035-AC7: the author's edit is version N+1 with every setting and the description, its
+// frozen skill carried over, the title following the new name, as a save from the room renames it
+// too; rooms keep their copy and are offered the update. An edit made on an older version, someone
+// else's edit and a built-in's are refused, and past 100 versions the edit is.
+func TestEditTemplate(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	alice, bob, grill := personaRoom(t, s, "a")
+	librarySkill(t, s, grill.ID)
+	t1, err := s.SavePersonaToLibrary(ctx, "a", grill.ID, alice.ProfileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := TemplateEdit{StarterPersona: StarterPersona{PersonaFields: PersonaFields{Name: "Grilled", Badge: "🍖", Colour: "#123456", Text: "Edited.", Model: "opus", Effort: "high"},
+		EveryMinutes: 5, SelfCall: true, Autocompact: 50_000, Speaks: no(), Voice: "fr-1", VoiceRate: 1.2, TimeKeeper: true, CutInS: 20,
+		Skills: []string{"ignored"}}, Description: "One line.", Version: 1}
+	t2, err := s.EditTemplate(ctx, alice.ProfileID, t1.ID, e)
+	if err != nil || t2.Version != 2 || t2.Name != "Grilled" || t2.Text != "Edited." || t2.Model != "opus" || t2.Description != "One line." ||
+		t2.EveryMinutes != 5 || !t2.SelfCall || t2.Autocompact != 50_000 || t2.SpeaksInCall() || t2.Voice != "fr-1" || t2.VoiceRate != 1.2 ||
+		!t2.TimeKeeper || t2.CutInS != 20 || t2.Author != "Alice" || strings.Join(t2.Skills, ",") != "stamp" || len(t2.FrozenSkills) != 1 ||
+		t2.Title != "Grilled" {
+		t.Fatalf("edited: %+v %v", t2, err)
+	}
+	if got := frozenData(t, s, t1.ID, 2, t2.FrozenSkills[0].File); got != "tar v1" {
+		t.Fatalf("v2 frozen skill %q", got)
+	}
+	p, err := s.RoomPersona(ctx, "a", grill.ID)
+	if err != nil || p.Name != "Grill" || p.Text != grill.Text || p.TemplateVersion != 1 || p.UpdateVersion != 2 || p.EveryMinutes != 0 {
+		t.Fatalf("room copy: %+v %v", p, err)
+	}
+	// A second tab's edit, made on v1 too, changes nothing.
+	stale := e
+	stale.Text = "Second tab."
+	if _, err := s.EditTemplate(ctx, alice.ProfileID, t1.ID, stale); !errors.Is(err, ErrStaleVersion) || err.Error() != "version 2 exists: reopen the persona to edit it" {
+		t.Fatalf("edit on v1 after v2: %v", err)
+	}
+	if got, err := s.Template(ctx, t1.ID); err != nil || got.Version != 2 || got.Text != "Edited." {
+		t.Fatalf("after the stale edit: %+v %v", got, err)
+	}
+	if _, _, _, err := s.EditPersona(ctx, "a", grill.ID, PersonaPatch{Name: ptr("Roaster")}, alice); err != nil {
+		t.Fatal(err)
+	}
+	if t3, err := s.SavePersonaToLibrary(ctx, "a", grill.ID, alice.ProfileID); err != nil || t3.Version != 3 || t3.Title != "Roaster" {
+		t.Fatalf("save after a rename: %+v %v", t3, err)
+	}
+	def := templateByPreset(t, s, PresetDefault)
+	for _, c := range []struct {
+		who  int64
+		id   int64
+		want error
+	}{{bob.ProfileID, t1.ID, ErrNotFound}, {alice.ProfileID, def.ID, ErrPreset}, {alice.ProfileID, 999, ErrNotFound}} {
+		if _, err := s.EditTemplate(ctx, c.who, c.id, e); !errors.Is(err, c.want) {
+			t.Errorf("edit %d by %d: %v, want %v", c.id, c.who, err, c.want)
+		}
+	}
+	if err := s.ShareTemplate(ctx, alice.ProfileID, t1.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EditTemplate(ctx, bob.ProfileID, t1.ID, e); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("bob edits the shared one: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE persona_template_versions SET n = n + 97 WHERE template_id = ?`, t1.ID); err != nil {
+		t.Fatal(err)
+	}
+	e.Version = MaxTemplateVersions
+	if _, err := s.EditTemplate(ctx, alice.ProfileID, t1.ID, e); !errors.Is(err, ErrLimit) || !strings.Contains(err.Error(), "at most 100 versions") {
+		t.Fatalf("past 100 versions: %v", err)
+	}
+}
+
+// 035-AC4 035-AC7: a duplicate is a personal library persona of the caller at version 1 with the
+// whole persona and its own copy of the frozen files, titled "(copy)" when the title is taken in
+// Yours, never linked to a room persona; another profile's private one is not found; past 50 the
+// copy is refused.
+func TestDuplicateTemplate(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	alice, bob, grill := personaRoom(t, s, "a")
+	librarySkill(t, s, grill.ID)
+	if _, _, _, err := s.EditPersona(ctx, "a", grill.ID, PersonaPatch{EveryN: ptr(3)}, alice); err != nil {
+		t.Fatal(err)
+	}
+	t1, err := s.SavePersonaToLibrary(ctx, "a", grill.ID, alice.ProfileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DuplicateTemplate(ctx, bob.ProfileID, t1.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("bob copies alice's private one: %v", err)
+	}
+	var copies []*Template
+	for _, want := range []string{"Grill (copy)", "Grill (copy) 2"} {
+		d, err := s.DuplicateTemplate(ctx, alice.ProfileID, t1.ID)
+		if err != nil || d.Title != want || d.Version != 1 || d.Section != SectionPersonal || !d.Mine || d.SourcePersonaID != 0 || d.EveryN != 3 ||
+			len(d.FrozenSkills) != 1 {
+			t.Fatalf("duplicate: %+v %v, want %q", d, err, want)
+		}
+		copies = append(copies, d)
+	}
+	// The copy keeps its "(copy)" title through an edit; a rename retitles it; a copy of the copy
+	// is named after the persona, not "(copy) (copy)".
+	cp := copies[0]
+	e := TemplateEdit{StarterPersona: cp.StarterPersona, Description: "Edited.", Version: 1}
+	if got, err := s.EditTemplate(ctx, alice.ProfileID, cp.ID, e); err != nil || got.Title != "Grill (copy)" || got.Version != 2 || !got.Mine {
+		t.Fatalf("edit without a rename: %+v %v", got, err)
+	}
+	if got, err := s.DuplicateTemplate(ctx, alice.ProfileID, cp.ID); err != nil || got.Title != "Grill (copy) 3" {
+		t.Fatalf("copy of the copy: %+v %v", got, err)
+	}
+	e.Name, e.Version = "Toaster", 2
+	if got, err := s.EditTemplate(ctx, alice.ProfileID, cp.ID, e); err != nil || got.Title != "Toaster" {
+		t.Fatalf("edit with a rename: %+v %v", got, err)
+	}
+	if err := s.ShareTemplate(ctx, alice.ProfileID, t1.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.DuplicateTemplate(ctx, bob.ProfileID, t1.ID)
+	if err != nil || d.Title != "Grill" || d.Author != "Bob" || !d.Mine || d.ProfileID != bob.ProfileID {
+		t.Fatalf("bob's copy: %+v %v", d, err)
+	}
+	if err := s.RemoveTemplate(ctx, alice.ProfileID, t1.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := frozenData(t, s, d.ID, 1, d.FrozenSkills[0].File); got != "tar v1" {
+		t.Fatalf("the copy's frozen skill after the original's deletion: %q", got)
+	}
+	for i := count(t, s, `SELECT count(*) FROM persona_templates WHERE profile_id = ?`, bob.ProfileID); i < MaxProfileTemplates; i++ {
+		if _, err := s.PublishTemplate(ctx, bob.ProfileID, "Bob", fmt.Sprintf("T%d", i), grill.PersonaFields); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.DuplicateTemplate(ctx, bob.ProfileID, d.ID); !errors.Is(err, ErrLimit) || !strings.Contains(err.Error(), "at most 50 personas") {
+		t.Fatalf("past 50: %v", err)
+	}
+}
+
+// 035-AC5 035-AC6 035-AC19: the owner shares and unshares, audited; another viewer sees it only
+// while shared and loses its update. The owner deletes their own, the admin a shared one but never
+// a private or built-in one; rooms keep their copies, unlinked, at their version.
+func TestShareAndRemoveTemplate(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	alice, bob, grill := personaRoom(t, s, "a")
+	t1, err := s.SavePersonaToLibrary(ctx, "a", grill.ID, alice.ProfileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sees := func(viewer int64) string {
+		t.Helper()
+		ts, err := s.Templates(ctx, viewer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i := slices.IndexFunc(ts, func(x Template) bool { return x.ID == t1.ID }); i >= 0 {
+			return ts[i].Section
+		}
+		return ""
+	}
+	audited := func(action string) context.Context {
+		return WithAudit(ctx, AuditEntry{At: t0, Actor: "profile:alice", Action: action, TargetKind: TargetTemplate, TargetID: "x"}, nil)
+	}
+	if err := s.ShareTemplate(ctx, bob.ProfileID, t1.ID, true); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("bob shares alice's private one: %v", err)
+	}
+	if err := s.ShareTemplate(audited("template.share"), alice.ProfileID, t1.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := sees(bob.ProfileID); got != SectionInstance {
+		t.Fatalf("bob sees %q, want instance", got)
+	}
+	for _, c := range []struct {
+		who   int64
+		share bool
+	}{{alice.ProfileID, true}, {bob.ProfileID, false}} {
+		if err := s.ShareTemplate(ctx, c.who, t1.ID, c.share); !errors.Is(err, ErrForbidden) {
+			t.Errorf("share %v by %d: %v", c.share, c.who, err)
+		}
+	}
+	// Bob takes its next version into his room copy only while he sees it.
+	if _, err := s.EditTemplate(ctx, alice.ProfileID, t1.ID, TemplateEdit{StarterPersona: StarterPersona{PersonaFields: PersonaFields{Name: "Grill", Badge: "🔥", Colour: "#123456",
+		Text: "v2", Model: "sonnet", Effort: "low"}}, Version: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ShareTemplate(audited("template.unshare"), alice.ProfileID, t1.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := sees(bob.ProfileID); got != "" {
+		t.Fatalf("bob still sees it: %q", got)
+	}
+	if _, _, _, err := s.UpdatePersona(ctx, "a", grill.ID, bob); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("bob updates from an unshared one: %v", err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM audit_log WHERE action IN ('template.share', 'template.unshare') AND target_id = ? AND details LIKE '%"version":%'`,
+		strconv.FormatInt(t1.ID, 10)); n != 2 {
+		t.Fatalf("%d audit entries, want 2", n)
+	}
+	def := templateByPreset(t, s, PresetDefault)
+	for _, c := range []struct {
+		who, id int64
+		want    error
+	}{{0, t1.ID, ErrNotFound}, {bob.ProfileID, t1.ID, ErrNotFound}, {0, def.ID, ErrPreset}, {alice.ProfileID, def.ID, ErrPreset}} {
+		if err := s.RemoveTemplate(ctx, c.who, c.id); !errors.Is(err, c.want) {
+			t.Errorf("remove %d by %d: %v, want %v", c.id, c.who, err, c.want)
+		}
+	}
+	if err := s.RemoveTemplate(ctx, alice.ProfileID, t1.ID); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.RoomPersona(ctx, "a", grill.ID)
+	if err != nil || p.TemplateID != 0 || p.TemplateVersion != 1 || p.Text != grill.Text {
+		t.Fatalf("room copy after delete: %+v %v", p, err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM persona_template_versions WHERE template_id = ?`, t1.ID); n != 0 {
+		t.Fatalf("%d versions left", n)
+	}
+	// The admin removes a shared one; another profile cannot.
+	t2, err := s.SavePersonaToLibrary(ctx, "a", grill.ID, alice.ProfileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ShareTemplate(ctx, alice.ProfileID, t2.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveTemplate(ctx, bob.ProfileID, t2.ID); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("bob removes a shared one: %v", err)
+	}
+	if err := s.RemoveTemplate(ctx, 0, t2.ID); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -210,13 +210,13 @@ func TestTemplateLibrary(t *testing.T) {
 			t.Fatalf("source persona for %s: %+v %v", c.who.Name, ts, err)
 		}
 	}
-	if err := s.RemoveTemplate(ctx, def.ID); !errors.Is(err, ErrPreset) {
+	if err := s.RemoveTemplate(ctx, 0, def.ID); !errors.Is(err, ErrPreset) {
 		t.Fatalf("remove a preset: %v", err)
 	}
-	if err := s.RemoveTemplate(ctx, 999); !errors.Is(err, ErrNotFound) {
+	if err := s.RemoveTemplate(ctx, 0, 999); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("remove unknown: %v", err)
 	}
-	if err := s.RemoveTemplate(ctx, tp.ID); err != nil {
+	if err := s.RemoveTemplate(ctx, 0, tp.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Template(ctx, tp.ID); !errors.Is(err, ErrNotFound) {

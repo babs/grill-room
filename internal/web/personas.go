@@ -221,14 +221,15 @@ func (s *Server) publishTemplate(w http.ResponseWriter, r *http.Request, sess se
 	}
 }
 
-// removeTemplate is the admin's: rooms keep their copies, shipped templates stay.
+// removeTemplate is the admin's, of a shared persona: rooms keep their copies, built-ins stay, and
+// a profile's own are not the admin's to see (035-AC19).
 func (s *Server) removeTemplate(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("template"), 10, 64)
 	if err != nil {
 		httpError(w, http.StatusNotFound, "no such template")
 		return
 	}
-	err = s.bus.Store.RemoveTemplate(s.auditing(r, ActionTemplateRemove, store.TargetTemplate, strconv.FormatInt(id, 10), "", nil), id)
+	err = s.bus.Store.RemoveTemplate(s.auditing(r, ActionTemplateRemove, store.TargetTemplate, strconv.FormatInt(id, 10), "", nil), 0, id)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		httpError(w, http.StatusNotFound, "no such template")
@@ -363,4 +364,167 @@ func (s *Server) removePersona(w http.ResponseWriter, r *http.Request, sess sess
 	}
 	m, err := s.bus.Store.RemovePersona(ctx, sess.p.RoomID, personaID(r), sess.p)
 	s.personaDone(w, sess, nil, m, err, http.StatusNoContent)
+}
+
+// maxTemplateDesc bounds a library persona's one-line description (035-AC3).
+const maxTemplateDesc = 200
+
+func templateID(r *http.Request) int64 {
+	id, _ := strconv.ParseInt(r.PathValue("template"), 10, 64)
+	return id
+}
+
+// libraryError answers a refusal of the profile's persona library with its status; false when err is nil.
+func (s *Server) libraryError(w http.ResponseWriter, event string, err error) bool {
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, store.ErrNotFound):
+		httpError(w, http.StatusNotFound, "no such persona")
+	case errors.Is(err, store.ErrPreset):
+		httpError(w, http.StatusForbidden, "built-in personas are read-only: duplicate one to change it")
+	case errors.Is(err, store.ErrForbidden):
+		httpError(w, http.StatusForbidden, "only the persona's author can do this")
+	case errors.Is(err, store.ErrLimit), errors.Is(err, store.ErrStaleVersion):
+		httpError(w, http.StatusConflict, err.Error())
+	default:
+		s.serverError(w, event, err)
+	}
+	return true
+}
+
+// myPersonas lists the library personas a profile sees: its own, the shared ones and the built-ins (035-AC1).
+func (s *Server) myPersonas(w http.ResponseWriter, r *http.Request) {
+	p := s.profileFor(w, r)
+	if p == nil {
+		return
+	}
+	ts, err := s.bus.Store.Templates(r.Context(), p.ID)
+	if s.libraryError(w, "list_templates_failed", err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, ts)
+}
+
+// getLibraryPersona answers one library persona the profile sees, at its latest version, with its
+// version history and the models and efforts the editor offers (035-AC2).
+func (s *Server) getLibraryPersona(w http.ResponseWriter, r *http.Request) {
+	p := s.profileFor(w, r)
+	if p == nil {
+		return
+	}
+	t, vs, err := s.bus.Store.TemplateHistory(r.Context(), templateID(r), p.ID)
+	if s.libraryError(w, "get_template_failed", err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		*store.Template
+		Versions []store.TemplateVersionInfo `json:"versions"`
+		Models   []string                    `json:"models"`
+		Efforts  []string                    `json:"efforts"`
+	}{t, vs, turn.Models, turn.Efforts})
+}
+
+// editLibraryPersona saves the author's edit of one of their library personas, made on `version`,
+// as its next version, checked as a room persona is; its skills and plugins carry over (035-AC3).
+func (s *Server) editLibraryPersona(w http.ResponseWriter, r *http.Request) {
+	p := s.profileFor(w, r)
+	if p == nil {
+		return
+	}
+	var q store.TemplateEdit
+	if !decode(w, r, &q) {
+		return
+	}
+	var err error
+	if q.StarterPersona, err = cleanPersona(q.StarterPersona); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if q.Version <= 0 {
+		httpError(w, http.StatusBadRequest, "version, the version the editor opened, is required")
+		return
+	}
+	if q.Description = strings.TrimSpace(q.Description); q.Description != "" && !store.ValidText(q.Description, maxTemplateDesc, false) {
+		httpError(w, http.StatusBadRequest, fmt.Sprintf("description must be at most %d characters on one line", maxTemplateDesc))
+		return
+	}
+	t, err := s.bus.Store.EditTemplate(r.Context(), p.ID, templateID(r), q)
+	if s.libraryError(w, "edit_template_failed", err) {
+		return
+	}
+	s.log.Info("template_edited", zap.Int64("template", t.ID), zap.Int("version", t.Version), zap.Int64("profile", p.ID))
+	writeJSON(w, http.StatusCreated, t)
+}
+
+// duplicateLibraryPersona copies a library persona the profile sees into its own at version 1 (035-AC4).
+func (s *Server) duplicateLibraryPersona(w http.ResponseWriter, r *http.Request) {
+	p := s.profileFor(w, r)
+	if p == nil {
+		return
+	}
+	t, err := s.bus.Store.DuplicateTemplate(r.Context(), p.ID, templateID(r))
+	if s.libraryError(w, "duplicate_template_failed", err) {
+		return
+	}
+	s.log.Info("template_duplicated", zap.Int64("template", t.ID), zap.Int64("from", templateID(r)), zap.Int64("profile", p.ID))
+	writeJSON(w, http.StatusCreated, t)
+}
+
+// shareLibraryPersona moves one of the profile's library personas to Shared, or back with
+// /unshare, audited (035-AC5).
+func (s *Server) shareLibraryPersona(w http.ResponseWriter, r *http.Request) {
+	p := s.profileFor(w, r)
+	if p == nil {
+		return
+	}
+	id, share, action := templateID(r), !strings.HasSuffix(r.URL.Path, "/unshare"), ActionTemplateShare
+	if !share {
+		action = ActionTemplateUnshare
+	}
+	if s.libraryError(w, "share_template_failed", s.bus.Store.ShareTemplate(s.profileAudit(r, p, action, store.TargetTemplate, id), p.ID, id, share)) {
+		return
+	}
+	s.log.Info("template_shared", zap.Int64("template", id), zap.Bool("shared", share), zap.Int64("profile", p.ID))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteLibraryPersona deletes one of the profile's library personas with its versions; rooms keep
+// their copies (035-AC6).
+func (s *Server) deleteLibraryPersona(w http.ResponseWriter, r *http.Request) {
+	p := s.profileFor(w, r)
+	if p == nil {
+		return
+	}
+	id := templateID(r)
+	if s.libraryError(w, "delete_template_failed", s.bus.Store.RemoveTemplate(s.profileAudit(r, p, ActionTemplateRemove, store.TargetTemplate, id), p.ID, id)) {
+		return
+	}
+	s.log.Info("template_removed", zap.Int64("template", id), zap.Int64("profile", p.ID))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// addLibraryPersonaToRoom adds a library persona to `room`, where the profile has a seat, as that
+// seat would from the room (035-AC4); 404 for a room without one.
+func (s *Server) addLibraryPersonaToRoom(w http.ResponseWriter, r *http.Request) {
+	if s.profileFor(w, r) == nil {
+		return
+	}
+	var req struct {
+		Room string `json:"room"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	sess, ok := s.profileSeat(w, r, req.Room)
+	if !ok {
+		return
+	}
+	admin, err := s.roomAdmin(r.Context(), &sess)
+	if err != nil {
+		s.serverError(w, "room_admin_lookup_failed", err)
+		return
+	}
+	p, m, err := s.bus.Store.AddPersona(r.Context(), sess.p.RoomID, templateID(r), sess.p, admin)
+	s.personaDone(w, sess, p, m, err, http.StatusCreated)
 }

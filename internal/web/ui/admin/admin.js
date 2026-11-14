@@ -181,7 +181,7 @@ const actionLabels = {
   'document.restore': 'Document restored', 'profile.delete': 'Profile deleted', 'profile.recovery_link': 'Recovery link made',
   'profile.recovery_link_used': 'Recovery link used', 'profile.merge': 'Profiles merged', 'profile.purge': 'Empty profiles deleted',
   'profile.oidc_bind': 'Signed in with the provider', 'profile.oidc_unbind': 'Provider sign-in unbound',
-  'profile.max_rooms': 'Room limit set', 'template.remove': 'Persona template removed', 'skill.remove': 'Shared skill removed',
+  'profile.max_rooms': 'Room limit set', 'template.remove': 'Persona template removed', 'template.share': 'Persona shared', 'template.unshare': 'Persona unshared', 'skill.remove': 'Shared skill removed',
   'starter.publish': 'Starter shared', 'starter.delete': 'Starter removed', 'instance.settings': 'Server settings changed',
   'tts.lexicon.add': 'Pronunciation added', 'tts.lexicon.edit': 'Pronunciation changed', 'tts.lexicon.delete': 'Pronunciation removed',
   'api_token.create': 'API token created', 'api_token.revoke': 'API token revoked', 'persona.remove': 'Persona removed',

@@ -308,6 +308,10 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 	sk := alice.uploadSkill(t, "shared", skillZip(t, "stamp", "x"), http.StatusCreated)
 	skID := strconv.FormatInt(sk.ID, 10)
 
+	// 035-AC19: the admin removes shared personas only; sharing it here writes no entry.
+	if err := e.st.ShareTemplate(t.Context(), alice.profile(t).Profile.ID, decodeJSON[store.Template](t, b).ID, true); err != nil {
+		t.Fatal(err)
+	}
 	if code, _ := e.do(t, "DELETE", "/api/templates/0"+tplID, e.admin, nil); code != http.StatusNoContent {
 		t.Fatalf("remove template: %d", code)
 	}
@@ -354,11 +358,11 @@ func TestEveryAdminMutationIsAudited(t *testing.T) {
 	// Every mutation action is exercised here; the admin.* ones, the room admins', the settings' and
 	// the archives' and the renames' have their own tests (TestAuditLogViewAPI, TestRoomAdmins,
 	// TestRoomSkillsAPI, TestProfileCreatesRooms, TestProfileMaxRoomsAPI, TestExportImportAPI,
-	// TestRenameParticipant, TestDeleteDocument, TestStarterLibraryAPI, TestHostTransfer,
+	// TestRenameParticipant, TestDeleteDocument, TestStarterLibraryAPI, TestProfilePersonaLibraryAPI, TestHostTransfer,
 	// TestAdminRecoveryLink, TestMergeAPI, TestPurgeProfilesLoopAndSwitch, TestAPITokenAuditAndLogs, TestMCPConfirm,
 	// TestTTSSpeechSettings, TestLexicon, TestRemoveLeaveBlockAPI, TestRoomLinkRoutes, TestProposalRightsAndLimits, TestOIDCBinding, TestOIDCUnbind, and store's TestAllowFlow,
 	// TestEgressDelegation, TestEgressRevoked, TestConnectorChanged).
-	covered := map[string]bool{ActionProfileOIDCBind: true, ActionProfileOIDCUnbind: true, ActionProfileMerge: true, ActionProfilePurge: true, ActionProfileRecoveryLink: true, ActionProfileRecoveryUsed: true, ActionStarterPublish: true, ActionStarterDelete: true, ActionRoomAdminAdd: true, ActionRoomAdminRemove: true, ActionRoomSkillRemove: true, ActionSettings: true,
+	covered := map[string]bool{ActionProfileOIDCBind: true, ActionProfileOIDCUnbind: true, ActionProfileMerge: true, ActionProfilePurge: true, ActionProfileRecoveryLink: true, ActionProfileRecoveryUsed: true, ActionStarterPublish: true, ActionStarterDelete: true, ActionTemplateShare: true, ActionTemplateUnshare: true, ActionRoomAdminAdd: true, ActionRoomAdminRemove: true, ActionRoomSkillRemove: true, ActionSettings: true,
 		ActionProfileMaxRooms: true, ActionRoomExport: true, ActionRoomImport: true, ActionRename: true, ActionDocumentDelete: true,
 		ActionDocumentRestore: true, ActionHostTransfer: true, ActionAPITokenCreate: true, ActionAPITokenRevoke: true, ActionPersonaRemove: true, ActionRoomSpeech: true,
 		ActionParticipantRemove: true, ActionParticipantUnblock: true, ActionRoomLinkCreate: true, ActionRoomLinkDelete: true, ActionProposalDismiss: true, store.ActionEgressAllow: true, store.ActionEgressRevoke: true, store.ActionEgressDelegate: true,

@@ -28,6 +28,8 @@ var (
 	// ErrAwaitingHost is returned when a persona with a change the host has yet to approve is saved
 	// to the library (035-AC12).
 	ErrAwaitingHost = errors.New("waits for the AI host's approval")
+	// ErrStaleVersion is returned when an edit was made on a version that is no longer the latest (035-AC3).
+	ErrStaleVersion = errors.New("exists: reopen the persona to edit it")
 )
 
 // Every member may add personas and every profile may publish: these bound what one of them can
@@ -313,18 +315,64 @@ func (s *Store) Templates(ctx context.Context, viewer int64) ([]Template, error)
 		if err != nil {
 			return nil, err
 		}
-		t.Mine = viewer != 0 && t.ProfileID == viewer
-		if !t.Mine {
-			t.SourcePersonaID = 0
-		}
-		out = append(out, *t)
+		out = append(out, *t.forViewer(viewer))
 	}
 	return out, rows.Err()
+}
+
+// forViewer sets Mine for profile viewer and hides the source persona from anyone else.
+func (t *Template) forViewer(viewer int64) *Template {
+	t.Mine = viewer != 0 && t.ProfileID == viewer
+	if !t.Mine {
+		t.SourcePersonaID = 0
+	}
+	return t
 }
 
 // Template returns template id at its latest version.
 func (s *Store) Template(ctx context.Context, id int64) (*Template, error) {
 	return scanTemplate(s.db.QueryRowContext(ctx, templateCols+`WHERE t.id = ?`, id))
+}
+
+// TemplateVersionInfo is one version in a library persona's history (035-AC2).
+type TemplateVersionInfo struct {
+	N         int       `json:"n"`
+	Author    string    `json:"author"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// TemplateHistory returns template id as profile viewer sees it, at its latest version, with its
+// versions newest first (035-AC2). ErrNotFound for one viewer does not see.
+func (s *Store) TemplateHistory(ctx context.Context, id, viewer int64) (*Template, []TemplateVersionInfo, error) {
+	// One snapshot: a version saved between the two reads would be missing from the history.
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	if err != nil {
+		return nil, nil, fmt.Errorf("template %d: %w", id, err)
+	}
+	defer tx.Rollback() //nolint:errcheck // read-only
+	t, err := scanTemplate(tx.QueryRowContext(ctx, templateCols+`WHERE t.id = ? AND `+templateVisible, id, viewer))
+	if err != nil {
+		return nil, nil, err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT n, author, created_at FROM persona_template_versions WHERE template_id = ? ORDER BY n DESC`, id)
+	if err != nil {
+		return nil, nil, fmt.Errorf("template %d versions: %w", id, err)
+	}
+	defer rows.Close()
+	vs := []TemplateVersionInfo{}
+	for rows.Next() {
+		var v TemplateVersionInfo
+		var created string
+		if err := rows.Scan(&v.N, &v.Author, &created); err != nil {
+			return nil, nil, fmt.Errorf("template %d versions: %w", id, err)
+		}
+		v.CreatedAt = parseTS(created)
+		vs = append(vs, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("template %d versions: %w", id, err)
+	}
+	return t.forViewer(viewer), vs, nil
 }
 
 // errVersionLimit is past MaxTemplateVersions (035-AC7).
@@ -369,24 +417,77 @@ func (s *Store) PublishTemplate(ctx context.Context, profileID int64, author, ti
 // ErrForbidden otherwise, presets included. The latest version's description, settings and frozen
 // files carry over: f holds only the six persona fields. Earlier versions never change.
 func (s *Store) PublishVersion(ctx context.Context, profileID, id int64, author string, f PersonaFields) (*Template, error) {
+	return s.publishVersion(ctx, profileID, id, author, f, nil)
+}
+
+// TemplateEdit is an author's edit of a library persona: every setting and the description, made on
+// version Version (035-AC3).
+type TemplateEdit struct {
+	StarterPersona
+	Description string `json:"description"`
+	Version     int    `json:"version"`
+}
+
+// EditTemplate adds e as the next version of template id, signed with profileID's name: the frozen
+// skills and plugins, and which ones the persona has on, carry over from the latest version; rooms
+// keep their copies; a rename retitles it (035-AC3). ErrStaleVersion when e.Version is not
+// the latest, ErrPreset for a built-in, ErrNotFound for another profile's personal one, ErrForbidden
+// for another profile's shared one, ErrLimit (035-AC7).
+func (s *Store) EditTemplate(ctx context.Context, profileID, id int64, e TemplateEdit) (*Template, error) {
+	t, err := s.publishVersion(ctx, profileID, id, "", e.PersonaFields, &e)
+	if err != nil {
+		return nil, err
+	}
+	return t.forViewer(profileID), nil
+}
+
+// publishVersion is PublishVersion, with e's settings and description when e is set, and the
+// author profileID's name when author is empty.
+func (s *Store) publishVersion(ctx context.Context, profileID, id int64, author string, f PersonaFields, e *TemplateEdit) (*Template, error) {
 	err := s.withTx(ctx, "publish version", func(tx *txn) error {
 		var owner, vid int64
 		var n int
-		var description, manifest string
-		err := tx.QueryRowContext(ctx, `SELECT COALESCE(t.profile_id, 0), v.id, v.n, v.description, v.manifest
+		var section, name, description, manifest string
+		err := tx.QueryRowContext(ctx, `SELECT t.section, COALESCE(t.profile_id, 0), v.id, v.n, v.name, v.description, v.manifest
 			FROM persona_templates t JOIN persona_template_versions v ON v.template_id = t.id
-			WHERE t.id = ? ORDER BY v.n DESC LIMIT 1`, id).Scan(&owner, &vid, &n, &description, &manifest)
+			WHERE t.id = ? ORDER BY v.n DESC LIMIT 1`, id).Scan(&section, &owner, &vid, &n, &name, &description, &manifest)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
 		if err != nil {
 			return fmt.Errorf("publish version: %w", err)
 		}
-		if owner == 0 || owner != profileID {
+		// The profile page hides another profile's private persona; the room's old route keeps its 403 (035-AC3).
+		switch {
+		case e != nil && section == SectionBuiltin:
+			return ErrPreset
+		case e != nil && section == SectionPersonal && owner != profileID:
+			return ErrNotFound
+		case owner == 0 || owner != profileID:
 			return ErrForbidden
+		}
+		// Another tab may have saved since the editor opened it: never replace that silently.
+		if e != nil && e.Version != n {
+			return fmt.Errorf("version %d %w", n, ErrStaleVersion)
 		}
 		if n >= MaxTemplateVersions {
 			return errVersionLimit
+		}
+		if e != nil {
+			var m TemplateManifest
+			if err := json.Unmarshal([]byte(manifest), &m); err != nil {
+				return fmt.Errorf("template %d manifest: %w", id, err)
+			}
+			e.Skills, e.Plugins = m.Skills, m.Plugins
+			m.StarterPersona, description = e.StarterPersona, e.Description
+			raw, err := m.marshal()
+			if err != nil {
+				return err
+			}
+			manifest = string(raw)
+			if err := retitle(ctx, tx, id, name, f.Name); err != nil {
+				return err
+			}
 		}
 		files, err := versionFiles(ctx, tx, vid)
 		if err != nil {
@@ -394,6 +495,11 @@ func (s *Store) PublishVersion(ctx context.Context, profileID, id int64, author 
 		}
 		if err := withinQuota(ctx, tx, StarterSize([]byte(manifest), files)); err != nil {
 			return err
+		}
+		if author == "" {
+			if author, err = profileName(ctx, tx, profileID); err != nil {
+				return err
+			}
 		}
 		return insertVersion(ctx, tx, id, n+1, author, f, description, []byte(manifest), files)
 	})
@@ -425,23 +531,163 @@ func versionFiles(ctx context.Context, tx *txn, vid int64) (map[string][]byte, e
 	return files, nil
 }
 
-// RemoveTemplate deletes template id with its versions. Room personas made from it keep their
-// copy. ErrPreset for a shipped template.
-func (s *Store) RemoveTemplate(ctx context.Context, id int64) error {
-	return s.withTx(ctx, "remove template", func(tx *txn) error {
-		var preset sql.NullString
-		err := tx.QueryRowContext(ctx, `SELECT preset FROM persona_templates WHERE id = ?`, id).Scan(&preset)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
+// retitle names template id after its new version's persona name when it differs from the latest
+// version's, was: a title of its own, as a duplicate's "(copy)", stays until a rename (035-AC3).
+func retitle(ctx context.Context, tx *txn, id int64, was, name string) error {
+	if name == was {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE persona_templates SET title = ? WHERE id = ?`, name, id); err != nil {
+		return fmt.Errorf("template %d title: %w", id, err)
+	}
+	return nil
+}
+
+// profileName is profile id's display name, which signs what it saves.
+func profileName(ctx context.Context, tx *txn, id int64) (string, error) {
+	var name string
+	if err := tx.QueryRowContext(ctx, `SELECT `+profileNameSQL, id, id).Scan(&name); err != nil {
+		return "", fmt.Errorf("profile %d name: %w", id, err)
+	}
+	return name, nil
+}
+
+// templateOwner returns template id's section, owner (0 for a built-in) and latest version.
+func templateOwner(ctx context.Context, tx *txn, id int64) (section string, owner int64, n int, err error) {
+	err = tx.QueryRowContext(ctx, `SELECT section, COALESCE(profile_id, 0), (SELECT COALESCE(MAX(n), 0) FROM persona_template_versions WHERE template_id = t.id)
+		FROM persona_templates t WHERE id = ?`, id).Scan(&section, &owner, &n)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", 0, 0, ErrNotFound
+	}
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("template %d: %w", id, err)
+	}
+	return section, owner, n, nil
+}
+
+// freeTitle is title, a persona's name, or "<name> (copy)", then "<name> (copy) 2"…, when profileID
+// has a personal persona of that title (035-AC4).
+func freeTitle(ctx context.Context, tx *txn, profileID int64, title string) (string, error) {
+	for i := 0; ; i++ {
+		try := title
+		switch {
+		case i == 1:
+			try += " (copy)"
+		case i > 1:
+			try += " (copy) " + strconv.Itoa(i)
 		}
+		var taken bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM persona_templates WHERE profile_id = ? AND section = 'personal' AND title = ?)`,
+			profileID, try).Scan(&taken); err != nil {
+			return "", fmt.Errorf("template title: %w", err)
+		}
+		if !taken {
+			return try, nil
+		}
+	}
+}
+
+// DuplicateTemplate copies the latest version of template id, which profileID sees, with its
+// description, settings and frozen files, into a new personal template of profileID at version 1,
+// titled after its persona's name and linked to no room persona (035-AC4). The profile's limit and the storage quota refuse it with
+// ErrLimit (035-AC7). ErrForbidden without a profile, ErrNotFound.
+func (s *Store) DuplicateTemplate(ctx context.Context, profileID, id int64) (*Template, error) {
+	if profileID == 0 {
+		return nil, ErrForbidden
+	}
+	var dup int64
+	// One transaction: a delete between the reads and the copy cannot leave a copy without its files.
+	err := s.withTx(ctx, "duplicate template", func(tx *txn) error {
+		t, err := scanTemplate(tx.QueryRowContext(ctx, templateCols+`WHERE t.id = ? AND `+templateVisible, id, profileID))
 		if err != nil {
-			return fmt.Errorf("remove template %d: %w", id, err)
-		}
-		if preset.Valid {
-			return ErrPreset
-		}
-		if err := auditTx(ctx, tx, "", nil); err != nil {
 			return err
+		}
+		var vid int64
+		var manifest string
+		if err := tx.QueryRowContext(ctx, `SELECT id, manifest FROM persona_template_versions WHERE template_id = ? AND n = ?`, id, t.Version).
+			Scan(&vid, &manifest); err != nil {
+			return fmt.Errorf("duplicate template: %w", err)
+		}
+		files, err := versionFiles(ctx, tx, vid)
+		if err != nil {
+			return err
+		}
+		title, err := freeTitle(ctx, tx, profileID, t.Name)
+		if err != nil {
+			return err
+		}
+		if dup, err = newTemplate(ctx, tx, profileID, title, 0); err != nil {
+			return err
+		}
+		if err := withinQuota(ctx, tx, StarterSize([]byte(manifest), files)); err != nil {
+			return err
+		}
+		author, err := profileName(ctx, tx, profileID)
+		if err != nil {
+			return err
+		}
+		return insertVersion(ctx, tx, dup, 1, author, t.PersonaFields, t.Description, []byte(manifest), files)
+	})
+	if err != nil {
+		return nil, err
+	}
+	t, err := s.Template(ctx, dup)
+	if err != nil {
+		return nil, err
+	}
+	return t.forViewer(profileID), nil
+}
+
+// ShareTemplate moves personal template id of profileID to the instance library, or with share
+// false back to its personal one, audited (035-AC5). Rooms keep their copies; a viewer who no longer
+// sees it loses its update offer. ErrPreset for a built-in, ErrNotFound for one profileID does not
+// see, ErrForbidden for someone else's or one already there.
+func (s *Store) ShareTemplate(ctx context.Context, profileID, id int64, share bool) error {
+	from, to := SectionPersonal, SectionInstance
+	if !share {
+		from, to = to, from
+	}
+	return s.withTx(ctx, "share template", func(tx *txn) error {
+		section, owner, n, err := templateOwner(ctx, tx, id)
+		switch {
+		case err != nil:
+			return err
+		case section == SectionBuiltin:
+			return ErrPreset
+		case section == SectionPersonal && owner != profileID:
+			return ErrNotFound
+		case owner != profileID || section != from:
+			return ErrForbidden
+		}
+		if err := execOne(ctx, tx, `UPDATE persona_templates SET section = ? WHERE id = ?`, to, id); err != nil {
+			return err
+		}
+		return auditTx(ctx, tx, strconv.FormatInt(id, 10), map[string]any{"version": n})
+	})
+}
+
+// RemoveTemplate deletes template id with its versions and frozen files: its owner's, any section,
+// or with profileID 0 the admin's, of a shared one; a shared one's removal is audited (035-AC6,
+// 035-AC19). Room personas made from it keep their copy, unlinked. ErrPreset for a built-in,
+// ErrNotFound for one profileID does not see (the admin sees no personal one), ErrForbidden for
+// someone else's shared one.
+func (s *Store) RemoveTemplate(ctx context.Context, profileID, id int64) error {
+	return s.withTx(ctx, "remove template", func(tx *txn) error {
+		section, owner, n, err := templateOwner(ctx, tx, id)
+		switch {
+		case err != nil:
+			return err
+		case section == SectionBuiltin:
+			return ErrPreset
+		case section == SectionPersonal && owner != profileID:
+			return ErrNotFound
+		case profileID != 0 && owner != profileID:
+			return ErrForbidden
+		}
+		if section == SectionInstance {
+			if err := auditTx(ctx, tx, strconv.FormatInt(id, 10), map[string]any{"version": n}); err != nil {
+				return err
+			}
 		}
 		return execOne(ctx, tx, `DELETE FROM persona_templates WHERE id = ?`, id)
 	})
@@ -1107,12 +1353,12 @@ func (s *Store) SavePersonaToLibrary(ctx context.Context, roomID string, persona
 		}
 		var id int64
 		var n int
-		var description string
+		var name, description string
 		// The linked template when it is the saver's, else the one the saver made from this persona:
 		// saves by other profiles in between never give the saver a second one (035-AC13).
-		err = tx.QueryRowContext(ctx, `SELECT t.id, v.n, v.description FROM persona_templates t JOIN persona_template_versions v ON v.template_id = t.id
+		err = tx.QueryRowContext(ctx, `SELECT t.id, v.n, v.name, v.description FROM persona_templates t JOIN persona_template_versions v ON v.template_id = t.id
 			WHERE t.profile_id = ? AND (t.id = ? OR t.source_persona_id = ?) ORDER BY t.id = ? DESC, t.id, v.n DESC LIMIT 1`,
-			profileID, p.TemplateID, p.ID, p.TemplateID).Scan(&id, &n, &description)
+			profileID, p.TemplateID, p.ID, p.TemplateID).Scan(&id, &n, &name, &description)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			if id, err = newTemplate(ctx, tx, profileID, p.Name, p.ID); err != nil {
@@ -1132,6 +1378,9 @@ func (s *Store) SavePersonaToLibrary(ctx context.Context, roomID string, persona
 			return fmt.Errorf("save persona to library: %w", err)
 		}
 		if err := insertVersion(ctx, tx, id, n+1, author, p.PersonaFields, description, raw, files); err != nil {
+			return err
+		}
+		if err := retitle(ctx, tx, id, name, p.Name); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE room_personas SET template_id = ?, template_version = ? WHERE id = ?`, id, n+1, p.ID); err != nil {

@@ -46,9 +46,9 @@ func (s *Server) starterError(w http.ResponseWriter, event string, err error) bo
 	return true
 }
 
-// profileAudit returns r's context carrying the entry of a profile's action on starter id.
-func (s *Server) profileAudit(r *http.Request, p *store.Profile, action string, id int64) context.Context {
-	e := store.AuditEntry{At: s.now(), Actor: ActorProfile + p.UUID, Action: action, TargetKind: store.TargetStarter, TargetID: strconv.FormatInt(id, 10)}
+// profileAudit returns r's context carrying the entry of a profile's action on library entry id of kind.
+func (s *Server) profileAudit(r *http.Request, p *store.Profile, action, kind string, id int64) context.Context {
+	e := store.AuditEntry{At: s.now(), Actor: ActorProfile + p.UUID, Action: action, TargetKind: kind, TargetID: strconv.FormatInt(id, 10)}
 	return store.WithAudit(r.Context(), e, nil)
 }
 
@@ -117,7 +117,7 @@ func (s *Server) publishStarter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := starterID(r)
-	if s.starterError(w, "publish_starter_failed", s.bus.Store.PublishStarter(s.profileAudit(r, p, ActionStarterPublish, id), p.ID, id)) {
+	if s.starterError(w, "publish_starter_failed", s.bus.Store.PublishStarter(s.profileAudit(r, p, ActionStarterPublish, store.TargetStarter, id), p.ID, id)) {
 		return
 	}
 	s.log.Info("starter_published", zap.Int64("starter", id), zap.Int64("profile", p.ID))
@@ -131,7 +131,7 @@ func (s *Server) deleteMyStarter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := starterID(r)
-	if s.starterError(w, "delete_starter_failed", s.bus.Store.DeleteStarter(s.profileAudit(r, p, ActionStarterDelete, id), p.ID, id)) {
+	if s.starterError(w, "delete_starter_failed", s.bus.Store.DeleteStarter(s.profileAudit(r, p, ActionStarterDelete, store.TargetStarter, id), p.ID, id)) {
 		return
 	}
 	s.log.Info("starter_deleted", zap.Int64("starter", id), zap.Int64("profile", p.ID))

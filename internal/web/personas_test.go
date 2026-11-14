@@ -151,11 +151,22 @@ func TestPersonaAPI(t *testing.T) {
 		"/api/templates/" + strconv.FormatInt(ts[0].ID, 10): http.StatusConflict,
 		"/api/templates/999": http.StatusNotFound,
 		"/api/templates/x":   http.StatusNotFound,
-		"/api/templates/" + strconv.FormatInt(tp.ID, 10): http.StatusNoContent,
+		"/api/templates/" + strconv.FormatInt(tp.ID, 10): http.StatusNotFound,
 	} {
 		if code, b := e.do(t, "DELETE", path, e.admin, nil); code != want {
 			t.Errorf("DELETE %s: %d %s, want %d", path, code, b, want)
 		}
+	}
+	// 035-AC19: a profile's own is not the admin's to remove until shared.
+	ap, err := e.st.ParticipantByToken(t.Context(), HashToken(alice))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.st.ShareTemplate(t.Context(), ap.ProfileID, tp.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if code, b := e.do(t, "DELETE", "/api/templates/"+strconv.FormatInt(tp.ID, 10), e.admin, nil); code != http.StatusNoContent {
+		t.Fatalf("admin removes the shared one: %d %s", code, b)
 	}
 	if code, _ := e.do(t, "DELETE", r.path(fmt.Sprintf("/personas/%d", cp.ID)), bob, nil); code != http.StatusNoContent {
 		t.Fatalf("remove: %d", code)
