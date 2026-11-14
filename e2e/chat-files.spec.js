@@ -47,7 +47,9 @@ for (const [size, viewport] of Object.entries(sizes)) {
     await bob.setViewportSize(viewport);
     await expect(alice.locator('#messages')).toContainText('Bob joined');
 
-    // 029-AC1: the paperclip names itself and opens a picker of several files.
+    // 029-AC1: the paperclip names itself and opens a picker of several files; a phone keeps it
+    // under the composer's "+" (037-AC5).
+    if (phone) await alice.getByRole('button', { name: 'Attach and more' }).click();
     const attach = alice.getByRole('button', { name: 'Attach files' });
     await expect(attach).toBeVisible();
     const box = await attach.boundingBox();

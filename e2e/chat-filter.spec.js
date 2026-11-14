@@ -206,6 +206,9 @@ test('room message text is 15 px on a desktop, 16 px on a phone', async ({ brows
   expect([await size(body), await size(alice.locator('#body'))]).toEqual(['16px', '16px']);
   await alice.setViewportSize({ width: 375, height: 700 });
   expect([await size(body), await size(alice.locator('#body')), await size(alice.locator('.msg.text .meta').first())]).toEqual(['16px', '16px', '14px']);
+  // A phone shows the filter once the room has voice (037-AC3).
+  await live(alice, line(1e9, 'voice', 'spoken'));
+  await expect(alice.locator('#chat-filter')).toBeVisible();
   expect(await alice.locator('#chat-filter button').evaluateAll((bs) => bs.filter((b) => b.offsetWidth < 44 || b.offsetHeight < 44).length)).toBe(0);
 });
 

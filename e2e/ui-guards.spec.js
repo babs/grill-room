@@ -718,6 +718,51 @@ test("a line's actions button names the line", async ({ browser, request }) => {
   expect(await name(1000204)).toBe('Line actions: Bold see the page');
 });
 
+// 037-AC4 in every browser: a phone's box rests one line high, grows with its text up to 5 lines,
+// then scrolls, and is one line again once sent; where CSS has no field-sizing, room.js sizes it.
+for (const fallback of [false, true]) {
+  test(`the phone box grows to 5 lines${fallback ? ', without field-sizing' : ''}`, async ({ browser, request }) => {
+    const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+    if (fallback) {
+      await alice.addInitScript(() => {
+        const supports = CSS.supports.bind(CSS);
+        CSS.supports = (...a) => (a[0] === 'field-sizing' ? false : supports(...a));
+      });
+      await alice.reload();
+    }
+    await alice.setViewportSize(phone);
+    const body = alice.locator('#body');
+    const height = () => body.evaluate((t) => t.getBoundingClientRect().height);
+    const lines = (n) => Array.from({ length: n }, (_, i) => 'line ' + i).join('\n');
+    await expect.poll(height, 'one line').toBeLessThanOrEqual(44.5);
+    const rest = await height();
+    await body.fill(lines(4));
+    const four = await height();
+    expect(four).toBeGreaterThan(rest);
+    await body.fill(lines(5));
+    const five = await height();
+    expect(five).toBeGreaterThan(four);
+    expect(await body.evaluate((t) => t.scrollHeight <= t.clientHeight), '5 lines without a scroll').toBe(true);
+    await body.fill(lines(9));
+    expect(await height(), 'capped at 5 lines').toBeCloseTo(five, 0);
+    expect(await body.evaluate((t) => t.scrollHeight > t.clientHeight), 'then scrolls').toBe(true);
+    if (fallback) expect(await body.evaluate((t) => t.style.height), 'sized by room.js').not.toBe('');
+    await body.press('Enter');
+    await expect(alice.locator('#messages')).toContainText('line 8');
+    await expect(body).toHaveValue('');
+    await expect.poll(height, 'one line again').toBeCloseTo(rest, 0);
+    // Wider, the height dragged from the resize handle is the person's: typing keeps it.
+    if (fallback) {
+      await alice.setViewportSize(desktop);
+      // Leaving the phone width undoes the height room.js set.
+      await expect.poll(() => body.evaluate((t) => t.style.height)).toBe('');
+      await body.evaluate((t) => { t.style.height = '200px'; });
+      await body.pressSequentially('kept');
+      expect(await height(), 'resized height kept').toBeCloseTo(200, 0);
+    }
+  });
+}
+
 // A8: until the stream sends the history, the chat says it is loading, not that it is empty, and the
 // avatar waits hidden for a name; the history then shows.
 test('the chat says Loading until the history comes', async ({ browser, request }) => {
@@ -741,6 +786,8 @@ test('the chat says Loading until the history comes', async ({ browser, request 
   release();
   await expect(alice.locator('#messages')).toContainText('Bob joined');
   await expect(alice.locator('#filter-empty')).toBeHidden();
+  // A phone shows the filter once the room has voice (037-AC3).
+  await alice.evaluate(() => markVoiced());
   await alice.locator('#chat-filter [data-filter=voice]').click();
   await expect(alice.locator('#filter-empty')).toHaveText('No voice messages yet.');
 });

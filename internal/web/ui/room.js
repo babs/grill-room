@@ -14,7 +14,8 @@ if (docsMode) document.body.classList.add('docs-window');
 // never takes the call from the room page, LiveKit allowing one connection per participant.
 const chatMode = location.pathname.split('/')[3] === 'chat';
 if (chatMode) document.body.classList.add('chat-window');
-const phone = () => matchMedia('(max-width: 40rem)').matches;
+const narrow = matchMedia('(max-width: 40rem)');
+const phone = () => narrow.matches;
 const messages = $('messages');
 // Voice lines move here while the Transcription pane shows (020-AC8): a line is in one list or
 // the other, so lookups go through lineSel.
@@ -26,6 +27,8 @@ const lineOf = (id) => document.querySelector(lineSel + '[data-id="' + id + '"]'
 const lineKind = (li) => li.classList[1];
 const sendForm = $('send');
 const bodyInput = $('body');
+// fitBody set the box's height; declared here, as text sizes apply before fitBody's own lines run.
+let bodySized = false;
 let events;
 // lastID is the newest message shown: a reopened stream resumes after it. editSeq is the last
 // edit or delete applied: the stream replays the ones past it.
@@ -396,8 +399,25 @@ function loaded() {
 const filterCounts = { written: 0, voice: 0 };
 let chatFilter = ['all', 'written', 'voice'].includes(localStorage.getItem(filterKey)) ? localStorage.getItem(filterKey) : 'written';
 let viewFilter = '';
+// Until a voice line comes or someone is in the audio, a phone's chat shows every line, no filter (037-AC3).
+let voiced = false;
+function markVoiced() {
+  if (voiced) return;
+  voiced = true;
+  document.body.classList.add('has-voice');
+  showHeld();
+}
+narrow.addEventListener('change', () => showHeld());
+// showHeld shows the filter with a line holding focus kept in view: All for the visit where the
+// filter would hide it (docs/design.md, Chat filter).
+function showHeld(held = document.activeElement?.closest?.(lineSel)) {
+  if (held && filterHides(lineKind(held))) setFilter('all');
+  showFilter();
+  held?.scrollIntoView({ block: 'nearest' });
+}
 // While the pane shows, the chat holds no voice line: nothing to filter (020-AC8).
-const shownFilter = () => (paneShows() ? 'all' : viewFilter || chatFilter);
+// Before the history comes, the stored filter says Loading (A8).
+const shownFilter = () => (paneShows() || (phone() && replayed && !voiced) ? 'all' : viewFilter || chatFilter);
 const filterKind = (kind) => (kind === 'voice' ? 'voice' : 'written');
 const filterHides = (kind) => shownFilter() !== 'all' && filterKind(kind) !== shownFilter();
 
@@ -474,10 +494,8 @@ function placeVoice() {
     }
   }
   if (held) setPinned(held.parentElement, false);
-  if (held && filterHides(lineKind(held))) setFilter('all');
   if (focused instanceof HTMLElement && focused !== document.activeElement && focused.isConnected) focused.focus({ preventScroll: true });
-  showFilter();
-  held?.scrollIntoView({ block: 'nearest' });
+  showHeld(held);
   for (const l of [messages, voiceLines]) if (l !== held?.parentElement) stick(l);
 }
 
@@ -515,6 +533,7 @@ if ('serviceWorker' in navigator) {
 
 function addMessage(m) {
   countUnread(m);
+  if (m.kind === 'voice') markVoiced();
   // A live line of a hidden kind counts on its segment; history and your own lines do not (020-AC6).
   if (filterHides(m.kind) && isLive(m) && String(m.participant_id) !== myID) {
     filterCounts[filterKind(m.kind)]++;
@@ -907,7 +926,8 @@ $('agent-warn').addEventListener('click', () => grillTip.show($('agent-warn')));
 function fitPersonas() {
   const bar = $('persona-buttons');
   bar.classList.remove('compact');
-  bar.classList.toggle('compact', bar.scrollWidth > bar.clientWidth);
+  // A phone's pills are always compact (037-AC6).
+  bar.classList.toggle('compact', phone() || bar.scrollWidth > bar.clientWidth);
   showEdges();
 }
 
@@ -1475,6 +1495,7 @@ function applyTextSizes(sizes) {
   textSizes = sizes && typeof sizes === 'object' ? sizes : {};
   for (const area of ['chat', 'transcript']) document.body.style.setProperty(`--${area}-scale`, String(textScales[textSizes[area]] || 1));
   for (const r of $('text-size').querySelectorAll('input')) r.checked = (textSizes[r.name] || 'm') === r.value;
+  fitBody();
 }
 function keepTextSizes(sizes) {
   applyTextSizes(sizes);
@@ -2548,6 +2569,7 @@ function connect() {
   });
   es.addEventListener('presence', (e) => {
     presence = new Map(JSON.parse(e.data).people.map((p) => [String(p.id), p]));
+    if ([...presence.values()].some((p) => p.audio)) markVoiced();
     // Until the stream opens the stay, a raise has no stay to count from and is lost.
     $('hand-raise').disabled = false;
     if (!handBusy) handWant = null;
@@ -5650,6 +5672,43 @@ function renderPending() {
 
 $('attach-input').accept = $('upload-input').accept;
 $('attach-open').addEventListener('click', () => $('attach-input').click());
+// A phone keeps the composer's tools under "+" (037-AC5): each item presses its button and follows
+// its state.
+const plusItems = [['plus-attach', 'attach-open'], ['plus-capture', 'capture-open'], ['plus-hand', 'hand-raise']];
+function syncPlus() {
+  for (const [item, tool] of plusItems) Object.assign($(item), { hidden: $(tool).hidden, disabled: $(tool).disabled });
+  $('plus-hand').querySelector('span').textContent = $('hand-raise').getAttribute('aria-label');
+}
+const plusWatch = new MutationObserver(syncPlus);
+for (const [item, tool] of plusItems) {
+  $(item).addEventListener('click', () => $(tool).click());
+  plusWatch.observe($(tool), { attributes: true, attributeFilter: ['hidden', 'disabled', 'aria-label'] });
+}
+syncPlus();
+$('plus-menu').addEventListener('toggle', (e) => { if (e.newState === 'open') menuItems($('plus-menu'))[0]?.focus(); });
+arrowKeys($('plus-menu'));
+// The box sizes to its placeholder too: a phone's shorter words keep it one line (037-AC4).
+const bodyWords = bodyInput.placeholder;
+const placeBody = () => { bodyInput.placeholder = phone() ? 'Message · @ to mention' : bodyWords; };
+placeBody();
+narrow.addEventListener('change', placeBody);
+// Without field-sizing a phone's box follows its text from here, the CSS capping it at 5 lines
+// (037-AC4): from the smallest box its CSS allows, the height its text scrolls to. Wider, the
+// height is the person's, from the resize handle: only one set here is undone (bodySized).
+function fitBody() {
+  if (CSS.supports('field-sizing', 'content')) return;
+  if (!phone()) {
+    if (bodySized) bodyInput.style.height = '';
+    bodySized = false;
+    return;
+  }
+  bodyInput.style.height = '0';
+  bodyInput.style.height = bodyInput.scrollHeight + bodyInput.offsetHeight - bodyInput.clientHeight + 'px';
+  bodySized = true;
+}
+fitBody();
+bodyInput.addEventListener('input', fitBody);
+narrow.addEventListener('change', fitBody);
 $('attach-input').addEventListener('change', (e) => {
   addPending(e.target.files);
   e.target.value = '';
@@ -5793,7 +5852,10 @@ async function send() {
   // What you type shows beside what is said, for this visit (020-AC6).
   if (shownFilter() === 'voice') setFilter('all');
   // Only the line sent leaves the box: the next one may already be typed in it.
-  if (bodyInput.value === typed) bodyInput.value = '';
+  if (bodyInput.value === typed) {
+    bodyInput.value = '';
+    fitBody();
+  }
   nudgeRecovery().catch(console.error);
   offerPush();
   if (m.mention_notices) {
@@ -5873,6 +5935,8 @@ function mentionAutocomplete(input, list) {
     input.focus();
     hits = [];
     render();
+    // A write from script fires no input: the phone box's height follows it (037-AC4).
+    input.dispatchEvent(new Event('input'));
   }
 
   input.setAttribute('aria-autocomplete', 'list');

@@ -73,7 +73,8 @@ test('quick clicks on the hand button end where the server is', async ({ browser
   await expect(b).toHaveAttribute('aria-pressed', 'false');
 });
 
-// 031-AC3 031-AC4 at 390 px: the button is 44 × 44 by the composer, and the People tab counts hands.
+// 031-AC3 031-AC4 at 390 px: the hand is raised from the composer's "+" and, raised, shows 44 × 44 by
+// the composer to be lowered in one tap (037-AC5); the People tab counts hands.
 test('a phone raises a hand by the composer and its People tab counts hands', async ({ browser, request }) => {
   const { room } = await roomWith(browser, request, ['Alice']);
   const inv = await (await request.post(`/api/rooms/${room.id}/invites`, { headers: admin })).json();
@@ -83,15 +84,17 @@ test('a phone raises a hand by the composer and its People tab counts hands', as
   await page.getByRole('button', { name: 'Join the room' }).click();
   await expect(page.locator('#me')).toHaveText('Dan');
 
-  const b = page.getByRole('button', { name: 'Raise my hand' });
+  await expect(page.locator('#tab-people-hands')).toBeHidden();
+  await page.getByRole('button', { name: 'Attach and more' }).tap();
+  await page.getByRole('button', { name: 'Raise my hand' }).tap();
+  const b = page.getByRole('button', { name: 'Lower my hand' });
   const box = await b.boundingBox();
   expect([Math.round(box.width), Math.round(box.height)]).toEqual([44, 44]);
   expect(await b.evaluate((el) => el.closest('#send') !== null)).toBe(true);
-  await expect(page.locator('#tab-people-hands')).toBeHidden();
-  await b.click();
   await expect(page.locator('#tab-people-hands')).toHaveText('1');
   await expect(page.locator('#tab-people-hands')).toHaveAttribute('aria-label', '1 hand raised');
   await expect(page.locator('#tab-people-hands')).toBeVisible();
-  await page.getByRole('button', { name: 'Lower my hand' }).click();
+  await b.tap();
   await expect(page.locator('#tab-people-hands')).toBeHidden();
+  await expect(page.locator('#hand-raise')).toBeHidden();
 });

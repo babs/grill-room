@@ -52,6 +52,8 @@ const stubCapture = async (page, mode) => {
 
 const pending = (page) => page.getByRole('list', { name: 'Files to send' }).locator('li');
 const capture = (page) => page.getByRole('button', { name: 'Capture screen' });
+// plus opens the phone composer's tools (037-AC5).
+const plus = (page) => page.getByRole('button', { name: 'Attach and more' });
 const now = (page) => page.evaluate(() => Date.now());
 // stampOf reads a capture name's local time, in the page's own time zone.
 const stampOf = (page, name) => page.evaluate((n) => {
@@ -112,14 +114,18 @@ test('a capture past the limit is refused', async ({ browser, request }) => {
   expect(await alice.evaluate(() => window.shared.every((t) => t.readyState === 'ended'))).toBe(true);
 });
 
-// 029-AC15: a narrow window with getDisplayMedia keeps a 44 px target.
+// 029-AC15: a narrow window with getDisplayMedia keeps a 44 px target, under the composer's "+"
+// (037-AC5), and captures from there.
 test('the capture button at 390 px', async ({ browser, request }) => {
   const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
   await alice.setViewportSize({ width: 390, height: 844 });
   await stubCapture(alice, 'ok');
+  await plus(alice).click();
   const box = await capture(alice).boundingBox();
   expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(44);
   expect(await smallTargets(alice), 'composer').toEqual([]);
+  await capture(alice).click();
+  await expect(pending(alice)).toHaveCount(1);
 });
 
 // 029-AC16: a touch phone that defines getDisplayMedia (Android refuses it) gets no button either.
@@ -130,6 +136,7 @@ test('no capture button on a touch phone', async ({ browser, browserName, reques
   await phone.goto(alice.url());
   await stubCapture(phone, 'ok');
   expect(await phone.evaluate(() => typeof navigator.mediaDevices.getDisplayMedia)).toBe('function');
+  await plus(phone).click();
   await expect(phone.getByRole('button', { name: 'Attach files' })).toBeVisible();
   await expect(capture(phone)).toHaveCount(0);
 });
@@ -139,6 +146,7 @@ test('no capture button without getDisplayMedia', async ({ browser, request }) =
   const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
   await alice.setViewportSize({ width: 390, height: 844 });
   await stubCapture(alice, 'none');
+  await plus(alice).click();
   await expect(alice.getByRole('button', { name: 'Attach files' })).toBeVisible();
   await expect(capture(alice)).toHaveCount(0);
   await expect(alice.locator('#capture-open')).toBeHidden();
