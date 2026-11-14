@@ -561,6 +561,57 @@ func TestUnlockedRetryBounds(t *testing.T) {
 	}
 }
 
+// A room delete whose cascade deadlocks with a presence write, as a heartbeat's insert does when it
+// needs the room row, runs again and deletes the room.
+func TestDeleteRoomRetriesDeadlock(t *testing.T) {
+	s := openTest(t)
+	ctx := t.Context()
+	p := seed(t, s, "a")
+	if _, err := s.PresenceBeat(ctx, "a", p.ID, "t1", TabState{}, false, 4, presenceTimes(1_000)); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := s.db.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Rollback() //nolint:errcheck // no-op after Commit
+	if _, err := raw.ExecContext(ctx, `UPDATE presence SET beat_at_ms = 2000 WHERE room_id = $1`, "a"); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := s.DeleteRoom(ctx, "a"); done <- err }()
+	// DeleteRoom must wait first: the first waiter detects the deadlock and is the victim.
+	for {
+		var waiting bool
+		if err := s.db.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+			WHERE NOT l.granted AND a.datname = current_database() AND a.query LIKE 'DELETE FROM rooms%')`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("DeleteRoom returned %v without waiting for the presence row", err)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	// Margin before the raw tx waits too, so DeleteRoom's deadlock_timeout expires well before ours.
+	time.Sleep(200 * time.Millisecond)
+	if _, err := raw.ExecContext(ctx, `SELECT 1 FROM rooms WHERE id = $1 FOR KEY SHARE`, "a"); err != nil {
+		t.Fatalf("the raw transaction was the deadlock victim, the retry is untested: %v", err)
+	}
+	if err := raw.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("delete room: %v", err)
+	}
+	if _, err := s.Room(ctx, "a"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("room after delete: %v, want ErrNotFound", err)
+	}
+}
+
 // The sweep deletes expired presence past one batch, and keeps the live rows.
 func TestSweepPresenceBatches(t *testing.T) {
 	s := openTest(t)

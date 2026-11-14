@@ -663,20 +663,24 @@ func (s *Store) Rooms(ctx context.Context) ([]Room, error) {
 // DeleteRoom purges a room and, through ON DELETE CASCADE, every row that belongs to it. The rooms
 // it was linked with get a line, returned for the caller to notify (023-AC7).
 func (s *Store) DeleteRoom(ctx context.Context, id string) (linked []string, err error) {
-	err = s.withTx(ctx, "delete room", func(tx *txn) error {
-		links, others, err := roomLinksGone(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		var extra map[string]any
-		if len(links) > 0 {
-			extra = map[string]any{"links": links[:min(len(links), maxAuditLinks)], "links_count": len(links)}
-		}
-		if err := auditTx(ctx, tx, "", extra); err != nil {
-			return err
-		}
-		linked = others
-		return execOne(ctx, tx, `DELETE FROM rooms WHERE id = ?`, id)
+	// The cascade locks rows the unlocked writers (presence, hands) also lock, so PostgreSQL may abort it for a deadlock.
+	err = rerun(func() error {
+		linked = nil
+		return s.withTx(ctx, "delete room", func(tx *txn) error {
+			links, others, err := roomLinksGone(ctx, tx, id)
+			if err != nil {
+				return err
+			}
+			var extra map[string]any
+			if len(links) > 0 {
+				extra = map[string]any{"links": links[:min(len(links), maxAuditLinks)], "links_count": len(links)}
+			}
+			if err := auditTx(ctx, tx, "", extra); err != nil {
+				return err
+			}
+			linked = others
+			return execOne(ctx, tx, `DELETE FROM rooms WHERE id = ?`, id)
+		})
 	})
 	return linked, err
 }
