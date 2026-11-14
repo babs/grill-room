@@ -79,8 +79,8 @@ test('agent LED, button and rights', async ({ browser, request, baseURL }) => {
     await expect(led(bob)).toHaveAttribute('aria-label', 'Grill ready');
 
     const granted = (await personMenu(alice, 'Bob')).getByRole('button', { name: 'Can ask the AI', pressed: true });
-    // The on state shows, not only to assistive tech: a tick after the label.
-    expect(await granted.evaluate((el) => getComputedStyle(el, '::after').content)).toContain('✓');
+    // The on state shows, not only to assistive tech: a tick in the item's box.
+    expect(await granted.locator('.ico.toggle').evaluate((el) => getComputedStyle(el, '::before').content)).toContain('✓');
     await granted.click();
     await expect(press(bob)).toBeDisabled();
 
