@@ -98,7 +98,7 @@ function end(text) {
   $('upload-open').hidden = true;
   for (const el of document.querySelectorAll('.dropping')) el.classList.remove('dropping');
   document.body.classList.remove('drag-files');
-  for (const id of ['manage-open', 'invite-open', 'personas-open']) $(id).hidden = true;
+  for (const id of ['manage-open', 'invite-open', 'personas-open', 'links-open']) $(id).hidden = true;
   $('room-open').disabled = true;
   delete $('room-open').dataset.tip;
   for (const d of document.querySelectorAll('dialog[open]')) d.close();
@@ -156,6 +156,7 @@ async function loadRoom() {
   $('doc-delete').hidden = !meAdmin;
   renameSenders();
   renderBlocked();
+  renderProposals();
   renderApprovals();
   $('voice').hidden = !data.voice;
   // Another tab of theirs may have turned it: this one follows, its device transcription too
@@ -173,8 +174,47 @@ async function loadRoom() {
   // The room admin panel (admin/room-admin.js) renders from the same answer.
   window.grillRoom = data;
   window.dispatchEvent(new CustomEvent('grill:room', { detail: data }));
+  showLinks().catch(console.error);
   return true;
 }
+
+// showLinks names the rooms linked to this one in the room menu, once there is one (023-AC8), and
+// hands the list to Room settings › Links (admin/room-admin.js), which reloads through it.
+async function showLinks() {
+  let links;
+  try {
+    const res = await netFetch(api + '/links');
+    if (!res.ok) throw new Error(res.statusText);
+    links = await res.json();
+  } catch {
+    // null tells the Links tab the load failed, apart from undefined, not loaded yet.
+    window.grillLinks = null;
+    window.dispatchEvent(new CustomEvent('grill:links', { detail: null }));
+    return;
+  }
+  // One room linked both ways is one linked room.
+  const n = new Set(links.map((l) => (l.reader_room === roomID ? l.read_room : l.reader_room))).size;
+  $('links-count').textContent = String(n);
+  $('links-open').hidden = n === 0;
+  window.grillLinks = links;
+  window.dispatchEvent(new CustomEvent('grill:links', { detail: links }));
+}
+window.grillShowLinks = () => showLinks().catch(console.error);
+
+// readersNote is what the remove sheet adds when other rooms read this one: their access stays,
+// and the reading rooms the caller shares with p where p still sits (023-AC15). '' for none.
+async function readersNote(p) {
+  if (!(window.grillLinks || []).some((l) => l.read_room === roomID)) return '';
+  let links = [];
+  try {
+    const res = await netFetch(api + '/links?participant=' + p.id);
+    if (res.ok) links = await res.json();
+  } catch { /* the note's first sentence holds without the names */ }
+  const where = links.filter((l) => l.person_member).map((l) => l.reader_name);
+  return ' Rooms that read this one keep their access; removing someone here does not cut it.'
+    + (where.length ? ' ' + p.name + ' still sits in ' + where.join(', ') + '.' : '');
+}
+window.grillReadersNote = readersNote;
 
 // showMe draws the user menu's button: initials in a ring, and the name beside them when wide.
 function showMe() {
@@ -459,6 +499,64 @@ function blockedActions(m) {
   return box;
 }
 
+// proposalLines are the shown cards of related rooms a persona proposed, by id: their buttons
+// follow who the viewer is (023-AC17, 023-AC19).
+const proposalLines = new Map();
+// myRooms is the rooms the viewer's profile sits in, fetched once per room reload: a created
+// card's room links only for its members (023-AC18).
+let myRooms = null;
+
+// proposalCard dresses line li, whose text is body, as the card of proposal m.proposal: "Create…"
+// for a member with a profile, "Dismiss" for who started the turn and room admins while open.
+// retry is for a card rendered from a live update: a room just created may postdate the cached list.
+function proposalCard(li, body, m, retry = true) {
+  const p = m.proposal;
+  proposalLines.set(m.id, m);
+  li.classList.add('proposal', p.status);
+  if (p.status === 'created' && p.room && hasProfile) linkCreated(body, m, retry);
+  if (p.status !== 'open') return;
+  const box = document.createElement('span');
+  box.className = 'proposal-actions';
+  if (hasProfile) box.append(button('Create…', '', () => window.grillCreateProposal?.(m)), ' ');
+  if (meAdmin || participants.some((x) => x.self && x.id === p.trigger)) {
+    box.append(button('Dismiss', '', () => {
+      sendJSON('POST', api + '/proposals/' + p.id + '/dismiss').catch((err) => showNotice(err.message));
+    }));
+  }
+  if (box.childNodes.length) li.append(' ', box);
+}
+
+// linkCreated links a created card's line to its room once the viewer's rooms hold it. A room made
+// since the list was fetched sends for it again, once: the cards that miss share that one fetch.
+function linkCreated(body, m, retry) {
+  const tried = (myRooms ||= netFetch('/api/profile').then((r) => (r.ok ? r.json() : {}))
+    .then((d) => new Set((d.profile?.rooms || []).map((x) => x.room_id)), () => new Set()));
+  tried.then((rooms) => {
+    if (rooms.has(m.proposal.room)) {
+      body.replaceChildren(Object.assign(document.createElement('a'), { href: '/r/' + encodeURIComponent(m.proposal.room), textContent: m.body }));
+    } else if (retry) {
+      if (myRooms === tried) myRooms = null;
+      linkCreated(body, m, false);
+    }
+  });
+}
+
+// renderProposals redraws the open cards after the room reloaded: an appointment changes who dismisses.
+// The fresh list it fetches holds every room by then: no retry for a card the viewer is not in.
+let reloading = false;
+function renderProposals() {
+  myRooms = null;
+  reloading = true;
+  try {
+    for (const m of proposalLines.values()) {
+      const li = lineOf(m.id);
+      if (li) li.replaceWith(renderMessage(m));
+    }
+  } finally {
+    reloading = false;
+  }
+}
+
 // whoAllows names who may allow a blocked website, for a viewer who may not (014-AC9).
 function whoAllows() {
   const host = participants.find((p) => p.id === agent.host_participant_id);
@@ -543,6 +641,7 @@ function renderMessage(m) {
       const acts = blockedActions(m);
       if (acts) li.append(' ', acts);
     }
+    if (m.proposal) proposalCard(li, body, m, !reloading);
     return li;
   }
   const meta = document.createElement('div');
@@ -3800,7 +3899,7 @@ async function removePerson(p) {
   block.id = 'remove-block';
   block.disabled = !!p.no_profile;
   box.append(block, p.no_profile ? ' Block from rejoining: no profile, so no block' : ' Block from rejoining');
-  if (!(await grillConfirm('Remove ' + p.name + ' from the room?', 'Their messages stay.', 'Remove', false, box))) return;
+  if (!(await grillConfirm('Remove ' + p.name + ' from the room?', 'Their messages stay.' + (await readersNote(p)), 'Remove', false, box))) return;
   sendJSON('DELETE', api + '/participants/' + p.id, { block: block.checked }).catch((err) => toast(err.message));
 }
 

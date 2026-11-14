@@ -120,6 +120,8 @@ type Server struct {
 	// a lockTurns, its wait behind the guard included: the store's lock timeout, shorter in tests.
 	turnWaits roomGuards
 	turnWait  time.Duration
+	// blobSums keeps the hashes of stored workspace blobs for manifests.
+	blobSums blobSums
 	// fallbacks counts full workspace fetches by daemons with a cache, by turn.FallbackReasons.
 	fallbacks map[string]*atomic.Int64
 	// conflicts counts results rejected on a document conflict, by ConflictOutcomes (003-AC21).
@@ -373,6 +375,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/join", s.join)
 	mux.Handle("GET /api/rooms/{room}", s.participant(s.getRoom))
 	mux.Handle("GET /api/rooms/{room}/overview", s.participant(s.roomOverview))
+	mux.Handle("GET /api/rooms/{room}/links", s.participant(s.listRoomLinks))
+	mux.Handle("POST /api/rooms/{room}/links", s.participant(s.createRoomLinks))
+	mux.Handle("DELETE /api/rooms/{room}/links/{link}", s.participant(s.deleteRoomLink))
+	mux.Handle("POST /api/rooms/{room}/proposals/{proposal}/create", s.participant(s.createFromProposal))
+	mux.Handle("POST /api/rooms/{room}/proposals/{proposal}/dismiss", s.participant(s.dismissProposal))
 	mux.Handle("PUT /api/rooms/{room}/admins/{participant}", s.memberOrAdmin(s.setRoomAdmin))
 	mux.Handle("DELETE /api/rooms/{room}/admins/{participant}", s.memberOrAdmin(s.setRoomAdmin))
 	mux.Handle("POST /api/rooms/{room}/messages", s.participant(s.postMessage))
@@ -792,7 +799,7 @@ func (s *Server) deleteRoom(w http.ResponseWriter, r *http.Request, sess *sessio
 		return
 	}
 	room := r.PathValue("room")
-	err := s.bus.Store.DeleteRoom(s.roomAuditing(r, sess, ActionRoomDelete, room, nil), room)
+	linked, err := s.bus.Store.DeleteRoom(s.roomAuditing(r, sess, ActionRoomDelete, room, nil), room)
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "no such room")
 		return
@@ -801,7 +808,9 @@ func (s *Server) deleteRoom(w http.ResponseWriter, r *http.Request, sess *sessio
 		s.serverError(w, "delete_room_failed", err)
 		return
 	}
-	s.bus.Notify(room)
+	for _, id := range append(linked, room) {
+		s.bus.Notify(id)
+	}
 	s.closeVoice(room)
 	s.people.forget(room)
 	s.log.Info("room_deleted", zap.String("room", room), zap.Bool("by_room_admin", sess != nil))
@@ -1200,6 +1209,10 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request, sess session) {
 		s.serverError(w, "get_room_failed", err)
 		return
 	}
+	if err := s.markProposedIn(r.Context(), room.ProposedIn, sess); err != nil {
+		s.serverError(w, "get_room_failed", err)
+		return
+	}
 	writeJSON(w, http.StatusOK, roomResp{Room: room, Me: sess.p, Participants: ps, Daemons: s.liveDaemons(room.ID), Voice: s.opts.Voice != nil, TTS: s.tts != nil,
 		Profile: sess.p.ProfileID != 0, Version: s.opts.Version, Departed: departed, Now: s.now(), Upload: s.uploadRules()})
 }
@@ -1566,6 +1579,15 @@ func podStopping(r *http.Request) <-chan struct{} {
 		return stop.Done()
 	}
 	return nil
+}
+
+// podContext is the request's pod context, for work that outlives the request but must end with
+// the pod; outside Serve, the request's own without its cancel.
+func podContext(r *http.Request) context.Context {
+	if stop, ok := r.Context().Value(stopKey{}).(context.Context); ok {
+		return stop
+	}
+	return context.WithoutCancel(r.Context())
 }
 
 // origin returns the scheme://host of a ws(s):// URL, as http(s):// when asHTTP is set.

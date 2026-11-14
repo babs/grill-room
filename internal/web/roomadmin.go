@@ -204,6 +204,10 @@ func (s *Server) roomOverview(w http.ResponseWriter, r *http.Request, sess sessi
 		s.serverError(w, "room_overview_failed", err)
 		return
 	}
+	if err := s.markProposedIn(r.Context(), o.ProposedIn, sess); err != nil {
+		s.serverError(w, "room_overview_failed", err)
+		return
+	}
 	v := roomOverview{RoomOverview: *o, Used: o.Volume.Counted()}
 	v.HostOnline = o.HostParticipantID != 0 && s.onlineHosts()[o.ID][o.HostParticipantID]
 	writeJSON(w, http.StatusOK, v)

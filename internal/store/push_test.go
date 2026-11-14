@@ -41,7 +41,7 @@ func TestPushSubscriptions(t *testing.T) {
 	if got, _ := s.PushSubscriptions(ctx, "r"); len(got) != 0 {
 		t.Fatalf("a revoked participant keeps %d", len(got))
 	}
-	if err := s.DeleteRoom(ctx, "r"); err != nil {
+	if _, err := s.DeleteRoom(ctx, "r"); err != nil {
 		t.Fatal(err)
 	}
 	var n int

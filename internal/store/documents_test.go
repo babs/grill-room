@@ -277,7 +277,7 @@ func TestMessageDocumentsFollowChanges(t *testing.T) {
 	if docs, err := s.Documents(ctx, "a"); err != nil || !slices.ContainsFunc(docs, func(d Document) bool { return d.ID == want[0].ID }) {
 		t.Fatalf("the renamed document left the room: %+v, %v", docs, err)
 	}
-	if err := s.DeleteRoom(ctx, "a"); err != nil {
+	if _, err := s.DeleteRoom(ctx, "a"); err != nil {
 		t.Fatal(err)
 	}
 	if n := countRows(t, s, "message_documents"); n != 0 {

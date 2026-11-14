@@ -35,13 +35,17 @@ func testDSN(t *testing.T) string {
 	})
 }
 
-// failInserts makes every INSERT into table fail with msg until the returned func runs.
-func failInserts(t *testing.T, s *Store, table, msg string) (restore func()) {
+// failOn makes every event ("INSERT", "UPDATE") on table's rows matching when, a trigger WHEN
+// condition or "" for all, fail with msg until the returned func runs.
+func failOn(t *testing.T, s *Store, event, table, when, msg string) (restore func()) {
 	t.Helper()
 	ctx := context.Background()
 	fn := "fail_" + table
+	if when != "" {
+		when = "WHEN (" + when + ")"
+	}
 	if _, err := s.db.ExecContext(ctx, `CREATE FUNCTION `+fn+`() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION '`+msg+`'; END $$;
-		CREATE TRIGGER fail BEFORE INSERT ON `+table+` FOR EACH ROW EXECUTE FUNCTION `+fn+`()`); err != nil {
+		CREATE TRIGGER fail BEFORE `+event+` ON `+table+` FOR EACH ROW `+when+` EXECUTE FUNCTION `+fn+`()`); err != nil {
 		t.Fatal(err)
 	}
 	return func() {
@@ -380,7 +384,7 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 		if err := s.StartTurn(ctx, rejected, false); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.PinBaseRevisions(ctx, room, rejected.ID); err != nil {
+		if _, _, err := s.PinBaseRevisions(ctx, room, rejected.ID); err != nil {
 			t.Fatal(err)
 		}
 		if _, rerun, err := s.RejectTurn(ctx, room, rejected.ID, dm.ID, "synthesis.md"); err != nil || !rerun {
@@ -433,7 +437,8 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 			{`INSERT INTO daemon_connections(id, daemon_id, room_id, pod, connected_at_ms, expires_at_ms) VALUES(?, ?, ?, 'p', 0, 1)`, []any{room, dm.ID, room}},
 			{`INSERT INTO daemon_status(daemon_id) VALUES(?)`, []any{dm.ID}},
 			{`INSERT INTO presence(room_id, participant_id, tab, expires_at_ms) VALUES(?, ?, '', 1)`, []any{room, p.ID}},
-			{`INSERT INTO hands(room_id, participant_id, raised_at_ms) VALUES(?, ?, 1)`, []any{room, p.ID}}, // 031-AC1
+			{`INSERT INTO hands(room_id, participant_id, raised_at_ms) VALUES(?, ?, 1)`, []any{room, p.ID}},                                   // 031-AC1
+			{`INSERT INTO room_proposals(room_id, turn_id, name, brief, created_at) VALUES(?, ?, 'Legal', '', '')`, []any{room, rejected.ID}}, // 023-AC16
 			{`INSERT INTO pairings(id, room_id, code, secret_hash, expires_at_ms) VALUES(?, ?, '', '', 1)`, []any{room, room}},
 			{`INSERT INTO tts_lines(room_id, persona_id, persona, voice, rate, text, quiet_ms, resume_s, queue_s, queued_at_ms)
 				VALUES(?, 0, '', '', 1, '', 0, 0, 0, 0)`, []any{room}},
@@ -459,7 +464,7 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 			t.Fatalf("seed wrote no %s", tb)
 		}
 	}
-	if err := s.DeleteRoom(ctx, "a"); err != nil {
+	if _, err := s.DeleteRoom(ctx, "a"); err != nil {
 		t.Fatal(err)
 	}
 	for _, tb := range indirect {
@@ -477,7 +482,7 @@ func TestDeleteRoomPurgesEverything(t *testing.T) {
 			t.Errorf("%s lost the other room's rows", table)
 		}
 	}
-	if err := s.DeleteRoom(ctx, "a"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.DeleteRoom(ctx, "a"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("second delete: got %v, want ErrNotFound", err)
 	}
 	for room, want := range map[string]int{"a": 0, "b": 1} {

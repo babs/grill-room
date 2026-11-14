@@ -626,6 +626,9 @@ body.room :is(.msg:not(.system) .body, #send textarea) { font-size: calc(var(--f
 .msg.system { color: var(--text-muted); font-size: var(--fs-sm); font-style: italic; }
 .msg.system.blocked .blocked-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); font-style: normal; }
 .msg.system.blocked .blocked-actions button { padding: 2px var(--sp-2); font-size: var(--fs-sm); }
+/* A persona's related room (023-AC16): its buttons inline; once dismissed, greyed out (023-AC19). */
+.msg.system.proposal .proposal-actions { display: inline-flex; flex-wrap: wrap; gap: var(--sp-2); font-style: normal; }
+.msg.system.proposal.dismissed { opacity: .6; }
 .msg.agent .meta strong { color: var(--primary-text); }
 .msg .meta :is(.model, .effort, .model-note) { font-size: var(--fs-xs); color: var(--text-muted); }
 .msg .meta .model-note.mismatch { color: var(--warning); font-weight: 600; }

@@ -748,7 +748,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 	// Each table's columns: those the export carries, or why the table is left out.
 	tables := map[string]string{
 		// 017: host_moved_line is the importing server's banner, shown only to a previous host.
-		"rooms": "id name created_at chain_budget chain_count chain_suspended parallel_turns stt_glossary created_from voice_quiet_ms voice_resume_s voice_queue_s voice_words | host_participant_id quota_bytes creator_profile_id egress_admins_allow host_moved_line",
+		"rooms": "id name created_at chain_budget chain_count chain_suspended parallel_turns stt_glossary created_from voice_quiet_ms voice_resume_s voice_queue_s voice_words | host_participant_id quota_bytes creator_profile_id egress_admins_allow host_moved_line proposed_in_room_id proposed_in_name", // 023: names another room
 		// 014: what the AI host allowed is the host's, not the room's; the lines stay as text.
 		"blocked_requests":    "| message_id room_id persona domain count decision pending_scope pending_by pending_actor pending_error dismissed_by",
 		"participants":        "id name joined_at can_trigger profile_id profile_uuid_hint room_id invite_id previous_name removed_at | token_hash last_seen_at join_ip join_ua last_ip last_ua end_reason stt_off",
@@ -767,7 +767,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"skills":              "id name created_at room_id pending scope | profile_id publisher_id from_starter",
 		"skill_versions":      "skill_id n author description files size sha256 data created_at | id author_id",
 		"agent_sessions":      "room_id persona_id session_id data updated_at context_tokens context_window context_updated_at |",
-		"turns":               "session_id message_cursor annotation_cursor change_cursor model effort ended_at persona_id status | id room_id participant_id daemon_id host fresh resume prompt error report started_at persona_name persona_text req_model req_effort skills plugins host_queued_at base_revisions rerun_of cause handoff delivered",
+		"turns":               "session_id message_cursor annotation_cursor change_cursor model effort ended_at persona_id status | id room_id participant_id daemon_id host fresh resume prompt error report started_at persona_name persona_text req_model req_effort skills plugins host_queued_at base_revisions rerun_of cause handoff delivered linked", // 023: linked names other rooms
 		"room_admins":         "room_id profile_id | created_at",
 		// 016: a block names a profile of this server; an imported room starts with none.
 		"room_blocks":              "| room_id profile_id name created_at by_participant_id",
@@ -789,7 +789,9 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"daemon_connections":        "| id daemon_id room_id pod connected_at_ms expires_at_ms",
 		"daemon_status":             "| daemon_id can_host reason version egress connectors",
 		"presence":                  "| room_id participant_id tab since_at_ms beat_at_ms device_at_ms audio mic muted deaf focused expires_at_ms",
-		"hands":                     "| room_id participant_id raised_at_ms", // 031-AC7: no hand in the export
+		"hands":                     "| room_id participant_id raised_at_ms",                             // 031-AC7: no hand in the export
+		"room_links":                "| id reader_room_id read_room_id created_by_profile_id created_at", // 023: an export names no other room
+		"room_proposals":            "| id room_id message_id turn_id name brief status handled_by_profile_id created_room_id created_at",
 		"pairings":                  "| id room_id code secret_hash status approved_by expires_at_ms",
 		"tts_lines":                 "| seq room_id persona_id persona voice rate text quiet_ms resume_s queue_s queued_at_ms sent cut_in_s",
 		"stt_workers":               server,
@@ -976,7 +978,7 @@ func TestImportIsAllOrNothing(t *testing.T) {
 	before := count()
 	for _, table := range []string{"rooms", "room_personas", "invites", "participants", "room_admins", "messages", "message_versions", "uploads", "documents",
 		"revisions", "annotations", "annotation_messages", "attachments", "skills", "skill_versions", "room_persona_skills", "turns", "agent_sessions", "audit_log"} {
-		restore := failInserts(t, s, table, "injected failure")
+		restore := failOn(t, s, "INSERT", table, "", "injected failure")
 		o := importOpts("x")
 		o.SameInstance = false
 		auditCtx := WithAudit(ctx, AuditEntry{Actor: ActorSuperAdmin, Action: "room.import", TargetKind: TargetRoom}, nil)

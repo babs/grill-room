@@ -350,6 +350,7 @@ func (s *Store) MergeProfiles(ctx context.Context, keep, merge int64, orgIssuer 
 			{&moved.Templates, `UPDATE persona_templates SET profile_id = ?1 WHERE profile_id = ?2`, both},
 			{&moved.Starters, `UPDATE starters SET profile_id = ?1 WHERE profile_id = ?2`, both},
 			{&moved.RoomsCreated, `UPDATE rooms SET creator_profile_id = ?1 WHERE creator_profile_id = ?2`, both},
+			{nil, `UPDATE room_links SET created_by_profile_id = ?1 WHERE created_by_profile_id = ?2`, both},
 			{nil, `INSERT INTO room_admins(room_id, profile_id, created_at) SELECT room_id, ?1::bigint, created_at FROM room_admins WHERE profile_id = ?2 ON CONFLICT DO NOTHING`, both},
 			{&moved.RoomAdmins, `DELETE FROM room_admins WHERE profile_id = ?`, only},
 			// 016-AC15: B's blocks become A's, one per room.

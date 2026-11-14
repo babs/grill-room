@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -391,14 +392,28 @@ func TestRegistryCountsMCPToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n := 0
+	n, tools, pairs := 0, map[string]bool{}, map[string]bool{}
 	for _, mf := range mfs {
-		if mf.GetName() == "grill_room_mcp_tool_calls_total" {
-			n = len(mf.GetMetric())
+		if mf.GetName() != "grill_room_mcp_tool_calls_total" {
+			continue
+		}
+		n = len(mf.GetMetric())
+		for _, m := range mf.GetMetric() {
+			l := map[string]string{}
+			for _, lp := range m.GetLabel() {
+				l[lp.GetName()] = lp.GetValue()
+			}
+			if len(l) != 2 || l["tool"] == "" || !slices.Contains(web.MCPResults, l["result"]) {
+				t.Errorf("series labels %v, want tool and result", l)
+			}
+			tools[l["tool"]], pairs[l["tool"]+"/"+l["result"]] = true, true
 		}
 	}
-	if n != len(web.MCPTools())*len(web.MCPResults) || n != 27*3 {
-		t.Fatalf("%d series", n)
+	if n == 0 || n != len(web.MCPTools())*len(web.MCPResults) || len(pairs) != n {
+		t.Fatalf("%d series, %d distinct", n, len(pairs))
+	}
+	if got := slices.Sorted(maps.Keys(tools)); !slices.Equal(got, slices.Sorted(slices.Values(web.MCPTools()))) {
+		t.Fatalf("tool labels %v, catalogue %v", got, web.MCPTools())
 	}
 }
 

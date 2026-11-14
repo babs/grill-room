@@ -154,7 +154,7 @@ func TestMCPProtocol(t *testing.T) {
 		return res.Tools
 	}
 	full, read := list(m.aliceFull), list(m.aliceRead)
-	if len(full) != 27 || len(read) != 12 {
+	if len(full) != 30 || len(read) != 13 {
 		t.Fatalf("tools: %d full, %d read", len(full), len(read))
 	}
 	// The SDK lists tools by name: compare the sets.
@@ -278,7 +278,7 @@ func TestMCPSDKClient(t *testing.T) {
 	}
 	defer cs.Close()
 	tools, err := cs.ListTools(t.Context(), nil)
-	if err != nil || len(tools.Tools) != 12 {
+	if err != nil || len(tools.Tools) != 13 {
 		t.Fatalf("list tools: %v %v", tools, err)
 	}
 	res, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "get_room", Arguments: map[string]any{"room": m.room.ID}})
@@ -549,5 +549,100 @@ func TestMCPParity(t *testing.T) {
 	}
 	if m.srv.MCPToolCalls("get_room", "ok") == 0 || m.srv.MCPToolCalls("edit_persona", "error") == 0 {
 		t.Fatal("tool calls not counted")
+	}
+}
+
+// 023-AC22: list_room_links reads, link_rooms and unlink_rooms write through the link routes with
+// the token's rights and audit; unlink_rooms needs the other room's name; a link opens no room to a
+// member's token.
+func TestMCPRoomLinks(t *testing.T) {
+	m := newMCPEnv(t)
+	if _, err := m.sqlDB(t).ExecContext(t.Context(), `UPDATE profiles SET max_rooms = 20`); err != nil {
+		t.Fatal(err)
+	}
+	room := m.room.ID
+	legal := m.alice.createRoom(t, "Legal", "Alice")
+	if _, _, b := m.rpc(t, m.aliceRead, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"link_rooms","arguments":{"room":"`+room+`","other":"`+legal.ID+`"}}}`); decodeJSON[rpcResp](t, b).Error == nil {
+		t.Fatalf("read token link_rooms: %s", b)
+	}
+	if r := m.call(t, m.aliceRead, "list_room_links", map[string]any{"room": room}); r.IsError || len(r.items(t)) != 0 {
+		t.Fatalf("empty list: %+v", r)
+	}
+
+	// Both directions by default, audited with the token; the same call again changes nothing.
+	made := m.call(t, m.aliceFull, "link_rooms", map[string]any{"room": room, "other": legal.ID})
+	var ls []store.RoomLink
+	if err := json.Unmarshal(made.StructuredContent, &struct {
+		Items *[]store.RoomLink `json:"items"`
+	}{&ls}); made.IsError || err != nil || len(ls) != 2 || ls[0].ReaderRoom != room || ls[1].ReaderRoom != legal.ID {
+		t.Fatalf("link_rooms: %+v", made)
+	}
+	if again := m.call(t, m.aliceFull, "link_rooms", map[string]any{"room": room, "other": legal.ID}); again.IsError || string(again.StructuredContent) != string(made.StructuredContent) {
+		t.Fatalf("again: %+v", again)
+	}
+	es := m.auditLog(t, "?action="+ActionRoomLinkCreate).Entries
+	if len(es) != 2 || !strings.Contains(string(es[0].Details), `"api_token"`) {
+		t.Fatalf("create audit: %+v", es)
+	}
+
+	// A room admin of one side only is refused; Bob's token reads the list, never the linked room.
+	bobs := m.bob.createRoom(t, "Bobs", "Bob")
+	if r := m.call(t, m.bobF, "link_rooms", map[string]any{"room": bobs.ID, "other": room}); !r.IsError || r.text() != msgLinkBothAdmin {
+		t.Errorf("admin of one: %+v", r)
+	}
+	if r := m.call(t, m.bobF, "list_room_links", map[string]any{"room": room}); r.IsError || !strings.Contains(string(r.StructuredContent), `"Legal"`) {
+		t.Errorf("member list: %+v", r)
+	}
+	for _, tool := range []string{"get_room", "list_documents", "get_transcript", "list_room_links"} {
+		if r := m.call(t, m.bobF, tool, map[string]any{"room": legal.ID}); !r.IsError || r.text() != msgTokenNotHere {
+			t.Errorf("bob %s in the linked room: %+v", tool, r)
+		}
+	}
+
+	// One direction only, up to the cap of 10 read rooms.
+	for i := 1; i <= store.MaxRoomReads; i++ {
+		other := m.alice.createRoom(t, fmt.Sprintf("R%d", i), "Alice")
+		r := m.call(t, m.aliceFull, "link_rooms", map[string]any{"room": room, "other": other.ID, "read_by": false})
+		if i < store.MaxRoomReads && (r.IsError || len(r.items(t)) != 1) {
+			t.Fatalf("link %d: %+v", i, r)
+		}
+		if i == store.MaxRoomReads && (!r.IsError || r.text() != "This room already reads 10 rooms. Remove one first.") {
+			t.Fatalf("11th: %+v", r)
+		}
+	}
+
+	// unlink_rooms: confirm is the other room's name, from either side, byte for byte.
+	n := len(m.auditLog(t, "?limit=200").Entries)
+	for _, confirm := range []any{nil, "Pricing", "legal", "Legal ", fmt.Sprint(ls[0].ID)} {
+		args := map[string]any{"room": room, "link": ls[0].ID}
+		if confirm != nil {
+			args["confirm"] = confirm
+		}
+		r := m.call(t, m.aliceFull, "unlink_rooms", args)
+		if !r.IsError || confirm != nil && (!strings.HasPrefix(r.text(), "confirm must be the exact name of the other room; read it with list_room_links") || strings.Contains(r.text(), "Legal")) {
+			t.Errorf("confirm %v: %+v", confirm, r)
+		}
+	}
+	if r := m.call(t, m.aliceFull, "unlink_rooms", map[string]any{"room": room, "link": 999999, "confirm": "Legal"}); !r.IsError || r.text() != "no such link" {
+		t.Errorf("unknown link: %+v", r)
+	}
+	if r := m.call(t, m.bobF, "unlink_rooms", map[string]any{"room": room, "link": ls[0].ID, "confirm": "Legal"}); !r.IsError || r.text() != msgLinkEitherAdmin {
+		t.Errorf("member unlink: %+v", r)
+	}
+	if len(m.auditLog(t, "?limit=200").Entries) != n {
+		t.Fatal("refusals wrote audit entries")
+	}
+	if r := m.call(t, m.aliceFull, "unlink_rooms", map[string]any{"room": legal.ID, "link": ls[0].ID, "confirm": "Pricing"}); r.IsError {
+		t.Fatalf("unlink from the read side: %+v", r)
+	}
+	if r := m.call(t, m.aliceFull, "unlink_rooms", map[string]any{"room": room, "link": ls[1].ID, "confirm": "Legal"}); r.IsError {
+		t.Fatalf("unlink: %+v", r)
+	}
+	es = m.auditLog(t, "?action="+ActionRoomLinkDelete).Entries
+	if len(es) != 2 || !strings.Contains(string(es[0].Details), `"api_token"`) {
+		t.Fatalf("delete audit: %+v", es)
+	}
+	if r := m.call(t, m.aliceRead, "list_room_links", map[string]any{"room": legal.ID}); r.IsError || len(r.items(t)) != 0 {
+		t.Fatalf("after unlink: %+v", r)
 	}
 }

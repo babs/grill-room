@@ -3,10 +3,10 @@
 // window.grillRoom, window.grillAgent and window.grillSTT, each followed by an event. Each tab is a
 // deep link, #manage/<tab>.
 import { render } from 'preact';
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { html } from 'htm/preact';
-import { RoomPanel, AdminRows, TabBar, Invites, fetchJSON, roomTabs, icon } from './room-panel.js';
+import { RoomPanel, AdminRows, TabBar, Invites, RowMenu, fetchJSON, roomTabs, icon, ago } from './room-panel.js';
 import { Editor } from './starters.js';
 import { PluginsTab, mountReview } from './plugins.js';
 
@@ -22,7 +22,7 @@ import { PluginsTab, mountReview } from './plugins.js';
  * @typedef {{glossary: boolean}} STTState
  */
 
-const w = /** @type {Window & {grillRoom?: RoomData, grillAgent?: AgentState, grillSTT?: STTState}} */ (window);
+const w = /** @type {Window & {grillRoom?: RoomData, grillAgent?: AgentState, grillSTT?: STTState, grillLinks?: RoomLink[], grillShowLinks?: () => void}} */ (window);
 const roomData = signal(w.grillRoom);
 const agentState = signal(w.grillAgent);
 // The glossary tab shows only while a transcription worker reads it (007-AC14); its data stays.
@@ -30,17 +30,22 @@ const sttGlossary = signal(!!w.grillSTT?.glossary);
 addEventListener('grill:room', (e) => { roomData.value = /** @type {CustomEvent<RoomData>} */ (e).detail; });
 addEventListener('grill:agent', (e) => { agentState.value = /** @type {CustomEvent<AgentState>} */ (e).detail; });
 addEventListener('grill:stt', (e) => { sttGlossary.value = /** @type {CustomEvent<STTState>} */ (e).detail.glossary; });
+// room.js fetches the links with each room reload (023-AC8); the Links tab shows that list.
+const roomLinks = signal(/** @type {RoomLink[] | null | undefined} */ (w.grillLinks));
+addEventListener('grill:links', (e) => { roomLinks.value = /** @type {CustomEvent<RoomLink[] | null>} */ (e).detail; });
+const reloadLinks = () => w.grillShowLinks?.();
 
-const allTabs = [...Object.entries(roomTabs).slice(0, 3), ['personas', 'Personas'], ['skills', 'Skills'], ['plugins', 'Plugins'],
+const allTabs = [...Object.entries(roomTabs).slice(0, 3), ['links', 'Links'], ['personas', 'Personas'], ['skills', 'Skills'], ['plugins', 'Plugins'],
   ['network', 'Websites and connectors'], ['documents', 'Documents'], ['export', roomTabs.export], ['glossary', 'Words to recognise'],
   ['voices', 'Call voices']];
 // The tabs a plain member gets; a room admin gets them all. Every member reads the room's plugins
-// (009-AC5), its websites (014) and manages their own invites (011-AC27).
-const memberTabs = ['invites', 'plugins', 'network', 'glossary'];
+// (009-AC5), its websites (014), its links (023-AC1) and manages their own invites (011-AC27).
+const memberTabs = ['invites', 'links', 'plugins', 'network', 'glossary'];
 
 // tab is the open tab from #manage/<tab>, '' when the sheet is closed.
 /** @param {string} hash */
-const tabOf = (hash) => (hash === '#manage' ? 'general' : hash.startsWith('#manage/') ? hash.slice(8) : '');
+// #links is the Links tab's own deep link (023-AC1).
+const tabOf = (hash) => (hash === '#manage' ? 'general' : hash === '#links' ? 'links' : hash.startsWith('#manage/') ? hash.slice(8) : '');
 const tab = signal(tabOf(location.hash));
 const dialog = /** @type {HTMLDialogElement} */ (document.getElementById('manage'));
 const follow = () => {
@@ -100,6 +105,7 @@ function Manage({ data, tab, tabs }) {
       ${tab === 'skills' && (skills.length ? html`<ul id="room-admin-skills">${skills.map((k) => html`<li key=${k.id}>${k.name} v${k.version}, copied by ${k.author}
           ${' '}<button type="button" class="btn-secondary" onClick=${() => removeSkill(k)} aria-label=${'Remove the room skill ' + k.name}>Remove</button></li>`)}</ul>`
         : html`<p class="empty">None yet. Members copy their personal skills in from the Personas sheet.</p>`)}
+      ${tab === 'links' && html`<${LinksTab} data=${data} base=${base} show=${show}/>`}
       ${tab === 'plugins' && html`<${PluginsTab} base=${base} admin=${true} host=${approves(data)} personas=${personas}/>`}
       ${tab === 'network' && html`<${NetworkTab} base=${base} host=${isHost(data)} show=${show}/>`}
       ${tab === 'documents' && html`<${DeletedDocuments} base=${base} show=${show}/>`}
@@ -240,6 +246,7 @@ function App() {
     ${said && html`<p class="said" role="alert">${said}</p>`}
     <div class="tab-panel" id=${'panel-' + t}>${t === 'glossary' && html`<${STTGlossary} data=${data}/>`}
       ${t === 'invites' && html`<${Invites} base=${base} api=${fetchJSON} show=${show} byName=${byName} me=${data.me.id}/>`}
+      ${t === 'links' && html`<${LinksTab} data=${data} base=${base} show=${show}/>`}
       ${t === 'plugins' && html`<${PluginsTab} base=${base} admin=${false} host=${approves(data)} personas=${agentState.value?.personas || []}/>`}
       ${t === 'network' && html`<${NetworkTab} base=${base} host=${isHost(data)} show=${show}/>`}</div>`;
 }
@@ -273,10 +280,184 @@ function NetworkTab({ base, host, show }) {
     : html`<p class="empty" id="room-connectors-none">None on for this room.</p>`}`;
 }
 
+/**
+ * @typedef {{id: number, reader_room: string, reader_name: string, read_room: string, read_name: string, linked_by?: string,
+ *   created_at: string, member: boolean, can_remove: boolean}} RoomLink
+ */
+
+/**
+ * LinksTab lists the rooms this room reads and those that read it, for every member (023-AC1);
+ * a room admin of either side removes a row (023-AC5), a room admin here links a room (023-AC2).
+ * @param {{data: RoomData, base: string, show: (err: unknown) => void}} props
+ */
+function LinksTab({ data, base, show }) {
+  const links = roomLinks.value;
+  const [linking, setLinking] = useState(false);
+  const here = data.room.id;
+  /** @param {RoomLink} l */
+  const remove = (l) => fetchJSON('DELETE', `${base}/links/${l.id}`).then(reloadLinks).catch(show);
+  /** @param {RoomLink[]} rows @param {boolean} reads @param {string} id @param {string} empty */
+  const list = (rows, reads, id, empty) => (rows.length ? html`<div class="cols" id=${id}>
+      <div class="list-row head"><span>Room</span><span>Linked by</span><span>Linked</span><span></span></div>
+      <ul class="list-rows">${rows.map((l) => {
+        const [room, name] = reads ? [l.read_room, l.read_name] : [l.reader_room, l.reader_name];
+        return html`<li class="list-row" id=${'link-' + l.id} key=${l.id}>
+          <div class="main">${l.member ? html`<a class="name" href=${'/r/' + encodeURIComponent(room)}>${name}</a>` : html`<span class="name">${name}</span>`}</div>
+          <div class="cells"><span class="cell" data-label="Linked by">${l.linked_by || 'a former member'}</span>
+            <span class="cell" data-label="Linked">${ago(l.created_at)}</span></div>
+          <div class="actions">${l.can_remove && html`<${RowMenu} id=${'link-menu-' + l.id} label=${'More actions on ' + name}
+            items=${[['Remove link', () => remove(l), 'danger', 'Remove link with ' + name]]}/>`}</div></li>`;
+      })}</ul></div>` : html`<p class="empty" id=${id + '-empty'}>${empty}</p>`);
+  return html`<p class="hint">A room's personas read the documents and conversation of the rooms it reads. Only a room admin of both rooms links them.</p>
+    ${data.me.admin && html`<div class="row"><button type="button" class="btn-primary" id="link-open" onClick=${() => setLinking(true)}>Link a room</button></div>`}
+    ${links === undefined && html`<p class="empty" id="links-loading">Loading…</p>`}
+    ${links === null && html`<p class="said error" role="alert" id="links-error">The links could not be loaded.</p>`}
+    ${links && html`<h3>Reads</h3>${list(links.filter((l) => l.reader_room === here), true, 'links-reads', 'This room reads no other room.')}
+      <h3>Read by</h3>${list(links.filter((l) => l.read_room === here), false, 'links-read-by', 'No other room reads this one.')}`}
+    ${linking && links && html`<${LinkSheet} data=${data} base=${base} links=${links} done=${() => { setLinking(false); reloadLinks(); }}/>`}`;
+}
+
+/**
+ * LinkSheet links this room with another the caller is a room admin of, both ways ticked; a
+ * direction that exists shows ticked and disabled (023-AC2, 023-AC3).
+ * @param {{data: RoomData, base: string, links: RoomLink[], done: () => void}} props
+ */
+function LinkSheet({ data, base, links, done }) {
+  const ref = useRef(/** @type {HTMLDialogElement | null} */ (null));
+  const [rooms, setRooms] = useState(/** @type {{room_id: string, room_name: string}[] | null} */ (null));
+  const [other, setOther] = useState('');
+  const [reads, setReads] = useState(true);
+  const [readBy, setReadBy] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState('');
+  const here = data.room.id;
+  useEffect(() => {
+    ref.current?.showModal();
+    fetchJSON('GET', '/api/profile').then((/** @type {{profile?: {rooms: {room_id: string, room_name: string, admin: boolean}[]}}} */ p) => {
+      const mine = (p.profile?.rooms || []).filter((r) => r.admin && r.room_id !== here);
+      setRooms(mine);
+      setOther(mine[0]?.room_id || '');
+    }).catch((/** @type {Error} */ err) => setSaid(err.message));
+  }, []);
+  const has = (/** @type {string} */ reader, /** @type {string} */ read) => links.some((l) => l.reader_room === reader && l.read_room === read);
+  const hasReads = has(here, other);
+  const hasReadBy = has(other, here);
+  const otherName = rooms?.find((r) => r.room_id === other)?.room_name || '';
+  const wants = (reads && !hasReads) || (readBy && !hasReadBy);
+  const close = () => ref.current?.close();
+  /** @param {Event} e */
+  const save = (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setSaid('');
+    fetchJSON('POST', base + '/links', { room: other, reads: reads && !hasReads, read_by: readBy && !hasReadBy })
+      .then(close).catch((/** @type {Error} */ err) => { setSaid(err.message); setBusy(false); });
+  };
+  // 023-AC2: each room picked starts with both directions ticked.
+  /** @param {Event} e */
+  const pick = (e) => {
+    setOther(/** @type {HTMLSelectElement} */ (e.currentTarget).value);
+    setReads(true);
+    setReadBy(true);
+  };
+  /** @param {(v: boolean) => void} set */
+  const tick = (set) => (/** @type {Event} */ e) => set(/** @type {HTMLInputElement} */ (e.currentTarget).checked);
+  return html`<dialog ref=${ref} id="link-sheet" class="sheet" aria-labelledby="link-title" onClose=${done}>
+    <div class="sheet-head"><h2 id="link-title">Link a room</h2>
+      <button type="button" class="btn-icon btn-ghost" aria-label="Close" onClick=${close} dangerouslySetInnerHTML=${icon('close')}></button></div>
+    ${!rooms && said && html`<p class="said error" role="alert">${said}</p>`}
+    ${rooms && !rooms.length ? html`<p class="empty" id="link-none">You are a room admin of no other room.</p>`
+    : rooms && html`<form id="link-form" class="stack" onSubmit=${save}>
+      <label>Room<select id="link-room" value=${other} onChange=${pick}>
+        ${rooms.map((r) => html`<option key=${r.room_id} value=${r.room_id}>${r.room_name}</option>`)}</select></label>
+      <label><input type="checkbox" id="link-reads" checked=${hasReads || reads} disabled=${hasReads || busy} onChange=${tick(setReads)}/> ${data.room.name} reads ${otherName}</label>
+      <label><input type="checkbox" id="link-read-by" checked=${hasReadBy || readBy} disabled=${hasReadBy || busy} onChange=${tick(setReadBy)}/> ${otherName} reads ${data.room.name}</label>
+      <p class="hint">Every member of a room that reads another can ask its personas about what the other room says and holds.</p>
+      <p class="said error" role="alert">${said}</p>
+      <div class="actions">
+        <button type="button" class="btn-secondary" onClick=${close}>Cancel</button>
+        <button type="submit" class="btn-primary" disabled=${busy || !wants}>Save</button>
+      </div></form>`}
+  </dialog>`;
+}
+
+/**
+ * @typedef {{id: number, body: string, html?: string, proposal: {id: number, name: string, status: string, trigger?: number}}} ProposalLine
+ * @typedef {{id: number, name: string, self?: boolean, no_profile?: boolean}} Member
+ */
+// room.js opens the creation sheet from a proposal's card (023-AC17).
+const proposal = signal(/** @type {ProposalLine | null} */ (null));
+/** @type {Window & {grillCreateProposal?: (m: ProposalLine) => void}} */ (window).grillCreateProposal = (m) => { proposal.value = m; };
+
+function Proposals() {
+  const data = roomData.value;
+  const m = proposal.value;
+  if (!data || !m) return null;
+  return html`<${ProposalSheet} key=${m.id} data=${data} m=${m} done=${() => { proposal.value = null; }}/>`;
+}
+
+/**
+ * ProposalSheet creates the room a persona proposed (023-AC17): its name, the brief, this room's
+ * members with a profile, the caller ticked for good, and for a room admin here both links ticked.
+ * @param {{data: RoomData, m: ProposalLine, done: () => void}} props
+ */
+function ProposalSheet({ data, m, done }) {
+  const ref = useRef(/** @type {HTMLDialogElement | null} */ (null));
+  const [name, setName] = useState(m.proposal.name);
+  const [picked, setPicked] = useState(/** @type {number[]} */ ([]));
+  const [reads, setReads] = useState(true);
+  const [readBy, setReadBy] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [said, setSaid] = useState('');
+  useEffect(() => { ref.current?.showModal(); }, []);
+  const here = data.room.name;
+  const admin = data.me.admin;
+  const members = /** @type {Member[]} */ (data.participants).filter((p) => !p.no_profile);
+  const close = () => ref.current?.close();
+  /** @param {number} id @param {Event} e */
+  const pick = (id, e) => {
+    const on = /** @type {HTMLInputElement} */ (e.currentTarget).checked;
+    setPicked((ids) => (on ? [...ids, id] : ids.filter((x) => x !== id)));
+  };
+  /** @param {(v: boolean) => void} set */
+  const tick = (set) => (/** @type {Event} */ e) => set(/** @type {HTMLInputElement} */ (e.currentTarget).checked);
+  /** @param {Event} e */
+  const save = (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setSaid('');
+    const base = '/api/rooms/' + encodeURIComponent(data.room.id);
+    fetchJSON('POST', `${base}/proposals/${m.proposal.id}/create`, { name, members: picked, reads: admin && reads, read_by: admin && readBy })
+      .then(close).catch((/** @type {Error} */ err) => { setSaid(err.message); setBusy(false); });
+  };
+  const shown = name.trim() || m.proposal.name;
+  return html`<dialog ref=${ref} id="proposal-sheet" class="sheet" aria-labelledby="proposal-title" onClose=${done}>
+    <div class="sheet-head"><h2 id="proposal-title">Create a room</h2>
+      <button type="button" class="btn-icon btn-ghost" aria-label="Close" onClick=${close} dangerouslySetInnerHTML=${icon('close')}></button></div>
+    <form id="proposal-form" class="stack" onSubmit=${save}>
+      <label>Name<input id="proposal-name" required maxlength="100" value=${name} onInput=${(/** @type {Event} */ e) => setName(/** @type {HTMLInputElement} */ (e.currentTarget).value)}/></label>
+      <h3>Brief</h3>
+      <div class="msg"><div class="body" id="proposal-brief" dangerouslySetInnerHTML=${{ __html: m.html || '' }}></div></div>
+      <p class="hint">It becomes the room's first document, brief.md.</p>
+      <fieldset id="proposal-members"><legend>Members of ${here} to bring along</legend>
+        ${members.map((p) => html`<label key=${p.id}><input type="checkbox" value=${p.id} checked=${p.self || picked.includes(p.id)} disabled=${p.self || busy}
+          onChange=${(/** @type {Event} */ e) => pick(p.id, e)}/> ${p.name}${p.self ? ' (you)' : ''}</label>`)}</fieldset>
+      ${admin ? html`<label><input type="checkbox" id="proposal-reads" checked=${reads} disabled=${busy} onChange=${tick(setReads)}/> ${shown} reads ${here}</label>
+        <label><input type="checkbox" id="proposal-read-by" checked=${readBy} disabled=${busy} onChange=${tick(setReadBy)}/> ${here} reads ${shown}</label>`
+      : html`<p class="hint" id="proposal-no-links">A room admin of ${here} can link the rooms later.</p>`}
+      <p class="said error" role="alert">${said}</p>
+      <div class="actions">
+        <button type="button" class="btn-secondary" onClick=${close}>Cancel</button>
+        <button type="submit" class="btn-primary" disabled=${busy || !name.trim()}>Create</button>
+      </div></form>
+  </dialog>`;
+}
+
 /** @param {RoomData} data */
 const isHost = (data) => agentState.value?.host_participant_id === data.me.id;
 /** Approvals follow the host's profile: any of its seats here reviews a plugin (daemon-r2). @param {RoomData} data */
 const approves = (data) => isHost(data) || !!agentState.value?.you_host;
 
 render(html`<${App}/>`, /** @type {HTMLElement} */ (document.getElementById('room-admin')));
+render(html`<${Proposals}/>`, document.body.appendChild(document.createElement('div')));
 mountReview(roomData, agentState);

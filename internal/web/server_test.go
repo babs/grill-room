@@ -783,7 +783,7 @@ func TestStreamRevokedWhenRoomGoesMidRead(t *testing.T) {
 	var once sync.Once
 	hook := func(string) {
 		once.Do(func() {
-			if err := e.st.DeleteRoom(context.Background(), room.ID); err != nil {
+			if _, err := e.st.DeleteRoom(context.Background(), room.ID); err != nil {
 				t.Error(err)
 			}
 		})

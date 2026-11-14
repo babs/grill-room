@@ -1,6 +1,7 @@
 package turn
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -78,7 +79,7 @@ func TestValidDocName(t *testing.T) {
 }
 
 func TestNeedsContent(t *testing.T) {
-	for p, want := range map[string]bool{"docs/a.md": true, RepliesFile: true, DriftFile: true, "uploads/1-a.pdf": false, "transcript/x.md": false, "docsx/a.md": false} {
+	for p, want := range map[string]bool{"docs/a.md": true, RepliesFile: true, DriftFile: true, RoomNewFile: true, "uploads/1-a.pdf": false, "transcript/x.md": false, "docsx/a.md": false} {
 		if NeedsContent(p) != want {
 			t.Errorf("NeedsContent(%q) != %v", p, want)
 		}
@@ -208,5 +209,68 @@ func TestDrift(t *testing.T) {
 		if d, err := ParseDrift([]byte(b)); err == nil {
 			t.Errorf("%s: accepted %+v", name, d)
 		}
+	}
+}
+
+// 023-AC12: any change under linked/ is ignored and listed, whatever its kind.
+func TestClassifyLinked(t *testing.T) {
+	o := Classify([]Change{{Path: "linked/legal/docs/a.md", Content: []byte("x")}, {Path: "linked/b/new.txt"}, {Path: "linked", Deleted: true}, {Path: "linkedin.md"}})
+	want := []string{"linked/legal/docs/a.md: linked rooms are read-only", "linked/b/new.txt: linked rooms are read-only", "linked: linked rooms are read-only"}
+	if !slices.Equal(o.Ignored, want) || len(o.Docs) != 0 || len(o.Rejected) != 0 {
+		t.Fatalf("%+v", o)
+	}
+}
+
+// 023-AC16: the daemon takes room-new.json out of the changes and posts it as room_new, absent when
+// the turn wrote none; ParseRoomNew takes one object with a one-line name and a brief within 64 KB.
+func TestRoomNew(t *testing.T) {
+	changes, text := TakeRoomNew([]Change{{Path: "docs/a.md", Content: []byte("a")}, {Path: "./" + RoomNewFile, Content: []byte(`{"name": "Legal"}`)}})
+	if text != `{"name": "Legal"}` || len(changes) != 1 || changes[0].Path != "docs/a.md" {
+		t.Fatalf("take: %q %+v", text, changes)
+	}
+	if _, text := TakeRoomNew([]Change{{Path: RoomNewFile, Deleted: true}}); text != "" {
+		t.Fatalf("a deleted file: %q", text)
+	}
+	for res, want := range map[string]bool{`{"name": "Legal"}`: true, "": false} {
+		b, _ := json.Marshal(Result{SessionID: "s", RoomNew: res})
+		if strings.Contains(string(b), `"room_new"`) != want {
+			t.Errorf("result %s", b)
+		}
+	}
+	long := strings.Repeat("é", MaxRoomNewName)
+	if r, err := ParseRoomNew(`{"name": " ` + long + ` ", "brief": "# Why\n\n` + strings.Repeat("a", MaxRoomNewBrief-7) + `"}`); err != nil || r.Name != long || len(r.Brief) != MaxRoomNewBrief {
+		t.Fatalf("at the limits: %v %d", err, len(r.Brief))
+	}
+	for name, s := range map[string]string{
+		"bad json":       `{"name": "Legal"`,
+		"two proposals":  ` [{"name": "Legal"}, {"name": "Tax"}]`,
+		"empty name":     `{"name": " ", "brief": "x"}`,
+		"no name":        `{"brief": "x"}`,
+		"two lines":      `{"name": "Legal\nTax"}`,
+		"line separator": `{"name": "Legal\u2028Tax"}`,
+		"bidi":           `{"name": "Legal\u202eTax"}`,
+		"81 characters":  `{"name": "` + long + `x"}`,
+		"brief too long": `{"name": "Legal", "brief": "` + strings.Repeat("a", MaxRoomNewBrief+1) + `"}`,
+		"nul":            `{"name": "Legal", "brief": "a\u0000b"}`,
+		"not utf-8":      "{\"name\": \"\xff\"}",
+		"over the file":  `{"name": "Legal", "pad": "` + strings.Repeat(" ", MaxRoomNewBytes) + `"}`,
+	} {
+		if r, err := ParseRoomNew(s); err == nil {
+			t.Errorf("%s: accepted %+v", name, r)
+		}
+	}
+	for name, s := range map[string]string{
+		"an array":         `[{"name": "Legal"}]`,
+		"two objects":      `{"name": "Legal"} {"name": "Tax"}`,
+		"two objects, nl":  "{\"name\": \"Legal\"}\n{\"name\": \"Tax\"}\n",
+		"object, garbage":  `{"name": "Legal"} x`,
+		"object, a number": `{"name": "Legal"}1`,
+	} {
+		if _, err := ParseRoomNew(s); err == nil || !strings.HasPrefix(err.Error(), "one proposal per turn") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if r, err := ParseRoomNew("\n{\"name\": \"Legal\"}\n\t "); err != nil || r.Name != "Legal" {
+		t.Errorf("trailing whitespace: %+v %v", r, err)
 	}
 }

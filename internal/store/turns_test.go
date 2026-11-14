@@ -479,14 +479,14 @@ func TestConflictOnBaseRevision(t *testing.T) {
 	ctx := context.Background()
 	r := newTurnRoom(t, s, "a")
 	tn := r.start(t, s, "a")
-	base, err := s.PinBaseRevisions(ctx, "a", tn.ID)
+	base, _, err := s.PinBaseRevisions(ctx, "a", tn.ID)
 	if err != nil || len(base) != 1 || base[r.doc] != 1 {
 		t.Fatalf("base %v %v", base, err)
 	}
 	if _, err := s.AddRevision(ctx, "a", r.doc, "# Plan\n\nA lazy dog.\n", "Secretary"); err != nil {
 		t.Fatal(err)
 	}
-	if again, _ := s.PinBaseRevisions(ctx, "a", tn.ID); again[r.doc] != 1 {
+	if again, _, _ := s.PinBaseRevisions(ctx, "a", tn.ID); again[r.doc] != 1 {
 		t.Fatalf("the pin moved: %v", again)
 	}
 	edit := func(body string) error {

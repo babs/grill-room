@@ -318,7 +318,7 @@ func TestInvitesRecordTheirCreator(t *testing.T) {
 	if _, _, err := s.Join(ctx, "bobs", "Carol", "tok-carol", JoinProfile{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteRoom(ctx, "a"); err != nil {
+	if _, err := s.DeleteRoom(ctx, "a"); err != nil {
 		t.Fatal(err)
 	}
 	if n := count(t, s, `SELECT count(*) FROM invites`); n != 0 {

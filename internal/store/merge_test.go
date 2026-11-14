@@ -160,6 +160,10 @@ func TestMergeProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 023-AC1: a link B made names A once merged, not "a former member".
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO room_links(reader_room_id, read_room_id, created_by_profile_id, created_at) VALUES('a', 'b', ?, ?)`, B, now()); err != nil {
+		t.Fatal(err)
+	}
 	t0 := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
 	kept, moved, _, err := s.MergeProfiles(mergeAudit(t0, A), A, B, "")
 	if err != nil {
@@ -167,6 +171,9 @@ func TestMergeProfiles(t *testing.T) {
 	}
 	if kept.ID != A || kept.Name != "Alice" || kept.UUID != pre.Keep.UUID {
 		t.Fatalf("kept: %+v", kept)
+	}
+	if n := count(t, s, `SELECT count(*) FROM room_links WHERE created_by_profile_id = ?`, A); n != 1 {
+		t.Errorf("links created by A after the merge: %d, want 1", n)
 	}
 	wantMoved := MergeMoved{Seats: 3, Skills: 3, SharedSkills: 1, Templates: 1, Starters: 1, RoomsCreated: 1, RoomAdmins: 2, Sessions: 1}
 	if moved != wantMoved || moved.Seats != int64(pre.Seats.Merge) {
