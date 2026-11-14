@@ -121,6 +121,15 @@ test('daemon page layout at phone, desktop and wide width', async ({ browser, re
         expect(said.match(/(?<![/-])\b(instances?|supervisors?|workers?|daemons?)\b(?![-/])/gi), `${tab} ${at}`).toBeNull();
       }
     }
+    // A11: the log box scrolls from the keyboard: a Tab stop named by its heading.
+    await unfoldTabs(admin.locator('#tabs'));
+    await admin.locator('#tab-monitoring').click();
+    const logs = admin.locator('pre#logs');
+    await expect(logs).toHaveAttribute('tabindex', '0');
+    await expect(logs).toHaveAccessibleName('Logs');
+    await admin.locator('#log-level').focus();
+    await admin.keyboard.press('Tab');
+    await expect(logs).toBeFocused();
   } finally {
     daemon.cleanup();
   }

@@ -397,8 +397,8 @@
   let tipHide;
   /** @param {EventTarget | null} t */
   const tipped = (t) => (t instanceof Element ? t.closest('[data-tip]:not([data-tip=""])') : null);
-  // A details card open on a person says more than any tip.
-  const cardOpen = () => !!document.querySelector('.person-card:popover-open');
+  // A details card open on a person or a persona says more than any tip.
+  const cardOpen = () => !!document.querySelector('.person-card:popover-open, .persona-card:popover-open');
   /** @param {Element} el */
   const showTip = (el) => {
     clearTimeout(tipHide);

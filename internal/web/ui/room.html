@@ -31,6 +31,7 @@
 <script type="module" src="/static/diagnostics.js"></script>
 </head>
 <body class="room">
+<a href="#body" id="skip-link" class="skip-link">Skip to message box</a>
 <header class="app-header room-header">
   <div class="zone zone-room">
     <img src="/static/logo.svg" alt="" class="logo" width="32" height="32">
@@ -60,7 +61,7 @@
       <span id="voice-more-state" class="sr-only" aria-hidden="true"></span>
       <button type="button" id="voice-leave" class="btn-icon" aria-label="Leave audio" data-tip="Leave the audio: stop hearing and being heard" data-icon="leave" hidden></button>
     </div>
-    <button type="button" id="me" class="avatar" popovertarget="me-menu" data-tip="You: your name, notifications, your profile"></button>
+    <button type="button" id="me" class="avatar" popovertarget="me-menu" data-tip="You: your name, notifications, your profile" hidden></button>
     <a id="me-anon" class="anon-mark" href="/profile#email" hidden></a>
   </div>
 </header>
@@ -367,7 +368,7 @@
     <button type="button" id="pairing-approve" class="btn-primary">Approve</button>
   </div>
 </section>
-<div class="layout">
+<main class="layout">
   <aside id="side">
     <section id="people-pane" aria-labelledby="people-title">
       <div class="pane-head">
@@ -458,8 +459,9 @@
     </div>
   </section>
   <div id="viewer-empty"><p class="empty">Pick a document to read it here.</p></div>
-  <section class="chat">
+  <section class="chat" aria-labelledby="chat-title">
     <!-- Keep #send last: e2e/transcription-pane.spec.js asserts it. -->
+    <h2 id="chat-title" class="sr-only">Chat</h2>
     <div class="drop-overlay" aria-hidden="true">Drop to send with your message</div>
     <button type="button" id="chat-unfold" class="btn-icon btn-ghost" aria-label="Show the chat" data-tip="Show the chat" data-icon="chat"></button>
     <div id="chat-filter" class="chat-filter" role="group" aria-label="Chat filter">
@@ -500,7 +502,12 @@
       <p id="send-hint" class="hint" hidden>Enter sends, Shift+Enter adds a line.</p>
     </form>
   </section>
-</div>
+</main>
+<main id="no-access" class="card join-card" aria-labelledby="no-access-title" hidden>
+  <h2 id="no-access-title">You are not in this room</h2>
+  <p>Your access may have been revoked. Open your invite link again to join.</p>
+  <a href="/profile" class="btn btn-primary">My rooms and profile</a>
+</main>
 <nav id="tabbar" class="tabbar" aria-label="Room sections">
   <button type="button" data-tab="chat" aria-pressed="true" data-icon="chat"><span>Chat</span></button>
   <button type="button" data-tab="docs" aria-pressed="false" data-icon="docs"><span>Docs <span id="tab-docs-count" class="count"></span></span></button>

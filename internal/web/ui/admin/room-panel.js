@@ -264,7 +264,13 @@ export function Invites({ base, api, show, byName, me, cut = false }) {
   const [making, setMaking] = useState(false);
   const [asking, setAsking] = useState(0);
   const [preview, setPreview] = useState(/** @type {Preview | null} */ (null));
-  const load = () => api('GET', base + '/invites').then(setInvites).catch(show);
+  const [people, setPeople] = useState(/** @type {{id: number, name: string}[] | null} */ (null));
+  // /admin names the makers from the room's participants, read with each list (someone may join
+  // since) and set together with it, so a new maker never shows as a former one.
+  const load = () => Promise.all([
+    api('GET', base + '/invites'),
+    byName ? null : api('GET', base + '/participants').catch((e) => { show(e); return null; }),
+  ]).then(([list, who]) => { setInvites(list); setPeople(who); }).catch(show);
   useEffect(() => { load(); }, [base]);
   const invite = () => {
     setMaking(true);
@@ -280,7 +286,8 @@ export function Invites({ base, api, show, byName, me, cut = false }) {
       .catch(show).finally(() => setAsking(0));
   };
   /** @param {Invite} i */
-  const by = (i) => (!i.created_by ? 'admin' : byName ? byName(i.created_by) : 'participant #' + i.created_by);
+  const by = (i) => (!i.created_by ? 'admin' : byName ? byName(i.created_by)
+    : people?.find((p) => p.id === i.created_by)?.name || (people ? 'a former participant' : 'a participant'));
   /** @param {Invite} i */
   const mark = (i) => (!i.shareable ? '' : i.created_by === me ? 'Your shareable link' : 'shareable');
   return html`

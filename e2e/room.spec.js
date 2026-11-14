@@ -54,9 +54,10 @@ test('join by invite, chat, revoke, delete', async ({ browser, request }) => {
   expect((await request.delete(`/api/rooms/${room.id}`, { headers: admin })).status()).toBe(204);
   await expect(bob.locator('#banner')).toHaveText('Your access to this room has ended.');
 
-  // A reload after the end shows the rejoin hint.
+  // A reload after the end shows the rejoin hint, on a card in place of the room (A8).
   await alice.reload();
-  await expect(alice.locator('#banner')).toContainText('Open your invite link again');
+  await expect(alice.locator('#no-access')).toContainText('Open your invite link again');
+  await expect(alice.locator('main.layout')).toBeHidden();
 });
 
 // 019-AC8: with anonymous rooms off, no create form either.

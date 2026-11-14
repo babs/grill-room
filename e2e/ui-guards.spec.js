@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures.js';
-import { roomWith, live, line, upload, appointAdmin, personaSheet, closePersonas, commentOnDocument, signIn, startDaemon, openDaemonPage, unfoldTabs } from './helpers.js';
+import { roomWith, live, line, upload, appointAdmin, personaSheet, closePersonas, commentOnDocument, signIn, startDaemon, openDaemonPage, unfoldTabs, contrastOf } from './helpers.js';
 
 // One guard per defect class of the v0.0.17 visual check (docs/design.md): each failed there.
 const desktop = { width: 1440, height: 900 };
@@ -231,6 +231,27 @@ test("a control's tip never takes the next row's click", async ({ browser, reque
   // v0.0.17 had no tip there; a hoverable tip under the first row covered the second.
   await rows.nth(1).click({ timeout: 3000 });
   await expect(alice.locator('#doc-name')).toHaveText(await rows.nth(1).textContent());
+});
+
+// A16: a document row pressed under the pointer opens the document with no tip over it, also when
+// pressed before the hover delay ran out.
+test('a document row opened leaves no tip over the document', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice']);
+  await alice.setViewportSize(desktop);
+  await upload(alice, longName, 'text/markdown', '# A\n');
+  await upload(alice, 'b.md', 'text/markdown', '# B\n');
+  const rows = alice.locator('#documents button.doc');
+  await expect(rows).toHaveCount(2);
+  const tip = alice.locator('#person-tip');
+  await rows.first().hover();
+  await expect(tip).toBeVisible();
+  await rows.first().click();
+  await expect(alice.locator('#doc-name')).toHaveText(longName);
+  await expect(tip).toBeHidden();
+  await rows.nth(1).click();
+  await expect(alice.locator('#doc-name')).toHaveText('b.md');
+  await alice.waitForTimeout(500);
+  await expect(tip).toBeHidden();
 });
 
 // The pointer going straight from a shown tip to another tipped control shows the new one: the
@@ -585,32 +606,17 @@ test('wide sheets paint the card surface', async ({ browser, request }) => {
 });
 
 // disabledContrast lists the visible disabled buttons whose text, as painted, is under 4.5:1 on what
-// is behind it: the button's and its ancestors' opacity and backgrounds blended in.
-const disabledContrast = (page) => page.evaluate(() => {
-  const rgba = (c) => { const m = c.match(/[\d.]+/g).map(Number); return [m[0], m[1], m[2], m.length > 3 ? m[3] : 1]; };
-  const over = (top, under) => top.slice(0, 3).map((v, i) => v * top[3] + under[i] * (1 - top[3])).concat(1);
-  const behind = (e) => {
-    const chain = [];
-    for (let p = e; p; p = p.parentElement) chain.push(p);
-    let bg = [255, 255, 255, 1];
-    for (const p of chain.reverse()) bg = over(rgba(getComputedStyle(p).backgroundColor), bg);
-    return bg;
-  };
-  const lum = (c) => { const [r, g, b] = c.slice(0, 3).map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
-  const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+// is behind it.
+async function disabledContrast(page) {
   const bad = [];
-  for (const b of document.querySelectorAll('button:disabled, .btn[aria-disabled=true]')) {
-    if (!b.getClientRects().length || !b.textContent.trim()) continue;
-    let opacity = 1;
-    for (let p = b; p; p = p.parentElement) opacity *= Number(getComputedStyle(p).opacity);
-    const under = behind(b.parentElement);
-    const face = over(rgba(getComputedStyle(b).backgroundColor), under);
-    const text = over(rgba(getComputedStyle(b).color), face);
-    const r = ratio(over([...text.slice(0, 3), opacity], under), over([...face.slice(0, 3), opacity], under));
-    if (r < 4.5) bad.push(`${b.textContent.trim().slice(0, 30)}: ${r.toFixed(2)}`);
+  // Handles, not nth locators: the list may change while it is read.
+  for (const b of await page.locator('button:disabled, .btn[aria-disabled=true]').elementHandles()) {
+    if (!(await b.evaluate((e) => e.getClientRects().length > 0 && !!e.textContent.trim()))) continue;
+    const r = await contrastOf(b);
+    if (r < 4.5) bad.push(`${(await b.textContent()).trim().slice(0, 30)}: ${r.toFixed(2)}`);
   }
   return bad;
-});
+}
 
 test('disabled buttons stay readable in both themes', async ({ browser, request }) => {
   const { room, pages: [alice] } = await roomWith(browser, request, ['Alice']);
@@ -636,4 +642,119 @@ test('disabled buttons stay readable in both themes', async ({ browser, request 
     await expect(pill).toBeVisible();
     expect(await pill.evaluate((b) => getComputedStyle(b).backgroundColor), `persona pill ${scheme}`).toBe(await token(alice, '--surface'));
   }
+});
+
+// A3: the room has one main, a chat region named by its hidden heading, and a skip link, the first
+// Tab stop, that takes the keyboard to the message box past every line, on a phone's other tabs too.
+test('the room has a main, a named chat region and a skip link to the message box', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  for (const size of [desktop, phone]) {
+    await alice.setViewportSize(size);
+    await alice.reload();
+    await expect(alice.locator('#me')).toHaveText('Alice');
+    await expect(alice.getByRole('main')).toHaveCount(1);
+    await expect(alice.getByRole('main').getByRole('region', { name: 'Chat', exact: true })).toHaveCount(1);
+    await expect(alice.getByRole('heading', { name: 'Chat', exact: true })).toHaveClass('sr-only');
+    const skip = alice.getByRole('link', { name: 'Skip to message box' });
+    expect(await skip.boundingBox(), `hidden until focused, ${size.width}`).toMatchObject({ width: 1, height: 1 });
+    // On a phone from the Docs tab: the link brings the Chat tab back.
+    if (size === phone) await alice.evaluate(() => showTab('docs'));
+    await alice.keyboard.press('Tab');
+    await expect(skip).toBeFocused();
+    expect((await skip.boundingBox()).width, `shown on focus, ${size.width}`).toBeGreaterThan(40);
+    await alice.keyboard.press('Enter');
+    await expect(alice.locator('#body')).toBeFocused();
+    await expect(alice.locator('#body')).toBeInViewport();
+    expect(new URL(alice.url()).hash).not.toBe('#body');
+  }
+});
+
+// A6: the mention box is a textarea: no aria-expanded on it, the composer's or a line's edit box.
+test('no textarea carries aria-expanded', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  await alice.locator('#body').pressSequentially('@');
+  await expect(alice.locator('#mention-list')).toBeVisible();
+  expect(await alice.locator('textarea[aria-expanded]').count()).toBe(0);
+  await expect(alice.locator('#body')).toHaveAttribute('aria-autocomplete', 'list');
+  await expect(alice.locator('#body')).toHaveAttribute('aria-activedescendant', 'mention-list-0');
+});
+
+// A7: a persona's name is in --text whatever colour its people picked, in both themes; the colour
+// shows as a stripe before it.
+test('a persona sender name keeps the text colour, its colour a stripe', async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  for (const [i, colour] of ['#ffd27a', '#f0f0f0', '#1e2238'].entries()) {
+    await live(alice, { ...line(1000100 + i, 'agent', 'Answer ' + i), participant_id: 0, sender: 'Grill', badge: '🔥', colour });
+  }
+  for (const scheme of ['light', 'dark']) {
+    await alice.emulateMedia({ colorScheme: scheme });
+    const text = await token(alice, '--text');
+    const senders = alice.locator('#messages .msg.agent .sender');
+    await expect(senders).toHaveCount(3);
+    for (const [i, rgb] of ['rgb(255, 210, 122)', 'rgb(240, 240, 240)', 'rgb(30, 34, 56)'].entries()) {
+      const s = senders.nth(i);
+      expect(await s.evaluate((e) => getComputedStyle(e).color), `name ${i} ${scheme}`).toBe(text);
+      expect(await s.evaluate((e) => getComputedStyle(e, '::before').backgroundColor), `stripe ${i} ${scheme}`).toBe(rgb);
+      expect(await s.evaluate((e) => parseFloat(getComputedStyle(e, '::before').width)), `stripe ${i}`).toBe(4);
+    }
+  }
+});
+
+// A13: each line's actions button says how its line reads: text as rendered, voice, and a file alone.
+test("a line's actions button names the line", async ({ browser, request }) => {
+  const { pages: [alice] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  const me = await alice.evaluate(() => Number(myID));
+  const long = 'This line is long enough to be cut somewhere after forty characters';
+  await live(alice, { ...line(1000201, 'text', long, undefined, me), sender: 'Alice' });
+  await live(alice, { ...line(1000202, 'voice', 'spoken  words\nhere', undefined, me), sender: 'Alice' });
+  await live(alice, { ...line(1000203, 'text', '', undefined, me), sender: 'Alice', html: '', documents: [{ id: 'd1', name: 'plan.pdf', format: 'pdf', size: 10 }] });
+  await live(alice, { ...line(1000204, 'text', '**Bold** see https://example.com/x', undefined, me), sender: 'Alice',
+    html: '<p><strong>Bold</strong> see <a href="https://example.com/x">the page</a></p>' });
+  // The voice line may sit in the Transcription pane.
+  const name = (id) => alice.locator(`li[data-id="${id}"] .msg-more`).getAttribute('aria-label');
+  expect(await name(1000201)).toBe('Line actions: ' + long.slice(0, 40).trimEnd() + '…');
+  expect(await name(1000202)).toBe('Line actions: spoken words here');
+  expect(await name(1000203)).toBe('Line actions: plan.pdf');
+  expect(await name(1000204)).toBe('Line actions: Bold see the page');
+});
+
+// A8: until the stream sends the history, the chat says it is loading, not that it is empty, and the
+// avatar waits hidden for a name; the history then shows.
+test('the chat says Loading until the history comes', async ({ browser, request }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  // Narrow: no Transcription pane, so the chat filters to Written, the audit's case.
+  await alice.setViewportSize(phone);
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let roomHeld;
+  const roomGate = new Promise((resolve) => { roomHeld = resolve; });
+  await alice.route(`**/api/rooms/${room.id}/events*`, async (r) => { await held; await r.continue(); });
+  await alice.route(`**/api/rooms/${room.id}`, async (r) => { await roomGate; await r.continue(); });
+  await alice.reload({ waitUntil: 'domcontentloaded' });
+  await expect(alice.locator('#filter-empty')).toHaveText('Loading…');
+  await expect(alice.locator('#filter-empty')).toBeVisible();
+  await expect(alice.locator('#me')).toBeHidden();
+  roomHeld();
+  await expect(alice.locator('#me')).toHaveText('Alice');
+  await expect(alice.locator('#me')).toHaveAccessibleName(/Alice/);
+  await expect(alice.locator('#filter-empty')).toHaveText('Loading…');
+  release();
+  await expect(alice.locator('#messages')).toContainText('Bob joined');
+  await expect(alice.locator('#filter-empty')).toBeHidden();
+  await alice.locator('#chat-filter [data-filter=voice]').click();
+  await expect(alice.locator('#filter-empty')).toHaveText('No voice messages yet.');
+});
+
+// A8: a browser with no seat gets a card like the join page with a way to its rooms, not a dead room.
+test('no seat: a card with a link to the profile, no room shell', async ({ browser, request }) => {
+  const { room } = await roomWith(browser, request, ['Alice']);
+  const stranger = await browser.newPage({ viewport: phone });
+  await stranger.goto('/r/' + room.id);
+  const card = stranger.getByRole('main');
+  await expect(card).toHaveCount(1);
+  await expect(card.getByRole('heading', { name: 'You are not in this room' })).toBeVisible();
+  await expect(card).toContainText('Open your invite link again');
+  await expect(card.getByRole('link', { name: 'My rooms and profile' })).toHaveAttribute('href', '/profile');
+  for (const sel of ['#send', '#chat-filter', '#tabbar', '#me', '#banner', '#skip-link', '#room-open .chev']) await expect(stranger.locator(sel), sel).toBeHidden();
+  await expect(stranger.locator('#room-open')).toBeDisabled();
 });

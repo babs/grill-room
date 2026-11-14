@@ -174,8 +174,11 @@ export function restricted(provider, db) {
     await page.evaluate(() => sessionStorage.setItem('grill_room_reauth_at', String(Date.now())));
     let again = 0;
     page.on('request', (r) => { if (r.url().includes('/auth/login')) again++; });
+    // Narrow, where the chat filters to Written: no "Loading…" stays under the banner (A8).
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.reload();
     await expect(page.locator('#banner')).toHaveText('Your organisation sign-in expired. Sign in again from your profile page.');
+    await expect(page.locator('#filter-empty')).toBeHidden();
     expect(again).toBe(0);
   });
 
@@ -188,10 +191,10 @@ export function restricted(provider, db) {
     let logins = 0;
     page.on('request', (r) => { if (r.url().includes('/auth/login')) logins++; });
     await page.goto(`/r/${room.id}`);
-    await expect(page.locator('#banner')).toContainText('You are not in this room');
+    await expect(page.locator('#no-access')).toContainText('You are not in this room');
     await page.waitForTimeout(2000);
     expect(logins).toBe(1);
-    // Elsewhere a login form nobody fills would have kept the banner away.
+    // Elsewhere a login form nobody fills would have kept the card away.
     if (provider.fake) expect(await provider.fake.prompts(request)).toEqual(['none']);
   });
 
@@ -241,6 +244,10 @@ export function restricted(provider, db) {
     await expect(row(users.admin.name).locator('.sign-in')).toContainText(/^Internal · /);
     await expect(memberRow.locator('.sign-in')).toHaveText('Internal · sign-in expired');
     await expect(row('Gil').locator('.sign-in')).toHaveText('External');
+    // A9: the Sign-in column still fits a tablet's 820 px without a sideways scroll.
+    await ops.setViewportSize({ width: 820, height: 1180 });
+    expect(await ops.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(820);
+    await ops.setViewportSize({ width: 1280, height: 720 });
     await rowAction(memberRow, new RegExp(`^Unbind ${users.member.name}`));
     await confirmSheet(ops, 'Unbind');
     await expect(memberRow.locator('.sign-in')).toHaveText('External');

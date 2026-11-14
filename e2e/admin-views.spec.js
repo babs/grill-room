@@ -52,11 +52,14 @@ for (const vp of widths) {
     if (vp.width > 400) {
       const names = () => page.locator('#rooms .list-row:not(.head) .name').allTextContents();
       const sorted = (list, desc) => [...list].sort((a, b) => (a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0) * (desc ? -1 : 1));
+      // The order is in the button's name (A14): aria-sort on a span is exposed nowhere.
       await page.getByRole('button', { name: 'Name', exact: true }).click();
-      await expect(page.locator('#rooms .head [aria-sort="ascending"]')).toHaveText('Name');
+      await expect(page.getByRole('button', { name: 'Name, sorted ascending', exact: true })).toHaveText('Name');
+      expect(await page.locator('#rooms [aria-sort]').count()).toBe(0);
       expect(await names()).toEqual(sorted(await names(), false));
-      await page.getByRole('button', { name: 'Name', exact: true }).click();
-      await expect(page.locator('#rooms .head [aria-sort="descending"]')).toHaveText('Name');
+      await page.getByRole('button', { name: 'Name, sorted ascending', exact: true }).click();
+      await expect(page.getByRole('button', { name: 'Name, sorted descending', exact: true })).toHaveText('Name');
+      await expect(page.getByRole('button', { name: 'Last activity', exact: true })).toBeVisible();
       expect(await names()).toEqual(sorted(await names(), true));
     }
 
@@ -277,4 +280,45 @@ test('the admin login of an open instance asks no provider', async ({ page }) =>
   await expect(page.locator('#provider-sign-in')).toHaveCount(0);
   await page.waitForTimeout(500);
   expect(asked).toEqual([]);
+});
+
+// A9: from 641 to 1280 px no /admin list scrolls the page sideways: Rooms keeps its columns, its sort
+// and its storage figures. A23: a room's Invites name the participant who made each link.
+test('admin lists fit 641 to 1280 px; invites name their maker', async ({ browser, request, baseURL }) => {
+  const name = `Tablet ${uniq()} with a fairly long room name to wrap`;
+  const room = await (await request.post('/api/rooms', { headers: admin, data: { name } })).json();
+  const alice = await member(baseURL, request, room, 'Alice Martin');
+  expect((await alice.ctx.post(`/api/rooms/${room.id}/invites`)).status()).toBe(201);
+  const page = await (await browser.newContext({ viewport: { width: 820, height: 1180 } })).newPage();
+  expect(await signIn(page, adminToken, 'rooms')).toBe(201);
+  await expect(page.locator('#room-' + room.id)).toBeVisible();
+  // Under about 720 px the other lists still scroll sideways, as before A9: 641 checks Rooms and its Invites.
+  for (const width of [641, 820, 1024, 1280]) {
+    await page.setViewportSize({ width, height: 1180 });
+    for (const view of ['rooms', 'profiles', 'libraries', 'sessions', 'pronunciation', 'audit', 'instance', `rooms/${room.id}/invites`]) {
+      if (width === 641 && view !== 'rooms' && view !== `rooms/${room.id}/invites`) continue;
+      const at = `${view} ${width}`;
+      await page.goto('/admin#' + view);
+      // Loaded: its list, or its empty state, or the server form.
+      await expect(page.locator('main :is(.cols, .empty, form):visible').first(), at).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth), at).toBeLessThanOrEqual(width);
+      expect(await noOverflow(page), at).toEqual([]);
+    }
+    await page.goto('/admin#rooms');
+    await expect(page.locator('#rooms .list-row.head'), `${width}`).toBeVisible();
+    await expect(page.getByRole('button', { name: 'More actions on ' + name }), `${width}`).toBeInViewport();
+    const used = page.locator(`#room-${room.id} .storage .used`);
+    await expect(used, `${width}`).toBeInViewport();
+    await expect(used, `${width}`).toHaveText(/ \/ 200 MB$/);
+  }
+  await page.goto(`/admin#rooms/${room.id}/invites`);
+  const makers = page.locator('#invites-all .list-row:not(.head) .name');
+  await expect(makers.filter({ hasText: /^Alice Martin$/ })).toHaveCount(1);
+  await expect(makers.filter({ hasText: /participant #/ })).toHaveCount(0);
+  // Someone who joins while the tab is open is named once the list reloads, not "a former participant".
+  const late = await member(baseURL, request, room, 'Carla Late');
+  expect((await late.ctx.post(`/api/rooms/${room.id}/invites`)).status()).toBe(201);
+  await page.locator('#room-panel').getByRole('button', { name: 'New invite link' }).click();
+  await expect(makers.filter({ hasText: /^Carla Late$/ })).toHaveCount(1);
+  await expect(makers.filter({ hasText: 'a former participant' })).toHaveCount(0);
 });

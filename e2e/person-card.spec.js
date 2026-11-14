@@ -153,3 +153,68 @@ test('the people details card', async ({ browser, request, baseURL }) => {
     for (const stop of stops) stop();
   }
 });
+
+// A12: a person's name in People is one button, its press or focus the card. A16: a pill's hover tip
+// goes once the pill is pressed. A15, A17: the persona card is titled by an h2 and opens with the
+// focus on it, so Enter twice on a pill starts no answer. A22: "Can ask the AI" draws its off state too.
+test('people names are buttons; the persona card opens on its title; toggles draw both states', async ({ browser, request, baseURL }) => {
+  const { room, pages: [alice] } = await roomWith(browser, request, ['Alice', 'Bob']);
+  await alice.setViewportSize({ width: 1440, height: 900 });
+  const stop = await fakeDaemon(alice, baseURL, room.id, 'alice-laptop');
+  try {
+    const bob = row(alice, 'Bob').locator('.name');
+    await expect(bob).toHaveRole('button');
+    await expect(bob).toHaveAccessibleName('Bob');
+    expect(await alice.locator('#participants span.name[tabindex], #participants-away span.name[tabindex]').count()).toBe(0);
+    await bob.focus();
+    await expect(alice.locator('#person-card')).toBeVisible();
+    await alice.keyboard.press('Escape');
+    await expect(alice.locator('#person-card')).toBeHidden();
+    await bob.press('Enter');
+    await expect(alice.locator('#person-card strong')).toHaveText('Bob');
+    await alice.keyboard.press('Escape');
+
+    // Pressed before the hover delay ran out: its tip must not open over the card afterwards.
+    const pill = alice.locator('#persona-buttons button.persona').first();
+    await pill.click();
+    const card = alice.locator('#persona-card');
+    await expect(card).toBeVisible();
+    // Across the pill's own parts, each with its tip: none opens over the card.
+    const pb = await pill.boundingBox();
+    await alice.mouse.move(pb.x + 2, pb.y + pb.height / 2);
+    await alice.mouse.move(pb.x + pb.width - 2, pb.y + pb.height / 2, { steps: 12 });
+    await alice.waitForTimeout(500);
+    await expect(alice.locator('#person-tip')).toBeHidden();
+    await expect(card.getByRole('heading', { level: 2 })).toHaveText(/Grill/);
+    await expect(alice.locator('#persona-card-title')).toBeFocused();
+    await alice.keyboard.press('Enter');
+    await expect(card).toBeVisible();
+    await expect(alice.locator('#running')).toBeHidden();
+    await alice.keyboard.press('Escape');
+
+    // The box is the item's icon, in the menu's icon column.
+    const box = (b) => b.locator(':scope > .ico.toggle').evaluate((e) => {
+      const s = getComputedStyle(e);
+      return { w: parseFloat(s.width), border: s.borderTopStyle, bg: s.backgroundColor, content: getComputedStyle(e, '::before').content };
+    });
+    const toggle = (await personMenuOf(alice, 'Bob')).getByRole('button', { name: 'Can ask the AI' });
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    const off = await box(toggle);
+    expect(off).toMatchObject({ w: 16, border: 'solid', bg: 'rgba(0, 0, 0, 0)' });
+    await toggle.click();
+    await expect.poll(() => alice.evaluate(() => agent.can_trigger.length)).toBe(1);
+    const on = (await personMenuOf(alice, 'Bob')).getByRole('button', { name: 'Can ask the AI' });
+    await expect(on).toHaveAttribute('aria-pressed', 'true');
+    const ticked = await box(on);
+    expect(ticked.w).toBe(16);
+    expect(ticked.bg).not.toBe(off.bg);
+    expect(ticked.content).toContain('✓');
+  } finally {
+    stop();
+  }
+});
+
+const personMenuOf = async (page, name) => {
+  await row(page, name).locator('.person-more').click();
+  return page.locator('#person-menu');
+};

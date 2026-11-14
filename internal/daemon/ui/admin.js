@@ -1374,11 +1374,12 @@ function Logs() {
   useEffect(() => {
     if (ref.current && atBottom.current) ref.current.scrollTop = ref.current.scrollHeight;
   });
+  // A Tab stop so the keyboard scrolls it; a group, as the section is already the Logs region.
   return html`<${Section} id="logs" title="Logs">
     <p class="row"><select id="log-level" aria-label="Log level" value=${level} onChange=${(/** @type {any} */ e) => setLevel(e.currentTarget.value)}>
       <option value="all">Every line</option><option value="warn">Warnings and errors</option><option value="error">Errors</option>
     </select></p>
-    <pre id="logs" ref=${ref}>${lines.join('\n')}</pre><//>`;
+    <pre id="logs" ref=${ref} tabindex="0" role="group" aria-labelledby="logs-title">${lines.join('\n')}</pre><//>`;
 }
 
 function App() {

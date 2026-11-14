@@ -9,11 +9,15 @@ h1, h2 { margin: 0; }
 .rows { list-style: none; margin: 0; padding: 0; }
 .rows li { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); min-height: var(--control-h); border-bottom: 1px solid var(--border); }
 
+/* Shown on the first Tab only: it jumps past the header, the side panel and every line. */
+.skip-link:not(:focus) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.skip-link:focus { position: fixed; top: var(--sp-2); left: var(--sp-2); z-index: var(--z-toast); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); background: var(--surface); color: var(--primary-text); box-shadow: var(--sh-2); }
+
 /* Join and profile */
 body.join { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
 .app-header .brand { font-size: var(--fs-lg); font-weight: 600; }
 .card.join-card { width: min(28rem, calc(100% - 2 * var(--sp-4))); margin: auto; padding: var(--sp-6); border-radius: var(--r-lg); text-align: center; }
-.join-card h1 { font-size: var(--fs-xl); }
+.join-card :is(h1, h2) { font-size: var(--fs-xl); }
 .join-card form { display: grid; gap: var(--sp-2); margin-top: var(--sp-5); text-align: left; }
 .join-card label { font-size: var(--fs-sm); font-weight: 600; }
 #status { color: var(--text-muted); min-height: 1.2em; }
@@ -196,6 +200,7 @@ body.room { position: fixed; top: var(--vv-top, 0); left: 0; right: 0; height: 1
 #room-open:focus-visible { outline-offset: -2px; }
 #room-open .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #room-open:hover:enabled .name { text-decoration: underline; }
+#room-open:disabled .chev { display: none; }
 #room-menu { right: auto; left: var(--sp-2); }
 /* A persona pill: its colour as a stripe, its state as a shape with a ring and, wide, as a word (005-AC32). */
 button.persona { flex: none; min-height: var(--control-h); padding: 0 var(--sp-3) 0 var(--sp-2); border: 0; border-radius: var(--r-pill); background: var(--surface); color: var(--text); font-weight: 600; }
@@ -232,7 +237,7 @@ button.persona .pstate { color: var(--text-muted); font-weight: 400; font-size: 
 @keyframes speak-wave { 50% { opacity: .2; } }
 @media (prefers-reduced-motion: reduce) { .vstate.speaking .wave { animation: none; } }
 .persona-card { min-width: 16rem; max-width: 22rem; padding: var(--sp-3); }
-.persona-card h3 { margin: 0 0 var(--sp-2); font-size: var(--fs-md); }
+.persona-card h2 { margin: 0 0 var(--sp-2); font-size: var(--fs-md); }
 .persona-card dl { display: grid; grid-template-columns: auto 1fr; gap: var(--sp-1) var(--sp-3); margin: 0 0 var(--sp-2); font-size: var(--fs-sm); }
 .persona-card dt { color: var(--text-muted); }
 .persona-card dd { margin: 0; }
@@ -375,8 +380,10 @@ code.risk { display: block; padding: var(--sp-1) var(--sp-2); border-left: 3px s
 #participants li > :not(.name, .tags), #participants-away li > :not(.name, .tags) { flex: none; }
 /* A name ends with an ellipsis, never breaks mid-word (005-AC35). */
 #participants .name, #participants-away .name { flex: 1 1 0; min-width: 5ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The name is a button that looks like the name: the row is the target, the card its answer. */
+:is(#participants, #participants-away) button.name { display: block; align-self: stretch; min-height: 0; padding-block: 0; border: 0; border-radius: 0; background: none; color: inherit; font: inherit; line-height: var(--control-h); text-align: start; cursor: inherit; }
 /* The name's own font, so the @ sits on the name's baseline; 1em holds one glyph. */
-:is(#participants, #participants-away) .sigil { width: 1em; text-align: right; color: var(--text-muted); }
+:is(#participants, #participants-away) .sigil { align-self: stretch; width: 1em; line-height: var(--control-h); text-align: right; color: var(--text-muted); }
 :is(#participants, #participants-away) .name.me { font-weight: 700; color: var(--primary-text); }
 .tags { display: inline-flex; flex: 0 1 auto; min-width: 0; overflow: hidden; align-items: center; gap: var(--sp-1); white-space: nowrap; }
 .tag { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: var(--r-sm); font-size: var(--fs-xs); line-height: 1; }
@@ -395,8 +402,10 @@ code.risk { display: block; padding: var(--sp-1) var(--sp-2); border-left: 3px s
 .person-more.blank { visibility: hidden; }
 #person-menu input[type=range] { width: 8rem; }
 #person-menu button[aria-disabled=true] { color: var(--text-muted); cursor: default; }
-/* A toggle shows its state with a tick after the label, kept out of the accessible name. */
-#person-menu button[aria-pressed=true]::after { content: " ✓" / ""; color: var(--primary-text); }
+/* A toggle draws both states, a box ticked or empty in the icon column, kept out of the accessible name. */
+#person-menu .ico.toggle { display: grid; place-items: center; border: 1px solid var(--border-strong); border-radius: var(--r-sm); font-size: var(--fs-xs); line-height: 1; }
+#person-menu [aria-pressed=true] > .ico.toggle { border-color: var(--primary); background: var(--primary); color: var(--on-primary); }
+#person-menu [aria-pressed=true] > .ico.toggle::before { content: "✓" / ""; }
 /* The details card and the badge tip (009-AC36): styled popovers, no native title tooltip. */
 .person-card { position: fixed; inset: auto; margin: 0; max-width: 20rem; padding: var(--sp-2) var(--sp-3);
   border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); color: var(--text); box-shadow: var(--sh-2); font-size: var(--fs-sm); line-height: 1.45; }
@@ -595,6 +604,8 @@ body.transcript-room:has(#viewer:not([hidden])) #transcript { order: -1; flex: 0
 #chat-empty p { margin: 0; }
 .msg { position: relative; margin-bottom: var(--sp-3); padding-right: var(--control-h); }
 .msg .meta { font-size: var(--fs-sm); }
+/* A persona's colour is user data: a stripe before the name, never the name's colour (docs/design.md §2). */
+.msg .sender.persona::before { content: ""; display: inline-block; width: 4px; height: 1em; margin-right: var(--sp-1); border-radius: 2px; background: var(--persona); vertical-align: text-bottom; }
 .msg .meta time { color: var(--text-muted); margin-left: var(--sp-1); }
 .msg .body { overflow-wrap: anywhere; }
 /* Room page only, from 40rem: more of the chat fits beside a document (020-AC15). Each area scales
@@ -629,7 +640,6 @@ body.room :is(.msg:not(.system) .body, #send textarea) { font-size: calc(var(--f
 /* A persona's related room (023-AC16): its buttons inline; once dismissed, greyed out (023-AC19). */
 .msg.system.proposal .proposal-actions { display: inline-flex; flex-wrap: wrap; gap: var(--sp-2); font-style: normal; }
 .msg.system.proposal.dismissed { opacity: .6; }
-.msg.agent .meta strong { color: var(--primary-text); }
 .msg .meta :is(.model, .effort, .model-note) { font-size: var(--fs-xs); color: var(--text-muted); }
 .msg .meta .model-note.mismatch { color: var(--warning); font-weight: 600; }
 /* The icon box takes the line's height: the icon centres on the first line, never offset. */
@@ -830,6 +840,8 @@ button.doc { display: block; overflow: hidden; text-overflow: ellipsis; white-sp
 #starter-search { width: 100%; }
 .starter-pick { display: flex; flex-direction: column; align-items: flex-start; width: 100%; height: auto; min-height: var(--control-h); padding: var(--sp-2) var(--sp-3); text-align: left; font-weight: 400; }
 .starter-pick[aria-pressed=true] { border-color: var(--brand); background: var(--primary-bg); }
+/* --text-muted on --primary-bg is 4.34:1 in dark. */
+.starter-pick[aria-pressed=true] .hint { color: var(--text); }
 .starter-detail { min-width: 0; }
 .starter-detail h4 { margin: var(--sp-3) 0 var(--sp-1); font-size: var(--fs-sm); }
 .starter-agenda { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; padding: var(--sp-2); border: 1px solid var(--border); border-radius: var(--r-md); font-size: var(--fs-sm); }

@@ -315,15 +315,19 @@ function Rooms() {
     </div>
     <p class="hint">A room's quota counts its uploads and attachments; the default is ${size(page.default_quota)}.</p>
     ${page.rooms.length ? html`<div class="cols" id="rooms">
-      <div class="list-row head">${roomCols.map(([id, label]) => html`<span aria-sort=${sort.col === id ? (sort.desc ? 'descending' : 'ascending') : undefined}>
-        <button type="button" class="sort" onClick=${() => by(id)}>${label}</button></span>`)}<span></span></div>
+      <div class="list-row head">${roomCols.map(([id, label]) => {
+        const order = sort.col === id ? (sort.desc ? 'descending' : 'ascending') : undefined;
+        // The order in the button's name: aria-sort is exposed on a column header only, and this is no table.
+        return html`<span><button type="button" class="sort" data-sort=${order} aria-label=${order ? label + ', sorted ' + order : label}
+          onClick=${() => by(id)}>${label}</button></span>`;
+      })}<span></span></div>
       <ul class="list-rows">${rooms.map((r) => html`<li class="list-row" id=${'room-' + r.id} key=${r.id}>
         <div class="main"><a class="name" href=${'#rooms/' + encodeURIComponent(r.id)} aria-label=${'Manage ' + r.name}>${r.name}</a>
           <div class="meta">created ${ago(r.created_at)}</div></div>
         <div class="cells"><span class="cell" data-label="Last activity">${ago(r.last_activity)}</span>
           <span class="cell" data-label="People">${r.participants}</span><span class="cell" data-label="Personas">${r.personas}</span>
           <span class="cell">${hostPill(r)}</span>
-          <span class="cell storage"><${Meter} used=${r.used} max=${r.quota} label=${size(r.used) + ' of ' + size(r.quota)}/> ${size(r.used)} / ${size(r.quota)}</span></div>
+          <span class="cell storage"><${Meter} used=${r.used} max=${r.quota} label=${size(r.used) + ' of ' + size(r.quota)}/> <span class="used">${size(r.used)} / ${size(r.quota)}</span></span></div>
         <div class="actions"><${RowMenu} id=${'room-menu-' + r.id} label=${'More actions on ' + r.name} items=${[
           ['Manage', go(r, 'general')], ['Invites', go(r, 'invites')], ['Admins', go(r, 'admins')], ['Export', go(r, 'export')]]}/></div>
       </li>`)}</ul></div>${q && !rooms.length && html`<p class="hint" id="rooms-none">No room matches "${search.trim()}".</p>`}` : html`<p class="empty">No room yet.</p>`}`;
