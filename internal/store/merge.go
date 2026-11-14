@@ -347,7 +347,8 @@ func (s *Store) MergeProfiles(ctx context.Context, keep, merge int64, orgIssuer 
 			{&moved.Seats, `UPDATE participants SET profile_id = ?1 WHERE profile_id = ?2`, both},
 			{&moved.SharedSkills, `UPDATE skills SET publisher_id = ?1 WHERE publisher_id = ?2`, both},
 			{nil, `UPDATE skill_versions SET author_id = ?1 WHERE author_id = ?2`, both},
-			{&moved.Templates, `UPDATE persona_templates SET profile_id = ?1 WHERE profile_id = ?2`, both},
+			// B's library personas land in A's own, shared ones included (035-AC21).
+			{&moved.Templates, `UPDATE persona_templates SET profile_id = ?1, section = 'personal' WHERE profile_id = ?2`, both},
 			{&moved.Starters, `UPDATE starters SET profile_id = ?1 WHERE profile_id = ?2`, both},
 			{&moved.RoomsCreated, `UPDATE rooms SET creator_profile_id = ?1 WHERE creator_profile_id = ?2`, both},
 			{nil, `UPDATE room_links SET created_by_profile_id = ?1 WHERE created_by_profile_id = ?2`, both},

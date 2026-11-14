@@ -153,6 +153,10 @@ func TestHeldChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Shared, so that Alice may add it (035-AC18).
+	if _, err := s.db.ExecContext(ctx, `UPDATE persona_templates SET section = 'instance' WHERE id = ?`, tpl.ID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.DecideChange(ctx, "a", s.onlyChange(t, "a").ID, false, alice); err != nil {
 		t.Fatal(err)
 	}

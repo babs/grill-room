@@ -148,7 +148,7 @@ func seedHeld(t *testing.T, s *Store, room string) *Participant {
 // catalogue voices' samples (013-AC27), the lexicon (013-AC31), the schema version, and the pods'
 // shared STT workers, TTS pod and rate-limit events (017 Phase 3).
 var serverWide = []string{"settings", "persona_templates", "persona_template_versions", "skills", "skill_versions", "admin_sessions", "audit_log",
-	"starters", "starter_versions", "starter_files", "tts_samples", "pronunciations", "schema_version", "stt_workers", "tts_pod", "rate_events"}
+	"starters", "starter_versions", "starter_files", "persona_template_files", "tts_samples", "pronunciations", "schema_version", "stt_workers", "tts_pod", "rate_events"}
 
 // fkSQL lists the single-column foreign keys: table, column, parent table, ON DELETE action and
 // whether the column is NOT NULL.

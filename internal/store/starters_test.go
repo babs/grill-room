@@ -191,7 +191,7 @@ func TestBuiltinTimekeeper(t *testing.T) {
 	var preset PersonaFields
 	for _, p := range presets {
 		if p.key == "timekeeper" {
-			preset = p.f
+			preset = p.f.PersonaFields
 		}
 	}
 	if preset.Name == "" {

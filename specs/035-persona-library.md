@@ -1,6 +1,6 @@
 # 035 — Persona library
 
-**Status**: approved
+**Status**: in progress
 **Requested by**: babs
 **Date**: 2026-11-14
 **Context**: UX audit part B (journeys 1 and 2, direction S1). Builds on 002 (personas, templates), 006 (starters and their libraries), 009 (persona sheet, skills, plugins), 013 (voices), 032/033 (time keeper). Folds in part A finding A19 (Personas sheet rows).
@@ -111,3 +111,10 @@ Personas get a library like starters. `/profile` gains a Personas tab with three
 - The time keeper role is copied only into a room without one. Because 032 allows one per room.
 - The "+" on the persona bar ships here, not in the quick-wins spec, because it opens this picker.
 - `/admin` does not list private personas. Because they are private, as personal starters are.
+- A library persona version keeps the six persona columns and holds every other setting, with its frozen skills and plugins, in one manifest in the starter persona shape, its blobs in `persona_template_files`. Because the starter shape already carries every setting and its readers exist.
+- Built-in versions saved before 035 get their description and settings in place, not as a new version. Because a new version would offer every room an "Update to vN" on upgrade.
+- "Update to vN" keeps 002's scope (text, model, effort). Because skills and plugins on update would need the add flow's host approvals for a change nobody asked for.
+- Adding a library persona gives the notes watcher role, like the time keeper, only to a room without one and never to a copy held for the host. Because taking the role from another persona silently, or before the host approves, would leave the room without a watcher on a refusal.
+- Adding or updating from a library persona the caller cannot see answers "not found". Because a private persona's id must not let another profile copy it.
+- "Save to my personas" is refused while the persona or a change to it waits for the host. Because the saved state must be one the room ran.
+- Saving finds the caller's library persona saved from this room persona when the link points to someone else's. Because two profiles saving the same room persona in turn must not give either a second library persona (AC13).

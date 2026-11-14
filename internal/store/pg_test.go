@@ -164,7 +164,7 @@ func TestColumnTypes(t *testing.T) {
 	if got := cols("integer"); len(got) != 0 {
 		t.Errorf("integer columns: %v", got)
 	}
-	blobs := []string{"agent_sessions.data", "attachments.data", "plugin_snapshots.data", "skill_versions.data", "starter_files.data",
+	blobs := []string{"agent_sessions.data", "attachments.data", "persona_template_files.data", "plugin_snapshots.data", "skill_versions.data", "starter_files.data",
 		"tts_samples.data", "uploads.data"}
 	if got := cols("bytea"); !slices.Equal(got, blobs) {
 		t.Errorf("bytea columns %v, want %v", got, blobs)

@@ -487,7 +487,9 @@ func (im *importer) template(p xPersona) (any, error) {
 	case p.TemplatePreset != "":
 		err = im.tx.QueryRowContext(im.ctx, `SELECT id FROM persona_templates WHERE preset = ?`, p.TemplatePreset).Scan(&id)
 	case p.Template != 0 && im.o.SameInstance:
-		err = im.tx.QueryRowContext(im.ctx, `SELECT id FROM persona_templates WHERE id = ?`, p.Template).Scan(&id)
+		// A profile links only a template it sees: another profile's personal one stays private (035-AC18).
+		err = im.tx.QueryRowContext(im.ctx, `SELECT id FROM persona_templates WHERE id = ? AND (? = 0 OR section <> 'personal' OR profile_id = ?)`,
+			p.Template, im.o.Importer, im.o.Importer).Scan(&id)
 	default:
 		return nil, nil
 	}

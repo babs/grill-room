@@ -253,7 +253,8 @@ func TestSilentKeeperSpeech(t *testing.T) {
 }
 
 // 032-AC6: a member's copy of the Timekeeper gets the timer and the voice, not the role nor the wait,
-// which stay with the persona that had them; a room admin's copy takes both.
+// which stay with the persona that had them; a room admin's copy takes both, the role only into a
+// room without a time keeper (035-AC11).
 func TestTimekeeperAddByRole(t *testing.T) {
 	e := newEnv(t)
 	alice := e.device(t)
@@ -290,11 +291,18 @@ func TestTimekeeperAddByRole(t *testing.T) {
 		t.Fatal("a member's add took the role")
 	}
 	byAlice := add(func(b any) (int, []byte) { return alice.do(t, "POST", path+"/personas", b) })
-	if !byAlice.TimeKeeper || byAlice.CutInS != 20 || byAlice.EveryMinutes != 5 || !byAlice.Speaks {
-		t.Fatalf("admin's copy %+v", byAlice)
+	// 035-AC11: the room has a time keeper already: the admin's copy takes the wait, not the role.
+	if byAlice.TimeKeeper || byAlice.CutInS != 20 || byAlice.EveryMinutes != 5 || !byAlice.Speaks {
+		t.Fatalf("admin's copy into a kept room %+v", byAlice)
 	}
-	if p, _ := e.st.RoomPersona(t.Context(), room.ID, ps[0].ID); p.TimeKeeper {
-		t.Fatal("an admin's add left the role with Grill")
+	if p, _ := e.st.RoomPersona(t.Context(), room.ID, ps[0].ID); !p.TimeKeeper {
+		t.Fatal("an admin's add took the role from Grill")
+	}
+	if code, b := alice.do(t, "PATCH", fmt.Sprintf("%s/personas/%d", path, ps[0].ID), map[string]any{"time_keeper": false}); code != http.StatusOK {
+		t.Fatalf("role off: %d %s", code, b)
+	}
+	if byAlice = add(func(b any) (int, []byte) { return alice.do(t, "POST", path+"/personas", b) }); !byAlice.TimeKeeper || byAlice.CutInS != 20 {
+		t.Fatalf("admin's copy into a room without a keeper %+v", byAlice)
 	}
 }
 

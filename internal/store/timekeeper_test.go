@@ -68,9 +68,9 @@ func TestOneTimeKeeper(t *testing.T) {
 	}
 }
 
-// 032-AC6: the Timekeeper template's copy comes with its room settings and takes the role from the
-// persona that had it; any other template's copy gets none. A new version of the preset is offered,
-// and taking it leaves the settings as the room has them.
+// 032-AC6: the Timekeeper template's copy comes with its room settings and the role; any other
+// template's copy gets none. A new version of the preset is offered, and taking it leaves the
+// settings as the room has them.
 func TestTimekeeperPreset(t *testing.T) {
 	path := testDSN(t)
 	s, err := Open(path)
@@ -78,10 +78,7 @@ func TestTimekeeperPreset(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := t.Context()
-	alice, _, grill := personaRoom(t, s, "p")
-	if _, _, _, err := s.EditPersona(ctx, "p", grill.ID, PersonaPatch{TimeKeeper: yes()}, alice); err != nil {
-		t.Fatal(err)
-	}
+	alice, _, _ := personaRoom(t, s, "p")
 	tk, m, err := s.AddPersona(ctx, "p", templateByPreset(t, s, "timekeeper").ID, alice, true)
 	if err != nil {
 		t.Fatal(err)
@@ -89,10 +86,25 @@ func TestTimekeeperPreset(t *testing.T) {
 	if tk.Badge != "⏱️" || tk.Model != "sonnet" || tk.Effort != "low" || tk.EveryMinutes != 5 || !tk.Speaks || !tk.TimeKeeper || tk.CutInS != 20 || tk.NextAt == nil {
 		t.Fatalf("copy %+v", tk)
 	}
-	if want := `Alice added the persona ⏱️ Timekeeper, from the template "Timekeeper" v1, every N minutes off → 5, now keeps time (was 🔥 Grill), speak over after off → 20 s.`; m.Body != want {
+	if want := `Alice added the persona ⏱️ Timekeeper, from the template "Timekeeper" v1, every N minutes off → 5, now keeps time, speak over after off → 20 s.`; m.Body != want {
 		t.Fatalf("line %q, want %q", m.Body, want)
 	}
 	if got := keepers(t, s, "p"); len(got) != 1 || got[0] != "Timekeeper" {
+		t.Fatalf("keepers %v", got)
+	}
+	// 035-AC11: into a room with a time keeper, the admin's copy comes without the role, and says so.
+	qa, _, qg := personaRoom(t, s, "q")
+	if _, _, _, err := s.EditPersona(ctx, "q", qg.ID, PersonaPatch{TimeKeeper: yes()}, qa); err != nil {
+		t.Fatal(err)
+	}
+	qk, m, err := s.AddPersona(ctx, "q", templateByPreset(t, s, "timekeeper").ID, qa, true)
+	if err != nil || qk.TimeKeeper || qk.CutInS != 20 || qk.EveryMinutes != 5 {
+		t.Fatalf("copy into a kept room: %+v %v", qk, err)
+	}
+	if want := `Alice added the persona ⏱️ Timekeeper, from the template "Timekeeper" v1, every N minutes off → 5, speak over after off → 20 s, not the time keeper (🔥 Grill keeps time).`; m.Body != want {
+		t.Fatalf("line %q, want %q", m.Body, want)
+	}
+	if got := keepers(t, s, "q"); len(got) != 1 || got[0] != "Grill" {
 		t.Fatalf("keepers %v", got)
 	}
 	sec, m, err := s.AddPersona(ctx, "p", templateByPreset(t, s, "secretary").ID, alice, true)
@@ -100,7 +112,7 @@ func TestTimekeeperPreset(t *testing.T) {
 		t.Fatalf("secretary %+v %+v %v", sec, m, err)
 	}
 	// 032-AC6: an add held for the host never brings the role, whether another persona keeps time
-	// or none does; the wait comes with it.
+	// or none does, and its line says so (035-AC11); the wait comes with it.
 	for _, keeper := range []bool{true, false} {
 		room := map[bool]string{true: "hk", false: "hn"}[keeper]
 		host, bob, g, _ := approvingRoom(t, s, room)
@@ -110,7 +122,8 @@ func TestTimekeeperPreset(t *testing.T) {
 			}
 		}
 		cp, m, err := s.AddPersona(ctx, room, templateByPreset(t, s, "timekeeper").ID, bob, true)
-		if err != nil || !cp.Pending || cp.TimeKeeper || cp.CutInS != 20 || strings.Contains(m.Body, "keeps time") {
+		note := map[bool]string{true: ", not the time keeper (🔥 Grill keeps time).", false: ", not the time keeper: a room admin gives it the role once the host approves it."}[keeper]
+		if err != nil || !cp.Pending || cp.TimeKeeper || cp.CutInS != 20 || !strings.Contains(m.Body, note) || strings.Contains(m.Body, "now keeps time") {
 			t.Fatalf("held add (keeper %v): %+v %+v %v", keeper, cp, m, err)
 		}
 		want := map[bool]string{true: "Grill", false: ""}[keeper]

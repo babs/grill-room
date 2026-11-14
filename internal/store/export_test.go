@@ -812,6 +812,7 @@ func TestExportCoversEveryColumn(t *testing.T) {
 		"starters":                  server,
 		"starter_versions":          server,
 		"starter_files":             server,
+		"persona_template_files":    server,
 		"schema_version":            server,
 	}
 	rows, err := s.db.QueryContext(t.Context(), `SELECT table_name::text, string_agg(column_name::text, ' ') FROM information_schema.columns

@@ -180,11 +180,18 @@ func TestTemplateLibrary(t *testing.T) {
 	if err != nil || len(ts) != mine+1 || ts[0].Preset != PresetDefault || ts[mine].ID != tp.ID || !ts[mine].Mine || ts[0].Mine {
 		t.Fatalf("library for Alice: %+v %v", ts, err)
 	}
-	if ts, _ := s.Templates(ctx, bob.ProfileID); ts[mine].Mine {
-		t.Fatal("Bob sees Alice's template as his")
+	// 035-AC18: a personal template is its owner's alone, in the list and to add.
+	if ts, _ := s.Templates(ctx, bob.ProfileID); len(ts) != mine || ts[mine-1].Section != SectionBuiltin {
+		t.Fatalf("Bob's library: %+v", ts)
+	}
+	if ts[mine].Section != SectionPersonal || ts[0].Section != SectionBuiltin {
+		t.Fatalf("sections for Alice: %+v", ts)
+	}
+	if _, _, err := s.AddPersona(ctx, "a", tp.ID, bob, true); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Bob adds Alice's personal template: %v", err)
 	}
 
-	p, _, err := s.AddPersona(ctx, "a", tp.ID, bob, true)
+	p, _, err := s.AddPersona(ctx, "a", tp.ID, alice, true)
 	if err != nil || p.TemplateVersion != 2 || p.Text != "v2 text" {
 		t.Fatalf("persona from it: %+v %v", p, err)
 	}
@@ -300,9 +307,13 @@ func TestRoomPersonaOverridesAndUpdate(t *testing.T) {
 	if err != nil || c.Text != "v1" || c.TemplateVersion != 1 || c.UpdateVersion != 2 {
 		t.Fatalf("offered: %+v %v", c, err)
 	}
-	c, m, _, err = s.UpdatePersona(ctx, "a", c.ID, bob)
+	// 035-AC18: Alice's template is personal: Bob cannot take its update.
+	if _, _, _, err := s.UpdatePersona(ctx, "a", c.ID, bob); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("update from a template Bob does not see: %v", err)
+	}
+	c, m, _, err = s.UpdatePersona(ctx, "a", c.ID, alice)
 	if err != nil || c.Text != "v2" || c.Model != "sonnet" || c.Effort != "high" || c.Badge != "🔎" || c.TemplateVersion != 2 || c.UpdateVersion != 0 ||
-		m.Body != `Bob updated 🔎 Critic to version 2 of the template "Critic".` {
+		m.Body != `Alice updated 🔎 Critic to version 2 of the template "Critic".` {
 		t.Fatalf("update: %+v %+v %v", c, m, err)
 	}
 	if got := lastBody(t, s, "a"); got != m.Body {
@@ -471,7 +482,7 @@ func TestPersonaLimits(t *testing.T) {
 		t.Fatalf("template past the limit: %v", err)
 	}
 	for n := 2; n <= MaxTemplateVersions; n++ {
-		if err := insertVersion(ctx, s.db, last.ID, n, "Alice", f); err != nil {
+		if err := insertVersion(ctx, s.db, last.ID, n, "Alice", f, "", []byte("{}"), nil); err != nil {
 			t.Fatal(err)
 		}
 	}

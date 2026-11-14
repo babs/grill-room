@@ -439,6 +439,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/rooms/{room}/personas", s.participant(s.addPersona))
 	mux.Handle("PATCH /api/rooms/{room}/personas/{persona}", s.participant(s.editPersona))
 	mux.Handle("POST /api/rooms/{room}/personas/{persona}/update", s.participant(s.updatePersona))
+	mux.Handle("POST /api/rooms/{room}/personas/{persona}/library", s.participant(s.savePersonaToLibrary))
 	mux.Handle("DELETE /api/rooms/{room}/personas/{persona}", s.participant(s.removePersona))
 	mux.Handle("GET /api/rooms/{room}/skills", s.participant(s.roomSkills))
 	mux.Handle("POST /api/rooms/{room}/skills", s.participant(s.copySkill))

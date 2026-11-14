@@ -330,6 +330,30 @@ func (s *Server) updatePersona(w http.ResponseWriter, r *http.Request, sess sess
 	s.personaDone(w, sess, p, m, err, heldStatus(held))
 }
 
+// savePersonaToLibrary saves a room persona, as the room saved it, to the member's personas: a new
+// version when it is linked to one of theirs, else a new one (035-AC12, 035-AC13).
+func (s *Server) savePersonaToLibrary(w http.ResponseWriter, r *http.Request, sess session) {
+	if sess.p.ProfileID == 0 {
+		httpError(w, http.StatusForbidden, "saving to your personas needs a profile")
+		return
+	}
+	t, err := s.bus.Store.SavePersonaToLibrary(r.Context(), sess.p.RoomID, personaID(r), sess.p.ProfileID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		httpError(w, http.StatusNotFound, "no such persona")
+	case errors.Is(err, store.ErrLimit), errors.Is(err, store.ErrAwaitingHost):
+		httpError(w, http.StatusConflict, err.Error())
+	case err != nil:
+		s.serverError(w, "save_persona_to_library_failed", err)
+	default:
+		// The relink changes where the persona came from, which every member's view shows.
+		s.bus.Notify(sess.p.RoomID)
+		s.log.Info("persona_saved_to_library", zap.Int64("template", t.ID), zap.Int("version", t.Version), zap.Int64("persona", personaID(r)),
+			zap.Int64("profile", sess.p.ProfileID))
+		writeJSON(w, http.StatusCreated, t)
+	}
+}
+
 // removePersona removes a room persona; any member may. Audited only when done with an API token
 // (012-AC20): the room's line says who did it otherwise.
 func (s *Server) removePersona(w http.ResponseWriter, r *http.Request, sess session) {

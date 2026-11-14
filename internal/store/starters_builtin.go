@@ -63,8 +63,7 @@ var (
 		s.Speaks = &off
 		return s
 	}()
-	builtinTimekeeper = StarterPersona{PersonaFields: timekeeper, EveryMinutes: *timekeeperRoom.EveryMinutes, Speaks: ptr(*timekeeperRoom.Speaks),
-		TimeKeeper: *timekeeperRoom.TimeKeeper, CutInS: *timekeeperRoom.CutInS}
+	builtinTimekeeper = timekeeper
 )
 
 var builtinStarters = []struct {
